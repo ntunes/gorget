@@ -1,0 +1,25 @@
+# Track B — CELL: Guard[String].get() → Vector.push · TEMP form ·
+# payload String · backend C
+#
+# Sibling of guard_get_into_dict_put_double_free.gg on the DESTINATION-CONSUMER
+# axis. The dict cell surfaced the bug as a runtime double-free (Dict.put was
+# NOT Tier 2a Move-classified, so validate was silent); Vector.push IS
+# Tier 2a Move-classified so the same borrow-consumed shape is caught earlier
+# as a check-time PANIC.
+#
+# Before Track B's fix: `gg build` PANICS at src/ir/lowering/mod.rs:2143:
+#   Tier 2a consume-site violation: CollectionMutator(
+#     Vector__GorgetString__push, arg #1) — borrowed source consumed
+# After Track B: the else-arm predicate clones the View temp before the callee
+# takes it; the Tier 2a validator sees an Owned clone (not a borrow) and no
+# longer panics. exit 0, prints `1`.
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+void main():
+    Mutex[String] m = Mutex[String](heaped())
+    Guard[String] g = m.lock()
+    Vector[String] sink = []
+    sink.push(g.get())
+    print(sink.len())

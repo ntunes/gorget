@@ -1,0 +1,23 @@
+# Track B — CELL: ReadGuard[String].get() → Dict.put · TEMP form ·
+# payload String · backend C
+#
+# Sibling of guard_get_into_dict_put_double_free.gg on the GUARD-FAMILY axis
+# (Guard · ReadGuard · WriteGuard). The View tag applies uniformly at the
+# writer (`emit_guard_get_ptr` at src/ir/lowering/exprs/methods.rs:1682-1710
+# for the whole guard family); the consumer's AST-shape guard skipped the
+# borrow predicate for all three the same way.
+#
+# Before Track B's fix: exit 134 (ASan double-free).
+# After Track B: exit 0, prints `1`.
+
+from std.sync import RWLock
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+void main():
+    RWLock[String] lock = RWLock[String](heaped())
+    ReadGuard[String] rg = lock.read()
+    Dict[String, String] d = {}
+    d.put("k", rg.get())
+    print(d.len())

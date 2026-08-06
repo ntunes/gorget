@@ -1947,3 +1947,84 @@ Un-ignore when the element-assign releases the old buffer, or replace with the r
 fn sound_loop_string_elem_assign_double_free() {
     security_safe("sound_loop_string_elem_assign_double_free", "x!");
 }
+
+// ── Round MEMORY SAFETY / ONE OWNERSHIP BOUNDARY · Track B ──────────────
+//
+// View-tagged TEMP crossing a container mutator: the writer-side fix restores
+// the missing borrow-detection predicate to `ensure_owned_at_consuming_arg`'s
+// else arm (`src/ir/lowering/context.rs:2680`) so a View (Guard.get and
+// family) temp is CLONED at the boundary, not memcpy'd as a shallow alias.
+// The fixture set covers producer × destination-consumer × payload cells;
+// pre-fix each was measured RED (exit 134 ASan double-free, or check-time
+// PANIC at src/ir/lowering/mod.rs:2143 for cells whose consumer was
+// Tier 2a Move-classified).
+
+/// GRADUATED from known_gaps/ — Guard[String].get() → Dict.put · TEMP form.
+/// Root of the view-into-consumer class; pre-fix exit 134.
+#[test]
+fn guard_get_into_dict_put_double_free_fixed() {
+    security_safe("guard_get_into_dict_put_double_free", "1");
+}
+
+/// Guard[Vector[int]].get() → Dict.put · TEMP form · payload-type axis.
+/// Pre-fix exit 134 (double-free on the 64-byte GorgetArray region).
+#[test]
+fn guard_get_vector_int_into_dict_put_temp_fixed() {
+    security_safe("guard_get_vector_int_into_dict_put_temp", "1");
+}
+
+/// Guard[String].get() → Vector.push · TEMP form ·
+/// destination-consumer axis. Pre-fix: `gg build` panics at
+/// mod.rs:2143 (Vector.push is Tier 2a Move-classified so the
+/// borrow-consumed shape is caught at check time).
+#[test]
+fn guard_get_into_vector_push_temp_fixed() {
+    security_safe("guard_get_into_vector_push_temp_fixed", "1");
+}
+
+/// ReadGuard[String].get() → Dict.put · TEMP form · guard-family axis.
+/// Pre-fix exit 134.
+#[test]
+fn read_guard_get_into_dict_put_double_free_fixed() {
+    security_safe("read_guard_get_into_dict_put_double_free", "1");
+}
+
+/// WriteGuard[String].get() → Dict.put · TEMP form · guard-family axis.
+/// Pre-fix exit 134.
+#[test]
+fn write_guard_get_into_dict_put_double_free_fixed() {
+    security_safe("write_guard_get_into_dict_put_double_free", "1");
+}
+
+/// Guard[String].get() → Set.add · TEMP form · destination-consumer axis.
+/// Pre-fix: `gg build` panics at mod.rs:2143 (Set.add is Tier 2a
+/// Move-classified).
+#[test]
+fn guard_get_into_set_add_temp_fixed() {
+    security_safe("guard_get_into_set_add_temp", "1");
+}
+
+/// Guard[String].get() → Channel.send · TEMP form ·
+/// destination-consumer axis. Pre-fix exit 134.
+#[test]
+fn guard_get_into_channel_send_temp_fixed() {
+    security_safe("guard_get_into_channel_send_temp", "1");
+}
+
+/// Guard[String].get() → index-assign `d[k] = v` · TEMP form ·
+/// destination-consumer axis (index-assign sugar). Pre-fix exit 134.
+#[test]
+fn guard_get_into_index_set_temp_fixed() {
+    security_safe("guard_get_into_index_set_temp", "1");
+}
+
+/// CONTROL PIN: `String s = g.get(); d.put("k", s)` NAMED-LOCAL form —
+/// green before AND after Track B's fix. Pins the var-decl clone path
+/// (`ensure_owned_at_boundary` at context.rs:2516 — the sibling helper
+/// whose predicate has always been unconditional). Discriminates the
+/// temp form (which needed the fix) from the named-local form (which
+/// was correct all along).
+#[test]
+fn guard_get_named_local_into_dict_put_pin() {
+    security_safe("guard_get_named_local_into_dict_put", "1");
+}

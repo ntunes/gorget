@@ -4441,18 +4441,45 @@ fn register_collection_method_sigs(
             "Dict" | "HashMap" => {
                 // Dict/HashMap have key and value types
                 // (GorgetDict/GorgetMap are opaque C types, not struct-based in GIR)
+                //
+                // Track B SIBLING D2 (Round MEMORY SAFETY / ONE OWNERSHIP
+                // BOUNDARY, 2026-08-06): register `put`/`set` with Move on
+                // the value slot so the Tier 2a consume-site validator
+                // (src/ir/validate.rs:2982) sees these as consume sites.
+                // Pre-Track-B, `Dict__put`/`Dict__set` were absent from
+                // `fn_param_ownerships`, so a View temp reaching one of them
+                // was silently miscompiled to a runtime UAF instead of
+                // surfacing as a check-time panic like Vector.push does.
+                // §3a's writer fix at context.rs:2680 stops the miscompile
+                // at the boundary; THIS registration is the belt-and-braces
+                // check-time diagnostic that would catch a future regression
+                // in the writer. NOT `insert` (Dict has no `insert` builtin);
+                // NOT `remove` (key lookup — no value slot). The KEY slot is
+                // also memcpy'd but is not marked here (single semantic axis
+                // per this fold; matches Vector.set's precedent of marking
+                // only the value slot).
                 let sigs: Vec<(String, Vec<TypeId>, TypeId, &[usize])> = vec![
                     (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE, &[]),
                     (format!("{mangled_name}__contains"), vec![self_ptr, I64_TYPE], BOOL_TYPE, &[]),
                     (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE, &[]),
+                    (format!("{mangled_name}__put"), vec![self_ptr, I64_TYPE, elem_type], UNIT_TYPE, &[2]),   // value consumed
+                    (format!("{mangled_name}__set"), vec![self_ptr, I64_TYPE, elem_type], UNIT_TYPE, &[2]),   // value consumed
                 ];
                 for (name, params, ret, moves) in sigs {
                     insert_collection_sig(name, params, ret, moves);
                 }
             }
             "Set" | "HashSet" => {
+                // Track B SIBLING D2: `insert` is a real Set/HashSet builtin
+                // (builtins.rs:539 — an alias for `add` via `gorget_set_add`)
+                // and was silently unclassified at Tier 2a because
+                // `register_builtin_type_protocol` populates `fn_sigs` but
+                // not `fn_param_ownerships`. Register with Move on the elem
+                // slot (same shape as `add`). NOT `remove` (elem lookup for
+                // hash/eq — the callee does not own the passed elem).
                 let sigs: Vec<(String, Vec<TypeId>, TypeId, &[usize])> = vec![
                     (format!("{mangled_name}__add"), vec![self_ptr, elem_type], UNIT_TYPE, &[1]),    // elem consumed
+                    (format!("{mangled_name}__insert"), vec![self_ptr, elem_type], UNIT_TYPE, &[1]), // elem consumed
                     (format!("{mangled_name}__contains"), vec![self_ptr, elem_type], BOOL_TYPE, &[]),
                     (format!("{mangled_name}__remove"), vec![self_ptr, elem_type], BOOL_TYPE, &[]),
                     (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE, &[]),

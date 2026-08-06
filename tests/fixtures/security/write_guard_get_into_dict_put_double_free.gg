@@ -1,0 +1,20 @@
+# Track B — CELL: WriteGuard[String].get() → Dict.put · TEMP form ·
+# payload String · backend C
+#
+# Sibling of guard_get_into_dict_put_double_free.gg on the GUARD-FAMILY axis
+# (Guard · ReadGuard · WriteGuard). Same class, same fix.
+#
+# Before Track B's fix: exit 134 (ASan double-free).
+# After Track B: exit 0, prints `1`.
+
+from std.sync import RWLock
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+void main():
+    RWLock[String] lock = RWLock[String](heaped())
+    WriteGuard[String] wg = lock.write()
+    Dict[String, String] d = {}
+    d.put("k", wg.get())
+    print(d.len())

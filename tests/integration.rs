@@ -17950,18 +17950,9 @@ fn shared_spawn_amp_param_double_free() {
     );
 }
 
-#[test]
-#[ignore = "KNOWN GAP (filed 2026-08-05): `d.put(\"k\", g.get())` double-frees at \
-runtime -- prints, then `free(): double free detected in tcache 2`, SIGABRT, \
-identically on C and --backend=llvm. Core #8: both backends agreeing on the wrong \
-answer is >=2 bugs. Discriminator is TEMP vs NAMED LOCAL, not the destination: \
-`String s = g.get(); d.put(\"k\", s)` is exit 0. Sibling `push` cell fails earlier \
-(check-time consume-site panic). Sibling return/ctor cells are CORRECT at HEAD \
-(1d892511) and owe live fixtures separately. Un-ignore and move out of known_gaps/ \
-when fixed."]
-fn guard_get_into_dict_put_double_free() {
-    run_gg("known_gaps/guard_get_into_dict_put_double_free.gg", "1");
-}
+// GRADUATED to tests/fixtures/security/guard_get_into_dict_put_double_free.gg
+// under `guard_get_into_dict_put_double_free_fixed` in tests/security.rs
+// (Round MEMORY SAFETY / ONE OWNERSHIP BOUNDARY, Track B, 2026-08-06).
 
 #[test]
 fn opaque_handle_struct_field() {

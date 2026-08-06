@@ -1,0 +1,25 @@
+# Track B — CONTROL PIN: `String s = g.get(); d.put("k", s)` — the NAMED-LOCAL
+# form of the sibling temp cell.
+#
+# This is the exit-0 CONTROL that discriminates the temp path from the
+# named-local path. `ensure_owned_at_boundary` (context.rs:2516) unconditionally
+# applied the borrow-detection predicate to var-decl RHS since forever, so this
+# named-local form has been correct all along. The temp form failed only
+# because `ensure_owned_at_consuming_arg`'s else arm dropped the predicate.
+#
+# Green BEFORE Track B's fix (var-decl clone path) and BOTH AFTER — the fix
+# unifies the two consumer paths on this predicate.
+#
+# HEAP-FORCED VALUE (never a literal — a rodata String has cap=0, so a false
+# negative would look like the bug is absent).
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+void main():
+    Mutex[String] m = Mutex[String](heaped())
+    Guard[String] g = m.lock()
+    Dict[String, String] d = {}
+    String s = g.get()
+    d.put("k", s)
+    print(d.len())

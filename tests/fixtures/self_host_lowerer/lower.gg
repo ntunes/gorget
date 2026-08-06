@@ -2743,11 +2743,11 @@ Operand op_consume(LowerCtx ctx, GirModule &gmod, int lid, ConsumeKind kind):
 # `ensure_owned_*` to reflect that split: this layer decides the mode,
 # downstream phases materialize the clone.
 #
-# **Status**: dead code in this commit. No caller exists. The
-# wire-up across the 7 ad-hoc aliasing fixes (Classes 1-7 from the
-# Phase 2c COMMIT 3 reverts) lands in Phases 2.3.a through 2.3.g; the
-# last-use information consumed by the by-value-resource branch is
-# threaded in Phase 2.2 (see the `is_last_use` param docstring).
+# **Status**: LIVE. Called at `lower_liveness.gg:888` from
+# `wire_one_operand` (and re-exported by 6 sibling modules that dispatch
+# through wire_one_operand). The last-use information consumed by the
+# by-value-resource branch is threaded through `LivenessAnalysis`
+# (see the `is_last_use` param docstring).
 #
 # **Inputs**:
 #   ctx          - LowerCtx (read-only here; future wiring may emit)

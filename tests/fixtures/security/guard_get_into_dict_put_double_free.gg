@@ -1,0 +1,32 @@
+# GRADUATED from known_gaps/ — Track B (round MEMORY SAFETY / ONE OWNERSHIP
+# BOUNDARY, 2026-08-06). Guarded by `security_safe` in tests/security.rs.
+#
+# CELL: Guard[String].get() → Dict.put · TEMP form · payload String · backend C
+#
+# Before Track B's fix: this program aborted with `AddressSanitizer:
+# attempting double-free`, exit 134 (both backends). `g.get()` yields a View
+# into the mutex-owned payload; the consumer's AST-shape guard at
+# `ensure_owned_at_consuming_arg` (`src/ir/lowering/context.rs:2680`) skipped
+# the borrow-detection predicate for the expression-temp arm, so the temp's
+# View tag was discarded and the shallow Str header was memcpy'd into the map
+# slot as an ALIAS. Scope-exit freed both ends of the alias.
+#
+# After Track B: the else arm reads the same View/borrow accessors as the
+# identifier arm; the temp is cloned before the callee memcpy's it; the
+# collection owns an independent buffer and the mutex still owns its own.
+#
+# INTENDED: exit 0, prints `1`.
+#
+# HEAP-FORCED VALUE (never a literal — a rodata String has cap=0, so
+# `gorget_string_free` short-circuits and the bug reads as absent on the
+# pre-fix compiler).
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+void main():
+    Mutex[String] m = Mutex[String](heaped())
+    Guard[String] g = m.lock()
+    Dict[String, String] d = {}
+    d.put("k", g.get())
+    print(d.len())

@@ -2678,8 +2678,22 @@ impl<'a> LoweringContext<'a> {
                 result
             }
         } else {
-            // Expression temp — always last-use, no clone needed.
-            false
+            // Expression temp: last-use by construction, so a moveable OWNED
+            // temp needs no clone -- but a View-tagged temp (Guard.get and
+            // family) is an ALIAS into a longer-lived resource. Apply the
+            // SAME borrow-detection predicate the identifier arm uses; a
+            // borrow source must be materialised before the callee takes it.
+            // Symmetric with `ensure_owned_at_boundary` at :2516, which has
+            // always applied these predicates unconditionally. Semantics is
+            // read from the typed metadata (`is_ref_local` = `LocalOwnership`
+            // .is_ref()) at ONE source of truth, not routed on AST shape.
+            // Enforced by `debug_assert_ne!` post-clone in the drop-tracking
+            // block below; ratcheted by `view_producer_into_consuming_cell_has_
+            // coverage` in `tests/lints.rs`.
+            !self.drops.is_registered(local)
+                || self.is_bare_param(builder, local)
+                || self.is_ref_local(builder, local)
+                || self.is_cow_borrow(builder, local)
         };
         if !needs_clone {
             if let Some(src) = owning_param_move_src {
@@ -2712,8 +2726,42 @@ impl<'a> LoweringContext<'a> {
             // Shared/Weak ctor + array/dict-literal consuming shapes). Case 1
             // registers only because a materialized Ptr→T is a fresh STANDALONE
             // value whose `mark_moved` state `pre_call_clone_temps` tracks.
+            //
+            // Class-retiring guard (Core #6, Round MEMORY SAFETY / ONE
+            // OWNERSHIP BOUNDARY Track B): the returned local MUST differ
+            // from the input — a borrow that reached needs_clone=true but
+            // came out with the same local id is exactly the view-into-
+            // consumer escape hatch this fix retired. `call_clone` mints a
+            // fresh local, so this fires only if a future refactor
+            // short-circuits the clone.
+            debug_assert_ne!(
+                cloned, local,
+                "ensure_owned_at_consuming_arg: needs_clone was true \
+                 but the returned operand shares the input's local id — \
+                 the borrow source would escape to the callee without \
+                 materialization. Round MEMORY SAFETY / ONE OWNERSHIP \
+                 BOUNDARY Track B fix contract; see \
+                 tests/security/guard_get_into_dict_put_double_free.gg \
+                 and tests/lints.rs::view_producer_into_consuming_cell_has_coverage."
+            );
             return crate::ir::builder::FunctionBuilder::copy(cloned);
         }
+        // Fall-through: `needs_clone` was true (borrow-detection predicate
+        // fired) but the type has no `clone_fn_for_ptr`. For a resource /
+        // refcount type this would silently release the borrow to the callee
+        // — the exact escape the else-arm predicate closes. The `builtins.rs`
+        // resource families each register a `clone_fn`, so this arm is
+        // unreachable under the current type registry; guard it so a future
+        // resource type added without a `clone_fn` fails loudly instead of
+        // silently miscompiling to a view-into-consumer double-free.
+        debug_assert!(
+            !needs_clone,
+            "ensure_owned_at_consuming_arg: needs_clone was true but \
+             clone_fn_for_ptr({arg_type:?}) returned None — a borrow \
+             source would escape to the callee without materialization. \
+             Add a `clone_fn` on the resource protocol, or add an \
+             upstream Move classification so the callee doesn't consume."
+        );
         operand
     }
 

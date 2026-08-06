@@ -1,0 +1,22 @@
+# Track B — CELL: Guard[String].get() → Set.add · TEMP form ·
+# payload String · backend C
+#
+# Sibling of guard_get_into_dict_put_double_free.gg on the DESTINATION-CONSUMER
+# axis. Set.add is Tier 2a Move-classified today (mod.rs:4455), so this
+# manifested as a check-time PANIC — the same shape Vector.push produces.
+#
+# Before Track B's fix: `gg build` PANICS at src/ir/lowering/mod.rs:2143:
+#   Tier 2a consume-site violation: CollectionMutator(
+#     Set__GorgetString__add, arg #1) — borrowed source consumed
+# After Track B: the else-arm predicate clones the View temp; validator sees
+# an Owned clone; no panic. exit 0, prints `1`.
+
+String heaped():
+    return "hello " + "world" + "-forced"
+
+void main():
+    Mutex[String] m = Mutex[String](heaped())
+    Guard[String] g = m.lock()
+    Set[String] s = Set[String]()
+    s.add(g.get())
+    print(s.len())
