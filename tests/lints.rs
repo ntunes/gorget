@@ -558,7 +558,16 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// `is_registered` are DROP-ACCOUNTANT state, not `LocalOwnership`, and
     /// remain unmigratable until the drop accountant is queryable off `Local`.
     /// Locking in the floor.
-    const BUDGET: usize = 93;
+    /// Bumped 93 → 94 (2026-08-06): one new `!self.drops.is_registered(local)`
+    /// call in `ensure_owned_at_consuming_arg`'s else arm (context.rs:2693) —
+    /// Track B (round MEMORY SAFETY / ONE OWNERSHIP BOUNDARY) restored the
+    /// borrow-detection predicate to the expression-temp arm so a View-tagged
+    /// temp (Guard.get and family) is cloned at the boundary instead of
+    /// memcpy'd as a shallow alias. The predicate mirrors the identifier arm
+    /// at :2638 line-for-line — same four accessors, same class. Same drop-
+    /// accountant state as the 64→…→85 bumps; unmigratable until the drop
+    /// accountant is queryable off `Local`. Locking in the floor.
+    const BUDGET: usize = 94;
 
     let count = count_phase_d_proxy_reads();
     assert!(
