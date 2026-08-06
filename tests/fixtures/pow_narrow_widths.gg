@@ -1,11 +1,20 @@
 # D28 Q2 uniform narrow-width smoke test.
 # int8 2 ** 5 = 32, uint8 3 ** 4 = 81. Both fit their type.
+# Non-const values (via fn call return, forced by wrapping) force LIR path.
+int8 i8_two():
+    return 2
+
+int8 i8_five():
+    return 5
+
+uint8 u8_three():
+    return 3
+
+uint8 u8_four():
+    return 4
+
 void main():
-    int8 a = 2
-    int8 b = 5
-    int8 r1 = a ** b
+    int8 r1 = i8_two() ** i8_five()
     print(r1)
-    uint8 x = 3
-    uint8 y = 4
-    uint8 r2 = x ** y
+    uint8 r2 = u8_three() ** u8_four()
     print(r2)

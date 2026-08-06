@@ -1,7 +1,13 @@
 # D28 C1: `**=` compound assignment on a plain local. Expected: 1024.
 # Exercises S4 in src/ir/lowering/stmts/assigns.rs — routed via
-# `compound_op_to_gir` post-fix (Core #4 class-fix).
+# `compound_op_to_gir` post-fix (Core #4 class-fix). The exponent goes
+# through a fn call so const-fold cannot elide the operation — the actual
+# LIR emission for GirBinOp::Pow gets exercised, catching the pre-fix
+# Core #10 placeholder rot at `src/lir/lower/calls.rs:93-97`.
+int ten():
+    return 10
+
 void main():
     int a = 2
-    a **= 10
+    a **= ten()
     print(a)

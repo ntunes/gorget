@@ -15512,6 +15512,8 @@ fn describe_token_canonical_rust(token: &Token) -> String {
         Token::Arrow => "->".into(),
         Token::MinusEq => "-=".into(),
         Token::StarEq => "*=".into(),
+        Token::StarStar => "**".into(),
+        Token::StarStarEq => "**=".into(),
         Token::SlashEq => "/=".into(),
         Token::PercentEq => "%=".into(),
         Token::PlusPercent => "+%".into(),
@@ -15882,6 +15884,7 @@ fn format_binop_canonical(op: &BinaryOp) -> &'static str {
         BinaryOp::Add => "+",
         BinaryOp::Sub => "-",
         BinaryOp::Mul => "*",
+        BinaryOp::Pow => "**",
         BinaryOp::Div => "/",
         BinaryOp::Rem => "%",
         BinaryOp::Mod => "mod",
@@ -42348,7 +42351,7 @@ fn pow_positive() {
 /// D28 P2: basic float `**`.
 #[test]
 fn pow_float_positive() {
-    run_gg("pow_float_positive.gg", "1024.0");
+    run_gg("pow_float_positive.gg", "1024.000000");
 }
 
 /// D28 P3: `**` right-assoc per amendment R2 — `2 ** 3 ** 2` = 512, not 64.

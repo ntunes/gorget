@@ -1,4 +1,11 @@
 # D28 P1: basic integer power `**`. Expected: 1024.
+# The exponent goes through a fn call so const-fold cannot elide the
+# operation — the LIR path for `GirBinOp::Pow` is exercised (Core #10
+# placeholder at `src/lir/lower/calls.rs:93-97` would silently produce
+# 20 pre-fix, matching the placeholder's `Inst::Mul` fallback).
+int ten():
+    return 10
+
 void main():
-    int r = 2 ** 10
+    int r = 2 ** ten()
     print(r)

@@ -1,6 +1,12 @@
 # D28 T1: integer `**` overflow traps T_Overflow (D30 narrow+wide uniform).
+# fn-call operands defeat const-fold's overflow reject (which would produce
+# a compile-time reject rather than a runtime trap).
+int million():
+    return 1000000
+
+int four():
+    return 4
+
 void main():
-    int base = 1000000
-    int exp = 3
-    int r = base ** exp
+    int r = million() ** four()
     print(r)

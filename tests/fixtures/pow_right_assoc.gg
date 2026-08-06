@@ -1,5 +1,14 @@
 # D28 P3: `**` is right-associative per amendment R2.
 # `2 ** 3 ** 2` = `2 ** (3 ** 2)` = `2 ** 9` = 512, NOT `(2 ** 3) ** 2` = 64.
+# Non-const values force LIR path (const-fold with `3 ** 2 = 9` would still
+# leave the outer `2 ** 9` for the LIR to lower; the fn calls dodge the
+# outer fold too).
+int two():
+    return 2
+
+int three():
+    return 3
+
 void main():
-    int r = 2 ** 3 ** 2
+    int r = two() ** three() ** two()
     print(r)
