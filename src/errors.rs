@@ -116,6 +116,14 @@ pub enum ParseErrorKind {
         /// `&` or `!` — the sigil the user wrote.
         sigil: char,
     },
+    /// D26 (Round XXXIII Batch C1): compound-fallible-assign forms
+    /// (`+!=`, `-!=`, `*!=`, `/!=`, `%!=`, `<<!=`, `>>!=`) are v1-EXCLUDED
+    /// per `docs/define-gorget/decisions.md:945`. Rejected at parse-time
+    /// with a precise glyph span; fix-it teaches the two-step rewrite.
+    CompoundFallibleAssignExcluded {
+        /// The offending glyph literal (`+!=` etc.), rendered in the message.
+        op: String,
+    },
 }
 
 impl std::fmt::Display for ParseError {
@@ -172,6 +180,14 @@ impl std::fmt::Display for ParseError {
                      (D35): write `Type {sigil}` instead of `{sigil}Type` — the sigil marks \
                      the binding position (uniform with the named form `Message &msg`), \
                      not the type"
+                )
+            }
+            ParseErrorKind::CompoundFallibleAssignExcluded { op } => {
+                write!(
+                    f,
+                    "compound fallible operators (`{op}` and its siblings) are excluded in v1; \
+                     help: rewrite as `Result[T, ArithError] r = x {base} y` and match on the result",
+                    base = op.trim_end_matches('=')
                 )
             }
         }

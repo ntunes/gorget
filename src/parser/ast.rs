@@ -881,6 +881,36 @@ pub enum BinaryOp {
     And,
     Or,
     In,
+    // D26 fallible arithmetic (Round XXXIII Batch C1) — each `+!` / `-!` / etc
+    // produces `Result[T, ArithError]` on integer operands; a plain trap becomes
+    // a value in the ONE error channel (D23), auto-propagates via D29 disposition.
+    AddFallible,
+    SubFallible,
+    MulFallible,
+    DivFallible,
+    RemFallible,
+    ShlFallible,
+    ShrFallible,
+}
+
+impl BinaryOp {
+    /// True for the D26 fallible arithmetic operators (`+!` / `-!` / `*!` /
+    /// `/!` / `%!` / `<<!` / `>>!`). Typed check — never a name/string match
+    /// (layering rule 2). Called from typecheck (auto-infer body walk,
+    /// integer-only reject) and lowering (build FaultableBinOp with
+    /// ArithError handler).
+    pub fn is_fallible_arith(self) -> bool {
+        matches!(
+            self,
+            BinaryOp::AddFallible
+                | BinaryOp::SubFallible
+                | BinaryOp::MulFallible
+                | BinaryOp::DivFallible
+                | BinaryOp::RemFallible
+                | BinaryOp::ShlFallible
+                | BinaryOp::ShrFallible,
+        )
+    }
 }
 
 #[derive(Debug, Clone)]

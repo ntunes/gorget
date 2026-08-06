@@ -1,0 +1,5 @@
+# D26 NEG — float operand to `+!` rejects at check with E_FallibleArithmeticOnNonInt.
+void main():
+    float x = 1.0
+    float y = x +! 2.0
+    print(y)

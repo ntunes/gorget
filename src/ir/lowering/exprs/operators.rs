@@ -324,6 +324,32 @@ pub(super) fn lower_binary_op(
                 AstOp::AddWrap => BinOp::AddWrap,
                 AstOp::SubWrap => BinOp::SubWrap,
                 AstOp::MulWrap => BinOp::MulWrap,
+                // D26 (Round XXXIII Batch C1): fallible arithmetic operators.
+                // First-shipped lowering routes each `+!` / `-!` / `*!` etc
+                // through the PLAIN checked BinOp for its base operator — a
+                // trap-on-overflow shape identical to plain `+` / `-` / `*`
+                // etc. The check-lane already types the expression as
+                // `Result[T, ArithError]`, and inside a fault-catch scope the
+                // `fault_handler_for` gate below (populated for Add/Sub/Mul/
+                // Div/Rem) still routes through `bin_op_faultable`, so
+                // catch-inner + throws-propagate lower correctly on the same
+                // path plain arithmetic already uses.
+                //
+                // OUT-OF-SESSION FOLLOW-UP (filed with the D26 executor's
+                // report): the value-capture path (`Result[T, ArithError] r =
+                // a +! b`) still needs a dedicated FaultableBinOp handler
+                // block that constructs `ArithError.Overflow` / `.DivByZero`
+                // Result-Error and materializes into `r` — the shape
+                // documented in the D26 brief §3d. This lowering emits a
+                // plain int for `r`, which C-emits as a type mismatch. The
+                // check-lane accepts the surface; the lowering is a scaffold.
+                AstOp::AddFallible => BinOp::Add,
+                AstOp::SubFallible => BinOp::Sub,
+                AstOp::MulFallible => BinOp::Mul,
+                AstOp::DivFallible => BinOp::Div,
+                AstOp::RemFallible => BinOp::Rem,
+                AstOp::ShlFallible => BinOp::Shl,
+                AstOp::ShrFallible => BinOp::Shr,
                 _ => BinOp::Add, // fallback
             };
             // Fault-`catch` routing (error-model.md §11.2): inside an active

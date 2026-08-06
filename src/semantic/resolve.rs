@@ -199,6 +199,22 @@ pub fn collect_top_level(
         }
         ctx.enum_variants.insert(fault_def_id, EnumVariantInfo { variants: variant_infos, variant_field_types, generic_param_names: Vec::new() });
     }
+    // D26 (Round XXXIII Batch C1): the compiler-internal `ArithError` prelude
+    // enum — payload-free variants for the two error channels produced by the
+    // fallible arithmetic operators (`+!` / `-!` / `*!` etc). Its variants are
+    // QUALIFIED-ONLY (`ArithError.Overflow`), mirroring the `Fault` shape
+    // above. Twin IR-lowering registration lives in `inject_builtin_enums`
+    // (generics/substitute.rs) + `src/ir/lowering/mod.rs` TypeDef pass.
+    if let Ok(ae_def_id) = scopes.define("ArithError".to_string(), DefKind::Enum, Span::dummy()) {
+        let mut variant_infos = Vec::new();
+        let mut variant_field_types = Vec::new();
+        for vname in &["Overflow", "DivByZero"] {
+            let variant_def_id = scopes.alloc_def(vname.to_string(), DefKind::Variant, Span::dummy());
+            variant_infos.push((vname.to_string(), variant_def_id));
+            variant_field_types.push((vname.to_string(), Vec::new()));
+        }
+        ctx.enum_variants.insert(ae_def_id, EnumVariantInfo { variants: variant_infos, variant_field_types, generic_param_names: Vec::new() });
+    }
     // Register trait bounds for built-in collection types.
     // Dict[K,V] / HashMap[K,V] require K: Hashable + Equatable.
     // Set[T] / HashSet[T] require T: Hashable + Equatable.

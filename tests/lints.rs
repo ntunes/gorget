@@ -795,11 +795,16 @@ fn snag11_auto_prop_gate_site_count() {
 /// 4th `resolve_throws_method_ret` call in the D36 auto-deref
 /// user-method-hit arm — routes through the same producer so
 /// `throws`-carrying equipped methods called via auto-deref propagate
-/// the throws obligation identically to a direct call.
+/// the throws obligation identically to a direct call. Round XXXIII Batch C1
+/// (D26 fallible arithmetic operators, 2026-08-06) added a 3rd
+/// `resolve_throws_call_type` call from `check_fallible_arith_binop` — the
+/// `+!` / `-!` / etc glyph is a throws-producer position mirroring a plain
+/// `throws`-fn call (the `!` glyph IS the mark), so it routes through the
+/// SAME producer helper for the D29 disposition table.
 #[test]
 fn d23_method_throws_return_sites() {
     const EXPECTED_METHOD_RET_SITES: usize = 4;
-    const EXPECTED_PRODUCER_CALLS: usize = 2;
+    const EXPECTED_PRODUCER_CALLS: usize = 3;
 
     let content = fs::read_to_string("src/semantic/typecheck.rs").unwrap_or_default();
     let mut method_ret_sites = 0usize;

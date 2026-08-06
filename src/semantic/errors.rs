@@ -600,6 +600,20 @@ pub enum SemanticErrorKind {
     /// redundant-capture reason.
     MissingFallibleMark { throws_type: String, reason: FallibleMarkReason },
 
+    /// D26 (Round XXXIII Batch C1): a D26 fallible arithmetic operator
+    /// (`+!` / `-!` / `*!` / `/!` / `%!` / `<<!` / `>>!`) applied to an
+    /// operand that isn't an integer primitive (float, String, user type).
+    /// v1 is integer-only; the fix-it steers users to plain `+`/`-`/etc for
+    /// float arithmetic (which trap on overflow) or to file a follow-up if
+    /// float-fallible is load-bearing.
+    FallibleArithmeticOnNonInt { op: String, found: String },
+
+    /// D26: a D26 fallible arithmetic operator used inside a `const`
+    /// initializer / `meta const` / `meta if` predicate / array-size /
+    /// generic const arg. Constant contexts cannot hold `Result[T, ArithError]`.
+    /// Rejected at `check_module_const_foldability` (chokepoint).
+    FallibleOpInConst { op: String },
+
     /// D29/A31: a bare `!` signature (`int f()!:`) — the reserved spelling for
     /// A31 inferred error sets — used before A31 is implemented. The grammar
     /// locks now (parses); the checker teaching-rejects until A31 lands, steering
@@ -961,6 +975,8 @@ impl SemanticErrorKind {
             SemanticErrorKind::UnconvertibleErrorPropagation { .. } => "E_UnconvertibleErrorPropagation",
             SemanticErrorKind::UnhandledThrows { .. } => "E_UnhandledThrows",
             SemanticErrorKind::MissingFallibleMark { .. } => "E_MissingFallibleMark",
+            SemanticErrorKind::FallibleArithmeticOnNonInt { .. } => "E_FallibleArithmeticOnNonInt",
+            SemanticErrorKind::FallibleOpInConst { .. } => "E_FallibleOpInConst",
             SemanticErrorKind::InferredThrowsUnsupported => "E_InferredThrowsUnsupported",
             SemanticErrorKind::AwaitOutsideAsync => "E_AwaitOutsideAsync",
             SemanticErrorKind::SelectOutsideAsync => "E_SelectOutsideAsync",
@@ -1328,6 +1344,23 @@ impl std::fmt::Display for SemanticError {
                      `Result[T, E]`, exactly one mark per call; remove it"
                 ),
             },
+            SemanticErrorKind::FallibleArithmeticOnNonInt { op, found } => write!(
+                f,
+                "the fallible arithmetic operator `{op}` is integer-only in v1 \
+                 (operand type is `{found}`); \
+                 help: for float arithmetic use `+`/`-`/`*`/`/` and check for \
+                 overflow manually — or file a follow-up if float-fallible is \
+                 load-bearing"
+            ),
+            SemanticErrorKind::FallibleOpInConst { op } => write!(
+                f,
+                "the fallible arithmetic operator `{op}` is not permitted in a \
+                 `const` initializer (v1); constant contexts cannot hold \
+                 `Result[T, ArithError]`; \
+                 help: compute the value at runtime, or use plain arithmetic \
+                 (`{plain}`) and rely on compile-time overflow trapping",
+                plain = op.trim_end_matches('!')
+            ),
             SemanticErrorKind::InferredThrowsUnsupported => write!(
                 f,
                 "inferred error sets (a bare `!` on the signature) are not yet \

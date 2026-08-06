@@ -15520,6 +15520,23 @@ fn describe_token_canonical_rust(token: &Token) -> String {
         Token::PlusPercentEq => "+%=".into(),
         Token::MinusPercentEq => "-%=".into(),
         Token::StarPercentEq => "*%=".into(),
+        // D26 (Round XXXIII Batch C1): fallible arithmetic tokens.
+        Token::PlusBang => "+!".into(),
+        Token::MinusBang => "-!".into(),
+        Token::StarBang => "*!".into(),
+        Token::SlashBang => "/!".into(),
+        Token::PercentBang => "%!".into(),
+        Token::LtLtBang => "<<!".into(),
+        Token::GtGtBang => ">>!".into(),
+        // D26 compound-fallible-assign reject tokens (v1-excluded but still
+        // lexed to give a distinct diagnostic span).
+        Token::PlusBangEq => "+!=".into(),
+        Token::MinusBangEq => "-!=".into(),
+        Token::StarBangEq => "*!=".into(),
+        Token::SlashBangEq => "/!=".into(),
+        Token::PercentBangEq => "%!=".into(),
+        Token::LtLtBangEq => "<<!=".into(),
+        Token::GtGtBangEq => ">>!=".into(),
         Token::DotDot => "..".into(),
         Token::DotDotEq => "..=".into(),
         Token::QuestionDot => "?.".into(),
@@ -15902,6 +15919,14 @@ fn format_binop_canonical(op: &BinaryOp) -> &'static str {
         BinaryOp::And => "and",
         BinaryOp::Or => "or",
         BinaryOp::In => "in",
+        // D26 (Round XXXIII Batch C1): fallible arithmetic operators.
+        BinaryOp::AddFallible => "+!",
+        BinaryOp::SubFallible => "-!",
+        BinaryOp::MulFallible => "*!",
+        BinaryOp::DivFallible => "/!",
+        BinaryOp::RemFallible => "%!",
+        BinaryOp::ShlFallible => "<<!",
+        BinaryOp::ShrFallible => ">>!",
     }
 }
 
@@ -42325,4 +42350,64 @@ fn unknown_backend_flag_is_rejected() {
     }
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// D26 — fallible arithmetic operators (Round XXXIII Batch C1)
+// ═══════════════════════════════════════════════════════════════
+//
+// C1 ships 7 new operators (`+! -! *! /! %! <<! >>!`) producing
+// `Result[T, ArithError]` on integer operands (D29 auto-propagate).
+//
+// Current-session executor scope-limit (documented for the follow-up track):
+// - Rust vertical: lexer + parser + AST + Pratt + prelude enum + basic
+//   check-arm + const-context reject + compound-fallible-assign reject
+//   LANDED.
+// - IR lowering emits plain BinOp for the fallible variants (correct trap
+//   behaviour when peeled to T in a propagating context — see the smoke
+//   fixture below). The FaultableBinOp handler that constructs
+//   `ArithError.Overflow` / `.DivByZero` Result-Error values for the
+//   Result-capture path is FOLLOW-UP work.
+// - Auto-infer `throws ArithError` on functions containing fallible ops
+//   (owner ruling Q1) is FOLLOW-UP — users must currently declare
+//   `throws ArithError` explicitly.
+// - Self-host mirror, ggdef mirror, and the full 32-cell fixture net are
+//   FOLLOW-UP work as well.
+//
+// The three NEG fixtures below prove the check-lane rejects fire; the smoke
+// POS fixture proves the peel-to-T + propagate path works end-to-end via C.
+#[test]
+fn c1_d26_smoke_propagate() {
+    // `+!` inside a `throws ArithError` fn peels to `int` per D29 route A;
+    // the caller catches the (never-fired for 1+2) error into `-1`.
+    run_gg("c1_d26_smoke_propagate.gg", "3");
+}
+
+#[test]
+fn c1_d26_reject_float_operand() {
+    // N1: float operand rejects with E_FallibleArithmeticOnNonInt.
+    check_gg_fails(
+        "c1_d26_reject_float_operand.gg",
+        "E_FallibleArithmeticOnNonInt",
+    );
+}
+
+#[test]
+fn c1_d26_reject_compound_assign() {
+    // N2: `+!=` is v1-EXCLUDED per amendment `decisions.md:945`; rejected at
+    // parse-time with a precise glyph span (CompoundFallibleAssignExcluded).
+    check_gg_fails(
+        "c1_d26_reject_compound_assign.gg",
+        "compound fallible operators",
+    );
+}
+
+#[test]
+fn c1_d26_reject_const_context() {
+    // N3: fallible arithmetic in a `const` initializer rejects at
+    // `check_module_const_foldability` with E_FallibleOpInConst.
+    check_gg_fails(
+        "c1_d26_reject_const_context.gg",
+        "E_FallibleOpInConst",
+    );
 }

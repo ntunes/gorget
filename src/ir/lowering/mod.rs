@@ -259,6 +259,16 @@ pub fn lower_module(
         &crate::ir::lowering::generics::builtin_fault_enum(),
         &generic_templates,
     );
+    // D26 (Round XXXIII Batch C1): register `ArithError` prelude enum
+    // (payload-free, non-generic) — a compile-time enum construction target
+    // for the fallible arithmetic operators. Same eager-registration pattern
+    // as `Fault`.
+    types::register_enum_type(
+        &mut type_mapper,
+        &mut module.type_registry,
+        &crate::ir::lowering::generics::builtin_arith_error_enum(),
+        &generic_templates,
+    );
 
     // Register opaque allocator pointer types (runtime types not defined in .gg source).
     // These C functions return pointers (e.g., gorget_pool_new → GorgetPoolAllocator*),

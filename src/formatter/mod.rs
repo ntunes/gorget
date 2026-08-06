@@ -2255,6 +2255,14 @@ fn binary_op_str(op: BinaryOp) -> &'static str {
         BinaryOp::Shl => "<<",
         BinaryOp::Shr => ">>",
         BinaryOp::In => "in",
+        // D26 fallible arithmetic.
+        BinaryOp::AddFallible => "+!",
+        BinaryOp::SubFallible => "-!",
+        BinaryOp::MulFallible => "*!",
+        BinaryOp::DivFallible => "/!",
+        BinaryOp::RemFallible => "%!",
+        BinaryOp::ShlFallible => "<<!",
+        BinaryOp::ShrFallible => ">>!",
     }
 }
 

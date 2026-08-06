@@ -1,0 +1,6 @@
+# D26 NEG — compound-fallible-assign (`+!=`) is v1-EXCLUDED per amendment
+# `decisions.md:945`; rejected at parse with a precise glyph span.
+void main():
+    int x = 5
+    x +!= 3
+    print(x)
