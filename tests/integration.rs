@@ -42483,3 +42483,148 @@ fn c1_d26_explicit_throws_declared_wins() {
         "E_UnconvertibleErrorPropagation",
     );
 }
+
+// ── D26 F2 self-host lane parity (Core #9) ───────────────────────────────
+//
+// Cross-lane fixture: the self-host driver runs the shared c1_d26_* fixtures
+// end-to-end (parse → lower → emit-C) so the SH mirror stays honest. The
+// MINIMUM SH mirror shipped in this round covers: lex + parse the 7 fallible
+// operators (Pratt binding at base-op precedence); reject the 7 compound
+// forms via `panic()` at the parser (SH gap TODO.md:784 — parser errors
+// are discarded, so `panic()` is the observable channel, mirroring D28 R1);
+// lowerer's `map_binop` routes `"+!"`/etc as their base op (Route-A trap-
+// on-fault minimum — matches Rust foundation-slice shape). Deeper items
+// (Route-B capture, float-operand reject at SH typecheck, const-context
+// reject, auto-infer) are `#[ignore]`d below with a citation, per Core #9's
+// allowed `#[ignore]+citation` shape for a lane genuinely lagging behind.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_accepts_d26_smoke_propagate() {
+    // SH must LEX + PARSE + LOWER the smoke fixture (an explicit `throws
+    // ArithError` fn using `+!` at Route-A shape). Success = SH emits C
+    // (parse+lower succeeded); we don't compile the C here — that path is
+    // exercised by the `self_host_bootstrap_fixed_point` battery when
+    // driver.gg itself uses `+!` (which it doesn't today; the round's
+    // acceptance is the cross-lane fixture matching Rust's stdout).
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/c1_d26_smoke_propagate.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_accepts_d26_smoke_propagate",
+    );
+    assert!(
+        out.status.success(),
+        "self-host driver REJECTED c1_d26_smoke_propagate.gg — the SH lex/\
+         parse/lower mirror for `+!` inside `throws ArithError` is broken. \
+         exit={:?}\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.trim().is_empty(),
+        "self-host driver exited 0 but produced no C for the smoke fixture — \
+         lex/parse succeeded but lowering emitted nothing.\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_d26_compound_assign() {
+    // SH must REJECT `+!=` (v1-EXCLUDED per amendment `decisions.md:945`).
+    // The SH reject is via panic() (parse_source discards parser.errors —
+    // TODO.md:784 systemic gap; same pattern D28 R1 used). Exits 101 with
+    // a T_Panic message naming the D26 tag and the glyph.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/c1_d26_reject_compound_assign.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_d26_compound_assign",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "self-host driver ACCEPTED `+!=` — the D26 compound-fallible-assign \
+         reject in self_host_typechecker/parser.gg is broken. exit={:?}\n\
+         stderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("D26") && stderr.contains("compound fallible operators")
+            && stderr.contains("+!="),
+        "self-host rejected but not with the ratified D26 panic message.\n\
+         stderr:\n{stderr}",
+    );
+}
+
+// ── D26 F2 SH lane-lag `#[ignore]+citation` set (Core #9 sanctioned) ─────
+//
+// The following cross-lane fixture runners require the SH mirror to grow
+// beyond the MINIMUM landed in this round. Each ignore has a filed
+// follow-up in TODO.md under "Semantics / reference-grade rejection" that
+// captures the exact SH file zone + shape needed. Un-ignore in the round
+// that lands the corresponding SH extension.
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "D26 F2 lane-lag: SH typechecker doesn't yet reject float-operand at fallible-arith \
+    (needs `check_fallible_arith_binop` mirror in self_host_typechecker/typecheck.gg); \
+    the RUST lane rejects with E_FallibleArithmeticOnNonInt at check time (see \
+    c1_d26_reject_float_operand). Un-ignore when the SH typecheck arm lands."]
+fn self_host_driver_rejects_d26_float_operand() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/c1_d26_reject_float_operand.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_d26_float_operand",
+    );
+    assert!(!out.status.success(), "SH accepted float operand at +!");
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "D26 F2 lane-lag: SH doesn't yet reject fallible-arith in a const initializer \
+    (needs `find_fallible_arith` const-fold walker mirror in self_host_typechecker/\
+    typecheck.gg or the SH's const-check pass). The RUST lane rejects with \
+    E_FallibleOpInConst. Un-ignore when the SH const-check arm lands."]
+fn self_host_driver_rejects_d26_const_context() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/c1_d26_reject_const_context.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_rejects_d26_const_context",
+    );
+    assert!(!out.status.success(), "SH accepted +! in const initializer");
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "D26 F2 lane-lag: SH's map_binop routes `+!` etc as base-op trap-on-fault (Route A \
+    minimum, matches Rust foundation-slice shape); Route B (Result-capture with \
+    ArithError.Overflow / .DivByZero construction) needs the SH mirror of \
+    `lower_fallible_arith_binop` in self_host_lowerer/lower_expr.gg. Un-ignore when \
+    the SH Route-B lowering lands. Rust-lane test: c1_d26_capture_add_overflow."]
+fn self_host_driver_captures_d26_add_overflow() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/c1_d26_capture_add_overflow.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "self_host_driver_captures_d26_add_overflow",
+    );
+    // When the SH lands Route-B, this should succeed and the emitted C should
+    // print "-99" (the Error arm's print). Today the SH lowering routes
+    // `a +! b` as plain `a + b` (trap on overflow) so the run WOULD abort at
+    // execution, not produce -99. The check + build stage still succeed.
+    assert!(out.status.success(), "SH failed to compile Route B fixture");
+}

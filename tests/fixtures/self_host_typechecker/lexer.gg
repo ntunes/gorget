@@ -156,6 +156,13 @@ enum Token:
     TkPlusEq  TkArrow  TkMinusEq  TkStarEq  TkSlashEq  TkPercentEq
     TkPlusPercent  TkMinusPercent  TkStarPercent
     TkPlusPercentEq  TkMinusPercentEq  TkStarPercentEq
+    # D26 (Round XXXIII Batch C1): fallible arithmetic operators + their
+    # compound-assign reject-tokens (v1-EXCLUDED per amendment
+    # `decisions.md:945` — same shape as the Rust lexer).
+    TkPlusBang  TkMinusBang  TkStarBang  TkSlashBang  TkPercentBang
+    TkLtLtBang  TkGtGtBang
+    TkPlusBangEq  TkMinusBangEq  TkStarBangEq  TkSlashBangEq  TkPercentBangEq
+    TkLtLtBangEq  TkGtGtBangEq
     TkDotDot  TkDotDotEq  TkQuestionDot  TkDoubleQuestion
     # Delimiters
     TkLParen  TkRParen  TkLBracket  TkRBracket  TkLBrace  TkRBrace
@@ -841,6 +848,23 @@ equip Lexer:
         byte c = self.lex_peek()
         int remaining = self.lex_source.byte_len() - self.lex_pos
 
+        # D26: four-char shift-fallible compound-assign reject tokens (`<<!=`,
+        # `>>!=`) — v1-EXCLUDED, tokenized distinctly so the parser can point
+        # at the whole glyph in its reject. Must be checked BEFORE 3-char
+        # `<<!`/`>>!` and `<<=`/`>>=` to keep max-munch correct.
+        if remaining >= 4:
+            byte c2 = self.lex_peek_at(1)
+            byte c3 = self.lex_peek_at(2)
+            byte c4 = self.lex_peek_at(3)
+            if c == b'<' and c2 == b'<' and c3 == b'!' and c4 == b'=':
+                self.lex_pos = self.lex_pos + 4
+                self.lex_emit(!TkLtLtBangEq(), start, self.lex_pos)
+                return
+            elif c == b'>' and c2 == b'>' and c3 == b'!' and c4 == b'=':
+                self.lex_pos = self.lex_pos + 4
+                self.lex_emit(!TkGtGtBangEq(), start, self.lex_pos)
+                return
+
         # Three-char operators
         if remaining >= 3:
             byte c2 = self.lex_peek_at(1)
@@ -868,6 +892,41 @@ equip Lexer:
             elif c == b'*' and c2 == b'%' and c3 == b'=':
                 self.lex_pos = self.lex_pos + 3
                 self.lex_emit(!TkStarPercentEq(), start, self.lex_pos)
+                return
+            # D26 three-char reject tokens for compound-fallible-assign
+            # (`+!=`, `-!=`, `*!=`, `/!=`, `%!=`) — v1-EXCLUDED per amendment
+            # `decisions.md:945`. Distinct tokens so the parser's reject
+            # points at the whole glyph rather than `+` + `!` + `=`. Also
+            # covers the 3-char shift-fallible non-compound (`<<!`, `>>!`)
+            # here since they're the only sane place before max-munch would
+            # slice `<<` off.
+            elif c == b'+' and c2 == b'!' and c3 == b'=':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(!TkPlusBangEq(), start, self.lex_pos)
+                return
+            elif c == b'-' and c2 == b'!' and c3 == b'=':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(!TkMinusBangEq(), start, self.lex_pos)
+                return
+            elif c == b'*' and c2 == b'!' and c3 == b'=':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(!TkStarBangEq(), start, self.lex_pos)
+                return
+            elif c == b'/' and c2 == b'!' and c3 == b'=':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(!TkSlashBangEq(), start, self.lex_pos)
+                return
+            elif c == b'%' and c2 == b'!' and c3 == b'=':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(!TkPercentBangEq(), start, self.lex_pos)
+                return
+            elif c == b'<' and c2 == b'<' and c3 == b'!':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(!TkLtLtBang(), start, self.lex_pos)
+                return
+            elif c == b'>' and c2 == b'>' and c3 == b'!':
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(!TkGtGtBang(), start, self.lex_pos)
                 return
 
         # Two-char operators
@@ -944,6 +1003,29 @@ equip Lexer:
             elif c == b'*' and c2 == b'%':
                 self.lex_pos = self.lex_pos + 2
                 self.lex_emit(!TkStarPercent(), start, self.lex_pos)
+                return
+            # D26 (Round XXXIII Batch C1): fallible arithmetic operators
+            # (`+!`, `-!`, `*!`, `/!`, `%!`). Two-char forms — the shift
+            # forms `<<!`/`>>!` are 3-char and handled above.
+            elif c == b'+' and c2 == b'!':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(!TkPlusBang(), start, self.lex_pos)
+                return
+            elif c == b'-' and c2 == b'!':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(!TkMinusBang(), start, self.lex_pos)
+                return
+            elif c == b'*' and c2 == b'!':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(!TkStarBang(), start, self.lex_pos)
+                return
+            elif c == b'/' and c2 == b'!':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(!TkSlashBang(), start, self.lex_pos)
+                return
+            elif c == b'%' and c2 == b'!':
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(!TkPercentBang(), start, self.lex_pos)
                 return
             elif c == b'&' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2
