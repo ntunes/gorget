@@ -506,6 +506,8 @@ impl<'src> Lexer<'src> {
             RawToken::Arrow => Token::Arrow,
             RawToken::MinusEq => Token::MinusEq,
             RawToken::StarEq => Token::StarEq,
+            RawToken::StarStar => Token::StarStar,
+            RawToken::StarStarEq => Token::StarStarEq,
             RawToken::SlashEq => Token::SlashEq,
             RawToken::PercentEq => Token::PercentEq,
             RawToken::PlusPercent => Token::PlusPercent,
