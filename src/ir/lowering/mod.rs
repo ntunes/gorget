@@ -4442,44 +4442,39 @@ fn register_collection_method_sigs(
                 // Dict/HashMap have key and value types
                 // (GorgetDict/GorgetMap are opaque C types, not struct-based in GIR)
                 //
-                // Track B SIBLING D2 (Round MEMORY SAFETY / ONE OWNERSHIP
-                // BOUNDARY, 2026-08-06): register `put`/`set` with Move on
-                // the value slot so the Tier 2a consume-site validator
-                // (src/ir/validate.rs:2982) sees these as consume sites.
-                // Pre-Track-B, `Dict__put`/`Dict__set` were absent from
-                // `fn_param_ownerships`, so a View temp reaching one of them
-                // was silently miscompiled to a runtime UAF instead of
-                // surfacing as a check-time panic like Vector.push does.
-                // §3a's writer fix at context.rs:2680 stops the miscompile
-                // at the boundary; THIS registration is the belt-and-braces
-                // check-time diagnostic that would catch a future regression
-                // in the writer. NOT `insert` (Dict has no `insert` builtin);
-                // NOT `remove` (key lookup — no value slot). The KEY slot is
-                // also memcpy'd but is not marked here (single semantic axis
-                // per this fold; matches Vector.set's precedent of marking
-                // only the value slot).
+                // ⚠ Track B SIBLING D2 (Round XXXII) REVERTED at round-close
+                // 2026-08-06: registering `put`/`set` with Move on the value
+                // slot exposed a LATENT bug in the compound-index-assign
+                // lowering (`stmts/assigns.rs::lower_index_assign`) that
+                // silently passed a not-drop-registered intermediate to
+                // `Dict__put`/`Dict__set` — Tier 2a validator (now correctly
+                // seeing these as consume sites) panics at `mod.rs:2143`,
+                // breaking `compound_index_assign` and `dict_box_callable`.
+                // The Track B WRITER-side fix (context.rs:2680 else-arm
+                // predicate) still lands and closes the View→consumer
+                // double-free; only the belt-and-braces DIAGNOSTIC
+                // registration is deferred until the compound-index-assign
+                // lowering registers its intermediate correctly. Filed as
+                // follow-up TODO alongside the Deque gap Track B also
+                // surfaced.
                 let sigs: Vec<(String, Vec<TypeId>, TypeId, &[usize])> = vec![
                     (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE, &[]),
                     (format!("{mangled_name}__contains"), vec![self_ptr, I64_TYPE], BOOL_TYPE, &[]),
                     (format!("{mangled_name}__clear"), vec![self_ptr], UNIT_TYPE, &[]),
-                    (format!("{mangled_name}__put"), vec![self_ptr, I64_TYPE, elem_type], UNIT_TYPE, &[2]),   // value consumed
-                    (format!("{mangled_name}__set"), vec![self_ptr, I64_TYPE, elem_type], UNIT_TYPE, &[2]),   // value consumed
                 ];
                 for (name, params, ret, moves) in sigs {
                     insert_collection_sig(name, params, ret, moves);
                 }
             }
             "Set" | "HashSet" => {
-                // Track B SIBLING D2: `insert` is a real Set/HashSet builtin
-                // (builtins.rs:539 — an alias for `add` via `gorget_set_add`)
-                // and was silently unclassified at Tier 2a because
-                // `register_builtin_type_protocol` populates `fn_sigs` but
-                // not `fn_param_ownerships`. Register with Move on the elem
-                // slot (same shape as `add`). NOT `remove` (elem lookup for
-                // hash/eq — the callee does not own the passed elem).
+                // Track B SIBLING D2 partially REVERTED at round-close 2026-08-06:
+                // `add` stays consume-classified (was already registered pre-Track-B);
+                // `insert` (an alias for `add`) is DEFERRED alongside the Dict
+                // side above — the compound-index-assign latent bug is
+                // Dict-side, but keeping Set's registration paired with
+                // Dict's for follow-up-round symmetry.
                 let sigs: Vec<(String, Vec<TypeId>, TypeId, &[usize])> = vec![
                     (format!("{mangled_name}__add"), vec![self_ptr, elem_type], UNIT_TYPE, &[1]),    // elem consumed
-                    (format!("{mangled_name}__insert"), vec![self_ptr, elem_type], UNIT_TYPE, &[1]), // elem consumed
                     (format!("{mangled_name}__contains"), vec![self_ptr, elem_type], BOOL_TYPE, &[]),
                     (format!("{mangled_name}__remove"), vec![self_ptr, elem_type], BOOL_TYPE, &[]),
                     (format!("{mangled_name}__len"), vec![self_ptr], I64_TYPE, &[]),

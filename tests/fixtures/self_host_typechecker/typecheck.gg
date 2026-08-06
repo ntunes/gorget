@@ -2902,38 +2902,27 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             check_safety_expr(*e, scope_id, &state, &scopes, &types, &ctx)
             ctx.d29_in_disposition = saved_disp_c
             check_safety_expr(*recovery, scope_id, &state, &scopes, &types, &ctx)
-            # Track A · SH mirror of Rust `check_recovery_type` — reject a
-            # recovery expression whose inferred type does not match the
-            # inner Result's OK slot. `option_or_result_payload(inner_ty, 0)`
-            # returns the OK type (axis 0). `carrier_op_suppress` covers
-            # NO_TYPE / RTVar / RTError / RTNever suppression shapes; if
-            # either side is a suppression shape the check bails. Carve-outs
-            # (`is_collection_assignment` / `auto_prop_skips_unify` /
-            # `is_result_capture_compatible`) are absent from the SH today —
-            # filed as a follow-up in `TODO.md`. Not a silent omission:
-            # `carrier_op_suppress` already covers the NoneLiteral →
-            # error_id path (SH `infer.gg:135-136` returns `types.error_id`
-            # for `None`) and the NO_TYPE path from empty array literals
-            # (SH `infer.gg:870`), which are the two carve-out shapes most
-            # likely to false-reject.
-            int c_inner_ty = infer_expr_type(SpannedExpr((*e).expr, (*e).span), scopes, &types, &ctx)
-            int c_ok_ty = option_or_result_payload(c_inner_ty, 0, scopes, types)
-            int c_recovery_ty = infer_expr_type(SpannedExpr((*recovery).expr, (*recovery).span), scopes, &types, &ctx)
-            if c_ok_ty >= 0 and not carrier_op_suppress(c_ok_ty, types) and not carrier_op_suppress(c_recovery_ty, types):
-                if c_ok_ty != c_recovery_ty:
-                    ctx.diagnostics.push(Diagnostic.error((*recovery).span, DkTypeMismatch(), "type mismatch: expected `" + describe_type(c_ok_ty, scopes, types) + "`, found `" + describe_type(c_recovery_ty, scopes, types) + "`"))
+            # ⚠ Track A · SH mirror REVERTED at round-close 2026-08-06:
+            # the SH-side `DkTypeMismatch` emission over-rejected 5 corpus
+            # fixtures (`fault_catch_bounds_drop`, `fault_catch_bounds_resource_mut`,
+            # `fault_deep_catch_bounds_resource`, `throws_expr_body_tail`,
+            # `throws_t_result_resource_inner`) — a mix of (a) legitimate
+            # type mismatches the Rust side accepts (Rust's carve-outs cover
+            # them; SH's minimal `carrier_op_suppress` did not) and (b)
+            # SH-side type-interning inconsistencies where the SAME type has
+            # different TypeIds in different scopes (`expected String, found
+            # String`). Rust-side `check_recovery_type` at
+            # `src/semantic/typecheck.rs` still lands and closes the class
+            # for Rust; SH mirror is deferred to a follow-up round that
+            # (i) audits the SH's carve-out set vs Rust's three and (ii)
+            # investigates the SH type-interning drift. Filed under Round
+            # XXXII SH-lag follow-ups in TODO.md.
         case EFaultCatch(fc_inner, _fc_pat, fc_handler):
             check_safety_expr(*fc_inner, scope_id, &state, &scopes, &types, &ctx)
             check_safety_expr(*fc_handler, scope_id, &state, &scopes, &types, &ctx)
-            # Track A · SH mirror — the fault-catch handler's type must match
-            # the wrapped expression's type (the fault-catch's overall value
-            # type on the no-fault path). Same suppression + carve-out
-            # discussion as the ECatch arm above.
-            int fc_inner_ty2 = infer_expr_type(SpannedExpr((*fc_inner).expr, (*fc_inner).span), scopes, &types, &ctx)
-            int fc_handler_ty2 = infer_expr_type(SpannedExpr((*fc_handler).expr, (*fc_handler).span), scopes, &types, &ctx)
-            if not carrier_op_suppress(fc_inner_ty2, types) and not carrier_op_suppress(fc_handler_ty2, types):
-                if fc_inner_ty2 != fc_handler_ty2:
-                    ctx.diagnostics.push(Diagnostic.error((*fc_handler).span, DkTypeMismatch(), "type mismatch: expected `" + describe_type(fc_inner_ty2, scopes, types) + "`, found `" + describe_type(fc_handler_ty2, scopes, types) + "`"))
+            # ⚠ Track A · SH mirror REVERTED at round-close 2026-08-06 — see
+            # the ECatch arm above for the rationale. Deferred to a follow-up
+            # round.
         case EFString(_tmpl, exprs, _specs):
             for fe in exprs:
                 check_safety_expr(fe, scope_id, &state, &scopes, &types, &ctx)

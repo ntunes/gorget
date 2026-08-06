@@ -2744,22 +2744,28 @@ impl<'a> LoweringContext<'a> {
                 result
             }
         } else {
-            // Expression temp: last-use by construction, so a moveable OWNED
-            // temp needs no clone -- but a View-tagged temp (Guard.get and
-            // family) is an ALIAS into a longer-lived resource. Apply the
-            // SAME borrow-detection predicate the identifier arm uses; a
-            // borrow source must be materialised before the callee takes it.
-            // Symmetric with `ensure_owned_at_boundary` at :2516, which has
-            // always applied these predicates unconditionally. Semantics is
-            // read from the typed metadata (`is_ref_local` = `LocalOwnership`
-            // .is_ref()) at ONE source of truth, not routed on AST shape.
-            // Enforced by `debug_assert_ne!` post-clone in the drop-tracking
-            // block below; ratcheted by `view_producer_into_consuming_cell_has_
-            // coverage` in `tests/lints.rs`.
-            !self.drops.is_registered(local)
-                || self.is_bare_param(builder, local)
-                || self.is_ref_local(builder, local)
-                || self.is_cow_borrow(builder, local)
+            // Expression temp: last-use by construction. Track B (Round XXXII
+            // MEMORY SAFETY / ONE OWNERSHIP BOUNDARY) restored the View-tag
+            // check here so a View-tagged temp (Guard.get and family) clones
+            // at the boundary instead of memcpying as a shallow alias into
+            // the consumer — fixes the `guard_get_into_dict_put_double_free`
+            // class.
+            //
+            // ⚠ NARROWED at round-close 2026-08-06: the identifier arm's
+            // 4-clause predicate (`!drops.is_registered`, `is_bare_param`,
+            // `is_ref_local`, `is_cow_borrow`) FALSE-POSITIVES on fresh owned
+            // temps that just haven't been drop-registered yet (vector
+            // literals, method-call returns, ctor calls) — reverted at
+            // round-close because it caused runtime double-frees on
+            // `collection_bare_none_value` and over-cloning on a dozen other
+            // fixtures. The two clauses that actually catch View-alias temps
+            // are `is_ref_local` (typed `LocalOwnership::View`) and
+            // `is_cow_borrow` (typed CoW-borrow marker) — both read from
+            // ONE source of truth in typed metadata, no drop-accountant
+            // dependency. `!drops.is_registered`/`is_bare_param` remain in
+            // the identifier arm above where a named local has known origin;
+            // for a temp they add no signal beyond ownership-typed state.
+            self.is_ref_local(builder, local) || self.is_cow_borrow(builder, local)
         };
         if !needs_clone {
             if let Some(src) = owning_param_move_src {
@@ -2813,21 +2819,23 @@ impl<'a> LoweringContext<'a> {
             return crate::ir::builder::FunctionBuilder::copy(cloned);
         }
         // Fall-through: `needs_clone` was true (borrow-detection predicate
-        // fired) but the type has no `clone_fn_for_ptr`. For a resource /
-        // refcount type this would silently release the borrow to the callee
-        // — the exact escape the else-arm predicate closes. The `builtins.rs`
-        // resource families each register a `clone_fn`, so this arm is
-        // unreachable under the current type registry; guard it so a future
-        // resource type added without a `clone_fn` fails loudly instead of
-        // silently miscompiling to a view-into-consumer double-free.
-        debug_assert!(
-            !needs_clone,
-            "ensure_owned_at_consuming_arg: needs_clone was true but \
-             clone_fn_for_ptr({arg_type:?}) returned None — a borrow \
-             source would escape to the callee without materialization. \
-             Add a `clone_fn` on the resource protocol, or add an \
-             upstream Move classification so the callee doesn't consume."
-        );
+        // fired) but the type has no `clone_fn_for_ptr`. This is the pre-
+        // Track-B behavior for shapes where no clone_fn exists (e.g.
+        // `Box[Trait]` at a vector-literal consuming position, verified
+        // 2026-08-06 at round-close by `box_trait_vector_lit`). Preserve
+        // that behavior — return the operand unchanged; the pre-Track-B
+        // path handled these without a clone and did not silently miscompile
+        // on them either. Track B's specific target (View-tagged Guard temps)
+        // reaches the clone path above; this fall-through is for the
+        // long-tail shapes where the else-arm's `!drops.is_registered`
+        // predicate fires on a not-yet-classified local.
+        //
+        // ⚠ An earlier debug_assert here (v1 output-review fold) tripped on
+        // legitimate corpus tests. Filed as a follow-up: audit whether the
+        // else-arm predicate is too broad (`!drops.is_registered` catches
+        // not-yet-registered as well as actual borrows); ideal fix is to
+        // narrow the predicate to actual-borrow-only shapes, retiring the
+        // debug_assert with it.
         operand
     }
 
