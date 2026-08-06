@@ -964,6 +964,37 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Type a `catch` recovery / `fault-catch` handler against its expected
+    /// slot type — mirror of the canonical THREE-carve-out unify contract
+    /// every "value into expected slot" site uses (VarDecl `:4848-4850`,
+    /// Assign, free-fn arg, method arg, Return — all identical). Do NOT
+    /// diverge from this set: the whole point of the helper is to route the
+    /// recovery slot through the SAME "expected vs actual" contract as its
+    /// siblings so literal shapes (`[]`, `None`) coerce here the way they
+    /// coerce there, and divergent recoveries (`return`, `throw`, `panic`)
+    /// pass via `unify`'s Never rule at `:985-990`.
+    ///
+    /// Track A · Core #10 (lower-or-reject / silent-fallthrough): before
+    /// this helper the two `Expr::Catch` / `Expr::FaultCatch` arms called
+    /// `infer_expr(recovery)` and DISCARDED the result, so the outer
+    /// VarDecl unified a fabricated OK type against itself and any
+    /// wrong-typed recovery reached codegen (silent heap-ptr-as-int64 on
+    /// same-layout mismatches). Every arm of that class now routes here.
+    /// `tests/lints.rs::recovery_arms_route_through_check_recovery_type`
+    /// pins the invariant.
+    fn check_recovery_type(&mut self, recovery: &Spanned<Expr>, expected: TypeId) {
+        let prev_hint = self.decl_type_hint;
+        self.decl_type_hint = Some(expected);
+        let actual = self.infer_expr(recovery);
+        self.decl_type_hint = prev_hint;
+        if !self.is_collection_assignment(expected, actual)
+            && !self.auto_prop_skips_unify(expected, actual, recovery.span)
+            && !self.is_result_capture_compatible(expected, actual)
+        {
+            self.unify(expected, actual, recovery.span);
+        }
+    }
+
     /// Unify two types, binding type variables as needed.
     fn unify(&mut self, a: TypeId, b: TypeId, span: Span) -> TypeId {
         let a = self.resolve_type(a);
@@ -4143,10 +4174,26 @@ impl<'a> TypeChecker<'a> {
 
             Expr::Do { body } => {
                 // Expression block: the tail IS the do-value (consumed).
+                // Divergent tail (`return` / `throw` / `break` / `continue`)
+                // types as Never — same shape as `Expr::Block` above, and
+                // for the same reason: a value-position Do-block whose tail
+                // diverges must unify with anything (`unify`'s Never rule at
+                // :985-990), otherwise a multi-line `catch (_): … return`
+                // recovery false-mismatches against the OK type. Symmetry
+                // with `Expr::Block` was not enforced before Track A
+                // surfaced it; the two site kinds ARE the same class.
+                let last_is_divergent = body.stmts.last().map_or(false, |s| matches!(
+                    &s.node,
+                    Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break | Stmt::Continue
+                ));
                 let prev_dropped = std::mem::replace(&mut self.tail_value_dropped, false);
                 let ty = self.check_block(body);
                 self.tail_value_dropped = prev_dropped;
-                ty
+                if last_is_divergent {
+                    self.types.never_id
+                } else {
+                    ty
+                }
             }
 
             Expr::Closure { params, body, .. } => {
@@ -4649,15 +4696,30 @@ impl<'a> TypeChecker<'a> {
                         self.scopes.get_def_mut(def_id).type_id = Some(err_ty);
                     }
                 }
-                self.infer_expr(recovery);
                 // Snag #35: throws calls now type as `Result[T, E]` at the
                 // call site. `catch` resolves the Result, so the
                 // expression's type is the OK type, not the Result.
-                if let ResolvedType::Generic(def_id, ref args) = self.types.get(resolved).clone() {
+                let ok_ty = if let ResolvedType::Generic(def_id, ref args) =
+                    self.types.get(resolved).clone()
+                {
                     if args.len() == 2 && self.scopes.get_def(def_id).name == "Result" {
-                        return args[0];
-                    }
+                        Some(args[0])
+                    } else { None }
+                } else { None };
+                // Recovery-type check (Track A, Core #10): route the recovery
+                // through the canonical three-carve-out unify contract that
+                // VarDecl / Assign / arg-pass / return sites use, so an
+                // ill-typed recovery is rejected at the writer site. Also
+                // installs the OK type as `decl_type_hint` so literals like
+                // `[]` / `None` coerce here just as they do at those sites.
+                if let Some(t) = ok_ty {
+                    self.check_recovery_type(recovery, t);
+                    return t;
                 }
+                // Non-Result inner (already an error path today): fall back
+                // to the historical inner_type return. Still type the
+                // recovery so its own diagnostics fire.
+                self.infer_expr(recovery);
                 inner_type
             }
             Expr::FaultCatch { expr: inner, pattern, handler } => {
@@ -4703,12 +4765,13 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 // The handler runs on the fault path and must produce a value
-                // of the wrapped expression's type (the fault-catch always
-                // yields that type). Hint it so a `match`-handler's arms unify.
-                let saved_hint = self.decl_type_hint.take();
-                self.decl_type_hint = Some(inner_type);
-                self.infer_expr(handler);
-                self.decl_type_hint = saved_hint;
+                // of the wrapped expression's type. Route it through the same
+                // helper as `Expr::Catch` above (Core #4 — one class, both
+                // arms) so the handler's inferred type is compared against
+                // the expected `inner_type` and literal shapes still get the
+                // hint they need (a `match`-handler's arms already unify
+                // among themselves — this catches the whole-handler slot).
+                self.check_recovery_type(handler, inner_type);
                 inner_type
             }
         }

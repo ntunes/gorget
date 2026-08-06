@@ -17769,9 +17769,11 @@ Vector[int] binding) is caught by the C compiler by accident of layout. SEVERE c
 (this fixture): a Vector[String] recovery into a Vector[int] binding shares the C \
 representation GorgetArray, so NOTHING catches it -- gg check exit 0, gg build \
 exit 0 on C AND llvm, runs and prints a Str header's data pointer as an int64_t. \
-Silent type confusion on both backends. Likely same mechanism as \
-index_string_from_grid_accidentally_green (a check-arm returning error_id, which \
-unifies with any type). Un-ignore and convert to a NEG fixture when fixed."]
+Silent type confusion on both backends. MECHANISM (verified 2026-08-05): \
+typecheck.rs:4652 called self.infer_expr(recovery) and DISCARDED the result, then \
+:4656-4659 returned the Result's `T` slot regardless -- a type was FABRICATED, \
+never compared. Sibling FaultCatch arm at :4710 was broken identically (Core #4). \
+Un-ignore and convert to a NEG fixture when fixed."]
 fn catch_recovery_type_unchecked() {
     check_gg_fails(
         "known_gaps/catch_recovery_type_unchecked.gg",
