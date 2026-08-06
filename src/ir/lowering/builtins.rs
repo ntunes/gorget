@@ -1248,6 +1248,27 @@ pub fn is_elem_borrow_read_builtin_method(method_name: &str) -> bool {
     })
 }
 
+/// Every opaque-handle protocol (SelfConvention::ByValue on ALL its methods) —
+/// the class the Round XXXII receiver-ABI chokepoint (`methods.rs:531 / :2315 /
+/// :2343`) covers. Read by `tests/lints.rs::opaque_handle_route_fixtures_exist`
+/// to grow-with-schema: adding a new by-value protocol to `ALL_PROTOCOLS`
+/// automatically flips the lint's expected-coverage set. Filter is on the
+/// FIRST method's self_conv (all methods on a given protocol share the
+/// convention by construction — the collection_protocols_have_full_metadata
+/// pattern above).
+pub fn by_value_protocol_names() -> Vec<&'static str> {
+    ALL_PROTOCOLS
+        .iter()
+        .filter(|p| {
+            p.methods
+                .first()
+                .map(|m| m.self_conv == SelfConvention::ByValue)
+                .unwrap_or(false)
+        })
+        .map(|p| p.base_name)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
