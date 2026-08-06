@@ -1,0 +1,38 @@
+# KNOWN GAP (filed 2026-08-06 by Round XXXII Track D+E output-review B3;
+# Core #8 both backends): the Rust lane runtime double-frees on
+# `shared(rwlock) String s = <computed>; with s: print(s)` where the
+# computed initializer is a String concat (or any Move-of-a-drop-registered
+# temp shape). This defect was HIDDEN by the Move-follow-through ICE 101
+# the Track D+E class-fix (`0f2b49ee`) retired.
+#
+#   gg check              : exit 0
+#   gg build (C)          : exit 0
+#   gg build --backend=llvm: exit 0
+#   run (C)               : `free(): double free detected in tcache 2`, exit 134
+#   run (LLVM)            : identical, exit 134
+#
+# INTENDED: `ab`, exit 0.
+#
+# Discriminator vs the graduated `tests/fixtures/shared_rwlock_call_init.gg`
+# (which prints `hello` correctly on the same ArcRwLock path): the
+# initializer FORM. Call-returned (`make()` returning a String) works;
+# String concat (`"a" + "b"`) double-frees. Both shapes hit the same
+# `emit_rwlock_read_get` facade-init path; both go through the class-fix's
+# `assign_with_move_follow_through` on `facade_local`; the concat form
+# triggers a different lower-level operand shape that leaks a live drop
+# somewhere in the rwlock facade-init chain.
+#
+# ⚠ SIBLING FAMILY (not identical): the SH-lane `op_consume` gap filed
+# separately in TODO.md (same round) is a DIFFERENT lane and DIFFERENT
+# mechanism. The Rust ArcRwLock+concat defect here is Rust-lane and
+# user-visible; the SH op_consume gap is SH-lane and invisible under the
+# `< PRIM_COUNT` gate. They may share a common cause in the higher-level
+# "moving a resource temp through a facade/lock read chain" seam, but they
+# manifest as distinct defects on distinct lanes.
+#
+# Graduate out of known_gaps/ (un-ignore + move) the round this is fixed.
+
+void main():
+    shared(rwlock) String s = "a" + "b"
+    with s:
+        print(s)

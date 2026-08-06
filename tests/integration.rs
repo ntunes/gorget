@@ -17803,6 +17803,20 @@ fn shared_vector_push_bare_silent_noop() {
 }
 
 #[test]
+#[ignore = "KNOWN GAP (filed 2026-08-06 by Round XXXII Track D+E output-review B3, \
+Core #8 both backends): `shared(rwlock) String s = <String concat>; with s: print(s)` \
+runtime double-frees identically on C and --backend=llvm (exit 134 \
+`free(): double free detected in tcache 2`). This defect was HIDDEN by the \
+Move-follow-through ICE 101 the class-fix retired (commit 0f2b49ee); post-fix it \
+compiles clean but crashes at runtime. Discriminator vs the graduated \
+`shared_rwlock_call_init` (call-returned form, works correctly): the initializer \
+FORM. Both hit the same `emit_rwlock_read_get` facade-init path. Un-ignore and move \
+out of known_gaps/ when fixed."]
+fn shared_rwlock_concat_init_double_free() {
+    run_gg("known_gaps/shared_rwlock_concat_init_double_free.gg", "ab");
+}
+
+#[test]
 fn shared_spawn_amp_param() {
     run_gg("shared_spawn_amp_param.gg", "hello world-forced!");
 }
