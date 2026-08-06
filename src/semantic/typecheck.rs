@@ -9562,6 +9562,9 @@ impl<'a> TypeChecker<'a> {
         // auto-propagation chokepoints can gate cross-error propagation. The
         // boolean `current_function_throws` is not enough — we need the
         // resolved TypeId of E to compare against the callee's error type.
+        // D26 auto-infer is transparent here: the pre-`collect_top_level`
+        // rewrite pass mutated `func.throws` to `Explicit(ArithError)`, so
+        // `explicit_type()` returns Some as if the user had written it.
         self.current_fn_throws_type_id = func.throws.explicit_type().and_then(|t| {
             super::types::ast_type_to_resolved(&t.node, t.span, self.scopes, self.types).ok()
         });

@@ -261,6 +261,21 @@ pub fn analyze_with_source_dir(
         }
     }
 
+    // Pass 0.9: D26 (Round XXXIII Batch C1) auto-infer `throws ArithError`
+    // for every fn whose body contains a fallible-arith op (`+! -! *! /! %!
+    // <<! >>!`), silently — owner ruling 2026-08-06. Runs BEFORE
+    // `collect_top_level` so `FunctionInfo.throws_type_id` picks up the
+    // mutation, AND before the IR lowering (which reads
+    // `func.throws.declares_throws()` directly at ten+ sites and would
+    // otherwise stay non-throws). The rewrite mutates `f.throws` to
+    // `ThrowsSpec::Explicit(ArithError)` in place, so every downstream reader
+    // sees an EXPLICITLY-typed throws-signature identical to what the user
+    // could have written by hand. Explicit `throws E` (any E) wins over
+    // auto-infer.
+    time_pass(&mut pass_times, "rewrite_d26_auto_infer_throws", || {
+        rewrite::rewrite_d26_auto_infer_throws(module);
+    });
+
     // Pass 1: Collect top-level definitions
     let mut resolve_ctx = time_pass(&mut pass_times, "collect_top_level", || {
         resolve::collect_top_level(module, &mut scopes, &mut types, &mut errors)

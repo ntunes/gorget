@@ -545,6 +545,13 @@ fn collect_item(
 
                     validate_default_param_ordering(&f.params, errors);
 
+                    // D26 auto-infer: by the time `collect_top_level` runs, the
+                    // `rewrite_d26_auto_infer_throws` pass has already mutated
+                    // `f.throws` to `Explicit(ArithError)` for any body
+                    // containing `+!` / `-!` / `*!` / etc — so the
+                    // `f.throws.explicit_type()` lookup below returns Some as if
+                    // the user had written it, and `FunctionInfo.throws_type_id`
+                    // reflects the auto-inferred signature transparently.
                     let throws_type_id = f.throws.explicit_type().and_then(|t| {
                         types::ast_type_to_resolved(&t.node, t.span, scopes, types).ok()
                     });
@@ -782,6 +789,11 @@ fn collect_item(
                             })
                             .collect();
                         validate_default_param_ordering(&f.params, errors);
+                        // D26 auto-infer: the pre-`collect_top_level` rewrite
+                        // pass already promoted this fn to `throws ArithError`
+                        // if its body contained a fallible-arith op (silent
+                        // owner ruling 2026-08-06), so `explicit_type()`
+                        // returns Some transparently.
                         let throws_type_id = f.throws.explicit_type().and_then(|t| {
                             types::ast_type_to_resolved(&t.node, t.span, scopes, types).ok()
                         });
