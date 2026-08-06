@@ -261,6 +261,35 @@ Type: `Option[T]` for some inferred `T`.
 | `%`    | Remainder (sign follows dividend) |
 | `.mod(n)` | Euclidean modulo (sign follows divisor) — method on numeric types |
 
+**Fallible arithmetic (D26):** the mark `!` fused into an arithmetic
+operator produces a `Result[T, ArithError]` instead of trapping on fault.
+
+| Symbol | Name                       | Faults raised |
+|--------|----------------------------|---------------|
+| `+!`   | Fallible addition          | `Overflow`    |
+| `-!`   | Fallible subtraction       | `Overflow`    |
+| `*!`   | Fallible multiplication    | `Overflow`    |
+| `/!`   | Fallible division          | `Overflow` (signed `TYPE_MIN/-1`), `DivByZero` |
+| `%!`   | Fallible remainder         | `Overflow`, `DivByZero` |
+| `<<!`  | Fallible left shift        | `Overflow` (shift range) |
+| `>>!`  | Fallible right shift       | `Overflow` (shift range) |
+
+Integer operands only (`E_FallibleArithmeticOnNonInt` on a float operand).
+Compound forms (`+!=`, ...) are v1-EXCLUDED. In a `const` initializer they
+reject with `E_FallibleOpInConst` (a Result is not a foldable Constant).
+
+**Auto-propagation.** A fn body containing any fallible-arith op
+auto-infers `throws ArithError` on its signature — silent, no diagnostic.
+The `+!` inside such a fn either produces the plain `T` (Route A: fault
+becomes `Error(ArithError.*)` early-returned via the fn's Result slot)
+or, at a Result-capture destination, produces a raw `Result[T,
+ArithError]` value (Route B). An explicit `throws E` declaration WINS
+over auto-infer — the user's contract is preserved (see D26 spec + F1a).
+
+`main()` is not auto-inferred (it can only throw `int` per
+`E_MainThrowsNonInt`); every `+!` in `main` must be captured
+(`Result[int, ArithError] r = a +! b`) or catch-handled at the use site.
+
 **Bitwise:**
 
 | Symbol | Name            |
