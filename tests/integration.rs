@@ -17791,6 +17791,18 @@ fn shared_computed_init() {
 }
 
 #[test]
+#[ignore = "KNOWN GAP (filed 2026-08-06 by Round XXXII Track D+E output-review B4): \
+bare `v.push(x)` on a `shared Vector` outside a `with v:` block is a SILENT NO-OP -- \
+the push mutates the facade snapshot, not the guarded storage. `gg check` accepts, \
+both backends run to exit 0 printing `0` instead of `1`. This is the WRITE face of \
+the same class as the bare-read owner-reconciliation follow-up \
+(docs/language-reference.md:1366 -- the ratified reject covers BOTH reads and writes). \
+Un-ignore and move out of known_gaps/ when fixed."]
+fn shared_vector_push_bare_silent_noop() {
+    run_gg("known_gaps/shared_vector_push_bare_silent_noop.gg", "1");
+}
+
+#[test]
 fn shared_spawn_amp_param() {
     run_gg("shared_spawn_amp_param.gg", "hello world-forced!");
 }

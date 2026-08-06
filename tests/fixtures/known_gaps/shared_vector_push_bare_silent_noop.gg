@@ -1,0 +1,38 @@
+# KNOWN GAP (filed 2026-08-06 by Round XXXII Track D+E output-review B4):
+# Bare `v.push(x)` on a `shared` variable OUTSIDE a `with v:` block is a
+# SILENT NO-OP -- the push mutates the facade snapshot, not the guarded
+# storage, and the next bare read reads back an empty snapshot. Neither
+# backend enforces the ratified `docs/language-reference.md:1366` bare-read/
+# write reject.
+#
+#   gg check              : exit 0, no diagnostic
+#   gg build (C)          : exit 0
+#   gg build --backend=llvm: exit 0
+#   run                   : prints `0`
+#
+# INTENDED: `1` (the push writes through the guarded storage).
+#
+# This is the WRITE face of the same class as the bare-READ owner-
+# reconciliation follow-up (docs/language-reference.md:1366 says the reject
+# covers BOTH reads and writes; the WRITE face is arguably worse -- it
+# silently drops the mutation, where the read face at least returns a
+# defined snapshot value).
+#
+# Related: `docs/language-reference.md:1366` (the ratified bare-read/write
+# reject that neither backend enforces).
+#
+# Discovered while writing Track D+E's fixture net (Round XXXII, 2026-08-06):
+# the brief specified this exact shape for the P4 ArcMutex-Vector-ctor
+# class-fix pin, but the runtime output was `0` instead of `1`. The class-
+# fix at the CTOR init lowering is exercised identically whether the push
+# is wrapped in `with v:` or not (the tmp-mat is at the init site, not the
+# push site), so P4 was pinned via `with v:` (see
+# `tests/fixtures/shared_vector_ctor_init.gg`) and this bare-write shape
+# was filed as a separate defect.
+#
+# Graduate out of known_gaps/ (un-ignore + move) the round this is fixed.
+
+void main():
+    shared Vector[int] v = Vector[int]()
+    v.push(1)
+    print(v.len())
