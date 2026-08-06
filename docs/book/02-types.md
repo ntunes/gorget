@@ -213,6 +213,23 @@ x *% y         # wrapping multiply
 Wrapping is per-expression by design — there is no whole-file or whole-build
 mode that changes what plain `+`/`-`/`*` do.
 
+### Exponentiation with `**`
+
+`x ** y` raises `x` to the power `y`:
+
+```gorget
+int r  = 2 ** 10          # 1024
+float f = 2.0 ** 0.5      # 1.414... (square root)
+int a  = 2
+a **= 10                  # compound assign — a = 1024
+```
+
+`**` is right-associative (`2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512, matching Fortran/Python/JS/Ruby), binds tighter than unary `-`, and does not switch types (`int ** int → int`, `float ** float → float`; mixed operands are rejected). An integer overflow OR negative exponent traps `Fault.Overflow` — write `**` explicitly with matching types.
+
+Unparenthesized `-x ** 2` is rejected as ambiguous (does the `-` apply to `x` or to `x ** 2`?) — write `-(x ** 2)` or `(-x) ** 2`.
+
+> **`^` is bitwise XOR, not power.** `2 ^ 10` = 8 (XOR), not 1024. The compiler emits a fix-it warning on the narrow shape `{2 | 10} ^ N` where `N` looks like an exponent.
+
 ---
 
 ## Summary

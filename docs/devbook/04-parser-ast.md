@@ -182,6 +182,15 @@ continue; (3) else stop. Postfix is checked before infix.
   `left:1` (`expr.rs:695-708`) and `??` at `left:3` (`:709`), up
   through `or` (5), `and` (7), comparisons (11–13), bitwise (17–22),
   shifts (25), to arithmetic at the top.
+- **Power `**`** binds at `left:34, right:33` (`expr.rs`) — tighter
+  than unary prefix (`-`/`*`/`!` at bp 33) so `2 ** -1` parses as
+  `2 ** (-1)`. Right-associative via the `(left, left-1)` idiom —
+  `2 ** 3 ** 2` groups as `2 ** (3 ** 2)` (Fortran/Python/JS/Ruby
+  convention). The parser also rejects `-x ** 2` at parse time
+  (`ParseErrorKind::AmbiguousUnaryMinusPow`, the JS/TC39 guardrail):
+  after consuming `-`, if the token right after is NOT `(` and the
+  operand ends up as a top-level `Pow`, the reject fires. See D28
+  amendment R1/R2 in `docs/define-gorget/decisions.md:1197`.
 - **Postfix** binding powers are in `postfix_bp()` (`expr.rs:1038`):
   `.` / `?.` / `[` / `(` all at 35 (the tightest), range `..` /
   `..=` at 23. `parse_postfix()` (`expr.rs:1054`) builds

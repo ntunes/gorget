@@ -102,7 +102,7 @@ Gorget ships with two module namespaces:
 | `std.os` | OS interface: `exit`, `getenv`, `getcwd`, `args`, `platform` |
 | `std.io` | Stdin/stdout: `readline`, `input`, `getchar` |
 | `std.conv` | Type conversions: `int_to_str`, `parse_int`, `ord`, `chr` |
-| `std.math` | Math: `sqrt`, `pow`, `sin`, `cos`, `abs`, `min`, `max` |
+| `std.math` | Math: `sqrt`, `sin`, `cos`, `abs`, `min`, `max` (use `**` for exponentiation) |
 | `std.random` | Random: `rand`, `seed`, `rand_range` |
 | `std.time` | Time: `time`, `time_ms`, `sleep_ms` |
 | `std.process` | Process execution: `exec`, `exec_output`, `process_spawn` |

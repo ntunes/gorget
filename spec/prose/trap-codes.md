@@ -45,7 +45,7 @@ its code, so **this registry file is the stability contract**.
 
 | Code | Class (`TrapKind`) | Catchable? (§10.9 `Fault`) |
 |---|---|---|
-| `T_Overflow` | `Overflow` — an overflowing checked `+`/`-`/`*`/`/`/`%`/unary-neg, a signed `TYPE_MIN / -1` (or `% -1`), or an out-of-range shift count (owner ruling 2026-07-10: shift-out-of-range normalizes to `T_Overflow`, no separate class) | **yes** |
+| `T_Overflow` | `Overflow` — an overflowing checked `+`/`-`/`*`/`/`/`%`/`**`/unary-neg, a signed `TYPE_MIN / -1` (or `% -1`), an integer `**` with a negative exponent (domain fault — D28 amendment R3), or an out-of-range shift count (owner ruling 2026-07-10: shift-out-of-range normalizes to `T_Overflow`, no separate class) | **yes** |
 | `T_DivByZero` | `DivByZero` — a `/` or `%` with a zero divisor | **yes** |
 | `T_Bounds` | `Bounds` — an out-of-bounds index | **yes** |
 | `T_UnwrapNone` | `UnwrapNone` — `.unwrap()` on a `None` | no |
