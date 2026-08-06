@@ -1,0 +1,44 @@
+# KNOWN GAP — HIGH severity: qualified match-arm patterns
+# `case Result.Ok(v):` / `case Result.Error(e):` on a `Result[T, E]` scrutinee
+# generate C that reads `.Ok_0` unconditionally without checking the
+# discriminant tag. Every arm falls to the Ok branch regardless of the actual
+# variant → silent WRONG OUTPUT on both backends. Discovered 2026-08-06 by
+# the Round XXXIII D26 F1 executor while writing capture fixtures (the D26
+# fixtures use the UNQUALIFIED `case Ok(v):` form as workaround).
+#
+# INTENDED: the match reads the discriminant, dispatches to the correct arm,
+# and prints `-42` (the Error arm hit because `pick(-1)` returns `Error`).
+#
+# CURRENT: both backends (C AND `--backend=llvm`) print `0` — the compiled
+# code reads `Ok_0` unconditionally as an int64, returning the zero-init
+# default (or garbage bytes from the Error payload). Silent type confusion
+# at the match lowering; no diagnostic at any stage.
+#
+# DISCRIMINATOR: the QUALIFIED form (`Result.Ok(v)` / `Result.Error(e)`)
+# breaks; the UNQUALIFIED form (`Ok(v)` / `Error(e)`) works correctly.
+# Rewriting this fixture's arms to the unqualified form yields the intended
+# `-42` output. That is the D26 fixtures' workaround pattern.
+#
+# SIBLING CLASS suspected: `Option.Some(v)` / `Option.None()` in qualified
+# form may have the same bug (not measured; would need a separate probe).
+#
+# FIX SHAPE: unknown — the qualified pattern path likely bypasses the tag-
+# discriminate code emit at match lowering; the unqualified path routes
+# through the correct discriminator. Own scout to find the divergence in
+# `src/ir/lowering/stmts/patterns.rs` (or wherever match arms lower). Fix
+# probably a one-line missing tag-check in the qualified-form branch.
+#
+# Filed at TODO.md "Semantics / reference-grade rejection > High" as
+# "Qualified match arm patterns... generate C that reads .Ok_0
+# unconditionally". Un-ignore `qualified_result_match_arm_wrong_output`
+# in `tests/integration.rs` when the fix lands.
+Result[int, String] pick(int x):
+    if x > 0:
+        return Ok(x)
+    return Error("bad")
+
+void main():
+    Result[int, String] r = pick(-1)
+    match r:
+        case Result.Ok(v): print(v)
+        case Result.Error(e): print(-42)

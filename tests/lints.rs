@@ -11530,8 +11530,9 @@ fn d26_map_binop_arm_count_ratchet() {
         ),
         (
             "src/semantic/typecheck.rs",
-            21,
-            "op_glyph_str (7) + op_display non-compound (7) + op_display compound (7)",
+            23,
+            "op_glyph_str (7) + op_display non-compound (7) + op_display compound (7) + \
+             shift-fallible Route-B reject guard matches! (2: ShlFallible|ShrFallible)",
         ),
         (
             "src/parser/expr.rs",

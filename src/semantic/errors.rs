@@ -614,6 +614,20 @@ pub enum SemanticErrorKind {
     /// Rejected at `check_module_const_foldability` (chokepoint).
     FallibleOpInConst { op: String },
 
+    /// D26 shift-fallible Route B: `<<!` / `>>!` at a `Result[T, ArithError]`
+    /// capture destination. The check-lane types the shape as
+    /// `Result[T, ArithError]` (via `check_fallible_arith_binop`), but
+    /// `lower_fallible_arith_binop` only handles the 5 arith fallible ops —
+    /// shift fallible falls through to plain `Shl`/`Shr` (int result), causing
+    /// a silent type-confusion miscompile that SIGSEGVs at run when the
+    /// caller reads the int as a `Result` scrutinee. Rejected at check with
+    /// this diagnostic; Route A (throws-propagate + auto-infer) still works
+    /// for shift-fallible via the base-op trap-on-oob path. Filed follow-up:
+    /// extend `FaultableBinOp` LIR + `lower_fallible_arith_binop`'s base_op
+    /// match to route Shl/Shr through a new `FaultOp::ShlOverflow`/
+    /// `ShrOverflow` category; when it lands, this reject retires.
+    ShiftFallibleRouteBNotYetImplemented { op: String },
+
     /// D29/A31: a bare `!` signature (`int f()!:`) — the reserved spelling for
     /// A31 inferred error sets — used before A31 is implemented. The grammar
     /// locks now (parses); the checker teaching-rejects until A31 lands, steering
@@ -977,6 +991,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::MissingFallibleMark { .. } => "E_MissingFallibleMark",
             SemanticErrorKind::FallibleArithmeticOnNonInt { .. } => "E_FallibleArithmeticOnNonInt",
             SemanticErrorKind::FallibleOpInConst { .. } => "E_FallibleOpInConst",
+            SemanticErrorKind::ShiftFallibleRouteBNotYetImplemented { .. } => "E_ShiftFallibleRouteBNotYetImplemented",
             SemanticErrorKind::InferredThrowsUnsupported => "E_InferredThrowsUnsupported",
             SemanticErrorKind::AwaitOutsideAsync => "E_AwaitOutsideAsync",
             SemanticErrorKind::SelectOutsideAsync => "E_SelectOutsideAsync",
@@ -1360,6 +1375,19 @@ impl std::fmt::Display for SemanticError {
                  help: compute the value at runtime, or use plain arithmetic \
                  (`{plain}`) and rely on compile-time overflow trapping",
                 plain = op.trim_end_matches('!')
+            ),
+            SemanticErrorKind::ShiftFallibleRouteBNotYetImplemented { op } => write!(
+                f,
+                "the shift-fallible operator `{op}` does not yet support the \
+                 `Result[T, ArithError]` capture destination (Route B); \
+                 help: use the auto-infer / throws-propagate shape instead — \
+                 `int f(int a, int b) throws ArithError: return a {op} b` and \
+                 recover with `catch (e)` at the call site — that path works \
+                 today. Rooted at TODO.md `Semantics / reference-grade rejection > \
+                 High` \"D26 shift-fallible Route B lowering gap\": extending \
+                 FaultableBinOp LIR + `lower_fallible_arith_binop` base_op map \
+                 to accept Shl/Shr with a new FaultOp category will retire \
+                 this reject."
             ),
             SemanticErrorKind::InferredThrowsUnsupported => write!(
                 f,

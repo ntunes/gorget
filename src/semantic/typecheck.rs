@@ -6598,6 +6598,32 @@ impl<'a> TypeChecker<'a> {
             Some(def_id) => self.types.defined_id(def_id),
             None => return operand_type,
         };
+        // D26 shift-fallible Route B guard (Core #10, Core #8): the check-lane
+        // types `<<!` / `>>!` as `Result[T, ArithError]` uniformly, but the
+        // lowering's `lower_fallible_arith_binop` only handles the 5 arith
+        // fallible ops — shift-fallible falls through to the plain `Shl`/`Shr`
+        // trap-on-oob path (an int result). At a Route-B (Result-capture)
+        // destination that mismatch is a silent type-confusion miscompile:
+        // the emitted C stores an int in a `Result[int, ArithError]` slot,
+        // the caller's match reads garbage bytes as the discriminant, and
+        // the program SIGSEGVs. Reject here at check-time until the shift-
+        // fallible lowering follow-up lands. Route A (throws-propagate /
+        // auto-infer) still works — the base-op trap-on-oob path in a
+        // throws context is a sound minimum for now (pins the same shape the
+        // `c1_d26_shift_shl_ok`/`c1_d26_shift_shr_ok` fixtures exercise).
+        let is_shift_fallible = matches!(op, BinaryOp::ShlFallible | BinaryOp::ShrFallible);
+        let dest_is_result_capture = self
+            .decl_type_hint
+            .map_or(false, |h| self.type_is_result(h));
+        if is_shift_fallible && dest_is_result_capture {
+            self.error(
+                SemanticErrorKind::ShiftFallibleRouteBNotYetImplemented {
+                    op: Self::op_display(op, /*compound=*/ false).to_string(),
+                },
+                span,
+            );
+            return self.types.error_id;
+        }
         // Route through D29 disposition table. The `!` glyph IS the mark, and
         // for D26 fallible-arith it is INHERENT to the operator (no un-marked
         // variant exists) — so the capture-position redundant-mark reject is

@@ -42563,6 +42563,92 @@ fn c1_d26_shift_shr_ok() {
     run_gg("c1_d26_shift_shr_ok.gg", "4");
 }
 
+#[test]
+fn c1_d26_shift_capture_rejects() {
+    // Core #10 same-round compliance for the Core #8 silent-SIGSEGV
+    // miscompile the review flagged: `<<!` / `>>!` at a `Result[T,
+    // ArithError]` capture destination now rejects at CHECK with
+    // `E_ShiftFallibleRouteBNotYetImplemented`. Route A still works —
+    // `c1_d26_shift_shl_ok` / `c1_d26_shift_shr_ok` above prove that path
+    // stays green. Retires when the shift-fallible Route B lowering
+    // follow-up lands (TODO "D26 shift-fallible Route B lowering gap"),
+    // at which point the `known_gaps/c1_d26_shift_capture_type_mismatch.gg`
+    // sibling graduates to a positive Route-B fixture.
+    //
+    // RED-verify (pre-fix behavior): the same source SIGSEGV'd at run —
+    // the emitted C stored a plain-int shift result into a
+    // `Result[int, ArithError]` slot, the caller's match read garbage
+    // bytes as the discriminant, exit 139 on both backends. That was the
+    // exact defect the review's concrete repro named.
+    check_gg_fails(
+        "c1_d26_shift_capture_rejects.gg",
+        "E_ShiftFallibleRouteBNotYetImplemented",
+    );
+}
+
+// ── D26 known_gaps repros (Task Continuity 2026-07-24 binding) ───────────
+//
+// Each `#[ignore]`d test below pairs a durable `tests/fixtures/known_gaps/*.gg`
+// repro with an assertion of the INTENDED behavior — the fixture graduates
+// (un-ignore + move out of known_gaps/) in the round that lands the
+// corresponding fix. Filed alongside the TODO.md follow-up entries under
+// "Semantics / reference-grade rejection".
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-06, D26 F1 executor discovery): qualified match \
+arm patterns `case Result.Ok(v):` / `case Result.Error(e):` on a Result[T, E] \
+scrutinee generate C that reads .Ok_0 UNCONDITIONALLY without checking the \
+discriminant tag. Every arm falls to the Ok branch regardless of the actual \
+variant — silent WRONG OUTPUT on both backends (this fixture prints `0` \
+instead of `-42`). The UNQUALIFIED form `case Ok(v):` / `case Error(e):` \
+works correctly and is the workaround the D26 fixture pack uses. Sibling \
+class suspected: `Option.Some(v)` / `Option.None()` qualified. Un-ignore \
+and graduate this fixture out of known_gaps/ when the match-lowering \
+qualified-form tag-check gap is fixed."]
+fn qualified_result_match_arm_wrong_output() {
+    run_gg(
+        "known_gaps/qualified_result_match_arm_wrong_output.gg",
+        "-42",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-06, D26 F4 review-fold): D26 shift-fallible \
+Route B (Result-capture) is not yet lowered to Result construction. The \
+Rust check-lane REJECTS this shape today with \
+E_ShiftFallibleRouteBNotYetImplemented (see c1_d26_shift_capture_rejects.gg) \
+so the SIGSEGV miscompile is blocked. This fixture pins the INTENDED \
+behavior: `4 <<! 2 = 16` at a `Result[int, ArithError]` destination → \
+Result.Ok(16), match prints `16`. FIX SHAPE: extend FaultableBinOp LIR + \
+lower_fallible_arith_binop base_op map to route Shl/Shr with a new FaultOp \
+category. Un-ignore and graduate this fixture out of known_gaps/ (rename to \
+c1_d26_shift_capture_shl_ok.gg) when the shift-fallible Route B lowering \
+lands. A sibling _overflow.gg fixture will cover Error(Overflow) construction."]
+fn c1_d26_shift_capture_type_mismatch_intended() {
+    run_gg(
+        "known_gaps/c1_d26_shift_capture_type_mismatch.gg",
+        "16",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-06, D26 F1a executor scope-note): a closure \
+whose body contains a fallible-arith operator does NOT auto-infer \
+`throws ArithError` on the closure's signature. The F1a pre-collect_top_level \
+walker in src/semantic/rewrite.rs deliberately skips Expr::Closure / \
+Expr::ImplicitClosure to avoid false-positive promotion of the enclosing fn. \
+Consequence: a closure using +! requires the user to declare `throws ArithError` \
+explicitly (an asymmetry with fn-body auto-infer). Current behavior is a SOUND \
+E_UnhandledThrows reject (not a miscompile) — this is an ERGONOMIC gap. FIX \
+SHAPE: mirror the F1a body-walker at the closure signature-resolution site. \
+Un-ignore and graduate when the closure auto-infer lands."]
+fn c1_d26_closure_body_no_auto_infer_intended() {
+    run_gg(
+        "known_gaps/c1_d26_closure_body_no_auto_infer.gg",
+        "5",
+    );
+}
+
 // ── D26 F2 self-host lane parity (Core #9) ───────────────────────────────
 //
 // Cross-lane fixture: the self-host driver runs the shared c1_d26_* fixtures
