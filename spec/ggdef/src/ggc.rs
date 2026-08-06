@@ -401,6 +401,13 @@ impl Expr {
 }
 
 /// The binary operators the subset needs.
+///
+/// D26 (Round XXXIII Batch C1): the `*Fallible` variants (`AddFallible`,
+/// `SubFallible`, `MulFallible`, `DivFallible`, `RemFallible`) are the five
+/// arithmetic fallible operators (`+! -! *! /! %!`); they always evaluate to a
+/// `Result[T, ArithError]` value in this subset. The shift-fallible operators
+/// (`<<! >>!`) are OUT-OF-SUBSET in Increment A — `map_binop` rejects them at
+/// elaboration with an out-of-subset error, matching the `Shl`/`Shr` policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
     Add,
@@ -408,6 +415,12 @@ pub enum BinOp {
     Mul,
     Div,
     Rem,
+    // D26 fallible arithmetic operators — evaluate to Result[T, ArithError].
+    AddFallible,
+    SubFallible,
+    MulFallible,
+    DivFallible,
+    RemFallible,
     Eq,
     Neq,
     Lt,
@@ -416,6 +429,22 @@ pub enum BinOp {
     GtEq,
     And,
     Or,
+}
+
+impl BinOp {
+    /// D26 fallible-arithmetic classification: true iff `self` is one of the
+    /// five `*Fallible` variants. Centralized so a sixth fallible variant lands
+    /// in ONE place (Core #4 sibling-site rule).
+    pub fn is_fallible_arith(&self) -> bool {
+        matches!(
+            self,
+            BinOp::AddFallible
+                | BinOp::SubFallible
+                | BinOp::MulFallible
+                | BinOp::DivFallible
+                | BinOp::RemFallible
+        )
+    }
 }
 
 /// The unary operators the subset needs.

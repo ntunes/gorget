@@ -1707,11 +1707,24 @@ impl Elaborator {
                 }
             }
 
-            ast::Expr::BinaryOp { left, op, right } => Ok(Expr::Binary(
-                map_binop(*op, span)?,
-                Box::new(self.elaborate_expr(left)?),
-                Box::new(self.elaborate_expr(right)?),
-            )),
+            ast::Expr::BinaryOp { left, op, right } => {
+                let mapped = map_binop(*op, span)?;
+                // D26 (Round XXXIII Batch C1): a fallible-arith BinOp evaluates
+                // to `Result[T, ArithError]`. In a propagating context — the
+                // enclosing fn is `throws` and the destination is NOT a Result
+                // capture — wrap in `Propagate` so an `Error` unwinds via the
+                // existing throws-return path (mirrors `f()!` propagation). At a
+                // Result-capture destination the raw Result flows through unchanged.
+                let dest_is_result = matches!(&self.dest_ty_hint, Some(Ty::Result(_, _)));
+                let elab_left = self.elaborate_expr(left)?;
+                let elab_right = self.elaborate_expr(right)?;
+                let inner = Expr::Binary(mapped, Box::new(elab_left), Box::new(elab_right));
+                if mapped.is_fallible_arith() && self.current_fn_throws && !dest_is_result {
+                    Ok(Expr::Propagate(Box::new(inner)))
+                } else {
+                    Ok(inner)
+                }
+            }
             ast::Expr::UnaryOp { op, operand } => {
                 Ok(Expr::Unary(map_unop(*op, span)?, Box::new(self.elaborate_expr(operand)?)))
             }
@@ -3632,6 +3645,21 @@ fn map_binop(op: ast::BinaryOp, span: Span) -> ElabResult<BinOp> {
         B::Mul => BinOp::Mul,
         B::Div => BinOp::Div,
         B::Rem | B::Mod => BinOp::Rem,
+        // D26 (Round XXXIII Batch C1): fallible arithmetic (`+! -! *! /! %!`)
+        // maps to the `*Fallible` GGC variants; eval produces Result.Ok / .Error.
+        B::AddFallible => BinOp::AddFallible,
+        B::SubFallible => BinOp::SubFallible,
+        B::MulFallible => BinOp::MulFallible,
+        B::DivFallible => BinOp::DivFallible,
+        B::RemFallible => BinOp::RemFallible,
+        // D26 shift-fallible (`<<! >>!`) is OUT-OF-SUBSET (Increment A). The
+        // plain shift ops (`Shl`/`Shr`) are also out-of-subset — kept parallel.
+        B::ShlFallible | B::ShrFallible => {
+            return Err(ElabError::new(
+                format!("operator {op:?} is outside the Increment-A subset (D26 shift-fallible)"),
+                span,
+            ));
+        }
         B::Eq => BinOp::Eq,
         B::Neq => BinOp::Neq,
         B::Lt => BinOp::Lt,
