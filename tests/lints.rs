@@ -11478,3 +11478,100 @@ fn shared_var_decl_arms_route_through_materialize_addressable() {
         unrouted
     );
 }
+
+// ============================================================================
+// Round XXXIII Batch C1 D28 — placeholder-rot + compound-assign silent-fall-
+// through class-retiring guards (Core #6).
+// ============================================================================
+
+/// Guard (a) — `src/lir/lower/calls.rs` must contain zero placeholder-comment
+/// anti-patterns AND the `GirBinOp::Pow` arm must dispatch to `CallExtern`
+/// (a real runtime call), NOT `Inst::Mul`.
+///
+/// Retires the CLASS of Core #10 rot: the pre-D28 site emitted
+/// `Inst::Mul { ... }` for `GirBinOp::Pow` with a `// For now, emit as Mul
+/// (placeholder)` comment. Users' `x ** y` silently miscompiled as `x * y`
+/// (measured: `2 ** ten()` → 20 instead of 1024). The negative-pattern
+/// forbid catches new placeholders under different wording (`stub`,
+/// `unimplemented for now`); the positive `CallExtern` assertion pins the
+/// specific invariant even if a future author rewords the placeholder to
+/// dodge the string check.
+#[test]
+fn lir_lower_calls_no_placeholders() {
+    let src = fs::read_to_string("src/lir/lower/calls.rs")
+        .expect("read src/lir/lower/calls.rs");
+    // (i) Negative: forbid known placeholder-comment anti-patterns.
+    for pat in &["For now, emit as", "// placeholder", "// TODO: implement"] {
+        assert!(
+            !src.contains(pat),
+            "src/lir/lower/calls.rs contains placeholder pattern `{pat}` — this is \
+             Core #10 silent-fallthrough rot. Wire real emission or reject at check \
+             time. See D28 amendment `docs/define-gorget/decisions.md:1197` and the \
+             ratchet's docstring for the class-retiring rationale."
+        );
+    }
+    // (ii) Positive: the Pow arm dispatches to a runtime `CallExtern`.
+    // The arm body starts at `GirBinOp::Pow => {` and ends at the matching `}`.
+    let pow_key = "GirBinOp::Pow => {";
+    let arm_start = src
+        .find(pow_key)
+        .expect("locate `GirBinOp::Pow => {` in src/lir/lower/calls.rs");
+    // Find the matching close-brace by depth-counting braces from arm_start.
+    let arm_body_start = arm_start + pow_key.len();
+    let bytes = src.as_bytes();
+    let mut depth = 1usize;
+    let mut i = arm_body_start;
+    while i < bytes.len() && depth > 0 {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => depth -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    let arm_body = &src[arm_body_start..i.saturating_sub(1)];
+    assert!(
+        arm_body.contains("CallExtern"),
+        "GirBinOp::Pow arm in src/lir/lower/calls.rs must dispatch to a runtime \
+         `Inst::CallExtern` (Core #10). Found arm body:\n{arm_body}\n\
+         The pre-D28 placeholder `Inst::Mul {{ ... }}` silently miscompiled `x ** y` \
+         as `x * y` — do NOT revert to that shape."
+    );
+}
+
+/// Guard (c) — `src/ir/lowering/stmts/assigns.rs` must contain ZERO
+/// `_ => BinOp::Add` catch-all fallbacks in compound-assign dispatch
+/// (comments excluded).
+///
+/// Retires the CLASS of Core #10 sibling-drift in `assigns.rs`. Pre-D28 the
+/// same 14-arm compound-op → `BinOp` mapping was open-coded at S1-S5 plus
+/// the shared helper (six sites), each with a `_ => BinOp::Add` catch-all
+/// — `x **= y` on ANY of them would silently lower as `+=`. D28's chokepoint
+/// fix routes S1-S5 through `compound_op_to_gir` and enumerates the
+/// rejected variants explicitly in the helper. This ratchet locks the
+/// invariant: a future BinaryOp variant addition MUST land at the single
+/// helper site (compile-forced), NOT smuggled in via a `_ => BinOp::Add`
+/// escape hatch that re-opens the whole sibling class.
+#[test]
+fn assigns_compound_op_no_silent_fallthrough() {
+    let src = fs::read_to_string("src/ir/lowering/stmts/assigns.rs")
+        .expect("read src/ir/lowering/stmts/assigns.rs");
+    // Strip line comments so the ratchet reasons about EXECUTABLE code only.
+    // The `compound_op_to_gir` docstring legitimately mentions the historical
+    // shape in prose.
+    let code: String = src
+        .lines()
+        .map(|l| l.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let count = code.matches("_ => BinOp::Add").count();
+    assert_eq!(
+        count, 0,
+        "`_ => BinOp::Add` catch-all found {count}× in src/ir/lowering/stmts/assigns.rs — \
+         this silently miscompiles any BinaryOp variant the arm doesn't name (Core #10 \
+         sibling-drift class). Route through `compound_op_to_gir` and enumerate the \
+         rejected variants explicitly with `_ => unreachable!(\"...\")` (convention: \
+         6/6 hits in src/ir/lowering/ are `unreachable!`). See D28 chokepoint fix at \
+         `docs/define-gorget/decisions.md:1197` and the helper's docstring."
+    );
+}
