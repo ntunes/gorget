@@ -74,6 +74,9 @@ const int TOK_STARPERCENT = 63
 const int TOK_PLUSPERCENTEQ = 64
 const int TOK_MINUSPERCENTEQ = 65
 const int TOK_STARPERCENTEQ = 66
+# D28 power operator.
+const int TOK_STARSTAR = 67
+const int TOK_STARSTAREQ = 68
 
 # ── Keyword tag constants ────────────────────────────────────
 
@@ -313,6 +316,10 @@ int token_tag(Token tok):
             return TOK_MINUSPERCENTEQ
         case TkStarPercentEq:
             return TOK_STARPERCENTEQ
+        case TkStarStar:
+            return TOK_STARSTAR
+        case TkStarStarEq:
+            return TOK_STARSTAREQ
         else:
             return 0
 
@@ -791,6 +798,8 @@ String op_str(int tag):
         return "-"
     elif tag == TOK_STAR:
         return "*"
+    elif tag == TOK_STARSTAR:
+        return "**"
     elif tag == TOK_SLASH:
         return "/"
     elif tag == TOK_PERCENT:
@@ -850,6 +859,8 @@ String compound_op_str(int tag):
         return "-%="
     elif tag == TOK_STARPERCENTEQ:
         return "*%="
+    elif tag == TOK_STARSTAREQ:
+        return "**="
     return ""
 
 bool is_compound_assign(int tag):
@@ -878,6 +889,8 @@ bool is_compound_assign(int tag):
     elif tag == TOK_MINUSPERCENTEQ:
         return true
     elif tag == TOK_STARPERCENTEQ:
+        return true
+    elif tag == TOK_STARSTAREQ:
         return true
     return false
 
@@ -922,6 +935,10 @@ int infix_left_bp(int tag):
         return 29
     elif tag == TOK_PERCENT:
         return 29
+    elif tag == TOK_STARSTAR:
+        # D28 amendment R2: right-associative. Binds tighter than unary
+        # prefix; `2 ** 3 ** 2` = 512.
+        return 34
     return 0
 
 int infix_right_bp(int tag):
@@ -963,6 +980,9 @@ int infix_right_bp(int tag):
         return 30
     elif tag == TOK_PERCENT:
         return 30
+    elif tag == TOK_STARSTAR:
+        # D28 R2 right-assoc: right BP < left BP (33 < 34).
+        return 33
     return 0
 
 # ── Expression helpers ───────────────────────────────────────

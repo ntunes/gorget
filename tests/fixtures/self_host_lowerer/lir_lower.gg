@@ -10,7 +10,7 @@ from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE
 from gir import U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
-from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
+from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR, OP_POW
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
 from lir import LirModule, LirFunction, LirBlock, LirInst, LirTerm, LirSlot, LirStructDef, LirExtern, LirGlobal, LirThreadSpawnedFn, DictGetOrReq, BoxWrapperReq, TraitDispatchReq, SharedWrapperReq
 from lir import LirSpawnedFn, SpawnParam, CloneParam
@@ -4001,6 +4001,34 @@ int lower_instruction(Instruction inst, LirFunction &f, int bb, Vector[int] loca
                 lir_push_inst(&f, bb, IRem(dst, lir_ty, lhs, rhs))
             elif op == OP_MOD:
                 lir_push_inst(&f, bb, IMod(dst, lir_ty, lhs, rhs))
+            elif op == OP_POW:
+                # D28: `**` lowers to a checked runtime call. The C runtime
+                # helper family `gorget_pow_checked_iN` / `gorget_pow` /
+                # `gorget_powf` traps `T_Overflow` on overflow OR (for signed
+                # integer widths) negative exponent per amendment R3.
+                # Dispatch on the operand LIR type.
+                Vector[int] pow_args = [lhs, rhs]
+                Vector[int] pow_abis = []
+                String pow_name = "gorget_pow_checked_i64"
+                if lir_ty == LT_I32:
+                    pow_name = "gorget_pow_checked_i32"
+                elif lir_ty == LT_I16:
+                    pow_name = "gorget_pow_checked_i16"
+                elif lir_ty == LT_I8:
+                    pow_name = "gorget_pow_checked_i8"
+                elif lir_ty == LT_U64:
+                    pow_name = "gorget_pow_checked_u64"
+                elif lir_ty == LT_U32:
+                    pow_name = "gorget_pow_checked_u32"
+                elif lir_ty == LT_U16:
+                    pow_name = "gorget_pow_checked_u16"
+                elif lir_ty == LT_U8:
+                    pow_name = "gorget_pow_checked_u8"
+                elif lir_ty == LT_F64:
+                    pow_name = "gorget_pow"
+                elif lir_ty == LT_F32:
+                    pow_name = "gorget_powf"
+                lir_push_inst(&f, bb, ICallExtern(dst, pow_name, pow_args, pow_name, pow_abis))
             # Store result
             int dst_slot = local_to_slot.get(dst_local).unwrap()
             lir_push_inst(&f, bb, ISlotStore(dst_slot, dst, false))
