@@ -1,0 +1,6 @@
+# D28 L5: canonical XOR fixture 0xff ^ 0x0f = 240 — XOR lint does NOT fire.
+# The amendment's motivating counter-example (ledger `:959-960` explicitly
+# REJECTs the broad literal^literal shape because it false-fires here).
+void main():
+    int r = 0xff ^ 0x0f
+    print(r)

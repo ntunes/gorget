@@ -1,0 +1,6 @@
+# D28 L1: XOR fix-it lint fires on `2 ^ 10` (base ∈ {2,10}, exp ≤ 63).
+# `2 ^ 10` = 8 (XOR) but user likely meant `2 ** 10` = 1024.
+# Non-fatal warning; program still compiles & runs.
+void main():
+    int r = 2 ^ 10
+    print(r)

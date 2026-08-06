@@ -13,6 +13,7 @@ from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Termi
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
 from gir import OP_ADD_WRAP, OP_SUB_WRAP, OP_MUL_WRAP
+from gir import OP_POW
 from gir import OP_BITAND, OP_BITOR, OP_BITXOR, OP_SHL, OP_SHR
 from gir import CMP_EQ, CMP_NE, CMP_LT, CMP_LE, CMP_GT, CMP_GE
 from gir import UNOP_NEG, UNOP_NOT, UNOP_BITNOT
@@ -2968,6 +2969,8 @@ int map_binop(String op):
             return OP_SUB_WRAP
         case "*%":
             return OP_MUL_WRAP
+        case "**":
+            return OP_POW
         case "&":
             return OP_BITAND
         case "|":
@@ -3010,6 +3013,8 @@ int map_compound_binop(String op):
             return OP_SUB_WRAP
         case "*%=":
             return OP_MUL_WRAP
+        case "**=":
+            return OP_POW
         case "&=":
             return OP_BITAND
         case "|=":

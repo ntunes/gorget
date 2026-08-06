@@ -112,6 +112,11 @@ const int OP_SHR = 13
 # (mirrors Rust gg's `FaultOp::DivOverflow`).
 const int OP_DIV_OVERFLOW = 14
 
+# D28 `**` — exponentiation. Lowers to a runtime call to
+# `gorget_pow_checked_iN` (traps on overflow OR negative exponent) for
+# integer widths, or `gorget_pow` / `gorget_powf` for floats.
+const int OP_POW = 15
+
 const int CMP_EQ = 0
 const int CMP_NE = 1
 const int CMP_LT = 2

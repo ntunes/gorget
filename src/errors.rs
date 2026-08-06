@@ -116,6 +116,19 @@ pub enum ParseErrorKind {
         /// `&` or `!` — the sigil the user wrote.
         sigil: char,
     },
+    /// D28 amendment R1 (docs/define-gorget/decisions.md:1197): an
+    /// unparenthesized unary minus with `**` is a compile REJECT. The JS/TC39
+    /// guardrail — the source `-x ** 2` is ambiguous: does the negation apply
+    /// to the result (`-(x ** 2)`) or the base (`(-x) ** 2`)? Parenthesize
+    /// one of the two forms explicitly.
+    ///
+    /// Detected at parse time when a `-` prefix consumes a top-level `Pow`
+    /// operand WITHOUT an intervening `(` token (a `(x ** 2)` sub-expression
+    /// disambiguates and is accepted). Emits `E_AmbiguousUnaryMinusPow` in
+    /// the message text so the parse-error surface teaches the fix even
+    /// though parse errors don't route through the `error[E_...]:` code
+    /// header.
+    AmbiguousUnaryMinusPow,
 }
 
 impl std::fmt::Display for ParseError {
@@ -163,6 +176,14 @@ impl std::fmt::Display for ParseError {
                     f,
                     "break takes no value; loops are not expressions; \
                      help: assign to a variable declared before the loop, then `break`"
+                )
+            }
+            ParseErrorKind::AmbiguousUnaryMinusPow => {
+                write!(
+                    f,
+                    "E_AmbiguousUnaryMinusPow: unparenthesized unary `-` with `**` is \
+                     ambiguous (D28 amendment R1). Write `-(x ** y)` (negation of the \
+                     result) or `(-x) ** y` (base is negated)"
                 )
             }
             ParseErrorKind::FunctionTypeParamSigilBeforeType { sigil } => {

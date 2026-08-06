@@ -3560,7 +3560,7 @@ std/                     # Core standard library — libc only, always lightweig
 ├── fmt                  # pad_left, center, join, str_truncate, repeat
 ├── bytes                # bytes_from_str, bytes_to_hex, base64_encode/decode, endian helpers
 ├── encoding             # url_encode/decode, html_escape, latin1, utf8 helpers
-├── math                 # sqrt, pow, sin, cos, abs, min, max, floor, ceil; PI/E/TAU
+├── math                 # sqrt, sin, cos, abs, min, max, floor, ceil; PI/E/TAU (use `**` for exponentiation)
 ├── random               # rand, seed, rand_range
 ├── time                 # time, time_ms, sleep_ms, format_time
 ├── datetime             # DateTime (now/utc_now, add_*, diff_*, format, weekday)

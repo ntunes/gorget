@@ -4192,6 +4192,8 @@ String arith_base_op(String op):
         return "-%"
     if op == "*%=":
         return "*%"
+    if op == "**=":
+        return "**"
     if op == "&=":
         return "&"
     if op == "|=":

@@ -313,6 +313,7 @@ pub(super) fn lower_binary_op(
                 AstOp::Add => BinOp::Add,
                 AstOp::Sub => BinOp::Sub,
                 AstOp::Mul => BinOp::Mul,
+                AstOp::Pow => BinOp::Pow,
                 AstOp::Div => BinOp::Div,
                 AstOp::Rem => BinOp::Rem,
                 AstOp::Mod => BinOp::Mod,
@@ -324,7 +325,18 @@ pub(super) fn lower_binary_op(
                 AstOp::AddWrap => BinOp::AddWrap,
                 AstOp::SubWrap => BinOp::SubWrap,
                 AstOp::MulWrap => BinOp::MulWrap,
-                _ => BinOp::Add, // fallback
+                // Non-arithmetic BinaryOps are handled earlier in this fn
+                // (Eq/Neq/Lt/Gt/LtEq/GtEq via the comparison arm, And/Or via
+                // short-circuit at the top, In via the contains arm). If we
+                // land here with one of them, upstream lost information.
+                AstOp::Eq | AstOp::Neq | AstOp::Lt | AstOp::Gt | AstOp::LtEq
+                | AstOp::GtEq | AstOp::And | AstOp::Or | AstOp::In => {
+                    unreachable!(
+                        "lower_binary_op arithmetic-tail reached with non-arithmetic \
+                         op {op:?} — should have been dispatched by the comparison / \
+                         short-circuit / contains arms above (Core #10 lower-or-reject)"
+                    )
+                }
             };
             // Fault-`catch` routing (error-model.md §11.2): inside an active
             // fault scope, an integer faultable op (Add/Sub/Mul overflow,

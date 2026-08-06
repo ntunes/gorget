@@ -222,10 +222,10 @@ Also: `form_encode`, `form_decode`, `html_unescape`, `utf8_len`,
 ### Math (`std.math`)
 
 ```gorget
-from std.math import sqrt, pow, sin, cos, abs, min, max, floor, ceil
+from std.math import sqrt, sin, cos, abs, min, max, floor, ceil
 
 float root = sqrt(2.0)          # 1.414...
-float area = pow(radius, 2.0) * 3.14159
+float area = radius ** 2.0 * 3.14159
 int smaller = min(a, b)
 float rounded = floor(3.7)      # 3.0
 ```

@@ -3630,6 +3630,7 @@ fn map_binop(op: ast::BinaryOp, span: Span) -> ElabResult<BinOp> {
         B::Add => BinOp::Add,
         B::Sub => BinOp::Sub,
         B::Mul => BinOp::Mul,
+        B::Pow => BinOp::Pow,
         B::Div => BinOp::Div,
         B::Rem | B::Mod => BinOp::Rem,
         B::Eq => BinOp::Eq,

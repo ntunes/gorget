@@ -3,7 +3,7 @@ use crate::span::{Span, Spanned};
 
 use super::ast::*;
 use super::Parser;
-use crate::errors::ParseError;
+use crate::errors::{ParseError, ParseErrorKind};
 
 /// Maximum AST-tree nesting depth for a single expression. A deeper expression
 /// overflows the lowering recursion (SIGSEGV on the gg compiler's own stack);
@@ -69,6 +69,7 @@ fn binary_op_from_token(tok: &Token) -> Option<BinaryOp> {
         Token::Plus     => BinaryOp::Add,
         Token::Minus    => BinaryOp::Sub,
         Token::Star     => BinaryOp::Mul,
+        Token::StarStar => BinaryOp::Pow,
         Token::Slash    => BinaryOp::Div,
         Token::EqEq     => BinaryOp::Eq,
         Token::BangEq   => BinaryOp::Neq,
@@ -541,8 +542,26 @@ impl Parser {
             // Unary negation
             Token::Minus => {
                 self.advance();
+                // D28 amendment R1 (docs/define-gorget/decisions.md:1197):
+                // `-x ** 2` is REJECT (JS/TC39 guardrail). Detect at parse
+                // time via the token stream: if the token right after `-` is
+                // `(`, the user parenthesized (`-(x ** 2)` accepts) — the
+                // parse_paren_expr call peels the parens but the token check
+                // records the shape. Otherwise, after parsing the operand at
+                // bp 33 (Pow's right bp), if the top-level operand turns out
+                // to be a `Pow`, `-` and `**` were unparenthesized siblings
+                // → emit E_AmbiguousUnaryMinusPow.
+                let after_minus_lparen = matches!(self.peek(), Token::LParen);
                 let operand = self.parse_expr_bp(33)?;
                 let end = operand.span;
+                if !after_minus_lparen {
+                    if let Expr::BinaryOp { op: BinaryOp::Pow, .. } = &operand.node {
+                        self.errors.push(ParseError {
+                            kind: ParseErrorKind::AmbiguousUnaryMinusPow,
+                            span: start.merge(end),
+                        });
+                    }
+                }
                 Ok(Spanned::new(
                     Expr::UnaryOp {
                         op: UnaryOp::Neg,
@@ -756,7 +775,7 @@ impl Parser {
             // Assignment operators are handled as statements, not expressions
             Token::Eq | Token::PlusEq | Token::MinusEq | Token::StarEq | Token::SlashEq
             | Token::PercentEq | Token::PlusPercentEq | Token::MinusPercentEq
-            | Token::StarPercentEq | Token::AmpersandEq | Token::PipeEq
+            | Token::StarPercentEq | Token::StarStarEq | Token::AmpersandEq | Token::PipeEq
             | Token::CaretEq | Token::LtLtEq | Token::GtGtEq => {
                 return None;
             }
@@ -937,6 +956,18 @@ impl Parser {
                 left: 31,
                 right: 32,
                 op: InfixOp::As,
+            },
+
+            // Power `**` — right-associative (amendment R2), binds tighter than
+            // unary prefix (33) so `2 ** -1` parses `2 ** (-1)` where the unary
+            // minus applies to the operand. R1's unparenthesized `-x ** 2`
+            // reject is a typecheck-time shape check, not a parser gate.
+            // Right-assoc via `(left, left-1)` pattern → `2 ** 3 ** 2` parses
+            // as `2 ** (3 ** 2)` = 512.
+            Token::StarStar => InfixBP {
+                left: 34,
+                right: 33,
+                op: InfixOp::Binary(BinaryOp::Pow),
             },
 
             // meta[op_name] — compile-time operator placeholder (same precedence as addition)

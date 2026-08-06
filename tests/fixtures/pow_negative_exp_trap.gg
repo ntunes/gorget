@@ -1,0 +1,12 @@
+# D28 T2: integer `**` with negative exponent traps T_Overflow (domain-fault).
+# A fallible `**!` deferred per amendment R3 (syntax budget).
+# fn-call operands defeat const-fold's negative-exp reject.
+int two():
+    return 2
+
+int neg_one():
+    return -1
+
+void main():
+    int r = two() ** neg_one()
+    print(r)

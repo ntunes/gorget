@@ -837,6 +837,7 @@ impl Parser {
             Token::PlusEq => Some(BinaryOp::Add),
             Token::MinusEq => Some(BinaryOp::Sub),
             Token::StarEq => Some(BinaryOp::Mul),
+            Token::StarStarEq => Some(BinaryOp::Pow),
             Token::SlashEq => Some(BinaryOp::Div),
             Token::PercentEq => Some(BinaryOp::Rem),
             Token::PlusPercentEq => Some(BinaryOp::AddWrap),

@@ -1560,20 +1560,13 @@ pub(super) fn lower_compound_assign(
                         let mutex_type = ctx.type_mapper.lookup_named(&format!("Mutex__{inner_c}")).unwrap_or(inner_type);
                         let cur_val = emit_shared_mutex_lock_get(ctx, builder, hidden_local, mutex_type, inner_type);
                         let rhs = lower_expr(ctx, builder, value);
-                        let gir_op = match op {
-                            ast::BinaryOp::Add => BinOp::Add,
-                            ast::BinaryOp::Sub => BinOp::Sub,
-                            ast::BinaryOp::Mul => BinOp::Mul,
-                            ast::BinaryOp::Div => BinOp::Div,
-                            ast::BinaryOp::Rem => BinOp::Rem,
-                            ast::BinaryOp::Mod => BinOp::Mod,
-                            ast::BinaryOp::BitAnd => BinOp::BitAnd,
-                            ast::BinaryOp::BitOr => BinOp::BitOr,
-                            ast::BinaryOp::BitXor => BinOp::BitXor,
-                            ast::BinaryOp::Shl => BinOp::Shl,
-                            ast::BinaryOp::Shr => BinOp::Shr,
-                            _ => BinOp::Add,
-                        };
+                        // D28 chokepoint (Core #4): route through the shared
+                        // helper so every new BinaryOp variant lands here
+                        // WITHOUT touching this site. Also fixes the
+                        // pre-existing Wrap-variant rot for free — the old
+                        // inline dispatch here silently miscompiled
+                        // `m *%= x` on a shared Mutex as `+=`.
+                        let gir_op = compound_op_to_gir(op);
                         let new_val = builder.bin_op(gir_op, inner_type, cur_val, rhs);
                         emit_shared_mutex_lock_set(ctx, builder, hidden_local, mutex_type, inner_type, FunctionBuilder::copy(new_val));
                         return;
@@ -1595,20 +1588,17 @@ pub(super) fn lower_compound_assign(
                                 return;
                             }
                             _ => {
-                                // Fallback: atomic load → compute → atomic store (NOT atomic, but functional)
+                                // Fallback: atomic load → compute → atomic
+                                // store (NOT atomic, but functional). D28
+                                // chokepoint (Core #4): the outer `match op`
+                                // above pre-intercepts Add/Sub into native
+                                // atomic add/sub; every OTHER variant reaches
+                                // here and maps through the shared helper.
+                                // The helper's Add/Sub arms are unreachable
+                                // from this call site but preserving them in
+                                // the mapping is correct.
                                 let cur_val = emit_atomic_load(ctx, builder, hidden_local, inner_type, &atomic_name);
-                                let gir_op = match op {
-                                    ast::BinaryOp::Mul => BinOp::Mul,
-                                    ast::BinaryOp::Div => BinOp::Div,
-                                    ast::BinaryOp::Rem => BinOp::Rem,
-                                    ast::BinaryOp::Mod => BinOp::Mod,
-                                    ast::BinaryOp::BitAnd => BinOp::BitAnd,
-                                    ast::BinaryOp::BitOr => BinOp::BitOr,
-                                    ast::BinaryOp::BitXor => BinOp::BitXor,
-                                    ast::BinaryOp::Shl => BinOp::Shl,
-                                    ast::BinaryOp::Shr => BinOp::Shr,
-                                    _ => BinOp::Add,
-                                };
+                                let gir_op = compound_op_to_gir(op);
                                 let new_val = builder.bin_op(gir_op, inner_type, cur_val, rhs);
                                 emit_atomic_store(ctx, builder, hidden_local, FunctionBuilder::copy(new_val), &atomic_name);
                                 return;
@@ -1619,20 +1609,11 @@ pub(super) fn lower_compound_assign(
                         // Write-lock, get current value, compute, set, release — all under one lock
                         let (guard_ptr, cur_val) = emit_rwlock_write_get(ctx, builder, hidden_local, inner_type);
                         let rhs = lower_expr(ctx, builder, value);
-                        let gir_op = match op {
-                            ast::BinaryOp::Add => BinOp::Add,
-                            ast::BinaryOp::Sub => BinOp::Sub,
-                            ast::BinaryOp::Mul => BinOp::Mul,
-                            ast::BinaryOp::Div => BinOp::Div,
-                            ast::BinaryOp::Rem => BinOp::Rem,
-                            ast::BinaryOp::Mod => BinOp::Mod,
-                            ast::BinaryOp::BitAnd => BinOp::BitAnd,
-                            ast::BinaryOp::BitOr => BinOp::BitOr,
-                            ast::BinaryOp::BitXor => BinOp::BitXor,
-                            ast::BinaryOp::Shl => BinOp::Shl,
-                            ast::BinaryOp::Shr => BinOp::Shr,
-                            _ => BinOp::Add,
-                        };
+                        // D28 chokepoint (Core #4): route through the helper.
+                        // Also fixes the pre-existing Wrap-variant rot for
+                        // free — the old inline dispatch silently miscompiled
+                        // `rw.value *%= x` as `+=` on a shared RwLock.
+                        let gir_op = compound_op_to_gir(op);
                         let new_val = builder.bin_op(gir_op, inner_type, cur_val, rhs);
                         emit_rwlock_write_finish(ctx, builder, guard_ptr, inner_type, FunctionBuilder::copy(new_val));
                         return;
@@ -1801,23 +1782,10 @@ pub(super) fn lower_compound_assign(
                 return;
             }
 
-            let gir_op = match op {
-                ast::BinaryOp::Add => BinOp::Add,
-                ast::BinaryOp::Sub => BinOp::Sub,
-                ast::BinaryOp::Mul => BinOp::Mul,
-                ast::BinaryOp::Div => BinOp::Div,
-                ast::BinaryOp::Rem => BinOp::Rem,
-                ast::BinaryOp::Mod => BinOp::Mod,
-                ast::BinaryOp::AddWrap => BinOp::AddWrap,
-                ast::BinaryOp::SubWrap => BinOp::SubWrap,
-                ast::BinaryOp::MulWrap => BinOp::MulWrap,
-                ast::BinaryOp::BitAnd => BinOp::BitAnd,
-                ast::BinaryOp::BitOr => BinOp::BitOr,
-                ast::BinaryOp::BitXor => BinOp::BitXor,
-                ast::BinaryOp::Shl => BinOp::Shl,
-                ast::BinaryOp::Shr => BinOp::Shr,
-                _ => BinOp::Add, // fallback
-            };
+            // D28 chokepoint (Core #4): plain-local compound-assign route
+            // through the shared helper — the same map every other compound
+            // site (Mutex/Atomic/RwLock/global/field/index) uses.
+            let gir_op = compound_op_to_gir(op);
             let tmp = builder.bin_op(gir_op, value_type, cur_val, rhs);
             let dst = if is_mut_capture {
                 Place { local: local_id, projections: vec![Projection::Deref] }
@@ -1852,23 +1820,9 @@ pub(super) fn lower_compound_assign(
             let value_type = ctx.global_type_names.get(name)
                 .and_then(|tn| ctx.type_mapper.lookup_named(tn))
                 .unwrap_or(I64_TYPE);
-            let gir_op = match op {
-                ast::BinaryOp::Add => BinOp::Add,
-                ast::BinaryOp::Sub => BinOp::Sub,
-                ast::BinaryOp::Mul => BinOp::Mul,
-                ast::BinaryOp::Div => BinOp::Div,
-                ast::BinaryOp::Rem => BinOp::Rem,
-                ast::BinaryOp::Mod => BinOp::Mod,
-                ast::BinaryOp::AddWrap => BinOp::AddWrap,
-                ast::BinaryOp::SubWrap => BinOp::SubWrap,
-                ast::BinaryOp::MulWrap => BinOp::MulWrap,
-                ast::BinaryOp::BitAnd => BinOp::BitAnd,
-                ast::BinaryOp::BitOr => BinOp::BitOr,
-                ast::BinaryOp::BitXor => BinOp::BitXor,
-                ast::BinaryOp::Shl => BinOp::Shl,
-                ast::BinaryOp::Shr => BinOp::Shr,
-                _ => BinOp::Add,
-            };
+            // D28 chokepoint (Core #4): module-global compound-assign route
+            // through the shared helper.
+            let gir_op = compound_op_to_gir(op);
             let tmp = builder.bin_op(gir_op, value_type, cur_val, rhs);
             builder.global_assign(name.clone(), FunctionBuilder::copy(tmp));
         }
@@ -2353,6 +2307,19 @@ pub(super) fn lower_compound_assign(
 }
 
 /// Map compound assignment operator to GIR binary operator.
+///
+/// **CHOKEPOINT** (Core #4): this is the SINGLE source of truth for compound
+/// `op=` → GIR `BinOp` mapping. Every compound-assign site — plain local
+/// (S4), module-global (S5), shared-Mutex (S1), shared-Atomic fallback (S2),
+/// shared-RwLock (S3), field/index projection (S6 via `:1240` / `:2200`) —
+/// routes through here. Prior to Round XXXIII D28 the same 14-arm match was
+/// open-coded at S1-S5 plus this helper (six sites), each with a bare
+/// wildcard-to-Add silent-fallthrough — a `x **= y` on any of them would
+/// silently miscompile as `+=` (Core #10). The class is retired at the
+/// TYPE-SYSTEM level: a new `BinaryOp` variant now forces a compile-time
+/// change here (and only here), and the guard
+/// `tests/lints.rs::assigns_compound_op_no_silent_fallthrough` locks in the
+/// zero-wildcard-Add-catch-all invariant.
 fn compound_op_to_gir(op: ast::BinaryOp) -> BinOp {
     match op {
         ast::BinaryOp::Add => BinOp::Add,
@@ -2361,6 +2328,7 @@ fn compound_op_to_gir(op: ast::BinaryOp) -> BinOp {
         ast::BinaryOp::Div => BinOp::Div,
         ast::BinaryOp::Rem => BinOp::Rem,
         ast::BinaryOp::Mod => BinOp::Mod,
+        ast::BinaryOp::Pow => BinOp::Pow,
         ast::BinaryOp::AddWrap => BinOp::AddWrap,
         ast::BinaryOp::SubWrap => BinOp::SubWrap,
         ast::BinaryOp::MulWrap => BinOp::MulWrap,
@@ -2369,7 +2337,19 @@ fn compound_op_to_gir(op: ast::BinaryOp) -> BinOp {
         ast::BinaryOp::BitXor => BinOp::BitXor,
         ast::BinaryOp::Shl => BinOp::Shl,
         ast::BinaryOp::Shr => BinOp::Shr,
-        _ => BinOp::Add,
+        // Enumerate the rejected variants so a new BinaryOp addition compiles
+        // ERROR here (instead of silently taking the catch-all). Compound
+        // assignment for comparison / logical / membership ops is nonsensical
+        // (`x >= 1` is a bool test, not a rebind); `check_assign_target_lvalue`
+        // + parser stmt.rs's compound-op token set already keep them out —
+        // this arm is defence-in-depth for a shape that slips.
+        ast::BinaryOp::Eq | ast::BinaryOp::Neq | ast::BinaryOp::Lt | ast::BinaryOp::Gt
+        | ast::BinaryOp::LtEq | ast::BinaryOp::GtEq | ast::BinaryOp::And | ast::BinaryOp::Or
+        | ast::BinaryOp::In => unreachable!(
+            "compound_op_to_gir: {op:?} is not a valid compound-assignment operator \
+             (parser stmt.rs restricts the compound-op token set; comparison / logical / \
+             membership ops have no `op=` form)"
+        ),
     }
 }
 

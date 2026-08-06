@@ -1,0 +1,6 @@
+# D28 N1: amendment R1 — unparenthesized unary minus with `**` is a REJECT.
+# Write `-(x ** 2)` (negation of the result) or `(-x) ** 2` (base is negated).
+void main():
+    int x = 3
+    int r = -x ** 2
+    print(r)

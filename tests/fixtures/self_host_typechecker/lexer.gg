@@ -154,6 +154,7 @@ enum Token:
     TkLtLt  TkGtGt  TkLtLtEq  TkGtGtEq
     TkAmpEq  TkPipeEq  TkCaretEq
     TkPlusEq  TkArrow  TkMinusEq  TkStarEq  TkSlashEq  TkPercentEq
+    TkStarStar  TkStarStarEq
     TkPlusPercent  TkMinusPercent  TkStarPercent
     TkPlusPercentEq  TkMinusPercentEq  TkStarPercentEq
     TkDotDot  TkDotDotEq  TkQuestionDot  TkDoubleQuestion
@@ -869,6 +870,12 @@ equip Lexer:
                 self.lex_pos = self.lex_pos + 3
                 self.lex_emit(!TkStarPercentEq(), start, self.lex_pos)
                 return
+            elif c == b'*' and c2 == b'*' and c3 == b'=':
+                # D28: `**=` compound power-assign; must come BEFORE the
+                # two-char `**` arm below (maximal-munch).
+                self.lex_pos = self.lex_pos + 3
+                self.lex_emit(!TkStarStarEq(), start, self.lex_pos)
+                return
 
         # Two-char operators
         if remaining >= 2:
@@ -944,6 +951,11 @@ equip Lexer:
             elif c == b'*' and c2 == b'%':
                 self.lex_pos = self.lex_pos + 2
                 self.lex_emit(!TkStarPercent(), start, self.lex_pos)
+                return
+            elif c == b'*' and c2 == b'*':
+                # D28: `**` power operator.
+                self.lex_pos = self.lex_pos + 2
+                self.lex_emit(!TkStarStar(), start, self.lex_pos)
                 return
             elif c == b'&' and c2 == b'=':
                 self.lex_pos = self.lex_pos + 2

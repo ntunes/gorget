@@ -48,6 +48,10 @@ pub enum RawToken {
     MinusEq,
     #[token("*=")]
     StarEq,
+    #[token("**")]
+    StarStar,
+    #[token("**=")]
+    StarStarEq,
     #[token("/=")]
     SlashEq,
     #[token("%=")]
@@ -160,6 +164,8 @@ impl fmt::Display for RawToken {
             RawToken::Arrow => write!(f, "'->'"),
             RawToken::MinusEq => write!(f, "'-='"),
             RawToken::StarEq => write!(f, "'*='"),
+            RawToken::StarStar => write!(f, "'**'"),
+            RawToken::StarStarEq => write!(f, "'**='"),
             RawToken::SlashEq => write!(f, "'/='"),
             RawToken::PercentEq => write!(f, "'%='"),
             RawToken::PlusPercent => write!(f, "'+%'"),
@@ -598,6 +604,8 @@ pub enum Token {
     Arrow,
     MinusEq,
     StarEq,
+    StarStar,
+    StarStarEq,
     SlashEq,
     PercentEq,
     PlusPercent,
@@ -680,6 +688,8 @@ impl fmt::Display for Token {
             Token::Arrow => write!(f, "'->'"),
             Token::MinusEq => write!(f, "'-='"),
             Token::StarEq => write!(f, "'*='"),
+            Token::StarStar => write!(f, "'**'"),
+            Token::StarStarEq => write!(f, "'**='"),
             Token::SlashEq => write!(f, "'/='"),
             Token::PercentEq => write!(f, "'%='"),
             Token::PlusPercent => write!(f, "'+%'"),

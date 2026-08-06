@@ -23,7 +23,6 @@ int max(int a, int b)
 # ── Float math ───────────────────────────────────────────────
 
 float sqrt(float x)
-float pow(float base, float exp)
 float floor(float x)
 float ceil(float x)
 float round(float x)

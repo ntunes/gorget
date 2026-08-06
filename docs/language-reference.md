@@ -1521,9 +1521,10 @@ From lowest to highest precedence:
 | 13         | `+` `-` `+%` `-%`            | Left          |
 | 14         | `*` `/` `%` `*%`             | Left          |
 | 15         | `as`                         | Left          |
-| 16         | Unary prefix `-` `not` `~` `*`, `spawn` | Right |
-| 17         | Postfix `.` `?.` `()` `[]` `.0` `.1`        | Left          |
-| 18         | Atoms (literals, identifiers, grouped expressions) | — |
+| 16         | `**` (power)                 | **Right**     |
+| 17         | Unary prefix `-` `not` `~` `*`, `spawn` | Right |
+| 18         | Postfix `.` `?.` `()` `[]` `.0` `.1`        | Left          |
+| 19         | Atoms (literals, identifiers, grouped expressions) | — |
 
 > **Looking for the `&` or `!` sigils?** The `&` in this table is **bitwise AND**
 > (row 10); `&` also joins trait bounds (`A & B`). The *prefix* sigils are a
@@ -1561,7 +1562,7 @@ unary_expr = ( "-" | "not" | "~" | "*" ) expr ;
 
 ```ebnf
 binary_expr = expr op expr ;
-op = "+" | "-" | "*" | "/" | "%" | "+%" | "-%" | "*%"
+op = "+" | "-" | "*" | "/" | "%" | "+%" | "-%" | "*%" | "**"
    | "==" | "!=" | "<" | ">" | "<=" | ">=" | "and" | "or" | "in"
    | "&" | "|" | "^" | "<<" | ">>" ;
 ```
@@ -1569,6 +1570,10 @@ op = "+" | "-" | "*" | "/" | "%" | "+%" | "-%" | "*%"
 Arithmetic operators require matching numeric types. Comparison operators produce `bool`. Logical operators require `bool` operands. Bitwise operators require matching integer types and produce the same type.
 
 **Wrapping arithmetic operators** (`+%`, `-%`, `*%`) perform the same operation as `+`, `-`, `*` but are guaranteed to wrap on overflow rather than panic. Plain `+`, `-`, `*` always check overflow: `+` panics on overflow (or recovers via `catch Fault.Overflow`) while `+%` wraps silently. Wrapping is strictly per-operator — there is no global mode that changes the behavior of `+`. Compound assignment forms (`+%=`, `-%=`, `*%=`) are also available.
+
+**Exponentiation `**`** — `x ** y` raises `x` to the power `y`. Right-associative (Fortran/Python convention: `2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512, NOT `(2 ** 3) ** 2` = 64). Binds tighter than unary prefix, so `-x ** 2` is a **compile REJECT** (the JS/TC39 guardrail) — write `-(x ** 2)` (negation of the result) or `(-x) ** 2` (base is negated) to disambiguate. The compound form `**=` is also available. No type-switching: `int ** int → int`, `float ** float → float`; mixed operands are rejected (`E_TypeMismatchInPow`). Integer overflow AND negative exponent both trap `Fault.Overflow` (a fallible `**!` is not yet available; use explicit width checks for now). `**` replaces the earlier `pow()` free function per the one-canonical-way rule.
+
+> **`^` is XOR, not power.** `2 ^ 10` produces 8 (XOR of 0b010 and 0b1010), not 1024. The compiler emits a `W_XorLikelyPower` fix-it warning on the narrow shape `{2 | 10} ^ N` where `N` looks like an exponent — write `2 ** 10` if you meant power.
 
 The `+` and `+=` operators also work on strings, producing a new concatenated string:
 
@@ -3040,7 +3045,7 @@ enum Fault:
 
 Faults panic by default; a fault `catch` (§10.5) is the only way to recover one, and only locally. The variants are spelled qualified (`Fault.Overflow`, `Fault.DivByZero`, `Fault.Bounds`).
 
-- **`Fault.Overflow`** — an overflowing checked `+`/`-`/`*` (the wrapping `+%`/`-%`/`*%` forms never fault). It also covers signed division overflow: `INT_MIN / -1` and `INT_MIN % -1` are `Fault.Overflow`, **not** `Fault.DivByZero`. An out-of-range shift count (e.g. `x << 64` on a 64-bit operand) normalizes into this class too — there is no separate shift trap.
+- **`Fault.Overflow`** — an overflowing checked `+`/`-`/`*` (the wrapping `+%`/`-%`/`*%` forms never fault). It also covers signed division overflow: `INT_MIN / -1` and `INT_MIN % -1` are `Fault.Overflow`, **not** `Fault.DivByZero`. An out-of-range shift count (e.g. `x << 64` on a 64-bit operand) normalizes into this class too — there is no separate shift trap. An overflowing integer `**` (e.g. `1000000 ** 4`) AND an integer `**` with a negative exponent (e.g. `2 ** -1`, a domain fault) both trap `Fault.Overflow`.
 - **`Fault.DivByZero`** — a `/` or `%` whose divisor is zero.
 - **`Fault.Bounds`** — an out-of-bounds index read of an indexed array-backed collection (`Vector`, `Deque`). A negative index is a catchable `Bounds` inside a fault `catch` (and a panic outside one). Dict lookups, string indexing, and range slices are not covered.
 
@@ -4057,7 +4062,6 @@ The following functions are available via `import`:
 | `min` | `int(int, int)` / `float(float, float)` | Minimum (dispatches by argument type) |
 | `max` | `int(int, int)` / `float(float, float)` | Maximum (dispatches by argument type) |
 | `sqrt` | `float(float)` | Square root |
-| `pow` | `float(float, float)` | Exponentiation |
 | `floor` | `float(float)` | Round down |
 | `ceil` | `float(float)` | Round up |
 | `round` | `float(float)` | Round to nearest |

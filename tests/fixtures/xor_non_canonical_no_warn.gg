@@ -1,0 +1,5 @@
+# D28 L3: both literal, non-canonical base (3, not {2,10}) — XOR lint does NOT fire.
+# Pins the "narrow to {2,10}" rule per ledger `:959-960`.
+void main():
+    int r = 3 ^ 5
+    print(r)

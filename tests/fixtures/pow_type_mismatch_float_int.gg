@@ -1,0 +1,3 @@
+# D28 N3: amendment R3 — no type-switching. Mixed operands (float base ** int exp) REJECT.
+void main():
+    print(2.0 ** 2)

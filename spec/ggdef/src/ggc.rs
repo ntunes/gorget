@@ -408,6 +408,11 @@ pub enum BinOp {
     Mul,
     Div,
     Rem,
+    /// D28 `**` — right-assoc exponentiation. `int × int → int` traps on
+    /// overflow OR negative exponent (`Halt::Trap(TrapKind::Overflow)`);
+    /// `float × float → float` uses IEEE 754 (no trap). Mixed operands are
+    /// rejected at elaboration time (D28 amendment R3).
+    Pow,
     Eq,
     Neq,
     Lt,

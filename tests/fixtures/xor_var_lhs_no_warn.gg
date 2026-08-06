@@ -1,0 +1,5 @@
+# D28 L2: non-literal LHS — XOR lint does NOT fire.
+void main():
+    int a = 2
+    int r = a ^ 10
+    print(r)

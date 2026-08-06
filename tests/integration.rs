@@ -15512,6 +15512,8 @@ fn describe_token_canonical_rust(token: &Token) -> String {
         Token::Arrow => "->".into(),
         Token::MinusEq => "-=".into(),
         Token::StarEq => "*=".into(),
+        Token::StarStar => "**".into(),
+        Token::StarStarEq => "**=".into(),
         Token::SlashEq => "/=".into(),
         Token::PercentEq => "%=".into(),
         Token::PlusPercent => "+%".into(),
@@ -15882,6 +15884,7 @@ fn format_binop_canonical(op: &BinaryOp) -> &'static str {
         BinaryOp::Add => "+",
         BinaryOp::Sub => "-",
         BinaryOp::Mul => "*",
+        BinaryOp::Pow => "**",
         BinaryOp::Div => "/",
         BinaryOp::Rem => "%",
         BinaryOp::Mod => "mod",
@@ -42325,4 +42328,165 @@ fn unknown_backend_flag_is_rejected() {
     }
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ============================================================================
+// Round XXXIII Batch C1 Track D28 — `**` power operator + XOR fix-it lint.
+// Amendment `docs/define-gorget/decisions.md:1197` binding riders:
+//   R1  unparenthesized unary minus with `**` REJECTs (`-x ** 2` → error).
+//   R2  right-associative (`2 ** 3 ** 2` = 512).
+//   R3  no type-switching (int×int→int, float×float→float, mixed REJECT).
+// Also retires the Core #10 placeholder at `src/lir/lower/calls.rs:93-97`
+// (silent-`Mul` for `BinOp::Pow`) and the 6-site `_ => BinOp::Add`
+// silent-fallthrough class in `src/ir/lowering/stmts/assigns.rs` via the
+// `compound_op_to_gir` chokepoint (Core #4).
+// ============================================================================
+
+/// D28 P1: basic integer `**`.
+#[test]
+fn pow_positive() {
+    run_gg("pow_positive.gg", "1024");
+}
+
+/// D28 P2: basic float `**`.
+#[test]
+fn pow_float_positive() {
+    run_gg("pow_float_positive.gg", "1024.000000");
+}
+
+/// D28 P3: `**` right-assoc per amendment R2 — `2 ** 3 ** 2` = 512, not 64.
+#[test]
+fn pow_right_assoc() {
+    run_gg("pow_right_assoc.gg", "512");
+}
+
+/// D28 N1: amendment R1 — unparenthesized unary minus with `**` is a REJECT.
+#[test]
+fn pow_unary_minus_reject() {
+    check_gg_fails("pow_unary_minus_reject.gg", "E_AmbiguousUnaryMinusPow");
+}
+
+/// D28 R1 cross-lane parity: the SH driver ALSO rejects `pow_unary_minus_reject.gg`
+/// with `E_AmbiguousUnaryMinusPow`. Pre-D28-R1-fix (measured 2026-08-06 with the
+/// SH parser at HEAD without this reject), the SH silently ACCEPTED the fixture
+/// and emitted valid C — a Core #9 silent-lane-gap: the shape a lane
+/// mathematically differed on (Rust parses `-x ** 2` as `-(x ** 2)`, SH as
+/// `(-x) ** 2`) was going through with no diagnostic on either interpretation.
+/// Fix: SH parser's unary-minus operand bp lowered 60 → 33 so `**` IS consumed
+/// inside the operand, then the R1 shape (peek-not-LParen + operand-is-Pow) is
+/// panic-rejected with the E_ code in the message body. Ratchet: this test.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_pow_unary_minus_ambiguous() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/pow_unary_minus_reject.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_pow_unary_minus_ambiguous",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "SH driver ACCEPTED `-x ** 2` (D28 amendment R1 silent-lane-gap: Rust \
+         REJECTS the shape at parse time, SH must too). exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("E_AmbiguousUnaryMinusPow"),
+        "SH driver rejected `-x ** 2` but the diagnostic did not name \
+         `E_AmbiguousUnaryMinusPow` — cross-lane parity requires the same \
+         error code on all lanes.\nstderr:\n{stderr}",
+    );
+}
+
+/// D28 N2: amendment R3 — mixed int base ** float exp REJECTs.
+#[test]
+fn pow_type_mismatch_int_float() {
+    check_gg_fails("pow_type_mismatch_int_float.gg", "E_TypeMismatchInPow");
+}
+
+/// D28 N3: amendment R3 — mixed float base ** int exp REJECTs.
+#[test]
+fn pow_type_mismatch_float_int() {
+    check_gg_fails("pow_type_mismatch_float_int.gg", "E_TypeMismatchInPow");
+}
+
+/// D28 N4: amendment R3 — non-numeric operand (String) REJECTs.
+#[test]
+fn pow_type_mismatch_non_numeric() {
+    check_gg_fails("pow_type_mismatch_non_numeric.gg", "E_TypeMismatchInPow");
+}
+
+/// D28 T1: integer `**` overflow traps T_Overflow.
+#[test]
+fn pow_overflow_trap() {
+    run_gg_panics("pow_overflow_trap.gg", "trap[T_Overflow]");
+}
+
+/// D28 T2: integer `**` with negative exponent traps T_Overflow (domain-fault).
+/// A fallible `**!` deferred per amendment R3 (syntax budget).
+#[test]
+fn pow_negative_exp_trap() {
+    run_gg_panics("pow_negative_exp_trap.gg", "trap[T_Overflow]");
+}
+
+/// D28 C1: `**=` compound assignment on a plain local — exercises S4 in
+/// `assigns.rs` (routed via `compound_op_to_gir` post-fix, Core #4 class-fix).
+#[test]
+fn pow_compound_assign() {
+    run_gg("pow_compound_assign.gg", "1024");
+}
+
+/// D28 CA5: `**=` on a module-level global — exercises S5 in `assigns.rs`
+/// (module-global branch, routed via `compound_op_to_gir` post-fix).
+#[test]
+fn pow_compound_assign_global() {
+    run_gg("pow_compound_assign_global.gg", "1024");
+}
+
+/// D28 Q2 uniform narrow-width smoke — int8 2**5 = 32, uint8 3**4 = 81.
+#[test]
+fn pow_narrow_widths() {
+    run_gg("pow_narrow_widths.gg", "32\n81");
+}
+
+/// D28 L1: XOR fix-it lint fires on narrow shape `2 ^ 10` (base ∈ {2,10},
+/// exp ≤ 63). Non-fatal warning; the program still compiles + runs (XOR = 8).
+#[test]
+fn xor_likely_power_warn() {
+    build_gg_expect_warning("xor_likely_power_warn.gg", "W_XorLikelyPower");
+}
+
+/// D28 L2: non-literal LHS — XOR lint does NOT fire.
+#[test]
+fn xor_var_lhs_no_warn() {
+    build_gg_expect_no_warning("xor_var_lhs_no_warn.gg", "W_XorLikelyPower");
+}
+
+/// D28 L3: both literal, non-canonical base (3, not {2,10}) — no warning.
+/// Pins the narrow-to-{2,10} rule per ledger `:959-960`.
+#[test]
+fn xor_non_canonical_no_warn() {
+    build_gg_expect_no_warning("xor_non_canonical_no_warn.gg", "W_XorLikelyPower");
+}
+
+/// D28 L4: 2-base but exp > 63 — no warning. Pins the exponent-range rule.
+#[test]
+fn xor_large_exp_no_warn() {
+    build_gg_expect_no_warning("xor_large_exp_no_warn.gg", "W_XorLikelyPower");
+}
+
+/// D28 L5: canonical XOR fixture `0xff ^ 0x0f` — no warning. The amendment's
+/// motivating counter-example (ledger `:959-960`).
+#[test]
+fn xor_canonical_no_warn() {
+    build_gg_expect_no_warning("xor_canonical_no_warn.gg", "W_XorLikelyPower");
 }

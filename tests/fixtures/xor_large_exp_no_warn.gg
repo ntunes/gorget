@@ -1,0 +1,5 @@
+# D28 L4: 2-base but exp > 63 — XOR lint does NOT fire.
+# Pins the exponent-range rule (a `2 ^ 100` might be intentional XOR mask).
+void main():
+    int r = 2 ^ 100
+    print(r)

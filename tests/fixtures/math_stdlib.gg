@@ -1,4 +1,4 @@
-from std.math import abs, min, max, sqrt, pow, floor, ceil, round, sin, cos, log2, log10
+from std.math import abs, min, max, sqrt, floor, ceil, round, sin, cos, log2, log10
 
 void main():
     # Integer math
@@ -9,7 +9,7 @@ void main():
 
     # Float math
     print(f"{sqrt(4.0)}")
-    print(f"{pow(2.0, 10.0)}")
+    print(f"{2.0 ** 10.0}")
     print(f"{floor(3.7)}")
     print(f"{ceil(3.2)}")
     print(f"{round(3.5)}")

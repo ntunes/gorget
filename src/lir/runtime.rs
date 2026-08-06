@@ -263,6 +263,19 @@ runtime_table! {
     Min    => "gorget_min",    sig(&[(T::I64, A::Scalar), (T::I64, A::Scalar)], T::I64, F::Pure);
     Max    => "gorget_max",    sig(&[(T::I64, A::Scalar), (T::I64, A::Scalar)], T::I64, F::Pure);
     Pow    => "gorget_pow",    sig(&[(T::F64, A::Scalar), (T::F64, A::Scalar)], T::F64, F::Pure);
+    // D28 `**` — float f32 variant + per-width integer checked helpers.
+    // `F::Aborts` because integer overflow OR negative exponent trap
+    // `T_Overflow` (amendment R3). Float family is `F::Pure` (IEEE 754,
+    // no trap; a NaN or Inf may result but not a fault).
+    Powf         => "gorget_powf",             sig(&[(T::F32, A::Scalar), (T::F32, A::Scalar)], T::F32, F::Pure);
+    PowCheckedI8  => "gorget_pow_checked_i8",  sig(&[(T::I8,  A::Scalar), (T::I8,  A::Scalar)], T::I8,  F::Aborts);
+    PowCheckedI16 => "gorget_pow_checked_i16", sig(&[(T::I16, A::Scalar), (T::I16, A::Scalar)], T::I16, F::Aborts);
+    PowCheckedI32 => "gorget_pow_checked_i32", sig(&[(T::I32, A::Scalar), (T::I32, A::Scalar)], T::I32, F::Aborts);
+    PowCheckedI64 => "gorget_pow_checked_i64", sig(&[(T::I64, A::Scalar), (T::I64, A::Scalar)], T::I64, F::Aborts);
+    PowCheckedU8  => "gorget_pow_checked_u8",  sig(&[(T::U8,  A::Scalar), (T::U8,  A::Scalar)], T::U8,  F::Aborts);
+    PowCheckedU16 => "gorget_pow_checked_u16", sig(&[(T::U16, A::Scalar), (T::U16, A::Scalar)], T::U16, F::Aborts);
+    PowCheckedU32 => "gorget_pow_checked_u32", sig(&[(T::U32, A::Scalar), (T::U32, A::Scalar)], T::U32, F::Aborts);
+    PowCheckedU64 => "gorget_pow_checked_u64", sig(&[(T::U64, A::Scalar), (T::U64, A::Scalar)], T::U64, F::Aborts);
     Round  => "gorget_round",  sig(&[(T::F64, A::Scalar)], T::F64, F::Pure);
     Sin    => "gorget_sin",    sig(&[(T::F64, A::Scalar)], T::F64, F::Pure);
     Sqrt   => "gorget_sqrt",   sig(&[(T::F64, A::Scalar)], T::F64, F::Pure);
