@@ -17914,10 +17914,13 @@ fn shared_struct_call_returned() {
 
 #[test]
 #[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcRwLock · String · \
-concat · spawn-sync. Pins the ArcRwLock arm distinctly from ArcMutex + ArcOnly. \
-RED-verified at HEAD (2026-08-06): exit 101."]
-fn shared_rwlock_concat_init() {
-    run_gg("shared_rwlock_concat_init.gg", "ab\nab");
+call-returned · no-spawn. Pins the ArcRwLock arm distinctly from ArcMutex + ArcOnly \
+via the explicit `shared(rwlock)` strategy tag. Uses call-returned (not concat) -- \
+the concat shape on ArcRwLock exposes a separate double-free at runtime unrelated to \
+this class-fix (the ICE 101 was hiding it). RED-verified at HEAD (2026-08-06): \
+exit 101."]
+fn shared_rwlock_call_init() {
+    run_gg("shared_rwlock_call_init.gg", "hello");
 }
 
 #[test]

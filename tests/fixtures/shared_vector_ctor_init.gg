@@ -1,12 +1,14 @@
 # Cell: ArcMutex · Vector[int] · ctor · no-spawn · pre-fix ICE 101 · post-fix `1`
 #
-# Part of the shared-var-decl class-fix fixture net (Core #11/#12). Does NOT
-# use `with v: for x in v:` — that's the shape `shared_iterator_invalidation`
-# uses which was "green for the wrong reason" pre-fix (downstream BB reshaping
-# moved the violation out of the offending BB). This fixture stays a straight
-# push+len read to keep the pin genuine.
+# Part of the shared-var-decl class-fix fixture net (Core #11/#12). The
+# push/len happen inside a bare `with v:` block — the shape that pins the
+# writer-side class-fix's Move-follow-through WITHOUT tripping the fragile
+# `for x in v:` iterator-invalidation shape (which pre-fix was green for the
+# WRONG reason: downstream BB reshaping moved the violation out of the
+# offending BB — Track E scout §"Corpus audit").
 
-void main():
+async void main():
     shared Vector[int] v = Vector[int]()
-    v.push(1)
-    print(v.len())
+    with v:
+        v.push(1)
+        print(v.len())

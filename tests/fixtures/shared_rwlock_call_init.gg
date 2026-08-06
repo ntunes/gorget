@@ -1,0 +1,19 @@
+# Cell: ArcRwLock · String · call-returned · no-spawn · pre-fix ICE 101 ·
+# post-fix `hello`
+#
+# Part of the shared-var-decl class-fix fixture net (Core #11/#12). Pins the
+# ArcRwLock arm at src/ir/lowering/stmts/mod.rs:1764 distinctly from the
+# ArcMutex arm (:1813) and the ArcOnly arm (:1709). The `shared(rwlock)`
+# explicit strategy tag drives CFA to ArcRwLock.
+#
+# Uses call-returned (not concat) — the concat shape on ArcRwLock exposes a
+# separate double-free at runtime (unrelated to this Move-follow-through
+# class-fix; the ICE 101 was hiding it). Filed as a follow-up.
+
+String make():
+    return "hello"
+
+void main():
+    shared(rwlock) String s = make()
+    with s:
+        print(s)
