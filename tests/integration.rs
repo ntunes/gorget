@@ -26984,7 +26984,22 @@ fn self_host_runtime_diff() {
     // splices the unrolled per-variant body just like Rust's
     // `evaluate_delayed_meta_block`. Also restores the non-MATCH ceiling from
     // 124 back to its Round XXX baseline of 123 (Track A guard).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1333;
+    // Ratcheted 2026-08-06 (Round XXXII Track D+E — Rust class-fix +
+    // 12 new fixtures + 5 controls; 5 SH-blocked fixtures moved to known_gaps/
+    // per output-review B1 to prevent runtime_diff regression from SH's
+    // op_consume non-scalar-inner gap). Force-rebuild remeasure on a quiet
+    // box: MATCH 1354 / 1471 = 92.0% (WRONG 25, CC-FAIL 65, CRASH 25,
+    // DRIVER-FAIL 2, EXCLUDED 94, RUST-REJECTED 399). +21 MATCH from XXVIII
+    // baseline of 1333 -- driven by (a) the 7 non-SH-blocked new fixtures
+    // MATCHing (P2 shared_call_returned_string, P3 shared_fstring_init,
+    // P5 shared_vector_literal_init, P6 shared_vector_call_returned,
+    // P7 shared_dict_call_returned, P8 shared_struct_call_returned +
+    // graduated shared_computed_init), (b) 4 shared_int_* controls MATCHing
+    // (int inner, ArcAtomic path, works on SH via existing < PRIM_COUNT
+    // gate), (c) upstream parallel work between rounds. Floor 1333 → 1349
+    // (−5 jitter from 1354). Non-MATCH ceiling shrinks 123 → 117 (fewer
+    // DRIVER-FAILs after SH-blocked moves).
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1349;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
@@ -27033,7 +27048,12 @@ fn self_host_runtime_diff() {
     // exemption for a fixture the self-host cannot run — that case is the
     // step-5 OWNER ASK, so the judgement stays with the owner instead of
     // becoming an agent-invocable carve-out.
-    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 123;
+    // Reseeded DOWN 2026-08-06 (Round XXXII Track D+E: 5 SH-blocked new
+    // fixtures moved to known_gaps/ per output-review B1; SH driver crash
+    // classes trimmed via reverting the D′ SH sub-track). Non-MATCH count on
+    // the quiet-box remeasure: 25 WRONG + 65 CC-FAIL + 25 CRASH + 2 DRIVER-FAIL
+    // = 117. Lock in the shrink.
+    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 117;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: non-MATCH ceiling skipped (debug profile — same \
