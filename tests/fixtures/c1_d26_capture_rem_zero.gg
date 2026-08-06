@@ -1,0 +1,15 @@
+# D26 axis: op=Rem · route=B (Result-capture) · NEG (div-by-zero) · int64.
+# `%!` at rhs=0 branches to the divzero_bb handler (twin of /! since
+# Div/Rem share both fault categories). Constructs
+# `Error(ArithError.DivByZero)`.
+# RED-verify: foundation slice's plain `%` would trap-abort with
+# T_DivByZero; F1 constructs a Result.Error value.
+int identity(int x): x
+
+void main():
+    int a = identity(10)
+    int b = identity(0)
+    Result[int, ArithError] r = a %! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-1)

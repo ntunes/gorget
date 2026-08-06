@@ -1,0 +1,17 @@
+# D26 axis: op=Add · route=B (Result-capture) · POS (success) · int64.
+# `+!` at a `Result[int, ArithError]` destination materialises `Result.Ok(v)`
+# on success (F1 lowering `lower_fallible_arith_binop` Route B).
+# RED-verify: at the pre-F1 foundation slice (5ee28211), this fixture failed
+# to compile with the C-emit type mismatch
+# `incompatible types when assigning to type '__gg_Result__int64_t__ArithError'
+# from type 'int64_t'` — the check-lane rejected `!` as
+# RedundantOnCapture before the F1 fix.
+int identity(int x): x
+
+void main():
+    int a = identity(5)
+    int b = identity(3)
+    Result[int, ArithError] r = a +! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-1)

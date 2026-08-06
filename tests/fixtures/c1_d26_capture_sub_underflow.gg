@@ -1,0 +1,17 @@
+# D26 axis: op=Sub · route=B (Result-capture) · NEG (underflow) · int64.
+# `-!` at INT64_MIN - 1 underflows (signed integer overflow — the same
+# fault category as add-overflow); branches to overflow_bb, constructs
+# `Error(ArithError.Overflow)`.
+int identity(int x): x
+
+void main():
+    # `-INT64_MAX - 2` = `INT64_MIN - 1` (underflow). INT64_MIN itself is
+    # not directly writable as a literal (parser rejects
+    # `-9223372036854775808` because `9223372036854775808` overflows
+    # `int` before negation).
+    int a = identity(-9223372036854775807)
+    int b = identity(2)
+    Result[int, ArithError] r = a -! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-3)

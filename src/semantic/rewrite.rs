@@ -63,6 +63,15 @@ fn auto_infer_fn(f: &mut FunctionDef) {
     if f.throws.explicit_type().is_some() {
         return;
     }
+    // `main()` can only throw `int` (per D26 spec + E_MainThrowsNonInt);
+    // auto-inferring `throws ArithError` on it would be immediately rejected
+    // by the check-lane. Users must capture (`Result[int, ArithError] r = ...`)
+    // or `catch`-handle every fallible op in `main` — never propagate. This
+    // matches the D29 discipline: `main` is the top-level; there is no
+    // caller to propagate to.
+    if f.name.node == "main" {
+        return;
+    }
     if !body_contains_fallible_arith(&f.body) {
         return;
     }

@@ -11483,3 +11483,103 @@ fn shared_var_decl_arms_route_through_materialize_addressable() {
         unrouted
     );
 }
+
+/// D26 (Round XXXIII Batch C1) `map_binop` class-retiring guard (Core #6):
+/// enumerates every site that mentions a fallible-arith enum variant
+/// (`(AddFallible|SubFallible|MulFallible|DivFallible|RemFallible|ShlFallible|ShrFallible)`)
+/// and pins the per-file variant-mention count. A future 8th fallible-arith
+/// operator MUST land at every one of these sites in the same round —
+/// this lint fails immediately if it doesn't.
+///
+/// **Sites (D26 F1+F3 landing state):**
+///   1. `src/parser/ast.rs` — the `BinaryOp` enum definition (7 variants)
+///      + `is_fallible_arith()` typed helper (7 matches).
+///   2. `src/formatter/mod.rs` — 7 glyph arms.
+///   3. `src/semantic/typecheck.rs::op_display` — 7 non-compound + 7
+///      compound arms.
+///   4. `src/parser/expr.rs` — 7 Pratt lex-token → InfixOp arms.
+///   5. `src/ir/lowering/exprs/operators.rs` — the 5-variant
+///      dispatch matches! + 5-arm base_op map inside
+///      `lower_fallible_arith_binop` + 7-arm fallback bin_op map.
+///   6. `spec/ggdef/src/elaborate/mod.rs::map_binop` — 5 arith + 2 shift.
+///
+/// Precise regex: `(AddFallible|SubFallible|MulFallible|DivFallible|RemFallible|ShlFallible|ShrFallible)`.
+/// This excludes the many `FallibleMark*` / `FallibleOp*` / `Fallible*Reason`
+/// diagnostic-enum uses that a naive `Fallible` substring count would inflate.
+///
+/// Positive-control demo (RED-verified 2026-08-06): dropping a fallible-arith
+/// variant arm from ANY site trips this lint immediately with the exact
+/// per-file count-off-by-one; restore restored green.
+#[test]
+fn d26_map_binop_arm_count_ratchet() {
+    let re = regex::Regex::new(
+        r"(AddFallible|SubFallible|MulFallible|DivFallible|RemFallible|ShlFallible|ShrFallible)",
+    )
+    .expect("d26 fallible-arm regex");
+
+    let expectations: &[(&str, usize, &str)] = &[
+        (
+            "src/parser/ast.rs",
+            14,
+            "BinaryOp enum definition (7) + is_fallible_arith() matches! (7)",
+        ),
+        (
+            "src/formatter/mod.rs",
+            7,
+            "formatter arm - 7 arms `Fallible => \"...!\"`",
+        ),
+        (
+            "src/semantic/typecheck.rs",
+            21,
+            "op_glyph_str (7) + op_display non-compound (7) + op_display compound (7)",
+        ),
+        (
+            "src/parser/expr.rs",
+            7,
+            "Pratt infix-op map - 7 lex-token to InfixOp::Binary arms",
+        ),
+        (
+            "src/ir/lowering/exprs/operators.rs",
+            17,
+            "5-variant matches! dispatch + 5-arm base_op map + 7-arm fallback bin_op map",
+        ),
+        (
+            "spec/ggdef/src/elaborate/mod.rs",
+            12,
+            "map_binop - 5 arith arms (2 mentions each: B::X + BinOp::X) + 2 shift OOS reject",
+        ),
+    ];
+
+    let mut per_file_actual: Vec<(String, usize)> = Vec::new();
+    for (path, expected, why) in expectations {
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(e) => panic!("d26_map_binop_arm_count_ratchet: cannot read {path}: {e}"),
+        };
+        let count: usize = content
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| re.find_iter(l).count())
+            .sum();
+        per_file_actual.push((path.to_string(), count));
+        assert_eq!(
+            count, *expected,
+            "d26_map_binop_arm_count_ratchet: `{path}` fallible-arith variant \
+             mentions {count} vs expected {expected} ({why}).\n\n\
+             If a new fallible-arith variant was added (an 8th op), it must land \
+             at every enumerated site (see doc comment). Bump each per-file count \
+             here after confirming the new op reaches: parser Pratt, ast helper, \
+             formatter, checker glyph table, lowerer dispatch + base_op map, \
+             lowerer fallback, ggdef elaborator, AND every SH-mirror site (which \
+             this Rust-only lint does NOT ratchet - the SH mirror lands in the \
+             same round per Core #9).",
+        );
+    }
+    let total: usize = per_file_actual.iter().map(|(_, c)| c).sum();
+    let expected_total: usize = expectations.iter().map(|(_, c, _)| c).sum();
+    assert_eq!(
+        total, expected_total,
+        "d26 fallible-arm total {total} vs expected {expected_total} - per-file \
+         breakdown: {per_file_actual:?}",
+    );
+}

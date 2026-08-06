@@ -42411,3 +42411,75 @@ fn c1_d26_reject_const_context() {
         "E_FallibleOpInConst",
     );
 }
+
+// D26 F1/F1a/F3/F4 follow-up fixture pack — axis-covered Route B (capture)
+// tests for each of the 5 arithmetic fallible variants at their success +
+// fault boundaries, plus Route A auto-infer end-to-end + the auto-infer
+// discipline (explicit `throws E` wins). All RED-verified against the
+// foundation slice (5ee28211) at authoring time — see per-fixture headers.
+
+#[test]
+fn c1_d26_capture_add_ok() {
+    // Route B success: `5 +! 3` at Result[int, ArithError] destination →
+    // Result.Ok(8). Match Ok arm prints 8.
+    run_gg("c1_d26_capture_add_ok.gg", "8");
+}
+
+#[test]
+fn c1_d26_capture_add_overflow() {
+    // Route B fault: INT64_MAX +! 1 → Result.Error(ArithError.Overflow).
+    // Match Error arm prints -99.
+    run_gg("c1_d26_capture_add_overflow.gg", "-99");
+}
+
+#[test]
+fn c1_d26_capture_sub_underflow() {
+    // Route B fault: -INT64_MAX -! 2 underflows → Error(Overflow).
+    // Match Error arm prints -3.
+    run_gg("c1_d26_capture_sub_underflow.gg", "-3");
+}
+
+#[test]
+fn c1_d26_capture_mul_overflow() {
+    // Route B fault: (3037000500 *! 3037000500) overflows → Error(Overflow).
+    // Match Error arm prints -2.
+    run_gg("c1_d26_capture_mul_overflow.gg", "-2");
+}
+
+#[test]
+fn c1_d26_capture_div_zero() {
+    // Route B fault (divzero): 10 /! 0 → Error(DivByZero). Div/Rem's
+    // second fault category (spec/prose/trap-codes.md). Match arm → -1.
+    run_gg("c1_d26_capture_div_zero.gg", "-1");
+}
+
+#[test]
+fn c1_d26_capture_rem_zero() {
+    // Route B fault (divzero): 10 %! 0 → Error(DivByZero). Twin of /!
+    // since Div and Rem share both fault categories.
+    run_gg("c1_d26_capture_rem_zero.gg", "-1");
+}
+
+#[test]
+fn c1_d26_auto_infer_propagate() {
+    // F1a auto-infer end-to-end: `add_or_throw` has NO explicit `throws
+    // ArithError` declaration, yet auto-infer promotes it. Two calls
+    // demonstrate both Ok-peel (2+3=5) and Error-propagate (INT64_MAX+1
+    // → catch -1) through the auto-inferred throws channel.
+    // Expected stdout: two lines, "5" then "-1".
+    run_gg("c1_d26_auto_infer_propagate.gg", "5\n-1");
+}
+
+#[test]
+fn c1_d26_explicit_throws_declared_wins() {
+    // F1a discipline (NEG): the user's explicit `throws MyError` is NOT
+    // overridden by auto-infer. The resulting `+!` (Result[int,
+    // ArithError]) can't propagate into a MyError-throws fn — the
+    // diagnostic names BOTH types, proving the user's declaration is
+    // preserved (auto-infer would have made this silently work under
+    // ArithError; the discipline rejects that).
+    check_gg_fails(
+        "c1_d26_explicit_throws_declared_wins.gg",
+        "E_UnconvertibleErrorPropagation",
+    );
+}
