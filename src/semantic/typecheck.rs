@@ -2476,6 +2476,7 @@ impl<'a> TypeChecker<'a> {
                                 err_ty,
                                 suppress_auto_prop,
                                 fallible_call_marked,
+                                /*mark_is_operator_inherent=*/ false,
                                 expr.span,
                             )
                         } else if self.type_is_result(return_type) {
@@ -6597,12 +6598,16 @@ impl<'a> TypeChecker<'a> {
             Some(def_id) => self.types.defined_id(def_id),
             None => return operand_type,
         };
-        // Route through D29 disposition table. The `!` glyph IS the mark.
+        // Route through D29 disposition table. The `!` glyph IS the mark, and
+        // for D26 fallible-arith it is INHERENT to the operator (no un-marked
+        // variant exists) — so the capture-position redundant-mark reject is
+        // skipped (`Result[int, ArithError] r = a +! b` is legal).
         self.resolve_throws_call_type(
             operand_type,
             err_ty,
             /*suppress_auto_prop=*/ false,
             /*marked=*/ true,
+            /*mark_is_operator_inherent=*/ true,
             span,
         )
     }
@@ -6957,12 +6962,21 @@ impl<'a> TypeChecker<'a> {
     /// | explicit `Result[T,E]` dest (capture)| capture (legal)  | E_MissingFallibleMark (redundant) |
     /// | propagating context                 | E_MissingFallibleMark | peel to `T` (Route A) |
     /// | non-propagating, no disposition     | E_MissingFallibleMark | E_UnhandledThrows     |
+    ///
+    /// `mark_is_operator_inherent` (D26): when true, the mark is fused INTO the
+    /// operator itself (`+! -! *!` etc — no un-marked variant of the operator
+    /// exists), not an optional postfix. Skips the RedundantOnCapture reject at
+    /// (2): `Result[int, ArithError] r = a +! b` is the canonical D26 capture
+    /// spelling, since plain `+` produces `int`, not `Result[int, ArithError]`.
+    /// Fallible-fn-calls pass `false` (the `!` is optional on capture); the
+    /// D26 fallible-arith check-arm passes `true`.
     fn resolve_throws_call_type(
         &mut self,
         return_type: TypeId,
         err_ty: TypeId,
         suppress_auto_prop: bool,
         marked: bool,
+        mark_is_operator_inherent: bool,
         span: Span,
     ) -> TypeId {
         if marked {
@@ -6991,8 +7005,12 @@ impl<'a> TypeChecker<'a> {
                 // (2) Explicit `Result[T,E]` capture position. LEGAL UNMARKED (the
                 //     annotation carries the visibility — 2026-07-17 amendment);
                 //     marking it too is the redundant-mark error (remove the `!`).
+                //     D26 exception: when the mark IS the operator (`+!` etc), the
+                //     capture spelling is `Result[T, ArithError] r = a +! b` — no
+                //     un-marked variant exists, so the redundant-mark reject does
+                //     not apply. The raw Result flows through as the expr type.
                 if dest_is_result {
-                    if marked {
+                    if marked && !mark_is_operator_inherent {
                         self.emit_missing_fallible_mark(
                             err_ty,
                             FallibleMarkReason::RedundantOnCapture,
@@ -7144,7 +7162,7 @@ impl<'a> TypeChecker<'a> {
         }
         match err_ty {
             Some(e) => {
-                self.resolve_throws_call_type(return_type, e, suppress_auto_prop, marked, span)
+                self.resolve_throws_call_type(return_type, e, suppress_auto_prop, marked, /*mark_is_operator_inherent=*/ false, span)
             }
             // Kind-2: a non-throws method whose DECLARED return is `Result[T,E]`
             // is fallible too (D29 one-mark-for-both-kinds). NO combinator

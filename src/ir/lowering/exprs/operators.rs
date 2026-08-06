@@ -309,6 +309,28 @@ pub(super) fn lower_binary_op(
                 }
             }
 
+            // D26 (Round XXXIII Batch C1): fallible arithmetic operators
+            // (`+! -! *! /! %!`) route through the dedicated Route-B (capture)
+            // + Route-A (propagate) lowering that constructs
+            // `Result[T, ArithError]` values. Shift-fallible (`<<! >>!`) is
+            // not yet routed — falls through to plain Shl/Shr below (a filed
+            // follow-up; the 5 arith ops are the load-bearing set — the
+            // check-lane still types the shift-fallible expression as
+            // `Result[T, ArithError]` and the lowering produces int, so a
+            // shift-fallible at a Result-capture destination is a type
+            // mismatch until the follow-up).
+            if matches!(op, AstOp::AddFallible | AstOp::SubFallible | AstOp::MulFallible
+                | AstOp::DivFallible | AstOp::RemFallible)
+            {
+                if let Some(dst_op) = lower_fallible_arith_binop(
+                    ctx, builder, op, operand_type, lhs.clone(), rhs.clone(), left.span,
+                ) {
+                    return dst_op;
+                }
+                // Fall through if the lowering couldn't fire (e.g. the
+                // ArithError/Result types weren't registered — defensive; the
+                // check-lane's `ArithError` lookup normally guarantees this).
+            }
             let bin_op = match op {
                 AstOp::Add => BinOp::Add,
                 AstOp::Sub => BinOp::Sub,
@@ -324,25 +346,10 @@ pub(super) fn lower_binary_op(
                 AstOp::AddWrap => BinOp::AddWrap,
                 AstOp::SubWrap => BinOp::SubWrap,
                 AstOp::MulWrap => BinOp::MulWrap,
-                // D26 (Round XXXIII Batch C1): fallible arithmetic operators.
-                // First-shipped lowering routes each `+!` / `-!` / `*!` etc
-                // through the PLAIN checked BinOp for its base operator — a
-                // trap-on-overflow shape identical to plain `+` / `-` / `*`
-                // etc. The check-lane already types the expression as
-                // `Result[T, ArithError]`, and inside a fault-catch scope the
-                // `fault_handler_for` gate below (populated for Add/Sub/Mul/
-                // Div/Rem) still routes through `bin_op_faultable`, so
-                // catch-inner + throws-propagate lower correctly on the same
-                // path plain arithmetic already uses.
-                //
-                // OUT-OF-SESSION FOLLOW-UP (filed with the D26 executor's
-                // report): the value-capture path (`Result[T, ArithError] r =
-                // a +! b`) still needs a dedicated FaultableBinOp handler
-                // block that constructs `ArithError.Overflow` / `.DivByZero`
-                // Result-Error and materializes into `r` — the shape
-                // documented in the D26 brief §3d. This lowering emits a
-                // plain int for `r`, which C-emits as a type mismatch. The
-                // check-lane accepts the surface; the lowering is a scaffold.
+                // Fall-through routing for fallible-arith when the dedicated
+                // lowering above declined (defensive) + shift-fallible (filed
+                // follow-up for full Result construction). Trap-on-fault via
+                // the plain checked BinOp is the safe minimum.
                 AstOp::AddFallible => BinOp::Add,
                 AstOp::SubFallible => BinOp::Sub,
                 AstOp::MulFallible => BinOp::Mul,
@@ -415,6 +422,238 @@ fn fault_handler_for(
         )),
         // Mod, bitwise, shifts, and the explicit `+%` wrap ops never fault.
         _ => None,
+    }
+}
+
+/// D26 (Round XXXIII Batch C1) — lower one of the five arithmetic fallible
+/// operators (`+! -! *! /! %!`) to a fault-check + branch shape that produces
+/// a `Result[T, ArithError]` value. Two disjoint routes, decided by the
+/// destination shape at the call site:
+///
+///   - **Route B (capture)** — the destination is `Result[T, ArithError]`
+///     (`Result[int, ArithError] r = a +! b`). Both branches materialise a
+///     Result value: the success branch builds `Result.Ok(v)`; each fault
+///     branch builds `Result.Error(ArithError.<Overflow|DivByZero>)`. All
+///     three converge on a `merge` block from which the caller reads the
+///     result-typed local.
+///
+///   - **Route A (propagate)** — the current fn is `throws ArithError` (or a
+///     `Result[T, ArithError]`-returning fn), and the destination is the
+///     peeled `T`. The success branch yields the plain int; each fault branch
+///     builds `Result.Error(ArithError.<...>)` in the fn's return slot and
+///     emits an early return (mirroring `emit_result_auto_propagate`).
+///
+/// Returns `None` when neither route fires (the check-lane already emitted
+/// `E_UnhandledThrows` and the caller falls back to the plain trap-on-fault
+/// path) or when the required prelude types (`ArithError`, mangled
+/// `Result[T, ArithError]`) cannot be resolved. Div/Rem emit BOTH an
+/// overflow-check (signed `TYPE_MIN/-1`) and a divzero-check (`rhs == 0`) —
+/// two distinct fault categories per `spec/prose/trap-codes.md`.
+fn lower_fallible_arith_binop(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    op: ast::BinaryOp,
+    operand_type: TypeId,
+    lhs: Operand,
+    rhs: Operand,
+    _span: crate::span::Span,
+) -> Option<Operand> {
+    use ast::BinaryOp as AstOp;
+
+    // Only the 5 arithmetic fallible variants — the caller filters to these.
+    let (base_op, needs_divzero) = match op {
+        AstOp::AddFallible => (BinOp::Add, false),
+        AstOp::SubFallible => (BinOp::Sub, false),
+        AstOp::MulFallible => (BinOp::Mul, false),
+        AstOp::DivFallible => (BinOp::Div, true),
+        AstOp::RemFallible => (BinOp::Rem, true),
+        _ => return None,
+    };
+
+    // Operand must be an integer for the fault-check semantics to apply
+    // (matches `fault_handler_for`; the check-lane rejects non-int operands
+    // via `E_FallibleArithmeticOnNonInt`).
+    let is_integer = matches!(
+        ctx.type_registry.get(operand_type),
+        Some(GirType::I8) | Some(GirType::I16) | Some(GirType::I32) | Some(GirType::I64)
+            | Some(GirType::U8) | Some(GirType::U16) | Some(GirType::U32) | Some(GirType::U64)
+    );
+    if !is_integer {
+        return None;
+    }
+
+    // Look up ArithError TypeId (registered as a prelude enum at
+    // `ir/lowering/mod.rs:262`). Without it we cannot materialise Error
+    // values — fall back to the plain path (should be unreachable in
+    // well-formed programs since the check-lane's `ArithError` lookup gates
+    // the whole fallible-arith arm).
+    let arith_error_type = ctx.type_mapper.lookup_named("ArithError")?;
+
+    // Resolve the destination Result type + name:
+    //   Route B: `expected_type` is Result[T, ArithError] (the capture slot).
+    //   Route A: `current_throws_result_type` carries the fn's Result slot.
+    // Whichever route fires, we need the mangled Result type NAME (for
+    // `enum_init`) and its TypeId (for creating a fresh local + variant tag).
+    let expected_type = ctx.func_state.expected_type;
+    let dest_is_result = expected_type
+        .map_or(false, |t| ctx.type_registry.enum_category(t) == Some(EnumCategory::Result));
+
+    // The Result type to construct. Route B uses `expected_type`; Route A uses
+    // `current_throws_result_type` (the fn's own Result slot).
+    let result_type = if dest_is_result {
+        expected_type.unwrap()
+    } else if let Some(fn_result_type) = ctx.func_state.current_throws_result_type {
+        fn_result_type
+    } else {
+        // Neither route applies (no capture destination, no throws context).
+        // The check-lane already emitted `E_UnhandledThrows` — fall back to
+        // the plain trap-on-fault path so the build still produces a value.
+        return None;
+    };
+
+    let result_name = ctx.type_registry.type_name(result_type)?;
+
+    // Allocate synthetic GIR blocks for the fault path(s) + merge.
+    let overflow_bb = builder.new_block();
+    let divzero_bb = if needs_divzero { Some(builder.new_block()) } else { None };
+    let merge_bb = builder.new_block();
+
+    // For Route B (capture): allocate a local to receive the final Result
+    // value; every branch assigns and jumps to `merge_bb`, then the caller
+    // reads the local. For Route A (propagate): we return the peeled int
+    // directly from the success branch.
+    let result_local = if dest_is_result {
+        Some(builder.add_local(result_type, None))
+    } else {
+        None
+    };
+
+    // Emit the FaultableBinOp with our custom handler blocks. The current
+    // block flows through to the success-continuation on no-fault; each
+    // fault jumps to the corresponding handler block.
+    let value_local = builder.bin_op_faultable(
+        base_op,
+        operand_type,
+        lhs,
+        rhs,
+        Some(overflow_bb),
+        divzero_bb,
+    );
+
+    // Success continuation (current block after FaultableBinOp).
+    if let Some(rl) = result_local {
+        // Route B — construct Result.Ok(value_local), assign to rl, jump merge.
+        let ok_local = builder.enum_init(
+            result_name.clone(),
+            "Ok",
+            result_type,
+            vec![FunctionBuilder::copy(value_local)],
+        );
+        builder.assign(Place::local(rl), FunctionBuilder::copy(ok_local));
+        builder.jump(merge_bb);
+    } else {
+        // Route A — jump straight to merge; the caller reads `value_local`.
+        builder.jump(merge_bb);
+    }
+
+    // Overflow handler block.
+    emit_fallible_arith_error_branch(
+        ctx,
+        builder,
+        overflow_bb,
+        merge_bb,
+        result_type,
+        &result_name,
+        arith_error_type,
+        "Overflow",
+        result_local,
+    );
+
+    // Div/Rem also need a divzero handler.
+    if let Some(dz_bb) = divzero_bb {
+        emit_fallible_arith_error_branch(
+            ctx,
+            builder,
+            dz_bb,
+            merge_bb,
+            result_type,
+            &result_name,
+            arith_error_type,
+            "DivByZero",
+            result_local,
+        );
+    }
+
+    builder.switch_to(merge_bb);
+    if let Some(rl) = result_local {
+        Some(FunctionBuilder::copy(rl))
+    } else {
+        // Route A: the peeled `T` value flows out to the caller.
+        Some(FunctionBuilder::copy(value_local))
+    }
+}
+
+/// D26 shared error-branch emitter: at `branch_bb`, construct
+/// `Result.Error(ArithError.<variant>)` and either assign to `result_local`
+/// + jump to `merge_bb` (Route B), or write to the fn's return slot + emit
+/// early-exit drops + `ret` (Route A). Extracted so the class-fix rule
+/// (Core #4) — a future third fault category — lands in ONE place.
+fn emit_fallible_arith_error_branch(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    branch_bb: BlockId,
+    merge_bb: BlockId,
+    result_type: TypeId,
+    result_name: &str,
+    arith_error_type: TypeId,
+    arith_error_variant: &str,
+    result_local: Option<LocalId>,
+) {
+    builder.switch_to(branch_bb);
+    // Construct ArithError.<variant> — a payload-free enum ctor.
+    let err_local = builder.enum_init(
+        "ArithError",
+        arith_error_variant,
+        arith_error_type,
+        vec![],
+    );
+    // Wrap in Result.Error(err).
+    let result_err_local = builder.enum_init(
+        result_name.to_string(),
+        "Error",
+        result_type,
+        vec![FunctionBuilder::copy(err_local)],
+    );
+    if let Some(rl) = result_local {
+        // Route B — assign to the capture local and merge.
+        builder.assign(Place::local(rl), FunctionBuilder::copy(result_err_local));
+        builder.jump(merge_bb);
+    } else {
+        // Route A — write into the fn's Result return slot and early-return.
+        // Mirrors `emit_result_auto_propagate`'s Error-branch: assign
+        // (Move-mode when Resource, else Copy), mark the source moved,
+        // emit early-exit drops, and `ret`.
+        let is_resource = ctx.type_registry.is_resource_type(result_type);
+        if is_resource {
+            builder.assign_mode(
+                crate::ir::instructions::AssignMode::Move,
+                Place::local(LocalId(0)),
+                FunctionBuilder::copy(result_err_local),
+            );
+            ctx.move_zero_and_mark(builder, result_err_local);
+        } else {
+            builder.assign(Place::local(LocalId(0)), FunctionBuilder::copy(result_err_local));
+        }
+        // Drop-correct the frame — a Result.Error early-return runs the
+        // same exit-drops path a normal `return Error(…)` would.
+        super::super::stmts::emit_on_error_cleanups(ctx, builder);
+        ctx.drops.emit_early_exit_drops(
+            builder,
+            &ctx.type_registry,
+            super::super::drops::DropScopeKind::Function,
+            None,
+        );
+        builder.ret(FunctionBuilder::copy(LocalId(0)));
     }
 }
 
