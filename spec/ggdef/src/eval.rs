@@ -2192,12 +2192,30 @@ fn eval_binary(ctx: &Ctx, state: &mut State, op: BinOp, l: &Expr, r: &Expr) -> R
                 a.checked_rem(*b).map(Value::Int).ok_or(Halt::Trap(TrapKind::Overflow))
             }
         }
+        // D28 integer `**` — branch on the RHS sign FIRST so the
+        // negative-exponent trap observably agrees with the C runtime
+        // (`gorget_pow_checked_i64` traps `T_Overflow` on `exp < 0`).
+        // Range-check for u32 fit before casting so a `2 ** (1 << 33)`
+        // input traps predictably instead of narrowing silently.
+        (BinOp::Pow, Value::Int(a), Value::Int(b)) => {
+            if *b < 0 {
+                return Err(Halt::Trap(TrapKind::Overflow));
+            }
+            if *b > u32::MAX as i64 {
+                return Err(Halt::Trap(TrapKind::Overflow));
+            }
+            a.checked_pow(*b as u32)
+                .map(Value::Int)
+                .ok_or(Halt::Trap(TrapKind::Overflow))
+        }
 
         // Float arithmetic — IEEE, no trap (matches hardware; D8 governs print).
         (BinOp::Add, Value::Float(a), Value::Float(b)) => Ok(Value::Float(a + b)),
         (BinOp::Sub, Value::Float(a), Value::Float(b)) => Ok(Value::Float(a - b)),
         (BinOp::Mul, Value::Float(a), Value::Float(b)) => Ok(Value::Float(a * b)),
         (BinOp::Div, Value::Float(a), Value::Float(b)) => Ok(Value::Float(a / b)),
+        // D28 float `**` — IEEE 754 (matches `gorget_pow{f,}`).
+        (BinOp::Pow, Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.powf(*b))),
 
         // String concatenation.
         (BinOp::Add, Value::Str(a), Value::Str(b)) => Ok(Value::Str(format!("{a}{b}"))),
