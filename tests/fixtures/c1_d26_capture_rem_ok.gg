@@ -1,0 +1,11 @@
+# D26 axis: op=Rem · route=B (Result-capture) · POS (success) · int64.
+# Route B success cell for `%!`. Non-zero divisor → success.
+int identity(int x): x
+
+void main():
+    int a = identity(23)
+    int b = identity(5)
+    Result[int, ArithError] r = a %! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-1)

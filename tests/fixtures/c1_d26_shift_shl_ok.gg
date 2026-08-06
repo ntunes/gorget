@@ -1,0 +1,15 @@
+# D26 axis: op=Shl · route=A (throws-propagate via auto-infer) · POS (success).
+# Success cell (`4 <<! 2 == 16`) — auto-infer promotes the fn to
+# `throws ArithError`; the shift value stays in range so the base-op
+# path succeeds. This fixture PINS CURRENT (Route-A minimum) behavior;
+# a shift-out-of-range would trap-on-oob rather than construct
+# Error(Overflow) — see filed follow-up "D26 shift-fallible lowering
+# gap" for the FaultableBinOp Shl/Shr extension that flips this.
+int identity(int x): x
+
+int shl_or_throw(int a, int b):
+    return a <<! b
+
+void main():
+    int ok = shl_or_throw(identity(4), identity(2))! catch (e): -1
+    print(ok)

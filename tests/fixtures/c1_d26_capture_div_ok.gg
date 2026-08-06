@@ -1,0 +1,14 @@
+# D26 axis: op=Div · route=B (Result-capture) · POS (success) · int64.
+# Route B success cell for `/!`. Non-zero divisor + non-`TYPE_MIN/-1`
+# operands → success. Div has BOTH overflow_bb (unused here) AND
+# divzero_bb (unused here) — the success continuation still runs both
+# FaultCheck emits before the merge, and both flag as false.
+int identity(int x): x
+
+void main():
+    int a = identity(20)
+    int b = identity(4)
+    Result[int, ArithError] r = a /! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-1)

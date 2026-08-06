@@ -42484,6 +42484,85 @@ fn c1_d26_explicit_throws_declared_wins() {
     );
 }
 
+// ── D26 F4 fixture-depth completion (Route B success + Route A per-op) ──
+//
+// Fills the axis matrix that F1's initial 8-fixture net left open: Route B
+// (Result-capture) success cells for the 4 remaining arith ops (Sub / Mul /
+// Div / Rem); Route A (auto-infer propagate) success + fault paths for
+// those same 4; shift-fallible smoke fixtures pinning the CURRENT trap-on-
+// oob (Route-A minimum) behavior — the shift fallible-arith lowering is a
+// filed follow-up and will flip these expectations when it lands.
+
+#[test]
+fn c1_d26_capture_sub_ok() {
+    // Route B success cell for `-!`: `10 -! 3 = 7` at Result-capture dest.
+    run_gg("c1_d26_capture_sub_ok.gg", "7");
+}
+
+#[test]
+fn c1_d26_capture_mul_ok() {
+    // Route B success cell for `*!`: `6 *! 7 = 42`.
+    run_gg("c1_d26_capture_mul_ok.gg", "42");
+}
+
+#[test]
+fn c1_d26_capture_div_ok() {
+    // Route B success cell for `/!`: `20 /! 4 = 5`. Div's two-fault
+    // sequence (overflow_bb + divzero_bb) both false-flag → success path.
+    run_gg("c1_d26_capture_div_ok.gg", "5");
+}
+
+#[test]
+fn c1_d26_capture_rem_ok() {
+    // Route B success cell for `%!`: `23 %! 5 = 3`.
+    run_gg("c1_d26_capture_rem_ok.gg", "3");
+}
+
+#[test]
+fn c1_d26_auto_infer_sub() {
+    // Route A auto-infer both cells for `-!`: 10-3=7 (success), then
+    // `-INT64_MAX - 2` underflow → catch -1. Two stdout lines "7\n-1".
+    run_gg("c1_d26_auto_infer_sub.gg", "7\n-1");
+}
+
+#[test]
+fn c1_d26_auto_infer_mul() {
+    // Route A auto-infer both cells for `*!`: 6*7=42 (success), then
+    // 3037000500*3037000500 overflow → catch -2. Two stdout lines.
+    run_gg("c1_d26_auto_infer_mul.gg", "42\n-2");
+}
+
+#[test]
+fn c1_d26_auto_infer_div() {
+    // Route A auto-infer both cells for `/!`: 20/4=5 (success), then
+    // 10/0 divzero → catch -99. Two stdout lines.
+    run_gg("c1_d26_auto_infer_div.gg", "5\n-99");
+}
+
+#[test]
+fn c1_d26_auto_infer_rem() {
+    // Route A auto-infer both cells for `%!`: 23%5=3 (success), then
+    // 10%0 divzero → catch -42. Two stdout lines.
+    run_gg("c1_d26_auto_infer_rem.gg", "3\n-42");
+}
+
+#[test]
+fn c1_d26_shift_shl_ok() {
+    // Route A shift-fallible smoke: `4 <<! 2 = 16` inside auto-inferred
+    // throws-fn. PINS CURRENT (Route-A minimum) trap-on-oob behavior —
+    // when the shift-fallible lowering follow-up lands (extends
+    // `lower_fallible_arith_binop` to route Shl/Shr through a new
+    // FaultOp category), the shift-out-of-range fault path flips from
+    // trap to Result.Error(Overflow); the success cell keeps this stdout.
+    run_gg("c1_d26_shift_shl_ok.gg", "16");
+}
+
+#[test]
+fn c1_d26_shift_shr_ok() {
+    // Route A shift-fallible smoke: `16 >>! 2 = 4`. Same PIN as shl_ok.
+    run_gg("c1_d26_shift_shr_ok.gg", "4");
+}
+
 // ── D26 F2 self-host lane parity (Core #9) ───────────────────────────────
 //
 // Cross-lane fixture: the self-host driver runs the shared c1_d26_* fixtures

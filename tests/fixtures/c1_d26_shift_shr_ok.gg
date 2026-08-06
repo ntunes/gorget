@@ -1,0 +1,11 @@
+# D26 axis: op=Shr · route=A (throws-propagate via auto-infer) · POS (success).
+# Success cell (`16 >>! 2 == 4`). PINS CURRENT (Route-A minimum) behavior;
+# out-of-range shift would trap-on-oob — see the shift-fallible follow-up.
+int identity(int x): x
+
+int shr_or_throw(int a, int b):
+    return a >>! b
+
+void main():
+    int ok = shr_or_throw(identity(16), identity(2))! catch (e): -1
+    print(ok)

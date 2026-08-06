@@ -1,0 +1,12 @@
+# D26 axis: op=Rem · route=A (throws-propagate via auto-infer) · POS + NEG.
+# Success cell (23%5=3) + divzero cell (10%0 → DivByZero).
+int identity(int x): x
+
+int rem_or_throw(int a, int b):
+    return a %! b
+
+void main():
+    int ok = rem_or_throw(identity(23), identity(5))! catch (e): -1
+    print(ok)
+    int dz = rem_or_throw(identity(10), identity(0))! catch (e): -42
+    print(dz)

@@ -1,0 +1,12 @@
+# D26 axis: op=Mul · route=B (Result-capture) · POS (success) · int64.
+# Route B success cell for `*!`. Small values so no overflow — proves
+# the FaultCheck-success-continuation constructs Result.Ok(v) correctly.
+int identity(int x): x
+
+void main():
+    int a = identity(6)
+    int b = identity(7)
+    Result[int, ArithError] r = a *! b
+    match r:
+        case Ok(v): print(v)
+        case Error(e): print(-1)
