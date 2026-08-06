@@ -1,0 +1,19 @@
+# CONTROL cell: Guard[int] · &-param route · Borrow self-conv (NOT ByValue).
+# Green pre AND post-fix. Guard is a LtStructBase type (holds a pointer, but
+# is itself a struct with copy_semantics::Resource), so its &-param needs the
+# raw-pointer path (auto-deref would drop the mutation-through-alias). The
+# chokepoint fix must NOT rewrite these -- the by-value predicate excludes
+# Guard by design.
+
+from std.sync import Mutex, Guard
+
+void bump(Guard[int] &g):
+    int v = g.get()
+    g.set(v + 1)
+
+void main():
+    Mutex[int] m = Mutex[int](40)
+    Guard[int] g = m.lock()
+    bump(&g)
+    bump(&g)
+    print(g.get())

@@ -1,0 +1,23 @@
+# Cell: Semaphore · &-param route · SelfConvention::ByValue chokepoint.
+#
+# LANDED 2026-08-06 (Round XXXII, opaque-handle receiver-ABI class fix).
+# Pre-fix (measured 2026-08-06): C DEADLOCK (exit 124); LLVM prints `42`
+# exit 0 (accidentally green -- reading garbage stack bytes that the
+# `sem_wait` runtime happens to treat as an already-signalled semaphore).
+# Post-fix: prints `42`, exit 0 on both backends.
+#
+# The LLVM accidentally-green cell is a good example of Core #12(a) -- the
+# fixture NAME is the claim about what it tests, and "accidentally green on
+# one backend" is not evidence of correctness; it's a cell green for a reason
+# unrelated to what we think it tests.
+
+from std.sync import Semaphore
+
+void grab(Semaphore &s):
+    s.acquire()
+
+void main():
+    Semaphore s = Semaphore(2)
+    grab(&s)
+    grab(&s)
+    print(42)

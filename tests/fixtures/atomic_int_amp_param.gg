@@ -1,0 +1,22 @@
+# Cell: AtomicInt · &-param route · SelfConvention::ByValue chokepoint.
+#
+# LANDED 2026-08-06 (Round XXXII, opaque-handle receiver-ABI class fix).
+# Pre-fix (measured 2026-08-06): silently prints `0` (both `.add(1)` calls
+# incremented the caller's stack frame reinterpreted as GorgetAtomicInt,
+# never touching the real handle), exit 0 on both C and LLVM. gg check
+# ACCEPTED it. Post-fix: prints `2`, exit 0.
+#
+# ⚠ THE LOUDEST SILENT-WRONG CELL of the class. No crash, no compiler
+# warning, no misleading heap-pointer value -- just the wrong number. A
+# user would file this as a runtime bug in AtomicInt itself.
+
+from std.sync import AtomicInt
+
+void bump(AtomicInt &c):
+    c.add(1)
+    c.add(1)
+
+void main():
+    AtomicInt c = AtomicInt(0)
+    bump(&c)
+    print(c.load())

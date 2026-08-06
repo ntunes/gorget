@@ -1,0 +1,34 @@
+# Cell: AtomicInt · struct-field route · SelfConvention::ByValue chokepoint.
+#
+# GRADUATED 2026-08-06 (Round XXXII, MEMORY SAFETY / ONE OWNERSHIP BOUNDARY).
+# Pre-fix: exit 0 but prints a heap pointer as an int (e.g. `187651089826466`)
+# and CORRUPTS the atomic handle. gg check ACCEPTED it -- no `&` anywhere, no
+# crash, so a user would never suspect the write went to the WRONG address.
+# Post-fix: prints `2`, exit 0.
+#
+# MECHANISM. `AtomicInt` typedefs to `GorgetAtomicInt*`, so a field of type
+# `AtomicInt` STORES a pointer value. The struct-field RECEIVER-BUILD at
+# `methods.rs:2322-2334` (field_place_info arm) took `&field_place` for the
+# receiver arg -- that gives a `*AtomicInt` == `GorgetAtomicInt**`, and the
+# by-value callee `gorget_atomic_int_add` reinterprets `&b.c` as the handle
+# struct. Each `.add(1)` incremented the 8 bytes AT `&b.c` (the field's
+# storage) rather than the atomic on the heap; two adds shifted the handle
+# pointer by 2. `.load()` on `&b.c` read those 8 bytes back -- a large integer
+# that reads as the corrupted handle value.
+#
+# CLASS (uniform across 12 by-value protocols). Sibling routes this round:
+# mutex_amp_param.gg (`&`-param), opaque_handle_struct_field_waitgroup.gg
+# (struct-field · WaitGroup), atomic_int_amp_param.gg. The chokepoint fix
+# loads the field VALUE (the handle pointer) directly instead of taking its
+# address. Mirrors the elem-place and borrow-param arms.
+
+from std.sync import AtomicInt
+
+struct Bag:
+    AtomicInt c
+
+void main():
+    Bag b = Bag(AtomicInt(0))
+    b.c.add(1)
+    b.c.add(1)
+    print(b.c.load())

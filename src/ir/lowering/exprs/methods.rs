@@ -529,9 +529,43 @@ pub(super) fn lower_method_call(
     };
 
     let mut recv = if borrow_param_local.is_some() {
-        // Skip auto-deref — use the raw pointer
+        // Skip auto-deref — use the raw pointer. This is correct for
+        // LtStructBase types (Vector, Dict, Guard, user structs) whose
+        // callees take a `*T` and write THROUGH the alias — a value copy
+        // would drop the mutation.
+        //
+        // EXCEPTION — opaque-handle (SelfConvention::ByValue) types (Mutex,
+        // AtomicInt, RWLock, Semaphore, Barrier, WaitGroup, Thread, Heap,
+        // Shared, Weak, OnceFlag, TaskGroup, AtomicBool). Each of these is a
+        // C typedef to `Gorget<Family>*` — the "pointer" IS the handle. Their
+        // methods take self BY VALUE (a single `*` of indirection), so a
+        // pointer-typed receiver (`&`/`!` param whose local type is
+        // `MutPtr(Named("Mutex__int64_t"))`) is one indirection too many and
+        // the callee reinterprets the CALLER'S STACK FRAME as the handle
+        // struct — measured as SEGV / silent-wrong-output / deadlock across
+        // the class (`known_gaps/mutex_amp_param_lost_writes_and_segv.gg`
+        // and siblings; owner decision TODO.md:889 — LOWER CORRECTLY, DO NOT
+        // REJECT). Load the handle value once here so the ABI matches.
+        //
+        // Core #4 class-fix / Core #1 write-site: the "receiver ABI matches
+        // callee SelfConvention" invariant belongs to the receiver-build
+        // site; downstream C/LLVM emitters must never fish it back out of a
+        // name.
         let local_id = borrow_param_local.unwrap();
-        Operand::Copy(Place::local(local_id))
+        let receiver_ty = builder.local_type(local_id);
+        let handle = ctx.pointee_type(receiver_ty)
+            .and_then(|inner| ctx.type_name_for_id(inner)
+                .map(|n| (inner, n.to_string())));
+        if let Some((handle_ty, handle_name)) = handle {
+            if crate::ir::lowering::builtins::is_by_value_receiver(&handle_name) {
+                let loaded = builder.load_ref(Place::local(local_id), handle_ty);
+                Operand::Copy(Place::local(loaded))
+            } else {
+                Operand::Copy(Place::local(local_id))
+            }
+        } else {
+            Operand::Copy(Place::local(local_id))
+        }
     } else {
         lower_expr(ctx, builder, receiver)
     };
@@ -2315,14 +2349,45 @@ pub(super) fn lower_method_call(
         if let Some((elem_ptr_place, elem_type_id)) = index_elem_place_info {
             let mut elem_place = elem_ptr_place;
             elem_place.projections.push(Projection::Deref);
-            let pt = ctx.register_mut_ptr_type(elem_type_id);
-            let pl = builder.add_local(pt, None);
-            builder.emit_borrow_mut(pl, elem_place);
-            call_args.push(FunctionBuilder::copy(pl));
+            // Opaque-handle (SelfConvention::ByValue) element type — the
+            // element slot STORES the handle pointer (`Named("AtomicInt")` is
+            // `typedef GorgetAtomicInt* AtomicInt`), so `&elem_place` would
+            // pass one indirection too many and the callee reinterprets the
+            // buffer address as a handle struct (measured SEGV 139 in
+            // `atomic_int_collection_elem_receiver_abi.gg` and siblings).
+            // Load the value directly. Mirrors the by-value arm at :2383 and
+            // the borrow-param arm at :531 — one chokepoint, three routes.
+            let elem_is_by_value = ctx.type_name_for_id(elem_type_id)
+                .map(|n| crate::ir::lowering::builtins::is_by_value_receiver(n))
+                .unwrap_or(false);
+            if elem_is_by_value {
+                let tmp = builder.add_local(elem_type_id, None);
+                builder.assign(Place::local(tmp), Operand::Copy(elem_place));
+                call_args.push(FunctionBuilder::copy(tmp));
+            } else {
+                let pt = ctx.register_mut_ptr_type(elem_type_id);
+                let pl = builder.add_local(pt, None);
+                builder.emit_borrow_mut(pl, elem_place);
+                call_args.push(FunctionBuilder::copy(pl));
+            }
         } else if let Some((field_place, field_type_id)) = field_place_info.clone()
             .filter(|_| !field_is_borrow_ptr)
         {
-            if needs_mut {
+            // Opaque-handle field — the field VALUE is the handle pointer;
+            // borrowing the field place would produce **T, which the ByValue
+            // callee reinterprets as the caller's struct memory (measured:
+            // `opaque_handle_struct_field_silent_garbage.gg` prints the heap
+            // pointer as an int instead of `2`). Load the value directly.
+            // Mirrors the elem-place arm above and the borrow-param arm at
+            // :531 — one chokepoint, three routes.
+            let field_is_by_value = ctx.type_name_for_id(field_type_id)
+                .map(|n| crate::ir::lowering::builtins::is_by_value_receiver(n))
+                .unwrap_or(false);
+            if field_is_by_value {
+                let tmp = builder.add_local(field_type_id, None);
+                builder.assign(Place::local(tmp), Operand::Copy(field_place.clone()));
+                call_args.push(FunctionBuilder::copy(tmp));
+            } else if needs_mut {
                 let pt = ctx.register_mut_ptr_type(field_type_id);
                 let pl = builder.add_local(pt, None);
                 builder.emit_borrow_mut(pl, field_place.clone());

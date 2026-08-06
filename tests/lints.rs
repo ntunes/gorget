@@ -11097,3 +11097,158 @@ fn backend_flag_set_matches_dispatch() {
          dispatch ever runs. Add it to BACKENDS."
     );
 }
+
+/// Round XXXII class-retirement guard (Core #6): every SelfConvention::ByValue
+/// opaque-handle protocol (Shared, Weak, Mutex, RWLock, Thread, AtomicInt,
+/// AtomicBool, Barrier, WaitGroup, Semaphore, OnceFlag, TaskGroup) needs a
+/// receiver-ABI POS or CONTROL fixture per route so the chokepoint fix at
+/// `src/ir/lowering/exprs/methods.rs:531 / :2315 / :2343` is proven to cover
+/// the WHOLE class, not just Mutex. Grow-with-schema: iterates the
+/// authoritative `ALL_PROTOCOLS` list via `by_value_protocol_names()`; a new
+/// by-value protocol added to `builtins.rs::ALL_PROTOCOLS` automatically
+/// flips this lint's expected-coverage set — no hard-coded list to keep in
+/// sync (Layering discipline rule 3, one source of truth per axis).
+///
+/// Every (protocol, route) cell MUST be either:
+///   1. In `EXPECTED_FIXTURE_STEMS` — pointing at a landed fixture stem in
+///      `tests/fixtures/` (asserted to exist on disk); or
+///   2. In `OPAQUE_HANDLE_UNCOVERED_CELLS` — with a cited follow-up (the
+///      known_gaps fixture or TODO entry).
+///
+/// A cell missing from BOTH lists panics the lint. This is the class-
+/// retiring guard: adding a new by-value protocol without either a fixture
+/// or a filing IS the regression.
+///
+/// **Positive-control** (Core #13): before landing this lint I renamed
+/// `tests/fixtures/mutex_amp_param.gg` and confirmed the lint went RED with
+/// the expected "MISSING opaque-handle Mutex × amp_param fixture" message;
+/// restored.
+#[test]
+fn opaque_handle_route_fixtures_exist() {
+    use std::collections::{HashMap, HashSet};
+
+    // Route naming mirrors the receiver-build sites in methods.rs:
+    //   amp_param       -> Route 1 (borrow-param, :531-566)
+    //   struct_field    -> Route 2a (field_place_info, :2343-2371)
+    //   collection_elem -> Route 2b (index_elem_place_info, :2315-2337)
+    const ROUTES: &[&str] = &["amp_param", "struct_field", "collection_elem"];
+
+    // (protocol, route) -> fixture stem (asserted to exist under tests/fixtures/).
+    // A cell absent here MUST have an entry in OPAQUE_HANDLE_UNCOVERED_CELLS
+    // below — the lint refuses silent gaps.
+    let mut expected: HashMap<(&str, &str), &str> = HashMap::new();
+    expected.insert(("Mutex",     "amp_param"),       "mutex_amp_param");
+    expected.insert(("AtomicInt", "amp_param"),       "atomic_int_amp_param");
+    expected.insert(("RWLock",    "amp_param"),       "rwlock_amp_param");
+    expected.insert(("Semaphore", "amp_param"),       "semaphore_amp_param");
+    expected.insert(("WaitGroup", "amp_param"),       "waitgroup_amp_param");
+    expected.insert(("Barrier",   "amp_param"),       "barrier_amp_param");
+    expected.insert(("AtomicInt", "struct_field"),    "opaque_handle_struct_field");
+    expected.insert(("WaitGroup", "struct_field"),    "opaque_handle_struct_field_waitgroup");
+    expected.insert(("Mutex",     "struct_field"),    "mutex_struct_field_lock_control");
+
+    // Filed-follow-up cells (either known_gaps fixtures OR TODO entries).
+    // Each entry cites where the follow-up lives. Graduating a cell (moving
+    // the fixture out of known_gaps or landing its coverage) means moving
+    // its row into `expected` above.
+    const OPAQUE_HANDLE_UNCOVERED_CELLS: &[(&str, &str, &str)] = &[
+        // (protocol, route, citation)
+        ("AtomicInt", "collection_elem",
+            "tests/fixtures/known_gaps/atomic_int_collection_elem_segv.gg (push-side)"),
+        ("Mutex",     "collection_elem",
+            "tests/fixtures/known_gaps/vector_mutex_elem_lock_segv.gg (push-side)"),
+        // Untagged / no-covered-route filings — class characterisation in
+        // TODO.md follow-up for the opaque-handle push-side ABI defect.
+        ("Shared",    "amp_param",       "TODO: Shared/Weak untagged, filed with push-side"),
+        ("Weak",      "amp_param",       "TODO: Shared/Weak untagged, filed with push-side"),
+        ("Thread",    "amp_param",       "TODO: opaque-handle Thread family follow-up"),
+        ("OnceFlag",  "amp_param",       "TODO: opaque-handle OnceFlag family follow-up"),
+        ("TaskGroup", "amp_param",       "TODO: opaque-handle TaskGroup family follow-up"),
+        ("AtomicBool","amp_param",       "TODO: opaque-handle AtomicBool follow-up"),
+        // Struct-field and collection-elem for the still-uncovered protocols
+        // fall under the same follow-up as their amp_param row. The lint
+        // enumerates every (protocol, route) cell; each MUST be listed.
+        ("Shared",    "struct_field",    "TODO: same as Shared amp_param"),
+        ("Weak",      "struct_field",    "TODO: same as Weak amp_param"),
+        ("Thread",    "struct_field",    "TODO: same as Thread amp_param"),
+        ("OnceFlag",  "struct_field",    "TODO: same as OnceFlag amp_param"),
+        ("TaskGroup", "struct_field",    "TODO: same as TaskGroup amp_param"),
+        ("AtomicBool","struct_field",    "TODO: same as AtomicBool amp_param"),
+        ("Barrier",   "struct_field",    "TODO: Barrier struct_field follow-up"),
+        ("Semaphore", "struct_field",    "TODO: Semaphore struct_field follow-up"),
+        ("RWLock",    "struct_field",    "TODO: RWLock struct_field follow-up"),
+        ("Shared",    "collection_elem", "TODO: known_gaps/shared_array_literal_*.gg family"),
+        ("Weak",      "collection_elem", "TODO: same as Shared collection_elem"),
+        ("Thread",    "collection_elem", "TODO: same as Thread amp_param"),
+        ("OnceFlag",  "collection_elem", "TODO: same as OnceFlag amp_param"),
+        ("TaskGroup", "collection_elem", "TODO: same as TaskGroup amp_param"),
+        ("AtomicBool","collection_elem", "TODO: same as AtomicBool amp_param"),
+        ("RWLock",    "collection_elem", "TODO: same class as vector_mutex_elem_lock_segv"),
+        ("Semaphore", "collection_elem", "TODO: same class as vector_mutex_elem_lock_segv"),
+        ("Barrier",   "collection_elem", "TODO: same class as vector_mutex_elem_lock_segv"),
+        ("WaitGroup", "collection_elem", "TODO: same class as vector_mutex_elem_lock_segv"),
+    ];
+
+    let uncovered: HashSet<(&str, &str)> = OPAQUE_HANDLE_UNCOVERED_CELLS
+        .iter()
+        .map(|(p, r, _)| (*p, *r))
+        .collect();
+
+    let by_value = gorget::ir::lowering::builtins::by_value_protocol_names();
+    assert!(
+        !by_value.is_empty(),
+        "by_value_protocol_names() returned empty — the SelfConvention::ByValue \
+         filter or ALL_PROTOCOLS registration got broken. Fix at source before \
+         the ratchet."
+    );
+
+    // Enumerate every (protocol, route) cell — either fixture-backed or filed.
+    let mut missing: Vec<String> = Vec::new();
+    for protocol in &by_value {
+        for route in ROUTES {
+            let key = (*protocol, *route);
+            if let Some(stem) = expected.get(&key) {
+                let path = format!("tests/fixtures/{stem}.gg");
+                if !std::path::Path::new(&path).exists() {
+                    missing.push(format!(
+                        "opaque-handle {protocol} × {route}: expected fixture \
+                         `{stem}.gg` is ABSENT — either land it or move the \
+                         cell to OPAQUE_HANDLE_UNCOVERED_CELLS with a cited \
+                         follow-up."
+                    ));
+                }
+            } else if !uncovered.contains(&key) {
+                missing.push(format!(
+                    "opaque-handle {protocol} × {route}: no fixture in \
+                     `expected` and no entry in `OPAQUE_HANDLE_UNCOVERED_CELLS`. \
+                     The receiver-ABI chokepoint at `methods.rs:531 / :2315 / \
+                     :2343` covers this cell; land a POS fixture OR file a \
+                     follow-up entry citing the reason."
+                ));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "opaque-handle receiver-ABI route-coverage gaps:\n{}",
+        missing.join("\n"),
+    );
+
+    // Also sanity-check that every entry in OPAQUE_HANDLE_UNCOVERED_CELLS is
+    // for an actual by-value protocol — a stale entry after graduation is a
+    // silent gap dressed as filed.
+    let by_value_set: HashSet<&str> = by_value.iter().copied().collect();
+    let stale: Vec<&str> = OPAQUE_HANDLE_UNCOVERED_CELLS
+        .iter()
+        .filter_map(|(p, _, _)| {
+            if !by_value_set.contains(*p) { Some(*p) } else { None }
+        })
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "OPAQUE_HANDLE_UNCOVERED_CELLS references non-by-value protocols: \
+         {stale:?}. Either the protocol lost its ByValue self_conv (fix at \
+         source in builtins.rs) or the entry is a stale carryover from a \
+         graduation — delete it."
+    );
+}

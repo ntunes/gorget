@@ -1,0 +1,43 @@
+# KNOWN GAP (filed 2026-08-06, sibling of the Round XXXII opaque-handle
+# receiver-ABI class fix): `Vector[T]` where T is a SelfConvention::ByValue
+# opaque-handle protocol (AtomicInt, Mutex, RWLock, Semaphore, Barrier, ...)
+# SEGVs on both C and LLVM backends. gg check ACCEPTS it.
+#
+# INTENDED: prints `2`, exit 0.
+#
+# ROOT CAUSE (measured 2026-08-06 -- DIFFERENT LAYER from the Round XXXII
+# receiver-ABI chokepoint fix). An opaque handle IS a pointer, so pushing
+# an `AtomicInt` (which is a pointer VALUE) into a `Vector[AtomicInt]`
+# passes the handle POINTER as `const void* elem` to `gorget_array_push`:
+#
+#   __v5 = gorget_atomic_int_new(0);     // handle = heap pointer
+#   gorget_array_push(__v3, __v5);       // memcpy(slot, __v5, 8)
+#
+# `push` treats `elem` as pointer-to-value-to-copy, so `memcpy(slot, handle, 8)`
+# reads the FIRST 8 bytes of the AtomicInt struct (the `__val` field, initial
+# 0) into the slot -- NOT the handle pointer itself. The slot now stores `0`
+# and the original handle is leaked. Every subsequent `v[0].add(1)` reads the
+# slot value (`0`) and dispatches to `atomic_int_add(0, 1)` -> SEGV.
+#
+# The chokepoint fix at `methods.rs:2315-2337` (Round XXXII) correctly
+# LOADS the slot value and passes it as the receiver -- so the receiver-
+# ABI half of the class is right. The SLOT itself is corrupt because push
+# stored 8 bytes of the wrong memory. The push-side arg-building for
+# scalar-sized value types (bool, int, and by-value opaque handles) is what
+# emits `&(int64_t){__v5}` for int -- it needs an equivalent `&__v5` wrap
+# for opaque-handle receivers. Owner-decided fix layer is a follow-up scout
+# in a subsequent round; graduating this cell is +1 close then.
+#
+# CLASS. Vector[AtomicInt] (this fixture) and Vector[Mutex[int]] (sibling
+# `vector_mutex_elem_lock_segv.gg`) are the two measured members of the
+# same class; the other 10 by-value protocols share the mechanism per the
+# receiver-ABI class taxonomy in `mutex_amp_param.gg`.
+
+from std.sync import AtomicInt
+
+void main():
+    Vector[AtomicInt] v = Vector[AtomicInt]()
+    v.push(AtomicInt(0))
+    v[0].add(1)
+    v[0].add(1)
+    print(v[0].load())
