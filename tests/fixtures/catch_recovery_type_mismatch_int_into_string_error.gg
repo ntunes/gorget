@@ -1,0 +1,16 @@
+# NEG · Track A · Result-catch · recovery `int 999` (via helper so it is not
+# const-folded) · binding `String` · VarDecl shape. Scalar into aggregate — the
+# reverse direction of the aggregate-into-scalar cells. INTENDED: `gg check`
+# rejects with E_TypeMismatch (recovery type int does not match String).
+
+String risky_str(int x) throws String:
+    if x < 0:
+        throw "neg"
+    return "ok " + "value"
+
+int make_int(int seed):
+    return seed + 999
+
+void main():
+    String s = risky_str(-1)! catch (_): make_int(0)
+    print(s)

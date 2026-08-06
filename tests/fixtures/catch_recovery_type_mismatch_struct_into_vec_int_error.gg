@@ -1,0 +1,19 @@
+# NEG · Track A · Result-catch · recovery struct-constructor `Foo(...)` ·
+# binding `Vector[int]` · VarDecl shape. Struct into collection — distinct from
+# Dict/Str because the recovery expression is a fresh struct value, not a
+# collection layout. INTENDED: `gg check` rejects with E_TypeMismatch.
+
+struct Foo:
+    int x
+    String s
+
+Vector[int] make_vec(int x) throws String:
+    if x < 0:
+        throw "neg"
+    Vector[int] v = Vector[int]()
+    v.push(x)
+    return v
+
+void main():
+    Vector[int] toks = make_vec(-1)! catch (_): Foo(1, "hi")
+    print(toks.len())

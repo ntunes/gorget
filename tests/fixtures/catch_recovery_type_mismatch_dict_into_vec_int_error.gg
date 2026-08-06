@@ -1,0 +1,21 @@
+# NEG · Track A · Result-catch · recovery `Dict[String, int]` · binding
+# `Vector[int]` · VarDecl shape · non-literal recovery. Different-layout
+# collection at the C level — hits the same silent-drop as the Vector[String]
+# cell but with a distinct backing type. INTENDED: `gg check` rejects with
+# E_TypeMismatch (recovery type Dict[String, int] does not match Vector[int]).
+
+Vector[int] make_vec(int x) throws String:
+    if x < 0:
+        throw "neg"
+    Vector[int] v = Vector[int]()
+    v.push(x)
+    return v
+
+Dict[String, int] make_dict():
+    Dict[String, int] d = Dict[String, int]()
+    d.put("k", 1)
+    return d
+
+void main():
+    Vector[int] toks = make_vec(-1)! catch (_): make_dict()
+    print(toks.len())

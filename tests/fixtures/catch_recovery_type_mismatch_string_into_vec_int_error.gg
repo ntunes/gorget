@@ -1,0 +1,20 @@
+# NEG · Track A · Result-catch · recovery `String` (from a helper) · binding
+# `Vector[int]` · VarDecl shape · non-literal recovery so const-fold cannot elide
+# it. This is the ORIGINAL cell the gorget-js report cited; on the current C
+# layout `Str` != `GorgetArray` so the C compiler happens to catch it downstream
+# — but that is an accident of layout, not a semantic-check. INTENDED: `gg check`
+# rejects with E_TypeMismatch (recovery type Str does not match Vector[int]).
+
+Vector[int] make_vec(int x) throws String:
+    if x < 0:
+        throw "neg"
+    Vector[int] v = Vector[int]()
+    v.push(x)
+    return v
+
+String make_str():
+    return "hello " + "world"
+
+void main():
+    Vector[int] toks = make_vec(-1)! catch (_): make_str()
+    print(toks.len())

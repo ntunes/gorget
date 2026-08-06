@@ -17779,6 +17779,145 @@ fn catch_recovery_type_unchecked() {
     );
 }
 
+// Track A · MEMORY-SAFETY round · CATCH / FAULT-CATCH recovery-type check.
+// Two writer arms (`Expr::Catch` at src/semantic/typecheck.rs:4624 and
+// `Expr::FaultCatch` at :4663) previously discarded their sub-expression's
+// inferred type — Core #10 lower-or-reject / silent-fallthrough class. The
+// helper `check_recovery_type` routes the recovery/handler through the
+// canonical three-carve-out unify contract that VarDecl / Assign / arg-pass /
+// return sites already use, retiring the class at its writer. The 10 NEG
+// cells below enumerate the type-mismatch axis (Vec[String] · String · Dict ·
+// int · struct-ctor · block-form · return-position · Fault-catch siblings);
+// the 8 POS canaries below guard the carve-outs (array literal · None ·
+// divergent Never · method-arg empty array) and the reference-grade
+// same-type shapes.
+
+#[test]
+fn catch_recovery_type_mismatch_vec_string_into_vec_int_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_vec_string_into_vec_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_string_into_vec_int_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_string_into_vec_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_dict_into_vec_int_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_dict_into_vec_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_int_into_string_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_int_into_string_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_struct_into_vec_int_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_struct_into_vec_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_block_form_into_vec_int_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_block_form_into_vec_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_mismatch_return_position_error() {
+    check_gg_fails(
+        "catch_recovery_type_mismatch_return_position_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn faultcatch_recovery_type_mismatch_vec_string_into_int_error() {
+    check_gg_fails(
+        "faultcatch_recovery_type_mismatch_vec_string_into_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn faultcatch_recovery_type_mismatch_dict_into_int_error() {
+    check_gg_fails(
+        "faultcatch_recovery_type_mismatch_dict_into_int_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn faultcatch_recovery_type_mismatch_match_handler_error() {
+    check_gg_fails(
+        "faultcatch_recovery_type_mismatch_match_handler_error.gg",
+        "E_TypeMismatch",
+    );
+}
+
+#[test]
+fn catch_recovery_type_pos_same_type_nonliteral() {
+    run_gg(
+        "catch_recovery_type_pos_same_type_nonliteral.gg",
+        "1\n42",
+    );
+}
+
+#[test]
+fn catch_recovery_type_pos_array_literal_carveout() {
+    run_gg("catch_recovery_type_pos_array_literal_carveout.gg", "0");
+}
+
+#[test]
+fn catch_recovery_type_pos_none_option_carveout() {
+    run_gg("catch_recovery_type_pos_none_option_carveout.gg", "-1");
+}
+
+#[test]
+fn catch_recovery_type_pos_divergent_never() {
+    run_gg("catch_recovery_type_pos_divergent_never.gg", "1\n0");
+}
+
+#[test]
+fn faultcatch_recovery_type_pos_overflow_int() {
+    run_gg("faultcatch_recovery_type_pos_overflow_int.gg", "-1");
+}
+
+#[test]
+fn faultcatch_recovery_type_pos_block_match_handler() {
+    run_gg(
+        "faultcatch_recovery_type_pos_block_match_handler.gg",
+        "111\n222",
+    );
+}
+
+#[test]
+fn catch_recovery_type_pos_return_position_none() {
+    run_gg("catch_recovery_type_pos_return_position_none.gg", "-1");
+}
+
+#[test]
+fn catch_recovery_type_pos_method_arg_empty_array() {
+    run_gg("catch_recovery_type_pos_method_arg_empty_array.gg", "0");
+}
+
 #[test]
 #[ignore = "KNOWN GAP (filed 2026-08-05): `gg check` ACCEPTS this 3-line program, \
 then BOTH Rust backends ICE at exit 101 (move-follow-through violation, \

@@ -1,0 +1,16 @@
+# POS · Track A canary · Result-catch · recovery `None` · binding `Option[int]`
+# · VarDecl shape. Exercises the NoneLiteral hint-consultation path (the same
+# `is_result_capture_compatible` carve-out mirrored from VarDecl); `None`
+# must coerce to `Option[int]` via the hint the fix installs.
+
+Option[int] risky(int x) throws String:
+    if x < 0:
+        throw "neg"
+    return Some(x)
+
+void main():
+    Option[int] o = risky(-1)! catch (_): None
+    if o is Some(v):
+        print(v)
+    else:
+        print(-1)

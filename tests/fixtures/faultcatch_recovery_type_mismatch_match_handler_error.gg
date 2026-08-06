@@ -1,0 +1,17 @@
+# NEG · Track A · Fault-catch · `catch f: match f: …` handler · every arm yields
+# `String` (internally consistent, so the match-arm-unify does NOT catch it) ·
+# binding `int` · VarDecl shape. This precisely isolates the writer-site check:
+# only a `check_recovery_type(handler, expected_int)` call catches the
+# handler-vs-expected mismatch. Without the writer fix, `gg check` accepts.
+# INTENDED: `gg check` rejects with E_TypeMismatch (handler yields String,
+# expected int).
+
+String bad_str():
+    return "not " + "int"
+
+void main():
+    int big = 4611686018427387904
+    int r = big * big catch f: match f:
+        case Fault.Overflow(): bad_str()
+        case Fault.DivByZero(): bad_str()
+    print(r)

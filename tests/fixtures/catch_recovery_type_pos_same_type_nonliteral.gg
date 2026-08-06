@@ -1,0 +1,20 @@
+# POS · Track A canary · Result-catch · recovery same type as OK, non-literal
+# helper · binding `Vector[int]` · VarDecl shape. Must stay accepted after the
+# writer-fix — this is the reference-grade shape the fix protects.
+
+Vector[int] make_vec(int x) throws String:
+    if x < 0:
+        throw "neg"
+    Vector[int] v = Vector[int]()
+    v.push(x)
+    return v
+
+Vector[int] fallback():
+    Vector[int] r = Vector[int]()
+    r.push(42)
+    return r
+
+void main():
+    Vector[int] toks = make_vec(-1)! catch (_): fallback()
+    print(toks.len())
+    print(toks[0])
