@@ -1,0 +1,6 @@
+# D28 T1: integer `**` overflow traps T_Overflow (D30 narrow+wide uniform).
+void main():
+    int base = 1000000
+    int exp = 3
+    int r = base ** exp
+    print(r)

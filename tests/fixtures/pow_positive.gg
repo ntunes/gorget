@@ -1,0 +1,4 @@
+# D28 P1: basic integer power `**`. Expected: 1024.
+void main():
+    int r = 2 ** 10
+    print(r)

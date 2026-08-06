@@ -1,0 +1,7 @@
+# D28 T2: integer `**` with negative exponent traps T_Overflow (domain-fault).
+# A fallible `**!` deferred per amendment R3 (syntax budget).
+void main():
+    int base = 2
+    int exp = -1
+    int r = base ** exp
+    print(r)

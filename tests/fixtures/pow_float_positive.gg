@@ -1,0 +1,4 @@
+# D28 P2: basic float power `**`. Expected: 1024.0
+void main():
+    float r = 2.0 ** 10.0
+    print(r)

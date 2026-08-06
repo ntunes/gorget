@@ -1,0 +1,8 @@
+# D28 CA5: `**=` compound assignment on a module-level global. Expected: 1024.
+# Exercises S5 in src/ir/lowering/stmts/assigns.rs — routed via
+# `compound_op_to_gir` post-fix (Core #4 class-fix, module-global branch).
+int GLOBAL = 2
+
+void main():
+    GLOBAL **= 10
+    print(GLOBAL)

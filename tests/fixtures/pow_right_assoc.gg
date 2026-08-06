@@ -1,0 +1,5 @@
+# D28 P3: `**` is right-associative per amendment R2.
+# `2 ** 3 ** 2` = `2 ** (3 ** 2)` = `2 ** 9` = 512, NOT `(2 ** 3) ** 2` = 64.
+void main():
+    int r = 2 ** 3 ** 2
+    print(r)
