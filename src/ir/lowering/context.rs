@@ -2245,6 +2245,72 @@ impl<'a> LoweringContext<'a> {
         self.drops.mark_moved(local);
     }
 
+    /// Assign `operand` into an EXISTING `dst` local under `mode`, pairing a
+    /// Move-mode assign with the required MoveZero + mark_moved on the source
+    /// (when the source is a bare, drop-registered place local that is not
+    /// already moved). Bare `builder.assign_mode(Move, …)` without this guard
+    /// is a use-after-free hazard — the source's scope-exit drop re-frees the
+    /// buffer the new dst now owns. The Move-follow-through guard here is the
+    /// same pattern `lower_var_decl` uses at
+    /// `src/ir/lowering/stmts/mod.rs:1189-1198` (Pattern::Binding) and
+    /// `:1236-1245` (Pattern::Tuple).
+    ///
+    /// The validator that diagnoses the missing guard is
+    /// `validate_move_follow_through` at `src/ir/validate.rs:1787`; when this
+    /// helper fires the write-side invariant, the read-side never trips
+    /// (Core #1: fix at the write site).
+    pub fn assign_with_move_follow_through(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        dst: LocalId,
+        operand: Operand,
+        mode: crate::ir::instructions::AssignMode,
+    ) {
+        use crate::ir::instructions::{AssignMode, Place};
+        builder.assign_mode(mode, Place::local(dst), operand.clone());
+        if mode == AssignMode::Move {
+            if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
+                if place.projections.is_empty()
+                    && place.local != dst
+                    && !self.drops.is_moved(place.local)
+                {
+                    self.move_zero_and_mark(builder, place.local);
+                }
+            }
+        }
+    }
+
+    /// Materialize `operand` into a FRESH addressable local of `inner_type`,
+    /// with the same Move-follow-through guard as
+    /// [`assign_with_move_follow_through`] (of which this is a thin wrapper
+    /// that also allocates the destination).
+    ///
+    /// Mirrors the self-host's `op_consume` chokepoint pattern (see
+    /// `tests/fixtures/self_host_lowerer/lower.gg:2625` — the SH's uniform
+    /// ownership-boundary helper that picks OpMove/OpClone/OpCopy per source
+    /// and drop-tracking state, with the Move follow-through baked in).
+    ///
+    /// Use at ownership-crossing boundaries that need a pointer-shaped
+    /// destination — Mutex/RwLock/Shared constructors take `&init` for a
+    /// sizeof-driven memcpy, so the initializer must live in an addressable
+    /// slot before the ctor call. The three resource arms of
+    /// `lower_shared_var_decl` all match this shape.
+    ///
+    /// Caller supplies `mode` — in `lower_shared_var_decl` this is the local
+    /// closure `resource_assign_mode(ctx, inner_type)` (Copy for scalar
+    /// inners; Move for resource/needs-drop inners).
+    pub fn materialize_addressable(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        operand: Operand,
+        inner_type: TypeId,
+        mode: crate::ir::instructions::AssignMode,
+    ) -> LocalId {
+        let tmp = builder.add_local(inner_type, None);
+        self.assign_with_move_follow_through(builder, tmp, operand, mode);
+        tmp
+    }
+
     /// Check if a type is a string type, resolving through Ptr.
     pub fn is_string_type(&self, type_id: TypeId) -> bool {
         let resolved = self.pointee_type(type_id).unwrap_or(type_id);

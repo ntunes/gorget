@@ -558,16 +558,27 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// `is_registered` are DROP-ACCOUNTANT state, not `LocalOwnership`, and
     /// remain unmigratable until the drop accountant is queryable off `Local`.
     /// Locking in the floor.
-    /// Bumped 93 → 94 (2026-08-06): one new `!self.drops.is_registered(local)`
-    /// call in `ensure_owned_at_consuming_arg`'s else arm (context.rs:2693) —
-    /// Track B (round MEMORY SAFETY / ONE OWNERSHIP BOUNDARY) restored the
-    /// borrow-detection predicate to the expression-temp arm so a View-tagged
-    /// temp (Guard.get and family) is cloned at the boundary instead of
-    /// memcpy'd as a shallow alias. The predicate mirrors the identifier arm
-    /// at :2638 line-for-line — same four accessors, same class. Same drop-
-    /// accountant state as the 64→…→85 bumps; unmigratable until the drop
-    /// accountant is queryable off `Local`. Locking in the floor.
-    const BUDGET: usize = 94;
+    /// Bumped 93 → 95 (2026-08-06, MERGE): TWO independent proxy-read additions
+    /// landed in the same round (MEMORY SAFETY / ONE OWNERSHIP BOUNDARY):
+    ///   1. Track B: `!self.drops.is_registered(local)` in
+    ///      `ensure_owned_at_consuming_arg`'s else arm at `context.rs:2693` —
+    ///      restored the borrow-detection predicate to the expression-temp arm
+    ///      so a View-tagged temp (Guard.get and family) clones at the
+    ///      boundary instead of memcpying as a shallow alias. Mirrors the
+    ///      identifier arm at :2638 line-for-line.
+    ///   2. Track D+E: `!self.drops.is_moved(place.local)` idempotence guard
+    ///      inside `LoweringContext::assign_with_move_follow_through` (which
+    ///      `materialize_addressable` reuses) — the CHOKEPOINT the 7 raw
+    ///      `!ctx.drops.is_moved` sites inside `lower_shared_var_decl` were
+    ///      consolidated into.
+    /// Both are SAME write-side-discipline class as the 64→…→85 bumps —
+    /// `is_moved` and `is_registered` are DROP-ACCOUNTANT state, not
+    /// `LocalOwnership`, and remain unmigratable until the drop accountant is
+    /// queryable off `Local`. Track D+E's chokepoint paves the way for a
+    /// future shrink once the analogous consolidation lands for
+    /// `lower_var_decl`'s Pattern::Binding + Pattern::Tuple sites.
+    /// Locking in the combined floor.
+    const BUDGET: usize = 95;
 
     let count = count_phase_d_proxy_reads();
     assert!(
@@ -11382,5 +11393,80 @@ fn view_producer_into_consuming_cell_has_coverage() {
          stale, remove it from VIEW_PRODUCERS_INTO_CONSUMERS. Losing a \
          row is losing the regression net for its class.\n\n{}",
         missing.join("\n")
+    );
+}
+
+/// Round XXXII Track D+E — class-retiring guard for the shared-var-decl
+/// Move-follow-through class-fix.
+///
+/// Pre-fix, all 7 `builder.assign_mode(resource_assign_mode(...), ...)` sites
+/// inside `lower_shared_var_decl` (`src/ir/lowering/stmts/mod.rs:1595-1834`)
+/// bypassed the Move-follow-through invariant. The 3 tmp-mat sites
+/// (:1709/:1764/:1813) triggered ICE 101 for any `shared T x = <computed>`
+/// where T is a resource type; the 4 facade-init sites (:1692/:1723/:1778/:1831)
+/// didn't panic in the surviving corpus but shared the same class defect.
+///
+/// The class-fix routes ALL 7 sites through helpers on `LoweringContext`:
+/// - `materialize_addressable` for tmp-mat sites (allocates fresh + assigns)
+/// - `assign_with_move_follow_through` for facade-init sites (assigns into
+///   an existing local)
+///
+/// Both helpers pair Move-mode with `move_zero_and_mark` on the source when
+/// required. See `src/ir/lowering/context.rs` for both.
+///
+/// This lint asserts that every `builder.assign_mode(resource_assign_mode(…))`
+/// call inside `lower_shared_var_decl` is followed within ~500 chars by a
+/// call to `materialize_addressable` or `assign_with_move_follow_through` (or
+/// a direct `move_zero_and_mark` — the escape hatch for a hypothetical inlined
+/// site). Note the regex is NARROWED to the `resource_assign_mode(...)` calls
+/// specifically: a broader regex over all `assign_mode(...)` in the same
+/// function matches 11 sites (4 hardcoded-`Move` facade wrappings at
+/// :1682/:1714/:1769/:1821 that DON'T route through the helper and can't --
+/// they wrap already-owned `wrapped`/`shared_val` locals from a call return;
+/// the helper's guard would be a no-op for them).
+///
+/// Positive-control (Core #13): delete the `move_zero_and_mark` call inside
+/// `materialize_addressable` (or delete one call to the helper from an arm),
+/// re-run this lint — it must go RED. Restore.
+#[test]
+fn shared_var_decl_arms_route_through_materialize_addressable() {
+    let src = std::fs::read_to_string("src/ir/lowering/stmts/mod.rs")
+        .expect("read src/ir/lowering/stmts/mod.rs");
+    let start = src
+        .find("fn lower_shared_var_decl(")
+        .expect("fn lower_shared_var_decl present in src/ir/lowering/stmts/mod.rs");
+    let end = src[start..]
+        .find("\nfn ")
+        .map(|off| start + off)
+        .unwrap_or(src.len());
+    let body = &src[start..end];
+
+    // ⚠ Pass-3 review BR1 fold: the regex is NARROWED to
+    // `resource_assign_mode(...)` calls -- a broader regex over
+    // `assign_mode(...)` matches 11 sites, including the 4 hardcoded-`Move`
+    // facade wrappings that correctly do NOT route through the helper.
+    let call_re = regex::Regex::new(r"builder\.assign_mode\(resource_assign_mode\(")
+        .expect("class-fix regex");
+    let unrouted: Vec<usize> = call_re
+        .find_iter(body)
+        .filter(|m| {
+            let after_start = m.end();
+            let after_end = (after_start + 500).min(body.len());
+            let after = &body[after_start..after_end];
+            !(after.contains("materialize_addressable")
+                || after.contains("assign_with_move_follow_through")
+                || after.contains("move_zero_and_mark"))
+        })
+        .map(|m| m.start())
+        .collect();
+    assert!(
+        unrouted.is_empty(),
+        "lower_shared_var_decl: {} `builder.assign_mode(resource_assign_mode(...))` \
+         call(s) at offset(s) {:?} not followed within 500 chars by a routing \
+         through `materialize_addressable`, `assign_with_move_follow_through`, or \
+         a direct `move_zero_and_mark` -- Move-follow-through class hazard. \
+         See src/ir/lowering/context.rs for the two helpers and Track D+E brief §5.",
+        unrouted.len(),
+        unrouted
     );
 }

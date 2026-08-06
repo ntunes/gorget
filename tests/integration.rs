@@ -17920,34 +17920,51 @@ fn catch_recovery_type_pos_method_arg_empty_array() {
     run_gg("catch_recovery_type_pos_method_arg_empty_array.gg", "0");
 }
 
+// Graduated from known_gaps/ by Round XXXII Track D+E (2026-08-06). The
+// class-fix at `src/ir/lowering/context.rs::materialize_addressable` +
+// `assign_with_move_follow_through` retires the Move-follow-through class
+// in `lower_shared_var_decl`; the SH gate removal at
+// `tests/fixtures/self_host_lowerer/lower_stmt.gg:62-66` retires the
+// non-scalar-shared-decl class in the SH lane.
 #[test]
-#[ignore = "KNOWN GAP (filed 2026-08-05): `gg check` ACCEPTS this 3-line program, \
-then BOTH Rust backends ICE at exit 101 (move-follow-through violation, \
-src/ir/lowering/mod.rs:1872). The self-host compiles and runs it correctly -- the \
-reference lags the self-host, a succession milestone. Trigger is a COMPUTED \
-initializer: `shared String s = \"a\" + \"b\"` ICEs, `shared String s = \"hello\"` \
-(rodata literal) is exit 0 -- and every `shared` fixture in the corpus uses the \
-literal form, which is why nothing caught it. Un-ignore and move out of \
-known_gaps/ when fixed."]
-fn shared_computed_init_ice() {
-    run_gg("known_gaps/shared_computed_init_ice.gg", "ab");
+fn shared_computed_init() {
+    run_gg("shared_computed_init.gg", "ab");
 }
 
 #[test]
-#[ignore = "KNOWN GAP (filed 2026-08-05): BOTH LANES broken, differently. gg check \
-accepts; Rust ICEs at exit 101 on both backends; the SELF-HOST compiles and then \
-double-frees (exit 134). This is the measured answer to Track B's reachability \
-question -- a droppable inner DOES reach the shared lock-chain. Discriminator is \
-NOT the owning destination (the non-owning read fails identically): the trigger is \
-the spawn/&-param task-facade path (__get_ptr + GIDeref(wr_binding) re-seed), which \
-unlike the plain lock-chain reads IS registered for drop. Without the spawn the \
-self-host is clean on the same shape. Un-ignore and move out of known_gaps/ when \
-fixed."]
-fn shared_spawn_amp_param_double_free() {
-    run_gg(
-        "known_gaps/shared_spawn_amp_param_double_free.gg",
-        "hello world-forced!",
-    );
+#[ignore = "KNOWN GAP (filed 2026-08-06 by Round XXXII Track D+E output-review B4): \
+bare `v.push(x)` on a `shared Vector` outside a `with v:` block is a SILENT NO-OP -- \
+the push mutates the facade snapshot, not the guarded storage. `gg check` accepts, \
+both backends run to exit 0 printing `0` instead of `1`. This is the WRITE face of \
+the same class as the bare-read owner-reconciliation follow-up \
+(docs/language-reference.md:1366 -- the ratified reject covers BOTH reads and writes). \
+Un-ignore and move out of known_gaps/ when fixed."]
+fn shared_vector_push_bare_silent_noop() {
+    run_gg("known_gaps/shared_vector_push_bare_silent_noop.gg", "1");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-06 by Round XXXII Track D+E output-review B3, \
+Core #8 both backends): `shared(rwlock) String s = <String concat>; with s: print(s)` \
+runtime double-frees identically on C and --backend=llvm (exit 134 \
+`free(): double free detected in tcache 2`). This defect was HIDDEN by the \
+Move-follow-through ICE 101 the class-fix retired (commit 0f2b49ee); post-fix it \
+compiles clean but crashes at runtime. Discriminator vs the graduated \
+`shared_rwlock_call_init` (call-returned form, works correctly): the initializer \
+FORM. Both hit the same `emit_rwlock_read_get` facade-init path. Un-ignore and move \
+out of known_gaps/ when fixed."]
+fn shared_rwlock_concat_init_double_free() {
+    run_gg("known_gaps/shared_rwlock_concat_init_double_free.gg", "ab");
+}
+
+#[test]
+#[ignore = "SH-BLOCKED (Track D+E output-review B1, 2026-08-06): SH lane blocked by \
+the reverted `< PRIM_COUNT` gate + SH `op_consume` non-scalar-inner gap (TODO.md). \
+The Rust class-fix IS proven -- this test passes on the C backend via run_gg. \
+Fixture MOVED to `known_gaps/` (out of runtime_diff auto-scan). Un-ignore + move \
+back once the SH op_consume follow-up lands."]
+fn shared_spawn_amp_param() {
+    run_gg("known_gaps/shared_spawn_amp_param.gg", "hello world-forced!");
 }
 
 // GRADUATED to tests/fixtures/security/guard_get_into_dict_put_double_free.gg
@@ -18052,6 +18069,115 @@ Vector[Mutex[int]] SEGVs on both backends -- same push-side mis-serialization of
 scalar-sized value-types. Owner-decided fix layer is a follow-up scout."]
 fn vector_mutex_elem_lock_segv() {
     run_gg("known_gaps/vector_mutex_elem_lock_segv.gg", "42");
+}
+
+// ── shared-var-decl class-fix fixture net (Core #11/#12, Round XXXII Track D+E) ──
+// Every P* fixture below was RED-verified at HEAD to reproduce the ICE 101
+// (move-follow-through violation, src/ir/lowering/mod.rs:1872) that
+// `lower_shared_var_decl` at src/ir/lowering/stmts/mod.rs:1595-1834 emits on
+// any `shared T x = <computed>` where T is a resource type. The
+// class-fix (§3a in the Track D+E brief) routes all three resource arms
+// (ArcOnly:1709, ArcRwLock:1764, ArcMutex:1813) through a shared
+// `materialize_addressable` chokepoint that carries the Move-follow-through.
+// Un-ignore un-happens at the fix commit (§6 step 7 in the brief).
+//
+// The controls C1-C5 stay UNIGNORED at HEAD: proving the fix didn't break
+// anything is only possible if the controls are actually observable.
+
+#[test]
+fn shared_call_returned_string() {
+    run_gg("shared_call_returned_string.gg", "hello");
+}
+
+#[test]
+fn shared_fstring_init() {
+    run_gg("shared_fstring_init.gg", "n=42");
+}
+
+#[test]
+#[ignore = "SH-BLOCKED (Track D+E output-review B1, 2026-08-06): the `with v:` block \
+requires the SH shared machinery; SH silently falls non-scalar shared through to \
+plain var-decl (the reverted `< PRIM_COUNT` gate). The Rust class-fix IS proven -- \
+this test passes on the C backend. Fixture MOVED to `known_gaps/`. Un-ignore + \
+move back once the SH op_consume follow-up (TODO.md) lands."]
+fn shared_vector_ctor_init() {
+    run_gg("known_gaps/shared_vector_ctor_init.gg", "1");
+}
+
+#[test]
+fn shared_vector_literal_init() {
+    run_gg("shared_vector_literal_init.gg", "3");
+}
+
+#[test]
+fn shared_vector_call_returned() {
+    run_gg("shared_vector_call_returned.gg", "3");
+}
+
+#[test]
+fn shared_dict_call_returned() {
+    run_gg("shared_dict_call_returned.gg", "1");
+}
+
+#[test]
+fn shared_struct_call_returned() {
+    run_gg("shared_struct_call_returned.gg", "hi");
+}
+
+#[test]
+#[ignore = "SH-BLOCKED (Track D+E output-review B1, 2026-08-06): ArcRwLock + `with s:` \
+requires SH's shared machinery. The Rust class-fix IS proven -- this test passes on \
+the C backend. Fixture MOVED to `known_gaps/`. Un-ignore + move back once the SH \
+op_consume follow-up (TODO.md) lands."]
+fn shared_rwlock_call_init() {
+    run_gg("known_gaps/shared_rwlock_call_init.gg", "hello");
+}
+
+#[test]
+#[ignore = "SH-BLOCKED (Track D+E output-review B1, 2026-08-06): spawn + `&`-param on \
+non-scalar `shared Vector` requires SH's shared machinery + shared-spawn dispatch. \
+The Rust class-fix IS proven -- this test passes on the C backend. Fixture MOVED \
+to `known_gaps/`. Un-ignore + move back once the SH op_consume follow-up (TODO.md) \
+lands."]
+fn shared_spawn_grow_vector() {
+    run_gg("known_gaps/shared_spawn_grow_vector.gg", "3");
+}
+
+#[test]
+#[ignore = "SH-BLOCKED (Track D+E output-review B1, 2026-08-06): spawn + `&`-param on \
+non-scalar `shared String` + PendingSharedAsync path requires SH's shared machinery. \
+The Rust class-fix IS proven -- this test passes on the C backend. Fixture MOVED \
+to `known_gaps/`. Un-ignore + move back once the SH op_consume follow-up (TODO.md) \
+lands."]
+fn shared_spawn_async_bump() {
+    run_gg("known_gaps/shared_spawn_async_bump.gg", "hello world!");
+}
+
+// ── Control cells (green at HEAD, must stay green after the class-fix) ──
+
+#[test]
+fn shared_int_atomic_control() {
+    run_gg("shared_int_atomic_control.gg", "42");
+}
+
+#[test]
+fn shared_int_computed_control() {
+    run_gg("shared_int_computed_control.gg", "3");
+}
+
+#[test]
+fn shared_string_rodata_control() {
+    run_gg("shared_string_rodata_control.gg", "hello");
+}
+
+#[test]
+fn shared_int_spawn_control() {
+    run_gg("shared_int_spawn_control.gg", "1");
+}
+
+#[test]
+fn shared_nonshared_concat_control() {
+    run_gg("shared_nonshared_concat_control.gg", "ab");
 }
 
 #[test]
@@ -27079,7 +27205,22 @@ fn self_host_runtime_diff() {
     // splices the unrolled per-variant body just like Rust's
     // `evaluate_delayed_meta_block`. Also restores the non-MATCH ceiling from
     // 124 back to its Round XXX baseline of 123 (Track A guard).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1333;
+    // Ratcheted 2026-08-06 (Round XXXII Track D+E — Rust class-fix +
+    // 12 new fixtures + 5 controls; 5 SH-blocked fixtures moved to known_gaps/
+    // per output-review B1 to prevent runtime_diff regression from SH's
+    // op_consume non-scalar-inner gap). Force-rebuild remeasure on a quiet
+    // box: MATCH 1354 / 1471 = 92.0% (WRONG 25, CC-FAIL 65, CRASH 25,
+    // DRIVER-FAIL 2, EXCLUDED 94, RUST-REJECTED 399). +21 MATCH from XXVIII
+    // baseline of 1333 -- driven by (a) the 7 non-SH-blocked new fixtures
+    // MATCHing (P2 shared_call_returned_string, P3 shared_fstring_init,
+    // P5 shared_vector_literal_init, P6 shared_vector_call_returned,
+    // P7 shared_dict_call_returned, P8 shared_struct_call_returned +
+    // graduated shared_computed_init), (b) 4 shared_int_* controls MATCHing
+    // (int inner, ArcAtomic path, works on SH via existing < PRIM_COUNT
+    // gate), (c) upstream parallel work between rounds. Floor 1333 → 1349
+    // (−5 jitter from 1354). Non-MATCH ceiling shrinks 123 → 117 (fewer
+    // DRIVER-FAILs after SH-blocked moves).
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1349;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
@@ -27128,7 +27269,12 @@ fn self_host_runtime_diff() {
     // exemption for a fixture the self-host cannot run — that case is the
     // step-5 OWNER ASK, so the judgement stays with the owner instead of
     // becoming an agent-invocable carve-out.
-    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 123;
+    // Reseeded DOWN 2026-08-06 (Round XXXII Track D+E: 5 SH-blocked new
+    // fixtures moved to known_gaps/ per output-review B1; SH driver crash
+    // classes trimmed via reverting the D′ SH sub-track). Non-MATCH count on
+    // the quiet-box remeasure: 25 WRONG + 65 CC-FAIL + 25 CRASH + 2 DRIVER-FAIL
+    // = 117. Lock in the shrink.
+    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 117;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: non-MATCH ceiling skipped (debug profile — same \

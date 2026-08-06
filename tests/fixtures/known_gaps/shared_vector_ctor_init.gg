@@ -1,0 +1,27 @@
+# SH-BLOCKED KNOWN GAP (Round XXXII Track D+E output-review B1, 2026-08-06):
+# the `with v:` block requires SH's shared machinery. SH silently falls
+# non-scalar `shared T` through to plain var-decl (the reverted `< PRIM_COUNT`
+# gate at `tests/fixtures/self_host_lowerer/lower_stmt.gg:62-66`), so the SH
+# lane DRIVER-FAILs on runtime_diff.
+#
+# ⚠ THE RUST CLASS-FIX IS PROVEN: this fixture passes on BOTH Rust backends
+# (C + LLVM) — the integration test `shared_vector_ctor_init` (`#[ignore]`d,
+# but the `run_gg` path asserts the intended `1` on the C backend). Its SH-lane
+# blockage is what forces it into `known_gaps/` (out of runtime_diff auto-scan).
+# Un-ignore + move back to `tests/fixtures/` once the SH `op_consume`
+# non-scalar-inner follow-up (TODO.md) lands.
+#
+# Cell: ArcMutex · Vector[int] · ctor · no-spawn · pre-fix ICE 101 · post-fix `1`
+#
+# Part of the shared-var-decl class-fix fixture net (Core #11/#12). The
+# push/len happen inside a bare `with v:` block — the shape that pins the
+# writer-side class-fix's Move-follow-through WITHOUT tripping the fragile
+# `for x in v:` iterator-invalidation shape (which pre-fix was green for the
+# WRONG reason: downstream BB reshaping moved the violation out of the
+# offending BB — Track E scout §"Corpus audit").
+
+async void main():
+    shared Vector[int] v = Vector[int]()
+    with v:
+        v.push(1)
+        print(v.len())

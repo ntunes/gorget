@@ -1,0 +1,11 @@
+# Control cell C5: non-shared · String · concat · always exit 0.
+#
+# Proves the bug lives specifically in `lower_shared_var_decl`, not in
+# `lower_var_decl`. The `String s = "a" + "b"` shape lowers via
+# `lower_var_decl`'s Pattern::Binding path which has the Move-follow-through
+# pattern at src/ir/lowering/stmts/mod.rs:1189-1198 already. Same RHS in the
+# shared arm ICEs pre-fix.
+
+void main():
+    String s = "a" + "b"
+    print(s)

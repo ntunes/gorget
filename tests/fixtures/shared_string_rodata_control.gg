@@ -1,0 +1,10 @@
+# Control cell C3: ArcMutex · String · rodata literal · no-spawn · always exit 0.
+#
+# The String rodata literal has cap=0, so the runtime `gorget_string_free`
+# short-circuits and no double-free is possible even if follow-through were
+# missing. This is why the entire corpus historically sampled ONLY this cell
+# for `shared String` and the ICE hid for months.
+
+void main():
+    shared String s = "hello"
+    print(s)

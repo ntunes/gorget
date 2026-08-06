@@ -1,0 +1,20 @@
+# Cell: ArcMutex · String · concat · no-spawn · post-Track-D+E-fix `ab`
+#
+# Graduated from known_gaps/ by Round XXXII Track D+E. Pre-fix, BOTH Rust
+# backends ICEd here (exit 101, move-follow-through violation at
+# src/ir/lowering/mod.rs:1872) while the self-host compiled it correctly --
+# a succession-plan milestone (the reference lagged the self-host). The
+# Track D+E class-fix routes all three resource arms of
+# `lower_shared_var_decl` through the `materialize_addressable` chokepoint
+# helper on `LoweringContext`, and this fixture pins the ArcMutex arm at
+# `src/ir/lowering/stmts/mod.rs:1813` on the concat init form.
+#
+# The corpus previously sampled ONLY the rodata-literal form
+# (`shared String s = "hello"`, cap=0), which is why every ICE-triggering
+# initializer form (concat, call, f-string, list literal, ctor, dict
+# literal) was 0-sampled on the initializer axis (Core #12
+# axis-incompleteness).
+
+void main():
+    shared String s = "a" + "b"
+    print(s)

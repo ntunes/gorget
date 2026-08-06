@@ -1,0 +1,9 @@
+# Control cell C1: ArcAtomic · int · rodata literal · no-spawn · always exit 0.
+#
+# Proves the ArcAtomic arm at src/ir/lowering/stmts/mod.rs:1677-1692 stays
+# green after the class-fix — its resource_assign_mode returns Copy for scalar
+# inners so the Move-follow-through guard is a no-op.
+
+void main():
+    shared int i = 42
+    print(i)

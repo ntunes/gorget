@@ -1689,7 +1689,8 @@ fn lower_shared_var_decl(
 
             // Initialize facade with atomic load
             let init_val = super::exprs::emit_atomic_load(ctx, builder, hidden_local, inner_type, &atomic_name);
-            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(facade_local), init_val);
+            let mode_fi = resource_assign_mode(ctx, inner_type);
+            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi);
         }
 
         SharedStrategy::ArcOnly => {
@@ -1705,8 +1706,8 @@ fn lower_shared_var_decl(
             };
 
             let new_fn = format!("{mangled}__new");
-            let tmp = builder.add_local(inner_type, None);
-            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(tmp), val_operand);
+            let mode = resource_assign_mode(ctx, inner_type);
+            let tmp = ctx.materialize_addressable(builder, val_operand, inner_type, mode);
             let wrapped = builder.call(&new_fn, vec![FunctionBuilder::copy(tmp)], shared_type);
 
             let hidden_local = builder.add_local(shared_type, None);
@@ -1720,7 +1721,8 @@ fn lower_shared_var_decl(
             ctx.shared.locals.insert(facade_local, SharedLocalInfo { hidden_local, inner_type, wrapper_type: shared_type, kind: SharedLocalKind::SharedArc, ast_shared: *shared });
 
             let init_val = super::exprs::emit_shared_get(ctx, builder, hidden_local, inner_type);
-            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(facade_local), init_val);
+            let mode_fi = resource_assign_mode(ctx, inner_type);
+            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi);
         }
 
         SharedStrategy::ArcRwLock => {
@@ -1760,8 +1762,8 @@ fn lower_shared_var_decl(
             let _ = super::exprs::get_or_register_type(ctx, &write_guard_mangled, Some(&|c| super::exprs::ensure_rwlock_guard_type_def(c, &write_guard_mangled, inner_type)));
 
             let new_fn = format!("{mangled}__new");
-            let tmp = builder.add_local(inner_type, None);
-            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(tmp), val_operand);
+            let mode = resource_assign_mode(ctx, inner_type);
+            let tmp = ctx.materialize_addressable(builder, val_operand, inner_type, mode);
             let wrapped = builder.call(&new_fn, vec![FunctionBuilder::copy(tmp)], rwlock_type);
 
             let rwlock_local = builder.add_local(rwlock_type, None);
@@ -1775,7 +1777,8 @@ fn lower_shared_var_decl(
             ctx.shared.locals.insert(facade_local, SharedLocalInfo { hidden_local: rwlock_local, inner_type, wrapper_type: rwlock_type, kind: SharedLocalKind::RwLock, ast_shared: *shared });
 
             let init_val = super::exprs::emit_rwlock_read_get(ctx, builder, rwlock_local, inner_type);
-            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(facade_local), init_val);
+            let mode_fi = resource_assign_mode(ctx, inner_type);
+            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi);
         }
 
         SharedStrategy::ArcMutex => {
@@ -1809,8 +1812,8 @@ fn lower_shared_var_decl(
 
             // Create Mutex, then wrap in Shared
             let mutex_new_fn = format!("{mutex_mangled}__new");
-            let tmp = builder.add_local(inner_type, None);
-            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(tmp), val_operand);
+            let mode = resource_assign_mode(ctx, inner_type);
+            let tmp = ctx.materialize_addressable(builder, val_operand, inner_type, mode);
             let mutex_val = builder.call(&mutex_new_fn, vec![FunctionBuilder::copy(tmp)], mutex_type);
 
             let shared_new_fn = format!("{shared_mutex_mangled}__new");
@@ -1828,7 +1831,8 @@ fn lower_shared_var_decl(
 
             // Init facade: Shared.get() → Mutex, then lock → get → release
             let init_val = super::exprs::emit_shared_mutex_lock_get(ctx, builder, hidden_local, mutex_type, inner_type);
-            builder.assign_mode(resource_assign_mode(ctx, inner_type), Place::local(facade_local), init_val);
+            let mode_fi = resource_assign_mode(ctx, inner_type);
+            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi);
         }
     }
 }

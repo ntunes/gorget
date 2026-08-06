@@ -1,0 +1,11 @@
+# Cell: ArcMutex · Dict[String,int] · call-returned · no-spawn · pre-fix ICE 101 · post-fix `1`
+#
+# Part of the shared-var-decl class-fix fixture net (Core #11/#12).
+
+Dict[String, int] build():
+    Dict[String, int] d = {"k": 1}
+    return d
+
+void main():
+    shared Dict[String, int] d = build()
+    print(d.len())

@@ -1,0 +1,17 @@
+# Control cell C4: ArcAtomic · int · rodata literal · spawn `&x` · always exit 0.
+#
+# Proves the shared-int-spawn path (Track D scout §5c) stays green — the
+# spawn/`&` face on scalar shared vars works today. Distinct from C1 by
+# exercising the spawn + `with x:` shape. Also present in the corpus under
+# other names (mutex_async_contention.gg, shared_arc_only.gg); named here for
+# explicit control-of-the-class purposes.
+
+async void increment(int &x):
+    x = x + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn increment(&x)
+    t.await()
+    with x:
+        print(x)

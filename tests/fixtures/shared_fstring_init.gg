@@ -1,0 +1,8 @@
+# Cell: ArcMutex · String · f-string · no-spawn · pre-fix ICE 101 · post-fix `n=42`
+#
+# Part of the shared-var-decl class-fix fixture net (Core #11/#12).
+
+void main():
+    int n = 42
+    shared String s = f"n={n}"
+    print(s)
