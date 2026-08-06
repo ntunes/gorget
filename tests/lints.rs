@@ -558,7 +558,21 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// `is_registered` are DROP-ACCOUNTANT state, not `LocalOwnership`, and
     /// remain unmigratable until the drop accountant is queryable off `Local`.
     /// Locking in the floor.
-    const BUDGET: usize = 93;
+    /// Bumped 93 → 94 (2026-08-06): one new proxy read from Round XXXII Track
+    /// D+E's class-fix (`0f2b49ee` "lower_shared_var_decl -- Move-follow-through
+    /// class fix"): the `!self.drops.is_moved(place.local)` idempotence guard
+    /// inside `LoweringContext::assign_with_move_follow_through` (which
+    /// `materialize_addressable` reuses). SAME write-side-discipline class as
+    /// every 64→…→93 bump — `move_zero_and_mark` is non-idempotent (asserts)
+    /// and `is_moved` is drop-accountant state with no `LocalOwnership`
+    /// accessor. This is the CHOKEPOINT the 7 raw `!ctx.drops.is_moved` sites
+    /// inside `lower_shared_var_decl` were consolidated into (a class-fix
+    /// LOWERS the guard count from 7 raw sites to 1 helper call site; the
+    /// helper's inner `is_moved` counts once), so this bump paves the way for
+    /// a future 93→92 shrink once the analogous consolidation lands for
+    /// `lower_var_decl`'s Pattern::Binding + Pattern::Tuple sites. Locking in
+    /// the floor.
+    const BUDGET: usize = 94;
 
     let count = count_phase_d_proxy_reads();
     assert!(
