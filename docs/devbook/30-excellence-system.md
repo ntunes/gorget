@@ -92,6 +92,33 @@ claim, which is why every pass gets cross-checked by the orchestrator
 regardless of model, and why mandate quality (the reviewer's checklist)
 dominates model strength.
 
+**Why the default is the strongest model in EVERY role** (owner 2026-07-27,
+reaffirmed 2026-08-06). The measurement above was for a while read as a licence
+to run scouts, executors and middle passes cheaper. The owner closed that off:
+every role gets the strongest available model. The standing argument for
+downgrading the executor — it is cheap and fast, and the output-review catches
+what it misses — fails on what a diff review structurally cannot see. Review
+reads what was written, not what was not: a read-site fix that works and passes
+its gates only looks wrong to a reviewer who independently derives the
+write-site one, and a silently narrowed brief reads as a coherent diff. Some of
+that gap is mechanised (Core #15(d)'s census procedure, the fixture-coverage
+gate), which is why the gauntlet tolerates a weaker agent at all — but a catch
+is not free: it costs the whole execute cycle, a re-brief, a second
+output-review, and orchestrator context, the scarcest resource in a long round.
+The rounds where executors did the most discovery are the proof that execution
+is not clerical work: Round XXX's Track D surfaced a new bug class at every
+phase, none of which a brief could have front-loaded. And in this tree an
+executor's wall-clock is dominated by `cargo build` and integration runs rather
+than token generation, so the speed saving is smaller than it looks while the
+failure mode is not.
+
+The rule's own history is a second lesson. It was ratified 2026-07-27 but lived
+only in one harness's private memory with a `DONE.md` breadcrumb citing it,
+while `AGENTS.md` went on prescribing the opposite for rounds afterwards — the
+exact failure the file header's "never only in one harness's private memory"
+clause exists to prevent. A process rule that is not in `AGENTS.md` is not a
+rule; it is a habit that dies with the session that learned it.
+
 ## 3. Fixture nets: RED-verification and axis-completeness
 
 Core #12's two clauses were earned in one round (2026-07-25, the
