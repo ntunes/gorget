@@ -213,6 +213,50 @@ x *% y         # wrapping multiply
 Wrapping is per-expression by design — there is no whole-file or whole-build
 mode that changes what plain `+`/`-`/`*` do.
 
+### Fallible Arithmetic
+
+Between the panic-on-overflow default (`+`) and the wrapping form (`+%`),
+Gorget offers a third discipline: the **fallible** arithmetic operators
+`+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!`. They surface the failure into
+the ordinary `throws` / `Result` channel instead of trapping.
+
+```gorget
+int add_or_throw(int a, int b):
+    return a +! b               # auto-infers `throws ArithError`
+
+void main():
+    int r = add_or_throw(2, 3)! catch (e): -1
+    print(r)                     # 5
+
+    # Capture form — the Result value is the destination.
+    Result[int, ArithError] r2 = 9223372036854775807 +! 1
+    match r2:
+        case Ok(v):  print(v)
+        case Error(e): print(-1)  # Overflow branch: prints -1
+```
+
+`ArithError` is a prelude enum with two variants:
+
+```gorget
+enum ArithError:
+    Overflow       # add/sub/mul, shift range, signed INT_MIN/-1 div
+    DivByZero      # / and % with rhs == 0
+```
+
+**Auto-inference.** A function body that syntactically contains any
+fallible-arith operator auto-infers `throws ArithError` on its signature —
+silently, without a diagnostic. Users see the throws in callers via the
+ordinary `!` propagate and `catch` machinery, so nothing else in the
+function needs to change. An explicit `throws E` declaration wins over
+auto-inference (the user's contract is preserved). `main()` is not auto-
+inferred, since `main` can only throw `int` — every `+!` in `main` must
+be captured or catch-handled at the use site.
+
+Fallible arithmetic is INTEGER-ONLY in v1 (a float operand rejects at
+check with `E_FallibleArithmeticOnNonInt`) and compound forms (`+!=`,
+`-!=`, …) are excluded. See the language reference §7.5 and §10.9 for
+the full specification.
+
 ---
 
 ## Summary
@@ -224,6 +268,8 @@ mode that changes what plain `+`/`-`/`*` do.
 | Constant | `const Type name = expr` | `const int MAX = 100` |
 | Type cast | `expr as Type` | `42 as float` |
 | Arithmetic | `+`, `-`, `*`, `/`, `%`, `.mod()` | `x + y`, `x.mod(3)` |
+| Wrapping arithmetic | `+%`, `-%`, `*%` | `a +% b` (never traps) |
+| Fallible arithmetic | `+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` | `a +! b` → `Result[T, ArithError]` |
 | Comparison | `==`, `!=`, `<`, `>`, `<=`, `>=` | `x == y` |
 | Logical | `and`, `or`, `not` | `a and b` |
 | Bitwise | `&`, `\|`, `^`, `~`, `<<`, `>>` | `x & 0xFF` |
