@@ -11097,3 +11097,69 @@ fn backend_flag_set_matches_dispatch() {
          dispatch ever runs. Add it to BACKENDS."
     );
 }
+
+// ── Round MEMORY SAFETY / ONE OWNERSHIP BOUNDARY · Track B ratchet ───────
+//
+// View-producer × container-mutator coverage: every {View-tag producer,
+// container-mutator consumer} pair that reached this codebase must own an
+// exercising fixture that will trip the double-free class if the boundary
+// clone regresses. The initial rows correspond one-to-one to the POS cells
+// in `tests/security.rs` (`guard_get_into_*` family).
+//
+// KNOWN LIMITATION (documented, deliberately deferred): this ratchet asserts
+// EXISTENCE of the cited fixture, not enumeration of the producer × consumer
+// matrix. A new producer or mutator variant would be silently uncovered
+// until someone adds a row. Extending to enforce enumeration would require
+// a producer-registry lookup (a scan of `emit_guard_get_ptr` call sites and
+// `insert_collection_sig` value-slot Move registrations); left as follow-up.
+//
+// Positive-control (Core #13): rename or delete one referenced fixture,
+// confirm this test goes RED, restore. Recorded in the commit message.
+const VIEW_PRODUCERS_INTO_CONSUMERS: &[(&str, &str, &str)] = &[
+    ("Guard.get",      "Dict.put",       "guard_get_into_dict_put_double_free"),
+    ("Guard.get",      "Vector.push",    "guard_get_into_vector_push_temp_fixed"),
+    ("Guard.get",      "Set.add",        "guard_get_into_set_add_temp"),
+    ("Guard.get",      "Channel.send",   "guard_get_into_channel_send_temp"),
+    ("Guard.get",      "index-assign",   "guard_get_into_index_set_temp"),
+    ("Guard.get",      "Dict.put[Vec]",  "guard_get_vector_int_into_dict_put_temp"),
+    ("ReadGuard.get",  "Dict.put",       "read_guard_get_into_dict_put_double_free"),
+    ("WriteGuard.get", "Dict.put",       "write_guard_get_into_dict_put_double_free"),
+];
+
+/// Every {View-tag producer, container-mutator consumer} cell must have an
+/// exercising security fixture. A missing row means a class-regression could
+/// resurrect the "view alias into consumer" double-free without tripping a
+/// test. Adding a new View producer or a new container-mutator surface owes
+/// a new row here + a fixture in `tests/fixtures/security/`.
+///
+/// See:
+///   - `src/ir/lowering/context.rs::ensure_owned_at_consuming_arg` — the
+///     writer this ratchet defends (else-arm predicate; class-retiring
+///     `debug_assert!`s live there too).
+///   - `src/ir/lowering/mod.rs::register_collection_method_sigs` — the
+///     Tier 2a validator diagnostic surface (SIBLING D2).
+#[test]
+fn view_producer_into_consuming_cell_has_coverage() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut missing: Vec<String> = Vec::new();
+    for (producer, dest, fixture) in VIEW_PRODUCERS_INTO_CONSUMERS {
+        let path = manifest_dir
+            .join("tests/fixtures/security")
+            .join(format!("{fixture}.gg"));
+        if !path.exists() {
+            missing.push(format!(
+                "  MISSING: {producer} -> {dest}\n    expected: {}\n    ratchet row: {fixture}",
+                path.display()
+            ));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "view_producer_into_consuming_cell_has_coverage: one or more \
+         View-producer x consumer cells lack an exercising fixture. \
+         Restore the missing fixture(s) below, or if the ratchet row is \
+         stale, remove it from VIEW_PRODUCERS_INTO_CONSUMERS. Losing a \
+         row is losing the regression net for its class.\n\n{}",
+        missing.join("\n")
+    );
+}
