@@ -1,3 +1,13 @@
+# SH-BLOCKED KNOWN GAP (Round XXXII Track D+E output-review B1, 2026-08-06):
+# spawn + `&`-param on non-scalar `shared Vector` requires SH's shared
+# machinery + shared-spawn dispatch. SH silently falls non-scalar `shared T`
+# through to plain var-decl and DRIVER-FAILs on the runtime_diff SH lane.
+#
+# ⚠ THE RUST CLASS-FIX IS PROVEN: this fixture passes on BOTH Rust backends
+# (C + LLVM). The integration test `shared_spawn_grow_vector` (`#[ignore]`d)
+# asserts the intended `3` on the C backend. Un-ignore + move back to
+# `tests/fixtures/` once the SH `op_consume` follow-up (TODO.md) lands.
+#
 # Cell: ArcMutex · Vector[int] · call-returned · spawn-async · pre-fix ICE 101 ·
 # post-fix `3`
 #

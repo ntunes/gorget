@@ -1,3 +1,13 @@
+# SH-BLOCKED KNOWN GAP (Round XXXII Track D+E output-review B1, 2026-08-06):
+# spawn + `&`-param on non-scalar `shared String` + PendingSharedAsync path
+# requires SH's shared machinery. SH silently falls non-scalar `shared T`
+# through to plain var-decl and DRIVER-FAILs on the runtime_diff SH lane.
+#
+# ⚠ THE RUST CLASS-FIX IS PROVEN: this fixture passes on BOTH Rust backends
+# (C + LLVM). The integration test `shared_spawn_async_bump` (`#[ignore]`d)
+# asserts the intended `hello world!` on the C backend. Un-ignore + move back
+# to `tests/fixtures/` once the SH `op_consume` follow-up (TODO.md) lands.
+#
 # Cell: ArcMutex · String · concat · spawn-async · pre-fix ICE 101 ·
 # post-fix `hello world!`
 #

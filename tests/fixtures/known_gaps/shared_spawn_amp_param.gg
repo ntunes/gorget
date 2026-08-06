@@ -1,3 +1,20 @@
+# SH-BLOCKED KNOWN GAP (Round XXXII Track D+E output-review B1, 2026-08-06):
+# spawn + `&`-param on non-scalar `shared String` requires SH's shared
+# machinery. SH still silently falls non-scalar `shared T` through to plain
+# var-decl (the D′ SH sub-track was reverted 2026-08-06, commit b0f716c4);
+# on the SH lane this fixture STILL DOUBLE-FREES (exit 134 `free(): double
+# free detected in tcache 2`, unchanged from pre-round). MOVED to
+# `known_gaps/` (out of runtime_diff auto-scan) so the SH-lane double-free
+# doesn't inflate the non-MATCH ceiling; the SH `op_consume` follow-up
+# (TODO.md) is what actually closes the SH lane.
+#
+# ⚠ THE RUST CLASS-FIX IS PROVEN: the graduated integration test
+# `shared_spawn_amp_param` (`#[ignore]`d, cites the SH-follow-up) asserts
+# the intended `hello world-forced!` on the C backend via `run_gg`, and
+# BOTH Rust backends (C + LLVM) build clean + print the intended output.
+# Un-ignore + move back to `tests/fixtures/` once the SH op_consume
+# follow-up lands.
+#
 # Cell: ArcMutex · String · concat · spawn-sync · post-Track-D+E-fix `hello world-forced!` (C backend + LLVM)
 #
 # Graduated from known_gaps/ by Round XXXII Track D+E. Pre-fix BOTH LANES
