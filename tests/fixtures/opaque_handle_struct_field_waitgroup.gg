@@ -1,0 +1,32 @@
+# Cell: WaitGroup · struct-field route · SelfConvention::ByValue chokepoint.
+#
+# LANDED 2026-08-06 (Round XXXII, opaque-handle receiver-ABI class fix). Class-
+# wideness sibling of `opaque_handle_struct_field.gg` (AtomicInt · struct-field)
+# -- proves the field-place chokepoint fires for MULTIPLE protocols on the same
+# route (Core #12 axis-completeness).
+#
+# Pre-fix (measured 2026-08-06): DEADLOCK on both C and LLVM (exit 124) --
+# `g.wg.add(3)` writes 3 to the field's storage in the struct, treating
+# `&g.wg` as a GorgetWaitGroup. The atomic counter inside the fake
+# WaitGroup is corrupted; workers spawn but `wg.wait()` never returns.
+# Post-fix: prints `3`, exit 0.
+
+from std.sync import WaitGroup, AtomicInt
+
+struct Group:
+    WaitGroup wg
+    AtomicInt counter
+
+async int worker(AtomicInt counter, WaitGroup wg):
+    counter.add(1)
+    wg.done()
+    return 0
+
+async void main():
+    Group g = Group(WaitGroup(), AtomicInt(0))
+    g.wg.add(3)
+    spawn worker(g.counter, g.wg)
+    spawn worker(g.counter, g.wg)
+    spawn worker(g.counter, g.wg)
+    g.wg.wait()
+    print(g.counter.load())

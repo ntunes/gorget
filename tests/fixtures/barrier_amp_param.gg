@@ -1,0 +1,26 @@
+# Cell: Barrier · &-param route · SelfConvention::ByValue chokepoint.
+#
+# LANDED 2026-08-06 (Round XXXII, opaque-handle receiver-ABI class fix).
+# Pre-fix (measured 2026-08-06): DEADLOCK on both C and LLVM backends (the
+# worker's `hit(&b)` calls barrier.wait() on the caller's stack frame
+# reinterpreted as GorgetBarrier -- spins). Post-fix: prints `2`, exit 0.
+
+from std.thread import Thread, thread_spawn
+from std.sync import Barrier, AtomicInt
+
+Barrier b = Barrier(2)
+AtomicInt arrived = AtomicInt(0)
+
+void hit(Barrier &br):
+    br.wait()
+
+void worker():
+    hit(&b)
+    arrived.add(1)
+
+void main():
+    Thread[void] t1 = thread_spawn(worker)
+    Thread[void] t2 = thread_spawn(worker)
+    t1.join()
+    t2.join()
+    print(arrived.load())

@@ -1,0 +1,29 @@
+# Cell: RWLock[int] · &-param route · SelfConvention::ByValue chokepoint.
+#
+# LANDED 2026-08-06 (Round XXXII, opaque-handle receiver-ABI class fix).
+# Pre-fix (measured 2026-08-06): DEADLOCK on both C and LLVM backends
+# (timeout, exit 124); gg check ACCEPTED it. Post-fix: prints `42`, exit 0.
+#
+# MECHANISM. Same class as mutex_amp_param.gg -- `RWLock[T]` typedefs to
+# `GorgetRWLock*`, so a `&`-param lowers to `GorgetRWLock**`. The runtime
+# takes `GorgetRWLock*` by value. Route 1 (borrow-param) chokepoint fix.
+# The "deadlock" face of the class is the write locked to a fake RWLock at
+# the caller's stack -- the mutex primitive spins.
+#
+# Class-wideness: this cell + mutex_amp_param.gg + atomic_int_amp_param.gg
+# + semaphore_amp_param.gg + waitgroup_amp_param.gg + barrier_amp_param.gg
+# exercise SIX distinct opaque-handle protocols on the &-param route.
+
+from std.sync import RWLock
+
+void bump(RWLock[int] &r):
+    WriteGuard[int] g = r.write()
+    int v = g.get()
+    g.set(v + 1)
+
+void main():
+    RWLock[int] r = RWLock[int](40)
+    bump(&r)
+    bump(&r)
+    ReadGuard[int] g = r.read()
+    print(g.get())

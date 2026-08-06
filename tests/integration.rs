@@ -17823,29 +17823,103 @@ fn guard_get_into_dict_put_double_free() {
 }
 
 #[test]
-#[ignore = "KNOWN GAP (filed 2026-08-05): the WORST cell of the opaque-handle \
-receiver-ABI class -- no `&` sigil anywhere, gg check clean, no crash, and it prints \
-a heap pointer as an integer (187650740445858 instead of 2). An opaque handle IS a \
-pointer and these 12 protocols take self ByValue, so any route handing such a callee \
-a pointer-typed receiver passes one indirection too many. Three measured routes: \
-struct field (this, silent garbage), collection element v[0].add(1) (SEGV), and `&` \
-param (silently prints 0). The BARE param is correct -- these types have interior \
-mutability, so mutation needs no `&`. Rejecting `&` would fix ZERO of the two \
-sigil-free routes. Un-ignore and move out of known_gaps/ when fixed, together with \
-its sibling cells."]
-fn opaque_handle_struct_field_silent_garbage() {
-    run_gg("known_gaps/opaque_handle_struct_field_silent_garbage.gg", "2");
+fn opaque_handle_struct_field() {
+    // Round XXXII graduation (2026-08-06). AtomicInt struct-field route on the
+    // opaque-handle receiver-ABI chokepoint. Pre-fix: printed a corrupted heap
+    // pointer (silent-wrong-output). Post-fix: prints `2`.
+    run_gg("opaque_handle_struct_field.gg", "2");
 }
 
 #[test]
-#[ignore = "KNOWN GAP (filed 2026-08-05): a Mutex[T] behind an explicitly-mutable \
-`&` borrow param loses writes made through its Guard and then dangles. C prints 40 \
-(increments vanish) then SIGSEGV; LLVM SIGSEGVs with no output; gg check ACCEPTS it. \
-Core #8 -- both backends wrong is >=2 bugs, not a wash. Note the sibling gate \
-mutex_alias() below covers only the BARE-param cell, and 0 of 43 Mutex fixtures used \
-a `&` param before this one. Un-ignore and move out of known_gaps/ when fixed."]
-fn mutex_amp_param_lost_writes_and_segv() {
-    run_gg("known_gaps/mutex_amp_param_lost_writes_and_segv.gg", "42");
+fn mutex_amp_param() {
+    // Round XXXII graduation (2026-08-06). Mutex[int] `&`-param route on the
+    // opaque-handle receiver-ABI chokepoint. Pre-fix: SEGV 139 (both backends).
+    // Post-fix: prints `42`.
+    run_gg("mutex_amp_param.gg", "42");
+}
+
+#[test]
+fn atomic_int_amp_param() {
+    // Round XXXII (2026-08-06). AtomicInt `&`-param route -- the LOUDEST
+    // silent-wrong cell of the opaque-handle class. Pre-fix silently prints
+    // `0`; post-fix `2`.
+    run_gg("atomic_int_amp_param.gg", "2");
+}
+
+#[test]
+fn rwlock_amp_param() {
+    // Round XXXII (2026-08-06). RWLock[int] `&`-param route. Pre-fix: deadlock
+    // on both backends (exit 124). Post-fix: prints `42`.
+    run_gg("rwlock_amp_param.gg", "42");
+}
+
+#[test]
+fn semaphore_amp_param() {
+    // Round XXXII (2026-08-06). Semaphore `&`-param route. Pre-fix: C deadlocks
+    // (exit 124), LLVM accidentally prints `42` (garbage stack read happens to
+    // pass `sem_wait`). Post-fix: prints `42` on both backends.
+    run_gg("semaphore_amp_param.gg", "42");
+}
+
+#[test]
+fn waitgroup_amp_param() {
+    // Round XXXII (2026-08-06). WaitGroup `&`-param route. Pre-fix: C silently
+    // prints `0` (wg.add() writes to caller stack, wg.wait() returns before
+    // workers run), LLVM asserts in pthread_mutex_lock (exit 134). Post-fix:
+    // prints `3` on both backends.
+    run_gg("waitgroup_amp_param.gg", "3");
+}
+
+#[test]
+fn barrier_amp_param() {
+    // Round XXXII (2026-08-06). Barrier `&`-param route. Pre-fix: deadlock on
+    // both backends. Post-fix: prints `2`.
+    run_gg("barrier_amp_param.gg", "2");
+}
+
+#[test]
+fn opaque_handle_struct_field_waitgroup() {
+    // Round XXXII (2026-08-06). WaitGroup struct-field route -- class-wideness
+    // sibling of opaque_handle_struct_field (AtomicInt · struct-field), proves
+    // the field-place chokepoint fires for MULTIPLE protocols. Pre-fix: deadlock.
+    // Post-fix: prints `3`.
+    run_gg("opaque_handle_struct_field_waitgroup.gg", "3");
+}
+
+#[test]
+fn mutex_struct_field_lock_control() {
+    // Round XXXII CONTROL cell (2026-08-06). Mutex struct-field with .lock().
+    // Accidentally-green pre-fix because Guard is a struct return, routing
+    // through gorget_mutex_lock_to's existing deref. Kept as a regression pin.
+    run_gg("mutex_struct_field_lock_control.gg", "42");
+}
+
+#[test]
+fn guard_amp_param_control() {
+    // Round XXXII CONTROL cell (2026-08-06). Guard[int] `&`-param -- a Borrow
+    // (LtStructBase) type that MUST stay on the raw-pointer path. Pins the
+    // chokepoint's is_by_value_receiver predicate: Guard excluded by design.
+    run_gg("guard_amp_param_control.gg", "42");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-06, Round XXXII sibling): Vector[AtomicInt] \
+SEGVs on both backends because gorget_array_push mis-serializes opaque-handle \
+elements -- it memcpys elem_size bytes STARTING AT the handle pointer (reading \
+the AtomicInt struct's __val field, zero) into the slot instead of storing the \
+handle pointer itself. Root cause is on the push arg-building layer, NOT the \
+receiver-ABI chokepoint (Round XXXII fixed that). Owner-decided fix layer is a \
+follow-up scout. Un-ignore and move out of known_gaps/ when fixed."]
+fn atomic_int_collection_elem_segv() {
+    run_gg("known_gaps/atomic_int_collection_elem_segv.gg", "2");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-06, sibling of atomic_int_collection_elem_segv): \
+Vector[Mutex[int]] SEGVs on both backends -- same push-side mis-serialization of \
+scalar-sized value-types. Owner-decided fix layer is a follow-up scout."]
+fn vector_mutex_elem_lock_segv() {
+    run_gg("known_gaps/vector_mutex_elem_lock_segv.gg", "42");
 }
 
 #[test]

@@ -1,0 +1,27 @@
+# Cell: WaitGroup · &-param route · SelfConvention::ByValue chokepoint.
+#
+# LANDED 2026-08-06 (Round XXXII, opaque-handle receiver-ABI class fix).
+# Pre-fix (measured 2026-08-06): silently prints `0` on C (wg.add() writes
+# to caller's stack, so the wg is never armed, wg.wait() returns immediately
+# before workers run, counter is 0); LLVM crashes with pthread_mutex_lock
+# assertion (exit 134). Post-fix: prints `3`, exit 0.
+
+from std.sync import WaitGroup, AtomicInt
+
+async int worker(AtomicInt counter, WaitGroup wg):
+    counter.add(1)
+    wg.done()
+    return 0
+
+void arm(WaitGroup &w):
+    w.add(3)
+
+async void main():
+    AtomicInt counter = AtomicInt(0)
+    WaitGroup wg = WaitGroup()
+    arm(&wg)
+    spawn worker(counter, wg)
+    spawn worker(counter, wg)
+    spawn worker(counter, wg)
+    wg.wait()
+    print(counter.load())

@@ -1,0 +1,39 @@
+# Cell: Mutex[int] · &-param route · SelfConvention::ByValue chokepoint.
+#
+# GRADUATED 2026-08-06 (Round XXXII, MEMORY SAFETY / ONE OWNERSHIP BOUNDARY).
+# Pre-fix: prints `40` (both increments vanish) then SIGSEGV (exit 139) on both
+# C and LLVM backends; gg check ACCEPTED it. Post-fix: prints `42`, exit 0.
+#
+# MECHANISM (measured, not hypothesised). An opaque handle type IS a pointer --
+# `typedef GorgetMutex* Mutex__int64_t` -- so a `Mutex[int] &m` parameter
+# lowers to a local of type `MutPtr(Named("Mutex__int64_t"))` == `GorgetMutex**`.
+# The runtime `gorget_mutex_lock` takes `GorgetMutex*` (SelfConvention::ByValue).
+# The RECEIVER-BUILD at `src/ir/lowering/exprs/methods.rs:531` skipped auto-deref
+# on the theory that a struct-based `&` param must write THROUGH the alias, but
+# that theory is FALSE for opaque handles -- the pointer IS the handle. Result:
+# the callee reinterpreted the caller's stack frame as `GorgetMutex`.
+#
+# CLASS (12 protocols, uniformly ByValue): Shared, Weak, Mutex, RWLock, Thread,
+# AtomicInt, AtomicBool, Barrier, WaitGroup, Semaphore, OnceFlag, TaskGroup.
+# Types with Borrow/MutBorrow self (Vector, Dict, String, Guard, ...) stay on
+# the raw-pointer path. Sibling cells this round: opaque_handle_struct_field.gg
+# (route: struct-field, protocol: AtomicInt), atomic_int_amp_param.gg,
+# rwlock_amp_param.gg, semaphore_amp_param.gg, waitgroup_amp_param.gg,
+# barrier_amp_param.gg, opaque_handle_struct_field_waitgroup.gg.
+#
+# NON-GOAL. The owner-decided fix (TODO.md, XXXI handover) is LOWER CORRECTLY,
+# not REJECT `&`-on-opaque-handle. `&` on an opaque handle uniquely means
+# REBIND-THE-HANDLE (`void replace(Mutex[int] &m): m = Mutex[int](99)`);
+# read/write-through-the-handle is what this fix restores.
+
+void bump(Mutex[int] &m):
+    Guard[int] g = m.lock()
+    int v = g.get()
+    g.set(v + 1)
+
+void main():
+    Mutex[int] m = Mutex[int](40)
+    bump(&m)
+    bump(&m)
+    Guard[int] g = m.lock()
+    print(g.get())

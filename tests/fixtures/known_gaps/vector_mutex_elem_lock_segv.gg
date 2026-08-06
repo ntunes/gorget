@@ -1,0 +1,29 @@
+# KNOWN GAP (filed 2026-08-06, sibling of the Round XXXII opaque-handle
+# receiver-ABI class fix and `atomic_int_collection_elem_segv.gg`):
+# `Vector[Mutex[int]]` SEGVs on both C and LLVM backends. gg check ACCEPTS it.
+#
+# INTENDED: prints `42`, exit 0.
+#
+# ROOT CAUSE (same class as `atomic_int_collection_elem_segv.gg`): pushing
+# a `Mutex[int]` (which is a pointer VALUE, `typedef GorgetMutex* Mutex__int64_t`)
+# into a `Vector[Mutex[int]]` passes the handle POINTER as `const void* elem`
+# to `gorget_array_push`. `push` memcpys `elem_size` (8) bytes STARTING AT the
+# handle pointer -- i.e. the first 8 bytes of the GorgetMutex struct (its
+# pthread_mutex_t start) -- into the slot instead of storing the handle
+# pointer itself. Every `v[0].lock()` then reads the slot's corrupted 8
+# bytes as a GorgetMutex* and dispatches to a nonsense address -> SEGV.
+#
+# Fix layer: push-side arg-building for scalar-sized value types (owner
+# decision deferred to a follow-up round scout). Graduating this cell is
+# +1 close then.
+
+from std.sync import Mutex, Guard
+
+void main():
+    Vector[Mutex[int]] v = Vector[Mutex[int]]()
+    v.push(Mutex[int](40))
+    Guard[int] g1 = v[0].lock()
+    int x = g1.get()
+    g1.set(x + 2)
+    Guard[int] g2 = v[0].lock()
+    print(g2.get())
