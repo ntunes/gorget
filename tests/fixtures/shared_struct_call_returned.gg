@@ -1,0 +1,14 @@
+# Cell: ArcMutex · user-struct-with-String-field · call-returned · no-spawn ·
+# pre-fix ICE 101 · post-fix `hi`
+#
+# Part of the shared-var-decl class-fix fixture net (Core #11/#12).
+
+struct S:
+    String name
+
+S load():
+    return S("hi")
+
+void main():
+    shared S x = load()
+    print(x.name)

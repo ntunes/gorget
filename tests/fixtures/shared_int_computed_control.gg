@@ -1,0 +1,10 @@
+# Control cell C2: ArcAtomic · int · computed (1+2) · no-spawn · always exit 0.
+#
+# Distinct from C1: proves the ArcAtomic + Copy-mode path stays green even
+# when the initializer is a Move-of-a-temp (int-add produces a
+# Move(_temp)-shaped operand), because resource_assign_mode returns Copy for
+# int and the Move-follow-through guard doesn't fire.
+
+void main():
+    shared int i = 1 + 2
+    print(i)

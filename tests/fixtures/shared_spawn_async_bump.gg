@@ -1,0 +1,21 @@
+# Cell: ArcMutex · String · concat · spawn-async · pre-fix ICE 101 ·
+# post-fix `hello world!`
+#
+# Part of the shared-var-decl class-fix fixture net (Core #11/#12). Distinct
+# from `shared_spawn_amp_param`: this exercises the `__shared_async_bump` /
+# PendingSharedAsync path via the `async_sleep(0)` yield inside the spawned
+# task's body, whereas `shared_spawn_amp_param` uses a straight
+# `s = s + "!"` sync-callee task.
+
+from std.async import async_sleep
+
+async void bump(String &s):
+    async_sleep(0)
+    s = s + "!"
+
+async void main():
+    shared String s = "hello " + "world"
+    Task[void] t = spawn bump(&s)
+    t.await()
+    with s:
+        print(s)

@@ -1,0 +1,11 @@
+# Cell: ArcMutex · Vector[int] · call-returned · no-spawn · pre-fix ICE 101 · post-fix `3`
+#
+# Part of the shared-var-decl class-fix fixture net (Core #11/#12).
+
+Vector[int] build():
+    Vector[int] v = [1, 2, 3]
+    return v
+
+void main():
+    shared Vector[int] v = build()
+    print(v.len())

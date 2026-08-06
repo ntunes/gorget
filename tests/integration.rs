@@ -17848,6 +17848,120 @@ fn mutex_amp_param_lost_writes_and_segv() {
     run_gg("known_gaps/mutex_amp_param_lost_writes_and_segv.gg", "42");
 }
 
+// ── shared-var-decl class-fix fixture net (Core #11/#12, Round XXXII Track D+E) ──
+// Every P* fixture below was RED-verified at HEAD to reproduce the ICE 101
+// (move-follow-through violation, src/ir/lowering/mod.rs:1872) that
+// `lower_shared_var_decl` at src/ir/lowering/stmts/mod.rs:1595-1834 emits on
+// any `shared T x = <computed>` where T is a resource type. The
+// class-fix (§3a in the Track D+E brief) routes all three resource arms
+// (ArcOnly:1709, ArcRwLock:1764, ArcMutex:1813) through a shared
+// `materialize_addressable` chokepoint that carries the Move-follow-through.
+// Un-ignore un-happens at the fix commit (§6 step 7 in the brief).
+//
+// The controls C1-C5 stay UNIGNORED at HEAD: proving the fix didn't break
+// anything is only possible if the controls are actually observable.
+
+#[test]
+#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · String · \
+call-returned. RED-verified at HEAD (2026-08-06): exit 101, move-follow-through \
+violation at src/ir/lowering/mod.rs:1872. Un-ignore after §3a lands."]
+fn shared_call_returned_string() {
+    run_gg("shared_call_returned_string.gg", "hello");
+}
+
+#[test]
+#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · String · \
+f-string. RED-verified at HEAD (2026-08-06): exit 101."]
+fn shared_fstring_init() {
+    run_gg("shared_fstring_init.gg", "n=42");
+}
+
+#[test]
+#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · Vector[int] · \
+ctor. RED-verified at HEAD (2026-08-06): exit 101."]
+fn shared_vector_ctor_init() {
+    run_gg("shared_vector_ctor_init.gg", "1");
+}
+
+#[test]
+#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · Vector[int] · \
+list-literal. RED-verified at HEAD (2026-08-06): exit 101."]
+fn shared_vector_literal_init() {
+    run_gg("shared_vector_literal_init.gg", "3");
+}
+
+#[test]
+#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · Vector[int] · \
+call-returned. RED-verified at HEAD (2026-08-06): exit 101."]
+fn shared_vector_call_returned() {
+    run_gg("shared_vector_call_returned.gg", "3");
+}
+
+#[test]
+#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · \
+Dict[String,int] · call-returned. RED-verified at HEAD (2026-08-06): exit 101."]
+fn shared_dict_call_returned() {
+    run_gg("shared_dict_call_returned.gg", "1");
+}
+
+#[test]
+#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · \
+user-struct-with-String-field · call-returned. RED-verified at HEAD (2026-08-06): \
+exit 101."]
+fn shared_struct_call_returned() {
+    run_gg("shared_struct_call_returned.gg", "hi");
+}
+
+#[test]
+#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcRwLock · String · \
+concat · spawn-sync. Pins the ArcRwLock arm distinctly from ArcMutex + ArcOnly. \
+RED-verified at HEAD (2026-08-06): exit 101."]
+fn shared_rwlock_concat_init() {
+    run_gg("shared_rwlock_concat_init.gg", "ab\nab");
+}
+
+#[test]
+#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · Vector[int] · \
+call-returned · spawn-async. RED-verified at HEAD (2026-08-06): exit 101."]
+fn shared_spawn_grow_vector() {
+    run_gg("shared_spawn_grow_vector.gg", "3");
+}
+
+#[test]
+#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · String · \
+concat · spawn-async (PendingSharedAsync path with `async_sleep(0)` yield). \
+RED-verified at HEAD (2026-08-06): exit 101."]
+fn shared_spawn_async_bump() {
+    run_gg("shared_spawn_async_bump.gg", "hello world!");
+}
+
+// ── Control cells (green at HEAD, must stay green after the class-fix) ──
+
+#[test]
+fn shared_int_atomic_control() {
+    run_gg("shared_int_atomic_control.gg", "42");
+}
+
+#[test]
+fn shared_int_computed_control() {
+    run_gg("shared_int_computed_control.gg", "3");
+}
+
+#[test]
+fn shared_string_rodata_control() {
+    run_gg("shared_string_rodata_control.gg", "hello");
+}
+
+#[test]
+fn shared_int_spawn_control() {
+    run_gg("shared_int_spawn_control.gg", "1");
+}
+
+#[test]
+fn shared_nonshared_concat_control() {
+    run_gg("shared_nonshared_concat_control.gg", "ab");
+}
+
 #[test]
 fn mutex_alias() {
     // AXIS NOTE (2026-08-05): this gate covers the BARE-param cell only. A bare

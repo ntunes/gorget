@@ -1,0 +1,22 @@
+# Cell: ArcMutex · Vector[int] · call-returned · spawn-async · pre-fix ICE 101 ·
+# post-fix `3`
+#
+# Part of the shared-var-decl class-fix fixture net (Core #11/#12). Exercises
+# the composed shape `shared T = <computed>` + `spawn f(&s)` + `t.await()` on
+# a Vector inner type — pinning the async task-facade path for non-scalar
+# resource inners.
+
+async void grow(Vector[int] &xs):
+    xs.push(1)
+    xs.push(2)
+
+Vector[int] seed():
+    Vector[int] v = [0]
+    return v
+
+async void main():
+    shared Vector[int] v = seed()
+    Task[void] t = spawn grow(&v)
+    t.await()
+    with v:
+        print(v.len())

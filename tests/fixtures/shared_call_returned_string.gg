@@ -1,0 +1,17 @@
+# Cell: ArcMutex · String · call-returned · no-spawn · pre-fix ICE 101 · post-fix `hello`
+#
+# Part of the shared-var-decl class-fix fixture net (Core #11/#12). Pre-fix,
+# `lower_shared_var_decl` omitted the Move-follow-through pattern that
+# `lower_var_decl` has at src/ir/lowering/stmts/mod.rs:1189-1198, so ANY
+# resource-typed shared init whose RHS is a Move of a drop-registered temp
+# ICEd with a move-follow-through violation at src/ir/lowering/mod.rs:1872.
+# The corpus historically sampled ONLY {rodata literal, in-place struct} —
+# every ICE-triggering initializer form (concat, call, f-string, list literal,
+# ctor, dict literal) was 0-sampled (Core #12 axis-incompleteness).
+
+String make():
+    return "hello"
+
+void main():
+    shared String s = make()
+    print(s)
