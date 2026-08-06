@@ -17779,34 +17779,20 @@ fn catch_recovery_type_unchecked() {
     );
 }
 
+// Graduated from known_gaps/ by Round XXXII Track D+E (2026-08-06). The
+// class-fix at `src/ir/lowering/context.rs::materialize_addressable` +
+// `assign_with_move_follow_through` retires the Move-follow-through class
+// in `lower_shared_var_decl`; the SH gate removal at
+// `tests/fixtures/self_host_lowerer/lower_stmt.gg:62-66` retires the
+// non-scalar-shared-decl class in the SH lane.
 #[test]
-#[ignore = "KNOWN GAP (filed 2026-08-05): `gg check` ACCEPTS this 3-line program, \
-then BOTH Rust backends ICE at exit 101 (move-follow-through violation, \
-src/ir/lowering/mod.rs:1872). The self-host compiles and runs it correctly -- the \
-reference lags the self-host, a succession milestone. Trigger is a COMPUTED \
-initializer: `shared String s = \"a\" + \"b\"` ICEs, `shared String s = \"hello\"` \
-(rodata literal) is exit 0 -- and every `shared` fixture in the corpus uses the \
-literal form, which is why nothing caught it. Un-ignore and move out of \
-known_gaps/ when fixed."]
-fn shared_computed_init_ice() {
-    run_gg("known_gaps/shared_computed_init_ice.gg", "ab");
+fn shared_computed_init() {
+    run_gg("shared_computed_init.gg", "ab");
 }
 
 #[test]
-#[ignore = "KNOWN GAP (filed 2026-08-05): BOTH LANES broken, differently. gg check \
-accepts; Rust ICEs at exit 101 on both backends; the SELF-HOST compiles and then \
-double-frees (exit 134). This is the measured answer to Track B's reachability \
-question -- a droppable inner DOES reach the shared lock-chain. Discriminator is \
-NOT the owning destination (the non-owning read fails identically): the trigger is \
-the spawn/&-param task-facade path (__get_ptr + GIDeref(wr_binding) re-seed), which \
-unlike the plain lock-chain reads IS registered for drop. Without the spawn the \
-self-host is clean on the same shape. Un-ignore and move out of known_gaps/ when \
-fixed."]
-fn shared_spawn_amp_param_double_free() {
-    run_gg(
-        "known_gaps/shared_spawn_amp_param_double_free.gg",
-        "hello world-forced!",
-    );
+fn shared_spawn_amp_param() {
+    run_gg("shared_spawn_amp_param.gg", "hello world-forced!");
 }
 
 #[test]
@@ -17862,78 +17848,51 @@ fn mutex_amp_param_lost_writes_and_segv() {
 // anything is only possible if the controls are actually observable.
 
 #[test]
-#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · String · \
-call-returned. RED-verified at HEAD (2026-08-06): exit 101, move-follow-through \
-violation at src/ir/lowering/mod.rs:1872. Un-ignore after §3a lands."]
 fn shared_call_returned_string() {
     run_gg("shared_call_returned_string.gg", "hello");
 }
 
 #[test]
-#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · String · \
-f-string. RED-verified at HEAD (2026-08-06): exit 101."]
 fn shared_fstring_init() {
     run_gg("shared_fstring_init.gg", "n=42");
 }
 
 #[test]
-#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · Vector[int] · \
-ctor. RED-verified at HEAD (2026-08-06): exit 101."]
 fn shared_vector_ctor_init() {
     run_gg("shared_vector_ctor_init.gg", "1");
 }
 
 #[test]
-#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · Vector[int] · \
-list-literal. RED-verified at HEAD (2026-08-06): exit 101."]
 fn shared_vector_literal_init() {
     run_gg("shared_vector_literal_init.gg", "3");
 }
 
 #[test]
-#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · Vector[int] · \
-call-returned. RED-verified at HEAD (2026-08-06): exit 101."]
 fn shared_vector_call_returned() {
     run_gg("shared_vector_call_returned.gg", "3");
 }
 
 #[test]
-#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · \
-Dict[String,int] · call-returned. RED-verified at HEAD (2026-08-06): exit 101."]
 fn shared_dict_call_returned() {
     run_gg("shared_dict_call_returned.gg", "1");
 }
 
 #[test]
-#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · \
-user-struct-with-String-field · call-returned. RED-verified at HEAD (2026-08-06): \
-exit 101."]
 fn shared_struct_call_returned() {
     run_gg("shared_struct_call_returned.gg", "hi");
 }
 
 #[test]
-#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcRwLock · String · \
-call-returned · no-spawn. Pins the ArcRwLock arm distinctly from ArcMutex + ArcOnly \
-via the explicit `shared(rwlock)` strategy tag. Uses call-returned (not concat) -- \
-the concat shape on ArcRwLock exposes a separate double-free at runtime unrelated to \
-this class-fix (the ICE 101 was hiding it). RED-verified at HEAD (2026-08-06): \
-exit 101."]
 fn shared_rwlock_call_init() {
     run_gg("shared_rwlock_call_init.gg", "hello");
 }
 
 #[test]
-#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · Vector[int] · \
-call-returned · spawn-async. RED-verified at HEAD (2026-08-06): exit 101."]
 fn shared_spawn_grow_vector() {
     run_gg("shared_spawn_grow_vector.gg", "3");
 }
 
 #[test]
-#[ignore = "GRADUATES same-round (Track D+E class-fix). Cell: ArcMutex · String · \
-concat · spawn-async (PendingSharedAsync path with `async_sleep(0)` yield). \
-RED-verified at HEAD (2026-08-06): exit 101."]
 fn shared_spawn_async_bump() {
     run_gg("shared_spawn_async_bump.gg", "hello world!");
 }

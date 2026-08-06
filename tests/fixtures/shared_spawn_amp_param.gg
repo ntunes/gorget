@@ -1,0 +1,36 @@
+# Cell: ArcMutex · String · concat · spawn-sync · post-Track-D+E-fix `hello world-forced!`
+#
+# Graduated from known_gaps/ by Round XXXII Track D+E. Pre-fix BOTH LANES
+# were broken DIFFERENTLY on this shape:
+#   Rust (both backends): exit 101 ICE (move-follow-through violation)
+#   Self-host: compiled, then exit 134 `free(): double free detected in tcache 2`
+#
+# Two composed writer defects landed together in the class-fix:
+#   (a) Rust: `lower_shared_var_decl`'s three resource arms omitted the
+#       Move-follow-through pattern. Fix at
+#       `src/ir/lowering/context.rs::materialize_addressable` +
+#       `assign_with_move_follow_through`; class-retiring lint at
+#       `tests/lints.rs::shared_var_decl_arms_route_through_materialize_addressable`.
+#   (b) Self-host: `lower_stmt.gg:62-66`'s `< PRIM_COUNT` gate silently fell
+#       non-scalar `shared T` decls through to the plain var-decl path,
+#       leaving `ctx.shared_locals` empty so `lower_shared_spawn` returned
+#       -1 and the caller fell through to `lower_named_fn_spawn`'s shallow
+#       `GorgetString` copy -- the source of the double-free. Fix: retire
+#       the `< PRIM_COUNT` gate.
+#
+# The outer `print(s)` is wrapped in `with s:` (the doc-compliant way per
+# `docs/language-reference.md:1366`, even though the bare-read reject is
+# not yet enforced -- filed as an owner-reconciliation follow-up in
+# TODO.md). The inner `s = s + "!"` inside `bump(String &s)` is a bare
+# write, but `s` there is a `String &` param NOT a shared local, so a
+# `with s:` wrap there would be a type error.
+
+async void bump(String &s):
+    s = s + "!"
+
+async void main():
+    shared String s = "hello " + "world" + "-forced"
+    Task[void] t = spawn bump(&s)
+    t.await()
+    with s:
+        print(s)
