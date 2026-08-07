@@ -10758,7 +10758,7 @@ fn code_doc_citations_resolve() {
     // fault_deep_*/faultcatch_recovery_type_* fixture families all deleted +
     // the removed `docs/plans/error-model.md` refs went with them). Budget
     // reseeded 139 → 28 as an upward-only ratchet lock-in.
-    const BUDGET: usize = 28;
+    const BUDGET: usize = 27;
     assert!(
         dangling.len() <= BUDGET,
         "code cites {} document(s) that do not exist (budget {}).\n\n{}\n\n\
