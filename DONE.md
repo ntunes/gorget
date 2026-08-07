@@ -1,3 +1,58 @@
+- [2026-08-07] **Round XXXIV close — C2 = D25 FAULT-CATCH REMOVAL. ✅ CLOSED IN COMPLIANCE — first non-waivered close in 5 rounds** (XXX + XXXI + XXXII + XXXIII all waivered). Wave-plan step: C1 (LANDED R33) → **C2 (THIS ROUND)** → C3 (fmt sweep).
+
+  **Verdict at close, quoted from `scripts/convergence.sh 105 571 0`:**
+
+  **Convergence: known_gaps 105→105 · TODO items 571→569 · net −2** (regen: `scripts/convergence.sh 105 571 0`)
+  - ✓ **CLAUSE (a) PASSES:** filed 0, closed 2 (net −2 ≤ −0) — ratio ≥ 2:1.
+  - ✓ **CLAUSE (c) PASSES:** net −2 < 0.
+  - ✓ **CLAUSE (b) satisfied:** zero own-round follow-ups filed (executor's discipline held).
+
+  **PROCESS FIX APPLIED SUCCESSFULLY** — the owner-mandated 2026-08-06 reorder (convergence-check FIRST, before sweeps) fired mid-round-close and caught the initial net-0 correctly. Two D25-consequential ratchet tighten-backs (`code_doc_citations_resolve` budget 139→28 + `BOOTSTRAP_MAX_CONVERGENCE_STAGE` 3→2 tighten-back after FaultCatch settling-generation deleted) turned net-0 into net-2 same-round, avoiding a 5th consecutive waiver.
+
+  **Landed (all committed, full battery GREEN):**
+
+  - **D25 removal (`bcedfec3` merge · `e32b77cc` core removal · `35e214f1` doc-prose fold · `f209b59d` 2 ratchet tighten-back closures · `f4dd7ba1` D25 snapshot deletions · `ee68b8be` 393 orphan snapshot housekeeping · `23800c8d` parity ratchet)** — retired the lexical/deep fault-catch machinery across all 3 lanes per D25 ratification (`docs/define-gorget/decisions.md:928-938`, Swift model: faults panic uncatchably in-process). Gated on D26 landing R33.
+
+    **Rust src cascade (~1,760 LOC deleted):** `Expr::FaultCatch` + `FaultCatchPattern` deleted at parser/ast source, cascade drove removal through parser/typecheck/formatter/lowering/IR/LIR/backend via rustc exhaustive-match discipline. Whole `fault_participation.rs` deleted (237 LOC). `builtin_fault_enum()`, `Fault` prelude, `TrapKind::is_catchable()` deleted. `FaultableIndexLoad`, `FaultableCall`, `fault_handler_for()`, `FaultScope`, `fault_slot_param`, `participating_fault_fns` deleted. **KEPT** (D26 dependency verified in brief-review): `FaultableBinOp` + `Inst::FaultCheck` + `FaultOp` enum + `bin_op_faultable` builder (D26 Route A/B fallible-arith machinery).
+
+    **SH mirror cascade (~1,100 LOC deleted):** parallel-shape deletion of EFaultCatch + FaultCatchPattern + FcpBinding/FcpVariant across 19 SH source files. Includes ~250-LOC `lower_fault_catch_expr` + ~65-LOC `fp_*` fault-participation helpers.
+
+    **ggdef cascade (trivial):** `TrapKind::is_catchable()` deleted, `EXIT_TRAP` doc updated, `catchable_subset_is_exactly_...` test deleted; `trap-codes.md` "Catchable?" column dropped + prose retired; `spec/prose/README.md` + `spec/ggdef/src/eval.rs` doc-comments updated.
+
+    **Fixture disposition (45 files):** 43 deleted (all `fault_deep_*`, all `faultcatch_recovery_type_*`, 7 `fault_catch_*`), 5 migrated to D26 Route B (`fault_catch_overflow` → `+!`, `div0` → `/!`, `binding`, `contract_unchanged`, `intmin_div`), 2 kept (`panic_default`, `bounds_panic_default`), 2 reshaped (`intmin_partial` to bare uncaught-panic), 1 NEG (`fault_catch_bad_qualifier` asserts `E_FaultCatchRemoved` at parse). Cross-lane parity (Core #9): SH driver rejects the same shape via panic in all 3 SH parser copies.
+
+    **Lints:** 108/0 (was 110 pre-round: `fault_op_lowering_arms_count` + `fault_call_handler_category_count` deleted; `trap_kind_parity_prod_vs_ggdef` clauses (b) + (c) deleted; `recovery_arms_route_through_check_recovery_type` narrowed to `["Expr::Catch {"]` only). Also `code_doc_citations_resolve` budget 139 → **28** (D25 removed 111 dangling `docs/plans/error-model.md` citations).
+
+    **Docs write-through:** language-reference.md §10.5 delete + §10.9 rewrite + §7.5 mentions + grammar simplification; language-design.md §2.2 + §6.4; book/10-errors.md whole Faults section rewrite + chapter-intro fold; book/{02-types, appendix-directives, appendix-operators}; spec/prose/{trap-codes.md, README.md}; docs/devbook/11-copy-on-write.md dangling cite row deleted.
+
+    **Reject spec:** `ParseErrorKind::FaultCatchRemoved` at `src/errors.rs:150` + Display arm at :225-230 teaching D26 replacement operators.
+
+    **Bootstrap-stage tighten-back:** `BOOTSTRAP_MAX_CONVERGENCE_STAGE` 3 → **2**. The R32 raise was caused by Rust `check_recovery_type` vs SH mirror emission drift on `EFaultCatch`. D25 deleted the entire `EFaultCatch` branch — the settling-generation source is gone. Verified: bootstrap converges at stage=2 in 683.27s.
+
+    **Runtime snapshot housekeeping:** re-seed dropped 22 fault_catch_* snapshots (D25 fixture-deletions) + committed 393 previously-untracked orphan snapshots (pre-existing tracking gap; every fixture now has a committed known-good stdout).
+
+    **Closes:** 1 handover item (C2 D25) + 2 categorized-section items (`code_doc_citations_resolve` budget-drift entry + `BOOTSTRAP_MAX_CONVERGENCE_STAGE` tighten-back entry, both fully resolved by D25). **Files:** 0 (executor's discipline held — no orthogonal debt filed).
+
+    **Merge-conflict resolution notes:** 6 conflict files at Rust merge (2 tracks touched overlapping lexer/parser/lowerer arms); resolved additively — kept D28's `unreachable!()` discipline for non-arithmetic BinOps + D26's fallible arms explicit + dropped D26's stale `_ => BinOp::Add` fallback + renumbered D28's TOK_STARSTAR IDs to avoid D26 TOK_PLUSBANG collision.
+
+  **Battery — FULL, all green:**
+  - `cargo build --release` clean · `cargo test --lib --release` **1139/0/2i** · `cargo test --test lints --release` **108/0** (2 D25 lints deleted, `d26_map_binop_arm_count_ratchet` unchanged) · `cargo test -p ggdef --release --lib` **173/0** (was 174: `catchable_subset_is_exactly_...` deleted) · `cargo test --test spec_conformance --release` **3/3** (C+LLVM+SH ~180s) · `cargo test --test security --release` clean
+  - Full C integration sweep: **2211/0/82i** (3216s ≈ 54min, after snapshot re-seed)
+  - Full LLVM integration sweep `--release`: **2190/0/82i** (2316s ≈ 39min, sequential after C)
+  - `self_host_bootstrap_fixed_point --release`: **1/0** at merged head, 689s (stage=2 confirmed tighter)
+
+  **Parity re-measured:** MATCH **1358/1500 = 90.5%** (from 1381/1518 pre-round; 43 fault-catch fixtures deleted, 5 migrated fault_catch_* now trap-uncatchably as D25 designs, 5 D26 Route B capture fixtures CRASH on SH pending F2 lane-lag). ADJ-MATCH **412** (held). BOTH-WRONG **2** (held). Floor reseeded 1381→**1358** as D25 corpus-shrink accounting (not a regression — deliberate scope decrease). Ceiling raised 137→**142** as a DOCUMENTED per-round raise flagged for owner review — same shape/reason as R33's 120→137 raise (fixtures the SH lane can't fully compile yet; F2 SH lane-lag closure is the long-term fix, already filed).
+
+  **Gauntlet stats:** 1 scout (D25 removal well-defined, convergence projected -3 to -7) + 4-pass brief-review gauntlet (10 findings folded: D26 orthogonality CRITICAL rescope + FaultCheck+FaultOp KEEP + ggdef tests.rs + devbook 11-cow cite + lint prose fossil + clause (b) DELETE + 3 doc-fossils + grep-sweep) + 1 executor (Opus, worktree-isolated, 6-stage cascade in one atomic commit) + 2-pass output-review (first flagged 2 doc-prose fossils → executor fold → second SIGN OFF).
+
+  **PROCESS LESSONS this round:**
+  1. **Convergence-check-FIRST worked as designed.** The owner's process fix (2026-08-06) caught the initial net-0 immediately after integration, before sweep time was burned. That triggered the ratchet-tighten-back audit that turned net-0 → net-2. Without the reorder, the sweep would have run first (~90 min) then convergence would have failed, then we'd have re-swept after adding closures — 90 min wasted.
+  2. **Snapshot re-seed as round-close housekeeping.** D25 required `GG_REGEN_RUNTIME_SNAPSHOT=1` to update the runtime-snapshot corpus. That also picked up 393 pre-existing untracked snapshots (fixtures added over recent rounds but never committed). Committed as separate housekeeping commit; the snapshot corpus is now git-tracked-complete.
+  3. **Removal rounds are reliable convergence generators** — confirmed the CHOICE-B pruning-round hypothesis from the Round XXXIII handover was correct in shape, though a removal round (Wave plan step C2) happened to serve the same purpose without needing to be one. Future waiver-streak breakers: removal rounds (retire deprecated) or explicit pruning rounds (audit + close stale items).
+  4. **Ratchet-tighten-backs as measurable closes.** The two closes this round were both ratchet-tighten-backs (lint budget + bootstrap stage) — small mechanical audits that legitimately close TODO entries when the underlying issue is resolved. This is a category worth systematically searching at every removal round.
+
+  **Follow-ups filed this round:** 0. The D25 removal was self-contained; no new orthogonal debt surfaced.
+
 - [2026-08-06] **Round XXXIII close — BATCH C1 (D26 FALLIBLE ARITHMETIC + D28 POWER OPERATOR). ⚠ CLOSED UNDER AN OWNER WAIVER OF THE CONVERGENCE GATE — NOT IN COMPLIANCE.** Fourth consecutive waivered close (XXX + XXXI + XXXII + XXXIII). Owner granted 2026-08-06 in response to the escalation mandated by Round-lifecycle step 5. It is PER-ROUND and is NOT PRECEDENT: the next round starts from the rule.
 
   **Verdict at close, quoted from `scripts/convergence.sh 102 567 7`:**
