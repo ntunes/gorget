@@ -1412,7 +1412,9 @@ equip Parser:
         if self.check_tok(TOK_AMP):
             self.advance()
             return OWN_MUTABLE
-        elif self.check_tok(TOK_BANG):
+        # D27 accept-both: `Type ^` and retired `Type !` both mean OWN_MOVE
+        # at the fn-type param sigil suffix (D35 spelling).
+        elif self.check_tok(TOK_BANG) or self.check_tok(TOK_CARET):
             self.advance()
             return OWN_MOVE
         return OWN_BORROW
@@ -1996,8 +1998,8 @@ equip Parser:
         return ""
 
     void skip_ownership_markers(&self):
-        # Skip &, !, move, mutable before args
-        if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG):
+        # Skip &, !, ^, move, mutable before args (D27 accept-both `!`/`^`)
+        if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG) or self.check_tok(TOK_CARET):
             self.advance()
         elif self.check_kw(KW_MOVE) or self.check_kw(KW_MUTABLE):
             self.advance()
@@ -3363,7 +3365,9 @@ equip Parser:
                 SpannedType self_ty = SpannedType(TSelf(), self.current_span())
                 return Param(self_ty, "self", OWN_MUTABLE, None)
 
-        if self.check_tok(TOK_BANG):
+        # D27 accept-both: `!self` (retired) and `^self` (canonical) both
+        # mean OWN_MOVE on the self-face. Round B rejects `!self` here.
+        if self.check_tok(TOK_BANG) or self.check_tok(TOK_CARET):
             if keyword_tag(self.peek_at(1).lex_token) == KW_SELF_LOWER:
                 self.advance()
                 self.advance()
@@ -3378,8 +3382,8 @@ equip Parser:
             self.advance()
 
         SpannedType ty = self.parse_type()
-        # Handle ownership markers between type and name
-        if self.check_tok(TOK_BANG):
+        # Handle ownership markers between type and name (D27 accept-both `!`/`^`)
+        if self.check_tok(TOK_BANG) or self.check_tok(TOK_CARET):
             own = OWN_MOVE
             self.advance()
         elif self.check_tok(TOK_AMP):

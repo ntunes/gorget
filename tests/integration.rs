@@ -9165,6 +9165,30 @@ fn fmt_rejects_parse_error() {
     );
 }
 
+/// Round XXXV Track C3 fold-in 2026-08-07: D27 accept-both parser landed.
+/// `^` is now the canonical D27 move sigil; docs (Round C3's Stage 5 sweep)
+/// teach `^` at every move position. The parser accepts BOTH `!` (retired)
+/// and `^` (canonical) so the docs teach valid syntax. `gg fmt` still
+/// normalizes to `!` — Round B (after the 2 filed HIGH formatter follow-ups
+/// land) does the fmt swap.
+///
+/// This test wires `tests/fixtures/d27_parser_accepts_caret.gg` (the POS
+/// fixture) into the integration suite. Exercises `^` at 4 positions:
+/// - named-param `void take(String ^s):`
+/// - self-face consuming method `String into_label(^self):`
+/// - type-arg suffix `Vector[int ^]`
+/// - prefix move `take(^s)` + move-closure `^(): body`
+///
+/// RED-verified pre-fold (against ce5fa232e HEAD, Stage 0 chip only):
+///   $ gg check tests/fixtures/d27_parser_accepts_caret.gg
+///   error: expected expression, found '^'
+///     ┌─ ...:24:15
+/// GREEN post-fold (this HEAD).
+#[test]
+fn d27_parser_accepts_caret() {
+    run_gg("d27_parser_accepts_caret.gg", "hi\nalpha\n6\n42");
+}
+
 // ══════════════════════════════════════════════════════════════
 // Semantic error tests (expected check failures)
 // ══════════════════════════════════════════════════════════════
