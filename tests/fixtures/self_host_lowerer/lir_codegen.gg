@@ -2218,19 +2218,10 @@ String emit_adapter_functions(LirModule m, Vector[String] sn, Dict[int, bool] ta
         String ret_c = c_type_name(m.functions.get(fi).unwrap().return_type, sn)
         String tname = c_func_name(m.functions.get(fi).unwrap().name)
         String adapt_name = "__adapt_" + tname
-        # Cross-frame fault (Inc-2.1a-iv): a PARTICIPATING fn has synthesized
-        # trailing `GtMutPtr(i32)` fault-slot param(s) that are NOT part of its
-        # callable type. The adapter is invoked through the 2-arg callable ABI,
-        # so it must declare ONLY the user params and pass NULL for the trailing
-        # slot(s) — forwarding a phantom slot arg writes a fault tag through a
-        # wild pointer (memory corruption). NULL makes the callee's fault arm
-        # panic inline = panic-by-default for an indirectly-invoked fault. Typed
-        # count off the LIR fn, never name/shape-matched (devbook/24 rule 2).
         int total_params = m.functions.get(fi).unwrap().params.len()
-        int user_param_count = total_params - m.functions.get(fi).unwrap().fault_slot_param_count
         out = out + ret_c + " " + adapt_name + "(void* __env"
         int pi = 0
-        while pi < user_param_count:
+        while pi < total_params:
             int pty = m.functions.get(fi).unwrap().params.get(pi).unwrap()
             String ty_str = ""
             if pty == LT_VOID:
@@ -2247,11 +2238,7 @@ String emit_adapter_functions(LirModule m, Vector[String] sn, Dict[int, bool] ta
         while pi < total_params:
             if pi > 0:
                 out = out + ", "
-            if pi < user_param_count:
-                out = out + "__p" + int_to_str(pi)
-            else:
-                # Synthesized trailing fault-slot: pass NULL (panic-by-default).
-                out = out + "NULL"
+            out = out + "__p" + int_to_str(pi)
             pi += 1
         out = out + "); }\n"
         fi += 1

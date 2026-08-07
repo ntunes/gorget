@@ -1,23 +1,24 @@
-# Div-split (error-model.md §11 Increment 2 (C)): a single signed Div has TWO
-# fault categories. `INT_MIN / -1` is an OVERFLOW (Fault.Overflow), NOT a
-# div-by-zero; `10 / 0` is Fault.DivByZero. The binding form reads the right
-# variant for each, and the pattern forms catch the right category. Rem too.
+# D26 division-split: a single signed `/!` distinguishes overflow (INT_MIN / -1)
+# from divzero. Post-D25 (no fault-catch) the D26 `Result[T, ArithError]` form
+# is the canonical path.
 void main():
     int imin = -9223372036854775807 - 1
     int neg1 = -1
-    # INT_MIN / -1 → Fault.Overflow (binding reads the variant).
-    int a = (imin / neg1) catch f: match f:
-        case Fault.Overflow(): 1
-        case Fault.DivByZero(): 2
-        case Fault.Bounds(): 3
-    print(f"{a}")
-    # INT_MIN / -1 caught by the Overflow pattern.
-    int b = (imin / neg1) catch Fault.Overflow: 11
-    print(f"{b}")
-    # 10 / 0 still caught by DivByZero.
+    Result[int, ArithError] a = imin /! neg1
+    match a:
+        case Ok(_):                        print("0")
+        case Error(ArithError.Overflow):   print("1")
+        case Error(ArithError.DivByZero):  print("2")
+    Result[int, ArithError] b = imin /! neg1
+    match b:
+        case Ok(_):     print("0")
+        case Error(_):  print("11")
     int z = 0
-    int c = (10 / z) catch Fault.DivByZero: 22
-    print(f"{c}")
-    # INT_MIN % -1 is the same overflow.
-    int d = (imin % neg1) catch Fault.Overflow: 33
-    print(f"{d}")
+    Result[int, ArithError] c = 10 /! z
+    match c:
+        case Ok(_):     print("0")
+        case Error(_):  print("22")
+    Result[int, ArithError] d = imin %! neg1
+    match d:
+        case Ok(_):     print("0")
+        case Error(_):  print("33")

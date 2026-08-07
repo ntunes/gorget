@@ -228,17 +228,7 @@ Wrapping operators: `+%`, `-%`, `*%`. These mirror Zig's approach. No wrapping d
 
 Plain `+`, `-`, `*` always check overflow; the per-operator `+%`/`-%`/`*%` forms are the only way to opt into wrapping. There is no global "wrap the whole build" mode — wrapping is per-expression, by design.
 
-The overflow panic is also **locally recoverable**. Wrapping an arithmetic expression in `(...) catch Fault.Overflow:` branches an overflowing op to a fallback instead of panicking:
-
-```gorget
-int big = 9223372036854775807
-int r = (big * 2) catch Fault.Overflow: -1     # r == -1 (overflow caught)
-int ok = (3 * 4) catch Fault.Overflow: -1      # ok == 12 (no fault)
-```
-
-Recovery is **local and lexical** — the catch covers only the faultable ops emitted directly into the wrapped expression, and an uncaught overflow still panics exactly as above. See §6 for the full `Fault` model.
-
-There is a THIRD discipline for arithmetic: the **fallible arithmetic operators** `+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` (D26). They neither trap nor wrap — they surface the failure into the ordinary `throws` / `Result` channel via the prelude enum `ArithError { Overflow, DivByZero }`. A function body that contains any fallible-arith op auto-infers `throws ArithError`, so callers see the fallibility through the normal `!`-propagate + `catch` machinery. Explicit `throws E` declarations win over auto-inference. Integer-only in v1; compound forms (`+!=`) are excluded.
+There is a SECOND discipline for opting out of the trap on arithmetic: the **fallible arithmetic operators** `+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` (D26). They neither trap nor wrap — they surface the failure into the ordinary `throws` / `Result` channel via the prelude enum `ArithError { Overflow, DivByZero }`. A function body that contains any fallible-arith op auto-infers `throws ArithError`, so callers see the fallibility through the normal `!`-propagate + `catch` machinery. Explicit `throws E` declarations win over auto-inference. Integer-only in v1; compound forms (`+!=`) are excluded.
 
 ```gorget
 int add_or_throw(int a, int b): return a +! b       # auto-throws ArithError
@@ -1493,27 +1483,11 @@ void critical_section():
 
 The rule still holds: a fault (overflow, bounds, div0) is a programmer error, so it **panics by default** — continuing with corrupted state is worse than stopping. What the rule adds, rather than reverses, is **opt-in local recovery**: a faulting op can be caught *lexically*, at the operation site, instead of aborting the process.
 
-#### Recoverable Faults
+#### Faults
 
-A small, closed set of panics — **`Fault.Overflow`** (integer overflow), **`Fault.DivByZero`** (division or remainder by zero), and **`Fault.Bounds`** (an out-of-bounds index into an array-backed collection) — form the **fault** kind. They panic by default, but an expression that can fault may opt into a local fallback with `catch`:
+A small, closed set of runtime error conditions — integer overflow, division or remainder by zero, out-of-bounds indexing of an array-backed collection — form the **fault** kind. Faults **panic uncatchably by default**: there is no lexical recovery form for them; an uncaught fault renders a diagnostic on stderr and exits with the trap code, exactly like any other trap (`.unwrap()` on `None`/`Error`, a failing `assert`, `panic`).
 
-```gorget
-# Pattern form: catch one named variant, yield a fallback.
-int r = (big * 2) catch Fault.Overflow: -1
-
-# Binding form: bind the constructed Fault value and match on it.
-int d = (10 / z) catch f: match f:
-    case Fault.Overflow(): 111
-    case Fault.DivByZero(): 222
-```
-
-This recovery is **strictly local and lexical**:
-
-- It covers only the faultable ops emitted directly into the wrapped expression's own basic blocks. A fault raised *inside a function the expression calls* is not caught — it still panics.
-- An uncaught fault still panics with a diagnostic and exits, exactly as before. `catch` adds a recovery path; it does not change the default.
-- Faults stay **out of function signatures** — a plain `int sum(...)` does not become a `Result`-returning function just because it does arithmetic. Faults are not contract errors; they are not part of any function's `throws` type or the API surface.
-
-The variants are spelled **qualified** (`Fault.Overflow`, not bare `Overflow`); a wrong qualifier (`Bogus.Overflow`) is a compile-time error. `INT_MIN / -1` and `INT_MIN % -1` are overflows (`Fault.Overflow`), not div-by-zero. This fault `catch Fault.X:` is distinct from the `Result`/`throws` `catch (e):` form (§6.1's model), which recovers a *contract* error from a throwing call.
+Faults stay **out of function signatures** — a plain `int sum(...)` does not become a `Result`-returning function just because it does arithmetic. Faults are not contract errors; they are not part of any function's `throws` type or the API surface. Programs that need to *recover* from an arithmetic fault opt in via the fallible arithmetic operators (`+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` — §2.2), which surface the fault into the ordinary `throws` / `Result[T, E]` channel.
 
 ### 6.5 Assert (Always-On)
 

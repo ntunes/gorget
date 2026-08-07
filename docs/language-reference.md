@@ -1599,9 +1599,9 @@ op = "+" | "-" | "*" | "/" | "%" | "+%" | "-%" | "*%" | "**"
 
 Arithmetic operators require matching numeric types. Comparison operators produce `bool`. Logical operators require `bool` operands. Bitwise operators require matching integer types and produce the same type.
 
-**Wrapping arithmetic operators** (`+%`, `-%`, `*%`) perform the same operation as `+`, `-`, `*` but are guaranteed to wrap on overflow rather than panic. Plain `+`, `-`, `*` always check overflow: `+` panics on overflow (or recovers via `catch Fault.Overflow`) while `+%` wraps silently. Wrapping is strictly per-operator — there is no global mode that changes the behavior of `+`. Compound assignment forms (`+%=`, `-%=`, `*%=`) are also available.
+**Wrapping arithmetic operators** (`+%`, `-%`, `*%`) perform the same operation as `+`, `-`, `*` but are guaranteed to wrap on overflow rather than panic. Plain `+`, `-`, `*` always check overflow: `+` panics on overflow while `+%` wraps silently. Wrapping is strictly per-operator — there is no global mode that changes the behavior of `+`. Compound assignment forms (`+%=`, `-%=`, `*%=`) are also available.
 
-**Exponentiation `**`** — `x ** y` raises `x` to the power `y`. Right-associative (Fortran/Python convention: `2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512, NOT `(2 ** 3) ** 2` = 64). Binds tighter than unary prefix, so `-x ** 2` is a **compile REJECT** (the JS/TC39 guardrail) — write `-(x ** 2)` (negation of the result) or `(-x) ** 2` (base is negated) to disambiguate. The compound form `**=` is also available. No type-switching: `int ** int → int`, `float ** float → float`; mixed operands are rejected (`E_TypeMismatchInPow`). Integer overflow AND negative exponent both trap `Fault.Overflow` (a fallible `**!` is not yet available; use explicit width checks for now). `**` replaces the earlier `pow()` free function per the one-canonical-way rule.
+**Exponentiation `**`** — `x ** y` raises `x` to the power `y`. Right-associative (Fortran/Python convention: `2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512, NOT `(2 ** 3) ** 2` = 64). Binds tighter than unary prefix, so `-x ** 2` is a **compile REJECT** (the JS/TC39 guardrail) — write `-(x ** 2)` (negation of the result) or `(-x) ** 2` (base is negated) to disambiguate. The compound form `**=` is also available. No type-switching: `int ** int → int`, `float ** float → float`; mixed operands are rejected (`E_TypeMismatchInPow`). Integer overflow AND negative exponent both trap uncatchably (a fallible `**!` is not yet available; use explicit width checks for now). `**` replaces the earlier `pow()` free function per the one-canonical-way rule.
 
 > **`^` is XOR, not power.** `2 ^ 10` produces 8 (XOR of 0b010 and 0b1010), not 1024. The compiler emits a `W_XorLikelyPower` fix-it warning on the narrow shape `{2 | 10} ^ N` where `N` looks like an exponent — write `2 ** 10` if you meant power.
 
@@ -2995,20 +2995,6 @@ int x = risky() catch (e):
 
 The block form lets the recovery run side-effecting statements (logging, cleanup, etc.) before producing the fallback value. Statements inside the block can be `return`, `throw` (if the enclosing function declares `throws`), or any normal control flow — the type checker treats divergent recoveries as compatible with any expected type.
 
-**Fault catch** — a distinct form of `catch` recovers a **fault** (integer overflow, division by zero, an out-of-bounds index) from a non-throwing expression. It is spelled without the parenthesized error binding the contract form uses, and names a `Fault` variant or binds the constructed `Fault` value (see §10.9 for the `Fault` type):
-
-```gorget
-# Pattern form — catch one named fault, yield a fallback.
-int r = (big * 2) catch Fault.Overflow: -1
-
-# Binding form — bind the constructed Fault value and match on it.
-int d = (10 / z) catch f: match f:
-    case Fault.Overflow(): 111
-    case Fault.DivByZero(): 222
-```
-
-Recovery is **local and lexical**: it covers only the faultable ops emitted directly into the wrapped expression's own basic blocks. A fault raised inside a function the expression *calls* is not caught — it still panics. Outside a fault `catch`, a fault panics by default, unchanged. The variant must be qualified with `Fault` (`Fault.Overflow`); a wrong qualifier (`Bogus.Overflow`) is a compile-time error. This is separate from the contract-error `catch (e):` form above (which recovers a thrown `Result` error) — the two never overlap, since faults are out of the function's signature.
-
 ### 10.6 Throws on Main
 
 `main()` may declare `throws int`, where the thrown integer becomes the process exit code:
@@ -3064,24 +3050,9 @@ enum AppError:
 
 ### 10.9 Faults
 
-`Fault` is a built-in, **closed** enum naming the recoverable runtime faults. It is the scrutinee of the fault `catch` form (§10.5):
+A **fault** is one of the closed set of runtime error conditions the language recognizes: integer overflow (checked `+`/`-`/`*`/signed Div/Rem `TYPE_MIN/-1`, an overflowing integer `**`, an integer `**` with a negative exponent, out-of-range shift counts), division or remainder by zero, and out-of-bounds indexing of `Vector`/`Deque`. Faults **panic uncatchably by default** — there is no lexical recovery form; an uncaught fault renders `trap[T_X]: detail at file:line:col` on stderr and exits 101, the same as any other trap (`.unwrap()` on `None`/`Error`, a failing `assert`, `panic`). The full `code → class` table lives at [`spec/prose/trap-codes.md`](../spec/prose/trap-codes.md).
 
-```gorget
-enum Fault:
-    Overflow         # integer overflow
-    DivByZero        # division or remainder by zero
-    Bounds           # out-of-bounds index
-```
-
-`Fault` is the **catchable subset** of the language's closed trap registry (D11 trap normalization; the full `code → class → catchable` table is [`spec/prose/trap-codes.md`](../spec/prose/trap-codes.md)). Its three variants — `Overflow`, `DivByZero`, `Bounds` — are exactly the catchable traps; the uncatchable classes (`.unwrap()` on `None`/`Error`, `.unwrap_error()` on `Ok`, a failing `assert`, and `panic`) are traps that panic uncatchably and cannot appear as a fault `catch` scrutinee. Every uncaught trap — catchable or not — renders `trap[T_X]: detail at file:line:col` on stderr and exits 101.
-
-Faults panic by default; a fault `catch` (§10.5) is the only way to recover one, and only locally. The variants are spelled qualified (`Fault.Overflow`, `Fault.DivByZero`, `Fault.Bounds`).
-
-- **`Fault.Overflow`** — an overflowing checked `+`/`-`/`*` (the wrapping `+%`/`-%`/`*%` forms never fault). It also covers signed division overflow: `INT_MIN / -1` and `INT_MIN % -1` are `Fault.Overflow`, **not** `Fault.DivByZero`. An out-of-range shift count (e.g. `x << 64` on a 64-bit operand) normalizes into this class too — there is no separate shift trap. An overflowing integer `**` (e.g. `1000000 ** 4`) AND an integer `**` with a negative exponent (e.g. `2 ** -1`, a domain fault) both trap `Fault.Overflow`.
-- **`Fault.DivByZero`** — a `/` or `%` whose divisor is zero.
-- **`Fault.Bounds`** — an out-of-bounds index read of an indexed array-backed collection (`Vector`, `Deque`). A negative index is a catchable `Bounds` inside a fault `catch` (and a panic outside one). Dict lookups, string indexing, and range slices are not covered.
-
-Faults are **out of the function signature** — a plain `int sum(...)` does not become a `Result`-returning function because it does arithmetic — so they never appear in a `throws` type or on the API surface.
+Faults are **out of the function signature** — a plain `int sum(...)` does not become a `Result`-returning function because it does arithmetic — so they never appear in a `throws` type or on the API surface. Programs that need to *recover* from an arithmetic fault opt in via the fallible arithmetic operators (`+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` — §7.5), which surface the fault into the ordinary `throws` / `Result[T, E]` channel. For bounds-safety, use `.get(i)` (returns `Option[T]`) or index-in-range checks; out-of-bounds indexing itself has no recovery form.
 
 **Fallible arithmetic operators (D26) — opting IN to `throws`.** The fallible arithmetic operators `+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` (§7.5) are the opposite discipline: they surface the arithmetic failure into the ordinary `throws` / `Result[T, E]` channel via the prelude-registered enum:
 
@@ -7161,9 +7132,8 @@ expr = literal | IDENTIFIER | path_expr | unary_expr | binary_expr
      | await_expr | spawn_expr | rethrow_expr | catch_expr
      | "self" | "it" | "(" expr ")" ;
 rethrow_expr = expr "rethrow" ( expr | "(" [ type ] IDENTIFIER ")" ":" expr ) ;
-catch_expr   = contract_catch | fault_catch ;
+catch_expr   = contract_catch ;
 contract_catch = expr "catch" "(" IDENTIFIER ")" ":" expr ;
-fault_catch  = expr "catch" ( "Fault" "." IDENTIFIER | IDENTIFIER ) ":" expr ;
 
 (* ── Patterns ── *)
 pattern = "_" | literal | IDENTIFIER

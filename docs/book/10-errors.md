@@ -549,92 +549,56 @@ is per-expression — plain `+`/`-`/`*` always check overflow.
 
 ---
 
-## Recovering from Faults
+## Faults Panic Uncatchably
 
-A panic isn't always the end. A small, closed set of programmer errors are **faults** — they
-panic by default, but you can opt into a local fallback when one makes sense. The faults are
-the variants of a built-in enum:
-
-```gorget
-enum Fault:
-    Overflow         # integer overflow (including INT_MIN / -1 and INT_MIN % -1)
-    DivByZero        # division or remainder by zero
-    Bounds           # out-of-bounds index into an array-backed collection
-```
-
-To recover, wrap a faultable expression in `(...) catch`. There are two forms.
-
-**Pattern form** — catch one named fault and produce a fallback:
+A small, closed set of runtime error conditions — integer overflow, division or remainder by
+zero, out-of-bounds indexing of an array-backed collection — are **faults**. They **panic
+uncatchably**: there is no lexical recovery form. An uncaught fault renders a diagnostic on
+stderr and exits, exactly like any other trap (`.unwrap()` on `None`/`Error`, a failing
+`assert`, `panic`).
 
 ```gorget
 void main():
     int big = 9223372036854775807
-    int r = (big * 2) catch Fault.Overflow: -1     # overflow caught → -1
-    int ok = (3 * 4) catch Fault.Overflow: -1      # no fault → 12
-    print(f"{r}")                                  # -1
-    print(f"{ok}")                                 # 12
+    int r = big * 2         # trap[T_Overflow]: integer overflow → exit 101
 ```
 
-**Binding form** — bind the constructed `Fault` value and `match` on which fault occurred:
+Programs that need to *recover* from an arithmetic fault opt in via the fallible arithmetic
+operators (`+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` — see [Chapter 2 §Fallible arithmetic](02-types.md)),
+which surface the fault into the ordinary `throws` / `Result[T, E]` channel:
 
 ```gorget
 void main():
-    int z = 0
-    int d = (10 / z) catch f: match f:
-        case Fault.Overflow(): 111
-        case Fault.DivByZero(): 222
-    print(f"{d}")                                  # 222
+    int big = 9223372036854775807
+    Result[int, ArithError] r = big +! 2       # Error(ArithError.Overflow)
+    match r:
+        case Ok(v):    print(f"{v}")
+        case Error(e): print("overflow")
+
+    # Inside a `throws ArithError` function, `+!` peels to T and auto-propagates:
+    int total = sum_or_throw([1, 2, 3]) catch (_): 0
+    print(f"{total}")                                # 6
+
+int sum_or_throw(Vector[int] xs) throws ArithError:  # auto-inferred from +!
+    int acc = 0
+    for x in xs:
+        acc = acc +! x                                # auto-propagates on overflow
+    return acc
 ```
 
-Out-of-bounds reads are catchable the same way:
+For bounds-safety, use `.get(i)` (returns `Option[T]`) or check the index yourself before
+indexing:
 
 ```gorget
 void main():
     Vector[int] xs = [10, 20, 30]
-    int r = (xs[10]) catch Fault.Bounds: -1        # out of bounds → -1
-    int ok = (xs[1]) catch Fault.Bounds: -1        # in bounds → 20
+    Option[int] r = xs.get(10)                      # None, no trap
+    match r:
+        case Some(v): print(f"{v}")
+        case None:    print("missing")
 ```
 
-A few rules worth keeping straight:
-
-- **Panic-by-default still holds.** A fault *outside* a `catch` panics and exits, exactly as
-  before. `catch` adds a recovery path; it does not soften the default.
-
-- **Recovery is local and lexical.** The `catch` only covers the faultable ops written
-  directly into the wrapped expression. A fault raised *inside a function the expression
-  calls* is **not** caught — it still panics:
-
-  ```gorget
-  int doubled(int x): x * 2          # overflows internally
-
-  void main():
-      int big = 9223372036854775807
-      # NOT caught — the overflow happens inside doubled(), across a call.
-      int r = (doubled(big)) catch Fault.Overflow: -1    # still panics
-  ```
-
-- **Variants are spelled qualified.** Write `Fault.Overflow`, not bare `Overflow`. A wrong
-  qualifier (`Bogus.Overflow`) is a compile-time error, never silently treated as a `Fault`.
-
-- **The categories are exact.** `INT_MIN / -1` and `INT_MIN % -1` are *overflows*
-  (`Fault.Overflow`), not div-by-zero. `Fault.Bounds` applies to array-backed collections
-  (`Vector`, `Deque`), not dict lookups or string indexing.
-
-### Fault `catch` vs contract `catch`
-
-This `catch Fault.X:` is a different construct from the `Result`/`throws` recovery you saw
-earlier. The contract form `catch (e):` (note the **parentheses**) recovers an *error thrown
-by a throwing call*:
-
-```gorget
-int port = parse_port(input) catch (e): 8080         # contract error from a throwing call
-int r = (big * 2) catch Fault.Overflow: -1           # fault from a local arithmetic op
-```
-
-They look similar but never overlap: faults are out-of-signature (a plain `int` function
-never becomes `Result`-returning just because it does arithmetic), while contract errors ride
-the function's declared `throws`/`Result` type. Use `catch (e):` for *contract* errors and
-`catch Fault.X:` for *faults*.
+Out-of-bounds indexing with `xs[i]` itself has no recovery form — it traps uncatchably.
 
 ---
 
@@ -715,7 +679,7 @@ kind differently.
 | `rethrow expr` | Replace error with a different value | `throws int` main, simple error mapping |
 | `rethrow (T e): expr` | Transform and re-throw with context | Adding context, converting error types |
 | `catch (e): expr` | Recover from error with fallback | Default values, graceful degradation |
-| `catch Fault.X: expr` | Locally recover from a fault (overflow/div0/bounds) | Recoverable arithmetic/indexing |
+| `+!` / `-!` / `*!` / `/!` / `%!` / `<<!` / `>>!` | Fallible arithmetic (returns `Result[T, ArithError]`) | Recoverable arithmetic |
 | `throws int` on main | Exit code on error | Process-level error handling |
 | `on error: block` | Cleanup on error exit only | Resource cleanup |
 | `Result[T, E] x = expr` | Capture a throwing call as `Result` | When you want to handle, not propagate |

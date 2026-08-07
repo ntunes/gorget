@@ -297,8 +297,7 @@ fn check_instruction_locals(
             check_local_id(*dst, max, ctx, errors);
             check_place_locals(base, max, ctx, errors);
         }
-        Instruction::IndexLoad { dst, base, index, .. }
-        | Instruction::FaultableIndexLoad { dst, base, index, .. } => {
+        Instruction::IndexLoad { dst, base, index, .. } => {
             check_local_id(*dst, max, ctx, errors);
             check_place_locals(base, max, ctx, errors);
             check_operand_locals(index, max, ctx, errors);
@@ -377,15 +376,6 @@ fn check_instruction_locals(
                 check_operand_locals(a, max, ctx, errors);
             }
         }
-        Instruction::FaultableCall { dst, args, fault_slot, .. } => {
-            if let Some(d) = dst {
-                check_local_id(*d, max, ctx, errors);
-            }
-            for a in args {
-                check_operand_locals(a, max, ctx, errors);
-            }
-            check_place_locals(fault_slot, max, ctx, errors);
-        }
         Instruction::CallIndirect {
             dst, callee, args, ..
         } => {
@@ -426,7 +416,7 @@ fn check_instruction_calls(
     errors: &mut Vec<ValidationError>,
 ) {
     match inst {
-        Instruction::Call { func, .. } | Instruction::FaultableCall { func, .. } => {
+        Instruction::Call { func, .. } => {
             if !callables.contains(func.as_str()) && !func.starts_with("__callable_") && !func.starts_with("__gorget_closure_call_") {
                 errors.push(ValidationError {
                     kind: ValidationErrorKind::UndefinedFunction(func.clone()),
@@ -716,7 +706,6 @@ fn instruction_write_local(inst: &Instruction) -> Option<u32> {
         | Instruction::PtrCast { dst, .. }
         | Instruction::FieldLoad { dst, .. }
         | Instruction::IndexLoad { dst, .. }
-        | Instruction::FaultableIndexLoad { dst, .. }
         | Instruction::HeapAlloc { dst, .. }
         | Instruction::HeapAllocArray { dst, .. }
         | Instruction::StructInit { dst, .. }
@@ -729,8 +718,7 @@ fn instruction_write_local(inst: &Instruction) -> Option<u32> {
         | Instruction::LoadThreadLocal { dst, .. } => Some(dst.0),
         Instruction::Call { dst: Some(d), .. }
         | Instruction::CallIndirect { dst: Some(d), .. }
-        | Instruction::CallExtern { dst: Some(d), .. }
-        | Instruction::FaultableCall { dst: Some(d), .. } => Some(d.0),
+        | Instruction::CallExtern { dst: Some(d), .. } => Some(d.0),
         _ => None,
     }
 }
@@ -781,17 +769,12 @@ fn collect_read_locals_for_validate(inst: &Instruction) -> Vec<u32> {
         Instruction::FieldLoad { base, .. } | Instruction::EnumFieldLoad { base, .. } => {
             push_place(&mut reads, base);
         }
-        Instruction::IndexLoad { base, index, .. }
-        | Instruction::FaultableIndexLoad { base, index, .. } => {
+        Instruction::IndexLoad { base, index, .. } => {
             push_place(&mut reads, base);
             push_op(&mut reads, index);
         }
         Instruction::Call { args, .. } | Instruction::CallExtern { args, .. } => {
             for a in args { push_op(&mut reads, a); }
-        }
-        Instruction::FaultableCall { args, fault_slot, .. } => {
-            for a in args { push_op(&mut reads, a); }
-            push_place(&mut reads, fault_slot);
         }
         Instruction::CallIndirect { callee, args, .. } => {
             push_op(&mut reads, callee);
@@ -1481,8 +1464,7 @@ fn for_each_read_site<'a, F: FnMut(ReadSite<'a>)>(
                         class: ReadSiteClass::FieldLoad { dst_local: *dst },
                     });
                 }
-                Instruction::IndexLoad { dst, base: _, index: _, read }
-                | Instruction::FaultableIndexLoad { dst, base: _, index: _, read, .. } => {
+                Instruction::IndexLoad { dst, base: _, index: _, read } => {
                     let Some(dst_ty) = func.locals.get(dst.0 as usize).map(|l| l.type_id) else { continue };
                     // Ptr-typed dst: raw element pointer == borrow.
                     let mode = if type_is_ptr(dst_ty, registry) { ReadMode::Borrow } else { *read };
@@ -1535,16 +1517,12 @@ fn for_each_read_site<'a, F: FnMut(ReadSite<'a>)>(
                         class: ReadSiteClass::EnumFieldLoad { dst_local: *dst, variant },
                     });
                 }
-                Instruction::Call { func: callee, args, .. }
-                | Instruction::FaultableCall { func: callee, args, .. } => {
+                Instruction::Call { func: callee, args, .. } => {
                     use crate::ir::lowering::context::ParamABI;
                     let Some(abis) = module.fn_param_abis.get(callee) else { continue };
                     for (idx, arg) in args.iter().enumerate() {
                         let abi = abis.get(idx).copied().unwrap_or(ParamABI::ByValue);
                         // Internal calls: only ByValue is shallow-copy-shaped.
-                        // (The trailing fault-slot arg of a `FaultableCall` is a
-                        // BorrowMut/Null operand, not a `Copy(p)`, so it is
-                        // skipped by the `else { continue }` below.)
                         let mode = if matches!(abi, ParamABI::ByValue) { ReadMode::Copy } else { ReadMode::Borrow };
                         let Operand::Copy(p) = arg else { continue };
                         let Some(src_ty) = resolve_place_type(p, func, registry) else { continue };
@@ -2628,13 +2606,8 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                         }
                     }
                 }
-                Instruction::Call { func: callee, args, .. }
-                | Instruction::FaultableCall { func: callee, args, .. } => {
+                Instruction::Call { func: callee, args, .. } => {
                     use crate::ir::lowering::context::ParamABI;
-                    // Try internal-call ABI table first. A participating callee's
-                    // `fn_param_abis` includes the trailing fault-slot's ByMutPtr
-                    // entry (2.1a-ii), so the slot arg index resolves to a borrow
-                    // shape (`consumes = false`) — never mis-flagged as a consume.
                     let abis = module.fn_param_abis.get(callee);
                     let is_runtime_collection = is_consume_extern(module, callee);
                     for (idx, op) in args.iter().enumerate() {
@@ -3116,8 +3089,7 @@ fn preceded_by_clone(
             Instruction::Assign { dst, .. } if dst.projections.is_empty() => Some(dst.local),
             Instruction::Call { dst: Some(d), .. }
             | Instruction::CallExtern { dst: Some(d), .. }
-            | Instruction::CallIndirect { dst: Some(d), .. }
-            | Instruction::FaultableCall { dst: Some(d), .. } => Some(*d),
+            | Instruction::CallIndirect { dst: Some(d), .. } => Some(*d),
             Instruction::BinOp { dst, .. }
             | Instruction::FaultableBinOp { dst, .. }
             | Instruction::UnOp { dst, .. }
@@ -3127,7 +3099,6 @@ fn preceded_by_clone(
             | Instruction::PtrCast { dst, .. }
             | Instruction::FieldLoad { dst, .. }
             | Instruction::IndexLoad { dst, .. }
-            | Instruction::FaultableIndexLoad { dst, .. }
             | Instruction::EnumFieldLoad { dst, .. }
             | Instruction::HeapAlloc { dst, .. }
             | Instruction::HeapAllocArray { dst, .. }
@@ -3277,7 +3248,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            participates_in_fault: false,
         });
 
         let errors = validate(&module);
@@ -3516,7 +3486,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            participates_in_fault: false,
         };
         module.functions.push(func);
 
@@ -3663,7 +3632,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            participates_in_fault: false,
         };
         module.functions.push(f);
         let errors = validate(&module);
@@ -3689,7 +3657,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            participates_in_fault: false,
         };
         module.functions.push(f);
         let errors = validate(&module);

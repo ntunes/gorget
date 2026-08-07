@@ -1,10 +1,16 @@
-# Fault-catch: a division by zero branches to the local handler and yields the
-# fallback instead of panicking (error-model.md §11).
+# Post-D25: capture div-by-zero via D26 `/!` and `%!` (Route B) — axis:
+# division fault categories.
 void main():
     int z = 0
-    int r = (10 / z) catch Fault.DivByZero: 999
-    print(f"{r}")
-    int ok = (20 / 4) catch Fault.DivByZero: 999
-    print(f"{ok}")
-    int m = (10 % z) catch Fault.DivByZero: 777
-    print(f"{m}")
+    Result[int, ArithError] r = 10 /! z
+    match r:
+        case Ok(v):    print(f"{v}")
+        case Error(_): print("999")
+    Result[int, ArithError] ok = 20 /! 4
+    match ok:
+        case Ok(v):    print(f"{v}")
+        case Error(_): print("999")
+    Result[int, ArithError] m = 10 %! z
+    match m:
+        case Ok(v):    print(f"{v}")
+        case Error(_): print("777")

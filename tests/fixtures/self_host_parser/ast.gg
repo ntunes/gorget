@@ -92,15 +92,6 @@ enum Expr:
     ESpawnBlocking(Box[SpannedExpr])
     ERethrow(Box[SpannedExpr], Option[String], Option[Box[SpannedType]], Box[SpannedExpr])
     ECatch(Box[SpannedExpr], String, Box[SpannedExpr])
-    # Local fault-catch (error-model.md §11) — a DISTINCT form from the
-    # Result `ECatch` above. `(expr) catch Fault.Overflow: h` /
-    # `(expr) catch f: match f`. Inc1 = arithmetic faults.
-    EFaultCatch(Box[SpannedExpr], FaultCatchPattern, Box[SpannedExpr])
-
-# How an EFaultCatch selects which fault(s) it intercepts.
-enum FaultCatchPattern:
-    FcpVariant(String, String)
-    FcpBinding(String)
 
 # ── Statements ───────────────────────────────────────────────
 

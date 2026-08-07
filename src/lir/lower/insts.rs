@@ -686,83 +686,6 @@ impl<'a> FuncLowering<'a> {
                 }
             }
 
-            // Fault-`catch`able cross-frame call (error-model.md §11, Increment
-            // 2.1a). The participating callee writes a fault tag into the hidden
-            // trailing `MutPtr<i32>` slot (passed as the last arg) on a deep
-            // fault; the caller checks the slot AFTER the call and BRANCHES to
-            // `fault_handler` BEFORE reading the result. Modeled on the
-            // `FaultableIndexLoad` split (branch-before-deref). The callee is
-            // always a known user fn in `func_index`, so delegate the call emit
-            // to the shared `Call` arm (handles result store + post-call zeros),
-            // then split the block on `slot != 0`.
-            Instruction::FaultableCall { dst, func, args, fault_slot, overflow_handler, divzero_handler, bounds_handler } => {
-                // 1. Emit the call exactly like a plain `Call` (the slot `&arg`
-                //    is already the last element of `args`; the result store is
-                //    a no-op-if-unread sentinel on the fault path).
-                let as_call = Instruction::Call {
-                    dst: *dst,
-                    func: func.clone(),
-                    args: args.clone(),
-                    reason: None,
-                };
-                bb = self.lower_instruction(&as_call, bb);
-
-                // 2. TAG-DISPATCH (error-model.md §11, Inc-2.1c): read the slot
-                //    tag VALUE and dispatch to the matching per-category handler.
-                //    A single `!= 0` branch can't distinguish Overflow from
-                //    DivByZero (it would route both to one entry, constructing
-                //    the WRONG `Fault` variant — the §2.3 silent miscompile). The
-                //    tags are the `Fault` enum discriminants + 1 (0 = "no fault"),
-                //    read from the typed registry — no magic `1`/`2` literal
-                //    (devbook/24 rule 2). The per-category handlers are ALWAYS
-                //    `Some` here (the gate resolves an uncaught category to its
-                //    panic block), so a category this scope doesn't catch
-                //    re-panics automatically — uniform across both backends.
-                let overflow_tag =
-                    (self.resolve_variant_ordinal("Fault", "Overflow") + 1) as i32;
-                let divzero_tag =
-                    (self.resolve_variant_ordinal("Fault", "DivByZero") + 1) as i32;
-                let bounds_tag =
-                    (self.resolve_variant_ordinal("Fault", "Bounds") + 1) as i32;
-
-                // Emit one `tag == N → handler` test+branch, splitting `cur`.
-                // Returns the continuation (slot-not-this-tag) block. The slot is
-                // an i32, so the tag constant is i32 (type-matched comparison).
-                let emit_tag_branch = |this: &mut Self, cur: BlockId, slot_val: ValueId, tag: i32, handler: ir::types::BlockId| -> BlockId {
-                    let tag_const = this.lower_constant(&Constant::I32(tag), cur);
-                    let flag = this.lir_func.next_value();
-                    this.push_inst(cur, Inst::Cmp {
-                        dst: flag, op: CmpOp::Eq, lhs: slot_val, rhs: tag_const,
-                    });
-                    let handler_lir = this.block_map[handler.0 as usize];
-                    let cont = this.lir_func.add_block();
-                    this.set_terminator(cur, Term::Branch {
-                        cond: flag,
-                        then_block: handler_lir,
-                        then_args: vec![],
-                        else_block: cont,
-                        else_args: vec![],
-                    });
-                    cont
-                };
-
-                // Load the slot ONCE, then chain a per-category equality branch.
-                let slot_val = self.lower_place_load(fault_slot, bb);
-                let mut cur = bb;
-                if let Some(h) = overflow_handler {
-                    cur = emit_tag_branch(self, cur, slot_val, overflow_tag, *h);
-                }
-                if let Some(h) = divzero_handler {
-                    cur = emit_tag_branch(self, cur, slot_val, divzero_tag, *h);
-                }
-                if let Some(h) = bounds_handler {
-                    cur = emit_tag_branch(self, cur, slot_val, bounds_tag, *h);
-                }
-                // Continuation: tag is 0 (no fault) — the result (already stored
-                // to `dst`) is read by subsequent instructions in this block.
-                bb = cur;
-            }
-
             Instruction::CallExtern { dst, func, args } => {
                 // Intercept unwrap/expect before func_index — these pseudo-functions
                 // may be in func_index but have no C implementation.
@@ -1225,68 +1148,6 @@ impl<'a> FuncLowering<'a> {
                     });
                     self.store_to_local(*dst, result, bb);
                 }
-            }
-
-            // Fault-`catch`able array element read (error-model.md §11,
-            // `Fault.Bounds`). The GIR build (`exprs/methods.rs`) emits this
-            // ONLY for an array element read inside a fault scope that catches
-            // `Bounds`. Use the non-panicking `gorget_array_safe_get` (returns
-            // NULL on OOB — signed index, so negatives are OOB too), test the
-            // returned pointer for NULL, then BRANCH: NULL → the GIR handler
-            // (block_map remapped), non-NULL → a continuation that materializes
-            // the element by SHARING the `IndexLoad` clone/move-zero/str-ptr
-            // logic (NULL is never deref'd before the branch — branch-before-
-            // deref, unwind-free). No goto, no backend-specific routing.
-            Instruction::FaultableIndexLoad { dst, base, index, read, fault_handler } => {
-                let base_type = self.effective_place_type(base);
-                let base_type_name = self.resolve_type_name(base_type);
-                // Resolve the collection pointer exactly like the IndexLoad
-                // array path (deref a Ptr-typed field-load ref that isn't a
-                // borrowed-param ref_local).
-                let mut base_val = self.lower_place_addr(base, bb);
-                let base_gir = self.gir_func.locals[base.local.0 as usize].type_id;
-                let is_ref_local = self.gir_func.locals.get(base.local.0 as usize)
-                    .map_or(false, |l| l.slot_kind == crate::ir::SlotKind::BorrowedPtr);
-                if matches!(self.gir_types.get(base_gir), Some(GirType::Ptr(_)))
-                    && base.projections.is_empty()
-                    && !is_ref_local
-                {
-                    let deref = self.lir_func.next_value();
-                    self.push_inst(bb, Inst::Load {
-                        dst: deref, ptr: base_val, ty: LirType::Ptr,
-                    });
-                    base_val = deref;
-                }
-                let idx = self.lower_operand(index, bb);
-                // gorget_array_safe_get(&arr, idx) → element ptr or NULL on OOB.
-                self.ensure_extern("gorget_array_safe_get", &[LirType::Ptr, LirType::I64], &LirType::Ptr);
-                let abis = self.lookup_arg_abis("gorget_array_safe_get");
-                let ptr_val = self.lir_func.next_value();
-                self.push_inst(bb, Inst::CallExtern {
-                    dst: Some(ptr_val),
-                    name: "gorget_array_safe_get".to_string(),
-                    args: vec![base_val, idx],
-                    arg_abis: abis,
-                });
-                // flag = (ptr_val == NULL). Branch BEFORE any deref.
-                let null = self.lower_constant(&Constant::Null, bb);
-                let flag = self.lir_func.next_value();
-                self.push_inst(bb, Inst::Cmp {
-                    dst: flag, op: CmpOp::Eq, lhs: ptr_val, rhs: null,
-                });
-                let handler_lir = self.block_map[fault_handler.0 as usize];
-                let cont_bb = self.lir_func.add_block();
-                self.set_terminator(bb, Term::Branch {
-                    cond: flag,
-                    then_block: handler_lir,
-                    then_args: vec![],
-                    else_block: cont_bb,
-                    else_args: vec![],
-                });
-                // Continuation: in-bounds — materialize the element (shared with
-                // the IndexLoad array path; ptr_val is non-NULL here).
-                self.materialize_collection_element(*dst, ptr_val, &base_type_name, *read, cont_bb);
-                bb = cont_bb;
             }
 
             // -- Enum --
@@ -1864,15 +1725,11 @@ impl<'a> FuncLowering<'a> {
     }
 
     /// Materialize a collection element from a raw element pointer (`ptr_val`,
-    /// the void* result of `gorget_array_get` / `gorget_array_safe_get` /
-    /// `gorget_map_get`). The single source of truth for the element
-    /// Ptr-return-vs-deref split, the str-ptr marking, and the clone-vs-move-zero
-    /// element handling (collection clone, recursive deep-clone, plain Load +
-    /// move-zero `Memset`). SHARED between `IndexLoad` (the array/dict path) and
-    /// `FaultableIndexLoad` (the `Fault.Bounds` path) so the faultable read gets
-    /// the exact same drop/clone semantics (error-model.md §11 — no duplication).
-    /// `ptr_val` must be a VALID element pointer here (the faultable path branches
-    /// on NULL before calling this; it is never NULL when this runs).
+    /// the void* result of `gorget_array_get` / `gorget_map_get`). Single source
+    /// of truth for the element Ptr-return-vs-deref split, the str-ptr marking,
+    /// and the clone-vs-move-zero element handling (collection clone, recursive
+    /// deep-clone, plain Load + move-zero `Memset`). `ptr_val` must be a VALID
+    /// element pointer here.
     fn materialize_collection_element(
         &mut self,
         dst: ir::types::LocalId,

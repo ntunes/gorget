@@ -16,7 +16,7 @@ from ast import SExpr, SVarDecl, SReturn
 from ast import ERange, EIf, EImplicitClosure, EArrayLiteral, ETupleLiteral
 from ast import EDictLiteral, EStructLiteral, EDotShorthand, ETry, EMove, EPropagate, EMutableBorrow, EDeref
 from ast import EListComp, ESetComp, EDictComp, EDefaultOp, EAwait, ESpawn, ESpawnBlocking
-from ast import ERethrow, ECatch, EFaultCatch, FaultCatchPattern, FcpBinding, FcpVariant
+from ast import ERethrow, ECatch
 from ast import SAssign, SCompoundAssign, SThrow, SBreak, SContinue, SPass, SFor, SWhile
 from ast import SLoop, SMatch, SWith, SAssert, SAssertReturn, SNamedScope, SSelect, SOnError
 from ast import SItem, SSnapshot, SMeta, SMetaFor, SMetaIf, SMetaConst, SMetaForMatch
@@ -2917,12 +2917,6 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             # (i) audits the SH's carve-out set vs Rust's three and (ii)
             # investigates the SH type-interning drift. Filed under Round
             # XXXII SH-lag follow-ups in TODO.md.
-        case EFaultCatch(fc_inner, _fc_pat, fc_handler):
-            check_safety_expr(*fc_inner, scope_id, &state, &scopes, &types, &ctx)
-            check_safety_expr(*fc_handler, scope_id, &state, &scopes, &types, &ctx)
-            # ⚠ Track A · SH mirror REVERTED at round-close 2026-08-06 — see
-            # the ECatch arm above for the rationale. Deferred to a follow-up
-            # round.
         case EFString(_tmpl, exprs, _specs):
             for fe in exprs:
                 check_safety_expr(fe, scope_id, &state, &scopes, &types, &ctx)

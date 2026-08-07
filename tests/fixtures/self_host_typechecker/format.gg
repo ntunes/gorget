@@ -4,7 +4,7 @@
 from std.collections import Vector
 from std.conv import int_to_str, float_to_str
 from std.math import floor, abs
-from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, SpannedType, SpannedPattern, FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch, Param, ImportStmt, FaultCatchPattern
+from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, SpannedType, SpannedPattern, FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch, Param, ImportStmt
 
 # ── Float formatting (decimal, no scientific notation) ──────────
 # Matches Rust's Display for f64: shortest decimal without e+/e- notation.
@@ -333,17 +333,6 @@ String format_expr(SpannedExpr se):
             return rhs
         case ECatch(expr, name, recovery):
             return f"{format_expr(*expr)} catch ({name}): {format_expr(*recovery)}"
-        case EFaultCatch(fc_expr, fc_pattern, fc_handler):
-            # Mirrors Rust gg's `format_expr_canonical` FaultCatch arm:
-            # `{inner} catch Fault.{variant}: {handler}` (variant form) /
-            # `{inner} catch {name}: {handler}` (binding form).
-            String fc_pat = ""
-            match fc_pattern:
-                case FcpVariant(fc_qual, fc_var):
-                    fc_pat = fc_qual + "." + fc_var
-                case FcpBinding(fc_name):
-                    fc_pat = fc_name
-            return f"{format_expr(*fc_expr)} catch {fc_pat}: {format_expr(*fc_handler)}"
         else:
             return "?"
 

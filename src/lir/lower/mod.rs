@@ -1496,10 +1496,6 @@ impl<'a> FuncLowering<'a> {
         let return_type = map_gir_type_with_structs(&gir_func.return_type, gir_types, Some(struct_reg));
         let mut lir_func = LirFunction::new(gir_func.name.clone(), params, return_type);
         lir_func.is_test_fn = gir_func.is_test_fn;
-        // Cross-frame fault (Inc-2.1a): propagate the synthesized trailing
-        // fault-slot count so the first-class adapter generation passes NULL for
-        // it instead of forwarding a phantom arg through the callable ABI.
-        lir_func.fault_slot_param_count = if gir_func.participates_in_fault { 1 } else { 0 };
         lir_func.display_name = gir_func.display_name.clone();
         // Propagate param name hints (GIR locals[1..N] are the params).
         lir_func.param_names = (0..gir_func.params.len())
@@ -1776,7 +1772,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            participates_in_fault: false,
         };
         module.functions.push(func);
         module
@@ -1848,7 +1843,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            participates_in_fault: false,
         };
         module.functions.push(func);
 
@@ -1881,7 +1875,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            participates_in_fault: false,
         });
         module.functions.push(Function {
             name: "caller".into(),
@@ -1907,7 +1900,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            participates_in_fault: false,
         });
 
         let lir = lower_module(&module);
@@ -1955,7 +1947,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            participates_in_fault: false,
         });
 
         let lir = lower_module(&module);
@@ -2003,7 +1994,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            participates_in_fault: false,
         });
 
         let lir = lower_module(&module);

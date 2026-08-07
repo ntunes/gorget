@@ -38,11 +38,11 @@ use crate::trace::TraceEvent;
 
 // ── Exit codes (deliverable 6) ─────────────────────────────────────────────
 // The `T_`-code trap format + exit 101 are normative (D11 trap normalization);
-// the code→class→catchable registry is `spec/prose/trap-codes.md`.
+// the code→class registry is `spec/prose/trap-codes.md`.
 /// Program ran to completion with a value.
 pub const EXIT_VALUE: i32 = 0;
-/// An uncaught trap (§10.9 catchable subset OR an uncatchable panic / unwrap /
-/// assert). All trap classes exit 101; the `T_` code discriminates them.
+/// An uncaught trap (panic / unwrap / assert / arithmetic fault / bounds fault).
+/// All trap classes exit 101; the `T_` code discriminates them.
 pub const EXIT_TRAP: i32 = 101;
 /// A statically-rejected program (a static rejection — parse, elaboration, OR
 /// may-move `IllFormed`; ONE class per the ratified TOOLCHAIN EXIT-CODE SCHEME
@@ -58,9 +58,8 @@ pub const EXIT_FUEL: i32 = 103;
 /// The closed registry of trap classes (RFC §2.3 `Trap(TrapKind)`; D11 trap
 /// normalization). Every variant's stable `T_<VariantName>` code derives
 /// mechanically from its identity (`code()`), mirroring `E_<VariantName>`
-/// (`SemanticErrorKind::code`). The §10.9 `Fault` catchable subset is exactly
-/// `Overflow | DivByZero | Bounds` (`is_catchable`); the rest
-/// (unwrap / assert / panic) are uncatchable.
+/// (`SemanticErrorKind::code`). All traps are uncatchable (D25 removed the
+/// lexical fault-catch recovery form).
 ///
 /// A variant's detail payload is for the RENDERED human line only — it is
 /// NEVER compared by conformance (Q1: `{T_ code, exit 101}` is the contract,
@@ -108,14 +107,6 @@ impl TrapKind {
             TrapKind::AssertFailed(_) => "T_AssertFailed",
             TrapKind::Panic(_) => "T_Panic",
         }
-    }
-
-    /// The §10.9 `Fault` catchable subset — a fault `catch` may recover exactly
-    /// these; the rest panic uncatchably. A PURE registry accessor (ggdef models
-    /// no `catch`): its consumers are the §10.9 prose subset and the T2a parity
-    /// lint.
-    pub fn is_catchable(&self) -> bool {
-        matches!(self, TrapKind::Overflow | TrapKind::DivByZero | TrapKind::Bounds)
     }
 
     /// The human-readable detail for the rendered `trap[T_X]: <detail>` line.

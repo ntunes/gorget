@@ -443,15 +443,6 @@ pub struct Function {
     /// Used by the `shared_async` transform to rewrite inner spawns to pass
     /// the `Shared[Mutex[T]]` wrapper instead of the facade value.
     pub inner_shared_spawns: Vec<InnerSharedSpawn>,
-    /// Cross-frame fault propagation (error-model.md §11, Inc-2.1a): true iff
-    /// this function PARTICIPATES — its LAST param is a SYNTHESIZED trailing
-    /// `MutPtr<i32>` fault-slot that is NOT part of its callable type. Direct
-    /// callers pass the slot; a value-position / closure-adapter invocation
-    /// (2-arg callable ABI) must pass `NULL` for it (the callee's fault arm then
-    /// panics inline — indirect propagation is deferred to 2.3b). Typed flag,
-    /// set at the source in `lower_function`; read by the first-class adapter
-    /// generation so it doesn't forward a phantom slot arg. (devbook/24 rule 2.)
-    pub participates_in_fault: bool,
 }
 
 /// Metadata for an inner spawn call inside a function that may need rewriting
@@ -904,7 +895,6 @@ mod tests {
             def_span: None,
             with_refresh_pairs: Vec::new(),
             inner_shared_spawns: Vec::new(),
-            participates_in_fault: false,
         });
         assert_eq!(module.functions.len(), 1);
         let f = module.find_function("main").unwrap();

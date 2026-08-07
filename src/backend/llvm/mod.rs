@@ -2501,25 +2501,10 @@ fn emit_intrinsic_declarations(out: &mut String, module: &LirModule, snames: &Ha
             param_decls.push(format!("ptr sret({ret_llvm}) %a.out"));
         }
         param_decls.push("ptr %a.env".to_string()); // env (ignored)
-        // Cross-frame fault (Inc-2.1b): a PARTICIPATING fn has synthesized trailing
-        // `MutPtr<i32>` fault-slot param(s) that are NOT part of its callable type.
-        // The adapter is invoked through the user-arity callable ABI, so it must
-        // declare ONLY the user params and pass `null` for the trailing slot(s) —
-        // forwarding a phantom slot arg writes a fault tag through a wild pointer
-        // (memory corruption / UB call-signature mismatch). `null` makes the callee's
-        // fault arm panic inline = panic-by-default for an indirectly-invoked fault.
-        // Typed count off the LIR function, never name/shape-matched (devbook/24
-        // rule 2). Mirrors the C adapter (src/backend/c_lir/mod.rs).
-        let user_param_count = target.params.len().saturating_sub(target.fault_slot_param_count);
-        for (i, p) in target.params.iter().take(user_param_count).enumerate() {
+        for (i, p) in target.params.iter().enumerate() {
             let ty = llvm_arg_type(p, snames, &module.structs);
             param_decls.push(format!("{ty} %a.p{i}"));
             param_names.push(format!("{ty} %a.p{i}"));
-        }
-        // Append `null` for each synthesized trailing fault-slot param (panic-by-default).
-        for p in target.params.iter().skip(user_param_count) {
-            let ty = llvm_arg_type(p, snames, &module.structs);
-            param_names.push(format!("{ty} null"));
         }
 
         // Forward call to target

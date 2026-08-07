@@ -31,7 +31,6 @@ from lir import lir_push_inst, lir_set_term
 from lir import lir_mod_add_struct, lir_mod_add_function, new_lir_module
 from lower import get_fn_param_types, type_id_to_name
 from gir import EnumCategory, enum_category_of, ENUM_CAT_OPTION, ENUM_CAT_RESULT
-from gir import participates_in_fault
 from std.collections import Vector, Dict
 from std.conv import int_to_str
 from std.conv import float_to_bits
@@ -5292,15 +5291,7 @@ LirFunction lir_lower_function(GirFunction gfn, GirModule &gmod, Dict[String, in
     for spt in param_types:
         saved_param_types.push(spt)
 
-    # Cross-frame fault (Inc-2.1a-iv): a participating callee carries one
-    # synthesized trailing `GtMutPtr(i32)` fault-slot param; record the count so
-    # the closure adapter declares ONLY the user params + passes NULL for the
-    # slot (a phantom forwarded slot is a wild write). Typed read of the module
-    # set, never name-matched (devbook/24 rule 2); 0 for the common case.
-    int fault_slot_count = 0
-    if participates_in_fault(gmod, gfn.name):
-        fault_slot_count = 1
-    LirFunction f = LirFunction(gfn.name, param_types, ret_type, [], [], 0, false, "", [], [], [], [], fault_slot_count)
+    LirFunction f = LirFunction(gfn.name, param_types, ret_type, [], [], 0, false, "", [], [], [], [])
 
     # Create slots for all GIR locals
     Vector[int] local_to_slot = []

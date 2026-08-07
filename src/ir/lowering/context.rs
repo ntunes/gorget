@@ -308,28 +308,6 @@ pub struct FunctionState {
     /// guards correct (at most one runtime clone). Only a WRITE to the local
     /// (`lower_assign` / `lower_compound_assign`) removes the entry.
     pub cow_lazy_mat_flag: FxHashMap<LocalId, LocalId>,
-    /// Active fault-catch scope (error-model.md §11). When `Some`, a faultable
-    /// arithmetic op (`a*b`, `a/b`, …) emitted DIRECTLY into the wrapped
-    /// expression's basic blocks branches to a handler block instead of
-    /// panicking. A scoped push/pop (NOT the one-shot `suppress_auto_prop`) —
-    /// it must survive the whole left-operand subtree. Only the innermost scope
-    /// is active (a nested fault-catch saves and restores the outer one).
-    ///
-    /// **2.1a override (was: "CLEARED at any Call/CallExtern boundary so a
-    /// callee's faults stay deep"):** the call-site gate now CONSULTS this scope
-    /// (+ the callee's `participates_in_fault` flag) to route a `FaultableCall`,
-    /// so the scope SURVIVES the call boundary for handler routing. A
-    /// participating callee's deep fault propagates to the caller's handler; a
-    /// non-participating callee's faults still panic deep (it has no slot param).
-    pub fault_scope: Option<FaultScope>,
-    /// The synthesized trailing `MutPtr<i32>` fault-slot param of a participating
-    /// callee (error-model.md §11, Inc-2.1a). `Some(local)` when the function
-    /// being lowered PARTICIPATES in cross-frame fault propagation — its body's
-    /// uncaught faultable ops branch to a synthesized fault-RETURN block that
-    /// writes the tag through this slot (NULL-checked) and early-exits. `None`
-    /// for a non-participating function. Set in `lower_function` before body
-    /// lowering, read by the fault-return block emit.
-    pub fault_slot_param: Option<LocalId>,
     /// Memoized `is`-scrutinee locals, keyed by the `Expr::Is` node's span
     /// start. When an `Expr::Is` is lowered as a boolean VALUE (the tag test in
     /// an `if`/`elif`/`while` condition, an expr-`if`, or an `and`-chain), the
@@ -361,42 +339,6 @@ pub struct FunctionState {
     /// read), and the whole map is cleared en masse per-function via `Default`
     /// (`clear_locals`) — so a stale entry can never be reused across functions.
     pub is_scrut_memo: FxHashMap<usize, (LocalId, TypeId)>,
-}
-
-/// The handler-block targets an active fault-`catch` routes faults to.
-/// `BlockId` is the GIR block id; GIR→LIR lowering maps it to the LIR block via
-/// the function's `block_map`. A `None` field means that fault category is NOT
-/// caught by this scope (it panics by default) — e.g. `catch Fault.Overflow:`
-/// sets only `overflow_handler`, leaving `divzero_handler` `None`.
-#[derive(Clone, Copy, Debug)]
-pub struct FaultScope {
-    /// The USER's `Fault.Overflow` catch entry (binding or `catch
-    /// Fault.Overflow:`), or `None` if this scope doesn't catch overflow.
-    /// Add/Sub/Mul become faultable only when this is `Some`; a signed Div/Rem
-    /// `TYPE_MIN/-1` overflow routes here if `Some`, else to `div_overflow_panic`.
-    pub overflow_handler: Option<BlockId>,
-    /// The USER's `Fault.DivByZero` catch entry, or `None`. A Div/Rem `rhs == 0`
-    /// routes here if `Some`, else to `div_zero_panic`.
-    pub divzero_handler: Option<BlockId>,
-    /// The USER's `Fault.Bounds` catch entry, or `None`. An out-of-bounds array
-    /// index read becomes a `FaultableIndexLoad` branching here only when `Some`.
-    pub bounds_handler: Option<BlockId>,
-    /// GIR block that panics `"integer overflow"` — the UNCAUGHT-`TYPE_MIN/-1`
-    /// destination for a Div/Rem in a scope that doesn't catch `Fault.Overflow`
-    /// (partial-catch). So a Div/Rem ALWAYS has both fault categories handled
-    /// (user entry OR panic) at GIR — the LIR just branches, no LIR-level panic
-    /// (uniform across both backends, error-model.md §11 (C) partial-catch).
-    pub div_overflow_panic: BlockId,
-    /// GIR block that panics `"division by zero"` — the UNCAUGHT-div0
-    /// destination for a Div/Rem in a scope that doesn't catch `Fault.DivByZero`.
-    pub div_zero_panic: BlockId,
-    /// GIR block that panics `"index out of bounds"` — the UNCAUGHT-bounds
-    /// destination at the CROSS-FRAME gate: when a participating callee can
-    /// raise `Fault.Bounds` but THIS scope catches only an arith category, the
-    /// gate resolves `bounds_handler.unwrap_or(bounds_panic)` so the
-    /// `FaultableCall` carries an ALWAYS-Some bounds handler and an uncaught
-    /// Bounds tag re-panics (mirrors `div_overflow_panic`/`div_zero_panic`, 2.1d).
-    pub bounds_panic: BlockId,
 }
 
 /// WHERE a materialize directive fires relative to the scope structure — the
@@ -654,17 +596,6 @@ pub struct LoweringContext<'a> {
     /// monomorph collection). Each function's body is the load-bearing
     /// `<T> __r = <RHS>; return __r` shape — see `lower_static_decl`.
     pub synthetic_static_init_fns: Vec<crate::parser::ast::FunctionDef>,
-    /// Functions that PARTICIPATE in cross-frame fault propagation
-    /// (error-model.md §11, Increment 2.1a). A function is in this set iff
-    /// (a) its body has a reachable-uncaught faultable arithmetic op AND (b) it
-    /// is directly called from inside a `FaultCatch` scope that catches the
-    /// fault. The intersection bounds the blast radius: ONLY these functions
-    /// get the synthesized trailing `MutPtr<i32>` fault-slot param, and every
-    /// direct caller of one of them passes the trailing arg (uniform signature,
-    /// D5). Computed once in the module pre-pass; read at the signature lowering
-    /// AND the call-site gate via [`Self::participates_in_fault`]. Typed flag,
-    /// set at the source — never re-derived from a name (devbook/24 rule 2).
-    pub participating_fault_fns: rustc_hash::FxHashSet<String>,
 }
 
 /// Snapshot of lowering state taken at branch entry, restored at branch exit.
@@ -764,17 +695,7 @@ impl<'a> LoweringContext<'a> {
             lower_fn_sub_times: std::collections::HashMap::new(),
             stmt_nested_dur: std::time::Duration::ZERO,
             synthetic_static_init_fns: Vec::new(),
-            participating_fault_fns: rustc_hash::FxHashSet::default(),
         }
-    }
-
-    /// Whether `name` participates in cross-frame fault propagation
-    /// (error-model.md §11, Increment 2.1a) — i.e. its lowered signature has a
-    /// synthesized trailing `MutPtr<i32>` fault-slot param and every direct
-    /// caller must pass the trailing arg. Read at the signature lowering and
-    /// the call-site gate. See [`Self::participating_fault_fns`].
-    pub fn participates_in_fault(&self, name: &str) -> bool {
-        self.participating_fault_fns.contains(name)
     }
 
     /// Populate fn_sigs and runtime_callees from the BuiltinTypeProtocol declarations.

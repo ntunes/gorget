@@ -1,9 +1,0 @@
-# Fault-catch over a compound expression: the catch covers every faultable op
-# emitted directly into the wrapped expression's blocks, so the overflow in
-# `big * 2` is caught even though `100 / 5` runs first (error-model.md §11.5).
-void main():
-    int big = 9223372036854775807
-    int r = (big * 2 + 100 / 5) catch Fault.Overflow: -7
-    print(f"{r}")
-    int ok = (3 * 4 + 100 / 5) catch Fault.Overflow: -7
-    print(f"{ok}")

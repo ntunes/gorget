@@ -641,8 +641,8 @@ struct TypeChecker<'a> {
     diverging_exprs: rustc_hash::FxHashSet<Span>,
     /// Spans of `match` statements/expressions (the span passed to
     /// `check_match_exhaustiveness`) whose arm set is known to cover every
-    /// possible scrutinee value WITHOUT an `else` arm (exhaustive enum match,
-    /// unguarded catch-all pattern, or the panic-by-default `Fault` enum).
+    /// possible scrutinee value WITHOUT an `else` arm (exhaustive enum match
+    /// or an unguarded catch-all pattern).
     /// Consulted by the definite-return analysis.
     exhaustive_matches: rustc_hash::FxHashSet<Span>,
     /// Map from method call span start → `MethodResolution` (D36: extended
@@ -1052,11 +1052,11 @@ impl<'a> TypeChecker<'a> {
     /// pass via `unify`'s Never rule at `:985-990`.
     ///
     /// Track A · Core #10 (lower-or-reject / silent-fallthrough): before
-    /// this helper the two `Expr::Catch` / `Expr::FaultCatch` arms called
-    /// `infer_expr(recovery)` and DISCARDED the result, so the outer
-    /// VarDecl unified a fabricated OK type against itself and any
-    /// wrong-typed recovery reached codegen (silent heap-ptr-as-int64 on
-    /// same-layout mismatches). Every arm of that class now routes here.
+    /// this helper the `Expr::Catch` arm called `infer_expr(recovery)` and
+    /// DISCARDED the result, so the outer VarDecl unified a fabricated OK
+    /// type against itself and any wrong-typed recovery reached codegen
+    /// (silent heap-ptr-as-int64 on same-layout mismatches). Every arm of
+    /// that class now routes here.
     /// `tests/lints.rs::recovery_arms_route_through_check_recovery_type`
     /// pins the invariant.
     fn check_recovery_type(&mut self, recovery: &Spanned<Expr>, expected: TypeId) {
@@ -4875,78 +4875,6 @@ impl<'a> TypeChecker<'a> {
                 self.check_recovery_type(recovery, expected);
                 if let Some(t) = ok_ty { t } else { inner_type }
             }
-            Expr::FaultCatch { expr: inner, pattern, handler } => {
-                // The wrapped expression is a plain (non-throwing) value — its
-                // type IS the fault-catch's value type on the no-fault path.
-                // Suppress the throws-call auto-prop peel: a faultable `a*b` is
-                // never a Result, and the handler reads the raw value, not a
-                // Result. (error-model.md §11.2: a fault-catch can't swallow a
-                // contract error precisely because the auto-prop hook fires only
-                // on Call/MethodCall operands returning Result.)
-                self.suppress_auto_prop = true;
-                let inner_type = self.infer_expr(inner);
-                match pattern {
-                    FaultCatchPattern::Variant { qualifier, variant } => {
-                        // `catch Fault.Overflow:` — the qualifier MUST be the
-                        // built-in `Fault` enum (a fault-catch can only name a
-                        // `Fault` variant). Reject a wrong qualifier
-                        // (`Bogus.Overflow`) rather than silently accepting it.
-                        if qualifier.node != "Fault" {
-                            self.error(
-                                SemanticErrorKind::UndefinedName {
-                                    name: format!("{}.{}", qualifier.node, variant.node),
-                                    suggestion: Some(format!("Fault.{}", variant.node)),
-                                },
-                                qualifier.span,
-                            );
-                        } else {
-                            // Validate the variant is a real `Fault` variant;
-                            // nothing is bound.
-                            self.check_fault_variant(variant);
-                        }
-                    }
-                    FaultCatchPattern::Binding(name) => {
-                        // `catch f:` binds `f` to the constructed `Fault` value.
-                        if let Some(fault_def_id) = self.scopes.lookup("Fault") {
-                            let fault_ty = self.types.insert(ResolvedType::Defined(fault_def_id));
-                            if let Some(def_id) = self.scopes.lookup_def_by_span(
-                                &name.node, name.span,
-                            ) {
-                                self.scopes.get_def_mut(def_id).type_id = Some(fault_ty);
-                            }
-                        }
-                    }
-                }
-                // The handler runs on the fault path and must produce a value
-                // of the wrapped expression's type. Route it through the same
-                // helper as `Expr::Catch` above (Core #4 — one class, both
-                // arms) so the handler's inferred type is compared against
-                // the expected `inner_type` and literal shapes still get the
-                // hint they need (a `match`-handler's arms already unify
-                // among themselves — this catches the whole-handler slot).
-                self.check_recovery_type(handler, inner_type);
-                inner_type
-            }
-        }
-    }
-
-    /// Validate that `variant` names a real `Fault` enum variant (the only enum
-    /// a fault-`catch` pattern may name). Emits `UndefinedName` otherwise.
-    fn check_fault_variant(&mut self, variant: &Spanned<String>) {
-        let is_fault_variant = self
-            .scopes
-            .lookup("Fault")
-            .and_then(|def_id| self.enum_variants.get(&def_id))
-            .map(|info| info.variants.iter().any(|(n, _)| n == &variant.node))
-            .unwrap_or(false);
-        if !is_fault_variant {
-            self.error(
-                SemanticErrorKind::UndefinedName {
-                    name: format!("Fault.{}", variant.node),
-                    suggestion: None,
-                },
-                variant.span,
-            );
         }
     }
 
@@ -5615,20 +5543,6 @@ impl<'a> TypeChecker<'a> {
             }) {
                 self.exhaustive_matches.insert(span);
             }
-            return;
-        }
-
-        // Panic-by-default over the closed `Fault` enum (error-model.md §11.1.5):
-        // a fault match may OMIT variants — the omitted ones fall through to a
-        // runtime panic, NOT a compile error. Keyed on the `Fault` enum ONLY, so
-        // every OTHER enum stays strictly exhaustive. (Increment 1: a fault
-        // handler usually carries an `else:`, which already covers it; this rule
-        // makes the `else`-less form legal too.)
-        if self.scopes.get_def(enum_def_id).name == "Fault" {
-            // Omitted variants fall through to a runtime PANIC — control
-            // diverges on them, so the match counts as covered for the
-            // definite-return analysis.
-            self.exhaustive_matches.insert(span);
             return;
         }
 

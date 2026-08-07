@@ -1,7 +1,0 @@
-# Fault.Bounds with a NEGATIVE index (error-model.md §11.6 caveat): a negative
-# index is a CATCHABLE Bounds INSIDE a catch (gorget_array_safe_get returns NULL
-# for index < 0), and a panic OUTSIDE one. Here it's caught → the fallback.
-void main():
-    Vector[int] xs = [10, 20, 30]
-    int r = (xs[-1]) catch Fault.Bounds: -1
-    print(f"{r}")

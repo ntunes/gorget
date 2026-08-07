@@ -15,7 +15,7 @@ from types import TypeTable, ResolvedType
 from gir import GirModule, GirFunction, GirLocal, BasicBlock, Instruction, Terminator, Operand, GirType, GirExtern, GirTypeInfo, GirFieldInfo, GirEnumVariantInfo, LiftedClosure, ClosureCapture, ResourceMetadata, CollectionKind, ConsumeKind
 from gir import BOOL_TYPE, I8_TYPE, I16_TYPE, I32_TYPE, I64_TYPE, U8_TYPE, U16_TYPE, U32_TYPE, U64_TYPE, F32_TYPE, F64_TYPE, UNIT_TYPE, PRIM_COUNT
 from gir import CAP_BY_VALUE, CAP_BY_MUT_REF
-from gir import init_type_table, register_type, lookup_or_register_named, register_ptr, participates_in_fault, enum_variant_index
+from gir import init_type_table, register_type, lookup_or_register_named, register_ptr, enum_variant_index
 from gir import GirGlobal, GirGlobalField, gir_mod_add_global, GGINIT_FN_REF, GGINIT_STRUCT
 from gir import GGSTATIC_RUNTIME, GGSTATIC_BYTES, static_put_bytes
 from gir import OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_REM, OP_MOD
@@ -58,50 +58,6 @@ from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dic
 # (0 reserved for "no fault" — never a magic literal, devbook/24 rule 2).
 # `panic_msg` is the per-category NULL-slot message. Mirrors Rust gg's
 # `fill_fault_return_block` (`src/ir/lowering/functions.rs`).
-void fill_fault_return_block(LowerCtx &ctx, GirModule &gmod, int return_bb, int slot_lid, int ret_type, String variant, String panic_msg):
-    # Tag = `Fault.<variant>` ordinal + 1 (0 reserved for "no fault"). Typed
-    # lookup off the enum registry — no magic `1`/`2`/`3` (devbook/24 rule 2).
-    int fault_ord = enum_variant_index(gmod, "Fault", variant)
-    int fault_tag = fault_ord + 1
-    if fault_ord < 0:
-        # Fault enum somehow unregistered — fall back to the Phase-1 ordering
-        # (Overflow=0/DivByZero=1/Bounds=2 → tags 1/2/3). Should never fire.
-        fault_tag = 1
-
-    switch_to(&ctx, return_bb)
-    # NULL-test the slot pointer: `flag = (__fault == NULL)`.
-    int null_flag = add_local(&ctx, BOOL_TYPE, None)
-    emit(&ctx, GICmp(null_flag, CMP_EQ, I64_TYPE, OpCopy(slot_lid), OpConstNull()))
-    int write_bb = new_block(&ctx)
-    int panic_bb = new_block(&ctx)
-    set_terminator(&ctx, GTBranch(OpCopy(null_flag), panic_bb, write_bb))
-
-    # Non-NULL: write the typed tag through the slot, drop frame locals, return.
-    switch_to(&ctx, write_bb)
-    emit(&ctx, GIDerefStore(slot_lid, OpConstI32(fault_tag), I32_TYPE))
-    # Early-exit drops for the whole function scope (excluding the return place).
-    emit_drops_for_early_exit(&ctx, DSK_FUNCTION, Some(0))
-    # Return the zero-inited sentinel `_0` (branch-before-read ⇒ never consumed
-    # on the fault path). Void fns return unit.
-    if ret_type == UNIT_TYPE:
-        set_terminator(&ctx, GTReturn(OpConstUnit()))
-    else:
-        set_terminator(&ctx, GTReturn(op_consume(ctx, &gmod, 0, CkReturn())))
-
-    # NULL slot: a non-catching caller — preserve panic-by-default.
-    switch_to(&ctx, panic_bb)
-    emit(&ctx, GICallExtern(-1, "gorget_panic", [OpConstStr(panic_msg)]))
-    # gorget_panic is noreturn; the self-host Terminator has no Unreachable, so
-    # jump to a fresh dead block (mirrors the `panic` builtin idiom in
-    # lower_call). A return terminator on a noreturn-preceded block is fine.
-    int panic_dead_bb = new_block(&ctx)
-    set_terminator(&ctx, GTJump(panic_dead_bb))
-    switch_to(&ctx, panic_dead_bb)
-    if ret_type == UNIT_TYPE:
-        set_terminator(&ctx, GTReturn(OpConstUnit()))
-    else:
-        set_terminator(&ctx, GTReturn(op_consume(ctx, &gmod, 0, CkReturn())))
-
 GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     bool is_main = fdef.name == "main"
     int ret_type = I64_TYPE
@@ -152,7 +108,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
             _fn_is_throws = true
         case None:
             pass
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks, false, !_cow_mut, !_cow_span, !_cow_clo, {}, [], {}, None, None, None, _fn_is_throws, {}, {}, "", {}, false, 0, [], [], [], {}, false)
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks, false, !_cow_mut, !_cow_span, !_cow_clo, {}, [], {}, _fn_is_throws, {}, {}, "", {}, false, 0, [], [], [], {}, false)
 
     # Push the function-scope drop frame. Pop emits GIDropIfAlive for
     # every owned resource local registered during lowering (param or
@@ -207,41 +163,6 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
             # no-op — is_droppable_type rejects GtMutPtr — the original leak.)
             register_owning_param(&ctx, plid, pt, &gmod)
 
-    # Cross-frame fault propagation (error-model.md §11, Inc-2.1a/2.1c/2.1d):
-    # for a PARTICIPATING free-fn callee, synthesize a trailing `GtMutPtr(i32)`
-    # fault-slot param `_{N+1}` (after the N user params) and point the
-    # function-level fault handlers at three synthesized fault-RETURN blocks
-    # (one per category). The body's uncaught faultable ops then branch to the
-    # matching return block via the EXISTING EBinaryOp/EIndex fault routing —
-    # no change to those arms. Each return block writes its category's typed tag
-    # through the slot + early-exit returns the sentinel `_0`; on a NULL slot
-    # (a non-catching caller) it PANICS by default (Design X / NULL-sentinel).
-    # The three return blocks are filled AFTER body lowering (below, while the
-    # Function drop scope is still pushed). `participating_fault_fns` is empty
-    # for the existing suite + self-host source → this whole block is dead →
-    # byte-identical → bootstrap unaffected.
-    int fault_slot_lid = -1
-    int fault_overflow_bb = -1
-    int fault_divzero_bb = -1
-    int fault_bounds_bb = -1
-    if participates_in_fault(gmod, fdef.name):
-        # Trailing fault-slot param: `&out`-shaped `GtMutPtr(i32)`. The slot
-        # holds the raw `int32_t*` the caller passed (`&slot`); a body NULL-test
-        # + GIDerefStore writes the tag through it. Registered as a PLAIN
-        # LoParam local (NOT an owning param) so it is never moved/dropped.
-        int fault_slot_pt = register_type(&gmod, GtMutPtr(I32_TYPE))
-        param_types.push(fault_slot_pt)
-        fault_slot_lid = add_local_with(&ctx, fault_slot_pt, Some("__fault"), LoParam(), BoParam(-1))
-        # Three per-category fault-RETURN blocks (filled after body lowering).
-        fault_overflow_bb = new_block(&ctx)
-        fault_divzero_bb = new_block(&ctx)
-        fault_bounds_bb = new_block(&ctx)
-        # Point the active fault scope at the return blocks. The body's
-        # faultable ops consult these (EBinaryOp/EIndex) and branch on a fault.
-        ctx.fault_overflow_handler = Some(fault_overflow_bb)
-        ctx.fault_divzero_handler = Some(fault_divzero_bb)
-        ctx.fault_bounds_handler = Some(fault_bounds_bb)
-
     # CoW resource-bind forward-scan (substrate ii): populate the
     # whole-function mutation set BEFORE lowering, so each SVarDecl's
     # Branch C-pre flip decision can consult it. See compute_cow_scan.
@@ -250,17 +171,6 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
     # Lower body statements
     for stmt in fdef.body:
         lower_stmt(&ctx, stmt, &gmod, is_main)
-
-    # Cross-frame fault (Inc-2.1a/2.1c/2.1d): fill the three per-category
-    # fault-RETURN blocks while the Function drop scope is still pushed (the
-    # fill emits early-exit drops). Switches blocks internally, so save +
-    # restore `ctx.current_block` before the implicit-return logic below.
-    if fault_slot_lid >= 0:
-        int fr_saved_bb = ctx.current_block
-        fill_fault_return_block(&ctx, &gmod, fault_overflow_bb, fault_slot_lid, ret_type, "Overflow", "integer overflow")
-        fill_fault_return_block(&ctx, &gmod, fault_divzero_bb, fault_slot_lid, ret_type, "DivByZero", "division by zero")
-        fill_fault_return_block(&ctx, &gmod, fault_bounds_bb, fault_slot_lid, ret_type, "Bounds", "index out of bounds")
-        switch_to(&ctx, fr_saved_bb)
 
     # If main and no explicit return, add return 0. The drop frame's
     # natural-exit emission needs to run BEFORE this: emit drops at
@@ -559,7 +469,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
                 _em_fn_is_throws = true
             case None:
                 pass
-        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2, false, !_cow_mut2, !_cow_span2, !_cow_clo2, {}, [], {}, None, None, None, _em_fn_is_throws, {}, {}, "", {}, false, 0, [], [], [], {}, false)
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2, false, !_cow_mut2, !_cow_span2, !_cow_clo2, {}, [], {}, _em_fn_is_throws, {}, {}, "", {}, false, 0, [], [], [], {}, false)
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -2008,7 +1918,7 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
     Dict[String, bool] _cow_clo_c = {}
     # Closure bodies are not `throws` fns (no synthesized Result slot) →
     # fn_is_throws=false. (See LowerCtx.fn_is_throws.)
-    LowerCtx cctx = LowerCtx([], !cblock_insts, !cblock_terms, 0, !_cnamed, !_clc, !_clb, "", "", "", false, call_name.clone(), DropElaborator(!_cde_scopes), !_cde_queue, ret_type, !_con_err, false, !_cow_mut_c, !_cow_span_c, !_cow_clo_c, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0, [], [], [], {}, false)
+    LowerCtx cctx = LowerCtx([], !cblock_insts, !cblock_terms, 0, !_cnamed, !_clc, !_clb, "", "", "", false, call_name.clone(), DropElaborator(!_cde_scopes), !_cde_queue, ret_type, !_con_err, false, !_cow_mut_c, !_cow_span_c, !_cow_clo_c, {}, [], {}, false, {}, {}, "", {}, false, 0, [], [], [], {}, false)
 
     push_drop_scope(&cctx.drop_elab, DSK_FUNCTION)
 

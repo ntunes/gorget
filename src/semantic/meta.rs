@@ -2460,10 +2460,6 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             substitute_expr(expr, env, type_env);
             substitute_expr(recovery, env, type_env);
         }
-        Expr::FaultCatch { expr, handler, .. } => {
-            substitute_expr(expr, env, type_env);
-            substitute_expr(handler, env, type_env);
-        }
         // Leaf nodes — no recursion needed
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::NoneLiteral

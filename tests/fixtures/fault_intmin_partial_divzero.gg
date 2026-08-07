@@ -1,8 +1,6 @@
-# Partial-catch guard, the other direction (error-model.md §11 Increment 2 (C)):
-# catching ONLY Fault.Overflow does NOT swallow a div-by-zero. Here `10 / 0` is
-# a DivByZero, UNCAUGHT by the Overflow pattern, so it PANICS `division by zero`
-# — uniformly on both backends.
+# Post-D25 panic-by-default: `10 / 0` panics `division by zero` uncatchably
+# (no fault-catch remains). D26 `/!` would capture it as ArithError.DivByZero.
 void main():
     int z = 0
-    int r = (10 / z) catch Fault.Overflow: 0
+    int r = 10 / z
     print(f"{r}")

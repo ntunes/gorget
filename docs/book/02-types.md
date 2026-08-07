@@ -224,7 +224,7 @@ int a  = 2
 a **= 10                  # compound assign — a = 1024
 ```
 
-`**` is right-associative (`2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512, matching Fortran/Python/JS/Ruby), binds tighter than unary `-`, and does not switch types (`int ** int → int`, `float ** float → float`; mixed operands are rejected). An integer overflow OR negative exponent traps `Fault.Overflow` — write `**` explicitly with matching types.
+`**` is right-associative (`2 ** 3 ** 2` is `2 ** (3 ** 2)` = 512, matching Fortran/Python/JS/Ruby), binds tighter than unary `-`, and does not switch types (`int ** int → int`, `float ** float → float`; mixed operands are rejected). An integer overflow OR negative exponent traps uncatchably — write `**` explicitly with matching types.
 
 Unparenthesized `-x ** 2` is rejected as ambiguous (does the `-` apply to `x` or to `x ** 2`?) — write `-(x ** 2)` or `(-x) ** 2`.
 

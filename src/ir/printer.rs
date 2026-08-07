@@ -365,17 +365,6 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
             )
             .unwrap();
         }
-        Instruction::FaultableIndexLoad { dst, base, index, fault_handler, .. } => {
-            write!(
-                out,
-                "_{} = index_load {}, {} !bounds->bb{}",
-                dst.0,
-                format_place(base),
-                format_operand(index, reg),
-                fault_handler.0,
-            )
-            .unwrap();
-        }
         Instruction::UnOp {
             dst,
             op,
@@ -522,28 +511,6 @@ fn print_instruction(out: &mut String, inst: &Instruction, reg: &TypeRegistry) {
                 write!(out, "{}", format_operand(a, reg)).unwrap();
             }
             write!(out, ")").unwrap();
-        }
-        Instruction::FaultableCall { dst, func, args, fault_slot, overflow_handler, divzero_handler, bounds_handler } => {
-            if let Some(d) = dst {
-                write!(out, "_{} = ", d.0).unwrap();
-            }
-            write!(out, "fault_call @{}(", func).unwrap();
-            for (i, a) in args.iter().enumerate() {
-                if i > 0 {
-                    write!(out, ", ").unwrap();
-                }
-                write!(out, "{}", format_operand(a, reg)).unwrap();
-            }
-            write!(out, ") fault_slot={}", format_place(fault_slot)).unwrap();
-            if let Some(h) = overflow_handler {
-                write!(out, " overflow->bb{}", h.0).unwrap();
-            }
-            if let Some(h) = divzero_handler {
-                write!(out, " divzero->bb{}", h.0).unwrap();
-            }
-            if let Some(h) = bounds_handler {
-                write!(out, " bounds->bb{}", h.0).unwrap();
-            }
         }
         Instruction::CallIndirect { dst, callee, args } => {
             if let Some(d) = dst {

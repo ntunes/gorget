@@ -295,18 +295,6 @@ struct LirFunction:
     # MUST guard `slot < slot_provenance.len()` and treat out-of-range as
     # the no-answer sentinel (fall back to the existing shape test).
     Vector[SlotProvenance] slot_provenance
-    # Cross-frame fault propagation (error-model.md §11, Inc-2.1a-iv): the count
-    # of synthesized trailing `GtMutPtr(i32)` fault-slot params (0 or 1) a
-    # PARTICIPATING callee carries — they are NOT part of its callable type, so
-    # the closure adapter (`__adapt_*`) must declare ONLY the user params and
-    # pass NULL for the trailing slot(s) (forwarding a phantom slot arg writes a
-    # fault tag through a wild pointer → memory corruption). NULL makes the
-    # callee's fault arm panic inline = panic-by-default for an indirectly-
-    # invoked fault (indirect propagation is a later increment). Set at GIR→LIR
-    # from the module participating set (typed, never name-matched — devbook/24
-    # rule 2). 0 for every non-participating fn (the common case). Mirrors Rust
-    # gg's `LirFunction.fault_slot_param_count` (`a4ed04ee`). Appended AT END.
-    int fault_slot_param_count
 
 # ── Struct Definitions ──────────────────────────────────────────
 

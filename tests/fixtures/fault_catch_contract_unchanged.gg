@@ -1,6 +1,6 @@
-# Regression guard: the existing `Result` `catch (name):` contract-error path is
-# UNCHANGED by the new fault-catch form. `catch (msg)` (parenthesized) still
-# recovers a thrown error; `catch Fault.Overflow` (no parens) is the new form.
+# Post-D25 sanity: the contract `catch (msg):` form is UNCHANGED. Combines a
+# throwing-call `!` propagate + contract catch with D26 `+!` capture. Axis:
+# contract-catch coexists with D26 fallible-arith on the same site.
 int parse_it(String s) throws String:
     if s == "bad":
         throw "parse failed"
@@ -12,5 +12,7 @@ void main():
     int w = parse_it("ok")! catch (msg): -1
     print(f"{w}")
     int big = 9223372036854775807
-    int r = (big * 2) catch Fault.Overflow: -2
-    print(f"{r}")
+    Result[int, ArithError] r = big *! 2
+    match r:
+        case Ok(v):    print(f"{v}")
+        case Error(_): print("-2")

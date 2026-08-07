@@ -645,21 +645,7 @@ void main():
     assert_eq!(go(src).outcome, Outcome::Trap(TrapKind::Bounds));
 }
 
-// ── The trap registry: codes + the §10.9 catchable subset ──────────────────
-
-#[test]
-fn catchable_subset_is_exactly_overflow_divbyzero_bounds() {
-    // The §10.9 `Fault` subset (W1): a fault `catch` may recover EXACTLY these.
-    assert!(TrapKind::Overflow.is_catchable());
-    assert!(TrapKind::DivByZero.is_catchable());
-    assert!(TrapKind::Bounds.is_catchable());
-    // The uncatchable five (unwrap / assert / panic).
-    assert!(!TrapKind::UnwrapNone.is_catchable());
-    assert!(!TrapKind::UnwrapError.is_catchable());
-    assert!(!TrapKind::UnwrapErrorOnOk.is_catchable());
-    assert!(!TrapKind::AssertFailed(String::new()).is_catchable());
-    assert!(!TrapKind::Panic(String::new()).is_catchable());
-}
+// ── The trap registry: codes ───────────────────────────────────────────────
 
 #[test]
 fn trap_codes_are_mechanical_t_variant() {
@@ -744,14 +730,14 @@ void main():
 
 #[test]
 fn unwrap_error_traps_uncatchable() {
-    // A Trap outcome is exit 101 and NOT in the catchable subset.
+    // A Trap outcome is exit 101 (all traps are uncatchable, D25).
     let src = r#"
 void main():
     Result[int, String] a = Ok(1)
     print(a.unwrap_error())
 "#;
     match go(src).outcome {
-        Outcome::Trap(k) => assert!(!k.is_catchable()),
+        Outcome::Trap(k) => assert_eq!(k, TrapKind::UnwrapErrorOnOk),
         other => panic!("expected Trap, got {other:?}"),
     }
 }

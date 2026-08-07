@@ -559,10 +559,6 @@ fn rename_expr(expr: &mut Spanned<Expr>, aliases: &rustc_hash::FxHashMap<String,
             rename_expr(expr, aliases);
             rename_expr(recovery, aliases);
         }
-        Expr::FaultCatch { expr, handler, .. } => {
-            rename_expr(expr, aliases);
-            rename_expr(handler, aliases);
-        }
         Expr::StringLiteral(_, interp_exprs) => {
             for e in interp_exprs {
                 rename_expr(e, aliases);
@@ -914,10 +910,6 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         Expr::Catch { expr, recovery, .. } => {
             rewrite_expr(expr, res, scopes, errors);
             rewrite_expr(recovery, res, scopes, errors);
-        }
-        Expr::FaultCatch { expr, handler, .. } => {
-            rewrite_expr(expr, res, scopes, errors);
-            rewrite_expr(handler, res, scopes, errors);
         }
         // Leaf nodes
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)

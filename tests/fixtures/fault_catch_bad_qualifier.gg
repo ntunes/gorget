@@ -1,6 +1,6 @@
-# Wrong fault-catch enum qualifier (error-model.md §11 Increment 2 (D)): a
-# fault-catch pattern can only name a `Fault` variant. `Bogus.Overflow` must be
-# REJECTED at typecheck, not silently accepted as `Fault.Overflow`.
+# Post-D25: any `catch <Ident>(.<Ident>)?:` shape (including the former
+# `Fault.Overflow` and any user-invented qualifier like `Bogus.Overflow`) is
+# rejected at parse-time with `E_FaultCatchRemoved`. NEG fixture.
 void main():
     int big = 9223372036854775807
     int r = (big * 2) catch Bogus.Overflow: -1
