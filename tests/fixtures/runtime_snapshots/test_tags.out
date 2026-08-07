@@ -1,6 +1,0 @@
-Running 3 tests...
-  test: smoke test ... PASS (0ms)
-  test: slow test ... PASS (0ms)
-  test: untagged test ... PASS (0ms)
-
-3 passed, 0 failed (0ms)
