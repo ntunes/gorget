@@ -933,23 +933,6 @@ struct GirModule:
     # (`src/ir/lowering/exprs/mod.rs:1247-1250`). Appended AT END to avoid
     # shifting positional ctor call sites.
     Dict[String, bool] async_fns
-    # Cross-frame fault propagation (error-model.md §11, Inc-2.1a/2.1c/2.1d): the
-    # set of FREE FUNCTIONS that PARTICIPATE in cross-frame fault propagation —
-    # those that (a) have a reachable-uncaught faultable op (int Add/Sub/Mul/Div/
-    # Rem OR an `xs[i]` array read) AND (b) are directly called from inside an
-    # `EFaultCatch.inner` that catches that fault. The (a)∩(b) INTERSECTION bounds
-    # the uniform-signature blast radius (D5): a participating callee gets a
-    # synthesized trailing `GtMutPtr(i32)` fault-slot param, and EVERY direct
-    # caller must pass the trailing arg. Computed once by `compute_participating_
-    # fault_fns` in the `lower_module` pre-pass (over the AST, before any body is
-    # lowered), read via the `participates_in_fault(&gmod, fname)` accessor — a
-    # TYPED flag set at the source (devbook/24 rule 2), NEVER re-derived from a
-    # name. Empty for the entire existing suite + self-host source (no arith/
-    # bounds `catch Fault.X` over a user CALL) → byte-identical → bootstrap safe.
-    # Mirrors Rust gg's `LoweringContext::participating_fault_fns`
-    # (`src/ir/lowering/fault_participation.rs`). Appended AT END to avoid
-    # shifting positional ctor call sites.
-    Dict[String, bool] participating_fault_fns
     # Trait-object dispatch: maps `<MangledTrait>__<method>` → the method's
     # VTable SLOT INDEX (its 0-based position among the trait's self-methods,
     # in declaration order). Populated by the `_VTable` struct-typedef pre-pass
@@ -1058,15 +1041,6 @@ String find_enum_by_variant(GirModule gmod, String variant_name):
             j += 1
         i += 1
     return result
-
-# Cross-frame fault propagation (error-model.md §11, Inc-2.1a): does `fname`
-# PARTICIPATE in cross-frame fault propagation? A participating callee carries a
-# synthesized trailing `GtMutPtr(i32)` fault-slot param, so every direct caller
-# must pass the trailing arg (uniform signature, D5). TYPED read of the
-# `participating_fault_fns` set — never name-derived (devbook/24 rule 2). Mirrors
-# Rust gg's `LoweringContext::participates_in_fault`.
-bool participates_in_fault(GirModule gmod, String fname):
-    return gmod.participating_fault_fns.contains(fname)
 
 # Look up the variant index (ordinal) for a given enum + variant.
 int enum_variant_index(GirModule gmod, String enum_name, String variant_name):

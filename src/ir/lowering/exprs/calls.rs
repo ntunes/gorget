@@ -2049,36 +2049,6 @@ pub(super) fn lower_call(
             I64_TYPE // fallback
         };
 
-        // Cross-frame fault propagation (error-model.md §11, Inc-2.1a/2.1c): does
-        // the callee PARTICIPATE? If so it has a synthesized trailing `MutPtr<i32>`
-        // fault-slot param, so EVERY direct caller must pass the trailing arg
-        // (uniform signature, D5). Keyed by the USER name (`effective_name`),
-        // which is also the C `call_name` for participating fns (they're never
-        // extern).
-        //
-        // Per-category handler resolution (FOLD-6): when this call site is INSIDE
-        // a fault scope, resolve BOTH arithmetic categories to ALWAYS-SOME blocks
-        // — the user's catch entry if the scope catches that category, else the
-        // scope's panic block (so an uncaught-by-this-scope category that the
-        // callee CAN raise re-panics automatically, mirroring the local
-        // `FaultableBinOp` precedent). The emitted `FaultableCall` then carries a
-        // per-category tag-dispatch (§2.3 silent-miscompile fix). When NOT inside
-        // a fault scope, both stay `None` → pass NULL + a plain `Call`
-        // (panic-by-default).
-        let callee_participates_in_fault = ctx.participates_in_fault(&effective_name);
-        let (fault_overflow_handler, fault_divzero_handler, fault_bounds_handler) = if callee_participates_in_fault {
-            match ctx.func_state.fault_scope {
-                Some(s) => (
-                    Some(s.overflow_handler.unwrap_or(s.div_overflow_panic)),
-                    Some(s.divzero_handler.unwrap_or(s.div_zero_panic)),
-                    Some(s.bounds_handler.unwrap_or(s.bounds_panic)),
-                ),
-                None => (None, None, None),
-            }
-        } else {
-            (None, None, None)
-        };
-
         // Resolve extern bindings: use the C symbol name instead of the Gorget name
         let call_name = if let Some(c_symbol) = ctx.extern_bindings.get(effective_name.as_str()) {
             c_symbol.clone()
@@ -2125,48 +2095,7 @@ pub(super) fn lower_call(
             }
         }
 
-        // Cross-frame fault: append the trailing fault-slot arg for a
-        // participating callee. A CATCHING caller (inside ANY arith fault scope —
-        // Overflow OR DivByZero, FOLD-1) allocates a zero-init `i32` slot and
-        // passes `&slot`; a NON-CATCHING caller passes `Constant::Null` (→ C
-        // `NULL`) and the callee's fault arm panics by default. `fault_slot_place`
-        // is `Some` only for the catching path (the FaultableCall reads its tag
-        // after the call, branch-before-read).
-        let fault_slot_place: Option<Place> = if callee_participates_in_fault {
-            if fault_overflow_handler.is_some() || fault_divzero_handler.is_some() || fault_bounds_handler.is_some() {
-                // Catching caller: zero-init slot + pass `&slot`.
-                let slot = builder.add_local(I32_TYPE, Some("__fault_slot"));
-                builder.assign(Place::local(slot), FunctionBuilder::const_i32(0));
-                let slot_ptr_ty = ctx.register_mut_ptr_type(I32_TYPE);
-                let slot_ref = builder.borrow_mut(Place::local(slot), slot_ptr_ty);
-                lowered_args.push(FunctionBuilder::copy(slot_ref));
-                Some(Place::local(slot))
-            } else {
-                // Non-catching caller: pass NULL, plain Call, panic-by-default.
-                lowered_args.push(Operand::Constant(Constant::Null));
-                None
-            }
-        } else {
-            None
-        };
-
-        let result = if let Some(slot_place) = fault_slot_place {
-            // Catching deep call: emit a FaultableCall threading BOTH per-category
-            // (always-Some) handlers. The GIR→LIR split adds the tag-dispatch
-            // AFTER the call (branch-before-read to the matching category entry).
-            // The result is read only on the no-fault continuation.
-            if ret_type == UNIT_TYPE {
-                builder.fault_call_void(&call_name, lowered_args, slot_place, fault_overflow_handler, fault_divzero_handler, fault_bounds_handler);
-                Operand::Constant(Constant::Unit)
-            } else {
-                let dst = builder.fault_call(&call_name, lowered_args, ret_type, slot_place, fault_overflow_handler, fault_divzero_handler, fault_bounds_handler);
-                if ctx.type_registry.needs_drop(ret_type) {
-                    ctx.drops.register_local(dst, ret_type, &ctx.type_registry);
-                }
-                ctx.set_owned(builder, dst);
-                FunctionBuilder::copy(dst)
-            }
-        } else if ret_type == UNIT_TYPE {
+        let result = if ret_type == UNIT_TYPE {
             builder.call_void(&call_name, lowered_args);
             Operand::Constant(Constant::Unit)
         } else {

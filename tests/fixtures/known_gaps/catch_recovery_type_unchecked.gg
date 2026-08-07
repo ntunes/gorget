@@ -36,9 +36,10 @@
 # returns the Result's `T` slot as the expression's type regardless. Nothing is
 # dropped -- a type is FABRICATED, without ever comparing.
 #
-# SIBLING ARM, must ship in the SAME diff (Core #4): FaultCatch at
-# typecheck.rs:4710 is broken identically -- `int v = a * b catch f: ""` is also
-# accepted. Two arms, one class.
+# SIBLING ARM (historical): the `Expr::FaultCatch` arm was broken identically.
+# That arm was RETIRED by D25 (Round XXXIV Track C2), which removed the lexical
+# fault-catch form entirely; only the `Expr::Catch` contract-catch arm survives
+# in the class this fixture guards.
 #
 # PROVENANCE NOTE: the report cites gorget HEAD 9a42a638 as where D29's
 # fallible-mark model "introduced/exposed" this. 9a42a638 is only the HEAD the

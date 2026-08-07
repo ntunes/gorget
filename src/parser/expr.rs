@@ -190,7 +190,6 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         // Rethrow / Catch
         Expr::Rethrow { expr, transform, .. } => contains_it(expr) || contains_it(transform),
         Expr::Catch { expr, recovery, .. } => contains_it(expr) || contains_it(recovery),
-        Expr::FaultCatch { expr, handler, .. } => contains_it(expr) || contains_it(handler),
 
         // Leaves — no sub-expressions
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
@@ -1182,32 +1181,21 @@ impl Parser {
                         start.merge(end),
                     ));
                 }
-                // ── Fault-catch (NEW form) ──
-                let enum_or_name = self.expect_identifier()?;
-                let pattern = if matches!(self.peek(), Token::Dot) {
-                    // Qualified path `Enum.Variant` → fault PATTERN form. Keep
-                    // BOTH the qualifier (the enum prefix, e.g. `Fault`) and the
-                    // variant; the qualifier is validated at typecheck (a wrong
-                    // qualifier like `Bogus.Overflow` is rejected) and the
-                    // variant selects which fault arm fires.
+                // ── D25: the fault-catch form (`catch Fault.X:` or
+                // `catch f: match f: …`) was REMOVED. Reject with a teaching
+                // diagnostic pointing at the D26 fallible-arithmetic operators
+                // (`+!`/`-!`/`*!`/`/!`/`%!`/`<<!`/`>>!`) as the recovery path.
+                let reject_span = self.peek_span();
+                let ident_span = self.expect_identifier()?.span;
+                let mut end = ident_span;
+                if matches!(self.peek(), Token::Dot) {
                     self.advance(); // consume `.`
-                    let variant = self.expect_identifier()?;
-                    FaultCatchPattern::Variant { qualifier: enum_or_name, variant }
-                } else {
-                    // Bare identifier → fault BINDING form `catch f:`.
-                    FaultCatchPattern::Binding(enum_or_name)
-                };
-                self.expect(&Token::Colon)?;
-                let handler = self.parse_body_or_expr(start)?;
-                let end = handler.span;
-                Ok(Spanned::new(
-                    Expr::FaultCatch {
-                        expr: Box::new(lhs),
-                        pattern,
-                        handler: Box::new(handler),
-                    },
-                    start.merge(end),
-                ))
+                    end = self.expect_identifier()?.span;
+                }
+                Err(ParseError {
+                    kind: ParseErrorKind::FaultCatchRemoved,
+                    span: reject_span.merge(end),
+                })
             }
         }
     }

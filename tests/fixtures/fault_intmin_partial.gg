@@ -1,10 +1,8 @@
-# Partial-catch guard (error-model.md §11 Increment 2 (C)): a Div has TWO fault
-# categories, and catching ONLY one does NOT swallow the other. Here the catch
-# names Fault.DivByZero, but the fault is `INT_MIN / -1` (an OVERFLOW), so it is
-# UNCAUGHT and PANICS `integer overflow` — uniformly on both backends (the GIR
-# emits the panic, so the LIR only ever branches; no backend-specific UB).
+# Post-D25 panic-by-default: `INT_MIN / -1` panics `integer overflow`
+# uncatchably (no fault-catch form remains; the D26 `/!` form would capture,
+# but this fixture pins the plain `/` panic behavior).
 void main():
     int imin = -9223372036854775807 - 1
     int neg1 = -1
-    int r = (imin / neg1) catch Fault.DivByZero: 0
+    int r = imin / neg1
     print(f"{r}")

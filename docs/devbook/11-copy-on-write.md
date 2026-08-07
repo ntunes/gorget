@@ -331,7 +331,6 @@ move):
 | `exprs/mod.rs:608` | tuple-literal field init (`Expr::TupleLiteral` in `lower_expr_inner`) |
 | `exprs/mod.rs:2141` | struct field init (`lower_struct_literal`) |
 | `exprs/mod.rs:3207` | match-arm value escaping an arm |
-| `exprs/mod.rs:4152` | fault-catch result escaping the catch |
 | `closures.rs:319,559` | closure capture |
 
 Both `return` forms go through the SAME helper on purpose. The statement return

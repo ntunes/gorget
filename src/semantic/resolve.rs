@@ -181,24 +181,6 @@ pub fn collect_top_level(
             ctx.enum_variants.insert(enum_def_id, EnumVariantInfo { variants: variant_infos, variant_field_types: Vec::new(), generic_param_names: Vec::new() });
         }
     }
-    // Register the compiler-internal `Fault` enum (error-model.md §11.1). Its
-    // variants are QUALIFIED-ONLY (`Fault.Overflow`, not bare `Overflow`), so —
-    // like a non-generic user enum (see the `Item::Enum` arm) — we `alloc_def`
-    // each variant WITHOUT inserting it into scope, and record them in
-    // `ctx.enum_variants` so qualified access, pattern matching, and the
-    // Fault-keyed panic-default exhaustiveness rule resolve. Overflow +
-    // DivByZero + Bounds. (The IR-lowering twin lives in
-    // `inject_builtin_enums`, generics/substitute.rs.)
-    if let Ok(fault_def_id) = scopes.define("Fault".to_string(), DefKind::Enum, Span::dummy()) {
-        let mut variant_infos = Vec::new();
-        let mut variant_field_types = Vec::new();
-        for vname in &["Overflow", "DivByZero", "Bounds"] {
-            let variant_def_id = scopes.alloc_def(vname.to_string(), DefKind::Variant, Span::dummy());
-            variant_infos.push((vname.to_string(), variant_def_id));
-            variant_field_types.push((vname.to_string(), Vec::new()));
-        }
-        ctx.enum_variants.insert(fault_def_id, EnumVariantInfo { variants: variant_infos, variant_field_types, generic_param_names: Vec::new() });
-    }
     // D26 (Round XXXIII Batch C1): the compiler-internal `ArithError` prelude
     // enum — payload-free variants for the two error channels produced by the
     // fallible arithmetic operators (`+!` / `-!` / `*!` etc). Its variants are
@@ -1959,26 +1941,6 @@ fn resolve_expr(
                 errors.push(e);
             }
             resolve_expr(recovery, scopes, errors, resolution_map);
-            scopes.pop_scope();
-        }
-        Expr::FaultCatch { expr, pattern, handler } => {
-            resolve_expr(expr, scopes, errors, resolution_map);
-            // Binding form `catch f:` registers `f` (a `Fault` value) for the
-            // handler; pattern form `catch Fault.Overflow:` binds nothing. The
-            // qualified `Fault.Overflow` references in either the pattern or the
-            // handler's `match` resolve through the type system (built-in enum),
-            // not the name resolver.
-            scopes.push_scope(super::scope::ScopeKind::Block);
-            if let FaultCatchPattern::Binding(name) = pattern {
-                if let Err(e) = scopes.define(
-                    name.node.clone(),
-                    DefKind::Variable,
-                    name.span,
-                ) {
-                    errors.push(e);
-                }
-            }
-            resolve_expr(handler, scopes, errors, resolution_map);
             scopes.pop_scope();
         }
     }

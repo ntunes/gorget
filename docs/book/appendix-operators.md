@@ -51,7 +51,7 @@ Operators listed from highest precedence (binds tightest) to lowest.
 | `*%` | Wrapping multiply | `200_u8 *% 2` |
 
 Wrapping operators never panic on overflow. They wrap around using modular arithmetic.
-Plain `+`/`-`/`*` always check overflow (and panic, or recover via `catch Fault.Overflow`); the `+%`/`-%`/`*%` operators are the only way to opt into wrapping, per-expression.
+Plain `+`/`-`/`*` always check overflow (trap uncatchably on fault); the `+%`/`-%`/`*%` operators are the only way to opt into wrapping, per-expression, and the `+!`/`-!`/`*!`/`/!`/`%!`/`<<!`/`>>!` operators are the way to capture the failure as `Result[T, ArithError]` instead.
 
 ---
 

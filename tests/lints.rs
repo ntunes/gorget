@@ -724,11 +724,11 @@ fn snag11_auto_prop_gate_site_count() {
     // The choke point is preserved (unify runs only when the shared
     // gate allows it); the count drop reflects the code consolidation.
     // Round XXXII Track A (2026-08-06): 12 → 13. The `check_recovery_type`
-    // helper adds site #13 at `src/semantic/typecheck.rs` — `Expr::Catch`
-    // and `Expr::FaultCatch` recovery/handler slots now route through the
-    // helper, which consults `auto_prop_skips_unify` per the canonical
-    // VarDecl three-carve-out pattern (E-check preserved: an ill-typed
-    // recovery still triggers the shared gate).
+    // helper adds site #13 at `src/semantic/typecheck.rs` — the `Expr::Catch`
+    // recovery slot routes through the helper, which consults
+    // `auto_prop_skips_unify` per the canonical VarDecl three-carve-out
+    // pattern (E-check preserved: an ill-typed recovery still triggers the
+    // shared gate). Post-D25 the `Expr::FaultCatch` sibling arm is gone.
     const EXPECTED_SKIPS_UNIFY: usize = 13;
     const EXPECTED_ROUTE_A_GATE: usize = 2;
 
@@ -2535,7 +2535,9 @@ fn self_host_generic_discovery_expr_arms_count() {
     /// `case Some|None` sub-matches are deeper-indented and excluded.
     // 2026-07-17 (D29): 35 → 36 — the `EPropagate` transparent wrapper arm
     // (recurses into its inner; the mark carries no semantics of its own).
-    const EXPECTED: usize = 36;
+    // 2026-08-07 (D25 Round XXXIV Track C2): 36 → 35 — the `EFaultCatch` arm
+    // vanished when the lexical fault-catch form was removed.
+    const EXPECTED: usize = 35;
 
     // lower_generics.gg lives ONLY in self_host_lowerer (real file, not
     // symlinked), so no double-count guard is needed.
@@ -2617,7 +2619,9 @@ fn self_host_mutinf_scan_expr_arms_count() {
     /// `case Some|None` sub-matches (12-space indent) are excluded.
     // 2026-07-17 (D29): 35 → 36 — the `EPropagate` transparent wrapper arm
     // (recurses into its inner; the mark carries no semantics of its own).
-    const EXPECTED: usize = 36;
+    // 2026-08-07 (D25 Round XXXIV Track C2): 36 → 35 — the `EFaultCatch` arm
+    // vanished when the lexical fault-catch form was removed.
+    const EXPECTED: usize = 35;
 
     // lower.gg lives ONLY in self_host_lowerer (real file, not symlinked), so
     // no double-count guard is needed.
@@ -4795,186 +4799,6 @@ fn await_value_route_sibling_count() {
     );
 }
 
-/// Ratchet (CLAUDE.md rule 4 — sibling-site drift): every faultable arithmetic
-/// op that a fault-`catch` can intercept MUST route through the ONE shared
-/// `Inst::FaultCheck` + `Term::Branch` lowering shape (error-model.md §11), so a
-/// future faultable condition can't silently skip the flag-and-branch shape and
-/// fall back to the panic-by-default form (or, worse, emit a bare arithmetic /
-/// bare index-read with no fault check at all).
-///
-/// The single source of truth for the faultable ARITHMETIC conditions is the
-/// `FaultOp` enum (`src/lir/mod.rs`): every member is one fault condition tested
-/// by `Inst::FaultCheck`. Increment 1 shipped Add/Sub/Mul/Div/Rem; Increment 2
-/// (C) split the signed `TYPE_MIN/-1` division overflow into `DivOverflow`, so
-/// the floor is now SIX. Adding a seventh condition (a future `Pow`, a `Neg` of
-/// `TYPE_MIN`, …) must extend the `FaultOp` enum AND give it a C/LLVM
-/// `Inst::FaultCheck` emit + the GIR→LIR mapping in the `FaultableBinOp` arm,
-/// then bump `FAULT_OP_VARIANTS` — forcing the new condition through the shared
-/// branch path as part of the change, not after the next miscompile.
-///
-/// The faultable ARRAY-READ shape (`Fault.Bounds`) is a separate GIR variant
-/// `FaultableIndexLoad` (error-model.md §11 Increment 2 (A)) — it does NOT
-/// produce a `FaultOp` arm (it null-branches on `gorget_array_safe_get` instead
-/// of a `FaultCheck`), so it is ratcheted separately below: its presence in the
-/// GIR→LIR lowering is asserted so a future index-fault sibling can't skip the
-/// branch-before-deref shape.
-///
-/// **If `FAULT_OP_VARIANTS` fails because a variant was added:** confirm the new
-/// `FaultOp::X` has a C/LLVM `Inst::FaultCheck` emit path and a GIR→LIR mapping
-/// in the `FaultableBinOp` arm, then bump it. If removed, lower it.
-#[test]
-fn fault_op_lowering_arms_count() {
-    /// Baseline 2026-06-21: 6 (Add, Sub, Mul, Div, Rem, DivOverflow).
-    const FAULT_OP_VARIANTS: usize = 6;
-
-    // Count the `FaultOp` enum variants — the single source of truth for the
-    // faultable arithmetic conditions tested by `Inst::FaultCheck`.
-    let lir = fs::read_to_string("src/lir/mod.rs").unwrap_or_default();
-    let mut in_fault_op = false;
-    let mut variant_count = 0usize;
-    for line in lir.lines() {
-        let t = line.trim_start();
-        if t.starts_with("pub enum FaultOp") {
-            in_fault_op = true;
-            continue;
-        }
-        if in_fault_op {
-            if t.starts_with('}') {
-                break;
-            }
-            if t.starts_with("//") || t.is_empty() {
-                continue;
-            }
-            // A variant line is a bare `Identifier,` inside the enum body.
-            if t.ends_with(',') && t[..t.len() - 1].chars().all(|c| c.is_alphanumeric() || c == '_') {
-                variant_count += 1;
-            }
-        }
-    }
-    assert_eq!(
-        variant_count, FAULT_OP_VARIANTS,
-        "`FaultOp` variant count (src/lir/mod.rs) changed: {variant_count} vs \
-         expected {FAULT_OP_VARIANTS}.\n\n\
-         Every faultable arithmetic condition must route through the shared \
-         `Inst::FaultCheck` + `Term::Branch` path. If you added a condition, also \
-         add its C/LLVM `Inst::FaultCheck` emit and its GIR→LIR mapping in the \
-         `FaultableBinOp` arm of src/lir/lower/insts.rs, then bump \
-         FAULT_OP_VARIANTS. If you removed one, lower it.",
-    );
-
-    // The faultable array-read shape must stay wired through the shared
-    // branch-before-deref lowering (`gorget_array_safe_get` + NULL-branch +
-    // shared element materialization). Assert the GIR→LIR arm + the safe-get
-    // call are present so a future index-fault sibling can't skip the shape.
-    let insts = fs::read_to_string("src/lir/lower/insts.rs").unwrap_or_default();
-    assert!(
-        insts.contains("Instruction::FaultableIndexLoad {"),
-        "the `FaultableIndexLoad` GIR→LIR lowering arm vanished from \
-         src/lir/lower/insts.rs — the `Fault.Bounds` array-read must lower \
-         through the shared null-branch-before-deref shape (error-model.md §11).",
-    );
-    assert!(
-        insts.contains("gorget_array_safe_get")
-            && insts.contains("materialize_collection_element"),
-        "the faultable array-read lowering must use `gorget_array_safe_get` + the \
-         shared `materialize_collection_element` element path — a future sibling \
-         must not duplicate or skip the clone/move-zero/str-ptr logic.",
-    );
-
-    // Cross-frame fault propagation (error-model.md §11, Increment 2.1a/2.1c)
-    // adds a THIRD faultable shape, `Instruction::FaultableCall` — a
-    // participating callee writes a per-category fault TAG into a hidden trailing
-    // `MutPtr<i32>` slot and the caller reads the tag VALUE and DISPATCHES to the
-    // matching per-category handler after the call. Like the other two shapes it
-    // must stay wired through the one shared lowering arm, and — THE LINCHPIN —
-    // each handler MUST be counted as a block successor in `successors()` (else
-    // DCE prunes a handler and the fault recovery silently vanishes). Assert both
-    // so a future refactor can't drop either without tripping this ratchet.
-    assert!(
-        insts.contains("Instruction::FaultableCall {"),
-        "the `FaultableCall` GIR→LIR lowering arm vanished from \
-         src/lir/lower/insts.rs — the cross-frame fault call must lower through \
-         the shared `Inst::Call` + tag-dispatch shape (error-model.md §11).",
-    );
-    let optimize = fs::read_to_string("src/ir/transforms/optimize.rs").unwrap_or_default();
-    assert!(
-        optimize.contains("Instruction::FaultableCall { overflow_handler, divzero_handler, bounds_handler, .. }"),
-        "the `FaultableCall` arm vanished from `successors()` / the block-id \
-         remap loops in src/ir/transforms/optimize.rs — its per-category handler \
-         blocks must count as successors (else DCE prunes a fault handler and \
-         cross-frame fault recovery silently vanishes) and forward through \
-         block renumbering (else a stored handler id goes stale).",
-    );
-}
-
-/// Sibling-arm ratchet for the `FaultableCall` per-category tag-dispatch
-/// (error-model.md §11, Increment 2.1c, CLAUDE.md invariant #4 "one fix, all
-/// siblings" + devbook/24 rule 2 "typed metadata, not name-matched"): the
-/// cross-frame fault call routes by reading the slot tag VALUE and dispatching
-/// to one of N per-category handler FIELDS on `Instruction::FaultableCall`
-/// (`overflow_handler`, `divzero_handler`; Bounds adds `bounds_handler` in
-/// 2.1d). A single `slot != 0` branch could NOT distinguish categories — it
-/// would route every fault to one entry and construct the WRONG `Fault` variant
-/// (the measured §2.3 silent miscompile: a deep DivByZero printing the Overflow
-/// arm). This lint PINS the handler-category count so the next category (Bounds)
-/// is FORCED to add its own typed handler field + tag-dispatch arm — not a
-/// name-matched or single-branch dodge.
-///
-/// **If this fails because you added a category:** add the `<cat>_handler:
-/// Option<BlockId>` field to the `FaultableCall` GIR variant
-/// (`src/ir/instructions.rs`), thread it through the builder ctors, printer, the
-/// three `optimize.rs` remap/successor arms, and the GIR→LIR tag-dispatch
-/// (`src/lir/lower/insts.rs`) with its own `tag == <CAT>_TAG → handler` branch,
-/// AND resolve it (always-Some) at the call-site gate (`calls.rs`). Then bump
-/// `FAULT_CALL_HANDLER_CATEGORIES`. If you removed one, lower it.
-#[test]
-fn fault_call_handler_category_count() {
-    /// Baseline 2026-06-25: 3 (overflow_handler, divzero_handler,
-    /// bounds_handler — Bounds landed in 2.1d).
-    const FAULT_CALL_HANDLER_CATEGORIES: usize = 3;
-
-    // Count the `*_handler: Option<BlockId>` fields inside the `FaultableCall`
-    // GIR variant body — the single source of truth for the dispatch categories.
-    let instructions = fs::read_to_string("src/ir/instructions.rs").unwrap_or_default();
-    let mut in_variant = false;
-    let mut handler_fields = 0usize;
-    for line in instructions.lines() {
-        let t = line.trim_start();
-        if t.starts_with("FaultableCall {") {
-            in_variant = true;
-            continue;
-        }
-        if in_variant {
-            // The variant body ends at its closing `},` (the field list is
-            // brace-balanced; the next variant or the enum tail follows).
-            if t.starts_with("},") || t == "}" {
-                break;
-            }
-            if t.starts_with("//") || t.is_empty() {
-                continue;
-            }
-            // A handler field line: `<name>_handler: Option<BlockId>,`.
-            if t.ends_with("_handler: Option<BlockId>,") {
-                handler_fields += 1;
-            }
-        }
-    }
-    assert_eq!(
-        handler_fields, FAULT_CALL_HANDLER_CATEGORIES,
-        "`FaultableCall` per-category handler-field count \
-         (src/ir/instructions.rs) changed: {handler_fields} vs expected \
-         {FAULT_CALL_HANDLER_CATEGORIES}.\n\n\
-         The cross-frame fault call dispatches by slot-tag VALUE to one \
-         per-category handler field. A new category (e.g. Bounds, 2.1d) must add \
-         its own `<cat>_handler: Option<BlockId>` field AND a matching \
-         `tag == <CAT>_TAG → handler` arm in the GIR→LIR tag-dispatch \
-         (src/lir/lower/insts.rs) + the call-site resolution (calls.rs) + the \
-         builder/printer/optimize.rs sibling arms, then bump \
-         FAULT_CALL_HANDLER_CATEGORIES — forcing the new category through the \
-         shared tag-dispatch, not a single-branch dodge (the §2.3 miscompile).",
-    );
-}
-
 /// Single-source-of-truth ratchet (CLAUDE.md invariant #4 "one fix, all
 /// siblings" + devbook/24 rule 3 "one source of truth per axis"): the set of
 /// builtin GorgetArray/Map/Set-backed collection base names that the self-host
@@ -6282,36 +6106,23 @@ fn ggdef_import_ratchet() {
 /// DEFINITIONAL one (`ggdef::TrapKind`, `spec/ggdef/src/eval.rs`) — the import
 /// ratchet (`ggdef_import_ratchet`) forbids ggdef importing `src/`, so the two
 /// registries are separate types that must nonetheless AGREE. This lint pins
-/// the correspondence:
-///   (a) the `code()` string SETS are identical (same closed set of `T_<X>`);
-///   (b) `is_catchable()` agrees variant-for-variant;
-///   (c) the §10.9 `Fault` language-prelude enum (`builtin_fault_enum()`)
-///       equals EXACTLY the `is_catchable()`-true subset (bare variant names).
-/// It compares ONLY the typed `code()` — NEVER the human `detail`/message text
-/// (production "integer overflow" vs ggdef "arithmetic overflow" is a
-/// sanctioned, conformance-ignored divergence, so `message()` is never fed in).
+/// the correspondence: the `code()` string SETS are identical (same closed set
+/// of `T_<X>`). Post-D25 (fault-catch removal) there is no catchable subset —
+/// all traps are uncatchable. It compares ONLY the typed `code()` — NEVER the
+/// human `detail`/message text (production "integer overflow" vs ggdef
+/// "arithmetic overflow" is a sanctioned, conformance-ignored divergence).
 ///
 /// ONE macro-expanded variant list drives BOTH the rustc-exhaustiveness
-/// ratchet (two generated catch-all-free `match`es) AND the arrays every check
-/// below iterates, so the ratchet REACHES the assertions: adding a variant to
-/// EITHER enum is a hard compile error AT the `trap_parity_pin!` list, and
-/// extending that list is the only fix — which extends the arrays in the same
-/// keystroke. (Pre-macro, the `_p_exhaustive`/`_g_exhaustive` guards were
-/// SEPARATE from hand-listed arrays: a developer could fix the match and leave
-/// every check running vacuously over the stale list — the new variant
-/// invisible to (a), (b), and (c).)
+/// ratchet (two generated catch-all-free `match`es) AND the code() set, so the
+/// ratchet REACHES the assertion: adding a variant to EITHER enum is a hard
+/// compile error AT the `trap_parity_pin!` list, and extending that list is
+/// the only fix — which extends the arrays in the same keystroke.
 #[test]
 fn trap_kind_parity_prod_vs_ggdef() {
     use std::collections::BTreeSet;
     use gorget::trap::TrapKind as P;
     use ggdef::TrapKind as G;
 
-    /// `$name` must exist in BOTH enums; `$name(payload)` marks the
-    /// ggdef-side payload variants (production variants are all unit — a
-    /// future payload-carrying production variant fails to compile here and
-    /// the macro grows a marker then). The `V { .. }` patterns bind any
-    /// variant shape, so the generated matches stay exhaustive-and-only-
-    /// exhaustive: rustc errors HERE on a variant missing from the list.
     macro_rules! trap_parity_pin {
         ( $( $name:ident $( ( $($gp:expr),* ) )? ),+ $(,)? ) => {{
             #[allow(dead_code)]
@@ -6329,43 +6140,17 @@ fn trap_kind_parity_prod_vs_ggdef() {
         }};
     }
 
-    // Same order on both sides so the zip pairs matching codes (asserted
-    // below). THE single source of truth for the registry pin.
     let (prod, ggd) = trap_parity_pin![
         Overflow, DivByZero, Bounds, UnwrapNone, UnwrapError, UnwrapErrorOnOk,
         AssertFailed(String::new()), Panic(String::new()),
     ];
 
-    // (a) code() SETS identical.
+    // code() SETS identical.
     let prod_codes: BTreeSet<&str> = prod.iter().map(|t| t.code()).collect();
     let ggd_codes: BTreeSet<&str> = ggd.iter().map(|t| t.code()).collect();
     assert_eq!(
         prod_codes, ggd_codes,
         "production TrapKind::code() set must equal ggdef's (D11 registry parity)",
-    );
-
-    // (b) is_catchable() agrees variant-for-variant (paired by code()).
-    for (p, g) in prod.iter().zip(ggd.iter()) {
-        assert_eq!(p.code(), g.code(), "TrapKind ordering drift between prod and ggdef");
-        assert_eq!(
-            p.is_catchable(), g.is_catchable(),
-            "is_catchable() disagrees for {} (prod {} vs ggdef {})",
-            p.code(), p.is_catchable(), g.is_catchable(),
-        );
-    }
-
-    // (c) §10.9 Fault prelude enum == is_catchable()-true subset (by bare name).
-    let fault_variants: BTreeSet<String> =
-        gorget::ir::lowering::generics::builtin_fault_enum()
-            .variants.iter().map(|v| v.node.name.node.clone()).collect();
-    let catchable_bare: BTreeSet<String> = prod.iter()
-        .filter(|t| t.is_catchable())
-        .map(|t| t.code().strip_prefix("T_").unwrap().to_string())
-        .collect();
-    assert_eq!(
-        fault_variants, catchable_bare,
-        "§10.9 Fault enum (builtin_fault_enum) must equal the is_catchable()-true \
-         TrapKind subset (bare variant names)",
     );
 }
 
@@ -11295,24 +11080,24 @@ fn opaque_handle_route_fixtures_exist() {
 /// Track A · MEMORY-SAFETY round · CLASS-RETIRING GUARD (Core #6).
 ///
 /// Every silent-drop of a sub-expression's inferred type in the checker is
-/// a Core #10 hazard. `Expr::Catch` (`src/semantic/typecheck.rs:4624`) and
-/// `Expr::FaultCatch` (`:4663`) previously called `self.infer_expr(recovery)`
-/// / `self.infer_expr(handler)` and DISCARDED the returned TypeId — the
-/// outer VarDecl then unified a fabricated OK type against itself, so an
-/// ill-typed recovery reached codegen (silent heap-ptr-as-int64 on
-/// same-C-layout mismatches like Vector[String] → Vector[int]).
+/// a Core #10 hazard. `Expr::Catch` (`src/semantic/typecheck.rs:4624`)
+/// previously called `self.infer_expr(recovery)` and DISCARDED the returned
+/// TypeId — the outer VarDecl then unified a fabricated OK type against
+/// itself, so an ill-typed recovery reached codegen (silent
+/// heap-ptr-as-int64 on same-C-layout mismatches like Vector[String] →
+/// Vector[int]).
 ///
-/// This lint asserts both arms route through the shared helper
-/// `check_recovery_type` and neither carries a bare `self.infer_expr(recovery)`
-/// / `self.infer_expr(handler)` call. A new recovery/handler-yielding arm
-/// added to `impl_typecheck_expr` must join this whitelist consciously
-/// (grepping for `check_recovery_type` to see how, or adding the
-/// justification here if the new arm legitimately doesn't need it).
+/// This lint asserts the arm routes through the shared helper
+/// `check_recovery_type` and does not carry a bare `self.infer_expr(recovery)`
+/// call. A new recovery-yielding arm added to `impl_typecheck_expr` must join
+/// this whitelist consciously (grepping for `check_recovery_type` to see how,
+/// or adding the justification here if the new arm legitimately doesn't need
+/// it). Post-D25 the `Expr::FaultCatch` sibling arm is gone.
 #[test]
 fn recovery_arms_route_through_check_recovery_type() {
     let src = std::fs::read_to_string("src/semantic/typecheck.rs")
         .expect("read src/semantic/typecheck.rs");
-    for pat in &["Expr::Catch {", "Expr::FaultCatch {"] {
+    for pat in &["Expr::Catch {"] {
         let start = src
             .find(pat)
             .unwrap_or_else(|| panic!("missing arm {pat} in src/semantic/typecheck.rs"));

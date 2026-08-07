@@ -4352,48 +4352,11 @@ pub(super) fn lower_index_access(
             elem_type
         };
         // Fault-`catch` routing for `Fault.Bounds` (error-model.md §11,
-        // Increment 2): inside an active fault scope whose `bounds_handler` is
-        // set, an out-of-bounds ARRAY element read BRANCHES to the handler
-        // instead of panicking. Gated to array element READS only — the sole
-        // path with a runtime bounds check (`gorget_array_safe_get`); range
-        // slices, string indexing, and dict-get are OUT (different runtime fns,
-        // some with no `safe_*` variant). Typed gate (collection_kind + not a
-        // range/string base), never a name check.
-        let bounds_handler = bounds_handler_for(ctx);
-        let base_type_name = ctx.type_name_for_id(resolved_base).unwrap_or_default().to_string();
-        let base_is_array = ctx.type_registry.get_type_def(&base_type_name)
-            .and_then(|td| td.metadata.collection_kind)
-            == Some(crate::ir::types::CollectionKind::Array);
-        let mut is_faultable_clone = false;
-        let dst = if let Some(handler) = bounds_handler {
-            if base_is_array && !is_range_index && !is_string_base {
-                let read = crate::ir::instructions::ReadMode::Clone;
-                is_faultable_clone = true;
-                builder.index_load_faultable(place.clone(), idx, result_type, read, handler)
-            } else {
-                builder.index_load(place.clone(), idx, result_type)
-            }
-        } else {
-            builder.index_load(place.clone(), idx, result_type)
-        };
-        // A CollectionRef tags `dst` as a LIVE borrow into the base collection so
-        // a later `base.push(...)` triggers `cow_before_mutation` to materialize
-        // the borrow before the collection reallocates. That is correct for a
-        // plain `ReadMode::Borrow` index (the dst genuinely aliases the element).
-        //
-        // It is WRONG for the faultable `Fault.Bounds` read (`ReadMode::Clone`):
-        //   (a) the no-fault path already materializes the element to an OWNED
-        //       value, and the enclosing fault-catch's `ensure_owned_at_boundary`
-        //       ensures the catch result escapes owned — nothing holds a live
-        //       borrow into the collection past the catch; and
-        //   (b) on the out-of-bounds path the dst is NULL (the safe_get returned
-        //       NULL and control branched to the handler). A stale CollectionRef
-        //       on that NULL dst makes `cow_before_mutation` at a later
-        //       `base.push(...)` clone NULL → NULL-deref crash in
-        //       `gorget_string_clone_to_owned` (Core #8, both backends).
-        // So skip the CollectionRef registration for the faultable-clone dst.
+        // Post-D25: out-of-bounds indexing panics uncatchably (no lexical
+        // fault-catch recovery form remains). Plain `index_load` — the runtime
+        // trap emitter handles the panic case.
+        let dst = builder.index_load(place.clone(), idx, result_type);
         if ctx.type_registry.is_resource_type(elem_type) && !is_task && !is_string_base
-            && !is_faultable_clone
         {
             // Use FieldPath provenance when the base is a field access (e.g., s.v[0]).
             // This ensures cow_before_field_mutation("s.v") finds the ref when
@@ -4420,15 +4383,6 @@ pub(super) fn lower_index_access(
         "typecheck must reject non-indexable receivers before lowering (E_NotIndexable)"
     );
     Operand::Constant(Constant::Unit)
-}
-
-/// The active fault scope's `bounds_handler`, if any — the GIR block an
-/// out-of-bounds array index read branches to instead of panicking
-/// (`Fault.Bounds`, error-model.md §11). `None` when no fault scope is active
-/// or the scope doesn't catch `Bounds`. Typed read off `FaultScope`, never a
-/// name check (mirrors `operators::fault_handler_for`).
-fn bounds_handler_for(ctx: &LoweringContext) -> Option<crate::ir::types::BlockId> {
-    ctx.func_state.fault_scope?.bounds_handler
 }
 
 /// Phase A residual #1: a mangled type-name fragment is a Callable family

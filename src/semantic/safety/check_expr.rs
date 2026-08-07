@@ -1662,15 +1662,6 @@ impl<'a> BorrowChecker<'a> {
                 self.check_expr(recovery);
                 self.restore_branch_state(&before);
             }
-            Expr::FaultCatch { expr, handler, .. } => {
-                self.check_expr(expr);
-                // Like `Expr::Catch`: the handler only runs on the fault path,
-                // so its divergence must not escape to the surrounding
-                // continuation (the no-fault path is always reachable).
-                let before = self.save_branch_state();
-                self.check_expr(handler);
-                self.restore_branch_state(&before);
-            }
         }
     }
 

@@ -950,19 +950,9 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
             let ret_c = c_type_named(&target.return_type, &struct_names);
             let adapt_name = format!("__adapt_{}", c_func_name(&target.name));
             let target_name = c_func_name(&target.name);
-            // Cross-frame fault (Inc-2.1a): a PARTICIPATING fn has synthesized
-            // trailing `MutPtr<i32>` fault-slot param(s) that are NOT part of its
-            // callable type. The adapter is invoked through the 2-arg callable
-            // ABI, so it must declare ONLY the user params and pass `NULL` for the
-            // trailing slot(s) — forwarding a phantom slot arg writes a fault tag
-            // through a wild pointer (memory corruption). NULL makes the callee's
-            // fault arm panic inline = panic-by-default for an indirectly-invoked
-            // fault (indirect propagation is deferred to 2.3b). Typed count off
-            // the LIR function, never name/shape-matched (devbook/24 rule 2).
-            let user_param_count = target.params.len().saturating_sub(target.fault_slot_param_count);
             // Signature: ret_type __adapt_fn(void* __env, USER params...)
             write!(out, "{ret_c} {adapt_name}(void* __env").unwrap();
-            for (i, p) in target.params.iter().take(user_param_count).enumerate() {
+            for (i, p) in target.params.iter().enumerate() {
                 let ty_str = if matches!(p, LirType::Void) { "void*".to_string() } else { c_type_named(p, &struct_names) };
                 write!(out, ", {ty_str} __p{i}").unwrap();
             }
@@ -973,12 +963,7 @@ fn generate_c_inner_impl(module: &LirModule, include_runtime: bool, wrappers_onl
             write!(out, "{target_name}(").unwrap();
             for i in 0..target.params.len() {
                 if i > 0 { write!(out, ", ").unwrap(); }
-                if i < user_param_count {
-                    write!(out, "__p{i}").unwrap();
-                } else {
-                    // Synthesized trailing fault-slot: pass NULL (panic-by-default).
-                    write!(out, "NULL").unwrap();
-                }
+                write!(out, "__p{i}").unwrap();
             }
             writeln!(out, "); }}").unwrap();
         }

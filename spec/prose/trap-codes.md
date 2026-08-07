@@ -2,10 +2,13 @@
 
 > **Phase-1 deliverable (RFC §4; D11 trap normalization).** Stable, symbolic
 > `T_`-codes for the language's dynamic **traps**: this registry maps **code →
-> trap class → catchable?**. An uncaught trap terminates the program with
+> trap class**. An uncaught trap terminates the program with
 > `trap[T_X]: detail at file:line:col` on stderr and exit **101**. Conformance
 > compares the `T_` code + exit only — never the human detail (the trailing
-> ` at file:line:col` is normalized out).
+> ` at file:line:col` is normalized out). All traps are uncatchable (D25 removed
+> the lexical fault-catch recovery form; use the fallible arithmetic operators
+> `+!`/`-!`/`*!`/`/!`/`%!`/`<<!`/`>>!` — §7.5 — to surface arithmetic failure into
+> the ordinary `throws` / `Result` channel instead).
 
 > **Exit-code context.** Trap + ICE = exit **101** is one tier of the toolchain's
 > fixed exit-code taxonomy (ratified 2026-07-15): `0` success · `1` **static
@@ -43,21 +46,19 @@ its code, so **this registry file is the stability contract**.
 
 ## Trap classes (`T_`)
 
-| Code | Class (`TrapKind`) | Catchable? (§10.9 `Fault`) |
-|---|---|---|
-| `T_Overflow` | `Overflow` — an overflowing checked `+`/`-`/`*`/`/`/`%`/`**`/unary-neg, a signed `TYPE_MIN / -1` (or `% -1`), an integer `**` with a negative exponent (domain fault — D28 amendment R3), or an out-of-range shift count (owner ruling 2026-07-10: shift-out-of-range normalizes to `T_Overflow`, no separate class) | **yes** |
-| `T_DivByZero` | `DivByZero` — a `/` or `%` with a zero divisor | **yes** |
-| `T_Bounds` | `Bounds` — an out-of-bounds index | **yes** |
-| `T_UnwrapNone` | `UnwrapNone` — `.unwrap()` on a `None` | no |
-| `T_UnwrapError` | `UnwrapError` — `.unwrap()` on an `Error` | no |
-| `T_UnwrapErrorOnOk` | `UnwrapErrorOnOk` — `.unwrap_error()` on an `Ok` | no |
-| `T_AssertFailed` | `AssertFailed` — a failing `assert` | no |
-| `T_Panic` | `Panic` — an explicit `panic(msg)` | no |
+| Code | Class (`TrapKind`) |
+|---|---|
+| `T_Overflow` | `Overflow` — an overflowing checked `+`/`-`/`*`/`/`/`%`/`**`/unary-neg, a signed `TYPE_MIN / -1` (or `% -1`), an integer `**` with a negative exponent (domain fault — D28 amendment R3), or an out-of-range shift count (owner ruling 2026-07-10: shift-out-of-range normalizes to `T_Overflow`, no separate class) |
+| `T_DivByZero` | `DivByZero` — a `/` or `%` with a zero divisor |
+| `T_Bounds` | `Bounds` — an out-of-bounds index |
+| `T_UnwrapNone` | `UnwrapNone` — `.unwrap()` on a `None` |
+| `T_UnwrapError` | `UnwrapError` — `.unwrap()` on an `Error` |
+| `T_UnwrapErrorOnOk` | `UnwrapErrorOnOk` — `.unwrap_error()` on an `Ok` |
+| `T_AssertFailed` | `AssertFailed` — a failing `assert` |
+| `T_Panic` | `Panic` — an explicit `panic(msg)` |
 
-The **catchable subset** (`TrapKind::is_catchable`) is exactly
-`Overflow | DivByZero | Bounds` — these three are re-founded as the §10.9 `Fault`
-enum (the scrutinee of the fault `catch` form). The other five
-(unwrap / assert / panic) are **uncatchable**: they always panic and exit 101.
+All traps are **uncatchable**: they always panic and exit 101 (D25 — the earlier
+lexical fault-catch recovery form is removed).
 
 ## Rendering
 
@@ -73,5 +74,4 @@ overflow`) and is **NEVER** compared by conformance; the language contract is
 `{T_ code, exit 101}`. No scope-exit drops run on the unwind of an uncaught trap.
 
 <!-- cites: spec/ggdef/src/eval.rs::TrapKind::code -->
-<!-- cites: spec/ggdef/src/eval.rs::TrapKind::is_catchable -->
 <!-- cites: spec/ggdef/src/eval.rs::EXIT_TRAP -->

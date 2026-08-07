@@ -637,20 +637,6 @@ pub enum Expr {
     },
 
     // ── Fault catch (local, unwind-free recovery from a faultable op) ──
-    /// A NEW form, distinct from the `Result` `catch` above (error-model.md
-    /// §11). Recovers an overflow/div-by-zero fault from the faultable ops
-    /// emitted DIRECTLY into `expr`'s own basic blocks (not through any call).
-    /// Two spellings, distinguished by `pattern`:
-    ///   - pattern form `(expr) catch Fault.Overflow: handler` — catches that
-    ///     one variant; no value is bound;
-    ///   - binding form `(expr) catch f: handler` — binds the constructed
-    ///     `Fault` value to `f` (the handler typically `match f`es it).
-    FaultCatch {
-        expr: Box<Spanned<Expr>>,
-        pattern: FaultCatchPattern,
-        handler: Box<Spanned<Expr>>,
-    },
-
     // ── Move (!) ──
     Move {
         expr: Box<Spanned<Expr>>,
@@ -802,23 +788,6 @@ pub enum Expr {
     /// `meta +` / `meta -` etc. at a call site — passes an operator token to a
     /// `meta op` parameter.  Has no runtime value; filtered out before GIR lowering.
     MetaOpToken(BinaryOp),
-}
-
-/// How an [`Expr::FaultCatch`] selects which fault(s) it intercepts.
-#[derive(Debug, Clone, PartialEq)]
-pub enum FaultCatchPattern {
-    /// Pattern form `catch Fault.Overflow:` — catches exactly the named
-    /// variant; faults of other variants in the wrapped expression panic.
-    /// `qualifier` is the enum prefix (`Fault`) — validated at typecheck so a
-    /// wrong qualifier (`Bogus.Overflow`) is rejected rather than silently
-    /// accepted; `variant` is the variant name (e.g. `"Overflow"`).
-    Variant {
-        qualifier: Spanned<String>,
-        variant: Spanned<String>,
-    },
-    /// Binding form `catch f:` — catches ANY fault in the wrapped expression,
-    /// constructs the corresponding `Fault` value, and binds it to the name.
-    Binding(Spanned<String>),
 }
 
 #[derive(Debug, Clone)]

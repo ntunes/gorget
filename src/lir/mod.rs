@@ -1448,15 +1448,6 @@ pub struct LirFunction {
     /// `cstr_vals`, `extern_cstr_return_vals`, `func_addr_targets`,
     /// `spawn_source_fn`.
     pub value_origins: Vec<Option<ValueOrigin>>,
-    /// Cross-frame fault propagation (error-model.md §11, Inc-2.1a): count of
-    /// SYNTHESIZED trailing fault-slot params (0 or 1) that are part of this
-    /// function's call signature but NOT its callable type. The first-class /
-    /// closure adapter generation reads this to emit the adapter over the USER
-    /// params only and pass `NULL` for the trailing slot(s) — so an indirectly
-    /// invoked participating fn PANICS by default instead of writing a fault tag
-    /// through a wild pointer. Propagated from the GIR `Function`'s
-    /// `participates_in_fault` flag (typed, devbook/24 rule 2).
-    pub fault_slot_param_count: usize,
 }
 
 impl LirFunction {
@@ -1476,7 +1467,6 @@ impl LirFunction {
             value_types: Vec::new(),
             pointee_types: Vec::new(),
             value_origins: Vec::new(),
-            fault_slot_param_count: 0,
         }
     }
 

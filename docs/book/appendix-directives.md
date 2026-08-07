@@ -35,8 +35,9 @@ void main():
 **CLI override:** `--strip-asserts` / `--no-strip-asserts`
 
 > **Note:** there is no overflow directive. Plain `+`/`-`/`*` always check
-> overflow (panic, or recover via `catch Fault.Overflow`); use the per-operator
-> `+%`/`-%`/`*%` forms for explicit wrapping. Wrapping is per-expression by
+> overflow (trap uncatchably on fault); use the per-operator `+%`/`-%`/`*%`
+> forms for explicit wrapping, or the fallible `+!`/`-!`/`*!` forms to capture
+> the failure as `Result[T, ArithError]`. Wrapping is per-expression by
 > design — there is no global mode.
 
 ---

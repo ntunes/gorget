@@ -53,7 +53,7 @@ from lower_stmt import lower_stmt, lower_place_base, lower_field_write, emit_fie
 from lower_match import match_enum_type, match_variant_index, try_lift_option_ref, emit_tag_read, is_deep_clone_fn, resolve_payload_clone_fn, emit_payload_read, emit_payload_read_mode, emit_payload_read_mode_full, match_scrutinee_ptr, lower_pattern_match, lower_ctor_pattern, lookup_ctor_field_type, result_payload_types, emit_on_error_cleanups, lower_throw_stmt, lower_catch_expr, lower_rethrow_expr, maybe_auto_propagate, arms_match_result_or_option, pattern_head_is_result_or_option, lower_match_stmt, lower_match_expr
 from lower_loops import lower_for, lower_for_vector, lower_for_string, parse_dict_kv_types, for_pat_binding_name, lower_for_dict, lower_for_range, lower_for_iterator, bind_tuple_field, bind_tuple_destructure, bind_for_local, local_is_borrow_alias, scrutinee_nonowning, scrutinee_owned_whole_dropped, scrutinee_borrow_into_owning_collection, resolve_elem_type_id, lower_while
 from lower_closures import lower_function, mangle_prim_type, mangle_trait_name, mangle_trait_equip_name, is_builtin_trait, is_iterator_protocol_trait, method_has_self, lower_equip_block, guess_return_type, expr_has_it, closure_ident_module_resolvable, closure_collect_pattern_bindings, closure_expr_has_capture, closure_stmt_has_capture, closure_stmts_have_capture, closure_body_captures, cc_callee_is_free_fn, cc_classify_ident, cc_collect_expr, cc_collect_stmt, cc_collect_stmts, collect_closure_captures, stmts_mutate_any, expr_target_mutates_any, stmt_mutates_any, expr_has_nested_closure, stmt_has_nested_closure, stmts_have_nested_closure, compute_closure_sig, compute_implicit_closure_sig, record_implicit_it_closure, lower_closure_body
-from lower_generics import GenericInstance, ProtoMethInst, proto_method_targ_tid, proto_inst_targ_count, proto_inst_targ_tid, proto_walk_expr, proto_walk_stmts, expand_meta_for_generics, expand_meta_for_stmt, expand_meta_for_expr, discover_generic_calls_expr, discover_generic_calls_stmt, discover_generic_calls_stmts, discover_adapter_chain_expr, discover_adapter_chain_stmts, spanned_type_to_c_name, has_type_variable_ctx, compute_mangled_name, setup_type_subs, clear_type_subs, lower_generic_function, lower_generic_equip, spawn_type_base_name, collect_shared_vars, scan_spawn_wrappers, scan_expr_for_spawn, stmts_have_await, emit_named_closure_spawn_expr, emit_named_closure_spawn_stmts, substitute_type, extract_meta_op_suffix, discover_transitive_expr, discover_transitive_stmt, discover_transitive_stmts, discover_mono_method_insts, block_has_delayed_meta, evaluate_delayed_meta_stmts, compute_participating_fault_fns
+from lower_generics import GenericInstance, ProtoMethInst, proto_method_targ_tid, proto_inst_targ_count, proto_inst_targ_tid, proto_walk_expr, proto_walk_stmts, expand_meta_for_generics, expand_meta_for_stmt, expand_meta_for_expr, discover_generic_calls_expr, discover_generic_calls_stmt, discover_generic_calls_stmts, discover_adapter_chain_expr, discover_adapter_chain_stmts, spanned_type_to_c_name, has_type_variable_ctx, compute_mangled_name, setup_type_subs, clear_type_subs, lower_generic_function, lower_generic_equip, spawn_type_base_name, collect_shared_vars, scan_spawn_wrappers, scan_expr_for_spawn, stmts_have_await, emit_named_closure_spawn_expr, emit_named_closure_spawn_stmts, substitute_type, extract_meta_op_suffix, discover_transitive_expr, discover_transitive_stmt, discover_transitive_stmts, discover_mono_method_insts, block_has_delayed_meta, evaluate_delayed_meta_stmts
 # Typed builtin-method declaration tables — the single source of truth
 # for the String-view / collection-owning-arg / String-return facts the
 # lowerer used to recognise via raw name-match lists (CLAUDE.md "No name
@@ -390,25 +390,6 @@ struct LowerCtx:
     # conditional-move-then-use, so the practical loss window is
     # narrow (trade documented in devbook/11 §Phase 2).
     Dict[String, bool] cow_moved_names
-    # ── Fault-catch scope (error-model.md §11) ───────────────────────
-    # The active fault-catch handler blocks for the wrapped subtree of a
-    # `(...) catch Fault.X:` expression. `Some(bb)` routes that fault
-    # category to handler block `bb`; `None` = not caught (the op stays
-    # panic-by-default). Pushed (save/restore) around ONLY the inner
-    # subtree by `lower_fault_catch_expr`; a faultable arithmetic op in
-    # `lower_expr`'s EBinaryOp gate consults the ACTIVE scope at its own
-    # site. Fresh `None` at function entry — a callee's faults stay deep
-    # (a separate `lower_function` pass = fresh ctx). Mirrors Rust gg's
-    # `FunctionState.fault_scope` (`src/ir/lowering/context.rs`).
-    Option[int] fault_overflow_handler
-    Option[int] fault_divzero_handler
-    # `Some(bb)` routes an out-of-bounds ARRAY index read (`xs[i]`) to handler
-    # block `bb` (error-model.md §11 Increment 2 (A)); `None` = not caught (the
-    # index read stays panic-by-default via `gorget_array_get`). Saved/restored
-    # around ONLY the inner subtree by `lower_fault_catch_expr`, same as the two
-    # arithmetic handlers above. The EIndex arm in `lower_expr` consults this to
-    # route through the non-panicking `gorget_array_safe_get` + a NULL-branch.
-    Option[int] fault_bounds_handler
     # True iff the function currently being lowered is a `throws` fn (its
     # declared `throws_type` is `Some`), so the return slot `_0` is the
     # SYNTHESIZED `Result[T, E]` one layer wider than the user's declared
@@ -655,8 +636,6 @@ String expr_kind(Expr e):
             return "ESpawn"
         case ESpawnBlocking(_):
             return "ESpawnBlocking"
-        case EFaultCatch(_, _, _):
-            return "EFaultCatch"
         else:
             return "?unknown_expr?"
 
@@ -1492,9 +1471,6 @@ bool mutinf_scan_expr(SpannedExpr e, String target, GirModule &gmod, Vector[Stri
         case ECatch(ce_inner, _, ce_handler):
             if mutinf_scan_expr(*ce_inner, target, &gmod, &callees): m = true
             if mutinf_scan_expr(*ce_handler, target, &gmod, &callees): m = true
-        case EFaultCatch(fc_inner, _, fc_handler):
-            if mutinf_scan_expr(*fc_inner, target, &gmod, &callees): m = true
-            if mutinf_scan_expr(*fc_handler, target, &gmod, &callees): m = true
         case ERange(rlo_opt, rhi_opt, _):
             match rlo_opt:
                 case Some(rlo):
@@ -2974,7 +2950,7 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
     Dict[String, int] _sb_cow_span = {}
     Dict[String, bool] _sb_cow_clo = {}
     # suite setup/teardown bodies are void, non-throws → fn_is_throws=false.
-    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0, [], [], [], {}, false)
+    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, false, {}, {}, "", {}, false, 0, [], [], [], {}, false)
     Vector[Instruction] sinit = []
     sctx.block_insts.push(!sinit)
     sctx.block_terms.push(GTNone())
@@ -3262,30 +3238,6 @@ bool is_builtin_collection_base(String name):
 
 GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[String, String] call_redirects, Dict[String, bool] imported_fns):
     Vector[GirType] type_table = init_type_table()
-
-    # Inject the compiler-internal `Fault` enum (error-model.md §11) as a
-    # synthetic non-generic user enum so it flows through EVERY registration
-    # pass below identically to a user-declared enum: `type_infos`,
-    # `enum_variant_parent_idx`, `enum_registry`, the C struct synthesis, and
-    # the nullary-variant constructor path (`Fault.Overflow()` →
-    # `lower_nullary_variant_ident` → `(Fault){.tag = N}`). Variant order is
-    # the tag order (Overflow=0, DivByZero=1, Bounds=2). Mirrors Rust gg's
-    # eager concrete-TypeDef injection (c7dd0816). Guarded so a user program
-    # that legitimately declares its own `enum Fault` is not duplicated.
-    bool fault_already = false
-    for fm_item in m.items:
-        match fm_item:
-            case IEnum(fm_edef):
-                if fm_edef.name == "Fault":
-                    fault_already = true
-            else:
-                pass
-    if not fault_already:
-        Vector[SpannedType] fault_no_fields = []
-        Vector[EnumVariant] fault_variants = [EnumVariant("Overflow", fault_no_fields), EnumVariant("DivByZero", []), EnumVariant("Bounds", [])]
-        Vector[String] fault_no_tp = []
-        Vector[String] fault_no_der = []
-        m.items.push(IEnum(EnumDef("Fault", fault_variants, fault_no_tp, fault_no_der)))
 
     # Pre-scan: detect if module has a main() function.
     # Test blocks are skipped when main exists (normal build mode),
@@ -3715,7 +3667,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
     Dict[String, GirStaticInfo] statics = {}
     Dict[String, ResourceMetadata] resource_metadata = {}
     Dict[int, int] option_ref_payload = {}
-    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, {}, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [], SCHED_POOL, [], !async_fns_pre, {}, {}, {}, {})
+    GirModule gmod = GirModule([], [GirExtern("printf", true, I32_TYPE)], type_table, !fn_sigs, !named_types, !resource_types, !type_subs, !meta_aliases, !call_redirects, !imported_fns, !type_infos, !fn_borrow_params, !fn_move_params, {}, !const_decls, !bool_const_decls, !string_const_decls, !none_decls, !enum_registry, !float_const_decls, !statics, !resource_metadata, types, scopes, !optionlike_resource_types, !option_ref_payload, [], !enum_variant_parent_idx, false, [], {}, {}, {}, {}, {}, !fn_defaults, [], [], {}, {}, {}, {}, [], SCHED_POOL, [], !async_fns_pre, {}, {}, {})
 
     # R38: mutation-inference — classify each &self/!self equip method
     # read-only vs writes-self (fixpoint), so the named-receiver CoW gate
@@ -3745,17 +3697,6 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                         gmod.scheduler_mode = SCHED_INLINE
             else:
                 pass
-
-    # Cross-frame fault propagation (error-model.md §11, Inc-2.1a/2.1c/2.1d):
-    # compute the participating-FREE-FUNCTION set over the AST. Runs HERE —
-    # before any function body is lowered — so `lower_function` (signature +
-    # callee fault-return arm) and `lower_call` (call-site tag-dispatch gate)
-    # can query `participates_in_fault`. Empty for the existing suite +
-    # self-host source (no arith/bounds `catch Fault.X` over a user CALL) →
-    # byte-identical → bootstrap unaffected. Mirrors Rust gg's pre-pass
-    # `compute_participating_fault_fns` (`src/ir/lowering/mod.rs`, after the
-    # fn_sigs prescan, before body lowering).
-    compute_participating_fault_fns(m, &gmod)
 
     # Pre-scan equip blocks to build the trait-impl registry for the
     # compile-time `implements(T, "Trait")` meta-predicate. Runs HERE — before
@@ -5234,7 +5175,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                         Dict[String, int] _cow_span3 = {}
                         Dict[String, bool] _cow_clo3 = {}
                         # Test bodies are void, non-throws → fn_is_throws=false.
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, None, None, None, false, {}, {}, "", {}, false, 0, [], [], [], {}, false)
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, false, {}, {}, "", {}, false, 0, [], [], [], {}, false)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())

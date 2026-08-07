@@ -314,9 +314,6 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
         case ECatch(ce_inner, _, ce_handler):
             cow_scan_expr(&ctx, &gmod, *ce_inner, in_closure)
             cow_scan_expr(&ctx, &gmod, *ce_handler, in_closure)
-        case EFaultCatch(fc_inner, _, fc_handler):
-            cow_scan_expr(&ctx, &gmod, *fc_inner, in_closure)
-            cow_scan_expr(&ctx, &gmod, *fc_handler, in_closure)
         else:
             pass
 

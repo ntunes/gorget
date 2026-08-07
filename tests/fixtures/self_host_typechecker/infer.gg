@@ -11,7 +11,7 @@ from ast import EIndex, EClosure, EArrayLiteral, ETupleLiteral
 from ast import EStructLiteral, EDotShorthand, ETry, EAs, EMove, EPropagate
 from ast import EMutableBorrow, EDeref, EIs, EAwait, ESpawn
 from ast import EDictLiteral, EDefaultOp, EBlock, EDo, EFString
-from ast import ECatch, EFaultCatch, FaultCatchPattern, FcpVariant, FcpBinding
+from ast import ECatch
 from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
@@ -1068,25 +1068,6 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                 Stmt last = body_stmts.get(body_stmts.len() - 1).unwrap()
                 return infer_stmt_return_type(last, scopes, &types, &ctx)
             return NO_TYPE
-
-        case EFaultCatch(fc_inner, fc_pattern, fc_handler):
-            # Local fault-catch (error-model.md §11). The wrapped expr is a
-            # plain (non-throwing) value — its type IS the result type on the
-            # no-fault path. For the variant form, reject a qualifier != "Fault"
-            # or an unknown Fault variant. The handler runs on the fault path
-            # and yields the same type. (No enum_variants registry in the
-            # self-host resolver, so the variant check uses the closed Fault
-            # set — pass-3 note.)
-            int fc_inner_ty = infer_expr_type(SpannedExpr((*fc_inner).expr, (*fc_inner).span), scopes, &types, &ctx)
-            match fc_pattern:
-                case FcpVariant(fc_qual, fc_var):
-                    bool fc_known = fc_var == "Overflow" or fc_var == "DivByZero" or fc_var == "Bounds"
-                    if fc_qual != "Fault" or not fc_known:
-                        ctx.diagnostics.push(Diagnostic.error((*fc_inner).span, DkUndefinedName(), "unknown fault-catch variant `" + fc_qual + "." + fc_var + "` (expected Fault.Overflow / Fault.DivByZero / Fault.Bounds)"))
-                case FcpBinding(_):
-                    pass
-            int fc_handler_ty = infer_expr_type(SpannedExpr((*fc_handler).expr, (*fc_handler).span), scopes, &types, &ctx)
-            return fc_inner_ty
 
         case ECatch(ec_inner, _ec_name, _ec_recovery):
             # Track A · SH mirror of Rust `Expr::Catch` at

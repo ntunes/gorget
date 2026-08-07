@@ -140,7 +140,6 @@ impl FunctionBuilder {
             def_span: None,
             with_refresh_pairs: self.with_refresh_pairs,
             inner_shared_spawns: self.inner_shared_spawns,
-            participates_in_fault: false,
         }
     }
 
@@ -287,10 +286,12 @@ impl FunctionBuilder {
         })
     }
 
-    /// Emit a fault-`catch`able arithmetic op (error-model.md §11.2): identical
-    /// to [`Self::bin_op`] but on a fault it BRANCHES to `fault_handler` instead
-    /// of panicking. Only used inside an active fault-catch for the five integer
-    /// faultable ops.
+    /// Emit a fallible arithmetic op (D26 — `+!`, `-!`, `*!`, `/!`, `%!`):
+    /// identical to [`Self::bin_op`] but on a fault it BRANCHES to
+    /// `overflow_handler` / `divzero_handler` blocks instead of panicking. The
+    /// handlers are wired by `lower_fallible_arith_binop` to construct a
+    /// `Result[T, ArithError]` value (Route B) or auto-propagate `Error` up
+    /// the throws chain (Route A).
     pub fn bin_op_faultable(
         &mut self,
         op: BinOp,
@@ -308,27 +309,6 @@ impl FunctionBuilder {
             rhs,
             overflow_handler,
             divzero_handler,
-        })
-    }
-
-    /// Emit a fault-`catch`able array element-READ (error-model.md §11,
-    /// `Fault.Bounds`): like [`Self::index_load`] but an out-of-bounds index
-    /// BRANCHES to `fault_handler` instead of panicking. Used only inside an
-    /// active fault-catch whose `bounds_handler` is set, on array element reads.
-    pub fn index_load_faultable(
-        &mut self,
-        base: Place,
-        index: Operand,
-        type_id: TypeId,
-        read: ReadMode,
-        fault_handler: BlockId,
-    ) -> LocalId {
-        self.emit_with_temp(type_id, |dst| Instruction::FaultableIndexLoad {
-            dst,
-            base,
-            index,
-            read,
-            fault_handler,
         })
     }
 
@@ -417,58 +397,6 @@ impl FunctionBuilder {
             args,
             reason: Some(reason),
         })
-    }
-
-    /// Emit a fault-`catch`able direct call (error-model.md §11, Increment
-    /// 2.1a/2.1c): like [`Self::call`] but the callee participates in cross-frame
-    /// fault propagation. `args` must already include the trailing `&fault_slot`
-    /// operand as its LAST element; `fault_slot` is the caller's `i32` slot place
-    /// (its tag VALUE selects the handler after the call). `overflow_handler` /
-    /// `divzero_handler` are the per-category GIR blocks to dispatch to (each the
-    /// user's catch entry OR the scope's panic block — always `Some` here). Emits
-    /// a `dst`-producing form when `return_type` is not unit. Used ONLY by the
-    /// call-site gate inside an active fault scope.
-    pub fn fault_call(
-        &mut self,
-        func: impl Into<String>,
-        args: Vec<Operand>,
-        return_type: TypeId,
-        fault_slot: Place,
-        overflow_handler: Option<BlockId>,
-        divzero_handler: Option<BlockId>,
-        bounds_handler: Option<BlockId>,
-    ) -> LocalId {
-        let func = func.into();
-        self.emit_with_temp(return_type, |dst| Instruction::FaultableCall {
-            dst: Some(dst),
-            func,
-            args,
-            fault_slot,
-            overflow_handler,
-            divzero_handler,
-            bounds_handler,
-        })
-    }
-
-    /// Void-returning variant of [`Self::fault_call`].
-    pub fn fault_call_void(
-        &mut self,
-        func: impl Into<String>,
-        args: Vec<Operand>,
-        fault_slot: Place,
-        overflow_handler: Option<BlockId>,
-        divzero_handler: Option<BlockId>,
-        bounds_handler: Option<BlockId>,
-    ) {
-        self.emit(Instruction::FaultableCall {
-            dst: None,
-            func: func.into(),
-            args,
-            fault_slot,
-            overflow_handler,
-            divzero_handler,
-            bounds_handler,
-        });
     }
 
     pub fn call_indirect(

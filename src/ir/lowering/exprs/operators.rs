@@ -372,69 +372,9 @@ pub(super) fn lower_binary_op(
                     )
                 }
             };
-            // Fault-`catch` routing (error-model.md §11.2): inside an active
-            // fault scope, an integer faultable op (Add/Sub/Mul overflow,
-            // Div/Rem div-by-zero) BRANCHES to the scope's handler on a fault
-            // instead of panicking. Only ops emitted DIRECTLY into the wrapped
-            // expression's own blocks are caught — a callee's or inline
-            // closure's faults are lowered in a SEPARATE function pass whose
-            // `func_state` (hence `fault_scope`) starts fresh, so they stay
-            // deep and panic (the §11.5 basic-block reach). Typed gate (op kind
-            // + integer type), never a name check.
-            if let Some((overflow_handler, divzero_handler)) = fault_handler_for(ctx, operand_type, bin_op) {
-                let dst = builder.bin_op_faultable(
-                    bin_op, operand_type, lhs, rhs, overflow_handler, divzero_handler,
-                );
-                return FunctionBuilder::copy(dst);
-            }
             let dst = builder.bin_op(bin_op, operand_type, lhs, rhs);
             FunctionBuilder::copy(dst)
         }
-    }
-}
-
-/// Decide whether the binary op at the current site should be a fault-`catch`able
-/// op, and if so return the per-category GIR handler blocks. Returns
-/// `Some((overflow_handler, divzero_handler))` only when a fault scope is active
-/// AND the op is one of the five integer faultable ops AND `operand_type` is an
-/// integer. Add/Sub/Mul populate only the overflow handler; Div/Rem populate
-/// BOTH (a single signed Div has two fault categories — `rhs == 0` → DivByZero
-/// AND `TYPE_MIN/-1` → Overflow — the `T_Overflow`/`T_DivByZero` split, see
-/// `spec/prose/trap-codes.md`). Each
-/// returned slot is `Some` only when the scope catches that category; a slot
-/// left `None` panics by default. `None` for the whole result → the op stays the
-/// panic-by-default form (typed gate, never a name check).
-fn fault_handler_for(
-    ctx: &LoweringContext,
-    operand_type: TypeId,
-    op: BinOp,
-) -> Option<(Option<crate::ir::types::BlockId>, Option<crate::ir::types::BlockId>)> {
-    let scope = ctx.func_state.fault_scope?;
-    // Integer types only (overflow/div0 are integer faults; floats don't trap).
-    let is_integer = matches!(
-        ctx.type_registry.get(operand_type),
-        Some(GirType::I8) | Some(GirType::I16) | Some(GirType::I32) | Some(GirType::I64)
-            | Some(GirType::U8) | Some(GirType::U16) | Some(GirType::U32) | Some(GirType::U64)
-    );
-    if !is_integer {
-        return None;
-    }
-    match op {
-        // Add/Sub/Mul: overflow only, and ONLY when the user catches it (else
-        // the plain panic-by-default checked op — behaviour unchanged).
-        BinOp::Add | BinOp::Sub | BinOp::Mul => {
-            scope.overflow_handler.map(|h| (Some(h), None))
-        }
-        // Div/Rem: TWO categories, BOTH always handled at GIR — `TYPE_MIN/-1` →
-        // user overflow entry OR the `"integer overflow"` panic block; `rhs == 0`
-        // → user div0 entry OR the `"division by zero"` panic block. So the LIR
-        // always branches (no LIR-level panic; uniform across both backends).
-        BinOp::Div | BinOp::Rem => Some((
-            Some(scope.overflow_handler.unwrap_or(scope.div_overflow_panic)),
-            Some(scope.divzero_handler.unwrap_or(scope.div_zero_panic)),
-        )),
-        // Mod, bitwise, shifts, and the explicit `+%` wrap ops never fault.
-        _ => None,
     }
 }
 
@@ -484,8 +424,7 @@ fn lower_fallible_arith_binop(
     };
 
     // Operand must be an integer for the fault-check semantics to apply
-    // (matches `fault_handler_for`; the check-lane rejects non-int operands
-    // via `E_FallibleArithmeticOnNonInt`).
+    // (the check-lane rejects non-int operands via `E_FallibleArithmeticOnNonInt`).
     let is_integer = matches!(
         ctx.type_registry.get(operand_type),
         Some(GirType::I8) | Some(GirType::I16) | Some(GirType::I32) | Some(GirType::I64)

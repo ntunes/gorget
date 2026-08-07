@@ -1,13 +1,15 @@
-# Fault-catch binding form: `catch f: match f` binds the constructed Fault
-# value so the handler reads which fault occurred (error-model.md §11.2).
+# Post-D25: match on the ArithError variant via D26 `*!` and `/!`. Axis: D26
+# error-variant binding stands in for the removed fault-catch binding form.
 void main():
     int big = 9223372036854775807
-    int r = (big * 2) catch f: match f:
-        case Fault.Overflow(): 111
-        case Fault.DivByZero(): 222
-    print(f"{r}")
+    Result[int, ArithError] r = big *! 2
+    match r:
+        case Ok(_):                        print("0")
+        case Error(ArithError.Overflow):   print("111")
+        case Error(ArithError.DivByZero):  print("222")
     int z = 0
-    int d = (10 / z) catch f: match f:
-        case Fault.Overflow(): 111
-        case Fault.DivByZero(): 222
-    print(f"{d}")
+    Result[int, ArithError] d = 10 /! z
+    match d:
+        case Ok(_):                        print("0")
+        case Error(ArithError.Overflow):   print("111")
+        case Error(ArithError.DivByZero):  print("222")

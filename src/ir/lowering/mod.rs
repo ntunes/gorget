@@ -3,7 +3,6 @@ pub mod closures;
 pub mod context;
 pub mod drops;
 pub mod exprs;
-pub mod fault_participation;
 pub mod functions;
 pub mod generics;
 pub mod liveness;
@@ -246,23 +245,11 @@ pub fn lower_module(
         }
     }
 
-    // Register the compiler-internal `Fault` enum (error-model.md §11.1) as a
-    // concrete non-generic enum TypeDef. Unlike the generic Option/Result
-    // (lazily monomorphized from `enum_templates` on use), `Fault` is
-    // non-generic and used in a TYPED position (`Fault f = …`, `match f`,
-    // `Fault.Overflow()`), so its TypeDef + variant layout must exist eagerly.
-    // `register_enum_type` is idempotent (no-op if a user already defined a
-    // `Fault`, though `Fault` is a reserved built-in name here).
-    types::register_enum_type(
-        &mut type_mapper,
-        &mut module.type_registry,
-        &crate::ir::lowering::generics::builtin_fault_enum(),
-        &generic_templates,
-    );
     // D26 (Round XXXIII Batch C1): register `ArithError` prelude enum
     // (payload-free, non-generic) — a compile-time enum construction target
-    // for the fallible arithmetic operators. Same eager-registration pattern
-    // as `Fault`.
+    // for the fallible arithmetic operators. Eager registration mirrors the
+    // Option/Result prelude pattern for typed positions
+    // (`ArithError e = …`, `match e`, `ArithError.Overflow()`).
     types::register_enum_type(
         &mut type_mapper,
         &mut module.type_registry,
@@ -940,32 +927,6 @@ pub fn lower_module(
     }
 
     *pass_times.entry("prescan_fn_sigs").or_default() += __pass_t.elapsed();
-
-    // Cross-frame fault-propagation participation (error-model.md §11, Inc-2.1a).
-    // Compute the set of functions that BOTH have an uncaught faultable
-    // arithmetic op AND are directly called from a `FaultCatch`-Overflow scope.
-    // ONLY these get the synthesized trailing `MutPtr<i32>` fault-slot param,
-    // and every direct caller passes the trailing arg (uniform signature, D5).
-    // Empty for the entire existing suite + self-host (no `catch Fault.X` over a
-    // user CALL) → zero signature change there. Must run BEFORE body lowering so
-    // the signature lowering and the call-site gate both see the typed flag.
-    ctx.participating_fault_fns =
-        crate::ir::lowering::fault_participation::compute_participating_fault_fns(
-            &ast_module.items,
-        );
-    // Append the synthesized trailing fault-slot's ByMutPtr ABI to each
-    // participating fn's `fn_param_abis` (the prescan recorded only the user
-    // params). The consume-site / read-site validators read this so the slot
-    // arg of a `FaultableCall` resolves to a borrow shape, never a consume.
-    {
-        let participating: Vec<String> =
-            ctx.participating_fault_fns.iter().cloned().collect();
-        for name in participating {
-            if let Some(abis) = ctx.fn_param_abis.get_mut(&name) {
-                abis.push(context::ParamABI::ByMutPtr);
-            }
-        }
-    }
 
     let __pass_t = Instant::now();
     // Build call_resolved_names: for each entry in resolution_map that points to a

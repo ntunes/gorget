@@ -138,6 +138,16 @@ pub enum ParseErrorKind {
         /// The offending glyph literal (`+!=` etc.), rendered in the message.
         op: String,
     },
+
+    /// D25 (Round XXXIV Batch C2): the lexical / deep `catch Fault.X:` and
+    /// `catch f: match f: …` fault-recovery forms are REMOVED. Faults now
+    /// panic uncatchably (Swift model). Programs that need to recover from an
+    /// arithmetic fault opt in via the fallible arithmetic operators (`+!`,
+    /// `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` — D26) which yield
+    /// `Result[T, ArithError]`. Detected at parse time when a bare identifier
+    /// (or `Ident.Ident`) follows `catch` where the contract form uses a
+    /// parenthesised binding.
+    FaultCatchRemoved,
 }
 
 impl std::fmt::Display for ParseError {
@@ -210,6 +220,15 @@ impl std::fmt::Display for ParseError {
                     "compound fallible operators (`{op}` and its siblings) are excluded in v1; \
                      help: rewrite as `Result[T, ArithError] r = x {base} y` and match on the result",
                     base = op.trim_end_matches('=')
+                )
+            }
+            ParseErrorKind::FaultCatchRemoved => {
+                write!(
+                    f,
+                    "E_FaultCatchRemoved: the `catch Fault.X:` recovery form was removed (D25). \
+                     Faults now panic uncatchably; use the fallible arithmetic operators \
+                     (`+!`/`-!`/`*!`/`/!`/`%!`/`<<!`/`>>!`) to capture faults as \
+                     `Result[T, ArithError]` instead"
                 )
             }
         }

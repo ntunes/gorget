@@ -270,10 +270,6 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
             v.visit_expr(expr);
             v.visit_expr(recovery);
         }
-        Expr::FaultCatch { expr, handler, .. } => {
-            v.visit_expr(expr);
-            v.visit_expr(handler);
-        }
     }
 }
 

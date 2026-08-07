@@ -139,12 +139,7 @@ fn infer_func(
                 | Instruction::HeapAllocArray { dst, .. } => {
                     decisions.push((*dst, LocalOwnership::FreshOwned));
                 }
-                // A `FaultableCall`'s result has the SAME ownership semantics
-                // as a plain `Call` on the no-fault path (an internal fn
-                // returning a droppable resource by value owns it) — tag it
-                // identically, else a Drop-bearing result leaks / double-frees.
-                Instruction::Call { dst: Some(d), func: callee, .. }
-                | Instruction::FaultableCall { dst: Some(d), func: callee, .. } => {
+                Instruction::Call { dst: Some(d), func: callee, .. } => {
                     if is_clone_or_fresh_call_name(callee, clone_fns, runtime_callees) {
                         decisions.push((*d, LocalOwnership::FreshOwned));
                     } else if call_result_is_owned(func, *d, registry) {
@@ -242,12 +237,7 @@ fn infer_func(
                 // `Borrow` mode is the zero-copy view path and is NOT
                 // tagged here. Catches the `Dict[K, V][k]` shape where
                 // the value is read by clone (default for resource Vs).
-                // A faultable index read (Fault.Bounds) materializes the same
-                // owned element as a plain `IndexLoad` on the no-fault path —
-                // SAME ownership tag, else a Drop-bearing element leaks /
-                // double-frees under Bounds-catch.
-                Instruction::IndexLoad { dst, read, .. }
-                | Instruction::FaultableIndexLoad { dst, read, .. } => {
+                Instruction::IndexLoad { dst, read, .. } => {
                     use crate::ir::instructions::ReadMode;
                     if matches!(read, ReadMode::Clone) {
                         decisions.push((*dst, LocalOwnership::Owned));

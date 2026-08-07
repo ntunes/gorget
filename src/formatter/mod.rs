@@ -2105,22 +2105,6 @@ impl Formatter {
                 self.emitter.write("): ");
                 self.format_expr(recovery);
             }
-            Expr::FaultCatch { expr, pattern, handler } => {
-                self.format_expr(expr);
-                self.emitter.write(" catch ");
-                match pattern {
-                    FaultCatchPattern::Variant { qualifier, variant } => {
-                        self.emitter.write(&qualifier.node);
-                        self.emitter.write(".");
-                        self.emitter.write(&variant.node);
-                    }
-                    FaultCatchPattern::Binding(name) => {
-                        self.emitter.write(&name.node);
-                    }
-                }
-                self.emitter.write(": ");
-                self.format_expr(handler);
-            }
         }
     }
 

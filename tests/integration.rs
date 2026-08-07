@@ -8625,344 +8625,84 @@ fn overflow_mul() {
     run_gg_panics("overflow_mul.gg", "integer overflow");
 }
 
-// ── Fault-catch (error-model.md §11, Phase 1 Increment 1) ──────────────────
-// A faultable op (overflow / div-by-zero) inside `(...) catch Fault.X:` branches
-// to a LOCAL handler instead of panicking; uncaught faults still panic. Both
-// backends derive the branch from the shared LIR `Inst::FaultCheck`.
+// ── Faults (post-D25, Round XXXIV Track C2, 2026-08-07) ────────────────────
+// D25 removed the lexical `catch Fault.X:` / `catch f: match f:` recovery
+// forms. Faults panic uncatchably (Swift model). Programs that want to
+// RECOVER from arithmetic faults now capture via the D26 fallible operators
+// (`+!`/`-!`/`*!`/`/!`/`%!`) as `Result[T, ArithError]`. Bounds-catch has no
+// D26 equivalent — out-of-bounds indexing panics uncatchably too.
 
 #[test]
 fn fault_catch_overflow() {
+    // MIGRATED: `*!` Route-B captures the overflow as `Error(ArithError.Overflow)`.
     run_gg("fault_catch_overflow.gg", "-1\n12");
 }
 
 #[test]
 fn fault_catch_div0() {
+    // MIGRATED: `/!` / `%!` Route-B captures div-by-zero as `ArithError.DivByZero`.
     run_gg("fault_catch_div0.gg", "999\n5\n777");
 }
 
 #[test]
 fn fault_catch_binding() {
+    // MIGRATED: match on the `ArithError` variant instead of the removed
+    // `catch f: match f:` binding form.
     run_gg("fault_catch_binding.gg", "111\n222");
 }
 
 #[test]
-fn fault_catch_compound() {
-    run_gg("fault_catch_compound.gg", "-7\n32");
-}
-
-#[test]
 fn fault_catch_contract_unchanged() {
-    // Regression: the existing Result `catch (name):` path is unperturbed.
+    // Regression: contract `catch (msg):` form UNCHANGED post-D25 — combined
+    // with a D26 `*!` capture on the arithmetic side.
     run_gg("fault_catch_contract_unchanged.gg", "-1\n42\n-2");
 }
 
 #[test]
-fn fault_catch_drop() {
-    // Drop-correctness: the live owned temporary is dropped EXACTLY once on each
-    // path (fault + no-fault) — two `make()` calls → two drops, no leak/double-free.
-    run_gg("fault_catch_drop.gg", "-1\n10\ndrop counter\ndrop counter");
-}
-
-#[test]
 fn fault_panic_default() {
-    // Panic-by-default preserved: overflow OUTSIDE a fault-catch still exits 1.
+    // Panic-by-default preserved: overflow panics uncatchably (no lexical
+    // fault-catch remains post-D25).
     run_gg_panics("fault_panic_default.gg", "integer overflow");
-}
-
-// ── Error model — Increment 2.1a: CROSS-FRAME fault propagation (C backend,
-// single hop, error-model.md §11). An overflow raised in a callee propagates to
-// a `catch` in its DIRECT caller via a hidden trailing `MutPtr<i32>` fault-slot,
-// without unwind — `FaultableCall` + branch-before-read. LLVM lock-in is 2.1b. ──
-
-#[test]
-fn fault_deep_catch() {
-    // The §1 demonstrator: `faulty(BIG, BIG)` overflows in the callee; the
-    // `catch Fault.Overflow` is one frame up in main. The fault propagates →
-    // handler value -1, NOT a panic.
-    run_gg("fault_deep_catch.gg", "-1");
-}
-
-#[test]
-fn fault_deep_catch_drop() {
-    // Q9 drop-gate: the callee `faulty` holds a LIVE Drop-bearing local (`g`) when
-    // the overflow happens. The early-exit drops run on the fault path → `g` is
-    // dropped EXACTLY ONCE (deterministic "drop guard N" print proves it on BOTH
-    // paths). Fault path → "drop guard 1", -1; no-fault → "drop guard 2", 14.
-    // (Also run under ASan/UBSan during development — clean: no leak/double-free.)
-    run_gg(
-        "fault_deep_catch_drop.gg",
-        "drop guard 1\n-1\ndrop guard 2\n14",
-    );
-}
-
-#[test]
-fn fault_deep_uncaught_panic() {
-    // Panic-by-default for a DEEP fault with NO catch in the caller: `main` calls
-    // `faulty` without a `catch`, so this call site passes a NULL fault-slot and
-    // the callee's fault arm panics (exit 1). `deep_catcher` (which DOES catch)
-    // prints 6 first, exercising the uniform-signature participating path.
-    run_gg_panics("fault_deep_uncaught_panic.gg", "integer overflow");
-}
-
-#[test]
-fn fault_deep_fnvalue_panic() {
-    // BOTH BACKENDS (2.1b landed): the LLVM closure-adapter for a participating fn
-    // now passes NULL for the trailing fault-slot (mirroring the C adapter, gated on
-    // the typed `LirFunction.fault_slot_param_count`), so this runs under LLVM too —
-    // the former incidental-UB-only pass (register happened to hold 0) is fixed.
-    // MEMORY-SAFETY regression guard (Core #6): a PARTICIPATING fn taken as a
-    // first-class fn-value AND passed to a higher-order fn is invoked through the
-    // 2-arg callable ABI — its synthesized trailing fault-slot is NOT part of the
-    // callable type, so the closure adapter must pass NULL for it. A phantom slot
-    // arg wrote a fault tag through a wild pointer (SIGSEGV / ASan global-buffer-
-    // overflow) before the fix. The no-overflow indirect calls still return the
-    // right values (-1, 42, 72); the indirect overflow PANICS by default (NULL
-    // slot → callee panic arm) — indirect propagation is deferred to 2.3b.
-    // Verified ASan/UBSan-clean during development (no wild write).
-    run_gg_panics_with_stdout(
-        "fault_deep_fnvalue_panic.gg",
-        "-1\n42\n72",
-        "integer overflow",
-    );
-}
-
-// ── Error model — Increment 2.1c: CROSS-FRAME DivByZero propagation (C + LLVM,
-// single hop, error-model.md §11). Same hidden-slot ABI as Overflow, plus the
-// load-bearing per-category TAG-DISPATCH: the caller reads the slot tag VALUE and
-// routes to the matching `Fault` category entry (a single `slot != 0` branch
-// would construct the WRONG variant — the §2.3 silent miscompile). ──
-
-#[test]
-fn fault_deep_catch_divzero() {
-    // The §1 demonstrator for DivByZero: `q(10, z)` divides by zero in the
-    // callee; the `catch Fault.DivByZero` is one frame up in main. The fault
-    // propagates → handler value 999, NOT a panic.
-    run_gg("fault_deep_catch_divzero.gg", "999");
-}
-
-#[test]
-fn fault_deep_catch_divzero_binding() {
-    // CORE-#8 REGRESSION GUARD (the §2.3 silent miscompile): the binding form
-    // `catch f: match f` catches multiple categories, so the caller must dispatch
-    // on the slot TAG VALUE. A naive single-handler `FaultableCall` printed 100
-    // (the Overflow arm) for a deep div0; the per-category tag-dispatch routes the
-    // DivByZero tag to the DivByZero arm → 200. MUST print 200, not 100.
-    run_gg("fault_deep_catch_divzero_binding.gg", "200");
-}
-
-#[test]
-fn fault_deep_uncaught_divzero_panic() {
-    // Panic-by-default for a DEEP div0 with NO catch in the caller: `main` calls
-    // `q` without a `catch`, so this call site passes a NULL fault-slot and the
-    // callee's fault arm panics (exit 1). `deep_catcher` (which DOES catch) prints
-    // 999 first, exercising the uniform-signature participating path.
-    run_gg_panics_with_stdout(
-        "fault_deep_uncaught_divzero_panic.gg",
-        "999",
-        "division by zero",
-    );
-}
-
-#[test]
-fn fault_deep_catch_divzero_drop() {
-    // Q9 drop-gate (cross-frame div0 variant): the callee `q` holds a LIVE
-    // Drop-bearing local (`g`) when the div0 happens. The early-exit drops run on
-    // the fault path → `g` is dropped EXACTLY ONCE (deterministic "drop guard N"
-    // print proves it on BOTH paths). Fault path → "drop guard 1", -1; no-fault →
-    // "drop guard 2", 7. (Also run under ASan/UBSan — clean: no leak/double-free.)
-    run_gg(
-        "fault_deep_catch_divzero_drop.gg",
-        "drop guard 1\n-1\ndrop guard 2\n7",
-    );
-}
-
-#[test]
-fn fault_deep_mixed_divzero_only() {
-    // §3 uncaught-CATEGORY re-panic guard: the callee `mixed` can raise BOTH an
-    // Overflow (`a * b`) and a DivByZero (`a / b`); the call site catches DivByZero
-    // ONLY. The first call's div0 is caught (777); the second call's OVERFLOW is a
-    // category this scope does NOT catch → the caller re-dispatches to the
-    // (always-Some) panic block → "integer overflow", exit 1. Proves a non-caught
-    // category does NOT silently fall through (a Core-#8 miscompile) — uniform
-    // across both backends.
-    run_gg_panics_with_stdout(
-        "fault_deep_mixed_divzero_only.gg",
-        "777",
-        "integer overflow",
-    );
-}
-
-// ── Error model — Increment 2.1d (Bounds cross-frame fault tag). The callee's
-// `v[i]` routes the OOB (gorget_array_safe_get NULL) into a Bounds fault-return
-// block (tag 3); the caller's tag-switch dispatches the Bounds category. ──
-
-#[test]
-fn fault_deep_catch_bounds() {
-    // The §1 demonstrator for Bounds: `getx(xs, 99)` indexes out of bounds in the
-    // callee; the `catch Fault.Bounds` is one frame up in main → handler 999.
-    run_gg("fault_deep_catch_bounds.gg", "999");
-}
-
-#[test]
-fn fault_deep_catch_bounds_binding() {
-    // Tag-dispatch guard (binding form): the callee's Bounds tag must select the
-    // Bounds arm (not Overflow/DivByZero) → 7.
-    run_gg("fault_deep_catch_bounds_binding.gg", "7");
-}
-
-#[test]
-fn fault_deep_uncaught_bounds_panic() {
-    // Panic-by-default for a DEEP OOB with NO catch: `deep_catcher` (which catches)
-    // prints 42; `main`'s second call passes a NULL slot → panic, exit 1.
-    run_gg_panics_with_stdout(
-        "fault_deep_uncaught_bounds_panic.gg",
-        "42",
-        "index out of bounds",
-    );
-}
-
-#[test]
-fn fault_deep_mixed_bounds_only() {
-    // Uncaught-CATEGORY re-panic guard: `mixed` raises BOTH a Bounds (`xs[i]`) and
-    // an Overflow (`a * b`); the call site catches Bounds ONLY. First call's OOB
-    // caught (777); second call's Overflow is uncaught → re-panic "integer
-    // overflow", exit 1 (not swallowed).
-    run_gg_panics_with_stdout(
-        "fault_deep_mixed_bounds_only.gg",
-        "777",
-        "integer overflow",
-    );
-}
-
-#[test]
-fn fault_deep_bounds_swallow_guard() {
-    // THE Core-#8 swallow guard (the reason the `bounds_panic` block on FaultScope
-    // exists, NEW in 2.1d): a deep Bounds caught only by `catch Fault.Overflow:` is
-    // a category this scope does NOT catch → it MUST re-panic "index out of bounds"
-    // (exit 1), NOT silently fall through to the result. Without the always-Some
-    // bounds_handler → bounds_panic resolution, the Bounds would be swallowed.
-    run_gg_panics("fault_deep_bounds_swallow_guard.gg", "index out of bounds");
-}
-
-#[test]
-fn fault_deep_catch_bounds_drop() {
-    // Q9 drop-gate (cross-frame Bounds): the callee holds a LIVE Drop-bearing local
-    // when the OOB happens; the early-exit drops run on the fault path → dropped
-    // EXACTLY ONCE. Fault path → "drop guard 1", -1; no-fault → "drop guard 2", 22.
-    // (Also run under ASan/UBSan — clean.)
-    run_gg(
-        "fault_deep_catch_bounds_drop.gg",
-        "drop guard 1\n-1\ndrop guard 2\n22",
-    );
-}
-
-#[test]
-fn fault_deep_catch_bounds_resource() {
-    // Resource-element Bounds: a deep OOB on a `Vector[String]`; the callee's
-    // declared return is the OWNED element (String), so the return-boundary
-    // materialization clones the borrow (no Ptr(T) leak). → "missing", "bob".
-    // (Run under ASan/UBSan — clean.)
-    run_gg("fault_deep_catch_bounds_resource.gg", "missing\nbob");
-}
-
-// ── Error model — Increment 2 (Bounds + Div-split + qualifier + plain-op
-// INT_MIN trap, error-model.md §11). ──
-
-#[test]
-fn fault_catch_bounds() {
-    // (A) Fault.Bounds: an out-of-bounds ARRAY index read branches to the local
-    // handler (pattern + binding forms); an in-bounds read yields the element.
-    run_gg("fault_catch_bounds.gg", "-1\n20\n7");
-}
-
-#[test]
-fn fault_catch_bounds_negidx() {
-    // (A) §11.6: a negative index is a CATCHABLE Bounds inside a catch.
-    run_gg("fault_catch_bounds_negidx.gg", "-1");
-}
-
-#[test]
-fn fault_catch_bounds_drop() {
-    // (A) §5 drop-correctness: a faultable read of a Drop-bearing element
-    // (String); both the in-bounds clone and the out-of-bounds handler are
-    // ASan-clean (no leak/double-free of the Vector's owned strings).
-    run_gg("fault_catch_bounds_drop.gg", "bob\nout-of-range");
-}
-
-#[test]
-fn fault_catch_bounds_resource_mut() {
-    // (A) §5 resource-coherence regression (Core #8): a faultable
-    // `Vector[String]` read whose OOB path is taken, followed by a `push`
-    // (which reallocates) and a USE of the caught value. The faultable dst
-    // must NOT be tagged a CollectionRef into `names` — otherwise the push's
-    // `cow_before_mutation` clones the dst, which is NULL on the OOB path →
-    // NULL-deref crash in `gorget_string_clone_to_owned` (identically on C and
-    // LLVM). Covers both the OOB and in-bounds branches + a post-mutation read.
-    run_gg("fault_catch_bounds_resource_mut.gg", "missing\nalice\ndave");
 }
 
 #[test]
 fn fault_bounds_panic_default() {
-    // (A) Panic-by-default preserved: an UNCAUGHT out-of-bounds index still
-    // panics `index out of bounds` and exit(1).
+    // Panic-by-default preserved for out-of-bounds indexing (uncatchable
+    // post-D25; no D26 equivalent for Bounds).
     run_gg_panics("fault_bounds_panic_default.gg", "index out of bounds");
 }
 
 #[test]
-fn fault_catch_bounds_struct() {
-    // (A) case (c): a faultable Bounds read of a Vector of PLAIN STRUCT elements.
-    // Rust gg catches the OOB and yields the fallback struct. The self-host now
-    // ALSO handles case (c) (the last Inc2 gap, closed): its faultable `safe_get`
-    // route is gated to scalar + resource + struct element dsts, and the
-    // in-bounds continuation derefs the raw element pointer with the same
-    // aggregate-safe `GIDeref` the scalar case uses. Locked into the self-host
-    // net via `runtime_snapshots/fault_catch_bounds_struct.out`; the `.get()`
-    // Option path is proved uncrossed by the `vec_struct_get` regression test.
-    run_gg("fault_catch_bounds_struct.gg", "3,4\n-1,-1");
-}
-
-#[test]
-fn vec_struct_get() {
-    // Regression guard for the fault-catch case-(c) fix: the ORDINARY
-    // `Vector[Struct].get()` Option path must be UNCHANGED. `.get()` flows
-    // through its own Option-wrap routing (`gorget_array_safe_get`), NOT the
-    // raw `gorget_array_get` the faultable EIndex arm emits — so in-bounds
-    // yields `Some(struct)` and OOB yields `None`. Proves the case-(c) fix did
-    // not perturb `safe_get`/`eindex_raw_getter`.
-    run_gg("vec_struct_get.gg", "3,4\nnone-oob");
-}
-
-#[test]
 fn fault_catch_intmin_div() {
-    // (C) Div-split: `INT_MIN/-1` → Fault.Overflow (NOT DivByZero); `10/0` →
-    // Fault.DivByZero; `INT_MIN % -1` → Fault.Overflow. Each caught correctly.
+    // MIGRATED: D26 `/!` distinguishes `INT_MIN/-1` (Overflow) from `10/0`
+    // (DivByZero); `%!` distinguishes them for the modulo op.
     run_gg("fault_catch_intmin_div.gg", "1\n11\n22\n33");
 }
 
 #[test]
 fn fault_intmin_partial() {
-    // (C) Partial-catch guard: `(INT_MIN/-1) catch Fault.DivByZero:` does NOT
-    // catch the overflow → panics `integer overflow` (uniform on both backends).
+    // Post-D25: an UNCAUGHT `INT_MIN / -1` panics `integer overflow` on BOTH
+    // backends (uncatchable — no `catch Fault.DivByZero:` to swallow-attempt).
     run_gg_panics("fault_intmin_partial.gg", "integer overflow");
 }
 
 #[test]
 fn fault_intmin_partial_divzero() {
-    // (C) Partial-catch guard, other direction: `(10/0) catch Fault.Overflow:`
-    // does NOT catch the div0 → panics `division by zero`.
+    // Post-D25: an UNCAUGHT `10 / 0` panics `division by zero` on BOTH backends.
     run_gg_panics("fault_intmin_partial_divzero.gg", "division by zero");
 }
 
 #[test]
 fn fault_catch_bad_qualifier() {
-    // (D) A wrong fault-catch enum qualifier (`Bogus.Overflow`) is REJECTED at
-    // typecheck, not silently accepted as `Fault.Overflow`.
-    check_gg_fails("fault_catch_bad_qualifier.gg", "Bogus.Overflow");
+    // NEG (D25): any `catch <Ident>(.<Ident>)?:` shape is rejected at
+    // PARSE-time with `E_FaultCatchRemoved` — fault-catch is gone, use
+    // `+!`/`-!`/`*!`/`/!`/`%!` to capture the fault as `Result[T, ArithError]`.
+    check_gg_fails("fault_catch_bad_qualifier.gg", "E_FaultCatchRemoved");
 }
 
 #[test]
 fn div_intmin_plain() {
-    // (E) Plain-op cross-backend trap: an UNCAUGHT `INT_MIN / -1` panics
+    // Plain-op cross-backend trap: an UNCAUGHT `INT_MIN / -1` panics
     // `integer overflow` on BOTH backends (was UB on LLVM-Div).
     run_gg_panics("div_intmin_plain.gg", "integer overflow");
 }
@@ -16315,19 +16055,6 @@ fn format_expr_canonical(expr: &Expr) -> String {
                 format_expr_canonical(&recovery.node),
             )
         }
-        Expr::FaultCatch { expr, pattern, handler } => {
-            let pat = match pattern {
-                gorget::parser::ast::FaultCatchPattern::Variant { qualifier, variant } =>
-                    format!("{}.{}", qualifier.node, variant.node),
-                gorget::parser::ast::FaultCatchPattern::Binding(name) => name.node.clone(),
-            };
-            format!(
-                "{} catch {}: {}",
-                format_expr_canonical(&expr.node),
-                pat,
-                format_expr_canonical(&handler.node),
-            )
-        }
     }
 }
 
@@ -17879,30 +17606,6 @@ fn catch_recovery_type_mismatch_return_position_error() {
 }
 
 #[test]
-fn faultcatch_recovery_type_mismatch_vec_string_into_int_error() {
-    check_gg_fails(
-        "faultcatch_recovery_type_mismatch_vec_string_into_int_error.gg",
-        "E_TypeMismatch",
-    );
-}
-
-#[test]
-fn faultcatch_recovery_type_mismatch_dict_into_int_error() {
-    check_gg_fails(
-        "faultcatch_recovery_type_mismatch_dict_into_int_error.gg",
-        "E_TypeMismatch",
-    );
-}
-
-#[test]
-fn faultcatch_recovery_type_mismatch_match_handler_error() {
-    check_gg_fails(
-        "faultcatch_recovery_type_mismatch_match_handler_error.gg",
-        "E_TypeMismatch",
-    );
-}
-
-#[test]
 fn catch_recovery_type_pos_same_type_nonliteral() {
     run_gg(
         "catch_recovery_type_pos_same_type_nonliteral.gg",
@@ -17923,19 +17626,6 @@ fn catch_recovery_type_pos_none_option_carveout() {
 #[test]
 fn catch_recovery_type_pos_divergent_never() {
     run_gg("catch_recovery_type_pos_divergent_never.gg", "1\n0");
-}
-
-#[test]
-fn faultcatch_recovery_type_pos_overflow_int() {
-    run_gg("faultcatch_recovery_type_pos_overflow_int.gg", "-1");
-}
-
-#[test]
-fn faultcatch_recovery_type_pos_block_match_handler() {
-    run_gg(
-        "faultcatch_recovery_type_pos_block_match_handler.gg",
-        "111\n222",
-    );
 }
 
 #[test]

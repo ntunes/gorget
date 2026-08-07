@@ -3,7 +3,7 @@
 # Pass 2: resolve_bodies — resolve name uses inside function/method bodies.
 
 from std.collections import Vector, Dict
-from ast import Span, Module, Item, Stmt, Expr, Type, Pattern, FaultCatchPattern
+from ast import Span, Module, Item, Stmt, Expr, Type, Pattern
 from ast import SpannedExpr, SpannedType, SpannedPattern
 from ast import FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock
 from ast import MatchArm, ElseBranch, Param, ImportStmt
@@ -880,22 +880,6 @@ void resolve_expr(SpannedExpr expr, ScopeTable &scopes, ResolveContext &ctx):
             scopes.push_scope(SkBlock())
             scopes.define(ename, DkVariable(), !Span(0, 0))
             resolve_expr(*recovery, &scopes, &ctx)
-            scopes.pop_scope()
-
-        case EFaultCatch(fc_inner, fc_pattern, fc_handler):
-            # Local fault-catch (error-model.md §11). Resolve the wrapped
-            # expr; for the binding form bind the Fault value name in a fresh
-            # scope so the handler's `match f` resolves `f`. The variant form
-            # binds nothing (the qualifier/variant are literal AST strings,
-            # not name-resolved).
-            resolve_expr(*fc_inner, &scopes, &ctx)
-            scopes.push_scope(SkBlock())
-            match fc_pattern:
-                case FcpBinding(fc_name):
-                    scopes.define(fc_name, DkVariable(), !Span(0, 0))
-                case FcpVariant(_, _):
-                    pass
-            resolve_expr(*fc_handler, &scopes, &ctx)
             scopes.pop_scope()
 
         case EClosure(params, body):

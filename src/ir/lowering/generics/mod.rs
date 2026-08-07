@@ -5,7 +5,7 @@
 
 mod substitute;
 
-pub use substitute::{substitute_type_pub, substitute_function_body_pub, builtin_fault_enum, builtin_arith_error_enum, merge_method_subs};
+pub use substitute::{substitute_type_pub, substitute_function_body_pub, builtin_arith_error_enum, merge_method_subs};
 use substitute::{substitute_type, substitute_function_body, inject_builtin_enums};
 
 use rustc_hash::FxHashMap;
@@ -795,10 +795,6 @@ impl GenericCollector {
                 self.scan_expr(inner);
                 self.scan_expr(transform);
             }
-            Expr::FaultCatch { expr: inner, handler, .. } => {
-                self.scan_expr(inner);
-                self.scan_expr(handler);
-            }
             Expr::Range { start, end, .. } => {
                 if let Some(s) = start { self.scan_expr(s); }
                 if let Some(e) = end { self.scan_expr(e); }
@@ -1176,10 +1172,6 @@ impl GenericCollector {
             Expr::Rethrow { expr: inner, transform, .. } => {
                 self.walk_expr_for_method_calls(inner, env);
                 self.walk_expr_for_method_calls(transform, env);
-            }
-            Expr::FaultCatch { expr: inner, handler, .. } => {
-                self.walk_expr_for_method_calls(inner, env);
-                self.walk_expr_for_method_calls(handler, env);
             }
             Expr::DefaultOp { lhs, rhs } => {
                 self.walk_expr_for_method_calls(lhs, env);
