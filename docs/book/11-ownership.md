@@ -52,7 +52,7 @@ print(s2)          # "hello!"
 
 # `!` is the explicit move opt-in
 String s3 = "world"
-String s4 = !s3    # explicit move — s3 now invalid
+String s4 = ^s3    # explicit move — s3 now invalid
 # print(s3)        # COMPILE ERROR: use after move
 ```
 
@@ -71,19 +71,19 @@ struct R:
     int id
 
 equip R with Drop:
-    void drop(!self):
+    void drop(^self):
         print(f"drop {self.id}")
 
 R a = R(1)
 R b = a            # COMPILE ERROR: would run R's drop twice
-R c = !a           # OK — move (a is now invalid)
+R c = ^a           # OK — move (a is now invalid)
 R d = b.clone()    # OK — an independent, separately-dropped copy
 ```
 
 Taint is transitive: a `Vector[R]`, a tuple `(R, int)`, an `Option[R]`,
 or a struct with an `R` field are all drop-tainted too. A **field or
 index place** of a tainted type (`hh.r`, `v[0]`) must use `.clone()` —
-`!hh.r` would be a partial move.
+`^hh.r` would be a partial move.
 
 The by-design single-owner members follow the same `!`/`.clone()` rule:
 
@@ -95,7 +95,7 @@ The by-design single-owner members follow the same `!`/`.clone()` rule:
   ownership transfers
 
 For all of these, `Box[int] b = a` is a compile error; write
-`Box[int] b = !a` (or `.clone()` for an independent copy). A fresh
+`Box[int] b = ^a` (or `.clone()` for an independent copy). A fresh
 temporary (`R b = R(1)`, `Box[int] b = make()`) is not a live place — it
 moves without an operator and is never rejected. The refcounted/handle
 types (`Shared[T]`, `Weak[T]`, `Mutex[T]`, `Channel[T]`) are the
@@ -114,7 +114,7 @@ struct Message:
     String text
 
 Message msg = Message("Alice", "hello")
-Message copy = !msg    # msg is moved to copy
+Message copy = ^msg    # msg is moved to copy
 # msg is now invalid
 ```
 
@@ -126,7 +126,7 @@ Functions declare how they receive values:
 void read(Message msg):         # borrows (default)
     print(msg.text)
 
-void consume(Message !msg):     # takes ownership
+void consume(Message ^msg):     # takes ownership
     archive(msg)
 ```
 
@@ -135,7 +135,7 @@ At the call site:
 ```gorget
 Message msg = Message("Alice", "hello")
 read(msg)          # borrow — msg still valid
-consume(!msg)      # move — msg now invalid
+consume(^msg)      # move — msg now invalid
 ```
 
 ### Reviving a Moved Variable
@@ -144,7 +144,7 @@ Reassigning a moved variable makes it valid again:
 
 ```gorget
 Message msg = Message("Alice", "hello")
-consume(!msg)                            # msg is invalid
+consume(^msg)                            # msg is invalid
 msg = Message("Bob", "reply")           # msg is valid again
 read(msg)
 ```
@@ -183,7 +183,7 @@ struct Resource:
     String name
 
 equip Resource with Drop:
-    void drop(!self):
+    void drop(^self):
         print(f"dropping {self.name}")
 
 void main():
@@ -194,7 +194,7 @@ void main():
 # dropping alpha
 ```
 
-Drop runs automatically when the value goes out of scope. The `!self` parameter
+Drop runs automatically when the value goes out of scope. The `^self` parameter
 means `drop` consumes the value.
 
 ### Drop Order
@@ -246,7 +246,7 @@ The compiler prevents dangerous patterns:
 ```gorget
 String s = "hello"
 for i in 0..3:
-    consume(!s)    # COMPILE ERROR: move in loop body
+    consume(^s)    # COMPILE ERROR: move in loop body
 ```
 
 The first iteration would move `s`, leaving iterations 2 and 3 with an invalid
@@ -256,8 +256,8 @@ variable.
 
 ```gorget
 String s = "hello"
-consume(!s)
-consume(!s)        # COMPILE ERROR: use after move
+consume(^s)
+consume(^s)        # COMPILE ERROR: use after move
 ```
 
 ### Conservative Branch Merging
@@ -265,7 +265,7 @@ consume(!s)        # COMPILE ERROR: use after move
 ```gorget
 String s = "hello"
 if condition:
-    consume(!s)    # moved in one branch
+    consume(^s)    # moved in one branch
 else:
     pass
 # s is treated as moved here (conservative)
@@ -492,11 +492,11 @@ for p in &points:       # write-through — points IS modified
 |---------|--------|---------|
 | Copy type | `int b = a` | Implicit copy, both valid |
 | Resource bare-assign | `String b = a` | Borrow, CoW-severs on mutation |
-| Explicit move | `Type b = !a` | Transfer ownership; `a` invalid after |
+| Explicit move | `Type b = ^a` | Transfer ownership; `a` invalid after |
 | Explicit clone | `Type b = a.clone()` | Independent owned copy |
-| Move parameter | `void f(Type !name)` | Function takes ownership |
-| Box / closure assign | `Box[int] b = !a` | Still requires explicit `!` |
+| Move parameter | `void f(Type ^name)` | Function takes ownership |
+| Box / closure assign | `Box[int] b = ^a` | Still requires explicit `!` |
 | Use after move | — | Compile error |
-| Drop | `equip T with Drop: void drop(!self)` | Cleanup on scope exit |
+| Drop | `equip T with Drop: void drop(^self)` | Cleanup on scope exit |
 | `with` statement | `with expr as name:` | Scoped resource management |
 | Reassign after move | `x = new_value` | Revives the variable |

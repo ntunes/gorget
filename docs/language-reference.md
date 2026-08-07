@@ -326,7 +326,7 @@ over auto-infer — the user's contract is preserved (see D26 spec + F1a).
 |----------------|----------------|------------------------|
 | (bare)         | Immutable borrow | Read-only access       |
 | `&`            | Mutable borrow | Read+write access    |
-| `!`            | Move           | Ownership transfer   |
+| `^`            | Move           | Ownership transfer   |
 
 **Range:**
 
@@ -399,7 +399,7 @@ over auto-infer — the user's contract is preserved (see D26 spec + F1a).
 | `cstr`    | pointer | Null-terminated C string pointer |
 | `void`    | 0       | No value (unit type)            |
 
-All primitive numeric types and `bool` are **Copy** types — they are implicitly copied on assignment and do not require `!` to transfer. `String` values carry their owned-vs-view status structurally: string literals and function parameters are lightweight views (Copy), while concatenation and f-strings produce owned values (Move). The distinction is resolved during IR lowering by the copy-on-write alias and last-use Move analysis (Phase D4) — there is no separate provenance pass. `byte` is a convenience alias for `uint8`. `cstr` is a raw C string pointer (`const char*`) for FFI interop — prefer `String` for normal string handling.
+All primitive numeric types and `bool` are **Copy** types — they are implicitly copied on assignment and do not require `^` to transfer. `String` values carry their owned-vs-view status structurally: string literals and function parameters are lightweight views (Copy), while concatenation and f-strings produce owned values (Move). The distinction is resolved during IR lowering by the copy-on-write alias and last-use Move analysis (Phase D4) — there is no separate provenance pass. `byte` is a convenience alias for `uint8`. `cstr` is a raw C string pointer (`const char*`) for FFI interop — prefer `String` for normal string handling.
 
 ### 4.2 Compound Types
 
@@ -511,7 +511,7 @@ int result = triple(4)  # 12
 **Closure kind auto-classification:**
 - No mutations to captures → `Callable`
 - Assigns to captures → `MutCallable`
-- Move closure (`!` or `move` prefix) → `ConsumeCallable`
+- Move closure (`^` or `move` prefix) → `ConsumeCallable`
 
 Named functions and non-capturing closures are always `Callable` and coerce to any variant.
 
@@ -570,14 +570,14 @@ auto name = "hello"  # inferred as String
 
 ### 4.6 Trivial vs. Resource Types
 
-**Trivial types** (implicitly copied, no `!` needed):
+**Trivial types** (implicitly copied, no `^` needed):
 - All integer types (`int`, `int8`, ..., `uint64`)
 - All float types (`float`, `float32`, `float64`)
 - `bool`
 - Tuples where all elements are Trivial
 - Small value structs with no owned resources (e.g., `Point { float x, float y }`)
 
-**Resource types** (own heap allocations or handles, require `!` to transfer ownership):
+**Resource types** (own heap allocations or handles, require `^` to transfer ownership):
 - `String`
 - Collections (`Vector`, `Dict`, `Set`, `Heap`)
 - Lock guards (`Guard[T]`, `ReadGuard[T]`, `WriteGuard[T]`)
@@ -637,7 +637,7 @@ A function has:
 |----------------------------------|-------------------|--------------------------------|
 | `Type name`                      | Immutable borrow  | `f(arg)`                       |
 | `Type &name`                       | Mutable borrow    | `f(&arg)`                      |
-| `Type !name`                       | Move (ownership)  | `f(!arg)`                      |
+| `Type ^name`                       | Move (ownership)  | `f(^arg)`                      |
 
 The ownership annotation at the call site **must match** the parameter declaration. Mismatches are compile-time errors.
 
@@ -669,7 +669,7 @@ of its body or execute a `return`, and cannot declare a `throws` clause.
 |----------------------------|-------------------|
 | `self`                     | Immutable borrow  |
 | `&self`                    | Mutable borrow    |
-| `!self`                    | Consuming (move)  |
+| `^self`                    | Consuming (move)  |
 | *(no self)*                | Static method     |
 
 Return value lifetime safety is handled automatically by the ownership system.
@@ -1161,7 +1161,7 @@ Reassigning a moved variable revives it:
 
 ```gorget
 String s = "hello"
-String t = !s        # s is now moved
+String t = ^s        # s is now moved
 s = "world"          # s is live again
 ```
 
@@ -1327,7 +1327,7 @@ Iterates over a collection or range. The optional ownership modifier before the 
 |------------------------------------|--------------------------------------|
 | `for x in coll`                     | Immutable borrow (collection intact) |
 | `for x in &coll`                    | Mutable borrow (modify in-place)     |
-| `for x in !coll`                    | Move (consumes collection)           |
+| `for x in ^coll`                    | Move (consumes collection)           |
 
 The optional `else` block runs if the loop completes without `break` (Python-style).
 
@@ -1555,7 +1555,7 @@ From lowest to highest precedence:
 | 18         | Postfix `.` `?.` `()` `[]` `.0` `.1`        | Left          |
 | 19         | Atoms (literals, identifiers, grouped expressions) | — |
 
-> **Looking for the `&` or `!` sigils?** The `&` in this table is **bitwise AND**
+> **Looking for the `&` or `^` sigils?** The `&` in this table is **bitwise AND**
 > (row 10); `&` also joins trait bounds (`A & B`). The *prefix* sigils are a
 > different thing and are not operators of any precedence — they say what the
 > other side of a boundary may do with a value you hand it. See
@@ -1652,7 +1652,7 @@ The optional `[...]` provides explicit generic type arguments. Arguments may use
 ```gorget
 add(1, 2)
 max[int](a, b)
-consume(!value)
+consume(^value)
 modify(&data)
 create_user("Alice", 30, admin = true)
 ```
@@ -1665,7 +1665,7 @@ create_user("Alice", 30, admin = true)
 method_call = expr "." IDENTIFIER [ "[" type { "," type } "]" ] "(" [ arg_list ] ")" ;
 ```
 
-Calls a method on a receiver. The receiver is automatically borrowed (no `&`/`!` at the call site).
+Calls a method on a receiver. The receiver is automatically borrowed (no `&`/`^` at the call site).
 
 ```gorget
 point.distance(other)
@@ -1719,7 +1719,7 @@ Option[int] last = v.pop()           # removes last, returns owned
 Subscript write drops the old element and moves the new value in:
 
 ```gorget
-v[0] = new_value    # drops old v[0], moves !new_value into slot
+v[0] = new_value    # drops old v[0], moves ^new_value into slot
 ```
 
 ### 7.10 Range Expressions
@@ -1790,8 +1790,8 @@ move_expr = "!" expr ;   (* at a boundary only — never as an operand; see §9.
 Transfers ownership of a value. The source variable becomes invalid after the move.
 
 ```gorget
-String s2 = !s1          # s1 is invalid after this
-consume(!data)            # data is moved into consume
+String s2 = ^s1          # s1 is invalid after this
+consume(^data)            # data is moved into consume
 ```
 
 ### 7.15 Mutable Borrow Expression
@@ -1953,7 +1953,7 @@ Equivalent to a closure with one tuple-typed param plus explicit field
 access (`((int, int) p): p._0`). The destructure form binds the components
 as named locals at the start of the closure body.
 
-**Move closures:** Prefix `!` or `move` forces all captured variables to be moved into the closure:
+**Move closures:** Prefix `^` or `move` forces all captured variables to be moved into the closure:
 
 ```gorget
 auto handle = thread.spawn(!(x):
@@ -2359,14 +2359,14 @@ afterwards:
 |---|---|---|
 | `f(x)` | read it | it, unchanged |
 | `f(&x)` | write to it | it, **with their changes** |
-| `f(!x)` | take it | **nothing — it is gone** |
+| `f(^x)` | take it | **nothing — it is gone** |
 
 The same three read identically at every boundary:
 
 ```gorget
 for x in xs:        # read each element
 for x in &xs:       # write through to the collection
-for x in !xs:       # consume the collection
+for x in ^xs:       # consume the collection
 ```
 
 **Where `&` may appear** (D32). A value must **cross from one scope into another**,
@@ -2387,17 +2387,17 @@ declare and nothing to grant, and the sigil is rejected:
 | `String w = &v` | ✗ neither | you are naming `v` in this scope |
 | `&a + 1` | ✗ neither | `+` produces a new value here |
 
-`&a + 1` and `!a + 1` are both rejected for the same reason: `+` reads its
+`&a + 1` and `^a + 1` are both rejected for the same reason: `+` reads its
 operands and hands nothing to anyone.
 
 **At a resting position the two sigils differ, and that is deliberate.** Binding
 a name is a nothing-crosses position, so `&` has nothing to mark there and is
-rejected — but `!` is legal, and for single-owner types it is **required**:
+rejected — but `^` is legal, and for single-owner types it is **required**:
 
 ```gorget
-String w = !v      # legal — the value moves; it is simply `w`'s now
+String w = ^v      # legal — the value moves; it is simply `w`'s now
 String w = &v      # rejected
-Box[int] c = !b    # required — see the single-owner types below
+Box[int] c = ^b    # required — see the single-owner types below
 ```
 
 The difference is what each sigil produces. A move hands over **the value
@@ -2411,7 +2411,7 @@ mark on the argument, and the call is rejected.
 
 **The receiver is a separate axis, and it is read from the signature.** A
 method's mode lives on its declaration, not at the call site: `void bump(&self)`
-writes through, `Vector[int] into_items(!self)` consumes. So a call that looks
+writes through, `Vector[int] into_items(^self)` consumes. So a call that looks
 bare can still change or even consume its receiver — `a.push(4)` modifies `a`,
 and `b.into_items()` leaves `b` moved-from. **The table above governs arguments
 only.** To know what a method does to its receiver, read its signature.
@@ -2447,7 +2447,7 @@ note for the full grid.
 
 **Closures cross at the capture.** A closure body is another scope, so a captured
 value crosses into it, and the sigil belongs in a per-variable capture list —
-`(&count)(): ...` to write through, `(!name)(): ...` to take it, with `!()` as
+`(&count)(): ...` to write through, `(^name)(): ...` to take it, with `^()` as
 sugar for moving everything. A bare name in a capture list is rejected: the sigil
 is the point of writing one. A name captured with the default mode is therefore
 **not listed at all** — omission is how a bare capture is spelled, and a closure
@@ -2458,7 +2458,7 @@ closure reads the variable and does not own it. A closure that **escapes** its
 defining scope materialises its captures at the escape, because at that point
 the destination must own — the same boundary rule as a `return`.
 
-A move capture is never inferred; it is requested with `!`.
+A move capture is never inferred; it is requested with `^`.
 
 > Today the compiler materialises captures at the *capture* rather than at the
 > escape, so a bare capture behaves as a snapshot taken when the closure is
@@ -2539,7 +2539,7 @@ the sigil before the type is the same mistake in both, with and without a name.
 
 > **Status against the current compiler (D35).** The Rust parser accepts
 > the ratified `int &` / `String !` spelling and rejects the retired `&int` /
-> `!String` form with a diagnostic naming the replacement. The self-host
+> `^String` form with a diagnostic naming the replacement. The self-host
 > parser accepts the ratified form and records the sigil faithfully in the
 > function type's per-parameter ownership vector (retiring the earlier
 > hardcoded `OWN_BORROW`). D35 also records that the shape this note
@@ -2556,12 +2556,12 @@ Underneath the sigils, the ownership model itself is these ten rules:
 4. **Resource types** (`String`, collections, structs/enums with resource fields)
    follow copy-on-write semantics for bare-identifier assignment, function
    parameters, match scrutinees, and closure captures — see §9.6.
-5. Ownership can be explicitly **transferred** (moved) using `!` at the use site.
+5. Ownership can be explicitly **transferred** (moved) using `^` at the use site.
 6. After a move, the source variable is invalid. Any use is a compile-time error (**use-after-move**).
 7. A variable cannot be moved more than once (**double-move** error).
 8. A variable cannot be moved inside a loop body (**move-in-loop** error).
 9. Reassigning a moved variable revives it — the new value makes it live again.
-10. Some resource types still require the explicit `!` operator (or `.clone()`)
+10. Some resource types still require the explicit `^` operator (or `.clone()`)
     on bare-identifier assignment because they're single-owner. This is **one
     principled rule plus a few by-design members**:
     - **Drop-tainted types (D4 drop-purity):** any type with a custom `Drop`
@@ -2569,25 +2569,25 @@ Underneath the sigils, the ownership model itself is these ten rules:
       tuple, `Option`, or `Result` carrying one. An implicit copy would run that
       custom `drop` twice, so implicit clones are available only to types whose
       transitive drop is side-effect-free. `.clone()` stays legal (Clone and
-      Drop coexist); a whole-identifier place moves with `!` or copies with
+      Drop coexist); a whole-identifier place moves with `^` or copies with
       `.clone()`, while a **field/index place** (`s.field`, `v[i]`) of a tainted
-      type must use `.clone()` (`!s.field` would be a partial move).
+      type must use `.clone()` (`^s.field` would be a partial move).
     - **By-design single-owner types:** `Box[T]`, `Task`, `TaskGroup`, `Guard`,
       and closure/`Callable` values (their drops are pure; they are unique by
       construction). (`Owned[T]` exists internally but has no user spelling
       yet — `Owned[Item] a = …` is `E_UndefinedName`.)
 
     For all of these, a bare `T b = a` of a live source is a
-    **`MoveWithoutOperator`** error; write `T b = !a` or `T b = a.clone()`. A
+    **`MoveWithoutOperator`** error; write `T b = ^a` or `T b = a.clone()`. A
     fresh temporary (`T b = make()`, `T b = T(1)`) is not a live place — it
     moves and is never rejected. The refcounted/handle types (`Shared[T]`,
     `Weak[T]`, `Mutex[T]`, `Channel[T]`) are the sanctioned multi-owner escape
     hatch and are **not** drop-tainted by their payload.
 
-The rules above are about **binds** (`Type b = !a` / `a.clone()`) and use sites.
+The rules above are about **binds** (`Type b = ^a` / `a.clone()`) and use sites.
 A borrow or move that crosses a **call** is a distinct position: the sigil is
 spelled on the *argument* and checked against the *parameter* declaration — see
-§9.3 (a `!` parameter requires `!`, a `&` parameter requires `&`, at every call
+§9.3 (a `^` parameter requires `^`, a `&` parameter requires `&`, at every call
 site, free-fn or method, named place or temporary).
 
 ### 9.2 Borrowing Rules
@@ -2607,8 +2607,8 @@ Three consequences, each load-bearing:
 
 - **Overlap is about storage, not spelling.** `f(&m.a, &m.b)` is two mutable
   borrows and is legal — the sub-places are disjoint.
-- **The test is the ability to write, not the sigil.** `Pair(v[0], !v)` is
-  accepted and `f(v[0], !v)` is rejected for a RESOURCE element type (a Copy element is a value snapshot and conflicts with nothing — §9.4): a move transfers a pointer without
+- **The test is the ability to write, not the sigil.** `Pair(v[0], ^v)` is
+  accepted and `f(v[0], ^v)` is rejected for a RESOURCE element type (a Copy element is a value snapshot and conflicts with nothing — §9.4): a move transfers a pointer without
   touching the buffer, but an opaque callee owns the moved-in value and may
   mutate it while the read is live.
 - **The lazy escape is what makes Gorget more tolerant than Rust.**
@@ -2628,34 +2628,34 @@ cases: `language-design.md` §3.5; the same-call aliasing table is §9.4.
 Where consumption is part of the API contract, it is always spelled at the call
 site. The ownership annotation on a call argument **must match** the parameter
 declaration — **bare** = the callee borrows, **`&`** = the callee writes
-through, **`!`** = the callee consumes:
+through, **`^`** = the callee consumes:
 
 | Parameter declares                 | Call site must use                 | Meaning |
 |------------------------------------|-----------------------------------|---------|
 | `String s`                         | `f(s)`                            | Immutable borrow |
 | `String &s`                        | `f(&s)`                           | Mutable borrow (write-through) |
-| `String !s`                        | `f(!s)`                           | Move (consume) |
+| `String ^s`                        | `f(^s)`                           | Move (consume) |
 
 Mismatches produce an **`E_OwnershipMismatch`** error. The rule is **uniform at
 every call site** — free function and method, and whether the argument is a
 **named place or a fresh temporary**:
 
 ```gorget
-void send(Message !msg):             # `msg` is consumed
+void send(Message ^msg):             # `msg` is consumed
     ...
 
 Message m = build()
-send(!m)                # ✓  the move is spelled
-send(!build())          # ✓  a temporary is spelled `!` too — the contract is
+send(^m)                # ✓  the move is spelled
+send(^build())          # ✓  a temporary is spelled `^` too — the contract is
                         #     the same regardless of what is passed
 send(build())           # ✗  error[E_OwnershipMismatch]: this call consumes the
-                        #     value — add `!`
-send(m)                 # ✗  same error — a `!` param needs `!`, named or not
+                        #     value — add `^`
+send(m)                 # ✗  same error — a `^` param needs `^`, named or not
 ```
 
 This is deliberate: the spelling stays invariant when you refactor a temporary
 into a named local (or back), and the call site alone declares the contract —
-`f(!x)` vs `g(x)` distinguishes a consuming API from a borrowing one **without
+`f(^x)` vs `g(x)` distinguishes a consuming API from a borrowing one **without
 opening the callee's signature**.
 
 Method calls are validated **identically** — the rule closed a former asymmetry
@@ -2675,11 +2675,11 @@ c.add_all(v)    # ✗  error[E_OwnershipMismatch] — a `&` param needs `&`
 The receiver itself is **not** sigil-marked at the call site (`c.add_all(...)`,
 not `&c.add_all(...)`); the receiver's own borrow is a separate axis (§9.1).
 
-**Contractual consumption only.** This rule governs `!`/`&` **parameters**. A
-bare value flowing into a *non-`!`* consuming position — a collection `push`, a
+**Contractual consumption only.** This rule governs `^`/`&` **parameters**. A
+bare value flowing into a *non-`^`* consuming position — a collection `push`, a
 constructor field, a `return` — is **not** sigil-marked: the
 compiler still moves it when it is dead (copy-on-write, §9.6), but that is an
-invisible optimization, not part of any API contract, so no `!` appears.
+invisible optimization, not part of any API contract, so no `^` appears.
 
 **Uniform at indirect call sites too.** The same rule applies at every
 **indirect** call site whose callee has a resolvable function type — a
@@ -2707,8 +2707,8 @@ and the two are not **both bare readers**:
 |----------------|-----------------------------------------------------|
 | `f(&x, &x)`    | rejected — two writers of the same place            |
 | `f(x, &x)`     | rejected — a (non-Copy) read overlapping a writer   |
-| `f(&x, !x)`    | rejected — a writer overlapping a mover             |
-| `f(x, !x)`     | rejected — a (non-Copy) read overlapping a mover    |
+| `f(&x, ^x)`    | rejected — a writer overlapping a mover             |
+| `f(x, ^x)`     | rejected — a (non-Copy) read overlapping a mover    |
 | `f(x, x)`      | allowed — two bare reads never conflict             |
 
 **Places, not variables — projection overlap.** The check keys on the argument's
@@ -2734,17 +2734,17 @@ overlapping writer or mover.
 **Moves are a separate axis — order matters.** The Copy-snapshot exemption is for
 *writers*, not movers, because a move **consumes** the storage:
 
-- `f(s.copy_int, !s)` — reading the Copy place **before** the move — is **legal**
+- `f(s.copy_int, ^s)` — reading the Copy place **before** the move — is **legal**
   (left-to-right evaluation takes the snapshot, then the move kills the slot).
-- `f(!s, s.copy_int)` — the **move then the read** — is **rejected**, but by
-  **use-after-move** (`error[E_UseAfterMove]`), *not* by aliasing: after `!s` the
+- `f(^s, s.copy_int)` — the **move then the read** — is **rejected**, but by
+  **use-after-move** (`error[E_UseAfterMove]`), *not* by aliasing: after `^s` the
   slot is dead, so reading `s.copy_int` is a dead-slot access. Rust rejects the
   identical program.
 
 Do not read a blanket "no reads of `s` in a call that moves `s`" into this — the
 rule is evaluation-order-sensitive, and the move-consumes-storage rejection is a
-liveness check one layer *before* place-overlap. Likewise `f(!x, !x)` and
-`f(!n, !n.field)` are rejected as double-moves (`error[E_DoubleMove]`), again a
+liveness check one layer *before* place-overlap. Likewise `f(^x, ^x)` and
+`f(^n, ^n.field)` are rejected as double-moves (`error[E_DoubleMove]`), again a
 liveness concern rather than place-overlap.
 
 See [§9.2 Borrowing Rules](#92-borrowing-rules) and the `&` operator's
@@ -2758,7 +2758,7 @@ When control flow branches (if/else, match), ownership state is merged **conserv
 ```gorget
 String s = "hello"
 if condition:
-    consume(!s)
+    consume(^s)
 else:
     pass
 # s is treated as moved here (conservative)
@@ -2788,7 +2788,7 @@ depends on the element type *and* on the form of the write.)
 
 The compiler also optimises last-use: if the source isn't live past the
 assign, the IR-lowering picks Move instead of Borrow (still no clone,
-and the source becomes invalid as if `!`-moved). See
+and the source becomes invalid as if `^`-moved). See
 `docs/devbook/11-copy-on-write.md` for the full Phase D4 decision tree.
 
 **Ownership-transfer / materialization points** — at each of these the
@@ -2802,7 +2802,7 @@ the same; only the cost differs.)
 3. **Struct/enum construction** — passing a borrowed value into a constructor
 4. **Collection store** — pushing/putting/inserting a borrowed value into a collection
 5. **Return** — returning a borrowed value from a function
-6. **Move transfer** — using `!` to transfer ownership (a move, not a clone — listed because it is an ownership-transfer boundary; when the source is a borrow that can't be moved out, the move materializes a clone)
+6. **Move transfer** — using `^` to transfer ownership (a move, not a clone — listed because it is an ownership-transfer boundary; when the source is a borrow that can't be moved out, the move materializes a clone)
 7. **Field store** — assigning a borrowed value to a struct field (`self.name = text`)
 8. **Match-arm extraction that escapes** — a resource-type value bound out of a `case` pattern and used past the match arm
 9. **Channel send** — sending a borrowed value across a channel (`ch.send(x)`)
@@ -2819,7 +2819,7 @@ method on a borrowed receiver, and the `&`-of-value **formation** of a call arg
 **drop-tainted** type (one with a custom `Drop` anywhere in its field graph) a
 silent copy here would run the destructor twice (the double-close class), so
 these positions **reject** with `E_MoveWithoutOperator`: write `&self`/`&<param>`
-to write through, or an explicit `!` / `.clone()`. Plain **value** types keep the
+to write through, or an explicit `^` / `.clone()`. Plain **value** types keep the
 silent materialize (the intended CoW semantics).
 
 **Plain `self` is a bare binding.** A method's plain `self` (not `&self`) follows
@@ -3195,7 +3195,7 @@ When a method is called on a value, the compiler resolves it in this order:
 
 If multiple traits provide a method with the same name, the implementation is ambiguous and must be disambiguated.
 
-Self parameters are **auto-borrowed**: the compiler automatically borrows the receiver based on the method's `self` declaration — immutable borrow for `self`, mutable borrow for `&self`, move for `!self`. No `&`/`!` annotation is needed at the method call site. This is the one place where Gorget relaxes its rule that `&` must appear at the call site to acknowledge mutation — requiring explicit borrows on every method call would make chaining and fluent APIs impractical.
+Self parameters are **auto-borrowed**: the compiler automatically borrows the receiver based on the method's `self` declaration — immutable borrow for `self`, mutable borrow for `&self`, move for `^self`. No `&`/`^` annotation is needed at the method call site. This is the one place where Gorget relaxes its rule that `&` must appear at the call site to acknowledge mutation — requiring explicit borrows on every method call would make chaining and fluent APIs impractical.
 
 ---
 
@@ -3305,7 +3305,7 @@ The compiler automatically registers the following core traits. They cannot be r
 | `Hashable` | `void hash(self, FxHasher &h)` | `void` | `Dict` keys, `Set` elements |
 | `Hasher` | `void write_int(&self, int v)` / `write_bytes(&self, Vector[byte])` / `write_string(&self, String)` / `int finish(self)` | — | Role trait for hash state accumulators; `FxHasher` in `std.hash` is the shipping implementor |
 | `Cloneable` | `Self clone(self)` | `Self` | Deep copying |
-| `Drop` | `void drop(!self)` | `void` | Auto-cleanup on scope exit, `with` statement (§6.14) |
+| `Drop` | `void drop(^self)` | `void` | Auto-cleanup on scope exit, `with` statement (§6.14) |
 | `Iterator[T]` | `Option[T] next(&self)` | `Option[T]` | `for` loop desugaring (§6.11) |
 | `Add[Out]` | `Out add(self, Self rhs)` | `Out` | `+` and `+=` operators |
 | `Sub[Out]` | `Out sub(self, Self rhs)` | `Out` | `-` and `-=` operators |
@@ -3395,14 +3395,14 @@ Point copy = p.clone()
 
 #### Drop
 
-Provides deterministic cleanup. The `drop` method is called automatically when a value goes out of scope, and is invoked by the `with` statement (§6.14). The `!self` parameter means `drop` takes ownership of the value (move semantics).
+Provides deterministic cleanup. The `drop` method is called automatically when a value goes out of scope, and is invoked by the `with` statement (§6.14). The `^self` parameter means `drop` takes ownership of the value (move semantics).
 
 ```gorget
 struct Connection:
     int fd
 
 equip Connection with Drop:
-    void drop(!self):
+    void drop(^self):
         close_fd(self.fd)
 
 with Connection(open_fd("db")) as conn:
@@ -4941,7 +4941,7 @@ from std.collections import Vector
 void main():
     Vector[int] outer = Vector[int]()
     with Arena(4096) as a:
-        outer = !Vector[int]()  # error: cannot assign arena-scoped value
+        outer = ^Vector[int]()  # error: cannot assign arena-scoped value
 ```
 
 Returning an allocator-scoped value from a function is also rejected:
@@ -5144,7 +5144,7 @@ Core functions:
 | `ReturnOutsideFunction`      | `return` outside of function                         |
 | `ThrowInNonThrowingFunction` | `throw` in function without `throws`                 |
 | `UseAfterMove`               | Variable used after ownership was moved              |
-| `MoveWithoutOperator`        | Single-owner type (`Box[T]`, `Task`, closures, …) bare-assigned without `!` |
+| `MoveWithoutOperator`        | Single-owner type (`Box[T]`, `Task`, closures, …) bare-assigned without `^` |
 | `BorrowConflict`             | Borrow exclusivity violated (aliasing in call)       |
 | `MoveInLoop`                 | Moving a variable inside a loop body                 |
 | `DoubleMove`                 | Same variable moved more than once                   |

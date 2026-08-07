@@ -195,7 +195,7 @@ wrappers call `gorget_channel_release` / `gorget_shared_drop` /
 param is a held reference whose teardown must decrement the refcount, so
 registering it for drop is correct (it balances the retain, never frees a
 live handle). The `!`-move call path also consults `needs_param_drop` to
-zero the caller slot on `!x` so a moved refcount isn't released twice
+zero the caller slot on `^x` so a moved refcount isn't released twice
 (`src/ir/lowering/exprs/calls.rs:371`). This is the only aspect of the
 refcounted-carrier / spawn machinery that belongs to the drop model; the
 rest of the async path is documented elsewhere. (For how `clone_fn` is

@@ -133,7 +133,7 @@ The carve-outs to CoW-default-borrow are: closures / `Callable[T]`,
 single-owner-by-design (no clone path in the lowering) — the safety pass
 emits `MoveWithoutOperator` (E_MoveWithoutOperator) for these at
 bare-assign sites AND at constructor / struct / enum-init sites, forcing
-the user to write `!source` or `source.clone()`. (At a plain function /
+the user to write `^source` or `source.clone()`. (At a plain function /
 method call these types are simply borrowed, so no operator is needed.)
 
 At each consuming position (`push`, `put`, `set`, `insert`, `send`,

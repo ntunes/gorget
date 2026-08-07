@@ -308,7 +308,7 @@ The heart of the language. Three modes of passing data, with visual "loudness" m
 |------|------------|-----------|---------|
 | Immutable borrow | `String s` | `f(name)` | Read-only access, caller keeps ownership |
 | Mutable borrow | `String &s` | `f(&name)` | Read+write access, caller keeps ownership |
-| Move (ownership) | `String !s` | `f(!name)` | Full ownership transfer, caller loses access |
+| Move (ownership) | `String ^s` | `f(^name)` | Full ownership transfer, caller loses access |
 
 The "Meaning" column generalises past calls. A sigil says what the **other side
 of a boundary** may do with a value you hand it, and therefore what you still
@@ -318,7 +318,7 @@ another**, and the sigil is written at the crossing:
 ```gorget
 for x in xs:        # read each element
 for x in &xs:       # the loop body may write through to the collection
-for x in !xs:       # the loop consumes the collection
+for x in ^xs:       # the loop consumes the collection
 ```
 
 A loop is a boundary exactly as a call is: the body is the other side. A
@@ -332,19 +332,19 @@ are rejected today. The **`&` operand** positions are still accepted by
 `gg check` and then fail downstream in costume-dependent ways (`!` in an
 operand position is likewise accepted today; it does not change the operator's
 result, but it is **not** inert — it still marks the source moved, so
-`String r = !s + "b"` followed by `print(s)` is `E_UseAfterMove`): `&a + 1` fails the C build
+`String r = ^s + "b"` followed by `print(s)` is `E_UseAfterMove`): `&a + 1` fails the C build
 ("invalid operands to binary +") and hard-fails `llc`, while `xs[&a - 9]`
 builds and miscompiles, using the pointer as an index. See
 `language-reference.md` §9.1's status note.)
 
-At a resting position the two sigils part company, deliberately. `String w = !v`
+At a resting position the two sigils part company, deliberately. `String w = ^v`
 is legal — and for single-owner types required — because a move hands over the
 **value itself**, which can then live wherever a value lives. A borrow would be a
 **route back** to something someone else still owns, which is a different
 question from where a sigil may be written.
 
 A method's receiver is a **separate axis**, read from the signature rather than
-the call site. `void bump(&self)` writes through and `Vector[int] into_items(!self)`
+the call site. `void bump(&self)` writes through and `Vector[int] into_items(^self)`
 consumes, so a call that looks bare can still change or even take its receiver:
 `a.push(4)` modifies `a`. The table governs arguments.
 
@@ -372,7 +372,7 @@ void push_exclaim(String &s):
     s.push('!')
 
 # Ownership transfer (! between type and name)
-void consume(String !s):
+void consume(String ^s):
     print(s)               # `s` belongs to consume now
     # s is freed here, at the end of consume — not in the caller
 ```
@@ -382,7 +382,7 @@ At call sites, symbols mirror declarations:
 String name = "hello"
 print_len(name)          # immutable borrow - name still valid
 push_exclaim(&name)      # mutable borrow - name still valid (now "hello!")
-consume(!name)           # moved - name is GONE after this
+consume(^name)           # moved - name is GONE after this
 # print(name)            # COMPILE ERROR: name was moved
 ```
 
@@ -460,9 +460,9 @@ The distinction is about **what the type owns**, not how large it is. A `Point` 
 |-------------|-------------|-------------------------------|---------------|
 | `Vector[int] v` | `const T*` (read-only) | materializes a private copy (copy-on-write); the caller is untouched | No |
 | `Vector[int] &v` | `T*` (mutable) | writes through to the caller's value | No |
-| `Vector[int] !v` | `T*` (mutable) | mutates the callee's own value — the caller has given it up, so nothing is written *through* to; the callee drops it | Yes |
+| `Vector[int] ^v` | `T*` (mutable) | mutates the callee's own value — the caller has given it up, so nothing is written *through* to; the callee drops it | Yes |
 
-A bare Resource param is a **read-only borrow** of the caller's data: the callee reads it freely but cannot change what the caller sees through it — the incoming pointer is `const`. A mutation *attempt* is **not** a compile error, though: it **materializes** a private copy (copy-on-write) and the write lands on that copy, leaving the caller untouched. (This is where Gorget is **more tolerant than Rust** — Rust rejects a mutation through an immutable borrow outright; Gorget copies instead.) So `void sneaky(Vector[Res] v): v[0].name = "x"` compiles and runs — it just mutates `sneaky`'s own private copy, never the caller's vector. The `&` sigil is the opt-in for **write-through** (a change made through an `&` param reaches the caller's value), and `!` transfers ownership. **Resource types are never copied by value (memcpy) at the boundary** — the only copy that ever happens is the copy-on-write clone at a mutation. A freshly owned resource value comes from construction, `.clone()`, `!move`, or that implicit copy-on-write clone.
+A bare Resource param is a **read-only borrow** of the caller's data: the callee reads it freely but cannot change what the caller sees through it — the incoming pointer is `const`. A mutation *attempt* is **not** a compile error, though: it **materializes** a private copy (copy-on-write) and the write lands on that copy, leaving the caller untouched. (This is where Gorget is **more tolerant than Rust** — Rust rejects a mutation through an immutable borrow outright; Gorget copies instead.) So `void sneaky(Vector[Res] v): v[0].name = "x"` compiles and runs — it just mutates `sneaky`'s own private copy, never the caller's vector. The `&` sigil is the opt-in for **write-through** (a change made through an `&` param reaches the caller's value), and `^` transfers ownership. **Resource types are never copied by value (memcpy) at the boundary** — the only copy that ever happens is the copy-on-write clone at a mutation. A freshly owned resource value comes from construction, `.clone()`, `^move`, or that implicit copy-on-write clone.
 
 **Storing borrowed parameters:**
 
@@ -477,8 +477,8 @@ Wrapper clone_in(Vector[int] v):
     return Wrapper(v)        # v is still live → cloned into Wrapper.data
 
 # OK: move transfers ownership with no clone (v is dead afterwards)
-Wrapper move_in(Vector[int] !v):
-    return Wrapper(!v)
+Wrapper move_in(Vector[int] ^v):
+    return Wrapper(^v)
 
 # OK: read-only access is fine
 int first(Vector[int] v):
@@ -525,7 +525,7 @@ print(matrix[0].len())    # original unchanged — 2, not 3
 Vector[int] row_copy = matrix[0].clone()
 
 # Move (!) of a reference → auto-clone for ownership transfer
-consume(!row_ref)
+consume(^row_ref)
 
 # Return from function with T return type → auto-clone (ownership boundary)
 Vector[int] get_first(Vector[Vector[int]] m):
@@ -555,7 +555,7 @@ The `!` operator is the explicit move opt-in. It transfers ownership and invalid
 the source:
 ```gorget
 String s3 = "world"
-String s4 = !s3          # explicit move, s3 is invalid
+String s4 = ^s3          # explicit move, s3 is invalid
 # print(s3)              # COMPILE ERROR: use after move
 ```
 
@@ -568,7 +568,7 @@ Drop coexist, as in Rust). The by-design members — `Box[T]`, `Task`, `TaskGrou
 `Owned[T]`, `Callable[...]` and closure values — are single-owner because aliasing them is
 unsafe (their drops are pure; they are unique by construction). For all of these,
 `Box[int] b = a` (or `R b = a` for a custom-`Drop` `R`) is a compile error
-(`E_MoveWithoutOperator`) — write `Box[int] b = !a` or `b = a.clone()`. A fresh temporary
+(`E_MoveWithoutOperator`) — write `Box[int] b = ^a` or `b = a.clone()`. A fresh temporary
 (`R b = R(1)`) is not a live place and moves without an operator. The refcounted/handle
 types (`Shared[T]`, `Weak[T]`, `Mutex[T]`, `Channel[T]`) are the sanctioned multi-owner
 escape hatch and are not drop-tainted by their payload.
@@ -588,7 +588,7 @@ For resource types, there are no implicit deep copies. Bare-identifier assignmen
 |-----------|---------|------|
 | `Vector[int] b = a` | Borrow — b aliases a (Ptr), clones on first mutation | Zero cost |
 | `auto b = a` | Borrow — identical to the explicit-type form above | Zero cost |
-| `Vector[int] b = !a` | Move — b takes ownership, a consumed | Zero cost |
+| `Vector[int] b = ^a` | Move — b takes ownership, a consumed | Zero cost |
 | `Vector[int] b = a.clone()` | Clone — b is an independent deep copy up front | Heap allocation |
 | `Vector[int] b = f()` | Move from temp — b owns the result | Zero cost |
 | `a = &b` | **Illegal** (D10) — `error[E_LocalBorrowBind]`: a named `&`-binding would alias a second writable path; pass `&b` at a call site instead | — |
@@ -603,7 +603,7 @@ print(a.len())             # 3 (unchanged)
 print(b.len())             # 4
 
 Vector[int] c = a.clone()  # explicit clone — independent up front
-Vector[int] d = !a         # move — a is consumed, d owns the data
+Vector[int] d = ^a         # move — a is consumed, d owns the data
 # print(a.len())           # COMPILE ERROR: a was moved
 
 Vector[int] e = make_vec() # move from temp — zero cost
@@ -698,8 +698,8 @@ Three things follow, and each is load-bearing:
 - **Overlap is about storage, not spelling.** `f(&m.a, &m.b)` is two mutable borrows and is perfectly
   legal — the sub-places are disjoint.
 - **The test is *ability to write*, not the sigil.** A move transfers a pointer without touching the
-  buffer, so `Pair(v[0], !v)` is fine: nothing runs between the two argument evaluations that could
-  disturb the read. The *same* `!v` at a call — `f(v[0], !v)` — is rejected, because the callee owns the
+  buffer, so `Pair(v[0], ^v)` is fine: nothing runs between the two argument evaluations that could
+  disturb the read. The *same* `^v` at a call — `f(v[0], ^v)` — is rejected, because the callee owns the
   moved-in value and may mutate or drop it while the read is still live. Same sigil, opposite verdicts,
   from one question.
 - **The lazy escape is what makes Gorget more tolerant than Rust.** `String s = v.get(0).unwrap()`
@@ -1077,13 +1077,13 @@ equip Point:
     void translate(&self, float dx, float dy): # mutable borrow
         self.x += dx
         self.y += dy
-    String into_string(!self):                 # move (takes ownership)
+    String into_string(^self):                 # move (takes ownership)
         return f"({self.x}, {self.y})"
     static Point origin():                     # no self (static)
         return Point(0.0, 0.0)
 ```
 
-Method receivers are **auto-borrowed**: the compiler automatically takes a reference to the receiver based on the method's `self` declaration — immutable borrow for `self`, mutable borrow for `&self`, move for `!self`. No `&` or `!` annotation is needed at the method call site. This is the one exception to Gorget's rule that `&` must appear at the call site to acknowledge mutation — method signatures are part of the API contract, and requiring explicit borrows on every method call would make chaining and fluent APIs impractical (`(&(&items).filter(f)).map(g)`).
+Method receivers are **auto-borrowed**: the compiler automatically takes a reference to the receiver based on the method's `self` declaration — immutable borrow for `self`, mutable borrow for `&self`, move for `^self`. No `&` or `!` annotation is needed at the method call site. This is the one exception to Gorget's rule that `&` must appear at the call site to acknowledge mutation — method signatures are part of the API contract, and requiring explicit borrows on every method call would make chaining and fluent APIs impractical (`(&(&items).filter(f)).map(g)`).
 
 ### 4.6 Equipping Traits
 
@@ -1326,8 +1326,8 @@ for item in &collection:
     item.transform()
 
 # Consuming (takes ownership of each item)
-for item in !collection:
-    store(!item)
+for item in ^collection:
+    store(^item)
 
 # Range
 for i in 0..10:                  # 0 through 9
@@ -1425,8 +1425,8 @@ equip AppError with Displayable:
             case NotFound(path): f"Not found: {path}"
 
 equip AppError with From[IoError]:
-    AppError from(IoError !e):
-        return AppError.Io(!e)
+    AppError from(IoError ^e):
+        return AppError.Io(^e)
 ```
 
 ### 6.3 Error Backtraces
@@ -1606,7 +1606,7 @@ Closures support three user-facing capture modes:
 
   When you want a value fixed at a particular moment rather than captured, pass it as a **closure parameter** instead — `(String snap): ...` — and supply it at the call. That is explicit, needs no inference, and is what parameters are for.
 - **Mutable borrow** — spelled `(&name)(): ...` in the capture list (§3.1). The compiler *currently* infers this by detecting that the closure mutates the variable and capturing a pointer to the outer slot automatically — but the inference misses mutation through a method call; the ratified capture-list syntax replaces that inference with an explicit sigil.
-- **Move** — the closure takes ownership of the captured value. Spelled `(!name)(): ...` per variable, with `!` before the parameter list (`!():`, `!(x):`) as sugar forcing ALL captures into move mode.
+- **Move** — the closure takes ownership of the captured value. Spelled `(^name)(): ...` per variable, with `!` before the parameter list (`!():`, `!(x):`) as sugar forcing ALL captures into move mode.
 
 Every name that *appears* in the capture list carries a sigil — a bare name
 there is rejected. A name captured with the default mode is simply **not
@@ -1649,7 +1649,7 @@ Per-variable capture lists are **ratified** (§3.1); the grammar is not
 implemented yet, so the syntax below does not parse today.
 
 ```gorget
-# (!name, &total)(x): ...     # !name = move, &total = write through
+# (^name, &total)(x): ...     # ^name = move, &total = write through
 # !(): ...                    # sugar: move everything captured
 ```
 
@@ -1847,7 +1847,7 @@ Method auto-deref through the guard follows the per-face rules ratified in
 D36: reading auto-derefs through `Guard` / `ReadGuard` / `WriteGuard` /
 `Box` uniformly; writing auto-derefs through `Guard` / `WriteGuard` / `Box`
 but **rejects `ReadGuard`** (the RWLock read-only invariant); consuming
-(`!wrapper.into_inner()` / any `!self` method on the inner) works for
+(`^wrapper.into_inner()` / any `^self` method on the inner) works for
 `Box` only (guards' Drop invariant forbids moving the inner out).
 `Shared[T]` / `Mutex[T]` / `RWLock[T]` / `Weak[T]` require explicit access
 (`.get()` / `.lock()` / `.read()` / `.write()` / `.upgrade()`) — auto-deref
@@ -1873,7 +1873,7 @@ The concurrency model includes async/await, spawn, channels, `Shared[T]`, `Mutex
 ```gorget
 from std.sync import Mutex
 
-async void bump(Shared[Mutex[int]] !counter):
+async void bump(Shared[Mutex[int]] ^counter):
     auto guard = counter.lock().unwrap()
     *guard += 1
 
@@ -1882,7 +1882,7 @@ async void main():
     Vector[Task[void]] handles = Vector[Task[void]]()
 
     for _ in 0..10:
-        Task[void] handle = spawn bump(!counter.clone())
+        Task[void] handle = spawn bump(^counter.clone())
         handles.push(handle)
 
     for h in handles:
@@ -2294,7 +2294,7 @@ Comprehensions produce **owned** collections. The iterator yields owned or clone
 Vector[String] names = [p.name for p in people]
 
 # Consuming: takes ownership of the collection (people is gone after)
-Vector[String] names = [p.name for p in !people]
+Vector[String] names = [p.name for p in ^people]
 
 # Clone to get owned copies while keeping the original
 Vector[String] names = [p.name.clone() for p in people]
@@ -2625,7 +2625,7 @@ Vector[int] row = matrix.remove(0).unwrap()   # removes and returns — no clone
 Option[int] last = v.pop()           # removes last — no clone
 ```
 
-**Subscript write** (`v[i] = val`) drops the existing element and moves `!val` into the slot. `v.insert(i, !val)` shifts elements right and moves `!val` in.
+**Subscript write** (`v[i] = val`) drops the existing element and moves `^val` into the slot. `v.insert(i, ^val)` shifts elements right and moves `^val` in.
 
 **Design rationale:** This follows Rust's principle that indexing borrows, explicit methods consume. A bare-assign from a subscript read borrows whether you write `auto` or an explicit type — the clone is deferred to a mutation through the alias (copy-on-write) or to an ownership boundary, and an explicit `.clone()` makes it eager. This keeps reads zero-cost by default while keeping every heap allocation visible at the mutation or `.clone()` site, consistent with Gorget's "Python-like surface, Rust-like safety" philosophy.
 
@@ -3177,7 +3177,7 @@ error[E0382]: use of moved value `name`
   |
 3 |     String name = "hello"
   |            ---- `name` has type `String` (non-Copy)
-4 |     String other = !name
+4 |     String other = ^name
   |                    ----- value moved here
 5 |     print(name)
   |           ^^^^ value used here after move

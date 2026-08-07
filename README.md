@@ -56,7 +56,7 @@ We think safe languages shouldn't have to be verbose. Here's what that means in 
   | owns its value, dead here (last use)                | auto-move — zero cost         |
   | owns its value, still used later (live)             | auto-clone — independent copy |
   | a borrow (bare param, `.get()` element, bare alias) | auto-clone — independent copy |
-  | explicit `!source`                                  | forced move — source consumed |
+  | explicit `^source`                                  | forced move — source consumed |
 
   Clones are silent by default; `--clones=sites` prints every implicit clone with its `file:line:col`, type, and reason, and `--clones=stats` reports the clones a run *actually executed* — so a clone that sneaks onto a hot path is one build flag away from being found. The full design is in [`docs/devbook/11-copy-on-write.md`](docs/devbook/11-copy-on-write.md).
 

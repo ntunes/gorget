@@ -341,7 +341,7 @@ emits a const `Ptr` via `emit_borrow` by default, or a `MutPtr` via
 `emit_borrow_mut` when the callee's param ownership is `Move` — and
 crucially it does **not** route bare call args through
 `ensure_owned_at_consuming_arg` (`calls.rs:187-256`). For an explicit
-`!name` where `name` is a `!`-sigil resource param (`is_owning_param`), it
+`^name` where `name` is a `!`-sigil resource param (`is_owning_param`), it
 severs CoW aliases, forwards the pointer, and schedules a post-call
 `MoveZero` on the param slot (`calls.rs:90-108`).
 
@@ -370,8 +370,8 @@ double-frees it.
 
 For a method call, the receiver is dispatched on the method's `self`
 declaration (param index 0). `has_consuming_self` reads
-`fn_param_ownerships[name][0]` and is true iff `self` is declared `!self`
-(`Ownership::Move`) (`src/ir/lowering/exprs/methods.rs:1757-1761`); a `!self`
+`fn_param_ownerships[name][0]` and is true iff `self` is declared `^self`
+(`Ownership::Move`) (`src/ir/lowering/exprs/methods.rs:1757-1761`); a `^self`
 method gets a post-call `MoveZero` on the receiver, a `&self`/bare-`self`
 method leaves the receiver live. This closed the "hardcoded `OpMove`
 without callee-signature consultation" class.
@@ -531,7 +531,7 @@ on `param.ownership`. Method receivers dispatch through a distinct site
 a `LoBorrowed` receiver passes `OpBorrow(recv)` directly (4880) — moving
 or cloning a borrowed receiver that names a real element in place would be
 wrong — while every other receiver ownership goes through `op_consume` on
-`classify_call_arg(&gmod, full_name, 0)`, so `!self` → `CkCallArgOwning` →
+`classify_call_arg(&gmod, full_name, 0)`, so `^self` → `CkCallArgOwning` →
 `OpMove` and `&self`/bare `self` → `CkCallArgBorrow` → `OpBorrow`. The
 receiver-dispatch fix — replacing a hardcoded `OpMove` with
 callee-signature consultation — has shipped.

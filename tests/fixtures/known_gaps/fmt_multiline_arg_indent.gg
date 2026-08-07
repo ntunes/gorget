@@ -1,0 +1,20 @@
+# Round XXXV Track C3 output-review 2026-08-07: `gg fmt` breaks multi-line
+# call-arg indent when a `+`-continuation crosses lines. Surfaced by the
+# D27 fmt sweep corrupting `tests/fixtures/self_host_lowerer/driver.gg:833-838`,
+# which broke the SH bootstrap. RED-verified: the reformatted output
+# re-parses as `E_PositionalAfterNamed` because the indent-dropped
+# continuation puts positional args after the `file=stderr` named arg.
+#
+# The shape below is a minimal repro. Running `gg fmt` on this file
+# re-emits `+ backend` and `+ " (…)"` at 4-space indent instead of the
+# nested indent that keeps them inside the outer `print(...)` call, and
+# the reformatted output parses wrong.
+#
+# When the formatter is fixed (see the "multi-line call-arg indent"
+# follow-up in TODO.md alongside the BinaryOp paren-drop follow-up),
+# un-ignore this and graduate it to a live regression test.
+from std.io import stderr
+
+void main():
+    String backend = "llvm"
+    print(("error: unsupported --backend=" + backend + " (the self-host compiler emits C only; use --backend=c)"), file=stderr)

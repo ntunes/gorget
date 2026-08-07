@@ -329,7 +329,7 @@ int h = hash_of[Point](p)
 ### Drop
 
 Auto-cleanup when a value goes out of scope or a `with` block ends. The `!` in
-`!self` means the method consumes ownership:
+`^self` means the method consumes ownership:
 
 ```gorget
 struct Connection:
