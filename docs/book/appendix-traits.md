@@ -107,7 +107,7 @@ trait Drop:
 ```
 
 Resource cleanup. Called automatically when a value goes out of scope.
-The `!self` parameter means `drop` consumes the value.
+The `^self` parameter means `drop` consumes the value.
 
 ### Default
 

@@ -1,0 +1,33 @@
+# Round XXXV Track C3 output-review 2026-08-07: `gg fmt` produces
+# MALFORMED multi-line call-arg indent when a `+`-continuation crosses
+# lines. Surfaced by the aborted D27 Round A fmt sweep against
+# `tests/fixtures/self_host_lowerer/driver.gg:833-838`.
+#
+# CORRECTED CLAIM (output-review fold, 2026-08-07): on THIS minimal
+# repro, the reformatted output still PARSES (idempotent on a second
+# fmt), but the emitted indent is visually wrong — `+ backend` and
+# `+ " (…)"` sit at 4-space indent instead of matching the opening `(`
+# of the outer `print(` call. A reader following the visual nesting
+# would think the args are at outer-scope; the parser is more forgiving
+# than the eye. On the WIDER `driver.gg` context, this reflow
+# cascaded into an SH-driver E_MoveInOperandPosition (43 phantom
+# diagnostics at synthetic line 1045:1) and broke bootstrap — the
+# formatter defect on driver.gg's actual shape is worse than what
+# reduces to this minimal file. The reduced fixture pins the
+# indent-emission defect the class shares.
+#
+# Fix scope: `src/formatter/mod.rs` call-arg / print-arg formatting —
+# the continuation-indent logic drops indent when a Doc line carries a
+# `+` continuing the previous arg across lines. A formatter that
+# preserves author intent must indent continuation lines to match the
+# opening `(`.
+#
+# When the formatter is fixed (see the "multi-line call-arg indent"
+# follow-up in TODO.md alongside the BinaryOp paren-drop follow-up),
+# un-ignore this and graduate it to a live regression test asserting
+# round-trip preserves indent + reduces the driver.gg repro to green.
+from std.io import stderr
+
+void main():
+    String backend = "llvm"
+    print(("error: unsupported --backend=" + backend + " (the self-host compiler emits C only; use --backend=c)"), file=stderr)

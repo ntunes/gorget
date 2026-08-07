@@ -14,9 +14,11 @@ impl Parser {
         self.parse_type_postfix(base, start)
     }
 
-    /// Parse a type with optional trailing ownership suffix (`&` or `!`).
-    /// Used in generic args and return types — NOT in param parsing
-    /// (params use separate `parse_ownership_modifier()` for the `Param.ownership` field).
+    /// Parse a type with optional trailing ownership suffix (`&` for
+    /// `Ref`; `!` or `^` for `Owned` — D27 accept-both, `Vector[T ^]`
+    /// alongside `Vector[T !]`). Used in generic args and return types
+    /// — NOT in param parsing (params use separate
+    /// `parse_ownership_modifier()` for the `Param.ownership` field).
     pub fn parse_type_with_ownership(&mut self) -> Result<Spanned<Type>, ParseError> {
         let ty = self.parse_type()?;
         let start = ty.span;
@@ -24,7 +26,7 @@ impl Parser {
             self.advance();
             let end = self.previous_span();
             Ok(Spanned::new(Type::Ref(Box::new(ty)), start.merge(end)))
-        } else if self.check(&Token::Bang) {
+        } else if self.check(&Token::Bang) || self.check(&Token::Caret) {
             self.advance();
             let end = self.previous_span();
             Ok(Spanned::new(Type::Owned(Box::new(ty)), start.merge(end)))
@@ -213,8 +215,18 @@ impl Parser {
                 // which is correct — we should not push to `self.errors` here
                 // because that error would then leak into a fallback expression
                 // parse. Retirement is a hard break, per D35's ratification.
-                if self.check(&Token::Ampersand) || self.check(&Token::Bang) {
-                    let sigil = if self.check(&Token::Ampersand) { '&' } else { '!' };
+                if self.check(&Token::Ampersand)
+                    || self.check(&Token::Bang)
+                    || self.check(&Token::Caret)
+                {
+                    // D27 accept-both: `^Type` rejected same shape as `!Type`.
+                    let sigil = if self.check(&Token::Ampersand) {
+                        '&'
+                    } else if self.check(&Token::Caret) {
+                        '^'
+                    } else {
+                        '!'
+                    };
                     let span = self.peek_span();
                     return Err(ParseError {
                         kind: crate::errors::ParseErrorKind::FunctionTypeParamSigilBeforeType { sigil },

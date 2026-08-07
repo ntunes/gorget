@@ -1,0 +1,52 @@
+# D27 Round A2 parser accept-both: `^` accepted alongside `!` at every
+# move-sigil position. The formatter still emits `!` (Round B does the
+# fmt-swap), so docs teaching `^{name}` are now VALID syntax the compiler
+# accepts. This fixture exercises `^` at each position; a sibling `!`
+# fixture continues to exercise the retired glyph.
+#
+# RED-verified pre-fold (at Stage 0 chip only, ce5fa232e):
+#   $ gg check tests/fixtures/d27_parser_accepts_caret.gg
+#   error: expected expression, found '^'
+# GREEN post-fold:
+#   $ gg check tests/fixtures/d27_parser_accepts_caret.gg
+#   OK: no semantic errors
+
+# Position 1: named-param move sigil (`Type ^name`).
+void take(String ^s):
+    print(s)
+
+# Position 2: self-face consuming method (`^self`).
+struct Bag:
+    String label
+
+equip Bag:
+    String into_label(^self):
+        return self.label
+
+# Position 3: type-arg suffix (`Vector[T ^]`, `Option[T ^]`) — D35 spelling.
+void take_owned(Vector[int ^] items):
+    int sum = 0
+    for x in items:
+        sum = sum + x
+    print(sum)
+
+# Position 4: prefix move expression on named place (`^s`) at a boundary.
+# Position 5: move closure prefix (`^(x): body`).
+int main():
+    String s = "hi"
+    take(^s)
+
+    Bag b = Bag("alpha")
+    String label = b.into_label()
+    print(label)
+
+    Vector[int] v = [1, 2, 3]
+    take_owned(v)
+
+    # Move closure — `^(): body` produces a ConsumeCallable (parses to
+    # `EMove` closure form, same as the retired `!(): body` spelling).
+    int count = 42
+    ConsumeCallable[int()] cb = ^(): count
+    print(cb())
+
+    return 0

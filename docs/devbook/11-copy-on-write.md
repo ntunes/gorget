@@ -74,7 +74,7 @@ create two owners of one heap buffer and double-free at drop.
 
 The exceptions are the **single-owner-by-design** types, where a silent alias
 would be a semantic bug. For these, the safety pass forces the user to write
-`!source` or `source.clone()` at a bare-assign site by emitting
+`^source` or `source.clone()` at a bare-assign site by emitting
 `MoveWithoutOperator`. The exact carve-out set is in
 `src/semantic/safety/check_stmt.rs:1217`:
 
@@ -1173,14 +1173,14 @@ code-comment twin lives at `cow_lazy_emit_guard` in `lower.gg`:
 | 3 | EMethodCall sig-args (`&`/`!`) | EMethodCall marg loop | hook 3 | `cow_lazy_method_arg` |
 | 4 | SAssign target root | `lower_stmt` SAssign | hook 4 | `cow_lazy_reassign_source` |
 | 5 | SCompoundAssign target | `lower_stmt` SCompoundAssign | hook 5 (collection-root compound is `lower_fail` today — class-rule completeness; member compound is excluded by the pristine gate) | `cow_lazy_compound` |
-| 6 | EMove (non-call `!name`) | decl-init / assign-RHS / return / literal element / match scrutinee — NO choke point | **eligibility EXCLUSION** (`cow_moved_names`) | `cow_lazy_move_bind`, `cow_lazy_move_reassign` |
+| 6 | EMove (non-call `^name`) | decl-init / assign-RHS / return / literal element / match scrutinee — NO choke point | **eligibility EXCLUSION** (`cow_moved_names`) | `cow_lazy_move_bind`, `cow_lazy_move_reassign` |
 | – | EMutableBorrow (`&name`) | call args strip the sigil in the parser; survivors lower as passthroughs | rows 2/3 carry the signature-driven routes; `&s` on the member itself is excluded by the pristine gate | `cow_lazy_mut_borrow_write` |
 | – | SWith / spawn / comprehension | no distinct route — they only recurse; their lowerings route through the hooked paths | (two PRE-EXISTING mode-independent gaps in TODO: inline-closure-spawn-arg; bare collection alias `w = v` then mutate) | — |
 
 #### Move shapes: the oracle exception and the open Rust EMove bug
 
 The self-host's `cow_moved_names` exclusion is whole-fn, per-source-NAME:
-one `!v` anywhere — even on a never-taken branch — makes every bind from `v`
+one `^v` anywhere — even on a never-taken branch — makes every bind from `v`
 in that fn eager (run-proven 1 clone where lazy would be 0). Acceptable
 because the borrow checker independently rejects conditional-move-then-use
 ("use of moved value"), so the practical loss window is narrow.
@@ -1532,14 +1532,14 @@ self-host driver otherwise lacks.
 
 `compute_method_mutates_self` (`lower.gg:1401`, run from the pre-pass) computes
 the answer precisely: a monotone fixpoint over self-callee edges. It seeds each
-`&self`/`!self` equip method (non-generic equips only) with a direct-mutation
+`&self`/`^self` equip method (non-generic equips only) with a direct-mutation
 flag from `mutinf_scan_stmts` / `mutinf_scan_expr` (which recognise
 `self`-rooted writes via `mutinf_expr_is_self_rooted`), records the set of
 `self`-method calls each makes as edges, then propagates mutation along those
 edges until fixed. The result is keyed `Type__mname` on the typed
 `GirModule.method_mutates_self` map (`gir.gg:621`) — one source of truth for
 this axis, alongside the existing `fn_borrow_params` / `fn_move_params`
-name-keyed caches. The self-convention (whether idx-0 is `&self`/`!self`) is
+name-keyed caches. The self-convention (whether idx-0 is `&self`/`^self`) is
 read from `fn_borrow_params`/`fn_move_params`, **not** from `mi_meth.params` —
 `apply_collect_target_rewrites` resets the reconstructed `self` param's
 ownership to bare (a filed footgun).

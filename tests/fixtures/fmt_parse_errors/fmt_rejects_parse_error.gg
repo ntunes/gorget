@@ -1,0 +1,12 @@
+# Fixture for Round XXXV Track C3 Stage 0: gg fmt must refuse to format
+# a source with parse errors — never silently drop unparseable lines.
+# Deliberately-invalid syntax: missing ':' on the `if` header.
+# Lives in `fmt_error_cases/` subdir so `fmt_idempotent`'s top-level sweep
+# does NOT pick it up (it would panic through format_source_infallible).
+int main():
+    int x = 5
+    if x > 0
+        print(x)
+    int y = 10
+    print(y)
+    return 0
