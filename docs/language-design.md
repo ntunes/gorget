@@ -1481,7 +1481,7 @@ void critical_section():
 
 **Rule of thumb:** Can the caller prevent this failure by writing correct code? Yes → panic. No → Result.
 
-The rule still holds: a fault (overflow, bounds, div0) is a programmer error, so it **panics by default** — continuing with corrupted state is worse than stopping. What the rule adds, rather than reverses, is **opt-in local recovery**: a faulting op can be caught *lexically*, at the operation site, instead of aborting the process.
+The rule still holds: a fault (overflow, bounds, div0) is a programmer error, so it **panics** — continuing with corrupted state is worse than stopping. Faults are **uncatchable in-process** (the Swift model): there is no lexical recovery form; an uncaught fault renders a diagnostic on stderr and exits with the trap code. Programs that need to *recover* from an arithmetic fault opt in via the fallible arithmetic operators (`+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!` — §2.2), which surface the fault into the ordinary `throws` / `Result[T, E]` channel instead of trapping.
 
 #### Faults
 

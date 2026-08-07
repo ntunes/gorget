@@ -13,10 +13,12 @@ Gorget sorts failures into two broad categories:
   on `None`. By default these **panic immediately**, because continuing with corrupted state
   is usually worse than stopping.
 
-The line between them isn't a wall. A small, closed set of programmer errors — integer
-overflow, division by zero, and out-of-bounds indexing — are **faults** that panic by
-default but can be *locally recovered* when a sensible fallback exists. We cover that at the
-end of the chapter under [Recovering from Faults](#recovering-from-faults).
+A small, closed set of programmer errors — integer overflow, division by zero, and
+out-of-bounds indexing — are **faults**. They panic **uncatchably**: there is no lexical
+recovery form for them. Programs that need to *recover* from an arithmetic fault opt in via
+the fallible arithmetic operators (`+!`, `-!`, `*!`, `/!`, `%!`, `<<!`, `>>!`), which
+surface the fault into the ordinary `throws` / `Result[T, E]` channel — see the "Faults
+Panic Uncatchably" section at the end of the chapter.
 
 This chapter covers all of it, starting with expected failures — the kind that need a design.
 
