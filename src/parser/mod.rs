@@ -263,12 +263,15 @@ impl Parser {
         }
     }
 
-    /// Parse an ownership modifier: `&` → MutableBorrow, `!` → Move, else Borrow.
+    /// Parse an ownership modifier: `&` → MutableBorrow, `!` or `^` → Move
+    /// (D27 accept-both this round; canonical glyph is `^` per docs; `!` is
+    /// the retired-but-still-accepted glyph — Round B does the fmt sweep and
+    /// then rejects `!`), else Borrow.
     pub fn parse_ownership_modifier(&mut self) -> Ownership {
         if self.check(&Token::Ampersand) {
             self.advance();
             Ownership::MutableBorrow
-        } else if self.check(&Token::Bang) {
+        } else if self.check(&Token::Bang) || self.check(&Token::Caret) {
             self.advance();
             Ownership::Move
         } else {
@@ -1917,10 +1920,12 @@ impl Parser {
             let name_tok = self.advance(); // self
             return Ok(make_self_param(start, name_tok.span, Ownership::MutableBorrow));
         }
-        if self.check(&Token::Bang)
+        // D27 accept-both: `!self` (retired) and `^self` (canonical) both mean
+        // `Ownership::Move` on the self-face.
+        if (self.check(&Token::Bang) || self.check(&Token::Caret))
             && matches!(self.peek_ahead(1), Token::Keyword(Keyword::SelfLower))
         {
-            self.advance(); // skip !
+            self.advance(); // skip ! or ^
             let name_tok = self.advance(); // self
             return Ok(make_self_param(start, name_tok.span, Ownership::Move));
         }

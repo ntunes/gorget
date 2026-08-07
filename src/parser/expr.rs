@@ -583,10 +583,13 @@ impl Parser {
                 ))
             }
 
-            // Move expression (! prefix)
-            Token::Bang => {
+            // Move expression (D27 accept-both: `!` retired glyph and `^`
+            // canonical glyph both produce `Expr::Move`. Round A2 minimal:
+            // parser accepts both so docs can teach `^` as canonical while
+            // `gg fmt` still normalizes to `!` — Round B does the fmt swap.)
+            Token::Bang | Token::Caret => {
                 self.advance();
-                // Check for move closure: !(params): body
+                // Check for move closure: !(params): body / ^(params): body
                 if self.check(&Token::LParen) {
                     return self.parse_closure(true, false, start);
                 }

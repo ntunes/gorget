@@ -2681,10 +2681,13 @@ equip Parser:
             SpannedExpr operand = self.parse_expr_bp(60)
             return SpannedExpr(EUnaryOp("not", Box(operand)), Span(start, operand.span.end))
 
-        # Unary bang (move) — but !(params): is a move closure, format without !
-        if ptag == TOK_BANG:
+        # Unary bang/caret (move) — but !(params):/^(params): is a move
+        # closure. D27 accept-both: `!` (retired) and `^` (canonical) both
+        # produce the same EMove AST this round. Round B does the fmt-swap
+        # and later rejects `!`.
+        if ptag == TOK_BANG or ptag == TOK_CARET:
             self.advance()
-            # Check for move closure: !(params): body
+            # Check for move closure: !(params): body / ^(params): body
             if self.check_tok(TOK_LPAREN):
                 int saved_move = self.pos
                 bool is_closure = self.try_detect_closure()
