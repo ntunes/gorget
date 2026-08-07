@@ -3525,7 +3525,20 @@ fn real_main() {
         "fmt" => {
             let in_place = args.iter().any(|a| a == "--in-place" || a == "-i");
             let check = args.iter().any(|a| a == "--check" || a == "-c");
-            let formatted = gorget::formatter::format_source(&source);
+            let formatted = match gorget::formatter::format_source_result(&source) {
+                Ok(s) => s,
+                Err(errs) => {
+                    // Core #8: never silently drop unparseable lines from the
+                    // formatted output. Render diagnostics and exit non-zero
+                    // WITHOUT writing to disk or emitting a partial format.
+                    let reporter = ErrorReporter::new(filename.clone(), source.clone());
+                    for err in &errs {
+                        reporter.report_parse_error(err);
+                    }
+                    eprintln!("\n{} parse error(s) found; refusing to format", errs.len());
+                    process::exit(1);
+                }
+            };
             if check {
                 if formatted != source {
                     eprintln!("{filename}: not formatted");

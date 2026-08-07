@@ -130,6 +130,12 @@
 # GREEN-remedy after-fixture applying the advice literally). Sources only.
 !lints/
 !lints/*.gg
+# Round XXXV Track C3 Stage 0: fmt-fix chip fixtures — deliberately-invalid
+# `.gg` sources that pin `gg fmt`'s refusal to silently drop unparseable
+# lines (Core #8 discharge). Subdir form so the top-level `fmt_idempotent`
+# sweep does not feed them to `format_source_infallible` (which would panic).
+!fmt_parse_errors/
+!fmt_parse_errors/*.gg
 
 # Re-ignore compiled/generated artifacts inside self-host subdirs
 self_host_*/driver

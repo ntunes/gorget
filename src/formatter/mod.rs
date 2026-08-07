@@ -2305,12 +2305,45 @@ fn primitive_type_str(p: PrimitiveType) -> &'static str {
 // Public API
 // ══════════════════════════════════════════════════════════════
 
-pub fn format_source(source: &str) -> String {
+/// Fallible formatter entry point.
+///
+/// Parses `source`, and if the parse recovered but recorded errors, returns
+/// those errors instead of producing a formatted output. The formatter builds
+/// its output from the AST, so any statement that failed to parse would be
+/// silently dropped from the formatted result if we ignored `parser.errors`
+/// — Core #8 (silent data loss) if we did not surface them.
+///
+/// Callers that are expected to feed valid Gorget (unit tests, integration
+/// fixtures) can use [`format_source_infallible`] which panics on any parse
+/// error with a clear message.
+pub fn format_source_result(source: &str) -> Result<String, Vec<crate::errors::ParseError>> {
     let mut parser = crate::parser::Parser::new(source);
     let module = parser.parse_module();
+    if !parser.errors.is_empty() {
+        return Err(parser.errors);
+    }
     let comments = parser.comments;
-    Formatter::new(comments).format(&module)
+    Ok(Formatter::new(comments).format(&module))
 }
+
+/// Infallible convenience: panics if the source has parse errors.
+///
+/// For tests and internal call sites that MUST be fed valid Gorget. Real
+/// user-facing `gg fmt` goes through [`format_source_result`] so it can
+/// surface diagnostics without silently dropping unparseable lines.
+pub fn format_source_infallible(source: &str) -> String {
+    match format_source_result(source) {
+        Ok(s) => s,
+        Err(errs) => {
+            panic!(
+                "format_source: input has {} parse error(s); first: {:?}",
+                errs.len(),
+                errs.first()
+            );
+        }
+    }
+}
+
 
 // ── Import sorting helpers ──────────────────────────────────
 
@@ -2439,7 +2472,7 @@ mod tests {
     use super::*;
 
     fn fmt(source: &str) -> String {
-        format_source(source)
+        format_source_infallible(source)
     }
 
     #[test]

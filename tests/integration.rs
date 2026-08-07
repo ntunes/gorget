@@ -8877,6 +8877,11 @@ fn directive_overflow_removed() {
 
 /// Format a .gg fixture twice and assert the second pass produces the same
 /// output as the first (idempotency). Uses the library API directly.
+///
+/// Post-Round XXXV Track C3 Stage 0 (fmt-fix chip): fixtures that FAIL to
+/// parse are correctly refused by the formatter, not silently dropped. Those
+/// fixtures pin a REJECT class (parse or check), NOT formatter idempotence;
+/// skip them here — the reject fixtures are exercised by their own tests.
 fn assert_fmt_idempotent(fixture: &str) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
@@ -8884,8 +8889,15 @@ fn assert_fmt_idempotent(fixture: &str) {
     let source = std::fs::read_to_string(&fixture_path)
         .unwrap_or_else(|e| panic!("Cannot read {}: {e}", fixture_path.display()));
 
-    let first = gorget::formatter::format_source(&source);
-    let second = gorget::formatter::format_source(&first);
+    let first = match gorget::formatter::format_source_result(&source) {
+        Ok(s) => s,
+        Err(_) => {
+            // Fixture pins a REJECT class — not the FMT idempotence layer.
+            // Silently skip (its own test binds the reject).
+            return;
+        }
+    };
+    let second = gorget::formatter::format_source_infallible(&first);
 
     assert_eq!(
         first, second,
@@ -8911,7 +8923,7 @@ fn assert_fmt_round_trips(label: &str, source: &str) {
     use gorget::parser::Parser;
 
     // Pass 1: format the source.
-    let first = gorget::formatter::format_source(source);
+    let first = gorget::formatter::format_source_infallible(source);
 
     // Round-trip: the formatted output MUST re-parse cleanly. A leading-operator
     // continuation (the old data-loss bug) shows up here as parse errors.
@@ -8927,7 +8939,7 @@ fn assert_fmt_round_trips(label: &str, source: &str) {
     );
 
     // Idempotence: a second pass must be byte-identical (nothing dropped/reshaped).
-    let second = gorget::formatter::format_source(&first);
+    let second = gorget::formatter::format_source_infallible(&first);
     assert_eq!(
         first, second,
         "Formatter is NOT idempotent for `{label}`.\n\
@@ -8987,7 +8999,7 @@ fn fmt_binary_chain_round_trips() {
         "void main():\n    int x = 1 + 2 + 3\n    print(x)\n";
     assert_fmt_round_trips("short_chain_flat", short_src);
     assert!(
-        !gorget::formatter::format_source(short_src).contains("(1 + 2 + 3)"),
+        !gorget::formatter::format_source_infallible(short_src).contains("(1 + 2 + 3)"),
         "short binary chain that fits should NOT be parenthesized"
     );
 }
@@ -9008,7 +9020,7 @@ void main():
     print(f(\"x\")! catch (e): 0)
 ";
     assert_fmt_round_trips("propagate_postfix", src);
-    let formatted = gorget::formatter::format_source(src);
+    let formatted = gorget::formatter::format_source_infallible(src);
     assert!(
         formatted.contains("parse(s)!"),
         "formatter must render Propagate as postfix `!` after the call.\nformatted:\n{formatted}"
@@ -9026,7 +9038,7 @@ void main():
     print(ok)
 ";
     assert_fmt_round_trips("propagate_ne_compare", cmp);
-    let cmp_fmt = gorget::formatter::format_source(cmp);
+    let cmp_fmt = gorget::formatter::format_source_infallible(cmp);
     assert!(
         cmp_fmt.contains("!") && cmp_fmt.contains("!="),
         "postfix mark and `!=` must both survive fmt.\nformatted:\n{cmp_fmt}"
@@ -9053,7 +9065,7 @@ void main():
     print(a)
 ";
     assert_fmt_round_trips("d35_fn_type_sigil_amp", amp_src);
-    let amp_fmt = gorget::formatter::format_source(amp_src);
+    let amp_fmt = gorget::formatter::format_source_infallible(amp_src);
     assert!(
         amp_fmt.contains("Callable[void(int &)]"),
         "formatter must emit D35 spelling with sigil AFTER type.\nformatted:\n{amp_fmt}"
@@ -9073,7 +9085,7 @@ void main():
     cb(!\"hi\")
 ";
     assert_fmt_round_trips("d35_fn_type_sigil_bang", bang_src);
-    let bang_fmt = gorget::formatter::format_source(bang_src);
+    let bang_fmt = gorget::formatter::format_source_infallible(bang_src);
     assert!(
         bang_fmt.contains("Callable[void(String !)]"),
         "formatter must emit D35 spelling for the `!` twin.\nformatted:\n{bang_fmt}"
@@ -9081,6 +9093,75 @@ void main():
     assert!(
         !bang_fmt.contains("Callable[void(!String)]"),
         "formatter must NOT emit retired pre-D35 `!Type` spelling.\nformatted:\n{bang_fmt}"
+    );
+}
+
+/// Round XXXV Track C3 Stage 0 (pre-fmt-fix chip) — `gg fmt` MUST NOT silently
+/// drop unparseable lines. Core #8: prior behaviour was `format_source` calling
+/// `parse_module()` and formatting the recovered AST, discarding any statements
+/// the parser rejected — a silent data-loss defect activated on every `gg fmt`
+/// invocation over a source with a parse error.
+///
+/// Chip: `format_source_result` returns `Err(Vec<ParseError>)` when the parse
+/// recorded any errors, and the CLI `fmt` arm renders the diagnostics and exits
+/// non-zero WITHOUT touching disk (in `--in-place`) or emitting a partial
+/// format (in stdout mode).
+///
+/// RED-verified pre-chip: `gg fmt` on this fixture exited 0 and dropped both
+/// the `if` header and the `print(x)` body from the formatted output.
+/// GREEN post-chip: exits non-zero, renders parse error(s), input file
+/// unchanged in `--in-place` mode, empty stdout in stdout mode.
+#[test]
+fn fmt_rejects_parse_error() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path =
+        manifest_dir.join("tests/fixtures/fmt_parse_errors/fmt_rejects_parse_error.gg");
+
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+
+    // Snapshot input so we can verify --in-place did NOT rewrite the file.
+    let source_before = std::fs::read_to_string(&fixture_path).expect("cannot read fixture");
+
+    // stdout mode: expect non-zero exit + parse diagnostics on stderr.
+    let output = build_with_timeout(gg_command("fmt").arg(&fixture_path), "fmt_rejects_parse_error.gg");
+    assert!(
+        !output.status.success(),
+        "gg fmt on a parse-error source MUST exit non-zero (Core #8 silent-drop chip).\n\
+         stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("parse error"),
+        "stderr must mention parse error(s), got:\n{stderr}",
+    );
+    // Never emit a partial format (which is exactly the silent-drop bug).
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("int main"),
+        "stdout must NOT contain a partial format when parse errors exist, got:\n{stdout}",
+    );
+
+    // --in-place mode: file must be UNCHANGED.
+    let output = build_with_timeout(
+        gg_command("fmt").arg("--in-place").arg(&fixture_path),
+        "fmt_rejects_parse_error.gg --in-place",
+    );
+    assert!(
+        !output.status.success(),
+        "gg fmt --in-place on a parse-error source MUST exit non-zero.\n\
+         stderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let source_after = std::fs::read_to_string(&fixture_path).expect("cannot re-read fixture");
+    assert_eq!(
+        source_before, source_after,
+        "gg fmt --in-place MUST leave the fixture unchanged when parse errors exist."
     );
 }
 
