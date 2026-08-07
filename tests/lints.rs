@@ -10752,14 +10752,13 @@ fn code_doc_citations_resolve() {
     // citing a `/tmp` brief, which the "scouts and briefs are /tmp-only" rule
     // forbids from the repo at all.
     //
-    // Round XXXII merge (2026-08-06): count found at 139 vs stale budget 138.
-    // Verified pre-existing at HEAD~5 by Track A executor (same 139 count
-    // before any Round XXXII commits). No Round XXXII commit introduced a
-    // new dangling citation. Bumping budget 138→139 to lock the floor and
-    // avoid masking; follow-up audit filed in TODO.md to identify the extra
-    // citation and repoint/retire it (candidate: the D25 wave batch C2
-    // fault-catch removal will retire the bulk).
-    const BUDGET: usize = 139;
+    // Round XXXIV C2 (2026-08-07): D25 fault-catch removal retired 111 of
+    // the 139 dangling citations (fault_participation.rs, lower_fault_catch_expr,
+    // FaultableCall/IndexLoad, builtin_fault_enum, and the fault_catch_*/
+    // fault_deep_*/faultcatch_recovery_type_* fixture families all deleted +
+    // the removed `docs/plans/error-model.md` refs went with them). Budget
+    // reseeded 139 → 28 as an upward-only ratchet lock-in.
+    const BUDGET: usize = 28;
     assert!(
         dangling.len() <= BUDGET,
         "code cites {} document(s) that do not exist (budget {}).\n\n{}\n\n\

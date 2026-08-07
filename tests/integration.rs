@@ -21602,7 +21602,7 @@ fn self_host_bootstrap_fixed_point() {
     // Track A change; a future round that closes the SH-Rust emission
     // discrepancy on the recovery-type check should tighten this back).
     // Convergence measured at stage-3 (release, loaded box; ~21 min).
-    const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 3;
+    const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 2;
     if let Some(k) = converged_at {
         assert!(
             k <= BOOTSTRAP_MAX_CONVERGENCE_STAGE,
