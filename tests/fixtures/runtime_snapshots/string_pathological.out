@@ -1,0 +1,24 @@
+long len: 10000
+long starts: true
+long ends: true
+long count a: 10000
+haystack len: 10000
+contains y: true
+ends y: true
+index_of y: 9999
+parts: 1000
+first: 0
+last: 999
+rejoin match: true
+replaced len: 500
+all x: true
+vector len: 5000
+first: s0
+last: s4999
+builder len: 5000
+stripped: x
+depth: 1
+alpha len: 1000
+mid: abcdefghij
+still hello: true
+pathological ok

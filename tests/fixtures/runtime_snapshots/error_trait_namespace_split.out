@@ -1,0 +1,9 @@
+not found
+IoError.NotFound
+no cause
+---
+invalid number: abc
+ParseError.InvalidNumber("abc")
+no cause
+---
+bad input

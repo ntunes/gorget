@@ -1,0 +1,6 @@
+a < b
+drop Foo temp
+a < temp
+b still world
+drop Foo world
+drop Foo hello

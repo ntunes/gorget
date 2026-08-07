@@ -1,0 +1,7 @@
+arena-in-arena: true
+pool blocks: 8
+fba capacity: 256
+tracker wraps alloc=: true
+42
+65536
+ok

@@ -1,0 +1,5 @@
+Running 2 tests...
+  test: oob vector index panics with exact detail ... PASS (0ms)
+  test: dynamic panic message survives cleanup ... PASS (0ms)
+
+2 passed, 0 failed (0ms)

@@ -1,0 +1,13 @@
+bin 6
+b after bin 5
+drop Acc 10
+id 15
+b after id 5
+drop Acc 2
+idx 7
+b after idx 5
+drop Acc 7
+drop Acc 15
+drop Acc 6
+drop Acc 5
+drop Acc 1

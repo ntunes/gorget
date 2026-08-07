@@ -1,0 +1,31 @@
+--- Vector[Option[int]] ---
+5
+some:10
+none
+some:20
+none
+some:30
+3
+10
+--- Vector[Result[int, str]] ---
+4
+true,false
+false,true
+true,false
+false,true
+ok_count:2
+err_count:2
+--- Dict[str, Option[int]] ---
+3
+95
+true
+88
+true
+--- Result[Vector[int], str] ---
+true
+3
+100
+200
+300
+true
+done

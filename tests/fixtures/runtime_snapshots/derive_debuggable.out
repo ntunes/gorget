@@ -1,0 +1,10 @@
+42
+3.14
+true
+"hi\nthere"
+hi
+there
+Outer { i: Inner { a: 42, s: "foo" }, flag: true }
+Login
+Tick(7)
+Message("hi\nyou")

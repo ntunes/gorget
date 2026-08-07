@@ -1,0 +1,11 @@
+split/join x500 ok
+replace converged: a
+trim x500 ok
+contains x1000: 1000
+index_of x1000: 16
+case roundtrip x500 ok
+substring x500 ok
+builder starts: true
+builder ends: true
+repeat x100: true
+all stress ok

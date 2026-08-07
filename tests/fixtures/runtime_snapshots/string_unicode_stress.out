@@ -1,0 +1,23 @@
+codepoints: 17
+accented: 4
+parts: 3
+café
+naïve
+résumé
+Hellö Wörld
+CAFÉ ÉLÈVE NAÏVE
+café élève naïve
+caf
+é
+bytes: 5, codepoints: 4
+byte_slice(0,3): caf
+substring(0,3): caf
+same: true
+contains e-acute: true
+contains af: true
+count e-acute: 4
+last: é
+rebuilt: café
+match: true
+ASCII: café naïve
+unicode case x200 ok

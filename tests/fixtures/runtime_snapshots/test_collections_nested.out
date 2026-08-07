@@ -1,0 +1,43 @@
+--- vec_of_vec ---
+2
+20
+40
+99
+1
+3
+--- dict_str_vec ---
+2
+true
+true
+false
+3
+2
+12
+4
+true
+--- vec_of_option ---
+5
+true
+10
+true
+30
+true
+true
+50
+--- option_of_vec ---
+true
+3
+100
+200
+300
+true
+--- dict_str_option ---
+3
+true
+true
+false
+95
+true
+88
+true
+done

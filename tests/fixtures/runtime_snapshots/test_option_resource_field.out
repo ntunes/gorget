@@ -1,0 +1,11 @@
+Running 8 tests...
+  test: option_string_field_is_some ... PASS (0ms)
+  test: option_string_field_is_none ... PASS (0ms)
+  test: option_string_field_unwrap ... PASS (0ms)
+  test: option_vector_field_is_some ... PASS (0ms)
+  test: option_vector_field_is_none ... PASS (0ms)
+  test: option_vector_literal_into_some ... PASS (0ms)
+  test: match_direct_arm_unwrap ... PASS (0ms)
+  test: match_bound_arm_unwrap ... PASS (0ms)
+
+8 passed, 0 failed (0ms)

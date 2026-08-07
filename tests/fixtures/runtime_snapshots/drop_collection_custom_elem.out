@@ -1,0 +1,9 @@
+A: vector temp
+B: vector named-move
+C: dict value named-move
+D: set key named-move
+done
+drop 40
+drop 30
+drop 20
+drop 10
