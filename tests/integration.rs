@@ -9004,6 +9004,136 @@ fn fmt_binary_chain_round_trips() {
     );
 }
 
+/// Round XXXVI FMT-C: **semantic** fmt round-trip guard. For each
+/// fixture in the curated list, build & run the ORIGINAL fixture and
+/// capture stdout; then run `gg fmt` on a copy, build & run the
+/// REFORMATTED fixture, and assert the stdout matches. This catches
+/// silent-miscompile classes that the existing `fmt_binary_chain_round_trips`
+/// (parse + idempotence only) does NOT catch — the R35 → R36 headline
+/// defect was `(a + b) / 2` re-emitting as `a + b / 2` (both parse
+/// cleanly, both are idempotent, but they compute different values).
+///
+/// This is the missing gate that would have caught R35's fmt sweep
+/// BEFORE it broke bootstrap (Core #6 — the recurring bug class gets
+/// an executable guard, not more prose). Fixtures added here become
+/// exercisable regression pins for the FMT-A/FMT-B arm classes.
+///
+/// The curated list starts with the FMT-A POS fixtures; add more
+/// fixtures as new operand classes surface (Core #4 sibling-drift).
+#[test]
+#[serial(gg_build)]
+fn fmt_round_trip_semantic() {
+    // Fixtures whose fmt round-trip must preserve stdout. Start with
+    // the Round XXXVI FMT-A arm-class POS fixtures; extend as new
+    // operand classes surface. Each entry: (fixture-basename, expected-stdout).
+    // Expected stdout comes from running the ORIGINAL fixture pre-fmt.
+    let corpus: &[(&str, &str)] = &[
+        // FMT-A: format_binary_chain paren-drop.
+        ("fmt_paren_binop_precedence.gg", "5"),
+        // FMT-A: Expr::UnaryOp Neg paren-drop.
+        ("fmt_paren_unary_neg.gg", "-7"),
+        // FMT-A: Expr::UnaryOp Not paren-drop (distinct prefix_bp=20).
+        ("fmt_paren_not_operand.gg", "true"),
+        // FMT-A: postfix-receiver paren-drop (method call receiver).
+        ("fmt_paren_postfix_receiver.gg", "11"),
+        // FMT-A: Expr::As paren-drop (as-cast operand).
+        ("fmt_paren_as_cast.gg", "-3"),
+        // FMT-A: same-precedence right-nested LEFT-assoc binops.
+        ("fmt_paren_binop_right_nested.gg", "3\n12\n0\n128"),
+        // FMT-A: Pow (only RIGHT-assoc) LEFT-nest paren-drop.
+        ("fmt_paren_pow_left_nest.gg", "64"),
+        // FMT-A: IIFE closure — closure as postfix-receiver of a call.
+        // Surfaced by the `scripts/fmt_sweep_smoke.sh` corpus sweep
+        // (Round XXXVI FMT-C bring-up): `((int x): x * x)(5)` was
+        // being re-emitted as `(int x): x * x(5)` which reparses with
+        // `x * x(5)` as the closure body — the outer call is lost.
+        // effective_outer_bp gives closures/if/match/do/block bp 0
+        // so they always wrap in postfix/infix embedding.
+        ("closure_iife.gg", "25\n10\nhello world"),
+    ];
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for (fixture, expected_stdout) in corpus {
+        assert_fmt_round_trip_semantic(&manifest_dir, fixture, expected_stdout);
+    }
+}
+
+/// Helper for `fmt_round_trip_semantic`: build+run ORIGINAL fixture,
+/// then fmt a copy, build+run the reformatted copy, assert stdouts match.
+fn assert_fmt_round_trip_semantic(
+    manifest_dir: &Path,
+    fixture: &str,
+    expected_stdout: &str,
+) {
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display(),
+    );
+
+    // Step 1: run ORIGINAL and capture stdout — positive control.
+    let orig_stdout = build_and_run_capture_stdout(&fixture_path, fixture);
+    assert_eq!(
+        orig_stdout.trim(),
+        expected_stdout.trim(),
+        "Pre-fmt run of {fixture} produced unexpected stdout — the fixture's \
+         expected_stdout in `fmt_round_trip_semantic` is out of date or the \
+         fixture is broken.",
+    );
+
+    // Step 2: read the source, format it in-memory (avoids touching the
+    // real fixture file), and write to a tempdir copy.
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture_path.display()));
+    let reformatted = gorget::formatter::format_source_infallible(&source);
+
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let reformatted_path = tmp.path().join(fixture);
+    std::fs::write(&reformatted_path, &reformatted)
+        .unwrap_or_else(|e| panic!("cannot write reformatted {fixture}: {e}"));
+
+    // Step 3: build+run reformatted and compare stdout.
+    let reformatted_label = format!("{fixture} (reformatted)");
+    let reformatted_stdout =
+        build_and_run_capture_stdout(&reformatted_path, &reformatted_label);
+    assert_eq!(
+        reformatted_stdout.trim(),
+        expected_stdout.trim(),
+        "SEMANTIC DRIFT — `gg fmt` changed the program's stdout for {fixture}.\n\
+         === Original stdout ===\n{orig_stdout}\n\
+         === Reformatted stdout ===\n{reformatted_stdout}\n\
+         === Reformatted source ===\n{reformatted}",
+    );
+}
+
+/// Build a fixture with `gg build` and run the resulting binary,
+/// returning captured stdout. Used by `fmt_round_trip_semantic`.
+fn build_and_run_capture_stdout(fixture_path: &Path, label: &str) -> String {
+    let build = build_with_timeout(gg_command("build").arg(fixture_path), label);
+    assert!(
+        build.status.success(),
+        "Build FAILED for {label}:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
+    let dir = fixture_path.parent().unwrap();
+    let exe_path = dir.join(stem);
+    let run = run_with_timeout(&mut Command::new(&exe_path), label);
+    assert!(
+        run.status.success(),
+        "Binary exited with error for {label}: status={:?}\nstdout:\n{}\nstderr:\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    // Clean up build artefacts alongside the fixture.
+    let _ = std::fs::remove_file(dir.join(format!("{stem}.c")));
+    let _ = std::fs::remove_file(&exe_path);
+    String::from_utf8_lossy(&run.stdout).to_string()
+}
+
 /// D29: `Expr::Propagate` must round-trip as a **postfix** `!` on the call
 /// (not a prefix bang, not fused with `!=`). Without this pin a missing
 /// formatter arm silently drops marks on `gg fmt` of marked corpus.

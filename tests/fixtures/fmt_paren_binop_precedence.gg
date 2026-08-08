@@ -1,0 +1,12 @@
+# FMT-A regression fixture (Round XXXVI): `format_binary_chain` MUST
+# wrap paren-bearing operands whose own precedence is lower than the
+# outer op, else `gg fmt` silently miscompiles `(a + b) / 2` to
+# `a + b / 2` (different arithmetic).
+#
+# Pre-fix RED signature: `gg fmt` re-emitted this file with `int r = a + b / 2`
+# and running the reformatted file printed `8` instead of `5`.
+void main():
+    int a = 6
+    int b = 4
+    int r = (a + b) / 2
+    print(r)

@@ -1,0 +1,12 @@
+# FMT-A regression fixture (Round XXXVI): postfix operators
+# (method call, field access, index, propagate) all bind at bp 35.
+# A BinaryOp receiver like `(a + b).len()` re-emits as
+# `a + b.len()` = `Add(a, MethodCall(b, len))` without the paren wrap.
+#
+# Pre-fix RED signature: `gg fmt` re-emitted `int r = a + b.len()`
+# and the reformatted file failed to compile (`String + int` type mismatch).
+void main():
+    String a = "hello"
+    String b = " world"
+    int r = (a + b).len()
+    print(r)

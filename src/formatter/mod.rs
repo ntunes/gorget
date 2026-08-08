@@ -145,8 +145,40 @@ impl Formatter {
 
     /// Format an AST element to a string using a temporary formatter.
     /// Used to produce string representations of elements for Doc wrapping.
+    ///
+    /// FMT-B (Round XXXVI): seeds the sub-Emitter's `indent` from the
+    /// caller's current indent so that any INTERNAL newlines produced by
+    /// the sub-render (e.g. a long binary chain that wraps mid-arg) are
+    /// indented to the caller's context, not to column 4 (the previous
+    /// hardcoded default). Also sets `at_line_start = false` so the
+    /// sub-Emitter doesn't prepend indent-spaces on its FIRST write —
+    /// the outer's `write_preformatted` handles first-line indent based
+    /// on the outer's own cursor.
+    ///
+    /// The `+ 1` bump matches the fact that almost every caller of this
+    /// helper (call args, params, generic args, comprehensions, method
+    /// chain, binary chain continuations, closure params, container
+    /// literals) wraps the returned strings in an outer `Doc::Indent(...)`
+    /// so items land one level deeper than the caller's cursor. Callers
+    /// whose sub-render placement is different can use
+    /// `element_to_string_at(base_indent, f)` directly to override.
     fn element_to_string(&self, f: impl FnOnce(&mut Formatter)) -> String {
+        self.element_to_string_at(self.emitter.indent + 1, f)
+    }
+
+    /// FMT-B (Round XXXVI) explicit-indent variant of `element_to_string`.
+    /// Seeds the sub-Emitter with the given `base_indent` (in indent LEVELS,
+    /// each = 4 spaces). The sub-Emitter starts `at_line_start = false`
+    /// so its first write emits no leading spaces — the outer decides
+    /// where to place the sub-buffer.
+    fn element_to_string_at(
+        &self,
+        base_indent: usize,
+        f: impl FnOnce(&mut Formatter),
+    ) -> String {
         let mut fmt = Formatter::new(vec![]);
+        fmt.emitter.indent = base_indent;
+        fmt.emitter.at_line_start = false;
         f(&mut fmt);
         fmt.emitter.finish()
     }
@@ -981,17 +1013,41 @@ impl Formatter {
         op: BinaryOp,
         right: &Spanned<Expr>,
     ) {
-        // Flatten same-operator chains for clean wrapping.
-        let mut operands = Vec::new();
-        collect_binary_operands(left, op, &mut operands);
+        let outer_left_bp = binary_op_left_bp(op);
+        let outer_right_assoc = binary_op_is_right_assoc(op);
+
+        // Flatten same-operator chains for clean wrapping — but ONLY
+        // for LEFT-associative operators. Right-associative flattening
+        // is unsafe: `(a ** b) ** c` and `a ** (b ** c)` both AST-shape
+        // as `BinaryOp(Pow, ...)` with the same operand vector after
+        // flattening, so a re-emit as `a ** b ** c` would silently
+        // collapse the two into the parser-default right-associative
+        // reading. Handle right-assoc as a plain 2-operand shape and
+        // let the paren-wrap helpers keep semantics true.
+        let mut operands: Vec<&Spanned<Expr>> = Vec::new();
+        if outer_right_assoc {
+            operands.push(left);
+        } else {
+            collect_binary_operands(left, op, &mut operands);
+        }
         operands.push(right);
 
         let op_str = binary_op_str(op);
 
-        // If only 2 operands (no chain), use simpler Doc
+        // FMT-A (Round XXXVI): wrap operand in `(...)` when its own
+        // precedence would misparse against the outer op. Position 0 is
+        // the LEFT operand of the leftmost pairing; positions >0 are all
+        // in RIGHT positions of successively-nested left-assoc pairings
+        // (or the single right-operand of a right-assoc op).
         let operand_strs: Vec<String> = operands
             .iter()
-            .map(|o| self.element_to_string(|f| f.format_expr(o)))
+            .enumerate()
+            .map(|(i, o)| {
+                let position = if i == 0 { BinOpPos::Left } else { BinOpPos::Right };
+                self.element_to_string(|f| {
+                    f.format_binop_operand(o, outer_left_bp, position, outer_right_assoc);
+                })
+            })
             .collect();
 
         // Build: operand1 <line " op "> operand2 <line " op "> operand3 ...
@@ -1651,6 +1707,48 @@ impl Formatter {
         }
     }
 
+    /// Emit `format_expr(expr)`, wrapping in `(...)` when `should_wrap` is true.
+    /// Used by the paren-aware operand emitters (FMT-A, Round XXXVI) so a
+    /// wrap-then-render path lives in ONE place — no ad-hoc `if { emit("(") ... }`
+    /// scattered across every arm.
+    fn format_expr_maybe_parens(&mut self, expr: &Spanned<Expr>, should_wrap: bool) {
+        if should_wrap {
+            self.emitter.write("(");
+            self.format_expr(expr);
+            self.emitter.write(")");
+        } else {
+            self.format_expr(expr);
+        }
+    }
+
+    /// FMT-A helper: emit an infix operand, wrapping in parens when the
+    /// operand's own precedence would misparse against the outer op.
+    fn format_binop_operand(
+        &mut self,
+        operand: &Spanned<Expr>,
+        outer_left_bp: u8,
+        position: BinOpPos,
+        outer_right_assoc: bool,
+    ) {
+        let wrap =
+            needs_parens_as_binop_operand(&operand.node, outer_left_bp, position, outer_right_assoc);
+        self.format_expr_maybe_parens(operand, wrap);
+    }
+
+    /// FMT-A helper: emit a prefix-operator operand, wrapping in parens
+    /// when the operand's own precedence would misparse against the prefix.
+    fn format_prefix_operand(&mut self, operand: &Spanned<Expr>, prefix_bp: u8) {
+        let wrap = needs_parens_as_prefix_operand(&operand.node, prefix_bp);
+        self.format_expr_maybe_parens(operand, wrap);
+    }
+
+    /// FMT-A helper: emit a postfix-operator receiver, wrapping in parens
+    /// when the receiver's own precedence would misparse against the postfix.
+    fn format_postfix_receiver(&mut self, receiver: &Spanned<Expr>) {
+        let wrap = needs_parens_as_postfix_receiver(&receiver.node);
+        self.format_expr_maybe_parens(receiver, wrap);
+    }
+
     fn format_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             Expr::IntLiteral(n) => {
@@ -1684,7 +1782,13 @@ impl Formatter {
             }
             Expr::UnaryOp { op, operand } => {
                 self.emitter.write(unary_op_str(*op));
-                self.format_expr(operand);
+                // FMT-A: `not` parses operand at bp 20; `-`/`~` at bp 33
+                // (src/parser/expr.rs:530,554,621).
+                let prefix_bp = match op {
+                    UnaryOp::Not => 20,
+                    UnaryOp::Neg | UnaryOp::BitNot => 33,
+                };
+                self.format_prefix_operand(operand, prefix_bp);
             }
             Expr::BinaryOp { left, op, right } => {
                 self.format_binary_chain(left, *op, right);
@@ -1694,7 +1798,9 @@ impl Formatter {
                 generic_args,
                 args,
             } => {
-                self.format_expr(callee);
+                // FMT-A: callee is a postfix-position receiver (bp 35). A
+                // BinaryOp callee like `(f + g)(x)` must stay wrapped.
+                self.format_postfix_receiver(callee);
                 if let Some(ga) = generic_args {
                     self.format_generic_args_wrapped(ga);
                 }
@@ -1712,7 +1818,9 @@ impl Formatter {
                 if chain_len >= 2 {
                     self.format_method_chain(expr);
                 } else {
-                    self.format_expr(receiver);
+                    // FMT-A: receiver at postfix bp 35 — wrap infix/prefix
+                    // receivers like `(a + b).foo()`.
+                    self.format_postfix_receiver(receiver);
                     self.emitter.write(".");
                     self.emitter.write(&method.node);
                     if let Some(ga) = generic_args {
@@ -1722,17 +1830,21 @@ impl Formatter {
                 }
             }
             Expr::FieldAccess { object, field } => {
-                self.format_expr(object);
+                // FMT-A: object at postfix bp 35.
+                self.format_postfix_receiver(object);
                 self.emitter.write(".");
                 self.emitter.write(&field.node);
             }
             Expr::TupleFieldAccess { object, index } => {
-                self.format_expr(object);
+                // FMT-A: object at postfix bp 35.
+                self.format_postfix_receiver(object);
                 self.emitter.write(".");
                 self.emitter.write(&index.to_string());
             }
             Expr::Index { object, index } => {
-                self.format_expr(object);
+                // FMT-A: object at postfix bp 35. `index` is inside `[...]`
+                // brackets, which reset precedence — no wrap needed there.
+                self.format_postfix_receiver(object);
                 self.emitter.write("[");
                 self.format_expr(index);
                 self.emitter.write("]");
@@ -1742,22 +1854,34 @@ impl Formatter {
                 end,
                 inclusive,
             } => {
+                // FMT-A: Range is bp 23 (postfix in parser sense, but rendered
+                // infix here). START was parsed at the outer bp of whichever
+                // context Range appeared in — treat as LEFT operand of an infix
+                // at bp 23 (left-assoc). END is parsed at bp 24 (parser::expr.rs:1394,1411),
+                // so END is a prefix operand at bp 24.
                 if let Some(s) = start {
-                    self.format_expr(s);
+                    self.format_binop_operand(s, 23, BinOpPos::Left, false);
                 }
                 self.emitter.write(if *inclusive { "..=" } else { ".." });
                 if let Some(e) = end {
-                    self.format_expr(e);
+                    self.format_prefix_operand(e, 24);
                 }
             }
             Expr::OptionalChain { object, field } => {
-                self.format_expr(object);
+                // FMT-A: object at postfix bp 35.
+                self.format_postfix_receiver(object);
                 self.emitter.write("?.");
                 self.emitter.write(&field.node);
             }
             Expr::DefaultOp { lhs, rhs } => {
-                let lhs_s = self.element_to_string(|f| f.format_expr(lhs));
-                let rhs_s = self.element_to_string(|f| f.format_expr(rhs));
+                // FMT-A: `??` is bp 3/4 (left-assoc). Only `Rethrow`/`Catch`
+                // (bp 1/2) bind looser — those need wrapping. E.g. `(a rethrow b) ?? c`.
+                let lhs_s = self.element_to_string(|f| {
+                    f.format_binop_operand(lhs, 3, BinOpPos::Left, false);
+                });
+                let rhs_s = self.element_to_string(|f| {
+                    f.format_binop_operand(rhs, 3, BinOpPos::Right, false);
+                });
                 let nil_doc = doc::group(doc::concat(vec![
                     doc::text(lhs_s),
                     doc::indent(doc::concat(vec![
@@ -1769,7 +1893,8 @@ impl Formatter {
             }
             Expr::Move { expr } => {
                 self.emitter.write("!");
-                self.format_expr(expr);
+                // FMT-A: Move `!` parses operand at bp 33 (parser::expr.rs:596).
+                self.format_prefix_operand(expr, 33);
             }
             // D29: postfix error-propagation renders the `!` AFTER the inner
             // expression. No bang-space corner here: a `!=`/`==` comparison is
@@ -1777,16 +1902,21 @@ impl Formatter {
             // so a re-rendered `f()! != b` never fuses. (The raw-text migrator
             // handles bang-space when INSERTING into un-spaced source.)
             Expr::Propagate { expr } => {
-                self.format_expr(expr);
+                // FMT-A: Propagate is POSTFIX at bp 35 — a bare BinaryOp
+                // operand like `(a + b)!` needs wrap, else `a + b!` reparses
+                // as `Add(a, Propagate(b))`.
+                self.format_postfix_receiver(expr);
                 self.emitter.write("!");
             }
             Expr::MutableBorrow { expr } => {
                 self.emitter.write("&");
-                self.format_expr(expr);
+                // FMT-A: MutableBorrow `&` parses operand at bp 33 (parser::expr.rs:635).
+                self.format_prefix_operand(expr, 33);
             }
             Expr::Deref { expr } => {
                 self.emitter.write("*");
-                self.format_expr(expr);
+                // FMT-A: Deref `*` parses operand at bp 33 (parser::expr.rs:576).
+                self.format_prefix_operand(expr, 33);
             }
             Expr::If {
                 condition,
@@ -2037,28 +2167,35 @@ impl Formatter {
                 self.write_doc(&doc);
             }
             Expr::As { expr, type_ } => {
-                self.format_expr(expr);
+                // FMT-A: `as` is bp 31/32 (left-assoc). Operand at LEFT position.
+                self.format_binop_operand(expr, 31, BinOpPos::Left, false);
                 self.emitter.write(" as ");
                 self.format_type(type_);
             }
             Expr::Await { expr } => {
-                self.format_expr(expr);
+                // FMT-A: postfix `.await()` — receiver at bp 35.
+                self.format_postfix_receiver(expr);
                 self.emitter.write(".await()");
             }
             Expr::Spawn { expr, unchecked } => {
                 self.emitter.write(if *unchecked { "spawn unchecked " } else { "spawn " });
-                self.format_expr(expr);
+                // FMT-A: `spawn` parses operand at bp 2 (parser::expr.rs:660).
+                self.format_prefix_operand(expr, 2);
             }
             Expr::SpawnBlocking { expr, unchecked } => {
                 self.emitter.write(if *unchecked { "spawn blocking unchecked " } else { "spawn blocking " });
-                self.format_expr(expr);
+                // FMT-A: `spawn blocking` parses operand at bp 2.
+                self.format_prefix_operand(expr, 2);
             }
             Expr::Is {
                 expr,
                 negated,
                 pattern,
             } => {
-                self.format_expr(expr);
+                // FMT-A: `is` / `is not` is bp 9/10 (left-assoc, treated as
+                // an infix with a pattern RHS). Only the LEFT expr can be a
+                // looser expression that needs paren-wrapping.
+                self.format_binop_operand(expr, 9, BinOpPos::Left, false);
                 if *negated {
                     self.emitter.write(" is not ");
                 } else {
@@ -2077,32 +2214,50 @@ impl Formatter {
                 }
             }
             Expr::MetaOpInfix { left, op_name, right } => {
-                self.format_expr(left);
+                // FMT-A: `meta[op]` infix is bp 27/28 (mirrors Add, left-assoc).
+                self.format_binop_operand(left, 27, BinOpPos::Left, false);
                 self.emitter.write(&format!(" meta[{op_name}] "));
-                self.format_expr(right);
+                self.format_binop_operand(right, 27, BinOpPos::Right, false);
             }
             Expr::MetaOpToken(op) => {
                 self.emitter.write("meta ");
                 self.emitter.write(binary_op_str(*op));
             }
             Expr::Rethrow { expr, error_binding, transform } => {
-                self.format_expr(expr);
+                // FMT-A: Rethrow is bp 1/2 (left-assoc). LHS is at bp 1 —
+                // basically nothing binds looser, so a leaf/atom is fine
+                // as LHS (no wrap needed). But the transform (RHS) is
+                // parsed at bp 2 (see parser). If the transform contains
+                // a nested `rethrow` (a Rethrow expression at bp 1), it's
+                // 1 <= 2-1 = 1, WRAP. (Catch bp 1 also wraps.)
+                self.format_binop_operand(expr, 1, BinOpPos::Left, false);
                 if let Some((error_type, error_name)) = error_binding {
                     self.emitter.write(" rethrow (");
                     self.format_type(error_type);
                     self.emitter.write(" ");
                     self.emitter.write(&error_name.node);
                     self.emitter.write("): ");
+                    // The bound-form transform after `):` is parsed by
+                    // parse_body_or_expr (parser::expr.rs:507) which reads
+                    // an expression at low precedence — safe from further
+                    // nesting hazards (like the Catch recovery arm).
+                    self.format_expr(transform);
                 } else {
                     self.emitter.write(" rethrow ");
+                    // Bare-form transform: nested Rethrow/Catch (bp 1) at
+                    // this position would silently re-associate. WRAP.
+                    self.format_binop_operand(transform, 1, BinOpPos::Right, false);
                 }
-                self.format_expr(transform);
             }
             Expr::Catch { expr, error_binding, recovery } => {
-                self.format_expr(expr);
+                // FMT-A: LHS at Catch bp 1 — same story as Rethrow LHS.
+                self.format_binop_operand(expr, 1, BinOpPos::Left, false);
                 self.emitter.write(" catch (");
                 self.emitter.write(&error_binding.node);
                 self.emitter.write("): ");
+                // Recovery parsed via parse_body_or_expr (parser::expr.rs:507)
+                // at bp 0 — absorbs everything on its line, so no wrap
+                // hazard for the recovery arm itself.
                 self.format_expr(recovery);
             }
         }
@@ -2277,6 +2432,207 @@ fn unary_op_str(op: UnaryOp) -> &'static str {
         UnaryOp::Not => "not ",
         UnaryOp::BitNot => "~",
     }
+}
+
+// ══════════════════════════════════════════════════════════════
+// Precedence-aware paren-wrapping helpers (FMT-A, Round XXXVI)
+// ══════════════════════════════════════════════════════════════
+//
+// The parser's Pratt binding-power table (src/parser/expr.rs:775-1029)
+// is mirrored here as `binary_op_left_bp`, `binary_op_is_right_assoc`,
+// and `effective_outer_bp`. The formatter needs to know when an operand
+// expression's own outer precedence is LOWER than the containing
+// operator's, so it can wrap the operand in `(...)` — otherwise
+// `gg fmt` on `(a+b)/2` re-emits `a+b/2`, silently flipping arithmetic.
+//
+// Two per-context helpers:
+//   - `needs_parens_as_binop_operand` for infix operands (left/right).
+//   - `needs_parens_as_prefix_operand` for prefix operators (`-x`,
+//     `not x`, `!x` move, `&x` mutable-borrow, `*x` deref, `~x` bitnot,
+//     `spawn x` / `spawn blocking x` / `await x`, Range `..end`).
+//   - `needs_parens_as_postfix_receiver` for postfix (`.field`,
+//     `.method()`, `[i]`, `(args)`, `!` propagate, `?.field`).
+//
+// Rules (mirror standard Pratt-parser paren-preservation logic):
+//   LEFT position of infix (left_bp `L`):
+//     - LEFT-assoc outer: wrap if inner_bp < L (strict)
+//     - RIGHT-assoc outer: wrap if inner_bp <= L
+//   RIGHT position of infix (left_bp `L`):
+//     - LEFT-assoc outer: wrap if inner_bp <= L
+//     - RIGHT-assoc outer: wrap if inner_bp < L
+//   PREFIX operand: wrap if inner_bp < prefix_bp
+//   POSTFIX receiver: wrap if inner_bp < 35 (postfix bp)
+//
+// A leaf/atom/postfix expression has no "outer precedence" to compare —
+// `effective_outer_bp` returns `None` and no wrap is needed.
+
+/// Mirror of `Parser::infix_bp` left binding-power for a BinaryOp.
+/// Keep in sync with `src/parser/expr.rs:775-1029` (`Parser::infix_bp`).
+fn binary_op_left_bp(op: BinaryOp) -> u8 {
+    match op {
+        BinaryOp::Or => 5,
+        BinaryOp::And => 7,
+        BinaryOp::Eq | BinaryOp::Neq => 11,
+        BinaryOp::Lt | BinaryOp::Gt | BinaryOp::LtEq | BinaryOp::GtEq => 13,
+        BinaryOp::In => 15,
+        BinaryOp::BitOr => 17,
+        BinaryOp::BitXor => 19,
+        BinaryOp::BitAnd => 21,
+        BinaryOp::Shl | BinaryOp::Shr | BinaryOp::ShlFallible | BinaryOp::ShrFallible => 25,
+        BinaryOp::Add
+        | BinaryOp::Sub
+        | BinaryOp::AddWrap
+        | BinaryOp::SubWrap
+        | BinaryOp::AddFallible
+        | BinaryOp::SubFallible => 27,
+        BinaryOp::Mul
+        | BinaryOp::Div
+        | BinaryOp::Rem
+        | BinaryOp::Mod
+        | BinaryOp::MulWrap
+        | BinaryOp::MulFallible
+        | BinaryOp::DivFallible
+        | BinaryOp::RemFallible => 29,
+        // `**` is RIGHT-associative — parser encodes as (left=34, right=33)
+        // so `a ** b ** c` parses `a ** (b ** c)`. The "effective left bp"
+        // for embedding checks is 34 — that's what a `**` at this position
+        // takes as its left-side binding priority.
+        BinaryOp::Pow => 34,
+    }
+}
+
+/// Only Pow (`**`) is right-associative in Gorget.
+fn binary_op_is_right_assoc(op: BinaryOp) -> bool {
+    matches!(op, BinaryOp::Pow)
+}
+
+/// The effective "outer precedence" (left binding-power) of an
+/// expression when embedded in a larger expression context.
+/// Returns `None` for leaves/postfixes/atoms that never need paren-wrapping.
+fn effective_outer_bp(expr: &Expr) -> Option<u8> {
+    match expr {
+        // Loose infix keywords — bp 1/2 (Rethrow, Catch).
+        Expr::Rethrow { .. } | Expr::Catch { .. } => Some(1),
+        // Default operator `??` — bp 3/4.
+        Expr::DefaultOp { .. } => Some(3),
+        // `is` / `is not` — bp 9/10.
+        Expr::Is { .. } => Some(9),
+        // Range `..` / `..=` — bp 23 (parser::expr.rs:1225).
+        Expr::Range { .. } => Some(23),
+        // `as` cast — bp 31/32.
+        Expr::As { .. } => Some(31),
+        // BinaryOp — look up the operator's left bp.
+        Expr::BinaryOp { op, .. } => Some(binary_op_left_bp(*op)),
+        // `meta[op]` infix — bp 27/28 (mirrors Add).
+        Expr::MetaOpInfix { .. } => Some(27),
+        // Prefix `not` — parses operand at bp 20 (parser::expr.rs:530).
+        Expr::UnaryOp { op: UnaryOp::Not, .. } => Some(20),
+        // Other prefix unary and sigil ops — bp 33 (parser::expr.rs:554,576,596,621,635).
+        Expr::UnaryOp { .. }
+        | Expr::Move { .. }
+        | Expr::MutableBorrow { .. }
+        | Expr::Deref { .. } => Some(33),
+        // spawn / spawn blocking — prefix bp 2 (parser::expr.rs:660).
+        Expr::Spawn { .. } | Expr::SpawnBlocking { .. } => Some(2),
+        // Await is ALWAYS rendered postfix as `.await()` by
+        // `format_expr` (Round XXXVI Expr::Await arm). The parser
+        // accepts prefix `await x` too, but they both AST-shape as
+        // `Expr::Await` and the formatter picks the postfix rendering,
+        // so the effective outer bp for embedding checks is 35
+        // (postfix bp), NOT the prefix parser bp of 2.
+        Expr::Await { .. } => None,
+        // "Statement-like" value-producing expressions — closure, if,
+        // match, do, block. Their surface syntax spans a body/branches
+        // that extend as far right as the parser will let them, so
+        // embedding them without paren-wrap in a postfix or infix
+        // context lets the outer op steal from the body. E.g. the IIFE
+        // `((int x): x * x)(5)` MUST wrap the closure — without the
+        // parens, `(int x): x * x(5)` reparses with `x * x(5)` as the
+        // closure body and drops the outer call.
+        //
+        // Report the LOOSEST bp (0) so ANY infix/prefix/postfix
+        // embedding triggers the wrap. Idempotent when the outer
+        // context is a bare statement/assign right-hand side (no
+        // operator to compare against — no wrap invoked at all).
+        Expr::Closure { .. }
+        | Expr::If { .. }
+        | Expr::Match { .. }
+        | Expr::Do { .. }
+        | Expr::Block(_) => Some(0),
+        // Everything else (literals, identifiers, calls, method calls,
+        // field access, index, propagate, container literals, struct
+        // literals, comprehensions, patterns, path, self, etc.) —
+        // no wrap needed as a nested operand.
+        _ => None,
+    }
+}
+
+/// Position of an operand relative to its containing binary operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BinOpPos {
+    Left,
+    Right,
+}
+
+/// True when `operand` needs `(...)` wrapping to preserve its own
+/// AST shape when spliced as the given `position` operand of an
+/// outer binary operator with left-bp `outer_left_bp`. Mirror of
+/// the parser's binding-power precedence resolution.
+fn needs_parens_as_binop_operand(
+    operand: &Expr,
+    outer_left_bp: u8,
+    position: BinOpPos,
+    outer_right_assoc: bool,
+) -> bool {
+    let Some(inner) = effective_outer_bp(operand) else {
+        return false;
+    };
+    match position {
+        BinOpPos::Left => {
+            if outer_right_assoc {
+                inner <= outer_left_bp
+            } else {
+                inner < outer_left_bp
+            }
+        }
+        BinOpPos::Right => {
+            if outer_right_assoc {
+                inner < outer_left_bp
+            } else {
+                inner <= outer_left_bp
+            }
+        }
+    }
+}
+
+/// True when `operand` needs `(...)` wrapping when spliced as the
+/// operand of a prefix operator that parses its operand at bp `prefix_bp`.
+/// (Prefixes: `not` bp 20; `-`/`~`/`!`/`&`/`*`/`^` bp 33; `spawn`/`await` bp 2;
+/// Range end `..end` bp 24.)
+fn needs_parens_as_prefix_operand(operand: &Expr, prefix_bp: u8) -> bool {
+    let Some(inner) = effective_outer_bp(operand) else {
+        return false;
+    };
+    // If inner infix's left_bp < prefix_bp, the parser would treat the
+    // infix as CONTINUATION of the outer expression (`not X + y` parses
+    // as `not (X + y)`, `Not(Add(X,y))`), losing the intended
+    // `Not(X) + y` shape — must wrap.
+    inner < prefix_bp
+}
+
+/// True when `operand` needs `(...)` wrapping when spliced as the
+/// receiver of a postfix operator (field access, tuple field access,
+/// method call, index, call, `?.field` optional chain, `!` propagate,
+/// `.await()` method-call form).
+///
+/// Postfix ops all bind at bp 35 (parser::expr.rs:1215-1223). Any infix
+/// or prefix expression as receiver would be dismantled by the parser —
+/// `a + b.foo()` = `Add(a, MethodCall(b, foo))`, `-a.foo()` = `Neg(MethodCall(a, foo))`.
+fn needs_parens_as_postfix_receiver(operand: &Expr) -> bool {
+    let Some(inner) = effective_outer_bp(operand) else {
+        return false;
+    };
+    inner < 35
 }
 
 fn primitive_type_str(p: PrimitiveType) -> &'static str {

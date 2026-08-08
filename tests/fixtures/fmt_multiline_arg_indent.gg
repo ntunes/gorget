@@ -1,0 +1,20 @@
+# FMT-B regression fixture (Round XXXVI — graduated from
+# `tests/fixtures/known_gaps/fmt_multiline_arg_indent.gg`).
+#
+# Reduction of the `driver.gg:833-838` shape from the aborted D27
+# Round A fmt sweep: a call arg containing a multi-line binary chain
+# used to be rendered with the chain's continuation lines at column 4
+# (from a fresh sub-Emitter starting at indent=0), instead of matching
+# the outer call's indent. The reformatted output still parsed on this
+# minimal repro but the visual indent was wrong; on the wider driver.gg
+# context the reflow cascaded into an SH-driver
+# E_MoveInOperandPosition (43 phantom diagnostics) that broke bootstrap.
+#
+# Round XXXVI FMT-B: `element_to_string` now seeds the sub-Emitter's
+# indent from the caller's context so internal newlines from the
+# sub-render land at the correct column.
+from std.io import stderr
+
+void main():
+    String backend = "llvm"
+    print(("error: unsupported --backend=" + backend + " (the self-host compiler emits C only; use --backend=c)"), file=stderr)

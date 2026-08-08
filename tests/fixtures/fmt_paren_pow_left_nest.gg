@@ -1,0 +1,20 @@
+# FMT-A regression fixture (Round XXXVI): Pow (`**`) is the ONE
+# RIGHT-associative infix in Gorget (parser bp left=34, right=33 →
+# `a ** b ** c` parses as `a ** (b ** c)`). Left-nested Pow expressions
+# `(a ** b) ** c` MUST wrap the LEFT operand — dropping parens re-emits
+# `a ** b ** c` which reparses right-assoc as `a ** (b ** c)`.
+#
+# Distinct axis polarity from `fmt_paren_binop_right_nested.gg`
+# (which covers LEFT-assoc RIGHT-nest) — this covers RIGHT-assoc LEFT-nest.
+#
+# Pre-fix RED signature: `gg fmt` re-emitted `int r = a ** b ** c`
+# and running the reformatted file printed `512` (right-assoc:
+# `2 ** (3 ** 2)` = `2 ** 9` = 512) instead of `64` (left-assoc:
+# `(2 ** 3) ** 2` = `8 ** 2` = 64). Non-constant operands so
+# const-fold can't elide the arithmetic.
+void main():
+    int a = 2
+    int b = 3
+    int c = 2
+    int r = (a ** b) ** c
+    print(r)
