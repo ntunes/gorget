@@ -27708,7 +27708,7 @@ fn self_host_runtime_diff() {
     // MATCH on SH for the shapes SH supports). Bump 1349 → 1360 (−9 jitter
     // from 1369; conservative because the round-close narrow of Track B's
     // else-arm may shift a couple of borderline shapes on future measurements).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1370;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1373;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
