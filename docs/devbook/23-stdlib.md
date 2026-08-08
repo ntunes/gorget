@@ -334,7 +334,7 @@ non-consumingly" — `Iterator[T] iter(&self)`. `for x in v` desugars to
 name-based dispatch on `iter()`; the trait provides the contract and enables
 `[Iterable T]` bounds but the for-loop fast path does not route through a
 trait vtable. `Drainable[T]` (`:341`) is the consuming sibling —
-`Iterator[T] drain(!self)` moves the source in and yields owned elements.
+`Iterator[T] drain(^self)` moves the source in and yields owned elements.
 
 `Vector` equips both: `iter()` returns `VectorIter[T]`
 (`lib/std/iter.gg:356-358`); `drain()` is an O(n) reverse + repeated O(1)

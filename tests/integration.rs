@@ -4489,6 +4489,139 @@ fn box_element_drop_symbol_collision() {
     run_gg("known_gaps/box_element_drop_symbol_collision.gg", "done");
 }
 
+// Round XXXVII (2026-08-08) — durable repro for the composite-print
+// raw-address defect (TODO.md HIGH, "print(<non-Displayable composite>)
+// prints a RAW ADDRESS", filed 2026-07-25, widened 2026-07-31 by Round
+// XX pass 6, "durable repro still owed since 2026-07-25 filing").
+// R37 committed the repro after re-verifying live at HEAD 900bd06f7
+// during the Phase 2 sweep debug: `print(<Vector[int]>)` prints a raw
+// pointer regardless of how the Vector was produced (move-and-return,
+// bare literal, passthrough — all print e.g. `281474799179512`). ggdef
+// prints `[10, 20, 30]`. See TODO.md HIGH entry and the fixture header
+// for the full Struct/Enum/Vector/Tuple/Set/Dict family.
+//
+// The `expected_stdout` here asserts the CORRECT / intended output: the
+// Vector CONTENTS in the language's canonical composite-display shape
+// (ggdef prints `[10, 20, 30]`). Un-ignore + promote when either the
+// composite-print reject lands (matching the f-string path) OR a
+// canonical composite-display is wired.
+#[test]
+#[ignore = "KNOWN GAP (HIGH, TODO.md — durable repro owed since 2026-07-25 \
+filing): print(<non-Displayable composite>) prints a raw address instead of \
+the composite's contents. Family: Struct/Enum/Vector/Tuple/Set/Dict. Fix at \
+the shared producer so both print(arg) and f\"{arg}\" route through one \
+check; NEG per costume."]
+fn print_composite_raw_address() {
+    run_gg("known_gaps/print_composite_raw_address.gg", "[10, 20, 30]");
+}
+
+// Round XXXVII (2026-08-08) — durable repro PROCEDURE for the SH-lowerer
+// stage-2 double-free triggered by the formatter's bulk canonicalization
+// (`gg fmt --in-place` sweep). Discovered and reproduced twice during
+// R37 Phase 2 debug (full-corpus sweep AND non-SH-only sweep both trip
+// the failure). ORTHOGONAL to D27 — the failure reproduces against the
+// retired `!` glyph too. See fixture header at
+// `tests/fixtures/known_gaps/sh_bootstrap_stage2_double_free_after_fmt_canonicalization.gg`
+// for the step-by-step reproducer command sequence and the exact
+// canonicalization operations the formatter performs.
+//
+// This wrapper runs the sweep procedure in a scratch tree and asserts
+// `self_host_bootstrap_fixed_point` succeeds — the CORRECT / intended
+// behavior. Un-ignore when the SH-lowerer memory-safety defect that the
+// bulk canonicalization exposes is diagnosed and fixed.
+//
+// The wrapper is heavy (invokes `gg fmt` recursively across ~2,754
+// non-SH .gg files, then runs the bootstrap fixed-point which itself
+// takes ~11 min on a warm CI box). Keeping it `#[ignore]`d until the
+// underlying defect is diagnosed lets targeted runs opt in without
+// paying the cost every suite.
+#[test]
+#[ignore = "KNOWN GAP (R37 filed 2026-08-08; blocks D27 Phase 2 sweep): \
+`gg fmt --in-place` sweep followed by `self_host_bootstrap_fixed_point` \
+crashes with `free(): double free detected in tcache 2` in the stage-2 \
+driver binary. Orthogonal to D27 (reproduces against `!` too). See \
+tests/fixtures/known_gaps/sh_bootstrap_stage2_double_free_after_fmt_canonicalization.gg \
+header for the procedure + TODO.md D27 headline follow-up."]
+#[serial(gg_build)]
+fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
+    // The repro procedure is documented in the fixture header. This
+    // wrapper implements it end-to-end so a future un-ignoring turns
+    // straight into a passing gate.
+    //
+    // Note: this test MODIFIES the working tree in-place via `gg fmt`,
+    // exactly as `scripts/fmt_sweep_smoke.sh --apply` does. Run only
+    // on a scratch tree or a branch dedicated to the diagnosis — the
+    // `#[ignore]` shields the default suite from the mutation.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let gg = manifest_dir.join("target/release/gg");
+    assert!(
+        gg.exists(),
+        "gg binary not found — build with `cargo build --release --bin gg` first"
+    );
+
+    // Sweep every non-SH .gg file in the D27 corpora. Matches
+    // scripts/fmt_sweep_smoke.sh --apply's scope minus self_host_*.
+    fn walk_dot_gg(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            let s = p.to_string_lossy();
+            if s.contains("self_host_") {
+                continue;
+            }
+            if p.is_dir() {
+                walk_dot_gg(&p, out);
+            } else if p.extension().and_then(|e| e.to_str()) == Some("gg") {
+                out.push(p);
+            }
+        }
+    }
+    let corpora = ["tests/fixtures", "lib", "examples", "demo", "spectests", "compiler/data"];
+    for corpus in corpora.iter() {
+        let root = manifest_dir.join(corpus);
+        if !root.exists() {
+            continue;
+        }
+        let mut files = Vec::new();
+        walk_dot_gg(&root, &mut files);
+        for file in files {
+            let _ = Command::new(&gg)
+                .arg("fmt")
+                .arg("--in-place")
+                .arg(&file)
+                .output();
+        }
+    }
+
+    // Delete cached driver binaries so the bootstrap rebuild uses the
+    // freshly-reformatted sources.
+    let driver_exe = manifest_dir.join("tests/fixtures/self_host_lowerer/driver");
+    let driver_c = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.c");
+    let _ = std::fs::remove_file(&driver_exe);
+    let _ = std::fs::remove_file(&driver_c);
+
+    // Now run the bootstrap fixed-point. This is what CURRENTLY fails
+    // with `free(): double free detected in tcache 2` in the stage-2
+    // driver binary. When the SH-lowerer defect is diagnosed and fixed,
+    // this call succeeds and the test can be un-ignored.
+    let status = Command::new(env!("CARGO"))
+        .arg("test")
+        .arg("--test")
+        .arg("integration")
+        .arg("--release")
+        .arg("--")
+        .arg("self_host_bootstrap_fixed_point")
+        .env("GG_BUILD_TIMEOUT_SECS", "900")
+        .env("GG_TEST_TIMEOUT_SECS", "600")
+        .status()
+        .expect("cargo test spawn");
+    assert!(
+        status.success(),
+        "SH-lowerer stage-2 double-free (or a related bootstrap regression) \
+         reproduced — see the fixture header for the repro and TODO.md."
+    );
+}
+
 /// Round XXIX Track A: `[]` was ungated on the `Index` trait — indexing a
 /// struct that equipped no indexing trait was silently accepted and lowered as
 /// an unchecked raw offset read (`p[5]` on a 2-field struct reads OUT OF
@@ -9177,10 +9310,14 @@ void main():
 
 /// D35 (docs/define-gorget/decisions.md, ratified 2026-07-26): a function
 /// type's unnamed parameter carries its sigil AFTER the type — `Callable[void(int &)]`,
-/// `Callable[void(String !)]`. The formatter must emit this shape and it must
-/// round-trip through the parser (both `&` and `!` variants). A regression
-/// where the formatter still emits the retired `&Type`/`!Type` spelling would
-/// trip here because the parser now rejects it (`FunctionTypeParamSigilBeforeType`).
+/// `Callable[void(String ^)]`. The formatter must emit this shape and it must
+/// round-trip through the parser. A regression where the formatter still emits
+/// the retired `&Type`/`!Type`/`^Type` spelling would trip here because the
+/// parser rejects it (`FunctionTypeParamSigilBeforeType`).
+///
+/// Round XXXVII D27 Round A: the move-sigil twin now asserts CARET, not the
+/// retired `!` — the formatter emits `^` at the D35 type-arg suffix
+/// (`src/formatter/mod.rs:1618`) as the D27 sigil-economy migration.
 #[test]
 fn fmt_d35_fn_type_sigil_round_trips() {
     // `&` variant — the exemplar case from D35's ratification.
@@ -9205,25 +9342,78 @@ void main():
         "formatter must NOT emit retired pre-D35 spelling.\nformatted:\n{amp_fmt}"
     );
 
-    // `!` twin — same rule, different sigil.
-    let bang_src = "\
-void take(String !s):
+    // Move-sigil twin — same rule, CARET after D27 Round A. Source uses `^`
+    // (canonical D27), formatter must EMIT `^` (not the retired pre-D27 `!`
+    // and not the pre-D35 `^Type`).
+    let caret_src = "\
+void take(String ^s):
     print(s)
 
 void main():
-    Callable[void(String !)] cb = take
-    cb(!\"hi\")
+    Callable[void(String ^)] cb = take
+    cb(^\"hi\")
 ";
-    assert_fmt_round_trips("d35_fn_type_sigil_bang", bang_src);
-    let bang_fmt = gorget::formatter::format_source_infallible(bang_src);
+    assert_fmt_round_trips("d35_fn_type_sigil_caret", caret_src);
+    let caret_fmt = gorget::formatter::format_source_infallible(caret_src);
     assert!(
-        bang_fmt.contains("Callable[void(String !)]"),
-        "formatter must emit D35 spelling for the `!` twin.\nformatted:\n{bang_fmt}"
+        caret_fmt.contains("Callable[void(String ^)]"),
+        "formatter must emit D35 spelling for the caret twin.\nformatted:\n{caret_fmt}"
     );
     assert!(
-        !bang_fmt.contains("Callable[void(!String)]"),
-        "formatter must NOT emit retired pre-D35 `!Type` spelling.\nformatted:\n{bang_fmt}"
+        !caret_fmt.contains("Callable[void(^String)]"),
+        "formatter must NOT emit retired pre-D35 `^Type` spelling.\nformatted:\n{caret_fmt}"
     );
+    assert!(
+        !caret_fmt.contains("Callable[void(String !)]"),
+        "formatter must NOT re-emit retired pre-D27 `!` move sigil.\nformatted:\n{caret_fmt}"
+    );
+}
+
+/// Round XXXVII (formatter chip surfaced during D27 Round A Phase 2 sweep):
+/// `gg fmt` MUST emit `pass` for an empty struct / enum / trait body. The
+/// pre-chip formatter dropped `pass` and emitted `struct X:` with an empty
+/// block, and the reformatted source failed to parse (`expected INDENT,
+/// got '<next-item>'`) — Core #10 lower-or-reject class (silent
+/// data-loss / bootstrap-breaker). `format_equip` had the `pass` fallback
+/// already (see `src/formatter/mod.rs:718`); struct/enum/trait now
+/// mirror it.
+///
+/// RED-verified pre-chip: `struct Vector[T]: pass` reformatted to
+/// `struct Vector[T]:` (no body), which broke `lib/std/collections.gg`
+/// on the D27 Round A sweep.
+#[test]
+#[serial(gg_build)]
+fn fmt_empty_body_pass_round_trips() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures")
+        .join("fmt_empty_body_pass.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture_path.display()));
+    let reformatted = gorget::formatter::format_source_infallible(&source);
+
+    // Each empty struct body must contain `pass` after formatting; otherwise
+    // the reformatted source is unparseable (`expected INDENT, got …`).
+    for header in ["struct EmptyStructA:", "struct EmptyStructB[T]:"] {
+        let idx = reformatted
+            .find(header)
+            .unwrap_or_else(|| panic!("header `{header}` missing from reformatted source:\n{reformatted}"));
+        // Slice from the header to end and check `pass` appears before the
+        // next top-level construct — a naive but sufficient shape check.
+        let tail = &reformatted[idx..];
+        assert!(
+            tail.contains("    pass"),
+            "R37 empty-body regression: `{header}` block lacks `pass` in reformatted source:\n{reformatted}"
+        );
+    }
+
+    // Semantic gate: the reformatted source must build and run.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let reformatted_path = tmp.path().join("fmt_empty_body_pass.gg");
+    std::fs::write(&reformatted_path, &reformatted)
+        .unwrap_or_else(|e| panic!("cannot write reformatted fixture: {e}"));
+    let stdout = build_and_run_capture_stdout(&reformatted_path, "fmt_empty_body_pass (reformatted)");
+    assert_eq!(stdout.trim(), "0");
 }
 
 /// Round XXXV Track C3 Stage 0 (pre-fmt-fix chip) — `gg fmt` MUST NOT silently
@@ -9317,6 +9507,198 @@ fn fmt_rejects_parse_error() {
 #[test]
 fn d27_parser_accepts_caret() {
     run_gg("d27_parser_accepts_caret.gg", "hi\nalpha\n6\n42");
+}
+
+/// Round XXXVII D27 Round A: `gg fmt` must EMIT `^` (not `!`) at every
+/// move-sigil position. Complements `d27_parser_accepts_caret` — that
+/// asserts the parser ACCEPTS `^`; this asserts the formatter EMITS `^`.
+///
+/// The fixture source uses `^` at 5 positions (named-param, `^self`,
+/// type-arg suffix `Vector[T ^]`, prefix `^s`, move-closure `^(): body`).
+/// After `gg fmt`, the reformatted source MUST still contain `^` — and
+/// specifically MUST NOT re-emit `!` in the move-sigil slots (which is what
+/// the pre-swap formatter did, silently flipping the canonical glyph to
+/// the retired one because parser accept-both hid the regression).
+///
+/// RED-verified pre-Phase-1 (formatter emit swap): the pre-swap formatter
+/// re-emits every `^` as `!`. Reformatted source contains 0 caret glyphs
+/// after formatting; assertion fails RED with a diff showing the flipped
+/// sigils.
+///
+/// GREEN post-Phase-1: reformatted source preserves `^` at every position;
+/// stdout stays `hi\nalpha\n6\n42`.
+#[test]
+#[serial(gg_build)]
+fn d27_fmt_emits_caret() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures")
+        .join("d27_fmt_emits_caret.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture_path.display()));
+
+    // Sanity — source has `^` at every declared position.
+    assert!(
+        source.contains("String ^s"),
+        "fixture drifted: expected `String ^s` (named-param position)"
+    );
+    assert!(
+        source.contains("^self"),
+        "fixture drifted: expected `^self` (self-face position)"
+    );
+    assert!(
+        source.contains("Vector[int ^]"),
+        "fixture drifted: expected `Vector[int ^]` (type-arg suffix)"
+    );
+    assert!(
+        source.contains("take(^s)"),
+        "fixture drifted: expected `take(^s)` (prefix move on named place)"
+    );
+    assert!(
+        source.contains("^(): count"),
+        "fixture drifted: expected `^(): count` (move closure prefix)"
+    );
+
+    // Format the source and assert the emitted GLYPH is `^` at every
+    // migrated position. Under the pre-swap formatter these all regress
+    // to `!` — the whole point of the assertion.
+    let reformatted = gorget::formatter::format_source_infallible(&source);
+
+    let caret_positions: &[(&str, &str)] = &[
+        ("String ^s", "named-param move sigil `Type ^name`"),
+        ("^self", "self-face consuming method `^self`"),
+        ("Vector[int ^]", "type-arg suffix (D35 spelling)"),
+        ("take(^s)", "prefix move on a named place `^s`"),
+        ("^(): count", "move closure prefix `^(): body`"),
+    ];
+    for (needle, label) in caret_positions {
+        assert!(
+            reformatted.contains(needle),
+            "D27 Round A regression: `gg fmt` failed to emit `^` at {label}.\n\
+             Expected reformatted source to contain: {needle:?}\n\
+             === Reformatted source ===\n{reformatted}",
+        );
+    }
+
+    // And the retired `!` sigil MUST NOT reappear in any move slot. The
+    // retired glyphs the formatter must never emit for D27 positions.
+    let bang_regressions: &[(&str, &str)] = &[
+        ("String !s", "named-param regressed to `!`"),
+        ("!self", "self-face regressed to `!`"),
+        ("Vector[int !]", "type-arg suffix regressed to `!`"),
+        ("take(!s)", "prefix-move regressed to `!`"),
+        ("!(): count", "move-closure regressed to `!`"),
+    ];
+    for (needle, label) in bang_regressions {
+        assert!(
+            !reformatted.contains(needle),
+            "D27 Round A regression: `gg fmt` re-emitted retired `!` sigil — {label}.\n\
+             Found `{needle}` in the reformatted source.\n\
+             === Reformatted source ===\n{reformatted}",
+        );
+    }
+
+    // Semantic equivalence: build+run the reformatted source and confirm
+    // stdout matches the ORIGINAL fixture's expected output. This catches
+    // any accidental semantic drift the glyph-swap might have introduced.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let reformatted_path = tmp.path().join("d27_fmt_emits_caret.gg");
+    std::fs::write(&reformatted_path, &reformatted)
+        .unwrap_or_else(|e| panic!("cannot write reformatted fixture: {e}"));
+
+    let reformatted_stdout =
+        build_and_run_capture_stdout(&reformatted_path, "d27_fmt_emits_caret (reformatted)");
+    assert_eq!(
+        reformatted_stdout.trim(),
+        "hi\nalpha\n6\n42",
+        "D27 fmt round-trip changed program semantics.\n\
+         === Reformatted source ===\n{reformatted}",
+    );
+}
+
+/// Round XXXVII D27 Round A: fmt semantic round-trip for a move-heavy
+/// program. Sibling to `d27_fmt_emits_caret` (which is glyph-focused);
+/// this one exercises a program whose runtime is directly move-driven
+/// (three `^name` moves at call sites), and asserts BOTH the emitted
+/// glyph stays `^` (glyph preservation) AND stdout is unchanged
+/// (semantic preservation).
+///
+/// RED-verified pre-Phase-1: the pre-swap formatter re-emits every `^`
+/// as `!`. Because the parser accepts both glyphs, stdout stays intact —
+/// but the glyph assertion catches the silent flip that stdout-only
+/// checks would miss.
+///
+/// GREEN post-Phase-1: reformatted source preserves `^` at every site;
+/// stdout is `hello world\n42\n[10, 20, 30]`.
+#[test]
+#[serial(gg_build)]
+fn fmt_d27_move_sigil_round_trip() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures")
+        .join("fmt_d27_move_sigil_round_trip.gg");
+
+    // Positive control: build+run the ORIGINAL fixture.
+    let orig_stdout = build_and_run_capture_stdout(&fixture_path, "fmt_d27_move_sigil_round_trip");
+    let expected = "hello world\n42\nHI";
+    assert_eq!(
+        orig_stdout.trim(),
+        expected,
+        "Original fixture stdout drifted from expected — update the fixture \
+         or the expected string.",
+    );
+
+    // Format the source and assert glyph preservation at each `^` site.
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture_path.display()));
+    let reformatted = gorget::formatter::format_source_infallible(&source);
+
+    let expected_glyphs: &[&str] = &[
+        "String ^s",                 // consume_string / consume_and_print params
+        "int ^n",                    // consume_int param
+        "consume_string(^greeting)", // prefix move site 1
+        "consume_int(^answer)",      // prefix move site 2
+        "consume_and_print(^tag)",   // prefix move site 3
+    ];
+    for needle in expected_glyphs {
+        assert!(
+            reformatted.contains(needle),
+            "D27 Round A regression: `gg fmt` failed to preserve `^` in `{needle}`.\n\
+             === Reformatted source ===\n{reformatted}",
+        );
+    }
+
+    // And the retired `!` MUST NOT reappear in these slots.
+    let forbidden_glyphs: &[&str] = &[
+        "String !s",
+        "int !n",
+        "consume_string(!greeting)",
+        "consume_int(!answer)",
+        "consume_and_print(!tag)",
+    ];
+    for needle in forbidden_glyphs {
+        assert!(
+            !reformatted.contains(needle),
+            "D27 Round A regression: `gg fmt` re-emitted retired `!` sigil — `{needle}`.\n\
+             === Reformatted source ===\n{reformatted}",
+        );
+    }
+
+    // Semantic equivalence: build+run the reformatted source.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let reformatted_path = tmp.path().join("fmt_d27_move_sigil_round_trip.gg");
+    std::fs::write(&reformatted_path, &reformatted)
+        .unwrap_or_else(|e| panic!("cannot write reformatted fixture: {e}"));
+    let reformatted_stdout = build_and_run_capture_stdout(
+        &reformatted_path,
+        "fmt_d27_move_sigil_round_trip (reformatted)",
+    );
+    assert_eq!(
+        reformatted_stdout.trim(),
+        expected,
+        "SEMANTIC DRIFT — `gg fmt` changed the program's stdout.\n\
+         === Reformatted source ===\n{reformatted}",
+    );
 }
 
 // ══════════════════════════════════════════════════════════════

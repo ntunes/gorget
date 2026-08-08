@@ -11539,3 +11539,286 @@ fn fmt_precedence_check_arm_count() {
          class-retirement mechanism (Core #4/#6).",
     );
 }
+
+/// Round XXXVII D27 Round A Phase 3 (Core #4 arm-count guard): the
+/// formatter's Move-sigil EMIT sites — 7 in `src/formatter/mod.rs` and 6
+/// in the SH `format.gg` files — MUST all agree to write `^` (D27
+/// canonical) and never regress to `!` (retired; `!` is now the D26/D29
+/// error channel exclusively). This lint pins the emit-site COUNT on
+/// both sides so a new arm that emits the sigil without joining the
+/// class trips the count.
+///
+/// **Rust arms (7 sites, `src/formatter/mod.rs`):**
+///   `Ownership::Move =>`     — 4 arms:
+///     :1091 `format_param` self-face (`^self`),
+///     :1605 fn-type param suffix (`Type ^`),
+///     :2076 comprehension for-binder,
+///     :2271 `format_ownership_prefix` helper (named-param chokepoint).
+///   `Type::Owned(inner) =>`  — 1 arm (:1618) — type-arg suffix (D35).
+///   `Expr::Move { expr } =>` — 1 arm (:1895) — prefix move expression.
+///   `if *is_move {`          — 1 site (:2012) — move-closure prefix.
+///
+/// **SH arms (6 sites, `tests/fixtures/self_host_{parser,resolver,typechecker}/format.gg`):**
+///   `case EMove(inner):`     — 3 arms (one per unique-content SH file).
+///   `"^self"` literal        — 3 arms (one per unique-content SH file).
+///   (self_host_check/format.gg and self_host_lowerer/format.gg are
+///   SYMLINKS to typechecker; self_host_lexer/format.gg has NO D27 site.)
+///
+/// **If this fails**: a new arm was added that emits the Move sigil
+/// without going through one of the enumerated patterns — the new arm
+/// likely regressed to `!` silently. Either fold into an existing arm,
+/// or bump EXPECTED with a citation naming the new arm and its `^` emit.
+#[test]
+fn fmt_move_sigil_emit_arm_count() {
+    const EXPECTED_RUST: usize = 7;
+    const EXPECTED_SH: usize = 6;
+
+    let rust = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+    // Skip pure-comment lines so a `// TODO Ownership::Move …` note
+    // doesn't spuriously trip the count. Only real code arms count.
+    let mut rust_count = 0usize;
+    for line in rust.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        rust_count += line.matches("Ownership::Move =>").count();
+        rust_count += line.matches("Type::Owned(inner) =>").count();
+        rust_count += line.matches("Expr::Move { expr } =>").count();
+        rust_count += line.matches("if *is_move {").count();
+    }
+    assert_eq!(
+        rust_count, EXPECTED_RUST,
+        "D27 Round A emit-site count in `src/formatter/mod.rs` changed: \
+         {rust_count} vs expected {EXPECTED_RUST}.\n\
+         Every Move-sigil emit arm must write `^` (D27 canonical) — a new \
+         arm that bypasses this class silently regresses to `!` (which is \
+         now reserved for the error channel).",
+    );
+
+    let sh_files: &[&str] = &[
+        "tests/fixtures/self_host_parser/format.gg",
+        "tests/fixtures/self_host_resolver/format.gg",
+        "tests/fixtures/self_host_typechecker/format.gg",
+    ];
+    let mut sh_count = 0usize;
+    for f in sh_files {
+        let src = fs::read_to_string(f)
+            .unwrap_or_else(|_| panic!("cannot read {f}"));
+        // Skip `#`-comment lines so notes mentioning `EMove` / `^self`
+        // in prose don't spuriously trip the count.
+        for line in src.lines() {
+            let t = line.trim_start();
+            if t.starts_with('#') {
+                continue;
+            }
+            if t.starts_with("case EMove(inner):") {
+                sh_count += 1;
+            }
+            // `^self` emit: only lines that are the actual concat site.
+            if t.starts_with("result = result +") && t.contains("\"^self\"") {
+                sh_count += 1;
+            }
+        }
+    }
+    assert_eq!(
+        sh_count, EXPECTED_SH,
+        "D27 Round A SH emit-site count in `self_host_*/format.gg` changed: \
+         {sh_count} vs expected {EXPECTED_SH}.\n\
+         Same-round parity with the Rust reference (Core #9) — the SH \
+         formatters must emit `^` alongside the Rust one, or the SH \
+         self-compile prints out-of-date sigils vs the reference.",
+    );
+}
+
+/// Round XXXVII D27 Round A Phase 3 (Core #6 shrink-only ratchet): a
+/// SHRINK-ONLY ceiling on `!name`-move sites in NON-SH corpora. Post-R37
+/// the FORMATTER emits `^`, but the in-place corpus sweep is deferred to
+/// a follow-up round (bulk-reformatting the corpus tripped an unrelated
+/// SH-lowering memory-safety regression at bootstrap fixed-point —
+/// filed on the D27 headline entry as a Round-A follow-up).
+///
+/// The ceiling STARTS at the current in-tree count and MUST NEVER GROW.
+/// Any new `!name` site added to a non-SH corpus is a regression during
+/// the Round A → Round B interval. Users of `gg fmt` will drop the count
+/// naturally as they migrate files; the follow-up sweep round drops it
+/// to (near) zero.
+///
+/// **Scope:** `tests/fixtures/**` (excluding `self_host_*/`, deferred),
+/// `lib/**`, `examples/**`, `demo/**`, `spectests/**`, `compiler/data/**`.
+/// Self-host corpora keep `!` transitionally (parser accept-both, R35).
+///
+/// **Detection:** regex `(^|[^!])!([A-Za-z_(])` matches `!name` and
+/// `!(x)` (move closure) — excludes `!=` (right-side isn't a letter),
+/// `!!` (left-side `!` filter). Pre-strip STRINGS FIRST, then COMMENTS
+/// (string-first prevents comment-strip from eating trailing quotes on
+/// lines like `code = "foo # bar"`). String shapes covered per
+/// `docs/language-reference.md:239`: `"..."`, `f"..."`, `r"..."`,
+/// `b"..."`, `c"..."`, and triple-quoted forms.
+///
+/// **Known limitation:** full string-strip hides a `!ident` inside an
+/// f-string interpolation `f"...{!x}..."`. The arm-count lint above
+/// covers the EMIT side of the class as a second guard.
+#[test]
+fn fmt_no_new_move_bang_in_migrated_corpora() {
+    /// R37 baseline (pre-sweep): 861 `!name`/`!(` sites in non-SH corpora,
+    /// spread across ~130 files. The bulk sweep is deferred to a
+    /// follow-up round — see TODO.md D27 headline entry. Users can run
+    /// `gg fmt --in-place path/to/file.gg` incrementally to migrate;
+    /// each such migration DROPS this ceiling toward 0.
+    ///
+    /// Tighten CEILING whenever the count drops (do NOT loosen — a rise
+    /// is a regression). Round B follow-up should drive CEILING to 0.
+    const CEILING: usize = 861;
+
+    // Roots to scan — non-SH corpora only. SH corpora migrate in a
+    // follow-up round (parser accept-both keeps them parseable until then).
+    let roots: &[&str] = &[
+        "tests/fixtures",
+        "lib",
+        "examples",
+        "demo",
+        "spectests",
+        "compiler/data",
+    ];
+
+    let count = count_bang_move_in_code(roots);
+    assert!(
+        count <= CEILING,
+        "D27 Round A shrink-only ratchet: {count} `!name`-move sites \
+         found in non-SH corpora (ceiling {CEILING}). A NEW `!name` in \
+         migrated corpora is a regression during the Round A → Round B \
+         interval — either migrate the new site to `^name` (or run \
+         `gg fmt --in-place` on the file), or if the fixture DELIBERATELY \
+         tests the retired glyph, allowlist it and bump CEILING with the \
+         fixture's rationale.",
+    );
+    // Sanity: the ceiling is honest. If someone raises CEILING without
+    // adding a new `!name` site, tighten it back down.
+    if count < CEILING {
+        eprintln!(
+            "[fmt_no_new_move_bang_in_migrated_corpora] measured={count} < CEILING={CEILING} — \
+             tighten CEILING to {count} and cite the retired sites.",
+        );
+    }
+}
+
+/// Helper for `fmt_no_new_move_bang_in_migrated_corpora`: walk .gg files
+/// in `roots`, skip any path with a `self_host_` segment, strip strings
+/// then comments per line, and count `!name` / `!(` matches. Also
+/// exercised by the unit tests below.
+fn count_bang_move_in_code(roots: &[&str]) -> usize {
+    let string_re = regex::Regex::new(
+        // Triple-quoted (any [fFrRbBcC] prefix, non-greedy `.*?`) OR
+        // single-line double-quoted (any prefix) OR single-line
+        // single-quoted. Match order: triple-quoted first so `"""..."""`
+        // isn't chopped into three empty `""` strings.
+        r#"(?s)([fFrRbBcC]?"""(?:.*?)""")|([fFrRbBcC]?"(?:[^"\\\n]|\\.)*")|('(?:[^'\\\n]|\\.)*')"#,
+    )
+    .expect("string regex compiles");
+    let comment_re = regex::Regex::new(r"#.*$").expect("comment regex compiles");
+    let move_re = regex::Regex::new(r"(^|[^!])!([A-Za-z_]|\()").expect("move regex compiles");
+
+    let mut total = 0usize;
+    for root in roots {
+        walk_gg_files(Path::new(root), &mut |path: &Path| {
+            // Skip self-host corpora (deferred to a later round).
+            let s = path.to_string_lossy();
+            if s.contains("self_host_") {
+                return;
+            }
+            let Ok(src) = fs::read_to_string(path) else { return };
+            for line in src.lines() {
+                let stripped = string_re.replace_all(line, "\"\"");
+                let stripped = comment_re.replace_all(&stripped, "");
+                total += move_re.find_iter(&stripped).count();
+            }
+        });
+    }
+    total
+}
+
+fn walk_gg_files(dir: &Path, cb: &mut dyn FnMut(&Path)) {
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_gg_files(&path, cb);
+        } else if path.extension().and_then(|e| e.to_str()) == Some("gg") {
+            cb(&path);
+        }
+    }
+}
+
+/// Unit tests for `count_bang_move_in_code`'s regex — ensure the pattern
+/// matches actual `!name`/`!(` and does NOT match `!=`, `!!`, `!"lit"`,
+/// or `x! + y`.
+#[test]
+fn fmt_bang_move_regex_matches() {
+    let move_re = regex::Regex::new(r"(^|[^!])!([A-Za-z_]|\()").expect("regex compiles");
+
+    // MATCH cases — real `!name`-move sites and move-closure.
+    let matches: &[&str] = &[
+        "!msg",              // bare prefix
+        "!(x): body",        // move closure
+        "take(!p)",          // prefix inside call
+        "foo(  !p  )",       // prefix with padding
+        "String !p = \"x\"", // param decl
+        "f(!Ctor(...))",     // Ctor argument
+    ];
+    for s in matches {
+        assert!(move_re.is_match(s), "regex should MATCH {s:?}");
+    }
+
+    // NON-MATCH cases — `!=` inequality, `!!` (D29 double-mark), literal.
+    let non_matches: &[&str] = &[
+        "!=",                // top-level inequality
+        "a!=b",              // fused inequality
+        "x! + y",            // postfix propagate followed by space
+        "!\"lit\"",          // `!` before a string literal (retired shape; not a `!name`)
+        "42! - 1",           // postfix propagate on int
+        "throws!",           // ThrowsSpec inferred — trailing `!` at word end
+        "return boom(x)!!",  // D29 double-mark (second `!` is right after `!` — filtered by [^!])
+    ];
+    for s in non_matches {
+        assert!(!move_re.is_match(s), "regex should NOT match {s:?}");
+    }
+}
+
+/// Positive-control for the strip logic: verify that `!x` inside a
+/// STRING or a COMMENT does NOT count as a real site (else the lint
+/// false-positives on `code = "if !flag"` or `# no !move here`).
+#[test]
+fn fmt_bang_move_strip_ignores_strings_and_comments() {
+    use std::io::Write;
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let fixture_path = tmp.path().join("probe.gg");
+    let mut f = std::fs::File::create(&fixture_path).unwrap();
+    // These lines contain `!x` but ALL are in string or comment context.
+    writeln!(f, "String s = \"contains !x literal\"").unwrap();
+    writeln!(f, "# comment mentioning !x").unwrap();
+    writeln!(f, "String r = r\"raw with !y\"").unwrap();
+    writeln!(f, "String fs = f\"fstr with !z\"").unwrap();
+    drop(f);
+
+    // Re-apply the strip logic here (avoids running the full walk).
+    let string_re = regex::Regex::new(
+        r#"(?s)([fFrRbBcC]?"""(?:.*?)""")|([fFrRbBcC]?"(?:[^"\\\n]|\\.)*")|('(?:[^'\\\n]|\\.)*')"#,
+    )
+    .unwrap();
+    let comment_re = regex::Regex::new(r"#.*$").unwrap();
+    let move_re = regex::Regex::new(r"(^|[^!])!([A-Za-z_]|\()").unwrap();
+
+    let src = std::fs::read_to_string(&fixture_path).unwrap();
+    let mut count = 0;
+    for line in src.lines() {
+        let stripped = string_re.replace_all(line, "\"\"");
+        let stripped = comment_re.replace_all(&stripped, "");
+        count += move_re.find_iter(&stripped).count();
+    }
+    assert_eq!(
+        count, 0,
+        "strip logic false-positive: `!x` in string/comment must not count"
+    );
+}

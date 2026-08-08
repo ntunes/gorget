@@ -1,0 +1,33 @@
+# D27 Round A fmt semantic round-trip: source uses caret at multiple move
+# positions and MUST round-trip through gg fmt with stdout preserved.
+# Wired at tests/integration.rs via fmt_d27_move_sigil_round_trip.
+# Sibling to d27_fmt_emits_caret (glyph-focused); this one asserts BOTH
+# glyph preservation AND semantic equivalence for a move-heavy program.
+# Comments deliberately avoid the retired-glyph spelling so the
+# forbidden-glyph assertion checks the CODE, not prose.
+#
+# RED-verified pre-Phase-1: the pre-swap formatter silently flips the
+# sigil (parser accept-both hides the flip in stdout). GREEN post-Phase-1
+# emit swap. Expected stdout: hello world\n42\nHI.
+
+String consume_string(String ^s):
+    return s + " world"
+
+int consume_int(int ^n):
+    return n
+
+# Move a boxed String into a consumer that upper-cases and prints it.
+void consume_and_print(String ^s):
+    print(s.to_upper())
+
+int main():
+    String greeting = "hello"
+    print(consume_string(^greeting))
+
+    int answer = 42
+    print(consume_int(^answer))
+
+    String tag = "hi"
+    consume_and_print(^tag)
+
+    return 0

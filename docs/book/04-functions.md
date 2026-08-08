@@ -87,10 +87,10 @@ At the call site:
 ```gorget
 read(msg)           # borrow
 modify(&msg)        # mutable borrow
-consume(!msg)       # move — msg is invalid after this
+consume(^msg)       # move — msg is invalid after this
 ```
 
-Copy types (integers, floats, bools) don't need `!` — they're implicitly
+Copy types (integers, floats, bools) don't need `^` — they're implicitly
 copied. Resource types (String, Vector, Dict, user structs with resource
 fields) are **never** copied by value — the bare parameter mode automatically
 creates an immutable borrow. This is zero-cost (a pointer) and prevents
@@ -200,23 +200,23 @@ the closure is done with it.
 ### Move Closures
 
 A single capture is moved by marking it in the capture list, the same way `&`
-marks one. To move *every* capture, put `!` before the parameter list instead:
+marks one. To move *every* capture, put `^` before the parameter list instead:
 
 ```gorget
 String msg = "hello"
-auto one = (!msg)(): print(f"got: {msg}")   # move just this capture
+auto one = (^msg)(): print(f"got: {msg}")   # move just this capture
 ```
 
 ```gorget
 String note = "hi"
-auto all = !(): print(f"got: {note}")       # move every capture
+auto all = ^(): print(f"got: {note}")       # move every capture
 ```
 
 In each case the captured name has been given away and is no longer usable in
 the enclosing scope.
 
-> Both forms are specification. `(!msg)()` does not parse yet, and the
-> move-all `!()` prefix parses but does not yet enforce the move — after it the
+> Both forms are specification. `(^msg)()` does not parse yet, and the
+> move-all `^()` prefix parses but does not yet enforce the move — after it the
 > source stays live and is even still movable.
 
 ### No-Argument Closures

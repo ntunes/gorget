@@ -103,7 +103,7 @@ Deep copy. Called explicitly with `.clone()`.
 
 ```gorget
 trait Drop:
-    void drop(!self)
+    void drop(^self)
 ```
 
 Resource cleanup. Called automatically when a value goes out of scope.

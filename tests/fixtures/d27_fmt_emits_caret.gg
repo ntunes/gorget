@@ -1,0 +1,46 @@
+# D27 Round A fmt emit assertion: source uses caret at every move-sigil
+# position; gg fmt must PRESERVE caret. Wired at tests/integration.rs via
+# d27_fmt_emits_caret. Comments deliberately avoid the retired-glyph
+# spelling so the forbidden-glyph assertion checks the CODE, not prose.
+#
+# RED-verified pre-Phase-1: the pre-swap formatter re-emits every caret as
+# the retired glyph at all 7 sites in src/formatter/mod.rs (lines 1091,
+# 1605, 1618, 1895, 2012, 2076, 2271). GREEN post-Phase-1 emit swap.
+# Expected stdout: hi\nalpha\n6\n42.
+
+# Position 1: named-param move sigil (`Type ^name`).
+void take(String ^s):
+    print(s)
+
+# Position 2: self-face consuming method (`^self`).
+struct Bag:
+    String label
+
+equip Bag:
+    String into_label(^self):
+        return self.label
+
+# Position 3: type-arg suffix (`Vector[T ^]`, `Option[T ^]`) — D35 spelling.
+void take_owned(Vector[int ^] items):
+    int sum = 0
+    for x in items:
+        sum = sum + x
+    print(sum)
+
+# Positions 4+5: prefix move on named place (`^s`) and move closure (`^(): body`).
+int main():
+    String s = "hi"
+    take(^s)
+
+    Bag b = Bag("alpha")
+    String label = b.into_label()
+    print(label)
+
+    Vector[int] v = [1, 2, 3]
+    take_owned(v)
+
+    int count = 42
+    ConsumeCallable[int()] cb = ^(): count
+    print(cb())
+
+    return 0

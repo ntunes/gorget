@@ -597,16 +597,28 @@ impl Formatter {
         self.emitter.write(":");
         self.emitter.newline();
         self.emitter.indent();
-        for field in &s.fields {
-            self.emit_comments_before(field.span.start);
-            if field.node.visibility == Visibility::Private {
-                self.emitter.write("private ");
-            }
-            // type-first: `type name`
-            self.format_type(&field.node.type_);
-            self.emitter.write(" ");
-            self.emitter.write(&field.node.name.node);
+        // R37 empty-body chip: an empty struct body must emit `pass` so the
+        // reformatted source PARSES. The parser rejects `struct X:` with no
+        // indented body (`expected INDENT, got 'struct'` at the next line),
+        // which broke bootstrap on `lib/std/collections.gg` (`struct Vector[T]: pass`
+        // → `struct Vector[T]:` → parse error). Same class as `format_equip`
+        // (:718) which already emits `pass` for empty item lists — extended
+        // here to struct/enum/trait for the empty-container class.
+        if s.fields.is_empty() {
+            self.emitter.write("pass");
             self.emitter.newline();
+        } else {
+            for field in &s.fields {
+                self.emit_comments_before(field.span.start);
+                if field.node.visibility == Visibility::Private {
+                    self.emitter.write("private ");
+                }
+                // type-first: `type name`
+                self.format_type(&field.node.type_);
+                self.emitter.write(" ");
+                self.emitter.write(&field.node.name.node);
+                self.emitter.newline();
+            }
         }
         self.emitter.dedent();
     }
@@ -623,23 +635,30 @@ impl Formatter {
         self.emitter.write(":");
         self.emitter.newline();
         self.emitter.indent();
-        for variant in &e.variants {
-            self.emit_comments_before(variant.span.start);
-            self.emitter.write(&variant.node.name.node);
-            match &variant.node.fields {
-                VariantFields::Unit => {}
-                VariantFields::Tuple(types) => {
-                    self.emitter.write("(");
-                    for (i, ty) in types.iter().enumerate() {
-                        if i > 0 {
-                            self.emitter.write(", ");
-                        }
-                        self.format_type(ty);
-                    }
-                    self.emitter.write(")");
-                }
-            }
+        // R37 empty-body chip: mirror format_struct — an empty enum body
+        // must emit `pass` so the reformatted source parses.
+        if e.variants.is_empty() {
+            self.emitter.write("pass");
             self.emitter.newline();
+        } else {
+            for variant in &e.variants {
+                self.emit_comments_before(variant.span.start);
+                self.emitter.write(&variant.node.name.node);
+                match &variant.node.fields {
+                    VariantFields::Unit => {}
+                    VariantFields::Tuple(types) => {
+                        self.emitter.write("(");
+                        for (i, ty) in types.iter().enumerate() {
+                            if i > 0 {
+                                self.emitter.write(", ");
+                            }
+                            self.format_type(ty);
+                        }
+                        self.emitter.write(")");
+                    }
+                }
+                self.emitter.newline();
+            }
         }
         self.emitter.dedent();
     }
@@ -668,30 +687,37 @@ impl Formatter {
         self.emitter.write(":");
         self.emitter.newline();
         self.emitter.indent();
-        for (i, item) in t.items.iter().enumerate() {
-            if i > 0 {
-                self.emitter.blank_line();
-            }
-            self.emit_comments_before(item.span.start);
-            match &item.node {
-                TraitItem::Method(f) => self.format_function(f),
-                TraitItem::AssociatedType(at) => {
-                    self.emitter.write("type ");
-                    self.emitter.write(&at.name.node);
-                    if !at.bounds.is_empty() {
-                        self.emitter.write(": ");
-                        for (i, bound) in at.bounds.iter().enumerate() {
-                            if i > 0 {
-                                self.emitter.write(" & ");
+        // R37 empty-body chip: mirror format_struct — an empty trait body
+        // must emit `pass` so the reformatted source parses.
+        if t.items.is_empty() {
+            self.emitter.write("pass");
+            self.emitter.newline();
+        } else {
+            for (i, item) in t.items.iter().enumerate() {
+                if i > 0 {
+                    self.emitter.blank_line();
+                }
+                self.emit_comments_before(item.span.start);
+                match &item.node {
+                    TraitItem::Method(f) => self.format_function(f),
+                    TraitItem::AssociatedType(at) => {
+                        self.emitter.write("type ");
+                        self.emitter.write(&at.name.node);
+                        if !at.bounds.is_empty() {
+                            self.emitter.write(": ");
+                            for (i, bound) in at.bounds.iter().enumerate() {
+                                if i > 0 {
+                                    self.emitter.write(" & ");
+                                }
+                                self.format_trait_bound(bound);
                             }
-                            self.format_trait_bound(bound);
                         }
+                        if let Some(ref default) = at.default {
+                            self.emitter.write(" = ");
+                            self.format_type(default);
+                        }
+                        self.emitter.newline();
                     }
-                    if let Some(ref default) = at.default {
-                        self.emitter.write(" = ");
-                        self.format_type(default);
-                    }
-                    self.emitter.newline();
                 }
             }
         }
@@ -1088,7 +1114,8 @@ impl Formatter {
             match param.ownership {
                 Ownership::Borrow => self.emitter.write("self"),
                 Ownership::MutableBorrow => self.emitter.write("&self"),
-                Ownership::Move => self.emitter.write("!self"),
+                // D27 Round A: `^self` (was `!self`); `!` is the error channel.
+                Ownership::Move => self.emitter.write("^self"),
             }
             return;
         }
@@ -1602,7 +1629,8 @@ impl Formatter {
                     if let Some(ownership) = param_ownerships.get(i) {
                         match ownership {
                             Ownership::MutableBorrow => self.emitter.write(" &"),
-                            Ownership::Move => self.emitter.write(" !"),
+                            // D27 Round A: `Type ^` in fn-type param list (was `Type !`).
+                            Ownership::Move => self.emitter.write(" ^"),
                             Ownership::Borrow => {}
                         }
                     }
@@ -1615,7 +1643,8 @@ impl Formatter {
             }
             Type::Owned(inner) => {
                 self.format_type(inner);
-                self.emitter.write(" !");
+                // D27 Round A: type-arg suffix `Vector[T ^]` (was `Vector[T !]`).
+                self.emitter.write(" ^");
             }
             Type::Pointer(inner) => {
                 self.format_type(inner);
@@ -1892,8 +1921,9 @@ impl Formatter {
                 self.write_doc(&nil_doc);
             }
             Expr::Move { expr } => {
-                self.emitter.write("!");
-                // FMT-A: Move `!` parses operand at bp 33 (parser::expr.rs:596).
+                // D27 Round A: prefix move sigil `^` (was `!`); `!` is now the error channel.
+                self.emitter.write("^");
+                // FMT-A: Move `^` parses operand at bp 33 (parser::expr.rs:596).
                 self.format_prefix_operand(expr, 33);
             }
             // D29: postfix error-propagation renders the `!` AFTER the inner
@@ -2009,7 +2039,8 @@ impl Formatter {
                     self.emitter.write("async ");
                 }
                 if *is_move {
-                    self.emitter.write("!");
+                    // D27 Round A: move-closure prefix `^` (was `!`).
+                    self.emitter.write("^");
                 }
                 let items: Vec<doc::Doc> = params.iter().map(|p| {
                     doc::text(self.element_to_string(|f| f.format_closure_param(&p.node)))
@@ -2073,7 +2104,8 @@ impl Formatter {
                 let own_prefix = match ownership {
                     Ownership::Borrow => "",
                     Ownership::MutableBorrow => "&",
-                    Ownership::Move => "!",
+                    // D27 Round A: comprehension for-binder `^` (was `!`).
+                    Ownership::Move => "^",
                 };
                 let iter_s = self.element_to_string(|f| f.format_expr(iterable));
                 let cond_s = condition.as_ref().map(|c| {
@@ -2268,7 +2300,9 @@ impl Formatter {
         match ownership {
             Ownership::Borrow => {}
             Ownership::MutableBorrow => self.emitter.write("&"),
-            Ownership::Move => self.emitter.write("!"),
+            // D27 Round A: generic ownership-prefix helper — `^` (was `!`).
+            // Chokepoint for named-param emission (`format_param` non-self path).
+            Ownership::Move => self.emitter.write("^"),
         }
     }
 

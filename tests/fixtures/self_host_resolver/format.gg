@@ -373,7 +373,8 @@ String format_expr(SpannedExpr se):
         case ETry(inner):
             return format_expr(*inner) + "?"
         case EMove(inner):
-            return "!" + format_expr(*inner)
+            # D27 Round A: prefix move sigil `^` (was `!`); `!` is the error channel.
+            return "^" + format_expr(*inner)
         case EPropagate(inner):
             return format_expr(*inner) + "!"
         case EMutableBorrow(inner):
@@ -648,7 +649,8 @@ String format_function(FunctionDef fd):
             if p.ownership == 1:
                 result = result + "&self"
             elif p.ownership == 2:
-                result = result + "!self"
+                # D27 Round A: `^self` (was `!self`).
+                result = result + "^self"
             else:
                 result = result + "self"
         else:

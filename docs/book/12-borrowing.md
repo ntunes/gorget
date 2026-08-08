@@ -265,7 +265,7 @@ When control flow branches, the compiler is conservative:
 ```gorget
 String s = "hello"
 if condition:
-    consume(!s)
+    consume(^s)
 else:
     pass
 # s treated as potentially moved — using it is an error

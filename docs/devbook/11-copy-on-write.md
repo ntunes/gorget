@@ -175,9 +175,9 @@ the AST argument expression to call `is_last_use_at(name, span)`
    This restores the `!`=move=zero-cost
    contract: a `!` param is owned, so putting it into a collection / returning it /
    passing it to another consuming position transfers rather than copies. (The
-   explicit-`!` push `out.push(!item)` routes through `consuming_clone_temps`
+   explicit-`^` push `out.push(^item)` routes through `consuming_clone_temps`
    `methods.rs:2766`, guarded identically by `is_owning_param_ptr`.) The `is_single_use`
-   gate is conservative — a param reassigned in a loop (`lhs = f(!lhs)`) must NOT move.
+   gate is conservative — a param reassigned in a loop (`lhs = f(^lhs)`) must NOT move.
 2. By-value resource:
    - non-identifier expression (a temp, owning by construction) → no clone, the
      caller will `MoveZero` after the call;
@@ -476,7 +476,7 @@ is already handled:
   `ensure_owned_at_consuming_arg` rule 1 (`context.rs:1963`) both clone through
   the pointer via `clone_fn_for_ptr`. This is the exact mechanism that makes a
   borrowed `Vector[T]` parameter safe — the for-element alias is no different.
-- **Consume it** (`consume(!x)`). Statically rejected by the safety pass:
+- **Consume it** (`consume(^x)`). Statically rejected by the safety pass:
   `check_move` (`src/semantic/safety/origins.rs:495-502`) emits `MoveInLoop` for
   a `!`-move of a non-loop-local inside a loop body, and the for-pattern binding
   is *not* a loop-local — it carries the iterable's borrow origin
@@ -1043,7 +1043,7 @@ before, because a self-referential RHS that mutates the source
 mid-expression (`s = s + poke(&v)`) needs the `&v` dispatch to still find
 the tag. A stale pair would emit a pointless guarded clone at the next
 collection mutation and leak the new buffer via the materialize's
-Move-assign overwrite. `consume(!s)` needs no clearing: the string-`!`
+Move-assign overwrite. `consume(^s)` needs no clearing: the string-move
 short-circuit (`exprs/calls.rs`) passes a const-Ptr borrow with no MoveZero.
 
 ### Phase 2 in the self-host — provenance-direct lazy CoW
