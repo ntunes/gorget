@@ -2,7 +2,9 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**🚧 ROUND XXXV Track C3 LANDED as a CHIP + DOCS + PARSER-ACCEPT-BOTH ROUND (2026-08-07)** — Round C3 shipped: (1) Stage 0 fmt-fix chip discharging Core #8's silent-drop-on-parse-error; (2) full docs D27 sweep teaching `^` as the canonical move sigil; (3) narrow parser accept-both grammar (Rust + SH, all 4 move-sigil positions) so docs teach VALID syntax the compiler accepts. The retired `!` glyph still parses. `gg fmt` still emits `!` — Round B does the fmt swap after the 2 filed HIGH formatter defect follow-ups land. Bootstrap green (~676s baseline, 676s post-fold — no regression). See DONE.md for the per-commit accounting.
+**✅ ROUND XXXV CLOSED 2026-08-08** — theme C3 = Wave-plan final (D27 sigil migration, SPLIT scope). **CLOSED IN COMPLIANCE — second non-waivered close in 6 rounds** (R34 broke streak, R35 continues it). See DONE.md for verdict verbatim (net −3, filed 3, closed 6 via stale-scan, ratio 2:1) and full accounting.
+
+**⚠ WAVE PLAN COMPLETE (in-repo).** C1 (R33: D26+D28 code) → C2 (R34: D25 removal) → C3 (R35: chip + docs + parser accept-both, deferred fmt sweep). D27 Round A retry + D22 slice migration + D27 Round B all remain but are POST-Wave-plan work. Out-of-repo migration (gorget-js, arena, gglox, gorget-conformance) still deferred to later coordination round per owner ruling.
 
 **▶ NEXT ROUND CANDIDATES:**
 
@@ -16,17 +18,6 @@
 
 **Default:** (A) — the two formatter defects gate Round A. Two paren/indent classes probably share a common precedence-aware pretty-printer, so land them as one round.
 
-**⚠ ROUND XXXV Track C3 landing summary (this session, 2026-08-07):**
-- **Landed** (3 commits on top of pre-round b909d2ec6):
-  - `ce5fa232e` — Stage 0 fmt-fix chip (Core #8 silent-drop discharge) — REQUIRED before any fmt sweep so a transitional parse error can't silently eat lines.
-  - `0e5f223fa` — docs D27 write-through (~46 `^` refs across `docs/language-reference.md`, `docs/language-design.md`, `docs/book/*`, `docs/devbook/*`, `README.md`, `CLAUDE.md`) + 2 HIGH follow-ups filed + repro fixture `tests/fixtures/known_gaps/fmt_multiline_arg_indent.gg`.
-  - `f4df05ff8` — parser accept-both `^` alongside `!` (Rust `src/parser/{expr,mod,types}.rs` + SH `tests/fixtures/self_host_{parser,typechecker}/parser.gg` at 4 positions each: prefix `^x`, move-closure `^(): body`, `^self` self-face, `Type ^name` param + `Vector[T ^]` type-arg suffix + D35 `^Type` sigil-before-type reject) + POS fixture `tests/fixtures/d27_parser_accepts_caret.gg` + integration test `d27_parser_accepts_caret`.
-  - Post-second-output-review fold: SH parser accept-both extended to `^self`, `Type ^name`, `Type ^` fn-type param suffix, and `skip_ownership_markers` / `parse_arg_ownership` / `parse_type_with_ownership` — all 4 SH sites now match Rust.
-- **Deferred to future round(s)**: formatter emit `!` → `^` swap (Round A), `gg fmt` sweep of in-repo corpora (Round A), Core #4 arm-count lint + Core #6 shrink-only ratchet (Round A), D27 Round B REJECT `!` at parse (Round B). All gated on the 2 filed HIGH formatter follow-ups (BinaryOp paren-drop + multi-line-arg indent) landing first — those defects would corrupt the sweep the same way they did in my first attempt.
-- **Bootstrap status**: pre-round baseline b909d2ec6 = 676s; post-narrow-fold f4df05ff8 = 676s. No regression. SH lane fully mirrors Rust for the 4 move-sigil positions.
-- **SELFHOST_MATCH_FLOOR** = 220 (all lanes match, restored).
-- **Scout artifacts preserved at `/tmp/scout_d27_{census,mechanism,phasing}.md` + `/tmp/scout_c3_20260807/scout_c3_20260807_145641.md`** for the Round A brief author.
-
 **⚠ D27 findings from the 3-scout wave (2026-08-06) — STILL PRESERVED for the C3 retry round after formatter defects land, do NOT re-scout at C3 retry stage:**
 - **Fresh in-repo census: ~1,637 sigils** (vs stale 2026-07-11 wave figure of ~1,048; +56% from D31 Addendum-2 full-strict migration + self-host expansion). Breakdown: 1,624 `!name` prefix + 5 `!(...)` move-closure + 8 corner cases (`!"literal"`, `*!bx`, `Vector[T !]` etc.) + 278 error-mark postfix (stay) + 780 `!=` inequality (stay) + 885 in strings/comments (skip).
 - **Both lexers already tokenize `^` as `Caret`** — no lexer change needed; prefix/infix resolved at parse time like `&`. Neither parser has a prefix `^` arm — straight copy of the existing `Bang` (move) arm. Rust: `src/parser/expr.rs:569-583` + `expr.rs:1477` needs `Token::Caret` REMOVED from the "never-sigil closure lookahead" set. SH: `tests/fixtures/self_host_parser/parser.gg:2241-2251`. Formatter 6 sites `src/formatter/mod.rs` + SH 3 sites in `self_host_{parser,lowerer}/format.gg`. Diagnostics 10+ sites in `src/semantic/errors.rs` (4 already carry pre-planted `// D27: !→^` breadcrumbs).
@@ -38,11 +29,16 @@
   - **Method-targ recorder (f-string).** Diagnosis wrong TWICE. `EFString` is genuinely absent from both walkers, but the causal chain is BROKEN: the undefined symbol is the iterator's own type, and `.iter()` fails `infer.gg`'s terminal/closure gate, so no targ entry is produced either way. The real hazard is `expr_link_types`, which is NOT in the snapshot/restore set. Filed in full on its ledger entry.
   - **Typed-`ret` / declare-set work.** Diagnosis refuted twice; the externs ARE already registered. The real defect is the strip→`_ws` **rename** changing callee identity without re-registering, plus **13 bare `Inst::CallExtern` sites in `src/lir/lower/drops.rs` with zero `ensure_extern` calls**. ⚠ **MEASURED: LLVM does NOT catch a declare/call signature mismatch** — `llvm-as`, `opt -passes=verify` and `llc` all exit 0 on a deliberate mismatch, so that class is a silent miscompile with no gate. Any fix here needs an emitted-`.ll` declare-set diff as its acceptance gate.
 
-**⚠ ROUND XXXIV PROCESS LESSONS (fresh, worth the read):**
-  1. **Convergence-first process fix PROVEN OUT.** The owner-mandated reorder caught net-0 immediately after integration, before ~90 min of sweep time was burned. Triggered an audit that turned net-0 → net-2 via two D25-consequential ratchet tighten-backs. Same-round remediation without waiver.
-  2. **Removal rounds are reliable convergence generators.** Confirmed the CHOICE-B pruning-round hypothesis from R33: a REMOVAL round (deletes retired machinery + fixtures citing it) can serve the same convergence purpose without needing to be explicitly a pruning round. Wave-plan removal rounds double as ledger-shrinkers.
-  3. **Ratchet-tighten-backs are systematic closes worth searching at every removal round.** Both R34 closes were ratchet audits: (`code_doc_citations_resolve` 139→28 after D25 deleted the fault-catch citations) + (`BOOTSTRAP_MAX_CONVERGENCE_STAGE` 3→2 after D25 deleted the settling-generation source). Category worth adding to round-close checklist for future removal rounds.
-  4. **Snapshot re-seed as expected round-close housekeeping.** `GG_REGEN_RUNTIME_SNAPSHOT=1` at D25 close naturally picked up 393 pre-existing untracked snapshots. Committed as separate housekeeping commit; the snapshot corpus is now git-tracked-complete.
+**⚠ ROUND XXXV PROCESS LESSONS (fresh, worth the read):**
+  1. **Convergence-first + owner-directed stale-scan combined to prevent a 5th waiver.** Convergence-first (R34 process fix, R35 first use) caught the 0:3 pre-audit state before ~90 min sweep waste. Stale-scan (60 min budget) surfaced 6 real closes from ~569 items across R18/R29/R30/R32 fixes never retired from the ledger. **Stale-scan is a systematic tool worth running at every round-close where convergence needs a boost** — every long-running project accretes un-retired filings that a scan can convert to real closes.
+  2. **Sweep flakes CAN look like real regressions.** First C-sweep showed `c_emit_comparison FAILED (Matched 654 < floor 1283)` — looked like a huge regression. Isolated test showed `Matched 1486` (comfortably above floor). Root: parallel-load contention with `c_emit_comparison`'s internal `parallel_map_fixtures` worker pool. Re-run cleared. **When a sweep flake looks impossibly large (2x+ drop), isolate the test before spending time root-causing.**
+  3. **Ratified plans can decay between ratification and execution.** Wave-plan C3 (composed D27+D22+D28 fmt sweep) was ratified when D22 was expected to land alongside D27. D22 didn't land (nobody scouted it); R33's D28 landing was CODE-not-fmt-sweep. Scout caught the compose premise was hollow before executor burn. **Ratified plans need Core #5 re-verification just like premises do.**
+  4. **Executor rescope-on-red is honest and correct behavior.** When R35 executor hit bootstrap regression from formatter defect amplification, they RESCOPED to chip+docs (aborted the sweep) rather than shipping known-red. Chain of small fold-back iterations rather than one-shot success is a legit path when discovery happens mid-execution — 4 fold-backs total this round, each surfaced a new blocker the prior didn't see.
+
+**⚠ ROUND XXXIV PROCESS LESSONS (still valid):**
+  1. **Convergence-first process fix.** Runs BEFORE sweeps to catch fail early.
+  2. **Removal rounds are reliable convergence generators.** Deletes machinery + fixtures citing it.
+  3. **Ratchet-tighten-backs are systematic closes worth searching at removal rounds.**
 
 **⚠ ROUND XXXIII PROCESS LESSONS (still valid):**
   1. **The Core #8 "shipped known defect" trap will fire — output-reviews must interrogate every FILED follow-up for "does this ship a live known defect?".** D26 F1 executor filed shift-fallible Route B as a MED follow-up "for a later round" while their code check-lane accepted `Result[int, ArithError] r = a <<! b` and their lowerer silently SIGSEGV'd it. Combined output-review caught it. Option B check-reject fix was ~15 LOC and satisfies Core #10 same-round.

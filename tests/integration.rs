@@ -26800,7 +26800,7 @@ fn self_host_runtime_diff() {
     // (of MATCH 1310, BOTH-WRONG 2 remaining). 3 BOTH-WRONG rows moved to
     // ADJ-MATCH; container-of-Drop transitivity + apply_mut pre-drop +
     // return-`!expr` kill remain filed as HIGH TODOs.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 412;
+    const GGDEF_ADJUDICATED_FLOOR: usize = 413;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -27050,7 +27050,7 @@ fn self_host_runtime_diff() {
     // MATCH on SH for the shapes SH supports). Bump 1349 → 1360 (−9 jitter
     // from 1369; conservative because the round-close narrow of Track B's
     // else-arm may shift a couple of borderline shapes on future measurements).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1358;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1359;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
