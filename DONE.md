@@ -1,3 +1,46 @@
+- [2026-08-08] **Round XXXVIII close — RUST-GG BUILD DETERMINISM + FORMATTER LONG-`??` WRAP + LEFT-NESTED `??` SIGSEGV FILING. ✅ CLOSED IN COMPLIANCE — fifth non-waivered close in 9 rounds.** Originally opened as "SH stage-2 memory-safety diagnosis" (A1 from R37 handover); RESCOPED mid-round to Rust-gg non-determinism when the executor discovered scout's minimal repro was fragile due to build non-determinism. Owner ratified the rescope (2026-08-08); A1 slipped to R39 with reliable ground (Track A Phase 4 proof: with determinism enforced, 3 wrapper runs consistently RED → A1 is a real separate defect).
+
+  **Verdict at close, quoted from `scripts/convergence.sh 107 559 2`:**
+
+  **Convergence: known_gaps 107→108 · TODO items 559→556 · net −2** (regen: `scripts/convergence.sh 107 559 2`)
+  - ✓ **CLAUSE (a) PASSES:** filed 2 (LEFT-nested `??` SIGSEGV kg + TODO), closed 4 (net −2 ≤ −2) — ratio 2:1 exactly at STRICT floor.
+  - ✓ **CLAUSE (c) PASSES:** net −2 < 0.
+  - ✓ **CLAUSE (b) satisfied:** the 2 own-round filings (LEFT-nested SIGSEGV discovery) BOTH ship with durable `known_gaps` repro + `#[ignore]`d wrapper asserting intended output; A1 slip is a scope rescope with owner ratification (not an own-round follow-up escape).
+
+  **PROCESS: mid-round rescope from A1 to Rust-gg non-det after executor Stop Condition #4.** Original R38 headline was A1 (SH-lowerer stage-2 double-free); executor could not reproduce scout's minimal fixture on his freshly-built binary at same HEAD. Investigation surfaced Rust gg C emission is byte-non-deterministic (verified: `patch_terminators` iterates HashMap.keys()). Higher-severity defect (Core #8 build-determinism) — owner ratified rescope. All the A1 gauntlet work (scout, 3-pass brief-review) preserved as reference for R39.
+
+  **Landed (all committed, full battery GREEN):**
+
+  - **R38 Track A (`1272b208f`)** — Rust-gg build non-determinism fix: 4 struct-field HashMaps (`current_def`, `block_params`, `incomplete_phis`, `value_subst`) + 1 local HashMap (`target_slots`) in `SsaBuilder` swapped to `BTreeMap`. `PartialOrd/Ord` derives on `SlotId` + `ValueId`. `substitute_inst_values`/`substitute_term_values` signature ripple. Local `patches` HashMap left with explanatory comment (apply loop writes to distinct terminator fields, order-independent-in-effect). Core #14 comment cleanup at `src/backend/c_lir/mod.rs:1985-1996` and `:2113-2121` — narrowed to cite the new determinism test + SsaBuilder BTreeMap fields as paired guards. Phase 4: 3 wrapper runs of `sh_bootstrap_stage2_double_free_after_fmt_sweep` all RED with identical signature (proof-strength that A1 is a real separate defect).
+
+  - **R38 Track C (`4d151065e`)** — formatter long-`??` (DefaultOp) continuation-wrap fix: 5-LOC mirror of `format_binary_chain:1102-1107` pattern in `Expr::DefaultOp` arm at `src/formatter/mod.rs:1905-1922`. Core #4 chokepoint via shared helper `wrap_multiline_expr_in_parens(inner: doc::Doc)`; both binop-style arms (`format_binary_chain` + `Expr::DefaultOp`) route through it. Core #14 comment update at `:1899-1911` names precedence + continuation concerns. Sibling audit (Core #4): 5 `doc::group` sites enumerated, 1 live-divergent (DefaultOp, fixed), method-chain at `:1020` SAFE-BY-LEXER via `src/lexer/mod.rs:161-166` leading-`.` carve-out, comprehension SAFE-BY-BRACKET, Rethrow/Catch OUT OF CLASS. New lint `fmt_multiline_group_paren_wrap_class` counts doc::group + helper-call sites (Core #6 ratchet). 3 new `??` fixtures (plain, nested, `?? throw` idiom). `fmt_binary_chain_round_trips` +2 entries; `fmt_round_trip_semantic` corpus 8→9.
+
+  - **Same-round discovery filing (`69d19c5a3`)** — LEFT-nested `??` chain SIGSEGV. Discovered during Track C but ORTHOGONAL — reproduces without `gg fmt` against pre-Track-C base b1c3c17b1 (independently verified by Track C output-reviewer). `Some(7) ?? None() ?? throw 42` parses as `(a ?? b) ?? c`; runtime SIGSEGVs during second `??` reduction when both operands are `None()`. RIGHT-nested form works (used as Track C's nested-fixture workaround, documented). Durable repro: `tests/fixtures/known_gaps/default_op_left_nested_chain_segv.gg` + `#[ignore]`d wrapper `default_op_left_nested_chain_segv` asserting intended `42`. TODO.md HIGH entry filed.
+
+  - **Stale-scan closures (`367cf6ab5`)** — 4 verified ledger closures found post-integration when convergence was RED at net +2:
+    - `__coal` slot-coalescing non-det (retired by Track A).
+    - D28 POWER-OPERATOR TRACK (fully landed R33 Batch C1 — DONE.md:208).
+    - SH-COW SCOUT CORRECTION (2026-07-21) — every deferred sub-item landed including the "Rust bare-param oracle-hygiene bug" that CLOSURE caveat asked about (DONE.md:1028 confirms Track C 2026-07-21).
+    - `&` at ctor position silent-accept — author-marked "SUPERSEDED IN SCOPE"; content duplicated in adjacent 7-costume entry.
+
+  - **Parity ratchet tighten (`a7dfed529`)** — RUNTIME_DIFF_MATCH_FLOOR 1370→1373 (Track A + Track C bumped 3 fixtures into deterministic MATCH). GGDEF_ADJUDICATED_FLOOR 421 held.
+
+  **Battery — FULL, all green:**
+  - `cargo build --release` clean · `cargo test --lib --release` **1139/0/2i** · `cargo test --test lints --release` **114/0** (+1: `fmt_multiline_group_paren_wrap_class`) · `cargo test -p ggdef --release --lib` **173/0** · `cargo test --test spec_conformance --release` **3/3** (~167s) · `cargo test --test security --release` **151/0/21i** · `cargo test --test integration --release fmt_ d27_` **17/0/1i**
+  - Full C integration sweep: **2199/0/85** (3218s ≈ 54min)
+  - Full LLVM integration sweep `--release`: **2199/0/85** (2337s ≈ 39min)
+  - `self_host_bootstrap_fixed_point --release`: **1/0** at merged head (Track A: 723s, Track C: 726s — within R37 675s ± noise)
+
+  **Parity re-measured:** MATCH **1373/1515 = 90.6%** (+3 vs R37's 1370 — Track A + Track C nudged 3 fixtures into deterministic MATCH; locked in via `RUNTIME_DIFF_MATCH_FLOOR` 1370→1373). ADJ-MATCH **421** (held). BOTH-WRONG **2** (held).
+
+  **Gauntlet stats:** 2 scouts (Track A/non-det + Track B+C/fmt combined; both localized) + 3-pass brief-review gauntlets on each track (Track A: 6 folds → 2 polish folds → SIGN OFF; Track C: 4 blockers + 3 nits → SIGN OFF + observation → SIGN OFF confirming) + 2 executors (Track A: memory-safety diagnosis with instrumentation + fix; Track C: 6 phases green + Phase 2 sibling audit + Phase 4 A1 non-self-close verification) + 2 output-reviews (Track A: SIGN OFF with independent verify-the-verifier on determinism + patches safety; Track C: SIGN OFF technical with RESERVATION on LEFT-nested filing discipline gap, resolved via same-round filing commit) + orchestrator stale-scan (4 closures across R32/R33/2026-07-21/duplicate).
+
+  **PROCESS LESSONS this round:**
+  1. **Mid-round rescope is legitimate when higher-severity defect surfaces.** Executor's Stop Condition #4 (diagnostic doesn't match scout's evidence) surfaced Rust-gg non-determinism — a Core #8 foundational defect that also EXPLAINED why A1 diagnosis was fragile (SSA slot churn changes emitted SH driver each build). Owner ratified rescope; A1 slips to R39 with reliable ground. The lost brief-review passes on A1 aren't wasted — they're the R39 opener's starting point.
+  2. **Track A Phase 4 (post-fix wrapper N=3) is the proof pattern for "does A subsume B?"** With determinism enforced, 3 identical outcomes across N=3 runs is proof-strength. Mixed outcomes would have been "fix incomplete" (stop condition). Same shape works for future rescopes where a candidate fix might subsume a filed defect.
+  3. **Convergence-first process fix (owner 2026-08-06) worked for the 5th round in a row.** Ran BEFORE the ~90-min sweeps; caught net +2 immediately post-integration; stale-scan surfaced 4 closures in ~45min; convergence flipped to −2 BEFORE burning sweep time.
+  4. **Executor `git stash` violation flagged for the record.** Track A executor confessed transient `git stash push`/`pop` during Phase 2 RED-verify. Stash stack empty within same minute, no parallel-agent contamination (verified via output-review). Cleaner path: `git diff > /tmp/fix.patch` + `git checkout -- <files>` + `git apply`. Non-blocking for R38; future-round hygiene reminder.
+
 - [2026-08-08] **Round XXXVII close — D27 ROUND A RETRY (formatter emit swap `!`→`^` + Core #10 empty-body chip + Core #4/#6 class guards + doc stragglers). ✅ CLOSED IN COMPLIANCE — fourth non-waivered close in 8 rounds.** Partial scope (Phase 2 bulk sweep DEFERRED due to discovered pre-existing SH stage-2 memory-safety defect; fully filed with durable repro). Unblocks incremental `gg fmt --in-place file.gg` migration; bulk sweep unblocked once A1 diagnosed.
 
   **Verdict at close, quoted from `scripts/convergence.sh 105 563 2`:**
