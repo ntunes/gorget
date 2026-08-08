@@ -3179,7 +3179,12 @@ Applicable to: functions, structs, struct fields, enums, traits, constants, stat
 > **directory** unless marked `public` (visible everywhere) or `private` (this file only).
 > The middle tier is the default and takes no keyword. `private` keeps its present meaning
 > (this file only); what changes is the *default*, from world-visible to directory-visible.
-> `static` is unaffected — it is already private by default.
+>
+> **The per-kind carve-outs above are retired by D43.** `static` and struct fields stop
+> having their own defaults and follow the one uniform rule. The `static` carve-out exists
+> only because the current default is world-visible — "mutable module-level state should be
+> explicitly exported" — and a directory-scoped default already prevents that accident, so
+> the exception becomes redundant. Write `private static` for file-only scoping.
 >
 > **Two of the three tiers are not enforced today, so the table above overstates what the
 > compiler checks.** Item-level `private` is enforced at import (`E_PrivateImport`) and by
