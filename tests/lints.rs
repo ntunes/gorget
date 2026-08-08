@@ -11822,3 +11822,104 @@ fn fmt_bang_move_strip_ignores_strings_and_comments() {
         "strip logic false-positive: `!x` in string/comment must not count"
     );
 }
+
+/// Round XXXVIII Track C (Core #4 arm-count + Core #6 executable guard):
+/// `src/formatter/mod.rs` emits multi-line expression docs via `doc::group`
+/// containing `doc::line`/`doc::softline`. Bare leading-operator
+/// continuations are NOT valid Gorget (the lexer suppresses NEWLINE/INDENT
+/// only inside brackets `bracket_depth > 0` — `src/lexer/mod.rs:22` — or
+/// after a leading `.` carve-out — `src/lexer/mod.rs:161`), so any such
+/// `doc::group` NOT already inside bracketed text and NOT going through
+/// the shared `wrap_multiline_expr_in_parens` helper emits unparseable
+/// output that a second `gg fmt` pass then drops (silent data loss).
+///
+/// This ratchet pins BOTH counts:
+///   - **`doc::group(` sites in `src/formatter/mod.rs`** — every new
+///     doc::group must either (a) go through
+///     `wrap_multiline_expr_in_parens` (bumping the helper-call count), or
+///     (b) be an allowlisted SAFE-BY-BRACKET / SAFE-BY-LEXER site whose
+///     rationale is recorded here.
+///   - **`wrap_multiline_expr_in_parens(` call sites** — one per binop-style
+///     wrap arm (`format_binary_chain` + `Expr::DefaultOp`); a new arm that
+///     forgot to route emits the leading-operator continuation the class
+///     was retired to prevent.
+///
+/// **Allowlisted SAFE sites (`doc::group` NOT going through the helper):**
+///
+///   `:1020` — **method chain**. SAFE-BY-LEXER: the lexer at
+///     `src/lexer/mod.rs:161-166` carves out leading-`.` as an explicit
+///     continuation (Python-like), suppressing NEWLINE. The method-chain
+///     arm emits `receiver\n    .m1()\n    .m2()` which parses cleanly.
+///   `:2853` — **the helper itself** (`wrap_multiline_expr_in_parens`).
+///     By definition SAFE — it IS the paren-wrap chokepoint.
+///   `:2888` — **`build_comprehension_doc`**. SAFE-BY-BRACKET: the
+///     outer `doc::group` is wrapped in explicit `open`/`close` text
+///     (`[`/`]` or `{`/`}`), so the lexer's `bracket_depth > 0`
+///     suppression covers the inner `doc::line`/`softline` breaks.
+///
+/// **If this fails**: a new `doc::group` was added. Either route it
+/// through `wrap_multiline_expr_in_parens` (bump `EXPECTED_CALLS`), or
+/// verify the new site is SAFE-BY-BRACKET / SAFE-BY-LEXER and add it to
+/// the allowlist above with its rationale (bumping `EXPECTED_TOTAL`).
+///
+/// **RED signature verified 2026-08-08 (Round XXXVIII Track C authoring):**
+/// deliberately removed one `wrap_multiline_expr_in_parens(` call and the
+/// count assertion tripped with `EXPECTED_CALLS = 2` vs measured 1.
+#[test]
+fn fmt_multiline_group_paren_wrap_class() {
+    /// Total `doc::group(` sites (excluding pure-comment mentions).
+    /// Round XXXVIII Track C baseline: 3 (see allowlist in the doc-comment).
+    const EXPECTED_TOTAL: usize = 3;
+    /// Call sites of the `wrap_multiline_expr_in_parens` helper — one per
+    /// binop-style arm that needs the paren wrap. Excludes the helper's
+    /// definition line and comment mentions. Round XXXVIII Track C baseline: 2
+    /// (`format_binary_chain` at :1100, `Expr::DefaultOp` at :1925).
+    const EXPECTED_CALLS: usize = 2;
+
+    let content = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+    let mut group_count = 0usize;
+    let mut call_count = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        // Skip pure-comment lines (docstrings and inline notes) so a
+        // `// see doc::group(...)` note doesn't spuriously trip the count.
+        if trimmed.starts_with("//") || trimmed.starts_with("///") {
+            continue;
+        }
+        // Skip the helper's DEFINITION line — the count tracks CALL sites,
+        // not the definition itself.
+        if trimmed.starts_with("fn wrap_multiline_expr_in_parens(") {
+            continue;
+        }
+        group_count += line.matches("doc::group(").count();
+        call_count += line.matches("wrap_multiline_expr_in_parens(").count();
+    }
+    assert_eq!(
+        group_count, EXPECTED_TOTAL,
+        "doc::group site count in `src/formatter/mod.rs` changed: \
+         {group_count} vs expected {EXPECTED_TOTAL}.\n\n\
+         If a new `doc::group` was added, it must EITHER route through \
+         `wrap_multiline_expr_in_parens` (bump EXPECTED_CALLS and use the \
+         shared helper), OR be documented in the allowlist above as \
+         SAFE-BY-BRACKET (open/close text wraps the group) or SAFE-BY-LEXER \
+         (leading-`.` continuation carve-out at src/lexer/mod.rs:161).\n\n\
+         Round XXXVIII Track C retires the leading-operator-continuation \
+         class (gorget-js snag #15 Class 2): a `??` doc::group without the \
+         `if_break(\"(\")` + `if_break(\")\")` wrapper emits invalid syntax \
+         that a second `gg fmt` pass drops. This arm-count IS the class \
+         guard (Core #4/#6/#10).",
+    );
+    assert_eq!(
+        call_count, EXPECTED_CALLS,
+        "`wrap_multiline_expr_in_parens` call-site count in \
+         `src/formatter/mod.rs` changed: {call_count} vs expected \
+         {EXPECTED_CALLS}.\n\n\
+         If a new binop-style arm was added, it must call \
+         `wrap_multiline_expr_in_parens` on its emission and bump \
+         EXPECTED_CALLS here; otherwise the arm emits a bare \
+         leading-operator continuation the parser rejects.\n\n\
+         If the arm count SHRANK (a call was removed / centralized), \
+         lower EXPECTED_CALLS with the rationale.",
+    );
+}

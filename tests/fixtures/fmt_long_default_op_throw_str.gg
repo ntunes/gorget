@@ -1,0 +1,16 @@
+# R38 Track C regression fixture (gorget-js snag #15 Class 2, throw-string axis):
+# The `??` RHS is a `throw` of a bare string literal — no `Call`, so no
+# fallback paren from `format_call_args_wrapped`. This isolates the
+# missing outer paren wrap in `Expr::DefaultOp`.
+#
+# Pre-fix RED: `gg check` on fmt output fails at the `??` continuation.
+# Post-fix: parses AND prints `55` (a is Some so no throw fires).
+int compute(Option[int] a) throws String:
+    int r = a ?? throw "This is a very long string literal used as the throw argument to force line wrap on the ?? RHS in the formatter"
+    return r
+
+int main():
+    Option[int] v = Some(55)
+    int r = compute(v)! catch (e): -1
+    print(r)
+    return 0
