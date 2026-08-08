@@ -10644,7 +10644,48 @@ const CODE_DOC_CITATION_VENDORED: &[&str] =
     &["src/backend/c/sqlite3/", "src/backend/c/stb_image.h"];
 
 /// Recursive walk over the source extensions that carry doc citations.
+/// Repo-relative paths git actually tracks.
+///
+/// Scans that read "the source tree" must gate on this. A raw `read_dir` walk
+/// also picks up GENERATED artifacts — `tests/fixtures/**/driver.c` and the
+/// per-fixture `main.c` are gitignored C emitted by the self-host and the C
+/// backend — and those carry Gorget source comments through into C string
+/// literals. That double-counts a citation already scanned at its real `.gg`
+/// line, and makes the result depend on whether a build has been run in this
+/// tree rather than on what the tree CONTAINS.
+///
+/// Gating on git is a class fix rather than a name blacklist: it excludes every
+/// generated artifact, present and future, with no pattern list to keep in sync
+/// with `tests/fixtures/.gitignore`.
+fn tracked_files() -> &'static std::collections::HashSet<PathBuf> {
+    use std::sync::OnceLock;
+    static TRACKED: OnceLock<std::collections::HashSet<PathBuf>> = OnceLock::new();
+    TRACKED.get_or_init(|| {
+        let out = std::process::Command::new("git")
+            .args(["ls-files", "-z"])
+            .output()
+            .expect("git ls-files failed — these lints must run inside the repo");
+        assert!(
+            out.status.success(),
+            "git ls-files exited non-zero; refusing to scan an unknown file set"
+        );
+        let set: std::collections::HashSet<PathBuf> = out
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|s| !s.is_empty())
+            .map(|s| PathBuf::from(String::from_utf8_lossy(s).into_owned()))
+            .collect();
+        assert!(
+            set.len() > 500,
+            "git ls-files returned only {} paths — the scan is broken, not the tree",
+            set.len()
+        );
+        set
+    })
+}
+
 fn walkdir_srcish(root: &str) -> Vec<PathBuf> {
+    let tracked = tracked_files();
     let mut out = Vec::new();
     let mut stack = vec![PathBuf::from(root)];
     while let Some(dir) = stack.pop() {
@@ -10656,7 +10697,8 @@ fn walkdir_srcish(root: &str) -> Vec<PathBuf> {
             } else if matches!(
                 p.extension().and_then(|e| e.to_str()),
                 Some("rs") | Some("gg") | Some("c") | Some("h")
-            ) {
+            ) && tracked.contains(&p)
+            {
                 out.push(p);
             }
         }
@@ -10757,7 +10799,20 @@ fn code_doc_citations_resolve() {
     // FaultableCall/IndexLoad, builtin_fault_enum, and the fault_catch_*/
     // fault_deep_*/faultcatch_recovery_type_* fixture families all deleted +
     // the removed `docs/plans/error-model.md` refs went with them). Budget
-    // reseeded 139 → 28 as an upward-only ratchet lock-in.
+    // reseeded 139 → 28, then tightened 28 → 27 in Round XXXV.
+    //
+    // 2026-08-08: those two figures disagreed because the scan was reading
+    // GENERATED files. `tests/fixtures/self_host_lowerer/driver.c` is
+    // gitignored self-host output, and it carries a `.gg` source comment
+    // through into a C string literal (a diagnostic string naming the deleted
+    // error-model design doc), so it contributed a 28th citation that
+    // duplicates one already counted at its real `.gg` line — note this
+    // comment must not spell that filename either, or the scan counts THIS
+    // line too. The count therefore tracked whether a bootstrap had
+    // been run in the working tree, not what the tree contains — 28 in a built
+    // tree, 27 in a clean one, so 28 and 27 were each "right" where they were
+    // locked, and the ratchet oscillated. `walkdir_srcish` now gates on
+    // `tracked_files()`; the budget is a property of the tree again.
     const BUDGET: usize = 27;
     assert!(
         dangling.len() <= BUDGET,
@@ -10772,7 +10827,11 @@ fn code_doc_citations_resolve() {
         BUDGET,
         dangling
             .iter()
-            .take(15)
+            // Show the whole list, not a window. Truncating at 15 is what hid
+            // the generated-`driver.c` entry for two rounds: it sat at index 24
+            // and every failure report cut it off, so the budget got re-locked
+            // twice without anyone seeing the offender.
+            .take(usize::MAX)
             .cloned()
             .collect::<Vec<_>>()
             .join("\n")
