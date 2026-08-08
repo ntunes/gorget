@@ -216,7 +216,7 @@ check_stmt → check_expr` is the recursive descent.
 
 **Move-in-loop** is rejected (`MoveInLoop`) unless the moved variable was declared
 inside the innermost loop body (`loop_local_defs`) or is rebound in the same
-statement — the `x = f(!x, …)` left-fold pattern, tracked via
+statement — the `x = f(^x, …)` left-fold pattern, tracked via
 `assignment_rebind_target` (`origins.rs:495-503`, `mod.rs:257-262`).
 
 ### Single-owner enforcement — `MoveWithoutOperator`

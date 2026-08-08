@@ -114,7 +114,7 @@ Plain `+`/`-`/`*` always check overflow (trap uncatchably on fault); the `+%`/`-
 | `is` | Type test | `x is int` |
 | `is not` | Negative type test | `x is not None` |
 | `in` | Membership test | `x in collection` |
-| `!` | Move operator | `take(!value)` |
+| `^` | Move operator | `take(^value)` |
 | `&` | Mutable borrow | `modify(&value)` |
 | `*` | Dereference | `*ptr` (unsafe) |
 | `rethrow` | Error transform | `risky() rethrow (e): wrap(e)` |

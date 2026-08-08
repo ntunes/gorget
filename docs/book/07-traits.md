@@ -336,7 +336,7 @@ struct Connection:
     int fd
 
 equip Connection with Drop:
-    void drop(!self):
+    void drop(^self):
         close_fd(self.fd)
 
 # Automatic cleanup:
@@ -407,7 +407,7 @@ Config c = Config.default()    # Config(0, 0, false, "")
 | `Comparable` | `int compare(self, Self other)` | `<`, `>`, `<=`, `>=` |
 | `Hashable` | `void hash(self, FxHasher &h)` | `Dict` keys, `Set` elements |
 | `Cloneable` | `Self clone(self)` | Deep copying |
-| `Drop` | `void drop(!self)` | Auto-cleanup on scope exit |
+| `Drop` | `void drop(^self)` | Auto-cleanup on scope exit |
 | `Iterator[T]` | `Option[T] next(&self)` | `for` loop iteration |
 | `Iterable[T]` | `Iterator[T] iter(&self)` | `for` loop on collections |
 | `Default` | `Self default()` (static) | Zero/default construction |
