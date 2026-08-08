@@ -1989,11 +1989,14 @@ fn emit_function(out: &mut String, func: &LirFunction, module: &LirModule, sn: &
     // compute SSA value liveness over the block CFG (block-args as phi) and
     // greedily coalesce values with disjoint live ranges + an IDENTICAL C decl
     // type onto one C local, emitted as `#define __vN __coalK` aliases (ZERO
-    // body rewrite) + `#undef` after the function close. Deterministic: the
-    // grouping sorts decl-type keys and iterates value ids ASCENDING, so slot
-    // NUMBERING is stable run-to-run (load-bearing for fixed_point byte-
-    // identity). A slot is shared only between values whose block-live-sets are
-    // provably disjoint — no slot-aliasing of simultaneously-live values.
+    // body rewrite) + `#undef` after the function close. `coalesce_assign_exact`
+    // itself is deterministic (BTreeMap keyed on decl-type strings, iterated
+    // in ascending value-id order); overall byte-identity of the emitted C
+    // depends on ValueId numbering being stable from SSA construction, which
+    // is guarded by BTreeMap-typed maps in `src/lir/ssa.rs::SsaBuilder` +
+    // `rust_gg_build_is_deterministic` in tests/integration.rs (Core #14 +
+    // Core #6). A slot is shared only between values whose block-live-sets
+    // are provably disjoint — no slot-aliasing of simultaneously-live values.
     let coalesce_assign = coalesce_assign_exact(func, &v_used, &decl_ctype);
     if coalesce_assign.is_empty() {
         // No coalescing possible (e.g. zero blocks) — fall back to one C local
@@ -2111,13 +2114,18 @@ fn mark_used_value_ids(body: &str, v_used: &mut [bool], s_used: &mut [bool]) {
 /// values). Empty `Vec` when there are no blocks (the caller falls back to the
 /// one-local-per-value decl path).
 ///
-/// DETERMINISM (load-bearing for `fixed_point` byte-identity): the grouping
-/// uses a `BTreeMap` keyed on the decl-type string (sorted keys) and the value
-/// ids within each group are inserted in ASCENDING order (we iterate `0..nval`),
-/// so slot numbering is identical run-to-run. The greedy interval coloring
-/// scans slots in creation order and places each value in the first slot whose
-/// live-set is disjoint from the value's — a value reuses a slot ONLY when
-/// their block-live-sets are provably disjoint, so no two simultaneously-live
+/// DETERMINISM: the grouping uses a `BTreeMap` keyed on the decl-type string
+/// (sorted keys) and the value ids within each group are inserted in
+/// ASCENDING order (we iterate `0..nval`), so THIS pass's slot numbering is
+/// identical run-to-run given identical inputs. Overall byte-identity of the
+/// emitted C additionally requires the input ValueId numbering to be stable
+/// from SSA construction — guarded by BTreeMap-typed maps in
+/// `src/lir/ssa.rs::SsaBuilder` + the `rust_gg_build_is_deterministic`
+/// integration test (Core #14 pairing: the invariant claim is backed by an
+/// executable check, not prose). The greedy interval coloring scans slots in
+/// creation order and places each value in the first slot whose live-set is
+/// disjoint from the value's — a value reuses a slot ONLY when their
+/// block-live-sets are provably disjoint, so no two simultaneously-live
 /// values ever share a slot.
 fn coalesce_assign_exact(
     func: &LirFunction,

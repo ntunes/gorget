@@ -21,11 +21,11 @@ use std::fmt;
 // ── Identity types ──────────────────────────────────────────────────────────
 
 /// SSA value identifier. Unique within a function.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ValueId(pub u32);
 
 /// Stack slot identifier. Unique within a function.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SlotId(pub u32);
 
 /// Basic block identifier. Unique within a function.

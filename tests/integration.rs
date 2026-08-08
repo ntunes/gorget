@@ -43410,3 +43410,138 @@ fn self_host_driver_captures_d26_add_overflow() {
     // execution, not produce -99. The check + build stage still succeed.
     assert!(out.status.success(), "SH failed to compile Route B fixture");
 }
+
+/// The Rust `gg` compiler's C emission MUST be byte-deterministic across
+/// runs: two consecutive builds of the same source at the same HEAD must
+/// produce byte-identical `.c` output.
+///
+/// **Why this exists (R38, 2026-08-08).** `src/lir/ssa.rs::patch_terminators`
+/// iterates `self.incomplete_phis.keys()` inside a fixpoint loop that
+/// allocates fresh `ValueId`s via `add_block_param` → `func.next_value()`.
+/// With those maps typed as `std::collections::HashMap`, per-instance
+/// randomized bucket iteration order made ValueId numbering (and hence
+/// every downstream `__vN`/`__coalK`/`__bpN`/`__bbN` identifier in emitted
+/// C) non-deterministic across otherwise-identical runs of the same binary
+/// on the same source. Fix: BTreeMap for `current_def`, `block_params`,
+/// `incomplete_phis`, `value_subst` on `SsaBuilder`, plus the local
+/// `target_slots` collector in `patch_terminators`. This test guards that
+/// class from silently regressing — Core #6 (guards, not prose) + Core #12
+/// (RED-verified: pre-fix produced 3 divergent MD5s on this fixture, e.g.
+/// 539c0a19… / d70fe3cd… / ec9a47e1…; post-fix all 3 identical).
+///
+/// **Fixture pick.** `self_host_parser/driver.gg` (115k C-loc) is the
+/// smallest reliably-non-deterministic input on the tree — below ~4k C-loc
+/// the phi-fixpoint loop converges in one pass in a fixed order and HashMap
+/// iteration order is invisible; the parser driver is well above that
+/// threshold. Building it in a scratch tempdir isolates from the shared
+/// `parser_comparison` test which uses the same driver.
+///
+/// **Cost.** ~3 back-to-back `gg build` invocations of the parser driver
+/// (~15-30s each on a warm box; auto-scaling `build_with_timeout` handles
+/// loaded hosts).
+#[test]
+fn rust_gg_build_is_deterministic() {
+    // LLVM backend has its own (potentially different) determinism story;
+    // this test guards the LIR→C path only. LLVM sweeps still catch a
+    // regression via `self_host_bootstrap_fixed_point` under llvm.
+    if skip_under_llvm() {
+        eprintln!(
+            "NOTE [rust_gg_build_is_deterministic]: skipped under GG_BACKEND=llvm — this \
+             test guards the LIR→C emission path; extend it if a similar LLVM guard is needed."
+        );
+        return;
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src_dir = manifest_dir.join("tests/fixtures/self_host_parser");
+    assert!(
+        src_dir.is_dir(),
+        "self_host_parser fixture directory missing: {}",
+        src_dir.display(),
+    );
+
+    // Copy the fixture directory into a tempdir so back-to-back builds
+    // don't race the shared `parser_comparison` test on driver.c/driver.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let dst_dir = tmp.path().join("self_host_parser");
+    std::fs::create_dir_all(&dst_dir).expect("mkdir dst_dir");
+    for entry in std::fs::read_dir(&src_dir).expect("read src_dir") {
+        let entry = entry.expect("read entry");
+        let path = entry.path();
+        // Only copy .gg sources (skip stale driver.c / driver binaries).
+        if path.is_file() && path.extension().map_or(false, |ext| ext == "gg") {
+            let dst = dst_dir.join(path.file_name().unwrap());
+            std::fs::copy(&path, &dst).expect("copy .gg");
+        }
+    }
+
+    let driver_gg = dst_dir.join("driver.gg");
+    let driver_c = dst_dir.join("driver.c");
+    let driver_bin = dst_dir.join("driver");
+
+    let n_runs = 3;
+    let mut outputs: Vec<Vec<u8>> = Vec::with_capacity(n_runs);
+    for i in 0..n_runs {
+        // Clean intermediate outputs so we're measuring `gg build`, not a
+        // stale cached artifact.
+        let _ = std::fs::remove_file(&driver_c);
+        let _ = std::fs::remove_file(&driver_bin);
+
+        let mut cmd = gg_command("build");
+        cmd.arg(&driver_gg);
+        let build = build_with_timeout(
+            &mut cmd,
+            &format!("rust_gg_build_is_deterministic run {}", i + 1),
+        );
+        assert!(
+            build.status.success(),
+            "run {}: gg build failed:\nstdout: {}\nstderr: {}",
+            i + 1,
+            String::from_utf8_lossy(&build.stdout),
+            String::from_utf8_lossy(&build.stderr),
+        );
+        let bytes = std::fs::read(&driver_c).unwrap_or_else(|e| {
+            panic!(
+                "run {}: cannot read emitted C at {}: {e}",
+                i + 1,
+                driver_c.display()
+            )
+        });
+        outputs.push(bytes);
+    }
+
+    // All outputs must be byte-identical. Report divergence sites in a
+    // compact form (byte offset + surrounding context) rather than
+    // dumping ~3.6 MiB of C into the assert message.
+    let base = &outputs[0];
+    for (i, run) in outputs.iter().enumerate().skip(1) {
+        if run != base {
+            let base_len = base.len();
+            let run_len = run.len();
+            let first_diff = base
+                .iter()
+                .zip(run.iter())
+                .position(|(a, b)| a != b)
+                .unwrap_or(base_len.min(run_len));
+            let ctx_start = first_diff.saturating_sub(80);
+            let ctx_end = (first_diff + 80).min(base_len.min(run_len));
+            let base_ctx = String::from_utf8_lossy(&base[ctx_start..ctx_end]);
+            let run_ctx = String::from_utf8_lossy(&run[ctx_start..ctx_end]);
+            panic!(
+                "gg build is NON-DETERMINISTIC: run 1 and run {} differ.\n\
+                 run 1 len={}, run {} len={}, first diff at byte {}.\n\
+                 run 1 context [{ctx_start}..{ctx_end}]:\n{base_ctx}\n\
+                 run {} context [{ctx_start}..{ctx_end}]:\n{run_ctx}\n\
+                 If this fires, a HashMap has been reintroduced in `src/lir/ssa.rs` \
+                 or an ordering-sensitive iteration site was added to the SSA \
+                 builder. See the R38 devbook entry for the diagnostic recipe.",
+                i + 1,
+                base_len,
+                i + 1,
+                run_len,
+                first_diff,
+                i + 1,
+            );
+        }
+    }
+}

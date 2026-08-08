@@ -13,7 +13,7 @@
 //! 6. Remove dead SlotStore/SlotLoad instructions.
 
 use super::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Run SSA construction on a function, promoting scalar slots.
 pub fn construct_ssa(func: &mut LirFunction) {
@@ -136,15 +136,41 @@ struct SsaBuilder<'a> {
     promotable: &'a HashSet<SlotId>,
     preds: &'a Vec<Vec<BlockId>>,
     /// Current definition of each slot at each block: block → slot → value.
-    current_def: HashMap<(BlockId, SlotId), ValueId>,
+    ///
+    /// BTreeMap (not HashMap): `patch_terminators` iterates
+    /// `incomplete_phis.keys()` inside a fixpoint loop that ALLOCATES fresh
+    /// `ValueId`s via `add_block_param` → `func.next_value()`. HashMap's
+    /// per-instance randomized bucket order would make ValueId numbering
+    /// (and therefore every downstream `__vN`/`__coalK`/`__bpN` identifier
+    /// in emitted C) non-deterministic across otherwise-identical runs of
+    /// the compiler. See `rust_gg_build_is_deterministic` (integration).
+    current_def: BTreeMap<(BlockId, SlotId), ValueId>,
     /// Block parameters we've added: block → slot → param ValueId.
-    block_params: HashMap<(BlockId, SlotId), ValueId>,
+    ///
+    /// BTreeMap (see `current_def` above): iterated by `patch_terminators`
+    /// alongside `incomplete_phis` during the phi-fixpoint; determinism of
+    /// SSA construction requires all three maps have a stable iteration
+    /// order.
+    block_params: BTreeMap<(BlockId, SlotId), ValueId>,
     /// Track which blocks we've sealed (all predecessors processed).
     /// For simplicity, we process in RPO order and seal blocks lazily.
-    incomplete_phis: HashMap<(BlockId, SlotId), ValueId>,
+    ///
+    /// BTreeMap (see `current_def` above): the primary non-det write site
+    /// was `self.incomplete_phis.keys().copied().collect()` inside a fixpoint
+    /// loop that allocates fresh `ValueId`s; sorted iteration is load-bearing.
+    incomplete_phis: BTreeMap<(BlockId, SlotId), ValueId>,
     /// Direct value substitution map: old ValueId → reaching ValueId.
     /// Accumulated during process_block for every eliminated SlotLoad.
-    value_subst: HashMap<ValueId, ValueId>,
+    ///
+    /// BTreeMap (not HashMap): symmetry with the three phi maps above (they
+    /// all live on the same SSA builder and can be produced in any order).
+    /// Its own `.keys()` iteration in `remove_promoted_instructions` is
+    /// order-independent-in-effect (each iteration just re-resolves through
+    /// `resolve_value` chains and re-inserts), but keeping it a HashMap here
+    /// would leave a recurring-bug-class invitation: a future refactor that
+    /// gains an allocating side-effect on that iteration would silently
+    /// resurrect the non-det.
+    value_subst: BTreeMap<ValueId, ValueId>,
 }
 
 impl<'a> SsaBuilder<'a> {
@@ -157,10 +183,10 @@ impl<'a> SsaBuilder<'a> {
             func,
             promotable,
             preds,
-            current_def: HashMap::new(),
-            block_params: HashMap::new(),
-            incomplete_phis: HashMap::new(),
-            value_subst: HashMap::new(),
+            current_def: BTreeMap::new(),
+            block_params: BTreeMap::new(),
+            incomplete_phis: BTreeMap::new(),
+            value_subst: BTreeMap::new(),
         }
     }
 
@@ -356,7 +382,12 @@ impl<'a> SsaBuilder<'a> {
         // Then for each predecessor, collect args in that same order.
         // First, build a map: target_bb → [slot in param order]
         let phis: Vec<(BlockId, SlotId)> = self.incomplete_phis.keys().copied().collect();
-        let mut target_slots: HashMap<BlockId, Vec<SlotId>> = HashMap::new();
+        // BTreeMap (not HashMap): iterated below in a loop that in its
+        // defensive `unwrap_or_else` path allocates fresh `ValueId`s via
+        // `self.func.next_value()`. HashMap's per-instance randomized bucket
+        // order would resurrect the same class of non-determinism the four
+        // SsaBuilder fields fixed above.
+        let mut target_slots: BTreeMap<BlockId, Vec<SlotId>> = BTreeMap::new();
         for &(target_bb, slot) in &phis {
             target_slots.entry(target_bb).or_default().push(slot);
         }
@@ -376,6 +407,13 @@ impl<'a> SsaBuilder<'a> {
 
         // Collect patches: for each (pred, target), build a single args vector
         // with values in the correct param order.
+        //
+        // HashMap here is safe (order-independent in effect): the apply loop
+        // below writes each patch to a distinct terminator field on a distinct
+        // block, and the terminator-writer allocates no fresh ValueIds. Kept
+        // as HashMap rather than swapped to BTreeMap only because there is no
+        // ordering hazard to close — the four SsaBuilder maps above are the
+        // load-bearing ones.
         let mut patches: HashMap<(BlockId, BlockId), Vec<ValueId>> = HashMap::new();
         for (&target_bb, slots) in &target_slots {
             let preds = self.preds[target_bb.0 as usize].clone();
@@ -493,7 +531,7 @@ fn add_args_to_terminator(term: &mut Term, target: BlockId, args: &[ValueId]) {
 }
 
 /// Substitute value references in an instruction.
-fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
+fn substitute_inst_values(inst: &mut Inst, subst: &BTreeMap<ValueId, ValueId>) {
     let sub = |v: &mut ValueId| {
         if let Some(&replacement) = subst.get(v) {
             *v = replacement;
@@ -642,7 +680,7 @@ fn substitute_inst_values(inst: &mut Inst, subst: &HashMap<ValueId, ValueId>) {
 }
 
 /// Substitute value references in a terminator.
-fn substitute_term_values(term: &mut Term, subst: &HashMap<ValueId, ValueId>) {
+fn substitute_term_values(term: &mut Term, subst: &BTreeMap<ValueId, ValueId>) {
     let sub = |v: &mut ValueId| {
         if let Some(&replacement) = subst.get(v) {
             *v = replacement;
