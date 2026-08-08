@@ -1087,24 +1087,17 @@ impl Formatter {
             docs.push(doc::text(s));
         }
 
-        // When this chain breaks across lines, the continuation lines start with
-        // the operator (`+ a`). Bare leading-operator continuations are NOT valid
-        // Gorget — the parser rejects them, and a second `gg fmt` pass then drops
-        // the orphaned lines, silently LOSING code on round-trip. The lexer only
-        // suppresses NEWLINE/INDENT/DEDENT inside brackets (`bracket_depth > 0`,
-        // src/lexer/mod.rs:22), so the multi-line form is only parser-valid when
-        // wrapped in parentheses. Emit `(` / `)` via `if_break` so the parens
-        // appear ONLY in broken mode (flat mode stays `a + b + c`, no noise), and
-        // the wrapped form re-parses to the same bare BinaryOp → re-formats to the
-        // same parenthesized shape (idempotent). Parens are semantically
-        // transparent, so adding them never changes meaning. See the
-        // `fmt_binary_chain_round_trips` guard in tests/integration.rs.
-        let bin_doc = doc::group(doc::concat(vec![
-            doc::if_break(doc::text(""), doc::text("(")),
+        // Wrap the chain via the shared `wrap_multiline_expr_in_parens` helper
+        // so a broken chain emits `(a\n    + b)` (parseable) rather than
+        // `a\n    + b` (unparseable — bare leading-operator continuation drops
+        // the orphan lines on a second `gg fmt` pass, silently LOSING code).
+        // See the helper's docstring for the full rationale; guard is
+        // `fmt_binary_chain_round_trips` in tests/integration.rs.
+        let inner = doc::concat(vec![
             docs.remove(0), // first operand
             doc::indent(doc::concat(docs)),
-            doc::if_break(doc::text(""), doc::text(")")),
-        ]));
+        ]);
+        let bin_doc = wrap_multiline_expr_in_parens(inner);
         self.write_doc(&bin_doc);
     }
 
@@ -1904,20 +1897,32 @@ impl Formatter {
             }
             Expr::DefaultOp { lhs, rhs } => {
                 // FMT-A: `??` is bp 3/4 (left-assoc). Only `Rethrow`/`Catch`
-                // (bp 1/2) bind looser — those need wrapping. E.g. `(a rethrow b) ?? c`.
+                // (bp 1/2) bind looser — those need operand-wrapping. E.g.
+                // `(a rethrow b) ?? c` (handled by `format_binop_operand`).
+                //
+                // R38 Track C (Core #10 lower-or-reject): also wrap the whole
+                // emission in `if_break` parens via
+                // `wrap_multiline_expr_in_parens` so a long RHS that breaks
+                // across lines emits `(a\n    ?? b)` (parseable) rather than
+                // `a\n    ?? b` (unparseable — a bare leading `??`
+                // continuation is not valid Gorget; the lexer only carves
+                // out leading `.` at `src/lexer/mod.rs:161`). Same fix R36
+                // applied to `format_binary_chain`; this arm was missed at
+                // that time (gorget-js snag #15 Class 2).
                 let lhs_s = self.element_to_string(|f| {
                     f.format_binop_operand(lhs, 3, BinOpPos::Left, false);
                 });
                 let rhs_s = self.element_to_string(|f| {
                     f.format_binop_operand(rhs, 3, BinOpPos::Right, false);
                 });
-                let nil_doc = doc::group(doc::concat(vec![
+                let inner = doc::concat(vec![
                     doc::text(lhs_s),
                     doc::indent(doc::concat(vec![
                         doc::line(),
                         doc::text(format!("?? {rhs_s}")),
                     ])),
-                ]));
+                ]);
+                let nil_doc = wrap_multiline_expr_in_parens(inner);
                 self.write_doc(&nil_doc);
             }
             Expr::Move { expr } => {
@@ -2816,7 +2821,43 @@ fn collect_binary_operands<'a>(
     }
 }
 
+/// Round XXXVI FMT-A / Round XXXVIII Track C chokepoint (Core #1 + #4):
+/// wrap a multi-line expression emission in parentheses that appear
+/// ONLY in broken mode. In flat mode nothing is added; in broken mode
+/// the emitted doc becomes `(<inner>)`.
+///
+/// **Why:** when an expression emission breaks across lines, the
+/// continuation lines start with the operator (`+ a`, `?? b`, ...).
+/// Bare leading-operator continuations are NOT valid Gorget — the
+/// parser rejects them, and a second `gg fmt` pass then drops the
+/// orphaned lines, silently LOSING code on round-trip (Core #8/#10).
+/// The lexer only suppresses NEWLINE/INDENT/DEDENT inside brackets
+/// (`bracket_depth > 0`, `src/lexer/mod.rs:22`) or after a leading `.`
+/// carve-out (`src/lexer/mod.rs:161`), so the multi-line form of an
+/// operator chain is only parser-valid when wrapped in parentheses.
+/// Emit `(` / `)` via `if_break` so the parens appear ONLY in broken
+/// mode (flat mode stays clean, no noise). The wrapped form re-parses
+/// to the same bare expression node with a paren wrapper that
+/// re-formats to the same parenthesized shape (idempotent). Parens are
+/// semantically transparent, so adding them never changes meaning.
+///
+/// **Callers must route through here** for any `doc::group` containing
+/// `doc::line`/`doc::softline` outside of a bracketed
+/// (`[`/`{`/`(...)`)  context and outside a leading-`.` chain. The
+/// `tests/lints.rs` guard `fmt_multiline_group_paren_wrap_class`
+/// counts callers and asserts the class-invariant. Guards:
+/// `fmt_binary_chain_round_trips` (parse+idempotence) and
+/// `fmt_round_trip_semantic` (build+run) in `tests/integration.rs`.
+fn wrap_multiline_expr_in_parens(inner: doc::Doc) -> doc::Doc {
+    doc::group(doc::concat(vec![
+        doc::if_break(doc::text(""), doc::text("(")),
+        inner,
+        doc::if_break(doc::text(""), doc::text(")")),
+    ]))
+}
+
 /// Build a Doc for a comprehension expression with line-width-aware wrapping.
+///
 /// Flat: `[expr for var in iterable if cond]`
 /// Broken:
 /// ```text

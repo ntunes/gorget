@@ -1,0 +1,19 @@
+# R38 Track C regression fixture (gorget-js snag #15 Class 2, nested axis):
+# Right-nested `??` chain — `a ?? (b ?? fallback)`. Both the outer `??`
+# group AND the inner one exceed line width; both must gain paren wraps
+# in broken mode.
+#
+# (LEFT-nested `??` chains — `a ?? b ?? throw ...` — hit a distinct
+# runtime segfault UNRELATED to formatting; the parse-only coverage lives
+# in `fmt_binary_chain_round_trips`'s `long_default_op_left_nested_chain`
+# entry which asserts parse+idempotence only. This fixture picks the
+# right-nested shape so the build+run semantic round-trip is meaningful.)
+#
+# Pre-fix RED: `gg check` on fmt output fails at the outer `??`
+# continuation. Post-fix: parses AND prints `13` (b wins because a is None).
+int main():
+    Option[int] a = None()
+    Option[int] b = Some(13)
+    int r = a ?? (b ?? 999999999 + 888888888 + 777777777 + 666666666 - 555555555 - 444444444 - 333333333 - 222222222)
+    print(r)
+    return 0

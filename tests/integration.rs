@@ -9135,6 +9135,35 @@ fn fmt_binary_chain_round_trips() {
         !gorget::formatter::format_source_infallible(short_src).contains("(1 + 2 + 3)"),
         "short binary chain that fits should NOT be parenthesized"
     );
+
+    // Round XXXVIII Track C (gorget-js snag #15 Class 2): long `??` chain
+    // on a NEW axis — `Expr::DefaultOp` was missed by R36's FMT-A sweep
+    // and emitted `int r = a\n    ?? b` (bare leading `??` continuation),
+    // which the lexer treats as NEWLINE + INDENT (no dot-carve-out for
+    // `??`) so the parser rejects with `expected expression, found INDENT`
+    // and a second `gg fmt` pass then drops the orphan line (data loss).
+    // Fix routes `DefaultOp` through the shared
+    // `wrap_multiline_expr_in_parens` helper so broken mode emits
+    // `(a\n    ?? b)` (parseable). This corpus entry is the Class 2 axis
+    // extension of the parse+idempotence guard.
+    let long_default_op_src = format!(
+        "int test(Option[int] a):\n    int r = a ?? {}\n    print(r)\n\nint main(): 0\n",
+        // Long integer default expression forces the RHS past 100 cols.
+        (0..40).map(|i| format!("{i}")).collect::<Vec<_>>().join(" + "),
+    );
+    assert_fmt_round_trips("long_default_op", &long_default_op_src);
+
+    // LEFT-nested `??` chain — parse+idempotence path (build+run of the
+    // left-nested shape hits a distinct pre-existing runtime segfault
+    // unrelated to formatting; parse-only coverage lives here).
+    let long_default_op_left_nested_chain = format!(
+        "int test(Option[int] a, Option[int] b):\n    int r = a ?? b ?? {}\n    print(r)\n\nint main(): 0\n",
+        (0..40).map(|i| format!("{i}")).collect::<Vec<_>>().join(" + "),
+    );
+    assert_fmt_round_trips(
+        "long_default_op_left_nested_chain",
+        &long_default_op_left_nested_chain,
+    );
 }
 
 /// Round XXXVI FMT-C: **semantic** fmt round-trip guard. For each
@@ -9183,6 +9212,11 @@ fn fmt_round_trip_semantic() {
         // effective_outer_bp gives closures/if/match/do/block bp 0
         // so they always wrap in postfix/infix embedding.
         ("closure_iife.gg", "25\n10\nhello world"),
+        // Round XXXVIII Track C: `Expr::DefaultOp` (`??`) long-RHS wrap
+        // (gorget-js snag #15 Class 2). R36 missed this arm; before the
+        // fix `gg fmt` emitted `a\n    ?? b` (unparseable). Fix routes
+        // through `wrap_multiline_expr_in_parens`.
+        ("fmt_long_default_op.gg", "42"),
     ];
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -9306,6 +9340,61 @@ void main():
         cmp_fmt.contains("!") && cmp_fmt.contains("!="),
         "postfix mark and `!=` must both survive fmt.\nformatted:\n{cmp_fmt}"
     );
+}
+
+/// Round XXXVIII Track C (gorget-js snag #15 Class 2): `Expr::DefaultOp`
+/// (`??`) with a long RHS was emitted by `gg fmt` as a bare leading-`??`
+/// continuation that the parser rejects with `expected expression, found
+/// INDENT`. Fix routes the arm through `wrap_multiline_expr_in_parens`
+/// so broken mode emits `(a\n    ?? b)`.
+///
+/// This is the graduated live regression fixture for the committed
+/// `tests/fixtures/fmt_long_default_op*.gg` files: format each one, then
+/// `check` the formatted output must succeed. Extends the class beyond
+/// what `fmt_binary_chain_round_trips` alone catches by pinning the
+/// exact user-facing shape from the downstream report
+/// (`env_get(...) ?? throw reference_error(...)`).
+#[test]
+fn fmt_long_binop_continuation_parses() {
+    use gorget::parser::Parser;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures = &[
+        "fmt_long_default_op.gg",
+        "fmt_long_default_op_nested.gg",
+        "fmt_long_default_op_throw_str.gg",
+    ];
+    for fixture in fixtures {
+        let path = manifest_dir.join("tests/fixtures").join(fixture);
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        let formatted = gorget::formatter::format_source_infallible(&source);
+
+        // Parse-cleanly is the primary guard: the pre-fix RED signature
+        // was `expected expression, found INDENT` from a bare leading-`??`
+        // continuation. If a future regression re-drops the paren wrap,
+        // this fires with the exact original signature.
+        let mut parser = Parser::new(&formatted);
+        let _ = parser.parse_module();
+        assert!(
+            parser.errors.is_empty(),
+            "gorget-js snag #15 Class 2 regression on {fixture}: \
+             `gg fmt` output does not re-parse ({} error(s)).\n\
+             === Formatted output ===\n{formatted}\n\
+             === First parse error ===\n{:?}",
+            parser.errors.len(),
+            parser.errors.first(),
+        );
+
+        // Idempotence — a second pass must be byte-identical (the
+        // orphan-line loss surfaced on the second pass).
+        let second = gorget::formatter::format_source_infallible(&formatted);
+        assert_eq!(
+            formatted, second,
+            "Formatter NOT idempotent for {fixture}.\n\
+             === First pass ===\n{formatted}\n=== Second pass ===\n{second}",
+        );
+    }
 }
 
 /// D35 (docs/define-gorget/decisions.md, ratified 2026-07-26): a function

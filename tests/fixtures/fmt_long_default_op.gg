@@ -1,0 +1,30 @@
+# R38 Track C regression fixture (gorget-js snag #15 Class 2):
+# `Expr::DefaultOp` (`??`) with a long RHS was emitted by `gg fmt` as
+# an unparseable leading-`??` continuation:
+#   int value = maybe_value
+#       ?? (throw reference_error("..."))
+# `gg check` on the fmt output failed with:
+#   error: expected expression, found INDENT
+# because the lexer suppresses NEWLINE/INDENT only inside brackets
+# (`src/lexer/mod.rs:22`) or after a leading `.` carve-out
+# (`src/lexer/mod.rs:161`) — bare `??` at line start is NOT valid Gorget.
+#
+# Fix (R38 Track C): route `Expr::DefaultOp` through the shared
+# `wrap_multiline_expr_in_parens` helper so the broken form becomes
+# `(maybe_value\n    ?? throw ...)` which parses.
+#
+# Pre-fix RED: `gg check` on `gg fmt` output failed with
+# `expected expression, found INDENT`. Post-fix: `OK: no semantic errors`
+# AND running the reformatted program prints `42` (semantic preservation).
+String reference_error(String msg):
+    return "ReferenceError: " + msg
+
+int compute(Option[int] maybe_value) throws String:
+    int value = maybe_value ?? throw reference_error("Cannot access uninitialized variable in this scope after a very long message that forces line wrap here")
+    return value
+
+int main():
+    Option[int] v = Some(42)
+    int r = compute(v)! catch (e): -1
+    print(r)
+    return 0
