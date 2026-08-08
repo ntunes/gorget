@@ -1,3 +1,54 @@
+- [2026-08-08] **Round XXXVII close — D27 ROUND A RETRY (formatter emit swap `!`→`^` + Core #10 empty-body chip + Core #4/#6 class guards + doc stragglers). ✅ CLOSED IN COMPLIANCE — fourth non-waivered close in 8 rounds.** Partial scope (Phase 2 bulk sweep DEFERRED due to discovered pre-existing SH stage-2 memory-safety defect; fully filed with durable repro). Unblocks incremental `gg fmt --in-place file.gg` migration; bulk sweep unblocked once A1 diagnosed.
+
+  **Verdict at close, quoted from `scripts/convergence.sh 105 563 2`:**
+
+  **Convergence: known_gaps 105→107 · TODO items 563→559 · net −2** (regen: `scripts/convergence.sh 105 563 2`)
+  - ✓ **CLAUSE (a) PASSES:** filed 2, closed 4 (net −2 ≤ −2) — ratio ≥ 2:1.
+  - ✓ **CLAUSE (c) PASSES:** net −2 < 0.
+  - ⚠ **CLAUSE (b) partial:** the DEFERRED sweep (A2 in handover, not visible to metric) is an own-round follow-up that did not close same-round. Blocker (A1 SH stage-2 double-free) was DISCOVERED at execution time (scout used `--check` not `--apply` per pass-1 output-review Q7). Transparent, not gamed — both handover items are filed with durable repros. Process-fix: future full-corpus fmt scouts MUST use `--apply` in a scratch tree, not `--check`.
+
+  **PROCESS: 3-pass fresh brief-review gauntlet + 2-pass fresh output-review gauntlet, all folds landed.** Brief pass 1 SIGN OFF + Core #6 `!(` closure-shape fold; pass 2 raised 2 blockers (comment/string strip, RED-verify) + 4 flags; pass 3 SIGN OFF + strip-order/fixture-ordering clarifications. Output-review pass 1 raised 2 Task Continuity blockers (missing `known_gaps` for SH stage-2 defect + unfiled Vector-move-and-return); pass 2 SIGN OFF after executor folds (which included discovering the "Vector move-and-return" report was a MISDIAGNOSIS — actual defect is the already-filed print-composite raw-address entry that had been OWING a durable repro since 2026-07-25; R37 delivered that owed repro).
+
+  **Landed (all committed, full battery GREEN):**
+
+  - **R37 executor track (`b8401893b` → `83c8db856` on branch `worktree-agent-a6916c437d407c85b`, merged as `2f...` merge commit)**:
+
+    **Phase 1** (formatter emit swap): `!`→`^` at 13 sites — 7 Rust (`src/formatter/mod.rs` at :1118, :1633, :1647, :1925, :2043, :2108, :2305 — the move-sigil chokepoint `format_ownership_prefix` + 6 direct writes) + 6 SH (`tests/fixtures/self_host_{parser,resolver,typechecker}/format.gg` × 2 sites each; `lexer/format.gg` has no D27 site). 2 new POS fixtures with pre-Phase-1 RED-verify signatures: `d27_fmt_emits_caret.gg` + `fmt_d27_move_sigil_round_trip.gg`.
+
+    **Empty-body Core #10 chip** (discovery-time, Core #8/#10 same-round fix): `format_struct`/`format_enum`/`format_trait` did NOT emit `pass` for empty bodies. `struct Vector[T]: pass` reformatted to `struct Vector[T]:` → parse error → bootstrap break. Fixed at 3 sibling sites + `fmt_empty_body_pass.gg` fixture. Would-be future work: `emit_body_or_pass` chokepoint (Core #4-style helper) if the fossil ever needs retiring.
+
+    **Phase 3** (Core #4 + Core #6 class guards):
+    - `tests/lints.rs::fmt_move_sigil_emit_arm_count` — arm-count guard, EXPECTED_RUST=7 + EXPECTED_SH=6 (Core #4 chokepoint).
+    - `tests/lints.rs::fmt_no_new_move_bang_in_migrated_corpora` — shrink-only ratchet, CEILING=861 pre-sweep. Regex `(^|[^!])!([A-Za-z_]|\()` + per-line string-then-comment pre-strip (pass-2 measured 262/1588 raw-regex hits are in comments — false-positive class). Positive-controls: `!x` in code (RED) + `# non-move !x mention` in comment (GREEN). Two supporting unit tests (`fmt_bang_move_regex_matches` + `fmt_bang_move_strip_ignores_strings_and_comments`).
+
+    **Phase 4** (doc stragglers): 8 hits swept in `docs/book/{04,07,12,appendix-*}.md` + `docs/devbook/{10,11,23}-*.md`. Kept 3 carve-outs: Rust macro `assert!(!fixtures.is_empty())` at `docs/devbook/00-how-to-read.md:194`; C-code prose example at `docs/devbook/11-copy-on-write.md:965`; historical ledger entries at `docs/define-gorget/decisions.md`.
+
+    **Post-review fold (`83c8db856`)**: durable `known_gaps` repros for A1 (Shape B `#[ignore]`d wrapper `sh_bootstrap_stage2_double_free_after_fmt_sweep`) + fulfilled the OWED durable repro on print-composite raw-address (HIGH TODO:144 entry, owing since 2026-07-25). TODO handover split (A1 SH-lowerer defect + A2 deferred sweep, dependency A1→A2→C). Breadcrumb-shaped header rephrased to pure REMAINING work.
+
+  - **Stale-scan closures (`8cdadfb0b`)** — 4 verified ledger closures:
+    - `.str()/.as_str()` removal (R31 landed; comment at builtins.rs:849 documents removal).
+    - OPAQUE-HANDLE RECEIVER-ABI CLASS (R32 Track C landed at exprs/methods.rs; both cited `known_gaps` graduated to top-level).
+    - SECURITY SUITE gate integration (in CLAUDE.md:335 + every R32-R36 close ran it).
+    - BOOTSTRAP_MAX_CONVERGENCE_STAGE N=5→2 (R34 tightened; tests/integration.rs:22260).
+
+  - **Parity ratchet tighten (`b437e338c`)** — RUNTIME_DIFF_MATCH_FLOOR 1367→1370, GGDEF_ADJUDICATED_FLOOR 419→421.
+
+  **Battery — FULL, all green:**
+  - `cargo build --release` clean · `cargo test --lib --release` **1139/0/2i** · `cargo test --test lints --release` **113/0** (+4 from R36 baseline of 109 — `fmt_move_sigil_emit_arm_count` + `fmt_no_new_move_bang_in_migrated_corpora` + 2 supporting unit tests) · `cargo test -p ggdef --release --lib` **173/0** · `cargo test --test spec_conformance --release` **3/3** (~162s) · `cargo test --test security --release` **151/0/21i** · `cargo test --test integration --release fmt_ d27_` **17/0/1i** (existing R36 + 3 new fmt + 3 d27_)
+  - Full C integration sweep: **2197/0/84i** (3213s ≈ 54min)
+  - Full LLVM integration sweep `--release`: **2197/0/84i** (2324s ≈ 39min)
+  - `self_host_bootstrap_fixed_point --release`: **1/0** at merged head, **675.60s** at stage=2 (vs R36 686s — no regression, within noise)
+
+  **Parity re-measured:** MATCH **1370/1512 = 90.6%** (+3 vs R36's 1367 — formatter's emit swap made 3 more fixtures deterministic MATCH; locked in via `RUNTIME_DIFF_MATCH_FLOOR` 1367→1370). ADJ-MATCH **421** (+2 vs R36's 419 — locked via `GGDEF_ADJUDICATED_FLOOR` 419→421). BOTH-WRONG **2** (held at `drop_collection_custom_elem_leak` + `drop_struct_collection_fields`).
+
+  **Gauntlet stats:** 1 scout (5 reservations named; recommended shape (c) 2-phase single-track; brief-premise defect surfaced later — scout used `--check` not `--apply`, missed the bulk-sweep tripwires) + 3-pass brief-review gauntlet (Core #6 `!(` fold pass 1; 2 blockers + 4 flags pass 2; strip-order/fixture-ordering clarifications pass 3) + executor Phase-1 through Phase-4 (all shipped + Core #10 empty-body chip live) + 2-pass output-review (2 Task Continuity blockers pass 1; SIGN OFF with independent verify-the-verifier pass 2) + orchestrator stale-scan (4 verified closures).
+
+  **PROCESS LESSONS this round:**
+  1. **Scout `--check` is not `--apply`.** Pass-1 output-review Q7 caught the brief-premise defect: the scout used `scripts/fmt_sweep_smoke.sh --check --skip-bootstrap` to preview the sweep, which counts diffs but never reformats-and-recompiles. The empty-body Core #10 defect and SH stage-2 double-free BOTH manifest only under `--apply`. Standing rule: full-corpus fmt scouts MUST use `--apply` in a scratch tree.
+  2. **Partial-scope landing with durable repro for the blocker IS a legitimate close.** Not everything in the round's intended scope shipped, but everything that DID ship is complete + guarded + tested + doc-covered, AND the deferred piece has a durable procedural repro (`#[ignore]`d wrapper that fails RED when un-ignored). Metric passes at 4:2 ratio; clause (b) has one deferred item filed transparently.
+  3. **Discovery-time misdiagnosis is why output-review verifies claims, not just diffs.** The "Vector[T] move-and-return garbage" report was WRONG — actual defect was already-filed `print(<composite>)` raw-address entry. Output-review pass 2 independently rebuilt both shapes and confirmed the misdiagnosis. Fulfilled the owed durable repro that had been outstanding since 2026-07-25.
+  4. **Convergence-first process fix (owner 2026-08-06) worked as designed for the 4th round in a row.** Ran BEFORE the ~90-min sweeps; caught net +2 immediately post-integration; stale-scan surfaced 4 closures in ~45min; convergence flipped to −2 BEFORE burning sweep time. Without the reorder, we'd have swept, THEN discovered convergence red, THEN stale-scanned, THEN re-swept.
+
 - [2026-08-08] **Round XXXVI close — FORMATTER DEFECT BATCH (FMT-A + FMT-B + FMT-C). ✅ CLOSED IN COMPLIANCE — third non-waivered close in 7 rounds.** First POST-Wave-plan round; unblocks D27 Round A retry that R35 C3 couldn't ship.
 
   **Verdict at close, quoted from `scripts/convergence.sh 106 565 0`:**

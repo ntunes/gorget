@@ -2,11 +2,9 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**✅ ROUND XXXVI CLOSED 2026-08-08** — theme FORMATTER DEFECT BATCH (FMT-A precedence chokepoint + FMT-B indent reflow + FMT-C semantic round-trip guard). **CLOSED IN COMPLIANCE — third non-waivered close in 7 rounds** (R34, R35, R36 all clean). First POST-Wave-plan round; UNBLOCKS D27 Round A retry.
+**✅ ROUND XXXVII CLOSED 2026-08-08** — theme D27 ROUND A RETRY (formatter emit swap `!`→`^` + Core #10 empty-body chip + Core #4/#6 class guards + doc stragglers). **CLOSED IN COMPLIANCE — fourth non-waivered close in 8 rounds** (R34, R35, R36, R37 all clean). Partial scope: Phase 2 bulk sweep DEFERRED due to discovered pre-existing SH stage-2 memory-safety defect (fully filed with durable repro at `known_gaps/sh_bootstrap_stage2_double_free_after_fmt_canonicalization.gg` + `#[ignore]`d wrapper).
 
-**⚠ 9-PASS GAUNTLET** (owner-precedent for accept/reject-surface class; 14 findings folded across 8 fold-cycles). Arm enumeration grew 5 → 13 → **20 arm-classes across 26 helper call-sites at execution**. Each successive pass genuinely surfaced Core #4 sibling-drift misses. Executor added 4 more discovery-time bugs (chain-flattener, IIFE, at_line_start, Await bp).
-
-**⚠ WAVE PLAN COMPLETE (in-repo).** C1 (R33) → C2 (R34) → C3 (R35). D27 Round A retry now UNBLOCKED (R36 fixed both blocker defects + added semantic-round-trip guard + sweep-smoke script). Out-of-repo migration (gorget-js, arena, gglox, gorget-conformance) still deferred.
+**⚠ WAVE PLAN — post-in-repo phase.** R37 shipped the D27 emit swap tool chain; the bulk in-repo sweep is deferred pending A1 diagnosis. Out-of-repo migration (gorget-js, arena, gglox, gorget-conformance) still deferred but now the migration TOOL is available: `gg fmt --in-place file.gg` per-file (small-N empirically safe; the SH-lowerer trip is at scale).
 
 **▶ NEXT ROUND CANDIDATES:**
 
@@ -31,11 +29,17 @@
   - **Method-targ recorder (f-string).** Diagnosis wrong TWICE. `EFString` is genuinely absent from both walkers, but the causal chain is BROKEN: the undefined symbol is the iterator's own type, and `.iter()` fails `infer.gg`'s terminal/closure gate, so no targ entry is produced either way. The real hazard is `expr_link_types`, which is NOT in the snapshot/restore set. Filed in full on its ledger entry.
   - **Typed-`ret` / declare-set work.** Diagnosis refuted twice; the externs ARE already registered. The real defect is the strip→`_ws` **rename** changing callee identity without re-registering, plus **13 bare `Inst::CallExtern` sites in `src/lir/lower/drops.rs` with zero `ensure_extern` calls**. ⚠ **MEASURED: LLVM does NOT catch a declare/call signature mismatch** — `llvm-as`, `opt -passes=verify` and `llc` all exit 0 on a deliberate mismatch, so that class is a silent miscompile with no gate. Any fix here needs an emitted-`.ll` declare-set diff as its acceptance gate.
 
-**⚠ ROUND XXXVI PROCESS LESSONS (fresh, worth the read):**
+**⚠ ROUND XXXVII PROCESS LESSONS (fresh, worth the read):**
+  1. **Scout `--check` is not `--apply`.** R37's scout used `scripts/fmt_sweep_smoke.sh --check --skip-bootstrap` to preview the sweep, counting diffs but never reformatting-and-recompiling. Both the empty-body Core #10 defect AND the SH stage-2 double-free manifest ONLY under `--apply`. Standing rule: full-corpus fmt scouts MUST use `--apply` in a scratch tree, not `--check`.
+  2. **Partial-scope landing with durable repro for the blocker IS a legitimate close.** R37 shipped everything it could + Core #10 chip + all guards + doc write-through, while the deferred Phase 2 sweep has a procedural durable repro (`#[ignore]`d wrapper that fails RED when un-ignored). Not "hidden defer"; fully filed. Metric passes 4:2 ratio; clause (b) has one transparent deferred item.
+  3. **Discovery-time misdiagnosis is why output-review verifies claims, not just diffs.** Executor's "Vector[T] move-and-return garbage" report was WRONG; actual defect was already-filed `print(<composite>)` raw-address entry OWING a durable repro since 2026-07-25. Output-review pass 2 independently rebuilt both shapes to confirm the misdiagnosis. Fulfilled the owed repro (bonus close).
+  4. **Convergence-first process fix (owner 2026-08-06) worked for the 4th round in a row.** Ran BEFORE the ~90-min sweeps; caught net +2 immediately post-integration; stale-scan surfaced 4 closures in ~45min; convergence flipped to −2 BEFORE burning sweep time.
+
+**⚠ ROUND XXXVI PROCESS LESSONS (still valid):**
   1. **9-pass gauntlet is the accept/reject-surface norm.** CLAUDE.md predicts ~9 for this class; R36 hit exactly. Arm enumeration grew 5 → 13 → 20 across the 9 passes because each Pratt cross-check surfaced sibling-drift misses. This IS convergence for wide-surface class fixes — not gauntlet failure.
-  2. **Discovery-time defects during execution are Core #8 same-round obligations.** Executor found 4 more bugs while wiring the fix (Pow chain-flattener, IIFE, at_line_start, Await bp). Fold inline; don't file as follow-ups. If any of these had been filed instead of fixed, R36 would be shipping known defects.
-  3. **Formatter fixes have net-positive parity impact.** MATCH +8, ADJ +6 vs pre-round. Deterministic emission means some fixtures whose Rust+SH lanes agreed by accident now agree by construction. Fmt fixes are a rare double-win.
-  4. **`scripts/fmt_sweep_smoke.sh` is the missing safety net for future fmt rounds.** R35 broke bootstrap because no gate ran `gg fmt` across the corpus + verified bootstrap. FMT-C's addition of this script is the Core #6 guard that would have caught R35 BEFORE it broke bootstrap. Standing pre-fmt-round checklist item now.
+  2. **Discovery-time defects during execution are Core #8 same-round obligations.** Executor found 4 more bugs while wiring the fix (Pow chain-flattener, IIFE, at_line_start, Await bp). Fold inline; don't file as follow-ups.
+  3. **Formatter fixes have net-positive parity impact.** MATCH +8, ADJ +6 vs pre-round (R36); R37 added another +3/+2. Deterministic emission means some fixtures whose Rust+SH lanes agreed by accident now agree by construction. Fmt fixes are a rare double-win.
+  4. **`scripts/fmt_sweep_smoke.sh` is the safety net for future fmt rounds.** BUT use `--apply` for full-corpus scouts, not `--check` (R37 lesson).
 
 **⚠ ROUND XXXV PROCESS LESSONS (still valid):**
   1. **Convergence-first + owner-directed stale-scan combined to prevent a 5th waiver.** Convergence-first (R34 process fix, R35 first use) caught the 0:3 pre-audit state before ~90 min sweep waste. Stale-scan (60 min budget) surfaced 6 real closes from ~569 items across R18/R29/R30/R32 fixes never retired from the ledger. **Stale-scan is a systematic tool worth running at every round-close where convergence needs a boost** — every long-running project accretes un-retired filings that a scan can convert to real closes.
