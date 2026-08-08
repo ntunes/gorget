@@ -11072,6 +11072,44 @@ fn fmt_idempotent() {
     }
 }
 
+/// R36 FMT-B regression pin — the `fmt_multiline_arg_indent` fixture's
+/// output-review nit (reviewer 2026-08-08): fmt_idempotent + bootstrap
+/// were the only guards for the graduated fixture, and on the isolated
+/// repro idempotence is green pre-fix AND post-fix (the parser is more
+/// forgiving than the eye). Bootstrap catches it only at the driver.gg-
+/// scale manifestation. Add a targeted RED-capable assertion: after
+/// `gg fmt`, the `+ backend` continuation must NOT land at column 4
+/// (which was the pre-fix indent-0 sub-Emitter bug). Column 8+ is the
+/// FMT-B fix — the sub-Emitter is now seeded from caller.
+#[test]
+fn fmt_multiline_arg_indent_pins_continuation_column() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/fmt_multiline_arg_indent.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_multiline_arg_indent.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // The reformatted output must NOT contain a `+ backend`-shaped
+    // continuation at column 4 (4-space indent = the pre-FMT-B bug where
+    // element_to_string's fresh sub-Emitter at indent=0 emitted internal
+    // newlines at level-1 indent regardless of caller context).
+    for line in formatted.lines() {
+        let leading_spaces = line.chars().take_while(|c| *c == ' ').count();
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("+ backend")
+            || trimmed.starts_with("+ \"")
+        {
+            assert!(
+                leading_spaces >= 8,
+                "FMT-B regression: continuation line has {} leading spaces \
+                 (must be >= 8; pre-fix was 4). Line: {:?}",
+                leading_spaces,
+                line
+            );
+        }
+    }
+}
+
 // ── Examples (programs under examples/) ─────────────────────────
 
 /// Build and run an example, asserting its stdout matches `expected`.
