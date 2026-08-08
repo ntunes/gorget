@@ -128,7 +128,7 @@ For a single file, just write `file.gg` and run it. For larger projects:
 gg new myproject
 ```
 
-This creates a `gorget.toml` manifest. Add dependencies with:
+This creates a `manifest.toml` manifest. Add dependencies with:
 
 ```bash
 gg add somelib --git https://github.com/user/somelib.git

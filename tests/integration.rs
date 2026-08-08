@@ -3342,9 +3342,9 @@ fn modules_import_shadow() {
     run_gg_dir("modules_import_shadow", "main.gg", "ok\n42\ndone");
 }
 
-/// known_gaps (filed 2026-08-08): a MALFORMED `gorget.toml` is silently
+/// known_gaps (filed 2026-08-08): a MALFORMED `manifest.toml` is silently
 /// dropped instead of reported. `Manifest::from_path` returns a perfectly
-/// good `ManifestError::Parse` ("invalid gorget.toml at <path>"), but
+/// good `ManifestError::Parse` ("invalid manifest at <path>"), but
 /// `src/main.rs:174` discards it with `if let Ok(manifest)`, so dependency
 /// resolution is skipped entirely and the user gets a misleading downstream
 /// error about a file that was never supposed to exist.
@@ -3362,7 +3362,7 @@ fn modules_import_shadow() {
 ///
 /// Un-ignore when the manifest load path propagates `ManifestError`.
 #[test]
-#[ignore = "known gap: malformed gorget.toml is silently dropped instead of reported"]
+#[ignore = "known gap: malformed manifest.toml is silently dropped instead of reported"]
 fn manifest_malformed_is_reported() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let main_path = manifest_dir
@@ -3377,8 +3377,8 @@ fn manifest_malformed_is_reported() {
     let combined = format!("{stderr}{stdout}");
 
     assert!(
-        combined.contains("invalid gorget.toml"),
-        "a malformed gorget.toml must be reported as a manifest parse error, \
+        combined.contains("invalid manifest"),
+        "a malformed manifest.toml must be reported as a manifest parse error, \
          not swallowed into a misleading missing-file diagnostic; got:\n{combined}",
     );
     assert!(
@@ -3388,7 +3388,7 @@ fn manifest_malformed_is_reported() {
     );
     assert!(
         !output.status.success(),
-        "a malformed gorget.toml must fail the build",
+        "a malformed manifest.toml must fail the build",
     );
 }
 

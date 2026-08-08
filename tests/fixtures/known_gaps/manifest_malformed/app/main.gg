@@ -1,11 +1,11 @@
-# known_gaps repro: a MALFORMED `gorget.toml` is silently dropped.
+# known_gaps repro: a MALFORMED `manifest.toml` is silently dropped.
 #
 # This program is well-formed and would build if the sibling `greeter`
-# package resolved. It does not, because `app/gorget.toml` fails to parse
+# package resolved. It does not, because `app/manifest.toml` fails to parse
 # and `src/main.rs:174` swallows the error with `if let Ok(manifest)`,
 # skipping dependency resolution entirely.
 #
-# INTENDED: build fails with `invalid gorget.toml at <path>`.
+# INTENDED: build fails with `invalid manifest at <path>`.
 # ACTUAL:   build fails with `cannot read '<app>/greeter.gg': No such file`.
 
 from greeter import hello

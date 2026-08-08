@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 // ══════════════════════════════════════════════════════════════
-// Manifest (gorget.toml)
+// Manifest (manifest.toml; legacy `gorget.toml` still accepted — D44)
 // ══════════════════════════════════════════════════════════════
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,7 +53,7 @@ impl fmt::Display for ManifestError {
                 write!(f, "cannot read '{}': {}", path.display(), error)
             }
             ManifestError::Parse { path, error } => {
-                write!(f, "invalid gorget.toml at '{}': {}", path.display(), error)
+                write!(f, "invalid manifest at '{}': {}", path.display(), error)
             }
             ManifestError::Serialize { error } => {
                 write!(f, "failed to serialize manifest: {error}")
@@ -63,7 +63,7 @@ impl fmt::Display for ManifestError {
 }
 
 impl Manifest {
-    /// Read and parse a `gorget.toml` file.
+    /// Read and parse a manifest file.
     pub fn from_path(path: &Path) -> Result<Self, ManifestError> {
         let content = fs::read_to_string(path).map_err(|e| ManifestError::Io {
             path: path.to_path_buf(),
@@ -99,8 +99,62 @@ impl Manifest {
     }
 }
 
-/// Walk up from `start` looking for a `gorget.toml` file. Returns the directory
-/// containing the manifest, or `None` if none is found.
+/// The manifest filename (D44). Every site that needs to name the manifest reads
+/// this constant or calls [`manifest_path_in`] — never spells the string inline,
+/// so the name lives at one source of truth.
+pub const MANIFEST_NAME: &str = "manifest.toml";
+
+/// The pre-D44 manifest filename, still accepted with a deprecation warning.
+///
+/// Kept only so existing checkouts (including the dogfood apps in sibling
+/// worktrees) do not break silently on the rename — and "silently" is the
+/// operative risk: a manifest that fails to load is currently DISCARDED by
+/// `src/main.rs`'s `if let Ok(manifest)`, surfacing as a misleading
+/// "cannot read '<dir>/<dep>.gg'" rather than anything about the manifest.
+/// Removal is filed in `TODO.md`; delete this constant and
+/// [`legacy_manifest_path_in`] together with the warning at its call site.
+pub const LEGACY_MANIFEST_NAME: &str = "gorget.toml";
+
+/// The canonical manifest path inside `dir` — whether or not it exists.
+pub fn manifest_path_in(dir: &Path) -> PathBuf {
+    dir.join(MANIFEST_NAME)
+}
+
+/// The legacy manifest path inside `dir` — whether or not it exists.
+pub fn legacy_manifest_path_in(dir: &Path) -> PathBuf {
+    dir.join(LEGACY_MANIFEST_NAME)
+}
+
+/// Locate an existing manifest in `dir`, preferring the canonical name.
+///
+/// Returns `(path, is_legacy)`. When both names are present the canonical one
+/// wins and the legacy file is ignored — a project mid-migration gets the new
+/// file's contents, not a merge of the two.
+pub fn find_manifest_in(dir: &Path) -> Option<(PathBuf, bool)> {
+    let canonical = manifest_path_in(dir);
+    if canonical.exists() {
+        return Some((canonical, false));
+    }
+    let legacy = legacy_manifest_path_in(dir);
+    if legacy.exists() {
+        return Some((legacy, true));
+    }
+    None
+}
+
+/// Emit the one-time deprecation notice for a legacy-named manifest.
+pub fn warn_legacy_manifest(path: &Path) {
+    eprintln!(
+        "warning: `{LEGACY_MANIFEST_NAME}` is deprecated — rename it to `{MANIFEST_NAME}` \
+         (found at '{}')",
+        path.display()
+    );
+}
+
+/// Walk up from `start` looking for a manifest. Returns the directory containing
+/// it, or `None` if none is found.
+///
+/// Accepts either filename so the rename does not strand existing checkouts.
 pub fn find_project_root(start: &Path) -> Option<PathBuf> {
     let mut dir = if start.is_file() {
         start.parent()?.to_path_buf()
@@ -108,7 +162,7 @@ pub fn find_project_root(start: &Path) -> Option<PathBuf> {
         start.to_path_buf()
     };
     loop {
-        if dir.join("gorget.toml").exists() {
+        if find_manifest_in(&dir).is_some() {
             return Some(dir);
         }
         if !dir.pop() {

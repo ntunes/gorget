@@ -26,7 +26,7 @@ impl fmt::Display for ResolveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ResolveError::ManifestNotFound { path } => {
-                write!(f, "gorget.toml not found at '{}'", path.display())
+                write!(f, "manifest not found at '{}'", path.display())
             }
             ResolveError::ManifestError(e) => write!(f, "{e}"),
             ResolveError::LockfileError(e) => write!(f, "{e}"),
@@ -166,7 +166,9 @@ fn resolve_deps(
                 })?;
 
                 // Read the dep's manifest for its version
-                let dep_manifest_path = canonical.join("gorget.toml");
+                let dep_manifest_path = crate::manifest::find_manifest_in(&canonical)
+                    .map(|(p, _)| p)
+                    .unwrap_or_else(|| crate::manifest::manifest_path_in(&canonical));
                 let dep_version = if dep_manifest_path.exists() {
                     let dep_manifest = Manifest::from_path(&dep_manifest_path)?;
                     dep_manifest.package.version
@@ -188,8 +190,8 @@ fn resolve_deps(
                 let dep_dir = fetch_git_dep(name, git, &commit, cache)?;
 
                 // Read the dep's manifest for its version
-                let dep_manifest_path = dep_dir.join("gorget.toml");
-                let dep_version = if dep_manifest_path.exists() {
+                let dep_manifest = crate::manifest::find_manifest_in(&dep_dir);
+                let dep_version = if let Some((dep_manifest_path, _)) = dep_manifest {
                     let dep_manifest = Manifest::from_path(&dep_manifest_path)?;
                     dep_manifest.package.version
                 } else {
@@ -211,8 +213,7 @@ fn resolve_deps(
         }
 
         // Read transitive dependencies
-        let dep_manifest_path = dep_dir.join("gorget.toml");
-        let transitive_deps = if dep_manifest_path.exists() {
+        let transitive_deps = if let Some((dep_manifest_path, _)) = crate::manifest::find_manifest_in(&dep_dir) {
             let dep_manifest = Manifest::from_path(&dep_manifest_path)?;
             dep_manifest.dependencies
         } else {
@@ -316,7 +317,7 @@ fn fetch_git_dep(
     let dep_dir = cache.join("git").join(&url_hash).join(commit);
 
     // Already cached?
-    if dep_dir.exists() && dep_dir.join("gorget.toml").exists() {
+    if dep_dir.exists() && crate::manifest::find_manifest_in(&dep_dir).is_some() {
         return Ok(dep_dir);
     }
 

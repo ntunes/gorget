@@ -164,13 +164,16 @@ fn load_imports(filename: &str, source: &str, module: gorget::parser::ast::Modul
 }
 
 /// Resolve package dependencies for a source file, returning dep_paths.
-/// Looks for gorget.toml by walking up from the source file's directory.
+/// Looks for the manifest by walking up from the source file's directory.
 fn resolve_deps_for_file(filename: &str) -> HashMap<String, PathBuf> {
     let input_path = Path::new(filename);
     let start_dir = input_path.parent().unwrap_or(Path::new("."));
 
     if let Some(project_root) = manifest::find_project_root(start_dir) {
-        let manifest_path = project_root.join("gorget.toml");
+        let manifest_path = match manifest::find_manifest_in(&project_root) {
+            Some((p, is_legacy)) => { if is_legacy { manifest::warn_legacy_manifest(&p); } p }
+            None => return HashMap::new(),
+        };
         if let Ok(manifest) = Manifest::from_path(&manifest_path) {
             if !manifest.dependencies.is_empty() {
                 match resolver::resolve(&project_root, &manifest) {
@@ -2259,9 +2262,9 @@ fn cmd_init() {
         process::exit(1);
     });
 
-    let manifest_path = cwd.join("gorget.toml");
-    if manifest_path.exists() {
-        eprintln!("gorget.toml already exists");
+    let manifest_path = manifest::manifest_path_in(&cwd);
+    if let Some((existing, _)) = manifest::find_manifest_in(&cwd) {
+        eprintln!("{} already exists", existing.display());
         process::exit(1);
     }
 
@@ -2376,9 +2379,15 @@ fn cmd_add(args: &[String]) {
         process::exit(1);
     });
 
-    let manifest_path = cwd.join("gorget.toml");
+    let manifest_path = match manifest::find_manifest_in(&cwd) {
+        Some((p, is_legacy)) => { if is_legacy { manifest::warn_legacy_manifest(&p); } p }
+        None => {
+            eprintln!("no {} found in '{}'", manifest::MANIFEST_NAME, cwd.display());
+            process::exit(1);
+        }
+    };
     let mut manifest = Manifest::from_path(&manifest_path).unwrap_or_else(|e| {
-        eprintln!("Error reading gorget.toml: {e}");
+        eprintln!("Error reading manifest: {e}");
         process::exit(1);
     });
 
@@ -2405,9 +2414,15 @@ fn cmd_remove(name: &str) {
         process::exit(1);
     });
 
-    let manifest_path = cwd.join("gorget.toml");
+    let manifest_path = match manifest::find_manifest_in(&cwd) {
+        Some((p, is_legacy)) => { if is_legacy { manifest::warn_legacy_manifest(&p); } p }
+        None => {
+            eprintln!("no {} found in '{}'", manifest::MANIFEST_NAME, cwd.display());
+            process::exit(1);
+        }
+    };
     let mut manifest = Manifest::from_path(&manifest_path).unwrap_or_else(|e| {
-        eprintln!("Error reading gorget.toml: {e}");
+        eprintln!("Error reading manifest: {e}");
         process::exit(1);
     });
 

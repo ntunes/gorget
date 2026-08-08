@@ -3117,7 +3117,7 @@ void debug_log(String msg):
 
 ## 34. Build System & Package Management (`gg`) in Detail
 
-### gorget.toml
+### manifest.toml
 ```toml
 [package]
 name = "my_project"
@@ -3134,7 +3134,7 @@ Dependencies are sourced from a local path or a Git URL; a `gorget.lock` lockfil
 ### Project Layout
 ```
 my_project/
-  gorget.toml               # manifest
+  manifest.toml               # manifest
   gorget.lock              # lockfile (auto-generated, committed to git)
   src/
     main.gg                # binary entry point
