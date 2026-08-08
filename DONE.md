@@ -1,3 +1,50 @@
+- [2026-08-08] **Round XXXVI close — FORMATTER DEFECT BATCH (FMT-A + FMT-B + FMT-C). ✅ CLOSED IN COMPLIANCE — third non-waivered close in 7 rounds.** First POST-Wave-plan round; unblocks D27 Round A retry that R35 C3 couldn't ship.
+
+  **Verdict at close, quoted from `scripts/convergence.sh 106 565 0`:**
+
+  **Convergence: known_gaps 106→105 · TODO items 565→563 · net −3** (regen: `scripts/convergence.sh 106 565 0`)
+  - ✓ **CLAUSE (a) PASSES:** filed 0, closed 3 (net −3 ≤ −0) — ratio ≥ 2:1.
+  - ✓ **CLAUSE (c) PASSES:** net −3 < 0.
+  - ✓ **CLAUSE (b) satisfied:** zero own-round follow-ups filed (executor discipline held).
+
+  **PROCESS: 9-pass brief-review gauntlet (owner-precedent for accept/reject-surface class), 14 findings folded across 8 fold-cycles.** Arm enumeration grew from 5 initial arm-classes → ~13 in brief → 20 arm-classes across 26 helper call-sites at execution. Each successive Pratt cross-check surfaced new sibling-drift misses (Is, MetaOpInfix, DefaultOp, postfix-receiver quartet, Propagate, Spawn/SpawnBlocking, Rethrow bare, Range end-cell, Pow left-nest). Gauntlet CONVERGED at pass 9 — final Pratt sweep clean.
+
+  **Landed (all committed, full battery GREEN):**
+
+  - **R36 executor track (`bcedf9ff1` — one atomic commit; `06fa530de` orchestrator fold for output-review nit)**:
+  
+    **FMT-A** (Core #4 chokepoint, Core #8 silent-miscompile fix): three precedence helpers in `src/formatter/mod.rs` mirror the parser's Pratt table + are wired into 26 operand-render sites across 20 arm classes. Fixes silent miscompiles like `(a+b)/2` → `a+b/2` (paren drops, `/` binds tighter than `+`, output 5→8). Also fixed 4 discovery-time bugs: Pow left-nest chain-flattener, IIFE closure-as-postfix-receiver, FMT-B `at_line_start=false` (brief only mentioned indent seed), Await effective-bp mismatch (formatter renders postfix bp 35 not parser prefix bp 2).
+    
+    **FMT-B** (Prettier halfway-house pragmatic fix, ~25 LOC): `element_to_string_at(base_indent, at_line_start=false)` seeds sub-Emitter from caller — previously sub-Emitter reset to `indent=0` and outer `write_preformatted` splatted verbatim, so internal newlines re-emerged at column 4 instead of caller's column. Broke bootstrap on `driver.gg:833-838` in R35. Now fixed.
+    
+    **FMT-C** (Core #6 guards — the missing gate R35 needed):
+    - `tests/integration.rs::fmt_round_trip_semantic` — new test (fmt → build → run × 2 → compare stdout) against 8 seed fixtures. Catches FMT-A-class silent miscompiles that existing `fmt_binary_chain_round_trips` misses (that guard checks parse+idempotence only; both malformed and correct forms parse cleanly and are idempotent — the silent-arithmetic-drift falls right through).
+    - `tests/lints.rs::fmt_precedence_check_arm_count` — source-scan guard pinning the 26 helper call-sites (Core #4 sibling-drift protection).
+    - `scripts/fmt_sweep_smoke.sh` — manual pre-D27-A-retry gate: sweeps `gg fmt --in-place` over the 8 in-repo corpora + asserts bootstrap survives. Exactly the gate R35's failure exposed the need for. Post-round test: 2845 files touched, 1884 would change (audit confirmed legitimate).
+    - `fmt_multiline_arg_indent_pins_continuation_column` — orchestrator-added post-output-review to close a Core #12 nit (fixture was green-on-arrival for `fmt_idempotent` since parser is more forgiving than the eye; this test asserts continuation lines have ≥8 leading spaces).
+
+    D26 `d26_map_binop_arm_count_ratchet` bumped 7→14 (regex counts fallible-arm MATCHES; new `binary_op_left_bp` fn adds 7 matches — no class-shrink hidden).
+
+    8 new POS fixtures + 1 graduated (`fmt_multiline_arg_indent.gg` from `known_gaps/`) — each with per-fixture RED-verify signatures captured in headers pre-fix.
+
+  **Battery — FULL, all green:**
+  - `cargo build --release` clean · `cargo test --lib --release` **1139/0/2i** · `cargo test --test lints --release` **109/0** (+1 new: `fmt_precedence_check_arm_count`) · `cargo test -p ggdef --release --lib` **173/0** · `cargo test --test spec_conformance --release` **3/3** (~160s) · `cargo test --test integration --release fmt_` **10/0** (existing 7 + new `fmt_round_trip_semantic` + `fmt_multiline_arg_indent_pins_continuation_column` + `fmt_idempotent`)
+  - Full C integration sweep: **2194/0/82i** (3214s ≈ 54min)
+  - Full LLVM integration sweep `--release`: **2194/0/82i** (2333s ≈ 39min)
+  - `self_host_bootstrap_fixed_point --release`: **1/0** at merged head, **686.12s** at stage=2
+
+  **Parity re-measured:** MATCH **1367/1509 = 90.6%** (+8 vs R35's 1359 — FMT-A's precedence fix made some fixtures newly deterministic MATCH; locked in via `RUNTIME_DIFF_MATCH_FLOOR` 1359→1367). ADJ-MATCH **419** (+6 vs R35's 413 — same driver; locked in via `GGDEF_ADJUDICATED_FLOOR` 413→419). BOTH-WRONG **2** (held). non-MATCH **142** (unchanged at R34 ceiling).
+
+  **Gauntlet stats:** 1 scout (both defects reproduce; shared-helper hypothesis wrong; recommend 3 parallel tracks; convergence ≤ −2 projected) + 9-pass brief-review gauntlet (owner-precedent; 14 findings folded — reservations named later ones didn't see because arm enumeration grew progressively) + executor 1-shot (all 3 tracks landed in one atomic commit; 4 discovery-time bugs fixed inline) + output-review (SIGN OFF with one non-blocking Core #12 nit) + orchestrator merge-time fold (added the RED-capable assertion for the graduated fixture).
+
+  **PROCESS LESSONS this round:**
+  1. **9-pass gauntlet is the accept/reject-surface norm, not exceptional.** CLAUDE.md predicts ~9 for this class; hit exactly. Each successive pass genuinely surfaced a real Core #4 sibling-drift miss (Is arm → MetaOpInfix → DefaultOp misclassified as safe → 7 postfix-receiver arms → helper signature bug → Propagate mis-grouped → Spawn/SpawnBlocking → Rethrow bare-form → Range end-cell missed → Pow left-nest). This is what "convergence" means for wide-surface class fixes.
+  2. **Discovery-time defects are BUILD-TIME confirmation of gauntlet scope.** Executor found 4 more bugs during work (chain-flattener, IIFE, at_line_start, Await bp). These wouldn't have shown up in review because they only manifest when the fix actually runs the sweep. Fold them inline (Core #8 same-round-fix); don't file as follow-ups.
+  3. **Formatter fixes have net-positive parity impact.** MATCH +8, ADJ +6 vs pre-round. Deterministic paren-emission means some fixtures whose Rust+SH lanes agreed by accident now agree by construction.
+  4. **The `scripts/fmt_sweep_smoke.sh` gate is the missing safety net.** R35 broke bootstrap because no gate ran `gg fmt` across the corpus + verified bootstrap. FMT-C's addition of this script (manual pre-D27-A-retry gate) is the Core #6 guard that would have caught R35's failure BEFORE it broke bootstrap. Should probably become part of the "before any fmt-affecting round" standing checklist.
+
+  **Follow-ups filed this round:** 0 (executor discipline held; all 4 discovery-time bugs folded inline). D27 Round A retry is now UNBLOCKED.
+
 - [2026-08-08] **Round XXXV close — C3 = WAVE-PLAN FINAL (D27 SIGIL MIGRATION SPLIT). ✅ CLOSED IN COMPLIANCE — second non-waivered close in 6 rounds.** Wave-plan step: C1 (LANDED R33) → C2 (LANDED R34) → **C3 (THIS ROUND, split-scope)**. The originally-ratified composed sweep (D27+D22+D28 in one fmt pass) was found unworkable at scout: D22 not landed (parser lacks colon-slice), D28 fully done in R33 (no fmt work). Owner ruling (2026-08-07): split — land D27 Round A now, D22 as separate future round.
 
   **Verdict at close, quoted from `scripts/convergence.sh 105 569 3`:**

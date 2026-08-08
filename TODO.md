@@ -2,9 +2,11 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**✅ ROUND XXXV CLOSED 2026-08-08** — theme C3 = Wave-plan final (D27 sigil migration, SPLIT scope). **CLOSED IN COMPLIANCE — second non-waivered close in 6 rounds** (R34 broke streak, R35 continues it). See DONE.md for verdict verbatim (net −3, filed 3, closed 6 via stale-scan, ratio 2:1) and full accounting.
+**✅ ROUND XXXVI CLOSED 2026-08-08** — theme FORMATTER DEFECT BATCH (FMT-A precedence chokepoint + FMT-B indent reflow + FMT-C semantic round-trip guard). **CLOSED IN COMPLIANCE — third non-waivered close in 7 rounds** (R34, R35, R36 all clean). First POST-Wave-plan round; UNBLOCKS D27 Round A retry.
 
-**⚠ WAVE PLAN COMPLETE (in-repo).** C1 (R33: D26+D28 code) → C2 (R34: D25 removal) → C3 (R35: chip + docs + parser accept-both, deferred fmt sweep). D27 Round A retry + D22 slice migration + D27 Round B all remain but are POST-Wave-plan work. Out-of-repo migration (gorget-js, arena, gglox, gorget-conformance) still deferred to later coordination round per owner ruling.
+**⚠ 9-PASS GAUNTLET** (owner-precedent for accept/reject-surface class; 14 findings folded across 8 fold-cycles). Arm enumeration grew 5 → 13 → **20 arm-classes across 26 helper call-sites at execution**. Each successive pass genuinely surfaced Core #4 sibling-drift misses. Executor added 4 more discovery-time bugs (chain-flattener, IIFE, at_line_start, Await bp).
+
+**⚠ WAVE PLAN COMPLETE (in-repo).** C1 (R33) → C2 (R34) → C3 (R35). D27 Round A retry now UNBLOCKED (R36 fixed both blocker defects + added semantic-round-trip guard + sweep-smoke script). Out-of-repo migration (gorget-js, arena, gglox, gorget-conformance) still deferred.
 
 **▶ NEXT ROUND CANDIDATES:**
 
@@ -14,7 +16,7 @@
 
 **(C) D27 Round B** — after Round A: reject `!` at parse with a fix-it "use `^`" at `E_MoveWithoutOperator` — small round (~100 LOC + NEG fixtures at each move-sigil position).
 
-**Default:** (A) — formatter defects that gated Round A are now fixed (R36 close 2026-08-08).
+**Default:** (A) — formatter defects that gated Round A are now fixed (R36 close 2026-08-08). Pre-D27-A-retry safety net: `scripts/fmt_sweep_smoke.sh` runs the sweep + bootstrap fixed-point BEFORE any writes; `fmt_round_trip_semantic` + `fmt_precedence_check_arm_count` guard against the paren-drop class recurring. Use these gates at scout stage.
 
 **⚠ D27 findings from the 3-scout wave (2026-08-06) — STILL PRESERVED for the C3 retry round after formatter defects land, do NOT re-scout at C3 retry stage:**
 - **Fresh in-repo census: ~1,637 sigils** (vs stale 2026-07-11 wave figure of ~1,048; +56% from D31 Addendum-2 full-strict migration + self-host expansion). Breakdown: 1,624 `!name` prefix + 5 `!(...)` move-closure + 8 corner cases (`!"literal"`, `*!bx`, `Vector[T !]` etc.) + 278 error-mark postfix (stay) + 780 `!=` inequality (stay) + 885 in strings/comments (skip).
@@ -27,7 +29,13 @@
   - **Method-targ recorder (f-string).** Diagnosis wrong TWICE. `EFString` is genuinely absent from both walkers, but the causal chain is BROKEN: the undefined symbol is the iterator's own type, and `.iter()` fails `infer.gg`'s terminal/closure gate, so no targ entry is produced either way. The real hazard is `expr_link_types`, which is NOT in the snapshot/restore set. Filed in full on its ledger entry.
   - **Typed-`ret` / declare-set work.** Diagnosis refuted twice; the externs ARE already registered. The real defect is the strip→`_ws` **rename** changing callee identity without re-registering, plus **13 bare `Inst::CallExtern` sites in `src/lir/lower/drops.rs` with zero `ensure_extern` calls**. ⚠ **MEASURED: LLVM does NOT catch a declare/call signature mismatch** — `llvm-as`, `opt -passes=verify` and `llc` all exit 0 on a deliberate mismatch, so that class is a silent miscompile with no gate. Any fix here needs an emitted-`.ll` declare-set diff as its acceptance gate.
 
-**⚠ ROUND XXXV PROCESS LESSONS (fresh, worth the read):**
+**⚠ ROUND XXXVI PROCESS LESSONS (fresh, worth the read):**
+  1. **9-pass gauntlet is the accept/reject-surface norm.** CLAUDE.md predicts ~9 for this class; R36 hit exactly. Arm enumeration grew 5 → 13 → 20 across the 9 passes because each Pratt cross-check surfaced sibling-drift misses. This IS convergence for wide-surface class fixes — not gauntlet failure.
+  2. **Discovery-time defects during execution are Core #8 same-round obligations.** Executor found 4 more bugs while wiring the fix (Pow chain-flattener, IIFE, at_line_start, Await bp). Fold inline; don't file as follow-ups. If any of these had been filed instead of fixed, R36 would be shipping known defects.
+  3. **Formatter fixes have net-positive parity impact.** MATCH +8, ADJ +6 vs pre-round. Deterministic emission means some fixtures whose Rust+SH lanes agreed by accident now agree by construction. Fmt fixes are a rare double-win.
+  4. **`scripts/fmt_sweep_smoke.sh` is the missing safety net for future fmt rounds.** R35 broke bootstrap because no gate ran `gg fmt` across the corpus + verified bootstrap. FMT-C's addition of this script is the Core #6 guard that would have caught R35 BEFORE it broke bootstrap. Standing pre-fmt-round checklist item now.
+
+**⚠ ROUND XXXV PROCESS LESSONS (still valid):**
   1. **Convergence-first + owner-directed stale-scan combined to prevent a 5th waiver.** Convergence-first (R34 process fix, R35 first use) caught the 0:3 pre-audit state before ~90 min sweep waste. Stale-scan (60 min budget) surfaced 6 real closes from ~569 items across R18/R29/R30/R32 fixes never retired from the ledger. **Stale-scan is a systematic tool worth running at every round-close where convergence needs a boost** — every long-running project accretes un-retired filings that a scan can convert to real closes.
   2. **Sweep flakes CAN look like real regressions.** First C-sweep showed `c_emit_comparison FAILED (Matched 654 < floor 1283)` — looked like a huge regression. Isolated test showed `Matched 1486` (comfortably above floor). Root: parallel-load contention with `c_emit_comparison`'s internal `parallel_map_fixtures` worker pool. Re-run cleared. **When a sweep flake looks impossibly large (2x+ drop), isolate the test before spending time root-causing.**
   3. **Ratified plans can decay between ratification and execution.** Wave-plan C3 (composed D27+D22+D28 fmt sweep) was ratified when D22 was expected to land alongside D27. D22 didn't land (nobody scouted it); R33's D28 landing was CODE-not-fmt-sweep. Scout caught the compose premise was hollow before executor burn. **Ratified plans need Core #5 re-verification just like premises do.**
