@@ -1,0 +1,25 @@
+# SIGSEGV: LEFT-nested `??` (default-op) chain crashes at runtime.
+# Discovered 2026-08-08 during R38 Track C (long-`??` formatter wrap fix).
+# ORTHOGONAL to the formatter defect Track C retired — reproduces WITHOUT
+# `gg fmt` on both pre-Track-C base (b1c3c17b1) and post-Track-C (4d151065e).
+# Not caused by R38.
+#
+# Repro: any LEFT-nested `??` chain where an intermediate operand is `None()`.
+# `a ?? b ?? c` parses as `(a ?? b) ?? c`; when `a = None()` and `b = None()`,
+# runtime SIGSEGVs during the second `??` reduction (exit 139).
+#
+# RIGHT-nested `a ?? (b ?? c)` shape works correctly — that's why R38 Track C's
+# fmt_long_default_op_nested.gg uses the right-nested form (documented in its
+# header). This fixture pins the intended behavior for the LEFT-nested case.
+#
+# Intended output: `42`.
+# Actual: SIGSEGV (exit 139) with no output.
+#
+# Wired: #[ignore]d `default_op_left_nested_chain_segv` in tests/integration.rs
+# asserting stdout "42\n". Fails RED when un-ignored.
+int main():
+    Option[int] a = None()
+    Option[int] b = None()
+    int r = a ?? b ?? 42
+    print(r)
+    return 0

@@ -4515,6 +4515,25 @@ fn print_composite_raw_address() {
     run_gg("known_gaps/print_composite_raw_address.gg", "[10, 20, 30]");
 }
 
+// Round XXXVIII (2026-08-08) — durable repro for the LEFT-nested `??`
+// (default-op) chain SIGSEGV. Discovered during R38 Track C (formatter
+// long-`??` wrap fix) but ORTHOGONAL to it — reproduces without `gg fmt`,
+// against pre-Track-C base (b1c3c17b1). LEFT-nested `a ?? b ?? c` parses as
+// `(a ?? b) ?? c`; when both a and b are `None()`, runtime crashes exit 139
+// during the second `??` reduction. R38 Track C's fmt_long_default_op_nested
+// fixture uses the RIGHT-nested shape (`a ?? (b ?? c)`) which works — that
+// workaround is documented in that fixture's header. This wrapper pins the
+// intended output for LEFT-nested; un-ignore when the runtime defect is fixed.
+#[test]
+#[ignore = "KNOWN GAP (HIGH — RUNTIME SIGSEGV, TODO.md, filed R38 2026-08-08): \
+LEFT-nested `??` chain SIGSEGVs when intermediate operands are None(). \
+Pre-existing (reproduces on b1c3c17b1); orthogonal to R38 Track C formatter \
+fix. Fix at the SH-lowerer or GIR level for default-op reduction; RIGHT-nested \
+form works correctly. Un-ignore when fixed."]
+fn default_op_left_nested_chain_segv() {
+    run_gg("known_gaps/default_op_left_nested_chain_segv.gg", "42");
+}
+
 // Round XXXVII (2026-08-08) — durable repro PROCEDURE for the SH-lowerer
 // stage-2 double-free triggered by the formatter's bulk canonicalization
 // (`gg fmt --in-place` sweep). Discovered and reproduced twice during
