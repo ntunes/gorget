@@ -3168,11 +3168,29 @@ Two levels:
 | Public    | `public`   | All modules                    |
 | Private   | `private`  | Same module only               |
 
-**Defaults:** Most items (functions, structs, enums, traits, constants) are **public by default**. Two exceptions are **private by default**:
+**Defaults (today):** Most items (functions, structs, enums, traits, constants) are **public by default**. Two exceptions are **private by default**:
 - **`static` declarations** — mutable module-level state should be explicitly exported
 - **struct fields** — internal layout is an implementation detail
 
 Applicable to: functions, structs, struct fields, enums, traits, constants, statics.
+
+> **Ruled, not shipped — D43.** The visibility model is ratified to change to **three
+> levels with two keywords, defaulting to the directory**: an item is visible within its
+> **directory** unless marked `public` (visible everywhere) or `private` (this file only).
+> The middle tier is the default and takes no keyword. `private` keeps its present meaning
+> (this file only); what changes is the *default*, from world-visible to directory-visible.
+> `static` is unaffected — it is already private by default.
+>
+> **Two of the three tiers are not enforced today, so the table above overstates what the
+> compiler checks.** Item-level `private` is enforced at import (`E_PrivateImport`) and by
+> scope non-promotion. **Struct-field and `equip`-method visibility are parsed and then
+> ignored** — a private field is readable *and writable* from another module, and a private
+> method is callable. `E_PrivateTypeInPublicSignature` covers function and method signatures
+> only, so a private type still leaks through a public struct field, an enum variant payload,
+> a trait method signature, or a public `const`/`static`. Do not rely on field or method
+> privacy for encapsulation until D43 lands.
+
+
 
 ```gorget
 public struct Point:
