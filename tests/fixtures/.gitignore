@@ -136,6 +136,15 @@
 # sweep does not feed them to `format_source_infallible` (which would panic).
 !fmt_parse_errors/
 !fmt_parse_errors/*.gg
+# Manifest-error known_gaps repro (2026-08-08): a malformed `gorget.toml` must
+# be REPORTED, not silently dropped into a misleading missing-file diagnostic.
+# Needs `**` (not the `known_gaps/*/*.gg` rule above) for two reasons: the
+# `.toml` files ARE the repro, and the layout is two levels deep (app/ +
+# greeter/) so the path dependency resolves. Same shape as `modules_pkg*/**`.
+# Generated artifacts are re-ignored by the catch-all block at the end.
+!known_gaps/manifest_malformed/
+!known_gaps/manifest_malformed/**
+known_gaps/manifest_malformed/**/gorget.lock
 
 # Re-ignore compiled/generated artifacts inside self-host subdirs
 self_host_*/driver

@@ -3342,6 +3342,56 @@ fn modules_import_shadow() {
     run_gg_dir("modules_import_shadow", "main.gg", "ok\n42\ndone");
 }
 
+/// known_gaps (filed 2026-08-08): a MALFORMED `gorget.toml` is silently
+/// dropped instead of reported. `Manifest::from_path` returns a perfectly
+/// good `ManifestError::Parse` ("invalid gorget.toml at <path>"), but
+/// `src/main.rs:174` discards it with `if let Ok(manifest)`, so dependency
+/// resolution is skipped entirely and the user gets a misleading downstream
+/// error about a file that was never supposed to exist.
+///
+/// Same root cause silently accepts a manifest MISSING the required
+/// `version` field. Note `gg add` / `gg remove` DO report the parse error
+/// (`src/main.rs:2380`, `:2409` use `unwrap_or_else` + eprintln), so the
+/// behaviour is also inconsistent across commands.
+///
+/// RED-verified at HEAD: this fixture exits 1 with
+/// `cannot read '<app>/greeter.gg': No such file or directory`.
+/// Positive control: replacing the malformed manifest with a valid one
+/// makes the identical layout check clean (exit 0), so the unclosed
+/// `[package` bracket is the discriminator, not the fixture layout.
+///
+/// Un-ignore when the manifest load path propagates `ManifestError`.
+#[test]
+#[ignore = "known gap: malformed gorget.toml is silently dropped instead of reported"]
+fn manifest_malformed_is_reported() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let main_path = manifest_dir
+        .join("tests/fixtures/known_gaps/manifest_malformed/app/main.gg");
+    let output = build_with_timeout(
+        gg_command("check").arg(&main_path),
+        "known_gaps/manifest_malformed/app/main.gg",
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let combined = format!("{stderr}{stdout}");
+
+    assert!(
+        combined.contains("invalid gorget.toml"),
+        "a malformed gorget.toml must be reported as a manifest parse error, \
+         not swallowed into a misleading missing-file diagnostic; got:\n{combined}",
+    );
+    assert!(
+        !combined.contains("greeter.gg"),
+        "the diagnostic must point at the manifest, not at an unresolved \
+         import path that is a downstream symptom; got:\n{combined}",
+    );
+    assert!(
+        !output.status.success(),
+        "a malformed gorget.toml must fail the build",
+    );
+}
+
 // Regression: equip method must not overwrite a same-named extern's
 // signature during `register_function_signature`. Before the fix at
 // typecheck.rs:5099, `equip VFS: bool file_exists(self, String)` in

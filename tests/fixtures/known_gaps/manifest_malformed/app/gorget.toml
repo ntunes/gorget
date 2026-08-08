@@ -1,0 +1,21 @@
+# DELIBERATELY MALFORMED — this is the repro.
+#
+# `[package` is missing its closing bracket, so `Manifest::from_path`
+# returns `ManifestError::Parse`. `src/main.rs:174` discards that with
+# `if let Ok(manifest)`, so the manifest — including the `[dependencies]`
+# table below — is silently dropped and `greeter` never resolves.
+#
+# The unclosed bracket is the ONLY intended defect in this file; every
+# other line is valid TOML (note `#`, not `//`, is TOML's comment marker).
+#
+# INTENDED: `gg` reports `invalid gorget.toml at <path>: ...` and exits
+# non-zero. ACTUAL: a misleading downstream `cannot read '.../greeter.gg':
+# No such file or directory` pointing at a file that was never meant to
+# exist at that path.
+
+[package
+name = "app"
+version = "0.1.0"
+
+[dependencies]
+greeter = { path = "../greeter" }

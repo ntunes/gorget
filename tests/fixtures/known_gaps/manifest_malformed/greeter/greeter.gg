@@ -1,0 +1,6 @@
+# Dependency package for the `manifest_malformed` known_gaps repro.
+# Resolvable only via the app's `[dependencies]` path entry, which is
+# exactly what the malformed manifest causes `gg` to silently skip.
+
+public String hello(String name):
+    return "hi " + name
