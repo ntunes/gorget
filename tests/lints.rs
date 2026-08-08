@@ -11406,8 +11406,11 @@ fn d26_map_binop_arm_count_ratchet() {
         ),
         (
             "src/formatter/mod.rs",
-            7,
-            "formatter arm - 7 arms `Fallible => \"...!\"`",
+            14,
+            "formatter arm - 7 arms `Fallible => \"...!\"` in binary_op_str (7) + \
+             7 mentions in `binary_op_left_bp` precedence table (Round XXXVI FMT-A: \
+             2 shift fallibles at bp 25, 2 add fallibles at bp 27, 3 mul/div/rem \
+             fallibles at bp 29 = 7)",
         ),
         (
             "src/semantic/typecheck.rs",
@@ -11463,5 +11466,76 @@ fn d26_map_binop_arm_count_ratchet() {
         total, expected_total,
         "d26 fallible-arm total {total} vs expected {expected_total} - per-file \
          breakdown: {per_file_actual:?}",
+    );
+}
+
+/// Round XXXVI Track FMT-A class-retirement guard (Core #4/#6): the
+/// formatter's precedence-aware paren-wrapping is a CHOKEPOINT enforced
+/// at every operand-emit site by calling one of three helpers:
+///   - `format_binop_operand(...)` — infix operand (left/right position).
+///   - `format_prefix_operand(...)` — prefix-operator operand.
+///   - `format_postfix_receiver(...)` — postfix-operator receiver.
+///
+/// Every arm in `format_expr` that emits a sub-expression as an
+/// operand MUST go through one of these helpers, or `gg fmt` re-emits
+/// the source with dropped parens — the exact silent-miscompile class
+/// R35's fmt sweep tripped (`(a + b) / 2` → `a + b / 2`, Core #8).
+///
+/// This ratchet pins the total call-site count. A new arm added
+/// without a helper call fails the count (drop) — a required arm-count
+/// review. A new arm added with a helper call bumps the count — an
+/// explicit bump of `EXPECTED` here with the new site's rationale.
+#[test]
+fn fmt_precedence_check_arm_count() {
+    /// Baseline (Round XXXVI FMT-A close 2026-08-08): 26 sites.
+    ///
+    ///   `format_binop_operand`     — 11 sites:
+    ///     format_binary_chain (1), Range start (1), DefaultOp lhs/rhs (2),
+    ///     As (1), Is (1), MetaOpInfix left/right (2),
+    ///     Rethrow left/transform (2), Catch left (1).
+    ///   `format_prefix_operand`    — 7 sites:
+    ///     UnaryOp (1), Range end (1), Move (1), MutableBorrow (1),
+    ///     Deref (1), Spawn (1), SpawnBlocking (1).
+    ///   `format_postfix_receiver`  — 8 sites:
+    ///     Call callee (1), MethodCall receiver non-chain (1),
+    ///     FieldAccess (1), TupleFieldAccess (1), Index object (1),
+    ///     OptionalChain object (1), Propagate expr (1), Await (1).
+    const EXPECTED: usize = 26;
+
+    let content = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+    // Count call sites of the three helpers. Skip the helper's OWN
+    // definition line (the signature line `fn format_binop_operand(`).
+    // Match `.format_<name>(` at any position — method invocation.
+    let mut count = 0;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        // Helper DEFINITION lines start with `fn format_...(`.
+        if trimmed.starts_with("fn format_binop_operand(")
+            || trimmed.starts_with("fn format_prefix_operand(")
+            || trimmed.starts_with("fn format_postfix_receiver(")
+        {
+            continue;
+        }
+        count += line.matches(".format_binop_operand(").count();
+        count += line.matches(".format_prefix_operand(").count();
+        count += line.matches(".format_postfix_receiver(").count();
+    }
+    assert_eq!(
+        count, EXPECTED,
+        "FMT-A precedence-helper call-site count in \
+         `src/formatter/mod.rs` changed: {count} vs expected {EXPECTED}.\n\n\
+         If a new arm in `format_expr` was added, it must consult one of \
+         the precedence helpers when emitting a sub-expression, or `gg fmt` \
+         will silently drop parens on some operand shapes. Update EXPECTED \
+         here with the new site's rationale.\n\n\
+         If an arm was removed / centralized, lower EXPECTED.\n\n\
+         Round XXXVI Track FMT-A retires the paren-drop class \
+         (`(a + b) / 2` → `a + b / 2`, Core #8 silent miscompile via \
+         the compiler's own tool). This arm-count guard IS the \
+         class-retirement mechanism (Core #4/#6).",
     );
 }

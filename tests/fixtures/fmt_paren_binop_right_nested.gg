@@ -1,0 +1,37 @@
+# FMT-A regression fixture (Round XXXVI): same-precedence RIGHT-nest
+# of LEFT-associative binops. Non-associative operators (`-`, `/`, `%`,
+# `>>`) render right-nested groups DIFFERENTLY than left-nested — the
+# right operand of the chain MUST wrap when the outer op is left-assoc
+# and the operand's own bp equals the outer's bp.
+#
+# Pre-fix RED signature: `gg fmt` re-emitted each expression with parens
+# dropped and running the reformatted file printed the wrong values:
+#   5 - (3 - 1) = 3 (wrap-dropped: 5 - 3 - 1 = 1)
+#   24 / (4 / 2) = 12 (wrap-dropped: 24 / 4 / 2 = 3)
+#   17 % (10 % 3) = 0 (wrap-dropped: 17 % 10 % 3 = 1)
+#   256 >> (2 >> 1) = 128 (wrap-dropped: 256 >> 2 >> 1 = 32)
+# Non-constant operands so const-fold can't elide the arithmetic.
+void main():
+    int a = 5
+    int b = 3
+    int c = 1
+    int r1 = a - (b - c)
+    print(r1)
+
+    int d = 24
+    int e = 4
+    int f = 2
+    int r2 = d / (e / f)
+    print(r2)
+
+    int g = 17
+    int h = 10
+    int i = 3
+    int r3 = g % (h % i)
+    print(r3)
+
+    int j = 256
+    int k = 2
+    int l = 1
+    int r4 = j >> (k >> l)
+    print(r4)

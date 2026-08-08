@@ -1,0 +1,12 @@
+# FMT-A regression fixture (Round XXXVI): the `Expr::UnaryOp` arm MUST
+# wrap a binary operand whose precedence is lower than the unary op's
+# operand bp (33). Without the wrap, `-(a + b)` re-emits as `-a + b`
+# = `Add(Neg(a), b)` instead of the intended `Neg(Add(a, b))`.
+#
+# Pre-fix RED signature: `gg fmt` re-emitted `int r = -a + b` and
+# running the reformatted file printed `1` instead of `-7`.
+void main():
+    int a = 3
+    int b = 4
+    int r = -(a + b)
+    print(r)

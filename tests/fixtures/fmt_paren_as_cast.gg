@@ -1,0 +1,11 @@
+# FMT-A regression fixture (Round XXXVI): the `Expr::As` arm MUST wrap
+# a binary operand whose precedence is lower than `as` (bp 31). Without
+# the wrap, `(0.0 - f) as int` re-emits as `0.0 - f as int` which
+# reparses `0.0 - (f as int)` (float - int) — a type mismatch.
+#
+# Pre-fix RED signature: `gg fmt` re-emitted `int r = 0.0 - f as int`
+# and the reformatted file failed with 2 semantic errors (type mismatch).
+void main():
+    float f = 3.7
+    int r = (0.0 - f) as int
+    print(r)
