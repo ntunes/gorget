@@ -4489,6 +4489,139 @@ fn box_element_drop_symbol_collision() {
     run_gg("known_gaps/box_element_drop_symbol_collision.gg", "done");
 }
 
+// Round XXXVII (2026-08-08) — durable repro for the composite-print
+// raw-address defect (TODO.md HIGH, "print(<non-Displayable composite>)
+// prints a RAW ADDRESS", filed 2026-07-25, widened 2026-07-31 by Round
+// XX pass 6, "durable repro still owed since 2026-07-25 filing").
+// R37 committed the repro after re-verifying live at HEAD 900bd06f7
+// during the Phase 2 sweep debug: `print(<Vector[int]>)` prints a raw
+// pointer regardless of how the Vector was produced (move-and-return,
+// bare literal, passthrough — all print e.g. `281474799179512`). ggdef
+// prints `[10, 20, 30]`. See TODO.md HIGH entry and the fixture header
+// for the full Struct/Enum/Vector/Tuple/Set/Dict family.
+//
+// The `expected_stdout` here asserts the CORRECT / intended output: the
+// Vector CONTENTS in the language's canonical composite-display shape
+// (ggdef prints `[10, 20, 30]`). Un-ignore + promote when either the
+// composite-print reject lands (matching the f-string path) OR a
+// canonical composite-display is wired.
+#[test]
+#[ignore = "KNOWN GAP (HIGH, TODO.md — durable repro owed since 2026-07-25 \
+filing): print(<non-Displayable composite>) prints a raw address instead of \
+the composite's contents. Family: Struct/Enum/Vector/Tuple/Set/Dict. Fix at \
+the shared producer so both print(arg) and f\"{arg}\" route through one \
+check; NEG per costume."]
+fn print_composite_raw_address() {
+    run_gg("known_gaps/print_composite_raw_address.gg", "[10, 20, 30]");
+}
+
+// Round XXXVII (2026-08-08) — durable repro PROCEDURE for the SH-lowerer
+// stage-2 double-free triggered by the formatter's bulk canonicalization
+// (`gg fmt --in-place` sweep). Discovered and reproduced twice during
+// R37 Phase 2 debug (full-corpus sweep AND non-SH-only sweep both trip
+// the failure). ORTHOGONAL to D27 — the failure reproduces against the
+// retired `!` glyph too. See fixture header at
+// `tests/fixtures/known_gaps/sh_bootstrap_stage2_double_free_after_fmt_canonicalization.gg`
+// for the step-by-step reproducer command sequence and the exact
+// canonicalization operations the formatter performs.
+//
+// This wrapper runs the sweep procedure in a scratch tree and asserts
+// `self_host_bootstrap_fixed_point` succeeds — the CORRECT / intended
+// behavior. Un-ignore when the SH-lowerer memory-safety defect that the
+// bulk canonicalization exposes is diagnosed and fixed.
+//
+// The wrapper is heavy (invokes `gg fmt` recursively across ~2,754
+// non-SH .gg files, then runs the bootstrap fixed-point which itself
+// takes ~11 min on a warm CI box). Keeping it `#[ignore]`d until the
+// underlying defect is diagnosed lets targeted runs opt in without
+// paying the cost every suite.
+#[test]
+#[ignore = "KNOWN GAP (R37 filed 2026-08-08; blocks D27 Phase 2 sweep): \
+`gg fmt --in-place` sweep followed by `self_host_bootstrap_fixed_point` \
+crashes with `free(): double free detected in tcache 2` in the stage-2 \
+driver binary. Orthogonal to D27 (reproduces against `!` too). See \
+tests/fixtures/known_gaps/sh_bootstrap_stage2_double_free_after_fmt_canonicalization.gg \
+header for the procedure + TODO.md D27 headline follow-up."]
+#[serial(gg_build)]
+fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
+    // The repro procedure is documented in the fixture header. This
+    // wrapper implements it end-to-end so a future un-ignoring turns
+    // straight into a passing gate.
+    //
+    // Note: this test MODIFIES the working tree in-place via `gg fmt`,
+    // exactly as `scripts/fmt_sweep_smoke.sh --apply` does. Run only
+    // on a scratch tree or a branch dedicated to the diagnosis — the
+    // `#[ignore]` shields the default suite from the mutation.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let gg = manifest_dir.join("target/release/gg");
+    assert!(
+        gg.exists(),
+        "gg binary not found — build with `cargo build --release --bin gg` first"
+    );
+
+    // Sweep every non-SH .gg file in the D27 corpora. Matches
+    // scripts/fmt_sweep_smoke.sh --apply's scope minus self_host_*.
+    fn walk_dot_gg(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for entry in rd.flatten() {
+            let p = entry.path();
+            let s = p.to_string_lossy();
+            if s.contains("self_host_") {
+                continue;
+            }
+            if p.is_dir() {
+                walk_dot_gg(&p, out);
+            } else if p.extension().and_then(|e| e.to_str()) == Some("gg") {
+                out.push(p);
+            }
+        }
+    }
+    let corpora = ["tests/fixtures", "lib", "examples", "demo", "spectests", "compiler/data"];
+    for corpus in corpora.iter() {
+        let root = manifest_dir.join(corpus);
+        if !root.exists() {
+            continue;
+        }
+        let mut files = Vec::new();
+        walk_dot_gg(&root, &mut files);
+        for file in files {
+            let _ = Command::new(&gg)
+                .arg("fmt")
+                .arg("--in-place")
+                .arg(&file)
+                .output();
+        }
+    }
+
+    // Delete cached driver binaries so the bootstrap rebuild uses the
+    // freshly-reformatted sources.
+    let driver_exe = manifest_dir.join("tests/fixtures/self_host_lowerer/driver");
+    let driver_c = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.c");
+    let _ = std::fs::remove_file(&driver_exe);
+    let _ = std::fs::remove_file(&driver_c);
+
+    // Now run the bootstrap fixed-point. This is what CURRENTLY fails
+    // with `free(): double free detected in tcache 2` in the stage-2
+    // driver binary. When the SH-lowerer defect is diagnosed and fixed,
+    // this call succeeds and the test can be un-ignored.
+    let status = Command::new(env!("CARGO"))
+        .arg("test")
+        .arg("--test")
+        .arg("integration")
+        .arg("--release")
+        .arg("--")
+        .arg("self_host_bootstrap_fixed_point")
+        .env("GG_BUILD_TIMEOUT_SECS", "900")
+        .env("GG_TEST_TIMEOUT_SECS", "600")
+        .status()
+        .expect("cargo test spawn");
+    assert!(
+        status.success(),
+        "SH-lowerer stage-2 double-free (or a related bootstrap regression) \
+         reproduced — see the fixture header for the repro and TODO.md."
+    );
+}
+
 /// Round XXIX Track A: `[]` was ungated on the `Index` trait — indexing a
 /// struct that equipped no indexing trait was silently accepted and lowered as
 /// an unchecked raw offset read (`p[5]` on a 2-field struct reads OUT OF

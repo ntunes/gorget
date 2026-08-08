@@ -1,0 +1,38 @@
+# DURABLE REPRO for the composite-print raw-address defect (TODO.md HIGH,
+# "print(<non-Displayable composite>) prints a RAW ADDRESS", filed
+# 2026-07-25, widened 2026-07-31 by Round XX pass 6, "durable repro still
+# owed since 2026-07-25 filing"). Committed by R37 (2026-08-08) after the
+# R37 executor rediscovered the defect during Phase 2 sweep debugging
+# (originally misdiagnosed as a Vector move-and-return issue — the real
+# root is `print(<Vector>)` prints a raw address regardless of how the
+# Vector was produced; move-and-return is not involved).
+#
+# Class: Core #4 sibling drift (`E_NonPrintableInterpolation` fires on the
+# f-string path — `docs/language-reference.md:2904` — but is NOT wired on
+# the `print(arg)` path) + Core #10 (lowering arm accepts syntax it cannot
+# render).
+#
+# Family: Struct / Enum / Vector / Tuple / Set (+ Dict on `gg`) — a NEG
+# fixture per costume owed at fix time; this minimal repro pins the
+# Vector[int] costume, which is the most commonly reachable (any user who
+# `print(<vector>)` s a Vector hits this).
+#
+# Wired at `tests/integration.rs::print_composite_raw_address` (`#[ignore]`d
+# — asserts the CORRECT / intended output: the Vector CONTENTS
+# (formatted as `[10, 20, 30]` or the compiler's canonical
+# vector-display), NOT a raw address `281474...`). Un-ignore + promote out
+# of `known_gaps/` when either (a) `print(<non-Displayable composite>)` is
+# rejected at check (matching the f-string path), OR (b) the compiler
+# gains a canonical composite-display for the base composites (matching
+# ggdef's `[1, 2, 3]` rendering).
+#
+# RED-verified at HEAD (2026-08-08, HEAD 900bd06f7 + R37 chain): building
+# and running THIS fixture prints e.g. `281474799179512` — a raw pointer
+# where `[10, 20, 30]` (or the language's chosen canonical) is intended.
+
+int main():
+    Vector[int] items = [10, 20, 30]
+    # BUG: prints e.g. `281474799179512` (raw heap address of the Vector's
+    # underlying buffer). ggdef prints `[10, 20, 30]`. See TODO.md HIGH.
+    print(items)
+    return 0
