@@ -597,16 +597,28 @@ impl Formatter {
         self.emitter.write(":");
         self.emitter.newline();
         self.emitter.indent();
-        for field in &s.fields {
-            self.emit_comments_before(field.span.start);
-            if field.node.visibility == Visibility::Private {
-                self.emitter.write("private ");
-            }
-            // type-first: `type name`
-            self.format_type(&field.node.type_);
-            self.emitter.write(" ");
-            self.emitter.write(&field.node.name.node);
+        // R37 empty-body chip: an empty struct body must emit `pass` so the
+        // reformatted source PARSES. The parser rejects `struct X:` with no
+        // indented body (`expected INDENT, got 'struct'` at the next line),
+        // which broke bootstrap on `lib/std/collections.gg` (`struct Vector[T]: pass`
+        // → `struct Vector[T]:` → parse error). Same class as `format_equip`
+        // (:718) which already emits `pass` for empty item lists — extended
+        // here to struct/enum/trait for the empty-container class.
+        if s.fields.is_empty() {
+            self.emitter.write("pass");
             self.emitter.newline();
+        } else {
+            for field in &s.fields {
+                self.emit_comments_before(field.span.start);
+                if field.node.visibility == Visibility::Private {
+                    self.emitter.write("private ");
+                }
+                // type-first: `type name`
+                self.format_type(&field.node.type_);
+                self.emitter.write(" ");
+                self.emitter.write(&field.node.name.node);
+                self.emitter.newline();
+            }
         }
         self.emitter.dedent();
     }
@@ -623,23 +635,30 @@ impl Formatter {
         self.emitter.write(":");
         self.emitter.newline();
         self.emitter.indent();
-        for variant in &e.variants {
-            self.emit_comments_before(variant.span.start);
-            self.emitter.write(&variant.node.name.node);
-            match &variant.node.fields {
-                VariantFields::Unit => {}
-                VariantFields::Tuple(types) => {
-                    self.emitter.write("(");
-                    for (i, ty) in types.iter().enumerate() {
-                        if i > 0 {
-                            self.emitter.write(", ");
-                        }
-                        self.format_type(ty);
-                    }
-                    self.emitter.write(")");
-                }
-            }
+        // R37 empty-body chip: mirror format_struct — an empty enum body
+        // must emit `pass` so the reformatted source parses.
+        if e.variants.is_empty() {
+            self.emitter.write("pass");
             self.emitter.newline();
+        } else {
+            for variant in &e.variants {
+                self.emit_comments_before(variant.span.start);
+                self.emitter.write(&variant.node.name.node);
+                match &variant.node.fields {
+                    VariantFields::Unit => {}
+                    VariantFields::Tuple(types) => {
+                        self.emitter.write("(");
+                        for (i, ty) in types.iter().enumerate() {
+                            if i > 0 {
+                                self.emitter.write(", ");
+                            }
+                            self.format_type(ty);
+                        }
+                        self.emitter.write(")");
+                    }
+                }
+                self.emitter.newline();
+            }
         }
         self.emitter.dedent();
     }
@@ -668,30 +687,37 @@ impl Formatter {
         self.emitter.write(":");
         self.emitter.newline();
         self.emitter.indent();
-        for (i, item) in t.items.iter().enumerate() {
-            if i > 0 {
-                self.emitter.blank_line();
-            }
-            self.emit_comments_before(item.span.start);
-            match &item.node {
-                TraitItem::Method(f) => self.format_function(f),
-                TraitItem::AssociatedType(at) => {
-                    self.emitter.write("type ");
-                    self.emitter.write(&at.name.node);
-                    if !at.bounds.is_empty() {
-                        self.emitter.write(": ");
-                        for (i, bound) in at.bounds.iter().enumerate() {
-                            if i > 0 {
-                                self.emitter.write(" & ");
+        // R37 empty-body chip: mirror format_struct — an empty trait body
+        // must emit `pass` so the reformatted source parses.
+        if t.items.is_empty() {
+            self.emitter.write("pass");
+            self.emitter.newline();
+        } else {
+            for (i, item) in t.items.iter().enumerate() {
+                if i > 0 {
+                    self.emitter.blank_line();
+                }
+                self.emit_comments_before(item.span.start);
+                match &item.node {
+                    TraitItem::Method(f) => self.format_function(f),
+                    TraitItem::AssociatedType(at) => {
+                        self.emitter.write("type ");
+                        self.emitter.write(&at.name.node);
+                        if !at.bounds.is_empty() {
+                            self.emitter.write(": ");
+                            for (i, bound) in at.bounds.iter().enumerate() {
+                                if i > 0 {
+                                    self.emitter.write(" & ");
+                                }
+                                self.format_trait_bound(bound);
                             }
-                            self.format_trait_bound(bound);
                         }
+                        if let Some(ref default) = at.default {
+                            self.emitter.write(" = ");
+                            self.format_type(default);
+                        }
+                        self.emitter.newline();
                     }
-                    if let Some(ref default) = at.default {
-                        self.emitter.write(" = ");
-                        self.format_type(default);
-                    }
-                    self.emitter.newline();
                 }
             }
         }

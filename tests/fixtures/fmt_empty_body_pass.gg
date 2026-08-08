@@ -1,0 +1,30 @@
+# R37 formatter chip (discovered during D27 Round A Phase 2 sweep):
+# `gg fmt` must emit `pass` for an empty struct body, or the reformatted
+# source has an empty block after `struct X:` and fails to parse
+# (`expected INDENT, got '<next-item>'`) — silent data-loss and a
+# bootstrap-breaker. The bug lived unnoticed for months because no fixture
+# exercised the empty-struct round-trip; found live on the Round A sweep
+# via `lib/std/collections.gg` (7 opaque struct forwards for the
+# runtime-provided collection types).
+#
+# Wired at `tests/integration.rs` via `fmt_empty_body_pass_round_trips` —
+# formats the source, then re-parses to catch the drop-then-invalid case,
+# and asserts the reformatted source still contains `pass`.
+#
+# RED-verified pre-chip: `struct Vector[T]: pass` reformats to
+# `struct Vector[T]:` (no body), which parses as a struct with an empty
+# block, and the NEXT `struct` declaration errors out with
+# `expected INDENT, got 'struct'`. GREEN post-chip: `pass` preserved.
+# `format_enum` and `format_trait` got the same defensive treatment
+# (empty enum/trait aren't spellable in source today but the AST-level
+# chip is cheap and consistent with `format_equip`, `src/formatter/mod.rs:718`).
+
+struct EmptyStructA:
+    pass
+
+struct EmptyStructB[T]:
+    pass
+
+int main():
+    print(0)
+    return 0

@@ -9236,6 +9236,53 @@ void main():
     );
 }
 
+/// Round XXXVII (formatter chip surfaced during D27 Round A Phase 2 sweep):
+/// `gg fmt` MUST emit `pass` for an empty struct / enum / trait body. The
+/// pre-chip formatter dropped `pass` and emitted `struct X:` with an empty
+/// block, and the reformatted source failed to parse (`expected INDENT,
+/// got '<next-item>'`) — Core #10 lower-or-reject class (silent
+/// data-loss / bootstrap-breaker). `format_equip` had the `pass` fallback
+/// already (see `src/formatter/mod.rs:718`); struct/enum/trait now
+/// mirror it.
+///
+/// RED-verified pre-chip: `struct Vector[T]: pass` reformatted to
+/// `struct Vector[T]:` (no body), which broke `lib/std/collections.gg`
+/// on the D27 Round A sweep.
+#[test]
+#[serial(gg_build)]
+fn fmt_empty_body_pass_round_trips() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures")
+        .join("fmt_empty_body_pass.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture_path.display()));
+    let reformatted = gorget::formatter::format_source_infallible(&source);
+
+    // Each empty struct body must contain `pass` after formatting; otherwise
+    // the reformatted source is unparseable (`expected INDENT, got …`).
+    for header in ["struct EmptyStructA:", "struct EmptyStructB[T]:"] {
+        let idx = reformatted
+            .find(header)
+            .unwrap_or_else(|| panic!("header `{header}` missing from reformatted source:\n{reformatted}"));
+        // Slice from the header to end and check `pass` appears before the
+        // next top-level construct — a naive but sufficient shape check.
+        let tail = &reformatted[idx..];
+        assert!(
+            tail.contains("    pass"),
+            "R37 empty-body regression: `{header}` block lacks `pass` in reformatted source:\n{reformatted}"
+        );
+    }
+
+    // Semantic gate: the reformatted source must build and run.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let reformatted_path = tmp.path().join("fmt_empty_body_pass.gg");
+    std::fs::write(&reformatted_path, &reformatted)
+        .unwrap_or_else(|e| panic!("cannot write reformatted fixture: {e}"));
+    let stdout = build_and_run_capture_stdout(&reformatted_path, "fmt_empty_body_pass (reformatted)");
+    assert_eq!(stdout.trim(), "0");
+}
+
 /// Round XXXV Track C3 Stage 0 (pre-fmt-fix chip) — `gg fmt` MUST NOT silently
 /// drop unparseable lines. Core #8: prior behaviour was `format_source` calling
 /// `parse_module()` and formatting the recovered AST, discarding any statements
