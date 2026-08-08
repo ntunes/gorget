@@ -9177,10 +9177,14 @@ void main():
 
 /// D35 (docs/define-gorget/decisions.md, ratified 2026-07-26): a function
 /// type's unnamed parameter carries its sigil AFTER the type — `Callable[void(int &)]`,
-/// `Callable[void(String !)]`. The formatter must emit this shape and it must
-/// round-trip through the parser (both `&` and `!` variants). A regression
-/// where the formatter still emits the retired `&Type`/`!Type` spelling would
-/// trip here because the parser now rejects it (`FunctionTypeParamSigilBeforeType`).
+/// `Callable[void(String ^)]`. The formatter must emit this shape and it must
+/// round-trip through the parser. A regression where the formatter still emits
+/// the retired `&Type`/`!Type`/`^Type` spelling would trip here because the
+/// parser rejects it (`FunctionTypeParamSigilBeforeType`).
+///
+/// Round XXXVII D27 Round A: the move-sigil twin now asserts CARET, not the
+/// retired `!` — the formatter emits `^` at the D35 type-arg suffix
+/// (`src/formatter/mod.rs:1618`) as the D27 sigil-economy migration.
 #[test]
 fn fmt_d35_fn_type_sigil_round_trips() {
     // `&` variant — the exemplar case from D35's ratification.
@@ -9205,24 +9209,30 @@ void main():
         "formatter must NOT emit retired pre-D35 spelling.\nformatted:\n{amp_fmt}"
     );
 
-    // `!` twin — same rule, different sigil.
-    let bang_src = "\
-void take(String !s):
+    // Move-sigil twin — same rule, CARET after D27 Round A. Source uses `^`
+    // (canonical D27), formatter must EMIT `^` (not the retired pre-D27 `!`
+    // and not the pre-D35 `^Type`).
+    let caret_src = "\
+void take(String ^s):
     print(s)
 
 void main():
-    Callable[void(String !)] cb = take
-    cb(!\"hi\")
+    Callable[void(String ^)] cb = take
+    cb(^\"hi\")
 ";
-    assert_fmt_round_trips("d35_fn_type_sigil_bang", bang_src);
-    let bang_fmt = gorget::formatter::format_source_infallible(bang_src);
+    assert_fmt_round_trips("d35_fn_type_sigil_caret", caret_src);
+    let caret_fmt = gorget::formatter::format_source_infallible(caret_src);
     assert!(
-        bang_fmt.contains("Callable[void(String !)]"),
-        "formatter must emit D35 spelling for the `!` twin.\nformatted:\n{bang_fmt}"
+        caret_fmt.contains("Callable[void(String ^)]"),
+        "formatter must emit D35 spelling for the caret twin.\nformatted:\n{caret_fmt}"
     );
     assert!(
-        !bang_fmt.contains("Callable[void(!String)]"),
-        "formatter must NOT emit retired pre-D35 `!Type` spelling.\nformatted:\n{bang_fmt}"
+        !caret_fmt.contains("Callable[void(^String)]"),
+        "formatter must NOT emit retired pre-D35 `^Type` spelling.\nformatted:\n{caret_fmt}"
+    );
+    assert!(
+        !caret_fmt.contains("Callable[void(String !)]"),
+        "formatter must NOT re-emit retired pre-D27 `!` move sigil.\nformatted:\n{caret_fmt}"
     );
 }
 
@@ -9317,6 +9327,198 @@ fn fmt_rejects_parse_error() {
 #[test]
 fn d27_parser_accepts_caret() {
     run_gg("d27_parser_accepts_caret.gg", "hi\nalpha\n6\n42");
+}
+
+/// Round XXXVII D27 Round A: `gg fmt` must EMIT `^` (not `!`) at every
+/// move-sigil position. Complements `d27_parser_accepts_caret` — that
+/// asserts the parser ACCEPTS `^`; this asserts the formatter EMITS `^`.
+///
+/// The fixture source uses `^` at 5 positions (named-param, `^self`,
+/// type-arg suffix `Vector[T ^]`, prefix `^s`, move-closure `^(): body`).
+/// After `gg fmt`, the reformatted source MUST still contain `^` — and
+/// specifically MUST NOT re-emit `!` in the move-sigil slots (which is what
+/// the pre-swap formatter did, silently flipping the canonical glyph to
+/// the retired one because parser accept-both hid the regression).
+///
+/// RED-verified pre-Phase-1 (formatter emit swap): the pre-swap formatter
+/// re-emits every `^` as `!`. Reformatted source contains 0 caret glyphs
+/// after formatting; assertion fails RED with a diff showing the flipped
+/// sigils.
+///
+/// GREEN post-Phase-1: reformatted source preserves `^` at every position;
+/// stdout stays `hi\nalpha\n6\n42`.
+#[test]
+#[serial(gg_build)]
+fn d27_fmt_emits_caret() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures")
+        .join("d27_fmt_emits_caret.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture_path.display()));
+
+    // Sanity — source has `^` at every declared position.
+    assert!(
+        source.contains("String ^s"),
+        "fixture drifted: expected `String ^s` (named-param position)"
+    );
+    assert!(
+        source.contains("^self"),
+        "fixture drifted: expected `^self` (self-face position)"
+    );
+    assert!(
+        source.contains("Vector[int ^]"),
+        "fixture drifted: expected `Vector[int ^]` (type-arg suffix)"
+    );
+    assert!(
+        source.contains("take(^s)"),
+        "fixture drifted: expected `take(^s)` (prefix move on named place)"
+    );
+    assert!(
+        source.contains("^(): count"),
+        "fixture drifted: expected `^(): count` (move closure prefix)"
+    );
+
+    // Format the source and assert the emitted GLYPH is `^` at every
+    // migrated position. Under the pre-swap formatter these all regress
+    // to `!` — the whole point of the assertion.
+    let reformatted = gorget::formatter::format_source_infallible(&source);
+
+    let caret_positions: &[(&str, &str)] = &[
+        ("String ^s", "named-param move sigil `Type ^name`"),
+        ("^self", "self-face consuming method `^self`"),
+        ("Vector[int ^]", "type-arg suffix (D35 spelling)"),
+        ("take(^s)", "prefix move on a named place `^s`"),
+        ("^(): count", "move closure prefix `^(): body`"),
+    ];
+    for (needle, label) in caret_positions {
+        assert!(
+            reformatted.contains(needle),
+            "D27 Round A regression: `gg fmt` failed to emit `^` at {label}.\n\
+             Expected reformatted source to contain: {needle:?}\n\
+             === Reformatted source ===\n{reformatted}",
+        );
+    }
+
+    // And the retired `!` sigil MUST NOT reappear in any move slot. The
+    // retired glyphs the formatter must never emit for D27 positions.
+    let bang_regressions: &[(&str, &str)] = &[
+        ("String !s", "named-param regressed to `!`"),
+        ("!self", "self-face regressed to `!`"),
+        ("Vector[int !]", "type-arg suffix regressed to `!`"),
+        ("take(!s)", "prefix-move regressed to `!`"),
+        ("!(): count", "move-closure regressed to `!`"),
+    ];
+    for (needle, label) in bang_regressions {
+        assert!(
+            !reformatted.contains(needle),
+            "D27 Round A regression: `gg fmt` re-emitted retired `!` sigil — {label}.\n\
+             Found `{needle}` in the reformatted source.\n\
+             === Reformatted source ===\n{reformatted}",
+        );
+    }
+
+    // Semantic equivalence: build+run the reformatted source and confirm
+    // stdout matches the ORIGINAL fixture's expected output. This catches
+    // any accidental semantic drift the glyph-swap might have introduced.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let reformatted_path = tmp.path().join("d27_fmt_emits_caret.gg");
+    std::fs::write(&reformatted_path, &reformatted)
+        .unwrap_or_else(|e| panic!("cannot write reformatted fixture: {e}"));
+
+    let reformatted_stdout =
+        build_and_run_capture_stdout(&reformatted_path, "d27_fmt_emits_caret (reformatted)");
+    assert_eq!(
+        reformatted_stdout.trim(),
+        "hi\nalpha\n6\n42",
+        "D27 fmt round-trip changed program semantics.\n\
+         === Reformatted source ===\n{reformatted}",
+    );
+}
+
+/// Round XXXVII D27 Round A: fmt semantic round-trip for a move-heavy
+/// program. Sibling to `d27_fmt_emits_caret` (which is glyph-focused);
+/// this one exercises a program whose runtime is directly move-driven
+/// (three `^name` moves at call sites), and asserts BOTH the emitted
+/// glyph stays `^` (glyph preservation) AND stdout is unchanged
+/// (semantic preservation).
+///
+/// RED-verified pre-Phase-1: the pre-swap formatter re-emits every `^`
+/// as `!`. Because the parser accepts both glyphs, stdout stays intact —
+/// but the glyph assertion catches the silent flip that stdout-only
+/// checks would miss.
+///
+/// GREEN post-Phase-1: reformatted source preserves `^` at every site;
+/// stdout is `hello world\n42\n[10, 20, 30]`.
+#[test]
+#[serial(gg_build)]
+fn fmt_d27_move_sigil_round_trip() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures")
+        .join("fmt_d27_move_sigil_round_trip.gg");
+
+    // Positive control: build+run the ORIGINAL fixture.
+    let orig_stdout = build_and_run_capture_stdout(&fixture_path, "fmt_d27_move_sigil_round_trip");
+    let expected = "hello world\n42\nHI";
+    assert_eq!(
+        orig_stdout.trim(),
+        expected,
+        "Original fixture stdout drifted from expected — update the fixture \
+         or the expected string.",
+    );
+
+    // Format the source and assert glyph preservation at each `^` site.
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture_path.display()));
+    let reformatted = gorget::formatter::format_source_infallible(&source);
+
+    let expected_glyphs: &[&str] = &[
+        "String ^s",                 // consume_string / consume_and_print params
+        "int ^n",                    // consume_int param
+        "consume_string(^greeting)", // prefix move site 1
+        "consume_int(^answer)",      // prefix move site 2
+        "consume_and_print(^tag)",   // prefix move site 3
+    ];
+    for needle in expected_glyphs {
+        assert!(
+            reformatted.contains(needle),
+            "D27 Round A regression: `gg fmt` failed to preserve `^` in `{needle}`.\n\
+             === Reformatted source ===\n{reformatted}",
+        );
+    }
+
+    // And the retired `!` MUST NOT reappear in these slots.
+    let forbidden_glyphs: &[&str] = &[
+        "String !s",
+        "int !n",
+        "consume_string(!greeting)",
+        "consume_int(!answer)",
+        "consume_and_print(!tag)",
+    ];
+    for needle in forbidden_glyphs {
+        assert!(
+            !reformatted.contains(needle),
+            "D27 Round A regression: `gg fmt` re-emitted retired `!` sigil — `{needle}`.\n\
+             === Reformatted source ===\n{reformatted}",
+        );
+    }
+
+    // Semantic equivalence: build+run the reformatted source.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let reformatted_path = tmp.path().join("fmt_d27_move_sigil_round_trip.gg");
+    std::fs::write(&reformatted_path, &reformatted)
+        .unwrap_or_else(|e| panic!("cannot write reformatted fixture: {e}"));
+    let reformatted_stdout = build_and_run_capture_stdout(
+        &reformatted_path,
+        "fmt_d27_move_sigil_round_trip (reformatted)",
+    );
+    assert_eq!(
+        reformatted_stdout.trim(),
+        expected,
+        "SEMANTIC DRIFT — `gg fmt` changed the program's stdout.\n\
+         === Reformatted source ===\n{reformatted}",
+    );
 }
 
 // ══════════════════════════════════════════════════════════════

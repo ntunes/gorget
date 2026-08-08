@@ -1088,7 +1088,8 @@ impl Formatter {
             match param.ownership {
                 Ownership::Borrow => self.emitter.write("self"),
                 Ownership::MutableBorrow => self.emitter.write("&self"),
-                Ownership::Move => self.emitter.write("!self"),
+                // D27 Round A: `^self` (was `!self`); `!` is the error channel.
+                Ownership::Move => self.emitter.write("^self"),
             }
             return;
         }
@@ -1602,7 +1603,8 @@ impl Formatter {
                     if let Some(ownership) = param_ownerships.get(i) {
                         match ownership {
                             Ownership::MutableBorrow => self.emitter.write(" &"),
-                            Ownership::Move => self.emitter.write(" !"),
+                            // D27 Round A: `Type ^` in fn-type param list (was `Type !`).
+                            Ownership::Move => self.emitter.write(" ^"),
                             Ownership::Borrow => {}
                         }
                     }
@@ -1615,7 +1617,8 @@ impl Formatter {
             }
             Type::Owned(inner) => {
                 self.format_type(inner);
-                self.emitter.write(" !");
+                // D27 Round A: type-arg suffix `Vector[T ^]` (was `Vector[T !]`).
+                self.emitter.write(" ^");
             }
             Type::Pointer(inner) => {
                 self.format_type(inner);
@@ -1892,8 +1895,9 @@ impl Formatter {
                 self.write_doc(&nil_doc);
             }
             Expr::Move { expr } => {
-                self.emitter.write("!");
-                // FMT-A: Move `!` parses operand at bp 33 (parser::expr.rs:596).
+                // D27 Round A: prefix move sigil `^` (was `!`); `!` is now the error channel.
+                self.emitter.write("^");
+                // FMT-A: Move `^` parses operand at bp 33 (parser::expr.rs:596).
                 self.format_prefix_operand(expr, 33);
             }
             // D29: postfix error-propagation renders the `!` AFTER the inner
@@ -2009,7 +2013,8 @@ impl Formatter {
                     self.emitter.write("async ");
                 }
                 if *is_move {
-                    self.emitter.write("!");
+                    // D27 Round A: move-closure prefix `^` (was `!`).
+                    self.emitter.write("^");
                 }
                 let items: Vec<doc::Doc> = params.iter().map(|p| {
                     doc::text(self.element_to_string(|f| f.format_closure_param(&p.node)))
@@ -2073,7 +2078,8 @@ impl Formatter {
                 let own_prefix = match ownership {
                     Ownership::Borrow => "",
                     Ownership::MutableBorrow => "&",
-                    Ownership::Move => "!",
+                    // D27 Round A: comprehension for-binder `^` (was `!`).
+                    Ownership::Move => "^",
                 };
                 let iter_s = self.element_to_string(|f| f.format_expr(iterable));
                 let cond_s = condition.as_ref().map(|c| {
@@ -2268,7 +2274,9 @@ impl Formatter {
         match ownership {
             Ownership::Borrow => {}
             Ownership::MutableBorrow => self.emitter.write("&"),
-            Ownership::Move => self.emitter.write("!"),
+            // D27 Round A: generic ownership-prefix helper — `^` (was `!`).
+            // Chokepoint for named-param emission (`format_param` non-self path).
+            Ownership::Move => self.emitter.write("^"),
         }
     }
 
