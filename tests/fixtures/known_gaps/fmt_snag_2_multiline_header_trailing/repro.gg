@@ -1,0 +1,7 @@
+struct S[
+    T
+]:  # multi-line header trailing
+    T x
+
+int main():
+    return 0
