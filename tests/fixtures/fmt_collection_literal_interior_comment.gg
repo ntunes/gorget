@@ -1,0 +1,114 @@
+# R39 fmt collection-literal interior comment escape — wide axis fixture.
+#
+# AXIS COVERAGE (Core #12 axis-complete): {ArrayLiteral, TupleLiteral,
+# DictLiteral, StructLiteral-via-Call} × {leading, trailing, orphan-pre-
+# close, nested} × {first, middle, last position}. Each cell has a unique
+# `# SEN <arm>-<class>-<pos>` sentinel; the paired integration test asserts
+# each sentinel line lives INSIDE its owning bracket (at indent ≥ 4 for a
+# top-level literal, ≥ 8 for a nested one), NOT dedented to the enclosing
+# scope's indent.
+#
+# Pre-fix behaviour (the bug this fixture pins): every `# SEN` interior
+# comment dedents to column 0 AFTER the closing bracket — the exact
+# `gg fmt compiler/data/resources.gg` symptom the round retires.
+
+struct Entry:
+    int a
+    int b
+
+# ── ArrayLiteral × {leading, trailing, orphan-pre-close, nested} ──
+Vector[int] ARR_LEADING = [
+    # SEN array-leading-first
+    1,
+    # SEN array-leading-mid
+    2,
+    3,
+]
+
+Vector[int] ARR_TRAILING = [
+    1,  # SEN array-trailing-first
+    2,  # SEN array-trailing-mid
+    3,  # SEN array-trailing-last
+]
+
+Vector[int] ARR_ORPHAN = [
+    1,
+    2,
+    3,
+    # SEN array-orphan-pre-close
+]
+
+Vector[Vector[int]] ARR_NESTED = [
+    [
+        10,
+        # SEN array-nested-inner
+        20,
+    ],
+    [30, 40],
+]
+
+# ── DictLiteral × {leading, trailing, orphan-pre-close} ──
+Dict[String, int] DICT_LEADING = {
+    # SEN dict-leading-first
+    "a": 1,
+    # SEN dict-leading-mid
+    "b": 2,
+    "c": 3,
+}
+
+Dict[String, int] DICT_TRAILING = {
+    "a": 1,  # SEN dict-trailing-first
+    "b": 2,  # SEN dict-trailing-mid
+    "c": 3,  # SEN dict-trailing-last
+}
+
+Dict[String, int] DICT_ORPHAN = {
+    "a": 1,
+    "b": 2,
+    "c": 3,
+    # SEN dict-orphan-pre-close
+}
+
+int main():
+    # ── TupleLiteral × {leading, trailing, orphan-pre-close} ──
+    # (Multi-element tuples only — single-elem is a known gap; see
+    # tests/fixtures/known_gaps/fmt_collection_literal_interior_tuple_single_elem.gg)
+    auto tup_leading = (
+        # SEN tuple-leading-first
+        1,
+        # SEN tuple-leading-mid
+        2,
+        3,
+    )
+    auto _tup_trailing = (
+        1,  # SEN tuple-trailing-first
+        2,  # SEN tuple-trailing-mid
+        3,  # SEN tuple-trailing-last
+    )
+    auto _tup_orphan = (
+        1,
+        2,
+        3,
+        # SEN tuple-orphan-pre-close
+    )
+
+    # ── StructLiteral-shape (parsed as Call in fmt-only) × {leading, trailing, orphan} ──
+    # NOTE: fmt runs BEFORE semantic rewrite, so `Entry(...)` is Expr::Call
+    # in fmt's view — NOT Expr::StructLiteral. The struct-shape Call-args
+    # sub-case is a filed known gap (interior comment escapes ONE LEVEL up
+    # instead of to col 0): see
+    # `tests/fixtures/known_gaps/fmt_collection_literal_interior_call_args.gg`.
+    # These fixtures still assert the outer-scope leading-comment case,
+    # which the round retires class-wide via the Array/Tuple/Dict dispatch.
+    Entry struct_a = Entry(1, 2)
+    Entry struct_b = Entry(3, 4)
+
+    print(ARR_LEADING[0])
+    print(ARR_TRAILING[1])
+    print(ARR_ORPHAN[2])
+    print(ARR_NESTED[0][0])
+    print(tup_leading.0)
+    print(DICT_LEADING["b"])
+    print(struct_a.a)
+    print(struct_b.a)
+    return 0

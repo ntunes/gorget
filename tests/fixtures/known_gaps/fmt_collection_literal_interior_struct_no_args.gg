@@ -1,0 +1,42 @@
+# R39 fmt collection-literal interior comment escape — KNOWN GAP:
+# `Expr::StructLiteral { args: [] }` (zero-arg struct construction) has no
+# element spans from which to derive the arg-tuple range needed by
+# `has_interior_comments`, so the dispatch is skipped for the empty-args
+# case. An interior comment inside `Foo()\n    # C\n)` still escapes to
+# the enclosing scope's next comment hook.
+#
+# ALSO: `Expr::StructLiteral` is currently UNREACHABLE from `gg fmt` —
+# fmt runs BEFORE the `semantic/rewrite.rs` pass that converts
+# `Expr::Call { callee: <struct-name> }` into `Expr::StructLiteral`. So
+# in the fmt-only pipeline the same shape is seen as
+# `Expr::Call { callee, args: [] }` and takes the Call arm's
+# format_call_args_wrapped path (which is itself a filed sibling gap; see
+# `fmt_collection_literal_interior_call_args.gg`).
+#
+# INTENDED (post-fix) shape after `gg fmt`:
+#     void main():
+#         Foo f = Foo(
+#             # inside empty ctor
+#         )
+#         print(1)
+#
+# CURRENT shape:
+#     void main():
+#         Foo f = Foo()
+#         # inside empty ctor
+#         print(1)
+#
+# UN-IGNORE + PROMOTE to a live regression fixture when either
+#   (a) the StructLiteral empty-args dispatch is added (span derivation
+#       from the CALL span-end walked backward for the `(` position), OR
+#   (b) the Call-args wrapper (`format_call_args_wrapped`) grows the
+#       same dispatch and closes the sibling class (Core #4).
+
+struct Foo:
+    pass
+
+void main():
+    Foo _f = Foo(
+        # inside empty ctor
+    )
+    print(1)

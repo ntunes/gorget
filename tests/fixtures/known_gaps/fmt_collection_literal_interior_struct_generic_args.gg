@@ -1,0 +1,43 @@
+# R39 fmt collection-literal interior comment escape — KNOWN GAP:
+# a comment INTERIOR to the generic-args slot of a struct/function
+# instantiation (`Foo[T, # C, U](a)`) is NOT covered by the round's fix.
+#
+# The R39 `Expr::StructLiteral` arm's dispatch narrows the interior-check
+# to the ARG-tuple range (from `args.first().span.start` to `expr.span.end`)
+# specifically to AVOID mis-firing on a generic_args-interior comment
+# with the wrong container_end (arg-tuple end, not generic-args end). But
+# this correctness fix also leaves the generic-args-interior escape
+# UNCAUGHT. Similar for `Expr::Call` and `format_generic_args_wrapped`.
+#
+# INTENDED (post-fix) shape after `gg fmt`:
+#     void main():
+#         auto x = foo[
+#             int,
+#             # in generic args
+#             String,
+#         ](42)
+#         print(x)
+#
+# CURRENT shape:
+#     void main():
+#         auto x = foo[int, String](42)
+#         # in generic args   ← escapes to enclosing scope
+#         print(x)
+#
+# UN-IGNORE + PROMOTE to a live regression fixture when
+# `format_generic_args_wrapped` grows the same interior-comment dispatch
+# (small addition — reuse `has_interior_comments` and
+# `format_bracketed_broken_with_comments` with `[`/`]`). Additionally,
+# `format_generic_params_wrapped` (for struct/fn generic parameters
+# `struct Foo[T, U]:`) has the same shape and should be updated together.
+
+Vector[int] foo[T, U](int x):
+    return [x]
+
+void main():
+    auto x = foo[
+        int,
+        # in generic args
+        String,
+    ](42)
+    print(x[0])

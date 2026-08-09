@@ -12296,6 +12296,431 @@ fn fmt_idempotent() {
     }
 }
 
+// ══════════════════════════════════════════════════════════════
+// R39 fmt collection-literal interior comment escape (round 39)
+// ══════════════════════════════════════════════════════════════
+//
+// The round's fix dispatches collection-literal formatting through
+// `Formatter::format_bracketed_broken_with_comments` whenever
+// `Formatter::has_interior_comments(container_span)` fires. Without the
+// fix, every `# ...` comment interior to an `Expr::ArrayLiteral` /
+// `Expr::TupleLiteral` / `Expr::DictLiteral` was silently DROPPED by
+// the sub-formatter (`element_to_string_at` seeds a fresh Formatter with
+// EMPTY comment sideband) and then re-emerged via the OUTER formatter's
+// `emit_trailing_comment_after` — dedented to column 0 AFTER the closing
+// bracket. The real-world flagship is `compiler/data/resources.gg`
+// (~138 interior comments across `RESOURCES`, `RUNTIME_FNS`, and
+// `COLLECTION_BUILTIN_METHODS`).
+//
+// The tests below pin one axis-cell per test, so a per-class regression
+// (leading vs trailing vs orphan-pre-close vs nested) fingers itself.
+
+/// R39 axis cell — leading comments preserved INSIDE the bracket.
+#[test]
+fn fmt_collection_literal_interior_comment_leading() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_collection_literal_interior_comment.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_collection_literal_interior_comment.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Each leading sentinel MUST appear on a line whose indent-prefix
+    // matches its expected interior indent. Top-level literals (Array,
+    // Dict) live at module scope so interior is exactly 4 spaces; the
+    // tuple literals live inside `main()`'s body so interior is 8 spaces
+    // (4 for main body + 4 for tuple interior). A dedent-to-col-0
+    // symptom (pre-fix) trips both.
+    let leading_expectations: &[(&str, &str)] = &[
+        ("# SEN array-leading-first", "    "),
+        ("# SEN array-leading-mid", "    "),
+        ("# SEN dict-leading-first", "    "),
+        ("# SEN dict-leading-mid", "    "),
+        ("# SEN tuple-leading-first", "        "),
+        ("# SEN tuple-leading-mid", "        "),
+    ];
+    for (sentinel, expected_prefix) in leading_expectations {
+        let line = formatted
+            .lines()
+            .find(|l| l.contains(sentinel))
+            .unwrap_or_else(|| {
+                panic!(
+                    "R39 collit-escape leading-comment regression: \
+                     sentinel `{sentinel}` missing from formatted output. \
+                     The pre-fix bug DROPPED interior comments — this test \
+                     asserts the round's dispatch fix preserves them.\n\
+                     === Formatted ===\n{formatted}"
+                );
+            });
+        // Exact-prefix (not "starts_with prefix + arbitrary more space")
+        // so a partial over-dedent also trips.
+        let expected_len = expected_prefix.len();
+        let indent = line.chars().take_while(|c| *c == ' ').count();
+        assert_eq!(
+            indent, expected_len,
+            "R39 collit-escape leading-comment DEDENT regression: \
+             sentinel `{sentinel}` at wrong indent — expected {expected_len} \
+             spaces, got {indent}: {line:?}\n\
+             === Formatted ===\n{formatted}"
+        );
+    }
+}
+
+/// R39 axis cell — trailing comments stay on same source line as their
+/// owning element.
+#[test]
+fn fmt_collection_literal_interior_comment_trailing() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_collection_literal_interior_comment.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_collection_literal_interior_comment.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Each (sentinel, owning_element_prefix) pair must appear on the SAME
+    // formatted line — the trailing-comma-then-inline-comment shape.
+    let trailing_pairs: &[(&str, &str)] = &[
+        ("# SEN array-trailing-first", "    1,"),
+        ("# SEN array-trailing-mid", "    2,"),
+        ("# SEN array-trailing-last", "    3,"),
+        ("# SEN dict-trailing-first", "    \"a\": 1,"),
+        ("# SEN dict-trailing-mid", "    \"b\": 2,"),
+        ("# SEN dict-trailing-last", "    \"c\": 3,"),
+        ("# SEN tuple-trailing-first", "        1,"),
+        ("# SEN tuple-trailing-mid", "        2,"),
+        ("# SEN tuple-trailing-last", "        3,"),
+    ];
+    for (sentinel, owning_prefix) in trailing_pairs {
+        let line = formatted
+            .lines()
+            .find(|l| l.contains(sentinel))
+            .unwrap_or_else(|| {
+                panic!(
+                    "R39 collit-escape trailing-comment MISSING: `{sentinel}`\n\
+                     === Formatted ===\n{formatted}"
+                );
+            });
+        assert!(
+            line.starts_with(owning_prefix),
+            "R39 collit-escape trailing-comment DETACHED from owner: \
+             sentinel `{sentinel}` expected on line beginning with \
+             `{owning_prefix:?}`, got: {line:?}\n\
+             === Formatted ===\n{formatted}"
+        );
+    }
+}
+
+/// R39 axis cell — orphan comment between last element and closing
+/// bracket stays INSIDE the bracket (the pass-1-R2-fold pre-close flush).
+#[test]
+fn fmt_collection_literal_interior_comment_orphan_pre_close() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_collection_literal_interior_comment.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_collection_literal_interior_comment.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Each orphan sentinel must appear on a line at the LITERAL's interior
+    // indent, and the FOLLOWING code line must be the closing bracket at
+    // the outer-scope indent. Absent the pre-close `emit_comments_before`
+    // flush, the orphan escapes to the enclosing scope's next comment
+    // hook (col 0 for top-level, indent-4 for main-body).
+    let orphan_expectations: &[(&str, &str, &str)] = &[
+        // (sentinel, expected_own_indent_prefix, expected_close_bracket_line)
+        ("# SEN array-orphan-pre-close", "    ", "]"),
+        ("# SEN dict-orphan-pre-close", "    ", "}"),
+        ("# SEN tuple-orphan-pre-close", "        ", "    )"),
+    ];
+    for (sentinel, own_prefix, close_line) in orphan_expectations {
+        let lines: Vec<&str> = formatted.lines().collect();
+        let idx = lines.iter().position(|l| l.contains(sentinel))
+            .unwrap_or_else(|| {
+                panic!(
+                    "R39 collit-escape orphan-pre-close MISSING: \
+                     `{sentinel}`\n=== Formatted ===\n{formatted}"
+                );
+            });
+        assert!(
+            lines[idx].starts_with(own_prefix),
+            "R39 collit-escape orphan-pre-close DEDENT: sentinel \
+             `{sentinel}` at wrong indent, expected prefix {own_prefix:?}, \
+             got: {:?}\n=== Formatted ===\n{formatted}",
+            lines[idx]
+        );
+        // The NEXT non-empty line must be the closing bracket.
+        let next_nonempty = lines[idx + 1..].iter()
+            .find(|l| !l.trim().is_empty())
+            .expect("orphan sentinel must be followed by a close-bracket line");
+        assert_eq!(
+            next_nonempty.trim_end(), *close_line,
+            "R39 collit-escape orphan-pre-close CLOSE-BRACKET drift: \
+             sentinel `{sentinel}` — next non-empty line should be \
+             `{close_line:?}`, got: {next_nonempty:?}\n\
+             === Formatted ===\n{formatted}"
+        );
+    }
+}
+
+/// R39 axis cell — nested literal's interior comment stays at inner
+/// literal's interior indent (double-indent for a literal-in-a-literal).
+#[test]
+fn fmt_collection_literal_interior_comment_nested() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_collection_literal_interior_comment.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_collection_literal_interior_comment.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // ARR_NESTED = [[10, # SEN array-nested-inner, 20], [30, 40]]
+    // Inner comment lives inside inner `[10, 20]` which is inside outer
+    // `[...]`. Outer is at module-scope indent-0; interior indent-4.
+    // Inner is at indent-4 (as an element of outer); its interior is
+    // indent-8. So the sentinel MUST appear at exactly 8 spaces.
+    let sentinel = "# SEN array-nested-inner";
+    let line = formatted
+        .lines()
+        .find(|l| l.contains(sentinel))
+        .unwrap_or_else(|| {
+            panic!(
+                "R39 collit-escape nested-comment MISSING: `{sentinel}`\n\
+                 === Formatted ===\n{formatted}"
+            );
+        });
+    assert!(
+        line.starts_with("        ") && !line.starts_with("         "),
+        "R39 collit-escape nested-comment INDENT regression: sentinel \
+         `{sentinel}` expected at exactly 8-space indent (inside a \
+         nested literal at outer-array-position-0), got: {line:?}\n\
+         === Formatted ===\n{formatted}"
+    );
+}
+
+/// R39 idempotence pin on the wide fixture — pass1 == pass2.
+#[test]
+fn fmt_collection_literal_interior_comment_idempotent() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_collection_literal_interior_comment.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_collection_literal_interior_comment.gg");
+    let pass1 = gorget::formatter::format_source_infallible(&source);
+    let pass2 = gorget::formatter::format_source_infallible(&pass1);
+    assert_eq!(
+        pass1, pass2,
+        "R39 collit-escape idempotence regression: `gg fmt` is not \
+         idempotent on the collection-literal interior-comment wide \
+         fixture.\n=== Pass 1 ===\n{pass1}\n=== Pass 2 ===\n{pass2}"
+    );
+}
+
+/// R39 semantic preservation pin — reformatted fixture builds AND runs
+/// identically to the original.
+#[test]
+#[serial_test::serial(gg_build)]
+fn fmt_collection_literal_interior_comment_source_runs() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_collection_literal_interior_comment.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_collection_literal_interior_comment.gg");
+    let orig_stdout = build_and_run_capture_stdout(
+        &fixture_path,
+        "fmt_collection_literal_interior_comment (original)",
+    );
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let reformatted_path = tmp.path().join("fmt_collection_literal_interior_comment.gg");
+    std::fs::write(&reformatted_path, &formatted).expect("write reformatted");
+    let reformatted_stdout = build_and_run_capture_stdout(
+        &reformatted_path,
+        "fmt_collection_literal_interior_comment (reformatted)",
+    );
+    assert_eq!(
+        orig_stdout, reformatted_stdout,
+        "R39 collit-escape SEMANTIC DRIFT: reformatting changed program \
+         stdout.\n=== Original stdout ===\n{orig_stdout}\n\
+         === Reformatted stdout ===\n{reformatted_stdout}\n\
+         === Formatted source ===\n{formatted}"
+    );
+}
+
+// ── R39 fmt collection-literal interior-comment escape — filed known
+//    gaps. Each test consumes the durable repro fixture under
+//    `tests/fixtures/known_gaps/` and asserts the CORRECT/intended
+//    post-fix formatted output. `#[ignore]`d today; un-ignore + promote
+//    to a live regression fixture when the corresponding sub-case is
+//    closed. Filed per CLAUDE.md Task Continuity: "Every filed
+//    reproducible bug/gap ships a DURABLE `known_gaps` repro."
+
+/// R39 known gap — `Expr::TupleLiteral` single-element branch bypasses
+/// the interior-comment dispatch. `(x,)` stays flat by design; the
+/// broken-with-comments helper is not called, so an interior comment
+/// escapes. Rare shape; filed as follow-up.
+#[test]
+#[ignore = "R39 known gap: single-element tuple bypass in TupleLiteral \
+            arm — interior comment escapes; un-ignore when the elems.len() == 1 \
+            branch unifies with the multi-elem dispatch."]
+fn fmt_collection_literal_interior_tuple_single_elem() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_collection_literal_interior_tuple_single_elem.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_collection_literal_interior_tuple_single_elem.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    // Intended-post-fix: `# inner` at indent-8 inside the tuple parens.
+    let line = formatted.lines().find(|l| l.contains("# inner"))
+        .expect("known-gap fixture must contain `# inner` sentinel");
+    assert!(
+        line.starts_with("        # inner"),
+        "R39 single-elem-tuple gap CLOSED: sentinel `# inner` now at \
+         8-space indent inside `(...,)`. Promote fixture to a live \
+         regression by moving it out of `known_gaps/` and removing the \
+         `#[ignore]` on this test. Line: {line:?}\n=== Formatted ===\n{formatted}"
+    );
+}
+
+/// R39 known gap — `Expr::StructLiteral` empty-args case. No first-arg
+/// span from which to derive the arg-tuple range; dispatch skipped.
+/// (Also unreachable in fmt today — see the fixture header for the
+/// double-nesting: fmt pipeline sees `Expr::Call { args: [] }`, which
+/// takes `format_call_args_wrapped` — the sibling call-args gap below.)
+#[test]
+#[ignore = "R39 known gap: StructLiteral empty-args skipped; un-ignore when \
+            span derivation (walk back from expr.span.end to `(`) lands."]
+fn fmt_collection_literal_interior_struct_no_args() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_collection_literal_interior_struct_no_args.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_collection_literal_interior_struct_no_args.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    // Intended-post-fix: `# inside empty ctor` at indent-8 inside `Foo(\n)`.
+    let line = formatted.lines().find(|l| l.contains("# inside empty ctor"))
+        .expect("known-gap fixture must contain sentinel");
+    assert!(
+        line.starts_with("        # inside empty ctor"),
+        "R39 empty-args-struct gap CLOSED: sentinel now at 8-space \
+         indent. Promote fixture. Line: {line:?}\n=== Formatted ===\n{formatted}"
+    );
+}
+
+/// R39 known gap — generic-args-interior comment escape. Current fix
+/// narrows the interior-check to the arg-tuple range specifically to
+/// AVOID mis-firing on `Foo[T, # C](a)`, at the cost of leaving that
+/// sub-case uncaught. Requires extending
+/// `format_generic_args_wrapped` with the same dispatch.
+#[test]
+#[ignore = "R39 known gap: generic-args-interior comment not dispatched; un-ignore \
+            when `format_generic_args_wrapped` gains the same broken-with-comments \
+            dispatch."]
+fn fmt_collection_literal_interior_struct_generic_args() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_collection_literal_interior_struct_generic_args.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_collection_literal_interior_struct_generic_args.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    // Intended-post-fix: `# in generic args` at indent-8 inside the
+    // generic-args `[...]`.
+    let line = formatted.lines().find(|l| l.contains("# in generic args"))
+        .expect("known-gap fixture must contain sentinel");
+    assert!(
+        line.starts_with("        # in generic args"),
+        "R39 generic-args gap CLOSED: sentinel now at 8-space indent. \
+         Promote fixture. Line: {line:?}\n=== Formatted ===\n{formatted}"
+    );
+}
+
+/// R39 known gap — Call-args nested collection-literal interior comment
+/// escapes ONE LEVEL up (not to col 0 as pre-round, but not fully
+/// preserved either). Root cause: `format_call_args_wrapped` renders
+/// each arg via `element_to_string` which uses a sub-formatter with
+/// EMPTY comments, dropping any interior-literal comment; the outer
+/// formatter then re-flushes at the wrong (dedented) indent. Requires
+/// extending `format_call_args_wrapped` with the same dispatch (see
+/// fixture header for the full triage).
+#[test]
+#[ignore = "R39 known gap: Call-args nested literal escape one level; un-ignore \
+            when `format_call_args_wrapped` gains the same broken-with-comments \
+            dispatch."]
+fn fmt_collection_literal_interior_call_args() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_collection_literal_interior_call_args.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_collection_literal_interior_call_args.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    // Intended-post-fix: `# inner comment` at indent-8 inside the
+    // nested `[10, 20]` array of `Entry(1, [...])`.
+    let line = formatted.lines().find(|l| l.contains("# inner comment"))
+        .expect("known-gap fixture must contain sentinel");
+    assert!(
+        line.starts_with("        # inner comment"),
+        "R39 Call-args gap CLOSED: sentinel now at 8-space indent \
+         inside the nested Call-arg literal. Promote fixture. Line: \
+         {line:?}\n=== Formatted ===\n{formatted}"
+    );
+}
+
+/// R39 real-world flagship validator — the input that motivated the
+/// round. `compiler/data/resources.gg` carries ~138 interior comments
+/// across `RESOURCES`, `RUNTIME_FNS`, and `COLLECTION_BUILTIN_METHODS`
+/// static arrays. Pre-fix, `gg fmt` dedented every one to column 0
+/// AFTER the closing `]`, corrupting the file. Post-fix, they stay
+/// inside the array at ≥ 4-space indent.
+///
+/// The pre-fix count of `grep -c "^    # "` = 0 (all interior comments
+/// dedented). Post-fix ≥ 138 (all preserved at the top-level array's
+/// interior indent). The `# GorgetString — multi-alias` anchor is a
+/// spot-check for the DEDENT-to-col-0 symptom class.
+#[test]
+fn fmt_resources_gg_comment_positions_preserved() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("compiler/data/resources.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read compiler/data/resources.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Count interior-comment lines (4-space indent, "# " prefix).
+    let interior_count = formatted
+        .lines()
+        .filter(|l| l.starts_with("    # "))
+        .count();
+    assert!(
+        interior_count >= 138,
+        "R39 collit-escape FLAGSHIP regression: post-fix `gg fmt` of \
+         compiler/data/resources.gg produced only {interior_count} \
+         interior-comment lines at indent-4 (`^    # `), expected ≥ 138 \
+         (pre-fix ~0; the round's fix preserves them inside the array).\n\
+         If this trips, either the dispatch was removed or a fresh sub- \
+         case of the class re-opened."
+    );
+
+    // Anchor spot-check: `# GorgetString — multi-alias` must NOT appear
+    // at column 0. Pre-fix bug relocated it to the top-level scope AFTER
+    // the closing `]`.
+    let anchor = "# GorgetString — multi-alias";
+    let anchor_line = formatted
+        .lines()
+        .find(|l| l.contains(anchor))
+        .unwrap_or_else(|| {
+            panic!(
+                "R39 collit-escape FLAGSHIP: anchor comment `{anchor}` \
+                 missing from formatted output entirely — the comment \
+                 was dropped by fmt (worse than the escape bug)."
+            );
+        });
+    assert!(
+        anchor_line.starts_with("    "),
+        "R39 collit-escape FLAGSHIP DEDENT: anchor comment `{anchor}` \
+         appeared at column 0 (or non-indented) after `gg fmt` — the \
+         exact pre-fix symptom class this round retires. Line: \
+         {anchor_line:?}"
+    );
+}
+
 /// R36 FMT-B regression pin — the `fmt_multiline_arg_indent` fixture's
 /// output-review nit (reviewer 2026-08-08): fmt_idempotent + bootstrap
 /// were the only guards for the graduated fixture, and on the isolated

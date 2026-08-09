@@ -1,0 +1,63 @@
+# R39 fmt collection-literal interior comment escape — KNOWN GAP:
+# an interior comment inside a Call arg's NESTED collection literal
+# escapes ONE LEVEL up instead of being preserved at the inner literal's
+# indent.
+#
+# Root cause: fmt runs BEFORE the `semantic/rewrite.rs` pass that rewrites
+# `Expr::Call { callee: StructName }` into `Expr::StructLiteral`, so the
+# formatter's `Expr::StructLiteral` arm (which was added by R39's fix)
+# is UNREACHABLE from the fmt-only pipeline. All `Foo(a, b)`-shape calls
+# route through the `Expr::Call` arm, which delegates to
+# `format_call_args_wrapped(args)`. That helper renders each arg via
+# `element_to_string(|f| f.format_call_arg(...))` — using a SUB-formatter
+# with EMPTY comment sideband — so any collection-literal-interior
+# comment inside a call arg is DROPPED by the sub-render, then re-emerges
+# via the OUTER formatter's next `emit_comments_before` at the wrong
+# (dedented) indent.
+#
+# The R39 round's fix handles the top-level ArrayLiteral / TupleLiteral /
+# DictLiteral shapes (Core #4 chokepoint at the arms). The Call-args
+# sub-case is a related sibling gap in the same class.
+#
+# WORST CASE OBSERVED (in `compiler/data/resources.gg`):
+#   original indent 8:      inside inner `[BuiltinMethodDecl(...), ...]`
+#                           within `BuiltinMethodEntry(CkVector(), [...])`
+#   post-R39 indent 4:      escapes ONE level up (still inside outer array,
+#                           NOT to col 0 as pre-round)
+#   fully-fixed indent 8:   preserved at inner-array interior
+#
+# INTENDED (post-fix) shape after `gg fmt`:
+#     void main():
+#         Entry e = Entry(1, [
+#             10,
+#             # inner comment
+#             20,
+#         ])
+#         print(e.a)
+#
+# CURRENT shape (after R39):
+#     void main():
+#         Entry e = Entry(1, [10, 20])
+#         # inner comment  ← escapes to enclosing scope
+#         print(e.a)
+#
+# UN-IGNORE + PROMOTE when `format_call_args_wrapped` gains the same
+# `has_interior_comments` / `format_bracketed_broken_with_comments`
+# dispatch as the 4 arms — small addition (~15 LOC), requires passing
+# `container_end` (usually `expr.span.end`) through from the 4 call sites
+# (Expr::Call, Expr::MethodCall, Expr::DotShorthand, and the method-chain
+# builder). The chain builder case is harder because its segment
+# rendering already routes through `element_to_string` (sub-formatter);
+# would need to inline segment rendering or bubble comments up.
+
+struct Entry:
+    int a
+    Vector[int] xs
+
+void main():
+    Entry e = Entry(1, [
+        10,
+        # inner comment
+        20,
+    ])
+    print(e.a)

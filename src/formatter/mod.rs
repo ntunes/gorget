@@ -273,6 +273,92 @@ impl Formatter {
         }
     }
 
+    /// R39 fmt collection-literal interior-comment escape: returns true iff
+    /// any UNEMITTED comment's span.start lies STRICTLY INSIDE `(start, end)`.
+    ///
+    /// Used by the 4 collection-literal arms of `format_expr`
+    /// (ArrayLiteral / TupleLiteral / DictLiteral / StructLiteral) to
+    /// decide whether to dispatch to `format_bracketed_broken_with_comments`
+    /// instead of the flat `doc::surround` path. When ANY element-interior
+    /// comment exists, the doc DSL cannot preserve it — the sub-formatter
+    /// used by `element_to_string` is passed empty source + no comment
+    /// sideband, so any comment interior to a collection literal is
+    /// silently dropped by the sub-render and then dedented to column 0
+    /// by the OUTER `emit_trailing_comment_after` after the literal
+    /// closes. The broken-with-comments path reuses the outer formatter's
+    /// comment sideband cursor to place each comment at the correct
+    /// interior indent, retiring the whole class.
+    ///
+    /// Strict-interior: a comment at exactly `start` or `end` belongs to
+    /// the ENCLOSING scope's sibling-loop hooks (leading of container,
+    /// trailing after container). Only comments in `(start, end)` are
+    /// collection-literal-interior and need the broken path.
+    fn has_interior_comments(&self, start: usize, end: usize) -> bool {
+        self.comments[self.comment_cursor..]
+            .iter()
+            .any(|c| c.span.start > start && c.span.start < end)
+    }
+
+    /// R39 fmt collection-literal interior-comment escape (Core #4
+    /// producer chokepoint): render `open elems close` in BROKEN
+    /// (multi-line) form with the outer formatter's comment sideband
+    /// interleaved per element. Called by the 4 collection-literal arms
+    /// of `format_expr` when `has_interior_comments(container_span)`
+    /// fires — i.e. when the flat `doc::surround` path would DROP interior
+    /// comments (the exact snag class).
+    ///
+    /// Emit order per element:
+    ///   1. `emit_comments_before(elem_start)` — flush standalone-line
+    ///      leading comment(s) at the currently-indented interior cursor.
+    ///   2. `format_elem(self, elem)` — render the element via the OUTER
+    ///      formatter (so nested literals ALSO route through this helper
+    ///      if they too have interior comments; Core #4 recursion).
+    ///   3. `,` + newline — one element per line, trailing comma always.
+    ///   4. `emit_trailing_comment_after(elem_end)` — attach any same-
+    ///      source-line trailing comment via `inject_before_newline`.
+    ///
+    /// After the loop, BEFORE the closing bracket:
+    /// `emit_comments_before(container_end)` flushes any ORPHAN comment
+    /// that sits after the last element's span-end but before the closing
+    /// bracket (e.g. `[a, b,\n    # tail\n]` where `# tail` shares no
+    /// element line). Without this, the orphan escapes to the enclosing
+    /// scope's next comment hook and dedents to column 0 — the same bug
+    /// in miniature (pass 1 R2 fold).
+    ///
+    /// `container_end` MUST be the AST-recorded EXCLUSIVE end of the
+    /// container (position of the byte AFTER the closing bracket, matching
+    /// logos' end-exclusive convention — verified at `src/parser/expr.rs`
+    /// `parse_array_or_comprehension` which merges `start.merge(previous_span())`
+    /// where `previous_span` returns the `]` token span end-exclusive).
+    fn format_bracketed_broken_with_comments<E>(
+        &mut self,
+        open: &str,
+        close: &str,
+        container_end: usize,
+        elems: &[E],
+        span_of: impl Fn(&E) -> (usize, usize),
+        mut format_elem: impl FnMut(&mut Formatter, &E),
+    ) {
+        self.emitter.write(open);
+        self.emitter.newline();
+        self.emitter.indent();
+        for elem in elems {
+            let (elem_start, elem_end) = span_of(elem);
+            self.emit_comments_before(elem_start);
+            format_elem(self, elem);
+            self.emitter.write(",");
+            self.emitter.newline();
+            self.emit_trailing_comment_after(elem_end);
+        }
+        // Orphan-comment flush before close (pass 1 R2): a comment on its
+        // own line between the last element and the closing bracket has no
+        // element to attach to; without this it escapes to the outer
+        // scope's next `emit_trailing_comment_after` and dedents.
+        self.emit_comments_before(container_end);
+        self.emitter.dedent();
+        self.emitter.write(close);
+    }
+
     /// R39 snag #2 sub-task 5b — container-header trailing comment.
     ///
     /// A comment on the SAME source line as a container-header
@@ -2594,6 +2680,24 @@ impl Formatter {
                 self.write_doc(&comp_doc);
             }
             Expr::ArrayLiteral(elems) => {
+                // R39 fmt collection-literal interior-comment escape (Core
+                // #4 chokepoint): if any un-emitted comment sits strictly
+                // inside `[...]`, the flat `doc::surround` path would
+                // silently drop it (sub-formatter has empty comment
+                // sideband — see `element_to_string_at`) and the OUTER
+                // trailing-hook would then dedent the comment to column
+                // 0. Route through the shared broken-with-comments helper
+                // so leading, trailing, and orphan-pre-close comments all
+                // land at the correct interior indent.
+                if self.has_interior_comments(expr.span.start, expr.span.end) {
+                    self.format_bracketed_broken_with_comments(
+                        "[", "]", expr.span.end,
+                        elems,
+                        |e| (e.span.start, e.span.end),
+                        |f, e| f.format_expr(e),
+                    );
+                    return;
+                }
                 let items: Vec<doc::Doc> = elems.iter().map(|e| {
                     doc::text(self.element_to_string(|f| f.format_expr(e)))
                 }).collect();
@@ -2602,11 +2706,28 @@ impl Formatter {
             }
             Expr::TupleLiteral(elems) => {
                 if elems.len() == 1 {
-                    // Single-element tuples always need trailing comma
+                    // Single-element tuples always need trailing comma.
+                    // R39 known gap (durable repro at
+                    // `tests/fixtures/known_gaps/fmt_collection_literal_interior_tuple_single_elem.gg`):
+                    // interior comments inside a single-element tuple
+                    // still escape — the broken-with-comments helper is
+                    // NOT dispatched here because a single-elem tuple
+                    // stays flat by design. Rare shape; filed as follow-up.
                     self.emitter.write("(");
                     self.format_expr(&elems[0]);
                     self.emitter.write(",)");
                 } else {
+                    // R39 fmt collection-literal interior-comment escape
+                    // (Core #4 chokepoint): see ArrayLiteral above.
+                    if self.has_interior_comments(expr.span.start, expr.span.end) {
+                        self.format_bracketed_broken_with_comments(
+                            "(", ")", expr.span.end,
+                            elems,
+                            |e| (e.span.start, e.span.end),
+                            |f, e| f.format_expr(e),
+                        );
+                        return;
+                    }
                     let items: Vec<doc::Doc> = elems.iter().map(|e| {
                         doc::text(self.element_to_string(|f| f.format_expr(e)))
                     }).collect();
@@ -2615,6 +2736,24 @@ impl Formatter {
                 }
             }
             Expr::DictLiteral(pairs) => {
+                // R39 fmt collection-literal interior-comment escape
+                // (Core #4 chokepoint): see ArrayLiteral above. `span_of`
+                // returns `(key.span.start, value.span.end)` so the range
+                // covers the WHOLE pair — a comment between key and value
+                // (rare) OR between pairs both count as pair-interior.
+                if self.has_interior_comments(expr.span.start, expr.span.end) {
+                    self.format_bracketed_broken_with_comments(
+                        "{", "}", expr.span.end,
+                        pairs,
+                        |pair| (pair.0.span.start, pair.1.span.end),
+                        |f, pair| {
+                            f.format_expr(&pair.0);
+                            f.emitter.write(": ");
+                            f.format_expr(&pair.1);
+                        },
+                    );
+                    return;
+                }
                 let items: Vec<doc::Doc> = pairs.iter().map(|(k, v)| {
                     doc::text(self.element_to_string(|f| {
                         f.format_expr(k);
@@ -2629,6 +2768,36 @@ impl Formatter {
                 self.emitter.write(&name.node);
                 if let Some(ga) = generic_args {
                     self.format_generic_args_wrapped(ga);
+                }
+                // R39 fmt collection-literal interior-comment escape
+                // (Core #4 chokepoint): NARROW the interior-check to the
+                // ARG TUPLE only — using `expr.span.start` as the interior
+                // start would fire on a comment inside `generic_args`
+                // (`Foo[T, # C](a)`) with the wrong container_end (arg-
+                // tuple end, not generic-args end), miscoloring the
+                // dispatch. Use the first arg's span.start as the interior
+                // start so only comments inside the arg tuple qualify.
+                //
+                // R39 known gaps (durable repros in
+                // `tests/fixtures/known_gaps/`):
+                //   - `args.is_empty()` (e.g. `Foo()\n  # C\n)`): no first-
+                //     arg span to derive the arg-tuple start; SKIP dispatch
+                //     — file
+                //     `fmt_collection_literal_interior_struct_no_args.gg`.
+                //   - `generic_args`-interior comment: current scope covers
+                //     only the arg tuple — file
+                //     `fmt_collection_literal_interior_struct_generic_args.gg`.
+                if !args.is_empty() {
+                    let args_start = args.first().unwrap().span.start;
+                    if self.has_interior_comments(args_start, expr.span.end) {
+                        self.format_bracketed_broken_with_comments(
+                            "(", ")", expr.span.end,
+                            args,
+                            |a| (a.span.start, a.span.end),
+                            |f, a| f.format_expr(a),
+                        );
+                        return;
+                    }
                 }
                 let items: Vec<doc::Doc> = args.iter().map(|a| {
                     doc::text(self.element_to_string(|f| f.format_expr(a)))

@@ -11738,7 +11738,14 @@ fn formatter_sibling_loops_hook_pairing() {
     /// `src/formatter/mod.rs`. The 12 sites are enumerated in the doc
     /// comment above; each has its paired `emit_trailing_comment_after`
     /// call one to a few lines below in the same loop body.
-    const EXPECTED_EMIT_COMMENTS_BEFORE: usize = 12;
+    // R39 fmt collection-literal interior-comment escape (2026-08-09):
+    // 12 → 14. The shared helper
+    // `Formatter::format_bracketed_broken_with_comments` adds TWO
+    // `.emit_comments_before(` call sites — one per-element leading
+    // flush + one orphan-pre-close flush — both inside the SINGLE helper
+    // (not per dispatcher). See `formatter_collection_literal_interior_hook_dispatch`
+    // below for the paired dispatch-count guard.
+    const EXPECTED_EMIT_COMMENTS_BEFORE: usize = 14;
     /// `emit_trailing_comment_after(` calls: 12 sibling-paired + 1
     /// EOF defensive + 1 internal delegation from
     /// `emit_trailing_comment_after_header`. If sub-task 5's EOF hook
@@ -11746,7 +11753,15 @@ fn formatter_sibling_loops_hook_pairing() {
     /// number must drop; if a new sibling loop is added without the
     /// paired call, `_BEFORE` will bump but this will not, and the
     /// count-equality assertion below fires.
-    const EXPECTED_EMIT_TRAILING_AFTER: usize = 14;
+    // R39 fmt collection-literal interior-comment escape (2026-08-09):
+    // 14 → 15. The shared helper
+    // `Formatter::format_bracketed_broken_with_comments` adds ONE
+    // `.emit_trailing_comment_after(` call site — the per-element
+    // trailing-comment splice inside the SINGLE helper (not per
+    // dispatcher). Total = 12 sibling-paired + 1 EOF defensive + 1
+    // header-helper delegation + 1 new collection-literal-interior
+    // per-element trailing.
+    const EXPECTED_EMIT_TRAILING_AFTER: usize = 15;
     /// `emit_trailing_comment_after_header(` calls: 4 structural
     /// containers (`format_struct`, `format_enum`, `format_trait`,
     /// `format_equip`). A new structural-container formatter that
@@ -11827,6 +11842,201 @@ fn formatter_sibling_loops_hook_pairing() {
          after writing `:` + newline and BEFORE `indent()` — otherwise \
          the header trailing comment dedents into the body as leading of \
          the first item."
+    );
+}
+
+/// R39 fmt collection-literal interior-comment escape (Core #4 producer
+/// chokepoint guard, 2026-08-09): every collection-literal arm of
+/// `format_expr` in `src/formatter/mod.rs` MUST dispatch through
+/// `Formatter::format_bracketed_broken_with_comments` when
+/// `Formatter::has_interior_comments` fires. This lint pins the number
+/// of dispatch sites (and the paired `has_interior_comments` call sites)
+/// at exactly 4, one per arm:
+///   1. `Expr::ArrayLiteral(elems)`
+///   2. `Expr::TupleLiteral(elems)` (multi-elem branch; single-elem is
+///      a filed known gap — see
+///      `tests/fixtures/known_gaps/fmt_collection_literal_interior_tuple_single_elem.gg`)
+///   3. `Expr::DictLiteral(pairs)`
+///   4. `Expr::StructLiteral { name, generic_args, args }` (currently
+///      UNREACHABLE from `gg fmt` — the semantic-rewrite pass that
+///      generates StructLiteral runs AFTER fmt, but the dispatch is kept
+///      as a defensive class-fix in case the fmt pipeline ever gains
+///      access to rewritten AST; the reachable sibling
+///      `Expr::Call { callee: <struct-name> }` case is a filed known
+///      gap — see
+///      `tests/fixtures/known_gaps/fmt_collection_literal_interior_call_args.gg`).
+///
+/// **Catches:** dispatch REMOVED from an existing arm (count drops to
+/// 3) OR helper called from a non-arm site (count rises to 5+).
+///
+/// **Break-and-verify (Core #6 / #15e Q2 — the guard must catch its own
+/// class):** delete the
+/// `self.format_bracketed_broken_with_comments(...)` call from any one
+/// arm and re-run; the assertion fires with `3 vs expected 4`. Similarly
+/// for `has_interior_comments`.
+///
+/// **Pairs with `formatter_literal_arms_dispatch_count`** below: that
+/// counts the ARMS themselves (Expr::*Literal in format_expr), so
+/// adding a 5th collection-literal arm (e.g. `Expr::SetLiteral`)
+/// silently — WITHOUT dispatching through the shared helper — leaves
+/// this lint's counts at 4 (still balanced) but trips the arm-count
+/// lint. The pair together closes the class-fix loop.
+#[test]
+fn formatter_collection_literal_interior_hook_dispatch() {
+    /// One dispatch per collection-literal arm in `format_expr`. See
+    /// the enumeration in the docstring above; bump ONLY with a
+    /// citation of the new arm's file:line + rationale.
+    const EXPECTED_DISPATCH: usize = 4;
+    /// One `has_interior_comments` gate per dispatch site — MUST equal
+    /// EXPECTED_DISPATCH. If a dispatch is added without a gate (the
+    /// helper always fires — wasteful; the flat `doc::surround` path is
+    /// preferable when no interior comment exists) OR a gate without a
+    /// dispatch (dead check), the two counts diverge.
+    const EXPECTED_INTERIOR_CHECK: usize = 4;
+
+    let content = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+    let mut dispatch_count = 0usize;
+    let mut interior_count = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        dispatch_count += line.matches(".format_bracketed_broken_with_comments(").count();
+        interior_count += line.matches(".has_interior_comments(").count();
+    }
+    assert_eq!(
+        dispatch_count, EXPECTED_DISPATCH,
+        "R39 fmt collection-literal interior-comment escape dispatch \
+         guard: `.format_bracketed_broken_with_comments(` call-site count \
+         in `src/formatter/mod.rs` = {dispatch_count}, expected \
+         {EXPECTED_DISPATCH} (one per Expr::ArrayLiteral / \
+         Expr::TupleLiteral / Expr::DictLiteral / Expr::StructLiteral \
+         arm in `format_expr`).\n\n\
+         If a dispatch was legitimately removed (arm deleted from AST), \
+         lower EXPECTED_DISPATCH with a citation of the arm removed. If \
+         a dispatch was added (e.g. a new Expr::SetLiteral arm), bump \
+         BOTH this constant AND the arm-count in \
+         `formatter_literal_arms_dispatch_count` below."
+    );
+    assert_eq!(
+        interior_count, EXPECTED_INTERIOR_CHECK,
+        "R39 fmt collection-literal interior-comment escape check guard: \
+         `.has_interior_comments(` call-site count in \
+         `src/formatter/mod.rs` = {interior_count}, expected \
+         {EXPECTED_INTERIOR_CHECK} (one per dispatch site — MUST equal \
+         dispatch count).\n\n\
+         If interior-check was removed at a dispatch site (helper always \
+         fires — wasteful), OR added at a non-dispatch site (dead check), \
+         reconcile with the dispatch count above."
+    );
+}
+
+/// R39 fmt collection-literal interior-comment escape (Core #4 + #15e Q2
+/// class-fix pair with `formatter_collection_literal_interior_hook_dispatch`,
+/// 2026-08-09): pins the number of `Expr::*Literal` arms in `format_expr`
+/// in `src/formatter/mod.rs` at exactly 4. Precedent:
+/// `container_literal_arms_count` at line 1021 scans `infer_expr` for
+/// `Expr::*Literal` arms in the typechecker.
+///
+/// Every collection-literal `format_expr` arm MUST dispatch through
+/// `Formatter::format_bracketed_broken_with_comments`. Adding a 5th arm
+/// (e.g. `Expr::SetLiteral`) bumps this count, forcing the developer to
+/// also bump the dispatch-count constants in
+/// `formatter_collection_literal_interior_hook_dispatch` above — that
+/// pairing IS the class-fix guard: without this arm-count check, a 5th
+/// arm added silently (without dispatching) would leave dispatch=4 =
+/// balanced, and the class-fix escape would go unnoticed.
+///
+/// **Break-and-verify:** insert `Expr::SetLiteral(_) => {}` into
+/// `format_expr`'s match body; this test fires with `5 vs expected 4`.
+///
+/// **Scope:** counts only lines that begin with `Expr::*Literal(` /
+/// `Expr::StructLiteral {` INSIDE the `format_expr` fn body, keyed off
+/// the `fn format_expr(` header + brace-depth tracking. The
+/// `Return(Some)` carve-out at ~line 1619 that pattern-matches
+/// `Expr::TupleLiteral` in `format_stmt`'s `Return` arm is a DIFFERENT
+/// fn — the scope guard excludes it.
+#[test]
+fn formatter_literal_arms_dispatch_count() {
+    /// Expected collection-literal arms in `format_expr`:
+    /// - Expr::ArrayLiteral
+    /// - Expr::TupleLiteral
+    /// - Expr::DictLiteral
+    /// - Expr::StructLiteral (kept for defensive class-fix even though
+    ///   currently unreachable via fmt's parse-only pipeline)
+    /// Baseline 2026-08-09: 4.
+    const EXPECTED_ARMS: usize = 4;
+
+    let content = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+    // Known collection-literal arms (the 4-pattern class-fix set) and a
+    // FUTURE-PROOFING list of potential-new-variant tell-tales. Adding a
+    // new variant to `Expr` typically follows the `*Literal` naming
+    // convention; catching the naming class here (rather than requiring
+    // the lint list to be updated *before* the new variant lands) makes
+    // the guard trip even when a new arm slips in unlisted. Any name in
+    // `future_literal_patterns` that grows a real count bumps the total
+    // — the developer must then either handle the new arm via dispatch
+    // + move the pattern to the KNOWN list, or intentionally raise
+    // EXPECTED_ARMS with a rationale.
+    let arm_patterns = [
+        "Expr::ArrayLiteral(",
+        "Expr::TupleLiteral(",
+        "Expr::DictLiteral(",
+        "Expr::StructLiteral {",
+    ];
+    let future_literal_patterns = [
+        "Expr::SetLiteral(",
+        "Expr::MapLiteral(",
+        "Expr::HashLiteral(",
+        "Expr::RecordLiteral(",
+        "Expr::UnitLiteral(",
+        "Expr::EnumLiteral(",
+    ];
+
+    let mut in_format_expr = false;
+    let mut depth: i32 = 0;
+    let mut count = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        if !in_format_expr && trimmed.starts_with("fn format_expr(") {
+            in_format_expr = true;
+            depth = 0;
+        }
+        if !in_format_expr {
+            continue;
+        }
+        depth += line.matches('{').count() as i32;
+        depth -= line.matches('}').count() as i32;
+        if depth <= 0 && !trimmed.starts_with("fn format_expr(") {
+            in_format_expr = false;
+            continue;
+        }
+        for pat in arm_patterns.iter().chain(future_literal_patterns.iter()) {
+            if trimmed.starts_with(pat) {
+                count += 1;
+                break;
+            }
+        }
+    }
+    assert_eq!(
+        count, EXPECTED_ARMS,
+        "R39 fmt collection-literal-arm count in `format_expr` in \
+         `src/formatter/mod.rs` = {count}, expected {EXPECTED_ARMS} \
+         (Expr::ArrayLiteral / Expr::TupleLiteral / Expr::DictLiteral / \
+         Expr::StructLiteral).\n\n\
+         If a new collection-literal arm was added, ensure it dispatches \
+         through `format_bracketed_broken_with_comments` when \
+         `has_interior_comments` fires (Core #4 chokepoint), then bump \
+         BOTH this constant AND the dispatch-count constants in \
+         `formatter_collection_literal_interior_hook_dispatch` above. \
+         If an arm was removed, lower EXPECTED_ARMS with the removal \
+         citation."
     );
 }
 

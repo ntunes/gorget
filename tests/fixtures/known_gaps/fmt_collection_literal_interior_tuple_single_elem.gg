@@ -1,0 +1,38 @@
+# R39 fmt collection-literal interior comment escape — KNOWN GAP:
+# single-element tuple bypasses the broken-with-comments dispatch.
+#
+# The `Expr::TupleLiteral` arm in `src/formatter/mod.rs` has a special
+# branch for `elems.len() == 1` that emits `(x,)` as a flat expression
+# (single-element tuples need the trailing comma to disambiguate from
+# parenthesised expressions). That branch does NOT call
+# `has_interior_comments` / `format_bracketed_broken_with_comments`, so
+# an interior comment inside a single-element tuple STILL escapes —
+# either dedents to col 0 (pre-fix) or becomes leading of the next sibling
+# stmt (rare shape; single-element tuples are unusual outside destructure
+# contexts).
+#
+# INTENDED (post-fix) shape after `gg fmt`:
+#     auto t = (
+#         # inner
+#         42,
+#     )
+#     print(t.0)
+#
+# CURRENT shape (both pre- and post-round-39; the round did NOT close this
+# sub-case per the brief's "Sub-task 3 skips single-elem tuples" note):
+#     auto t = (42,)
+#     # inner
+#     print(t.0)
+#
+# UN-IGNORE + PROMOTE to a live regression fixture when the single-elem
+# tuple branch is unified with the multi-elem dispatch (either by
+# collapsing the elems.len() == 1 special-case OR by adding a targeted
+# has_interior_comments check inside it).
+
+int main():
+    auto t = (
+        # inner
+        42,
+    )
+    print(t.0)
+    return 0
