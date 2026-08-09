@@ -39,6 +39,20 @@ int infer_stmt_return_type(Stmt s, ScopeTable scopes, TypeTable &types, ResolveC
             if opt_expr is Some(sexpr):
                 return infer_expr_type(sexpr, scopes, &types, &ctx)
             return types.void_id
+        case SThrow(_):
+            # R39 Phase 2e Round-close fix (2026-08-09): `throw expr`
+            # parses as `EDo([SThrow(expr)])` (parser.gg:3005-3010), so
+            # `EDo` type inference calls into this helper to compute
+            # the outer expression's type.  `throw` diverges — Never.
+            # Without this arm the `else:` branch returned `void_id`,
+            # which then tripped `check_default_op_rhs`'s
+            # inner-match/carrier-match check with a false negative and
+            # emitted `E_DefaultOpRhsTypeMismatch` on programs like
+            # `o ?? throw x` (Rust gg accepts; SH DRIVER-FAIL'd on
+            # `dop_throw_rhs.gg` + `snag44_closure_throw_diagnosed.gg`).
+            # `carrier_op_suppress` at typecheck.gg:671 already suppresses
+            # RTNever, so returning never_id here restores accept.
+            return types.never_id
         else:
             return types.void_id
     return types.void_id

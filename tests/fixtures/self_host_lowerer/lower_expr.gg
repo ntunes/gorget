@@ -5275,6 +5275,57 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                         Vector[Operand] eix_sl_args = [op_consume(ctx, &gmod, eix_base, CkCallArgBorrow()), op_consume(ctx, &gmod, eix_sl_start, CkBinOpArg()), op_consume(ctx, &gmod, eix_sl_end, CkBinOpArg())]
                                         emit(&ctx, GICallExtern(eix_sl_dst, "gorget_str_slice", eix_sl_args))
                                         return eix_sl_dst
+                                    # Vector / Deque / Heap base slice `v[a:b]` — R39 round-close fix
+                                    # 2026-08-09.  D22 (ratified 2026-07-06) `v[a:b]` colon-slice
+                                    # canonical syntax lowers to `EIndex(v, ERange(a, b, false))`.
+                                    # The STRING branch above handles the `s[a:b]` case; without a
+                                    # sibling Vector branch, the code falls through to the plain
+                                    # `gorget_array_get(&arr, idx)` path with `idx` being the
+                                    # lowered ERange value (garbage int), then the caller treats
+                                    # the returned void* element as a GorgetArray for cloning →
+                                    # SIGSEGV in memcpy (`test_vector_all`, `vector_methods2`,
+                                    # `leak_reassign`, `coroutine_vector_ops`).  Mirrors Rust gg's
+                                    # `lower_index_access` range branch (src/ir/lowering/exprs/
+                                    # methods.rs:4344): a range index against a collection base
+                                    # returns a fresh container of the SAME type via
+                                    # `gorget_array_slice(&arr, start, end)`.
+                                    int eix_range_base_tid = ctx.locals.get(eix_base).unwrap().type_id
+                                    String eix_range_base_name = type_id_to_name(eix_range_base_tid, &gmod)
+                                    if eix_range_base_tid >= 0 and eix_range_base_tid < gmod.type_table.len():
+                                        GirType eix_range_bt = gmod.type_table.get(eix_range_base_tid).unwrap()
+                                        match eix_range_bt:
+                                            case GtPtr(eix_range_inner):
+                                                eix_range_base_name = type_id_to_name(eix_range_inner, &gmod)
+                                            case GtMutPtr(eix_range_inner2):
+                                                eix_range_base_name = type_id_to_name(eix_range_inner2, &gmod)
+                                            else:
+                                                pass
+                                    bool eix_range_is_array = false
+                                    match resource_meta_for(&gmod, eix_range_base_name):
+                                        case Some(eix_range_rmeta):
+                                            match eix_range_rmeta.collection_kind:
+                                                case CkVector():
+                                                    eix_range_is_array = true
+                                                case CkDeque():
+                                                    eix_range_is_array = true
+                                                case CkHeap():
+                                                    eix_range_is_array = true
+                                                else:
+                                                    pass
+                                        case None:
+                                            pass
+                                    if eix_range_is_array:
+                                        int eix_arr_sl_start = lower_expr(&ctx, *eix_rs_box, &gmod)
+                                        int eix_arr_sl_end = lower_expr(&ctx, *eix_re_box, &gmod)
+                                        ctx.expected_type = prev_expected_eix
+                                        # Slice returns a NEW OWNED container of the base's type
+                                        # (gorget_array_slice allocates + memcpys the range), so
+                                        # tag LoOwned (default) — no view aliasing concern like
+                                        # the string case.
+                                        int eix_arr_sl_dst = add_local(&ctx, eix_range_base_tid, None)
+                                        Vector[Operand] eix_arr_sl_args = [op_consume(ctx, &gmod, eix_base, CkCallArgBorrow()), op_consume(ctx, &gmod, eix_arr_sl_start, CkBinOpArg()), op_consume(ctx, &gmod, eix_arr_sl_end, CkBinOpArg())]
+                                        emit(&ctx, GICallExtern(eix_arr_sl_dst, "gorget_array_slice", eix_arr_sl_args))
+                                        return eix_arr_sl_dst
                                 case None:
                                     pass
                         case None:
