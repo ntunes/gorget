@@ -1,0 +1,37 @@
+# gorget-js snag #15c — the multi-statement sibling of snag #15b.
+#
+# Post-Track-F (snag #15b, single-expression bodies): `gg fmt` still wrapped
+# MULTI-STATEMENT `else:` / `catch (e):` / `rethrow (e):` bodies in a
+# spurious `do:` block. Not breaking (the output compiles + preserves
+# behavior) but a readability regression + rot magnet (users read the
+# reformatted `catch (e): do:` and re-add the `do:` on rewrites, then hit
+# snag #15b when they simplify to a single-expression body).
+#
+# 16 sites in gorget-js: main.gg 9, parser.gg 5, eval.gg 2.
+#
+# RETIRED R39 Track G (2026-08-09) by extending `format_arm_body` at
+# `src/formatter/mod.rs:1135+` to also handle `Expr::Do { body }` — the
+# parser wraps indented catch/rethrow bodies as `Expr::Do` via
+# `parse_body_or_expr`, not `Expr::Block`. Track F only covered the
+# `Expr::Block` single-`Stmt::Expr` case.
+#
+# The fix now recognizes BOTH ast forms (Expr::Block from match `else:`
+# via `parse_arm_body`, Expr::Do from catch/rethrow via
+# `parse_body_or_expr`) and emits bare-indented-block for multi-stmt +
+# inline for single-expression, no `do:` re-emission at any of the three
+# arm sites.
+int compute(int x) throws String:
+    if x < 0:
+        throw "negative"
+    return x * 2
+
+int safe(int x):
+    int r = compute(x)! catch (e):
+        print("recovering")
+        0
+    return r
+
+int main():
+    print(safe(5))
+    print(safe(-1))
+    return 0

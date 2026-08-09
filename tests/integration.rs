@@ -9566,6 +9566,67 @@ fn fmt_else_catch_rethrow_no_do_wrap_source_runs() {
     run_gg("fmt_else_catch_rethrow_no_do_wrap.gg", "hello");
 }
 
+// Round XXXIX Track G (2026-08-09) — gorget-js snag #15c regression pin.
+// Multi-statement sibling of #15b: `catch (e):` / `rethrow (e):` / `else:`
+// with a multi-stmt indented body used to reformat as `catch (e): do:\n
+//     ...`, adding a spurious `do:` wrapper (not breaking, but noise +
+// rot magnet). Fixed by extending format_arm_body to handle `Expr::Do`
+// (which parse_body_or_expr wraps around indented catch/rethrow bodies)
+// in addition to `Expr::Block`.
+#[test]
+fn fmt_catch_multi_stmt_no_do_wrap() {
+    use gorget::parser::Parser;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_catch_rethrow_multi_stmt_no_do_wrap.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Positive control: no code line should emit `catch (e): do:` /
+    // `rethrow ...: do:` / `else: do:`. Skip comment lines so the header
+    // can document the retired defect.
+    let bad_code_line = formatted.lines().find(|line| {
+        let trimmed = line.trim_start();
+        !trimmed.starts_with('#')
+            && (line.contains("catch (") && line.contains("): do:")
+                || line.contains("rethrow (") && line.contains("): do:")
+                || line.contains("else: do:"))
+    });
+    assert!(
+        bad_code_line.is_none(),
+        "gorget-js snag #15c regression: spurious `do:` wrap on multi-stmt handler body.\n\
+         Offending line: {:?}\n\
+         === Formatted output ===\n{formatted}",
+        bad_code_line
+    );
+
+    // Re-parse the formatted output cleanly.
+    let mut parser = Parser::new(&formatted);
+    let _ = parser.parse_module();
+    assert!(
+        parser.errors.is_empty(),
+        "gorget-js snag #15c regression: `gg fmt` output does not re-parse ({} error(s)).\n\
+         === Formatted output ===\n{formatted}\n\
+         === First parse error ===\n{:?}",
+        parser.errors.len(),
+        parser.errors.first(),
+    );
+
+    // Idempotence — a second pass must be byte-identical.
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(
+        formatted, second,
+        "Formatter NOT idempotent for fmt_catch_rethrow_multi_stmt_no_do_wrap.gg.\n\
+         === First pass ===\n{formatted}\n=== Second pass ===\n{second}",
+    );
+}
+
+#[test]
+fn fmt_catch_multi_stmt_source_runs() {
+    run_gg("fmt_catch_rethrow_multi_stmt_no_do_wrap.gg", "10\nrecovering\n0");
+}
+
 #[test]
 fn fmt_long_binop_continuation_parses() {
     use gorget::parser::Parser;

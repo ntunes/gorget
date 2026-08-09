@@ -1132,6 +1132,48 @@ impl Formatter {
         }
     }
 
+    /// gorget-js snag #15b (R39 Track F) + #15c (R39 Track G): the arm body of
+    /// `else:` / `catch (e):` / `rethrow (e):` accepts either an inline
+    /// expression or an indented block WITHOUT a `do:` keyword — the parser
+    /// takes the indented block directly at those positions. Formatting the
+    /// arm body through `format_expr` would emit `Expr::Block` as a `do:` wrap
+    /// (a formatter-only artifact), which:
+    ///   - #15b (single-expr body): breaks move-tail semantics (`else: do:\n
+    ///     ^x` rejects with E_MoveInOperandPosition; `else: ^x` doesn't).
+    ///     Fixed by Track F's Stmt::Expr inline carve-out at Expr::Block.
+    ///   - #15c (multi-stmt body): compiles but adds noise + rot (users read
+    ///     the reformatted `catch (e): do:` and re-add the `do:` on rewrites).
+    ///
+    /// This helper handles both by calling from the arm-body sites directly.
+    /// Caller writes the `else:`/`catch (e):`/`rethrow (e):` prefix WITHOUT
+    /// trailing space; helper emits either a leading space + inline expression
+    /// (single-expr / non-Block body) or a newline + indented bare block
+    /// (multi-stmt Block body).
+    fn format_arm_body(&mut self, body: &Spanned<Expr>) {
+        // Snag #15c note: `parse_body_or_expr` (catch/rethrow arm) wraps
+        // the indented body as `Expr::Do { body }`, NOT `Expr::Block`. The
+        // match `else:` uses `parse_arm_body` which returns Expr::Block for
+        // indented. Both AST forms carry an indented statement list and
+        // should format WITHOUT re-emitting `do:` at these arm positions —
+        // the parser accepts the indented form directly at all three sites.
+        let block_opt = match &body.node {
+            Expr::Block(block) => Some(block),
+            Expr::Do { body } => Some(body),
+            _ => None,
+        };
+        if let Some(block) = block_opt {
+            if block.stmts.len() > 1 {
+                self.emitter.newline();
+                self.emitter.indent();
+                self.format_block_stmts(block);
+                self.emitter.dedent();
+                return;
+            }
+        }
+        self.emitter.write(" ");
+        self.format_expr(body);
+    }
+
     fn format_elif_else_blocks(
         &mut self,
         elif_branches: &[(Spanned<Expr>, Block)],
@@ -2014,8 +2056,8 @@ impl Formatter {
                     self.format_match_arm(arm);
                 }
                 if let Some(else_arm) = else_arm {
-                    self.emitter.write("else: ");
-                    self.format_expr(else_arm);
+                    self.emitter.write("else:");
+                    self.format_arm_body(else_arm);
                     self.emitter.newline();
                 }
                 self.emitter.dedent();
@@ -2313,12 +2355,14 @@ impl Formatter {
                     self.format_type(error_type);
                     self.emitter.write(" ");
                     self.emitter.write(&error_name.node);
-                    self.emitter.write("): ");
+                    self.emitter.write("):");
                     // The bound-form transform after `):` is parsed by
                     // parse_body_or_expr (parser::expr.rs:507) which reads
                     // an expression at low precedence — safe from further
                     // nesting hazards (like the Catch recovery arm).
-                    self.format_expr(transform);
+                    // Snag #15b/#15c: use `format_arm_body` so multi-stmt
+                    // transforms don't get wrapped in a spurious `do:`.
+                    self.format_arm_body(transform);
                 } else {
                     self.emitter.write(" rethrow ");
                     // Bare-form transform: nested Rethrow/Catch (bp 1) at
@@ -2331,11 +2375,13 @@ impl Formatter {
                 self.format_binop_operand(expr, 1, BinOpPos::Left, false);
                 self.emitter.write(" catch (");
                 self.emitter.write(&error_binding.node);
-                self.emitter.write("): ");
+                self.emitter.write("):");
                 // Recovery parsed via parse_body_or_expr (parser::expr.rs:507)
                 // at bp 0 — absorbs everything on its line, so no wrap
                 // hazard for the recovery arm itself.
-                self.format_expr(recovery);
+                // Snag #15b/#15c: use `format_arm_body` so multi-stmt
+                // recovery bodies don't get wrapped in a spurious `do:`.
+                self.format_arm_body(recovery);
             }
         }
     }
