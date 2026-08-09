@@ -35,23 +35,32 @@ int infer_stmt_return_type(Stmt s, ScopeTable scopes, TypeTable &types, ResolveC
     match s:
         case SExpr(sexpr):
             return infer_expr_type(sexpr, scopes, &types, &ctx)
-        case SReturn(opt_expr):
-            if opt_expr is Some(sexpr):
-                return infer_expr_type(sexpr, scopes, &types, &ctx)
-            return types.void_id
+        # R39 Phase 2e Round-close fix (2026-08-09) + Core #4 class fold
+        # from R39 output-review R1: `return` / `throw` / `break` /
+        # `continue` all DIVERGE — the enclosing `EDo` / `EBlock`
+        # doesn't produce a value, so its type is Never.  Mirrors Rust
+        # gg's divergent-tail predicate at `src/semantic/typecheck.rs`
+        # `Expr::Block`:4382 and `Expr::Do`:4407
+        # (`matches!(&s.node, Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break | Stmt::Continue)`).
+        # Load-bearing for `??`'s divergent-RHS suppression at
+        # `typecheck.gg` `check_default_op_rhs`:699 (Round XXXIX Track E
+        # Option B ratified 2026-08-09: divergent RHS is legal).  The
+        # SReturn(Some(_)) branch previously returned the type of the
+        # returned expression — but that's the type of the value being
+        # returned OUT OF the function, NOT the type of the enclosing
+        # `EDo` (which the return diverges past).  Never is the
+        # reference-grade type.  `carrier_op_suppress` at
+        # `typecheck.gg:671` already suppresses RTNever, so all four
+        # arms accept the divergent RHS shapes on `??` (dop_throw_rhs,
+        # snag44_closure_throw_diagnosed, dop_return_rhs,
+        # dop_return_bare_rhs, dop_break_rhs, dop_closure_throw_rhs).
+        case SReturn(_):
+            return types.never_id
         case SThrow(_):
-            # R39 Phase 2e Round-close fix (2026-08-09): `throw expr`
-            # parses as `EDo([SThrow(expr)])` (parser.gg:3005-3010), so
-            # `EDo` type inference calls into this helper to compute
-            # the outer expression's type.  `throw` diverges — Never.
-            # Without this arm the `else:` branch returned `void_id`,
-            # which then tripped `check_default_op_rhs`'s
-            # inner-match/carrier-match check with a false negative and
-            # emitted `E_DefaultOpRhsTypeMismatch` on programs like
-            # `o ?? throw x` (Rust gg accepts; SH DRIVER-FAIL'd on
-            # `dop_throw_rhs.gg` + `snag44_closure_throw_diagnosed.gg`).
-            # `carrier_op_suppress` at typecheck.gg:671 already suppresses
-            # RTNever, so returning never_id here restores accept.
+            return types.never_id
+        case SBreak():
+            return types.never_id
+        case SContinue():
             return types.never_id
         else:
             return types.void_id
@@ -96,10 +105,21 @@ int infer_closure_return_type(Stmt s, Dict[String, int] param_types, ScopeTable 
     match s:
         case SExpr(sexpr):
             return infer_closure_expr_type(sexpr, param_types, scopes, &types, &ctx)
-        case SReturn(opt_expr):
-            if opt_expr is Some(sexpr):
-                return infer_closure_expr_type(sexpr, param_types, scopes, &types, &ctx)
-            return types.void_id
+        # R39 Phase 2e Round-close R2 (Core #4 sibling of the class fold
+        # in `infer_stmt_return_type` above — same divergent-tail
+        # enumeration).  A closure body ending in `return` / `throw` /
+        # `break` / `continue` has return type Never (the body doesn't
+        # produce a value; it diverges).  Load-bearing for `??`'s
+        # divergent-RHS suppression when the RHS is a closure like
+        # `(): throw x` used through a Callable-typed sink.
+        case SReturn(_):
+            return types.never_id
+        case SThrow(_):
+            return types.never_id
+        case SBreak():
+            return types.never_id
+        case SContinue():
+            return types.never_id
         else:
             return types.void_id
     return types.void_id

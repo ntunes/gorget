@@ -1,0 +1,23 @@
+# R39 Phase 2e Round-close R1 (2026-08-09) — `??` with `SReturn(None)`
+# bare divergent RHS.  Bare `return` (no value) in a void function
+# diverges — the enclosing `EDo` types as Never.  Same class as
+# `dop_return_rhs.gg`; separate cell because pre-fold the `SReturn`
+# arm distinguished None vs Some via `if opt_expr is Some(...)` and
+# both fell to `void_id`.
+#
+# RED signature pre-fold (against HEAD 0fb64cf0c): the pre-fold
+# `SReturn(None) → types.void_id` returned `void`, which is neither
+# the inner `int` nor the same `Option[int]` carrier, so
+# `check_default_op_rhs` at typecheck.gg:699-707 rejected with
+# `E_DefaultOpRhsTypeMismatch`.
+#
+# Post-fold: `SReturn(_) → never_id` accepts.
+
+void process(Option[int] o):
+    int v = o ?? return
+    print(f"got {v}")
+
+void main():
+    process(Some(42))
+    process(None)
+    print("done")

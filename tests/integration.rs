@@ -5914,6 +5914,41 @@ fn dop_throw_rhs() {
     );
 }
 
+// R39 Phase 2e Round-close R1 (2026-08-09) — output-review class-fold:
+// `check_default_op_rhs` accepts ALL FOUR divergent-tail forms
+// (`Stmt::Return(_)`, `Stmt::Throw(_)`, `Stmt::Break`, `Stmt::Continue`),
+// mirroring Rust gg's `matches!` predicate at `src/semantic/typecheck.rs`
+// `Expr::Block`:4382 / `Expr::Do`:4407.  The initial R39 fix covered
+// only `SThrow` (see `dop_throw_rhs` + `snag44_closure_throw_diagnosed`
+// above); the R1 fold extends the same enumeration to the sibling arms.
+// Each fixture RED-verified against HEAD `0fb64cf0c` (my earlier commit
+// with SThrow-only) — signature: `E_DefaultOpRhsTypeMismatch: right-hand
+// side of `??` must be the inner `T` (unwrap), the same carrier shape
+// (peel-outer for `a ?? b ?? default`), or divergent`.
+#[test]
+fn dop_return_rhs() {
+    run_gg(
+        "dop_return_rhs.gg",
+        "ok: got 42\nok: bail",
+    );
+}
+
+#[test]
+fn dop_return_bare_rhs() {
+    run_gg(
+        "dop_return_bare_rhs.gg",
+        "got 42\ndone",
+    );
+}
+
+#[test]
+fn dop_break_rhs() {
+    run_gg(
+        "dop_break_rhs.gg",
+        "60\n10",
+    );
+}
+
 #[test]
 fn snag41_audit_box_string_deref() {
     // Snag #41 audit follow-up — `Box[String]` deref was the only site

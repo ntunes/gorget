@@ -1,0 +1,35 @@
+# R39 Phase 2e Round-close R1 (2026-08-09) — `??`  with `SReturn(Some(_))`
+# divergent RHS (return with a value).  RHS `return "bail"` is the
+# divergent tail of the enclosing `wrap` function; the `EDo` wrapping
+# it (parser.gg:2981-3003) needs to type as Never so
+# `check_default_op_rhs`'s inner/carrier match at
+# typecheck.gg:699-707 accepts.
+#
+# RED signature pre-fold (against HEAD 0fb64cf0c which only handled
+# `SThrow`, not `SReturn`): `E_DefaultOpRhsTypeMismatch: right-hand
+# side of `??` must be the inner `T` (unwrap), the same carrier shape
+# (peel-outer for `a ?? b ?? default`), or divergent`.  The pre-fold
+# `SReturn(Some(sexpr))` branch returned `infer_expr_type(sexpr)` —
+# here that's `String` — which is neither the inner `int` nor the
+# same `Option[int]` carrier, so the check rejected.
+#
+# Post-fold: `SReturn(_) → never_id`, `carrier_op_suppress` accepts
+# it, the whole `??` typechecks.
+
+String wrap(Option[int] o) throws String:
+    int v = o ?? return "bail"
+    return f"got {v}"
+
+void main():
+    Result[String, String] r1 = wrap(Some(42))
+    match r1:
+        case Ok(s):
+            print(f"ok: {s}")
+        case Error(e):
+            print(f"err: {e}")
+    Result[String, String] r2 = wrap(None)
+    match r2:
+        case Ok(s):
+            print(f"ok: {s}")
+        case Error(e):
+            print(f"err: {e}")
