@@ -1,0 +1,18 @@
+# LLVM-backend repro: struct from an FFI-only stdlib module, passed by value.
+#
+#   xtd.sdl defines `struct SDLEvent` alongside an `extern "C"` block and
+#   NO Gorget-body functions (an FFI-only module). Passing SDLEvent by value
+#   to a user function forces its C name `GorgetSDLEvent` into the LLVM
+#   backend's generated runtime shim — but the shim never emits its typedef.
+#
+#   C backend    : builds a working binary.
+#   LLVM backend : `error: unknown type name 'GorgetSDLEvent'` at shim compile.
+from xtd.sdl import SDLEvent, sdl_poll_event
+
+void handle(SDLEvent ev):
+    print("event handled")
+
+void main():
+    SDLEvent ev = sdl_poll_event()
+    handle(ev)                     # <-- SDLEvent passed BY VALUE to a user fn
+    print("done")

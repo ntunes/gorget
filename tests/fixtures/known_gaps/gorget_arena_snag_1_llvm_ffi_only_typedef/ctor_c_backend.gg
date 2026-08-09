@@ -1,0 +1,9 @@
+# Related C-backend defect (same root cause): DIRECT Gorget construction of an
+# FFI-only-module struct emits malformed C (`expected expression before ')'`).
+# The C backend emits no constructor for such structs. A locally-defined struct
+# constructed identically compiles fine.
+from xtd.sdl import SDLEvent
+
+void main():
+    SDLEvent ev = SDLEvent(1, 2, 3, 4, 5)   # <-- direct ctor of an FFI-only struct
+    print(ev.event_type)

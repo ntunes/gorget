@@ -1,0 +1,12 @@
+# Control that PASSES on both backends: Vec3 has the same by-value shape, but
+# its module (xtd.math3d) carries real Gorget-body methods, so its typedef is
+# gathered. This isolates the trigger to "module has no lowered function bodies".
+from xtd.math3d import Vec3
+
+void handle(Vec3 v):
+    print("vec handled")
+
+void main():
+    Vec3 v = Vec3(1.0, 2.0, 3.0)
+    handle(v)
+    print("done")
