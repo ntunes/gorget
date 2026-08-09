@@ -9997,6 +9997,99 @@ fn fmt_import_group_single_blank() {
     assert_eq!(formatted, second, "not idempotent");
 }
 
+// gorget-js snag 15e (R39, owner 2026-08-09): trailing comments on the
+// inlined-arm-body source line were orphaned to a leading line at
+// indent 2. Fix: `try_inline_single_terminal_stmt` now calls
+// `emit_trailing_comment_after(stmt.span.end)` after inlining.
+#[test]
+fn fmt_inlined_arm_trailing_comment_preserved() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_inlined_arm_trailing_comment.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Sentinel MUST live on the same line as `else: return`, not on a
+    // standalone `#` line.
+    let line_with_sentinel = formatted.lines().find(|l| l.contains("propagate throw sentinel"));
+    assert!(
+        line_with_sentinel.is_some(),
+        "sentinel vanished from formatted output.\n=== Formatted ===\n{formatted}"
+    );
+    let line = line_with_sentinel.unwrap();
+    assert!(
+        line.contains("else: return") || line.contains("else: return"),
+        "snag 15e regression: `# propagate throw sentinel` orphaned from its owning line.\n\
+         Found sentinel at: {line:?}\n=== Formatted ===\n{formatted}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+}
+
+#[test]
+fn fmt_inlined_arm_trailing_comment_source_runs() {
+    // compute(5): match 5 → else → return 5+1000=1005 (early return),
+    //             so cv is never assigned; but match-return-in-else short-
+    //             circuits the outer fn — so compute(5) returns 1005 directly.
+    // compute(1): match 1 → case 1 → 42; cv=42; return 42.
+    run_gg("fmt_inlined_arm_trailing_comment.gg", "1005\n42");
+}
+
+// gorget-arena snag #3 (R39, owner 2026-08-09): gg fmt was deleting all
+// intra-block blank lines (844 stripped on 12.7k-line arena codebase).
+// Fix: `has_blank_line_between` helper + hook in format_block_stmts +
+// format_struct fields + format_enum variants.
+#[test]
+fn fmt_preserves_intra_block_blank_lines() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_preserves_intra_block_blank_lines.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Count blank lines INSIDE the fn body (between `int total = 0` and
+    // `return total`). Source has 2 blanks; post-fix should have 2 blanks
+    // preserved (author paragraphing). Pre-fix stripped both.
+    let compute_start = formatted
+        .find("int compute(int n):")
+        .expect("fn header missing from formatted");
+    let compute_end = formatted[compute_start..]
+        .find("int main():")
+        .expect("main header missing")
+        + compute_start;
+    let body = &formatted[compute_start..compute_end];
+    let blank_count = body.lines().filter(|l| l.is_empty()).count();
+    assert!(
+        blank_count >= 2,
+        "snag #3 regression: intra-block blank lines stripped.\n\
+         compute body has {blank_count} blank line(s), expected ≥ 2.\n\
+         === Body ===\n{body}\n=== Formatted ===\n{formatted}"
+    );
+
+    // Also verify struct-field paragraphing preserved.
+    let struct_start = formatted.find("struct Point:").expect("struct missing");
+    let struct_end = formatted[struct_start..]
+        .find("enum Direction:")
+        .expect("enum missing")
+        + struct_start;
+    let struct_body = &formatted[struct_start..struct_end];
+    let struct_blanks = struct_body.lines().filter(|l| l.is_empty()).count();
+    assert!(
+        struct_blanks >= 1,
+        "snag #3 regression: struct-field blank stripped.\n=== Struct body ===\n{struct_body}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+}
+
+#[test]
+fn fmt_preserves_intra_block_blank_lines_source_runs() {
+    // compute(5): total = 0+5 = 5; total = 5*2 = 10; return 10.
+    run_gg("fmt_preserves_intra_block_blank_lines.gg", "10");
+}
+
 #[test]
 fn fmt_preserves_blocking_extern_qualifier() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

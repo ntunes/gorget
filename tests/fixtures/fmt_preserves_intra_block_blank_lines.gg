@@ -1,0 +1,30 @@
+# gorget-arena snag #3 (owner 2026-08-09): gg fmt deleted ALL blank lines
+# INSIDE blocks (function bodies, struct/enum fields, control-flow bodies).
+# 844 blanks stripped from arena's 12.7k-line codebase. Semantically neutral
+# but destroys intentional paragraphing. Per black/rustfmt/gofmt: preserve
+# blanks, collapse runs of ≥2 → 1.
+#
+# Wired: `fmt_preserves_intra_block_blank_lines` in tests/integration.rs
+# asserts author-written blanks between stmts, struct fields, and enum
+# variants survive fmt round-trip.
+struct Point:
+    int x
+
+    int y
+
+enum Direction:
+    North()
+
+    South()
+
+int compute(int n):
+    int total = 0
+    total = total + n
+
+    total = total * 2
+
+    return total
+
+int main():
+    print(compute(5))
+    return 0

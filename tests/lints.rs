@@ -11761,7 +11761,13 @@ fn formatter_sibling_loops_hook_pairing() {
     // dispatcher). Total = 12 sibling-paired + 1 EOF defensive + 1
     // header-helper delegation + 1 new collection-literal-interior
     // per-element trailing.
-    const EXPECTED_EMIT_TRAILING_AFTER: usize = 15;
+    //
+    // R39 gorget-js snag 15e (2026-08-09): 15 → 16. Added ONE
+    // `emit_trailing_comment_after(stmt.span.end)` at the tail of
+    // `try_inline_single_terminal_stmt` — preserves trailing comments on
+    // inlined single-stmt arm bodies (`else: return cc  # doc`). Single
+    // helper site covers all 4 inline-arm callers.
+    const EXPECTED_EMIT_TRAILING_AFTER: usize = 16;
     /// `emit_trailing_comment_after_header(` calls: 4 structural
     /// containers (`format_struct`, `format_enum`, `format_trait`,
     /// `format_equip`) + 6 control-flow openers added R39 by the

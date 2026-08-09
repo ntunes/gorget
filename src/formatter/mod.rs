@@ -976,7 +976,14 @@ impl Formatter {
             self.emitter.write("pass");
             self.emitter.newline();
         } else {
-            for field in &s.fields {
+            for (i, field) in s.fields.iter().enumerate() {
+                // gorget-arena snag #3: preserve author-written blank
+                // lines between struct fields (paragraphing).
+                if i > 0
+                    && self.has_blank_line_between(s.fields[i - 1].span.end, field.span.start)
+                {
+                    self.emitter.blank_line();
+                }
                 self.emit_comments_before(field.span.start);
                 if field.node.visibility == Visibility::Private {
                     self.emitter.write("private ");
@@ -1018,7 +1025,15 @@ impl Formatter {
             self.emitter.write("pass");
             self.emitter.newline();
         } else {
-            for variant in &e.variants {
+            for (i, variant) in e.variants.iter().enumerate() {
+                // gorget-arena snag #3: preserve author-written blank
+                // lines between enum variants (paragraphing).
+                if i > 0
+                    && self
+                        .has_blank_line_between(e.variants[i - 1].span.end, variant.span.start)
+                {
+                    self.emitter.blank_line();
+                }
                 self.emit_comments_before(variant.span.start);
                 self.emitter.write(&variant.node.name.node);
                 match &variant.node.fields {
@@ -1532,11 +1547,37 @@ impl Formatter {
         // largest coverage site (Core #4 producer chokepoint): a fix
         // here retires the class for the whole block-stmt family instead
         // of at each match arm's `format_stmt` call site.
-        for stmt in &block.stmts {
+        //
+        // gorget-arena snag #3 (R39, owner 2026-08-09): preserve
+        // author-written blank lines between consecutive stmts. Pre-fix,
+        // `gg fmt` deleted all intra-block blanks (844 stripped on the
+        // 12.7k-line arena codebase). Per black/rustfmt/gofmt: preserve
+        // blanks, collapse runs of ≥2 → 1. Check the source bytes between
+        // prev.span.end and cur.span.start for a blank-line separator (a
+        // `\n` beyond the mandatory line-end `\n`). Skip on the first
+        // stmt (blank between block opener and first stmt is not
+        // paragraphing, it's stylistic sparseness we canonicalize away).
+        for (i, stmt) in block.stmts.iter().enumerate() {
+            if i > 0 && self.has_blank_line_between(block.stmts[i - 1].span.end, stmt.span.start) {
+                self.emitter.blank_line();
+            }
             self.emit_comments_before(stmt.span.start);
             self.format_stmt(stmt);
             self.emit_trailing_comment_after(stmt.span.end);
         }
+    }
+
+    /// gorget-arena snag #3 (R39, 2026-08-09): true iff `source[prev_end..cur_start]`
+    /// contains at least 2 newlines — i.e. the author wrote a blank line
+    /// between the two spans. One newline is the natural EOL of the prev
+    /// stmt; a SECOND newline indicates an intentional blank line.
+    /// Collapse-runs-of-≥2-to-1 semantics: any count ≥ 2 → single blank.
+    fn has_blank_line_between(&self, prev_end: usize, cur_start: usize) -> bool {
+        if cur_start <= prev_end || cur_start > self.source.len() {
+            return false;
+        }
+        let between = &self.source[prev_end..cur_start];
+        between.bytes().filter(|b| *b == b'\n').count() >= 2
     }
 
     /// gorget-js snag #15b (R39 Track F) + #15c (R39 Track G): the arm body of
@@ -1579,11 +1620,11 @@ impl Formatter {
         if block.stmts.len() != 1 {
             return false;
         }
-        match &block.stmts[0].node {
+        let stmt = &block.stmts[0];
+        match &stmt.node {
             Stmt::Throw(value) => {
                 self.emitter.write("throw ");
                 self.format_expr(value);
-                true
             }
             Stmt::Return(value) => {
                 self.emitter.write("return");
@@ -1591,14 +1632,23 @@ impl Formatter {
                     self.emitter.write(" ");
                     self.format_expr(v);
                 }
-                true
             }
             Stmt::Expr(expr) => {
                 self.format_expr(expr);
-                true
             }
-            _ => false,
+            _ => return false,
         }
+        // gorget-js snag 15e (R39, owner 2026-08-09): when we inline a
+        // single-stmt block (`else:\n    return cc  # comment`), the
+        // trailing comment on the ORIGINAL stmt's source line would
+        // otherwise be orphaned (dedents to enclosing scope's `#`-line at
+        // indent 2 — user-reported class). Attach it here — the caller
+        // is about to emit a newline after the inline output; the hook
+        // splices via `inject_before_newline` (or appends if no newline
+        // yet), so the trailing comment lands correctly regardless of
+        // caller's emit order.
+        self.emit_trailing_comment_after(stmt.span.end);
+        true
     }
 
     fn format_arm_body(&mut self, body: &Spanned<Expr>) {
