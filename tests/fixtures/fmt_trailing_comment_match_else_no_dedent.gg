@@ -1,0 +1,31 @@
+# R39 snag #2 focused fixture — block-final dedent case
+# (match-arm-else body).
+#
+# Pre-fix: the trailing comment on the LAST stmt of a match-arm's
+# `else:` body dedented out of the entire match block, sometimes to
+# the enclosing function's scope or even to top-level. Same class as
+# the struct-last-field case (block-final dedent); different context
+# to guard against a per-block-context regression.
+#
+# Post-fix: `format_block_stmts` calls
+# `emit_trailing_comment_after(stmt.span.end)` after each stmt in ANY
+# block context (function bodies, if/elif/else, match-arm bodies,
+# try/catch, with, unsafe, select), so the trailing comment on the
+# else-body's last stmt stays at the else-body's indentation (12
+# spaces = case-body indent + else-body indent).
+#
+# Correctness signal: `# belongs to else` appears on the SAME line as
+# `pass` at 12-space indent (match block = 4, arm else = 8, arm body
+# stmt = 12).
+
+void apply(int x):
+    match x:
+        case 1:
+            print("one")
+        else:
+            pass  # belongs to else
+
+int main():
+    apply(1)
+    apply(2)
+    return 0

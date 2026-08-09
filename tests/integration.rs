@@ -12034,6 +12034,253 @@ done",
     );
 }
 
+/// R39 snag #2 (gorget-arena snag #2 fix) — Core #12 axis-coverage guard.
+///
+/// The `emit_trailing_comment_after` hook was wired into 12 sibling-loop
+/// sites covering 8 semantic classes (module / meta_if item, struct
+/// field, enum variant, trait item, equip method, block stmt, closure
+/// post-prelude stmt). A per-class regression that removed the trailing
+/// hook from JUST ONE of the 12 sites would be invisible to
+/// `fmt_idempotent` (idempotence held on the pre-fix WRONG shape too).
+/// This test pins each class with a per-line sentinel `# NNN kind` in
+/// `tests/fixtures/fmt_trailing_comment_axis.gg`; the assertion below
+/// re-formats the file and requires each sentinel to appear on the
+/// SAME line as its owning statement.
+///
+/// **RED-verified** by commenting out `emit_trailing_comment_after` at
+/// any of the 12 sites — the affected class's sentinel migrates to the
+/// following line, this assertion fails with the exact class label the
+/// regression re-opened. Pinned RED signatures filed in the R39 snag #2
+/// executor report.
+#[test]
+fn fmt_trailing_comment_axis_all_classes() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/fmt_trailing_comment_axis.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_trailing_comment_axis.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Per-class sentinel checks — each `(sentinel, owning_prefix)` must
+    // land on the SAME formatted line. Split for a precise failure
+    // message when a specific class regresses.
+    let checks: &[(&str, &str)] = &[
+        // Sub-task 5b container-header hooks (struct / enum / trait / equip):
+        ("# 5b container-header", "struct S:"),
+        // Struct field-mid / -last (site :733):
+        ("# 733 struct-field-mid", "int a"),
+        ("# 733 struct-field-last", "int b"),
+        // Enum variant (site :774):
+        ("# 774 enum-variant-mid", "Case"),
+        ("# 774 enum-variant-last", "Other"),
+        // Trait item (site :832):
+        ("# 832 trait-item", "void m()"),
+        // Function-body statement — covers if/elif/else, match-arm
+        // bodies, function bodies etc. via `format_block_stmts` (site :1270):
+        ("# 1270 function-body-stmt-mid", "int y = x"),
+        ("# 1270 function-body-stmt-last (Return trailing)", "return y"),
+        ("# 1270 if-body (format_block_stmts covers all if/elif/else)", "return 1"),
+        ("# 1270 else-body", "return 0"),
+        ("# 1270 match-arm body (format_block_stmts via format_match_arm)", "print(1)"),
+        ("# 1270 match-arm else-body", "print(0)"),
+    ];
+
+    for (sentinel, owning_prefix) in checks {
+        let line = formatted
+            .lines()
+            .find(|l| l.contains(sentinel))
+            .unwrap_or_else(|| {
+                panic!(
+                    "R39 snag #2 axis regression: sentinel `{sentinel}` \
+                     not found in formatted output — the trailing comment \
+                     was dropped or the fixture was mis-edited.\n\
+                     === Formatted ===\n{formatted}"
+                );
+            });
+        assert!(
+            line.contains(owning_prefix),
+            "R39 snag #2 axis regression: sentinel `{sentinel}` appears \
+             on a line that does NOT contain its owning prefix \
+             `{owning_prefix}` — the trailing comment DETACHED from its \
+             owning statement (the exact gorget-arena snag #2 class). \
+             Line found: {line:?}\n\
+             === Formatted ===\n{formatted}"
+        );
+    }
+}
+
+/// R39 snag #2 idempotence guard on the axis fixture. Distinct from the
+/// generic `fmt_idempotent` sweep — this test ONLY re-formats the axis
+/// fixture and asserts pass1 == pass2. Adds a targeted signal if the
+/// axis fixture's shape changes non-idempotently while the whole-tree
+/// sweep still (accidentally) rounds to the same fixpoint.
+#[test]
+fn fmt_trailing_comment_axis_idempotent() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/fmt_trailing_comment_axis.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_trailing_comment_axis.gg");
+    let pass1 = gorget::formatter::format_source_infallible(&source);
+    let pass2 = gorget::formatter::format_source_infallible(&pass1);
+    assert_eq!(
+        pass1, pass2,
+        "R39 snag #2 axis idempotence regression: `gg fmt` is not \
+         idempotent on the trailing-comment axis fixture.\n\
+         === Pass 1 ===\n{pass1}\n=== Pass 2 ===\n{pass2}"
+    );
+}
+
+/// R39 snag #2 semantic-preservation guard on the axis fixture.
+/// The reformatted axis fixture must build and run identically to the
+/// original — expected stdout: `5\n1\n1\n` (from `print(f(5))` +
+/// `print(g(10))` + `apply(1)` which prints `1` for case 1 arm).
+#[test]
+#[serial_test::serial(gg_build)]
+fn fmt_trailing_comment_axis_source_runs() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/fmt_trailing_comment_axis.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_trailing_comment_axis.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let reformatted_path = tmp.path().join("fmt_trailing_comment_axis.gg");
+    std::fs::write(&reformatted_path, &formatted)
+        .expect("write reformatted axis fixture");
+    let stdout = build_and_run_capture_stdout(
+        &reformatted_path,
+        "fmt_trailing_comment_axis (reformatted)",
+    );
+    assert_eq!(
+        stdout.trim(),
+        "5\n1\n1",
+        "R39 snag #2 SEMANTIC DRIFT on axis fixture: `gg fmt` changed \
+         the program's stdout. This means a trailing comment was \
+         relocated into a semantically-load-bearing position (indentation \
+         changed the parse). Formatted source:\n{formatted}"
+    );
+}
+
+/// R39 snag #2 focused fixture — struct-last-field trailing comment
+/// stays at 4-space indent inside the struct body (NOT dedented to
+/// column 0 = top-level). Pre-fix worst-case symptom.
+#[test]
+fn fmt_trailing_comment_struct_last_no_dedent() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_trailing_comment_struct_last_no_dedent.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_trailing_comment_struct_last_no_dedent.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Find the CODE line that carries the sentinel — the fixture's
+    // docstring header ALSO mentions the sentinel in prose, so we must
+    // scope to lines that look like actual field emit (`int last_field`
+    // prefix) rather than doc/comment paragraphs (`# `-only prefix).
+    let line = formatted
+        .lines()
+        .find(|l| {
+            l.contains("# doc on the LAST field")
+                && l.trim_start().starts_with("int last_field")
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "R39 snag #2 struct-last-field DEDENT regression: no CODE \
+                 line with the sentinel + `int last_field` found (comment \
+                 escaped the struct or attached to wrong owner).\n\
+                 === Formatted ===\n{formatted}"
+            );
+        });
+    assert!(
+        line.starts_with("    int last_field"),
+        "R39 snag #2 struct-last-field DEDENT regression: sentinel \
+         line found but at wrong indent (should be 4-space struct-body \
+         indent). Line: {line:?}\n=== Formatted ===\n{formatted}"
+    );
+    // Idempotence + re-parse guard.
+    let pass2 = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, pass2, "not idempotent");
+}
+
+/// R39 snag #2 focused fixture — match-arm else-body trailing stays at
+/// 12-space indent inside the else-body (NOT dedented out of the match).
+#[test]
+fn fmt_trailing_comment_match_else_no_dedent() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_trailing_comment_match_else_no_dedent.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_trailing_comment_match_else_no_dedent.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Same scoping trick as the struct case — the docstring mentions
+    // the sentinel in prose; scope to CODE lines carrying `pass`.
+    let line = formatted
+        .lines()
+        .find(|l| {
+            l.contains("# belongs to else") && l.trim_start().starts_with("pass")
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "R39 snag #2 match-else-body DEDENT regression: no CODE \
+                 line with the sentinel + `pass` found.\n\
+                 === Formatted ===\n{formatted}"
+            );
+        });
+    assert!(
+        line.starts_with("            pass"),
+        "R39 snag #2 match-else-body DEDENT regression: sentinel line \
+         at wrong indent (should be 12-space else-body indent). Line: \
+         {line:?}\n=== Formatted ===\n{formatted}"
+    );
+    let pass2 = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, pass2, "not idempotent");
+}
+
+/// R39 snag #2 — graduated fixture from
+/// `tests/fixtures/known_gaps/gorget_arena_snag_2_fmt_trailing_comment_detach/`.
+/// The known_gaps repro's `README.md` enumerated FIVE distinct
+/// relocations pre-fix; this test asserts all five are FIXED (each
+/// trailing comment stays attached to its owning statement, no dedent).
+#[test]
+fn fmt_snag_2_trailing_comment_repro() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/fmt_snag_2_trailing_comment_repro.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_snag_2_trailing_comment_repro.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // The 5 pre-fix relocations from README.md, each rewritten as a
+    // per-line sentinel-on-owning-line assertion. Prefix contains
+    // 4-space indent to catch a partial dedent regression (e.g. a
+    // comment that stays on the same line as its owner but at the
+    // WRONG indent because the owner and the comment landed in
+    // different container scopes).
+    let checks: &[(&str, &str)] = &[
+        ("# offset into index buffer", "    int first_index"),
+        ("# number of indices", "    int num_indices"),
+        ("# doc on the LAST field", "    int last_field"),
+        ("# belongs to case 1", "            do_a()"),
+        ("# belongs to else", "            pass"),
+    ];
+    for (sentinel, owning_prefix) in checks {
+        let line = formatted
+            .lines()
+            .find(|l| l.contains(sentinel))
+            .unwrap_or_else(|| {
+                panic!(
+                    "R39 snag #2 REPRO regression: `{sentinel}` missing \
+                     from formatted output.\n=== Formatted ===\n{formatted}"
+                );
+            });
+        assert!(
+            line.starts_with(owning_prefix),
+            "R39 snag #2 REPRO regression on `{sentinel}`: attached to \
+             wrong owner or wrong indent.\nLine: {line:?}\nExpected \
+             owner prefix: {owning_prefix:?}\n=== Formatted ===\n{formatted}"
+        );
+    }
+}
+
 #[test]
 fn fmt_idempotent() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

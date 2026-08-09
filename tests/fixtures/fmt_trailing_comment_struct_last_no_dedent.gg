@@ -1,0 +1,24 @@
+# R39 snag #2 focused fixture — block-final dedent case (struct fields).
+#
+# Pre-fix: the trailing comment on the LAST field of a struct dedented
+# out of the struct block entirely, landing at column 0 (top-level scope)
+# — the WORST symptom of the class (comment stopped documenting a field
+# and appeared to lead the next top-level item). Post-fix the same-line
+# trailing helper injects the comment ahead of the `\n` of the field's
+# own emit, so the comment stays INSIDE the struct at 4-space indent.
+#
+# Correctness signal is the per-line assertion in
+# `fmt_trailing_comment_struct_last_no_dedent` — `# doc on the LAST field`
+# must appear on the SAME line as `int last_field`, at 4-space indent.
+# Fixture is Core #12 RED-verified by commenting out
+# `emit_trailing_comment_after(field.span.end)` in `format_struct`.
+
+struct Face:
+    int first_index
+    int num_indices
+    int last_field  # doc on the LAST field
+
+int main():
+    Face f = Face(1, 2, 3)
+    print(f.last_field)
+    return 0

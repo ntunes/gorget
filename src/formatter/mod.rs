@@ -1,5 +1,7 @@
 pub mod doc;
 
+use std::rc::Rc;
+
 use crate::lexer::token::{StringKind, StringLiteral, StringSegment};
 use crate::parser::ast::*;
 use crate::span::Spanned;
@@ -91,6 +93,32 @@ impl Emitter {
     fn finish(self) -> String {
         self.buf
     }
+
+    /// R39 snag #2 trailing-comment helper: inject `s` immediately BEFORE
+    /// the buffer's trailing newline (if any), preserving the newline.
+    ///
+    /// After `format_stmt(prev)` runs the buf typically ends with `\n`.
+    /// A trailing comment `# c` that shared the source line with `prev`
+    /// must attach to `prev`, not lead the next sibling — so we splice
+    /// `# c` in ahead of that `\n`. If the buf doesn't end with `\n`
+    /// (rare: sibling emit didn't newline-terminate) we simply append.
+    ///
+    /// Column/indent bookkeeping: injecting text does NOT change
+    /// `at_line_start` (still true after the trailing `\n`) and does
+    /// not need `col` update since `at_line_start` invalidates it.
+    fn inject_before_newline(&mut self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        if self.buf.ends_with('\n') {
+            // Pop the `\n`, push `s`, re-push `\n`.
+            self.buf.pop();
+            self.buf.push_str(s);
+            self.buf.push('\n');
+        } else {
+            self.buf.push_str(s);
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -101,19 +129,40 @@ pub struct Formatter {
     emitter: Emitter,
     comments: Vec<Spanned<String>>,
     comment_cursor: usize,
+    /// Source text, needed for span-based lookups when interleaving
+    /// trailing comments — the "same source line as previous emit" check
+    /// requires reading the original bytes between two span endpoints
+    /// (looking for a `\n` separator). Held as `Rc<str>` so `Formatter`
+    /// stays `Clone`-cheap and sub-formatters (the `element_to_string_at`
+    /// helper) can pass a trivial empty source without allocating.
+    source: Rc<str>,
 }
 
 impl Formatter {
-    pub fn new(comments: Vec<Spanned<String>>) -> Self {
+    pub fn new(comments: Vec<Spanned<String>>, source: Rc<str>) -> Self {
         Self {
             emitter: Emitter::new(),
             comments,
             comment_cursor: 0,
+            source,
         }
     }
 
     pub fn format(mut self, module: &Module) -> String {
         self.format_module(module);
+        // R39 snag #2 sub-task 5: defensive anchor for the block-final
+        // case at EOF. The per-item trailing hook in the module loop
+        // already handles a same-line trailing on each top-level item
+        // (including the last), and per-field/variant/stmt hooks handle
+        // container internals. This EOF hook is a belt-and-suspenders
+        // catch for any comment that slipped past those hooks but is
+        // still on the same source line as some just-emitted content
+        // (rare — would need an item.span.end that under-shot the
+        // item's real last byte). Uses `source.len()` as the anchor
+        // ceiling; the helper's own `last_real_content_before` walks
+        // back over trailing whitespace / comments to find the true
+        // last-content position, so passing an over-shoot is safe.
+        self.emit_trailing_comment_after(self.source.len());
         self.emit_remaining_comments();
         let mut result = self.emitter.finish();
         // Normalize blank lines: collapse 3+ consecutive newlines to 2 (one blank line max).
@@ -176,7 +225,13 @@ impl Formatter {
         base_indent: usize,
         f: impl FnOnce(&mut Formatter),
     ) -> String {
-        let mut fmt = Formatter::new(vec![]);
+        // Sub-formatter for Doc-tree rendering has no user comments to
+        // interleave (the outer Formatter owns the sideband + cursor),
+        // and no source-lookup is possible since we don't have any
+        // spans of interest here. Pass an empty `Rc<str>` — the trailing
+        // comment helpers below will simply find no matching comment
+        // ranges because `comments` is empty.
+        let mut fmt = Formatter::new(vec![], Rc::from(""));
         fmt.emitter.indent = base_indent;
         fmt.emitter.at_line_start = false;
         f(&mut fmt);
@@ -218,6 +273,183 @@ impl Formatter {
         }
     }
 
+    /// R39 snag #2 sub-task 5b — container-header trailing comment.
+    ///
+    /// A comment on the SAME source line as a container-header
+    /// (`struct S:  # header`, `enum E:  # what`, `trait T:  # note`,
+    /// `equip S with T:  # via`) belongs to that header, not to the
+    /// first body element. Without this hook the emit order is:
+    ///   `struct S:\n` → `emit_comments_before(field.span.start)` fires
+    ///   on the loop's first iteration → header comment is emitted at
+    ///   field indent as a leading comment of the first field.
+    /// With the hook fired right after `newline()`, the comment is
+    /// spliced inline via `inject_before_newline` ahead of the just-
+    /// emitted `\n`, restoring `struct S:  # header\n`.
+    ///
+    /// The `header_anchor_end` argument is the source byte position of
+    /// the LAST anchor token on the header line — for the four
+    /// structural containers this is the container name's span end
+    /// (`s.name.span.end`), which is always on the same source line as
+    /// the `:` for the common single-line-header shape. A multi-line
+    /// header (`struct S[\n T]:  # x`) is out of scope and falls
+    /// through to `emit_comments_before` (deferred to R40 —
+    /// `known_gaps/gorget_arena_snag_2_intra_item_multiline_header`).
+    ///
+    /// **Separate from `emit_trailing_comment_after` on purpose:**
+    /// the semantics are distinct (same-line-as-header vs same-line-
+    /// as-previous-sibling) even though the underlying same-line
+    /// mechanic is identical. Keeping them separate keeps the
+    /// `formatter_sibling_loops_hook_pairing` lint clean at exactly 12
+    /// sibling call-sites for `emit_trailing_comment_after`; this
+    /// header hook has its own count (4 sites, one per structural
+    /// container) enforced by
+    /// `formatter_container_header_hook_arm_count`.
+    fn emit_trailing_comment_after_header(&mut self, header_anchor_end: usize) {
+        // Same semantics — reuse the base helper (single-implementation
+        // chokepoint per Core #4). If the multi-line-header rescope
+        // (R40) needs different behaviour, this wrapper adapts here
+        // while the base helper stays unchanged.
+        self.emit_trailing_comment_after(header_anchor_end);
+    }
+
+    /// R39 snag #2 (`gorget-arena` snag #2 — durable repro at
+    /// `tests/fixtures/known_gaps/gorget_arena_snag_2_fmt_trailing_comment_detach/`):
+    /// after emitting a sibling item/stmt/field that ends at source
+    /// position `prev_end`, flush any trailing comment(s) that shared
+    /// the SAME SOURCE LINE as that previous emit. The comments stay
+    /// attached to their owning node (inline, with a two-space visual
+    /// gap) instead of drifting to lead the NEXT sibling — the exact
+    /// bug the fixture pins.
+    ///
+    /// A comment qualifies as "trailing" iff:
+    ///   1. it hasn't been emitted yet (cursor > it),
+    ///   2. `comment.span.start >= prev_end` (comment follows prev in
+    ///      source), and
+    ///   3. `source[prev_end..comment.span.start]` contains no `\n`
+    ///      (still on the same source line — no line break separates
+    ///      them, only whitespace / punctuation).
+    ///
+    /// When those hold, the comment is injected inline via
+    /// `Emitter::inject_before_newline` (which splices ahead of the
+    /// trailing `\n` `format_stmt` left behind), and the comment cursor
+    /// advances. The loop repeats to handle the rare multi-comment same-
+    /// line case (e.g. `stmt  # a  # b`, which the lexer records as two
+    /// separate `Comment` tokens on one line — both are trailing).
+    ///
+    /// A comment that fails condition (3) is left for `emit_comments_before`
+    /// on the next iteration — it will be emitted as a LEADING comment
+    /// at the next sibling's indent, which is the correct behaviour for a
+    /// standalone-line comment BETWEEN two siblings.
+    fn emit_trailing_comment_after(&mut self, prev_end: usize) {
+        // The "trailing comment" question — is comment C a trailing
+        // comment on the just-emitted node I? — reduces to:
+        //
+        //   "Is I's ACTUAL LAST EMITTED CHARACTER on the same source
+        //    line as C's start?"
+        //
+        // `prev_end` is I's AST-recorded span end, which is UNRELIABLE
+        // for multi-line items: it may sit at a `Dedent` position on
+        // the NEXT construct's line (`struct.span.end` on the `enum`
+        // header line), or MID-comment (parse_function_def extending
+        // through a trailing comment via consume_newline). Both give a
+        // `prev_end` that "runs past" the item's real content.
+        //
+        // Fix: compute an ANCHOR = the last SOURCE byte before
+        // `prev_end` that is NEITHER whitespace NOR inside a comment
+        // span. That byte is guaranteed to be part of the item's own
+        // textual content (comments live in the sideband, whitespace is
+        // just separator). Then C is a trailing on I iff there is no
+        // `\n` in `source[anchor..C.start]` — i.e. C is on the same
+        // source line as the item's last real byte.
+        //
+        // Load-bearing correctness cases (RED-verified by
+        // `fmt_trailing_comment_axis_all_classes`):
+        //   - `struct S: ... \n\nenum E:  # x` → struct.span.end sits
+        //     on enum's line; anchor walks back over `\n\n` to the
+        //     last field's identifier → `\n` in [anchor..#x] → break.
+        //     The enum's OWN header hook then fires with a clean
+        //     cursor.
+        //   - `trait T:\n    void m()  # x\n    void n()` →
+        //     item.span.end for `void m()` sits on line 3 (past `# x`);
+        //     anchor walks back over `\n` + across comment `# x` (both
+        //     skipped) → hits `)` at end of `m()` → no `\n` between
+        //     `)` and `# x` → fire.
+        while self.comment_cursor < self.comments.len() {
+            let c = &self.comments[self.comment_cursor];
+            let comment_start = c.span.start;
+            if comment_start > self.source.len() {
+                break;
+            }
+            let anchor = self.last_real_content_before(prev_end);
+            if comment_start < anchor {
+                // Comment predates the anchor — should have been
+                // consumed by an earlier `emit_comments_before`; break
+                // defensively rather than duplicate-emit.
+                break;
+            }
+            let between = &self.source[anchor..comment_start];
+            if between.contains('\n') {
+                // A newline separates the item's last real byte from
+                // the comment — the comment is on a later line, treat
+                // as leading of the next sibling.
+                break;
+            }
+            // Same-line trailing: inject inline with a two-space gap.
+            let mut inlined = String::with_capacity(c.node.len() + 2);
+            inlined.push_str("  ");
+            inlined.push_str(&c.node);
+            self.emitter.inject_before_newline(&inlined);
+            self.comment_cursor += 1;
+        }
+    }
+
+    /// Walk `self.source` backwards from `pos` and return the byte
+    /// position AFTER the LAST byte that is NEITHER whitespace nor
+    /// inside a comment span (both from `self.comments`). Returns `0`
+    /// if the walk reaches the source start without hitting a real
+    /// content byte.
+    ///
+    /// The two skips are load-bearing:
+    ///   - **Whitespace** because `prev_end` for a multi-line item
+    ///     sits on the NEXT construct's line, PAST intervening blank
+    ///     lines; walking back over `\n`s + indent lands on the item's
+    ///     own last content.
+    ///   - **Comments** because some AST spans extend through trailing
+    ///     comments via `consume_newline` (e.g. `parse_function_def`);
+    ///     without skipping comment bytes, the anchor would land inside
+    ///     the comment we're deciding about (or an earlier trailing
+    ///     comment) rather than on the item's real code.
+    ///
+    /// O(n × m) worst case (source position × comment count) — small
+    /// files this is fine; if it shows on the profiler for very
+    /// comment-heavy inputs, replace the `iter().any` with a binary
+    /// search over pre-sorted comment spans.
+    fn last_real_content_before(&self, pos: usize) -> usize {
+        let bytes = self.source.as_bytes();
+        let mut i = pos.min(bytes.len());
+        while i > 0 {
+            let idx = i - 1;
+            let c = bytes[idx];
+            if c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' {
+                i -= 1;
+                continue;
+            }
+            // Byte `idx` is inside a comment span iff some comment
+            // covers `[span.start, span.end)` and `span.start <= idx <
+            // span.end`.
+            let in_comment = self
+                .comments
+                .iter()
+                .any(|cm| cm.span.start <= idx && idx < cm.span.end);
+            if in_comment {
+                i -= 1;
+                continue;
+            }
+            return i;
+        }
+        0
+    }
+
     // ── Module ──────────────────────────────────────────────
 
     fn format_module(&mut self, module: &Module) {
@@ -255,6 +487,14 @@ impl Formatter {
         }
 
         // Emit directives.
+        // Trailing-hook placement (R39 snag #2): `emit_comments_before`
+        // BEFORE `format_item` flushes any standalone leading comments;
+        // `emit_trailing_comment_after(item.span.end)` AFTER `format_item`
+        // splices any comment that shared the item's LAST source line
+        // ahead of the newline `format_item` left behind. This
+        // sequencing (leading → item → trailing) is the same at all 12
+        // sibling-loop sites — see `emit_trailing_comment_after` for the
+        // full same-line semantics.
         let mut emitted = 0;
         for item in &directives {
             if emitted > 0 {
@@ -262,6 +502,7 @@ impl Formatter {
             }
             self.emit_comments_before(item.span.start);
             self.format_item(item);
+            self.emit_trailing_comment_after(item.span.end);
             emitted += 1;
         }
 
@@ -272,6 +513,7 @@ impl Formatter {
             }
             self.emit_comments_before(item.span.start);
             self.format_item(item);
+            self.emit_trailing_comment_after(item.span.end);
             emitted += 1;
         }
 
@@ -282,6 +524,7 @@ impl Formatter {
             }
             self.emit_comments_before(item.span.start);
             self.format_item(item);
+            self.emit_trailing_comment_after(item.span.end);
             emitted += 1;
         }
     }
@@ -377,9 +620,12 @@ impl Formatter {
                 self.emitter.write(":");
                 self.emitter.newline();
                 self.emitter.indent();
+                // R39 snag #2: trailing-hook after each nested item —
+                // same pairing as the format_module loops.
                 for item in &mi.then_items {
                     self.emit_comments_before(item.span.start);
                     self.format_item(item);
+                    self.emit_trailing_comment_after(item.span.end);
                 }
                 self.emitter.dedent();
                 for (cond, items) in &mi.elif_branches {
@@ -391,6 +637,7 @@ impl Formatter {
                     for item in items {
                         self.emit_comments_before(item.span.start);
                         self.format_item(item);
+                        self.emit_trailing_comment_after(item.span.end);
                     }
                     self.emitter.dedent();
                 }
@@ -401,6 +648,7 @@ impl Formatter {
                     for item in else_items {
                         self.emit_comments_before(item.span.start);
                         self.format_item(item);
+                        self.emit_trailing_comment_after(item.span.end);
                     }
                     self.emitter.dedent();
                 }
@@ -610,6 +858,10 @@ impl Formatter {
         }
         self.emitter.write(":");
         self.emitter.newline();
+        // R39 snag #2 sub-task 5b: `struct S:  # header` shape —
+        // header trailing comment stays on the header line, not
+        // dedented into the body.
+        self.emit_trailing_comment_after_header(s.name.span.end);
         self.emitter.indent();
         // R37 empty-body chip: an empty struct body must emit `pass` so the
         // reformatted source PARSES. The parser rejects `struct X:` with no
@@ -632,6 +884,13 @@ impl Formatter {
                 self.emitter.write(" ");
                 self.emitter.write(&field.node.name.node);
                 self.emitter.newline();
+                // R39 snag #2: trailing-hook for `int x  # doc` on a
+                // struct field. field.span.end sits at the end of the
+                // identifier token (see parse_struct_body's
+                // field_end = self.previous_span() after
+                // expect_identifier), so a same-source-line comment
+                // that follows the name is spliced inline.
+                self.emit_trailing_comment_after(field.span.end);
             }
         }
         self.emitter.dedent();
@@ -648,6 +907,8 @@ impl Formatter {
         }
         self.emitter.write(":");
         self.emitter.newline();
+        // R39 snag #2 sub-task 5b: `enum E:  # header` shape.
+        self.emit_trailing_comment_after_header(e.name.span.end);
         self.emitter.indent();
         // R37 empty-body chip: mirror format_struct — an empty enum body
         // must emit `pass` so the reformatted source parses.
@@ -672,6 +933,9 @@ impl Formatter {
                     }
                 }
                 self.emitter.newline();
+                // R39 snag #2: trailing-hook for `Variant()  # doc`
+                // on enum variants — same shape as struct fields.
+                self.emit_trailing_comment_after(variant.span.end);
             }
         }
         self.emitter.dedent();
@@ -700,6 +964,11 @@ impl Formatter {
         }
         self.emitter.write(":");
         self.emitter.newline();
+        // R39 snag #2 sub-task 5b: `trait T:  # header` / `trait T extends A:  # x`
+        // — for the same-line-header shape, `t.name.span.end` is on the
+        // same source line as the `:`, so the helper's newline scan
+        // covers `extends`-list variants without extra tracking.
+        self.emit_trailing_comment_after_header(t.name.span.end);
         self.emitter.indent();
         // R37 empty-body chip: mirror format_struct — an empty trait body
         // must emit `pass` so the reformatted source parses.
@@ -733,6 +1002,11 @@ impl Formatter {
                         self.emitter.newline();
                     }
                 }
+                // R39 snag #2: trailing-hook for `void m()  # doc` on a
+                // trait item (method or associated type). Same-line
+                // comments after the item's last identifier land inline
+                // instead of leading the next item.
+                self.emit_trailing_comment_after(item.span.end);
             }
         }
         self.emitter.dedent();
@@ -754,6 +1028,12 @@ impl Formatter {
         }
         self.emitter.write(":");
         self.emitter.newline();
+        // R39 snag #2 sub-task 5b: `equip S:  # x`, `equip S with T:  # x`,
+        // `equip S via f:  # x` — anchor on the type's own span end.
+        // For the same-line-header shape, whatever `with T` / `via f`
+        // sits between anchor and `:` stays on the same source line, so
+        // the helper's newline scan is unaffected.
+        self.emit_trailing_comment_after_header(e.type_.span.end);
         self.emitter.indent();
         if e.items.is_empty() {
             self.emitter.write("pass");
@@ -765,6 +1045,9 @@ impl Formatter {
                 }
                 self.emit_comments_before(method.span.start);
                 self.format_function(&method.node);
+                // R39 snag #2: trailing-hook for methods inside an
+                // `equip … with T:` block. Same class as trait items.
+                self.emit_trailing_comment_after(method.span.end);
             }
         }
         self.emitter.dedent();
@@ -1140,9 +1423,17 @@ impl Formatter {
     // ── Statements ──────────────────────────────────────────
 
     fn format_block_stmts(&mut self, block: &Block) {
+        // R39 snag #2: `emit_trailing_comment_after(stmt.span.end)` after
+        // each stmt captures the `stmt  # doc` case for ALL block-body
+        // contexts — function bodies, if/elif/else, for/while, match arm
+        // bodies, try/catch/rethrow, with, unsafe, select. This is the
+        // largest coverage site (Core #4 producer chokepoint): a fix
+        // here retires the class for the whole block-stmt family instead
+        // of at each match arm's `format_stmt` call site.
         for stmt in &block.stmts {
             self.emit_comments_before(stmt.span.start);
             self.format_stmt(stmt);
+            self.emit_trailing_comment_after(stmt.span.end);
         }
     }
 
@@ -2216,6 +2507,13 @@ impl Formatter {
                             for stmt in &post_prelude {
                                 self.emit_comments_before(stmt.span.start);
                                 self.format_stmt(stmt);
+                                // R39 snag #2: mirror `format_block_stmts`
+                                // hook. This branch bypasses the shared
+                                // helper because it must SKIP the parser-
+                                // synthesized destructure-prelude stmts,
+                                // but the trailing-comment semantics are
+                                // identical for the post-prelude tail.
+                                self.emit_trailing_comment_after(stmt.span.end);
                             }
                         } else {
                             self.format_block_stmts(block);
@@ -2857,7 +3155,7 @@ pub fn format_source_result(source: &str) -> Result<String, Vec<crate::errors::P
         return Err(parser.errors);
     }
     let comments = parser.comments;
-    Ok(Formatter::new(comments).format(&module))
+    Ok(Formatter::new(comments, Rc::from(source)).format(&module))
 }
 
 /// Infallible convenience: panics if the source has parse errors.

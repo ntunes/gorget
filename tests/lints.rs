@@ -11692,6 +11692,144 @@ fn fmt_move_sigil_emit_arm_count() {
     );
 }
 
+/// R39 snag #2 (Core #6 arm-count guard): the formatter's sibling-loop
+/// pattern is `emit_comments_before(node.span.start)` → `format_node(node)`
+/// → `emit_trailing_comment_after(node.span.end)`. A NEW sibling loop
+/// added to `src/formatter/mod.rs` MUST call BOTH helpers, or the
+/// gorget-arena snag #2 class (trailing comments detached and
+/// misattributed to the next sibling) re-opens on the new loop. This
+/// lint pins BOTH counts:
+///
+///   * `emit_comments_before(` call sites: 12 sibling-loop sites
+///     (`format_module` directives / imports / rest, `Item::MetaIf`
+///     then / elif / else, `format_struct` fields, `format_enum`
+///     variants, `format_trait` items, `format_equip` methods,
+///     `format_block_stmts`, closure post-prelude stmts). If this
+///     count changes without an equal change to the trailing count
+///     below, a new sibling loop bypassed the trailing hook.
+///
+///   * `emit_trailing_comment_after(` call sites: 12 sibling-loop
+///     paired calls + 1 defensive EOF hook (sub-task 5 in
+///     `Formatter::format`) + 1 internal delegation from
+///     `emit_trailing_comment_after_header` = **14 total**.
+///
+///   * `emit_trailing_comment_after_header(` call sites: 4 — one per
+///     structural container (struct / enum / trait / equip). Uses a
+///     SEPARATE helper (with distinct docstring semantics) so the
+///     sibling-boundary count above stays clean.
+///
+/// **Break-and-verify (Core #12 / Core #15e Q2 — the guard must catch
+/// its own class):** manually mutate one call site to drop the paired
+/// trailing hook (e.g. delete
+/// `self.emit_trailing_comment_after(field.span.end)` in the struct
+/// field loop). The lint's `assert_eq!` fires with
+/// `emit_trailing_comment_after count 13 vs expected 14` — RED,
+/// pinpointing the missing pair. Restore the deletion and the lint
+/// goes green again. Recorded RED signature filed in the R39 snag #2
+/// executor report.
+///
+/// If a new sibling loop legitimately joins this class (a future
+/// AST node kind added), both counts must bump together with a
+/// citation of the new loop's file:line + rationale, mirroring the
+/// precedent-check / move-sigil arm-count guards.
+#[test]
+fn formatter_sibling_loops_hook_pairing() {
+    /// Sibling-loop `emit_comments_before(node.span.start)` calls in
+    /// `src/formatter/mod.rs`. The 12 sites are enumerated in the doc
+    /// comment above; each has its paired `emit_trailing_comment_after`
+    /// call one to a few lines below in the same loop body.
+    const EXPECTED_EMIT_COMMENTS_BEFORE: usize = 12;
+    /// `emit_trailing_comment_after(` calls: 12 sibling-paired + 1
+    /// EOF defensive + 1 internal delegation from
+    /// `emit_trailing_comment_after_header`. If sub-task 5's EOF hook
+    /// is inlined/removed OR the header helper stops delegating, this
+    /// number must drop; if a new sibling loop is added without the
+    /// paired call, `_BEFORE` will bump but this will not, and the
+    /// count-equality assertion below fires.
+    const EXPECTED_EMIT_TRAILING_AFTER: usize = 14;
+    /// `emit_trailing_comment_after_header(` calls: 4 structural
+    /// containers (`format_struct`, `format_enum`, `format_trait`,
+    /// `format_equip`). A new structural-container formatter that
+    /// wants the header-trailing behaviour must add its own call and
+    /// bump this to 5.
+    const EXPECTED_EMIT_TRAILING_AFTER_HEADER: usize = 4;
+
+    let content = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+
+    // Text-scan: count method-call sites (leading `.` distinguishes
+    // from function-definition lines like `fn emit_...`); skip pure
+    // comment lines (a `// TODO emit_comments_before ...` note doesn't
+    // trip the count).
+    let mut before_count = 0usize;
+    let mut trailing_count = 0usize;
+    let mut header_count = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        before_count += line.matches(".emit_comments_before(").count();
+        // The header helper's name has _AFTER_ as a prefix — match
+        // trailing hook first, then subtract the header-suffix matches
+        // by counting them separately (the header helper's calls also
+        // start with `.emit_trailing_comment_after_header(`, which
+        // contains `.emit_trailing_comment_after(` as a substring only
+        // if we're not careful — use a stricter match).
+        //
+        // Use `.emit_trailing_comment_after(` (with `(` — matches only
+        // the base helper) and `.emit_trailing_comment_after_header(`
+        // (matches only the header helper) — the trailing `(` locks
+        // each to its own name.
+        trailing_count += line.matches(".emit_trailing_comment_after(").count();
+        header_count += line.matches(".emit_trailing_comment_after_header(").count();
+    }
+
+    assert_eq!(
+        before_count, EXPECTED_EMIT_COMMENTS_BEFORE,
+        "R39 snag #2 sibling-loop-pairing guard: \
+         `emit_comments_before(` call-site count in `src/formatter/mod.rs` \
+         changed: {before_count} vs expected {EXPECTED_EMIT_COMMENTS_BEFORE}.\n\n\
+         Each `emit_comments_before` call in a sibling loop MUST be paired \
+         with an `emit_trailing_comment_after(node.span.end)` call at the \
+         end of the same loop body — otherwise a trailing comment on the \
+         node's last source line drifts to lead the NEXT sibling (the \
+         gorget-arena snag #2 class).\n\n\
+         If a new sibling loop legitimately joined, bump BOTH \
+         EXPECTED_EMIT_COMMENTS_BEFORE and EXPECTED_EMIT_TRAILING_AFTER \
+         together with a citation of the new site's file:line + rationale."
+    );
+
+    assert_eq!(
+        trailing_count, EXPECTED_EMIT_TRAILING_AFTER,
+        "R39 snag #2 sibling-loop-pairing guard: \
+         `emit_trailing_comment_after(` call-site count in \
+         `src/formatter/mod.rs` changed: {trailing_count} vs expected \
+         {EXPECTED_EMIT_TRAILING_AFTER}.\n\n\
+         Expected = {EXPECTED_EMIT_COMMENTS_BEFORE} sibling-paired \
+         + 1 defensive EOF hook in `Formatter::format` \
+         + 1 internal delegation from `emit_trailing_comment_after_header`.\n\n\
+         If a sibling loop was added without the paired trailing hook, \
+         this trips — restore the pair. If the EOF hook or the header \
+         helper's delegation was removed intentionally, bump EXPECTED with \
+         the rationale.",
+    );
+
+    assert_eq!(
+        header_count, EXPECTED_EMIT_TRAILING_AFTER_HEADER,
+        "R39 snag #2 sub-task 5b container-header hook count in \
+         `src/formatter/mod.rs` changed: {header_count} vs expected \
+         {EXPECTED_EMIT_TRAILING_AFTER_HEADER}.\n\n\
+         Expected: 4 (struct / enum / trait / equip). A new structural-\
+         container formatter that wants trailing comments on its header \
+         line (`container Header:  # doc`) MUST call \
+         `emit_trailing_comment_after_header(anchor.span.end)` right \
+         after writing `:` + newline and BEFORE `indent()` — otherwise \
+         the header trailing comment dedents into the body as leading of \
+         the first item."
+    );
+}
+
 /// Round XXXVII D27 Round A Phase 3 (Core #6 shrink-only ratchet): a
 /// SHRINK-ONLY ceiling on `!name`-move sites in NON-SH corpora. Post-R37
 /// the FORMATTER emits `^`, but the in-place corpus sweep is deferred to
