@@ -705,6 +705,20 @@ void check_default_op_rhs(SpannedExpr lhs, SpannedExpr rhs, int scope_id, ScopeT
     bool carrier_match = default_op_carrier_shape_equals(lhs_type, rhs_type, types)
     if not inner_match and not carrier_match:
         ctx.diagnostics.push(Diagnostic.error(rhs.span, DkDefaultOpRhsTypeMismatch(), "right-hand side of `??` must be the inner `T` (unwrap), the same carrier shape (peel-outer for `a ?? b ?? default`), or divergent"))
+        return
+    # SH-lane gap (Core #9): the SH lowerer does NOT yet implement the
+    # Option-preserving shape (extract-and-wrap in the Some/Ok branch) because
+    # the SH GIR lacks a direct enum-init instruction — accepting a
+    # carrier-matching RHS would produce C that GCC rejects with
+    # "incompatible types when assigning to 'int64_t' from 'Option__int64_t'"
+    # (empirically verified by the R39 Track E output-review). Reject
+    # explicitly here with a lane-specific message so the failure is a loud
+    # check-time reject (Core #8 reference-grade), not a loud C-emit build-fail
+    # or, worse, silent miscompilation. The Rust lane accepts this shape (owner
+    # Option B ratification 2026-08-09); the SH lane will follow when the GIR
+    # grows the enum-init primitive it needs.
+    if carrier_match and not inner_match:
+        ctx.diagnostics.push(Diagnostic.error(rhs.span, DkDefaultOpRhsTypeMismatch(), "Option-preserving `??` (carrier-matching RHS) is not yet supported on the self-host lane — rewrite as `a ?? (b ?? default)` (right-nested) or use an unwrapped RHS; the SH lane will accept this shape once its GIR grows direct enum-init"))
 
 # Reject `*x` when `x` is not a `Box[T]` (with the same suppression). Peels a
 # single RTRef wrapper (`*(&box)`), mirroring infer.gg's EDeref arm.

@@ -24421,6 +24421,73 @@ fn self_host_driver_rejects_default_op_non_optional_nested() {
     );
 }
 
+// Round XXXIX Track E (Core #9 SH-lane gap, filed 2026-08-09): under owner
+// Option B ratification the Rust lane accepts Option-preserving `??`
+// (`Option[T] ?? Option[T]` → `Option[T]`). The SH lane's GIR lacks a
+// direct enum-init instruction, so its lowerer cannot yet emit the
+// extract-and-wrap shape. `self_host_typechecker/typecheck.gg`
+// `check_default_op_rhs` explicitly REJECTS the carrier-matching cell
+// with a lane-specific `E_DefaultOpRhsTypeMismatch` message pointing at
+// the right-nested rewrite. This test pins that reject — Core #8
+// (defect surfacing) and Core #10 (lower-or-reject): a loud check-time
+// reject is strictly better than a loud GCC compile-fail. Same contract
+// as the sibling `??` reject harnesses (non-zero exit, codespan
+// diagnostic on stderr, NO C on stdout). Parity-neutral — SH-rejected,
+// excluded from the parity denominator.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_default_op_option_preserving_sh_lane_gap() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/default_op_option_preserving_sh_lane_gap.gg");
+    assert!(fixture.exists(), "guard fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe)
+            .arg(&fixture)
+            .arg(&lib_dir)
+            .arg("--lir-c"),
+        "self_host_driver_rejects_default_op_option_preserving_sh_lane_gap",
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    // 1. The driver MUST exit non-zero (the SH lane rejects Option-preserving).
+    assert!(
+        !out.status.success(),
+        "self-host driver accepted Option-preserving `??` — the SH lowerer \
+         cannot emit the extract-and-wrap shape (no direct GIR enum-init), \
+         so the SH TC must REJECT this cell. Either the reject in \
+         self_host_typechecker/typecheck.gg `check_default_op_rhs` was \
+         removed or stopped firing on carrier-matching RHS. exit={:?}\n\
+         stderr:\n{stderr}",
+        out.status.code(),
+    );
+
+    // 2. It MUST render the lane-specific codespan diagnostic.
+    assert!(
+        stderr.contains("error[E_DefaultOpRhsTypeMismatch]")
+            && stderr.contains("Option-preserving `??`")
+            && stderr.contains("self-host lane")
+            && stderr.contains('\u{250c}'),
+        "self-host driver exited non-zero but did not render the \
+         lane-specific Option-preserving diagnostic.\nstderr:\n{stderr}",
+    );
+
+    // 3. It MUST NOT emit C (the gate halts BEFORE lower_module — Core #10).
+    assert!(
+        stdout.trim().is_empty(),
+        "self-host driver emitted C for a rejected program (Option-preserving \
+         `??`) — the gate must halt BEFORE lowering. stdout bytes={}\n\
+         stdout head:\n{}",
+        stdout.len(),
+        &stdout.chars().take(200).collect::<String>(),
+    );
+}
+
 // Companion to `self_host_driver_rejects_invalid_program`, exercising the
 // required-after-default diagnostic (the self-host typecheck now REJECTS a
 // function decl where a required param follows a defaulted one,
