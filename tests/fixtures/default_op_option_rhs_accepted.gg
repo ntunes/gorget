@@ -1,0 +1,28 @@
+# Round XXXIX Track E (owner Option B chain-friendly + LAZY ratification
+# 2026-08-09): pins the natural LEFT-nested `??` chain shape, which the
+# Option B lowering (Rust `src/semantic/typecheck.rs` `Expr::DefaultOp` +
+# `src/ir/lowering/exprs/mod.rs` `Expr::DefaultOp`) makes correct.
+#
+# Pre-fix history: this fixture graduated from `known_gaps/` where it was
+# `default_op_left_nested_chain_segv.gg` (filed R38 2026-08-08); the
+# LEFT-nested `a ?? b ?? c` chain SIGSEGV'd (exit 139) because the inner
+# `??`'s Option-typed RHS silently size-truncated the else-branch store
+# and the outer `??`'s `tag_of` read wild bytes as a struct tag.
+# Under Option B the inner `Option[int] ?? Option[int]` now peels to
+# `Option[int]` (Kotlin/Swift/C#/JS convention), the outer `?? int`
+# unwraps to `int`, and the chain runs correctly.
+#
+# Class scope: this pins the ACCEPT surface for `Option[T]`-typed RHS on
+# `??`. Sibling POS fixtures cover: three-Option chains
+# (`default_op_left_nested_full_option.gg`), Result LHS chains
+# (`default_op_option_result_result.gg`), right-nested composition
+# (`default_op_right_nested_option_option.gg`), divergent RHS
+# (`default_op_divergent_rhs.gg`), and lazy-RHS semantic
+# (`default_op_lazy_rhs.gg`). NEG covers wrong-type RHS
+# (`default_op_rhs_wrong_type.gg`).
+int main():
+    Option[int] a = None()
+    Option[int] b = None()
+    int r = a ?? b ?? 42
+    print(r)
+    return 0

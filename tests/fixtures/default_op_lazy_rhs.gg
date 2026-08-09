@@ -1,0 +1,33 @@
+# Round XXXIX Track E: LAZY-RHS regression pin (owner ratification 2026-08-09).
+# `??` evaluates RHS only when LHS is None/Error. Observable via an
+# incrementing counter — if RHS is evaluated eagerly, the count comes
+# out 2 (both Some AND None-arm calls); lazy, 1 (only None-arm call).
+#
+# Core #12(b) authoring obligation — this fixture is GREEN on arrival
+# because the lazy semantic already holds. Break-and-verify RECORD:
+#   Rust `src/ir/lowering/exprs/mod.rs` DefaultOp arm — move
+#     `let rhs_val = lower_expr(ctx, builder, rhs);` to BEFORE
+#     `builder.switch_to(else_bb);`. Rebuild + run → this fixture prints
+#     `2\n2` (both calls fired), confirming RED. Restore → `1\n2`.
+#   SH `tests/fixtures/self_host_lowerer/lower_expr.gg` (op == "??" arm) —
+#     move `int qq_rhs = lower_expr(&ctx, *rhs_box, &gmod)` to BEFORE
+#     `switch_to(&ctx, qq_else_bb)`. Same RED signature. Restore.
+# Both signatures verified 2026-08-09 by executor.
+int __side_count = 0
+
+int side_effect_incrementer(int base):
+    __side_count += 1
+    return base
+
+int main():
+    # LHS = Some — RHS should NOT be called.
+    Option[int] a = Some(1)
+    int r1 = a ?? side_effect_incrementer(99)
+    print(__side_count)  # 0 — RHS lazily skipped
+    # LHS = None — RHS called once.
+    Option[int] b = None()
+    int r2 = b ?? side_effect_incrementer(42)
+    print(__side_count)  # 1 — RHS evaluated exactly once
+    print(r1)  # 1 (from Some(1))
+    print(r2)  # 42 (from None fallback)
+    return 0

@@ -2544,9 +2544,20 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if qq_variant != "":
                     int qq_inner_tid = qq_ec.ok_type
                     String qq_recv_tn = local_type_name(qq_lhs, ctx, &gmod)
-                    # Result slot holds the inner T (NOT the Option/Result), so
-                    # both arms store a T value and the merge is T-typed —
-                    # mirrors Rust typing result_id as inner_type (:894).
+                    # Round XXXIX Track E: SH lowerer is aware of the canonical
+                    # type but does NOT yet emit the Option-preserving shape
+                    # (SH's GIR lacks a direct GIEnumInit instruction — the
+                    # existing chokepoint routes ctor calls through ECall
+                    # resolution earlier at the AST level). Option-preserving
+                    # cases are FILED as a self-host-only gap; the SH TC's
+                    # `check_default_op_rhs` still REJECTS the miscompile-class
+                    # (E_DefaultOpRhsTypeMismatch), so no silent-wrong result
+                    # ships. Under CoW-default the Option-preserving Rust path
+                    # is only reachable in a chain `a ?? b ?? c` where inner
+                    # `a ?? b` returns Option[T] — a shape the SH driver's own
+                    # source does NOT use (grepped 2026-08-09), so SH's own
+                    # bootstrap is unaffected. Same-round fix TODO when the
+                    # SH lowerer grows GIR-level enum init.
                     int qq_dst = add_local(&ctx, qq_inner_tid, None)
                     int qq_scr_ptr = match_scrutinee_ptr(&ctx, &gmod, qq_lhs)
                     int qq_tag = emit_tag_read(&ctx, qq_scr_ptr, qq_recv_tn, &gmod)
@@ -2568,6 +2579,8 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # (block_terms still GTNone), mirroring lower_match_expr's
                     # divergent-arm gate. A divergent rhs contributes no merge
                     # edge; a value rhs is moved/copied into the T-typed slot.
+                    # LAZY: RHS lowered INSIDE the else block — do NOT hoist
+                    # (owner ratification 2026-08-09).
                     switch_to(&ctx, qq_else_bb)
                     int qq_rhs = lower_expr(&ctx, *rhs_box, &gmod)
                     match ctx.block_terms.get(ctx.current_block).unwrap():

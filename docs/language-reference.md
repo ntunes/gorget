@@ -1753,20 +1753,40 @@ auto city = user?.address?.city    # Option[String]
 default_op = expr "??" expr ;
 ```
 
-Unwraps the left operand if `Some`; otherwise evaluates the right operand. The right-hand side is **lazy** — it is only evaluated when the left-hand side is `None`.
+The default operator applies to an `Option[T]` or `Result[T, E]` left-hand side. It unwraps the carrier on `Some` / `Ok`; otherwise it evaluates the right-hand side. The right-hand side is **lazy** — it is evaluated only when the left-hand side is `None` / `Error`.
 
 ```gorget
 String name = user?.name ?? "anonymous"
+int port = env_var("PORT") ?? 8080
 ```
 
-The right-hand side may be a **divergent expression** (`throw`, `return`, or a noreturn call) — useful for the "unwrap-or-throw" idiom:
+The right-hand side may be:
+
+1. The unwrapped type `T` — the common case, yields `T`:
+   `Option[int] ?? int` → `int` · `Result[int, E] ?? int` → `int`.
+2. The same carrier shape (with matching type arguments) — peels one outer `??` and yields the carrier itself; enables natural left-nested chains `a ?? b ?? default`:
+   `Option[int] ?? Option[int]` → `Option[int]` · `Result[int, E] ?? Result[int, E]` → `Result[int, E]`.
+3. A divergent expression (`throw`, `return`, `panic(...)`) — the else branch never merges, so the whole `??` keeps the type of the success side (inner `T`).
 
 ```gorget
-JsValue v = arg ?? throw "missing argument"      # throws if None, in a `throws E` fn
-int port = parsed ?? return Error("config")      # early-returns if None
+# Chain — parses as (a ?? b) ?? default; inner ?? peels, outer ?? unwraps.
+Option[int] a = None()
+Option[int] b = Some(7)
+int r = a ?? b ?? 42          # r == 7
+
+# All-carrier chain — outer `??` also peels, yielding the carrier.
+Option[int] pick = a ?? b     # pick == Some(7)
+
+# Divergent RHS — "unwrap-or-throw" idiom.
+JsValue v = arg ?? throw "missing argument"     # inside a `throws String` fn
+int port = parsed ?? return Error("config")     # early-return
 ```
 
-Divergent right-hand sides type-check as compatible with any expected `T` (they never produce a value), so the overall `??` expression keeps the type of the success side.
+For a `Result[T, E]` chain, both `T` AND `E` on the right must match the left's `T` and `E` — a mismatched `E` would size-truncate the else branch on the `Error` variant, so the compiler rejects it.
+
+The convention follows Kotlin's `?:`, Swift and C#'s `??`, and JavaScript's `??` — chains read left-to-right as "first present wins".
+
+An RHS that is none of the three shapes above (`Option[int] ?? String`, `Result[int, E] ?? Result[U, E]` with `T != U`, etc.) is rejected at check time with `E_DefaultOpRhsTypeMismatch`.
 
 ### 7.13 Type-Directed Result Capture
 

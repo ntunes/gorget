@@ -1,0 +1,20 @@
+# Round XXXIX Track E: Result LHS chain under Option B.
+# `Result[T,E1] ?? Result[T,E1]` peels to `Result[T,E1]` (E-must-match:
+# a mismatched E would size-truncate the else-branch store on the E
+# variant; reference-grade reject). Then `?? T` unwraps to T.
+Result[int, String] fail():
+    return Error("bad")
+
+Result[int, String] ok():
+    return Ok(9)
+
+int main():
+    Result[int, String] a = fail()
+    Result[int, String] b = ok()
+    int r1 = a ?? b ?? 42
+    print(r1)  # 9 (b wins)
+    Result[int, String] c = fail()
+    Result[int, String] d = fail()
+    int r2 = c ?? d ?? 42
+    print(r2)  # 42 (fallback to T)
+    return 0

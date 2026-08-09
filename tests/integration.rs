@@ -4565,23 +4565,17 @@ fn print_composite_raw_address() {
     run_gg("known_gaps/print_composite_raw_address.gg", "[10, 20, 30]");
 }
 
-// Round XXXVIII (2026-08-08) — durable repro for the LEFT-nested `??`
-// (default-op) chain SIGSEGV. Discovered during R38 Track C (formatter
-// long-`??` wrap fix) but ORTHOGONAL to it — reproduces without `gg fmt`,
-// against pre-Track-C base (b1c3c17b1). LEFT-nested `a ?? b ?? c` parses as
-// `(a ?? b) ?? c`; when both a and b are `None()`, runtime crashes exit 139
-// during the second `??` reduction. R38 Track C's fmt_long_default_op_nested
-// fixture uses the RIGHT-nested shape (`a ?? (b ?? c)`) which works — that
-// workaround is documented in that fixture's header. This wrapper pins the
-// intended output for LEFT-nested; un-ignore when the runtime defect is fixed.
+// Round XXXIX Track E (owner Option B chain-friendly + LAZY ratification
+// 2026-08-09) — LIVE POS regression pinning the LEFT-nested `??` chain
+// shape. Graduated from `known_gaps/` (was `default_op_left_nested_chain_segv.gg`,
+// filed R38 2026-08-08 as SIGSEGV exit 139). Under Option B, the inner
+// `Option[int] ?? Option[int]` peels to `Option[int]` (Kotlin/Swift/C#/JS
+// convention) and the outer `?? int` unwraps to `int`. Fixture name reflects
+// the RETIRED CLASS (Option-typed RHS accept), not the specific chain shape,
+// per Core #12 "fixture name is a claim about SCOPE".
 #[test]
-#[ignore = "KNOWN GAP (HIGH — RUNTIME SIGSEGV, TODO.md, filed R38 2026-08-08): \
-LEFT-nested `??` chain SIGSEGVs when intermediate operands are None(). \
-Pre-existing (reproduces on b1c3c17b1); orthogonal to R38 Track C formatter \
-fix. Fix at the SH-lowerer or GIR level for default-op reduction; RIGHT-nested \
-form works correctly. Un-ignore when fixed."]
-fn default_op_left_nested_chain_segv() {
-    run_gg("known_gaps/default_op_left_nested_chain_segv.gg", "42");
+fn default_op_option_rhs_accepted() {
+    run_gg("default_op_option_rhs_accepted.gg", "42");
 }
 
 // Round XXXVII (2026-08-08) — durable repro PROCEDURE for the SH-lowerer
@@ -10408,6 +10402,59 @@ fn default_op_non_optional_nested_is_rejected() {
     check_gg_fails(
         "default_op_non_optional_nested_rejected.gg",
         "default operator `??` requires an `Option` or `Result` left-hand side, but `int` is neither",
+    );
+}
+
+// Round XXXIX Track E (owner Option B chain-friendly 2026-08-09): full
+// three-Option chain `Option[int] ?? Option[int] ?? Option[int]` returning
+// `Option[int]` — distinct scope from `default_op_option_rhs_accepted` (which
+// unwraps to `int` on the outer `??`). Pins the CARRIER-PRESERVING all-Option
+// chain shape.
+#[test]
+fn default_op_left_nested_full_option() {
+    run_gg("default_op_left_nested_full_option.gg", "7\n-1");
+}
+
+// Round XXXIX Track E: RIGHT-nested composition `a ?? (b ?? c)` pin.
+// Worked pre-fix but the lowering path changed (canonical read from
+// expr_types); guards against a regression in the shape-switch decision.
+#[test]
+fn default_op_right_nested_option_option() {
+    run_gg("default_op_right_nested_option_option.gg", "5\n42");
+}
+
+// Round XXXIX Track E: Result LHS chain under Option B.
+// E-must-match (`Result[T,E1] ?? Result[T,E1]` accepted; `E1 != E2` rejects).
+#[test]
+fn default_op_option_result_result() {
+    run_gg("default_op_option_result_result.gg", "9\n42");
+}
+
+// Round XXXIX Track E: divergent-RHS carve-out preservation. `?? throw`
+// / `?? return` / `?? panic` — RHS diverges the else branch; result_id
+// stays inner-typed.
+#[test]
+fn default_op_divergent_rhs() {
+    run_gg("default_op_divergent_rhs.gg", "10\n-1");
+}
+
+// Round XXXIX Track E (owner LAZY-RHS ratification 2026-08-09): pins the
+// existing lazy-RHS semantic against regression. `x ?? side_effect()`
+// invokes `side_effect` only when `x` is None/Error. Break-and-verify
+// procedure in the fixture header (Core #12(b) authoring obligation).
+#[test]
+fn default_op_lazy_rhs() {
+    run_gg("default_op_lazy_rhs.gg", "0\n1\n1\n42");
+}
+
+// Round XXXIX Track E: NEG — RHS type is neither inner-T, matching-carrier,
+// nor divergent. Retires the size-truncating store class via a targeted
+// diagnostic (`E_DefaultOpRhsTypeMismatch`).
+#[test]
+fn default_op_rhs_wrong_type_is_rejected() {
+    check_gg_fails(
+        "default_op_rhs_wrong_type.gg",
+        "right-hand side of `??` must be `int` (unwrapped) or `Option[int]` (matching left), but got `String`",
     );
 }
 

@@ -10135,8 +10135,8 @@ fn interp_error_retention_arms_count() {
     let block = &scope[matches_start..matches_start + block_end];
     let arm_count = block.matches("SemanticErrorKind::").count();
     assert_eq!(
-        arm_count, 15,
-        "interp-error retention whitelist arm count changed ({arm_count} vs pinned 15). \
+        arm_count, 16,
+        "interp-error retention whitelist arm count changed ({arm_count} vs pinned 16). \
          Add the new SemanticErrorKind arm here + bump the count if a new gate needs \
          its error preserved inside `f\"{{...}}\"`. Removing an arm may re-open a \
          silent-swallow class — see Round XXIX Track A residual `17a3e342` + \
@@ -10144,7 +10144,8 @@ fn interp_error_retention_arms_count() {
          Track E closed the UndefinedName cell at the resolve layer (meta-for iter-vars \
          + meta-const names now bind as DkVariable, so the sink in resolve's \
          Expr::StringLiteral arm was retired; see \
-         `resolve_interp_arm_uses_shared_errors_vec`)."
+         `resolve_interp_arm_uses_shared_errors_vec`). Round XXXIX Track E added \
+         `E_DefaultOpRhsTypeMismatch` (Option B `??` RHS-type reject)."
     );
 }
 

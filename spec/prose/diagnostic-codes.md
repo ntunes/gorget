@@ -69,6 +69,7 @@ and is cited concretely.
 | `E_UnwrapOnNonOptional` | `UnwrapOnNonOptional` | — |
 | `E_DerefNonBox` | `DerefNonBox` | — |
 | `E_DefaultOpNonOptional` | `DefaultOpNonOptional` | — |
+| `E_DefaultOpRhsTypeMismatch` | `DefaultOpRhsTypeMismatch` | — |
 | `E_LocalBorrowBind` | `LocalBorrowBind` | [`03`](03-writethrough-and-move.md) |
 | `E_MethodGenericInferenceFailed` | `MethodGenericInferenceFailed` | — |
 | `E_CannotInferType` | `CannotInferType` | — |

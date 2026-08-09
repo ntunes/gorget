@@ -1,0 +1,14 @@
+# Round XXXIX Track E: pins the RIGHT-nested `??` composition
+# `a ?? (b ?? c)` under the Option B lowering. This shape worked pre-fix
+# (the R38 known-gap explicitly noted it), but the lowering path changed
+# (canonical read from expr_types) so pin it to guard against regression.
+int main():
+    Option[int] a = None()
+    Option[int] b = Some(5)
+    int r = a ?? (b ?? 42)
+    print(r)
+    Option[int] a2 = None()
+    Option[int] b2 = None()
+    int r2 = a2 ?? (b2 ?? 42)
+    print(r2)
+    return 0

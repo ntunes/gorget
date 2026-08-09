@@ -58,6 +58,7 @@ enum DiagKind:
     # Split out of the former coarse DkTypeMismatch — each 1:1 with its registry code:
     DkDerefNonBox          # `*` on a non-`Box[T]` value (E_DerefNonBox)
     DkDefaultOpNonOptional # `??` on a non-Option/Result LHS (E_DefaultOpNonOptional)
+    DkDefaultOpRhsTypeMismatch # `??` RHS type is neither inner-T, matching-carrier, nor divergent (E_DefaultOpRhsTypeMismatch)
     DkMainThrowsNonInt     # `main()` throws a non-`int` (E_MainThrowsNonInt)
     DkValueOutOfRange      # integer literal out of the target type's range (E_ValueOutOfRange)
     DkStringIndexAssign    # `s[i] = x` on a read-only string view (E_StringIndexAssign)
@@ -148,6 +149,8 @@ String diag_kind_str(DiagKind kind):
             return "deref-non-box"
         case DkDefaultOpNonOptional():
             return "default-op-non-optional"
+        case DkDefaultOpRhsTypeMismatch():
+            return "default-op-rhs-type-mismatch"
         case DkMainThrowsNonInt():
             return "main-throws-non-int"
         case DkValueOutOfRange():
@@ -250,6 +253,8 @@ String diag_kind_code(DiagKind kind):
             return "E_DerefNonBox"
         case DkDefaultOpNonOptional():
             return "E_DefaultOpNonOptional"
+        case DkDefaultOpRhsTypeMismatch():
+            return "E_DefaultOpRhsTypeMismatch"
         case DkMainThrowsNonInt():
             return "E_MainThrowsNonInt"
         case DkValueOutOfRange():
