@@ -22,9 +22,7 @@
 
 **(C) D27 Round B** — reject `!` at parse with a fix-it "use `^`" at `E_MoveWithoutOperator`. Blocked on A2's sweep landing (or an incremental migration path). Round B prerequisite: sweep or curate `fuzz/corpus/**` (~1,989 `.gg` files) before rejecting `!` at parse.
 
-**(E) LEFT-nested `??` chain SIGSEGV (R38 discovery, filed 2026-08-08).** `a ?? b ?? c` parses as `(a ?? b) ?? c`; when a=`None()` and b=`None()`, runtime SIGSEGVs during the second `??` reduction. Pre-existing (reproduces against pre-R38 base b1c3c17b1). Fix likely at SH-lowerer or GIR level for default-op reduction. RIGHT-nested `a ?? (b ?? c)` works — Track C's `fmt_long_default_op_nested.gg` uses that shape as a workaround. Durable repro: `tests/fixtures/known_gaps/default_op_left_nested_chain_segv.gg`.
-
-**Default:** owner call between (D43) locking + (A1) diagnosis. D43 is a design decision; A1 is now unblocked and executor-ready. Suggest bundling: R39 = D43 lock + Track-A-shape A1 fix (both are foundational-language-semantics work, orthogonal file zones).
+**Default:** (A1) SH-lowerer stage-2 memory-safety diagnosis — now unblocked on deterministic ground (R38 Track A).
 
 **⚠ D27 findings from the 3-scout wave (2026-08-06) — STILL PRESERVED for the C3 retry round after formatter defects land, do NOT re-scout at C3 retry stage:**
 - **Fresh in-repo census: ~1,637 sigils** (vs stale 2026-07-11 wave figure of ~1,048; +56% from D31 Addendum-2 full-strict migration + self-host expansion). Breakdown: 1,624 `!name` prefix + 5 `!(...)` move-closure + 8 corner cases (`!"literal"`, `*!bx`, `Vector[T !]` etc.) + 278 error-mark postfix (stay) + 780 `!=` inequality (stay) + 885 in strings/comments (skip).
