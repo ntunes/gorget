@@ -148,6 +148,105 @@
 #     resources.gg): semantically neutral, but again a formatter
 #     preservation gap worth its own filing.
 #
+# ── Phase 2d LOCALIZED — TRAILING-COMMA PARSER BUG (2026-08-09):
+#
+# Post-rebase onto `0b242a73f` (fmt collection-literal interior-
+# comment escape fix), A1 STILL reproduces (Core #5 re-verified;
+# same signature).  Owner-directed 2d-step-0 AST-diff before
+# instrumenting lower_call decisions: dump per-ctor AST at the
+# `lower_call` entry for `ResourceEntry` / `ResourceMetadata` /
+# `RuntimeFn` names; run against clean-tree and fmt'd-tree; diff.
+#
+# Result — AST DIFFERS.  The SH lowerer is NOT the wrong layer:
+# the divergence is UPSTREAM in the parser.
+#
+# Sample from the diff (`ResourceMetadata` for "GorgetString"):
+#
+#   Clean-tree (argc=13, correct):
+#     LC ResourceMetadata argc=13 tc=0
+#       a[0] Str            span=…4177
+#       …
+#       a[12] Bool(false)   span=…4404
+#
+#   Fmt-tree (argc=16, WRONG — same source, formatter-only change):
+#     LC ResourceMetadata argc=16 tc=0
+#       a[0] Str            span=…6728
+#       …
+#       a[12] Bool(false)   span=…7077
+#       a[13] Int(0)        span=…7087..7088   ← 1-byte "Int(0)"
+#       a[14] Int(0)        span=…7094..7095   ← 1-byte "Int(0)"
+#       a[15] Call(ResourceEntry,argc=2)  span=…7305..78839
+#
+# The two 1-byte `Int(0)` args are the parser's error-recovery
+# fallback (`parser.gg:3045-3047`): when `parse_prefix` hits an
+# unexpected token, it pushes "expected expression" to `self.errors`,
+# ADVANCES past that token, and returns `EIntLiteral(0)` at the
+# advanced token's span.  Since `self.errors` is not checked before
+# the driver proceeds to lowering, the dummy `Int(0)` propagates
+# into `args`.  The 1-byte spans identify the tokens the parser
+# ate: they are the CLOSING `)` characters of the outer
+# `ResourceMetadata(...)` and `ResourceEntry(...)` calls.  Arg[15]
+# then picks up the NEXT `ResourceEntry(…)` sibling (span extends
+# ~22KB, swallowing many following entries).
+#
+# WRITE-SITE: `tests/fixtures/self_host_lowerer/parser.gg:2248-2262`
+# `parse_call_args` does not accept a trailing comma:
+#
+#     Vector[CallArg] parse_call_args(&self):
+#         ...
+#         self.expect_tok(TOK_LPAREN, "expected '(' for call args")
+#         if not self.check_tok(TOK_RPAREN):
+#             args.push(self.parse_call_arg())
+#             while self.match_tok(TOK_COMMA):
+#                 args.push(self.parse_call_arg())   # ← consumes `)`
+#         self.expect_tok(TOK_RPAREN, "expected ')' after call args")
+#         return args
+#
+# After matching `,`, the loop UNCONDITIONALLY calls
+# `parse_call_arg`; when the next token is `)` (trailing comma),
+# `parse_call_arg_value` → `parse_expr` → `parse_prefix` falls
+# through to the fallback that advances past the `)` and returns
+# `EIntLiteral(0)`.  The now-lost `)` is never expected by the
+# outer parser, so the next `,` matches, the next `)` is eaten
+# the same way, and the parse state cascades — the outer
+# `ResourceEntry(...)` is pulled in as arg[15] of the inner
+# `ResourceMetadata`.
+#
+# The `Rust gg` reference parser accepts trailing commas
+# (`src/parser/expr.rs`, matching common practice), which is why
+# the formatter emits them — the SH parser is the outlier.
+#
+# CORE #4 SIBLING SITES to check simultaneously (each is a
+# `while self.match_tok(TOK_COMMA): parse_X()` shape that would
+# have the SAME trailing-comma defect):
+#   parser.gg:1550 / :1559 (fn param list)
+#   parser.gg:1635 / :1664 / :1712 (type args / generic args)
+#   parser.gg:1799 / :1814 / :1836 / :1846 / :1870 (patterns)
+#   parser.gg:2259 (parse_call_args — the site above)
+#   parser.gg:2407 / :2501 / :2531 (array / tuple / dict literals)
+#   parser.gg:2843 / :2848 / :2877 / :2913 / :2938 / :2980 (etc)
+# The 20+ sites should be enumerated + fixed as a class (Core #4);
+# a trailing-comma acceptance helper would centralize the fix.
+#
+# PROPOSED FIX SHAPE (Phase 2e brief — SUBJECT TO ≥3 FRESH
+# BRIEF-REVIEWS PER CLAUDE.md before implementation):
+#   * At each `while self.match_tok(TOK_COMMA):` site, after
+#     matching the comma, `check_tok(TOK_RPAREN)` (or the
+#     appropriate terminator: TOK_RBRACK / TOK_RBRACE) and
+#     `break` if it matches.  Centralize as a helper if the
+#     terminator token is the only thing that varies per site
+#     (Core #4: fix the class).
+#   * REGRESSION FIXTURE (Core #11/#12): a minimal `.gg`
+#     exercising a trailing-comma ctor call inside a Vector
+#     literal, wired to RUN and assert output — must RED-verify
+#     pre-fix (Core #12) — plus a fresh negative fixture that
+#     exercises the closing-bracket cascade (2+ nested ctors
+#     with trailing commas each) to prevent regression on the
+#     sibling class.
+#   * KG GRADUATION: un-ignore
+#     `sh_bootstrap_stage2_double_free_after_fmt_sweep` at
+#     `tests/integration.rs:4684` + delete THIS kg fixture.
+#
 # ── Phase 2c bisection outcome (2026-08-09, Path C partial + narrowing continued):
 #
 # Post-rebase (onto `1664da711`, which includes the extern-qualifier
