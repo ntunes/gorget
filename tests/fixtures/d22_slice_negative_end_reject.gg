@@ -1,0 +1,7 @@
+# D22 negative-literal-end reject: `v[a:-b]` also rejected. Sibling of
+# d22_slice_negative_literal_reject.gg — the parse-time reject covers BOTH
+# bracket positions (Core #4 sibling class).
+void main():
+    Vector[int] v = [1, 2, 3]
+    Vector[int] s = v[0:-1]
+    print(s.len().to_string())

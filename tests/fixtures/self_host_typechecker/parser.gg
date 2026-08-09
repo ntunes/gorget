@@ -1960,7 +1960,53 @@ equip Parser:
                     # Not a generic constructor — restore and parse as index
                     self.pos = saved
                 self.advance()
+                # D22 (ratified 2026-07-06): colon-slice `v[a:b]` is
+                # canonical. Four accept-forms + two parse rejects for the
+                # deferred negative-literal and step syntaxes. Desugars to
+                # `EIndex(v, ERange(start, end, false))` so it composes with
+                # the existing range-lower path used by `v[a..b]`. The
+                # colon-vs-dotdot distinction is formatter-only, and the
+                # self-host has no formatter, so ERange is produced verbatim.
+                int slice_start = self.peek().lex_start
+                # Colon-first slice: `[:...]`
+                if self.check_tok(TOK_COLON):
+                    self.advance()
+                    if self.check_tok(TOK_COLON):
+                        self.errors.push("E_SliceStepDeferred: step in `v[a:b:c]` slice syntax is deferred (D22); use `v.reversed()`")
+                    Option[Box[SpannedExpr]] end_opt = None
+                    if not self.check_tok(TOK_RBRACKET):
+                        if self.check_tok(TOK_MINUS) and token_tag(self.peek_at(1).lex_token) == TOK_INT:
+                            self.errors.push("E_NegativeSliceIndex: negative-literal indices in `v[a:b]` slice syntax are deferred (D22); use `v.len() - N`")
+                        SpannedExpr end_expr = self.parse_expr()
+                        if self.check_tok(TOK_COLON):
+                            self.errors.push("E_SliceStepDeferred: step in `v[a:b:c]` slice syntax is deferred (D22); use `v.reversed()`")
+                        end_opt = Some(Box(end_expr))
+                    self.expect_tok(TOK_RBRACKET, "expected ']' after slice")
+                    SpannedExpr rng = SpannedExpr(ERange(None, end_opt, false), Span(slice_start, self.peek().lex_start))
+                    lhs = SpannedExpr(EIndex(Box(lhs), Box(rng)), Span(bp_start, self.peek().lex_start))
+                    continue
+                bool start_is_neg_lit = self.check_tok(TOK_MINUS) and token_tag(self.peek_at(1).lex_token) == TOK_INT
+                int start_neg_span_start = self.peek().lex_start
+                int start_neg_span_end = self.peek().lex_end
                 SpannedExpr idx = self.parse_expr()
+                if self.check_tok(TOK_COLON):
+                    if start_is_neg_lit:
+                        self.errors.push("E_NegativeSliceIndex: negative-literal indices in `v[a:b]` slice syntax are deferred (D22); use `v.len() - N`")
+                    self.advance()
+                    if self.check_tok(TOK_COLON):
+                        self.errors.push("E_SliceStepDeferred: step in `v[a:b:c]` slice syntax is deferred (D22); use `v.reversed()`")
+                    Option[Box[SpannedExpr]] end_opt2 = None
+                    if not self.check_tok(TOK_RBRACKET):
+                        if self.check_tok(TOK_MINUS) and token_tag(self.peek_at(1).lex_token) == TOK_INT:
+                            self.errors.push("E_NegativeSliceIndex: negative-literal indices in `v[a:b]` slice syntax are deferred (D22); use `v.len() - N`")
+                        SpannedExpr end_expr2 = self.parse_expr()
+                        if self.check_tok(TOK_COLON):
+                            self.errors.push("E_SliceStepDeferred: step in `v[a:b:c]` slice syntax is deferred (D22); use `v.reversed()`")
+                        end_opt2 = Some(Box(end_expr2))
+                    self.expect_tok(TOK_RBRACKET, "expected ']' after slice")
+                    SpannedExpr rng2 = SpannedExpr(ERange(Some(Box(idx)), end_opt2, false), Span(slice_start, self.peek().lex_start))
+                    lhs = SpannedExpr(EIndex(Box(lhs), Box(rng2)), Span(bp_start, self.peek().lex_start))
+                    continue
                 self.expect_tok(TOK_RBRACKET, "expected ']' after index")
                 lhs = SpannedExpr(EIndex(Box(lhs), Box(idx)), Span(bp_start, self.peek().lex_start))
                 continue

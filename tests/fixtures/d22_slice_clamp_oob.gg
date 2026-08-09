@@ -1,0 +1,24 @@
+# D22 clamp semantics: OOB indices clamp instead of trapping. Pre-C-2 the
+# `gorget_array_slice` runtime TRAPPED with `T_Bounds`; post-C-2 it clamps
+# Python-style (`start<0→0`, `end>len→len`, `start>end→empty`). Core #12
+# OOB-cell coverage: high-past-end + both-past-end + start>end.
+void main():
+    Vector[int] v = [10, 20, 30]
+    int len = v.len()
+    # OOB-high end (`end > len`): clamps to len.
+    Vector[int] s1 = v[1:len + 10]
+    print(f"oob-high len={s1.len()} last={s1.get(s1.len() - 1).unwrap()}")
+    # Both-past-end (`start > len`): clamps to (len, len) → empty.
+    Vector[int] s2 = v[len + 5:len + 10]
+    print(f"both-oob len={s2.len()}")
+    # start > end: empty slice.
+    Vector[int] s3 = v[2:1]
+    print(f"start-gt-end len={s3.len()}")
+    # String receiver same axes (already-clamping).
+    String s = "hello"
+    String t1 = s[1:100]
+    print(f"str oob-high {t1}")
+    String t2 = s[100:200]
+    print(f"str both-oob len={t2.len()}")
+    String t3 = s[3:1]
+    print(f"str start-gt-end len={t3.len()}")

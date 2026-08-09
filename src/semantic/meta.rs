@@ -1723,7 +1723,7 @@ fn eval_meta_stmt(
         Stmt::For { pattern, iterable, body, else_body, .. } => {
             // Only integer range iteration is supported at compile time.
             match &iterable.node {
-                Expr::Range { start, end, inclusive } => {
+                Expr::Range { start, end, inclusive, .. } => {
                     let start_val = match start {
                         Some(s) => match eval_expr(&s.node, env, ctx, s.span)? {
                             MetaValue::Int(n) => n,
@@ -3616,7 +3616,7 @@ fn eval_delayed_meta_range(
     span: Span,
 ) -> Result<(i64, i64, bool), SemanticError> {
     match range_expr {
-        Expr::Range { start, end, inclusive } => {
+        Expr::Range { start, end, inclusive, .. } => {
             let start_val = match start {
                 Some(s) => match eval_delayed_expr(&s.node, ctx, s.span)? {
                     MetaValue::Int(n) => n,

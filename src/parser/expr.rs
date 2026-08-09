@@ -1347,9 +1347,136 @@ impl Parser {
                         start.merge(end),
                     ));
                 }
-                // Not a generic call — parse as index
+                // Not a generic call — parse as index or colon-slice.
+                //
+                // D22 (docs/define-gorget/decisions.md, ratified 2026-07-06):
+                // colon-slice `v[a:b]` is canonical. Four accept-forms:
+                //   `v[a:b]`  `v[a:]`  `v[:b]`  `v[:]`
+                // Two reject-forms (deferred, not silently accepted):
+                //   `v[-a:b]` — E_NegativeSliceIndex (negative-literal at
+                //       parse-position; runtime-negative variables still fall
+                //       through to §10.9's Bounds fault at runtime).
+                //   `v[a:b:c]` — E_SliceStepDeferred (step; use .reversed()).
+                //
+                // Desugars to `Index(v, Range{ start, end, inclusive: false,
+                // colon: true })` so it composes with the existing `is_range`
+                // lower path used by `v[a..b]`. The `colon` marker is
+                // formatter-only — all semantic passes treat colon-slice and
+                // dot-dot range identically.
                 self.advance(); // skip [
+                let bracket_start_span = self.previous_span();
+
+                // Peek for colon-first slice: `[:...]`
+                if self.check(&Token::Colon) {
+                    self.advance(); // skip :
+                    // Reject step: `[::stride]`
+                    if self.check(&Token::Colon) {
+                        return Err(ParseError {
+                            kind: ParseErrorKind::SliceStepDeferred,
+                            span: self.peek_span(),
+                        });
+                    }
+                    let end_expr = if self.check(&Token::RBracket) {
+                        None
+                    } else {
+                        // Reject negative-literal end: `[:-1]`
+                        if let Some(neg_span) = self.peek_negative_int_literal_span() {
+                            return Err(ParseError {
+                                kind: ParseErrorKind::NegativeSliceIndex,
+                                span: neg_span,
+                            });
+                        }
+                        let e = self.parse_expr()?;
+                        // Reject step after the second value: `[:b:c]`
+                        if self.check(&Token::Colon) {
+                            return Err(ParseError {
+                                kind: ParseErrorKind::SliceStepDeferred,
+                                span: self.peek_span(),
+                            });
+                        }
+                        Some(Box::new(e))
+                    };
+                    self.expect(&Token::RBracket)?;
+                    let end = self.previous_span();
+                    let range_span = bracket_start_span.merge(end);
+                    let range = Spanned::new(
+                        Expr::Range {
+                            start: None,
+                            end: end_expr,
+                            inclusive: false,
+                            colon: true,
+                        },
+                        range_span,
+                    );
+                    return Ok(Spanned::new(
+                        Expr::Index {
+                            object: Box::new(lhs),
+                            index: Box::new(range),
+                        },
+                        start.merge(end),
+                    ));
+                }
+
+                // Reject negative-literal start: `[-a...]`
+                let start_neg_span = self.peek_negative_int_literal_span();
                 let index = self.parse_expr()?;
+                // Colon-slice with explicit start: `[a:...]` / `[a:]`
+                if self.check(&Token::Colon) {
+                    // If start was a negative-literal, reject.
+                    if let Some(neg_span) = start_neg_span {
+                        return Err(ParseError {
+                            kind: ParseErrorKind::NegativeSliceIndex,
+                            span: neg_span,
+                        });
+                    }
+                    self.advance(); // skip :
+                    // Reject step: `[a::b]`
+                    if self.check(&Token::Colon) {
+                        return Err(ParseError {
+                            kind: ParseErrorKind::SliceStepDeferred,
+                            span: self.peek_span(),
+                        });
+                    }
+                    let end_expr = if self.check(&Token::RBracket) {
+                        None
+                    } else {
+                        // Reject negative-literal end: `[a:-b]`
+                        if let Some(neg_span) = self.peek_negative_int_literal_span() {
+                            return Err(ParseError {
+                                kind: ParseErrorKind::NegativeSliceIndex,
+                                span: neg_span,
+                            });
+                        }
+                        let e = self.parse_expr()?;
+                        // Reject step after second value: `[a:b:c]`
+                        if self.check(&Token::Colon) {
+                            return Err(ParseError {
+                                kind: ParseErrorKind::SliceStepDeferred,
+                                span: self.peek_span(),
+                            });
+                        }
+                        Some(Box::new(e))
+                    };
+                    self.expect(&Token::RBracket)?;
+                    let end = self.previous_span();
+                    let range_span = index.span.merge(end);
+                    let range = Spanned::new(
+                        Expr::Range {
+                            start: Some(Box::new(index)),
+                            end: end_expr,
+                            inclusive: false,
+                            colon: true,
+                        },
+                        range_span,
+                    );
+                    return Ok(Spanned::new(
+                        Expr::Index {
+                            object: Box::new(lhs),
+                            index: Box::new(range),
+                        },
+                        start.merge(end),
+                    ));
+                }
                 self.expect(&Token::RBracket)?;
                 let end = self.previous_span();
                 Ok(Spanned::new(
@@ -1401,6 +1528,7 @@ impl Parser {
                         start: Some(Box::new(lhs)),
                         end: end_expr,
                         inclusive: false,
+                        colon: false,
                     },
                     start.merge(end),
                 ))
@@ -1415,6 +1543,7 @@ impl Parser {
                         start: Some(Box::new(lhs)),
                         end: Some(Box::new(end_expr)),
                         inclusive: true,
+                        colon: false,
                     },
                     start.merge(end),
                 ))
@@ -2122,6 +2251,25 @@ impl Parser {
     }
 
     // ── Helpers ───────────────────────────────────────────────
+
+    /// D22: at the current position, detect a `-<IntLit>` prefix — the
+    /// syntactic shape D22 rejects at parse time inside a colon-slice
+    /// bracket position (`v[-a:b]`, `v[a:-b]`, etc.). Returns `Some(span)`
+    /// spanning both tokens when it matches, `None` otherwise. Runtime-negative
+    /// variables (`v[some_int:b]` where `some_int` goes negative at runtime)
+    /// still route through §10.9's Bounds fault — this helper only sees the
+    /// syntactic `- <IntLiteral>` pair.
+    pub fn peek_negative_int_literal_span(&self) -> Option<Span> {
+        if !matches!(self.peek(), Token::Minus) {
+            return None;
+        }
+        if !matches!(self.peek_ahead(1), Token::IntLiteral(_)) {
+            return None;
+        }
+        let minus = self.peek_span();
+        let lit = self.spans.get(self.pos + 1).copied().unwrap_or(Span::dummy());
+        Some(minus.merge(lit))
+    }
 
     /// Check if the current token can start an expression.
     pub fn is_expr_start(&self) -> bool {

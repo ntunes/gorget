@@ -1,0 +1,17 @@
+# D22 colon-slice × Vector[String] (droppable element) — exercises the
+# runtime `elem_clone` deep-clone branch in `gorget_array_slice`
+# (`src/backend/c/runtime/runtime_array.c:475-479`), which never fires for
+# `Vector[int]`. Core #12 element-type axis: the POD cell (Vector[int]) says
+# nothing about the droppable-element cell.
+void main():
+    Vector[String] v = ["alpha", "beta", "gamma", "delta"]
+    int a = 1
+    int b = 3
+    Vector[String] s1 = v[a:b]
+    print(f"[a:b] {s1.get(0).unwrap()},{s1.get(1).unwrap()}")
+    Vector[String] s2 = v[:]
+    print(f"[:] len={s2.len()} {s2.get(0).unwrap()},{s2.get(3).unwrap()}")
+    # Mutate the source AFTER the slice — the slice is an independent OWNED
+    # value (D15 semantics), so the earlier snapshot survives.
+    v.push("epsilon")
+    print(f"after push {v.len()} s1[0]={s1.get(0).unwrap()}")

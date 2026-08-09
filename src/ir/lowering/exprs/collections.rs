@@ -667,7 +667,7 @@ pub(super) fn lower_list_comprehension(
     let array_type = ctx.type_mapper.lookup_named("GorgetArray").unwrap_or(UNIT_TYPE);
 
     // Only handle range iterables for now
-    if let Expr::Range { start: Some(start), end: Some(end), inclusive } = &iterable.node {
+    if let Expr::Range { start: Some(start), end: Some(end), inclusive, .. } = &iterable.node {
         // Create accumulator array (use I64 as default element size)
         let acc_local = builder.call_extern(
             "gorget_array_new",
@@ -959,7 +959,7 @@ pub(super) fn lower_dict_comprehension(
     condition: Option<&Spanned<Expr>>,
 ) -> Operand {
     // Only handle range iterables for now
-    if let Expr::Range { start: Some(start), end: Some(end), inclusive } = &iterable.node {
+    if let Expr::Range { start: Some(start), end: Some(end), inclusive, .. } = &iterable.node {
         let var_name = if let Some(first) = variables.first() {
             first.node.clone()
         } else {
@@ -1046,7 +1046,7 @@ pub(super) fn lower_set_comprehension(
     let new_fn = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
 
     // Only handle range iterables for now
-    if let Expr::Range { start: Some(start), end: Some(end), inclusive } = &iterable.node {
+    if let Expr::Range { start: Some(start), end: Some(end), inclusive, .. } = &iterable.node {
         let acc_local = builder.call_extern(
             new_fn,
             vec![Operand::Constant(Constant::SizeOf(I64_TYPE))],
@@ -1194,10 +1194,18 @@ pub(super) fn lower_range_expr(
     } else {
         Operand::Constant(Constant::I64(0))
     };
+    // D22 open-end slice (`v[a:]` / `v[:]`): the range's end is None; pass
+    // `i64::MAX` so the runtime clamp (`end > arr->len → arr->len`) reduces
+    // it to the receiver's length at the actual slice call. The for-loop
+    // range fast path (`src/ir/lowering/stmts/for_loops.rs:136`) requires
+    // Some(end) so it never observes the sentinel — only the slice path
+    // does, and that path is guarded by the runtime clamp landed in the
+    // same round (Track C, C-2). Pre-C-2, an open-end slice traps with the
+    // OOB message; post-C-2, it succeeds as the empty/full clamped slice.
     let end_val = if let Some(e) = end {
         lower_expr(ctx, builder, e)
     } else {
-        Operand::Constant(Constant::I64(0))
+        Operand::Constant(Constant::I64(i64::MAX))
     };
     let inclusive_val = Operand::Constant(Constant::Bool(inclusive));
 

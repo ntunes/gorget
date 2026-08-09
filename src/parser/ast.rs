@@ -605,6 +605,12 @@ pub enum Expr {
         start: Option<Box<Spanned<Expr>>>,
         end: Option<Box<Spanned<Expr>>>,
         inclusive: bool,
+        /// D22 colon-slice marker: `v[a:b]` sets `colon = true`;
+        /// `v[a..b]` / `a..b` sets `colon = false`. Only the formatter
+        /// reads this to preserve the user's source shape during the
+        /// D22 accept-both migration window. All semantic passes ignore
+        /// it — the two forms have identical meaning.
+        colon: bool,
     },
 
     // ── Optional chaining (?.) ──

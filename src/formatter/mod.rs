@@ -1866,21 +1866,47 @@ impl Formatter {
             Expr::Index { object, index } => {
                 // FMT-A: object at postfix bp 35. `index` is inside `[...]`
                 // brackets, which reset precedence — no wrap needed there.
+                //
+                // D22 colon-slice: a Range payload carrying `colon: true`
+                // (from `v[a:b]` / `v[a:]` / `v[:b]` / `v[:]`) renders with
+                // `:` between the endpoints — the parser preserves the
+                // user's source shape via the marker rather than
+                // canonicalising every Range payload to `:` (which would
+                // also rewrite standalone `for i in a..b` iterables).
                 self.format_postfix_receiver(object);
                 self.emitter.write("[");
-                self.format_expr(index);
+                if let Expr::Range { start, end, inclusive: false, colon: true } = &index.node {
+                    // D22 slice: `[a:b]`, `[a:]`, `[:b]`, `[:]`. Endpoints
+                    // are inside `[...]` — precedence resets, so no wrap
+                    // logic needed for the operands.
+                    if let Some(s) = start {
+                        self.format_expr(s);
+                    }
+                    self.emitter.write(":");
+                    if let Some(e) = end {
+                        self.format_expr(e);
+                    }
+                } else {
+                    self.format_expr(index);
+                }
                 self.emitter.write("]");
             }
             Expr::Range {
                 start,
                 end,
                 inclusive,
+                colon: _,
             } => {
                 // FMT-A: Range is bp 23 (postfix in parser sense, but rendered
                 // infix here). START was parsed at the outer bp of whichever
                 // context Range appeared in — treat as LEFT operand of an infix
                 // at bp 23 (left-assoc). END is parsed at bp 24 (parser::expr.rs:1394,1411),
                 // so END is a prefix operand at bp 24.
+                //
+                // D22 colon-slice `[a:b]` is only valid INSIDE an `Index`
+                // wrapper, and the `Index` arm above catches that shape
+                // before falling here. A standalone Range emits `..`/`..=`
+                // regardless of the `colon` marker.
                 if let Some(s) = start {
                     self.format_binop_operand(s, 23, BinOpPos::Left, false);
                 }

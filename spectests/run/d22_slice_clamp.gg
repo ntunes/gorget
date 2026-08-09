@@ -1,0 +1,47 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# doc: D22 colon-slice clamp semantics (all four accept-forms; OOB clamps
+#       Python-style; String + Vector[int] receivers). 4-lane cross-check
+#       (C / LLVM / SH / ggdef).
+# expect:
+#   exit: 0
+#   stdout: "3 20 30 40\n4 20 30 40 50\n4 10 20 30 40\n5 10 20 30 40 50\n4 20 30\n0\n0\nhello\n_world\nhello\nhello_world\nello_world\n0\n"
+#!end
+void main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+    int a = 1
+    int b = 4
+
+    Vector[int] s1 = v[a:b]
+    print(f"{s1.len()} {s1.get(0).unwrap()} {s1.get(1).unwrap()} {s1.get(2).unwrap()}")
+
+    Vector[int] s2 = v[a:]
+    print(f"{s2.len()} {s2.get(0).unwrap()} {s2.get(1).unwrap()} {s2.get(2).unwrap()} {s2.get(3).unwrap()}")
+
+    Vector[int] s3 = v[:b]
+    print(f"{s3.len()} {s3.get(0).unwrap()} {s3.get(1).unwrap()} {s3.get(2).unwrap()} {s3.get(3).unwrap()}")
+
+    Vector[int] s4 = v[:]
+    print(f"{s4.len()} {s4.get(0).unwrap()} {s4.get(1).unwrap()} {s4.get(2).unwrap()} {s4.get(3).unwrap()} {s4.get(4).unwrap()}")
+
+    # OOB clamp: end > len → len; start > end → empty; both-past → empty.
+    int len = v.len()
+    Vector[int] o1 = v[1:len + 10]
+    print(f"{o1.len()} {o1.get(0).unwrap()} {o1.get(1).unwrap()}")
+
+    Vector[int] o2 = v[len + 5:len + 10]
+    print(f"{o2.len()}")
+
+    Vector[int] o3 = v[2:1]
+    print(f"{o3.len()}")
+
+    # String receiver (already clamps in the runtime).
+    String s = "hello_world"
+    print(s[0:5])
+    print(s[5:])
+    print(s[:5])
+    print(s[:])
+    print(s[1:100])
+    String t3 = s[3:1]
+    print(f"{t3.len()}")
