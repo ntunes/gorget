@@ -87,7 +87,89 @@
 # Some OTHER file(s) in the 1924 fmt-changed files contribute. Full
 # bisection: ~11 rounds × 7min bootstrap = ~1.3h + overhead.
 #
-# ── R40 fix paths:
+# ── Phase 2b bisection outcome (2026-08-09, narrowed to ONE file):
+#
+# The trigger narrows to `compiler/data/resources.gg`.  Verified:
+#   * reset all + fmt EVERY file EXCEPT `compiler/data/*.gg` → bootstrap
+#     CONVERGES cleanly (stage-2 exit 0, stage-2.c == stage-3.c).
+#   * reset all + fmt ONLY `compiler/data/resources.gg` (leave every
+#     other file untouched) → bootstrap CRASHES with the same
+#     `free(): double free detected in tcache 2` at stage-2.
+#
+# `compiler/data/resources.gg` is a data-only module describing the
+# runtime resource table (~139 `ResourceEntry(...)` literals).  The
+# SH driver reads it at runtime via project-root fallback (`from
+# compiler.data.resources import ...` in the loader.gg / lower_*.gg
+# family), so its on-disk contents are load-bearing for both the Rust
+# build of `driver_post_sweep` (used as stage-0) AND the SH-emitted
+# stage-N drivers.
+#
+# ── Phase 2b diagnostic — where SH-emit diverges on the fmt'd file:
+#
+# Comparing `__gg_static_init_RESOURCES` in `stage_1.c` (Rust-emit of
+# fmt'd resources.gg, correct) vs `stage_2.c` (SH-emit compiled from
+# stage_1.c, buggy) shows the SH-emit is MISSING two stack slots per
+# `ResourceEntry`:
+#
+#   Rust-emit (per iteration, N=139):
+#     __gg_ResourceMetadata __s27 = {0};   /* temp for the nested ctor */
+#     __gg_ResourceEntry    __s28 = {0};   /* temp for the outer ctor  */
+#     ...
+#   SH-emit: those two slot decls are absent — the ctor result is
+#     stored directly into the RESOURCES vector element without an
+#     intermediate slot.
+#
+# The single-line vs multi-line ctor shape in the source drives this:
+# fmt reformats `ResourceEntry([...], ResourceMetadata("Gorget...", 32,
+# LtStructBase(), Some("gorget_string_free"), ...))` from a compact
+# one-per-line form into a "one argument per line with trailing comma"
+# form.  Both parse to the same AST in Rust gg (verified — Rust builds
+# stage-0/driver_post_sweep and it works), but the SH lowerer takes a
+# DIFFERENT PATH for the multi-line ctor shape and elides the
+# ResourceMetadata / ResourceEntry temp slots.  That elision breaks
+# drop_elab's tracking downstream — hundreds of `map_put` sites end
+# up with spurious `gorget_string_free(&slot)` calls in stage-2.c
+# (~118 spurious put+free-within-5-lines patterns in `loader___load_
+# imports` alone vs 34 in the Rust reference and 9 in stage-1.c).
+#
+# Cross-checks that let us stop here (not the trigger):
+#   * `blocking` / `noreturn` extern qualifiers stripped by fmt — real
+#     formatter bug (`src/formatter/mod.rs::format_qualifiers` at
+#     :573-586 lists `is_async/is_const/is_static/is_unsafe` but not
+#     `is_blocking/is_noreturn`), but reset-lib alone does NOT stop
+#     the crash and only compiler/data/resources.gg contributes.
+#   * Import re-ordering to alphabetic within `from X import ...`:
+#     changes the file but does not by itself flip stage-2 to the
+#     double-free (partial isolated test showed a HANG at stage-2's
+#     driver.gg self-compile — a distinct failure signature, not the
+#     double-free class).
+#   * Comment removal from Vector literals (fmt DROPS inline `#…`
+#     comments between elements of `RESOURCES = [ … ]` in
+#     resources.gg): semantically neutral, but again a formatter
+#     preservation gap worth its own filing.
+#
+# ── R40+ fix paths (updated by Phase 2b):
+#
+# Path C (highest signal) — hypothesis-test the ctor-shape divergence:
+#   1. Manually restructure ONE `ResourceEntry(...)` literal in
+#      HEAD's resources.gg from single-line into fmt's multi-line
+#      shape (nothing else — no import reorder, no comment removal).
+#   2. Rebuild driver + rerun `self_host_bootstrap_fixed_point`.
+#   3. If it crashes: the trigger is the multi-line ctor lowering —
+#      dig into `lower.gg` / `lower_expr.gg`'s handling of Call and
+#      Ctor expressions to find the shape-dependent branch that
+#      elides the ResourceMetadata/ResourceEntry temp slots.
+#   4. If it does NOT crash: the trigger is CUMULATIVE — needs N
+#      such rewrites before flipping — instrumentation via a small
+#      per-ctor rewrite script + N-vs-outcome sweep.
+# Path A — fmt bisection (superseded — already narrowed to one file).
+# Path B — emitter diff at drop_elab/lower_liveness (Phase 2b ruled
+#   in as INSUFFICIENT: the drift is UPSTREAM, in ctor lowering, so
+#   drop_elab reads mis-initialized dataflow state; Core #1 rule
+#   applies — fix at the write site in lower_expr, not read site in
+#   drop_elab).
+#
+# ── R40 fix paths (retained from Phase 2 for reference):
 #
 # Path A — fmt bisection: narrow to specific file/canonicalization, then
 #   grep the file for the SH construct that miscompiles.
