@@ -11776,7 +11776,11 @@ fn formatter_sibling_loops_hook_pairing() {
     /// elif branch, `format_match_arm` case. A new structural-container
     /// or control-flow header formatter that wants the header-trailing
     /// behaviour must add its own call and bump this count.
-    const EXPECTED_EMIT_TRAILING_AFTER_HEADER: usize = 10;
+    // R39 gorget-arena verdict follow-up (2026-08-09): 10 → 11 with
+    // function-definition header (`int f(): # doc`) added via
+    // `format_function`'s FunctionBody::Block arm. Same class as the
+    // control-flow openers + structural containers.
+    const EXPECTED_EMIT_TRAILING_AFTER_HEADER: usize = 11;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");

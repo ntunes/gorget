@@ -910,6 +910,14 @@ impl Formatter {
         match &f.body {
             FunctionBody::Block(block) => {
                 self.emitter.write(":");
+                // R39 gorget-arena verdict follow-up (owner 2026-08-09):
+                // preserve `int f(int x): # doc` trailing comment on the
+                // function-header line — same class as R39 block-header
+                // trailing (if/while/for/match/case) + snag #2 residual
+                // container-header (struct/enum/trait/equip). Anchor at
+                // f.name.span.end (before `:` and any trailing comment
+                // on the same source line).
+                self.emit_trailing_comment_after_header(f.name.span.end);
                 self.emitter.newline();
                 self.emitter.indent();
                 self.format_block_stmts(block);
@@ -1579,17 +1587,44 @@ impl Formatter {
         }
     }
 
-    /// gorget-arena snag #3 (R39, 2026-08-09): true iff `source[prev_end..cur_start]`
-    /// contains at least 2 newlines — i.e. the author wrote a blank line
-    /// between the two spans. One newline is the natural EOL of the prev
-    /// stmt; a SECOND newline indicates an intentional blank line.
-    /// Collapse-runs-of-≥2-to-1 semantics: any count ≥ 2 → single blank.
-    fn has_blank_line_between(&self, prev_end: usize, cur_start: usize) -> bool {
-        if cur_start <= prev_end || cur_start > self.source.len() {
+    /// gorget-arena snag #3 (R39, 2026-08-09): true iff the author wrote
+    /// at least one blank line before `cur_start`. Walks BACKWARDS from
+    /// `cur_start` to find the last non-whitespace byte (or 0), then
+    /// counts `\n`s in that trailing-whitespace region. ≥ 2 `\n` = the
+    /// user wrote at least one wholly-empty line (one `\n` is the natural
+    /// EOL of prev's content line; the second `\n` starts the blank).
+    ///
+    /// **Why backward walk (not `source[prev_end..cur_start]`):** for
+    /// container-type items (`struct`/`enum`/`trait`/`equip`/`function`),
+    /// the AST `span.end` sits at the DEDENT token — which is often
+    /// ZERO WIDTH at the same byte position as the NEXT item's start.
+    /// `source[prev.span.end..cur.span.start]` is then empty even when
+    /// the author wrote blank lines in between. Walking back from
+    /// `cur_start` past all trailing whitespace catches the blanks
+    /// regardless of where the AST considers prev to end.
+    ///
+    /// The `prev_end` param is kept for compatibility with callers that
+    /// want an explicit floor, but the primary signal is the walk-back
+    /// from `cur_start`.
+    fn has_blank_line_between(&self, _prev_end: usize, cur_start: usize) -> bool {
+        if cur_start == 0 || cur_start > self.source.len() {
             return false;
         }
-        let between = &self.source[prev_end..cur_start];
-        between.bytes().filter(|b| *b == b'\n').count() >= 2
+        let bytes = self.source.as_bytes();
+        // Walk backward from cur_start past all whitespace (space, tab,
+        // newline, CR). Stop at first non-ws byte OR position 0.
+        // `_prev_end` is intentionally unused: for container-type items
+        // (struct/enum/fn/etc.), AST span.end is often ZERO WIDTH at the
+        // same position as the next item's start — so using it as a
+        // floor would defeat the walk. The whitespace walk-back reaches
+        // the last actual content byte from prev regardless.
+        let mut i = cur_start;
+        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+            i -= 1;
+        }
+        // Count `\n`s in the trailing-ws region source[i..cur_start].
+        // ≥ 2 = user wrote a blank line before cur.
+        self.source[i..cur_start].bytes().filter(|b| *b == b'\n').count() >= 2
     }
 
     /// gorget-js snag #15b (R39 Track F) + #15c (R39 Track G): the arm body of

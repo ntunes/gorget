@@ -10093,6 +10093,34 @@ fn fmt_preserves_intra_block_blank_lines_source_runs() {
     run_gg("fmt_preserves_intra_block_blank_lines.gg", "10");
 }
 
+// R39 gorget-arena verdict fold: opinionated golden-file test. Any fmt
+// behavior change on the canonical sample must be either INTENDED (update
+// expected file same commit) or REGRESSION (fix formatter). See fixture
+// headers for full rationale.
+#[test]
+fn fmt_golden_sample_matches_expected() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let input_path = manifest_dir.join("tests/fixtures/fmt_golden_sample_input.gg");
+    let expected_path = manifest_dir.join("tests/fixtures/fmt_golden_sample_expected.gg");
+    let input = std::fs::read_to_string(&input_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", input_path.display()));
+    let expected = std::fs::read_to_string(&expected_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", expected_path.display()));
+    let actual = gorget::formatter::format_source_infallible(&input);
+    if actual != expected {
+        // Print a helpful diff.
+        panic!(
+            "fmt golden-file mismatch — regenerate via:\n  \
+             ./target/release/gg fmt tests/fixtures/fmt_golden_sample_input.gg > tests/fixtures/fmt_golden_sample_expected.gg\n\
+             (if the shift is INTENDED) OR fix the formatter (if regression).\n\
+             === Actual ===\n{actual}\n=== Expected ===\n{expected}"
+        );
+    }
+    // Also verify idempotence.
+    let second = gorget::formatter::format_source_infallible(&actual);
+    assert_eq!(actual, second, "golden-file output not idempotent");
+}
+
 #[test]
 fn fmt_preserves_blocking_extern_qualifier() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

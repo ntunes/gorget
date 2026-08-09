@@ -1,0 +1,43 @@
+# R39 gorget-arena verdict fold (owner 2026-08-09): opinionated golden-file
+# regression test. This file is a synthesized sample exercising the full range
+# of formatter rules — imports/grouping, top-level items with blank spacing,
+# struct fields with trailing comments, enum variants with paragraphing,
+# function-header trailing comments, control-flow bodies with trailing
+# comments + intra-block blanks, and match arms.
+#
+# The paired file `fmt_golden_sample_expected.gg` locks in the EXACT expected
+# `gg fmt` output. When the two diverge, the paired integration test
+# `fmt_golden_sample_matches_expected` fails — surfacing whether the fmt
+# behavior change was INTENDED (update the expected file) or a REGRESSION
+# (fix the formatter).
+#
+# Golden-file assertion is restrictive by design: any fmt output shift on
+# this canonical sample requires deliberate acknowledgement.
+from std.collections import Vector
+from std.io import print
+
+from myapp.helpers import util
+
+static int MAX = 100
+
+const int MIN = 0
+
+struct Point:
+    int x  # x-coordinate
+    int y  # y-coordinate
+
+enum Direction:
+    North()
+
+    South()
+
+int compute(int a, int b):  # add two numbers
+    int total = a + b
+
+    if total > MAX:  # cap
+        total = MAX
+    return total
+
+int main():
+    print(compute(50, 60))
+    return 0
