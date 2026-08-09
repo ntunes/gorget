@@ -1302,6 +1302,24 @@ Multiple sites reconstruct "is this field a borrow pointer" from the field-type-
 
 - **🔭 (low-pri, const-bytes #10) — scalar-FLOAT static const-init uses `%g` (`float_to_str`), not bit-exact.** `scalar_static_c_literal`'s float path round-trips `2.5` exactly, but a future precision-sensitive float static (`3.14159265358979`) would `%g`-truncate. Switch to a `.17e`/LE-byte encoding when such a static appears.
 
+### Rust gg bugs surfaced by R39 Phase 2e Sub-task 0 probe (2026-08-09)
+
+The 4 bugs below blocked R39's owner-chosen Option C helper design
+(`Vector[T] parse_comma_separated_list[T](Parser &, Token, Callable[T(Parser &)])`)
+and forced the shipped Path 3 fallback (single boolean `consume_comma_or_tok`
+helper, no generics, no Callable). Each has a durable `known_gaps/rust_gg_bug_*/`
+repro + `#[ignore]`d integration test asserting the INTENDED behavior. Un-ignore
+each test as the underlying bug fixes; graduate the fixture out of `known_gaps/`
+when it passes cleanly (per Task Continuity).
+
+- **🆕🐛 [HIGH — Rust gg, closure-inference gap] `Callable[T(Struct &)]` + closure literal `(p): p.field` — Rust gg infers `p` as `int64_t` instead of `Struct &`, so `.field` returns garbage (or fails at link time with `undefined reference to 'int64_t__<method>'` when the closure body invokes a method).** Fixture: `tests/fixtures/known_gaps/rust_gg_bug_callable_amp_struct_closure_literal/repro.gg` + README.md. Integration test: `rust_gg_bug_callable_amp_struct_closure_literal` (`#[ignore]`d, asserts intended `1`). Green cell (scalar-arg): `Callable[T(int)]` + `(n): n * 10` works — see top-level `generic_callable.gg`. **Fix direction:** closure-literal untyped-param inference must consult the ENCLOSING call's expected function type; today it bails to `int64_t` when the expected param is `Struct &`.
+
+- **🆕🐛 [HIGH — Rust gg, SIGSEGV, MEMORY-UNSAFE] `Callable[T(Struct &)]` + named-fn callback + `Vector.get().unwrap()` iterator body → SIGSEGV.** Fixture: `tests/fixtures/known_gaps/rust_gg_bug_callable_amp_struct_iterator_segv/repro.gg` + README.md. Integration test: `rust_gg_bug_callable_amp_struct_iterator_segv` (`#[ignore]`d, asserts intended `1\n2`). Green cell (direct, no iterator): `with_counter(f, &c)` — see `tests/fixtures/callable_ref_param.gg`. Adding `Vector.get().unwrap()` into the shape flips it to SIGSEGV. **Fix direction:** unclear without instrumentation of the emitted C around `f(&t)` — either the `t` local's stack slot is stale by the time f is invoked, or the fn-pointer wrapper mangles the `Thing &` calling convention, or drop-elab frees `t` in the loop body pre-call.
+
+- **🆕🐛 [MED — Rust gg, closure struct capture wrong-code] Closure capturing a local struct's `&self`-method mutations does NOT persist across successive closure invocations — prints `1 1 1` instead of `1 2 3`.** Fixture: `tests/fixtures/known_gaps/rust_gg_bug_closure_struct_capture_no_persist/repro.gg` + README.md. Integration test: `rust_gg_bug_closure_struct_capture_no_persist` (`#[ignore]`d, asserts intended `1\n2\n3`). Green cell (primitive capture): `int count = 0; auto increment = (): count = count + 1;` prints `3` after 3 calls — see top-level `closures.gg`. Isolated (no HOF, no Callable indirection) — the closure is called in-place three times in `main`. **Fix direction:** struct captures inside a closure invoked more than once MUST be stored by-reference in the closure environment (or mutations must write back through the env slot). Related to the two Callable-with-struct-ref bugs above (all three seem to trip on how struct locals cross into a closure environment).
+
+- **🆕🐛 [MED — Rust gg, scale-dependent monomorphization] Generic user-fn monomorphization SKIPPED at parser.gg scale — declaration emitted with `int64_t` return, no definition, `cc` fails with `incompatible types when assigning to type 'GorgetArray' from type 'int64_t'`.** Fixture: `tests/fixtures/known_gaps/rust_gg_bug_generic_mono_parser_scale/repro.gg` (SEED, does NOT reproduce in isolation) + README.md (durable REPRO PROCEDURE: revert R39 Phase 2e migration + re-apply a Callable-typed helper on parser.gg). Integration test: `rust_gg_bug_generic_mono_parser_scale` (`#[ignore]`d). Green cell: same shape in a small file monomorphizes correctly (isolated fixture prints `0` — a different bug from the sibling `rust_gg_bug_callable_amp_struct_closure_literal`, but not the scale-dependent mono skip). **Fix direction:** instrument `src/backend/c_lir/emit_types.rs` + `src/monomorph.rs` to log every generic-fn instantiation request + emitted definition; find the missing pair at parser.gg scale. May be a downstream of the closure-inference bug (if the concrete `T=SpannedType` is only reachable through the closure body's inferred return, the mono walker doesn't consult that path).
+
 ## Perf / clone-pressure / compile-time
 
 ### High

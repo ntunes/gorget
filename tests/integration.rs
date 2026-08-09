@@ -4723,6 +4723,78 @@ fn parser_trailing_comma_variant_fields() {
     run_gg("parser_trailing_comma_variant_fields.gg", "rect 1 2 3 4");
 }
 
+// ────────────────────────────────────────────────────────────────────
+// Round XXXIX Phase 2e Sub-task 0 probe (2026-08-09) — 4 Rust gg bugs
+// filed as `known_gaps/rust_gg_bug_*` durable repros.  Each `#[ignore]`d
+// test asserts the INTENDED behavior (per Task Continuity), so a
+// future un-ignore instantly turns each into a passing gate when the
+// underlying Rust gg bug is diagnosed and fixed.  Full write-ups +
+// mechanism speculation in each fixture's README.md.
+// ────────────────────────────────────────────────────────────────────
+
+#[test]
+#[ignore = "KNOWN GAP (R39 Phase 2e probe 2026-08-09): closure capturing a local \
+struct's `.increment()` (&self method) does NOT persist mutation across \
+successive closure invocations — prints `1 1 1` instead of `1 2 3`. \
+Isolated (no HOF).  Blocked R39 Option C helper design's Callable[T()] + \
+captured-Parser alternative.  Fixture + mechanism speculation at \
+tests/fixtures/known_gaps/rust_gg_bug_closure_struct_capture_no_persist/README.md."]
+fn rust_gg_bug_closure_struct_capture_no_persist() {
+    run_gg(
+        "known_gaps/rust_gg_bug_closure_struct_capture_no_persist/repro.gg",
+        "1\n2\n3",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP (R39 Phase 2e probe 2026-08-09): `Callable[T(Struct &)]` + \
+named-fn callback + `Vector.get().unwrap()` iterator body → SIGSEGV. \
+The direct (non-iterator) shape works — see tests/fixtures/callable_ref_param.gg. \
+Blocked R39 Option C helper design's named-fn callback fallback. \
+Fixture + mechanism speculation at \
+tests/fixtures/known_gaps/rust_gg_bug_callable_amp_struct_iterator_segv/README.md."]
+fn rust_gg_bug_callable_amp_struct_iterator_segv() {
+    run_gg(
+        "known_gaps/rust_gg_bug_callable_amp_struct_iterator_segv/repro.gg",
+        "1\n2",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP (R39 Phase 2e probe 2026-08-09): `Callable[T(Struct &)]` + \
+closure literal `(p): p.field` — Rust gg infers `p` as `int64_t` instead of \
+`Struct &`, so `.field` returns garbage (or fails at link time with \
+`undefined reference to 'int64_t__<method>'` when the closure body invokes a method). \
+The scalar-arg variant works — see tests/fixtures/generic_callable.gg. \
+Blocked R39 Option C helper design (was the cleanest idiomatic shape). \
+Fixture + mechanism speculation at \
+tests/fixtures/known_gaps/rust_gg_bug_callable_amp_struct_closure_literal/README.md."]
+fn rust_gg_bug_callable_amp_struct_closure_literal() {
+    run_gg(
+        "known_gaps/rust_gg_bug_callable_amp_struct_closure_literal/repro.gg",
+        "1",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP (R39 Phase 2e probe 2026-08-09): generic user-fn \
+monomorphization SKIPPED when a large SH-parser-scale file adds a generic \
+helper called from an equip method — declaration emitted with `int64_t` return, \
+no definition, `cc` fails with `incompatible types when assigning to type \
+'GorgetArray' from type 'int64_t'` at the call site.  SEED fixture; only \
+reproduces at parser.gg scale — the DURABLE REPRO is the procedure in \
+tests/fixtures/known_gaps/rust_gg_bug_generic_mono_parser_scale/README.md \
+(revert R39 Phase 2e migration + re-apply a Callable-typed helper on parser.gg). \
+Isolated fixture prints `0` (a distinct closure-literal-inference bug — see the \
+sibling `rust_gg_bug_callable_amp_struct_closure_literal` above).  Blocked \
+R39 Option C helper design."]
+fn rust_gg_bug_generic_mono_parser_scale() {
+    run_gg(
+        "known_gaps/rust_gg_bug_generic_mono_parser_scale/repro.gg",
+        "10",
+    );
+}
+
 // Round XXXVII (2026-08-08 filed) → Round XXXIX Phase 2e (2026-08-09
 // fixed) — the SH-lowerer stage-2 double-free triggered by the
 // formatter's bulk canonicalization (`gg fmt --in-place` sweep) was

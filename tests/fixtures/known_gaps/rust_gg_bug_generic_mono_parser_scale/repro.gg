@@ -1,0 +1,44 @@
+# RUST GG BUG — Generic user-fn monomorphization SKIPPED when
+# a large file adds a generic helper called from an equip method,
+# producing a single non-monomorphized declaration + no definition
+# + `cc` type-mismatch failure downstream.
+#
+# Discovered R39 Phase 2e Sub-task 0 probe (2026-08-09) attempting
+# to add a `Vector[T] parse_comma_separated_list[T](Parser &, int,
+# Callable[T(Parser &)])` helper to `tests/fixtures/self_host_typechecker/parser.gg`
+# (~5000 LOC).  See
+# tests/fixtures/known_gaps/rust_gg_bug_generic_mono_parser_scale/README.md.
+#
+# ⚠ This isolated file DOES compile+run correctly on Rust gg — the
+# bug ONLY manifests at parser.gg-scale (file size + import graph
+# complexity + concurrent generic-fn population).  The isolated
+# fixture is kept as a REGRESSION SEED that a future contributor
+# can extend if the bug is reproduced minimally.
+#
+# The DURABLE REPRO for this bug is the PROCEDURE in this README,
+# not this file — reverting the R39 Phase 2e migration (see
+# git log `bc21127d5`) and re-applying a Callable-typed helper
+# produces the failure.
+
+from std.collections import Vector
+
+struct P:
+    int pos
+
+Vector[T] gen_list[T](P &parser, int terminator, Callable[T(P &)] parse_item):
+    Vector[T] items = []
+    items.push(parse_item(&parser))
+    return items
+
+struct Chunk:
+    int val
+
+equip P:
+    Vector[Chunk] parse_stuff(&self):
+        Vector[Chunk] args = gen_list(&self, 42, (p): Chunk(p.pos))
+        return args
+
+void main():
+    P p = P(5)
+    Vector[Chunk] r = p.parse_stuff()
+    print(f"{r.get(0).unwrap().val}")
