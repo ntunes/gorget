@@ -1,0 +1,49 @@
+# gorget-js snag #15b/#15c widening — axis coverage for Stmt::Throw and
+# Stmt::Return in `catch (e):`/`rethrow (e):` bodies (single-stmt Expr::Do
+# case). The primary regression fixture
+# (`fmt_catch_rethrow_single_stmt_no_do_wrap.gg`) exercises Stmt::Expr;
+# this companion covers the two other terminal-expression arms the
+# `try_inline_single_terminal_stmt` helper handles (Core #12 axis
+# coverage per the R39 widening fix output-review).
+#
+# Wired: `fmt_catch_rethrow_single_stmt_terminal_axis` in
+# `tests/integration.rs` asserts (a) no `catch/rethrow ...: do:` on any
+# code line, (b) formatted source re-parses, (c) idempotent, (d) source
+# runs to "18\n17\n7\nrecovered: negative\n-3".
+int compute(int x) throws String:
+    if x < 0:
+        throw "negative"
+    return x * 2
+
+int rethrow_arm(int x) throws String:
+    return compute(x)! rethrow (String e):
+        throw "wrapped: " + e
+
+int rethrow_caller(int x):
+    int r = rethrow_arm(x)! catch (e2):
+        e2.len()
+    return r
+
+int return_arm(int x):
+    return compute(x)! catch (e):
+        return -1 - x
+
+int format_recovery(String e, int x):
+    print("recovered: " + e)
+    return x
+
+int expr_arm(int x):
+    return compute(x)! catch (e):
+        format_recovery(e, x)
+
+int safe_rethrow_arm(int x):
+    int r = rethrow_arm(x)! catch (e2):
+        e2.len()
+    return r
+
+int main():
+    print(safe_rethrow_arm(9))
+    print(rethrow_caller(-1))
+    print(return_arm(-8))
+    print(expr_arm(-3))
+    return 0

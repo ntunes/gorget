@@ -1149,6 +1149,51 @@ impl Formatter {
     /// trailing space; helper emits either a leading space + inline expression
     /// (single-expr / non-Block body) or a newline + indented bare block
     /// (multi-stmt Block body).
+    /// If `block` is a single-stmt block whose sole stmt is a bare terminal
+    /// expression (Stmt::Throw / Stmt::Return / Stmt::Expr), emit it inline
+    /// and return true; otherwise leave the emitter untouched and return
+    /// false.
+    ///
+    /// Core #4 producer chokepoint (R39 fold, 2026-08-09): the two `format_expr`
+    /// arms that used to hand-roll this carve-out (Expr::Block and Expr::Do)
+    /// now delegate here, so a future third block-like AST variant needs a
+    /// one-line delegation instead of a copy-pasted 17-line match. The
+    /// carve-out itself is load-bearing for TWO defect classes:
+    ///   - Synthetic Expr::Block wrappers around throw/return (parser
+    ///     wraps them to make `throw x`/`return x` parse as expression
+    ///     prefixes) — inlining round-trips; do:-wrapping drifts and
+    ///     breaks `fmt_idempotent` (gorget-js critique #2, 2026-05-13).
+    ///   - Move-sigil arm tails (`else: ^b`, `catch (e): ^b`) — do:-
+    ///     wrapping makes the expression a READ position and rejects
+    ///     with `E_MoveInOperandPosition` under the D27 emit swap
+    ///     (gorget-js snag #15b, R39 Track F for Expr::Block +
+    ///     widening fix for Expr::Do).
+    fn try_inline_single_terminal_stmt(&mut self, block: &Block) -> bool {
+        if block.stmts.len() != 1 {
+            return false;
+        }
+        match &block.stmts[0].node {
+            Stmt::Throw(value) => {
+                self.emitter.write("throw ");
+                self.format_expr(value);
+                true
+            }
+            Stmt::Return(value) => {
+                self.emitter.write("return");
+                if let Some(v) = value {
+                    self.emitter.write(" ");
+                    self.format_expr(v);
+                }
+                true
+            }
+            Stmt::Expr(expr) => {
+                self.format_expr(expr);
+                true
+            }
+            _ => false,
+        }
+    }
+
     fn format_arm_body(&mut self, body: &Spanned<Expr>) {
         // Snag #15c note: `parse_body_or_expr` (catch/rethrow arm) wraps
         // the indented body as `Expr::Do { body }`, NOT `Expr::Block`. The
@@ -2071,37 +2116,17 @@ impl Formatter {
                 // wrapped form breaks `fmt_idempotent` (re-parsing the
                 // do-block re-wraps it, then drops the surrounding var
                 // decl as the syntactic shape drifts).
-                if block.stmts.len() == 1 {
-                    match &block.stmts[0].node {
-                        Stmt::Throw(value) => {
-                            self.emitter.write("throw ");
-                            self.format_expr(value);
-                            return;
-                        }
-                        Stmt::Return(value) => {
-                            self.emitter.write("return");
-                            if let Some(v) = value {
-                                self.emitter.write(" ");
-                                self.format_expr(v);
-                            }
-                            return;
-                        }
-                        // gorget-js snag #15b (2026-08-09): a single-expression
-                        // Block wrapped in `do:` makes the expression a READ
-                        // position, which breaks move-sigil tails (`^x` becomes
-                        // `E_MoveInOperandPosition`) — the original `else: ^b`
-                        // compiles, `else: do: ^b` doesn't. Also unnecessary
-                        // noise for any single-expression tail. Format inline
-                        // instead. (Same shape as the Throw/Return carve-out
-                        // above; ratified R38 Track C output-review deemed the
-                        // pre-D27 `do:` wrap COSMETIC — post-D27 emit swap it
-                        // is BREAKING for move tails.)
-                        Stmt::Expr(expr) => {
-                            self.format_expr(expr);
-                            return;
-                        }
-                        _ => {}
-                    }
+                //
+                // gorget-js snag #15b (2026-08-09) extended the carve-out
+                // to Stmt::Expr: a single-expression Block wrapped in `do:`
+                // makes the expression a READ position, breaking move-sigil
+                // tails (`else: do: ^b` rejects `E_MoveInOperandPosition`;
+                // `else: ^b` compiles). Consolidated into
+                // `try_inline_single_terminal_stmt` (R39 follow-up to
+                // Tracks F/G/widening-fix); the helper handles all three
+                // arms (Throw/Return/Expr) and is shared with Expr::Do.
+                if self.try_inline_single_terminal_stmt(block) {
+                    return;
                 }
                 self.emitter.write("do:");
                 self.emitter.newline();
@@ -2120,27 +2145,9 @@ impl Formatter {
                 // mirror, `catch (e):\n    fallback(x)` reformats to
                 // `catch (e): do:\n    fallback(x)` (cosmetic rot + snag
                 // #15b move-tail regression class for Throw/Return).
-                if body.stmts.len() == 1 {
-                    match &body.stmts[0].node {
-                        Stmt::Throw(value) => {
-                            self.emitter.write("throw ");
-                            self.format_expr(value);
-                            return;
-                        }
-                        Stmt::Return(value) => {
-                            self.emitter.write("return");
-                            if let Some(v) = value {
-                                self.emitter.write(" ");
-                                self.format_expr(v);
-                            }
-                            return;
-                        }
-                        Stmt::Expr(expr) => {
-                            self.format_expr(expr);
-                            return;
-                        }
-                        _ => {}
-                    }
+                // Consolidated via the shared helper.
+                if self.try_inline_single_terminal_stmt(body) {
+                    return;
                 }
                 self.emitter.write("do:");
                 self.emitter.newline();

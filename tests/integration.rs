@@ -9688,6 +9688,66 @@ fn fmt_catch_rethrow_single_stmt_source_runs() {
     );
 }
 
+// gorget-js snag #15b/#15c widening — axis coverage for Stmt::Throw and
+// Stmt::Return in `catch (e):`/`rethrow (e):` bodies (single-stmt Expr::Do
+// case). The primary regression fixture exercises Stmt::Expr; this
+// companion covers the two other terminal-expression arms handled by
+// the shared `try_inline_single_terminal_stmt` helper (R39 fold from
+// widening-fix output-review O1).
+#[test]
+fn fmt_catch_rethrow_single_stmt_terminal_axis() {
+    use gorget::parser::Parser;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_catch_rethrow_single_stmt_terminal_axis.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Stmt::Throw / Stmt::Return / Stmt::Expr all inlined post-fix.
+    // Skip comment lines so the header can document the retired defect.
+    let bad_code_line = formatted.lines().find(|line| {
+        let trimmed = line.trim_start();
+        !trimmed.starts_with('#')
+            && (line.contains("catch (") && line.contains("): do:")
+                || line.contains("rethrow (") && line.contains("): do:")
+                || line.contains("else: do:"))
+    });
+    assert!(
+        bad_code_line.is_none(),
+        "gorget-js snag #15c widening regression on Stmt::Throw/Return/Expr axis.\n\
+         Offending line: {:?}\n\
+         === Formatted output ===\n{formatted}",
+        bad_code_line
+    );
+
+    let mut parser = Parser::new(&formatted);
+    let _ = parser.parse_module();
+    assert!(
+        parser.errors.is_empty(),
+        "widening axis regression: `gg fmt` output does not re-parse ({} error(s)).\n\
+         === Formatted output ===\n{formatted}\n\
+         === First parse error ===\n{:?}",
+        parser.errors.len(),
+        parser.errors.first(),
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(
+        formatted, second,
+        "Formatter NOT idempotent for fmt_catch_rethrow_single_stmt_terminal_axis.gg.\n\
+         === First pass ===\n{formatted}\n=== Second pass ===\n{second}",
+    );
+}
+
+#[test]
+fn fmt_catch_rethrow_single_stmt_terminal_axis_source_runs() {
+    run_gg(
+        "fmt_catch_rethrow_single_stmt_terminal_axis.gg",
+        "18\n17\n7\nrecovered: negative\n-3",
+    );
+}
+
 #[test]
 fn fmt_long_binop_continuation_parses() {
     use gorget::parser::Parser;
