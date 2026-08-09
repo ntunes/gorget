@@ -454,12 +454,36 @@ A borrowed view into contiguous memory. Does not own its data.
 > only runtime view is the `cap == 0` `String` view (see *String Types*). A
 > non-`String` `int[]` binding works as a function local but cannot cross a
 > function boundary (returning one miscompiles). Use `String` slicing for views
-> and `Vector[T]` / `Vector.slice` (an independent copy) for array sub-ranges.
+> and `Vector[T]` colon-slice `v[a:b]` (an independent copy) for array sub-ranges.
+
+**Colon-slice syntax `v[a:b]` (D22, ratified 2026-07-06).** The canonical
+slice spelling on `String` and `Vector[T]` receivers. Four accept-forms —
+`v[a:b]`, `v[a:]` (to end), `v[:b]` (from start), `v[:]` (full copy) — with
+Python-style CLAMP bounds (negatives clamp to `0`, ends past the length clamp
+to the length, `start > end` yields an empty slice; never a bounds fault). The
+result is a semantically OWNED sub-sequence value (D15); the runtime backs a
+`String` slice with a `cap == 0` view as an invisible optimisation. Negatives
+in either bracket position and step (`v[a:b:c]`) are DEFERRED — the parser
+rejects `v[-1:b]` with `E_NegativeSliceIndex` and `v[a:b:c]` with
+`E_SliceStepDeferred` (fix-it: `v.reversed()` for reverse iteration).
+Runtime-negative values (`v[some_int:b]` where `some_int` goes negative at
+runtime) fall through to the runtime clamp, so a slice can never bounds-fault
+at run time.
 
 ```gorget
-String sub = text[1..4]        # String view — supported
+String sub = text[1:4]         # canonical String slice
+String tail = text[3:]         # implicit end = len
+String head = text[:5]         # implicit start = 0
+String full = text[:]          # full copy
+Vector[int] a = v[a:b]         # Vector sub-range — independent OWNED copy
+Vector[int] safe = v[0:1000]   # OOB end clamps to v.len(); no fault
+# text[-1:3]      # rejected: E_NegativeSliceIndex (D22 deferred)
+# text[0:5:2]     # rejected: E_SliceStepDeferred (use .reversed())
 # int[] slice = arr[1..4]      # general slice: parsed/typed but NOT lowered
 ```
+
+The `..` range spelling is still accepted during the D22 migration window and
+is identical in meaning; `gg fmt` preserves whichever form the user wrote.
 
 #### Function Types
 
@@ -3702,7 +3726,7 @@ The following methods are available on built-in types without any import.
 | `count(needle)` | `String → int` | Number of non-overlapping occurrences |
 | `byte_at(index)` | `int → uint8` | Raw byte at byte index (O(1), for parser/codec use; panics if out of bounds) |
 | `byte_slice(start, end)` | `int, int → String` | Byte-range substring view (O(1), for parser/codec use) |
-| `substring(start, end)` | `int, int → String` | Codepoint-range substring view from `start` to `end` (panics if out of bounds) |
+| `substring(start, end)` | `int, int → String` | Codepoint-range substring view from `start` to `end` (panics if out of bounds; prefer the D22 colon-slice `s[a:b]`, which CLAMPS instead of trapping and covers the `[a:]` / `[:b]` / `[:]` open-end forms too) |
 | `trim()` | `→ String` | Strip leading/trailing Unicode whitespace (view, no allocation) |
 | `strip(chars?)` | `String? → String` | Strip codepoints (or whitespace) from both ends (view) |
 | `trim_left(chars?)` / `lstrip(chars?)` | `String? → String` | Strip codepoints (or whitespace) from left (view) |
@@ -3809,7 +3833,7 @@ These methods operate on individual characters within a `String`:
 | `index_of(item)` | `T → Option[int]` | Index of first match (`None` if not found) |
 | `insert(index, item)` | `int, T → void` | Insert element at index, shifting subsequent elements |
 | `extend(other)` | `Vector[T] → void` | Append all elements from another vector (consuming — source is moved) |
-| `slice(start, end)` | `int, int → Vector[T]` | New vector from elements `[start, end)` (deep-clones resource-type elements) |
+| `v[a:b]` (D22 colon-slice — canonical) | `int, int → Vector[T]` | New vector from elements `[a, b)` (deep-clones resource-type elements). Python-style CLAMP bounds (`a < 0 → 0`, `b > len → len`, `a > b → empty`; never faults). Four accept-forms: `v[a:b]`, `v[a:]`, `v[:b]`, `v[:]`. See *Slice Types* for the parse-time reject-forms (negative literals + step). Replaces the retired `.slice(start, end)` method. |
 | `clear()` | `→ void` | Remove all elements (drops resource-type elements) |
 | `reserve(n)` | `int → void` | Pre-allocate capacity for at least `n` elements |
 | `capacity()` | `→ int` | Current allocated capacity (elements — may exceed `len()`) |

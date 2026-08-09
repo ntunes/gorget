@@ -64,7 +64,7 @@ String next_var():
 # ── Collection type detection ───────────────────────────────
 
 # Collection type detection operates on the string type name.
-# We avoid String.slice() due to C backend GorgetString issues.
+# We avoid String colon-slice `[a:b]` due to C backend GorgetString issues.
 
 String strip_generic_prefix(String ty, String prefix):
     # Check if ty starts with prefix + "[" and ends with "]"

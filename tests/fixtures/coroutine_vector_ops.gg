@@ -25,7 +25,7 @@ async int test_vector_ops():
     print(cloned[4])
 
     # slice in async
-    Vector[int] sl = v.slice(1, 4)
+    Vector[int] sl = v[1:4]
     print(sl.len())
     print(sl[0])
     print(sl[2])

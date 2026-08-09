@@ -11798,6 +11798,95 @@ fn count_bang_move_in_code(roots: &[&str]) -> usize {
     total
 }
 
+/// D22 shrink-only lint (Core #6 executable guard). Retiring `.slice()` on
+/// String/Vector receivers in favor of colon-slice `v[a:b]` (ratified
+/// 2026-07-06). Track C-3a landed the non-SH migration + this ratchet;
+/// Track C-3b (208 SH sites in `tests/fixtures/self_host_lowerer/`) is
+/// hard-blocked on Track A (SH stage-2 memory-safety fix) and defers to
+/// R40 if A stalls. Meanwhile the SH corpora sit in an ALLOWLIST — the
+/// allowlist entry drops out atomically when C-3b lands, ratcheting the
+/// non-SH count down to 0 and the SH count to 0 in one commit.
+///
+/// Positive-control: add `foo.slice(0, 1)` to any non-SH `.gg` under
+/// `tests/fixtures/` → this lint MUST fire with a count above the
+/// ceiling. If it doesn't, the regex or the ceiling has decayed.
+#[test]
+fn no_dot_slice_after_d22() {
+    /// Non-SH ceiling AFTER C-3a lands = 0 (every non-SH site was
+    /// migrated in the same commit as this lint). The SH corpora sit in
+    /// the allowlist (see the walker below) and do NOT count toward this
+    /// ceiling; when C-3b lands they migrate too and the allowlist entry
+    /// is removed atomically.
+    ///
+    /// Tighten CEILING whenever the count drops (do NOT loosen — a rise
+    /// is a regression during the D22 accept-both window).
+    const CEILING: usize = 0;
+
+    let roots: &[&str] = &[
+        "tests/fixtures",
+        "lib",
+        "examples",
+        "demo",
+        "spectests",
+        "compiler/data",
+    ];
+
+    let count = count_dot_slice_in_code(roots);
+    assert!(
+        count <= CEILING,
+        "D22 shrink-only ratchet: {count} `.slice(...)` sites found in \
+         non-SH corpora (ceiling {CEILING}). D22 (ratified 2026-07-06) \
+         retired `.slice()` in favor of colon-slice `v[a:b]`. A NEW site \
+         is a migration regression — replace with the colon form. If a \
+         NEG fixture DELIBERATELY exercises the retired method, allowlist \
+         its path and bump the ceiling with the rationale.",
+    );
+    if count < CEILING {
+        eprintln!(
+            "[no_dot_slice_after_d22] measured={count} < CEILING={CEILING} — \
+             tighten CEILING to {count} and cite the retired sites.",
+        );
+    }
+}
+
+/// Helper for `no_dot_slice_after_d22`: walk .gg files in `roots`, skip
+/// any path with a `self_host_lowerer` segment (the deferred C-3b
+/// migration site set), strip strings then comments per line, and count
+/// `.slice(` occurrences. `substring(a, b)` is a distinct method
+/// (`gorget_str_slice` routes through the `substring` name too) and is
+/// EXPLICITLY not counted — only literal `.slice(` matches. Fuzz-corpus
+/// and known-gaps fixtures ARE scanned; the migration handles them the
+/// same way as any other fixture.
+fn count_dot_slice_in_code(roots: &[&str]) -> usize {
+    let string_re = regex::Regex::new(
+        r#"(?s)([fFrRbBcC]?"""(?:.*?)""")|([fFrRbBcC]?"(?:[^"\\\n]|\\.)*")|('(?:[^'\\\n]|\\.)*')"#,
+    )
+    .expect("string regex compiles");
+    let comment_re = regex::Regex::new(r"#.*$").expect("comment regex compiles");
+    let slice_re = regex::Regex::new(r"\.slice\(").expect("slice regex compiles");
+
+    let mut total = 0usize;
+    for root in roots {
+        walk_gg_files(Path::new(root), &mut |path: &Path| {
+            // ALLOWLIST: self-host lowerer corpora — the 208 SH `.slice()`
+            // sites are gated on Track A (SH stage-2 memory-safety fix)
+            // landing before Track C-3b can migrate them. Remove this
+            // check when C-3b lands (atomic ceiling ratchet 208 → 0).
+            let s = path.to_string_lossy();
+            if s.contains("self_host_lowerer") {
+                return;
+            }
+            let Ok(src) = fs::read_to_string(path) else { return };
+            for line in src.lines() {
+                let stripped = string_re.replace_all(line, "\"\"");
+                let stripped = comment_re.replace_all(&stripped, "");
+                total += slice_re.find_iter(&stripped).count();
+            }
+        });
+    }
+    total
+}
+
 fn walk_gg_files(dir: &Path, cb: &mut dyn FnMut(&Path)) {
     let Ok(rd) = fs::read_dir(dir) else { return };
     for entry in rd.flatten() {

@@ -88,9 +88,10 @@ String name = "world"
 String combined = greeting + " " + name   # concatenation creates new String
 ```
 
-Behind the scenes, `String` is a 32-byte value type. String literals, `slice()`,
-`trim()`, and `char_at()` are **zero-allocation views** — they point into
-existing data without copying. Concatenation, f-strings, and methods like
+Behind the scenes, `String` is a 32-byte value type. String literals, colon-slice
+`s[a:b]` (with all four accept-forms `[a:b]`/`[a:]`/`[:b]`/`[:]`), `trim()`, and
+`char_at()` are **zero-allocation views** — they point into existing data
+without copying. Concatenation, f-strings, and methods like
 `to_upper()` produce **owned** copies. The compiler auto-materializes views
 when you mutate the source (copy-on-write). You don't need to think about
 this — just use `String` everywhere.

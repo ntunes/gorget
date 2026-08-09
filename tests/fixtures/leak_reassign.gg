@@ -62,7 +62,7 @@ void main():
     b = mem_live()
     i = 0
     while i < 50:
-        sv = sv.slice(0, sv.len())
+        sv = sv[0:sv.len()]
         i = i + 1
     bool t5 = mem_live() - b > 0
     print(f"self-ref slice: leaked={t5}")
