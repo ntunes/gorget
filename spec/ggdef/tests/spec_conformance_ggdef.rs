@@ -75,7 +75,7 @@ use ggdef::{parse_frontmatter, run_source, Outcome, DEFAULT_FUEL};
 /// Bump-on-improvement: when MATCH rises — a new run seed lands, or P1-A
 /// coverage retires a GGDEF-SKIP — raise this in the SAME commit that lands the
 /// gain, so the improvement is locked in.
-const GGDEF_MATCH_FLOOR: usize = 215;
+const GGDEF_MATCH_FLOOR: usize = 216;
 
 fn ws_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")

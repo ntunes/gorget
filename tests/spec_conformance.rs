@@ -153,16 +153,21 @@ use ggdef::{parse_frontmatter, Expect};
 // rose by all SIX (214 → 220). (The D29 chain also migrated 8 pre-existing
 // `throws` spectests the earlier corpus migration had missed — behavior-
 // preserving marks, so the count is unchanged, only their build-verdict restored.)
-const C_MATCH_FLOOR: usize = 220;
-const LLVM_MATCH_FLOOR: usize = 220;
+const C_MATCH_FLOOR: usize = 221;
+const LLVM_MATCH_FLOOR: usize = 221;
 const SELFHOST_MATCH_FLOOR: usize = 220;
+// SH lane doesn't yet reproduce d22_slice_clamp.gg — SH lowerer needs the
+// Range-in-index lowering wired (parser mirror lands the syntax, but the
+// lowerer's SIndex arm at self_host_lowerer/lower_expr.gg doesn't yet
+// dispatch to the range-slice runtime call). Filed for R40 as part of the
+// D22 C-3b (SH sites migration) track, which is hard-blocked on A1 anyway.
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
 /// the TOTAL seed COUNT (214 pre-D29 + the 6 D29 gate-8 seeds = 220). It EQUALS
 /// all three production MATCH floors (C, LLVM, and self-host all reject/run the
 /// whole corpus).
-const MIN_FIXTURES: usize = 220;
+const MIN_FIXTURES: usize = 221;
 
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs
