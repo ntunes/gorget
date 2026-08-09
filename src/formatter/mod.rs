@@ -583,6 +583,20 @@ impl Formatter {
         if q.is_unsafe {
             self.emitter.write("unsafe ");
         }
+        // R39 Track A output-review finding (filed 2026-08-09): the `blocking`
+        // and `noreturn` extern qualifiers were dropped by `gg fmt`. Both are
+        // load-bearing at lowering (`src/ir/lowering/mod.rs` — is_blocking
+        // gates the shared_async lock release/reacquire transform; is_noreturn
+        // makes the call type as Never + terminates the block with unreachable),
+        // so silently stripping them mis-lowered `blocking`/`noreturn` externs
+        // after a fmt sweep. Same class as gorget-js snag #15b (fmt silently
+        // dropping user syntax at the arm-body position).
+        if q.is_blocking {
+            self.emitter.write("blocking ");
+        }
+        if q.is_noreturn {
+            self.emitter.write("noreturn ");
+        }
     }
 
     fn format_struct(&mut self, s: &StructDef) {

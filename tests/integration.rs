@@ -9748,6 +9748,65 @@ fn fmt_catch_rethrow_single_stmt_terminal_axis_source_runs() {
     );
 }
 
+// R39 Track A output-review chip (2026-08-09): `gg fmt` was silently
+// dropping the `blocking` and `noreturn` extern qualifiers at
+// src/formatter/mod.rs:format_qualifiers. Both are load-bearing at
+// lowering (is_blocking gates shared_async lock release/reacquire;
+// is_noreturn types the call as Never + terminates block with
+// unreachable), so a fmt sweep of any extern block would silently
+// mis-lower the resulting extern calls. Verified reproducing across
+// lib/std/fs.gg (blocking) and tests/fixtures/noreturn_diverges.gg
+// (noreturn). ~4 LOC fix mirrors the existing is_async/is_const/
+// is_static/is_unsafe arms.
+#[test]
+fn fmt_preserves_blocking_extern_qualifier() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("lib/std/fs.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    // Pre-fix source contained `extern blocking String read_file(...)`;
+    // pre-fix fmt stripped it to `extern String read_file(...)`.
+    // Guard the specific line as a canary — 5 `blocking` extern rows in
+    // this file, this test pins the first as a representative.
+    assert!(
+        source.contains("extern blocking String read_file(cstr path)"),
+        "canary premise: lib/std/fs.gg no longer contains the extern-blocking source row this test pins"
+    );
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert!(
+        formatted.contains("extern blocking String read_file(cstr path)"),
+        "R39 chip regression: `gg fmt` stripped `blocking` from an extern qualifier.\n\
+         === Formatted lib/std/fs.gg excerpt ===\n{}",
+        formatted.lines().filter(|l| l.contains("read_file")).collect::<Vec<_>>().join("\n")
+    );
+    // Also verify count-neutral: all 5 blocking-extern rows should survive.
+    let source_blocking_count = source.matches("extern blocking").count();
+    let formatted_blocking_count = formatted.matches("extern blocking").count();
+    assert_eq!(
+        source_blocking_count, formatted_blocking_count,
+        "R39 chip regression: `blocking` extern-qualifier count changed from {} → {} under gg fmt",
+        source_blocking_count, formatted_blocking_count
+    );
+}
+
+#[test]
+fn fmt_preserves_noreturn_qualifier() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/noreturn_diverges.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let source_noreturn_count = source.matches("noreturn void").count();
+    let formatted_noreturn_count = formatted.matches("noreturn void").count();
+    assert_eq!(
+        source_noreturn_count, formatted_noreturn_count,
+        "R39 chip regression: `noreturn` qualifier count changed from {} → {} under gg fmt\n\
+         === Formatted excerpt ===\n{}",
+        source_noreturn_count, formatted_noreturn_count,
+        formatted.lines().filter(|l| l.contains("die") || l.contains("noreturn")).collect::<Vec<_>>().join("\n")
+    );
+}
+
 #[test]
 fn fmt_long_binop_continuation_parses() {
     use gorget::parser::Parser;
