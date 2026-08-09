@@ -1,0 +1,18 @@
+struct Face:
+    int first_index       # offset into index buffer
+    int num_indices       # number of indices
+    int last_field        # doc on the LAST field
+
+void apply(int x):
+    match x:
+        case 1:
+            do_a()        # belongs to case 1
+        else:
+            pass          # belongs to else
+
+int do_a(): 1
+
+int main():
+    apply(1)
+    apply(2)
+    return 0
