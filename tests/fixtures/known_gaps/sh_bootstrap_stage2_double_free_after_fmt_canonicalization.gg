@@ -1,8 +1,74 @@
-# DURABLE REPRO PROCEDURE for the SH-lowerer stage-2 double-free triggered
-# by the formatter's bulk canonicalization (R37 Phase 2 sweep, filed
-# 2026-08-08). Orthogonal to D27 — reproduces against the retired `!`
-# glyph too, so the trigger is the FORMATTER'S BULK CANONICALIZATION, not
-# the D27 sigil swap.
+# DURABLE REPRO PROCEDURE for the SH-lowerer stage-2 double-free.
+# Originally filed R37 (2026-08-08) as "triggered by the formatter's bulk
+# canonicalization". R39 Track A Phase 1 (2026-08-09) diagnosis CORRECTED
+# THE MECHANISM: the fmt sweep is NOT the actual trigger — it just
+# accelerates the crash by changing enough sources to shift it earlier.
+# The underlying defect is a self-host NON-CONVERGENCE bug that
+# reproduces on a clean tree at stage-3 WITHOUT ANY fmt sweep:
+#
+#   stage-0 (Rust-compiled SH lowerer) → correct stage-1.c (0 spurious
+#     frees at map_put sites)
+#   stage-1 (SH-compiled from stage-1.c) → BUGGY stage-2.c (136 spurious
+#     frees at map_put sites — algorithm decisions differ from stage-0)
+#   stage-2 (SH-compiled from stage-2.c) → CRASHES with double-free on
+#     invocation (exit 134)
+#
+# GIR-LEVEL DIVERGENCE (verified by R39 Track A on freshly-built binaries
+# from the SAME source at HEAD 8ea74d277):
+#
+#   stage-1 (correct):
+#     call_extern @Dict__..__put(borrow _57, MOVE _38, MOVE _56)
+#     move_zero _38
+#     move_zero _56
+#
+#   stage-2 (buggy):
+#     call_extern @Dict__..__put(borrow _57, BORROW _38, BORROW _56)
+#     (no move_zero — args treated as borrows, then scope-exit
+#     drop_if_alive fires on aliased data → UAF)
+#
+# The SH lowerer's algorithm decides MOVE when compiled by Rust gg and
+# BORROW when compiled by itself, for the SAME input. R37's diagnosis
+# (missing `wire_liveness_into_modes` OpMove promotion) is refuted at
+# THIS layer: the wire pass in stage-1 correctly emits OpMove +
+# move_zero; the wire pass in stage-2 emits OpBorrow (no move_zero).
+# The divergence is HIGHER up — some construct in the SH lowerer's OWN
+# source lowers to different C behavior in Rust-emit vs SH-emit.
+#
+# Both stage-1 and stage-2 are individually byte-deterministic (verified
+# via N=3 md5 probe on both). So the fix is NOT a determinism ratchet
+# (Hypothesis A DEAD per R39 Track A byte-consistency probe).
+#
+# ── R40 (or later) fix path per R39 Track A recommendation:
+#   1. Byte-by-byte diff stage-1.c vs stage-2.c → isolate first divergent
+#      function, reverse-engineer the source line that produced it.
+#   2. Find the SH lowerer's emission for THAT source construct, check
+#      for UB (aliasing, uninitialized read, ABI mismatch, incorrect
+#      ownership tag) in the emitted C.
+#   3. Fix at the write site.
+#
+# R40 (Phase 2) reproducer: the executor should regenerate the diagnostic
+# artifacts via the procedure below. Committing them was tried in R39 but
+# would have added ~101 MB of emitted-C to the repo (driver.gg is huge; its
+# stage-2 emission is 1.4M lines) — regeneration is cheap (~7 min for the
+# byte-consistency probe alone) so R40 scout re-derives fresh:
+#
+#   1. Build stage-0 (Rust-compiled SH lowerer): `./target/release/gg build
+#      tests/fixtures/self_host_lowerer/driver.gg -o /tmp/my_stage0`
+#   2. Run stage-0 on driver+lib to emit stage-1.c:
+#      `/tmp/my_stage0 tests/fixtures/self_host_lowerer/driver.gg lib --lir-c
+#      > /tmp/my_probe.c`  # correct output, 0 spurious frees at map_put
+#   3. Compile stage-1 binary: `cc -O0 /tmp/my_probe.c -o /tmp/fresh_stage2`
+#   4. Run stage-1 binary on the same input: `/tmp/fresh_stage2 driver.gg
+#      lib --lir-c > /tmp/fresh_stage3.c`  # 136 spurious frees at map_put
+#   5. Compile stage-2 binary: `cc -O0 /tmp/fresh_stage3.c -o /tmp/fresh_stage3_bin`
+#   6. Run stage-2 binary: `/tmp/fresh_stage3_bin`  # CRASHES exit 134
+#      (double free in tcache 2)
+#
+# ── Original filing framing (R37, superseded but preserved):
+# Orthogonal to D27 — reproduces against the retired `!` glyph too, so
+# the trigger is the FORMATTER'S BULK CANONICALIZATION, not the D27
+# sigil swap. (R39 Track A refines: the fmt sweep is not even the
+# trigger; the sweep just accelerates a pre-existing non-convergence.)
 #
 # The trigger is INTRINSICALLY PROCEDURAL — no single `.gg` input
 # reproduces it in isolation. The double-free surfaces only after
