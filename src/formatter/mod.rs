@@ -620,8 +620,20 @@ impl Formatter {
         }
 
         // Emit remaining items.
-        for item in &rest {
-            if emitted > 0 {
+        // gorget-arena verdict follow-up (owner 2026-08-09): preserve
+        // AUTHOR-written blank lines between top-level items instead of
+        // blindly emitting one between every item. Same rule as intra-
+        // block (`format_block_stmts`): if source has ≥ 2 newlines
+        // between prev and cur, emit ONE blank; else no blank. Collapse-
+        // runs-to-1 semantics. First iter: blank iff prior section
+        // (directives/imports) emitted.
+        for (i, item) in rest.iter().enumerate() {
+            let need_blank = if i == 0 {
+                emitted > 0
+            } else {
+                self.has_blank_line_between(rest[i - 1].span.end, item.span.start)
+            };
+            if need_blank {
                 self.emitter.blank_line();
             }
             self.emit_comments_before(item.span.start);
