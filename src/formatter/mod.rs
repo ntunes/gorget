@@ -2110,6 +2110,38 @@ impl Formatter {
                 self.emitter.dedent();
             }
             Expr::Do { body } => {
+                // gorget-js snag #15c widening (R39 follow-up to Track G,
+                // 2026-08-09): a `do:` wrapping a SINGLE bare terminal
+                // expression (Throw/Return/Expr) inlines to the bare form,
+                // matching Expr::Block's carve-out above. Reached via
+                // `format_arm_body` for `catch (e):`/`rethrow (e):` bodies
+                // whose parser (`parse_body_or_expr`) synthesizes an
+                // Expr::Do wrap around an indented body — without this
+                // mirror, `catch (e):\n    fallback(x)` reformats to
+                // `catch (e): do:\n    fallback(x)` (cosmetic rot + snag
+                // #15b move-tail regression class for Throw/Return).
+                if body.stmts.len() == 1 {
+                    match &body.stmts[0].node {
+                        Stmt::Throw(value) => {
+                            self.emitter.write("throw ");
+                            self.format_expr(value);
+                            return;
+                        }
+                        Stmt::Return(value) => {
+                            self.emitter.write("return");
+                            if let Some(v) = value {
+                                self.emitter.write(" ");
+                                self.format_expr(v);
+                            }
+                            return;
+                        }
+                        Stmt::Expr(expr) => {
+                            self.format_expr(expr);
+                            return;
+                        }
+                        _ => {}
+                    }
+                }
                 self.emitter.write("do:");
                 self.emitter.newline();
                 self.emitter.indent();

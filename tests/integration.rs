@@ -9628,6 +9628,67 @@ fn fmt_catch_multi_stmt_source_runs() {
 }
 
 #[test]
+fn fmt_catch_rethrow_single_stmt_no_do_wrap() {
+    use gorget::parser::Parser;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_catch_rethrow_single_stmt_no_do_wrap.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Positive control: no code line should emit `catch (...): do:` /
+    // `rethrow (...): do:` / `else: do:` for a SINGLE-stmt body whose sole
+    // stmt is Stmt::Throw/Return/Expr. The R39 follow-up mirrors the F/G
+    // carve-out into `Expr::Do` at `src/formatter/mod.rs:2112`. Comment
+    // lines are skipped so the header can document the retired defect.
+    let bad_code_line = formatted.lines().find(|line| {
+        let trimmed = line.trim_start();
+        !trimmed.starts_with('#')
+            && (line.contains("catch (") && line.contains("): do:")
+                || line.contains("rethrow (") && line.contains("): do:")
+                || line.contains("else: do:"))
+    });
+    assert!(
+        bad_code_line.is_none(),
+        "gorget-js snag #15c widening regression: spurious `do:` wrap on \
+         single-stmt terminal-expression handler body.\n\
+         Offending line: {:?}\n\
+         === Formatted output ===\n{formatted}",
+        bad_code_line
+    );
+
+    // Re-parse the formatted output cleanly.
+    let mut parser = Parser::new(&formatted);
+    let _ = parser.parse_module();
+    assert!(
+        parser.errors.is_empty(),
+        "gorget-js snag #15c widening regression: `gg fmt` output does not \
+         re-parse ({} error(s)).\n\
+         === Formatted output ===\n{formatted}\n\
+         === First parse error ===\n{:?}",
+        parser.errors.len(),
+        parser.errors.first(),
+    );
+
+    // Idempotence — a second pass must be byte-identical.
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(
+        formatted, second,
+        "Formatter NOT idempotent for fmt_catch_rethrow_single_stmt_no_do_wrap.gg.\n\
+         === First pass ===\n{formatted}\n=== Second pass ===\n{second}",
+    );
+}
+
+#[test]
+fn fmt_catch_rethrow_single_stmt_source_runs() {
+    run_gg(
+        "fmt_catch_rethrow_single_stmt_no_do_wrap.gg",
+        "10\nrecovering\n-1\n200",
+    );
+}
+
+#[test]
 fn fmt_long_binop_continuation_parses() {
     use gorget::parser::Parser;
 
