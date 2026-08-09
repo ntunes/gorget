@@ -1,0 +1,19 @@
+# R39 gorget-arena verdict finding (owner 2026-08-09): pre-fix, `gg fmt`
+# inserted a blank line between EVERY import — inflated import-heavy files
+# ~30% (arena's main.gg 1701 → 2207 lines). Owner directed: group with a
+# single blank line BETWEEN GROUPS (mirror gofmt's behavior). Current groups
+# per `is_std_import` (src/formatter/mod.rs): std/xtd is group 1, everything
+# else is group 2.
+#
+# Wired: `fmt_import_group_single_blank` in `tests/integration.rs` asserts
+# NO blank between consecutive std/xtd imports, ONE blank at the transition
+# to the non-std group. Parse-only assertion (fixture doesn't need semantic
+# resolution — mylib.utils and myapp.core wouldn't resolve).
+from std.collections import Vector
+from std.io import print
+from xtd.json import escape_string
+from xtd.toml import parse
+from mylib.utils import helper
+from myapp.core import setup
+
+int placeholder(): 0

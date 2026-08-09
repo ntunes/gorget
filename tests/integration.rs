@@ -9758,6 +9758,112 @@ fn fmt_catch_rethrow_single_stmt_terminal_axis_source_runs() {
 // lib/std/fs.gg (blocking) and tests/fixtures/noreturn_diverges.gg
 // (noreturn). ~4 LOC fix mirrors the existing is_async/is_const/
 // is_static/is_unsafe arms.
+// R39 gorget-arena verdict finding (owner 2026-08-09): trailing comments on
+// block-opening lines (`if x:  # comment`) were being pushed onto the first
+// body stmt. Same class as snag #2; fix mirrored `emit_trailing_comment_after_header`
+// hook (already in place for structural container headers) into the
+// control-flow openers (if/elif/while/for/match/case/etc.).
+#[test]
+fn fmt_block_header_trailing_comment_stays_on_header() {
+    use gorget::parser::Parser;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_block_header_trailing_comment.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Each sentinel MUST live on a line that ALSO contains its owning
+    // header prefix — i.e. `if x: # SENTINEL`. Pre-fix: sentinel lives on
+    // a standalone leading-comment line above the first body stmt (that
+    // line has the sentinel but NOT the header prefix). RED-verified.
+    for (sentinel, header_prefix) in &[
+        ("SENTINEL-if", "if flags % 2 >= 1:"),
+        ("SENTINEL-while", "while total > 0:"),
+        ("SENTINEL-for", "for i in 0..3:"),
+        ("SENTINEL-case", "case 0:"),
+    ] {
+        let line_with_sentinel = formatted.lines().find(|l| l.contains(sentinel));
+        assert!(
+            line_with_sentinel.is_some(),
+            "sentinel {sentinel} vanished from formatted output.\n=== Formatted ===\n{formatted}"
+        );
+        let line = line_with_sentinel.unwrap();
+        assert!(
+            line.contains(header_prefix),
+            "block-header trailing regression: {sentinel} moved OFF its owning header line ({header_prefix}).\n\
+             Found sentinel at: {line:?}\n=== Formatted output ===\n{formatted}"
+        );
+    }
+
+    // Re-parse.
+    let mut parser = Parser::new(&formatted);
+    let _ = parser.parse_module();
+    assert!(
+        parser.errors.is_empty(),
+        "formatted output does not re-parse ({} error(s)):\n{formatted}\n=== First error ===\n{:?}",
+        parser.errors.len(),
+        parser.errors.first()
+    );
+
+    // Idempotent.
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+}
+
+#[test]
+fn fmt_block_header_trailing_comment_source_runs() {
+    // compute(3): if (odd) → +1; while → -1; for → +3; match 3 else → +200 = 203
+    // compute(0): if false; while false; for → +3; match 0 case 0 → +100 = 103
+    run_gg("fmt_block_header_trailing_comment.gg", "203\n103");
+}
+
+// R39 gorget-arena verdict finding (owner 2026-08-09): pre-fix `gg fmt`
+// inserted a blank line between EVERY import. Post-fix: single blank between
+// GROUPS (std vs non-std), no blank between same-group imports.
+#[test]
+fn fmt_import_group_single_blank() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_import_group_single_blank.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    let lines: Vec<&str> = formatted.lines().collect();
+    let is_group1 = |l: &&str| l.starts_with("from std.") || l.starts_with("from xtd.");
+    let is_group2 = |l: &&str| l.starts_with("from mylib.") || l.starts_with("from myapp.");
+
+    // No blank line between any two consecutive group-1 (std/xtd) imports
+    // OR between any two consecutive group-2 (non-std) imports.
+    for i in 0..lines.len().saturating_sub(2) {
+        let a = &lines[i];
+        let sep = &lines[i + 1];
+        let c = &lines[i + 2];
+        if !sep.is_empty() {
+            continue;
+        }
+        if (is_group1(&a) && is_group1(&c)) || (is_group2(&a) && is_group2(&c)) {
+            panic!(
+                "import-group regression: blank line between two consecutive same-group imports at line {i}:\n  {a}\n  {sep}\n  {c}\n=== Formatted ===\n{formatted}"
+            );
+        }
+    }
+
+    // Verify EXACTLY ONE blank line at the group transition.
+    let last_g1 = lines.iter().rposition(|l| is_group1(&l)).expect("fixture has group-1 imports");
+    let first_g2 = lines.iter().position(|l| is_group2(&l)).expect("fixture has group-2 imports");
+    assert!(first_g2 > last_g1, "group-1 should precede group-2 (sort order)");
+    let gap = first_g2 - last_g1 - 1;
+    assert_eq!(
+        gap, 1,
+        "import-group regression: expected exactly 1 blank line between groups, found {gap} lines.\n=== Formatted ===\n{formatted}"
+    );
+
+    // Idempotent.
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+}
+
 #[test]
 fn fmt_preserves_blocking_extern_qualifier() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

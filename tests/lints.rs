@@ -11764,10 +11764,13 @@ fn formatter_sibling_loops_hook_pairing() {
     const EXPECTED_EMIT_TRAILING_AFTER: usize = 15;
     /// `emit_trailing_comment_after_header(` calls: 4 structural
     /// containers (`format_struct`, `format_enum`, `format_trait`,
-    /// `format_equip`). A new structural-container formatter that
-    /// wants the header-trailing behaviour must add its own call and
-    /// bump this to 5.
-    const EXPECTED_EMIT_TRAILING_AFTER_HEADER: usize = 4;
+    /// `format_equip`) + 6 control-flow openers added R39 by the
+    /// gorget-arena verdict fold (owner 2026-08-09): `Stmt::For`,
+    /// `Stmt::While`, `Stmt::If`, `Stmt::Match`, `format_elif_else_blocks`
+    /// elif branch, `format_match_arm` case. A new structural-container
+    /// or control-flow header formatter that wants the header-trailing
+    /// behaviour must add its own call and bump this count.
+    const EXPECTED_EMIT_TRAILING_AFTER_HEADER: usize = 10;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");

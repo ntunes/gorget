@@ -592,15 +592,31 @@ impl Formatter {
             emitted += 1;
         }
 
-        // Emit sorted imports.
+        // Emit sorted imports. Blank line only on group transition (std vs
+        // non-std), not between every import — the every-import-blank shape
+        // inflates line counts ~30% on import-heavy files (owner 2026-08-09,
+        // gorget-arena verdict). Group-with-single-blank-between-groups is
+        // the canonical shape (mirror gofmt's behavior).
+        let mut prev_import_is_std: Option<bool> = None;
+        let mut first_import = true;
         for item in &imports {
-            if emitted > 0 {
+            let cur_is_std = is_std_import(&import_sort_key(item));
+            let need_blank = if first_import {
+                // First import iter: blank iff prior section (directives) emitted.
+                emitted > 0
+            } else {
+                // Subsequent iters: blank iff group transition.
+                prev_import_is_std != Some(cur_is_std)
+            };
+            if need_blank {
                 self.emitter.blank_line();
             }
             self.emit_comments_before(item.span.start);
             self.format_item(item);
             self.emit_trailing_comment_after(item.span.end);
             emitted += 1;
+            prev_import_is_std = Some(cur_is_std);
+            first_import = false;
         }
 
         // Emit remaining items.
@@ -1619,6 +1635,7 @@ impl Formatter {
             self.emitter.write("elif ");
             self.format_expr(cond);
             self.emitter.write(":");
+            self.emit_trailing_comment_after_header(cond.span.end);
             self.emitter.newline();
             self.emitter.indent();
             self.format_block_stmts(body);
@@ -1754,6 +1771,12 @@ impl Formatter {
                 self.format_ownership_prefix(*ownership);
                 self.format_expr(iterable);
                 self.emitter.write(":");
+                // R39 gorget-arena block-header trailing (owner 2026-08-09):
+                // preserve `for x in xs:  # comment` as trailing on the header
+                // line, not pushed onto the first body stmt. Same class as
+                // snag #2; anchor at iterable.span.end (before `:` and any
+                // trailing comment on the same source line).
+                self.emit_trailing_comment_after_header(iterable.span.end);
                 self.emitter.newline();
                 self.emitter.indent();
                 self.format_block_stmts(body);
@@ -1774,6 +1797,7 @@ impl Formatter {
                 self.emitter.write("while ");
                 self.format_expr(condition);
                 self.emitter.write(":");
+                self.emit_trailing_comment_after_header(condition.span.end);
                 self.emitter.newline();
                 self.emitter.indent();
                 self.format_block_stmts(body);
@@ -1802,6 +1826,7 @@ impl Formatter {
                 self.emitter.write("if ");
                 self.format_expr(condition);
                 self.emitter.write(":");
+                self.emit_trailing_comment_after_header(condition.span.end);
                 self.emitter.newline();
                 self.emitter.indent();
                 self.format_block_stmts(then_body);
@@ -1816,6 +1841,7 @@ impl Formatter {
                 self.emitter.write("match ");
                 self.format_expr(scrutinee);
                 self.emitter.write(":");
+                self.emit_trailing_comment_after_header(scrutinee.span.end);
                 self.emitter.newline();
                 self.emitter.indent();
                 for item in arms {
@@ -2037,6 +2063,12 @@ impl Formatter {
             self.format_expr(guard);
         }
         self.emitter.write(":");
+        // R39 gorget-arena block-header trailing: preserve `case P:  # comment`
+        // as trailing on the header line for indented-body arms. Uses
+        // arm.pattern.span.end (or guard.span.end if a guard is present) as
+        // the anchor before the `:` and any trailing comment.
+        let arm_anchor = arm.guard.as_ref().map(|g| g.span.end).unwrap_or(arm.pattern.span.end);
+        self.emit_trailing_comment_after_header(arm_anchor);
         // Check if the body is a Block expression (multi-line arm)
         if let Expr::Block(ref block) = arm.body.node {
             self.emitter.newline();
@@ -3684,10 +3716,15 @@ void main():
 
     #[test]
     fn test_import_order_sorting() {
-        // std imports should come before third-party imports.
+        // std/xtd imports come first, followed by third-party imports.
+        // R39 gorget-arena verdict: blank line only on group transition, NOT
+        // between every import (was `+30%` line inflation on import-heavy
+        // files). Both std.io and xtd.log are in the "std/gg" group per
+        // `is_std_import`; they emit consecutively. mylib.utils is a
+        // different group; single blank line at the transition.
         let input = "import mylib.utils\n\nimport std.io\n\nimport xtd.log\n";
         let output = fmt(input);
-        assert_eq!(output, "import std.io\n\nimport xtd.log\n\nimport mylib.utils\n");
+        assert_eq!(output, "import std.io\nimport xtd.log\n\nimport mylib.utils\n");
     }
 
     #[test]

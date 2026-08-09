@@ -1,0 +1,27 @@
+# R39 gorget-arena verdict finding (owner 2026-08-09): `gg fmt` was pushing
+# trailing comments on block-opening lines DOWN onto the first body stmt.
+# gorget-arena's 12.7k-line codebase had 17 sites (`delta 344→327 trailing
+# comments; all 17 are this class`). All 5 shapes below covered.
+#
+# Wired: `fmt_block_header_trailing_comment_stays_on_header` in
+# `tests/integration.rs` asserts each of the 5 sentinels stays on its owning
+# header line (not on the following body stmt) + idempotent + source runs.
+int compute(int flags):
+    int total = 0
+    if flags % 2 >= 1:                # SENTINEL-if
+        total = total + 1
+    while total > 0:                  # SENTINEL-while
+        total = total - 1
+    for i in 0..3:                    # SENTINEL-for
+        total = total + i
+    match flags:
+        case 0:                       # SENTINEL-case
+            total = total + 100
+        else:
+            total = total + 200
+    return total
+
+int main():
+    print(compute(3))
+    print(compute(0))
+    return 0
