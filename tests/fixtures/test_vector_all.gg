@@ -105,12 +105,12 @@ void main():
     print(f"{a.len()}")
 
     # --- slice ---
-    Vector[int] sl = a.slice(1, 3)
+    Vector[int] sl = a[1:3]
     print(f"{sl.len()}")
     print(f"{sl.get(0).unwrap()}")
     print(f"{sl.get(1).unwrap()}")
     # empty slice
-    Vector[int] esl = a.slice(0, 0)
+    Vector[int] esl = a[0:0]
     print(f"{esl.len()}")
 
     # --- sort ---

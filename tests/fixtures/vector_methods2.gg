@@ -27,7 +27,7 @@ void main():
     print(f"{v.get(6).unwrap()}")
 
     # slice
-    Vector[int] s = v.slice(0, 3)
+    Vector[int] s = v[0:3]
     print(f"{s.len()}")
     print(f"{s.get(0).unwrap()}")
     print(f"{s.get(2).unwrap()}")

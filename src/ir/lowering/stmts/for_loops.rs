@@ -137,6 +137,7 @@ pub(super) fn lower_for(
             start: Some(start),
             end: Some(end),
             inclusive,
+            ..
         } = &iterable.node
         {
             lower_for_range(ctx, builder, var_name, start, end, *inclusive, body, else_arm);

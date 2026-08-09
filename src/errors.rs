@@ -148,6 +148,23 @@ pub enum ParseErrorKind {
     /// (or `Ident.Ident`) follows `catch` where the contract form uses a
     /// parenthesised binding.
     FaultCatchRemoved,
+
+    /// D22 (docs/define-gorget/decisions.md, ratified 2026-07-06):
+    /// negative-literal indices in colon-slice syntax (`v[-1:b]`) are
+    /// DEFERRED. Negatives collide with §10.9's negative-index-is-Bounds-fault
+    /// rule and need their own decision with usage data. Detected at parse
+    /// time when a `-<IntLit>` prefix appears in either bracket-position of a
+    /// colon-slice. Runtime-negative variables (`v[some_int:b]` where
+    /// `some_int` becomes negative at runtime) fall through to the runtime
+    /// `Bounds` fault per §10.9 — this reject is parse-time only.
+    NegativeSliceIndex,
+
+    /// D22: step / stride in colon-slice syntax (`v[a:b:c]`) is DEFERRED.
+    /// Step's real use is `.reversed()`'s job and a stride breaks the future
+    /// offset+len CoW-share Vector-view representation. Detected at parse
+    /// time when a second `:` appears in a `[a:b:...]` position. Fix-it:
+    /// `use v.reversed() for reverse iteration`.
+    SliceStepDeferred,
 }
 
 impl std::fmt::Display for ParseError {
@@ -229,6 +246,23 @@ impl std::fmt::Display for ParseError {
                      Faults now panic uncatchably; use the fallible arithmetic operators \
                      (`+!`/`-!`/`*!`/`/!`/`%!`/`<<!`/`>>!`) to capture faults as \
                      `Result[T, ArithError]` instead"
+                )
+            }
+            ParseErrorKind::NegativeSliceIndex => {
+                write!(
+                    f,
+                    "E_NegativeSliceIndex: negative-literal indices in `v[a:b]` slice \
+                     syntax are deferred (D22). Negatives collide with §10.9's \
+                     negative-index-is-Bounds-fault rule and need a separate decision; \
+                     help: write `v.len() - N` for a from-end index"
+                )
+            }
+            ParseErrorKind::SliceStepDeferred => {
+                write!(
+                    f,
+                    "E_SliceStepDeferred: step in `v[a:b:c]` slice syntax is deferred (D22). \
+                     A stride breaks the future offset+len CoW-share view representation; \
+                     help: use `v.reversed()` for reverse iteration"
                 )
             }
         }

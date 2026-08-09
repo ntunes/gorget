@@ -49,7 +49,7 @@ bench "slice x32":
     String s = "the quick brown fox jumps over the lazy dog"
     int i = 0
     while i < 32:
-        String sub = s.slice(4, 19)
+        String sub = s[4:19]
         i = i + 1
 
 bench "char_at x32":

@@ -1,0 +1,33 @@
+# D22 colon-slice: the four accept-forms (`v[a:b]`, `v[a:]`, `v[:b]`, `v[:]`)
+# for both Vector and String receivers, with non-constant operands so const-fold
+# cannot elide the runtime path (Core #11 wide-fixtures — must EXERCISE the
+# slice runtime, not just parse).
+void main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+    int a = 1
+    int b = 4
+    # `[a:b]` — both explicit
+    Vector[int] s1 = v[a:b]
+    print(f"[a:b] len={s1.len()} s0={s1.get(0).unwrap()} s2={s1.get(2).unwrap()}")
+    # `[a:]` — implicit end = len
+    Vector[int] s2 = v[a:]
+    print(f"[a:] len={s2.len()} s0={s2.get(0).unwrap()} last={s2.get(s2.len() - 1).unwrap()}")
+    # `[:b]` — implicit start = 0
+    Vector[int] s3 = v[:b]
+    print(f"[:b] len={s3.len()} s0={s3.get(0).unwrap()} last={s3.get(s3.len() - 1).unwrap()}")
+    # `[:]` — full copy
+    Vector[int] s4 = v[:]
+    print(f"[:] len={s4.len()} s0={s4.get(0).unwrap()} last={s4.get(s4.len() - 1).unwrap()}")
+
+    # String receiver — codepoint-indexed cap=0 view (docs/language-reference.md).
+    String base = "hello_world"
+    int sa = 0
+    int sb = 5
+    String t1 = base[sa:sb]
+    print(f"str[a:b] {t1}")
+    String t2 = base[sb:]
+    print(f"str[a:] {t2}")
+    String t3 = base[:sb]
+    print(f"str[:b] {t3}")
+    String t4 = base[:]
+    print(f"str[:] {t4}")

@@ -28,13 +28,13 @@ void main():
     # Probe A: String slice VIEW passed via `&` to a mutating fn — the mutation
     # lands on the dead view temp, base unchanged.
     String base = "hello"
-    bump(&base.slice(0, 3))
+    bump(&base[0:3])
     print(base)                     # hello
 
     # slice-on-Vector[int] returns an OWNED copy; the index write hits the dead
     # copy, v unchanged.
     Vector[int] v = [10, 20, 30]
-    v.slice(0, 2)[0] = 88
+    v[0:2][0] = 88
     print(v[0])                     # 10
 
     # A container-returning method result is an owned copy (ReturnFromBorrow

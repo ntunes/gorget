@@ -1220,7 +1220,7 @@ fn lower_expr_inner(
         }
 
         // P3.5.7: Range expressions (standalone)
-        Expr::Range { start, end, inclusive } => {
+        Expr::Range { start, end, inclusive, .. } => {
             lower_range_expr(ctx, builder, start.as_deref(), end.as_deref(), *inclusive)
         }
 
@@ -5752,6 +5752,7 @@ mod tests {
                     start: Some(Box::new(spanned(Expr::IntLiteral(0)))),
                     end: Some(Box::new(spanned(Expr::IntLiteral(5)))),
                     inclusive: false,
+                    colon: false,
                 })),
                 condition: None,
             }),
@@ -5798,6 +5799,7 @@ mod tests {
                     start: Some(Box::new(spanned(Expr::IntLiteral(0)))),
                     end: Some(Box::new(spanned(Expr::IntLiteral(10)))),
                     inclusive: false,
+                    colon: false,
                 })),
                 condition: Some(Box::new(spanned(Expr::BinaryOp {
                     left: Box::new(spanned(Expr::Identifier("x".into()))),
@@ -5837,6 +5839,7 @@ mod tests {
                     start: Some(Box::new(spanned(Expr::IntLiteral(0)))),
                     end: Some(Box::new(spanned(Expr::IntLiteral(3)))),
                     inclusive: false,
+                    colon: false,
                 })),
                 condition: None,
             }),
@@ -5874,6 +5877,7 @@ mod tests {
                     start: Some(Box::new(spanned(Expr::IntLiteral(0)))),
                     end: Some(Box::new(spanned(Expr::IntLiteral(10)))),
                     inclusive: false,
+                    colon: false,
                 })),
                 condition: Some(Box::new(spanned(Expr::BinaryOp {
                     left: Box::new(spanned(Expr::Identifier("x".into()))),
@@ -5957,6 +5961,7 @@ mod tests {
                 start: Some(Box::new(spanned(Expr::IntLiteral(0)))),
                 end: Some(Box::new(spanned(Expr::IntLiteral(10)))),
                 inclusive: false,
+                colon: false,
             }),
         );
         assert!(matches!(result, Operand::Copy(_)));

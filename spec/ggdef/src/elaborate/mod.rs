@@ -1242,7 +1242,7 @@ impl Elaborator {
 
         // `for i in a..b:` → a numeric `while` loop (the loop variable is a
         // fresh int per iteration, not a Borrow view of an element).
-        if let ast::Expr::Range { start, end, inclusive } = &iterable.node {
+        if let ast::Expr::Range { start, end, inclusive, .. } = &iterable.node {
             let start_e = match start {
                 Some(e) => self.elaborate_expr(e)?,
                 None => Expr::Int(0),
@@ -1662,7 +1662,7 @@ impl Elaborator {
             }
             ast::Expr::Index { object, index } => {
                 // `s[a..b]` / `v[a..b]` → a `Slice`; `x[i]` → an `Index`.
-                if let ast::Expr::Range { start, end, inclusive } = &index.node {
+                if let ast::Expr::Range { start, end, inclusive, .. } = &index.node {
                     let object = Box::new(self.elaborate_expr(object)?);
                     let start = self.opt_expr(start.as_deref())?;
                     let end = self.opt_expr(end.as_deref())?;

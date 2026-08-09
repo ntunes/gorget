@@ -8,7 +8,7 @@
 # views), so the INTENDED behavior once the ABI is fixed is a DEAD-TEMP ACCEPT —
 # the view materializes to an owned copy at the mutation boundary, push_char
 # mutates the copy, and `base` is UNCHANGED (`hello world`), consistent with the
-# `bump(&base.slice(...))` shape in cow_2d_method_result_dead_write.gg. (An
+# `bump(&base[0:...])` shape in cow_2d_method_result_dead_write.gg. (An
 # equally-defensible alternative once revisited: REJECT an in-place mutating
 # method on a view-derived binding; the dead-temp-accept output below matches the
 # 2D ruling's warning-track posture and is the value asserted here.)
@@ -17,5 +17,5 @@ void grow(String &s):
 
 void main():
     String base = "hello world"
-    grow(&base.slice(0, 5))
+    grow(&base[0:5])
     print(base)

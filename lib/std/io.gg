@@ -429,7 +429,7 @@ Result[int, IoError] write_all[W](W &w, Vector[byte] buf):
     int total = 0
     int len = buf.len()
     while total < len:
-        Vector[byte] remaining = buf.slice(total, len)
+        Vector[byte] remaining = buf[total:len]
         Result[int, IoError] r = w.write(remaining)
         match r:
             case Ok(0):

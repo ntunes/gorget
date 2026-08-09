@@ -1,0 +1,10 @@
+# D22 negative-literal-index reject: `v[-1:b]` etc. rejected at parse-time
+# with `E_NegativeSliceIndex`. Negatives are DEFERRED (D22, ratified 2026-07-06)
+# because they collide with §10.9's negative-index-is-a-Bounds-fault rule and
+# deserve their own decision with usage data. Runtime-negative variables
+# (`v[some_int:b]` where `some_int` becomes negative at runtime) fall through
+# to the runtime `Bounds` fault per §10.9 — this reject is parse-time only.
+void main():
+    Vector[int] v = [1, 2, 3]
+    Vector[int] s = v[-1:2]
+    print(s.len().to_string())

@@ -372,7 +372,7 @@ String resolve_module_path(String base_dir, String module_path):
     # std.net.foo → std/foo (no std/net/ subdir on disk)
     String resolved = module_path
     if module_path.starts_with("std.net."):
-        resolved = "std." + module_path.slice(8, module_path.len())
+        resolved = "std." + module_path[8:module_path.len()]
     String path_part = resolved.replace(".", "/")
     return base_dir + "/" + path_part + ".gg"
 
@@ -381,12 +381,12 @@ String parent_dir(String path):
     int i = 0
     while i < path.len():
         if i + 1 <= path.len():
-            String ch = path.slice(i, i + 1)
+            String ch = path[i:i + 1]
             if ch == "/":
                 last_slash = i
         i += 1
     if last_slash >= 0:
-        return path.slice(0, last_slash)
+        return path[0:last_slash]
     return "."
 
 # ── Linear-scan dedup ────────────────────────────────────────

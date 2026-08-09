@@ -1542,6 +1542,81 @@ fn string_slice_index_assign_error() {
     );
 }
 
+// D22 colon-slice (ratified 2026-07-06, landed R39 Track C):
+// `v[a:b]` / `v[a:]` / `v[:b]` / `v[:]` — four accept-forms over Vector
+// and String receivers, with non-constant operands so const-fold cannot
+// elide the runtime path (Core #11 wide, RUN-exercising).
+#[test]
+fn d22_slice_colon_all_forms() {
+    run_gg(
+        "d22_slice_colon_all_forms.gg",
+        "[a:b] len=3 s0=20 s2=40\n\
+         [a:] len=4 s0=20 last=50\n\
+         [:b] len=4 s0=10 last=40\n\
+         [:] len=5 s0=10 last=50\n\
+         str[a:b] hello\n\
+         str[a:] _world\n\
+         str[:b] hello\n\
+         str[:] hello_world",
+    );
+}
+
+// D22 element-type axis (Core #12): Vector[String] slice exercises the
+// runtime `elem_clone` deep-clone branch that the POD Vector[int] cell
+// never touches.
+#[test]
+fn d22_slice_vector_string() {
+    run_gg(
+        "d22_slice_vector_string.gg",
+        "[a:b] beta,gamma\n\
+         [:] len=4 alpha,delta\n\
+         after push 5 s1[0]=beta",
+    );
+}
+
+// D22 clamp semantics: OOB indices clamp Python-style instead of trapping
+// (previously `gorget_array_slice` traps on `end > len` / `start > end`;
+// now clamps to length / empty). Cross-lane fixture — C, LLVM, SH, ggdef
+// must all agree.
+#[test]
+fn d22_slice_clamp_oob() {
+    run_gg(
+        "d22_slice_clamp_oob.gg",
+        "oob-high len=2 last=30\n\
+         both-oob len=0\n\
+         start-gt-end len=0\n\
+         str oob-high ello\n\
+         str both-oob len=0\n\
+         str start-gt-end len=0",
+    );
+}
+
+// D22 parse rejects: negative-literal in either bracket position + step.
+// Class fix (Core #4) — every rejected shape gets its own fixture.
+#[test]
+fn d22_slice_negative_literal_reject() {
+    check_gg_fails(
+        "d22_slice_negative_literal_reject.gg",
+        "E_NegativeSliceIndex",
+    );
+}
+
+#[test]
+fn d22_slice_negative_end_reject() {
+    check_gg_fails(
+        "d22_slice_negative_end_reject.gg",
+        "E_NegativeSliceIndex",
+    );
+}
+
+#[test]
+fn d22_slice_step_reject() {
+    check_gg_fails(
+        "d22_slice_step_reject.gg",
+        "E_SliceStepDeferred",
+    );
+}
+
 // A module-level `const` is inlined at every use site, so its initializer must
 // fold to a compile-time constant. An enum/struct constructor cannot — the
 // lowering substituted a zero placeholder (a zeroed Option tag reads as `Some`,
@@ -16600,7 +16675,7 @@ fn format_expr_canonical(expr: &Expr) -> String {
             format!("{os}[{is}]")
         }
         Expr::Range {
-            start, end, inclusive,
+            start, end, inclusive, ..
         } => {
             let mut result = String::new();
             if let Some(s) = start {

@@ -434,22 +434,42 @@ int[3] fixed = [1, 2, 3]          # int[3] — fixed size, stack-allocated
 
 ### Slices
 
-A slice is a borrowed view into contiguous memory — a window into existing data
-without copying. **Today only `String` supports slicing:**
+Slice syntax `v[a:b]` (canonical) produces a semantically OWNED sub-sequence
+value for both `String` and `Vector[T]` receivers. The runtime may back a
+`String` slice with a `cap == 0` view as an invisible optimisation — you
+cannot observe the distinction from source. Bounds CLAMP Python-style:
 
 ```gorget
 String text = "hello"
-String sub = text[1..4]            # borrowed view: "ell" (no copy)
-```
+String sub = text[1:4]             # "ell" (String slice, view-backed at runtime)
+String tail = text[2:]             # "llo" — implicit end = len
+String head = text[:3]             # "hel" — implicit start = 0
+String full = text[:]              # "hello" — full copy
 
-A general `T[]` slice type exists in the grammar but is **not yet implemented**
-for arrays and vectors — it has no runtime representation. To take a sub-range of
-a `Vector[T]`, use `.slice(start, end)`, which returns an independent **copy**:
-
-```gorget
 Vector[int] v = [1, 2, 3, 4, 5]
-Vector[int] mid = v.slice(1, 4)    # new vector [2, 3, 4] — a copy, not a view
+Vector[int] mid = v[1:4]           # [2, 3, 4] — independent OWNED copy
+Vector[int] safe = v[0:1000]       # [1..5] — end clamps to v.len(); no fault
+Vector[int] empty = v[3:1]         # [] — start > end yields empty
 ```
+
+Four accept-forms: `v[a:b]`, `v[a:]`, `v[:b]`, `v[:]`. Two forms are
+DEFERRED and rejected at parse time:
+
+- `v[-1:b]` — negative-literal indices (`E_NegativeSliceIndex`). Write
+  `v[v.len() - 1:b]` for an offset-from-end index.
+- `v[a:b:c]` — step (`E_SliceStepDeferred`). Use `v.reversed()` for reverse
+  iteration.
+
+Runtime-negative values (a variable that goes negative at run time) still
+clamp — a slice never faults at runtime.
+
+The general `T[]` slice type exists in the grammar but is **not yet
+implemented** for arrays and vectors as a distinct return type; `v[a:b]`
+returns a fresh `Vector[T]` copy instead.
+
+The `..` range spelling (`v[1..4]`) is still accepted during the D22
+migration window and is identical in meaning; `gg fmt` preserves whichever
+form you wrote.
 
 ---
 
@@ -721,6 +741,6 @@ print(type(v))             # "Vector[int]"
 | `Set[T]` | (constructor) | `add`, `in`, `len`, unique elements |
 | `HashSet[T]` | (constructor) | Same API as `Set`, unordered, faster |
 | `T[N]` (array) | `int[5] a = [...]` | Fixed-size, stack-allocated |
-| `String` slice | `s[1..4]` | Borrowed view (general `T[]` array/vector slices not yet implemented) |
+| Colon-slice (D22) | `s[1:4]`, `v[1:]`, `v[:3]`, `v[:]` | Owned sub-sequence for `String` + `Vector[T]`; bounds CLAMP; four accept-forms; negatives + step deferred at parse. `s[1..4]` still accepted during migration. |
 | Tuple | `(a, b, c)` | `._0`, `._1`, unpacking |
 | Comprehension | `[expr for x in items if cond]` | List, set, and dict forms |

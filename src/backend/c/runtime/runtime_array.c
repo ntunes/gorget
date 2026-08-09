@@ -460,9 +460,23 @@ static inline void gorget_string_clone_inplace(void* p) {
 }
 
 static inline GorgetArray gorget_array_slice(const GorgetArray* arr, int64_t start, int64_t end) {
-    if (start < 0 || end < 0 || (size_t)start > arr->len || (size_t)end > arr->len || start > end) {
-        gorget_trap_fmt(GG_T_BOUNDS, "vector slice out of bounds: [%" PRId64 "..%" PRId64 "], length %zu", start, end, arr->len);
-    }
+    // D22 (ratified 2026-07-06): Python-style CLAMP semantics for
+    // `v[a:b]` / `v[a..b]` slicing. Negative starts clamp to 0; ends past
+    // the length clamp to the length; and `start > end` yields an EMPTY
+    // slice (never a fault). This mirrors the String slice runtime
+    // (`gorget_str_slice` at runtime_string.c:717) and ggdef's evaluator
+    // (`spec/ggdef/src/eval.rs:1225-1227`). Runtime-negative variables
+    // (`v[some_int:b]` where `some_int` goes negative at runtime) also
+    // land here — the surface language rejects only NEGATIVE-LITERAL
+    // indices at parse-time (D22 negatives-deferred + §10.9 as the
+    // fallback for a genuinely-negative runtime value; kept as clamp here
+    // because D22 chose clamp over §10.9 for the slice-value case).
+    int64_t alen = (int64_t)arr->len;
+    if (start < 0) { start = 0; }
+    if (end < 0) { end = 0; }
+    if (start > alen) { start = alen; }
+    if (end > alen) { end = alen; }
+    if (start > end) { start = end; }
     size_t slice_len = (size_t)(end - start);
     GorgetAllocator* a = __gorget_current_alloc;
     GorgetArray result = {NULL, 0, 0, arr->elem_size, a, arr->elem_drop, arr->elem_clone, arr->elem_materialize};
