@@ -148,9 +148,106 @@
 #     resources.gg): semantically neutral, but again a formatter
 #     preservation gap worth its own filing.
 #
-# ── R40+ fix paths (updated by Phase 2b):
+# ── Phase 2c bisection outcome (2026-08-09, Path C partial + narrowing continued):
 #
-# Path C (highest signal) — hypothesis-test the ctor-shape divergence:
+# Post-rebase (onto `1664da711`, which includes the extern-qualifier
+# chip `4deee6e56` + snag #2 trailing-comment fix `f4b98a681`), A1
+# STILL REPRODUCES with the same signature (`stage-2 exit 134`,
+# `free(): double free detected in tcache 2`). Neither the
+# extern-qualifier fix nor the trailing-comment attachment fix
+# incidentally repaired A1 — the SH-side ctor lowering divergence is
+# independent of those two formatter defects. (Core #5 re-verified.)
+#
+# Path C step 1 executed — refutes the "single-ctor-shape flip"
+# hypothesis: rewriting ONE `ResourceEntry(...)` literal in HEAD's
+# resources.gg from single-line into fmt's multi-line "one arg per
+# line with trailing comma" shape (nothing else changed) → bootstrap
+# CONVERGES cleanly (stage-2 exit 0). So the SH lowering divergence
+# is NOT triggered by a single ctor-shape change; it accumulates.
+#
+# Additional isolated Path A slices tested (all against a clean
+# starting tree, `driver_pre_sweep`-equivalent post-rebase):
+#   * fmt applied EXCEPT reverting the 8 import re-orderings in
+#     resources.gg → still CRASHES with the double-free (imports are
+#     NOT the trigger; some other fmt-change is).
+#   * import re-ordering ALONE (no other fmt changes to resources.gg)
+#     → CONVERGES. Imports alone are not enough to flip either.
+#   * fmt applied then all trailing commas removed programmatically
+#     (`,\n[ ]*)` → `\n[ ]*)`) → SH-stage-2 HUNG (~4 min producing
+#     4KB, killed) — a distinct "hang" symptom from the double-free,
+#     but still a self-hosting divergence.
+#   * fmt applied ONLY inside the RESOURCES section (kept HEAD's form
+#     for RUNTIME_FNS/BUILTIN_METHOD_MUTATES/etc.) → SH-stage-2
+#     HUNG (same 4KB pattern), killed at 5 min.
+#
+# The pattern that emerges: multiple fmt-shape changes to
+# `compiler/data/resources.gg` accumulate into a self-hosting
+# divergence, but the exact minimal trigger set is NOT a single
+# structural change (import reorder alone / trailing commas alone /
+# one ctor multi-line alone). The trigger appears CUMULATIVE across
+# multiple ctor-shape rewrites AND/OR interacts with an accumulated
+# whitespace/comment structure. Further narrowing requires either:
+#   (a) A binary-search over lines of the fmt output (halve until
+#       flip observed), which is slow because every step requires a
+#       full 8-10 min bootstrap; OR
+#   (b) Instrument the SH lowerer's Call/Ctor path to log the
+#       "temp slot emit vs elide" decision per-ctor and diff the
+#       decisions between fmt'd and clean resources.gg. This is
+#       more principled but requires editing `lower_expr.gg` /
+#       `lower.gg` + a self-host rebuild between each iteration.
+#
+# ── PROGRESS STOPPED HERE per stop-condition "Path C step 3 (branch
+# localization) > 4h without narrowing" (session used ~7h — Phase
+# 2b bisection ~5h + Phase 2c Path C narrowing ~2h). Owner-visible
+# rescope proposal:
+#
+#   The A1 fix is more expensive than the initial estimate suggested,
+#   because the trigger is CUMULATIVE not single-shape and the SH
+#   Call/Ctor lowering has ~10K LOC of arm-branching (`lower_call`
+#   alone starts at `lower_expr.gg:7947` and spans ~1000+ lines).
+#   Recommended next-round shape:
+#     Phase 2d — Instrument the SH lowerer's temp-slot-elision path
+#     (add debug prints to the exact write site in `lower_expr.gg`
+#     that decides `add_local` vs direct-store for ctor results in
+#     Vector element positions), run once with clean and once with
+#     fmt'd resources.gg, diff the per-ctor decision log. That
+#     yields a minimal SH source pair that triggers the divergence
+#     on a single ctor site (Path C step 1's single-ctor probe was
+#     too coarse — the difference likely lies in the INTERACTION
+#     between adjacent ctors' slot IDs, not in a single ctor).
+#     Budget: ~1-2 days.
+#     Then Phase 2e — Fix at the write site (Core #1) with a
+#     regression fixture that exercises the multi-ctor-inside-Vector
+#     shape. Estimated ~1 day.
+#
+# The R40+ fix paths above remain valid; Path C is REFINED not
+# refuted (single ctor is too coarse; must instrument to see the
+# per-ctor decision).
+#
+# ── R40+ fix paths (updated by Phase 2b; Path C REFINED by Phase 2c):
+#
+# Path C (highest signal, REFINED) — hypothesis-test the ctor-shape
+# divergence via instrumentation, not via source-shape rewriting:
+#   1. Add debug prints to the SH lowerer at the write site in
+#      `lower_expr.gg` where ctor calls decide temp-slot allocation
+#      (grep for `add_local` calls with an owning-typed result
+#      inside `lower_call` / the ctor handlers). Log per-ctor
+#      "TEMP_SLOT=yes/no" plus the source line.
+#   2. Rebuild driver + run once against clean resources.gg and once
+#      against fmt'd resources.gg. Diff the two logs.
+#   3. Isolate the FIRST ctor whose decision flips. That ctor's
+#      shape difference is the minimal trigger.
+#   4. Fix at the write site: the branch should emit consistently
+#      regardless of source shape.
+#
+# Old Path C step 1 (Phase 2b) — REFUTED by Phase 2c:
+# manually rewriting ONE `ResourceEntry(...)` literal alone does
+# NOT flip stage-2 (bootstrap converges). Trigger is CUMULATIVE.
+#
+# (rest of R40 fix paths retained below — Path A/B still valid
+# alternatives; Path C above is the recommended next move.)
+#
+# — Original Path C (Phase 2b) description for context:
 #   1. Manually restructure ONE `ResourceEntry(...)` literal in
 #      HEAD's resources.gg from single-line into fmt's multi-line
 #      shape (nothing else — no import reorder, no comment removal).
