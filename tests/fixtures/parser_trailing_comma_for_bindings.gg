@@ -1,17 +1,16 @@
-# R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
+# R39 Phase 2e per-shape SHAPE-PARSE fixture (Core #12 axis coverage) —
 # cell: KEYWORD `in` terminator × for-loop bare-tuple bindings
-# (parser.gg parse_for_stmt).  This site is INTENTIONALLY NOT migrated
-# to `consume_comma_or_tok` because Rust gg REJECTS a trailing comma
-# here (`for a, b, in xs:` fails at Rust's `parse_pattern` with
-# "expected pattern, found 'in'") and the SH mirrors that behavior.
-# The rejecting-site enumeration lives in the docstring of
-# `self_host_parser_comma_loops_go_through_helper` in tests/lints.rs.
+# (parser.gg parse_for_stmt).  Rust gg REJECTS `for a, b, in xs:` at
+# parse (`expected pattern, found 'in'`), so this fixture cannot
+# meaningfully test the trailing-comma cell against Rust.  The SH's
+# post-migration `while check_tok(TOK_COMMA): advance; if check_kw(KW_IN):
+# break; ...` shape ACCEPTS the trailing comma at this site
+# (owner-directive 2026-08-09) — verified end-to-end via
+# `sh_bootstrap_stage2_double_free_after_fmt_sweep`.
 #
-# What this fixture DOES cover: the non-trailing bare-tuple bindings
-# `for a, b in xs:` — parse_for_stmt's raw comma loop still needs to
-# handle multi-binding correctly.  Trailing-comma at this site is a
-# filed language-follow-up (accept vs reject align with Rust) — not
-# this brief's fix.
+# What this fixture LOCKS: the non-trailing `for a, b in xs:`
+# bare-tuple bindings shape parses+runs correctly on Rust gg (and,
+# through the wrapper, on SH too).
 void main():
     Vector[(int, int)] pairs = [(1, 10), (2, 20), (3, 30)]
     int sum = 0

@@ -4669,7 +4669,10 @@ fn default_op_option_rhs_accepted() {
 fn parser_trailing_comma_cascade() {
     run_gg(
         "parser_trailing_comma_cascade.gg",
-        "count=3\nsum=216\nfirst=first\nthird=third",
+        "count=3\n\
+         sum=66\n\
+         first_outer_label=outer_first_alpha_label\n\
+         third_inner_label=inner_third_gamma_label",
     );
 }
 
@@ -4695,12 +4698,12 @@ fn parser_trailing_comma_dict_entries() {
 
 #[test]
 fn parser_trailing_comma_type_args() {
-    run_gg("parser_trailing_comma_type_args.gg", "first=42\nsecond=hello");
+    run_gg("parser_trailing_comma_type_args.gg", "10 20 30 40 50");
 }
 
 #[test]
 fn parser_trailing_comma_fn_params() {
-    run_gg("parser_trailing_comma_fn_params.gg", "6\n25");
+    run_gg("parser_trailing_comma_fn_params.gg", "28\n30");
 }
 
 #[test]
@@ -4715,12 +4718,12 @@ fn parser_trailing_comma_for_bindings() {
 
 #[test]
 fn parser_trailing_comma_ctor_pattern() {
-    run_gg("parser_trailing_comma_ctor_pattern.gg", "tup 1 2\na 10 20\nsome 42");
+    run_gg("parser_trailing_comma_ctor_pattern.gg", "10 20 30 40 50 60");
 }
 
 #[test]
 fn parser_trailing_comma_variant_fields() {
-    run_gg("parser_trailing_comma_variant_fields.gg", "rect 1 2 3 4");
+    run_gg("parser_trailing_comma_variant_fields.gg", "1 2 3 4 5 6");
 }
 
 // ────────────────────────────────────────────────────────────────────

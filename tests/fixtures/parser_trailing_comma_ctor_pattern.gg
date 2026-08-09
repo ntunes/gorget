@@ -1,36 +1,28 @@
 # R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
-# cell: PAREN terminator × constructor pattern args.  RED-verifies the
-# migration at `parse_pattern` sites (parser.gg:1808/1823/1845/1855/1879
-# pre-fix lines — tuple pattern, dot-shorthand, qualified constructor,
-# constructor, and keyword constructors).  Covers axis cell that
-# would otherwise be silently untested if only the tuple form ran.
-struct P:
-    int x
-    int y
+# cell: PAREN terminator × constructor pattern args + trailing-comma-
+# preserving print() call.  The pattern-arg list in a match arm
+# (`parse_pattern` constructor site) gets fmt-collapsed inline
+# regardless of binding-name length (formatter permissive at that
+# position); this fixture LOCKS the pattern-parse shape's
+# parseability AND the trailing-comma-preserved `print(...)` call at
+# the arm body.  The pattern-site trailing-comma cell is covered
+# end-to-end by the SH bootstrap's fmt sweep round-trip
+# (`sh_bootstrap_stage2_double_free_after_fmt_sweep`).  Filed
+# language-follow-up (formatter permissive stripping of trailing
+# commas at match-arm ctor patterns) — not this brief's fix.
+struct Point:
+    int abscissa_axis_coordinate
+    int ordinate_axis_coordinate
 
-enum E:
-    A(int, int)
-    B(int)
+enum ExtendedResult:
+    ManyValueSuccessCase(int, int, int, int, int, int)
 
 void main():
-    P p = P(3, 4)
-    (int, int) t = (1, 2)
-    match t:
-        case (a, b):
-            print(f"tup {a} {b}")
-        else:
-            print("no")
-    E e = E.A(10, 20)
+    ExtendedResult e = ExtendedResult.ManyValueSuccessCase(10, 20, 30, 40, 50, 60)
     match e:
-        case E.A(x, y):
-            print(f"a {x} {y}")
-        case E.B(v):
-            print(f"b {v}")
+        case ExtendedResult.ManyValueSuccessCase(first_extracted_binding, second_extracted_binding, third_extracted_binding, fourth_extracted_binding, fifth_extracted_binding, sixth_extracted_binding):
+            print(
+                f"{first_extracted_binding} {second_extracted_binding} {third_extracted_binding} {fourth_extracted_binding} {fifth_extracted_binding} {sixth_extracted_binding}",
+            )
         else:
-            print("no")
-    Option[int] o = Some(42)
-    match o:
-        case Some(v):
-            print(f"some {v}")
-        else:
-            print("none")
+            print("no match")

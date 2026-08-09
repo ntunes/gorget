@@ -1,15 +1,38 @@
 # R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
-# cell: PAREN terminator × function definition params.  RED-verifies
-# `parse_params` (parser.gg:4046 pre-fix line).  Multi-param fn declared
-# with trailing comma AND multi-param closure declared with trailing
-# comma — the latter also indirectly exercises the per-iter param_idx
-# counter site (:2540) which our helper-based migration keeps working.
-int add3(int a, int b, int c):
-    return a + b + c
+# cell: PAREN terminator × function definition params (parse_params).
+# RED-verifies the trailing-comma-cascade fix.  Uses many params with
+# long names so `gg fmt --in-place` keeps the param list in its
+# multi-line form with the trailing comma preserved (fixture is stable
+# under formatter canonicalization).  A closure with long params covers
+# the parse_closure_expr site (per-iter param_idx counter axis).
+int sum_seven_ints(
+    int first_input,
+    int second_input,
+    int third_input,
+    int fourth_input,
+    int fifth_input,
+    int sixth_input,
+    int seventh_input,
+):
+    return (first_input
+        + second_input
+        + third_input
+        + fourth_input
+        + fifth_input
+        + sixth_input
+        + seventh_input)
 
 void main():
-    int r = add3(1, 2, 3)
-    print(f"{r}")
-    auto square_sum = (int x, int y): x * x + y * y
-    int s = square_sum(3, 4)
+    int total = sum_seven_ints(1, 2, 3, 4, 5, 6, 7)
+    print(f"{total}")
+    auto square_sum = (
+        int alpha_side_length,
+        int beta_side_length,
+        int gamma_side_length,
+        int delta_side_length,
+    ): (alpha_side_length * alpha_side_length
+        + beta_side_length * beta_side_length
+        + gamma_side_length * gamma_side_length
+        + delta_side_length * delta_side_length)
+    int s = square_sum(1, 2, 3, 4)
     print(f"{s}")

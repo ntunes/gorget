@@ -7,40 +7,65 @@
 # the trailing `,` as demanding a next arg, and its fallback advances past
 # the closing `)`, cascading the sibling ctor into the current arg list.
 #
+# Uses long string args in the outer + inner ctors so `gg fmt --in-place`
+# keeps ALL ctor arg lists (outer + inner) in their multi-line form with
+# trailing commas preserved — fixture stable under formatter
+# canonicalization at BOTH nesting levels.
+#
 # EXPECTED SEMANTIC (both Rust gg and, post-fix, the SH):
-#   Each `Meta(...)` ctor takes exactly its declared count of args (3 for
-#   outer, 2 for inner).  The Vector literal has exactly N entries.  The
-#   cumulative arg count printed matches the sum of declared arg counts.
+#   Each outer `Outer(...)` ctor takes exactly its declared count of args
+#   (4: int + Inner + String + String).  Each inner `Inner(...)` ctor takes
+#   3 args (int + String + String).  The Vector literal has exactly N
+#   entries.  The cumulative arg count matches the sum of declared arg
+#   counts.
 #
 # RED-VERIFY PROCEDURE (Core #12): stub the SH parser's helper by removing
-# the `if self.check_tok(terminator): break` line inside
-# `consume_comma_or_tok` in `tests/fixtures/self_host_lowerer/parser.gg`,
-# then run the SH-touching gates (`self_host_bootstrap_fixed_point`,
+# the `return not self.check_tok(terminator)` line inside
+# `consume_comma_or_tok` in `tests/fixtures/self_host_lowerer/parser.gg`
+# (change to `return true`), then run the SH-touching gates
+# (`self_host_bootstrap_fixed_point`,
 # `sh_bootstrap_stage2_double_free_after_fmt_sweep`).  Expected RED: the
 # SH bootstrap breaks with the pre-fix trailing-comma cascade signature
 # (dummy `Int(0)` args + sibling-ctor swallowing).  Restore.
 struct Inner:
-    int a
-    int b
+    int inner_first_int
+    String inner_second_label
+    String inner_third_description
 
 struct Outer:
-    int tag
-    Inner nested
-    String name
+    int outer_tag
+    Inner outer_nested_inner
+    String outer_second_label
+    String outer_third_description
 
 void main():
     Vector[Outer] xs = [
-        Outer(1, Inner(10, 20), "first"),
-        Outer(2, Inner(30, 40), "second"),
-        Outer(3, Inner(50, 60), "third"),
+        Outer(
+            1,
+            Inner(10, "inner_first_alpha_label", "inner_first_alpha_description"),
+            "outer_first_alpha_label",
+            "outer_first_alpha_description",
+        ),
+        Outer(
+            2,
+            Inner(20, "inner_second_beta_label", "inner_second_beta_description"),
+            "outer_second_beta_label",
+            "outer_second_beta_description",
+        ),
+        Outer(
+            3,
+            Inner(30, "inner_third_gamma_label", "inner_third_gamma_description"),
+            "outer_third_gamma_label",
+            "outer_third_gamma_description",
+        ),
     ]
     print(f"count={xs.len()}")
     int i = 0
     int sum = 0
     while i < xs.len():
         Outer o = xs.get(i).unwrap()
-        sum = sum + o.tag + o.nested.a + o.nested.b
+        sum = sum + o.outer_tag + o.outer_nested_inner.inner_first_int
         i = i + 1
     print(f"sum={sum}")
-    print(f"first={xs.get(0).unwrap().name}")
-    print(f"third={xs.get(2).unwrap().name}")
+    print(f"first_outer_label={xs.get(0).unwrap().outer_second_label}")
+    print(f"third_inner_label={xs.get(2).unwrap().outer_nested_inner.inner_second_label}")
