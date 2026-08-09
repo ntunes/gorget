@@ -1,68 +1,125 @@
 # DURABLE REPRO PROCEDURE for the SH-lowerer stage-2 double-free.
-# Originally filed R37 (2026-08-08) as "triggered by the formatter's bulk
-# canonicalization". R39 Track A Phase 1 (2026-08-09) diagnosis CORRECTED
-# THE MECHANISM: the fmt sweep is NOT the actual trigger — it just
-# accelerates the crash by changing enough sources to shift it earlier.
-# The underlying defect is a self-host NON-CONVERGENCE bug that
-# reproduces on a clean tree at stage-3 WITHOUT ANY fmt sweep:
 #
-#   stage-0 (Rust-compiled SH lowerer) → correct stage-1.c (0 spurious
-#     frees at map_put sites)
-#   stage-1 (SH-compiled from stage-1.c) → BUGGY stage-2.c (136 spurious
-#     frees at map_put sites — algorithm decisions differ from stage-0)
-#   stage-2 (SH-compiled from stage-2.c) → CRASHES with double-free on
-#     invocation (exit 134)
+# R37 (2026-08-08) filed as "triggered by the formatter's bulk
+# canonicalization".
 #
-# GIR-LEVEL DIVERGENCE (verified by R39 Track A on freshly-built binaries
-# from the SAME source at HEAD 8ea74d277):
+# R39 Track A Phase 1 (2026-08-09) claimed the mechanism was corrected —
+# "the fmt sweep is not the trigger; reproduces on a clean tree at
+# stage-3 without ANY fmt sweep". Phase 2 (2026-08-09) RETRACTS that
+# claim: verified against current HEAD (`0ed1c2315`),
+# `self_host_bootstrap_fixed_point` PASSES cleanly WITHOUT the fmt sweep
+# (stage-2.c == stage-3.c, converges at K=2). Phase 1's raw --lir-c-
+# only-cc reproducer skipped the runtime preamble splice; that shape
+# never was a valid clean-tree crash. The fmt sweep IS the trigger.
 #
-#   stage-1 (correct):
-#     call_extern @Dict__..__put(borrow _57, MOVE _38, MOVE _56)
-#     move_zero _38
-#     move_zero _56
+# ── Phase 2 refined diagnosis (fmt sweep required to reproduce):
 #
-#   stage-2 (buggy):
-#     call_extern @Dict__..__put(borrow _57, BORROW _38, BORROW _56)
-#     (no move_zero — args treated as borrows, then scope-exit
-#     drop_if_alive fires on aliased data → UAF)
+# With the fmt sweep applied on the non-SH corpus (as
+# `sh_bootstrap_stage2_double_free_after_fmt_sweep` does), the bootstrap
+# reproduces reliably:
 #
-# The SH lowerer's algorithm decides MOVE when compiled by Rust gg and
-# BORROW when compiled by itself, for the SAME input. R37's diagnosis
-# (missing `wire_liveness_into_modes` OpMove promotion) is refuted at
-# THIS layer: the wire pass in stage-1 correctly emits OpMove +
-# move_zero; the wire pass in stage-2 emits OpBorrow (no move_zero).
-# The divergence is HIGHER up — some construct in the SH lowerer's OWN
-# source lowers to different C behavior in Rust-emit vs SH-emit.
+#   stage-0 (Rust-compiled SH lowerer) → stage-1.c CORRECT (no extra
+#     unconditional frees at consuming-mutator call sites)
+#   stage-1 (SH-compiled from stage-1.c) → stage-2.c BUGGY: emits
+#     UNCONDITIONAL `gorget_string_free(&slot)` after `gorget_map_put`
+#     for values that were moved into the map (drop_elab decided
+#     INITIALIZED instead of UNINITIALIZED for the moved slot)
+#   stage-2 (SH-compiled from stage-2.c) → CRASHES with exit 134
+#     `free(): double free detected in tcache 2`
 #
-# Both stage-1 and stage-2 are individually byte-deterministic (verified
-# via N=3 md5 probe on both). So the fix is NOT a determinism ratchet
-# (Hypothesis A DEAD per R39 Track A byte-consistency probe).
+# ── ASan on the crashing stage-2 binary (aarch64, 2026-08-09):
 #
-# ── R40 (or later) fix path per R39 Track A recommendation:
-#   1. Byte-by-byte diff stage-1.c vs stage-2.c → isolate first divergent
-#      function, reverse-engineer the source line that produced it.
-#   2. Find the SH lowerer's emission for THAT source construct, check
-#      for UB (aliasing, uninitialized read, ABI mismatch, incorrect
-#      ownership tag) in the emitted C.
-#   3. Fix at the write site.
+#   AddressSanitizer: heap-use-after-free
+#   READ at __gorget_hash_str_len ← __gorget_str_key_hash ←
+#         __gorget_map_dense_grow ← gorget_map_put ←
+#         loader___load_imports (self_host_stage2.c:461222)
+#   freed by gorget_string_free ← loader___load_imports (:461226)
+#   allocated by gorget_string_clone_to_owned ← loader___load_imports
+#         (:461215)
 #
-# R40 (Phase 2) reproducer: the executor should regenerate the diagnostic
-# artifacts via the procedure below. Committing them was tried in R39 but
-# would have added ~101 MB of emitted-C to the repo (driver.gg is huge; its
-# stage-2 emission is 1.4M lines) — regeneration is cheap (~7 min for the
-# byte-consistency probe alone) so R40 scout re-derives fresh:
+# The exact bad C in stage-2 at the crash site:
 #
-#   1. Build stage-0 (Rust-compiled SH lowerer): `./target/release/gg build
-#      tests/fixtures/self_host_lowerer/driver.gg -o /tmp/my_stage0`
-#   2. Run stage-0 on driver+lib to emit stage-1.c:
-#      `/tmp/my_stage0 tests/fixtures/self_host_lowerer/driver.gg lib --lir-c
-#      > /tmp/my_probe.c`  # correct output, 0 spurious frees at map_put
-#   3. Compile stage-1 binary: `cc -O0 /tmp/my_probe.c -o /tmp/fresh_stage2`
-#   4. Run stage-1 binary on the same input: `/tmp/fresh_stage2 driver.gg
-#      lib --lir-c > /tmp/fresh_stage3.c`  # 136 spurious frees at map_put
-#   5. Compile stage-2 binary: `cc -O0 /tmp/fresh_stage3.c -o /tmp/fresh_stage3_bin`
-#   6. Run stage-2 binary: `/tmp/fresh_stage3_bin`  # CRASHES exit 134
-#      (double free in tcache 2)
+#   __v112 = gorget_string_clone_to_owned(__v111);   /* alloc */
+#   __s53 = __v112;
+#   gorget_map_put(__v115, &__s53, &__s54);          /* moves __s53 in */
+#   __v119 = &__s53;
+#   gorget_string_free(__v119);                      /* BUG: unconditional */
+#
+# Loop iteration N+1's `gorget_map_put` hashes existing keys → reads the
+# already-freed data from iteration N → UAF.
+#
+# The corresponding SH source at `loader.gg:663` is:
+#   `loaded.put(imp.module_path.clone(), true)`
+#
+# ── Root-cause chain (write site per Core #1):
+#
+# stage-1's `drop_elab.gg::elaborate_block` decides INITIALIZED for the
+# moved-into-map slot where stage-0 correctly decides UNINITIALIZED
+# (moved, delete drop). The chain that should produce UNINITIALIZED:
+#   1. `op_consume` / `decide_operand_at_consuming_arg`
+#      (lower.gg:2603+, :2779+) picks OpMove for the moved arg
+#   2. `wire_liveness_into_modes` (lower_liveness.gg:807-812) emits
+#      `GIMoveZero(lid)` after the moving inst
+#   3. lir_lower translates `GIMoveZero` → `IMoveSlot`
+#   4. `drop_elab::apply_inst_effect` sees `IMoveSlot` → marks slot
+#      Uninitialized → strip guard, delete drop
+#
+# Stage-1's algorithm — implementing THIS SAME chain — produces a wrong
+# result at ONE step. Since ASan on stage-1 binary finds NO memory
+# errors during its execution, the bug is NOT a UB in stage-1's
+# runtime — it's a codegen bug: SH's own compilation of some SH lowerer
+# construct produces C whose runtime SEMANTICS differ from Rust's C for
+# the same source construct, without introducing UB.
+#
+# ── Diff stats (stage-1.c vs stage-2.c, post-fmt-sweep):
+#
+#   +741 extra `gorget_{string,array,map,set}_free` unconditional calls
+#   -431 fewer bool drop-flag storage decls (`bool __coal*` / `bool __s*`)
+#   +2 empty `struct __gg_R` / `struct __gg_W` (unmonomorphized W/R type
+#      params from `write_all[W]`/`reader_drain[R]` in `lib/std/io.gg` —
+#      the `is_generic_placeholder_name` filter at lir_lower.gg:600 lists
+#      T/E/K/V/U but NOT R/W). Independent minor gap; not the crash.
+#
+# ── Phase 2 bisection outcome (partial):
+#
+# Applying fmt to `lib/std/io.gg` ALONE does NOT trigger the crash
+# (bootstrap converges; only the R/W empty-struct additions appear).
+# Some OTHER file(s) in the 1924 fmt-changed files contribute. Full
+# bisection: ~11 rounds × 7min bootstrap = ~1.3h + overhead.
+#
+# ── R40 fix paths:
+#
+# Path A — fmt bisection: narrow to specific file/canonicalization, then
+#   grep the file for the SH construct that miscompiles.
+# Path B — emitter diff: compare
+#   `tests/fixtures/self_host_lowerer/driver.c` (Rust-emit of SH source)
+#   vs freshly-generated stage-1.c (SH-emit) at
+#   `drop_elab___elaborate_block`, `drop_elab___apply_inst_effect`,
+#   `lower_liveness___wire_one_operand`, and
+#   `lower_liveness___rewrite_inst_modes`. Find the specific
+#   instruction sequence that differs. Trace back to SH source. Fix at
+#   the write site.
+#
+# ── R40 reproducer (regeneration, per the wrapper test's shape — NOT
+# the raw --lir-c-only shape Phase 1 originally used, which lacks the
+# runtime preamble and won't cc):
+#
+#   1. `cargo build --release --bin gg`
+#   2. Apply fmt to non-SH corpus (see the wrapper test at
+#      `tests/integration.rs::sh_bootstrap_stage2_double_free_after_fmt_sweep`
+#      for the exact enumeration; script equivalent:
+#      `find tests/fixtures lib examples demo spectests compiler/data \
+#            -name '*.gg' -not -path '*/self_host_*/*' | \
+#         xargs -P 8 -I{} ./target/release/gg fmt --in-place {}`)
+#   3. `rm -f tests/fixtures/self_host_lowerer/driver{,.c}`
+#   4. `GG_BUILD_TIMEOUT_SECS=900 GG_TEST_TIMEOUT_SECS=600 \
+#         cargo test --test integration --release \
+#         self_host_bootstrap_fixed_point`
+#      → REPRODUCES: `stage-2 binary failed: stderr=free(): double free
+#        detected in tcache 2` (~8-10 min from clean cache).
+#   5. To get an ASan trace: cc `/tmp/self_host_stage2.c` with
+#      `-fsanitize=address -O0 -w -g` and run it against
+#      `tests/fixtures/self_host_lowerer/driver.gg lib --lir-c`.
 #
 # ── Original filing framing (R37, superseded but preserved):
 # Orthogonal to D27 — reproduces against the retired `!` glyph too, so
