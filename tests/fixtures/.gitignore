@@ -14,4 +14,6 @@
 !**/*.expected
 !**/*.txt
 !**/*.lock
+!**/*.md
+!**/*.sh
 !.gitignore
