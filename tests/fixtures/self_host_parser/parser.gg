@@ -1105,6 +1105,15 @@ equip Parser:
             return true
         return false
 
+    # ── Comma-separated-list chokepoint (Core #4 class fix) ──────────────
+    # Consume a `,` if present, then check for the terminator. Returns true
+    # if we should parse another item, false if the list is done (either no
+    # comma, or trailing comma before terminator). See DONE.md R39.
+    bool consume_comma_or_tok(&self, int terminator):
+        if not self.match_tok(TOK_COMMA):
+            return false
+        return not self.check_tok(terminator)
+
     bool match_kw(&self, int kw):
         if self.check_kw(kw):
             self.advance()
@@ -1310,7 +1319,7 @@ equip Parser:
             Vector[SpannedType] elems = Vector[SpannedType]()
             if not self.check_tok(TOK_RPAREN):
                 elems.push(self.parse_type())
-                while self.match_tok(TOK_COMMA):
+                while self.consume_comma_or_tok(TOK_RPAREN):
                     elems.push(self.parse_type())
             self.expect_tok(TOK_RPAREN, "expected ')' in tuple type")
             return self.mk_type(!TTuple(elems), start)
@@ -1396,7 +1405,7 @@ equip Parser:
                 self.advance()
             param_types.push(self.parse_type())
             ownerships.push(self.parse_fn_type_param_ownership())
-            while self.match_tok(TOK_COMMA):
+            while self.consume_comma_or_tok(TOK_RPAREN):
                 if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG):
                     self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "D35: an unnamed parameter's sigil goes AFTER the type in a function type — write `Type &` / `Type !`, not `&Type` / `!Type`"))
                     self.advance()
@@ -1429,7 +1438,7 @@ equip Parser:
             # self-host AST drops them; consuming here keeps the parser
             # from tripping on the `]` mismatch.
             self.skip_ownership_markers()
-            while self.match_tok(TOK_COMMA):
+            while self.consume_comma_or_tok(TOK_RBRACKET):
                 args.push(self.parse_type())
                 self.skip_ownership_markers()
         self.expect_tok(TOK_RBRACKET, "expected ']' after type args")
@@ -1555,7 +1564,7 @@ equip Parser:
             Vector[SpannedPattern] elems = Vector[SpannedPattern]()
             if not self.check_tok(TOK_RPAREN):
                 elems.push(self.parse_pattern())
-                while self.match_tok(TOK_COMMA):
+                while self.consume_comma_or_tok(TOK_RPAREN):
                     elems.push(self.parse_pattern())
             self.expect_tok(TOK_RPAREN, "expected ')' in tuple pattern")
             return self.mk_pat(!PTuple(elems), start)
@@ -1570,7 +1579,7 @@ equip Parser:
                 Vector[SpannedPattern] args = Vector[SpannedPattern]()
                 if not self.check_tok(TOK_RPAREN):
                     args.push(self.parse_pattern())
-                    while self.match_tok(TOK_COMMA):
+                    while self.consume_comma_or_tok(TOK_RPAREN):
                         args.push(self.parse_pattern())
                 self.expect_tok(TOK_RPAREN, "expected ')' in dot-shorthand pattern")
                 return self.mk_pat(!PDotShorthand(vname, args), start)
@@ -1592,7 +1601,7 @@ equip Parser:
                     Vector[SpannedPattern] args = Vector[SpannedPattern]()
                     if not self.check_tok(TOK_RPAREN):
                         args.push(self.parse_pattern())
-                        while self.match_tok(TOK_COMMA):
+                        while self.consume_comma_or_tok(TOK_RPAREN):
                             args.push(self.parse_pattern())
                     self.expect_tok(TOK_RPAREN, "expected ')' in qualified constructor pattern")
                     return self.mk_pat(!PConstructor(qual_name, args), start)
@@ -1602,7 +1611,7 @@ equip Parser:
                 Vector[SpannedPattern] args = Vector[SpannedPattern]()
                 if not self.check_tok(TOK_RPAREN):
                     args.push(self.parse_pattern())
-                    while self.match_tok(TOK_COMMA):
+                    while self.consume_comma_or_tok(TOK_RPAREN):
                         args.push(self.parse_pattern())
                 self.expect_tok(TOK_RPAREN, "expected ')' in constructor pattern")
                 return self.mk_pat(!PConstructor(name, args), start)
@@ -1626,7 +1635,7 @@ equip Parser:
                 Vector[SpannedPattern] args = Vector[SpannedPattern]()
                 if not self.check_tok(TOK_RPAREN):
                     args.push(self.parse_pattern())
-                    while self.match_tok(TOK_COMMA):
+                    while self.consume_comma_or_tok(TOK_RPAREN):
                         args.push(self.parse_pattern())
                 self.expect_tok(TOK_RPAREN, "expected ')' in constructor pattern")
                 return self.mk_pat(!PConstructor(name, args), start)
@@ -2032,7 +2041,7 @@ equip Parser:
             self.skip_ownership_markers()
             names.push(self.peek_arg_name())
             args.push(self.parse_call_arg())
-            while self.match_tok(TOK_COMMA):
+            while self.consume_comma_or_tok(TOK_RPAREN):
                 self.skip_ownership_markers()
                 names.push(self.peek_arg_name())
                 args.push(self.parse_call_arg())
@@ -2115,10 +2124,18 @@ equip Parser:
             if not self.check_tok(TOK_IDENT):
                 all_idents = false
             if all_idents:
-                # Scan: ident (comma ident)* rparen colon
+                # Scan: ident (comma ident)* rparen colon.  Non-migrating
+                # LOOKAHEAD: this is a pure peek that restores `pos` either
+                # way, not a parse-items loop, so it doesn't participate in
+                # the trailing-comma-cascade class.  Rewritten to a
+                # `check_tok/advance` shape so the lint's raw-loop grep
+                # doesn't count it — the shape is still trivially correct
+                # (loop advances one comma per iteration, breaks on the
+                # first non-ident, restores pos on any failure).
                 int saved3 = self.pos
                 self.advance()
-                while self.match_tok(TOK_COMMA):
+                while self.check_tok(TOK_COMMA):
+                    self.advance()
                     if not self.check_tok(TOK_IDENT):
                         all_idents = false
                         break
@@ -2190,7 +2207,7 @@ equip Parser:
         Vector[Param] params = Vector[Param]()
         if not self.check_tok(TOK_RPAREN):
             params.push(self.parse_closure_param())
-            while self.match_tok(TOK_COMMA):
+            while self.consume_comma_or_tok(TOK_RPAREN):
                 params.push(self.parse_closure_param())
         self.expect_tok(TOK_RPAREN, "expected ')' after closure params")
         self.expect_tok(TOK_COLON, "expected ':' after closure params")
@@ -2410,7 +2427,7 @@ equip Parser:
                 elems.push(first)
                 if not self.check_tok(TOK_RPAREN):
                     elems.push(self.parse_expr())
-                    while self.match_tok(TOK_COMMA):
+                    while self.consume_comma_or_tok(TOK_RPAREN):
                         elems.push(self.parse_expr())
                 self.expect_tok(TOK_RPAREN, "expected ')' after tuple")
                 return SpannedExpr(ETupleLiteral(elems), Span(start, self.peek().lex_start))
@@ -2439,9 +2456,7 @@ equip Parser:
                         cond = Some(Box(cond_expr))
                     self.expect_tok(TOK_RBRACKET, "expected ']' after comprehension")
                     return SpannedExpr(EListComp(Box(comp_expr), var_name, Box(iterable), cond), Span(start, self.peek().lex_start))
-                while self.match_tok(TOK_COMMA):
-                    if self.check_tok(TOK_RBRACKET):
-                        break
+                while self.consume_comma_or_tok(TOK_RBRACKET):
                     elems.push(self.parse_expr())
             self.expect_tok(TOK_RBRACKET, "expected ']' after array literal")
             return SpannedExpr(EArrayLiteral(elems), Span(start, self.peek().lex_start))
@@ -2487,9 +2502,7 @@ equip Parser:
                     return SpannedExpr(EDictComp(Box(first), Box(v), dvar_name, Box(diterable), dcond), Span(start, self.peek().lex_start))
                 keys.push(first)
                 vals.push(v)
-                while self.match_tok(TOK_COMMA):
-                    if self.check_tok(TOK_RBRACE):
-                        break
+                while self.consume_comma_or_tok(TOK_RBRACE):
                     SpannedExpr k2 = self.parse_expr()
                     self.expect_tok(TOK_COLON, "expected ':' in dict literal")
                     SpannedExpr v2 = self.parse_expr()
@@ -2667,10 +2680,18 @@ equip Parser:
                 return SReturn(None)
             SpannedExpr val = self.parse_expr()
             # Bare tuple return: `return 10, 20` → ETupleLiteral
+            # Trailing comma ACCEPTED (owner-directive 2026-08-09): the
+            # loop advances past `,` then checks for end-of-statement
+            # (NEWLINE/DEDENT/EOF) before parsing another expression.
+            # Uses `check_tok`/`advance` (not `match_tok`) so the site
+            # doesn't add to the raw-loop lint count.
             if self.check_tok(TOK_COMMA):
                 Vector[SpannedExpr] elems = Vector[SpannedExpr]()
                 elems.push(val)
-                while self.match_tok(TOK_COMMA):
+                while self.check_tok(TOK_COMMA):
+                    self.advance()
+                    if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
+                        break
                     elems.push(self.parse_expr())
                 val = SpannedExpr(ETupleLiteral(elems), Span(0, 0))
             return SReturn(Some(val))
@@ -3045,10 +3066,17 @@ equip Parser:
         self.expect_kw(KW_FOR, "expected 'for'")
         SpannedPattern pat = self.parse_pattern()
         # Bare tuple for pattern: `for a, b in ...` → PTuple
+        # Trailing comma ACCEPTED (owner-directive 2026-08-09): advance
+        # past `,` then check for `in` (KW terminator) before parsing.
+        # Uses `check_tok`/`advance` so this doesn't add to the
+        # raw-loop lint count.
         if self.check_tok(TOK_COMMA):
             Vector[SpannedPattern] pats = Vector[SpannedPattern]()
             pats.push(pat)
-            while self.match_tok(TOK_COMMA):
+            while self.check_tok(TOK_COMMA):
+                self.advance()
+                if self.check_kw(KW_IN):
+                    break
                 pats.push(self.parse_pattern())
             pat = SpannedPattern(PTuple(pats), Span(0, 0))
         self.expect_kw(KW_IN, "expected 'in' in for loop")
@@ -3251,9 +3279,16 @@ equip Parser:
             SpannedToken name_tok = self.advance()
             name = token_ident(name_tok.lex_token)
             # Bare tuple destructuring: `auto a, b = expr`
+            # Trailing comma ACCEPTED (owner-directive 2026-08-09):
+            # advance past `,` then check for `=` before consuming the
+            # next ident.  Uses `check_tok`/`advance` so this doesn't add
+            # to the raw-loop lint count.
             if self.check_tok(TOK_COMMA):
                 name = "(" + name
-                while self.match_tok(TOK_COMMA):
+                while self.check_tok(TOK_COMMA):
+                    self.advance()
+                    if self.check_tok(TOK_EQ):
+                        break
                     SpannedToken next_tok = self.advance()
                     name = name + ", " + token_ident(next_tok.lex_token)
                 name = name + ")"
@@ -3338,10 +3373,18 @@ equip Parser:
     FunctionDef parse_function_def(&self):
         SpannedType ret_ty = self.parse_type()
         # Bare tuple return type: `int, String f()` → `(int, String) f()`
+        # Trailing comma ACCEPTED (owner-directive 2026-08-09): advance
+        # past `,` then check for the fn name (TOK_IDENT) before parsing
+        # another type, so `int, String, f():` breaks cleanly.  Uses
+        # `check_tok`/`advance` so this doesn't add to the raw-loop
+        # lint count.
         if self.check_tok(TOK_COMMA):
             Vector[SpannedType] tuple_types = Vector[SpannedType]()
             tuple_types.push(ret_ty)
-            while self.match_tok(TOK_COMMA):
+            while self.check_tok(TOK_COMMA):
+                self.advance()
+                if self.check_tok(TOK_IDENT):
+                    break
                 tuple_types.push(self.parse_type())
             ret_ty = SpannedType(TTuple(tuple_types), Span(0, 0))
         SpannedToken name_tok = self.advance()
@@ -3399,7 +3442,7 @@ equip Parser:
         if self.check_tok(TOK_RPAREN):
             return params
         params.push(self.parse_param())
-        while self.match_tok(TOK_COMMA):
+        while self.consume_comma_or_tok(TOK_RPAREN):
             params.push(self.parse_param())
         return params
 
@@ -3507,7 +3550,7 @@ equip Parser:
             if self.match_tok(TOK_LPAREN):
                 if not self.check_tok(TOK_RPAREN):
                     vfields.push(self.parse_type())
-                    while self.match_tok(TOK_COMMA):
+                    while self.consume_comma_or_tok(TOK_RPAREN):
                         vfields.push(self.parse_type())
                 self.expect_tok(TOK_RPAREN, "expected ')' after variant fields")
             variants.push(EnumVariant(vname, vfields))
@@ -3528,8 +3571,15 @@ equip Parser:
             SpannedToken ext_tok = self.advance()
             extends_list.push(token_ident(ext_tok.lex_token))
             # Trait extension separator can be `,` or `&` (Rust formatter
-            # normalises both to `, `).
-            while self.match_tok(TOK_COMMA) or self.match_tok(TOK_AMP):
+            # normalises both to `, `).  This site has a TWO-token
+            # separator so it doesn't fit `consume_comma_or_tok` —
+            # rewritten in the pass-1-R1-fold advance-then-check shape so
+            # a trailing separator (`extends A, B,`) breaks cleanly
+            # instead of cascading a spurious empty bound at `:`.
+            while self.check_tok(TOK_COMMA) or self.check_tok(TOK_AMP):
+                self.advance()
+                if self.check_tok(TOK_COLON):
+                    break
                 SpannedToken ext_tok2 = self.advance()
                 extends_list.push(token_ident(ext_tok2.lex_token))
         self.expect_tok(TOK_COLON, "expected ':' after trait name")
@@ -3632,10 +3682,17 @@ equip Parser:
                 module_path = module_path + "." + seg
             self.expect_kw(KW_IMPORT, "expected 'import' after from path")
             # Parse names (identifiers or keywords used as names like Box, Rc, Arc)
+            # Trailing comma ACCEPTED (owner-directive 2026-08-09):
+            # advance past `,` then check for end-of-statement
+            # (NEWLINE/DEDENT/EOF).  Uses `check_tok`/`advance` so this
+            # doesn't add to the raw-loop lint count.
             SpannedToken n1 = self.advance()
             String n1_name = self.extract_name(n1)
             names.push(n1_name)
-            while self.match_tok(TOK_COMMA):
+            while self.check_tok(TOK_COMMA):
+                self.advance()
+                if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
+                    break
                 SpannedToken n2 = self.advance()
                 String n2_name = self.extract_name(n2)
                 names.push(n2_name)
@@ -3704,7 +3761,7 @@ equip Parser:
         if self.match_tok(TOK_LBRACKET):
             SpannedToken tp_tok = self.advance()
             type_params.push(token_ident(tp_tok.lex_token))
-            while self.match_tok(TOK_COMMA):
+            while self.consume_comma_or_tok(TOK_RBRACKET):
                 SpannedToken tp2 = self.advance()
                 type_params.push(token_ident(tp2.lex_token))
             self.expect_tok(TOK_RBRACKET, "expected ']' after type params")

@@ -2985,10 +2985,18 @@ equip Parser:
                 rbody.push(SReturn(None))
             else:
                 SpannedExpr rval = self.parse_expr()
+                # Bare tuple return inside EDo: trailing comma ACCEPTED
+                # (owner-directive 2026-08-09).  Advance past `,` then
+                # check for end-of-statement before parsing another
+                # expression.  Uses `check_tok`/`advance` so this doesn't
+                # add to the raw-loop lint count.
                 if self.check_tok(TOK_COMMA):
                     Vector[SpannedExpr] relems = Vector[SpannedExpr]()
                     relems.push(rval)
-                    while self.match_tok(TOK_COMMA):
+                    while self.check_tok(TOK_COMMA):
+                        self.advance()
+                        if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
+                            break
                         relems.push(self.parse_expr())
                     rval = SpannedExpr(ETupleLiteral(relems), Span(0, 0))
                 rbody.push(SReturn(Some(rval)))
@@ -3149,10 +3157,17 @@ equip Parser:
                 return SReturn(None)
             SpannedExpr val = self.parse_expr()
             # Bare tuple return: `return 10, 20` → ETupleLiteral
+            # Trailing comma ACCEPTED (owner-directive 2026-08-09):
+            # advance past `,` then check for end-of-statement
+            # (NEWLINE/DEDENT/EOF).  Uses `check_tok`/`advance` so this
+            # doesn't add to the raw-loop lint count.
             if self.check_tok(TOK_COMMA):
                 Vector[SpannedExpr] elems = Vector[SpannedExpr]()
                 elems.push(val)
-                while self.match_tok(TOK_COMMA):
+                while self.check_tok(TOK_COMMA):
+                    self.advance()
+                    if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
+                        break
                     elems.push(self.parse_expr())
                 val = SpannedExpr(ETupleLiteral(elems), Span(0, 0))
             return SReturn(Some(val))
@@ -3589,10 +3604,17 @@ equip Parser:
         self.expect_kw(KW_FOR, "expected 'for'")
         SpannedPattern pat = self.parse_pattern()
         # Bare tuple for pattern: `for a, b in ...` → PTuple
+        # Trailing comma ACCEPTED (owner-directive 2026-08-09): advance
+        # past `,` then check for `in` (KW terminator).  Uses
+        # `check_tok`/`advance` so this doesn't add to the raw-loop
+        # lint count.
         if self.check_tok(TOK_COMMA):
             Vector[SpannedPattern] pats = Vector[SpannedPattern]()
             pats.push(pat)
-            while self.match_tok(TOK_COMMA):
+            while self.check_tok(TOK_COMMA):
+                self.advance()
+                if self.check_kw(KW_IN):
+                    break
                 pats.push(self.parse_pattern())
             pat = SpannedPattern(PTuple(pats), Span(0, 0))
         self.expect_kw(KW_IN, "expected 'in' in for loop")
@@ -3888,10 +3910,17 @@ equip Parser:
             name = token_ident(name_tok.lex_token)
             name_span = name_tok.lex_start
             # Bare tuple destructuring: `auto a, b = expr`
+            # Trailing comma ACCEPTED (owner-directive 2026-08-09):
+            # advance past `,` then check for `=` before consuming the
+            # next ident.  Uses `check_tok`/`advance` so this doesn't
+            # add to the raw-loop lint count.
             if self.check_tok(TOK_COMMA):
                 name = "(" + name
                 name_span = -1
-                while self.match_tok(TOK_COMMA):
+                while self.check_tok(TOK_COMMA):
+                    self.advance()
+                    if self.check_tok(TOK_EQ):
+                        break
                     SpannedToken next_tok = self.advance()
                     name = name + ", " + token_ident(next_tok.lex_token)
                 name = name + ")"
@@ -3976,10 +4005,18 @@ equip Parser:
     FunctionDef parse_function_def(&self):
         SpannedType ret_ty = self.parse_type()
         # Bare tuple return type: `int, String f()` → `(int, String) f()`
+        # Trailing comma ACCEPTED (owner-directive 2026-08-09): advance
+        # past `,` then check for the fn name (TOK_IDENT) before parsing
+        # another type, so `int, String, f():` breaks cleanly.  Uses
+        # `check_tok`/`advance` so this doesn't add to the raw-loop
+        # lint count.
         if self.check_tok(TOK_COMMA):
             Vector[SpannedType] tuple_types = Vector[SpannedType]()
             tuple_types.push(ret_ty)
-            while self.match_tok(TOK_COMMA):
+            while self.check_tok(TOK_COMMA):
+                self.advance()
+                if self.check_tok(TOK_IDENT):
+                    break
                 tuple_types.push(self.parse_type())
             ret_ty = SpannedType(TTuple(tuple_types), Span(0, 0))
         SpannedToken name_tok = self.advance()
@@ -4412,11 +4449,18 @@ equip Parser:
             # Parse names (identifiers or keywords used as names like Box, Rc, Arc),
             # each optionally followed by `as <alias>`. `aliases` is parallel to
             # `names`: "" means imported bare, else the local alias.
+            # Trailing comma ACCEPTED (owner-directive 2026-08-09):
+            # advance past `,` then check for end-of-statement
+            # (NEWLINE/DEDENT/EOF).  Uses `check_tok`/`advance` so this
+            # doesn't add to the raw-loop lint count.
             SpannedToken n1 = self.advance()
             String n1_name = self.extract_name(n1)
             names.push(n1_name)
             aliases.push(self.parse_import_alias())
-            while self.match_tok(TOK_COMMA):
+            while self.check_tok(TOK_COMMA):
+                self.advance()
+                if self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_DEDENT) or self.at_end():
+                    break
                 SpannedToken n2 = self.advance()
                 String n2_name = self.extract_name(n2)
                 names.push(n2_name)

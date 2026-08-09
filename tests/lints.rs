@@ -12050,11 +12050,13 @@ fn formatter_literal_arms_dispatch_count() {
 }
 
 /// Round XXXIX Phase 2e Core #6 producer-chokepoint guard: every
-/// COMMA-SEPARATED-LIST parse in the SH parser (`parse_call_args`,
-/// `parse_type_args`, dict / array / tuple literals, function params,
-/// closure params, variant fields, pattern args, etc.) MUST route
-/// through the `Parser::consume_comma_or_tok` chokepoint (or one of
-/// the intentionally-remaining sibling shapes enumerated below).
+/// COMMA-SEPARATED-LIST parse in each of the THREE SH parser copies
+/// (`self_host_{typechecker,parser,resolver}/parser.gg` — see
+/// tests/fixtures/self_host_lowerer/parser.gg which symlinks to the
+/// typechecker copy) MUST route through the shared
+/// `Parser::consume_comma_or_tok(&self, int terminator)` chokepoint
+/// (or one of the intentionally-remaining sibling shapes enumerated
+/// below).
 ///
 /// **Root defect (R37+ SH-lowerer stage-2 double-free — see DONE.md R39
 /// entry):** the raw pattern
@@ -12066,89 +12068,92 @@ fn formatter_literal_arms_dispatch_count() {
 /// past the `)` and returns a dummy `EIntLiteral(0)`, and the OUTER
 /// parser then treats the next sibling ctor as a further arg of the
 /// current one — silently swallowing whole subtrees.  The class defect
-/// spans 20+ sites in `parser.gg`; Rust gg's parser accepts trailing
-/// commas at these positions and the formatter emits them.
+/// spans 20+ sites per copy; Rust gg's parser accepts trailing commas
+/// at these positions and the formatter emits them.
 ///
-/// **Class fix (Core #4 chokepoint):** the accepting sites route through
-/// `Parser::consume_comma_or_tok(terminator)` — one shared helper whose
-/// body performs the `match_tok(TOK_COMMA)` + `check_tok(terminator)`
-/// pair correctly.  Any new comma-separated-list site added later MUST
-/// use the helper; the lint catches a REGRESSION that adds a raw
-/// `while self.match_tok(TOK_COMMA):` back into `parser.gg`.
+/// **Class fix (Core #4 chokepoint):** all accepting sites route
+/// through `Parser::consume_comma_or_tok(terminator)` — one shared
+/// helper per copy whose body performs the `match_tok(TOK_COMMA)` +
+/// `check_tok(terminator)` pair correctly.  The owner-directed
+/// REJECTING sites (previously left raw with cascade behavior) were
+/// migrated in a second pass (owner call 2026-08-09) to ACCEPT
+/// trailing commas via inline `while check_tok(TOK_COMMA): advance;
+/// if check_<TERM>: break; ...` rewrites — 6 sites in the
+/// typechecker copy (return-tuple / for-bindings / auto-tuple /
+/// fn-return-type / import list / EDo return-tuple), 5 in the
+/// parser copy (parser copy has no EDo variant), 5 in the resolver
+/// copy (same as parser).
 ///
-/// **RAW SITES INTENTIONALLY LEFT (Core #15b — the SET, not a selection).**
-/// After the migration, 6 raw `while self.match_tok(TOK_COMMA):` loops
-/// remain in `parser.gg`.  All 6 are at positions where Rust gg REJECTS
-/// a trailing comma with a clean single-error rejection — the SH mirrors
-/// that behavior (the natural error from `parse_pattern`/`parse_expr`
-/// failing on the next token IS the rejection).  These 6 stay outside
-/// the helper so the SH stays symmetric with Rust; making them ACCEPT
-/// trailing commas is a filed language-design follow-up, not this
-/// brief's fix.
-///   1. return-tuple in `EDo` block   (`parse_expr` KW_RETURN branch)
-///   2. return-tuple in statement     (`parse_statement` KW_RETURN branch)
-///   3. for-loop bare-tuple bindings  (`parse_for_stmt`, KW_IN terminator)
-///   4. auto-tuple destructure name   (`parse_var_decl`, TOK_EQ terminator)
-///   5. fn return-type bare tuple     (`parse_function_def`, TOK_IDENT terminator)
-///   6. `from X import a, b, ...`     (`parse_import_stmt`, NEWLINE/DEDENT)
+/// **Any new comma-separated-list site added later MUST use the
+/// helper**; the lint catches a REGRESSION that adds a raw
+/// `while self.match_tok(TOK_COMMA):` back into ANY of the three copies.
 ///
-/// Two additional sites carry the pattern but do not match the grep:
-///   a. **Trait `extends A, B` / `A & B` two-separator loop** —
-///      `parse_trait_item` rewritten to `while (self.check_tok(TOK_COMMA)
-///      or self.check_tok(TOK_AMP))` + advance-then-check-then-parse,
-///      matching the pass-1-R1 fold from the brief.
-///   b. **Closure-syntax lookahead in `is_untyped_closure_ahead`** —
-///      pure PEEK/RESTORE scan, not a parse-items loop, rewritten to
-///      `while self.check_tok(TOK_COMMA): self.advance() ...` so the
-///      guard's grep doesn't count it.
+/// **RAW SITES INTENTIONALLY LEFT (post-owner-directive migration):**
+/// After the two-pass migration, every copy has EXACTLY ZERO raw
+/// `while self.match_tok(TOK_COMMA):` loops — every comma-list parse
+/// either routes through `consume_comma_or_tok(TOK_TERM)` (for
+/// paren/bracket/brace terminators) or through a
+/// `while check_tok(TOK_COMMA): advance; if check_<TERM>: break; ...`
+/// inline rewrite (for KW / NEWLINE / TOK_EQ / TOK_IDENT terminators
+/// and the trait `extends A, B & C` two-separator variant).
 ///
-/// **Break-and-verify (Core #6 / #15e Q2 — the guard must catch its own
-/// class):** add a fake raw `while self.match_tok(TOK_COMMA):` anywhere
-/// in `parser.gg` OUTSIDE the 6 documented sites and re-run — the
-/// assertion fires with a count mismatch.  Restore.
+/// **Break-and-verify (Core #6 / #15e Q2 — the guard must catch its
+/// own class):** add a fake raw `while self.match_tok(TOK_COMMA):`
+/// anywhere in ANY of the three parser copies and re-run — the
+/// assertion fires with a count mismatch on that copy.  Restore.
 #[test]
 fn self_host_parser_comma_loops_go_through_helper() {
-    /// After Phase 2e migration + rewrites: 6 raw loops at positions
-    /// where Rust gg rejects trailing commas.  See the docstring above
-    /// for the enumeration and the two rewritten-shape carve-outs.
-    /// Bump ONLY when a NEW raw site is added at a Rust-rejecting
-    /// position (documented above), or when one of the 6 is refactored
-    /// to accept trailing commas (post-brief follow-up).
-    const EXPECTED_RAW_COMMA_LOOPS: usize = 6;
+    /// Post-migration: zero raw loops in every SH parser copy.
+    /// Bump ONLY when the language semantics change to REJECT
+    /// trailing commas at some position, and the fix is a raw
+    /// `while match_tok(TOK_COMMA):` (unlikely — the inline
+    /// `while check_tok/advance` shape rejects cleanly without
+    /// matching the grep).
+    const EXPECTED_RAW_COMMA_LOOPS_PER_COPY: usize = 0;
 
-    let path = "tests/fixtures/self_host_typechecker/parser.gg";
-    let content = fs::read_to_string(path)
-        .unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+    let paths = [
+        "tests/fixtures/self_host_typechecker/parser.gg",
+        "tests/fixtures/self_host_parser/parser.gg",
+        "tests/fixtures/self_host_resolver/parser.gg",
+    ];
 
-    let mut count = 0usize;
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('#') {
-            continue;
+    for path in paths.iter() {
+        let content = fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+
+        let mut count = 0usize;
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with('#') {
+                continue;
+            }
+            if trimmed.contains("while ") && trimmed.contains("match_tok(TOK_COMMA)") {
+                count += 1;
+            }
         }
-        if trimmed.contains("while ") && trimmed.contains("match_tok(TOK_COMMA)") {
-            count += 1;
-        }
+
+        assert_eq!(
+            count, EXPECTED_RAW_COMMA_LOOPS_PER_COPY,
+            "R39 Phase 2e Core #4 producer-chokepoint guard: raw \
+             `while ... match_tok(TOK_COMMA)` loops in `{path}` = {count}, \
+             expected {EXPECTED_RAW_COMMA_LOOPS_PER_COPY}.\n\n\
+             Every comma-separated-list parse in the SH parser MUST route \
+             through `Parser::consume_comma_or_tok(terminator)` — the \
+             shared chokepoint that pairs `match_tok(TOK_COMMA)` with a \
+             `check_tok(terminator)` break to prevent the R37+ SH-lowerer \
+             stage-2 double-free cascade.  Sites at owner-directed \
+             ACCEPTING positions with non-token (KW/NEWLINE/EQ/IDENT) \
+             terminators use the `while check_tok(TOK_COMMA): advance; \
+             if check_<TERM>: break; ...` inline rewrite — that shape \
+             does NOT match this grep.\n\n\
+             If you added a NEW raw loop, migrate it: either call \
+             `consume_comma_or_tok(TOK_TERM)` (for paren/bracket/brace \
+             terminators) or use the `while check_tok/advance` inline \
+             shape (for keyword or non-single-token terminators). \
+             The three parser copies must stay symmetric — a fix in one \
+             copy must be mirrored to the other two."
+        );
     }
-
-    assert_eq!(
-        count, EXPECTED_RAW_COMMA_LOOPS,
-        "R39 Phase 2e Core #4 producer-chokepoint guard: raw \
-         `while ... match_tok(TOK_COMMA)` loops in `{path}` = {count}, \
-         expected {EXPECTED_RAW_COMMA_LOOPS}.\n\n\
-         Every comma-separated-list parse where trailing commas are \
-         ACCEPTED (Rust-parity) MUST route through \
-         `Parser::consume_comma_or_tok(terminator)` — the shared \
-         chokepoint that pairs `match_tok(TOK_COMMA)` with a \
-         `check_tok(terminator)` break to prevent the R37+ SH-lowerer \
-         stage-2 double-free cascade.\n\n\
-         If a new raw loop legitimately joins the 6 REJECTING sites \
-         (documented above the assertion), bump EXPECTED with a \
-         citation.  If a REJECTING site is migrated to the helper as a \
-         follow-up, decrement.  Do NOT add a raw loop for a NEW \
-         accepting position — call `consume_comma_or_tok(TOK_TERM)` \
-         instead."
-    );
 }
 
 /// Round XXXVII D27 Round A Phase 3 (Core #6 shrink-only ratchet): a
