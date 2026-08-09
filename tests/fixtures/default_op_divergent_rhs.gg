@@ -1,0 +1,16 @@
+# Round XXXIX Track E: divergent RHS carve-out preserved under Option B.
+# `Option[T] ?? panic(...)` / `?? return` yield inner T; the diverging RHS
+# means the else branch has no merge edge, so result_id stays inner-typed
+# as before.
+int early_return_default(Option[int] a):
+    int r = a ?? return -1
+    return r * 2
+
+int main():
+    # LHS Some — Some path taken, returns 10.
+    int r1 = early_return_default(Some(5))
+    print(r1)  # 10
+    # LHS None — RHS `return -1` diverges out of the function.
+    int r2 = early_return_default(None())
+    print(r2)  # -1
+    return 0

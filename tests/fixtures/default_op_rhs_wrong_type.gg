@@ -1,0 +1,9 @@
+# Round XXXIX Track E: NEG fixture — RHS is neither the inner `T` (unwrap)
+# nor the same carrier shape (peel-outer) nor divergent. Must be rejected
+# at check time with E_DefaultOpRhsTypeMismatch (retires the miscompile
+# class that used to size-truncate the else-branch store).
+int main():
+    Option[int] a = Some(1)
+    String s = a ?? "wrong"
+    print(s)
+    return 0

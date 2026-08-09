@@ -33,10 +33,10 @@ from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
 from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, RTRef, get_rtype_at, get_int_at
 from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
 from resolve import ResolveContext
-from infer import infer_expr_type, infer_closure_return_type
+from infer import infer_expr_type, infer_closure_return_type, default_op_carrier_inner_type, default_op_carrier_shape_equals
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name, primitive_satisfies_trait
 from std.conv import int_to_str
-from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound, DkAmpInOperandPosition, DkMoveInOperandPosition
+from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkDefaultOpRhsTypeMismatch, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound, DkAmpInOperandPosition, DkMoveInOperandPosition
 from format_types import describe_type
 
 # ── Fallback def lookup by name ──────────────────────────────
@@ -680,6 +680,45 @@ void check_default_op_lhs(SpannedExpr lhs, int scope_id, ScopeTable scopes, Type
         return
     if not carrier_op_is_option_or_result(lhs_type, scopes, types):
         ctx.diagnostics.push(Diagnostic.error(lhs.span, DkDefaultOpNonOptional(), "default operator `??` requires an `Option` or `Result` left-hand side"))
+
+# Round XXXIX Track E (owner ruling Option B + LAZY 2026-08-09): the RHS of
+# `??` must be one of {inner `T` (unwrap), same carrier shape (peel-outer for
+# `a ?? b ?? default`), or divergent}. Anything else silently size-truncated
+# in the lowering else-branch — SIGSEGV / miscompile (Rust mirror at
+# `src/semantic/typecheck.rs Expr::DefaultOp`, R39 Track E). Enforcing here
+# retires the class; sibling of `check_default_op_lhs`. Helpers
+# `default_op_carrier_inner_type` / `default_op_carrier_shape_equals` are
+# imported from infer.gg (single source of truth — Layering rule 3).
+void check_default_op_rhs(SpannedExpr lhs, SpannedExpr rhs, int scope_id, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
+    int lhs_type = infer_expr_type(lhs, scopes, &types, &ctx)
+    if carrier_op_suppress(lhs_type, types):
+        return
+    if not carrier_op_is_option_or_result(lhs_type, scopes, types):
+        return  # LHS reject is emitted by check_default_op_lhs; skip
+    int rhs_type = infer_expr_type(rhs, scopes, &types, &ctx)
+    if carrier_op_suppress(rhs_type, types):
+        return  # Var / error / never — divergent RHS is legal
+    int inner_t = default_op_carrier_inner_type(lhs_type, types)
+    bool inner_match = false
+    if inner_t >= 0:
+        inner_match = (inner_t == rhs_type)
+    bool carrier_match = default_op_carrier_shape_equals(lhs_type, rhs_type, types)
+    if not inner_match and not carrier_match:
+        ctx.diagnostics.push(Diagnostic.error(rhs.span, DkDefaultOpRhsTypeMismatch(), "right-hand side of `??` must be the inner `T` (unwrap), the same carrier shape (peel-outer for `a ?? b ?? default`), or divergent"))
+        return
+    # SH-lane gap (Core #9): the SH lowerer does NOT yet implement the
+    # Option-preserving shape (extract-and-wrap in the Some/Ok branch) because
+    # the SH GIR lacks a direct enum-init instruction — accepting a
+    # carrier-matching RHS would produce C that GCC rejects with
+    # "incompatible types when assigning to 'int64_t' from 'Option__int64_t'"
+    # (empirically verified by the R39 Track E output-review). Reject
+    # explicitly here with a lane-specific message so the failure is a loud
+    # check-time reject (Core #8 reference-grade), not a loud C-emit build-fail
+    # or, worse, silent miscompilation. The Rust lane accepts this shape (owner
+    # Option B ratification 2026-08-09); the SH lane will follow when the GIR
+    # grows the enum-init primitive it needs.
+    if carrier_match and not inner_match:
+        ctx.diagnostics.push(Diagnostic.error(rhs.span, DkDefaultOpRhsTypeMismatch(), "Option-preserving `??` (carrier-matching RHS) is not yet supported on the self-host lane — rewrite as `a ?? (b ?? default)` (right-nested) or use an unwrapped RHS; the SH lane will accept this shape once its GIR grows direct enum-init"))
 
 # Reject `*x` when `x` is not a `Box[T]` (with the same suppression). Peels a
 # single RTRef wrapper (`*(&box)`), mirroring infer.gg's EDeref arm.
@@ -2480,6 +2519,7 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             check_safety_expr(*right, scope_id, &state, &scopes, &types, &ctx)
             if op == "??":
                 check_default_op_lhs(SpannedExpr((*left).expr, (*left).span), scope_id, scopes, &types, &ctx)
+                check_default_op_rhs(SpannedExpr((*left).expr, (*left).span), SpannedExpr((*right).expr, (*right).span), scope_id, scopes, &types, &ctx)
             # E_UnsupportedOperator for arith / bitwise binary ops (Rust
             # BinaryOp arm, compound=false). Non-arith ops (`==`, `and`, `in`,
             # `??`) fall through operator_supported_for_type as supported.
@@ -2876,6 +2916,7 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             check_safety_expr(*left, scope_id, &state, &scopes, &types, &ctx)
             check_safety_expr(*right, scope_id, &state, &scopes, &types, &ctx)
             check_default_op_lhs(SpannedExpr((*left).expr, (*left).span), scope_id, scopes, &types, &ctx)
+            check_default_op_rhs(SpannedExpr((*left).expr, (*left).span), SpannedExpr((*right).expr, (*right).span), scope_id, scopes, &types, &ctx)
         case EAwait(inner):
             check_safety_expr(*inner, scope_id, &state, &scopes, &types, &ctx)
         case ESpawn(inner):

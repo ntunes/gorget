@@ -1487,6 +1487,11 @@ impl<'a> TypeChecker<'a> {
                             | SemanticErrorKind::NotAStruct { .. }
                             | SemanticErrorKind::TupleIndexOutOfBounds { .. }
                             | SemanticErrorKind::EnumerateOnNonIterator { .. }
+                            // Round XXXIX Track E: `??` RHS-type reject (Option B
+                            // chain-friendly). A genuine "the RHS is the wrong
+                            // carrier/inner-type" reject — never the unify-noise
+                            // TypeMismatch was the original swallow-reason for.
+                            | SemanticErrorKind::DefaultOpRhsTypeMismatch { .. }
                     )
                 }));
                 for seg in &s.segments {
@@ -4053,7 +4058,70 @@ impl<'a> TypeChecker<'a> {
                     );
                     return self.types.error_id;
                 }
-                rhs_type // unwrapped type
+                // Round XXXIX Track E (owner Option B chain-friendly + LAZY
+                // ratification 2026-08-09): RHS may be inner `T` (unwrapping
+                // form), the SAME carrier shape (peel-outer for `a ?? b ??
+                // default`), or divergent. Anything else silently size-truncated
+                // in the IR-lowering else-branch — a Core #1 write-site defect
+                // upstream of the SIGSEGV on `Option[int] ?? Option[int] ??
+                // int` (repro at `known_gaps/default_op_left_nested_chain_segv.gg`,
+                // graduated same round to `default_op_option_rhs_accepted.gg`).
+                //
+                // Layering rule 3 (one source of truth): the typechecker writes
+                // the CANONICAL result type into `expr_types`; the IR lowering
+                // reads it and picks the shape switch (`Expr::DefaultOp` arm at
+                // `src/ir/lowering/exprs/mod.rs`). No independent re-inference
+                // in the lowering.
+                let resolved_rhs = self.resolve_type(rhs_type);
+                let rhs_suppressed = matches!(self.types.get(resolved_rhs), ResolvedType::Var(_))
+                    || resolved_rhs == self.types.error_id
+                    || resolved_rhs == self.types.never_id;
+                let inner_t = self.default_op_inner_type(resolved_lhs);
+                // Pin the LHS's canonical semantic type on its span so the IR
+                // lowering can decide the shape switch without independent
+                // re-inference. TypeIds are interned; equality with the outer
+                // expr's canonical is the discriminator.
+                self.expr_types.insert(lhs.span, resolved_lhs);
+                if rhs_suppressed {
+                    // Var / error / divergent — carve-out. Result type is the
+                    // inner `T` (or fall back to the LHS carrier if inner
+                    // extraction failed, e.g. for a still-inference LHS).
+                    let canonical = inner_t.unwrap_or(resolved_lhs);
+                    self.expr_types.insert(expr.span, canonical);
+                    return canonical;
+                }
+                let carrier_match = self.default_op_rhs_matches_carrier(resolved_lhs, resolved_rhs);
+                let inner_match = inner_t
+                    .map(|t| self.resolve_type(t) == resolved_rhs)
+                    .unwrap_or(false);
+                if !carrier_match && !inner_match {
+                    let expected = match inner_t {
+                        Some(t) => format!(
+                            "`{}` (unwrapped) or `{}` (matching left)",
+                            self.describe_resolved_type(t),
+                            self.describe_resolved_type(resolved_lhs),
+                        ),
+                        None => format!(
+                            "`{}` (matching left)",
+                            self.describe_resolved_type(resolved_lhs),
+                        ),
+                    };
+                    self.error(
+                        SemanticErrorKind::DefaultOpRhsTypeMismatch {
+                            expected,
+                            actual: self.describe_resolved_type(rhs_type),
+                        },
+                        expr.span,
+                    );
+                    return self.types.error_id;
+                }
+                let canonical = if carrier_match {
+                    resolved_lhs
+                } else {
+                    inner_t.unwrap_or(rhs_type)
+                };
+                self.expr_types.insert(expr.span, canonical);
+                canonical
             }
 
             Expr::Move { expr: inner }
@@ -8669,6 +8737,69 @@ impl<'a> TypeChecker<'a> {
             ResolvedType::Generic(def_id, _) | ResolvedType::Defined(def_id) => {
                 let name = &self.scopes.get_def(*def_id).name;
                 name == "Option" || name == "Result"
+            }
+            _ => false,
+        }
+    }
+
+    /// Round XXXIX Track E: extract the inner `T` of an `Option[T]` /
+    /// `Result[T,E]` carrier — variant 0's payload type. Returns `None` for a
+    /// non-carrier type or a carrier whose T is unrecoverable. Used by the
+    /// `Expr::DefaultOp` arm to (a) validate an unwrap-form RHS and (b) label
+    /// the canonical type in `expr_types` so the IR lowering can pick the
+    /// right shape (Layering rule 3 — one source of truth). Reads type args
+    /// directly rather than going through `resolve_user_enum_field_types`
+    /// because for the prelude Option/Result the shape is fixed.
+    fn default_op_inner_type(&self, carrier_type: TypeId) -> Option<TypeId> {
+        let resolved = self.resolve_type(carrier_type);
+        match self.types.get(resolved) {
+            ResolvedType::Generic(def_id, args) => {
+                let name = &self.scopes.get_def(*def_id).name;
+                if name == "Option" || name == "Result" {
+                    args.first().copied()
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Round XXXIX Track E: true iff `rhs_type` matches the LHS carrier shape
+    /// (`Option[T] × Option[T]` with T equal, or `Result[T,E] × Result[T,E]`
+    /// with T AND E equal). Used by the `Expr::DefaultOp` arm to accept
+    /// `Option[T] ?? Option[T]` (Option B, ratified 2026-08-09) — the RHS
+    /// peels one carrier layer for chain-friendly `a ?? b ?? default`. For
+    /// Result, E-must-match (a mismatched E would size-truncate the else-branch
+    /// store on the E variant — reference-grade reject).
+    ///
+    /// Structural equality by TypeId after top-level resolve. Types are
+    /// interned via `intern_generic`, so identical shapes share IDs. Nested
+    /// Vars would produce a false-negative here; the fall-through then emits
+    /// `E_DefaultOpRhsTypeMismatch`, which is safe (the user rewrites the
+    /// annotation) — not a soundness issue.
+    fn default_op_rhs_matches_carrier(&self, lhs_type: TypeId, rhs_type: TypeId) -> bool {
+        let lhs = self.resolve_type(lhs_type);
+        let rhs = self.resolve_type(rhs_type);
+        match (self.types.get(lhs), self.types.get(rhs)) {
+            (
+                ResolvedType::Generic(l_def, l_args),
+                ResolvedType::Generic(r_def, r_args),
+            ) => {
+                if l_def != r_def {
+                    return false;
+                }
+                let name = &self.scopes.get_def(*l_def).name;
+                if name != "Option" && name != "Result" {
+                    return false;
+                }
+                if l_args.len() != r_args.len() {
+                    return false;
+                }
+                l_args
+                    .iter()
+                    .zip(r_args.iter())
+                    .all(|(&la, &ra)| self.resolve_type(la) == self.resolve_type(ra))
             }
             _ => false,
         }

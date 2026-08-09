@@ -459,6 +459,19 @@ pub enum SemanticErrorKind {
     /// the wrong carrier type" guard class; AGENTS.md Core invariant #8.)
     DefaultOpNonOptional { type_: String },
 
+    /// Round XXXIX Track E (owner ruling 2026-08-09, Option B chain-friendly).
+    /// `lhs ?? rhs` where `lhs` is `Option[T]`/`Result[T,E]` but `rhs`'s type is
+    /// neither the inner `T` (unwrap), nor the same carrier shape (peel-outer for
+    /// `a ?? b ?? default`), nor divergent (`throw`/`return`/`panic`). Pre-fix
+    /// the typechecker returned `rhs_type` UNCHECKED — so `Option[int] ?? String`
+    /// typed as `String` at the semantic layer while the IR lowering committed to
+    /// inner `int`. The size-truncating store into the inner-typed result slot
+    /// then read wild bytes as a struct tag on the outer `??` and SIGSEGV'd
+    /// (Round XXXIX Track E scout, `known_gaps/default_op_left_nested_chain_segv.gg`).
+    /// Enforcing at typecheck retires the class; sibling of `DefaultOpNonOptional`
+    /// (same guard family — carrier-op typing enforcement).
+    DefaultOpRhsTypeMismatch { expected: String, actual: String },
+
     /// D10(a) (docs/define-gorget/decisions.md, ratified 2026-07-06):
     /// a mutable borrow (`&expr`) bound to a name — `auto r = &b`,
     /// `Vector[int] r = &b.data`, `r = &b`, or a module-level
@@ -1000,6 +1013,7 @@ impl SemanticErrorKind {
             SemanticErrorKind::EnumerateOnNonIterator { .. } => "E_EnumerateOnNonIterator",
             SemanticErrorKind::DerefNonBox { .. } => "E_DerefNonBox",
             SemanticErrorKind::DefaultOpNonOptional { .. } => "E_DefaultOpNonOptional",
+            SemanticErrorKind::DefaultOpRhsTypeMismatch { .. } => "E_DefaultOpRhsTypeMismatch",
             SemanticErrorKind::LocalBorrowBind => "E_LocalBorrowBind",
             SemanticErrorKind::AmpInOperandPosition => "E_AmpInOperandPosition",
             SemanticErrorKind::MoveInOperandPosition => "E_MoveInOperandPosition",
@@ -1217,6 +1231,14 @@ impl std::fmt::Display for SemanticError {
                     f,
                     "default operator `??` requires an `Option` or `Result` \
                      left-hand side, but `{type_}` is neither"
+                )
+            }
+            SemanticErrorKind::DefaultOpRhsTypeMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "right-hand side of `??` must be {expected}, but got `{actual}` — \
+                     `??` either unwraps (`Option[T] ?? T`) or peels one carrier layer \
+                     (`Option[T] ?? Option[T]`, for `a ?? b ?? default` chains)"
                 )
             }
             SemanticErrorKind::LocalBorrowBind => {

@@ -1,0 +1,22 @@
+# Round XXXIX Track E: three-Option chain `Option[int] ?? Option[int] ??
+# Option[int]` → `Option[int]` (peel-outer, Option B). Distinct from
+# `default_op_option_rhs_accepted.gg` which ends in an `int` unwrap; this
+# pins the CARRIER-PRESERVING chain, ending in Some(_) or None() rather
+# than an unwrapped int.
+Option[int] pick_or(Option[int] a, Option[int] b, Option[int] c):
+    return a ?? b ?? c
+
+int main():
+    Option[int] r1 = pick_or(None(), None(), Some(7))
+    Option[int] r2 = pick_or(None(), None(), None())
+    match r1:
+        case Some(v):
+            print(v)
+        case None():
+            print(-1)
+    match r2:
+        case Some(v):
+            print(v)
+        case None():
+            print(-1)
+    return 0

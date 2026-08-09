@@ -981,6 +981,30 @@ fn lower_expr_inner(
             // source's payload field, preventing the alias. The None-branch
             // assigns rhs_val (already typed T) into result_id with a mode
             // chosen to avoid shallow-copy when T is a resource.
+            //
+            // Round XXXIX Track E (owner Option B chain-friendly + LAZY
+            // ratification 2026-08-09): the typechecker also allows
+            // `Option[T] ?? Option[T]` (peel-outer for `a ?? b ?? default`
+            // chains). When the RHS is the SAME carrier shape, `result_id`
+            // must be typed as the LHS carrier (Option[T]) — NOT the inner T
+            // — or the else-branch's assign silently size-truncates the
+            // Option struct into an int slot and the outer `??` reads garbage
+            // (SIGSEGV, `known_gaps/default_op_left_nested_chain_segv.gg` →
+            // graduated to `default_op_option_rhs_accepted.gg`).
+            //
+            // Layering rule 3 (one source of truth): the typechecker records
+            // the CANONICAL result type in `expr_types` — this arm reads it,
+            // never re-infers. `canonical == lhs_semantic_type` ⇒ Option-preserving
+            // shape; otherwise inner-T shape. TypeIds are interned; equality
+            // is reliable.
+            //
+            // LAZY-RHS (owner ratification 2026-08-09): RHS is lowered INSIDE
+            // the else-branch (post-`switch_to(else_bb)`). This preserves the
+            // existing lazy semantic — `x ?? expensive()` only calls
+            // `expensive()` when `x` is None. DO NOT hoist RHS lowering above
+            // `switch_to(else_bb)` under either shape. Regression fixture:
+            // `default_op_lazy_rhs.gg` — moved earlier, then break-and-verify
+            // confirmed RED, then restored (Core #12(b) authoring obligation).
             let lhs_val = lower_expr(ctx, builder, lhs);
             let raw_lhs_type = infer_operand_type_full(ctx, &lhs_val, builder);
             // Non-Copy params pass by pointer (`*Option[T]`); peel one layer
@@ -1016,6 +1040,25 @@ fn lower_expr_inner(
                 }
                 found.unwrap_or_else(|| (String::from("Some"), lhs_type))
             };
+
+            // Layering rule 3: read canonical type from typechecker's
+            // `expr_types` output (single source of truth). If canonical
+            // matches the LHS's semantic type, the outer `??` preserves the
+            // carrier shape (`Option[T] ?? Option[T]` → `Option[T]`);
+            // otherwise it unwraps (`Option[T] ?? T` → `T`, or divergent RHS).
+            // Both spans were populated by the DefaultOp arm in typecheck.rs.
+            let option_preserving = match (
+                ctx.analysis.expr_types.get(&expr.span),
+                ctx.analysis.expr_types.get(&lhs.span),
+            ) {
+                (Some(&canonical), Some(&lhs_sem)) => canonical == lhs_sem,
+                _ => false,
+            };
+
+            // The `result_id` slot type — Option[T] carrier if preserving,
+            // inner T otherwise. Both branches will assign a value of this
+            // type into `result_id`.
+            let result_type = if option_preserving { lhs_type } else { inner_type };
 
             // Pick the right staging shape for the source.
             //   (a) Source is a bare named local that owns its data — use
@@ -1084,48 +1127,97 @@ fn lower_expr_inner(
                 Operand::Constant(Constant::I32(0)),
             );
 
-            // result_id typed T (the inner type) — NOT Option[T].
-            let result_id = builder.add_local(inner_type, None);
+            // result_id typed by shape: Option[T] carrier under Option B
+            // (peel-outer) or inner T under unwrap.
+            let result_id = builder.add_local(result_type, None);
             let then_bb = builder.new_block();
             let else_bb = builder.new_block();
             let merge_bb = builder.new_block();
 
             builder.branch(FunctionBuilder::copy(is_some), then_bb, else_bb);
 
-            // Some/Ok path: extract field 0 with Move semantics (zeros the
-            // source's payload field), then Move the extracted T into
-            // result_id. The extracted local owns the bytes after
-            // enum_field_load_move — mark Owned + register for drop so the
-            // Tier 2a "AssignIntoOwnedSlot from untracked source" validator
-            // sees a tracked Owned source on the subsequent Move.
+            // Some/Ok path.
+            //   Inner-T shape: extract field 0 with Move semantics (zeros the
+            //     source's payload field), then Move the extracted T into
+            //     result_id. The extracted local owns the bytes after
+            //     enum_field_load_move — mark Owned + register for drop so
+            //     the Tier 2a "AssignIntoOwnedSlot from untracked source"
+            //     validator sees a tracked Owned source on the subsequent
+            //     Move.
+            //   Option-preserving shape: extract T with Move, then re-wrap
+            //     as `Some(extracted)` / `Ok(extracted)` into result_id. The
+            //     wrap preserves the Option/Result struct shape so the outer
+            //     consumer reads a well-typed carrier (not a truncated i64).
+            //     Extract-and-wrap over move-whole-scrut avoids invalidating
+            //     the caller's original LHS local (the source retains its
+            //     zeroed-payload carrier for scope-exit drop, matching the
+            //     inner-T path's ownership discipline).
             builder.switch_to(then_bb);
-            // scrut is now always owned (the borrowed-source clone above
-            // forces it). Move-extract zeros source's Some_0 and gives us
-            // an owned T; Move-assign that into result_id.
-            let extracted = builder.enum_field_load_move(
-                scrut_place.clone(),
-                variant_name,
-                0,
-                inner_type,
-            );
-            if ctx.type_registry.is_resource_type(inner_type) {
-                ctx.set_owned(builder, extracted);
-                builder.assign_mode(
-                    crate::ir::instructions::AssignMode::Move,
-                    Place::local(result_id),
-                    FunctionBuilder::copy(extracted),
+            if option_preserving {
+                // Extract T via move (zeros scrut's payload) then rewrap in
+                // the LHS carrier via the ownership-aware init chokepoint.
+                let extracted = builder.enum_field_load_move(
+                    scrut_place.clone(),
+                    &variant_name,
+                    0,
+                    inner_type,
                 );
+                if ctx.type_registry.is_resource_type(inner_type) {
+                    ctx.set_owned(builder, extracted);
+                }
+                let carrier_type_name = ctx
+                    .type_registry
+                    .type_name(lhs_type)
+                    .unwrap_or_default();
+                let wrapped = ctx.emit_enum_init_owned(
+                    builder,
+                    &carrier_type_name,
+                    &variant_name,
+                    lhs_type,
+                    vec![FunctionBuilder::copy(extracted)],
+                    None,
+                );
+                if ctx.type_registry.is_resource_type(result_type) {
+                    ctx.set_owned(builder, wrapped);
+                    builder.assign_mode(
+                        crate::ir::instructions::AssignMode::Move,
+                        Place::local(result_id),
+                        FunctionBuilder::copy(wrapped),
+                    );
+                } else {
+                    builder.assign(Place::local(result_id), FunctionBuilder::copy(wrapped));
+                }
             } else {
-                builder.assign(Place::local(result_id), FunctionBuilder::copy(extracted));
+                // scrut is now always owned (the borrowed-source clone above
+                // forces it). Move-extract zeros source's Some_0 and gives us
+                // an owned T; Move-assign that into result_id.
+                let extracted = builder.enum_field_load_move(
+                    scrut_place.clone(),
+                    variant_name,
+                    0,
+                    inner_type,
+                );
+                if ctx.type_registry.is_resource_type(inner_type) {
+                    ctx.set_owned(builder, extracted);
+                    builder.assign_mode(
+                        crate::ir::instructions::AssignMode::Move,
+                        Place::local(result_id),
+                        FunctionBuilder::copy(extracted),
+                    );
+                } else {
+                    builder.assign(Place::local(result_id), FunctionBuilder::copy(extracted));
+                }
             }
             builder.jump(merge_bb);
 
             // None path: lower rhs and assign into result_id. Move mode for
             // resource T so a fresh-constructed rhs (e.g. `JsValue.Undefined`)
-            // doesn't shallow-alias result_id.
+            // doesn't shallow-alias result_id. RHS lowering STAYS inside the
+            // else block — LAZY semantic (owner ratification 2026-08-09):
+            // `x ?? expensive()` only invokes `expensive()` when x is None.
             builder.switch_to(else_bb);
             let rhs_val = lower_expr(ctx, builder, rhs);
-            if ctx.type_registry.is_resource_type(inner_type) {
+            if ctx.type_registry.is_resource_type(result_type) {
                 builder.assign_mode(
                     crate::ir::instructions::AssignMode::Move,
                     Place::local(result_id),
@@ -1137,11 +1229,11 @@ fn lower_expr_inner(
             builder.jump(merge_bb);
 
             builder.switch_to(merge_bb);
-            // Register result_id for drop when T needs one (resource T).
+            // Register result_id for drop when result_type needs one.
             // result_id owns the data after either branch — Some-path moved
-            // it out of lhs_local, None-path moved it from a fresh rhs.
-            if ctx.type_registry.needs_drop(inner_type) {
-                ctx.drops.register_local(result_id, inner_type, &ctx.type_registry);
+            // it out of scrut, None-path moved it from a fresh rhs.
+            if ctx.type_registry.needs_drop(result_type) {
+                ctx.drops.register_local(result_id, result_type, &ctx.type_registry);
                 ctx.set_owned(builder, result_id);
             }
             FunctionBuilder::copy(result_id)

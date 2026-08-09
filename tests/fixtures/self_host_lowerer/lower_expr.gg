@@ -2544,9 +2544,18 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 if qq_variant != "":
                     int qq_inner_tid = qq_ec.ok_type
                     String qq_recv_tn = local_type_name(qq_lhs, ctx, &gmod)
-                    # Result slot holds the inner T (NOT the Option/Result), so
-                    # both arms store a T value and the merge is T-typed —
-                    # mirrors Rust typing result_id as inner_type (:894).
+                    # Round XXXIX Track E: this arm ONLY lowers the inner-T
+                    # (unwrap) shape. The Option-preserving shape (owner
+                    # Option B, Rust src/ir/lowering/exprs/mod.rs) is
+                    # unreachable here because SH TC's `check_default_op_rhs`
+                    # explicitly REJECTS carrier-matching RHS with a
+                    # lane-specific E_DefaultOpRhsTypeMismatch (SH GIR lacks
+                    # direct enum-init; loud check-time reject > loud C-emit
+                    # build-fail, Core #8 + #10). Pinned by
+                    # `self_host_driver_rejects_default_op_option_preserving_sh_lane_gap`
+                    # in tests/integration.rs. When SH GIR grows enum-init,
+                    # remove the SH TC reject AND add the extract-and-wrap
+                    # branch here (mirror of the Rust arm).
                     int qq_dst = add_local(&ctx, qq_inner_tid, None)
                     int qq_scr_ptr = match_scrutinee_ptr(&ctx, &gmod, qq_lhs)
                     int qq_tag = emit_tag_read(&ctx, qq_scr_ptr, qq_recv_tn, &gmod)
@@ -2568,6 +2577,8 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # (block_terms still GTNone), mirroring lower_match_expr's
                     # divergent-arm gate. A divergent rhs contributes no merge
                     # edge; a value rhs is moved/copied into the T-typed slot.
+                    # LAZY: RHS lowered INSIDE the else block — do NOT hoist
+                    # (owner ratification 2026-08-09).
                     switch_to(&ctx, qq_else_bb)
                     int qq_rhs = lower_expr(&ctx, *rhs_box, &gmod)
                     match ctx.block_terms.get(ctx.current_block).unwrap():
