@@ -1534,7 +1534,7 @@ pub enum EnumKind {
     /// Not an enum — regular struct.
     #[default]
     NotEnum,
-    /// Option-like enum: `{tag, Some_0}`. Tag 0 = None, tag != 0 = has payload.
+    /// Option-like enum: `{tag, Some_0}`. Tag 0 = Some (has payload), Tag 1 = None.
     Option,
     /// Result-like enum: `{tag, Ok_0, Error_0}`. Two payload variants.
     Result,
