@@ -3,7 +3,7 @@
 This chapter covers how a multi-file Gorget program becomes a single AST, and how external dependencies are fetched and pinned. Four Rust modules own this subsystem:
 
 - `src/loader.rs` — the **module loader**: turns `import` statements into a filesystem walk, parses each `.gg` file, detects cycles, and merges everything into one `Module` for semantic analysis.
-- `src/manifest.rs` — `manifest.toml` (package metadata + declared dependencies).
+- `src/manifest.rs` — `gorget.toml` (package metadata + declared dependencies).
 - `src/lockfile.rs` — `gorget.lock` (pinned, fully-resolved dependency graph).
 - `src/resolver.rs` — the **package/dependency resolver**: walks declared deps, fetches git/path sources, detects dependency cycles and version conflicts, writes the lockfile.
 
@@ -17,11 +17,11 @@ The driver wiring that calls all four lives in `src/main.rs` (`load_imports` at 
 
 For `gg build foo.gg`, the driver does, in order:
 
-1. **Resolve dependencies** (`resolve_deps_for_file`, `src/main.rs:96`): walk up from the source file looking for `manifest.toml`; if found and it declares deps, call `resolver::resolve` to produce/validate the lockfile, then `resolver::build_dep_paths` to get a `package-name → source-dir` map.
+1. **Resolve dependencies** (`resolve_deps_for_file`, `src/main.rs:96`): walk up from the source file looking for `gorget.toml`; if found and it declares deps, call `resolver::resolve` to produce/validate the lockfile, then `resolver::build_dep_paths` to get a `package-name → source-dir` map.
 2. **Load & merge** (`load_imports`, `src/main.rs:33`): construct a `ModuleLoader` (with the dep paths from step 1), call `load_all`, then `merge_modules`.
 3. Hand the merged `Module` to semantic analysis.
 
-Steps 1 and 2 are independent: a single-file program with no `manifest.toml` skips straight to step 2 with an empty dep map (`resolve_deps_for_file` returns `HashMap::new()` at `src/main.rs:116`).
+Steps 1 and 2 are independent: a single-file program with no `gorget.toml` skips straight to step 2 with an empty dep map (`resolve_deps_for_file` returns `HashMap::new()` at `src/main.rs:116`).
 
 ---
 
@@ -115,11 +115,11 @@ The single `Module` from `merge_modules` is what every later pass consumes. The 
 
 ---
 
-## Manifest — `manifest.toml`
+## Manifest — `gorget.toml`
 
-The filename and format are ruled by **D44**: the manifest is `manifest.toml`, and it is declarative TOML rather than Gorget source, because its readers are not all `gg` — registries, CI, editors and auditors read it too, and dependency resolution must be able to obtain metadata without executing anything. The pre-D44 name `gorget.toml` is still accepted with a deprecation warning.
+The filename and format are ruled by **D44**: the manifest is `gorget.toml`, and it is declarative TOML rather than Gorget source, because its readers are not all `gg` — registries, CI, editors and auditors read it too, and dependency resolution must be able to obtain metadata without executing anything.
 
-The name lives at one source of truth: `manifest::MANIFEST_NAME`, reached through `manifest_path_in` and `find_manifest_in`. No call site spells the string. `find_manifest_in` returns `(path, is_legacy)` and prefers the canonical name, so a project that has both files gets the new one's contents rather than a merge of the two.
+The name lives at one source of truth: `manifest::MANIFEST_NAME`, reached through `manifest_path_in` and `find_manifest_in`. No call site spells the string, so changing the filename is a one-constant edit rather than a sweep across the driver, the resolver and the manifest module.
 
 Visibility does **not** key off this file. The privacy unit is the directory (**D43**); the manifest governs dependencies and versioning only. That separation is deliberate — it keeps a mislocated manifest a packaging error rather than something that silently rescopes declarations.
 
@@ -130,7 +130,7 @@ Visibility does **not** key off this file. The privacy unit is the directory (**
 - `Git { git, tag?, branch?, rev? }` — `http-router = { git = "…", tag = "v1.2.0" }`
 - `Path { path }` — `utils = { path = "../shared/utils" }`
 
-`find_project_root` (`src/manifest.rs:104`) walks up from a starting path until it finds a directory containing `manifest.toml` — this is how the driver locates the manifest from an arbitrary source file. `Manifest::new` (`src/manifest.rs:91`) seeds version `"0.1.0"`; `gg init` writes it via `cmd_init` (`src/main.rs:2089`), which also scaffolds `main.gg` and `.gitignore`.
+`find_project_root` (`src/manifest.rs:104`) walks up from a starting path until it finds a directory containing `gorget.toml` — this is how the driver locates the manifest from an arbitrary source file. `Manifest::new` (`src/manifest.rs:91`) seeds version `"0.1.0"`; `gg init` writes it via `cmd_init` (`src/main.rs:2089`), which also scaffolds `main.gg` and `.gitignore`.
 
 ---
 
@@ -158,7 +158,7 @@ Otherwise it resolves from scratch via `resolve_deps` (`src/resolver.rs:130`), a
 
 For each dep:
 
-- **Path deps** (`src/resolver.rs:153`): canonicalize the path (relative to the importing manifest's dir), read the dep's own `manifest.toml` for its version (defaulting to `"0.0.0"` if absent), and record `source = "path+<rel>"`.
+- **Path deps** (`src/resolver.rs:153`): canonicalize the path (relative to the importing manifest's dir), read the dep's own `gorget.toml` for its version (defaulting to `"0.0.0"` if absent), and record `source = "path+<rel>"`.
 - **Git deps** (`src/resolver.rs:181`): `resolve_git_ref` (`src/resolver.rs:246`) turns the requested ref into a commit hash. An explicit `rev` is used verbatim; otherwise `git ls-remote` resolves `refs/tags/<tag>`, `refs/heads/<branch>`, or `HEAD`. `fetch_git_dep` (`src/resolver.rs:299`) then shallow-clones into `<cache>/git/<url_hash>/<commit>` (skipping the clone if already cached, `src/resolver.rs:319`) and checks out the commit. Source is recorded as `git+<url>#<commit>`.
 
 After resolving a dep, the resolver reads the dep's *transitive* dependencies from its manifest (`src/resolver.rs:214`) and **recurses** (`src/resolver.rs:235`), so the lockfile captures the full transitive graph.
@@ -173,7 +173,7 @@ The CLI surface — `gg init` (`src/main.rs:2089`), `gg new` (`src/main.rs:2136`
 
 ## In the self-host
 
-The self-host frontend has a Gorget reimplementation of the **module loader** at `tests/fixtures/self_host_lowerer/loader.gg` (`load_imports`, `loader.gg:527`). It does *not* reimplement the package resolver, the manifest, or the lockfile — there is **no self-host coverage of `manifest.toml`/`gorget.lock`/git fetching**; the self-host always resolves modules from a local dir or an embedded `lib` dir. It is wired into the self-host pipeline by `tests/fixtures/self_host_lowerer/driver.gg` (`from loader import load_imports`, `driver.gg:10`; called at `driver.gg:52`). A second copy lives at `tests/fixtures/self_host_check/loader.gg` (the two copies have diverged in size).
+The self-host frontend has a Gorget reimplementation of the **module loader** at `tests/fixtures/self_host_lowerer/loader.gg` (`load_imports`, `loader.gg:527`). It does *not* reimplement the package resolver, the manifest, or the lockfile — there is **no self-host coverage of `gorget.toml`/`gorget.lock`/git fetching**; the self-host always resolves modules from a local dir or an embedded `lib` dir. It is wired into the self-host pipeline by `tests/fixtures/self_host_lowerer/driver.gg` (`from loader import load_imports`, `driver.gg:10`; called at `driver.gg:52`). A second copy lives at `tests/fixtures/self_host_check/loader.gg` (the two copies have diverged in size).
 
 Architectural parity and the notable divergences:
 

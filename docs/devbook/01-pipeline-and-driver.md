@@ -229,7 +229,7 @@ by a `--trace`/`directive trace` build) into an HTML report via
 
 ### Package commands: `init` / `new` / `add` / `remove`
 Thin wrappers over `src/manifest.rs` / `src/resolver` / `src/lockfile.rs`:
-- `init` writes `manifest.toml`, a starter `main.gg`, and a `.gitignore` in the
+- `init` writes `gorget.toml`, a starter `main.gg`, and a `.gitignore` in the
   cwd (`cmd_init`, `src/main.rs:2089`).
 - `new <name>` creates the directory, `cd`s in, and runs `init`
   (`cmd_new`, `src/main.rs:2136`).
@@ -239,7 +239,7 @@ Thin wrappers over `src/manifest.rs` / `src/resolver` / `src/lockfile.rs`:
   `src/main.rs:2235`).
 
 Dependency resolution for any build is bootstrapped by `resolve_deps_for_file`
-(`src/main.rs:96`): walk up for `manifest.toml`, resolve, and build the
+(`src/main.rs:96`): walk up for `gorget.toml`, resolve, and build the
 `name → path` map that the loader consults. Covered in Chapter 22.
 
 ## The REPL / TUI

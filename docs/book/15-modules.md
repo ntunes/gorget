@@ -71,7 +71,7 @@ Each `.gg` file is a module. The file name becomes the module name:
 
 ```
 myproject/
-    manifest.toml
+    gorget.toml
     main.gg           # entry point
     config.gg         # module: config
     utils.gg          # module: utils
@@ -157,7 +157,7 @@ Some types and functions are always available without imports:
 gg new myproject
 ```
 
-Creates `manifest.toml`:
+Creates `gorget.toml`:
 
 ```toml
 [package]
@@ -172,15 +172,14 @@ gg add http-client --git https://github.com/user/http-client.git --tag v1.0
 gg add utils --path ../shared/utils
 ```
 
-Dependencies are recorded in `manifest.toml` and locked in `gorget.lock` for
+Dependencies are recorded in `gorget.toml` and locked in `gorget.lock` for
 reproducible builds.
 
 The manifest is plain TOML rather than Gorget source (D44 — the manifest file).
 It is data, not a program: `gg` must be able to read a package's name, version
 and dependencies *without running anything*, and so must every other tool that
 looks at your project. Build steps that need real logic belong in code, not in
-the manifest. If you have an older project using the previous name
-`gorget.toml`, it still works — `gg` reads it and warns you to rename it.
+the manifest.
 
 ### Removing Dependencies
 

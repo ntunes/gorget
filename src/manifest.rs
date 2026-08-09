@@ -100,55 +100,25 @@ impl Manifest {
 }
 
 /// The manifest filename (D44). Every site that needs to name the manifest reads
-/// this constant or calls [`manifest_path_in`] — never spells the string inline,
-/// so the name lives at one source of truth.
-pub const MANIFEST_NAME: &str = "manifest.toml";
-
-/// The pre-D44 manifest filename, still accepted with a deprecation warning.
+/// this constant or calls [`manifest_path_in`] / [`find_manifest_in`] — never
+/// spells the string inline, so the name lives at one source of truth.
 ///
-/// Kept only so existing checkouts (including the dogfood apps in sibling
-/// worktrees) do not break silently on the rename — and "silently" is the
-/// operative risk: a manifest that fails to load is currently DISCARDED by
-/// `src/main.rs`'s `if let Ok(manifest)`, surfacing as a misleading
-/// "cannot read '<dir>/<dep>.gg'" rather than anything about the manifest.
-/// Removal is filed in `TODO.md`; delete this constant and
-/// [`legacy_manifest_path_in`] together with the warning at its call site.
-pub const LEGACY_MANIFEST_NAME: &str = "gorget.toml";
+/// D44 briefly renamed this to `manifest.toml` and then reverted: the rename's
+/// only argument was that `manifest.toml` names the file's role, which is an
+/// argument against `package.toml` (which stutters against its own `[package]`
+/// table), not an argument for changing a name already in use. See the D44
+/// ledger entry's amendment.
+pub const MANIFEST_NAME: &str = "gorget.toml";
 
 /// The canonical manifest path inside `dir` — whether or not it exists.
 pub fn manifest_path_in(dir: &Path) -> PathBuf {
     dir.join(MANIFEST_NAME)
 }
 
-/// The legacy manifest path inside `dir` — whether or not it exists.
-pub fn legacy_manifest_path_in(dir: &Path) -> PathBuf {
-    dir.join(LEGACY_MANIFEST_NAME)
-}
-
-/// Locate an existing manifest in `dir`, preferring the canonical name.
-///
-/// Returns `(path, is_legacy)`. When both names are present the canonical one
-/// wins and the legacy file is ignored — a project mid-migration gets the new
-/// file's contents, not a merge of the two.
-pub fn find_manifest_in(dir: &Path) -> Option<(PathBuf, bool)> {
-    let canonical = manifest_path_in(dir);
-    if canonical.exists() {
-        return Some((canonical, false));
-    }
-    let legacy = legacy_manifest_path_in(dir);
-    if legacy.exists() {
-        return Some((legacy, true));
-    }
-    None
-}
-
-/// Emit the one-time deprecation notice for a legacy-named manifest.
-pub fn warn_legacy_manifest(path: &Path) {
-    eprintln!(
-        "warning: `{LEGACY_MANIFEST_NAME}` is deprecated — rename it to `{MANIFEST_NAME}` \
-         (found at '{}')",
-        path.display()
-    );
+/// Locate an existing manifest in `dir`.
+pub fn find_manifest_in(dir: &Path) -> Option<PathBuf> {
+    let path = manifest_path_in(dir);
+    path.exists().then_some(path)
 }
 
 /// Walk up from `start` looking for a manifest. Returns the directory containing

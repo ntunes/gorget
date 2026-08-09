@@ -183,11 +183,11 @@ gg fmt app.gg --check        # exit 1 if not formatted (CI use)
 
 ### `gg init`
 
-Create a `manifest.toml` manifest in the current directory.
+Create a `gorget.toml` manifest in the current directory.
 
 ### `gg new <name>`
 
-Create a new project directory with a template `manifest.toml` and `main.gg`.
+Create a new project directory with a template `gorget.toml` and `main.gg`.
 
 ### `gg add <name>`
 
@@ -202,7 +202,7 @@ gg add local-lib --path ../local-lib
 
 ### `gg remove <name>`
 
-Remove a dependency from `manifest.toml`.
+Remove a dependency from `gorget.toml`.
 
 ---
 

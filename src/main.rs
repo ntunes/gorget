@@ -171,7 +171,7 @@ fn resolve_deps_for_file(filename: &str) -> HashMap<String, PathBuf> {
 
     if let Some(project_root) = manifest::find_project_root(start_dir) {
         let manifest_path = match manifest::find_manifest_in(&project_root) {
-            Some((p, is_legacy)) => { if is_legacy { manifest::warn_legacy_manifest(&p); } p }
+            Some(p) => p,
             None => return HashMap::new(),
         };
         if let Ok(manifest) = Manifest::from_path(&manifest_path) {
@@ -2263,7 +2263,7 @@ fn cmd_init() {
     });
 
     let manifest_path = manifest::manifest_path_in(&cwd);
-    if let Some((existing, _)) = manifest::find_manifest_in(&cwd) {
+    if let Some(existing) = manifest::find_manifest_in(&cwd) {
         eprintln!("{} already exists", existing.display());
         process::exit(1);
     }
@@ -2380,7 +2380,7 @@ fn cmd_add(args: &[String]) {
     });
 
     let manifest_path = match manifest::find_manifest_in(&cwd) {
-        Some((p, is_legacy)) => { if is_legacy { manifest::warn_legacy_manifest(&p); } p }
+        Some(p) => p,
         None => {
             eprintln!("no {} found in '{}'", manifest::MANIFEST_NAME, cwd.display());
             process::exit(1);
@@ -2415,7 +2415,7 @@ fn cmd_remove(name: &str) {
     });
 
     let manifest_path = match manifest::find_manifest_in(&cwd) {
-        Some((p, is_legacy)) => { if is_legacy { manifest::warn_legacy_manifest(&p); } p }
+        Some(p) => p,
         None => {
             eprintln!("no {} found in '{}'", manifest::MANIFEST_NAME, cwd.display());
             process::exit(1);

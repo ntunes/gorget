@@ -49,7 +49,7 @@ file is called out. "Pipeline stage" follows the order above. Files marked
 | `src/tui.rs` | ~375 | Terminal UI helpers (crossterm-based) for interactive output (`src/tui.rs:1`). |
 | `src/span.rs` | ~220 | `Span` (byte-offset range) and `Spanned<T>` — the source-location primitives threaded through every layer (`src/span.rs:1`). |
 | `src/lockfile.rs` | ~200 | Lockfile parse/serialize for the package manager. |
-| `src/manifest.rs` | ~190 | Package manifest (`manifest.toml`-style) parsing and `DepSpec` model. |
+| `src/manifest.rs` | ~190 | Package manifest (`gorget.toml`-style) parsing and `DepSpec` model. |
 | `src/intern.rs` | ~130 | Global string interner; `Symbol` (u32 handle) for fast identifier compare/hash (`src/intern.rs:1`). |
 | `src/compiler_data.rs` | ~90 | Embeds the canonical resource/runtime-function table source (`compiler/data/{schema,resources}.gg`) into the binary via `include_str!` (`src/compiler_data.rs:1`). |
 | `src/lib.rs` | ~20 | Crate root — module declarations only. |

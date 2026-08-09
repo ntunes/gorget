@@ -167,7 +167,6 @@ fn resolve_deps(
 
                 // Read the dep's manifest for its version
                 let dep_manifest_path = crate::manifest::find_manifest_in(&canonical)
-                    .map(|(p, _)| p)
                     .unwrap_or_else(|| crate::manifest::manifest_path_in(&canonical));
                 let dep_version = if dep_manifest_path.exists() {
                     let dep_manifest = Manifest::from_path(&dep_manifest_path)?;
@@ -191,7 +190,7 @@ fn resolve_deps(
 
                 // Read the dep's manifest for its version
                 let dep_manifest = crate::manifest::find_manifest_in(&dep_dir);
-                let dep_version = if let Some((dep_manifest_path, _)) = dep_manifest {
+                let dep_version = if let Some(dep_manifest_path) = dep_manifest {
                     let dep_manifest = Manifest::from_path(&dep_manifest_path)?;
                     dep_manifest.package.version
                 } else {
@@ -213,7 +212,7 @@ fn resolve_deps(
         }
 
         // Read transitive dependencies
-        let transitive_deps = if let Some((dep_manifest_path, _)) = crate::manifest::find_manifest_in(&dep_dir) {
+        let transitive_deps = if let Some(dep_manifest_path) = crate::manifest::find_manifest_in(&dep_dir) {
             let dep_manifest = Manifest::from_path(&dep_manifest_path)?;
             dep_manifest.dependencies
         } else {
