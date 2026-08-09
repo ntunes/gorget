@@ -1,0 +1,17 @@
+# R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
+# cell: PAREN terminator × PURE-ITEM parse.  RED-verifies the
+# trailing-comma-cascade fix at `parse_call_args` (parser.gg:2268 pre-fix
+# line).  Uses long string args so `gg fmt --in-place` keeps the call
+# in its multi-line form with the trailing comma preserved — matches
+# `compiler/data/resources.gg`'s shape (the fixture that surfaced the
+# defect originally).
+String join3(String prefix_arg, String middle_arg, String suffix_arg):
+    return prefix_arg + "|" + middle_arg + "|" + suffix_arg
+
+void main():
+    String r = join3(
+        "this is a deliberately long first argument literal string",
+        "this is a deliberately long middle argument literal string",
+        "this is a deliberately long final argument literal string",
+    )
+    print(r)

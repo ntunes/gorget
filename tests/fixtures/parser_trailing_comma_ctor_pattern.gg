@@ -1,0 +1,36 @@
+# R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
+# cell: PAREN terminator × constructor pattern args.  RED-verifies the
+# migration at `parse_pattern` sites (parser.gg:1808/1823/1845/1855/1879
+# pre-fix lines — tuple pattern, dot-shorthand, qualified constructor,
+# constructor, and keyword constructors).  Covers axis cell that
+# would otherwise be silently untested if only the tuple form ran.
+struct P:
+    int x
+    int y
+
+enum E:
+    A(int, int)
+    B(int)
+
+void main():
+    P p = P(3, 4)
+    (int, int) t = (1, 2)
+    match t:
+        case (a, b):
+            print(f"tup {a} {b}")
+        else:
+            print("no")
+    E e = E.A(10, 20)
+    match e:
+        case E.A(x, y):
+            print(f"a {x} {y}")
+        case E.B(v):
+            print(f"b {v}")
+        else:
+            print("no")
+    Option[int] o = Some(42)
+    match o:
+        case Some(v):
+            print(f"some {v}")
+        else:
+            print("none")

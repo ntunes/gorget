@@ -1,0 +1,50 @@
+# R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
+# cell: TWO-SEPARATOR variant (`&` in Rust gg, `,`-or-`&` in SH) ×
+# trait extends list.  RED-verifies the `:4210` rewrite inline shape
+# (pass 1 R1 fold: advance-then-check-then-parse) so trailing separators
+# don't cascade into a spurious extra trait bound.  Rust gg only accepts
+# `&` here — the `,` alternative is a self-host-only extension that
+# `parser_comparison` covers indirectly (both parsers must agree on the
+# `&` form's AST).
+trait A:
+    int a_val(self)
+
+trait B:
+    int b_val(self)
+
+trait C:
+    int c_val(self)
+
+trait AB extends A & B:
+    int ab_sum(self):
+        return self.a_val() + self.b_val()
+
+trait BC extends B & C:
+    int bc_sum(self):
+        return self.b_val() + self.c_val()
+
+struct S:
+    int v
+
+equip S with A:
+    int a_val(self):
+        return 1
+
+equip S with B:
+    int b_val(self):
+        return 10
+
+equip S with C:
+    int c_val(self):
+        return 100
+
+equip S with AB:
+    pass
+
+equip S with BC:
+    pass
+
+void main():
+    S s = S(0)
+    print(f"ab={s.ab_sum()}")
+    print(f"bc={s.bc_sum()}")

@@ -1,0 +1,16 @@
+# R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
+# cell: PAREN terminator × enum variant fields.  RED-verifies the
+# migration at `parse_enum_variant` (parser.gg:4175 pre-fix line).
+enum Shape:
+    Circle(int, int)
+    Rect(int, int, int, int)
+
+void main():
+    Shape s = Shape.Rect(1, 2, 3, 4)
+    match s:
+        case Shape.Rect(a, b, c, d):
+            print(f"rect {a} {b} {c} {d}")
+        case Shape.Circle(x, r):
+            print(f"circle {x} {r}")
+        else:
+            print("no")

@@ -1,0 +1,46 @@
+# R39 Phase 2e CASCADE regression fixture (Core #11 + #12) for the SH-parser
+# trailing-comma-then-terminator defect that manifests as an R37+ SH-lowerer
+# stage-2 double-free.  Scaled-down mirror of `compiler/data/resources.gg`'s
+# `RESOURCES = [Meta(...), Meta(...), ...]` shape — a Vector literal of
+# constructor calls each with a trailing comma AND nested constructor calls
+# with trailing commas.  Pre-fix the SH parser's `parse_call_args` treats
+# the trailing `,` as demanding a next arg, and its fallback advances past
+# the closing `)`, cascading the sibling ctor into the current arg list.
+#
+# EXPECTED SEMANTIC (both Rust gg and, post-fix, the SH):
+#   Each `Meta(...)` ctor takes exactly its declared count of args (3 for
+#   outer, 2 for inner).  The Vector literal has exactly N entries.  The
+#   cumulative arg count printed matches the sum of declared arg counts.
+#
+# RED-VERIFY PROCEDURE (Core #12): stub the SH parser's helper by removing
+# the `if self.check_tok(terminator): break` line inside
+# `consume_comma_or_tok` in `tests/fixtures/self_host_lowerer/parser.gg`,
+# then run the SH-touching gates (`self_host_bootstrap_fixed_point`,
+# `sh_bootstrap_stage2_double_free_after_fmt_sweep`).  Expected RED: the
+# SH bootstrap breaks with the pre-fix trailing-comma cascade signature
+# (dummy `Int(0)` args + sibling-ctor swallowing).  Restore.
+struct Inner:
+    int a
+    int b
+
+struct Outer:
+    int tag
+    Inner nested
+    String name
+
+void main():
+    Vector[Outer] xs = [
+        Outer(1, Inner(10, 20), "first"),
+        Outer(2, Inner(30, 40), "second"),
+        Outer(3, Inner(50, 60), "third"),
+    ]
+    print(f"count={xs.len()}")
+    int i = 0
+    int sum = 0
+    while i < xs.len():
+        Outer o = xs.get(i).unwrap()
+        sum = sum + o.tag + o.nested.a + o.nested.b
+        i = i + 1
+    print(f"sum={sum}")
+    print(f"first={xs.get(0).unwrap().name}")
+    print(f"third={xs.get(2).unwrap().name}")

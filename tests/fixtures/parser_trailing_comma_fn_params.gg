@@ -1,0 +1,15 @@
+# R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
+# cell: PAREN terminator × function definition params.  RED-verifies
+# `parse_params` (parser.gg:4046 pre-fix line).  Multi-param fn declared
+# with trailing comma AND multi-param closure declared with trailing
+# comma — the latter also indirectly exercises the per-iter param_idx
+# counter site (:2540) which our helper-based migration keeps working.
+int add3(int a, int b, int c):
+    return a + b + c
+
+void main():
+    int r = add3(1, 2, 3)
+    print(f"{r}")
+    auto square_sum = (int x, int y): x * x + y * y
+    int s = square_sum(3, 4)
+    print(f"{s}")

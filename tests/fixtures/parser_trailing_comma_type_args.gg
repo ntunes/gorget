@@ -1,0 +1,17 @@
+# R39 Phase 2e per-shape fixture (Core #12 axis coverage) —
+# cell: BRACKET terminator × generic type args (parser.gg:1699 pre-fix
+# line — the first site migrated to `consume_comma_or_tok`).  `gg fmt`
+# canonicalizes short generic-arg lists inline (no trailing comma), so
+# this fixture LOCKS the shape's parseability rather than the trailing-
+# comma acceptance itself.  The SH-lane trailing-comma acceptance is
+# verified end-to-end by `sh_bootstrap_stage2_double_free_after_fmt_sweep`
+# (fmt sweep over the whole non-SH tree + bootstrap fixed-point).
+
+struct Pair[A, B]:
+    A first
+    B second
+
+void main():
+    Pair[int, String] p = Pair[int, String](42, "hello")
+    print(f"first={p.first}")
+    print(f"second={p.second}")

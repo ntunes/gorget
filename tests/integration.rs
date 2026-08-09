@@ -4653,33 +4653,94 @@ fn default_op_option_rhs_accepted() {
     run_gg("default_op_option_rhs_accepted.gg", "42");
 }
 
-// Round XXXVII (2026-08-08) — durable repro PROCEDURE for the SH-lowerer
-// stage-2 double-free triggered by the formatter's bulk canonicalization
-// (`gg fmt --in-place` sweep). Discovered and reproduced twice during
-// R37 Phase 2 debug (full-corpus sweep AND non-SH-only sweep both trip
-// the failure). ORTHOGONAL to D27 — the failure reproduces against the
-// retired `!` glyph too. See fixture header at
-// `tests/fixtures/known_gaps/sh_bootstrap_stage2_double_free_after_fmt_canonicalization.gg`
-// for the step-by-step reproducer command sequence and the exact
-// canonicalization operations the formatter performs.
+// Round XXXIX Phase 2e (2026-08-09) — per-shape RED-verify fixtures for
+// the SH-parser trailing-comma-cascade class fix.  Each fixture pins
+// ONE axis cell: paren/bracket/brace terminator × pure-item / per-iter
+// state / variant-fields / ctor-pattern.  Rust gg already accepts
+// trailing commas at these positions (formatter emits them for
+// canonicalized long ctor calls); these tests lock the accept-and-
+// preserve-arg-count contract as a live regression net so a future
+// fold that reintroduces the `while match_tok(TOK_COMMA):` shape at
+// any of these sites trips a targeted test in addition to the shared
+// `self_host_parser_comma_loops_go_through_helper` lint.  The SH-lane
+// verification lives in `sh_bootstrap_stage2_double_free_after_fmt_sweep`
+// below (fmt-formatted parser.gg round-trips through the SH driver).
+#[test]
+fn parser_trailing_comma_cascade() {
+    run_gg(
+        "parser_trailing_comma_cascade.gg",
+        "count=3\nsum=216\nfirst=first\nthird=third",
+    );
+}
+
+#[test]
+fn parser_trailing_comma_call_args() {
+    run_gg(
+        "parser_trailing_comma_call_args.gg",
+        "this is a deliberately long first argument literal string|\
+         this is a deliberately long middle argument literal string|\
+         this is a deliberately long final argument literal string",
+    );
+}
+
+#[test]
+fn parser_trailing_comma_dict_entries() {
+    run_gg(
+        "parser_trailing_comma_dict_entries.gg",
+        "long_resource_value_alpha_lorem\n\
+         long_resource_value_beta_ipsum\n\
+         long_resource_value_gamma_dolor",
+    );
+}
+
+#[test]
+fn parser_trailing_comma_type_args() {
+    run_gg("parser_trailing_comma_type_args.gg", "first=42\nsecond=hello");
+}
+
+#[test]
+fn parser_trailing_comma_fn_params() {
+    run_gg("parser_trailing_comma_fn_params.gg", "6\n25");
+}
+
+#[test]
+fn parser_trailing_comma_extends() {
+    run_gg("parser_trailing_comma_extends.gg", "ab=11\nbc=110");
+}
+
+#[test]
+fn parser_trailing_comma_for_bindings() {
+    run_gg("parser_trailing_comma_for_bindings.gg", "sum=66");
+}
+
+#[test]
+fn parser_trailing_comma_ctor_pattern() {
+    run_gg("parser_trailing_comma_ctor_pattern.gg", "tup 1 2\na 10 20\nsome 42");
+}
+
+#[test]
+fn parser_trailing_comma_variant_fields() {
+    run_gg("parser_trailing_comma_variant_fields.gg", "rect 1 2 3 4");
+}
+
+// Round XXXVII (2026-08-08 filed) → Round XXXIX Phase 2e (2026-08-09
+// fixed) — the SH-lowerer stage-2 double-free triggered by the
+// formatter's bulk canonicalization (`gg fmt --in-place` sweep) was
+// LOCALIZED at Phase 2d as a TRAILING-COMMA CASCADE in the SH parser
+// (parser.gg:2268 `parse_call_args` and 20+ sibling `while
+// match_tok(TOK_COMMA)` sites), then class-fixed at Phase 2e via the
+// `Parser::consume_comma_or_tok(terminator)` chokepoint helper (Core #4
+// producer-chokepoint per `self_host_parser_comma_loops_go_through_helper`
+// in tests/lints.rs).  See DONE.md R39 for the full write-up.
 //
 // This wrapper runs the sweep procedure in a scratch tree and asserts
 // `self_host_bootstrap_fixed_point` succeeds — the CORRECT / intended
-// behavior. Un-ignore when the SH-lowerer memory-safety defect that the
-// bulk canonicalization exposes is diagnosed and fixed.
+// behavior.  Un-ignored post-fix (was blocking D27 Phase 2 sweep).
 //
 // The wrapper is heavy (invokes `gg fmt` recursively across ~2,754
 // non-SH .gg files, then runs the bootstrap fixed-point which itself
-// takes ~11 min on a warm CI box). Keeping it `#[ignore]`d until the
-// underlying defect is diagnosed lets targeted runs opt in without
-// paying the cost every suite.
+// takes ~11 min on a warm CI box).
 #[test]
-#[ignore = "KNOWN GAP (R37 filed 2026-08-08; blocks D27 Phase 2 sweep): \
-`gg fmt --in-place` sweep followed by `self_host_bootstrap_fixed_point` \
-crashes with `free(): double free detected in tcache 2` in the stage-2 \
-driver binary. Orthogonal to D27 (reproduces against `!` too). See \
-tests/fixtures/known_gaps/sh_bootstrap_stage2_double_free_after_fmt_canonicalization.gg \
-header for the procedure + TODO.md D27 headline follow-up."]
 #[serial(gg_build)]
 fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
     // The repro procedure is documented in the fixture header. This

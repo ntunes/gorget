@@ -1,0 +1,17 @@
+# R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
+# cell: BRACE terminator × dict entries.  RED-verifies the trailing-
+# comma-cascade fix at the dict-literal site (parser.gg:2947 pre-fix
+# line).  Uses long-string keys/values so `gg fmt --in-place` keeps
+# the dict in its multi-line form with the trailing comma preserved.
+void main():
+    Dict[String, String] resource_metadata = {
+        "long_resource_key_alpha": "long_resource_value_alpha_lorem",
+        "long_resource_key_beta": "long_resource_value_beta_ipsum",
+        "long_resource_key_gamma": "long_resource_value_gamma_dolor",
+    }
+    String ka = "long_resource_key_alpha"
+    String kb = "long_resource_key_beta"
+    String kg = "long_resource_key_gamma"
+    print(resource_metadata.get(&ka).unwrap())
+    print(resource_metadata.get(&kb).unwrap())
+    print(resource_metadata.get(&kg).unwrap())

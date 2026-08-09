@@ -1,0 +1,20 @@
+# R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
+# cell: KEYWORD `in` terminator × for-loop bare-tuple bindings
+# (parser.gg parse_for_stmt).  This site is INTENTIONALLY NOT migrated
+# to `consume_comma_or_tok` because Rust gg REJECTS a trailing comma
+# here (`for a, b, in xs:` fails at Rust's `parse_pattern` with
+# "expected pattern, found 'in'") and the SH mirrors that behavior.
+# The rejecting-site enumeration lives in the docstring of
+# `self_host_parser_comma_loops_go_through_helper` in tests/lints.rs.
+#
+# What this fixture DOES cover: the non-trailing bare-tuple bindings
+# `for a, b in xs:` — parse_for_stmt's raw comma loop still needs to
+# handle multi-binding correctly.  Trailing-comma at this site is a
+# filed language-follow-up (accept vs reject align with Rust) — not
+# this brief's fix.
+void main():
+    Vector[(int, int)] pairs = [(1, 10), (2, 20), (3, 30)]
+    int sum = 0
+    for a, b in pairs:
+        sum = sum + a + b
+    print(f"sum={sum}")
