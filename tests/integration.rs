@@ -9492,6 +9492,80 @@ void main():
 /// what `fmt_binary_chain_round_trips` alone catches by pinning the
 /// exact user-facing shape from the downstream report
 /// (`env_get(...) ?? throw reference_error(...)`).
+// Round XXXIX Track F (2026-08-09) — gorget-js snag #15b regression pin.
+// Pre-R39: `gg fmt` wrapped single-expression `else:` / `catch` / `rethrow`
+// arm bodies in a `do:` block, making the arm tail a READ position. Under
+// R37 D27 (`!`→`^`), a bare `^x` tail in the original code parsed cleanly
+// but the reformatted `else: do:\n    ^x` was rejected with
+// `E_MoveInOperandPosition`. Fixed by extending `Expr::Block`'s inline
+// carve-out at `src/formatter/mod.rs` to include single `Stmt::Expr` bodies
+// (mirroring the existing Throw/Return carve-outs).
+//
+// Guard shape: (a) run_gg confirms the original source builds + runs
+// (via the harness at the plain-fixture entry below); (b) this test formats
+// the source in-process, asserts the `else: do:` wrap does NOT re-appear,
+// and asserts the formatted output re-parses cleanly (the pre-fix RED
+// signature was `E_MoveInOperandPosition` at parse time on the wrapped
+// tail).
+#[test]
+fn fmt_else_catch_rethrow_no_do_wrap_on_move_tail() {
+    use gorget::parser::Parser;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_else_catch_rethrow_no_do_wrap.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Positive control: no code line should emit a spurious `else: do:`
+    // wrap on the move tail. Skip comment lines (`#`-prefix) — the fixture
+    // header intentionally mentions the phrase to document the retired
+    // defect. This checks the actual emitted code.
+    let bad_code_line = formatted
+        .lines()
+        .find(|line| !line.trim_start().starts_with('#') && line.contains("else: do:"));
+    assert!(
+        bad_code_line.is_none(),
+        "gorget-js snag #15b regression: `else: do:` wrap re-appeared on a code line.\n\
+         Offending line: {:?}\n\
+         === Formatted output ===\n{formatted}",
+        bad_code_line
+    );
+
+    // Re-parse the formatted output — the pre-fix RED was a parse error
+    // (`E_MoveInOperandPosition` on `^b` in operand position). If the
+    // `do:` wrap re-appears on a move tail, this fires with the exact
+    // pre-fix signature.
+    let mut parser = Parser::new(&formatted);
+    let _ = parser.parse_module();
+    assert!(
+        parser.errors.is_empty(),
+        "gorget-js snag #15b regression: `gg fmt` output does not re-parse ({} error(s)).\n\
+         === Formatted output ===\n{formatted}\n\
+         === First parse error ===\n{:?}",
+        parser.errors.len(),
+        parser.errors.first(),
+    );
+
+    // Idempotence — a second pass must be byte-identical.
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(
+        formatted, second,
+        "Formatter NOT idempotent for fmt_else_catch_rethrow_no_do_wrap.gg.\n\
+         === First pass ===\n{formatted}\n=== Second pass ===\n{second}",
+    );
+}
+
+// Companion — asserts the un-formatted source builds and runs to "hello",
+// so the `else: ^b` bare-move tail (which the formatter fix keeps unwrapped)
+// is a genuine live shape the compiler executes. Any regression in the
+// language semantics that made the un-formatted source stop working would
+// fire here.
+#[test]
+fn fmt_else_catch_rethrow_no_do_wrap_source_runs() {
+    run_gg("fmt_else_catch_rethrow_no_do_wrap.gg", "hello");
+}
+
 #[test]
 fn fmt_long_binop_continuation_parses() {
     use gorget::parser::Parser;

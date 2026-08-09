@@ -1,0 +1,67 @@
+# gorget-js snag #15b — `gg fmt` used to wrap single-expression `else:` /
+# `catch` / `rethrow` arm bodies in a spurious `do:` block. A `do:`-block
+# tail is a READ position (not a move boundary), so when the wrapped arm's
+# tail is a move expression (`^x` after D27 emit swap), the formatted
+# output failed with `E_MoveInOperandPosition`.
+#
+# RETIRED R39 Track F (2026-08-09) by adding `Stmt::Expr` inline carve-out
+# to `Expr::Block` in `src/formatter/mod.rs` (mirroring the existing
+# Throw/Return carve-outs). Single-expression bodies now format inline; the
+# `do:` wrap is preserved for multi-statement bodies where it's real.
+#
+# R38 Track C output-review flagged the `do:` wrapping as "Class 3 —
+# COSMETIC, not breaking". That was true UNDER `!` sigils (`!x` in a
+# non-boundary position was already an error). After R37 D27 landed
+# (`!`→`^`), the combination becomes BREAKING: a bare `^x` tail that
+# COMPILES in the original code fails to parse in the formatted output.
+#
+# Live in gorget-js at eval_try's `else: ^try_c` shape.
+#
+# Repro (bare-move tail):
+#   int main():
+#       bool flag = true
+#       String a = "hello"
+#       String b = "world"
+#       String result = match flag:
+#           case true:
+#               ^a
+#           else:
+#               ^b       ← original compiles + runs, prints "hello"
+#       print(result)
+#       return 0
+#
+# Formatted output introduces `else: do:` before the `^b`, making the tail
+# a read position → rejected as E_MoveInOperandPosition.
+#
+# ⚠ IMPORTANT: R38 Track C confirmed via output-review "compiles and runs
+# identically". That verdict was ONLY correct for the `!` sigil (moves were
+# operator-position rejected anyway). Post-D27 the combination is a
+# reformats-then-doesn't-parse defect and merits the same class-fix pattern
+# R38 Track C used for the long-`??` wrap (Core #1 chokepoint + Core #6
+# guard).
+#
+# Fix path: in `src/formatter/mod.rs`, the arm that emits `else:` / `catch` /
+# `rethrow` currently wraps the arm body in a `do:` when the body is a
+# single-expression tail. Remove the wrap: emit the tail directly (inheriting
+# the surrounding match/catch position, which IS a move boundary).
+#
+# Intended output after fix (matches original, no `do:` wrap):
+#   String result = match flag:
+#       case true:
+#           ^a
+#       else:
+#           ^b
+#
+# Wired: `#[ignore]`d `fmt_else_catch_rethrow_wrap_breaks_move_tail` in
+# `tests/integration.rs` asserting fmt output parses + runs to "hello".
+int main():
+    bool flag = true
+    String a = "hello"
+    String b = "world"
+    String result = match flag:
+        case true:
+            ^a
+        else:
+            ^b
+    print(result)
+    return 0

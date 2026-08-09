@@ -2044,6 +2044,20 @@ impl Formatter {
                             }
                             return;
                         }
+                        // gorget-js snag #15b (2026-08-09): a single-expression
+                        // Block wrapped in `do:` makes the expression a READ
+                        // position, which breaks move-sigil tails (`^x` becomes
+                        // `E_MoveInOperandPosition`) — the original `else: ^b`
+                        // compiles, `else: do: ^b` doesn't. Also unnecessary
+                        // noise for any single-expression tail. Format inline
+                        // instead. (Same shape as the Throw/Return carve-out
+                        // above; ratified R38 Track C output-review deemed the
+                        // pre-D27 `do:` wrap COSMETIC — post-D27 emit swap it
+                        // is BREAKING for move tails.)
+                        Stmt::Expr(expr) => {
+                            self.format_expr(expr);
+                            return;
+                        }
                         _ => {}
                     }
                 }
