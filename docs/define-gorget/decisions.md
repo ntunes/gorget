@@ -2213,7 +2213,24 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   corpus; this supersedes the TODO entry's earlier "NOT blocking any current work" note.
   Small formatter track (T-FP): own scout→brief→≥3 reviews→executor; gates = per-kind
   fixture pairs (short-fits-inline vs long-must-wrap) + `fmt_idempotent` + the A1
-  scratch-tree gate + bootstrap.
+  scratch-tree gate + bootstrap. ⚡ Width amended same day: 120, not 100 — see the FMT CANON
+  PAIR entry below.
+
+- 2026-08-10 — **🎯 FMT CANON PAIR RATIFIED (owner, at R41 planning; owner invited
+  objections, orchestrator raised none):** **(1) MAX LINE WIDTH = 120** — `gg fmt` breaks a
+  line only past 120 columns; SUPERSEDES the 2026-08-09 100-char ruling; composes with
+  fill-pack (fill to 120, then wrap). **(2) TRAILING-COMMENT GAP = 4 SPACES** — a LONE
+  inline comment starts exactly 4 spaces after code end (measured current behavior: 2 —
+  this changes it); consecutive-comment GROUPS keep R40's STRIDE=4 alignment with the
+  4-gap as the anchor/floor (group column = max code end in group + 4; exact stride
+  rounding = T-FMT scout detail). The owner's "most of them are already like that" matches
+  the measured group-alignment output — the change is the lone-comment gap and the floor.
+  Both land in the PRE-A2 fmt-hardening wave (canonical-output changes precede the sweep).
+  **A2 DELIVERY REQUIREMENT (owner, same session): the bulk sweep lands as ONE commit
+  containing ONLY the `gg fmt` pass — no fixes mixed in — so the diff is analyzable for
+  suboptimal format changes**; T-FMT fixes + fill-pack + this canon pair land in separate
+  PRIOR commits, and the A2 track delivers a hunk-classification summary beside the commit
+  to guide that analysis.
 
 - 2026-08-10 — **🎯 SUITE-LAYOUT FORM PRESERVATION RATIFIED (owner, from a gorget-arena
   diff): `gg fmt` NEVER collapses a next-line suite or arm body onto its header line — the
