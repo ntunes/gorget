@@ -1602,6 +1602,8 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 
 - **🆕⚠ [LOW — R40, fmt form-preservation] `gg fmt` canonicalizes byte/char literals + string-escape forms to their decoded value, losing the author's form.** `b'A'` → `65` (decimal), and (post-Track-B) `"\x41"` → `"A"`. Value-preserving, readability-losing. Same class as gorget-js snag #15f (radix rewrite); fix = span-based original-lexeme preservation at the byte-literal + string-escape emit sites (generalize the `int_literal_text` span mechanism used for radix). Surfaced by Track C + Track B output-reviews.
 
+- **🆕🐛 [MED — R40, `gg fmt` CLI arg handling] Two pre-existing `gg fmt` CLI arg-parsing bugs (surfaced by Track G doc verification).** (1) **Short flag BEFORE the file fails:** `gg fmt -i <file>` / `-c <file>` errors ("Error reading -i") — the filename parser (`src/main.rs:2773-2796`) only skips `--`-prefixed args, so a leading `-i`/`-c` is taken as the filename; the file-first form (`gg fmt <file> -i`) works. (2) **Extra file args SILENTLY IGNORED (Core #10 silent-drop):** `gg fmt --check f1.gg f2.gg` returns exit 0 ignoring `f2`, so `gg fmt --check src/*.gg` checks only the FIRST globbed file — materially misleading for CI. Reference-grade fix: (1) skip any `-`-prefixed arg in the filename parse; (2) either process ALL file args or REJECT extras with a clear error (never silently drop — Core #10). Pre-existing, not R40-introduced. Docs (appendix E) use the verified file-first form + a per-file CI loop as the workaround.
+
 ## Docs / devbook + misc language features
 
 ### Medium
