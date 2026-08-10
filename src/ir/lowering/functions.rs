@@ -1650,7 +1650,12 @@ pub fn lower_generic_function(
             FunctionBody::Expression(ref mut expr) => {
                 meta::evaluate_delayed_meta_expr(expr, &delayed_ctx);
             }
-            _ => {}
+            // Enumerated (not `_`) so a future FunctionBody variant that can
+            // carry a `meta[op]` fails to compile here and forces the author to
+            // decide whether it needs the sweep — the meta-substitution
+            // completeness gate (Core #10 / #4). Declaration has no body; Extern
+            // is a C-symbol string — neither carries a sweepable meta op.
+            FunctionBody::Declaration | FunctionBody::Extern(_) => {}
         }
         template_with_meta_evaluated = cloned;
         &template_with_meta_evaluated
