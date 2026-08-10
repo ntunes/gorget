@@ -278,3 +278,8 @@ void main():
     String src10 = "if true and not false:\n    return None\n"
     auto toks10 = lex_tokenize(src10)
     print(tokens_to_str(toks10))
+
+    # Test 11: \xHH hex escape (Rust model) — \x41 -> A, \x5A -> Z (ASCII)
+    String src11 = "s = \"\\x41\\x5A\"\n"
+    auto toks11 = lex_tokenize(src11)
+    print(tokens_to_str(toks11))

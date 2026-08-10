@@ -1,0 +1,5 @@
+# NEG: `\xA` has only 1 hex digit — REJECT (needs exactly 2).
+# RED-verify: compiles clean at HEAD.
+void main():
+    String s = "\xA"
+    print(s)

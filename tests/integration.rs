@@ -3493,7 +3493,8 @@ ident:char ident:c = str:a NL EOF
 comment:this is a comment ident:x = int:1 NL EOF
 ident:f ( ident:a , ident:b ) NL EOF
 ident:a += int:1 NL ident:b -= int:2 NL ident:c ..= ident:d NL EOF
-kw:if kw:true kw:and kw:not kw:false : NL INDENT kw:return ident:None NL DEDENT EOF",
+kw:if kw:true kw:and kw:not kw:false : NL INDENT kw:return ident:None NL DEDENT EOF
+ident:s = str:AZ NL EOF",
     );
 }
 
@@ -8701,6 +8702,91 @@ label
 value
 5",
     );
+}
+
+// ── `\xHH` hex escapes + lexer-error-channel rejection (R40 Track B) ──────
+// POS: `\xHH` in a UTF-8 String decodes to the ASCII char (0x00-0x7F).
+#[test]
+fn escape_hex_ascii_string() {
+    run_gg("escape_hex_ascii_string.gg", "A\nZ\nHI");
+}
+
+// POS: `\xHH` in a BYTE literal takes the full 0x00-0xFF range (raw byte).
+#[test]
+fn escape_byte_literal_hex() {
+    run_gg("escape_byte_literal_hex.gg", "255\n0\n65\n127\n128");
+}
+
+// POS: byte-ness threading must NOT break `\'`/`\\`/`\n`/`\0` in `b'..'`
+// (the SingleQuoted delimiter context still applies). Core #12 axis cell.
+#[test]
+fn escape_byte_literal_delims() {
+    run_gg("escape_byte_literal_delims.gg", "39\n92\n10\n0\n65");
+}
+
+// POS regression guard: `\u{...}`, `\uXXXX`, `\n`, `\t`, `\\` are SEPARATE
+// arms from `\x` and stay unchanged (Core #12(d)).
+#[test]
+fn escape_unicode_untouched() {
+    run_gg("escape_unicode_untouched.gg", "HI\nJK\nx\ty\na\nb\nback\\slash");
+}
+
+// POS: `gg fmt` round-trips + is idempotent on `\xHH` (non-control values
+// only — control-char fmt form-preservation is Track H). Graduated from the
+// mis-filed known_gaps/fmt_hex_backslash_string_mangle.gg (#15g non-repro).
+#[test]
+fn escape_hex_string_fmt() {
+    run_gg("escape_hex_string_fmt.gg", "AAZZ");
+    assert_fmt_idempotent("escape_hex_string_fmt.gg");
+}
+
+// NEG: the lexer error channel now reaches rejection (was silently swallowed).
+// `\x` > 0x7F in a String → reject (use `\u{00HH}`).
+#[test]
+fn escape_hex_non_ascii_reject() {
+    check_gg_fails("escape_hex_non_ascii_reject.gg", "only encodes ASCII");
+}
+
+// NEG: `\x` with a non-hex digit → reject.
+#[test]
+fn escape_hex_nonhex_reject() {
+    check_gg_fails("escape_hex_nonhex_reject.gg", "2 hex digits");
+}
+
+// NEG: `\x` with fewer than 2 hex digits → reject.
+#[test]
+fn escape_hex_short_reject() {
+    check_gg_fails("escape_hex_short_reject.gg", "2 hex digits");
+}
+
+// NEG: a genuinely-unknown escape → reject.
+#[test]
+fn escape_unknown_q_reject() {
+    check_gg_fails("escape_unknown_q_reject.gg", "invalid escape sequence: \\q");
+}
+
+// NEG: `\b`/`\f`/`\v` are NOT escapes (Rust-minimal ruling, owner 2026-08-10) —
+// each rejects; the user writes `\x08`/`\x0c`/`\x0b`.
+#[test]
+fn escape_unknown_b_reject() {
+    check_gg_fails("escape_unknown_b_reject.gg", "invalid escape sequence: \\b");
+}
+
+#[test]
+fn escape_unknown_f_reject() {
+    check_gg_fails("escape_unknown_f_reject.gg", "invalid escape sequence: \\f");
+}
+
+#[test]
+fn escape_unknown_v_reject() {
+    check_gg_fails("escape_unknown_v_reject.gg", "invalid escape sequence: \\v");
+}
+
+// NEG: a NON-escape swallowed lex error (unterminated string) also rejects —
+// proves the CHANNEL wiring, not just the escape arm.
+#[test]
+fn escape_unterminated_string_reject() {
+    check_gg_fails("escape_unterminated_string_reject.gg", "unterminated string literal");
 }
 
 #[test]

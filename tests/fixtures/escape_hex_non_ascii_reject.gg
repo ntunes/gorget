@@ -1,0 +1,5 @@
+# NEG: `\x80` in a UTF-8 String is > 0x7F — REJECT, use \u{0080}.
+# RED-verify: compiles clean at HEAD (swallowed lex channel).
+void main():
+    String s = "\x80"
+    print(s)

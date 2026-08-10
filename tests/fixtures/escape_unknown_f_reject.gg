@@ -1,0 +1,5 @@
+# NEG: `\f` is NOT an escape (Rust-minimal ruling) — REJECT; write \x0c.
+# RED-verify: compiles clean at HEAD.
+void main():
+    String s = "\f"
+    print(s)

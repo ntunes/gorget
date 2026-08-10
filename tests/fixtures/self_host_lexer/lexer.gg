@@ -418,8 +418,33 @@ equip Lexer:
             String u_hex = owned_slice(self.lex_source, u_hex_start, self.lex_pos)
             int u_code = lex_parse_int_radix(u_hex, 16)
             return Some(chr(u_code))
-        else:
+        elif c == b'x':
+            # \xHH — hex byte escape (Rust model). Exactly 2 hex digits.
+            # ASCII-only (0x00-0x7F) here: this buffer is a UTF-8 String, so a
+            # byte >= 0x80 cannot round-trip; direct the user to \u{00HH}.
+            # Mirrors the Rust lexer's EscapeByteness::Ascii cells.
             self.lex_advance()
+            int x_hex_start = self.lex_pos
+            int x_read = 0
+            while x_read < 2 and self.lex_pos < self.lex_source.byte_len() and self.lex_peek().is_hex_digit():
+                self.lex_advance()
+                x_read = x_read + 1
+            if x_read != 2:
+                self.lex_diagnostics.push(Diagnostic.error(Span(x_hex_start - 2, self.lex_pos), DkLexError(), "\\x requires exactly 2 hex digits"))
+                return Some("\u{FFFD}")
+            String x_hex = owned_slice(self.lex_source, x_hex_start, self.lex_pos)
+            int x_code = lex_parse_int_radix(x_hex, 16)
+            if x_code > 127:
+                self.lex_diagnostics.push(Diagnostic.error(Span(x_hex_start - 2, self.lex_pos), DkLexError(), "\\x only encodes ASCII (<=0x7F); use \\u{00HH}"))
+                return Some("\u{FFFD}")
+            return Some(chr(x_code))
+        else:
+            # Unknown escape — REJECT (mirrors the Rust lexer). The char is
+            # recovered so lexing can continue and surface more diagnostics,
+            # but the pushed diagnostic makes the program reject.
+            int esc_start = self.lex_pos - 1
+            self.lex_advance()
+            self.lex_diagnostics.push(Diagnostic.error(Span(esc_start, self.lex_pos), DkLexError(), "unknown escape sequence"))
             return Some(owned_slice(self.lex_source, self.lex_pos - 1, self.lex_pos))
 
     # ── Identifier scanning ───────────────────────────────────

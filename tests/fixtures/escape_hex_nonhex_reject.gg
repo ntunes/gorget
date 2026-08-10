@@ -1,0 +1,5 @@
+# NEG: `\xZZ` has non-hex digits — REJECT (needs exactly 2 hex digits).
+# RED-verify: compiles clean at HEAD.
+void main():
+    String s = "\xZZ"
+    print(s)

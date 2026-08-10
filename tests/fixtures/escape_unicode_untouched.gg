@@ -1,0 +1,10 @@
+# Adding `\xHH` and rejecting unknown escapes must leave the existing arms
+# UNCHANGED: `\u{...}` (braced), `\uXXXX` (4-hex BMP), `\n`, `\t`, `\\` all
+# decode exactly as before (they are SEPARATE match arms from `\x`). Core
+# #12(d) regression guard — break any of these arms and this fixture goes RED.
+void main():
+    print("\u{48}\u{49}")
+    print("\u004A\u004B")
+    print("x\ty")
+    print("a\nb")
+    print("back\\slash")

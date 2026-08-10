@@ -1,0 +1,8 @@
+# Graduated from the mis-filed known_gaps/fmt_hex_backslash_string_mangle.gg
+# (gorget-js snag #15g — NON-REPRO on HEAD; the real defect was the swallowed
+# lexer error channel, now wired). Live pin: `gg fmt` round-trips (re-parses)
+# and is idempotent on `\xHH` escapes. NON-CONTROL values only
+# (\x41=A, \x5A=Z) — control-char fmt form-preservation is Track H.
+String s = "A\x41Z\x5A"
+void main():
+    print(s)

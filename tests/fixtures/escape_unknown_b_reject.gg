@@ -1,0 +1,5 @@
+# NEG: `\b` is NOT an escape (Rust-minimal ruling, owner 2026-08-10) —
+# REJECT; write \x08. RED-verify: compiles clean at HEAD.
+void main():
+    String s = "\b"
+    print(s)

@@ -1,0 +1,6 @@
+# NEG: an unterminated string literal — REJECT. Proves the lexer error
+# CHANNEL (not just the escape arm) now reaches rejection.
+# RED-verify: compiles clean at HEAD (swallowed UnterminatedString).
+void main():
+    String s = "unterminated
+    print(s)

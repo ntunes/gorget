@@ -1,0 +1,9 @@
+# `\xHH` hex escapes in a UTF-8 String literal decode to the ASCII char
+# `0x00-0x7F`. POS pin for the Rust-model `\x` escape (Track B, R40).
+# Non-control values only (`\x41`=A, `\x5A`=Z, `\x48\x49`=HI) so the fmt
+# round-trip (Track H scope) never bites.
+void main():
+    print("\x41")
+    print("\x5A")
+    String s = "\x48\x49"
+    print(s)

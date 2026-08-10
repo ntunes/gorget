@@ -1,0 +1,5 @@
+# NEG: `\q` is not a recognized escape — REJECT (Rust-minimal set).
+# RED-verify: compiles clean at HEAD (silent lossy decode).
+void main():
+    String s = "\q"
+    print(s)

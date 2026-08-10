@@ -1,0 +1,5 @@
+# NEG: `\v` is NOT an escape (Rust-minimal ruling) — REJECT; write \x0b.
+# RED-verify: compiles clean at HEAD.
+void main():
+    String s = "\v"
+    print(s)

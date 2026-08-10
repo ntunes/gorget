@@ -1,0 +1,11 @@
+# DELIMITER-escape regression for byte literals: threading byte-ness through
+# `parse_one_quoted_char` must NOT break `\'` / `\\` / `\n` / `\0` in `b'..'`
+# (the SingleQuoted delimiter context still applies). Core #12 axis cell the
+# earlier fixture list missed; the self-host uses `b'\''` so this pins the
+# bootstrap too.
+void main():
+    print(b'\'')
+    print(b'\\')
+    print(b'\n')
+    print(b'\0')
+    print(b'A')

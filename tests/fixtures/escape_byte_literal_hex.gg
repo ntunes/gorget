@@ -1,0 +1,9 @@
+# `\xHH` in a BYTE literal `b'..'` takes the full `0x00-0xFF` range and
+# yields the raw byte value (an IntLiteral). `b'\xFF'` is 255 (Rust model),
+# where a String `"\xFF"` would REJECT. POS pin for the byte-ness axis cell.
+void main():
+    print(b'\xFF')
+    print(b'\x00')
+    print(b'\x41')
+    print(b'\x7f')
+    print(b'\x80')
