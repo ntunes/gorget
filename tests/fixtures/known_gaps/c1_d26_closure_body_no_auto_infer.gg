@@ -1,6 +1,10 @@
 # KNOWN GAP — MED ergonomic: a closure whose body contains a D26 fallible-
 # arith operator does NOT auto-infer `throws ArithError` on the closure's
-# signature. The F1a pre-`collect_top_level` rewrite pass deliberately
+# signature.
+# ⚡ D45 pin 8 (2026-08-10): the mirror-the-F1a-walker fix shape below is
+# SUPERSEDED — D26 auto-infer retires into general inference at round E2, where
+# this fixture's INTENDED is re-derived (anonymous-closure decl-site `!` is an
+# E2 scout question). Graduates at E2; see decisions.md D45. The F1a pre-`collect_top_level` rewrite pass deliberately
 # skips closure bodies (`Expr::Closure` / `Expr::ImplicitClosure`) to avoid
 # false-positive promotion of the enclosing fn's signature — the enclosing
 # fn's auto-infer walker steps into the closure only if the fallible op is

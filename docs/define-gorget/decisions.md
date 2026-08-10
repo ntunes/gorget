@@ -2042,9 +2042,15 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   pointers drifted TWICE inside this very fold (pass-6 catch), which is what line numbers do:
   reference §10.6 "Throws on Main" (the most normative statement), §10.9, §3.4,
   `docs/book/02-types.md`, `docs/book/10-errors.md`. The EXIT-TAXONOMY write-through
-  additionally sweeps the SPEC corpus (pass-7 catch — the docs-only census missed it):
-  `spec/prose/trap-codes.md`'s "Exit-code context" block and `spec/ggdef/src/main.rs`'s
-  header both state the taxonomy as a total enumeration and gain 102)
+  additionally sweeps the SPEC corpus BY CENSUS (pass-7 caught the docs-only scope; pass-8
+  caught the replacement two-item list being itself a selection):
+  `grep -rn "102\|one remaining non\|one nonzero NON\|four total outcomes" spec/` —
+  exemplars: `spec/prose/trap-codes.md`'s "Exit-code context" block, `spec/ggdef/src/main.rs`'s
+  header, `frontmatter.rs`'s "(102 is retired…)" comment — the literal negation of this pin —
+  and `eval.rs`'s four-outcome `Outcome` model, the ggdef modeling site. The census also
+  surfaces a REAL E0 LANE QUESTION, decided at E0 not discovered there: the conformance
+  expect-block keys `trap:` ⟺ 101 and `reject:` ⟺ 1, so a compared exit-102 outcome needs
+  its own frontmatter field and rule)
   RETIRES at E0**, all lanes per Core #9, its negative fixtures flipping. Without this the
   102 class has no reachable trigger — the only error that can escape `main` today is an
   int. Semantics: an error reaching the top of `main` renders `error: <Displayable of

@@ -37754,10 +37754,12 @@ guard: ERR(propagated)",
 /// Checked against the design record before filing (Core #15e Q1): `DONE.md`
 /// (Snag #49) records auto-propagation centralized "gated to `Call` /
 /// `MethodCall` expressions only" — method calls are named IN SCOPE — and Snag
-/// #43's note lists call args among the sites that need it. So this is a gap
-/// against intent, not an undecided asymmetry. The asymmetry lives in the
-/// TYPECHECKER (the method arm never admits the unwrap, so it never reaches
-/// lowering); a fix belongs there.
+/// #43's note lists call args among the sites that need it. ⚡ That intent is
+/// REVERSED by D45 pin 6 (2026-08-10): bare `Result` in a `T` position is a
+/// type error at EVERY call kind — the method-arm REJECT is the ratified
+/// behavior and the free-call ACCEPT is the defect. The Snag #49/#43 record
+/// below the line is historical derivation only; at round E0 this fixture is
+/// rewritten as a NEGATIVE (both positions rejected).
 #[test]
 #[ignore = "KNOWN GAP: Result→T auto-propagation is admitted at a free-call arg but REJECTED at \
 a method-call arg (E_TypeMismatch), same expression and param type. Pre-existing. ⚡ D45 pin 6 \

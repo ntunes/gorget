@@ -8,6 +8,9 @@
 #     b.take_m(&t.0)    same argument, same param type → `error[E_TypeMismatch]:
 #                       type mismatch: expected `int`, found `Result[int, int]``
 #
+# ⚡ D45 pin 6 (2026-08-10): THIS HEADER'S INTENT IS OVERTURNED — both positions
+# REJECT (bare `Result` in a `T` position = type error). Re-headered and flipped
+# to a NEGATIVE at round E0; see decisions.md D45.
 # INTENDED (asserted below): both accept. The argument is `Result[int,int]`, both
 # callees declare `int &x`, and auto-propagation is exactly the mechanism that
 # bridges them — it unwraps the `Ok` and calls, or propagates the `Error` without

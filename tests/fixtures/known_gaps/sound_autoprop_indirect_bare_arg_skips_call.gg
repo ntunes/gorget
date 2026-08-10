@@ -9,6 +9,10 @@
 #     iife_bare: err
 # Neither callee body runs. `gg check` is clean.
 #
+# ⚡ D45 pin 6 (2026-08-10): INTENDED is VINDICATED, but the ROOT section's
+# `expected_type` fix below is SUPERSEDED — at round E0 the peel re-gates on
+# `!`-mark provenance and unmarked positions never peel. Graduates as a passing
+# positive at E0; see decisions.md D45.
 # INTENDED (asserted below): each callee runs, then `ok`.
 #
 # ROOT. `maybe_auto_propagate`'s first gate is `ctx.func_state.expected_type`.
