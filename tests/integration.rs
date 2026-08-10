@@ -4819,13 +4819,20 @@ fn rust_gg_bug_generic_mono_parser_scale() {
 #[serial(gg_build)]
 fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
     // The repro procedure is documented in the fixture header. This
-    // wrapper implements it end-to-end so a future un-ignoring turns
-    // straight into a passing gate.
+    // wrapper implements it end-to-end so the R39 A1 fix has a live
+    // regression gate: sweep-and-bootstrap, assert success.
     //
-    // Note: this test MODIFIES the working tree in-place via `gg fmt`,
-    // exactly as `scripts/fmt_sweep_smoke.sh --apply` does. Run only
-    // on a scratch tree or a branch dedicated to the diagnosis — the
-    // `#[ignore]` shields the default suite from the mutation.
+    // WORKING-TREE HYGIENE. This test MUTATES ~2,754 `.gg` files via
+    // `gg fmt --in-place`. Un-restored, that mutation contaminates
+    // every subsequent test in the same sweep — an R39 close-blocker
+    // when a downstream fmt regression on `lib/xtd/tensor.gg` broke
+    // tensor tests. To keep the wrapper a live gate WITHOUT corrupting
+    // the sweep, we snapshot every touched file's original bytes into
+    // an in-memory map before the sweep and rewrite them at the end,
+    // whether the bootstrap passed or failed. Non-git dependency by
+    // design (matches CLAUDE.md `feedback-no-git-stash-in-worktrees`:
+    // stash is repo-global; a save-and-restore inside the test is
+    // self-contained + parallel-safe under `#[serial(gg_build)]`).
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let gg = manifest_dir.join("target/release/gg");
     assert!(
@@ -4851,33 +4858,63 @@ fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
         }
     }
     let corpora = ["tests/fixtures", "lib", "examples", "demo", "spectests", "compiler/data"];
+    let mut all_files: Vec<PathBuf> = Vec::new();
     for corpus in corpora.iter() {
         let root = manifest_dir.join(corpus);
         if !root.exists() {
             continue;
         }
-        let mut files = Vec::new();
-        walk_dot_gg(&root, &mut files);
-        for file in files {
-            let _ = Command::new(&gg)
-                .arg("fmt")
-                .arg("--in-place")
-                .arg(&file)
-                .output();
+        walk_dot_gg(&root, &mut all_files);
+    }
+    // Snapshot original bytes.
+    let mut original_bytes: std::collections::HashMap<PathBuf, Vec<u8>> =
+        std::collections::HashMap::with_capacity(all_files.len());
+    for file in &all_files {
+        if let Ok(b) = std::fs::read(file) {
+            original_bytes.insert(file.clone(), b);
         }
     }
-
-    // Delete cached driver binaries so the bootstrap rebuild uses the
-    // freshly-reformatted sources.
+    // Snapshot cached driver artifacts too (we delete them below to
+    // force a clean rebuild; restore whatever was there).
     let driver_exe = manifest_dir.join("tests/fixtures/self_host_lowerer/driver");
     let driver_c = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.c");
+    let saved_driver_exe = std::fs::read(&driver_exe).ok();
+    let saved_driver_c = std::fs::read(&driver_c).ok();
+
+    // Helper: rewrite every snapshotted file back to original bytes.
+    // Called both on success and on any assertion failure below.
+    let restore = |bytes: &std::collections::HashMap<PathBuf, Vec<u8>>,
+                   ex: &Option<Vec<u8>>,
+                   dc: &Option<Vec<u8>>,
+                   ex_path: &Path,
+                   dc_path: &Path| {
+        for (path, orig) in bytes {
+            let _ = std::fs::write(path, orig);
+        }
+        match ex {
+            Some(b) => { let _ = std::fs::write(ex_path, b); }
+            None => { let _ = std::fs::remove_file(ex_path); }
+        }
+        match dc {
+            Some(b) => { let _ = std::fs::write(dc_path, b); }
+            None => { let _ = std::fs::remove_file(dc_path); }
+        }
+    };
+
+    // Perform the fmt sweep + driver-cache clear + bootstrap check,
+    // capturing bootstrap status without assert! so we can restore
+    // BEFORE panicking. `std::panic::catch_unwind` would swallow the
+    // spawn assertions; a plain status check is enough.
+    for file in &all_files {
+        let _ = Command::new(&gg)
+            .arg("fmt")
+            .arg("--in-place")
+            .arg(file)
+            .output();
+    }
     let _ = std::fs::remove_file(&driver_exe);
     let _ = std::fs::remove_file(&driver_c);
 
-    // Now run the bootstrap fixed-point. This is what CURRENTLY fails
-    // with `free(): double free detected in tcache 2` in the stage-2
-    // driver binary. When the SH-lowerer defect is diagnosed and fixed,
-    // this call succeeds and the test can be un-ignored.
     let status = Command::new(env!("CARGO"))
         .arg("test")
         .arg("--test")
@@ -4887,8 +4924,13 @@ fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
         .arg("self_host_bootstrap_fixed_point")
         .env("GG_BUILD_TIMEOUT_SECS", "900")
         .env("GG_TEST_TIMEOUT_SECS", "600")
-        .status()
-        .expect("cargo test spawn");
+        .status();
+
+    // Restore working tree BEFORE asserting so a failure doesn't leave
+    // it corrupted.
+    restore(&original_bytes, &saved_driver_exe, &saved_driver_c, &driver_exe, &driver_c);
+
+    let status = status.expect("cargo test spawn");
     assert!(
         status.success(),
         "SH-lowerer stage-2 double-free (or a related bootstrap regression) \
