@@ -2216,6 +2216,18 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   scratch-tree gate + bootstrap. ⚡ Width amended same day: 120, not 100 — see the FMT CANON
   PAIR entry below.
 
+- 2026-08-10 — **🎯 MULTI-LINE STRING LAYOUT RATIFIED (owner, from gorget-arena snag #4;
+  recorded 2026-08-10 after plan-review pass 6 caught the ruling living only in TODO prose
+  while `appendix-formatting.md:85-97`'s "canonical, not verbatim" doctrine has no multi-line
+  carve-out):** `gg fmt` PRESERVES the physical line layout of a multi-line `"""` string —
+  owner's words: "Expected: preserve the physical line layout of multi-line string literals."
+  NARROW ruling: it governs PHYSICAL NEWLINES in the `"""` form only; the wider
+  escape-canon-vs-verbatim question for single-line strings remains OPEN as owner question Q1
+  (T-FMT-B's gate). The appendix gains the multi-line carve-out as this ruling's write-through
+  WHEN the fix lands (same track); top-level fixtures carrying physical `"""` blocks
+  (`multiline_strings.gg`, `string_multiline_ops.gg`, `lib/xtd/toml.gg`) join the A2
+  subject-preservation pass.
+
 - 2026-08-10 — **🎯 FMT CANON PAIR RATIFIED (owner, at R41 planning; owner invited
   objections, orchestrator raised none):** **(1) MAX LINE WIDTH = 120** — `gg fmt` breaks a
   line only past 120 columns; SUPERSEDES the 2026-08-09 100-char ruling; composes with
