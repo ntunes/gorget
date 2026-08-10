@@ -8,7 +8,8 @@ Operators listed from highest precedence (binds tightest) to lowest.
 |:----------:|-----------|----------|:-------------:|
 | 20 | `.` `?.` `[]` `()` `.0` `.1` ... | Postfix / access | Left |
 | 20 | `-` `not` `~` `*` | Unary prefix | Right |
-| 20 | `!` | Move | Right |
+| 20 | `!` (postfix) | Fallible mark | Left |
+| 20 | `^` (prefix) | Move | Right |
 | 20 | `&` | Mutable borrow | Right |
 | 20 | `spawn` `spawn blocking` | Task creation | Right |
 | 18 | `as` | Type cast | Left |
@@ -117,8 +118,8 @@ Plain `+`/`-`/`*` always check overflow (trap uncatchably on fault); the `+%`/`-
 | `^` | Move operator | `take(^value)` |
 | `&` | Mutable borrow | `modify(&value)` |
 | `*` | Dereference | `*ptr` (unsafe) |
-| `rethrow` | Error transform | `risky() rethrow (e): wrap(e)` |
-| `catch` | Error recovery | `risky() catch (e): fallback` |
+| `rethrow` | Error transform | `risky()! rethrow (e): wrap(e)` |
+| `catch` | Error recovery | `risky()! catch (e): fallback` |
 
 ---
 

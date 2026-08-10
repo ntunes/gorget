@@ -178,8 +178,9 @@ Config load_with_fallback(String path) throws String:
             return Config.default()
 ```
 
-Without the `Result` type, the error from `load_config` would auto-propagate. With
-Result capture, you handle it locally and decide what to do.
+Without the `Result` annotation the call would need the mark, and the error from
+`load_config` would propagate. With Result capture, you handle it locally and decide
+what to do.
 
 ### Recovering from Errors with `catch`
 
@@ -190,7 +191,7 @@ value. The overall expression always succeeds:
 
 ```gorget
 void main():
-    int port = parse_port(input) catch (e): 8080
+    int port = parse_port(input)! catch (e): 8080
     print(f"using port {port}")
 ```
 
@@ -204,8 +205,8 @@ functions:
 
 ```gorget
 void main():
-    String content = read_file("config.json") catch (e): "{}"
-    Config cfg = parse_config(content) catch (e): Config.default()
+    String content = read_file("config.json")! catch (e): "{}"
+    Config cfg = parse_config(content)! catch (e): Config.default()
     serve(cfg)
 ```
 
@@ -216,8 +217,8 @@ The `rethrow` keyword does this concisely:
 
 ```gorget
 Config load_config(String path) throws ConfigError:
-    String content = read_file(path) rethrow (String e): ConfigError.Io(f"reading {path}: {e}")
-    Config cfg = parse(content) rethrow (String e): ConfigError.Parse(e)
+    String content = read_file(path)! rethrow (String e): ConfigError.Io(f"reading {path}: {e}")
+    Config cfg = parse(content)! rethrow (String e): ConfigError.Parse(e)
     return cfg
 ```
 
@@ -225,8 +226,8 @@ When you don't need the original error, use the **bare form**:
 
 ```gorget
 void main() throws int:
-    Json doc = json_parse(input) rethrow 1
-    Data d = load(doc) rethrow 2
+    Json doc = json_parse(input)! rethrow 1
+    Data d = load(doc)! rethrow 2
     process(d)
 ```
 
@@ -242,7 +243,7 @@ code:
 
 ```gorget
 void main() throws int:
-    Config cfg = load("config.json") rethrow 1
+    Config cfg = load("config.json")! rethrow 1
     serve(cfg)
     # implicit success → exit 0
 ```
@@ -578,7 +579,7 @@ void main():
         case Error(e): print("overflow")
 
     # Inside a `throws ArithError` function, `+!` peels to T and auto-propagates:
-    int total = sum_or_throw([1, 2, 3]) catch (_): 0
+    int total = sum_or_throw([1, 2, 3])! catch (_): 0
     print(f"{total}")                                # 6
 
 int sum_or_throw(Vector[int] xs) throws ArithError:  # auto-inferred from +!
@@ -647,8 +648,8 @@ Config parse_config(String content) throws ConfigError:
             throw ConfigError.ParseFailed(f"invalid port: {port_str}")
 
 Config load_config(String path) throws ConfigError:
-    String content = read_file(path) rethrow (String e): ConfigError.FileNotFound(path)
-    return parse_config(content)
+    String content = read_file(path)! rethrow (String e): ConfigError.FileNotFound(path)
+    return parse_config(content)!
 
 void main():
     Result[Config, ConfigError] result = load_config("app.conf")

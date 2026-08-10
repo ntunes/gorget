@@ -1368,46 +1368,73 @@ HashSet[int] unique = {x * x for x in 1..=10}
 
 ### 6.1 The `throws` Model
 
-Functions that can fail use `throws`. Errors auto-propagate without `?`:
+A function that can fail declares `throws E` on its signature, and **every call to one
+carries a postfix `!`** — the fallible mark. The keyword states the contract; the sigil
+marks the flow. Reading a body top to bottom, every point where control can leave early
+is visible on the line where it happens:
 
 ```gorget
-# Clean: no ?, no Result wrapping
+# The happy path reads like straight-line code; the marks show where it can end
 Data process(String path) throws AppError:
-    String content = read_file(path)          # auto-propagates if error
-    Config config = parse_config(content)     # auto-propagates if error
+    String content = read_file(path)!         # on failure: return the error to the caller
+    Config config = parse_config(content)!
     return transform(config)
-
-# To handle an error locally, use type-directed Result capture:
-Data safe_process(String path) throws AppError:
-    Result[String, AppError] result = read_file(path)   # Result type suppresses auto-propagation
-    match result:
-        case Ok(content): return parse(content)
-        case Error(e):
-            log(f"Fallback: {e}")
-            return default_data()
 
 # To explicitly raise an error, use throw:
 Record parse_line(String line) throws ParseError:
     if line.is_empty():
         throw ParseError("empty line")      # raises error, exits function
     return parse(line)
-
-# Non-throwing functions capture via Result type:
-void main():
-    Result[Data, AppError] result = process("data.txt")
-    match result:
-        case Ok(data): print(data)
-        case Error(e): print(f"Error: {e}")
 ```
 
-**Keywords summary:**
-- `throws` — annotates a function that can fail (on the signature)
-- `throw` — explicitly raises an error (inside a `throws` function)
-- **Type-directed capture** — declaring the destination as `Result[T, E]` suppresses auto-propagation
+The mark is not optional and it is not only about propagation — it stays on when the
+error is handled, so a fallible call looks the same everywhere it appears:
 
-Under the hood, `throws` desugars to `Result`. Both styles available:
-- **throws style**: clean, auto-propagation (most code)
-- **Result style**: when you need to manipulate errors as data (map, and_then)
+```gorget
+int port = parse_port(input)! catch (e): 8080               # recover
+Config c = load(path)! rethrow (e): ConfigError.Io(e)       # transform and re-raise
+```
+
+An unmarked fallible call is rejected, and so is a marked call in a function that can
+neither propagate nor handle it. There is no spelling that discards a failure silently.
+
+**Errors as data.** The one fallible call that needs no mark is the one where nothing
+propagates: an explicitly `Result[T, E]`-annotated destination captures the whole
+outcome as a value, and the annotation carries the visibility on the same line.
+
+```gorget
+Data safe_process(String path) throws AppError:
+    Result[String, AppError] result = read_file(path)   # captured, not propagated
+    match result:
+        case Ok(content): return parse(content)
+        case Error(e):
+            log(f"Fallback: {e}")
+            return default_data()
+```
+
+Writing both — `Result[…] r = f()!` — is an error: capture and propagate are different
+things and each has one spelling. An `auto` or otherwise inferred destination does not
+capture; it types as the success value and still needs the mark.
+
+**Keywords and sigils:**
+- `throws E` — declares the failure contract on the signature
+- `!` — marks a fallible call at the use site (mandatory)
+- `throw` — explicitly raises an error, inside a `throws` function
+- `catch` — recovers with a fallback value; does *not* require the enclosing function to throw
+- `rethrow` — transforms an error and re-raises it
+- `on error` — cleanup that runs only on error paths, in reverse order
+- **Type-directed capture** — an explicit `Result[T, E]` destination holds the outcome as data
+
+Under the hood `throws` desugars to `Result`, but that desugar never surfaces at a use
+site: a marked fallible call is an expression of the success type `T` in every position
+except the capture position above. The Result face is there when you want to manipulate
+errors as data (`map`, `and_then`); the `throws` face is there so the common path reads
+without ceremony.
+
+The design point is that **visibility and brevity are not in tension here.** A single
+character per fallible call buys the property that Zig pays for with `try` and Go pays
+for with four lines of `if err != nil` — you can find every early exit by reading, not
+by knowing which callees happen to fail.
 
 ### 6.2 Custom Error Types
 
@@ -1429,30 +1456,24 @@ equip AppError with From[IoError]:
         return AppError.Io(^e)
 ```
 
-### 6.3 Error Backtraces
+### 6.3 Diagnosing a Failure
 
-Three layers, from cheap to detailed:
+*Not yet implemented.* An error value today carries exactly what its type carries — the
+enum variant and its payload. There is no propagation trace, no automatic source
+location, and no separate context-attachment API; the way to add context as an error
+crosses a boundary is `rethrow`, which is an ordinary transform with an ordinary payload.
 
-| Layer | Available | Cost | Info |
-|-------|-----------|------|------|
-| Source location | Always | ~zero | File + line where error was created |
-| Propagation trace | Debug builds | Moderate | Full chain of throws propagation |
-| `.context()` | Always | String alloc | Human-readable context messages |
-| `GORGET_BACKTRACE=1` | On demand | Heavy | Full native stack trace |
+The intended design is an **annotated causal chain**: because the fallible mark is
+mandatory (§6.1), the compiler already knows every propagation site statically, and can
+record the chain an error travelled without stack unwinding and without the programmer
+opting in at each hop. Where a trace of return addresses tells you *where* the error
+surfaced, a chain that also carries the payload and the `rethrow` context at each hop
+tells you *what was being attempted* at every layer that passed it along. Debug builds
+pay for the records; release builds compile them out entirely.
 
-```gorget
-# Adding context:
-Result[String, IOError] content = read_file(path)
-    .context(f"loading config from {path}")
-
-# Accessing trace:
-Result[Data, AppError] result = process("data.txt")
-match result:
-    case Error(e):
-        print(e)           # error message
-        print(e.trace())   # propagation trace (debug builds)
-        print(e.source())  # file:line (always)
-```
+This is a design target, not a shipped feature; the open questions (record layout, cost
+in debug builds, whether the chain is reachable as a value or only rendered at the top)
+are tracked in the language-definition ledger.
 
 ### 6.4 Panic (Unrecoverable)
 
@@ -2636,21 +2657,21 @@ Option[int] last = v.pop()           # removes last — no clone
 Python-style `with` for explicit resource scoping:
 
 ```gorget
-# In a throws function, errors auto-propagate:
+# A fallible acquisition carries the mark like any other fallible call:
 void read_data(String path) throws IoError:
-    with File.open(path) as file:
-        String content = file.read_all()
+    with File.open(path)! as file:
+        String content = file.read_all()!
         print(content)
     # file is closed here (Drop called)
 
-    with mutex.lock() as guard:
+    with mutex.lock() as guard:     # infallible: no mark
         *guard += 1
     # lock released here
 
     # Multiple resources
-    with File.open("in.txt") as input, File.create("out.txt") as output:
-        String data = input.read_all()
-        output.write(data)
+    with File.open("in.txt")! as input, File.create("out.txt")! as output:
+        String data = input.read_all()!
+        output.write(data)!
 ```
 
 This is syntactic sugar - it just creates a scope. Ownership + Drop handles the cleanup. But it makes the intent **explicit** and is familiar to Python developers.
@@ -3324,16 +3345,17 @@ Record parse_line(String line) throws ProcessError:
     return Record(name, value)
 
 Vector[Record] process_file(Path path) throws ProcessError:
-    auto file = fs.File.open(path)           # auto-propagates IoError → ProcessError
+    auto file = fs.File.open(path)!          # marked: propagates, IoError → ProcessError
     auto reader = BufReader.new(file)
     Vector[Record] records = Vector[Record]()
 
     for line_result in reader.lines():
-        String line = line_result             # auto-propagates
-        if line.starts_with('#') or line.is_empty():
-            continue
-        auto record = parse_line(line)        # auto-propagates
-        records.push(record)
+        match line_result:
+            case Error(e): throw ProcessError.Io(e)
+            case Ok(line):
+                if line.starts_with('#') or line.is_empty():
+                    continue
+                records.push(parse_line(line)!)   # marked: propagates ProcessError
 
     return records
 

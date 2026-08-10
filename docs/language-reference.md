@@ -3012,8 +3012,8 @@ void main() throws int:
 
 ```gorget
 int load_config(String path) throws ConfigError:
-    String content = read_file(path) rethrow (String e): ConfigError.Io(f"loading {path}: {e}")
-    return parse(content) rethrow (String e): ConfigError.Parse(e)
+    String content = read_file(path)! rethrow (String e): ConfigError.Io(f"loading {path}: {e}")
+    return parse(content)! rethrow (String e): ConfigError.Parse(e)
 ```
 
 On success, the expression's value passes through unchanged. On error, the transform expression is evaluated and thrown. In the binding form, the original error is available to the transform; in the bare form, it is discarded.
@@ -3028,13 +3028,13 @@ The `catch` keyword is the recovery counterpart to `rethrow`. Where `rethrow` tr
 
 ```gorget
 void main():
-    int port = parse_port(input) catch (e): 8080
+    int port = parse_port(input)! catch (e): 8080
     print(f"using port {port}")
 ```
 
 ```gorget
 void main():
-    int x = risky() catch (e): default_value
+    int x = risky()! catch (e): default_value
 ```
 
 On success, the expression's value passes through unchanged. On failure, the error is bound to the identifier and the recovery expression is evaluated. The recovery expression must produce the same type as the success value.
@@ -3044,13 +3044,13 @@ Unlike `rethrow`, `catch` does **not** require the enclosing function to declare
 **Wildcard binding** — use `_` when the error value isn't needed:
 
 ```gorget
-int x = risky() catch (_): default_value
+int x = risky()! catch (_): default_value
 ```
 
 **Multi-line recovery body** — the recovery expression may be a multi-line indented block; the block's last expression is the value:
 
 ```gorget
-int x = risky() catch (e):
+int x = risky()! catch (e):
     log_error(e)
     default_value
 ```
@@ -3063,7 +3063,7 @@ The block form lets the recovery run side-effecting statements (logging, cleanup
 
 ```gorget
 void main() throws int:
-    Data d = load("config.json") rethrow 1
+    Data d = load("config.json")! rethrow 1
     process(d)
     # implicit success → exit 0
 ```
