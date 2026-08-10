@@ -381,11 +381,13 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
     - **gofmt**: DOES align within "comment groups" — a run of contiguous lines that each carry a trailing comment. Automatic; no directive.
     - **clang-format**: has `AlignTrailingComments` option (default true in most styles). Configurable.
 
-    **Recommended (gofmt shape):** within a contiguous run of ≥2 stmt-lines (struct fields, enum variants, consecutive local vardecls, whatever the emit-list surface is) that EACH carry a trailing comment, align all comments to the max-required column. Budget guard: if the alignment column would push a comment past the line-width budget (~100), fall back to single-space alignment for the whole group. Groups are broken by any interior line WITHOUT a trailing comment (that becomes the new group boundary).
+    **Ratified rule (owner 2026-08-10):** within a contiguous run of ≥2 stmt-lines (struct fields, enum variants, consecutive local vardecls, whatever the emit-list surface is) that EACH carry a trailing comment, align all comments to a common column derived from a STRIDE-ROUNDED max, NOT the strict max. Do NOT probe or preserve the author's original alignment — this is a formatter rule, purely derivable from AST + line-width. Groups are broken by any interior line WITHOUT a trailing comment (that becomes the new group boundary). Budget guard: if the alignment column would push a comment past the line-width budget (~100), fall back to single-space alignment for the whole group.
+
+    **Stride (future-proof margin, owner-directed):** align to `next_multiple_of(STRIDE, max_lhs_width + MIN_GAP)` rather than `max_lhs_width + 2` exactly. STRIDE = 4 recommended (Gorget's indent unit; adding a field with `lhs_width ≤ current_alignment_column - MIN_GAP` leaves the whole group untouched, no diff churn). MIN_GAP = 2 (at least two spaces between LHS and `#`). Example: if the longest field's lhs renders to 17 chars, `next_multiple_of(4, 19) = 20`, so `#` lands at column 20; adding a new field with lhs=18 or 19 fits at column 20 with no reflow. Trade-off: 4 is compact; 8 is safer for evolving code; owner chose 4 stride to minimize whitespace while still absorbing 1-3 char growth.
 
     **Applies to:** struct fields, enum variants, consecutive const/static/vardecls, match arms, dict/set literal entries — wherever the emit-list surface has one line per element and elements can carry trailing comments.
 
-    **Implementation hint:** at emit time, walk the elements in a group and compute `max_lhs_width = max(each_elem_rendered_no_comment_width)`. Emit each `<elem><padding to max_lhs_width + 2>#<comment>`. Pass width into the doc-emitter via a new group-context field.
+    **Implementation hint:** at emit time, walk the elements in a group and compute `max_lhs_width = max(each_elem_rendered_no_comment_width)`. Compute `align_col = next_multiple_of(4, max_lhs_width + 2)`. Emit each `<elem><padding to align_col>#<comment>`. Pass `align_col` into the doc-emitter via a new group-context field.
 
     Not blocking; own scout for R40+.
 
