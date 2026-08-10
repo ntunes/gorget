@@ -25,9 +25,9 @@ pub enum LexErrorKind {
     TabCharacter,
 }
 
-impl std::fmt::Display for LexError {
+impl std::fmt::Display for LexErrorKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.kind {
+        match self {
             LexErrorKind::UnterminatedString => write!(f, "unterminated string literal"),
             LexErrorKind::UnterminatedCharLiteral => write!(f, "unterminated character literal"),
             LexErrorKind::InvalidEscapeSequence(s) => write!(f, "invalid escape sequence: {s}"),
@@ -41,6 +41,12 @@ impl std::fmt::Display for LexError {
             }
             LexErrorKind::TabCharacter => write!(f, "tab characters are not allowed; use spaces"),
         }
+    }
+}
+
+impl std::fmt::Display for LexError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.kind)
     }
 }
 
@@ -165,6 +171,23 @@ pub enum ParseErrorKind {
     /// time when a second `:` appears in a `[a:b:...]` position. Fix-it:
     /// `use v.reversed() for reverse iteration`.
     SliceStepDeferred,
+
+    /// A lex-time error surfaced through the parser's single consumed error
+    /// channel. The lexer produces `Vec<LexError>` while tokenizing; those
+    /// errors are converted here (via `From<LexError>`) and joined into
+    /// `Parser.errors` at construction so every consumer that already drains
+    /// `parser.errors` (check / build / parse / loader) rejects malformed
+    /// tokens — one source of truth, no parallel channel (Layering rule 3).
+    Lex(LexErrorKind),
+}
+
+impl From<LexError> for ParseError {
+    fn from(err: LexError) -> Self {
+        ParseError {
+            span: err.span,
+            kind: ParseErrorKind::Lex(err.kind),
+        }
+    }
 }
 
 impl std::fmt::Display for ParseError {
@@ -265,6 +288,7 @@ impl std::fmt::Display for ParseError {
                      help: use `v.reversed()` for reverse iteration"
                 )
             }
+            ParseErrorKind::Lex(kind) => write!(f, "{kind}"),
         }
     }
 }

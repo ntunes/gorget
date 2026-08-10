@@ -353,9 +353,9 @@ equip TomlParser:
         elif esc == 'r':
             return "\r"
         elif esc == 'b':
-            return "\b"
+            return "\x08"
         elif esc == 'f':
-            return "\f"
+            return "\x0c"
         elif esc == 'u' or esc == 'U':
             int toml_hex_len = 4
             if esc == 'U':

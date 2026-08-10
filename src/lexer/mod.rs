@@ -31,12 +31,34 @@ pub struct Lexer<'src> {
     pub errors: Vec<LexError>,
 }
 
-/// What kind of literal we're parsing escape sequences for.
+/// What kind of literal we're parsing escape sequences for. Encodes the
+/// DELIMITER concern only — which quote/brace escapes are legal in this
+/// context. Byte-ness (the `\xHH` range) is a SEPARATE, orthogonal axis
+/// (`EscapeByteness`) so that byte literals keep their `\'`/`\\` delimiter
+/// escapes while widening only the hex range.
 enum EscapeContext {
     /// String literal: allows `\"`, `\{`, `\}`.
     String,
     /// Single-quoted literal: allows `\'`.
     SingleQuoted,
+}
+
+/// The byte-ness of an escape context — controls the `\xHH` hex-escape range,
+/// ORTHOGONAL to `EscapeContext`'s delimiter concern (Layering rule 2: typed
+/// metadata, chosen from context, never a name/shape heuristic).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EscapeByteness {
+    /// UTF-8 text context (`"..."`, `f"..."`, `"""..."""`, `c"..."`, `'x'`,
+    /// and — for now — `b"..."`): `\xHH` encodes only ASCII `0x00-0x7F`; a
+    /// value `> 0x7F` is an error directing the user to `\u{00HH}`. Because
+    /// `parse_escape` returns a `char`, a byte `>= 0x80` cannot round-trip as
+    /// a raw byte here anyway (`\xFF` -> U+00FF is two UTF-8 bytes).
+    Ascii,
+    /// Byte-literal context (`b'\xFF'`): `\xHH` encodes the full byte range
+    /// `0x00-0xFF`. `scan_byte_literal` immediately narrows the returned
+    /// `char` scalar (`ch as u32 <= 255`) to a `u8`, so U+00FF -> 255 is the
+    /// intended raw byte with no UTF-8 buffer path.
+    Byte,
 }
 
 /// Result of parsing a single escape sequence.
@@ -548,7 +570,13 @@ impl<'src> Lexer<'src> {
 
     /// Parse a single escape sequence at `bytes[*i]` (the byte after `\`).
     /// Advances `*i` past the consumed bytes. Pushes errors on invalid sequences.
-    fn parse_escape(&mut self, bytes: &[u8], i: &mut usize, context: EscapeContext) -> EscapeResult {
+    fn parse_escape(
+        &mut self,
+        bytes: &[u8],
+        i: &mut usize,
+        context: EscapeContext,
+        byteness: EscapeByteness,
+    ) -> EscapeResult {
         if *i >= bytes.len() {
             return EscapeResult::Eof;
         }
@@ -626,6 +654,48 @@ impl<'src> Lexer<'src> {
                             });
                             '\u{FFFD}'
                         })
+                }
+            }
+            // \xHH — hex byte escape (Rust model). Exactly 2 hex digits.
+            // In UTF-8 text contexts (`EscapeByteness::Ascii`) the value must
+            // be ASCII (`<= 0x7F`); `> 0x7F` is rejected with a pointer to the
+            // `\u{00HH}` form (a raw byte >= 0x80 cannot round-trip through the
+            // returned `char`). In byte-literal context (`EscapeByteness::Byte`)
+            // the full `0x00-0xFF` range is accepted. `\u{...}` / `\uXXXX` are
+            // SEPARATE arms above and stay untouched.
+            b'x' => {
+                *i += 1; // skip x
+                let hex_start = *i;
+                let hex_end = (*i + 2).min(bytes.len());
+                while *i < hex_end && bytes[*i].is_ascii_hexdigit() {
+                    *i += 1;
+                }
+                if *i - hex_start != 2 {
+                    self.errors.push(LexError {
+                        kind: LexErrorKind::InvalidEscapeSequence(
+                            "\\x requires exactly 2 hex digits (e.g. \\x41)".to_string(),
+                        ),
+                        span: self.span(backslash_pos, *i),
+                    });
+                    '\u{FFFD}'
+                } else {
+                    let hex = &self.source[hex_start..*i];
+                    // Two hex digits always parse to 0..=255.
+                    let val = u32::from_str_radix(hex, 16).unwrap();
+                    if byteness == EscapeByteness::Ascii && val > 0x7F {
+                        self.errors.push(LexError {
+                            kind: LexErrorKind::InvalidEscapeSequence(
+                                format!(
+                                    "\\x{hex}: \\x only encodes ASCII (<=0x7F); use \\u{{00{hex}}} for U+00{hex}"
+                                ),
+                            ),
+                            span: self.span(backslash_pos, *i),
+                        });
+                        '\u{FFFD}'
+                    } else {
+                        // val <= 0xFF is always a valid scalar (U+0000..U+00FF).
+                        char::from_u32(val).unwrap()
+                    }
                 }
             }
             other => {
@@ -724,7 +794,14 @@ impl<'src> Lexer<'src> {
             // Escape sequences (all non-Raw kinds)
             if bytes[i] == b'\\' && actual_kind != StringKind::Raw {
                 i += 1; // skip backslash
-                match self.parse_escape(bytes, &mut i, EscapeContext::String) {
+                // All string-buffer kinds (Normal / Format / MultiLine / CStr,
+                // and byte string `b"..."`) decode into a UTF-8 `String`
+                // buffer, so `\xHH` is ASCII-only here. TODO(byte-string):
+                // when `b"..."` gains a real `Vec[u8]` value type (today it is
+                // typed as a plain `string_id`, `typecheck.rs`), route
+                // `StringKind::Byte` through `EscapeByteness::Byte` for the
+                // full `0x00-0xFF` range — it needs a byte-buffer path first.
+                match self.parse_escape(bytes, &mut i, EscapeContext::String, EscapeByteness::Ascii) {
                     EscapeResult::Char(c) => current_literal.push(c),
                     EscapeResult::Eof => {
                         self.errors.push(LexError {
@@ -849,7 +926,8 @@ impl<'src> Lexer<'src> {
                 break;
             }
 
-            match self.parse_one_quoted_char(bytes, i, pos) {
+            // Single-quoted `'…'` is UTF-8 text: `\xHH` is ASCII-only.
+            match self.parse_one_quoted_char(bytes, i, pos, EscapeByteness::Ascii) {
                 Ok((ch, new_i)) => {
                     literal.push(ch);
                     i = new_i;
@@ -870,10 +948,22 @@ impl<'src> Lexer<'src> {
 
     /// Parse one character (literal or escaped) from a single-quoted context.
     /// Returns `Ok((char, new_pos))` on success, or `Err(new_pos)` on EOF/unterminated.
-    fn parse_one_quoted_char(&mut self, bytes: &[u8], i: usize, literal_start: usize) -> Result<(char, usize), usize> {
+    ///
+    /// Shared by `scan_char_literal` (`'x'`, UTF-8 text — `EscapeByteness::Ascii`)
+    /// and `scan_byte_literal` (`b'\xFF'`, raw byte — `EscapeByteness::Byte`).
+    /// Both use `EscapeContext::SingleQuoted` so `\'`/`\\` stay legal in each;
+    /// byte-ness is threaded ORTHOGONALLY so `b'\''` keeps working while only
+    /// the `\xHH` range widens for byte literals.
+    fn parse_one_quoted_char(
+        &mut self,
+        bytes: &[u8],
+        i: usize,
+        literal_start: usize,
+        byteness: EscapeByteness,
+    ) -> Result<(char, usize), usize> {
         if bytes[i] == b'\\' {
             let mut j = i + 1;
-            match self.parse_escape(bytes, &mut j, EscapeContext::SingleQuoted) {
+            match self.parse_escape(bytes, &mut j, EscapeContext::SingleQuoted, byteness) {
                 EscapeResult::Char(c) => Ok((c, j)),
                 EscapeResult::Eof => {
                     self.errors.push(LexError {
@@ -904,8 +994,9 @@ impl<'src> Lexer<'src> {
             return (Token::Error, i);
         }
 
-        // Parse one char or escape sequence.
-        let (ch, after) = match self.parse_one_quoted_char(bytes, i, pos) {
+        // Parse one char or escape sequence. Byte literals take the full
+        // `\xHH` range (`0x00-0xFF`); the scalar is narrowed to `u8` below.
+        let (ch, after) = match self.parse_one_quoted_char(bytes, i, pos, EscapeByteness::Byte) {
             Ok(result) => result,
             Err(end) => return (Token::Error, end),
         };

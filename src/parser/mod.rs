@@ -91,8 +91,19 @@ impl Parser {
         // `resolution_map[span_start]` collides last-write-wins, and
         // `lower_call` emits the wrong mangled symbol at the interp site.
         let interp_base = (1usize << 40).wrapping_add(base_offset.wrapping_shl(20));
-        let lexer = Lexer::new_with_offset(source, base_offset);
-        let all_tokens: Vec<Spanned<Token>> = lexer.collect();
+        // Single lexing pass: drive the iterator to collect tokens, then take
+        // the accumulated lex errors from the SAME lexer (never a second
+        // re-lex — that would be the sidecar the one-source-of-truth mandate
+        // forbids). `by_ref()` keeps `lexer` alive so `lexer.errors` is still
+        // reachable after tokenizing. Lex errors are converted to `ParseError`
+        // and become the parser's initial error set, so every consumer that
+        // already drains `parser.errors` rejects malformed tokens.
+        let mut lexer = Lexer::new_with_offset(source, base_offset);
+        let all_tokens: Vec<Spanned<Token>> = lexer.by_ref().collect();
+        let lex_errors: Vec<ParseError> = std::mem::take(&mut lexer.errors)
+            .into_iter()
+            .map(ParseError::from)
+            .collect();
 
         // Partition: Comment tokens go to side-table, everything else split into parallel arrays
         let mut kinds = Vec::new();
@@ -115,7 +126,7 @@ impl Parser {
             kinds,
             spans,
             pos: 0,
-            errors: Vec::new(),
+            errors: lex_errors,
             warnings: Vec::new(),
             call_arg_depth: 0,
             expr_depth: 0,

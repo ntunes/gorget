@@ -426,10 +426,13 @@ equip RxParser:
                 self.fail("unrecognized group syntax")
                 return Empty()
             elif la == b':' as int:
-                self.advance(); self.advance()
+                self.advance()
+                self.advance()
                 capture = false
             elif la == b'P' as int and self.peek_at(2) == b'<' as int:
-                self.advance(); self.advance(); self.advance()
+                self.advance()
+                self.advance()
+                self.advance()
                 # Read name until '>'.
                 int name_start = self.pos
                 while not self.at_end() and self.peek() != b'>' as int:
