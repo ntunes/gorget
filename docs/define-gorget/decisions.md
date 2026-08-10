@@ -1386,7 +1386,9 @@ P1-infra reviewers' recommendation.
   WASI's 0–125 restriction (Wasm-grade bar). `70`/EX_SOFTWARE considered, declined (moribund
   standard, no recognition). 101 = Rust-panic precedent, exact semantic match, massive
   acquired recognition incl. LLM training priors. Language contract = {program's own code,
-  101}; ggdef 102/103 stay tool-level; signal deaths stay OS-reported. Full D11 (T_ registry,
+  101}; ggdef 102/103 stay tool-level (⚡ superseded twice: the 2026-07-15 scheme moved
+  ILLFORMED off 102, and D45 pin 7 later assigned 102 a COMPARED cross-lane meaning —
+  uncaught channel error); signal deaths stay OS-reported. Full D11 (T_ registry,
   normalized stderr line, `trap:` frontmatter) still PROPOSED in the batch-4 proposal (git history).
 - 2026-07-06 (later): D9 decided (3.0 → "3.0"); P1-infra brief at v3 (2 passes folded);
   matcluster brief at v2 (1 pass folded).
@@ -2032,8 +2034,10 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   (`src/semantic/typecheck.rs:9707-9714`; mirrored in the SH lane at
   `self_host_typechecker/typecheck.gg:3010`. The DOC write-through set is derived by CENSUS —
   `grep -rni "only throw.*int\|other than .int" docs/` — never by this list (pass-5 catch:
-  a cited list is a selection); exemplars: §10.6 "Throws on Main" `language-reference.md:3080`
-  — the most normative statement — §10.9 `:3136`, §3.4 `:308`, `docs/book/02-types.md:265-271`)
+  a cited list is a selection); exemplars by SECTION ANCHOR only, no line numbers — these
+  pointers drifted TWICE inside this very fold (pass-6 catch), which is what line numbers do:
+  reference §10.6 "Throws on Main" (the most normative statement), §10.9, §3.4,
+  `docs/book/02-types.md`, `docs/book/10-errors.md`)
   RETIRES at E0**, all lanes per Core #9, its negative fixtures flipping. Without this the
   102 class has no reachable trigger — the only error that can escape `main` today is an
   int. Semantics: an error reaching the top of `main` renders `error: <Displayable of
