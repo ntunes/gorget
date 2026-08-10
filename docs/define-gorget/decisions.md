@@ -186,7 +186,13 @@ language-design/book examples showing float output.
   SPEC-DIVERGE). Retroactively reclassifies the snag-#9/#10/#13
   class + the expr-body asymmetry as violations of ONE rule.
 - **A31 (error composition): inferred error sets (Zig-style) as the TARGET; explicit
-  From-conversion as the FALLBACK.** ⚡ **ELEVATED 2026-08-10 to the LOAD-BEARING error-model
+  From-conversion as the FALLBACK.** ⚡ **→ RATIFIED 2026-08-10 as part of D45 (see LOG):**
+  `|` spelling; named sets are `type` aliases (`type AppError = IoError | ParseError`);
+  closed-by-default + `..`; written-public keyed on D43; REQUIRED decl-site `!` on
+  inferred-fallible non-public fns; implicit `From` at marks DELETED (widening replaces it —
+  the "FALLBACK" in this entry's headline is dead); `gg semver-check` lands the same round;
+  impl = the synthesized-union path below + D45's ONE set-algebra module. Implementation =
+  round E2 (TODO define-gorget section). ⚡ **ELEVATED 2026-08-10 to the LOAD-BEARING error-model
   decision — see the ERROR-MODEL NORTH STAR entry in the LOG.** Not an ergonomics upgrade:
   Gorget currently has typed errors in signatures with no inference and no set algebra, which
   is the exact mechanical setup that collapsed Java's checked exceptions, and the escape hole
@@ -218,7 +224,8 @@ language-design/book examples showing float output.
   unannotated function types concretely infallible everywhere (E1 uniform); packet
   scout-a32-a1xe1-composition (derivation in git history).** Impl
   track separate (not opened here; after D29 call-sites when scheduled). Full throws×async
-  algebra later.
+  algebra later. ⚡ **D45 rider (2026-08-10): the impl consumes A31's ONE set-algebra module
+  (D45 pin 9) — never a second implementation of error-set union.**
 - **A33 (deep-fault prep, small): spec the supervised-boundary HOOK now** — a
   T_-code-carrying fault value convertible to a catchable Error at a defined isolation
   point (Task join is the natural site) — so the phase-3 supervised boundary composes
@@ -251,7 +258,13 @@ language-design/book examples showing float output.
   (launched 2026-07-11); candidate rulings D24 (boundary spec) · D25 (fault-catch
   disposition) · D26 (fallible operators).
 
-- **A34 (owner-noted CANDIDATE, 2026-08-10 — NOT ratified): the ANNOTATED CAUSAL CHAIN
+- **A34 (owner-noted CANDIDATE, 2026-08-10 — NOT ratified) ⚡ → SPLIT RATIFIED 2026-08-10 as
+  part of D45 (see LOG): A34a (top-level render + exit 102) lands at round E0; A34b (the
+  chain) is debug-only, NOT value-reachable in v1, and sequenced after D45 pin 6's
+  value-position auto-prop kill; the format trigger becomes "a `throw` consuming a catch
+  binding" (D45 retired `rethrow`); the paired implicit-`From` hole is resolved by DELETION
+  (D45 pin 3), not the purity-gating candidate at the end of this entry. Original entry kept
+  below for the chain's design detail: — the ANNOTATED CAUSAL CHAIN
   — error diagnosability as a first-class feature.** Raised in the Zig
   "no-hidden-control-flow" comparison. Today an error value carries only its own payload;
   there is no propagation trace at all (language-design §6.3 formerly documented
@@ -306,7 +319,9 @@ language-design/book examples showing float output.
   render says "error" twice (`error[E_UseAfterMove]`); the rendered level already carries
   severity, so the code becomes a pure identifier: `error[UseAfterMove]` / `warning[UnusedResult]`.
   **Registry columns:** `{ code, default_level, configurable, group, since }` — the A36 table
-  plus two. `configurable: false` is REQUIRED because not everything can be demoted
+  plus two. ⚡ **D45 rider (2026-08-10): A38 (D45 pin 10) extends these to `{ …, fix_direction,
+  tombstoned, summary, example }`, shipped as machine-readable toolchain data (`gg explain`);
+  the `E_MissingFallibleMark` three-way split rides phase 2's rename round.** `configurable: false` is REQUIRED because not everything can be demoted
   (`type-mismatch = none` must not be a legal setting); the virtue of one namespace is that the
   fixed/configurable boundary then MOVES AS DATA rather than as a rename.
   **PHASE 1 — adopt the table** as the single source of truth (severity, configurability, group,
@@ -678,6 +693,8 @@ P1-infra reviewers' recommendation.
   No second mark and no "handle without `!`" form. Remaining D29 open items: A32 HOF
   path; handled-sites census; `!=` maximal-munch tests. (Result-returning-call `!`,
   diagnostic split, D17 sequencing+fixture hardening: PINNED same session.)
+  ⚡ **AMENDED by D45 (2026-08-10): disposition (3) is RETIRED — `rethrow` leaves the grammar;
+  its meaning is spelled `catch (e): throw wrap(e)`, one handler construct (D45 pin 4).**
 
 - 2026-07-16 (formal ratification; the six follow-through pins above postdate it) — **🎯 D29 RATIFIED (owner, formal — packet-backed: census + accept-both
   prototype + collision corners + readability pages, scout-d29-packet (git history)): VISIBLE
@@ -1794,7 +1811,10 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   row-polymorphism-in-the-signature is a tax the "easier than Python" pillar cannot pay;
   open/closed sets get most of the benefit at a fraction of the concept count.
 
-  **PROPOSED (NOT RATIFIED) — how error sets work at a LIBRARY boundary.** Owner asked the three
+  **PROPOSED (NOT RATIFIED) — how error sets work at a LIBRARY boundary.** ⚡ **→ RATIFIED
+  2026-08-10 as D45 (see that entry), with amendments: union spelling is `|` (the braces in
+  (iv) below are DEAD — `throws NotFound | Denied`); named sets spell as `type` aliases;
+  handler-side subtraction added at member granularity.** Owner asked the three
   questions that decide whether sets are an asset or a liability: how do they work in libraries,
   can a function suddenly fail with an unlisted error, and how do we know everything is handled.
   (i) **Under naive inference the answer to Q2 is YES, and the change can originate two packages
@@ -1823,3 +1843,220 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   a failed assert, or OOM — deliberately out of the channel and uncatchable. The accurate claim
   is **every ERROR is handled; not every TERMINATION is recoverable.** That is the ratified
   errors-vs-faults split working as designed, and it is why A33 stays a separate question.
+
+- 2026-08-10 — **🎯 D45 RATIFIED (owner, in-session design iteration on the NORTH STAR + the
+  adversarial Fable review): THE ERROR-MODEL CONSOLIDATION — ONE CHANNEL, SEVEN GUARANTEES;
+  NAMED SETS VIA `type`; SUBTRACTIVE `catch`; `rethrow` RETIRED.** The owner ratified the v2
+  consolidation package in full (the eight owner calls), then settled the two open spellings in
+  a follow-up exchange (named-set spelling = `type` aliases; `rethrow` retirement confirmed).
+  **STATUS: DESIGN RATIFIED, NOT IMPLEMENTED** — implementation is rounds E0–E4, filed in
+  `TODO.md` (define-gorget section). Every probe and census figure in this entry was
+  regenerated 2026-08-10 (Core #5); commands quoted where load-bearing.
+
+  **THE DOCTRINE (final form — supersedes the NORTH STAR's four-properties-plus-three-missing-
+  axes statement).** *An error is a value on one visible channel. It carries a typed CONTRACT —
+  written where it can be depended on, inferred where it cannot. Its FLOW is marked at every
+  site. Its HANDLING is provable, and shrinks what remains. Its HISTORY is recorded for free.
+  Its PATHS have priced costs. And everything it tells a human, it tells a MACHINE as data.*
+  Seven guarantees: **(1) typed contract** (payload-carrying error types; public sets written;
+  set algebra so composition never taxes); **(2) visible flow** (D29 marks, and NO second
+  channel — value-position auto-prop dead, implicit `From` dead, D26 silent auto-infer dead);
+  **(3) provable, SUBTRACTIVE handling** (exhaustiveness + open/closed sets + residual
+  subtraction + A35 no-silent-discard); **(4) recorded history** (A34 chain: automatic, free in
+  release, rendered at the top by default); **(5) bounded multiplicity** (the channel is
+  one-error BY DESIGN; N-error shapes are blessed DATA patterns, never a channel mode);
+  **(6) priced paths** (zero happy-path overhead, no hidden allocation on the error path,
+  provably infallible cleanup); **(7) machine-grade surface** (diagnostics are an API —
+  guarantee 7 has the same standing as the other six). The errors≠faults split (Midori) stands
+  unchanged beneath all seven; A33's supervised boundary stays the only aperture.
+
+  **PIN 1 — NAMED ERROR SETS SPELL AS `type` ALIASES: `type AppError = IoError | ParseError |
+  ConfigError`.** Zero new keywords — Gorget already owns the transparent/nominal split as
+  `type`/`newtype` (`src/lexer/token.rs:294-295`; live at HEAD: `type Count = int`
+  in `type_alias_usage.gg`, `newtype UserId(int)` in `newtype.gg`), and a named error set IS a
+  transparent alias. Rules: the RHS `|` union is legal only when every member is an
+  error-capable type — a union outside the error channel gets a teaching diagnostic, so the
+  door to general union types is closed by a CHECKER RULE, not grammar (non-breaking to open
+  later if ever wanted; general sum types remain `enum` — an anonymous general union would be a
+  second spelling for enums, the "multiple ways" anti-goal). The alias is STRUCTURAL and
+  TRANSPARENT: the name is documentation, a display anchor, and the semver anchor — never a
+  nominal wall; nominal error wrappers stay available via `newtype`. Open sets compose the same
+  way: `type NetFail = NetError | TlsError | ..` (open-marker glyph `..` vs `...` decided at
+  the E2 grammar scout). Widening into a named set is tag injection — free, no user code —
+  which is what kills the restate-or-wrap boundary tax (Java's collapse mechanism) that
+  named-ENUMS-as-public-currency would have reintroduced the moment implicit `From` died.
+  **Alternatives considered and rejected (recorded so they are not re-proposed):** `error set
+  Name = …` — viable runner-up, self-documenting, also zero reserved words (the `on error`
+  contextual-identifier precedent, `src/parser/stmt.rs:70-72`), but adds a declaration head for
+  what `type` already expresses; `throws Name = …` — the head over-claims (these names also
+  appear in `Result[T, E]` and catch patterns); `enum Name = …` — conflates nominal (new
+  constructors) with transparent (referenced types), a reader cannot tell which; `ErrorSet[]
+  Name = [A, B]` — types in value-literal position (a `Vector[int] v = [1,2,3]` declares a
+  runtime VALUE with values on the RHS; this declares a TYPE with types on the RHS — the
+  category the type-first style exists to keep crisp), and `ErrorSet[]`'s empty brackets mean
+  nothing in the generics grammar.
+
+  **PIN 2 — A31 AMENDMENTS RATIFIED.** Union spelling is `|` everywhere — the NORTH STAR's
+  brace form (`throws {NotFound, Denied}`) is DEAD (annotated at that entry). Closed by
+  default; `..` is the opt-in to growth. Public sets are WRITTEN (checker rule keyed on D43
+  visibility); inference applies interior-side with the decl-site `!` REQUIRED on every
+  inferred-fallible non-public function (the D29(b) grammar-locked form `Config load(String
+  p)!:` — flow visible at both ends, and the machine consumer reads fallibility off the decl
+  line instead of running whole-program inference). Set algebra pins: commutative, flattening,
+  idempotent (`A|B ≡ B|A`, `(A|B)|C ≡ A|B|C`, `A|A ≡ A`); aliases expand transparently.
+  Implementation = the sizing note's synthesized union enums with structural interning.
+  **`gg semver-check` lands in the SAME round as closed-by-default** (public error-set diff:
+  member added to a closed set ⇒ MAJOR; added behind `..` ⇒ MINOR; removed ⇒ MINOR) — the tool
+  is what makes the default livable (Elm-enforced, error-set-specific), not an add-on.
+
+  **PIN 3 — IMPLICIT `From` AT `!` SITES IS DELETED.** Widening replaces conversion; no user
+  code ever runs at a mark. The purity-gating candidate recorded with A34 is retired UNUSED —
+  deletion, not gating. A conversion that does real work is spelled `catch (e): throw wrap(e)`.
+  The book's wrapper-enum + `equip … with From[…]` pattern (`language-design.md` §6.2) retires
+  with it at E1/E2.
+
+  **PIN 4 — `rethrow` IS RETIRED: `throw` is the one raising form, `catch` the one handling
+  form.** The channel surface becomes `throws` / `throw` / `catch` / `on error` / `!` —
+  keyword count net −1 in the same package that adds sets. Evidence at HEAD (probe this
+  session): `int v = f(x)! catch (e): throw "wrapped"` compiles and runs (success path prints
+  the value; error path wraps into the enclosing channel) — `throw` already functions as a
+  diverging catch body, so the keyword is pure sugar. Rationale: (a) pin 1 makes boundary
+  conversion rare (widening is free), so the keyword serves a now-rare operation; (b) ONE
+  checker path retires the per-form handler-defect class at the root (the void-`catch`
+  miscompile, the unchecked recovery type, and the match-arm-throw ICE all live on the split
+  surface — Core #4); (c) bare `rethrow 3`'s payload erasure becomes VISIBLE — `catch (_):
+  throw 3` shows the discard, uniform with A35's acknowledgment principle (the top-level-
+  silence finding stayed invisible partly because `rethrow` hid the discard); (d) A34's format
+  trigger becomes "a `throw` that consumes a catch binding" — same information, still
+  mechanical. Census 2026-08-10 (regenerate before acting): 107 occurrences across 41 files in
+  `tests/fixtures` (`grep -rln "rethrow" tests/fixtures --include="*.gg" | wc -l`), bare
+  `rethrow N` exactly 2, 32 mentions across `lib` + `docs/book` + the reference. Mechanics:
+  the keyword is TOMBSTONED — token stays in the lexer, the parser emits a teaching diagnostic
+  with a machine-applicable fix-it (`rethrow (e): X` → `catch (e): throw X`; bare `rethrow N`
+  → `catch (_): throw N`), the first customer of A38's `gg fix`; the diagnostic code is never
+  reused (A38 tombstone column). The `main throws int` exit-code idiom is PRESERVED, now
+  spelled `throw N` / `catch (_): throw N`.
+
+  **PIN 5 — HANDLER SIDE: `catch` GROWS `case` ARMS AND SUBTRACTS, AT MEMBER GRANULARITY.**
+  `catch (e): expr` stays as bind-all sugar; the general form is `catch:` + case arms. Patterns
+  are ORDINARY match patterns — probe this session: `catch (DbError.Timeout(ms)):` is a parse
+  error at HEAD, so today partial handling has no direct spelling at all — with variants
+  qualified per the existing rule (which also resolves duplicate variant names across members,
+  `IoError.Other` vs `ParseError.Other`, with zero new rules). The member-level pattern is
+  TYPE-FIRST: `case IoError e:` — a type-first declaration in pattern position, the signature
+  idiom. **THE RULE (one sentence, normative): a catch block subtracts member `M` from the
+  callee's set iff its arms cover `M` exhaustively; the residual — the union of not-fully-
+  covered members — propagates and must be covered by the enclosing signature.** The type
+  never narrows below a member (want variant-precise residuals? restructure the sets — make
+  that variant its own member type). Exhaustiveness per member is decided by the ordinary
+  match checker. **Variant-level narrowing is REJECTED for v1** (recorded so it is not
+  re-proposed casually: it is unification-grade flow typing, hostile to the nominal system and
+  to ggdef). `else` is required exactly when the matched set is open; a fully-covered closed
+  set needs no channel at all (a fully-handled catch in `main` stays legal). D26 operator
+  dispositions ride the SAME unified path — the operator-vs-call catch divergence (probe this
+  session: `(big +! 1) catch (e): -99` in `main` → `E_UnhandledThrows`, a diagnostic
+  recommending the exact spelling it rejects) dies with the unification.
+
+  **PIN 6 — THE VALUE-POSITION AUTO-PROP HOLE IS KILLED (the two-doctrines conflict resolved
+  by owner).** A bare `Result`-typed value in a `T` position is a TYPE ERROR; propagation
+  happens at `!`-marked calls only. The `known_gaps/sound_autoprop_method_arg_rejected.gg` +
+  `known_gaps/sound_autoprop_indirect_bare_arg_skips_call.gg` "INTENDED: both accept" headers
+  are OVERTURNED (pre-D29 doctrine); the fixtures flip to negatives at E0. Prerequisite of
+  A34 — the chain's premise ("the compiler knows every hop") is false until this lands.
+
+  **PIN 7 — A34 SPLIT + THE EXIT CLASS.** **A34a lands at E0:** an error reaching the top of
+  `main` renders `error: <Displayable of payload>` to stderr — one line, frozen grammar, the
+  channel sibling of `trap[T_X]: … at file:line:col` — with `GG_ERROR_FORMAT=json` for
+  machines, and the process exits **102**. The taxonomy becomes: 0 success / 1 static
+  rejection / 2 usage / 101 fault-trap / **102 uncaught error** — distinct classes are a
+  machine API, and reusing 101 would re-blur errors≠faults at the one place a harness reads
+  it. `main throws int`'s escaping int stays the process exit code (the user chose the exit
+  contract); whether it also renders in debug builds is an E0 track detail. **A34b later:**
+  the chain per the A34 design — static descriptor per `!` hop, format only at a
+  throw-consuming-a-catch-binding, debug-only, and **NOT value-reachable in v1** (reachability
+  would make it semantics, bind ggdef, and falsify the release-compiles-out promise) —
+  sequenced after pin 6.
+
+  **PIN 8 — D26'S SILENT AUTO-INFER RETIRES INTO GENERAL INFERENCE (at E2).** `+!` contributes
+  `ArithError` to the inferred set like any fallible operation; the inferred-fallible function
+  carries the decl-site `!` (pin 2); a PUBLIC function using `+!` writes `throws ArithError`
+  like any other member. The bespoke closure-walker fix shape filed for the closure gap
+  (`known_gaps/c1_d26_closure_body_no_auto_infer.gg`) is superseded — that gap dissolves in
+  the general rule.
+
+  **PIN 9 — ONE SET-ALGEBRA MODULE (Core #4 applied to the type checker).** Representation,
+  interning, union, subtraction, membership are built ONCE in A31's implementation and
+  consumed by A32's latent-effect slot, D26's `ArithError` contribution, the TaskGroup union
+  join, and any future async row. There will never be a second implementation of error-set
+  union in this compiler. Surface effect rows: NEVER (reaffirms the NORTH STAR's
+  what-not-to-copy; the internal module is the non-speculative form of the effects question —
+  if a real row lattice is ever warranted it grows out of this module, not beside it).
+
+  **PIN 10 — A38 FILED: THE MACHINE-CONSUMER PACKAGE (guarantee 7 as doctrine, not backlog;
+  largely semantics-free and parallelizable).** (a) Registry columns extend A37's to `{ code,
+  default_level, configurable, group, since, fix_direction, tombstoned, summary, example }`,
+  shipped as machine-readable data IN the toolchain (`gg explain <Code>` prints it); codes are
+  permanent identifiers (tombstone, never reuse). (b) One code = one fix DIRECTION: split
+  `E_MissingFallibleMark`'s three opposite meanings (insert-mark / remove-mark-on-capture /
+  remove-mark-on-infallible; candidate names `MissingFallibleMark` / `MarkOnCapture` /
+  `MarkOnInfallible`, finalized at A37 phase 2 since codes are cross-lane-compared values).
+  (c) Structured fix-its `{span, replacement, applicability}` with applicability ∈
+  machine-applicable / choice / advisory — a machine-applicable edit must at minimum COMPILE;
+  `gg fix --only=<code>` is the standing codemod vehicle; the `f()!=` maximal-munch trap gets
+  a targeted `choice` fix-it ("`f()! != x` or `f() != x`?"), never a silent fmt rewrite.
+  (d) `--diagnostics=json` (NDJSON, versioned schema, rustc's proven shape) + isatty detection
+  + `NO_COLOR` + `--color=never` + byte offsets + secondary spans (`UnhandledThrows` spans the
+  call AND the enclosing signature — today the second edit site is prose). (e) The check⇒build
+  contract becomes a GUARD: a ratchet asserting `gg check`-accept ⇒ backend-compile success
+  over the corpus, plus the harness greps build stderr for `.c:` on every fixture — a C error
+  reaching the user is BY DEFINITION an ICE (render `internal error` with the Gorget span,
+  exit 101; `language-design.md:120` already promises this, now executable per Core #6).
+  (f) Determinism pinned by fixture: same source ⇒ byte-identical diagnostics across runs and
+  parallelism. (g) The runtime grammars are FROZEN API: the trap line and pin 7's error
+  render. The payoff coupling this to A31: enumerable fix menus — on `UnhandledThrows` over a
+  known closed set the compiler emits the complete `catch: case` skeleton as a `choice`
+  fix-it, so an agent fills holes instead of inventing structure.
+
+  **PIN 11 — MULTIPLICITY STAYS OUT OF THE CHANNEL.** Blessed DATA patterns —
+  `TaskGroup.join_all() → Vector[Result[T, E]]` and the accumulate-Diagnostics shape (the
+  self-host's own) — get a named book section at E1; the channel never grows an N-error mode.
+  **TaskGroup policy (PROPOSED, pending concurrency-round dogfood; E2's design must not
+  foreclose it):** fail-fast — first error cancels siblings; `group.join()!` throws the UNION
+  of the tasks' sets (free under pin 2); sibling errors and cancellation outcomes are recorded
+  in the A34 chain (HISTORY absorbs multiplicity, the TYPE stays one union member); faults
+  surface only at the A33 join boundary.
+
+  **PIN 12 — THE COST ANNEXE (guarantee 6; spec'd at implementation).** The happy path of `!`
+  is a branch on a tag and nothing else; the error path allocates nothing beyond the payload
+  the user constructed; `on error` blocks are CHECKED infallible (a throwing cleanup is a
+  compile error — the Midori/Rust-drop lesson made static); the release-mode chain is zero
+  bytes. "Provably no-alloc error path" as a user-checkable property is research — filed, not
+  blocking.
+
+  **PIN 13 — `stringly-error` LINT.** Public `throws String` (or `String` as a member of a
+  public set) defaults WARN via A36 machinery — the book's demotion of `throws String` made
+  mechanical (Core #6). Interior/prototyping use stays clean; `String` remains a legal set
+  member for uniformity.
+
+  **SEQUENCING (each round per the Round lifecycle; Core #9 all-lanes; ggdef models union
+  identity and subtraction where in-subset — real spec work — and stays structurally blind to
+  the memory face per Core #13):** **E0** "kill the fictions" (pure defect closure): pin 6 +
+  the handler cells (void-`catch`, recovery-type check, match-arm-throw ICE; axis-complete net
+  per Core #12) + A34a/exit 102 + the munch-trap fix-it, ∥ the semantics-free A38 subtracks.
+  **E1** "the model gets real users": the D17 class sweep + the 59 runtime `exit(1)`
+  retirements + the book ch.10 rewrite against the D45 surface + the stdlib error taxonomy
+  designed against named sets + pin 13 + pin 11's book section. **E2** "sets": pins 1–3/8/9 +
+  `gg semver-check`, one scout under the existing A31 sizing challenge with these pins as the
+  spec. **E3** "subtraction": pins 4–5 (the catch grammar + the tombstone/codemod migration).
+  **E4** "history + concurrency": A34b + pin 11's TaskGroup + A32 impl consuming the module.
+  Honest sizing: E2+E3 is 2–3 rounds of type-system work. **Sequencing rule: E2 does not open
+  before E0+E1 land** — sets composing signatures that do not exist would be building the
+  second floor first.
+
+  **DERIVATION + WHAT WAS GIVEN UP (priced honestly).** The v2 iteration closed four gaps in
+  the adversarial review's own §4 design: the boundary wrap tax (pin 1), unspecified
+  subtraction granularity (pin 5), the unpinned exit class (pin 7), and the doctrine-as-
+  patches statement (the seven guarantees). Given up: surface novelty (the mechanism is OCaml
+  polymorphic variants + Swift marks + Zig named sets/errdefer + Midori's split, integrated —
+  cite all four); resumable handlers (never); variant-level narrowing (v1); accumulation in
+  the channel (never — it is a data pattern, pin 11).
