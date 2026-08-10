@@ -1,0 +1,64 @@
+# gorget-arena snag #3b (R40): `gg fmt` stripped blank lines ADJACENT to
+# comments — a residual of R39's snag #3 (intra-block blank preservation).
+# The broken class was "a blank whose preceding non-blank line is a comment":
+# a blank BELOW a comment, or BETWEEN two comments, at BLOCK and TOP level,
+# PLUS the EOF orphan-comment group. Pre-fix, `emit_comments_before` dumped
+# comments back-to-back with no blank awareness, and `has_blank_line_between`
+# walked transparently through the run and could only place ONE blank ABOVE
+# the whole group — so a below-comment blank was MOVED above the comment and
+# `# c1`/`# c2` were glued together.
+#
+# Wired: `fmt_comment_adjacent_blank_lines` in tests/integration.rs asserts
+# each cell survives fmt in its authored position (+ idempotence), and the
+# glued forms are absent. `_source_runs` proves the fixture compiles and runs
+# (prints 10). Corrected case (a) — blank ABOVE a comment — was already
+# preserved by R39; guarded here as a no-regression cell.
+
+# tl_below top-level comment: an authored blank BELOW it must survive.
+
+int helper_a():
+    return 1
+
+# tl_between_1 top-level comment: an authored blank between it and
+
+# tl_between_2 the next top-level comment must survive.
+int helper_b():
+    return 2
+
+int helper_c():
+    return 3
+
+# tl_above case (a): the blank ABOVE this comment must survive (R39 cell).
+int helper_d():
+    return 4
+
+struct Point:
+    int x
+    # fld_below struct-field comment: authored blank BELOW must survive.
+
+    int y
+
+enum Direction:
+    North()
+    # var_1 enum-variant comment: authored blank BETWEEN it and
+
+    # var_2 the next variant comment must survive.
+    South()
+
+int main():
+    int a = helper_a()
+    # blk_below block comment: an authored blank BELOW it must survive.
+
+    int b = helper_b()
+    # blk_1 block comment: an authored blank between it and
+
+    # blk_2 the next block comment must survive.
+    int c = helper_c()
+    int d = helper_d()
+    int total = a + b + c + d
+    print(total)
+    return 0
+
+# eof_1 EOF orphan comment: the blank ABOVE it (from main) and
+
+# eof_2 the blank BETWEEN the two orphan comments must survive.

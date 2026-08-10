@@ -257,24 +257,67 @@ impl Formatter {
 
     // ── Comment interleaving ────────────────────────────────
 
+    /// gorget-arena snag #3b (R40): the single leading-comment chokepoint
+    /// (~14 callers). Emits each standalone comment whose span precedes
+    /// `pos`, AND — the #3b fix — preserves an author-written blank line
+    /// that immediately FOLLOWS a comment in the source: a blank BELOW a
+    /// comment (`# c\n\nstmt`) or BETWEEN two comments (`# c1\n\n# c2`).
+    /// Pre-#3b this loop dumped comments back-to-back with a bare
+    /// `newline()`, so `has_blank_line_between` (which walked transparently
+    /// through the run and could place only ONE blank ABOVE the whole
+    /// group) was the sole blank source — moving a below-comment blank
+    /// above the comment and gluing `# c1`/`# c2` together.
+    ///
+    /// The blank ABOVE the run stays owned by `has_blank_line_between`
+    /// (called by the sibling loops BEFORE this); this helper owns only
+    /// the blanks WITHIN/BELOW the run, so the two never double-count.
+    ///
+    /// The follow-check MUST be `blank_line_follows` (a reorder-immune
+    /// forward source scan from the comment's own end) and NOT
+    /// `blank_between(comment.end, next_item.span.start)`: imports are
+    /// SORTED, so the next AST item's start is a reordered source position
+    /// and would false-positive a blank (this exact bug tripped the golden
+    /// sample in the scout's first prototype).
     fn emit_comments_before(&mut self, pos: usize) {
         while self.comment_cursor < self.comments.len() {
-            let c = &self.comments[self.comment_cursor];
-            if c.span.start < pos {
-                self.emitter.write(&c.node);
-                self.emitter.newline();
-                self.comment_cursor += 1;
-            } else {
+            if self.comments[self.comment_cursor].span.start >= pos {
                 break;
+            }
+            let c_end = self.comments[self.comment_cursor].span.end;
+            self.emitter.write(&self.comments[self.comment_cursor].node);
+            self.emitter.newline();
+            self.comment_cursor += 1;
+            if self.blank_line_follows(c_end) {
+                self.emitter.blank_line();
             }
         }
     }
 
+    /// EOF-orphan comment flush (gorget-arena snag #3b, R40): same blank
+    /// awareness as `emit_comments_before`, for the trailing comment group
+    /// at end-of-file. Preserves the blank ABOVE the first orphan comment
+    /// (between the last real item and the group) and blanks BETWEEN
+    /// consecutive orphan comments. A trailing blank after the LAST comment
+    /// is intentionally dropped by `blank_line_follows` (EOF whitespace is
+    /// not a paragraph break) and by `format`'s final trailing-newline
+    /// normalization.
     fn emit_remaining_comments(&mut self) {
+        let mut first = true;
         while self.comment_cursor < self.comments.len() {
+            let c_start = self.comments[self.comment_cursor].span.start;
+            let c_end = self.comments[self.comment_cursor].span.end;
+            if first {
+                first = false;
+                if self.blank_line_directly_above(c_start) {
+                    self.emitter.blank_line();
+                }
+            }
             self.emitter.write(&self.comments[self.comment_cursor].node);
             self.emitter.newline();
             self.comment_cursor += 1;
+            if self.blank_line_follows(c_end) {
+                self.emitter.blank_line();
+            }
         }
     }
 
@@ -1606,49 +1649,49 @@ impl Formatter {
         }
     }
 
-    /// gorget-arena snag #3 (R39, 2026-08-09): true iff the author wrote
-    /// at least one blank line before `cur_start`. Walks BACKWARDS from
-    /// `cur_start` to find the last non-whitespace byte (or 0), then
-    /// counts `\n`s in that trailing-whitespace region. ≥ 2 `\n` = the
-    /// user wrote at least one wholly-empty line (one `\n` is the natural
-    /// EOL of prev's content line; the second `\n` starts the blank).
+    /// gorget-arena snag #3 (R39) + #3b reconciliation (R40): true iff the
+    /// author wrote a blank line DIRECTLY ABOVE the comment run that leads
+    /// `cur_start` — equivalently, a blank between prev's last content line
+    /// and the TOPMOST comment of the run (or above `cur` itself when there
+    /// is no run). Walks upward from `cur_start`, skipping the run's comment
+    /// lines, and reports the blankness of the line immediately above prev's
+    /// content.
+    ///
+    /// **#3b reconciliation (why NON-transparent about ownership):** the
+    /// R39 version walked TRANSPARENTLY through comments and returned true
+    /// on the FIRST blank anywhere in the region, so a blank BELOW a
+    /// comment (`stmt\n# c\n\nstmt`) was reported here and emitted ABOVE the
+    /// comment — moving it. With #3b, blanks BELOW/BETWEEN the run's
+    /// comments are owned by `emit_comments_before` (`blank_line_follows`);
+    /// this predicate must therefore own ONLY the blank ABOVE the run, or
+    /// the two double-count (blank both sides ⇒ two blanks). It reports the
+    /// classification of the line DIRECTLY above prev's content: blank there
+    /// ⇒ blank-above-run; a comment or content line there ⇒ no blank-above.
     ///
     /// **Why backward walk (not `source[prev_end..cur_start]`):** for
     /// container-type items (`struct`/`enum`/`trait`/`equip`/`function`),
-    /// the AST `span.end` sits at the DEDENT token — which is often
-    /// ZERO WIDTH at the same byte position as the NEXT item's start.
-    /// `source[prev.span.end..cur.span.start]` is then empty even when
-    /// the author wrote blank lines in between. Walking back from
-    /// `cur_start` past all trailing whitespace catches the blanks
-    /// regardless of where the AST considers prev to end.
-    ///
-    /// The `prev_end` param is kept for compatibility with callers that
-    /// want an explicit floor, but the primary signal is the walk-back
-    /// from `cur_start`.
+    /// the AST `span.end` sits at the DEDENT token — often ZERO WIDTH at the
+    /// same byte position as the NEXT item's start, so `source[prev.span.end
+    /// ..cur.span.start]` is empty even when the author wrote blanks. The
+    /// walk-back from `cur_start` past trailing whitespace and the comment
+    /// run reaches prev's real last content regardless. `_prev_end` is
+    /// unused for the same zero-width reason.
     fn has_blank_line_between(&self, _prev_end: usize, cur_start: usize) -> bool {
         if cur_start == 0 || cur_start > self.source.len() {
             return false;
         }
         let bytes = self.source.as_bytes();
-        // Walk lines backward from cur_start looking for a fully-blank line
-        // (a line whose bytes are all whitespace) between prev's content
-        // and cur's content. Standalone-comment lines (`<ws>*#…\n`) are
-        // TRANSPARENT to this walk: they attach to cur, so a blank the
-        // user wrote BEFORE such a comment still expresses paragraphing.
-        // Without this, `stmt\n\n    # comment\n    stmt` collapses to
-        // `stmt\n# comment\nstmt` because the walk stops at `#`, missing
-        // the blank above it (fmt_idempotent regression, R39 close).
-        //
-        // `_prev_end` is intentionally unused: container-type items
-        // (struct/enum/fn/etc.) have zero-width AST span.end at the same
-        // position as the next item's start, so using it as a floor
-        // would defeat the walk. The whitespace walk-back reaches the
-        // last actual content byte from prev regardless.
         let mut i = cur_start;
         // Skip cur's own line (from its last `\n` to cur_start).
         while i > 0 && bytes[i - 1] != b'\n' {
             i -= 1;
         }
+        // Walk lines upward, remembering the blankness of the line last
+        // examined. On reaching prev's content line, return that remembered
+        // value: it is the classification of the line DIRECTLY above prev's
+        // content (the topmost line of the comment run, or cur's own
+        // predecessor when the run is empty).
+        let mut last_was_blank = false;
         while i > 0 {
             i -= 1; // step past the `\n` that ended the line above
             let line_end = i;
@@ -1657,12 +1700,71 @@ impl Formatter {
             }
             let line = &bytes[i..line_end];
             match line.iter().position(|b| !b.is_ascii_whitespace()) {
-                None => return true, // fully-blank line = user paragraph break
-                Some(pos) if line[pos] == b'#' => continue, // comment, keep walking
-                _ => return false, // content line — no blank between prev and cur
+                None => last_was_blank = true,               // blank line
+                Some(pos) if line[pos] == b'#' => last_was_blank = false, // comment
+                _ => return last_was_blank,                  // prev's content line
             }
         }
         false
+    }
+
+    /// gorget-arena snag #3b (R40): reorder-immune forward source scan.
+    /// True iff the line IMMEDIATELY after the source line containing `pos`
+    /// is a blank (all-whitespace, `\n`-terminated) line. `pos` is a
+    /// comment's own span end; scanning forward from it reads only the
+    /// physical source right after the comment, so it is immune to import
+    /// SORTING (unlike `blank_between(comment.end, next_item.span.start)`,
+    /// whose right endpoint is a reordered AST position — that form
+    /// false-positived the golden sample in the scout's first prototype).
+    ///
+    /// A trailing all-whitespace tail at EOF (no terminating `\n`) is NOT a
+    /// paragraph blank, so it returns false — the trailing-newline
+    /// normalization in `format` owns that.
+    fn blank_line_follows(&self, pos: usize) -> bool {
+        let bytes = self.source.as_bytes();
+        let mut i = pos.min(bytes.len());
+        // Advance to the `\n` ending pos's own line.
+        while i < bytes.len() && bytes[i] != b'\n' {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            return false; // pos's line is the final line — nothing follows
+        }
+        i += 1; // step past that `\n` onto the next line
+        let line_start = i;
+        while i < bytes.len() && bytes[i] != b'\n' {
+            i += 1;
+        }
+        // Blank line = all-whitespace AND `\n`-terminated (i < len).
+        i < bytes.len() && bytes[line_start..i].iter().all(|b| b.is_ascii_whitespace())
+    }
+
+    /// gorget-arena snag #3b (R40): true iff the line IMMEDIATELY above the
+    /// source line containing `pos` is a blank (all-whitespace) line. Used
+    /// by `emit_remaining_comments` to preserve a blank the author wrote
+    /// between the last real item and the first EOF-orphan comment (the
+    /// blank ABOVE the EOF run, which no sibling loop's
+    /// `has_blank_line_between` covers).
+    fn blank_line_directly_above(&self, pos: usize) -> bool {
+        if pos == 0 || pos > self.source.len() {
+            return false;
+        }
+        let bytes = self.source.as_bytes();
+        let mut i = pos;
+        // Walk back to the start of pos's own line.
+        while i > 0 && bytes[i - 1] != b'\n' {
+            i -= 1;
+        }
+        if i == 0 {
+            return false; // pos is on the first source line
+        }
+        // bytes[i-1] is the `\n` ending the previous line; examine that line.
+        let line_end = i - 1;
+        let mut j = line_end;
+        while j > 0 && bytes[j - 1] != b'\n' {
+            j -= 1;
+        }
+        bytes[j..line_end].iter().all(|b| b.is_ascii_whitespace())
     }
 
     /// gorget-js snag #15b (R39 Track F) + #15c (R39 Track G): the arm body of

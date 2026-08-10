@@ -10241,6 +10241,100 @@ fn fmt_preserves_intra_block_blank_lines_source_runs() {
     run_gg("fmt_preserves_intra_block_blank_lines.gg", "10");
 }
 
+// gorget-arena snag #3b (R40): `gg fmt` stripped blank lines ADJACENT to
+// comments (a residual of R39's snag #3). RED-verified per cell on the
+// PRE-fix compiler: a blank BELOW a comment was MOVED above it, blanks
+// BETWEEN two comments were stripped (gluing `# c1`/`# c2`), and the EOF
+// orphan group lost both its above-blank and between-blank. This test pins
+// the whole class in ONE fixture: block + top-level, struct fields, enum
+// variants, and the EOF orphan group. Corrected case (a) — blank ABOVE a
+// comment — was already preserved by R39 and is guarded here as a
+// no-regression cell.
+#[test]
+fn fmt_comment_adjacent_blank_lines() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_comment_adjacent_blank_lines.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let f = gorget::formatter::format_source_infallible(&source);
+
+    // ── Positive cells: the authored blank survives in its authored place. ──
+    // (Each `\n\n` window pins a blank whose preceding non-blank line is a
+    // comment — the exact broken class.)
+    let positives: &[(&str, &str)] = &[
+        // top-level: blank BELOW a comment
+        ("tl-below",
+         "# tl_below top-level comment: an authored blank BELOW it must survive.\n\nint helper_a():"),
+        // top-level: blank BETWEEN two comments
+        ("tl-between",
+         "# tl_between_1 top-level comment: an authored blank between it and\n\n# tl_between_2 the next top-level comment must survive.\nint helper_b():"),
+        // corrected case (a): blank ABOVE a comment — no-regression guard
+        ("tl-above (case a)",
+         "    return 3\n\n# tl_above case (a): the blank ABOVE this comment must survive (R39 cell).\nint helper_d():"),
+        // struct field: blank BELOW a comment
+        ("struct-field-below",
+         "    int x\n    # fld_below struct-field comment: authored blank BELOW must survive.\n\n    int y"),
+        // enum variant: blank BETWEEN two comments
+        ("enum-variant-between",
+         "    North()\n    # var_1 enum-variant comment: authored blank BETWEEN it and\n\n    # var_2 the next variant comment must survive.\n    South()"),
+        // block: blank BELOW a comment
+        ("block-below",
+         "    # blk_below block comment: an authored blank BELOW it must survive.\n\n    int b = helper_b()"),
+        // block: blank BETWEEN two comments
+        ("block-between",
+         "    # blk_1 block comment: an authored blank between it and\n\n    # blk_2 the next block comment must survive.\n    int c = helper_c()"),
+        // EOF orphan group: blank ABOVE the first orphan + BETWEEN the two
+        ("eof-group",
+         "    return 0\n\n# eof_1 EOF orphan comment: the blank ABOVE it (from main) and\n\n# eof_2 the blank BETWEEN the two orphan comments must survive."),
+    ];
+    for (cell, window) in positives {
+        assert!(
+            f.contains(window),
+            "snag #3b regression: cell `{cell}` lost its comment-adjacent blank.\n\
+             Expected window:\n{window}\n=== Formatted ===\n{f}"
+        );
+    }
+
+    // ── Negative cells: the pre-fix GLUED/MOVED shapes must be ABSENT. ──
+    let negatives: &[(&str, &str)] = &[
+        // glued top-level comments (blank between stripped)
+        ("glued tl-between",
+         "# tl_between_1 top-level comment: an authored blank between it and\n# tl_between_2"),
+        // glued enum variant comments
+        ("glued enum-between",
+         "# var_1 enum-variant comment: authored blank BETWEEN it and\n    # var_2"),
+        // glued block comments
+        ("glued block-between",
+         "# blk_1 block comment: an authored blank between it and\n    # blk_2"),
+        // glued EOF comments
+        ("glued eof-between",
+         "# eof_1 EOF orphan comment: the blank ABOVE it (from main) and\n# eof_2"),
+        // blank MOVED above the struct-field comment (pre-fix bug)
+        ("moved struct-field blank",
+         "    int x\n\n    # fld_below"),
+        // blank MOVED above the block comment (pre-fix bug)
+        ("moved block blank",
+         "    int a = helper_a()\n\n    # blk_below"),
+    ];
+    for (cell, glued) in negatives {
+        assert!(
+            !f.contains(glued),
+            "snag #3b regression: cell `{cell}` produced the pre-fix glued/moved shape.\n\
+             Forbidden window:\n{glued}\n=== Formatted ===\n{f}"
+        );
+    }
+
+    // Idempotence: a second pass must be a no-op.
+    let second = gorget::formatter::format_source_infallible(&f);
+    assert_eq!(f, second, "snag #3b: comment-adjacent blank handling not idempotent");
+}
+
+#[test]
+fn fmt_comment_adjacent_blank_lines_source_runs() {
+    // a=1, b=2, c=3, d=4 → total = 10.
+    run_gg("fmt_comment_adjacent_blank_lines.gg", "10");
+}
+
 // R39 gorget-arena verdict fold: opinionated golden-file test. Any fmt
 // behavior change on the canonical sample must be either INTENDED (update
 // expected file same commit) or REGRESSION (fix formatter). See fixture
