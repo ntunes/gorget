@@ -4816,23 +4816,23 @@ fn rust_gg_bug_generic_mono_parser_scale() {
 // non-SH .gg files, then runs the bootstrap fixed-point which itself
 // takes ~11 min on a warm CI box).
 #[test]
+#[ignore = "Mutates ~2,754 .gg files in the shared working tree via `gg fmt --in-place` — parallel tensor_* / stdlib_udp_typed / etc. tests reading those files during the mutation window fail with unpredictable errors (measured R39 close: ~11 collateral failures per LLVM sweep). Save/restore at test-end is insufficient; the fix is a scratch-tree copy (own follow-up filed to TODO.md, R39 close-time). Run manually with `cargo test --release --test integration -- --ignored sh_bootstrap_stage2_double_free_after_fmt_sweep` in a dedicated tree to verify A1 remains fixed."]
 #[serial(gg_build)]
 fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
     // The repro procedure is documented in the fixture header. This
-    // wrapper implements it end-to-end so the R39 A1 fix has a live
-    // regression gate: sweep-and-bootstrap, assert success.
+    // wrapper implements it end-to-end. See #[ignore] above for why
+    // it is currently NOT part of the default suite despite A1 being
+    // closed (mutation race with parallel readers). Save/restore is
+    // implemented below but does NOT prevent intra-run races.
     //
     // WORKING-TREE HYGIENE. This test MUTATES ~2,754 `.gg` files via
     // `gg fmt --in-place`. Un-restored, that mutation contaminates
     // every subsequent test in the same sweep — an R39 close-blocker
     // when a downstream fmt regression on `lib/xtd/tensor.gg` broke
-    // tensor tests. To keep the wrapper a live gate WITHOUT corrupting
-    // the sweep, we snapshot every touched file's original bytes into
-    // an in-memory map before the sweep and rewrite them at the end,
-    // whether the bootstrap passed or failed. Non-git dependency by
-    // design (matches CLAUDE.md `feedback-no-git-stash-in-worktrees`:
-    // stash is repo-global; a save-and-restore inside the test is
-    // self-contained + parallel-safe under `#[serial(gg_build)]`).
+    // tensor tests. The in-memory snapshot below restores the tree
+    // post-run so `git status` stays clean, but DOES NOT solve the
+    // in-run race with other tests reading .gg files during the
+    // mutation window (which is why the test is `#[ignore]`d).
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let gg = manifest_dir.join("target/release/gg");
     assert!(
