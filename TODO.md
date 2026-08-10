@@ -358,6 +358,37 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 
     Reference-grade fix: extend `emit_comments_before` (or replace with a comment-run emitter) to inspect the source region between consecutive comments AND between the last comment and `cur_start`, emitting `blank_line()` at each authored paragraph break. Same-shape fix for `format_module`'s rest loop + `format_struct.fields` + `format_enum.variants`. Add regression fixtures per axis cell (case 1 top-level, case 1 in-block, case 2 top-level, case 2 in-block, case 3, control case at top-level). `fmt_idempotent` will catch regressions once fixtures land.
 
+- **🆕⚠ [MED — R39 close-time, owner-directed formatter behavior] `gg fmt` should ALIGN trailing comments within contiguous comment groups (gofmt shape).** Owner 2026-08-10: struct field trailing comments lose their column alignment after fmt:
+
+    ```
+     struct Camera:
+         Vec3 position
+    -    float yaw       # horizontal rotation around Z axis (radians)
+    -    float pitch     # vertical rotation (radians), positive = look up
+    -    float fov       # field of view (degrees)
+    -    float speed     # movement speed (units/sec)
+    +    float yaw  # horizontal rotation around Z axis (radians)
+    +    float pitch  # vertical rotation (radians), positive = look up
+    +    float fov  # field of view (degrees)
+    +    float speed  # movement speed (units/sec)
+         float sensitivity  # mouse sensitivity
+    ```
+
+    Current: canonicalize to exactly 2 spaces before `#`, alignment lost.
+
+    **Best-practice survey:**
+    - **rustfmt / black / prettier**: do NOT align. Single space before `#`. Rationale: minimal diff-churn when a new field lands.
+    - **gofmt**: DOES align within "comment groups" — a run of contiguous lines that each carry a trailing comment. Automatic; no directive.
+    - **clang-format**: has `AlignTrailingComments` option (default true in most styles). Configurable.
+
+    **Recommended (gofmt shape):** within a contiguous run of ≥2 stmt-lines (struct fields, enum variants, consecutive local vardecls, whatever the emit-list surface is) that EACH carry a trailing comment, align all comments to the max-required column. Budget guard: if the alignment column would push a comment past the line-width budget (~100), fall back to single-space alignment for the whole group. Groups are broken by any interior line WITHOUT a trailing comment (that becomes the new group boundary).
+
+    **Applies to:** struct fields, enum variants, consecutive const/static/vardecls, match arms, dict/set literal entries — wherever the emit-list surface has one line per element and elements can carry trailing comments.
+
+    **Implementation hint:** at emit time, walk the elements in a group and compute `max_lhs_width = max(each_elem_rendered_no_comment_width)`. Emit each `<elem><padding to max_lhs_width + 2>#<comment>`. Pass width into the doc-emitter via a new group-context field.
+
+    Not blocking; own scout for R40+.
+
 - **🆕⚠ [MED — R39 close-time, owner-directed formatter behavior] `gg fmt` should FILL-PACK long argument lists, not explode one-per-line.** Owner 2026-08-10: current behavior on a long fn signature explodes every param onto its own line + trailing comma:
 
     ```
