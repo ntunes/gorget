@@ -2036,7 +2036,21 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   added there): **0 success · 1 static rejection · 2 usage · 101 trap + ICE · 102 uncaught
   channel error (NEW) · 103 ggdef fuel (outside the compared set)** — distinct classes are a
   machine API, and reusing 101 would re-blur errors≠faults at the one place a harness reads
-  it. **A34b later:**
+  it. **THE NUMBER 102: owner-challenged ("why not 3?") and RECONFIRMED 2026-08-10 —
+  recorded so it is not re-litigated.** No ecosystem has a consensus code for "uncaught
+  error" (Python/Node/JVM exit 1, Go panic 2, Rust panic 101), so the scheme's
+  "deliberately un-novel" principle resolves by extending the already-ratified family.
+  Rejected: **1** — taken by static rejection; reusing it recreates the exact
+  runtime-masquerades-as-compile-error hole this package kills; **3** (and the small-int
+  band generally) — no Unix consensus meaning, MSVC `abort()` exits 3 on Windows (a FAULT
+  smell on the wrong class), and `main throws int` hands the small-int band to the USER as
+  their exit API, so reserved classes live away from it (a user can still `throw 102` and
+  spoof the class — same caveat as Rust's `process::exit(101)`; distance minimizes the
+  accidental collisions); **sysexits 65/70** — EX_SOFTWARE=70 is the bug face (our 101),
+  EX_DATAERR=65 is a sendmail-era convention modern toolchains ignore, and half-adopting
+  one number buys no recognition. 102 extends Rust's 101 into a self-describing band —
+  10x = the language runtime ended the process; the digit says which face (101 bug, 102
+  error, 103 ggdef fuel) — clear of the shell's 126/127/128+N territory. **A34b later:**
   the chain per the A34 design — static descriptor per `!` hop, format only at a
   throw-consuming-a-catch-binding, debug-only, and **NOT value-reachable in v1** (reachability
   would make it semantics, bind ggdef, and falsify the release-compiles-out promise) —
