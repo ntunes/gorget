@@ -29115,7 +29115,12 @@ fn self_host_runtime_diff() {
     // (of MATCH 1310, BOTH-WRONG 2 remaining). 3 BOTH-WRONG rows moved to
     // ADJ-MATCH; container-of-Drop transitivity + apply_mut pre-drop +
     // return-`!expr` kill remain filed as HIGH TODOs.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 421;
+    // Ratcheted 2026-08-10 (Round XXXIX close — A1 SH-lowerer stage-2 fix +
+    // fmt-verdict fold): +12 ADJ-MATCH from R39's SH-lane fixes (SThrow arm
+    // in `infer_stmt_return_type`, Vector-slice arm in `lower_expr.gg`, and
+    // the `??` divergent-tail R1+R2 fold) that let ~12 previously-UNADJ
+    // fixtures cleanly adjudicate.
+    const GGDEF_ADJUDICATED_FLOOR: usize = 433;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -29365,7 +29370,9 @@ fn self_host_runtime_diff() {
     // MATCH on SH for the shapes SH supports). Bump 1349 → 1360 (−9 jitter
     // from 1369; conservative because the round-close narrow of Track B's
     // else-arm may shift a couple of borderline shapes on future measurements).
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1373;
+    // Ratcheted 2026-08-10 (Round XXXIX close): +27 MATCH from R39's
+    // 11-regression fix + fold on the SH lane. Locked at 1400.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1400;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
@@ -29441,7 +29448,17 @@ fn self_host_runtime_diff() {
     // Track A's divergent-tail SH gap is unfiled — add if this raise is not
     // accepted) or moving the graduated Track C fixtures back to known_gaps
     // (which would also revert Track C's +2 kg closes).
-    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 142;
+    // ⚠ RE-RAISED at round-close (Round XXXIX, 2026-08-10): quiet-box
+    // remeasure printed non-MATCH = 149 (+7 vs 142 ceiling). R39 added
+    // Rust-lane-green fixture families (`c1_d26_*` × 20, `d29_*` × 15,
+    // `bench_dict_*/bench_set_*` × 5, `builtin_oracle_sync_*` × 6,
+    // `box_trait_*` × 4, `d22_slice_colon_all_forms.gg`) as part of the
+    // A1 + fmt-verdict + `??` Track E work; several fall into the
+    // SH-can't-yet-compile bucket per Core #9. Same shape as R32/R33/R34
+    // raises. OWNER-ASK GRANTED 2026-08-10 for a documented raise; SH
+    // follow-up TODOs filed per family. Lowering back to 142 requires
+    // porting the inflow fixtures to SH.
+    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 149;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: non-MATCH ceiling skipped (debug profile — same \

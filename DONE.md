@@ -1,3 +1,54 @@
+- [2026-08-10] **Round XXXIX close — A1 SH-LOWERER STAGE-2 MEMORY-SAFETY FIX + FMT-VERDICT FOLD (gorget-arena snags #2/#3, gorget-js snags #15b/c/e) + `??` TRACK E OPTION B + D22 SLICE MIGRATION. ⚠ CLOSED WITH OWNER-GRANTED WAIVERS on both convergence STRICT 2× AND `RUNTIME_DIFF_NONMATCH_CEILING` raise 142→149 (2026-08-10). First waivered close since the STRICT rule landed at R28.** Not a precedent: next round starts from the rule per CLAUDE.md step 5.
+
+  **Verdict at close, quoted from `scripts/convergence.sh 108 556 20`:**
+
+  **Convergence: known_gaps 108→120 · TODO items 556→571 · net +27** (regen: `scripts/convergence.sh 108 556 20`)
+  - ✗ **CLAUSE (a) FAILS:** filed 20 ⇒ net must be ≤ −20, but net is +27 (closed −7, ratio −7:20 < 2:1). Deficit: 47 closures needed to satisfy the STRICT rule.
+  - ✗ **CLAUSE (c) FAILS:** net +27 is not < 0.
+  - ⚠ **WAIVER GRANTED 2026-08-10 by owner** — filings are honest inflow from Core #11/#12 obligation (durable repros for every defect surfaced during Phase 2b–2e A1 diagnosis + 11-regression fix + fold + fmt-verdict tracks + close-time discoveries). Same rationale as R32/R33 parity-inflow raises: SH lane-lag inflow outpaces same-round port capacity. All filings self-contained with durable repros or reference-grade fix notes. NOT precedent per rule; next round starts from the STRICT 2×.
+
+  **Battery — FULL, all green (per owner-required close protocol):**
+  - `cargo build --release` clean · `cargo test --lib --release` **1139/0/2i** · `cargo test --test lints --release` **119/0** · `cargo test -p ggdef --release --lib` **173/0** · `cargo test --test spec_conformance --release` **3/0** (~162s) · `cargo test --test security --release` **151/0/21i**
+  - Full C integration sweep: **2255/0/92** (~57 min, autoscaled `scripts/run_integration.sh`)
+  - Full LLVM integration sweep `--release` @ `GG_MAX_TEST_THREADS=4`: **2254/0/93** (~43 min)
+
+  **Parity re-measured:** MATCH **1400/1540 = 90.4%** (+27 vs R38's 1373). ADJ-MATCH **433** (+12 vs R38's 421). BOTH-WRONG **2** (unchanged; `drop_collection_custom_elem_leak`, `drop_struct_collection_fields`). Locked in via `RUNTIME_DIFF_MATCH_FLOOR` 1373→1400 + `GGDEF_ADJUDICATED_FLOOR` 421→433 + **owner-granted** `RUNTIME_DIFF_NONMATCH_CEILING` 142→149 raise.
+
+  **Landed (all committed, full battery GREEN):**
+
+  - **A1 SH-lowerer stage-2 memory-safety fix (Phase 2b–2e, chain of commits culminating in `08055f424`)** — trailing-comma cascade in SH parser (`parse_call_args` at parser.gg:2268 + 20+ sibling `while match_tok(TOK_COMMA)` sites) was the root cause of the stage-2 double-free that R38's Phase 4 confirmed was a real separate defect. Class-fixed via `Parser::consume_comma_or_tok(terminator)` chokepoint helper (Core #4 producer). Companion lint `self_host_parser_comma_loops_go_through_helper` (Core #6 ratchet). Ported to all 3 SH parser copies (Core #9). 9 new axis-covering `parser_trailing_comma_*` fixtures.
+
+  - **11 self_host_runtime regressions retired same-round + Core #4 fold (`17c9a9c6f` → `41361b8dd`)** — two SH-lane defects surfaced by the C sweep post-A1 integration: (i) SH typechecker's `??` divergent-RHS suppression missing the `SThrow` arm in `infer_stmt_return_type` (fixed at write site — `SThrow(_) → types.never_id`); (ii) SH lowerer's `EIndex(_, ERange(_,_))` arm handled STRING base only, silently falling through for Vector/Deque/Heap (added `gorget_array_slice(&arr, start, end)` branch with LoOwned dst, mirroring Rust's `is_collection_type` predicate). Fold extended (i) to all four divergent-tail forms `SReturn(_)/SThrow(_)/SBreak()/SContinue()` per Rust gg's `matches!` predicate at `src/semantic/typecheck.rs:4382/4407`. 4-pass fresh-review gauntlet (2 blocking reservations, both Core #4 sibling-drift, folded in place).
+
+  - **Track E — `??` Option B chain-friendly + LAZY-RHS pin (`52150f6ba`)** — nested `??` correctness. Ratified three-shape RHS: inner-`T` unwrap, same-carrier peel-outer, or divergent (Never bottom via `carrier_op_suppress` at `typecheck.gg:662`). Mirrors Kotlin `?:` and Swift `??`+ Never idiom. SH TC hardens the Option-preserving reject.
+
+  - **D22 slice migration (`3ebad8fea` + `a0eac582f`)** — parser accepts `v[a:b]` colon-slice syntax with runtime clamp. 18 non-SH sites migrated from `.slice(a, b)`. Only stdlib site: `lib/std/io.gg:432` (`write_all`'s `buf[total:len]`).
+
+  - **Formatter — Track F + G + snag #2 + collection-literal interior comment escape** (chain of ~15 commits from `f4b98a681` through `d34dd9f9e`) — comprehensive fmt fix pack from gorget-arena/gorget-js verdicts:
+    - snag #2 (arena) — trailing comment detach: `format_block_stmts` chokepoint via `emit_trailing_comment_after(stmt.span.end)` after every stmt (Core #4 producer). 15 emit sites enumerated + lint ratchet.
+    - snag #3 (arena) — intra-body blank preservation: `has_blank_line_between(prev.end, cur.start)` walk that skips comment lines transparently. Adopted `format_block_stmts` + `format_module` rest loop + `format_struct.fields` + `format_enum.variants`.
+    - snag #3 close-time close-tail: R39 close full-sweep surfaced `p2p_protocol_rpc.gg` non-idempotent (blank before standalone comment inside body); `has_blank_line_between` walks lines back through comment lines to find blanks above them (`d8034c74f`).
+    - Track F (snag #15b) + Track G (snag #15c): spurious `do:` wrap on else/catch/rethrow inline expression + multi-stmt bodies.
+    - snag #15e (gorget-js): arm-body trailing comment preserved when inline: `try_inline_single_terminal_stmt` extraction + trailing hook.
+    - Block-header trailing comments + import grouping + fn-header trailing + top-level blank preservation + golden-file regression net (`fmt_golden_sample_input.gg` + `_expected.gg`).
+    - fmt-collection-literal interior comment escape class (Core #4 + #6 producer chokepoint).
+    - Ownership sigil preserve for `blocking`/`noreturn` extern qualifiers.
+    - 4 new formatter fixtures + 6 axis-covering NEG fixtures + golden-file pair.
+
+  - **A1 sweep-test working-tree hygiene (`d34dd9f9e` → `fb0480511`)** — `sh_bootstrap_stage2_double_free_after_fmt_sweep` was un-`#[ignore]`d at R39 Phase 2e (`08055f424`) as a live regression gate, but mutates ~2,754 `.gg` files via `gg fmt --in-place` and did not restore, contaminating the sweep and breaking every subsequent tensor/network test parallel-reading the polluted files. First fix (`d34dd9f9e`) added post-run save/restore. Discovery that `#[serial(gg_build)]` does NOT prevent IN-RUN races with parallel readers led to re-`#[ignore]` (`fb0480511`) pending a proper scratch-tree implementation (filed MED to TODO.md; a1 fix itself is unchanged).
+
+  - **Ratchet tightens + owner-granted raise (`[this commit]`)** — `RUNTIME_DIFF_MATCH_FLOOR` 1373→1400 (+27 SH-lane fixes), `GGDEF_ADJUDICATED_FLOOR` 421→433 (+12), `RUNTIME_DIFF_NONMATCH_CEILING` 142→149 (**owner-granted RAISE** for the R39 inflow families).
+
+  **Gauntlet stats:** 1 executor for the 11-regression fix (Phase 2f), 2 sequential fresh output-review passes (pass 1 raised 2 Core #4 sibling-drift reservations, both folded; pass 2 SIGN OFF with 4 non-blocking observations); orchestrator directly ran the fmt tracks (Track F + G + snag #2/#3 + close-time fmt regression on `has_blank_line_between`, 4 self-composed passes); 1 stale-scan agent surfacing 2 closures.
+
+  **Filings received during R39 close (2026-08-10):** gorget-js snag #15g (HIGH — fmt string mangle `\\x`+non-hex; local repro NOT reproducible on my HEAD, R40 must probe reporter's tree) + snag #15f (MED — hex→decimal literal rewrite, RED-verified) + gorget-arena snag #3b (MED — comment-adjacent blank stripping residual) + owner-directed fmt behavior asks (fill-pack long arg lists + trailing-comment alignment gofmt-shape with STRIDE=4 margin and outlier-exclusion budget guard) — all filed with durable repros or self-contained TODO entries; none blocking R39 close.
+
+  **PROCESS LESSONS this round:**
+  1. **The A1 fmt-sweep test is a `#[ignore]` test in-shape but a live gate in-spirit.** Un-`#[ignore]`ing it requires either full-suite `#[serial]` (thousands of tests, wrong shape) or a scratch-tree implementation. The R39 close hit this the hard way when the un-`#[ignore]` at Phase 2e broke tensor + network tests via mid-mutation race. Filed as R40+ scout.
+  2. **fmt regressions on metaprogramming-heavy stdlib modules (`xtd/tensor.gg`) silently corrupt semantics.** `gg fmt` on that file produces a source `gg build` can't compile (`MetaOpInfix not substituted before GIR lowering`). Filed as MED; likely affects `xtd.dataframe`, `xtd.ecs`, `xtd.compress` too. First fmt bug to surface as REJECTS (not just data-loss).
+  3. **Convergence rule can force a genuine choice at close.** R39 hit +27 net despite the stale-scan + reviewer folds; the STRICT rule is doing its job — a waiver here does NOT normalize waivers, per its explicit "not precedent" clause. R40 opens back at the rule.
+  4. **Save/restore hygiene in tests that mutate the shared working tree is necessary-not-sufficient.** In-run races defeat post-run restoration. The right pattern is scratch-tree isolation, not mutation-with-restore.
+
 - [2026-08-08] **Round XXXVIII close — RUST-GG BUILD DETERMINISM + FORMATTER LONG-`??` WRAP + LEFT-NESTED `??` SIGSEGV FILING. ✅ CLOSED IN COMPLIANCE — fifth non-waivered close in 9 rounds.** Originally opened as "SH stage-2 memory-safety diagnosis" (A1 from R37 handover); RESCOPED mid-round to Rust-gg non-determinism when the executor discovered scout's minimal repro was fragile due to build non-determinism. Owner ratified the rescope (2026-08-08); A1 slipped to R39 with reliable ground (Track A Phase 4 proof: with determinism enforced, 3 wrapper runs consistently RED → A1 is a real separate defect).
 
   **Verdict at close, quoted from `scripts/convergence.sh 107 559 2`:**
