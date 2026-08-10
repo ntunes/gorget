@@ -121,6 +121,7 @@ need prior exposure to follow along.
 - **[B — Built-in Traits Reference](appendix-traits.md)**
 - **[C — CLI Reference](appendix-cli.md)**
 - **[D — Directives](appendix-directives.md)**
+- **[E — Formatting and Code Style](appendix-formatting.md)**
 
 ---
 
