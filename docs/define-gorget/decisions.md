@@ -1966,8 +1966,9 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   diverging catch body, so the keyword is pure sugar. Rationale: (a) pin 1 makes boundary
   conversion rare (widening is free), so the keyword serves a now-rare operation; (b) ONE
   checker path retires the per-form handler-defect class at the root (the void-`catch`
-  miscompile, the unchecked recovery type, and the match-arm-throw ICE all live on the split
-  surface — Core #4); (c) bare `rethrow 3`'s payload erasure becomes VISIBLE — `catch (_):
+  miscompile, the unchecked recovery type, and the match-arm-throw ICE all lived on the split
+  surface — Core #4; the recovery-type cell CLOSED at R40, between ratification and the
+  rebase onto the R40 base — see the E0 note in SEQUENCING); (c) bare `rethrow 3`'s payload erasure becomes VISIBLE — `catch (_):
   throw 3` shows the discard, uniform with A35's acknowledgment principle (the top-level-
   silence finding stayed invisible partly because `rethrow` hid the discard); (d) A34's format
   trigger becomes "a `throw` that consumes a catch binding" — same information, still
@@ -2166,8 +2167,12 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   identity and subtraction where in-subset — real spec work — and stays structurally blind to
   the memory face per Core #13):** **E0** "kill the fictions" (pure defect closure; its scout censuses bare-Result-in-`T`
   corpus reliance first, per pin 6): pin 6 +
-  the handler cells (void-`catch`, recovery-type check, match-arm-throw ICE; axis-complete net
-  per Core #12) + A34a/exit 102 + the munch-trap fix-it, ∥ the semantics-free A38 subtracks.
+  the handler cells (void-`catch` + match-arm-throw ICE; axis-complete net per Core #12 —
+  the THIRD cell, the `catch` recovery-type check, CLOSED between ratification and the
+  rebase onto the R40 base: R40's stale-scan landed both reject cells + the SH port and
+  graduated `catch_recovery_type_unchecked` to a live NEG, see DONE.md R40; its residuals
+  stay on their own filed entries — the SH ECatch diagnostic-emission mirror and the ggdef
+  catch-subset gap) + A34a/exit 102 + the munch-trap fix-it, ∥ the semantics-free A38 subtracks.
   **E1** "the model gets real users": the D17 class sweep + the 59 runtime `exit(1)`
   retirements + the book ch.10 FIRST pass (against the surface AS SHIPPED AT E1: real
   stdlib; the `catch (e): throw …` idiom, legal at HEAD; no `From`-wrapper; `throws String`
