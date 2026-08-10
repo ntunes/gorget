@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use crate::lexer::token::{StringKind, StringLiteral, StringSegment};
 use crate::parser::ast::*;
-use crate::span::Spanned;
+use crate::span::{Span, Spanned};
 
 // ══════════════════════════════════════════════════════════════
 // Emitter — indentation-aware output buffer
@@ -226,12 +226,17 @@ impl Formatter {
         f: impl FnOnce(&mut Formatter),
     ) -> String {
         // Sub-formatter for Doc-tree rendering has no user comments to
-        // interleave (the outer Formatter owns the sideband + cursor),
-        // and no source-lookup is possible since we don't have any
-        // spans of interest here. Pass an empty `Rc<str>` — the trailing
-        // comment helpers below will simply find no matching comment
-        // ranges because `comments` is empty.
-        let mut fmt = Formatter::new(vec![], Rc::from(""));
+        // interleave (the outer Formatter owns the sideband + cursor) —
+        // the trailing-comment helpers find no matching ranges because
+        // `comments` is empty. BUT it DOES need the real `source`: the
+        // elements it renders carry their original spans, and the
+        // `Expr::IntLiteral` arm slices `source[span]` to recover the
+        // author's radix / digit-case / underscores. Threading the real
+        // source (a cheap `Rc` clone) is what keeps a hex/oct/bin literal
+        // inside a broken multi-line collection from reverting to decimal
+        // (gorget-js snag #15f). Comment interleaving stays inert because
+        // `comments` is empty regardless of source content.
+        let mut fmt = Formatter::new(vec![], self.source.clone());
         fmt.emitter.indent = base_indent;
         fmt.emitter.at_line_start = false;
         f(&mut fmt);
@@ -281,8 +286,9 @@ impl Formatter {
     /// decide whether to dispatch to `format_bracketed_broken_with_comments`
     /// instead of the flat `doc::surround` path. When ANY element-interior
     /// comment exists, the doc DSL cannot preserve it — the sub-formatter
-    /// used by `element_to_string` is passed empty source + no comment
-    /// sideband, so any comment interior to a collection literal is
+    /// used by `element_to_string` is passed an EMPTY comment sideband
+    /// (it does hold the real `source` for span lookups, but no comments),
+    /// so any comment interior to a collection literal is
     /// silently dropped by the sub-render and then dedented to column 0
     /// by the OUTER `emit_trailing_comment_after` after the literal
     /// closes. The broken-with-comments path reuses the outer formatter's
@@ -2410,10 +2416,42 @@ impl Formatter {
         self.format_expr_maybe_parens(receiver, wrap);
     }
 
+    /// Choose the surface text for an integer literal (gorget-js snag #15f).
+    ///
+    /// The lexer discards an int literal's RADIX — `0x5C`, `0o134`, `0b1011100`
+    /// and `92` all lex to the same `IntLiteral(92)` — because radix is *syntax*
+    /// (Layering rule 1: layers are lossy on syntax, lossless on invariants), so
+    /// the AST is correct to carry only the value. The formatter is the ONE
+    /// consumer that needs the original spelling, and it recovers it the same way
+    /// it recovers comments: from the source text at the node's span.
+    ///
+    /// If the original lexeme at `span` is in-bounds AND parses back to exactly
+    /// `n` under the lexer's own rules (`parse_int_lexeme`), emit it verbatim —
+    /// this preserves the author's radix, hex digit-case, and `_` grouping in a
+    /// single round-trip-checked step. Otherwise fall back to canonical decimal.
+    /// The round-trip check is self-verifying: it is impossible to emit a lexeme
+    /// that denotes a different value than the AST node.
+    ///
+    /// The decimal fallback covers every non-preservable case safely, WITHOUT a
+    /// panic: an out-of-bounds/synthetic span (f-string interp spans live at
+    /// `1 << 40`), an empty sub-formatter source, a byte literal `b'A'` (lexes to
+    /// `IntLiteral(65)` but its lexeme does not parse as an integer), or a span
+    /// that does not land on char boundaries — `str::get` returns `None` for all
+    /// of them.
+    fn int_literal_text(&self, n: i64, span: Span) -> String {
+        if let Some(lexeme) = self.source.get(span.start..span.end) {
+            if parse_int_lexeme(lexeme) == Some(n) {
+                return lexeme.to_string();
+            }
+        }
+        n.to_string()
+    }
+
     fn format_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             Expr::IntLiteral(n) => {
-                self.emitter.write(&n.to_string());
+                let text = self.int_literal_text(*n, expr.span);
+                self.emitter.write(&text);
             }
             Expr::FloatLiteral(n) => {
                 let s = format!("{}", n);
@@ -3174,6 +3212,55 @@ impl Formatter {
 // ══════════════════════════════════════════════════════════════
 // Helper functions
 // ══════════════════════════════════════════════════════════════
+
+/// Parse an integer-literal lexeme back to its `i64` value using the SAME
+/// rules the lexer applies in `Lexer::parse_int_literal`
+/// (`src/lexer/mod.rs`): an optional leading sign, a case-insensitive
+/// `0x`/`0o`/`0b` radix prefix (else decimal), and `_` digit separators
+/// stripped before `i64::from_str_radix`. Returns `Some(value)` on a clean
+/// parse, `None` otherwise.
+///
+/// The formatter uses this to decide whether a literal's ORIGINAL source
+/// lexeme round-trips to the AST value (`int_literal_text`); mirroring the
+/// lexer exactly means "the lexeme parses back to `n`" is equivalent to
+/// "the lexer produced `n` from this lexeme", so overflow/edge behaviour
+/// (e.g. `0x7FFF…` at the i64 ceiling) matches by construction.
+///
+/// The leading sign is accepted defensively: the `IntLiteral` operand span
+/// for `-0x10` covers only `0x10` (the unary `-` is a separate AST node),
+/// but even if a signed slice arrived, the caller's `== n` equality check
+/// guards against ever emitting a lexeme that denotes a different value.
+fn parse_int_lexeme(lexeme: &str) -> Option<i64> {
+    let s = lexeme.trim();
+    let (neg, rest) = match s.as_bytes().first()? {
+        b'-' => (true, &s[1..]),
+        b'+' => (false, &s[1..]),
+        _ => (false, s),
+    };
+    let (radix, digits) = if let Some(h) =
+        rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X"))
+    {
+        (16u32, h)
+    } else if let Some(o) = rest.strip_prefix("0o").or_else(|| rest.strip_prefix("0O")) {
+        (8, o)
+    } else if let Some(b) = rest.strip_prefix("0b").or_else(|| rest.strip_prefix("0B")) {
+        (2, b)
+    } else {
+        (10, rest)
+    };
+    let clean: String = digits.chars().filter(|c| *c != '_').collect();
+    if clean.is_empty() {
+        return None;
+    }
+    // `from_str_radix` rejects any non-radix-digit char (including a stray
+    // interior sign), so a byte literal `b'A'` or a char slice fails here.
+    let mag = i64::from_str_radix(&clean, radix).ok()?;
+    if neg {
+        mag.checked_neg()
+    } else {
+        Some(mag)
+    }
+}
 
 fn binary_op_str(op: BinaryOp) -> &'static str {
     match op {

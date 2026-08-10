@@ -1,0 +1,45 @@
+# gorget-js snag #15f: `gg fmt` must PRESERVE the author's integer-literal
+# radix (and hex digit-case + `_` grouping), not rewrite everything to
+# decimal. The lexer drops radix (all four forms lex to the same
+# `IntLiteral`), so the formatter recovers the original spelling from the
+# node's source span (src/formatter/mod.rs `int_literal_text`).
+#
+# Axis exercised — radix {0x,0o,0b,dec} x hex-case {upper,lower} x
+# underscores {with,without} x position {vardecl RHS, if-cond, match-arm,
+# broken multi-line collection element, negative -0x10, f-string interp}.
+# This fixture pins the RUNTIME VALUE (unchanged by fmt); the text-level
+# "the spelling survives" claim is pinned by the `fmt_radix_preserved`
+# integration test asserting the formatted source still contains each form.
+void main():
+    int hx = 0x5C
+    int oc = 0o134
+    int bn = 0b1011100
+    int de = 92
+    int up = 0xABCD
+    int lo = 0xabcd
+    int gap = 0xFF_FF
+    int nogap = 0xFFFF
+    int decgap = 1_000_000
+    int neg = -0x10
+    Vector[int] arr = [0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D]
+    print(hx)
+    print(oc)
+    print(bn)
+    print(de)
+    print(up)
+    print(lo)
+    print(gap)
+    print(nogap)
+    print(decgap)
+    print(neg)
+    print(arr[10])
+    print(f"fs={0x10}")
+    if hx == 0x5C:
+        print("if-ok")
+    else:
+        print("if-no")
+    match de:
+        case 0x5C:
+            print("match-ok")
+        else:
+            print("match-no")

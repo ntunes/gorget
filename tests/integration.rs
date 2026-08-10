@@ -9559,6 +9559,16 @@ fn fmt_round_trip_semantic() {
         // fix `gg fmt` emitted `a\n    ?? b` (unparseable). Fix routes
         // through `wrap_multiline_expr_in_parens`.
         ("fmt_long_default_op.gg", "42"),
+        // gorget-js snag #15f: integer-literal RADIX preservation. The
+        // VALUE must be identical after fmt whether a literal was written
+        // hex/oct/bin/decimal (all lex to the same `IntLiteral`); the
+        // companion `fmt_radix_preserved` test pins the TEXT (spelling
+        // survives). This value-net catches a round-trip that changed a
+        // literal's meaning.
+        (
+            "fmt_radix_preserved.gg",
+            "92\n92\n92\n92\n43981\n43981\n65535\n65535\n1000000\n-16\n11\nfs=16\nif-ok\nmatch-ok",
+        ),
     ];
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -9681,6 +9691,76 @@ void main():
     assert!(
         cmp_fmt.contains("!") && cmp_fmt.contains("!="),
         "postfix mark and `!=` must both survive fmt.\nformatted:\n{cmp_fmt}"
+    );
+}
+
+/// gorget-js snag #15f: `gg fmt` must PRESERVE an integer literal's RADIX,
+/// hex digit-case, and `_` grouping instead of rewriting every literal to
+/// decimal (`0x5C` -> `92`, the reported bug). The lexer discards radix — all
+/// four forms lex to one `IntLiteral` — so the formatter recovers the author's
+/// spelling from the node's source SPAN (`int_literal_text` in
+/// src/formatter/mod.rs), the same source+span mechanism it uses for comments.
+///
+/// This pins the TEXT-level claim (each spelling survives verbatim) plus
+/// idempotence + clean re-parse; the companion `fmt_radix_preserved.gg` entry
+/// in `fmt_round_trip_semantic` pins the RUNTIME VALUE (build+run stdout
+/// unchanged). Axis: radix {0x,0o,0b,dec} x hex-case {upper,lower} x
+/// underscores {with,without} x position {vardecl, if-cond, match-arm, broken
+/// multi-line collection element, negative -0x10, f-string interp}.
+///
+/// RED-verify: reverting the `int_literal_text` fix reverts EVERY spelling
+/// below to decimal (all `contains` checks fail); reverting ONLY the
+/// `self.source.clone()` threading in `element_to_string_at` reverts JUST the
+/// broken-collection element (`0x000B` -> `11`), isolating the empty-source
+/// sub-formatter axis hole (edge case #1).
+#[test]
+fn fmt_radix_preserved() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir.join("tests/fixtures/fmt_radix_preserved.gg");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+
+    // Idempotence + clean re-parse. Also exercises that verbatim emission is a
+    // fixpoint: the emitted `0x5C` re-lexes to the same value at a span that
+    // slices back to `0x5C`. `format_source_infallible` panics on a parse
+    // error, so this also asserts the reformatted source stays parseable —
+    // and, for the f-string interp literal `{0x10}`, that formatting a
+    // synthetic-span operand does NOT panic (edge case #2).
+    assert_fmt_round_trips("radix_preserved", &source);
+
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Every author spelling must survive verbatim across the full axis.
+    for needle in [
+        "0x5C",           // hex, vardecl RHS
+        "0o134",          // octal
+        "0b1011100",      // binary
+        "0xABCD",         // hex, UPPER digits
+        "0xabcd",         // hex, lower digits
+        "0xFF_FF",        // hex WITH underscore grouping
+        "0xFFFF",         // hex WITHOUT underscore
+        "1_000_000",      // DECIMAL underscore grouping (also preserved)
+        "-0x10",          // negative hex (unary `-` + hex operand)
+        "0x000B",         // element of the BROKEN multi-line collection —
+                          // the empty-source sub-formatter would revert this
+                          // to `11` (edge case #1)
+        "f\"fs={0x10}\"", // f-string interpolation (synthetic-span operand)
+    ] {
+        assert!(
+            formatted.contains(needle),
+            "gg fmt dropped integer-literal radix: `{needle}` is missing from \
+             the formatted output (rewritten to decimal?).\n=== formatted ===\n{formatted}"
+        );
+    }
+
+    // The collection literal must ACTUALLY break multi-line (each element on
+    // its own line at indent 2) so the sub-formatter (`element_to_string`)
+    // path is exercised — otherwise the `0x000B` check would pass via the flat
+    // path and never touch the empty-source axis hole (edge case #1).
+    assert!(
+        formatted.contains("\n        0x000B,\n"),
+        "expected the collection literal to break multi-line so the \
+         sub-formatter path is exercised.\n=== formatted ===\n{formatted}"
     );
 }
 
