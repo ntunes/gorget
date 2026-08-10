@@ -238,6 +238,24 @@ Interpolation is only available in **f-strings** (strings prefixed with `f`). Ex
 
 Any prefix combines with triple quotes (`"""`) for a multi-line literal of that kind — `"""…"""` (normal), `f"""…"""` (with interpolation), `r"""…"""`, `b"""…"""`, and `c"""…"""` all span multiple lines. The triple-quote form simply permits embedded newlines; the prefix's interpolation and escape rules still apply.
 
+**Escape sequences.** Every escape-processing kind (Normal, Format, MultiLine, Byte, C strings, and single-quoted char/byte literals) recognizes exactly the set below. Any other `\`-sequence is a **compile error** — unknown escapes are rejected, never silently passed through:
+
+| Escape      | Meaning                                                                 |
+|-------------|-------------------------------------------------------------------------|
+| `\n`        | newline (U+000A)                                                        |
+| `\t`        | tab (U+0009)                                                            |
+| `\r`        | carriage return (U+000D)                                                |
+| `\0`        | NUL (U+0000)                                                            |
+| `\\`        | backslash                                                               |
+| `\"`        | double quote (inside `"…"`)                                             |
+| `\'`        | single quote (inside `'…'` / `b'…'`)                                    |
+| `\{` `\}`   | literal braces (in strings; f-strings additionally accept `{{` / `}}`)  |
+| `\xHH`      | hex escape — **exactly 2 hex digits**. In a text string or char literal it must be ASCII (`0x00`–`0x7F`); a value `> 0x7F` is rejected with a pointer to the `\u{00HH}` form. In a **byte literal** `b'\xHH'` the full `0x00`–`0xFF` range is allowed (raw byte value). |
+| `\u{...}`   | Unicode scalar by hex codepoint (any width, e.g. `\u{1F600}`)           |
+| `\uXXXX`    | Unicode scalar, exactly 4 hex digits (BMP shorthand)                    |
+
+There is **no** `\b`, `\f`, `\v`, or `\a` escape — write `\x08`, `\x0c`, `\x0b`, `\x07`. Raw strings (`r"…"`) process no escapes at all, so a backslash inside `r"…"` is a literal backslash.
+
 Type: `String`. Internally a 32-byte struct `{ data, cap, len, alloc }`. String literals and slicing/trim results are zero-allocation views (`cap == 0`). Concatenation, f-strings, and methods like `to_upper()` produce owned copies (`cap > 0`). The compiler auto-materializes views when the source is mutated (copy-on-write).
 
 #### None Literal
