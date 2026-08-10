@@ -345,6 +345,32 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 
 ### Medium
 
+- **🆕⚠ [MED — R39 close-time, owner-directed formatter behavior] `gg fmt` should FILL-PACK long argument lists, not explode one-per-line.** Owner 2026-08-10: current behavior on a long fn signature explodes every param onto its own line + trailing comma:
+
+    ```
+    void draw_text_atlas(
+        GpuContext &ctx,
+        FontAtlas font,
+        String text,
+        float x,
+        float y,
+        float char_size,
+        float r,
+        float g,
+        float b,
+        float a,
+    ):
+    ```
+
+    Desired: fill each line up to max width (100 chars per owner 2026-08-09 memory), then wrap:
+
+    ```
+    void draw_text_atlas(GpuContext &ctx, FontAtlas font, String text, float x, float y,
+                         float char_size, float r, float g, float b, float a):
+    ```
+
+    Applies to fn signatures, call args, tuple/collection literals, generic-arg lists — every horizontally-broken list. Formatter is currently one-per-line-when-broken (a `doc::group`+ `doc::line()` between elements → all-or-nothing wrap; the "fill" primitive would be `doc::softline()` with a `doc::group_fill`-style mode). Reference behavior: rustfmt `fn_args_layout = "Compressed"`, Prettier's `fill()` (vs its default `line`). Implementation: audit `src/formatter/mod.rs` for the list-emit sites (param list, call args, container literals, generic args, import lists) and swap `doc::line()`+`doc::group()` → a `doc::group_fill()` variant that packs greedily. Add fixture pairs for each list kind (short-fits-inline vs long-must-wrap) + `fmt_idempotent` will catch regressions. Discuss trailing-comma policy in fill mode (rustfmt keeps it; some styles drop it in packed form). NOT blocking any current work; own-scout for R40+.
+
 - **🆕⚠ [MED — R39 close-time discovery, test-infra] `sh_bootstrap_stage2_double_free_after_fmt_sweep` needs a SCRATCH-TREE implementation to be safely un-`#[ignore]`d.** The wrapper (`tests/integration.rs:4818`) mutates ~2,754 `.gg` files via `gg fmt --in-place` on the shared working tree; parallel tests (tensor_*, stdlib_udp_typed, ~11 collateral failures measured on R39 LLVM sweep) race against the mutation window and fail unpredictably. `#[serial(gg_build)]` only serializes against other `gg_build`-tagged tests, not the whole suite. R39 added post-run save/restore (`d34dd9f9e`) so `git status` stays clean after the test finishes, but the IN-RUN race is unsolved. Re-`#[ignore]`d R39 close-time. Fix: copy the corpora to a `TempDir`, chdir the sweep into it, invoke the bootstrap check pointing at the copy. Un-`#[ignore]` once implemented so A1 regressions are gated automatically.
 
 - **🆕🐛 [MED — R39 close-time discovery, fmt regression] `gg fmt` on `lib/xtd/tensor.gg` produces a source that `gg build` panics with `MetaOpInfix not substituted before GIR lowering — meta substitution pass incomplete` (`src/ir/lowering/exprs/mod.rs:1797`).** RED-verified: (a) HEAD `lib/xtd/tensor.gg` builds all tensor test fixtures clean; (b) `gg fmt` reorders the first-line `xtd.tensor` import alphabetically + likely other whole-file mutations; (c) after `gg fmt --in-place`, `gg build tests/fixtures/tensor_basic.gg` panics as above on BOTH C and LLVM backends. Regression surfaced when `sh_bootstrap_stage2_double_free_after_fmt_sweep` (an un-`#[ignore]`d test as of `08055f424`) mutated the working tree via `gg fmt` and left it corrupted, breaking every subsequent tensor test in the same sweep. The A1 sweep test now save/restores in-memory (this round's fix); the ROOT CAUSE — that `gg fmt` on `xtd/tensor.gg` produces a semantically-different source — remains. Investigate what fmt canonicalization breaks meta-op substitution (import reorder? something else in the ~600-LOC tensor stdlib?). Likely a formatter regression from R37 (`!`→`^` or empty-body chip) or R39's Track A follow-up chain touching format.gg. Bisect + fix. Also likely affects other xtd modules that use similar meta-programming (`xtd.dataframe`, `xtd.ecs`, `xtd.compress`) — audit.
