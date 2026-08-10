@@ -544,6 +544,19 @@ void lower_for_string_bytes(LowerCtx &ctx, SpannedPattern pat, int coll_local, b
     # Byte-ordinal counter for `for (i, b) in s.bytes().enumerate()` — the
     # logical 0-based index, +1 per iteration (== byte_pos here, since the
     # stride is 1, but kept independent to mirror lower_for_string's cpidx).
+    # ⚠ CURRENTLY UNREACHABLE: `is_enumerate` is always false at this call. The
+    # router (`match wt_iter.expr` above, ~line 163) tests `.enumerate()` BEFORE
+    # `.bytes()` in the same `elif` chain, so `s.bytes().enumerate()` matches the
+    # enumerate arm FIRST, strips down to the `s.bytes()` receiver, and takes the
+    # VECTOR path (`lower_for_vector`) — which over-reads the 1-byte-stride array
+    # through the i64 payload slot (prints 0,16961,1,66 not 0,65,1,66). So this
+    # complete `is_enumerate` sibling is kept, NOT trimmed, for the future router
+    # fix that would re-detect `.bytes()` on the stripped enumerate receiver and
+    # route it HERE. Filed latent gap (SH lane):
+    # tests/fixtures/known_gaps/sh_bytes_enumerate_i64_overread.gg.
+    # When reachable: byte-ordinal counter for `for (i, b) in s.bytes().enumerate()`
+    # — the logical 0-based index, +1 per iteration (== byte_pos here, since the
+    # stride is 1, but kept independent to mirror lower_for_string's cpidx).
     int idx_local = -1
     if is_enumerate:
         idx_local = add_local(&ctx, I64_TYPE, None)

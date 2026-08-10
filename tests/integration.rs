@@ -5157,6 +5157,25 @@ fn catch_binding_throw_in_match_arm_ice() {
     run_gg("known_gaps/catch_binding_throw_in_match_arm_ice.gg", "8080");
 }
 
+// SELF-HOST-LANE gap (surfaced Round R40, Track-J review): `for (i, b) in
+// s.bytes().enumerate()` MISCOMPILES on the self-host lane — it prints
+// `0,16961,1,66` (the i64-slot over-read) instead of the correct `0,65,1,66`.
+// The Rust gg lane is correct (this asserts the INTENDED, Rust-correct output).
+// Cause: the SH router (self_host_lowerer/lower_loops.gg) tests `.enumerate()`
+// BEFORE `.bytes()`, so the outer `.enumerate()` strips first and the loop
+// takes the VECTOR path over the materialized `Vector[u8]` — the SH's i64 slot
+// widening then over-reads the 1-byte-stride array. `lower_for_string_bytes`
+// has a complete-but-UNREACHABLE `is_enumerate` arm awaiting a router fix that
+// re-detects `.bytes()` on the stripped enumerate receiver. Ignored because the
+// SH lane does not yet match this spec; un-ignore + promote out of known_gaps/
+// when the SH router fix lands. TODO.md (LOW, SH-lane, Core #9-adjacent).
+#[test]
+#[ignore = "KNOWN GAP (SH lane): `for (i, b) in s.bytes().enumerate()` over-reads \
+the i64 slot on the self-host lane (0,16961,1,66 vs 0,65,1,66); Rust gg is correct; TODO.md."]
+fn sh_bytes_enumerate_i64_overread() {
+    run_gg("known_gaps/sh_bytes_enumerate_i64_overread.gg", "0\n65\n1\n66");
+}
+
 // PERF PATHOLOGY — Track I sibling filing (2026-07-28). `Ownership::Move if
 // callee_is_move_param` arm at `src/ir/lowering/exprs/calls.rs:624`
 // unconditionally emits an `emit_clone` on the Ptr(T) operand of a `!`-arg
@@ -20430,22 +20449,19 @@ fn mutex_basic() {
     run_gg("mutex_basic.gg", "0\n42");
 }
 
+// NEG regression — GRADUATED from known_gaps R40 (2026-08-10). A `catch`
+// recovery expression's type IS now checked against the binding's declared
+// type (`check_recovery_type`, src/semantic/typecheck.rs, guarded by the lint
+// `recovery_arms_route_through_check_recovery_type`) — a mismatched recovery
+// is rejected `error[E_TypeMismatch]` at CHECK, before codegen. Both the
+// reported cell (recovery `""` into a `Vector[int]` binding) and the severe
+// cell (`Vector[String]` recovery into `Vector[int]`, which shared the C
+// `GorgetArray` layout so NOTHING caught it and it ran on both backends) now
+// reject. Was `known_gaps/catch_recovery_type_unchecked.gg`.
 #[test]
-#[ignore = "KNOWN GAP (filed 2026-08-05, reported by gorget-js snag #14; severe cell \
-found while verifying it): a `catch` recovery expression's type is NEVER checked \
-against the binding's declared type. Reported cell (recovery `\"\"` into a \
-Vector[int] binding) is caught by the C compiler by accident of layout. SEVERE cell \
-(this fixture): a Vector[String] recovery into a Vector[int] binding shares the C \
-representation GorgetArray, so NOTHING catches it -- gg check exit 0, gg build \
-exit 0 on C AND llvm, runs and prints a Str header's data pointer as an int64_t. \
-Silent type confusion on both backends. MECHANISM (verified 2026-08-05): \
-typecheck.rs:4652 called self.infer_expr(recovery) and DISCARDED the result, then \
-:4656-4659 returned the Result's `T` slot regardless -- a type was FABRICATED, \
-never compared. Sibling FaultCatch arm at :4710 was broken identically (Core #4). \
-Un-ignore and convert to a NEG fixture when fixed."]
 fn catch_recovery_type_unchecked() {
     check_gg_fails(
-        "known_gaps/catch_recovery_type_unchecked.gg",
+        "catch_recovery_type_unchecked.gg",
         "error[E_TypeMismatch]",
     );
 }

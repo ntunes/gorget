@@ -11168,8 +11168,9 @@ fn recovery_arms_route_through_check_recovery_type() {
         assert!(
             arm.contains("check_recovery_type("),
             "{pat}: must route through check_recovery_type — see \
-             tests/fixtures/known_gaps/catch_recovery_type_unchecked.gg for \
-             the class this guard retires. New recovery/handler-yielding arms \
+             tests/fixtures/catch_recovery_type_unchecked.gg (the NEG regression \
+             graduated from known_gaps R40) for the class this guard retires. \
+             New recovery/handler-yielding arms \
              must call check_recovery_type(recovery_or_handler, expected) at \
              the writer site so ill-typed recoveries reject with E_TypeMismatch \
              instead of reaching codegen (Core #10 lower-or-reject)."

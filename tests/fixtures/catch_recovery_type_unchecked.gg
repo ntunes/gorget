@@ -1,12 +1,13 @@
-# KNOWN GAP — TYPE-CHECKER SOUNDNESS HOLE. A `catch` recovery expression's
-# type is never checked against the binding's declared type, so ill-typed code
-# reaches codegen. Reported by the gorget-js project (snag #14); the severe
-# cell below was found while verifying that report.
+# NEG REGRESSION — GRADUATED from known_gaps R40 (2026-08-10); bug FIXED. A
+# `catch` recovery expression's type IS now checked against the binding's
+# declared type, so this asserts the `error[E_TypeMismatch]` reject that now
+# fires at CHECK (before codegen). Reported by the gorget-js project (snag #14);
+# the severe cell below was found while verifying that report and drove the fix.
 #
-# INTENDED: `gg check` REJECTS this with a type error, e.g.
-#   "catch recovery type Vector[String] does not match expected Vector[int]".
+# ASSERTS: `gg check` REJECTS this with `error[E_TypeMismatch]`.
 #
-# TWO CELLS, and the severity depends entirely on C-level layout:
+# TWO CELLS (the PRE-FIX behavior this fixture now guards against), where the
+# severity depended entirely on C-level layout:
 #
 #   (a) REPORTED CELL -- recovery `""` (Str) into a `Vector[int]` binding:
 #       gg check : exit 0, "OK: no semantic errors"
@@ -47,7 +48,9 @@
 # earlier. Treat the provenance as "observed at", not "caused by", until
 # bisected.
 #
-# Graduate out of known_gaps/ (un-ignore + move to a NEG fixture) when fixed.
+# GRADUATED R40 (2026-08-10): the fix (`check_recovery_type` in typecheck.rs,
+# guarded by the lint `recovery_arms_route_through_check_recovery_type`) rejects
+# BOTH cells at CHECK. Now a live NEG regression, no longer a known gap.
 
 Vector[int] make_vec(int x) throws String:
     if x < 0:

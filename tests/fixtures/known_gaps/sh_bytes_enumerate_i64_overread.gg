@@ -1,0 +1,26 @@
+# SELF-HOST-LANE gap (surfaced Round R40, Track-J review): iterating
+# `for (i, b) in s.bytes().enumerate()` MISCOMPILES on the self-host lane —
+# it prints `0,16961,1,66` (the i64-slot over-read) instead of the correct
+# `0,65,1,66`. The Rust gg lane is CORRECT (this fixture passes on Rust).
+#
+# Mechanism (self-host lowerer, tests/fixtures/self_host_lowerer/lower_loops.gg):
+# the router's `match wt_iter.expr` tests `.enumerate()` BEFORE `.bytes()` in an
+# `elif` chain, so the outer `.enumerate()` is stripped FIRST — `probe_coll`
+# becomes `s.bytes()`, `probe_is_bytes` stays false, and the loop takes the
+# VECTOR path (`lower_for_vector`) over the materialized `Vector[u8]`. The SH
+# widens narrow ints to i64 SLOTS, so reading the 1-byte-stride `.bytes()` array
+# back through the i64-payload `.get().unwrap()` path OVER-READS 8 bytes per
+# element (0x4241 = 16961 for the first two bytes of "AB"). The plain
+# `for b in s.bytes()` shape (no `.enumerate()`) DOES route to the correct
+# byte-stride path (`lower_for_string_bytes`), which is why that one is fine.
+#
+# The fix is a router change: re-detect a `.bytes()` on the stripped enumerate
+# receiver and route it to `lower_for_string_bytes` with `is_enumerate=true`
+# (whose enumerate arm is written and complete, but currently UNREACHABLE).
+# Asserts the CORRECT output; graduate out of known_gaps/ when the SH router
+# fix lands. 'A' = 65, 'B' = 66.
+void main():
+    String s = "AB"
+    for (i, b) in s.bytes().enumerate():
+        print(i)
+        print(b)
