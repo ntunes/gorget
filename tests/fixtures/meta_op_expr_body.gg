@@ -1,0 +1,40 @@
+# Regression: expression-bodied generic functions that use a `meta[op]` infix.
+#
+# `lower_generic_function` runs the meta-op substitution sweep for BLOCK
+# bodies; the expression-body arm was missing, so an expr-body `meta[op]`
+# survived to GIR lowering and panicked (`MetaOpInfix not substituted`).
+# Sibling of the `gg fmt` `meta op` -> `void op` write-site bug.
+#
+# Operands are runtime function arguments (not literals) so constant folding
+# cannot elide the meta[op] node. Exercises arithmetic AND comparison ops.
+# Results are bound to typed locals BEFORE printing so a lowering failure
+# surfaces at the binding, never swallowed by f-string interpolation.
+
+# Expression body containing the meta[op] infix — the shape that regressed.
+T combine[Numeric T](T a, T b, meta op): a meta[op] b
+
+bool compare[Numeric T](T a, T b, meta op): a meta[op] b
+
+# Expression-body wrappers that pass a `meta <op>` argument.
+int iadd(int a, int b): combine[int](a, b, meta +)
+int isub(int a, int b): combine[int](a, b, meta -)
+int imul(int a, int b): combine[int](a, b, meta *)
+float fadd(float a, float b): combine[float](a, b, meta +)
+bool ilt(int a, int b): compare[int](a, b, meta <)
+bool igt(int a, int b): compare[int](a, b, meta >)
+
+void main():
+    int x = 6
+    int y = 4
+    int s = iadd(x, y)
+    int d = isub(x, y)
+    int p = imul(x, y)
+    float f = fadd(1.5, 2.25)
+    bool lt = ilt(x, y)
+    bool gt = igt(x, y)
+    print(f"{s}")   # 10
+    print(f"{d}")   # 2
+    print(f"{p}")   # 24
+    print(f"{f}")   # 3.75
+    print(f"{lt}")  # false
+    print(f"{gt}")  # true

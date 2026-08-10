@@ -3608,6 +3608,27 @@ pub fn evaluate_delayed_meta_block(
     }
 }
 
+/// Expression-body mirror of `evaluate_delayed_meta_block`'s upfront meta-op
+/// sweep (that function's lines guarded by `if !local_env.is_empty()`).
+///
+/// Expression-bodied generic functions (`T f[Numeric T](T a, T b, meta op) =
+/// a meta[op] b`) never enter `evaluate_delayed_meta_block` — `lower_generic_
+/// function` only calls it for `FunctionBody::Block`. Without this sibling their
+/// `MetaOpInfix` nodes would survive to GIR lowering and panic (`MetaOpInfix not
+/// substituted`). We substitute the pre-loaded meta-op / meta-const bindings
+/// directly into the body expression, exactly as the block sweep does per
+/// statement. An expression body carries no `meta if`/`for`/`match` statements,
+/// so the statement-expansion machinery above is not needed here — only the
+/// binding substitution. Guarded by a non-empty env so a body with no meta
+/// bindings is untouched.
+pub fn evaluate_delayed_meta_expr(expr: &mut Spanned<Expr>, ctx: &DelayedMetaContext<'_>) {
+    let local_env = (*ctx.meta_env).clone();
+    if !local_env.is_empty() {
+        let empty_type_env = FxHashMap::default();
+        substitute_expr(expr, &local_env, &empty_type_env);
+    }
+}
+
 /// Evaluate an integer range expression in delayed meta context.
 /// Returns (start, end, inclusive).
 fn eval_delayed_meta_range(

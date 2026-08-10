@@ -19774,6 +19774,16 @@ fn meta_fn_loops() {
     run_gg("meta_fn_loops.gg", "5050\n6");
 }
 
+#[test]
+fn meta_op_expr_body() {
+    // Regression: expression-bodied generic fns using a `meta[op]` infix.
+    // The meta-op substitution sweep in `lower_generic_function` only ran for
+    // BLOCK bodies, so an expr-body `meta[op]` survived to GIR lowering and
+    // panicked (`MetaOpInfix not substituted`). RED-verified: reverting the
+    // `FunctionBody::Expression` arm reproduces the panic on this fixture.
+    run_gg("meta_op_expr_body.gg", "10\n2\n24\n3.750000\nfalse\ntrue");
+}
+
 // Concurrency Primitives Tests
 // ═══════════════════════════════════════════════════════════════
 

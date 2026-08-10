@@ -1633,15 +1633,24 @@ pub fn lower_generic_function(
             trait_registry: &ctx.analysis.traits,
             type_registry:  &ctx.type_registry,
         };
-        if let FunctionBody::Block(ref mut block) = cloned.body {
-            let mut errors = Vec::new();
-            meta::evaluate_delayed_meta_block(block, &delayed_ctx, &mut errors);
-            // Errors are non-fatal here (will surface as missing symbols); log if any.
-            if !errors.is_empty() {
-                for e in &errors {
-                    eprintln!("[delayed-meta] {e:?}");
+        match cloned.body {
+            FunctionBody::Block(ref mut block) => {
+                let mut errors = Vec::new();
+                meta::evaluate_delayed_meta_block(block, &delayed_ctx, &mut errors);
+                // Errors are non-fatal here (will surface as missing symbols); log if any.
+                if !errors.is_empty() {
+                    for e in &errors {
+                        eprintln!("[delayed-meta] {e:?}");
+                    }
                 }
             }
+            // Expression bodies get the same meta-op substitution sweep (Core #4:
+            // same MetaOpInfix-substitution class as the block arm). Without this
+            // an expr-body `meta[op]` infix survives to GIR lowering and panics.
+            FunctionBody::Expression(ref mut expr) => {
+                meta::evaluate_delayed_meta_expr(expr, &delayed_ctx);
+            }
+            _ => {}
         }
         template_with_meta_evaluated = cloned;
         &template_with_meta_evaluated
