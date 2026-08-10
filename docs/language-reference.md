@@ -305,7 +305,8 @@ ArithError]` value (Route B). An explicit `throws E` declaration WINS
 over auto-infer — the user's contract is preserved (see D26 spec + F1a).
 
 `main()` is not auto-inferred (it can only throw `int` per
-`E_MainThrowsNonInt`); every `+!` in `main` must be captured
+`E_MainThrowsNonInt` — ruled to change: D45 pin 7 legalizes `main throws E`
+for any error type, see §10); every `+!` in `main` must be captured
 (`Result[int, ArithError] r = a +! b`) or catch-handled at the use site.
 
 **Bitwise:**

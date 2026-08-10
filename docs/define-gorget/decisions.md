@@ -323,7 +323,8 @@ language-design/book examples showing float output.
   **Registry columns:** `{ code, default_level, configurable, group, since }` — the A36 table
   plus two. ⚡ **D45 rider (2026-08-10): A38 (D45 pin 10) extends these to `{ …, fix_direction,
   tombstoned, summary, example }`, shipped as machine-readable toolchain data (`gg explain`);
-  the `E_MissingFallibleMark` three-way split rides phase 2's rename round.** `configurable: false` is REQUIRED because not everything can be demoted
+  the `E_MissingFallibleMark` split-by-fix-direction (D45 pin 10(b) — FOUR reasons at HEAD,
+  census the enum at split time) rides phase 2's rename round.** `configurable: false` is REQUIRED because not everything can be demoted
   (`type-mismatch = none` must not be a legal setting); the virtue of one namespace is that the
   fixed/configurable boundary then MOVES AS DATA rather than as a rename.
   **PHASE 1 — adopt the table** as the single source of truth (severity, configurability, group,
@@ -1888,16 +1889,22 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   ConfigError`.** Zero new keywords — Gorget already owns the transparent/nominal split as
   `type`/`newtype` (`src/lexer/token.rs:294-295`; live at HEAD: `type Count = int`
   in `type_alias_usage.gg`, `newtype UserId(int)` in `newtype.gg`), and a named error set IS a
-  transparent alias. Rules (pass-2 review sharpened the predicate): the `|` union form is an
-  ERROR-SET TYPE, legal only in the CHANNEL'S POSITIONS — an error-set `type` alias RHS, a
-  `throws` clause, `Result[T, _]`'s error slot, and (at E3) catch patterns; in any value /
-  param / field / general-type position it gets a teaching diagnostic. It is this USE-SITE
-  rule — not a member predicate — that closes the door to general union types, as a CHECKER
-  RULE, not grammar (non-breaking to open later if ever wanted; general sum types remain
-  `enum` — an anonymous general union would be a second spelling for enums, the "multiple
-  ways" anti-goal). Member types are UNCONSTRAINED at v1 (`throws int` / `throws String` are
-  legal today and stay legal; pin 13's lint is the hygiene layer; whether a member predicate
-  — e.g. equips `Error` — is wanted is an E2 scout question). The alias is STRUCTURAL and
+  transparent alias. Rules (sharpened by pass-2, then CORRECTED by pass-3 — the
+  position-list rule had a case with no subject): the `|` union form denotes an ERROR-SET
+  TYPE whose VALUES are ordinary values — errors are values (guarantee 1) — so a catch
+  binding's union-typed value can be bound, stored, passed to a helper, and its type WRITTEN
+  (via the alias or the inline `|` form) in any type position. What is CHANNEL-ONLY is
+  INTRODUCTION: a union value is BORN only at a `throw` (injection at the throw site) and at
+  widening (`!` marks and catch-transform `throw`s) — there is NO general injection:
+  `AnyVal x = 5` is a type error and no constructor exists. THAT is the checker rule that
+  closes the door to using error sets as a second general-sum spelling: you cannot CONSTRUCT
+  one outside the channel, only observe, hold, and match what the channel produced (general
+  sum types remain `enum`; the "multiple ways" anti-goal stands). Whether subset→superset
+  re-tagging is legal at a PLAIN assignment (`AppError e2 = e1`, `e1` in a subset) or only
+  through channel verbs is an E2 scout question. Member types are UNCONSTRAINED at v1
+  (`throws int` / `throws String` are legal today and stay legal; pin 13's lint is the
+  hygiene layer; whether a member predicate — e.g. equips `Error` — is wanted is an E2
+  scout question). The alias is STRUCTURAL and
   TRANSPARENT: the name is documentation, a display anchor, and the semver anchor — never a
   nominal wall; nominal error wrappers stay available via `newtype`. Open sets compose the same
   way: `type NetFail = NetError | TlsError | ..` (open-marker glyph `..` vs `...` decided at
@@ -1920,7 +1927,13 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   default; an open marker is the opt-in to growth (glyph `..` vs `...` finalized at the E2
   grammar scout, per pin 1). Public sets are WRITTEN (checker rule keyed on D43
   visibility); inference applies interior-side with the decl-site `!` REQUIRED on every
-  inferred-fallible non-public function (the D29(b) grammar-locked form `Config load(String
+  inferred-fallible non-public function. ⚠ **PREREQUISITE (pass-3 catch): D43 is ratified
+  but NOT IMPLEMENTED and currently sequenced behind the D27 chain — at minimum the
+  public/non-public distinction must be ENFORCED before this rule has a subject** (at HEAD
+  the default is public and the unit is the file, so "written-public" would degenerate to
+  "every function writes its set" — the Java tax this pin exists to kill). The cross-chain
+  ordering (D27 chain → D43's public/non-public minimum → E2) is the owner's sequencing
+  call at round-open; recorded in SEQUENCING and the TODO E2 track (the D29(b) grammar-locked form `Config load(String
   p)!:` — flow visible at both ends, and the machine consumer reads fallibility off the decl
   line instead of running whole-program inference). Set algebra pins: commutative, flattening,
   idempotent (`A|B ≡ B|A`, `(A|B)|C ≡ A|B|C`, `A|A ≡ A`); aliases expand transparently.
@@ -1987,15 +2000,31 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   its callees take `Result[int, int] &x` — Result-typed positions, nothing to unwrap — and its
   INTENDED ("each callee runs") is exactly what the kill mandates; the bug it pins is the
   auto-prop machinery erroneously FIRING there, so it GRADUATES as a passing positive at E0
-  (its header's PRESCRIBED fix — set `expected_type` on the indirect-call paths — is DEAD
-  under this pin: the machinery is DELETED, not repaired; re-header at E0).
+  (its header's PRESCRIBED fix — set `expected_type` on the indirect-call paths — is dead
+  under this pin, for the reason the mechanism note gives; re-header at E0).
+  **MECHANISM NOTE (pass-3 review correction — the machinery SURVIVES, re-gated; it is NOT
+  deleted).** At HEAD `should_auto_propagate` (`src/ir/lowering/exprs/mod.rs:4530`) gates on
+  the operand TYPE alone (Result + enclosing-can-propagate — no mark provenance exists at
+  lowering), and the SAME path implements D23's RATIFIED marked-call peel (`Wrap(to_n(sel)!)`
+  typing as `T` in every position) — pinned live by the positive family
+  `throws_autoprop_{ctor_field,method_arg,binop_operand,dict_value,if_branch,list_element,
+  match_arm,tuple_element}.gg`. Deleting the machinery wholesale would red that family and
+  silently un-ratify D23. The E0 fix is TWO-SIDED: CHECK-side, bare `Result` in a `T`
+  position = `E_TypeMismatch`; LOWERING-side, the peel RE-GATES on `!`-mark provenance
+  written AT the mark as a typed field (Layering rule 4 — resolve once at the writer; never
+  a second type test at the read site). Under the re-gate an unmarked position never peels —
+  which is also what fixes the vindicated fixture (no mark at the indirect call ⇒ no peel ⇒
+  the callee runs), independent of `expected_type`. E0's scout CENSUSES the corpus for
+  bare-Result-in-`T`-position reliance BEFORE landing (the D29 precedent for a new breakage
+  class): "pure defect closure" is the expectation, the census is the evidence.
   Prerequisite of A34 — the chain's premise ("the compiler knows every hop") is false until
   this lands.
 
   **PIN 7 — A34 SPLIT + THE EXIT CLASS.** **A34a lands at E0, and it CARRIES ITS ENABLING
   ACCEPT/REJECT CHANGE (pass-2 review caught the first fold assuming it silently): `main
   throws E` becomes LEGAL for ANY error type — `E_MainThrowsNonInt`
-  (`src/semantic/typecheck.rs:9707-9714`; reference §10.10's "main can only throw int")
+  (`src/semantic/typecheck.rs:9707-9714`; stated at reference §10.9 `language-reference.md:3135`
+  and §3.4 `:308`, and mirrored in the SH lane at `self_host_typechecker/typecheck.gg:3010`)
   RETIRES at E0**, all lanes per Core #9, its negative fixtures flipping. Without this the
   102 class has no reachable trigger — the only error that can escape `main` today is an
   int. Semantics: an error reaching the top of `main` renders `error: <Displayable of
@@ -2011,7 +2040,9 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   the chain per the A34 design — static descriptor per `!` hop, format only at a
   throw-consuming-a-catch-binding, debug-only, and **NOT value-reachable in v1** (reachability
   would make it semantics, bind ggdef, and falsify the release-compiles-out promise) —
-  sequenced after pin 6.
+  sequenced after pin 6. The E0 freeze admits exactly ONE extension (pass-3 seam catch):
+  A34b's chain renders BELOW the frozen first line as additional debug-only lines with their
+  own grammar; the first line stays byte-stable across debug and release.
 
   **PIN 8 — D26'S SILENT AUTO-INFER RETIRES INTO GENERAL INFERENCE (at E2).** `+!` contributes
   `ArithError` to the inferred set like any fallible operation; the inferred-fallible function
@@ -2077,13 +2108,17 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   blocking.
 
   **PIN 13 — `stringly-error` LINT.** Public `throws String` (or `String` as a member of a
-  public set) defaults WARN via A36 machinery — the book's demotion of `throws String` made
-  mechanical (Core #6). Interior/prototyping use stays clean; `String` remains a legal set
-  member for uniformity.
+  public set) defaults WARN — the book's demotion of `throws String` made mechanical
+  (Core #6). DEPENDENCY (pass-3 catch): A36's lint-level machinery is NOT IMPLEMENTED — at
+  E1 this ships as a registry warning that RENDERS ITS CODE (A36(1) is a one-function change
+  and rides along), gains per-lint configurability when A36's D42-generalization lands, and
+  is NEVER a bespoke per-feature flag (the trap A36 exists to retire). Interior/prototyping
+  use stays clean; `String` remains a legal set member for uniformity.
 
   **SEQUENCING (each round per the Round lifecycle; Core #9 all-lanes; ggdef models union
   identity and subtraction where in-subset — real spec work — and stays structurally blind to
-  the memory face per Core #13):** **E0** "kill the fictions" (pure defect closure): pin 6 +
+  the memory face per Core #13):** **E0** "kill the fictions" (pure defect closure; its scout censuses bare-Result-in-`T`
+  corpus reliance first, per pin 6): pin 6 +
   the handler cells (void-`catch`, recovery-type check, match-arm-throw ICE; axis-complete net
   per Core #12) + A34a/exit 102 + the munch-trap fix-it, ∥ the semantics-free A38 subtracks.
   **E1** "the model gets real users": the D17 class sweep + the 59 runtime `exit(1)`
@@ -2099,7 +2134,9 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   **E4** "history + concurrency": A34b + pin 11's TaskGroup + A32 impl consuming the module.
   Honest sizing: E2+E3 is 2–3 rounds of type-system work. **Sequencing rule: E2 does not open
   before E0+E1 land** — sets composing signatures that do not exist would be building the
-  second floor first.
+  second floor first — **and E2 additionally requires D43's public/non-public distinction
+  IMPLEMENTED (pin 2's prerequisite; D43 currently sits behind the D27 chain — the
+  cross-chain ordering is the owner's round-open call).**
 
   **DERIVATION + WHAT WAS GIVEN UP (priced honestly).** The v2 iteration closed four gaps in
   the adversarial review's own §4 design: the boundary wrap tax (pin 1), unspecified
