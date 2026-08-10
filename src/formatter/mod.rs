@@ -211,11 +211,13 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
         });
     }
 
-    // Dedupe multi-comment lines (`stmt  # a  # b`): keep only the FIRST
-    // `#` per output line (lowest buf_offset); later same-line comments
-    // keep their natural gap and never pollute `max_lhs`. Same-line entries
-    // are consecutive in buf order, so comparing the previous kept entry
-    // suffices.
+    // Enforce ONE alignment entry per output line (keep the first, lowest
+    // buf_offset). Today each `emit_trailing_comment_after` call injects at
+    // most one trailing entry per line — `# a  # b` is a SINGLE comment token,
+    // not two — so this is a belt-and-suspenders guard that keeps `max_lhs`
+    // clean and makes the one-entry-per-line invariant explicit should a
+    // future injection path ever record more. Same-line entries are
+    // consecutive in buf order, so comparing the previous kept entry suffices.
     let mut deduped: Vec<AlignGeom> = Vec::with_capacity(geoms.len());
     for g in geoms {
         if deduped
