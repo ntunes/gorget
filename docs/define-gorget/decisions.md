@@ -1674,8 +1674,47 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   owner-directed; the four-property doctrine below is the synthesis recorded at his request;
   the library/semver design in the last section is PROPOSED, NOT RATIFIED.**
 
-  **⚠ THE FINDING — GORGET IS ONE STEP FROM JAVA'S FAILURE MODE, AND THE CENSUS SHOWS IT
-  ALREADY HAPPENING.** Java's checked exceptions had the RIGHT idea (errors stated in the
+  **⚠⚠ CORRECTED 2026-08-10 (same day) BY AN ADVERSARIAL FABLE REVIEW — TWO CLAIMS IN THIS
+  ENTRY WERE WRONG; BOTH CORRECTIONS RE-VERIFIED INDEPENDENTLY BY THE ORCHESTRATOR.**
+  **(1) "The census shows it already happening" is OVERSTATED — the model has ~ZERO production
+  users, which is a WORSE finding than the one it replaces.** Measured: `lib/std/*.gg` contains
+  **0** `throws` declarations (`read_file` is typed INFALLIBLE — `lib/std/fs.gg:6`), and the
+  self-host contains **0** `throws` signature declarations across all six directories
+  (`grep -rhoE "\) throws [A-Za-z_]+:" tests/fixtures/self_host_*/*.gg` → 0; the ~338 raw
+  "throws" hits are the compiler's own handling of the keyword, e.g. the `throws_type` field and
+  `elif s == "throws"` — an orchestrator grep that did NOT distinguish these was the source of
+  the error). The self-host accumulates `Diagnostic` VALUES instead. So the 148 `throws String`
+  measures TEST-FIXTURE CONVENIENCE, not escape pressure: **there are no layers to collapse
+  yet.** The Java risk is PROSPECTIVE, not underway. But the reason it is not underway is worse
+  than if it were: **the error model's most important consumer bypasses it entirely, and the C
+  runtime calls `exit(1)` 59 times** (`find src/backend/c -name '*.c' -not -name sqlite3.c
+  -exec grep -c 'exit(1)' {} +` → 59) — errno-style hidden fatal failure, the named anti-goal,
+  AND the *static-rejection* exit class, violating §10.10's own "the classes MUST be distinct so
+  a runtime crash can never masquerade as a correct static rejection".
+  **(2) "Gorget already holds property 2 (visible flow) outright" is FALSE at HEAD.** A bare
+  `Result`-typed value in a `T` position still silently unwraps-or-early-returns with NO mark
+  anywhere — surviving pre-D29 value-plane auto-propagation. Orchestrator-verified: with
+  `Result[int,String] r = fails()` and `int consume(int x)`, the call `consume(r)` passes
+  `gg check` clean, and at runtime **the callee never runs** and the error propagates. D29
+  governs fallible CALLS; a Result-typed VALUE coerced to `T` at an argument position is a
+  second, unmarked propagation channel with no subject in the rule (Core #15e Q4 — a case the
+  rule's subject does not cover). Two `known_gaps/sound_autoprop_*` fixtures record adjacent
+  shapes with headers calling the free-call behaviour INTENDED, i.e. two ratified doctrines in
+  direct conflict. **Consequence for A34: its premise ("the mandatory mark means the compiler
+  knows every propagation hop") has a HOLE until value-position auto-prop is killed — that fix
+  is a PREREQUISITE, not a parallel track.** Further corrections from the same review:
+  **OCaml's polymorphic variants are payload-carrying inferred open/closed sets with
+  handler-side narrowing, which FALSIFIES the novelty claim for A31**, and **Elm's enforced
+  API-diff semver is prior art for frontier (a)** — it is enforcement-in-a-package-manager that
+  is unclaimed, not the idea. Full report + ~20 compiled probes: the review also found the book's
+  flagship example does not compile against the real stdlib (orchestrator-verified:
+  `read_file(path)!` → `E_MissingFallibleMark`, because `read_file` is infallible), and that
+  `catch` on a VOID fallible call miscompiles in every spelling (orchestrator-verified:
+  `gg check` clean, `gg build` fails with a raw C error `void value not ignored as it ought to
+  be` leaking to the user). Both filed to `TODO.md`.
+
+  **⚠ THE FINDING (as originally written — read WITH correction (1) above) — THE JAVA FAILURE
+  MODE IS THE STRUCTURAL RISK.** Java's checked exceptions had the RIGHT idea (errors stated in the
   signature, compiler-enforced) and collapsed for a specific mechanical reason: no inference
   and no set algebra, so every layer had to restate or wrap its callees' errors, and the
   pressure escaped through the widest available hole — `throws Exception`. **Gorget today has
@@ -1717,8 +1756,25 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   every channel-active site. (3) **Provable handling** — exhaustiveness, open/closed sets, no
   silent discard. (4) **Recorded history** — the causal chain, automatic, and free in release.
   **Scored:** Rust has 1+3. Swift has 2, and 1 since 6.0. Zig has 3, partial 2, partial 4, fails
-  1. Go has 2 and a manual 4. **Gorget already holds 2 outright (D29) and most of 1 and 3;
-  A31 completes 1 and 3; A34 delivers 4.**
+  1. Go has 2 and a manual 4. **Gorget holds 2 ON PAPER (D29) — but see correction (2): the
+  value-position auto-prop hole means it does NOT hold it at HEAD — and most of 1 and 3;
+  A31 completes 1 and 3; A34 delivers 4.** ⚡ **The doctrine is INCOMPLETE — the Fable review
+  names three missing axes, and the third is the important one:** (5) **MULTIPLICITY** — one
+  error at a time is an assumption, not a law; the self-host proves the need by routing around
+  the channel entirely to accumulate `Diagnostic` values, so accumulation must be a BLESSED
+  named pattern (`Vector[Result[T,E]]`) even if it stays out of the channel; (6) **COST
+  CONTRACTS** — what the error path is allowed to allocate/do, the `on error`-must-be-infallible
+  class; (7) **THE MACHINE CONSUMER** — an agentic harness runs read-diagnostic → localize →
+  edit → re-run → verify, and every property that shortens or destabilizes that loop is part of
+  the error model's design, not its packaging. **(7) is argued to be the real 2026 frontier and
+  is largely SEMANTICS-FREE work** (stable one-code-one-fix identities, structured fix-its with
+  applicability tags, JSON diagnostics + `NO_COLOR`, byte offsets, a `check`-accept ⇒
+  `build`-success guard ratchet, frozen runtime-error grammar, determinism pinned by fixture).
+  Note the pleasing corollary the review draws: **Gorget's mark-everything doctrine is,
+  unintentionally, the most agent-friendly error design in any language** — a machine edits from
+  a context window and cannot go ask, so invisible remote facts (implicit `From`, value-position
+  auto-prop, D26's silent signature rewrite) tax machines harder than humans. That is a reason to
+  DEFEND D29 against "it's noise" pressure, and to advertise it.
 
   **THE FRONTIER — three things NO language has, which is what turns "best" into "aspired to".**
   (a) **Machine-checked error contracts across versions** — once public sets are explicit the
