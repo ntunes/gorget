@@ -122,6 +122,219 @@ impl Emitter {
 }
 
 // ══════════════════════════════════════════════════════════════
+// Trailing-comment alignment (R40, owner-directed 2026-08-10)
+// ══════════════════════════════════════════════════════════════
+
+/// One recorded trailing-comment injection, captured at the single
+/// `emit_trailing_comment_after` chokepoint for the post-pass aligner.
+///
+/// The aligner groups a contiguous run of ≥2 stmt-lines that each carry a
+/// trailing comment (struct fields, enum variants, consecutive vardecls,
+/// collection-literal elements) and moves their `#` to a common column so
+/// they read as a table. Grouping keys off this TYPED metadata — never a
+/// `#` text-search over the buffer (Layering rule 2).
+struct TrailingAlign {
+    /// Byte offset in `emitter.buf` of the FIRST of the two gap spaces
+    /// injected before the comment (i.e. the end of the rendered LHS).
+    buf_offset: usize,
+    /// Display (char) width of the comment text, leading `#` included —
+    /// used by the budget guard, which measures the comment's END column.
+    comment_len: usize,
+    /// True iff this is a header-line trailing comment (`struct B:  # hdr`,
+    /// `if flags:  # b`). Header comments never join a body group.
+    is_header: bool,
+}
+
+/// Column geometry derived for one recorded entry from the EMITTED buffer.
+struct AlignGeom {
+    buf_offset: usize,
+    output_line: usize,
+    indent_width: usize,
+    lhs_width: usize,
+    comment_len: usize,
+    is_header: bool,
+}
+
+/// Owner-ratified alignment constants (R40, 2026-08-10). Column =
+/// smallest multiple of `STRIDE` that is ≥ `max_lhs + MIN_GAP`; a comment
+/// whose END column would exceed `MAX_WIDTH` triggers outlier exclusion.
+const ALIGN_MIN_GAP: usize = 2;
+const ALIGN_STRIDE: usize = 4;
+
+/// Smallest multiple of `ALIGN_STRIDE` that is ≥ `x`.
+fn round_up_to_stride(x: usize) -> usize {
+    (x + ALIGN_STRIDE - 1) / ALIGN_STRIDE * ALIGN_STRIDE
+}
+
+/// Pure planning half of the trailing-comment aligner: given the emitted
+/// buffer and the recorded entries (in buf order), return the gap rewrites
+/// `(buf_offset, new_gap_len)` to apply, sorted LAST→FIRST so earlier
+/// offsets stay valid as each is spliced in. Reads only `&str` + typed
+/// entries so the mutating half can borrow `buf` mutably afterward.
+fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usize)> {
+    if entries.len() < 2 {
+        return Vec::new();
+    }
+    let bytes = buf.as_bytes();
+
+    // Entries are recorded in emission order → `buf_offset` strictly
+    // increasing. Walk the buffer once, deriving each entry's output line
+    // (newline count), line start, indent width, and LHS width.
+    let mut geoms: Vec<AlignGeom> = Vec::with_capacity(entries.len());
+    let mut scan = 0usize;
+    let mut nl_count = 0usize;
+    let mut line_start = 0usize;
+    for e in entries {
+        while scan < e.buf_offset && scan < bytes.len() {
+            if bytes[scan] == b'\n' {
+                nl_count += 1;
+                line_start = scan + 1;
+            }
+            scan += 1;
+        }
+        // Indent width = leading spaces on this output line (the emitter
+        // writes exactly `indent*4` spaces before content).
+        let mut iw = 0usize;
+        let mut k = line_start;
+        while k < e.buf_offset && bytes[k] == b' ' {
+            iw += 1;
+            k += 1;
+        }
+        let lhs_width = e.buf_offset.saturating_sub(line_start).saturating_sub(iw);
+        geoms.push(AlignGeom {
+            buf_offset: e.buf_offset,
+            output_line: nl_count,
+            indent_width: iw,
+            lhs_width,
+            comment_len: e.comment_len,
+            is_header: e.is_header,
+        });
+    }
+
+    // Dedupe multi-comment lines (`stmt  # a  # b`): keep only the FIRST
+    // `#` per output line (lowest buf_offset); later same-line comments
+    // keep their natural gap and never pollute `max_lhs`. Same-line entries
+    // are consecutive in buf order, so comparing the previous kept entry
+    // suffices.
+    let mut deduped: Vec<AlignGeom> = Vec::with_capacity(geoms.len());
+    for g in geoms {
+        if deduped
+            .last()
+            .map_or(true, |p| p.output_line != g.output_line)
+        {
+            deduped.push(g);
+        }
+    }
+
+    // Group adjacent output lines at equal indent; a header entry never
+    // joins a group (it breaks the run and stays a singleton). Group-break
+    // on any interior blank / standalone-comment / no-trailing-comment line
+    // falls out for free — such a line carries no entry, so the output-line
+    // delta jumps ≥ 2.
+    let mut groups: Vec<Vec<AlignGeom>> = Vec::new();
+    for g in deduped {
+        let start_new = match groups.last().and_then(|grp| grp.last()) {
+            None => true,
+            Some(prev) => {
+                prev.is_header
+                    || g.is_header
+                    || g.output_line != prev.output_line + 1
+                    || g.indent_width != prev.indent_width
+            }
+        };
+        if start_new {
+            groups.push(vec![g]);
+        } else {
+            groups.last_mut().unwrap().push(g);
+        }
+    }
+
+    let mut rewrites: Vec<(usize, usize)> = Vec::new();
+    for group in &groups {
+        if group.len() < 2 {
+            continue;
+        }
+        let indent_width = group[0].indent_width;
+        // `active` = indices (into `group`) still aligned to the common
+        // column. The budget guard drops outliers from this set until no
+        // surviving comment's END column exceeds MAX_WIDTH.
+        let mut active: Vec<usize> = (0..group.len()).collect();
+        let align_col: usize;
+        loop {
+            if active.len() < 2 {
+                // Too few remain to form a table — nobody is realigned;
+                // survivors + excluded all keep their natural 2-space gap.
+                active.clear();
+                align_col = 0;
+                break;
+            }
+            let max_lhs = active.iter().map(|&i| group[i].lhs_width).max().unwrap();
+            let col = round_up_to_stride(max_lhs + ALIGN_MIN_GAP);
+            // Overflow measured at the comment END column, in display width.
+            let overflow: Vec<usize> = active
+                .iter()
+                .copied()
+                .filter(|&i| indent_width + col + group[i].comment_len > doc::MAX_WIDTH)
+                .collect();
+            if overflow.is_empty() {
+                align_col = col;
+                break;
+            }
+            // A "self-overflower" overflows even at its OWN minimal column
+            // (short LHS + long comment) — no amount of dropping wider LHS
+            // entries will fit it, so exclude it directly.
+            let self_over: Vec<usize> = overflow
+                .iter()
+                .copied()
+                .filter(|&i| {
+                    indent_width
+                        + round_up_to_stride(group[i].lhs_width + ALIGN_MIN_GAP)
+                        + group[i].comment_len
+                        > doc::MAX_WIDTH
+                })
+                .collect();
+            let drop_idx = if !self_over.is_empty() {
+                // Exclude the self-overflower with the LONGEST comment
+                // (tie → lowest buf_offset), deterministically.
+                *self_over
+                    .iter()
+                    .max_by(|&&a, &&b| {
+                        group[a]
+                            .comment_len
+                            .cmp(&group[b].comment_len)
+                            .then(group[b].buf_offset.cmp(&group[a].buf_offset))
+                    })
+                    .unwrap()
+            } else {
+                // Overflow driven purely by a wide LHS inflating the shared
+                // column — drop the max-LHS contributor (tie → lowest
+                // buf_offset) to lower `align_col` and iterate.
+                *active
+                    .iter()
+                    .max_by(|&&a, &&b| {
+                        group[a]
+                            .lhs_width
+                            .cmp(&group[b].lhs_width)
+                            .then(group[b].buf_offset.cmp(&group[a].buf_offset))
+                    })
+                    .unwrap()
+            };
+            active.retain(|&i| i != drop_idx);
+        }
+        for &i in &active {
+            let g = &group[i];
+            // `align_col ≥ max_lhs + MIN_GAP ≥ lhs_width + MIN_GAP`, so the
+            // new gap is always ≥ MIN_GAP.
+            rewrites.push((g.buf_offset, align_col - g.lhs_width));
+        }
+    }
+
+    // Apply LAST→FIRST so a splice never shifts an as-yet-unwritten offset.
+    rewrites.sort_by(|a, b| b.0.cmp(&a.0));
+    rewrites
+}
+
+// ══════════════════════════════════════════════════════════════
 // Formatter — walks AST and emits formatted source
 // ══════════════════════════════════════════════════════════════
 
@@ -129,6 +342,10 @@ pub struct Formatter {
     emitter: Emitter,
     comments: Vec<Spanned<String>>,
     comment_cursor: usize,
+    /// Sideband recorded at the `emit_trailing_comment_after` chokepoint:
+    /// one entry per injected trailing comment, consumed by the
+    /// `align_trailing_comments` post-pass (owner-directed R40 alignment).
+    trailing_aligns: Vec<TrailingAlign>,
     /// Source text, needed for span-based lookups when interleaving
     /// trailing comments — the "same source line as previous emit" check
     /// requires reading the original bytes between two span endpoints
@@ -144,6 +361,7 @@ impl Formatter {
             emitter: Emitter::new(),
             comments,
             comment_cursor: 0,
+            trailing_aligns: Vec::new(),
             source,
         }
     }
@@ -162,8 +380,14 @@ impl Formatter {
         // ceiling; the helper's own `last_real_content_before` walks
         // back over trailing whitespace / comments to find the true
         // last-content position, so passing an over-shoot is safe.
-        self.emit_trailing_comment_after(self.source.len());
+        self.emit_trailing_comment_after(self.source.len(), false);
         self.emit_remaining_comments();
+        // R40 (owner-directed 2026-08-10): align contiguous runs of
+        // trailing comments to a common column. Runs on the recorded
+        // sideband + the emitted buffer, BEFORE `finish()` and BEFORE the
+        // blank-line normalization below (which only collapses newlines and
+        // cannot affect a within-line gap).
+        self.align_trailing_comments();
         let mut result = self.emitter.finish();
         // Normalize blank lines: collapse 3+ consecutive newlines to 2 (one blank line max).
         // Single-pass: track consecutive newlines and skip extras.
@@ -397,7 +621,7 @@ impl Formatter {
             format_elem(self, elem);
             self.emitter.write(",");
             self.emitter.newline();
-            self.emit_trailing_comment_after(elem_end);
+            self.emit_trailing_comment_after(elem_end, false);
         }
         // Orphan-comment flush before close (pass 1 R2): a comment on its
         // own line between the last element and the closing bracket has no
@@ -443,8 +667,11 @@ impl Formatter {
         // Same semantics — reuse the base helper (single-implementation
         // chokepoint per Core #4). If the multi-line-header rescope
         // (R40) needs different behaviour, this wrapper adapts here
-        // while the base helper stays unchanged.
-        self.emit_trailing_comment_after(header_anchor_end);
+        // while the base helper stays unchanged. `is_header=true` so the
+        // R40 aligner never groups a header comment with its body fields
+        // (or with a same-indent sibling stmt — `int x = 5  # a` followed
+        // by `if flags:  # b`).
+        self.emit_trailing_comment_after(header_anchor_end, true);
     }
 
     /// R39 snag #2 (`gorget-arena` snag #2 — durable repro at
@@ -475,7 +702,7 @@ impl Formatter {
     /// on the next iteration — it will be emitted as a LEADING comment
     /// at the next sibling's indent, which is the correct behaviour for a
     /// standalone-line comment BETWEEN two siblings.
-    fn emit_trailing_comment_after(&mut self, prev_end: usize) {
+    fn emit_trailing_comment_after(&mut self, prev_end: usize, is_header: bool) {
         // The "trailing comment" question — is comment C a trailing
         // comment on the just-emitted node I? — reduces to:
         //
@@ -530,11 +757,51 @@ impl Formatter {
                 break;
             }
             // Same-line trailing: inject inline with a two-space gap.
+            let comment_len = c.node.chars().count();
             let mut inlined = String::with_capacity(c.node.len() + 2);
             inlined.push_str("  ");
             inlined.push_str(&c.node);
+            // Record the gap-start for the R40 aligner BEFORE the injection.
+            // The buffer currently ends `...LHS\n`; `inject_before_newline`
+            // pops that `\n`, so the first gap space lands where the `\n`
+            // sits now (`buf.len() - 1`). If the buffer does NOT end in `\n`
+            // (rare — sibling emit didn't newline-terminate), the injection
+            // appends, so the gap starts at `buf.len()`. (`c` is no longer
+            // borrowed past `inlined`, so the mutable pushes below are fine.)
+            let buf_offset = if self.emitter.buf.ends_with('\n') {
+                self.emitter.buf.len() - 1
+            } else {
+                self.emitter.buf.len()
+            };
             self.emitter.inject_before_newline(&inlined);
+            self.trailing_aligns.push(TrailingAlign {
+                buf_offset,
+                comment_len,
+                is_header,
+            });
             self.comment_cursor += 1;
+        }
+    }
+
+    /// R40 owner-directed trailing-comment aligner (2026-08-10). Post-pass
+    /// over the recorded `trailing_aligns` sideband + the emitted buffer:
+    /// re-spaces the gap of each grouped trailing comment so a contiguous
+    /// run lands its `#` at a common `next_multiple_of(STRIDE)` column.
+    /// Pure planning lives in `plan_trailing_aligns` (reads `&str`); this
+    /// half only splices the computed gaps into `self.emitter.buf`.
+    ///
+    /// Idempotent: the plan is a pure function of LHS widths + comment
+    /// lengths, both stable across a re-run (the formatter re-emits the same
+    /// LHS text and the same comment), so `fmt(fmt(x)) == fmt(x)`.
+    fn align_trailing_comments(&mut self) {
+        let entries = std::mem::take(&mut self.trailing_aligns);
+        let rewrites = plan_trailing_aligns(&self.emitter.buf, &entries);
+        // Already sorted LAST→FIRST; each gap is exactly the injected two
+        // spaces at `[off, off+2)` (both ASCII → valid char boundaries).
+        for (off, new_gap) in rewrites {
+            self.emitter
+                .buf
+                .replace_range(off..off + 2, &" ".repeat(new_gap));
         }
     }
 
@@ -637,7 +904,7 @@ impl Formatter {
             }
             self.emit_comments_before(item.span.start);
             self.format_item(item);
-            self.emit_trailing_comment_after(item.span.end);
+            self.emit_trailing_comment_after(item.span.end, false);
             emitted += 1;
         }
 
@@ -662,7 +929,7 @@ impl Formatter {
             }
             self.emit_comments_before(item.span.start);
             self.format_item(item);
-            self.emit_trailing_comment_after(item.span.end);
+            self.emit_trailing_comment_after(item.span.end, false);
             emitted += 1;
             prev_import_is_std = Some(cur_is_std);
             first_import = false;
@@ -687,7 +954,7 @@ impl Formatter {
             }
             self.emit_comments_before(item.span.start);
             self.format_item(item);
-            self.emit_trailing_comment_after(item.span.end);
+            self.emit_trailing_comment_after(item.span.end, false);
             emitted += 1;
         }
     }
@@ -788,7 +1055,7 @@ impl Formatter {
                 for item in &mi.then_items {
                     self.emit_comments_before(item.span.start);
                     self.format_item(item);
-                    self.emit_trailing_comment_after(item.span.end);
+                    self.emit_trailing_comment_after(item.span.end, false);
                 }
                 self.emitter.dedent();
                 for (cond, items) in &mi.elif_branches {
@@ -800,7 +1067,7 @@ impl Formatter {
                     for item in items {
                         self.emit_comments_before(item.span.start);
                         self.format_item(item);
-                        self.emit_trailing_comment_after(item.span.end);
+                        self.emit_trailing_comment_after(item.span.end, false);
                     }
                     self.emitter.dedent();
                 }
@@ -811,7 +1078,7 @@ impl Formatter {
                     for item in else_items {
                         self.emit_comments_before(item.span.start);
                         self.format_item(item);
-                        self.emit_trailing_comment_after(item.span.end);
+                        self.emit_trailing_comment_after(item.span.end, false);
                     }
                     self.emitter.dedent();
                 }
@@ -1068,7 +1335,7 @@ impl Formatter {
                 // field_end = self.previous_span() after
                 // expect_identifier), so a same-source-line comment
                 // that follows the name is spliced inline.
-                self.emit_trailing_comment_after(field.span.end);
+                self.emit_trailing_comment_after(field.span.end, false);
             }
         }
         self.emitter.dedent();
@@ -1121,7 +1388,7 @@ impl Formatter {
                 self.emitter.newline();
                 // R39 snag #2: trailing-hook for `Variant()  # doc`
                 // on enum variants — same shape as struct fields.
-                self.emit_trailing_comment_after(variant.span.end);
+                self.emit_trailing_comment_after(variant.span.end, false);
             }
         }
         self.emitter.dedent();
@@ -1192,7 +1459,7 @@ impl Formatter {
                 // trait item (method or associated type). Same-line
                 // comments after the item's last identifier land inline
                 // instead of leading the next item.
-                self.emit_trailing_comment_after(item.span.end);
+                self.emit_trailing_comment_after(item.span.end, false);
             }
         }
         self.emitter.dedent();
@@ -1233,7 +1500,7 @@ impl Formatter {
                 self.format_function(&method.node);
                 // R39 snag #2: trailing-hook for methods inside an
                 // `equip … with T:` block. Same class as trait items.
-                self.emit_trailing_comment_after(method.span.end);
+                self.emit_trailing_comment_after(method.span.end, false);
             }
         }
         self.emitter.dedent();
@@ -1645,7 +1912,7 @@ impl Formatter {
             }
             self.emit_comments_before(stmt.span.start);
             self.format_stmt(stmt);
-            self.emit_trailing_comment_after(stmt.span.end);
+            self.emit_trailing_comment_after(stmt.span.end, false);
         }
     }
 
@@ -1834,7 +2101,7 @@ impl Formatter {
         // splices via `inject_before_newline` (or appends if no newline
         // yet), so the trailing comment lands correctly regardless of
         // caller's emit order.
-        self.emit_trailing_comment_after(stmt.span.end);
+        self.emit_trailing_comment_after(stmt.span.end, false);
         true
     }
 
@@ -2900,7 +3167,7 @@ impl Formatter {
                                 // synthesized destructure-prelude stmts,
                                 // but the trailing-comment semantics are
                                 // identical for the post-prelude tail.
-                                self.emit_trailing_comment_after(stmt.span.end);
+                                self.emit_trailing_comment_after(stmt.span.end, false);
                             }
                         } else {
                             self.format_block_stmts(block);

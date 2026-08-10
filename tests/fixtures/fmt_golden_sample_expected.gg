@@ -23,8 +23,8 @@ static int MAX = 100
 const int MIN = 0
 
 struct Point:
-    int x  # x-coordinate
-    int y  # y-coordinate
+    int x   # x-coordinate
+    int y   # y-coordinate
 
 enum Direction:
     North()

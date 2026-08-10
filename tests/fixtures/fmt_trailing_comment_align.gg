@@ -1,0 +1,66 @@
+# R40 owner-directed trailing-comment ALIGNMENT (2026-08-10). Wide fixture
+# exercising the aligner across every grouping axis. Each `# Xn` sentinel is
+# load-bearing: the paired test `fmt_trailing_comment_align_columns` reads the
+# `#` column on the line carrying the sentinel and asserts the group / break /
+# header / budget behaviour.
+#
+# RED-verify (#15d): the alignment mechanism is `align_trailing_comments` in
+# `src/formatter/mod.rs`. Disable it (early-return before `plan_trailing_aligns`)
+# and every group assertion below FAILS (all `#` collapse to the natural
+# 2-space gap). Confirmed misaligned pre-restore during authoring.
+
+# Group A — struct fields, varying LHS -> shared stride-4 column.
+struct SA:
+    int x  # A1
+    int y  # A2
+    String nm  # A3
+
+# Group B — enum variants, varying LHS.
+enum EB:
+    Red  # B1
+    Greenish  # B2
+    B  # B3
+
+# Group C — consecutive vardecls in a block.
+int fc():
+    int aa = 1  # C1
+    int bbbbbb = 2  # C2
+    int c = 3  # C3
+    return 0
+
+# Header-vs-body D — a `struct:` header comment must NOT join its field group.
+struct SD:  # D0
+    int pppppp  # D1
+    int q  # D2
+
+# Header-vs-body E — a same-indent body stmt then a block-header stmt must NOT
+# group (the `is_header` discriminator; both keep their natural gap).
+int fe():
+    int xxxxxx = 5  # E1
+    if x > 0:  # E2
+        return 1
+    return 0
+
+# Group-break F — an interior non-commented line splits the run.
+struct SF:
+    int aaaa  # F1
+    int bb
+    int c  # F2
+
+# Group-break G — a blank line splits the run.
+struct SG:
+    int aaaa  # G1
+
+    int c  # G2
+
+# Group-break H — a standalone-comment line splits the run.
+struct SH:
+    int aaaa  # H1
+    # standalone between
+    int c  # H2
+
+# Multi-comment I — `stmt # a # b`: only the FIRST `#` aligns.
+int fi():
+    int m = 1  # I1a  # I1b
+    int nnn = 2  # I2
+    return 0

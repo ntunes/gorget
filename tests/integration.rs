@@ -12730,6 +12730,178 @@ fn fmt_trailing_comment_axis_source_runs() {
     );
 }
 
+/// R40 trailing-comment ALIGNMENT (owner-directed 2026-08-10) — byte column
+/// (0-based) of the FIRST `#` on the formatted line that carries `sentinel`.
+/// Panics if the sentinel is absent (a dropped/detached comment).
+fn hash_col_of(formatted: &str, sentinel: &str) -> usize {
+    let line = formatted
+        .lines()
+        .find(|l| l.contains(sentinel))
+        .unwrap_or_else(|| {
+            panic!(
+                "R40 align: sentinel `{sentinel}` missing from formatted output \
+                 (comment dropped or detached).\n=== Formatted ===\n{formatted}"
+            )
+        });
+    line.find('#')
+        .unwrap_or_else(|| panic!("R40 align: no `#` on line for `{sentinel}`: {line:?}"))
+}
+
+/// R40 owner-directed trailing-comment aligner: a contiguous run of ≥2
+/// stmt-lines that each carry a trailing comment aligns its `#` to a common
+/// `next_multiple_of(STRIDE=4, max_lhs + MIN_GAP=2)` column, keyed on TYPED
+/// recorded metadata (never a `#` text-search). This pins the group / break /
+/// header / multi-comment axes. RED-verify: disabling `align_trailing_comments`
+/// in `src/formatter/mod.rs` collapses every group to the natural 2-space gap,
+/// so every `assert_eq!` on a shared column below fails.
+#[test]
+fn fmt_trailing_comment_align_columns() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures/fmt_trailing_comment_align.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_trailing_comment_align.gg");
+    let f = gorget::formatter::format_source_infallible(&source);
+
+    // Group A — struct fields (LHS 5,5,9 → align_col 12, +indent 4 = col 16).
+    assert_eq!(hash_col_of(&f, "# A1"), 16, "struct-field group col");
+    assert_eq!(hash_col_of(&f, "# A2"), 16);
+    assert_eq!(hash_col_of(&f, "# A3"), 16);
+    // Group B — enum variants (LHS 3,8,1 → align_col 12, col 16).
+    assert_eq!(hash_col_of(&f, "# B1"), 16, "enum-variant group col");
+    assert_eq!(hash_col_of(&f, "# B2"), 16);
+    assert_eq!(hash_col_of(&f, "# B3"), 16);
+    // Group C — vardecls (LHS 10,14,9 → align_col 16, col 20).
+    assert_eq!(hash_col_of(&f, "# C1"), 20, "vardecl group col");
+    assert_eq!(hash_col_of(&f, "# C2"), 20);
+    assert_eq!(hash_col_of(&f, "# C3"), 20);
+    // All aligned columns land on the stride-4 grid.
+    for c in [16usize, 20] {
+        assert_eq!(c % 4, 0, "aligned column must be a multiple of STRIDE=4");
+    }
+
+    // Header-vs-body D — the `struct SD:  # D0` HEADER comment (col 12) does
+    // NOT join the field group (D1/D2 at col 16). Header stays at natural gap.
+    assert_eq!(hash_col_of(&f, "# D0"), 12, "struct header comment natural gap");
+    assert_eq!(hash_col_of(&f, "# D1"), 16, "struct-D field group col");
+    assert_eq!(hash_col_of(&f, "# D2"), 16);
+    assert_ne!(
+        hash_col_of(&f, "# D0"),
+        hash_col_of(&f, "# D1"),
+        "header comment must NOT align into its field group"
+    );
+
+    // Header-vs-body E — a same-indent body stmt (`int xxxxxx = 5  # E1`, col
+    // 20) immediately followed by a block-header stmt (`if x > 0:  # E2`, col
+    // 15) must NOT group; both keep their natural 2-space gap at DIFFERENT
+    // columns (the `is_header` discriminator).
+    assert_eq!(hash_col_of(&f, "# E1"), 20, "body stmt natural gap");
+    assert_eq!(hash_col_of(&f, "# E2"), 15, "block-header stmt natural gap");
+    assert_ne!(
+        hash_col_of(&f, "# E1"),
+        hash_col_of(&f, "# E2"),
+        "body stmt must NOT group with the following block-header stmt"
+    );
+
+    // Group-break F/G/H — a non-commented line / blank / standalone-comment
+    // line splits the run; F1/G1/H1 (LHS 8, col 14) and F2/G2/H2 (LHS 5, col
+    // 11) stay ungrouped at DIFFERENT natural columns.
+    for (a, b) in [("# F1", "# F2"), ("# G1", "# G2"), ("# H1", "# H2")] {
+        assert_eq!(hash_col_of(&f, a), 14, "{a} natural gap");
+        assert_eq!(hash_col_of(&f, b), 11, "{b} natural gap");
+        assert_ne!(
+            hash_col_of(&f, a),
+            hash_col_of(&f, b),
+            "group-break: {a}/{b} must NOT share an aligned column"
+        );
+    }
+
+    // Multi-comment I — `int m = 1  # I1a  # I1b`: only the FIRST `#` aligns
+    // (col 20, shared with `# I2`); the second `#` keeps its natural gap.
+    assert_eq!(hash_col_of(&f, "# I1a"), 20, "multi-comment first # aligns");
+    assert_eq!(hash_col_of(&f, "# I2"), 20);
+    let i_line = f.lines().find(|l| l.contains("# I1a")).unwrap();
+    assert!(
+        i_line.contains("# I1a") && i_line.contains("# I1b"),
+        "both comments stay on the same line: {i_line:?}"
+    );
+    // The SECOND `#` sits at its natural 2-space gap right after `# I1a`.
+    assert!(
+        i_line.contains("# I1a  # I1b"),
+        "only the first `#` is realigned; the second keeps its 2-space gap: {i_line:?}"
+    );
+
+    // Idempotency — the plan is a pure function of stable LHS/comment widths.
+    let f2 = gorget::formatter::format_source_infallible(&f);
+    assert_eq!(f, f2, "R40 aligner not idempotent");
+}
+
+/// R40 aligner BUDGET GUARD — a comment whose END column would exceed
+/// MAX_WIDTH=100 forces the widest-LHS / self-overflowing lines to be EXCLUDED
+/// (kept at the natural 2-space gap) so the rest align without them; the
+/// exclusion ITERATES for multiple outliers. RED-verify: disabling the aligner
+/// drops the short lines back to a 2-space gap, so the shared-column asserts
+/// fail; and every emitted line stays a legal parse (build-and-run below).
+#[test]
+fn fmt_trailing_comment_align_budget_guard() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path =
+        manifest_dir.join("tests/fixtures/fmt_trailing_comment_align_budget.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_trailing_comment_align_budget.gg");
+    let f = gorget::formatter::format_source_infallible(&source);
+
+    // Single outlier — the huge LHS (`# BJ-outlier`) is EXCLUDED at its natural
+    // gap (col 78), while the two short lines align WITHOUT it (col 20). The
+    // aligned column is far LEFT of the outlier's, proving it left the max calc
+    // (were it included, all three would sit near col 80 and overflow).
+    let out1 = hash_col_of(&f, "# BJ-outlier");
+    let bj1 = hash_col_of(&f, "# BJ1");
+    let bj2 = hash_col_of(&f, "# BJ2");
+    assert_eq!(bj1, 20, "budget: surviving short lines align at col 20");
+    assert_eq!(bj2, 20);
+    assert!(
+        bj1 < out1,
+        "budget: excluded outlier (#{out1}) must NOT inflate the group column (#{bj1})"
+    );
+
+    // Two outliers — the exclusion ITERATES: BOTH huge LHS lines drop out (at
+    // their own natural columns 78 and 70) and the two short lines align.
+    let ko1 = hash_col_of(&f, "# BK-out1");
+    let ko2 = hash_col_of(&f, "# BK-out2");
+    let bk1 = hash_col_of(&f, "# BK1");
+    let bk2 = hash_col_of(&f, "# BK2");
+    assert_eq!(bk1, 20, "budget-iterate: short lines align at col 20");
+    assert_eq!(bk2, 20);
+    assert!(
+        bk1 < ko2 && ko2 < ko1,
+        "budget-iterate: both outliers excluded at their natural (distinct) \
+         columns ({ko1}, {ko2}), short lines aligned left ({bk1})"
+    );
+
+    // Idempotency.
+    let f2 = gorget::formatter::format_source_infallible(&f);
+    assert_eq!(f, f2, "R40 budget-guard aligner not idempotent");
+}
+
+/// R40 aligner — the realigned source still parses and runs identically
+/// (alignment only rewrites whitespace before `#`, so it CANNOT change the
+/// program). Guards against a splice landing on a non-gap byte.
+#[test]
+#[serial_test::serial(gg_build)]
+fn fmt_trailing_comment_align_source_runs() {
+    let src = "int fc():\n    int aa = 1  # a\n    int bbbbbb = 2  # bb\n    int c = 3  # ccc\n    return aa + bbbbbb + c\n\nint main():\n    print(fc())\n    return 0\n";
+    let formatted = gorget::formatter::format_source_infallible(src);
+    // Sanity: the vardecl group aligned (all three `#` share a column).
+    assert_eq!(hash_col_of(&formatted, "# a"), hash_col_of(&formatted, "# bb"));
+    assert_eq!(hash_col_of(&formatted, "# bb"), hash_col_of(&formatted, "# ccc"));
+
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let path = tmp.path().join("fmt_trailing_comment_align_runs.gg");
+    std::fs::write(&path, &formatted).expect("write reformatted align fixture");
+    let stdout = build_and_run_capture_stdout(&path, "fmt_trailing_comment_align (reformatted)");
+    assert_eq!(stdout.trim(), "6", "aligned source must run identically (1+2+3)");
+}
+
 /// R39 snag #2 focused fixture — struct-last-field trailing comment
 /// stays at 4-space indent inside the struct body (NOT dedented to
 /// column 0 = top-level). Pre-fix worst-case symptom.
@@ -13288,6 +13460,17 @@ fn fmt_resources_gg_comment_positions_preserved() {
          appeared at column 0 (or non-indented) after `gg fmt` — the \
          exact pre-fix symptom class this round retires. Line: \
          {anchor_line:?}"
+    );
+
+    // R40 (owner-directed 2026-08-10): the trailing-comment aligner routes
+    // this large real-world file through the same chokepoint. resources.gg
+    // carries no trailing comments today, so the aligner is a structural
+    // no-op here — but pin the flagship's idempotency so any future regress
+    // (or a newly-added trailing comment that re-spaces) is caught.
+    let s2 = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(
+        formatted, s2,
+        "R40: `gg fmt` not idempotent on compiler/data/resources.gg"
     );
 }
 
