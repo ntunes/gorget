@@ -437,8 +437,8 @@ remain TODOs:
   because their `other` parameter is iterator-typed and the current
   method-generic inference can't thread a second iterator's concrete type
   through the adapter field. (Set/Dict `Drainable` itself is *shipped* —
-  `equip Set with Drainable[T]` at `lib/std/iter.gg:972` and
-  `equip Dict with Drainable[(K, V)]` at `:993`, driving the
+  `equip Set with Drainable[T]` at `lib/std/iter.gg:947` and
+  `equip Dict with Drainable[(K, V)]` at `:968`, driving the
   `__set_drain_entry`/`__dict_drain_entry` runtime helpers.)
 - **Turbofish `collect[Set[int]]()`** — today the binding-type rewrite
   (§23.6) covers the inference case; explicit turbofish routes through

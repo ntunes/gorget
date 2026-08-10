@@ -1611,20 +1611,39 @@ impl Formatter {
             return false;
         }
         let bytes = self.source.as_bytes();
-        // Walk backward from cur_start past all whitespace (space, tab,
-        // newline, CR). Stop at first non-ws byte OR position 0.
-        // `_prev_end` is intentionally unused: for container-type items
-        // (struct/enum/fn/etc.), AST span.end is often ZERO WIDTH at the
-        // same position as the next item's start — so using it as a
-        // floor would defeat the walk. The whitespace walk-back reaches
-        // the last actual content byte from prev regardless.
+        // Walk lines backward from cur_start looking for a fully-blank line
+        // (a line whose bytes are all whitespace) between prev's content
+        // and cur's content. Standalone-comment lines (`<ws>*#…\n`) are
+        // TRANSPARENT to this walk: they attach to cur, so a blank the
+        // user wrote BEFORE such a comment still expresses paragraphing.
+        // Without this, `stmt\n\n    # comment\n    stmt` collapses to
+        // `stmt\n# comment\nstmt` because the walk stops at `#`, missing
+        // the blank above it (fmt_idempotent regression, R39 close).
+        //
+        // `_prev_end` is intentionally unused: container-type items
+        // (struct/enum/fn/etc.) have zero-width AST span.end at the same
+        // position as the next item's start, so using it as a floor
+        // would defeat the walk. The whitespace walk-back reaches the
+        // last actual content byte from prev regardless.
         let mut i = cur_start;
-        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
+        // Skip cur's own line (from its last `\n` to cur_start).
+        while i > 0 && bytes[i - 1] != b'\n' {
             i -= 1;
         }
-        // Count `\n`s in the trailing-ws region source[i..cur_start].
-        // ≥ 2 = user wrote a blank line before cur.
-        self.source[i..cur_start].bytes().filter(|b| *b == b'\n').count() >= 2
+        while i > 0 {
+            i -= 1; // step past the `\n` that ended the line above
+            let line_end = i;
+            while i > 0 && bytes[i - 1] != b'\n' {
+                i -= 1;
+            }
+            let line = &bytes[i..line_end];
+            match line.iter().position(|b| !b.is_ascii_whitespace()) {
+                None => return true, // fully-blank line = user paragraph break
+                Some(pos) if line[pos] == b'#' => continue, // comment, keep walking
+                _ => return false, // content line — no blank between prev and cur
+            }
+        }
+        false
     }
 
     /// gorget-js snag #15b (R39 Track F) + #15c (R39 Track G): the arm body of

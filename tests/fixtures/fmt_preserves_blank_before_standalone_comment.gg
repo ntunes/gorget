@@ -1,0 +1,17 @@
+# R39 close-blocker regression fixture (fmt_idempotent). Formatter was
+# stripping the blank line that separated a stmt from a following
+# standalone-comment inside p2p_protocol_rpc.gg. The
+# has_blank_line_between walk stopped at the `#` (non-ws), never
+# seeing the blank above it. Fix: walk lines back transparently
+# through standalone-comment lines. RED-verify pre-fix: `gg fmt`
+# strips the two blanks between stmts and their leading section
+# comments below.
+void main():
+    int x = 42
+
+    # ── section 1 ────
+    int y = 7
+
+    # ── section 2 ────
+    int z = 99
+    print(x + y + z)
