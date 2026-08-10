@@ -1,0 +1,22 @@
+# DURABLE REPRO — the RATIFIED-UNIMPLEMENTED D33 comprehension rider
+# (decisions.md 2026-07-26: list comprehensions align to D33 ITERABLE-SIDE;
+# "retire the pre-`in` spelling"; "move the parse-site call to after
+# expect_keyword(In)"). At HEAD the parser still reads the ownership sigil
+# BEFORE `in` (src/parser/expr.rs:1947-1951) while the formatter emits it
+# AFTER (mod.rs:4119) — so this program round-trips through `gg fmt` with its
+# ownership FLIPPED (Move -> Borrow), a formatter round-trip inversion. The
+# ledger cites the formatter's iterable-side emission as corroboration of the
+# rider's direction, so the FIX IS IN THE PARSER, never the formatter
+# (T-FMT-A brief-review pass 4, Core #15e Q1).
+#
+# INTENDED (post-rider, asserted by the #[ignore]d test): the pre-`in`
+# spelling below REJECTS at parse with the rider's teaching diagnostic;
+# the accepted spelling is `[v for v in ^xs]`.
+void consume(Vector[int] !v):
+    print(v.len())
+
+int main():
+    Vector[int] xs = [1, 2, 3]
+    auto ys = [v for v ^ in xs]
+    print(ys.len())
+    return 0

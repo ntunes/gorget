@@ -37822,6 +37822,26 @@ fn dict_key_paren_binop_closure_misparse() {
     );
 }
 
+/// The RATIFIED-UNIMPLEMENTED D33 comprehension rider (decisions.md
+/// 2026-07-26): the pre-`in` ownership-sigil spelling is retired; the parser
+/// moves the sigil read to after `in`. See the fixture header.
+#[test]
+#[ignore = "KNOWN GAP (ratified rider, unimplemented): `[v for v ^ in xs]` still PARSES pre-`in` and round-trips through gg fmt with ownership FLIPPED Move->Borrow. Asserts the INTENDED post-rider REJECT of the pre-`in` spelling; TODO.md. Un-ignore when the D33 comprehension rider lands (parser-side move, Core #9 lanes)."]
+fn comprehension_pre_in_sigil_retired() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture =
+        manifest_dir.join("tests/fixtures/known_gaps/comprehension_pre_in_sigil_retired.gg");
+    let out = run_with_timeout(
+        Command::new(env!("CARGO_BIN_EXE_gg")).arg("check").arg(&fixture),
+        "comprehension_pre_in_sigil_retired",
+    );
+    assert!(
+        !out.status.success(),
+        "the pre-`in` comprehension sigil spelling still parses — the ratified D33 \
+         comprehension rider (retire pre-`in`; parser-side sigil move) has not landed"
+    );
+}
+
 /// FAMILY-1 — an `&<projection>` argument that is `Result`-typed while the
 /// CALLEE's parameter is NOT must still AUTO-PROPAGATE. `void take(int &x)`
 /// called as `take(&h.r)` only typechecks because auto-propagation unwraps the
