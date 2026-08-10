@@ -9887,6 +9887,60 @@ fn fmt_radix_preserved() {
     );
 }
 
+/// R40 Track D output-review (F1): `gg fmt` MUST preserve a COMMENT-ONLY file
+/// (a source with no items) byte-for-byte. Today it corrupts it — the first
+/// comment gains a spurious 2-space indent and, with >=2 comments, the first
+/// two are GLUED (the line break is dropped): `# a\n# b\n` -> `  # a# b`. Root:
+/// the belt-and-suspenders `emit_trailing_comment_after(self.source.len())` at
+/// `src/formatter/mod.rs:165` misfires on the first EOF-orphan comment when
+/// there is no preceding content to anchor it.
+///
+/// Asserts the INTENDED byte-identical round-trip, so it is RED on HEAD (both
+/// the indent and the glued line break trip it); `#[ignore]`d until the root
+/// cause is fixed, then un-ignore + graduate out of `known_gaps/`.
+#[test]
+#[ignore = "known gap (R40 F1): gg fmt corrupts comment-only files; un-ignore when fixed"]
+fn fmt_comment_only_file_preserved() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture =
+        manifest_dir.join("tests/fixtures/known_gaps/fmt_comment_only_file_corruption.gg");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Intended: a comment-only file round-trips byte-identically (trailing-
+    // newline policy aside).
+    assert_eq!(
+        formatted.trim_end_matches('\n'),
+        source.trim_end_matches('\n'),
+        "gg fmt corrupted a comment-only file.\n\
+         === source ===\n{source}\n=== formatted ===\n{formatted}"
+    );
+
+    // Belt-and-suspenders on the two concrete symptoms, so a partial regression
+    // still trips even if the equality check's whitespace policy ever loosens:
+    // (1) no spurious leading indent on the first comment;
+    assert!(
+        !formatted.starts_with(' ') && !formatted.starts_with('\t'),
+        "first comment gained a spurious indent.\n=== formatted ===\n{formatted}"
+    );
+    // (2) every authored comment stays on its OWN line (no glue).
+    let src_comment_lines = source
+        .lines()
+        .filter(|l| l.trim_start().starts_with('#'))
+        .count();
+    let fmt_comment_lines = formatted
+        .lines()
+        .filter(|l| l.trim_start().starts_with('#'))
+        .count();
+    assert_eq!(
+        fmt_comment_lines, src_comment_lines,
+        "comment LINE count changed — comments were glued onto one line.\n\
+         === formatted ===\n{formatted}"
+    );
+}
+
 /// Round XXXVIII Track C (gorget-js snag #15 Class 2): `Expr::DefaultOp`
 /// (`??`) with a long RHS was emitted by `gg fmt` as a bare leading-`??`
 /// continuation that the parser rejects with `expected expression, found

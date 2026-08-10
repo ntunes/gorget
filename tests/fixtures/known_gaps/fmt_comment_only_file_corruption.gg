@@ -1,0 +1,13 @@
+# KNOWN GAP (R40 Track D output-review, F1) — `gg fmt` corrupts a COMMENT-ONLY
+# file (a source with no items). This whole file is comments and nothing else.
+# Bug: the first comment gets a spurious 2-space indent, and with >=2 comments
+# the first two are GLUED together (the line break between them is dropped):
+#   printf '# a\n# b\n' | gg fmt   ->   "  # a# b"
+# Intended: a comment-only file round-trips BYTE-IDENTICALLY (no indent, no glue).
+# Root: the belt-and-suspenders emit_trailing_comment_after(self.source.len())
+# at src/formatter/mod.rs:165 misfires on the first EOF-orphan comment when there
+# is no preceding content to anchor it.
+# Pre-existing (reproduces on the pre-R40 compiler).
+# The `#[ignore]`d guard `fmt_comment_only_file_preserved` in tests/integration.rs
+# asserts the INTENDED byte-identical round-trip; un-ignore + graduate the round
+# the root cause is fixed.
