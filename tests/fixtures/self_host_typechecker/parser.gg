@@ -2161,6 +2161,28 @@ equip Parser:
                 lhs = SpannedExpr(EBinaryOp(Box(lhs), "mod", Box(rhs)), Span(lhs.span.start, rhs.span.end))
                 continue
 
+            # meta[op]: compile-time operator placeholder inside a generic body
+            # (`a meta[op] b`). Same precedence as addition (Rust l=27/r=28).
+            # Encoded as an EBinaryOp whose op string is the sentinel "meta[op]";
+            # lower_generic_function substitutes it with the concrete operator
+            # per monomorphized instance (the op comes from the call-site
+            # `meta +` argument, mirrored in the mono's mangled-name suffix). The
+            # bracketed op-PARAM name is not load-bearing — a function carries a
+            # single meta op, the same assumption the call-site `__metaop__`
+            # encoding and meta_op_arg_suffix already make — so it is
+            # consumed and discarded.
+            if self.check_kw(KW_META) and token_tag(self.peek_at(1).lex_token) == TOK_LBRACKET:
+                int l_bp = 27
+                if l_bp < min_bp:
+                    break
+                self.advance()  # skip 'meta'
+                self.expect_tok(TOK_LBRACKET, "expected '[' after meta in meta[op]")
+                self.advance()  # consume the op-param identifier
+                self.expect_tok(TOK_RBRACKET, "expected ']' closing meta[op]")
+                SpannedExpr rhs = self.parse_expr_bp(28)
+                lhs = SpannedExpr(EBinaryOp(Box(lhs), "meta[op]", Box(rhs)), Span(lhs.span.start, rhs.span.end))
+                continue
+
             # Wrapping operators: +%, -%, *%
             if ptag == TOK_PLUSPERCENT or ptag == TOK_MINUSPERCENT or ptag == TOK_STARPERCENT:
                 int w_bp = 27

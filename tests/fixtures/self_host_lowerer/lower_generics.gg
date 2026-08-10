@@ -423,7 +423,12 @@ void discover_generic_calls_expr(SpannedExpr sexpr, Dict[String, bool] &seen, Ve
                 SpannedExpr callee = *callee_box
                 match callee.expr:
                     case EIdentifier(fname):
-                        String mangled = compute_mangled_name(targs, fname)
+                        # Per-operator monomorphization for `meta <op>` args:
+                        # `combine[int](a, b, meta +)` → `combine__int64_t__add`,
+                        # a distinct mono from `..__sub`. `meta_op_arg_suffix`
+                        # returns "" for an ordinary generic call, so this is a
+                        # no-op there (must MATCH the call-lowering site's name).
+                        String mangled = compute_mangled_name(targs, fname) + meta_op_arg_suffix(callarg_values(args))
                         if not seen.contains(mangled):
                             seen.put(mangled.clone(), true)
                             GenericInstance gi = GenericInstance(fname, targs, mangled)
@@ -1492,6 +1497,97 @@ Vector[Stmt] subst_mf_stmts(Vector[Stmt] stmts, Dict[String, String] &sv, Dict[S
                 out.push(s)
     return out
 
+# Substitute the `meta[op]` sentinel operator with the concrete operator `mop`
+# throughout an expression, for one monomorphized instance of a generic body
+# (`a meta[op] b` in `combine[Numeric T](T a, T b, meta op)`). The ONLY rewrite
+# is on an EBinaryOp whose op string is the parser's "meta[op]" sentinel; every
+# other node is rebuilt unchanged with its children recursed. Structural mirror
+# of subst_mf_expr (its proven variant coverage) — `mop` is the operator
+# spelling (`+`, `-`, `<`, …) derived from the mono's mangled-name suffix.
+SpannedExpr subst_meta_op_expr(SpannedExpr se, String mop):
+    match se.expr:
+        case EBinaryOp(l, op_str, r):
+            String new_op = op_str
+            if op_str == "meta[op]":
+                new_op = mop
+            return SpannedExpr(EBinaryOp(Box(subst_meta_op_expr(*l, mop)), new_op, Box(subst_meta_op_expr(*r, mop))), se.span)
+        case EUnaryOp(op, operand):
+            return SpannedExpr(EUnaryOp(op, Box(subst_meta_op_expr(*operand, mop))), se.span)
+        case ECall(callee, args, targs):
+            Vector[CallArg] na = Vector[CallArg]()
+            for a in args:
+                na.push(CallArg(a.name, a.ownership, subst_meta_op_expr(a.value, mop)))
+            return SpannedExpr(ECall(Box(subst_meta_op_expr(*callee, mop)), na, targs), se.span)
+        case EMethodCall(recv, mname, args, targs):
+            Vector[CallArg] na = Vector[CallArg]()
+            for a in args:
+                na.push(CallArg(a.name, a.ownership, subst_meta_op_expr(a.value, mop)))
+            return SpannedExpr(EMethodCall(Box(subst_meta_op_expr(*recv, mop)), mname, na, targs), se.span)
+        case EFieldAccess(base, fname):
+            return SpannedExpr(EFieldAccess(Box(subst_meta_op_expr(*base, mop)), fname), se.span)
+        case EIndex(base, idx):
+            return SpannedExpr(EIndex(Box(subst_meta_op_expr(*base, mop)), Box(subst_meta_op_expr(*idx, mop))), se.span)
+        case EFString(raw, parts, specs):
+            Vector[SpannedExpr] np = Vector[SpannedExpr]()
+            for p in parts:
+                np.push(subst_meta_op_expr(p, mop))
+            return SpannedExpr(EFString(raw, np, specs), se.span)
+        case EArrayLiteral(elems):
+            Vector[SpannedExpr] ne = Vector[SpannedExpr]()
+            for e in elems:
+                ne.push(subst_meta_op_expr(e, mop))
+            return SpannedExpr(EArrayLiteral(ne), se.span)
+        case EIs(inner, negated, pat):
+            SpannedPattern pat_copy = *pat
+            return SpannedExpr(EIs(Box(subst_meta_op_expr(*inner, mop)), negated, Box(pat_copy)), se.span)
+        else:
+            return se
+
+# Statement-list counterpart of subst_meta_op_expr (structural mirror of
+# subst_mf_stmts): recurse the `meta[op]`→`mop` rewrite through every
+# expression-bearing statement of a monomorphized generic body.
+Vector[Stmt] subst_meta_op_stmts(Vector[Stmt] stmts, String mop):
+    Vector[Stmt] out = Vector[Stmt]()
+    for s in stmts:
+        match s:
+            case SExpr(e):
+                out.push(SExpr(subst_meta_op_expr(e, mop)))
+            case SReturn(oe):
+                match oe:
+                    case Some(e):
+                        out.push(SReturn(Some(subst_meta_op_expr(e, mop))))
+                    case None:
+                        out.push(s)
+            case SVarDecl(ty, name, val, a, b, c):
+                out.push(SVarDecl(ty, name, subst_meta_op_expr(val, mop), a, b, c))
+            case SAssign(lhs, rhs):
+                out.push(SAssign(subst_meta_op_expr(lhs, mop), subst_meta_op_expr(rhs, mop)))
+            case SCompoundAssign(lhs, op, rhs):
+                out.push(SCompoundAssign(subst_meta_op_expr(lhs, mop), op, subst_meta_op_expr(rhs, mop)))
+            case SIf(cond, then_b, branches):
+                Vector[ElseBranch] nb = Vector[ElseBranch]()
+                for eb in branches:
+                    Option[SpannedExpr] nc = None
+                    match eb.condition:
+                        case Some(c):
+                            nc = Some(subst_meta_op_expr(c, mop))
+                        case None:
+                            nc = None
+                    nb.push(ElseBranch(nc, subst_meta_op_stmts(eb.body, mop)))
+                out.push(SIf(subst_meta_op_expr(cond, mop), subst_meta_op_stmts(then_b, mop), nb))
+            case SWhile(cond, body, else_b):
+                out.push(SWhile(subst_meta_op_expr(cond, mop), subst_meta_op_stmts(body, mop), subst_meta_op_stmts(else_b, mop)))
+            case SFor(pat, iter_e, body, own, else_b):
+                out.push(SFor(pat, subst_meta_op_expr(iter_e, mop), subst_meta_op_stmts(body, mop), own, subst_meta_op_stmts(else_b, mop)))
+            case SMatch(scrut, arms):
+                Vector[MatchArm] na = Vector[MatchArm]()
+                for a in arms:
+                    na.push(MatchArm(a.pattern, a.guard, subst_meta_op_stmts(a.body, mop)))
+                out.push(SMatch(subst_meta_op_expr(scrut, mop), na))
+            else:
+                out.push(s)
+    return out
+
 # Resolve a meta-for iterable of the form `fields(T)` to the list of
 # (field-name, source-type-name) pairs for the concrete T. Sets ok=false
 # if the iterable is not a recognized `fields(<param>)` call or the
@@ -2021,6 +2117,22 @@ void lower_generic_function(FunctionDef fdef, String mangled_name, Vector[String
     Dict[String, String] tn_env = build_meta_typename_env(type_params, type_args)
     Dict[String, int] int_env = {}
     Vector[Stmt] expanded_body = evaluate_delayed_meta_stmts(fdef.body, &tn_env, &int_env, &gmod)
+    # Substitute the body's `meta[op]` sentinel(s) with THIS instance's concrete
+    # operator. The operator is encoded in the mono's mangled-name suffix
+    # (`combine__int64_t__add`), appended at discovery + call-lowering from the
+    # `meta +` call argument. Recover it by stripping the type-only mangling
+    # (`compute_mangled_name` reproduces exactly that prefix) and mapping the
+    # remaining suffix back to the operator spelling. Empty for an ordinary
+    # generic (no suffix past the type mangling) → the body is left untouched,
+    # and the sentinel never appears there anyway. Applies to BLOCK and
+    # EXPRESSION bodies alike: the SH stores both as `Vector[Stmt]` (an expr
+    # body is one `SReturn`), so a single statement-walker covers both — no
+    # Rust-style FunctionBody::Block vs ::Expression split is needed here.
+    String meta_op_base = compute_mangled_name(type_args, fdef.name)
+    if mangled_name.len() > meta_op_base.len():
+        String meta_op_spell = meta_op_suffix_to_op(mangled_name.slice(meta_op_base.len(), mangled_name.len()))
+        if meta_op_spell != "":
+            expanded_body = subst_meta_op_stmts(expanded_body, meta_op_spell)
     FunctionDef mfdef = FunctionDef(fdef.name, fdef.params, fdef.return_type, fdef.type_params, expanded_body, fdef.is_expr_body, fdef.throws_type, fdef.is_extern_stub, fdef.throws_inferred)
     GirFunction gfn = lower_function(mfdef, &gmod)
 
@@ -2599,40 +2711,6 @@ void discover_mono_method_insts_expr(SpannedExpr sexpr, Dict[String, SpannedType
         else:
             pass
 
-# Extract meta-op suffix from a call argument list.
-# Looks for EIdentifier("__metaop__<op>") produced by the parser's meta-op handling.
-String extract_meta_op_suffix(Vector[SpannedExpr] args):
-    for arg in args:
-        match arg.expr:
-            case EIdentifier(aname):
-                if aname == "__metaop__add":
-                    return "__add"
-                elif aname == "__metaop__sub":
-                    return "__sub"
-                elif aname == "__metaop__mul":
-                    return "__mul"
-                elif aname == "__metaop__div":
-                    return "__div"
-                elif aname == "__metaop__mod":
-                    return "__mod"
-                elif aname == "__metaop__eq":
-                    return "__eq"
-                elif aname == "__metaop__ne":
-                    return "__ne"
-                elif aname == "__metaop__lt":
-                    return "__lt"
-                elif aname == "__metaop__gt":
-                    return "__gt"
-                elif aname == "__metaop__le":
-                    return "__le"
-                elif aname == "__metaop__ge":
-                    return "__ge"
-                else:
-                    pass
-            else:
-                pass
-    return ""
-
 int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_sub_map, Dict[String, bool] &seen, Vector[GenericInstance] &instances):
     int added = 0
     match sexpr.expr:
@@ -2650,7 +2728,7 @@ int discover_transitive_expr(SpannedExpr sexpr, Dict[String, SpannedType] &type_
                     for ta in targs:
                         resolved.push(substitute_type(ta, &type_sub_map))
                     if not has_type_variable_ctx(resolved, &tt_ctx):
-                        String meta_suffix = extract_meta_op_suffix(callarg_values(args))
+                        String meta_suffix = meta_op_arg_suffix(callarg_values(args))
                         match (*callee_box).expr:
                             case EIdentifier(fname):
                                 String mangled = compute_mangled_name(resolved, fname) + meta_suffix

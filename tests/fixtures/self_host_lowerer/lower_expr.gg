@@ -8664,6 +8664,10 @@ int lower_call(LowerCtx &ctx, String fname, Vector[SpannedExpr] args, Vector[Str
         if targs.len() > 0:
             for ta in targs:
                 call_name = call_name + "__" + type_to_c_name(ta, &gmod)
+            # Per-operator monomorphization: a `meta <op>` arg makes the callee
+            # `combine__int64_t__add` (vs `..__sub`) — MUST match the mangled
+            # name the discovery pre-pass registered. "" for ordinary calls.
+            call_name = call_name + meta_op_arg_suffix(args)
         else:
             # R43-C: a turbofish-free generic free-fn call — infer its type-args
             # from the arg types (same helper the discovery pre-pass uses) so the

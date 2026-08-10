@@ -1192,14 +1192,14 @@ int lower_nullary_variant_ident(LowerCtx &ctx, GirModule &gmod, String name):
 # of the call arg list at GIR lowering
 # (`src/ir/lowering/exprs/calls.rs:882-893`) and uses them only to
 # build the mangled callee name (`tensor_elemwise__add` etc.) via
-# what `extract_meta_op_suffix` mirrors here. They have no runtime
+# what `meta_op_arg_suffix` mirrors here. They have no runtime
 # representation; if `lower_expr` walks one as a real value
 # identifier (because the call's arg-lowering didn't filter it),
 # the existing `[bug] EIdentifier` fallback triggers.
 #
 # Emit a harmless zero-int placeholder when the EIdentifier arm
 # encounters one. The mangled call name was already computed by
-# `extract_meta_op_suffix` during transitive-generic discovery, so
+# `meta_op_arg_suffix` during transitive-generic discovery, so
 # the runtime call dispatches to e.g. `tensor_elemwise__add`,
 # which doesn't take a meta-op param. Whatever extra arg gets
 # emitted from this placeholder is dead at the C level — but the

@@ -49,6 +49,76 @@ Vector[SpannedExpr] callarg_values(Vector[CallArg] args):
         out.push(a.value)
     return out
 
+# Compile-time meta-operator suffix for a call's argument list. The parser
+# encodes a `meta <op>` call argument as `EIdentifier("__metaop__<op>")`; a
+# generic function called with one is monomorphized PER-OPERATOR
+# (`combine__int64_t__add` vs `..__sub`), so the mangled name carries this
+# suffix at BOTH the discovery pre-pass and the call-lowering site, and
+# `lower_generic_function` reads it back to substitute the body's `meta[op]`
+# sentinel. Returns "" when no meta-op argument is present (the common case), so
+# appending it to an ordinary generic call is a no-op. Single source of truth
+# for the op→suffix mapping (paired with `meta_op_suffix_to_op`, its inverse).
+String meta_op_arg_suffix(Vector[SpannedExpr] args):
+    for a in args:
+        match a.expr:
+            case EIdentifier(nm):
+                if nm == "__metaop__add":
+                    return "__add"
+                elif nm == "__metaop__sub":
+                    return "__sub"
+                elif nm == "__metaop__mul":
+                    return "__mul"
+                elif nm == "__metaop__div":
+                    return "__div"
+                elif nm == "__metaop__mod":
+                    return "__mod"
+                elif nm == "__metaop__eq":
+                    return "__eq"
+                elif nm == "__metaop__ne":
+                    return "__ne"
+                elif nm == "__metaop__lt":
+                    return "__lt"
+                elif nm == "__metaop__gt":
+                    return "__gt"
+                elif nm == "__metaop__le":
+                    return "__le"
+                elif nm == "__metaop__ge":
+                    return "__ge"
+                else:
+                    pass
+            else:
+                pass
+    return ""
+
+# Inverse of `meta_op_arg_suffix`: the mono's mangled-name suffix (`__add`) →
+# the EBinaryOp operator spelling (`+`) that `lower_generic_function` writes into
+# the body in place of each `meta[op]` sentinel. "" for any non-meta suffix, so
+# a coincidental type-name tail never triggers a substitution.
+String meta_op_suffix_to_op(String suffix):
+    if suffix == "__add":
+        return "+"
+    elif suffix == "__sub":
+        return "-"
+    elif suffix == "__mul":
+        return "*"
+    elif suffix == "__div":
+        return "/"
+    elif suffix == "__mod":
+        return "%"
+    elif suffix == "__eq":
+        return "=="
+    elif suffix == "__ne":
+        return "!="
+    elif suffix == "__lt":
+        return "<"
+    elif suffix == "__gt":
+        return ">"
+    elif suffix == "__le":
+        return "<="
+    elif suffix == "__ge":
+        return ">="
+    return ""
+
 # Extract the parallel keyword-name list ("" for positional) from a CallArg
 # list, matching the sidecar shape lower_call still consumes internally.
 Vector[String] callarg_names(Vector[CallArg] args):
