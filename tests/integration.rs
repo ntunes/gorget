@@ -4838,7 +4838,7 @@ fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
 
     // fmt-sweep every `.gg` under `dir` in place (the COPY, never the shared
     // tree). This is the canonicalization that reproduced A1.
-    fn fmt_sweep(dir: &Path, gg: &Path) {
+    fn fmt_sweep(dir: &Path, gg: &Path, changed: &mut usize) {
         let rd = match std::fs::read_dir(dir) {
             Ok(rd) => rd,
             Err(_) => return,
@@ -4846,13 +4846,18 @@ fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
         for entry in rd.flatten() {
             let p = entry.path();
             if p.is_dir() {
-                fmt_sweep(&p, gg);
+                fmt_sweep(&p, gg, changed);
             } else if p.extension().and_then(|e| e.to_str()) == Some("gg") {
+                let before = std::fs::read(&p).unwrap_or_default();
                 let _ = Command::new(gg)
                     .arg("fmt")
                     .arg("--in-place")
                     .arg(&p)
                     .output();
+                let after = std::fs::read(&p).unwrap_or_default();
+                if before != after {
+                    *changed += 1;
+                }
             }
         }
     }
@@ -4870,7 +4875,18 @@ fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
     let work_dir = tmp.path().join("work");
     copy_dir_recursive(&src_lib, &tmp_lib).expect("recursive-copy lib/ into scratch tree");
 
-    fmt_sweep(&tmp_lib, gg_binary());
+    // Self-validation (Core #12/#13 — verify the verifier): the sweep MUST
+    // actually canonicalize (trailing commas) for the gate to exercise the SH
+    // parser path A1 lives on. If `gg fmt` ever regressed to a no-op/error, a
+    // 0-change sweep would make this double-free canary VACUOUSLY GREEN.
+    let mut changed = 0usize;
+    fmt_sweep(&tmp_lib, gg_binary(), &mut changed);
+    assert!(
+        changed >= 1,
+        "A1 canary self-check FAILED: `gg fmt --in-place` changed 0 of the \
+         scratch lib/ files — the sweep is a no-op, so the double-free gate \
+         would test nothing. Investigate `gg fmt` before trusting this gate."
+    );
 
     // Bootstrap against the fmt-formatted scratch `lib/`, reusing the cached
     // stage-0 driver (its embedded stdlib is irrelevant — the SH driver reads
@@ -24146,20 +24162,14 @@ fn self_host_bootstrap_fixed_point() {
     // legacy `liveness_instrumentation_diff` pass at its writer, so
     // there is no interim strip to maintain.
     //
-    // Raised 2026-08-06 from 2 to 3 (Round XXXII Track A / MEMORY-SAFETY
-    // round): the SH mirror at `tests/fixtures/self_host_typechecker/
-    // typecheck.gg` (safety-pass ECatch + EFaultCatch arms now emit
-    // `DkTypeMismatch` when recovery/handler type ≠ expected type) +
-    // `infer.gg` (new ECatch inference arm returning the Result's OK slot)
-    // introduces new diagnostic-emission and inference call sites during
-    // self-check. Stage2 is built from Rust gg (uses Rust's semantically-
-    // equivalent `check_recovery_type` helper), stage3 is built from
-    // stage2 which uses the SH's newly-added arms — the byte-level LIR
-    // outputs converge but take ONE extra generation to settle. Bumped
-    // from 2 → 3 (not higher — the debt is scoped to this one round's
-    // Track A change; a future round that closes the SH-Rust emission
-    // discrepancy on the recovery-type check should tighten this back).
-    // Convergence measured at stage-3 (release, loaded box; ~21 min).
+    // NOTE (corrected R40 — the prior comment was stale): the ceiling is 2 and
+    // convergence is measured at STAGE-2 today — both this ratchet's test and
+    // `sh_bootstrap_stage2_double_free_after_fmt_sweep` report `converged at
+    // stage-2`. An earlier comment here described a 2→3 raise in Round XXXII for
+    // the ECatch SH-mirror emission settle-lag; that has since been tightened
+    // back to 2. Keep it at 2 — a regression that appears to need a higher
+    // ceiling is a real SH↔Rust emission divergence to investigate, not a number
+    // to bump.
     const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 2;
     assert!(
         converged_at <= BOOTSTRAP_MAX_CONVERGENCE_STAGE,
