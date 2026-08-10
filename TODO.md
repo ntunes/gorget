@@ -345,6 +345,19 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 
 ### Medium
 
+- **🆕🐛 [MED — R39 close-time, gorget-arena snag #3b] `gg fmt` strips blank lines adjacent to comments.** Narrower residual of Snag #3 (blank preservation) — the R39 fix in `format_block_stmts` (`fb0480511`/`d8034c74f`) covered `code\n\n# comment\ncode` inside function bodies, but the following axis cells REMAIN broken (verified 2026-08-10 on `/tmp/snag_3b_comment_blank.gg`):
+
+    1. **Blank between stacked comments:** `# a\n# b\n\n# c` collapses to `# a\n# b\n# c` (contiguous). Occurs both at top-level and inside blocks.
+    2. **Blank between a comment header and the following item:** `# ── Section ──\n\nint X` strips the blank. Occurs both at top-level and inside blocks.
+    3. **Blank after a comment before code:** `# comment\n\ncode` strips the blank.
+    4. **Blank BEFORE a comment at top-level:** `code\n\n# comment\ncode` — also strips at top-level (works INSIDE blocks per the R39 fix; gorget-arena's report says it's preserved, likely measured in-block context; top-level surface is the mirror gap).
+
+    Impact per gorget-arena: `gpu_backend.gg` alone loses 127 blanks; comment-adjacent blanks are most of the remaining tree-wide −449 (1997 → 1548) after Snag #3 landed.
+
+    Root cause: `has_blank_line_between` (`src/formatter/mod.rs:1609`, R39 fix) walks lines BACKWARD from `cur_start` and transparently skips comment lines to find a blank above; but comments themselves are emitted by `emit_comments_before` as a back-to-back group with no blank preservation between them, and the ABOVE-comment blank is not surfaced from `emit_comments_before` into `format_block_stmts`'s blank-line decision. And `format_module` and its container-item variants (struct/enum fields/variants) don't call the comment-transparent walker in the same producer position.
+
+    Reference-grade fix: extend `emit_comments_before` (or replace with a comment-run emitter) to inspect the source region between consecutive comments AND between the last comment and `cur_start`, emitting `blank_line()` at each authored paragraph break. Same-shape fix for `format_module`'s rest loop + `format_struct.fields` + `format_enum.variants`. Add regression fixtures per axis cell (case 1 top-level, case 1 in-block, case 2 top-level, case 2 in-block, case 3, control case at top-level). `fmt_idempotent` will catch regressions once fixtures land.
+
 - **🆕⚠ [MED — R39 close-time, owner-directed formatter behavior] `gg fmt` should FILL-PACK long argument lists, not explode one-per-line.** Owner 2026-08-10: current behavior on a long fn signature explodes every param onto its own line + trailing comma:
 
     ```
