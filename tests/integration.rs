@@ -37806,6 +37806,22 @@ iife_bare: ok",
     );
 }
 
+/// R41 Round-B scout find (2026-08-10), orchestrator-verified: a parenthesized
+/// BINOP key in a dict literal misparses as a CLOSURE param list, checks clean,
+/// and SIGBUSes at runtime on both backends. See the fixture header for the
+/// three stacked bugs and the `looks_like_closure` class context (D27 Round B).
+#[test]
+#[ignore = "KNOWN GAP: `{(a & b): 99}` misparses as an array-of-closures (looks_like_closure \
+shape heuristic), `gg check` prints OK, runtime SIGBUS (exit 135) on both backends. Asserts \
+the INTENDED parenthesized bitwise-AND key; TODO.md. Un-ignore when D27 Round B's \
+disambiguation redesign retires the heuristic class."]
+fn dict_key_paren_binop_closure_misparse() {
+    run_gg(
+        "known_gaps/dict_key_paren_binop_closure_misparse.gg",
+        "99",
+    );
+}
+
 /// FAMILY-1 — an `&<projection>` argument that is `Result`-typed while the
 /// CALLEE's parameter is NOT must still AUTO-PROPAGATE. `void take(int &x)`
 /// called as `take(&h.r)` only typechecks because auto-propagation unwraps the

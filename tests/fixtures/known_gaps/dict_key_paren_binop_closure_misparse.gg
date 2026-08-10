@@ -1,0 +1,21 @@
+# DURABLE REPRO — a parenthesized BINOP key in a dict literal is misparsed as a
+# CLOSURE param list: `{(a & b): 99}` becomes an array-of-closures value
+# (`ClosureParam { type_: Named("a"), ownership: MutableBorrow, name: "b" }`),
+# the unknown param type `a` never rejects, the array-of-closures into a
+# `Dict[int, int]` binding never type-errors, and the program SIGBUSes at
+# runtime (exit 135) on BOTH backends. `gg check` prints "OK: no semantic
+# errors" — >=3 stacked bugs: the `looks_like_closure` shape heuristic
+# (src/parser/expr.rs, patched 4x before, still holed); unknown-type closure
+# params accepted; array-of-closures unified with Dict. The same hole opens for
+# `^` the moment Caret leaves the deny-list — which is why D27 Round B's core
+# is retiring this heuristic class, not deleting a match arm.
+# Found by the R41 Round-B scout 2026-08-10; orchestrator-verified same day.
+#
+# INTENDED (asserted below): `(a & b)` is a parenthesized bitwise-AND key
+# expression -> {6 & 3 = 2: 99} -> prints 99.
+int main():
+    int a = 6
+    int b = 3
+    Dict[int, int] m = {(a & b): 99}
+    print(m.get(2).unwrap())
+    return 0
