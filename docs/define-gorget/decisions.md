@@ -200,7 +200,8 @@ language-design/book examples showing float output.
   taught 9× in the book — i.e. `throws Exception` in different clothes). A31 also RETIRES the
   implicit-`From` hidden-control-flow hole as a side effect, because set widening needs no
   conversion. The library/semver answers (inference is internal-only, `public` sets are written,
-  open/closed sets, closed by default) are PROPOSED in that LOG entry.
+  open/closed sets, closed by default) were PROPOSED in that LOG entry; RATIFIED 2026-08-10
+  via D45 (see the head of this entry).
   ⚡ **SIZING CHALLENGED 2026-08-10 — scout the cheaper path before accepting "phase-scale".**
   The framing below (anonymous tagged union-of-enums) may be what has kept this parked. Cheaper
   candidate: **synthesized union enums with structural identity** — `throws IoError | ParseError`
@@ -546,7 +547,9 @@ P1-infra reviewers' recommendation.
 - 2026-07-17 — **🎯 D29 CAPTURE AMENDMENT RATIFIED (owner; supersedes the catch-attachment
   pin's "Result destination is a disposition; still requires `!`" clause — that clause ONLY).**
   Normative pin: **`!` marks error-channel ACTIVATION — the three control-flow dispositions
-  (propagate / `catch` / `rethrow`) — on BOTH call kinds. A fallible call with NO mark is
+  (propagate / `catch` / `rethrow`) (⚡ D45 pin 4: `rethrow` retires at E3; the set becomes
+  propagate / `catch` / Result-capture, transform spelled `catch (e): throw wrap(e)`) — on
+  BOTH call kinds. A fallible call with NO mark is
   legal exactly where its full `Result[T,E]` is captured by an EXPLICITLY Result-annotated
   destination (binding / param / return): `Result[int, Error] r = f()`. Mark + Result
   destination together is an ERROR (fix-it: remove the `!` — one way to write everything).
@@ -655,7 +658,8 @@ P1-infra reviewers' recommendation.
   declared-`Result` return); message teaches mark `f()!` and lists dispositions
   (`f()! catch …` / `f()! rethrow …` / `Result[T,E] r = f()!`). (2) **`E_UnhandledThrows`**
   — marked call that cannot propagate here (non-`throws` fn, no disposition); message
-  teaches handle with catch/rethrow/Result bind **or declare `throws E` to propagate**.
+  teaches handle with catch/rethrow/Result bind **or declare `throws E` to propagate**
+  (⚡ D45 pin 4: the message contracts drop `rethrow` when E3 retires it).
   Never primary-fix-it to signature `!` / `! E`. Never surface desugar as type-mismatch
   `found Result[…]` for these cases. Fix-it: insert `!` (or `! ` before `=`). Registry +
   smith/D23 ratchets gain the new code; both compilers + ggdef. Terminology of the codes
@@ -666,7 +670,8 @@ P1-infra reviewers' recommendation.
   Mandatory postfix `!` applies to **every fallible call**, not only `throws`-declared
   callees: (1) calls/methods whose callee is `throws E`; (2) calls/methods whose
   **declared return type** is `Result[T,E]`. Same dispositions (prop / `catch` /
-  `rethrow` / Result-bind). Bare fallible call remains always illegal. Scope of the
+  `rethrow` / Result-bind) (⚡ D45 pin 4: `rethrow` retires at E3). Bare fallible call
+  remains always illegal. Scope of the
   mark = Call/MethodCall whose resolved callee is throws **or** returns Result — not
   every expression of type Result (locals/combinators are separate). **`Result[T,E]`
   stays a first-class value type** (deferred handling, collections, combinators,
@@ -1207,7 +1212,8 @@ P1-infra reviewers' recommendation.
   its Result-ness is unobservable except at a Result-typed binding or a catch." Plus the
   diagnostic contract: the checker never surfaces the desugar ("found Result[T,E]" is
   banned from user-facing diagnostics) — violations of the virality rule say "this call
-  throws E; declare `throws E` or handle it (catch/rethrow/Result capture)."
+  throws E; declare `throws E` or handle it (catch/rethrow/Result capture)." (⚡ D45 pin 4:
+  contract wording drops `rethrow` when E3 retires it.)
   NO semantic change — the virality is pre-existing; this pins coverage totality + UX.
   Enforcement rides the trap-normalization wave: ggdef models the invariant; smith gains
   a throws-in-every-expression-position fuzz tier that asserts production REJECTS each
@@ -1898,7 +1904,8 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
 
   **PIN 2 — A31 AMENDMENTS RATIFIED.** Union spelling is `|` everywhere — the NORTH STAR's
   brace form (`throws {NotFound, Denied}`) is DEAD (annotated at that entry). Closed by
-  default; `..` is the opt-in to growth. Public sets are WRITTEN (checker rule keyed on D43
+  default; an open marker is the opt-in to growth (glyph `..` vs `...` finalized at the E2
+  grammar scout, per pin 1). Public sets are WRITTEN (checker rule keyed on D43
   visibility); inference applies interior-side with the decl-site `!` REQUIRED on every
   inferred-fallible non-public function (the D29(b) grammar-locked form `Config load(String
   p)!:` — flow visible at both ends, and the machine consumer reads fallibility off the decl
@@ -1928,9 +1935,9 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   throw 3` shows the discard, uniform with A35's acknowledgment principle (the top-level-
   silence finding stayed invisible partly because `rethrow` hid the discard); (d) A34's format
   trigger becomes "a `throw` that consumes a catch binding" — same information, still
-  mechanical. Census 2026-08-10 (regenerate before acting): 107 occurrences across 41 files in
-  `tests/fixtures` (`grep -rln "rethrow" tests/fixtures --include="*.gg" | wc -l`), bare
-  `rethrow N` exactly 2, 32 mentions across `lib` + `docs/book` + the reference. Mechanics:
+  mechanical. Census 2026-08-10 (regenerate before acting): 107 mention lines across 41 files
+  in `tests/fixtures` (`grep -rln "rethrow" tests/fixtures --include="*.gg" | wc -l`), bare
+  `rethrow N` exactly 2, 32 mention lines across `lib` + `docs/book` + the reference. Mechanics:
   the keyword is TOMBSTONED — token stays in the lexer, the parser emits a teaching diagnostic
   with a machine-applicable fix-it (`rethrow (e): X` → `catch (e): throw X`; bare `rethrow N`
   → `catch (_): throw N`), the first customer of A38's `gg fix`; the diagnostic code is never
@@ -1959,10 +1966,16 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
 
   **PIN 6 — THE VALUE-POSITION AUTO-PROP HOLE IS KILLED (the two-doctrines conflict resolved
   by owner).** A bare `Result`-typed value in a `T` position is a TYPE ERROR; propagation
-  happens at `!`-marked calls only. The `known_gaps/sound_autoprop_method_arg_rejected.gg` +
-  `known_gaps/sound_autoprop_indirect_bare_arg_skips_call.gg` "INTENDED: both accept" headers
-  are OVERTURNED (pre-D29 doctrine); the fixtures flip to negatives at E0. Prerequisite of
-  A34 — the chain's premise ("the compiler knows every hop") is false until this lands.
+  happens at `!`-marked calls only. Fixture dispositions at E0 are OPPOSITE (pass-1 review
+  correction — the first fold lumped them): `known_gaps/sound_autoprop_method_arg_rejected.gg`'s
+  "INTENDED: both accept" header is OVERTURNED (pre-D29 doctrine) — under this pin BOTH call
+  kinds reject the bare `Result` at an `int &x` param, and the fixture flips to a NEGATIVE.
+  `known_gaps/sound_autoprop_indirect_bare_arg_skips_call.gg` is VINDICATED, not overturned:
+  its callees take `Result[int, int] &x` — Result-typed positions, nothing to unwrap — and its
+  INTENDED ("each callee runs") is exactly what the kill mandates; the bug it pins is the
+  auto-prop machinery erroneously FIRING there, so it GRADUATES as a passing positive at E0.
+  Prerequisite of A34 — the chain's premise ("the compiler knows every hop") is false until
+  this lands.
 
   **PIN 7 — A34 SPLIT + THE EXIT CLASS.** **A34a lands at E0:** an error reaching the top of
   `main` renders `error: <Displayable of payload>` to stderr — one line, frozen grammar, the
@@ -1982,7 +1995,9 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   carries the decl-site `!` (pin 2); a PUBLIC function using `+!` writes `throws ArithError`
   like any other member. The bespoke closure-walker fix shape filed for the closure gap
   (`known_gaps/c1_d26_closure_body_no_auto_infer.gg`) is superseded — that gap dissolves in
-  the general rule.
+  the general rule. Whether an ANONYMOUS closure carries pin 2's decl-site `!` is an E2 scout
+  question (pin 2's subject is named non-public functions); the fixture stays, its INTENDED
+  shape is re-derived from that answer, and it graduates at E2.
 
   **PIN 9 — ONE SET-ALGEBRA MODULE (Core #4 applied to the type checker).** Representation,
   interning, union, subtraction, membership are built ONCE in A31's implementation and
