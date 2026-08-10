@@ -2214,3 +2214,16 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   Small formatter track (T-FP): own scout→brief→≥3 reviews→executor; gates = per-kind
   fixture pairs (short-fits-inline vs long-must-wrap) + `fmt_idempotent` + the A1
   scratch-tree gate + bootstrap.
+
+- 2026-08-10 — **🎯 SUITE-LAYOUT FORM PRESERVATION RATIFIED (owner, from a gorget-arena
+  diff): `gg fmt` NEVER collapses a next-line suite or arm body onto its header line — the
+  author's break is preserved.** Owner's words: "keep the original style and leave it on the
+  next line." Measured violating cell (reproduced + cell-mapped same day, fresh binary): an
+  EXPRESSION-POSITION match's `else` arm with a single-expression body collapses
+  (`else:` + next-line `^b` → `else: ^b`) and gains an inserted blank line, while the
+  sibling `case` arms preserve — inconsistent within one construct; statement-position
+  matches unaffected; the mangle is idempotent (stable, not oscillating). Same
+  form-preservation family as R40's radix / comment-blank / escape rulings. Fix rides R41's
+  PRE-A2 fmt-hardening wave (with the fill-pack track) — a canonical-output mangle must die
+  before the bulk sweep bakes it into the corpus. Filed with repro in TODO (Tooling/CLI,
+  beside the fill-pack entry).
