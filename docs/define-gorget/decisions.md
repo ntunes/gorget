@@ -233,6 +233,39 @@ language-design/book examples showing float output.
   (launched 2026-07-11); candidate rulings D24 (boundary spec) · D25 (fault-catch
   disposition) · D26 (fallible operators).
 
+- **A34 (owner-noted CANDIDATE, 2026-08-10 — NOT ratified): the ANNOTATED CAUSAL CHAIN
+  — error diagnosability as a first-class feature.** Raised in the Zig
+  "no-hidden-control-flow" comparison. Today an error value carries only its own payload;
+  there is no propagation trace at all (language-design §6.3 formerly documented
+  `.context()` / `e.trace()` / `e.source()` / `GORGET_BACKTRACE=1` — an entire subsystem
+  that has NEVER existed; corrected 2026-08-10 to *Not yet implemented* + this pointer).
+  **The opportunity:** D29 made the fallible mark MANDATORY, so the compiler already knows
+  every propagation site statically — that is exactly the handle Zig's error-return-traces
+  are built on, and Gorget has it by construction at every hop. Zig's trace carries return
+  ADDRESSES and its errors carry NO payload; Rust/anyhow carries context STRINGS but loses
+  the typed intermediates; neither carries both. Gorget can: the chain records the span +
+  enclosing function at each `!`, and at each `rethrow` ALSO the pre-transform rendering,
+  so the trace reads as *what was being attempted at every layer* rather than a list of
+  addresses. **Proposed cost split (the design's load-bearing idea): a PURE propagation hop
+  (`f()!`, no rethrow) pushes one static descriptor pointer — Zig-cheap; only a `rethrow`
+  hop, which the programmer explicitly chose to annotate, pays a format.** Debug builds
+  pay; release compiles the records out entirely and `!` degrades to today's branch.
+  **Open questions for a scout:** (a) record layout + where the chain lives (per-thread ring
+  à la Zig vs carried beside the error value — the latter is a DEBUG-ONLY error-channel ABI
+  difference and must be checked against C/LLVM/self-host lane parity, Core #9); (b) whether
+  the chain is reachable as a VALUE (`e.chain()`) or only rendered at the top-level handler —
+  reachability makes it observable and therefore semantics, not diagnostics, which would bind
+  ggdef; (c) measured debug-build cost (Core: perf work measures MEMORY too — the retained
+  renderings are the balloon risk); (d) interaction with `on error` cleanup running at each
+  hop; (e) faults/traps are NOT in the channel and have no chain — separate concern, do not
+  conflate. **Pairs with the other finding from the same discussion:** implicit `From`-conversion
+  at a `!` site runs arbitrary user code invisibly (measured: a `From` impl that prints and
+  panics does both, mid-propagation, exit 101) — a live hidden-control-flow hole that D4's
+  drop-purity doctrine already answers for the analogous case (implicit clones require a
+  provably effect-free drop). Candidate remedy: gate implicitly-invoked error `From` on the
+  same purity/totality proof, with `rethrow` as the visible spelling for conversions that do
+  real work. Both items are the owner's call; neither is ratified.
+
 - **A29 (owner question, 2026-07-05): CONSOLIDATE the `&`-exclusivity rules into one
   static-semantics prose section + fixtures.** The intended rule is Rust-style (readers XOR
   one writer, language-design §3.5) and is a PREMISE of D1's refinement claim (same-call
