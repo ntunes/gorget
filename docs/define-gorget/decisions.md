@@ -266,6 +266,39 @@ language-design/book examples showing float output.
   same purity/totality proof, with `rethrow` as the visible spelling for conversions that do
   real work. Both items are the owner's call; neither is ratified.
 
+- **A37 (owner-directed, 2026-08-10 — direction RATIFIED, two phases): ONE DIAGNOSTIC
+  NAMESPACE; SEVERITY IS TABLE DATA, NOT A NAME PREFIX.** Owner proposal: name every
+  diagnostic uniformly and put its default level in a table. **Why it is right:** severity
+  encoded in an identifier prefix is exactly what Layering rule 2 forbids — deciding meaning
+  from a name string instead of a typed field read via an accessor. The current scheme is
+  ALREADY broken by it: `W_DeadBareParamWrite`'s registry entry declares it "promotes to a
+  reserved `E_DeadBareParamWrite` after corpus burn-down" — ONE concept, TWO reserved
+  identifiers, because changing severity currently requires a RENAME. With A36's configurable
+  levels ratified, the first lint set to `error` would render as `error[W_…]`, the name
+  contradicting the output. **Decisive project-specific argument: "land as a warning, burn it
+  down, make it fatal" IS the standard operating procedure here (Core #6 spells out that exact
+  pipeline), so a naming scheme that demands a rename at the final step is hostile to the way
+  this tree actually works** — and each such rename costs a reserved-name pair plus every
+  reference. (gcc lands differently, keeping `-Wunused-variable` named `W` under `-Werror`
+  because there the prefix means "lint-family", not "currently a warning" — a defensible
+  cheaper design, REJECTED here because this project's promotion pipeline crosses that category
+  boundary routinely and gcc's does not.)
+  **⚡ SPELLING PIN (owner-confirmed 2026-08-10): DROP THE PREFIX ENTIRELY — not `E_<something>`.**
+  If severity is data, a prefix saying "error" reintroduces the same lie one layer down. Today's
+  render says "error" twice (`error[E_UseAfterMove]`); the rendered level already carries
+  severity, so the code becomes a pure identifier: `error[UseAfterMove]` / `warning[UnusedResult]`.
+  **Registry columns:** `{ code, default_level, configurable, group, since }` — the A36 table
+  plus two. `configurable: false` is REQUIRED because not everything can be demoted
+  (`type-mismatch = none` must not be a legal setting); the virtue of one namespace is that the
+  fixed/configurable boundary then MOVES AS DATA rather than as a rename.
+  **PHASE 1 — adopt the table** as the single source of truth (severity, configurability, group,
+  `since`, default). Needed for A36 regardless; NO renames. **PHASE 2 — drop the prefixes:**
+  mechanical, and it MUST land with the conformance-harness update in the SAME round, because
+  the codes are a CROSS-LANE COMPARED VALUE (language-reference §10.10: conformance compares
+  "the `E_` code plus the exit class"). **Measured 2026-08-10 (regenerate before acting, Core #5):**
+  133 distinct codes (114 `E_` + 19 `W_`); 1,767 references repo-wide; 1,165 of those in
+  `tests/` + `spec/` — i.e. the majority are user-visible conformance pins, not source.
+
 - **A35 (owner-directed CANDIDATE, 2026-08-10 — pins ratified below, whole not yet ratified):
   `_ = expr` DISCARD FORM + `W_UnusedResult`.** Today a discarded value is invisible: bare
   `pure_val()`, `v.pop()`, and even `x + 1` as a statement all check clean, and there is NO
@@ -311,18 +344,43 @@ language-design/book examples showing float output.
   exists today (no `#[allow]`, no lint levels; `--implicit-clones=…` is a bespoke per-feature
   flag). **The shape is already ratified: GENERALIZE D42** (`decisions.md:1472` — "ONE NAME,
   THREE SCOPES, `allow`/`warn`/`deny`", ratified 2026-07-28, NOT IMPLEMENTED) from the single
-  `implicit_clones` knob to every `W_` code: `--unused-result=allow` (project) ·
-  `directive unused-result=allow` (module) · `@unused_result(allow)` (function).
-  **Proposed pin for the scout — lint names derive MECHANICALLY from diagnostic codes**
-  (`W_UnusedResult` → `unused-result` / `@unused_result`), never a parallel registry: one
-  source of truth per axis (Layering rule 3), and it makes the rendered code tell the reader
-  exactly what to write in the allow, with no lookup table. **⚡ OWNER PINS (ratified 2026-08-10):**
-  (a) **PER-LINT DEFAULT LEVELS** — each lint declares its own default, since D42's
-  `implicit_clones` defaults `allow` (opt-IN checking) while A35's `unused-result` defaults
-  `warn` (opt-OUT); the default belongs on the lint's typed registration, not a global table.
-  (b) **`deny` ESCALATES A `W_` TO A HARD ERROR** — this also supplies the `W_`→`E_` promotion
-  path (cf. `W_DeadBareParamWrite`) with no renaming: a class burns down under `deny` in the
-  gates before any code change makes it fatal by default.
+  `implicit_clones` knob to every lint.
+  **⚡ OWNER PINS (all ratified 2026-08-10):**
+  (a) **LEVELS ARE `none` / `warn` / `error` — AMENDS D42**, which pinned `allow`/`warn`/`deny`
+  (unimplemented, so the amendment costs nothing; recorded as an amendment, not silent drift).
+  Rationale: `error` names the CONSEQUENCE, `deny` named the compiler's DISPOSITION and was
+  ambiguous ("deny the clone? deny the build?"). Evidence it was ambiguous: the OWNER misread
+  his own ratified D42 from the name, reading `@implicit_clones(deny)` as a functionality
+  toggle when D42 defines it as "an annotation that changes no semantics and only makes the
+  compiler prove a property or error." A severity word cannot be misread as a toggle. Precedent:
+  ESLint/Biome's `off`/`warn`/`error`. `none` over `off` — at a use site `@unused_result(none)`
+  describes the CODE, which is what an attribute attaches to.
+  (b) **TWO AXES (gcc's shape, owner-directed)** — enablement is separate from severity:
+  `--warn=<group>` selects the SET (the `-Wall` axis), `--warn-as-error[=<lint>]` escalates
+  (the `-Werror` axis), `--<lint>=none|warn|error` sets one lint at three scopes. Precedence:
+  explicit per-lint > group > registry default.
+  (c) **`--warn=all` IS BOUNDED BY `since`** — each lint records the language version it was
+  introduced in; `all` means "every lint at or before the version the manifest declares". This
+  makes gcc's *policy* ("new warnings don't auto-join `-Wall`") MECHANICAL (Core #6): a new lint
+  cannot join your `all` without a reviewed version bump, so `--warn=all --warn-as-error` is
+  upgrade-safe by construction. **Requires a language-version field in `gorget.toml`** — only
+  `[package] version` exists today (`src/manifest.rs:22`).
+  (d) **LINT NAMES DERIVE MECHANICALLY FROM DIAGNOSTIC CODES**, never a parallel registry
+  (`UnusedResult` → `unused-result` / `@unused_result`): one source of truth per axis (Layering
+  rule 3), and the rendered code tells the reader exactly what to write in the suppression.
+  (e) **SOURCE-SCOPE LINTS USE A `lint` KEYWORD, NOT `directive`.** Every existing directive
+  CHANGES THE PROGRAM (`strip-asserts` removes runtime assertion checks — semantics; `trace`,
+  `hot-reload`, `scheduler=…`), while a lint changes only what is REPORTED. Mixing them means a
+  reader cannot tell whether a module header is load-bearing for semantics — the wrong ambiguity
+  in a language built on "no hidden control flow". So: `directive strip-asserts` (changes the
+  program) vs `lint unused-result = none` (changes only reporting). CLI and attributes need NO
+  split — the closed value set `none|warn|error` disambiguates them, and only `directive
+  name=value` has an open enough grammar to blur.
+  (f) **PER-LINT DEFAULT LEVELS** — each lint declares its own default, since D42's
+  `implicit_clones` defaults `none` (opt-IN checking) while A35's `unused-result` defaults
+  `warn` (opt-OUT); the default belongs on the lint's typed registration.
+  (g) **`error` LEVEL IS FATAL** — supplying the lint→hard-error promotion path: a class burns
+  down under `error` in the gates before any default flips.
   **BLANKET `--deny=warnings`: CONSIDERED AND DEPRIORITIZED (2026-08-10).** The goal it serves
   (warning rot — a project sitting on 400 warnings effectively has zero) is served STRICTLY
   BETTER in-tree by the existing shrink-only ratchet (`tests/lints.rs`,
