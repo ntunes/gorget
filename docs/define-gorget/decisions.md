@@ -1951,8 +1951,12 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   **PIN 3 — IMPLICIT `From` AT `!` SITES IS DELETED.** Widening replaces conversion; no user
   code ever runs at a mark. The purity-gating candidate recorded with A34 is retired UNUSED —
   deletion, not gating. A conversion that does real work is spelled `catch (e): throw wrap(e)`.
-  The book's wrapper-enum + `equip … with From[…]` pattern (`language-design.md` §6.2) retires
-  with it at E1/E2.
+  The wrapper-enum + `equip … with From[…]` teaching retires with it — doc set derived by
+  CENSUS (`grep -rn "with From\[" docs/` — pass-7 catch: the earlier §6.2-only cite was a
+  selection; the census also returns `language-design.md` §36.3, the flagship worked example,
+  whose `!`-mark comment "IoError → ProcessError" teaches exactly the deleted conversion).
+  Write-through is OWNED BY THE E2 TRACK (not by the tombstoned From-on-bare-`rethrow` TODO
+  entry, which is deleted at E3).
 
   **PIN 4 — `rethrow` IS RETIRED: `throw` is the one raising form, `catch` the one handling
   form.** The channel surface becomes `throws` / `throw` / `catch` / `on error` / `!` —
@@ -2037,7 +2041,10 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   a cited list is a selection); exemplars by SECTION ANCHOR only, no line numbers — these
   pointers drifted TWICE inside this very fold (pass-6 catch), which is what line numbers do:
   reference §10.6 "Throws on Main" (the most normative statement), §10.9, §3.4,
-  `docs/book/02-types.md`, `docs/book/10-errors.md`)
+  `docs/book/02-types.md`, `docs/book/10-errors.md`. The EXIT-TAXONOMY write-through
+  additionally sweeps the SPEC corpus (pass-7 catch — the docs-only census missed it):
+  `spec/prose/trap-codes.md`'s "Exit-code context" block and `spec/ggdef/src/main.rs`'s
+  header both state the taxonomy as a total enumeration and gain 102)
   RETIRES at E0**, all lanes per Core #9, its negative fixtures flipping. Without this the
   102 class has no reachable trigger — the only error that can escape `main` today is an
   int. Semantics: an error reaching the top of `main` renders `error: <Displayable of

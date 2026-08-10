@@ -37760,9 +37760,10 @@ guard: ERR(propagated)",
 /// lowering); a fix belongs there.
 #[test]
 #[ignore = "KNOWN GAP: Result→T auto-propagation is admitted at a free-call arg but REJECTED at \
-a method-call arg (E_TypeMismatch), same expression and param type. Pre-existing. Asserts the \
-INTENDED symmetric acceptance; TODO.md. Un-ignore when the method-call arg position admits the \
-same unwrap."]
+a method-call arg (E_TypeMismatch), same expression and param type. Pre-existing. ⚡ D45 pin 6 \
+(2026-08-10) REVERSED the intent: both call kinds REJECT — bare Result in a T position is a \
+type error. Do NOT un-ignore toward acceptance; at round E0 this fixture is REWRITTEN as a \
+NEGATIVE (both positions rejected) per the TODO rider."]
 fn sound_autoprop_method_arg_rejected() {
     run_gg(
         "known_gaps/sound_autoprop_method_arg_rejected.gg",
@@ -37783,13 +37784,15 @@ fn sound_autoprop_method_arg_rejected() {
 /// Both rows survive the Family-1 fix because `try_resolve_place` has no
 /// `Identifier` arm BY DESIGN — the projection twins are resolved and return
 /// early (pinned live by `cow_amp_projection_indirect_call_arg`), the bare ones
-/// fall through to the unguarded unwrap. ⚠ The fix is for the indirect call
-/// paths to set `expected_type`, NOT to widen the producer.
+/// fall through to the unguarded unwrap. ⚠ The `expected_type` fix vehicle is
+/// SUPERSEDED by D45 pin 6 (2026-08-10): at E0 the peel re-gates on `!`-mark
+/// provenance, so unmarked positions never peel — no expected_type plumbing.
 #[test]
 #[ignore = "KNOWN GAP: an indirect call (closure-var or IIFE) with a BARE `Result`-typed arg \
 auto-unwraps and silently skips the call, though the callee's param is itself a Result. Asserts \
-the INTENDED call; TODO.md. Un-ignore when the indirect call paths set `expected_type` like \
-their free/method siblings."]
+the INTENDED call; TODO.md. ⚡ D45 pin 6 (2026-08-10): the expected_type vehicle is SUPERSEDED — \
+at E0 the peel re-gates on `!`-mark provenance and unmarked positions never peel, so this \
+fixture's INTENDED holds and it GRADUATES as a passing positive. Un-ignore with the E0 landing."]
 fn sound_autoprop_indirect_bare_arg_skips_call() {
     run_gg(
         "known_gaps/sound_autoprop_indirect_bare_arg_skips_call.gg",
@@ -45529,9 +45532,12 @@ walker in src/semantic/rewrite.rs deliberately skips Expr::Closure / \
 Expr::ImplicitClosure to avoid false-positive promotion of the enclosing fn. \
 Consequence: a closure using +! requires the user to declare `throws ArithError` \
 explicitly (an asymmetry with fn-body auto-infer). Current behavior is a SOUND \
-E_UnhandledThrows reject (not a miscompile) — this is an ERGONOMIC gap. FIX \
-SHAPE: mirror the F1a body-walker at the closure signature-resolution site. \
-Un-ignore and graduate when the closure auto-infer lands."]
+E_UnhandledThrows reject (not a miscompile) — this is an ERGONOMIC gap. ⚡ FIX \
+SHAPE SUPERSEDED by D45 pin 8 (2026-08-10): do NOT mirror the F1a walker — D26 \
+auto-infer retires into general inference at round E2, where closures fall out \
+of the one rule; whether an anonymous closure carries the decl-site `!` is an \
+E2 scout question and this fixture's INTENDED is re-derived from that answer. \
+Un-ignore and graduate at E2."]
 fn c1_d26_closure_body_no_auto_infer_intended() {
     run_gg(
         "known_gaps/c1_d26_closure_body_no_auto_infer.gg",
