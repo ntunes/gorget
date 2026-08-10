@@ -1536,6 +1536,19 @@ impl Formatter {
     }
 
     fn format_param(&mut self, param: &Param) {
+        // meta op parameter: `meta name` — carries only an operator token, no
+        // runtime type. The parser stores it as `type_=Void, is_meta_op=true`
+        // (parser `parse_param`), so WITHOUT this arm we fall through to the
+        // type-first path below and re-emit the placeholder as `void name`. On
+        // reparse `is_meta_op` is then false → the op-binding is filtered out of
+        // `meta_env` → the substitution sweep is skipped → a `meta[op]` infix
+        // survives to GIR lowering and panics (`MetaOpInfix not substituted`).
+        // Fix at the write site (Core #1): emit the `meta` keyword form.
+        if param.is_meta_op {
+            self.emitter.write("meta ");
+            self.emitter.write(&param.name.node);
+            return;
+        }
         // self parameter (same in both modes)
         if matches!(param.type_.node, Type::SelfType) {
             match param.ownership {
@@ -3709,6 +3722,34 @@ mod tests {
         let first = fmt(input);
         let second = fmt(&first);
         assert_eq!(first, second, "Formatter is not idempotent");
+    }
+
+    #[test]
+    fn test_meta_op_param_round_trips() {
+        // A `meta op` parameter (parser: `is_meta_op=true`, placeholder
+        // `type_=Void`) must re-emit as `meta op`, NOT `void op`. Emitting the
+        // placeholder type loses `is_meta_op` on reparse, so the op-binding is
+        // dropped from `meta_env`, the substitution sweep is skipped, and a
+        // `meta[op]` infix survives to GIR lowering and panics
+        // (`MetaOpInfix not substituted`). RED-verify: revert the `format_param`
+        // meta-op arm and this test fails on both asserts (`void op` appears,
+        // `meta op` does not).
+        let input =
+            "int apply[Numeric T](T a, T b, meta op):\n    T r = a meta[op] b\n    return r\n";
+        let output = fmt(input);
+        assert!(
+            output.contains(", meta op)"),
+            "meta op param must survive formatting, got:\n{output}"
+        );
+        assert!(
+            !output.contains("void op"),
+            "meta op param must NOT re-emit as its placeholder type `void op`, got:\n{output}"
+        );
+        // The infix `meta[op]` in the body is preserved verbatim.
+        assert!(output.contains("meta[op]"), "meta[op] infix must survive, got:\n{output}");
+        // Idempotent: formatting the output again is a no-op.
+        let second = fmt(&output);
+        assert_eq!(output, second, "meta op formatting is not idempotent");
     }
 
     #[test]
