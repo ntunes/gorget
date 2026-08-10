@@ -5140,6 +5140,23 @@ fn equip_exprbody_owning_param_return_uaf() {
     run_gg("known_gaps/equip_exprbody_owning_param_return_uaf.gg", "5\n28");
 }
 
+// ICE — re-throwing the `catch` error-binding from inside a `match` ARM panics
+// the Tier 2a consume-site validator at `src/ir/lowering/mod.rs:2114`
+// (`AssignIntoOwnedSlot(dst: CE) — owned-but-live source consumed without
+// preceding clone`), exit 101. The `match` arm is the discriminator: bare
+// `throw e` in the catch block, `throw e` inside an `if`, and `match e` with no
+// `throw` all lower fine. Reaches only `gg build` — `gg check` stops before IR
+// lowering, so this is invisible to check-only gates. This is the natural
+// idiom for PARTIAL error handling; the Result-capture + nested-match spelling
+// is the working workaround. Un-ignore + promote out of known_gaps/ when the
+// catch-binding ownership fix lands. TODO.md.
+#[test]
+#[ignore = "KNOWN GAP: `throw <catch-binding>` inside a `match` arm ICEs the \
+Tier 2a consume-site validator during IR lowering (exit 101); TODO.md."]
+fn catch_binding_throw_in_match_arm_ice() {
+    run_gg("known_gaps/catch_binding_throw_in_match_arm_ice.gg", "8080");
+}
+
 // PERF PATHOLOGY — Track I sibling filing (2026-07-28). `Ownership::Move if
 // callee_is_move_param` arm at `src/ir/lowering/exprs/calls.rs:624`
 // unconditionally emits an `emit_clone` on the Ptr(T) operand of a `!`-arg

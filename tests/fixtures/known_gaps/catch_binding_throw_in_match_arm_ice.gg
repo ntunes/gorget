@@ -1,0 +1,51 @@
+# KNOWN GAP — ICE (compiler panic, exit 101) at IR lowering: re-throwing the
+# `catch` error-binding from inside a `match` ARM panics the Tier 2a
+# consume-site validator.
+#
+#     thread 'gg-main' panicked at src/ir/lowering/mod.rs:2114:
+#     Tier 2a consume-site violation: 1 violation(s) in module '<unknown>'.
+#     First: fn @handle bb2 i4 — AssignIntoOwnedSlot(dst: CE) —
+#     owned-but-live source consumed without preceding clone.
+#
+# The `match` arm is load-bearing. Measured at filing (all via `gg build`, NOT
+# `gg check` — the panic is in IR lowering, which `check` never reaches):
+#   - `throw e` bare in the catch block .................... OK
+#   - `throw e` inside an `if` in the catch block .......... OK
+#   - `match e` in the catch block with NO `throw` ......... OK
+#   - `throw e` inside a `match` ARM ...................... ICE  <- this file
+# Enum arity is NOT the discriminator (reproduces with one variant and two).
+#
+# Why it matters beyond the crash: this is the natural idiom for PARTIAL error
+# handling — recover from some variants, re-throw the rest. The Result-capture
+# spelling (`Result[T,E] r = f()` + `match r: case Error(CE.NotFound(_)): ...`)
+# works correctly and is the current workaround, so this is an ergonomics gap
+# wearing an ICE, not a missing capability.
+#
+# Distinct from the filed Tier 2a siblings: TODO's `s.debug()` panic is a
+# different site (`mod.rs:2084`) and a builtin-method trigger; the Dict/Set
+# `put`/`insert` consume-classification item is a check-time REJECT, not an ICE;
+# the self-host `lower_catch_expr` err-binding item is an SH-lane verify-by-
+# running task, whereas this is a Rust-gg lowering panic.
+#
+# INTENDED behavior: `load("x")` throws `CE.NotFound("x")`; the catch binds it,
+# the match takes the `NotFound` arm, and the recovery value is 8080 — so the
+# program prints 8080 and exits 0. It must NOT panic the compiler.
+
+enum CE:
+    NotFound(String)
+    BadPort(int)
+
+int load(String p) throws CE:
+    throw CE.NotFound(p)
+
+int handle(String p) throws CE:
+    int c = load(p)! catch (e):
+        match e:
+            case CE.NotFound(_):
+                8080
+            else:
+                throw e
+    return c
+
+void main():
+    print(handle("x")! catch (_): -1)
