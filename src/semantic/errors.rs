@@ -325,8 +325,8 @@ pub enum MoveShape {
 }
 
 /// D29: which fallible-mark violation an `E_MissingFallibleMark` reports. One
-/// code, two messages — the reason discriminates the teaching text (the code
-/// registry stays one-per-variant; this is a payload, not a second code).
+/// code; the reason discriminates the teaching text (the code registry stays
+/// one-per-variant; this is a payload, not a second code).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FallibleMarkReason {
     /// A bare fallible call with no `!` and no capturing `Result` destination.

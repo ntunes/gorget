@@ -188,7 +188,8 @@ language-design/book examples showing float output.
 - **A31 (error composition): inferred error sets (Zig-style) as the TARGET; explicit
   From-conversion as the FALLBACK.** ⚡ **→ RATIFIED 2026-08-10 as part of D45 (see LOG):**
   `|` spelling; named sets are `type` aliases (`type AppError = IoError | ParseError`);
-  closed-by-default + `..`; written-public keyed on D43; REQUIRED decl-site `!` on
+  closed-by-default + an open marker (glyph TBD at the E2 scout); written-public keyed on
+  D43; REQUIRED decl-site `!` on
   inferred-fallible non-public fns; implicit `From` at marks DELETED (widening replaces it —
   the "FALLBACK" in this entry's headline is dead); `gg semver-check` lands the same round;
   impl = the synthesized-union path below + D45's ONE set-algebra module. Implementation =
@@ -1019,6 +1020,9 @@ P1-infra reviewers' recommendation.
   **⚠ TOOLCHAIN EXIT-CODE SCHEME (Option A), RATIFIED 2026-07-15 (owner, firm; research-backed):** the whole
   `gg`/`ggdef` toolchain uses **`0` success · `1` static rejection (parse OR semantic OR may-move IllFormed —
   ONE class) · `2` usage/CLI · `101` runtime trap + ICE · `103` fuel (ggdef-ONLY, outside the compared set).**
+  (⚡ AMENDED by D45 pin 7, 2026-08-10: class **`102` = uncaught channel error** joins the
+  scheme; `main throws E` legalized for ANY error type with `E_MainThrowsNonInt` retiring at
+  round E0; `101` keeps trap + ICE; `103` unchanged.)
   Rationale: the NUMBERS are pure consensus, deliberately un-novel (0 universal; compile=1 per
   rustc/clang/gcc/tsc/swiftc/javac — Go's 2 is the lone outlier; usage=2 per GNU/argparse; 101 = Rust's
   panic/ICE, and rustc's exact compile=1 / panic=ICE=101 split is the DIRECT precedent for the one distinction
@@ -1695,7 +1699,9 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   comparing only to Zig… Gorget is to become the leader."* This entry is the strategic frame
   for A31/A33/A34 and for every future error-model call. **Ratification status: the GOAL is
   owner-directed; the four-property doctrine below is the synthesis recorded at his request;
-  the library/semver design in the last section is PROPOSED, NOT RATIFIED.**
+  the library/semver design in the last section is PROPOSED, NOT RATIFIED — ⚡ 2026-08-10:
+  that section is now RATIFIED via D45 (see its head annotation), and the four-property
+  doctrine below is SUPERSEDED by D45's seven-guarantee form.**
 
   **⚠⚠ CORRECTED 2026-08-10 (same day) BY AN ADVERSARIAL FABLE REVIEW — TWO CLAIMS IN THIS
   ENTRY WERE WRONG; BOTH CORRECTIONS RE-VERIFIED INDEPENDENTLY BY THE ORCHESTRATOR.**
@@ -1772,7 +1778,8 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   plus fail-fast abandonment. Gorget's ratified errors-vs-faults split IS Midori's model, and
   Midori never shipped, so its unfinished business is unclaimed.**
 
-  **THE DOCTRINE — four properties, and no language has all four.** *An error is a value with
+  **THE DOCTRINE — four properties, and no language has all four (⚡ SUPERSEDED 2026-08-10
+  by D45's seven-guarantee form; kept for derivation).** *An error is a value with
   a typed CONTRACT, a visible FLOW, a provable HANDLING obligation, and a recorded HISTORY —
   and none of those costs anything you did not ask for.* (1) **Typed contract** — payloads, and
   public error sets that are WRITTEN, not inferred. (2) **Visible flow** — a mandatory mark at
@@ -1840,7 +1847,8 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   an `else` arm, so adding a member is non-breaking by construction. Either way there is no
   unhandled path. Better than Rust's `#[non_exhaustive]`, where you must go read a distant enum
   declaration to learn whether your match needs a wildcard. **Proposed default: CLOSED**, with
-  `...` as the opt-in to growth — matching D43's posture that the powerful thing is opt-in and
+  `...` as the opt-in to growth (⚡ D45: open-marker glyph `..` vs `...` TBD at the E2 grammar
+  scout) — matching D43's posture that the powerful thing is opt-in and
   visible (here, an author reserving the right to change the contract). (v) **Widening is free:**
   calling a `{A,B}` callee from a `{A,B,C}` caller is a pure set widening, no conversion and no
   user code — **which is what RETIRES the implicit-`From` hidden-control-flow hole rather than
@@ -1880,11 +1888,16 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   ConfigError`.** Zero new keywords — Gorget already owns the transparent/nominal split as
   `type`/`newtype` (`src/lexer/token.rs:294-295`; live at HEAD: `type Count = int`
   in `type_alias_usage.gg`, `newtype UserId(int)` in `newtype.gg`), and a named error set IS a
-  transparent alias. Rules: the RHS `|` union is legal only when every member is an
-  error-capable type — a union outside the error channel gets a teaching diagnostic, so the
-  door to general union types is closed by a CHECKER RULE, not grammar (non-breaking to open
-  later if ever wanted; general sum types remain `enum` — an anonymous general union would be a
-  second spelling for enums, the "multiple ways" anti-goal). The alias is STRUCTURAL and
+  transparent alias. Rules (pass-2 review sharpened the predicate): the `|` union form is an
+  ERROR-SET TYPE, legal only in the CHANNEL'S POSITIONS — an error-set `type` alias RHS, a
+  `throws` clause, `Result[T, _]`'s error slot, and (at E3) catch patterns; in any value /
+  param / field / general-type position it gets a teaching diagnostic. It is this USE-SITE
+  rule — not a member predicate — that closes the door to general union types, as a CHECKER
+  RULE, not grammar (non-breaking to open later if ever wanted; general sum types remain
+  `enum` — an anonymous general union would be a second spelling for enums, the "multiple
+  ways" anti-goal). Member types are UNCONSTRAINED at v1 (`throws int` / `throws String` are
+  legal today and stay legal; pin 13's lint is the hygiene layer; whether a member predicate
+  — e.g. equips `Error` — is wanted is an E2 scout question). The alias is STRUCTURAL and
   TRANSPARENT: the name is documentation, a display anchor, and the semver anchor — never a
   nominal wall; nominal error wrappers stay available via `newtype`. Open sets compose the same
   way: `type NetFail = NetError | TlsError | ..` (open-marker glyph `..` vs `...` decided at
@@ -1913,7 +1926,7 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   idempotent (`A|B ≡ B|A`, `(A|B)|C ≡ A|B|C`, `A|A ≡ A`); aliases expand transparently.
   Implementation = the sizing note's synthesized union enums with structural interning.
   **`gg semver-check` lands in the SAME round as closed-by-default** (public error-set diff:
-  member added to a closed set ⇒ MAJOR; added behind `..` ⇒ MINOR; removed ⇒ MINOR) — the tool
+  member added to a closed set ⇒ MAJOR; added behind the open marker ⇒ MINOR; removed ⇒ MINOR) — the tool
   is what makes the default livable (Elm-enforced, error-set-specific), not an add-on.
 
   **PIN 3 — IMPLICIT `From` AT `!` SITES IS DELETED.** Widening replaces conversion; no user
@@ -1973,18 +1986,28 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   `known_gaps/sound_autoprop_indirect_bare_arg_skips_call.gg` is VINDICATED, not overturned:
   its callees take `Result[int, int] &x` — Result-typed positions, nothing to unwrap — and its
   INTENDED ("each callee runs") is exactly what the kill mandates; the bug it pins is the
-  auto-prop machinery erroneously FIRING there, so it GRADUATES as a passing positive at E0.
+  auto-prop machinery erroneously FIRING there, so it GRADUATES as a passing positive at E0
+  (its header's PRESCRIBED fix — set `expected_type` on the indirect-call paths — is DEAD
+  under this pin: the machinery is DELETED, not repaired; re-header at E0).
   Prerequisite of A34 — the chain's premise ("the compiler knows every hop") is false until
   this lands.
 
-  **PIN 7 — A34 SPLIT + THE EXIT CLASS.** **A34a lands at E0:** an error reaching the top of
-  `main` renders `error: <Displayable of payload>` to stderr — one line, frozen grammar, the
-  channel sibling of `trap[T_X]: … at file:line:col` — with `GG_ERROR_FORMAT=json` for
-  machines, and the process exits **102**. The taxonomy becomes: 0 success / 1 static
-  rejection / 2 usage / 101 fault-trap / **102 uncaught error** — distinct classes are a
+  **PIN 7 — A34 SPLIT + THE EXIT CLASS.** **A34a lands at E0, and it CARRIES ITS ENABLING
+  ACCEPT/REJECT CHANGE (pass-2 review caught the first fold assuming it silently): `main
+  throws E` becomes LEGAL for ANY error type — `E_MainThrowsNonInt`
+  (`src/semantic/typecheck.rs:9707-9714`; reference §10.10's "main can only throw int")
+  RETIRES at E0**, all lanes per Core #9, its negative fixtures flipping. Without this the
+  102 class has no reachable trigger — the only error that can escape `main` today is an
+  int. Semantics: an error reaching the top of `main` renders `error: <Displayable of
+  payload>` to stderr — one line, frozen grammar, the channel sibling of `trap[T_X]: … at
+  file:line:col` — with `GG_ERROR_FORMAT=json` for machines, and the process exits **102**;
+  `main throws int`'s escaping int KEEPS the exit-code idiom (the user chose the exit
+  contract; whether it also renders in debug builds is an E0 track detail). The FULL
+  taxonomy — total enumeration, amending the 2026-07-15 Option-A scheme in place (rider
+  added there): **0 success · 1 static rejection · 2 usage · 101 trap + ICE · 102 uncaught
+  channel error (NEW) · 103 ggdef fuel (outside the compared set)** — distinct classes are a
   machine API, and reusing 101 would re-blur errors≠faults at the one place a harness reads
-  it. `main throws int`'s escaping int stays the process exit code (the user chose the exit
-  contract); whether it also renders in debug builds is an E0 track detail. **A34b later:**
+  it. **A34b later:**
   the chain per the A34 design — static descriptor per `!` hop, format only at a
   throw-consuming-a-catch-binding, debug-only, and **NOT value-reachable in v1** (reachability
   would make it semantics, bind ggdef, and falsify the release-compiles-out promise) —
@@ -2012,9 +2035,14 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   default_level, configurable, group, since, fix_direction, tombstoned, summary, example }`,
   shipped as machine-readable data IN the toolchain (`gg explain <Code>` prints it); codes are
   permanent identifiers (tombstone, never reuse). (b) One code = one fix DIRECTION: split
-  `E_MissingFallibleMark`'s three opposite meanings (insert-mark / remove-mark-on-capture /
-  remove-mark-on-infallible; candidate names `MissingFallibleMark` / `MarkOnCapture` /
-  `MarkOnInfallible`, finalized at A37 phase 2 since codes are cross-lane-compared values).
+  `E_MissingFallibleMark` BY FIX DIRECTION — at HEAD its `FallibleMarkReason` payload has
+  FOUR variants, not three (`Bare` / `RedundantOnCapture` / `ResultArmsOnPeeled` /
+  `MarkOnInfallible`, `src/semantic/errors.rs:331-348`; pass-2 review correction — census
+  the enum at split time, never inherit this count), with fix directions insert-the-mark /
+  remove-the-mark / capture-then-match / remove-the-mark; the split lands one code per
+  DIRECTION (the two remove-mark reasons may merge; names finalized at A37 phase 2 since
+  codes are cross-lane-compared values). The enum's stale "One code, two messages" doc
+  comment was corrected in the same fold (Core #14).
   (c) Structured fix-its `{span, replacement, applicability}` with applicability ∈
   machine-applicable / choice / advisory — a machine-applicable edit must at minimum COMPILE;
   `gg fix --only=<code>` is the standing codemod vehicle; the `f()!=` maximal-munch trap gets
@@ -2059,8 +2087,13 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   the handler cells (void-`catch`, recovery-type check, match-arm-throw ICE; axis-complete net
   per Core #12) + A34a/exit 102 + the munch-trap fix-it, ∥ the semantics-free A38 subtracks.
   **E1** "the model gets real users": the D17 class sweep + the 59 runtime `exit(1)`
-  retirements + the book ch.10 rewrite against the D45 surface + the stdlib error taxonomy
-  designed against named sets + pin 13 + pin 11's book section. **E2** "sets": pins 1–3/8/9 +
+  retirements + the book ch.10 FIRST pass (against the surface AS SHIPPED AT E1: real
+  stdlib; the `catch (e): throw …` idiom, legal at HEAD; no `From`-wrapper; `throws String`
+  demoted) + the stdlib LEAF-enum taxonomy (`IoError`/`ParseError`/`NetError`…) + pin 13 +
+  pin 11's book section — set-alias syntax does not parse until E2, so composite-API set
+  aliases and the book's set/subtraction teaching are the chapter's SECOND pass at E2/E3;
+  E1 must not teach syntax that cannot run (the exact defect the book entry files; pass-2
+  review caught the first fold doing it). **E2** "sets": pins 1–3/8/9 +
   `gg semver-check`, one scout under the existing A31 sizing challenge with these pins as the
   spec. **E3** "subtraction": pins 4–5 (the catch grammar + the tombstone/codemod migration).
   **E4** "history + concurrency": A34b + pin 11's TaskGroup + A32 impl consuming the module.

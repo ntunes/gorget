@@ -2960,6 +2960,14 @@ This analysis is fully automatic and requires no programmer-visible annotations.
 
 Gorget uses a `throws`/`throw` model that desugars to `Result[T, E]`.
 
+> **Ruled, not shipped — D45.** The error model is ratified to change: named error sets as
+> `type` aliases (`type AppError = IoError | ParseError`), member-granularity subtractive
+> `catch: case`, `rethrow` retired (`catch (e): throw wrap(e)` becomes the transform
+> spelling), implicit `From` at `!` marks deleted, value-position auto-propagation removed,
+> and `main throws E` legal for any error type with an uncaught error rendered to stderr and
+> exiting 102. This chapter describes shipped behavior until implementation rounds E0–E3
+> land. See `docs/define-gorget/decisions.md` D45.
+
 ### 10.1 Throwing Functions
 
 A function declared with `throws` may fail:
@@ -3142,6 +3150,12 @@ Prior art: Zig's `std.math` error unions; Pony's partial arithmetic. The typed +
 ### 10.10 Toolchain Exit Codes
 
 The `gg` / `ggdef` toolchain uses one fixed, executably-enforced process exit-code taxonomy (ratified 2026-07-15; the conformance harness compares the exit *class* across the C, LLVM, self-host, and `ggdef` lanes). The numbers are deliberately un-novel — they follow the rustc / clang / gcc / tsc consensus (compile error = 1, panic/ICE = 101):
+
+> **Ruled, not shipped — D45 pin 7.** Class **102 — uncaught channel error** joins this
+> scheme: an error escaping `main` renders one `error:` line to stderr and exits 102, and
+> `main throws E` becomes legal for any error type (`E_MainThrowsNonInt` retires;
+> `main throws int` keeps int-as-exit-code). This table describes shipped behavior until
+> round E0 lands.
 
 | Exit | Class | Meaning |
 |---|---|---|
