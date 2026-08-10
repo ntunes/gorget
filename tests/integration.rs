@@ -8740,6 +8740,71 @@ fn escape_hex_string_fmt() {
     assert_fmt_idempotent("escape_hex_string_fmt.gg");
 }
 
+// Track H: `gg fmt` MUST emit control chars as READABLE `\xHH` escapes, never
+// raw control bytes (a Core #8 source-corruption / data-loss class made LIVE by
+// Track B's toml.gg `\x08`/`\x0c`/`\x01` migration). The value round-trips even
+// WITH the bug — a raw 0x1B re-lexes to scalar 0x1B, so idempotence and semantic
+// round-trip both stay green — which is exactly why the load-bearing guard here
+// is the OUTPUT-SHAPE assertion (escaped form + zero raw control bytes), not the
+// value tests.
+//
+// RED-verify (`git checkout src/formatter/mod.rs && cargo build`): pre-fix
+// `gg fmt` wrote a raw 0x1B / 0x08 byte into the source (`od -c` → `033` / `\b`);
+// this test's byte-scan assertion fires on that. Fixture also feeds
+// `fmt_round_trip_semantic` (value survives fmt) and `run_gg` (value survives
+// the compiler).
+#[test]
+fn fmt_control_char_escape() {
+    // (a) Value survives the COMPILER: control-char scalars + printable-Unicode
+    // bytes come out as their codes. ESC(0x1b) via `\x1b` then `[0m`=91,48,109;
+    // BS `\x08`=8; ESC via `\u{1b}`=27; DEL `\x7f`=127; é=C3 A9=195,169;
+    // 😀=F0 9F 98 80=240,159,152,128.
+    run_gg(
+        "fmt_control_char_escape.gg",
+        "27\n91\n48\n109\n8\n27\n127\n195\n169\n240\n159\n152\n128",
+    );
+
+    // (b) Output SHAPE — the data-loss guard proper. Format a control-char
+    // source and assert the escaped form appears and NO raw control byte
+    // survives. `\u{1b}` normalises to `\x1b` (same scalar 0x1B).
+    let src = "String a = \"\\x1b[0m\"\n\
+               String b = \"\\x08\"\n\
+               String c = \"\\u{1b}\"\n\
+               String d = \"\\x7f\"\n\
+               String e = \"é😀\"\n";
+    let out = gorget::formatter::format_source_infallible(src);
+
+    assert!(out.contains("\\x1b[0m"), "ESC escaped-form missing:\n{out}");
+    assert!(out.contains("\\x08"), "BS escaped-form missing:\n{out}");
+    assert!(out.contains("\\x7f"), "DEL escaped-form missing:\n{out}");
+    assert!(
+        !out.contains("\\u{1b}"),
+        "\\u{{1b}} not normalised to \\x1b:\n{out}"
+    );
+
+    // NO raw control byte (C0 minus the whitespace \t \n \r, plus DEL) leaked
+    // into the formatted source — this is the byte the bug wrote raw.
+    for &b in out.as_bytes() {
+        let is_raw_ctrl =
+            (b <= 0x1F && b != b'\t' && b != b'\n' && b != b'\r') || b == 0x7F;
+        assert!(
+            !is_raw_ctrl,
+            "raw control byte 0x{b:02x} leaked into fmt output \
+             (Core #8 data-loss class):\n{out:?}"
+        );
+    }
+
+    // Printable Unicode (>= 0x80) stays RAW UTF-8, NOT escaped.
+    assert!(
+        out.contains("é😀"),
+        "printable Unicode must remain raw UTF-8, not escaped:\n{out}"
+    );
+
+    // (c) Round-trip + idempotent: formatted output re-lexes cleanly and a
+    // second pass is byte-identical (belt-and-suspenders on the value path).
+    assert_fmt_round_trips("fmt_control_char_escape", src);
+}
+
 // NEG: the lexer error channel now reaches rejection (was silently swallowed).
 // `\x` > 0x7F in a String → reject (use `\u{00HH}`).
 #[test]
@@ -9619,6 +9684,13 @@ fn fmt_round_trip_semantic() {
         (
             "fmt_radix_preserved.gg",
             "92\n92\n92\n92\n43981\n43981\n65535\n65535\n1000000\n-16\n11\nfs=16\nif-ok\nmatch-ok",
+        ),
+        // Track H: control-char `\xHH` escapes (ESC/BS/DEL + `\u{1b}`) and
+        // printable Unicode (é/😀) must all round-trip through fmt with the
+        // exact same scalar/byte values.
+        (
+            "fmt_control_char_escape.gg",
+            "27\n91\n48\n109\n8\n27\n127\n195\n169\n240\n159\n152\n128",
         ),
     ];
 

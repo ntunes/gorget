@@ -3570,6 +3570,18 @@ impl Formatter {
                 '\0' => self.emitter.write("\\0"),
                 '{' if kind == StringKind::Format => self.emitter.write("{{"),
                 '}' if kind == StringKind::Format => self.emitter.write("}}"),
+                // Control chars with no named escape above (C0 minus the
+                // already-handled \0 \t \n \r, plus DEL) would otherwise write
+                // a RAW control byte into the source (a data-loss defect, since
+                // e.g. a raw 0x1B corrupts the file and cannot be read back as
+                // the author intended). Emit the `\xHH` byte escape (lowercase
+                // 2-hex, matching the lexer's `\x` arm which accepts <=0x7F in
+                // string context), which re-lexes to the same scalar. Printable
+                // Unicode (>= 0x80: accented letters, emoji, …) is left as raw
+                // UTF-8 — it round-trips fine and escaping it would be noise.
+                c if (c.is_control() && (c as u32) <= 0x7F) => {
+                    self.emitter.write(&format!("\\x{:02x}", c as u32));
+                }
                 c => {
                     let mut buf = [0u8; 4];
                     self.emitter.write(c.encode_utf8(&mut buf));

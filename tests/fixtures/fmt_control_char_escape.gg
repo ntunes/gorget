@@ -1,0 +1,28 @@
+# Track H: `gg fmt` must emit control chars as READABLE `\xHH` escapes, never
+# raw control bytes (a Core #8 source-corruption/data-loss class). This fixture
+# RUNS to a deterministic stdout so `run_gg` + `fmt_round_trip_semantic` pin
+# that the control-char VALUES survive the compiler AND a fmt round-trip; the
+# `fmt_control_char_escape` test additionally asserts the fmt OUTPUT SHAPE
+# (escaped form, zero raw control bytes) — the value round-trips even with the
+# bug (a raw 0x1B re-lexes to 0x1B), so the byte-shape assertion is the guard
+# that actually catches the raw-byte emission.
+#
+# Coverage: ESC (0x1b) via `\x1b` AND via `\u{1b}` (both normalise to `\x1b`),
+# BS (0x08), DEL (0x7f), plus printable Unicode (é = C3 A9, 😀 = F0 9F 98 80)
+# which MUST stay raw UTF-8, not escaped.
+void main():
+    String esc = "\x1b[0m"
+    String bs = "\x08"
+    String u = "\u{1b}"
+    String del = "\x7f"
+    String uni = "é😀"
+    for b in esc.bytes():
+        print(b)
+    for b in bs.bytes():
+        print(b)
+    for b in u.bytes():
+        print(b)
+    for b in del.bytes():
+        print(b)
+    for b in uni.bytes():
+        print(b)
