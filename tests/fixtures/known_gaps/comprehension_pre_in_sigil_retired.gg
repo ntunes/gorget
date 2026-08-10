@@ -12,7 +12,7 @@
 # INTENDED (post-rider, asserted by the #[ignore]d test): the pre-`in`
 # spelling below REJECTS at parse with the rider's teaching diagnostic;
 # the accepted spelling is `[v for v in ^xs]`.
-void consume(Vector[int] !v):
+void consume(Vector[int] ^v):
     print(v.len())
 
 int main():
