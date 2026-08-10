@@ -4798,143 +4798,92 @@ fn rust_gg_bug_generic_mono_parser_scale() {
     );
 }
 
-// Round XXXVII (2026-08-08 filed) → Round XXXIX Phase 2e (2026-08-09
-// fixed) — the SH-lowerer stage-2 double-free triggered by the
-// formatter's bulk canonicalization (`gg fmt --in-place` sweep) was
-// LOCALIZED at Phase 2d as a TRAILING-COMMA CASCADE in the SH parser
-// (parser.gg:2268 `parse_call_args` and 20+ sibling `while
-// match_tok(TOK_COMMA)` sites), then class-fixed at Phase 2e via the
-// `Parser::consume_comma_or_tok(terminator)` chokepoint helper (Core #4
-// producer-chokepoint per `self_host_parser_comma_loops_go_through_helper`
-// in tests/lints.rs).  See DONE.md R39 for the full write-up.
+// A1 regression gate (`gorget-js snag`/Round XXXVII filed 2026-08-08 →
+// Round XXXIX Phase 2e fixed 2026-08-09).  The formatter's bulk
+// canonicalization (`gg fmt --in-place`) rewrites long ctor calls / dict
+// entries / etc. with trailing commas; the SH parser's trailing-comma
+// cascade (parser.gg `parse_call_args` + 20+ sibling `while
+// match_tok(TOK_COMMA)` sites) then double-freed at stage-2.  Class-fixed
+// via the `Parser::consume_comma_or_tok(terminator)` chokepoint (Core #4
+// producer, guarded by `self_host_parser_comma_loops_go_through_helper` in
+// tests/lints.rs).  See DONE.md R39 for the full write-up.
 //
-// This wrapper runs the sweep procedure in a scratch tree and asserts
-// `self_host_bootstrap_fixed_point` succeeds — the CORRECT / intended
-// behavior.  Un-ignored post-fix (was blocking D27 Phase 2 sweep).
-//
-// The wrapper is heavy (invokes `gg fmt` recursively across ~2,754
-// non-SH .gg files, then runs the bootstrap fixed-point which itself
-// takes ~11 min on a warm CI box).
+// This test reproduces the sweep in an ISOLATED scratch tree so it runs
+// un-#[ignore]d as a live gate WITHOUT racing parallel readers: it copies
+// ONLY `lib/` (the bootstrap's sole on-disk `.gg` input besides the
+// pristine, cached self_host_lowerer sources — Rust gg embeds the stdlib
+// and intercepts `std.*`/`xtd.*` before the FS, while the SH driver reads
+// `lib_dir` from disk), `gg fmt`-formats the COPY, then bootstraps against
+// it.  The shared working tree is never mutated.
 #[test]
-#[ignore = "Mutates ~2,754 .gg files in the shared working tree via `gg fmt --in-place` — parallel tensor_* / stdlib_udp_typed / etc. tests reading those files during the mutation window fail with unpredictable errors (measured R39 close: ~11 collateral failures per LLVM sweep). Save/restore at test-end is insufficient; the fix is a scratch-tree copy (own follow-up filed to TODO.md, R39 close-time). Run manually with `cargo test --release --test integration -- --ignored sh_bootstrap_stage2_double_free_after_fmt_sweep` in a dedicated tree to verify A1 remains fixed."]
-#[serial(gg_build)]
+#[serial(self_host_lowerer_driver)]
 fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
-    // The repro procedure is documented in the fixture header. This
-    // wrapper implements it end-to-end. See #[ignore] above for why
-    // it is currently NOT part of the default suite despite A1 being
-    // closed (mutation race with parallel readers). Save/restore is
-    // implemented below but does NOT prevent intra-run races.
-    //
-    // WORKING-TREE HYGIENE. This test MUTATES ~2,754 `.gg` files via
-    // `gg fmt --in-place`. Un-restored, that mutation contaminates
-    // every subsequent test in the same sweep — an R39 close-blocker
-    // when a downstream fmt regression on `lib/xtd/tensor.gg` broke
-    // tensor tests. The in-memory snapshot below restores the tree
-    // post-run so `git status` stays clean, but DOES NOT solve the
-    // in-run race with other tests reading .gg files during the
-    // mutation window (which is why the test is `#[ignore]`d).
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let gg = manifest_dir.join("target/release/gg");
-    assert!(
-        gg.exists(),
-        "gg binary not found — build with `cargo build --release --bin gg` first"
-    );
+    // Recursive .gg copy. The `rust_gg_build_is_deterministic` precedent
+    // (below) copies a FLAT `.gg`-only dir; `lib/` is nested (std/, xtd/,
+    // gg/, freestanding/), so we need recursion.
+    fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let from = entry.path();
+            let to = dst.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                copy_dir_recursive(&from, &to)?;
+            } else {
+                std::fs::copy(&from, &to)?;
+            }
+        }
+        Ok(())
+    }
 
-    // Sweep every non-SH .gg file in the D27 corpora. Matches
-    // scripts/fmt_sweep_smoke.sh --apply's scope minus self_host_*.
-    fn walk_dot_gg(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
+    // fmt-sweep every `.gg` under `dir` in place (the COPY, never the shared
+    // tree). This is the canonicalization that reproduced A1.
+    fn fmt_sweep(dir: &Path, gg: &Path) {
+        let rd = match std::fs::read_dir(dir) {
+            Ok(rd) => rd,
+            Err(_) => return,
+        };
         for entry in rd.flatten() {
             let p = entry.path();
-            let s = p.to_string_lossy();
-            if s.contains("self_host_") {
-                continue;
-            }
             if p.is_dir() {
-                walk_dot_gg(&p, out);
+                fmt_sweep(&p, gg);
             } else if p.extension().and_then(|e| e.to_str()) == Some("gg") {
-                out.push(p);
+                let _ = Command::new(gg)
+                    .arg("fmt")
+                    .arg("--in-place")
+                    .arg(&p)
+                    .output();
             }
         }
     }
-    let corpora = ["tests/fixtures", "lib", "examples", "demo", "spectests", "compiler/data"];
-    let mut all_files: Vec<PathBuf> = Vec::new();
-    for corpus in corpora.iter() {
-        let root = manifest_dir.join(corpus);
-        if !root.exists() {
-            continue;
-        }
-        walk_dot_gg(&root, &mut all_files);
-    }
-    // Snapshot original bytes.
-    let mut original_bytes: std::collections::HashMap<PathBuf, Vec<u8>> =
-        std::collections::HashMap::with_capacity(all_files.len());
-    for file in &all_files {
-        if let Ok(b) = std::fs::read(file) {
-            original_bytes.insert(file.clone(), b);
-        }
-    }
-    // Snapshot cached driver artifacts too (we delete them below to
-    // force a clean rebuild; restore whatever was there).
-    let driver_exe = manifest_dir.join("tests/fixtures/self_host_lowerer/driver");
-    let driver_c = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.c");
-    let saved_driver_exe = std::fs::read(&driver_exe).ok();
-    let saved_driver_c = std::fs::read(&driver_c).ok();
 
-    // Helper: rewrite every snapshotted file back to original bytes.
-    // Called both on success and on any assertion failure below.
-    let restore = |bytes: &std::collections::HashMap<PathBuf, Vec<u8>>,
-                   ex: &Option<Vec<u8>>,
-                   dc: &Option<Vec<u8>>,
-                   ex_path: &Path,
-                   dc_path: &Path| {
-        for (path, orig) in bytes {
-            let _ = std::fs::write(path, orig);
-        }
-        match ex {
-            Some(b) => { let _ = std::fs::write(ex_path, b); }
-            None => { let _ = std::fs::remove_file(ex_path); }
-        }
-        match dc {
-            Some(b) => { let _ = std::fs::write(dc_path, b); }
-            None => { let _ = std::fs::remove_file(dc_path); }
-        }
-    };
+    let (driver_exe, driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src_lib = manifest_dir.join("lib");
+    let driver_gg = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.gg");
 
-    // Perform the fmt sweep + driver-cache clear + bootstrap check,
-    // capturing bootstrap status without assert! so we can restore
-    // BEFORE panicking. `std::panic::catch_unwind` would swallow the
-    // spawn assertions; a plain status check is enough.
-    for file in &all_files {
-        let _ = Command::new(&gg)
-            .arg("fmt")
-            .arg("--in-place")
-            .arg(file)
-            .output();
-    }
-    let _ = std::fs::remove_file(&driver_exe);
-    let _ = std::fs::remove_file(&driver_c);
+    // The TempDir's lifetime spans the WHOLE test — a bare `mktemp` a cleaner
+    // could reap mid-run caused a transient partial-tree false alarm during
+    // scouting. `tmp` is dropped (recursively removed) at end of scope.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let tmp_lib = tmp.path().join("lib");
+    let work_dir = tmp.path().join("work");
+    copy_dir_recursive(&src_lib, &tmp_lib).expect("recursive-copy lib/ into scratch tree");
 
-    let status = Command::new(env!("CARGO"))
-        .arg("test")
-        .arg("--test")
-        .arg("integration")
-        .arg("--release")
-        .arg("--")
-        .arg("self_host_bootstrap_fixed_point")
-        .env("GG_BUILD_TIMEOUT_SECS", "900")
-        .env("GG_TEST_TIMEOUT_SECS", "600")
-        .status();
+    fmt_sweep(&tmp_lib, gg_binary());
 
-    // Restore working tree BEFORE asserting so a failure doesn't leave
-    // it corrupted.
-    restore(&original_bytes, &saved_driver_exe, &saved_driver_c, &driver_exe, &driver_c);
-
-    let status = status.expect("cargo test spawn");
+    // Bootstrap against the fmt-formatted scratch `lib/`, reusing the cached
+    // stage-0 driver (its embedded stdlib is irrelevant — the SH driver reads
+    // `lib_dir` from disk, which we point at the mutated copy). A regression in
+    // the trailing-comma fix resurfaces as a stage-2 double-free (exit 134) or
+    // a parse failure — either way `run_bootstrap_stages` returns Err.
+    let result = run_bootstrap_stages(&driver_exe, &driver_c, &driver_gg, &tmp_lib, &work_dir);
     assert!(
-        status.success(),
+        result.is_ok(),
         "SH-lowerer stage-2 double-free (or a related bootstrap regression) \
-         reproduced — see the fixture header for the repro and TODO.md."
+         reproduced after the `gg fmt --in-place` sweep over a scratch lib/ \
+         copy: {}",
+        result.err().unwrap_or_default(),
     );
 }
 
@@ -23870,70 +23819,89 @@ fn self_host_stage1_clone_ceiling() {
     );
 }
 
-#[test]
-#[serial(self_host_lowerer_driver)]
-fn self_host_bootstrap_fixed_point() {
-    let (driver_exe, driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let lib_dir = manifest_dir.join("lib");
-    let driver_gg = manifest_dir
-        .join("tests/fixtures/self_host_lowerer/driver.gg");
+/// Shared self-host bootstrap engine (Core #4 producer for the two bootstrap
+/// tests). Runs the bootstrap stage-by-stage and returns the convergence stage.
+///
+/// `driver_exe` is the stage-0 driver (built by `build_gg_dir_cached`); its
+/// C-backend emission `driver_c` supplies the runtime preamble (rebuilt via the
+/// C backend when absent, e.g. under `GG_BACKEND=llvm`). `driver_gg` is lowered
+/// against `lib_dir` — pass a private scratch `lib/` copy to isolate the run
+/// from parallel readers. Every stage artifact (`.c` + binary) is written under
+/// `work_dir`.
+///
+/// Returns `Ok(K)` where stage-K.c == stage-(K+1).c (the convergence stage), or
+/// `Err(msg)` describing the first failed stage / non-convergence (the message
+/// preserves the pairwise-diff hints for inspection). Callers layer their own
+/// assertions on the result: `self_host_bootstrap_fixed_point` ratchets
+/// K <= BOOTSTRAP_MAX_CONVERGENCE_STAGE; the fmt-sweep double-free test only
+/// asserts `Ok`.
+fn run_bootstrap_stages(
+    driver_exe: &Path,
+    driver_c: &Path,
+    driver_gg: &Path,
+    lib_dir: &Path,
+    work_dir: &Path,
+) -> Result<usize, String> {
+    let _ = std::fs::create_dir_all(work_dir);
 
-    // Stage 0 → stage 1 body C.
+    // Stage 0 -> stage 1 body C.
     let body_out = run_with_deadline(
-        Command::new(&driver_exe)
-            .arg(&driver_gg)
-            .arg(&lib_dir)
+        Command::new(driver_exe)
+            .arg(driver_gg)
+            .arg(lib_dir)
             .arg("--lir-c"),
-        "self_host_bootstrap_fixed_point stage0 → stage1.c",
-        // Default 600s — bumped from 300s for parallel-load resilience (see
-        // self_host_bootstrap above for the full rationale). Honors
-        // GG_STAGE1_TIMEOUT_SECS (CI overrides higher) like every other stage self-compile.
+        "run_bootstrap_stages stage0 -> stage1.c",
         Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 600)),
     );
-    assert!(body_out.status.success(), "stage-0 driver failed");
+    if !body_out.status.success() {
+        return Err(format!(
+            "stage-0 driver failed: stderr={}",
+            String::from_utf8_lossy(&body_out.stderr),
+        ));
+    }
     let stage1_body = String::from_utf8_lossy(&body_out.stdout).to_string();
 
-    // Extract Rust preamble + concatenate → stage1.c.
+    // Extract Rust preamble + concatenate -> stage1.c.
     //
     // The runtime preamble (the C-runtime boilerplate `gg`'s C backend emits
     // before the user typedefs) comes from a `driver.c`. Under the LLVM backend
     // `gg build` emits only the `.ll`/exe, so `driver.c` is absent — build a
     // one-off C-backend copy of the driver purely to materialize `driver.c` for
     // the preamble. The driver EXE used for stage emission above is still the
-    // backend-selected build (so under LLVM this genuinely verifies the
-    // LLVM-built driver bootstraps); the `--lir-c` body it emits is
-    // backend-independent and byte-identical to the C-built driver's.
-    let driver_c = if driver_c.exists() {
+    // backend-selected build; the `--lir-c` body it emits is backend-
+    // independent and byte-identical to the C-built driver's.
+    let driver_c_owned;
+    let driver_c: &Path = if driver_c.exists() {
         driver_c
     } else {
         let c_build = build_with_timeout(
             Command::new(gg_binary())
                 .arg("build")
                 .arg("--backend=c-lir")
-                .arg(&driver_gg),
-            "self_host_bootstrap_fixed_point C-backend driver (preamble source)",
+                .arg(driver_gg),
+            "run_bootstrap_stages C-backend driver (preamble source)",
         );
-        assert!(
-            c_build.status.success(),
-            "C-backend driver build (for preamble) failed: stderr={}",
-            String::from_utf8_lossy(&c_build.stderr),
-        );
-        driver_c
+        if !c_build.status.success() {
+            return Err(format!(
+                "C-backend driver build (for preamble) failed: stderr={}",
+                String::from_utf8_lossy(&c_build.stderr),
+            ));
+        }
+        driver_c_owned = driver_c.to_path_buf();
+        driver_c_owned.as_path()
     };
-    let rust_c = std::fs::read_to_string(&driver_c)
-        .expect("failed to read driver.c");
+    let rust_c = std::fs::read_to_string(driver_c)
+        .map_err(|e| format!("failed to read driver.c at {}: {e}", driver_c.display()))?;
     let preamble_end = rust_c
         .find("\ntypedef struct __gg_")
-        .expect("driver.c has no user-type typedef boundary");
+        .ok_or_else(|| "driver.c has no user-type typedef boundary".to_string())?;
     let runtime_preamble = &rust_c[..preamble_end];
 
-    let tmp_dir = std::env::temp_dir();
-    let stage1_c = tmp_dir.join("self_host_stage1.c");
-    let stage1_bin = tmp_dir.join("self_host_stage1");
-    let stage2_c = tmp_dir.join("self_host_stage2.c");
+    let stage1_c = work_dir.join("self_host_stage1.c");
+    let stage1_bin = work_dir.join("self_host_stage1");
+    let stage2_c = work_dir.join("self_host_stage2.c");
     std::fs::write(&stage1_c, format!("{runtime_preamble}\n{stage1_body}"))
-        .expect("failed to write stage1.c");
+        .map_err(|e| format!("failed to write stage1.c: {e}"))?;
 
     // Compile stage-1 binary.
     let cc_out = Command::new("cc")
@@ -23945,32 +23913,36 @@ fn self_host_bootstrap_fixed_point() {
         .arg("-lm")
         .arg("-lpthread")
         .output()
-        .expect("failed to spawn cc");
-    assert!(cc_out.status.success(), "stage-1 cc failed");
+        .map_err(|e| format!("failed to spawn cc: {e}"))?;
+    if !cc_out.status.success() {
+        return Err(format!(
+            "stage-1 cc failed: {}",
+            String::from_utf8_lossy(&cc_out.stderr),
+        ));
+    }
 
-    // Stage 1 → stage 2 body C. Same arguments as stage-0.
+    // Stage 1 -> stage 2 body C. Same arguments as stage-0.
     let stage2_out = run_with_deadline(
         Command::new(&stage1_bin)
-            .arg(&driver_gg)
-            .arg(&lib_dir)
+            .arg(driver_gg)
+            .arg(lib_dir)
             .arg("--lir-c"),
-        "self_host_bootstrap_fixed_point stage1 → stage2.c",
-        // Default 600s — bumped from 300s for parallel-load resilience. Honors
-        // GG_STAGE1_TIMEOUT_SECS (CI overrides higher) like every other stage self-compile.
+        "run_bootstrap_stages stage1 -> stage2.c",
         Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 600)),
     );
-    assert!(
-        stage2_out.status.success(),
-        "stage-1 binary failed: stderr={}",
-        String::from_utf8_lossy(&stage2_out.stderr),
-    );
+    if !stage2_out.status.success() {
+        return Err(format!(
+            "stage-1 binary failed: stderr={}",
+            String::from_utf8_lossy(&stage2_out.stderr),
+        ));
+    }
     let stage2_body = String::from_utf8_lossy(&stage2_out.stdout).to_string();
     std::fs::write(&stage2_c, format!("{runtime_preamble}\n{stage2_body}"))
-        .expect("failed to write stage2.c");
+        .map_err(|e| format!("failed to write stage2.c: {e}"))?;
 
-    // Compile stage-2 binary up front so the loop below can run it
-    // for the stage2 → stage3 transition.
-    let stage2_bin = tmp_dir.join("self_host_stage2");
+    // Compile stage-2 binary up front so the loop below can run it for the
+    // stage2 -> stage3 transition.
+    let stage2_bin = work_dir.join("self_host_stage2");
     let cc2_out = Command::new("cc")
         .arg("-O0")
         .arg("-w")
@@ -23980,34 +23952,30 @@ fn self_host_bootstrap_fixed_point() {
         .arg("-lm")
         .arg("-lpthread")
         .output()
-        .expect("failed to spawn cc for stage-2");
-    assert!(
-        cc2_out.status.success(),
-        "stage-2 cc failed: stderr={}",
-        String::from_utf8_lossy(&cc2_out.stderr),
-    );
+        .map_err(|e| format!("failed to spawn cc for stage-2: {e}"))?;
+    if !cc2_out.status.success() {
+        return Err(format!(
+            "stage-2 cc failed: stderr={}",
+            String::from_utf8_lossy(&cc2_out.stderr),
+        ));
+    }
 
-    // Stage-0 artifacts are cached across tests — leave them in place.
-    let _ = (&driver_c, &driver_exe);
-
-    // Iterate stage-N → stage-(N+1) until convergence. The self-host
-    // is a fixed point when stage-K.c == stage-(K+1).c for some K ≤
-    // MAX_GEN. See the test docstring for why N=5 is the upper bound.
+    // Iterate stage-N -> stage-(N+1) until convergence. The self-host is a
+    // fixed point when stage-K.c == stage-(K+1).c for some K <= MAX_GEN.
     const MAX_GEN: usize = 5;
-    // Stages we've computed so far. stages[0] = stage1_body (stage-0's
-    // emission, may legitimately differ from later stages because
-    // stage-0 is Rust's `gg`). stages[1] = stage2_body, etc. We compare
-    // stages[i] vs stages[i+1] for i ≥ 1 — stage1 → stage2 is the
-    // "transitioning" generation; convergence starts at stage2.
-    let mut stages: Vec<String> = vec![stage1_body, stage2_body.clone()];
+    // stages[0] = stage1_body (stage-0's emission, may legitimately differ from
+    // later stages because stage-0 is Rust's `gg`). stages[1] = stage2_body,
+    // etc. We compare stages[i] vs stages[i+1] for i >= 1 — convergence starts
+    // at stage2.
+    let mut stages: Vec<String> = vec![stage1_body, stage2_body];
     let mut prev_bin = stage2_bin.clone();
     let mut prev_c = stage2_c.clone();
 
     let mut converged_at: Option<usize> = None;
 
     for gn in 3..=MAX_GEN {
-        // Compile prev binary if not already compiled. stage2_bin is
-        // pre-built above; for gn ≥ 4 we need to build stage(gn-1).
+        // Compile prev binary if not already compiled. stage2_bin is pre-built
+        // above; for gn >= 4 we need to build stage(gn-1).
         if gn > 3 {
             let cc_out = Command::new("cc")
                 .arg("-O0")
@@ -24018,36 +23986,32 @@ fn self_host_bootstrap_fixed_point() {
                 .arg("-lm")
                 .arg("-lpthread")
                 .output()
-                .expect(&format!("failed to spawn cc for stage-{}", gn - 1));
-            assert!(
-                cc_out.status.success(),
-                "stage-{} cc failed: stderr={}",
-                gn - 1,
-                String::from_utf8_lossy(&cc_out.stderr),
-            );
+                .map_err(|e| format!("failed to spawn cc for stage-{}: {e}", gn - 1))?;
+            if !cc_out.status.success() {
+                return Err(format!(
+                    "stage-{} cc failed: stderr={}",
+                    gn - 1,
+                    String::from_utf8_lossy(&cc_out.stderr),
+                ));
+            }
         }
 
         // Run prev binary to produce stage(gn).c.
         let next_out = run_with_deadline(
             Command::new(&prev_bin)
-                .arg(&driver_gg)
-                .arg(&lib_dir)
+                .arg(driver_gg)
+                .arg(lib_dir)
                 .arg("--lir-c"),
-            &format!(
-                "self_host_bootstrap_fixed_point stage{} → stage{}.c",
-                gn - 1,
-                gn,
-            ),
-            // Honors GG_STAGE1_TIMEOUT_SECS (CI overrides higher); default 600 — same
-            // driver.gg self-compile workload as every other stage.
+            &format!("run_bootstrap_stages stage{} -> stage{}.c", gn - 1, gn),
             Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 600)),
         );
-        assert!(
-            next_out.status.success(),
-            "stage-{} binary failed: stderr={}",
-            gn - 1,
-            String::from_utf8_lossy(&next_out.stderr),
-        );
+        if !next_out.status.success() {
+            return Err(format!(
+                "stage-{} binary failed: stderr={}",
+                gn - 1,
+                String::from_utf8_lossy(&next_out.stderr),
+            ));
+        }
         let next_body = String::from_utf8_lossy(&next_out.stdout).to_string();
 
         if stages.last().unwrap() == &next_body {
@@ -24059,26 +24023,83 @@ fn self_host_bootstrap_fixed_point() {
 
         stages.push(next_body);
 
-        // Prepare to build stage(gn+1) on the next iteration — write
-        // stage(gn).c, point prev_bin/prev_c at it.
+        // Prepare to build stage(gn+1) on the next iteration.
         if gn < MAX_GEN {
-            let next_c = tmp_dir.join(format!("self_host_stage{}.c", gn));
+            let next_c = work_dir.join(format!("self_host_stage{}.c", gn));
             std::fs::write(
                 &next_c,
                 format!("{runtime_preamble}\n{}", stages.last().unwrap()),
             )
-            .expect(&format!("failed to write stage{}.c", gn));
-            let next_bin = tmp_dir.join(format!("self_host_stage{}", gn));
+            .map_err(|e| format!("failed to write stage{}.c: {e}", gn))?;
+            let next_bin = work_dir.join(format!("self_host_stage{}", gn));
             prev_bin = next_bin;
             prev_c = next_c;
         }
     }
 
-    // Report the convergence stage always — round-close visibility for the
-    // "converges at stage-K" ratchet below. Silent otherwise.
     if let Some(k) = converged_at {
         eprintln!("[bootstrap-fixed-point] converged at stage-{k} (MAX_GEN={MAX_GEN})");
+        // Cleanup on success — remove every stage artifact we created.
+        let _ = std::fs::remove_file(&stage1_c);
+        let _ = std::fs::remove_file(&stage1_bin);
+        let _ = std::fs::remove_file(&stage2_c);
+        let _ = std::fs::remove_file(&stage2_bin);
+        for gn in 3..=MAX_GEN {
+            let _ = std::fs::remove_file(work_dir.join(format!("self_host_stage{}.c", gn)));
+            let _ = std::fs::remove_file(work_dir.join(format!("self_host_stage{}", gn)));
+        }
+        return Ok(k);
     }
+
+    // Did not converge within MAX_GEN. Persist every stage for inspection and
+    // return the comparison set in the error.
+    let mut paths: Vec<std::path::PathBuf> = Vec::new();
+    for (i, body) in stages.iter().enumerate() {
+        // stages[0] = stage1, stages[1] = stage2, ...
+        let p = work_dir.join(format!("self_host_stage{}.c", i + 1));
+        let _ = std::fs::write(&p, format!("{runtime_preamble}\n{}", body));
+        paths.push(p);
+    }
+    let diff_hints: Vec<String> = paths
+        .windows(2)
+        .map(|w| format!("diff {} {}", w[0].display(), w[1].display()))
+        .collect();
+    Err(format!(
+        "self-host did not reach a fixed point within {} generations.\n\
+         stages preserved:\n  {}\n\
+         pairwise diff hints:\n  {}",
+        MAX_GEN,
+        paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n  "),
+        diff_hints.join("\n  "),
+    ))
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_bootstrap_fixed_point() {
+    let (driver_exe, driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let driver_gg = manifest_dir
+        .join("tests/fixtures/self_host_lowerer/driver.gg");
+
+    // Drive the shared bootstrap engine in the process-wide temp dir — the
+    // stage-artifact paths are unchanged from the pre-extraction inline body,
+    // preserving this test's behavior exactly. The fmt-sweep double-free test
+    // (`sh_bootstrap_stage2_double_free_after_fmt_sweep`) drives the SAME
+    // engine against an isolated scratch `lib/` copy.
+    let converged_at = run_bootstrap_stages(
+        &driver_exe,
+        &driver_c,
+        &driver_gg,
+        &lib_dir,
+        &std::env::temp_dir(),
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
 
     // ═══════════════════════════════════════════════════════════════
     // BOOTSTRAP CONVERGENCE STAGE — TIGHTEN-ONLY RATCHET
@@ -24140,58 +24161,14 @@ fn self_host_bootstrap_fixed_point() {
     // discrepancy on the recovery-type check should tighten this back).
     // Convergence measured at stage-3 (release, loaded box; ~21 min).
     const BOOTSTRAP_MAX_CONVERGENCE_STAGE: usize = 2;
-    if let Some(k) = converged_at {
-        assert!(
-            k <= BOOTSTRAP_MAX_CONVERGENCE_STAGE,
-            "self-host bootstrap converged at stage-{k}, exceeding the tighten-only \
-             ceiling BOOTSTRAP_MAX_CONVERGENCE_STAGE={BOOTSTRAP_MAX_CONVERGENCE_STAGE}. \
-             Some round's change added a lowering divergence that costs an extra \
-             generation to settle. Either revert the divergence or raise this ceiling \
-             with a cited re-pin naming the change."
-        );
-    }
-
-    if converged_at.is_none() {
-        // Did not converge within MAX_GEN. Persist every stage for
-        // inspection and report the comparison set.
-        let mut paths: Vec<std::path::PathBuf> = Vec::new();
-        for (i, body) in stages.iter().enumerate() {
-            // stages[0] = stage1, stages[1] = stage2, ...
-            let p = tmp_dir.join(format!("self_host_stage{}.c", i + 1));
-            std::fs::write(&p, format!("{runtime_preamble}\n{}", body))
-                .expect(&format!("failed to write stage{}.c", i + 1));
-            paths.push(p);
-        }
-        let diff_hints: Vec<String> = paths
-            .windows(2)
-            .map(|w| format!("diff {} {}", w[0].display(), w[1].display()))
-            .collect();
-        panic!(
-            "self-host did not reach a fixed point within {} generations.\n\
-             stages preserved:\n  {}\n\
-             pairwise diff hints:\n  {}",
-            MAX_GEN,
-            paths
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join("\n  "),
-            diff_hints.join("\n  "),
-        );
-    }
-
-    // Cleanup on success — remove every stage artifact we created.
-    let _ = std::fs::remove_file(&stage1_c);
-    let _ = std::fs::remove_file(&stage1_bin);
-    let _ = std::fs::remove_file(&stage2_c);
-    let _ = std::fs::remove_file(&stage2_bin);
-    for gn in 3..=MAX_GEN {
-        let _ = std::fs::remove_file(tmp_dir.join(format!("self_host_stage{}.c", gn)));
-        let _ = std::fs::remove_file(tmp_dir.join(format!("self_host_stage{}", gn)));
-    }
-    // Silence unused warning when MAX_GEN ≥ 3 and we never touched
-    // stage2_body after stages.push'ing its clone above.
-    let _ = stage2_body;
+    assert!(
+        converged_at <= BOOTSTRAP_MAX_CONVERGENCE_STAGE,
+        "self-host bootstrap converged at stage-{converged_at}, exceeding the tighten-only \
+         ceiling BOOTSTRAP_MAX_CONVERGENCE_STAGE={BOOTSTRAP_MAX_CONVERGENCE_STAGE}. \
+         Some round's change added a lowering divergence that costs an extra \
+         generation to settle. Either revert the divergence or raise this ceiling \
+         with a cited re-pin naming the change."
+    );
 }
 
 // Self-host snag #5 regression: the lowerer's `is_type` heuristic at
