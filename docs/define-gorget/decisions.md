@@ -1730,7 +1730,8 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   second, unmarked propagation channel with no subject in the rule (Core #15e Q4 — a case the
   rule's subject does not cover). Two `known_gaps/sound_autoprop_*` fixtures record adjacent
   shapes with headers calling the free-call behaviour INTENDED, i.e. two ratified doctrines in
-  direct conflict. **Consequence for A34: its premise ("the mandatory mark means the compiler
+  direct conflict (dispositions refined in D45 pin 6 — they are OPPOSITE: one header
+  overturned, one vindicated). **Consequence for A34: its premise ("the mandatory mark means the compiler
   knows every propagation hop") has a HOLE until value-position auto-prop is killed — that fix
   is a PREREQUISITE, not a parallel track.** Further corrections from the same review:
   **OCaml's polymorphic variants are payload-carrying inferred open/closed sets with
@@ -1827,7 +1828,7 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
 
   **PROPOSED (NOT RATIFIED) — how error sets work at a LIBRARY boundary.** ⚡ **→ RATIFIED
   2026-08-10 as D45 (see that entry), with amendments: union spelling is `|` (the braces in
-  (iv) below are DEAD — `throws NotFound | Denied`); named sets spell as `type` aliases;
+  (iv)–(v) below are DEAD — `throws NotFound | Denied`); named sets spell as `type` aliases;
   handler-side subtraction added at member granularity.** Owner asked the three
   questions that decide whether sets are an asset or a liability: how do they work in libraries,
   can a function suddenly fail with an unlisted error, and how do we know everything is handled.
@@ -1904,7 +1905,10 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   through channel verbs is an E2 scout question. Member types are UNCONSTRAINED at v1
   (`throws int` / `throws String` are legal today and stay legal; pin 13's lint is the
   hygiene layer; whether a member predicate — e.g. equips `Error` — is wanted is an E2
-  scout question). The alias is STRUCTURAL and
+  scout question). One more E2 scout question at the pin-7 seam (pass-5 catch): once sets
+  reach `main`, which path does an escaping `int` MEMBER of a `main` error set take — the
+  exit-code idiom or render+102? Decided BEFORE sets touch `main`, not discovered there.
+  The alias is STRUCTURAL and
   TRANSPARENT: the name is documentation, a display anchor, and the semver anchor — never a
   nominal wall; nominal error wrappers stay available via `newtype`. Open sets compose the same
   way: `type NetFail = NetError | TlsError | ..` (open-marker glyph `..` vs `...` decided at
@@ -2025,9 +2029,11 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   **PIN 7 — A34 SPLIT + THE EXIT CLASS.** **A34a lands at E0, and it CARRIES ITS ENABLING
   ACCEPT/REJECT CHANGE (pass-2 review caught the first fold assuming it silently): `main
   throws E` becomes LEGAL for ANY error type — `E_MainThrowsNonInt`
-  (`src/semantic/typecheck.rs:9707-9714`; stated at reference §10.9 `language-reference.md:3136`
-  and §3.4 `:308` — lines as of this fold — and mirrored in the SH lane at
-  `self_host_typechecker/typecheck.gg:3010`)
+  (`src/semantic/typecheck.rs:9707-9714`; mirrored in the SH lane at
+  `self_host_typechecker/typecheck.gg:3010`. The DOC write-through set is derived by CENSUS —
+  `grep -rni "only throw.*int\|other than .int" docs/` — never by this list (pass-5 catch:
+  a cited list is a selection); exemplars: §10.6 "Throws on Main" `language-reference.md:3080`
+  — the most normative statement — §10.9 `:3136`, §3.4 `:308`, `docs/book/02-types.md:265-271`)
   RETIRES at E0**, all lanes per Core #9, its negative fixtures flipping. Without this the
   102 class has no reachable trigger — the only error that can escape `main` today is an
   int. Semantics: an error reaching the top of `main` renders `error: <Displayable of
@@ -2099,9 +2105,13 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   + `NO_COLOR` + `--color=never` + byte offsets + secondary spans (`UnhandledThrows` spans the
   call AND the enclosing signature — today the second edit site is prose). (e) The check⇒build
   contract becomes a GUARD: a ratchet asserting `gg check`-accept ⇒ backend-compile success
-  over the corpus, plus the harness greps build stderr for `.c:` on every fixture — a C error
-  reaching the user is BY DEFINITION an ICE (render `internal error` with the Gorget span,
-  exit 101; `language-design.md:120` already promises this, now executable per Core #6).
+  over the corpus, plus the harness greps build stderr for C-compiler ERROR lines (`.c:`
+  co-occurring with `error:`) on every fixture — NOT bare `.c:` (pass-5 falsified that
+  predicate at HEAD: a pre-existing `-Wmissing-field-initializers` leak prints 3 `.c:`
+  WARNING lines on a two-line hello-world, so the bare grep is red-on-arrival everywhere;
+  the warning leak itself is filed with the A38 track). A C ERROR reaching the user is BY
+  DEFINITION an ICE (render `internal error` with the Gorget span, exit 101;
+  `language-design.md:120` already promises this, now executable per Core #6).
   (f) Determinism pinned by fixture: same source ⇒ byte-identical diagnostics across runs and
   parallelism. (g) The runtime grammars are FROZEN API: the trap line and pin 7's error
   render. The payoff coupling this to A31: enumerable fix menus — on `UnhandledThrows` over a
