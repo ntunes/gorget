@@ -2198,3 +2198,19 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   polymorphic variants + Swift marks + Zig named sets/errdefer + Midori's split, integrated —
   cite all four); resumable handlers (never); variant-level narrowing (v1); accumulation in
   the channel (never — it is a data pattern, pin 11).
+
+- 2026-08-10 — **🎯 FILL-PACK ARGUMENT WRAPPING RATIFIED (owner, at R41 planning): when a
+  horizontally-broken list exceeds the width limit, `gg fmt` FILLS each line with as many
+  elements as fit before breaking to the next — never one-element-per-line explosion.**
+  Owner's words: "fill long lines before breaking to the next." Scope (fn signatures, call
+  args, tuple/collection literals, generic-arg lists — every horizontally-broken list),
+  width (100 per the 2026-08-09 ruling), the `doc::group_fill` implementation sketch,
+  reference precedents (rustfmt `Compressed`, Prettier `fill()`), and the fixture plan live
+  in the filed TODO entry (Tooling/CLI, "fill-pack long argument lists"); the track's scout
+  settles trailing-comma-in-fill and the per-list-kind cells within this principle.
+  **SEQUENCED PRE-A2 (R41): canonical-output changes land BEFORE the bulk `!`→`^` sweep so
+  the ~1,600-file corpus canonicalizes ONCE** — deciding it post-sweep would re-churn the
+  corpus; this supersedes the TODO entry's earlier "NOT blocking any current work" note.
+  Small formatter track (T-FP): own scout→brief→≥3 reviews→executor; gates = per-kind
+  fixture pairs (short-fits-inline vs long-must-wrap) + `fmt_idempotent` + the A1
+  scratch-tree gate + bootstrap.
