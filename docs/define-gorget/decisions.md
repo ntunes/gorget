@@ -266,6 +266,63 @@ language-design/book examples showing float output.
   same purity/totality proof, with `rethrow` as the visible spelling for conversions that do
   real work. Both items are the owner's call; neither is ratified.
 
+- **A35 (owner-directed CANDIDATE, 2026-08-10 — pins ratified below, whole not yet ratified):
+  `_ = expr` DISCARD FORM + `W_UnusedResult`.** Today a discarded value is invisible: bare
+  `pure_val()`, `v.pop()`, and even `x + 1` as a statement all check clean, and there is NO
+  discard form at all — neither `_ = f()` nor `int _ = f()` parses, so the only way to say
+  "I don't want this" is to invent a name (`int _unused = …`). **Rule SUBJECT (pinned): the
+  EXPRESSION STATEMENT, not the call** — an expression statement whose type is non-`void`
+  warns; `_ = ` acknowledges it. Keying it on the call would miss `x + 1`; keying it on
+  fallibility (the original framing) was rejected as a category error — D29 already killed
+  silent ERROR discard, what remains is a plain unused-VALUE question, and fallible calls
+  are if anything MORE likely to be legitimate effect-calls (`file.write(d)!`).
+  **Spelling `_ = expr`, not `(void) expr` (owner 2026-08-10):** `_` is ALREADY Gorget's
+  wildcard binder — `for _ in xs:` and `catch (_):` both check clean at HEAD — and assignment
+  is the one binding position that rejects it, so this CLOSES an inconsistency rather than
+  adding syntax. `(void) expr` was rejected: Gorget casts are postfix (`x as float`), bare
+  parens are tuple syntax, and it would be the language's only C-ism.
+  **⚡ OWNER PINS (ratified 2026-08-10):** (a) `_ = act()` where `act()` returns `void` is
+  REJECTED — nothing to discard, and allowing it invites `_ =` as noise-punctuation;
+  (b) `_` stays WRITE-ONLY — reading `_` remains a parse error, else it becomes a real
+  variable that shadows; (c) stays a WARNING for now — no `E_` promotion ratchet yet
+  (contrast `W_DeadBareParamWrite`, whose registry entry declares a promotion path).
+  **@must_use was CONSIDERED AND DROPPED (owner 2026-08-10)** — "not yet"; it stays additive
+  later as a SUPPRESSOR (marking values whose discard is fine) rather than an enabler, which
+  is the better shape and keeps one uniform rule now.
+  **Measured blast radius (2026-08-10, regenerate before acting — Core #5):** the common
+  mutators return `void` (`push`/`put`/`add`/`set`/`sort` probed at HEAD), so the dominant
+  idioms never fire; 14,906 bare-statement calls corpus-wide are dominated by exactly those.
+  Confirmed non-void discards among known builtins: 111 (`pop` 74, `remove` 34, `unwrap` 2,
+  `clone` 1) — a LOWER BOUND, covering builtin method names only, not user functions
+  (`expect_tok`/`advance`/… return types unverified). Census commands in the round brief;
+  do not reuse these figures without regenerating. Migration is mechanical (the checker knows
+  every call's type — same codemod vehicle as D29's `!` insertion).
+
+- **A36 (owner-REQUIRED, 2026-08-10 — direction ratified, shape is the candidate):
+  WARNINGS ANNOUNCE THEIR CODE + A GENERIC SUPPRESSION MECHANISM.** Two owner rulings from
+  the A35 discussion: **(1) warnings render their code exactly as errors do.** Today errors
+  print `error[E_MissingFallibleMark]: …` while warnings print a bare `warning: …` — all 17
+  `W_` codes exist (`SemanticWarningKind::code()`, registry `spec/prose/diagnostic-codes.md:160`
+  under the heading "not rendered in phase 1") and feed ONLY the exhaustiveness ratchet and
+  that table, because `report_semantic_warning` (`src/errors.rs:459`) never threads
+  `.with_code(...)`. One function, and every existing warning gains its code. Sequenced WITH
+  A35, whose warning would otherwise be the highest-volume diagnostic in the language and the
+  only one users cannot name. **(2) a generic suppression mechanism is REQUIRED** — none
+  exists today (no `#[allow]`, no lint levels; `--implicit-clones=…` is a bespoke per-feature
+  flag). **The shape is already ratified: GENERALIZE D42** (`decisions.md:1472` — "ONE NAME,
+  THREE SCOPES, `allow`/`warn`/`deny`", ratified 2026-07-28, NOT IMPLEMENTED) from the single
+  `implicit_clones` knob to every `W_` code: `--unused-result=allow` (project) ·
+  `directive unused-result=allow` (module) · `@unused_result(allow)` (function).
+  **Proposed pin for the scout — lint names derive MECHANICALLY from diagnostic codes**
+  (`W_UnusedResult` → `unused-result` / `@unused_result`), never a parallel registry: one
+  source of truth per axis (Layering rule 3), and it makes the rendered code tell the reader
+  exactly what to write in the allow, with no lookup table. **Open:** per-lint DEFAULT levels
+  (D42's `implicit_clones` defaults `allow` = opt-IN checking; A35's defaults `warn` = opt-OUT),
+  whether `deny` escalates a `W_` to a hard error, and whether a blanket `--deny=warnings`
+  exists. NOTE the ordering consequence: shipping A35 without A36(2) means `_ = ` per-site is
+  the ONLY escape hatch — acceptable (it is explicit and per-site), but it is a one-way door
+  for anyone with a file full of legitimate discards.
+
 - **A29 (owner question, 2026-07-05): CONSOLIDATE the `&`-exclusivity rules into one
   static-semantics prose section + fixtures.** The intended rule is Rust-style (readers XOR
   one writer, language-design §3.5) and is a PREMISE of D1's refinement claim (same-call
