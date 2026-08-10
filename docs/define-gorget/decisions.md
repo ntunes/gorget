@@ -1927,15 +1927,15 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   default; an open marker is the opt-in to growth (glyph `..` vs `...` finalized at the E2
   grammar scout, per pin 1). Public sets are WRITTEN (checker rule keyed on D43
   visibility); inference applies interior-side with the decl-site `!` REQUIRED on every
-  inferred-fallible non-public function. ⚠ **PREREQUISITE (pass-3 catch): D43 is ratified
-  but NOT IMPLEMENTED and currently sequenced behind the D27 chain — at minimum the
+  inferred-fallible non-public function (the D29(b) grammar-locked form `Config load(String
+  p)!:` — flow visible at both ends, and the machine consumer reads fallibility off the decl
+  line instead of running whole-program inference). ⚠ **PREREQUISITE (pass-3 catch): D43 is
+  ratified but NOT IMPLEMENTED and currently sequenced behind the D27 chain — at minimum the
   public/non-public distinction must be ENFORCED before this rule has a subject** (at HEAD
   the default is public and the unit is the file, so "written-public" would degenerate to
   "every function writes its set" — the Java tax this pin exists to kill). The cross-chain
   ordering (D27 chain → D43's public/non-public minimum → E2) is the owner's sequencing
-  call at round-open; recorded in SEQUENCING and the TODO E2 track (the D29(b) grammar-locked form `Config load(String
-  p)!:` — flow visible at both ends, and the machine consumer reads fallibility off the decl
-  line instead of running whole-program inference). Set algebra pins: commutative, flattening,
+  call at round-open; recorded in SEQUENCING and the TODO E2 track. Set algebra pins: commutative, flattening,
   idempotent (`A|B ≡ B|A`, `(A|B)|C ≡ A|B|C`, `A|A ≡ A`); aliases expand transparently.
   Implementation = the sizing note's synthesized union enums with structural interning.
   **`gg semver-check` lands in the SAME round as closed-by-default** (public error-set diff:
@@ -1962,8 +1962,10 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   silence finding stayed invisible partly because `rethrow` hid the discard); (d) A34's format
   trigger becomes "a `throw` that consumes a catch binding" — same information, still
   mechanical. Census 2026-08-10 (regenerate before acting): 107 mention lines across 41 files
-  in `tests/fixtures` (`grep -rln "rethrow" tests/fixtures --include="*.gg" | wc -l`), bare
-  `rethrow N` exactly 2, 32 mention lines across `lib` + `docs/book` + the reference. Mechanics:
+  in `tests/fixtures` (`grep -rn "rethrow" tests/fixtures --include="*.gg" | wc -l` for the
+  lines; `-rln` for the files), bare `rethrow N` exactly 2, 32 mention lines across `lib` +
+  `docs/book` + the reference at ratification time (the fold's own D45 pointers joined that
+  count the same day — regenerate, never inherit). Mechanics:
   the keyword is TOMBSTONED — token stays in the lexer, the parser emits a teaching diagnostic
   with a machine-applicable fix-it (`rethrow (e): X` → `catch (e): throw X`; bare `rethrow N`
   → `catch (_): throw N`), the first customer of A38's `gg fix`; the diagnostic code is never
@@ -2023,8 +2025,9 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   **PIN 7 — A34 SPLIT + THE EXIT CLASS.** **A34a lands at E0, and it CARRIES ITS ENABLING
   ACCEPT/REJECT CHANGE (pass-2 review caught the first fold assuming it silently): `main
   throws E` becomes LEGAL for ANY error type — `E_MainThrowsNonInt`
-  (`src/semantic/typecheck.rs:9707-9714`; stated at reference §10.9 `language-reference.md:3135`
-  and §3.4 `:308`, and mirrored in the SH lane at `self_host_typechecker/typecheck.gg:3010`)
+  (`src/semantic/typecheck.rs:9707-9714`; stated at reference §10.9 `language-reference.md:3136`
+  and §3.4 `:308` — lines as of this fold — and mirrored in the SH lane at
+  `self_host_typechecker/typecheck.gg:3010`)
   RETIRES at E0**, all lanes per Core #9, its negative fixtures flipping. Without this the
   102 class has no reachable trigger — the only error that can escape `main` today is an
   int. Semantics: an error reaching the top of `main` renders `error: <Displayable of
@@ -2118,8 +2121,11 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   is a branch on a tag and nothing else; the error path allocates nothing beyond the payload
   the user constructed; `on error` blocks are CHECKED infallible (a throwing cleanup is a
   compile error — the Midori/Rust-drop lesson made static); the release-mode chain is zero
-  bytes. "Provably no-alloc error path" as a user-checkable property is research — filed, not
-  blocking.
+  bytes. **Round owner (pass-4 catch — a ratified reject class must not be unowned): the
+  `on error`-infallibility check is a NEW accept/reject rule and lands at E3** (the
+  handler-surface round), with its negative fixtures, all lanes per Core #9; filed in the
+  TODO E3 track. "Provably no-alloc error path" as a user-checkable property is research —
+  filed (the `@[no_alloc]` annotation item in `TODO.md`), not blocking.
 
   **PIN 13 — `stringly-error` LINT.** Public `throws String` (or `String` as a member of a
   public set) defaults WARN — the book's demotion of `throws String` made mechanical
@@ -2144,7 +2150,8 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   E1 must not teach syntax that cannot run (the exact defect the book entry files; pass-2
   review caught the first fold doing it). **E2** "sets": pins 1–3/8/9 +
   `gg semver-check`, one scout under the existing A31 sizing challenge with these pins as the
-  spec. **E3** "subtraction": pins 4–5 (the catch grammar + the tombstone/codemod migration).
+  spec. **E3** "subtraction": pins 4–5 (the catch grammar + the tombstone/codemod migration)
+  + pin 12's `on error`-infallible check (a new reject class — negative fixtures, all lanes).
   **E4** "history + concurrency": A34b + pin 11's TaskGroup + A32 impl consuming the module.
   Honest sizing: E2+E3 is 2–3 rounds of type-system work. **Sequencing rule: E2 does not open
   before E0+E1 land** — sets composing signatures that do not exist would be building the
