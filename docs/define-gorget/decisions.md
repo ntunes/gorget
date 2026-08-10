@@ -316,10 +316,26 @@ language-design/book examples showing float output.
   **Proposed pin for the scout — lint names derive MECHANICALLY from diagnostic codes**
   (`W_UnusedResult` → `unused-result` / `@unused_result`), never a parallel registry: one
   source of truth per axis (Layering rule 3), and it makes the rendered code tell the reader
-  exactly what to write in the allow, with no lookup table. **Open:** per-lint DEFAULT levels
-  (D42's `implicit_clones` defaults `allow` = opt-IN checking; A35's defaults `warn` = opt-OUT),
-  whether `deny` escalates a `W_` to a hard error, and whether a blanket `--deny=warnings`
-  exists. NOTE the ordering consequence: shipping A35 without A36(2) means `_ = ` per-site is
+  exactly what to write in the allow, with no lookup table. **⚡ OWNER PINS (ratified 2026-08-10):**
+  (a) **PER-LINT DEFAULT LEVELS** — each lint declares its own default, since D42's
+  `implicit_clones` defaults `allow` (opt-IN checking) while A35's `unused-result` defaults
+  `warn` (opt-OUT); the default belongs on the lint's typed registration, not a global table.
+  (b) **`deny` ESCALATES A `W_` TO A HARD ERROR** — this also supplies the `W_`→`E_` promotion
+  path (cf. `W_DeadBareParamWrite`) with no renaming: a class burns down under `deny` in the
+  gates before any code change makes it fatal by default.
+  **BLANKET `--deny=warnings`: CONSIDERED AND DEPRIORITIZED (2026-08-10).** The goal it serves
+  (warning rot — a project sitting on 400 warnings effectively has zero) is served STRICTLY
+  BETTER in-tree by the existing shrink-only ratchet (`tests/lints.rs`,
+  `docs/devbook/25-structural-guards.md`): a ratchet permits a NONZERO baseline while forbidding
+  growth (`fmt_no_new_move_bang_in_migrated_corpora` ceiling 861, shrink-only), is per-class so
+  one new warning cannot detonate every gate, and already runs in the round-close battery. A
+  blanket flag has no middle state — which is exactly why it cannot be adopted mid-migration.
+  Its cost: it makes COMPILER UPGRADES BREAKING CHANGES (a new warning fails builds of unchanged
+  code — the hazard Rust now advises against baking into project config). Residual value is for
+  DOWNSTREAM users, who have no `tests/lints.rs`. **If it ever ships, PIN IT CLI-ONLY — never a
+  `directive`, never an attribute** — so it lives with whoever controls the toolchain version for
+  that invocation and cannot be baked into source that outlives it. NOT on A36's critical path.
+  NOTE the ordering consequence: shipping A35 without A36(2) means `_ = ` per-site is
   the ONLY escape hatch — acceptable (it is explicit and per-site), but it is a one-way door
   for anyone with a file full of legitimate discards.
 
