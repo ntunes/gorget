@@ -186,7 +186,25 @@ language-design/book examples showing float output.
   SPEC-DIVERGE). Retroactively reclassifies the snag-#9/#10/#13
   class + the expr-body asymmetry as violations of ONE rule.
 - **A31 (error composition): inferred error sets (Zig-style) as the TARGET; explicit
-  From-conversion as the FALLBACK.** Scout-first: the hard core Zig doesn't have is
+  From-conversion as the FALLBACK.** ⚡ **ELEVATED 2026-08-10 to the LOAD-BEARING error-model
+  decision — see the ERROR-MODEL NORTH STAR entry in the LOG.** Not an ergonomics upgrade:
+  Gorget currently has typed errors in signatures with no inference and no set algebra, which
+  is the exact mechanical setup that collapsed Java's checked exceptions, and the escape hole
+  is already measurable (`throws String`, 148 uses — more than every other error type combined,
+  taught 9× in the book — i.e. `throws Exception` in different clothes). A31 also RETIRES the
+  implicit-`From` hidden-control-flow hole as a side effect, because set widening needs no
+  conversion. The library/semver answers (inference is internal-only, `public` sets are written,
+  open/closed sets, closed by default) are PROPOSED in that LOG entry.
+  ⚡ **SIZING CHALLENGED 2026-08-10 — scout the cheaper path before accepting "phase-scale".**
+  The framing below (anonymous tagged union-of-enums) may be what has kept this parked. Cheaper
+  candidate: **synthesized union enums with structural identity** — `throws IoError | ParseError`
+  desugars to a compiler-generated enum whose variants are the member types, so drop, ownership,
+  clone and match exhaustiveness all come FREE (it is a real enum, and the compiler already
+  monomorphizes). The genuinely new work then reduces to structural identity — normalizing
+  `IoError | ParseError` ≡ `ParseError | IoError` over a sorted member list, stable across
+  compilation units — which is a type-interning problem, not a new kind of type. If that holds,
+  A31 is a round, not a phase. Scout it before sequencing.
+  Original framing: the hard core Zig doesn't have is
   PAYLOADS — Gorget errors are owned enums, so an inferred union {IoError, ParseError}
   = anonymous tagged union-of-enums + member-type match syntax + ownership/drop through
   it (phase-scale type-system feature). Also the semver story (public APIs must narrow
@@ -1647,3 +1665,105 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   **REJECTED ALTERNATIVES, recorded so they are not re-proposed.** **(1) `package.toml`** — stutters against `[package]`, and generic besides. **(2) `manifest.toml`** — tried and REVERTED 2026-08-09; see the amendment above. **(3) `gg.toml`** — shorter and matches the binary users type, a reasonable alternative that simply did not beat the incumbent by enough to justify churn. **(3) A manifest written in Gorget** (full language) — makes dependency resolution execute untrusted third-party code, the npm-`postinstall` / SwiftPM-`Package.swift` shape. **(4) A ZON-style data-only Gorget subset** — coherent, and Zig ships it, but it costs a comment-preserving serializer for `gg add`/`gg remove` (which round-trip through serde today for free) and hands every external tool a parsing problem, for a file that is four keys and a dependency table.
 
   **ONE SOURCE OF TRUTH FOR THE NAME.** `manifest::MANIFEST_NAME` plus `manifest_path_in` / `find_manifest_in`; no call site spells the string. This is the durable win of the D44 round and it outlived the rename it was built for — it is what made the 2026-08-09 reversal a one-line change.
+
+- 2026-08-10 — **🎯 ERROR-MODEL NORTH STAR (owner-directed, recorded at owner request):
+  THE BAR IS "THE MODEL OTHERS ASPIRE TO", NOT PARITY WITH ANY ONE REFERENCE.** Opened as a
+  Zig "no hidden control flow" comparison; the owner widened the mandate — *"we should not be
+  comparing only to Zig… Gorget is to become the leader."* This entry is the strategic frame
+  for A31/A33/A34 and for every future error-model call. **Ratification status: the GOAL is
+  owner-directed; the four-property doctrine below is the synthesis recorded at his request;
+  the library/semver design in the last section is PROPOSED, NOT RATIFIED.**
+
+  **⚠ THE FINDING — GORGET IS ONE STEP FROM JAVA'S FAILURE MODE, AND THE CENSUS SHOWS IT
+  ALREADY HAPPENING.** Java's checked exceptions had the RIGHT idea (errors stated in the
+  signature, compiler-enforced) and collapsed for a specific mechanical reason: no inference
+  and no set algebra, so every layer had to restate or wrap its callees' errors, and the
+  pressure escaped through the widest available hole — `throws Exception`. **Gorget today has
+  typed errors in signatures, no inference, and no set algebra; the escape hole is
+  `throws String`.** Measured 2026-08-10 (regenerate before acting, Core #5): 148 uses across
+  `tests/fixtures`, more than every other error type combined (next: `throws E` 36,
+  `throws int` 17), and `docs/book/10-errors.md` teaches it 9 times. `language-design.md:81`
+  names stringly-typed errors as an explicit ANTI-GOAL and error-set inference as a GOAL — so
+  the anti-goal is winning precisely because the goal is unbuilt. **The concrete harm is not
+  aesthetic: a `String` error cannot be DISCRIMINATED.** Every caller can only `catch (e)` and
+  get text — never match a variant, never handle `NotFound` differently from `BadPort` — so the
+  moment a library throws `String`, every consumer's handling collapses to blanket recovery or
+  string comparison. Honest caveat on the number: fixtures are small programs and some of the
+  148 is test convenience; the load-bearing evidence is the BOOK teaching it plus the named
+  anti-goal, not the raw count. **Consequence: A31 is not an ergonomics upgrade, it is the
+  load-bearing decision** — the difference between Gorget's typed-error model working and being
+  routed around the way Java's was.
+
+  **THE FIELD (surveyed 2026-08-10, so later calls are not re-derived).** C: no type-level
+  signal. C++: RAII cleanup, but invisible flow, `throw()` specs abandoned, two models coexist.
+  Java: right idea, no composition ⇒ the failure above. C#: gave up on the type level. Go:
+  errors are values, flow maximally visible, `%w` chains — but verbose, interface-typed (no
+  exhaustiveness), trivially ignorable. Rust: typed payloads, exhaustive, `must_use` — but
+  `From` is a hidden conversion, there is no automatic trace (`Error::source()` is manual and
+  span-less), and composition is boilerplate (hence `thiserror`). Swift: uniform mandatory mark,
+  typed throws since 6.0 — no inference, no traces. Zig: inference, `errdefer`, **error return
+  traces** — but NO payloads, globally interned error names, and inferred sets leak from public
+  APIs (its own docs warn against them there). Erlang/Elixir: supervision + isolation as a
+  SEPARATE axis from handling, nothing typed. Koka/Eff: row-polymorphic algebraic effects — the
+  real solution to composition, at a conceptual cost most programmers will not pay. **Midori
+  (Joe Duffy, unshipped): the definitive doctrine — recoverable errors ≠ bugs, typed contracts
+  plus fail-fast abandonment. Gorget's ratified errors-vs-faults split IS Midori's model, and
+  Midori never shipped, so its unfinished business is unclaimed.**
+
+  **THE DOCTRINE — four properties, and no language has all four.** *An error is a value with
+  a typed CONTRACT, a visible FLOW, a provable HANDLING obligation, and a recorded HISTORY —
+  and none of those costs anything you did not ask for.* (1) **Typed contract** — payloads, and
+  public error sets that are WRITTEN, not inferred. (2) **Visible flow** — a mandatory mark at
+  every channel-active site. (3) **Provable handling** — exhaustiveness, open/closed sets, no
+  silent discard. (4) **Recorded history** — the causal chain, automatic, and free in release.
+  **Scored:** Rust has 1+3. Swift has 2, and 1 since 6.0. Zig has 3, partial 2, partial 4, fails
+  1. Go has 2 and a manual 4. **Gorget already holds 2 outright (D29) and most of 1 and 3;
+  A31 completes 1 and 3; A34 delivers 4.**
+
+  **THE FRONTIER — three things NO language has, which is what turns "best" into "aspired to".**
+  (a) **Machine-checked error contracts across versions** — once public sets are explicit the
+  compiler holds both the old and new set, so error-compatibility is mechanically verifiable at
+  package resolution (`manifest.rs` + `lockfile.rs` already exist). Rust needs external
+  `cargo-semver-checks` and cannot do it fully. (b) **Errors through structured concurrency** —
+  every language degrades here (Go's errgroup, Rust's `JoinError`); a `TaskGroup`'s error set
+  should be the UNION of its tasks', composing under the same set algebra as sequential code.
+  The ledger currently files throws×async as "later"; this elevates it. (c) **The fault↔error
+  bridge at a supervised boundary** — Midori argued the split and never shipped the bridge;
+  Erlang shipped supervision with no types. **A33's hook is exactly that unclaimed
+  intersection**, and this is the reason to keep it scoped to ONE defined isolation point.
+
+  **WHAT NOT TO COPY (recorded so it is not re-proposed).** Java's restate-or-wrap tax.
+  C++/C#'s invisible flow. Go's verbosity as the price of visibility — D29 already proved ONE
+  CHARACTER buys it. Effect-system syntax: Koka solves composition correctly, but
+  row-polymorphism-in-the-signature is a tax the "easier than Python" pillar cannot pay;
+  open/closed sets get most of the benefit at a fraction of the concept count.
+
+  **PROPOSED (NOT RATIFIED) — how error sets work at a LIBRARY boundary.** Owner asked the three
+  questions that decide whether sets are an asset or a liability: how do they work in libraries,
+  can a function suddenly fail with an unlisted error, and how do we know everything is handled.
+  (i) **Under naive inference the answer to Q2 is YES, and the change can originate two packages
+  away** — a dependency adds a variant, it flows into your inferred set, and your public API
+  changes without you touching a line, silently re-exporting your dependency's error taxonomy
+  and coupling your semver to theirs. So inference must be INTERNAL only. (ii) **Proposed rule:
+  a `public` function's error set must be WRITTEN; inference applies within a directory-
+  visibility group** — keyed on ratified D43, whose own rationale already argues this shape
+  ("public-by-default makes every internal helper part of the semver surface by accident"; an
+  inferred public error set is the same accident one layer down). A checker rule, not a lint.
+  (iii) **Consequence worth stating: library signatures DO NOT CHANGE.** `throws AppError` over
+  a named enum already IS a closed named error set; A31 adds inference for internal code and
+  set algebra for composition, so the library migration story is "nothing happens".
+  (iv) **Q3 answered by an open/closed distinction visible IN THE SIGNATURE:**
+  `throws {NotFound, Denied}` closed ⇒ compiler proves exhaustiveness, no `else` needed, adding
+  a member is deliberately breaking; `throws {NotFound, Denied, ...}` open ⇒ compiler REQUIRES
+  an `else` arm, so adding a member is non-breaking by construction. Either way there is no
+  unhandled path. Better than Rust's `#[non_exhaustive]`, where you must go read a distant enum
+  declaration to learn whether your match needs a wildcard. **Proposed default: CLOSED**, with
+  `...` as the opt-in to growth — matching D43's posture that the powerful thing is opt-in and
+  visible (here, an author reserving the right to change the contract). (v) **Widening is free:**
+  calling a `{A,B}` callee from a `{A,B,C}` caller is a pure set widening, no conversion and no
+  user code — **which is what RETIRES the implicit-`From` hidden-control-flow hole rather than
+  patching it** (see the live defect filed with A34). (vi) **⚠ SCOPE THE GUARANTEE HONESTLY:**
+  a library can still terminate the process via a FAULT (overflow, out-of-bounds, div-by-zero),
+  a failed assert, or OOM — deliberately out of the channel and uncatchable. The accurate claim
+  is **every ERROR is handled; not every TERMINATION is recoverable.** That is the ratified
+  errors-vs-faults split working as designed, and it is why A33 stays a separate question.
