@@ -1273,12 +1273,26 @@ bool try_register_static_runtime_call(GirModule &gmod, SpannedType sd_ty, String
 # (`lir_codegen.gg:4504-4513`) — for (1) it calls the synth fn, for (2)
 # it runs the allocator C-expr directly.
 
-# True for an array/dict literal RHS → synth-fn path (case 1 above).
+# True for an array/dict/string literal RHS → synth-fn path (case 1 above).
+# A module-level `static String s = "hi"` belongs here too: a String
+# literal is NOT a compile-time const-bytes value (it needs a runtime
+# `gorget_str_from_literal` wrap of text+len into a `Str` struct), and a
+# `static` is MUTABLE — so it must NOT be const-folded into
+# `string_const_decls` (the IConstDecl `const String` path) which would
+# inline the value and silently drop any later write. The synth fn
+# `String __gg_static_init_s(): String __r = "hi"; return __r` builds the
+# GorgetString via the normal string-literal VarDecl lowering (escaping /
+# interpolation handled there) and returns it into the real mutable global.
+# Mirrors Rust's `GlobalInit::Extern { gorget_str_from_literal }` for a
+# String static (`src/ir/lowering/mod.rs:2787-2795`); the SH wraps the same
+# runtime call in the uniform synth-init fn instead of an inline extern.
 bool static_is_literal_init(SpannedExpr sd_val):
     match sd_val.expr:
         case EArrayLiteral(_):
             return true
         case EDictLiteral(_, _):
+            return true
+        case EStringLiteral(_, _):
             return true
         else:
             return false

@@ -159,6 +159,7 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     SpannedExpr wt_iter = for_iterable_mode(iter_expr, &for_write_through)
     SpannedExpr probe_coll = wt_iter
     bool probe_is_enumerate = false
+    bool probe_is_bytes = false
     match wt_iter.expr:
         case EMethodCall(recv_box, mname, margs, _):
             if mname == "enumerate" and margs.len() == 0:
@@ -167,6 +168,22 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
                 if recv_write_through:
                     for_write_through = true
                 probe_is_enumerate = true
+            elif mname == "bytes" and margs.len() == 0:
+                # Strip a `.bytes()` and iterate the receiver's raw UTF-8
+                # BYTES directly (lower_for_string_bytes), rather than
+                # materializing the `Vector[u8]` `.bytes()` denotes and taking
+                # the Vector fast path. The SH widens narrow ints to i64 SLOTS,
+                # so reading a real 1-byte-stride `gorget_str_bytes` array back
+                # through the i64-payload `.get().unwrap()` path OVER-READS 8
+                # bytes per element (`for b in "AB".bytes()` → 16961 not 65).
+                # Speculative like the enumerate strip: committed only once the
+                # probed receiver types as GorgetString below (else a loud
+                # lower_fail). Mirrors Rust routing `for b in s.bytes()`
+                # through its Vector[u8] array path with a correct 1-byte
+                # element read (mod.rs:2274 `GorgetString__bytes` →
+                # `Vector[u8]`).
+                probe_coll = SpannedExpr((*recv_box).expr, (*recv_box).span)
+                probe_is_bytes = true
         else:
             pass
     # Lower the probe receiver once. If it's Vector/Deque, the
@@ -186,6 +203,20 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # Auto-propagate a `throws` call used as the iterable (`for x in might()`).
     coll_local = maybe_auto_propagate(&ctx, coll_local, &gmod)
     String coll_tn = local_type_name(coll_local, ctx, &gmod)
+    # `.bytes()` byte-iteration fast path (probed above): the stripped
+    # receiver must be a String; iterate its raw bytes via gorget_str_byte_at
+    # (stride 1, one uint8_t value per iteration). A non-String receiver would
+    # need a user `.bytes()` returning a real Vector — unsupported, so fail
+    # loudly rather than silently mis-iterating the stripped receiver
+    # (Core #10: lower-or-reject, never silently drop). `coll_tn ==
+    # "GorgetString"` also covers a Ptr-to-String source (a bare String
+    # param), which type_id_to_name collapses to "GorgetString".
+    if probe_is_bytes:
+        if coll_tn == "GorgetString":
+            lower_for_string_bytes(&ctx, pat, coll_local, probe_is_enumerate, body, &gmod, is_main)
+            return
+        lower_fail("SFor .bytes() over non-String iterable not yet implemented (coll type: " + coll_tn + ")")
+        return
     # Phase A — typed-metadata classification (CkVector/CkDeque) via
     # the lazy `resource_meta_for` accessor; retires the legacy
     # `starts_with("Vector__")` cascade per
@@ -478,6 +509,100 @@ void lower_for_string(LowerCtx &ctx, SpannedPattern pat, int coll_local, bool is
         int new_cpidx = add_local(&ctx, I64_TYPE, None)
         emit(&ctx, GIBinOp(new_cpidx, OP_ADD, I64_TYPE, OpCopy(cpidx_local), OpConstI64(1)))
         emit(&ctx, GIAssign(cpidx_local, OpCopy(new_cpidx)))
+    set_terminator(&ctx, GTJump(header_bb))
+    switch_to(&ctx, exit_bb)
+
+# Byte fast path: `for b in <String>.bytes()` iterates the raw UTF-8 BYTES
+# (one `uint8_t` value 0-255 per iteration), NOT codepoints. Same
+# header/body/incr/exit scaffold as `lower_for_string`, but the stride is a
+# constant 1 (`byte_pos += 1`) and the per-iteration value is the byte itself
+# (`gorget_str_byte_at(coll, byte_pos)` → uint8_t, bound U8_TYPE).
+#
+# The SH iterates the string's bytes DIRECTLY rather than materializing the
+# `Vector[u8]` that `.bytes()` denotes: the SH widens all narrow ints to i64
+# SLOTS, so a real 1-byte-stride `gorget_str_bytes` array read back through
+# the i64-payload `.get().unwrap()` path OVER-READS 8 bytes per element
+# (`for b in "AB".bytes()` → 16961, not 65). Reading each byte in place with
+# `gorget_str_byte_at` (which returns exactly one `uint8_t`) sidesteps the
+# stride mismatch entirely. Mirrors Rust routing `for b in s.bytes()` through
+# its `Vector[u8]` array path with a correct 1-byte element read (mod.rs:2274
+# `GorgetString__bytes` → `Vector[u8]`, `lower_for_array` at :668).
+#
+# `gorget_str_byte_len` / `gorget_str_byte_at` both take `Str` BY VALUE; a
+# Ptr-source `coll` (a bare String param's void* ABI) is auto-deref'd
+# `*(Str*)` at C-emit via the `gorget_str_` prefix registrations in
+# runtime_takes_str_by_value / runtime_arg_is_str (lir_codegen.gg). The byte
+# value is COPIED out per iteration (not a view into the buffer), so unlike
+# the codepoint path there is no per-iteration owned-drop and no borrow alias.
+void lower_for_string_bytes(LowerCtx &ctx, SpannedPattern pat, int coll_local, bool is_enumerate, Vector[Stmt] body, GirModule &gmod, bool is_main):
+    # A lazy-tagged (cap=0 family) source must materialize before the loop
+    # reads its buffer byte-by-byte — mirrors lower_for_string's W3d hook.
+    cow_lazy_materialize_slot(&ctx, coll_local)
+    # ── Iteration state ── byte_pos counter (seeded 0) + BYTE-length bound.
+    int bytepos_local = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIAssign(bytepos_local, OpConstI64(0)))
+    # Byte-ordinal counter for `for (i, b) in s.bytes().enumerate()` — the
+    # logical 0-based index, +1 per iteration (== byte_pos here, since the
+    # stride is 1, but kept independent to mirror lower_for_string's cpidx).
+    int idx_local = -1
+    if is_enumerate:
+        idx_local = add_local(&ctx, I64_TYPE, None)
+        emit(&ctx, GIAssign(idx_local, OpConstI64(0)))
+    int len_local = add_local(&ctx, I64_TYPE, None)
+    Vector[Operand] len_args = [OpBorrow(coll_local)]
+    emit(&ctx, GICallExtern(len_local, "gorget_str_byte_len", len_args))
+    # ── Block layout ─────────────────────────────────────────
+    int header_bb = new_block(&ctx)
+    int body_bb = new_block(&ctx)
+    int incr_bb = new_block(&ctx)
+    int exit_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(header_bb))
+    # Header: `byte_pos < len ? body : exit`
+    switch_to(&ctx, header_bb)
+    int cond_local = add_local(&ctx, BOOL_TYPE, None)
+    emit(&ctx, GICmp(cond_local, CMP_LT, I64_TYPE, OpCopy(bytepos_local), OpCopy(len_local)))
+    set_terminator(&ctx, GTBranch(OpCopy(cond_local), body_bb, exit_bb))
+    # Body: `b = gorget_str_byte_at(coll, byte_pos)` — one owned uint8_t value.
+    ctx.loop_continue_stack.push(incr_bb)
+    ctx.loop_break_stack.push(exit_bb)
+    push_drop_scope(&ctx.drop_elab, DSK_LOOP)
+    switch_to(&ctx, body_bb)
+    int b_local = add_local(&ctx, U8_TYPE, None)
+    Vector[Operand] byte_args = [OpBorrow(coll_local), OpCopy(bytepos_local)]
+    emit(&ctx, GICallExtern(b_local, "gorget_str_byte_at", byte_args))
+    if is_enumerate:
+        # `(i, b)` 2-tuple bind, mirroring the Vector/String enumerate paths:
+        # i ← byte ordinal, b ← the byte value.
+        match pat.pat:
+            case PTuple(parts):
+                if parts.len() == 2:
+                    bind_for_local(&ctx, parts.get(0).unwrap(), idx_local, I64_TYPE, &gmod)
+                    bind_for_local(&ctx, parts.get(1).unwrap(), b_local, U8_TYPE, &gmod)
+                else:
+                    lower_fail("SFor enumerate: expected 2-tuple pattern, got " + int_to_str(parts.len()) + " parts")
+            else:
+                lower_fail("SFor enumerate: expected tuple pattern")
+    else:
+        bind_for_local(&ctx, pat, b_local, U8_TYPE, &gmod)
+    lower_stmts(&ctx, body, &gmod, is_main)
+    Terminator body_term = ctx.block_terms.get(ctx.current_block).unwrap()
+    match body_term:
+        case GTNone():
+            pop_drop_scope(&ctx)
+            set_terminator(&ctx, GTJump(incr_bb))
+        else:
+            pop_drop_scope_no_emit(&ctx)
+    ctx.loop_continue_stack.pop()
+    ctx.loop_break_stack.pop()
+    # Incr: `byte_pos += 1; goto header` (stride 1 — one byte per step).
+    switch_to(&ctx, incr_bb)
+    int new_pos = add_local(&ctx, I64_TYPE, None)
+    emit(&ctx, GIBinOp(new_pos, OP_ADD, I64_TYPE, OpCopy(bytepos_local), OpConstI64(1)))
+    emit(&ctx, GIAssign(bytepos_local, OpCopy(new_pos)))
+    if is_enumerate:
+        int new_idx = add_local(&ctx, I64_TYPE, None)
+        emit(&ctx, GIBinOp(new_idx, OP_ADD, I64_TYPE, OpCopy(idx_local), OpConstI64(1)))
+        emit(&ctx, GIAssign(idx_local, OpCopy(new_idx)))
     set_terminator(&ctx, GTJump(header_bb))
     switch_to(&ctx, exit_bb)
 
