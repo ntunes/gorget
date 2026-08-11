@@ -55,22 +55,25 @@ document algebra and rendered separately, then spliced back into the buffer.
 
 ### The `Emitter` (the imperative layer)
 
-`Emitter` (`src/formatter/mod.rs:11`) is a string buffer that tracks the current
+`Emitter` (`src/formatter/mod.rs:13`) is a string buffer that tracks the current
 indentation level, the current column, and whether the cursor is at line start. Its
 contract is simple:
 
 - `write(s)` lazily emits the pending indentation (four spaces per level,
-  `src/formatter/mod.rs:39-41`) the first time text is written on a fresh line, then
+  `src/formatter/mod.rs:39-47`) the first time text is written on a fresh line, then
   appends `s`.
 - `indent()` / `dedent()` bump the level; `newline()` resets to line start;
   `blank_line()` emits *at most* one blank line and never doubles up
-  (`src/formatter/mod.rs:80-89`).
+  (`src/formatter/mod.rs:102`).
+- `current_col()` (`src/formatter/mod.rs:61`) answers *which column the next character
+  will occupy* — which is not the same as the `col` field while indentation is still
+  pending. Anything making a width decision asks through it.
 
-Indentation is always four spaces, hardcoded (`src/formatter/mod.rs:39`, mirrored by
+Indentation is always four spaces, hardcoded (`src/formatter/mod.rs:41`, mirrored by
 `doc::INDENT_WIDTH = 4` in `src/formatter/doc.rs:13`). There is no configuration:
 the formatter is opinionated and has no options struct.
 
-The `Formatter` struct (`src/formatter/mod.rs:100`) wraps an `Emitter` plus the
+The `Formatter` struct (`src/formatter/mod.rs:380`) wraps an `Emitter` plus the
 comment side-table. The walk is a conventional recursive descent:
 `format_module → format_item → format_function / format_struct / … →
 format_stmt → format_expr / format_type / format_pattern`. Each handler writes
@@ -82,11 +85,12 @@ For constructs where a long line should wrap onto multiple indented lines —
 call-argument lists, generic-parameter lists, method chains, binary-operator chains,
 comprehensions, grouped imports — the formatter builds a `Doc` tree and renders it.
 
-`Doc` (`src/formatter/doc.rs:21`) is a textbook Wadler-Lindig document algebra:
+`Doc` (`src/formatter/doc.rs:21`) is a textbook Wadler-Lindig document algebra, plus
+one node — `Fill` — for the layout Gorget actually wants:
 
 | node | flat mode | broken mode |
 |------|-----------|-------------|
-| `Text(s)` | literal text (never contains `\n`) | same |
+| `Text(s)` | literal text; *may* contain `\n` when it is a pre-rendered sub-element | same |
 | `Line` | a single space | newline + indent |
 | `SoftLine` | nothing | newline + indent |
 | `HardLine` | — | always newline; *forces* the enclosing group to break |
@@ -94,37 +98,97 @@ comprehensions, grouped imports — the formatter builds a `Doc` tree and render
 | `Concat([..])` | render in order | same |
 | `Group(d)` | try flat; break if it doesn't fit | — |
 | `IfBreak{flat,broken}` | emit `flat` | emit `broken` |
+| `Fill{items,close}` | `item, item, item` + `close` | pack greedily; break to `indent+1` and resume |
 
-The renderer (`src/formatter/doc.rs:215`) walks a `Doc` against a `max_width`. For
-each `Group` it calls `measure_flat` (`src/formatter/doc.rs:288`) — which returns
-`None` if the subtree contains a `HardLine`, otherwise the single-line width — and
-renders flat iff `current_col + width <= max_width`, else broken
-(`src/formatter/doc.rs:256-267`). The maximum line width is `MAX_WIDTH = 100`
+The renderer (`src/formatter/doc.rs:284`) walks a `Doc` against a `max_width`. For
+each `Group` it calls `measure_flat` (`src/formatter/doc.rs:437`) — which returns the
+single-line width, or `None` when the subtree cannot be flattened at all — and renders
+flat iff `current_col + width <= max_width`, else broken
+(`src/formatter/doc.rs:325-336`). The maximum line width is `MAX_WIDTH = 120`
 (`src/formatter/doc.rs:10`).
 
-`IfBreak` is how trailing commas appear only when a list wraps: `surround` builds
-`IfBreak { flat: "", broken: "," }` so a flat list has no trailing comma and a broken
-one does (`src/formatter/doc.rs:146-147`, exercised by the tests at `doc.rs:436` and
-`:413`). `surround` (`src/formatter/doc.rs:141`) is the workhorse that lays out
-`open item1, item2 close` flat or one-item-per-indented-line broken.
+Two things make `measure_flat` return `None`: a `HardLine`, and a `Text` that already
+contains newlines. The second is not a corner case — it is how a *pre-rendered
+sub-element that had to wrap* arrives (see `element_to_string` below), and reporting a
+width for it would let an enclosing group choose "flat" for something that is already
+several lines tall. `None` propagates through every combinator, `Fill` included: one
+unflattenable item makes the whole list unflattenable.
+
+Widths are counted in **characters, not bytes**, throughout — the budget is a display
+property, and a byte count inflates every decision downstream of a non-ASCII literal.
+
+### Fill: the canonical broken-list layout
+
+`surround_fill` (`src/formatter/doc.rs:232`) is the workhorse for every list the
+formatter lays out — parameter lists, call arguments, generic parameters and
+arguments, closure parameters, array / tuple / dict literals, grouped imports. It
+emits `open item1, item2 close` when the list fits, and when it does not, it **packs
+greedily**: as many items per line as the budget allows, continuation lines at the
+block indent one level in, and the closing delimiter following the last item inline.
+
+```text
+void draw_text_atlas(GpuContext &ctx, FontAtlas font, String text, float x, float y, float char_size, float r, float g,
+    float b, float a):
+```
+
+Three properties fall out of the packing loop (`render_fill`,
+`src/formatter/doc.rs:349`) and are worth stating because each is load-bearing:
+
+- **The fit test for the last item includes the closing delimiter.** Otherwise the
+  final line overruns by exactly `close.len()`, which is why `Fill` owns its `close`
+  instead of leaving it as a sibling `Text`.
+- **At least one item lands on every line.** An item too wide to fit even alone at the
+  continuation indent is emitted there anyway and overflows — the single exception to
+  "no line exceeds the budget".
+- **A multi-line item never shares a line.** It measures `None`, so the packer always
+  breaks before it, which places it at precisely the column its sub-render assumed;
+  packing then resumes from the column its last line ended at.
+
+There is **no trailing comma** in a fill-broken list: the close is inline after the
+last item, so there is nothing for a trailing comma to precede.
+
+`surround` (`src/formatter/doc.rs:184`) is the other shape — one item per indented
+line, *with* a trailing comma, built from `Group`/`Line`/`IfBreak`. `IfBreak` is what
+makes that comma conditional: `IfBreak { flat: "", broken: "," }`, so a flat list has
+no trailing comma and a broken one does (`src/formatter/doc.rs:189-190`, exercised at
+`doc.rs:580` and `:602`). No production call site uses it — a comment-bearing list
+reaches the same exploded shape imperatively, through
+`format_bracketed_broken_with_comments`, because comments cannot survive the
+pre-render that fill packing depends on. The `formatter_list_emit_fill_census` lint
+counts both spellings so that opting a list out of the canon stays a visible decision.
 
 ### Splicing the two layers together
 
-The bridge is `write_doc` (`src/formatter/mod.rs:156`). It renders the `Doc` with
+The bridge is `write_doc` (`src/formatter/mod.rs:521`). It renders the `Doc` with
 `doc::render_at` — passing the emitter's *current column and indent level as the
-starting state* (`src/formatter/mod.rs:157-162`) so the wrapping decision accounts
-for text already on the line — then writes the pre-rendered (newline-bearing) string
-back via `Emitter::write_preformatted` (`src/formatter/mod.rs:54`), which prepends the
-base indentation and recomputes the column from the last newline of the spliced text.
+starting state* so the wrapping decision accounts for text already on the line — then
+writes the pre-rendered (newline-bearing) string back via `Emitter::write_preformatted`
+(`src/formatter/mod.rs:73`), which prepends the base indentation and recomputes the
+column from the last newline of the spliced text.
+
+"Current column" is asked for through `Emitter::current_col`
+(`src/formatter/mod.rs:61`), never off the raw `col` field. Indentation is written
+*lazily*, on the first `write` of a line, so at line start `col` is 0 while the text
+about to be emitted will land at `indent * 4`. A statement that *begins* with a list
+would otherwise be measured that many columns too narrow and silently overrun the
+budget.
 
 A subtlety of the hybrid design: the imperative layer frequently needs a *string*
 for a sub-expression to drop into a `Doc::Text`. It gets one via `element_to_string`
-(`src/formatter/mod.rs:148`), which spins up a throwaway `Formatter` (with no
+(`src/formatter/mod.rs:477`), which spins up a throwaway `Formatter` (with no
 comments), runs a closure against it, and returns its buffer. This is how
-`format_method_chain` (`src/formatter/mod.rs:932`) and `format_binary_chain`
-(`src/formatter/mod.rs:973`) turn each chain segment / operand into a `Doc::Text`
+`format_method_chain` (`src/formatter/mod.rs:1874`) and `format_binary_chain`
+(`src/formatter/mod.rs:1915`) turn each chain segment / operand into a `Doc::Text`
 leaf before grouping them — the wrapping is decided over the *segments*, while each
 segment is formatted by an ordinary recursive call.
+
+The throwaway formatter is seeded with both the indent level *and* the column its
+output will be spliced at (`element_to_string_at`, `src/formatter/mod.rs:486`). It has
+to be: a sub-render that measured from column 0 would believe it had a whole
+indentation's worth of extra budget, and emit lines that overflow by exactly that
+much once spliced. Seeding makes the assumption self-consistent — an element that
+decides to break becomes multi-line, and a multi-line element is always placed at
+precisely the column it assumed.
 
 ## How canonical output is produced
 
@@ -143,17 +207,17 @@ trait/equip members are inserted explicitly during the walk via `blank_line`
 
 ### Import sorting
 
-`format_module` (`src/formatter/mod.rs:191`) partitions items into leading
+`format_module` (`src/formatter/mod.rs:934`) partitions items into leading
 directives, imports, and "the rest" — the partition stops at the first non-import,
 non-directive item (`past_imports`, `src/formatter/mod.rs:196-206`), so only the
 *leading* import block is reordered. Within that block imports are sorted with
 std/`xtd` libraries first, then alphabetically (`src/formatter/mod.rs:211-222`;
 `is_std_import` at `src/formatter/mod.rs:2293`). Names *inside* an import are also
 sorted: `import a.{X, Y}` groups are sorted alphabetically and laid out with
-`surround` so they can wrap (`src/formatter/mod.rs:707-711`), and `from a import …`
-name lists are sorted too — but **not** wrapped, because in indentation-based syntax a
-bare name on a fresh line would re-parse as a new statement
-(`src/formatter/mod.rs:736-743`).
+`surround_fill`, so a long group packs across continuation lines
+(`src/formatter/mod.rs:1628`), and `from a import …` name lists are sorted too — but
+**not** wrapped, because in indentation-based syntax a bare name on a fresh line would
+re-parse as a new statement (`src/formatter/mod.rs:1658-1666`).
 
 ### Type-first re-printing and bare-tuple positions
 
@@ -253,7 +317,7 @@ Comments are not part of the AST. The parser drops them into a side-table —
 `parser.comments`, a `Vec<Spanned<String>>` collected in lexer-token order
 (`src/parser/mod.rs:79-82`), which therefore comes pre-sorted by source position. The
 `Formatter` holds that vector plus a forward-only `comment_cursor`
-(`src/formatter/mod.rs:100-104`).
+(`src/formatter/mod.rs:380-383`).
 
 Interleaving is span-driven and one-directional: before emitting an item, field,
 variant, statement, or branch body, the walker calls `emit_comments_before(pos)`

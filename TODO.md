@@ -1556,31 +1556,6 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 ## Tooling / CLI / formatter / LSP
 
 #### 🆕 R41 PRE-A2 FMT-HARDENING WAVE (moved here 2026-08-10 from Self-host parity — these are tooling entries; the ledger/handover 'Tooling/CLI' pointers were correct, the filing location was not)
-- **🆕⚠ [MED — R39 close-time, owner-directed formatter behavior] `gg fmt` should FILL-PACK long argument lists, not explode one-per-line.** Owner 2026-08-10: current behavior on a long fn signature explodes every param onto its own line + trailing comma:
-
-    ```
-    void draw_text_atlas(
-        GpuContext &ctx,
-        FontAtlas font,
-        String text,
-        float x,
-        float y,
-        float char_size,
-        float r,
-        float g,
-        float b,
-        float a,
-    ):
-    ```
-
-    Desired: fill each line up to max width (⚡ 120 chars per owner 2026-08-10 FMT CANON PAIR, superseding the 2026-08-09 100), then wrap:
-
-    ```
-    void draw_text_atlas(GpuContext &ctx, FontAtlas font, String text, float x, float y,
-                         float char_size, float r, float g, float b, float a):
-    ```
-
-    Applies to fn signatures, call args, tuple/collection literals, generic-arg lists — every horizontally-broken list. Formatter is currently one-per-line-when-broken (a `doc::group`+ `doc::line()` between elements → all-or-nothing wrap; the "fill" primitive would be `doc::softline()` with a `doc::group_fill`-style mode). Reference behavior: rustfmt `fn_args_layout = "Compressed"`, Prettier's `fill()` (vs its default `line`). Implementation: audit `src/formatter/mod.rs` for the list-emit sites (param list, call args, container literals, generic args, import lists) and swap `doc::line()`+`doc::group()` → a `doc::group_fill()` variant that packs greedily. Add fixture pairs for each list kind (short-fits-inline vs long-must-wrap) + `fmt_idempotent` will catch regressions. Discuss trailing-comma policy in fill mode (rustfmt keeps it; some styles drop it in packed form). ⚡ **RATIFIED (owner 2026-08-10, at R41 planning): "fill long lines before breaking to the next." RE-SEQUENCED — no longer "NOT blocking": lands PRE-A2 in R41 as track T-FMT-D (canon-pair + fill-pack)** (a canonical-output change must precede the bulk sweep or the ~1,600-file corpus re-churns; ledger LOG 2026-08-10). Scout settles trailing-comma-in-fill + the per-list-kind cells.
 - **🆕🐛 [MED — R41 PRE-A2 BLOCKER, fmt suite-layout mangle; owner-reported 2026-08-10 from a gorget-arena diff, reproduced + cell-mapped same day] `gg fmt` collapses an EXPRESSION-POSITION match's `else`-arm single-expression body onto the header (`else:` + next-line `^b` → `else: ^b`) AND inserts a blank line after it — while the SIBLING `case` arms keep their next-line bodies (inconsistent within one construct).** Minimal repro (probe-verified on the fresh binary): `C r = match x:` with `case 1:`/next-line `^a` (PRESERVED) and `else:`/next-line `^b` (COLLAPSED + blank inserted). Statement-position match: unaffected (probed). Idempotent after one pass — a stable mangle, not an oscillation. ⚖ **RULED (owner 2026-08-10): keep the original style — the statement stays on the next line.** Fix = suite-layout FORM PRESERVATION at the expression-match else-arm emit site (route through the same path the case arms use; kill the blank insertion); fixture pairs stmt-pos vs expr-pos × case vs else × single vs multi + `fmt_idempotent`. **Rides the R41 pre-A2 fmt-hardening wave (with T-FP)** — a canonical-output mangle must die before the ~1,600-file sweep bakes it in.
 - **🆕🐛💥 [HIGH — R41 PRE-A2 BLOCKER, fmt emits NON-COMPILING output; gorget-js snag 15g RESIDUAL, owner-reported 2026-08-10, reproduced + WIDENED same day] The `test "..."` NAME-string re-emitter prints the DECODED name with NO re-escaping — a sibling emit site the R40 escape-form-preservation fix missed (Core #4 drift).** Cells (probe-verified, fresh binary): `test "name with \\xHH escape":` → `test "name with \xHH escape":` → reparse FAILS (`\x requires exactly 2 hex digits` under the R40 strict lexer — gorget-js's fmt'd parser_test.gg stalls at 65/675). WIDER than reported: `test "quote \" and tab \t":` → the `\"` emits as a BARE quote (string structure BROKEN) and `\t` as a literal TAB — ANY escape in a test name corrupts. Regular string literals round-trip correctly (the R40 fix is confirmed at the literal site; `suite` takes identifiers, not strings — no cell there). Fix the CLASS: census the formatter for every name-string/raw-emission site (test names; check bench/snapshot names, directive values, import paths) and route ALL of them through the ONE span-preserving string emitter the literal path uses (producer chokepoint + arm-count guard, Core #4/#6); fixture pairs per escape cell (`\\x` / `\"` / `\t` / `\n` / `\u{…}`) + `fmt_idempotent` + ⚠ a standing REPARSE GATE (fmt output MUST re-parse — this bug is the motivation; the scratch-tree sweep gate subsumes it corpus-wide, the unit gate catches it per-fixture). **Rides the R41 pre-A2 fmt-hardening wave.**
 - **🆕🐛 [MED — R41 PRE-A2, fmt layout destruction; gorget-arena snag #4, owner-reported 2026-08-10, reproduced same day] `gg fmt` flattens a multi-line `"""` string to ONE `\n`-escaped line** — delimiters kept, every physical newline re-emitted as a `\n` escape (probe: a 6-line block → `"""\nvertex float4…\n"""` on one line). Value-preserving (AST identical) but a severe readability regression — arena's ~90-line Metal shader becomes a 4,504-char line. ⚖ RATIFIED (owner; ledger MULTI-LINE STRING LAYOUT entry 2026-08-10): **preserve the physical line layout of multi-line string literals** — span-based original-lexeme preservation at the string emitter's `"""` arm, the SAME mechanism as R40's radix/escape fixes (another sibling of the form-preservation family; census the emitter for any remaining decode-and-re-emit arms while there). In-tree blast radius: 3 files carry `"""` (census 2026-08-10: `grep -rl '"""' tests/fixtures lib examples demo --include="*.gg"`); the dogfood repos are the real victims. Fixture: multi-line string round-trips byte-identical + `fmt_idempotent`. Rides the pre-A2 fmt-hardening wave.

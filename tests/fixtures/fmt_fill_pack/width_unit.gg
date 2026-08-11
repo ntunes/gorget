@@ -1,0 +1,49 @@
+# ==== T-FMT-D (R41) canon-pair matrix — WIDTH-UNIT axis (characters, not bytes).
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte and by `#`
+# column, in `fmt_fill_pack_width_unit_axis`) — a bulk `gg fmt` sweep MUST
+# EXCLUDE it.
+#
+# Every width the formatter computes is a DISPLAY column, so it must be a
+# CHARACTER count. Measuring UTF-8 BYTES inflates every number downstream of a
+# non-ASCII literal. Cells sampled (Core #12 — this file samples the `width
+# unit` axis ONLY):
+#
+#   wu_pack   PACKER width — the elements are 12 characters / 14 bytes each.
+#             Measured in characters the list fits on one line; measured in
+#             bytes it would break spuriously. Pins `measure_flat(Doc::Text)`.
+#   wu_align  ALIGNER width — a LIVE DEFECT before this track: the trailing
+#             comments on a group whose LHS carries multi-byte characters did
+#             NOT line up, because `plan_trailing_aligns` derived `lhs_width` by
+#             subtracting BYTE offsets. Pins that subtraction.
+#   wu_tail   RESUME width — after a multi-line element the packer restarts the
+#             column from that element's LAST line, which here holds multi-byte
+#             literals; the following `bbbb` is then packed against it. Pins the
+#             newline branch of the renderer's column advance.
+#
+# Two cells of this axis have NO source spelling that changes the output, and
+# are pinned as unit tests instead: `Emitter::write_preformatted`'s multi-byte
+# tail (`test_emitter_columns_count_characters_not_bytes` in
+# `src/formatter/mod.rs` — no construct emits a second Doc after a multi-line,
+# multi-byte splice on the same line) and the character-vs-byte RESUME boundary
+# (`test_fill_resumes_from_a_multiline_element_in_characters` in
+# `src/formatter/doc.rs`, which sets the budget so the two units disagree).
+#
+# RED source per row: wu_align is a TRUE pre-fix RED and it is a REAL BUG FIX —
+# pre-fix the three `#` land at character columns 30/32/32 (they only agree in
+# BYTE columns), and the assertion that they share a column fails. NOTE the test
+# helper `hash_col_of` had the SAME byte/character bug and had to be corrected
+# first, or this cell would have read green pre-fix and red post-fix.
+# wu_pack / wu_tail are TRUE pre-fix REDs as well: at MAX_WIDTH=100 both lists
+# explode one element per line.
+void wu_pack():
+    Vector[String] p = ["naïve café", "naïve café", "naïve café", "naïve café", "naïve café", "naïve café", "naïve café"]
+
+void wu_align():
+    String a = "naïve café"  # first
+    String b = "plain ascii"  # second
+    String c = "third"  # third
+    print(a)
+
+void wu_tail():
+    outer(aaaa, inner("naïve café", "naïve café", "naïve café", "naïve café", "naïve café", "naïve café", "naïve café", "naïve café"), bbbb)

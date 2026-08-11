@@ -1,0 +1,35 @@
+# ==== T-FMT-D (R41) fill-pack matrix — LIST KIND = CLOSURE-PARAMETER list.
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
+# `fmt_fill_pack_closure_params_kind`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
+#
+# Emit site: the `Expr::Closure` arm of `format_expr` -> `doc::surround_fill("(", .., ")")`.
+#
+# Axis cell claim (Core #12 — `list kind x fit` for the CLOSURE-PARAM kind ONLY):
+#   cl_empty  empty              `()` — the zero-parameter closure
+#   cl_flat   fits-flat          one line, no trailing comma
+#   cl_fill   needs-fill         greedy packing at the block continuation indent
+#   cl_over   single-over-width  the one closure parameter does not fit on the open
+#                                line, so it breaks to the continuation indent — and
+#                                being wider than the budget it overflows even there
+#
+# NOTE the acknowledged, PRE-EXISTING width blind spot this cell also documents:
+# the `: <body>` tail is written by the emitter AFTER the Doc is rendered, so it
+# is invisible to the packer's fit test and can push the last line past the
+# budget. Same shape as `throws` / `:` after a parameter list.
+#
+# RED source per row: cl_fill / cl_over are TRUE pre-fix REDs (one closure
+# parameter per line with a trailing comma, and `): body` hanging off a bare `)`
+# line). cl_empty / cl_flat are invariant — break-and-restore them by lowering
+# `doc::MAX_WIDTH`.
+void cl_empty():
+    auto e = (): 0
+
+void cl_flat():
+    auto f = (int aaaa, int bbbb, int cccc): aaaa
+
+void cl_fill():
+    auto g = (int aaaaaaaa, int bbbbbbbb, int cccccccc, int dddddddd, int eeeeeeee, int ffffffff, int gggggggg, int hhhhhhhh): aaaaaaaa
+
+void cl_over():
+    auto h = (VeryLongClosureParameterTypeNameForTheOverWidthCell aSingleClosureParameterWhoseWidthExceedsTheWholeLineBudget): 0

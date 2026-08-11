@@ -1,0 +1,27 @@
+# ==== T-FMT-D (R41) fill-pack matrix — LIST KIND = GENERIC-ARGUMENT list.
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
+# `fmt_fill_pack_generic_args_kind`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
+#
+# Emit site: `Formatter::format_generic_args_wrapped` -> `doc::surround_fill("[", .., "]")`.
+#
+# Axis cell claim (Core #12 — `list kind x fit` for the GENERIC-ARG kind ONLY):
+#   ga_flat  fits-flat          one line, no trailing comma
+#   ga_fill  needs-fill         greedy packing at the block continuation indent
+#   ga_over  single-over-width  the one type argument does not fit on the open line,
+#                               so it breaks to the continuation indent — and being
+#                               wider than the budget it overflows even there
+#
+# The EMPTY cell has no spelling here either: `Tuple[]` is a parse error.
+#
+# RED source per row: ga_fill / ga_over are TRUE pre-fix REDs (one type argument
+# per line with a trailing comma and a bare `]`). ga_flat is invariant —
+# break-and-restore it by lowering `doc::MAX_WIDTH`.
+void ga_flat():
+    Tuple[int, int, int] a = ok()
+
+void ga_fill():
+    Tuple[Aaaaaaaaaaaaaaaa, Bbbbbbbbbbbbbbbb, Cccccccccccccccc, Dddddddddddddddd, Eeeeeeeeeeeeeeee, Ffffffffffffffff, Gggggggggggggggg] b = ok()
+
+void ga_over():
+    Tuple[ASingleTypeArgumentNameWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetFormatterEvenAtBlockIndent] c = ok()

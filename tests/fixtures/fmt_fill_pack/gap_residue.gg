@@ -1,0 +1,58 @@
+# ==== T-FMT-D (R41) canon-pair matrix — TRAILING-COMMENT GAP axis.
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT (the `#` columns, in
+# `fmt_fill_pack_gap_residue_axis`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
+#
+# The aligned column is `round_up_to_stride(max_lhs + TRAILING_COMMENT_GAP)`
+# with STRIDE = 4, so the gap the WIDEST line ends up with depends on
+# `max_lhs mod 4`. All four residues, plus the three non-group shapes:
+#
+#   gr0  max_lhs = 12  (residue 0)  col = 16, widest line's gap = 4
+#   gr1  max_lhs = 13  (residue 1)  col = 20, widest line's gap = 7
+#   gr2  max_lhs = 14  (residue 2)  col = 20, widest line's gap = 6
+#   gr3  max_lhs = 15  (residue 3)  col = 20, widest line's gap = 5
+#   grLone   a single trailing comment — never grouped, sits at exactly GAP
+#   grAnchor a group of exactly TWO — the smallest run that aligns at all
+#   grHeader a container-header comment — never joins its body group
+#
+# RED source per row — MEASURED, not assumed. Going from GAP 2 to GAP 4 moves a
+# group's column only when `round_up_4(max_lhs+2) != round_up_4(max_lhs+4)`,
+# which holds for residues 1 and 2 and FAILS for residues 0 and 3:
+#   gr1 (16 -> 20) and gr2 (16 -> 20) are TRUE pre-fix REDs.
+#   gr0 and gr3 are INVARIANT under the canon change by construction, and so is
+#     grAnchor (max_lhs 15, residue 3). Their red is break-and-restore: set
+#     `TRAILING_COMMENT_GAP` to 8 and every asserted column moves.
+#   grLone and grHeader are TRUE pre-fix REDs — an ungrouped comment sits at
+#     exactly GAP, so it moves 2 -> 4.
+int gr0():
+    int abcd = 1  # r0 widest
+    int a = 1  # r0 short
+    return 0
+
+int gr1():
+    int abcde = 1  # r1 widest
+    int a = 1  # r1 short
+    return 0
+
+int gr2():
+    int abcdef = 1  # r2 widest
+    int a = 1  # r2 short
+    return 0
+
+int gr3():
+    int abcdefg = 1  # r3 widest
+    int a = 1  # r3 short
+    return 0
+
+int grLone():
+    int solo = 1  # lone
+    return 0
+
+int grAnchor():
+    int aa = 1  # anchor one
+    int bbbbbbb = 2  # anchor two
+    return 0
+
+struct GrHeaderContainer:  # header
+    int field  # body one
+    int f2  # body two

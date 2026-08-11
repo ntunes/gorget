@@ -1,15 +1,22 @@
-# R40 trailing-comment aligner — BUDGET GUARD (owner 2026-08-10). When the
-# aligned column would push a comment's END past MAX_WIDTH=100, the widest-LHS
-# / self-overflowing contributors are EXCLUDED (kept at the natural 2-space gap)
-# and the remaining lines align as if the outliers weren't there. The exclusion
-# ITERATES when more than one line overflows.
+# Trailing-comment aligner — BUDGET GUARD. When the aligned column would push a
+# comment's END past `MAX_WIDTH`, the widest-LHS / self-overflowing contributors
+# are EXCLUDED (kept at the natural `TRAILING_COMMENT_GAP`) and the remaining
+# lines align as if the outliers weren't there. The exclusion ITERATES when more
+# than one line overflows.
+#
+# The outlier LHS widths are DERIVED from the budget, not decorative: the guard
+# fires only when `indent + round_up_to_stride(max_lhs + GAP) + comment_len`
+# exceeds `MAX_WIDTH` STRICTLY. At MAX_WIDTH 120 / GAP 4 that needs an LHS of 92
+# here (4 + 96 + 40 = 140), where 72 sufficed at MAX_WIDTH 100 / GAP 2. Each
+# outlier keeps the same overflow MARGIN it was authored with, so the guard is
+# exercised at the same distance from the boundary as before.
 #
 # RED-verify (#15d): disabling `align_trailing_comments` collapses everything to
-# the 2-space gap, so the "short lines share a stride-4 column" assertions fail.
+# the natural gap, so the "short lines share a stride-4 column" assertions fail.
 
 # Single outlier: one huge LHS is dropped; the two short lines align without it.
 int budget_single():
-    int wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww = 1  # BJ-outlier padded to overflow the line
+    int wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww = 1  # BJ-outlier padded to overflow the line
     int s1 = 1  # BJ1 short
     int longer = 2  # BJ2 short
     return 0
@@ -17,8 +24,8 @@ int budget_single():
 # Two outliers: the exclusion iterates — both huge LHS lines drop out, the two
 # short lines align.
 int budget_iterate():
-    int qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq = 1  # BK-out1 padded to overflow the line
-    int rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr = 2  # BK-out2 padded to overflow the line
+    int qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq = 1  # BK-out1 padded to overflow the line
+    int rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr = 2  # BK-out2 padded to overflow the line
     int t1 = 1  # BK1 short
     int t2 = 22  # BK2 short
     return 0

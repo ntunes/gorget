@@ -1,0 +1,32 @@
+# ==== T-FMT-D (R41) fill-pack matrix — WIDTH-BOUNDARY axis.
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
+# `fmt_fill_pack_width_boundary_axis`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
+#
+# Every row is SUFFIX-FREE (a vardecl, so nothing is emitted after the closing
+# bracket on that line) and uses FLAT SCALAR elements, so the asserted column is
+# exactly the packer's arithmetic with no pre-render or caller-suffix noise.
+#
+# Cells sampled (Core #12 — this file samples the `width boundary` axis ONLY;
+# `MAX_WIDTH` is 120):
+#   wb119   flat width 119  <  budget  => one line
+#   wb120   flat width 120  == budget  => one line (the boundary is INCLUSIVE)
+#   wb121   flat width 121  >  budget  => the last element that does not fit
+#                                         breaks to the continuation indent
+#   wbline  LINE-INITIAL list: the statement IS the list, so the Doc render
+#           starts with the indentation still unwritten. Its true flat width is
+#           124; measured from a raw `col` of 0 it looks like 120 and would be
+#           emitted flat, four columns over budget. This row pins
+#           `Emitter::current_col()`.
+#
+# RED source per row: wb119 / wb120 / wb121 are TRUE pre-fix REDs — at
+# MAX_WIDTH=100 all three break, and one-per-line at that. wbline is a TRUE
+# pre-fix RED for a second, independent reason: revert `write_doc` to pass
+# `self.emitter.col` and it is emitted as a single 124-column line.
+void wb():
+    Vector[int] wb119 = [11111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 121212, 131313]
+    Vector[int] wb120 = [111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 121212, 131313]
+    Vector[int] wb121 = [1111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 121212, 131313]
+
+void wbline():
+    [111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 121212, 131313, 141414, 151515, 161616]

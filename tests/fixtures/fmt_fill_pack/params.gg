@@ -1,0 +1,39 @@
+# ==== T-FMT-D (R41) fill-pack matrix — LIST KIND = function PARAMETER list.
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT. Its wired test
+# (`fmt_fill_pack_params_kind`) compares the formatted text byte-for-byte, so a
+# bulk `gg fmt` sweep MUST EXCLUDE it — sweeping rewrites the input into its own
+# expected output and makes the assertion tautological.
+#
+# Emit site: `Formatter::format_params_wrapped` -> `doc::surround_fill("(", .., ")")`.
+#
+# Axis cell claim (Core #12 — this file samples the `list kind x fit` axis for
+# the PARAMETER-list kind ONLY; the eight sibling kinds have their own files):
+#   p_empty  empty              `()` — no `Fill` node is built at all
+#   p_flat   fits-flat          flat width <= MAX_WIDTH  => one line, no trailing comma
+#   p_fill   needs-fill         flat width >  MAX_WIDTH  => greedy packing, continuation
+#                               lines at the BLOCK indent (outer+1)*4, NO trailing comma
+#   p_over   single-over-width  the ONE element does not fit on the open-delimiter
+#                               line, so it breaks to the continuation indent — and
+#                               being wider than the budget it overflows even there.
+#                               That overflowing line is the SINGLE documented
+#                               exception to the per-line width property.
+#
+# RED source per row: p_fill / p_over are TRUE pre-fix REDs (the pre-fix
+# formatter explodes one element per line WITH a trailing comma and a bare `)`
+# line, so every asserted line differs). p_empty / p_flat are invariant under
+# the change, so their red is BREAK-AND-RESTORE: flip
+# `format_params_wrapped`'s `doc::surround_fill(..)` back to
+# `doc::surround("(", items, ")", true)` and the whole assertion still passes
+# for them — instead set `doc::MAX_WIDTH` to 20 and they explode too.
+int p_empty():
+    return 1
+
+int p_flat(int aaaa, int bbbb, int cccc):
+    return aaaa
+
+int p_fill(int aaaaaaaa, int bbbbbbbb, int cccccccc, int dddddddd, int eeeeeeee, int ffffffff, int gggggggg, int hhhhhhhh, int iiiiiiii, int jjjjjjjj):
+    return aaaaaaaa
+
+int p_over(VeryLongParameterTypeNameForTheSingleOverWidthFillPackCell aSingleParameterWhoseRenderedWidthExceedsTheWholeLineBudget):
+    return 0

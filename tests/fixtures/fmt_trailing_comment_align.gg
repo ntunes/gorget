@@ -7,7 +7,7 @@
 # RED-verify (#15d): the alignment mechanism is `align_trailing_comments` in
 # `src/formatter/mod.rs`. Disable it (early-return before `plan_trailing_aligns`)
 # and every group assertion below FAILS (all `#` collapse to the natural
-# 2-space gap). Confirmed misaligned pre-restore during authoring.
+# TRAILING_COMMENT_GAP). Confirmed misaligned pre-restore during authoring.
 
 # Group A — struct fields, varying LHS -> shared stride-4 column.
 struct SA:

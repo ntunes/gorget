@@ -13,8 +13,7 @@ kept formatted.
 > the author's inline-vs-next-line suite choice is preserved SYMMETRICALLY;
 > synonym spellings (`byte`/`uint8`, set-literal/vector, `await` forms,
 > `public`, …) are never rewritten by `gg fmt` — construct canonicalization, if
-> ever wanted, is `gg fix` territory. Width becomes 120 with fill-pack
-> wrapping; the trailing-comment gap becomes 4. This appendix is rewritten by
+> ever wanted, is `gg fix` territory. This appendix is rewritten by
 > the R41 formatter-hardening tracks as their write-through; until then it
 > describes shipped behavior. Normative record:
 > `docs/define-gorget/decisions.md` (the FMT FORM-PRESERVATION TRIO entry and
@@ -54,23 +53,59 @@ between two comments, is a deliberate break and is kept.
 Where the language accepts more than one spelling of a construct, the formatter
 emits the canonical one — for example `elif` rather than `else if`.
 
-## Comments
+### Line width and wrapping
 
-A **trailing comment** stays attached to the line it annotates:
+Lines are budgeted at **120 columns** — counted in characters, so accented
+letters and emoji cost one column each, not one per byte.
+
+A list that fits stays on one line. A list that doesn't is **packed**: the
+formatter fills each line up to the budget and then wraps, rather than exploding
+every element onto a line of its own. Continuation lines are indented one level
+in from the line the list started on, and the closing bracket follows the last
+element:
 
 ```gorget
-static int width = 80  # characters per line
+void draw_text_atlas(GpuContext &ctx, FontAtlas font, String text, float x, float y, float char_size, float r, float g,
+    float b, float a):
+    pass
+```
+
+This applies to every horizontally-broken list: parameter lists, call arguments,
+generic parameters and arguments, closure parameters, array, tuple and
+dictionary literals, and grouped imports.
+
+A packed list carries **no trailing comma** — the closing bracket is right after
+the last element, so there is nowhere for one to sit. The exception is a list
+whose elements carry comments: comments belong to the lines they annotate, so
+such a list falls back to one element per line, *with* a trailing comma and a
+closing bracket on its own line. Those two shapes are the whole vocabulary; you
+never have to choose between them.
+
+One element can be wider than the whole budget — a long qualified name, a deeply
+generic type. The formatter puts it on its own continuation line and lets it
+overrun rather than breaking it somewhere meaningless. That is the only case
+where a formatted line exceeds 120 columns.
+
+## Comments
+
+A **trailing comment** stays attached to the line it annotates, four spaces
+after the code:
+
+```gorget
+static int width = 80    # characters per line
 ```
 
 Within a contiguous run of lines that *each* carry a trailing comment — struct
 fields, enum variants, or a block of consecutive statements — the comments are
-aligned to a common column so they read as a table:
+aligned to a common column so they read as a table. The column is the first
+multiple of four that leaves at least that four-space gap after the longest line
+in the run:
 
 ```gorget
 struct Camera:
-    Vec3 position   # world-space eye point
-    Vec3 forward    # unit view direction
-    float fov       # vertical field of view, radians
+    Vec3 position       # world-space eye point
+    Vec3 forward        # unit view direction
+    float fov           # vertical field of view, radians
 ```
 
 The run is broken by any line without a trailing comment (and by a blank line),
