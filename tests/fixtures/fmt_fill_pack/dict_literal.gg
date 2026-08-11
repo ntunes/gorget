@@ -1,0 +1,29 @@
+# ==== T-FMT-D (R41) fill-pack matrix — LIST KIND = DICT literal.
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
+# `fmt_fill_pack_dict_literal_kind`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
+#
+# Emit site: the `Expr::DictLiteral` arm of `format_expr` ->
+# `doc::surround_fill("{", .., "}")`.
+#
+# Axis cell claim (Core #12 — `list kind x fit` for the DICT-LITERAL kind ONLY):
+#   di_empty  empty              `{}`
+#   di_flat   fits-flat          one line, no trailing comma
+#   di_fill   needs-fill         greedy packing at the block continuation indent
+#   di_over   single-over-width  the one `key: value` pair does not fit on the open
+#                                line, so it breaks to the continuation indent, alone
+#
+# RED source per row: di_fill / di_over are TRUE pre-fix REDs (one pair per line
+# with a trailing comma and a bare `}`). di_empty / di_flat are invariant —
+# break-and-restore them by lowering `doc::MAX_WIDTH`.
+void di_empty():
+    Dict[int, int] z = {}
+
+void di_flat():
+    Dict[int, int] a = {111111: 1, 222222: 2, 333333: 3}
+
+void di_fill():
+    Dict[int, int] b = {111111: 1, 222222: 2, 333333: 3, 444444: 4, 555555: 5, 666666: 6, 777777: 7, 888888: 8, 999999: 9}
+
+void di_over():
+    Dict[int, int] c = {aSingleDictKeyIdentifierWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetFmtter: 1}

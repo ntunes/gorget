@@ -9765,7 +9765,7 @@ fn fmt_binary_chain_round_trips() {
     // extension of the parse+idempotence guard.
     let long_default_op_src = format!(
         "int test(Option[int] a):\n    int r = a ?? {}\n    print(r)\n\nint main(): 0\n",
-        // Long integer default expression forces the RHS past 100 cols.
+        // Long integer default expression forces the RHS past the line budget.
         (0..40).map(|i| format!("{i}")).collect::<Vec<_>>().join(" + "),
     );
     assert_fmt_round_trips("long_default_op", &long_default_op_src);
@@ -10035,28 +10035,53 @@ fn fmt_radix_preserved() {
         );
     }
 
-    // The collection literal must ACTUALLY break multi-line (each element on
-    // its own line at indent 2) so the sub-formatter (`element_to_string`)
-    // path is exercised — otherwise the `0x000B` check would pass via the flat
-    // path and never touch the empty-source axis hole (edge case #1).
+    // The collection literal must ACTUALLY break multi-line so the
+    // sub-formatter (`element_to_string`) path is exercised on the BROKEN
+    // side — otherwise the `0x000B` check would pass via the flat path and
+    // never touch the empty-source axis hole (edge case #1).
+    //
+    // R41 T-FMT-D: broken lists are fill-PACKED now, so an element no longer
+    // gets a line to itself. The check is therefore "the literal spans more
+    // than one line, and the element that was pushed onto a continuation line
+    // still carries its radix" — which is the property that was ever meant,
+    // stated without assuming the one-element-per-line shape.
+    let arr_line = formatted
+        .lines()
+        .find(|l| l.contains("Vector[int] arr"))
+        .expect("the arr vardecl is missing from the formatted output");
+    let after_open = arr_line
+        .split_once("= [")
+        .expect("the arr vardecl has no literal")
+        .1;
     assert!(
-        formatted.contains("\n        0x000B,\n"),
+        !after_open.contains(']'),
         "expected the collection literal to break multi-line so the \
          sub-formatter path is exercised.\n=== formatted ===\n{formatted}"
+    );
+    let continuation = formatted
+        .lines()
+        .skip_while(|l| !l.contains("Vector[int] arr"))
+        .nth(1)
+        .expect("the literal has no continuation line");
+    assert!(
+        continuation.trim_start().starts_with("0x"),
+        "the element pushed onto the continuation line must keep its radix \
+         (the empty-source sub-formatter would revert it to decimal).\n\
+         continuation: {continuation:?}\n=== formatted ===\n{formatted}"
     );
 }
 
 /// R40 Track D output-review (F1), FIXED in R41 T-FMT-A: `gg fmt` preserves a
 /// COMMENT-ONLY file (a source with no items) byte-for-byte.
 ///
-/// The corruption was: the first comment gained a spurious 2-space indent and,
+/// The corruption was: the first comment gained a spurious leading gap and,
 /// with >=2 comments, the first two were GLUED (the line break dropped) —
 /// `# a\n# b\n` -> `  # a# b`. Root cause was the SENTINEL return of
 /// `Formatter::last_real_content_before`, which answered `0` both for "content
 /// ends at byte 0" and for "there is no content at all". In a file with no
 /// items, `format`'s EOF hook took the latter for the former, decided the
 /// file's FIRST comment was a *trailing* comment on a node that had never been
-/// emitted, and injected it with the inline two-space gap into an empty
+/// emitted, and injected it with the inline trailing-comment gap into an empty
 /// buffer. The fix makes the empty case a distinct TYPE (`Option<usize>`), so
 /// the trailing hook cannot fire before any content exists.
 ///
@@ -14368,30 +14393,38 @@ fn fmt_trailing_comment_axis_source_runs() {
     );
 }
 
-/// R40 trailing-comment ALIGNMENT (owner-directed 2026-08-10) — byte column
-/// (0-based) of the FIRST `#` on the formatted line that carries `sentinel`.
-/// Panics if the sentinel is absent (a dropped/detached comment).
+/// Trailing-comment ALIGNMENT — CHARACTER column (0-based) of the FIRST `#` on
+/// the formatted line that carries `sentinel`. Panics if the sentinel is absent
+/// (a dropped/detached comment).
+///
+/// R41 T-FMT-D: this used to return `line.find('#')`, a BYTE offset. Alignment
+/// is a DISPLAY property, so on a line whose left-hand side holds non-ASCII text
+/// the byte offset is not the column — and a group that is visibly ragged reads
+/// as aligned. The instrument has to measure the same unit the formatter does,
+/// or it cannot see the failure class (Core #13). Behaviour-neutral for the
+/// all-ASCII fixtures; load-bearing for `fmt_fill_pack/width_unit.gg`.
 fn hash_col_of(formatted: &str, sentinel: &str) -> usize {
     let line = formatted
         .lines()
         .find(|l| l.contains(sentinel))
         .unwrap_or_else(|| {
             panic!(
-                "R40 align: sentinel `{sentinel}` missing from formatted output \
+                "align: sentinel `{sentinel}` missing from formatted output \
                  (comment dropped or detached).\n=== Formatted ===\n{formatted}"
             )
         });
-    line.find('#')
-        .unwrap_or_else(|| panic!("R40 align: no `#` on line for `{sentinel}`: {line:?}"))
+    line.chars()
+        .position(|c| c == '#')
+        .unwrap_or_else(|| panic!("align: no `#` on line for `{sentinel}`: {line:?}"))
 }
 
-/// R40 owner-directed trailing-comment aligner: a contiguous run of ≥2
-/// stmt-lines that each carry a trailing comment aligns its `#` to a common
-/// `next_multiple_of(STRIDE=4, max_lhs + MIN_GAP=2)` column, keyed on TYPED
-/// recorded metadata (never a `#` text-search). This pins the group / break /
-/// header / multi-comment axes. RED-verify: disabling `align_trailing_comments`
-/// in `src/formatter/mod.rs` collapses every group to the natural 2-space gap,
-/// so every `assert_eq!` on a shared column below fails.
+/// Owner-directed trailing-comment aligner: a contiguous run of >=2 stmt-lines
+/// that each carry a trailing comment aligns its `#` to a common
+/// `next_multiple_of(STRIDE=4, max_lhs + TRAILING_COMMENT_GAP=4)` column, keyed
+/// on TYPED recorded metadata (never a `#` text-search). This pins the group /
+/// break / header / multi-comment axes. RED-verify: disabling
+/// `align_trailing_comments` in `src/formatter/mod.rs` collapses every group to
+/// the natural gap, so every `assert_eq!` on a shared column below fails.
 #[test]
 fn fmt_trailing_comment_align_columns() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -14400,40 +14433,44 @@ fn fmt_trailing_comment_align_columns() {
         .expect("read fmt_trailing_comment_align.gg");
     let f = gorget::formatter::format_source_infallible(&source);
 
-    // Group A — struct fields (LHS 5,5,9 → align_col 12, +indent 4 = col 16).
-    assert_eq!(hash_col_of(&f, "# A1"), 16, "struct-field group col");
-    assert_eq!(hash_col_of(&f, "# A2"), 16);
-    assert_eq!(hash_col_of(&f, "# A3"), 16);
-    // Group B — enum variants (LHS 3,8,1 → align_col 12, col 16).
+    // Every column below is `indent + round_up_to_stride(max_lhs + GAP)` with
+    // STRIDE = 4 and GAP = TRAILING_COMMENT_GAP = 4.
+    // Group A — struct fields (LHS 5,5,9 → align_col 16, +indent 4 = col 20).
+    assert_eq!(hash_col_of(&f, "# A1"), 20, "struct-field group col");
+    assert_eq!(hash_col_of(&f, "# A2"), 20);
+    assert_eq!(hash_col_of(&f, "# A3"), 20);
+    // Group B — enum variants (LHS 3,8,1 → align_col 12, col 16). This group is
+    // INVARIANT under the gap change: max_lhs 8 is a multiple of STRIDE, and
+    // round_up_4(8+2) == round_up_4(8+4).
     assert_eq!(hash_col_of(&f, "# B1"), 16, "enum-variant group col");
     assert_eq!(hash_col_of(&f, "# B2"), 16);
     assert_eq!(hash_col_of(&f, "# B3"), 16);
-    // Group C — vardecls (LHS 10,14,9 → align_col 16, col 20).
-    assert_eq!(hash_col_of(&f, "# C1"), 20, "vardecl group col");
-    assert_eq!(hash_col_of(&f, "# C2"), 20);
-    assert_eq!(hash_col_of(&f, "# C3"), 20);
+    // Group C — vardecls (LHS 10,14,9 → align_col 20, col 24).
+    assert_eq!(hash_col_of(&f, "# C1"), 24, "vardecl group col");
+    assert_eq!(hash_col_of(&f, "# C2"), 24);
+    assert_eq!(hash_col_of(&f, "# C3"), 24);
     // All aligned columns land on the stride-4 grid.
-    for c in [16usize, 20] {
+    for c in [16usize, 20, 24] {
         assert_eq!(c % 4, 0, "aligned column must be a multiple of STRIDE=4");
     }
 
     // Header-vs-body D — the `struct SD:  # D0` HEADER comment (col 12) does
     // NOT join the field group (D1/D2 at col 16). Header stays at natural gap.
-    assert_eq!(hash_col_of(&f, "# D0"), 12, "struct header comment natural gap");
-    assert_eq!(hash_col_of(&f, "# D1"), 16, "struct-D field group col");
-    assert_eq!(hash_col_of(&f, "# D2"), 16);
+    assert_eq!(hash_col_of(&f, "# D0"), 14, "struct header comment natural gap");
+    assert_eq!(hash_col_of(&f, "# D1"), 20, "struct-D field group col");
+    assert_eq!(hash_col_of(&f, "# D2"), 20);
     assert_ne!(
         hash_col_of(&f, "# D0"),
         hash_col_of(&f, "# D1"),
         "header comment must NOT align into its field group"
     );
 
-    // Header-vs-body E — a same-indent body stmt (`int xxxxxx = 5  # E1`, col
-    // 20) immediately followed by a block-header stmt (`if x > 0:  # E2`, col
-    // 15) must NOT group; both keep their natural 2-space gap at DIFFERENT
-    // columns (the `is_header` discriminator).
-    assert_eq!(hash_col_of(&f, "# E1"), 20, "body stmt natural gap");
-    assert_eq!(hash_col_of(&f, "# E2"), 15, "block-header stmt natural gap");
+    // Header-vs-body E — a same-indent body stmt (`int xxxxxx = 5`, LHS 14)
+    // immediately followed by a block-header stmt (`if x > 0:`, LHS 9) must NOT
+    // group; both keep their natural gap at DIFFERENT columns (the `is_header`
+    // discriminator), i.e. indent 4 + LHS + GAP.
+    assert_eq!(hash_col_of(&f, "# E1"), 22, "body stmt natural gap");
+    assert_eq!(hash_col_of(&f, "# E2"), 17, "block-header stmt natural gap");
     assert_ne!(
         hash_col_of(&f, "# E1"),
         hash_col_of(&f, "# E2"),
@@ -14441,11 +14478,11 @@ fn fmt_trailing_comment_align_columns() {
     );
 
     // Group-break F/G/H — a non-commented line / blank / standalone-comment
-    // line splits the run; F1/G1/H1 (LHS 8, col 14) and F2/G2/H2 (LHS 5, col
-    // 11) stay ungrouped at DIFFERENT natural columns.
+    // line splits the run; F1/G1/H1 (LHS 8, col 16) and F2/G2/H2 (LHS 5, col
+    // 13) stay ungrouped at DIFFERENT natural columns.
     for (a, b) in [("# F1", "# F2"), ("# G1", "# G2"), ("# H1", "# H2")] {
-        assert_eq!(hash_col_of(&f, a), 14, "{a} natural gap");
-        assert_eq!(hash_col_of(&f, b), 11, "{b} natural gap");
+        assert_eq!(hash_col_of(&f, a), 16, "{a} natural gap");
+        assert_eq!(hash_col_of(&f, b), 13, "{b} natural gap");
         assert_ne!(
             hash_col_of(&f, a),
             hash_col_of(&f, b),
@@ -14453,8 +14490,12 @@ fn fmt_trailing_comment_align_columns() {
         );
     }
 
-    // Multi-comment I — `int m = 1  # I1a  # I1b`: only the FIRST `#` aligns
-    // (col 20, shared with `# I2`); the second `#` keeps its natural gap.
+    // Multi-comment I — `int m = 1  # I1a  # I1b`. A `#` comment runs to end of
+    // line, so this is ONE comment token whose TEXT contains a second `#`
+    // (`gg lex` reports `Comment("# I1a  # I1b")`). Only the leading `#` is a
+    // formatter-owned column; everything after it is the author's text and is
+    // reproduced verbatim. The group is INVARIANT under the gap change
+    // (max_lhs 11 = 3 mod STRIDE), so col 20 both before and after.
     assert_eq!(hash_col_of(&f, "# I1a"), 20, "multi-comment first # aligns");
     assert_eq!(hash_col_of(&f, "# I2"), 20);
     let i_line = f.lines().find(|l| l.contains("# I1a")).unwrap();
@@ -14462,10 +14503,12 @@ fn fmt_trailing_comment_align_columns() {
         i_line.contains("# I1a") && i_line.contains("# I1b"),
         "both comments stay on the same line: {i_line:?}"
     );
-    // The SECOND `#` sits at its natural 2-space gap right after `# I1a`.
+    // The spacing INSIDE the comment is the author's and never moves — the
+    // canon gap applies only to the gap between the code and the leading `#`.
     assert!(
         i_line.contains("# I1a  # I1b"),
-        "only the first `#` is realigned; the second keeps its 2-space gap: {i_line:?}"
+        "the author's spacing inside a comment must be reproduced verbatim; \
+         only the leading `#` is realigned: {i_line:?}"
     );
 
     // Idempotency — the plan is a pure function of stable LHS/comment widths.
@@ -14473,12 +14516,12 @@ fn fmt_trailing_comment_align_columns() {
     assert_eq!(f, f2, "R40 aligner not idempotent");
 }
 
-/// R40 aligner BUDGET GUARD — a comment whose END column would exceed
-/// MAX_WIDTH=100 forces the widest-LHS / self-overflowing lines to be EXCLUDED
-/// (kept at the natural 2-space gap) so the rest align without them; the
-/// exclusion ITERATES for multiple outliers. RED-verify: disabling the aligner
-/// drops the short lines back to a 2-space gap, so the shared-column asserts
-/// fail; and every emitted line stays a legal parse (build-and-run below).
+/// Aligner BUDGET GUARD — a comment whose END column would exceed `MAX_WIDTH`
+/// forces the widest-LHS / self-overflowing lines to be EXCLUDED (kept at the
+/// natural gap) so the rest align without them; the exclusion ITERATES for
+/// multiple outliers. RED-verify: disabling the aligner drops the short lines
+/// back to the natural gap, so the shared-column asserts fail; and every
+/// emitted line stays a legal parse (build-and-run below).
 #[test]
 fn fmt_trailing_comment_align_budget_guard() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -14492,11 +14535,13 @@ fn fmt_trailing_comment_align_budget_guard() {
     // gap (col 78), while the two short lines align WITHOUT it (col 20). The
     // aligned column is far LEFT of the outlier's, proving it left the max calc
     // (were it included, all three would sit near col 80 and overflow).
+    // Columns re-derived at GAP 4: the survivors are `int s1 = 1` (LHS 10) and
+    // `int longer = 2` (LHS 14), so 4 + round_up_4(14 + 4) = 24.
     let out1 = hash_col_of(&f, "# BJ-outlier");
     let bj1 = hash_col_of(&f, "# BJ1");
     let bj2 = hash_col_of(&f, "# BJ2");
-    assert_eq!(bj1, 20, "budget: surviving short lines align at col 20");
-    assert_eq!(bj2, 20);
+    assert_eq!(bj1, 24, "budget: surviving short lines align at col 24");
+    assert_eq!(bj2, 24);
     assert!(
         bj1 < out1,
         "budget: excluded outlier (#{out1}) must NOT inflate the group column (#{bj1})"
@@ -14504,6 +14549,9 @@ fn fmt_trailing_comment_align_budget_guard() {
 
     // Two outliers — the exclusion ITERATES: BOTH huge LHS lines drop out (at
     // their own natural columns 78 and 70) and the two short lines align.
+    // Survivors here are `int t1 = 1` (LHS 10) and `int t2 = 22` (LHS 11), so
+    // 4 + round_up_4(11 + 4) = 20 — this group is INVARIANT under the gap
+    // change (max_lhs 11 = 3 mod STRIDE), unlike the BJ group above.
     let ko1 = hash_col_of(&f, "# BK-out1");
     let ko2 = hash_col_of(&f, "# BK-out2");
     let bk1 = hash_col_of(&f, "# BK1");
@@ -15133,12 +15181,14 @@ fn fmt_multiline_arg_indent_pins_continuation_column() {
     // continuation at column 4 (4-space indent = the pre-FMT-B bug where
     // element_to_string's fresh sub-Emitter at indent=0 emitted internal
     // newlines at level-1 indent regardless of caller context).
+    let mut checked = 0usize;
     for line in formatted.lines() {
         let leading_spaces = line.chars().take_while(|c| *c == ' ').count();
         let trimmed = line.trim_start();
         if trimmed.starts_with("+ backend")
             || trimmed.starts_with("+ \"")
         {
+            checked += 1;
             assert!(
                 leading_spaces >= 8,
                 "FMT-B regression: continuation line has {} leading spaces \
@@ -15148,6 +15198,608 @@ fn fmt_multiline_arg_indent_pins_continuation_column() {
             );
         }
     }
+    // VACUITY GUARD (R41 T-FMT-D): the loop above asserts nothing unless the
+    // chain actually breaks. When `MAX_WIDTH` rose to 120 the fixture's message
+    // began fitting on one line and this test went silently, permanently green.
+    // Any future width change must GROW the fixture, not coast on an empty loop.
+    assert!(
+        checked >= 2,
+        "vacuous pin: the binary chain did not break, so the continuation-column \
+         assertion never ran. GROW `tests/fixtures/fmt_multiline_arg_indent.gg` \
+         past the current MAX_WIDTH.\n=== Formatted ===\n{formatted}"
+    );
+}
+
+// ── R41 T-FMT-D: fill-pack + canon pair (width 120, comment gap 4) ──
+//
+// The matrix lives in `tests/fixtures/fmt_fill_pack/`; each file's header
+// states which CELL of which axis it samples and where its RED comes from.
+// Every test here asserts the EXACT canonical output, so a bulk `gg fmt` sweep
+// must exclude the whole directory.
+
+/// The canonical line-width budget, mirrored from `src/formatter/doc.rs`.
+/// Not imported: the point is to pin the number the fixtures were derived at,
+/// so a change to `MAX_WIDTH` reds these tests instead of silently sliding
+/// their expectations along with it.
+const FILL_PACK_MAX_WIDTH: usize = 120;
+
+/// Format a fill-pack fixture and return everything from its first line of
+/// CODE onward (the fixture headers are long and document the cells; they are
+/// not the subject of the assertion).
+fn fill_pack_body(name: &str) -> String {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_fill_pack").join(name);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read fmt_fill_pack/{name}: {e}"));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let body_start = formatted
+        .lines()
+        .position(|l| !l.starts_with('#') && !l.trim().is_empty())
+        .unwrap_or_else(|| panic!("fmt_fill_pack/{name} has no code lines"));
+    let mut body: String = formatted
+        .lines()
+        .skip(body_start)
+        .collect::<Vec<_>>()
+        .join("\n");
+    body.push('\n');
+    body
+}
+
+/// No emitted line exceeds the budget, EXCEPT the lines named in
+/// `allowed_overflow` — each of which must be a single element that cannot fit
+/// alone at its continuation indent. Widths are CHARACTER counts, because the
+/// budget is a display property.
+fn assert_fill_pack_width(name: &str, body: &str, allowed_overflow: &[&str]) {
+    for line in body.lines() {
+        let width = line.chars().count();
+        if width <= FILL_PACK_MAX_WIDTH {
+            continue;
+        }
+        let excused = allowed_overflow.iter().any(|frag| line.contains(frag));
+        assert!(
+            excused,
+            "fmt_fill_pack/{name}: line is {width} columns, over the {FILL_PACK_MAX_WIDTH} \
+             budget, and is not one of the documented single-element exceptions.\n{line}"
+        );
+        // An excused line must hold exactly ONE element at the continuation
+        // indent — otherwise it is a packing bug wearing an exception's coat.
+        let trimmed = line.trim_start();
+        assert!(
+            !trimmed.contains(", "),
+            "fmt_fill_pack/{name}: an over-budget line may hold only a SINGLE element, \
+             but this one packs several.\n{line}"
+        );
+    }
+}
+
+/// Greedy maximality: wherever the packer broke, the first element of the
+/// continuation line must NOT have fitted on the line above.
+///
+/// Reconstructs the packer's own arithmetic from the OUTPUT alone — the check
+/// is independent of the implementation, so a packer that broke one element
+/// early (the classic off-by-one in a fill) fails here even though every line
+/// is within budget. Only valid for fill-broken lists of flat scalar elements;
+/// the comment-broken shape is one-per-line BY DESIGN and is excluded.
+fn assert_fill_pack_greedy(name: &str, body: &str) {
+    let lines: Vec<&str> = body.lines().collect();
+    for i in 0..lines.len().saturating_sub(1) {
+        let prev = lines[i];
+        let next = lines[i + 1];
+        let prev_trimmed = prev.trim_end();
+        // A break the packer made shows up as a line ending in the separating
+        // comma, or in the open delimiter when even the FIRST element had to
+        // move down.
+        let is_break = prev_trimmed.ends_with(',')
+            || prev_trimmed.ends_with('(')
+            || prev_trimmed.ends_with('[')
+            || prev_trimmed.ends_with('{');
+        if !is_break {
+            continue;
+        }
+        // The continuation must be indented deeper than the line it came from.
+        let prev_indent = prev.chars().take_while(|c| *c == ' ').count();
+        let next_indent = next.chars().take_while(|c| *c == ' ').count();
+        if next_indent <= prev_indent {
+            continue;
+        }
+        // First element on the continuation line: everything before whichever
+        // comes first — the `", "` separator or the list's closing delimiter.
+        // (Stopping at the close also drops any caller-emitted suffix such as
+        // `] b = ok()` or `):`, which is not part of the list.)
+        let rest = next.trim_start();
+        let cut = [", ", ")", "]", "}"]
+            .iter()
+            .filter_map(|p| rest.find(p))
+            .min()
+            .unwrap_or(rest.len());
+        let first_elem = &rest[..cut];
+        // What placing it on `prev` would have cost: the text already there
+        // (minus the comma the break wrote), `", "`, the element, and a
+        // one-character terminator — a comma, or a closing delimiter.
+        let prev_cols = prev_trimmed.chars().count();
+        let lead = if prev_trimmed.ends_with(',') { 1 } else { 0 };
+        let needed = prev_cols - lead + 2 * lead + first_elem.chars().count() + 1;
+        assert!(
+            needed > FILL_PACK_MAX_WIDTH,
+            "fmt_fill_pack/{name}: the packer broke early — `{first_elem}` would have \
+             fitted on the previous line at {needed} columns (budget {FILL_PACK_MAX_WIDTH}).\n\
+             prev: {prev}\nnext: {next}"
+        );
+    }
+}
+
+/// The whole fill-pack contract for one fixture: exact canonical output, no
+/// line over budget bar the named exceptions, greedy packing, and a clean
+/// re-parse + idempotent second pass.
+fn assert_fill_pack(name: &str, expected: &str, allowed_overflow: &[&str]) {
+    let body = fill_pack_body(name);
+    assert_eq!(
+        body, expected,
+        "fmt_fill_pack/{name}: formatted output changed.\n=== got ===\n{body}"
+    );
+    assert_fill_pack_width(name, &body, allowed_overflow);
+    assert_fill_pack_greedy(name, &body);
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_fill_pack").join(name);
+    let source = std::fs::read_to_string(&path).expect("re-read fixture");
+    assert_fmt_round_trips(&format!("fmt_fill_pack/{name}"), &source);
+}
+
+/// A fill-broken list carries NO trailing comma anywhere in `body`.
+fn assert_no_trailing_comma_before_close(name: &str, body: &str) {
+    for (i, line) in body.lines().enumerate() {
+        let t = line.trim_end();
+        if !t.ends_with(',') {
+            continue;
+        }
+        let next = body.lines().nth(i + 1).unwrap_or("").trim();
+        assert!(
+            !(next.starts_with(')') || next.starts_with(']') || next.starts_with('}')),
+            "fmt_fill_pack/{name}: fill-broken lists must not emit a trailing comma \
+             before the close.\n{line}\n{next}"
+        );
+    }
+}
+
+#[test]
+fn fmt_fill_pack_params_kind() {
+    assert_fill_pack(
+        "params.gg",
+        r#"int p_empty():
+    return 1
+
+int p_flat(int aaaa, int bbbb, int cccc):
+    return aaaa
+
+int p_fill(int aaaaaaaa, int bbbbbbbb, int cccccccc, int dddddddd, int eeeeeeee, int ffffffff, int gggggggg,
+    int hhhhhhhh, int iiiiiiii, int jjjjjjjj):
+    return aaaaaaaa
+
+int p_over(
+    VeryLongParameterTypeNameForTheSingleOverWidthFillPackCell aSingleParameterWhoseRenderedWidthExceedsTheWholeLineBudget):
+    return 0
+"#,
+        &["aSingleParameterWhoseRenderedWidthExceedsTheWholeLineBudget"],
+    );
+    assert_no_trailing_comma_before_close("params.gg", &fill_pack_body("params.gg"));
+}
+
+#[test]
+fn fmt_fill_pack_call_args_kind() {
+    assert_fill_pack(
+        "call_args.gg",
+        r#"void c_empty():
+    draw_text_atlas()
+
+void c_flat():
+    draw_text_atlas(ctxValue, fontValue, textValue)
+
+void c_fill():
+    draw_text_atlas(ctxValue, fontValue, textValue, xxValue, yyValue, charSizeValue, rrValue, ggValue, bbValue, aaValue)
+
+void c_over():
+    draw_text_atlas(
+        aSingleCallArgumentIdentifierWhoseRenderedWidthAloneExceedsTheEntireLineBudgetOfTheFormatterAndThenSome)
+"#,
+        &[],
+    );
+    assert_no_trailing_comma_before_close("call_args.gg", &fill_pack_body("call_args.gg"));
+}
+
+#[test]
+fn fmt_fill_pack_generic_params_kind() {
+    assert_fill_pack(
+        "generic_params.gg",
+        r#"struct GpFlat[Aaaa, Bbbb, Cccc]:
+    int x
+
+struct GpFill[Aaaaaaaaaaaaaaaa, Bbbbbbbbbbbbbbbb, Cccccccccccccccc, Dddddddddddddddd, Eeeeeeeeeeeeeeee,
+    Ffffffffffffffff, Gggggggggggggggg]:
+    int x
+
+struct GpOver[
+    ASingleTypeParameterNameWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetFormatterEvenAtIndent]:
+    int x
+"#,
+        &[],
+    );
+}
+
+#[test]
+fn fmt_fill_pack_generic_args_kind() {
+    assert_fill_pack(
+        "generic_args.gg",
+        r#"void ga_flat():
+    Tuple[int, int, int] a = ok()
+
+void ga_fill():
+    Tuple[Aaaaaaaaaaaaaaaa, Bbbbbbbbbbbbbbbb, Cccccccccccccccc, Dddddddddddddddd, Eeeeeeeeeeeeeeee, Ffffffffffffffff,
+        Gggggggggggggggg] b = ok()
+
+void ga_over():
+    Tuple[
+        ASingleTypeArgumentNameWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetFormatterEvenAtBlockIndent] c = ok()
+"#,
+        &["ASingleTypeArgumentNameWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudget"],
+    );
+}
+
+#[test]
+fn fmt_fill_pack_closure_params_kind() {
+    assert_fill_pack(
+        "closure_params.gg",
+        r#"void cl_empty():
+    auto e = (): 0
+
+void cl_flat():
+    auto f = (int aaaa, int bbbb, int cccc): aaaa
+
+void cl_fill():
+    auto g = (int aaaaaaaa, int bbbbbbbb, int cccccccc, int dddddddd, int eeeeeeee, int ffffffff, int gggggggg,
+        int hhhhhhhh): aaaaaaaa
+
+void cl_over():
+    auto h = (
+        VeryLongClosureParameterTypeNameForTheOverWidthCell aSingleClosureParameterWhoseWidthExceedsTheWholeLineBudget): 0
+"#,
+        &["aSingleClosureParameterWhoseWidthExceedsTheWholeLineBudget"],
+    );
+}
+
+#[test]
+fn fmt_fill_pack_array_literal_kind() {
+    assert_fill_pack(
+        "array_literal.gg",
+        r#"void ar_empty():
+    Vector[int] z = []
+
+void ar_flat():
+    Vector[int] a = [111111, 222222, 333333]
+
+void ar_fill():
+    Vector[int] b = [111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 111011, 121212,
+        131313]
+
+void ar_over():
+    Vector[int] c = [
+        aSingleArrayElementIdentifierWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetFormatter]
+"#,
+        &[],
+    );
+    assert_no_trailing_comma_before_close("array_literal.gg", &fill_pack_body("array_literal.gg"));
+}
+
+#[test]
+fn fmt_fill_pack_tuple_literal_kind() {
+    assert_fill_pack(
+        "tuple_literal.gg",
+        r#"void tu_empty():
+    auto z = ()
+
+void tu_flat():
+    auto a = (111111, 222222, 333333)
+
+void tu_fill():
+    auto b = (111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 111011, 121212, 131313)
+
+void tu_over():
+    auto c = (aSingleTupleElementIdentifierWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetFormatter,
+        7)
+"#,
+        &[],
+    );
+}
+
+#[test]
+fn fmt_fill_pack_dict_literal_kind() {
+    assert_fill_pack(
+        "dict_literal.gg",
+        r#"void di_empty():
+    Dict[int, int] z = {}
+
+void di_flat():
+    Dict[int, int] a = {111111: 1, 222222: 2, 333333: 3}
+
+void di_fill():
+    Dict[int, int] b = {111111: 1, 222222: 2, 333333: 3, 444444: 4, 555555: 5, 666666: 6, 777777: 7, 888888: 8,
+        999999: 9}
+
+void di_over():
+    Dict[int, int] c = {
+        aSingleDictKeyIdentifierWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetFmtter: 1}
+"#,
+        &[],
+    );
+}
+
+#[test]
+fn fmt_fill_pack_import_group_kind() {
+    assert_fill_pack(
+        "import_group.gg",
+        r#"import std.collections.{Alpha, Beta, Delta, Epsilon, Eta, Gamma, Iota, Kappa, Lambda, Mu, Nu, Omicron, Pi, Rho, Theta,
+    Xi, Zeta}
+import std.io.{Alpha, Beta, Gamma}
+import std.math.{
+    ASingleImportedNameWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetCanonicalSourceFormatter}
+from std.text import Aaaaaaaaaa, Bbbbbbbbbb, Cccccccccc, Dddddddddd, Eeeeeeeeee, Ffffffffff, Gggggggggg, Hhhhhhhhhh
+
+void iu():
+    print(1)
+"#,
+        &[],
+    );
+}
+
+#[test]
+fn fmt_fill_pack_broken_element_axis() {
+    // A multi-line element can never share a line, so the packer breaks BEFORE
+    // it — landing it at exactly the continuation indent its sub-render was
+    // pre-rendered for — and resumes packing afterwards (`cccc, dddd` and
+    // `333333` ride the element's last line).
+    let body = fill_pack_body("broken_element.gg");
+    assert_eq!(
+        body,
+        r#"void be_resume():
+    outer(aaaa, bbbb,
+        inner(1111111, 2222222, 3333333, 4444444, 5555555, 6666666, 7777777, 8888888, 9999999, 1010101, 1111011,
+            1212121, 1313131, 1414141, 1515151, 1616161), cccc, dddd)
+
+void be_nested():
+    Vector[int] v = [111111, 222222,
+        [1111111, 2222222, 3333333, 4444444, 5555555, 6666666, 7777777, 8888888, 9999999, 1010101, 1111011, 1212121,
+            1313131, 1414141, 1515151, 1616161], 333333]
+"#,
+        "=== got ===\n{body}"
+    );
+    // The nested pre-render is column-aware now, so even the composed shape
+    // keeps every line inside the budget — no exceptions to name.
+    assert_fill_pack_width("broken_element.gg", &body, &[]);
+    assert_no_trailing_comma_before_close("broken_element.gg", &body);
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_fill_pack/broken_element.gg");
+    let source = std::fs::read_to_string(&path).expect("read broken_element.gg");
+    assert_fmt_round_trips("fmt_fill_pack/broken_element.gg", &source);
+}
+
+#[test]
+fn fmt_fill_pack_comma_axis() {
+    let body = fill_pack_body("comma_policy.gg");
+    assert_eq!(
+        body,
+        r#"void cm_fill():
+    Vector[int] a = [111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 111011, 121212,
+        131313]
+
+void cm_over():
+    Vector[int] b = [
+        aSingleArrayElementIdentifierWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetFormatter]
+
+void cm_comment():
+    Vector[int] c = [
+        111111,    # first
+        222222,
+        333333,
+    ]
+"#,
+        "=== got ===\n{body}"
+    );
+    assert_fill_pack_width("comma_policy.gg", &body, &[]);
+    // The fill-broken and over-width lists end WITHOUT a comma...
+    assert!(body.contains("131313]\n"), "fill-broken close is inline, no comma");
+    assert!(
+        !body.contains("131313,\n    ]"),
+        "fill-broken list must not emit a trailing comma"
+    );
+    // ...while the comment-bearing list keeps one element per line WITH the
+    // comma, including on the last element before the close. The two shapes
+    // are deliberately different and this is the control that proves it.
+    assert!(
+        body.contains("        333333,\n    ]"),
+        "comment-broken list keeps its trailing comma and its own close line"
+    );
+    assert!(
+        body.contains("        111111,    # first"),
+        "comment-broken elements keep their trailing comments at the canon gap"
+    );
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_fill_pack/comma_policy.gg");
+    let source = std::fs::read_to_string(&path).expect("read comma_policy.gg");
+    assert_fmt_round_trips("fmt_fill_pack/comma_policy.gg", &source);
+}
+
+#[test]
+fn fmt_fill_pack_width_boundary_axis() {
+    assert_fill_pack(
+        "width_boundary.gg",
+        r#"void wb():
+    Vector[int] wb119 = [11111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 121212, 131313]
+    Vector[int] wb120 = [111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 121212, 131313]
+    Vector[int] wb121 = [1111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 121212,
+        131313]
+
+void wbline():
+    [111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 121212, 131313, 141414, 151515,
+        161616]
+"#,
+        &[],
+    );
+    // The boundary is INCLUSIVE: 120 columns is a fit, 121 is not.
+    let body = fill_pack_body("width_boundary.gg");
+    let width_of = |needle: &str| {
+        body.lines()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("missing {needle}"))
+            .chars()
+            .count()
+    };
+    assert_eq!(width_of("wb119"), 119, "one column under budget: stays flat");
+    assert_eq!(width_of("wb120"), 120, "exactly at budget: stays flat");
+    assert_eq!(
+        width_of("wb121"),
+        113,
+        "one column over budget: the last element that does not fit breaks off"
+    );
+    // The line-initial list: its flat width is 124, and it is only measured as
+    // such because `write_doc` asks for the column through
+    // `Emitter::current_col()` — the raw `col` field reads 0 at line start.
+    assert!(
+        body.contains("\n        161616]\n"),
+        "the line-initial list must break: measured from the raw column it looks \
+         like 120 and would be emitted flat at 124.\n{body}"
+    );
+}
+
+#[test]
+fn fmt_fill_pack_gap_residue_axis() {
+    let body = fill_pack_body("gap_residue.gg");
+    assert_eq!(
+        body,
+        r#"int gr0():
+    int abcd = 1    # r0 widest
+    int a = 1       # r0 short
+    return 0
+
+int gr1():
+    int abcde = 1       # r1 widest
+    int a = 1           # r1 short
+    return 0
+
+int gr2():
+    int abcdef = 1      # r2 widest
+    int a = 1           # r2 short
+    return 0
+
+int gr3():
+    int abcdefg = 1     # r3 widest
+    int a = 1           # r3 short
+    return 0
+
+int grLone():
+    int solo = 1    # lone
+    return 0
+
+int grAnchor():
+    int aa = 1          # anchor one
+    int bbbbbbb = 2     # anchor two
+    return 0
+
+struct GrHeaderContainer:    # header
+    int field       # body one
+    int f2          # body two
+"#,
+        "=== got ===\n{body}"
+    );
+
+    // Column = indent + round_up_to_stride(max_lhs + TRAILING_COMMENT_GAP),
+    // STRIDE = 4, GAP = 4. All four residues of `max_lhs mod 4`:
+    //   r0: max_lhs 12 -> round_up(16) = 16, +4 indent = 20, widest gap 4
+    //   r1: max_lhs 13 -> round_up(17) = 20, +4 indent = 24, widest gap 7
+    //   r2: max_lhs 14 -> round_up(18) = 20, +4 indent = 24, widest gap 6
+    //   r3: max_lhs 15 -> round_up(19) = 20, +4 indent = 24, widest gap 5
+    for (sentinel, col) in [
+        ("# r0 widest", 20),
+        ("# r0 short", 20),
+        ("# r1 widest", 24),
+        ("# r1 short", 24),
+        ("# r2 widest", 24),
+        ("# r2 short", 24),
+        ("# r3 widest", 24),
+        ("# r3 short", 24),
+    ] {
+        assert_eq!(hash_col_of(&body, sentinel), col, "{sentinel} aligned column");
+        assert_eq!(col % 4, 0, "aligned columns sit on the stride-4 grid");
+    }
+    // A lone trailing comment is never grouped — it sits at exactly the canon
+    // gap after its code: indent 4 + `int solo = 1` (12) + 4 = 20.
+    assert_eq!(hash_col_of(&body, "# lone"), 20, "lone comment gap = GAP");
+    // The smallest run that aligns at all is TWO lines: max_lhs 15 -> col 24.
+    assert_eq!(hash_col_of(&body, "# anchor one"), 24);
+    assert_eq!(hash_col_of(&body, "# anchor two"), 24);
+    // A container-header comment never joins its body group: `struct
+    // GrHeaderContainer:` is 25 columns at indent 0, so its own gap puts it at
+    // 29, while the two fields align at 4 + round_up(9 + 4) = 20.
+    assert_eq!(hash_col_of(&body, "# header"), 29, "header keeps its own gap");
+    assert_eq!(hash_col_of(&body, "# body one"), 20);
+    assert_eq!(hash_col_of(&body, "# body two"), 20);
+    assert_ne!(
+        hash_col_of(&body, "# header"),
+        hash_col_of(&body, "# body one"),
+        "the header comment must NOT align into its field group"
+    );
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_fill_pack/gap_residue.gg");
+    let source = std::fs::read_to_string(&path).expect("read gap_residue.gg");
+    assert_fmt_round_trips("fmt_fill_pack/gap_residue.gg", &source);
+}
+
+#[test]
+fn fmt_fill_pack_width_unit_axis() {
+    let body = fill_pack_body("width_unit.gg");
+    assert_eq!(
+        body,
+        "void wu_pack():\n    \
+         Vector[String] p = [\"naïve café\", \"naïve café\", \"naïve café\", \"naïve café\", \
+         \"naïve café\", \"naïve café\",\n        \"naïve café\"]\n\n\
+         void wu_align():\n    \
+         String a = \"naïve café\"     # first\n    \
+         String b = \"plain ascii\"    # second\n    \
+         String c = \"third\"          # third\n    \
+         print(a)\n\n\
+         void wu_tail():\n    \
+         outer(aaaa,\n        \
+         inner(\"naïve café\", \"naïve café\", \"naïve café\", \"naïve café\", \"naïve café\", \
+         \"naïve café\", \"naïve café\",\n            \"naïve café\"), bbbb)\n",
+        "=== got ===\n{body}"
+    );
+    assert_fill_pack_width("width_unit.gg", &body, &[]);
+
+    // THE LIVE DEFECT this cell retires: the aligner derived its LHS width by
+    // subtracting BYTE offsets, so a group whose left-hand side holds non-ASCII
+    // text was left visibly ragged. Pre-fix these three landed at CHARACTER
+    // columns 30 / 32 / 32 — they agreed only in bytes, which is why the test
+    // helper `hash_col_of` had to stop measuring bytes first.
+    let first = hash_col_of(&body, "# first");
+    assert_eq!(first, 32, "multi-byte LHS: 4 indent + round_up(24 + 4) = 32");
+    assert_eq!(hash_col_of(&body, "# second"), first);
+    assert_eq!(hash_col_of(&body, "# third"), first);
+
+    // And the packer measures elements in characters: each `"naïve café"` is 12
+    // characters but 14 bytes, so a byte measure would break the list earlier.
+    let pack_line = body
+        .lines()
+        .find(|l| l.contains("Vector[String] p"))
+        .expect("wu_pack line");
+    assert_eq!(pack_line.chars().count(), 107);
+    assert_eq!(pack_line.matches("naïve").count(), 6, "six elements packed");
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_fill_pack/width_unit.gg");
+    let source = std::fs::read_to_string(&path).expect("read width_unit.gg");
+    assert_fmt_round_trips("fmt_fill_pack/width_unit.gg", &source);
 }
 
 // ── Examples (programs under examples/) ─────────────────────────

@@ -2,7 +2,7 @@
 # `gg fmt` corrupting a COMMENT-ONLY file. This whole file is comments and
 # nothing else, which is the entire point: with no items, the formatter emits
 # no content before it flushes the comment sideband.
-# Symptom was: the first comment got a spurious 2-space indent, and with >=2
+# Symptom was: the first comment got a spurious leading gap, and with >=2
 # comments the first two were GLUED (the line break between them dropped):
 #   printf '# a\n# b\n' | gg fmt   ->   "  # a# b"
 # Intended (and now actual): a comment-only file round-trips BYTE-IDENTICALLY.

@@ -1,0 +1,32 @@
+# ==== T-FMT-D (R41) fill-pack matrix — LIST KIND = GROUPED-IMPORT name list.
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
+# `fmt_fill_pack_import_group_kind`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
+#
+# Emit site: the `ImportStmt::Grouped` arm of `format_import` ->
+# `doc::surround_fill("{", .., "}")`.
+#
+# Axis cell claim (Core #12 — `list kind x fit` for the IMPORT-GROUP kind ONLY):
+#   std.io       fits-flat          one line, no trailing comma
+#   std.collect  needs-fill         greedy packing at the block continuation indent
+#   std.math     single-over-width  the one name does not fit on the open line, so it
+#                                    breaks to the continuation indent, alone
+#
+# The EMPTY cell has no spelling: `import a.{}` is a parse error.
+#
+# The `from std.text import ..` line below is the deliberately NON-converted
+# sibling: `ImportStmt::From` never wraps at all, because a bare name on a fresh
+# line re-parses as a new statement in indentation-based syntax. It must stay on
+# ONE line however long it gets — that is what this row pins.
+#
+# RED source per row: the grouped `std.collections` / `std.math` rows are TRUE
+# pre-fix REDs (one name per line with a trailing comma and a bare `}`). The
+# `std.io` row and the `from` row are invariant — break-and-restore them by
+# lowering `doc::MAX_WIDTH` (the `from` row must NOT move even then).
+import std.io.{Alpha, Beta, Gamma}
+import std.collections.{Alpha, Beta, Gamma, Delta, Epsilon, Zeta, Eta, Theta, Iota, Kappa, Lambda, Mu, Nu, Xi, Omicron, Pi, Rho}
+import std.math.{ASingleImportedNameWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetCanonicalSourceFormatter}
+from std.text import Aaaaaaaaaa, Bbbbbbbbbb, Cccccccccc, Dddddddddd, Eeeeeeeeee, Ffffffffff, Gggggggggg, Hhhhhhhhhh
+
+void iu():
+    print(1)

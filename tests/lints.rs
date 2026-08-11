@@ -13624,3 +13624,100 @@ fn fuzz_targets_still_compile() {
 }
 
 // ==== end T-RB0 ============================================================
+
+/// R41 T-FMT-D (Core #4/#6 class guard): the LIST-EMIT CENSUS for
+/// `src/formatter/mod.rs`.
+///
+/// Gorget has ONE canonical layout for a horizontally-broken list — greedy
+/// fill packing at the block continuation indent, no trailing comma
+/// (`doc::surround_fill`). There are exactly FOUR ways to emit a list from the
+/// formatter, and each one is counted separately here so that adding a list
+/// kind is a CONSCIOUS choice rather than a copy-paste of whichever neighbour
+/// was nearest:
+///
+///   * `doc::surround_fill(` — the canonical, fill-packed spelling.
+///   * `doc::surround(` — the one-item-per-line-with-trailing-comma spelling.
+///     Zero production call sites: this is a TRIPWIRE, not a baseline. A new
+///     `doc::surround(` in the formatter means a list opted OUT of the canon,
+///     which needs a stated reason. (The builder itself stays in `doc.rs`, with
+///     its own unit tests — the exploded shape is still the right one for a
+///     comment-bearing list, which reaches it imperatively through
+///     `Formatter::format_bracketed_broken_with_comments`.)
+///   * `doc::group(` — the hand-rolled group compositions (method chain,
+///     comprehension, paren-wrap helper). Also counted by
+///     `fmt_multiline_group_paren_wrap_class` above, which adjudicates a
+///     DIFFERENT invariant (that a broken group re-parses); the duplication is
+///     deliberate so each axis is discoverable from its own lint.
+///   * `write(", ")` — the imperative comma loops that never wrap at all
+///     (`from` imports, type-parameter bindings, bare tuple positions, …).
+///     These are the fourth escape route from the canon: a new one is fine, but
+///     it must be a decision, not an accident.
+///
+/// **Why a SEPARATE lint rather than a rider on the paren-wrap class:** that
+/// lint's name is a claim about multi-line re-parse safety. Bolting a
+/// list-layout count onto it would make its name false, and a guard whose scope
+/// is mis-stated is the kind that green-lights its own class (Core #15e Q2).
+///
+/// **Break-and-verify:** flip any `doc::surround_fill(` in
+/// `src/formatter/mod.rs` back to `doc::surround(.., true)` — the fill count
+/// drops and the surround count rises, and BOTH assertions below fire.
+#[test]
+fn formatter_list_emit_fill_census() {
+    /// Canonical fill-packed list sites. The nine live list kinds — parameter
+    /// list, call args, generic params, generic args, closure params, array /
+    /// tuple / dict literal, grouped import — plus the `Expr::StructLiteral`
+    /// arm, which is unreachable through `gg fmt`'s parse-only pipeline but is
+    /// kept converted so the class rule has no exception (see
+    /// `formatter_literal_arms_dispatch_count`).
+    const EXPECTED_SURROUND_FILL: usize = 10;
+    /// Non-canonical one-item-per-line sites. A tripwire pinned at zero.
+    const EXPECTED_SURROUND: usize = 0;
+    /// Hand-rolled `doc::group` compositions — see the allowlist in
+    /// `fmt_multiline_group_paren_wrap_class`.
+    const EXPECTED_GROUP: usize = 3;
+    /// Imperative `", "` separator loops that never wrap.
+    const EXPECTED_WRITE_SEP: usize = 23;
+
+    let content = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+    let mut fill = 0usize;
+    let mut surround = 0usize;
+    let mut group = 0usize;
+    let mut write_sep = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        // Skip pure-comment lines so prose mentioning a spelling doesn't count.
+        if trimmed.starts_with("//") || trimmed.starts_with("///") {
+            continue;
+        }
+        fill += line.matches("doc::surround_fill(").count();
+        // `doc::surround(` cannot match `doc::surround_fill(` — the `(` is
+        // required immediately after the name, which is exactly why the fill
+        // builder is a DISTINCT SPELLING and not a boolean parameter. A flag
+        // would make both shapes the same token and this census blind.
+        surround += line.matches("doc::surround(").count();
+        group += line.matches("doc::group(").count();
+        write_sep += line.matches("write(\", \")").count();
+    }
+
+    let msg = "\n\nGorget has ONE canonical broken-list layout: greedy fill packing at \
+               the block continuation indent, no trailing comma. If you added a list \
+               kind, route it through `doc::surround_fill` and bump \
+               EXPECTED_SURROUND_FILL. If you deliberately opted a list OUT of the \
+               canon, raise the matching constant here WITH the reason — the point of \
+               this census is that the choice is visible.\n\
+               Sibling guard on a different axis: `fmt_multiline_group_paren_wrap_class` \
+               (multi-line output must re-parse).";
+    assert_eq!(fill, EXPECTED_SURROUND_FILL, "`doc::surround_fill(` site count changed.{msg}");
+    assert_eq!(
+        surround, EXPECTED_SURROUND,
+        "`doc::surround(` site count changed — a formatter list opted OUT of the \
+         fill-packed canon.{msg}"
+    );
+    assert_eq!(group, EXPECTED_GROUP, "`doc::group(` site count changed.{msg}");
+    assert_eq!(
+        write_sep, EXPECTED_WRITE_SEP,
+        "`write(\", \")` separator-loop count changed — a list is emitted with a \
+         hand-rolled comma loop that can never wrap.{msg}"
+    );
+}

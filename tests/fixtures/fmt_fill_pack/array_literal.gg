@@ -1,0 +1,31 @@
+# ==== T-FMT-D (R41) fill-pack matrix — LIST KIND = ARRAY literal.
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
+# `fmt_fill_pack_array_literal_kind`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
+#
+# Emit site: the `Expr::ArrayLiteral` arm of `format_expr` ->
+# `doc::surround_fill("[", .., "]")` (the fill-packed path; a literal carrying
+# INTERIOR comments still routes to `format_bracketed_broken_with_comments` —
+# see `comma_policy.gg` for that cell).
+#
+# Axis cell claim (Core #12 — `list kind x fit` for the ARRAY-LITERAL kind ONLY):
+#   ar_empty  empty              `[]`
+#   ar_flat   fits-flat          one line, no trailing comma
+#   ar_fill   needs-fill         greedy packing at the block continuation indent
+#   ar_over   single-over-width  the one element does not fit on the open line, so it
+#                                breaks to the continuation indent, alone
+#
+# RED source per row: ar_fill / ar_over are TRUE pre-fix REDs (one element per
+# line with a trailing comma and a bare `]`). ar_empty / ar_flat are invariant —
+# break-and-restore them by lowering `doc::MAX_WIDTH`.
+void ar_empty():
+    Vector[int] z = []
+
+void ar_flat():
+    Vector[int] a = [111111, 222222, 333333]
+
+void ar_fill():
+    Vector[int] b = [111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 111011, 121212, 131313]
+
+void ar_over():
+    Vector[int] c = [aSingleArrayElementIdentifierWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetFormatter]

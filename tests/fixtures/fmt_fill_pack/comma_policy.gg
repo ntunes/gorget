@@ -1,0 +1,37 @@
+# ==== T-FMT-D (R41) fill-pack matrix — TRAILING-COMMA axis.
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
+# `fmt_fill_pack_comma_axis`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
+#
+# The ratified asymmetry, in one file (Core #12 — this file samples the `comma`
+# axis ONLY):
+#   cm_fill     fill-broken       NO trailing comma: the close follows the last
+#                                 element inline, so there is nothing for a
+#                                 trailing comma to sit before.
+#   cm_over     over-width single NO trailing comma either — the lone element is
+#                                 also the last one.
+#   cm_comment  comment-broken    KEEPS the trailing comma, one element per line.
+#                                 A list with an INTERIOR COMMENT cannot be
+#                                 packed (the packer's elements are pre-rendered
+#                                 strings from a sub-formatter with an empty
+#                                 comment sideband), so it routes to
+#                                 `format_bracketed_broken_with_comments`, whose
+#                                 shape is unchanged by this track.
+#
+# RED source per row: cm_fill / cm_over are TRUE pre-fix REDs (pre-fix they DO
+# carry a trailing comma). cm_comment is INVARIANT by design — it is the control
+# that proves the two shapes stayed distinct; its red is break-and-restore
+# (delete the `has_interior_comments` dispatch in the `Expr::ArrayLiteral` arm
+# and the comment is dropped entirely).
+void cm_fill():
+    Vector[int] a = [111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 111011, 121212, 131313]
+
+void cm_over():
+    Vector[int] b = [aSingleArrayElementIdentifierWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetFormatter]
+
+void cm_comment():
+    Vector[int] c = [
+        111111,  # first
+        222222,
+        333333,
+    ]

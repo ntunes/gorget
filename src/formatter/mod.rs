@@ -46,7 +46,24 @@ impl Emitter {
             self.col = indent_width;
         }
         self.buf.push_str(s);
-        self.col += s.len();
+        self.col += s.chars().count();
+    }
+
+    /// The column the NEXT character will occupy.
+    ///
+    /// `col` alone is not that number: after `newline()` / `blank_line()` the
+    /// cursor sits at line start with the indentation still UNWRITTEN (it is
+    /// emitted lazily by the first `write`), so `col` reads 0 while the real
+    /// column is `indent * 4`. Every consumer that makes a WIDTH decision —
+    /// `write_doc`, which seeds the Doc renderer's starting column — must ask
+    /// through here, or a line-initial list is measured `indent * 4` columns
+    /// too narrow and silently overruns `MAX_WIDTH` by that much.
+    fn current_col(&self) -> usize {
+        if self.at_line_start {
+            self.indent * 4
+        } else {
+            self.col
+        }
     }
 
     /// Write pre-formatted text from the Doc renderer.
@@ -66,10 +83,13 @@ impl Emitter {
         }
         self.at_line_start = false;
         self.buf.push_str(s);
+        // Columns count CHARACTERS, not bytes: `s` is pre-rendered source that
+        // can carry non-ASCII literals, and a byte count would over-report the
+        // cursor for everything emitted after them on the same line.
         if let Some(last_nl) = s.rfind('\n') {
-            self.col = s.len() - last_nl - 1;
+            self.col = s[last_nl + 1..].chars().count();
         } else {
-            self.col += s.len();
+            self.col += s.chars().count();
         }
     }
 
@@ -115,6 +135,9 @@ impl Emitter {
             }
             self.buf.push('\n');
             self.at_line_start = true;
+            // Same reset `newline()` does — leaving the previous line's column
+            // behind makes `col` stale while `at_line_start` says otherwise.
+            self.col = 0;
         }
     }
 
@@ -183,10 +206,18 @@ struct AlignGeom {
     is_header: bool,
 }
 
-/// Owner-ratified alignment constants (R40, 2026-08-10). Column =
-/// smallest multiple of `STRIDE` that is ≥ `max_lhs + MIN_GAP`; a comment
-/// whose END column would exceed `MAX_WIDTH` triggers outlier exclusion.
-const ALIGN_MIN_GAP: usize = 2;
+/// Owner-ratified alignment constants (FMT CANON PAIR). Column =
+/// smallest multiple of `STRIDE` that is ≥ `max_lhs + TRAILING_COMMENT_GAP`; a
+/// comment whose END column would exceed `MAX_WIDTH` triggers outlier
+/// exclusion.
+///
+/// `TRAILING_COMMENT_GAP` serves BOTH roles from one definition: it is the gap
+/// `emit_trailing_comment_after` injects between the code and the `#`, and it
+/// is the aligner's minimum gap when it computes a group's shared column.
+/// Because the injected gap is exactly this many ASCII spaces,
+/// `align_trailing_comments` can splice over `[off, off + TRAILING_COMMENT_GAP)`
+/// — one constant keeps the writer and the rewriter from ever disagreeing.
+const TRAILING_COMMENT_GAP: usize = 4;
 const ALIGN_STRIDE: usize = 4;
 
 /// Smallest multiple of `ALIGN_STRIDE` that is ≥ `x`.
@@ -228,7 +259,13 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
             iw += 1;
             k += 1;
         }
-        let lhs_width = e.buf_offset.saturating_sub(line_start).saturating_sub(iw);
+        // LHS width in DISPLAY columns, i.e. characters — `buf_offset`,
+        // `line_start` and `iw` are all byte quantities, so subtracting them
+        // yields a BYTE length that over-counts every non-ASCII character on
+        // the line and pushes its `#` left of the group's column. Both bounds
+        // are char boundaries: `line_start + iw` follows a run of ASCII spaces
+        // and `buf_offset` is where the injected gap begins.
+        let lhs_width = buf[line_start + iw..e.buf_offset].chars().count();
         geoms.push(AlignGeom {
             buf_offset: e.buf_offset,
             output_line: nl_count,
@@ -293,13 +330,13 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
         loop {
             if active.len() < 2 {
                 // Too few remain to form a table — nobody is realigned;
-                // survivors + excluded all keep their natural 2-space gap.
+                // survivors + excluded all keep their natural gap.
                 active.clear();
                 align_col = 0;
                 break;
             }
             let max_lhs = active.iter().map(|&i| group[i].lhs_width).max().unwrap();
-            let col = round_up_to_stride(max_lhs + ALIGN_MIN_GAP);
+            let col = round_up_to_stride(max_lhs + TRAILING_COMMENT_GAP);
             // Overflow measured at the comment END column, in display width.
             let overflow: Vec<usize> = active
                 .iter()
@@ -318,7 +355,7 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
                 .copied()
                 .filter(|&i| {
                     indent_width
-                        + round_up_to_stride(group[i].lhs_width + ALIGN_MIN_GAP)
+                        + round_up_to_stride(group[i].lhs_width + TRAILING_COMMENT_GAP)
                         + group[i].comment_len
                         > doc::MAX_WIDTH
                 })
@@ -458,13 +495,14 @@ impl Formatter {
     /// the outer's `write_preformatted` handles first-line indent based
     /// on the outer's own cursor.
     ///
-    /// The `+ 1` bump matches the fact that almost every caller of this
-    /// helper (call args, params, generic args, comprehensions, method
-    /// chain, binary chain continuations, closure params, container
-    /// literals) wraps the returned strings in an outer `Doc::Indent(...)`
-    /// so items land one level deeper than the caller's cursor. Callers
-    /// whose sub-render placement is different can use
-    /// `element_to_string_at(base_indent, f)` directly to override.
+    /// The `+ 1` bump matches where the returned string is actually spliced:
+    /// every caller of this helper (call args, params, generic args,
+    /// comprehensions, method chain, binary chain continuations, closure
+    /// params, container literals) places its elements one level deeper than
+    /// the caller's cursor — via `Doc::Indent(...)` for the group-based
+    /// builders, and via `Doc::Fill`'s own continuation indent for the
+    /// fill-packed lists. Callers whose sub-render placement is different can
+    /// use `element_to_string_at(base_indent, f)` directly to override.
     fn element_to_string(&self, f: impl FnOnce(&mut Formatter)) -> String {
         self.element_to_string_at(self.emitter.indent + 1, f)
     }
@@ -493,6 +531,16 @@ impl Formatter {
         let mut fmt = Formatter::new(vec![], self.source.clone());
         fmt.emitter.indent = base_indent;
         fmt.emitter.at_line_start = false;
+        // Seed the CURSOR too, not just the indent level. The rendered string
+        // is spliced back in at column `base_indent * 4` — either as a broken
+        // list's continuation-indented element, or as the fill packer's next
+        // line — so a sub-render that measures from column 0 believes it has
+        // `base_indent * 4` more columns than it does, and emits lines that
+        // overflow the budget by exactly that much. Seeding makes the
+        // assumption self-consistent: an element that decides to break becomes
+        // multi-line, and a multi-line element is always placed at precisely
+        // the column it assumed.
+        fmt.emitter.col = base_indent * 4;
         f(&mut fmt);
         fmt.emitter.finish()
     }
@@ -503,7 +551,10 @@ impl Formatter {
         let rendered = doc::render_at(
             doc,
             doc::MAX_WIDTH,
-            self.emitter.col,
+            // `current_col()`, never the raw `col`: at line start the indent
+            // has not been written yet, so the raw field reads 0 while the Doc
+            // will actually be placed at `indent * 4`.
+            self.emitter.current_col(),
             self.emitter.indent,
         );
         self.emitter.write_preformatted(&rendered);
@@ -581,7 +632,7 @@ impl Formatter {
     /// Used by the 4 collection-literal arms of `format_expr`
     /// (ArrayLiteral / TupleLiteral / DictLiteral / StructLiteral) to
     /// decide whether to dispatch to `format_bracketed_broken_with_comments`
-    /// instead of the flat `doc::surround` path. When ANY element-interior
+    /// instead of the fill-packed `doc::surround_fill` path. When ANY element-interior
     /// comment exists, the doc DSL cannot preserve it — the sub-formatter
     /// used by `element_to_string` is passed an EMPTY comment sideband
     /// (it does hold the real `source` for span lookups, but no comments),
@@ -607,7 +658,7 @@ impl Formatter {
     /// (multi-line) form with the outer formatter's comment sideband
     /// interleaved per element. Called by the 4 collection-literal arms
     /// of `format_expr` when `has_interior_comments(container_span)`
-    /// fires — i.e. when the flat `doc::surround` path would DROP interior
+    /// fires — i.e. when the fill-packed `doc::surround_fill` path would DROP interior
     /// comments (the exact snag class).
     ///
     /// Emit order per element:
@@ -688,11 +739,12 @@ impl Formatter {
     /// the semantics are distinct (same-line-as-header vs same-line-
     /// as-previous-sibling) even though the underlying same-line
     /// mechanic is identical. Keeping them separate keeps the
-    /// `formatter_sibling_loops_hook_pairing` lint clean at exactly 12
-    /// sibling call-sites for `emit_trailing_comment_after`; this
-    /// header hook has its own count (4 sites, one per structural
-    /// container) enforced by
-    /// `formatter_container_header_hook_arm_count`.
+    /// `formatter_sibling_loops_hook_pairing` lint's sibling-pairing
+    /// counts for `emit_comments_before` / `emit_trailing_comment_after`
+    /// honest; this header hook is counted SEPARATELY by that same lint,
+    /// as `EXPECTED_EMIT_TRAILING_AFTER_HEADER` (structural containers
+    /// plus the control-flow and function-definition openers — see the
+    /// constant's own comment for the live roster).
     fn emit_trailing_comment_after_header(&mut self, header_anchor_end: usize) {
         // Same semantics — reuse the base helper (single-implementation
         // chokepoint per Core #4). If the multi-line-header rescope
@@ -778,9 +830,9 @@ impl Formatter {
     /// after emitting a sibling item/stmt/field that ends at source
     /// position `prev_end`, flush any trailing comment(s) that shared
     /// the SAME SOURCE LINE as that previous emit. The comments stay
-    /// attached to their owning node (inline, with a two-space visual
-    /// gap) instead of drifting to lead the NEXT sibling — the exact
-    /// bug the fixture pins.
+    /// attached to their owning node (inline, after a
+    /// `TRAILING_COMMENT_GAP` visual gap) instead of drifting to lead the
+    /// NEXT sibling — the exact bug the fixture pins.
     ///
     /// A comment qualifies as "trailing" iff:
     ///   1. it hasn't been emitted yet (cursor > it),
@@ -793,9 +845,17 @@ impl Formatter {
     /// When those hold, the comment is injected inline via
     /// `Emitter::inject_before_newline` (which splices ahead of the
     /// trailing `\n` `format_stmt` left behind), and the comment cursor
-    /// advances. The loop repeats to handle the rare multi-comment same-
-    /// line case (e.g. `stmt  # a  # b`, which the lexer records as two
-    /// separate `Comment` tokens on one line — both are trailing).
+    /// advances. The loop repeats because a single emit can own more than one
+    /// comment — a MULTI-LINE construct whose trailing comments the walker
+    /// reaches all at once.
+    ///
+    /// It is NOT what makes `stmt  # a  # b` work: a `#` comment runs to the
+    /// end of the line, so the lexer records that as ONE `Comment` token whose
+    /// text happens to contain a second `#` (verified: `gg lex` reports a
+    /// single `Comment("# a  # b")`). The inner spacing is the author's, inside
+    /// the comment, and is reproduced verbatim — only the gap BEFORE the first
+    /// `#` is the formatter's to set. The same fact is what lets
+    /// `plan_trailing_aligns` assume one alignment entry per output line.
     ///
     /// A comment that fails condition (3) is left for `emit_comments_before`
     /// on the next iteration — it will be emitted as a LEADING comment
@@ -862,10 +922,12 @@ impl Formatter {
                 // as leading of the next sibling.
                 break;
             }
-            // Same-line trailing: inject inline with a two-space gap.
+            // Same-line trailing: inject inline with the canonical gap.
             let comment_len = c.node.chars().count();
-            let mut inlined = String::with_capacity(c.node.len() + 2);
-            inlined.push_str("  ");
+            let mut inlined = String::with_capacity(c.node.len() + TRAILING_COMMENT_GAP);
+            for _ in 0..TRAILING_COMMENT_GAP {
+                inlined.push(' ');
+            }
             inlined.push_str(&c.node);
             // Record the gap-start for the R40 aligner BEFORE the injection.
             // The buffer currently ends `...LHS\n`; `inject_before_newline`
@@ -902,12 +964,13 @@ impl Formatter {
     fn align_trailing_comments(&mut self) {
         let entries = std::mem::take(&mut self.trailing_aligns);
         let rewrites = plan_trailing_aligns(&self.emitter.buf, &entries);
-        // Already sorted LAST→FIRST; each gap is exactly the injected two
-        // spaces at `[off, off+2)` (both ASCII → valid char boundaries).
+        // Already sorted LAST→FIRST; each gap is exactly the injected run of
+        // `TRAILING_COMMENT_GAP` ASCII spaces at `[off, off + GAP)` (ASCII →
+        // valid char boundaries).
         for (off, new_gap) in rewrites {
             self.emitter
                 .buf
-                .replace_range(off..off + 2, &" ".repeat(new_gap));
+                .replace_range(off..off + TRAILING_COMMENT_GAP, &" ".repeat(new_gap));
         }
     }
 
@@ -941,8 +1004,8 @@ impl Formatter {
     /// no items, `format`'s EOF hook anchored at `0`, found `source[0..0]`
     /// empty (no `\n`), and therefore classified the file's FIRST comment as
     /// a *trailing* comment on a node that was never emitted: it was injected
-    /// with the two-space inline gap into an empty buffer (`  # a`), and the
-    /// next comment then glued onto the same line (`  # a# b`). Making the
+    /// with the inline trailing-comment gap into an empty buffer, and the
+    /// next comment then glued onto the same line. Making the
     /// "nothing precedes" case a distinct TYPE rather than a magic value
     /// forces every caller to handle it (Layering rule 2: typed metadata, not
     /// sentinel values).
@@ -1672,7 +1735,7 @@ impl Formatter {
                 let mut sorted: Vec<&str> = names.iter().map(|n| n.node.as_str()).collect();
                 sorted.sort_unstable();
                 let items: Vec<doc::Doc> = sorted.iter().map(|n| doc::text(*n)).collect();
-                let doc = doc::surround("{", items, "}", true);
+                let doc = doc::surround_fill("{", items, "}");
                 self.write_doc(&doc);
                 self.emitter.newline();
             }
@@ -1863,18 +1926,18 @@ impl Formatter {
     // ── Parameters ──────────────────────────────────────────
 
     /// Format a parenthesized parameter list with line-width-aware wrapping.
-    /// Writes `(param1, param2)` on one line if it fits, otherwise wraps:
+    /// Writes `(param1, param2)` on one line if it fits, otherwise FILL-PACKS
+    /// it — as many parameters per line as the budget allows, continuation
+    /// lines at the block indent, no trailing comma:
     /// ```text
-    /// (
-    ///     param1,
-    ///     param2,
-    /// )
+    /// (param1, param2, param3, param4,
+    ///     param5, param6)
     /// ```
     fn format_params_wrapped(&mut self, params: &[Spanned<Param>]) {
         let items: Vec<doc::Doc> = params.iter().map(|p| {
             doc::text(self.element_to_string(|f| f.format_param(&p.node)))
         }).collect();
-        let doc = doc::surround("(", items, ")", true);
+        let doc = doc::surround_fill("(", items, ")");
         self.write_doc(&doc);
     }
 
@@ -1883,7 +1946,7 @@ impl Formatter {
         let items: Vec<doc::Doc> = args.iter().map(|a| {
             doc::text(self.element_to_string(|f| f.format_call_arg(&a.node)))
         }).collect();
-        let doc = doc::surround("(", items, ")", true);
+        let doc = doc::surround_fill("(", items, ")");
         self.write_doc(&doc);
     }
 
@@ -1892,7 +1955,7 @@ impl Formatter {
         let items: Vec<doc::Doc> = gp.node.params.iter().map(|p| {
             doc::text(self.element_to_string(|f| f.format_generic_param(&p.node)))
         }).collect();
-        let doc = doc::surround("[", items, "]", true);
+        let doc = doc::surround_fill("[", items, "]");
         self.write_doc(&doc);
     }
 
@@ -1901,7 +1964,7 @@ impl Formatter {
         let items: Vec<doc::Doc> = args.iter().map(|t| {
             doc::text(self.element_to_string(|f| f.format_type(t)))
         }).collect();
-        let doc = doc::surround("[", items, "]", true);
+        let doc = doc::surround_fill("[", items, "]");
         self.write_doc(&doc);
     }
 
@@ -3598,7 +3661,7 @@ impl Formatter {
                 let items: Vec<doc::Doc> = params.iter().map(|p| {
                     doc::text(self.element_to_string(|f| f.format_closure_param(&p.node)))
                 }).collect();
-                let params_doc = doc::surround("(", items, ")", true);
+                let params_doc = doc::surround_fill("(", items, ")");
                 self.write_doc(&params_doc);
                 // R41 T-FMT-C: the colon and the separator are SEPARATE
                 // writes. Writing `": "` unconditionally and then newlining
@@ -3745,7 +3808,7 @@ impl Formatter {
             Expr::ArrayLiteral(elems) => {
                 // R39 fmt collection-literal interior-comment escape (Core
                 // #4 chokepoint): if any un-emitted comment sits strictly
-                // inside `[...]`, the flat `doc::surround` path would
+                // inside `[...]`, the fill-packed `doc::surround_fill` path would
                 // silently drop it (sub-formatter has empty comment
                 // sideband — see `element_to_string_at`) and the OUTER
                 // trailing-hook would then dedent the comment to column
@@ -3764,7 +3827,7 @@ impl Formatter {
                 let items: Vec<doc::Doc> = elems.iter().map(|e| {
                     doc::text(self.element_to_string(|f| f.format_expr(e)))
                 }).collect();
-                let doc = doc::surround("[", items, "]", true);
+                let doc = doc::surround_fill("[", items, "]");
                 self.write_doc(&doc);
             }
             Expr::TupleLiteral(elems) => {
@@ -3794,7 +3857,7 @@ impl Formatter {
                     let items: Vec<doc::Doc> = elems.iter().map(|e| {
                         doc::text(self.element_to_string(|f| f.format_expr(e)))
                     }).collect();
-                    let doc = doc::surround("(", items, ")", true);
+                    let doc = doc::surround_fill("(", items, ")");
                     self.write_doc(&doc);
                 }
             }
@@ -3824,7 +3887,7 @@ impl Formatter {
                         f.format_expr(v);
                     }))
                 }).collect();
-                let doc = doc::surround("{", items, "}", true);
+                let doc = doc::surround_fill("{", items, "}");
                 self.write_doc(&doc);
             }
             Expr::StructLiteral { name, generic_args, args } => {
@@ -3865,7 +3928,7 @@ impl Formatter {
                 let items: Vec<doc::Doc> = args.iter().map(|a| {
                     doc::text(self.element_to_string(|f| f.format_expr(a)))
                 }).collect();
-                let doc = doc::surround("(", items, ")", true);
+                let doc = doc::surround_fill("(", items, ")");
                 self.write_doc(&doc);
             }
             Expr::As { expr, type_ } => {
@@ -4815,6 +4878,58 @@ mod tests {
 
     fn fmt(source: &str) -> String {
         format_source_infallible(source)
+    }
+
+    // ── Emitter cursor (R41 T-FMT-D) ──────────────────────────
+    //
+    // The column the emitter reports is what seeds every width decision the
+    // Doc renderer makes. These pin the two ways it used to lie. Neither has a
+    // `.gg` spelling that changes the OUTPUT today, so they live here rather
+    // than in the `fmt_fill_pack` fixture matrix.
+
+    #[test]
+    fn test_emitter_current_col_at_line_start_is_the_pending_indent() {
+        // After `newline()` the indentation has NOT been written yet, so the
+        // raw `col` field is 0 while the next character will land at
+        // `indent * 4`. Reading the raw field here is what let a line-initial
+        // list be measured `indent * 4` columns too narrow.
+        let mut e = Emitter::new();
+        e.indent();
+        e.indent();
+        e.newline();
+        assert_eq!(e.col, 0);
+        assert_eq!(e.current_col(), 8);
+        // Once something is written, the two agree again.
+        e.write("abc");
+        assert_eq!(e.current_col(), 11);
+    }
+
+    #[test]
+    fn test_emitter_blank_line_resets_the_column() {
+        let mut e = Emitter::new();
+        e.write("some text");
+        e.blank_line();
+        assert!(e.at_line_start);
+        assert_eq!(e.col, 0, "blank_line must reset the cursor like newline");
+    }
+
+    #[test]
+    fn test_emitter_columns_count_characters_not_bytes() {
+        // "naïve café" is 10 characters and 12 UTF-8 bytes.
+        let mut e = Emitter::new();
+        e.write("\"naïve café\"");
+        assert_eq!(e.col, 12, "12 characters (14 bytes)");
+
+        // Same for a pre-formatted splice with no newline...
+        let mut e = Emitter::new();
+        e.write_preformatted("\"naïve café\"");
+        assert_eq!(e.col, 12);
+
+        // ...and for one whose LAST LINE carries the multi-byte text, where
+        // the column restarts from that line's own baked-in indentation.
+        let mut e = Emitter::new();
+        e.write_preformatted("[\n    \"naïve café\"]");
+        assert_eq!(e.col, 17, "4 indent + 12 literal + 1 bracket, in chars");
     }
 
     #[test]

@@ -1,0 +1,32 @@
+# ==== T-FMT-D (R41) fill-pack matrix — LIST KIND = TUPLE literal.
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
+# `fmt_fill_pack_tuple_literal_kind`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
+#
+# Emit site: the `Expr::TupleLiteral` arm of `format_expr` ->
+# `doc::surround_fill("(", .., ")")`.
+#
+# Axis cell claim (Core #12 — `list kind x fit` for the TUPLE-LITERAL kind ONLY):
+#   tu_empty  empty              `()`
+#   tu_flat   fits-flat          one line, no trailing comma
+#   tu_fill   needs-fill         greedy packing at the block continuation indent
+#   tu_over   single-over-width  a TWO-element tuple, deliberately: the
+#                                one-element spelling `(x,)` never reaches
+#                                `surround_fill` (that arm emits `(` expr `,)`
+#                                directly), so a single-element over-width tuple
+#                                would sample nothing.
+#
+# RED source per row: tu_fill / tu_over are TRUE pre-fix REDs (one element per
+# line with a trailing comma and a bare `)`). tu_empty / tu_flat are invariant —
+# break-and-restore them by lowering `doc::MAX_WIDTH`.
+void tu_empty():
+    auto z = ()
+
+void tu_flat():
+    auto a = (111111, 222222, 333333)
+
+void tu_fill():
+    auto b = (111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 111011, 121212, 131313)
+
+void tu_over():
+    auto c = (aSingleTupleElementIdentifierWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetFormatter, 7)

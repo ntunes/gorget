@@ -1,0 +1,37 @@
+# ==== T-FMT-D (R41) fill-pack matrix — BROKEN-ELEMENT axis.
+#
+# SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
+# `fmt_fill_pack_broken_element_axis`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
+#
+# Cells sampled (Core #12 — this file samples the `broken element` axis ONLY):
+#   be_resume  a MULTI-LINE element among flat siblings. The packer cannot
+#              measure it flat, so it BREAKS to the continuation indent before it
+#              — exactly the column plain `doc::surround` used to place every
+#              element at, and exactly the column `element_to_string`
+#              pre-rendered it for — and then RESUMES packing after it.
+#   be_nested  FILL-INSIDE-FILL composition: the multi-line element is itself a
+#              filled list, pre-rendered one indent level deeper.
+#
+# NOT sampled here — a genuine `Doc::HardLine` INSIDE a `Doc::Fill`: no
+# `format_expr` path can produce one (every `surround_fill` item is a
+# `doc::text(..)` leaf built from `element_to_string`, and `text` never carries a
+# HardLine). That cell is pinned at the algebra level instead, by
+# `test_fill_hardline_element_breaks_and_packing_resumes` in
+# `src/formatter/doc.rs`.
+#
+# KNOWN, PRE-EXISTING blind spot these cells also document: a nested element is
+# pre-rendered by a sub-formatter that starts at column 0 and knows only its
+# INDENT LEVEL, so its own internal packing ignores the column it is finally
+# placed at. Breaking before every multi-line element keeps that error exactly
+# where plain `doc::surround` had it (the element always starts at the
+# continuation indent) rather than making it worse — but the element's interior
+# lines can still exceed the budget, and the wired test names them.
+#
+# RED source: both rows are TRUE pre-fix REDs — pre-fix the OUTER lists explode
+# one element per line, so "flat siblings share the open line" never happens and
+# the packing never resumes after the multi-line element.
+void be_resume():
+    outer(aaaa, bbbb, inner(1111111, 2222222, 3333333, 4444444, 5555555, 6666666, 7777777, 8888888, 9999999, 1010101, 1111011, 1212121, 1313131, 1414141, 1515151, 1616161), cccc, dddd)
+
+void be_nested():
+    Vector[int] v = [111111, 222222, [1111111, 2222222, 3333333, 4444444, 5555555, 6666666, 7777777, 8888888, 9999999, 1010101, 1111011, 1212121, 1313131, 1414141, 1515151, 1616161], 333333]

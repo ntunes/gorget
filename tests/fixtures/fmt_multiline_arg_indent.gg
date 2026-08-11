@@ -13,8 +13,14 @@
 # Round XXXVI FMT-B: `element_to_string` now seeds the sub-Emitter's
 # indent from the caller's context so internal newlines from the
 # sub-render land at the correct column.
+#
+# R41 T-FMT-D: the message was LENGTHENED when `MAX_WIDTH` rose to 120. At the
+# old width the chain broke; at 120 the original text fit on one line and the
+# paired test's assertion loop stopped executing entirely — a pin that is green
+# because it never runs is worse than no pin (Core #12). The chain must stay
+# wider than the budget for the continuation-column assertion to mean anything.
 from std.io import stderr
 
 void main():
     String backend = "llvm"
-    print(("error: unsupported --backend=" + backend + " (the self-host compiler emits C only; use --backend=c)"), file=stderr)
+    print(("error: unsupported --backend=" + backend + " (the self-host compiler emits C only; use --backend=c, or rebuild with the LLVM backend enabled)"), file=stderr)
