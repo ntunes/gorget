@@ -11767,7 +11767,24 @@ fn formatter_sibling_loops_hook_pairing() {
     // in &eb.items` loop) gains the leading hook it never had — it was the one
     // child-collection loop in the file with ZERO hooks, which is why a
     // COUNT-based lint could not see it. Paired with the trailing bump below.
-    const EXPECTED_EMIT_COMMENTS_BEFORE: usize = 15;
+    //
+    // R41 T-FMT-A follow-up (2026-08-11): 15 → 21. SIX leading-only hooks join,
+    // and they deliberately do NOT move the trailing count — they are the
+    // BRANCH-HEADER family, whose trailing side is the header hook the child
+    // emitter already writes:
+    //   `format_stmt`             Stmt::Match arms (`for item in arms`)
+    //   `format_stmt`             Stmt::Select arms
+    //   `format_stmt`             Stmt::MetaMatch arms
+    //   `format_expr`             match-expression arms
+    //   `format_elif_else_blocks` the `elif` loop, and the `else` branch
+    // Each fixes the MISATTRIBUTION face of the class: a comment written above
+    // `case`/`elif`/`else` had no hook to claim it, so `format_block_stmts`
+    // swallowed it into the branch BODY, where it documented the wrong thing.
+    // Adding a base trailing hook to these would DOUBLE-claim against the
+    // header hook — which is exactly why the count-pairing model below cannot
+    // adjudicate them, and why `formatter_child_collection_loop_census`
+    // classifies each loop's hook state explicitly instead.
+    const EXPECTED_EMIT_COMMENTS_BEFORE: usize = 21;
     /// `emit_trailing_comment_after(` calls: 12 sibling-paired + 1
     /// EOF defensive + 1 internal delegation from
     /// `emit_trailing_comment_after_header`. If sub-task 5's EOF hook
@@ -11844,14 +11861,21 @@ fn formatter_sibling_loops_hook_pairing() {
         "R39 snag #2 sibling-loop-pairing guard: \
          `emit_comments_before(` call-site count in `src/formatter/mod.rs` \
          changed: {before_count} vs expected {EXPECTED_EMIT_COMMENTS_BEFORE}.\n\n\
-         Each `emit_comments_before` call in a sibling loop MUST be paired \
-         with an `emit_trailing_comment_after(node.span.end)` call at the \
-         end of the same loop body — otherwise a trailing comment on the \
+         An `emit_comments_before` call in a CHILD-COLLECTION loop must be \
+         paired with an `emit_trailing_comment_after(node.span.end)` call at \
+         the end of the same loop body — otherwise a trailing comment on the \
          node's last source line drifts to lead the NEXT sibling (the \
-         gorget-arena snag #2 class).\n\n\
-         If a new sibling loop legitimately joined, bump BOTH \
-         EXPECTED_EMIT_COMMENTS_BEFORE and EXPECTED_EMIT_TRAILING_AFTER \
-         together with a citation of the new site's file:line + rationale."
+         gorget-arena snag #2 class). ⚠ The BRANCH-HEADER loops \
+         (match/select/meta-match arms, elif/else) are the exception: their \
+         trailing side is the header hook the child emitter already writes, so \
+         they carry a LEADING hook only and this count moves without the \
+         trailing one. `formatter_child_collection_loop_census` classifies \
+         every loop's hook state explicitly and is the guard that adjudicates \
+         which kind a new loop is.\n\n\
+         If a new sibling loop legitimately joined, bump \
+         EXPECTED_EMIT_COMMENTS_BEFORE (and EXPECTED_EMIT_TRAILING_AFTER too, \
+         unless it is a branch-header loop) with a citation of the new site's \
+         file:line + rationale."
     );
 
     assert_eq!(
@@ -11887,147 +11911,293 @@ fn formatter_sibling_loops_hook_pairing() {
 /// R41 T-FMT-A §5 (Core #6 class-retiring guard, 2026-08-11): the LOOP
 /// CENSUS that `formatter_sibling_loops_hook_pairing` above cannot be.
 ///
-/// **Why a second guard.** The pairing lint pins CALL-SITE COUNTS, so it
-/// only fires when a loop has *some* hooks and is missing its partner. A
-/// loop with ZERO hooks moves no count at all and is therefore invisible
-/// to it — which is not hypothetical: `format_extern_block`'s item loop
-/// shipped hookless, every comment inside an `extern:` block escaped to
-/// column 0, and the pairing lint stayed green the whole time. A guard
-/// that green-lights the class it exists to retire is worse than none
-/// (Core #15e Q2), so this one enumerates the LOOPS instead of the calls.
+/// **Why a second guard.** The pairing lint pins CALL-SITE COUNTS, so it only
+/// fires when a loop has *some* hooks and is missing its partner. A loop with
+/// ZERO hooks moves no count at all and is therefore invisible to it — not
+/// hypothetical: `format_extern_block`'s item loop shipped hookless, every
+/// comment inside an `extern:` block escaped to column 0, and the pairing lint
+/// stayed green throughout. A guard that green-lights the class it exists to
+/// retire is worse than none (Core #15e Q2), so this one enumerates the LOOPS.
 ///
-/// **The census.** Every `for` loop in `src/formatter/mod.rs` that iterates
-/// an AST child collection — a field named `items` / `fields` / `variants`
-/// / `stmts`, the shape in which the AST stores line-per-element children —
-/// is located, attributed to its enclosing `fn`, and that fn is required to
-/// contain BOTH comment hooks. The enclosing-fn set must equal the
-/// allowlist below exactly, so a NEW container formatter cannot join the
-/// family silently: it either carries hooks and is added here with a
-/// rationale, or the lint is RED.
+/// **Detection is by SHAPE, not by field name.** The first cut keyed on
+/// `.items` / `.fields` / `.variants` / `.stmts`, which made the match-arm,
+/// select-arm and meta-match loops (all iterating a binding called `arms`)
+/// INVISIBLE — the census could not see its own class. A loop qualifies here
+/// when it emits AST children as separate SOURCE LINES, detected as: the body
+/// calls `self.format_*`, AND the body either calls `self.emitter.newline()`
+/// directly or delegates to a block-child emitter. That definition is about
+/// what the loop DOES, so a new container cannot dodge it by naming its field
+/// something else.
 ///
-/// **Break-and-verify (Core #13 — RED-verified 2026-08-11):** delete the
-/// two hook calls from `format_extern_block`'s `for func in &eb.items`
-/// loop (the pre-R41 state). `formatter_sibling_loops_hook_pairing` still
-/// passes once its constants are lowered to match; THIS lint fires with
-/// `format_extern_block` listed as hookless.
+/// **Every row is classified, so nothing is invisible.** `Both` = leading +
+/// trailing hook in the loop body. `Leading` = leading hook here, with the
+/// trailing/header hook delegated into the child emitter (`format_match_arm`)
+/// or written as a header hook in the body. `None` = knowingly hookless, with
+/// the reason recorded. A new loop is RED until it is classified.
+///
+/// **Break-and-verify (Core #13 — RED-verified 2026-08-11):** delete the two
+/// hook calls from `format_extern_block`'s `for func in &eb.items` loop (the
+/// pre-R41 state) and this lint fires with that row flipping `Both` → `None`.
 #[test]
 fn formatter_child_collection_loop_census() {
-    /// Formatter fns containing a child-collection loop. Each MUST carry
-    /// both `emit_comments_before(` and a trailing hook.
-    ///
-    ///   * `format_module`        — top-level items (via the directives /
-    ///                              imports / rest partition loops)
-    ///   * `format_struct`        — fields
-    ///   * `format_enum`          — variants
-    ///   * `format_trait`         — items (methods + associated types)
-    ///   * `format_equip`         — items (methods)
-    ///   * `format_extern_block`  — items (extern declarations)  ← R41 §5
-    ///   * `format_block_stmts`   — stmts (the largest coverage site)
-    ///
-    /// A new entry needs its file:line + rationale, exactly like the
-    /// arm-count guards.
-    const ALLOWLIST: &[&str] = &[
-        "format_module",
-        "format_struct",
-        "format_enum",
-        "format_trait",
-        "format_equip",
-        "format_extern_block",
-        "format_block_stmts",
+    /// Hook state a census row expects.
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+    enum Hooks {
+        /// Leading + trailing hook, both in the loop body.
+        Both,
+        /// Leading hook in the body; the trailing/header hook is delegated to
+        /// the child emitter or written as `emit_trailing_comment_after_header`.
+        Leading,
+        /// Knowingly hookless — see the row's rationale.
+        None_,
+    }
+    use Hooks::*;
+
+    // (enclosing fn, loop header text, expected hook state).
+    //
+    // Rationale for the non-`Both` rows:
+    //   * the four ARM loops + `format_elif_else_blocks` carry the LEADING
+    //     hook (R41 follow-up: without it a comment written above `case`/
+    //     `elif`/`else` was re-emitted INSIDE the branch body, documenting the
+    //     wrong thing). Their trailing side is the header hook that
+    //     `format_match_arm` / the loop body already emits, so a second
+    //     `emit_trailing_comment_after` here would double-claim.
+    //   * `format_item`'s `Item::Module` loop is a SYNTHETIC container built by
+    //     the loader for an imported module, not a source-level block, so it
+    //     has no interior comments of its own to preserve.
+    const CENSUS: &[(&str, &str, Hooks)] = &[
+        ("format_module", "for item in &directives {", Both),
+        ("format_module", "for item in &imports {", Both),
+        ("format_module", "for (i, item) in rest.iter().enumerate() {", Both),
+        ("format_item", "for item in &mi.then_items {", Both),
+        ("format_item", "for (cond, items) in &mi.elif_branches {", Both),
+        ("format_item", "for item in items {", Both),
+        ("format_item", "for item in else_items {", Both),
+        ("format_item", "for inner in items {", None_),
+        ("format_struct", "for (i, field) in s.fields.iter().enumerate() {", Both),
+        ("format_enum", "for (i, variant) in e.variants.iter().enumerate() {", Both),
+        ("format_trait", "for (i, item) in t.items.iter().enumerate() {", Both),
+        ("format_equip", "for (i, method) in e.items.iter().enumerate() {", Both),
+        ("format_extern_block", "for func in &eb.items {", Both),
+        ("format_block_stmts", "for (i, stmt) in block.stmts.iter().enumerate() {", Both),
+        ("format_elif_else_blocks", "for (cond, body) in elif_branches {", Leading),
+        ("format_stmt", "for item in arms {", Leading),
+        ("format_stmt", "for arm in arms {", Leading),
+        ("format_stmt", "for (case_expr, body) in arms {", Leading),
+        ("format_expr", "for arm in arms {", Leading),
+        ("format_expr", "for stmt in &post_prelude {", Both),
+    ];
+
+    /// Child emitters that put their argument on its own source line(s), so a
+    /// loop delegating to one is a line-per-child loop even with no direct
+    /// `newline()` in the loop body.
+    const BLOCK_CHILD: &[&str] = &[
+        "format_match_arm(",
+        "format_function(",
+        "format_stmt(",
+        "format_block_stmts(",
+        "format_item(",
     ];
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
+    let src: Vec<&str> = content.lines().collect();
 
-    // Attribute each line to its enclosing `fn` by brace depth: a `fn` header
-    // at depth D owns every line until depth returns to D.
-    let mut fn_stack: Vec<(String, i32)> = Vec::new();
+    // Attribute each line to its enclosing `fn` by brace depth. A fn header may
+    // span several lines (`fn f(\n  a: T,\n) {`), so the fn's base depth is
+    // recorded when its opening brace actually appears, not at the header line.
+    let mut fn_stack: Vec<(String, i32, bool)> = Vec::new();
     let mut depth: i32 = 0;
-    // enclosing fn -> (has a child-collection loop, has leading, has trailing)
-    let mut found: std::collections::BTreeMap<String, (bool, bool, bool)> =
-        std::collections::BTreeMap::new();
+    // (enclosing fn, header text, has_leading, has_trailing)
+    let mut open_loops: Vec<(String, String, i32, String)> = Vec::new();
+    let mut found: Vec<(String, String, Hooks)> = Vec::new();
 
-    for line in content.lines() {
+    for line in &src {
         let trimmed = line.trim_start();
         let is_comment = trimmed.starts_with("//");
 
         if !is_comment {
-            if let Some(rest) = trimmed.strip_prefix("fn ").or_else(|| {
-                trimmed
-                    .strip_prefix("pub fn ")
-                    .or_else(|| trimmed.strip_prefix("pub(crate) fn "))
-            }) {
-                let name: String =
-                    rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
-                fn_stack.push((name, depth));
+            let after_vis = trimmed
+                .strip_prefix("pub(crate) fn ")
+                .or_else(|| trimmed.strip_prefix("pub fn "))
+                .or_else(|| trimmed.strip_prefix("fn "));
+            if let Some(rest) = after_vis {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                fn_stack.push((name, depth, false));
+            }
+            if trimmed.starts_with("for ") && trimmed.ends_with('{') {
+                let owner = fn_stack.last().map(|f| f.0.clone()).unwrap_or_default();
+                open_loops.push((owner, trimmed.to_string(), depth, String::new()));
             }
         }
-
-        if let Some((name, _)) = fn_stack.last() {
-            let name = name.clone();
-            if !is_comment {
-                // A child-collection loop: `for <pat> in <expr>.items|fields|
-                // variants|stmts` (with or without `&`, `.iter().enumerate()`).
-                let is_child_loop = trimmed.starts_with("for ")
-                    && [".items", ".fields", ".variants", ".stmts"].iter().any(|f| {
-                        trimmed.contains(&format!("{f} ")) || trimmed.contains(&format!("{f}."))
-                    });
-                let e = found.entry(name).or_insert((false, false, false));
-                e.0 |= is_child_loop;
-                e.1 |= line.contains(".emit_comments_before(");
-                e.2 |= line.contains(".emit_trailing_comment_after(")
-                    || line.contains(".emit_trailing_comment_after_header(");
-            }
+        for l in open_loops.iter_mut() {
+            l.3.push_str(line);
+            l.3.push('\n');
         }
-
         if !is_comment {
-            depth += line.matches('{').count() as i32;
-            depth -= line.matches('}').count() as i32;
-            while let Some((_, d)) = fn_stack.last() {
-                if depth <= *d {
-                    fn_stack.pop();
-                } else {
-                    break;
+            let opens = line.matches('{').count() as i32;
+            let closes = line.matches('}').count() as i32;
+            if let Some(top) = fn_stack.last_mut() {
+                if !top.2 && opens > 0 {
+                    top.2 = true;
+                    top.1 = depth;
                 }
+            }
+            depth += opens - closes;
+            let mut i = 0;
+            while i < open_loops.len() {
+                if depth <= open_loops[i].2 {
+                    let (owner, header, _, body) = open_loops.remove(i);
+                    let emits_children = body.contains("self.format_");
+                    let per_line = body.contains(".emitter.newline()")
+                        || BLOCK_CHILD.iter().any(|b| body.contains(b));
+                    if emits_children && per_line {
+                        let lead = body.contains(".emit_comments_before(");
+                        let trail = body.contains(".emit_trailing_comment_after(");
+                        found.push((
+                            owner,
+                            header,
+                            match (lead, trail) {
+                                (true, true) => Both,
+                                (true, false) => Leading,
+                                _ => None_,
+                            },
+                        ));
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+            while matches!(fn_stack.last(), Some(f) if f.2 && depth <= f.1) {
+                fn_stack.pop();
             }
         }
     }
 
-    let mut census: Vec<String> = found
+    let mut got: Vec<(String, String, Hooks)> = found;
+    got.sort();
+    let mut want: Vec<(String, String, Hooks)> = CENSUS
         .iter()
-        .filter(|(_, (is_loop, _, _))| *is_loop)
-        .map(|(name, _)| name.clone())
+        .map(|(f, h, s)| (f.to_string(), h.to_string(), *s))
         .collect();
-    census.sort();
-    let mut expected: Vec<String> = ALLOWLIST.iter().map(|s| s.to_string()).collect();
-    expected.sort();
+    want.sort();
 
     assert_eq!(
-        census, expected,
+        got, want,
         "R41 T-FMT-A child-collection loop census in `src/formatter/mod.rs` \
-         changed.\n\nfound:    {census:?}\nallowlist: {expected:?}\n\n\
-         A formatter fn that iterates an AST child collection emits those \
-         children as separate SOURCE LINES, so a comment can sit between any \
-         two of them. Every such loop needs the leading + trailing comment \
-         hooks, or interior comments ESCAPE the container and re-emerge at \
-         column 0 (R41 §5, `format_extern_block`). Add the new fn to \
-         ALLOWLIST with its file:line + rationale AFTER wiring both hooks."
+         changed.\n\ngot:  {got:#?}\nwant: {want:#?}\n\n\
+         A formatter loop that emits AST children as separate SOURCE LINES can \
+         have a comment sitting between any two of them. Without the leading \
+         hook the comment is swallowed into the NEXT child's body (the \
+         match/elif misattribution class); without the trailing hook it escapes \
+         the container entirely and re-emerges at column 0 (the extern-block \
+         class, R41 §5). Wire `emit_comments_before(child.span.start)` before \
+         the child emit and `emit_trailing_comment_after(child.span.end, false)` \
+         after it, mirroring `format_trait` / `format_equip` — then add the row \
+         here with its rationale."
+    );
+}
+
+/// R41 T-FMT-A (Core #4 — the SITE axis, 2026-08-11): pins the parser's
+/// `parse_ownership_modifier` CALL SITES against the formatter's paren guards.
+///
+/// The exhaustive `Expr` match in `emits_leading_ownership_sigil` closes the
+/// VARIANT axis — a new expression kind is a compile error. It says nothing
+/// about the SITE axis, which is the one that produced the original bug: the
+/// defect existed because two parser positions strip an ownership sigil BEFORE
+/// the expression parser runs, and the formatter guarded neither. An 8th such
+/// position could be added tomorrow with the formatter still guarding two, and
+/// nothing would notice.
+///
+/// So enumerate the sites and require the enumeration to stay TOTAL: the three
+/// disposition buckets must sum to the measured total (Core #15e Q3 — a
+/// selection cannot show you what it omits).
+///
+/// **Break-and-verify:** add a `parse_ownership_modifier()` call anywhere under
+/// `src/parser/`; the total moves and this lint fires, forcing the new site to
+/// be classified as guarded / carve-out / non-flippable.
+#[test]
+fn formatter_ownership_modifier_site_pin() {
+    /// EXPRESSION-OPERAND positions — the sigil is stripped ahead of an
+    /// expression, so an expression whose emission LEADS with a sigil silently
+    /// re-homes it into the node's `ownership` field. These are the positions
+    /// `Formatter::format_ownership_modifier_operand` must guard:
+    ///   1. `src/parser/stmt.rs`  `parse_for_stmt`  — the iterable
+    ///   2. `src/parser/expr.rs`  `parse_call_arg`  — the value (POSITIONAL
+    ///      args only: the pre-pass runs ahead of the `name =` lookahead, so a
+    ///      named arg's value is parsed with no pre-pass and needs no guard)
+    const GUARDED: usize = 2;
+    /// The comprehension iterable (`src/parser/expr.rs`, sigil BEFORE `in`).
+    /// Also an expression-operand position, deliberately NOT guarded: the
+    /// ratified D33 comprehension rider retires the pre-`in` spelling by moving
+    /// the PARSER, and cites the formatter's post-`in` emission as corroboration
+    /// of that direction. "Fixing" it in the formatter would contradict a
+    /// ratified decision (Core #15e Q1). Repro:
+    /// `tests/fixtures/known_gaps/comprehension_pre_in_sigil_retired.gg`.
+    const CARVE_OUT: usize = 1;
+    /// Positions where the sigil precedes a NAME or a TYPE, never an
+    /// expression, so no paren can change the parse:
+    ///   1. `src/parser/mod.rs`   `parse_param`            — param name slot
+    ///   2. `src/parser/expr.rs`  closure destructure binding name slot
+    ///   3. `src/parser/expr.rs`  closure typed-param name slot
+    ///   4. `src/parser/types.rs` type position (D32 whitelist)
+    const NON_FLIPPABLE: usize = 4;
+
+    let mut sites = 0usize;
+    for f in [
+        "src/parser/mod.rs",
+        "src/parser/stmt.rs",
+        "src/parser/expr.rs",
+        "src/parser/types.rs",
+    ] {
+        let content = fs::read_to_string(f).unwrap_or_else(|_| panic!("cannot read {f}"));
+        for line in content.lines() {
+            let t = line.trim_start();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            // CALL sites only — `pub fn parse_ownership_modifier(` is the
+            // definition and must not be counted.
+            if t.starts_with("pub fn ") || t.starts_with("fn ") {
+                continue;
+            }
+            sites += line.matches("parse_ownership_modifier()").count();
+        }
+    }
+
+    assert_eq!(
+        sites,
+        GUARDED + CARVE_OUT + NON_FLIPPABLE,
+        "R41 T-FMT-A site pin: `parse_ownership_modifier()` call-site count \
+         under src/parser/ is {sites}, but the census accounts for {} \
+         ({GUARDED} guarded + {CARVE_OUT} carve-out + {NON_FLIPPABLE} \
+         non-flippable).\n\n\
+         Every position that strips an ownership sigil BEFORE parsing an \
+         EXPRESSION must be guarded by \
+         `Formatter::format_ownership_modifier_operand`, or `gg fmt` will \
+         re-home the sigil into the enclosing node's `ownership` field and \
+         change accept/reject. Classify the new site and update the constants \
+         (and the formatter guard, if it is an expression-operand position).",
+        GUARDED + CARVE_OUT + NON_FLIPPABLE
     );
 
-    let hookless: Vec<&String> = found
-        .iter()
-        .filter(|(_, (is_loop, before, trailing))| *is_loop && !(*before && *trailing))
-        .map(|(name, _)| name)
-        .collect();
-    assert!(
-        hookless.is_empty(),
-        "R41 T-FMT-A: formatter fn(s) iterate an AST child collection WITHOUT \
-         both comment hooks: {hookless:?}.\n\n\
-         This is the hole `formatter_sibling_loops_hook_pairing` is blind to — \
-         a hookless loop moves no call-site count. Wire \
-         `emit_comments_before(child.span.start)` before the child emit and \
-         `emit_trailing_comment_after(child.span.end, false)` after it, \
-         mirroring `format_trait` / `format_equip`."
+    // The formatter side of the pin: exactly GUARDED call sites.
+    let fmt = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+    let guards = fmt
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .map(|l| l.matches(".format_ownership_modifier_operand(").count())
+        .sum::<usize>();
+    assert_eq!(
+        guards, GUARDED,
+        "R41 T-FMT-A site pin: the formatter has {guards} \
+         `format_ownership_modifier_operand(` call site(s), expected {GUARDED} \
+         — one per expression-operand `parse_ownership_modifier` position. If a \
+         parser position was added or removed, move BOTH counts together."
     );
 }
 

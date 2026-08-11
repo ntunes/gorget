@@ -2221,6 +2221,12 @@ impl Formatter {
         else_body: Option<&Block>,
     ) {
         for (cond, body) in elif_branches {
+            // R41 T-FMT-A follow-up: a comment on its own line BEFORE `elif`
+            // documents the BRANCH, but with no leading hook here it fell
+            // through to `format_block_stmts` and was re-emitted INSIDE the
+            // branch body — same misattribution class as the match/select arm
+            // loops. Claim it at branch indent first.
+            self.emit_comments_before(cond.span.start);
             self.emitter.write("elif ");
             self.format_expr(cond);
             self.emitter.write(":");
@@ -2231,6 +2237,11 @@ impl Formatter {
             self.emitter.dedent();
         }
         if let Some(else_body) = else_body {
+            // Same class as the `elif` hook above. There is no recorded span
+            // for the `else` KEYWORD, but the body's span starts after it —
+            // and after any comment written above `else:` — so it is a sound
+            // upper bound for "comments that belong to this branch".
+            self.emit_comments_before(else_body.span.start);
             self.emitter.write("else:");
             self.emitter.newline();
             self.emitter.indent();
@@ -2440,6 +2451,7 @@ impl Formatter {
                 for item in arms {
                     match item {
                         crate::parser::ast::MatchItem::Arm(arm) => {
+                            self.emit_comments_before(arm.span.start);
                             self.format_match_arm(arm);
                         }
                         crate::parser::ast::MatchItem::MetaFor { vars, range, arm_template, .. } => {
@@ -2470,6 +2482,7 @@ impl Formatter {
                 self.emitter.newline();
                 self.emitter.indent();
                 for arm in arms {
+                    self.emit_comments_before(arm.span.start);
                     self.emitter.write("case ");
                     match &arm.op {
                         SelectOp::Recv { type_, name, channel } => {
@@ -2589,6 +2602,7 @@ impl Formatter {
                 self.emitter.newline();
                 self.emitter.indent();
                 for (case_expr, body) in arms {
+                    self.emit_comments_before(case_expr.span.start);
                     self.emitter.write("case ");
                     self.format_expr(case_expr);
                     self.emitter.write(":");
@@ -3179,6 +3193,7 @@ impl Formatter {
                 self.emitter.newline();
                 self.emitter.indent();
                 for arm in arms {
+                    self.emit_comments_before(arm.span.start);
                     self.format_match_arm(arm);
                 }
                 if let Some(else_arm) = else_arm {
@@ -3615,7 +3630,25 @@ impl Formatter {
         self.format_ownership_prefix(arg.ownership);
         // R41 T-FMT-A: sibling of the for-iterable site — `parse_call_arg`
         // strips the sigil before parsing the argument expression.
-        self.format_ownership_modifier_operand(&arg.value);
+        //
+        // POSITIONAL args ONLY. `parse_call_arg` runs
+        // `parse_ownership_modifier` BEFORE the `name =` lookahead, so on a
+        // NAMED argument the stripped position is ahead of the NAME, not ahead
+        // of the value: `f(&b = x)` is the spelling that yields
+        // `CallArg.ownership`, while the value in `f(b = &x)` is parsed by
+        // `parse_expr` with no pre-pass and therefore keeps its sigil
+        // unaided. Guarding it too is pure churn (`b = &x` → `b = (&x)`,
+        // measured live on `known_gaps/sound_named_arg_sigil_dropped.gg`).
+        //
+        // ⚠ NOT a statement that the named form is sound: a `&` after `=` is
+        // silently dropped by the OWNERSHIP CHECK, which is the separate,
+        // already-filed defect that fixture pins. This is only about which
+        // position the FORMATTER must protect.
+        if arg.name.is_some() {
+            self.format_expr(&arg.value);
+        } else {
+            self.format_ownership_modifier_operand(&arg.value);
+        }
     }
 
     fn format_closure_param(&mut self, param: &ClosureParam) {
@@ -4054,10 +4087,6 @@ fn needs_parens_as_postfix_receiver(operand: &Expr) -> bool {
 /// rule) would otherwise re-open. Core #4: the class, not the instance;
 /// Core #10: no silent fall-through.
 fn emits_leading_ownership_sigil(expr: &Expr) -> bool {
-    /// The sigils `parse_ownership_modifier` strips (`parser/mod.rs`).
-    fn is_sigil(s: &str) -> bool {
-        matches!(s.as_bytes().first(), Some(b'&') | Some(b'!') | Some(b'^'))
-    }
     /// Recurse into a child that the emitter renders FIRST, unless the
     /// emitter parenthesises it (in which case `(` leads and we are safe).
     fn through(child: &Spanned<Expr>, wrapped: bool) -> bool {
@@ -4071,11 +4100,17 @@ fn emits_leading_ownership_sigil(expr: &Expr) -> bool {
         // A MOVE CLOSURE emits its `^` prefix before the param list
         // (`^(int x): x`). Non-move closures lead with `(` or `async `.
         Expr::Closure { is_move, .. } => *is_move,
-        // `meta +` / `meta &` — the operator token is emitted verbatim,
-        // and `binary_op_str` spells BitAnd `&` and BitXor `^`. The
-        // `meta ` prefix leads, so this is safe, but spell the check out
-        // rather than rely on the prefix staying there.
-        Expr::MetaOpToken(op) => is_sigil("meta ") || is_sigil(binary_op_str(*op)),
+        // `meta +` / `meta &` / `meta !=` — emitted as the literal `meta `
+        // prefix followed by the operator token, so the LEADING character is
+        // always `m`. The operator's own spelling is irrelevant here: this
+        // predicate is about the first character of the emission, and
+        // `binary_op_str` is never reached by the parser's sigil pre-pass.
+        //
+        // (The first cut of this arm tested `binary_op_str(op)` for a sigil,
+        // which made `meta !=` — a real shape, `lib/xtd/tensor.gg` — come out
+        // as `(meta !=)`. Testing the operator instead of the leading char is
+        // exactly the mistake the doc comment above warns about.)
+        Expr::MetaOpToken(_) => false,
 
         // ── Leftmost child is an INFIX LEFT operand ────────────────
         // Each mirrors its emission arm's `format_binop_operand(.., Left, ..)`.

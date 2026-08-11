@@ -10864,6 +10864,158 @@ fn fmt_preserves_run_output_call_arg_paren_move_closure() {
     run_gg("fmt_silent_drops/call_arg_paren_move_closure.gg", "10");
 }
 
+/// §4 NEGATIVE cells — the paren guard must not OVER-fire.
+///
+/// Two shapes emit a leading sigil-looking token yet need NO parens, and
+/// guarding them is pure churn on live code:
+///
+///   1. A NAMED call argument. `parse_call_arg` runs `parse_ownership_modifier`
+///      BEFORE the `name =` lookahead, so the stripped position is ahead of the
+///      NAME (`f(&b = x)`), not ahead of the value — `f(b = &x)`'s value is
+///      parsed with no pre-pass and keeps its sigil unaided.
+///   2. `meta <op>`. It emits the literal `meta ` prefix first, so the leading
+///      char is `m` regardless of the operator's own spelling.
+///
+/// RED-verified against the first cut of the predicate, which churned BOTH on
+/// real in-tree files:
+///   `known_gaps/sound_named_arg_sigil_dropped.gg` → `takes_bare(1, b = (&x))`
+///   `lib/xtd/tensor.gg:627`                       → `..., (meta !=))`
+#[test]
+fn fmt_ownership_paren_guard_does_not_over_fire() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    // Cell 1 — named argument whose VALUE carries the sigil.
+    let named = manifest_dir.join("tests/fixtures/known_gaps/sound_named_arg_sigil_dropped.gg");
+    let src = std::fs::read_to_string(&named)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", named.display()));
+    // ⚠ Match the CODE line, not the file text: this fixture's header PROSE
+    // also spells `takes_bare(1, b = &x)` (twice), so a bare `contains` is
+    // satisfied by the comment and can never see the churn. That vacuity was
+    // caught by RED-verifying this very cell — the exact Core #12 trap.
+    fn code_line(text: &str, starts_with: &str) -> String {
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with('#'))
+            .find(|l| l.starts_with(starts_with))
+            .unwrap_or_else(|| panic!("no code line starting `{starts_with}` in:\n{text}"))
+            .to_string()
+    }
+    assert_eq!(
+        code_line(&src, "takes_bare("),
+        "takes_bare(1, b = &x)",
+        "canary premise: the named-arg repro's CODE line changed."
+    );
+    let f = gorget::formatter::format_source_infallible(&src);
+    assert_eq!(
+        code_line(&f, "takes_bare("),
+        "takes_bare(1, b = &x)",
+        "paren guard OVER-FIRED on a NAMED argument's value — the sigil there is \
+         not in a `parse_ownership_modifier` position.\n{f}"
+    );
+
+    // Cell 2 — `meta <op>` where the OPERATOR's own spelling starts with a
+    // sigil character.
+    //
+    // AXIS SCOPE, measured not assumed: `binary_op_from_token`
+    // (`src/parser/expr.rs`) accepts exactly `+ - * ** / == != < > <= >=`, so
+    // `!=` is the ONLY `meta <op>` spelling whose operator token begins with a
+    // stripped sigil — `&` (BitAnd) and `^` (BitXor) have `binary_op_str`
+    // spellings that would trip the same mistake but are UNREACHABLE through
+    // this surface (`meta &` is a parse error). That is why the first cut of
+    // the predicate manifested only on `!=`, and why this is a one-cell axis
+    // rather than a three-cell one.
+    let meta_src = "int apply[Numeric T](T a, T b, meta op):\n    \
+        T r = a meta[op] b\n    return r\n\
+        int ne[Numeric T](T a, T b): apply[T](a, b, meta !=)\n";
+    assert_fmt_round_trips("meta_op_token_no_parens", meta_src);
+    let f = gorget::formatter::format_source_infallible(meta_src);
+    assert!(
+        f.contains("meta !=)"),
+        "paren guard OVER-FIRED on `meta !=` — `meta <op>` emits the `meta ` \
+         prefix first, so its leading character is never a stripped sigil.\n{f}"
+    );
+    // And the real in-tree victim, so the cell tracks live code too.
+    let tensor = manifest_dir.join("lib/xtd/tensor.gg");
+    let tsrc = std::fs::read_to_string(&tensor)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", tensor.display()));
+    let tf = gorget::formatter::format_source_infallible(&tsrc);
+    assert_eq!(
+        tsrc.matches("meta !=").count(),
+        tf.matches("meta !=").count(),
+        "paren guard changed the `meta !=` rendering in lib/xtd/tensor.gg"
+    );
+    assert!(
+        !tf.contains("(meta "),
+        "paren guard wrapped a `meta <op>` token in lib/xtd/tensor.gg"
+    );
+}
+
+/// The MISATTRIBUTION face of the comment class (R41 T-FMT-A follow-up): a
+/// comment written on its own line above a BRANCH HEADER — `case`, `elif`,
+/// `else` — belongs to the branch, but with no leading hook on those loops it
+/// fell through to `format_block_stmts` and was re-emitted INSIDE the branch
+/// body, where it documents the wrong thing.
+///
+/// Sibling of the extern-block ESCAPE face (§5): same missing-hook root, other
+/// direction. Found because the loop census was rewritten to detect loops by
+/// SHAPE — the field-name detector could not see these four `arms` loops at
+/// all, which is precisely the "can this guard catch its own class?" trap.
+///
+/// RED-verified pre-fix: every marker below moved one line down, inside the
+/// branch body, at body indent.
+#[test]
+fn fmt_branch_header_comments_stay_on_the_branch() {
+    // One cell per branch-header loop the census classifies as `Leading`.
+    let src = "void main():\n    \
+        int x = 2\n    \
+        match x:\n        \
+        # above first case\n        \
+        case 1:\n            print(1)\n        \
+        # above second case\n        \
+        case 2:\n            print(2)\n        \
+        else:\n            print(3)\n    \
+        if x == 1:\n        print(4)\n    \
+        # above elif\n    \
+        elif x == 2:\n        print(5)\n    \
+        # above else\n    \
+        else:\n        print(6)\n";
+    assert_fmt_round_trips("branch_header_comments", src);
+    let f = gorget::formatter::format_source_infallible(src);
+
+    // Each marker must be followed by its branch header on the NEXT non-blank
+    // line — i.e. it still leads the branch rather than having sunk into a body.
+    let lines: Vec<&str> = f.lines().collect();
+    for (marker, header) in [
+        ("# above first case", "case 1:"),
+        ("# above second case", "case 2:"),
+        ("# above elif", "elif x == 2:"),
+        ("# above else", "else:"),
+    ] {
+        let i = lines
+            .iter()
+            .position(|l| l.trim() == marker)
+            .unwrap_or_else(|| panic!("marker `{marker}` vanished.\n{f}"));
+        let next = lines[i + 1..]
+            .iter()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| panic!("nothing after `{marker}`.\n{f}"));
+        assert_eq!(
+            next.trim(),
+            header,
+            "`{marker}` was misattributed — it should lead `{header}`, but the \
+             next line is `{}`. A branch-header comment sinking into the branch \
+             BODY is the misattribution face of the missing-hook class.\n{f}",
+            next.trim()
+        );
+        // …and at the branch's own indent, not the body's.
+        assert_eq!(
+            lines[i].len() - lines[i].trim_start().len(),
+            next.len() - next.trim_start().len(),
+            "`{marker}` is not at its branch's indent.\n{f}"
+        );
+    }
+}
+
 /// §1 cell — the FFI-marshalling instrument. `--emit-c-lir` is the ONLY
 /// instrument that sees the dropped `extern "C"`: `gg check` and `gg build`
 /// are both green over the corrupted form.
@@ -11266,6 +11418,30 @@ fn fact_field_corpus() -> Vec<(&'static str, &'static str)> {
              for i in (^s)..e:\n        print(i)\n    \
              take((^a))\n",
         ),
+        // The §4 axes at DEPTH — inside an `if` inside a `while`, and inside a
+        // match-arm body. `Stmt::For.ownership` / `CallArg.ownership` are
+        // POSITIONAL, so they occur at any nesting level; a fn-level-only
+        // projection would be blind to exactly these, and the paren guard runs
+        // at every depth. Exercises the walk's descent into nested blocks.
+        (
+            "ownership_nested_position_facts",
+            "void take(Vector[int] ^v):\n    print(v.len())\n\n\
+             int pick():\n    return 0\n\n\
+             void main():\n    \
+             int n = pick()\n    \
+             while n < 1:\n        \
+             if n == 0:\n            \
+             Vector[int] a = [1, 2]\n            \
+             int e = 3\n            \
+             for i in (^n)..e:\n                print(i)\n            \
+             take((^a))\n        \
+             n = n + 1\n    \
+             match n:\n        \
+             case 1:\n            \
+             Vector[int] b = [4]\n            \
+             take((^b))\n        \
+             else:\n            print(0)\n",
+        ),
         // The pre-`in` comprehension sigil — an XFAIL-SHAPED ALLOWLIST ROW,
         // see `project_facts`. Read here so the exemption is EXERCISED rather
         // than being dead prose.
@@ -11351,8 +11527,33 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
                 facts.push(format!("{path}.mutborrow=1"));
                 visit_expr(&format!("{path}.inner"), &expr.node, facts);
             }
-            Expr::Closure { is_move, .. } => {
+            Expr::Closure { is_move, body, .. } => {
                 facts.push(format!("{path}.closure_is_move={is_move}"));
+                visit_expr(&format!("{path}.closure.b"), &body.node, facts);
+            }
+            Expr::Block(b) | Expr::Do { body: b } => {
+                for (i, st) in b.stmts.iter().enumerate() {
+                    visit_stmt(&format!("{path}.blk.s{i}"), &st.node, facts);
+                }
+            }
+            Expr::If { condition, then_branch, else_branch, .. } => {
+                visit_expr(&format!("{path}.ifc"), &condition.node, facts);
+                visit_expr(&format!("{path}.ift"), &then_branch.node, facts);
+                if let Some(e) = else_branch {
+                    visit_expr(&format!("{path}.ife"), &e.node, facts);
+                }
+            }
+            Expr::Index { object, index } => {
+                visit_expr(&format!("{path}.obj"), &object.node, facts);
+                visit_expr(&format!("{path}.idx"), &index.node, facts);
+            }
+            Expr::FieldAccess { object, .. } | Expr::OptionalChain { object, .. } => {
+                visit_expr(&format!("{path}.obj"), &object.node, facts)
+            }
+            Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+                for (i, e) in elems.iter().enumerate() {
+                    visit_expr(&format!("{path}.el{i}"), &e.node, facts);
+                }
             }
             Expr::Range { start, end, .. } => {
                 if let Some(s) = start {
@@ -11387,18 +11588,68 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
         }
     }
 
+    fn visit_block(path: &str, b: &Block, facts: &mut Vec<String>) {
+        for (i, st) in b.stmts.iter().enumerate() {
+            visit_stmt(&format!("{path}.s{i}"), &st.node, facts);
+        }
+    }
+
+    /// The walk descends into EVERY nested block, not just the function body.
+    /// The §4 ownership axes (`Stmt::For.ownership`, `CallArg.ownership`) are
+    /// positional, so they occur at any nesting depth — a `for i in (^s)..e:`
+    /// inside an `if` is the same defect as one at fn level, and a fn-level-only
+    /// projection would be blind to it.
     fn visit_stmt(path: &str, s: &Stmt, facts: &mut Vec<String>) {
         match s {
             // Stmt::For.ownership — a §4 axis.
-            Stmt::For { ownership, iterable, body, .. } => {
+            Stmt::For { ownership, iterable, body, else_body, .. } => {
                 facts.push(format!("{path}.for.ownership={}", ownership_str(*ownership)));
                 visit_expr(&format!("{path}.for.iter"), &iterable.node, facts);
-                for (i, st) in body.stmts.iter().enumerate() {
-                    visit_stmt(&format!("{path}.for.b{i}"), &st.node, facts);
+                visit_block(&format!("{path}.for.b"), body, facts);
+                if let Some(e) = else_body {
+                    visit_block(&format!("{path}.for.e"), e, facts);
                 }
             }
+            Stmt::While { condition, body, else_body } => {
+                visit_expr(&format!("{path}.while.c"), &condition.node, facts);
+                visit_block(&format!("{path}.while.b"), body, facts);
+                if let Some(e) = else_body {
+                    visit_block(&format!("{path}.while.e"), e, facts);
+                }
+            }
+            Stmt::Loop { body, .. } => visit_block(&format!("{path}.loop"), body, facts),
+            Stmt::If { condition, then_body, elif_branches, else_body } => {
+                visit_expr(&format!("{path}.if.c"), &condition.node, facts);
+                visit_block(&format!("{path}.if.t"), then_body, facts);
+                for (i, (c, b)) in elif_branches.iter().enumerate() {
+                    visit_expr(&format!("{path}.if.ec{i}"), &c.node, facts);
+                    visit_block(&format!("{path}.if.eb{i}"), b, facts);
+                }
+                if let Some(e) = else_body {
+                    visit_block(&format!("{path}.if.e"), e, facts);
+                }
+            }
+            Stmt::Match { scrutinee, arms, else_arm, .. } => {
+                visit_expr(&format!("{path}.match.s"), &scrutinee.node, facts);
+                for (i, item) in arms.iter().enumerate() {
+                    if let Some(a) = item.arm() {
+                        visit_expr(&format!("{path}.match.a{i}"), &a.body.node, facts);
+                    }
+                }
+                if let Some(e) = else_arm {
+                    visit_block(&format!("{path}.match.e"), e, facts);
+                }
+            }
+            Stmt::With { body, .. } => visit_block(&format!("{path}.with"), body, facts),
+            Stmt::Unsafe { body, .. } => visit_block(&format!("{path}.unsafe"), body, facts),
+            Stmt::NamedScope { body, .. } => visit_block(&format!("{path}.scope"), body, facts),
             Stmt::Expr(e) => visit_expr(&format!("{path}.e"), &e.node, facts),
             Stmt::Return(Some(e)) => visit_expr(&format!("{path}.ret"), &e.node, facts),
+            Stmt::Throw(e) => visit_expr(&format!("{path}.throw"), &e.node, facts),
+            Stmt::Assign { value, .. } => visit_expr(&format!("{path}.assign"), &value.node, facts),
+            Stmt::CompoundAssign { value, .. } => {
+                visit_expr(&format!("{path}.cassign"), &value.node, facts)
+            }
             Stmt::VarDecl { value, .. } => visit_expr(&format!("{path}.init"), &value.node, facts),
             _ => {}
         }
