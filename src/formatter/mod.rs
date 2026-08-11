@@ -5133,12 +5133,12 @@ mod tests {
     fn test_emitter_columns_count_characters_not_bytes() {
         // "naïve café" is 10 characters and 12 UTF-8 bytes.
         let mut e = Emitter::new();
-        e.write("\"naïve café\"");
+        e.write("naïve café..");
         assert_eq!(e.col, 12, "12 characters (14 bytes)");
 
         // Same for a pre-formatted splice with no newline...
         let mut e = Emitter::new();
-        e.write_preformatted("\"naïve café\"");
+        e.write_preformatted("naïve café..");
         assert_eq!(e.col, 12);
 
         // ...and for one whose LAST LINE carries the multi-byte text, where
