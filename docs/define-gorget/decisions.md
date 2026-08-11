@@ -2298,3 +2298,18 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   `appendix-formatting.md`'s use of `elif` as the canonicalization example is rewritten
   by T-FMT-B's write-through. Both had been derived-and-flagged; both are now owner
   calls, closing the last open formatter-canon knobs before the A2 sweep.
+- 2026-08-11 — **🎯 ELIF RULING SUPERSEDED SAME-DAY (owner, live session, after a
+  requested recommendation): `else if` → `elif` CANONICALIZATION STANDS — the pair
+  LEAVES the preserve family.** The owner reopened the morning's preserve ruling; the
+  accepted principle: the Q3 preserve family covers spellings that carry AUTHORIAL
+  INFORMATION (radix, escape form, `byte`, set-literal, await style, `with`-as,
+  `public`, parens); a pure keyword synonym with ZERO information content is
+  formatter-owned, and `elif`↔`else if` is the only member today. Canonical spelling =
+  **`elif`** (owner considered promoting `else if`, decided against on the evidence:
+  the corpus is unanimous — 4 `else if` sites in ~2,700 files; the surface is
+  Python-first; the book/appendix already teach `elif`; and elif-canonical is today's
+  shipped fmt behavior, zero code change). The parser KEEPS accepting both (the
+  D27-style welcome: accept muscle memory, format to house style). The contract
+  sentence gains its one documented carve-out, stated as the intent-content principle
+  above, not an ad-hoc exception. Supersedes clause (2) of today's "FILL SHAPE + ELIF
+  PAIR" entry; `appendix-formatting.md`'s elif example remains TRUE and stays.
