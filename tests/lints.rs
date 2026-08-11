@@ -13239,6 +13239,97 @@ fn ast_block_constructed_only_via_synthetic_outside_parser() {
             // LIR's identically-named `Block` does not false-positive.
             if line.contains("stmts") || content.lines().nth(i + 1).is_some_and(|n| n.contains("stmts:")) {
                 offenders.push(format!("  {s}:{}: {t}", i + 1));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "R41 T-FMT-C: raw `ast::Block` struct literal outside `src/parser/`:\n{}\n\n\
+         Use `Block::synthetic(stmts, span)`. `Block.layout` records what the \
+         AUTHOR spelled, and only the parser can know that — everywhere else \
+         there is no author, and a hand-picked value is a fact invented at a \
+         layer that cannot have it.",
+        offenders.join("\n")
+    );
+}
+
+/// No RAW newline writing outside `Emitter` in `src/formatter/mod.rs`.
+///
+/// `Emitter::newline()` is idempotent at line start — that is what retires the
+/// spurious-blank class, where an expression-position suite terminated its own
+/// line and then the enclosing statement terminated it again. The property is
+/// only total if every line ending goes through the emitter: one
+/// `buf.push('\n')` from the outside reopens the class at that site, and the
+/// symptom (a blank line nobody wrote) is subtle enough to survive review.
+///
+/// **Break-and-verify (Core #13, RED-verified 2026-08-11):** add a
+/// `self.emitter.buf.push('\n');` anywhere in `Formatter` and this fires.
+#[test]
+fn formatter_no_raw_newline_outside_emitter() {
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let src: Vec<&str> = content.lines().collect();
+
+    // Locate `impl Emitter { .. }` by brace depth.
+    let mut impl_range: Option<(usize, usize)> = None;
+    let mut depth: i32 = 0;
+    let mut start: Option<(usize, i32)> = None;
+    for (i, line) in src.iter().enumerate() {
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        if start.is_none() && line.trim_start().starts_with("impl Emitter") {
+            start = Some((i, depth));
+        }
+        depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
+        if let Some((s, base)) = start {
+            if i > s && depth <= base {
+                impl_range = Some((s, i));
+                break;
+            }
+        }
+    }
+    let (impl_start, impl_end) = impl_range.expect("could not locate `impl Emitter` block");
+
+    // The ONE sanctioned outside writer: `format`'s final trailing-newline
+    // normalization, which runs on the OWNED String returned by `finish()` —
+    // after the emitter is gone, so it cannot reopen the class.
+    const ALLOWED_OUTSIDE: &[&str] = &["result.push('\\n');"];
+
+    let mut offenders: Vec<String> = Vec::new();
+    for (i, line) in src.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        if !(trimmed.contains(".push('\\n')") || trimmed.contains(".push_str(\"\\n\")")) {
+            continue;
+        }
+        if i >= impl_start && i <= impl_end {
+            continue;
+        }
+        if ALLOWED_OUTSIDE.contains(&trimmed) {
+            continue;
+        }
+        offenders.push(format!("  line {}: {trimmed}", i + 1));
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "R41 T-FMT-C: raw newline writing outside `Emitter` in \
+         `src/formatter/mod.rs`:\n{}\n\n\
+         Line endings must go through `Emitter::newline()`, which is IDEMPOTENT \
+         at line start. That idempotence is what retires the spurious-blank \
+         class (an expression-position suite terminates its own line, then the \
+         enclosing statement terminates it again). A raw push bypasses it and \
+         reopens the class at that site.\n\n\
+         Want a deliberate blank? `Emitter::blank_line()` is the one way to ask \
+         for one.",
+        offenders.join("\n")
+    );
+}
+
 // ==== T-RB0 ================================================================
 
 /// **D27 accept-both, SELF-HOST parse side: every ownership-context
@@ -13411,90 +13502,6 @@ fn sh_parser_caret_predicate_siblings() {
 
     assert!(
         offenders.is_empty(),
-        "R41 T-FMT-C: raw `ast::Block` struct literal outside `src/parser/`:\n{}\n\n\
-         Use `Block::synthetic(stmts, span)`. `Block.layout` records what the \
-         AUTHOR spelled, and only the parser can know that — everywhere else \
-         there is no author, and a hand-picked value is a fact invented at a \
-         layer that cannot have it.",
-        offenders.join("\n")
-    );
-}
-
-/// No RAW newline writing outside `Emitter` in `src/formatter/mod.rs`.
-///
-/// `Emitter::newline()` is idempotent at line start — that is what retires the
-/// spurious-blank class, where an expression-position suite terminated its own
-/// line and then the enclosing statement terminated it again. The property is
-/// only total if every line ending goes through the emitter: one
-/// `buf.push('\n')` from the outside reopens the class at that site, and the
-/// symptom (a blank line nobody wrote) is subtle enough to survive review.
-///
-/// **Break-and-verify (Core #13, RED-verified 2026-08-11):** add a
-/// `self.emitter.buf.push('\n');` anywhere in `Formatter` and this fires.
-#[test]
-fn formatter_no_raw_newline_outside_emitter() {
-    let content =
-        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
-    let src: Vec<&str> = content.lines().collect();
-
-    // Locate `impl Emitter { .. }` by brace depth.
-    let mut impl_range: Option<(usize, usize)> = None;
-    let mut depth: i32 = 0;
-    let mut start: Option<(usize, i32)> = None;
-    for (i, line) in src.iter().enumerate() {
-        if line.trim_start().starts_with("//") {
-            continue;
-        }
-        if start.is_none() && line.trim_start().starts_with("impl Emitter") {
-            start = Some((i, depth));
-        }
-        depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
-        if let Some((s, base)) = start {
-            if i > s && depth <= base {
-                impl_range = Some((s, i));
-                break;
-            }
-        }
-    }
-    let (impl_start, impl_end) = impl_range.expect("could not locate `impl Emitter` block");
-
-    // The ONE sanctioned outside writer: `format`'s final trailing-newline
-    // normalization, which runs on the OWNED String returned by `finish()` —
-    // after the emitter is gone, so it cannot reopen the class.
-    const ALLOWED_OUTSIDE: &[&str] = &["result.push('\\n');"];
-
-    let mut offenders: Vec<String> = Vec::new();
-    for (i, line) in src.iter().enumerate() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("//") {
-            continue;
-        }
-        if !(trimmed.contains(".push('\\n')") || trimmed.contains(".push_str(\"\\n\")")) {
-            continue;
-        }
-        if i >= impl_start && i <= impl_end {
-            continue;
-        }
-        if ALLOWED_OUTSIDE.contains(&trimmed) {
-            continue;
-        }
-        offenders.push(format!("  line {}: {trimmed}", i + 1));
-    }
-
-    assert!(
-        offenders.is_empty(),
-        "R41 T-FMT-C: raw newline writing outside `Emitter` in \
-         `src/formatter/mod.rs`:\n{}\n\n\
-         Line endings must go through `Emitter::newline()`, which is IDEMPOTENT \
-         at line start. That idempotence is what retires the spurious-blank \
-         class (an expression-position suite terminates its own line, then the \
-         enclosing statement terminates it again). A raw push bypasses it and \
-         reopens the class at that site.\n\n\
-         Want a deliberate blank? `Emitter::blank_line()` is the one way to ask \
-         for one.",
-        offenders.join("\n")
-    );
-}
         "D27 accept-both regression in the self-host parser(s): {} ownership predicate(s) \
          name only one move glyph.\n\n{}\n\n\
          Every ownership-context move-glyph test must accept BOTH `!` (retired but still \
