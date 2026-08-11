@@ -11507,6 +11507,56 @@ fn fmt_container_last_interior_comment_stays_inside() {
     }
 }
 
+/// KNOWN GAP (R41 T-FMT-B, filed 2026-08-11): `gg fmt` DELETES the author's
+/// grouping parentheses.
+///
+/// `parse_paren_expr`'s parenthesized-expression branch (`src/parser/expr.rs:1641-1645`)
+/// does `expect(RParen); Ok(first)` — the AST node IS the inner expression, so the
+/// paren layer never reaches the formatter and only the parens the formatter's own
+/// precedence rules demand come back. Redundant author parens are how a reader is
+/// told what binds first; deleting them is an edit to the user's source, not a
+/// canonicalization.
+///
+/// One cell per costume so a partial fix fingers what it missed: a group around a
+/// higher-precedence binary operand, a group around a whole arithmetic sub-term,
+/// and a group around a cast in condition position. The fixture's outer
+/// `(… or …)` is deliberately NOT asserted — the formatter re-emits that one from
+/// precedence, so it would be green for a reason unrelated to this gap.
+///
+/// Asserts the INTENDED preserved output, so it is RED at HEAD. Un-ignore and
+/// graduate the fixture out of `known_gaps/` the round the paren-emission
+/// chokepoint lands (the prototype's idempotence blocker is in the TODO entry).
+#[test]
+#[ignore = "known gap (R41 T-FMT-B): gg fmt deletes the author's grouping parens; un-ignore when the paren-emission chokepoint lands"]
+fn fmt_preserves_author_parens() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir.join("tests/fixtures/known_gaps/fmt_paren_deletion.gg");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    // Assert on the CODE lines only — the header comment quotes these same
+    // shapes to document the gap, and a substring search over the whole file
+    // would match the prose and pass while the code was still being rewritten.
+    let code: String = formatted
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for cell in [
+        "(y % 4) == 0",
+        "(y % 100) != 0",
+        "(y % 400) == 0",
+        "n + (n * shift)",
+        "if (slen as bool):",
+    ] {
+        assert!(
+            code.contains(cell),
+            "author parens deleted: `{cell}` is not in the formatted output.\n\
+             === formatted (code lines) ===\n{code}"
+        );
+    }
+}
+
 /// The CLASS-RETIRING guard (Core #6): a hand-written projection of every
 /// fact-carrying AST field, compared across a `gg fmt` round trip.
 ///
