@@ -169,9 +169,14 @@ Three properties fall out of the packing loop (`render_fill`,
   final line overruns by exactly `close.len()`, which is why `Fill` owns its `close`
   instead of leaving it as a sibling `Text`.
 - **At least one item lands on every line.** An item too wide to fit even alone at the
-  continuation indent is emitted there anyway and overflows. (The other budget
+  continuation indent is emitted there anyway and overflows. (The second budget
   escape is caller-emitted text after the close — an extern's `= "symbol"`, a
-  signature's `:` — which the packer cannot see; filed as a known gap.)
+  signature's `:` — which the packer cannot see; filed as a known gap. The third
+  is the `from x import a, b, c` name list, which never reaches a packer at all:
+  it is the one undelimited list in the language, and an undelimited list cannot
+  wrap in indentation-based syntax without re-parsing as a new statement. The
+  ratified parenthesized form retires that exemption and routes the list through
+  `surround_fill` like every other.)
 - **A multi-line item never shares a line.** It measures `None`, so the packer always
   breaks before it, which places it at precisely the column its sub-render assumed;
   packing then resumes from the column its last line ended at.

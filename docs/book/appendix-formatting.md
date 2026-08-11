@@ -139,10 +139,20 @@ never have to choose between them.
 
 One element can be wider than the whole budget — a long qualified name, a deeply
 generic type. The formatter puts it on its own continuation line and lets it
-overrun rather than breaking it somewhere meaningless. Two things can push a
-line past 120: that single over-wide element, and text the formatter writes
-after a list's closing bracket — the `= "symbol"` of an `extern` declaration,
-or the `:` that ends a signature — which the packer does not measure.
+overrun rather than breaking it somewhere meaningless. Three things can push a
+line past 120: that single over-wide element; text the formatter writes after a
+list's closing bracket — the `= "symbol"` of an `extern` declaration, or the `:`
+that ends a signature — which the packer does not measure; and an **import
+line**, which is exempt from the budget entirely.
+
+The import exemption is a consequence of the syntax, not a preference. A `from x
+import a, b, c` name list is the one list in the language with no delimiter
+around it, and in indentation-based syntax an undelimited list cannot wrap — a
+bare name on a fresh line re-parses as a new statement. So a long import stays
+long. The parenthesized form `from x import (a, b, c)` is ratified and retires
+this exemption when it lands: parentheses suspend newline-significance the way
+they do in an expression, and the name list then packs at 120 like every other
+list.
 
 ## Comments
 
