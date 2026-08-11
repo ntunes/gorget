@@ -26,7 +26,7 @@
 # The fix is a paren-emission CHOKEPOINT (Core #4), not a patch — the prototype
 # that recorded author parens as parser trivia and deduped at
 # `format_expr_maybe_parens` was NOT IDEMPOTENT, because
-# `wrap_multiline_expr_in_parens` (`src/formatter/mod.rs:5041`) writes its
+# `wrap_multiline_expr_in_parens` (`src/formatter/mod.rs:5168`) writes its
 # broken-chain parens through `doc::if_break` unconditionally at the Doc layer,
 # outside that dedup; pass 2 then reads the pair as an author paren and stacks
 # another. Every unconditional paren write has to route through one dedup, with

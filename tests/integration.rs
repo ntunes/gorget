@@ -48344,7 +48344,7 @@ fn d27_sh_caret_typearg_suffix() {
 /// `^` as an unnamed FUNCTION-TYPE PARAMETER SUFFIX
 /// (`Callable[void(int &, String ^)]`). The accept-both control is the only
 /// in-corpus postfix-`!` twin of that POSITION,
-/// `callable_bang_arr_indexed_callee` (integration.rs:39777), whose fn type
+/// `callable_bang_arr_indexed_callee` (integration.rs:39859), whose fn type
 /// (`callable_bang_arr_indexed_callee.gg:27`) is the same two-parameter
 /// `&`/move pair differing in the glyph.
 ///

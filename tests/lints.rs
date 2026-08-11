@@ -10556,27 +10556,101 @@ fn doc_source_citations_name_the_right_line() {
 
     let cite = regex::Regex::new(r"`([A-Za-z0-9_./-]+\.(?:rs|gg|c|h|toml)):(\d+)(?:-\d+)?`")
         .expect("citation regex");
-    let ident = regex::Regex::new(r"`([A-Za-z_][A-Za-z0-9_]*(?:(?:::|\.)[A-Za-z_][A-Za-z0-9_]*)*)`")
-        .expect("identifier regex");
+    // The LEADING identifier chain inside backticks, ignoring whatever follows
+    // it. Prose writes `emit_comments_before(pos)` and `Block::synthetic(stmts,
+    // span)` as often as bare names, and requiring the whole span to be an
+    // identifier skipped those entirely — which then fell through to the
+    // paragraph fallback and produced false failures on correct cites.
+    let ident = regex::Regex::new(
+        r"`([A-Za-z_][A-Za-z0-9_]*(?:(?:::|\.)[A-Za-z_][A-Za-z0-9_]*)*)[^`]*`",
+    )
+    .expect("identifier regex");
+
+    // A CONTINUATION cite: `` `:1370` `` — a bare line number whose file is the
+    // last one named nearby. Prose uses these constantly in list bullets
+    // ("`meta if` (`:1370`), `meta for` (`:1386`)"), and the first version of
+    // this guard never even scanned them, which hid eight of the ten stale cites
+    // it was written to catch.
+    let bare = regex::Regex::new(r"`:(\d+)(?:-\d+)?`").expect("bare citation regex");
 
     let mut checked = 0usize;
     let mut stale: Vec<String> = Vec::new();
 
-    for doc in walkdir_md("docs") {
-        let rel = doc.to_string_lossy().replace('\\', "/");
-        if rel != SCOPE {
-            continue;
+    // Both citation guards walked `docs/` only, and that is where the four
+    // stalest cites of the last round were NOT: `TODO.md`, a `known_gaps`
+    // fixture header, and two test-file doc comments all cite `src/` line
+    // numbers, all four drifted, and nothing looked. Records rot the same way
+    // prose does — so the walk CAN cover them, behind the standard env gate.
+    //
+    // MEASURED before gating (2026-08-11, `GG_LINT_CITE_CONTENT_WIDE=1`): the
+    // widened scan reports 98 rows — 65 `TODO.md`, 22 `tests/integration.rs`,
+    // 9 `tests/lints.rs`, 2 `known_gaps`. That is NOT 98 stale cites. TODO.md
+    // dominates for a structural reason: its bullets are single enormous lines
+    // packing dozens of identifiers and many cites, so the candidate set is
+    // huge and never near any particular cite — the heuristic has no signal
+    // there. But the pile is not all noise either: `tests/lints.rs:4820` cites
+    // `src/ir/lowering/types.rs:699` for `register_collection_alias`, which is
+    // at **967**. A real stale cite, outside `docs/`, that nothing guarded.
+    //
+    // BURN-DOWN, in this order: (1) `known_gaps` (2 rows) and `tests/lints.rs`
+    // (9) — line-structured prose where the heuristic works; (2)
+    // `tests/integration.rs` (22); (3) `TODO.md` LAST, and probably not with
+    // this heuristic at all — a per-bullet check would need the cite's own
+    // sentence, not the bullet. Fix or allowlist each row WITH ITS REASON, then
+    // fold the target into the fatal set above. Do not bulk-allowlist: an
+    // unread row asserts a verification nobody did.
+    let wide = std::env::var("GG_LINT_CITE_CONTENT_WIDE").is_ok();
+    let mut targets: Vec<PathBuf> = vec![PathBuf::from(SCOPE)];
+    if wide {
+        targets.push(PathBuf::from("TODO.md"));
+        if let Ok(entries) = fs::read_dir("tests/fixtures/known_gaps") {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("gg") {
+                    targets.push(p);
+                }
+            }
         }
+        for f in ["tests/lints.rs", "tests/integration.rs"] {
+            targets.push(PathBuf::from(f));
+        }
+    }
+
+    for doc in targets {
+        let rel = doc.to_string_lossy().replace('\\', "/");
         let Ok(text) = fs::read_to_string(&doc) else { continue };
+        let all: Vec<&str> = text.lines().collect();
+        // The file most recently named, so a bare `:N` resolves to it.
+        let mut last_path: Option<String> = None;
         for (lineno, line) in text.lines().enumerate() {
-            let Some(caps) = cite.captures(line) else { continue };
-            let path = caps[1].to_string();
+            // Every cite on the line, full or continuation, in source order.
+            let mut on_line: Vec<(String, usize)> = Vec::new();
+            for caps in cite.captures_iter(line) {
+                let p = caps[1].to_string();
+                if let Ok(n) = caps[2].parse::<usize>() {
+                    on_line.push((p.clone(), n));
+                }
+                last_path = Some(p);
+            }
+            for caps in bare.captures_iter(line) {
+                if let (Some(p), Ok(n)) = (last_path.clone(), caps[1].parse::<usize>()) {
+                    on_line.push((p, n));
+                }
+            }
+            for (path, cited) in on_line {
             if !DOC_CITATION_ROOTS.iter().any(|r| path.starts_with(r)) {
                 continue;
             }
-            let Ok(cited) = caps[2].parse::<usize>() else { continue };
             let Ok(src) = fs::read_to_string(&path) else { continue };
             let src_lines: Vec<&str> = src.lines().collect();
+            // A bare `:N` is resolved against the last file NAMED nearby, and
+            // that inference can be wrong — a paragraph may cite `doc.rs` and
+            // then carry a bare number meant for `mod.rs`. Out of range means
+            // the inference missed, so say nothing: `doc_source_citations_resolve`
+            // owns the range question for cites that carry their own path.
+            if cited == 0 || cited > src_lines.len() {
+                continue;
+            }
 
             // Candidate names: every backticked identifier on the doc line,
             // exploded so `Formatter::verbatim` also offers `verbatim` and
@@ -10589,22 +10663,56 @@ fn doc_source_citations_name_the_right_line() {
             // "`format_method_chain` (cite) and `format_binary_chain` \n (cite)
             // turn each segment into a `Doc::Text` leaf" — where line two offers
             // only `Doc::Text` and the cite is correct.
-            let mut names: Vec<String> = Vec::new();
-            let prev = if lineno > 0 { text.lines().nth(lineno - 1).unwrap_or("") } else { "" };
-            for src_line in [line, prev] {
+            let collect = |src_line: &str, out: &mut Vec<String>| {
                 for m in ident.captures_iter(src_line) {
+                    // A backtick span holding a PATH is a citation, not a name.
+                    // Without this the leading-chain match turns
+                    // `` `src/formatter/mod.rs:5` `` into the candidate "src",
+                    // which matches almost any window and drowns the real names.
+                    if m[0].contains('/') {
+                        continue;
+                    }
                     let whole = m[1].to_string();
                     for seg in whole.split("::").flat_map(|s| s.split('.')) {
-                        if seg.len() >= 4 {
-                            names.push(seg.to_string());
+                        if seg.len() >= 3 {
+                            out.push(seg.to_string());
                         }
                     }
+                }
+            };
+            let mut names: Vec<String> = Vec::new();
+            collect(line, &mut names);
+            if lineno > 0 {
+                collect(all[lineno - 1], &mut names);
+            }
+            // When neither line names anything, widen to the PARAGRAPH rather
+            // than skipping. Skipping was a real hole — it hid the extern
+            // `= "symbol"` and `from a import` cites, whose sentences put the
+            // identifier two lines up. A wider candidate set only makes the
+            // check more permissive (any hit passes), so this trades a little
+            // detection power for covering cites that had none at all.
+            if names.is_empty() {
+                let mut lo = lineno;
+                while lo > 0 && !all[lo - 1].trim().is_empty() {
+                    lo -= 1;
+                }
+                let mut hi = lineno;
+                while hi + 1 < all.len() && !all[hi + 1].trim().is_empty() {
+                    hi += 1;
+                }
+                for l in &all[lo..=hi] {
+                    collect(l, &mut names);
                 }
             }
             names.sort();
             names.dedup();
             if names.is_empty() {
-                continue; // a cite with no identifier beside it says nothing to check
+                // ⚠ RESIDUAL, named rather than assumed away: a cite in a
+                // paragraph that backticks no identifier at all cannot be
+                // content-checked by this method. Rare in this chapter (prose
+                // here names what it cites), and the fallback above removed the
+                // common case.
+                continue;
             }
             checked += 1;
 
@@ -10618,6 +10726,7 @@ fn doc_source_citations_name_the_right_line() {
                     lineno + 1
                 ));
             }
+            }
         }
     }
 
@@ -10627,6 +10736,33 @@ fn doc_source_citations_name_the_right_line() {
          citation or identifier format moved and this lint reads almost \
          nothing. Fix the scanner, don't lower the floor."
     );
+    // ── ALLOWLIST, shrink-only ───────────────────────────────────────────────
+    //
+    // A cite whose sentence describes code by BEHAVIOUR rather than by symbol
+    // name cannot be content-checked this way: the backticked tokens near it
+    // are keywords, constants or types that live elsewhere in the file, while
+    // the cite points at exactly the right lines. Each row below was READ at
+    // HEAD and confirmed to land on the code its sentence describes; the reason
+    // is recorded so a future reader re-checks rather than trusts.
+    //
+    // SHRINK-ONLY. Do not add a row to silence a failure — repoint the cite. A
+    // row belongs here only when the cite is measured CORRECT and the sentence
+    // genuinely names no symbol at that line.
+    const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
+        ("103", "src/formatter/mod.rs:41", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
+        ("138", "src/formatter/doc.rs:325", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
+        ("190", "src/formatter/doc.rs:189", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
+        ("280", "src/formatter/mod.rs:461", "the blank-collapse loop INSIDE `fn format`, whose name is 25 lines up"),
+        ("284", "src/formatter/mod.rs:457", "the `align_trailing_comments()` call, named in prose without backticks"),
+        ("293", "src/formatter/mod.rs:1060", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("387", "src/formatter/mod.rs:1537", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+    ];
+    stale.retain(|s| {
+        !HEURISTIC_BLIND.iter().any(|(line, cite, _)| {
+            s.contains(&format!("{SCOPE}:{line} ")) && s.contains(cite)
+        })
+    });
+
     assert!(
         stale.is_empty(),
         "{} citation(s) in {SCOPE} point at a line that does not mention the \
@@ -10634,8 +10770,12 @@ fn doc_source_citations_name_the_right_line() {
          The line number has drifted. Re-read the source and repoint it. This is \
          the half `doc_source_citations_resolve` cannot see: an in-range cite on \
          the wrong line resolves perfectly and still misleads every reader.\n\n\
-         NEXT STEP FOR THIS RATCHET: widen SCOPE from the one chapter to the \
-         whole docs tree, run, and burn down or allowlist what it finds.",
+         NEXT STEPS FOR THIS RATCHET, both measured and both real:\n\
+         (1) widen SCOPE from the one chapter to the whole docs tree;\n\
+         (2) burn down the WIDE scan — `GG_LINT_CITE_CONTENT_WIDE=1` already \
+         walks TODO.md, the known_gaps headers and the two test files, where \
+         nothing guards cites today and where at least one confirmed stale cite \
+         lives. See the burn-down order in the comment above `targets`.",
         stale.len(),
         stale.join("\n  ")
     );
@@ -14176,7 +14316,7 @@ fn formatter_list_emit_fill_census() {
 ///
 /// So the two counts are pinned against each other. `format_static_decl` is the
 /// one deliberate non-caller: statics are private-by-DEFAULT, the inverse
-/// convention, and it carries its own rule (`src/formatter/mod.rs:1842-1858`).
+/// convention, and it carries its own rule (`src/formatter/mod.rs:1894-1910`).
 /// A mismatch means either a new carrier that skipped the path, or a carrier
 /// removed without its emit site — both worth a look.
 #[test]
