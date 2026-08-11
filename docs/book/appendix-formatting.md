@@ -6,6 +6,20 @@ configuration, no options to bikeshed. Running the formatter is how Gorget code
 is meant to look; the standard library and the self-hosting compiler are both
 kept formatted.
 
+> **Ruled, not shipped — the 2026-08-11 form-preservation rulings.** This
+> appendix's doctrine is ratified to change: **`gg fmt` changes layout it owns
+> and nothing the author spelled.** Literal and escape forms are preserved
+> VERBATIM (the "canonical, not verbatim" escaping section below is superseded);
+> the author's inline-vs-next-line suite choice is preserved SYMMETRICALLY;
+> synonym spellings (`byte`/`uint8`, set-literal/vector, `await` forms,
+> `public`, …) are never rewritten by `gg fmt` — construct canonicalization, if
+> ever wanted, is `gg fix` territory. Width becomes 120 with fill-pack
+> wrapping; the trailing-comment gap becomes 4. This appendix is rewritten by
+> the R41 formatter-hardening tracks as their write-through; until then it
+> describes shipped behavior. Normative record:
+> `docs/define-gorget/decisions.md` (the FMT FORM-PRESERVATION TRIO entry and
+> the three 2026-08-10 fmt entries).
+
 ## Running the formatter
 
 | Command | Effect |
