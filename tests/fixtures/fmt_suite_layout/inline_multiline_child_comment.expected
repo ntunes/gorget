@@ -19,5 +19,5 @@ void main():
         case 2:
             20
         else:
-            30  # note
+            30    # note
     print(1)

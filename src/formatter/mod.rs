@@ -808,8 +808,8 @@ impl Formatter {
     fn emit_claimed_header_comments(&mut self, claimed: Vec<String>) {
         for comment in claimed {
             let comment_len = comment.chars().count();
-            let mut inlined = String::with_capacity(comment.len() + 2);
-            inlined.push_str("  ");
+            let mut inlined = String::with_capacity(comment.len() + TRAILING_COMMENT_GAP);
+            inlined.push_str(&" ".repeat(TRAILING_COMMENT_GAP));
             inlined.push_str(&comment);
             let buf_offset = if self.emitter.buf.ends_with('\n') {
                 self.emitter.buf.len() - 1
