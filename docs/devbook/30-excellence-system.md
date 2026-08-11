@@ -714,3 +714,47 @@ comments).
 chapter and that file ever disagree, `AGENTS.md` wins and this chapter is
 stale — fix it in the same round (Core #9 spans docs). The exception is §9,
 which is open thinking `AGENTS.md` deliberately does not carry.*
+
+## 12. The two-clean-pass convergence gate (owner 2026-08-11)
+
+The original gauntlet terminal condition — keep launching fresh reviewers until one
+raises *no reservations at all* — was written for reviewers that ran dry. Stronger
+reviewer models do not run dry: they reliably produce minor findings forever, partly
+structurally (every fold shifts line anchors, which mints fresh citation nits for the
+next pass), so the gate risked becoming unreachable. A gate that cannot close is a
+broken gate.
+
+The replacement, proposed by the owner mid-R41 and adopted with three refinements:
+**two successive full-mandate passes with zero BLOCKING reservations.** The trade is
+deliberate and asymmetric. On the dimension that matters — design defects — the new
+gate is *stricter* than the old one: the old rule accepted a single clean pass as
+terminal; the new one requires two independent derivations agreeing the design is
+sound, which also guards against one weak or lucky reviewer. On the cheap dimension —
+precision nits — it relaxes, and the executor absorbs the residue (every brief already
+mandates re-verifying anchors at HEAD).
+
+The refinements exist because each closes a measured hole:
+
+1. **Blocking is defined, not vibes** — anything that would make the executor produce
+   wrong code, fixtures, or records, or that violates a Core invariant. The
+   classification burden this shifts onto reviewers is real: in R41, one pass filed
+   "author `do:` deleted at arm position" as a *minor* when it changes accept/reject.
+   Hence the orchestrator cross-check with PROMOTION power, and a promotion resets the
+   streak.
+2. **Terminal minors land as a marked errata addendum, never a weave.** The sequential
+   rule's core insight survives: a fold can leave a stale remnant, and only a next pass
+   catches it. Weaving unreviewed fixes into reviewed text would reintroduce exactly
+   that; an appended errata block leaves the reviewed body intact and tells the
+   executor what is spec-with-re-verify.
+3. **The ≥3 floor and the no-upper-bound stance stay.** Both terminal passes run the
+   full mandate — a narrowed "confirmation-only" pass is how rubber stamps start.
+
+The honest counterexample, recorded so nobody rediscovers it as a surprise: the D45
+gauntlet's passes 5-7 were all zero-blocking, so this gate would have converged after
+pass 6 — and pass 8 found a blocker (a doc comment arguing the reversed doctrine two
+lines above a pass-7 rewrite). That blocker was record-accuracy, not design — the
+class most likely to also be caught by the executor or the output-review — and the
+owner closed that gauntlet by hand at 8 with exactly this gate's logic. The gate
+codifies the judgment that was already being exercised; the residual risk it accepts
+is the record-grade tail, and the expected cost of the pure-minor passes it retires
+was the lowest-value spend in the system.
