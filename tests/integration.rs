@@ -15246,8 +15246,9 @@ fn fill_pack_body(name: &str) -> String {
 }
 
 /// No emitted line exceeds the budget, EXCEPT the lines named in
-/// `allowed_overflow` — each of which must be a single element that cannot fit
-/// alone at its continuation indent. Widths are CHARACTER counts, because the
+/// `allowed_overflow` — each a single element that cannot fit alone at its
+/// continuation indent. (Caller-emitted suffixes after the close are the other
+/// escape, invisible to the packer — filed; these cells are suffix-free.) Widths are CHARACTER counts, because the
 /// budget is a display property.
 fn assert_fill_pack_width(name: &str, body: &str, allowed_overflow: &[&str]) {
     for line in body.lines() {
@@ -48449,3 +48450,22 @@ fn known_gap_fmt_multiline_header_trailing_comment() {
 }
 
 // ==== end T-RB0 ============================================================
+
+// ==== R41 orchestrator: the fill-suffix width gap (known_gaps) ==============
+
+/// KNOWN GAP: caller-emitted suffixes after a list close are invisible to the
+/// fill packer, so this extern formats to a ~148-char line at MAX_WIDTH=120.
+/// Asserts the INTENDED output property: no formatted line exceeds 120 chars.
+/// Un-ignore when the packer accounts for caller suffixes (TODO.md).
+#[test]
+#[ignore = "KNOWN GAP: fill packer cannot see caller-emitted suffixes (extern = \"symbol\") — lines overrun 120; filed 2026-08-11"]
+fn fmt_fill_suffix_overrun_stays_in_budget() {
+    let src = std::fs::read_to_string("tests/fixtures/known_gaps/fmt_fill_suffix_overrun.gg").unwrap();
+    let out = gorget::formatter::format_source_result(&src).expect("fixture parses");
+    let over: Vec<String> = out
+        .lines()
+        .filter(|l| l.chars().count() > 120)
+        .map(|l| format!("{} chars: {}", l.chars().count(), l))
+        .collect();
+    assert!(over.is_empty(), "lines over 120 chars:\n{}", over.join("\n"));
+}

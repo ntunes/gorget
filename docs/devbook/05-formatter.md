@@ -149,8 +149,9 @@ Three properties fall out of the packing loop (`render_fill`,
   final line overruns by exactly `close.len()`, which is why `Fill` owns its `close`
   instead of leaving it as a sibling `Text`.
 - **At least one item lands on every line.** An item too wide to fit even alone at the
-  continuation indent is emitted there anyway and overflows — the single exception to
-  "no line exceeds the budget".
+  continuation indent is emitted there anyway and overflows. (The other budget
+  escape is caller-emitted text after the close — an extern's `= "symbol"`, a
+  signature's `:` — which the packer cannot see; filed as a known gap.)
 - **A multi-line item never shares a line.** It measures `None`, so the packer always
   breaks before it, which places it at precisely the column its sub-render assumed;
   packing then resumes from the column its last line ended at.

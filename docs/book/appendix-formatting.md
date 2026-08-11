@@ -126,8 +126,10 @@ never have to choose between them.
 
 One element can be wider than the whole budget — a long qualified name, a deeply
 generic type. The formatter puts it on its own continuation line and lets it
-overrun rather than breaking it somewhere meaningless. That is the only case
-where a formatted line exceeds 120 columns.
+overrun rather than breaking it somewhere meaningless. Two things can push a
+line past 120: that single over-wide element, and text the formatter writes
+after a list's closing bracket — the `= "symbol"` of an `extern` declaration,
+or the `:` that ends a signature — which the packer does not measure.
 
 ## Comments
 

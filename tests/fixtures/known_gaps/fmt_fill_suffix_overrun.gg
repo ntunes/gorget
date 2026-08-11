@@ -1,0 +1,11 @@
+# KNOWN GAP (fmt width, filed 2026-08-11 from the T-FMT-D output-review):
+# the fill packer cannot see CALLER-EMITTED text after a list's closing
+# delimiter. This extern's parameter list ends inside the 120 budget, so the
+# packer keeps it flat — and the ` = "symbol"` suffix carries the line to ~148
+# characters. INTENDED: the formatter accounts for the caller suffix and breaks
+# the list so no emitted line exceeds 120. Cell: extern-decl suffix; siblings:
+# signature `:`; vardecl after generic args. See TODO.md (fill-suffix entry).
+extern void gl_vertex_attrib_pointer(int index, int size, int type_, int normalized, int stride, int offset) = "gorget_gl_vertex_attrib_pointer"
+
+void main():
+    print(1)
