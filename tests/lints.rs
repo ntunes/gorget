@@ -12955,6 +12955,17 @@ fn fmt_multiline_group_paren_wrap_class() {
 /// mutation is not the shape a regression takes — a lost gate is deleted, not
 /// short-circuited — and the fixture matrix catches the disabled form anyway,
 /// but the limit is real and stated rather than assumed away.
+///
+/// ⚠ **The closure emitter's layout read has NO ROW HERE, and its `Plain` row
+/// does not mean "no layout question at this site".** A closure suite reaches
+/// `format_block_stmts` through `format_closure_post_prelude`, so the census
+/// sees the delegating call, not the read at `src/formatter/mod.rs:3856` that
+/// chose the spelling. Independently measured (`if true || block.layout == ...`
+/// at that read): this census stays GREEN while
+/// `tests/fixtures/fmt_suite_layout/closure_body.gg` loses its fixpoint AND
+/// regains trailing whitespace, so `fmt_suite_layout_form_preservation` and the
+/// `suite_layout_expr_facts` projection are what cover this site. Two guards,
+/// not one — do not read the `Plain` row as an absence of the question.
 #[test]
 fn formatter_suite_layout_hook_census() {
     #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -13122,6 +13133,90 @@ fn formatter_suite_layout_hook_census() {
          · `Plain` is for a position with only ONE legal author spelling; \
          record WHY in the table's rationale block, the way the existing rows \
          do."
+    );
+}
+
+/// The READ-SITE guard behind `SuiteLayout`'s doc comment (Core #14 — an
+/// invariant-asserting comment needs an enforcing guard, or it gets deleted).
+///
+/// `src/parser/ast.rs` tells every reader: *"Nothing outside the formatter reads
+/// this field: it records syntax, and semantics must not depend on it."* True at
+/// the time it was written, and load-bearing — the day a semantic pass consults
+/// `Block.layout` or `Expr::Do.author_spelled`, a program's MEANING starts
+/// depending on how its author spaced it, and `if c: return x` stops being the
+/// same program as the indented form. That is not a bug you find in review; it
+/// is a bug you find when someone's whitespace change flips a verdict.
+///
+/// So the sentence is enforced here rather than trusted:
+///   * `src/formatter/` may READ both fields — it is the one consumer whose
+///     entire job is spelling.
+///   * `src/parser/` may DECLARE and WRITE them (`layout:` / `author_spelled:`
+///     in a field decl or a struct-literal init) but may NOT read them: the
+///     parser is the writer, and a read there would mean the fact is being
+///     round-tripped through the layer that produces it.
+///   * Everywhere else under `src/` — semantic, ir, lir, backend — may not
+///     mention them at all.
+///
+/// Comments are exempt: naming the anti-pattern is how the rule is taught. The
+/// test-side fact projection in `tests/integration.rs` is out of scope by
+/// construction (this walks `src/` only) and is a fixture ORACLE, not a
+/// consumer.
+///
+/// **Break-and-verify (Core #13, RED-verified 2026-08-11):** adding
+/// `let _ = block.layout;` to `src/semantic/typecheck.rs` fires this lint with
+/// that file:line; adding it to `src/parser/stmt.rs` fires the reads-in-parser
+/// arm. Restored both.
+#[test]
+fn suite_layout_is_read_only_by_the_formatter() {
+    const FIELDS: [&str; 2] = [".layout", "author_spelled"];
+    let mut violations: Vec<String> = Vec::new();
+
+    for path in walkdir_rs("src") {
+        let rel = path.to_string_lossy().replace('\\', "/");
+        if rel.starts_with("src/formatter/") {
+            continue; // the sanctioned reader
+        }
+        let Ok(content) = fs::read_to_string(&path) else { continue };
+        let in_parser = rel.starts_with("src/parser/");
+        for (i, line) in content.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") {
+                continue; // prose may name the field
+            }
+            for field in FIELDS {
+                if !line.contains(field) {
+                    continue;
+                }
+                // A WRITE is `layout: …` / `author_spelled: …` — a field
+                // declaration or a struct-literal initializer. Anything else
+                // that mentions the field is a read.
+                let bare = field.trim_start_matches('.');
+                let is_write = line.contains(&format!("{bare}:"));
+                if in_parser && is_write {
+                    continue;
+                }
+                violations.push(format!(
+                    "{rel}:{}  {}",
+                    i + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "`Block.layout` / `Expr::Do.author_spelled` are SYNTAX, and \
+         `src/parser/ast.rs` promises that nothing outside the formatter reads \
+         them. These sites break that promise:\n\n{}\n\n\
+         If a pass genuinely needs to know how a suite was spelled, the answer \
+         is almost certainly that it needs a different fact — one the parser \
+         should RESOLVE and write through as typed metadata (Layering rule 4), \
+         not the author's whitespace. A semantics that reads this field makes \
+         `if c: stmt` and its indented form different programs.\n\n\
+         The parser may DECLARE and WRITE these fields (`layout:` / \
+         `author_spelled:`); it may not read them back.",
+        violations.join("\n")
     );
 }
 
