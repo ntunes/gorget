@@ -1,0 +1,24 @@
+# ==== T-FMT-B — SYNONYM: `private` kept everywhere, and the THIRD emit path.
+# SCOPE CLAIM: `format_static_decl`'s own visibility write — the emit path
+# neither `visibility_explicit_public.gg` (items) nor its field write covers.
+# Statics are private BY DEFAULT (the opposite convention from every other
+# item), so the static path has always had its own branch.
+# Pre-fix RED (measured, and the sharpest cell in the family): `private static
+# int x = 0` came back as `static int x = 0` — the `private` keyword DELETED,
+# because the static branch emitted a keyword only for `Public`. On a static
+# that is private by default the deletion is value-preserving, which is exactly
+# why it survived: nothing downstream could see it.
+private static int private_static = 0
+
+public static int public_static = 1
+
+private struct Hidden:
+    private int v
+
+private int helper(int a):
+    return a + 1
+
+private const int SECRET = 3
+
+void main():
+    print(helper(private_static + public_static) + SECRET)

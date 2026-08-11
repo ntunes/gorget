@@ -1,0 +1,20 @@
+# ==== T-FMT-B — SYNONYM: prefix `await` inside a BINARY OPERATOR (brief-review
+# pass 6, blocking-grade).
+# SCOPE CLAIM: the interaction between prefix-await rendering and the
+# formatter's paren predicate. Prefix `await` parses its operand at binding
+# power 2 — LOOSER than `+` (27) — while postfix `.await()` is a bp-35 postfix.
+# So a node's effective outer binding power now DEPENDS ON THE RENDERED FORM.
+# If `effective_outer_bp` keeps reporting the postfix answer for a
+# prefix-rendered await, `(await f()) + 1` re-emits as `await f() + 1`, which
+# re-parses as `Await(f() + 1)` — a SILENT AST CHANGE that re-parses and runs.
+# RED-verified by omitting the form-dependent arm from `effective_outer_bp`.
+async int f():
+    return 1
+
+async void g():
+    int y = (await f()) + 1
+    int z = f().await() + 1
+    print(y + z)
+
+async void main():
+    await g()

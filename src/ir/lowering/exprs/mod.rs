@@ -712,7 +712,7 @@ fn lower_expr_inner(
             FunctionBuilder::copy(dst)
         }
 
-        Expr::ArrayLiteral(elems) => {
+        Expr::ArrayLiteral(elems, _) => {
             lower_array_literal(ctx, builder, elems)
         }
 
@@ -1318,7 +1318,7 @@ fn lower_expr_inner(
 
         // Await: check if this is awaiting a Task (spawn result) and dispatch via __gorget_await_<fn>.
         // In synchronous GIR mode for non-task expressions, just lower the inner expression.
-        Expr::Await { expr } => {
+        Expr::Await { expr, .. } => {
             let inner = lower_expr(ctx, builder, expr);
             // Extract receiver local before inner is consumed by the call.
             let inner_local = match &inner {
@@ -5739,11 +5739,14 @@ mod tests {
         let result = lower_expr(
             &mut ctx,
             &mut builder,
-            &spanned(Expr::ArrayLiteral(vec![
-                spanned(Expr::IntLiteral(1)),
-                spanned(Expr::IntLiteral(2)),
-                spanned(Expr::IntLiteral(3)),
-            ])),
+            &spanned(Expr::ArrayLiteral(
+                vec![
+                    spanned(Expr::IntLiteral(1)),
+                    spanned(Expr::IntLiteral(2)),
+                    spanned(Expr::IntLiteral(3)),
+                ],
+                ast::ArrayLiteralSpelling::Brackets,
+            )),
         );
         assert!(matches!(result, Operand::Copy(_)));
         // Count gorget_array_new + gorget_array_push calls
@@ -5771,7 +5774,7 @@ mod tests {
         let result = lower_expr(
             &mut ctx,
             &mut builder,
-            &spanned(Expr::ArrayLiteral(vec![])),
+            &spanned(Expr::ArrayLiteral(vec![], ast::ArrayLiteralSpelling::Brackets)),
         );
         assert!(matches!(result, Operand::Copy(_)));
         let has_new = builder.blocks[0].instructions.iter().any(|inst| {

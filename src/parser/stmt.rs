@@ -551,17 +551,21 @@ impl Parser {
                     return Ok(WithBinding {
                         expr: *expr.clone(),
                         name: name.clone(),
+                        explicit_as: true,
                         span,
                     });
                 }
             }
             return Err(self.error_at(span, "expected 'as <name>' in with-binding"));
         }
-        // Bare `name` form — use identifier as both expr and name
+        // Bare `name` form — use identifier as both expr and name.
+        // The duplicated span is incidental, NOT the record of which form was
+        // written: `explicit_as` carries that (Layering rules 2/4).
         if let Expr::Identifier(name) = &full_expr.node {
             return Ok(WithBinding {
                 name: Spanned::new(name.clone(), full_expr.span),
                 expr: full_expr,
+                explicit_as: false,
                 span,
             });
         }

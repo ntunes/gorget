@@ -1,0 +1,21 @@
+# ==== T-FMT-B — SYNONYM: prefix `await` at an OWNERSHIP-MODIFIER operand
+# position (brief-review pass 6).
+# SCOPE CLAIM: the second form-dependent predicate,
+# `emits_leading_ownership_sigil`. At a call-argument / for-iterable position
+# the parser strips a leading `&` / `!` / `^` into the enclosing node's
+# ownership field BEFORE the expression parser runs, so the formatter wraps any
+# expression whose emission STARTS with a sigil. For `Expr::Await` that
+# predicate recurses into the RECEIVER — correct for the postfix rendering
+# (`^x.m().await()` leads with `^`) and WRONG for the prefix rendering, whose
+# leftmost token is the `await` keyword. A prefix await must gain no parens.
+async int f():
+    return 1
+
+void consume(int x):
+    print(x)
+
+async void g():
+    consume(await f())
+
+async void main():
+    await g()

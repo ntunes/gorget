@@ -802,7 +802,7 @@ impl GenericCollector {
             Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
                 self.scan_expr(body);
             }
-            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
                 for e in elems {
                     self.scan_expr(e);
                 }
@@ -1180,7 +1180,7 @@ impl GenericCollector {
             Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
                 self.walk_expr_for_method_calls(body, env);
             }
-            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
                 for e in elems {
                     self.walk_expr_for_method_calls(e, env);
                 }

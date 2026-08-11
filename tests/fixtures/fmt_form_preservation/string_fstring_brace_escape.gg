@@ -1,0 +1,10 @@
+# ==== T-FMT-B — string-literal VERBATIM: the f-string BRACE-ESCAPE cell.
+# SCOPE CLAIM: `StringKind::Format` only. Gorget accepts TWO spellings for a
+# literal brace inside an f-string — `\{` / `\}` and `{{` / `}}`. Pre-fix RED:
+# the emitter canonicalized every literal brace to the DOUBLED form, so an
+# author who wrote `\{` got `{{` back. Both spellings must survive.
+void main():
+    int x = 1
+    String backslash_form = f"brace \{ and \} with {x}"
+    String doubled_form = f"brace {{ and }} with {x}"
+    print(backslash_form.len() + doubled_form.len())

@@ -1,0 +1,12 @@
+# ==== T-FMT-B — SYNONYM: the SET-literal brace spelling.
+# SCOPE CLAIM: `{a, b}` (set literal) vs `[a, b]` (array literal). The parser
+# folds BOTH into `Expr::ArrayLiteral` — semantic analysis tells set from array
+# by context — so the brace-vs-bracket choice is authorial information the AST
+# must now carry (`spelled_braces`).
+# Pre-fix RED (measured): `{1, 2}` came back as `[1, 2]`, rewriting every set
+# literal in the tree into array syntax.
+void main():
+    Set[int] s = {1, 2, 3}
+    Vector[int] v = [1, 2, 3]
+    Set[int] empty_ok = {9}
+    print(s.len() + v.len() + empty_ok.len())

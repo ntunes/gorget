@@ -1,0 +1,33 @@
+# ==== T-FMT-B — SYNONYM: implicit visibility is NOT made explicit (the
+# over-fire guard for `visibility_explicit_public.gg`).
+# SCOPE CLAIM: the same eight carriers with NO visibility keyword written.
+# Preserving explicitness is only half a mechanism — the other half is never
+# INVENTING a keyword. Unconditional `public` emission is forbidden precisely
+# because both spellings parse to `Visibility::Public`: a formatter that
+# "helpfully" spelled the default would rewrite every declaration in the tree.
+# Green on arrival by construction (there is no pre-fix compiler for a
+# not-yet-existing feature to be red against), so RED-verified the #15(d) way:
+# make the emit sites unconditional on `Visibility::Public`, confirm this
+# fixture goes red, restore.
+struct Point:
+    float x
+    float y
+
+enum Color:
+    Red()
+    Green()
+
+trait Show:
+    String show(self)
+
+type Alias = int
+
+newtype Meters(int)
+
+const int LIMIT = 10
+
+int add(int a, int b):
+    return a + b
+
+void main():
+    print(add(1, 2) + LIMIT)

@@ -2,7 +2,7 @@ pub mod doc;
 
 use std::rc::Rc;
 
-use crate::lexer::token::{StringKind, StringLiteral, StringSegment};
+use crate::lexer::token::{StringKind, StringLiteral, StringSegment, Token};
 use crate::parser::ast::*;
 use crate::span::{Span, Spanned};
 
@@ -1285,9 +1285,9 @@ impl Formatter {
     fn format_test(&mut self, t: &TestDef) {
         self.format_doc_comment(&t.doc_comment);
         self.format_attributes(&t.attributes);
-        self.emitter.write("test \"");
-        self.emitter.write(&t.name.node);
-        self.emitter.write("\":");
+        self.emitter.write("test ");
+        self.emit_quoted_string(&t.name.node, Some(t.name.span));
+        self.emitter.write(":");
         self.emitter.newline();
         self.emitter.indent();
         self.format_block_stmts(&t.body);
@@ -1297,9 +1297,9 @@ impl Formatter {
     fn format_bench(&mut self, b: &BenchDef) {
         self.format_doc_comment(&b.doc_comment);
         self.format_attributes(&b.attributes);
-        self.emitter.write("bench \"");
-        self.emitter.write(&b.name.node);
-        self.emitter.write("\":");
+        self.emitter.write("bench ");
+        self.emit_quoted_string(&b.name.node, Some(b.name.span));
+        self.emitter.write(":");
         self.emitter.newline();
         self.emitter.indent();
         self.format_block_stmts(&b.body);
@@ -1344,16 +1344,25 @@ impl Formatter {
                     match arg {
                         AttributeArg::Identifier(s) => self.emitter.write(s),
                         AttributeArg::StringLiteral(s) => {
-                            self.emitter.write("\"");
-                            self.emitter.write(s);
-                            self.emitter.write("\"");
+                            self.emit_quoted_string(&s.node, Some(s.span));
                         }
                         AttributeArg::KeyValue(k, v) => {
                             self.emitter.write(k);
                             self.emitter.write(" = ");
-                            self.emitter.write("\"");
-                            self.emitter.write(v);
-                            self.emitter.write("\"");
+                            // The two producers are NOT interchangeable: a
+                            // bare identifier stays bare. Quoting it (which
+                            // this arm used to do unconditionally) invents a
+                            // string the author did not write — and the
+                            // result re-parses cleanly as the OTHER producer,
+                            // so no round-trip gate could ever see it.
+                            match v {
+                                AttributeArgValue::Ident(name) => {
+                                    self.emitter.write(&name.node);
+                                }
+                                AttributeArgValue::Str(s) => {
+                                    self.emit_quoted_string(&s.node, Some(s.span));
+                                }
+                            }
                         }
                     }
                 }
@@ -1363,18 +1372,30 @@ impl Formatter {
         }
     }
 
-    fn format_visibility(&mut self, vis: &Visibility) {
-        // Public is the default — no keyword needed.
-        // Private is the opt-in keyword.
-        if *vis == Visibility::Private {
-            self.emitter.write("private ");
+    /// Emit the visibility keyword IFF the author wrote one.
+    ///
+    /// Both `public Foo` and a bare `Foo` parse to `Visibility::Public`, so
+    /// the value alone cannot tell the two apart — which is why this used to
+    /// emit a keyword only for `Private` and silently DELETED every explicit
+    /// `public` in the tree. Emitting one unconditionally is equally wrong in
+    /// the other direction: it would rewrite every declaration that relies on
+    /// the default. The parser records which spelling it consumed; this reads
+    /// that fact and nothing else. (Statics have their own path — they are
+    /// private by default, the opposite convention.)
+    fn format_visibility(&mut self, vis: &Visibility, explicit: bool) {
+        if !explicit {
+            return;
+        }
+        match vis {
+            Visibility::Private => self.emitter.write("private "),
+            Visibility::Public => self.emitter.write("public "),
         }
     }
 
     fn format_function(&mut self, f: &FunctionDef) {
         self.format_doc_comment(&f.doc_comment);
         self.format_attributes(&f.attributes);
-        self.format_visibility(&f.visibility);
+        self.format_visibility(&f.visibility, f.explicit_visibility);
         if matches!(f.body, FunctionBody::Extern(_)) {
             self.emitter.write("extern ");
         }
@@ -1403,9 +1424,8 @@ impl Formatter {
         // cannot double-emit the block header; `returns_borrowed` however
         // IS per-item in both forms, which is why the block form dropped it.
         if let Some(ref abi) = f.extern_abi {
-            self.emitter.write("\"");
-            self.emitter.write(abi);
-            self.emitter.write("\" ");
+            self.emit_quoted_string(&abi.node, Some(abi.span));
+            self.emitter.write(" ");
         }
         self.format_qualifiers(&f.qualifiers);
         if f.returns_borrowed {
@@ -1463,9 +1483,8 @@ impl Formatter {
                 self.emitter.newline();
             }
             FunctionBody::Extern(sym) => {
-                self.emitter.write(" = \"");
-                self.emitter.write(sym);
-                self.emitter.write("\"");
+                self.emitter.write(" = ");
+                self.emit_quoted_string(&sym.node, Some(sym.span));
                 self.emitter.newline();
             }
         }
@@ -1503,7 +1522,7 @@ impl Formatter {
     fn format_struct(&mut self, s: &StructDef) {
         self.format_doc_comment(&s.doc_comment);
         self.format_attributes(&s.attributes);
-        self.format_visibility(&s.visibility);
+        self.format_visibility(&s.visibility, s.explicit_visibility);
         self.emitter.write("struct ");
         self.emitter.write(&s.name.node);
         if let Some(ref gp) = s.generic_params {
@@ -1536,9 +1555,13 @@ impl Formatter {
                     self.emitter.blank_line();
                 }
                 self.emit_comments_before(field.span.start);
-                if field.node.visibility == Visibility::Private {
-                    self.emitter.write("private ");
-                }
+                // The struct-FIELD visibility write — the third emit path,
+                // and the one that used to delete an author's `public float x`
+                // because `Public` is the parsed default here too.
+                self.format_visibility(
+                    &field.node.visibility,
+                    field.node.explicit_visibility,
+                );
                 // type-first: `type name`
                 self.format_type(&field.node.type_);
                 self.emitter.write(" ");
@@ -1559,7 +1582,7 @@ impl Formatter {
     fn format_enum(&mut self, e: &EnumDef) {
         self.format_doc_comment(&e.doc_comment);
         self.format_attributes(&e.attributes);
-        self.format_visibility(&e.visibility);
+        self.format_visibility(&e.visibility, e.explicit_visibility);
         self.emitter.write("enum ");
         self.emitter.write(&e.name.node);
         if let Some(ref gp) = e.generic_params {
@@ -1612,7 +1635,7 @@ impl Formatter {
     fn format_trait(&mut self, t: &TraitDef) {
         self.format_doc_comment(&t.doc_comment);
         self.format_attributes(&t.attributes);
-        self.format_visibility(&t.visibility);
+        self.format_visibility(&t.visibility, t.explicit_visibility);
         self.emitter.write("trait ");
         self.emitter.write(&t.name.node);
         if let Some(ref gp) = t.generic_params {
@@ -1784,7 +1807,7 @@ impl Formatter {
     }
 
     fn format_type_alias(&mut self, ta: &TypeAlias) {
-        self.format_visibility(&ta.visibility);
+        self.format_visibility(&ta.visibility, ta.explicit_visibility);
         self.emitter.write("type ");
         self.emitter.write(&ta.name.node);
         if let Some(ref gp) = ta.generic_params {
@@ -1796,7 +1819,7 @@ impl Formatter {
     }
 
     fn format_newtype(&mut self, nt: &NewtypeDef) {
-        self.format_visibility(&nt.visibility);
+        self.format_visibility(&nt.visibility, nt.explicit_visibility);
         self.emitter.write("newtype ");
         self.emitter.write(&nt.name.node);
         self.emitter.write("(");
@@ -1806,7 +1829,7 @@ impl Formatter {
     }
 
     fn format_const_decl(&mut self, cd: &ConstDecl) {
-        self.format_visibility(&cd.visibility);
+        self.format_visibility(&cd.visibility, cd.explicit_visibility);
         self.emitter.write("const ");
         self.format_type(&cd.type_);
         self.emitter.write(" ");
@@ -1817,14 +1840,28 @@ impl Formatter {
     }
 
     fn format_static_decl(&mut self, sd: &StaticDecl) {
-        // Static globals are private-by-default (opposite of functions / structs
-        // which are public-by-default). Emit `public` explicitly — `format_visibility`
-        // drops it for the regular-item convention, which would silently flip
-        // visibility on round-trip through `gg fmt`.
+        // Static globals are private-by-default (the opposite of functions /
+        // structs, which are public-by-default), so this path has always had
+        // its own visibility rule rather than sharing `format_visibility`.
+        //
+        // `public` is emitted whenever the value IS Public: for a parsed
+        // static that implies the author wrote it (the parser only reaches
+        // `Public` here via an explicit keyword), and for a synthetically
+        // built `StaticDecl` it keeps the emission from silently FLIPPING the
+        // declaration to private. `private` is emitted only when written —
+        // it is the default, so inventing it would rewrite the whole tree,
+        // and DELETING an author's `private` is what this path used to do.
         if sd.visibility == Visibility::Public {
             self.emitter.write("public ");
+        } else if sd.explicit_visibility {
+            self.emitter.write("private ");
         }
-        self.emitter.write("static ");
+        // Q3 PRESERVE: a bare `int counter = 0` at file scope is implicitly
+        // static and builds the same node — inserting the keyword would be
+        // writing code the author did not.
+        if sd.explicit_static_kw {
+            self.emitter.write("static ");
+        }
         self.format_type(&sd.type_);
         self.emitter.write(" ");
         self.emitter.write(&sd.name.node);
@@ -1842,9 +1879,8 @@ impl Formatter {
         let header_anchor_end = eb.abi.as_ref().map_or(eb.span.start, |a| a.span.end);
         self.emitter.write("extern");
         if let Some(ref abi) = eb.abi {
-            self.emitter.write(" \"");
-            self.emitter.write(&abi.node);
-            self.emitter.write("\"");
+            self.emitter.write(" ");
+            self.emit_quoted_string(&abi.node, Some(abi.span));
         }
         self.emitter.write(":");
         // R41 T-FMT-A (S1 N13): `extern "C":  # why` — the block header's own
@@ -2844,9 +2880,14 @@ impl Formatter {
                     if i > 0 {
                         self.emitter.write(", ");
                     }
+                    // Q3 PRESERVE: the bare `with r:` form is not shorthand
+                    // the formatter gets to expand — `with r as r:` is a
+                    // different thing to read.
                     self.format_expr(&binding.expr);
-                    self.emitter.write(" as ");
-                    self.emitter.write(&binding.name.node);
+                    if binding.explicit_as {
+                        self.emitter.write(" as ");
+                        self.emitter.write(&binding.name.node);
+                    }
                 }
                 self.emitter.write(":");
                 self.emitter.newline();
@@ -2880,9 +2921,9 @@ impl Formatter {
                 self.emitter.newline();
             }
             Stmt::Snapshot { name, value } => {
-                self.emitter.write("snapshot \"");
-                self.emitter.write(&name.node);
-                self.emitter.write("\" ");
+                self.emitter.write("snapshot ");
+                self.emit_quoted_string(&name.node, Some(name.span));
+                self.emitter.write(" ");
                 self.format_expr(value);
                 self.emitter.newline();
             }
@@ -3064,7 +3105,10 @@ impl Formatter {
 
     fn format_type(&mut self, ty: &Spanned<Type>) {
         match &ty.node {
-            Type::Primitive(p) => self.emitter.write(primitive_type_str(*p)),
+            Type::Primitive(p) => {
+                let text = self.type_lexeme_text(*p, ty.span);
+                self.emitter.write(&text);
+            }
             Type::Named { name, generic_args } => {
                 self.emitter.write(&name.node);
                 if !generic_args.is_empty() {
@@ -3292,35 +3336,160 @@ impl Formatter {
         self.format_expr_maybe_parens(operand, wrap);
     }
 
+    // ── The verbatim chokepoint ─────────────────────────────
+    //
+    // Several kinds of authorial choice are SYNTAX, not semantics, so the AST
+    // is right to drop them (Layering rule 1: lossy on syntax, lossless on
+    // invariants): an int literal's radix and digit grouping, a float's
+    // trailing zeros, whether a byte was written `b'A'` or `65`, which escape
+    // spelled a character, which quote style wrapped a string, whether a
+    // primitive type was spelled `byte` or `uint8`. The formatter is the ONE
+    // consumer that needs them back, and it recovers them the same way it
+    // recovers comments: from the source text at the node's span.
+    //
+    // Every one of those arms goes through `verbatim` below, and `verbatim`
+    // enforces the property that makes the whole class safe: the recovered
+    // lexeme is RE-LEXED and compared against the AST value the caller is
+    // about to emit. A stale, synthetic, or merely mis-computed span cannot
+    // produce output that means something other than the node it came from —
+    // it can only fall back to the canonical spelling. That is the difference
+    // between preservation and a silent miscompile of the user's source.
+
+    /// Recover the author's own lexeme for the node at `span`, but only if
+    /// re-lexing it yields a token that `accepts` — i.e. one that denotes
+    /// EXACTLY the value being emitted.
+    ///
+    /// Total on every span: `str::get` returns `None` for an out-of-bounds or
+    /// synthetic span (f-string interpolation sub-expressions are parsed at a
+    /// synthetic base offset), for an empty sub-formatter source, and for a
+    /// span that does not land on char boundaries. There is no panic path and
+    /// no arm that needs to know why recovery failed — it just emits canonical.
+    fn verbatim(&self, span: Span, accepts: impl FnOnce(&Token) -> bool) -> Option<&str> {
+        let lexeme = self.source.get(span.start..span.end)?;
+        let tok = relex_single_token(lexeme)?;
+        if accepts(&tok) {
+            Some(lexeme)
+        } else {
+            None
+        }
+    }
+
     /// Choose the surface text for an integer literal (gorget-js snag #15f).
     ///
-    /// The lexer discards an int literal's RADIX — `0x5C`, `0o134`, `0b1011100`
-    /// and `92` all lex to the same `IntLiteral(92)` — because radix is *syntax*
-    /// (Layering rule 1: layers are lossy on syntax, lossless on invariants), so
-    /// the AST is correct to carry only the value. The formatter is the ONE
-    /// consumer that needs the original spelling, and it recovers it the same way
-    /// it recovers comments: from the source text at the node's span.
-    ///
-    /// If the original lexeme at `span` is in-bounds AND parses back to exactly
-    /// `n` under the lexer's own rules (`parse_int_lexeme`), emit it verbatim —
-    /// this preserves the author's radix, hex digit-case, and `_` grouping in a
-    /// single round-trip-checked step. Otherwise fall back to canonical decimal.
-    /// The round-trip check is self-verifying: it is impossible to emit a lexeme
-    /// that denotes a different value than the AST node.
-    ///
-    /// The decimal fallback covers every non-preservable case safely, WITHOUT a
-    /// panic: an out-of-bounds/synthetic span (f-string interp spans live at
-    /// `1 << 40`), an empty sub-formatter source, a byte literal `b'A'` (lexes to
-    /// `IntLiteral(65)` but its lexeme does not parse as an integer), or a span
-    /// that does not land on char boundaries — `str::get` returns `None` for all
-    /// of them.
+    /// Preserves the author's radix, hex digit-case and `_` grouping — and,
+    /// because the oracle is the lexer itself, the BYTE-literal spelling
+    /// `b'A'` too (it lexes to `IntLiteral(65)`, so a hand-written
+    /// integer-syntax mirror could never accept it).
     fn int_literal_text(&self, n: i64, span: Span) -> String {
-        if let Some(lexeme) = self.source.get(span.start..span.end) {
-            if parse_int_lexeme(lexeme) == Some(n) {
+        match self.verbatim(span, |t| matches!(t, Token::IntLiteral(v) if *v == n)) {
+            Some(lexeme) => lexeme.to_string(),
+            None => n.to_string(),
+        }
+    }
+
+    /// Choose the surface text for a float literal.
+    ///
+    /// `format!("{n}")` prints the shortest decimal that round-trips, which is
+    /// value-preserving and form-destroying: `1.50` came back as `1.5`, and a
+    /// table of aligned constants lost its alignment. The comparison is on the
+    /// f64 VALUE, so the recovered lexeme provably denotes the same number.
+    fn float_literal_text(&self, n: f64, span: Span) -> String {
+        if let Some(lexeme) =
+            self.verbatim(span, |t| matches!(t, Token::FloatLiteral(v) if *v == n))
+        {
+            return lexeme.to_string();
+        }
+        let s = format!("{}", n);
+        // Ensure it still looks like a float.
+        if !s.contains('.') && !s.contains('e') && !s.contains('E') {
+            format!("{}.0", s)
+        } else {
+            s
+        }
+    }
+
+    /// Choose the surface text for a primitive TYPE.
+    ///
+    /// `byte` is a user-facing alias the lexer folds into `Keyword::Uint8`
+    /// (`src/lexer/token.rs`), so by the time the parser builds
+    /// `Type::Primitive(Uint8)` the author's spelling is gone — the same
+    /// situation as a literal's radix, and it takes the same cure. The
+    /// re-lexed keyword is mapped back through the parser's own
+    /// keyword-to-primitive table, so an alias is accepted only when it
+    /// denotes the very primitive being emitted.
+    fn type_lexeme_text(&self, p: PrimitiveType, span: Span) -> String {
+        let accepts = |t: &Token| match t {
+            Token::Keyword(kw) => crate::parser::types::keyword_to_primitive(*kw) == Some(p),
+            _ => false,
+        };
+        match self.verbatim(span, accepts) {
+            Some(lexeme) => lexeme.to_string(),
+            None => primitive_type_str(p).to_string(),
+        }
+    }
+
+    /// Choose the surface text for a string literal, INCLUDING its delimiters.
+    ///
+    /// Returns `None` when the author's lexeme cannot be recovered, leaving the
+    /// caller to emit the canonical spelling. The acceptance test is structural
+    /// equality of the re-lexed literal with the AST node — same kind, same
+    /// segments — which pins quote style, prefix letter, escape spelling, the
+    /// f-string brace form, AND the physical line layout of a `"""` block, all
+    /// in one check.
+    fn string_literal_text(&self, s: &StringLiteral, span: Span) -> Option<String> {
+        let accepts = |t: &Token| match t {
+            Token::StringLiteral(relexed) => {
+                relexed.kind == s.kind && relexed.segments == s.segments
+            }
+            _ => false,
+        };
+        self.verbatim(span, accepts).map(|l| l.to_string())
+    }
+
+    /// Choose the surface text for a NAME-string — a quoted string the AST
+    /// stores DECODED, as a plain `String`: test and bench names, snapshot
+    /// names, attribute string arguments, extern ABI tags and symbol names.
+    ///
+    /// Unlike `Expr::StringLiteral`, these carry no `StringLiteral` token to
+    /// compare against, so the check is on the decoded text: the recovered
+    /// lexeme must re-lex to a literal whose plain text is exactly `value`.
+    /// That is what makes a stale-but-in-bounds span harmless — several of
+    /// these fields are also written by compiler passes that synthesise nodes,
+    /// and a span pointing at the wrong literal falls back to canonical
+    /// escaping instead of emitting a name the AST does not contain.
+    fn quoted_string_text(&self, value: &str, span: Option<Span>) -> String {
+        if let Some(span) = span {
+            let accepts = |t: &Token| match t {
+                Token::StringLiteral(relexed) => relexed.as_plain_text() == value,
+                _ => false,
+            };
+            if let Some(lexeme) = self.verbatim(span, accepts) {
                 return lexeme.to_string();
             }
         }
-        n.to_string()
+        format!(
+            "\"{}\"",
+            canonical_string_escape(value, StringKind::Normal)
+        )
+    }
+
+    /// THE producer for every quoted name-string the formatter emits.
+    ///
+    /// Eight sites used to spell this by hand as `write("\"")` + `write(name)`
+    /// + `write("\"")`, which re-emitted the DECODED text with no re-escaping:
+    /// `\x41` came back as `A`, a `\t` as a literal TAB, and an escaped quote
+    /// as a BARE quote that terminated the string early and broke the file.
+    /// Routing all eight through one producer is what makes the class fixable
+    /// once; `formatter_verbatim_emit_arm_count` in `tests/lints.rs` is what
+    /// keeps a ninth site from spelling its own quotes again.
+    ///
+    /// `write_preformatted` rather than `write`: a recovered lexeme may be a
+    /// multi-line `"""` block, and `write` would advance the emitter's column
+    /// by the literal's whole byte length, desyncing every later fit decision
+    /// and trailing-comment anchor on the line.
+    fn emit_quoted_string(&mut self, value: &str, span: Option<Span>) {
+        let text = self.quoted_string_text(value, span);
+        self.emitter.write_preformatted(&text);
     }
 
     fn format_expr(&mut self, expr: &Spanned<Expr>) {
@@ -3330,19 +3499,14 @@ impl Formatter {
                 self.emitter.write(&text);
             }
             Expr::FloatLiteral(n) => {
-                let s = format!("{}", n);
-                // Ensure it looks like a float
-                if !s.contains('.') && !s.contains('e') && !s.contains('E') {
-                    self.emitter.write(&format!("{}.0", s));
-                } else {
-                    self.emitter.write(&s);
-                }
+                let text = self.float_literal_text(*n, expr.span);
+                self.emitter.write(&text);
             }
             Expr::BoolLiteral(b) => {
                 self.emitter.write(if *b { "true" } else { "false" });
             }
             Expr::StringLiteral(s, _) => {
-                self.format_string_lit(s);
+                self.format_string_lit(s, expr.span);
             }
             Expr::NoneLiteral => self.emitter.write("None"),
             Expr::Identifier(name) => self.emitter.write(name),
@@ -3805,10 +3969,21 @@ impl Formatter {
                 );
                 self.write_doc(&comp_doc);
             }
-            Expr::ArrayLiteral(elems) => {
+            Expr::ArrayLiteral(elems, spelling) => {
+                // Q3 PRESERVE: a set literal `{a, b}` and an array literal
+                // `[a, b]` share this node, so the delimiters come from the
+                // recorded spelling — never from a hardcoded `[`. BOTH emit
+                // paths below spell their own delimiters, so both dispatch:
+                // patching only the flat one leaves a multi-line set with an
+                // interior comment silently rewritten into array syntax, and
+                // no round-trip gate can see it because the result re-parses.
+                let (open, close) = match spelling {
+                    ArrayLiteralSpelling::Braces => ("{", "}"),
+                    ArrayLiteralSpelling::Brackets => ("[", "]"),
+                };
                 // R39 fmt collection-literal interior-comment escape (Core
                 // #4 chokepoint): if any un-emitted comment sits strictly
-                // inside `[...]`, the fill-packed `doc::surround_fill` path would
+                // inside the delimiters, the fill-packed `doc::surround_fill` path would
                 // silently drop it (sub-formatter has empty comment
                 // sideband — see `element_to_string_at`) and the OUTER
                 // trailing-hook would then dedent the comment to column
@@ -3817,7 +3992,7 @@ impl Formatter {
                 // land at the correct interior indent.
                 if self.has_interior_comments(expr.span.start, expr.span.end) {
                     self.format_bracketed_broken_with_comments(
-                        "[", "]", expr.span.end,
+                        open, close, expr.span.end,
                         elems,
                         |e| (e.span.start, e.span.end),
                         |f, e| f.format_expr(e),
@@ -3827,7 +4002,7 @@ impl Formatter {
                 let items: Vec<doc::Doc> = elems.iter().map(|e| {
                     doc::text(self.element_to_string(|f| f.format_expr(e)))
                 }).collect();
-                let doc = doc::surround_fill("[", items, "]");
+                let doc = doc::surround_fill(open, items, close);
                 self.write_doc(&doc);
             }
             Expr::TupleLiteral(elems) => {
@@ -3937,10 +4112,23 @@ impl Formatter {
                 self.emitter.write(" as ");
                 self.format_type(type_);
             }
-            Expr::Await { expr } => {
-                // FMT-A: postfix `.await()` — receiver at bp 35.
-                self.format_postfix_receiver(expr);
-                self.emitter.write(".await()");
+            Expr::Await { expr: inner, prefix_form } => {
+                // Q3 PRESERVE: both spellings build this node, so the author's
+                // choice is honoured. They are NOT interchangeable for the
+                // paren predicates — prefix `await` parses its operand at bp 2
+                // (looser than every infix operator), postfix `.await()` is a
+                // bp-35 postfix. `effective_outer_bp` and
+                // `emits_leading_ownership_sigil` dispatch on this same flag.
+                //
+                // NOTE the shadowing hazard: `inner` is the AWAITED
+                // expression; the node being formatted is `expr`.
+                if *prefix_form {
+                    self.emitter.write("await ");
+                    self.format_prefix_operand(inner, 2);
+                } else {
+                    self.format_postfix_receiver(inner);
+                    self.emitter.write(".await()");
+                }
             }
             Expr::Spawn { expr, unchecked } => {
                 self.emitter.write(if *unchecked { "spawn unchecked " } else { "spawn " });
@@ -4113,7 +4301,18 @@ impl Formatter {
 
     // ── String formatting ───────────────────────────────────
 
-    fn format_string_lit(&mut self, s: &StringLiteral) {
+    fn format_string_lit(&mut self, s: &StringLiteral, span: Span) {
+        // Verbatim first: the author's own lexeme, when it re-lexes to exactly
+        // this literal. That single check preserves quote style, prefix letter,
+        // escape spelling, the f-string brace form, and — the case that made a
+        // 90-line shader unreadable — the PHYSICAL LINE LAYOUT of a `"""`
+        // block, which the canonical path below flattens into one `\n`-escaped
+        // line. `write_preformatted` keeps the emitter's column honest across
+        // those embedded newlines.
+        if let Some(text) = self.string_literal_text(s, span) {
+            self.emitter.write_preformatted(&text);
+            return;
+        }
         match s.kind {
             StringKind::Raw => self.emitter.write("r\""),
             StringKind::Byte => self.emitter.write("b\""),
@@ -4144,39 +4343,15 @@ impl Formatter {
         }
     }
 
+    /// The canonical (non-verbatim) escaping path. Reached only when the
+    /// author's lexeme could not be recovered — a synthesised literal, or a
+    /// span that no longer denotes this node. See `canonical_string_escape`
+    /// for the escape policy itself; keeping the policy in a free function
+    /// makes it unit-testable without a `Formatter`, which matters because
+    /// no `.gg` source can force this path.
     fn format_string_escape(&mut self, text: &str, kind: StringKind) {
-        if kind == StringKind::Raw {
-            self.emitter.write(text);
-            return;
-        }
-        for ch in text.chars() {
-            match ch {
-                '\n' => self.emitter.write("\\n"),
-                '\t' => self.emitter.write("\\t"),
-                '\r' => self.emitter.write("\\r"),
-                '\\' => self.emitter.write("\\\\"),
-                '"' => self.emitter.write("\\\""),
-                '\0' => self.emitter.write("\\0"),
-                '{' if kind == StringKind::Format => self.emitter.write("{{"),
-                '}' if kind == StringKind::Format => self.emitter.write("}}"),
-                // Control chars with no named escape above (C0 minus the
-                // already-handled \0 \t \n \r, plus DEL) would otherwise write
-                // a RAW control byte into the source (a data-loss defect, since
-                // e.g. a raw 0x1B corrupts the file and cannot be read back as
-                // the author intended). Emit the `\xHH` byte escape (lowercase
-                // 2-hex, matching the lexer's `\x` arm which accepts <=0x7F in
-                // string context), which re-lexes to the same scalar. Printable
-                // Unicode (>= 0x80: accented letters, emoji, …) is left as raw
-                // UTF-8 — it round-trips fine and escaping it would be noise.
-                c if (c.is_control() && (c as u32) <= 0x7F) => {
-                    self.emitter.write(&format!("\\x{:02x}", c as u32));
-                }
-                c => {
-                    let mut buf = [0u8; 4];
-                    self.emitter.write(c.encode_utf8(&mut buf));
-                }
-            }
-        }
+        let escaped = canonical_string_escape(text, kind);
+        self.emitter.write(&escaped);
     }
 
 }
@@ -4185,53 +4360,84 @@ impl Formatter {
 // Helper functions
 // ══════════════════════════════════════════════════════════════
 
-/// Parse an integer-literal lexeme back to its `i64` value using the SAME
-/// rules the lexer applies in `Lexer::parse_int_literal`
-/// (`src/lexer/mod.rs`): an optional leading sign, a case-insensitive
-/// `0x`/`0o`/`0b` radix prefix (else decimal), and `_` digit separators
-/// stripped before `i64::from_str_radix`. Returns `Some(value)` on a clean
-/// parse, `None` otherwise.
+/// Re-lex an isolated source slice and return the SINGLE token it denotes.
 ///
-/// The formatter uses this to decide whether a literal's ORIGINAL source
-/// lexeme round-trips to the AST value (`int_literal_text`); mirroring the
-/// lexer exactly means "the lexeme parses back to `n`" is equivalent to
-/// "the lexer produced `n` from this lexeme", so overflow/edge behaviour
-/// (e.g. `0x7FFF…` at the i64 ceiling) matches by construction.
+/// This is the oracle behind every verbatim-preservation arm in the formatter.
+/// It asks the real lexer rather than mirroring its rules, which is what makes
+/// the round-trip check meaningful: "this lexeme denotes value V" is decided by
+/// the same code that produced V from that lexeme in the first place. The
+/// earlier hand-written `parse_int_lexeme` had to promise, in prose, that it
+/// mirrored `Lexer::parse_int_literal` exactly — a promise nothing enforced,
+/// and one that was already false for byte literals (`b'A'`, which the lexer
+/// turns into `IntLiteral(65)` and the mirror rejected).
 ///
-/// The leading sign is accepted defensively: the `IntLiteral` operand span
-/// for `-0x10` covers only `0x10` (the unary `-` is a separate AST node),
-/// but even if a signed slice arrived, the caller's `== n` equality check
-/// guards against ever emitting a lexeme that denotes a different value.
-fn parse_int_lexeme(lexeme: &str) -> Option<i64> {
-    let s = lexeme.trim();
-    let (neg, rest) = match s.as_bytes().first()? {
-        b'-' => (true, &s[1..]),
-        b'+' => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let (radix, digits) = if let Some(h) =
-        rest.strip_prefix("0x").or_else(|| rest.strip_prefix("0X"))
-    {
-        (16u32, h)
-    } else if let Some(o) = rest.strip_prefix("0o").or_else(|| rest.strip_prefix("0O")) {
-        (8, o)
-    } else if let Some(b) = rest.strip_prefix("0b").or_else(|| rest.strip_prefix("0B")) {
-        (2, b)
-    } else {
-        (10, rest)
-    };
-    let clean: String = digits.chars().filter(|c| *c != '_').collect();
-    if clean.is_empty() {
+/// Returns `None` unless the slice lexes cleanly into exactly one value-bearing
+/// token that covers the WHOLE slice. Trailing structural tokens the lexer
+/// synthesises at end-of-input (`Newline`, `Dedent`, `Eof`) are expected and
+/// ignored; anything else means the slice was not one literal.
+fn relex_single_token(lexeme: &str) -> Option<Token> {
+    if lexeme.is_empty() {
         return None;
     }
-    // `from_str_radix` rejects any non-radix-digit char (including a stray
-    // interior sign), so a byte literal `b'A'` or a char slice fails here.
-    let mag = i64::from_str_radix(&clean, radix).ok()?;
-    if neg {
-        mag.checked_neg()
-    } else {
-        Some(mag)
+    let mut lexer = crate::lexer::Lexer::new(lexeme);
+    let tokens: Vec<Spanned<Token>> = lexer.by_ref().collect();
+    if !lexer.errors.is_empty() {
+        return None;
     }
+    let mut it = tokens.into_iter();
+    let first = it.next()?;
+    // The token must span the entire slice. The multi-token check below cannot
+    // see slack that produces no token of its own (trailing spaces, a leading
+    // indent), and slack would be emitted verbatim along with the literal.
+    if first.span.start != 0 || first.span.end != lexeme.len() {
+        return None;
+    }
+
+    for rest in it {
+        match rest.node {
+            Token::Newline | Token::Dedent | Token::Indent | Token::Eof => {}
+            _ => return None,
+        }
+    }
+    Some(first.node)
+}
+
+/// Canonically escape a string body for re-emission — the FALLBACK spelling,
+/// used only when the author's own lexeme could not be recovered verbatim.
+///
+/// Every control character is escaped. C0 and DEL take the `\xHH` byte escape
+/// (the lexer's `\x` accepts `<= 0x7F` in string context); C1 (`0x80-0x9F`)
+/// takes `\u{XX}`, because `\x` above `0x7F` is REJECTED by the lexer and a
+/// raw C1 byte is an invisible control character planted in the user's source.
+/// Printable non-ASCII (accented letters, emoji, …) stays raw UTF-8 — it
+/// round-trips fine and escaping it would be noise.
+fn canonical_string_escape(text: &str, kind: StringKind) -> String {
+    let mut out = String::with_capacity(text.len());
+    if kind == StringKind::Raw {
+        out.push_str(text);
+        return out;
+    }
+    for ch in text.chars() {
+        match ch {
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            '\r' => out.push_str("\\r"),
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\0' => out.push_str("\\0"),
+            '{' if kind == StringKind::Format => out.push_str("{{"),
+            '}' if kind == StringKind::Format => out.push_str("}}"),
+            c if c.is_control() => {
+                if (c as u32) <= 0x7F {
+                    out.push_str(&format!("\\x{:02x}", c as u32));
+                } else {
+                    out.push_str(&format!("\\u{{{:X}}}", c as u32));
+                }
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn binary_op_str(op: BinaryOp) -> &'static str {
@@ -4399,13 +4605,16 @@ fn effective_outer_bp(expr: &Expr) -> Option<u8> {
         | Expr::Deref { .. } => Some(33),
         // spawn / spawn blocking — prefix bp 2 (parser::expr.rs:660).
         Expr::Spawn { .. } | Expr::SpawnBlocking { .. } => Some(2),
-        // Await is ALWAYS rendered postfix as `.await()` by
-        // `format_expr` (Round XXXVI Expr::Await arm). The parser
-        // accepts prefix `await x` too, but they both AST-shape as
-        // `Expr::Await` and the formatter picks the postfix rendering,
-        // so the effective outer bp for embedding checks is 35
-        // (postfix bp), NOT the prefix parser bp of 2.
-        Expr::Await { .. } => None,
+        // Await's effective bp DEPENDS ON THE RENDERED FORM, because the two
+        // spellings the language accepts are not interchangeable at this
+        // level: the parser reads prefix `await e` with the operand at bp 2
+        // (looser than every infix operator) and postfix `e.await()` as a
+        // bp-35 postfix. Reporting the postfix answer for a prefix-rendered
+        // node re-emits `(await f()) + 1` as `await f() + 1`, which re-parses
+        // as `Await(f() + 1)` — a silent AST change that compiles and runs.
+        // Same shape as Spawn/SpawnBlocking above, which are prefix-only.
+        Expr::Await { prefix_form: true, .. } => Some(2),
+        Expr::Await { prefix_form: false, .. } => None,
         // "Statement-like" value-producing expressions — closure, if,
         // match, do, block. Their surface syntax spans a body/branches
         // that extend as far right as the parser will let them, so
@@ -4596,9 +4805,16 @@ fn emits_leading_ownership_sigil(expr: &Expr) -> bool {
         | Expr::Index { object: recv, .. }
         | Expr::OptionalChain { object: recv, .. }
         | Expr::Propagate { expr: recv }
-        | Expr::Await { expr: recv } => {
+        | Expr::Await { expr: recv, prefix_form: false } => {
             through(recv, needs_parens_as_postfix_receiver(&recv.node))
         }
+
+        // A PREFIX-rendered await leads with the `await` keyword, not with its
+        // operand — so unlike the postfix rendering above it never begins with
+        // an ownership sigil, and the recursion into the operand would be
+        // asking about a token that is no longer leftmost. Same reasoning as
+        // the `spawn ` / `spawn blocking ` forms in the arm below.
+        Expr::Await { prefix_form: true, .. } => false,
 
         // ── Transparent wrapper ────────────────────────────────────
         // `ImplicitClosure` emits its body directly (the `it` inside is the
@@ -4637,7 +4853,7 @@ fn emits_leading_ownership_sigil(expr: &Expr) -> bool {
         | Expr::ListComprehension { .. }
         | Expr::DictComprehension { .. }
         | Expr::SetComprehension { .. }
-        | Expr::ArrayLiteral(_)
+        | Expr::ArrayLiteral(_, _)
         | Expr::TupleLiteral(_)
         | Expr::DictLiteral(_)
         | Expr::StructLiteral { .. }
@@ -4930,6 +5146,129 @@ mod tests {
         let mut e = Emitter::new();
         e.write_preformatted("[\n    \"naïve café\"]");
         assert_eq!(e.col, 17, "4 indent + 12 literal + 1 bracket, in chars");
+    }
+
+    // ── R41 T-FMT-B: the two verbatim cells no .gg source can reach ──
+    //
+    // Both of these guard the FALLBACK half of the verbatim chokepoint, and
+    // neither is reachable from a fixture: with span recovery working, every
+    // literal in a real source file takes the verbatim path. They are unit
+    // cells for that reason, not for convenience — an integration fixture
+    // claiming to cover them would be green for the wrong reason.
+
+    /// The C1 FALLBACK cell.
+    ///
+    /// When a string cannot be recovered verbatim, its control characters are
+    /// re-escaped. C0 and DEL take `\xHH`; C1 (`0x80-0x9F`) must take
+    /// `\u{XX}`, because the lexer REJECTS `\x` above `0x7F` — so emitting
+    /// `\x85` would produce a file that no longer lexes, and emitting the raw
+    /// byte (what this path used to do) plants an invisible control character
+    /// in the user's source.
+    ///
+    /// RED pre-fix: `canonical_string_escape("\u{85}", Normal)` returned the
+    /// raw two-byte UTF-8 sequence.
+    #[test]
+    fn canonical_escape_c1_uses_unicode_escape() {
+        assert_eq!(
+            canonical_string_escape("a\u{85}b", StringKind::Normal),
+            "a\\u{85}b",
+            "C1 NEL must escape as \\u{{85}} — \\x85 is rejected by the lexer \
+             and a raw byte corrupts the source"
+        );
+        assert_eq!(
+            canonical_string_escape("\u{9F}", StringKind::Normal),
+            "\\u{9F}",
+            "the top of the C1 range takes the same escape"
+        );
+        // C0 and DEL keep the byte escape they already had.
+        assert_eq!(
+            canonical_string_escape("\u{1B}", StringKind::Normal),
+            "\\x1b"
+        );
+        assert_eq!(
+            canonical_string_escape("\u{7F}", StringKind::Normal),
+            "\\x7f"
+        );
+        // Printable non-ASCII is NOT escaped — it round-trips as itself.
+        assert_eq!(
+            canonical_string_escape("café 😀", StringKind::Normal),
+            "café 😀"
+        );
+
+        // And the fallback spelling must actually re-lex to the same scalar.
+        let src = format!(
+            "void main():\n    String s = \"{}\"\n    print(s.len())\n",
+            canonical_string_escape("\u{85}", StringKind::Normal)
+        );
+        let mut parser = crate::parser::Parser::new(&src);
+        let _ = parser.parse_module();
+        assert!(
+            parser.errors.is_empty(),
+            "the C1 fallback spelling does not re-lex: {:?}",
+            parser.errors.first()
+        );
+    }
+
+    /// The DEGENERATE-SPAN cell.
+    ///
+    /// `relex_single_token` is the gate every verbatim arm passes through, and
+    /// its contract is that a slice which is not exactly one clean token is
+    /// REFUSED — so a stale, truncated, or synthetic span can only ever cost
+    /// the author their spelling, never change what their program means.
+    ///
+    /// RED-verify by deleting the whole-slice span check inside
+    /// `relex_single_token`: `"1.5"` then accepts as `IntLiteral(1)` and a
+    /// float literal re-emits as an integer.
+    #[test]
+    fn relex_single_token_refuses_partial_and_multi_token_slices() {
+        // Exactly one token covering the whole slice — accepted.
+        assert!(matches!(
+            relex_single_token("0x5C"),
+            Some(Token::IntLiteral(92))
+        ));
+        assert!(matches!(
+            relex_single_token("b'A'"),
+            Some(Token::IntLiteral(65))
+        ));
+        assert!(matches!(
+            relex_single_token("1.50"),
+            Some(Token::FloatLiteral(_))
+        ));
+
+        // More than one token — refused, so no arm can emit half a slice.
+        assert!(relex_single_token("1 + 2").is_none());
+        assert!(relex_single_token("\"a\" \"b\"").is_none());
+        // One token that does not COVER the slice — refused by the
+        // whole-slice span check specifically (the multi-token check above
+        // cannot see this: the trailing bytes produce no token of their own).
+        // A span with slack would otherwise emit the slack along with the
+        // literal.
+        assert!(relex_single_token("42   ").is_none());
+        assert!(relex_single_token("  42").is_none());
+        // Not lexable at all — refused rather than panicking.
+        assert!(relex_single_token("\"unterminated").is_none());
+        assert!(relex_single_token("").is_none());
+    }
+
+    /// Totality over a WRONG span: the formatter must never index-panic and
+    /// must never emit a name the AST does not contain.
+    ///
+    /// A `Formatter` is built over the real source, so this exercises the
+    /// property through the public entry point on a program whose literals sit
+    /// at every offset — including the f-string interpolation sub-expressions,
+    /// which the parser deliberately gives SYNTHETIC spans far outside the
+    /// source. If any arm indexed instead of `get`-ing, this panics.
+    #[test]
+    fn verbatim_recovery_is_total_over_synthetic_spans() {
+        let src = concat!(
+            "void main():\n",
+            "    int n = 0x1F\n",
+            "    float f = 2.50\n",
+            "    String s = f\"n={n} f={f} lit={0x1F}\"\n",
+            "    print(s)\n",
+        );
+        let out = fmt(src);
+        assert_eq!(out, src, "f-string interpolation spans must not misroute");
     }
 
     #[test]

@@ -1,0 +1,12 @@
+# ==== T-FMT-B — name-string site 4/8: `AttributeArg::KeyValue`, STRING-valued
+# producer (`src/parser/mod.rs`, the `Token::StringLiteral` arm of the
+# `key = value` branch).
+# SCOPE CLAIM: the QUOTED half of KeyValue only — the BARE-IDENTIFIER half is
+# a separate producer with its own cell (`attr_keyvalue_bare_ident.gg`).
+# Six escape costumes: \x41 · \" · \t · \n · \\ · \u{1F600}.
+@timeout(unit = "esc \x41 quote \" tab \t nl \n back \\ emoji \u{1F600}")
+void decorated():
+    print(1)
+
+void main():
+    decorated()

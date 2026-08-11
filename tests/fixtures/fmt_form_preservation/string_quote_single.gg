@@ -1,0 +1,13 @@
+# ==== T-FMT-B — string-literal VERBATIM: QUOTE-STYLE preservation.
+# SCOPE CLAIM: single-quoted spellings only — the plain `'…'` form and the
+# single-quoted f-string `f'…'`. Both are the `'A'` / `f'…'` cells of the
+# matrix. Pre-fix RED: the emitter hardcoded `"` for every kind, so `'x'`
+# came back as `"x"` — and a single-quoted string CONTAINING a double quote
+# came back with the quote escaped, changing the author's form twice over.
+void main():
+    String a = 'A'
+    String plain = 'apostrophe string'
+    String has_dq = 'he said "hi"'
+    int n = 3
+    String fs = f'n is {n}'
+    print(a.len() + plain.len() + has_dq.len() + fs.len())

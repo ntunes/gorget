@@ -1,0 +1,9 @@
+# ==== T-FMT-B — name-string site 3/8: `AttributeArg::StringLiteral`.
+# SCOPE CLAIM: the bare string-literal ATTRIBUTE ARGUMENT emit site ONLY,
+# six escape costumes: \x41 · \" · \t · \n · \\ · \u{1F600}.
+@link("esc \x41 quote \" tab \t nl \n back \\ emoji \u{1F600}")
+void decorated():
+    print(1)
+
+void main():
+    decorated()

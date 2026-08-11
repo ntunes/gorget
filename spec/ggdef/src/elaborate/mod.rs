@@ -1641,7 +1641,7 @@ impl Elaborator {
         // `Ty::Callable { consuming }` and reject an `is_move` mismatch (the
         // production `E_ClosureKindMismatch` shape); the closure arm `.take()`s
         // the hint before recursing into its own body.
-        if !matches!(&expr.node, ast::Expr::ArrayLiteral(_) | ast::Expr::Closure { .. }) {
+        if !matches!(&expr.node, ast::Expr::ArrayLiteral(..) | ast::Expr::Closure { .. }) {
             self.dest_ty_hint = None;
         }
         match &expr.node {
@@ -1787,7 +1787,7 @@ impl Elaborator {
                 self.elaborate_method(receiver, &method.node, args, span)
             }
 
-            ast::Expr::ArrayLiteral(elems) => {
+            ast::Expr::ArrayLiteral(elems, _) => {
                 // `{a, b, c}` and `[a, b, c]` are the SAME node; a `Set[T]`
                 // destination makes this a set literal (dedup on build), else a
                 // vector — matching production, which dedupes BOTH spellings

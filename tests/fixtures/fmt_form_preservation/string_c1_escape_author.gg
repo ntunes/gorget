@@ -1,0 +1,14 @@
+# ==== T-FMT-B — string-literal VERBATIM: the C1 CONTROL-CHAR cell (author side).
+# SCOPE CLAIM: an author-written `\u{85}` (U+0085 NEL, a C1 control) stays an
+# ESCAPE. Pre-fix RED (TODO entry "fmt leaves C1 control chars as raw UTF-8
+# bytes"): the escape was decoded and re-emitted as the raw two-byte UTF-8
+# sequence 0xC2 0x85, silently planting an invisible control character in the
+# user's source file.
+# The FALLBACK half of this cell — a string that CANNOT be recovered verbatim
+# must escape C1 as `\u{XX}`, never as a raw byte and never as `\x85` (the
+# lexer rejects `\x` above 0x7F) — is a unit cell on `canonical_string_escape`
+# in `src/formatter/mod.rs`, because no .gg source can force the fallback.
+void main():
+    String nel = "before \u{85} after"
+    String c1_high = "before \u{9F} after"
+    print(nel.len() + c1_high.len())

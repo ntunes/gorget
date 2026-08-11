@@ -1,0 +1,14 @@
+# ==== T-FMT-B — FLOAT-literal VERBATIM (five cells on one axis: the author's
+# decimal spelling).
+# SCOPE CLAIM: `Expr::FloatLiteral` only. Cells: trailing zero (1.50) ·
+# already-canonical (2.0) · fraction trailing zero (0.10) · integral with two
+# trailing zeros (100.00) · multi-digit trailing zeros (1.2500).
+# Pre-fix RED: the emitter re-derived the text with `format!("{}", n)`, so
+# every trailing zero the author wrote was deleted (1.50 -> 1.5).
+void main():
+    float trailing_zero = 1.50
+    float canonical = 2.0
+    float fraction_zero = 0.10
+    float integral_zeros = 100.00
+    float many_zeros = 1.2500
+    print(trailing_zero + canonical + fraction_zero + integral_zeros + many_zeros)

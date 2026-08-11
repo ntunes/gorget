@@ -719,7 +719,7 @@ pub fn lower_module(
                 ctx.yield_point_fns.insert(name.clone());
                 // Also register C symbol name for extern functions
                 if let FunctionBody::Extern(c_symbol) = &func.body {
-                    ctx.yield_point_fns.insert(c_symbol.clone());
+                    ctx.yield_point_fns.insert(c_symbol.node.clone());
                 }
             }
 
@@ -729,14 +729,14 @@ pub fn lower_module(
             if func.qualifiers.is_noreturn {
                 ctx.noreturn_fns.insert(name.clone());
                 if let FunctionBody::Extern(c_symbol) = &func.body {
-                    ctx.noreturn_fns.insert(c_symbol.clone());
+                    ctx.noreturn_fns.insert(c_symbol.node.clone());
                 }
             }
 
             // Record extern binding: Gorget name → C symbol (takes priority over mangling).
             // Declaration functions are C-runtime inline implementations; do not rename them.
             if let FunctionBody::Extern(c_symbol) = &func.body {
-                ctx.extern_bindings.insert(name.clone(), c_symbol.clone());
+                ctx.extern_bindings.insert(name.clone(), c_symbol.node.clone());
                 // Derive param ABI from inline extern's language tag or explicit cstr types.
                 // extern "C" → String params become CStr (same as extern "C": blocks).
                 {
@@ -749,7 +749,7 @@ pub fn lower_module(
                     // it omits the byval(...) attr and the C side reads the Str struct
                     // from the wrong place. (aarch64 large-aggregate-by-value happens to
                     // be compatible with bare `ptr` IR, hiding the bug there.)
-                    let string_abi = match func.extern_abi.as_deref() {
+                    let string_abi = match func.extern_abi.as_ref().map(|a| a.node.as_str()) {
                         Some("C") => AbiKind::CStr,
                         _ => AbiKind::GorgetString,
                     };
@@ -776,18 +776,18 @@ pub fn lower_module(
                     }).collect();
                     if abis.iter().any(|a| *a != AbiKind::Auto) {
                         ctx.fn_extern_abi_kinds.insert(name.clone(), abis.clone());
-                        ctx.fn_extern_abi_kinds.insert(c_symbol.clone(), abis);
+                        ctx.fn_extern_abi_kinds.insert(c_symbol.node.clone(), abis);
                     }
                     // Derive return ABI from explicit cstr return type.
                     if matches!(func.return_type.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
                         ctx.fn_return_abis.insert(name.clone(), AbiKind::CStr);
-                        ctx.fn_return_abis.insert(c_symbol.clone(), AbiKind::CStr);
+                        ctx.fn_return_abis.insert(c_symbol.node.clone(), AbiKind::CStr);
                     }
                     // `extern borrowed T f(...)` — record the function as
                     // returning a borrowed pointer (auto-clone TODO).
                     if func.returns_borrowed {
                         ctx.fn_returns_borrowed.insert(name.clone());
-                        ctx.fn_returns_borrowed.insert(c_symbol.clone());
+                        ctx.fn_returns_borrowed.insert(c_symbol.node.clone());
                     }
                 }
             } else if !matches!(func.body, FunctionBody::Declaration) {
@@ -847,7 +847,7 @@ pub fn lower_module(
                 if func.qualifiers.is_async || func.qualifiers.is_blocking {
                     ctx.yield_point_fns.insert(name.clone());
                     if let FunctionBody::Extern(c_symbol) = &func.body {
-                        ctx.yield_point_fns.insert(c_symbol.clone());
+                        ctx.yield_point_fns.insert(c_symbol.node.clone());
                     }
                 }
 
@@ -859,13 +859,13 @@ pub fn lower_module(
                 if func.qualifiers.is_noreturn {
                     ctx.noreturn_fns.insert(name.clone());
                     if let FunctionBody::Extern(c_symbol) = &func.body {
-                        ctx.noreturn_fns.insert(c_symbol.clone());
+                        ctx.noreturn_fns.insert(c_symbol.node.clone());
                     }
                 }
 
                 // Register extern binding: name → C symbol
                 if let FunctionBody::Extern(c_symbol) = &func.body {
-                    ctx.extern_bindings.insert(name.clone(), c_symbol.clone());
+                    ctx.extern_bindings.insert(name.clone(), c_symbol.node.clone());
                 }
 
                 // Derive ABI kinds from block's ABI string
@@ -902,7 +902,7 @@ pub fn lower_module(
                     if abis.iter().any(|a| *a != AbiKind::Auto) {
                         ctx.fn_extern_abi_kinds.insert(name.clone(), abis.clone());
                         if let FunctionBody::Extern(c_symbol) = &func.body {
-                            ctx.fn_extern_abi_kinds.insert(c_symbol.clone(), abis);
+                            ctx.fn_extern_abi_kinds.insert(c_symbol.node.clone(), abis);
                         }
                     }
                 }
@@ -910,7 +910,7 @@ pub fn lower_module(
                 if matches!(func.return_type.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
                     ctx.fn_return_abis.insert(name.clone(), AbiKind::CStr);
                     if let FunctionBody::Extern(c_symbol) = &func.body {
-                        ctx.fn_return_abis.insert(c_symbol.clone(), AbiKind::CStr);
+                        ctx.fn_return_abis.insert(c_symbol.node.clone(), AbiKind::CStr);
                     }
                 }
                 // `extern borrowed T f(...)` → record the function as
@@ -919,7 +919,7 @@ pub fn lower_module(
                 if func.returns_borrowed {
                     ctx.fn_returns_borrowed.insert(name.clone());
                     if let FunctionBody::Extern(c_symbol) = &func.body {
-                        ctx.fn_returns_borrowed.insert(c_symbol.clone());
+                        ctx.fn_returns_borrowed.insert(c_symbol.node.clone());
                     }
                 }
             }
@@ -957,7 +957,7 @@ pub fn lower_module(
         let Some(template) = generic_collector.get_fn_template(base_name) else { continue; };
         let FunctionBody::Extern(c_symbol) = &template.body else { continue; };
         // extern_bindings: mangled → C symbol (same C symbol for every mono instance).
-        ctx.extern_bindings.insert(mangled_name.clone(), c_symbol.clone());
+        ctx.extern_bindings.insert(mangled_name.clone(), c_symbol.node.clone());
         // Propagate per-function ABI metadata keyed by the base name.
         if let Some(abis) = ctx.fn_extern_abi_kinds.get(base_name).cloned() {
             ctx.fn_extern_abi_kinds.insert(mangled_name.clone(), abis);
@@ -1107,7 +1107,7 @@ pub fn lower_module(
 
                     // Register extern binding for equip methods (e.g., UdpSocket__local_addr → gorget_udp_local_addr)
                     if let FunctionBody::Extern(c_symbol) = &method_def.body {
-                        ctx.extern_bindings.insert(mangled.clone(), c_symbol.clone());
+                        ctx.extern_bindings.insert(mangled.clone(), c_symbol.node.clone());
 
                         // Derive param ABI from inline extern's language tag or explicit cstr types.
                         // Prepend Auto for implicit self (always position 0 in C call).
@@ -1120,7 +1120,7 @@ pub fn lower_module(
                         // guard below means an all-Auto vector here leaves those overrides
                         // intact. Promoting bare to Gorget would clobber them.
                         use crate::ir::abi::AbiKind;
-                        let string_abi = match method_def.extern_abi.as_deref() {
+                        let string_abi = match method_def.extern_abi.as_ref().map(|a| a.node.as_str()) {
                             Some("C") => AbiKind::CStr,
                             Some("Gorget") => AbiKind::GorgetString,
                             _ => AbiKind::Auto,
@@ -1154,12 +1154,12 @@ pub fn lower_module(
                         }));
                         if abis.iter().any(|a| *a != crate::ir::abi::AbiKind::Auto) {
                             ctx.fn_extern_abi_kinds.insert(mangled.clone(), abis.clone());
-                            ctx.fn_extern_abi_kinds.insert(c_symbol.clone(), abis);
+                            ctx.fn_extern_abi_kinds.insert(c_symbol.node.clone(), abis);
                         }
                         // Derive return ABI from explicit cstr return type.
                         if matches!(method_def.return_type.node, ast::Type::Primitive(ast::PrimitiveType::CStr)) {
                             ctx.fn_return_abis.insert(mangled.clone(), crate::ir::abi::AbiKind::CStr);
-                            ctx.fn_return_abis.insert(c_symbol.clone(), crate::ir::abi::AbiKind::CStr);
+                            ctx.fn_return_abis.insert(c_symbol.node.clone(), crate::ir::abi::AbiKind::CStr);
                         }
                     }
                 }
@@ -2638,7 +2638,7 @@ fn lower_static_decl(
 /// change here plus an init-ordering decision.
 fn initializer_needs_synthetic_fn(expr: &crate::parser::ast::Expr) -> bool {
     use crate::parser::ast::Expr;
-    matches!(expr, Expr::ArrayLiteral(_) | Expr::DictLiteral(_))
+    matches!(expr, Expr::ArrayLiteral(_, _) | Expr::DictLiteral(_))
 }
 
 /// Bug #2: does this static-initializer RHS construct a USER STRUCT whose ctor
@@ -2745,6 +2745,8 @@ fn synthesize_static_init_fn(
     let func = FunctionDef {
         attributes: vec![],
         visibility: Visibility::Private,
+        // Compiler-synthesised: no author wrote a visibility keyword.
+        explicit_visibility: false,
         qualifiers: FunctionQualifiers::default(),
         return_type: decl.type_.clone(),
         name: Spanned::new(synth_name.to_string(), span),
@@ -3177,7 +3179,7 @@ fn try_const_array(
     expr: &crate::parser::ast::Expr,
 ) -> Option<crate::ir::GlobalInit> {
     use crate::parser::ast::Expr;
-    let Expr::ArrayLiteral(elems) = expr else { return None; };
+    let Expr::ArrayLiteral(elems, _) = expr else { return None; };
     let elem_name = coll_name.split_once("__").map(|(_, rest)| rest)?;
 
     // Drop-strategy soundness gate: the element type must NEVER be move-zeroed
@@ -3768,7 +3770,7 @@ fn lower_test_items(
                 if attr.node.name.node == "tag" {
                     for arg in &attr.node.args {
                         if let AttributeArg::StringLiteral(s) = arg {
-                            if options.test_exclude_tags.contains(s) {
+                            if options.test_exclude_tags.contains(&s.node) {
                                 return false;
                             }
                         }
@@ -3782,7 +3784,7 @@ fn lower_test_items(
                 if attr.node.name.node == "tag" {
                     for arg in &attr.node.args {
                         if let AttributeArg::StringLiteral(s) = arg {
-                            if options.test_tags.contains(s) {
+                            if options.test_tags.contains(&s.node) {
                                 return true;
                             }
                         }
@@ -3853,7 +3855,7 @@ fn lower_test_items(
                 .find(|a| a.node.name.node == "should_panic")
                 .and_then(|a| a.node.args.first())
                 .and_then(|arg| {
-                    if let AttributeArg::StringLiteral(s) = arg { Some(s.clone()) } else { None }
+                    if let AttributeArg::StringLiteral(s) = arg { Some(s.node.clone()) } else { None }
                 });
 
             // Extract @skip metadata — skipped tests are reported but not executed
@@ -3863,7 +3865,7 @@ fn lower_test_items(
                 .find(|a| a.node.name.node == "skip")
                 .and_then(|a| a.node.args.first())
                 .and_then(|arg| {
-                    if let AttributeArg::StringLiteral(s) = arg { Some(s.clone()) } else { None }
+                    if let AttributeArg::StringLiteral(s) = arg { Some(s.node.clone()) } else { None }
                 });
 
             // Extract @timeout metadata — per-test timeout in milliseconds
@@ -3871,7 +3873,7 @@ fn lower_test_items(
                 .find(|a| a.node.name.node == "timeout")
                 .and_then(|a| a.node.args.first())
                 .and_then(|arg| match arg {
-                    AttributeArg::StringLiteral(s) => s.parse::<u64>().ok(),
+                    AttributeArg::StringLiteral(s) => s.node.parse::<u64>().ok(),
                     _ => None,
                 })
                 .or(options.default_timeout_ms);

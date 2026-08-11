@@ -1,0 +1,25 @@
+# ==== T-FMT-B — the `"""` COLUMN-TRACKING cell.
+# PIN, with its RED-verification honestly reported (Core #12's escape hatch).
+#
+# SCOPE CLAIM: a multi-line `"""` literal followed on its closing line by a
+# trailing comment, and a multi-line literal appearing inside a construct whose
+# layout is decided by the Doc renderer. A verbatim multi-line emission goes
+# through the emitter's `write_preformatted` — the writer whose contract is
+# "text that may contain newlines", and which resets the column from the LAST
+# newline — rather than `write`, which advances the column by the whole slice
+# length and so leaves a phantom column of the literal's full byte count.
+#
+# MEASURED (2026-08-11): swapping the verbatim path to `write` and re-running
+# the whole corpus produced BYTE-IDENTICAL output. The emitter's column feeds
+# exactly one consumer, `write_doc`'s fit decision, and every Doc-bearing
+# construct builds its document from sub-formatter renderings BEFORE the outer
+# column is consulted — so the desync has no live observer today. The correct
+# writer is used anyway, because "no current observer" is not "correct", and
+# this cell stands as the guard for the day one appears. It is a PIN: it cannot
+# be made to fail by breaking the mechanism it names.
+void main():
+    String s = """
+alpha
+beta
+"""  # the closing line carries a trailing comment
+    print(s.len())

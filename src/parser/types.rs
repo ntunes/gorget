@@ -5,6 +5,36 @@ use super::ast::*;
 use super::Parser;
 use crate::errors::ParseError;
 
+/// The keyword → primitive-type table, in ONE place.
+///
+/// The lexer folds surface ALIASES into a single keyword before the parser
+/// ever sees them (`byte` → `Keyword::Uint8`), so this table is the only thing
+/// that knows which keywords denote which primitive. `parse_base_type` reads
+/// it to build the type; the formatter reads it to decide whether an author's
+/// spelling at a span denotes the primitive it is about to emit. A second copy
+/// of the table would be exactly the parallel list the layering rules forbid.
+pub fn keyword_to_primitive(kw: Keyword) -> Option<PrimitiveType> {
+    match kw {
+        Keyword::Int => Some(PrimitiveType::Int),
+        Keyword::Int8 => Some(PrimitiveType::Int8),
+        Keyword::Int16 => Some(PrimitiveType::Int16),
+        Keyword::Int32 => Some(PrimitiveType::Int32),
+        Keyword::Int64 => Some(PrimitiveType::Int64),
+        Keyword::Uint => Some(PrimitiveType::Uint),
+        Keyword::Uint8 => Some(PrimitiveType::Uint8),
+        Keyword::Uint16 => Some(PrimitiveType::Uint16),
+        Keyword::Uint32 => Some(PrimitiveType::Uint32),
+        Keyword::Uint64 => Some(PrimitiveType::Uint64),
+        Keyword::Float => Some(PrimitiveType::Float),
+        Keyword::Float32 => Some(PrimitiveType::Float32),
+        Keyword::Float64 => Some(PrimitiveType::Float64),
+        Keyword::Bool => Some(PrimitiveType::Bool),
+        Keyword::StringType => Some(PrimitiveType::StringType),
+        Keyword::Void => Some(PrimitiveType::Void),
+        _ => None,
+    }
+}
+
 impl Parser {
     /// Parse a type expression.
     pub fn parse_type(&mut self) -> Result<Spanned<Type>, ParseError> {
@@ -41,25 +71,7 @@ impl Parser {
         match self.peek().clone() {
             // Primitive types
             Token::Keyword(kw) => {
-                let prim = match kw {
-                    Keyword::Int => Some(PrimitiveType::Int),
-                    Keyword::Int8 => Some(PrimitiveType::Int8),
-                    Keyword::Int16 => Some(PrimitiveType::Int16),
-                    Keyword::Int32 => Some(PrimitiveType::Int32),
-                    Keyword::Int64 => Some(PrimitiveType::Int64),
-                    Keyword::Uint => Some(PrimitiveType::Uint),
-                    Keyword::Uint8 => Some(PrimitiveType::Uint8),
-                    Keyword::Uint16 => Some(PrimitiveType::Uint16),
-                    Keyword::Uint32 => Some(PrimitiveType::Uint32),
-                    Keyword::Uint64 => Some(PrimitiveType::Uint64),
-                    Keyword::Float => Some(PrimitiveType::Float),
-                    Keyword::Float32 => Some(PrimitiveType::Float32),
-                    Keyword::Float64 => Some(PrimitiveType::Float64),
-                    Keyword::Bool => Some(PrimitiveType::Bool),
-                    Keyword::StringType => Some(PrimitiveType::StringType),
-                    Keyword::Void => Some(PrimitiveType::Void),
-                    _ => None,
-                };
+                let prim = keyword_to_primitive(kw);
 
                 if let Some(p) = prim {
                     self.advance();

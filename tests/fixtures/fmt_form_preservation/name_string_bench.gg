@@ -1,0 +1,6 @@
+# ==== T-FMT-B — name-string site 2/8: `format_bench`.
+# SCOPE CLAIM: the `bench "…"` NAME-string emit site ONLY, six escape
+# costumes: \x41 · \" · \t · \n · \\ · \u{1F600}.
+bench "esc \x41 quote \" tab \t nl \n back \\ emoji \u{1F600}":
+    int x = 1 + 1
+    print(x)

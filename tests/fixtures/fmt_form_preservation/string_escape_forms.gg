@@ -1,0 +1,14 @@
+# ==== T-FMT-B — string-literal VERBATIM: escape-FORM preservation.
+# SCOPE CLAIM: a plain (`StringKind::Normal`) double-quoted literal, sampling
+# EVERY escape family the lexer accepts: \x41 (hex) · \u{42} (unicode) ·
+# \t \n \r \0 (named C0) · \\ · \" · a raw non-ASCII char.
+# Pre-fix RED: every escape was DECODED and re-emitted in the emitter's own
+# canonical spelling (`\x41` -> `A`, `\u{42}` -> `B`), losing the author's form.
+void main():
+    String hex = "\x41"
+    String uni = "\u{42}"
+    String named = "tab \t nl \n cr \r nul \0"
+    String backslash = "back \\ slash"
+    String quote = "a \" quote"
+    String raw_unicode = "café 😀"
+    print(hex.len() + uni.len() + named.len() + backslash.len() + quote.len() + raw_unicode.len())

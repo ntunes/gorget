@@ -1,0 +1,16 @@
+# ==== T-FMT-B — string-literal VERBATIM: the `"""` PHYSICAL-LAYOUT cell.
+# SCOPE CLAIM: a multi-line `"""` literal's physical line layout, per the
+# ledger's 2026-08-10 MULTI-LINE STRING LAYOUT ratification.
+# Pre-fix RED (measured): the whole block collapsed onto ONE line with each
+# physical newline re-emitted as a `\n` escape — value-preserving, layout-
+# destroying (a ~90-line shader became a 4,504-char line in the wild).
+void main():
+    String shader = """
+struct VertexOut:
+    float4 position
+    float2 uv
+
+fragment float4 frag(VertexOut in):
+    return float4(in.uv, 0.0, 1.0)
+"""
+    print(shader.len())

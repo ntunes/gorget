@@ -268,7 +268,7 @@ fn uses_expr<'a>(
             }
         }
         // Container literals — every element is a real use.
-        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+        Expr::ArrayLiteral(elems, _) | Expr::TupleLiteral(elems) => {
             for e in elems.iter().rev() {
                 uses_expr(&e.node, e.span.start, live, lu);
             }

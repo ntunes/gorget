@@ -1,0 +1,21 @@
+# ==== T-FMT-B — SYNONYM: the `_`-CONTINUATION BOUNDARY shapes for `await`.
+# PIN (Core #12 escape hatch — this cell has no breakable mechanism under the
+# typed design, so it states what it pins instead): identifiers may begin with
+# the letters of a keyword (`[a-zA-Z_][a-zA-Z0-9_]*`), so `await_x` is an
+# ORDINARY function name, not the `await` keyword plus `_x`. A source-SCAN
+# oracle ("does the text at this span start with `await`?") reports a false
+# positive here; the typed `prefix_form` flag written by the parser cannot.
+# This fixture is the standing evidence that the scan-based design was
+# rejected for cause: it must format to itself under the typed design, and a
+# future contributor who "simplifies" the flag back into a span sniff will see
+# `await_x().await()` rewritten to `await await_x()` and know why.
+async int await_x():
+    return 1
+
+async void g():
+    int a = await_x().await()
+    int b = await await_x()
+    print(a + b)
+
+async void main():
+    await g()

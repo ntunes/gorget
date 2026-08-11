@@ -132,7 +132,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
         | Expr::Propagate { expr }
         | Expr::MutableBorrow { expr }
         | Expr::Deref { expr }
-        | Expr::Await { expr }
+        | Expr::Await { expr, .. }
         | Expr::Spawn { expr, .. }
         | Expr::SpawnBlocking { expr, .. }
         | Expr::As { expr, .. } => {
@@ -226,7 +226,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
         }
 
         // ── Collection literals ──
-        Expr::ArrayLiteral(items) | Expr::TupleLiteral(items) => {
+        Expr::ArrayLiteral(items, _) | Expr::TupleLiteral(items) => {
             for item in items {
                 v.visit_expr(item);
             }

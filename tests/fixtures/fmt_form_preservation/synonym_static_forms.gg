@@ -1,0 +1,15 @@
+# ==== T-FMT-B — SYNONYM: the `static` keyword's presence.
+# SCOPE CLAIM: a module-level variable declaration may be written WITH the
+# `static` keyword or WITHOUT it (a bare `Type name = expr` at file scope is
+# implicitly static). Both build the same `StaticDecl`, so the keyword's
+# presence is authorial information the AST must now carry
+# (`explicit_static_kw`).
+# Pre-fix RED (measured): the emitter unconditionally wrote `static `, so a
+# bare `int counter = 0` came back as `static int counter = 0` — inserting a
+# keyword the author did not write.
+static int with_keyword = 1
+
+int without_keyword = 2
+
+void main():
+    print(with_keyword + without_keyword)

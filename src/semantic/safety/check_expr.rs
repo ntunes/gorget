@@ -1087,7 +1087,7 @@ impl<'a> BorrowChecker<'a> {
                 self.restore_branch_state(&before);
             }
 
-            Expr::Await { expr: inner } => {
+            Expr::Await { expr: inner, .. } => {
                 self.check_expr(inner);
                 if self.current_function_is_async {
                     let to_invalidate: Vec<DefId> = self.var_origins.iter()
@@ -1521,7 +1521,7 @@ impl<'a> BorrowChecker<'a> {
                 self.in_return_expr = saved_in_return;
             }
 
-            Expr::ArrayLiteral(elements) | Expr::TupleLiteral(elements) => {
+            Expr::ArrayLiteral(elements, _) | Expr::TupleLiteral(elements) => {
                 // Round XXVIII Track C R1 (walker-driven, per pass-2 reference-
                 // grade fold): container-literal ELEMENTS are D32 consuming init
                 // boundaries — a `!x` element (`[!a, !b]`, `(!a, !b)`) is

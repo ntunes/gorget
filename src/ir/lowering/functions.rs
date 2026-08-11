@@ -937,7 +937,7 @@ fn count_uses_in_expr(expr: &Expr, counts: &mut rustc_hash::FxHashMap<String, u3
         Expr::StructLiteral { args, .. } => {
             for arg in args { count_uses_in_expr(&arg.node, counts); }
         }
-        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+        Expr::ArrayLiteral(elems, _) | Expr::TupleLiteral(elems) => {
             for e in elems { count_uses_in_expr(&e.node, counts); }
         }
         Expr::DictLiteral(pairs) => {
