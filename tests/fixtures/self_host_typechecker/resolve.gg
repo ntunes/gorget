@@ -229,6 +229,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
     # Register built-in collection types as Import placeholders
     Vector[String] col_names = Vector[String]()
     col_names.push("Vector")
+    col_names.push("Deque")
     col_names.push("Dict")
     col_names.push("HashMap")
     col_names.push("Set")
@@ -255,15 +256,16 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
         scopes.define("Ok", DkVariant(), !Span(0, 0))
         scopes.define("Error", DkVariant(), !Span(0, 0))
 
-    # Register the compiler-internal `Fault` enum (error-model.md §11). Its
-    # variants are QUALIFIED (`Fault.Overflow`) — unlike the prelude-bare
-    # Some/Ok/Error — so they register via `alloc_def` (allocated WITHOUT a
-    # bare-name scope insertion), mirroring the non-generic user-enum path
-    # below + Rust gg's resolve.rs:175-183.
-    if scopes.define("Fault", DkEnum(), !Span(0, 0)) is Some(_):
+    # D26: the compiler-internal `ArithError` prelude enum — payload-free
+    # variants for the two error channels of the fallible arithmetic
+    # operators (`+!` / `-!` / `*!` …). Its variants are QUALIFIED-ONLY
+    # (`ArithError.Overflow`) — unlike the prelude-bare Some/Ok/Error — so
+    # they register via `alloc_def` (allocated WITHOUT a bare-name scope
+    # insertion), mirroring the non-generic user-enum path below.
+    # Twin registration: Rust gg `src/semantic/resolve.rs` (`ArithError`).
+    if scopes.define("ArithError", DkEnum(), !Span(0, 0)) is Some(_):
         scopes.alloc_def("Overflow", DkVariant(), !Span(0, 0))
         scopes.alloc_def("DivByZero", DkVariant(), !Span(0, 0))
-        scopes.alloc_def("Bounds", DkVariant(), !Span(0, 0))
 
     # Collect all top-level items
     for item in module.items:

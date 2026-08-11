@@ -161,6 +161,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
     # Register built-in collection types as Import placeholders
     Vector[String] col_names = Vector[String]()
     col_names.push("Vector")
+    col_names.push("Deque")
     col_names.push("Dict")
     col_names.push("HashMap")
     col_names.push("Set")
@@ -192,15 +193,16 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
         scopes.define("Ok", DkVariant(), !Span(0, 0))
         scopes.define("Error", DkVariant(), !Span(0, 0))
 
-    # Register the compiler-internal `Fault` enum (error-model.md §11). Its
-    # variants are QUALIFIED (`Fault.Overflow`) so they register via
-    # `alloc_def` (no bare-name scope insertion), mirroring the non-generic
-    # user-enum path + Rust gg resolve.rs:175-183.
-    int fault_def = scopes.define("Fault", DkEnum(), !Span(0, 0))
-    if fault_def >= 0:
+    # D26: the compiler-internal `ArithError` prelude enum — payload-free
+    # variants for the two error channels of the fallible arithmetic
+    # operators (`+!` / `-!` / `*!` …). Its variants are QUALIFIED-ONLY
+    # (`ArithError.Overflow`) so they register via `alloc_def` (no bare-name
+    # scope insertion), mirroring the non-generic user-enum path.
+    # Twin registration: Rust gg `src/semantic/resolve.rs` (`ArithError`).
+    int arith_error_def = scopes.define("ArithError", DkEnum(), !Span(0, 0))
+    if arith_error_def >= 0:
         scopes.alloc_def("Overflow", DkVariant(), !Span(0, 0))
         scopes.alloc_def("DivByZero", DkVariant(), !Span(0, 0))
-        scopes.alloc_def("Bounds", DkVariant(), !Span(0, 0))
 
     # Collect all top-level items
     int i = 0

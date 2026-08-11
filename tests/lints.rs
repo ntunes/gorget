@@ -13239,6 +13239,172 @@ fn ast_block_constructed_only_via_synthetic_outside_parser() {
             // LIR's identically-named `Block` does not false-positive.
             if line.contains("stmts") || content.lines().nth(i + 1).is_some_and(|n| n.contains("stmts:")) {
                 offenders.push(format!("  {s}:{}: {t}", i + 1));
+// ==== T-RB0 ================================================================
+
+/// **D27 accept-both, SELF-HOST parse side: every ownership-context
+/// `TOK_BANG` predicate must have a `TOK_CARET` SIBLING.**
+///
+/// The class this retires: the self-host parsers recognised only the RETIRED
+/// move glyph `!` in ownership positions, so the self-host could not re-parse
+/// the `^` its own formatter emits. That was invisible for as long as it
+/// lasted because `resolver_comparison` had no floor.
+///
+/// **Sibling-predicate form, NOT a count.** A count of caret sites stays
+/// green when a NEW bang-only predicate is born — the guard would sail past
+/// the very class it exists to retire (Core #15e Q2: "can this guard catch
+/// its OWN class?"). So this asserts a PROPERTY of each predicate instead:
+/// wherever the parser tests for the move glyph in an ownership context, it
+/// must test for BOTH glyphs on that same line.
+///
+/// It is deliberately symmetric — it also fails if a `TOK_BANG` test is
+/// REPLACED by a bare `TOK_CARET` test, which would silently retire the `!`
+/// glyph ahead of the ratified schedule.
+///
+/// **File set is DISCOVERED, not hardcoded.** A hardcoded 3-file list cannot
+/// see copy N+1. `read_dir` finds every `self_host_*/parser.gg` and
+/// `canonicalize` collapses the symlinks (`self_host_check` and
+/// `self_host_lowerer` both point at `self_host_typechecker`), so the set is
+/// the REAL files, however many there turn out to be.
+///
+/// **Exclusions are identified by CONTENT, never by line number** (line
+/// numbers rot on the first edit). Each is anchored on a stable string that
+/// appears a few lines BELOW its predicate, so the match uses a small
+/// lookahead window:
+///   - `EPropagate(` — postfix error-propagation `expr!` (D29). `^` is the
+///     BITWISE-XOR operator in that position, so a caret sibling would be
+///     flatly wrong.
+///   - `is not a signature form` — the bare `!` inferred-error-set signature
+///     marker (A31). Same reasoning: not an ownership sigil.
+///   - `sigil = "` — the D35 diagnostic-text helper, whose whole job is to
+///     tell the two glyphs APART so the message names the one the author
+///     actually wrote.
+///
+/// **Detection is comment-stripped and word-bounded.** A bare `TOK_BANG`
+/// grep also matches `TOK_BANGEQ` — the INEQUALITY token — which appears in
+/// the operator tables; and prose like "TOK_BANG here is always the postfix
+/// mark" would otherwise register as a predicate.
+///
+/// **If this fails**: a new ownership predicate was added for `!` only (add
+/// the `or self.check_tok(TOK_CARET)` sibling), or an existing one lost its
+/// caret sibling (a D27 regression), or a genuinely-new NON-ownership `!`
+/// site was added (give it a content anchor here, with the reason).
+#[test]
+fn sh_parser_caret_predicate_siblings() {
+    /// Stable strings marking a `TOK_BANG` test that is NOT an ownership
+    /// sigil test, paired with why. Matched within `LOOKAHEAD` lines below
+    /// the predicate.
+    const EXCLUSION_ANCHORS: &[(&str, &str)] = &[
+        ("EPropagate(", "postfix error-propagation `expr!` (D29) — `^` is bitwise-xor there"),
+        ("is not a signature form", "bare `!` inferred-error-set signature marker (A31)"),
+        ("sigil = \"", "D35 diagnostic-text helper — must tell the glyphs APART by design"),
+    ];
+    const LOOKAHEAD: usize = 6;
+
+    // ---- discover the REAL parser.gg copies (symlinks collapsed) ----------
+    let fixtures = std::path::Path::new("tests/fixtures");
+    let mut real_files: Vec<std::path::PathBuf> = Vec::new();
+    let mut seen: Vec<std::path::PathBuf> = Vec::new();
+    let entries = fs::read_dir(fixtures).expect("cannot read tests/fixtures");
+    let mut dirs: Vec<std::path::PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("self_host_"))
+        })
+        .collect();
+    dirs.sort();
+    for d in &dirs {
+        let candidate = d.join("parser.gg");
+        if !candidate.exists() {
+            continue;
+        }
+        let canon = candidate
+            .canonicalize()
+            .unwrap_or_else(|e| panic!("canonicalize {}: {e}", candidate.display()));
+        if seen.contains(&canon) {
+            continue; // a symlink onto a copy already counted
+        }
+        seen.push(canon);
+        real_files.push(candidate);
+    }
+    assert!(
+        real_files.len() >= 3,
+        "sh_parser_caret_predicate_siblings: expected at least 3 REAL self_host_*/parser.gg \
+         copies, found {}: {real_files:?}.\nIf a copy was deleted or newly symlinked, say so \
+         here; if the self-host tree moved, fix the discovery above.",
+        real_files.len(),
+    );
+
+    // ---- check every ownership-context TOK_BANG predicate ----------------
+    let mut offenders: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    let mut excluded = 0usize;
+
+    for path in &real_files {
+        let content = fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        // Strip comments so prose mentioning the token never registers as a
+        // predicate. `#` inside a string literal is not a comment, so only
+        // cut at a `#` preceded by an even number of quotes.
+        let code: Vec<String> = content
+            .lines()
+            .map(|line| match line
+                .char_indices()
+                .find(|(i, c)| *c == '#' && line[..*i].matches('"').count() % 2 == 0)
+            {
+                Some((i, _)) => line[..i].to_string(),
+                None => line.to_string(),
+            })
+            .collect();
+
+        for (i, line) in code.iter().enumerate() {
+            if !mentions_move_token(line, "TOK_BANG") {
+                continue;
+            }
+            // Excluded? Look a few lines down for the anchoring content.
+            let window_end = (i + 1 + LOOKAHEAD).min(code.len());
+            let window = code[i..window_end].join("\n");
+            if let Some((anchor, _why)) =
+                EXCLUSION_ANCHORS.iter().find(|(a, _)| window.contains(a))
+            {
+                let _ = anchor;
+                excluded += 1;
+                continue;
+            }
+            checked += 1;
+            if !mentions_move_token(line, "TOK_CARET") {
+                offenders.push(format!(
+                    "{}:{} — tests TOK_BANG without a TOK_CARET sibling:\n      {}",
+                    path.display(),
+                    i + 1,
+                    line.trim(),
+                ));
+            }
+        }
+
+        // Symmetry: a caret-only ownership predicate would silently retire
+        // the `!` glyph early. Every ownership-context TOK_CARET test must
+        // likewise name TOK_BANG.
+        for (i, line) in code.iter().enumerate() {
+            if !mentions_move_token(line, "TOK_CARET") {
+                continue;
+            }
+            let window_end = (i + 1 + LOOKAHEAD).min(code.len());
+            let window = code[i..window_end].join("\n");
+            if EXCLUSION_ANCHORS.iter().any(|(a, _)| window.contains(a)) {
+                continue;
+            }
+            if !mentions_move_token(line, "TOK_BANG") {
+                offenders.push(format!(
+                    "{}:{} — tests TOK_CARET without a TOK_BANG sibling (the retired \
+                     glyph is still ACCEPTED until D27 Round B retires it):\n      {}",
+                    path.display(),
+                    i + 1,
+                    line.trim(),
+                ));
             }
         }
     }
@@ -13329,3 +13495,125 @@ fn formatter_no_raw_newline_outside_emitter() {
         offenders.join("\n")
     );
 }
+        "D27 accept-both regression in the self-host parser(s): {} ownership predicate(s) \
+         name only one move glyph.\n\n{}\n\n\
+         Every ownership-context move-glyph test must accept BOTH `!` (retired but still \
+         accepted) and `^` (canonical) — the self-host must be able to re-parse the `^` \
+         its own formatter emits.\n\
+         Fix: add the missing `or self.check_tok(TOK_CARET)` / `or ptag == TOK_CARET` \
+         sibling on the cited line.\n\
+         If the site is genuinely NOT an ownership sigil test, add a CONTENT anchor to \
+         EXCLUSION_ANCHORS in this test with the reason (never a line number).",
+        offenders.len(),
+        offenders.join("\n"),
+    );
+
+    // Positive control: the scan must actually have found predicates. A
+    // detection regression that matched nothing would otherwise pass loudly
+    // green — the exact failure mode this lint exists to prevent.
+    assert!(
+        checked >= 24 && excluded >= 6,
+        "sh_parser_caret_predicate_siblings: DETECTION regression — only {checked} \
+         ownership predicate(s) and {excluded} excluded site(s) found across {} real \
+         parser copies. Expected at least 24 and 6 (>=8 ownership predicates and >=2 \
+         excluded sites per copy). The scan is no longer seeing the predicates it is \
+         supposed to guard; fix the detection, do NOT lower these bounds.",
+        real_files.len(),
+    );
+}
+
+/// Does `line` test the parser's CURRENT token against `token` in an
+/// OWNERSHIP context?
+///
+/// Only the two forms the self-host parsers actually use for ownership
+/// sigils count:
+///   - `self.check_tok(TOK_X)` — the lookahead predicate
+///   - `ptag == TOK_X`         — the prefix/postfix dispatch on a peeked tag
+///
+/// Everything else that merely NAMES the token is out of scope by
+/// construction, which is what keeps the lexer's token table
+/// (`const int TOK_BANG = 16`, `return TOK_CARET`) and the operator/
+/// precedence tables (`elif tag == TOK_CARET:` — there `^` is BITWISE XOR,
+/// not a move sigil) from registering as ownership predicates.
+///
+/// `check_tok(TOK_BANG)` cannot collide with `TOK_BANGEQ` because the
+/// closing paren pins the end. The `ptag ==` form is word-bounded for the
+/// same reason: `TOK_BANG` must not match `TOK_BANGEQ` (the INEQUALITY
+/// token), nor `TOK_CARET` match `TOK_CARETEQ`.
+fn mentions_move_token(line: &str, token: &str) -> bool {
+    if line.contains(&format!("check_tok({token})")) {
+        return true;
+    }
+    let needle = format!("ptag == {token}");
+    let bytes = line.as_bytes();
+    let mut from = 0usize;
+    while let Some(rel) = line[from..].find(&needle) {
+        let end = from + rel + needle.len();
+        if bytes
+            .get(end)
+            .is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'_')
+        {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+/// **The fuzz targets must still COMPILE against the current library API.**
+///
+/// The fuzz crate is not part of the workspace build, so nothing in the
+/// normal gate ever type-checks it. It bit-rotted exactly that way:
+/// `formatter::format_source` was renamed to `format_source_result` /
+/// `format_source_infallible` and `fuzz_roundtrip.rs` kept importing the old
+/// name — an `E0432` that sat there because no gate compiled the crate. The
+/// fuzzers are a real safety net; a net that does not build catches nothing.
+///
+/// **UNGATED on purpose.** An env-gated version would be skipped in CI and
+/// the rot would simply resume. ~10s cold, which is what CI pays (the
+/// `/tmp` target dir is never cached there).
+///
+/// **No `--bin` filter**: all three targets (`fuzz_lexer`, `fuzz_parser`,
+/// `fuzz_roundtrip`) are checked, so the next rename is caught in whichever
+/// target uses the renamed symbol.
+///
+/// **`--locked`** does double duty: it keeps the run from mutating
+/// `fuzz/Cargo.lock` (a test that dirties the tree is its own problem) AND
+/// it ratchets lock staleness — if `fuzz/Cargo.lock` drifts from
+/// `fuzz/Cargo.toml`, this fails with "cannot update the lock file" and the
+/// fix is to commit a refreshed lock.
+///
+/// **CARGO_TARGET_DIR under /tmp** so the check cannot collide with the main
+/// build's target dir or leave artifacts in the tree.
+#[test]
+fn fuzz_targets_still_compile() {
+    let manifest = std::path::Path::new("fuzz/Cargo.toml");
+    assert!(
+        manifest.exists(),
+        "fuzz/Cargo.toml is missing — if the fuzz crate was intentionally \
+         removed, delete this lint in the same commit."
+    );
+
+    let out = std::process::Command::new(env!("CARGO"))
+        .args(["check", "--locked", "--manifest-path", "fuzz/Cargo.toml"])
+        .env("CARGO_TARGET_DIR", "/tmp/gg_fuzz_lint_target")
+        .output()
+        .expect("failed to invoke cargo check on fuzz/Cargo.toml");
+
+    assert!(
+        out.status.success(),
+        "the fuzz crate no longer compiles against the current library API.\n\n\
+         {}\n\n\
+         The fuzz targets are not in the workspace build, so ONLY this lint \
+         type-checks them. Fix the target (usually a renamed/removed `pub` \
+         item), or — if `fuzz/Cargo.lock` is merely stale — refresh and COMMIT \
+         it:\n  \
+         cargo update --manifest-path fuzz/Cargo.toml --workspace\n\n\
+         Reproduce locally with:\n  \
+         CARGO_TARGET_DIR=/tmp/gg_fuzz_lint_target cargo check --locked \
+         --manifest-path fuzz/Cargo.toml",
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+// ==== end T-RB0 ============================================================

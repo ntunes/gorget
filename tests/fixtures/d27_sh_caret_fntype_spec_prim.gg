@@ -1,0 +1,39 @@
+# D27 accept-both, SELF-HOST resolver + runtime lanes: the canonical `^` move
+# sigil immediately AFTER a FUNCTION TYPE whose return type is a PRIMITIVE
+# (`int(int) ^cb`).
+#
+# AXIS CELL: glyph = `^` · position = named param whose type is a function
+# type · function-type RETURN kind = PRIMITIVE (the `named` sibling cell is
+# `d27_sh_caret_fntype_spec_named.gg`) · lanes = Rust gg (C + LLVM),
+# self-host resolver, self-host runtime.
+#
+# WHY THIS IS ITS OWN CELL: `Type(params)` is parsed SPECULATIVELY — the
+# parser commits to "this is a function type" only when the token that
+# FOLLOWS the parameter list is one of an accept-set. The `^` glyph was
+# missing from that accept-set, so the speculation BACKTRACKED and the
+# construct was re-parsed as something else. The primitive-return and
+# named-return speculation sites are two DISTINCT predicates in the parser,
+# hence two fixtures.
+#
+# RED-verified against the PRE-port self-host lane: this program failed to
+# compile through the self-host driver (the C compile step exited non-zero)
+# while its `!` twin built and ran, printing `6`. Post-port the self-host
+# lane compiles it and its output MATCHES Rust gg.
+#
+# No new `!` site is added for the control (`fmt_no_new_move_bang_in_migrated_corpora`
+# in tests/lints.rs is shrink-only and at zero headroom); the corpus has no
+# postfix-`!` twin of this exact position, so the durable guard for the
+# glyph PAIR at this predicate is the `sh_parser_caret_predicate_siblings`
+# lint in tests/lints.rs, which asserts every ported predicate names BOTH
+# tokens.
+#
+# Expected stdout: 6
+
+int double_it(int x):
+    return x * 2
+
+void apply(int(int) ^cb):
+    print(cb(3))
+
+void main():
+    apply(^double_it)

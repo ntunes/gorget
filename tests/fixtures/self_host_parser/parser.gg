@@ -1274,7 +1274,7 @@ equip Parser:
                 SpannedType ret_ty = self.mk_type(!TPrimitive(name), start)
                 SpannedType fn_ty = self.parse_function_type(ret_ty, start)
                 # Accept if followed by a name, closing bracket, comma, newline, colon, or EOF (in type context)
-                if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
+                if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_CARET) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
                     self.exit_speculation()
                     return fn_ty
                 # Restore — wasn't a function type.
@@ -1362,7 +1362,7 @@ equip Parser:
                 SpannedType named_ty = self.mk_type(!TNamed(name, Vector[SpannedType]()), start)
                 SpannedType fn_ty = self.parse_function_type(named_ty, start)
                 # Accept if followed by name (var/param name) or closing context
-                if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
+                if self.check_tok(TOK_IDENT) or self.check_tok(TOK_RBRACKET) or self.check_tok(TOK_COMMA) or self.check_tok(TOK_RPAREN) or self.check_tok(TOK_BANG) or self.check_tok(TOK_CARET) or self.check_tok(TOK_AMP) or self.check_tok(TOK_NEWLINE) or self.check_tok(TOK_COLON) or self.at_end():
                     self.exit_speculation()
                     return fn_ty
                 # Restore — wasn't a function type.
@@ -1400,22 +1400,35 @@ equip Parser:
             # returns Err instead (see src/parser/types.rs); the SH
             # equivalent is push+advance, so the recovery path pins the
             # sigil to a single diagnostic.
-            if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG):
-                self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "D35: an unnamed parameter's sigil goes AFTER the type in a function type — write `Type &` / `Type !`, not `&Type` / `!Type`"))
+            if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG) or self.check_tok(TOK_CARET):
+                self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), self.d35_sigil_before_type_msg()))
                 self.advance()
             param_types.push(self.parse_type())
             ownerships.push(self.parse_fn_type_param_ownership())
             while self.consume_comma_or_tok(TOK_RPAREN):
-                if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG):
-                    self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), "D35: an unnamed parameter's sigil goes AFTER the type in a function type — write `Type &` / `Type !`, not `&Type` / `!Type`"))
+                if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG) or self.check_tok(TOK_CARET):
+                    self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), self.d35_sigil_before_type_msg()))
                     self.advance()
                 param_types.push(self.parse_type())
                 ownerships.push(self.parse_fn_type_param_ownership())
         self.expect_tok(TOK_RPAREN, "expected ')' for function type")
         return self.mk_type(!TFunction(Box(ret_ty), param_types, ownerships), start)
 
+    # D35 diagnostic text, parameterized by the sigil ACTUALLY SEEN — a
+    # `^Type` author must be told to write `Type ^`, never the retired `!`.
+    # Mirrors Rust gg's `FunctionTypeParamSigilBeforeType { sigil }`
+    # (src/errors.rs:248-256). ONE producer for both call sites above.
+    String d35_sigil_before_type_msg(self):
+        String sigil = "&"
+        if self.check_tok(TOK_BANG):
+            sigil = "!"
+        elif self.check_tok(TOK_CARET):
+            sigil = "^"
+        return "D35: an unnamed parameter's sigil goes AFTER the type in a function type — write `Type " + sigil + "` instead of `" + sigil + "Type`"
+
     # D35: consume the trailing sigil AFTER an unnamed function-type parameter
-    # (`Type &` / `Type !`) and return its OWN_* code. Sibling of
+    # (`Type &` / `Type ^`, and retired-but-accepted `Type !`) and return its
+    # OWN_* code. Sibling of
     # `skip_ownership_markers` (which is retained for other positions).
     int parse_fn_type_param_ownership(&self):
         if self.check_tok(TOK_AMP):

@@ -1,0 +1,41 @@
+# KNOWN GAP — self-host resolver: no RES edge for the `self` receiver inside
+# an `equip` method body.
+#
+# Rust gg's canonical resolution output for this program contains a `RES`
+# edge resolving the `self` occurrence in `self.text` to the method's
+# self-parameter def. The self-host resolver emits ONE FEWER `RES` line: the
+# self-receiver edge is missing, which shifts every later RES comparison and
+# makes the fixture MISMATCH in `resolver_comparison`.
+#
+# Measured shape (resolver_comparison, first divergence):
+#     Rust:   RES 80 -> 55
+#     Gorget: RES 128 -> 52
+#   with rust=60 vs gorget=59 collected DEF+RES lines.
+#
+# GLYPH-INDEPENDENT: this reproduces with `&self` (as written below) exactly
+# as it does with `^self` / `!self`, so it is NOT a D27 move-sigil issue. It
+# is also independent of the method's return type and of `.len()` — the
+# receiver edge is simply never recorded.
+#
+# WHY IT MATTERS: every `equip`-method fixture in the corpus carries this
+# divergence, so it is a standing contributor to the `resolver_comparison`
+# mismatch population and it caps the RESOLVER_MATCH_FLOOR ratchet.
+#
+# INTENDED behaviour: the self-host resolver records a RES edge for the
+# `self` receiver, matching Rust gg line for line, and this file MATCHES in
+# `resolver_comparison`.
+#
+# Expected stdout when the gap is closed (the program itself already RUNS
+# correctly on both lanes — the gap is in the resolver's RESOLUTION MAP, not
+# in codegen): 3
+
+struct Label:
+    String text
+
+equip Label:
+    int size(&self):
+        return self.text.len()
+
+void main():
+    Label small = Label("abc")
+    print(small.size())

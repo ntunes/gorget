@@ -1,0 +1,37 @@
+# D27 accept-both, SELF-HOST resolver lane: the canonical `^` move sigil as a
+# TYPE-ARG SUFFIX (`Vector[int ^]`) — the D35 spelling, sigil AFTER the type.
+#
+# AXIS CELL: glyph = `^` · position = type-arg suffix inside `[...]` ·
+# lanes = Rust gg (C + LLVM), self-host resolver, self-host runtime.
+#
+# This is a DISTINCT parser predicate from the named-param cell: the type-arg
+# suffix is consumed by `skip_ownership_markers`, reached from
+# `parse_type_args`. `d27_fmt_emits_caret.gg` also spells this position, but
+# bundles five positions in one program and is wired only to the FORMATTER
+# test; this cell isolates the type-arg predicate so a regression confined to
+# it produces an unambiguous signal on the resolver and runtime lanes.
+#
+# RED-verified against the PRE-port self-host resolver driver: with the
+# type-arg suffix predicate un-ported the parser did not consume the `^`,
+# tripped on the `]`, and produced a GARBAGE AST — the function body escaped
+# to top level (`sum` surfaced as a `DEF Static`) and a `DEF Variable ""`
+# appeared, leaving only 2 `RES` lines. Post-port all DEFs carry their names
+# and the full set of `RES` edges is produced.
+#
+# The `!` (retired-glyph) control for this position is the existing corpus;
+# no new `!` site is added (`fmt_no_new_move_bang_in_migrated_corpora` in
+# tests/lints.rs is shrink-only and at zero headroom).
+#
+# Expected stdout: 9
+
+int take_owned(Vector[int ^] items):
+    int sum = 0
+    for v in items:
+        sum = sum + v
+    return sum
+
+void main():
+    Vector[int] xs = Vector[int]()
+    xs.push(4)
+    xs.push(5)
+    print(take_owned(xs))

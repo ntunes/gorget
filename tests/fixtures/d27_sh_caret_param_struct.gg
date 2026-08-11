@@ -1,0 +1,31 @@
+# D27 accept-both, SELF-HOST resolver lane: the canonical `^` move sigil in
+# the NAMED-PARAMETER position (`Type ^name`), with the body USING the param.
+#
+# AXIS CELL: glyph = `^` (canonical) · position = named param · param TYPE =
+# user struct (the sibling `String` cell lives in `d27_fmt_emits_caret.gg`;
+# Core #12 "go TYPE-first" — this widens the param-type axis off `String`) ·
+# lanes = Rust gg (C + LLVM), self-host resolver, self-host runtime.
+#
+# The `!` (retired-glyph) control for this cell is the EXISTING corpus — no
+# new `!` site is added here, because `fmt_no_new_move_bang_in_migrated_corpora`
+# (tests/lints.rs) is a shrink-only ratchet sitting at zero headroom.
+#
+# RED-verified against the PRE-port self-host resolver driver: this program
+# yielded `DEF Variable ""` (the parameter's name was LOST) plus a spurious
+# `DIAG error undefined-name ... `m``, and the `RES` edge for the body use of
+# `m` was MISSING entirely. The `!` twin of the same program resolved
+# cleanly, which is what made the gap a D27 accept-both hole rather than a
+# general parameter bug. Post-port the DEF carries the name and the RES edge
+# appears. Guards the `Type ^name` ownership predicate in parser.gg.
+#
+# Expected stdout: hello
+
+struct Message:
+    String body
+
+String render(Message ^m):
+    return m.body
+
+void main():
+    Message msg = Message("hello")
+    print(render(^msg))

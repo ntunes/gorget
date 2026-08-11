@@ -1,0 +1,49 @@
+# D27 accept-both, SELF-HOST resolver lane: the canonical `^` move sigil as an
+# UNNAMED FUNCTION-TYPE PARAMETER SUFFIX (`Callable[void(int &, String ^)]`) —
+# the D35 spelling, sigil AFTER the type.
+#
+# AXIS CELL: glyph = `^` · position = fn-type unnamed-param suffix · callee
+# shape = PARAMETER-passed callable · lanes = Rust gg (C + LLVM), self-host
+# resolver, self-host runtime.
+#
+# `!` CONTROL: `callable_bang_arr_indexed_callee.gg:27` is the ONLY in-corpus
+# postfix-`!` twin of this position and is the accept-both control for this
+# cell — same two-parameter `&`/move pair in the fn type, differing in the
+# glyph. No new `!` site is added (`fmt_no_new_move_bang_in_migrated_corpora`
+# in tests/lints.rs is shrink-only and at zero headroom).
+#
+# ⚠ The callee shape is load-bearing, not incidental. TWO shapes were
+# measured and rejected for this cell:
+#   - Callable-typed LOCAL VARIABLE (`Callable[...] f = mix; f(&a, ^s)`) —
+#     ICEs the Rust lowerer ("Tier 2a consume-site violation",
+#     src/ir/lowering/mod.rs:2114) for BOTH glyphs identically. Pre-existing
+#     and glyph-independent; repro at
+#     known_gaps/callable_local_var_consuming_arg_ices.gg.
+#   - INDEXED callee out of a Vector (`arr[0](&a, ^s)`) — runs on Rust gg but
+#     TIMES OUT on the self-host runtime lane. Its `!` twin
+#     `callable_bang_arr_indexed_callee.gg` has no committed snapshot either,
+#     i.e. that shape has NEVER matched on the self-host lane. Also
+#     pre-existing and glyph-independent.
+# The parameter-passed shape below exercises the SAME parse predicate and
+# runs on every lane, so this cell pins D27 rather than either of those
+# unrelated defects.
+#
+# RED-verified against the PRE-port self-host resolver driver: the fn-type
+# param-suffix predicate accepted only the retired glyph, so the `^` was not
+# consumed as an ownership marker and the type parse desynchronized.
+# Post-port the resolver output matches Rust gg's.
+#
+# Expected stdout: hi\n101
+
+void mix(int &n, String ^s):
+    n = n + 100
+    print(s)
+
+void apply(Callable[void(int &, String ^)] cb, int &a, String ^s):
+    cb(&a, ^s)
+
+void main():
+    int a = 1
+    String greeting = "hi"
+    apply(mix, &a, ^greeting)
+    print(a)

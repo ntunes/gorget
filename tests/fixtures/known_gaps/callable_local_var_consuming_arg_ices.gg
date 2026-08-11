@@ -1,0 +1,45 @@
+# KNOWN GAP — ICE: calling a `Callable[...]`-typed LOCAL VARIABLE with a
+# CONSUMING argument panics the Rust lowerer.
+#
+#   thread 'gg-main' panicked at src/ir/lowering/mod.rs:2114:
+#   Tier 2a consume-site violation: 1 violation(s) in module '<unknown>'.
+#   First: fn @main bb0 i5 — CollectionMutator(__gorget_closure_call_3,
+#   arg #0) — untracked source consumed (ownership not decided).
+#
+# `gg check` passes cleanly; the panic is at IR lowering, so this is a
+# crash-on-valid-program, not a rejected program.
+#
+# GLYPH-INDEPENDENT: the retired-glyph twin (`String !s` in the signature,
+# `Callable[void(int &, String !)]` in the type, `f(&a, !greeting)` at the
+# call) panics with the BYTE-IDENTICAL message. So this is NOT a D27
+# accept-both issue — it is an ownership-tracking hole for the
+# closure-call path.
+#
+# DISCRIMINATOR vs the working case: the same program with an INDEXED callee
+# compiles and runs fine —
+#   Vector[Callable[void(int &, String ^)]] arr = []
+#   arr.push(mix)
+#   arr[0](&a, ^greeting)
+# — which is exactly `callable_bang_arr_indexed_callee.gg` (and its caret
+# twin `d27_sh_caret_fntype_param_suffix.gg`). So the hole is specific to
+# calling a Callable-typed LOCAL BINDING, not to Callable calls in general:
+# the indexed form registers the consume site, the bare-variable form does
+# not.
+#
+# INTENDED behaviour: this compiles and runs, printing the two lines below.
+# Per Core #3 the fix belongs at the PRODUCER — the closure-call lowering
+# must register the argument's ownership at the consume site, the same way
+# the indexed-callee path already does — not at the validator's read site.
+#
+# Expected stdout: hi\n101
+
+void mix(int &n, String ^s):
+    n = n + 100
+    print(s)
+
+void main():
+    int a = 1
+    String greeting = "hi"
+    Callable[void(int &, String ^)] f = mix
+    f(&a, ^greeting)
+    print(a)

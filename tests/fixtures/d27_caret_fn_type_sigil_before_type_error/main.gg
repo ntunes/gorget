@@ -1,0 +1,30 @@
+# D27 ⊕ D35: the CANONICAL move glyph `^` gets exactly the same reject as the
+# retired glyph `!` when spelled BEFORE the type in a function type.
+#
+# D35 (docs/define-gorget/decisions.md, ratified 2026-07-26) puts an unnamed
+# parameter's sigil AFTER the type (`Callable[void(int ^)]`), mirroring the
+# named-parameter rule (`void consume(Message ^msg)`). The pre-D35 spelling
+# `Callable[void(^int)]` is REJECTED at parse — never co-accepted.
+#
+# AXIS CELL: glyph = `^` (canonical). The `&` cell of this same reject is
+# `d35_fn_type_sigil_before_type_error/`; this fixture is its `^` sibling.
+# D27 accept-both governs where a move sigil is LEGAL — it must NOT be read
+# as "accept `^` in positions where `!` is rejected", so the reject surface
+# has to be pinned per glyph, not assumed to follow.
+#
+# The diagnostic must name the replacement spelling USING THE GLYPH THE
+# AUTHOR ACTUALLY WROTE — telling a `^Type` author to write `Type !` would
+# teach the retired glyph. Rust gg parameterizes this
+# (`FunctionTypeParamSigilBeforeType { sigil }`, src/errors.rs:248-256) and
+# the self-host parsers now do too (`d35_sigil_before_type_msg`).
+#
+# Fixture lives in its own directory so the unparseable source stays OUT of
+# the top-level fixture sweeps (fmt_idempotent, *_comparison, runtime_diff).
+void consume(String ^s):
+    print(s)
+
+void call_it(Callable[void(^String)] cb):
+    cb("x")
+
+void main():
+    call_it(consume)

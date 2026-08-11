@@ -1,0 +1,53 @@
+# D27 accept-both, SELF-HOST resolver lane: the canonical `^` move sigil on
+# the SELF FACE (`^self`), i.e. a consuming method.
+#
+# AXIS CELL: glyph = `^` · position = self-face · receiver shape = struct with
+# a `&self` sibling method on the same `equip` block (so a partial regression
+# that broke only the consuming face would still trip this) · lanes = Rust gg
+# (C + LLVM), self-host resolver, self-host runtime.
+#
+# ⚠ `^self` parses ONLY inside an `equip` block — a bare top-level function
+# cannot spell the self face, so this cell necessarily uses `equip`.
+#
+# The `!self` (retired-glyph) control is the existing corpus; no new `!` site
+# is added (the `fmt_no_new_move_bang_in_migrated_corpora` ratchet in
+# tests/lints.rs is shrink-only and at zero headroom).
+#
+# RED-verified against the PRE-port self-host resolver driver by diffing the
+# driver's own output on this file: pre-port it emitted `DEF Variable ""` for
+# the self-face (the name LOST); post-port it emits `DEF Variable "self"`.
+# That one-line delta is this cell's caret pin. Guards the `^self` ownership
+# predicate in parser.gg.
+#
+# ⚠ SCOPE OF THE PIN: this fixture does NOT reach MATCH in
+# `resolver_comparison`, for a reason that has nothing to do with D27 — the
+# self-host resolver omits a `RES` edge for the `self` receiver inside an
+# `equip` method body, so it emits one fewer RES line than Rust gg. That
+# divergence is GLYPH-INDEPENDENT: the minimal `&self` probe
+# (`int size(&self): return self.text.len()`) diverges identically, and it
+# reproduces in a 10-line program with no move sigil anywhere. Filed in
+# TODO.md with a repro at
+# `tests/fixtures/known_gaps/sh_resolver_equip_self_receiver_res_missing.gg`.
+# The shape here is deliberately NOT reworked to dodge it (that would bury
+# the gap): the caret pin is the direct pre/post driver-output delta above,
+# plus the self-host RUNTIME lane (committed snapshot) and the
+# `sh_parser_caret_predicate_siblings` lint in tests/lints.rs.
+#
+# Expected stdout: 3\nwidget
+
+struct Label:
+    String text
+
+equip Label:
+    int size(&self):
+        return self.text.len()
+
+    String into_text(^self):
+        return self.text
+
+void main():
+    Label small = Label("abc")
+    print(small.size())
+
+    Label owned = Label("widget")
+    print(owned.into_text())

@@ -184,8 +184,11 @@ pub fn collect_top_level(
     // D26 (Round XXXIII Batch C1): the compiler-internal `ArithError` prelude
     // enum — payload-free variants for the two error channels produced by the
     // fallible arithmetic operators (`+!` / `-!` / `*!` etc). Its variants are
-    // QUALIFIED-ONLY (`ArithError.Overflow`), mirroring the `Fault` shape
-    // above. Twin IR-lowering registration lives in `inject_builtin_enums`
+    // QUALIFIED-ONLY (`ArithError.Overflow`) — allocated WITHOUT a bare-name
+    // scope insertion, unlike the prelude-bare Some/Ok/Error above. (The
+    // `Fault` prelude enum this once mirrored was retired with the
+    // fault-catch form by D25 — see `E_FaultCatchRemoved`.) Twin
+    // registrations: IR lowering's `inject_builtin_enums`
     // (generics/substitute.rs) + `src/ir/lowering/mod.rs` TypeDef pass.
     if let Ok(ae_def_id) = scopes.define("ArithError".to_string(), DefKind::Enum, Span::dummy()) {
         let mut variant_infos = Vec::new();
