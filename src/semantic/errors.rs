@@ -1498,9 +1498,12 @@ impl std::fmt::Display for SemanticError {
             }
             SemanticErrorKind::MoveWithoutOperator { name, reason, shape, write_through_available } => {
                 // The "why" clause depends on the reason; the REMEDY depends on
-                // the place shape (D12 pin-4). `!` is today's move sigil — a
-                // `# D27: !→^` breadcrumb marks it for D27's re-sigil sweep
-                // (do NOT switch to `^` here: it does not parse yet).
+                // the place shape (D12 pin-4). The message texts below still
+                // spell the RETIRED `!` glyph; `^` is the CANONICAL one and
+                // the parser accepts BOTH today (D27 accept-both — see
+                // `parse_ownership_modifier`, src/parser/mod.rs:282-285). The
+                // `# D27: !→^` breadcrumbs mark every such site for D27 Round
+                // B, which flips these texts to `^` and then rejects `!`.
                 let why = match reason {
                     MoveReason::DropTaint => "a resource (a type with a custom `Drop` is single-owner)",
                     MoveReason::SingleOwner => "a single-owner type (no implicit copy)",

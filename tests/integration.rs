@@ -5518,17 +5518,86 @@ k=delta v=40",
    filed follow-up in TODO.md; graduate to non-ignored once the SH lift \
    handles Option[Vector[T]]. Fixture lives at \
    tests/fixtures/known_gaps/dict_swap_remove_vector_value.gg"]
+#[serial(self_host_lowerer_driver)]
 fn dict_swap_remove_vector_value() {
-    // Ignored — pinned only as intent; the fixture in known_gaps/ asserts
-    // the CORRECT output (SH is expected to reproduce Rust here).
+    // T-RB0: this body was EMPTY. An `#[ignore]`d test with no assertions
+    // passes the moment it is un-ignored, so the graduate-when-fixed
+    // contract had nothing behind it (Core #12/#13). The gap is on the
+    // SELF-HOST lane, so the assertion runs the fixture through the SH
+    // driver — wiring it to `run_gg` (the Rust lane) would be GREEN ON
+    // ARRIVAL, since Rust gg already produces this output.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture =
+        manifest_dir.join("tests/fixtures/known_gaps/dict_swap_remove_vector_value.gg");
+    let tmp_root = std::env::temp_dir()
+        .join(format!("gg_kg_dict_swap_vec_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let result = self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    );
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    match result {
+        Ok(stdout) => assert_eq!(
+            stdout,
+            "\
+len=3
+taken_len=3
+taken0=20 taken1=21 taken2=22
+len=2
+k=1 first=10
+k=3 first=30",
+            "SH lane must reproduce Rust gg for Dict[int, Vector[int]].swap_remove \
+             (Option[Resource] payload lift)"
+        ),
+        Err(outcome) => panic!(
+            "SH dict_swap_remove_vector_value emit/cc/run failed: {outcome:?}"
+        ),
+    }
 }
 
 #[test]
 #[ignore = "KNOWN GAP (sibling of dict_swap_remove_vector_value): SH's \
    Option[Vector[T]] payload lift is broken; runs correctly on Rust gg. \
    Fixture: tests/fixtures/known_gaps/dict_swap_remove_nested_resource.gg"]
+#[serial(self_host_lowerer_driver)]
 fn dict_swap_remove_nested_resource() {
-    // Ignored — see sibling above.
+    // T-RB0: body was EMPTY — see the sibling above for why the assertion
+    // runs on the SELF-HOST lane rather than through `run_gg`.
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture =
+        manifest_dir.join("tests/fixtures/known_gaps/dict_swap_remove_nested_resource.gg");
+    let tmp_root = std::env::temp_dir()
+        .join(format!("gg_kg_dict_swap_nested_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let result = self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    );
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    match result {
+        Ok(stdout) => assert_eq!(
+            stdout,
+            "\
+len=3
+taken_len=3
+taken0=b1
+taken1=b2
+taken2=b3
+len=2
+k=1 first=a1
+k=3 first=c1",
+            "SH lane must reproduce Rust gg for Dict[int, Vector[String]].swap_remove \
+             (nested Option[Resource] payload lift)"
+        ),
+        Err(outcome) => panic!(
+            "SH dict_swap_remove_nested_resource emit/cc/run failed: {outcome:?}"
+        ),
+    }
 }
 
 #[test]
@@ -23929,6 +23998,9 @@ fn resolver_comparison() {
         mismatches.len(),
         crashes.len()
     );
+    // NOTE: this test is NO LONGER "diagnostic, always passes" — a
+    // MATCH-count floor is asserted at the end of this fn. See
+    // RESOLVER_MATCH_FLOOR there for the seed and the regeneration command.
 
     if !crashes.is_empty() {
         eprintln!("\n--- Crashes ({}) ---", crashes.len());
@@ -23953,8 +24025,59 @@ fn resolver_comparison() {
         }
     }
 
-    // Diagnostic test — always passes. Mismatches guide development.
     eprintln!("\n================================\n");
+
+    // ==== T-RB0: MATCH-count floor (Core #13 — "verify the verifier") ======
+    //
+    // This test used to end "Diagnostic test — always passes", and that
+    // floorlessness hid a TOTAL parity collapse: the pre-port measurement in
+    // this worktree reported `matched: 0` out of 2079 compared. EVERY fixture
+    // diverged, on the very first prelude line, for two reasons that had
+    // nothing to do with any fixture:
+    //   1. Rust's `BUILTIN_GENERIC_TYPES` (src/semantic/resolve.rs) gained
+    //      `Deque`; the self-host's `col_names` list never did, so every DEF
+    //      id from index 28 onward was off by one.
+    //   2. The self-host registered a `Fault` prelude enum (3 variants) that
+    //      Rust does not — a fossil of the fault-catch form RETIRED by D25
+    //      (the self-host's OWN parser rejects it: `E_FaultCatchRemoved`) —
+    //      while never registering the ratified D26 `ArithError` (2 variants)
+    //      that Rust does.
+    // Aligning both preludes moved the count 0 -> 1859 with no other change.
+    // A floorless gate cannot see that; hence this floor.
+    //
+    // Routed through `parity_floor_active` (tests/integration.rs:103) rather
+    // than a hand-rolled assert — its carve-outs are load-bearing: linux-only
+    // (Apple clang CC-FAILs the self-host net en masse) and C-backend-only
+    // (LLVM counts are unseeded — "do not floor LLVM without seeding it
+    // first"). A hand-rolled assert would false-RED the round-close LLVM
+    // sweep.
+    //
+    // Seeded from a regenerated run in THIS worktree, post-port:
+    //   cargo test --test integration --release resolver_comparison -- --nocapture
+    //   -> Fixtures compared: 2085, matched: 1865, mismatched: 219, crashed: 1
+    //
+    // `matched` cannot fall merely because the corpus grew: a new fixture
+    // that does not match raises `compared`/`mismatched` and never lowers
+    // `matched`. So this is a pure regression ratchet.
+    //
+    // Bump-on-improvement: when Matched rises, raise the floor in the same
+    // commit that lands the improvement, so the gain is locked in.
+    const RESOLVER_MATCH_FLOOR: usize = 1865;
+    if parity_floor_active("resolver_comparison") {
+        assert!(
+            matched >= RESOLVER_MATCH_FLOOR,
+            "resolver_comparison Matched-count floor regression: Matched {matched} < floor \
+             {RESOLVER_MATCH_FLOOR}.\n\n\
+             A change regressed self-host RESOLVER parity with Rust gg. The MISMATCHES \
+             listing above names the fixtures — fix the regression rather than lowering \
+             the floor.\n\n\
+             Regenerate the count with:\n  \
+             cargo test --test integration --release resolver_comparison -- --nocapture\n\n\
+             If the count went UP (an improvement landed), raise RESOLVER_MATCH_FLOOR in \
+             tests/integration.rs in the same commit to lock in the new floor.\n\
+             Emergency escape hatch (loud, temporary): GG_PARITY_FLOOR_OFF=1."
+        );
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -47102,3 +47225,334 @@ fn rust_gg_build_is_deterministic() {
         }
     }
 }
+
+// ==== T-RB0: D27 accept-both on the SELF-HOST lane =========================
+//
+// The self-host parsers' ownership predicates accepted only the RETIRED move
+// glyph `!`; the canonical `^` that the formatter emits was not recognized in
+// any ownership position. That made the self-host unable to re-parse its own
+// formatter's output — invisible because `resolver_comparison` had no floor.
+//
+// Each fixture below isolates ONE ported parser predicate so a regression
+// confined to it gives an unambiguous signal. All are RED-verified against
+// the pre-port self-host resolver driver (see each fixture's header for the
+// observed pre-port failure). They additionally enrol in the self-host
+// RUNTIME net via their committed `runtime_snapshots/<stem>.out`.
+
+/// `^` in the NAMED-PARAMETER position, param type = user struct.
+/// Pre-port: `DEF Variable ""` + spurious undefined-name DIAG on the
+/// signature occurrence, and the body-use RES edge missing.
+#[test]
+fn d27_sh_caret_param_struct() {
+    run_gg("d27_sh_caret_param_struct.gg", "hello");
+}
+
+/// `^self` — the consuming self-face, alongside a `&self` sibling method so a
+/// partial regression on only one face still trips. `^self` parses ONLY
+/// inside an `equip` block, hence the shape.
+#[test]
+fn d27_sh_caret_self_consuming_method() {
+    run_gg("d27_sh_caret_self_consuming_method.gg", "3\nwidget");
+}
+
+/// `^` as a TYPE-ARG SUFFIX (`Vector[int ^]`) — consumed via
+/// `skip_ownership_markers` from `parse_type_args`. Pre-port the parser
+/// tripped on the `]` and produced a GARBAGE AST (the function body escaped
+/// to top level as a `DEF Static`).
+#[test]
+fn d27_sh_caret_typearg_suffix() {
+    run_gg("d27_sh_caret_typearg_suffix.gg", "9");
+}
+
+/// `^` as an unnamed FUNCTION-TYPE PARAMETER SUFFIX
+/// (`Callable[void(int &, String ^)]`). Deliberate mirror of the only
+/// in-corpus postfix-`!` twin, `callable_bang_arr_indexed_callee`
+/// (integration.rs:38845) — same indexed-callee shape, differing ONLY in the
+/// glyph, so the pair is the accept-both control.
+#[test]
+fn d27_sh_caret_fntype_param_suffix() {
+    run_gg("d27_sh_caret_fntype_param_suffix.gg", "hi\n101");
+}
+
+/// `^` after a function type with a PRIMITIVE return (`int(int) ^cb`) — the
+/// speculative "is this a function type?" accept-set. Pre-port the self-host
+/// lane FAILED TO COMPILE this program (cc exit 1) while the `!` twin ran.
+#[test]
+fn d27_sh_caret_fntype_spec_prim() {
+    run_gg("d27_sh_caret_fntype_spec_prim.gg", "6");
+}
+
+/// `^` after a function type with a NAMED return (`Point(int) ^cb`) — a
+/// DISTINCT speculation predicate from the primitive-return one, so it needs
+/// its own cell (Core #12: one value of a typed axis is an anecdote).
+#[test]
+fn d27_sh_caret_fntype_spec_named() {
+    run_gg("d27_sh_caret_fntype_spec_named.gg", "7");
+}
+
+/// NEG — D27 accept-both governs where a move sigil is LEGAL; it must NOT be
+/// read as "accept `^` where `!` is rejected". The pre-D35 spelling with the
+/// sigil BEFORE the type is rejected for the canonical glyph exactly as for
+/// the retired one. Sibling of `d35_fn_type_sigil_before_type_error` (the `&`
+/// cell). The diagnostic must name the replacement using the glyph the author
+/// WROTE — advising `Type !` to a `^Type` author would teach the retired
+/// glyph.
+#[test]
+fn d27_caret_fn_type_sigil_before_type_error() {
+    check_gg_fails(
+        "d27_caret_fn_type_sigil_before_type_error/main.gg",
+        "write `Type ^` instead of `^Type`",
+    );
+}
+// ---- T-RB0: known_gaps WIRING --------------------------------------------
+//
+// A committed reproducer that no test names is a file, not a gate: nothing
+// tells us when the bug is fixed, and nothing stops it silently regressing
+// further. The rows below are the COMPLETE unwired set as of this round,
+// derived by censusing `tests/fixtures/known_gaps/` against the test hosts:
+//
+//   callable_local_var_consuming_arg_ices.gg          -> WIRED below
+//   sh_resolver_equip_self_receiver_res_missing.gg    -> WIRED below
+//   gorget_arena_snag_1_llvm_ffi_only_typedef/        -> WIRED below (2 cells)
+//   fmt_snag_2_multiline_header_trailing/             -> WIRED below
+//   snag53_nested_struct_field_mut.expected           -> NOT a wiring row: it
+//       is the expected-output DATA COMPANION of the already-wired
+//       `snag53_nested_struct_field_mut.gg`, not a reproducer of its own.
+//
+// Every one asserts the INTENDED behaviour and is `#[ignore]`d with a
+// citation, so it flips green the round the bug is fixed. Wire, don't fix.
+
+/// KNOWN GAP — calling a `Callable[...]`-typed LOCAL VARIABLE with a
+/// consuming argument panics the lowerer (`Tier 2a consume-site violation`,
+/// src/ir/lowering/mod.rs:2114). `gg check` passes, so this is a
+/// crash-on-valid-program.
+///
+/// GLYPH-INDEPENDENT: the retired-glyph twin panics with a byte-identical
+/// message, so it is NOT a D27 issue. The INDEXED-callee form of the same
+/// program compiles and runs — see `callable_bang_arr_indexed_callee` and
+/// its caret twin `d27_sh_caret_fntype_param_suffix` — so the hole is
+/// specific to calling a Callable-typed local BINDING.
+#[test]
+#[ignore = "KNOWN GAP (filed R41 T-RB0): calling a Callable-typed LOCAL \
+VARIABLE with a consuming arg ICEs at src/ir/lowering/mod.rs:2114 (Tier 2a \
+consume-site violation, `untracked source consumed`). gg check passes. \
+Glyph-independent (the `!` twin panics identically). The indexed-callee form \
+works, so the closure-call lowering must register the consume site the way \
+the indexed path already does."]
+fn known_gap_callable_local_var_consuming_arg_ices() {
+    run_gg(
+        "known_gaps/callable_local_var_consuming_arg_ices.gg",
+        "hi\n101",
+    );
+}
+
+/// KNOWN GAP — the self-host resolver emits no `RES` edge for the `self`
+/// receiver inside an `equip` method body, so it produces one fewer RES line
+/// than Rust gg and every `equip`-method fixture MISMATCHES in
+/// `resolver_comparison`.
+///
+/// GLYPH-INDEPENDENT: reproduces with `&self` exactly as with `^self`, in a
+/// program containing no move sigil at all. This is a standing contributor to
+/// the `resolver_comparison` mismatch population and it caps
+/// RESOLVER_MATCH_FLOOR.
+///
+/// ⚠ The program RUNS correctly on both lanes — the gap is in the resolution
+/// MAP, not codegen. So a `run_gg` stdout pin would be GREEN ON ARRIVAL and
+/// could never flip when the bug is fixed (Core #12). This test therefore
+/// asserts the thing that is actually broken: the self-host driver's DEF+RES
+/// output must equal Rust gg's, exactly as `resolver_comparison` compares it.
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "KNOWN GAP (filed R41 T-RB0): the self-host resolver records no \
+RES edge for the `self` receiver in an `equip` method body (rust=60 vs \
+gorget=59 collected DEF+RES lines; first divergence `RES 80 -> 55` vs \
+`RES 128 -> 52`). Glyph-independent — the `&self` probe diverges identically. \
+Un-ignore when this fixture reaches MATCH in resolver_comparison, and raise \
+RESOLVER_MATCH_FLOOR in the same commit."]
+fn known_gap_sh_resolver_equip_self_receiver_res_missing() {
+    use gorget::parser::Parser;
+    use gorget::semantic::resolve;
+    use gorget::semantic::scope::ScopeTable;
+    use gorget::semantic::types::TypeTable;
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/sh_resolver_equip_self_receiver_res_missing.gg");
+    let source = std::fs::read_to_string(&fixture).expect("read the equip-self repro");
+
+    // Rust side — the same pipeline `resolver_comparison` runs.
+    let mut parser = Parser::new(&source);
+    let module = parser.parse_module();
+    let mut scopes = ScopeTable::new();
+    let mut types = TypeTable::new();
+    let mut errors = Vec::new();
+    let mut resolve_ctx =
+        resolve::collect_top_level(&module, &mut scopes, &mut types, &mut errors);
+    let mut resolution_map = resolve::resolve_bodies(
+        &module,
+        &mut scopes,
+        &mut types,
+        &mut errors,
+        &mut resolve_ctx.function_info,
+        &mut resolve_ctx.function_body_scopes,
+        &resolve_ctx.file_module_scopes,
+    );
+    resolution_map.extend(resolve_ctx.resolution_map);
+    let rust_output = format_resolution_canonical(&scopes, &resolution_map);
+
+    // Self-host side — the resolver driver, same as the comparison test.
+    let (driver_exe, driver_c) = build_gg_dir("self_host_resolver", "driver.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture),
+        "known_gaps/sh_resolver_equip_self_receiver_res_missing.gg",
+    );
+    let _ = std::fs::remove_file(&driver_c);
+    let _ = std::fs::remove_file(&driver_exe);
+    assert!(
+        out.status.success(),
+        "self-host resolver driver crashed on the equip-self repro:\n{}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let sh_output = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
+
+    let (rust_defs, rust_res) = normalize_resolver_output(&rust_output);
+    let (sh_defs, sh_res) = normalize_resolver_output(&sh_output);
+
+    assert_eq!(
+        rust_res.len(),
+        sh_res.len(),
+        "self-host resolver emitted {} RES edge(s) vs Rust gg's {} for an \
+         `equip` method body — the `self` receiver edge is missing.\n\
+         Rust RES:\n  {}\nSelf-host RES:\n  {}",
+        sh_res.len(),
+        rust_res.len(),
+        rust_res.join("\n  "),
+        sh_res.join("\n  "),
+    );
+    assert_eq!(
+        (rust_defs, rust_res),
+        (sh_defs, sh_res),
+        "self-host resolver DEF/RES output must match Rust gg for an `equip` \
+         method body.",
+    );
+}
+
+/// KNOWN GAP (LLVM cell) — a struct defined in an FFI-only module never gets
+/// its C typedef emitted into the LLVM backend's runtime shim, so the shim
+/// fails to C-compile with `unknown type name 'GorgetSDLEvent'`.
+///
+/// Passes `--backend=llvm` EXPLICITLY rather than relying on `gg_command`,
+/// which only appends the flag under `GG_BACKEND=llvm` — this cell must
+/// exercise the LLVM lane on the default C-backend sweep too.
+#[test]
+#[ignore = "KNOWN GAP (filed pre-R41, wired R41 T-RB0): LLVM backend drops \
+the C typedef for a struct from an FFI-only module (a module with struct defs \
++ an extern \"C\" block and no Gorget-body functions). The generated runtime \
+shim __gorget_runtime_mini.c forward-declares a fn taking the struct by value \
+but never emits the typedef -> `unknown type name 'GorgetSDLEvent'` at \
+C-compile of the shim, before linking (so it reproduces without SDL \
+installed). See the dir's README.md. Fix: emit the typedef for any struct \
+used in emitted code, shim signatures included."]
+fn known_gap_arena_snag1_llvm_ffi_only_typedef() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let main_path = manifest_dir
+        .join("tests/fixtures/known_gaps/gorget_arena_snag_1_llvm_ffi_only_typedef/mini.gg");
+    let out = build_with_timeout(
+        gg_command("build").arg(&main_path).arg("--backend=llvm"),
+        "known_gaps/gorget_arena_snag_1_llvm_ffi_only_typedef/mini.gg (llvm)",
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        out.status.success(),
+        "FFI-only-module struct must get its C typedef emitted into the LLVM \
+         runtime shim; the build failed instead.\n{combined}",
+    );
+    assert!(
+        !combined.contains("unknown type name"),
+        "LLVM runtime shim still references an undeclared struct typedef.\n{combined}",
+    );
+}
+
+/// KNOWN GAP (C cell) — same root cause, C backend. With the struct
+/// CONSTRUCTED directly in Gorget and no extern referenced, the C backend
+/// has no path that emits the typedef either.
+///
+/// Two cells because the dir documents TWO reproducing lanes; a single cell
+/// would leave one of them un-gated.
+#[test]
+#[ignore = "KNOWN GAP (filed pre-R41, wired R41 T-RB0): C backend also drops \
+the FFI-only-module struct typedef when the struct is CONSTRUCTED directly in \
+Gorget and no extern is referenced -> `unknown type name 'GorgetSDLEvent'` \
+plus a malformed ctor expression (`expected expression before ')'`). Same \
+root cause as the LLVM cell above; the C backend only works today when a \
+referenced extern's signature happens to pull the typedef in. The dir's \
+control_ok.gg (identical by-value shape, but its module has Gorget-body \
+methods) builds on BOTH backends, isolating the trigger to `the defining \
+module contributes no lowered function bodies`."]
+fn known_gap_arena_snag1_c_backend_ctor_typedef() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let main_path = manifest_dir.join(
+        "tests/fixtures/known_gaps/gorget_arena_snag_1_llvm_ffi_only_typedef/ctor_c_backend.gg",
+    );
+    let out = build_with_timeout(
+        gg_command("build").arg(&main_path),
+        "known_gaps/gorget_arena_snag_1_llvm_ffi_only_typedef/ctor_c_backend.gg",
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        out.status.success(),
+        "directly constructing an FFI-only-module struct must emit its C \
+         typedef; the build failed instead.\n{combined}",
+    );
+    assert!(
+        !combined.contains("unknown type name"),
+        "C backend still references an undeclared struct typedef.\n{combined}",
+    );
+}
+
+/// KNOWN GAP — `gg fmt` mis-attributes a trailing comment that sits on the
+/// LAST source line of a MULTI-LINE container header: instead of staying on
+/// the reformatted header line it is DEDENTED into the body as a leading
+/// comment of the first body element.
+///
+/// Not caught by `fmt_idempotent` (the formatter is idempotent on the wrong
+/// shape) nor by `fmt_trailing_comment_axis_all_classes` (that axis fixture
+/// uses single-line headers only) — which is precisely why it needs its own
+/// wiring.
+#[test]
+#[ignore = "KNOWN GAP (filed pre-R41, wired R41 T-RB0): `gg fmt` moves a \
+trailing comment off a MULTI-LINE container header into the body. The \
+header-hook anchors on the container NAME's span end, so for a multi-line \
+header the comment is on a later source line, the same-line check rejects it, \
+and the body loop picks it up as a leading comment. Fix direction (dir \
+README.md): expose the header-closing `:` span on the container AST node and \
+anchor the hook on that instead of the name end."]
+fn known_gap_fmt_multiline_header_trailing_comment() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_snag_2_multiline_header_trailing/repro.gg");
+    let source = std::fs::read_to_string(&fixture_path).expect("read repro.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    let sentinel = "# multi-line header trailing";
+    let line = formatted
+        .lines()
+        .find(|l| l.contains(sentinel))
+        .unwrap_or_else(|| panic!("sentinel {sentinel:?} vanished from:\n{formatted}"));
+    assert!(
+        line.contains("struct S[T]:"),
+        "a trailing comment on the last line of a MULTI-LINE container header \
+         must stay ON the reformatted header line (`struct S[T]:  {sentinel}`); \
+         it was emitted on its own line instead.\nGot line: {line:?}\n\nFull output:\n{formatted}",
+    );
+}
+
+// ==== end T-RB0 ============================================================

@@ -1,0 +1,39 @@
+# D27 accept-both, SELF-HOST resolver + runtime lanes: the canonical `^` move
+# sigil immediately AFTER a FUNCTION TYPE whose return type is a NAMED (user)
+# type (`Point(int) ^cb`).
+#
+# AXIS CELL: glyph = `^` · position = named param whose type is a function
+# type · function-type RETURN kind = NAMED user type (the primitive sibling
+# cell is `d27_sh_caret_fntype_spec_prim.gg`) · lanes = Rust gg (C + LLVM),
+# self-host resolver, self-host runtime.
+#
+# WHY THIS IS ITS OWN CELL: the parser reaches the function-type speculation
+# through a DIFFERENT predicate for a named return type than for a primitive
+# one — the two accept-sets are separate pieces of code, so a fix applied to
+# one does not cover the other. Sampling only the primitive cell would be
+# exactly the "one value of a typed axis is an anecdote" trap (Core #12).
+#
+# RED-verified against the PRE-port self-host lane: this program failed to
+# compile through the self-host driver while its `!` twin built and ran.
+# Post-port the self-host lane compiles it and its output MATCHES Rust gg.
+#
+# No new `!` site is added for the control (`fmt_no_new_move_bang_in_migrated_corpora`
+# in tests/lints.rs is shrink-only and at zero headroom); the durable guard
+# for the glyph PAIR at this predicate is the `sh_parser_caret_predicate_siblings`
+# lint in tests/lints.rs, which asserts every ported predicate names BOTH
+# tokens.
+#
+# Expected stdout: 7
+
+struct Point:
+    int x
+
+Point make(int v):
+    return Point(v)
+
+void apply(Point(int) ^cb):
+    Point p = cb(7)
+    print(p.x)
+
+void main():
+    apply(^make)
