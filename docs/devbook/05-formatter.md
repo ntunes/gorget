@@ -1,50 +1,70 @@
 # 5. The formatter (`gg fmt`)
 
-The formatter is the source-canonicalizer: it parses a `.gg` file to an AST and
-re-prints that AST as canonical Gorget source. It lives entirely in
+The formatter is the source-canonicalizer: it parses a `.gg` file and re-prints it
+as canonical Gorget source from two inputs — the AST, and the original source text
+at the AST's spans. It lives entirely in
 [`src/formatter/`](../../src/formatter/) — two files: [`mod.rs`](../../src/formatter/mod.rs)
 (the AST walker / emitter) and [`doc.rs`](../../src/formatter/doc.rs) (a small
 Wadler-Lindig pretty-printer used for the few constructs that need line-width-aware
 wrapping). It depends only on the lexer's token types and the parser's AST
-(`src/formatter/mod.rs:3-5`); it runs *before* semantic analysis and is the only
+(`src/formatter/mod.rs:5-6`); it runs *before* semantic analysis and is the only
 consumer of the AST that intentionally produces text rather than more IR.
 
-Because the formatter round-trips through *parse → AST → print*, it is lossy on
-exactly the things the AST is lossy on — original whitespace, line breaks that
-don't matter, redundant parentheses, the literal spelling of an import list. It is
-lossless on everything the AST preserves, and it goes out of its way to preserve a
-handful of facts that *look* cosmetic but are semantically load-bearing on re-parse
-(visibility on statics, the `:`-vs-`= "sym"` shape of a function body). The goal is
-**idempotence**: `fmt(fmt(x)) == fmt(x)`, which the unit tests assert directly
-(`src/formatter/mod.rs:2452`, `:2504`, and many more).
+The second input is what keeps the AST honest. A whole family of authorial choices
+is *syntax*, not semantics — an integer's radix and digit grouping, which escape
+spelled a character, which quote style wrapped a string, whether a primitive was
+written `byte` or `uint8` — so the AST is right to drop them, and the formatter is
+the one consumer that needs them back. It recovers them from the source text at the
+node's span, the same way it recovers comments, behind a re-lex check that makes a
+stale span harmless (see [String literals and the verbatim
+chokepoint](#string-literals-and-the-verbatim-chokepoint)).
+
+What neither input preserves is genuinely lost: original whitespace, line breaks
+that don't matter, redundant parentheses, the order of an import list. Everything
+else round-trips, and the formatter goes out of its way to preserve a handful of
+facts that *look* cosmetic but are semantically load-bearing on re-parse
+(visibility on statics, the `:`-vs-`= "sym"` shape of a function body, the
+author's suite layout). The goal is **idempotence**: `fmt(fmt(x)) == fmt(x)`,
+which the unit tests assert directly (`src/formatter/mod.rs:5318`, `:5486`, and
+many more).
 
 ## The `gg fmt` command
 
-`gg fmt <file>` is dispatched in the driver at `src/main.rs:3279`. It supports three
-modes, all keyed off the single entry point `format_source`:
+`gg fmt <file>` is dispatched in the driver at `src/main.rs:3540`. It supports three
+modes, all keyed off one entry point:
 
-- default — print the formatted source to stdout (`src/main.rs:3294`);
-- `--in-place` / `-i` — overwrite the file in place (`src/main.rs:3288`);
+- default — print the formatted source to stdout (`src/main.rs:3568`);
+- `--in-place` / `-i` — overwrite the file in place (`src/main.rs:3562-3566`);
 - `--check` / `-c` — exit non-zero if the file is not already formatted, printing
-  `"<file>: not formatted"` to stderr via `eprintln!` (`src/main.rs:3283-3287`). The
+  `"<file>: not formatted"` to stderr via `eprintln!` (`src/main.rs:3557-3561`). The
   check is a raw `formatted != source` string comparison — there is no structural diff.
 
-The public API is one function:
+The public API is one function, and its return type is the interesting part:
 
 ```rust
-// src/formatter/mod.rs:2271
-pub fn format_source(source: &str) -> String {
+// src/formatter/mod.rs:4904
+pub fn format_source_result(source: &str) -> Result<String, Vec<ParseError>> {
     let mut parser = crate::parser::Parser::new(source);
     let module = parser.parse_module();
+    if !parser.errors.is_empty() {
+        return Err(parser.errors);
+    }
     let comments = parser.comments;
-    Formatter::new(comments).format(&module)
+    Ok(Formatter::new(comments, Rc::from(source)).format(&module))
 }
 ```
 
-Note what it does **not** do: it never runs semantic analysis, never reports parse
-errors, and ignores `parser.errors`. `gg fmt` on a file with a syntax error will
-format whatever AST the (error-recovering) parser managed to build. Diagnostics are
-the job of `gg check`, not `gg fmt`.
+The formatter builds its output from the AST, so a statement the parser could not
+build would simply be **absent** from the result — silent data loss on the user's own
+file. Refusing is the only safe answer: on any parse error the driver renders the
+diagnostics and exits non-zero *without* writing to disk or printing a partial
+format. Call sites that are contractually fed valid Gorget (unit tests, fixtures) use
+`format_source_infallible` (`src/formatter/mod.rs:4919`), which panics rather than
+returning a truncated file.
+
+What `gg fmt` still does not do is run semantic analysis: type errors, ownership
+errors and name-resolution errors are `gg check`'s job, and a file that parses but
+does not check formats normally.
 
 ## Two-layer architecture: the `Emitter` and the `Doc` IR
 
@@ -84,7 +104,7 @@ Indentation is always four spaces, hardcoded (`src/formatter/mod.rs:41`, mirrore
 `doc::INDENT_WIDTH = 4` in `src/formatter/doc.rs:13`). There is no configuration:
 the formatter is opinionated and has no options struct.
 
-The `Formatter` struct (`src/formatter/mod.rs:380`) wraps an `Emitter` plus the
+The `Formatter` struct (`src/formatter/mod.rs:408`) wraps an `Emitter` plus the
 comment side-table. The walk is a conventional recursive descent:
 `format_module → format_item → format_function / format_struct / … →
 format_stmt → format_expr / format_type / format_pattern`. Each handler writes
@@ -171,7 +191,7 @@ counts both spellings so that opting a list out of the canon stays a visible dec
 
 ### Splicing the two layers together
 
-The bridge is `write_doc` (`src/formatter/mod.rs:521`). It renders the `Doc` with
+The bridge is `write_doc` (`src/formatter/mod.rs:550`). It renders the `Doc` with
 `doc::render_at` — passing the emitter's *current column and indent level as the
 starting state* so the wrapping decision accounts for text already on the line — then
 writes the pre-rendered (newline-bearing) string back via `Emitter::write_preformatted`
@@ -187,15 +207,15 @@ budget.
 
 A subtlety of the hybrid design: the imperative layer frequently needs a *string*
 for a sub-expression to drop into a `Doc::Text`. It gets one via `element_to_string`
-(`src/formatter/mod.rs:477`), which spins up a throwaway `Formatter` (with no
+(`src/formatter/mod.rs:506`), which spins up a throwaway `Formatter` (with no
 comments), runs a closure against it, and returns its buffer. This is how
-`format_method_chain` (`src/formatter/mod.rs:1874`) and `format_binary_chain`
-(`src/formatter/mod.rs:1915`) turn each chain segment / operand into a `Doc::Text`
+`format_method_chain` (`src/formatter/mod.rs:2016`) and `format_binary_chain`
+(`src/formatter/mod.rs:2057`) turn each chain segment / operand into a `Doc::Text`
 leaf before grouping them — the wrapping is decided over the *segments*, while each
 segment is formatted by an ordinary recursive call.
 
 The throwaway formatter is seeded with both the indent level *and* the column its
-output will be spliced at (`element_to_string_at`, `src/formatter/mod.rs:486`). It has
+output will be spliced at (`element_to_string_at`, `src/formatter/mod.rs:515`). It has
 to be: a sub-render that measured from column 0 would believe it had a whole
 indentation's worth of extra budget, and emit lines that overflow by exactly that
 much once spliced. Seeding makes the assumption self-consistent — an element that
@@ -252,24 +272,26 @@ detaches from the clause it documents.
 
 After the walk, `format` runs a single-pass collapse over the whole buffer: any run
 of 3+ consecutive newlines is squeezed to 2 (i.e. at most one blank line)
-(`src/formatter/mod.rs:121-136`), and a trailing newline is guaranteed
-(`src/formatter/mod.rs:138-140`). Blank lines *between* top-level items and between
+(`src/formatter/mod.rs:461-476`), and a trailing newline is guaranteed
+(`src/formatter/mod.rs:477-480`). Blank lines *between* top-level items and between
 trait/equip members are inserted explicitly during the walk via `blank_line`
-(`src/formatter/mod.rs:229`, `:636`, `:687`).
+(`src/formatter/mod.rs:1136`, `:1672`, `:1735`). The trailing-comment aligner runs
+before this collapse (`src/formatter/mod.rs:457`) and is unaffected by it — the
+collapse only removes newlines, never touches a within-line gap.
 
 ### Import sorting
 
-`format_module` (`src/formatter/mod.rs:934`) partitions items into leading
+`format_module` (`src/formatter/mod.rs:1040`) partitions items into leading
 directives, imports, and "the rest" — the partition stops at the first non-import,
-non-directive item (`past_imports`, `src/formatter/mod.rs:196-206`), so only the
+non-directive item (`past_imports`, `src/formatter/mod.rs:1045-1052`), so only the
 *leading* import block is reordered. Within that block imports are sorted with
-std/`xtd` libraries first, then alphabetically (`src/formatter/mod.rs:211-222`;
-`is_std_import` at `src/formatter/mod.rs:2293`). Names *inside* an import are also
+std/`xtd` libraries first, then alphabetically (`src/formatter/mod.rs:1060-1071`;
+`is_std_import` at `src/formatter/mod.rs:4948`). Names *inside* an import are also
 sorted: `import a.{X, Y}` groups are sorted alphabetically and laid out with
 `surround_fill`, so a long group packs across continuation lines
-(`src/formatter/mod.rs:1628`), and `from a import …` name lists are sorted too — but
+(`src/formatter/mod.rs:1761`), and `from a import …` name lists are sorted too — but
 **not** wrapped, because in indentation-based syntax a bare name on a fresh line would
-re-parse as a new statement (`src/formatter/mod.rs:1658-1666`).
+re-parse as a new statement (`src/formatter/mod.rs:1787-1794`).
 
 ### Type-first re-printing and bare-tuple positions
 
@@ -288,27 +310,68 @@ patterns (`src/formatter/mod.rs:1175-1181`).
 
 ### Visibility: the load-bearing "cosmetic" cases
 
-`format_visibility` (`src/formatter/mod.rs:473`) emits nothing for public and
-`private ` for private — because for functions, structs, etc. *public is the default*.
-Two cases invert this and are handled specially, because getting them wrong would
-*silently change semantics* on re-parse:
+`public Foo` and a bare `Foo` both parse to `Visibility::Public`, so the value alone
+cannot say which the author wrote — and both directions of guessing are wrong.
+Emitting a keyword only for `Private` deletes every explicit `public` in the tree;
+emitting one unconditionally rewrites every declaration that relies on the default.
+The parser therefore records which spelling it consumed, on `explicit_visibility`,
+and `format_visibility` (`src/formatter/mod.rs:1385`) reads that fact and nothing
+else: **the keyword is emitted iff one was written.** Nine declaration kinds carry
+the flag, and `formatter_visibility_emit_site_count` in `tests/lints.rs` cross-checks
+the emit sites against the carriers so a tenth kind cannot quietly skip the path.
 
-- **Statics are private-by-default.** `format_static_decl` emits an explicit
-  `public ` keyword (`src/formatter/mod.rs:796-798`); dropping it would flip a public
-  static to private and break cross-module imports. The test at
-  `src/formatter/mod.rs:2460` guards exactly this.
-- **Struct fields** print an explicit `private ` (`src/formatter/mod.rs:565-567`).
+Statics invert the default and keep their own rule (`format_static_decl`,
+`src/formatter/mod.rs:1842-1858`). They are private-by-default, so `public` is
+emitted whenever the value *is* public — for a parsed static that means the author
+wrote it, and for a synthesised one it stops the emission from silently flipping the
+declaration to private and breaking cross-module imports — while `private` is emitted
+only when explicitly written, since inventing the default everywhere would rewrite
+the tree.
 
-### String literals
+### String literals and the verbatim chokepoint
 
-`format_string_lit` (`src/formatter/mod.rs:2130`) reconstructs the literal from its
-`StringKind` prefix (`r"`, `b"`, `c"`, `f"`, `"""`, `"`) and its segment list. For
-f-strings, interpolation segments are re-emitted as `{expr_text[:spec]}`
-(`src/formatter/mod.rs:2144-2152`) — the formatter stores the interpolation's source
-text, it does not re-format the embedded expression. `format_string_escape`
-(`src/formatter/mod.rs:2161`) re-escapes control characters, with raw strings passed
-through verbatim and `{`/`}` doubled inside f-strings
-(`src/formatter/mod.rs:2174-2175`).
+A string literal is emitted **verbatim first**: `format_string_lit`
+(`src/formatter/mod.rs:4304`) asks for the author's own lexeme and, when it can have
+it, writes exactly that. Quote style, the prefix letter, which escape spelled a
+character, the f-string brace form and — the case that makes a long `"""` block
+readable — its physical line layout all survive, because nothing was regenerated.
+
+Recovery goes through one helper, `Formatter::verbatim`
+(`src/formatter/mod.rs:3367`), and it is the same helper behind every other form the
+AST drops: an integer's radix and digit grouping, a float's trailing zeros, `b'A'`
+versus `65`, `byte` versus `uint8`, and the quoted **name-strings** the AST stores
+decoded (test and bench names, snapshot names, attribute string arguments, extern ABI
+tags). Routing them through one place is what makes the property below a property of
+the class rather than a habit of each arm; `formatter_verbatim_emit_arm_count` in
+`tests/lints.rs` keeps a new arm from spelling its own quotes.
+
+**The property: a recovered lexeme is re-lexed and compared before it is trusted.**
+`verbatim` slices the source at the node's span, hands the slice to
+`relex_single_token` (`src/formatter/mod.rs:4378`) — which asks the *real lexer* and
+returns a token only when the slice lexes cleanly into exactly one value-bearing
+token covering the whole slice — and then checks that token against the value the
+caller is about to emit. Asking the lexer rather than mirroring its rules is the
+point: "this lexeme denotes this value" is decided by the same code that produced the
+value from that lexeme. So a stale, synthetic, or merely mis-computed span cannot
+produce output meaning something other than the node it came from. It can only fail
+the comparison and fall back. That is the difference between preservation and a
+silent rewrite of the user's source.
+
+**The fallback path reconstructs.** When recovery fails — a synthesised literal, an
+f-string interpolation's sub-expression parsed at a synthetic base offset, a span that
+no longer denotes this node — `format_string_lit` rebuilds the literal from its
+`StringKind` prefix (`r"`, `b"`, `c"`, `f"`, `"""`, `"`) and its segment list,
+re-emitting interpolation segments as `{expr_text[:spec]}` from the stored source text
+rather than re-formatting the embedded expression. Bodies are escaped by
+`canonical_string_escape` (`src/formatter/mod.rs:4414`): raw strings pass through,
+`{`/`}` double inside f-strings, every control character is escaped — C0 and DEL as
+`\xHH`, C1 (`0x80-0x9F`) as `\u{XX}`, because the lexer rejects `\x` above `0x7F` and a
+raw C1 byte would plant an invisible control character in the user's source. Printable
+non-ASCII stays raw.
+
+No `.gg` source can reach that path, which is exactly why the escape policy lives in a
+free function with unit cells of its own (`src/formatter/mod.rs:5171`) instead of a
+fixture that would be green for the wrong reason.
 
 ### Function body shapes
 
@@ -349,7 +412,7 @@ single `arm_template` indented beneath it, rather than treating it as a regular 
 
 ## Match arms and guards
 
-`format_match_arm` (`src/formatter/mod.rs:1464`) prints `case <pattern>`, then — **if
+`format_match_arm` (`src/formatter/mod.rs:3059`) prints `case <pattern>`, then — **if
 the arm has a guard** — ` if <guard>`. The arm body is laid out two ways
 according to the author's `Block.layout`: an indented `Block` becomes a newline
 plus indented statements, and everything else is printed inline after the colon.
@@ -371,8 +434,8 @@ arm.
 > **Note on a stale claim.** Older project memory states that "the formatter
 > suppresses match guards for canonical output." That is **not** true of the Rust
 > `gg fmt` here — `MatchArm.guard` is a real AST field
-> (`src/parser/ast.rs:798-800`) and the production formatter emits it verbatim
-> (`src/formatter/mod.rs:1467-1470`). The guard-suppression behavior belongs to the
+> (`src/parser/ast.rs:967`) and the production formatter emits it verbatim
+> (`src/formatter/mod.rs:3062-3064`). The guard-suppression behavior belongs to the
 > *self-host AST-debug canonicalizer* (`tests/fixtures/self_host_*/format.gg`), a
 > different program with a different purpose — see "In the self-host" below.
 
@@ -380,25 +443,39 @@ arm.
 
 Comments are not part of the AST. The parser drops them into a side-table —
 `parser.comments`, a `Vec<Spanned<String>>` collected in lexer-token order
-(`src/parser/mod.rs:79-82`), which therefore comes pre-sorted by source position. The
+(`src/parser/mod.rs:57-58`), which therefore comes pre-sorted by source position. The
 `Formatter` holds that vector plus a forward-only `comment_cursor`
-(`src/formatter/mod.rs:380-383`).
+(`src/formatter/mod.rs:408-411`).
 
 Interleaving is span-driven and one-directional: before emitting an item, field,
 variant, statement, or branch body, the walker calls `emit_comments_before(pos)`
-(`src/formatter/mod.rs:168`), which flushes every comment whose span starts before
+(`src/formatter/mod.rs:586`), which flushes every comment whose span starts before
 `pos`, each on its own line, advancing the cursor. After the whole module is walked,
-`emit_remaining_comments` (`src/formatter/mod.rs:181`) flushes whatever's left (e.g.
+`emit_remaining_comments` (`src/formatter/mod.rs:609`) flushes whatever's left (e.g.
 trailing comments after the last item).
 
-A consequence worth flagging: **there is no true inline (end-of-line) comment
-attachment.** A comment that followed code on the same line in the source
-(`int x = 5  # inline`) is flushed *before* the next AST node that starts after it,
-so it lands on its own line rather than trailing the code. The test at
-`src/formatter/mod.rs:2444` only asserts the comment text *survives somewhere*, not
-its position — which is the honest description of what the current implementation
-guarantees. This is a known weakness of the side-table approach (a logged
-improvement, not a property the formatter currently provides).
+A leading flush would move every end-of-line comment onto its own line, so a comment
+that *trails* its node is claimed before the cursor can reach it.
+`emit_trailing_comment_after(prev_end)` (`src/formatter/mod.rs:864`) asks one
+question — is this comment's start on the same source line as the previous emit's
+last character? — and if so injects it after the emitted line, ahead of the newline
+that statement already wrote. A comment separated by a line break fails that test and
+stays a leading comment at the next sibling's indent, which is the right answer for a
+standalone comment *between* two nodes. Headers get the same treatment one level up:
+a comment after `if c:` is claimed at the header and emitted after the body, because
+emitting it at the colon would put it ahead of the statement it heads and the result
+would not re-parse.
+
+Two constants finish the shape. A trailing comment is injected exactly
+`TRAILING_COMMENT_GAP` spaces after the code (`src/formatter/mod.rs:220`), and a
+*run* of them is then aligned to a shared column — the smallest multiple of
+`ALIGN_STRIDE` that clears the widest line in the run, with a comment that would
+overrun `MAX_WIDTH` excluded as an outlier rather than dragging the group right.
+That alignment is a pure post-pass over the finished buffer (`plan_trailing_aligns`,
+`src/formatter/mod.rs:233`, plans the gap rewrites; the mutating half applies them
+last-to-first so earlier offsets stay valid), which is why the same one constant can
+be both the writer's gap and the aligner's minimum: the pass rewrites exactly the run
+of spaces the writer laid down.
 
 ## In the self-host
 
