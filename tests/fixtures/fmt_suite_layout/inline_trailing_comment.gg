@@ -28,22 +28,22 @@
 
 int arm_comment(int x):
     int r = match x:
-        case 1: 10  # one
-        else: 20  # other
+        case 1: 10    # one
+        else: 20    # other
     return r
 
 void if_comment(int x):
-    if x == 1: print(1)  # then
-    elif x == 2: print(2)  # otherwise
-    else: print(3)  # fallback
+    if x == 1: print(1)    # then
+    elif x == 2: print(2)    # otherwise
+    else: print(3)    # fallback
 
 void on_error_comment():
-    on error print(9)  # recover
+    on error print(9)    # recover
 
 String meta_case_comment[T]():
     meta match typename(T):
-        case "int": return "i"  # ints
-        else: return "o"  # rest
+        case "int": return "i"    # ints
+        else: return "o"    # rest
 
 void main():
     print(arm_comment(1))
