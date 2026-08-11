@@ -11354,8 +11354,9 @@ fn fmt_extern_block_interior_comments_stay_inside() {
 /// generalise already exists for collection literals
 /// (`format_bracketed_broken_with_comments`'s orphan-pre-close flush).
 ///
-/// The dedent DEPTH varies by shape (a fn-body or for-body tail lands at column
-/// 0; an if-body or while-body tail lands at the enclosing indent) — cosmetic
+/// The dedent DEPTH varies by POSITION, not shape (pass-3 measured: the orphan
+/// defers OUTWARD until an enclosing scope's flush claims it — the same for-body
+/// tail lands at indent 4 mid-fn, column 0 as the fn's last statement) — cosmetic
 /// variation on one mechanism, not separate bugs. Asserting BOTH faces here
 /// stops a container-only fix from closing this gap by halves.
 ///
@@ -11737,8 +11738,10 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
         }
     }
 
-    /// The walk descends into EVERY block-bearing statement, not just the
-    /// function body. The §4 ownership axes (`Stmt::For.ownership`,
+    /// The walk descends into every block-bearing statement EXCEPT the meta forms
+    /// (`Stmt::MetaFor`/`MetaMatch`/`MetaWhile` — named exclusions, pass-3; the
+    /// formatter guard verified live inside a `meta for` body regardless), not
+    /// just the function body. The §4 ownership axes (`Stmt::For.ownership`,
     /// `CallArg.ownership`) are positional, so they occur at any nesting depth —
     /// a `for i in (^s)..e:` inside an `if` is the same defect as one at fn
     /// level, and a fn-level-only projection would be blind to it.

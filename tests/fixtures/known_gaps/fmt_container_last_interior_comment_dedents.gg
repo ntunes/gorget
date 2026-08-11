@@ -11,9 +11,11 @@
 # fires for ordinary STATEMENT BODIES too — a function body, an `if` body, a
 # `while` body, an `for` body — because `format_block_stmts` has the identical
 # shape (per-child hooks, no orphan-pre-close flush before `dedent()`). The
-# dedent DEPTH varies with the shape (a fn-body or for-body tail lands at
-# column 0; an if-body or while-body tail lands at the enclosing indent), which
-# is cosmetic detail on one mechanism, not separate bugs. Both faces are
+# dedent DEPTH varies with POSITION, not shape (pass-3 output-review measured
+# it: the orphan is deferred OUTWARD until some enclosing scope's flush claims
+# it, so the same for-body tail lands at indent 4 mid-fn and column 0 when the
+# loop is the fn's last statement) — cosmetic detail on one mechanism, not
+# separate bugs. Both faces are
 # asserted below so a container-only fix cannot close this gap by halves.
 #
 # Mechanism: each container's member loop pairs `emit_comments_before(
