@@ -2587,7 +2587,9 @@ impl Formatter {
     ///
     /// `format_block_stmts` preserves an author blank between two statements,
     /// but a clause header is not a statement — it is written by its own emit
-    /// site, and none of the eight sites checked. A blank the author put
+    /// site, and before this predicate existed none of those sites checked
+    /// (the current site set is `grep -n "blank_before_clause(" ` on this
+    /// file — regenerated, never quoted). A blank the author put
     /// between a long branch body and the `else:` that follows it is
     /// paragraphing exactly like any other, and deleting it is the same
     /// defect at a position the statement loop cannot see.

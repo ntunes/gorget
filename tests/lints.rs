@@ -10582,27 +10582,35 @@ fn doc_source_citations_name_the_right_line() {
     // numbers, all four drifted, and nothing looked. Records rot the same way
     // prose does — so the walk CAN cover them, behind the standard env gate.
     //
-    // MEASURED at HEAD (`GG_LINT_CITE_CONTENT_WIDE=1`): the widened scan reports
-    // 99 rows — 65 `TODO.md`, 22 `tests/integration.rs`, 10 `tests/lints.rs`,
-    // 2 `known_gaps`. ⚠ The number is SELF-REFERENTIAL and will drift: this very
-    // comment cites `types.rs:699` below, so it counts itself. Re-run rather
-    // than trusting the figure.
+    // Row counts are deliberately NOT quoted here — the figure went stale twice
+    // in two commits: any edit to a scanned file moves identifiers relative to
+    // cites and changes the count, and an edit to THIS file can add or remove
+    // rows (a version of this comment once counted itself). Regenerate instead:
+    // `GG_LINT_CITE_CONTENT_WIDE=1 cargo test --test lints doc_source_citations_name_the_right_line`.
     //
-    // That is NOT 99 stale cites. TODO.md dominates for a structural reason: its
-    // bullets are single enormous lines packing dozens of identifiers and many
-    // cites, so the candidate set is huge and never near any particular cite —
-    // the heuristic has no signal there. But the pile is not all noise either:
-    // `tests/lints.rs:4820` cites `src/ir/lowering/types.rs:699` for
-    // `register_collection_alias`, which is at **967**. A real stale cite,
-    // outside `docs/`, that nothing guarded.
+    // Most rows are not stale cites. TODO.md dominates for a structural reason:
+    // its bullets are single enormous lines packing dozens of identifiers and
+    // many cites, so the candidate set is huge and never near any particular
+    // cite — the heuristic has no signal there. But the pile is not all noise:
+    // the scan's first run caught a `register_collection_alias` cite in this
+    // very file pointing hundreds of lines off its target — a real stale cite,
+    // outside `docs/`, that nothing guarded. It stays unfixed for the
+    // burn-down, which starts from the scan's own output, not from figures
+    // quoted here.
     //
-    // BURN-DOWN, in this order: (1) `known_gaps` and `tests/lints.rs` —
-    // line-structured prose where the heuristic works; (2)
-    // `tests/integration.rs`; (3) `TODO.md` LAST, and probably not with this
-    // heuristic at all — a per-bullet check would need the cite's own sentence,
-    // not the bullet. Fix or allowlist each row WITH ITS REASON, then fold the
-    // target into the fatal set above. Do not bulk-allowlist: an unread row
-    // asserts a verification nobody did.
+    // BURN-DOWN, in this order: (1) `known_gaps` fixture headers, whose cites
+    // sit in short comment paragraphs the heuristic reads well; (2)
+    // `tests/integration.rs` and `tests/lints.rs` — ⚠ in `.rs` files the
+    // PARAGRAPH fallback degenerates: "paragraph" is delimited by truly blank
+    // lines, so a `//` block plus its adjacent code reads as ONE paragraph, the
+    // candidate identifier set balloons, and a stale cite can PASS because some
+    // unrelated candidate happens to sit near the cited line. The burn-down
+    // must either tighten paragraph delimiting to comment-block boundaries for
+    // `.rs` targets or accept per-row manual reads there. (3) `TODO.md` LAST,
+    // and probably not with this heuristic at all — a per-bullet check would
+    // need the cite's own sentence, not the bullet. Fix or allowlist each row
+    // WITH ITS REASON, then fold the target into the fatal set above. Do not
+    // bulk-allowlist: an unread row asserts a verification nobody did.
     let wide = std::env::var("GG_LINT_CITE_CONTENT_WIDE").is_ok();
     let mut targets: Vec<PathBuf> = vec![PathBuf::from(SCOPE)];
     if wide {
