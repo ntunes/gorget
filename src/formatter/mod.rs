@@ -2451,25 +2451,46 @@ impl Formatter {
         true
     }
 
-    fn format_arm_body(&mut self, body: &Spanned<Expr>) {
-        // Snag #15c note: `parse_body_or_expr` (catch/rethrow arm) SYNTHESIZES
-        // the indented body as `Expr::Do`, NOT `Expr::Block`. The match
-        // `else:` uses `parse_arm_body`, which returns `Expr::Block` for the
-        // indented form. Both AST forms carry an indented statement list and
-        // format WITHOUT re-emitting `do:` at these arm positions — the parser
-        // accepts the indented form directly at all three sites.
-        //
-        // R41 T-FMT-C: an AUTHOR-written `do:` is a different case, and the
-        // one-path treatment deleted it. `else: do:` + suite came back as a
-        // bare `else:` + suite — not the same program, since `else: do: ^b`
-        // is REJECTED (E_MoveInOperandPosition) where `else: ^b` compiles.
-        // `author_spelled` is what separates the two producers.
+    /// THE producer for an arm/clause BODY written after a header colon —
+    /// match arms, the expression-match `else`, and the `catch` / `rethrow`
+    /// recovery arms — INCLUDING where the header's trailing comment goes.
+    ///
+    /// The body has exactly three shapes, and each puts the header comment in a
+    /// different place. Keeping the shape decision and the comment placement in
+    /// ONE function is the point: they were split before, with the shape test
+    /// hand-mirrored at the call site, and the copy disagreed with the original
+    /// on the shape it was written to exclude.
+    ///
+    /// * **Author `do:`** — the keyword belongs to the HEADER's line, so the
+    ///   comment is emitted after ` do:`. Firing the hook before it would spell
+    ///   `else:  # note do:`, eating the author's keyword into a comment; that
+    ///   is not cosmetic, since `else: do: ^b` is REJECTED
+    ///   (`E_MoveInOperandPosition`) where `else: ^b` compiles.
+    /// * **Indented suite** — the header owns its line, so the comment is
+    ///   emitted at the header, exactly as at every other clause position.
+    /// * **Inline expression** — the body SHARES the header's line, so the
+    ///   comment is CLAIMED first and emitted after the body. Emitting it at the
+    ///   colon would put the comment ahead of the value it heads and the output
+    ///   would not re-parse. Claiming (rather than deferring the whole hook) is
+    ///   what stops a leading hook inside the body from taking it first.
+    ///
+    /// Snag #15c note: `parse_body_or_expr` (catch/rethrow arm) SYNTHESIZES the
+    /// indented body as `Expr::Do`, NOT `Expr::Block`. The match `else:` uses
+    /// `parse_arm_body`, which returns `Expr::Block` for the indented form.
+    /// Both carry an indented statement list and format WITHOUT re-emitting
+    /// `do:` — the parser accepts the indented form directly at all three sites.
+    /// An AUTHOR-written `do:` is the different case, and `author_spelled` is
+    /// what separates the two producers; the one-path treatment deleted it.
+    ///
+    /// `header_anchor` is the last real byte of the header before its colon.
+    fn format_arm_body(&mut self, body: &Spanned<Expr>, header_anchor: usize) {
         if let Expr::Do {
             body: block,
             author_spelled: true,
         } = &body.node
         {
             self.emitter.write(" do:");
+            self.emit_trailing_comment_after_header(header_anchor);
             self.emitter.newline();
             self.emitter.indent();
             self.format_block_stmts(block);
@@ -2489,6 +2510,7 @@ impl Formatter {
             // the AST shape instead — kept theirs, so one construct formatted
             // two different ways.
             if block.layout == SuiteLayout::NextLine {
+                self.emit_trailing_comment_after_header(header_anchor);
                 self.emitter.newline();
                 self.emitter.indent();
                 self.format_block_stmts(block);
@@ -2496,8 +2518,10 @@ impl Formatter {
                 return;
             }
         }
+        let deferred = self.claim_header_trailing_comments(header_anchor);
         self.emitter.write(" ");
         self.format_expr(body);
+        self.emit_claimed_header_comments(deferred);
     }
 
     /// Emit an INLINE statement suite — the one the author wrote on the
@@ -3172,30 +3196,17 @@ impl Formatter {
         // wraps a `throw`/`return` expression-prefix, and the old
         // `if let Expr::Block(..)` test could not tell the two apart. It
         // exploded every inline `throw`/`return` arm onto its own line.
-        match &arm.body.node {
-            Expr::Block(block) if block.layout == SuiteLayout::NextLine => {
-                self.emit_trailing_comment_after_header(arm_anchor);
-                self.emitter.newline();
-                self.emitter.indent();
-                self.format_block_stmts(block);
-                self.emitter.dedent();
-            }
-            _ => {
-                // ⚠ The header hook must fire AFTER the body here, or it puts
-                // the comment BEFORE the statement it heads: `case 1: 10  # one`
-                // came out as `case 1:  # one 10`, with the statement inside
-                // the comment and the file no longer parsing. Suppressing the
-                // hook instead is not an option at this site — an inline arm
-                // body is an EXPRESSION, so no statement-side hook exists to
-                // claim the comment and it would drift down to lead the NEXT
-                // arm.
-                let deferred = self.claim_header_trailing_comments(arm_anchor);
-                self.emitter.write(" ");
-                self.format_expr(&arm.body);
-                self.emit_claimed_header_comments(deferred);
-                self.emitter.newline();
-            }
-        }
+        // The three body shapes and where each puts the header's trailing
+        // comment live in `format_arm_body`. This site used to hand-mirror the
+        // shape test and handle two of the three itself, which is how the
+        // author-`do:` arm ended up placing the comment on the LAST statement
+        // of the branch.
+        self.format_arm_body(&arm.body, arm_anchor);
+        // Terminates the arm. Required after an INLINE body (which has emitted
+        // no newline yet); a no-op after an indented suite, whose last
+        // statement already closed the line — `Emitter::newline` is idempotent
+        // at line start.
+        self.emitter.newline();
     }
 
     // ── Types ───────────────────────────────────────────────
@@ -3847,24 +3858,12 @@ impl Formatter {
                     }
                     self.emit_comments_before(else_arm.span.start);
                     self.emitter.write("else:");
-                    // Header trailing-comment hook, fired ONLY when
-                    // `format_arm_body` is about to end the line — i.e. an
-                    // indented suite. Firing it before an author `do:` would
-                    // emit `else:  # note do:`, and before an inline expression
-                    // it would put the comment ahead of the value it heads;
-                    // neither re-parses. The same three-way distinction
-                    // `format_arm_body` makes, made once here.
-                    let indented_suite = match &else_arm.node {
-                        Expr::Do { author_spelled: true, .. } => false,
-                        Expr::Block(b) | Expr::Do { body: b, .. } => {
-                            b.layout == SuiteLayout::NextLine
-                        }
-                        _ => false,
-                    };
-                    if indented_suite {
-                        self.emit_trailing_comment_after_header(else_arm.span.start);
-                    }
-                    self.format_arm_body(else_arm);
+                    // The header's trailing comment is placed by
+                    // `format_arm_body`, which is the one function that knows
+                    // which of the three body shapes it is about to emit. This
+                    // site used to re-derive that decision and fire the hook
+                    // itself, which is two sources of truth for one predicate.
+                    self.format_arm_body(else_arm, else_arm.span.start);
                     // Terminates the clause. Required for the INLINE form
                     // (`else: 20` has emitted no newline yet); a no-op for the
                     // indented form, whose last statement already closed the
@@ -4316,8 +4315,10 @@ impl Formatter {
                     // an expression at low precedence — safe from further
                     // nesting hazards (like the Catch recovery arm).
                     // Snag #15b/#15c: use `format_arm_body` so multi-stmt
-                    // transforms don't get wrapped in a spurious `do:`.
-                    self.format_arm_body(transform);
+                    // transforms don't get wrapped in a spurious `do:` — and so
+                    // a trailing comment on the `rethrow (T e):` header stays on
+                    // the header instead of falling into the body.
+                    self.format_arm_body(transform, error_name.span.end);
                 } else {
                     self.emitter.write(" rethrow ");
                     // Bare-form transform: nested Rethrow/Catch (bp 1) at
@@ -4335,8 +4336,10 @@ impl Formatter {
                 // at bp 0 — absorbs everything on its line, so no wrap
                 // hazard for the recovery arm itself.
                 // Snag #15b/#15c: use `format_arm_body` so multi-stmt
-                // recovery bodies don't get wrapped in a spurious `do:`.
-                self.format_arm_body(recovery);
+                // recovery bodies don't get wrapped in a spurious `do:` — and
+                // so a trailing comment on the `catch (e):` header stays on the
+                // header instead of falling into the body.
+                self.format_arm_body(recovery, error_binding.span.end);
             }
         }
     }

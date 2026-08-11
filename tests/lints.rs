@@ -13072,7 +13072,12 @@ fn formatter_suite_layout_hook_census() {
         ("format_function", "self.format_block_stmts(block);", Plain),
         ("format_inline_suite", "self.format_block_stmts(block);", Plain),
         ("format_item", "self.format_block_stmts(&mtf.body);", Plain),
-        ("format_match_arm", "self.format_block_stmts(block);", Layout),
+        // `format_match_arm` no longer has a row: it used to hand-mirror
+        // `format_arm_body`'s three-way shape decision and emit two of the
+        // three suites itself, and the copy disagreed with the original on the
+        // author-`do:` shape (the header's trailing comment landed on the LAST
+        // statement of the branch). It now delegates, so the arm's suite is
+        // emitted at `format_arm_body`'s rows above.
         // select CASE arm body.
         ("format_stmt", "self.format_block_stmts(&arm.body);", Plain),
         // meta match CASE arm body — `Both` since the R41 fold: a `case`

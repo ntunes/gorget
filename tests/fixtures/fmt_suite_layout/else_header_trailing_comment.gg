@@ -16,23 +16,36 @@
 #
 # SITE AXIS (6 statement cells): `if`-`else` · statement-match `else` · `for`
 #   `else` · `while` `else` · `meta match` `else` · expression-match `else`. The
-#   last one is separate in the code: its body goes through `format_arm_body`, so
-#   it needs its own guarded call, fired only when the body is an indented suite.
+#   last one reaches its body through `format_arm_body`, which is where the
+#   header comment is placed for every arm-shaped position.
 #
-# PLUS 3 ITEM-LEVEL cells (`meta if` over ITEMS, at the bottom): the `meta if`
-#   header itself, its `elif`, and its `else`. Same class, one layer up — the
-#   nested-item loop re-emitted a header's trailing comment as a LEADING comment
-#   on the branch's first DEFINITION. The item-level `else` has no clause span,
-#   so its anchor is derived by walking back from the first item to the colon.
+# PLUS 3 ITEM-LEVEL cells (`meta if` over ITEMS): the `meta if` header itself,
+#   its `elif`, and its `else`. Same class, one layer up — the nested-item loop
+#   re-emitted a header's trailing comment as a LEADING comment on the branch's
+#   first DEFINITION. The item-level `else` has no clause span, so its anchor is
+#   derived by walking back from the first item to the colon.
 #
-# ⚠ INLINE bodies are NOT part of this axis and must not be. A comment emitted at
-# the header of `else: stmt` lands ahead of the statement that shares the line,
-# and the output does not re-parse — those go through the claim-then-emit split
-# in `format_inline_suite` instead. Same reason an author `do:` body is excluded:
-# the hook would land between `else:` and ` do:`.
+# PLUS 4 ARM-BODY SHAPE cells (`case`/`else`/`catch` with an author `do:`, and
+#   the inline sibling). These are the third body shape, and they are the reason
+#   `format_arm_body` — not the call site — decides where the header comment
+#   goes. An author `do:` belongs to the HEADER's line, so the comment is emitted
+#   after ` do:`; firing the hook before it spells `else:  # note do:` and eats
+#   the keyword, which is ACCEPT/REJECT-relevant (`else: do: ^b` is rejected
+#   where `else: ^b` compiles). These cells exist because an earlier version of
+#   this file claimed the shape was "excluded by construction" while the
+#   exclusion arm had NO fixture at all — flipping it left every gate green.
 #
-# RED pre-fix (recorded 2026-08-11): every cell moved its comment down one line
-#   and one indent level, into the branch body.
+# ⚠ INLINE bodies get the third treatment, not the header hook. A comment emitted
+# at the header of `else: stmt` lands ahead of the statement that shares the line,
+# and the output does not re-parse — those are CLAIMED at the header and emitted
+# after the body, by `format_inline_suite` for statement suites and by
+# `format_arm_body` for arm-shaped positions.
+#
+# RED pre-fix (recorded 2026-08-11, break-and-restore per cell): every `else`
+#   cell moved its comment down one line and one indent level into the branch
+#   body. The author-`do:` cells were worse and differed by position — the `case`
+#   one re-emitted the comment as a TRAILING comment on the branch's LAST
+#   statement, the `else` and `catch` ones as a LEADING comment on the FIRST.
 
 void if_else(int x):
     if x == 1:
@@ -84,6 +97,31 @@ else:    # every other platform
     int backend_id():
         return 3
 
+int rem_or_throw(int a, int b):
+    return a %! b
+
+int arm_body_do_shapes(int x):
+    int viacase = match x:
+        case 1: do:    # author `do:` on a CASE arm
+            int a = 1
+            a + 1
+        else:
+            0
+    int viaelse = match x:
+        case 9:
+            9
+        else: do:    # author `do:` on an ELSE clause
+            int b = 2
+            b + 1
+    int viacatch = rem_or_throw(x, 0)! catch (e): do:    # author `do:` on a CATCH arm
+        int c = 3
+        c
+    int inline_sibling = match x:
+        case 9:
+            9
+        else: 4    # the INLINE sibling — claimed, then emitted after the body
+    return viacase + viaelse + viacatch + inline_sibling
+
 void main():
     if_else(1)
     stmt_match_else(1)
@@ -92,3 +130,4 @@ void main():
     print(meta_match_else[int]())
     print(expr_match_else(1))
     print(backend_id())
+    print(arm_body_do_shapes(1))
