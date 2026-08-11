@@ -1,0 +1,60 @@
+# KNOWN GAP (gorget-js snag 15h, filed R41 2026-08-11) — the CONTINUATION LINES
+# of a multi-line TRAILING comment detach from the member they annotate.
+#
+# A trailing comment that runs onto further lines — each aligned under the first
+# `#`, no code between them, no blank line — is ONE logical comment in every
+# language that has the shape, and it is how a field's rationale gets written
+# without a 200-column line. `gg fmt` has no such concept: the tokenizer emits
+# one `Comment` token per line and the classifier asks each one independently
+# "are you on the same source line as the previous emit?". A continuation line
+# is not, so it is never a trailing comment, and it lands wherever the leading /
+# orphan paths put it.
+#
+# TWO CELLS, because the detachment lands in two different places:
+#
+#   cellA — continuation on a NON-LAST member. The classifier attaches the
+#           continuation lines as the LEADING comment of the NEXT member, so
+#           they come out at MEMBER indent, above `int depth`. The reader is now
+#           told that "inherited by nested envs" documents `depth`.
+#
+#   cellB — continuation on the LAST member. No next member to lead, so the run
+#           falls through to the module-level flush at COLUMN 0, escaping the
+#           struct entirely. That half is the SAME orphan-flush mechanism as
+#           `fmt_container_last_interior_comment_dedents.gg` and closes with it;
+#           it is cross-cited rather than re-filed.
+#
+# A third symptom rides along: the detached lines SPLIT the alignment group, so
+# the members below a multi-line trailing comment stop sharing the group's `#`
+# column (`int depth` aligns to its own width instead of the group's).
+#
+# INTENDED: a continuation run is ONE logical trailing comment, attached to its
+# member, and it MOVES WITH THE `#` — when the aligner picks a column for the
+# group, every continuation line is re-aligned under that same column. Asserted
+# by `fmt_multiline_trailing_comment_stays_attached` as three properties rather
+# than a byte-exact expected output, so the cells survive a future change to the
+# alignment stride:
+#   1. no comment line lands at column 0 (cellB),
+#   2. every continuation `#` sits at the same column as its head's `#`,
+#   3. the member below a multi-line trailing comment still shares the group's
+#      `#` column.
+#
+# OBSERVED at HEAD (all three fail): continuations at member indent for cellA,
+# at column 0 for cellB, and `int depth`'s `#` four columns left of the group's.
+#
+# ⚠ The NEW work here is the COMMENT MODEL, not the flush: the tokenizer and
+# classifier need a multi-line-trailing concept (a continuation run is part of
+# the comment above it), and the aligner has to move the run with its head.
+# Fixing only the orphan flush relocates cellB and leaves cellA and the
+# alignment split standing.
+
+public struct Env:
+    int parent          # cellA-first: EnvId of the enclosing env
+    bool strict         # cellA-head: set by a "use strict" directive in the
+                        # cellA-cont-1: enclosing Program or FunctionBody, and
+                        # cellA-cont-2: inherited by nested envs at entry
+    int depth           # cellA-last: nesting depth from the root env
+
+public struct Frame:
+    int slot            # cellB-head: index of this frame's slot in the arena
+                        # cellB-cont-1: the LAST member, so the continuation
+                        # cellB-cont-2: run escapes the struct entirely

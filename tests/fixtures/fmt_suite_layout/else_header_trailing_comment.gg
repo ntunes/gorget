@@ -1,0 +1,94 @@
+# ==== T-FMT-C · a trailing comment ON the `else:` header stays on the header
+#
+# `else:  # note` was the one clause header that dropped its trailing comment
+# into the branch body, where `format_block_stmts` re-emitted it as a LEADING
+# comment on the branch's first statement — so a note about the `else` came out
+# reading as a note about whatever happened to come first inside it. The
+# misattribution class T-FMT-A retired, surviving at the sites nobody censused.
+#
+# It survived because of an ASYMMETRY, not an oversight in the abstract: `elif`
+# fires a header hook and so does `case`, so those two positions were right;
+# only `else` had none. EVERY indented-`else` site now goes through ONE producer,
+# `Formatter::emit_else_header`, which writes the header, fires the hook and ends
+# the line — one implementation, so the next `else` position cannot ship without
+# it. The exact site count is pinned by `formatter_sibling_loops_hook_pairing`
+# in tests/lints.rs, not restated here where it would rot.
+#
+# SITE AXIS (6 statement cells): `if`-`else` · statement-match `else` · `for`
+#   `else` · `while` `else` · `meta match` `else` · expression-match `else`. The
+#   last one is separate in the code: its body goes through `format_arm_body`, so
+#   it needs its own guarded call, fired only when the body is an indented suite.
+#
+# PLUS 3 ITEM-LEVEL cells (`meta if` over ITEMS, at the bottom): the `meta if`
+#   header itself, its `elif`, and its `else`. Same class, one layer up — the
+#   nested-item loop re-emitted a header's trailing comment as a LEADING comment
+#   on the branch's first DEFINITION. The item-level `else` has no clause span,
+#   so its anchor is derived by walking back from the first item to the colon.
+#
+# ⚠ INLINE bodies are NOT part of this axis and must not be. A comment emitted at
+# the header of `else: stmt` lands ahead of the statement that shares the line,
+# and the output does not re-parse — those go through the claim-then-emit split
+# in `format_inline_suite` instead. Same reason an author `do:` body is excluded:
+# the hook would land between `else:` and ` do:`.
+#
+# RED pre-fix (recorded 2026-08-11): every cell moved its comment down one line
+#   and one indent level, into the branch body.
+
+void if_else(int x):
+    if x == 1:
+        print(1)
+    else:    # the fallback branch
+        print(2)
+
+void stmt_match_else(int x):
+    match x:
+        case 1:
+            print(1)
+        else:    # everything that is not 1
+            print(2)
+
+void for_else():
+    for i in 0..3:
+        print(i)
+    else:    # ran to completion
+        print(9)
+
+void while_else():
+    while false:
+        print(1)
+    else:    # never entered the loop
+        print(2)
+
+String meta_match_else[T]():
+    meta match typename(T):
+        case "int":
+            return "i"
+        else:    # every other type
+            return "o"
+
+int expr_match_else(int x):
+    int r = match x:
+        case 1:
+            10
+        else:    # the expression-position clause
+            20
+    return r
+
+meta if platform() == "macos":    # the mac branch
+    int backend_id():
+        return 1
+elif platform() == "windows":    # the windows branch
+    int backend_id():
+        return 2
+else:    # every other platform
+    int backend_id():
+        return 3
+
+void main():
+    if_else(1)
+    stmt_match_else(1)
+    for_else()
+    while_else()
+    print(meta_match_else[int]())
+    print(expr_match_else(1))
+    print(backend_id())

@@ -11,7 +11,7 @@ void main():
     Set[int] s = {
         # a leading interior comment forces the broken-with-comments path
         1,
-        2,  # trailing
+        2,    # trailing
         3,
     }
     print(s.len())

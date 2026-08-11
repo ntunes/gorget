@@ -11510,6 +11510,75 @@ fn fmt_container_last_interior_comment_stays_inside() {
     }
 }
 
+/// KNOWN GAP (gorget-js snag 15h, filed R41 2026-08-11): the CONTINUATION LINES
+/// of a multi-line trailing comment detach from the member they annotate.
+///
+/// `gg fmt` has no multi-line-trailing concept: one `Comment` token per line,
+/// and the classifier asks each independently "same source line as the previous
+/// emit?". A continuation line is not, so it is never trailing — it lands at
+/// MEMBER indent as the next member's leading comment (cellA) or, with no next
+/// member, at COLUMN 0 via the module flush (cellB, the same orphan mechanism as
+/// `fmt_container_last_interior_comment_dedents`).
+///
+/// Asserts the three properties rather than a byte-exact expected output, so the
+/// cells survive a change to the alignment stride: no comment at column 0, every
+/// continuation `#` under its head's `#`, and the member below a multi-line
+/// trailing comment still sharing the group's `#` column.
+#[test]
+#[ignore = "known gap (snag 15h): multi-line trailing comment continuations detach from their member; un-ignore when the comment model grows a continuation-run concept"]
+fn fmt_multiline_trailing_comment_stays_attached() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_multiline_trailing_comment_detach.gg");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // The header's own prose is comment-at-column-0 by construction; the cells
+    // are the only lines this test reasons about, and each carries a sentinel.
+    let hash_col = |sentinel: &str| -> usize {
+        let line = formatted
+            .lines()
+            .find(|l| l.contains(sentinel))
+            .unwrap_or_else(|| panic!("sentinel `{sentinel}` vanished.\n{formatted}"));
+        line.find('#')
+            .unwrap_or_else(|| panic!("sentinel line has no `#`: {line:?}"))
+    };
+
+    // (1) cellB — no continuation escapes to column 0.
+    for cont in ["cellB-cont-1", "cellB-cont-2"] {
+        assert!(
+            hash_col(cont) > 0,
+            "`{cont}` escaped its struct to column 0.\n=== formatted ===\n{formatted}"
+        );
+    }
+
+    // (2) every continuation sits under its head's `#`.
+    for (head, cont) in [
+        ("cellA-head", "cellA-cont-1"),
+        ("cellA-head", "cellA-cont-2"),
+        ("cellB-head", "cellB-cont-1"),
+        ("cellB-head", "cellB-cont-2"),
+    ] {
+        assert_eq!(
+            hash_col(cont),
+            hash_col(head),
+            "`{cont}` is not aligned under `{head}`'s `#`.\n\
+             === formatted ===\n{formatted}"
+        );
+    }
+
+    // (3) the member BELOW a multi-line trailing comment still shares the
+    //     alignment group's column — the detachment splits the run today.
+    assert_eq!(
+        hash_col("cellA-last"),
+        hash_col("cellA-head"),
+        "the multi-line trailing comment split the alignment group: the member \
+         below it no longer shares the group's `#` column.\n\
+         === formatted ===\n{formatted}"
+    );
+}
+
 /// KNOWN GAP (R41 T-FMT-B, filed 2026-08-11): `gg fmt` DELETES the author's
 /// grouping parentheses.
 ///
@@ -48093,6 +48162,7 @@ fn rust_gg_build_is_deterministic() {
 /// fails on both a missing and an unregistered file.
 const FMT_SUITE_LAYOUT_FIXTURES: &[&str] = &[
     "b1_newline_members.gg",
+    "blank_before_case.gg",
     "blank_before_clause.gg",
     "blank_hosts.gg",
     "blank_insertion.gg",
@@ -48101,11 +48171,14 @@ const FMT_SUITE_LAYOUT_FIXTURES: &[&str] = &[
     "clause_sites_comment.gg",
     "closure_body.gg",
     "do_expr.gg",
+    "else_header_trailing_comment.gg",
     "expr_match.gg",
     "if_chain.gg",
     "inline_multiline_child_comment.gg",
     "inline_slot_kinds.gg",
     "inline_trailing_comment.gg",
+    "meta_if_nested_item_blank_run.gg",
+    "meta_if_nested_item_blanks.gg",
     "meta_match.gg",
     "nested_overwidth.gg",
     "on_error.gg",

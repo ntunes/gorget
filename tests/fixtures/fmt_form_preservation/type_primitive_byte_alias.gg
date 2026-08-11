@@ -6,11 +6,17 @@
 # it takes the same span-recovery cure.
 # Pre-fix RED: `byte x` came back as `uint8 x` everywhere — in declarations,
 # in parameter lists, in return types, in generic arguments, and in slices.
+# Every position named there has a cell below; the generic-argument pair was
+# added after an output-review measured that the header named a position the
+# file did not sample (Core #12 — a fixture's NAME is a claim about SCOPE).
 byte scale(byte v, uint8 already_canonical):
     return v + already_canonical
 
 byte[] widen(byte[] xs):
     return xs
+
+Vector[byte] buffer(Dict[String, byte] table):
+    return []
 
 void main():
     byte a = 1

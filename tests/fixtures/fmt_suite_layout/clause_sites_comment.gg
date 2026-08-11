@@ -6,13 +6,25 @@
 # documents the first statement instead. Same misattribution class as the
 # arm-loop hooks, six sites further along.
 #
-# SITE AXIS (6 cells): statement-match `else` · expression-match `else` ·
-#   `for` `else` · `while` `else` · `meta match` `else` · `select` `else`.
+# SITE AXIS (7 cells): statement-match `else` · expression-match `else` ·
+#   `for` `else` · `while` `else` · `meta match` `else` · `select` `else` · and
+#   the ITEM-level `meta if`'s `else`, added when the item-level clause headers
+#   turned out to have the whole family's holes (no blank check, no leading
+#   hook, no trailing hook) at a layer the original census did not reach.
 #
 # ORDER: blank check -> `emit_comments_before(<clause anchor>)` -> write the
-# header, mirroring `format_block_stmts`. The hooks are LEADING-only: adding
+# header, mirroring `format_block_stmts`.
+#
+# ⚠ CORRECTED 2026-08-11: this header used to add "the hooks are LEADING-only —
 # a paired trailing hook here would DOUBLE-CLAIM against the header hook the
-# branch emitters already write.
+# branch emitters already write". That reasoning was wrong for `else`, and it is
+# why `else:  # note` kept losing its comment into the branch body: `elif` and
+# `case` DO write a header hook, but nothing wrote one for `else`, so there was
+# nothing to double-claim against. The indented-`else` sites now emit their own
+# through `Formatter::emit_else_header`; the cells are in
+# `else_header_trailing_comment.gg`. What remains true is that the LOOP-level
+# hooks in the arm loops are leading-only — a trailing hook in the loop body
+# would double-claim against the one `format_match_arm` writes.
 #
 # RED pre-fix (recorded 2026-08-11): all six pulled the comment down into the
 # branch body.
@@ -66,6 +78,14 @@ void select_else():
             print(0)
     ch.close()
 
+meta if platform() == "macos":
+    int backend_id():
+        return 1
+# every other platform
+else:
+    int backend_id():
+        return 2
+
 void main():
     stmt_match_else(1)
     print(expr_match_else(1))
@@ -73,3 +93,4 @@ void main():
     while_else()
     print(meta_match_else[int]())
     select_else()
+    print(backend_id())

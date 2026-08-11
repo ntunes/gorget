@@ -11808,6 +11808,23 @@ fn formatter_sibling_loops_hook_pairing() {
     // `EXPECTED_EMIT_TRAILING_AFTER` deliberately does NOT move. Adding a
     // paired trailing hook at a clause header would double-claim against the
     // header hook the branch emitters already write.
+    //
+    // R41 fold (2026-08-11): 27 → 27 — and the fact that it lands back on the
+    // same number is a COINCIDENCE of two independent moves, not a no-op.
+    // Anyone re-deriving this constant should check both.
+    //   −2: NOT a lost hook, a CENTRALIZED one. The three `meta if`
+    //       nested-item loops (then / elif body / else) each carried their own
+    //       copy of the leading+trailing pair; they now share the single
+    //       `format_nested_items` producer, so three pairs became one. `_AFTER`
+    //       drops by the same two and the equality between them still holds,
+    //       which is the property that matters.
+    //   +2: the ITEM-level `meta if`'s `elif` and `else` headers gain the
+    //       leading hook their statement-level twins have had since the
+    //       clause-header census — the item-level clause headers were simply not
+    //       in that census, and without the hook a comment written above them
+    //       fell to the nested-item loop and was re-emitted INSIDE the branch,
+    //       leading the first definition. LEADING ONLY, like every other clause
+    //       header, so `_AFTER` does not move.
     const EXPECTED_EMIT_COMMENTS_BEFORE: usize = 27;
     /// `emit_trailing_comment_after(` calls: 12 sibling-paired + 1
     /// EOF defensive + 1 internal delegation from
@@ -11832,7 +11849,9 @@ fn formatter_sibling_loops_hook_pairing() {
     // helper site covers all 4 inline-arm callers.
     // R41 T-FMT-A §5 (2026-08-11): 16 → 17 — `format_extern_block`'s item
     // loop gains its paired trailing hook alongside the leading one above.
-    const EXPECTED_EMIT_TRAILING_AFTER: usize = 17;
+    // R41 fold (2026-08-11): 17 → 15, the trailing half of the
+    // `format_nested_items` centralization described above.
+    const EXPECTED_EMIT_TRAILING_AFTER: usize = 15;
     /// `emit_trailing_comment_after_header(` calls: 4 structural
     /// containers (`format_struct`, `format_enum`, `format_trait`,
     /// `format_equip`) + 6 control-flow openers added R39 by the
@@ -11847,7 +11866,26 @@ fn formatter_sibling_loops_hook_pairing() {
     // control-flow openers + structural containers.
     // R41 T-FMT-A §5 (2026-08-11): 11 → 12 — `extern "C":  # why` joins the
     // structural-container header family (struct / enum / trait / equip).
-    const EXPECTED_EMIT_TRAILING_AFTER_HEADER: usize = 12;
+    //
+    // R41 fold (2026-08-11): 12 → 14. The `else:` clause header was the ONE
+    // header position with no trailing hook — `elif` had one and the `case`
+    // arms had one, so `else:  # note` alone dropped its comment through to
+    // `format_block_stmts`, which re-emitted it as a LEADING comment on the
+    // branch's first statement (the comment then documents that statement
+    // instead of the clause). +1 for the shared `emit_else_header` producer,
+    // which the five indented-`else` sites now route through, and +1 for the
+    // expression-match `else:`, whose body goes through `format_arm_body` and
+    // therefore needs its own guarded call (fired only for an indented suite —
+    // before an author `do:` or an inline expression it would emit the comment
+    // ahead of the thing it heads, and the output would not re-parse).
+    //
+    // 14 → 16 in the same change: the ITEM-level `meta if` and its `elif`
+    // headers. Their trailing comments were falling into the branch body, where
+    // the nested-item loop re-emitted them as LEADING comments on the branch's
+    // first DEFINITION — the same class one layer up, at sites the clause census
+    // did not cover. (The item-level `else` needs no row of its own: it routes
+    // through the shared `emit_else_header` counted above.)
+    const EXPECTED_EMIT_TRAILING_AFTER_HEADER: usize = 16;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -11993,11 +12031,18 @@ fn formatter_child_collection_loop_census() {
         ("format_module", "for item in &directives {", Both),
         ("format_module", "for item in &imports {", Both),
         ("format_module", "for (i, item) in rest.iter().enumerate() {", Both),
-        ("format_item", "for item in &mi.then_items {", Both),
-        ("format_item", "for (cond, items) in &mi.elif_branches {", Both),
-        ("format_item", "for item in items {", Both),
-        ("format_item", "for item in else_items {", Both),
+        // R41 fold: the four `meta if` nested-item loops (then / the elif
+        // branch walk / the elif body / else) collapsed into ONE producer,
+        // `format_nested_items`, when the nested-item blank preservation
+        // landed — four copies of the loop were four chances to omit it, and
+        // one of them omitting it is exactly what the snag was. The surviving
+        // `for (cond, items) in &mi.elif_branches` row is the BRANCH walk, not
+        // a child-collection loop: it emits the `elif` HEADER (with its own
+        // leading-comment hook, hence `Leading`, exactly like the statement-level
+        // `format_elif_else_blocks` row above) and delegates the items.
+        ("format_item", "for (cond, items) in &mi.elif_branches {", Leading),
         ("format_item", "for inner in items {", None_),
+        ("format_nested_items", "for (i, item) in items.iter().enumerate() {", Both),
         ("format_struct", "for (i, field) in s.fields.iter().enumerate() {", Both),
         ("format_enum", "for (i, variant) in e.variants.iter().enumerate() {", Both),
         ("format_trait", "for (i, item) in t.items.iter().enumerate() {", Both),
@@ -13006,6 +13051,15 @@ fn formatter_suite_layout_hook_census() {
     // The `for`/`while`/`match`/`select` `else` CLAUSES are the `Clause` rows;
     // `meta match`'s `else` is `Both` (a clause header that ALSO has two legal
     // spellings), as is the `if`-`else`.
+    //
+    // ⚠ The `case` ARM headers are clause headers too, and they check for the
+    // author's blank the same way — but only the meta-match one shows up in
+    // this table, because the other three arm loops (statement-match,
+    // expression-match, select) reach their bodies through `format_match_arm`
+    // or their own emit rather than calling `format_block_stmts` within the
+    // classifier's window. Their blank check lives in the arm LOOP, not beside
+    // a `format_block_stmts` call, so a `Plain` row here is not evidence that
+    // an arm position skipped it.
     const CENSUS: &[(&str, &str, Kind)] = &[
         ("format_arm_body", "self.format_block_stmts(block);", Layout),
         ("format_arm_body", "self.format_block_stmts(block);", Plain),
@@ -13021,8 +13075,13 @@ fn formatter_suite_layout_hook_census() {
         ("format_match_arm", "self.format_block_stmts(block);", Layout),
         // select CASE arm body.
         ("format_stmt", "self.format_block_stmts(&arm.body);", Plain),
-        // meta match CASE arm body · on error.
-        ("format_stmt", "self.format_block_stmts(body);", Layout),
+        // meta match CASE arm body — `Both` since the R41 fold: a `case`
+        // header is a clause header too, and it now checks for the author's
+        // blank above itself like `else:`/`elif:` always did. The asymmetry
+        // that made the blank above `case 1:` vanish while the blank above the
+        // sibling `else:` survived was the reported snag.
+        ("format_stmt", "self.format_block_stmts(body);", Both),
+        // on error.
         ("format_stmt", "self.format_block_stmts(body);", Layout),
         // for body · while body · loop · with · unsafe · meta for ·
         // meta while · named scope.
@@ -13827,6 +13886,79 @@ fn formatter_list_emit_fill_census() {
 }
 
 
+
+/// R41 T-FMT-B CLASS GUARD, visibility face — every declaration kind that can
+/// carry a visibility keyword is emitted through the explicitness-aware path.
+///
+/// `public Foo` and a bare `Foo` both parse to `Visibility::Public`, so the
+/// emitter cannot recover the author's spelling from the value; it reads
+/// `explicit_visibility`, which the parser writes. The class risk is a TENTH
+/// carrier: a new declaration kind that grows a `visibility` field and emits it
+/// with its own two-arm match would silently delete every explicit `public` on
+/// that kind, which is precisely the defect the flag exists to retire — and
+/// nothing about adding the field forces its author past this path.
+///
+/// So the two counts are pinned against each other. `format_static_decl` is the
+/// one deliberate non-caller: statics are private-by-DEFAULT, the inverse
+/// convention, and it carries its own rule (`src/formatter/mod.rs:1842-1858`).
+/// A mismatch means either a new carrier that skipped the path, or a carrier
+/// removed without its emit site — both worth a look.
+#[test]
+fn formatter_visibility_emit_site_count() {
+    /// `pub visibility: Visibility` fields in the AST — the carriers.
+    const EXPECTED_CARRIERS: usize = 9;
+    /// `self.format_visibility(` call sites, plus `format_static_decl`'s own
+    /// inverted rule, which together must cover every carrier.
+    const EXPECTED_EMIT_SITES: usize = 8;
+    const STATIC_DECL_OWN_RULE: usize = 1;
+
+    let ast = fs::read_to_string("src/parser/ast.rs").expect("cannot read src/parser/ast.rs");
+    let fmt = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+
+    let carriers = ast
+        .lines()
+        .filter(|l| l.trim() == "pub visibility: Visibility,")
+        .count();
+    let emit_sites = fmt
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//") && !l.trim_start().starts_with("///"))
+        .filter(|l| l.contains("self.format_visibility("))
+        .count();
+
+    assert_eq!(
+        carriers, EXPECTED_CARRIERS,
+        "the number of AST declarations carrying `visibility` changed \
+         ({EXPECTED_CARRIERS} -> {carriers}).\n\n\
+         If a kind was ADDED: it also needs `explicit_visibility` written at the \
+         parser (one writer, where the keyword is consumed) and an emit through \
+         `format_visibility`, or `gg fmt` will delete the author's `public` on \
+         that kind — the class this guard exists to retire. Then bump both \
+         constants.\n\
+         Census: grep -c 'pub visibility: Visibility,' src/parser/ast.rs"
+    );
+    assert_eq!(
+        emit_sites, EXPECTED_EMIT_SITES,
+        "the `format_visibility` call-site count changed \
+         ({EXPECTED_EMIT_SITES} -> {emit_sites}). A site that DISAPPEARED means \
+         a declaration kind stopped emitting a keyword the user wrote — the \
+         silent-drop class. A site ADDED without a new carrier means something \
+         is emitting visibility twice.\n\
+         Census: grep -c 'self.format_visibility(' src/formatter/mod.rs"
+    );
+    assert_eq!(
+        emit_sites + STATIC_DECL_OWN_RULE,
+        carriers,
+        "visibility EMIT sites ({emit_sites} `format_visibility` calls + \
+         `format_static_decl`'s own inverted rule) no longer cover the \
+         {carriers} AST carriers.\n\n\
+         Every carrier must route through `format_visibility`, which emits the \
+         keyword IFF the author wrote one. The single sanctioned exception is \
+         `format_static_decl` (statics are private-by-default, the opposite \
+         convention).\n\
+         Census: grep -c 'self.format_visibility(' src/formatter/mod.rs"
+    );
+}
 
 /// R41 T-FMT-B CLASS GUARD — every quoted string the formatter emits goes
 /// through the ONE producer.

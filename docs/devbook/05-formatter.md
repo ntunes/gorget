@@ -466,10 +466,18 @@ question — is this comment's start on the same source line as the previous emi
 last character? — and if so injects it after the emitted line, ahead of the newline
 that statement already wrote. A comment separated by a line break fails that test and
 stays a leading comment at the next sibling's indent, which is the right answer for a
-standalone comment *between* two nodes. Headers get the same treatment one level up:
-a comment after `if c:` is claimed at the header and emitted after the body, because
-emitting it at the colon would put it ahead of the statement it heads and the result
-would not re-parse.
+standalone comment *between* two nodes.
+
+Clause and block HEADERS get the same treatment one level up, and the layout decides
+where the comment goes. When the suite is indented, the header owns its line, so the
+comment is emitted at the header — `if c:  # why` keeps its comment on the `if`.
+When the suite is INLINE the body shares that line, so emitting at the colon would put
+the comment ahead of the statement it heads and the output would not re-parse; there
+the comment is *claimed* at the header (which stops a leading hook inside the body
+from taking it first) and emitted after the body. Every header position needs one of
+the two: a clause that has neither drops its comment into the branch body, where
+`format_block_stmts` re-emits it as a leading comment on the first statement and it
+silently starts documenting that statement instead of the clause.
 
 Two constants finish the shape. A trailing comment is injected exactly
 `TRAILING_COMMENT_GAP` spaces after the code (`src/formatter/mod.rs:220`), and a

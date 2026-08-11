@@ -1,0 +1,75 @@
+# ==== T-FMT-C · author blanks BETWEEN DEFINITIONS nested in a `meta if` block
+#
+# `format_module` preserves an author blank between TOP-LEVEL items and
+# `format_block_stmts` preserves one between statements. The nested-ITEM loops —
+# the bodies of `meta if` / `elif` / `else` — were the one member of that family
+# with no such check, so a platform backend wrapped in
+# `meta if platform() == "macos":` came back with every definition welded to the
+# next. One real file lost 88 blank lines this way.
+#
+# All three branch bodies now route through ONE producer,
+# `Formatter::format_nested_items`, rather than three copies of the loop: three
+# copies were three chances to omit the check, and one of them omitting it is
+# exactly this snag. `formatter_child_collection_loop_census` in tests/lints.rs
+# pins that there is one.
+#
+# AXIS (4 cells): blank between nested defs in the `then` branch · in an `elif`
+#   branch · in the `else` branch · no blank stays absent (the `frame_begin` /
+#   `frame_end` pair in the `elif` branch). The fifth cell of the axis — a RUN
+#   of blanks collapsing to one — cannot live in a fixpoint fixture, since its
+#   whole point is that input and output differ; it is
+#   `meta_if_nested_item_blank_run.gg` with an `.expected` companion.
+#
+# SECOND AXIS (2 cells, the CLAUSE face of the same item-level block): a blank
+#   ABOVE the item-level `elif:` and above the item-level `else:`. Those headers
+#   are not items, so the nested-item loop cannot see a blank above them — the
+#   identical reason a statement-level clause header needs its own check. ⚠ The
+#   anchor for the item-level `else` has to be DERIVED (walk back from the first
+#   item's start to the clause's colon): the first item's start sits one line
+#   below the header, so using it directly reports the `else:` line itself as
+#   the content above and every author blank reads as absent.
+#
+# Same rule as both siblings: a blank iff the author wrote one, runs collapse to
+# one, and the FIRST item of a branch never gets one (a blank between a block
+# opener and its first item is sparseness, not paragraphing) — which is why
+# `frame_begin` sits directly under the `meta if` header here.
+#
+# RED pre-fix (recorded 2026-08-11): every blank cell lost its blank and the
+#   definitions came out contiguous. The run-collapse and no-blank cells were
+#   GREEN — BREAK-AND-WATCH: emit `blank_line()` unconditionally in
+#   `format_nested_items` and the no-blank pair REDs with a blank the author
+#   never wrote.
+
+meta if platform() == "macos":
+    int backend_id():
+        return 1
+
+    int frame_begin():
+        return 2
+
+    int frame_end():
+        return 3
+
+elif platform() == "windows":
+    int backend_id():
+        return 10
+
+    int frame_begin():
+        return 20
+    int frame_end():
+        return 30
+
+else:
+    int backend_id():
+        return 100
+
+    int frame_begin():
+        return 200
+
+    int frame_end():
+        return 300
+
+void main():
+    print(backend_id())
+    print(frame_begin())
+    print(frame_end())
