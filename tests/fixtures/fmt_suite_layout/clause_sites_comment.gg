@@ -4,7 +4,7 @@
 # no leading-comment hook at the clause site it fell through to
 # `format_block_stmts`, which re-emitted it INSIDE the branch body — where it
 # documents the first statement instead. Same misattribution class as the
-# arm-loop hooks, six sites further along.
+# arm-loop hooks, seven sites further along.
 #
 # SITE AXIS (7 cells): statement-match `else` · expression-match `else` ·
 #   `for` `else` · `while` `else` · `meta match` `else` · `select` `else` · and
@@ -26,8 +26,12 @@
 # hooks in the arm loops are leading-only — a trailing hook in the loop body
 # would double-claim against the one `format_match_arm` writes.
 #
-# RED pre-fix (recorded 2026-08-11): all six pulled the comment down into the
-# branch body.
+# RED pre-fix (recorded 2026-08-11): all six statement-level cells pulled the
+# comment down into the branch body. The seventh — the ITEM-level `meta if`
+# `else` — was added later with the item-level clause work and RED-verified the
+# same way, separately: removing its `emit_comments_before` moves
+# `# every other platform` from above `else:` to inside the branch, leading the
+# first DEFINITION.
 
 void stmt_match_else(int x):
     match x:
