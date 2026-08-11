@@ -52,7 +52,7 @@ pub(crate) fn expr_is_borrow_bind(expr: &Expr) -> bool {
                     .as_ref()
                     .map_or(false, |b| expr_is_borrow_bind(&b.node))
         }
-        Expr::Do { body } => block_tail_is_borrow_bind(body),
+        Expr::Do { body, .. } => block_tail_is_borrow_bind(body),
         Expr::Block(block) => block_tail_is_borrow_bind(block),
         _ => false,
     }

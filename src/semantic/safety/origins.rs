@@ -184,7 +184,7 @@ impl<'a> BorrowChecker<'a> {
                 Self::merge_origins(origins)
             }
 
-            Expr::Block(block) | Expr::Do { body: block } => {
+            Expr::Block(block) | Expr::Do { body: block, .. } => {
                 // Origin comes from the last expression statement
                 if let Some(last) = block.stmts.last() {
                     if let Stmt::Expr(e) = &last.node {

@@ -1321,7 +1321,7 @@ impl<'a> BorrowChecker<'a> {
                 self.check_block(block);
             }
 
-            Expr::Do { body } => {
+            Expr::Do { body, .. } => {
                 self.check_block(body);
             }
 

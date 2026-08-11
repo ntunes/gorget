@@ -1,0 +1,52 @@
+# ==== T-FMT-C · inline suite x header TRAILING COMMENT
+#
+# AXIS (6 cells): {match case, if, elif, else, on error, meta case} each
+#   spelled inline WITH a trailing comment on the header line. The comment
+#   must land AFTER the inline statement and the output must REPARSE.
+#
+# THE MECHANISM IS **DEFER**, NOT SUPPRESS. A header's trailing-comment hook
+# naturally fires right after the `:`; on an inline suite that puts the
+# comment BEFORE the statement, so the statement ends up INSIDE the comment
+# and the file no longer parses. Suppressing the hook instead is wrong at the
+# match-arm site: an inline arm body is an EXPRESSION, so no statement-side
+# hook exists to claim the comment and it would leak to the NEXT arm as a
+# bogus leading line. Deferring is provably safe — the comment cursor is
+# monotone (no double-emit) and `emit_remaining_comments` catches any straggler
+# (no drop).
+#
+# RED pre-fix (recorded 2026-08-11) — the match-arm cell was a LIVE
+# non-reparsing defect, independent of this track's layout work:
+#     `case 1: 10  # one`  -->  `case 1:  # one 10`
+#   and `gg parse` on that output failed with 10 errors
+#   (`expected INDENT, found 'else'`). The other five cells were latent: their
+#   suites always exploded, which hid the same pre-wired ordering.
+#
+# ⚠ CHOSEN BEHAVIOUR for a MULTI-LINE inline child (`if true: int x = match y:`
+#   with a header comment): DEFER lands the comment after the child's LAST
+#   line. It reparses and no comment is lost, but the comment MOVES. That cell
+#   lives in `inline_multiline_child_comment.gg`.
+
+int arm_comment(int x):
+    int r = match x:
+        case 1: 10  # one
+        else: 20  # other
+    return r
+
+void if_comment(int x):
+    if x == 1: print(1)  # then
+    elif x == 2: print(2)  # otherwise
+    else: print(3)  # fallback
+
+void on_error_comment():
+    on error print(9)  # recover
+
+String meta_case_comment[T]():
+    meta match typename(T):
+        case "int": return "i"  # ints
+        else: return "o"  # rest
+
+void main():
+    print(arm_comment(1))
+    if_comment(1)
+    on_error_comment()
+    print(meta_case_comment[int]())

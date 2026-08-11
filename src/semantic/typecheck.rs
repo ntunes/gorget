@@ -4392,7 +4392,7 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            Expr::Do { body } => {
+            Expr::Do { body, .. } => {
                 // Expression block: the tail IS the do-value (consumed).
                 // Divergent tail (`return` / `throw` / `break` / `continue`)
                 // types as Never — same shape as `Expr::Block` above, and
@@ -5770,7 +5770,7 @@ impl<'a> TypeChecker<'a> {
         }
         match &expr.node {
             Expr::Block(b) => self.block_terminates(b),
-            Expr::Do { body } => self.block_terminates(body),
+            Expr::Do { body, .. } => self.block_terminates(body),
             _ => false,
         }
     }
@@ -9952,7 +9952,7 @@ fn stmt_has_loop_break(stmt: &Stmt) -> bool {
 fn expr_has_loop_break(expr: &Expr) -> bool {
     match expr {
         Expr::Block(b) => block_has_loop_break(b),
-        Expr::Do { body } => block_has_loop_break(body),
+        Expr::Do { body, .. } => block_has_loop_break(body),
         _ => false,
     }
 }
@@ -10015,7 +10015,7 @@ fn stmt_contains_return(stmt: &Stmt) -> bool {
 fn expr_contains_return(expr: &Expr) -> bool {
     match expr {
         Expr::Block(b) => block_contains_return(b),
-        Expr::Do { body } => block_contains_return(body),
+        Expr::Do { body, .. } => block_contains_return(body),
         // NEVER `Expr::Closure` / `Expr::ImplicitClosure`: their `return`
         // binds to the closure body, not the enclosing function.
         _ => false,

@@ -37,9 +37,10 @@ Each invocation formats a single file.
   structure of every expression survive untouched.
 - **Idempotent.** `gg fmt` applied to already-formatted source is a no-op:
   `fmt(fmt(x)) == fmt(x)`. This is what makes `--check` reliable.
-- **Canonical.** The output is a pure function of the parsed program and the
-  line-width budget — it does not depend on how the input was spaced, so two
-  authors who format the same program get byte-identical results.
+- **Canonical.** The output is a pure function of the parsed program, the
+  line-width budget, and the handful of choices the language leaves to the
+  author (below). It does not depend on incidental spacing, so two authors who
+  format the same program get byte-identical results.
 
 ## Layout
 
@@ -49,7 +50,49 @@ block structure, and the formatter normalizes it.
 The formatter preserves the blank lines you write as paragraph breaks, and
 collapses any run of consecutive blank lines down to a single one. A blank line
 keeps its meaning next to comments, too: a blank above or below a comment, or
-between two comments, is a deliberate break and is kept.
+between two comments, is a deliberate break and is kept. That includes a blank
+above a clause header — the space you leave between a long branch body and the
+`else:` that follows it is paragraphing like any other, and survives:
+
+```gorget
+if ready:
+    prepare()
+    launch()
+
+# nothing to do
+else:
+    wait()
+```
+
+### Suite layout is yours
+
+Gorget accepts two spellings for a suite: on the header's own line, or indented
+beneath it. Both are idiomatic, and which one reads better depends on the code —
+so the formatter keeps whichever you wrote, everywhere it is legal:
+
+```gorget
+if n == 1: print(1)          # stays a one-liner
+elif n == 2:                 # stays indented
+    print(2)
+else: print(3)               # each clause keeps its OWN spelling
+```
+
+This holds for `if` / `elif` / `else`, `match` arms and their `else`, `meta
+match` arms and their `else`, `on error`, and closure bodies — and it holds
+symmetrically: the formatter neither explodes a one-liner nor collapses a short
+indented suite. A one-liner that runs past the width budget stays a one-liner,
+because the width budget governs how an expression wraps, not which form of
+suite you chose.
+
+Two spellings are not interchangeable everywhere, and there the language decides
+rather than you: `on error` takes no colon in its inline form
+(`on error cleanup()`), and a statement-position `match` accepts only the
+indented form after `else:`.
+
+An explicit `do:` block is likewise kept where you wrote it, and never inserted
+where you did not. That one is more than cosmetic — `do:` makes its tail a read
+position, so `else: do:` followed by `^value` is rejected where `else: ^value`
+compiles.
 
 Where the language accepts more than one spelling of a construct, the formatter
 emits the canonical one — for example `elif` rather than `else if`.

@@ -3915,15 +3915,12 @@ mod tests {
                 op: ast::BinaryOp::Gt,
                 right: Box::new(spanned(Expr::IntLiteral(0))),
             }),
-            then_body: Block {
-                stmts: vec![spanned(Stmt::Pass)],
-                span: Span { start: 0, end: 0 },
-            },
+            then_body: Block::synthetic(vec![spanned(Stmt::Pass)], Span { start: 0, end: 0 }),
             elif_branches: vec![],
-            else_body: Some(Block {
-                stmts: vec![spanned(Stmt::Pass)],
-                span: Span { start: 0, end: 0 },
-            }),
+            else_body: Some(Block::synthetic(
+                vec![spanned(Stmt::Pass)],
+                Span { start: 0, end: 0 },
+            )),
         });
 
         lower_stmt(&mut ctx, &mut builder, &stmt);
@@ -3951,10 +3948,7 @@ mod tests {
                 op: ast::BinaryOp::Lt,
                 right: Box::new(spanned(Expr::IntLiteral(10))),
             }),
-            body: Block {
-                stmts: vec![spanned(Stmt::Pass)],
-                span: Span { start: 0, end: 0 },
-            },
+            body: Block::synthetic(vec![spanned(Stmt::Pass)], Span { start: 0, end: 0 }),
             else_body: None,
         });
 
@@ -3977,10 +3971,7 @@ mod tests {
         let mut builder = FunctionBuilder::new("test", UNIT_TYPE, &[]);
 
         let stmt = spanned(Stmt::Loop {
-            body: Block {
-                stmts: vec![spanned(Stmt::Break)],
-                span: Span { start: 0, end: 0 },
-            },
+            body: Block::synthetic(vec![spanned(Stmt::Break)], Span { start: 0, end: 0 }),
         });
 
         lower_stmt(&mut ctx, &mut builder, &stmt);
@@ -4003,10 +3994,7 @@ mod tests {
 
         // loop: break
         let stmt = spanned(Stmt::Loop {
-            body: Block {
-                stmts: vec![spanned(Stmt::Break)],
-                span: Span { start: 0, end: 0 },
-            },
+            body: Block::synthetic(vec![spanned(Stmt::Break)], Span { start: 0, end: 0 }),
         });
 
         lower_stmt(&mut ctx, &mut builder, &stmt);
@@ -4037,10 +4025,7 @@ mod tests {
                 op: ast::BinaryOp::Lt,
                 right: Box::new(spanned(Expr::IntLiteral(10))),
             }),
-            body: Block {
-                stmts: vec![spanned(Stmt::Continue)],
-                span: Span { start: 0, end: 0 },
-            },
+            body: Block::synthetic(vec![spanned(Stmt::Continue)], Span { start: 0, end: 0 }),
             else_body: None,
         });
 
@@ -4065,16 +4050,10 @@ mod tests {
         //   loop:
         //     break   <- should break inner loop only
         let inner_loop = spanned(Stmt::Loop {
-            body: Block {
-                stmts: vec![spanned(Stmt::Break)],
-                span: Span { start: 0, end: 0 },
-            },
+            body: Block::synthetic(vec![spanned(Stmt::Break)], Span { start: 0, end: 0 }),
         });
         let outer_loop = spanned(Stmt::Loop {
-            body: Block {
-                stmts: vec![inner_loop],
-                span: Span { start: 0, end: 0 },
-            },
+            body: Block::synthetic(vec![inner_loop], Span { start: 0, end: 0 }),
         });
 
         lower_stmt(&mut ctx, &mut builder, &outer_loop);
@@ -4118,10 +4097,10 @@ mod tests {
                     span: Span { start: 0, end: 0 },
                 }),
             ],
-            else_arm: Some(Block {
-                stmts: vec![spanned(Stmt::Pass)],
-                span: Span { start: 0, end: 0 },
-            }),
+            else_arm: Some(Block::synthetic(
+                vec![spanned(Stmt::Pass)],
+                Span { start: 0, end: 0 },
+            )),
         });
 
         lower_stmt(&mut ctx, &mut builder, &stmt);

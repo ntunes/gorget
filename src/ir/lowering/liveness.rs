@@ -294,7 +294,7 @@ fn uses_expr<'a>(
             uses_expr(&rhs.node, rhs.span.start, live, lu);
             uses_expr(&lhs.node, lhs.span.start, live, lu);
         }
-        Expr::Do { body } => {
+        Expr::Do { body, .. } => {
             walk_block(&body.stmts, live, lu);
         }
         // `Foo.bar(args)` shorthand — args are real uses. Variant tag is

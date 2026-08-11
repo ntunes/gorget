@@ -220,7 +220,7 @@ fn collect_loop_reassigned(
             Stmt::Match { arms, else_arm, .. } => {
                 for item in arms {
                     if let Some(arm) = item.arm() {
-                        if let Expr::Do { body } = &arm.body.node {
+                        if let Expr::Do { body, .. } = &arm.body.node {
                             collect_loop_reassigned(&body.stmts, in_loop, names);
                         }
                     }

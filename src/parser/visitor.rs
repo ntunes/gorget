@@ -176,7 +176,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
         }
 
         // ── Block / Do ──
-        Expr::Block(block) | Expr::Do { body: block } => {
+        Expr::Block(block) | Expr::Do { body: block, .. } => {
             v.visit_block(block);
         }
 

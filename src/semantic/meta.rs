@@ -2384,7 +2384,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             }
             if let Some(ea) = else_arm { substitute_expr(ea, env, type_env); }
         }
-        Expr::Block(block) | Expr::Do { body: block } => {
+        Expr::Block(block) | Expr::Do { body: block, .. } => {
             substitute_block(block, env, type_env);
         }
         Expr::Closure { params, body, .. } => {
@@ -3980,8 +3980,8 @@ mod tests {
                         generic_params: None,
                         params: vec![],
                         throws: ThrowsSpec::No,
-                        body: FunctionBody::Block(Block {
-                            stmts: vec![Spanned::new(
+                        body: FunctionBody::Block(Block::synthetic(
+                            vec![Spanned::new(
                                 Stmt::Expr(Spanned::new(
                                     Expr::Call {
                                         callee: Box::new(Spanned::new(
@@ -4005,8 +4005,8 @@ mod tests {
                                 )),
                                 dummy_span(),
                             )],
-                            span: dummy_span(),
-                        }),
+                            dummy_span(),
+                        )),
                         doc_comment: None,
                         span: dummy_span(),
                         param_abis: vec![],
@@ -4075,8 +4075,8 @@ mod tests {
                         generic_params: None,
                         params: vec![],
                         throws: ThrowsSpec::No,
-                        body: FunctionBody::Block(Block {
-                            stmts: vec![Spanned::new(
+                        body: FunctionBody::Block(Block::synthetic(
+                            vec![Spanned::new(
                                 Stmt::Expr(Spanned::new(
                                     Expr::Call {
                                         callee: Box::new(Spanned::new(
@@ -4103,8 +4103,8 @@ mod tests {
                                 )),
                                 dummy_span(),
                             )],
-                            span: dummy_span(),
-                        }),
+                            dummy_span(),
+                        )),
                         doc_comment: None,
                         span: dummy_span(),
                         param_abis: vec![],
@@ -4236,8 +4236,8 @@ mod tests {
                         generic_params: None,
                         params: vec![],
                         throws: ThrowsSpec::No,
-                        body: FunctionBody::Block(Block {
-                            stmts: vec![Spanned::new(
+                        body: FunctionBody::Block(Block::synthetic(
+                            vec![Spanned::new(
                                 Stmt::VarDecl {
                                     is_const: false,
                                     is_mutable: false,
@@ -4257,8 +4257,8 @@ mod tests {
                                 },
                                 dummy_span(),
                             )],
-                            span: dummy_span(),
-                        }),
+                            dummy_span(),
+                        )),
                         doc_comment: None,
                         span: dummy_span(),
                         param_abis: vec![],
@@ -4327,7 +4327,7 @@ mod tests {
                                 generic_params: None,
                                 params: vec![],
                                 throws: ThrowsSpec::No,
-                                        body: FunctionBody::Block(Block { stmts: vec![], span: dummy_span() }),
+                                        body: FunctionBody::Block(Block::synthetic(vec![], dummy_span())),
                                 doc_comment: None,
                                 span: dummy_span(),
                                 param_abis: vec![],
@@ -4347,7 +4347,7 @@ mod tests {
                                 generic_params: None,
                                 params: vec![],
                                 throws: ThrowsSpec::No,
-                                        body: FunctionBody::Block(Block { stmts: vec![], span: dummy_span() }),
+                                        body: FunctionBody::Block(Block::synthetic(vec![], dummy_span())),
                                 doc_comment: None,
                                 span: dummy_span(),
                                 param_abis: vec![],
@@ -4410,7 +4410,7 @@ mod tests {
                                 generic_params: None,
                                 params: vec![],
                                 throws: ThrowsSpec::No,
-                                        body: FunctionBody::Block(Block { stmts: vec![], span: dummy_span() }),
+                                        body: FunctionBody::Block(Block::synthetic(vec![], dummy_span())),
                                 doc_comment: None,
                                 span: dummy_span(),
                                 param_abis: vec![],
@@ -4430,7 +4430,7 @@ mod tests {
                                 generic_params: None,
                                 params: vec![],
                                 throws: ThrowsSpec::No,
-                                        body: FunctionBody::Block(Block { stmts: vec![], span: dummy_span() }),
+                                        body: FunctionBody::Block(Block::synthetic(vec![], dummy_span())),
                                 doc_comment: None,
                                 span: dummy_span(),
                                 param_abis: vec![],
@@ -4491,7 +4491,7 @@ mod tests {
                                 generic_params: None,
                                 params: vec![],
                                 throws: ThrowsSpec::No,
-                                        body: FunctionBody::Block(Block { stmts: vec![], span: dummy_span() }),
+                                        body: FunctionBody::Block(Block::synthetic(vec![], dummy_span())),
                                 doc_comment: None,
                                 span: dummy_span(),
                                 param_abis: vec![],
@@ -4566,8 +4566,8 @@ mod tests {
                         generic_params: None,
                         params: vec![],
                         throws: ThrowsSpec::No,
-                        body: FunctionBody::Block(Block {
-                            stmts: vec![Spanned::new(
+                        body: FunctionBody::Block(Block::synthetic(
+                            vec![Spanned::new(
                                 Stmt::Expr(Spanned::new(
                                     Expr::Call {
                                         callee: Box::new(Spanned::new(
@@ -4591,8 +4591,8 @@ mod tests {
                                 )),
                                 dummy_span(),
                             )],
-                            span: dummy_span(),
-                        }),
+                            dummy_span(),
+                        )),
                         doc_comment: None,
                         span: dummy_span(),
                         param_abis: vec![],
@@ -4696,8 +4696,8 @@ mod tests {
                         generic_params: None,
                         params: vec![],
                         throws: ThrowsSpec::No,
-                        body: FunctionBody::Block(Block {
-                            stmts: vec![Spanned::new(
+                        body: FunctionBody::Block(Block::synthetic(
+                            vec![Spanned::new(
                                 Stmt::VarDecl {
                                     is_const: false,
                                     is_mutable: false,
@@ -4711,8 +4711,8 @@ mod tests {
                                 },
                                 dummy_span(),
                             )],
-                            span: dummy_span(),
-                        }),
+                            dummy_span(),
+                        )),
                         doc_comment: None,
                         span: dummy_span(),
                         param_abis: vec![],
@@ -4823,8 +4823,8 @@ mod tests {
                 },
                 dummy_span(),
             )],
-            body: Block {
-                stmts: vec![Spanned::new(
+            body: Block::synthetic(
+                vec![Spanned::new(
                     Stmt::If {
                         condition: Spanned::new(
                             Expr::BinaryOp {
@@ -4834,26 +4834,26 @@ mod tests {
                             },
                             dummy_span(),
                         ),
-                        then_body: Block {
-                            stmts: vec![Spanned::new(
+                        then_body: Block::synthetic(
+                            vec![Spanned::new(
                                 Stmt::Return(Some(Spanned::new(Expr::Identifier("int8".to_string()), dummy_span()))),
                                 dummy_span(),
                             )],
-                            span: dummy_span(),
-                        },
+                            dummy_span(),
+                        ),
                         elif_branches: vec![],
-                        else_body: Some(Block {
-                            stmts: vec![Spanned::new(
+                        else_body: Some(Block::synthetic(
+                            vec![Spanned::new(
                                 Stmt::Return(Some(Spanned::new(Expr::Identifier("int64".to_string()), dummy_span()))),
                                 dummy_span(),
                             )],
-                            span: dummy_span(),
-                        }),
+                            dummy_span(),
+                        )),
                     },
                     dummy_span(),
                 )],
-                span: dummy_span(),
-            },
+                dummy_span(),
+            ),
             span: dummy_span(),
         });
 
@@ -4880,8 +4880,8 @@ mod tests {
                         generic_params: None,
                         params: vec![],
                         throws: ThrowsSpec::No,
-                        body: FunctionBody::Block(Block {
-                            stmts: vec![Spanned::new(
+                        body: FunctionBody::Block(Block::synthetic(
+                            vec![Spanned::new(
                                 Stmt::VarDecl {
                                     is_const: false,
                                     is_mutable: false,
@@ -4895,8 +4895,8 @@ mod tests {
                                 },
                                 dummy_span(),
                             )],
-                            span: dummy_span(),
-                        }),
+                            dummy_span(),
+                        )),
                         doc_comment: None,
                         span: dummy_span(),
                         param_abis: vec![],

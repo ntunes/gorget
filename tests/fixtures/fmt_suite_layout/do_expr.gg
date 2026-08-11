@@ -1,0 +1,63 @@
+# ==== T-FMT-C · author-written `do:` — kept everywhere the author spelled it
+#
+# AXIS (4 cells): author multi-stmt · author single-terminal ·
+#   author at ARM position · synthetic (catch body) NOT wrapped.
+#
+# `Expr::Do` has TWO producers and the formatter could not tell them apart:
+#   * `parser/expr.rs` — the author typed `do:`;
+#   * `parser/mod.rs`  — `parse_body_or_expr` SYNTHESIZES the variant for an
+#     indented `catch`/`rethrow` body, where `do:` was never written.
+# `Expr::Do.author_spelled` is the typed bit that separates them, set at both
+# construction sites. Deriving it from the shape of the body is not possible:
+# both producers make the same shape.
+#
+# ⚠ ACCEPT/REJECT-RELEVANT, not cosmetic. Wrapping an arm tail in `do:` makes
+#   the tail a READ position: `else: do:` + `^b` is REJECTED with
+#   E_MoveInOperandPosition while `else: ^b` compiles. So both directions —
+#   inserting a `do:` and deleting one — can change whether a program is
+#   accepted.
+#
+# RED pre-fix (recorded 2026-08-11):
+#   * author single-terminal  — `int s = do:` + next-line `1 + 1` was EATEN
+#                               to `int s = 1 + 1`.
+#   * author at ARM position  — `else: do:` + block became bare `else:`
+#                               + block; `format_arm_body` mapped
+#                               `Expr::Block` and `Expr::Do` onto one path.
+#   * author multi-stmt       — `do:` kept, spurious BLANK line after it.
+# GREEN pre-fix / BREAK-AND-WATCH: the synthetic cell. Hardcode
+#   `author_spelled = true` at `parse_body_or_expr` and the catch body grows
+#   a `do:` the author never wrote.
+
+void author_multi():
+    int r = do:
+        int y = 2
+        y + 1
+    print(r)
+
+void author_single_terminal():
+    int s = do:
+        1 + 1
+    print(s)
+
+int author_at_arm(int x):
+    int t = match x:
+        case 1: 1
+        else: do:
+            int y = 2
+            y + 1
+    return t
+
+int risky2(int x):
+    throw "boom"
+
+void synthetic_not_wrapped(int x):
+    int v = risky2(x) catch (e):
+        int t = x + 1
+        t * 2
+    print(v)
+
+void main():
+    author_multi()
+    author_single_terminal()
+    print(author_at_arm(1))
+    synthetic_not_wrapped(1)

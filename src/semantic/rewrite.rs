@@ -489,7 +489,7 @@ fn rename_expr(expr: &mut Spanned<Expr>, aliases: &rustc_hash::FxHashMap<String,
                 rename_expr(ea, aliases);
             }
         }
-        Expr::Block(b) | Expr::Do { body: b } => rename_block(b, aliases),
+        Expr::Block(b) | Expr::Do { body: b, .. } => rename_block(b, aliases),
         Expr::Closure { body, .. } => {
             // Closure params carry an optional type annotation via ClosureParam,
             // but those types are name-resolved by the resolver, not by us.
@@ -851,7 +851,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
             }
             if let Some(ea) = else_arm { rewrite_expr(ea, res, scopes, errors); }
         }
-        Expr::Block(block) | Expr::Do { body: block } => {
+        Expr::Block(block) | Expr::Do { body: block, .. } => {
             rewrite_block(block, res, scopes, errors);
         }
         Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
@@ -1094,10 +1094,10 @@ mod tests {
                     generic_params: None,
                     params: vec![],
                     throws: ThrowsSpec::No,
-                    body: FunctionBody::Block(Block {
-                        stmts: vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
-                        span: dummy_span(),
-                    }),
+                    body: FunctionBody::Block(Block::synthetic(
+                        vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
+                        dummy_span(),
+                    )),
                     doc_comment: None,
                     span: dummy_span(),
                     param_abis: vec![],
@@ -1170,10 +1170,10 @@ mod tests {
                     generic_params: None,
                     params: vec![],
                     throws: ThrowsSpec::No,
-                    body: FunctionBody::Block(Block {
-                        stmts: vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
-                        span: dummy_span(),
-                    }),
+                    body: FunctionBody::Block(Block::synthetic(
+                        vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
+                        dummy_span(),
+                    )),
                     doc_comment: None,
                     span: dummy_span(),
                     param_abis: vec![],
@@ -1254,10 +1254,10 @@ mod tests {
                     generic_params: None,
                     params: vec![],
                     throws: ThrowsSpec::No,
-                    body: FunctionBody::Block(Block {
-                        stmts: vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
-                        span: dummy_span(),
-                    }),
+                    body: FunctionBody::Block(Block::synthetic(
+                        vec![Spanned::new(Stmt::Expr(call_expr), dummy_span())],
+                        dummy_span(),
+                    )),
                     doc_comment: None,
                     span: dummy_span(),
                     param_abis: vec![],

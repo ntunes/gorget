@@ -1,0 +1,74 @@
+# ==== T-FMT-C · author BLANK (and comment) before a clause header
+#
+# `format_block_stmts` preserves an author blank BETWEEN statements, but a
+# clause header (`elif:` / `else:`) is not a statement — it is emitted by its
+# own site, and every one of those sites wrote the header with no blank check
+# at all. So a blank the author wrote to separate a long branch body from the
+# `else:` that follows it was silently deleted.
+#
+# The predicate is `has_blank_line_between`, NOT `blank_line_directly_above`:
+# the blank the author wrote may sit ABOVE a comment run that leads the
+# clause (`blank`, `# note`, `else:`), and the directly-above form reports the
+# COMMENT line and drops that cell.
+#
+# ORDER IS LOAD-BEARING: blank check -> `emit_comments_before` -> write the
+# header. Reversed, the blank -> comment -> else cell emits comment-then-blank
+# and the comment detaches from the clause it documents.
+#
+# AXIS (5 cells): blank before `else` · blank before `elif` · no blank stays
+#   absent · blank -> comment -> else · comment -> else with no blank.
+#
+# RED pre-fix (recorded 2026-08-11): the two blank cells and the
+#   blank->comment->else cell all lost their blank. The two no-blank cells
+#   were GREEN — BREAK-AND-WATCH: make the clause emitter call
+#   `blank_line()` unconditionally and they RED with a blank that was never
+#   written.
+
+void blank_before_else(int x):
+    if x == 1:
+        print(1)
+        print(11)
+
+    else:
+        print(2)
+
+void blank_before_elif(int x):
+    if x == 1:
+        print(1)
+        print(11)
+
+    elif x == 2:
+        print(2)
+
+    else:
+        print(3)
+
+void no_blank_stays_absent(int x):
+    if x == 1:
+        print(1)
+    elif x == 2:
+        print(2)
+    else:
+        print(3)
+
+void blank_then_comment_then_else(int x):
+    if x == 1:
+        print(1)
+
+    # the other half
+    else:
+        print(2)
+
+void comment_then_else_no_blank(int x):
+    if x == 1:
+        print(1)
+    # the other half
+    else:
+        print(2)
+
+void main():
+    blank_before_else(1)
+    blank_before_elif(1)
+    no_blank_stays_absent(1)
+    blank_then_comment_then_else(1)
+    comment_then_else_no_blank(1)

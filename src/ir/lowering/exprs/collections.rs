@@ -926,10 +926,7 @@ fn lower_string_comprehension(
         vec![Spanned::new(
             Stmt::If {
                 condition: cond_expr.clone(),
-                then_body: Block {
-                    stmts: vec![Spanned::new(push_stmt, span)],
-                    span,
-                },
+                then_body: Block::synthetic(vec![Spanned::new(push_stmt, span)], span),
                 elif_branches: vec![],
                 else_body: None,
             },
@@ -938,7 +935,7 @@ fn lower_string_comprehension(
     } else {
         vec![Spanned::new(push_stmt, span)]
     };
-    let body = Block { stmts: body_stmts, span };
+    let body = Block::synthetic(body_stmts, span);
 
     crate::ir::lowering::stmts::for_loops::lower_for_string(
         ctx, builder, &var_name, iter_op, iterable, &body, None,

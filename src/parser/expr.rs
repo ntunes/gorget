@@ -178,7 +178,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         }
 
         // Block / Do — walk statements for expressions
-        Expr::Block(block) | Expr::Do { body: block } => block_contains_it(block),
+        Expr::Block(block) | Expr::Do { body: block, .. } => block_contains_it(block),
 
         // Dot-shorthand: .Variant(args)
         Expr::DotShorthand { args, .. } => args.iter().any(|a| contains_it(&a.node.value)),
@@ -511,7 +511,15 @@ impl Parser {
                 let throw_stmt = self.parse_throw_stmt()?;
                 let span = throw_stmt.span;
                 Ok(Spanned::new(
-                    Expr::Block(Block { stmts: vec![throw_stmt], span }),
+                    // SYNTHETIC wrap — the author wrote `throw x`, not a
+                    // suite. `Inline` keeps the formatter from emitting it on
+                    // its own line (or as `do:` + block), which would invent
+                    // syntax and, for a move-sigil tail, change accept/reject.
+                    Expr::Block(Block {
+                        stmts: vec![throw_stmt],
+                        span,
+                        layout: SuiteLayout::Inline,
+                    }),
                     span,
                 ))
             }
@@ -519,7 +527,12 @@ impl Parser {
                 let return_stmt = self.parse_return_stmt()?;
                 let span = return_stmt.span;
                 Ok(Spanned::new(
-                    Expr::Block(Block { stmts: vec![return_stmt], span }),
+                    // SYNTHETIC wrap — see the `throw` arm above.
+                    Expr::Block(Block {
+                        stmts: vec![return_stmt],
+                        span,
+                        layout: SuiteLayout::Inline,
+                    }),
                     span,
                 ))
             }
@@ -691,7 +704,14 @@ impl Parser {
                 self.advance();
                 let body = self.parse_block()?;
                 let end = self.previous_span();
-                Ok(Spanned::new(Expr::Do { body }, start.merge(end)))
+                // The author typed `do`.
+                Ok(Spanned::new(
+                    Expr::Do {
+                        body,
+                        author_spelled: true,
+                    },
+                    start.merge(end),
+                ))
             }
 
             // Parenthesized expression, tuple, or closure
@@ -1844,12 +1864,19 @@ impl Parser {
             // (lowered as `Expr::Block` doesn't auto-return the last expression).
             let mut block = match body.node {
                 Expr::Block(b) => b,
+                // SYNTHETIC wrap of an EXPRESSION-bodied closure
+                // (`((int a, int b)): a + b`) — the `return` is the parser's,
+                // not the author's, and the body was written on the header's
+                // own line. The `Expr::Block(b)` arm above keeps `b`'s own
+                // layout, so a block-bodied destructuring closure stays
+                // indented.
                 other => Block {
                     stmts: vec![Spanned::new(
                         Stmt::Return(Some(Spanned::new(other, body_span))),
                         body_span,
                     )],
                     span: body_span,
+                    layout: SuiteLayout::Inline,
                 },
             };
             // Build prelude stmts. Iterate in declaration order.

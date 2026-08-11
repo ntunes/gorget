@@ -575,7 +575,7 @@ fn lower_expr_inner(
             lower_block_expr(ctx, builder, block)
         }
 
-        Expr::Do { body } => {
+        Expr::Do { body, .. } => {
             lower_block_expr(ctx, builder, body)
         }
 
@@ -5587,10 +5587,10 @@ mod tests {
         let result = lower_expr(
             &mut ctx,
             &mut builder,
-            &spanned(Expr::Block(Block {
-                stmts: vec![spanned(Stmt::Expr(spanned(Expr::IntLiteral(42))))],
-                span: Span { start: 0, end: 0 },
-            })),
+            &spanned(Expr::Block(Block::synthetic(
+                vec![spanned(Stmt::Expr(spanned(Expr::IntLiteral(42))))],
+                Span { start: 0, end: 0 },
+            ))),
         );
 
         // The block's last expression (42) should be the value

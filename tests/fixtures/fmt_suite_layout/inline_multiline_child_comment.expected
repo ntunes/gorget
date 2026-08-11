@@ -1,0 +1,23 @@
+# ==== T-FMT-C · inline suite, MULTI-LINE child, header trailing comment
+#
+# THE ONE CELL IN THIS DIRECTORY THAT IS NOT A FIXPOINT — see the `.expected`
+# companion. When an inline suite's single statement spans several lines and
+# the header carries a trailing comment, the comment cannot stay on the header
+# line: emitting it there puts the statement inside the comment and the file
+# stops parsing.
+#
+# The comment is CLAIMED at the header (which is what stops the nested
+# match-arm loop's leading hook from pulling it down into the arm list, where
+# it would document the wrong thing) and INJECTED after the child's last line.
+# It reparses, nothing is lost, and a second pass is a fixpoint — but the
+# comment MOVES, and that is the pinned, chosen behaviour rather than an
+# accident.
+
+void main():
+    int y = 2
+    if true: int x = match y:
+        case 2:
+            20
+        else:
+            30  # note
+    print(1)
