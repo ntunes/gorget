@@ -48231,10 +48231,19 @@ fn d27_sh_caret_typearg_suffix() {
 }
 
 /// `^` as an unnamed FUNCTION-TYPE PARAMETER SUFFIX
-/// (`Callable[void(int &, String ^)]`). Deliberate mirror of the only
-/// in-corpus postfix-`!` twin, `callable_bang_arr_indexed_callee`
-/// (integration.rs:38845) — same indexed-callee shape, differing ONLY in the
-/// glyph, so the pair is the accept-both control.
+/// (`Callable[void(int &, String ^)]`). The accept-both control is the only
+/// in-corpus postfix-`!` twin of that POSITION,
+/// `callable_bang_arr_indexed_callee` (integration.rs:39777), whose fn type
+/// (`callable_bang_arr_indexed_callee.gg:27`) is the same two-parameter
+/// `&`/move pair differing in the glyph.
+///
+/// The pair matches on the parse predicate, NOT on the callee shape: this cell
+/// passes the callable as a PARAMETER (`apply(mix, &a, ^greeting)`) while the
+/// `!` control calls it out of a Vector index. That is deliberate and the
+/// fixture header carries the reason — the indexed shape times out on the
+/// self-host runtime lane (filed) and the local-variable shape ICEs the
+/// lowerer, so neither could carry a D27 cell without pinning an unrelated
+/// defect. There is no caret INDEXED-callee cell anywhere in the corpus.
 #[test]
 fn d27_sh_caret_fntype_param_suffix() {
     run_gg("d27_sh_caret_fntype_param_suffix.gg", "hi\n101");
@@ -48295,9 +48304,12 @@ fn d27_caret_fn_type_sigil_before_type_error() {
 ///
 /// GLYPH-INDEPENDENT: the retired-glyph twin panics with a byte-identical
 /// message, so it is NOT a D27 issue. The INDEXED-callee form of the same
-/// program compiles and runs — see `callable_bang_arr_indexed_callee` and
-/// its caret twin `d27_sh_caret_fntype_param_suffix` — so the hole is
-/// specific to calling a Callable-typed local BINDING.
+/// program compiles and runs on the Rust lane — see
+/// `callable_bang_arr_indexed_callee`, the one in-corpus cell of that shape —
+/// so the hole is specific to calling a Callable-typed local BINDING.
+/// (`d27_sh_caret_fntype_param_suffix` is NOT an indexed-callee twin: it
+/// passes its callable as a parameter. It shares the fn-type param-suffix
+/// parse position, not the callee shape.)
 #[test]
 #[ignore = "KNOWN GAP (filed R41 T-RB0): calling a Callable-typed LOCAL \
 VARIABLE with a consuming arg ICEs at src/ir/lowering/mod.rs:2114 (Tier 2a \
