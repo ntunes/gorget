@@ -1,0 +1,25 @@
+# R41 T-FMT-A — the NAMED-argument ownership position, `&` cell.
+#
+# AXIS CELL: `CallArg.ownership` on a NAMED argument. `parse_call_arg` runs
+# `parse_ownership_modifier` BEFORE the `name =` lookahead, so the sigil slot is
+# ahead of the NAME (`&b = x`, the D35 spelling) — not after the `=`.
+#
+# INTENDED: runs and prints `2`, before AND after `gg fmt`. Pre-fix the
+# formatter emitted the name first and the sigil after the `=`
+# (`takes_mut(1, b = &x)`), putting it where the pre-pass cannot see it: the
+# sigil was re-parsed as part of the VALUE and `CallArg.ownership` came back
+# `Borrow`. A WORKING program became 2 semantic errors
+# (E_OwnershipMismatch + E_AmpInOperandPosition).
+#
+# The seed is COMPUTED so no const-fold can elide the call.
+
+void takes_mut(int a, int &b):
+    b = b + 1
+
+int seed():
+    return 1
+
+void main():
+    int x = seed()
+    takes_mut(1, &b = x)
+    print(x)

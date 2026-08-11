@@ -1,0 +1,13 @@
+# R41 T-FMT-A §4 — POS half of the call-argument differential pair.
+#
+# AXIS CELL: the sigil in its legitimate call-argument slot
+# (`CallArg.ownership = Move`, no parens). Accepted before AND after `gg fmt`,
+# with NO parens added. Pins the other direction of the paren predicate: it
+# must fire on the parenthesised-operand shape and stay silent on this one.
+
+void take(Vector[int] ^v):
+    print(v.len())
+
+void main():
+    Vector[int] a = [1, 2]
+    take(^a)

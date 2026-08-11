@@ -4819,6 +4819,7 @@ mod tests {
                     default: None,
                     ownership: Ownership::Borrow,
                     is_meta_op: false,
+                    is_receiver: false,
                 },
                 dummy_span(),
             )],

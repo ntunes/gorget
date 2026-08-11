@@ -4889,6 +4889,60 @@ fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
          would test nothing. Investigate `gg fmt` before trusting this gate."
     );
 
+    // R41 T-FMT-A: the SWEEP-FIDELITY assertion (S1 §4.6(3)). This gate already
+    // fmt-swept a `lib/` copy on every run, and stayed GREEN for the entire time
+    // `gg fmt` was deleting `extern "C"` from that copy — because the bootstrap
+    // never calls those externs. A sweep gate that cannot notice the sweep
+    // CORRUPTING its input is only testing the bootstrap, so pin the one fact
+    // the sweep must preserve: the inline `extern "C"` declaration count, per
+    // file, across the whole scratch tree.
+    //
+    // Placed BEFORE the (slow) bootstrap so a formatter regression fails fast.
+    // RED-verified 2026-08-11 against the pre-fix formatter: fires immediately
+    // with `lib/std/bytes.gg 2 -> 0`.
+    fn assert_extern_abi_preserved(src_dir: &Path, swept_dir: &Path, checked: &mut usize) {
+        let rd = match std::fs::read_dir(src_dir) {
+            Ok(rd) => rd,
+            Err(_) => return,
+        };
+        for entry in rd.flatten() {
+            let from = entry.path();
+            let to = swept_dir.join(entry.file_name());
+            if from.is_dir() {
+                assert_extern_abi_preserved(&from, &to, checked);
+                continue;
+            }
+            if from.extension().and_then(|e| e.to_str()) != Some("gg") {
+                continue;
+            }
+            let before = std::fs::read_to_string(&from).unwrap_or_default();
+            let want = before.matches("extern \"C\" ").count();
+            if want == 0 {
+                continue;
+            }
+            let after = std::fs::read_to_string(&to).unwrap_or_default();
+            let got = after.matches("extern \"C\" ").count();
+            assert_eq!(
+                want, got,
+                "A1 SWEEP FIDELITY FAILED: `gg fmt --in-place` changed the inline \
+                 `extern \"C\"` count in {} ({want} -> {got}). Dropping the ABI tag \
+                 silently re-marshals `String` parameters as by-value 32-byte `Str` \
+                 structs into `const char*` — this gate stayed green over exactly \
+                 that corruption until R41 T-FMT-A.",
+                from.display()
+            );
+            *checked += want;
+        }
+    }
+    let mut abi_tags_checked = 0usize;
+    assert_extern_abi_preserved(&src_lib, &tmp_lib, &mut abi_tags_checked);
+    assert!(
+        abi_tags_checked > 0,
+        "A1 sweep-fidelity canary premise: no inline `extern \"C\"` declarations \
+         found under lib/ — the assertion is vacuous and its premise needs \
+         re-deriving."
+    );
+
     // Bootstrap against the fmt-formatted scratch `lib/`, reusing the cached
     // stage-0 driver (its embedded stdlib is irrelevant — the SH driver reads
     // `lib_dir` from disk, which we point at the mutated copy). A regression in
@@ -9923,19 +9977,25 @@ fn fmt_radix_preserved() {
     );
 }
 
-/// R40 Track D output-review (F1): `gg fmt` MUST preserve a COMMENT-ONLY file
-/// (a source with no items) byte-for-byte. Today it corrupts it — the first
-/// comment gains a spurious 2-space indent and, with >=2 comments, the first
-/// two are GLUED (the line break is dropped): `# a\n# b\n` -> `  # a# b`. Root:
-/// the belt-and-suspenders `emit_trailing_comment_after(self.source.len())` at
-/// `src/formatter/mod.rs:165` misfires on the first EOF-orphan comment when
-/// there is no preceding content to anchor it.
+/// R40 Track D output-review (F1), FIXED in R41 T-FMT-A: `gg fmt` preserves a
+/// COMMENT-ONLY file (a source with no items) byte-for-byte.
 ///
-/// Asserts the INTENDED byte-identical round-trip, so it is RED on HEAD (both
-/// the indent and the glued line break trip it); `#[ignore]`d until the root
-/// cause is fixed, then un-ignore + graduate out of `known_gaps/`.
+/// The corruption was: the first comment gained a spurious 2-space indent and,
+/// with >=2 comments, the first two were GLUED (the line break dropped) —
+/// `# a\n# b\n` -> `  # a# b`. Root cause was the SENTINEL return of
+/// `Formatter::last_real_content_before`, which answered `0` both for "content
+/// ends at byte 0" and for "there is no content at all". In a file with no
+/// items, `format`'s EOF hook took the latter for the former, decided the
+/// file's FIRST comment was a *trailing* comment on a node that had never been
+/// emitted, and injected it with the inline two-space gap into an empty
+/// buffer. The fix makes the empty case a distinct TYPE (`Option<usize>`), so
+/// the trailing hook cannot fire before any content exists.
+///
+/// The fixture stays in `known_gaps/` as its minimal repro; the test itself is
+/// graduated IN PLACE (un-`#[ignore]`d). It is deliberately NOT promoted to a
+/// top-level fixture: it has no `main`, so `gg run` exits 1 and the runtime
+/// parity scan would classify it as a non-MATCH (Core #9 ⊕).
 #[test]
-#[ignore = "known gap (R40 F1): gg fmt corrupts comment-only files; un-ignore when fixed"]
 fn fmt_comment_only_file_preserved() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture =
@@ -9975,6 +10035,42 @@ fn fmt_comment_only_file_preserved() {
         "comment LINE count changed — comments were glued onto one line.\n\
          === formatted ===\n{formatted}"
     );
+}
+
+/// The LIVE VICTIM of the comment-only-file corruption (R41 S2 scout):
+/// `tests/fixtures/self_host_lowerer/reachability.gg` is a real, in-tree,
+/// comment-only module that `gg fmt` ATE one line per pass — the only
+/// non-idempotence in the full-corpus sweep besides the minimal repro.
+///
+/// It needs its own wiring: `fmt_idempotent` enumerates TOP-LEVEL
+/// `tests/fixtures/*.gg` only, so nothing under `self_host_lowerer/` gets
+/// automatic coverage. Pins the stronger property — a FIXED POINT, i.e. the
+/// file is already canonical, not merely stable after one pass.
+///
+/// RED pre-fix: pass 1 glued the first two comments and indented them
+/// (`  # Reachability analysis module.#`), and each further pass consumed
+/// another line.
+#[test]
+fn fmt_comment_only_live_victim_is_fixed_point() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/self_host_lowerer/reachability.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    assert!(
+        source.lines().all(|l| l.trim().is_empty() || l.trim_start().starts_with('#')),
+        "canary premise: reachability.gg is no longer comment-only, so it no \
+         longer exercises this class — re-derive the cell."
+    );
+
+    let first = gorget::formatter::format_source_infallible(&source);
+    assert_eq!(
+        first.trim_end_matches('\n'),
+        source.trim_end_matches('\n'),
+        "gg fmt is not a FIXED POINT on the comment-only self-host module.\n\
+         === source ===\n{source}\n=== formatted ===\n{first}"
+    );
+    let second = gorget::formatter::format_source_infallible(&first);
+    assert_eq!(first, second, "gg fmt is not idempotent on reachability.gg");
 }
 
 /// Round XXXVIII Track C (gorget-js snag #15 Class 2): `Expr::DefaultOp`
@@ -10623,6 +10719,1147 @@ fn fmt_preserves_noreturn_qualifier() {
         source_noreturn_count, formatted_noreturn_count,
         formatted.lines().filter(|l| l.contains("die") || l.contains("noreturn")).collect::<Vec<_>>().join("\n")
     );
+}
+
+// ══════════════════════════════════════════════════════════════
+// R41 T-FMT-A — the formatter's SILENT-DROP class
+// ══════════════════════════════════════════════════════════════
+//
+// SECOND episode of the class the two tests above retired one member of
+// (R39: `blocking` / `noreturn`). `gg fmt` walks the AST and re-emits source;
+// any fact-carrying field an emission arm forgets is DELETED from the user's
+// program, silently, with no diagnostic and no round-trip failure — the output
+// re-parses fine, it just means something else.
+//
+// The members retired here:
+//   §1  `FunctionDef.extern_abi`      — FFI marshalling (String → cstr)
+//   §2  `FunctionDef.returns_borrowed` — FFI return ownership, BOTH forms
+//   §3  `Param` receiver-vs-named-`Self` — destroyed the parameter's NAME
+//   §4  the two `parse_ownership_modifier` operand positions — accept-flips
+//   §5  comments interior to an `extern:` block — escaped to column 0
+//   §6  comment-only files — comments glued onto one indented line
+//
+// The class-retiring guards are `fmt_ast_fact_field_projection_round_trips`
+// (below) plus `formatter_child_collection_loop_census` in tests/lints.rs.
+//
+// FIXTURE PLACEMENT: the `.gg` files live in `tests/fixtures/fmt_silent_drops/`
+// — a SUBDIRECTORY. `runtime_parity_corpus` and `fmt_idempotent` both enumerate
+// with a top-level `read_dir`, so nothing here is picked up automatically (the
+// self-host parser skips `abi`/`borrowed` without recording them, so a
+// top-level fmt fixture would blow `RUNTIME_DIFF_NONMATCH_CEILING`, which
+// Core #9 ⊕ forbids raising for a round's own inflow). Every fixture below is
+// therefore wired to a NAMED test by hand.
+
+/// Differential helper for the §4 parse-order cells: `gg fmt` must not change
+/// what `gg check` SAYS about a program.
+///
+/// Compares the accept/reject bit AND the set of `E_*` diagnostic codes,
+/// before and after formatting. The code-set comparison matters: the
+/// move-closure cell flipped from one rejection to a DIFFERENT rejection on
+/// its way to the accept-flip, and a bare success/failure bit would have
+/// called that green.
+fn assert_fmt_preserves_check_verdict(fixture: &str) {
+    fn codes(stderr: &str) -> Vec<String> {
+        let mut v: Vec<String> = stderr
+            .split("error[")
+            .skip(1)
+            .filter_map(|s| s.split(']').next())
+            .map(|s| s.to_string())
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture_path.display()));
+
+    let before = build_with_timeout(gg_command("check").arg(&fixture_path), fixture);
+    let before_ok = before.status.success();
+    let before_codes = codes(&String::from_utf8_lossy(&before.stderr));
+
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let after_path = tmp.path().join(
+        fixture_path.file_name().expect("fixture has a file name"),
+    );
+    std::fs::write(&after_path, &formatted).expect("write formatted fixture");
+
+    let after = build_with_timeout(gg_command("check").arg(&after_path), fixture);
+    let after_ok = after.status.success();
+    let after_codes = codes(&String::from_utf8_lossy(&after.stderr));
+
+    assert_eq!(
+        before_ok, after_ok,
+        "R41 T-FMT-A: `gg fmt` FLIPPED the accept/reject verdict for {fixture} \
+         ({before_ok} → {after_ok}).\n=== source ===\n{source}\n=== formatted ===\n{formatted}"
+    );
+    assert_eq!(
+        before_codes, after_codes,
+        "R41 T-FMT-A: `gg fmt` changed the DIAGNOSTIC SET for {fixture} \
+         ({before_codes:?} → {after_codes:?}).\n\
+         === source ===\n{source}\n=== formatted ===\n{formatted}"
+    );
+}
+
+/// §4 cell — for-iterable, parenthesised move OPERAND (the reject side).
+/// RED pre-fix: rejected `E_MoveInOperandPosition` before fmt, ACCEPTED after.
+#[test]
+fn fmt_preserves_check_verdict_for_iterable_paren_move() {
+    assert_fmt_preserves_check_verdict("fmt_silent_drops/for_iterable_paren_move_operand.gg");
+}
+
+/// §4 cell — for-iterable, sigil in its legitimate MODIFIER slot (the accept
+/// side). Pins that the paren fix does not fire where it must not.
+#[test]
+fn fmt_preserves_check_verdict_for_iterable_move_modifier() {
+    assert_fmt_preserves_check_verdict("fmt_silent_drops/for_iterable_move_modifier.gg");
+    // …and that no parens were introduced around a well-formed move-iterable.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(
+        manifest_dir.join("tests/fixtures/fmt_silent_drops/for_iterable_move_modifier.gg"),
+    )
+    .expect("read for_iterable_move_modifier.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert!(
+        formatted.contains("for i in ^coll:"),
+        "paren predicate over-fired: a bare move-iterable gained parens.\n{formatted}"
+    );
+}
+
+/// §4 cell — call argument, parenthesised move OPERAND (the reject side).
+/// RED pre-fix: rejected before fmt, ACCEPTED after.
+#[test]
+fn fmt_preserves_check_verdict_call_arg_paren_move() {
+    assert_fmt_preserves_check_verdict("fmt_silent_drops/call_arg_paren_move_operand.gg");
+}
+
+/// §4 cell — call argument, sigil in its legitimate slot (the accept side).
+#[test]
+fn fmt_preserves_check_verdict_call_arg_move_sigil() {
+    assert_fmt_preserves_check_verdict("fmt_silent_drops/call_arg_move_sigil.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let source = std::fs::read_to_string(
+        manifest_dir.join("tests/fixtures/fmt_silent_drops/call_arg_move_sigil.gg"),
+    )
+    .expect("read call_arg_move_sigil.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert!(
+        formatted.contains("take(^a)"),
+        "paren predicate over-fired: a bare move argument gained parens.\n{formatted}"
+    );
+}
+
+/// §4 cell — the RUN differential: a move-CLOSURE argument. This is the shape
+/// that turned a working program into a rejected one, so it is pinned on
+/// OUTPUT, not merely on the accept bit.
+///
+/// RED pre-fix: `10` before fmt; `E_OwnershipMismatch` (no output) after.
+#[test]
+fn fmt_preserves_run_output_call_arg_paren_move_closure() {
+    assert_fmt_preserves_check_verdict("fmt_silent_drops/call_arg_paren_move_closure.gg");
+    // Both spellings must actually RUN and print the same thing.
+    run_gg("fmt_silent_drops/call_arg_paren_move_closure.gg", "10");
+}
+
+/// The NAMED-argument ownership position — one differential cell per sigil.
+///
+/// `parse_call_arg` runs `parse_ownership_modifier` BEFORE the `name =`
+/// lookahead, so `CallArg.ownership` on a named argument was written by a sigil
+/// in the NAME's slot (`f(&b = x)`, the D35 spelling) and must be re-emitted
+/// there. Emitting it after the `=` puts it where the pre-pass cannot see it,
+/// and the sigil is silently re-homed into the VALUE expression.
+///
+/// RED-verified: pre-fix, `takes_mut(1, &b = x)` RAN and printed `2` while the
+/// formatted `takes_mut(1, b = &x)` was REJECTED with 2 semantic errors
+/// (E_OwnershipMismatch + E_AmpInOperandPosition) — a working program broken by
+/// `gg fmt`. Same for the `^` cell.
+#[test]
+fn fmt_preserves_named_arg_ownership_sigil() {
+    for (fixture, expect) in [
+        ("fmt_silent_drops/named_arg_mut_borrow_sigil.gg", "2"),
+        ("fmt_silent_drops/named_arg_move_sigil.gg", "3"),
+    ] {
+        assert_fmt_preserves_check_verdict(fixture);
+        run_gg(fixture, expect);
+    }
+    // …and the sigil must land in the NAME's slot, not after the `=`.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for (fixture, want) in [
+        ("fmt_silent_drops/named_arg_mut_borrow_sigil.gg", "takes_mut(1, &b = x)"),
+        ("fmt_silent_drops/named_arg_move_sigil.gg", "take(1, ^v = xs)"),
+    ] {
+        let src = std::fs::read_to_string(manifest_dir.join("tests/fixtures").join(fixture))
+            .unwrap_or_else(|e| panic!("cannot read {fixture}: {e}"));
+        let f = gorget::formatter::format_source_infallible(&src);
+        assert!(
+            f.lines().any(|l| l.trim() == want),
+            "named-arg ownership sigil moved out of the NAME's slot — expected \
+             `{want}` in the formatted {fixture}.\n{f}"
+        );
+    }
+}
+
+/// §4 NEGATIVE cells — the paren guard must not OVER-fire.
+///
+/// Two shapes emit a leading sigil-looking token yet need NO parens, and
+/// guarding them is pure churn on live code:
+///
+///   1. A NAMED call argument. `parse_call_arg` runs `parse_ownership_modifier`
+///      BEFORE the `name =` lookahead, so the stripped position is ahead of the
+///      NAME (`f(&b = x)`), not ahead of the value — `f(b = &x)`'s value is
+///      parsed with no pre-pass and keeps its sigil unaided.
+///   2. `meta <op>`. It emits the literal `meta ` prefix first, so the leading
+///      char is `m` regardless of the operator's own spelling.
+///
+/// RED-verified against the first cut of the predicate, which churned BOTH on
+/// real in-tree files:
+///   `known_gaps/sound_named_arg_sigil_dropped.gg` → `takes_bare(1, b = (&x))`
+///   `lib/xtd/tensor.gg:627`                       → `..., (meta !=))`
+#[test]
+fn fmt_ownership_paren_guard_does_not_over_fire() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    // Cell 1 — named argument whose VALUE carries the sigil.
+    let named = manifest_dir.join("tests/fixtures/known_gaps/sound_named_arg_sigil_dropped.gg");
+    let src = std::fs::read_to_string(&named)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", named.display()));
+    // ⚠ Match the CODE line, not the file text: this fixture's header PROSE
+    // also spells `takes_bare(1, b = &x)` (twice), so a bare `contains` is
+    // satisfied by the comment and can never see the churn. That vacuity was
+    // caught by RED-verifying this very cell — the exact Core #12 trap.
+    fn code_line(text: &str, starts_with: &str) -> String {
+        text.lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with('#'))
+            .find(|l| l.starts_with(starts_with))
+            .unwrap_or_else(|| panic!("no code line starting `{starts_with}` in:\n{text}"))
+            .to_string()
+    }
+    assert_eq!(
+        code_line(&src, "takes_bare("),
+        "takes_bare(1, b = &x)",
+        "canary premise: the named-arg repro's CODE line changed."
+    );
+    let f = gorget::formatter::format_source_infallible(&src);
+    assert_eq!(
+        code_line(&f, "takes_bare("),
+        "takes_bare(1, b = &x)",
+        "paren guard OVER-FIRED on a NAMED argument's value — the sigil there is \
+         not in a `parse_ownership_modifier` position.\n{f}"
+    );
+
+    // Cell 2 — `meta <op>` where the OPERATOR's own spelling starts with a
+    // sigil character.
+    //
+    // AXIS SCOPE, measured not assumed: `binary_op_from_token`
+    // (`src/parser/expr.rs`) accepts exactly `+ - * ** / == != < > <= >=`, so
+    // `!=` is the ONLY `meta <op>` spelling whose operator token begins with a
+    // stripped sigil — `&` (BitAnd) and `^` (BitXor) have `binary_op_str`
+    // spellings that would trip the same mistake but are UNREACHABLE through
+    // this surface (`meta &` is a parse error). That is why the first cut of
+    // the predicate manifested only on `!=`, and why this is a one-cell axis
+    // rather than a three-cell one.
+    let meta_src = "int apply[Numeric T](T a, T b, meta op):\n    \
+        T r = a meta[op] b\n    return r\n\
+        int ne[Numeric T](T a, T b): apply[T](a, b, meta !=)\n";
+    assert_fmt_round_trips("meta_op_token_no_parens", meta_src);
+    let f = gorget::formatter::format_source_infallible(meta_src);
+    // ⚠ Assert the ABSENCE of the wrap, not the presence of the unwrapped
+    // text: the churned form `(meta !=)` CONTAINS `meta !=)`, so a positive
+    // `contains` is satisfied by the very output it is meant to reject. Same
+    // vacuity class as the comment-matched `takes_bare` cell above.
+    assert!(
+        !f.contains("(meta "),
+        "paren guard OVER-FIRED on `meta !=` — `meta <op>` emits the `meta ` \
+         prefix first, so its leading character is never a stripped sigil.\n{f}"
+    );
+    // And the real in-tree victim, so the cell tracks live code too.
+    let tensor = manifest_dir.join("lib/xtd/tensor.gg");
+    let tsrc = std::fs::read_to_string(&tensor)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", tensor.display()));
+    let tf = gorget::formatter::format_source_infallible(&tsrc);
+    assert_eq!(
+        tsrc.matches("meta !=").count(),
+        tf.matches("meta !=").count(),
+        "paren guard changed the `meta !=` rendering in lib/xtd/tensor.gg"
+    );
+    assert!(
+        !tf.contains("(meta "),
+        "paren guard wrapped a `meta <op>` token in lib/xtd/tensor.gg"
+    );
+}
+
+/// The MISATTRIBUTION face of the comment class (R41 T-FMT-A follow-up): a
+/// comment written on its own line above a BRANCH HEADER — `case`, `elif`,
+/// `else` — belongs to the branch, but with no leading hook on those loops it
+/// fell through to `format_block_stmts` and was re-emitted INSIDE the branch
+/// body, where it documents the wrong thing.
+///
+/// Sibling of the extern-block ESCAPE face (§5): same missing-hook root, other
+/// direction. Found because the loop census was rewritten to detect loops by
+/// SHAPE — the field-name detector could not see these four `arms` loops at
+/// all, which is precisely the "can this guard catch its own class?" trap.
+///
+/// RED-verified pre-fix: every marker below moved one line down, inside the
+/// branch body, at body indent.
+#[test]
+fn fmt_branch_header_comments_stay_on_the_branch() {
+    // ONE CELL PER `Leading` LOOP in the census — all six, not a selection:
+    //   Stmt::Match arms · Stmt::Select arms · Stmt::MetaMatch arms ·
+    //   match-EXPRESSION arms · `elif` · `else`.
+    //
+    // The match-EXPRESSION cell is the one with the worst pre-fix behaviour:
+    // without its hook BOTH arm comments are EJECTED OUT of the match entirely
+    // and land after it (the ESCAPE face, as with extern blocks), not merely
+    // pushed one line down into a body. Measured 2026-08-11 by deleting the
+    // hook — and it was UNPINNED until this cell existed.
+    let src = "void main():\n    \
+        int x = 2\n    \
+        match x:\n        \
+        # above first case\n        \
+        case 1:\n            print(1)\n        \
+        # above second case\n        \
+        case 2:\n            print(2)\n        \
+        else:\n            print(3)\n    \
+        int y = match x:\n        \
+        # above expr case\n        \
+        case 1: 10\n        \
+        else: 30\n    \
+        print(y)\n    \
+        select:\n        \
+        # above select case\n        \
+        case int v = ch.recv():\n            print(v)\n    \
+        meta match 1:\n        \
+        # above meta case\n        \
+        case 1:\n            print(1)\n    \
+        if x == 1:\n        print(4)\n    \
+        # above elif\n    \
+        elif x == 2:\n        print(5)\n    \
+        # above else\n    \
+        else:\n        print(6)\n";
+    assert_fmt_round_trips("branch_header_comments", src);
+    let f = gorget::formatter::format_source_infallible(src);
+
+    // Each marker must be followed by its branch header on the NEXT non-blank
+    // line — i.e. it still leads the branch rather than having sunk into a body.
+    let lines: Vec<&str> = f.lines().collect();
+    for (marker, header) in [
+        // Stmt::Match arms
+        ("# above first case", "case 1:"),
+        ("# above second case", "case 2:"),
+        // match-EXPRESSION arms (the ejection cell)
+        ("# above expr case", "case 1: 10"),
+        // Stmt::Select arms
+        ("# above select case", "case int v = ch.recv():"),
+        // Stmt::MetaMatch arms
+        ("# above meta case", "case 1:"),
+        // format_elif_else_blocks — the `elif` loop and the `else` branch
+        ("# above elif", "elif x == 2:"),
+        ("# above else", "else:"),
+    ] {
+        let i = lines
+            .iter()
+            .position(|l| l.trim() == marker)
+            .unwrap_or_else(|| panic!("marker `{marker}` vanished.\n{f}"));
+        let next = lines[i + 1..]
+            .iter()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or_else(|| panic!("nothing after `{marker}`.\n{f}"));
+        assert_eq!(
+            next.trim(),
+            header,
+            "`{marker}` was misattributed — it should lead `{header}`, but the \
+             next line is `{}`. A branch-header comment sinking into the branch \
+             BODY is the misattribution face of the missing-hook class.\n{f}",
+            next.trim()
+        );
+        // …and at the branch's own indent, not the body's.
+        assert_eq!(
+            lines[i].len() - lines[i].trim_start().len(),
+            next.len() - next.trim_start().len(),
+            "`{marker}` is not at its branch's indent.\n{f}"
+        );
+    }
+}
+
+/// §1 cell — the FFI-marshalling instrument. `--emit-c-lir` is the ONLY
+/// instrument that sees the dropped `extern "C"`: `gg check` and `gg build`
+/// are both green over the corrupted form.
+///
+/// RED pre-fix: the emitted call went from
+/// `puts(gorget_str_to_cstr(*(Str*)__v1))` to `puts(*(Str*)__v1)` — a 32-byte
+/// `Str` struct passed by value into a `const char*` parameter.
+#[test]
+fn fmt_preserves_extern_abi_marshalling() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path =
+        manifest_dir.join("tests/fixtures/fmt_silent_drops/extern_abi_string_param.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture_path.display()));
+
+    fn marshalled_call(path: &Path, label: &str) -> String {
+        let out = build_with_timeout(gg_command("build").arg("--emit-c-lir").arg(path), label);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        stdout
+            .lines()
+            .find(|l| l.contains("= puts("))
+            .unwrap_or_else(|| {
+                panic!("no `= puts(` call in --emit-c-lir output for {label}:\n{stdout}")
+            })
+            .trim()
+            .to_string()
+    }
+
+    let before = marshalled_call(&fixture_path, "extern_abi_string_param (source)");
+    assert!(
+        before.contains("gorget_str_to_cstr"),
+        "canary premise: the `extern \"C\"` String param no longer marshals via \
+         gorget_str_to_cstr — this test's instrument is stale.\ngot: {before}"
+    );
+
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert!(
+        formatted.contains("extern \"C\" int gg_puts_probe"),
+        "R41 T-FMT-A: `gg fmt` dropped the `extern \"C\"` ABI tag.\n{formatted}"
+    );
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let after_path = tmp.path().join("extern_abi_string_param.gg");
+    std::fs::write(&after_path, &formatted).expect("write formatted fixture");
+    let after = marshalled_call(&after_path, "extern_abi_string_param (formatted)");
+
+    assert_eq!(
+        before, after,
+        "R41 T-FMT-A: `gg fmt` CHANGED the FFI marshalling of an `extern \"C\"` \
+         String parameter — the ABI tag was dropped and the 32-byte `Str` struct \
+         is now passed by value into a `const char*`.\n=== formatted ===\n{formatted}"
+    );
+}
+
+/// §1/§2 cells — the extern surface, exercised through `assert_fmt_round_trips`
+/// (round-trip + idempotence + re-parse) plus explicit content assertions.
+///
+/// The round-trip helper alone is NOT sufficient here and that is the point of
+/// the class: pre-fix, `extern "C" int puts(String s)` formatted to
+/// `extern int puts(String s)`, which re-parses perfectly and is idempotent. It
+/// simply means something else. Hence the content assertions.
+#[test]
+fn fmt_preserves_extern_abi_and_borrowed() {
+    // §1 cell 1 — single-decl ABI tag.
+    // RED pre-fix: `extern "C" int puts(...)` → `extern int puts(...)`.
+    let abi_single = "extern \"C\" int puts(String s) = \"puts\"\n";
+    assert_fmt_round_trips("extern_abi_single_decl", abi_single);
+    let f = gorget::formatter::format_source_infallible(abi_single);
+    assert!(
+        f.contains("extern \"C\" int puts(String s) = \"puts\""),
+        "§1: single-decl `extern \"C\"` ABI tag dropped.\n{f}"
+    );
+
+    // §2 cell 2 — single-decl `borrowed`, AND the cstr REPARSE cell: `cstr` is
+    // legal ONLY inside `extern "C"`, so dropping the tag made the output fail
+    // to re-parse at all (`assert_fmt_round_trips` covers that half).
+    // RED pre-fix: → `extern cstr SDL_GetError()` (tag AND `borrowed` gone).
+    let borrowed_single = "extern \"C\" borrowed cstr SDL_GetError() = \"SDL_GetError\"\n";
+    assert_fmt_round_trips("extern_borrowed_single_decl", borrowed_single);
+    let f = gorget::formatter::format_source_infallible(borrowed_single);
+    assert!(
+        f.contains("extern \"C\" borrowed cstr SDL_GetError()"),
+        "§2: single-decl `borrowed` (or the ABI tag) dropped.\n{f}"
+    );
+
+    // §2 cell 3 — BLOCK form `borrowed`. The block PRESERVED the ABI (it lives
+    // on `ExternBlock`) but dropped `borrowed`, which is per-ITEM in both forms.
+    // RED pre-fix: → `extern cstr SDL_GetError() = ...` inside the block.
+    let borrowed_block = "extern \"C\":\n    \
+        extern borrowed cstr SDL_GetError() = \"SDL_GetError\"\n    \
+        extern int puts(String s) = \"puts\"\n";
+    assert_fmt_round_trips("extern_borrowed_block_form", borrowed_block);
+    let f = gorget::formatter::format_source_infallible(borrowed_block);
+    assert!(
+        f.contains("extern borrowed cstr SDL_GetError()"),
+        "§2: block-form `borrowed` dropped.\n{f}"
+    );
+
+    // §1 cell 4 — the ABI tag must NOT be double-emitted onto block ITEMS.
+    // Block items carry `extern_abi = None` (the tag lives on `ExternBlock`),
+    // so exactly ONE `"C"` may appear — on the block header.
+    assert_eq!(
+        f.matches('"').filter(|_| true).count(),
+        borrowed_block.matches('"').count(),
+        "§1: quote count changed — the ABI tag was double-emitted onto block items \
+         (or a symbol string was mangled).\n{f}"
+    );
+    assert!(
+        !f.contains("extern \"C\" borrowed"),
+        "§1: the block's ABI tag was ALSO emitted on an item.\n{f}"
+    );
+
+    // §1/§2 cell 5 — QUALIFIER ORDER. The parser accepts exactly
+    // `extern` → ABI → qualifiers → `borrowed` → return type; an emission in
+    // any other order does not re-parse.
+    // RED pre-fix: → `extern blocking noreturn cstr fatal(...)`.
+    let ordered = "extern \"C\" blocking noreturn borrowed cstr fatal(cstr msg) = \"gg_fatal\"\n";
+    assert_fmt_round_trips("extern_full_qualifier_order", ordered);
+    let f = gorget::formatter::format_source_infallible(ordered);
+    assert!(
+        f.contains("extern \"C\" blocking noreturn borrowed cstr fatal(cstr msg)"),
+        "§1/§2: extern qualifier ORDER is not the parser's order.\n{f}"
+    );
+}
+
+/// §1 cell 6 — the LIVE canary over `lib/std/`, mirroring
+/// `fmt_preserves_blocking_extern_qualifier`. The A1 gate fmt-sweeps a copy of
+/// `lib/` on every run and stayed green over this corruption for the whole
+/// time it was live, because the bootstrap never calls these externs.
+///
+/// RED pre-fix: every `extern "C"` in `lib/std/` formatted away to `extern `
+/// (measured on `lib/std/bytes.gg`: 2 → 0).
+#[test]
+fn fmt_preserves_lib_std_extern_abi_tags() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut checked = 0usize;
+    let mut total_tags = 0usize;
+    let lib_std = manifest_dir.join("lib/std");
+    for entry in std::fs::read_dir(&lib_std).expect("cannot read lib/std") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("gg") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        // Only the INLINE `extern "C" <...>` declaration form is at risk; the
+        // `extern "C":` block header was always preserved.
+        let want = source.matches("extern \"C\" ").count();
+        if want == 0 {
+            continue;
+        }
+        checked += 1;
+        total_tags += want;
+        let formatted = gorget::formatter::format_source_infallible(&source);
+        let got = formatted.matches("extern \"C\" ").count();
+        assert_eq!(
+            want, got,
+            "R41 T-FMT-A: `gg fmt` changed the inline `extern \"C\"` count in {} \
+             ({want} → {got}) — dropping the tag silently re-marshals String \
+             parameters as by-value structs.",
+            path.display()
+        );
+    }
+    assert!(
+        checked > 0 && total_tags > 0,
+        "canary premise: no inline `extern \"C\"` declarations found under lib/std — \
+         this test is now vacuous and its premise needs re-deriving."
+    );
+}
+
+/// §3 cells — a `Self`-TYPED parameter keeps its NAME; a RECEIVER keeps its
+/// bare spelling. Five cells over the two axes that matter: the ownership
+/// sigil (borrow / `&` / `^`) crossed with receiver-vs-named.
+///
+/// RED pre-fix: `format_param` inferred "receiver" from `type_ ==
+/// Type::SelfType` and discarded the name, so all three named forms collapsed
+/// to `self` / `&self` / `^self` and the emitted bodies referenced an
+/// UNDEFINED identifier. The named cells are the ones that were broken; the
+/// receiver cells pin that the typed `is_receiver` read did not break them.
+#[test]
+fn fmt_named_self_typed_param_keeps_name() {
+    let src = "struct Point:\n    int x\n\n\
+        equip Point:\n    \
+        int get(Self a):\n        return a.x\n\n    \
+        void bump(Self &a):\n        a.x = a.x + 1\n\n    \
+        int eat(Self ^a):\n        return a.x\n\n    \
+        int me(self):\n        return self.x\n\n    \
+        void memut(&self):\n        self.x = 1\n\n    \
+        int mymove(^self):\n        return self.x\n";
+    assert_fmt_round_trips("named_self_typed_param", src);
+    let f = gorget::formatter::format_source_infallible(src);
+
+    // Cells 1-3: named `Self`-typed params, one per ownership spelling.
+    for cell in ["int get(Self a)", "void bump(Self &a)", "int eat(Self ^a)"] {
+        assert!(
+            f.contains(cell),
+            "§3: named `Self`-typed param destroyed — expected `{cell}`.\n{f}"
+        );
+    }
+    // Cells 4-5: the receiver forms stay bare (all three spellings).
+    for cell in ["int me(self)", "void memut(&self)", "int mymove(^self)"] {
+        assert!(
+            f.contains(cell),
+            "§3: receiver spelling changed — expected `{cell}`.\n{f}"
+        );
+    }
+    // The emitted program must still NAME-RESOLVE: the pre-fix output referenced
+    // an undefined `a`, which round-trip/idempotence alone never noticed.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let p = tmp.path().join("named_self_typed_param.gg");
+    std::fs::write(&p, &f).expect("write formatted source");
+    let out = build_with_timeout(gg_command("check").arg(&p), "named_self_typed_param");
+    assert!(
+        out.status.success(),
+        "§3: `gg fmt` output does not name-resolve.\n=== formatted ===\n{f}\n=== stderr ===\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// §5 cells — comments interior to an `extern:` block. Four cells: the doc
+/// comment ABOVE the block, a LEADING comment inside it, a BETWEEN-items
+/// comment, and the block HEADER's own trailing comment.
+///
+/// RED pre-fix: `format_extern_block`'s item loop was the one child-collection
+/// loop in the formatter with NO comment hooks at all, so every interior
+/// comment escaped and re-emerged at COLUMN 0 after the block.
+#[test]
+fn fmt_extern_block_interior_comments_stay_inside() {
+    let src = "# doc above the block\n\
+        extern \"C\":  # why we bind these\n    \
+        # leading comment\n    \
+        extern int puts(String s) = \"puts\"\n    \
+        # between items\n    \
+        extern int getpid() = \"getpid\"\n";
+    assert_fmt_round_trips("extern_block_interior_comments", src);
+    let f = gorget::formatter::format_source_infallible(src);
+
+    // Cell 1: the doc comment above the block stays at column 0.
+    assert!(
+        f.lines().any(|l| l == "# doc above the block"),
+        "§5: the block's leading doc comment moved.\n{f}"
+    );
+    // Cell 2: the header's own trailing comment stays ON the header line.
+    assert!(
+        f.lines().any(|l| l.starts_with("extern \"C\":") && l.contains("# why we bind these")),
+        "§5: the `extern \"C\":` header trailing comment detached.\n{f}"
+    );
+    // Cells 3-4: interior comments keep the block's indent — the escape
+    // symptom was these landing at column 0 AFTER the block.
+    for cell in ["# leading comment", "# between items"] {
+        assert!(
+            f.lines().any(|l| l.starts_with("    ") && l.trim() == cell),
+            "§5: `{cell}` escaped the extern block (expected it indented INSIDE).\n{f}"
+        );
+    }
+}
+
+/// KNOWN GAP (R41 T-FMT-A, filed 2026-08-11): the LAST interior comment of a
+/// container block dedents to column 0, escaping the block.
+///
+/// Found while wiring §5's extern-block hooks, and deliberately NOT fixed
+/// there: it reproduces identically in ALL FIVE container formatters
+/// (struct / enum / trait / equip / extern block) AND — measured 2026-08-11 —
+/// in ordinary STATEMENT BODIES (fn / if / while / for), because
+/// `format_block_stmts` has the identical shape. So it needs a shared
+/// orphan-pre-close flush before each `dedent()`; patching only the extern
+/// block would be an instance-fix where a class exists (Core #4). The shape to
+/// generalise already exists for collection literals
+/// (`format_bracketed_broken_with_comments`'s orphan-pre-close flush).
+///
+/// The dedent DEPTH varies by shape (a fn-body or for-body tail lands at column
+/// 0; an if-body or while-body tail lands at the enclosing indent) — cosmetic
+/// variation on one mechanism, not separate bugs. Asserting BOTH faces here
+/// stops a container-only fix from closing this gap by halves.
+///
+/// Asserts the INTENDED indented output, so it is RED at HEAD; un-ignore and
+/// graduate out of `known_gaps/` the round the shared flush lands.
+#[test]
+#[ignore = "known gap (R41 T-FMT-A): last interior comment of struct/enum/trait/equip/extern blocks dedents to column 0; un-ignore when the shared orphan-pre-close flush lands"]
+fn fmt_container_last_interior_comment_stays_inside() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_container_last_interior_comment_dedents.gg");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // One cell per SHAPE — a partial fix fingers exactly what it missed.
+    // Containers (indent 4) …
+    for container in ["struct", "enum", "trait", "equip", "extern block"] {
+        let marker = format!("# trailing in {container}");
+        assert!(
+            formatted
+                .lines()
+                .any(|l| l.starts_with("    ") && l.trim() == marker),
+            "`{marker}` escaped its container (expected it INDENTED inside).\n\
+             === formatted ===\n{formatted}"
+        );
+    }
+    // … and statement bodies: the fn body sits at indent 4, the if/while/for
+    // bodies one level deeper at indent 8.
+    for (body, indent) in [
+        ("fn body", 4usize),
+        ("if body", 8),
+        ("while body", 8),
+        ("for body", 8),
+    ] {
+        let marker = format!("# trailing in {body}");
+        assert!(
+            formatted.lines().any(|l| {
+                l.trim() == marker && l.len() - l.trim_start().len() == indent
+            }),
+            "`{marker}` dedented out of its block (expected it at indent \
+             {indent}).\n=== formatted ===\n{formatted}"
+        );
+    }
+}
+
+/// The CLASS-RETIRING guard (Core #6): a hand-written projection of every
+/// fact-carrying AST field, compared across a `gg fmt` round trip.
+///
+/// This is the guard the class kept slipping past. `assert_fmt_round_trips`
+/// only asks "does the output re-parse, and is it stable?" — and every member
+/// of this class answers YES while meaning something else. The projection asks
+/// the question that actually matters: does the re-parsed AST carry the SAME
+/// FACTS?
+///
+/// **Hand-written on purpose.** `#[derive(PartialEq)]` on the AST is not an
+/// option: `Spanned<T>` already derives `PartialEq` AND carries a `Span`, so
+/// the derive route compares source positions and is red on arrival. And this
+/// deliberately does NOT extend the `format_*_canonical` family — that is the
+/// Rust-vs-self-host `parser_comparison` oracle, an always-pass diagnostic;
+/// growing it would degrade parser-parity reporting silently.
+///
+/// **The baseline is COMPLETE, not a selection** (Core #15e Q3): it carries the
+/// ALREADY-FIXED members of the class (`is_meta_op`, `blocking`, `noreturn`)
+/// beside this round's (`extern_abi`, `returns_borrowed`, `is_receiver`) and
+/// this round's own §4 ownership axes (`Stmt::For.ownership`,
+/// `CallArg.ownership`). A field-COUNT pin fires only on NEW fields, so an
+/// incomplete baseline here would be invisible to it.
+///
+/// The walk descends into equip / trait / extern-BLOCK members — top-level-only
+/// would be vacuous for exactly the shapes this round fixes.
+#[test]
+fn fmt_ast_fact_field_projection_round_trips() {
+    for (label, src) in fact_field_corpus() {
+        let formatted = gorget::formatter::format_source_infallible(src);
+        let before = project_facts(src, label);
+        let after = project_facts(&formatted, label);
+        assert_eq!(
+            before, after,
+            "R41 T-FMT-A class guard: `gg fmt` changed an AST FACT for `{label}`.\n\
+             The output re-parses and is idempotent — it simply means something \
+             else. Left = source facts, right = formatted facts.\n\
+             === source ===\n{src}\n=== formatted ===\n{formatted}"
+        );
+        assert!(
+            !before.is_empty(),
+            "corpus entry `{label}` projects NO facts — it carries none of the \
+             fields this guard pins, so it is dead weight in the corpus."
+        );
+    }
+}
+
+/// The guard's corpus. Every entry must CARRY the fields non-trivially — a
+/// corpus of fact-free programs makes the projection vacuously equal.
+fn fact_field_corpus() -> Vec<(&'static str, &'static str)> {
+    vec![
+        // extern_abi (single-decl + block) · returns_borrowed (BOTH forms) ·
+        // blocking · noreturn — the §1/§2 members plus R39's.
+        (
+            "extern_facts",
+            "extern \"C\" blocking noreturn borrowed cstr fatal(cstr m) = \"f\"\n\
+             extern \"C\" int puts(String s) = \"puts\"\n\
+             extern \"C\":\n    \
+             extern borrowed cstr err() = \"err\"\n    \
+             extern blocking int wait() = \"wait\"\n",
+        ),
+        // is_receiver — named `Self`-typed params vs real receivers, inside an
+        // EQUIP block (a nested member position, not top level).
+        (
+            "receiver_facts",
+            "struct P:\n    int x\n\n\
+             equip P:\n    \
+             int get(Self a):\n        return a.x\n\n    \
+             void bump(Self &a):\n        a.x = 1\n\n    \
+             int me(self):\n        return self.x\n\n    \
+             void mut2(&self):\n        self.x = 1\n\n    \
+             int mv(^self):\n        return self.x\n",
+        ),
+        // is_receiver + is_meta_op inside a TRAIT declaration body — the other
+        // nested member position.
+        (
+            "trait_member_facts",
+            "trait T:\n    \
+             int size(self)\n    \
+             int with_named(Self a)\n",
+        ),
+        // is_meta_op — R39's sibling member of the class.
+        (
+            "meta_op_facts",
+            "int apply[Numeric T](T a, T b, meta op):\n    \
+             T r = a meta[op] b\n    return r\n",
+        ),
+        // Stmt::For.ownership + CallArg.ownership — this round's OWN §4 axes.
+        // Both the modifier spelling and the parenthesised-operand spelling, so
+        // the guard covers the exact shapes §4 fixes (Core #15e Q2: a guard
+        // that omits the round's own scope cannot catch its own class).
+        (
+            "ownership_position_facts",
+            "void take(Vector[int] ^v):\n    print(v.len())\n\n\
+             void main():\n    \
+             Vector[int] a = [1, 2]\n    \
+             Vector[int] b = [3]\n    \
+             for i in ^a:\n        print(i)\n    \
+             take(^b)\n",
+        ),
+        (
+            "ownership_paren_operand_facts",
+            "void take(Vector[int] ^v):\n    print(v.len())\n\n\
+             int pick():\n    return 0\n\n\
+             void main():\n    \
+             Vector[int] a = [1, 2]\n    \
+             int s = pick()\n    \
+             int e = 3\n    \
+             for i in (^s)..e:\n        print(i)\n    \
+             take((^a))\n",
+        ),
+        // CARRIER for `CallArg.ownership` at the NAMED-argument position.
+        //
+        // ⚠ Without this row the guard was VACUOUS for that position: it
+        // already PROJECTED `CallArg.ownership`, but no corpus entry carried a
+        // named arg with a non-Borrow ownership, so the formatter could — and
+        // did — re-home the sigil from the CallArg into the value expression
+        // with the guard green (Core #15e Q2, and the same vacuity as the
+        // `contains`-matched-the-comment cell one level down: a projection is
+        // only as good as its carriers).
+        (
+            "named_arg_ownership_facts",
+            "void takes_mut(int a, int &b):\n    b = b + 1\n\n\
+             void takes_move(int a, Vector[int] ^v):\n    print(v.len())\n\n\
+             int seed():\n    return 1\n\n\
+             void main():\n    \
+             int x = seed()\n    \
+             Vector[int] xs = [1, 2]\n    \
+             takes_mut(1, &b = x)\n    \
+             takes_move(1, ^v = xs)\n",
+        ),
+        // The §4 axes at DEPTH — inside an `if` inside a `while`, and inside a
+        // match-arm body. `Stmt::For.ownership` / `CallArg.ownership` are
+        // POSITIONAL, so they occur at any nesting level; a fn-level-only
+        // projection would be blind to exactly these, and the paren guard runs
+        // at every depth. Exercises the walk's descent into nested blocks.
+        (
+            "ownership_nested_position_facts",
+            "void take(Vector[int] ^v):\n    print(v.len())\n\n\
+             int pick():\n    return 0\n\n\
+             void main():\n    \
+             int n = pick()\n    \
+             while n < 1:\n        \
+             if n == 0:\n            \
+             Vector[int] a = [1, 2]\n            \
+             int e = 3\n            \
+             for i in (^n)..e:\n                print(i)\n            \
+             take((^a))\n        \
+             n = n + 1\n    \
+             match n:\n        \
+             case 1:\n            \
+             Vector[int] b = [4]\n            \
+             take((^b))\n        \
+             else:\n            print(0)\n",
+        ),
+        // The pre-`in` comprehension sigil — an XFAIL-SHAPED ALLOWLIST ROW,
+        // see `project_facts`. Read here so the exemption is EXERCISED rather
+        // than being dead prose.
+        ("comprehension_pre_in_sigil", COMPREHENSION_PRE_IN_SIGIL_SRC),
+    ]
+}
+
+/// The D33 comprehension rider's carve-out, kept as live source so the
+/// allowlist row below is actually exercised. Mirrors
+/// `tests/fixtures/known_gaps/comprehension_pre_in_sigil_retired.gg`.
+const COMPREHENSION_PRE_IN_SIGIL_SRC: &str = "void main():\n    \
+    Vector[int] xs = [1, 2, 3]\n    \
+    Vector[int] ys = [x for x in ^xs]\n    \
+    print(ys.len())\n";
+
+/// Hand-written projection of the fact-carrying AST fields, as a sorted list of
+/// `path=value` strings. Deliberately NOT `#[derive(PartialEq)]` (see the test's
+/// doc comment) and deliberately NOT part of the `format_*_canonical` family.
+///
+/// ⚠ ALLOWLIST — `ListComprehension.ownership` is EXCLUDED, and the exclusion
+/// is XFAIL-SHAPED: this row ASSERTS the known divergence rather than skipping
+/// it, so it goes RED the day the divergence is repaired instead of quietly
+/// green-lighting a formatter change nobody wanted.
+///
+/// The shape is `[x for x in ^xs]`: the parser strips the sigil BEFORE `in`
+/// (`parse_ownership_modifier` at the comprehension's iterable), while the
+/// formatter emits it AFTER. That asymmetry is NOT a bug to fix here — the
+/// ratified D33 comprehension rider (`docs/define-gorget/decisions.md:1449-1463`,
+/// 2026-07-26) RETIRES the pre-`in` spelling by moving the PARSER, and cites the
+/// formatter's post-`in` emission as corroboration of that direction. Repairing
+/// it in the FORMATTER instead would contradict the ratified decision (Core #15e
+/// Q1: two positions with different ratified semantics, not an asymmetry defect).
+/// Durable repro + `#[ignore]`d test:
+/// `tests/fixtures/known_gaps/comprehension_pre_in_sigil_retired.gg`.
+fn project_facts(source: &str, label: &str) -> Vec<String> {
+    use gorget::parser::ast::*;
+    use gorget::parser::Parser;
+
+    let mut p = Parser::new(source);
+    let module = p.parse_module();
+    assert!(
+        p.errors.is_empty(),
+        "fact projection could not parse `{label}` ({} error(s)): {:?}\n{source}",
+        p.errors.len(),
+        p.errors.first()
+    );
+
+    let mut facts: Vec<String> = Vec::new();
+
+    fn ownership_str(o: Ownership) -> &'static str {
+        match o {
+            Ownership::Borrow => "borrow",
+            Ownership::MutableBorrow => "mutborrow",
+            Ownership::Move => "move",
+        }
+    }
+
+    fn visit_expr(path: &str, e: &Expr, facts: &mut Vec<String>) {
+        // CallArg.ownership — a §4 axis. Recurse through call/method args.
+        let visit_args = |args: &[Spanned<CallArg>], facts: &mut Vec<String>| {
+            for (i, a) in args.iter().enumerate() {
+                facts.push(format!(
+                    "{path}.arg{i}.ownership={}",
+                    ownership_str(a.node.ownership)
+                ));
+                visit_expr(&format!("{path}.arg{i}"), &a.node.value.node, facts);
+            }
+        };
+        match e {
+            Expr::Call { callee, args, .. } => {
+                visit_expr(&format!("{path}.callee"), &callee.node, facts);
+                visit_args(args, facts);
+            }
+            Expr::MethodCall { receiver, args, .. } => {
+                visit_expr(&format!("{path}.recv"), &receiver.node, facts);
+                visit_args(args, facts);
+            }
+            Expr::Move { expr } => {
+                facts.push(format!("{path}.move=1"));
+                visit_expr(&format!("{path}.inner"), &expr.node, facts);
+            }
+            Expr::MutableBorrow { expr } => {
+                facts.push(format!("{path}.mutborrow=1"));
+                visit_expr(&format!("{path}.inner"), &expr.node, facts);
+            }
+            Expr::Closure { is_move, body, .. } => {
+                facts.push(format!("{path}.closure_is_move={is_move}"));
+                visit_expr(&format!("{path}.closure.b"), &body.node, facts);
+            }
+            Expr::Block(b) | Expr::Do { body: b } => {
+                for (i, st) in b.stmts.iter().enumerate() {
+                    visit_stmt(&format!("{path}.blk.s{i}"), &st.node, facts);
+                }
+            }
+            Expr::If { condition, then_branch, else_branch, .. } => {
+                visit_expr(&format!("{path}.ifc"), &condition.node, facts);
+                visit_expr(&format!("{path}.ift"), &then_branch.node, facts);
+                if let Some(e) = else_branch {
+                    visit_expr(&format!("{path}.ife"), &e.node, facts);
+                }
+            }
+            Expr::Index { object, index } => {
+                visit_expr(&format!("{path}.obj"), &object.node, facts);
+                visit_expr(&format!("{path}.idx"), &index.node, facts);
+            }
+            Expr::FieldAccess { object, .. } | Expr::OptionalChain { object, .. } => {
+                visit_expr(&format!("{path}.obj"), &object.node, facts)
+            }
+            Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+                for (i, e) in elems.iter().enumerate() {
+                    visit_expr(&format!("{path}.el{i}"), &e.node, facts);
+                }
+            }
+            Expr::Range { start, end, .. } => {
+                if let Some(s) = start {
+                    visit_expr(&format!("{path}.start"), &s.node, facts);
+                }
+                if let Some(en) = end {
+                    visit_expr(&format!("{path}.end"), &en.node, facts);
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                visit_expr(&format!("{path}.l"), &left.node, facts);
+                visit_expr(&format!("{path}.r"), &right.node, facts);
+            }
+            // ⚠ ALLOWLIST ROW — see this function's doc comment. The pre-`in`
+            // comprehension sigil is a RATIFIED-divergence carve-out (D33
+            // rider), NOT a formatter defect: `ListComprehension.ownership` is
+            // the one ownership axis this guard does not pin. Asserted rather
+            // than skipped, so the row goes RED when the divergence is repaired.
+            Expr::ListComprehension { ownership, .. } => {
+                assert_eq!(
+                    ownership_str(*ownership),
+                    "borrow",
+                    "D33 comprehension-rider carve-out is STALE: the parser now \
+                     records a non-borrow ownership for `[x for x in ^xs]`, so the \
+                     pre-`in` sigil divergence has moved. Re-derive this allowlist \
+                     row against docs/define-gorget/decisions.md:1449-1463 and \
+                     tests/fixtures/known_gaps/comprehension_pre_in_sigil_retired.gg, \
+                     then PIN ListComprehension.ownership here."
+                );
+            }
+            _ => {}
+        }
+    }
+
+    fn visit_block(path: &str, b: &Block, facts: &mut Vec<String>) {
+        for (i, st) in b.stmts.iter().enumerate() {
+            visit_stmt(&format!("{path}.s{i}"), &st.node, facts);
+        }
+    }
+
+    /// Item-level dispatch, shared by the module loop and by `Stmt::Item`.
+    fn visit_item(prefix: &str, item: &Item, facts: &mut Vec<String>) {
+        match item {
+            Item::Function(f) => visit_fn(&format!("{prefix}fn:{}", f.name.node), f, facts),
+            Item::Equip(e) => {
+                for m in &e.items {
+                    visit_fn(&format!("{prefix}equip.fn:{}", m.node.name.node), &m.node, facts);
+                }
+            }
+            Item::Trait(t) => {
+                for m in &t.items {
+                    if let TraitItem::Method(f) = &m.node {
+                        visit_fn(&format!("{prefix}trait.fn:{}", f.name.node), f, facts);
+                    }
+                }
+            }
+            Item::ExternBlock(eb) => {
+                facts.push(format!(
+                    "{prefix}externblock.abi={:?}",
+                    eb.abi.as_ref().map(|a| &a.node)
+                ));
+                for m in &eb.items {
+                    visit_fn(&format!("{prefix}extern.fn:{}", m.node.name.node), &m.node, facts);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The walk descends into EVERY block-bearing statement, not just the
+    /// function body. The §4 ownership axes (`Stmt::For.ownership`,
+    /// `CallArg.ownership`) are positional, so they occur at any nesting depth —
+    /// a `for i in (^s)..e:` inside an `if` is the same defect as one at fn
+    /// level, and a fn-level-only projection would be blind to it.
+    ///
+    /// `Stmt::Item` routes back through `visit_item`: a function nested in a
+    /// function body carries `extern_abi` / `returns_borrowed` / `is_receiver`
+    /// exactly like a top-level one, so skipping it would leave a live blind
+    /// spot in the class guard.
+    fn visit_stmt(path: &str, s: &Stmt, facts: &mut Vec<String>) {
+        match s {
+            Stmt::Item(item) => visit_item(&format!("{path}.item."), item, facts),
+            Stmt::OnError { body, .. } => visit_block(&format!("{path}.onerr"), body, facts),
+            Stmt::Select { arms, .. } => {
+                for (i, a) in arms.iter().enumerate() {
+                    visit_block(&format!("{path}.select{i}"), &a.body, facts);
+                }
+            }
+            Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+                visit_block(&format!("{path}.metaif.t"), then_body, facts);
+                for (i, (_, b)) in elif_branches.iter().enumerate() {
+                    visit_block(&format!("{path}.metaif.e{i}"), b, facts);
+                }
+                if let Some(e) = else_body {
+                    visit_block(&format!("{path}.metaif.el"), e, facts);
+                }
+            }
+            // Stmt::For.ownership — a §4 axis.
+            Stmt::For { ownership, iterable, body, else_body, .. } => {
+                facts.push(format!("{path}.for.ownership={}", ownership_str(*ownership)));
+                visit_expr(&format!("{path}.for.iter"), &iterable.node, facts);
+                visit_block(&format!("{path}.for.b"), body, facts);
+                if let Some(e) = else_body {
+                    visit_block(&format!("{path}.for.e"), e, facts);
+                }
+            }
+            Stmt::While { condition, body, else_body } => {
+                visit_expr(&format!("{path}.while.c"), &condition.node, facts);
+                visit_block(&format!("{path}.while.b"), body, facts);
+                if let Some(e) = else_body {
+                    visit_block(&format!("{path}.while.e"), e, facts);
+                }
+            }
+            Stmt::Loop { body, .. } => visit_block(&format!("{path}.loop"), body, facts),
+            Stmt::If { condition, then_body, elif_branches, else_body } => {
+                visit_expr(&format!("{path}.if.c"), &condition.node, facts);
+                visit_block(&format!("{path}.if.t"), then_body, facts);
+                for (i, (c, b)) in elif_branches.iter().enumerate() {
+                    visit_expr(&format!("{path}.if.ec{i}"), &c.node, facts);
+                    visit_block(&format!("{path}.if.eb{i}"), b, facts);
+                }
+                if let Some(e) = else_body {
+                    visit_block(&format!("{path}.if.e"), e, facts);
+                }
+            }
+            Stmt::Match { scrutinee, arms, else_arm, .. } => {
+                visit_expr(&format!("{path}.match.s"), &scrutinee.node, facts);
+                for (i, item) in arms.iter().enumerate() {
+                    if let Some(a) = item.arm() {
+                        visit_expr(&format!("{path}.match.a{i}"), &a.body.node, facts);
+                    }
+                }
+                if let Some(e) = else_arm {
+                    visit_block(&format!("{path}.match.e"), e, facts);
+                }
+            }
+            Stmt::With { body, .. } => visit_block(&format!("{path}.with"), body, facts),
+            Stmt::Unsafe { body, .. } => visit_block(&format!("{path}.unsafe"), body, facts),
+            Stmt::NamedScope { body, .. } => visit_block(&format!("{path}.scope"), body, facts),
+            Stmt::Expr(e) => visit_expr(&format!("{path}.e"), &e.node, facts),
+            Stmt::Return(Some(e)) => visit_expr(&format!("{path}.ret"), &e.node, facts),
+            Stmt::Throw(e) => visit_expr(&format!("{path}.throw"), &e.node, facts),
+            Stmt::Assign { value, .. } => visit_expr(&format!("{path}.assign"), &value.node, facts),
+            Stmt::CompoundAssign { value, .. } => {
+                visit_expr(&format!("{path}.cassign"), &value.node, facts)
+            }
+            Stmt::VarDecl { value, .. } => visit_expr(&format!("{path}.init"), &value.node, facts),
+            _ => {}
+        }
+    }
+
+    fn visit_fn(path: &str, f: &FunctionDef, facts: &mut Vec<String>) {
+        // §1/§2 members + R39's already-fixed members.
+        facts.push(format!("{path}.extern_abi={:?}", f.extern_abi));
+        facts.push(format!("{path}.returns_borrowed={}", f.returns_borrowed));
+        facts.push(format!("{path}.blocking={}", f.qualifiers.is_blocking));
+        facts.push(format!("{path}.noreturn={}", f.qualifiers.is_noreturn));
+        facts.push(format!("{path}.async={}", f.qualifiers.is_async));
+        facts.push(format!("{path}.const={}", f.qualifiers.is_const));
+        facts.push(format!("{path}.static={}", f.qualifiers.is_static));
+        facts.push(format!("{path}.unsafe={}", f.qualifiers.is_unsafe));
+        for (i, prm) in f.params.iter().enumerate() {
+            // §3 member + R39's is_meta_op. The NAME is projected too: the
+            // §3 defect deleted it while every other fact stayed correct.
+            facts.push(format!("{path}.p{i}.is_receiver={}", prm.node.is_receiver));
+            facts.push(format!("{path}.p{i}.is_meta_op={}", prm.node.is_meta_op));
+            facts.push(format!("{path}.p{i}.name={}", prm.node.name.node));
+            facts.push(format!(
+                "{path}.p{i}.ownership={}",
+                ownership_str(prm.node.ownership)
+            ));
+        }
+        if let FunctionBody::Block(b) = &f.body {
+            for (i, st) in b.stmts.iter().enumerate() {
+                visit_stmt(&format!("{path}.s{i}"), &st.node, facts);
+            }
+        }
+        if let FunctionBody::Expression(e) = &f.body {
+            visit_expr(&format!("{path}.body"), &e.node, facts);
+        }
+    }
+
+    // The walk MUST descend into nested member positions — equip, trait, and
+    // extern BLOCK — not just top-level items. Shared with `Stmt::Item` (below),
+    // so a function nested inside a function BODY is projected identically to a
+    // top-level one: it carries the very same pinned fields.
+    for item in &module.items {
+        visit_item("", &item.node, &mut facts);
+    }
+
+    facts.sort();
+    facts
 }
 
 #[test]

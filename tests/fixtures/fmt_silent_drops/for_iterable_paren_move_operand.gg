@@ -1,0 +1,24 @@
+# R41 T-FMT-A §4 — NEG half of the for-iterable differential pair.
+#
+# AXIS CELL: `parse_for_stmt`'s iterable position (`parser/stmt.rs`), where
+# `parse_ownership_modifier` strips the sigil BEFORE the iterable expression
+# is parsed. The parens force `^start` to be read as an EXPRESSION operand
+# instead — a range ENDPOINT — which D32 rejects.
+#
+# INTENDED: `gg check` REJECTS with E_MoveInOperandPosition, both on this
+# source AND on `gg fmt`'s output. Pre-fix the formatter dropped the parens
+# (`for i in ^start..end:`), which re-homed the sigil into `Stmt::For.ownership`
+# and the SAME PROGRAM was then ACCEPTED — a silent accept-flip.
+#
+# Wired by `fmt_preserves_check_verdict_for_iterable_paren_move` (differential:
+# the verdict before and after fmt must be identical), NOT by the top-level
+# fixture scans — this directory is deliberately outside them.
+
+int pick():
+    return 0
+
+void main():
+    int start = pick()
+    int end = 3
+    for i in (^start)..end:
+        print(i)

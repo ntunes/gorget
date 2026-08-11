@@ -1,0 +1,15 @@
+# R41 T-FMT-A §4 — POS half of the for-iterable differential pair.
+#
+# AXIS CELL: the SAME position as the NEG sibling, but with the sigil in its
+# legitimate iterable-MODIFIER slot (`Stmt::For.ownership = Move`, no parens).
+#
+# INTENDED: accepted before AND after `gg fmt`, and fmt must NOT gain parens
+# here — the paren fix is a pure function of the parse, so it fires only when
+# the emission would otherwise begin with a stripped sigil. Without this half,
+# a formatter that parenthesised EVERYTHING would pass the NEG cell while
+# churning every well-formed move-iterable in the tree.
+
+void main():
+    Vector[int] coll = [1, 2, 3]
+    for i in ^coll:
+        print(i)

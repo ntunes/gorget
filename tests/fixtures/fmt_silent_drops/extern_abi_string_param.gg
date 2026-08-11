@@ -1,0 +1,20 @@
+# R41 T-FMT-A §1 — the FFI-marshalling cell, and the reason the dropped
+# `extern "C"` tag was a SEMANTIC defect rather than a cosmetic one.
+#
+# AXIS CELL: `extern "C"` + a `String` PARAMETER. `FunctionDef.extern_abi ==
+# Some("C")` selects `AbiKind::CStr` at lowering, so the argument marshals via
+# `gorget_str_to_cstr(...)`. Drop the tag and the SAME call passes the 32-byte
+# `Str` struct BY VALUE into a `const char*` — silent UB, and this was live
+# across the `extern "C"` declarations in `lib/std/`.
+#
+# The instrument is `gg build --emit-c-lir`: it is the only one that SEES the
+# marshalling. `gg check` and `gg build` both stay green across the drop, which
+# is exactly why this shipped unnoticed. Wired by
+# `fmt_preserves_extern_abi_marshalling`, which diffs the emitted call between
+# the original source and the `gg fmt` output.
+
+extern "C" int gg_puts_probe(String s) = "puts"
+
+void main():
+    String msg = "hi"
+    print(gg_puts_probe(msg))
