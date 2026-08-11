@@ -10532,6 +10532,116 @@ const DOC_CITATION_ROOTS: &[&str] = &[
 ];
 
 #[test]
+fn doc_source_citations_name_the_right_line() {
+    // The CONTENT half of the citation guard, and the reason it exists: its
+    // sibling `doc_source_citations_resolve` checks only that the file exists
+    // and the line number is IN RANGE. It therefore green-lights every stale
+    // citation in the tree — a cite that has drifted onto an unrelated line is
+    // exactly as "resolvable" as a correct one. That is a guard that cannot
+    // catch its own class (Core #15e Q2), and it let the same class bite twice
+    // in one round: the formatter chapter's cites went stale when the file grew,
+    // were swept by hand, and went stale again inside the same round when a
+    // later commit added 121 lines to the same file.
+    //
+    // The check: when a doc line carries a `file.rs:N` cite AND names a
+    // backticked IDENTIFIER, that identifier must appear within ±WINDOW lines of
+    // the cited line. Prose legitimately mentions an identifier without meaning
+    // "it is defined here", so a HIT anywhere in the window passes and only a
+    // total miss fails — deliberately loose, because the failure this catches is
+    // a cite pointing somewhere else entirely, not an off-by-two.
+    const WINDOW: usize = 10;
+    // Scoped to the chapter whose cites this round moved twice. The tree-wide
+    // burn-down is the ratchet's next step: widen SCOPE, run, fix or allowlist.
+    const SCOPE: &str = "docs/devbook/05-formatter.md";
+
+    let cite = regex::Regex::new(r"`([A-Za-z0-9_./-]+\.(?:rs|gg|c|h|toml)):(\d+)(?:-\d+)?`")
+        .expect("citation regex");
+    let ident = regex::Regex::new(r"`([A-Za-z_][A-Za-z0-9_]*(?:(?:::|\.)[A-Za-z_][A-Za-z0-9_]*)*)`")
+        .expect("identifier regex");
+
+    let mut checked = 0usize;
+    let mut stale: Vec<String> = Vec::new();
+
+    for doc in walkdir_md("docs") {
+        let rel = doc.to_string_lossy().replace('\\', "/");
+        if rel != SCOPE {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&doc) else { continue };
+        for (lineno, line) in text.lines().enumerate() {
+            let Some(caps) = cite.captures(line) else { continue };
+            let path = caps[1].to_string();
+            if !DOC_CITATION_ROOTS.iter().any(|r| path.starts_with(r)) {
+                continue;
+            }
+            let Ok(cited) = caps[2].parse::<usize>() else { continue };
+            let Ok(src) = fs::read_to_string(&path) else { continue };
+            let src_lines: Vec<&str> = src.lines().collect();
+
+            // Candidate names: every backticked identifier on the doc line,
+            // exploded so `Formatter::verbatim` also offers `verbatim` and
+            // `doc::surround_fill` also offers `surround_fill`.
+            //
+            // The PREVIOUS line counts too, because prose wraps: a sentence can
+            // name its subject on one line and carry the second of two cites
+            // onto the next, where the only backticked token left is an
+            // incidental type. Measured on exactly that shape —
+            // "`format_method_chain` (cite) and `format_binary_chain` \n (cite)
+            // turn each segment into a `Doc::Text` leaf" — where line two offers
+            // only `Doc::Text` and the cite is correct.
+            let mut names: Vec<String> = Vec::new();
+            let prev = if lineno > 0 { text.lines().nth(lineno - 1).unwrap_or("") } else { "" };
+            for src_line in [line, prev] {
+                for m in ident.captures_iter(src_line) {
+                    let whole = m[1].to_string();
+                    for seg in whole.split("::").flat_map(|s| s.split('.')) {
+                        if seg.len() >= 4 {
+                            names.push(seg.to_string());
+                        }
+                    }
+                }
+            }
+            names.sort();
+            names.dedup();
+            if names.is_empty() {
+                continue; // a cite with no identifier beside it says nothing to check
+            }
+            checked += 1;
+
+            let lo = cited.saturating_sub(WINDOW).saturating_sub(1);
+            let hi = (cited + WINDOW).min(src_lines.len());
+            let window = src_lines[lo..hi].join("\n");
+            if !names.iter().any(|n| window.contains(n.as_str())) {
+                stale.push(format!(
+                    "{rel}:{} → `{path}:{cited}` names {names:?}, none of which \
+                     appears within ±{WINDOW} lines",
+                    lineno + 1
+                ));
+            }
+        }
+    }
+
+    assert!(
+        checked > 20,
+        "the content check inspected only {checked} citations in {SCOPE} — the \
+         citation or identifier format moved and this lint reads almost \
+         nothing. Fix the scanner, don't lower the floor."
+    );
+    assert!(
+        stale.is_empty(),
+        "{} citation(s) in {SCOPE} point at a line that does not mention the \
+         identifier the sentence is about:\n  {}\n\n\
+         The line number has drifted. Re-read the source and repoint it. This is \
+         the half `doc_source_citations_resolve` cannot see: an in-range cite on \
+         the wrong line resolves perfectly and still misleads every reader.\n\n\
+         NEXT STEP FOR THIS RATCHET: widen SCOPE from the one chapter to the \
+         whole docs tree, run, and burn down or allowlist what it finds.",
+        stale.len(),
+        stale.join("\n  ")
+    );
+}
+
+#[test]
 fn doc_source_citations_resolve() {
     let cite = regex::Regex::new(r"`([A-Za-z0-9_./-]+\.(?:rs|gg|c|h|toml))(?::(\d+))?`?")
         .expect("citation regex");
