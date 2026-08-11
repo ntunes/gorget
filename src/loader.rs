@@ -469,7 +469,7 @@ fn extract_imports_from_meta_if(meta_if: &MetaIf, imports: &mut Vec<(Vec<String>
                     }
                 }
             }
-            if let Some(else_items) = &meta_if.else_items {
+            if let Some((_, else_items)) = &meta_if.else_branch {
                 extract_imports_from_items(else_items, imports);
             }
         }
@@ -479,7 +479,7 @@ fn extract_imports_from_meta_if(meta_if: &MetaIf, imports: &mut Vec<(Vec<String>
             for (_cond, branch_items) in &meta_if.elif_branches {
                 extract_imports_from_items(branch_items, imports);
             }
-            if let Some(else_items) = &meta_if.else_items {
+            if let Some((_, else_items)) = &meta_if.else_branch {
                 extract_imports_from_items(else_items, imports);
             }
         }

@@ -15,16 +15,21 @@
 # ORDER: blank check -> `emit_comments_before(<clause anchor>)` -> write the
 # header, mirroring `format_block_stmts`.
 #
-# ⚠ CORRECTED 2026-08-11: this header used to add "the hooks are LEADING-only —
-# a paired trailing hook here would DOUBLE-CLAIM against the header hook the
-# branch emitters already write". That reasoning was wrong for `else`, and it is
-# why `else:  # note` kept losing its comment into the branch body: `elif` and
-# `case` DO write a header hook, but nothing wrote one for `else`, so there was
-# nothing to double-claim against. The indented-`else` sites now emit their own
-# through `Formatter::emit_else_header`; the cells are in
-# `else_header_trailing_comment.gg`. What remains true is that the LOOP-level
-# hooks in the arm loops are leading-only — a trailing hook in the loop body
-# would double-claim against the one `format_match_arm` writes.
+# ⚠ CORRECTED: this header used to add "the hooks are LEADING-only — a paired
+# trailing hook here would DOUBLE-CLAIM against the header hook the branch
+# emitters already write". That reasoning was wrong for `else`, and it is why
+# `else:  # note` kept losing its comment into the branch body: `elif` wrote a
+# header hook and nothing wrote one for `else`, so there was nothing to
+# double-claim against. The indented-`else` sites now emit their own through
+# `Formatter::emit_else_header`; the trailing-comment cells live in
+# `else_header_trailing_comment.gg`.
+#
+# What remains true is narrower than the old claim, and than its first
+# correction: the LOOP-level hooks in the arm loops are leading-only, because
+# the arm's own body emitter writes the trailing half. That emitter is
+# `format_arm_body`, NOT `format_match_arm` — the latter used to place the
+# header comment itself and no longer does; it delegates, along with the
+# expression-match `else`, `catch` and `rethrow`.
 #
 # RED pre-fix (recorded 2026-08-11): all six statement-level cells pulled the
 # comment down into the branch body. The seventh — the ITEM-level `meta if`

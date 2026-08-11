@@ -956,13 +956,13 @@ impl Parser {
             elif_branches.push((elif_cond, elif_items));
         }
 
-        let mut else_keyword_span = None;
-        let else_items = if self.match_keyword(Keyword::Else) {
-            // The clause header's own position, recorded where it is known.
-            // The formatter cannot recover it: `else` has no expression and the
-            // first item starts on the next line.
-            else_keyword_span = Some(self.previous_span());
-            Some(self.parse_meta_block()?)
+        let else_branch = if self.match_keyword(Keyword::Else) {
+            // The clause header's own position, recorded where it is known —
+            // the formatter cannot recover it, since `else` has no expression
+            // and the first item starts on the next line. Captured together
+            // with the items so the pair cannot come apart.
+            let kw = self.previous_span();
+            Some((kw, self.parse_meta_block()?))
         } else {
             None
         };
@@ -974,8 +974,7 @@ impl Parser {
                 condition,
                 then_items,
                 elif_branches,
-                else_items,
-                else_keyword_span,
+                else_branch,
                 span,
             }),
             span,

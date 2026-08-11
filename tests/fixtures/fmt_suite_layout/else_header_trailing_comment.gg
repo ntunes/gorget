@@ -1,51 +1,93 @@
-# ==== T-FMT-C · a trailing comment ON the `else:` header stays on the header
+# ==== T-FMT-C · a trailing comment on a CLAUSE or ARM header stays on the header
 #
-# `else:  # note` was the one clause header that dropped its trailing comment
-# into the branch body, where `format_block_stmts` re-emitted it as a LEADING
-# comment on the branch's first statement — so a note about the `else` came out
-# reading as a note about whatever happened to come first inside it. The
-# misattribution class T-FMT-A retired, surviving at the sites nobody censused.
+# `else:  # note` used to drop its trailing comment into the branch body, where
+# `format_block_stmts` re-emitted it as a LEADING comment on the branch's first
+# statement — so a note about the `else` came out reading as a note about
+# whatever happened to come first inside it. The misattribution class T-FMT-A
+# retired, surviving at the sites nobody censused.
 #
 # It survived because of an ASYMMETRY, not an oversight in the abstract: `elif`
-# fires a header hook and so does `case`, so those two positions were right;
-# only `else` had none. EVERY indented-`else` site now goes through ONE producer,
-# `Formatter::emit_else_header`, which writes the header, fires the hook and ends
-# the line — one implementation, so the next `else` position cannot ship without
-# it. The exact site count is pinned by `formatter_sibling_loops_hook_pairing`
-# in tests/lints.rs, not restated here where it would rot.
+# fired a header hook and so did `case`, so those two positions were right; only
+# `else` had none.
 #
-# SITE AXIS (6 statement cells): `if`-`else` · statement-match `else` · `for`
-#   `else` · `while` `else` · `meta match` `else` · expression-match `else`. The
-#   last one reaches its body through `format_arm_body`, which is where the
-#   header comment is placed for every arm-shaped position.
+# ── AXIS 1 · CLAUSE POSITION, indented body (9 cells) ─────────────────────────
+#   STATEMENT level (6): `if`-`else` · statement-match `else` · `for` `else` ·
+#     `while` `else` · `meta match` `else` · expression-match `else`.
+#   ITEM level (3): the `meta if` header itself, its `elif`, its `else` — same
+#     class one layer up, where the nested-item loop re-emitted a header's
+#     comment as a LEADING comment on the branch's first DEFINITION.
 #
-# PLUS 3 ITEM-LEVEL cells (`meta if` over ITEMS): the `meta if` header itself,
-#   its `elif`, and its `else`. Same class, one layer up — the nested-item loop
-#   re-emitted a header's trailing comment as a LEADING comment on the branch's
-#   first DEFINITION. The item-level `else` has no clause span, so its anchor is
-#   derived by walking back from the first item to the colon.
+#   Seven of the nine go through ONE producer, `Formatter::emit_else_header`
+#   (header + hook + newline). The two that do not are named rather than
+#   glossed: the `meta if` and `elif` ITEM headers carry a condition, so they
+#   write their own header text and call the hook directly — and the
+#   expression-match `else` reaches its body through `format_arm_body`, which
+#   owns hook placement for every ARM-shaped position (axis 2). The site counts
+#   are pinned by `formatter_sibling_loops_hook_pairing` in tests/lints.rs, not
+#   restated here where they would rot.
 #
-# PLUS 4 ARM-BODY SHAPE cells (`case`/`else`/`catch` with an author `do:`, and
-#   the inline sibling). These are the third body shape, and they are the reason
-#   `format_arm_body` — not the call site — decides where the header comment
-#   goes. An author `do:` belongs to the HEADER's line, so the comment is emitted
-#   after ` do:`; firing the hook before it spells `else:  # note do:` and eats
-#   the keyword, which is ACCEPT/REJECT-relevant (`else: do: ^b` is rejected
-#   where `else: ^b` compiles). These cells exist because an earlier version of
-#   this file claimed the shape was "excluded by construction" while the
-#   exclusion arm had NO fixture at all — flipping it left every gate green.
+#   The item-level `else` anchors on `MetaIf.else_keyword_span`, WRITTEN by the
+#   parser. It used to walk backwards from the first item to find the colon;
+#   that walk is gone.
 #
-# ⚠ INLINE bodies get the third treatment, not the header hook. A comment emitted
-# at the header of `else: stmt` lands ahead of the statement that shares the line,
-# and the output does not re-parse — those are CLAIMED at the header and emitted
-# after the body, by `format_inline_suite` for statement suites and by
-# `format_arm_body` for arm-shaped positions.
+# ── AXIS 2 · ARM POSITION × BODY SHAPE (8 cells, COMPLETE) ────────────────────
+#   `format_arm_body` has FOUR call sites — `format_match_arm` (a `case` arm),
+#   the expression-match `else`, `catch`, and `rethrow` — and each hands over
+#   its own anchor. Every one of the four is sampled against both body shapes
+#   that put the comment somewhere non-obvious:
 #
-# RED pre-fix (recorded 2026-08-11, break-and-restore per cell): every `else`
-#   cell moved its comment down one line and one indent level into the branch
-#   body. The author-`do:` cells were worse and differed by position — the `case`
-#   one re-emitted the comment as a TRAILING comment on the branch's LAST
-#   statement, the `else` and `catch` ones as a LEADING comment on the FIRST.
+#                      author `do:`        inline expression
+#     case             do x case           inline x case
+#     else             do x else           inline x else
+#     catch            do x catch          inline x catch
+#     rethrow          do x rethrow        inline x rethrow
+#
+#   The third body shape — an INDENTED suite — is axis 1 above; a `case` or
+#   `catch` with an indented body is the same code path as the `else` cells.
+#
+#   WHY BOTH SHAPES ARE HERE. An author `do:` belongs to the HEADER's line, so
+#   the comment is emitted after ` do:`; firing the hook before it spells
+#   `else:  # note do:` and eats the keyword, which is ACCEPT/REJECT-relevant
+#   (see the note on `E_MoveInOperandPosition` at `format_arm_body`). An INLINE
+#   body SHARES the header's line, so its comment is CLAIMED at the header and
+#   emitted after the body — emitting at the colon would put it ahead of the
+#   value it heads and the output would not re-parse.
+#
+#   WHY ONE CELL PER CALL SITE and not one per producer: the anchor is supplied
+#   PER SITE, and a wrong per-site anchor is exactly the defect that opened this
+#   work — the expression-match `else` and `format_match_arm` already shared a
+#   producer and still disagreed, because each re-derived the decision. Two
+#   earlier versions of this file shipped an arm with NO cell at all (first the
+#   author-`do:` shape, then `rethrow`), and in both cases every gate stayed
+#   green while the mechanism was disabled.
+#
+# ── RED, per cell (break-and-restore, re-recorded 2026-08-11) ─────────────────
+#   AXIS 1: every cell moved its comment down one line and one indent level into
+#     the branch body.
+#   AXIS 2, `do:` row: worse, and the costume differed by position — the `case`
+#     one re-emitted the comment as a TRAILING comment on the branch's LAST
+#     statement, the `else` / `catch` / `rethrow` ones as a LEADING comment on
+#     the FIRST.
+#   AXIS 2, inline row: MEASURED PER CELL, and only two of the four can red —
+#     stated rather than assumed, per Core #12's "if neither form of red is
+#     possible, say what it pins instead". Killing a site's anchor
+#     (`format_arm_body(body, 0)` — `last_real_content_before(0)` is `None`, so
+#     both hooks no-op) moves `inline x case` onto its own line above the next
+#     arm, and `inline x else` likewise: an ARM is not a statement, so nothing
+#     else claims its comment and it drifts to lead the arm below.
+#     `inline x catch` and `inline x rethrow` do NOT red, and the reason is
+#     structural: each is the tail of an ordinary `int v = …` STATEMENT that
+#     ends on the same line, so `format_block_stmts`' own trailing hook puts the
+#     comment back in the identical position. Those two cells therefore pin the
+#     OUTPUT (the comment stays on the header line) rather than the anchor —
+#     they would still catch a change that moved the comment, just not one that
+#     only neutralised this site's anchor. The `do:` row above is what pins the
+#     anchor at those two positions, and it reds at all four.
+#
+# ⚠ NOT a runnable fixture, and no harness treats it as one: the suite-layout
+#   matrix PARSES and FORMATS these files and asserts fixpoint + re-parse +
+#   idempotence + no trailing whitespace. `rethrow` propagates, so this file is
+#   deliberately not expected to execute.
 
 void if_else(int x):
     if x == 1:
@@ -101,26 +143,38 @@ int rem_or_throw(int a, int b):
     return a %! b
 
 int arm_body_do_shapes(int x):
-    int viacase = match x:
-        case 1: do:    # author `do:` on a CASE arm
+    int do_case = match x:
+        case 1: do:    # do x case
             int a = 1
             a + 1
         else:
             0
-    int viaelse = match x:
+    int do_else = match x:
         case 9:
             9
-        else: do:    # author `do:` on an ELSE clause
+        else: do:    # do x else
             int b = 2
             b + 1
-    int viacatch = rem_or_throw(x, 0)! catch (e): do:    # author `do:` on a CATCH arm
+    int do_catch = rem_or_throw(x, 0)! catch (e): do:    # do x catch
         int c = 3
         c
-    int inline_sibling = match x:
+    int do_rethrow = rem_or_throw(x, 1)! rethrow (String e): do:    # do x rethrow
+        int d = 4
+        d
+    return do_case + do_else + do_catch + do_rethrow
+
+int arm_body_inline_shapes(int x):
+    int in_case = match x:
+        case 1: 11    # inline x case
+        else:
+            0
+    int in_else = match x:
         case 9:
             9
-        else: 4    # the INLINE sibling — claimed, then emitted after the body
-    return viacase + viaelse + viacatch + inline_sibling
+        else: 12    # inline x else
+    int in_catch = rem_or_throw(x, 0)! catch (e): 13    # inline x catch
+    int in_rethrow = rem_or_throw(x, 1)! rethrow (String e): 14    # inline x rethrow
+    return in_case + in_else + in_catch + in_rethrow
 
 void main():
     if_else(1)
@@ -131,3 +185,4 @@ void main():
     print(expr_match_else(1))
     print(backend_id())
     print(arm_body_do_shapes(1))
+    print(arm_body_inline_shapes(1))

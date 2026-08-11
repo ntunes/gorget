@@ -1495,19 +1495,22 @@ pub struct MetaIf {
     pub condition: Spanned<Expr>,
     pub then_items: Vec<Spanned<Item>>,
     pub elif_branches: Vec<(Spanned<Expr>, Vec<Spanned<Item>>)>,
-    pub else_items: Option<Vec<Spanned<Item>>>,
-    /// Span of the `else` KEYWORD, when the author wrote an else branch.
+    /// The `else` branch: the span of its KEYWORD, and its items.
     ///
-    /// The `else` clause of an item-level `meta if` is the one clause header in
-    /// the language with nothing else to anchor to: `condition` anchors the
+    /// One `Option`, not two, because the two facts are the same fact. The
+    /// `else` clause of an item-level `meta if` is the one clause header in the
+    /// language with nothing else to anchor to — `condition` anchors the
     /// `meta if` and each `elif`, but `else` has no expression of its own and
-    /// `else_items` starts on the NEXT line. The formatter needs a position on
-    /// the clause's own line to decide whether the author left a blank above it
-    /// and to attach a trailing comment written after the colon.
+    /// its items start on the NEXT line. The formatter needs a position on the
+    /// clause's own line to decide whether the author left a blank above it and
+    /// to attach a trailing comment written after the colon.
     ///
     /// Recorded here rather than reconstructed by walking backwards from the
-    /// first item (Layering rule 4 — the parser knows, so the parser writes it).
-    /// `None` only when there is no else branch.
-    pub else_keyword_span: Option<Span>,
+    /// first item (Layering rule 4 — the parser knows, so the parser writes
+    /// it). Pairing them in one `Option` is what removes the `.expect` the
+    /// formatter needed while "has a branch" and "has a keyword span" were
+    /// encoded separately: a branch without its keyword is now unrepresentable
+    /// rather than merely asserted against.
+    pub else_branch: Option<(Span, Vec<Spanned<Item>>)>,
     pub span: Span,
 }

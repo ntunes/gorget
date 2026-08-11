@@ -13392,6 +13392,45 @@ fn formatter_suite_layout_hook_census() {
          record WHY in the table's rationale block, the way the existing rows \
          do."
     );
+
+    // ── The ARM-POSITION axis, which the table above cannot see ─────────────
+    //
+    // This census keys on `format_block_stmts` calls, so it enumerates SUITE
+    // emissions. `format_arm_body` is a different axis: it emits an arm/clause
+    // BODY and decides where the header's trailing comment goes, and its call
+    // sites hand it a PER-SITE anchor. A fifth arm position that forgot to
+    // delegate — or delegated with a wrong anchor — moves no count above,
+    // because it would not call `format_block_stmts` in the window.
+    //
+    // That gap is not hypothetical. Two arms of this exact family shipped with
+    // no fixture cell and every gate green: first the author-`do:` body shape,
+    // then the `rethrow` call site. The fixture axis is
+    // `else_header_trailing_comment.gg` (4 positions × 2 body shapes); this
+    // pins the POSITION set the fixture claims to cover, so the two cannot
+    // drift apart silently.
+    const EXPECTED_ARM_BODY_CALL_SITES: usize = 4;
+    let arm_body_calls = content
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.starts_with("//") && !t.starts_with("///")
+        })
+        .filter(|l| l.contains("self.format_arm_body("))
+        .count();
+    assert_eq!(
+        arm_body_calls, EXPECTED_ARM_BODY_CALL_SITES,
+        "`format_arm_body` call-site count changed ({EXPECTED_ARM_BODY_CALL_SITES} \
+         -> {arm_body_calls}).\n\n\
+         The four are `format_match_arm` (a `case` arm), the expression-match \
+         `else`, `rethrow`, and `catch`. Each supplies its OWN anchor, so each \
+         needs its OWN cell in `tests/fixtures/fmt_suite_layout/\
+         else_header_trailing_comment.gg` — a shared producer does not make a \
+         per-site anchor correct, which is the defect that opened this work.\n\n\
+         If you ADDED a position: add its author-`do:` and inline cells to that \
+         fixture, RED-verify each by killing the anchor \
+         (`self.format_arm_body(body, 0)`), and bump this count.\n\
+         Census: grep -c 'self.format_arm_body(' src/formatter/mod.rs"
+    );
 }
 
 /// The READ-SITE guard behind `SuiteLayout`'s doc comment (Core #14 — an

@@ -1290,22 +1290,20 @@ impl Formatter {
                     self.format_nested_items(items);
                     self.emitter.dedent();
                 }
-                if let Some(ref else_items) = mi.else_items {
+                if let Some((else_kw, ref else_items)) = mi.else_branch {
                     // The clause's own position, WRITTEN by the parser
-                    // (`MetaIf.else_keyword_span`). This used to walk backwards
-                    // from the first item to find the colon, which worked but
+                    // (`MetaIf.else_branch`). This used to walk backwards from
+                    // the first item to find the colon, which worked but
                     // reconstructed at the read site a fact the writer had in
                     // hand — and the first item's start is NOT usable directly,
                     // since it sits one line below and makes every author blank
                     // above the clause read as absent.
+                    //
                     // The keyword's END, not its start: both hooks walk BACK
                     // from the anchor to the last real content, so an anchor at
                     // the `e` of `else` lands them on the PREVIOUS line and the
                     // trailing comment after the colon reads as a line away.
-                    let anchor = mi
-                        .else_keyword_span
-                        .expect("parser writes else_keyword_span whenever else_items is Some")
-                        .end;
+                    let anchor = else_kw.end;
                     if self.blank_before_clause(anchor) {
                         self.emitter.blank_line();
                     }
@@ -2462,8 +2460,14 @@ impl Formatter {
     /// * **Author `do:`** — the keyword belongs to the HEADER's line, so the
     ///   comment is emitted after ` do:`. Firing the hook before it would spell
     ///   `else:  # note do:`, eating the author's keyword into a comment; that
-    ///   is not cosmetic, since `else: do: ^b` is REJECTED
-    ///   (`E_MoveInOperandPosition`) where `else: ^b` compiles.
+    ///   is not cosmetic, because the `do:` changes what the arm MEANS. Measured
+    ///   (2026-08-11), with `String b` moved out of a `String`-typed match:
+    ///     `else: ^b`                 → compiles
+    ///     `else: do:` + `\n    ^b`   → REJECTED, `E_MoveInOperandPosition`
+    ///     `else: do: ^b` (one line)  → PARSE error, "expected NEWLINE"
+    ///   So the reject is a property of the INDENTED `do:` suite; the one-line
+    ///   spelling is not a legal program at all, and the two must not be quoted
+    ///   as if they were the same case (an earlier version of this comment did).
     /// * **Indented suite** — the header owns its line, so the comment is
     ///   emitted at the header, exactly as at every other clause position.
     /// * **Inline expression** — the body SHARES the header's line, so the
@@ -3883,8 +3887,9 @@ impl Formatter {
                 // gorget-js snag #15b (2026-08-09) extended the carve-out
                 // to Stmt::Expr: a single-expression Block wrapped in `do:`
                 // makes the expression a READ position, breaking move-sigil
-                // tails (`else: do: ^b` rejects `E_MoveInOperandPosition`;
-                // `else: ^b` compiles). Consolidated into
+                // tails (an INDENTED `else: do:` with a `^b` tail rejects
+                // `E_MoveInOperandPosition`; `else: ^b` compiles — the one-line
+                // `else: do: ^b` is a PARSE error, not this reject). Into
                 // `try_inline_single_terminal_stmt` (R39 follow-up to
                 // Tracks F/G/widening-fix); the helper handles all three
                 // arms (Throw/Return/Expr) and is shared with Expr::Do.

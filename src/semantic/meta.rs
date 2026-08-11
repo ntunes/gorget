@@ -950,7 +950,7 @@ fn pick_meta_if_branch(
     }
 
     // Else branch
-    meta_if.else_items.clone().unwrap_or_default()
+    meta_if.else_branch.as_ref().map(|(_, items)| items.clone()).unwrap_or_default()
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -4341,7 +4341,7 @@ mod tests {
                             dummy_span(),
                         )],
                         elif_branches: vec![],
-                        else_items: Some(vec![Spanned::new(
+                        else_branch: Some((dummy_span(), vec![Spanned::new(
                             Item::Function(FunctionDef {
                                 attributes: vec![],
                                 visibility: Visibility::Private,
@@ -4360,9 +4360,7 @@ mod tests {
                                 returns_borrowed: false,
                             }),
                             dummy_span(),
-                        )]),
-                        // Paired with `else_items`: a branch implies a keyword.
-                        else_keyword_span: Some(dummy_span()),
+                        )])),
                         span: dummy_span(),
                     }),
                     dummy_span(),
@@ -4428,7 +4426,7 @@ mod tests {
                             dummy_span(),
                         )],
                         elif_branches: vec![],
-                        else_items: Some(vec![Spanned::new(
+                        else_branch: Some((dummy_span(), vec![Spanned::new(
                             Item::Function(FunctionDef {
                                 attributes: vec![],
                                 visibility: Visibility::Private,
@@ -4447,9 +4445,7 @@ mod tests {
                                 returns_borrowed: false,
                             }),
                             dummy_span(),
-                        )]),
-                        // Paired with `else_items`: a branch implies a keyword.
-                        else_keyword_span: Some(dummy_span()),
+                        )])),
                         span: dummy_span(),
                     }),
                     dummy_span(),
@@ -4513,8 +4509,7 @@ mod tests {
                             dummy_span(),
                         )],
                         elif_branches: vec![],
-                        else_items: None,
-                        else_keyword_span: None,
+                        else_branch: None,
                         span: dummy_span(),
                     }),
                     dummy_span(),
@@ -4563,8 +4558,7 @@ mod tests {
                             dummy_span(),
                         )],
                         elif_branches: vec![],
-                        else_items: None,
-                        else_keyword_span: None,
+                        else_branch: None,
                         span: dummy_span(),
                     }),
                     dummy_span(),
