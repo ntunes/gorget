@@ -1,0 +1,39 @@
+# ==== T-FMT-C · if / elif / else — suite-layout form preservation
+#
+# AXIS (6 cells): {if, elif, else} x {inline, next-line}.
+#
+# RED pre-fix (recorded 2026-08-11): all THREE inline cells EXPLODED —
+# `Stmt::If` and `format_elif_else_blocks` wrote `:` + newline + indent
+# unconditionally, so `if true: print(1)` became a two-line suite. The
+# parser records the one-liner as `Block { stmts: [stmt] }` via
+# `parse_block_or_inline_stmt`, structurally identical to a one-statement
+# indented suite — the information the formatter needed did not exist.
+# GREEN pre-fix / BREAK-AND-WATCH: the three next-line cells. Make the
+# `Stmt::If` / elif / else emitters ignore `Block.layout` (always inline)
+# and they collapse.
+
+void all_inline(int x):
+    if x == 1: print(1)
+    elif x == 2: print(2)
+    else: print(3)
+
+void all_next(int x):
+    if x == 1:
+        print(1)
+    elif x == 2:
+        print(2)
+    else:
+        print(3)
+
+# Mixed within one chain — each clause keeps its OWN spelling.
+void mixed(int x):
+    if x == 1: print(1)
+    elif x == 2:
+        print(2)
+        print(22)
+    else: print(3)
+
+void main():
+    all_inline(1)
+    all_next(1)
+    mixed(1)

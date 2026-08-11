@@ -1,0 +1,55 @@
+# ==== T-FMT-C · statement-position match — suite-layout form preservation
+#
+# AXIS (7 cells): case inline-call · case inline-`throw` · case inline-`return`
+#   · case next-line x2 · else next-line x2.
+#
+# ⚠ There is NO `else:`-inline cell: `match x:` / `else: print(2)` is a PARSE
+#   ERROR (measured 2026-08-11 — `expected NEWLINE, found identifier`), so the
+#   statement-match `else` clause has exactly one legal form. That is why the
+#   `Stmt::Match` else site carries NO layout read: an inline branch there
+#   could never be reached, and a cell for it could never go RED.
+#
+# RED pre-fix (recorded 2026-08-11):
+#   * case inline-`throw`  — EXPLODED to a next-line body. The parser wraps a
+#                            `throw`/`return` expression-prefix in a SYNTHETIC
+#                            `Expr::Block`, and `format_match_arm`'s
+#                            `if let Expr::Block(..)` shape test could not tell
+#                            it from an author-written indented suite.
+#   * case inline-`return` — same, same mechanism.
+# GREEN pre-fix / BREAK-AND-WATCH: `case 1: g(1)` (a bare call is NOT wrapped,
+#   so it never matched the if-let) and the four next-line cells. Flip
+#   `format_match_arm` to ignore `Block.layout` and the next-line cells collapse.
+#
+# ⚠ TODO.md:1584 claimed "statement-position match: unaffected". That claim was
+#   FALSE at HEAD — two of its seven cells were live. Disproof recorded here so
+#   the premise is not re-filed from the old entry.
+
+void g(int y):
+    print(y)
+
+int f(int x):
+    match x:
+        case 1: g(1)
+        case 2: return 5
+        case 3: throw "bad"
+        case 4:
+            g(4)
+        case 5:
+            int t = x + 1
+            g(t)
+        else:
+            g(9)
+    return 0
+
+int h(int x):
+    match x:
+        case 1:
+            g(1)
+        else:
+            int u = x + 2
+            g(u)
+    return 1
+
+void main():
+    print(f(1))
+    print(h(1))

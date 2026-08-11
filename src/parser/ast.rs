@@ -704,6 +704,21 @@ pub enum Expr {
     // ── Do expression ──
     Do {
         body: Block,
+        /// `true` when the author actually typed `do:`.
+        ///
+        /// This variant has TWO producers. One is the `do` keyword. The other
+        /// is `parse_body_or_expr`, which SYNTHESIZES a `Do` around an
+        /// indented `catch`/`rethrow` body — a position where the grammar
+        /// takes the suite directly and `do:` was never written. The two are
+        /// otherwise indistinguishable, so a consumer that has to tell them
+        /// apart (the formatter, which must neither invent the keyword nor
+        /// delete it) cannot derive the answer from the shape.
+        ///
+        /// Not cosmetic: `do:` makes its tail a READ position, so
+        /// `else: do:` + `^b` is REJECTED (E_MoveInOperandPosition) where
+        /// `else: ^b` compiles. Inventing or dropping the wrap can flip
+        /// whether a program is accepted.
+        author_spelled: bool,
     },
 
     // ── Closure ──
@@ -1221,10 +1236,64 @@ pub struct WithBinding {
     pub span: Span,
 }
 
+/// How the author LAID OUT a suite — the one bit of syntax that survives
+/// into the AST because `gg fmt` owns layout only where the author did not
+/// choose it (`docs/define-gorget/decisions.md`, Q2: "`gg fmt` changes layout
+/// it owns and nothing the author spelled").
+///
+/// Gorget accepts two spellings for every suite: on the header's own line
+/// (`if c: stmt`, `case P: expr`) or indented beneath it. The parser folds
+/// both into the same one-statement `Block`, so without this field the two
+/// are structurally IDENTICAL downstream and a formatter can only guess —
+/// which is exactly how `gg fmt` came to explode every one-liner and collapse
+/// every short indented suite.
+///
+/// It is deliberately a typed field on `Block` rather than a span comparison
+/// at the formatter: the formatter is not the only consumer that may need to
+/// know, spans lie for synthesized blocks, and a span heuristic cannot
+/// distinguish an author's one-liner from a parser-synthesized wrap at all.
+///
+/// **`Inline` also marks parser-SYNTHESIZED wraps** — `throw x` / `return x`
+/// in expression position, and the closure-body normalization — where the
+/// author wrote no suite whatsoever. Emitting those on their own line would
+/// invent syntax; `Inline` is the typed carve-out that keeps them inline.
+///
+/// Nothing outside the formatter reads this field: it records syntax, and
+/// semantics must not depend on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuiteLayout {
+    /// `NEWLINE INDENT stmt+ DEDENT` — the author indented the suite.
+    NextLine,
+    /// The suite shares the header's line (`if c: stmt`), OR the `Block` is a
+    /// parser synthesis wrapping something the author wrote inline.
+    Inline,
+}
+
 #[derive(Debug, Clone)]
 pub struct Block {
     pub stmts: Vec<Spanned<Stmt>>,
     pub span: Span,
+    /// Author-spelled suite layout — see [`SuiteLayout`]. Written at the
+    /// seven parser construction sites; every non-parser construction goes
+    /// through [`Block::synthetic`].
+    pub layout: SuiteLayout,
+}
+
+impl Block {
+    /// A `Block` that no author wrote — built by a lowering pass, a desugar,
+    /// or a test. Defaults to [`SuiteLayout::NextLine`]: a synthesized block
+    /// has no author spelling to preserve, and if one ever reaches the
+    /// formatter the indented form is the shape that is legal in every
+    /// position (the inline form is a parse error after `on error:`, after a
+    /// statement-match `else:`, and anywhere a suite holds more than one
+    /// statement).
+    pub fn synthetic(stmts: Vec<Spanned<Stmt>>, span: Span) -> Self {
+        Block {
+            stmts,
+            span,
+            layout: SuiteLayout::NextLine,
+        }
+    }
 }
 
 // ══════════════════════════════════════════════════════════════

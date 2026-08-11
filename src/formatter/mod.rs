@@ -73,7 +73,35 @@ impl Emitter {
         }
     }
 
+    /// End the current line — IDEMPOTENT AT LINE START.
+    ///
+    /// **Why idempotent (R41 T-FMT-C).** An expression-position suite ends by
+    /// newline-terminating its last statement, and then the ENCLOSING
+    /// statement newline-terminates itself. Two newlines render as a blank
+    /// line the author never wrote, and the class had members in every host
+    /// that can hold a suite-bearing expression (`int r = match ...`, `r +=
+    /// match ...`, `throw match ...`, `assert match ...`, an
+    /// expression-bodied function, a top-level `const`/`static`) crossed with
+    /// every suite that can sit there (match `else`, `catch`, `rethrow`, a
+    /// block-bodied closure, an author `do:`).
+    ///
+    /// Neither side is wrong on its own — each is honouring "I terminate my
+    /// own line" — so there is no write site to blame and a per-host list
+    /// could only ever chase the members it knew about (it would have missed
+    /// `format_const_decl` and `format_static_decl`, which are not
+    /// `format_stmt` arms at all). The producer is the right layer: asking to
+    /// end a line that has already ended is a no-op.
+    ///
+    /// `blank_line()` remains the ONE way to ask for a blank, so nothing that
+    /// wants one loses it. Verified before the change that no site emits two
+    /// consecutive `newline()`s on purpose.
     fn newline(&mut self) {
+        if self.buf.ends_with('\n') {
+            // Already at line start — the previous emitter closed the line.
+            self.at_line_start = true;
+            self.col = 0;
+            return;
+        }
         self.buf.push('\n');
         self.col = 0;
         self.at_line_start = true;
@@ -674,6 +702,75 @@ impl Formatter {
         // (or with a same-indent sibling stmt — `int x = 5  # a` followed
         // by `if flags:  # b`).
         self.emit_trailing_comment_after(header_anchor_end, true);
+    }
+
+    /// R41 T-FMT-C: CLAIM a header's trailing comment now, EMIT it after the
+    /// inline suite body — the header hook's two halves, split.
+    ///
+    /// **Why not just emit it in place.** On an INLINE suite the body follows
+    /// the header on the same output line, so a comment emitted at the header
+    /// swallows the statement: `case 1: 10  # one` became
+    /// `case 1:  # one 10`, which does not re-parse.
+    ///
+    /// **Why not just suppress it.** At a match arm the body is an
+    /// EXPRESSION, so there is no statement-side hook to claim the comment
+    /// instead; it would drift down and lead the NEXT arm.
+    ///
+    /// **Why CLAIM here rather than defer the whole hook.** Claiming advances
+    /// the comment cursor before the body is emitted, which is what stops a
+    /// leading-comment hook INSIDE the body from taking the comment first —
+    /// for a multi-line inline child (`if true: int x = match y:  # note`)
+    /// the nested match-arm loop's `emit_comments_before` would otherwise
+    /// pull it into the arm list, where it documents the wrong thing.
+    ///
+    /// Safe in both directions: the cursor is monotone, so nothing is emitted
+    /// twice, and `emit_remaining_comments` flushes anything a caller drops.
+    fn claim_header_trailing_comments(&mut self, header_anchor_end: usize) -> Vec<String> {
+        let mut claimed = Vec::new();
+        while self.comment_cursor < self.comments.len() {
+            let c = &self.comments[self.comment_cursor];
+            let comment_start = c.span.start;
+            if comment_start > self.source.len() {
+                break;
+            }
+            let Some(anchor) = self.last_real_content_before(header_anchor_end) else {
+                break;
+            };
+            if comment_start < anchor {
+                break;
+            }
+            if self.source[anchor..comment_start].contains('\n') {
+                break;
+            }
+            claimed.push(c.node.clone());
+            self.comment_cursor += 1;
+        }
+        claimed
+    }
+
+    /// Emit comments claimed by [`claim_header_trailing_comments`], now that
+    /// the inline suite body has been written. Mirrors the injection half of
+    /// `emit_trailing_comment_after` (two-space gap, spliced ahead of the
+    /// trailing newline, recorded for the R40 aligner as a HEADER comment so
+    /// it is never grouped with body lines).
+    fn emit_claimed_header_comments(&mut self, claimed: Vec<String>) {
+        for comment in claimed {
+            let comment_len = comment.chars().count();
+            let mut inlined = String::with_capacity(comment.len() + 2);
+            inlined.push_str("  ");
+            inlined.push_str(&comment);
+            let buf_offset = if self.emitter.buf.ends_with('\n') {
+                self.emitter.buf.len() - 1
+            } else {
+                self.emitter.buf.len()
+            };
+            self.emitter.inject_before_newline(&inlined);
+            self.trailing_aligns.push(TrailingAlign {
+                buf_offset,
+                comment_len,
+                is_header: true,
+            });
+        }
     }
 
     /// R39 snag #2 (`gorget-arena` snag #2 — durable repro at
@@ -2156,10 +2253,19 @@ impl Formatter {
     ///     (gorget-js snag #15b, R39 Track F for Expr::Block +
     ///     widening fix for Expr::Do).
     fn try_inline_single_terminal_stmt(&mut self, block: &Block) -> bool {
-        if block.stmts.len() != 1 {
+        self.try_inline_single_terminal_stmts(&block.stmts)
+    }
+
+    /// The slice form of [`Self::try_inline_single_terminal_stmt`], for the
+    /// one caller that must skip a parser-synthesized prelude: a
+    /// destructuring closure's `Block` carries the destructure binds ahead of
+    /// the author's body, so the "is this a single terminal statement?"
+    /// question is about the tail, not the whole block.
+    fn try_inline_single_terminal_stmts(&mut self, stmts: &[Spanned<Stmt>]) -> bool {
+        if stmts.len() != 1 {
             return false;
         }
-        let stmt = &block.stmts[0];
+        let stmt = &stmts[0];
         match &stmt.node {
             Stmt::Throw(value) => {
                 self.emitter.write("throw ");
@@ -2191,19 +2297,43 @@ impl Formatter {
     }
 
     fn format_arm_body(&mut self, body: &Spanned<Expr>) {
-        // Snag #15c note: `parse_body_or_expr` (catch/rethrow arm) wraps
-        // the indented body as `Expr::Do { body }`, NOT `Expr::Block`. The
-        // match `else:` uses `parse_arm_body` which returns Expr::Block for
-        // indented. Both AST forms carry an indented statement list and
-        // should format WITHOUT re-emitting `do:` at these arm positions —
-        // the parser accepts the indented form directly at all three sites.
+        // Snag #15c note: `parse_body_or_expr` (catch/rethrow arm) SYNTHESIZES
+        // the indented body as `Expr::Do`, NOT `Expr::Block`. The match
+        // `else:` uses `parse_arm_body`, which returns `Expr::Block` for the
+        // indented form. Both AST forms carry an indented statement list and
+        // format WITHOUT re-emitting `do:` at these arm positions — the parser
+        // accepts the indented form directly at all three sites.
+        //
+        // R41 T-FMT-C: an AUTHOR-written `do:` is a different case, and the
+        // one-path treatment deleted it. `else: do:` + suite came back as a
+        // bare `else:` + suite — not the same program, since `else: do: ^b`
+        // is REJECTED (E_MoveInOperandPosition) where `else: ^b` compiles.
+        // `author_spelled` is what separates the two producers.
+        if let Expr::Do {
+            body: block,
+            author_spelled: true,
+        } = &body.node
+        {
+            self.emitter.write(" do:");
+            self.emitter.newline();
+            self.emitter.indent();
+            self.format_block_stmts(block);
+            self.emitter.dedent();
+            return;
+        }
         let block_opt = match &body.node {
             Expr::Block(block) => Some(block),
-            Expr::Do { body } => Some(body),
+            Expr::Do { body, .. } => Some(body),
             _ => None,
         };
         if let Some(block) = block_opt {
-            if block.stmts.len() > 1 {
+            // R41 T-FMT-C: the question is WHAT THE AUTHOR SPELLED, not how
+            // many statements the suite happens to hold. The old
+            // `stmts.len() > 1` test collapsed every one-statement indented
+            // `else:` onto its header while the sibling `case` arms — reading
+            // the AST shape instead — kept theirs, so one construct formatted
+            // two different ways.
+            if block.layout == SuiteLayout::NextLine {
                 self.emitter.newline();
                 self.emitter.indent();
                 self.format_block_stmts(block);
@@ -2215,12 +2345,97 @@ impl Formatter {
         self.format_expr(body);
     }
 
+    /// Emit an INLINE statement suite — the one the author wrote on the
+    /// header's own line (`if c: stmt`, `elif c: stmt`, `else: stmt`,
+    /// `on error stmt`, meta `case e: stmt`).
+    ///
+    /// `header_suffix` is the per-site spelling between header and body:
+    /// `":"` everywhere except `on error`, whose inline form takes NO colon
+    /// (`on error: print(1)` is a parse error).
+    ///
+    /// Three deliberate properties:
+    ///   * **no `indent()`** — a block-bearing child (`if true: int x = match
+    ///     y:` followed by an indented suite) nests relative to the HEADER's
+    ///     indent, which is where the author put it. Indenting first would
+    ///     push the nested suite a level deeper on every pass.
+    ///   * **delegation through `format_block_stmts`** — the child then gets
+    ///     the same leading/trailing comment hooks as any other statement,
+    ///     rather than a second, subtly different comment path.
+    ///   * **no width check** — this path emits through `write`, not the Doc
+    ///     renderer, so an over-width one-liner stays a one-liner. Letting
+    ///     width re-decide the suite's FORM would rewrite a choice the author
+    ///     made, for a reason invisible in the source.
+    fn format_inline_suite(&mut self, header_suffix: &str, block: &Block, header_anchor_end: usize) {
+        self.emitter.write(header_suffix);
+        // Claim the header's trailing comment BEFORE the body is emitted (so
+        // a leading hook inside the body cannot take it first) and emit it
+        // AFTER (so it does not swallow the statement).
+        let deferred = self.claim_header_trailing_comments(header_anchor_end);
+        self.emitter.write(" ");
+        self.format_block_stmts(block);
+        self.emit_claimed_header_comments(deferred);
+        self.emitter.newline();
+    }
+
+    /// Emit an indented closure body, skipping the parser-synthesized
+    /// destructure prelude.
+    ///
+    /// With no prelude this is plain `format_block_stmts`. With one, the
+    /// shared helper cannot be used — it would emit the destructure binds the
+    /// parser injected — so the per-statement leading/trailing comment hooks
+    /// are mirrored here for the author's tail.
+    fn format_closure_post_prelude(
+        &mut self,
+        block: &Block,
+        post_prelude: &[&Spanned<Stmt>],
+        prelude_skip: usize,
+    ) {
+        if prelude_skip == 0 {
+            self.format_block_stmts(block);
+            return;
+        }
+        for stmt in post_prelude {
+            self.emit_comments_before(stmt.span.start);
+            self.format_stmt(stmt);
+            self.emit_trailing_comment_after(stmt.span.end, false);
+        }
+    }
+
+    /// True iff the author left a blank line above a CLAUSE header
+    /// (`elif:` / `else:`).
+    ///
+    /// `format_block_stmts` preserves an author blank between two statements,
+    /// but a clause header is not a statement — it is written by its own emit
+    /// site, and none of the eight sites checked. A blank the author put
+    /// between a long branch body and the `else:` that follows it is
+    /// paragraphing exactly like any other, and deleting it is the same
+    /// defect at a position the statement loop cannot see.
+    ///
+    /// `anchor` is any position on the clause's own source line. The
+    /// predicate is `has_blank_line_between` rather than
+    /// `blank_line_directly_above` because the blank may sit ABOVE a comment
+    /// run that leads the clause (`blank`, `# note`, `else:`); the
+    /// directly-above form reports the COMMENT line there and drops the cell.
+    fn blank_before_clause(&self, anchor: usize) -> bool {
+        // `has_blank_line_between` walks BACKWARD from its second argument and
+        // never reads the first (block-bearing spans are zero-width at DEDENT
+        // positions), so there is no meaningful `prev` to pass here.
+        self.has_blank_line_between(0, anchor)
+    }
+
     fn format_elif_else_blocks(
         &mut self,
         elif_branches: &[(Spanned<Expr>, Block)],
         else_body: Option<&Block>,
     ) {
         for (cond, body) in elif_branches {
+            // R41 T-FMT-C: ORDER IS LOAD-BEARING — blank check, then leading
+            // comments, then the header. Reversed, a `blank` / `# note` /
+            // `elif` run comes out comment-then-blank and the comment detaches
+            // from the clause it documents. Mirrors `format_block_stmts`.
+            if self.blank_before_clause(cond.span.start) {
+                self.emitter.blank_line();
+            }
             // R41 T-FMT-A follow-up: a comment on its own line BEFORE `elif`
             // documents the BRANCH, but with no leading hook here it fell
             // through to `format_block_stmts` and was re-emitted INSIDE the
@@ -2229,24 +2444,38 @@ impl Formatter {
             self.emit_comments_before(cond.span.start);
             self.emitter.write("elif ");
             self.format_expr(cond);
-            self.emitter.write(":");
-            self.emit_trailing_comment_after_header(cond.span.end);
-            self.emitter.newline();
-            self.emitter.indent();
-            self.format_block_stmts(body);
-            self.emitter.dedent();
+            if body.layout == SuiteLayout::Inline {
+                self.format_inline_suite(":", body, cond.span.end);
+            } else {
+                self.emitter.write(":");
+                self.emit_trailing_comment_after_header(cond.span.end);
+                self.emitter.newline();
+                self.emitter.indent();
+                self.format_block_stmts(body);
+                self.emitter.dedent();
+            }
         }
         if let Some(else_body) = else_body {
-            // Same class as the `elif` hook above. There is no recorded span
-            // for the `else` KEYWORD, but the body's span starts after it —
-            // and after any comment written above `else:` — so it is a sound
-            // upper bound for "comments that belong to this branch".
+            // Same class as the `elif` hooks above. There is no recorded span
+            // for the `else` KEYWORD, but the body's span starts at the
+            // clause's own colon (the parser records `start` BEFORE consuming
+            // it) — after any comment written above `else:`, and on the
+            // clause's own source line, so it is a sound anchor for both the
+            // blank check and the comment hook.
+            if self.blank_before_clause(else_body.span.start) {
+                self.emitter.blank_line();
+            }
             self.emit_comments_before(else_body.span.start);
-            self.emitter.write("else:");
-            self.emitter.newline();
-            self.emitter.indent();
-            self.format_block_stmts(else_body);
-            self.emitter.dedent();
+            self.emitter.write("else");
+            if else_body.layout == SuiteLayout::Inline {
+                self.format_inline_suite(":", else_body, else_body.span.start);
+            } else {
+                self.emitter.write(":");
+                self.emitter.newline();
+                self.emitter.indent();
+                self.format_block_stmts(else_body);
+                self.emitter.dedent();
+            }
         }
     }
 
@@ -2386,6 +2615,14 @@ impl Formatter {
                 self.format_block_stmts(body);
                 self.emitter.dedent();
                 if let Some(else_body) = else_body {
+                    // R41 T-FMT-C: the `for`/`while` `else` clauses are
+                    // members of the clause-header class — same blank deletion
+                    // and same comment misattribution as `elif`/`else`, at
+                    // sites the filed report never named.
+                    if self.blank_before_clause(else_body.span.start) {
+                        self.emitter.blank_line();
+                    }
+                    self.emit_comments_before(else_body.span.start);
                     self.emitter.write("else:");
                     self.emitter.newline();
                     self.emitter.indent();
@@ -2407,6 +2644,11 @@ impl Formatter {
                 self.format_block_stmts(body);
                 self.emitter.dedent();
                 if let Some(else_body) = else_body {
+                    // Clause-header class — see the `for` `else` above.
+                    if self.blank_before_clause(else_body.span.start) {
+                        self.emitter.blank_line();
+                    }
+                    self.emit_comments_before(else_body.span.start);
                     self.emitter.write("else:");
                     self.emitter.newline();
                     self.emitter.indent();
@@ -2429,12 +2671,16 @@ impl Formatter {
             } => {
                 self.emitter.write("if ");
                 self.format_expr(condition);
-                self.emitter.write(":");
-                self.emit_trailing_comment_after_header(condition.span.end);
-                self.emitter.newline();
-                self.emitter.indent();
-                self.format_block_stmts(then_body);
-                self.emitter.dedent();
+                if then_body.layout == SuiteLayout::Inline {
+                    self.format_inline_suite(":", then_body, condition.span.end);
+                } else {
+                    self.emitter.write(":");
+                    self.emit_trailing_comment_after_header(condition.span.end);
+                    self.emitter.newline();
+                    self.emitter.indent();
+                    self.format_block_stmts(then_body);
+                    self.emitter.dedent();
+                }
                 self.format_elif_else_blocks(elif_branches, else_body.as_ref());
             }
             Stmt::Match {
@@ -2469,6 +2715,15 @@ impl Formatter {
                     }
                 }
                 if let Some(else_body) = else_arm {
+                    // Clause-header class. ⚠ NO layout read here: a
+                    // statement-match `else: stmt` is a PARSE ERROR, so an
+                    // inline branch at this site could never be reached and a
+                    // cell for it could never go RED — a guard that cannot
+                    // catch its own class is worse than none.
+                    if self.blank_before_clause(else_body.span.start) {
+                        self.emitter.blank_line();
+                    }
+                    self.emit_comments_before(else_body.span.start);
                     self.emitter.write("else:");
                     self.emitter.newline();
                     self.emitter.indent();
@@ -2507,6 +2762,11 @@ impl Formatter {
                     self.emitter.dedent();
                 }
                 if let Some(else_body) = else_arm {
+                    // Clause-header class — see the `for` `else` above.
+                    if self.blank_before_clause(else_body.span.start) {
+                        self.emitter.blank_line();
+                    }
+                    self.emit_comments_before(else_body.span.start);
                     self.emitter.write("else:");
                     self.emitter.newline();
                     self.emitter.indent();
@@ -2605,18 +2865,37 @@ impl Formatter {
                     self.emit_comments_before(case_expr.span.start);
                     self.emitter.write("case ");
                     self.format_expr(case_expr);
-                    self.emitter.write(":");
-                    self.emitter.newline();
-                    self.emitter.indent();
-                    self.format_block_stmts(body);
-                    self.emitter.dedent();
+                    if body.layout == SuiteLayout::Inline {
+                        self.format_inline_suite(":", body, case_expr.span.end);
+                    } else {
+                        self.emitter.write(":");
+                        self.emitter.newline();
+                        self.emitter.indent();
+                        self.format_block_stmts(body);
+                        self.emitter.dedent();
+                    }
                 }
                 if let Some(else_body) = else_arm {
-                    self.emitter.write("else:");
-                    self.emitter.newline();
-                    self.emitter.indent();
-                    self.format_block_stmts(else_body);
-                    self.emitter.dedent();
+                    // Clause-header class + the inline layout read. Anchored at
+                    // the clause's own colon, like every other site —
+                    // `parse_meta_match_arm_body` used to start its span at
+                    // the NEWLINE token instead, which put `span.start` on the
+                    // line BELOW the clause and made the walk-back miss the
+                    // author's blank entirely.
+                    if self.blank_before_clause(else_body.span.start) {
+                        self.emitter.blank_line();
+                    }
+                    self.emit_comments_before(else_body.span.start);
+                    self.emitter.write("else");
+                    if else_body.layout == SuiteLayout::Inline {
+                        self.format_inline_suite(":", else_body, else_body.span.start);
+                    } else {
+                        self.emitter.write(":");
+                        self.emitter.newline();
+                        self.emitter.indent();
+                        self.format_block_stmts(else_body);
+                        self.emitter.dedent();
+                    }
                 }
                 self.emitter.dedent();
             }
@@ -2653,11 +2932,22 @@ impl Formatter {
                 self.emitter.dedent();
             }
             Stmt::OnError { body } => {
-                self.emitter.write("on error:");
-                self.emitter.newline();
-                self.emitter.indent();
-                self.format_block_stmts(body);
-                self.emitter.dedent();
+                self.emitter.write("on error");
+                if body.layout == SuiteLayout::Inline {
+                    // ⚠ THE INLINE FORM TAKES NO COLON. `on error print(1)`
+                    // parses; `on error: print(1)` is a parse error. This is
+                    // the site whose header spelling differs from every other
+                    // suite in the family, which is why the inline emitter
+                    // takes the suffix as a parameter instead of hardcoding
+                    // `":"`.
+                    self.format_inline_suite("", body, body.span.start);
+                } else {
+                    self.emitter.write(":");
+                    self.emitter.newline();
+                    self.emitter.indent();
+                    self.format_block_stmts(body);
+                    self.emitter.dedent();
+                }
             }
         }
     }
@@ -2671,21 +2961,39 @@ impl Formatter {
         }
         self.emitter.write(":");
         // R39 gorget-arena block-header trailing: preserve `case P:  # comment`
-        // as trailing on the header line for indented-body arms. Uses
-        // arm.pattern.span.end (or guard.span.end if a guard is present) as
-        // the anchor before the `:` and any trailing comment.
+        // as trailing on the header line. Uses arm.pattern.span.end (or
+        // guard.span.end if a guard is present) as the anchor before the `:`
+        // and any trailing comment.
         let arm_anchor = arm.guard.as_ref().map(|g| g.span.end).unwrap_or(arm.pattern.span.end);
-        self.emit_trailing_comment_after_header(arm_anchor);
-        // Check if the body is a Block expression (multi-line arm)
-        if let Expr::Block(ref block) = arm.body.node {
-            self.emitter.newline();
-            self.emitter.indent();
-            self.format_block_stmts(block);
-            self.emitter.dedent();
-        } else {
-            self.emitter.write(" ");
-            self.format_expr(&arm.body);
-            self.emitter.newline();
+        // R41 T-FMT-C: read the author's LAYOUT, not the AST shape. A `Block`
+        // body is an indented suite only when the author indented it —
+        // `case 1: throw "bad"` also arrives as a `Block`, because the parser
+        // wraps a `throw`/`return` expression-prefix, and the old
+        // `if let Expr::Block(..)` test could not tell the two apart. It
+        // exploded every inline `throw`/`return` arm onto its own line.
+        match &arm.body.node {
+            Expr::Block(block) if block.layout == SuiteLayout::NextLine => {
+                self.emit_trailing_comment_after_header(arm_anchor);
+                self.emitter.newline();
+                self.emitter.indent();
+                self.format_block_stmts(block);
+                self.emitter.dedent();
+            }
+            _ => {
+                // ⚠ The header hook must fire AFTER the body here, or it puts
+                // the comment BEFORE the statement it heads: `case 1: 10  # one`
+                // came out as `case 1:  # one 10`, with the statement inside
+                // the comment and the file no longer parsing. Suppressing the
+                // hook instead is not an option at this site — an inline arm
+                // body is an EXPRESSION, so no statement-side hook exists to
+                // claim the comment and it would drift down to lead the NEXT
+                // arm.
+                let deferred = self.claim_header_trailing_comments(arm_anchor);
+                self.emitter.write(" ");
+                self.format_expr(&arm.body);
+                self.emit_claimed_header_comments(deferred);
+                self.emitter.newline();
+            }
         }
     }
 
@@ -3197,8 +3505,22 @@ impl Formatter {
                     self.format_match_arm(arm);
                 }
                 if let Some(else_arm) = else_arm {
+                    // Clause-header class — the expression-position `else` had
+                    // neither the blank check nor a leading-comment hook, so a
+                    // comment written above it landed after the whole match.
+                    // The anchor is the clause's colon for an indented body
+                    // and the inline expression's start otherwise; both sit on
+                    // the `else:` source line, which is all either use needs.
+                    if self.blank_before_clause(else_arm.span.start) {
+                        self.emitter.blank_line();
+                    }
+                    self.emit_comments_before(else_arm.span.start);
                     self.emitter.write("else:");
                     self.format_arm_body(else_arm);
+                    // Terminates the clause. Required for the INLINE form
+                    // (`else: 20` has emitted no newline yet); a no-op for the
+                    // indented form, whose last statement already closed the
+                    // line — `Emitter::newline` is idempotent at line start.
                     self.emitter.newline();
                 }
                 self.emitter.dedent();
@@ -3230,7 +3552,10 @@ impl Formatter {
                 self.format_block_stmts(block);
                 self.emitter.dedent();
             }
-            Expr::Do { body } => {
+            Expr::Do {
+                body,
+                author_spelled,
+            } => {
                 // gorget-js snag #15c widening (R39 follow-up to Track G,
                 // 2026-08-09): a `do:` wrapping a SINGLE bare terminal
                 // expression (Throw/Return/Expr) inlines to the bare form,
@@ -3242,7 +3567,13 @@ impl Formatter {
                 // `catch (e): do:\n    fallback(x)` (cosmetic rot + snag
                 // #15b move-tail regression class for Throw/Return).
                 // Consolidated via the shared helper.
-                if self.try_inline_single_terminal_stmt(body) {
+                //
+                // R41 T-FMT-C: ONLY the synthesized wrap may be inlined away.
+                // Applied to an author-written `do:`, this same inlining ATE
+                // the keyword — `int s = do:` + `1 + 1` came back as
+                // `int s = 1 + 1`. `author_spelled` is what separates the two
+                // producers of this variant; the shape cannot.
+                if !*author_spelled && self.try_inline_single_terminal_stmt(body) {
                     return;
                 }
                 self.emitter.write("do:");
@@ -3269,49 +3600,76 @@ impl Formatter {
                 }).collect();
                 let params_doc = doc::surround("(", items, ")", true);
                 self.write_doc(&params_doc);
-                self.emitter.write(": ");
+                // R41 T-FMT-C: the colon and the separator are SEPARATE
+                // writes. Writing `": "` unconditionally and then newlining
+                // left `(int x): ` — a trailing space — on every block-bodied
+                // closure, which the corpus-wide sweep would have baked in.
+                self.emitter.write(":");
                 // Total prelude stmts injected by the parser for tuple destructuring.
                 let prelude_skip: usize = params
                     .iter()
                     .filter_map(|p| p.node.destructure.as_ref().map(|b| b.len()))
                     .sum();
                 if let Expr::Block(ref block) = body.node {
-                    // If the only post-prelude stmt is `return expr;`, render the closure
-                    // as expression-body — mirrors the parser's wrap of inline `((...)): expr`
-                    // bodies into `Block { ..prelude.., Stmt::Return(Some(expr)) }`.
                     let post_prelude: Vec<&Spanned<Stmt>> =
                         block.stmts.iter().skip(prelude_skip).collect();
-                    let inline_expr = if post_prelude.len() == 1 {
-                        match &post_prelude[0].node {
-                            Stmt::Return(Some(e)) => Some(e.clone()),
-                            _ => None,
+                    // R41 T-FMT-C: layout-GATED, not layout-only. `NextLine`
+                    // means the author indented the body and it stays
+                    // indented; `Inline` still has to pick WHICH inline form,
+                    // because the parser normalizes an expression body into
+                    // `Block { ..prelude.., Return(e) }` and that `return` is
+                    // the parser's spelling, not the author's.
+                    //
+                    // The old code inferred the form from the shape
+                    // (`post_prelude.len() == 1 && Stmt::Return`), which
+                    // COLLAPSED an author-indented single-`return` body onto
+                    // the header. A multi-statement indented body survived,
+                    // which is why a fixture carrying only that shape would
+                    // have been green throughout.
+                    if block.layout == SuiteLayout::Inline {
+                        self.emitter.write(" ");
+                        let inline_expr = if post_prelude.len() == 1 {
+                            match &post_prelude[0].node {
+                                Stmt::Return(Some(e)) => Some(e.clone()),
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(expr) = inline_expr {
+                            self.format_expr(&expr);
+                        } else {
+                            // A non-`return` inline shape — `(int x): throw "a"`
+                            // is a synthetic `Block { Throw }` with no
+                            // expression form. Route it through the shared
+                            // single-terminal inliner rather than exploding it
+                            // onto its own line.
+                            let tail: Vec<Spanned<Stmt>> =
+                                post_prelude.iter().map(|s| (*s).clone()).collect();
+                            if !self.try_inline_single_terminal_stmts(&tail) {
+                                // Unreachable for parser output: an `Inline`
+                                // closure body is always a one-statement
+                                // synthetic wrap. Emit the suite rather than
+                                // drop it (Core #10 — never silently discard
+                                // what the author wrote).
+                                self.emitter.newline();
+                                self.emitter.indent();
+                                self.format_closure_post_prelude(
+                                    block,
+                                    &post_prelude,
+                                    prelude_skip,
+                                );
+                                self.emitter.dedent();
+                            }
                         }
-                    } else {
-                        None
-                    };
-                    if let Some(expr) = inline_expr {
-                        self.format_expr(&expr);
                     } else {
                         self.emitter.newline();
                         self.emitter.indent();
-                        if prelude_skip > 0 {
-                            for stmt in &post_prelude {
-                                self.emit_comments_before(stmt.span.start);
-                                self.format_stmt(stmt);
-                                // R39 snag #2: mirror `format_block_stmts`
-                                // hook. This branch bypasses the shared
-                                // helper because it must SKIP the parser-
-                                // synthesized destructure-prelude stmts,
-                                // but the trailing-comment semantics are
-                                // identical for the post-prelude tail.
-                                self.emit_trailing_comment_after(stmt.span.end, false);
-                            }
-                        } else {
-                            self.format_block_stmts(block);
-                        }
+                        self.format_closure_post_prelude(block, &post_prelude, prelude_skip);
                         self.emitter.dedent();
                     }
                 } else {
+                    self.emitter.write(" ");
                     self.format_expr(body);
                 }
             }

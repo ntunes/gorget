@@ -2751,10 +2751,10 @@ fn synthesize_static_init_fn(
         generic_params: None,
         params: vec![],
         throws: ThrowsSpec::No,
-        body: FunctionBody::Block(Block {
-            stmts: vec![Spanned::new(var_decl_stmt, span), Spanned::new(return_stmt, span)],
+        body: FunctionBody::Block(Block::synthetic(
+            vec![Spanned::new(var_decl_stmt, span), Spanned::new(return_stmt, span)],
             span,
-        }),
+        )),
         doc_comment: None,
         span,
         param_abis: vec![],

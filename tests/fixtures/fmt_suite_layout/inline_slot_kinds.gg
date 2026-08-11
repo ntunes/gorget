@@ -1,0 +1,26 @@
+# ==== T-FMT-C · what KIND of statement sits in an inline suite slot
+#
+# AXIS (4 cells): call · var-decl · nested `if` · block-bearing child.
+# The inline emitter delegates the slot to `format_block_stmts` WITHOUT an
+# `indent()`, so a block-bearing child (`int x = match y:` + an indented
+# suite) nests relative to the HEADER's indent — exactly as the author
+# spelled it. An `indent()` here would push the nested suite one level too
+# deep and break the fixpoint.
+#
+# RED pre-fix (recorded 2026-08-11): all four EXPLODED (the `Stmt::If`
+# emitter had no inline path at all). The block-bearing cell additionally
+# showed the collapse + spurious-blank pair from the expr-match `else`.
+
+void kinds(int y):
+    if true: print(1)
+    if true: int a = y + 1
+    if true: if false: print(2)
+    if true: int x = match y:
+        case 2:
+            20
+        else:
+            30
+    print(3)
+
+void main():
+    kinds(2)

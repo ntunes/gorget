@@ -480,6 +480,10 @@ impl Parser {
         Ok(Block {
             stmts,
             span: start.merge(end),
+            // The ONE `NextLine` writer: this function IS the indented-suite
+            // grammar (`NEWLINE INDENT stmt* DEDENT`). Every other `Block`
+            // construction in the parser is an inline or synthesized form.
+            layout: SuiteLayout::NextLine,
         })
     }
 
@@ -509,6 +513,7 @@ impl Parser {
         Ok(Block {
             stmts: vec![stmt],
             span: start.merge(end),
+            layout: SuiteLayout::Inline,
         })
     }
 
@@ -518,7 +523,15 @@ impl Parser {
         if self.check(&Token::Newline) {
             let block = self.parse_block_body(start)?;
             let span = block.span;
-            Ok(Spanned::new(Expr::Do { body: block }, span))
+            // SYNTHESIZED `Do` — `catch (e):` / `rethrow (e):` take an
+            // indented suite directly; the author wrote no `do`.
+            Ok(Spanned::new(
+                Expr::Do {
+                    body: block,
+                    author_spelled: false,
+                },
+                span,
+            ))
         } else {
             self.parse_expr()
         }

@@ -1,0 +1,74 @@
+# ==== T-FMT-C · author blank before an `else` clause — the WHOLE class
+#
+# The blank-before-clause defect was filed against `if`/`elif` only. Censusing
+# the class found EIGHT clause-emitting sites, and the six here were deleting
+# author blanks exactly like the two that were filed. Fixing only the filed
+# pair would have been an instance fix with the siblings left live.
+#
+# SITE AXIS (6 cells): statement-match `else` · expression-match `else` ·
+#   `for` `else` · `while` `else` · `meta match` `else` · `select` `else`.
+#   (The `if`-`else` and `elif` cells live in `blank_before_clause.gg`.)
+#
+# All eight anchors are the clause's OWN colon — the parser records
+# `start = peek_span()` BEFORE consuming the `:`, so the clause body's
+# `span.start` sits on the clause's own source line and walking back from it
+# reaches the branch body's last content line.
+#
+# RED pre-fix (recorded 2026-08-11): all six deleted the blank.
+
+void stmt_match_else(int x):
+    match x:
+        case 1:
+            print(1)
+
+        else:
+            print(2)
+
+int expr_match_else(int x):
+    int r = match x:
+        case 1:
+            10
+
+        else:
+            20
+    return r
+
+void for_else():
+    for i in 0..3:
+        print(i)
+
+    else:
+        print(9)
+
+void while_else():
+    while false:
+        print(1)
+
+    else:
+        print(2)
+
+String meta_match_else[T]():
+    meta match typename(T):
+        case "int":
+            return "i"
+
+        else:
+            return "o"
+
+void select_else():
+    Channel[int] ch = Channel[int](1)
+    select:
+        case int v = ch.recv():
+            print(v)
+
+        else:
+            print(0)
+    ch.close()
+
+void main():
+    stmt_match_else(1)
+    print(expr_match_else(1))
+    for_else()
+    while_else()
+    print(meta_match_else[int]())
+    select_else()

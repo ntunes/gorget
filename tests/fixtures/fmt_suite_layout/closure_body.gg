@@ -1,0 +1,71 @@
+# ==== T-FMT-C · closure body — suite-layout form preservation
+#
+# AXIS (6 cells): single-`return` next-line · multi-stmt next-line ·
+#   inline expression · destructure-param inline · destructure-param
+#   next-line · inline `throw` body.
+#
+# ⚠ CELL NAMING (Core #12): the collapsing shape pre-fix was specifically the
+#   SINGLE-post-prelude-`return` one. A multi-statement next-line body was
+#   already preserved, so a fixture named "closure block bodies are preserved"
+#   that only carried the multi-statement shape would have been GREEN while
+#   the defect ran. Each cell below names the shape it samples.
+#
+# ⚠ The closure emitter is layout-GATED, not layout-ONLY. On the `Inline`
+#   side it still destructures the body to pick the expression form:
+#   `(int x): return x * 2` renders as `(int x): x * 2` (pre-existing and
+#   deliberately unchanged — the parser wraps an inline closure body in
+#   `Block { Return(expr) }`, so `return` is a spelling the parser invented,
+#   not one the author spelled), while an inline `throw` body is a synthetic
+#   `Block { Throw }` that has no expression form and routes through
+#   `try_inline_single_terminal_stmt`.
+#
+# RED pre-fix (recorded 2026-08-11):
+#   * single-`return` next-line   — COLLAPSED to `(int x): x * 2`.
+#   * destructure next-line       — COLLAPSED the same way.
+#   * multi-stmt next-line        — body kept, but the enclosing var-decl
+#                                   gained a spurious BLANK line.
+#   * EVERY block-bodied closure  — the header emitted `": "` unconditionally
+#                                   and then newlined, leaving `(int x): `
+#                                   with TRAILING WHITESPACE (measured with
+#                                   `cat -A`). The harness asserts no line in
+#                                   the output ends in whitespace, so this
+#                                   file pins that cell too.
+# GREEN pre-fix / BREAK-AND-WATCH: the multi-stmt next-line cell's LAYOUT
+#   (only its blank was red) and the two inline cells. Make the closure
+#   emitter ignore `Block.layout` and the next-line cells collapse.
+
+void single_return_next():
+    int(int) f = (int x):
+        return x * 2
+    print(f(3))
+
+void multi_stmt_next():
+    int(int) g = (int x):
+        int t = x * 2
+        return t + 1
+    print(g(3))
+
+void inline_expr():
+    int(int) h = (int x): x * 2
+    print(h(3))
+
+void destructure_inline():
+    int((int, int)) p = ((int a, int b)): a + b
+    print(p((1, 2)))
+
+void destructure_next():
+    int((int, int)) q = ((int a, int b)):
+        return a + b
+    print(q((1, 2)))
+
+void inline_throw():
+    int(int) k = (int x): throw "nope"
+    print(1)
+
+void main():
+    single_return_next()
+    multi_stmt_next()
+    inline_expr()
+    destructure_inline()
+    destructure_next()
+    inline_throw()

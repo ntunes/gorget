@@ -1,0 +1,29 @@
+# ==== T-FMT-C · `on error` — suite-layout form preservation
+#
+# AXIS (2 cells): inline (COLON-LESS) · block.
+#
+# ⚠ THE INLINE FORM TAKES NO COLON. `on error print(1)` parses;
+#   `on error: print(1)` is a PARSE ERROR (measured 2026-08-11 —
+#   `expected NEWLINE, found identifier 'print'`). So this site's inline
+#   header suffix differs from every other suite in the family, which is why
+#   the inline emitter takes the header spelling as a per-site parameter
+#   rather than hardcoding `":"`.
+#
+# RED pre-fix (recorded 2026-08-11): the inline cell EXPLODED to
+#   `on error:` + an indented body — three hunks on the S1 corpus sweep.
+# GREEN pre-fix / BREAK-AND-WATCH: the block cell; make the emitter ignore
+#   `Block.layout` (always inline) and it collapses onto the header.
+
+void inline_form():
+    on error print(1)
+    print(2)
+
+void block_form():
+    on error:
+        print(1)
+        print(3)
+    print(2)
+
+void main():
+    inline_form()
+    block_form()

@@ -11561,6 +11561,60 @@ fn fact_field_corpus() -> Vec<(&'static str, &'static str)> {
         // see `project_facts`. Read here so the exemption is EXERCISED rather
         // than being dead prose.
         ("comprehension_pre_in_sigil", COMPREHENSION_PRE_IN_SIGIL_SRC),
+        // ── R41 T-FMT-C: `Block.layout` ──────────────────────────────────
+        // Both spellings of the same suite, side by side, at every site the
+        // formatter reads the layout at. The pair is the point: an entry with
+        // only one spelling would agree with itself under a formatter that had
+        // picked that spelling for everything.
+        (
+            "suite_layout_stmt_facts",
+            "void g(int y):\n    print(y)\n\n\
+             void main():\n    \
+             int x = 1\n    \
+             if x == 1: g(1)\n    \
+             elif x == 2:\n        g(2)\n    \
+             else: g(3)\n    \
+             on error g(4)\n    \
+             match x:\n        \
+             case 1: g(5)\n        \
+             case 2:\n            g(6)\n        \
+             else:\n            g(7)\n",
+        ),
+        // Expression-position suites: match arms (the `else` arm's collapse was
+        // the reported defect) and closure bodies (whose single-`return`
+        // indented form collapsed while the multi-statement one did not).
+        (
+            "suite_layout_expr_facts",
+            "int pick(int x):\n    \
+             int r = match x:\n        \
+             case 1: 10\n        \
+             else:\n            20\n    \
+             int(int) f = (int y):\n        return y * 2\n    \
+             int(int) h = (int y): y * 3\n    \
+             return r + f(1) + h(1)\n",
+        ),
+        // `meta match` — reached only because R41 T-FMT-C added the
+        // `Stmt::MetaMatch` arm to the walk; without it these blocks are
+        // invisible and the meta cells of the class project nothing.
+        (
+            "suite_layout_meta_facts",
+            "String tn[T]():\n    \
+             meta match typename(T):\n        \
+             case \"int\": return \"i\"\n        \
+             else:\n            return \"o\"\n",
+        ),
+        // `Expr::Do.author_spelled` — the author's `do:` beside the wrap
+        // `parse_body_or_expr` synthesizes for an indented `catch` body. Same
+        // variant, same shape; only the flag tells them apart, and the
+        // formatter must neither delete the first nor invent the second.
+        (
+            "do_author_spelled_facts",
+            "int risky(int x):\n    throw \"boom\"\n\n\
+             int main2(int x):\n    \
+             int a = do:\n        int t = x + 1\n        t * 2\n    \
+             int b = risky(x) catch (e):\n        int u = x + 2\n        u * 3\n    \
+             return a + b\n",
+        ),
     ]
 }
 
@@ -11646,10 +11700,15 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
                 facts.push(format!("{path}.closure_is_move={is_move}"));
                 visit_expr(&format!("{path}.closure.b"), &body.node, facts);
             }
-            Expr::Block(b) | Expr::Do { body: b } => {
-                for (i, st) in b.stmts.iter().enumerate() {
-                    visit_stmt(&format!("{path}.blk.s{i}"), &st.node, facts);
-                }
+            // R41 T-FMT-C: the or-pattern SPLITS, because `Do` now carries a
+            // fact of its own that only one alternative has. Both route
+            // through `visit_block` so the block's `layout` is projected here
+            // too — inlined, this arm was the guard's blind spot for closure
+            // bodies (the shape most of the suite-layout defects lived in).
+            Expr::Block(b) => visit_block(&format!("{path}.blk"), b, facts),
+            Expr::Do { body: b, author_spelled } => {
+                facts.push(format!("{path}.do.author_spelled={author_spelled}"));
+                visit_block(&format!("{path}.do"), b, facts);
             }
             Expr::If { condition, then_branch, else_branch, .. } => {
                 visit_expr(&format!("{path}.ifc"), &condition.node, facts);
@@ -11704,6 +11763,12 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
     }
 
     fn visit_block(path: &str, b: &Block, facts: &mut Vec<String>) {
+        // R41 T-FMT-C — `Block.layout`, the author's suite spelling. This is
+        // the fact the class needed: `gg fmt` exploded every one-liner and
+        // collapsed every short indented suite, and the re-parsed AST was
+        // structurally IDENTICAL either way, so re-parse + idempotence both
+        // stayed green while the source was being rewritten.
+        facts.push(format!("{path}.layout={:?}", b.layout));
         for (i, st) in b.stmts.iter().enumerate() {
             visit_stmt(&format!("{path}.s{i}"), &st.node, facts);
         }
@@ -11738,10 +11803,13 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
         }
     }
 
-    /// The walk descends into every block-bearing statement EXCEPT the meta forms
-    /// (`Stmt::MetaFor`/`MetaMatch`/`MetaWhile` — named exclusions, pass-3; the
-    /// formatter guard verified live inside a `meta for` body regardless), not
-    /// just the function body. The §4 ownership axes (`Stmt::For.ownership`,
+    /// The walk descends into every block-bearing statement except
+    /// `Stmt::MetaFor` / `MetaWhile` (named exclusions; the formatter guard is
+    /// verified live inside a `meta for` body regardless), not just the
+    /// function body. **`Stmt::MetaMatch` joined the walk in R41 T-FMT-C** —
+    /// its arm bodies are `Block`s whose `layout` the formatter now reads, and
+    /// leaving it out would have left the `meta match` cells of the
+    /// suite-layout class unprojected. The §4 ownership axes (`Stmt::For.ownership`,
     /// `CallArg.ownership`) are positional, so they occur at any nesting depth —
     /// a `for i in (^s)..e:` inside an `if` is the same defect as one at fn
     /// level, and a fn-level-only projection would be blind to it.
@@ -11766,6 +11834,19 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
                 }
                 if let Some(e) = else_body {
                     visit_block(&format!("{path}.metaif.el"), e, facts);
+                }
+            }
+            // R41 T-FMT-C: mirrors the `MetaIf` arm above. `meta match` arm
+            // bodies are `Block`s whose author layout the formatter reads, so
+            // the projection has to reach them.
+            Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+                visit_expr(&format!("{path}.metamatch.s"), &scrutinee.node, facts);
+                for (i, (c, b)) in arms.iter().enumerate() {
+                    visit_expr(&format!("{path}.metamatch.c{i}"), &c.node, facts);
+                    visit_block(&format!("{path}.metamatch.b{i}"), b, facts);
+                }
+                if let Some(e) = else_arm {
+                    visit_block(&format!("{path}.metamatch.el"), e, facts);
                 }
             }
             // Stmt::For.ownership — a §4 axis.
@@ -20041,7 +20122,11 @@ fn format_expr_canonical(expr: &Expr) -> String {
             let body = format_block_canonical(&block.stmts);
             format!("block:{body}")
         }
-        Expr::Do { body } => {
+        // ⚠ `author_spelled` is deliberately NOT described here. This is the
+        // Rust-vs-self-host `parser_comparison` oracle; it must mirror what
+        // the SH parser can express, and growing it would silently degrade
+        // parity reporting rather than pin anything.
+        Expr::Do { body, .. } => {
             let body_str = format_block_canonical(&body.stmts);
             format!("do:{body_str}")
         }
@@ -47101,4 +47186,161 @@ fn rust_gg_build_is_deterministic() {
             );
         }
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// R41 T-FMT-C — suite-layout FORM PRESERVATION
+// ══════════════════════════════════════════════════════════════════════
+
+/// The T-FMT-C fixture matrix: `tests/fixtures/fmt_suite_layout/`.
+///
+/// **The assertion is a FIXPOINT, not a golden-output diff.** Every `.gg`
+/// file in the directory is written in the exact form `gg fmt` must produce,
+/// so `fmt(file) == file` and a failure prints a plain before/after of what
+/// the formatter did to the author's spelling. The one exception is a cell
+/// where the formatter is DESIGNED to move something (the deferred header
+/// comment on a multi-line inline child): those carry a `.expected`
+/// companion and assert against it instead.
+///
+/// Four properties per cell, each of which the suite-layout class broke at
+/// least once:
+///   1. **form preservation** — `fmt(src)` equals the pinned form;
+///   2. **re-parse** — the output parses with zero errors (the inline
+///      header-comment swallow emitted a file that did NOT reparse);
+///   3. **idempotence** — a second pass is byte-identical;
+///   4. **no trailing whitespace** — the block-bodied closure header wrote
+///      `": "` unconditionally and then newlined, leaving `(int x): ` with a
+///      trailing space on every block-bodied closure in the corpus.
+///
+/// **The file list is PINNED.** A directory scan alone would let a deleted
+/// fixture disappear silently, taking its axis cell with it; the census test
+/// fails on both a missing and an unregistered file.
+const FMT_SUITE_LAYOUT_FIXTURES: &[&str] = &[
+    "b1_newline_members.gg",
+    "blank_before_clause.gg",
+    "blank_hosts.gg",
+    "blank_insertion.gg",
+    "catch_arm.gg",
+    "clause_sites_blank.gg",
+    "clause_sites_comment.gg",
+    "closure_body.gg",
+    "do_expr.gg",
+    "expr_match.gg",
+    "if_chain.gg",
+    "inline_multiline_child_comment.gg",
+    "inline_slot_kinds.gg",
+    "inline_trailing_comment.gg",
+    "meta_match.gg",
+    "nested_overwidth.gg",
+    "on_error.gg",
+    "stmt_match.gg",
+    "synthetic_terminal.gg",
+];
+
+#[test]
+fn fmt_suite_layout_census_is_complete() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fmt_suite_layout");
+    let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()))
+        .map(|e| {
+            e.expect("dir entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|n| n.ends_with(".gg"))
+        .collect();
+    on_disk.sort();
+    let mut pinned: Vec<String> = FMT_SUITE_LAYOUT_FIXTURES
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    pinned.sort();
+    assert_eq!(
+        on_disk, pinned,
+        "R41 T-FMT-C fixture census drifted. `tests/fixtures/fmt_suite_layout/` \
+         and `FMT_SUITE_LAYOUT_FIXTURES` must agree — a fixture deleted from \
+         disk takes its axis cell with it, and one added without a census row \
+         is not attributable to an axis."
+    );
+}
+
+#[test]
+fn fmt_suite_layout_form_preservation() {
+    use gorget::parser::Parser;
+
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fmt_suite_layout");
+    let mut failures: Vec<String> = Vec::new();
+
+    for name in FMT_SUITE_LAYOUT_FIXTURES {
+        let path = dir.join(name);
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+
+        // A fixture that does not itself parse pins nothing.
+        let mut p0 = Parser::new(&source);
+        let _ = p0.parse_module();
+        assert!(
+            p0.errors.is_empty(),
+            "T-FMT-C fixture `{name}` does not parse ({} error(s)): {:?}",
+            p0.errors.len(),
+            p0.errors.first()
+        );
+
+        let expected_path = dir.join(format!("{}.expected", name.trim_end_matches(".gg")));
+        let expected = if expected_path.exists() {
+            std::fs::read_to_string(&expected_path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", expected_path.display()))
+        } else {
+            source.clone()
+        };
+
+        let first = gorget::formatter::format_source_infallible(&source);
+        if first != expected {
+            failures.push(format!(
+                "--- {name}: `gg fmt` changed a form the author spelled ---\n\
+                 === expected ===\n{expected}\n=== got ===\n{first}"
+            ));
+            continue;
+        }
+
+        let mut p1 = Parser::new(&first);
+        let _ = p1.parse_module();
+        if !p1.errors.is_empty() {
+            failures.push(format!(
+                "--- {name}: output does NOT re-parse ({} error(s)) ---\n{:?}\n\
+                 === output ===\n{first}",
+                p1.errors.len(),
+                p1.errors.first()
+            ));
+            continue;
+        }
+
+        let second = gorget::formatter::format_source_infallible(&first);
+        if second != first {
+            failures.push(format!(
+                "--- {name}: NOT idempotent ---\n=== pass 1 ===\n{first}\n\
+                 === pass 2 ===\n{second}"
+            ));
+            continue;
+        }
+
+        for (i, line) in first.lines().enumerate() {
+            if line.len() != line.trim_end().len() {
+                failures.push(format!(
+                    "--- {name}: line {} ends in whitespace ---\n{:?}",
+                    i + 1,
+                    line
+                ));
+                break;
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "R41 T-FMT-C suite-layout matrix: {} fixture(s) failed.\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
 }

@@ -1,0 +1,72 @@
+# ==== T-FMT-C · the spurious-BLANK class — MEMBERS
+#
+# MECHANISM: an expression-position suite's LAST statement writes the
+# terminating newline (through `format_block_stmts`), and then the ENCLOSING
+# statement writes its own. Two newlines render as a blank line the author
+# never wrote. It is a PRODUCER defect, so the fix is at the producer:
+# `Emitter::newline()` is idempotent at line start (`blank_line()` stays the
+# one explicit way to ask for a blank). A per-host swap would have missed the
+# members that live outside `format_stmt` entirely.
+#
+# MEMBER AXIS (6 cells, each followed by a sibling statement with NO author
+# blank, which is what makes an inserted one visible):
+#   expr-match else inline · expr-match else block · catch block ·
+#   closure block body · author `do:` block · nested expr-match.
+#
+# RED pre-fix (recorded 2026-08-11): every cell gained one blank line.
+
+int m_inline(int x):
+    int r = match x:
+        case 1: 10
+        else: 20
+    return r
+
+int m_block(int x):
+    int r = match x:
+        case 1:
+            10
+        else:
+            20
+    return r
+
+int risky3(int x):
+    throw "boom"
+
+int c_block(int x):
+    int v = risky3(x) catch (e):
+        int t = x + 1
+        t * 2
+    return v
+
+int cl_block(int x):
+    int(int) f = (int y):
+        int t = y * 2
+        return t
+    return f(x)
+
+int d_block(int x):
+    int r = do:
+        int y = x + 1
+        y * 2
+    return r
+
+int nested(int x):
+    int r = match x:
+        case 1:
+            int inner = match x:
+                case 1:
+                    100
+                else:
+                    200
+            inner + 1
+        else:
+            0
+    return r
+
+void main():
+    print(m_inline(1))
+    print(m_block(1))
+    print(c_block(1))
+    print(cl_block(1))
+    print(d_block(1))
+    print(nested(1))

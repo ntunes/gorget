@@ -1,0 +1,30 @@
+# ==== T-FMT-C · synthetic terminal-statement wraps stay INLINE
+#
+# AXIS (2 cells): `else: throw ...` · `else: return ...`.
+#
+# `throw x` and `return x` are STATEMENTS that the parser accepts in
+# expression position by wrapping them in a synthetic `Expr::Block`. That wrap
+# is not something the author spelled, so it is constructed with
+# `SuiteLayout::Inline` — the typed carve-out that keeps the layout read from
+# exploding these onto their own line, and keeps `format_expr` from emitting
+# them as `do:` + block (which would break `fmt_idempotent` and, for a
+# move-sigil tail, flip the program from ACCEPTED to REJECTED).
+#
+# GREEN pre-fix — BREAK-AND-WATCH: construct the two synthetic wraps at
+#   `parser/expr.rs` with `SuiteLayout::NextLine` instead of `Inline` and both
+#   cells RED (the tails explode onto their own lines).
+
+int thrower(int x):
+    int r = match x:
+        case 1: 10
+        else: throw "bad"
+    return r
+
+int returner(int x):
+    int r = match x:
+        case 1: 10
+        else: return 0
+    return r
+
+void main():
+    print(returner(1))

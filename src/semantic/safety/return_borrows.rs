@@ -640,7 +640,7 @@ fn trace_expr_to_params(
             }
         }
 
-        Expr::Block(block) | Expr::Do { body: block } => {
+        Expr::Block(block) | Expr::Do { body: block, .. } => {
             if let Some(last) = block.stmts.last() {
                 if let Stmt::Expr(e) = &last.node {
                     trace_expr_to_params(e, param_names, local_aliases, function_info, resolution_map, scopes, result);

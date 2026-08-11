@@ -1,0 +1,75 @@
+# ==== T-FMT-C · a comment ABOVE an `else` clause documents the CLAUSE
+#
+# A comment written on its own line above `else:` documents the BRANCH. With
+# no leading-comment hook at the clause site it fell through to
+# `format_block_stmts`, which re-emitted it INSIDE the branch body — where it
+# documents the first statement instead. Same misattribution class as the
+# arm-loop hooks, six sites further along.
+#
+# SITE AXIS (6 cells): statement-match `else` · expression-match `else` ·
+#   `for` `else` · `while` `else` · `meta match` `else` · `select` `else`.
+#
+# ORDER: blank check -> `emit_comments_before(<clause anchor>)` -> write the
+# header, mirroring `format_block_stmts`. The hooks are LEADING-only: adding
+# a paired trailing hook here would DOUBLE-CLAIM against the header hook the
+# branch emitters already write.
+#
+# RED pre-fix (recorded 2026-08-11): all six pulled the comment down into the
+# branch body.
+
+void stmt_match_else(int x):
+    match x:
+        case 1:
+            print(1)
+        # the fallback
+        else:
+            print(2)
+
+int expr_match_else(int x):
+    int r = match x:
+        case 1:
+            10
+        # the fallback
+        else:
+            20
+    return r
+
+void for_else():
+    for i in 0..3:
+        print(i)
+    # ran to completion
+    else:
+        print(9)
+
+void while_else():
+    while false:
+        print(1)
+    # never entered
+    else:
+        print(2)
+
+String meta_match_else[T]():
+    meta match typename(T):
+        case "int":
+            return "i"
+        # every other type
+        else:
+            return "o"
+
+void select_else():
+    Channel[int] ch = Channel[int](1)
+    select:
+        case int v = ch.recv():
+            print(v)
+        # nothing ready
+        else:
+            print(0)
+    ch.close()
+
+void main():
+    stmt_match_else(1)
+    print(expr_match_else(1))
+    for_else()
+    while_else()
+    print(meta_match_else[int]())
+    select_else()

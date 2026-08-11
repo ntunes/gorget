@@ -1,0 +1,58 @@
+# ==== T-FMT-C · expression-position match — suite-layout form preservation
+#
+# AXIS: {case arm, else arm} x {inline, next-line 1 stmt, next-line N stmts}
+#       = 6 cells. Every cell is spelled in the form `gg fmt` must PRODUCE,
+#       so the assertion is "fmt is a FIXPOINT on this file".
+#
+# RED pre-fix (recorded 2026-08-11 on the pre-fix binary):
+#   * else/next-1  — `else:` + next-line `20` COLLAPSED to `else: 20`
+#                    (`format_arm_body`'s stmts.len() <= 1 shape test).
+#   * else/next-N  — body kept, but a spurious BLANK line appeared after
+#                    the enclosing var-decl (the double-newline class).
+#   * all 6 hosts  — the same spurious blank; an expression-position suite's
+#                    last stmt newline-terminated, then the enclosing
+#                    `Stmt::VarDecl` wrote its own newline.
+# GREEN pre-fix / BREAK-AND-WATCH: the three `case` cells preserve layout
+#   today. To see them RED, make `format_match_arm` ignore `Block.layout`
+#   (always take the inline branch) — the next-line case bodies collapse.
+
+int case_inline(int x):
+    int r = match x:
+        case 1: 10
+        else: 20
+    return r
+
+int case_next_one(int x):
+    int r = match x:
+        case 1:
+            10
+        else:
+            20
+    return r
+
+int case_next_many(int x):
+    int r = match x:
+        case 1:
+            int t = x + 1
+            t * 2
+        else:
+            int u = x - 1
+            u * 3
+    return r
+
+# Mixed: an inline `case` beside a next-line `else` — the two arms of ONE
+# construct must each keep the form its author spelled (the owner-reported
+# "inconsistent within one construct" symptom).
+int mixed_forms(int x):
+    int r = match x:
+        case 1: 10
+        else:
+            int u = x - 1
+            u * 3
+    return r
+
+void main():
+    print(case_inline(1))
+    print(case_next_one(1))
+    print(case_next_many(1))
+    print(mixed_forms(1))

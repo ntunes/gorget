@@ -1,0 +1,37 @@
+# ==== T-FMT-C · spurious-blank members OUTSIDE `format_stmt`
+#
+# These two cells are why the fix is at `Emitter::newline()` and not a list of
+# `format_stmt` arms: neither host is a `format_stmt` arm.
+#
+# AXIS (2 cells):
+#   * an INLINE match arm whose body is itself a BLOCK-form match — the double
+#     newline happens at `format_match_arm`'s inline branch, INSIDE the arm.
+#     This shape became MORE reachable once inline arms stopped exploding, so
+#     a host-list fix would have shipped a fresh blank-inserter in the same
+#     round it removed the old ones.
+#   * a top-level `static` whose initializer is a block-form match —
+#     `format_static_decl` has its own terminal newline (as does
+#     `format_const_decl`, celled in `blank_hosts.gg`).
+#
+# RED pre-fix (recorded 2026-08-11): both gained a blank; both also showed the
+# `else:` collapse.
+
+int inline_arm_block_body(int x):
+    int r = match x:
+        case 1: match x:
+            case 1:
+                100
+            else:
+                200
+        else: 0
+    return r
+
+static int STATIC_HOST = match 1:
+    case 1:
+        10
+    else:
+        20
+
+void main():
+    print(inline_arm_block_body(1))
+    print(STATIC_HOST)

@@ -62,9 +62,20 @@ contract is simple:
 - `write(s)` lazily emits the pending indentation (four spaces per level,
   `src/formatter/mod.rs:39-41`) the first time text is written on a fresh line, then
   appends `s`.
-- `indent()` / `dedent()` bump the level; `newline()` resets to line start;
-  `blank_line()` emits *at most* one blank line and never doubles up
-  (`src/formatter/mod.rs:80-89`).
+- `indent()` / `dedent()` bump the level; `newline()` ends the current line and
+  is **idempotent at line start**; `blank_line()` emits *at most* one blank line
+  and never doubles up.
+
+`newline()`'s idempotence is what keeps blank lines out of nested emissions. An
+expression-position suite ends by newline-terminating its last statement, and
+the enclosing statement then terminates its own line — `int r = match x:` with
+an indented `else:` has both happen in sequence. Neither side is wrong; each is
+honouring "I end my own line". Making the *producer* treat "end a line that has
+already ended" as a no-op settles it once, for every combination of host and
+suite, instead of asking each host to know what its child did. `blank_line()`
+stays the one way to ask for a blank, so a deliberate one is never lost; a
+`tests/lints.rs` guard keeps raw newline writing inside `Emitter` so the
+property stays total.
 
 Indentation is always four spaces, hardcoded (`src/formatter/mod.rs:39`, mirrored by
 `doc::INDENT_WIDTH = 4` in `src/formatter/doc.rs:13`). There is no configuration:
@@ -131,6 +142,46 @@ segment is formatted by an ordinary recursive call.
 The formatter does more than echo the AST — it normalizes. The normalizations are
 the interesting part of the implementation; each is a deliberate canonical-form
 choice.
+
+### What the formatter does *not* own: suite layout
+
+Canonical output stops where the author made a real choice. Gorget accepts a
+suite on the header's own line (`if c: stmt`) or indented beneath it, and the
+formatter keeps whichever was written — symmetrically, so it neither explodes a
+one-liner nor collapses a short indented suite.
+
+That choice cannot be recovered downstream: the parser folds both spellings into
+the same one-statement `Block`, and comparing spans cannot help, because the same
+`Block` shape is also *synthesized* — for `throw x` / `return x` in expression
+position, for a normalized closure body — at positions where no suite was written
+at all. So the fact travels as typed metadata: **`Block.layout: SuiteLayout`**
+(`src/parser/ast.rs`), written at the parser's suite-construction sites and read
+by the emitters that have two spellings to choose between. Constructions outside
+the parser have no author to preserve and go through `Block::synthetic`.
+
+`Expr::Do` carries the same kind of bit for the same reason. It has two
+producers — the `do` keyword, and `parse_body_or_expr` synthesizing the variant
+for an indented `catch` / `rethrow` body — and the formatter must neither delete
+the author's keyword nor invent one where the parser supplied it.
+`author_spelled` separates them. It is not cosmetic: a `do:` wrap makes its tail
+a read position, so inserting or removing one can flip a program between
+accepted and rejected.
+
+Reading the *shape* instead of the layout is the trap this replaces, and it
+fails in both directions — a synthetic `Block { Throw }` is not an indented
+suite, and a one-statement indented suite is not a one-liner.
+
+Two positions accept only one spelling, and the emitters there deliberately
+carry no layout read: a statement-position `match` rejects `else: stmt`, and
+`on error`'s inline form is colon-less (`on error stmt`), so the inline emitter
+takes its header spelling as a parameter rather than hardcoding `":"`.
+
+Clause headers (`elif:`, `else:`) need one more thing. They are not statements,
+so the per-statement blank-line preservation in `format_block_stmts` cannot see
+them, and each clause site checks for an author blank above itself. The order is
+load-bearing — blank, then leading comments, then the header — or a
+`blank` / comment / `else:` run comes out comment-then-blank and the comment
+detaches from the clause it documents.
 
 ### Blank-line and trailing-newline normalization
 
@@ -234,10 +285,23 @@ single `arm_template` indented beneath it, rather than treating it as a regular 
 ## Match arms and guards
 
 `format_match_arm` (`src/formatter/mod.rs:1464`) prints `case <pattern>`, then — **if
-the arm has a guard** — ` if <guard>` (`src/formatter/mod.rs:1467-1470`). The arm
-body is laid out two ways depending on its AST shape: a `Block` body becomes a
-newline + indented statements (a multi-line arm), while any other expression body is
-printed inline after `: ` (`src/formatter/mod.rs:1472-1482`).
+the arm has a guard** — ` if <guard>`. The arm body is laid out two ways
+according to the author's `Block.layout`: an indented `Block` becomes a newline
+plus indented statements, and everything else is printed inline after the colon.
+
+The layout read matters here specifically because a `Block` body is *not* the
+same thing as an indented arm: `case 1: throw "bad"` also arrives as a `Block`,
+since the parser wraps a `throw`/`return` expression-prefix, and an emitter that
+branched on the AST shape put those on their own line.
+
+An inline arm also flips the order of the header's trailing-comment hook. Firing
+it at the colon would put the comment ahead of the statement it heads
+(`case 1:  # one` followed by the body), which does not re-parse. The comment is
+*claimed* at the header — which is what keeps a leading-comment hook inside the
+body from taking it first — and emitted after the body. Suppressing it instead is
+not available at this site: an inline arm body is an expression, so no
+statement-side hook exists to claim it, and it would drift down to lead the next
+arm.
 
 > **Note on a stale claim.** Older project memory states that "the formatter
 > suppresses match guards for canonical output." That is **not** true of the Rust

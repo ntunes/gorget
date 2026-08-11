@@ -1760,7 +1760,7 @@ fn resolve_expr(
             scopes.pop_scope();
         }
 
-        Expr::Do { body } => {
+        Expr::Do { body, .. } => {
             scopes.push_scope(super::scope::ScopeKind::Block);
             resolve_block(body, scopes, &mut TypeTable::new(), errors, resolution_map);
             scopes.pop_scope();

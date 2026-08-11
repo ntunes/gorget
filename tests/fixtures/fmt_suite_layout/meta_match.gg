@@ -1,0 +1,28 @@
+# ==== T-FMT-C · `meta match` — suite-layout form preservation
+#
+# AXIS (3 cells): case inline · else inline · next-line preserved.
+#
+# RED pre-fix (recorded 2026-08-11, also on the in-tree corpus fixture
+# `tests/fixtures/meta_delayed_match.gg`): BOTH inline cells EXPLODED to
+# next-line bodies — `Stmt::MetaMatch`'s emitter unconditionally wrote
+# `:` + newline + indent + block.
+# GREEN pre-fix / BREAK-AND-WATCH: the next-line cell. Make the MetaMatch
+# emitter ignore `Block.layout` (always take the new inline branch) and it
+# collapses.
+
+String tn_inline[T]():
+    meta match typename(T):
+        case "int": return "i"
+        case "float": return "f"
+        else: return "o"
+
+String tn_next[T]():
+    meta match typename(T):
+        case "int":
+            return "i"
+        else:
+            return "o"
+
+void main():
+    print(tn_inline[int]())
+    print(tn_next[int]())

@@ -1,0 +1,41 @@
+# ==== T-FMT-C · nesting and width
+#
+# AXIS (2 cells):
+#   * match-in-match — an inline arm holding a block-form match holding an
+#     inline arm. Each suite keeps its own spelling regardless of depth,
+#     because the layout is a property of the Block, not of the emitter's
+#     recursion state.
+#   * over-width inline — an inline suite that pushes its line past the
+#     120-column budget stays INLINE. The inline path emits through `write`,
+#     not the Doc renderer, so width never re-decides the suite's form. If
+#     over-width ever started exploding the suite, `gg fmt` would silently
+#     rewrite a one-liner the author chose, and the reason would be invisible
+#     in the source.
+#
+# RED pre-fix (recorded 2026-08-11): both cells EXPLODED / collapsed and the
+# nested cell gained blanks; the over-width cell exploded like every other
+# inline `if`.
+
+int deep(int x):
+    int r = match x:
+        case 1: match x:
+            case 1: 100
+            case 2:
+                200
+            else: 300
+        case 2:
+            int inner = match x:
+                case 1: 10
+                else:
+                    20
+            inner
+        else: 0
+    return r
+
+void over_width(int a_long_input_parameter_name_for_the_width_cell):
+    if a_long_input_parameter_name_for_the_width_cell == 1: int an_intentionally_long_local_binding_name = a_long_input_parameter_name_for_the_width_cell
+    print(2)
+
+void main():
+    print(deep(1))
+    over_width(1)

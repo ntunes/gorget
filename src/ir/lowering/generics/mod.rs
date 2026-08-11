@@ -817,7 +817,7 @@ impl GenericCollector {
                 }
             }
             // Block expressions: multi-statement match arm bodies, do-blocks, etc.
-            Expr::Block(block) | Expr::Do { body: block } => {
+            Expr::Block(block) | Expr::Do { body: block, .. } => {
                 self.scan_block(block);
             }
             // Expression-level match (arm bodies may contain VarDecls with generic types)

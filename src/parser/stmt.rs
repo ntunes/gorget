@@ -170,7 +170,12 @@ impl Parser {
             // Inline form: on error stmt
             let stmt = self.parse_stmt()?;
             let end = stmt.span;
-            let body = Block { stmts: vec![stmt], span: start.merge(end) };
+            // `on error <stmt>` — note the inline form takes NO colon.
+            let body = Block {
+                stmts: vec![stmt],
+                span: start.merge(end),
+                layout: SuiteLayout::Inline,
+            };
             Ok(Spanned::new(Stmt::OnError { body }, start.merge(end)))
         }
     }
@@ -1050,16 +1055,18 @@ impl Parser {
             }
 
             if self.match_keyword(Keyword::Else) {
+                let clause_start = self.peek_span();
                 self.expect(&Token::Colon)?;
-                let body = self.parse_meta_match_arm_body()?;
+                let body = self.parse_meta_match_arm_body(clause_start)?;
                 else_arm = Some(body);
                 continue;
             }
 
             self.expect_keyword(Keyword::Case)?;
             let case_expr = self.parse_expr()?;
+            let clause_start = self.peek_span();
             self.expect(&Token::Colon)?;
-            let body = self.parse_meta_match_arm_body()?;
+            let body = self.parse_meta_match_arm_body(clause_start)?;
             arms.push((case_expr, body));
         }
 
@@ -1077,17 +1084,29 @@ impl Parser {
         ))
     }
 
-    /// Parse a `meta match` arm body: either a single inline statement or a newline-indented block.
-    fn parse_meta_match_arm_body(&mut self) -> Result<Block, ParseError> {
+    /// Parse a `meta match` arm body: either a single inline statement or a
+    /// newline-indented block.
+    ///
+    /// `start` is the arm's own COLON, captured by the caller before consuming
+    /// it — the same anchor `parse_block` records for every other suite. It
+    /// puts the resulting `Block.span.start` on the arm's own source line,
+    /// which is what a walk-back from the block (for the blank line above a
+    /// clause header, or for the comments that lead it) needs. Anchoring at
+    /// the NEWLINE token instead put it on the line BELOW, one line past
+    /// everything such a walk is looking for.
+    fn parse_meta_match_arm_body(&mut self, start: Span) -> Result<Block, ParseError> {
         if self.check(&Token::Newline) {
-            let block_start = self.peek_span();
-            self.parse_block_body(block_start)
+            self.parse_block_body(start)
         } else {
             // Single inline statement
             let stmt_start = self.peek_span();
             let stmt = self.parse_stmt()?;
             let span = stmt.span;
-            Ok(Block { stmts: vec![stmt], span: stmt_start.merge(span) })
+            Ok(Block {
+                stmts: vec![stmt],
+                span: stmt_start.merge(span),
+                layout: SuiteLayout::Inline,
+            })
         }
     }
 

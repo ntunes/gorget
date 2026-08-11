@@ -3578,7 +3578,7 @@ fn expr_is_borrow_bind(expr: &ast::Expr) -> bool {
             arms.iter().any(|arm| expr_is_borrow_bind(&arm.body.node))
                 || else_arm.as_ref().is_some_and(|b| expr_is_borrow_bind(&b.node))
         }
-        ast::Expr::Do { body } => block_tail_is_borrow_bind(body),
+        ast::Expr::Do { body, .. } => block_tail_is_borrow_bind(body),
         ast::Expr::Block(block) => block_tail_is_borrow_bind(block),
         _ => false,
     }

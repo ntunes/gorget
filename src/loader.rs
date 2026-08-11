@@ -1203,7 +1203,7 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
             if let Some(e) = else_arm { qualify_expr(e, vm); }
         }
         Expr::Block(block) => qualify_block(block, vm),
-        Expr::Do { body } => qualify_block(body, vm),
+        Expr::Do { body, .. } => qualify_block(body, vm),
         Expr::Move { expr: inner }
         | Expr::Propagate { expr: inner }
         | Expr::MutableBorrow { expr: inner }

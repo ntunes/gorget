@@ -11784,7 +11784,23 @@ fn formatter_sibling_loops_hook_pairing() {
     // header hook — which is exactly why the count-pairing model below cannot
     // adjudicate them, and why `formatter_child_collection_loop_census`
     // classifies each loop's hook state explicitly instead.
-    const EXPECTED_EMIT_COMMENTS_BEFORE: usize = 21;
+    //
+    // R41 T-FMT-C (2026-08-11): 21 → 27. SIX more leading-only hooks, the rest
+    // of the CLAUSE-HEADER class. `elif`/`else` had gained theirs above; a
+    // census of the class found six sibling clause sites with none —
+    // `for`-`else`, `while`-`else`, `select`-`else`, `meta match`-`else`, the
+    // statement-match `else` and the expression-match `else`. Each was
+    // deleting an author blank above the clause AND letting a comment written
+    // above it fall through to `format_block_stmts`, which re-emitted the
+    // comment INSIDE the branch body. Same misattribution face, six positions
+    // the arm loops cannot see (a clause header is not a loop iteration, which
+    // is why `formatter_child_collection_loop_census` was blind to them too).
+    //
+    // ⚠ These are LEADING-ONLY, like the branch-header family above:
+    // `EXPECTED_EMIT_TRAILING_AFTER` deliberately does NOT move. Adding a
+    // paired trailing hook at a clause header would double-claim against the
+    // header hook the branch emitters already write.
+    const EXPECTED_EMIT_COMMENTS_BEFORE: usize = 27;
     /// `emit_trailing_comment_after(` calls: 12 sibling-paired + 1
     /// EOF defensive + 1 internal delegation from
     /// `emit_trailing_comment_after_header`. If sub-task 5's EOF hook
@@ -11985,7 +12001,11 @@ fn formatter_child_collection_loop_census() {
         ("format_stmt", "for arm in arms {", Leading),
         ("format_stmt", "for (case_expr, body) in arms {", Leading),
         ("format_expr", "for arm in arms {", Leading),
-        ("format_expr", "for stmt in &post_prelude {", Both),
+        // R41 T-FMT-C: the closure post-prelude loop moved out of `format_expr`
+        // into its own `format_closure_post_prelude`, so the indented and
+        // (unreachable-for-parser-output) fallback paths share ONE emitter
+        // instead of two copies of the hook pair.
+        ("format_closure_post_prelude", "for stmt in post_prelude {", Both),
     ];
 
     /// Child emitters that put their argument on its own source line(s), so a
@@ -12881,5 +12901,431 @@ fn fmt_multiline_group_paren_wrap_class() {
          leading-operator continuation the parser rejects.\n\n\
          If the arm count SHRANK (a call was removed / centralized), \
          lower EXPECTED_CALLS with the rationale.",
+    );
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// R41 T-FMT-C — suite-layout form preservation (Core #6 class guards)
+// ══════════════════════════════════════════════════════════════════════
+
+/// CENSUS of every SUITE EMISSION in `src/formatter/mod.rs`, classified by
+/// whether it reads the author's `Block.layout` and whether it checks for an
+/// author blank above a clause header.
+///
+/// **Why a census and not a count.** A count lint fires only when a site that
+/// HAS the mechanism loses it; a brand-new suite emitter that never had one
+/// moves no count and is invisible — the same blindness that let
+/// `format_extern_block`'s hookless loop sit green through the R41 T-FMT-A
+/// class. Both faces of the suite-layout class are exactly that shape: the
+/// eight clause headers were sites that had never checked for a blank, and the
+/// suite emitters were sites that had never read a layout. A guard that
+/// green-lights the class it exists to retire is worse than none.
+///
+/// **Detection is at the CHOKEPOINT, so a new site cannot dodge it.** Every
+/// indented suite in the formatter goes through `format_block_stmts` (and the
+/// inline path through `format_inline_suite`, which calls it), so enumerating
+/// its call sites enumerates the suites. A new suite-emitting arm necessarily
+/// adds a row here and is RED until it is classified — at which point its
+/// author has to answer "does this position have two author spellings?".
+///
+/// Classification (from the 12 source lines preceding the call):
+///   * `Layout`  — the emission is gated on `SuiteLayout`.
+///   * `Clause`  — the emission belongs to a clause header that checks
+///                 `blank_before_clause` for an author blank above it.
+///   * `Both`    — both.
+///   * `Plain`   — neither, with the row's rationale recorded below.
+///
+/// **Break-and-verify (Core #13, RED-verified 2026-08-11):** delete the
+/// `if body.layout == SuiteLayout::Inline` gate at the `Stmt::OnError` arm
+/// (keeping only the indented branch) and this lint fires with that row
+/// flipping `Layout` → `Plain`.
+///
+/// ⚠ **Known blind spot, measured while RED-verifying:** the classifier looks
+/// for the TOKEN, so a read that is present but DISABLED
+/// (`if false && body.layout == ...`) still reads as `Layout` here. That
+/// mutation is not the shape a regression takes — a lost gate is deleted, not
+/// short-circuited — and the fixture matrix catches the disabled form anyway,
+/// but the limit is real and stated rather than assumed away.
+#[test]
+fn formatter_suite_layout_hook_census() {
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+    enum Kind {
+        Layout,
+        Clause,
+        Both,
+        Plain,
+    }
+    use Kind::*;
+
+    // (enclosing fn, the call line, classification).
+    //
+    // Rationale for the `Plain` rows — positions with only ONE legal author
+    // spelling, so there is no layout to preserve and no clause header to
+    // carry a blank:
+    //   * DECLARATION bodies — `format_function`, `format_item`'s
+    //     `meta type` function, `format_test` / `format_bench` /
+    //     `format_suite_setup` / `format_suite_teardown`. A declaration body is
+    //     always indented. (`format_trait` has no row of its own: its default
+    //     method bodies route through `format_function`.)
+    //   * NEWLINE-REQUIRING statement producers — `Stmt::Loop` / `With` /
+    //     `Unsafe` / `NamedScope` / `MetaFor` / `MetaWhile` / `MetaIf`, the
+    //     `for` and `while` BODIES, and the `select` / `match` CASE arm
+    //     bodies. Each parses through `parse_block`, which accepts the
+    //     indented form only. `on error` is the counter-example that proves
+    //     the rule — its inline form is colon-less and real — and it is
+    //     `Layout`.
+    //   * `format_arm_body`'s author-`do:` branch, and `Expr::Block` /
+    //     `Expr::Do` in `format_expr` — a `do:` suite is always indented. What
+    //     varies there is whether the KEYWORD was written, which
+    //     `Expr::Do.author_spelled` carries; `Block.layout` is the wrong axis.
+    //   * `format_inline_suite` — it IS the inline half, delegating the slot;
+    //     its CALLER did the layout read.
+    //   * `format_closure_post_prelude` — likewise called from both closure
+    //     paths after the layout has been read.
+    //
+    // The `for`/`while`/`match`/`select` `else` CLAUSES are the `Clause` rows;
+    // `meta match`'s `else` is `Both` (a clause header that ALSO has two legal
+    // spellings), as is the `if`-`else`.
+    const CENSUS: &[(&str, &str, Kind)] = &[
+        ("format_arm_body", "self.format_block_stmts(block);", Layout),
+        ("format_arm_body", "self.format_block_stmts(block);", Plain),
+        ("format_bench", "self.format_block_stmts(&b.body);", Plain),
+        ("format_closure_post_prelude", "self.format_block_stmts(block);", Plain),
+        ("format_elif_else_blocks", "self.format_block_stmts(body);", Layout),
+        ("format_elif_else_blocks", "self.format_block_stmts(else_body);", Both),
+        ("format_expr", "self.format_block_stmts(block);", Plain),
+        ("format_expr", "self.format_block_stmts(body);", Plain),
+        ("format_function", "self.format_block_stmts(block);", Plain),
+        ("format_inline_suite", "self.format_block_stmts(block);", Plain),
+        ("format_item", "self.format_block_stmts(&mtf.body);", Plain),
+        ("format_match_arm", "self.format_block_stmts(block);", Layout),
+        // select CASE arm body.
+        ("format_stmt", "self.format_block_stmts(&arm.body);", Plain),
+        // meta match CASE arm body · on error.
+        ("format_stmt", "self.format_block_stmts(body);", Layout),
+        ("format_stmt", "self.format_block_stmts(body);", Layout),
+        // for body · while body · loop · with · unsafe · meta for ·
+        // meta while · named scope.
+        ("format_stmt", "self.format_block_stmts(body);", Plain),
+        ("format_stmt", "self.format_block_stmts(body);", Plain),
+        ("format_stmt", "self.format_block_stmts(body);", Plain),
+        ("format_stmt", "self.format_block_stmts(body);", Plain),
+        ("format_stmt", "self.format_block_stmts(body);", Plain),
+        ("format_stmt", "self.format_block_stmts(body);", Plain),
+        ("format_stmt", "self.format_block_stmts(body);", Plain),
+        ("format_stmt", "self.format_block_stmts(body);", Plain),
+        // for else · while else · statement-match else · select else.
+        ("format_stmt", "self.format_block_stmts(else_body);", Clause),
+        ("format_stmt", "self.format_block_stmts(else_body);", Clause),
+        ("format_stmt", "self.format_block_stmts(else_body);", Clause),
+        ("format_stmt", "self.format_block_stmts(else_body);", Clause),
+        // meta match else.
+        ("format_stmt", "self.format_block_stmts(else_body);", Both),
+        // Stmt::If then-body.
+        ("format_stmt", "self.format_block_stmts(then_body);", Layout),
+        // Stmt::MetaIf then-body.
+        ("format_stmt", "self.format_block_stmts(then_body);", Plain),
+        ("format_suite_setup", "self.format_block_stmts(&s.body);", Plain),
+        ("format_suite_teardown", "self.format_block_stmts(&s.body);", Plain),
+        ("format_test", "self.format_block_stmts(&t.body);", Plain),
+    ];
+
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let src: Vec<&str> = content.lines().collect();
+
+    // Attribute each line to its enclosing `fn` by brace depth — the same
+    // technique `formatter_child_collection_loop_census` uses.
+    let mut fn_stack: Vec<(String, i32, bool)> = Vec::new();
+    let mut depth: i32 = 0;
+    let mut found: Vec<(String, String, Kind)> = Vec::new();
+
+    for (i, line) in src.iter().enumerate() {
+        let trimmed = line.trim_start();
+        let is_comment = trimmed.starts_with("//");
+
+        if !is_comment {
+            let after_vis = trimmed
+                .strip_prefix("pub(crate) fn ")
+                .or_else(|| trimmed.strip_prefix("pub fn "))
+                .or_else(|| trimmed.strip_prefix("fn "));
+            if let Some(rest) = after_vis {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                fn_stack.push((name, depth, false));
+            }
+            if trimmed.starts_with("self.format_block_stmts(") {
+                let owner = fn_stack.last().map(|f| f.0.clone()).unwrap_or_default();
+                let window_start = i.saturating_sub(12);
+                let window = src[window_start..i].join("\n");
+                let has_layout = window.contains("SuiteLayout::");
+                let has_clause = window.contains("blank_before_clause(");
+                found.push((
+                    owner,
+                    trimmed.to_string(),
+                    match (has_layout, has_clause) {
+                        (true, true) => Both,
+                        (true, false) => Layout,
+                        (false, true) => Clause,
+                        (false, false) => Plain,
+                    },
+                ));
+            }
+
+            let opens = line.matches('{').count() as i32;
+            let closes = line.matches('}').count() as i32;
+            if let Some(top) = fn_stack.last_mut() {
+                if !top.2 && opens > 0 {
+                    top.2 = true;
+                    top.1 = depth;
+                }
+            }
+            depth += opens - closes;
+            while matches!(fn_stack.last(), Some(f) if f.2 && depth <= f.1) {
+                fn_stack.pop();
+            }
+        }
+    }
+
+    let mut got = found;
+    got.sort();
+    let mut want: Vec<(String, String, Kind)> = CENSUS
+        .iter()
+        .map(|(f, c, k)| (f.to_string(), c.to_string(), *k))
+        .collect();
+    want.sort();
+
+    assert_eq!(
+        got, want,
+        "R41 T-FMT-C suite-emission census in `src/formatter/mod.rs` changed.\n\n\
+         Every indented suite goes through `format_block_stmts`, so this table \
+         IS the list of suite emissions. A NEW row means a new suite position: \
+         classify it.\n\n\
+         · Does this position accept BOTH an inline and an indented spelling? \
+         Then it must read `Block.layout` (`Layout`), or `gg fmt` will pick one \
+         and rewrite every source that chose the other.\n\
+         · Is it a CLAUSE HEADER (`else:` / `elif:`)? Then it must check \
+         `blank_before_clause` (`Clause`), or an author blank above the clause \
+         is deleted — `format_block_stmts` cannot see it, because a clause \
+         header is not a statement.\n\
+         · `Plain` is for a position with only ONE legal author spelling; \
+         record WHY in the table's rationale block, the way the existing rows \
+         do."
+    );
+}
+
+/// The PARSER-side writer census for `SuiteLayout` (Layering rule 4 — resolve
+/// once, write through).
+///
+/// The formatter's reads are only as good as the writes behind them, and a new
+/// `Block` construction in the parser silently picks whatever the author of
+/// that line felt like. Pinning the write sites forces the question at the
+/// only place it can be answered: the parser knows whether it just consumed a
+/// NEWLINE+INDENT or a statement on the header's line; nothing downstream can
+/// recover that.
+///
+/// **Break-and-verify (Core #13, RED-verified 2026-08-11):** flip
+/// `parse_block_or_inline_stmt`'s `SuiteLayout::Inline` to `NextLine` and the
+/// per-variant counts below fire.
+#[test]
+fn parser_suite_layout_writer_census() {
+    // (file, NextLine writes, Inline writes, rationale)
+    const CENSUS: &[(&str, usize, usize, &str)] = &[
+        // `parse_block_body` IS the indented-suite grammar
+        // (`NEWLINE INDENT stmt* DEDENT`) and is the sole NextLine writer;
+        // `parse_block_or_inline_stmt`'s one-liner path is the Inline one.
+        ("src/parser/mod.rs", 1, 1, "parse_block_body · parse_block_or_inline_stmt"),
+        // `on error <stmt>` (colon-less inline) · `meta match` inline arm body.
+        ("src/parser/stmt.rs", 0, 2, "on error inline · meta match inline arm"),
+        // The three SYNTHETIC wraps: `throw x` and `return x` in expression
+        // position, and the expression-bodied destructuring closure. No author
+        // wrote a suite at any of them, so emitting one would invent syntax.
+        ("src/parser/expr.rs", 0, 3, "throw wrap · return wrap · closure body wrap"),
+    ];
+
+    for (path, want_next, want_inline, rationale) in CENSUS {
+        let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+        // Count WRITES only — a `SuiteLayout::X` in a `==` comparison is a
+        // read, and the parser has none, but be explicit rather than lucky.
+        let got_next = content
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//") && !l.contains("=="))
+            .filter(|l| l.contains("SuiteLayout::NextLine"))
+            .count();
+        let got_inline = content
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//") && !l.contains("=="))
+            .filter(|l| l.contains("SuiteLayout::Inline"))
+            .count();
+        assert_eq!(
+            (got_next, got_inline),
+            (*want_next, *want_inline),
+            "R41 T-FMT-C `SuiteLayout` writer census changed in `{path}` \
+             (expected sites: {rationale}).\n\n\
+             A new `Block` construction in the parser must decide, at the only \
+             layer that can: did the author indent this suite, or write it on \
+             the header's line? A construction outside the parser has no author \
+             spelling at all and goes through `Block::synthetic`.\n\n\
+             Bump the row with the new site's rationale."
+        );
+    }
+}
+
+/// Outside `src/parser/`, an `ast::Block` is built through `Block::synthetic`.
+///
+/// The companion to `parser_suite_layout_writer_census`: that one pins the
+/// sites that DO know the author's spelling, this one keeps every site that
+/// does NOT from inventing one. A lowering pass, a desugar or a test fixture
+/// has no author to preserve, and a raw struct literal there would silently
+/// pick whichever variant the author of that line typed — which is the shape
+/// of a fact-carrying field going wrong quietly (`SuiteLayout` is not
+/// `Default`, so the type system forces the choice, and this lint is what
+/// makes the choice a single reviewed one).
+///
+/// **Break-and-verify (Core #13, RED-verified 2026-08-11):** rewrite any
+/// `Block::synthetic(stmts, span)` outside `src/parser/` as
+/// `Block { stmts, span, layout: SuiteLayout::NextLine }` and this fires.
+#[test]
+fn ast_block_constructed_only_via_synthetic_outside_parser() {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).expect("read_dir") {
+            let p = entry.expect("dir entry").path();
+            if p.is_dir() {
+                if p.file_name().is_some_and(|n| n == "target") {
+                    continue;
+                }
+                walk(&p, out);
+            } else if p.extension().is_some_and(|e| e == "rs") {
+                out.push(p);
+            }
+        }
+    }
+
+    let mut files: Vec<PathBuf> = Vec::new();
+    for root in ["src", "tests", "spec"] {
+        let p = Path::new(root);
+        if p.exists() {
+            walk(p, &mut files);
+        }
+    }
+
+    let mut offenders: Vec<String> = Vec::new();
+    for path in &files {
+        let s = path.to_string_lossy().replace('\\', "/");
+        // `src/parser/` OWNS the field — it is the only layer that knows.
+        if s.contains("src/parser/") {
+            continue;
+        }
+        let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {s}: {e}"));
+        for (i, line) in content.lines().enumerate() {
+            let t = line.trim();
+            if t.starts_with("//") || t.starts_with("///") {
+                continue;
+            }
+            // The AST `Block` literal, distinguished from the LIR/IR
+            // `BasicBlock`/`Block` types that share the bare word.
+            let is_ast_block_literal = (t.contains("Block {") || t.ends_with("Block {"))
+                && !t.contains("BasicBlock")
+                && !t.contains("EquipBlock")
+                && !t.contains("ExternBlock")
+                && !t.contains("pub struct Block")
+                && !t.contains("impl Block");
+            if !is_ast_block_literal {
+                continue;
+            }
+            // Only flag lines that also carry the AST field names, so the
+            // LIR's identically-named `Block` does not false-positive.
+            if line.contains("stmts") || content.lines().nth(i + 1).is_some_and(|n| n.contains("stmts:")) {
+                offenders.push(format!("  {s}:{}: {t}", i + 1));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "R41 T-FMT-C: raw `ast::Block` struct literal outside `src/parser/`:\n{}\n\n\
+         Use `Block::synthetic(stmts, span)`. `Block.layout` records what the \
+         AUTHOR spelled, and only the parser can know that — everywhere else \
+         there is no author, and a hand-picked value is a fact invented at a \
+         layer that cannot have it.",
+        offenders.join("\n")
+    );
+}
+
+/// No RAW newline writing outside `Emitter` in `src/formatter/mod.rs`.
+///
+/// `Emitter::newline()` is idempotent at line start — that is what retires the
+/// spurious-blank class, where an expression-position suite terminated its own
+/// line and then the enclosing statement terminated it again. The property is
+/// only total if every line ending goes through the emitter: one
+/// `buf.push('\n')` from the outside reopens the class at that site, and the
+/// symptom (a blank line nobody wrote) is subtle enough to survive review.
+///
+/// **Break-and-verify (Core #13, RED-verified 2026-08-11):** add a
+/// `self.emitter.buf.push('\n');` anywhere in `Formatter` and this fires.
+#[test]
+fn formatter_no_raw_newline_outside_emitter() {
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let src: Vec<&str> = content.lines().collect();
+
+    // Locate `impl Emitter { .. }` by brace depth.
+    let mut impl_range: Option<(usize, usize)> = None;
+    let mut depth: i32 = 0;
+    let mut start: Option<(usize, i32)> = None;
+    for (i, line) in src.iter().enumerate() {
+        if line.trim_start().starts_with("//") {
+            continue;
+        }
+        if start.is_none() && line.trim_start().starts_with("impl Emitter") {
+            start = Some((i, depth));
+        }
+        depth += line.matches('{').count() as i32 - line.matches('}').count() as i32;
+        if let Some((s, base)) = start {
+            if i > s && depth <= base {
+                impl_range = Some((s, i));
+                break;
+            }
+        }
+    }
+    let (impl_start, impl_end) = impl_range.expect("could not locate `impl Emitter` block");
+
+    // The ONE sanctioned outside writer: `format`'s final trailing-newline
+    // normalization, which runs on the OWNED String returned by `finish()` —
+    // after the emitter is gone, so it cannot reopen the class.
+    const ALLOWED_OUTSIDE: &[&str] = &["result.push('\\n');"];
+
+    let mut offenders: Vec<String> = Vec::new();
+    for (i, line) in src.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        if !(trimmed.contains(".push('\\n')") || trimmed.contains(".push_str(\"\\n\")")) {
+            continue;
+        }
+        if i >= impl_start && i <= impl_end {
+            continue;
+        }
+        if ALLOWED_OUTSIDE.contains(&trimmed) {
+            continue;
+        }
+        offenders.push(format!("  line {}: {trimmed}", i + 1));
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "R41 T-FMT-C: raw newline writing outside `Emitter` in \
+         `src/formatter/mod.rs`:\n{}\n\n\
+         Line endings must go through `Emitter::newline()`, which is IDEMPOTENT \
+         at line start. That idempotence is what retires the spurious-blank \
+         class (an expression-position suite terminates its own line, then the \
+         enclosing statement terminates it again). A raw push bypasses it and \
+         reopens the class at that site.\n\n\
+         Want a deliberate blank? `Emitter::blank_line()` is the one way to ask \
+         for one.",
+        offenders.join("\n")
     );
 }
