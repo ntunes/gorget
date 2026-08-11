@@ -2257,3 +2257,28 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   PRE-A2 fmt-hardening wave (with the fill-pack track) — a canonical-output mangle must die
   before the bulk sweep bakes it into the corpus. Filed with repro in TODO (Tooling/CLI,
   beside the fill-pack entry).
+
+- 2026-08-11 — **🎯 FMT FORM-PRESERVATION TRIO + RENDER FALLBACK + R41 SCOPE RATIFIED (owner:
+  "Let's go with your recommendations. I tend to agree on all", after a field survey across
+  gofmt/rustfmt/Black/Prettier/zig-fmt/clang-format + Rust/Swift/Python/Java top-level error
+  handling).** **(Q1) LITERAL FORM = VERBATIM:** `gg fmt` never decodes escapes, changes
+  radix, or rewrites a literal's value-spelling when the span round-trips — the field is
+  unanimous (no major formatter does; Black/Prettier touch only casing and quote marks).
+  SUPERSEDES `appendix-formatting.md` §85-97's "canonical, not verbatim" doctrine, which
+  T-FMT-B rewrites as its write-through; subsumes the byte/char/float/`\u`/f-string classes.
+  **(Q2) SUITE LAYOUT = SYMMETRIC PRESERVATION:** fmt neither collapses NOR explodes the
+  author's inline-vs-next-line suite choice — completes the 2026-08-10 never-collapse ruling;
+  the author-signal precedent (Prettier's object rule, gofmt's statement preservation) chosen
+  over Black's force-expand for internal consistency with the ratified form-preservation
+  family. **(Q3) SYNONYM PAIRS = PRESERVE:** `byte`↔`uint8`, set-literal↔vector, await forms,
+  `with`-as, `public`, static-insert, paren churn — the field's division of labor is
+  structural (formatters format; construct choice is clippy/`eslint --fix`/`go fix`
+  territory): canonical synonyms, if ever wanted, are a `gg fix` rule, NEVER `gg fmt`.
+  Q1 PRECEDES Q3 on overlapping hunks. **(Q5) TOP-LEVEL RENDER FALLBACK = `display()` else
+  `debug()`** — no `E: Displayable` requirement (Rust's Debug-require rejected: Displayable
+  is derive-only here, so it would import Rust's mechanism without Rust's ubiquity and mint a
+  fresh reject class; the Swift/Python/Java always-renderable shape wins; pin-1-consistent).
+  UNBLOCKS E0c-102 (the `E_MainThrowsNonInt` retirement + the whole exit-102 surface).
+  **(SCOPE) R41 keeps full W2 scope** + a clause-(a)-sized T-PRUNE + the honest close-time
+  ask if short. **The formatter's contract is now ONE SENTENCE: `gg fmt` changes layout it
+  owns and nothing the author spelled.**
