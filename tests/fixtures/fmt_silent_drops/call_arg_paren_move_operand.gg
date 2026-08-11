@@ -1,0 +1,17 @@
+# R41 T-FMT-A §4 — NEG half of the call-argument differential pair.
+#
+# AXIS CELL: `parse_call_arg`'s value position (`parser/expr.rs`), the SECOND
+# of the two expression-operand sites where `parse_ownership_modifier` runs
+# ahead of the expression parser. Same mechanism as the for-iterable cell,
+# different site — a class needs one cell per sibling (Core #4/#11).
+#
+# INTENDED: `gg check` REJECTS (E_MoveInOperandPosition on the parenthesised
+# `^a`), before AND after `gg fmt`. Pre-fix, fmt emitted `take(^a)` — the sigil
+# migrated into `CallArg.ownership` and the rejection VANISHED.
+
+void take(Vector[int] ^v):
+    print(v.len())
+
+void main():
+    Vector[int] a = [1, 2]
+    take((^a))

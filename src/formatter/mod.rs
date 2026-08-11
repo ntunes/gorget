@@ -744,7 +744,14 @@ impl Formatter {
             if comment_start > self.source.len() {
                 break;
             }
-            let anchor = self.last_real_content_before(prev_end);
+            // No real content precedes this position ⇒ there is no
+            // just-emitted node for the comment to trail, so it cannot be a
+            // trailing comment. Leave it to `emit_comments_before` /
+            // `emit_remaining_comments`, which emit it as a LEADING comment
+            // on its own line. (R41 T-FMT-A: the comment-only-file fix.)
+            let Some(anchor) = self.last_real_content_before(prev_end) else {
+                break;
+            };
             if comment_start < anchor {
                 // Comment predates the anchor — should have been
                 // consumed by an earlier `emit_comments_before`; break
@@ -828,7 +835,21 @@ impl Formatter {
     /// files this is fine; if it shows on the profiler for very
     /// comment-heavy inputs, replace the `iter().any` with a binary
     /// search over pre-sorted comment spans.
-    fn last_real_content_before(&self, pos: usize) -> usize {
+    /// Returns `None` when NO real content precedes `pos` — the source up to
+    /// `pos` is nothing but whitespace and comments.
+    ///
+    /// R41 T-FMT-A: this used to return the sentinel `0`, which is
+    /// indistinguishable from "real content ends at byte 0" — and that
+    /// conflation is the whole comment-only-file corruption. In a file with
+    /// no items, `format`'s EOF hook anchored at `0`, found `source[0..0]`
+    /// empty (no `\n`), and therefore classified the file's FIRST comment as
+    /// a *trailing* comment on a node that was never emitted: it was injected
+    /// with the two-space inline gap into an empty buffer (`  # a`), and the
+    /// next comment then glued onto the same line (`  # a# b`). Making the
+    /// "nothing precedes" case a distinct TYPE rather than a magic value
+    /// forces every caller to handle it (Layering rule 2: typed metadata, not
+    /// sentinel values).
+    fn last_real_content_before(&self, pos: usize) -> Option<usize> {
         let bytes = self.source.as_bytes();
         let mut i = pos.min(bytes.len());
         while i > 0 {
@@ -849,9 +870,9 @@ impl Formatter {
                 i -= 1;
                 continue;
             }
-            return i;
+            return Some(i);
         }
-        0
+        None
     }
 
     // ── Module ──────────────────────────────────────────────
@@ -1197,7 +1218,39 @@ impl Formatter {
         if matches!(f.body, FunctionBody::Extern(_)) {
             self.emitter.write("extern ");
         }
+        // R41 T-FMT-A (silent-drop class, 2nd episode after R39's
+        // `blocking`/`noreturn`): emit the extern ABI tag and the
+        // `borrowed` return marker. Both are FunctionDef facts that the
+        // formatter used to drop on the floor, and both are load-bearing:
+        //
+        //   - `extern_abi == Some("C")` selects `AbiKind::CStr` over
+        //     `GorgetString` at lowering (`ir/lowering/mod.rs`), so a
+        //     dropped tag re-marshals a `String` param as a by-value
+        //     32-byte `Str` struct into a `const char*` — silent UB, live
+        //     across 9 `lib/std` declarations. It also gates the `cstr`
+        //     type's legality, so dropping it can even make the output
+        //     fail to re-parse.
+        //   - `returns_borrowed` says the FFI returned pointer is NOT owned,
+        //     so the caller must clone at the ownership boundary.
+        //
+        // Order mirrors `parse_function_def` exactly — `extern` → ABI
+        // string → qualifier loop → `borrowed` → return type — so the
+        // emission re-parses to the same AST.
+        //
+        // ONE call site for each, serving BOTH extern forms. Items of an
+        // `extern "C":` BLOCK carry `extern_abi = None` (the tag lives on
+        // `ExternBlock` and is emitted by `format_extern_block`), so this
+        // cannot double-emit the block header; `returns_borrowed` however
+        // IS per-item in both forms, which is why the block form dropped it.
+        if let Some(ref abi) = f.extern_abi {
+            self.emitter.write("\"");
+            self.emitter.write(abi);
+            self.emitter.write("\" ");
+        }
         self.format_qualifiers(&f.qualifiers);
+        if f.returns_borrowed {
+            self.emitter.write("borrowed ");
+        }
         // type-first: `ReturnType name(params)`
         // Bare tuple return: emit `T1, T2` not `(T1, T2)` in return position
         if let Type::Tuple(types) = &f.return_type.node {
@@ -1621,6 +1674,12 @@ impl Formatter {
     }
 
     fn format_extern_block(&mut self, eb: &ExternBlock) {
+        // Header anchor for the trailing-comment hook: the last real byte of
+        // the header is the closing quote of the ABI string (`extern "C":`).
+        // A block always carries one today (`parse_item`'s block-vs-inline
+        // disambiguation REQUIRES the string literal), but the field is an
+        // Option, so fall back to the `extern` keyword's own position.
+        let header_anchor_end = eb.abi.as_ref().map_or(eb.span.start, |a| a.span.end);
         self.emitter.write("extern");
         if let Some(ref abi) = eb.abi {
             self.emitter.write(" \"");
@@ -1628,10 +1687,24 @@ impl Formatter {
             self.emitter.write("\"");
         }
         self.emitter.write(":");
+        // R41 T-FMT-A (S1 N13): `extern "C":  # why` — the block header's own
+        // trailing comment, same class as struct/enum/trait/equip headers.
+        self.emit_trailing_comment_after_header(header_anchor_end);
         self.emitter.newline();
         self.emitter.indent();
         for func in &eb.items {
+            // R41 T-FMT-A (S1 N13): this child-collection loop was the ONE
+            // such loop in the formatter with NO comment hooks at all, so
+            // every comment interior to an `extern:` block escaped the block
+            // and re-emerged at COLUMN 0 after it (via the EOF/leading
+            // flush) — leading comments and between-item comments alike.
+            // Pairing the two hooks here matches the trait/equip member
+            // loops exactly; `formatter_child_collection_loop_census` in
+            // tests/lints.rs now pins the whole family so the next such
+            // loop cannot ship hookless.
+            self.emit_comments_before(func.span.start);
             self.format_function(&func.node);
+            self.emit_trailing_comment_after(func.span.end, false);
         }
         self.emitter.dedent();
     }
@@ -1867,8 +1940,18 @@ impl Formatter {
             self.emitter.write(&param.name.node);
             return;
         }
-        // self parameter (same in both modes)
-        if matches!(param.type_.node, Type::SelfType) {
+        // METHOD RECEIVER (`self` / `&self` / `^self`) — the one param
+        // whose surface form is the bare sigil+keyword, with no type and
+        // no separate name to emit.
+        //
+        // Keyed off the typed `Param::is_receiver` axis, NOT off
+        // `type_ == Type::SelfType`: a `Self`-TYPED regular param is legal
+        // (`int get(Self a)`) and the type-based inference collapsed it to
+        // `self`, DESTROYING the user's parameter name — the emitted body
+        // then referenced an undefined `a`. The flag is written once at the
+        // parser's receiver chokepoint (`make_self_param`), so this read
+        // cannot disagree with the parse (Layering rule 4).
+        if param.is_receiver {
             match param.ownership {
                 Ownership::Borrow => self.emitter.write("self"),
                 Ownership::MutableBorrow => self.emitter.write("&self"),
@@ -2275,7 +2358,11 @@ impl Formatter {
                 }
                 self.emitter.write(" in ");
                 self.format_ownership_prefix(*ownership);
-                self.format_expr(iterable);
+                // R41 T-FMT-A: `parse_for_stmt` strips the iterable's
+                // ownership sigil BEFORE parsing the iterable expression, so
+                // an iterable whose own emission leads with `&`/`!`/`^` must
+                // be parenthesised or the reparse steals it into `ownership`.
+                self.format_ownership_modifier_operand(iterable);
                 self.emitter.write(":");
                 // R39 gorget-arena block-header trailing (owner 2026-08-09):
                 // preserve `for x in xs:  # comment` as trailing on the header
@@ -2785,6 +2872,39 @@ impl Formatter {
     fn format_postfix_receiver(&mut self, receiver: &Spanned<Expr>) {
         let wrap = needs_parens_as_postfix_receiver(&receiver.node);
         self.format_expr_maybe_parens(receiver, wrap);
+    }
+
+    /// R41 T-FMT-A: emit an expression at a position where the parser runs
+    /// `parse_ownership_modifier` BEFORE `parse_expr`, wrapping in parens
+    /// when the emission would otherwise begin with a sigil that pre-pass
+    /// would swallow.
+    ///
+    /// This is a fourth sibling of the precedence-aware operand emitters
+    /// above, and it exists because these positions have a parse ORDER the
+    /// binding-power table cannot express: the sigil (`&` / `!` / `^`) is
+    /// stripped by a *token* pre-pass into the node's own `ownership` field
+    /// and never reaches the Pratt parser. So an expression that legitimately
+    /// *starts* with a move/borrow sigil (because the author parenthesised it
+    /// to force the expression reading) round-trips into a DIFFERENT AST:
+    /// the sigil migrates from the expression into the enclosing node's
+    /// `ownership` field. That is an accept/reject change, not a cosmetic one
+    /// — RED-verified in both directions:
+    ///
+    ///   - `for i in (^start)..end:` rejects `E_MoveInOperandPosition`, but
+    ///     re-emitted as `for i in ^start..end:` it is ACCEPTED (the sigil
+    ///     became the iterable modifier).
+    ///   - `apply_once((^(int x): x + n), 3)` COMPILES AND PRINTS `10`, but
+    ///     re-emitted as `apply_once(^(int x): x + n, 3)` it is REJECTED
+    ///     `E_OwnershipMismatch` — the move-CLOSURE became a moved argument.
+    ///
+    /// The parens are not "author paren preservation" (no `Paren` node
+    /// exists, and span recovery would silently fall back to the canonical
+    /// spelling, reopening the flip with the guard green). They are a pure
+    /// function of the parsed program: emit exactly the parens the reparse
+    /// requires, and no others.
+    fn format_ownership_modifier_operand(&mut self, operand: &Spanned<Expr>) {
+        let wrap = emits_leading_ownership_sigil(&operand.node);
+        self.format_expr_maybe_parens(operand, wrap);
     }
 
     /// Choose the surface text for an integer literal (gorget-js snag #15f).
@@ -3493,7 +3613,9 @@ impl Formatter {
             self.emitter.write(" = ");
         }
         self.format_ownership_prefix(arg.ownership);
-        self.format_expr(&arg.value);
+        // R41 T-FMT-A: sibling of the for-iterable site — `parse_call_arg`
+        // strips the sigil before parsing the argument expression.
+        self.format_ownership_modifier_operand(&arg.value);
     }
 
     fn format_closure_param(&mut self, param: &ClosureParam) {
@@ -3909,6 +4031,152 @@ fn needs_parens_as_postfix_receiver(operand: &Expr) -> bool {
         return false;
     };
     inner < 35
+}
+
+/// R41 T-FMT-A — the PARSE-ORDER predicate behind
+/// `Formatter::format_ownership_modifier_operand`.
+///
+/// True iff `format_expr(expr)` would emit a first character that
+/// `Parser::parse_ownership_modifier` consumes as an ownership sigil —
+/// `&` (MutableBorrow), `!` or `^` (Move). At the two positions where that
+/// pre-pass runs before the expression parser (`parse_for_stmt`'s iterable
+/// and `parse_call_arg`'s value), such an emission silently re-homes the
+/// sigil from the expression into the enclosing node's `ownership` field.
+///
+/// It answers a question about the EMITTED TEXT, so it walks the same
+/// left spine `format_expr` does and consults the SAME wrap predicates the
+/// emission arms use: whenever an arm wraps its leftmost child in parens,
+/// the emitted text begins with `(` and the sigil is already shielded.
+///
+/// **The match is deliberately exhaustive — no `_` arm.** A new `Expr`
+/// variant is then a COMPILE ERROR here rather than a silent `false`, which
+/// is how this class (a leftmost-emitting variant added without a paren
+/// rule) would otherwise re-open. Core #4: the class, not the instance;
+/// Core #10: no silent fall-through.
+fn emits_leading_ownership_sigil(expr: &Expr) -> bool {
+    /// The sigils `parse_ownership_modifier` strips (`parser/mod.rs`).
+    fn is_sigil(s: &str) -> bool {
+        matches!(s.as_bytes().first(), Some(b'&') | Some(b'!') | Some(b'^'))
+    }
+    /// Recurse into a child that the emitter renders FIRST, unless the
+    /// emitter parenthesises it (in which case `(` leads and we are safe).
+    fn through(child: &Spanned<Expr>, wrapped: bool) -> bool {
+        !wrapped && emits_leading_ownership_sigil(&child.node)
+    }
+
+    match expr {
+        // ── The sigil producers ────────────────────────────────────
+        // `Expr::Move` emits `^`, `Expr::MutableBorrow` emits `&`.
+        Expr::Move { .. } | Expr::MutableBorrow { .. } => true,
+        // A MOVE CLOSURE emits its `^` prefix before the param list
+        // (`^(int x): x`). Non-move closures lead with `(` or `async `.
+        Expr::Closure { is_move, .. } => *is_move,
+        // `meta +` / `meta &` — the operator token is emitted verbatim,
+        // and `binary_op_str` spells BitAnd `&` and BitXor `^`. The
+        // `meta ` prefix leads, so this is safe, but spell the check out
+        // rather than rely on the prefix staying there.
+        Expr::MetaOpToken(op) => is_sigil("meta ") || is_sigil(binary_op_str(*op)),
+
+        // ── Leftmost child is an INFIX LEFT operand ────────────────
+        // Each mirrors its emission arm's `format_binop_operand(.., Left, ..)`.
+        Expr::BinaryOp { left, op, .. } => through(
+            left,
+            needs_parens_as_binop_operand(
+                &left.node,
+                binary_op_left_bp(*op),
+                BinOpPos::Left,
+                binary_op_is_right_assoc(*op),
+            ),
+        ),
+        Expr::Range { start, .. } => match start {
+            // `..end` leads with the `..` token.
+            None => false,
+            Some(s) => through(
+                s,
+                needs_parens_as_binop_operand(&s.node, 23, BinOpPos::Left, false),
+            ),
+        },
+        Expr::As { expr, .. } => through(
+            expr,
+            needs_parens_as_binop_operand(&expr.node, 31, BinOpPos::Left, false),
+        ),
+        Expr::Is { expr, .. } => through(
+            expr,
+            needs_parens_as_binop_operand(&expr.node, 9, BinOpPos::Left, false),
+        ),
+        Expr::DefaultOp { lhs, .. } => through(
+            lhs,
+            needs_parens_as_binop_operand(&lhs.node, 3, BinOpPos::Left, false),
+        ),
+        Expr::MetaOpInfix { left, .. } => through(
+            left,
+            needs_parens_as_binop_operand(&left.node, 27, BinOpPos::Left, false),
+        ),
+        Expr::Rethrow { expr, .. } | Expr::Catch { expr, .. } => through(
+            expr,
+            needs_parens_as_binop_operand(&expr.node, 1, BinOpPos::Left, false),
+        ),
+
+        // ── Leftmost child is a POSTFIX RECEIVER (bp 35) ───────────
+        // Both sigil producers report bp 33 < 35, so these always wrap —
+        // but route through the shared predicate rather than assert it.
+        Expr::Call { callee: recv, .. }
+        | Expr::MethodCall { receiver: recv, .. }
+        | Expr::FieldAccess { object: recv, .. }
+        | Expr::TupleFieldAccess { object: recv, .. }
+        | Expr::Index { object: recv, .. }
+        | Expr::OptionalChain { object: recv, .. }
+        | Expr::Propagate { expr: recv }
+        | Expr::Await { expr: recv } => {
+            through(recv, needs_parens_as_postfix_receiver(&recv.node))
+        }
+
+        // ── Transparent wrapper ────────────────────────────────────
+        // `ImplicitClosure` emits its body directly (the `it` inside is the
+        // implicit-parameter marker), so the body's first char is ours.
+        Expr::ImplicitClosure { body } => emits_leading_ownership_sigil(&body.node),
+
+        // ── Leads with its OWN token ───────────────────────────────
+        // Literals and atoms; prefix operators whose spelling is not a
+        // stripped sigil (`-`, `~`, `not `, `*`, `spawn `, `spawn blocking `);
+        // bracketed/keyword-introduced forms (`[`, `(`, `{`, `if`, `match`,
+        // `Name(`, `.variant`, `it`, `self`).
+        //
+        // `Block`/`Do` lead with `do:` unless
+        // `try_inline_single_terminal_stmt` inlines a lone terminal stmt —
+        // and those spellings lead with `throw `/`return `/the bare
+        // expression. The bare-expression case cannot be reached at a
+        // position this predicate guards: a `Block`/`Do` is never the direct
+        // value of a for-iterable or a call argument (the parser builds them
+        // only for arm/branch bodies and `throw`/`return` prefixes), so the
+        // conservative `false` here is not load-bearing. If that ever
+        // changes, the fixture matrix's differential pairs are what fails.
+        Expr::IntLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::BoolLiteral(_)
+        | Expr::StringLiteral(..)
+        | Expr::NoneLiteral
+        | Expr::Identifier(_)
+        | Expr::SelfExpr
+        | Expr::Path { .. }
+        | Expr::UnaryOp { .. }
+        | Expr::Deref { .. }
+        | Expr::If { .. }
+        | Expr::Match { .. }
+        | Expr::Block(_)
+        | Expr::Do { .. }
+        | Expr::ListComprehension { .. }
+        | Expr::DictComprehension { .. }
+        | Expr::SetComprehension { .. }
+        | Expr::ArrayLiteral(_)
+        | Expr::TupleLiteral(_)
+        | Expr::DictLiteral(_)
+        | Expr::StructLiteral { .. }
+        | Expr::Spawn { .. }
+        | Expr::SpawnBlocking { .. }
+        | Expr::It
+        | Expr::DotShorthand { .. } => false,
+    }
 }
 
 fn primitive_type_str(p: PrimitiveType) -> &'static str {

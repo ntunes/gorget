@@ -1,0 +1,21 @@
+# R41 T-FMT-A §4 — the THIRD shape of the paren parse-order class, and the
+# only one that breaks a WORKING program. Found while enumerating `Expr` for
+# the leftmost-sigil predicate: a MOVE CLOSURE also emits a leading `^`.
+#
+# AXIS CELL: `parse_call_arg` + `Expr::Closure { is_move: true }`. The parens
+# make the `^` bind to the CLOSURE (`ConsumeCallable`, what `apply_once` wants)
+# rather than to the argument.
+#
+# INTENDED: runs and prints `10`, before AND after `gg fmt`. Pre-fix, fmt
+# emitted `apply_once(^(int x): x + n, 3)` — the move-closure became a plain
+# closure moved as an argument, and the program STOPPED COMPILING
+# (E_OwnershipMismatch: "the parameter only borrows"). A green-on-both-sides
+# reject-to-reject cell would have missed this; this cell is the reason the
+# differential helper compares RUN OUTPUT, not just the accept/reject bit.
+
+int apply_once(ConsumeCallable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    int n = 7
+    print(apply_once((^(int x): x + n), 3))

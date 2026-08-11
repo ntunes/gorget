@@ -23,6 +23,11 @@ fn make_self_param(
             name: Spanned::new("self".to_string(), name_span),
             default: None,
             is_meta_op: false,
+            // THE receiver chokepoint: all three receiver spellings
+            // (`self` / `&self` / `^self`) route through here, and nothing
+            // else does. Downstream consumers read `Param::is_receiver`
+            // instead of re-deriving from the type or the name.
+            is_receiver: true,
         },
         start.merge(name_span),
     )
@@ -1914,6 +1919,7 @@ impl Parser {
                     name,
                     default: None,
                     is_meta_op: true,
+                    is_receiver: false,
                 },
                 start.merge(end),
             ));
@@ -1962,6 +1968,10 @@ impl Parser {
                 name,
                 default,
                 is_meta_op: false,
+                // A regular param — including a `Self`-TYPED one such as
+                // `int get(Self a)`, which is NOT the receiver and keeps
+                // its user-written name.
+                is_receiver: false,
             },
             start.merge(end),
         ))

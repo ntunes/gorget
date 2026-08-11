@@ -1,13 +1,17 @@
-# KNOWN GAP (R40 Track D output-review, F1) — `gg fmt` corrupts a COMMENT-ONLY
-# file (a source with no items). This whole file is comments and nothing else.
-# Bug: the first comment gets a spurious 2-space indent, and with >=2 comments
-# the first two are GLUED together (the line break between them is dropped):
+# MINIMAL REPRO (R40 Track D output-review, F1 — FIXED in R41 T-FMT-A) for
+# `gg fmt` corrupting a COMMENT-ONLY file. This whole file is comments and
+# nothing else, which is the entire point: with no items, the formatter emits
+# no content before it flushes the comment sideband.
+# Symptom was: the first comment got a spurious 2-space indent, and with >=2
+# comments the first two were GLUED (the line break between them dropped):
 #   printf '# a\n# b\n' | gg fmt   ->   "  # a# b"
-# Intended: a comment-only file round-trips BYTE-IDENTICALLY (no indent, no glue).
-# Root: the belt-and-suspenders emit_trailing_comment_after(self.source.len())
-# at src/formatter/mod.rs:165 misfires on the first EOF-orphan comment when there
-# is no preceding content to anchor it.
-# Pre-existing (reproduces on the pre-R40 compiler).
-# The `#[ignore]`d guard `fmt_comment_only_file_preserved` in tests/integration.rs
-# asserts the INTENDED byte-identical round-trip; un-ignore + graduate the round
-# the root cause is fixed.
+# Intended (and now actual): a comment-only file round-trips BYTE-IDENTICALLY.
+# Root: `Formatter::last_real_content_before` returned the SENTINEL 0 both for
+# "content ends at byte 0" and for "no content at all", so `format`'s EOF
+# trailing-comment hook treated the file's first comment as a trailing comment
+# on a node that was never emitted. Fixed by making the empty case a distinct
+# type (`Option<usize>`), so the trailing hook cannot fire before any content.
+# The live guard is `fmt_comment_only_file_preserved` in tests/integration.rs
+# (graduated in place — un-`#[ignore]`d). The fixture stays here as the minimal
+# repro: it has no `main`, so promoting it to a top-level fixture would make
+# `gg run` exit 1 and register a runtime-parity non-MATCH (Core #9 (+)).

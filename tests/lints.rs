@@ -863,7 +863,12 @@ fn d29_propagate_walker_arm_coverage() {
     // pattern arms and constructions alike — the pin is on coverage presence,
     // not arm shape.
     const EXPECTED: &[(&str, usize)] = &[
-        ("src/formatter/mod.rs", 1),
+        // R41 T-FMT-A (2026-08-11): 1 → 2. `emits_leading_ownership_sigil`
+        // adds a SECOND `Expr::Propagate` arm — the parse-order paren
+        // predicate must see THROUGH the wrapper to decide whether the
+        // emitted text leads with an ownership sigil, exactly the
+        // transparent-wrapper obligation this lint exists to pin.
+        ("src/formatter/mod.rs", 2),
         ("src/ir/lowering/closures.rs", 1),
         ("src/ir/lowering/context.rs", 1),
         ("src/ir/lowering/exprs/mod.rs", 2),
@@ -11699,35 +11704,46 @@ fn fmt_move_sigil_emit_arm_count() {
 /// added to `src/formatter/mod.rs` MUST call BOTH helpers, or the
 /// gorget-arena snag #2 class (trailing comments detached and
 /// misattributed to the next sibling) re-opens on the new loop. This
-/// lint pins BOTH counts:
+/// lint pins the three counts. ⚠ The AUTHORITATIVE values are the
+/// `EXPECTED_*` constants in the test body — read those, never this prose
+/// (it drifted to 12/14/4 against pinned 14/16/11 before R41 caught it).
 ///
-///   * `emit_comments_before(` call sites: 12 sibling-loop sites
-///     (`format_module` directives / imports / rest, `Item::MetaIf`
+///   * `emit_comments_before(` call sites — the sibling-loop leading
+///     hooks (`format_module` directives / imports / rest, `Item::MetaIf`
 ///     then / elif / else, `format_struct` fields, `format_enum`
 ///     variants, `format_trait` items, `format_equip` methods,
-///     `format_block_stmts`, closure post-prelude stmts). If this
-///     count changes without an equal change to the trailing count
-///     below, a new sibling loop bypassed the trailing hook.
+///     `format_extern_block` items, `format_block_stmts`, closure
+///     post-prelude stmts) plus the two inside the shared collection-
+///     literal helper. If this count changes without an equal change to
+///     the trailing count below, a new sibling loop bypassed the
+///     trailing hook.
 ///
-///   * `emit_trailing_comment_after(` call sites: 12 sibling-loop
-///     paired calls + 1 defensive EOF hook (sub-task 5 in
-///     `Formatter::format`) + 1 internal delegation from
-///     `emit_trailing_comment_after_header` = **14 total**.
+///   * `emit_trailing_comment_after(` call sites — the sibling-loop
+///     paired calls, plus 1 defensive EOF hook (in `Formatter::format`),
+///     plus 1 internal delegation from `emit_trailing_comment_after_header`,
+///     plus the collection-literal helper's per-element call.
 ///
-///   * `emit_trailing_comment_after_header(` call sites: 4 — one per
-///     structural container (struct / enum / trait / equip). Uses a
+///   * `emit_trailing_comment_after_header(` call sites — the structural
+///     containers (struct / enum / trait / equip / extern block), the
+///     control-flow openers, and the function-definition header. Uses a
 ///     SEPARATE helper (with distinct docstring semantics) so the
 ///     sibling-boundary count above stays clean.
 ///
-/// **Break-and-verify (Core #12 / Core #15e Q2 — the guard must catch
-/// its own class):** manually mutate one call site to drop the paired
-/// trailing hook (e.g. delete
+/// ⚠ **This lint pins COUNTS, so it is structurally blind to a loop with
+/// ZERO hooks** — a hookless loop moves no count. That is exactly how
+/// `format_extern_block`'s item loop sat green while every comment inside
+/// an `extern:` block escaped to column 0 (R41 T-FMT-A §5). The companion
+/// `formatter_child_collection_loop_census` below closes that hole by
+/// enumerating the LOOPS themselves. Neither is sufficient alone
+/// (Core #15e Q2 — a guard must be able to catch its own class).
+///
+/// **Break-and-verify (Core #12 / Core #15e Q2):** manually mutate one
+/// call site to drop the paired trailing hook (e.g. delete
 /// `self.emit_trailing_comment_after(field.span.end)` in the struct
-/// field loop). The lint's `assert_eq!` fires with
-/// `emit_trailing_comment_after count 13 vs expected 14` — RED,
-/// pinpointing the missing pair. Restore the deletion and the lint
-/// goes green again. Recorded RED signature filed in the R39 snag #2
-/// executor report.
+/// field loop). The lint's `assert_eq!` fires with the trailing count one
+/// BELOW `EXPECTED_EMIT_TRAILING_AFTER` — RED, pinpointing the missing
+/// pair. Restore the deletion and the lint goes green again. Recorded RED
+/// signature filed in the R39 snag #2 executor report.
 ///
 /// If a new sibling loop legitimately joins this class (a future
 /// AST node kind added), both counts must bump together with a
@@ -11746,7 +11762,12 @@ fn formatter_sibling_loops_hook_pairing() {
     // flush + one orphan-pre-close flush — both inside the SINGLE helper
     // (not per dispatcher). See `formatter_collection_literal_interior_hook_dispatch`
     // below for the paired dispatch-count guard.
-    const EXPECTED_EMIT_COMMENTS_BEFORE: usize = 14;
+    // R41 T-FMT-A §5 (extern-block comment escape, 2026-08-11): 14 → 15.
+    // `format_extern_block`'s item loop (`src/formatter/mod.rs`, the `for func
+    // in &eb.items` loop) gains the leading hook it never had — it was the one
+    // child-collection loop in the file with ZERO hooks, which is why a
+    // COUNT-based lint could not see it. Paired with the trailing bump below.
+    const EXPECTED_EMIT_COMMENTS_BEFORE: usize = 15;
     /// `emit_trailing_comment_after(` calls: 12 sibling-paired + 1
     /// EOF defensive + 1 internal delegation from
     /// `emit_trailing_comment_after_header`. If sub-task 5's EOF hook
@@ -11768,7 +11789,9 @@ fn formatter_sibling_loops_hook_pairing() {
     // `try_inline_single_terminal_stmt` — preserves trailing comments on
     // inlined single-stmt arm bodies (`else: return cc  # doc`). Single
     // helper site covers all 4 inline-arm callers.
-    const EXPECTED_EMIT_TRAILING_AFTER: usize = 16;
+    // R41 T-FMT-A §5 (2026-08-11): 16 → 17 — `format_extern_block`'s item
+    // loop gains its paired trailing hook alongside the leading one above.
+    const EXPECTED_EMIT_TRAILING_AFTER: usize = 17;
     /// `emit_trailing_comment_after_header(` calls: 4 structural
     /// containers (`format_struct`, `format_enum`, `format_trait`,
     /// `format_equip`) + 6 control-flow openers added R39 by the
@@ -11781,7 +11804,9 @@ fn formatter_sibling_loops_hook_pairing() {
     // function-definition header (`int f(): # doc`) added via
     // `format_function`'s FunctionBody::Block arm. Same class as the
     // control-flow openers + structural containers.
-    const EXPECTED_EMIT_TRAILING_AFTER_HEADER: usize = 11;
+    // R41 T-FMT-A §5 (2026-08-11): 11 → 12 — `extern "C":  # why` joins the
+    // structural-container header family (struct / enum / trait / equip).
+    const EXPECTED_EMIT_TRAILING_AFTER_HEADER: usize = 12;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -11856,6 +11881,153 @@ fn formatter_sibling_loops_hook_pairing() {
          after writing `:` + newline and BEFORE `indent()` — otherwise \
          the header trailing comment dedents into the body as leading of \
          the first item."
+    );
+}
+
+/// R41 T-FMT-A §5 (Core #6 class-retiring guard, 2026-08-11): the LOOP
+/// CENSUS that `formatter_sibling_loops_hook_pairing` above cannot be.
+///
+/// **Why a second guard.** The pairing lint pins CALL-SITE COUNTS, so it
+/// only fires when a loop has *some* hooks and is missing its partner. A
+/// loop with ZERO hooks moves no count at all and is therefore invisible
+/// to it — which is not hypothetical: `format_extern_block`'s item loop
+/// shipped hookless, every comment inside an `extern:` block escaped to
+/// column 0, and the pairing lint stayed green the whole time. A guard
+/// that green-lights the class it exists to retire is worse than none
+/// (Core #15e Q2), so this one enumerates the LOOPS instead of the calls.
+///
+/// **The census.** Every `for` loop in `src/formatter/mod.rs` that iterates
+/// an AST child collection — a field named `items` / `fields` / `variants`
+/// / `stmts`, the shape in which the AST stores line-per-element children —
+/// is located, attributed to its enclosing `fn`, and that fn is required to
+/// contain BOTH comment hooks. The enclosing-fn set must equal the
+/// allowlist below exactly, so a NEW container formatter cannot join the
+/// family silently: it either carries hooks and is added here with a
+/// rationale, or the lint is RED.
+///
+/// **Break-and-verify (Core #13 — RED-verified 2026-08-11):** delete the
+/// two hook calls from `format_extern_block`'s `for func in &eb.items`
+/// loop (the pre-R41 state). `formatter_sibling_loops_hook_pairing` still
+/// passes once its constants are lowered to match; THIS lint fires with
+/// `format_extern_block` listed as hookless.
+#[test]
+fn formatter_child_collection_loop_census() {
+    /// Formatter fns containing a child-collection loop. Each MUST carry
+    /// both `emit_comments_before(` and a trailing hook.
+    ///
+    ///   * `format_module`        — top-level items (via the directives /
+    ///                              imports / rest partition loops)
+    ///   * `format_struct`        — fields
+    ///   * `format_enum`          — variants
+    ///   * `format_trait`         — items (methods + associated types)
+    ///   * `format_equip`         — items (methods)
+    ///   * `format_extern_block`  — items (extern declarations)  ← R41 §5
+    ///   * `format_block_stmts`   — stmts (the largest coverage site)
+    ///
+    /// A new entry needs its file:line + rationale, exactly like the
+    /// arm-count guards.
+    const ALLOWLIST: &[&str] = &[
+        "format_module",
+        "format_struct",
+        "format_enum",
+        "format_trait",
+        "format_equip",
+        "format_extern_block",
+        "format_block_stmts",
+    ];
+
+    let content = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+
+    // Attribute each line to its enclosing `fn` by brace depth: a `fn` header
+    // at depth D owns every line until depth returns to D.
+    let mut fn_stack: Vec<(String, i32)> = Vec::new();
+    let mut depth: i32 = 0;
+    // enclosing fn -> (has a child-collection loop, has leading, has trailing)
+    let mut found: std::collections::BTreeMap<String, (bool, bool, bool)> =
+        std::collections::BTreeMap::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        let is_comment = trimmed.starts_with("//");
+
+        if !is_comment {
+            if let Some(rest) = trimmed.strip_prefix("fn ").or_else(|| {
+                trimmed
+                    .strip_prefix("pub fn ")
+                    .or_else(|| trimmed.strip_prefix("pub(crate) fn "))
+            }) {
+                let name: String =
+                    rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                fn_stack.push((name, depth));
+            }
+        }
+
+        if let Some((name, _)) = fn_stack.last() {
+            let name = name.clone();
+            if !is_comment {
+                // A child-collection loop: `for <pat> in <expr>.items|fields|
+                // variants|stmts` (with or without `&`, `.iter().enumerate()`).
+                let is_child_loop = trimmed.starts_with("for ")
+                    && [".items", ".fields", ".variants", ".stmts"].iter().any(|f| {
+                        trimmed.contains(&format!("{f} ")) || trimmed.contains(&format!("{f}."))
+                    });
+                let e = found.entry(name).or_insert((false, false, false));
+                e.0 |= is_child_loop;
+                e.1 |= line.contains(".emit_comments_before(");
+                e.2 |= line.contains(".emit_trailing_comment_after(")
+                    || line.contains(".emit_trailing_comment_after_header(");
+            }
+        }
+
+        if !is_comment {
+            depth += line.matches('{').count() as i32;
+            depth -= line.matches('}').count() as i32;
+            while let Some((_, d)) = fn_stack.last() {
+                if depth <= *d {
+                    fn_stack.pop();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut census: Vec<String> = found
+        .iter()
+        .filter(|(_, (is_loop, _, _))| *is_loop)
+        .map(|(name, _)| name.clone())
+        .collect();
+    census.sort();
+    let mut expected: Vec<String> = ALLOWLIST.iter().map(|s| s.to_string()).collect();
+    expected.sort();
+
+    assert_eq!(
+        census, expected,
+        "R41 T-FMT-A child-collection loop census in `src/formatter/mod.rs` \
+         changed.\n\nfound:    {census:?}\nallowlist: {expected:?}\n\n\
+         A formatter fn that iterates an AST child collection emits those \
+         children as separate SOURCE LINES, so a comment can sit between any \
+         two of them. Every such loop needs the leading + trailing comment \
+         hooks, or interior comments ESCAPE the container and re-emerge at \
+         column 0 (R41 §5, `format_extern_block`). Add the new fn to \
+         ALLOWLIST with its file:line + rationale AFTER wiring both hooks."
+    );
+
+    let hookless: Vec<&String> = found
+        .iter()
+        .filter(|(_, (is_loop, before, trailing))| *is_loop && !(*before && *trailing))
+        .map(|(name, _)| name)
+        .collect();
+    assert!(
+        hookless.is_empty(),
+        "R41 T-FMT-A: formatter fn(s) iterate an AST child collection WITHOUT \
+         both comment hooks: {hookless:?}.\n\n\
+         This is the hole `formatter_sibling_loops_hook_pairing` is blind to — \
+         a hookless loop moves no call-site count. Wire \
+         `emit_comments_before(child.span.start)` before the child emit and \
+         `emit_trailing_comment_after(child.span.end, false)` after it, \
+         mirroring `format_trait` / `format_equip`."
     );
 }
 

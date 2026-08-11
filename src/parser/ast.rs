@@ -222,6 +222,22 @@ pub struct Param {
     pub default: Option<Spanned<Expr>>,
     /// True for params declared `meta name` — carry no runtime value; operator token only.
     pub is_meta_op: bool,
+    /// True iff this param is the METHOD RECEIVER (`self` / `&self` / `^self`),
+    /// as opposed to a regular param that merely happens to be `Self`-typed
+    /// (`int get(Self a)` — legal, and its NAME is user-visible).
+    ///
+    /// Typed metadata written once at the single receiver chokepoint
+    /// (`parser::make_self_param`) and read via this field — never
+    /// re-derived downstream from `type_ == Type::SelfType` or from
+    /// `name.node == "self"` (Layering rule 2 / "No name matching"): both
+    /// re-derivations are WRONG for a named `Self`-typed param, and the
+    /// formatter's copy of that inference destroyed the name outright
+    /// (`int get(Self a)` → `int get(self)`, whose body then references an
+    /// undefined `a`).
+    ///
+    /// `Param` deliberately derives no `Default`, so every construction
+    /// site is compile-forced to state this axis.
+    pub is_receiver: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
