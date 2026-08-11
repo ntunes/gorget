@@ -10,25 +10,40 @@
 # fired a header hook and so did `case`, so those two positions were right; only
 # `else` had none.
 #
-# ── AXIS 1 · CLAUSE POSITION, indented body (9 cells) ─────────────────────────
-#   STATEMENT level (6): `if`-`else` · statement-match `else` · `for` `else` ·
-#     `while` `else` · `meta match` `else` · expression-match `else`.
+# ── AXIS 1 · CLAUSE POSITION, indented body (10 cells) ────────────────────────
+#   STATEMENT level (7): `if`-`else` · statement-match `else` · `for` `else` ·
+#     `while` `else` · `select` `else` · `meta match` `else` ·
+#     expression-match `else`.
 #   ITEM level (3): the `meta if` header itself, its `elif`, its `else` — same
 #     class one layer up, where the nested-item loop re-emitted a header's
 #     comment as a LEADING comment on the branch's first DEFINITION.
 #
-#   Seven of the nine go through ONE producer, `Formatter::emit_else_header`
-#   (header + hook + newline). The two that do not are named rather than
-#   glossed: the `meta if` and `elif` ITEM headers carry a condition, so they
-#   write their own header text and call the hook directly — and the
-#   expression-match `else` reaches its body through `format_arm_body`, which
-#   owns hook placement for every ARM-shaped position (axis 2). The site counts
-#   are pinned by `formatter_sibling_loops_hook_pairing` in tests/lints.rs, not
-#   restated here where they would rot.
+#   SEVEN of the ten go through ONE producer, `Formatter::emit_else_header`
+#   (header + hook + newline), and that is exactly its call-site count — the
+#   cells and the sites are the same set, which is the property worth having.
+#   The THREE that do not are named, not glossed:
+#     · the `meta if` ITEM header and its `elif` carry a CONDITION, so they
+#       write their own header text and call the hook directly;
+#     · the expression-match `else` reaches its body through `format_arm_body`,
+#       which owns hook placement for every ARM-shaped position (axis 2).
 #
-#   The item-level `else` anchors on `MetaIf.else_keyword_span`, WRITTEN by the
-#   parser. It used to walk backwards from the first item to find the colon;
-#   that walk is gone.
+#   ⚠ An earlier version of this header said "seven of the nine" and then
+#   listed three exceptions as "the two". The arithmetic was hiding a missing
+#   cell: `select`'s `else` is site 6 of the producer, uses the identical
+#   anchor, and had no trailing-comment cell anywhere in this directory. A
+#   reviewer neutered that one call site and every gate stayed green.
+#
+#   The counts are pinned by `formatter_suite_layout_hook_census` in
+#   tests/lints.rs, which asserts the call-site count of all THREE per-site
+#   anchor producers. (They are NOT pinned by
+#   `formatter_sibling_loops_hook_pairing`, as this header once claimed — that
+#   lint counts hook NAMES, and none of its three numbers moves when a clause
+#   site stops delegating, because the hook lives inside the producer.)
+#
+#   The item-level `else` anchors on `MetaIf.else_branch`'s span, WRITTEN by the
+#   parser and paired with the branch's items in one `Option` so a branch
+#   without its keyword span is unrepresentable. It used to walk backwards from
+#   the first item to find the colon; that walk is gone.
 #
 # ── AXIS 2 · ARM POSITION × BODY SHAPE (8 cells, COMPLETE) ────────────────────
 #   `format_arm_body` has FOUR call sites — `format_match_arm` (a `case` arm),
@@ -114,6 +129,15 @@ void while_else():
     else:    # never entered the loop
         print(2)
 
+void select_else():
+    Channel[int] ch = Channel[int](1)
+    select:
+        case int v = ch.recv():
+            print(v)
+        else:    # nothing ready
+            print(0)
+    ch.close()
+
 String meta_match_else[T]():
     meta match typename(T):
         case "int":
@@ -181,6 +205,7 @@ void main():
     stmt_match_else(1)
     for_else()
     while_else()
+    select_else()
     print(meta_match_else[int]())
     print(expr_match_else(1))
     print(backend_id())

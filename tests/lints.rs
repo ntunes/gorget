@@ -10582,23 +10582,27 @@ fn doc_source_citations_name_the_right_line() {
     // numbers, all four drifted, and nothing looked. Records rot the same way
     // prose does — so the walk CAN cover them, behind the standard env gate.
     //
-    // MEASURED before gating (2026-08-11, `GG_LINT_CITE_CONTENT_WIDE=1`): the
-    // widened scan reports 98 rows — 65 `TODO.md`, 22 `tests/integration.rs`,
-    // 9 `tests/lints.rs`, 2 `known_gaps`. That is NOT 98 stale cites. TODO.md
-    // dominates for a structural reason: its bullets are single enormous lines
-    // packing dozens of identifiers and many cites, so the candidate set is
-    // huge and never near any particular cite — the heuristic has no signal
-    // there. But the pile is not all noise either: `tests/lints.rs:4820` cites
-    // `src/ir/lowering/types.rs:699` for `register_collection_alias`, which is
-    // at **967**. A real stale cite, outside `docs/`, that nothing guarded.
+    // MEASURED at HEAD (`GG_LINT_CITE_CONTENT_WIDE=1`): the widened scan reports
+    // 99 rows — 65 `TODO.md`, 22 `tests/integration.rs`, 10 `tests/lints.rs`,
+    // 2 `known_gaps`. ⚠ The number is SELF-REFERENTIAL and will drift: this very
+    // comment cites `types.rs:699` below, so it counts itself. Re-run rather
+    // than trusting the figure.
     //
-    // BURN-DOWN, in this order: (1) `known_gaps` (2 rows) and `tests/lints.rs`
-    // (9) — line-structured prose where the heuristic works; (2)
-    // `tests/integration.rs` (22); (3) `TODO.md` LAST, and probably not with
-    // this heuristic at all — a per-bullet check would need the cite's own
-    // sentence, not the bullet. Fix or allowlist each row WITH ITS REASON, then
-    // fold the target into the fatal set above. Do not bulk-allowlist: an
-    // unread row asserts a verification nobody did.
+    // That is NOT 99 stale cites. TODO.md dominates for a structural reason: its
+    // bullets are single enormous lines packing dozens of identifiers and many
+    // cites, so the candidate set is huge and never near any particular cite —
+    // the heuristic has no signal there. But the pile is not all noise either:
+    // `tests/lints.rs:4820` cites `src/ir/lowering/types.rs:699` for
+    // `register_collection_alias`, which is at **967**. A real stale cite,
+    // outside `docs/`, that nothing guarded.
+    //
+    // BURN-DOWN, in this order: (1) `known_gaps` and `tests/lints.rs` —
+    // line-structured prose where the heuristic works; (2)
+    // `tests/integration.rs`; (3) `TODO.md` LAST, and probably not with this
+    // heuristic at all — a per-bullet check would need the cite's own sentence,
+    // not the bullet. Fix or allowlist each row WITH ITS REASON, then fold the
+    // target into the fatal set above. Do not bulk-allowlist: an unread row
+    // asserts a verification nobody did.
     let wide = std::env::var("GG_LINT_CITE_CONTENT_WIDE").is_ok();
     let mut targets: Vec<PathBuf> = vec![PathBuf::from(SCOPE)];
     if wide {
@@ -10645,9 +10649,17 @@ fn doc_source_citations_name_the_right_line() {
             let src_lines: Vec<&str> = src.lines().collect();
             // A bare `:N` is resolved against the last file NAMED nearby, and
             // that inference can be wrong — a paragraph may cite `doc.rs` and
-            // then carry a bare number meant for `mod.rs`. Out of range means
-            // the inference missed, so say nothing: `doc_source_citations_resolve`
-            // owns the range question for cites that carry their own path.
+            // then carry a bare number meant for `mod.rs`.
+            //
+            // This catches only the OUT-OF-RANGE half of that: if the number
+            // exceeds the inferred file, the inference certainly missed, so say
+            // nothing (`doc_source_citations_resolve` owns the range question
+            // for cites that carry their own path). ⚠ RESIDUAL: an IN-RANGE
+            // mis-inference is invisible here — the check then reads a window
+            // in the wrong file and can report a stale cite that is fine, or
+            // pass one that is not. The mitigation is that this only fires for
+            // BARE cites, where the resolution is at worst a neighbouring file
+            // in the same paragraph; a cite carrying its own path is exact.
             if cited == 0 || cited > src_lines.len() {
                 continue;
             }
@@ -10757,6 +10769,36 @@ fn doc_source_citations_name_the_right_line() {
         ("293", "src/formatter/mod.rs:1060", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
         ("387", "src/formatter/mod.rs:1537", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
+    // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
+    // must still be LIVE: if the cite it excuses no longer fails, the row has
+    // outlived its reason and has to go, which is what makes the list shrink
+    // instead of quietly accumulating. And the count may not grow.
+    const HEURISTIC_BLIND_CEILING: usize = 7;
+    assert!(
+        HEURISTIC_BLIND.len() <= HEURISTIC_BLIND_CEILING,
+        "the heuristic-blind allowlist GREW ({} > {HEURISTIC_BLIND_CEILING}). \
+         Rows are added only for a cite measured CORRECT that this method cannot \
+         see — never to silence a failure. Repoint the cite instead.",
+        HEURISTIC_BLIND.len()
+    );
+    let mut dead_rows: Vec<String> = Vec::new();
+    for (line, cite, _) in HEURISTIC_BLIND {
+        let live = stale
+            .iter()
+            .any(|s| s.contains(&format!("{SCOPE}:{line} ")) && s.contains(cite));
+        if !live {
+            dead_rows.push(format!("{SCOPE}:{line} → `{cite}`"));
+        }
+    }
+    assert!(
+        dead_rows.is_empty(),
+        "{} heuristic-blind allowlist row(s) no longer excuse anything:\n  {}\n\n\
+         The cite was repointed, the prose changed, or the matcher improved. \
+         DELETE the row and lower HEURISTIC_BLIND_CEILING — that is the whole \
+         point of a shrink-only list.",
+        dead_rows.len(),
+        dead_rows.join("\n  ")
+    );
     stale.retain(|s| {
         !HEURISTIC_BLIND.iter().any(|(line, cite, _)| {
             s.contains(&format!("{SCOPE}:{line} ")) && s.contains(cite)
@@ -10765,7 +10807,7 @@ fn doc_source_citations_name_the_right_line() {
 
     assert!(
         stale.is_empty(),
-        "{} citation(s) in {SCOPE} point at a line that does not mention the \
+        "{} citation(s) point at a line that does not mention the \
          identifier the sentence is about:\n  {}\n\n\
          The line number has drifted. Re-read the source and repoint it. This is \
          the half `doc_source_citations_resolve` cannot see: an in-range cite on \
@@ -13533,44 +13575,78 @@ fn formatter_suite_layout_hook_census() {
          do."
     );
 
-    // ── The ARM-POSITION axis, which the table above cannot see ─────────────
+    // ── The PER-SITE-ANCHOR producers, which the table above cannot see ─────
     //
     // This census keys on `format_block_stmts` calls, so it enumerates SUITE
-    // emissions. `format_arm_body` is a different axis: it emits an arm/clause
-    // BODY and decides where the header's trailing comment goes, and its call
-    // sites hand it a PER-SITE anchor. A fifth arm position that forgot to
-    // delegate — or delegated with a wrong anchor — moves no count above,
-    // because it would not call `format_block_stmts` in the window.
+    // emissions. The three producers below are a different axis: each emits a
+    // clause/arm header or body AND places the header's trailing comment, and
+    // each of their call sites hands over its OWN anchor. A position that
+    // forgot to delegate — or delegated with a wrong anchor — moves no count
+    // above, because it would not call `format_block_stmts` in the window.
     //
-    // That gap is not hypothetical. Two arms of this exact family shipped with
-    // no fixture cell and every gate green: first the author-`do:` body shape,
-    // then the `rethrow` call site. The fixture axis is
-    // `else_header_trailing_comment.gg` (4 positions × 2 body shapes); this
-    // pins the POSITION set the fixture claims to cover, so the two cannot
-    // drift apart silently.
-    const EXPECTED_ARM_BODY_CALL_SITES: usize = 4;
-    let arm_body_calls = content
+    // That gap is not hypothetical, and it has now bitten THREE TIMES, once per
+    // review pass, each time in a different member of the same family:
+    //   1. the author-`do:` body shape shipped with no cell — every gate green;
+    //   2. the `rethrow` call site shipped with no cell — every gate green;
+    //   3. `select`'s `else` had no trailing-comment cell, and a reviewer
+    //      neutered that call site and reproduced the misattribution class with
+    //      lints, lib, fmt_suite_layout, fmt_idempotent, fmt_comment_only and
+    //      fmt_output_reparses_corpus_wide ALL green.
+    //
+    // Pass 3's fix pinned one producer, which is why pass 3 found the next one.
+    // The class is "a producer whose callers each supply an anchor", so all
+    // three are pinned here, each against the fixture axis that covers it.
+    const ANCHOR_PRODUCERS: &[(&str, usize, &str)] = &[
+        (
+            "self.format_arm_body(",
+            4,
+            "`format_match_arm` (a `case` arm), the expression-match `else`, \
+             `rethrow`, `catch` — axis 2 of else_header_trailing_comment.gg, \
+             which samples each against an author-`do:` and an inline body. \
+             RED-verify a new one by killing its anchor: format_arm_body(body, 0)",
+        ),
+        (
+            "self.emit_else_header(",
+            7,
+            "the item-level `meta if` `else`, `format_elif_else_blocks`, and the \
+             `for` / `while` / statement-match / `select` / `meta match` `else` \
+             clauses — axis 1 of else_header_trailing_comment.gg, one cell each. \
+             RED-verify a new one by replacing the call with a hand-written \
+             `write(\"else:\")` + `newline()`, which is exactly what a site that \
+             forgot to delegate looks like",
+        ),
+        (
+            "self.format_inline_suite(",
+            6,
+            "the INLINE half of the same clause family — `elif`, the `if`-`else`, \
+             `Stmt::If`'s then-body, `meta match`'s case and `else`, and \
+             `on error` (whose inline form takes NO colon, which is why the \
+             header suffix is a parameter). Its cells are inline_slot_kinds.gg \
+             and the inline rows of else_header_trailing_comment.gg",
+        ),
+    ];
+    let code_lines: Vec<&str> = content
         .lines()
         .filter(|l| {
             let t = l.trim_start();
             !t.starts_with("//") && !t.starts_with("///")
         })
-        .filter(|l| l.contains("self.format_arm_body("))
-        .count();
-    assert_eq!(
-        arm_body_calls, EXPECTED_ARM_BODY_CALL_SITES,
-        "`format_arm_body` call-site count changed ({EXPECTED_ARM_BODY_CALL_SITES} \
-         -> {arm_body_calls}).\n\n\
-         The four are `format_match_arm` (a `case` arm), the expression-match \
-         `else`, `rethrow`, and `catch`. Each supplies its OWN anchor, so each \
-         needs its OWN cell in `tests/fixtures/fmt_suite_layout/\
-         else_header_trailing_comment.gg` — a shared producer does not make a \
-         per-site anchor correct, which is the defect that opened this work.\n\n\
-         If you ADDED a position: add its author-`do:` and inline cells to that \
-         fixture, RED-verify each by killing the anchor \
-         (`self.format_arm_body(body, 0)`), and bump this count.\n\
-         Census: grep -c 'self.format_arm_body(' src/formatter/mod.rs"
-    );
+        .collect();
+    for (needle, expected, roster) in ANCHOR_PRODUCERS {
+        let found = code_lines.iter().filter(|l| l.contains(needle)).count();
+        assert_eq!(
+            found, *expected,
+            "`{needle}` call-site count changed ({expected} -> {found}).\n\n\
+             The {expected} are: {roster}.\n\n\
+             Each call site supplies its OWN anchor, so each needs its OWN \
+             fixture cell — a shared producer does not make a per-site anchor \
+             correct, which is the defect this family keeps producing. If you \
+             ADDED a position, add its cell, RED-verify it, and bump the count \
+             here. If you REMOVED one, a header comment is probably now \
+             misattributed.\n\
+             Census: grep -c '{needle}' src/formatter/mod.rs"
+        );
+    }
 }
 
 /// The READ-SITE guard behind `SuiteLayout`'s doc comment (Core #14 — an
