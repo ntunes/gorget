@@ -12001,6 +12001,90 @@ fn formatter_sibling_loops_hook_pairing() {
 /// hook calls from `format_extern_block`'s `for func in &eb.items` loop (the
 /// pre-R41 state) and this lint fires with that row flipping `Both` → `None`.
 #[test]
+fn item_module_is_constructed_only_by_the_loader() {
+    // `format_item`'s `Item::Module` loop is the ONE child-collection loop in
+    // the formatter that carries no comment hooks and no blank preservation.
+    // The census row records the reason: the node is SYNTHETIC — the loader
+    // wraps a non-entry imported module in it (`merge_modules`), and `gg fmt`
+    // parses fresh source with `Parser::new(..).parse_module()` and never runs
+    // the loader, so the loop is unreachable from the formatter.
+    //
+    // That reasoning is only as good as its premise. The day the PARSER grows a
+    // `module X:` form, the loop would silently strip every blank and comment
+    // inside it (Core #10 class) and nothing would say so.
+    //
+    // ⚠ The premise is NOT "one construction site" — an output-review asserted
+    // that and it is wrong. There are TWO in production code, and the second is
+    // easy to misread as a pattern because the line above it IS one:
+    //   * `src/loader.rs` — `merge_modules` wraps a non-entry imported module;
+    //   * `src/semantic/meta.rs` — `flatten_meta_ifs` REBUILDS the wrapper after
+    //     flattening the `meta if`s inside it.
+    // What actually holds — and what the formatter's hookless loop rests on — is
+    // that BOTH producers are POST-PARSE. The parser builds none, and
+    // `format_source_result` parses fresh source and runs neither the loader nor
+    // semantic analysis. So this pins the file SET, not a count of one: a
+    // producer appearing anywhere else, above all in `src/parser/`, is what
+    // invalidates the reasoning.
+    const EXPECTED_PRODUCER_FILES: &[&str] = &["src/loader.rs", "src/semantic/meta.rs"];
+
+    let mut sites: Vec<String> = Vec::new();
+    for path in walkdir_rs("src") {
+        let rel = path.to_string_lossy().replace('\\', "/");
+        let Ok(content) = fs::read_to_string(&path) else { continue };
+        // Unit-test modules build AST fixtures by hand; those constructions are
+        // real but are not producers in the shipped pipeline, and they reach the
+        // formatter no more than the loader's does. Scope to production code —
+        // the trailing `#[cfg(test)]` module is the convention in this tree.
+        let prod_end = content
+            .lines()
+            .position(|l| l.trim_start() == "#[cfg(test)]")
+            .unwrap_or(usize::MAX);
+        for (i, line) in content.lines().enumerate() {
+            if i >= prod_end {
+                break;
+            }
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            // A CONSTRUCTION builds the node; a PATTERN binds it. Patterns carry
+            // a rest-`..`, a match arrow, or a `let`/`if let` binder on the same
+            // line — constructions carry none of the three.
+            if line.contains("Item::Module {")
+                && !line.contains("..")
+                && !line.contains("=>")
+                && !trimmed.starts_with("let ")
+                && !trimmed.contains("if let ")
+            {
+                sites.push(format!("{rel}:{}", i + 1));
+            }
+        }
+    }
+
+    let mut producer_files: Vec<String> = sites
+        .iter()
+        .map(|s| s.rsplit_once(':').map(|(f, _)| f.to_string()).unwrap_or_default())
+        .collect();
+    producer_files.sort();
+    producer_files.dedup();
+
+    assert_eq!(
+        producer_files, EXPECTED_PRODUCER_FILES,
+        "`Item::Module` producers changed.\n\nSites: {sites:?}\n\n\
+         The formatter's `Item::Module` loop (`format_item`) has NO comment \
+         hooks and NO blank-line preservation, and its census row justifies \
+         that by the node being POST-PARSE and therefore unreachable from \
+         `gg fmt`, which parses fresh source and runs neither the loader nor \
+         semantic analysis.\n\n\
+         A producer in `src/parser/` breaks that reasoning outright — the loop \
+         would silently strip every blank and comment inside the new form \
+         (Core #10 class). A producer in another post-parse pass is probably \
+         fine, but say so deliberately: re-read the census row in \
+         `formatter_child_collection_loop_census` before extending this list."
+    );
+}
+
+#[test]
 fn formatter_child_collection_loop_census() {
     /// Hook state a census row expects.
     #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -13226,6 +13310,13 @@ fn formatter_suite_layout_hook_census() {
 /// construction (this walks `src/` only) and is a fixture ORACLE, not a
 /// consumer.
 ///
+/// ⚠ ONE RESIDUAL BLIND SPOT, stated rather than assumed away: a RENAMING
+/// destructure *inside the parser* (`let Block { layout: l, .. } = b;`) spells
+/// `layout:` and is therefore taken for the struct-literal write it looks
+/// identical to. Outside the parser the same shape is caught, which is where the
+/// danger lives — a semantics reading the field is what makes whitespace change
+/// meaning. Closing the parser cell needs a real Rust parse, not a line scan.
+///
 /// **Break-and-verify (Core #13, RED-verified 2026-08-11):** adding
 /// `let _ = block.layout;` to `src/semantic/typecheck.rs` fires this lint with
 /// that file:line; adding it to `src/parser/stmt.rs` fires the reads-in-parser
@@ -13233,6 +13324,26 @@ fn formatter_suite_layout_hook_census() {
 #[test]
 fn suite_layout_is_read_only_by_the_formatter() {
     const FIELDS: [&str; 2] = [".layout", "author_spelled"];
+    // A DESTRUCTURING read spells the field as a BARE identifier in a
+    // brace-list position — `let Block { layout, .. } = b;`, or a match pattern
+    // `Expr::Do { author_spelled, .. } =>`. The dotted form above cannot see it,
+    // which is exactly the hole an output-review demonstrated by slipping such a
+    // read into `src/semantic/` past the first version of this guard.
+    //
+    // Anchoring on the preceding `{` or `,` is what keeps this from firing on
+    // the ordinary local named `layout` (`let mut layout = String::new()` in
+    // `src/ir/lowering/mod.rs`, `Some(layout)` in the LLVM backend — both
+    // measured) while still catching every brace-list position. The parser's own
+    // write sites put `layout:` at the start of their line, so they are not in a
+    // brace-list position either and do not match.
+    let destructure: Vec<(String, regex::Regex)> = FIELDS
+        .iter()
+        .map(|f| {
+            let bare = f.trim_start_matches('.').to_string();
+            let re = regex::Regex::new(&format!(r"[{{,]\s*{bare}\s*[,}}:]")).unwrap();
+            (bare, re)
+        })
+        .collect();
     let mut violations: Vec<String> = Vec::new();
 
     for path in walkdir_rs("src") {
@@ -13246,6 +13357,17 @@ fn suite_layout_is_read_only_by_the_formatter() {
             let code = line.trim_start();
             if code.starts_with("//") {
                 continue; // prose may name the field
+            }
+            for (bare, re) in &destructure {
+                if !re.is_match(line) {
+                    continue;
+                }
+                // In the parser a brace-list `layout:` is a struct-literal
+                // WRITE on one line (`Block { stmts, span, layout: … }`).
+                if in_parser && line.contains(&format!("{bare}:")) {
+                    continue;
+                }
+                violations.push(format!("{rel}:{}  {}", i + 1, line.trim()));
             }
             for field in FIELDS {
                 if !line.contains(field) {

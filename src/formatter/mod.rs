@@ -1291,32 +1291,30 @@ impl Formatter {
                     self.emitter.dedent();
                 }
                 if let Some(ref else_items) = mi.else_items {
-                    // No clause span exists for an item-level `else`, so the
-                    // anchor is DERIVED: walk back from the first item's start
-                    // over whitespace and comment spans, which lands on the
-                    // `else:` colon — the clause's own line, which is what both
-                    // hooks need. The first item's start will NOT do for the
-                    // blank check: it sits one line below, so the walk reports
-                    // the `else:` line itself as the content above and every
-                    // author blank reads as absent. An EMPTY else body has no
-                    // anchor and no comment to attribute; both hooks skip.
-                    let clause_anchor = else_items
-                        .first()
-                        .and_then(|it| self.last_real_content_before(it.span.start));
-                    if let Some(anchor) = clause_anchor {
-                        if self.blank_before_clause(anchor) {
-                            self.emitter.blank_line();
-                        }
-                        // A comment on its own line above `else:` documents the
-                        // BRANCH; without this it fell to the nested-item loop's
-                        // flush and was re-emitted INSIDE the branch, leading the
-                        // first definition.
-                        self.emit_comments_before(anchor);
-                        self.emit_else_header(anchor);
-                    } else {
-                        self.emitter.write("else:");
-                        self.emitter.newline();
+                    // The clause's own position, WRITTEN by the parser
+                    // (`MetaIf.else_keyword_span`). This used to walk backwards
+                    // from the first item to find the colon, which worked but
+                    // reconstructed at the read site a fact the writer had in
+                    // hand — and the first item's start is NOT usable directly,
+                    // since it sits one line below and makes every author blank
+                    // above the clause read as absent.
+                    // The keyword's END, not its start: both hooks walk BACK
+                    // from the anchor to the last real content, so an anchor at
+                    // the `e` of `else` lands them on the PREVIOUS line and the
+                    // trailing comment after the colon reads as a line away.
+                    let anchor = mi
+                        .else_keyword_span
+                        .expect("parser writes else_keyword_span whenever else_items is Some")
+                        .end;
+                    if self.blank_before_clause(anchor) {
+                        self.emitter.blank_line();
                     }
+                    // A comment on its own line above `else:` documents the
+                    // BRANCH; without this it fell to the nested-item loop's
+                    // flush and was re-emitted INSIDE the branch, leading the
+                    // first definition.
+                    self.emit_comments_before(anchor);
+                    self.emit_else_header(anchor);
                     self.emitter.indent();
                     self.format_nested_items(else_items);
                     self.emitter.dedent();

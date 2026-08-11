@@ -1496,5 +1496,18 @@ pub struct MetaIf {
     pub then_items: Vec<Spanned<Item>>,
     pub elif_branches: Vec<(Spanned<Expr>, Vec<Spanned<Item>>)>,
     pub else_items: Option<Vec<Spanned<Item>>>,
+    /// Span of the `else` KEYWORD, when the author wrote an else branch.
+    ///
+    /// The `else` clause of an item-level `meta if` is the one clause header in
+    /// the language with nothing else to anchor to: `condition` anchors the
+    /// `meta if` and each `elif`, but `else` has no expression of its own and
+    /// `else_items` starts on the NEXT line. The formatter needs a position on
+    /// the clause's own line to decide whether the author left a blank above it
+    /// and to attach a trailing comment written after the colon.
+    ///
+    /// Recorded here rather than reconstructed by walking backwards from the
+    /// first item (Layering rule 4 — the parser knows, so the parser writes it).
+    /// `None` only when there is no else branch.
+    pub else_keyword_span: Option<Span>,
     pub span: Span,
 }

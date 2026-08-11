@@ -4361,6 +4361,8 @@ mod tests {
                             }),
                             dummy_span(),
                         )]),
+                        // Paired with `else_items`: a branch implies a keyword.
+                        else_keyword_span: Some(dummy_span()),
                         span: dummy_span(),
                     }),
                     dummy_span(),
@@ -4446,6 +4448,8 @@ mod tests {
                             }),
                             dummy_span(),
                         )]),
+                        // Paired with `else_items`: a branch implies a keyword.
+                        else_keyword_span: Some(dummy_span()),
                         span: dummy_span(),
                     }),
                     dummy_span(),
@@ -4510,6 +4514,7 @@ mod tests {
                         )],
                         elif_branches: vec![],
                         else_items: None,
+                        else_keyword_span: None,
                         span: dummy_span(),
                     }),
                     dummy_span(),
@@ -4559,6 +4564,7 @@ mod tests {
                         )],
                         elif_branches: vec![],
                         else_items: None,
+                        else_keyword_span: None,
                         span: dummy_span(),
                     }),
                     dummy_span(),

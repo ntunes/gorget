@@ -956,7 +956,12 @@ impl Parser {
             elif_branches.push((elif_cond, elif_items));
         }
 
+        let mut else_keyword_span = None;
         let else_items = if self.match_keyword(Keyword::Else) {
+            // The clause header's own position, recorded where it is known.
+            // The formatter cannot recover it: `else` has no expression and the
+            // first item starts on the next line.
+            else_keyword_span = Some(self.previous_span());
             Some(self.parse_meta_block()?)
         } else {
             None
@@ -970,6 +975,7 @@ impl Parser {
                 then_items,
                 elif_branches,
                 else_items,
+                else_keyword_span,
                 span,
             }),
             span,

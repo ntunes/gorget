@@ -10851,11 +10851,21 @@ fn fmt_preserves_noreturn_qualifier() {
 //
 // FIXTURE PLACEMENT: the `.gg` files live in `tests/fixtures/fmt_silent_drops/`
 // — a SUBDIRECTORY. `runtime_parity_corpus` and `fmt_idempotent` both enumerate
-// with a top-level `read_dir`, so nothing here is picked up automatically (the
-// self-host parser skips `abi`/`borrowed` without recording them, so a
-// top-level fmt fixture would blow `RUNTIME_DIFF_NONMATCH_CEILING`, which
-// Core #9 ⊕ forbids raising for a round's own inflow). Every fixture below is
-// therefore wired to a NAMED test by hand.
+// with a top-level `read_dir`, so nothing here is picked up automatically.
+// THESE fixtures need that: the self-host parser skips `abi`/`borrowed` without
+// recording them, so promoting one would register a genuine non-MATCH against
+// `RUNTIME_DIFF_NONMATCH_CEILING`, which Core #9 ⊕ forbids raising for a round's
+// own inflow. Every fixture below is therefore wired to a NAMED test by hand.
+//
+// ⚠ That is a property of THESE fixtures, not of fmt fixtures in general — an
+// earlier version of this paragraph read as the general rule and stopped a later
+// promotion that was in fact safe. A fmt fixture with no `main` exits non-zero
+// CLEANLY, and a clean non-zero oracle exit classifies as
+// `RuntimeParityOutcome::RustRejected`, which the scan EXCLUDES from its
+// denominator — measured on `fmt_comment_only_file_corruption.gg`, which is
+// top-level for exactly that reason. Decide per fixture: what blows the ceiling
+// is a fixture that RUNS and whose self-host output differs, not one that lives
+// at the top level.
 
 /// Differential helper for the §4 parse-order cells: `gg fmt` must not change
 /// what `gg check` SAYS about a program.
