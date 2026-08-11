@@ -2326,3 +2326,17 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   axis, still open: ATTRIBUTES above `extern` blocks (`@link(name = …)` — the
   standard FFI idiom, plausibly a missing CARRY feature, not a reject) vs above
   `equip` — filed with the discard-family entry for its own decision.
+- 2026-08-11 — **🎯 PARENTHESIZED IMPORT FORM RATIFIED (owner, live session, after
+  measuring that Gorget's import name-list is the language's ONE undelimited list —
+  hence unwrappable — while every peer ships a bracketed form).** `from env import
+  (a, b, c)` becomes legal: the parens suspend newline-significance exactly as in
+  expression context (Python-identical; PEP 8's preferred wrap). Consequences:
+  `gg fmt` fill-packs import name lists at the 120 budget like every other list
+  once the form lands; the split-into-repeated-statements workaround stops being
+  needed; backslash continuation stays rejected. Until the form lands, import
+  lines are EXEMPT from the width budget (the self-host's long-line convention is
+  stated doctrine, not an accident — the appendix documents the exemption with a
+  pointer here). Accept-surface change ⇒ Core #9: lands cross-lane (Rust parser +
+  the three SH parser copies) with POS/NEG conformance fixtures, its own small
+  track, not R41's. fmt-merge of adjacent same-module imports (the isort
+  precedent) was NOT ratified — a separate knob if ever wanted.
