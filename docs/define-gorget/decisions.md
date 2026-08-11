@@ -2224,8 +2224,9 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   NARROW ruling: it governs PHYSICAL NEWLINES in the `"""` form only; the wider
   escape-canon-vs-verbatim question for single-line strings remains OPEN as owner question Q1
   (T-FMT-B's gate). The appendix gains the multi-line carve-out as this ruling's write-through
-  WHEN the fix lands (same track); top-level fixtures carrying physical `"""` blocks
-  (`multiline_strings.gg`, `string_multiline_ops.gg`, `lib/xtd/toml.gg`) join the A2
+  WHEN the fix lands (same track); FIXTURES AND LIB SOURCES carrying physical `"""` blocks
+  (`multiline_strings.gg`, `string_multiline_ops.gg`, `lib/xtd/toml.gg` — the pass covers the
+  WHOLE sweep root set, not `tests/fixtures/*.gg` only; pass-8 wording fix) join the A2
   subject-preservation pass.
 
 - 2026-08-10 — **🎯 FMT CANON PAIR RATIFIED (owner, at R41 planning; owner invited
