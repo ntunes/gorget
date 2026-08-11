@@ -1,21 +1,28 @@
-# DURABLE REPRO — the `&`-in-an-OWNING-POSITION class, costume 7 of 7:
-# a RETURN VALUE (`return &c.fd` from an `int` function).
+# LIVE REGRESSION FIXTURE (graduated out of `known_gaps/`) — the
+# `&`-in-an-OWNING-POSITION class, costume 7 of 7: a RETURN VALUE
+# (`return &c.fd` from an `int` function).
 #
-# ⚠ THIS COSTUME DIVERGES BETWEEN THE TWO PRODUCTION BACKENDS — the only row of
-# the class that does.
-#
-# WRONG TODAY (measured at HEAD, Rust gg):
-#   * `gg check` is CLEAN on both backends.
-#   * C:    accepts (with a cc pointer-to-integer warning) and prints a RAW
+# REJECTED at `gg check` as intended, which is where this one always belonged:
+# it is the only row of the class that DIVERGED BETWEEN THE TWO PRODUCTION
+# BACKENDS. Before the reject —
+#   * `gg check` was CLEAN on both backends.
+#   * C:    accepted (with a cc pointer-to-integer warning) and printed a RAW
 #           STACK ADDRESS — 281474879431680 (ASLR-dependent; the stable fact is
 #           that it is a pointer, not 10).
 #   * LLVM: HARD BUILD FAILURE in `llc` —
 #             error: '%v4' defined with type 'ptr' but expected 'i64'
 #             ret i64 %v4
-#           i.e. no binary is produced at all.
+#           i.e. no binary was produced at all.
 # A `gg check`-clean program that miscompiles on one backend and fails to
 # assemble on the other is the sharpest possible statement that the rejection
 # belongs at check time.
+#
+# ⚠ THE CODE IT FIRES IS NOT THE CODE THIS CLASS IS OWED. The reject arrives as
+# `error[E_AmpInOperandPosition]` — the OPERAND-position rule, not a dedicated
+# ownership-BOUNDARY diagnostic. Correct and actionable here (a `return` operand
+# has no callee), but three siblings of this class — ctor / push / enum payload —
+# are STILL ACCEPTED at HEAD because they DO have a callee. This fixture's green
+# does not close the class; the parent TODO row stays open.
 #
 # ORACLE (ggdef, measured this session): OUT OF SUBSET — "expression
 # `unsupported` is outside the phase-0 subset". Its in-subset siblings (ctor,

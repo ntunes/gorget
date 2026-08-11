@@ -11,7 +11,12 @@
 # trailing-comment hook treated the file's first comment as a trailing comment
 # on a node that was never emitted. Fixed by making the empty case a distinct
 # type (`Option<usize>`), so the trailing hook cannot fire before any content.
-# The live guard is `fmt_comment_only_file_preserved` in tests/integration.rs
-# (graduated in place — un-`#[ignore]`d). The fixture stays here as the minimal
-# repro: it has no `main`, so promoting it to a top-level fixture would make
-# `gg run` exit 1 and register a runtime-parity non-MATCH (Core #9 (+)).
+# The live guard is `fmt_comment_only_file_preserved` in tests/integration.rs,
+# plus the corpus-wide `fmt_idempotent` sweep, which enumerates top-level
+# fixtures and therefore covers this file now that it lives here.
+#
+# It used to sit in `known_gaps/` on the theory that a `main`-less file would
+# register a runtime-parity non-MATCH. Measured: `gg run` on this file exits 1
+# CLEANLY, and a clean non-zero oracle exit classifies as
+# `RuntimeParityOutcome::RustRejected`, which the parity scan excludes from its
+# denominator. Promotion is ceiling-neutral.

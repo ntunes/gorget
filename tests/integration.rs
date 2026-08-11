@@ -10095,15 +10095,18 @@ fn fmt_radix_preserved() {
 /// buffer. The fix makes the empty case a distinct TYPE (`Option<usize>`), so
 /// the trailing hook cannot fire before any content exists.
 ///
-/// The fixture stays in `known_gaps/` as its minimal repro; the test itself is
-/// graduated IN PLACE (un-`#[ignore]`d). It is deliberately NOT promoted to a
-/// top-level fixture: it has no `main`, so `gg run` exits 1 and the runtime
-/// parity scan would classify it as a non-MATCH (Core #9 ⊕).
+/// Graduated out of `known_gaps/` — the fix landed, and the parking reason that
+/// kept the FIXTURE behind did not survive measurement. It claimed that a
+/// `main`-less file would make `gg run` exit 1 and register a runtime-parity
+/// non-MATCH; measured, `gg run` exits 1 CLEANLY, and a clean non-zero oracle
+/// exit is `RuntimeParityOutcome::RustRejected`, which the scan excludes from
+/// its denominator. It cannot become a non-MATCH. Promoting it is parity-neutral
+/// and buys real coverage: `fmt_idempotent` enumerates top-level fixtures, so
+/// the file is now swept by the corpus-wide fmt gates as well as by this test.
 #[test]
 fn fmt_comment_only_file_preserved() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture =
-        manifest_dir.join("tests/fixtures/known_gaps/fmt_comment_only_file_corruption.gg");
+    let fixture = manifest_dir.join("tests/fixtures/fmt_comment_only_file_corruption.gg");
     let source = std::fs::read_to_string(&fixture)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
 
@@ -46135,15 +46138,32 @@ fn sound_for_amp_scalar_elem_writethrough() {
 // ── The `&`-in-an-OWNING-POSITION class ─────────────────────────────────────
 //
 // Seven costumes, each its own fixture (Core #4: fix the class, not the
-// instance; Core #12: axis-complete, not axis-sampled). All seven are `gg
-// check`-clean at HEAD. Four silently DROP the sigil; three are worse —
-// `[&c.fd]`, `(&c.fd, 5)` and `return &c.fd` store a RAW STACK ADDRESS into an
-// `int` slot on both backends, and the `return` costume additionally makes LLVM
-// fail hard in `llc`. ggdef REJECTS every row it covers.
+// instance; Core #12: axis-complete, not axis-sampled). INTENDED for all seven:
+// REJECT at `gg check`. D10(b) ADDENDUM 3 makes these consuming
+// ownership-BOUNDARY positions and D31 full-strict defines `&` as "the callee
+// writes through" — which an owning position cannot do.
 //
-// INTENDED for all seven: REJECT at `gg check`. D10(b) ADDENDUM 3 makes these
-// consuming ownership-BOUNDARY positions and D31 full-strict defines `&` as
-// "the callee writes through" — which an owning position cannot do.
+// THE CLASS IS FOUR-SEVENTHS CLOSED, and the split is not arbitrary (re-measured
+// 2026-08-11, `gg check` per fixture):
+//
+//   REJECTED — array literal · tuple literal · dict-literal value · return.
+//     These four are LIVE regression fixtures (graduated out of `known_gaps/`).
+//     Their reject comes from the `E_AmpInOperandPosition` chokepoint in
+//     `src/semantic/safety/check_expr.rs`, and each host below pins that exact
+//     code rather than the `"error[E_"` prefix, which would match ANY
+//     diagnostic and green-light a reject that arrived for the wrong reason.
+//
+//   STILL ACCEPTED — struct-ctor arg · collection put · enum payload. These
+//     three remain `#[ignore]`d known gaps, and the reason they differ is the
+//     mechanism: each HAS a callee, so the operand-position rule does not reach
+//     them. What the class is actually owed is an ownership-BOUNDARY reject
+//     with its own code; the four greens below are that reject arriving by a
+//     neighbouring route, not the class being retired. The TODO row stays open.
+//
+// Three of the closed four were never merely "sigil ignored": `[&c.fd]`,
+// `(&c.fd, 5)` and `return &c.fd` stored a RAW STACK ADDRESS into an `int` slot
+// on both backends, and `return` additionally made LLVM fail hard in `llc`.
+// ggdef REJECTS every row it covers.
 
 #[test]
 #[ignore = "KNOWN GAP (&-in-an-owning-position 1/7, struct ctor arg): sigil silently dropped on \
@@ -46169,37 +46189,45 @@ fn sound_amp_owning_position_enum_rejected() {
     check_gg_fails("known_gaps/sound_amp_owning_position_enum.gg", "error[E_");
 }
 
+/// CLOSED 4/7 (dict-literal value). Was: sigil silently dropped on C and LLVM.
+/// Out of ggdef's subset, so pinned against the class rule (Core #9).
 #[test]
-#[ignore = "KNOWN GAP (&-in-an-owning-position 4/7, dict-literal value): sigil silently dropped \
-on C and LLVM; out of ggdef's subset, pinned against the class rule. Asserts the INTENDED \
-reject; TODO.md. Un-ignore when the owning-position reject lands."]
 fn sound_amp_owning_position_dict_literal_rejected() {
-    check_gg_fails("known_gaps/sound_amp_owning_position_dict_literal.gg", "error[E_");
+    check_gg_fails(
+        "sound_amp_owning_position_dict_literal.gg",
+        "error[E_AmpInOperandPosition]",
+    );
 }
 
+/// CLOSED 5/7 (array literal). Was a GARBAGE-VALUE MISCOMPILE: a raw stack
+/// address in an `int` slot on BOTH backends. ggdef rejects.
 #[test]
-#[ignore = "KNOWN GAP (&-in-an-owning-position 5/7, array literal) — GARBAGE-VALUE MISCOMPILE: \
-a raw stack address lands in an `int` slot on BOTH backends; ggdef rejects. Asserts the INTENDED \
-reject; TODO.md. Un-ignore when the owning-position reject lands."]
 fn sound_amp_owning_position_array_literal_rejected() {
-    check_gg_fails("known_gaps/sound_amp_owning_position_array_literal.gg", "error[E_");
+    check_gg_fails(
+        "sound_amp_owning_position_array_literal.gg",
+        "error[E_AmpInOperandPosition]",
+    );
 }
 
+/// CLOSED 6/7 (tuple literal). Was a GARBAGE-VALUE MISCOMPILE: a raw stack
+/// address in an `int` slot on BOTH backends. ggdef rejects.
 #[test]
-#[ignore = "KNOWN GAP (&-in-an-owning-position 6/7, tuple literal) — GARBAGE-VALUE MISCOMPILE: \
-a raw stack address lands in an `int` slot on BOTH backends; ggdef rejects. Asserts the INTENDED \
-reject; TODO.md. Un-ignore when the owning-position reject lands."]
 fn sound_amp_owning_position_tuple_literal_rejected() {
-    check_gg_fails("known_gaps/sound_amp_owning_position_tuple_literal.gg", "error[E_");
+    check_gg_fails(
+        "sound_amp_owning_position_tuple_literal.gg",
+        "error[E_AmpInOperandPosition]",
+    );
 }
 
+/// CLOSED 7/7 (return value). Was a BACKEND DIVERGENCE: C accepted and printed a
+/// raw stack address, LLVM hard-failed in llc ('%v4 defined with type ptr but
+/// expected i64'). Out of ggdef's subset; pinned against the class rule.
 #[test]
-#[ignore = "KNOWN GAP (&-in-an-owning-position 7/7, return value) — BACKEND DIVERGENCE: C \
-accepts and prints a raw stack address, LLVM hard-fails in llc ('%v4 defined with type ptr but \
-expected i64'). Asserts the INTENDED reject; TODO.md. Un-ignore when the value-position-& reject \
-lands."]
 fn sound_amp_owning_position_return_rejected() {
-    check_gg_fails("known_gaps/sound_amp_owning_position_return.gg", "error[E_");
+    check_gg_fails(
+        "sound_amp_owning_position_return.gg",
+        "error[E_AmpInOperandPosition]",
+    );
 }
 
 /// LIVE CONTROL — the eighth position of the same axis, and the one production
