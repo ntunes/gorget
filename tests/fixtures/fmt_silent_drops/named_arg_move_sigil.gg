@@ -1,0 +1,15 @@
+# R41 T-FMT-A — the NAMED-argument ownership position, `^` cell.
+#
+# AXIS CELL: the MOVE sigil at the same position as the `&` sibling. One cell
+# per sigil, because `format_ownership_prefix` renders them from the same
+# `Ownership` enum but a partial fix could easily reach only one.
+#
+# INTENDED: runs and prints `3`, before AND after `gg fmt`. Pre-fix the sigil
+# migrated across the `=` into the value expression exactly as in the `&` cell.
+
+void take(int a, Vector[int] ^v):
+    print(v.len())
+
+void main():
+    Vector[int] xs = [1, 2, 3]
+    take(1, ^v = xs)

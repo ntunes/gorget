@@ -7,6 +7,15 @@
 # extern block), so it must be fixed at the shared chokepoint, not patched into
 # one arm (Core #4 — fix the class, not the instance).
 #
+# ⚠ WIDER THAN "CONTAINERS" (measured 2026-08-11): the same tail-orphan dedent
+# fires for ordinary STATEMENT BODIES too — a function body, an `if` body, a
+# `while` body, an `for` body — because `format_block_stmts` has the identical
+# shape (per-child hooks, no orphan-pre-close flush before `dedent()`). The
+# dedent DEPTH varies with the shape (a fn-body or for-body tail lands at
+# column 0; an if-body or while-body tail lands at the enclosing indent), which
+# is cosmetic detail on one mechanism, not separate bugs. Both faces are
+# asserted below so a container-only fix cannot close this gap by halves.
+#
 # Mechanism: each container's member loop pairs `emit_comments_before(
 # child.span.start)` with `emit_trailing_comment_after(child.span.end)`. A
 # comment AFTER the last child has no following child to lead, and it is on its
@@ -44,5 +53,19 @@ extern "C":
     extern int puts(String s) = "puts"
     # trailing in extern block
 
+void body_faces():
+    if true:
+        print(2)
+        # trailing in if body
+    while false:
+        print(3)
+        # trailing in while body
+    for i in [1]:
+        print(i)
+        # trailing in for body
+    print(4)
+    # trailing in fn body
+
 void main():
     print(1)
+    body_faces()

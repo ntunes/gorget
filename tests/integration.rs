@@ -10864,6 +10864,44 @@ fn fmt_preserves_run_output_call_arg_paren_move_closure() {
     run_gg("fmt_silent_drops/call_arg_paren_move_closure.gg", "10");
 }
 
+/// The NAMED-argument ownership position — one differential cell per sigil.
+///
+/// `parse_call_arg` runs `parse_ownership_modifier` BEFORE the `name =`
+/// lookahead, so `CallArg.ownership` on a named argument was written by a sigil
+/// in the NAME's slot (`f(&b = x)`, the D35 spelling) and must be re-emitted
+/// there. Emitting it after the `=` puts it where the pre-pass cannot see it,
+/// and the sigil is silently re-homed into the VALUE expression.
+///
+/// RED-verified: pre-fix, `takes_mut(1, &b = x)` RAN and printed `2` while the
+/// formatted `takes_mut(1, b = &x)` was REJECTED with 2 semantic errors
+/// (E_OwnershipMismatch + E_AmpInOperandPosition) — a working program broken by
+/// `gg fmt`. Same for the `^` cell.
+#[test]
+fn fmt_preserves_named_arg_ownership_sigil() {
+    for (fixture, expect) in [
+        ("fmt_silent_drops/named_arg_mut_borrow_sigil.gg", "2"),
+        ("fmt_silent_drops/named_arg_move_sigil.gg", "3"),
+    ] {
+        assert_fmt_preserves_check_verdict(fixture);
+        run_gg(fixture, expect);
+    }
+    // …and the sigil must land in the NAME's slot, not after the `=`.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for (fixture, want) in [
+        ("fmt_silent_drops/named_arg_mut_borrow_sigil.gg", "takes_mut(1, &b = x)"),
+        ("fmt_silent_drops/named_arg_move_sigil.gg", "take(1, ^v = xs)"),
+    ] {
+        let src = std::fs::read_to_string(manifest_dir.join("tests/fixtures").join(fixture))
+            .unwrap_or_else(|e| panic!("cannot read {fixture}: {e}"));
+        let f = gorget::formatter::format_source_infallible(&src);
+        assert!(
+            f.lines().any(|l| l.trim() == want),
+            "named-arg ownership sigil moved out of the NAME's slot — expected \
+             `{want}` in the formatted {fixture}.\n{f}"
+        );
+    }
+}
+
 /// §4 NEGATIVE cells — the paren guard must not OVER-fire.
 ///
 /// Two shapes emit a leading sigil-looking token yet need NO parens, and
@@ -10929,8 +10967,12 @@ fn fmt_ownership_paren_guard_does_not_over_fire() {
         int ne[Numeric T](T a, T b): apply[T](a, b, meta !=)\n";
     assert_fmt_round_trips("meta_op_token_no_parens", meta_src);
     let f = gorget::formatter::format_source_infallible(meta_src);
+    // ⚠ Assert the ABSENCE of the wrap, not the presence of the unwrapped
+    // text: the churned form `(meta !=)` CONTAINS `meta !=)`, so a positive
+    // `contains` is satisfied by the very output it is meant to reject. Same
+    // vacuity class as the comment-matched `takes_bare` cell above.
     assert!(
-        f.contains("meta !=)"),
+        !f.contains("(meta "),
         "paren guard OVER-FIRED on `meta !=` — `meta <op>` emits the `meta ` \
          prefix first, so its leading character is never a stripped sigil.\n{f}"
     );
@@ -10965,7 +11007,15 @@ fn fmt_ownership_paren_guard_does_not_over_fire() {
 /// branch body, at body indent.
 #[test]
 fn fmt_branch_header_comments_stay_on_the_branch() {
-    // One cell per branch-header loop the census classifies as `Leading`.
+    // ONE CELL PER `Leading` LOOP in the census — all six, not a selection:
+    //   Stmt::Match arms · Stmt::Select arms · Stmt::MetaMatch arms ·
+    //   match-EXPRESSION arms · `elif` · `else`.
+    //
+    // The match-EXPRESSION cell is the one with the worst pre-fix behaviour:
+    // without its hook BOTH arm comments are EJECTED OUT of the match entirely
+    // and land after it (the ESCAPE face, as with extern blocks), not merely
+    // pushed one line down into a body. Measured 2026-08-11 by deleting the
+    // hook — and it was UNPINNED until this cell existed.
     let src = "void main():\n    \
         int x = 2\n    \
         match x:\n        \
@@ -10974,6 +11024,17 @@ fn fmt_branch_header_comments_stay_on_the_branch() {
         # above second case\n        \
         case 2:\n            print(2)\n        \
         else:\n            print(3)\n    \
+        int y = match x:\n        \
+        # above expr case\n        \
+        case 1: 10\n        \
+        else: 30\n    \
+        print(y)\n    \
+        select:\n        \
+        # above select case\n        \
+        case int v = ch.recv():\n            print(v)\n    \
+        meta match 1:\n        \
+        # above meta case\n        \
+        case 1:\n            print(1)\n    \
         if x == 1:\n        print(4)\n    \
         # above elif\n    \
         elif x == 2:\n        print(5)\n    \
@@ -10986,8 +11047,16 @@ fn fmt_branch_header_comments_stay_on_the_branch() {
     // line — i.e. it still leads the branch rather than having sunk into a body.
     let lines: Vec<&str> = f.lines().collect();
     for (marker, header) in [
+        // Stmt::Match arms
         ("# above first case", "case 1:"),
         ("# above second case", "case 2:"),
+        // match-EXPRESSION arms (the ejection cell)
+        ("# above expr case", "case 1: 10"),
+        // Stmt::Select arms
+        ("# above select case", "case int v = ch.recv():"),
+        // Stmt::MetaMatch arms
+        ("# above meta case", "case 1:"),
+        // format_elif_else_blocks — the `elif` loop and the `else` branch
         ("# above elif", "elif x == 2:"),
         ("# above else", "else:"),
     ] {
@@ -11277,11 +11346,18 @@ fn fmt_extern_block_interior_comments_stay_inside() {
 ///
 /// Found while wiring §5's extern-block hooks, and deliberately NOT fixed
 /// there: it reproduces identically in ALL FIVE container formatters
-/// (struct / enum / trait / equip / extern block), so it needs a shared
-/// orphan-pre-close flush before each `dedent()` — patching only the extern
+/// (struct / enum / trait / equip / extern block) AND — measured 2026-08-11 —
+/// in ordinary STATEMENT BODIES (fn / if / while / for), because
+/// `format_block_stmts` has the identical shape. So it needs a shared
+/// orphan-pre-close flush before each `dedent()`; patching only the extern
 /// block would be an instance-fix where a class exists (Core #4). The shape to
 /// generalise already exists for collection literals
 /// (`format_bracketed_broken_with_comments`'s orphan-pre-close flush).
+///
+/// The dedent DEPTH varies by shape (a fn-body or for-body tail lands at column
+/// 0; an if-body or while-body tail lands at the enclosing indent) — cosmetic
+/// variation on one mechanism, not separate bugs. Asserting BOTH faces here
+/// stops a container-only fix from closing this gap by halves.
 ///
 /// Asserts the INTENDED indented output, so it is RED at HEAD; un-ignore and
 /// graduate out of `known_gaps/` the round the shared flush lands.
@@ -11295,7 +11371,8 @@ fn fmt_container_last_interior_comment_stays_inside() {
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
     let formatted = gorget::formatter::format_source_infallible(&source);
 
-    // One cell per container — a partial fix fingers the containers it missed.
+    // One cell per SHAPE — a partial fix fingers exactly what it missed.
+    // Containers (indent 4) …
     for container in ["struct", "enum", "trait", "equip", "extern block"] {
         let marker = format!("# trailing in {container}");
         assert!(
@@ -11304,6 +11381,23 @@ fn fmt_container_last_interior_comment_stays_inside() {
                 .any(|l| l.starts_with("    ") && l.trim() == marker),
             "`{marker}` escaped its container (expected it INDENTED inside).\n\
              === formatted ===\n{formatted}"
+        );
+    }
+    // … and statement bodies: the fn body sits at indent 4, the if/while/for
+    // bodies one level deeper at indent 8.
+    for (body, indent) in [
+        ("fn body", 4usize),
+        ("if body", 8),
+        ("while body", 8),
+        ("for body", 8),
+    ] {
+        let marker = format!("# trailing in {body}");
+        assert!(
+            formatted.lines().any(|l| {
+                l.trim() == marker && l.len() - l.trim_start().len() == indent
+            }),
+            "`{marker}` dedented out of its block (expected it at indent \
+             {indent}).\n=== formatted ===\n{formatted}"
         );
     }
 }
@@ -11417,6 +11511,26 @@ fn fact_field_corpus() -> Vec<(&'static str, &'static str)> {
              int e = 3\n    \
              for i in (^s)..e:\n        print(i)\n    \
              take((^a))\n",
+        ),
+        // CARRIER for `CallArg.ownership` at the NAMED-argument position.
+        //
+        // ⚠ Without this row the guard was VACUOUS for that position: it
+        // already PROJECTED `CallArg.ownership`, but no corpus entry carried a
+        // named arg with a non-Borrow ownership, so the formatter could — and
+        // did — re-home the sigil from the CallArg into the value expression
+        // with the guard green (Core #15e Q2, and the same vacuity as the
+        // `contains`-matched-the-comment cell one level down: a projection is
+        // only as good as its carriers).
+        (
+            "named_arg_ownership_facts",
+            "void takes_mut(int a, int &b):\n    b = b + 1\n\n\
+             void takes_move(int a, Vector[int] ^v):\n    print(v.len())\n\n\
+             int seed():\n    return 1\n\n\
+             void main():\n    \
+             int x = seed()\n    \
+             Vector[int] xs = [1, 2]\n    \
+             takes_mut(1, &b = x)\n    \
+             takes_move(1, ^v = xs)\n",
         ),
         // The §4 axes at DEPTH — inside an `if` inside a `while`, and inside a
         // match-arm body. `Stmt::For.ownership` / `CallArg.ownership` are
@@ -11594,13 +11708,63 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
         }
     }
 
-    /// The walk descends into EVERY nested block, not just the function body.
-    /// The §4 ownership axes (`Stmt::For.ownership`, `CallArg.ownership`) are
-    /// positional, so they occur at any nesting depth — a `for i in (^s)..e:`
-    /// inside an `if` is the same defect as one at fn level, and a fn-level-only
-    /// projection would be blind to it.
+    /// Item-level dispatch, shared by the module loop and by `Stmt::Item`.
+    fn visit_item(prefix: &str, item: &Item, facts: &mut Vec<String>) {
+        match item {
+            Item::Function(f) => visit_fn(&format!("{prefix}fn:{}", f.name.node), f, facts),
+            Item::Equip(e) => {
+                for m in &e.items {
+                    visit_fn(&format!("{prefix}equip.fn:{}", m.node.name.node), &m.node, facts);
+                }
+            }
+            Item::Trait(t) => {
+                for m in &t.items {
+                    if let TraitItem::Method(f) = &m.node {
+                        visit_fn(&format!("{prefix}trait.fn:{}", f.name.node), f, facts);
+                    }
+                }
+            }
+            Item::ExternBlock(eb) => {
+                facts.push(format!(
+                    "{prefix}externblock.abi={:?}",
+                    eb.abi.as_ref().map(|a| &a.node)
+                ));
+                for m in &eb.items {
+                    visit_fn(&format!("{prefix}extern.fn:{}", m.node.name.node), &m.node, facts);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The walk descends into EVERY block-bearing statement, not just the
+    /// function body. The §4 ownership axes (`Stmt::For.ownership`,
+    /// `CallArg.ownership`) are positional, so they occur at any nesting depth —
+    /// a `for i in (^s)..e:` inside an `if` is the same defect as one at fn
+    /// level, and a fn-level-only projection would be blind to it.
+    ///
+    /// `Stmt::Item` routes back through `visit_item`: a function nested in a
+    /// function body carries `extern_abi` / `returns_borrowed` / `is_receiver`
+    /// exactly like a top-level one, so skipping it would leave a live blind
+    /// spot in the class guard.
     fn visit_stmt(path: &str, s: &Stmt, facts: &mut Vec<String>) {
         match s {
+            Stmt::Item(item) => visit_item(&format!("{path}.item."), item, facts),
+            Stmt::OnError { body, .. } => visit_block(&format!("{path}.onerr"), body, facts),
+            Stmt::Select { arms, .. } => {
+                for (i, a) in arms.iter().enumerate() {
+                    visit_block(&format!("{path}.select{i}"), &a.body, facts);
+                }
+            }
+            Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+                visit_block(&format!("{path}.metaif.t"), then_body, facts);
+                for (i, (_, b)) in elif_branches.iter().enumerate() {
+                    visit_block(&format!("{path}.metaif.e{i}"), b, facts);
+                }
+                if let Some(e) = else_body {
+                    visit_block(&format!("{path}.metaif.el"), e, facts);
+                }
+            }
             // Stmt::For.ownership — a §4 axis.
             Stmt::For { ownership, iterable, body, else_body, .. } => {
                 facts.push(format!("{path}.for.ownership={}", ownership_str(*ownership)));
@@ -11687,30 +11851,11 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
     }
 
     // The walk MUST descend into nested member positions — equip, trait, and
-    // extern BLOCK — not just top-level items.
+    // extern BLOCK — not just top-level items. Shared with `Stmt::Item` (below),
+    // so a function nested inside a function BODY is projected identically to a
+    // top-level one: it carries the very same pinned fields.
     for item in &module.items {
-        match &item.node {
-            Item::Function(f) => visit_fn(&format!("fn:{}", f.name.node), f, &mut facts),
-            Item::Equip(e) => {
-                for m in &e.items {
-                    visit_fn(&format!("equip.fn:{}", m.node.name.node), &m.node, &mut facts);
-                }
-            }
-            Item::Trait(t) => {
-                for m in &t.items {
-                    if let TraitItem::Method(f) = &m.node {
-                        visit_fn(&format!("trait.fn:{}", f.name.node), f, &mut facts);
-                    }
-                }
-            }
-            Item::ExternBlock(eb) => {
-                facts.push(format!("externblock.abi={:?}", eb.abi.as_ref().map(|a| &a.node)));
-                for m in &eb.items {
-                    visit_fn(&format!("extern.fn:{}", m.node.name.node), &m.node, &mut facts);
-                }
-            }
-            _ => {}
-        }
+        visit_item("", &item.node, &mut facts);
     }
 
     facts.sort();

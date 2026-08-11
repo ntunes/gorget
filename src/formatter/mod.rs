@@ -3623,30 +3623,43 @@ impl Formatter {
     }
 
     fn format_call_arg(&mut self, arg: &CallArg) {
+        // `parse_call_arg` runs `parse_ownership_modifier` BEFORE the `name =`
+        // lookahead, so the sigil position is ahead of the NAME, not ahead of
+        // the value. Both branches below follow from that one fact.
         if let Some(ref name) = arg.name {
+            // NAMED argument. `CallArg.ownership` was written by a sigil in
+            // the NAME's slot (`f(&b = x)` — the D35 spelling), so it must be
+            // re-emitted there. Emitting it after the `=` instead
+            // (`f(b = &x)`) puts it where the pre-pass cannot see it: the
+            // sigil is re-parsed as part of the VALUE expression, and
+            // `CallArg.ownership` comes back `Borrow`.
+            //
+            // That is a silent re-homing of a fact-carrying field — the exact
+            // class this track exists to retire — and it BREAKS WORKING CODE:
+            // `takes_mut(1, &b = x)` runs and prints `2`, while the
+            // pre-fix emission `takes_mut(1, b = &x)` is REJECTED
+            // (E_OwnershipMismatch + E_AmpInOperandPosition).
+            //
+            // No paren guard is needed on the value here, and adding one is
+            // pure churn (`b = &x` → `b = (&x)`, measured live on
+            // `known_gaps/sound_named_arg_sigil_dropped.gg`): with the sigil
+            // emitted in its own slot, the value is parsed by `parse_expr`
+            // with no pre-pass ahead of it.
+            //
+            // ⚠ This does NOT make the after-`=` spelling sound — a `&` there
+            // is still silently dropped by the OWNERSHIP CHECK, the separate
+            // already-filed defect that same fixture pins. This is only about
+            // the formatter re-emitting the ownership it was GIVEN.
+            self.format_ownership_prefix(arg.ownership);
             self.emitter.write(&name.node);
             self.emitter.write(" = ");
-        }
-        self.format_ownership_prefix(arg.ownership);
-        // R41 T-FMT-A: sibling of the for-iterable site — `parse_call_arg`
-        // strips the sigil before parsing the argument expression.
-        //
-        // POSITIONAL args ONLY. `parse_call_arg` runs
-        // `parse_ownership_modifier` BEFORE the `name =` lookahead, so on a
-        // NAMED argument the stripped position is ahead of the NAME, not ahead
-        // of the value: `f(&b = x)` is the spelling that yields
-        // `CallArg.ownership`, while the value in `f(b = &x)` is parsed by
-        // `parse_expr` with no pre-pass and therefore keeps its sigil
-        // unaided. Guarding it too is pure churn (`b = &x` → `b = (&x)`,
-        // measured live on `known_gaps/sound_named_arg_sigil_dropped.gg`).
-        //
-        // ⚠ NOT a statement that the named form is sound: a `&` after `=` is
-        // silently dropped by the OWNERSHIP CHECK, which is the separate,
-        // already-filed defect that fixture pins. This is only about which
-        // position the FORMATTER must protect.
-        if arg.name.is_some() {
             self.format_expr(&arg.value);
         } else {
+            // POSITIONAL argument — sibling of the for-iterable site. The
+            // sigil slot is immediately ahead of the value expression, so a
+            // value whose own emission LEADS with a sigil must be
+            // parenthesised or the reparse steals it into `ownership`.
+            self.format_ownership_prefix(arg.ownership);
             self.format_ownership_modifier_operand(&arg.value);
         }
     }
