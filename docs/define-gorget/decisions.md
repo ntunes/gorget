@@ -2282,3 +2282,19 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   **(SCOPE) R41 keeps full W2 scope** + a clause-(a)-sized T-PRUNE + the honest close-time
   ask if short. **The formatter's contract is now ONE SENTENCE: `gg fmt` changes layout it
   owns and nothing the author spelled.**
+- 2026-08-11 — **🎯 FILL SHAPE + ELIF PAIR RATIFIED (owner, live session, on the
+  orchestrator's recommendations after the T-FMT-D pass-2 / T-FMT-B pass-2 evidence).**
+  **(1) FILL-PACK CONTINUATION = BLOCK INDENT** — a wrapped list's continuation lines
+  start at one indent level, never aligned under the open delimiter. Grounds put to the
+  owner and accepted: the 2026-08-10 ratification covered only the packing principle
+  ("fill long lines before breaking to the next" — the paren-aligned TODO example was
+  agent-authored paraphrase); paren-alignment measured architecturally unsound with the
+  formatter's pre-rendered elements (absolute sub-render columns ⇒ nested fills
+  mis-column) and rename-fragile; rustfmt `Compressed` and Prettier `fill()` both
+  block-indent. Supersedes the visual example embedded in the fill-pack TODO entry.
+  **(2) `else if` ↔ `elif` JOINS the Q3 PRESERVE family** — fmt keeps the author's
+  spelling; the Q3 pair list is thereby confirmed extensible by the contract sentence
+  ("`gg fmt` changes layout it owns and nothing the author spelled"), and
+  `appendix-formatting.md`'s use of `elif` as the canonicalization example is rewritten
+  by T-FMT-B's write-through. Both had been derived-and-flagged; both are now owner
+  calls, closing the last open formatter-canon knobs before the A2 sweep.
