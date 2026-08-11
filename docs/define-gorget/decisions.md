@@ -2313,3 +2313,16 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   sentence gains its one documented carve-out, stated as the intent-content principle
   above, not an ad-hoc exception. Supersedes clause (2) of today's "FILL SHAPE + ELIF
   PAIR" entry; `appendix-formatting.md`'s elif example remains TRUE and stays.
+- 2026-08-11 — **🎯 VISIBILITY-ON-EQUIP/TEST/BENCH = REJECT (owner, live session, on
+  the T-FMT-B pass-4 find that `public equip Foo:` is accepted and silently
+  DISCARDED at parse — a Core #10 silent-drop).** `public`/`private` on an `equip`
+  block, `test`, or `bench` is a PARSE-TIME REJECTION with a teaching diagnostic
+  ("visibility goes on the methods inside the equip block, not on the block") —
+  the Rust E0449 shape; an equip block exports nothing of its own and per-method
+  visibility already exists. The Swift-style member-default (`public extension`)
+  remains an ADDABLE D43-era extension, deliberately not chosen now. Accept/reject
+  change ⇒ Core #9: lands cross-lane with a NEG conformance fixture + the SH parser
+  mirrors, same round as its fix (a small W2 rider, not the fmt track). SEPARATE
+  axis, still open: ATTRIBUTES above `extern` blocks (`@link(name = …)` — the
+  standard FFI idiom, plausibly a missing CARRY feature, not a reject) vs above
+  `equip` — filed with the discard-family entry for its own decision.
