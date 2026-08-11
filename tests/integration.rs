@@ -10095,15 +10095,18 @@ fn fmt_radix_preserved() {
 /// buffer. The fix makes the empty case a distinct TYPE (`Option<usize>`), so
 /// the trailing hook cannot fire before any content exists.
 ///
-/// The fixture stays in `known_gaps/` as its minimal repro; the test itself is
-/// graduated IN PLACE (un-`#[ignore]`d). It is deliberately NOT promoted to a
-/// top-level fixture: it has no `main`, so `gg run` exits 1 and the runtime
-/// parity scan would classify it as a non-MATCH (Core #9 ⊕).
+/// Graduated out of `known_gaps/` — the fix landed, and the parking reason that
+/// kept the FIXTURE behind did not survive measurement. It claimed that a
+/// `main`-less file would make `gg run` exit 1 and register a runtime-parity
+/// non-MATCH; measured, `gg run` exits 1 CLEANLY, and a clean non-zero oracle
+/// exit is `RuntimeParityOutcome::RustRejected`, which the scan excludes from
+/// its denominator. It cannot become a non-MATCH. Promoting it is parity-neutral
+/// and buys real coverage: `fmt_idempotent` enumerates top-level fixtures, so
+/// the file is now swept by the corpus-wide fmt gates as well as by this test.
 #[test]
 fn fmt_comment_only_file_preserved() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture =
-        manifest_dir.join("tests/fixtures/known_gaps/fmt_comment_only_file_corruption.gg");
+    let fixture = manifest_dir.join("tests/fixtures/fmt_comment_only_file_corruption.gg");
     let source = std::fs::read_to_string(&fixture)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
 
@@ -10848,11 +10851,21 @@ fn fmt_preserves_noreturn_qualifier() {
 //
 // FIXTURE PLACEMENT: the `.gg` files live in `tests/fixtures/fmt_silent_drops/`
 // — a SUBDIRECTORY. `runtime_parity_corpus` and `fmt_idempotent` both enumerate
-// with a top-level `read_dir`, so nothing here is picked up automatically (the
-// self-host parser skips `abi`/`borrowed` without recording them, so a
-// top-level fmt fixture would blow `RUNTIME_DIFF_NONMATCH_CEILING`, which
-// Core #9 ⊕ forbids raising for a round's own inflow). Every fixture below is
-// therefore wired to a NAMED test by hand.
+// with a top-level `read_dir`, so nothing here is picked up automatically.
+// THESE fixtures need that: the self-host parser skips `abi`/`borrowed` without
+// recording them, so promoting one would register a genuine non-MATCH against
+// `RUNTIME_DIFF_NONMATCH_CEILING`, which Core #9 ⊕ forbids raising for a round's
+// own inflow. Every fixture below is therefore wired to a NAMED test by hand.
+//
+// ⚠ That is a property of THESE fixtures, not of fmt fixtures in general — an
+// earlier version of this paragraph read as the general rule and stopped a later
+// promotion that was in fact safe. A fmt fixture with no `main` exits non-zero
+// CLEANLY, and a clean non-zero oracle exit classifies as
+// `RuntimeParityOutcome::RustRejected`, which the scan EXCLUDES from its
+// denominator — measured on `fmt_comment_only_file_corruption.gg`, which is
+// top-level for exactly that reason. Decide per fixture: what blows the ceiling
+// is a fixture that RUNS and whose self-host output differs, not one that lives
+// at the top level.
 
 /// Differential helper for the §4 parse-order cells: `gg fmt` must not change
 /// what `gg check` SAYS about a program.
@@ -11503,6 +11516,125 @@ fn fmt_container_last_interior_comment_stays_inside() {
             }),
             "`{marker}` dedented out of its block (expected it at indent \
              {indent}).\n=== formatted ===\n{formatted}"
+        );
+    }
+}
+
+/// KNOWN GAP (gorget-js snag 15h, filed R41 2026-08-11): the CONTINUATION LINES
+/// of a multi-line trailing comment detach from the member they annotate.
+///
+/// `gg fmt` has no multi-line-trailing concept: one `Comment` token per line,
+/// and the classifier asks each independently "same source line as the previous
+/// emit?". A continuation line is not, so it is never trailing — it lands at
+/// MEMBER indent as the next member's leading comment (cellA) or, with no next
+/// member, at COLUMN 0 via the module flush (cellB, the same orphan mechanism as
+/// `fmt_container_last_interior_comment_dedents`).
+///
+/// Asserts the three properties rather than a byte-exact expected output, so the
+/// cells survive a change to the alignment stride: no comment at column 0, every
+/// continuation `#` under its head's `#`, and the member below a multi-line
+/// trailing comment still sharing the group's `#` column.
+#[test]
+#[ignore = "known gap (snag 15h): multi-line trailing comment continuations detach from their member; un-ignore when the comment model grows a continuation-run concept"]
+fn fmt_multiline_trailing_comment_stays_attached() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_multiline_trailing_comment_detach.gg");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // The header's own prose is comment-at-column-0 by construction; the cells
+    // are the only lines this test reasons about, and each carries a sentinel.
+    let hash_col = |sentinel: &str| -> usize {
+        let line = formatted
+            .lines()
+            .find(|l| l.contains(sentinel))
+            .unwrap_or_else(|| panic!("sentinel `{sentinel}` vanished.\n{formatted}"));
+        line.find('#')
+            .unwrap_or_else(|| panic!("sentinel line has no `#`: {line:?}"))
+    };
+
+    // (1) cellB — no continuation escapes to column 0.
+    for cont in ["cellB-cont-1", "cellB-cont-2"] {
+        assert!(
+            hash_col(cont) > 0,
+            "`{cont}` escaped its struct to column 0.\n=== formatted ===\n{formatted}"
+        );
+    }
+
+    // (2) every continuation sits under its head's `#`.
+    for (head, cont) in [
+        ("cellA-head", "cellA-cont-1"),
+        ("cellA-head", "cellA-cont-2"),
+        ("cellB-head", "cellB-cont-1"),
+        ("cellB-head", "cellB-cont-2"),
+    ] {
+        assert_eq!(
+            hash_col(cont),
+            hash_col(head),
+            "`{cont}` is not aligned under `{head}`'s `#`.\n\
+             === formatted ===\n{formatted}"
+        );
+    }
+
+    // (3) the member BELOW a multi-line trailing comment still shares the
+    //     alignment group's column — the detachment splits the run today.
+    assert_eq!(
+        hash_col("cellA-last"),
+        hash_col("cellA-head"),
+        "the multi-line trailing comment split the alignment group: the member \
+         below it no longer shares the group's `#` column.\n\
+         === formatted ===\n{formatted}"
+    );
+}
+
+/// KNOWN GAP (R41 T-FMT-B, filed 2026-08-11): `gg fmt` DELETES the author's
+/// grouping parentheses.
+///
+/// `parse_paren_expr`'s parenthesized-expression branch (`src/parser/expr.rs:1641-1645`)
+/// does `expect(RParen); Ok(first)` — the AST node IS the inner expression, so the
+/// paren layer never reaches the formatter and only the parens the formatter's own
+/// precedence rules demand come back. Redundant author parens are how a reader is
+/// told what binds first; deleting them is an edit to the user's source, not a
+/// canonicalization.
+///
+/// One cell per costume so a partial fix fingers what it missed: a group around a
+/// higher-precedence binary operand, a group around a whole arithmetic sub-term,
+/// and a group around a cast in condition position. The fixture's outer
+/// `(… or …)` is deliberately NOT asserted — the formatter re-emits that one from
+/// precedence, so it would be green for a reason unrelated to this gap.
+///
+/// Asserts the INTENDED preserved output, so it is RED at HEAD. Un-ignore and
+/// graduate the fixture out of `known_gaps/` the round the paren-emission
+/// chokepoint lands (the prototype's idempotence blocker is in the TODO entry).
+#[test]
+#[ignore = "known gap (R41 T-FMT-B): gg fmt deletes the author's grouping parens; un-ignore when the paren-emission chokepoint lands"]
+fn fmt_preserves_author_parens() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir.join("tests/fixtures/known_gaps/fmt_paren_deletion.gg");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    // Assert on the CODE lines only — the header comment quotes these same
+    // shapes to document the gap, and a substring search over the whole file
+    // would match the prose and pass while the code was still being rewritten.
+    let code: String = formatted
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    for cell in [
+        "(y % 4) == 0",
+        "(y % 100) != 0",
+        "(y % 400) == 0",
+        "n + (n * shift)",
+        "if (slen as bool):",
+    ] {
+        assert!(
+            code.contains(cell),
+            "author parens deleted: `{cell}` is not in the formatted output.\n\
+             === formatted (code lines) ===\n{code}"
         );
     }
 }
@@ -46085,15 +46217,32 @@ fn sound_for_amp_scalar_elem_writethrough() {
 // ── The `&`-in-an-OWNING-POSITION class ─────────────────────────────────────
 //
 // Seven costumes, each its own fixture (Core #4: fix the class, not the
-// instance; Core #12: axis-complete, not axis-sampled). All seven are `gg
-// check`-clean at HEAD. Four silently DROP the sigil; three are worse —
-// `[&c.fd]`, `(&c.fd, 5)` and `return &c.fd` store a RAW STACK ADDRESS into an
-// `int` slot on both backends, and the `return` costume additionally makes LLVM
-// fail hard in `llc`. ggdef REJECTS every row it covers.
+// instance; Core #12: axis-complete, not axis-sampled). INTENDED for all seven:
+// REJECT at `gg check`. D10(b) ADDENDUM 3 makes these consuming
+// ownership-BOUNDARY positions and D31 full-strict defines `&` as "the callee
+// writes through" — which an owning position cannot do.
 //
-// INTENDED for all seven: REJECT at `gg check`. D10(b) ADDENDUM 3 makes these
-// consuming ownership-BOUNDARY positions and D31 full-strict defines `&` as
-// "the callee writes through" — which an owning position cannot do.
+// THE CLASS IS FOUR-SEVENTHS CLOSED, and the split is not arbitrary (re-measured
+// 2026-08-11, `gg check` per fixture):
+//
+//   REJECTED — array literal · tuple literal · dict-literal value · return.
+//     These four are LIVE regression fixtures (graduated out of `known_gaps/`).
+//     Their reject comes from the `E_AmpInOperandPosition` chokepoint in
+//     `src/semantic/safety/check_expr.rs`, and each host below pins that exact
+//     code rather than the `"error[E_"` prefix, which would match ANY
+//     diagnostic and green-light a reject that arrived for the wrong reason.
+//
+//   STILL ACCEPTED — struct-ctor arg · collection put · enum payload. These
+//     three remain `#[ignore]`d known gaps, and the reason they differ is the
+//     mechanism: each HAS a callee, so the operand-position rule does not reach
+//     them. What the class is actually owed is an ownership-BOUNDARY reject
+//     with its own code; the four greens below are that reject arriving by a
+//     neighbouring route, not the class being retired. The TODO row stays open.
+//
+// Three of the closed four were never merely "sigil ignored": `[&c.fd]`,
+// `(&c.fd, 5)` and `return &c.fd` stored a RAW STACK ADDRESS into an `int` slot
+// on both backends, and `return` additionally made LLVM fail hard in `llc`.
+// ggdef REJECTS every row it covers.
 
 #[test]
 #[ignore = "KNOWN GAP (&-in-an-owning-position 1/7, struct ctor arg): sigil silently dropped on \
@@ -46119,37 +46268,45 @@ fn sound_amp_owning_position_enum_rejected() {
     check_gg_fails("known_gaps/sound_amp_owning_position_enum.gg", "error[E_");
 }
 
+/// CLOSED 4/7 (dict-literal value). Was: sigil silently dropped on C and LLVM.
+/// Out of ggdef's subset, so pinned against the class rule (Core #9).
 #[test]
-#[ignore = "KNOWN GAP (&-in-an-owning-position 4/7, dict-literal value): sigil silently dropped \
-on C and LLVM; out of ggdef's subset, pinned against the class rule. Asserts the INTENDED \
-reject; TODO.md. Un-ignore when the owning-position reject lands."]
 fn sound_amp_owning_position_dict_literal_rejected() {
-    check_gg_fails("known_gaps/sound_amp_owning_position_dict_literal.gg", "error[E_");
+    check_gg_fails(
+        "sound_amp_owning_position_dict_literal.gg",
+        "error[E_AmpInOperandPosition]",
+    );
 }
 
+/// CLOSED 5/7 (array literal). Was a GARBAGE-VALUE MISCOMPILE: a raw stack
+/// address in an `int` slot on BOTH backends. ggdef rejects.
 #[test]
-#[ignore = "KNOWN GAP (&-in-an-owning-position 5/7, array literal) — GARBAGE-VALUE MISCOMPILE: \
-a raw stack address lands in an `int` slot on BOTH backends; ggdef rejects. Asserts the INTENDED \
-reject; TODO.md. Un-ignore when the owning-position reject lands."]
 fn sound_amp_owning_position_array_literal_rejected() {
-    check_gg_fails("known_gaps/sound_amp_owning_position_array_literal.gg", "error[E_");
+    check_gg_fails(
+        "sound_amp_owning_position_array_literal.gg",
+        "error[E_AmpInOperandPosition]",
+    );
 }
 
+/// CLOSED 6/7 (tuple literal). Was a GARBAGE-VALUE MISCOMPILE: a raw stack
+/// address in an `int` slot on BOTH backends. ggdef rejects.
 #[test]
-#[ignore = "KNOWN GAP (&-in-an-owning-position 6/7, tuple literal) — GARBAGE-VALUE MISCOMPILE: \
-a raw stack address lands in an `int` slot on BOTH backends; ggdef rejects. Asserts the INTENDED \
-reject; TODO.md. Un-ignore when the owning-position reject lands."]
 fn sound_amp_owning_position_tuple_literal_rejected() {
-    check_gg_fails("known_gaps/sound_amp_owning_position_tuple_literal.gg", "error[E_");
+    check_gg_fails(
+        "sound_amp_owning_position_tuple_literal.gg",
+        "error[E_AmpInOperandPosition]",
+    );
 }
 
+/// CLOSED 7/7 (return value). Was a BACKEND DIVERGENCE: C accepted and printed a
+/// raw stack address, LLVM hard-failed in llc ('%v4 defined with type ptr but
+/// expected i64'). Out of ggdef's subset; pinned against the class rule.
 #[test]
-#[ignore = "KNOWN GAP (&-in-an-owning-position 7/7, return value) — BACKEND DIVERGENCE: C \
-accepts and prints a raw stack address, LLVM hard-fails in llc ('%v4 defined with type ptr but \
-expected i64'). Asserts the INTENDED reject; TODO.md. Un-ignore when the value-position-& reject \
-lands."]
 fn sound_amp_owning_position_return_rejected() {
-    check_gg_fails("known_gaps/sound_amp_owning_position_return.gg", "error[E_");
+    check_gg_fails(
+        "sound_amp_owning_position_return.gg",
+        "error[E_AmpInOperandPosition]",
+    );
 }
 
 /// LIVE CONTROL — the eighth position of the same axis, and the one production
@@ -48015,6 +48172,7 @@ fn rust_gg_build_is_deterministic() {
 /// fails on both a missing and an unregistered file.
 const FMT_SUITE_LAYOUT_FIXTURES: &[&str] = &[
     "b1_newline_members.gg",
+    "blank_before_case.gg",
     "blank_before_clause.gg",
     "blank_hosts.gg",
     "blank_insertion.gg",
@@ -48023,11 +48181,14 @@ const FMT_SUITE_LAYOUT_FIXTURES: &[&str] = &[
     "clause_sites_comment.gg",
     "closure_body.gg",
     "do_expr.gg",
+    "else_header_trailing_comment.gg",
     "expr_match.gg",
     "if_chain.gg",
     "inline_multiline_child_comment.gg",
     "inline_slot_kinds.gg",
     "inline_trailing_comment.gg",
+    "meta_if_nested_item_blank_run.gg",
+    "meta_if_nested_item_blanks.gg",
     "meta_match.gg",
     "nested_overwidth.gg",
     "on_error.gg",
@@ -48181,10 +48342,19 @@ fn d27_sh_caret_typearg_suffix() {
 }
 
 /// `^` as an unnamed FUNCTION-TYPE PARAMETER SUFFIX
-/// (`Callable[void(int &, String ^)]`). Deliberate mirror of the only
-/// in-corpus postfix-`!` twin, `callable_bang_arr_indexed_callee`
-/// (integration.rs:38845) — same indexed-callee shape, differing ONLY in the
-/// glyph, so the pair is the accept-both control.
+/// (`Callable[void(int &, String ^)]`). The accept-both control is the only
+/// in-corpus postfix-`!` twin of that POSITION,
+/// `callable_bang_arr_indexed_callee` (integration.rs:39859), whose fn type
+/// (`callable_bang_arr_indexed_callee.gg:27`) is the same two-parameter
+/// `&`/move pair differing in the glyph.
+///
+/// The pair matches on the parse predicate, NOT on the callee shape: this cell
+/// passes the callable as a PARAMETER (`apply(mix, &a, ^greeting)`) while the
+/// `!` control calls it out of a Vector index. That is deliberate and the
+/// fixture header carries the reason — the indexed shape times out on the
+/// self-host runtime lane (filed) and the local-variable shape ICEs the
+/// lowerer, so neither could carry a D27 cell without pinning an unrelated
+/// defect. There is no caret INDEXED-callee cell anywhere in the corpus.
 #[test]
 fn d27_sh_caret_fntype_param_suffix() {
     run_gg("d27_sh_caret_fntype_param_suffix.gg", "hi\n101");
@@ -48245,9 +48415,12 @@ fn d27_caret_fn_type_sigil_before_type_error() {
 ///
 /// GLYPH-INDEPENDENT: the retired-glyph twin panics with a byte-identical
 /// message, so it is NOT a D27 issue. The INDEXED-callee form of the same
-/// program compiles and runs — see `callable_bang_arr_indexed_callee` and
-/// its caret twin `d27_sh_caret_fntype_param_suffix` — so the hole is
-/// specific to calling a Callable-typed local BINDING.
+/// program compiles and runs on the Rust lane — see
+/// `callable_bang_arr_indexed_callee`, the one in-corpus cell of that shape —
+/// so the hole is specific to calling a Callable-typed local BINDING.
+/// (`d27_sh_caret_fntype_param_suffix` is NOT an indexed-callee twin: it
+/// passes its callable as a parameter. It shares the fn-type param-suffix
+/// parse position, not the callee shape.)
 #[test]
 #[ignore = "KNOWN GAP (filed R41 T-RB0): calling a Callable-typed LOCAL \
 VARIABLE with a consuming arg ICEs at src/ir/lowering/mod.rs:2114 (Tier 2a \

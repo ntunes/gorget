@@ -1144,6 +1144,38 @@ impl Formatter {
 
     // ── Items ───────────────────────────────────────────────
 
+    /// THE producer for a NESTED item sequence — every `meta if` / `elif` /
+    /// `else` block body.
+    ///
+    /// A blank line between two definitions is paragraphing, and it does not
+    /// stop being paragraphing one level in. `format_module` preserves it
+    /// between TOP-LEVEL items and `format_block_stmts` preserves it between
+    /// statements; the nested-item loops were the one member of that family
+    /// that did not, so an entire platform backend wrapped in
+    /// `meta if platform() == "macos":` came back with every definition
+    /// welded to the next.
+    ///
+    /// Same rule as both siblings — a blank iff the author left one, runs
+    /// collapse to one, and the FIRST item never gets one (a blank between a
+    /// block opener and its first item is sparseness, not paragraphing). Three
+    /// call sites route through here rather than repeating the loop, so a
+    /// fourth nested-item block cannot quietly ship without it;
+    /// `formatter_child_collection_loop_census` (tests/lints.rs) carries the row
+    /// that makes it a guarantee rather than a habit — a new loop with its own
+    /// copy of the hooks shows up there and has to be classified.
+    fn format_nested_items(&mut self, items: &[Spanned<Item>]) {
+        for (i, item) in items.iter().enumerate() {
+            if i > 0 && self.has_blank_line_between(items[i - 1].span.end, item.span.start) {
+                self.emitter.blank_line();
+            }
+            // R39 snag #2: trailing-hook after each nested item — same
+            // pairing as the `format_module` loops.
+            self.emit_comments_before(item.span.start);
+            self.format_item(item);
+            self.emit_trailing_comment_after(item.span.end, false);
+        }
+    }
+
     fn format_item(&mut self, item: &Spanned<Item>) {
         match &item.node {
             Item::Function(f) => self.format_function(f),
@@ -1228,41 +1260,61 @@ impl Formatter {
                 self.emitter.newline();
             }
             Item::MetaIf(mi) => {
+                // The ITEM-level twin of the statement-level clause family, and
+                // it had the same two holes: a trailing comment on any of the
+                // three headers fell through to the branch body (where the
+                // nested-item loop re-emitted it as a LEADING comment on the
+                // first definition), and an author blank above `elif:`/`else:`
+                // was deleted because a clause header is not an item either.
                 self.emitter.write("meta if ");
                 self.format_expr(&mi.condition);
                 self.emitter.write(":");
+                self.emit_trailing_comment_after_header(mi.condition.span.end);
                 self.emitter.newline();
                 self.emitter.indent();
-                // R39 snag #2: trailing-hook after each nested item —
-                // same pairing as the format_module loops.
-                for item in &mi.then_items {
-                    self.emit_comments_before(item.span.start);
-                    self.format_item(item);
-                    self.emit_trailing_comment_after(item.span.end, false);
-                }
+                self.format_nested_items(&mi.then_items);
                 self.emitter.dedent();
                 for (cond, items) in &mi.elif_branches {
+                    // Blank, then leading comments, then the header — the order
+                    // every clause site keeps.
+                    if self.blank_before_clause(cond.span.start) {
+                        self.emitter.blank_line();
+                    }
+                    self.emit_comments_before(cond.span.start);
                     self.emitter.write("elif ");
                     self.format_expr(cond);
                     self.emitter.write(":");
+                    self.emit_trailing_comment_after_header(cond.span.end);
                     self.emitter.newline();
                     self.emitter.indent();
-                    for item in items {
-                        self.emit_comments_before(item.span.start);
-                        self.format_item(item);
-                        self.emit_trailing_comment_after(item.span.end, false);
-                    }
+                    self.format_nested_items(items);
                     self.emitter.dedent();
                 }
-                if let Some(ref else_items) = mi.else_items {
-                    self.emitter.write("else:");
-                    self.emitter.newline();
-                    self.emitter.indent();
-                    for item in else_items {
-                        self.emit_comments_before(item.span.start);
-                        self.format_item(item);
-                        self.emit_trailing_comment_after(item.span.end, false);
+                if let Some((else_kw, ref else_items)) = mi.else_branch {
+                    // The clause's own position, WRITTEN by the parser
+                    // (`MetaIf.else_branch`). This used to walk backwards from
+                    // the first item to find the colon, which worked but
+                    // reconstructed at the read site a fact the writer had in
+                    // hand — and the first item's start is NOT usable directly,
+                    // since it sits one line below and makes every author blank
+                    // above the clause read as absent.
+                    //
+                    // The keyword's END, not its start: both hooks walk BACK
+                    // from the anchor to the last real content, so an anchor at
+                    // the `e` of `else` lands them on the PREVIOUS line and the
+                    // trailing comment after the colon reads as a line away.
+                    let anchor = else_kw.end;
+                    if self.blank_before_clause(anchor) {
+                        self.emitter.blank_line();
                     }
+                    // A comment on its own line above `else:` documents the
+                    // BRANCH; without this it fell to the nested-item loop's
+                    // flush and was re-emitted INSIDE the branch, leading the
+                    // first definition.
+                    self.emit_comments_before(anchor);
+                    self.emit_else_header(anchor);
+                    self.emitter.indent();
+                    self.format_nested_items(else_items);
                     self.emitter.dedent();
                 }
             }
@@ -2395,25 +2447,52 @@ impl Formatter {
         true
     }
 
-    fn format_arm_body(&mut self, body: &Spanned<Expr>) {
-        // Snag #15c note: `parse_body_or_expr` (catch/rethrow arm) SYNTHESIZES
-        // the indented body as `Expr::Do`, NOT `Expr::Block`. The match
-        // `else:` uses `parse_arm_body`, which returns `Expr::Block` for the
-        // indented form. Both AST forms carry an indented statement list and
-        // format WITHOUT re-emitting `do:` at these arm positions — the parser
-        // accepts the indented form directly at all three sites.
-        //
-        // R41 T-FMT-C: an AUTHOR-written `do:` is a different case, and the
-        // one-path treatment deleted it. `else: do:` + suite came back as a
-        // bare `else:` + suite — not the same program, since `else: do: ^b`
-        // is REJECTED (E_MoveInOperandPosition) where `else: ^b` compiles.
-        // `author_spelled` is what separates the two producers.
+    /// THE producer for an arm/clause BODY written after a header colon —
+    /// match arms, the expression-match `else`, and the `catch` / `rethrow`
+    /// recovery arms — INCLUDING where the header's trailing comment goes.
+    ///
+    /// The body has exactly three shapes, and each puts the header comment in a
+    /// different place. Keeping the shape decision and the comment placement in
+    /// ONE function is the point: they were split before, with the shape test
+    /// hand-mirrored at the call site, and the copy disagreed with the original
+    /// on the shape it was written to exclude.
+    ///
+    /// * **Author `do:`** — the keyword belongs to the HEADER's line, so the
+    ///   comment is emitted after ` do:`. Firing the hook before it would spell
+    ///   `else:  # note do:`, eating the author's keyword into a comment; that
+    ///   is not cosmetic, because the `do:` changes what the arm MEANS. Measured
+    ///   (2026-08-11), with `String b` moved out of a `String`-typed match:
+    ///     `else: ^b`                 → compiles
+    ///     `else: do:` + `\n    ^b`   → REJECTED, `E_MoveInOperandPosition`
+    ///     `else: do: ^b` (one line)  → PARSE error, "expected NEWLINE"
+    ///   So the reject is a property of the INDENTED `do:` suite; the one-line
+    ///   spelling is not a legal program at all, and the two must not be quoted
+    ///   as if they were the same case (an earlier version of this comment did).
+    /// * **Indented suite** — the header owns its line, so the comment is
+    ///   emitted at the header, exactly as at every other clause position.
+    /// * **Inline expression** — the body SHARES the header's line, so the
+    ///   comment is CLAIMED first and emitted after the body. Emitting it at the
+    ///   colon would put the comment ahead of the value it heads and the output
+    ///   would not re-parse. Claiming (rather than deferring the whole hook) is
+    ///   what stops a leading hook inside the body from taking it first.
+    ///
+    /// Snag #15c note: `parse_body_or_expr` (catch/rethrow arm) SYNTHESIZES the
+    /// indented body as `Expr::Do`, NOT `Expr::Block`. The match `else:` uses
+    /// `parse_arm_body`, which returns `Expr::Block` for the indented form.
+    /// Both carry an indented statement list and format WITHOUT re-emitting
+    /// `do:` — the parser accepts the indented form directly at all three sites.
+    /// An AUTHOR-written `do:` is the different case, and `author_spelled` is
+    /// what separates the two producers; the one-path treatment deleted it.
+    ///
+    /// `header_anchor` is the last real byte of the header before its colon.
+    fn format_arm_body(&mut self, body: &Spanned<Expr>, header_anchor: usize) {
         if let Expr::Do {
             body: block,
             author_spelled: true,
         } = &body.node
         {
             self.emitter.write(" do:");
+            self.emit_trailing_comment_after_header(header_anchor);
             self.emitter.newline();
             self.emitter.indent();
             self.format_block_stmts(block);
@@ -2433,6 +2512,7 @@ impl Formatter {
             // the AST shape instead — kept theirs, so one construct formatted
             // two different ways.
             if block.layout == SuiteLayout::NextLine {
+                self.emit_trailing_comment_after_header(header_anchor);
                 self.emitter.newline();
                 self.emitter.indent();
                 self.format_block_stmts(block);
@@ -2440,8 +2520,10 @@ impl Formatter {
                 return;
             }
         }
+        let deferred = self.claim_header_trailing_comments(header_anchor);
         self.emitter.write(" ");
         self.format_expr(body);
+        self.emit_claimed_header_comments(deferred);
     }
 
     /// Emit an INLINE statement suite — the one the author wrote on the
@@ -2501,11 +2583,13 @@ impl Formatter {
     }
 
     /// True iff the author left a blank line above a CLAUSE header
-    /// (`elif:` / `else:`).
+    /// (`elif:` / `else:` / a `case` arm).
     ///
     /// `format_block_stmts` preserves an author blank between two statements,
     /// but a clause header is not a statement — it is written by its own emit
-    /// site, and none of the eight sites checked. A blank the author put
+    /// site, and before this predicate existed none of those sites checked
+    /// (the current site set is `grep -n "blank_before_clause(" ` on this
+    /// file — regenerated, never quoted). A blank the author put
     /// between a long branch body and the `else:` that follows it is
     /// paragraphing exactly like any other, and deleting it is the same
     /// defect at a position the statement loop cannot see.
@@ -2520,6 +2604,31 @@ impl Formatter {
         // never reads the first (block-bearing spans are zero-width at DEDENT
         // positions), so there is no meaningful `prev` to pass here.
         self.has_blank_line_between(0, anchor)
+    }
+
+    /// THE producer for an `else:` clause header whose body is INDENTED.
+    ///
+    /// Writes the header, fires the trailing-comment hook, ends the line. The
+    /// hook is the part every `else` site was missing: `elif` had it and the
+    /// `case` arms had it, so `else:  # note` — alone among clause headers —
+    /// dropped its comment through to `format_block_stmts`, which re-emitted it
+    /// as a LEADING comment on the branch's first statement. The comment then
+    /// documents the wrong thing: a note about the `else` reads as a note about
+    /// whatever happens to come first inside it. That is the misattribution
+    /// class R41 T-FMT-A retired at the other clause positions.
+    ///
+    /// INLINE bodies do NOT come here — they need the claim-then-emit split
+    /// (`format_inline_suite`), because a comment emitted at the header would
+    /// land ahead of a body that shares the line and the output would not
+    /// re-parse.
+    ///
+    /// `anchor` is any position on the clause's own source line; every caller
+    /// passes the same one it gives `blank_before_clause`, which is the
+    /// clause's colon.
+    fn emit_else_header(&mut self, anchor: usize) {
+        self.emitter.write("else:");
+        self.emit_trailing_comment_after_header(anchor);
+        self.emitter.newline();
     }
 
     fn format_elif_else_blocks(
@@ -2565,12 +2674,11 @@ impl Formatter {
                 self.emitter.blank_line();
             }
             self.emit_comments_before(else_body.span.start);
-            self.emitter.write("else");
             if else_body.layout == SuiteLayout::Inline {
+                self.emitter.write("else");
                 self.format_inline_suite(":", else_body, else_body.span.start);
             } else {
-                self.emitter.write(":");
-                self.emitter.newline();
+                self.emit_else_header(else_body.span.start);
                 self.emitter.indent();
                 self.format_block_stmts(else_body);
                 self.emitter.dedent();
@@ -2722,8 +2830,7 @@ impl Formatter {
                         self.emitter.blank_line();
                     }
                     self.emit_comments_before(else_body.span.start);
-                    self.emitter.write("else:");
-                    self.emitter.newline();
+                    self.emit_else_header(else_body.span.start);
                     self.emitter.indent();
                     self.format_block_stmts(else_body);
                     self.emitter.dedent();
@@ -2748,8 +2855,7 @@ impl Formatter {
                         self.emitter.blank_line();
                     }
                     self.emit_comments_before(else_body.span.start);
-                    self.emitter.write("else:");
-                    self.emitter.newline();
+                    self.emit_else_header(else_body.span.start);
                     self.emitter.indent();
                     self.format_block_stmts(else_body);
                     self.emitter.dedent();
@@ -2794,12 +2900,23 @@ impl Formatter {
                 self.emitter.newline();
                 self.emitter.indent();
                 for item in arms {
+                    // Clause-header class, `case` face: an arm header is not a
+                    // statement either, so `format_block_stmts` never sees the
+                    // author's blank above it. Same ORDER as every other clause
+                    // site — blank, then leading comments, then the header.
+                    let arm_anchor = match item {
+                        crate::parser::ast::MatchItem::Arm(arm) => arm.span.start,
+                        crate::parser::ast::MatchItem::MetaFor { span, .. } => span.start,
+                    };
+                    if self.blank_before_clause(arm_anchor) {
+                        self.emitter.blank_line();
+                    }
                     match item {
                         crate::parser::ast::MatchItem::Arm(arm) => {
                             self.emit_comments_before(arm.span.start);
                             self.format_match_arm(arm);
                         }
-                        crate::parser::ast::MatchItem::MetaFor { vars, range, arm_template, .. } => {
+                        crate::parser::ast::MatchItem::MetaFor { vars, range, arm_template, span: _ } => {
                             self.emitter.write("meta for ");
                             let joined = vars.iter().map(|v| v.node.as_str()).collect::<Vec<_>>().join(", ");
                             self.emitter.write(&joined);
@@ -2823,8 +2940,7 @@ impl Formatter {
                         self.emitter.blank_line();
                     }
                     self.emit_comments_before(else_body.span.start);
-                    self.emitter.write("else:");
-                    self.emitter.newline();
+                    self.emit_else_header(else_body.span.start);
                     self.emitter.indent();
                     self.format_block_stmts(else_body);
                     self.emitter.dedent();
@@ -2836,6 +2952,11 @@ impl Formatter {
                 self.emitter.newline();
                 self.emitter.indent();
                 for arm in arms {
+                    // Clause-header class, `case` face — the select sibling of
+                    // the two match arm loops.
+                    if self.blank_before_clause(arm.span.start) {
+                        self.emitter.blank_line();
+                    }
                     self.emit_comments_before(arm.span.start);
                     self.emitter.write("case ");
                     match &arm.op {
@@ -2866,8 +2987,7 @@ impl Formatter {
                         self.emitter.blank_line();
                     }
                     self.emit_comments_before(else_body.span.start);
-                    self.emitter.write("else:");
-                    self.emitter.newline();
+                    self.emit_else_header(else_body.span.start);
                     self.emitter.indent();
                     self.format_block_stmts(else_body);
                     self.emitter.dedent();
@@ -2966,6 +3086,12 @@ impl Formatter {
                 self.emitter.newline();
                 self.emitter.indent();
                 for (case_expr, body) in arms {
+                    // Clause-header class, `case` face — see the statement-match
+                    // arm loop. Anchored at the case EXPRESSION, which sits on
+                    // the clause's own source line.
+                    if self.blank_before_clause(case_expr.span.start) {
+                        self.emitter.blank_line();
+                    }
                     self.emit_comments_before(case_expr.span.start);
                     self.emitter.write("case ");
                     self.format_expr(case_expr);
@@ -2990,12 +3116,11 @@ impl Formatter {
                         self.emitter.blank_line();
                     }
                     self.emit_comments_before(else_body.span.start);
-                    self.emitter.write("else");
                     if else_body.layout == SuiteLayout::Inline {
+                        self.emitter.write("else");
                         self.format_inline_suite(":", else_body, else_body.span.start);
                     } else {
-                        self.emitter.write(":");
-                        self.emitter.newline();
+                        self.emit_else_header(else_body.span.start);
                         self.emitter.indent();
                         self.format_block_stmts(else_body);
                         self.emitter.dedent();
@@ -3075,30 +3200,17 @@ impl Formatter {
         // wraps a `throw`/`return` expression-prefix, and the old
         // `if let Expr::Block(..)` test could not tell the two apart. It
         // exploded every inline `throw`/`return` arm onto its own line.
-        match &arm.body.node {
-            Expr::Block(block) if block.layout == SuiteLayout::NextLine => {
-                self.emit_trailing_comment_after_header(arm_anchor);
-                self.emitter.newline();
-                self.emitter.indent();
-                self.format_block_stmts(block);
-                self.emitter.dedent();
-            }
-            _ => {
-                // ⚠ The header hook must fire AFTER the body here, or it puts
-                // the comment BEFORE the statement it heads: `case 1: 10  # one`
-                // came out as `case 1:  # one 10`, with the statement inside
-                // the comment and the file no longer parsing. Suppressing the
-                // hook instead is not an option at this site — an inline arm
-                // body is an EXPRESSION, so no statement-side hook exists to
-                // claim the comment and it would drift down to lead the NEXT
-                // arm.
-                let deferred = self.claim_header_trailing_comments(arm_anchor);
-                self.emitter.write(" ");
-                self.format_expr(&arm.body);
-                self.emit_claimed_header_comments(deferred);
-                self.emitter.newline();
-            }
-        }
+        // The three body shapes and where each puts the header's trailing
+        // comment live in `format_arm_body`. This site used to hand-mirror the
+        // shape test and handle two of the three itself, which is how the
+        // author-`do:` arm ended up placing the comment on the LAST statement
+        // of the branch.
+        self.format_arm_body(&arm.body, arm_anchor);
+        // Terminates the arm. Required after an INLINE body (which has emitted
+        // no newline yet); a no-op after an indented suite, whose last
+        // statement already closed the line — `Emitter::newline` is idempotent
+        // at line start.
+        self.emitter.newline();
     }
 
     // ── Types ───────────────────────────────────────────────
@@ -3486,7 +3598,9 @@ impl Formatter {
     /// `write_preformatted` rather than `write`: a recovered lexeme may be a
     /// multi-line `"""` block, and `write` would advance the emitter's column
     /// by the literal's whole byte length, desyncing every later fit decision
-    /// and trailing-comment anchor on the line.
+    /// on the line. (Only fit decisions — `emitter.col`'s one consumer is
+    /// `write_doc`. Trailing comments are injected into the finished buffer and
+    /// aligned by `plan_trailing_aligns`, which never reads the column.)
     fn emit_quoted_string(&mut self, value: &str, span: Option<Span>) {
         let text = self.quoted_string_text(value, span);
         self.emitter.write_preformatted(&text);
@@ -3728,6 +3842,11 @@ impl Formatter {
                 self.emitter.newline();
                 self.emitter.indent();
                 for arm in arms {
+                    // Clause-header class, `case` face — see the statement-match
+                    // arm loop. Blank, then comments, then the header.
+                    if self.blank_before_clause(arm.span.start) {
+                        self.emitter.blank_line();
+                    }
                     self.emit_comments_before(arm.span.start);
                     self.format_match_arm(arm);
                 }
@@ -3743,7 +3862,12 @@ impl Formatter {
                     }
                     self.emit_comments_before(else_arm.span.start);
                     self.emitter.write("else:");
-                    self.format_arm_body(else_arm);
+                    // The header's trailing comment is placed by
+                    // `format_arm_body`, which is the one function that knows
+                    // which of the three body shapes it is about to emit. This
+                    // site used to re-derive that decision and fire the hook
+                    // itself, which is two sources of truth for one predicate.
+                    self.format_arm_body(else_arm, else_arm.span.start);
                     // Terminates the clause. Required for the INLINE form
                     // (`else: 20` has emitted no newline yet); a no-op for the
                     // indented form, whose last statement already closed the
@@ -3765,8 +3889,9 @@ impl Formatter {
                 // gorget-js snag #15b (2026-08-09) extended the carve-out
                 // to Stmt::Expr: a single-expression Block wrapped in `do:`
                 // makes the expression a READ position, breaking move-sigil
-                // tails (`else: do: ^b` rejects `E_MoveInOperandPosition`;
-                // `else: ^b` compiles). Consolidated into
+                // tails (an INDENTED `else: do:` with a `^b` tail rejects
+                // `E_MoveInOperandPosition`; `else: ^b` compiles — the one-line
+                // `else: do: ^b` is a PARSE error, not this reject). Into
                 // `try_inline_single_terminal_stmt` (R39 follow-up to
                 // Tracks F/G/widening-fix); the helper handles all three
                 // arms (Throw/Return/Expr) and is shared with Expr::Do.
@@ -4195,8 +4320,10 @@ impl Formatter {
                     // an expression at low precedence — safe from further
                     // nesting hazards (like the Catch recovery arm).
                     // Snag #15b/#15c: use `format_arm_body` so multi-stmt
-                    // transforms don't get wrapped in a spurious `do:`.
-                    self.format_arm_body(transform);
+                    // transforms don't get wrapped in a spurious `do:` — and so
+                    // a trailing comment on the `rethrow (T e):` header stays on
+                    // the header instead of falling into the body.
+                    self.format_arm_body(transform, error_name.span.end);
                 } else {
                     self.emitter.write(" rethrow ");
                     // Bare-form transform: nested Rethrow/Catch (bp 1) at
@@ -4214,8 +4341,10 @@ impl Formatter {
                 // at bp 0 — absorbs everything on its line, so no wrap
                 // hazard for the recovery arm itself.
                 // Snag #15b/#15c: use `format_arm_body` so multi-stmt
-                // recovery bodies don't get wrapped in a spurious `do:`.
-                self.format_arm_body(recovery);
+                // recovery bodies don't get wrapped in a spurious `do:` — and
+                // so a trailing comment on the `catch (e):` header stays on the
+                // header instead of falling into the body.
+                self.format_arm_body(recovery, error_binding.span.end);
             }
         }
     }

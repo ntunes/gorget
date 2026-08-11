@@ -1,0 +1,38 @@
+# ==== T-FMT-C · a RUN of blanks between nested `meta if` items collapses to one
+#
+# The run-collapse half of the nested-item blank rule, and the one cell of that
+# axis that cannot be a fixpoint fixture — its whole point is that the input and
+# the output differ. Compared against the `.expected` companion.
+#
+# Preserving author blanks must not mean preserving however many the author
+# left: the rule at every level is "a blank iff one was written, runs collapse
+# to one", which is what `format_module` and `format_block_stmts` already do.
+# Three blank lines between two nested definitions come back as one.
+#
+# The sibling cells — blank preserved per branch, and no blank staying absent —
+# are in `meta_if_nested_item_blanks.gg`.
+#
+# RED pre-fix (recorded 2026-08-11): the blanks were not collapsed to one, they
+#   were deleted outright, so this file came back with the two definitions
+#   welded together.
+
+meta if platform() == "macos":
+    int alpha():
+        return 1
+
+
+
+    int beta():
+        return 2
+else:
+    int alpha():
+        return 3
+
+
+
+    int beta():
+        return 4
+
+void main():
+    print(alpha())
+    print(beta())

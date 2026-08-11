@@ -1,0 +1,96 @@
+# ==== T-FMT-C · author blank before a `case` ARM header — the CASE face of the
+# clause-header class
+#
+# The blank-before-clause fix covered the eight `elif:`/`else:` sites. A `case`
+# arm header is the same kind of thing — written by its own emit site, not by
+# `format_block_stmts`, which is why the statement loop cannot see a blank above
+# it — and the arm loops had no check. The result was visible ASYMMETRY inside a
+# single `match`: the blank the author left above `case 2:` was deleted while
+# the blank above the sibling `else:` survived.
+#
+# SITE AXIS (4 cells + negatives): statement-match `case` · expression-match
+#   `case` · `meta match` `case` · `select` `case`. Three of the four carry a
+#   `case`→`case` NEGATIVE — a second arm with no blank above it, which must stay
+#   contiguous — so a fix that emits a blank unconditionally REDs in the same
+#   file. The `select` cell's negative is its `case`→`else` transition instead
+#   (a third select arm needs a third channel for no extra coverage).
+#
+# ⚠ Every cell's blank is above a `case`, NOT above the trailing `else`. The
+#   `else` blanks are `clause_sites_blank.gg`'s axis and were already preserved;
+#   pinning one here would be green for a reason unrelated to this fixture's
+#   name. That is why the `select` cell carries TWO channels: a one-arm select
+#   has no second `case` to put a blank above.
+#
+# ORDER IS LOAD-BEARING, as at every other clause site: blank check ->
+# `emit_comments_before` -> the header. Reversed, a blank / `# note` / `case`
+# run comes out comment-then-blank and the comment detaches from the arm it
+# documents.
+#
+# The anchor is the arm's own start (the pattern for a match arm, the case
+# expression for `meta match`, the arm span for `select`) — all on the arm's own
+# source line, which is what the backward walk needs.
+#
+# RED pre-fix (recorded 2026-08-11, break-and-restore on the arm-loop blank
+#   checks): every blank cell lost its blank — the four arms came out contiguous,
+#   which is the reported snag. The NEGATIVES were green pre-fix and are the
+#   other half of the pin: make the arm loops call `blank_line()`
+#   unconditionally and they RED with a blank the author never wrote.
+
+void stmt_match_case(int x):
+    match x:
+        case 1:
+            print(1)
+
+        case 2:
+            print(2)
+        case 3:
+            print(3)
+
+        else:
+            print(0)
+
+int expr_match_case(int x):
+    int r = match x:
+        case 1:
+            10
+
+        case 2:
+            20
+        case 3:
+            30
+        else:
+            40
+    return r
+
+String meta_match_case[T]():
+    meta match typename(T):
+        case "int":
+            return "i"
+
+        case "bool":
+            return "b"
+        case "String":
+            return "s"
+        else:
+            return "o"
+
+void select_case():
+    Channel[int] ch = Channel[int](1)
+    Channel[int] other = Channel[int](1)
+    ch.send(1)
+    select:
+        case int v = ch.recv():
+            print(v)
+
+        case int w = other.recv():
+            print(w)
+        else:
+            print(0)
+    ch.close()
+    other.close()
+
+void main():
+    stmt_match_case(2)
+    print(expr_match_case(2))
+    print(meta_match_case[int]())
+    select_case()

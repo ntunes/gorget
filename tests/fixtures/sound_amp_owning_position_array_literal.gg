@@ -1,0 +1,45 @@
+# LIVE REGRESSION FIXTURE (graduated out of `known_gaps/`) — the
+# `&`-in-an-OWNING-POSITION class, costume 5 of 7: an ARRAY-LITERAL ELEMENT
+# (`[&c.fd]`).
+#
+# REJECTED at `gg check` as intended. An array-literal element position is an
+# ownership boundary — the array must own its elements — so there is nothing to
+# write through to, and D31 full-strict gives `&` no other meaning.
+#
+# ⚠ THE CODE IT FIRES IS NOT THE CODE THIS CLASS IS OWED. The reject arrives as
+# `error[E_AmpInOperandPosition]` — the OPERAND-position rule, from the
+# chokepoint at `src/semantic/safety/check_expr.rs`. It is correct and
+# actionable here (an array-literal element has no callee, which is exactly what
+# that message says), but it is not a dedicated ownership-BOUNDARY diagnostic,
+# and three siblings of this class — ctor / push / enum payload — are STILL
+# ACCEPTED at HEAD because they DO have a callee. Do not read this fixture's
+# green as the class being closed; the parent TODO row stays open.
+#
+# ⚠ THIS COSTUME WAS NOT "the sigil is ignored" — IT WAS A GARBAGE-VALUE
+# MISCOMPILE. Before the reject, `gg check` was clean and both backends accepted,
+# then stored a RAW STACK ADDRESS into an `int` slot:
+#     C    -> 281474930661984
+#     LLVM -> 281474478852760
+# (the exact digits are ASLR-dependent; what was stable is that the value is a
+# pointer, not 10). `ggdef` REJECTS it too ("`&`-alias into an owning position is
+# not valid").
+#
+# The `fd` seed is COMPUTED, not a literal, so the address cannot be
+# const-folded into a plausible-looking constant.
+#
+# The DROP facet of this same costume has its own fixture:
+# `security/sound_amp_array_literal_duplicate_drop.gg` (a bare-param root plus a
+# user `Drop` runs the drop TWICE on both backends).
+#
+# See `sound_amp_owning_position_ctor.gg` for the full sibling list and the
+# ruling this class rests on.
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Vector[int] arr = [&c.fd]
+    print(arr[0])

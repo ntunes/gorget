@@ -1,0 +1,37 @@
+# LIVE REGRESSION FIXTURE (graduated out of `known_gaps/`) — the
+# `&`-in-an-OWNING-POSITION class, costume 6 of 7: a TUPLE-LITERAL ELEMENT
+# (`(&c.fd, 5)`).
+#
+# REJECTED at `gg check` as intended. Tuple field init is an ownership boundary
+# (devbook/11 lists tuple/struct field init together as "unconditional
+# leave-behinds" cloned via `ensure_owned_at_boundary`).
+#
+# ⚠ THE CODE IT FIRES IS NOT THE CODE THIS CLASS IS OWED. The reject arrives as
+# `error[E_AmpInOperandPosition]` — the OPERAND-position rule, not a dedicated
+# ownership-BOUNDARY diagnostic. Correct and actionable here (a tuple-literal
+# element has no callee), but three siblings of this class — ctor / push / enum
+# payload — are STILL ACCEPTED at HEAD because they DO have a callee. This
+# fixture's green does not close the class; the parent TODO row stays open.
+#
+# ⚠ LIKE THE ARRAY-LITERAL COSTUME, THIS WAS A GARBAGE-VALUE MISCOMPILE, not a
+# dropped sigil. Before the reject: `gg check` clean, both backends accepting,
+# and a RAW STACK ADDRESS in the `int` slot:
+#     C    -> 281474930661888
+#     LLVM -> 281474478852616
+# (digits are ASLR-dependent; the stable fact is that it is a pointer, not 10).
+# `ggdef` REJECTS it too ("`&`-alias into an owning position is not valid").
+#
+# The `fd` seed is COMPUTED, not a literal.
+#
+# See `sound_amp_owning_position_ctor.gg` for the full sibling list and the
+# ruling this class rests on.
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    (int, int) t = (&c.fd, 5)
+    print(t.0)

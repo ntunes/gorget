@@ -1,13 +1,21 @@
 # ==== T-FMT-B — the `"""` COLUMN-TRACKING cell.
 # PIN, with its RED-verification honestly reported (Core #12's escape hatch).
 #
-# SCOPE CLAIM: a multi-line `"""` literal followed on its closing line by a
-# trailing comment, and a multi-line literal appearing inside a construct whose
-# layout is decided by the Doc renderer. A verbatim multi-line emission goes
-# through the emitter's `write_preformatted` — the writer whose contract is
-# "text that may contain newlines", and which resets the column from the LAST
-# newline — rather than `write`, which advances the column by the whole slice
-# length and so leaves a phantom column of the literal's full byte count.
+# SCOPE CLAIM, narrowed to what the file actually contains: ONE cell — a
+# multi-line `"""` literal whose closing line is followed by something else, so
+# the emitter's column after the literal is observable at all. A verbatim
+# multi-line emission goes through the emitter's `write_preformatted` — the
+# writer whose contract is "text that may contain newlines", and which resets
+# the column from the LAST newline — rather than `write`, which advances the
+# column by the whole slice length and so leaves a phantom column of the
+# literal's full byte count.
+#
+# The trailing comment is the SHAPE, not the mechanism. It cannot itself
+# desync: trailing comments are injected into the finished buffer and aligned by
+# `plan_trailing_aligns`, a pure post-pass that never reads `emitter.col`. The
+# column's only consumer is `write_doc`'s fit decision. This fixture does NOT
+# sample a multi-line literal nested inside a Doc-laid-out construct — an
+# earlier version of this header claimed it did, and no such construct is here.
 #
 # MEASURED (2026-08-11): swapping the verbatim path to `write` and re-running
 # the whole corpus produced BYTE-IDENTICAL output. The emitter's column feeds
@@ -21,5 +29,5 @@ void main():
     String s = """
 alpha
 beta
-"""  # the closing line carries a trailing comment
+"""    # the closing line carries a trailing comment
     print(s.len())

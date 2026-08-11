@@ -1,0 +1,54 @@
+# KNOWN GAP (R41 T-FMT-B, 2026-08-11) — `gg fmt` DELETES the author's grouping
+# parentheses.
+#
+# A redundant paren is not noise: it is how a reader is told which sub-expression
+# to bind first. `(y % 4) == 0 and ((y % 100) != 0 or (y % 400) == 0)` says the
+# arithmetic groups before the comparisons; the same line with every paren
+# stripped means exactly the same thing to the compiler and something noticeably
+# harder to a human. The formatter is not entitled to that edit.
+#
+# WRITE SITE: `parse_paren_expr`'s parenthesized-expression branch
+# (`src/parser/expr.rs:1641-1645`) does `expect(RParen); Ok(first)` — the AST node
+# IS the inner expression and the paren layer is gone, so nothing downstream can
+# know it was written. The formatter re-emits only the parens ITS OWN precedence
+# rules demand, which is why the outer `(… or …)` group below survives while
+# every author paren inside it does not: that one is the formatter's, not the
+# author's, and it is green for a reason unrelated to this gap.
+#
+# INTENDED (asserted by `fmt_preserves_author_parens`, `#[ignore]`d until the fix
+# lands): every parenthesis below round-trips unchanged.
+#
+# OBSERVED at HEAD, all three cells:
+#     (y % 4) == 0 and ((y % 100) != 0 …)  →  y % 4 == 0 and (y % 100 != 0 …)
+#     n + (n * shift)                      →  n + n * shift
+#     if (slen as bool):                   →  if slen as bool:
+#
+# The fix is a paren-emission CHOKEPOINT (Core #4), not a patch — the prototype
+# that recorded author parens as parser trivia and deduped at
+# `format_expr_maybe_parens` was NOT IDEMPOTENT, because
+# `wrap_multiline_expr_in_parens` (`src/formatter/mod.rs:5168`) writes its
+# broken-chain parens through `doc::if_break` unconditionally at the Doc layer,
+# outside that dedup; pass 2 then reads the pair as an author paren and stacks
+# another. Every unconditional paren write has to route through one dedup, with
+# an arm-count guard so the next one cannot skip it. Full filing in `TODO.md`
+# (Tooling / CLI / formatter / LSP).
+#
+# CELL AXIS: three costumes of ONE class — a redundant group around a
+# higher-precedence binary operand, a redundant group around a whole arithmetic
+# sub-term, and a redundant group around a cast in condition position. It does
+# NOT sample the accretion shape (a chain long enough to break), which is the
+# prototype's separate blocker and is described in the TODO entry.
+
+bool is_leap(int y):
+    return (y % 4) == 0 and ((y % 100) != 0 or (y % 400) == 0)
+
+int scaled(int n, int shift):
+    return n + (n * shift)
+
+bool nonempty(int slen):
+    if (slen as bool):
+        return true
+    return false
+
+void main():
+    print(f"{is_leap(2024)} {scaled(3, 4)} {nonempty(2)}")

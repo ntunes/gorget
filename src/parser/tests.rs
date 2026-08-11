@@ -1267,7 +1267,7 @@ fn test_meta_if() {
         assert_eq!(mi.then_items.len(), 1);
         assert!(matches!(&mi.then_items[0].node, Item::Function(_)));
         assert!(mi.elif_branches.is_empty());
-        assert!(mi.else_items.is_none());
+        assert!(mi.else_branch.is_none());
     }
 }
 
@@ -1289,8 +1289,8 @@ else:
     if let Item::MetaIf(mi) = &module.items[0].node {
         assert_eq!(mi.then_items.len(), 1);
         assert_eq!(mi.elif_branches.len(), 1);
-        assert!(mi.else_items.is_some());
-        assert_eq!(mi.else_items.as_ref().unwrap().len(), 1);
+        assert!(mi.else_branch.is_some());
+        assert_eq!(mi.else_branch.as_ref().unwrap().1.len(), 1);
     } else {
         panic!("expected MetaIf");
     }

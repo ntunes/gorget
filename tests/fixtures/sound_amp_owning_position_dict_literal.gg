@@ -1,0 +1,34 @@
+# LIVE REGRESSION FIXTURE (graduated out of `known_gaps/`) — the
+# `&`-in-an-OWNING-POSITION class, costume 4 of 7: a DICT-LITERAL VALUE
+# (`{1: &c.fd}`).
+#
+# REJECTED at `gg check` as intended. A container-literal value position is an
+# ownership boundary; the map must own its value. Before the reject, `gg check`
+# was clean on both backends and the sigil was silently DROPPED (printed 10).
+#
+# ⚠ THE CODE IT FIRES IS NOT THE CODE THIS CLASS IS OWED. The reject arrives as
+# `error[E_AmpInOperandPosition]` — the OPERAND-position rule, not a dedicated
+# ownership-BOUNDARY diagnostic. Correct and actionable here (a dict-literal
+# value has no callee), but three siblings of this class — ctor / push / enum
+# payload — are STILL ACCEPTED at HEAD because they DO have a callee. This
+# fixture's green does not close the class; the parent TODO row stays open.
+#
+# ORACLE: this shape is outside ggdef's phase-0 subset, so it is pinned against
+# the RULE rather than against a third implementation. Recorded explicitly
+# rather than left implicit (Core #9). Its in-subset siblings — ctor, push, enum
+# — all reject in ggdef, and a dict-literal value is the same kind of position.
+#
+# The `fd` seed is COMPUTED, not a literal.
+#
+# See `sound_amp_owning_position_ctor.gg` for the full sibling list and the
+# ruling this class rests on.
+struct Counter:
+    int fd
+
+int seed():
+    return 10
+
+void main():
+    Counter c = Counter(seed())
+    Dict[int, int] d = {1: &c.fd}
+    print(d[1])

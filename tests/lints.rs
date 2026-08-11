@@ -10532,6 +10532,306 @@ const DOC_CITATION_ROOTS: &[&str] = &[
 ];
 
 #[test]
+fn doc_source_citations_name_the_right_line() {
+    // The CONTENT half of the citation guard, and the reason it exists: its
+    // sibling `doc_source_citations_resolve` checks only that the file exists
+    // and the line number is IN RANGE. It therefore green-lights every stale
+    // citation in the tree — a cite that has drifted onto an unrelated line is
+    // exactly as "resolvable" as a correct one. That is a guard that cannot
+    // catch its own class (Core #15e Q2), and it let the same class bite twice
+    // in one round: the formatter chapter's cites went stale when the file grew,
+    // were swept by hand, and went stale again inside the same round when a
+    // later commit added 121 lines to the same file.
+    //
+    // The check: when a doc line carries a `file.rs:N` cite AND names a
+    // backticked IDENTIFIER, that identifier must appear within ±WINDOW lines of
+    // the cited line. Prose legitimately mentions an identifier without meaning
+    // "it is defined here", so a HIT anywhere in the window passes and only a
+    // total miss fails — deliberately loose, because the failure this catches is
+    // a cite pointing somewhere else entirely, not an off-by-two.
+    const WINDOW: usize = 10;
+    // Scoped to the chapter whose cites this round moved twice. The tree-wide
+    // burn-down is the ratchet's next step: widen SCOPE, run, fix or allowlist.
+    const SCOPE: &str = "docs/devbook/05-formatter.md";
+
+    let cite = regex::Regex::new(r"`([A-Za-z0-9_./-]+\.(?:rs|gg|c|h|toml)):(\d+)(?:-\d+)?`")
+        .expect("citation regex");
+    // The LEADING identifier chain inside backticks, ignoring whatever follows
+    // it. Prose writes `emit_comments_before(pos)` and `Block::synthetic(stmts,
+    // span)` as often as bare names, and requiring the whole span to be an
+    // identifier skipped those entirely — which then fell through to the
+    // paragraph fallback and produced false failures on correct cites.
+    let ident = regex::Regex::new(
+        r"`([A-Za-z_][A-Za-z0-9_]*(?:(?:::|\.)[A-Za-z_][A-Za-z0-9_]*)*)[^`]*`",
+    )
+    .expect("identifier regex");
+
+    // A CONTINUATION cite: `` `:1370` `` — a bare line number whose file is the
+    // last one named nearby. Prose uses these constantly in list bullets
+    // ("`meta if` (`:1370`), `meta for` (`:1386`)"), and the first version of
+    // this guard never even scanned them, which hid eight of the ten stale cites
+    // it was written to catch.
+    let bare = regex::Regex::new(r"`:(\d+)(?:-\d+)?`").expect("bare citation regex");
+
+    let mut checked = 0usize;
+    let mut stale: Vec<String> = Vec::new();
+
+    // Both citation guards walked `docs/` only, and that is where the four
+    // stalest cites of the last round were NOT: `TODO.md`, a `known_gaps`
+    // fixture header, and two test-file doc comments all cite `src/` line
+    // numbers, all four drifted, and nothing looked. Records rot the same way
+    // prose does — so the walk CAN cover them, behind the standard env gate.
+    //
+    // Row counts are deliberately NOT quoted here — the figure went stale twice
+    // in two commits: any edit to a scanned file moves identifiers relative to
+    // cites and changes the count, and an edit to THIS file can add or remove
+    // rows (a version of this comment once counted itself). Regenerate instead:
+    // `GG_LINT_CITE_CONTENT_WIDE=1 cargo test --test lints doc_source_citations_name_the_right_line`.
+    //
+    // Most rows are not stale cites. TODO.md dominates for a structural reason:
+    // its bullets are single enormous lines packing dozens of identifiers and
+    // many cites, so the candidate set is huge and never near any particular
+    // cite — the heuristic has no signal there. But the pile is not all noise:
+    // the scan's first run caught a `register_collection_alias` cite in this
+    // very file pointing hundreds of lines off its target — a real stale cite,
+    // outside `docs/`, that nothing guarded. It stays unfixed for the
+    // burn-down, which starts from the scan's own output, not from figures
+    // quoted here.
+    //
+    // BURN-DOWN, in this order: (1) `known_gaps` fixture headers, whose cites
+    // sit in short comment paragraphs the heuristic reads well; (2)
+    // `tests/integration.rs` and `tests/lints.rs` — ⚠ in `.rs` files the
+    // PARAGRAPH fallback degenerates: "paragraph" is delimited by truly blank
+    // lines, so a `//` block plus its adjacent code reads as ONE paragraph, the
+    // candidate identifier set balloons, and a stale cite can PASS because some
+    // unrelated candidate happens to sit near the cited line. The burn-down
+    // must either tighten paragraph delimiting to comment-block boundaries for
+    // `.rs` targets or accept per-row manual reads there. (3) `TODO.md` LAST,
+    // and probably not with this heuristic at all — a per-bullet check would
+    // need the cite's own sentence, not the bullet. Fix or allowlist each row
+    // WITH ITS REASON, then fold the target into the fatal set above. Do not
+    // bulk-allowlist: an unread row asserts a verification nobody did.
+    let wide = std::env::var("GG_LINT_CITE_CONTENT_WIDE").is_ok();
+    let mut targets: Vec<PathBuf> = vec![PathBuf::from(SCOPE)];
+    if wide {
+        targets.push(PathBuf::from("TODO.md"));
+        if let Ok(entries) = fs::read_dir("tests/fixtures/known_gaps") {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|x| x.to_str()) == Some("gg") {
+                    targets.push(p);
+                }
+            }
+        }
+        for f in ["tests/lints.rs", "tests/integration.rs"] {
+            targets.push(PathBuf::from(f));
+        }
+    }
+
+    for doc in targets {
+        let rel = doc.to_string_lossy().replace('\\', "/");
+        let Ok(text) = fs::read_to_string(&doc) else { continue };
+        let all: Vec<&str> = text.lines().collect();
+        // The file most recently named, so a bare `:N` resolves to it.
+        let mut last_path: Option<String> = None;
+        for (lineno, line) in text.lines().enumerate() {
+            // Every cite on the line, full or continuation, in source order.
+            let mut on_line: Vec<(String, usize)> = Vec::new();
+            for caps in cite.captures_iter(line) {
+                let p = caps[1].to_string();
+                if let Ok(n) = caps[2].parse::<usize>() {
+                    on_line.push((p.clone(), n));
+                }
+                last_path = Some(p);
+            }
+            for caps in bare.captures_iter(line) {
+                if let (Some(p), Ok(n)) = (last_path.clone(), caps[1].parse::<usize>()) {
+                    on_line.push((p, n));
+                }
+            }
+            for (path, cited) in on_line {
+            if !DOC_CITATION_ROOTS.iter().any(|r| path.starts_with(r)) {
+                continue;
+            }
+            let Ok(src) = fs::read_to_string(&path) else { continue };
+            let src_lines: Vec<&str> = src.lines().collect();
+            // A bare `:N` is resolved against the last file NAMED nearby, and
+            // that inference can be wrong — a paragraph may cite `doc.rs` and
+            // then carry a bare number meant for `mod.rs`.
+            //
+            // This catches only the OUT-OF-RANGE half of that: if the number
+            // exceeds the inferred file, the inference certainly missed, so say
+            // nothing (`doc_source_citations_resolve` owns the range question
+            // for cites that carry their own path). ⚠ RESIDUAL: an IN-RANGE
+            // mis-inference is invisible here — the check then reads a window
+            // in the wrong file and can report a stale cite that is fine, or
+            // pass one that is not. The mitigation is that this only fires for
+            // BARE cites, where the resolution is at worst a neighbouring file
+            // in the same paragraph; a cite carrying its own path is exact.
+            if cited == 0 || cited > src_lines.len() {
+                continue;
+            }
+
+            // Candidate names: every backticked identifier on the doc line,
+            // exploded so `Formatter::verbatim` also offers `verbatim` and
+            // `doc::surround_fill` also offers `surround_fill`.
+            //
+            // The PREVIOUS line counts too, because prose wraps: a sentence can
+            // name its subject on one line and carry the second of two cites
+            // onto the next, where the only backticked token left is an
+            // incidental type. Measured on exactly that shape —
+            // "`format_method_chain` (cite) and `format_binary_chain` \n (cite)
+            // turn each segment into a `Doc::Text` leaf" — where line two offers
+            // only `Doc::Text` and the cite is correct.
+            let collect = |src_line: &str, out: &mut Vec<String>| {
+                for m in ident.captures_iter(src_line) {
+                    // A backtick span holding a PATH is a citation, not a name.
+                    // Without this the leading-chain match turns
+                    // `` `src/formatter/mod.rs:5` `` into the candidate "src",
+                    // which matches almost any window and drowns the real names.
+                    if m[0].contains('/') {
+                        continue;
+                    }
+                    let whole = m[1].to_string();
+                    for seg in whole.split("::").flat_map(|s| s.split('.')) {
+                        if seg.len() >= 3 {
+                            out.push(seg.to_string());
+                        }
+                    }
+                }
+            };
+            let mut names: Vec<String> = Vec::new();
+            collect(line, &mut names);
+            if lineno > 0 {
+                collect(all[lineno - 1], &mut names);
+            }
+            // When neither line names anything, widen to the PARAGRAPH rather
+            // than skipping. Skipping was a real hole — it hid the extern
+            // `= "symbol"` and `from a import` cites, whose sentences put the
+            // identifier two lines up. A wider candidate set only makes the
+            // check more permissive (any hit passes), so this trades a little
+            // detection power for covering cites that had none at all.
+            if names.is_empty() {
+                let mut lo = lineno;
+                while lo > 0 && !all[lo - 1].trim().is_empty() {
+                    lo -= 1;
+                }
+                let mut hi = lineno;
+                while hi + 1 < all.len() && !all[hi + 1].trim().is_empty() {
+                    hi += 1;
+                }
+                for l in &all[lo..=hi] {
+                    collect(l, &mut names);
+                }
+            }
+            names.sort();
+            names.dedup();
+            if names.is_empty() {
+                // ⚠ RESIDUAL, named rather than assumed away: a cite in a
+                // paragraph that backticks no identifier at all cannot be
+                // content-checked by this method. Rare in this chapter (prose
+                // here names what it cites), and the fallback above removed the
+                // common case.
+                continue;
+            }
+            checked += 1;
+
+            let lo = cited.saturating_sub(WINDOW).saturating_sub(1);
+            let hi = (cited + WINDOW).min(src_lines.len());
+            let window = src_lines[lo..hi].join("\n");
+            if !names.iter().any(|n| window.contains(n.as_str())) {
+                stale.push(format!(
+                    "{rel}:{} → `{path}:{cited}` names {names:?}, none of which \
+                     appears within ±{WINDOW} lines",
+                    lineno + 1
+                ));
+            }
+            }
+        }
+    }
+
+    assert!(
+        checked > 20,
+        "the content check inspected only {checked} citations in {SCOPE} — the \
+         citation or identifier format moved and this lint reads almost \
+         nothing. Fix the scanner, don't lower the floor."
+    );
+    // ── ALLOWLIST, shrink-only ───────────────────────────────────────────────
+    //
+    // A cite whose sentence describes code by BEHAVIOUR rather than by symbol
+    // name cannot be content-checked this way: the backticked tokens near it
+    // are keywords, constants or types that live elsewhere in the file, while
+    // the cite points at exactly the right lines. Each row below was READ at
+    // HEAD and confirmed to land on the code its sentence describes; the reason
+    // is recorded so a future reader re-checks rather than trusts.
+    //
+    // SHRINK-ONLY. Do not add a row to silence a failure — repoint the cite. A
+    // row belongs here only when the cite is measured CORRECT and the sentence
+    // genuinely names no symbol at that line.
+    const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
+        ("103", "src/formatter/mod.rs:41", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
+        ("138", "src/formatter/doc.rs:325", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
+        ("190", "src/formatter/doc.rs:189", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
+        ("280", "src/formatter/mod.rs:461", "the blank-collapse loop INSIDE `fn format`, whose name is 25 lines up"),
+        ("284", "src/formatter/mod.rs:457", "the `align_trailing_comments()` call, named in prose without backticks"),
+        ("293", "src/formatter/mod.rs:1060", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("387", "src/formatter/mod.rs:1537", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+    ];
+    // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
+    // must still be LIVE: if the cite it excuses no longer fails, the row has
+    // outlived its reason and has to go, which is what makes the list shrink
+    // instead of quietly accumulating. And the count may not grow.
+    const HEURISTIC_BLIND_CEILING: usize = 7;
+    assert!(
+        HEURISTIC_BLIND.len() <= HEURISTIC_BLIND_CEILING,
+        "the heuristic-blind allowlist GREW ({} > {HEURISTIC_BLIND_CEILING}). \
+         Rows are added only for a cite measured CORRECT that this method cannot \
+         see — never to silence a failure. Repoint the cite instead.",
+        HEURISTIC_BLIND.len()
+    );
+    let mut dead_rows: Vec<String> = Vec::new();
+    for (line, cite, _) in HEURISTIC_BLIND {
+        let live = stale
+            .iter()
+            .any(|s| s.contains(&format!("{SCOPE}:{line} ")) && s.contains(cite));
+        if !live {
+            dead_rows.push(format!("{SCOPE}:{line} → `{cite}`"));
+        }
+    }
+    assert!(
+        dead_rows.is_empty(),
+        "{} heuristic-blind allowlist row(s) no longer excuse anything:\n  {}\n\n\
+         The cite was repointed, the prose changed, or the matcher improved. \
+         DELETE the row and lower HEURISTIC_BLIND_CEILING — that is the whole \
+         point of a shrink-only list.",
+        dead_rows.len(),
+        dead_rows.join("\n  ")
+    );
+    stale.retain(|s| {
+        !HEURISTIC_BLIND.iter().any(|(line, cite, _)| {
+            s.contains(&format!("{SCOPE}:{line} ")) && s.contains(cite)
+        })
+    });
+
+    assert!(
+        stale.is_empty(),
+        "{} citation(s) point at a line that does not mention the \
+         identifier the sentence is about:\n  {}\n\n\
+         The line number has drifted. Re-read the source and repoint it. This is \
+         the half `doc_source_citations_resolve` cannot see: an in-range cite on \
+         the wrong line resolves perfectly and still misleads every reader.\n\n\
+         NEXT STEPS FOR THIS RATCHET, both measured and both real:\n\
+         (1) widen SCOPE from the one chapter to the whole docs tree;\n\
+         (2) burn down the WIDE scan — `GG_LINT_CITE_CONTENT_WIDE=1` already \
+         walks TODO.md, the known_gaps headers and the two test files, where \
+         nothing guards cites today and where at least one confirmed stale cite \
+         lives. See the burn-down order in the comment above `targets`.",
+        stale.len(),
+        stale.join("\n  ")
+    );
+}
+
+#[test]
 fn doc_source_citations_resolve() {
     let cite = regex::Regex::new(r"`([A-Za-z0-9_./-]+\.(?:rs|gg|c|h|toml))(?::(\d+))?`?")
         .expect("citation regex");
@@ -11808,6 +12108,23 @@ fn formatter_sibling_loops_hook_pairing() {
     // `EXPECTED_EMIT_TRAILING_AFTER` deliberately does NOT move. Adding a
     // paired trailing hook at a clause header would double-claim against the
     // header hook the branch emitters already write.
+    //
+    // R41 fold (2026-08-11): 27 → 27 — and the fact that it lands back on the
+    // same number is a COINCIDENCE of two independent moves, not a no-op.
+    // Anyone re-deriving this constant should check both.
+    //   −2: NOT a lost hook, a CENTRALIZED one. The three `meta if`
+    //       nested-item loops (then / elif body / else) each carried their own
+    //       copy of the leading+trailing pair; they now share the single
+    //       `format_nested_items` producer, so three pairs became one. `_AFTER`
+    //       drops by the same two and the equality between them still holds,
+    //       which is the property that matters.
+    //   +2: the ITEM-level `meta if`'s `elif` and `else` headers gain the
+    //       leading hook their statement-level twins have had since the
+    //       clause-header census — the item-level clause headers were simply not
+    //       in that census, and without the hook a comment written above them
+    //       fell to the nested-item loop and was re-emitted INSIDE the branch,
+    //       leading the first definition. LEADING ONLY, like every other clause
+    //       header, so `_AFTER` does not move.
     const EXPECTED_EMIT_COMMENTS_BEFORE: usize = 27;
     /// `emit_trailing_comment_after(` calls: 12 sibling-paired + 1
     /// EOF defensive + 1 internal delegation from
@@ -11832,7 +12149,9 @@ fn formatter_sibling_loops_hook_pairing() {
     // helper site covers all 4 inline-arm callers.
     // R41 T-FMT-A §5 (2026-08-11): 16 → 17 — `format_extern_block`'s item
     // loop gains its paired trailing hook alongside the leading one above.
-    const EXPECTED_EMIT_TRAILING_AFTER: usize = 17;
+    // R41 fold (2026-08-11): 17 → 15, the trailing half of the
+    // `format_nested_items` centralization described above.
+    const EXPECTED_EMIT_TRAILING_AFTER: usize = 15;
     /// `emit_trailing_comment_after_header(` calls: 4 structural
     /// containers (`format_struct`, `format_enum`, `format_trait`,
     /// `format_equip`) + 6 control-flow openers added R39 by the
@@ -11847,7 +12166,26 @@ fn formatter_sibling_loops_hook_pairing() {
     // control-flow openers + structural containers.
     // R41 T-FMT-A §5 (2026-08-11): 11 → 12 — `extern "C":  # why` joins the
     // structural-container header family (struct / enum / trait / equip).
-    const EXPECTED_EMIT_TRAILING_AFTER_HEADER: usize = 12;
+    //
+    // R41 fold (2026-08-11): 12 → 14. The `else:` clause header was the ONE
+    // header position with no trailing hook — `elif` had one and the `case`
+    // arms had one, so `else:  # note` alone dropped its comment through to
+    // `format_block_stmts`, which re-emitted it as a LEADING comment on the
+    // branch's first statement (the comment then documents that statement
+    // instead of the clause). +1 for the shared `emit_else_header` producer,
+    // which the five indented-`else` sites now route through, and +1 for the
+    // expression-match `else:`, whose body goes through `format_arm_body` and
+    // therefore needs its own guarded call (fired only for an indented suite —
+    // before an author `do:` or an inline expression it would emit the comment
+    // ahead of the thing it heads, and the output would not re-parse).
+    //
+    // 14 → 16 in the same change: the ITEM-level `meta if` and its `elif`
+    // headers. Their trailing comments were falling into the branch body, where
+    // the nested-item loop re-emitted them as LEADING comments on the branch's
+    // first DEFINITION — the same class one layer up, at sites the clause census
+    // did not cover. (The item-level `else` needs no row of its own: it routes
+    // through the shared `emit_else_header` counted above.)
+    const EXPECTED_EMIT_TRAILING_AFTER_HEADER: usize = 16;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -11963,6 +12301,90 @@ fn formatter_sibling_loops_hook_pairing() {
 /// hook calls from `format_extern_block`'s `for func in &eb.items` loop (the
 /// pre-R41 state) and this lint fires with that row flipping `Both` → `None`.
 #[test]
+fn item_module_is_constructed_only_by_the_loader() {
+    // `format_item`'s `Item::Module` loop is the ONE child-collection loop in
+    // the formatter that carries no comment hooks and no blank preservation.
+    // The census row records the reason: the node is SYNTHETIC — the loader
+    // wraps a non-entry imported module in it (`merge_modules`), and `gg fmt`
+    // parses fresh source with `Parser::new(..).parse_module()` and never runs
+    // the loader, so the loop is unreachable from the formatter.
+    //
+    // That reasoning is only as good as its premise. The day the PARSER grows a
+    // `module X:` form, the loop would silently strip every blank and comment
+    // inside it (Core #10 class) and nothing would say so.
+    //
+    // ⚠ The premise is NOT "one construction site" — an output-review asserted
+    // that and it is wrong. There are TWO in production code, and the second is
+    // easy to misread as a pattern because the line above it IS one:
+    //   * `src/loader.rs` — `merge_modules` wraps a non-entry imported module;
+    //   * `src/semantic/meta.rs` — `flatten_meta_ifs` REBUILDS the wrapper after
+    //     flattening the `meta if`s inside it.
+    // What actually holds — and what the formatter's hookless loop rests on — is
+    // that BOTH producers are POST-PARSE. The parser builds none, and
+    // `format_source_result` parses fresh source and runs neither the loader nor
+    // semantic analysis. So this pins the file SET, not a count of one: a
+    // producer appearing anywhere else, above all in `src/parser/`, is what
+    // invalidates the reasoning.
+    const EXPECTED_PRODUCER_FILES: &[&str] = &["src/loader.rs", "src/semantic/meta.rs"];
+
+    let mut sites: Vec<String> = Vec::new();
+    for path in walkdir_rs("src") {
+        let rel = path.to_string_lossy().replace('\\', "/");
+        let Ok(content) = fs::read_to_string(&path) else { continue };
+        // Unit-test modules build AST fixtures by hand; those constructions are
+        // real but are not producers in the shipped pipeline, and they reach the
+        // formatter no more than the loader's does. Scope to production code —
+        // the trailing `#[cfg(test)]` module is the convention in this tree.
+        let prod_end = content
+            .lines()
+            .position(|l| l.trim_start() == "#[cfg(test)]")
+            .unwrap_or(usize::MAX);
+        for (i, line) in content.lines().enumerate() {
+            if i >= prod_end {
+                break;
+            }
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            // A CONSTRUCTION builds the node; a PATTERN binds it. Patterns carry
+            // a rest-`..`, a match arrow, or a `let`/`if let` binder on the same
+            // line — constructions carry none of the three.
+            if line.contains("Item::Module {")
+                && !line.contains("..")
+                && !line.contains("=>")
+                && !trimmed.starts_with("let ")
+                && !trimmed.contains("if let ")
+            {
+                sites.push(format!("{rel}:{}", i + 1));
+            }
+        }
+    }
+
+    let mut producer_files: Vec<String> = sites
+        .iter()
+        .map(|s| s.rsplit_once(':').map(|(f, _)| f.to_string()).unwrap_or_default())
+        .collect();
+    producer_files.sort();
+    producer_files.dedup();
+
+    assert_eq!(
+        producer_files, EXPECTED_PRODUCER_FILES,
+        "`Item::Module` producers changed.\n\nSites: {sites:?}\n\n\
+         The formatter's `Item::Module` loop (`format_item`) has NO comment \
+         hooks and NO blank-line preservation, and its census row justifies \
+         that by the node being POST-PARSE and therefore unreachable from \
+         `gg fmt`, which parses fresh source and runs neither the loader nor \
+         semantic analysis.\n\n\
+         A producer in `src/parser/` breaks that reasoning outright — the loop \
+         would silently strip every blank and comment inside the new form \
+         (Core #10 class). A producer in another post-parse pass is probably \
+         fine, but say so deliberately: re-read the census row in \
+         `formatter_child_collection_loop_census` before extending this list."
+    );
+}
+
+#[test]
 fn formatter_child_collection_loop_census() {
     /// Hook state a census row expects.
     #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -11993,11 +12415,18 @@ fn formatter_child_collection_loop_census() {
         ("format_module", "for item in &directives {", Both),
         ("format_module", "for item in &imports {", Both),
         ("format_module", "for (i, item) in rest.iter().enumerate() {", Both),
-        ("format_item", "for item in &mi.then_items {", Both),
-        ("format_item", "for (cond, items) in &mi.elif_branches {", Both),
-        ("format_item", "for item in items {", Both),
-        ("format_item", "for item in else_items {", Both),
+        // R41 fold: the four `meta if` nested-item loops (then / the elif
+        // branch walk / the elif body / else) collapsed into ONE producer,
+        // `format_nested_items`, when the nested-item blank preservation
+        // landed — four copies of the loop were four chances to omit it, and
+        // one of them omitting it is exactly what the snag was. The surviving
+        // `for (cond, items) in &mi.elif_branches` row is the BRANCH walk, not
+        // a child-collection loop: it emits the `elif` HEADER (with its own
+        // leading-comment hook, hence `Leading`, exactly like the statement-level
+        // `format_elif_else_blocks` row above) and delegates the items.
+        ("format_item", "for (cond, items) in &mi.elif_branches {", Leading),
         ("format_item", "for inner in items {", None_),
+        ("format_nested_items", "for (i, item) in items.iter().enumerate() {", Both),
         ("format_struct", "for (i, field) in s.fields.iter().enumerate() {", Both),
         ("format_enum", "for (i, variant) in e.variants.iter().enumerate() {", Both),
         ("format_trait", "for (i, item) in t.items.iter().enumerate() {", Both),
@@ -12955,6 +13384,17 @@ fn fmt_multiline_group_paren_wrap_class() {
 /// mutation is not the shape a regression takes — a lost gate is deleted, not
 /// short-circuited — and the fixture matrix catches the disabled form anyway,
 /// but the limit is real and stated rather than assumed away.
+///
+/// ⚠ **The closure emitter's layout read has NO ROW HERE, and its `Plain` row
+/// does not mean "no layout question at this site".** A closure suite reaches
+/// `format_block_stmts` through `format_closure_post_prelude`, so the census
+/// sees the delegating call, not the read at `src/formatter/mod.rs:3856` that
+/// chose the spelling. Independently measured (`if true || block.layout == ...`
+/// at that read): this census stays GREEN while
+/// `tests/fixtures/fmt_suite_layout/closure_body.gg` loses its fixpoint AND
+/// regains trailing whitespace, so `fmt_suite_layout_form_preservation` and the
+/// `suite_layout_expr_facts` projection are what cover this site. Two guards,
+/// not one — do not read the `Plain` row as an absence of the question.
 #[test]
 fn formatter_suite_layout_hook_census() {
     #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
@@ -12995,6 +13435,15 @@ fn formatter_suite_layout_hook_census() {
     // The `for`/`while`/`match`/`select` `else` CLAUSES are the `Clause` rows;
     // `meta match`'s `else` is `Both` (a clause header that ALSO has two legal
     // spellings), as is the `if`-`else`.
+    //
+    // ⚠ The `case` ARM headers are clause headers too, and they check for the
+    // author's blank the same way — but only the meta-match one shows up in
+    // this table, because the other three arm loops (statement-match,
+    // expression-match, select) reach their bodies through `format_match_arm`
+    // or their own emit rather than calling `format_block_stmts` within the
+    // classifier's window. Their blank check lives in the arm LOOP, not beside
+    // a `format_block_stmts` call, so a `Plain` row here is not evidence that
+    // an arm position skipped it.
     const CENSUS: &[(&str, &str, Kind)] = &[
         ("format_arm_body", "self.format_block_stmts(block);", Layout),
         ("format_arm_body", "self.format_block_stmts(block);", Plain),
@@ -13007,11 +13456,21 @@ fn formatter_suite_layout_hook_census() {
         ("format_function", "self.format_block_stmts(block);", Plain),
         ("format_inline_suite", "self.format_block_stmts(block);", Plain),
         ("format_item", "self.format_block_stmts(&mtf.body);", Plain),
-        ("format_match_arm", "self.format_block_stmts(block);", Layout),
+        // `format_match_arm` no longer has a row: it used to hand-mirror
+        // `format_arm_body`'s three-way shape decision and emit two of the
+        // three suites itself, and the copy disagreed with the original on the
+        // author-`do:` shape (the header's trailing comment landed on the LAST
+        // statement of the branch). It now delegates, so the arm's suite is
+        // emitted at `format_arm_body`'s rows above.
         // select CASE arm body.
         ("format_stmt", "self.format_block_stmts(&arm.body);", Plain),
-        // meta match CASE arm body · on error.
-        ("format_stmt", "self.format_block_stmts(body);", Layout),
+        // meta match CASE arm body — `Both` since the R41 fold: a `case`
+        // header is a clause header too, and it now checks for the author's
+        // blank above itself like `else:`/`elif:` always did. The asymmetry
+        // that made the blank above `case 1:` vanish while the blank above the
+        // sibling `else:` survived was the reported snag.
+        ("format_stmt", "self.format_block_stmts(body);", Both),
+        // on error.
         ("format_stmt", "self.format_block_stmts(body);", Layout),
         // for body · while body · loop · with · unsafe · meta for ·
         // meta while · named scope.
@@ -13122,6 +13581,201 @@ fn formatter_suite_layout_hook_census() {
          · `Plain` is for a position with only ONE legal author spelling; \
          record WHY in the table's rationale block, the way the existing rows \
          do."
+    );
+
+    // ── The PER-SITE-ANCHOR producers, which the table above cannot see ─────
+    //
+    // This census keys on `format_block_stmts` calls, so it enumerates SUITE
+    // emissions. The three producers below are a different axis: each emits a
+    // clause/arm header or body AND places the header's trailing comment, and
+    // each of their call sites hands over its OWN anchor. A position that
+    // forgot to delegate — or delegated with a wrong anchor — moves no count
+    // above, because it would not call `format_block_stmts` in the window.
+    //
+    // That gap is not hypothetical, and it has now bitten THREE TIMES, once per
+    // review pass, each time in a different member of the same family:
+    //   1. the author-`do:` body shape shipped with no cell — every gate green;
+    //   2. the `rethrow` call site shipped with no cell — every gate green;
+    //   3. `select`'s `else` had no trailing-comment cell, and a reviewer
+    //      neutered that call site and reproduced the misattribution class with
+    //      lints, lib, fmt_suite_layout, fmt_idempotent, fmt_comment_only and
+    //      fmt_output_reparses_corpus_wide ALL green.
+    //
+    // Pass 3's fix pinned one producer, which is why pass 3 found the next one.
+    // The class is "a producer whose callers each supply an anchor", so all
+    // three are pinned here, each against the fixture axis that covers it.
+    const ANCHOR_PRODUCERS: &[(&str, usize, &str)] = &[
+        (
+            "self.format_arm_body(",
+            4,
+            "`format_match_arm` (a `case` arm), the expression-match `else`, \
+             `rethrow`, `catch` — axis 2 of else_header_trailing_comment.gg, \
+             which samples each against an author-`do:` and an inline body. \
+             RED-verify a new one by killing its anchor: format_arm_body(body, 0)",
+        ),
+        (
+            "self.emit_else_header(",
+            7,
+            "the item-level `meta if` `else`, `format_elif_else_blocks`, and the \
+             `for` / `while` / statement-match / `select` / `meta match` `else` \
+             clauses — axis 1 of else_header_trailing_comment.gg, one cell each. \
+             RED-verify a new one by replacing the call with a hand-written \
+             `write(\"else:\")` + `newline()`, which is exactly what a site that \
+             forgot to delegate looks like",
+        ),
+        (
+            "self.format_inline_suite(",
+            6,
+            "the INLINE half of the same clause family — `elif`, the `if`-`else`, \
+             `Stmt::If`'s then-body, `meta match`'s case and `else`, and \
+             `on error` (whose inline form takes NO colon, which is why the \
+             header suffix is a parameter). Its cells are inline_slot_kinds.gg \
+             and the inline rows of else_header_trailing_comment.gg",
+        ),
+    ];
+    let code_lines: Vec<&str> = content
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.starts_with("//") && !t.starts_with("///")
+        })
+        .collect();
+    for (needle, expected, roster) in ANCHOR_PRODUCERS {
+        let found = code_lines.iter().filter(|l| l.contains(needle)).count();
+        assert_eq!(
+            found, *expected,
+            "`{needle}` call-site count changed ({expected} -> {found}).\n\n\
+             The {expected} are: {roster}.\n\n\
+             Each call site supplies its OWN anchor, so each needs its OWN \
+             fixture cell — a shared producer does not make a per-site anchor \
+             correct, which is the defect this family keeps producing. If you \
+             ADDED a position, add its cell, RED-verify it, and bump the count \
+             here. If you REMOVED one, a header comment is probably now \
+             misattributed.\n\
+             Census: grep -c '{needle}' src/formatter/mod.rs"
+        );
+    }
+}
+
+/// The READ-SITE guard behind `SuiteLayout`'s doc comment (Core #14 — an
+/// invariant-asserting comment needs an enforcing guard, or it gets deleted).
+///
+/// `src/parser/ast.rs` tells every reader: *"Nothing outside the formatter reads
+/// this field: it records syntax, and semantics must not depend on it."* True at
+/// the time it was written, and load-bearing — the day a semantic pass consults
+/// `Block.layout` or `Expr::Do.author_spelled`, a program's MEANING starts
+/// depending on how its author spaced it, and `if c: return x` stops being the
+/// same program as the indented form. That is not a bug you find in review; it
+/// is a bug you find when someone's whitespace change flips a verdict.
+///
+/// So the sentence is enforced here rather than trusted:
+///   * `src/formatter/` may READ both fields — it is the one consumer whose
+///     entire job is spelling.
+///   * `src/parser/` may DECLARE and WRITE them (`layout:` / `author_spelled:`
+///     in a field decl or a struct-literal init) but may NOT read them: the
+///     parser is the writer, and a read there would mean the fact is being
+///     round-tripped through the layer that produces it.
+///   * Everywhere else under `src/` — semantic, ir, lir, backend — may not
+///     mention them at all.
+///
+/// Comments are exempt: naming the anti-pattern is how the rule is taught. The
+/// test-side fact projection in `tests/integration.rs` is out of scope by
+/// construction (this walks `src/` only) and is a fixture ORACLE, not a
+/// consumer.
+///
+/// ⚠ ONE RESIDUAL BLIND SPOT, stated rather than assumed away: a RENAMING
+/// destructure *inside the parser* (`let Block { layout: l, .. } = b;`) spells
+/// `layout:` and is therefore taken for the struct-literal write it looks
+/// identical to. Outside the parser the same shape is caught, which is where the
+/// danger lives — a semantics reading the field is what makes whitespace change
+/// meaning. Closing the parser cell needs a real Rust parse, not a line scan.
+///
+/// **Break-and-verify (Core #13, RED-verified 2026-08-11):** adding
+/// `let _ = block.layout;` to `src/semantic/typecheck.rs` fires this lint with
+/// that file:line; adding it to `src/parser/stmt.rs` fires the reads-in-parser
+/// arm. Restored both.
+#[test]
+fn suite_layout_is_read_only_by_the_formatter() {
+    const FIELDS: [&str; 2] = [".layout", "author_spelled"];
+    // A DESTRUCTURING read spells the field as a BARE identifier in a
+    // brace-list position — `let Block { layout, .. } = b;`, or a match pattern
+    // `Expr::Do { author_spelled, .. } =>`. The dotted form above cannot see it,
+    // which is exactly the hole an output-review demonstrated by slipping such a
+    // read into `src/semantic/` past the first version of this guard.
+    //
+    // Anchoring on the preceding `{` or `,` is what keeps this from firing on
+    // the ordinary local named `layout` (`let mut layout = String::new()` in
+    // `src/ir/lowering/mod.rs`, `Some(layout)` in the LLVM backend — both
+    // measured) while still catching every brace-list position. The parser's own
+    // write sites put `layout:` at the start of their line, so they are not in a
+    // brace-list position either and do not match.
+    let destructure: Vec<(String, regex::Regex)> = FIELDS
+        .iter()
+        .map(|f| {
+            let bare = f.trim_start_matches('.').to_string();
+            let re = regex::Regex::new(&format!(r"[{{,]\s*{bare}\s*[,}}:]")).unwrap();
+            (bare, re)
+        })
+        .collect();
+    let mut violations: Vec<String> = Vec::new();
+
+    for path in walkdir_rs("src") {
+        let rel = path.to_string_lossy().replace('\\', "/");
+        if rel.starts_with("src/formatter/") {
+            continue; // the sanctioned reader
+        }
+        let Ok(content) = fs::read_to_string(&path) else { continue };
+        let in_parser = rel.starts_with("src/parser/");
+        for (i, line) in content.lines().enumerate() {
+            let code = line.trim_start();
+            if code.starts_with("//") {
+                continue; // prose may name the field
+            }
+            for (bare, re) in &destructure {
+                if !re.is_match(line) {
+                    continue;
+                }
+                // In the parser a brace-list `layout:` is a struct-literal
+                // WRITE on one line (`Block { stmts, span, layout: … }`).
+                if in_parser && line.contains(&format!("{bare}:")) {
+                    continue;
+                }
+                violations.push(format!("{rel}:{}  {}", i + 1, line.trim()));
+            }
+            for field in FIELDS {
+                if !line.contains(field) {
+                    continue;
+                }
+                // A WRITE is `layout: …` / `author_spelled: …` — a field
+                // declaration or a struct-literal initializer. Anything else
+                // that mentions the field is a read.
+                let bare = field.trim_start_matches('.');
+                let is_write = line.contains(&format!("{bare}:"));
+                if in_parser && is_write {
+                    continue;
+                }
+                violations.push(format!(
+                    "{rel}:{}  {}",
+                    i + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "`Block.layout` / `Expr::Do.author_spelled` are SYNTAX, and \
+         `src/parser/ast.rs` promises that nothing outside the formatter reads \
+         them. These sites break that promise:\n\n{}\n\n\
+         If a pass genuinely needs to know how a suite was spelled, the answer \
+         is almost certainly that it needs a different fact — one the parser \
+         should RESOLVE and write through as typed metadata (Layering rule 4), \
+         not the author's whitespace. A semantics that reads this field makes \
+         `if c: stmt` and its indented form different programs.\n\n\
+         The parser may DECLARE and WRITE these fields (`layout:` / \
+         `author_spelled:`); it may not read them back.",
+        violations.join("\n")
     );
 }
 
@@ -13732,6 +14386,79 @@ fn formatter_list_emit_fill_census() {
 }
 
 
+
+/// R41 T-FMT-B CLASS GUARD, visibility face — every declaration kind that can
+/// carry a visibility keyword is emitted through the explicitness-aware path.
+///
+/// `public Foo` and a bare `Foo` both parse to `Visibility::Public`, so the
+/// emitter cannot recover the author's spelling from the value; it reads
+/// `explicit_visibility`, which the parser writes. The class risk is a TENTH
+/// carrier: a new declaration kind that grows a `visibility` field and emits it
+/// with its own two-arm match would silently delete every explicit `public` on
+/// that kind, which is precisely the defect the flag exists to retire — and
+/// nothing about adding the field forces its author past this path.
+///
+/// So the two counts are pinned against each other. `format_static_decl` is the
+/// one deliberate non-caller: statics are private-by-DEFAULT, the inverse
+/// convention, and it carries its own rule (`src/formatter/mod.rs:1894-1910`).
+/// A mismatch means either a new carrier that skipped the path, or a carrier
+/// removed without its emit site — both worth a look.
+#[test]
+fn formatter_visibility_emit_site_count() {
+    /// `pub visibility: Visibility` fields in the AST — the carriers.
+    const EXPECTED_CARRIERS: usize = 9;
+    /// `self.format_visibility(` call sites, plus `format_static_decl`'s own
+    /// inverted rule, which together must cover every carrier.
+    const EXPECTED_EMIT_SITES: usize = 8;
+    const STATIC_DECL_OWN_RULE: usize = 1;
+
+    let ast = fs::read_to_string("src/parser/ast.rs").expect("cannot read src/parser/ast.rs");
+    let fmt = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+
+    let carriers = ast
+        .lines()
+        .filter(|l| l.trim() == "pub visibility: Visibility,")
+        .count();
+    let emit_sites = fmt
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//") && !l.trim_start().starts_with("///"))
+        .filter(|l| l.contains("self.format_visibility("))
+        .count();
+
+    assert_eq!(
+        carriers, EXPECTED_CARRIERS,
+        "the number of AST declarations carrying `visibility` changed \
+         ({EXPECTED_CARRIERS} -> {carriers}).\n\n\
+         If a kind was ADDED: it also needs `explicit_visibility` written at the \
+         parser (one writer, where the keyword is consumed) and an emit through \
+         `format_visibility`, or `gg fmt` will delete the author's `public` on \
+         that kind — the class this guard exists to retire. Then bump both \
+         constants.\n\
+         Census: grep -c 'pub visibility: Visibility,' src/parser/ast.rs"
+    );
+    assert_eq!(
+        emit_sites, EXPECTED_EMIT_SITES,
+        "the `format_visibility` call-site count changed \
+         ({EXPECTED_EMIT_SITES} -> {emit_sites}). A site that DISAPPEARED means \
+         a declaration kind stopped emitting a keyword the user wrote — the \
+         silent-drop class. A site ADDED without a new carrier means something \
+         is emitting visibility twice.\n\
+         Census: grep -c 'self.format_visibility(' src/formatter/mod.rs"
+    );
+    assert_eq!(
+        emit_sites + STATIC_DECL_OWN_RULE,
+        carriers,
+        "visibility EMIT sites ({emit_sites} `format_visibility` calls + \
+         `format_static_decl`'s own inverted rule) no longer cover the \
+         {carriers} AST carriers.\n\n\
+         Every carrier must route through `format_visibility`, which emits the \
+         keyword IFF the author wrote one. The single sanctioned exception is \
+         `format_static_decl` (statics are private-by-default, the opposite \
+         convention).\n\
+         Census: grep -c 'self.format_visibility(' src/formatter/mod.rs"
+    );
+}
 
 /// R41 T-FMT-B CLASS GUARD — every quoted string the formatter emits goes
 /// through the ONE producer.

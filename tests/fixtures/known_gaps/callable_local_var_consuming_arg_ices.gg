@@ -20,11 +20,16 @@
 #   Vector[Callable[void(int &, String ^)]] arr = []
 #   arr.push(mix)
 #   arr[0](&a, ^greeting)
-# — which is exactly `callable_bang_arr_indexed_callee.gg` (and its caret
-# twin `d27_sh_caret_fntype_param_suffix.gg`). So the hole is specific to
-# calling a Callable-typed LOCAL BINDING, not to Callable calls in general:
-# the indexed form registers the consume site, the bare-variable form does
-# not.
+# — which is exactly `callable_bang_arr_indexed_callee.gg`, the one in-corpus
+# cell of that shape. So the hole is specific to calling a Callable-typed
+# LOCAL BINDING, not to Callable calls in general: the indexed form registers
+# the consume site, the bare-variable form does not.
+#
+# ⚠ `d27_sh_caret_fntype_param_suffix.gg` is NOT a caret twin of the indexed
+# shape — it passes its callable as a PARAMETER, and shares only the fn-type
+# param-suffix parse position. No caret indexed-callee cell exists. (The
+# indexed shape also runs on the Rust lane ONLY: it times out on the self-host
+# runtime lane, filed separately.)
 #
 # INTENDED behaviour: this compiles and runs, printing the two lines below.
 # Per Core #3 the fix belongs at the PRODUCER — the closure-call lowering
