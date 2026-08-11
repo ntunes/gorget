@@ -4207,7 +4207,7 @@ impl<'a> TypeChecker<'a> {
                 inner_type
             }
 
-            Expr::Await { expr: inner } => {
+            Expr::Await { expr: inner, .. } => {
                 if let Expr::Await { .. } = &inner.node {
                     self.error(SemanticErrorKind::DoubleAwait, expr.span);
                 }
@@ -4598,7 +4598,7 @@ impl<'a> TypeChecker<'a> {
                 self.types.error_id // Set[T]
             }
 
-            Expr::ArrayLiteral(elements) => {
+            Expr::ArrayLiteral(elements, _) => {
                 if elements.is_empty() {
                     return self.types.error_id;
                 }
@@ -10268,7 +10268,7 @@ pub fn apply_inferred_method_targs(
             Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
                 walk_expr(body, inferred);
             }
-            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
                 for e in elems.iter_mut() { walk_expr(e, inferred); }
             }
             Expr::Block(b) => walk_block(b, inferred),
@@ -10430,7 +10430,7 @@ pub fn apply_inferred_call_targs(
             Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
                 walk_expr(body, inferred);
             }
-            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
                 for e in elems.iter_mut() { walk_expr(e, inferred); }
             }
             Expr::Block(b) => walk_block(b, inferred),
@@ -10679,7 +10679,7 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
                 walk_expr(rhs, sigs);
             }
             Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => walk_expr(body, sigs),
-            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
                 for e in elems { walk_expr(e, sigs); }
             }
             Expr::Block(b) => {

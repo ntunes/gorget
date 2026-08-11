@@ -8830,13 +8830,18 @@ fn escape_hex_string_fmt() {
     assert_fmt_idempotent("escape_hex_string_fmt.gg");
 }
 
-// Track H: `gg fmt` MUST emit control chars as READABLE `\xHH` escapes, never
-// raw control bytes (a Core #8 source-corruption / data-loss class made LIVE by
+// Track H: `gg fmt` MUST emit control chars as READABLE escapes, never raw
+// control bytes (a Core #8 source-corruption / data-loss class made LIVE by
 // Track B's toml.gg `\x08`/`\x0c`/`\x01` migration). The value round-trips even
 // WITH the bug — a raw 0x1B re-lexes to scalar 0x1B, so idempotence and semantic
 // round-trip both stay green — which is exactly why the load-bearing guard here
 // is the OUTPUT-SHAPE assertion (escaped form + zero raw control bytes), not the
 // value tests.
+//
+// WHICH escape is now the author's call (the form-preservation ruling): a
+// control character written `\u{1b}` stays `\u{1b}`, one written `\x1b` stays
+// `\x1b`. The invariant this test defends is unchanged and stronger than the
+// spelling — no control character is ever emitted as a raw byte.
 //
 // RED-verify (`git checkout src/formatter/mod.rs && cargo build`): pre-fix
 // `gg fmt` wrote a raw 0x1B / 0x08 byte into the source (`od -c` → `033` / `\b`);
@@ -8867,9 +8872,14 @@ fn fmt_control_char_escape() {
     assert!(out.contains("\\x1b[0m"), "ESC escaped-form missing:\n{out}");
     assert!(out.contains("\\x08"), "BS escaped-form missing:\n{out}");
     assert!(out.contains("\\x7f"), "DEL escaped-form missing:\n{out}");
+    // `\u{1b}` is PRESERVED, not normalised to `\x1b`. This assertion used to
+    // demand the opposite, and it was reversed by the form-preservation ruling:
+    // `\u{1b}` and `\x1b` are two spellings of one scalar, so which one appears
+    // is the author's choice, not the formatter's. What is NOT negotiable is
+    // the byte-scan below — the escape must remain AN ESCAPE.
     assert!(
-        !out.contains("\\u{1b}"),
-        "\\u{{1b}} not normalised to \\x1b:\n{out}"
+        out.contains("\\u{1b}"),
+        "the author's `\\u{{1b}}` spelling was rewritten:\n{out}"
     );
 
     // NO raw control byte (C0 minus the whitespace \t \n \r, plus DEL) leaked
@@ -11665,7 +11675,7 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
             Expr::FieldAccess { object, .. } | Expr::OptionalChain { object, .. } => {
                 visit_expr(&format!("{path}.obj"), &object.node, facts)
             }
-            Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+            Expr::ArrayLiteral(elems, _) | Expr::TupleLiteral(elems) => {
                 for (i, e) in elems.iter().enumerate() {
                     visit_expr(&format!("{path}.el{i}"), &e.node, facts);
                 }
@@ -11824,7 +11834,18 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
 
     fn visit_fn(path: &str, f: &FunctionDef, facts: &mut Vec<String>) {
         // §1/§2 members + R39's already-fixed members.
-        facts.push(format!("{path}.extern_abi={:?}", f.extern_abi));
+        // Project the ABI's VALUE, not its `Spanned` wrapper. `extern_abi`
+        // carries a span so the formatter can recover the author's escape
+        // spelling; `{:?}` on the wrapper would print byte offsets, and the
+        // pre- and post-format spans of the same declaration differ whenever
+        // formatting moves a single byte. The guard would then fail for the
+        // one reason it is not looking for — while a genuinely dropped ABI
+        // still shows up, because the value is what is compared. Same
+        // projection the `ExternBlock` arm above already uses.
+        facts.push(format!(
+            "{path}.extern_abi={:?}",
+            f.extern_abi.as_ref().map(|a| &a.node)
+        ));
         facts.push(format!("{path}.returns_borrowed={}", f.returns_borrowed));
         facts.push(format!("{path}.blocking={}", f.qualifiers.is_blocking));
         facts.push(format!("{path}.noreturn={}", f.qualifiers.is_noreturn));
@@ -20045,7 +20066,7 @@ fn format_expr_canonical(expr: &Expr) -> String {
             let body_str = format_block_canonical(&body.stmts);
             format!("do:{body_str}")
         }
-        Expr::ArrayLiteral(elems) => {
+        Expr::ArrayLiteral(elems, _) => {
             let parts: Vec<String> = elems
                 .iter()
                 .map(|e| format_expr_canonical(&e.node))
@@ -20128,7 +20149,7 @@ fn format_expr_canonical(expr: &Expr) -> String {
                 format!("({e} is {p})")
             }
         }
-        Expr::Await { expr } => {
+        Expr::Await { expr, .. } => {
             format!("{}.await()", format_expr_canonical(&expr.node))
         }
         Expr::Spawn { expr, .. } => {
@@ -47101,4 +47122,428 @@ fn rust_gg_build_is_deterministic() {
             );
         }
     }
+}
+
+// ══════════════════════════════════════════════════════════════
+// R41 T-FMT-B — form preservation: the VERBATIM chokepoint
+// ══════════════════════════════════════════════════════════════
+//
+// `gg fmt` may re-LAYOUT a program. It may not re-SPELL it.
+//
+// A whole family of authorial choices are pure syntax, so the AST is right to
+// drop them: which escape spelled a character, which quote style wrapped a
+// string, whether a byte was written `b'A'` or `65`, how many trailing zeros a
+// float carried, whether a primitive was spelled `byte` or `uint8`, whether an
+// await was prefix or postfix, whether a collection literal used braces or
+// brackets, whether `static` / `public` / `as` were written or left implicit.
+// The formatter is the one consumer that needs them back, and it recovers each
+// from the source text at the node's span — the same mechanism that already
+// recovered an integer literal's radix.
+//
+// Two of these were not merely cosmetic. Eight NAME-STRING sites re-emitted a
+// decoded string with no re-escaping, so `test "a \" b":` came back with a BARE
+// quote and the formatted file no longer parsed. And a multi-line `"""` block
+// was flattened onto one `\n`-escaped line.
+//
+// FIXTURE PLACEMENT: `tests/fixtures/fmt_form_preservation/` is a
+// SUBDIRECTORY, for the reason spelled out at the `fmt_silent_drops` block
+// above (`runtime_parity_corpus` and `fmt_idempotent` enumerate with a
+// top-level `read_dir`; a top-level fmt fixture would blow
+// `RUNTIME_DIFF_NONMATCH_CEILING`, which Core #9 ⊕ forbids raising for a
+// round's own inflow). Every fixture below is wired to a NAMED test by hand.
+//
+// Each fixture is written in the form it must KEEP, so the assertion is
+// byte-exact identity: format it, and nothing moves. Idempotence and
+// re-parseability are checked alongside, because a spelling that survives one
+// pass but not the second, or that survives but no longer parses, is not
+// preservation.
+
+/// Format `fixture`, and assert it is a FIXED POINT: byte-identical output,
+/// which re-parses with zero errors and is stable under a second pass.
+///
+/// The byte-exact form is what makes these cells sharp — a diff of one
+/// character in one escape fails the test and prints both texts.
+fn assert_fmt_form_preserved(fixture: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_form_preservation")
+        .join(fixture);
+    let source = std::fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture_path.display()));
+
+    let formatted = match gorget::formatter::format_source_result(&source) {
+        Ok(s) => s,
+        Err(errs) => panic!(
+            "R41 T-FMT-B: {fixture} does not parse ({} error(s)); first: {:?}",
+            errs.len(),
+            errs.first()
+        ),
+    };
+    assert_eq!(
+        source, formatted,
+        "R41 T-FMT-B: `gg fmt` CHANGED the spelling of {fixture}.\n\
+         === author wrote ===\n{source}\n=== formatter emitted ===\n{formatted}"
+    );
+
+    // The output must still be a program.
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(
+        reparse.errors.is_empty(),
+        "R41 T-FMT-B: `gg fmt` output for {fixture} does NOT re-parse \
+         ({} error(s)); first: {:?}\n=== formatted ===\n{formatted}",
+        reparse.errors.len(),
+        reparse.errors.first()
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(
+        formatted, second,
+        "R41 T-FMT-B: formatter is NOT idempotent for {fixture}.\n\
+         === pass 1 ===\n{formatted}\n=== pass 2 ===\n{second}"
+    );
+}
+
+// ── The EIGHT name-string sites, one test each ──────────────
+//
+// Every cell carries the same six escape costumes in one name —
+// `\x41` · `\"` · `\t` · `\n` · `\\` · `\u{1F600}` — so a site that
+// regresses on any one of them fingers itself by NAME.
+
+/// Site 1/8 — `format_test`. RED pre-fix: `\x41`→`A`, `\"`→bare quote
+/// (string structure broken), `\t`→literal TAB; output did not re-parse.
+#[test]
+fn fmt_form_name_string_test() {
+    assert_fmt_form_preserved("name_string_test.gg");
+}
+
+/// Site 2/8 — `format_bench`. RED pre-fix: same six, output did not re-parse.
+#[test]
+fn fmt_form_name_string_bench() {
+    assert_fmt_form_preserved("name_string_bench.gg");
+}
+
+/// Site 3/8 — `AttributeArg::StringLiteral`. RED pre-fix: did not re-parse.
+#[test]
+fn fmt_form_name_string_attr_string() {
+    assert_fmt_form_preserved("name_string_attr_string.gg");
+}
+
+/// Site 4/8 — `AttributeArg::KeyValue`, the STRING-valued producer.
+/// RED pre-fix: did not re-parse.
+#[test]
+fn fmt_form_name_string_attr_keyvalue() {
+    assert_fmt_form_preserved("name_string_attr_keyvalue.gg");
+}
+
+/// Site 5/8 — the inline `extern "<abi>"` tag. RED pre-fix: did not re-parse.
+#[test]
+fn fmt_form_name_string_extern_abi_inline() {
+    assert_fmt_form_preserved("name_string_extern_abi_inline.gg");
+}
+
+/// Site 6/8 — `FunctionBody::Extern`'s `= "<symbol>"`.
+/// RED pre-fix: did not re-parse.
+#[test]
+fn fmt_form_name_string_extern_body_symbol() {
+    assert_fmt_form_preserved("name_string_extern_body_symbol.gg");
+}
+
+/// Site 7/8 — the `extern "<abi>":` BLOCK header.
+/// RED pre-fix: did not re-parse.
+#[test]
+fn fmt_form_name_string_extern_block_abi() {
+    assert_fmt_form_preserved("name_string_extern_block_abi.gg");
+}
+
+/// Site 8/8 — `Stmt::Snapshot`'s name. RED pre-fix: did not re-parse.
+#[test]
+fn fmt_form_name_string_snapshot() {
+    assert_fmt_form_preserved("name_string_snapshot.gg");
+}
+
+/// The NINTH cell of the name-string family, and the only one the reparse
+/// gate is blind to: `AttributeArg::KeyValue`'s BARE-IDENTIFIER producer.
+/// RED pre-fix (measured): `unit = ms` → `unit = "ms"`, which re-parses
+/// perfectly — as the OTHER producer. Only a byte-exact assertion sees it.
+#[test]
+fn fmt_form_attr_keyvalue_bare_ident_stays_bare() {
+    assert_fmt_form_preserved("attr_keyvalue_bare_ident.gg");
+}
+
+// ── String-literal verbatim ─────────────────────────────────
+
+/// RED pre-fix: `"\x41"` → `"A"`, `"\u{42}"` → `"B"`.
+#[test]
+fn fmt_form_string_escape_forms() {
+    assert_fmt_form_preserved("string_escape_forms.gg");
+}
+
+/// RED pre-fix: `'A'` → `"A"`, and a single-quoted string containing a double
+/// quote came back with the quote escaped — the form changed twice over.
+#[test]
+fn fmt_form_string_quote_single() {
+    assert_fmt_form_preserved("string_quote_single.gg");
+}
+
+/// RED pre-fix: the whole block collapsed onto ONE `\n`-escaped line.
+#[test]
+fn fmt_form_string_multiline_layout() {
+    assert_fmt_form_preserved("string_multiline_layout.gg");
+}
+
+/// The column-tracking cell — a PIN, not a RED (see the fixture header).
+///
+/// A verbatim multi-line literal goes through `write_preformatted`, the writer
+/// that resets the column from the last embedded newline. Swapping it back to
+/// `write` was MEASURED to leave corpus output byte-identical: the emitter's
+/// column has exactly one consumer, `write_doc`'s fit decision, and every
+/// Doc-bearing construct is built from sub-formatter renderings before the
+/// outer column is read. The correct writer is used regardless; this cell is
+/// the standing guard for the day a consumer appears.
+#[test]
+fn fmt_form_string_multiline_trailing_comment() {
+    assert_fmt_form_preserved("string_multiline_trailing_comment.gg");
+}
+
+/// RED pre-fix: `f"\{"` → `f"{{"` — the brace-escape form canonicalized.
+#[test]
+fn fmt_form_string_fstring_brace_escape() {
+    assert_fmt_form_preserved("string_fstring_brace_escape.gg");
+}
+
+/// The KIND-PREFIX axis (r / b / c / f / bare). RED pre-fix on the escape
+/// content of the `c"…"` and bare cells; the prefix letters themselves pin
+/// against a verbatim path that recovers an off-by-one slice.
+#[test]
+fn fmt_form_string_kind_prefixes() {
+    assert_fmt_form_preserved("string_kind_prefixes.gg");
+}
+
+/// RED pre-fix: `"\u{85}"` was decoded and re-emitted as the RAW two-byte
+/// UTF-8 sequence — an invisible C1 control character planted in the source.
+#[test]
+fn fmt_form_string_c1_escape_author() {
+    assert_fmt_form_preserved("string_c1_escape_author.gg");
+}
+
+// ── Numbers and types ───────────────────────────────────────
+
+/// RED pre-fix: `1.50`→`1.5`, `0.10`→`0.1`, `100.00`→`100.0`, `1.2500`→`1.25`.
+#[test]
+fn fmt_form_float_literal_forms() {
+    assert_fmt_form_preserved("float_literal_forms.gg");
+}
+
+/// RED pre-fix: every byte literal came back as a bare decimal —
+/// `b'A'`→`65`, `b'\n'`→`10`, `b'\x41'`→`65`, `b'0'`→`48`, `b'\\'`→`92`.
+#[test]
+fn fmt_form_byte_literal_forms() {
+    assert_fmt_form_preserved("byte_literal_forms.gg");
+}
+
+/// RED pre-fix: `byte` → `uint8` in declarations, params, return types and
+/// slice element types alike.
+#[test]
+fn fmt_form_type_primitive_byte_alias() {
+    assert_fmt_form_preserved("type_primitive_byte_alias.gg");
+}
+
+// ── Synonyms (Q3 PRESERVE) ──────────────────────────────────
+
+/// RED pre-fix: prefix `await f()` → `f().await()`.
+#[test]
+fn fmt_form_synonym_await_forms() {
+    assert_fmt_form_preserved("synonym_await_forms.gg");
+}
+
+/// The binding-power cell. RED-verified by omitting the form-dependent arm
+/// from `effective_outer_bp`: `(await f()) + 1` then re-emits as
+/// `await f() + 1`, which re-parses as `Await(f() + 1)`.
+#[test]
+fn fmt_form_synonym_await_prefix_in_binop() {
+    assert_fmt_form_preserved("synonym_await_prefix_in_binop.gg");
+}
+
+/// The ownership-operand cell — a prefix await leads with its keyword, so the
+/// sigil predicate must not recurse into the operand and wrap it in parens.
+#[test]
+fn fmt_form_synonym_await_prefix_ownership_operand() {
+    assert_fmt_form_preserved("synonym_await_prefix_ownership_operand.gg");
+}
+
+/// The `_`-continuation boundary: `await_x` is an ordinary identifier.
+/// PIN — no breakable mechanism under the typed design (see fixture header).
+#[test]
+fn fmt_form_synonym_await_underscore_shapes() {
+    assert_fmt_form_preserved("synonym_await_underscore_shapes.gg");
+}
+
+/// RED pre-fix: `{1, 2, 3}` → `[1, 2, 3]`.
+#[test]
+fn fmt_form_synonym_set_braces() {
+    assert_fmt_form_preserved("synonym_set_braces.gg");
+}
+
+/// The SECOND emit path: a set literal with an interior comment routes through
+/// `format_bracketed_broken_with_comments`, which spells its own delimiters.
+/// RED pre-fix: `{`/`}` → `[`/`]` — and the output re-parses, so only a
+/// byte-exact assertion catches it.
+#[test]
+fn fmt_form_synonym_set_multiline_interior_comment() {
+    assert_fmt_form_preserved("synonym_set_multiline_interior_comment.gg");
+}
+
+/// RED pre-fix: bare `with r:` → `with r as r:`.
+#[test]
+fn fmt_form_synonym_with_as_and_bare() {
+    assert_fmt_form_preserved("synonym_with_as_and_bare.gg");
+}
+
+/// RED pre-fix: a bare module-level `int without_keyword = 2` gained an
+/// inserted `static` keyword.
+#[test]
+fn fmt_form_synonym_static_forms() {
+    assert_fmt_form_preserved("synonym_static_forms.gg");
+}
+
+/// The `_`-continuation boundary for `static`. RED pre-fix (this one IS
+/// breakable in the pre-fix direction): `static_thing a = …` gained a second,
+/// invented `static` keyword.
+#[test]
+fn fmt_form_synonym_static_underscore_shapes() {
+    assert_fmt_form_preserved("synonym_static_underscore_shapes.gg");
+}
+
+/// RED pre-fix: every explicit `public` was DELETED — on the item path and on
+/// the struct-field path alike.
+#[test]
+fn fmt_form_visibility_explicit_public() {
+    assert_fmt_form_preserved("visibility_explicit_public.gg");
+}
+
+/// The over-fire guard: implicit visibility is never made explicit.
+/// RED-verified the #15(d) way — make the emit sites unconditional on
+/// `Visibility::Public`, watch this go red, restore.
+#[test]
+fn fmt_form_visibility_implicit_default() {
+    assert_fmt_form_preserved("visibility_implicit_default.gg");
+}
+
+/// The THIRD emit path (`format_static_decl`). RED pre-fix: `private static
+/// int x = 0` came back as `static int x = 0` — the keyword deleted, silently,
+/// because on a private-by-default declaration the deletion preserved the
+/// VALUE and nothing downstream could see it.
+#[test]
+fn fmt_form_visibility_private_forms() {
+    assert_fmt_form_preserved("visibility_private_forms.gg");
+}
+
+/// The ONE synonym that is canonicalized rather than preserved: `else if` is
+/// rewritten to `elif`. The preserve family is the set of spellings that carry
+/// AUTHORIAL INFORMATION, and this pair carries none.
+///
+/// PIN (see fixture header): nothing in this track implements the rewrite, so
+/// there is no own-mechanism to break. The RED was demonstrated by temporarily
+/// flipping the emitter's `"elif "` literal to `"else if "` and watching this
+/// test fail.
+#[test]
+fn fmt_form_synonym_elif_canonicalized() {
+    assert_fmt_form_preserved("synonym_elif_canonicalized.gg");
+}
+
+/// CLASS GUARD — `gg fmt` output must RE-PARSE, for every `.gg` file in the
+/// tree.
+///
+/// The per-fixture cells above pin the shapes this round knew to look for.
+/// This one pins the property, corpus-wide: whatever the formatter emits for
+/// any program in `tests/fixtures`, `lib`, or `examples`, feeding it back to
+/// the parser produces zero errors — and a second pass is byte-identical, so
+/// nothing is lost on the way through.
+///
+/// It is the standing guard for the class that motivated the whole track: a
+/// name-string re-emitted with its escapes decoded produced a file that no
+/// longer parsed, and no existing gate noticed, because `fmt_idempotent`
+/// compares pass 1 against pass 2 — and a broken output is broken CONSISTENTLY.
+///
+/// Inputs that do not parse to begin with are skipped: the formatter correctly
+/// REFUSES those, so they pin a reject class, not this property. The skip is
+/// deliberately narrow — the baseline parse of the ORIGINAL must fail. A
+/// post-format parse failure is the RED, and never a skip.
+///
+/// The corpus SIZE is deliberately not asserted to a figure — parallel tracks
+/// add fixtures. Re-derive it with
+/// `find tests/fixtures lib examples -name '*.gg' | wc -l`.
+#[test]
+fn fmt_output_reparses_corpus_wide() {
+    fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                collect(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("gg") {
+                out.push(path);
+            }
+        }
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    for root in ["tests/fixtures", "lib", "examples"] {
+        collect(&manifest_dir.join(root), &mut files);
+    }
+    files.sort();
+    assert!(
+        files.len() > 100,
+        "corpus enumeration found only {} .gg files — the roots moved",
+        files.len()
+    );
+
+    let mut checked = 0usize;
+    let mut skipped_unparseable = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+
+    for path in &files {
+        let Ok(source) = std::fs::read_to_string(path) else { continue };
+        let rel = path.strip_prefix(&manifest_dir).unwrap_or(path).display();
+
+        // `format_source_result`, never `_infallible` — the latter PANICS on a
+        // parse error and would abort the sweep at the first reject fixture.
+        let formatted = match gorget::formatter::format_source_result(&source) {
+            Ok(f) => f,
+            Err(_) => {
+                skipped_unparseable += 1;
+                continue;
+            }
+        };
+
+        let mut reparse = gorget::parser::Parser::new(&formatted);
+        let _ = reparse.parse_module();
+        if !reparse.errors.is_empty() {
+            failures.push(format!(
+                "{rel}: formatted output does NOT re-parse ({} error(s)); first: {:?}",
+                reparse.errors.len(),
+                reparse.errors.first()
+            ));
+            continue;
+        }
+
+        // Output re-parses, so the infallible entry point cannot panic here.
+        let second = gorget::formatter::format_source_infallible(&formatted);
+        if second != formatted {
+            failures.push(format!("{rel}: formatter is NOT idempotent"));
+        }
+        checked += 1;
+    }
+
+    assert!(
+        failures.is_empty(),
+        "R41 T-FMT-B corpus reparse gate: {} of {} formatted files failed \
+         ({} skipped as unparseable at baseline).\n{}",
+        failures.len(),
+        checked,
+        skipped_unparseable,
+        failures.join("\n")
+    );
 }

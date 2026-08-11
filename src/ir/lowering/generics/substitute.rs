@@ -337,7 +337,7 @@ fn substitute_expr_types(expr: &mut Spanned<Expr>, subs: &[(String, Type)]) {
         Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
             substitute_expr_types(body, subs);
         }
-        Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+        Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
             for e in elems {
                 substitute_expr_types(e, subs);
             }
@@ -362,6 +362,7 @@ pub fn builtin_arith_error_enum() -> ast::EnumDef {
     ast::EnumDef {
         attributes: vec![],
         visibility: Visibility::Public,
+        explicit_visibility: false,
         name: Spanned::dummy("ArithError".to_string()),
         generic_params: None,
         variants: vec![
@@ -387,6 +388,7 @@ pub(super) fn inject_builtin_enums(enum_templates: &mut FxHashMap<String, ast::E
         enum_templates.insert("Option".to_string(), ast::EnumDef {
             attributes: vec![],
             visibility: Visibility::Public,
+            explicit_visibility: false,
             name: Spanned::dummy("Option".to_string()),
             generic_params: Some(Spanned::dummy(GenericParams {
                 params: vec![Spanned::dummy(GenericParam::Type { name: Spanned::dummy("T".to_string()), bounds: vec![] })],
@@ -419,6 +421,7 @@ pub(super) fn inject_builtin_enums(enum_templates: &mut FxHashMap<String, ast::E
         enum_templates.insert("Result".to_string(), ast::EnumDef {
             attributes: vec![],
             visibility: Visibility::Public,
+            explicit_visibility: false,
             name: Spanned::dummy("Result".to_string()),
             generic_params: Some(Spanned::dummy(GenericParams {
                 params: vec![

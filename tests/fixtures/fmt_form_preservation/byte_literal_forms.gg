@@ -1,0 +1,16 @@
+# ==== T-FMT-B — BYTE-literal VERBATIM (five cells: the escape axis inside
+# `b'…'`).
+# SCOPE CLAIM: byte-character literals only. Cells: plain ASCII (b'A') ·
+# named escape (b'\n') · hex escape (b'\x41') · a DIGIT character (b'0',
+# whose decoded value 48 is visually indistinguishable from a decimal literal)
+# · escaped backslash (b'\\').
+# Pre-fix RED (TODO entry, 1,046 hunks measured in the self-host lexers —
+# the elegance showcase): every one came back as a bare DECIMAL number, so
+# `b'A'` read as `65` and the lexer tables became unreadable.
+void main():
+    uint8 plain = b'A'
+    uint8 named = b'\n'
+    uint8 hex = b'\x41'
+    uint8 digit = b'0'
+    uint8 backslash = b'\\'
+    print(plain + named + hex + digit + backslash)

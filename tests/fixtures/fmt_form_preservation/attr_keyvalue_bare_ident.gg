@@ -1,0 +1,16 @@
+# ==== T-FMT-B — the NINTH name-string cell: `AttributeArg::KeyValue`'s
+# BARE-IDENTIFIER producer (`src/parser/mod.rs`, the `expect_identifier` arm of
+# the `key = value` branch).
+# SCOPE CLAIM: this cell pins that a bare-identifier attribute VALUE stays
+# BARE. Pre-fix RED (measured): the emitter QUOTED it unconditionally
+# (`unit = ms` -> `unit = "ms"`), inventing a string where the author wrote an
+# identifier — a form change the reparse gate cannot see because the quoted
+# form re-parses fine as the OTHER producer.
+# `@timeout` is used rather than `@inline` because `@inline` is semantically
+# rejected; `@timeout(unit = ms)` parses AND checks clean.
+@timeout(unit = ms)
+void decorated():
+    print(1)
+
+void main():
+    decorated()

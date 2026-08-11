@@ -1,0 +1,7 @@
+# ==== T-FMT-B — name-string site 7/8: the `extern "<abi>":` BLOCK header
+# (`ExternBlock.abi`).
+# SCOPE CLAIM: the extern-BLOCK ABI string ONLY (site 5 covers the inline
+# form). Six escape costumes: \x41 · \" · \t · \n · \\ · \u{1F600}.
+# PARSE-ONLY cell (see site 5's header).
+extern "esc \x41 quote \" tab \t nl \n back \\ emoji \u{1F600}":
+    int weird(int x)

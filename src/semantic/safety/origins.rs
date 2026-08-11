@@ -240,7 +240,7 @@ impl<'a> BorrowChecker<'a> {
             }
 
             // Collection literals: propagate element origins
-            Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+            Expr::ArrayLiteral(elems, _) | Expr::TupleLiteral(elems) => {
                 let origins: Vec<_> = elems.iter()
                     .map(|e| self.compute_expr_origin(e))
                     .collect();
@@ -297,7 +297,7 @@ impl<'a> BorrowChecker<'a> {
             Expr::MutableBorrow { expr: inner } => self.compute_expr_origin(inner),
 
             // Await/spawn propagate from inner expression
-            Expr::Await { expr: inner } | Expr::Spawn { expr: inner, .. } | Expr::SpawnBlocking { expr: inner, .. } => {
+            Expr::Await { expr: inner, .. } | Expr::Spawn { expr: inner, .. } | Expr::SpawnBlocking { expr: inner, .. } => {
                 self.compute_expr_origin(inner)
             }
 

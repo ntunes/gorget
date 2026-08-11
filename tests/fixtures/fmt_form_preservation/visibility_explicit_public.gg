@@ -1,0 +1,33 @@
+# ==== T-FMT-B — SYNONYM: `public` EXPLICITNESS, kept where written.
+# SCOPE CLAIM: the emit path `format_visibility` (items) plus the struct-FIELD
+# inline write. Both `public Foo` and a bare `Foo` parse to
+# `Visibility::Public`, so the keyword's presence is authorial information the
+# AST must now carry (`explicit_visibility`) — the VALUE is untouched.
+# Pre-fix RED (measured): `format_visibility` emitted a keyword only for
+# `Private`, so every explicit `public` the author wrote was DELETED. On a
+# `lib/xtd`-scale codebase this silently erases the API-surface marking.
+# Cells here: fn · struct · field · enum · trait · type alias · newtype ·
+# const. (`public static` is in `visibility_private_forms.gg`, which owns the
+# third emit path.)
+public struct Point:
+    public float x
+    private float internal_id
+
+public enum Color:
+    Red()
+    Green()
+
+public trait Show:
+    String show(self)
+
+public type Alias = int
+
+public newtype Meters(int)
+
+public const int LIMIT = 10
+
+public int add(int a, int b):
+    return a + b
+
+void main():
+    print(add(1, 2) + LIMIT)

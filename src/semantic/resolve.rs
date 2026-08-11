@@ -1711,7 +1711,7 @@ fn resolve_expr(
         | Expr::Propagate { expr: inner }
         | Expr::MutableBorrow { expr: inner }
         | Expr::Deref { expr: inner }
-        | Expr::Await { expr: inner }
+        | Expr::Await { expr: inner, .. }
         | Expr::Spawn { expr: inner, .. }
         | Expr::SpawnBlocking { expr: inner, .. } => {
             resolve_expr(inner, scopes, errors, resolution_map);
@@ -1852,7 +1852,7 @@ fn resolve_expr(
             scopes.pop_scope();
         }
 
-        Expr::ArrayLiteral(elements) | Expr::TupleLiteral(elements) => {
+        Expr::ArrayLiteral(elements, _) | Expr::TupleLiteral(elements) => {
             for elem in elements {
                 resolve_expr(elem, scopes, errors, resolution_map);
             }

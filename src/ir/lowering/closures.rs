@@ -736,7 +736,7 @@ impl FreeVarCollector<'_> {
                     self.visit_expr(&arg.node);
                 }
             }
-            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
                 for elem in elems {
                     self.visit_expr(&elem.node);
                 }

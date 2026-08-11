@@ -1,0 +1,5 @@
+# ==== T-FMT-B — name-string site 8/8: `Stmt::Snapshot` — the snapshot NAME.
+# SCOPE CLAIM: the `snapshot "…" <expr>` name string ONLY. Six escape
+# costumes: \x41 · \" · \t · \n · \\ · \u{1F600}.
+test "snapshot name form":
+    snapshot "esc \x41 quote \" tab \t nl \n back \\ emoji \u{1F600}" 1 + 1

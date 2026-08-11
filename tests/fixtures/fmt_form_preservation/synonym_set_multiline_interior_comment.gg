@@ -1,0 +1,17 @@
+# ==== T-FMT-B — SYNONYM: the SET literal's SECOND emit site (brief-review
+# pass 6, blocking-grade).
+# SCOPE CLAIM: `Expr::ArrayLiteral` has TWO bracket-emitting paths, and the
+# spelling dispatch must patch both. The flat `doc::surround` path is the one
+# everybody sees; when `has_interior_comments` fires, the arm instead routes
+# through `format_bracketed_broken_with_comments("[", "]", …)`, which spells
+# its own delimiters. A fix applied only to the flat path leaves this shape
+# silently rewritten `{}` -> `[]` — and the corpus reparse gate is BLIND to it,
+# because the rewritten output re-parses perfectly.
+void main():
+    Set[int] s = {
+        # a leading interior comment forces the broken-with-comments path
+        1,
+        2,  # trailing
+        3,
+    }
+    print(s.len())

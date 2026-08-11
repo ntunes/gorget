@@ -169,6 +169,8 @@ impl ThrowsSpec {
 pub struct FunctionDef {
     pub attributes: Vec<Spanned<Attribute>>,
     pub visibility: Visibility,
+    /// See `ConstDecl::explicit_visibility`.
+    pub explicit_visibility: bool,
     pub qualifiers: FunctionQualifiers,
     pub return_type: Spanned<Type>,
     pub name: Spanned<String>,
@@ -182,7 +184,8 @@ pub struct FunctionDef {
     pub param_abis: Vec<crate::ir::abi::AbiKind>,
     /// ABI language tag for inline extern declarations: `extern "C" int foo() = "symbol"`.
     /// Determines string param marshalling (Some("C") → String params become CStr).
-    pub extern_abi: Option<String>,
+    /// `Spanned` so the formatter can recover the author's escape spelling.
+    pub extern_abi: Option<Spanned<String>>,
     /// `extern borrowed T f(...)`: the FFI returns a non-owned pointer
     /// (e.g. SDL_GetError's internal buffer). Callers must clone at the
     /// ownership boundary; the IR layer is expected to insert that clone.
@@ -210,8 +213,9 @@ pub enum FunctionBody {
     Block(Block),
     Expression(Box<Spanned<Expr>>),
     Declaration,
-    /// Extern binding: body is a C symbol name, e.g. `extern int abs(int x) = "abs"`
-    Extern(String),
+    /// Extern binding: body is a C symbol name, e.g. `extern int abs(int x) = "abs"`.
+    /// `Spanned` so the formatter can recover the author's escape spelling.
+    Extern(Spanned<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -261,6 +265,8 @@ pub enum Visibility {
 pub struct StructDef {
     pub attributes: Vec<Spanned<Attribute>>,
     pub visibility: Visibility,
+    /// See `ConstDecl::explicit_visibility`.
+    pub explicit_visibility: bool,
     pub name: Spanned<String>,
     pub generic_params: Option<Spanned<GenericParams>>,
     pub fields: Vec<Spanned<FieldDef>>,
@@ -271,6 +277,8 @@ pub struct StructDef {
 #[derive(Debug, Clone)]
 pub struct FieldDef {
     pub visibility: Visibility,
+    /// See `ConstDecl::explicit_visibility`.
+    pub explicit_visibility: bool,
     pub type_: Spanned<Type>,
     pub name: Spanned<String>,
 }
@@ -283,6 +291,8 @@ pub struct FieldDef {
 pub struct EnumDef {
     pub attributes: Vec<Spanned<Attribute>>,
     pub visibility: Visibility,
+    /// See `ConstDecl::explicit_visibility`.
+    pub explicit_visibility: bool,
     pub name: Spanned<String>,
     pub generic_params: Option<Spanned<GenericParams>>,
     pub variants: Vec<Spanned<Variant>>,
@@ -310,6 +320,8 @@ pub enum VariantFields {
 pub struct TraitDef {
     pub attributes: Vec<Spanned<Attribute>>,
     pub visibility: Visibility,
+    /// See `ConstDecl::explicit_visibility`.
+    pub explicit_visibility: bool,
     pub name: Spanned<String>,
     pub generic_params: Option<Spanned<GenericParams>>,
     pub extends: Vec<Spanned<TraitBound>>,
@@ -422,6 +434,8 @@ pub struct TypeAlias {
     pub generic_params: Option<Spanned<GenericParams>>,
     pub type_: Spanned<Type>,
     pub visibility: Visibility,
+    /// See `ConstDecl::explicit_visibility`.
+    pub explicit_visibility: bool,
     pub span: Span,
 }
 
@@ -430,6 +444,8 @@ pub struct NewtypeDef {
     pub name: Spanned<String>,
     pub inner_type: Spanned<Type>,
     pub visibility: Visibility,
+    /// See `ConstDecl::explicit_visibility`.
+    pub explicit_visibility: bool,
     pub span: Span,
 }
 
@@ -544,6 +560,21 @@ pub enum PrimitiveType {
 // ══════════════════════════════════════════════════════════════
 // Expressions
 // ══════════════════════════════════════════════════════════════
+
+/// Which delimiter pair the author wrote around an `Expr::ArrayLiteral`.
+///
+/// Set literals (`{1, 2}`) and array literals (`[1, 2]`) share one AST node —
+/// semantic analysis distinguishes them by context — so without this field the
+/// formatter had no way to tell them apart and rewrote every set literal into
+/// array syntax. Compiler passes that SYNTHESISE a literal write `Brackets`;
+/// only the parser has an author to speak for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArrayLiteralSpelling {
+    /// `[a, b]`
+    Brackets,
+    /// `{a, b}` — a set literal.
+    Braces,
+}
 
 #[derive(Debug, Clone)]
 pub enum Expr {
@@ -744,7 +775,11 @@ pub enum Expr {
     },
 
     // ── Collection literals ──
-    ArrayLiteral(Vec<Spanned<Expr>>),
+    /// `[a, b]` — and, with the flag set, the SET spelling `{a, b}`. Both
+    /// surface forms build this one node (semantic analysis tells set from
+    /// array by context), so the brace-vs-bracket choice is authorial
+    /// information the parser records here rather than a distinct node kind.
+    ArrayLiteral(Vec<Spanned<Expr>>, ArrayLiteralSpelling),
     TupleLiteral(Vec<Spanned<Expr>>),
     DictLiteral(Vec<(Spanned<Expr>, Spanned<Expr>)>),
 
@@ -764,6 +799,12 @@ pub enum Expr {
     // ── Await ──
     Await {
         expr: Box<Spanned<Expr>>,
+        /// True for the PREFIX spelling `await e`, false for the POSTFIX
+        /// spelling `e.await()`. Both parse to this node, so the choice is
+        /// authorial information — and it is load-bearing for the formatter's
+        /// paren predicates, because the two spellings have DIFFERENT binding
+        /// powers (prefix operand at bp 2, postfix receiver at bp 35).
+        prefix_form: bool,
     },
 
     // ── Spawn ──
@@ -1218,6 +1259,11 @@ pub enum Stmt {
 pub struct WithBinding {
     pub expr: Spanned<Expr>,
     pub name: Spanned<String>,
+    /// True when the author wrote `<expr> as <name>`. The bare `with <name>:`
+    /// form desugars to expr==name, which USED to be inferred from
+    /// `name.span == expr.span` — a sentinel encoding. The parser knows which
+    /// spelling it consumed; it records the fact instead (Layering rules 2/4).
+    pub explicit_as: bool,
     pub span: Span,
 }
 
@@ -1237,16 +1283,50 @@ pub struct Attribute {
     pub args: Vec<AttributeArg>,
 }
 
+/// The value half of an `@attr(key = value)` argument.
+///
+/// The surface grammar has TWO producers here — `key = "quoted"` and
+/// `key = bare_ident` — and they are NOT interchangeable spellings of one
+/// thing: one denotes a string, the other an identifier. Collapsing them into
+/// a single `String` made the formatter guess (it guessed "string", and quoted
+/// every bare identifier it re-emitted). The variant is the typed fact,
+/// written once by the parser and read by the emitter — never re-derived by
+/// sniffing the first byte at the span.
+#[derive(Debug, Clone)]
+pub enum AttributeArgValue {
+    /// `key = bare_ident`
+    Ident(Spanned<String>),
+    /// `key = "quoted"` — the span covers the literal INCLUDING its quotes.
+    Str(Spanned<String>),
+}
+
+impl AttributeArgValue {
+    /// The decoded text, whichever spelling produced it.
+    pub fn text(&self) -> &str {
+        match self {
+            AttributeArgValue::Ident(s) | AttributeArgValue::Str(s) => &s.node,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum AttributeArg {
     Identifier(String),
-    StringLiteral(String),
-    KeyValue(String, String),
+    /// A bare string-literal argument. `Spanned` so the formatter can recover
+    /// the author's ESCAPE SPELLING from the source instead of re-encoding the
+    /// decoded text (see `Formatter::emit_quoted_string`).
+    StringLiteral(Spanned<String>),
+    KeyValue(String, AttributeArgValue),
 }
 
 #[derive(Debug, Clone)]
 pub struct ConstDecl {
     pub visibility: Visibility,
+    /// True when the author WROTE `public` / `private`. The visibility VALUE
+    /// is the same either way (both `const int X` and `public const int X`
+    /// resolve to `Public`), so the keyword's presence is authorial
+    /// information the formatter would otherwise invent or delete.
+    pub explicit_visibility: bool,
     pub type_: Spanned<Type>,
     pub name: Spanned<String>,
     pub value: Spanned<Expr>,
@@ -1256,6 +1336,12 @@ pub struct ConstDecl {
 #[derive(Debug, Clone)]
 pub struct StaticDecl {
     pub visibility: Visibility,
+    /// See `ConstDecl::explicit_visibility`.
+    pub explicit_visibility: bool,
+    /// True when the author wrote the `static` keyword. A bare
+    /// `Type name = expr` at file scope is implicitly static and builds the
+    /// same node, so the keyword's presence is authorial information.
+    pub explicit_static_kw: bool,
     pub type_: Spanned<Type>,
     pub name: Spanned<String>,
     pub value: Spanned<Expr>,

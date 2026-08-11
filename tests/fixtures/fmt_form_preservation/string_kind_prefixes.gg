@@ -1,0 +1,14 @@
+# ==== T-FMT-B — string-literal VERBATIM: the KIND-PREFIX axis.
+# SCOPE CLAIM: one cell per `StringKind` that carries a prefix letter —
+# r (raw) · b (byte) · c (C string) · f (format) — plus the bare Normal form.
+# These are already emitted with the right prefix today; the cell exists so a
+# verbatim path that recovers the WRONG slice (off-by-one on the prefix letter,
+# the classic span-arithmetic bug) fingers itself instead of silently changing
+# a literal's KIND.
+void main():
+    String raw = r"no \n escape here"
+    String cstr = c"c string \x41"
+    int x = 2
+    String fmt = f"x is {x}"
+    String normal = "plain \x41"
+    print(raw.len() + cstr.len() + fmt.len() + normal.len())

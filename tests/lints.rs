@@ -11566,7 +11566,15 @@ fn fmt_precedence_check_arm_count() {
     ///     Call callee (1), MethodCall receiver non-chain (1),
     ///     FieldAccess (1), TupleFieldAccess (1), Index object (1),
     ///     OptionalChain object (1), Propagate expr (1), Await (1).
-    const EXPECTED: usize = 26;
+    ///
+    /// R41 T-FMT-B bump 26 → 27: `Expr::Await` now renders in the form the
+    /// author wrote, and the two forms sit at DIFFERENT precedence levels —
+    /// prefix `await e` takes its operand at bp 2, postfix `e.await()` is a
+    /// bp-35 postfix receiver. The arm therefore holds TWO helper calls, one
+    /// per form (`format_prefix_operand` 8 sites, `format_postfix_receiver`
+    /// still 8), and both are load-bearing: emitting `(await f()) + 1`
+    /// without the prefix helper's parens re-parses as `Await(f() + 1)`.
+    const EXPECTED: usize = 27;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -12881,5 +12889,137 @@ fn fmt_multiline_group_paren_wrap_class() {
          leading-operator continuation the parser rejects.\n\n\
          If the arm count SHRANK (a call was removed / centralized), \
          lower EXPECTED_CALLS with the rationale.",
+    );
+}
+
+/// R41 T-FMT-B CLASS GUARD — every quoted string the formatter emits goes
+/// through the ONE producer.
+///
+/// The defect this retires: eight separate arms spelled their own quotes
+/// (`write("\"")` … `write("\"")`) around a name string the AST stores
+/// DECODED. None of them re-escaped, so `test "a \" b":` came back with a bare
+/// quote and the formatted file no longer parsed — and the eight sites drifted
+/// in exactly the way Core #4 describes, because each was written
+/// independently and none of them knew about the others.
+///
+/// The guard has two halves, and the second is the one that matters:
+///
+///   (a) the producer's call-site count is pinned, so ADDING a site is a
+///       deliberate bump rather than a silent divergence; and
+///   (b) NO OTHER function in the formatter may write a bare quote character
+///       at all. That is what makes the guard able to catch its own class: a
+///       ninth site that hand-rolls quotes fails here even though it never
+///       touches the producer.
+///
+/// The quote-write census covers both costumes: a literal `write("\"")` and a
+/// `format!` whose template contains an escaped quote. Zero of the latter
+/// exist today outside the allowed functions; the pattern is checked anyway so
+/// that "spell it with `format!` instead" is not an escape hatch.
+///
+/// There is deliberately NO allowlist of name-string field names here: an
+/// allowlist would have to be kept in sync with the AST, which is the parallel
+/// list the layering rules forbid.
+#[test]
+fn formatter_verbatim_emit_arm_count() {
+    /// Call sites of `self.emit_quoted_string(` — the eight name-string
+    /// emitters, censused 2026-08-11 at the T-FMT-B landing:
+    ///   `format_test` (1), `format_bench` (1),
+    ///   `AttributeArg::StringLiteral` (1), `AttributeArg::KeyValue`'s
+    ///   string-valued producer (1), the inline `extern "<abi>"` tag (1),
+    ///   `FunctionBody::Extern`'s `= "<symbol>"` (1), the `extern "<abi>":`
+    ///   block header (1), `Stmt::Snapshot`'s name (1).
+    ///
+    /// A NEW name-string field in the AST adds a site and bumps this; a site
+    /// that DISAPPEARS means an emitter stopped emitting a name the user
+    /// wrote, which is the silent-drop class and wants its own look.
+    const EXPECTED_PRODUCER_CALLS: usize = 8;
+
+    /// Functions permitted to write a quote character directly. These ARE the
+    /// producers — everything downstream of them must call one of these
+    /// instead of spelling quotes itself.
+    ///
+    ///   `quoted_string_text`      — builds the name-string fallback.
+    ///   `canonical_string_escape` — escapes a `"` INSIDE a string body.
+    ///   `format_string_lit`       — the literal path's own delimiters.
+    const ALLOWED_QUOTE_WRITERS: &[&str] = &[
+        "fn quoted_string_text(",
+        "fn canonical_string_escape(",
+        "fn format_string_lit(",
+    ];
+
+    let content = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+
+    // ── (a) the producer call-site count ──
+    let mut producer_calls = 0usize;
+    for line in content.lines() {
+        if line.trim_start().starts_with("//") || line.trim_start().starts_with("///") {
+            continue;
+        }
+        producer_calls += line.matches(".emit_quoted_string(").count();
+    }
+    assert_eq!(
+        producer_calls, EXPECTED_PRODUCER_CALLS,
+        "R41 T-FMT-B: `emit_quoted_string` call-site count in \
+         `src/formatter/mod.rs` changed: {producer_calls} vs expected \
+         {EXPECTED_PRODUCER_CALLS}.\n\n\
+         A new quoted NAME-STRING emit site must route through \
+         `emit_quoted_string` (which recovers the author's escape spelling \
+         from the span and re-escapes when it cannot) and bump EXPECTED here. \
+         A site that vanished means a name the user wrote is no longer being \
+         emitted — check for a silent drop before lowering the count."
+    );
+
+    // ── (b) nobody else writes a quote ──
+    //
+    // Track the enclosing function by its `fn <name>(` header, and flag any
+    // quote-write that occurs outside an allowed one.
+    let mut current_fn = String::new();
+    let mut offenders: Vec<String> = Vec::new();
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("fn ") {
+            current_fn = format!("fn {}", rest);
+        } else if let Some(rest) = trimmed.strip_prefix("pub fn ") {
+            current_fn = format!("fn {}", rest);
+        }
+        if trimmed.starts_with("//") {
+            continue;
+        }
+        let allowed = ALLOWED_QUOTE_WRITERS
+            .iter()
+            .any(|a| current_fn.starts_with(a));
+        if allowed {
+            continue;
+        }
+        // Costume 1: a write of a bare quote — `write("\"")`,
+        // `write("\" ")`, `write(" \"")`, `write("\":")`, …
+        let writes_quote = line.contains(".write(\"")
+            && line
+                .split(".write(\"")
+                .skip(1)
+                .any(|tail| tail.split("\")").next().is_some_and(|s| s.contains('\\')) && tail.contains("\\\""));
+        // Costume 2: a `format!` template carrying an escaped quote.
+        let formats_quote = line.contains("format!(\"") && line.contains("\\\"");
+        if writes_quote || formats_quote {
+            offenders.push(format!(
+                "  src/formatter/mod.rs:{} (in {current_fn}): {}",
+                i + 1,
+                line.trim()
+            ));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "R41 T-FMT-B: {} site(s) in `src/formatter/mod.rs` spell a quote \
+         character outside the string producers.\n\n\
+         A quoted string is emitted by ONE of: `emit_quoted_string` (name \
+         strings the AST stores decoded) or `format_string_lit` (an \
+         `Expr::StringLiteral`). Spelling quotes by hand re-emits the DECODED \
+         text with no re-escaping, which is how eight sites came to produce \
+         output that no longer parsed.\n\n\
+         Offending lines:\n{}",
+        offenders.len(),
+        offenders.join("\n")
     );
 }

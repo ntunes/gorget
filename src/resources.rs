@@ -165,7 +165,7 @@ fn as_option_string(e: &Expr) -> WalkResult<Option<String>> {
 
 fn as_array<'a>(e: &'a Expr) -> WalkResult<&'a [Spanned<Expr>]> {
     match e {
-        Expr::ArrayLiteral(v) => Ok(v.as_slice()),
+        Expr::ArrayLiteral(v, _) => Ok(v.as_slice()),
         other => Err(format!("expected [...] literal, got {}", expr_kind(other))),
     }
 }
@@ -211,7 +211,7 @@ fn expr_kind(e: &Expr) -> &'static str {
         Expr::NoneLiteral => "None",
         Expr::Identifier(_) => "identifier",
         Expr::Call { .. } => "call",
-        Expr::ArrayLiteral(_) => "array literal",
+        Expr::ArrayLiteral(_, _) => "array literal",
         Expr::MethodCall { .. } => "method call",
         Expr::FieldAccess { .. } => "field access",
         Expr::BinaryOp { .. } => "binary op",

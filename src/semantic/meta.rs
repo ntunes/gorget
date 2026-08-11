@@ -2363,7 +2363,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         Expr::Move { expr: inner }
         | Expr::Propagate { expr: inner }
         | Expr::MutableBorrow { expr: inner } | Expr::Deref { expr: inner }
-        | Expr::Await { expr: inner } | Expr::Spawn { expr: inner, .. }
+        | Expr::Await { expr: inner, .. } | Expr::Spawn { expr: inner, .. }
         | Expr::SpawnBlocking { expr: inner, .. } => {
             substitute_expr(inner, env, type_env);
         }
@@ -2414,7 +2414,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             substitute_expr(iterable, env, type_env);
             if let Some(cond) = condition { substitute_expr(cond, env, type_env); }
         }
-        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+        Expr::ArrayLiteral(elems, _) | Expr::TupleLiteral(elems) => {
             for elem in elems { substitute_expr(elem, env, type_env); }
         }
         Expr::DictLiteral(pairs) => {
@@ -3974,6 +3974,7 @@ mod tests {
                     Item::Function(FunctionDef {
                         attributes: vec![],
                         visibility: Visibility::Private,
+                        explicit_visibility: false,
                         qualifiers: FunctionQualifiers::default(),
                         return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                         name: Spanned::new("main".to_string(), dummy_span()),
@@ -4069,6 +4070,7 @@ mod tests {
                     Item::Function(FunctionDef {
                         attributes: vec![],
                         visibility: Visibility::Private,
+                        explicit_visibility: false,
                         qualifiers: FunctionQualifiers::default(),
                         return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                         name: Spanned::new("main".to_string(), dummy_span()),
@@ -4230,6 +4232,7 @@ mod tests {
                     Item::Function(FunctionDef {
                         attributes: vec![],
                         visibility: Visibility::Private,
+                        explicit_visibility: false,
                         qualifiers: FunctionQualifiers::default(),
                         return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                         name: Spanned::new("main".to_string(), dummy_span()),
@@ -4321,6 +4324,7 @@ mod tests {
                             Item::Function(FunctionDef {
                                 attributes: vec![],
                                 visibility: Visibility::Private,
+                                explicit_visibility: false,
                                 qualifiers: FunctionQualifiers::default(),
                                 return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                                 name: Spanned::new("kept".to_string(), dummy_span()),
@@ -4341,6 +4345,7 @@ mod tests {
                             Item::Function(FunctionDef {
                                 attributes: vec![],
                                 visibility: Visibility::Private,
+                                explicit_visibility: false,
                                 qualifiers: FunctionQualifiers::default(),
                                 return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                                 name: Spanned::new("dropped".to_string(), dummy_span()),
@@ -4404,6 +4409,7 @@ mod tests {
                             Item::Function(FunctionDef {
                                 attributes: vec![],
                                 visibility: Visibility::Private,
+                                explicit_visibility: false,
                                 qualifiers: FunctionQualifiers::default(),
                                 return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                                 name: Spanned::new("dropped".to_string(), dummy_span()),
@@ -4424,6 +4430,7 @@ mod tests {
                             Item::Function(FunctionDef {
                                 attributes: vec![],
                                 visibility: Visibility::Private,
+                                explicit_visibility: false,
                                 qualifiers: FunctionQualifiers::default(),
                                 return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                                 name: Spanned::new("kept".to_string(), dummy_span()),
@@ -4485,6 +4492,7 @@ mod tests {
                             Item::Function(FunctionDef {
                                 attributes: vec![],
                                 visibility: Visibility::Private,
+                                explicit_visibility: false,
                                 qualifiers: FunctionQualifiers::default(),
                                 return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                                 name: Spanned::new("dropped".to_string(), dummy_span()),
@@ -4560,6 +4568,7 @@ mod tests {
                     Item::Function(FunctionDef {
                         attributes: vec![],
                         visibility: Visibility::Private,
+                        explicit_visibility: false,
                         qualifiers: FunctionQualifiers::default(),
                         return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                         name: Spanned::new("main".to_string(), dummy_span()),
@@ -4690,6 +4699,7 @@ mod tests {
                     Item::Function(FunctionDef {
                         attributes: vec![],
                         visibility: Visibility::Private,
+                        explicit_visibility: false,
                         qualifiers: FunctionQualifiers::default(),
                         return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                         name: Spanned::new("main".to_string(), dummy_span()),
@@ -4874,6 +4884,7 @@ mod tests {
                     Item::Function(FunctionDef {
                         attributes: vec![],
                         visibility: Visibility::Private,
+                        explicit_visibility: false,
                         qualifiers: FunctionQualifiers::default(),
                         return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                         name: Spanned::new("main".to_string(), dummy_span()),

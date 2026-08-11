@@ -384,7 +384,7 @@ fn expr_mentions_iter(expr: &Spanned<crate::parser::ast::Expr>) -> bool {
         Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => {
             expr_mentions_iter(body)
         }
-        Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+        Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
             elems.iter().any(|e| expr_mentions_iter(e))
         }
         Expr::Block(block) => block_mentions_iter(block),
@@ -1208,7 +1208,7 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
         | Expr::Propagate { expr: inner }
         | Expr::MutableBorrow { expr: inner }
         | Expr::Deref { expr: inner }
-        | Expr::Await { expr: inner }
+        | Expr::Await { expr: inner, .. }
         | Expr::Spawn { expr: inner, .. }
         | Expr::SpawnBlocking { expr: inner, .. } => qualify_expr(inner, vm),
         Expr::DefaultOp { lhs, rhs } => {
@@ -1223,7 +1223,7 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
         Expr::As { expr: inner, .. } => qualify_expr(inner, vm),
         Expr::Closure { body, .. } => qualify_expr(body, vm),
         Expr::ImplicitClosure { body } => qualify_expr(body, vm),
-        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+        Expr::ArrayLiteral(elems, _) | Expr::TupleLiteral(elems) => {
             for e in elems { qualify_expr(e, vm); }
         }
         Expr::DictLiteral(pairs) => {

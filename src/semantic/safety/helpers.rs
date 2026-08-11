@@ -170,7 +170,7 @@ impl<'a> BorrowChecker<'a> {
                     .or_else(|| self.find_shared_ref_in_expr_spanned(index))
             }
             Expr::TupleLiteral(elems)
-            | Expr::ArrayLiteral(elems) => {
+            | Expr::ArrayLiteral(elems, _) => {
                 elems.iter().find_map(|e| self.find_shared_ref_in_expr_spanned(e))
             }
             Expr::DictLiteral(pairs) => {
@@ -205,7 +205,7 @@ impl<'a> BorrowChecker<'a> {
             | Expr::Move { expr: inner }
             | Expr::Propagate { expr: inner }
             | Expr::Deref { expr: inner }
-            | Expr::Await { expr: inner }
+            | Expr::Await { expr: inner, .. }
             | Expr::Spawn { expr: inner, .. }
             | Expr::SpawnBlocking { expr: inner, .. }
             | Expr::Is { expr: inner, .. }
@@ -268,7 +268,7 @@ impl<'a> BorrowChecker<'a> {
             | Expr::Deref { expr: inner }
             | Expr::Is { expr: inner, .. } => self.find_with_tracked_in_condition(inner),
             Expr::TupleLiteral(elems)
-            | Expr::ArrayLiteral(elems) => {
+            | Expr::ArrayLiteral(elems, _) => {
                 elems.iter().flat_map(|e| self.find_with_tracked_in_condition(e)).collect()
             }
             _ => vec![],
@@ -361,7 +361,7 @@ impl<'a> BorrowChecker<'a> {
             Expr::Index { object, index } => {
                 self.expr_contains_yield_point(object) || self.expr_contains_yield_point(index)
             }
-            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems) => {
+            Expr::TupleLiteral(elems) | Expr::ArrayLiteral(elems, _) => {
                 elems.iter().any(|e| self.expr_contains_yield_point(e))
             }
             Expr::If { condition, then_branch, else_branch, elif_branches, .. } => {
@@ -416,7 +416,7 @@ impl<'a> BorrowChecker<'a> {
             | Expr::Deref { expr: inner }
             | Expr::Is { expr: inner, .. } => self.find_stale_in_condition(inner),
             Expr::TupleLiteral(elems)
-            | Expr::ArrayLiteral(elems) => {
+            | Expr::ArrayLiteral(elems, _) => {
                 elems.iter().find_map(|e| self.find_stale_in_condition(e))
             }
             _ => None,
@@ -1875,7 +1875,7 @@ impl<'a> BorrowChecker<'a> {
                 }
                 false
             }
-            Expr::ArrayLiteral(elems) => {
+            Expr::ArrayLiteral(elems, _) => {
                 for elem in elems {
                     if self.check_expr_for_escaping_closures(elem) {
                         return true;
@@ -1915,7 +1915,7 @@ impl<'a> BorrowChecker<'a> {
             Expr::StructLiteral { args, .. } => {
                 args.iter().any(|arg| self.expr_contains_escaping_closure(arg))
             }
-            Expr::ArrayLiteral(elems) => {
+            Expr::ArrayLiteral(elems, _) => {
                 elems.iter().any(|elem| self.expr_contains_escaping_closure(elem))
             }
             _ => false,

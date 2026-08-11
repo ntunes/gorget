@@ -297,12 +297,18 @@ impl Parser {
 
     /// Parse an optional `private` or `public` visibility modifier.
     /// Defaults to `Public` if neither is present.
-    pub fn parse_visibility_modifier(&mut self) -> Visibility {
+    ///
+    /// Returns `(visibility, explicit)` — `explicit` records whether a keyword
+    /// was actually WRITTEN. The value alone cannot answer that (`public Foo`
+    /// and a bare `Foo` both yield `Public`), and the formatter needs the
+    /// distinction so it neither deletes an author's `public` nor invents one.
+    pub fn parse_visibility_modifier(&mut self) -> (Visibility, bool) {
         if self.match_keyword(Keyword::Private) {
-            Visibility::Private
+            (Visibility::Private, true)
+        } else if self.match_keyword(Keyword::Public) {
+            (Visibility::Public, true)
         } else {
-            let _ = self.match_keyword(Keyword::Public);
-            Visibility::Public
+            (Visibility::Public, false)
         }
     }
 
@@ -608,17 +614,20 @@ impl Parser {
         // Determine item kind
         match self.peek() {
             Token::Keyword(Keyword::Struct) => {
-                let def = self.parse_struct_def(attributes, visibility, doc_comment)?;
+                let def =
+                    self.parse_struct_def(attributes, visibility, explicit_visibility, doc_comment)?;
                 let span = start.merge(def.span);
                 Ok(Spanned::new(Item::Struct(def), span))
             }
             Token::Keyword(Keyword::Enum) => {
-                let def = self.parse_enum_def(attributes, visibility, doc_comment)?;
+                let def =
+                    self.parse_enum_def(attributes, visibility, explicit_visibility, doc_comment)?;
                 let span = start.merge(def.span);
                 Ok(Spanned::new(Item::Enum(def), span))
             }
             Token::Keyword(Keyword::Trait) => {
-                let def = self.parse_trait_def(attributes, visibility, doc_comment)?;
+                let def =
+                    self.parse_trait_def(attributes, visibility, explicit_visibility, doc_comment)?;
                 let span = start.merge(def.span);
                 Ok(Spanned::new(Item::Trait(def), span))
             }
@@ -638,12 +647,12 @@ impl Parser {
                 Ok(Spanned::new(Item::Import(stmt), span))
             }
             Token::Keyword(Keyword::Type) => {
-                let alias = self.parse_type_alias(visibility)?;
+                let alias = self.parse_type_alias(visibility, explicit_visibility)?;
                 let span = start.merge(alias.span);
                 Ok(Spanned::new(Item::TypeAlias(alias), span))
             }
             Token::Keyword(Keyword::Newtype) => {
-                let nt = self.parse_newtype(visibility)?;
+                let nt = self.parse_newtype(visibility, explicit_visibility)?;
                 let span = start.merge(nt.span);
                 Ok(Spanned::new(Item::Newtype(nt), span))
             }
@@ -658,7 +667,12 @@ impl Parser {
                     let span = start.merge(ext.span);
                     Ok(Spanned::new(Item::ExternBlock(ext), span))
                 } else {
-                    let func = self.parse_function_def(attributes, visibility, doc_comment)?;
+                    let func = self.parse_function_def(
+                        attributes,
+                        visibility,
+                        explicit_visibility,
+                        doc_comment,
+                    )?;
                     let span = start.merge(func.span);
                     Ok(Spanned::new(Item::Function(func), span))
                 }
@@ -666,7 +680,7 @@ impl Parser {
             Token::Keyword(Keyword::Static) => {
                 // Static declarations are private by default
                 let vis = if explicit_visibility { visibility } else { Visibility::Private };
-                let decl = self.parse_static_decl(vis)?;
+                let decl = self.parse_static_decl(vis, explicit_visibility)?;
                 let span = start.merge(decl.span);
                 Ok(Spanned::new(Item::StaticDecl(decl), span))
             }
@@ -674,7 +688,8 @@ impl Parser {
                 // Could be const function or const declaration
                 // Peek ahead: if after const we see a type followed by identifier( → function
                 // If after const we see a type followed by identifier = → const decl
-                let decl = self.parse_const_item(attributes, visibility, doc_comment)?;
+                let decl =
+                    self.parse_const_item(attributes, visibility, explicit_visibility, doc_comment)?;
                 let span = start.merge(match &decl {
                     Item::ConstDecl(d) => d.span,
                     Item::Function(f) => f.span,
@@ -706,11 +721,16 @@ impl Parser {
                 if self.looks_like_module_var_decl() {
                     // Module-level var decls are implicitly static — private by default
                     let vis = if explicit_visibility { visibility } else { Visibility::Private };
-                    let decl = self.parse_module_var_decl(vis)?;
+                    let decl = self.parse_module_var_decl(vis, explicit_visibility)?;
                     let span = start.merge(decl.span);
                     Ok(Spanned::new(Item::StaticDecl(decl), span))
                 } else {
-                    let func = self.parse_function_def(attributes, visibility, doc_comment)?;
+                    let func = self.parse_function_def(
+                        attributes,
+                        visibility,
+                        explicit_visibility,
+                        doc_comment,
+                    )?;
                     let span = start.merge(func.span);
                     Ok(Spanned::new(Item::Function(func), span))
                 }
@@ -983,19 +1003,30 @@ impl Parser {
                             // key = "value"
                             if let Token::StringLiteral(s) = self.peek() {
                                 let text = s.as_plain_text();
+                                let val_span = self.peek_span();
                                 self.advance();
-                                args.push(AttributeArg::KeyValue(ident.node, text));
+                                args.push(AttributeArg::KeyValue(
+                                    ident.node,
+                                    AttributeArgValue::Str(Spanned::new(text, val_span)),
+                                ));
                             } else {
                                 let val_ident = self.expect_identifier()?;
-                                args.push(AttributeArg::KeyValue(ident.node, val_ident.node));
+                                args.push(AttributeArg::KeyValue(
+                                    ident.node,
+                                    AttributeArgValue::Ident(val_ident),
+                                ));
                             }
                         } else {
                             args.push(AttributeArg::Identifier(ident.node));
                         }
                     }
                     Token::StringLiteral(_) => {
+                        let lit_span = self.peek_span();
                         if let Token::StringLiteral(s) = self.advance().node {
-                            args.push(AttributeArg::StringLiteral(s.as_plain_text()));
+                            args.push(AttributeArg::StringLiteral(Spanned::new(
+                                s.as_plain_text(),
+                                lit_span,
+                            )));
                         }
                     }
                     _ => {
@@ -1021,6 +1052,7 @@ impl Parser {
         &mut self,
         attributes: Vec<Spanned<Attribute>>,
         visibility: Visibility,
+        explicit_visibility: bool,
         doc_comment: Option<String>,
     ) -> Result<StructDef, ParseError> {
         let start = self.peek_span();
@@ -1043,7 +1075,7 @@ impl Parser {
             }
             let saved_pos = self.pos;
             let field_start = self.peek_span();
-            let field_vis = self.parse_visibility_modifier();
+            let (field_vis, field_vis_explicit) = self.parse_visibility_modifier();
             match self.parse_type().and_then(|type_| {
                 let field_name = self.expect_identifier()?;
                 let field_end = self.previous_span();
@@ -1051,6 +1083,7 @@ impl Parser {
                 Ok(Spanned::new(
                     FieldDef {
                         visibility: field_vis,
+                        explicit_visibility: field_vis_explicit,
                         type_,
                         name: field_name,
                     },
@@ -1075,6 +1108,7 @@ impl Parser {
         Ok(StructDef {
             attributes,
             visibility,
+            explicit_visibility,
             name,
             generic_params,
             fields,
@@ -1089,6 +1123,7 @@ impl Parser {
         &mut self,
         attributes: Vec<Spanned<Attribute>>,
         visibility: Visibility,
+        explicit_visibility: bool,
         doc_comment: Option<String>,
     ) -> Result<EnumDef, ParseError> {
         let start = self.peek_span();
@@ -1125,6 +1160,7 @@ impl Parser {
         Ok(EnumDef {
             attributes,
             visibility,
+            explicit_visibility,
             name,
             generic_params,
             variants,
@@ -1168,6 +1204,7 @@ impl Parser {
         &mut self,
         attributes: Vec<Spanned<Attribute>>,
         visibility: Visibility,
+        explicit_visibility: bool,
         doc_comment: Option<String>,
     ) -> Result<TraitDef, ParseError> {
         let start = self.peek_span();
@@ -1200,7 +1237,7 @@ impl Parser {
                     Spanned::new(TraitItem::AssociatedType(assoc.node), assoc.span)
                 })
             } else {
-                self.parse_function_def(Vec::new(), Visibility::Public, method_doc).map(|func| {
+                self.parse_function_def(Vec::new(), Visibility::Public, false, method_doc).map(|func| {
                     let span = func.span;
                     Spanned::new(TraitItem::Method(func), span)
                 })
@@ -1223,6 +1260,7 @@ impl Parser {
         Ok(TraitDef {
             attributes,
             visibility,
+            explicit_visibility,
             name,
             generic_params,
             extends,
@@ -1334,8 +1372,8 @@ impl Parser {
                 };
 
                 if attr_ok {
-                    let vis = self.parse_visibility_modifier();
-                    match self.parse_function_def(attrs, vis, method_doc) {
+                    let (vis, vis_explicit) = self.parse_visibility_modifier();
+                    match self.parse_function_def(attrs, vis, vis_explicit, method_doc) {
                         Ok(func) => {
                             let span = func.span;
                             items.push(Spanned::new(func, span));
@@ -1485,7 +1523,11 @@ impl Parser {
 
     // ── Type Alias ────────────────────────────────────────────
 
-    fn parse_type_alias(&mut self, visibility: Visibility) -> Result<TypeAlias, ParseError> {
+    fn parse_type_alias(
+        &mut self,
+        visibility: Visibility,
+        explicit_visibility: bool,
+    ) -> Result<TypeAlias, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Type)?;
         let name = self.expect_identifier()?;
@@ -1502,13 +1544,18 @@ impl Parser {
             generic_params,
             type_,
             visibility,
+            explicit_visibility,
             span: start.merge(end),
         })
     }
 
     // ── Newtype ───────────────────────────────────────────────
 
-    fn parse_newtype(&mut self, visibility: Visibility) -> Result<NewtypeDef, ParseError> {
+    fn parse_newtype(
+        &mut self,
+        visibility: Visibility,
+        explicit_visibility: bool,
+    ) -> Result<NewtypeDef, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Newtype)?;
         let name = self.expect_identifier()?;
@@ -1522,6 +1569,7 @@ impl Parser {
             name,
             inner_type,
             visibility,
+            explicit_visibility,
             span: start.merge(end),
         })
     }
@@ -1554,7 +1602,7 @@ impl Parser {
                 self.advance();
                 continue;
             }
-            let func = self.parse_function_def(Vec::new(), Visibility::Public, None)?;
+            let func = self.parse_function_def(Vec::new(), Visibility::Public, false, None)?;
             let span = func.span;
             items.push(Spanned::new(func, span));
         }
@@ -1610,22 +1658,38 @@ impl Parser {
 
     /// Parse a module-level variable declaration without a `static` keyword:
     /// `TypeName [generic_args] name = expr`
-    fn parse_module_var_decl(&mut self, visibility: Visibility) -> Result<StaticDecl, ParseError> {
+    fn parse_module_var_decl(
+        &mut self,
+        visibility: Visibility,
+        explicit_visibility: bool,
+    ) -> Result<StaticDecl, ParseError> {
         let start = self.peek_span();
-        self.parse_static_decl_body(start, visibility)
+        // No `static` keyword was consumed — this is the implicit form.
+        self.parse_static_decl_body(start, visibility, explicit_visibility, false)
     }
 
     // ── Static Declaration ────────────────────────────────────
 
-    fn parse_static_decl(&mut self, visibility: Visibility) -> Result<StaticDecl, ParseError> {
+    fn parse_static_decl(
+        &mut self,
+        visibility: Visibility,
+        explicit_visibility: bool,
+    ) -> Result<StaticDecl, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Static)?;
-        self.parse_static_decl_body(start, visibility)
+        // The keyword was consumed HERE — that is the one place that knows.
+        self.parse_static_decl_body(start, visibility, explicit_visibility, true)
     }
 
     /// Shared body for module-level and `static` variable declarations:
     /// `type name = expr`
-    fn parse_static_decl_body(&mut self, start: Span, visibility: Visibility) -> Result<StaticDecl, ParseError> {
+    fn parse_static_decl_body(
+        &mut self,
+        start: Span,
+        visibility: Visibility,
+        explicit_visibility: bool,
+        explicit_static_kw: bool,
+    ) -> Result<StaticDecl, ParseError> {
         let type_ = self.parse_type()?;
         let name = self.expect_identifier()?;
         self.expect(&Token::Eq)?;
@@ -1634,6 +1698,8 @@ impl Parser {
         self.consume_newline();
         Ok(StaticDecl {
             visibility,
+            explicit_visibility,
+            explicit_static_kw,
             type_,
             name,
             value,
@@ -1647,6 +1713,7 @@ impl Parser {
         &mut self,
         attributes: Vec<Spanned<Attribute>>,
         visibility: Visibility,
+        explicit_visibility: bool,
         doc_comment: Option<String>,
     ) -> Result<Item, ParseError> {
         let start = self.peek_span();
@@ -1661,6 +1728,7 @@ impl Parser {
             let func = self.finish_function_def(
                 attributes,
                 visibility,
+                explicit_visibility,
                 FunctionQualifiers {
                     is_const: true,
                     ..Default::default()
@@ -1683,6 +1751,7 @@ impl Parser {
 
             Ok(Item::ConstDecl(ConstDecl {
                 visibility,
+                explicit_visibility,
                 type_,
                 name,
                 value,
@@ -1697,6 +1766,7 @@ impl Parser {
         &mut self,
         attributes: Vec<Spanned<Attribute>>,
         visibility: Visibility,
+        explicit_visibility: bool,
         doc_comment: Option<String>,
     ) -> Result<FunctionDef, ParseError> {
         let start = self.peek_span();
@@ -1706,8 +1776,9 @@ impl Parser {
         let is_extern = self.match_keyword(Keyword::Extern);
         let extern_abi = if is_extern {
             if let Token::StringLiteral(_) = self.peek() {
+                let abi_span = self.peek_span();
                 if let Token::StringLiteral(s) = self.advance().node {
-                    Some(s.as_plain_text())
+                    Some(Spanned::new(s.as_plain_text(), abi_span))
                 } else {
                     None
                 }
@@ -1720,7 +1791,7 @@ impl Parser {
 
         // Set extern "C" context for type parsing (enables cstr type)
         let prev_extern_c = self.in_extern_c;
-        if extern_abi.as_deref() == Some("C") { self.in_extern_c = true; }
+        if extern_abi.as_ref().map(|a| a.node.as_str()) == Some("C") { self.in_extern_c = true; }
 
         let mut qualifiers = FunctionQualifiers::default();
 
@@ -1782,7 +1853,7 @@ impl Parser {
         let name = self.expect_name()?;
 
         let result = self.finish_function_def(
-            attributes, visibility, qualifiers, return_type, name, doc_comment, start, is_extern, extern_abi, returns_borrowed,
+            attributes, visibility, explicit_visibility, qualifiers, return_type, name, doc_comment, start, is_extern, extern_abi, returns_borrowed,
         );
         self.in_extern_c = prev_extern_c;
         result
@@ -1794,13 +1865,14 @@ impl Parser {
         &mut self,
         attributes: Vec<Spanned<Attribute>>,
         visibility: Visibility,
+        explicit_visibility: bool,
         qualifiers: FunctionQualifiers,
         return_type: Spanned<Type>,
         name: Spanned<String>,
         doc_comment: Option<String>,
         start: Span,
         is_extern: bool,
-        extern_abi: Option<String>,
+        extern_abi: Option<Spanned<String>>,
         returns_borrowed: bool,
     ) -> Result<FunctionDef, ParseError> {
         let generic_params = self.try_parse_generic_params()?;
@@ -1840,9 +1912,10 @@ impl Parser {
         let body = if is_extern {
             // Extern function: expect `= "c_symbol_name"`
             self.expect(&Token::Eq)?;
+            let sym_span = self.peek_span();
             if let Token::StringLiteral(s) = self.advance().node {
                 self.consume_newline();
-                FunctionBody::Extern(s.as_plain_text())
+                FunctionBody::Extern(Spanned::new(s.as_plain_text(), sym_span))
             } else {
                 return Err(self.error_unexpected("string literal for extern symbol"));
             }
@@ -1866,6 +1939,7 @@ impl Parser {
         Ok(FunctionDef {
             attributes,
             visibility,
+            explicit_visibility,
             qualifiers,
             return_type,
             name,

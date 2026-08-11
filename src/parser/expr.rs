@@ -95,7 +95,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         // Unary
         Expr::UnaryOp { operand, .. } => contains_it(operand),
         Expr::Move { expr } | Expr::Propagate { expr } | Expr::MutableBorrow { expr }
-        | Expr::Deref { expr } | Expr::Await { expr }
+        | Expr::Deref { expr } | Expr::Await { expr, .. }
         | Expr::Spawn { expr, .. } | Expr::SpawnBlocking { expr, .. } => contains_it(expr),
 
         // Binary
@@ -149,7 +149,7 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         }
 
         // Collections
-        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+        Expr::ArrayLiteral(elems, _) | Expr::TupleLiteral(elems) => {
             elems.iter().any(contains_it)
         }
         Expr::DictLiteral(pairs) => {
@@ -675,6 +675,7 @@ impl Parser {
                 Ok(Spanned::new(
                     Expr::Await {
                         expr: Box::new(operand),
+                        prefix_form: true,
                     },
                     start.merge(end),
                 ))
@@ -1257,6 +1258,7 @@ impl Parser {
                     return Ok(Spanned::new(
                         Expr::Await {
                             expr: Box::new(lhs),
+                            prefix_form: false,
                         },
                         start.merge(end),
                     ));
@@ -1902,7 +1904,7 @@ impl Parser {
             self.advance();
             let end = self.previous_span();
             return Ok(Spanned::new(
-                Expr::ArrayLiteral(Vec::new()),
+                Expr::ArrayLiteral(Vec::new(), ArrayLiteralSpelling::Brackets),
                 start.merge(end),
             ));
         }
@@ -1926,7 +1928,10 @@ impl Parser {
         self.expect(&Token::RBracket)?;
         let end = self.previous_span();
 
-        Ok(Spanned::new(Expr::ArrayLiteral(items), start.merge(end)))
+        Ok(Spanned::new(
+            Expr::ArrayLiteral(items, ArrayLiteralSpelling::Brackets),
+            start.merge(end),
+        ))
     }
 
     fn parse_optional_comprehension_filter(
@@ -2059,7 +2064,10 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         let end = self.previous_span();
-        Ok(Spanned::new(Expr::ArrayLiteral(items), start.merge(end)))
+        Ok(Spanned::new(
+            Expr::ArrayLiteral(items, ArrayLiteralSpelling::Braces),
+            start.merge(end),
+        ))
     }
 
     fn parse_if_expr(&mut self) -> Result<Spanned<Expr>, ParseError> {

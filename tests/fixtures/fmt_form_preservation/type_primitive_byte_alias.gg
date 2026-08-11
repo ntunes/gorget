@@ -1,0 +1,18 @@
+# ==== T-FMT-B — TYPE-lexeme VERBATIM: the `byte` / `uint8` synonym pair, and
+# the non-synonym primitives that must NOT move.
+# SCOPE CLAIM: `Type::Primitive` spellings. `byte` is a user-facing alias the
+# LEXER folds into `Keyword::Uint8` (`src/lexer/token.rs`), so the AST keeps no
+# record of which spelling the author chose — exactly the radix situation, and
+# it takes the same span-recovery cure.
+# Pre-fix RED: `byte x` came back as `uint8 x` everywhere — in declarations,
+# in parameter lists, in return types, in generic arguments, and in slices.
+byte scale(byte v, uint8 already_canonical):
+    return v + already_canonical
+
+byte[] widen(byte[] xs):
+    return xs
+
+void main():
+    byte a = 1
+    uint8 b = 2
+    print(scale(a, b))

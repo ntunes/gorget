@@ -1,0 +1,6 @@
+# ==== T-FMT-B — name-string site 6/8: `FunctionBody::Extern` — the `= "<symbol>"`
+# C symbol name.
+# SCOPE CLAIM: the extern BODY symbol string ONLY. Six escape costumes:
+# \x41 · \" · \t · \n · \\ · \u{1F600}.
+# PARSE-ONLY cell (see site 5's header).
+extern int weird(int x) = "esc \x41 quote \" tab \t nl \n back \\ emoji \u{1F600}"

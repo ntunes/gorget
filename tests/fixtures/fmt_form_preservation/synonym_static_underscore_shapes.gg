@@ -1,0 +1,21 @@
+# ==== T-FMT-B — SYNONYM: the `_`-CONTINUATION BOUNDARY shapes for `static`.
+# PIN (Core #12 escape hatch — no breakable mechanism under the typed design;
+# this header states what it pins instead): `static_thing` and `staticThing`
+# are ORDINARY type names, not the `static` keyword followed by a name. A
+# source-SCAN oracle asking "does the text at this declaration start with
+# `static`?" reports a false positive on both; the parser-written
+# `explicit_static_kw` flag cannot, because the parser consumed a `Static`
+# TOKEN or it did not.
+# Standing evidence that the scan-based design was rejected for cause.
+struct static_thing:
+    int v
+
+struct staticThing:
+    int v
+
+static_thing a = static_thing(1)
+
+staticThing b = staticThing(2)
+
+void main():
+    print(a.v + b.v)

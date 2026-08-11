@@ -1,0 +1,22 @@
+# ==== T-FMT-B — SYNONYM: the `with` binding's two spellings.
+# SCOPE CLAIM: `with <expr> as <name>:` vs the bare `with <name>:` form. The
+# parser desugars the bare form by using the identifier as BOTH the expression
+# and the binding name, so the two shapes become indistinguishable in the AST
+# unless the choice is recorded (`explicit_as`).
+# Pre-fix RED: the bare form came back as `with r as r:` — the formatter always
+# emitted ` as <name>`. (The pre-fix code inferred the answer from
+# `name.span == expr.span`, a SPAN-EQUALITY sentinel; that inference is
+# replaced by the parser-written typed flag, per Layering rules 2/4.)
+struct R:
+    int v
+
+equip R:
+    void close(self):
+        print(self.v)
+
+void main():
+    R r = R(1)
+    with r:
+        print(r.v)
+    with R(2) as s:
+        print(s.v)

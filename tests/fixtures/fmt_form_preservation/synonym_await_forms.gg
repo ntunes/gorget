@@ -1,0 +1,18 @@
+# ==== T-FMT-B — SYNONYM (Q3 PRESERVE): the two `await` spellings.
+# SCOPE CLAIM: `Expr::Await` rendering. Gorget accepts prefix `await e` and
+# postfix `e.await()`; both build the SAME `Expr::Await` node, so the choice is
+# authorial information the AST must now carry (`prefix_form`), exactly like a
+# literal's radix.
+# Pre-fix RED (measured): every prefix `await f()` was rewritten to
+# `f().await()` — a whole-file rewrite of any codebase that prefers the prefix
+# spelling.
+async int f():
+    return 1
+
+async void g():
+    int a = await f()
+    int b = f().await()
+    print(a + b)
+
+async void main():
+    await g()

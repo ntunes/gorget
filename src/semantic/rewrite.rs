@@ -462,7 +462,7 @@ fn rename_expr(expr: &mut Spanned<Expr>, aliases: &rustc_hash::FxHashMap<String,
             rename_expr(rhs, aliases);
         }
         Expr::Move { expr: inner } | Expr::Propagate { expr: inner } | Expr::MutableBorrow { expr: inner }
-        | Expr::Deref { expr: inner } | Expr::Await { expr: inner }
+        | Expr::Deref { expr: inner } | Expr::Await { expr: inner, .. }
         | Expr::Spawn { expr: inner, .. } | Expr::SpawnBlocking { expr: inner, .. } => {
             rename_expr(inner, aliases);
         }
@@ -514,7 +514,7 @@ fn rename_expr(expr: &mut Spanned<Expr>, aliases: &rustc_hash::FxHashMap<String,
             rename_expr(iterable, aliases);
             if let Some(c) = condition { rename_expr(c, aliases); }
         }
-        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+        Expr::ArrayLiteral(elems, _) | Expr::TupleLiteral(elems) => {
             for e in elems { rename_expr(e, aliases); }
         }
         Expr::DictLiteral(pairs) => {
@@ -830,7 +830,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         Expr::Move { expr: inner }
         | Expr::Propagate { expr: inner }
         | Expr::MutableBorrow { expr: inner } | Expr::Deref { expr: inner }
-        | Expr::Await { expr: inner } | Expr::Spawn { expr: inner, .. }
+        | Expr::Await { expr: inner, .. } | Expr::Spawn { expr: inner, .. }
         | Expr::SpawnBlocking { expr: inner, .. } => {
             rewrite_expr(inner, res, scopes, errors);
         }
@@ -873,7 +873,7 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
             rewrite_expr(iterable, res, scopes, errors);
             if let Some(cond) = condition { rewrite_expr(cond, res, scopes, errors); }
         }
-        Expr::ArrayLiteral(elems) | Expr::TupleLiteral(elems) => {
+        Expr::ArrayLiteral(elems, _) | Expr::TupleLiteral(elems) => {
             for elem in elems { rewrite_expr(elem, res, scopes, errors); }
         }
         Expr::DictLiteral(pairs) => {
@@ -1088,6 +1088,7 @@ mod tests {
                 Item::Function(FunctionDef {
                     attributes: vec![],
                     visibility: Visibility::Private,
+                    explicit_visibility: false,
                     qualifiers: FunctionQualifiers::default(),
                     return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                     name: Spanned::new("test_fn".to_string(), dummy_span()),
@@ -1164,6 +1165,7 @@ mod tests {
                 Item::Function(FunctionDef {
                     attributes: vec![],
                     visibility: Visibility::Private,
+                    explicit_visibility: false,
                     qualifiers: FunctionQualifiers::default(),
                     return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                     name: Spanned::new("test_fn".to_string(), dummy_span()),
@@ -1248,6 +1250,7 @@ mod tests {
                 Item::Function(FunctionDef {
                     attributes: vec![],
                     visibility: Visibility::Private,
+                    explicit_visibility: false,
                     qualifiers: FunctionQualifiers::default(),
                     return_type: Spanned::new(Type::Primitive(PrimitiveType::Void), dummy_span()),
                     name: Spanned::new("test_fn".to_string(), dummy_span()),

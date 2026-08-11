@@ -1,0 +1,9 @@
+# ==== T-FMT-B — name-string site 1/8: `format_test`.
+# SCOPE CLAIM: this cell samples the `test "…"` NAME-string emit site ONLY,
+# across SIX escape costumes in one name: \x41 · \" · \t · \n · \\ · \u{1F600}.
+# It says nothing about any other site — each of the other seven has its own
+# fixture. Pre-fix RED: the name is re-emitted DECODED (`\x41`->`A`, `\"`->a
+# bare quote that breaks the string, `\t`->a literal TAB), so `gg fmt` output
+# does not re-parse.
+test "esc \x41 quote \" tab \t nl \n back \\ emoji \u{1F600}":
+    assert 1 == 1

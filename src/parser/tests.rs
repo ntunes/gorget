@@ -1125,7 +1125,7 @@ fn test_extern_function_def() {
     if let Item::Function(ref f) = module.items[0].node {
         assert_eq!(f.name.node, "abs");
         if let FunctionBody::Extern(ref sym) = f.body {
-            assert_eq!(sym, "abs");
+            assert_eq!(sym.node, "abs");
         } else {
             panic!("Expected FunctionBody::Extern, got {:?}", f.body);
         }
@@ -1150,7 +1150,7 @@ equip Foo:
         let method = &eq.items[0].node;
         assert_eq!(method.name.node, "value");
         if let FunctionBody::Extern(ref sym) = method.body {
-            assert_eq!(sym, "foo_get_value");
+            assert_eq!(sym.node, "foo_get_value");
         } else {
             panic!("Expected FunctionBody::Extern, got {:?}", method.body);
         }

@@ -1,0 +1,9 @@
+# ==== T-FMT-B — name-string site 5/8: the INLINE `extern "<abi>"` tag
+# (`FunctionDef.extern_abi`).
+# SCOPE CLAIM: the inline-extern ABI string ONLY; the extern-BLOCK header ABI
+# is site 7 with its own fixture. Six escape costumes:
+# \x41 · \" · \t · \n · \\ · \u{1F600}.
+# PARSE-ONLY cell: the ABI tag is nonsense to the semantic pass on purpose —
+# what is under test is that the SPELLING survives the emitter, and the
+# corpus reparse gate only requires `gg parse` to succeed.
+extern "esc \x41 quote \" tab \t nl \n back \\ emoji \u{1F600}" int weird(int x) = "weird_sym"
