@@ -9,9 +9,12 @@
 # non-ASCII literal. Cells sampled (Core #12 — this file samples the `width
 # unit` axis ONLY):
 #
-#   wu_pack   PACKER width — the elements are 12 characters / 14 bytes each.
-#             Measured in characters the list fits on one line; measured in
-#             bytes it would break spuriously. Pins `measure_flat(Doc::Text)`.
+#   wu_pack   PACKER width — the elements are 12 characters / 14 bytes each, so
+#             the character measure fits SIX of them on the opening line and a
+#             byte measure would fit fewer and break earlier. Pins
+#             `measure_flat(Doc::Text)`. (The sharpest form of this cell, where
+#             the two units disagree on ONE element at the exact budget, is the
+#             `test_fill_measures_elements_in_characters_not_bytes` unit test.)
 #   wu_align  ALIGNER width — a LIVE DEFECT before this track: the trailing
 #             comments on a group whose LHS carries multi-byte characters did
 #             NOT line up, because `plan_trailing_aligns` derived `lhs_width` by
