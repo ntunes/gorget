@@ -5,11 +5,13 @@ Reads a unified diff (default: `git diff -U0` in the repo) and buckets every
 hunk into a class, so the owner can review the one-commit sweep by CLASS
 rather than by 25k raw lines.
 
-Classes are tried in order; first match wins.  Every class is decided by a
-NORMALISATION: two sides are in class C iff normalising both under C's rule
-makes them identical.  That makes the classification mechanical (no taste),
-and anything that survives every rule lands in `other` — the bucket that
-actually needs a human.
+Classes are tried in order; first match wins — the AUTHORITATIVE order is
+the `CLASSES` list below (whitespace-only classes lead, so a pure rewrap
+cannot false-match `sigil_move`); this glossary is alphabetical-ish, not the
+match order.  Every class is decided by a NORMALISATION: two sides are in
+class C iff normalising both under C's rule makes them identical.  That
+makes the classification mechanical (no taste), and anything that survives
+every rule lands in `other` — the bucket that actually needs a human.
 
   sigil_move      only `!x` -> `^x` move-sigil rewrites            (D27 INTENT)
   blank_line      only blank lines added/removed
