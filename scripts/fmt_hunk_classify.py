@@ -88,10 +88,15 @@ NUM_LIT = re.compile(r"\b0[xXoObB][0-9a-fA-F_]+\b|\b\d[\d_]*\b")
 # `String !s` collapses to `String!s`, whose `!` then reads as a POSTFIX error
 # mark and the lookbehind refuses to match.  (This bug under-counted
 # `sigil_move` by ~600 hunks on the first run of this script.)
+# `whitespace` MUST lead: every later normaliser embeds strip_ws, so under
+# first-match-wins a whitespace-only (pure rewrap / re-indent) hunk would
+# false-match `sigil_move` and be reported to the style review as sigil
+# intent.  A hunk that combines a sigil change WITH a rewrap still lands in
+# `sigil_move` (the sigil delta stops the `whitespace` match).
 CLASSES = [
+    ("whitespace", lambda t: strip_ws(t)),
     ("sigil_move", lambda t: strip_ws(sigil_norm(t))),
     ("trailing_comma", lambda t: drop_trailing_commas(strip_ws(sigil_norm(t)))),
-    ("whitespace", lambda t: strip_ws(t)),
     ("string_escape", lambda t: STR_LIT.sub("\x01", strip_ws(sigil_norm(t)))),
     ("numeric", lambda t: NUM_LIT.sub("\x02", strip_ws(sigil_norm(t)))),
     ("paren_drop", lambda t: re.sub(r"\(\)", "", strip_ws(sigil_norm(t)))),

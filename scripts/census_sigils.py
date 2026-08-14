@@ -116,7 +116,8 @@ def classify_file(path):
 
 
 def main():
-    root = sys.argv[1]
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    root = args[0] if args else "."
     want_list = None
     per_file = "--per-file" in sys.argv
     if "--list" in sys.argv:
@@ -125,7 +126,7 @@ def main():
     by_dir = collections.defaultdict(collections.Counter)
     files = []
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in (".git", "target", "node_modules")]
+        dirnames[:] = [d for d in dirnames if d not in (".git", "target", "node_modules", ".claude", ".worktrees")]
         for f in sorted(filenames):
             if f.endswith(".gg"):
                 files.append(os.path.join(dirpath, f))
