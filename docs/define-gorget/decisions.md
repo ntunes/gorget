@@ -2340,3 +2340,18 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   the three SH parser copies) with POS/NEG conformance fixtures, its own small
   track, not R41's. fmt-merge of adjacent same-module imports (the isort
   precedent) was NOT ratified — a separate knob if ever wanted.
+
+## PHANTOM `private` ENUM VARIANT (h4) — REJECT (owner 2026-08-14)
+
+**`private` (or any visibility keyword) in enum-variant position is a parse-time
+REJECT with a teaching diagnostic** — joining the ratified equip/test/bench
+visibility rejects (owner 2026-08-11): same `parse_item` modifier-discard family,
+same Rust-E0449-shaped diagnostic. At HEAD the parser reads `private` as a
+VARIANT NAME and mints a phantom unit variant (`enum Color:` with `private Red()`
+yields variants `[private, Red, Green]`, `gg check`-clean) — a Core #8
+wrong-accept. **Variant-level visibility is NOT foreclosed:** if a need arises it
+can be promoted to a real feature by a future ruling; until then the position
+rejects. Implementation rides the W2 reject-rider with h1-h3; the accept-surface
+change lands cross-lane per Core #9 with NEG conformance fixtures per Core #11
+(the known_gaps repro owed by the visibility entry's deferred-until-ruled logic is
+discharged by those fixtures landing WITH the reject).
