@@ -31973,7 +31973,7 @@ fn self_host_runtime_diff() {
     // in `infer_stmt_return_type`, Vector-slice arm in `lower_expr.gg`, and
     // the `??` divergent-tail R1+R2 fold) that let ~12 previously-UNADJ
     // fixtures cleanly adjudicate.
-    const GGDEF_ADJUDICATED_FLOOR: usize = 440;
+    const GGDEF_ADJUDICATED_FLOOR: usize = 443;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: GGDEF_ADJUDICATED_FLOOR skipped (debug profile)."
@@ -32225,7 +32225,7 @@ fn self_host_runtime_diff() {
     // else-arm may shift a couple of borderline shapes on future measurements).
     // Ratcheted 2026-08-10 (Round XXXIX close): +27 MATCH from R39's
     // 11-regression fix + fold on the SH lane. Locked at 1400.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1409;
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1415;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
@@ -32311,7 +32311,7 @@ fn self_host_runtime_diff() {
     // raises. OWNER-ASK GRANTED 2026-08-10 for a documented raise; SH
     // follow-up TODOs filed per family. Lowering back to 142 requires
     // porting the inflow fixtures to SH.
-    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 149;
+    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 148;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: non-MATCH ceiling skipped (debug profile — same \
