@@ -1,0 +1,12 @@
+# KNOWN GAP (fmt, filed 2026-08-14 from the R42 Track-D brief-review pass 2):
+# `gg fmt` drops the trailing comma of a ONE-TUPLE TYPE — `(int,)` in type
+# position formats to `(int)`, which is a parenthesized type, not a 1-tuple.
+# The VALUE spelling `(5,)` keeps its comma; only the TYPE loses it, so the
+# round trip is form-changing (and the re-parsed program may not typecheck).
+# INTENDED: the 1-tuple type keeps its comma exactly like the 1-tuple value.
+# Cell: type position, var-decl. Siblings not sampled here: 1-tuple type as a
+# param type / return type / generic arg (same emitter, unverified).
+# Wired test: fmt_one_tuple_type_keeps_comma (tests/integration.rs, #[ignore]d).
+void main():
+    (int,) t3 = (5,)
+    print(t3.0)

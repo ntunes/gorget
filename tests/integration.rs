@@ -11608,6 +11608,33 @@ fn fmt_multiline_trailing_comment_stays_attached() {
 /// Asserts the INTENDED preserved output, so it is RED at HEAD. Un-ignore and
 /// graduate the fixture out of `known_gaps/` the round the paren-emission
 /// chokepoint lands (the prototype's idempotence blocker is in the TODO entry).
+/// KNOWN GAP (R42): `gg fmt` drops the trailing comma of a ONE-TUPLE TYPE
+/// (`(int,)` → `(int)`) while the value spelling keeps its comma — a
+/// form-changing round trip. Asserts the INTENDED preserved spelling, so it
+/// is RED at HEAD (observed: the formatted decl reads `(int) t3`). Un-ignore
+/// and graduate the fixture out of `known_gaps/` the round the type emitter
+/// keeps the comma.
+#[test]
+#[ignore = "known gap (R42): gg fmt drops the 1-tuple TYPE trailing comma; un-ignore when the type emitter preserves it"]
+fn fmt_one_tuple_type_keeps_comma() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir.join("tests/fixtures/known_gaps/fmt_one_tuple_type_comma_drop.gg");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    // Code lines only — the header comment quotes the gap shapes.
+    let code: String = formatted
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        code.contains("(int,) t3"),
+        "1-tuple TYPE comma dropped: `(int,) t3` is not in the formatted output.\n\
+         === formatted (code lines) ===\n{code}"
+    );
+}
+
 #[test]
 #[ignore = "known gap (R41 T-FMT-B): gg fmt deletes the author's grouping parens; un-ignore when the paren-emission chokepoint lands"]
 fn fmt_preserves_author_parens() {
