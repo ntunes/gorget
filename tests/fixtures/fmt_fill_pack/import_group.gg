@@ -4,7 +4,16 @@
 # `fmt_fill_pack_import_group_kind`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
 #
 # Emit site: the `ImportStmt::Grouped` arm of `format_import` ->
-# `doc::surround_fill("{", .., "}")`.
+# `emit_delimited_texts("{", "}", ..)` -> `doc::surround_fill`.
+#
+# ⚠ This is the ONE list kind that calls `emit_delimited_texts` DIRECTLY,
+# bypassing the delimited-list chokepoint — the single declared carve-out from
+# the interior-comment gate, because the names are SORTED and the comment cursor
+# is forward-only. A comment inside a grouped import therefore still leaves the
+# group; that is filed, not fixed. Do not "fix" this by routing the group
+# through `emit_delimited_list`: the gate would interleave comments against
+# reordered elements. Adding a SECOND direct caller trips
+# `formatter_list_emit_fill_census`.
 #
 # Axis cell claim (Core #12 — `list kind x fit` for the IMPORT-GROUP kind ONLY):
 #   std.io       fits-flat          one line, no trailing comma

@@ -5,7 +5,10 @@
 # bulk `gg fmt` sweep MUST EXCLUDE it — sweeping rewrites the input into its own
 # expected output and makes the assertion tautological.
 #
-# Emit site: `Formatter::format_params_wrapped` -> `doc::surround_fill("(", .., ")")`.
+# Emit site: `Formatter::format_params_wrapped` -> the delimited-list
+# chokepoint `emit_delimited_list("(", ")", ..)` -> `emit_delimited_texts` ->
+# `doc::surround_fill`. The chokepoint is where an interior comment would divert
+# this list to the exploded shape; with no comment here it fill-packs.
 #
 # Axis cell claim (Core #12 — this file samples the `list kind x fit` axis for
 # the PARAMETER-list kind ONLY; the eight sibling kinds have their own files):
@@ -22,10 +25,10 @@
 # RED source per row: p_fill / p_over are TRUE pre-fix REDs (the pre-fix
 # formatter explodes one element per line WITH a trailing comma and a bare `)`
 # line, so every asserted line differs). p_empty / p_flat are invariant under
-# the change, so their red is BREAK-AND-RESTORE: flip
-# `format_params_wrapped`'s `doc::surround_fill(..)` back to
-# `doc::surround("(", items, ")", true)` and the whole assertion still passes
-# for them — instead set `doc::MAX_WIDTH` to 20 and they explode too.
+# the change, so their red is BREAK-AND-RESTORE — and note which break WORKS:
+# swapping the packed spelling for the exploded one leaves p_empty / p_flat
+# passing regardless, because a list that fits looks the same either way.
+# Set `doc::MAX_WIDTH` to 20 instead and they explode too.
 int p_empty():
     return 1
 

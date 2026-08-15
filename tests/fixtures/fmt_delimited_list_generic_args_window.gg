@@ -1,0 +1,43 @@
+# The generic-args ANCHOR-ADVANCE pin — a POS / idempotence pin, NOT a
+# red-verified regression fixture. Read the disposition before trusting
+# the name (Core #12: a fixture's name is a claim about scope).
+#
+# WHAT IT PINS: explicit generic arguments can contain a `(` of their own —
+# `Callable[void(int)]` does — so the argument-tuple gate must anchor at
+# the generic-args `]`, never at the callee or method name. A scan started
+# at the name end would return the `(` INSIDE the brackets and gate over a
+# window that begins mid-generic-args. Both callee shapes appear: a free
+# function (`Expr::Call`) and a method (`Expr::MethodCall`).
+#
+# WHY THERE IS NO RED HERE: the two anchor choices emit IDENTICAL output on
+# every SOURCE-REACHABLE shape — measured, not assumed. Neither line here
+# carries an interior comment, so the gate does not fire either way, and a
+# comment cannot be placed inside `Callable[void(int)]`'s parens without
+# the line comment swallowing the rest of the line. What this fixture
+# therefore pins is that the `]`-scan premise on `Type::Named` spans holds
+# and that these shapes stay formattable, re-parseable and idempotent.
+#
+# The class's actual net is the BREAK-AND-VERIFY procedure recorded in the
+# round's report: force the generic-args gate to miss, run a
+# generics-interior-comment shape, observe the comment hoovered into the
+# argument list, restore.
+
+void identity[T](T c):
+    print(1)
+
+struct P2:
+    int n
+
+equip P2:
+    void pick[T](self, T c):
+        print(2)
+
+void cb(int x):
+    print(x)
+
+int main():
+    auto c = cb
+    identity[Callable[void(int)]](c)
+    P2 b = P2(1)
+    b.pick[Callable[void(int)]](c)
+    return 0

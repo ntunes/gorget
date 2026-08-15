@@ -1,35 +1,24 @@
-# R39 fmt collection-literal interior comment escape — KNOWN GAP:
-# a comment INTERIOR to the generic-args slot of a struct/function
-# instantiation (`Foo[T, # C, U](a)`) is NOT covered by the round's fix.
+# Interior comment inside an explicit GENERIC-ARGS list — live regression
+# pin, on the `Expr::Call` path.
 #
-# The R39 `Expr::StructLiteral` arm's dispatch narrows the interior-check
-# to the ARG-tuple range (from `args.first().span.start` to `expr.span.end`)
-# specifically to AVOID mis-firing on a generic_args-interior comment
-# with the wrong container_end (arg-tuple end, not generic-args end). But
-# this correctness fix also leaves the generic-args-interior escape
-# UNCAUGHT. Similar for `Expr::Call` and `format_generic_args_wrapped`.
+# CELL (Core #12): axis = fill-emitted region kind; this file samples the
+# `[…]` generic-args region of a call. Its gate is DERIVED — `[` scanned
+# forward from the callee end, `]` scanned forward from the last argument
+# — because no AST node records the bracket span here (generic PARAMS do,
+# which is why they need no scan).
 #
-# INTENDED (post-fix) shape after `gg fmt`:
-#     void main():
-#         auto x = foo[
-#             int,
-#             # in generic args
-#             String,
-#         ](42)
-#         print(x)
+# This is also the shape whose sibling the earlier narrow gate was written
+# to dodge: the old dispatch clamped its window to the ARGUMENT tuple so a
+# generic-args comment could not mis-fire it with the wrong container end.
+# The two regions now gate INDEPENDENTLY, each over its own range, so both
+# a generic-args comment and an argument comment are preserved — see
+# `fmt_delimited_list_interior_comment.gg` for the both-at-once cell.
 #
-# CURRENT shape:
-#     void main():
-#         auto x = foo[int, String](42)
-#         # in generic args   ← escapes to enclosing scope
-#         print(x)
-#
-# UN-IGNORE + PROMOTE to a live regression fixture when
-# `format_generic_args_wrapped` grows the same interior-comment dispatch
-# (small addition — reuse `has_interior_comments` and
-# `format_bracketed_broken_with_comments` with `[`/`]`). Additionally,
-# `format_generic_params_wrapped` (for struct/fn generic parameters
-# `struct Foo[T, U]:`) has the same shape and should be updated together.
+# RED-VERIFIED against the pre-fix binary: `# in generic args` dedented out
+# of the brackets and became a leading comment of `print(x[0])` —
+#     auto x = foo[int, String](42)
+#     # in generic args
+#     print(x[0])
 
 Vector[int] foo[T, U](int x):
     return [x]

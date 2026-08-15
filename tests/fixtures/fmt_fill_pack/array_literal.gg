@@ -3,10 +3,11 @@
 # SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
 # `fmt_fill_pack_array_literal_kind`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
 #
-# Emit site: the `Expr::ArrayLiteral` arm of `format_expr` ->
-# `doc::surround_fill("[", .., "]")` (the fill-packed path; a literal carrying
-# INTERIOR comments still routes to `format_bracketed_broken_with_comments` —
-# see `comma_policy.gg` for that cell).
+# Emit site: the `Expr::ArrayLiteral` arm of `format_expr` -> the delimited-list
+# chokepoint `emit_delimited_list("[", "]", ..)` -> `doc::surround_fill` (the
+# fill-packed path). The chokepoint is also where a literal carrying INTERIOR
+# comments is diverted to `format_bracketed_broken_with_comments` instead — see
+# `comma_policy.gg` for that cell.
 #
 # Axis cell claim (Core #12 — `list kind x fit` for the ARRAY-LITERAL kind ONLY):
 #   ar_empty  empty              `[]`

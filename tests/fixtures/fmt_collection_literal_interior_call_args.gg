@@ -1,54 +1,35 @@
-# R39 fmt collection-literal interior comment escape — KNOWN GAP:
-# an interior comment inside a Call arg's NESTED collection literal
-# escapes ONE LEVEL up instead of being preserved at the inner literal's
-# indent.
+# Interior comment inside a call argument's NESTED collection literal —
+# live regression pin, and the NESTING cell of the canonical form.
 #
-# Root cause: fmt runs BEFORE the `semantic/rewrite.rs` pass that rewrites
-# `Expr::Call { callee: StructName }` into `Expr::StructLiteral`, so the
-# formatter's `Expr::StructLiteral` arm (which was added by R39's fix)
-# is UNREACHABLE from the fmt-only pipeline. All `Foo(a, b)`-shape calls
-# route through the `Expr::Call` arm, which delegates to
-# `format_call_args_wrapped(args)`. That helper renders each arg via
-# `element_to_string(|f| f.format_call_arg(...))` — using a SUB-formatter
-# with EMPTY comment sideband — so any collection-literal-interior
-# comment inside a call arg is DROPPED by the sub-render, then re-emerges
-# via the OUTER formatter's next `emit_comments_before` at the wrong
-# (dedented) indent.
+# CELL (Core #12): axis = nesting depth. The comment sits two containers
+# deep — inside the `[…]` array that is itself an argument of `Entry(…)`.
+# It is the cell that makes the canonical form observable: *a fill-emitted
+# container with an interior comment breaks fully, and so does every
+# ancestor fill-emitted container on the path to it.* The argument tuple
+# has no comment of its own and still explodes, because the array inside
+# it does.
 #
-# The R39 round's fix handles the top-level ArrayLiteral / TupleLiteral /
-# DictLiteral shapes (Core #4 chokepoint at the arms). The Call-args
-# sub-case is a related sibling gap in the same class.
+# ⚠ SCOPE OF THE PIN — the `Expr::Call` path, NOT `Expr::StructLiteral`.
+# `gg fmt` is parse-only, so `Entry(1, […])` is an `Expr::Call` in fmt's
+# view; the `Expr::StructLiteral` arm is unreachable here and carries no
+# red. See `fmt_collection_literal_interior_struct_no_args.gg`.
 #
-# WORST CASE OBSERVED (in `compiler/data/resources.gg`):
-#   original indent 8:      inside inner `[BuiltinMethodDecl(...), ...]`
-#                           within `BuiltinMethodEntry(CkVector(), [...])`
-#   post-R39 indent 4:      escapes ONE level up (still inside outer array,
-#                           NOT to col 0 as pre-round)
-#   fully-fixed indent 8:   preserved at inner-array interior
+# INDENT: the sentinel lands at 12 spaces, not 8 — statement body 4, the
+# exploded argument tuple 8, the exploded inner array 12. An 8-space
+# expectation would be the pre-canonical `Entry(1, [` shape, where the
+# argument tuple stayed flat while its child broke; that shape is not
+# reachable and not intended.
 #
-# INTENDED (post-fix) shape after `gg fmt`:
-#     void main():
-#         Entry e = Entry(1, [
-#             10,
-#             # inner comment
-#             20,
-#         ])
-#         print(e.a)
+# RED-VERIFIED against the pre-fix binary: `# inner comment` escaped the
+# nested array entirely and became a leading comment of `print(e.a)` —
+#     Entry e = Entry(1, [10, 20])
+#     # inner comment
+#     print(e.a)
 #
-# CURRENT shape (after R39):
-#     void main():
-#         Entry e = Entry(1, [10, 20])
-#         # inner comment  ← escapes to enclosing scope
-#         print(e.a)
-#
-# UN-IGNORE + PROMOTE when `format_call_args_wrapped` gains the same
-# `has_interior_comments` / `format_bracketed_broken_with_comments`
-# dispatch as the 4 arms — small addition (~15 LOC), requires passing
-# `container_end` (usually `expr.span.end`) through from the 4 call sites
-# (Expr::Call, Expr::MethodCall, Expr::DotShorthand, and the method-chain
-# builder). The chain builder case is harder because its segment
-# rendering already routes through `element_to_string` (sub-formatter);
-# would need to inline segment rendering or bubble comments up.
+# The real-world instance is `compiler/data/resources.gg`, whose two long
+# `BuiltinMethodDecl` comment blocks were ejected past the closing `])` to
+# indent 4, where they read as documenting the NEXT table entry. They now
+# sit at indent 12, immediately above the row they were written against.
 
 struct Entry:
     int a

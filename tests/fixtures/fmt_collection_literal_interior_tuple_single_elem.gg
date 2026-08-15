@@ -1,33 +1,22 @@
-# R39 fmt collection-literal interior comment escape — KNOWN GAP:
-# single-element tuple bypasses the broken-with-comments dispatch.
+# Interior comment inside a SINGLE-ELEMENT tuple — live regression pin.
 #
-# The `Expr::TupleLiteral` arm in `src/formatter/mod.rs` has a special
-# branch for `elems.len() == 1` that emits `(x,)` as a flat expression
-# (single-element tuples need the trailing comma to disambiguate from
-# parenthesised expressions). That branch does NOT call
-# `has_interior_comments` / `format_bracketed_broken_with_comments`, so
-# an interior comment inside a single-element tuple STILL escapes —
-# either dedents to col 0 (pre-fix) or becomes leading of the next sibling
-# stmt (rare shape; single-element tuples are unusual outside destructure
-# contexts).
+# CELL (Core #12): axis = fill-emitted region kind; this file samples the
+# ONE region that deliberately does NOT route through the delimited-list
+# chokepoint. `(x,)` is spelled with a trailing comma because the comma IS
+# the tuple, so the `elems.len() == 1` branch emits it flat rather than
+# fill-packing it — and a flat emission cannot carry a comment. The branch
+# therefore evaluates the interior-comment gate ITSELF, the second and only
+# other `has_interior_comments` call in the formatter, and hands a
+# comment-bearing 1-tuple to the exploded form (whose own trailing comma
+# re-parses as a 1-tuple, so nothing is lost).
 #
-# INTENDED (post-fix) shape after `gg fmt`:
-#     auto t = (
-#         # inner
-#         42,
-#     )
-#     print(t.0)
-#
-# CURRENT shape (both pre- and post-round-39; the round did NOT close this
-# sub-case per the brief's "Sub-task 3 skips single-elem tuples" note):
+# RED-VERIFIED against the pre-fix binary: `# inner` dedented out of the
+# tuple to statement indent and became a leading comment of `print(t.0)` —
 #     auto t = (42,)
 #     # inner
 #     print(t.0)
 #
-# UN-IGNORE + PROMOTE to a live regression fixture when the single-elem
-# tuple branch is unified with the multi-elem dispatch (either by
-# collapsing the elems.len() == 1 special-case OR by adding a targeted
-# has_interior_comments check inside it).
+# The paired assertion pins `# inner` at 8-space indent, inside the parens.
 
 int main():
     auto t = (
