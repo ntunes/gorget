@@ -12420,9 +12420,12 @@ fn item_module_is_constructed_only_by_the_loader() {
 /// costumes schedules the next round. So the subject here is the ACCESS:
 ///
 ///   * a binding whose initializer is a formatting call is RAW TEXT;
-///   * a function CALLED with such a binding is a raw-text consumer, and its
-///     `&str` parameters are raw text too — the hop that let `hash_col_of` hide
-///     behind ~25 call sites;
+///   * a function CALLED with such a binding — at ANY argument position — is a
+///     raw-text consumer, and its `&str` parameters are raw text too, ALL of
+///     them (the rule taints the callee's whole `&str` surface rather than the
+///     matching parameter, so a helper cannot launder raw text by shuffling its
+///     signature); this is the hop that let `hash_col_of` hide behind ~25 call
+///     sites;
 ///   * every METHOD CALL and every SLICE on raw text must be routed through the
 ///     helpers or carry an allowlist row with its reason.
 ///
@@ -12433,7 +12436,14 @@ fn item_module_is_constructed_only_by_the_loader() {
 /// hop and left two-hop raw text invisible, with a live instance already
 /// present: `fmt_sentinel_idx`, reached only through `fmt_sentinel_line` and
 /// `fmt_line_after_sentinel`, carrying the column-0 header skip for the whole
-/// `fmt_sentinel_*` family. Deleting that predicate left every gate green.
+/// `fmt_sentinel_*` family. Deleting that predicate left the LINT green — the
+/// four `fmt_collection_literal_interior_*` consumers do catch it, so what was
+/// missing was the ROUTING record, not every net.
+///
+/// The same rule is applied AT ANY ARGUMENT POSITION, which is a separate axis
+/// from depth: keying on the first argument alone hid five live accesses in
+/// three `assert_fill_pack*` helpers (see their ALLOWED rows), all of whose
+/// call sites pass the text second, at every depth.
 ///
 /// The allowlist names ALLOWED ACCESSES, not forbidden costumes, so a search
 /// spelling nobody has written yet — `.rfind(`, `.match_indices(`,
@@ -12443,24 +12453,51 @@ fn item_module_is_constructed_only_by_the_loader() {
 /// typed carrier whose only accessors are body-scoped, making raw text
 /// unreachable rather than merely flagged; measured at 115 bindings and ~430
 /// mentions to migrate, it was judged disproportionate for a test harness.
-/// The residual dodges are now exactly TWO — raw text reaching a consumer
-/// through a struct FIELD, or through a CLOSURE CAPTURE, rather than through a
-/// `&str` parameter. Neither exists today. Call-chain DEPTH is no longer one of
-/// them; only these two shapes route raw text past the parameter rule.
+/// **The rule's REACH, stated so it can be attacked rather than trusted.** The
+/// taint starts at a `let` whose initializer names a `FMT_SOURCES` producer and
+/// travels FORWARD through call ARGUMENTS into `&str` parameters, to a fixed
+/// point. Neither DEPTH nor argument POSITION bounds it any more. What it does
+/// not follow — four shapes, each PROBED this round rather than reasoned about,
+/// so the next reader can re-run them:
+///   1. a struct FIELD holding raw text (`s.text.contains(…)`) — no live
+///      instance;
+///   2. a CLOSURE parameter or capture receiving it — no live instance;
+///   3. a helper RETURNING raw text untouched (`fn f(t: &str) -> &str { t }`):
+///      with no method call and no slice there is no access to disposition, and
+///      the result binding is clean. Measured GREEN. This one is
+///      indistinguishable from legitimate routing BY CONSTRUCTION — de-tainting
+///      at a return is exactly what `fmt_body` does — so what carries the
+///      guarantee is that every helper which TOUCHES the text has its access in
+///      the table below with a reason;
+///   4. raw text that never becomes a `let` binding: a producer call used as a
+///      temporary (`format_source_infallible(src).contains(…)` — live at
+///      tests/integration.rs:9762, header-immune only because its source is a
+///      synthetic in-test string with no fixture header), or a fixture-
+///      formatting helper that is not itself registered in `FMT_SOURCES`
+///      (`fmt_delimited_list_fixture`, :15356 — measured: its nine-test family
+///      makes ZERO direct accesses, routing everything through the sentinel
+///      helpers, so no live exposure).
+/// Anything reachable by "let-bound from a producer, then passed as an
+/// argument" IS covered; the list above is what is known to fall outside that
+/// sentence, not a proof that nothing else does.
 ///
 /// SHRINK-ONLY. A row belongs here when the access is genuinely header-immune —
 /// it searches something that is not fixture output, or the predicate already
 /// excludes comment lines, or the needle is a code shape no comment line can
 /// have. Adding a row to silence a new fmt assertion is the wrong move: route it.
 ///
-/// **Break-and-verify (six costumes, all RED-verified):**
+/// **Break-and-verify (eight costumes, all RED-verified):**
 /// `formatted.contains(needle)`; reverting an `fmt_body(&formatted).lines().any(…)`
 /// to `formatted.lines().any(…)`; a `.rposition(` lookup; a novel
 /// `for line in formatted.split('\n')` loop; and — for the fixed point — a
 /// TWO-hop plant (`f(&formatted)` forwards to `g(text)`, which does
 /// `text.contains(…)`) plus a THREE-hop variant, which reds identically and is
 /// what makes the depth-independence claim above a measurement rather than an
-/// argument.
+/// argument. For argument position: `plant_second_arg("0x", &formatted)`, which
+/// was GREEN under the first-argument-only rule and is RED now, and a THIRD
+/// position behind a nested call carrying its own comma —
+/// `plant_third_arg(&format!("{}, {}", "0x", 1), 7, &formatted)` — which
+/// exercises the balanced walk-back to the enclosing `(`.
 #[test]
 fn fmt_raw_text_access_is_routed_or_reasoned() {
     /// (enclosing fn, method or `[slice]`, why the access is header-immune).
@@ -12502,6 +12539,37 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
         ("fmt_fill_pack_comma_axis", "contains", "searches `fill_pack_body` output, header already removed"),
         ("fmt_fill_pack_width_boundary_axis", "contains", "searches `fill_pack_body` output, header already removed"),
         ("fmt_fill_pack_width_boundary_axis", "lines", "searches `fill_pack_body` output, header already removed"),
+        // The fill-pack ASSERTION HELPERS. Invisible until the consumer rule
+        // stopped keying on the FIRST argument — every call site passes the
+        // text second (`assert_fill_pack_width(name, &body, …)`).
+        // `assert_fill_pack_width` (tests/integration.rs:15931, :16173, :16204,
+        // :16374) and `assert_no_trailing_comma_before_close` (:15976, :15998,
+        // :16086, :16174) are fed `fill_pack_body` output at every one of those
+        // sites, and `fill_pack_body` strips the header through `fmt_body`
+        // (:15799).
+        ("assert_fill_pack_width", "lines", "every caller passes `fill_pack_body` output, header already removed"),
+        ("assert_no_trailing_comma_before_close", "lines", "every caller passes `fill_pack_body` output, header already removed"),
+        // Not formatter output at all: `allowed_overflow: &[&str]`
+        // (tests/integration.rs:15822) is the caller's list of excuse
+        // fragments. The `&` + `str` param filter cannot tell a slice OF strs
+        // from a str, so the receiver is raw text only by classification.
+        ("assert_fill_pack_width", "iter", "the receiver is `allowed_overflow: &[&str]`, the caller's excuse list — not formatter output; the `&`+`str` param filter cannot see the slice"),
+        // ⚠ THE ONE ACCIDENTAL GREEN IN THIS TABLE, written down as such.
+        // `assert_fill_pack_greedy` has two callers and they do NOT agree:
+        // :15932 passes header-stripped `fill_pack_body` output, but :16652
+        // passes RAW `tail_reserve_format` output (:16566-16572 does no header
+        // stripping — it is one of this lint's own FMT_SOURCES), so the whole
+        // `fmt_tail_reserve` matrix runs the greedy model over text that still
+        // carries the fixture header. It is immune only because the model
+        // engages solely on a break line followed by a STRICTLY DEEPER indented
+        // line, and `gg fmt` normalizes top-level comments to column 0 — so a
+        // header line can never BE that continuation, and a header line ending
+        // in a comma never has one. Measured, not assumed: an indented header
+        // continuation planted in `fmt_tail_reserve/a1_fn_throws.gg` came back
+        // flattened to column 0 and the matrix stayed green. If the formatter
+        // ever preserves comment indentation, this row is the first thing to
+        // re-check — route :16652 through `fmt_body` instead.
+        ("assert_fill_pack_greedy", "lines", "one caller (:16652) feeds it RAW `tail_reserve_format` output; header-immune only because the greedy model needs a strictly-deeper continuation and `gg fmt` flattens top-level comments to column 0"),
         // Surfaced only once the detector learned to join WRAPPED method
         // chains — the blind spot that let a routed `.any(…)` be reverted
         // undetected. Each disposition checked at the site.
@@ -12581,6 +12649,16 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
     // (2) a fn CALLED with a formatted binding consumes raw text; (3) its
     // `&str` params are raw text too.
     //
+    // ⚠ AT ANY ARGUMENT POSITION. Matching the binding only where it follows
+    // the open paren — `f(raw)` — resolves the FIRST argument and nothing else,
+    // so `f(other, &raw)` never made `f` a consumer and everything the callee
+    // did to the text was invisible AT EVERY DEPTH, because the rule the fixed
+    // point iterates never fired. Not hypothetical: five live accesses in
+    // `assert_fill_pack_width`, `assert_fill_pack_greedy` and
+    // `assert_no_trailing_comma_before_close` hid behind exactly this, since
+    // every one of their call sites passes the text SECOND. Position is
+    // orthogonal to depth — closing depth alone left this open.
+    //
     // ⚠ TO A FIXED POINT, not once. Applying (2)+(3) a single time resolves
     // exactly ONE hop: a function that becomes a consumer only *because* of a
     // param-derived entry is never scanned, so raw text two hops from its
@@ -12589,9 +12667,54 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
     // `fmt_line_after_sentinel`, which are themselves one-hop consumers, and it
     // carries the column-0 header skip for the entire `fmt_sentinel_*` family:
     // under the one-pass rule its `.lines()` was in neither the census nor the
-    // allowlist, and deleting the skip predicate left every gate green.
+    // allowlist, and deleting the skip predicate left THIS LINT green (the four
+    // `fmt_collection_literal_interior_*` tests do go red on it — what was
+    // missing was the routing record, not every net).
     // Iterating until nothing new appears makes the rule DEPTH-INDEPENDENT
     // instead of one-hop deep, which is what the rule always claimed to be.
+
+    // The callee whose ARGUMENT LIST holds the raw-text binding occurring at
+    // byte offset `at` — independent of which argument it is. First argument:
+    // the `(` sits right there. Later argument: the binding follows a `,`, so
+    // walk back over balanced delimiters to the `(` that opens this argument
+    // list, and take the identifier before it. `(`, `)`, `[`, `]` and `,` are
+    // ASCII, so every byte index below lands on a char boundary.
+    let callee_of_arg = |l: &str, at: usize| -> Option<String> {
+        let head = l[..at].trim_end();
+        // `f(x, &raw)` passes by reference; the `&` is not part of the shape.
+        let head = head.strip_suffix('&').unwrap_or(head).trim_end();
+        let bytes = head.as_bytes();
+        let open = match *bytes.last()? {
+            b'(' => head.len() - 1,
+            b',' => {
+                let mut depth = 0usize;
+                let mut p = head.len() - 1; // the `,`
+                loop {
+                    if p == 0 {
+                        return None;
+                    }
+                    p -= 1;
+                    match bytes[p] {
+                        b')' | b']' => depth += 1,
+                        b'(' | b'[' if depth > 0 => depth -= 1,
+                        b'(' => break p,
+                        // Reached an unclosed `[` first: this comma separates
+                        // elements of an array/index expression, not the
+                        // arguments of a call.
+                        b'[' => return None,
+                        _ => {}
+                    }
+                }
+            }
+            _ => return None,
+        };
+        head[..open]
+            .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            .filter(|c| !c.is_empty())
+            .map(str::to_string)
+    };
+
     let mut consumers: Vec<String> = Vec::new();
     loop {
         let size = |cs: &Vec<String>, bs: &Vec<(usize, Vec<String>)>| -> usize {
@@ -12602,26 +12725,19 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
             let (i, end) = span(*k);
             for j in i..end {
                 for name in b {
-                    let pat = format!("({name}");
-                    let pat_ref = format!("(&{name}");
-                    for p in [&pat, &pat_ref] {
-                        if let Some(at) = lines[j].find(p.as_str()) {
-                            let head = &lines[j][..at];
-                            if let Some(callee) = head
-                                .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
-                                .next()
-                                .filter(|c| !c.is_empty())
-                            {
-                                if ![
-                                    "assert", "panic", "format", "println", "Some", "Ok", "if",
-                                    "for",
-                                ]
-                                .contains(&callee)
-                                    && !consumers.iter().any(|x| x == callee)
-                                {
-                                    consumers.push(callee.to_string());
-                                }
-                            }
+                    let l = lines[j];
+                    let mut from = 0usize;
+                    while let Some(rel) = l[from..].find(name.as_str()) {
+                        let at = from + rel;
+                        from = at + name.len();
+                        let Some(callee) = callee_of_arg(l, at) else { continue };
+                        if ![
+                            "assert", "panic", "format", "println", "Some", "Ok", "if", "for",
+                        ]
+                        .contains(&callee.as_str())
+                            && !consumers.iter().any(|x| *x == callee)
+                        {
+                            consumers.push(callee);
                         }
                     }
                 }
@@ -12742,7 +12858,7 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
         unlisted.join("\n")
     );
 
-    const EXPECTED_RAW_ACCESSES: usize = 54;
+    const EXPECTED_RAW_ACCESSES: usize = 59;
     assert_eq!(
         flagged.len(),
         EXPECTED_RAW_ACCESSES,

@@ -1852,10 +1852,24 @@ const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
     ("fn, WRAPPED signature", "int f(int a_long_one,\n      int b_long_one):\n    return a_long_one\n", Wrapped),
     ("if / elif, WRAPPED conditions", "void f(int i,\n       int j):\n    if (i <\n        3):\n        print(1)\n    elif (j >\n        9):\n        print(2)\n", Wrapped),
     // ⚠ THE `else:` CLAUSES ARE AN ENUMERATION, NOT A SAMPLE. There are SEVEN
-    // else-body wiring calls in the parser (statement-`if`, for-else,
-    // while-else, match-else, select-else, meta-if-else, meta-match-else) and
-    // every one of them has its OWN row below, adjacent to the construct it
-    // belongs to. They were once carried INSIDE the neighbouring `Wrapped`
+    // else-body `parse_block*` WIRING CALLS in the parser (statement-`if`,
+    // for-else, while-else, match-else, select-else, meta-if-else,
+    // meta-match-else), all of them in `src/parser/stmt.rs`, and every one of
+    // them has its OWN row below, adjacent to the construct it belongs to.
+    //
+    // Seven wiring CALLS is not seven else ANCHORS, and the sentence above is
+    // exact only in the census's terms: the match-EXPRESSION
+    // (`parse_match_expr`, src/parser/expr.rs) is an EIGHTH `else:` that wires
+    // `Block::header_start`, via `parse_arm_body` — which
+    // `parser_header_start_wiring_census` counts as the wiring site itself
+    // rather than counting its callers, so both counts are right. It is
+    // guarded elsewhere, not here: mis-wiring its `parse_arm_body(else_start)`
+    // to `parse_arm_body(start)` reds `fmt_suite_layout_form_preservation`.
+    // (The `else` clauses that carry no `Block` at all — the `if`-EXPRESSION
+    // else, the conditional-TYPE else, the item-level `meta if` else — have no
+    // `header_start` to wire, so they are outside this table's subject.)
+    //
+    // These rows were once carried INSIDE the neighbouring `Wrapped`
     // probes, where the strict per-block rule (see `ProbeKind::Wrapped`) would
     // have failed them; the fix split them out, and the split then kept only
     // two of them — a deleted row is invisible to the next reader, and the
@@ -1864,8 +1878,10 @@ const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
     // seven by construction, which is the point: it is stated seven times so
     // that removing one is visible.
     //
-    // ⚠ AND THESE ROWS ARE THE ONLY GATE ON THE ELSE-BODY ANCHOR, because for
-    // four of the seven NO OUTPUT CELL CAN EXIST. `Block::header_start`'s sole
+    // ⚠ AND THESE ROWS ARE THE ONLY GATE ON THESE SEVEN ELSE-BODY ANCHORS
+    // (the eighth, the match-EXPRESSION, is gated by the fmt fixture named
+    // above), because for four of the seven NO OUTPUT CELL CAN EXIST.
+    // `Block::header_start`'s sole
     // consumer is `line_indent_of` in `emit_orphan_comments_before_close`
     // (src/formatter/mod.rs) — it reads the anchor line's INDENT and nothing
     // else. An `else:` for `if` / `for` / `while` / `meta if` sits at exactly
