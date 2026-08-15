@@ -4877,16 +4877,61 @@ fn sh_bootstrap_stage2_double_free_after_fmt_sweep() {
     copy_dir_recursive(&src_lib, &tmp_lib).expect("recursive-copy lib/ into scratch tree");
 
     // Self-validation (Core #12/#13 — verify the verifier): the sweep MUST
-    // actually canonicalize (trailing commas) for the gate to exercise the SH
-    // parser path A1 lives on. If `gg fmt` ever regressed to a no-op/error, a
-    // 0-change sweep would make this double-free canary VACUOUSLY GREEN.
+    // actually canonicalize for the gate to exercise the SH parser path A1
+    // lives on. If `gg fmt` ever regressed to a no-op/error, a 0-change sweep
+    // would make this double-free canary VACUOUSLY GREEN.
+    //
+    // The guard SUPPLIES ITS OWN non-canonical input instead of counting how
+    // many `lib/` files the sweep rewrote. A corpus-derived `changed >= 1`
+    // only works while the corpus is UNFORMATTED: once the tree's `lib/` is
+    // itself canonical — which the A2 bulk-sweep round makes it, idempotence
+    // being the POINT of that round — the count is 0 BY CONSTRUCTION and this
+    // gate would RED forever on a perfectly healthy formatter. A self-supplied
+    // canary is canonical-state-INDEPENDENT: it is non-canonical on every run
+    // because the test writes it that way.
+    //
+    // Each spelling below was verified to change under HEAD `gg fmt`, and each
+    // is an INDEPENDENT canon axis, so the guard survives any one of them
+    // being retired:
+    //   (1) intra-parameter spacing  `int  a,   int  b` -> `int a, int b`
+    //   (2) binary-operator spacing  `a  +  b`          -> `a + b`
+    //   (3) blank-line run collapse  3 blank lines      -> 1
+    // Deliberately WHITESPACE-ONLY: a sigil-rewrite canary (`!x` -> `^x`)
+    // would stop PARSING once `!` is retired (D27 Round B), and `gg fmt`
+    // leaves an unparseable file byte-identical — i.e. it would fail into a
+    // false RED, blaming the formatter for the canary's own rot.
+    const FMT_CANARY: &str = "\
+# fmt sweep canary - written by sh_bootstrap_stage2_double_free_after_fmt_sweep.
+# Deliberately NON-CANONICAL on three independent axes; see that test.
+int canary_add(int  a,   int  b):
+    return a  +  b
+
+
+
+int canary_use():
+    return canary_add(1, 2)
+";
+    // Lives at the scratch `lib/` ROOT, reachable only as `import _fmt_canary`
+    // — which nothing does, so it is inert to the bootstrap below. It is only
+    // ever an INPUT to fmt_sweep.
+    let canary_path = tmp_lib.join("_fmt_canary.gg");
+    std::fs::write(&canary_path, FMT_CANARY).expect("write fmt canary into scratch lib/");
+
     let mut changed = 0usize;
     fmt_sweep(&tmp_lib, gg_binary(), &mut changed);
-    assert!(
-        changed >= 1,
-        "A1 canary self-check FAILED: `gg fmt --in-place` changed 0 of the \
-         scratch lib/ files — the sweep is a no-op, so the double-free gate \
-         would test nothing. Investigate `gg fmt` before trusting this gate."
+
+    let canary_after = std::fs::read_to_string(&canary_path).expect("read back fmt canary");
+    assert_ne!(
+        canary_after, FMT_CANARY,
+        "A1 canary self-check FAILED: `gg fmt --in-place` left the deliberately \
+         NON-CANONICAL canary file byte-identical, so the sweep is a no-op and \
+         the double-free gate below would test NOTHING. ({changed} scratch lib/ \
+         file(s) also changed — that count is informational only: it is legally \
+         0 once lib/ is canonical, which is why it is no longer the guard.)\n\
+         Either `gg fmt` regressed to a no-op/error, or all three canon axes the \
+         canary rides on were retired — in which case re-derive FMT_CANARY from \
+         the CURRENT canon: pick a non-canonical spelling, confirm `gg fmt` \
+         rewrites it, and update the constant. Do NOT delete this assertion."
     );
 
     // R41 T-FMT-A: the SWEEP-FIDELITY assertion (S1 §4.6(3)). This gate already
