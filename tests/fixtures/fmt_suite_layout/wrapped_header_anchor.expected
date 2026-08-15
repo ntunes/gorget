@@ -15,49 +15,100 @@
 # written at the one indented-suite parser, pointing at the owning construct's
 # FIRST line.
 #
-# ONE CELL PER VALUE-NEEDING ROW of that field's wiring table:
-#   row 5 (the multi-kind block router)      — wrapped `while` condition, and
-#                                              the clause-position `meta elif`
-#   row 6 (the statement if/elif/else parser)— wrapped `if` and `elif`
-#   row 7 (function bodies)                  — wrapped fn signature
-#   row 8 (meta-match arm bodies)            — wrapped `meta match` case arm
-#   row 1 (catch/rethrow bodies)             — wrapped `catch` header
-#   row 9 (`meta while`)                     — wrapped `meta while` condition
-#   the bracketed CONTAINER header           — enum/trait/equip cells live in
-#                                              `header_colon_anchor_bracketed.gg`
+# THE ROW LIST IS A TOTAL ENUMERATION, DERIVED BY MEASUREMENT, not a selection.
+# A construct is VALUE-NEEDING iff some LEGAL spelling puts its FIRST line on a
+# different line from the position a careless implementation would fall back to.
+# There are exactly two such fallbacks, so there are two breaks, and each row
+# below names the one that reds its cell:
 #
-# ⚠ ROW 9 NEEDS ITS OWN WRAPPED CELL, and for a while it did not have one. The
-# `meta while` parser used to take its block span AFTER consuming the colon, so
-# `Block.span.start` landed on the BODY's own line and even the UNWRAPPED cell
-# in `orphan_close_routed_kinds.gg` discriminated. Hoisting that span onto the
-# colon (parser hygiene, output-neutral) removed the accident: an unwrapped
-# `meta while cond:` has its colon on the `meta` line, so a colon-seeded anchor
-# now has the same indent as row 9's value and NO unwrapped cell can go red.
-# Wrapping is what separates them again.
+#   BREAK A — `header_start := Block.span.start` (the whole-field fallback).
+#   BREAK C — that row's own value := the COLON (the per-row mistake). It is
+#     needed because rows 1-4 pass a position that is ALREADY the construct's
+#     first line, so BREAK A cannot see them at all.
 #
-# ⚠ Two authoring traps this file works around: a wrapped bare `if` condition
-# is a 10-error parse failure, so the PARENTHESIZED form is used; and the
-# wrapped-FN cell only discriminates in its ALIGNED-CONTINUATION spelling — a
-# hanging `):` at column 0 lets any anchor pass.
+# VALUE-NEEDING — every one has a cell in this file:
+#   row 7  fn signature .......................... BREAK A
+#   row 6  `if` condition ........................ BREAK A
+#   row 6  `elif` condition ...................... BREAK A
+#   row 5  `while` condition ..................... BREAK A
+#   row 5  `for` iterable ........................ BREAK A
+#   row 5  `with … as …` bindings ................ BREAK A
+#   row 5  `meta if` condition ................... BREAK A
+#   row 5  `meta elif` condition ................. BREAK A
+#   row 5  `meta for` range ...................... BREAK A
+#   row 5  `meta type f(…)` parameter list ....... BREAK A
+#   row 9  `meta while` condition ................ BREAK A
+#   row 8  `meta match` case expression .......... BREAK A
+#   row 1  `catch` / `rethrow` LHS ............... BREAK C
+#   row 2  match-STATEMENT arm pattern ........... BREAK C
+#   row 2  match-EXPRESSION arm pattern .......... BREAK C
+#   row 3  `select` arm operation ................ BREAK C
+#   row 4  closure parameter list ................ BREAK C
 #
-# RED, observed by BREAK-AND-WATCH on this tree (each break reverted after):
-#   * value `header_start` from the block's own `span.start` (the colon):
-#       wrapped-while tail  8 -> 4     wrapped-if tail       8 -> 4
-#       wrapped-elif tail   8 -> 4     wrapped-fn tail       4 -> 0
-#       wrapped meta-elif   8 -> 4     wrapped meta-while    8 -> 4
-#       wrapped meta-match case tail  12 -> 8
-#     Every one of those cells is in THIS file; the unwrapped siblings in
-#     `orphan_close_routed_kinds.gg` stay green under this break, which is why
-#     they are routed-kind cells and not discriminators.
-#   * ROW 9: unwire meta-while's `header_start` (pass the colon-derived block
-#       span instead of the `meta` keyword) — wrapped meta-while tail 8 -> 4,
-#       and nothing else moves
-#   * ROW 1: seed the catch/rethrow body from the colon instead of the LHS's
-#       first line —              wrapped-catch tail  8 -> 4
-#   * ROW 6: capture the `elif` clause span AFTER parsing the condition —
-#       wrapped-elif tail  8 -> 4, while the wrapped-IF tail stays at 8
-#   * ROW 8: seed the meta-match arm from its own colon instead of the `case`
-#       keyword —                 wrapped meta-match case tail  12 -> 8
+# NON-VALUE-NEEDING — a KEYWORD-ONLY header, where the construct's first line
+# IS the colon's line by construction, so no legal spelling can separate them
+# and no cell can ever go red:
+#   `loop:` · `unsafe:` · `on error:` · a named scope `name:` · `do:` ·
+#   `test "…":` · `bench "…":` · `suite setup:` · `suite teardown:` ·
+#   and EVERY `else:` clause (statement-if, for-else, while-else, match-else,
+#   select-else, meta-else, meta-match-else).
+# The string in `test`/`bench` and the identifier in a named scope are single
+# tokens; they cannot wrap either.
+#
+#   the bracketed CONTAINER header — enum/trait/equip cells live in
+#   `header_colon_anchor_bracketed.gg`
+#
+# ⚠ THIS LIST WAS A SELECTION TWICE. It first said row 9 was covered by an
+# unwrapped cell (false after the meta-while span hoist); it then said "one cell
+# per value-needing row" while `for`, `with`, `meta if`, `meta for`, `meta type
+# f()`, both match-arm positions, `select` arms and closures had none — nine
+# rows, every one of which leaks a real comment out of its block when unwired,
+# with every gate green. Re-derive by MEASUREMENT before trusting it again: add
+# a wrapped spelling of the construct, unwire its row, and look.
+#
+# ⚠ Three authoring traps this file works around: a wrapped bare `if` condition
+# is a 10-error parse failure, so the PARENTHESIZED form is used; the wrapped-FN
+# cell only discriminates in its ALIGNED-CONTINUATION spelling (a hanging `):`
+# at column 0 lets any anchor pass); and the `with` cell wraps a CALL's argument
+# list rather than a parenthesized expression, because `gg fmt` deletes grouping
+# parens and `with (r + 0) as held:` comes back as `with r + 0 as held:`, which
+# does NOT re-parse (10 errors). That is the filed paren-deletion gap, not this
+# axis — but it is why this cell is spelled with a call.
+#
+# RED, observed by BREAK-AND-WATCH on this tree — every row measured, each
+# break reverted and the tree confirmed restored-green afterwards. The indents
+# are this file's own cells.
+#
+#   BREAK A · `header_start := Block.span.start`, which reds every row whose
+#   value is not already the construct's first line:
+#       wrapped-while       8 -> 4      wrapped-if            8 -> 4
+#       wrapped-elif        8 -> 4      wrapped-fn            4 -> 0
+#       wrapped meta-while  8 -> 4      wrapped meta-elif     8 -> 4
+#       wrapped meta-match case  12 -> 8
+#       wrapped-for         8 -> 4      wrapped-with          8 -> 4
+#       wrapped meta-for    8 -> 4      wrapped meta-if       8 -> 4
+#       wrapped meta-type-fn     4 -> 0
+#     The UNWRAPPED siblings in `orphan_close_routed_kinds.gg` stay green under
+#     this break — which is why they are routed-kind cells, not discriminators.
+#
+#   BREAK C · one row at a time, seeded from that row's COLON. Rows 1-4 pass a
+#   position that is ALREADY the construct's first line, so only this break can
+#   see them; each reds ONLY its own cell(s):
+#       row 1  catch/rethrow ......... wrapped-catch          8 -> 4
+#       row 2  arm bodies ............ wrapped match-arm     12 -> 8
+#                                      wrapped match-EXPR arm 12 -> 8
+#       row 3  select arms .......... wrapped select-arm     12 -> 8
+#       row 4  closures ............. wrapped closure         8 -> 4
+#       row 5  `for` iterable ....... wrapped-for             8 -> 4
+#       row 5  `with` bindings ...... wrapped-with            8 -> 4
+#       row 5  `meta for` range ..... wrapped meta-for        8 -> 4
+#       row 5  `meta if` condition .. wrapped meta-if         8 -> 4
+#       row 5  `meta type f()` ...... wrapped meta-type-fn    4 -> 0
+#       row 6  `elif` (span captured AFTER the condition) —
+#                                      wrapped-elif           8 -> 4,
+#              while the wrapped-IF tail stays at 8
+#       row 8  `meta match` arm ..... wrapped meta-match case 12 -> 8
+#       row 9  `meta while` ......... wrapped meta-while      8 -> 4
 
 void wrapped_while(int i):
     while i < 3:
@@ -95,6 +146,63 @@ void wrapped_meta_match[T]():
             print(1)
             # tail in a wrapped meta-match case body
 
+void wrapped_for(int n):
+    for i in [1, 2]:
+        print(i + n)
+        # tail in a wrapped-for body
+
+int wrapped_make(int a):
+    return a
+
+void wrapped_with(int r):
+    with wrapped_make(r) as held:
+        print(held)
+        # tail in a wrapped-with body
+
+void wrapped_meta_for():
+    meta for i in [1, 2]:
+        print(i)
+        # tail in a wrapped meta-for body
+
+void wrapped_meta_if[T]():
+    meta if bitwidth(T) > 4096:
+        print(1)
+        # tail in a wrapped meta-if body
+
+meta type WrappedMetaTypeFn(Type a_long_parameter_name, Type another_long_parameter_name):
+    return a_long_parameter_name
+    # tail in a wrapped meta-type-fn body
+
+void wrapped_match_arm(Option[int] x):
+    match x:
+        case Some(v):
+            print(v)
+            # tail in a wrapped match-arm body
+
+int wrapped_match_expr_arm(Option[int] x):
+    int r = match x:
+        case Some(v):
+            10
+            # tail in a wrapped match-EXPRESSION arm body
+        else:
+            20
+    return r
+
+Chan[int] wrapped_chan():
+    return Chan[int](1)
+
+void wrapped_select_arm():
+    select:
+        case int v = wrapped_chan().recv():
+            print(v)
+            # tail in a wrapped select-arm body
+
+void wrapped_closure():
+    Callable[void(int, int)] g = (int a_long_parameter_name, int another_long_parameter_name):
+        print(a_long_parameter_name)
+        # tail in a wrapped closure body
+    g(1, 2)
+
 int fallible(int x) throws String:
     if x < 0:
         throw "negative"
@@ -110,6 +218,14 @@ int wrapped_catch(int x):
 void main():
     wrapped_while(1)
     wrapped_meta_while[int]()
+    wrapped_for(1)
+    wrapped_with(1)
+    wrapped_meta_for()
+    wrapped_meta_if[int]()
+    wrapped_match_arm(Some(1))
+    print(wrapped_match_expr_arm(Some(1)))
+    wrapped_select_arm()
+    wrapped_closure()
     wrapped_if(1)
     print(wrapped_signature(1, 2))
     wrapped_meta_clauses[int]()

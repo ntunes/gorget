@@ -1801,41 +1801,51 @@ fn line_indent_of(src: &str, pos: usize) -> usize {
 /// The probe corpus: one source per block-carrying construct, WRAPPED wherever
 /// wrapping is legal, since a wrapped header is the only shape where the two
 /// positions land on different lines.
+///
+/// "Wherever wrapping is legal" is a TOTAL claim and was twice a selection —
+/// `for`, `with`, `meta if`, `meta for`, `meta type f()`, both match-arm
+/// positions, `select` arms and closures were all spelled FLAT while their
+/// wiring rows leaked a real comment when unwired. The constructs left flat
+/// here are the KEYWORD-ONLY headers (`loop:`, `unsafe:`, `on error:`, a named
+/// scope, `do:`, `test`/`bench`/`suite`, and every `else:` clause): their first
+/// line IS the colon's line by construction, so there is nothing to wrap. The
+/// authoritative per-row enumeration, with the break that reds each row, lives
+/// in `tests/fixtures/fmt_suite_layout/wrapped_header_anchor.gg`.
 const BLOCK_PROBES: &[(&str, &str)] = &[
     ("fn, WRAPPED signature", "int f(int a_long_one,\n      int b_long_one):\n    return a_long_one\n"),
     ("if / elif / else, WRAPPED conditions", "void f(int i):\n    if (i <\n        3):\n        print(1)\n    elif (i >\n        9):\n        print(2)\n    else:\n        print(3)\n"),
     ("while, WRAPPED condition", "void f(int i):\n    while (i <\n        3):\n        print(i)\n"),
-    ("for + for-else", "void f():\n    for i in [1]:\n        print(i)\n    else:\n        print(0)\n"),
+    ("for, WRAPPED iterable + for-else", "void f():\n    for i in [1,\n            2]:\n        print(i)\n    else:\n        print(0)\n"),
     ("while + while-else", "void f():\n    while false:\n        print(1)\n    else:\n        print(0)\n"),
     ("loop", "void f():\n    loop:\n        break\n"),
     ("unsafe", "void f():\n    unsafe:\n        print(1)\n"),
-    ("with … as …", "void f(int r):\n    with r as held:\n        print(held)\n"),
+    ("with … as …, WRAPPED binding", "int mk(int a):\n    return a\n\nvoid f(int r):\n    with mk(\n            r) as held:\n        print(held)\n"),
     ("named scope", "void f():\n    cleanup:\n        print(1)\n"),
     ("on error", "void f():\n    on error:\n        print(1)\n"),
     ("do:", "void f():\n    int d = do:\n        1\n    print(d)\n"),
-    ("match arm", "void f(int x):\n    match x:\n        case 1:\n            print(1)\n"),
+    ("match arm, WRAPPED pattern", "void f(Option[int] x):\n    match x:\n        case Some(\n                v):\n            print(v)\n"),
     // The DISCRIMINATING `else:` probe: the else BODY's header is the `else`
     // clause line, not the `match` line — which is what keeps an arms-level
     // tail beside a match `else:` claimed at the MATCH level instead of being
     // pulled inside the else body.
-    ("match + else", "void f(int x):\n    match x:\n        case 1:\n            print(1)\n        else:\n            print(0)\n"),
-    ("select arm + else", "void f():\n    select:\n        case int v = c().recv():\n            print(v)\n        else:\n            print(0)\n"),
-    ("closure body", "void f():\n    Callable[void()] g = ():\n        print(1)\n    g()\n"),
+    ("match, WRAPPED pattern + else", "void f(Option[int] x):\n    match x:\n        case Some(\n                v):\n            print(v)\n        else:\n            print(0)\n"),
+    ("select arm, WRAPPED op + else", "void f():\n    select:\n        case int v = c(\n                ).recv():\n            print(v)\n        else:\n            print(0)\n"),
+    ("closure body, WRAPPED params", "void f():\n    Callable[void(int, int)] g = (int a_long_one,\n                                 int b_long_one):\n        print(a_long_one)\n    g(1, 2)\n"),
     ("catch", "void f(int x):\n    int a = fallible(x) catch (e):\n        print(1)\n        0\n"),
     ("rethrow", "int f(int x) throws String:\n    int a = fallible(x) rethrow (String e):\n        print(1)\n        e\n    return a\n"),
-    ("meta if / elif / else", "void f[T]():\n    meta if bitwidth(T) > 4096:\n        print(1)\n    elif bitwidth(T) > 2048:\n        print(2)\n    else:\n        print(3)\n"),
-    ("meta for", "void f():\n    meta for i in 0..2:\n        print(i)\n"),
+    ("meta if / elif / else, WRAPPED conditions", "void f[T]():\n    meta if (bitwidth(T) >\n            4096):\n        print(1)\n    elif (bitwidth(T) >\n            2048):\n        print(2)\n    else:\n        print(3)\n"),
+    ("meta for, WRAPPED range", "void f():\n    meta for i in [1,\n            2]:\n        print(i)\n"),
     // WRAPPED, and it has to be: an unwrapped `meta while cond:` has its colon
     // on the `meta` line, so a colon-seeded `header_start` has the same indent
     // as the right answer and the probe cannot fail. Wrapping is what separates
     // the construct's FIRST line from the colon's.
     ("meta while, WRAPPED condition", "void f[T]():\n    meta while (bitwidth(T) >\n            128):\n        print(1)\n"),
     ("meta match arm, WRAPPED case expr", "void f[T]():\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(1)\n"),
-    ("meta match + else", "void f[T]():\n    meta match typename(T):\n        case \"int\":\n            print(1)\n        else:\n            print(0)\n"),
+    ("meta match, WRAPPED case expr + else", "void f[T]():\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(1)\n        else:\n            print(0)\n"),
     ("test body", "test \"t\":\n    print(1)\n"),
     ("bench body", "bench \"b\":\n    print(1)\n"),
     ("suite setup / teardown", "suite setup:\n    print(1)\n\nsuite teardown:\n    print(2)\n"),
-    ("meta type fn", "meta type W(Type t):\n    return t\n"),
+    ("meta type fn, WRAPPED params", "meta type W(Type a_long_one,\n            Type b_long_one):\n    return a_long_one\n"),
 ];
 
 /// `Block::header_start` sits on a line LESS INDENTED than the block's body —
