@@ -49486,6 +49486,35 @@ fn known_gap_fmt_multiline_header_trailing_comment() {
 
 // ==== R41 orchestrator: the fill-suffix width gap (known_gaps) ==============
 
+/// KNOWN GAP, filed by the R42 tail-reserve track and NOT closable by it: a
+/// binary chain's FIRST operand is pre-rendered for the CONTINUATION column
+/// while it is spliced at the CALLER's, so its own sub-render measures from
+/// ~23 columns too far left and keeps a nested call flat that should break.
+/// A sibling root of the caller-suffix class, on the START-COLUMN axis rather
+/// than the tail axis — the reserve reaching this sub-render is correct.
+///
+/// Asserts the INTENDED property: no formatted line exceeds 120. Un-ignore
+/// when the first operand is pre-rendered for the column it lands at. Live
+/// twin: `tests/fixtures/self_host_lowerer/lower_expr.gg`'s
+/// `df_param_is_result` declaration, counted in the width ratchet's
+/// `Unbroken` category (`tests/lints.rs::fmt_no_new_over_budget_lines`).
+#[test]
+#[ignore = "KNOWN GAP: a binary chain's first operand is pre-rendered for the continuation \
+    column but spliced at the caller's; filed by R42 Track C"]
+fn fmt_prerender_column_binary_chain_stays_in_budget() {
+    let src = std::fs::read_to_string(
+        "tests/fixtures/known_gaps/fmt_prerender_column_binary_chain.gg",
+    )
+    .unwrap();
+    let out = gorget::formatter::format_source_result(&src).expect("fixture parses");
+    let over: Vec<String> = out
+        .lines()
+        .filter(|l| l.chars().count() > 120)
+        .map(|l| format!("{} chars: {}", l.chars().count(), l))
+        .collect();
+    assert!(over.is_empty(), "lines over 120 chars:\n{}", over.join("\n"));
+}
+
 /// The filed fill-suffix repro, GRADUATED out of `known_gaps/` and
 /// un-ignored: caller-emitted text after a list's close is now carried down as
 /// the renderer's `tail_reserve`, so this extern breaks instead of running to
@@ -49840,9 +49869,16 @@ fn fmt_form_synonym_elif_canonicalized() {
 ///
 /// The per-fixture cells above pin the shapes this round knew to look for.
 /// This one pins the property, corpus-wide: whatever the formatter emits for
-/// any program in `tests/fixtures`, `lib`, or `examples`, feeding it back to
-/// the parser produces zero errors — and a second pass is byte-identical, so
-/// nothing is lost on the way through.
+/// any program under the FOUR roots — `tests/fixtures`, `lib`, `examples` and
+/// `compiler` — feeding it back to the parser produces zero errors, and a
+/// second pass is byte-identical, so nothing is lost on the way through.
+///
+/// (This paragraph said "three roots" while the walk below named four, and the
+/// fourth is the one whose omission from a later guard hid three live defects.
+/// The root array is duplicated in `tests/lints.rs::WIDTH_RATCHET_ROOTS`,
+/// which cannot import a nested fn from another test binary;
+/// `width_ratchet_roots_agree_with_the_standing_walk` keys on the literal
+/// array line below, so changing it means changing that needle too.)
 ///
 /// It is the standing guard for the class that motivated the whole track: a
 /// name-string re-emitted with its escapes decoded produced a file that no

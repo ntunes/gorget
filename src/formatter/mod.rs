@@ -2661,7 +2661,8 @@ impl Formatter {
         self.emitter.write("newtype ");
         self.emitter.write(&nt.name.node);
         self.emitter.write("(");
-        self.format_type(&nt.inner_type);
+        // The inner type's tail is the `)` this arm writes after it.
+        self.with_tail_reserve(1, |s| s.format_type(&nt.inner_type));
         self.emitter.write(")");
         self.emitter.newline();
     }
@@ -2669,7 +2670,15 @@ impl Formatter {
     fn format_const_decl(&mut self, cd: &ConstDecl) {
         self.format_visibility(&cd.visibility, cd.explicit_visibility);
         self.emitter.write("const ");
-        self.format_type(&cd.type_);
+        // A10's var-decl cell, const sibling: the type's tail is ` name = `
+        // plus the initializer's leading unbreakable text.
+        let tail = self.measured_reserve(|s| {
+            s.emitter.write(" ");
+            s.emitter.write(&cd.name.node);
+            s.emitter.write(" = ");
+            s.format_expr(&cd.value);
+        });
+        self.with_tail_reserve(tail, |s| s.format_type(&cd.type_));
         self.emitter.write(" ");
         self.emitter.write(&cd.name.node);
         self.emitter.write(" = ");
@@ -2700,7 +2709,14 @@ impl Formatter {
         if sd.explicit_static_kw {
             self.emitter.write("static ");
         }
-        self.format_type(&sd.type_);
+        // A10's var-decl cell, static sibling.
+        let tail = self.measured_reserve(|s| {
+            s.emitter.write(" ");
+            s.emitter.write(&sd.name.node);
+            s.emitter.write(" = ");
+            s.format_expr(&sd.value);
+        });
+        self.with_tail_reserve(tail, |s| s.format_type(&sd.type_));
         self.emitter.write(" ");
         self.emitter.write(&sd.name.node);
         self.emitter.write(" = ");
@@ -2748,11 +2764,24 @@ impl Formatter {
     fn format_generic_param(&mut self, param: &GenericParam) {
         match param {
             GenericParam::Type { name, bounds } => {
+                // Every bound is its own width-decided render, charged for the
+                // rest of the bound list plus the ` name` that closes the
+                // parameter — ADDED to whatever the enclosing generic-param
+                // list already reserved for this item.
                 for (i, tb) in bounds.iter().enumerate() {
                     if i > 0 {
                         self.emitter.write(" & ");
                     }
-                    self.format_trait_bound(tb);
+                    let rest = &bounds[i + 1..];
+                    let tail = self.measured_reserve(|s| {
+                        for b in rest {
+                            s.emitter.write(" & ");
+                            s.format_trait_bound(b);
+                        }
+                        s.emitter.write(" ");
+                        s.emitter.write(&name.node);
+                    });
+                    self.with_tail_reserve(tail, |s| s.format_trait_bound(tb));
                 }
                 if !bounds.is_empty() {
                     self.emitter.write(" ");
@@ -2761,7 +2790,9 @@ impl Formatter {
             }
             GenericParam::Const { type_, name } => {
                 self.emitter.write("const ");
-                self.format_type(type_);
+                self.with_tail_reserve(1 + name.node.chars().count(), |s| {
+                    s.format_type(type_)
+                });
                 self.emitter.write(" ");
                 self.emitter.write(&name.node);
             }
@@ -2775,26 +2806,57 @@ impl Formatter {
         if has_args || has_bindings {
             self.emitter.write("[");
             let mut first = true;
+            // Another HAND-ROLLED comma loop, so every member is its own
+            // width-decided render and each is charged for the rest of the
+            // list plus the `]`.
             if let Some(ref args) = tb.node.generic_args {
-                for arg in args {
+                for (i, arg) in args.iter().enumerate() {
                     if !first {
                         self.emitter.write(", ");
                     }
-                    self.format_type(arg);
+                    let rest = &args[i + 1..];
+                    let tail = self.measured_reserve(|s| {
+                        s.format_trait_bound_tail(rest, &tb.node.assoc_type_bindings);
+                    });
+                    self.with_tail_reserve(tail, |s| s.format_type(arg));
                     first = false;
                 }
             }
-            for binding in &tb.node.assoc_type_bindings {
+            for (i, binding) in tb.node.assoc_type_bindings.iter().enumerate() {
                 if !first {
                     self.emitter.write(", ");
                 }
                 self.emitter.write(&binding.name.node);
                 self.emitter.write(" = ");
-                self.format_type(&binding.type_);
+                let rest = &tb.node.assoc_type_bindings[i + 1..];
+                let tail = self.measured_reserve(|s| {
+                    s.format_trait_bound_tail(&[], rest);
+                });
+                self.with_tail_reserve(tail, |s| s.format_type(&binding.type_));
                 first = false;
             }
             self.emitter.write("]");
         }
+    }
+
+    /// The remainder of a trait bound's `[…]` list from a given point on, used
+    /// only to MEASURE a member's tail; the emission walks the list itself.
+    fn format_trait_bound_tail(
+        &mut self,
+        rest_args: &[Spanned<Type>],
+        rest_bindings: &[AssocTypeBinding],
+    ) {
+        for t in rest_args {
+            self.emitter.write(", ");
+            self.format_type(t);
+        }
+        for b in rest_bindings {
+            self.emitter.write(", ");
+            self.emitter.write(&b.name.node);
+            self.emitter.write(" = ");
+            self.format_type(&b.type_);
+        }
+        self.emitter.write("]");
     }
 
     // ── Parameters ──────────────────────────────────────────
@@ -3102,7 +3164,21 @@ impl Formatter {
             return;
         }
         // type-first: `type [&|!]name`
-        self.format_type(&param.type_);
+        //
+        // A10's param-type position: the type's tail is the sigil, the name
+        // and any ` = default`, ADDED to whatever the enclosing list already
+        // reserved for this item (its `,` or the list's close + the caller's
+        // own suffix) — which is what `with_tail_reserve`'s additivity buys.
+        let tail = self.measured_reserve(|s| {
+            s.emitter.write(" ");
+            s.format_ownership_prefix(param.ownership);
+            s.emitter.write(&param.name.node);
+            if let Some(ref default) = param.default {
+                s.emitter.write(" = ");
+                s.format_expr(default);
+            }
+        });
+        self.with_tail_reserve(tail, |s| s.format_type(&param.type_));
         self.emitter.write(" ");
         self.format_ownership_prefix(param.ownership);
         self.emitter.write(&param.name.node);
@@ -4505,7 +4581,16 @@ impl Formatter {
                 // assert-return handler emits the keyword.
             }
             Expr::BinaryOp { left, op, right } => {
-                self.format_assert_return_expr(left);
+                // Family O in the assert-postcondition walk: this arm emits
+                // the operator BETWEEN two renders, so the left one is charged
+                // for ` op ` plus the right one's leading unbreakable text.
+                let tail = self.measured_reserve(|s| {
+                    s.emitter.write(" ");
+                    s.emitter.write(binary_op_str(*op));
+                    s.emitter.write(" ");
+                    s.format_assert_return_expr(right);
+                });
+                self.with_tail_reserve(tail, |s| s.format_assert_return_expr(left));
                 self.emitter.write(" ");
                 self.emitter.write(binary_op_str(*op));
                 self.emitter.write(" ");
@@ -4522,7 +4607,11 @@ impl Formatter {
     fn format_expr_maybe_parens(&mut self, expr: &Spanned<Expr>, should_wrap: bool) {
         if should_wrap {
             self.emitter.write("(");
-            self.format_expr(expr);
+            // The precedence wrap's own `)` is a caller-emitted tail like any
+            // other, and it is charged HERE rather than at the three operand
+            // emitters — this is the one place that knows whether the wrap
+            // fired, so a fourth emitter cannot forget it.
+            self.with_tail_reserve(1, |s| s.format_expr(expr));
             self.emitter.write(")");
         } else {
             self.format_expr(expr);
@@ -4564,9 +4653,12 @@ impl Formatter {
     /// accumulates its own tails.
     fn format_postfix_receiver(&mut self, receiver: &Spanned<Expr>, operator_tail: usize) {
         let wrap = needs_parens_as_postfix_receiver(&receiver.node);
-        // The precedence wrap's own closing `)` is part of the tail too.
-        let tail = operator_tail + usize::from(wrap);
-        self.with_tail_reserve(tail, |s| s.format_expr_maybe_parens(receiver, wrap));
+        // The precedence wrap's own `)` is charged inside
+        // `format_expr_maybe_parens`, which is the one place that knows
+        // whether it fired.
+        self.with_tail_reserve(operator_tail, |s| {
+            s.format_expr_maybe_parens(receiver, wrap)
+        });
     }
 
     /// R41 T-FMT-A: emit an expression at a position where the parser runs
@@ -5664,11 +5756,27 @@ impl Formatter {
         // rather than the synthesised `(T1, T2) __dp_N` form.
         if let Some(ref bindings) = param.destructure {
             self.emitter.write("(");
+            // Another hand-rolled comma loop: each binding's TYPE is charged
+            // for its own ` name`, the rest of the list, and the `)`.
             for (i, b) in bindings.iter().enumerate() {
                 if i > 0 {
                     self.emitter.write(", ");
                 }
-                self.format_type(&b.type_);
+                let rest = &bindings[i + 1..];
+                let tail = self.measured_reserve(|s| {
+                    s.emitter.write(" ");
+                    s.format_ownership_prefix(b.ownership);
+                    s.emitter.write(&b.name.node);
+                    for r in rest {
+                        s.emitter.write(", ");
+                        s.format_type(&r.type_);
+                        s.emitter.write(" ");
+                        s.format_ownership_prefix(r.ownership);
+                        s.emitter.write(&r.name.node);
+                    }
+                    s.emitter.write(")");
+                });
+                self.with_tail_reserve(tail, |s| s.format_type(&b.type_));
                 self.emitter.write(" ");
                 self.format_ownership_prefix(b.ownership);
                 self.emitter.write(&b.name.node);
@@ -5678,7 +5786,14 @@ impl Formatter {
         }
         // type-first: `[type] [&|!]name`
         if let Some(ref ty) = param.type_ {
-            self.format_type(ty);
+            // The type's tail is ` ` + the sigil + the name, ADDED to whatever
+            // the enclosing closure-param list already reserved for this item.
+            let tail = self.measured_reserve(|s| {
+                s.emitter.write(" ");
+                s.format_ownership_prefix(param.ownership);
+                s.emitter.write(&param.name.node);
+            });
+            self.with_tail_reserve(tail, |s| s.format_type(ty));
             self.emitter.write(" ");
         }
         self.format_ownership_prefix(param.ownership);
