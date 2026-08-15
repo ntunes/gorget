@@ -178,8 +178,8 @@ void draw_text_atlas(GpuContext &ctx, FontAtlas font, String text, float x, floa
     float b, float a):
 ```
 
-Three properties fall out of the packing loop (`render_fill`,
-`src/formatter/doc.rs:442`) and are worth stating because each is load-bearing:
+Four properties fall out of the packing loop (`render_fill`,
+`src/formatter/doc.rs:448`) and are worth stating because each is load-bearing:
 
 - **The fit test for the last item includes the closing delimiter.** Otherwise the
   final line overruns by exactly `close.len()`, which is why `Fill` owns its `close`
@@ -309,7 +309,11 @@ budget.
 A subtlety of the hybrid design: the imperative layer frequently needs a *string*
 for a sub-expression to drop into a `Doc::Text`. It gets one via `element_to_string`
 (`src/formatter/mod.rs:752`), which spins up a throwaway `Formatter` (with no
-comments), runs a closure against it, and returns its buffer. This is how
+comments), runs a closure against it, and returns its buffer. In production the
+spelling is almost always `element_to_string_reserving`, which additionally states
+what the caller will write after the spliced element — see [The tail
+reserve](#the-tail-reserve); the bare form survives for the one position with no
+tail of its own, and a `tests/lints.rs` ratchet pins that at one. This is how
 `format_method_chain` (`src/formatter/mod.rs:3038`) and `format_binary_chain`
 (`src/formatter/mod.rs:3022`) turn each chain segment / operand into a `Doc::Text`
 leaf before grouping them — the wrapping is decided over the *segments*, while each
