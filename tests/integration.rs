@@ -46435,6 +46435,23 @@ fn sound_callable_amp_param_ices() {
     run_gg("known_gaps/sound_callable_amp_param_ices.gg", "11\n11");
 }
 
+/// KNOWN GAP (R42) — indexing a TYPE NAME (`int[2]` in expression position)
+/// passes `gg check`, then the DEBUG build ICEs in IR lowering and the RELEASE
+/// build silently miscompiles (prints 0). Core #10: check must reject what the
+/// lowering cannot lower. Asserts the INTENDED check-time reject
+/// (E_NotIndexable family), so it is RED at HEAD (check currently says OK).
+/// Pre-existing; surfaced by the R42 Track-D brief gauntlet's speculation
+/// probes, unrelated to the paren work itself.
+#[test]
+#[ignore = "KNOWN GAP (R42): `int[2]` passes gg check then debug-ICEs / release-miscompiles; \
+asserts the INTENDED check-time reject. Un-ignore when type-name indexing is rejected at check."]
+fn check_rejects_type_index() {
+    check_gg_fails(
+        "known_gaps/check_passes_type_index_miscompile.gg",
+        "E_NotIndexable",
+    );
+}
+
 /// KNOWN GAP — `E_BorrowAcrossAwait` has NO POSITIVE CONTROL and appears dead,
 /// and it is the SECOND of a propping-each-other-up pair.
 /// `docs/language-reference.md` §7.24 documents a borrow held across an `await`

@@ -1,0 +1,14 @@
+# KNOWN GAP (filed 2026-08-15 from the R42 Track-D brief-review pass 6, orchestrator-verified):
+# indexing a TYPE NAME — `int[2]` in expression position — passes `gg check`
+# ("OK: no semantic errors"), then the DEBUG build ICEs in IR lowering
+# (methods.rs consuming-position validator, debug_assert!(false) +
+# Operand::Constant(Unit)) and the RELEASE build SILENTLY MISCOMPILES
+# (prints 0). Core #10: check must reject what lowering cannot lower;
+# Core #8: debug-ICE + release-silent-wrong is two defects.
+# INTENDED: check-time rejection (E_NotIndexable family — `int` is a type,
+# not an indexable value). Pre-existing at HEAD; predates and is unrelated
+# to the R42 author-paren work that surfaced it.
+# Wired test: check_rejects_type_index (tests/integration.rs, #[ignore]d).
+void main():
+    int a = int[2]
+    print(a)
