@@ -7,12 +7,15 @@
 # deleting the author's paren here is not cosmetic — it is a `gg fmt` run that
 # turns a valid file into an unparseable one.
 #
-# RED (pre-fix binary), verbatim:
+# RED (pre-fix binary), verbatim — quoted from `gg check` on the formatted
+# output, whose `with` line is the one below at COLUMN 10 (the line NUMBER is
+# not quoted on purpose: it is this file's own `with` line, and it moves
+# whenever this header does):
 #     with (r + 0) as held:   →   with r + 0 as held:
 #     $ gg check <output>
 #     error: expected expected '<expr> as <name>' or bare identifier in
 #            with-binding, found
-#       ┌─ :10
+#       ┌─ <output>:<the `with` line>:10
 #       │ with r + 0 as held:
 #     then `expected expression, found INDENT`, then 8x `expected type, found
 #     DEDENT` — `10 parse error(s) found`, and `gg fmt` drops the orphaned body.

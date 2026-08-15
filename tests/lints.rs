@@ -14508,8 +14508,8 @@ fn fmt_author_paren_dedup_class() {
     );
 }
 
-/// TOTAL CENSUS of paren EMISSION in the formatter, classified per function —
-/// the guard that pins the SIZE of the expression-wrapping set, not merely the
+/// CENSUS of paren EMISSION in the formatter, classified per function — the
+/// guard that pins the SIZE of the expression-wrapping set, not merely the
 /// identity of its members.
 ///
 /// The sibling guard above checks that the two known dedup sites still consult
@@ -14536,33 +14536,53 @@ fn fmt_author_paren_dedup_class() {
 ///    `format_expr_maybe_parens` (the precedence wrap, suppressed on same-span)
 ///    and `wrap_multiline_expr_in_parens` (the broken-chain wrap, ditto).
 ///
-/// A new paren write anywhere in the formatter changes some row's count or adds
-/// an unlisted function, and is RED until its author classifies it — at which
-/// point an EXPRESSION disposition is a deliberate, reviewed decision that also
-/// owes a dedup.
+/// A row's count changing — or a function appearing with no row — is RED until
+/// its author classifies it. The disposition describes what a function's parens
+/// ARE today; a count change is red regardless of disposition, which is what
+/// forces an EXPRESSION addition inside an already-STRUCTURAL function (say a
+/// new wrap inside `format_expr_inner`) to be looked at rather than absorbed.
 ///
-/// **Break-and-verify, measured on this tree (both plants reverted):**
-///  * a bare `emitter.write("(")` planted around an expression emission inside
-///    an EXISTING function → RED on that row's count
-///    (`format_expr_inner 2` vs expected `1`);
-///  * a whole NEW paren-writing function → RED with the row printed as
-///    `brand_new_paren_helper  2  UNCLASSIFIED`.
+/// **THE LENS — what "a paren write" means here, stated because the first cut
+/// of this guard got it wrong.** It counts paren CHARACTERS inside any string
+/// literal handed to `emitter.write` / `write_preformatted` / `doc::text`, plus
+/// the two delimiter arguments of the `emit_delimited_*` family. Not the
+/// spelling `write("(")`: `write(" catch (")`, `write("):")`, `write(",)")`,
+/// `write(".await()")` and `emit_delimited_list("(", ")", …)` all emit parens
+/// too, and this file uses those spellings twenty times. A lens keyed on the
+/// bare spelling was measured to let a NEW function writing `" ("` + an
+/// expression + `") "` through with every lint green — the exact accretion
+/// shape this round exists to retire, in a costume the file already wears.
 ///
-/// ⚠ **Stated boundary, also measured.** This census sees paren WRITES, so it
-/// cannot see the other face of the hole: a TRANSPARENT WRAPPER that reuses a
-/// child's span and routes through `format_expr` would double-emit an EXISTING
-/// write, moving no count. What that direction actually costs was probed rather
-/// than assumed — rerouting `Expr::Catch`'s same-span recovery child through
-/// `format_expr` (instead of `format_arm_body`) reds
-/// `formatter_header_suffix_census` and `formatter_suite_layout_hook_census`
-/// immediately, and produced NO paren accretion, because the author layer is
-/// keyed on the node the parser recorded and that reroute does not make two
-/// nodes share it. The accreting shape needs literal span REUSE, which is what
-/// `Expr::ImplicitClosure` alone has (it wraps `body` at `body.span`); that
-/// spelling is pinned by the `format_expr_inner` caller count above, and
+/// **Break-and-verify, measured on this tree (all plants reverted):**
+///  * a new function writing `" ("` / `") "` around `format_expr` — the
+///    composite spelling the narrow lens missed → RED, `UNCLASSIFIED`;
+///  * a bare `emitter.write("(")` planted inside an EXISTING function → RED on
+///    that row's count;
+///  * a whole new function writing bare `"("` / `")"` → RED, `UNCLASSIFIED`.
+///
+/// ⚠ **Stated boundaries — two, both measured, neither claimed away.**
+///
+/// (1) The lens reads LITERAL text. A paren assembled at runtime — interpolated
+/// into a `format!` from a computed value, or carried inside a variable — is
+/// invisible to it. Nothing in the formatter does that today (every paren in
+/// the file is a literal character in a written string), and a runtime-computed
+/// delimiter would be a Layering rule-2 problem of its own before it was a
+/// paren problem.
+///
+/// (2) It sees paren WRITES, so it cannot see the other face of the hole: a
+/// TRANSPARENT WRAPPER that reuses a child's span and routes through
+/// `format_expr` would double-emit an EXISTING write, moving no count. What
+/// that direction actually costs was probed rather than assumed — rerouting
+/// `Expr::Catch`'s same-span recovery child through `format_expr` (instead of
+/// `format_arm_body`) reds `formatter_header_suffix_census` and
+/// `formatter_suite_layout_hook_census` immediately, and produced NO paren
+/// accretion, because the author layer is keyed on the node the parser recorded
+/// and that reroute does not make two nodes share it. The accreting shape needs
+/// literal span REUSE, which is what `Expr::ImplicitClosure` alone has (it
+/// wraps `body` at `body.span`); that spelling is pinned by the
+/// `format_expr_inner` caller count above, and
 /// `tests/fixtures/fmt_author_parens/wrappers.gg` carries a cell per censused
-/// shared-span pair kind. Those two, not this lint, are the net for that
-/// direction.
+/// shared-span pair kind. Those two, not this lint, are the net for it.
 #[test]
 fn fmt_paren_emission_census() {
     #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -14576,62 +14596,145 @@ fn fmt_paren_emission_census() {
     use Paren::*;
 
     /// Every function in `src/formatter/mod.rs` that emits a `(` or `)`, with
-    /// its site count and disposition. Counts cover BOTH layers: the imperative
-    /// `emitter.write("(")` / `write(")")` and the Doc layer's
-    /// `doc::text("(")` / `doc::text(")")`.
+    /// its paren-CHARACTER count and disposition. 63 characters, 16 functions.
     const CENSUS: &[(&str, usize, Paren)] = &[
-        ("format_item", 3, Structural),                  // import list / meta-item args
+        // `import (a, b)` list · the meta-type-fn param list, whose closer is
+        // spelled `"):"` — the shape that proved a bare-spelling lens is blind.
+        ("format_item", 5, Structural),
         ("format_attributes", 2, Structural),            // `@attr(args)`
         ("format_variant_tuple_fields", 3, Structural),  // `Variant(int, int)`
         ("format_newtype", 2, Structural),               // `type Name(Inner)`
-        ("format_stmt", 1, Structural),                  // the `)` closing `.send(`
+        // `shared(rwlock)` / `shared(atomic)` declaration modifiers, `.recv()`,
+        // and the `.send(` … `)` argument list.
+        ("format_stmt", 8, Structural),
         ("format_type", 7, Structural),                  // tuple + function types
         ("format_fn_type_params", 1, Structural),        // `int(int, int)`
         ("format_pattern", 6, Structural),               // `case (a, b)` / `Some(x)`
         ("format_closure_param", 3, Structural),         // `(int x)`
-        // The ONE-TUPLE LITERAL `(x,)`. Structural despite living in the
-        // expression dispatch: the parser's COMMA branch builds a
-        // `TupleLiteral` and returns before the grouping branch, so this pair
-        // never records a layer. Pinned by `structural_neg.gg`'s one-tuple cell.
-        ("format_expr_inner", 1, Structural),
+        // The three delimited-list wrappers, each `emit_delimited_list("(", ")")`:
+        // a parameter list, a CALL's argument list, a closure's parameter list.
+        ("format_params_wrapped", 2, Structural),
+        ("format_call_args_wrapped", 2, Structural),
+        ("format_closure_params_wrapped", 2, Structural),
+        // STRUCTURAL despite living in the expression dispatch, all fourteen:
+        // the one-tuple literal `(x,)` (opener + the `,)` closer), the tuple and
+        // call-argument `emit_delimited_list` delimiters, `.await()`'s empty
+        // argument list, and the `rethrow (T e):` / `catch (e):` error-BINDING
+        // declarations. None is an expression wrap: each re-parses through the
+        // tuple / call / binding production, never through `parse_paren_expr`'s
+        // grouping branch. The one-tuple pair is pinned by `structural_neg.gg`.
+        ("format_expr_inner", 14, Structural),
         // ── The expression-wrapping set: exactly three, all deduped ──
         ("format_expr", 2, Expression),
         ("format_expr_maybe_parens", 2, Expression),
         ("wrap_multiline_expr_in_parens", 2, Expression),
     ];
 
+    /// The emitting calls whose string arguments reach the output.
+    const EMITTERS: &[&str] = &[
+        "emitter.write(",
+        "emitter.write_preformatted(",
+        "doc::text(",
+        "emit_delimited_list(",
+        "emit_delimited_list_with(",
+        "emit_delimited_fill(",
+        "surround_fill(",
+    ];
+
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
-    let mut actual: Vec<(String, usize)> = Vec::new();
+    let bytes: Vec<char> = content.chars().collect();
+
+    // Line index -> enclosing fn name, so a site anywhere in a multi-line
+    // argument list is attributed to the function that opened the call.
+    let mut fn_of_line: Vec<String> = Vec::with_capacity(content.lines().count());
     let mut current_fn = String::from("<top-level>");
     for line in content.lines() {
         let t = line.trim_start();
-        if let Some(rest) = t.strip_prefix("fn ").or_else(|| t.strip_prefix("pub fn ")) {
+        // `fn`, `pub fn`, `pub(crate) fn`, `async fn` — all four spellings, so
+        // attribution cannot silently fall back to the previous function.
+        let after = t
+            .strip_prefix("pub(crate) ")
+            .or_else(|| t.strip_prefix("pub "))
+            .unwrap_or(t);
+        let after = after.strip_prefix("async ").unwrap_or(after);
+        if let Some(rest) = after.strip_prefix("fn ") {
             current_fn = rest.split(['(', '<']).next().unwrap_or("").to_string();
         }
-        if t.starts_with("//") {
+        fn_of_line.push(current_fn.clone());
+    }
+    let line_of_offset = |off: usize| -> usize { content[..off].matches('\n').count() };
+
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    let mut i = 0usize;
+    // Byte offsets of `content` and indices into `bytes` coincide only for
+    // ASCII; the file has non-ASCII in comments, so walk `content` by char
+    // boundaries via `char_indices` positions instead.
+    let offsets: Vec<usize> = content.char_indices().map(|(o, _)| o).collect();
+    while i < bytes.len() {
+        let off = offsets[i];
+        let Some(call) = EMITTERS.iter().find(|c| content[off..].starts_with(**c)) else {
+            i += 1;
+            continue;
+        };
+        // Skip a mention inside a comment line.
+        let line_start = content[..off].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        if content[line_start..off].trim_start().starts_with("//") {
+            i += 1;
             continue;
         }
-        let n = line.matches("emitter.write(\"(\")").count()
-            + line.matches("emitter.write(\")\")").count()
-            + line.matches("doc::text(\"(\")").count()
-            + line.matches("doc::text(\")\")").count();
-        if n == 0 {
-            continue;
+        // Walk to this call's matching close paren, tracking string state so a
+        // paren INSIDE a literal does not close the argument list.
+        let mut depth = 1i32;
+        let mut j = i + call.chars().count();
+        let (mut in_str, mut esc) = (false, false);
+        while j < bytes.len() && depth > 0 {
+            let ch = bytes[j];
+            if in_str {
+                if esc {
+                    esc = false;
+                } else if ch == '\\' {
+                    esc = true;
+                } else if ch == '"' {
+                    in_str = false;
+                }
+            } else if ch == '"' {
+                in_str = true;
+            } else if ch == '(' {
+                depth += 1;
+            } else if ch == ')' {
+                depth -= 1;
+            }
+            j += 1;
         }
-        match actual.last_mut() {
-            Some((f, c)) if *f == current_fn => *c += n,
-            _ => actual.push((current_fn.clone(), n)),
+        // Count paren CHARACTERS inside the string literals of that region —
+        // `" catch ("`, `"):"`, `",)"`, `".await()"` and `"("`/`")"` alike.
+        let (mut n, mut in_str, mut esc) = (0usize, false, false);
+        for &ch in &bytes[i + call.chars().count()..j.min(bytes.len())] {
+            if in_str {
+                if esc {
+                    esc = false;
+                } else if ch == '\\' {
+                    esc = true;
+                } else if ch == '"' {
+                    in_str = false;
+                } else if ch == '(' || ch == ')' {
+                    n += 1;
+                }
+            } else if ch == '"' {
+                in_str = true;
+            }
         }
+        if n > 0 {
+            let f = fn_of_line[line_of_offset(off)].clone();
+            match counts.iter_mut().find(|(g, _)| *g == f) {
+                Some((_, total)) => *total += n,
+                None => counts.push((f, n)),
+            }
+        }
+        i = j;
     }
-    // Fold the repeated-visit case (a function's writes split by a nested fn).
-    let mut folded: Vec<(String, usize)> = Vec::new();
-    for (f, c) in actual {
-        match folded.iter_mut().find(|(g, _)| *g == f) {
-            Some((_, total)) => *total += c,
-            None => folded.push((f, c)),
-        }
-    }
+    let mut folded = counts;
     folded.sort();
 
     let mut expected: Vec<(String, usize)> =
