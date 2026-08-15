@@ -272,6 +272,15 @@ pub struct StructDef {
     pub fields: Vec<Spanned<FieldDef>>,
     pub doc_comment: Option<String>,
     pub span: Span,
+    /// Span of the `:` that closes this container's header — the position a
+    /// header-line trailing comment attaches to.
+    ///
+    /// Written by `Parser::expect_block_start`, the single `:`-consuming
+    /// chokepoint for block headers. The container's NAME is not a substitute:
+    /// on a MULTI-LINE header (`struct S[\n    T\n]:  # x`) the name sits on
+    /// an earlier source line, so a same-line test against it rejects the
+    /// header's own comment and drops it into the body.
+    pub header_colon_span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -298,6 +307,15 @@ pub struct EnumDef {
     pub variants: Vec<Spanned<Variant>>,
     pub doc_comment: Option<String>,
     pub span: Span,
+    /// Span of the `:` that closes this container's header — the position a
+    /// header-line trailing comment attaches to.
+    ///
+    /// Written by `Parser::expect_block_start`, the single `:`-consuming
+    /// chokepoint for block headers. The container's NAME is not a substitute:
+    /// on a MULTI-LINE header (`struct S[\n    T\n]:  # x`) the name sits on
+    /// an earlier source line, so a same-line test against it rejects the
+    /// header's own comment and drops it into the body.
+    pub header_colon_span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -328,6 +346,15 @@ pub struct TraitDef {
     pub items: Vec<Spanned<TraitItem>>,
     pub doc_comment: Option<String>,
     pub span: Span,
+    /// Span of the `:` that closes this container's header — the position a
+    /// header-line trailing comment attaches to.
+    ///
+    /// Written by `Parser::expect_block_start`, the single `:`-consuming
+    /// chokepoint for block headers. The container's NAME is not a substitute:
+    /// on a MULTI-LINE header (`struct S[\n    T\n]:  # x`) the name sits on
+    /// an earlier source line, so a same-line test against it rejects the
+    /// header's own comment and drops it into the body.
+    pub header_colon_span: Span,
 }
 
 #[derive(Debug, Clone)]
@@ -356,6 +383,19 @@ pub struct EquipBlock {
     pub via_field: Option<Spanned<String>>,
     pub items: Vec<Spanned<FunctionDef>>,
     pub span: Span,
+    /// Span of the `:` that closes this container's header — the position a
+    /// header-line trailing comment attaches to.
+    ///
+    /// Written by `Parser::expect_block_start`, the single `:`-consuming
+    /// chokepoint for block headers. The container's NAME is not a substitute:
+    /// on a MULTI-LINE header (`struct S[\n    T\n]:  # x`) the name sits on
+    /// an earlier source line, so a same-line test against it rejects the
+    /// header's own comment and drops it into the body.
+    ///
+    /// `Option` because equip's colon is OPTIONAL: the blank form `equip S
+    /// with T` (no colon, no body) is legal and in the corpus, so there is no
+    /// colon to record for it.
+    pub header_colon_span: Option<Span>,
 }
 
 #[derive(Debug, Clone)]
@@ -1323,6 +1363,22 @@ pub struct Block {
     /// seven parser construction sites; every non-parser construction goes
     /// through [`Block::synthetic`].
     pub layout: SuiteLayout,
+    /// A byte position on the FIRST source line of the construct this block is
+    /// the body of — the `if` keyword, the `def`'s return type, the `case`, the
+    /// closure's `(`.
+    ///
+    /// **Not derivable from `span`.** `span.start` is the introducer the
+    /// parser happened to have in hand (the colon at most sites, a clause
+    /// keyword, a closure `(`, a whole catch expression, a body-line NEWLINE),
+    /// and on a WRAPPED header the colon sits on a continuation line whose
+    /// indent is at or past the body's. Anything that needs the header's
+    /// INDENT — the formatter's orphan-pre-close flush, whose membership rule
+    /// is "indented past the header" — must read this field instead.
+    ///
+    /// Written at the one indented-suite writer, `Parser::parse_block_body`,
+    /// which takes it as an explicit parameter so each caller states the
+    /// construct it is parsing rather than letting a default drift in.
+    pub header_start: usize,
 }
 
 impl Block {
@@ -1338,6 +1394,10 @@ impl Block {
             stmts,
             span,
             layout: SuiteLayout::NextLine,
+            // No author header exists, so the block's own start is the only
+            // honest answer. Unread in practice: the formatter's flush is the
+            // one consumer and never reaches a synthesized block.
+            header_start: span.start,
         }
     }
 }
@@ -1422,6 +1482,15 @@ pub struct ExternBlock {
     pub abi: Option<Spanned<String>>,
     pub items: Vec<Spanned<FunctionDef>>,
     pub span: Span,
+    /// Span of the `:` that closes this container's header — the position a
+    /// header-line trailing comment attaches to.
+    ///
+    /// Written by `Parser::expect_block_start`, the single `:`-consuming
+    /// chokepoint for block headers. The container's NAME is not a substitute:
+    /// on a MULTI-LINE header (`struct S[\n    T\n]:  # x`) the name sits on
+    /// an earlier source line, so a same-line test against it rejects the
+    /// header's own comment and drops it into the body.
+    pub header_colon_span: Span,
 }
 
 // ══════════════════════════════════════════════════════════════

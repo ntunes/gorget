@@ -10769,12 +10769,12 @@ fn doc_source_citations_name_the_right_line() {
     // row belongs here only when the cite is measured CORRECT and the sentence
     // genuinely names no symbol at that line.
     const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
-        ("103", "src/formatter/mod.rs:41", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
+        ("103", "src/formatter/mod.rs:42", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("143", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
         ("220", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("469", "src/formatter/mod.rs:709", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("493", "src/formatter/mod.rs:1653", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("587", "src/formatter/mod.rs:2239", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("469", "src/formatter/mod.rs:879", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("493", "src/formatter/mod.rs:2128", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("587", "src/formatter/mod.rs:2742", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
@@ -12400,6 +12400,305 @@ fn item_module_is_constructed_only_by_the_loader() {
     );
 }
 
+/// THE ORPHAN-PRE-CLOSE CENSUS. Every `self.emitter.dedent()` in
+/// `src/formatter/mod.rs` is a block CLOSING, and a block that closes without
+/// having claimed the comment written after its last child leaks that comment
+/// outward — to the enclosing scope's next hook, in the worst case to the
+/// module flush at column 0, where it reads as documentation of the NEXT item.
+///
+/// **Shape-detected per row, never a bare count.** A count stays green with a
+/// site missing (that is exactly how a hookless loop shipped once before), so
+/// this lint classifies each row by the EVIDENCE immediately above it and RED's
+/// on any row it cannot classify. The class vocabulary is the design's, not a
+/// list invented here:
+///
+///   * `Routed` — the row closes a statement suite whose body went through
+///     `format_block_stmts`, which carries the flush for the whole family.
+///   * `Container` — struct / enum / trait / equip / extern block: children are
+///     members, not statements, so the container calls the flush itself.
+///   * `NestedItems` — the item-level `meta if` branch bodies, whose flush
+///     lives in the shared `format_nested_items` producer (one per arm).
+///   * `ArmContainer` — match statement / select / meta match / match
+///     EXPRESSION: children are ARMS, so the routed chokepoint is structurally
+///     absent and each calls the flush on its own span.
+///   * `Site13` — the `meta for …:` block INSIDE a match statement. It owns its
+///     own indent/child/dedent, so it needs its own flush anchored on ITS
+///     header; with only the match container's flush its tail is re-parented to
+///     the arms level.
+///   * `ClosureRouting` — the closure body paths, which route through
+///     `format_closure_post_prelude` (the prelude-skipping one cannot delegate
+///     to `format_block_stmts` and takes the flush explicitly).
+///   * `Bracketed` — `format_bracketed_broken_with_comments`, the
+///     collection-literal shape that had the orphan-pre-close POSITION before
+///     the rest of the family did.
+///
+/// The scope is `src/formatter/mod.rs` PLUS an assertion that `doc.rs` still
+/// contains zero `dedent()` calls — so a future one there trips this guard
+/// instead of escaping its scope.
+///
+/// **Break-and-verify, two ways (both RED-verified when this landed):**
+///   1. delete one flush call (e.g. the one in `format_struct`) — that row's
+///      evidence disappears, it classifies as UNKNOWN, RED;
+///   2. add a bare `self.emitter.indent(); … self.emitter.dedent();` pair
+///      anywhere — the new row has no evidence, UNKNOWN, RED.
+/// Restore, green.
+///
+/// ⚠ The three existing hook lints CANNOT see this chokepoint:
+/// `.emit_orphan_comments_before_close(` contains none of the strings they
+/// count. This is their sibling, not a modification of them.
+#[test]
+fn formatter_dedent_close_census() {
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    enum Class {
+        Routed,
+        Container,
+        NestedItems,
+        ArmContainer,
+        Site13,
+        ClosureRouting,
+        Bracketed,
+        Unknown,
+    }
+    use Class::*;
+
+    /// Expected row count per class. Regenerate with
+    ///   cargo test --test lints formatter_dedent_close_census -- --nocapture
+    const EXPECTED: &[(Class, usize)] = &[
+        (Routed, 30),
+        (Container, 5),
+        (NestedItems, 3),
+        (ArmContainer, 4),
+        (Site13, 1),
+        (ClosureRouting, 2),
+        (Bracketed, 1),
+    ];
+    /// Every `dedent()` in the file is one of the classes above.
+    const EXPECTED_TOTAL: usize = 46;
+
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let lines: Vec<&str> = content.lines().collect();
+
+    // `doc.rs` owns no indentation state today; if it grows a `dedent()` this
+    // census stops covering the file that has it.
+    let doc = fs::read_to_string("src/formatter/doc.rs").expect("cannot read doc.rs");
+    assert_eq!(
+        doc.matches("dedent()").count(),
+        0,
+        "`src/formatter/doc.rs` grew a `dedent()`. This census only scans \
+         `mod.rs`; extend its scope (and classify the new rows) rather than \
+         letting a block close outside the guard."
+    );
+
+    // Classify each `dedent()` by the evidence in the window above it, up to
+    // the matching `indent()` (or 60 lines, whichever comes first).
+    let mut rows: Vec<(usize, String, Class)> = Vec::new();
+    let mut current_fn = String::from("<file scope>");
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        if (t.starts_with("fn ") || t.starts_with("pub fn ")) && line.starts_with("    ") {
+            current_fn = t
+                .trim_start_matches("pub ")
+                .trim_start_matches("fn ")
+                .split(['(', '<'])
+                .next()
+                .unwrap_or("?")
+                .to_string();
+        }
+        if t.starts_with("//") || !line.contains("self.emitter.dedent()") {
+            continue;
+        }
+        let start = i.saturating_sub(60);
+        let mut class = Unknown;
+        for w in (start..i).rev() {
+            let wl = lines[w];
+            let wt = wl.trim_start();
+            if wt.starts_with("//") {
+                continue;
+            }
+            if wl.contains("self.emitter.indent()") {
+                break;
+            }
+            if wl.contains(".emit_orphan_comments_before_close(") {
+                // The ARGUMENT names the anchor, and the anchor names the class.
+                class = if wl.contains("(s.span.start")
+                    || wl.contains("(e.span.start")
+                    || wl.contains("(t.span.start")
+                    || wl.contains("(eb.span.start")
+                {
+                    Container
+                } else if wl.contains("(stmt.span.start") || wl.contains("(expr.span.start") {
+                    ArmContainer
+                } else if wl.contains("(span.start") {
+                    Site13
+                } else {
+                    Unknown
+                };
+                break;
+            }
+            if wl.contains("self.format_nested_items(") {
+                class = NestedItems;
+                break;
+            }
+            if wl.contains("self.format_closure_post_prelude(") {
+                class = ClosureRouting;
+                break;
+            }
+            if wl.contains("self.format_block_stmts(") {
+                class = Routed;
+                break;
+            }
+            if wl.contains("self.emit_comments_before(container_end)") {
+                class = Bracketed;
+                break;
+            }
+        }
+        rows.push((i + 1, current_fn.clone(), class));
+    }
+
+    // Printed so the constants above can be regenerated from the scan itself.
+    for (ln, f, c) in &rows {
+        println!("dedent row: src/formatter/mod.rs:{ln}  fn {f}  {c:?}");
+    }
+
+    let unknown: Vec<String> = rows
+        .iter()
+        .filter(|(_, _, c)| *c == Unknown)
+        .map(|(ln, f, _)| format!("  src/formatter/mod.rs:{ln} (fn {f})"))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "UNCLASSIFIED block close(s) — every `dedent()` in the formatter must \
+         be attributable to one of the orphan-pre-close classes, because a \
+         block that closes without claiming its tail comment leaks it \
+         outward:\n{}\n\nIf the new row genuinely closes a block that can hold \
+         an author's tail comment, give it a flush \
+         (`emit_orphan_comments_before_close(<owning construct's first line>, \
+         <block end>)`). If it closes something else, say which class it is and \
+         teach this scan to see it — never widen the scan to swallow it \
+         silently.",
+        unknown.join("\n")
+    );
+
+    assert_eq!(
+        rows.len(),
+        EXPECTED_TOTAL,
+        "the formatter's `dedent()` count moved ({} vs {EXPECTED_TOTAL}). That \
+         is fine — but the per-class table below must move with it, and the new \
+         row needs a class.",
+        rows.len()
+    );
+
+    for (class, want) in EXPECTED {
+        let got = rows.iter().filter(|(_, _, c)| c == class).count();
+        assert_eq!(
+            got, *want,
+            "orphan-pre-close census: {class:?} rows moved ({got} vs {want}). \
+             A DROP is the dangerous direction — it means a block close lost \
+             its flush and its tail comments now escape. Re-derive with \
+             `cargo test --test lints formatter_dedent_close_census -- --nocapture`."
+        );
+    }
+}
+
+/// THE CLAIM-SITE CENSUS. `Formatter::comment_cursor` advances at exactly ONE
+/// place, and every hook that takes a comment off it goes through the one
+/// claim/emit pair.
+///
+/// Why it has to be one place: a trailing comment continued on the lines below
+/// it is ONE logical comment, so whichever hook claims the HEAD must claim the
+/// whole run — otherwise the run splits and its continuation lines end up
+/// documenting whatever follows them. That rule is not enforceable by review
+/// across four hooks; it is enforceable by there being one cursor advance.
+///
+/// **Break-and-verify (both RED-verified when this landed):** add a bare
+/// `self.comment_cursor += 1;` in any hook — the advance count moves and this
+/// fires; add a new caller of `claim_run_at_cursor` without a census row — the
+/// caller count moves and this fires.
+#[test]
+fn formatter_comment_claim_site_census() {
+    /// The functions that may claim a comment, and why each does.
+    const CLAIMERS: &[(&str, &str)] = &[
+        ("emit_comments_before", "leading comments before a sibling's start"),
+        ("emit_remaining_comments", "the EOF flush"),
+        ("emit_trailing_comment_after", "a same-source-line trailing comment"),
+        ("claim_header_trailing_comments", "an inline suite's header comment, emitted after its body"),
+        ("emit_orphan_comments_before_close", "the orphan-pre-close flush"),
+    ];
+    /// `comment_cursor += 1` sites — BOTH inside `claim_run_at_cursor` (the
+    /// head, then each continuation).
+    const EXPECTED_CURSOR_ADVANCES: usize = 2;
+
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let lines: Vec<&str> = content.lines().collect();
+
+    let mut advances: Vec<(usize, String)> = Vec::new();
+    let mut claim_calls: Vec<(usize, String)> = Vec::new();
+    let mut current_fn = String::from("<file scope>");
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        if (t.starts_with("fn ") || t.starts_with("pub fn ")) && line.starts_with("    ") {
+            current_fn = t
+                .trim_start_matches("pub ")
+                .trim_start_matches("fn ")
+                .split(['(', '<'])
+                .next()
+                .unwrap_or("?")
+                .to_string();
+        }
+        if t.starts_with("//") {
+            continue;
+        }
+        // Any mutation of the cursor, not just `+= 1`: the needle is the
+        // ASSIGNMENT, so a bypassing claimer cannot dodge it by stepping two.
+        if line.contains("self.comment_cursor +=") || line.contains("self.comment_cursor =") {
+            advances.push((i + 1, current_fn.clone()));
+        }
+        if line.contains("self.claim_run_at_cursor(") {
+            claim_calls.push((i + 1, current_fn.clone()));
+        }
+    }
+
+    let stray: Vec<String> = advances
+        .iter()
+        .filter(|(_, f)| f != "claim_run_at_cursor")
+        .map(|(ln, f)| format!("  src/formatter/mod.rs:{ln} (fn {f})"))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "`comment_cursor` advanced OUTSIDE `claim_run_at_cursor`:\n{}\n\nA hook \
+         that advances the cursor itself can take a multi-line trailing \
+         comment's HEAD and leave its continuation lines behind, which splits \
+         the run and re-parents its tail. Route the claim through \
+         `claim_run_at_cursor` + `emit_claimed_run` and add a row to CLAIMERS \
+         with the reason this position claims.",
+        stray.join("\n")
+    );
+    assert_eq!(
+        advances.len(),
+        EXPECTED_CURSOR_ADVANCES,
+        "the number of cursor advances inside `claim_run_at_cursor` changed \
+         ({} vs {EXPECTED_CURSOR_ADVANCES}). Expected exactly two: the head, \
+         and each continuation of its run.",
+        advances.len()
+    );
+
+    let mut callers: Vec<String> = claim_calls.iter().map(|(_, f)| f.clone()).collect();
+    callers.sort();
+    callers.dedup();
+    let mut expected: Vec<String> = CLAIMERS.iter().map(|(f, _)| (*f).to_string()).collect();
+    expected.sort();
+    assert_eq!(
+        callers,
+        expected,
+        "the set of comment CLAIM SITES changed.\n\nEvery claimer is listed in \
+         CLAIMERS with the reason it claims; a new cursor-advancing site with \
+         no row is exactly the drift this census exists to catch. Sites found: \
+         {claim_calls:?}"
+    );
+}
+
 #[test]
 fn formatter_child_collection_loop_census() {
     /// Hook state a census row expects.
@@ -12436,11 +12735,17 @@ fn formatter_child_collection_loop_census() {
         // `format_nested_items`, when the nested-item blank preservation
         // landed — four copies of the loop were four chances to omit it, and
         // one of them omitting it is exactly what the snag was. The surviving
-        // `for (cond, items) in &mi.elif_branches` row is the BRANCH walk, not
+        // surviving `mi.elif_branches` row is the BRANCH walk, not
         // a child-collection loop: it emits the `elif` HEADER (with its own
         // leading-comment hook, hence `Leading`, exactly like the statement-level
-        // `format_elif_else_blocks` row above) and delegates the items.
-        ("format_item", "for (cond, items) in &mi.elif_branches {", Leading),
+        // `format_elif_else_blocks` row above) and delegates the items. It is
+        // INDEXED (`enumerate`) because each branch's orphan-flush ceiling is
+        // the NEXT clause's header, which the walk has to look ahead for.
+        (
+            "format_item",
+            "for (bi, (cond, items)) in mi.elif_branches.iter().enumerate() {",
+            Leading,
+        ),
         ("format_item", "for inner in items {", None_),
         ("format_nested_items", "for (i, item) in items.iter().enumerate() {", Both),
         ("format_struct", "for (i, field) in s.fields.iter().enumerate() {", Both),
@@ -13891,23 +14196,35 @@ fn suite_layout_is_read_only_by_the_formatter() {
 /// **Break-and-verify (Core #13, RED-verified 2026-08-11):** flip
 /// `parse_block_or_inline_stmt`'s `SuiteLayout::Inline` to `NextLine` and the
 /// per-variant counts below fire.
+///
+/// **It censuses `Block::header_start` too, in the same rows** (Layering rule 3
+/// — one writer axis, one census). That field is the other thing a `Block`
+/// construction cannot recover afterwards: which source line the owning
+/// construct STARTS on. `span.start` is not a substitute — it is whatever
+/// introducer the parser had in hand, which is the colon at most sites and on
+/// a wrapped header sits on a continuation line indented at or past the body.
+/// `Block::synthetic` carries its own row: it has no author header, so it
+/// writes its own span start, and nothing reads it (the formatter's flush never
+/// reaches a synthesized block).
 #[test]
 fn parser_suite_layout_writer_census() {
-    // (file, NextLine writes, Inline writes, rationale)
-    const CENSUS: &[(&str, usize, usize, &str)] = &[
+    // (file, NextLine writes, Inline writes, header_start writes, rationale)
+    const CENSUS: &[(&str, usize, usize, usize, &str)] = &[
         // `parse_block_body` IS the indented-suite grammar
         // (`NEWLINE INDENT stmt* DEDENT`) and is the sole NextLine writer;
         // `parse_block_or_inline_stmt`'s one-liner path is the Inline one.
-        ("src/parser/mod.rs", 1, 1, "parse_block_body · parse_block_or_inline_stmt"),
+        ("src/parser/mod.rs", 1, 1, 2, "parse_block_body · parse_block_or_inline_stmt"),
         // `on error <stmt>` (colon-less inline) · `meta match` inline arm body.
-        ("src/parser/stmt.rs", 0, 2, "on error inline · meta match inline arm"),
+        ("src/parser/stmt.rs", 0, 2, 2, "on error inline · meta match inline arm"),
         // The three SYNTHETIC wraps: `throw x` and `return x` in expression
         // position, and the expression-bodied destructuring closure. No author
         // wrote a suite at any of them, so emitting one would invent syntax.
-        ("src/parser/expr.rs", 0, 3, "throw wrap · return wrap · closure body wrap"),
+        ("src/parser/expr.rs", 0, 3, 3, "throw wrap · return wrap · closure body wrap"),
+        // `Block::synthetic` — no author spelling and no author header.
+        ("src/parser/ast.rs", 1, 0, 1, "Block::synthetic"),
     ];
 
-    for (path, want_next, want_inline, rationale) in CENSUS {
+    for (path, want_next, want_inline, want_header, rationale) in CENSUS {
         let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
         // Count WRITES only — a `SuiteLayout::X` in a `==` comparison is a
         // read, and the parser has none, but be explicit rather than lucky.
@@ -13921,14 +14238,23 @@ fn parser_suite_layout_writer_census() {
             .filter(|l| !l.trim_start().starts_with("//") && !l.contains("=="))
             .filter(|l| l.contains("SuiteLayout::Inline"))
             .count();
+        // A field INIT (`header_start,` / `header_start: <expr>,`), never the
+        // parameter declarations (`header_start: usize`) or the prose.
+        let got_header = content
+            .lines()
+            .map(|l| l.trim())
+            .filter(|t| !t.starts_with("//"))
+            .filter(|t| t.starts_with("header_start") && t.ends_with(',') && !t.contains("usize"))
+            .count();
         assert_eq!(
-            (got_next, got_inline),
-            (*want_next, *want_inline),
-            "R41 T-FMT-C `SuiteLayout` writer census changed in `{path}` \
-             (expected sites: {rationale}).\n\n\
+            (got_next, got_inline, got_header),
+            (*want_next, *want_inline, *want_header),
+            "R41 T-FMT-C `SuiteLayout` / `Block::header_start` writer census \
+             changed in `{path}` (expected sites: {rationale}).\n\n\
              A new `Block` construction in the parser must decide, at the only \
              layer that can: did the author indent this suite, or write it on \
-             the header's line? A construction outside the parser has no author \
+             the header's line? And WHERE does the owning construct's first \
+             line begin? A construction outside the parser has no author \
              spelling at all and goes through `Block::synthetic`.\n\n\
              Bump the row with the new site's rationale."
         );

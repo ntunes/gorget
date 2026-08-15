@@ -377,6 +377,8 @@ pub fn builtin_arith_error_enum() -> ast::EnumDef {
         ],
         doc_comment: None,
         span: crate::span::Span::dummy(),
+        // Synthesized — no author header, so no colon to point at.
+        header_colon_span: crate::span::Span::dummy(),
     }
 }
 
@@ -408,6 +410,8 @@ pub(super) fn inject_builtin_enums(enum_templates: &mut FxHashMap<String, ast::E
             ],
             doc_comment: None,
             span: crate::span::Span::dummy(),
+            // Synthesized — see `builtin_arith_error_enum`.
+            header_colon_span: crate::span::Span::dummy(),
         });
     }
 
@@ -447,6 +451,8 @@ pub(super) fn inject_builtin_enums(enum_templates: &mut FxHashMap<String, ast::E
             ],
             doc_comment: None,
             span: crate::span::Span::dummy(),
+            // Synthesized — see `builtin_arith_error_enum`.
+            header_colon_span: crate::span::Span::dummy(),
         });
     }
 }

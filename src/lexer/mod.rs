@@ -4,7 +4,10 @@ use crate::errors::{LexError, LexErrorKind};
 use crate::span::{Span, Spanned};
 use logos::Logos;
 use std::collections::VecDeque;
-use token::{Keyword, RawToken, StringKind, StringLiteral, StringSegment, Token};
+use token::{
+    CommentPlacement, CommentToken, Keyword, RawToken, StringKind, StringLiteral, StringSegment,
+    Token,
+};
 
 /// Indentation-aware lexer for Gorget source code.
 ///
@@ -309,14 +312,31 @@ impl<'src> Lexer<'src> {
 
             match bytes[i] {
                 // Comment — emit as token then stop processing line
+                //
+                // The TRAILING producer. Unlike the own-line one it is
+                // byte-indexed into the middle of a line, so its two lexical
+                // facts are derived by scanning BACK to the line start (the
+                // two producers are not symmetric: this one has code before
+                // the `#`, so the column is a CHARACTER count over that code,
+                // not a byte distance).
                 b'#' => {
                     let comment_start = i;
                     while i < bytes.len() && bytes[i] != b'\n' {
                         i += 1;
                     }
                     let content = self.source[comment_start..i].to_string();
+                    let mut line_start = comment_start;
+                    while line_start > 0 && bytes[line_start - 1] != b'\n' {
+                        line_start -= 1;
+                    }
+                    let hash_col = self.source[line_start..comment_start].chars().count();
                     self.pending.push_back(Spanned::new(
-                        Token::Comment(content),
+                        Token::Comment(CommentToken {
+                            text: content,
+                            line_start: self.base_offset + line_start,
+                            hash_col,
+                            placement: CommentPlacement::Trailing,
+                        }),
                         self.span(comment_start, i),
                     ));
                     break;
@@ -1025,10 +1045,34 @@ impl<'src> Lexer<'src> {
     }
 
     /// Scan a comment to EOL, emit as a token, and skip the trailing newline.
+    ///
+    /// This is the OWN-LINE producer: `scan_next_line` reaches it only when
+    /// nothing but indentation precedes the `#`, so `placement` is known
+    /// without inspecting anything. `line_start` is the caller's `start`, and
+    /// the `#` sits at `self.pos` on entry — the column is therefore the
+    /// indentation run's width, in hand at scan time.
+    ///
+    /// The emitted span starts at the `#`, NOT at `line_start`: the trailing
+    /// producer below spells it that way too, and one axis gets one meaning.
     fn emit_comment_token(&mut self, start: usize, is_doc: bool) {
+        let hash_pos = self.pos;
+        // Only spaces and tabs can precede the `#` here (the caller reached
+        // this arm through `count_leading_spaces`), so the byte distance IS
+        // the character column.
+        let hash_col = hash_pos - start;
         let content = self.scan_to_eol();
-        let token = if is_doc { Token::DocComment(content) } else { Token::Comment(content) };
-        self.pending.push_back(Spanned::new(token, self.span(start, self.pos)));
+        let span = self.span(hash_pos, self.pos);
+        let token = if is_doc {
+            Token::DocComment(content)
+        } else {
+            Token::Comment(CommentToken {
+                text: content,
+                line_start: self.base_offset + start,
+                hash_col,
+                placement: CommentPlacement::OwnLine,
+            })
+        };
+        self.pending.push_back(Spanned::new(token, span));
         if self.pos < self.source.len() {
             self.pos += 1; // skip \n
         }
@@ -1344,7 +1388,14 @@ mod tests {
                 Token::Identifier(crate::intern::intern("x")),
                 Token::Eq,
                 Token::IntLiteral(5),
-                Token::Comment("# comment".to_string()),
+                // The TRAILING producer: code precedes the `#`, whose column
+                // is 7 (`x = 5  ` is seven characters).
+                Token::Comment(CommentToken {
+                    text: "# comment".to_string(),
+                    line_start: 0,
+                    hash_col: 7,
+                    placement: CommentPlacement::Trailing,
+                }),
                 Token::Newline,
             ]
         );
@@ -1787,7 +1838,14 @@ void main():
         assert_eq!(
             tokens,
             vec![
-                Token::Comment("# whole line comment".to_string()),
+                // The OWN-LINE producer: nothing but (zero) indentation
+                // precedes the `#`.
+                Token::Comment(CommentToken {
+                    text: "# whole line comment".to_string(),
+                    line_start: 0,
+                    hash_col: 0,
+                    placement: CommentPlacement::OwnLine,
+                }),
                 Token::Identifier(crate::intern::intern("x")),
                 Token::Eq,
                 Token::IntLiteral(1),

@@ -1,0 +1,40 @@
+# ==== INLINE-HEADER COMMENT · the deferred injection's two control cells
+#
+# An inline suite's header comment is CLAIMED before the body renders and
+# EMITTED after, at the output line the claim recorded. That back-injection has
+# two consequences the aligner can see, and each gets a cell.
+#
+# CELL 1 — MUST-NOT-MOVE control: a SINGLE-LINE inline body. The header comment
+#   is already at the buffer's tail when it is emitted, so resolving the
+#   recorded anchor must land it in exactly the same place it always did. This
+#   is the regression guard for the multi-line cell's fix.
+#
+# CELL 2 — SILENT MISALIGNMENT: a multi-line inline body whose statements carry
+#   a trailing-comment GROUP. Those entries are recorded BEFORE the header's
+#   (the body renders first), at absolute buffer offsets, and the header's
+#   comment is then spliced in AHEAD of them. Two things must happen or the
+#   aligner writes spaces into the middle of a line: every later entry's offset
+#   shifts by the spliced length, and the header's own entry is inserted at its
+#   SORTED position rather than pushed onto the end (the planner walks its scan
+#   cursor forward once and would otherwise mis-attribute every entry after
+#   it). Either half alone leaves one failure mode.
+#
+# Both are FIXPOINT cells. The alignment of the body group is the assertion:
+# the two `case` comments share a column, and neither line is corrupted.
+
+void single_line_body(int x):
+    if x == 1: print(1)    # control: single-line body, comment does not move
+
+int multi_line_body(int y):
+    if true: int x = match y:    # note: the header's own comment
+        case 2:
+            int a = 1       # group member one
+            int bb = 22     # group member two
+            20
+        else:
+            30
+    return 0
+
+void main():
+    single_line_body(1)
+    print(multi_line_body(2))

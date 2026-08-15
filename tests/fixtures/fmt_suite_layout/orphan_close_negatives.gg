@@ -1,0 +1,63 @@
+# ==== ORPHAN-PRE-CLOSE · the NEGATIVE cells (AXIS B — over-consumption)
+#
+# The flush claims a PREFIX of the comment cursor, and membership is decided by
+# COLUMN, not by the block's recorded span. Both halves are load-bearing, and
+# both are only visible in the negative: a block's `span.end` is its DEDENT
+# token, whose span reaches into the NEXT code line, so a span ceiling on its
+# own drags the next item's leading comment into the closing block.
+#
+# CELLS (six):
+#   1. a column-0 comment BETWEEN two containers
+#   2. a column-0 comment LEADING the next item after a block
+#   3. a comment at the ENCLOSING body's indent after a nested block closes
+#   4. a comment after an INLINE suite
+#   5. a comment at EOF, column 0
+#   6. a tail comment in an EMPTY container (no child to anchor on)
+#
+# GREEN ON ARRIVAL — there is no pre-fix build to red these against, so each is
+# RED-verified by BREAK-AND-WATCH instead:
+#   * cells 1, 2, 3, 6 — relax the column test from `hash_col <= header_col` to
+#     `hash_col < header_col`, or loosen the ceiling to the block's `span.end`
+#     alone: the comment is dragged into the block above it.
+#   * cell 5 — the same relaxation pulls the EOF comment into the last block.
+#   * cell 4 — ⚠ NO CONSTRUCTIBLE RED. The `SuiteLayout::NextLine` guard on the
+#     routed flush is DEFENSIVE: an inline suite's comments are already refused
+#     by the column rule alone (the header line IS the body line, so the
+#     comment is never indented past the header). Removing the guard leaves the
+#     cell green. It is kept because the guard also stops a MID-LINE flush —
+#     the inline-suite emitter routes through the same statement-body function
+#     while the buffer sits mid-line — and that failure has no column test to
+#     catch it.
+
+struct A:
+    int a
+# BETWEEN — belongs to no container, stays at column 0
+
+struct B:
+    int b
+
+# leading for the enum, at column 0
+enum E:
+    One()
+
+struct Empty:
+    pass
+    # tail in an EMPTY container — no child to anchor on
+
+void nested(int x):
+    if x == 1:
+        if x == 1:
+            print(1)
+    # after the NESTED block closes — belongs to the OUTER if body
+    print(2)
+
+void inline_suite(int x):
+    if x == 1: print(1)
+    # after an INLINE suite — belongs to the function body, not the if
+    print(2)
+
+void main():
+    nested(1)
+    inline_suite(1)
+
+# EOF comment at column 0

@@ -11458,33 +11458,24 @@ fn fmt_extern_block_interior_comments_stay_inside() {
     }
 }
 
-/// KNOWN GAP (R41 T-FMT-A, filed 2026-08-11): the LAST interior comment of a
-/// container block dedents to column 0, escaping the block.
+/// The LAST interior comment of a block stays INSIDE the block.
 ///
-/// Found while wiring §5's extern-block hooks, and deliberately NOT fixed
-/// there: it reproduces identically in ALL FIVE container formatters
-/// (struct / enum / trait / equip / extern block) AND — measured 2026-08-11 —
-/// in ordinary STATEMENT BODIES (fn / if / while / for), because
-/// `format_block_stmts` has the identical shape. So it needs a shared
-/// orphan-pre-close flush before each `dedent()`; patching only the extern
-/// block would be an instance-fix where a class exists (Core #4). The shape to
-/// generalise already exists for collection literals
-/// (`format_bracketed_broken_with_comments`'s orphan-pre-close flush).
+/// It used to dedent to column 0 (containers, and a function body) or one
+/// level out (a nested statement body), because a comment after the last child
+/// leads no next child and trails no previous one, so no sibling hook claimed
+/// it. `emit_orphan_comments_before_close` is the shared chokepoint that does.
 ///
-/// The dedent DEPTH varies by POSITION, not shape (pass-3 measured: the orphan
-/// defers OUTWARD until an enclosing scope's flush claims it — the same for-body
-/// tail lands at indent 4 mid-fn, column 0 as the fn's last statement) — cosmetic
-/// variation on one mechanism, not separate bugs. Asserting BOTH faces here
-/// stops a container-only fix from closing this gap by halves.
-///
-/// Asserts the INTENDED indented output, so it is RED at HEAD; un-ignore and
-/// graduate out of `known_gaps/` the round the shared flush lands.
+/// One cell per SHAPE, so a partial fix fingers exactly what it missed: the
+/// five containers (struct / enum / trait / equip / extern block) and four
+/// routed statement bodies (fn / if / while / for). The dedent DEPTH used to
+/// vary by POSITION, not shape — the orphan deferred OUTWARD until an
+/// enclosing scope's flush claimed it — which is why both faces are asserted;
+/// a container-only fix would otherwise close this by halves.
 #[test]
-#[ignore = "known gap (R41 T-FMT-A): last interior comment of struct/enum/trait/equip/extern blocks dedents to column 0; un-ignore when the shared orphan-pre-close flush lands"]
 fn fmt_container_last_interior_comment_stays_inside() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture = manifest_dir
-        .join("tests/fixtures/known_gaps/fmt_container_last_interior_comment_dedents.gg");
+        .join("tests/fixtures/fmt_suite_layout/orphan_close_containers_and_bodies.gg");
     let source = std::fs::read_to_string(&fixture)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
     let formatted = gorget::formatter::format_source_infallible(&source);
@@ -11520,26 +11511,26 @@ fn fmt_container_last_interior_comment_stays_inside() {
     }
 }
 
-/// KNOWN GAP (gorget-js snag 15h, filed R41 2026-08-11): the CONTINUATION LINES
-/// of a multi-line trailing comment detach from the member they annotate.
+/// The CONTINUATION LINES of a multi-line trailing comment stay attached to the
+/// member they annotate.
 ///
-/// `gg fmt` has no multi-line-trailing concept: one `Comment` token per line,
-/// and the classifier asks each independently "same source line as the previous
-/// emit?". A continuation line is not, so it is never trailing — it lands at
+/// The formatter used to have no multi-line-trailing concept: one `Comment`
+/// token per line, each asked independently "same source line as the previous
+/// emit?". A continuation line is not, so it was never trailing — it landed at
 /// MEMBER indent as the next member's leading comment (cellA) or, with no next
-/// member, at COLUMN 0 via the module flush (cellB, the same orphan mechanism as
-/// `fmt_container_last_interior_comment_dedents`).
+/// member, at COLUMN 0 via the module flush (cellB). `CommentTable`'s
+/// `continues` relation is the run concept, and the claiming chokepoint is what
+/// keeps a head and its run together.
 ///
 /// Asserts the three properties rather than a byte-exact expected output, so the
 /// cells survive a change to the alignment stride: no comment at column 0, every
 /// continuation `#` under its head's `#`, and the member below a multi-line
 /// trailing comment still sharing the group's `#` column.
 #[test]
-#[ignore = "known gap (snag 15h): multi-line trailing comment continuations detach from their member; un-ignore when the comment model grows a continuation-run concept"]
 fn fmt_multiline_trailing_comment_stays_attached() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture = manifest_dir
-        .join("tests/fixtures/known_gaps/fmt_multiline_trailing_comment_detach.gg");
+        .join("tests/fixtures/fmt_suite_layout/trailing_run_detach.gg");
     let source = std::fs::read_to_string(&fixture)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
     let formatted = gorget::formatter::format_source_infallible(&source);
@@ -21207,7 +21198,11 @@ fn describe_token_canonical_rust(token: &Token) -> String {
         Token::Dedent => "DEDENT".into(),
         Token::Newline => "NL".into(),
         Token::DocComment(text) => format!("doc:{text}"),
-        Token::Comment(text) => format!("comment:{text}"),
+        // The canonical form is the TEXT alone: this string is compared
+        // against the self-host lexer's, and the attachment facts the Rust
+        // `CommentToken` carries (placement, column, line start) are a
+        // formatter concern the self-host lexer does not model.
+        Token::Comment(c) => format!("comment:{}", c.text),
         Token::Eof => "EOF".into(),
         Token::Error => "error".into(),
     }
@@ -49042,13 +49037,15 @@ fn rust_gg_build_is_deterministic() {
 
 /// The T-FMT-C fixture matrix: `tests/fixtures/fmt_suite_layout/`.
 ///
-/// **The assertion is a FIXPOINT, not a golden-output diff.** Every `.gg`
-/// file in the directory is written in the exact form `gg fmt` must produce,
-/// so `fmt(file) == file` and a failure prints a plain before/after of what
-/// the formatter did to the author's spelling. The one exception is a cell
-/// where the formatter is DESIGNED to move something (the deferred header
-/// comment on a multi-line inline child): those carry a `.expected`
-/// companion and assert against it instead.
+/// **The assertion is a FIXPOINT for most cells, a golden-output diff for the
+/// rest.** A `.gg` file with no companion is written in the exact form `gg fmt`
+/// must produce, so `fmt(file) == file` and a failure prints a plain
+/// before/after of what the formatter did to the author's spelling. A cell that
+/// pins an INPUT→OUTPUT transformation — a shape `gg fmt` is designed to
+/// rewrite, such as a wrapped header it rejoins — carries a `.expected`
+/// companion and asserts against that instead. (The `.expected` set is
+/// whatever is on disk; the deferred header comment on a multi-line inline
+/// child was one until the comment stopped moving.)
 ///
 /// Four properties per cell, each of which the suite-layout class broke at
 /// least once:
@@ -49067,6 +49064,7 @@ const FMT_SUITE_LAYOUT_FIXTURES: &[&str] = &[
     "b1_newline_members.gg",
     "blank_before_case.gg",
     "blank_before_clause.gg",
+    "blank_fidelity_runs.gg",
     "blank_hosts.gg",
     "blank_insertion.gg",
     "catch_arm.gg",
@@ -49076,7 +49074,10 @@ const FMT_SUITE_LAYOUT_FIXTURES: &[&str] = &[
     "do_expr.gg",
     "else_header_trailing_comment.gg",
     "expr_match.gg",
+    "header_colon_anchor_bracketed.gg",
+    "header_colon_anchor_multiline.gg",
     "if_chain.gg",
+    "inline_header_comment_injection.gg",
     "inline_multiline_child_comment.gg",
     "inline_slot_kinds.gg",
     "inline_trailing_comment.gg",
@@ -49085,8 +49086,19 @@ const FMT_SUITE_LAYOUT_FIXTURES: &[&str] = &[
     "meta_match.gg",
     "nested_overwidth.gg",
     "on_error.gg",
+    "orphan_close_arm_containers.gg",
+    "orphan_close_clause_kinds.gg",
+    "orphan_close_containers_and_bodies.gg",
+    "orphan_close_meta_if_items.gg",
+    "orphan_close_negatives.gg",
+    "orphan_close_routed_kinds.gg",
     "stmt_match.gg",
     "synthetic_terminal.gg",
+    "trailing_run_detach.gg",
+    "trailing_run_edge_cases.gg",
+    "trailing_run_header_heads.gg",
+    "trailing_run_shapes.gg",
+    "wrapped_header_anchor.gg",
 ];
 
 #[test]
@@ -49293,7 +49305,8 @@ fn d27_caret_fn_type_sigil_before_type_error() {
 //   callable_local_var_consuming_arg_ices.gg          -> WIRED below
 //   sh_resolver_equip_self_receiver_res_missing.gg    -> WIRED below
 //   gorget_arena_snag_1_llvm_ffi_only_typedef/        -> WIRED below (2 cells)
-//   fmt_snag_2_multiline_header_trailing/             -> WIRED below
+//   (fmt_snag_2_multiline_header_trailing/ was one of these; the gap is
+//    closed and the reproducer graduated to `tests/fixtures/fmt_suite_layout/`)
 //   snag53_nested_struct_field_mut.expected           -> NOT a wiring row: it
 //       is the expected-output DATA COMPANION of the already-wired
 //       `snag53_nested_struct_field_mut.gg`, not a reproducer of its own.
@@ -49500,28 +49513,24 @@ fn known_gap_arena_snag1_c_backend_ctor_typedef() {
     );
 }
 
-/// KNOWN GAP — `gg fmt` mis-attributes a trailing comment that sits on the
-/// LAST source line of a MULTI-LINE container header: instead of staying on
-/// the reformatted header line it is DEDENTED into the body as a leading
-/// comment of the first body element.
+/// A trailing comment on the LAST source line of a MULTI-LINE container header
+/// stays on the reformatted header line.
 ///
-/// Not caught by `fmt_idempotent` (the formatter is idempotent on the wrong
+/// It used to be DEDENTED into the body as a leading comment of the first
+/// element, because the header hook anchored on the container NAME — which on
+/// a multi-line header is on an earlier line, so the same-line test correctly
+/// rejected the comment and the body loop then claimed it. The anchor is now
+/// the header's own `:` (`StructDef::header_colon_span`).
+///
+/// Not caught by `fmt_idempotent` (the formatter was idempotent on the wrong
 /// shape) nor by `fmt_trailing_comment_axis_all_classes` (that axis fixture
-/// uses single-line headers only) — which is precisely why it needs its own
-/// wiring.
+/// uses single-line headers only) — which is why this cell has its own test.
 #[test]
-#[ignore = "KNOWN GAP (filed pre-R41, wired R41 T-RB0): `gg fmt` moves a \
-trailing comment off a MULTI-LINE container header into the body. The \
-header-hook anchors on the container NAME's span end, so for a multi-line \
-header the comment is on a later source line, the same-line check rejects it, \
-and the body loop picks it up as a leading comment. Fix direction (dir \
-README.md): expose the header-closing `:` span on the container AST node and \
-anchor the hook on that instead of the name end."]
-fn known_gap_fmt_multiline_header_trailing_comment() {
+fn fmt_multiline_header_trailing_comment_stays_on_header() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir
-        .join("tests/fixtures/known_gaps/fmt_snag_2_multiline_header_trailing/repro.gg");
-    let source = std::fs::read_to_string(&fixture_path).expect("read repro.gg");
+        .join("tests/fixtures/fmt_suite_layout/header_colon_anchor_multiline.gg");
+    let source = std::fs::read_to_string(&fixture_path).expect("read the fixture");
     let formatted = gorget::formatter::format_source_infallible(&source);
 
     let sentinel = "# multi-line header trailing";
@@ -49534,6 +49543,69 @@ fn known_gap_fmt_multiline_header_trailing_comment() {
         "a trailing comment on the last line of a MULTI-LINE container header \
          must stay ON the reformatted header line (`struct S[T]:  {sentinel}`); \
          it was emitted on its own line instead.\nGot line: {line:?}\n\nFull output:\n{formatted}",
+    );
+}
+
+/// KNOWN GAP — a trailing comment is claimed by the WRONG DELIMITED REGION when
+/// two regions end on the same source line.
+///
+/// `emit_trailing_comment_after`'s same-source-line test is blind to delimiter
+/// boundaries: when a call's generic-argument list and the call's own `)` end
+/// on one line, the generic-arg region's per-element hook takes the comment off
+/// the shared forward-only cursor first, and a comment written about the CALL
+/// is re-emitted as a trailing comment on the last TYPE ARGUMENT.
+///
+/// Measured against the R42 comment-attachment rework and NOT closed by it —
+/// nothing in a typed comment table or a single claiming chokepoint changes the
+/// same-line test. The fix is a REGION-AWARE claim.
+///
+/// Idempotent and re-parsing, which is why it needs an `#[ignore]`d
+/// intended-output test rather than a live fixture pinning today's output.
+#[test]
+#[ignore = "known gap: a call's trailing comment is claimed by its GENERIC-ARGS region when both end on one source line; un-ignore when the trailing hook becomes region-aware"]
+fn known_gap_fmt_cross_region_trailing_claim() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture =
+        manifest_dir.join("tests/fixtures/known_gaps/fmt_cross_region_trailing_claim.gg");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    let line = formatted
+        .lines()
+        .find(|l| l.contains("# SEN B"))
+        .unwrap_or_else(|| panic!("sentinel `# SEN B` vanished:\n{formatted}"));
+    assert!(
+        line.contains("](6)"),
+        "the comment belongs to the CALL, so it must trail the call's own `)` \
+         line; it was claimed by the generic-args region instead.\n\
+         Got line: {line:?}\n\n=== formatted ===\n{formatted}"
+    );
+}
+
+/// KNOWN GAP — `gg fmt` deletes the space between an `equip` block's generic
+/// parameter list and the equipped type (`equip [T] Cell[T]:` →
+/// `equip [T]Cell[T]:`).
+///
+/// The output re-parses and is idempotent, which is why nothing caught it. The
+/// corpus has 42 generic `equip` headers, so a bulk sweep would bake the wrong
+/// spelling into every one of them.
+///
+/// Found by the R42 comment-attachment track (a multi-line equip-header cell);
+/// out of that track's scope — a header SPACING defect, not a comment one.
+#[test]
+#[ignore = "known gap: `gg fmt` drops the space after an equip block's generic-params list; un-ignore when the equip header emitter writes the separator"]
+fn known_gap_fmt_equip_generic_space() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir.join("tests/fixtures/known_gaps/fmt_equip_generic_params_space.gg");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    assert!(
+        formatted.contains("equip [T] Cell[T]:"),
+        "the space between the equip generic-params list and the equipped type \
+         was deleted.\n\n=== formatted ===\n{formatted}"
     );
 }
 

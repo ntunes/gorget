@@ -1,0 +1,62 @@
+# ==== ORPHAN-PRE-CLOSE · the base 9 cells (AXIS A)
+#
+# A comment written after a block's LAST child leads no next child and trails
+# no previous one, so before the orphan-pre-close flush existed nothing claimed
+# it and it fell out to whatever hook fired next — reading, to the next
+# reader, as documentation of the NEXT item.
+#
+# AXIS A (closing-block kind), the five CONTAINER cells and four ROUTED
+# statement-body cells:
+#   struct · enum · trait · equip · extern block   (container flush, indent 4)
+#   fn body                                        (routed, indent 4)
+#   if body · while body · for body                (routed, indent 8)
+#
+# The dedent DEPTH varied with POSITION, not shape — the orphan deferred
+# OUTWARD until some enclosing scope's flush claimed it — which is why both
+# faces are asserted: a container-only fix cannot close this by halves.
+#
+# RED, observed on the pre-fix build: all five container markers at column 0,
+# `# trailing in fn body` at column 0, and the if/while/for markers at indent 4
+# instead of 8.
+#
+# The property test `fmt_container_last_interior_comment_stays_inside` asserts
+# the indent of each cell by name; this file's own harness row asserts the
+# whole thing is a FIXPOINT.
+
+struct S:
+    int a
+    # trailing in struct
+
+enum E:
+    One()
+    # trailing in enum
+
+trait T:
+    int m()
+    # trailing in trait
+
+equip S:
+    int g(self):
+        return self.a
+    # trailing in equip
+
+extern "C":
+    extern int puts(String s) = "puts"
+    # trailing in extern block
+
+void body_faces():
+    if true:
+        print(2)
+        # trailing in if body
+    while false:
+        print(3)
+        # trailing in while body
+    for i in [1]:
+        print(i)
+        # trailing in for body
+    print(4)
+    # trailing in fn body
+
+void main():
+    print(1)
+    body_faces()

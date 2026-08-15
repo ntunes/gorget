@@ -1,4 +1,5 @@
 pub mod ast;
+pub mod comments;
 pub mod expr;
 pub mod pattern;
 pub mod stmt;
@@ -55,7 +56,9 @@ pub struct Parser {
     /// `recursion_limit`). See `ExprDepthGuard` / `MAX_EXPR_DEPTH` in `expr.rs`.
     expr_depth: usize,
     /// Comments extracted from the token stream, for use by the formatter.
-    pub comments: Vec<Spanned<String>>,
+    /// See [`comments::CommentTable`] for what each entry carries and where
+    /// each fact is written.
+    pub comments: comments::CommentTable,
     /// True when parsing inside an `extern "C":` block or `extern "C"` inline declaration.
     /// Controls whether `cstr` is accepted as a type.
     in_extern_c: bool,
@@ -115,13 +118,16 @@ impl Parser {
         let mut spans = Vec::new();
         let mut comments = Vec::new();
         for tok in all_tokens {
-            if let Token::Comment(ref text) = tok.node {
-                comments.push(Spanned::new(text.clone(), tok.span));
+            if let Token::Comment(c) = tok.node {
+                comments.push((c, tok.span));
             } else {
                 kinds.push(tok.node);
                 spans.push(tok.span);
             }
         }
+        // THE collection site — and therefore the one place the cross-entry
+        // continuation relation is derived (see `CommentTable::build`).
+        let comments = comments::CommentTable::build(comments);
 
         // Ensure we always have an EOF sentinel
         let eof_pos = spans.last().map(|s| s.end).unwrap_or(0);
@@ -396,12 +402,21 @@ impl Parser {
         }
     }
 
-    /// Expect the `: NEWLINE INDENT` sequence that begins an indented block.
-    pub fn expect_block_start(&mut self) -> Result<(), ParseError> {
+    /// Expect the `: NEWLINE INDENT` sequence that begins an indented block,
+    /// returning the span of the `:` that closed the header.
+    ///
+    /// That colon is the ONE position guaranteed to sit on the header's LAST
+    /// source line whatever the header's shape — a wrapped generic parameter
+    /// list, a wrapped `extends` list, a `with T via f` tail. A container's
+    /// NAME cannot stand in for it: on a multi-line header the name is on an
+    /// earlier line, and the header's own trailing comment then reads as
+    /// belonging to something else.
+    pub fn expect_block_start(&mut self) -> Result<Span, ParseError> {
+        let colon = self.peek_span();
         self.expect(&Token::Colon)?;
         self.expect(&Token::Newline)?;
         self.expect(&Token::Indent)?;
-        Ok(())
+        Ok(colon)
     }
 
     /// Synchronize and guarantee forward progress. If `synchronize()` didn't
@@ -457,15 +472,26 @@ impl Parser {
     // ── Block Parsing ─────────────────────────────────────────
 
     /// Parse a block: COLON NEWLINE INDENT stmts DEDENT
-    pub fn parse_block(&mut self) -> Result<Block, ParseError> {
+    ///
+    /// `header_start` is a byte position on the owning construct's FIRST
+    /// source line — see [`Block::header_start`]. The router cannot derive it:
+    /// its own `start` is the COLON, which a wrapped header puts on a
+    /// continuation line. Every caller states it.
+    pub fn parse_block(&mut self, header_start: usize) -> Result<Block, ParseError> {
         let start = self.peek_span();
         self.expect(&Token::Colon)?;
-        self.parse_block_body(start)
+        self.parse_block_body(start, header_start)
     }
 
     /// Parse `NEWLINE INDENT stmt* DEDENT`, returning a Block.
     /// The colon (or other introducer) must already be consumed by the caller.
-    pub fn parse_block_body(&mut self, start: Span) -> Result<Block, ParseError> {
+    ///
+    /// THE writer of [`Block::header_start`] for indented suites.
+    pub fn parse_block_body(
+        &mut self,
+        start: Span,
+        header_start: usize,
+    ) -> Result<Block, ParseError> {
         self.expect(&Token::Newline)?;
         self.expect(&Token::Indent)?;
 
@@ -490,6 +516,7 @@ impl Parser {
             // grammar (`NEWLINE INDENT stmt* DEDENT`). Every other `Block`
             // construction in the parser is an inline or synthesized form.
             layout: SuiteLayout::NextLine,
+            header_start,
         })
     }
 
@@ -504,11 +531,16 @@ impl Parser {
     /// `if x: stmt` shape. The colon must be the current token; advance
     /// past it and dispatch on the next token (Newline → indented block,
     /// anything else → single inline statement).
-    pub fn parse_block_or_inline_stmt(&mut self) -> Result<Block, ParseError> {
+    ///
+    /// `header_start` is a byte position on the owning clause's FIRST source
+    /// line (the `if` / `elif` / `else` keyword) — see [`Block::header_start`].
+    /// Like `parse_block`, this parser sees only the colon and cannot derive
+    /// it.
+    pub fn parse_block_or_inline_stmt(&mut self, header_start: usize) -> Result<Block, ParseError> {
         let start = self.peek_span();
         self.expect(&Token::Colon)?;
         if self.check(&Token::Newline) {
-            return self.parse_block_body(start);
+            return self.parse_block_body(start, header_start);
         }
         // One-liner: parse a single statement at the post-colon position.
         // The wrapper Block has one stmt and a span covering the colon
@@ -520,14 +552,19 @@ impl Parser {
             stmts: vec![stmt],
             span: start.merge(end),
             layout: SuiteLayout::Inline,
+            header_start,
         })
     }
 
     /// Parse a body that is either an indented block (→ `Expr::Do`) or a
     /// single expression on the same line. Used by rethrow and catch.
+    ///
+    /// `start` is the whole `catch`/`rethrow` expression, so it already begins
+    /// on the owning construct's first line — the block's `header_start` is
+    /// that same position.
     pub fn parse_body_or_expr(&mut self, start: Span) -> Result<Spanned<Expr>, ParseError> {
         if self.check(&Token::Newline) {
-            let block = self.parse_block_body(start)?;
+            let block = self.parse_block_body(start, start.start)?;
             let span = block.span;
             // SYNTHESIZED `Do` — `catch (e):` / `rethrow (e):` take an
             // indented suite directly; the author wrote no `do`.
@@ -545,9 +582,13 @@ impl Parser {
 
     /// Parse a match-arm body: indented block (→ `Expr::Block`) or inline
     /// expression (consumed newline). Used by match arms and meta-for match items.
+    ///
+    /// `start` is the arm's own header position (the `case` keyword, or the
+    /// colon of an `else:`), which is on the arm's first line — so it is also
+    /// the block's `header_start`.
     pub fn parse_arm_body(&mut self, start: Span) -> Result<Spanned<Expr>, ParseError> {
         if self.check(&Token::Newline) {
-            let block = self.parse_block_body(start)?;
+            let block = self.parse_block_body(start, start.start)?;
             let span = block.span;
             Ok(Spanned::new(Expr::Block(block), span))
         } else {
@@ -831,7 +872,7 @@ impl Parser {
             self.advance(); // consume (
             let params = self.parse_param_list()?;
             self.expect(&Token::RParen)?;
-            let body = self.parse_block()?;
+            let body = self.parse_block(start.start)?;
             let end = self.previous_span();
             let span = start.merge(end);
             Ok(Spanned::new(
@@ -1079,7 +1120,7 @@ impl Parser {
 
         let generic_params = self.try_parse_generic_params()?;
 
-        self.expect_block_start()?;
+        let header_colon_span = self.expect_block_start()?;
 
         let mut fields = Vec::new();
         // Allow `pass` for empty struct bodies (opaque types)
@@ -1132,6 +1173,7 @@ impl Parser {
             fields,
             doc_comment,
             span: start.merge(end),
+            header_colon_span,
         })
     }
 
@@ -1150,7 +1192,7 @@ impl Parser {
 
         let generic_params = self.try_parse_generic_params()?;
 
-        self.expect_block_start()?;
+        let header_colon_span = self.expect_block_start()?;
 
         let mut variants = Vec::new();
         while !self.check(&Token::Dedent) && !self.at_end() && !self.at_error_limit() {
@@ -1184,6 +1226,7 @@ impl Parser {
             variants,
             doc_comment,
             span: start.merge(end),
+            header_colon_span,
         })
     }
 
@@ -1237,7 +1280,7 @@ impl Parser {
             Vec::new()
         };
 
-        self.expect_block_start()?;
+        let header_colon_span = self.expect_block_start()?;
 
         let mut items = Vec::new();
         while !self.check(&Token::Dedent) && !self.at_end() && !self.at_error_limit() {
@@ -1285,6 +1328,7 @@ impl Parser {
             items,
             doc_comment,
             span: start.merge(end),
+            header_colon_span,
         })
     }
 
@@ -1350,7 +1394,13 @@ impl Parser {
             None
         };
 
+        // ⚠ equip's colon is OPTIONAL — the blank form `equip S with T` (no
+        // colon, no body) is legal, so this cannot route through
+        // `expect_block_start` wholesale. The `check` stays; what is hoisted
+        // is the colon's span, recorded before it is consumed.
+        let mut header_colon_span = None;
         let items = if self.check(&Token::Colon) {
+            header_colon_span = Some(self.peek_span());
             self.advance();
             self.expect(&Token::Newline)?;
             self.expect(&Token::Indent)?;
@@ -1426,6 +1476,7 @@ impl Parser {
             via_field,
             items,
             span: start.merge(end),
+            header_colon_span,
         })
     }
 
@@ -1608,7 +1659,7 @@ impl Parser {
             None
         };
 
-        self.expect_block_start()?;
+        let header_colon_span = self.expect_block_start()?;
 
         let is_c_abi = abi.as_ref().map_or(false, |a| a.node == "C");
         let prev_extern_c = self.in_extern_c;
@@ -1633,6 +1684,7 @@ impl Parser {
             abi,
             items,
             span: start.merge(end),
+            header_colon_span,
         })
     }
 
@@ -1939,8 +1991,12 @@ impl Parser {
             }
         } else if self.match_token(&Token::Colon) {
             if self.check(&Token::Newline) {
-                let start = self.previous_span();
-                FunctionBody::Block(self.parse_block_body(start)?)
+                // The body block's introducer is the COLON just consumed; the
+                // function's own `start` (un-shadowed — this used to rebind
+                // the name) is what puts `header_start` on the signature's
+                // FIRST line, which a wrapped signature makes distinct.
+                let colon = self.previous_span();
+                FunctionBody::Block(self.parse_block_body(colon, start.start)?)
             } else {
                 // Same line → expression body
                 let expr = self.parse_expr()?;
@@ -2181,7 +2237,7 @@ impl Parser {
 
         let name = self.expect_plain_string()?;
 
-        let body = self.parse_block()?;
+        let body = self.parse_block(start.start)?;
         let end = self.previous_span();
 
         Ok(TestDef {
@@ -2205,7 +2261,7 @@ impl Parser {
 
         let name = self.expect_plain_string()?;
 
-        let body = self.parse_block()?;
+        let body = self.parse_block(start.start)?;
         let end = self.previous_span();
 
         Ok(BenchDef {
@@ -2226,13 +2282,13 @@ impl Parser {
         let ident = self.expect_identifier()?;
         match ident.node.as_str() {
             "setup" => {
-                let body = self.parse_block()?;
+                let body = self.parse_block(start.start)?;
                 let end = self.previous_span();
                 let span = start.merge(end);
                 Ok((Item::SuiteSetup(SuiteSetup { body, span }), span))
             }
             "teardown" => {
-                let body = self.parse_block()?;
+                let body = self.parse_block(start.start)?;
                 let end = self.previous_span();
                 let span = start.merge(end);
                 Ok((Item::SuiteTeardown(SuiteTeardown { body, span }), span))

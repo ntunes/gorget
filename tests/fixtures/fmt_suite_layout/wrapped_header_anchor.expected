@@ -1,0 +1,100 @@
+# ==== WRAPPED HEADERS · the `Block::header_start` discriminators (AXIS H)
+#
+# ⚠ INPUT→OUTPUT, not a fixpoint — see the `.expected` companion. `gg fmt`
+# REJOINS a wrapped header onto one line, so the wrapped spelling exists only
+# on pass one; the companion is a fixpoint and the harness's second pass
+# asserts that.
+#
+# WHY THIS AXIS EXISTS. The orphan-pre-close flush decides membership by
+# COLUMN: a comment indented past the block's HEADER line was written inside
+# the block. Anchoring that test on the block's own `span.start` — the COLON —
+# looks right and is wrong: on a wrapped header the colon sits on a
+# CONTINUATION line whose indent is at or past the body's, so the test refuses
+# everything and the tail comment escapes exactly as before, while its
+# single-line sibling is fixed. Hence the typed `Block::header_start` field,
+# written at the one indented-suite parser, pointing at the owning construct's
+# FIRST line.
+#
+# ONE CELL PER VALUE-NEEDING ROW of that field's wiring table:
+#   row 5 (the multi-kind block router)      — wrapped `while` condition, and
+#                                              the clause-position `meta elif`
+#   row 6 (the statement if/elif/else parser)— wrapped `if` and `elif`
+#   row 7 (function bodies)                  — wrapped fn signature
+#   row 8 (meta-match arm bodies)            — wrapped `meta match` case arm
+#   row 1 (catch/rethrow bodies)             — wrapped `catch` header
+#   the bracketed CONTAINER header           — enum/trait/equip cells live in
+#                                              `header_colon_anchor_bracketed.gg`
+# Row 9 (`meta while`) has its DISCRIMINATOR in the UNWRAPPED `meta while` cell
+# of `orphan_close_routed_kinds.gg`: that parser's block span starts on the
+# BODY line, so the unwrapped spelling already discriminates and no wrapped one
+# is needed.
+#
+# ⚠ Two authoring traps this file works around: a wrapped bare `if` condition
+# is a 10-error parse failure, so the PARENTHESIZED form is used; and the
+# wrapped-FN cell only discriminates in its ALIGNED-CONTINUATION spelling — a
+# hanging `):` at column 0 lets any anchor pass.
+#
+# RED, observed by BREAK-AND-WATCH on this tree (each break reverted after):
+#   * value `header_start` from the block's own `span.start` (the colon):
+#       wrapped-while tail  8 -> 4     wrapped-if tail       8 -> 4
+#       wrapped-elif tail   8 -> 4     wrapped-fn tail       4 -> 0
+#       wrapped meta-elif   8 -> 4     wrapped meta-while*   8 -> 4
+#     (* the UNWRAPPED `meta while` cell in `orphan_close_routed_kinds.gg` —
+#      row 9's discriminator, RED under the same break)
+#   * ROW 1: seed the catch/rethrow body from the colon instead of the LHS's
+#       first line —              wrapped-catch tail  8 -> 4
+#   * ROW 6: capture the `elif` clause span AFTER parsing the condition —
+#       wrapped-elif tail  8 -> 4, while the wrapped-IF tail stays at 8
+#   * ROW 8: seed the meta-match arm from its own colon instead of the `case`
+#       keyword —                 wrapped meta-match case tail  12 -> 8
+
+void wrapped_while(int i):
+    while i < 3:
+        print(i)
+        # tail in a wrapped-while body
+
+void wrapped_if(int i):
+    if i < 3:
+        print(i)
+        # tail in a wrapped-if body
+    elif i > 9:
+        print(i)
+        # tail in a wrapped-elif body
+
+int wrapped_signature(int a_long_parameter_name, int another_long_parameter_name):
+    print(a_long_parameter_name)
+    return another_long_parameter_name
+    # tail in a wrapped-signature body
+
+void wrapped_meta_clauses[T]():
+    meta if bitwidth(T) > 4096:
+        print(1)
+    elif bitwidth(T) > 2048:
+        print(2)
+        # tail in a wrapped meta-elif body
+
+void wrapped_meta_match[T]():
+    meta match typename(T):
+        case "i" + "nt":
+            print(1)
+            # tail in a wrapped meta-match case body
+
+int fallible(int x) throws String:
+    if x < 0:
+        throw "negative"
+    return x
+
+int wrapped_catch(int x):
+    int a = fallible(x) catch (e):
+        print("recovered")
+        0
+        # tail in a wrapped-catch body
+    return a
+
+void main():
+    wrapped_while(1)
+    wrapped_if(1)
+    print(wrapped_signature(1, 2))
+    wrapped_meta_clauses[int]()
+    wrapped_meta_match[int]()
+    print(wrapped_catch(1))

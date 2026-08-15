@@ -1,0 +1,40 @@
+# KNOWN GAP — a trailing comment is claimed by the WRONG DELIMITED REGION when
+# two regions end on the same source line.
+#
+# `emit_trailing_comment_after` asks one question: is this comment on the same
+# SOURCE LINE as the previous emit's last real character? That test is blind to
+# DELIMITER BOUNDARIES. When a call's generic-argument list and the call's own
+# `)` end on the same line, the generic-arg region's per-element hook runs
+# FIRST and takes the comment off the shared forward-only cursor — so a comment
+# the author wrote about the CALL is re-emitted as a trailing comment on the
+# last TYPE ARGUMENT.
+#
+# Handed to the comment-attachment track by the delimited-list chokepoint track,
+# and MEASURED there: the claiming rework (a typed comment table, one claiming
+# chokepoint, runs claimed with their heads) does NOT close it, because nothing
+# in that rework changes the same-source-line test. The fix is a region-aware
+# claim: the trailing hook needs to know which delimited region owns the
+# position it is claiming from.
+#
+# It is IDEMPOTENT and it RE-PARSES, which is exactly why no live fixture may
+# pin the current output (Core #8 — a wrong answer that survives a second pass
+# is the kind that gets ratified by accident).
+#
+# INTENDED (asserted by the `#[ignore]`d
+# `known_gap_fmt_cross_region_trailing_claim`): the comment stays with the CALL,
+# after `](6)`, and the last type argument keeps no comment of its own.
+#
+# OBSERVED (both before and after the R42 comment-attachment work):
+#     auto b = wrap[
+#         int,
+#         # SEN gb-interior
+#         String,    # SEN B      <- documents the TYPE ARGUMENT now
+#     ](6)
+
+auto b = wrap[
+    int,
+    # SEN gb-interior
+    String](6)  # SEN B
+
+void main():
+    print(1)

@@ -1,0 +1,70 @@
+# ==== ORPHAN-PRE-CLOSE · clause and definition block kinds (AXIS A)
+#
+# The rest of axis A's routed rows: the clause bodies a control-flow statement
+# owns beyond its first, and the definition blocks that are not containers.
+#
+# CELLS: elif body · else body · for-else · while-else · match-ARM body ·
+#        test · bench · suite setup · suite teardown · closure body ·
+#        DESTRUCTURING-closure body
+#
+# ⚠ The destructuring-closure cell is its own row: that body cannot delegate to
+# the shared statement-body emitter (it would re-emit the parser-synthesized
+# destructure binds), so it takes the flush explicitly. Without that, a plain
+# closure is fixed and a destructuring one is not — the same class, half done.
+#
+# RED, observed on the pre-fix build: every `# tail in …` marker dedented one
+# level out of its clause.
+
+void clause_bodies(int x):
+    if x == 1:
+        print(1)
+    elif x == 2:
+        print(2)
+        # tail in elif body
+    else:
+        print(3)
+        # tail in else body
+    for i in [1]:
+        print(i)
+    else:
+        print(0)
+        # tail in for-else body
+    while false:
+        print(4)
+    else:
+        print(5)
+        # tail in while-else body
+    match x:
+        case 1:
+            print(6)
+            # tail in match arm body
+
+void closures():
+    Callable[void()] plain = ():
+        print(7)
+        # tail in closure body
+    plain()
+    Callable[void((int, int))] destructured = ((int a, int b)):
+        print(a + b)
+        # tail in destructuring closure body
+    destructured((1, 2))
+
+test "orphan in a test body":
+    print(8)
+    # tail in test body
+
+bench "orphan in a bench body":
+    print(9)
+    # tail in bench body
+
+suite setup:
+    print(10)
+    # tail in suite setup body
+
+suite teardown:
+    print(11)
+    # tail in suite teardown body
+
+void main():
+    clause_bodies(2)
+    closures()

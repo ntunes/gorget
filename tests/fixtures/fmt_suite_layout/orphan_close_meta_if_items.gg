@@ -1,0 +1,44 @@
+# ==== ORPHAN-PRE-CLOSE · `meta if` ITEM blocks (AXIS A + AXIS E)
+#
+# The item-level `meta if` is the third face of the tail-orphan class: one
+# producer, three arms. Each arm's flush needs its OWN ceiling — the NEXT
+# clause's header — because with one ceiling for all three, the then-branch's
+# flush swallows the elif branch's leading comment and documents the wrong
+# branch.
+#
+# AXIS A cells: tail of the THEN branch · tail of the ELIF branch · tail of the
+#   ELSE branch · the `meta if` STATEMENT body (a routed suite, not an item
+#   block — the two live in different emitters).
+#
+# AXIS E cells (the per-branch CEILING, all NEGATIVE): the LEADING comment of
+#   the elif branch's first item stays in the ELIF branch, and the same for the
+#   else branch. Green on arrival; RED-verified by BREAK-AND-WATCH — widen
+#   either ceiling to the whole `meta if`'s `span.end` and the leading comment
+#   is pulled up into the branch ABOVE it.
+#
+# RED, observed on the pre-fix build: all four axis-A tails escaped to column 0.
+
+meta if true:
+    void then_one():
+        print(1)
+    # tail of the THEN branch
+elif false:
+    # leads the ELIF branch's first item
+    void elif_one():
+        print(2)
+    # tail of the ELIF branch
+else:
+    # leads the ELSE branch's first item
+    void else_one():
+        print(3)
+    # tail of the ELSE branch
+
+void meta_if_statement_body(int x):
+    meta if true:
+        print(x)
+        # tail of the meta-if STATEMENT body
+    print(x)
+
+void main():
+    then_one()
+    meta_if_statement_body(1)

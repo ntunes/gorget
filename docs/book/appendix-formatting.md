@@ -181,8 +181,29 @@ so each group aligns independently. A comment whose aligned column would push it
 past the line-width budget is left at its natural position rather than dragging
 the whole group to the right.
 
+**A trailing comment may run onto the lines below it.** Keep each `#` at the
+first one's column, with no blank line and no code line in between, and the
+whole thing is ONE comment on the line it started on — which is how you write a
+field's rationale without a 200-column line:
+
+```gorget
+struct Frame:
+    int slot        # index of this frame's slot in the arena, assigned at
+                    # push time and never reused while the frame is live
+    int depth       # nesting depth from the root frame
+```
+
+The continuation lines move with their `#`: when the group above picks a column,
+the whole comment follows it. They do not break the run either — `int depth`
+still shares the group's column, because the comment above it is one comment,
+not one comment and two stray lines. Change the column, leave a blank line, or
+put a line of code in between, and you have written two separate comments
+instead.
+
 **Standalone comments** — a comment on its own line — keep their own line and
-indentation and are never merged into the code around them.
+indentation and are never merged into the code around them. That includes a
+comment written after the LAST thing in a block: it belongs to the block it was
+indented into, and it stays there rather than sliding out to the next one.
 
 ## Literals
 

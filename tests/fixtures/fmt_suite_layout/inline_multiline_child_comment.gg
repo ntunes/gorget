@@ -1,21 +1,31 @@
 # ==== T-FMT-C · inline suite, MULTI-LINE child, header trailing comment
 #
-# THE ONE CELL IN THIS DIRECTORY THAT IS NOT A FIXPOINT — see the `.expected`
-# companion. When an inline suite's single statement spans several lines and
-# the header carries a trailing comment, the comment cannot stay on the header
-# line: emitting it there puts the statement inside the comment and the file
-# stops parsing.
+# AXIS: inline-suite header comment × MULTI-LINE child body — the cell where
+# the header's own output line is NOT the buffer's last line by the time the
+# comment is emitted.
 #
-# The comment is CLAIMED at the header (which is what stops the nested
-# match-arm loop's leading hook from pulling it down into the arm list, where
-# it would document the wrong thing) and INJECTED after the child's last line.
-# It reparses, nothing is lost, and a second pass is a fixpoint — but the
-# comment MOVES, and that is the pinned, chosen behaviour rather than an
-# accident.
+# A header's trailing-comment hook naturally fires right after the `:`, which
+# on an inline suite would put the comment BEFORE the statement and stop the
+# file parsing. So the comment is CLAIMED at the header — that is what stops
+# the nested match-arm loop's leading hook from pulling it down into the arm
+# list, where it would document the wrong thing — and EMITTED once the body
+# has rendered.
+#
+# WHERE it is emitted is the point of this cell. The claim records the
+# header's own position and the emission resolves it to the END OF THAT LINE,
+# so the comment lands where the author wrote it. Splicing at the buffer's
+# then-current tail instead put it on the BODY's last line — silently, since
+# the moved form reparses and is itself a fixpoint.
+#
+# This cell is a FIXPOINT: `gg fmt` reproduces it byte for byte. (It carried a
+# `.expected` companion for as long as the comment moved.)
+#
+# RED procedure: resolve the claim anchor to the buffer's current tail instead
+# of the recorded header line — the `# note` reappears after `30`.
 
 void main():
     int y = 2
-    if true: int x = match y:  # note
+    if true: int x = match y:    # note
         case 2:
             20
         else:

@@ -1,0 +1,41 @@
+# ==== MULTI-LINE TRAILING COMMENT · the base run cells (AXIS C)
+#
+# A trailing comment that runs onto the following lines — each aligned under
+# the first `#`, no code between, no blank between — is ONE logical comment.
+# It is how a field's rationale gets written without a 200-column line.
+#
+# CELLS (axis C, run POSITION):
+#   cellA — a run on a NON-LAST member. Before the run concept existed the
+#           continuation lines were classified independently, failed the
+#           same-source-line test, and were emitted as the LEADING comment of
+#           the NEXT member — so "inherited by nested envs" documented `depth`.
+#   cellB — a run on the LAST member. No next member to lead, so the lines fell
+#           through to the module flush at COLUMN 0, escaping the struct.
+#   cellA-last — the member BELOW a run still shares the alignment group's `#`
+#           column: continuation lines carry no trailing entry of their own, so
+#           group adjacency is measured from the run's LAST line.
+#
+# RED, observed on the pre-fix build: in the first struct both continuation
+# lines came out at MEMBER indent (4) above `int depth`, and `int depth`'s own
+# `#` landed at column 17 while its group's column was 20 — the run had split
+# the alignment group. In the second struct, whose run is on the LAST member,
+# both continuation lines came out at COLUMN 0, outside the struct entirely.
+# (The marker text is deliberately not quoted here: the assertions locate their
+# cells by sentinel, and a quote in this header would be found first.)
+#
+# Asserted by `fmt_multiline_trailing_comment_stays_attached` as three
+# properties rather than a byte-exact output, so the cells survive a change to
+# the alignment stride; this file's harness row additionally pins it as a
+# FIXPOINT.
+
+public struct Env:
+    int parent      # cellA-first: EnvId of the enclosing env
+    bool strict     # cellA-head: set by a "use strict" directive in the
+                    # cellA-cont-1: enclosing Program or FunctionBody, and
+                    # cellA-cont-2: inherited by nested envs at entry
+    int depth       # cellA-last: nesting depth from the root env
+
+public struct Frame:
+    int slot    # cellB-head: index of this frame's slot in the arena
+                # cellB-cont-1: the LAST member, so the continuation
+                # cellB-cont-2: run escapes the struct entirely

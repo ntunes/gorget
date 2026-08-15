@@ -1,0 +1,52 @@
+# ==== MULTI-LINE TRAILING COMMENT · runs whose HEAD is a HEADER comment
+#                                    (AXIS C, the three header spellings)
+#
+# A header's trailing comment can be the head of a run too, and a header
+# comment is claimed by a DIFFERENT hook from a sibling's — which is exactly
+# how a run gets split. "Claim a head ⇒ claim its whole run" therefore lives in
+# ONE helper pair that every cursor-advancing claimer calls.
+#
+# THREE SPELLINGS, because the three take three different claim paths:
+#   1. INDENTED container header — the header hook injects in place;
+#   2. INLINE arm / suite header — the comment is CLAIMED at the header and
+#      EMITTED after the body renders (emitting in place would put the
+#      statement inside the comment);
+#   3. the LAST-POSITION inline variant — the only spelling that also reaches
+#      the orphan-pre-close flush, since there is no following sibling. One
+#      cell for an inline SUITE in last position and one for an inline match
+#      ARM in last position; they land at different depths.
+#
+# RED, observed on the pre-fix build: every run SPLIT. The head stayed on its
+# header line and the continuations were re-emitted as own-line comments at
+# whatever indent the next hook happened to be at — member indent 4 for the
+# container header, arm indent 8 for the inline arm, function indent 4 for the
+# last inline arm, and column 0 for the last-position inline suite.
+
+struct Boxed:    # container-header head: the header's own comment,
+                 # container-header cont-1: continued below it
+    int v
+
+int inline_arm(int x):
+    int r = match x:
+        case 1: 10    # inline-arm head: an inline arm body, and
+                      # inline-arm cont-1: its continuation line
+        case 2: 20
+        else: 30
+    return r
+
+void inline_suite_last(int x):
+    if x == 1: print(1)    # inline-suite-last head: the LAST statement of its
+                           # inline-suite-last cont-1: block, so the run also
+                           # inline-suite-last cont-2: meets the orphan flush
+
+int inline_arm_last(int x):
+    int r = match x:
+        case 1: 10
+        else: 30    # inline-arm-last head: the LAST arm, so the run meets
+                    # inline-arm-last cont-1: the container's flush too
+    return r
+
+void main():
+    print(inline_arm(1))
+    inline_suite_last(1)
+    print(inline_arm_last(1))
