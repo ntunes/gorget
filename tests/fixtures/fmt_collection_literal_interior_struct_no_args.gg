@@ -1,0 +1,31 @@
+# Interior comment inside an EMPTY argument tuple — live regression pin.
+#
+# CELL (Core #12): axis = comment position; this file samples the
+# no-elements cell, where there is no element span to derive a range from.
+# The gate's open position comes from a delimiter SCAN rather than from
+# the first element's span start, which is exactly why the empty case
+# works at all — a gate keyed on `args.first()` has nothing to key on.
+#
+# ⚠ SCOPE OF THE PIN — this fixture exercises the `Expr::Call` path, NOT
+# `Expr::StructLiteral`. `gg fmt` is parse-only and the parser constructs
+# zero `Expr::StructLiteral` (its sole producer is `rewrite_struct_calls`
+# in semantic analysis), so in fmt's view `Foo()` is `Expr::Call`. The
+# formatter's `Expr::StructLiteral` arm is kept in sync as class hygiene
+# and carries NO red — no `gg fmt` input can reach it. The lint
+# `formatter_collection_literal_interior_hook_dispatch` pins that
+# unreachability.
+#
+# RED-VERIFIED against the pre-fix binary: `# inside empty ctor` dedented
+# out of the parens and became a leading comment of `print(1)` —
+#     Foo _f = Foo()
+#     # inside empty ctor
+#     print(1)
+
+struct Foo:
+    pass
+
+void main():
+    Foo _f = Foo(
+        # inside empty ctor
+    )
+    print(1)

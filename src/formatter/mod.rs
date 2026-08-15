@@ -405,6 +405,29 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
 // Formatter — walks AST and emits formatted source
 // ══════════════════════════════════════════════════════════════
 
+/// Whether a fill-emitted delimited list consults the comment sideband,
+/// and — when it does — over which source range.
+///
+/// A TYPED decision rather than an `Option<(usize, usize)>`: an
+/// un-named `None` hatch lets the next emitter opt out of the interior-
+/// comment gate with every guard count unchanged, which is exactly the
+/// class the chokepoint exists to retire (Layering rule 2 — the reason
+/// crosses the boundary as data, not as an absence). Every
+/// `UngatedCarveOut` carries the reason it is one, and
+/// `formatter_list_emit_fill_census` pins the whole set.
+enum Gate {
+    /// Consult the sideband over `(open_delim_pos, one_past_close_delim)`.
+    /// `open_delim_pos` is the byte offset of the OPEN delimiter itself —
+    /// never the first element's start, which would leave a comment
+    /// between the delimiter and the first element outside the window.
+    Span(usize, usize),
+    /// Do not consult the sideband. The `&'static str` is the reason, and
+    /// the reason is always a property of the CONTEXT (an empty comment
+    /// sideband, or a delimiter scan that found nothing), never a
+    /// "not implemented yet".
+    UngatedCarveOut(&'static str),
+}
+
 pub struct Formatter {
     emitter: Emitter,
     comments: Vec<Spanned<String>>,
@@ -626,13 +649,15 @@ impl Formatter {
         }
     }
 
-    /// R39 fmt collection-literal interior-comment escape: returns true iff
-    /// any UNEMITTED comment's span.start lies STRICTLY INSIDE `(start, end)`.
+    /// Interior-comment gate: returns true iff any UNEMITTED comment's
+    /// span.start lies STRICTLY INSIDE `(start, end)`.
     ///
-    /// Used by the 4 collection-literal arms of `format_expr`
-    /// (ArrayLiteral / TupleLiteral / DictLiteral / StructLiteral) to
-    /// decide whether to dispatch to `format_bracketed_broken_with_comments`
-    /// instead of the fill-packed `doc::surround_fill` path. When ANY element-interior
+    /// TWO call sites, and only two: the delimited-list chokepoint
+    /// `emit_delimited_list`, and the `Expr::TupleLiteral` single-element
+    /// branch, which emits `(x,)` flat rather than fill-packed and so does
+    /// not pass through the chokepoint. A true answer routes the region to
+    /// `format_bracketed_broken_with_comments` instead of the fill-packed
+    /// `doc::surround_fill` path. When ANY element-interior
     /// comment exists, the doc DSL cannot preserve it — the sub-formatter
     /// used by `element_to_string` is passed an EMPTY comment sideband
     /// (it does hold the real `source` for span lookups, but no comments),
@@ -653,13 +678,16 @@ impl Formatter {
             .any(|c| c.span.start > start && c.span.start < end)
     }
 
-    /// R39 fmt collection-literal interior-comment escape (Core #4
-    /// producer chokepoint): render `open elems close` in BROKEN
-    /// (multi-line) form with the outer formatter's comment sideband
-    /// interleaved per element. Called by the 4 collection-literal arms
-    /// of `format_expr` when `has_interior_comments(container_span)`
-    /// fires — i.e. when the fill-packed `doc::surround_fill` path would DROP interior
-    /// comments (the exact snag class).
+    /// Interior-comment exploded emission (Core #4 producer chokepoint):
+    /// render `open elems close` in BROKEN (multi-line) form with the
+    /// outer formatter's comment sideband interleaved per element.
+    ///
+    /// ONE caller: `emit_delimited_list`, when its gate fires — i.e. when
+    /// the fill-packed `doc::surround_fill` path would DROP interior
+    /// comments (the exact snag class). The lint
+    /// `formatter_collection_literal_interior_hook_dispatch` pins that at
+    /// one, so a new list emitter cannot reach this shape without passing
+    /// the gate on the way.
     ///
     /// Emit order per element:
     ///   1. `emit_comments_before(elem_start)` — flush standalone-line
@@ -711,6 +739,276 @@ impl Formatter {
         self.emit_comments_before(container_end);
         self.emitter.dedent();
         self.emitter.write(close);
+    }
+
+    // ── The delimited-list chokepoint ───────────────────────
+    //
+    // Every FILL-EMITTED delimited list in the language funnels through
+    // these two functions. `emit_delimited_list` decides — BEFORE the Doc
+    // layer — whether the region carries an interior comment; only
+    // `emit_delimited_texts` reaches `doc::surround_fill`.
+    //
+    // The decision cannot be taken any lower. `Doc::Fill` writes `", "`
+    // AFTER each pre-rendered item, so an item text ending in `# c` would
+    // swallow the separator and the rest of the list; that is why
+    // `element_to_string` hands its sub-`Formatter` an EMPTY comment
+    // sideband, and why a comment-bearing list must reach its exploded
+    // shape imperatively instead. The boundary is therefore the last
+    // point at which the sideband is still visible.
+
+    /// Terminal splice of a pre-rendered delimited list into the buffer.
+    ///
+    /// The ONLY `doc::surround_fill` call site in the formatter. A new
+    /// list emitter that wants fill packing has to come through here, so
+    /// it cannot silently skip the gate above it — which is what
+    /// `formatter_list_emit_fill_census` pins at 1.
+    fn emit_delimited_texts(&mut self, open: &str, close: &str, items: Vec<String>) {
+        let docs: Vec<doc::Doc> = items.into_iter().map(doc::text).collect();
+        let doc = doc::surround_fill(open, docs, close);
+        self.write_doc(&doc);
+    }
+
+    /// The chokepoint for a fill-emitted delimited list.
+    ///
+    /// On `Gate::Span`, an interior comment routes the list to
+    /// `format_bracketed_broken_with_comments`, which re-renders every
+    /// element on the OUTER formatter — so a nested list recurses back
+    /// into this gate and reaches the same exploded shape (Core #4
+    /// recursion). Hence the canonical form: *a FILL-EMITTED container
+    /// with an interior comment breaks fully, and so does every ancestor
+    /// FILL-EMITTED container on the path to it.* The scope is part of the
+    /// rule, not a caveat on it — see below for what is outside.
+    ///
+    /// Scope: FILL-EMITTED lists only. Three other mechanisms build
+    /// delimited regions and none of them comes through here, so an
+    /// interior comment is still re-parented in all three:
+    ///
+    ///  * the hand-rolled `write(", ")` comma loops — e.g. pattern field
+    ///    lists, enum tuple-variant field lists, tuple and function TYPES.
+    ///    ⚠ Those are EXAMPLES, not the set: the set is pinned as a COUNT
+    ///    by `formatter_list_emit_fill_census`'s `EXPECTED_WRITE_SEP` and
+    ///    enumerated row-by-row with dispositions in `TODO.md`;
+    ///  * regions pre-rendered one level ABOVE a list emitter (method
+    ///    chains of 2+ segments, binary chains, `??`, comprehensions);
+    ///  * the non-list `Expr::Index` brackets.
+    ///
+    /// All three are filed with durable repros — see `TODO.md`.
+    fn emit_delimited_list<E>(
+        &mut self,
+        open: &str,
+        close: &str,
+        gate: Gate,
+        elems: &[E],
+        span_of: impl Fn(&E) -> (usize, usize),
+        format_elem: impl Fn(&mut Formatter, &E),
+    ) {
+        if let Gate::UngatedCarveOut(reason) = gate {
+            // Core #14 — the reason is load-bearing, not decoration. In a
+            // DEBUG build the scan-miss path panics inside
+            // `gate_or_scan_miss` before it can arrive here, so every
+            // carve-out that reaches this point is one of the declared
+            // empty-sideband ones — and THAT is checkable: their soundness
+            // rests entirely on the sideband being inert.
+            debug_assert!(
+                self.comments.is_empty(),
+                "ungated carve-out `{reason}` fired on a formatter that DOES \
+                 hold comments — the stated reason (an empty comment sideband) \
+                 does not hold, so an interior comment escapes here"
+            );
+        }
+        if let Gate::Span(interior_start, container_end) = gate {
+            // Provenance guard: the gate's open position must BE the open
+            // delimiter. A guessed or drifted offset would silently widen
+            // or narrow the window instead of failing, which is the whole
+            // class of bug the scan design exists to avoid.
+            debug_assert_eq!(
+                self.source.as_bytes().get(interior_start).copied(),
+                open.as_bytes().first().copied(),
+                "Gate::Span open position {interior_start} is not the `{open}` \
+                 delimiter (source byte: {:?})",
+                self.source.as_bytes().get(interior_start).map(|b| *b as char),
+            );
+            if self.has_interior_comments(interior_start, container_end) {
+                self.format_bracketed_broken_with_comments(
+                    open,
+                    close,
+                    container_end,
+                    elems,
+                    span_of,
+                    |f, e| format_elem(f, e),
+                );
+                return;
+            }
+        }
+        let items: Vec<String> = elems
+            .iter()
+            .map(|e| self.element_to_string(|f| format_elem(f, e)))
+            .collect();
+        self.emit_delimited_texts(open, close, items);
+    }
+
+    /// The single `Option<(usize, usize)> -> Gate` converter: every
+    /// delimiter-scan result becomes a gate here, and every scan MISS
+    /// becomes the one carve-out spelled `"scan miss"`.
+    ///
+    /// A miss loses the container's END, and every substitute end
+    /// available at a scan-derived site reaches into the FUNCTION BODY —
+    /// so gating on a guessed span would hoover body comments into the
+    /// parameter list, which is this class of bug in reverse. The safe
+    /// fallback is today's pre-render behaviour.
+    ///
+    /// The `debug_assert!` is the miss DETECTOR (no corpus input reaches
+    /// it); the census pins that the fallback exists in exactly ONE place,
+    /// so the number of carve-out sites does not grow with the number of
+    /// callers that can miss.
+    fn gate_or_scan_miss(&self, scanned: Option<(usize, usize)>) -> Gate {
+        match scanned {
+            Some((open_pos, container_end)) => Gate::Span(open_pos, container_end),
+            None => {
+                debug_assert!(
+                    false,
+                    "delimiter scan missed: a fill-emitted list fell back to the \
+                     ungated pre-render path. The window argument at \
+                     `delim_pos_after` no longer holds for some source shape."
+                );
+                Gate::UngatedCarveOut("scan miss")
+            }
+        }
+    }
+
+    /// Byte offset of the first `ch` in `[from, upto)` that is not inside
+    /// a comment span, mirroring `last_real_content_before`'s use of the
+    /// parser's comment table.
+    ///
+    /// WINDOW RULE (the safety argument, and the reason this is a source
+    /// scan rather than a parser-recorded span). Callers must pass a
+    /// window that provably contains no string literal, because a `(` or
+    /// `[` inside one would be indistinguishable from the real delimiter.
+    /// The window that satisfies this is the POST-ANCHOR one, where the
+    /// anchor has ADVANCED PAST any explicit generic-argument region:
+    ///
+    ///  * a call / method call with explicit generic args anchors at the
+    ///    generic-args `]` (one past it), never at the callee or method
+    ///    name — `identity[Callable[void(int)]](c)` puts a `(` inside the
+    ///    generic-args region, so the pre-generic-args window is NOT safe;
+    ///  * a function's parameter list anchors at the generic-PARAMS span
+    ///    end when the function is generic, else at the name;
+    ///  * a closing-delimiter search runs from the LAST element's span end.
+    ///
+    /// Between such an anchor and the delimiter, only whitespace, commas
+    /// and comments can appear. If a caller cannot advance its anchor —
+    /// because the gate it would anchor on MISSED — it must not fall back
+    /// to the pre-anchor position; it propagates the miss instead (see
+    /// `gate_or_scan_miss`).
+    fn delim_pos_after(&self, from: usize, upto: usize, ch: u8) -> Option<usize> {
+        let bytes = self.source.as_bytes();
+        let hi = upto.min(bytes.len());
+        let mut i = from.min(hi);
+        while i < hi {
+            if bytes[i] == ch
+                && !self
+                    .comments
+                    .iter()
+                    .any(|cm| cm.span.start <= i && i < cm.span.end)
+            {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Scan a parenthesized argument/parameter tuple: `(` .. one past `)`.
+    ///
+    /// `anchor` is the end of whatever immediately precedes the `(` under
+    /// the window rule at `delim_pos_after` (callee end, method-name end,
+    /// generic-args `]`, or generic-PARAMS span end). `outer_end` bounds
+    /// both searches. `first_elem_start` tightens the `(` search so a
+    /// delimiter inside an element cannot be mistaken for the opener; the
+    /// `)` search starts at the LAST element's end for the same reason.
+    ///
+    /// PREMISE (pinned by `fmt_delimited_list_window_safety.gg`):
+    /// `Param.span` INCLUDES the default-value expression, so
+    /// `String s = "a)b"` ends AFTER the string and the `)` search never
+    /// starts inside it. Were the premise false, the truncated end would
+    /// land on the `)` inside the literal — observable only through an
+    /// orphan-pre-close comment, which is exactly what that fixture uses.
+    fn paren_tuple_gate(
+        &self,
+        anchor: usize,
+        outer_end: usize,
+        first_elem_start: Option<usize>,
+        last_elem_end: Option<usize>,
+    ) -> Option<(usize, usize)> {
+        let upto = first_elem_start.unwrap_or(outer_end);
+        let lp = self.delim_pos_after(anchor, upto, b'(')?;
+        let rp = self.delim_pos_after(last_elem_end.unwrap_or(lp), outer_end, b')')?;
+        Some((lp, rp + 1))
+    }
+
+    /// Scan a bracketed generic-argument list: `[` .. one past `]`.
+    /// Same window rule as `paren_tuple_gate`; `upto` bounds the closing
+    /// search (the enclosing node's end).
+    fn generic_args_gate(
+        &self,
+        anchor: usize,
+        first_arg_start: Option<usize>,
+        last_arg_end: Option<usize>,
+        upto: usize,
+    ) -> Option<(usize, usize)> {
+        let lb = self.delim_pos_after(anchor, first_arg_start.unwrap_or(upto), b'[')?;
+        let rb = self.delim_pos_after(last_arg_end.unwrap_or(lb + 1), upto, b']')?;
+        Some((lb, rb + 1))
+    }
+
+    /// Derive both gates of a callee-shaped expression — `name[generic
+    /// args](call args)` — in ONE place, so the window rule's
+    /// ANCHOR-ADVANCE and its miss PROPAGATION are stated once rather
+    /// than re-derived at `Expr::Call`, `Expr::MethodCall`,
+    /// `Expr::StructLiteral` and `Expr::DotShorthand`.
+    ///
+    /// ANCHOR-ADVANCE: with explicit generic args the argument tuple
+    /// anchors at the generic-args `]`, never at the name. Explicit
+    /// generic args can themselves contain a `(` —
+    /// `identity[Callable[void(int)]](c)` — so a scan started at the name
+    /// end would return the `(` INSIDE the brackets and gate over a
+    /// window beginning mid-generic-args.
+    ///
+    /// MISS PROPAGATION: if the generic-args scan misses there is no
+    /// advanced anchor, and falling back to the name end is precisely the
+    /// unsafe window above. The sibling therefore inherits the miss and
+    /// becomes an ungated carve-out too. (No source shape reaches this;
+    /// the `debug_assert!` in `gate_or_scan_miss` is the detector.)
+    ///
+    /// Returns `None` for the generic-args gate exactly when the
+    /// expression has no explicit generic args.
+    fn callee_arg_gates(
+        &self,
+        name_end: usize,
+        generic_args: Option<&[Spanned<Type>]>,
+        outer_end: usize,
+        first_arg_start: Option<usize>,
+        last_arg_end: Option<usize>,
+    ) -> (Option<Gate>, Gate) {
+        let (ga_gate, anchor) = match generic_args {
+            Some(ga) => {
+                let scanned = self.generic_args_gate(
+                    name_end,
+                    ga.first().map(|t| t.span.start),
+                    ga.last().map(|t| t.span.end),
+                    outer_end,
+                );
+                (
+                    Some(self.gate_or_scan_miss(scanned)),
+                    scanned.map(|(_, ga_end)| ga_end),
+                )
+            }
+            None => (None, Some(name_end)),
+        };
+        let args_scanned = anchor.and_then(|a| {
+            self.paren_tuple_gate(a, outer_end, first_arg_start, last_arg_end)
+        });
+        (ga_gate, self.gate_or_scan_miss(args_scanned))
     }
 
     /// R39 snag #2 sub-task 5b — container-header trailing comment.
@@ -1500,7 +1798,17 @@ impl Formatter {
         if let Some(ref gp) = f.generic_params {
             self.format_generic_params_wrapped(gp);
         }
-        self.format_params_wrapped(&f.params);
+        // Window rule (`delim_pos_after`): anchor PAST the generic-PARAMS
+        // region when the function is generic — a generic param's default
+        // or bound can otherwise sit between the name and the `(`.
+        let anchor = f.generic_params.as_ref().map_or(f.name.span.end, |gp| gp.span.end);
+        let params_gate = self.paren_tuple_gate(
+            anchor,
+            f.span.end,
+            f.params.first().map(|p| p.span.start),
+            f.params.last().map(|p| p.span.end),
+        );
+        self.format_params_wrapped(&f.params, self.gate_or_scan_miss(params_gate));
         match &f.throws {
             ThrowsSpec::Explicit(throws) => {
                 self.emitter.write(" throws ");
@@ -1809,9 +2117,18 @@ impl Formatter {
                 self.emitter.write(".");
                 let mut sorted: Vec<&str> = names.iter().map(|n| n.node.as_str()).collect();
                 sorted.sort_unstable();
-                let items: Vec<doc::Doc> = sorted.iter().map(|n| doc::text(*n)).collect();
-                let doc = doc::surround_fill("{", items, "}");
-                self.write_doc(&doc);
+                // The one DECLARED carve-out from the gate, and the only
+                // direct `emit_delimited_texts` caller. It has no `Gate`
+                // at all: the names are SORTED, so emitted order is not
+                // source order, and the comment cursor is forward-only —
+                // interleaving per element would flush a later name's
+                // comment against an earlier one. A comment inside a
+                // grouped import therefore still leaves the group; that
+                // is a real defect, filed with the residual family in
+                // `TODO.md`, and closing it needs an order-aware cursor
+                // rather than a gate here.
+                let items: Vec<String> = sorted.iter().map(|n| (*n).to_string()).collect();
+                self.emit_delimited_texts("{", "}", items);
                 self.emitter.newline();
             }
             ImportStmt::From { path, names, glob_types, wildcard, .. } => {
@@ -2021,39 +2338,44 @@ impl Formatter {
     /// (param1, param2, param3, param4,
     ///     param5, param6)
     /// ```
-    fn format_params_wrapped(&mut self, params: &[Spanned<Param>]) {
-        let items: Vec<doc::Doc> = params.iter().map(|p| {
-            doc::text(self.element_to_string(|f| f.format_param(&p.node)))
-        }).collect();
-        let doc = doc::surround_fill("(", items, ")");
-        self.write_doc(&doc);
+    /// With an interior comment the list instead breaks fully, one
+    /// parameter per line WITH a trailing comma — the canonical exploded
+    /// form shared with every other gated list.
+    fn format_params_wrapped(&mut self, params: &[Spanned<Param>], gate: Gate) {
+        self.emit_delimited_list(
+            "(", ")", gate, params,
+            |p| (p.span.start, p.span.end),
+            |f, p| f.format_param(&p.node),
+        );
     }
 
     /// Format a parenthesized call argument list with line-width-aware wrapping.
-    fn format_call_args_wrapped(&mut self, args: &[Spanned<CallArg>]) {
-        let items: Vec<doc::Doc> = args.iter().map(|a| {
-            doc::text(self.element_to_string(|f| f.format_call_arg(&a.node)))
-        }).collect();
-        let doc = doc::surround_fill("(", items, ")");
-        self.write_doc(&doc);
+    fn format_call_args_wrapped(&mut self, args: &[Spanned<CallArg>], gate: Gate) {
+        self.emit_delimited_list(
+            "(", ")", gate, args,
+            |a| (a.span.start, a.span.end),
+            |f, a| f.format_call_arg(&a.node),
+        );
     }
 
     /// Format a bracketed generic parameter list with line-width-aware wrapping.
     fn format_generic_params_wrapped(&mut self, gp: &Spanned<GenericParams>) {
-        let items: Vec<doc::Doc> = gp.node.params.iter().map(|p| {
-            doc::text(self.element_to_string(|f| f.format_generic_param(&p.node)))
-        }).collect();
-        let doc = doc::surround_fill("[", items, "]");
-        self.write_doc(&doc);
+        // No scan needed: `parse_generic_params` merges the `[` and `]`
+        // token spans, so `gp.span` already IS the gate range.
+        self.emit_delimited_list(
+            "[", "]", Gate::Span(gp.span.start, gp.span.end), &gp.node.params,
+            |p| (p.span.start, p.span.end),
+            |f, p| f.format_generic_param(&p.node),
+        );
     }
 
     /// Format a bracketed generic argument list (types) with wrapping.
-    fn format_generic_args_wrapped(&mut self, args: &[Spanned<Type>]) {
-        let items: Vec<doc::Doc> = args.iter().map(|t| {
-            doc::text(self.element_to_string(|f| f.format_type(t)))
-        }).collect();
-        let doc = doc::surround_fill("[", items, "]");
-        self.write_doc(&doc);
+    fn format_generic_args_wrapped(&mut self, args: &[Spanned<Type>], gate: Gate) {
+        self.emit_delimited_list(
+            "[", "]", gate, args,
+            |t| (t.span.start, t.span.end),
+            |f, t| f.format_type(t),
+        );
     }
 
     /// Format a method chain with line-width-aware wrapping.
@@ -2075,10 +2397,20 @@ impl Formatter {
             let seg_str = self.element_to_string(|f| {
                 f.emitter.write(".");
                 f.emitter.write(&method.node);
+                // DECLARED carve-outs. `f` here is the sub-`Formatter`
+                // built by `element_to_string`, whose comment sideband is
+                // EMPTY — a `Gate::Span` would evaluate against no
+                // comments and read as a live gate while being dead code.
+                // The escape is real (a comment inside a chain segment's
+                // arguments re-parents), and it belongs to the
+                // pre-render-ABOVE mechanism: the chain itself must decide
+                // before it pre-renders. Filed with a repro in `TODO.md`.
                 if let Some(ga) = generic_args {
-                    f.format_generic_args_wrapped(ga);
+                    let r = Gate::UngatedCarveOut("chain segment generic args: empty sideband");
+                    f.format_generic_args_wrapped(ga, r);
                 }
-                f.format_call_args_wrapped(args);
+                let r = Gate::UngatedCarveOut("chain segment call args: empty sideband");
+                f.format_call_args_wrapped(args, r);
             });
             parts.push(seg_str);
         }
@@ -3224,7 +3556,18 @@ impl Formatter {
             Type::Named { name, generic_args } => {
                 self.emitter.write(&name.node);
                 if !generic_args.is_empty() {
-                    self.format_generic_args_wrapped(generic_args);
+                    // `ty.span` ends one past the `]`, so only the `[`
+                    // needs scanning — from the name end, which is the
+                    // anchor the window rule requires here (a named type
+                    // has nothing between its name and its `[`).
+                    let gate = self
+                        .delim_pos_after(
+                            name.span.end,
+                            generic_args[0].span.start,
+                            b'[',
+                        )
+                        .map(|lb| (lb, ty.span.end));
+                    self.format_generic_args_wrapped(generic_args, self.gate_or_scan_miss(gate));
                 }
             }
             Type::Array { element, size } => {
@@ -3654,10 +3997,20 @@ impl Formatter {
                 // FMT-A: callee is a postfix-position receiver (bp 35). A
                 // BinaryOp callee like `(f + g)(x)` must stay wrapped.
                 self.format_postfix_receiver(callee);
+                let (ga_gate, args_gate) = self.callee_arg_gates(
+                    callee.span.end,
+                    generic_args.as_deref(),
+                    expr.span.end,
+                    args.first().map(|a| a.span.start),
+                    args.last().map(|a| a.span.end),
+                );
                 if let Some(ga) = generic_args {
-                    self.format_generic_args_wrapped(ga);
+                    self.format_generic_args_wrapped(
+                        ga,
+                        ga_gate.expect("generic args present => generic-args gate derived"),
+                    );
                 }
-                self.format_call_args_wrapped(args);
+                self.format_call_args_wrapped(args, args_gate);
             }
             Expr::MethodCall {
                 receiver,
@@ -3676,10 +4029,20 @@ impl Formatter {
                     self.format_postfix_receiver(receiver);
                     self.emitter.write(".");
                     self.emitter.write(&method.node);
+                    let (ga_gate, args_gate) = self.callee_arg_gates(
+                        method.span.end,
+                        generic_args.as_deref(),
+                        expr.span.end,
+                        args.first().map(|a| a.span.start),
+                        args.last().map(|a| a.span.end),
+                    );
                     if let Some(ga) = generic_args {
-                        self.format_generic_args_wrapped(ga);
+                        self.format_generic_args_wrapped(
+                            ga,
+                            ga_gate.expect("generic args present => generic-args gate derived"),
+                        );
                     }
-                    self.format_call_args_wrapped(args);
+                    self.format_call_args_wrapped(args, args_gate);
                 }
             }
             Expr::FieldAccess { object, field } => {
@@ -3947,11 +4310,20 @@ impl Formatter {
                     // D27 Round A: move-closure prefix `^` (was `!`).
                     self.emitter.write("^");
                 }
-                let items: Vec<doc::Doc> = params.iter().map(|p| {
-                    doc::text(self.element_to_string(|f| f.format_closure_param(&p.node)))
-                }).collect();
-                let params_doc = doc::surround_fill("(", items, ")");
-                self.write_doc(&params_doc);
+                // The closure's own span start anchors the scan: nothing
+                // but the optional `async`/`^` prefixes precedes the
+                // parameter `(`, and neither can contain one.
+                let params_gate = self.paren_tuple_gate(
+                    expr.span.start,
+                    expr.span.end,
+                    params.first().map(|p| p.span.start),
+                    params.last().map(|p| p.span.end),
+                );
+                self.emit_delimited_list(
+                    "(", ")", self.gate_or_scan_miss(params_gate), params,
+                    |p| (p.span.start, p.span.end),
+                    |f, p| f.format_closure_param(&p.node),
+                );
                 // R41 T-FMT-C: the colon and the separator are SEPARATE
                 // writes. Writing `": "` unconditionally and then newlining
                 // left `(int x): ` — a trailing space — on every block-bodied
@@ -4106,130 +4478,93 @@ impl Formatter {
                     ArrayLiteralSpelling::Braces => ("{", "}"),
                     ArrayLiteralSpelling::Brackets => ("[", "]"),
                 };
-                // R39 fmt collection-literal interior-comment escape (Core
-                // #4 chokepoint): if any un-emitted comment sits strictly
-                // inside the delimiters, the fill-packed `doc::surround_fill` path would
-                // silently drop it (sub-formatter has empty comment
-                // sideband — see `element_to_string_at`) and the OUTER
-                // trailing-hook would then dedent the comment to column
-                // 0. Route through the shared broken-with-comments helper
-                // so leading, trailing, and orphan-pre-close comments all
-                // land at the correct interior indent.
-                if self.has_interior_comments(expr.span.start, expr.span.end) {
-                    self.format_bracketed_broken_with_comments(
-                        open, close, expr.span.end,
-                        elems,
-                        |e| (e.span.start, e.span.end),
-                        |f, e| f.format_expr(e),
-                    );
-                    return;
-                }
-                let items: Vec<doc::Doc> = elems.iter().map(|e| {
-                    doc::text(self.element_to_string(|f| f.format_expr(e)))
-                }).collect();
-                let doc = doc::surround_fill(open, items, close);
-                self.write_doc(&doc);
+                // Interior-comment gate (Core #4 chokepoint): the range
+                // comes free from the AST — `expr.span` runs from the open
+                // delimiter to one past the close.
+                self.emit_delimited_list(
+                    open, close, Gate::Span(expr.span.start, expr.span.end), elems,
+                    |e| (e.span.start, e.span.end),
+                    |f, e| f.format_expr(e),
+                );
             }
             Expr::TupleLiteral(elems) => {
-                if elems.len() == 1 {
-                    // Single-element tuples always need trailing comma.
-                    // R39 known gap (durable repro at
-                    // `tests/fixtures/known_gaps/fmt_collection_literal_interior_tuple_single_elem.gg`):
-                    // interior comments inside a single-element tuple
-                    // still escape — the broken-with-comments helper is
-                    // NOT dispatched here because a single-elem tuple
-                    // stays flat by design. Rare shape; filed as follow-up.
+                // The ONE gate evaluated outside `emit_delimited_list`.
+                // A single-element tuple is spelled `(x,)` — the trailing
+                // comma IS the tuple, so the flat form is not a packing
+                // choice but the syntax, and it does not route through the
+                // chokepoint. It must still be skipped when a comment sits
+                // inside the parens, or the comment escapes; the exploded
+                // form carries its own trailing comma and re-parses as a
+                // 1-tuple, so the broken path is safe for this shape too.
+                let has_interior = self.has_interior_comments(expr.span.start, expr.span.end);
+                if elems.len() == 1 && !has_interior {
+                    debug_assert!(
+                        !has_interior,
+                        "single-element tuple took the flat `(x,)` path with an \
+                         interior comment — the comment will escape. The two \
+                         `has_interior_comments` evaluations (here and in \
+                         `emit_delimited_list`) are NOT redundant: collapsing \
+                         them reopens the escape."
+                    );
                     self.emitter.write("(");
                     self.format_expr(&elems[0]);
                     self.emitter.write(",)");
                 } else {
-                    // R39 fmt collection-literal interior-comment escape
-                    // (Core #4 chokepoint): see ArrayLiteral above.
-                    if self.has_interior_comments(expr.span.start, expr.span.end) {
-                        self.format_bracketed_broken_with_comments(
-                            "(", ")", expr.span.end,
-                            elems,
-                            |e| (e.span.start, e.span.end),
-                            |f, e| f.format_expr(e),
-                        );
-                        return;
-                    }
-                    let items: Vec<doc::Doc> = elems.iter().map(|e| {
-                        doc::text(self.element_to_string(|f| f.format_expr(e)))
-                    }).collect();
-                    let doc = doc::surround_fill("(", items, ")");
-                    self.write_doc(&doc);
+                    self.emit_delimited_list(
+                        "(", ")", Gate::Span(expr.span.start, expr.span.end), elems,
+                        |e| (e.span.start, e.span.end),
+                        |f, e| f.format_expr(e),
+                    );
                 }
             }
             Expr::DictLiteral(pairs) => {
-                // R39 fmt collection-literal interior-comment escape
-                // (Core #4 chokepoint): see ArrayLiteral above. `span_of`
-                // returns `(key.span.start, value.span.end)` so the range
-                // covers the WHOLE pair — a comment between key and value
-                // (rare) OR between pairs both count as pair-interior.
-                if self.has_interior_comments(expr.span.start, expr.span.end) {
-                    self.format_bracketed_broken_with_comments(
-                        "{", "}", expr.span.end,
-                        pairs,
-                        |pair| (pair.0.span.start, pair.1.span.end),
-                        |f, pair| {
-                            f.format_expr(&pair.0);
-                            f.emitter.write(": ");
-                            f.format_expr(&pair.1);
-                        },
-                    );
-                    return;
-                }
-                let items: Vec<doc::Doc> = pairs.iter().map(|(k, v)| {
-                    doc::text(self.element_to_string(|f| {
-                        f.format_expr(k);
+                // `span_of` returns `(key.span.start, value.span.end)` so
+                // the range covers the WHOLE pair — a comment between key
+                // and value (rare) OR between pairs both count as
+                // pair-interior.
+                self.emit_delimited_list(
+                    "{", "}", Gate::Span(expr.span.start, expr.span.end), pairs,
+                    |pair| (pair.0.span.start, pair.1.span.end),
+                    |f, pair| {
+                        f.format_expr(&pair.0);
                         f.emitter.write(": ");
-                        f.format_expr(v);
-                    }))
-                }).collect();
-                let doc = doc::surround_fill("{", items, "}");
-                self.write_doc(&doc);
+                        f.format_expr(&pair.1);
+                    },
+                );
             }
             Expr::StructLiteral { name, generic_args, args } => {
-                self.emitter.write(&name.node);
-                if let Some(ga) = generic_args {
-                    self.format_generic_args_wrapped(ga);
-                }
-                // R39 fmt collection-literal interior-comment escape
-                // (Core #4 chokepoint): NARROW the interior-check to the
-                // ARG TUPLE only — using `expr.span.start` as the interior
-                // start would fire on a comment inside `generic_args`
-                // (`Foo[T, # C](a)`) with the wrong container_end (arg-
-                // tuple end, not generic-args end), miscoloring the
-                // dispatch. Use the first arg's span.start as the interior
-                // start so only comments inside the arg tuple qualify.
+                // fmt-UNREACHABLE arm, kept in sync as class hygiene.
+                // `gg fmt` is parse-only, and the parser constructs zero
+                // `Expr::StructLiteral` — the sole producer is
+                // `rewrite_struct_calls` in semantic analysis, which fmt
+                // never reaches. Every `Foo(a, b)` the formatter sees is an
+                // `Expr::Call`, which is where the user-visible fix lands.
+                // The lint `formatter_collection_literal_interior_hook_dispatch`
+                // pins the unreachability so this comment cannot rot.
                 //
-                // R39 known gaps (durable repros in
-                // `tests/fixtures/known_gaps/`):
-                //   - `args.is_empty()` (e.g. `Foo()\n  # C\n)`): no first-
-                //     arg span to derive the arg-tuple start; SKIP dispatch
-                //     — file
-                //     `fmt_collection_literal_interior_struct_no_args.gg`.
-                //   - `generic_args`-interior comment: current scope covers
-                //     only the arg tuple — file
-                //     `fmt_collection_literal_interior_struct_generic_args.gg`.
-                if !args.is_empty() {
-                    let args_start = args.first().unwrap().span.start;
-                    if self.has_interior_comments(args_start, expr.span.end) {
-                        self.format_bracketed_broken_with_comments(
-                            "(", ")", expr.span.end,
-                            args,
-                            |a| (a.span.start, a.span.end),
-                            |f, a| f.format_expr(a),
-                        );
-                        return;
-                    }
+                // Span note for anyone who does reach it:
+                // `rewrite_struct_calls` keeps the outer `expr.span` and
+                // sets `name.span` to the callee span, so both anchors used
+                // here are valid on a rewritten node.
+                self.emitter.write(&name.node);
+                let (ga_gate, args_gate) = self.callee_arg_gates(
+                    name.span.end,
+                    generic_args.as_deref(),
+                    expr.span.end,
+                    args.first().map(|a| a.span.start),
+                    args.last().map(|a| a.span.end),
+                );
+                if let Some(ga) = generic_args {
+                    self.format_generic_args_wrapped(
+                        ga,
+                        ga_gate.expect("generic args present => generic-args gate derived"),
+                    );
                 }
-                let items: Vec<doc::Doc> = args.iter().map(|a| {
-                    doc::text(self.element_to_string(|f| f.format_expr(a)))
-                }).collect();
-                let doc = doc::surround_fill("(", items, ")");
-                self.write_doc(&doc);
+                self.emit_delimited_list(
+                    "(", ")", args_gate, args,
+                    |a| (a.span.start, a.span.end),
+                    |f, a| f.format_expr(a),
+                );
             }
             Expr::As { expr, type_ } => {
                 // FMT-A: `as` is bp 31/32 (left-assoc). Operand at LEFT position.
@@ -4288,7 +4623,16 @@ impl Formatter {
                 self.emitter.write(".");
                 self.emitter.write(&variant.node);
                 if !args.is_empty() {
-                    self.format_call_args_wrapped(args);
+                    // No generic-args region on a dot-shorthand, so the
+                    // variant name end IS the anchor.
+                    let (_, args_gate) = self.callee_arg_gates(
+                        variant.span.end,
+                        None,
+                        expr.span.end,
+                        args.first().map(|a| a.span.start),
+                        args.last().map(|a| a.span.end),
+                    );
+                    self.format_call_args_wrapped(args, args_gate);
                 }
             }
             Expr::MetaOpInfix { left, op_name, right } => {

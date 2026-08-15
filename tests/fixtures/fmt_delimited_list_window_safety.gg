@@ -1,0 +1,40 @@
+# The delimiter-scan WINDOW-SAFETY premise pin.
+#
+# WHAT THIS FIXTURE PINS (Core #12 — the cell, not a vague claim): the
+# `)`-scan that derives a parameter list's gate end starts at the LAST
+# PARAMETER'S SPAN END, and `Param.span` INCLUDES the default-value
+# expression. Were the premise false — were the span to end at the
+# parameter NAME — the scan would start inside `"a)b"` and return the `)`
+# that lives inside the STRING LITERAL, truncating the gate's container
+# end to a byte before the real `)`.
+#
+# WHY THE COMMENT SITS WHERE IT DOES: a truncated container end is
+# INVISIBLE to an ordinary mid-list interior comment (that comment is
+# inside the window either way, so the gate still fires and the list still
+# breaks). It is observable only through the ORPHAN-PRE-CLOSE flush, which
+# `format_bracketed_broken_with_comments` runs against the container end
+# itself. So the sentinel is an own-line comment AFTER the last parameter
+# and BEFORE the `)`.
+#
+# TWO REDS, both recorded in the round's report:
+#   1. Ordinary pre-fix red: the whole parameter list was ungated, so the
+#      sentinel re-parented INTO the function body and documented the
+#      first body statement (`print(y)`).
+#   2. Simulated premise-break red (the one that pins the premise): with
+#      the last parameter's span end forced to the parameter name's end,
+#      the `)`-scan lands inside `"a)b"` and the sentinel escapes again.
+#
+# The string literal doubles as the adversarial probe for the scan itself:
+# a `)` inside a string must never be mistaken for a delimiter.
+
+void f(
+    int y,
+    String s = "a)b",
+    # SEN window-orphan-pre-close
+):
+    print(y)
+    print(s)
+
+int main():
+    f(1)
+    return 0

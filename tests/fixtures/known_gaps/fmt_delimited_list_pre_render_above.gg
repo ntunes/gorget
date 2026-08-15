@@ -1,0 +1,106 @@
+# KNOWN GAP — the PRE-RENDER-ABOVE mechanism: a delimited list nested
+# inside a construct that pre-renders its own sub-parts is gated against
+# an EMPTY comment sideband, so the gate is vacuous and the interior
+# comment escapes.
+#
+# ONE FIXTURE PER MECHANISM, not per shape: every costume below shares the
+# single root, so they close together or not at all.
+#
+# MECHANISM. `element_to_string` builds a sub-`Formatter` with
+# `comments = vec![]`. The delimited-list chokepoint (`emit_delimited_list`)
+# retires the class for every list emitted by the OUTER formatter — but a
+# method chain, a binary chain, an `??` chain and the three comprehensions
+# each pre-render their sub-parts through that sub-formatter FIRST. Any
+# list emitter reached from inside one of them therefore runs with no
+# comments to see. Closing this needs the same decide-before-Doc move ONE
+# LEVEL UP: the chain / comprehension builder consults the sideband over
+# its own span and falls back to an imperative broken emission. That is a
+# different mechanism from the list chokepoint, not a missing call.
+#
+# The method-chain sub-formatter carve-outs are DECLARED in the formatter
+# (`Gate::UngatedCarveOut("chain segment ...: empty sideband")`) and pinned
+# by `formatter_list_emit_fill_census`, so this gap has a structural
+# marker in the source, not only this file.
+#
+# CURRENT (measured on the post-chokepoint build): every `# SEN` comment
+# below dedents to the enclosing statement indent and becomes a LEADING
+# comment of the NEXT statement — for the three comprehensions that means
+# each sentinel documents the following declaration instead of its own.
+#
+#     int chained = Acc(0).add(1, 2).get()
+#     # SEN chain-2seg          ← escaped
+#     int summed = ...
+#
+# ⚠ The method-chain costume MUST use 2+ segments. A single-segment
+# receiver call (`b.addup(...)`) is FIXED by the chokepoint and would be
+# green on arrival — the opposite of coverage.
+#
+# INTENDED (post-fix) shape, e.g. for the chain costume:
+#     int chained = Acc(0).add(
+#         # SEN chain-2seg
+#         1,
+#         2,
+#     ).get()
+#
+# UN-IGNORE + PROMOTE out of `known_gaps/` when the pre-render-above
+# builders gain their own interior-comment gate.
+
+int f(int a):
+    return a
+
+struct Acc:
+    int v
+
+equip Acc:
+    Acc add(self, int a, int b):
+        return Acc(self.v + a + b)
+
+    int get(self):
+        return self.v
+
+int main():
+    # ── costume 1: method chain, 2+ segments ──
+    int chained = Acc(0).add(
+        # SEN chain-2seg
+        1,
+        2,
+    ).get()
+
+    # ── costume 2: binary chain operand ──
+    int summed = f(
+        # SEN binchain
+        1,
+    ) + f(2)
+
+    # ── costume 3: `??` (Elvis) chain ──
+    Option[int] maybe = None
+    int elvis = maybe ?? f(
+        # SEN elvis
+        7,
+    )
+
+    # ── costume 4: list comprehension ──
+    Vector[int] lc = [f(
+        # SEN listcomp
+        x,
+    ) for x in 0..3]
+
+    # ── costume 5: dict comprehension ──
+    Dict[int, int] dc = {x: f(
+        # SEN dictcomp
+        x,
+    ) for x in 0..3}
+
+    # ── costume 6: set comprehension ──
+    Set[int] sc = {f(
+        # SEN setcomp
+        x,
+    ) for x in 0..3}
+
+    print(chained)
+    print(summed)
+    print(elvis)
+    print(lc[0])
+    print(dc[1])
+    print(sc.len())
+    return 0

@@ -3,7 +3,8 @@
 # SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
 # `fmt_fill_pack_call_args_kind`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
 #
-# Emit site: `Formatter::format_call_args_wrapped` -> `doc::surround_fill("(", .., ")")`.
+# Emit site: `Formatter::format_call_args_wrapped` -> the delimited-list
+# chokepoint `emit_delimited_list("(", ")", ..)` -> `doc::surround_fill`.
 #
 # Axis cell claim (Core #12 — `list kind x fit` for the CALL-ARG kind ONLY):
 #   c_empty  empty              `()` — the commonest list shape in any program

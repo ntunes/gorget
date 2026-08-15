@@ -1,0 +1,44 @@
+# Interior comment inside a call argument's NESTED collection literal —
+# live regression pin, and the NESTING cell of the canonical form.
+#
+# CELL (Core #12): axis = nesting depth. The comment sits two containers
+# deep — inside the `[…]` array that is itself an argument of `Entry(…)`.
+# It is the cell that makes the canonical form observable: *a fill-emitted
+# container with an interior comment breaks fully, and so does every
+# ancestor fill-emitted container on the path to it.* The argument tuple
+# has no comment of its own and still explodes, because the array inside
+# it does.
+#
+# ⚠ SCOPE OF THE PIN — the `Expr::Call` path, NOT `Expr::StructLiteral`.
+# `gg fmt` is parse-only, so `Entry(1, […])` is an `Expr::Call` in fmt's
+# view; the `Expr::StructLiteral` arm is unreachable here and carries no
+# red. See `fmt_collection_literal_interior_struct_no_args.gg`.
+#
+# INDENT: the sentinel lands at 12 spaces, not 8 — statement body 4, the
+# exploded argument tuple 8, the exploded inner array 12. An 8-space
+# expectation would be the pre-canonical `Entry(1, [` shape, where the
+# argument tuple stayed flat while its child broke; that shape is not
+# reachable and not intended.
+#
+# RED-VERIFIED against the pre-fix binary: `# inner comment` escaped the
+# nested array entirely and became a leading comment of `print(e.a)` —
+#     Entry e = Entry(1, [10, 20])
+#     # inner comment
+#     print(e.a)
+#
+# The real-world instance is `compiler/data/resources.gg`, whose two long
+# `BuiltinMethodDecl` comment blocks were ejected past the closing `])` to
+# indent 4, where they read as documenting the NEXT table entry. They now
+# sit at indent 12, immediately above the row they were written against.
+
+struct Entry:
+    int a
+    Vector[int] xs
+
+void main():
+    Entry e = Entry(1, [
+        10,
+        # inner comment
+        20,
+    ])
+    print(e.a)

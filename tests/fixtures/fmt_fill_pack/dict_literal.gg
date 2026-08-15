@@ -3,8 +3,8 @@
 # SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
 # `fmt_fill_pack_dict_literal_kind`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
 #
-# Emit site: the `Expr::DictLiteral` arm of `format_expr` ->
-# `doc::surround_fill("{", .., "}")`.
+# Emit site: the `Expr::DictLiteral` arm of `format_expr` -> the delimited-list
+# chokepoint `emit_delimited_list("{", "}", ..)` -> `doc::surround_fill`.
 #
 # Axis cell claim (Core #12 — `list kind x fit` for the DICT-LITERAL kind ONLY):
 #   di_empty  empty              `{}`

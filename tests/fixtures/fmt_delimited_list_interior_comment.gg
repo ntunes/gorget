@@ -1,0 +1,165 @@
+# Delimited-list interior-comment gate — wide axis fixture for the regions
+# the fill-emitter chokepoint newly gates.
+#
+# SCOPE CLAIM (Core #12 — the name is a claim, so here is the cell list).
+# Axis 1 = FILL-EMITTED delimited region kind. This file covers every kind
+# the chokepoint gates OTHER than the four container literals, which have
+# their own fixture (`fmt_collection_literal_interior_comment.gg`):
+#   fn params · generic params · closure params · call args ·
+#   method-call args (non-chain) · dot-shorthand args ·
+#   `Type::Named` generic args · `Expr::MethodCall` generic args ·
+#   `Expr::Call` generic args
+# Axis 2 = comment position within the region: interior-first (the
+# before-first-element cell, on BOTH a `(`-scanned and a `[`-scanned
+# region) · interior-mid · interior-last (orphan pre-close) ·
+# trailing-on-element. The call-args region carries all four.
+# Axis 3 = both regions of one callee commented at once (`foo[…](…)`) —
+# the shape R39's narrowing was written to dodge.
+#
+# NOT covered here, deliberately: regions pre-rendered ABOVE a list
+# emitter (method chains of 2+ segments, binary chains, `??`,
+# comprehensions), `Expr::Index`, and the sorted grouped-import group.
+# Those are a different mechanism with their own repros — see `TODO.md`.
+#
+# PRE-FIX BEHAVIOUR (the RED this fixture pins, measured with the pre-fix
+# binary): every `# SEN` comment below is re-parented — it dedents to the
+# enclosing statement indent and becomes a LEADING comment of the next
+# statement. For fn params and generic params it lands INSIDE the
+# following body, where it silently documents the wrong declaration.
+#
+# POST-FIX: the region breaks fully, one element per line with a trailing
+# comma, and each comment stays above (or beside) the element it was
+# written against. Every ancestor fill-emitted container on the path
+# breaks too — that is the canonical form, not a side effect.
+
+struct Pair[
+    T,
+    # SEN generic-params-mid
+    U,
+]:
+    T first
+    U second
+
+struct Box2:
+    int v
+
+equip Box2:
+    int addup(self, int a, int b):
+        return self.v + a + b
+
+    T pick[T](self, T x):
+        return x
+
+enum Shape:
+    Circle(int)
+    Square(int)
+
+int area(Shape s):
+    match s:
+        case Shape.Circle(r): return r * 10
+        case Shape.Square(a): return a * 100
+
+# ── fn params: interior-mid ──
+int add(
+    int a,
+    # SEN fn-params-mid
+    int b,
+):
+    return a + b
+
+# ── `Expr::Call` generic args, and both regions of one callee ──
+Vector[T] wrap[T, U](T x):
+    return [x]
+
+int three(int a, int b, int c):
+    return a + b + c
+
+int one(int a):
+    return a
+
+int main():
+    # ── call args × all four positions of axis 2 ──
+    int t = three(
+        # SEN callargs-interior-first
+        1,
+        # SEN callargs-interior-mid
+        2,
+        3,  # SEN callargs-trailing-on-element
+        # SEN callargs-interior-last
+    )
+
+    # ── before-first-element on a `(`-SCANNED region ──
+    # This is the cell the delimiter SCAN exists to close: the comment sits
+    # between the `(` and the first argument, so a gate keyed on the first
+    # element's span start would never see it.
+    int u = one(
+        # SEN before-first-paren
+        4,
+    )
+
+    # ── before-first-element on a `[`-SCANNED region ──
+    auto w = wrap[
+        # SEN before-first-bracket
+        int,
+        String,
+    ](5)
+
+    # ── generic args AND call args both commented, own-line spelling ──
+    # (The inline spelling `wrap[int, # c](…)` does NOT parse — a line
+    # comment swallows the rest of the line — so the own-line spelling is
+    # the only writable form of this cell.)
+    auto x = wrap[
+        int,
+        # SEN both-generic-args
+        String,
+    ](
+        # SEN both-call-args
+        6,
+    )
+
+    # ── closure params ──
+    auto f = (
+        int a,
+        # SEN closure-params-mid
+        int b,
+    ): a + b
+
+    # ── method-call args, NON-chain (a chain of 2+ segments is the
+    #    pre-render-above residual, not this mechanism) ──
+    Box2 b = Box2(7)
+    int m = b.addup(
+        1,
+        # SEN method-args-mid
+        2,
+    )
+
+    # ── `Expr::MethodCall` generic args ──
+    int p = b.pick[
+        # SEN methodcall-generic-args-first
+        int
+    ](9)
+
+    # ── dot-shorthand args ──
+    Shape s = .Circle(
+        # SEN dot-shorthand-first
+        2,
+    )
+
+    # ── `Type::Named` generic args ──
+    Dict[
+        String,
+        # SEN type-named-generic-args-mid
+        int,
+    ] d = {"a": 1}
+
+    print(t)
+    print(u)
+    print(w[0])
+    print(x[0])
+    print(f(1, 2))
+    print(m)
+    print(p)
+    print(area(s))
+    print(d["a"])
+    print(add(1, 2))
+    return 0

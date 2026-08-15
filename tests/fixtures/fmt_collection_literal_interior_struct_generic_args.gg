@@ -1,0 +1,32 @@
+# Interior comment inside an explicit GENERIC-ARGS list — live regression
+# pin, on the `Expr::Call` path.
+#
+# CELL (Core #12): axis = fill-emitted region kind; this file samples the
+# `[…]` generic-args region of a call. Its gate is DERIVED — `[` scanned
+# forward from the callee end, `]` scanned forward from the last argument
+# — because no AST node records the bracket span here (generic PARAMS do,
+# which is why they need no scan).
+#
+# This is also the shape whose sibling the earlier narrow gate was written
+# to dodge: the old dispatch clamped its window to the ARGUMENT tuple so a
+# generic-args comment could not mis-fire it with the wrong container end.
+# The two regions now gate INDEPENDENTLY, each over its own range, so both
+# a generic-args comment and an argument comment are preserved — see
+# `fmt_delimited_list_interior_comment.gg` for the both-at-once cell.
+#
+# RED-VERIFIED against the pre-fix binary: `# in generic args` dedented out
+# of the brackets and became a leading comment of `print(x[0])` —
+#     auto x = foo[int, String](42)
+#     # in generic args
+#     print(x[0])
+
+Vector[int] foo[T, U](int x):
+    return [x]
+
+void main():
+    auto x = foo[
+        int,
+        # in generic args
+        String,
+    ](42)
+    print(x[0])

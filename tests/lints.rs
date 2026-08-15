@@ -10771,11 +10771,11 @@ fn doc_source_citations_name_the_right_line() {
     const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
         ("103", "src/formatter/mod.rs:41", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("138", "src/formatter/doc.rs:325", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
-        ("190", "src/formatter/doc.rs:189", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("280", "src/formatter/mod.rs:461", "the blank-collapse loop INSIDE `fn format`, whose name is 25 lines up"),
-        ("284", "src/formatter/mod.rs:457", "the `align_trailing_comments()` call, named in prose without backticks"),
-        ("293", "src/formatter/mod.rs:1060", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("387", "src/formatter/mod.rs:1537", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("200", "src/formatter/doc.rs:189", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
+        ("358", "src/formatter/mod.rs:484", "the blank-collapse loop INSIDE `fn format`, whose name is 25 lines up"),
+        ("362", "src/formatter/mod.rs:480", "the `align_trailing_comments()` call, named in prose without backticks"),
+        ("371", "src/formatter/mod.rs:1358", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("465", "src/formatter/mod.rs:1845", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
@@ -12658,54 +12658,56 @@ fn formatter_ownership_modifier_site_pin() {
     );
 }
 
-/// R39 fmt collection-literal interior-comment escape (Core #4 producer
-/// chokepoint guard, 2026-08-09): every collection-literal arm of
-/// `format_expr` in `src/formatter/mod.rs` MUST dispatch through
-/// `Formatter::format_bracketed_broken_with_comments` when
-/// `Formatter::has_interior_comments` fires. This lint pins the number
-/// of dispatch sites (and the paired `has_interior_comments` call sites)
-/// at exactly 4, one per arm:
-///   1. `Expr::ArrayLiteral(elems)`
-///   2. `Expr::TupleLiteral(elems)` (multi-elem branch; single-elem is
-///      a filed known gap — see
-///      `tests/fixtures/known_gaps/fmt_collection_literal_interior_tuple_single_elem.gg`)
-///   3. `Expr::DictLiteral(pairs)`
-///   4. `Expr::StructLiteral { name, generic_args, args }` (currently
-///      UNREACHABLE from `gg fmt` — the semantic-rewrite pass that
-///      generates StructLiteral runs AFTER fmt, but the dispatch is kept
-///      as a defensive class-fix in case the fmt pipeline ever gains
-///      access to rewritten AST; the reachable sibling
-///      `Expr::Call { callee: <struct-name> }` case is a filed known
-///      gap — see
-///      `tests/fixtures/known_gaps/fmt_collection_literal_interior_call_args.gg`).
+/// Interior-comment escape, Core #4 producer-chokepoint guard: the
+/// decision to break a fill-emitted delimited list around an interior
+/// comment is taken in exactly ONE place, and the exploded emission is
+/// reached from exactly ONE place.
 ///
-/// **Catches:** dispatch REMOVED from an existing arm (count drops to
-/// 3) OR helper called from a non-arm site (count rises to 5+).
+/// **The counts are STRUCTURAL, not per-arm — and that is the point.**
+/// This guard used to pin the dispatch count at 4, one per
+/// collection-literal arm, which meant every new list emitter came with
+/// an instruction to BUMP it. A count that grows per emitter green-lights
+/// the very class it exists to retire (Core #15e Q2): the eleventh
+/// emitter raises the number and nothing asks whether it was gated. Under
+/// the chokepoint the numbers are structurally 1 and cannot be reached by
+/// adding an emitter at all — a new one either routes through
+/// `emit_delimited_list` (gated, counted by
+/// `formatter_list_emit_fill_census`) or hand-rolls a second
+/// `doc::surround_fill`, which trips that census instead.
 ///
-/// **Break-and-verify (Core #6 / #15e Q2 — the guard must catch its own
-/// class):** delete the
-/// `self.format_bracketed_broken_with_comments(...)` call from any one
-/// arm and re-run; the assertion fires with `3 vs expected 4`. Similarly
-/// for `has_interior_comments`.
+/// **`.has_interior_comments(` is 2, and it is NOT "one per dispatch".**
+/// The chokepoint holds one; the `Expr::TupleLiteral` single-element
+/// branch holds the other, because `(x,)` is spelled flat — the trailing
+/// comma IS the tuple — so it does not route through the chokepoint and
+/// must consult the sideband itself. The two are not redundant, and
+/// collapsing them reopens the escape for 1-tuples; a `debug_assert!` in
+/// that branch says so at the site.
 ///
-/// **Pairs with `formatter_literal_arms_dispatch_count`** below: that
-/// counts the ARMS themselves (Expr::*Literal in format_expr), so
-/// adding a 5th collection-literal arm (e.g. `Expr::SetLiteral`)
-/// silently — WITHOUT dispatching through the shared helper — leaves
-/// this lint's counts at 4 (still balanced) but trips the arm-count
-/// lint. The pair together closes the class-fix loop.
+/// **StructLiteral unreachability is pinned here too** (Core #14 — the
+/// claim used to be prose with no guard). `gg fmt` is parse-only and the
+/// parser constructs zero `Expr::StructLiteral`; the formatter's arm is
+/// kept in sync as class hygiene and carries no red. Both halves are
+/// asserted below, with the counting method spelled out.
+///
+/// **Break-and-verify (Core #6 / #13):**
+///   * add a second `self.format_bracketed_broken_with_comments(...)`
+///     anywhere in the formatter — fires with `2 vs expected 1`;
+///   * add `let _x = Expr::StructLiteral { … };` under `src/parser/` —
+///     fires on the construction-site assertion;
+///   * add `use crate::semantic::…` to the formatter — fires on the
+///     parse-only assertion.
+///
+/// **Pairs with `formatter_literal_arms_dispatch_count`** below, which
+/// counts the `Expr::*Literal` ARMS rather than any dispatch.
 #[test]
 fn formatter_collection_literal_interior_hook_dispatch() {
-    /// One dispatch per collection-literal arm in `format_expr`. See
-    /// the enumeration in the docstring above; bump ONLY with a
-    /// citation of the new arm's file:line + rationale.
-    const EXPECTED_DISPATCH: usize = 4;
-    /// One `has_interior_comments` gate per dispatch site — MUST equal
-    /// EXPECTED_DISPATCH. If a dispatch is added without a gate (the
-    /// helper always fires — wasteful; the flat `doc::surround` path is
-    /// preferable when no interior comment exists) OR a gate without a
-    /// dispatch (dead check), the two counts diverge.
-    const EXPECTED_INTERIOR_CHECK: usize = 4;
+    /// The exploded-emission entry point, reached from the chokepoint
+    /// and nowhere else. Structurally 1 — do not bump it to admit a new
+    /// caller; route the caller through `emit_delimited_list` instead.
+    const EXPECTED_DISPATCH: usize = 1;
+    /// Interior-comment gates: the chokepoint + the single-element-tuple
+    /// branch. NOT one per dispatch — see the docstring.
+    const EXPECTED_INTERIOR_CHECK: usize = 2;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -12721,28 +12723,103 @@ fn formatter_collection_literal_interior_hook_dispatch() {
     }
     assert_eq!(
         dispatch_count, EXPECTED_DISPATCH,
-        "R39 fmt collection-literal interior-comment escape dispatch \
-         guard: `.format_bracketed_broken_with_comments(` call-site count \
-         in `src/formatter/mod.rs` = {dispatch_count}, expected \
-         {EXPECTED_DISPATCH} (one per Expr::ArrayLiteral / \
-         Expr::TupleLiteral / Expr::DictLiteral / Expr::StructLiteral \
-         arm in `format_expr`).\n\n\
-         If a dispatch was legitimately removed (arm deleted from AST), \
-         lower EXPECTED_DISPATCH with a citation of the arm removed. If \
-         a dispatch was added (e.g. a new Expr::SetLiteral arm), bump \
-         BOTH this constant AND the arm-count in \
-         `formatter_literal_arms_dispatch_count` below."
+        "interior-comment dispatch guard: \
+         `.format_bracketed_broken_with_comments(` call-site count in \
+         `src/formatter/mod.rs` = {dispatch_count}, expected \
+         {EXPECTED_DISPATCH} — the chokepoint `emit_delimited_list` is \
+         its only caller.\n\n\
+         A SECOND caller means a list emitter took the exploded path \
+         without going through the gate. Route it through \
+         `emit_delimited_list` rather than raising this constant."
     );
     assert_eq!(
         interior_count, EXPECTED_INTERIOR_CHECK,
-        "R39 fmt collection-literal interior-comment escape check guard: \
-         `.has_interior_comments(` call-site count in \
-         `src/formatter/mod.rs` = {interior_count}, expected \
-         {EXPECTED_INTERIOR_CHECK} (one per dispatch site — MUST equal \
-         dispatch count).\n\n\
-         If interior-check was removed at a dispatch site (helper always \
-         fires — wasteful), OR added at a non-dispatch site (dead check), \
-         reconcile with the dispatch count above."
+        "interior-comment gate guard: `.has_interior_comments(` call-site \
+         count in `src/formatter/mod.rs` = {interior_count}, expected \
+         {EXPECTED_INTERIOR_CHECK} (the chokepoint + the \
+         `Expr::TupleLiteral` single-element branch).\n\n\
+         A DROP to 1 means the single-elem-tuple branch stopped consulting \
+         the sideband — `(x,)` is emitted flat, so an interior comment \
+         escapes again. A RISE means a new gate outside the chokepoint: \
+         route it through `emit_delimited_list` instead."
+    );
+
+    // ── Core #14: the StructLiteral-unreachability claim, enforced.
+    //
+    // COUNTING METHOD, half one: `Expr::StructLiteral` appears under
+    // `src/parser/` only in PATTERN position. The exact allowlist is
+    // pinned with per-site attribution so a reviewer can see at a glance
+    // whether a new mention is a pattern or a construction. A
+    // CONSTRUCTION is spelled `Expr::StructLiteral {` with field
+    // initialisers; the two live mentions destructure instead.
+    let parser_mentions: &[(&str, &str)] = &[
+        (
+            "src/parser/visitor.rs",
+            "Expr::StructLiteral { args, .. } => {",
+        ),
+        (
+            "src/parser/expr.rs",
+            "Expr::StructLiteral { args, .. } => args.iter().any(contains_it),",
+        ),
+    ];
+    let mut found: Vec<String> = Vec::new();
+    for entry in fs::read_dir("src/parser").expect("cannot read src/parser") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = fs::read_to_string(&path).expect("cannot read parser file");
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if trimmed.contains("Expr::StructLiteral") {
+                found.push(format!("{}: {trimmed}", path.display()));
+            }
+        }
+    }
+    let expected: Vec<String> = parser_mentions
+        .iter()
+        .map(|(f, snippet)| format!("{f}: {snippet}"))
+        .collect();
+    found.sort();
+    let mut expected_sorted = expected.clone();
+    expected_sorted.sort();
+    assert_eq!(
+        found, expected_sorted,
+        "`Expr::StructLiteral` mentions under `src/parser/` changed.\n\n\
+         The formatter's `Expr::StructLiteral` arm is documented as \
+         fmt-UNREACHABLE, and its fixtures say the cells are pinned on the \
+         `Expr::Call` path instead. That rests on the parser constructing \
+         ZERO `Expr::StructLiteral` — the sole producer being \
+         `rewrite_struct_calls` in semantic analysis, which `gg fmt` never \
+         reaches.\n\n\
+         If the new mention is another PATTERN, add it to the allowlist \
+         above with its file and snippet. If it is a CONSTRUCTION, the \
+         unreachability claim is now FALSE: the formatter arm becomes \
+         live, its fixtures need real reds, and this lint's docstring \
+         needs rewriting."
+    );
+
+    // COUNTING METHOD, half two: `gg fmt` is parse-only. The formatter
+    // never names the semantic layer, so it cannot see a rewritten AST.
+    let formatter = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+    let semantic_mentions = formatter
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.starts_with("//") && l.contains("semantic::")
+        })
+        .count();
+    assert_eq!(
+        semantic_mentions, 0,
+        "`src/formatter/mod.rs` now references `semantic::` \
+         ({semantic_mentions} site(s)). `gg fmt` is parse-only, which is \
+         the other half of the StructLiteral-unreachability claim above; \
+         if the formatter has gained access to post-semantic AST, that \
+         claim and the fixtures resting on it must be revisited."
     );
 }
 
@@ -12753,14 +12830,20 @@ fn formatter_collection_literal_interior_hook_dispatch() {
 /// `container_literal_arms_count` at line 1021 scans `infer_expr` for
 /// `Expr::*Literal` arms in the typechecker.
 ///
-/// Every collection-literal `format_expr` arm MUST dispatch through
-/// `Formatter::format_bracketed_broken_with_comments`. Adding a 5th arm
-/// (e.g. `Expr::SetLiteral`) bumps this count, forcing the developer to
-/// also bump the dispatch-count constants in
-/// `formatter_collection_literal_interior_hook_dispatch` above — that
-/// pairing IS the class-fix guard: without this arm-count check, a 5th
-/// arm added silently (without dispatching) would leave dispatch=4 =
-/// balanced, and the class-fix escape would go unnoticed.
+/// Every collection-literal `format_expr` arm MUST reach the delimited-list
+/// chokepoint `Formatter::emit_delimited_list`, which is what consults the
+/// comment side-table before the `Doc` layer. Adding a 5th arm (e.g. a
+/// separately-spelled `Expr::SetLiteral`) bumps this count, forcing its
+/// author past that decision.
+///
+/// The counts on the two sides are now different KINDS of number, and the
+/// distinction is the point. This one is per-ARM and grows with the AST;
+/// the chokepoint's dispatch count in
+/// `formatter_collection_literal_interior_hook_dispatch` is structurally 1
+/// and does NOT grow — a new arm either routes through the chokepoint
+/// (counted per-kind by `formatter_list_emit_fill_census`) or hand-rolls a
+/// second `doc::surround_fill`, which that census catches. So a 5th arm
+/// added silently can no longer leave a "balanced" pair behind it.
 ///
 /// **Break-and-verify:** insert `Expr::SetLiteral(_) => {}` into
 /// `format_expr`'s match body; this test fires with `5 vs expected 4`.
@@ -14298,7 +14381,12 @@ fn fuzz_targets_still_compile() {
 /// kind is a CONSCIOUS choice rather than a copy-paste of whichever neighbour
 /// was nearest:
 ///
-///   * `doc::surround_fill(` — the canonical, fill-packed spelling.
+///   * `doc::surround_fill(` — the canonical, fill-packed spelling. ONE call
+///     site, inside `Formatter::emit_delimited_texts`: every fill-packed list
+///     funnels through it, having first passed the interior-comment gate in
+///     `emit_delimited_list`. The per-list-KIND census that used to live on
+///     this count now lives on `EXPECTED_DELIMITED_LIST_SITES`, where a new
+///     kind cannot reach fill packing without meeting the gate.
 ///   * `doc::surround(` — the one-item-per-line-with-trailing-comma spelling.
 ///     Zero production call sites: this is a TRIPWIRE, not a baseline. A new
 ///     `doc::surround(` in the formatter means a list opted OUT of the canon,
@@ -14321,24 +14409,83 @@ fn fuzz_targets_still_compile() {
 /// list-layout count onto it would make its name false, and a guard whose scope
 /// is mis-stated is the kind that green-lights its own class (Core #15e Q2).
 ///
-/// **Break-and-verify:** flip any `doc::surround_fill(` in
-/// `src/formatter/mod.rs` back to `doc::surround(.., true)` — the fill count
-/// drops and the surround count rises, and BOTH assertions below fire.
+/// **Break-and-verify:** hand-roll a second `doc::surround_fill(` anywhere in
+/// `src/formatter/mod.rs` — the fill count rises to 2 and the first assertion
+/// fires. Add an `emit_delimited_list(.., Gate::UngatedCarveOut(..), ..)`
+/// without listing its reason in `EXPECTED_CARVE_OUTS` — the attributed-set
+/// assertion fires with the new (fn, reason) row shown.
 #[test]
 fn formatter_list_emit_fill_census() {
-    /// Canonical fill-packed list sites. The nine live list kinds — parameter
-    /// list, call args, generic params, generic args, closure params, array /
-    /// tuple / dict literal, grouped import — plus the `Expr::StructLiteral`
-    /// arm, which is unreachable through `gg fmt`'s parse-only pipeline but is
-    /// kept converted so the class rule has no exception (see
-    /// `formatter_literal_arms_dispatch_count`).
-    const EXPECTED_SURROUND_FILL: usize = 10;
+    /// The terminal splice into the Doc layer. Structurally ONE: every
+    /// fill-packed list in the language funnels through
+    /// `Formatter::emit_delimited_texts`, which is the only place
+    /// `doc::surround_fill` is spelled.
+    ///
+    /// This constant used to be 10, one per list kind, with an instruction
+    /// to bump it per new kind — the per-list-kind visibility now lives in
+    /// EXPECTED_DELIMITED_LIST_SITES below, where it is UN-BYPASSABLE: a
+    /// kind can no longer reach fill packing without passing the
+    /// interior-comment gate on the way.
+    const EXPECTED_SURROUND_FILL: usize = 1;
+    /// One `self.emit_delimited_list(` per GATED list kind. Nine: the
+    /// parameter list, call args, generic params, generic args, closure
+    /// params, the array/set literal arm, the multi-element tuple arm, the
+    /// dict literal arm, and the fmt-unreachable `Expr::StructLiteral` arm
+    /// (kept converted so the class rule has no exception — see
+    /// `formatter_collection_literal_interior_hook_dispatch`, which pins
+    /// that unreachability).
+    ///
+    /// This is the census that replaced the ten-way `doc::surround_fill`
+    /// count, and it keeps the same property: adding a list kind is a
+    /// CONSCIOUS choice, visible as a number.
+    const EXPECTED_DELIMITED_LIST_SITES: usize = 9;
+    /// DIRECT `emit_delimited_texts` callers outside the chokepoint. One:
+    /// the grouped-import group, the single declared carve-out — its names
+    /// are SORTED, so emitted order is not source order and the
+    /// forward-only comment cursor cannot interleave per element.
+    ///
+    /// COUNTING METHOD: the dotted spelling `.emit_delimited_texts(`
+    /// returns 2 raw hits — the chokepoint's own internal call and this
+    /// caller (the DEFINITION has no dot) — and the internal call is
+    /// excluded by fn scope below. The dot-less spelling would return 3.
+    const EXPECTED_UNGATED_TEXTS: usize = 1;
+    /// LEXICAL `Gate::UngatedCarveOut("…")` construction sites, pinned as
+    /// an exact (enclosing fn, reason) set so each carve-out is attributed
+    /// rather than merely counted. Three:
+    ///   * `gate_or_scan_miss` — the SINGLE `Option -> Gate` converter.
+    ///     All delimiter-scan misses route through it, including the
+    ///     sibling-anchor propagation, so this stays one site regardless of
+    ///     how many callers can miss.
+    ///   * two in `format_method_chain` — chain segments are pre-rendered
+    ///     into a sub-formatter whose comment sideband is EMPTY, so a real
+    ///     gate there would be dead code reading as a live one. That escape
+    ///     is filed with a repro (`known_gaps/fmt_delimited_list_pre_render_above.gg`);
+    ///     these two sites are its structural marker in the source.
+    ///
+    /// A pattern match (`if let Gate::UngatedCarveOut(reason) = gate`) is
+    /// NOT a construction and is excluded by requiring the `("` opener.
+    const EXPECTED_CARVE_OUTS: &[(&str, &str)] = &[
+        ("gate_or_scan_miss", "scan miss"),
+        ("format_method_chain", "chain segment generic args: empty sideband"),
+        ("format_method_chain", "chain segment call args: empty sideband"),
+    ];
     /// Non-canonical one-item-per-line sites. A tripwire pinned at zero.
     const EXPECTED_SURROUND: usize = 0;
     /// Hand-rolled `doc::group` compositions — see the allowlist in
     /// `fmt_multiline_group_paren_wrap_class`.
     const EXPECTED_GROUP: usize = 3;
-    /// Imperative `", "` separator loops that never wrap.
+    /// Imperative `", "` separator loops that never wrap. These are the
+    /// hand-rolled comma-loop emitters — pattern field lists and enum
+    /// tuple-variant field lists among them. They do NOT reach the
+    /// delimited-list chokepoint and still re-parent an interior comment.
+    ///
+    /// ⚠ This CONSTANT is the family's only total statement: the
+    /// row-by-row enumeration, with a disposition and the measured
+    /// symptom per row, lives in `TODO.md`. Regenerate it with
+    /// `awk '/^    fn /{fn=$0;sub(/^ +fn /,"",fn);sub(/[(<].*/,"",fn)}
+    ///      /write\(", "\)/{print NR"\t"fn}' src/formatter/mod.rs`
+    /// (comment lines excluded, as below). A change here means the family
+    /// grew or shrank — reconcile the TODO enumeration with it.
     const EXPECTED_WRITE_SEP: usize = 23;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
@@ -14347,8 +14494,25 @@ fn formatter_list_emit_fill_census() {
     let mut surround = 0usize;
     let mut group = 0usize;
     let mut write_sep = 0usize;
+    let mut delimited_list_sites = 0usize;
+    let mut ungated_texts = 0usize;
+    let mut carve_outs: Vec<(String, String)> = Vec::new();
+    // Enclosing-fn tracking, for carve-out attribution and for excluding
+    // the chokepoint's own internal `emit_delimited_texts` call.
+    let mut current_fn = String::new();
     for line in content.lines() {
         let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("fn ") {
+            // Strip the generic parameter list too: the chokepoint is
+            // declared `fn emit_delimited_list<E>(`, and splitting on `(`
+            // alone would leave `emit_delimited_list<E>` and silently
+            // defeat the scope exclusion below.
+            current_fn = rest
+                .split(|c| c == '(' || c == '<')
+                .next()
+                .unwrap_or("")
+                .to_string();
+        }
         // Skip pure-comment lines so prose mentioning a spelling doesn't count.
         if trimmed.starts_with("//") || trimmed.starts_with("///") {
             continue;
@@ -14361,17 +14525,60 @@ fn formatter_list_emit_fill_census() {
         surround += line.matches("doc::surround(").count();
         group += line.matches("doc::group(").count();
         write_sep += line.matches("write(\", \")").count();
+        delimited_list_sites += line.matches("self.emit_delimited_list(").count();
+        if current_fn != "emit_delimited_list" {
+            ungated_texts += line.matches(".emit_delimited_texts(").count();
+        }
+        if let Some(idx) = line.find("Gate::UngatedCarveOut(\"") {
+            let after = &line[idx + "Gate::UngatedCarveOut(\"".len()..];
+            let reason = after.split('"').next().unwrap_or("").to_string();
+            carve_outs.push((current_fn.clone(), reason));
+        }
     }
 
     let msg = "\n\nGorget has ONE canonical broken-list layout: greedy fill packing at \
-               the block continuation indent, no trailing comma. If you added a list \
-               kind, route it through `doc::surround_fill` and bump \
-               EXPECTED_SURROUND_FILL. If you deliberately opted a list OUT of the \
-               canon, raise the matching constant here WITH the reason — the point of \
-               this census is that the choice is visible.\n\
+               the block continuation indent, no trailing comma — and ONE place where a \
+               list decides, before the Doc layer, whether an interior comment forces it \
+               to the exploded shape instead. If you added a list kind, route it through \
+               `Formatter::emit_delimited_list` and bump \
+               EXPECTED_DELIMITED_LIST_SITES. If you deliberately opted a list OUT of the \
+               gate, it becomes a `Gate::UngatedCarveOut` WITH its reason and joins the \
+               attributed set below — the point of this census is that the choice is \
+               visible.\n\
                Sibling guard on a different axis: `fmt_multiline_group_paren_wrap_class` \
                (multi-line output must re-parse).";
-    assert_eq!(fill, EXPECTED_SURROUND_FILL, "`doc::surround_fill(` site count changed.{msg}");
+    assert_eq!(
+        fill, EXPECTED_SURROUND_FILL,
+        "`doc::surround_fill(` site count changed — it is structurally 1 \
+         (inside `emit_delimited_texts`). A second spelling means a list \
+         reached fill packing WITHOUT passing the interior-comment gate.{msg}"
+    );
+    assert_eq!(
+        delimited_list_sites, EXPECTED_DELIMITED_LIST_SITES,
+        "`self.emit_delimited_list(` site count changed — this is the \
+         per-list-kind census.{msg}"
+    );
+    assert_eq!(
+        ungated_texts, EXPECTED_UNGATED_TEXTS,
+        "direct `.emit_delimited_texts(` caller count outside the \
+         chokepoint changed — expected exactly the grouped-import \
+         carve-out.{msg}"
+    );
+    let expected_carve_outs: Vec<(String, String)> = EXPECTED_CARVE_OUTS
+        .iter()
+        .map(|(f, r)| ((*f).to_string(), (*r).to_string()))
+        .collect();
+    assert_eq!(
+        carve_outs, expected_carve_outs,
+        "the `Gate::UngatedCarveOut` set changed (enclosing fn, reason).\n\n\
+         Every carve-out states WHY it is one, and the reason is always a \
+         property of the CONTEXT — an empty comment sideband, or a \
+         delimiter scan that found nothing — never a 'not implemented \
+         yet'. A NEW entry means a list emitter opted out of the gate: it \
+         needs a filed repro for the escape it admits, and its reason \
+         listed here. A MISSING entry means a carve-out was closed, which \
+         should also un-ignore the repro that pins it.{msg}"
+    );
     assert_eq!(
         surround, EXPECTED_SURROUND,
         "`doc::surround(` site count changed — a formatter list opted OUT of the \

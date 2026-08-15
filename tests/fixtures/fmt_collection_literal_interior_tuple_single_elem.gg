@@ -1,0 +1,27 @@
+# Interior comment inside a SINGLE-ELEMENT tuple — live regression pin.
+#
+# CELL (Core #12): axis = fill-emitted region kind; this file samples the
+# ONE region that deliberately does NOT route through the delimited-list
+# chokepoint. `(x,)` is spelled with a trailing comma because the comma IS
+# the tuple, so the `elems.len() == 1` branch emits it flat rather than
+# fill-packing it — and a flat emission cannot carry a comment. The branch
+# therefore evaluates the interior-comment gate ITSELF, the second and only
+# other `has_interior_comments` call in the formatter, and hands a
+# comment-bearing 1-tuple to the exploded form (whose own trailing comma
+# re-parses as a 1-tuple, so nothing is lost).
+#
+# RED-VERIFIED against the pre-fix binary: `# inner` dedented out of the
+# tuple to statement indent and became a leading comment of `print(t.0)` —
+#     auto t = (42,)
+#     # inner
+#     print(t.0)
+#
+# The paired assertion pins `# inner` at 8-space indent, inside the parens.
+
+int main():
+    auto t = (
+        # inner
+        42,
+    )
+    print(t.0)
+    return 0

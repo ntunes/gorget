@@ -14908,17 +14908,20 @@ fn fmt_idempotent() {
 // R39 fmt collection-literal interior comment escape (round 39)
 // ══════════════════════════════════════════════════════════════
 //
-// The round's fix dispatches collection-literal formatting through
-// `Formatter::format_bracketed_broken_with_comments` whenever
-// `Formatter::has_interior_comments(container_span)` fires. Without the
-// fix, every `# ...` comment interior to an `Expr::ArrayLiteral` /
-// `Expr::TupleLiteral` / `Expr::DictLiteral` was silently DROPPED by
-// the sub-formatter (`element_to_string_at` seeds a fresh Formatter with
-// EMPTY comment sideband) and then re-emerged via the OUTER formatter's
-// `emit_trailing_comment_after` — dedented to column 0 AFTER the closing
-// bracket. The real-world flagship is `compiler/data/resources.gg`
-// (~138 interior comments across `RESOURCES`, `RUNTIME_FNS`, and
-// `COLLECTION_BUILTIN_METHODS`).
+// A fill-emitted delimited list with an interior comment is diverted, at
+// the `Formatter::emit_delimited_list` chokepoint, to
+// `Formatter::format_bracketed_broken_with_comments`. Without that gate,
+// every `# ...` comment interior to the list is silently DROPPED by the
+// sub-formatter (`element_to_string_at` seeds a fresh Formatter with an
+// EMPTY comment sideband) and then re-emerges via the OUTER formatter's
+// next comment hook — dedented, after the closing bracket, documenting
+// whatever follows. The real-world flagship is
+// `compiler/data/resources.gg` (~275 comments across `RESOURCES`,
+// `RUNTIME_FNS`, and `COLLECTION_BUILTIN_METHODS`).
+//
+// The container literals below were the first cells closed; the same gate
+// now covers every fill-emitted list — see
+// `fmt_delimited_list_interior_comment.gg` for the rest.
 //
 // The tests below pin one axis-cell per test, so a per-class regression
 // (leading vs trailing vs orphan-pre-close vs nested) fingers itself.
@@ -15154,135 +15157,455 @@ fn fmt_collection_literal_interior_comment_source_runs() {
     );
 }
 
-// ── R39 fmt collection-literal interior-comment escape — filed known
-//    gaps. Each test consumes the durable repro fixture under
-//    `tests/fixtures/known_gaps/` and asserts the CORRECT/intended
-//    post-fix formatted output. `#[ignore]`d today; un-ignore + promote
-//    to a live regression fixture when the corresponding sub-case is
-//    closed. Filed per CLAUDE.md Task Continuity: "Every filed
-//    reproducible bug/gap ships a DURABLE `known_gaps` repro."
+// ── The four cells that graduated out of `known_gaps/` when the
+//    delimited-list chokepoint landed. Each was RED against the pre-fix
+//    binary — the recorded escape is in its fixture header — and each now
+//    pins the sentinel INSIDE the region that owns it.
 
-/// R39 known gap — `Expr::TupleLiteral` single-element branch bypasses
-/// the interior-comment dispatch. `(x,)` stays flat by design; the
-/// broken-with-comments helper is not called, so an interior comment
-/// escapes. Rare shape; filed as follow-up.
+/// The `(x,)` cell: a single-element tuple does NOT route through the
+/// chokepoint (the trailing comma IS the tuple, so the flat spelling is
+/// syntax rather than a packing choice). It evaluates the interior-comment
+/// gate itself and hands a comment-bearing 1-tuple to the exploded form.
 #[test]
-#[ignore = "R39 known gap: single-element tuple bypass in TupleLiteral \
-            arm — interior comment escapes; un-ignore when the elems.len() == 1 \
-            branch unifies with the multi-elem dispatch."]
 fn fmt_collection_literal_interior_tuple_single_elem() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir
-        .join("tests/fixtures/known_gaps/fmt_collection_literal_interior_tuple_single_elem.gg");
+        .join("tests/fixtures/fmt_collection_literal_interior_tuple_single_elem.gg");
     let source = std::fs::read_to_string(&fixture_path)
         .expect("read fmt_collection_literal_interior_tuple_single_elem.gg");
     let formatted = gorget::formatter::format_source_infallible(&source);
-    // Intended-post-fix: `# inner` at indent-8 inside the tuple parens.
-    let line = formatted.lines().find(|l| l.contains("# inner"))
-        .expect("known-gap fixture must contain `# inner` sentinel");
+    // `# inner` at indent-8, inside the tuple parens.
+    let line = fmt_sentinel_line(&formatted, "# inner");
     assert!(
         line.starts_with("        # inner"),
-        "R39 single-elem-tuple gap CLOSED: sentinel `# inner` now at \
-         8-space indent inside `(...,)`. Promote fixture to a live \
-         regression by moving it out of `known_gaps/` and removing the \
-         `#[ignore]` on this test. Line: {line:?}\n=== Formatted ===\n{formatted}"
+        "single-elem-tuple interior comment escaped its parens — expected \
+         `# inner` at 8-space indent inside `(...,)`. Line: \
+         {line:?}\n=== Formatted ===\n{formatted}"
+    );
+    // The trailing comma must survive the exploded form, or `(x,)`
+    // re-parses as a parenthesised expression and the tuple is gone.
+    assert!(
+        formatted.contains("        42,\n    )"),
+        "single-elem tuple lost its trailing comma in the exploded form — \
+         the output re-parses as `(42)`, a different program.\n\
+         === Formatted ===\n{formatted}"
     );
 }
 
-/// R39 known gap — `Expr::StructLiteral` empty-args case. No first-arg
-/// span from which to derive the arg-tuple range; dispatch skipped.
-/// (Also unreachable in fmt today — see the fixture header for the
-/// double-nesting: fmt pipeline sees `Expr::Call { args: [] }`, which
-/// takes `format_call_args_wrapped` — the sibling call-args gap below.)
+/// The empty-argument-tuple cell: no element span to derive a range from,
+/// which the delimiter SCAN handles and a first-element-keyed gate cannot.
+/// Pinned on the `Expr::Call` path — `gg fmt` is parse-only, so the
+/// `Expr::StructLiteral` arm is unreachable and carries no red.
 #[test]
-#[ignore = "R39 known gap: StructLiteral empty-args skipped; un-ignore when \
-            span derivation (walk back from expr.span.end to `(`) lands."]
 fn fmt_collection_literal_interior_struct_no_args() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir
-        .join("tests/fixtures/known_gaps/fmt_collection_literal_interior_struct_no_args.gg");
+        .join("tests/fixtures/fmt_collection_literal_interior_struct_no_args.gg");
     let source = std::fs::read_to_string(&fixture_path)
         .expect("read fmt_collection_literal_interior_struct_no_args.gg");
     let formatted = gorget::formatter::format_source_infallible(&source);
-    // Intended-post-fix: `# inside empty ctor` at indent-8 inside `Foo(\n)`.
-    let line = formatted.lines().find(|l| l.contains("# inside empty ctor"))
-        .expect("known-gap fixture must contain sentinel");
+    // `# inside empty ctor` at indent-8, inside `Foo(\n    …\n)`.
+    let line = fmt_sentinel_line(&formatted, "# inside empty ctor");
     assert!(
         line.starts_with("        # inside empty ctor"),
-        "R39 empty-args-struct gap CLOSED: sentinel now at 8-space \
-         indent. Promote fixture. Line: {line:?}\n=== Formatted ===\n{formatted}"
+        "empty-args interior comment escaped the parens — expected 8-space \
+         indent. Line: {line:?}\n=== Formatted ===\n{formatted}"
     );
 }
 
-/// R39 known gap — generic-args-interior comment escape. Current fix
-/// narrows the interior-check to the arg-tuple range specifically to
-/// AVOID mis-firing on `Foo[T, # C](a)`, at the cost of leaving that
-/// sub-case uncaught. Requires extending
-/// `format_generic_args_wrapped` with the same dispatch.
+/// The explicit-generic-args cell, on the `Expr::Call` path. Its gate is
+/// derived by scanning for `[` and `]`; the argument tuple gates
+/// independently over its own range, so neither region can mis-fire on
+/// the other's comment.
 #[test]
-#[ignore = "R39 known gap: generic-args-interior comment not dispatched; un-ignore \
-            when `format_generic_args_wrapped` gains the same broken-with-comments \
-            dispatch."]
 fn fmt_collection_literal_interior_struct_generic_args() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir
-        .join("tests/fixtures/known_gaps/fmt_collection_literal_interior_struct_generic_args.gg");
+        .join("tests/fixtures/fmt_collection_literal_interior_struct_generic_args.gg");
     let source = std::fs::read_to_string(&fixture_path)
         .expect("read fmt_collection_literal_interior_struct_generic_args.gg");
     let formatted = gorget::formatter::format_source_infallible(&source);
-    // Intended-post-fix: `# in generic args` at indent-8 inside the
-    // generic-args `[...]`.
-    let line = formatted.lines().find(|l| l.contains("# in generic args"))
-        .expect("known-gap fixture must contain sentinel");
+    // `# in generic args` at indent-8, inside the generic-args `[...]`.
+    let line = fmt_sentinel_line(&formatted, "# in generic args");
     assert!(
         line.starts_with("        # in generic args"),
-        "R39 generic-args gap CLOSED: sentinel now at 8-space indent. \
-         Promote fixture. Line: {line:?}\n=== Formatted ===\n{formatted}"
+        "generic-args interior comment escaped the brackets — expected \
+         8-space indent. Line: {line:?}\n=== Formatted ===\n{formatted}"
     );
 }
 
-/// R39 known gap — Call-args nested collection-literal interior comment
-/// escapes ONE LEVEL up (not to col 0 as pre-round, but not fully
-/// preserved either). Root cause: `format_call_args_wrapped` renders
-/// each arg via `element_to_string` which uses a sub-formatter with
-/// EMPTY comments, dropping any interior-literal comment; the outer
-/// formatter then re-flushes at the wrong (dedented) indent. Requires
-/// extending `format_call_args_wrapped` with the same dispatch (see
-/// fixture header for the full triage).
+/// The NESTING cell, on the `Expr::Call` path: the comment sits inside an
+/// array that is itself a call argument. It pins the canonical form — a
+/// fill-emitted container with an interior comment breaks fully, and so
+/// does every ancestor fill-emitted container on the path to it.
+///
+/// The sentinel lands at TWELVE spaces (body 4 · exploded argument tuple 8
+/// · exploded inner array 12), not eight. An 8-space expectation describes
+/// the shape where the argument tuple stayed flat while its child broke —
+/// not reachable, and not the canon.
 #[test]
-#[ignore = "R39 known gap: Call-args nested literal escape one level; un-ignore \
-            when `format_call_args_wrapped` gains the same broken-with-comments \
-            dispatch."]
 fn fmt_collection_literal_interior_call_args() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir
-        .join("tests/fixtures/known_gaps/fmt_collection_literal_interior_call_args.gg");
+        .join("tests/fixtures/fmt_collection_literal_interior_call_args.gg");
     let source = std::fs::read_to_string(&fixture_path)
         .expect("read fmt_collection_literal_interior_call_args.gg");
     let formatted = gorget::formatter::format_source_infallible(&source);
-    // Intended-post-fix: `# inner comment` at indent-8 inside the
-    // nested `[10, 20]` array of `Entry(1, [...])`.
-    let line = formatted.lines().find(|l| l.contains("# inner comment"))
-        .expect("known-gap fixture must contain sentinel");
+    // `# inner comment` at indent-12, inside the nested `[10, 20]` array
+    // of the exploded `Entry(1, [...])`.
+    let line = fmt_sentinel_line(&formatted, "# inner comment");
     assert!(
-        line.starts_with("        # inner comment"),
-        "R39 Call-args gap CLOSED: sentinel now at 8-space indent \
-         inside the nested Call-arg literal. Promote fixture. Line: \
+        line.starts_with("            # inner comment"),
+        "call-arg nested-literal interior comment is not at the inner \
+         array's interior indent — expected 12 spaces (body 4 · argument \
+         tuple 8 · inner array 12). Line: \
          {line:?}\n=== Formatted ===\n{formatted}"
+    );
+    // The ancestor half of the canonical form: the ARGUMENT TUPLE has no
+    // comment of its own and must break anyway, because its child did.
+    assert!(
+        formatted.contains("Entry(\n        1,\n"),
+        "the ancestor argument tuple did NOT break — the canonical form \
+         requires every ancestor container on the path to a commented \
+         container to break too.\n=== Formatted ===\n{formatted}"
+    );
+}
+
+// ── The newly-gated fill-emitted regions. One assertion per region, each
+//    RED-verified against the pre-fix binary: every sentinel dedented to
+//    the enclosing statement indent and became a LEADING comment of the
+//    next statement (for fn params and generic params, INSIDE the
+//    following body, documenting the wrong declaration).
+//
+//    The assertion is deliberately NOT an indent check. For a top-level
+//    parameter list the escaped position and the correct position share
+//    an indent, so indent cannot discriminate; what discriminates is WHAT
+//    THE COMMENT NOW SITS ABOVE. Each cell therefore names the line that
+//    must FOLLOW its sentinel — which is also the property the class is
+//    about: the comment documents the thing it was written against.
+
+/// Index of `sentinel`'s line, skipping the fixture's own FILE HEADER.
+///
+/// Every one of these fixtures narrates its pre-fix symptom in a top-level
+/// comment block, and that narration quotes the sentinel verbatim — so a
+/// naive `find` matches the HEADER, not the live comment, and the
+/// assertion becomes a statement about prose. Header comments sit at
+/// column 0; a sentinel interior to a delimited region never can. Skipping
+/// column-0 comment lines is therefore exact, not a heuristic: if the
+/// escape being tested ever dedents a sentinel all the way to column 0,
+/// this returns "missing", which is a louder failure than a wrong indent.
+fn fmt_sentinel_idx(formatted: &str, sentinel: &str) -> usize {
+    formatted
+        .lines()
+        .position(|l| l.contains(sentinel) && !l.starts_with('#'))
+        .unwrap_or_else(|| {
+            panic!(
+                "sentinel `{sentinel}` not found OUTSIDE the fixture header — \
+                 it was either DROPPED entirely, or dedented all the way to \
+                 column 0.\n=== Formatted ===\n{formatted}"
+            )
+        })
+}
+
+/// The line carrying `sentinel` (header-skipping, see `fmt_sentinel_idx`).
+fn fmt_sentinel_line<'a>(formatted: &'a str, sentinel: &str) -> &'a str {
+    formatted.lines().nth(fmt_sentinel_idx(formatted, sentinel)).unwrap()
+}
+
+/// The line immediately after `sentinel`'s line, trimmed.
+fn fmt_line_after_sentinel<'a>(formatted: &'a str, sentinel: &str) -> &'a str {
+    let idx = fmt_sentinel_idx(formatted, sentinel);
+    formatted.lines().nth(idx + 1).map(|l| l.trim()).unwrap_or("<EOF>")
+}
+
+fn fmt_delimited_list_fixture() -> String {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_delimited_list_interior_comment.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_delimited_list_interior_comment.gg");
+    gorget::formatter::format_source_infallible(&source)
+}
+
+/// Every newly-gated region, one cell per row: the sentinel must sit
+/// directly above the element it documents, not above whatever statement
+/// the escape re-parented it onto.
+#[test]
+fn fmt_delimited_list_interior_comment_regions() {
+    let formatted = fmt_delimited_list_fixture();
+    // (sentinel, the line that must follow it, region)
+    let cells: &[(&str, &str, &str)] = &[
+        ("# SEN generic-params-mid", "U,", "generic params `[T, U]`"),
+        ("# SEN fn-params-mid", "int b,", "fn params"),
+        ("# SEN closure-params-mid", "int b,", "closure params"),
+        ("# SEN method-args-mid", "2,", "method-call args (non-chain)"),
+        ("# SEN methodcall-generic-args-first", "int,", "MethodCall generic args"),
+        ("# SEN dot-shorthand-first", "2,", "dot-shorthand args"),
+        ("# SEN type-named-generic-args-mid", "int,", "`Type::Named` generic args"),
+    ];
+    for (sentinel, expected_next, region) in cells {
+        let actual = fmt_line_after_sentinel(&formatted, sentinel);
+        assert_eq!(
+            actual, *expected_next,
+            "interior comment escaped its {region} region: `{sentinel}` is \
+             now followed by {actual:?}, expected {expected_next:?} — i.e. \
+             the comment documents something other than the element it was \
+             written against.\n=== Formatted ===\n{formatted}"
+        );
+    }
+}
+
+/// The BEFORE-FIRST-ELEMENT cell, on both a `(`-scanned and a `[`-scanned
+/// region. This is the hole the delimiter SCAN exists to close: a gate
+/// keyed on the first element's span start never sees a comment that sits
+/// between the delimiter and that element, so without these two rows the
+/// scan design has no pin at all.
+#[test]
+fn fmt_delimited_list_before_first_element() {
+    let formatted = fmt_delimited_list_fixture();
+    assert_eq!(
+        fmt_line_after_sentinel(&formatted, "# SEN before-first-paren"),
+        "4,",
+        "before-first-element comment escaped a `(`-scanned region.\n\
+         === Formatted ===\n{formatted}"
+    );
+    assert_eq!(
+        fmt_line_after_sentinel(&formatted, "# SEN before-first-bracket"),
+        "int,",
+        "before-first-element comment escaped a `[`-scanned region.\n\
+         === Formatted ===\n{formatted}"
+    );
+}
+
+/// All four positions of the comment-position axis on ONE region (call
+/// args): interior-first · interior-mid · trailing-on-element ·
+/// interior-last (orphan pre-close). A gate that fires but flushes only
+/// leading comments would pass the first two rows and fail the last two.
+#[test]
+fn fmt_delimited_list_position_axis() {
+    let formatted = fmt_delimited_list_fixture();
+    assert_eq!(
+        fmt_line_after_sentinel(&formatted, "# SEN callargs-interior-first"),
+        "1,",
+        "interior-FIRST cell escaped.\n=== Formatted ===\n{formatted}"
+    );
+    assert_eq!(
+        fmt_line_after_sentinel(&formatted, "# SEN callargs-interior-mid"),
+        "2,",
+        "interior-MID cell escaped.\n=== Formatted ===\n{formatted}"
+    );
+    // Trailing-on-element: the sentinel must stay ON the element's line.
+    let trailing = fmt_sentinel_line(&formatted, "# SEN callargs-trailing-on-element");
+    assert!(
+        trailing.trim_start().starts_with("3,"),
+        "trailing-ON-ELEMENT cell left its element's line: {trailing:?}\n\
+         === Formatted ===\n{formatted}"
+    );
+    // Interior-LAST is the orphan-pre-close flush: nothing follows it but
+    // the closing delimiter.
+    assert_eq!(
+        fmt_line_after_sentinel(&formatted, "# SEN callargs-interior-last"),
+        ")",
+        "interior-LAST (orphan pre-close) cell escaped — it must be flushed \
+         inside the region, before the close.\n=== Formatted ===\n{formatted}"
+    );
+}
+
+/// Generic args AND call args of the SAME callee, both carrying an
+/// own-line interior comment. The two regions gate independently over
+/// their own ranges; a shared or mis-anchored window puts one region's
+/// comment into the other.
+#[test]
+fn fmt_delimited_list_both_regions_commented() {
+    let formatted = fmt_delimited_list_fixture();
+    assert_eq!(
+        fmt_line_after_sentinel(&formatted, "# SEN both-generic-args"),
+        "String,",
+        "the generic-args comment did not stay in the generic-args \
+         region.\n=== Formatted ===\n{formatted}"
+    );
+    assert_eq!(
+        fmt_line_after_sentinel(&formatted, "# SEN both-call-args"),
+        "6,",
+        "the call-args comment did not stay in the argument tuple.\n\
+         === Formatted ===\n{formatted}"
+    );
+}
+
+/// The WINDOW-SAFETY premise pin — see the fixture header for the full
+/// argument. `Param.span` INCLUDES the default-value expression, so the
+/// `)`-scan starts after `"a)b"` and cannot return the `)` that lives
+/// inside the string literal.
+///
+/// TWO REDS were recorded for this cell. (1) The ordinary pre-fix red: the
+/// parameter list was ungated, so the sentinel re-parented into the
+/// function body above `print(y)`. (2) The premise-break red: with the
+/// last parameter's span end forced to the parameter NAME's end, the scan
+/// lands inside `"a)b"`, the container end truncates, and the sentinel
+/// escapes again — while a mid-list interior comment stays GREEN, which is
+/// why the sentinel is an ORPHAN-PRE-CLOSE comment and not a mid-list one.
+#[test]
+fn fmt_delimited_list_window_safety() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_delimited_list_window_safety.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_delimited_list_window_safety.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert_eq!(
+        fmt_line_after_sentinel(&formatted, "# SEN window-orphan-pre-close"),
+        "):",
+        "the orphan-pre-close comment left the parameter list. Either the \
+         list is ungated, or the `)`-scan returned the `)` INSIDE the \
+         `\"a)b\"` default — i.e. `Param.span` no longer covers the default \
+         value.\n=== Formatted ===\n{formatted}"
+    );
+    // The string literal must come through untouched — it doubles as the
+    // adversarial probe for the scan.
+    assert!(
+        formatted.contains("String s = \"a)b\""),
+        "the `\"a)b\"` default was altered.\n=== Formatted ===\n{formatted}"
+    );
+}
+
+/// The generic-args ANCHOR-ADVANCE pin — a POS / idempotence pin, NOT a
+/// RED-verified regression fixture, and the fixture header says so.
+///
+/// `Callable[void(int)]` puts a `(` INSIDE the generic-args region, so an
+/// argument-tuple scan anchored at the callee name would return that one.
+/// The two anchor choices emit IDENTICAL output on every source-reachable
+/// shape (measured — neither line carries an interior comment, and a
+/// comment cannot be placed inside `void(int)`'s parens without the line
+/// comment swallowing the rest of the line), so there is no red to
+/// harvest here. What this pins is that the shapes stay formattable,
+/// re-parseable and idempotent. The class's real net is the
+/// break-and-verify procedure recorded in the round's report.
+#[test]
+fn fmt_delimited_list_generic_args_window() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/fmt_delimited_list_generic_args_window.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_delimited_list_generic_args_window.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    for shape in [
+        "identity[Callable[void(int)]](c)",
+        "b.pick[Callable[void(int)]](c)",
+    ] {
+        assert!(
+            formatted.contains(shape),
+            "`{shape}` did not survive formatting intact — a `(` inside the \
+             generic-args region was treated as the argument tuple's \
+             opener.\n=== Formatted ===\n{formatted}"
+        );
+    }
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(
+        formatted, second,
+        "`gg fmt` is not idempotent on the generic-args-window shapes"
+    );
+}
+
+// ── Residual mechanisms, filed with durable repros under `known_gaps/`.
+//    Each asserts the CORRECT/intended output and is `#[ignore]`d; each
+//    was verified to STILL REPRODUCE against the post-chokepoint binary.
+
+/// KNOWN GAP — the PRE-RENDER-ABOVE mechanism, all costumes in one
+/// fixture because they share one root: the construct pre-renders its
+/// sub-parts through `element_to_string`'s comment-blind sub-formatter,
+/// so any list emitter reached from inside it gates against an EMPTY
+/// sideband. Closing it needs the same decide-before-Doc move ONE LEVEL
+/// UP, in the chain / comprehension builders.
+///
+/// Measured on the post-chokepoint binary: all six costumes still escape.
+/// The method-chain costume uses 2+ segments deliberately — a
+/// single-segment receiver call IS fixed by the chokepoint and would be
+/// green on arrival.
+#[test]
+#[ignore = "known gap: pre-render-above mechanism (method chain 2+ segments, \
+            binary chain, `??`, list/dict/set comprehension) — un-ignore and \
+            promote out of known_gaps/ when those builders gain their own \
+            interior-comment gate."]
+fn fmt_delimited_list_pre_render_above() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_delimited_list_pre_render_above.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_delimited_list_pre_render_above.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let cells: &[(&str, &str, &str)] = &[
+        ("# SEN chain-2seg", "0,", "method chain, 2+ segments"),
+        ("# SEN binchain", "1,", "binary chain operand"),
+        ("# SEN elvis", "7,", "`??` chain"),
+        ("# SEN listcomp", "x,", "list comprehension"),
+        ("# SEN dictcomp", "x,", "dict comprehension"),
+        ("# SEN setcomp", "x,", "set comprehension"),
+    ];
+    for (sentinel, expected_next, costume) in cells {
+        let actual = fmt_line_after_sentinel(&formatted, sentinel);
+        assert_eq!(
+            actual, *expected_next,
+            "pre-render-above gap CLOSED for the {costume} costume \
+             (`{sentinel}` now followed by {actual:?}). If every costume \
+             passes, promote the fixture out of `known_gaps/` and drop the \
+             `#[ignore]`.\n=== Formatted ===\n{formatted}"
+        );
+    }
+}
+
+/// KNOWN GAP — `Expr::Index` brackets are hand-written, not a
+/// fill-emitted list, so they never reach the chokepoint. A DISTINCT
+/// mechanism from the pre-render-above family, and the smallest member of
+/// the wider hand-rolled-delimiter family enumerated in `TODO.md`.
+///
+/// Measured on the post-chokepoint binary: still reproduces.
+#[test]
+#[ignore = "known gap: `Expr::Index` brackets have no interior-comment gate \
+            (hand-written delimiters, single slot) — un-ignore and promote out \
+            of known_gaps/ when they gain one."]
+fn fmt_delimited_list_index_brackets() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_delimited_list_index_brackets.gg");
+    let source = std::fs::read_to_string(&fixture_path)
+        .expect("read fmt_delimited_list_index_brackets.gg");
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert_eq!(
+        fmt_line_after_sentinel(&formatted, "# SEN index"),
+        "0",
+        "`Expr::Index` interior-comment gap CLOSED — promote the fixture \
+         out of `known_gaps/` and drop the `#[ignore]`.\n\
+         === Formatted ===\n{formatted}"
     );
 }
 
 /// R39 real-world flagship validator — the input that motivated the
-/// round. `compiler/data/resources.gg` carries ~138 interior comments
-/// across `RESOURCES`, `RUNTIME_FNS`, and `COLLECTION_BUILTIN_METHODS`
-/// static arrays. Pre-fix, `gg fmt` dedented every one to column 0
-/// AFTER the closing `]`, corrupting the file. Post-fix, they stay
-/// inside the array at ≥ 4-space indent.
+/// round. `compiler/data/resources.gg` carries ~275 comments across
+/// `RESOURCES`, `RUNTIME_FNS`, and `COLLECTION_BUILTIN_METHODS` static
+/// arrays. Before the interior-comment work `gg fmt` dedented every
+/// array-interior one to column 0 AFTER the closing `]`, corrupting the
+/// file; they now stay inside the array they were written in.
 ///
-/// The pre-fix count of `grep -c "^    # "` = 0 (all interior comments
-/// dedented). Post-fix ≥ 138 (all preserved at the top-level array's
-/// interior indent). The `# GorgetString — multi-alias` anchor is a
-/// spot-check for the DEDENT-to-col-0 symptom class.
+/// TWO assertions, because the 4-space floor alone is BLIND to the
+/// nested case — measured: 153 lines at 4-space indent before the
+/// delimited-list chokepoint, 138 at 4 plus 15 at 12 after it, and a
+/// `>= 138` floor passes in BOTH states. A regression that re-ejects the
+/// nested comments pushes the 4-space count UP, not down, which is
+/// green-before-and-after and therefore worse than no assertion at all.
+///
+/// So: the 4-space floor is now EXACTLY TIGHT (**never lower it** — the
+/// slack that hid the nested class is gone), and the 12-space count is
+/// the class-seeing half. The 15 comments it counts live inside the inner
+/// `[BuiltinMethodDecl…]` arrays; before the chokepoint that count was
+/// ZERO, and the two long `# fill(n, val)` / `# get_or_put(k, default)`
+/// blocks sat one level out where they documented the WRONG table row.
+///
+/// Regenerate both figures with:
+///   `target/debug/gg fmt compiler/data/resources.gg | grep -coE '^    # '`
+///   `target/debug/gg fmt compiler/data/resources.gg | grep -coE '^            # '`
+///
+/// The `# GorgetString — multi-alias` anchor is a spot-check for the
+/// original DEDENT-to-col-0 symptom class.
 #[test]
 fn fmt_resources_gg_comment_positions_preserved() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -15298,12 +15621,35 @@ fn fmt_resources_gg_comment_positions_preserved() {
         .count();
     assert!(
         interior_count >= 138,
-        "R39 collit-escape FLAGSHIP regression: post-fix `gg fmt` of \
+        "collit-escape FLAGSHIP regression: `gg fmt` of \
          compiler/data/resources.gg produced only {interior_count} \
-         interior-comment lines at indent-4 (`^    # `), expected ≥ 138 \
-         (pre-fix ~0; the round's fix preserves them inside the array).\n\
+         interior-comment lines at indent-4 (`^    # `), expected ≥ 138.\n\
          If this trips, either the dispatch was removed or a fresh sub- \
-         case of the class re-opened."
+         case of the class re-opened.\n\
+         ⚠ NEVER LOWER THIS FLOOR: it is exactly tight, and the slack it \
+         used to carry is what let the nested-comment regression hide."
+    );
+
+    // The class-seeing half: comments that belong to the INNER
+    // `[BuiltinMethodDecl…]` arrays, at the nested interior indent. This
+    // count was 0 before the delimited-list chokepoint, because those
+    // comments were ejected one level out — where the 4-space assertion
+    // above happily counted them.
+    let nested_count = formatted
+        .lines()
+        .filter(|l| l.starts_with("            # "))
+        .count();
+    assert!(
+        nested_count >= 15,
+        "collit-escape NESTED regression: `gg fmt` of \
+         compiler/data/resources.gg produced only {nested_count} \
+         comment lines at the inner array's interior indent \
+         (`^            # `), expected ≥ 15.\n\
+         These are the comments inside `[BuiltinMethodDecl…]` within a \
+         `BuiltinMethodEntry(…)` argument tuple. A drop here means they \
+         escaped ONE LEVEL UP and now document the wrong table row — the \
+         exact symptom the 4-space floor above cannot see, because an \
+         escape INCREASES that count."
     );
 
     // Anchor spot-check: `# GorgetString — multi-alias` must NOT appear
@@ -49143,7 +49489,12 @@ fn fmt_form_synonym_elif_canonicalized() {
 ///
 /// The corpus SIZE is deliberately not asserted to a figure — parallel tracks
 /// add fixtures. Re-derive it with
-/// `find tests/fixtures lib examples -name '*.gg' | wc -l`.
+/// `find tests/fixtures lib examples compiler -name '*.gg' | wc -l`.
+///
+/// `compiler/` is one of the roots: `compiler/data/resources.gg` is the
+/// flagship real-world input for the comment-preservation work, and
+/// leaving it out of the class guard meant the one file with the most
+/// interior comments in the tree was covered only by its own bespoke test.
 #[test]
 fn fmt_output_reparses_corpus_wide() {
     fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -49160,7 +49511,7 @@ fn fmt_output_reparses_corpus_wide() {
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    for root in ["tests/fixtures", "lib", "examples"] {
+    for root in ["tests/fixtures", "lib", "examples", "compiler"] {
         collect(&manifest_dir.join(root), &mut files);
     }
     files.sort();

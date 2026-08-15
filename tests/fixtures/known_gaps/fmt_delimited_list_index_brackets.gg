@@ -1,0 +1,38 @@
+# KNOWN GAP — `Expr::Index` brackets are NOT a fill-emitted list.
+#
+# A DISTINCT MECHANISM from the pre-render-above family (its own fixture,
+# `fmt_delimited_list_pre_render_above.gg`) and from the fill-emitter
+# chokepoint. `v[i]` has exactly one "element" and is emitted with
+# HAND-WRITTEN delimiters — `write("[")`, format the index expression,
+# `write("]")` — so it never reaches `emit_delimited_list` and there is no
+# gate to route it through. Giving it one means either teaching the index
+# arm to consult the sideband itself, or generalising the chokepoint to
+# single-slot delimited regions.
+#
+# It is the smallest member of a wider hand-rolled-delimiter family that
+# also includes the `write(", ")` comma-loop emitters (pattern field
+# lists, tuple and function TYPES, enum tuple-variant field lists,
+# meta-construct argument lists) — those are enumerated in `TODO.md`.
+#
+# CURRENT (measured on the post-chokepoint build):
+#     int r = v[0]
+#     # SEN index          ← escaped to the enclosing statement indent,
+#     print(r)                now a leading comment of `print(r)`
+#
+# INTENDED (post-fix):
+#     int r = v[
+#         # SEN index
+#         0
+#     ]
+#
+# UN-IGNORE + PROMOTE out of `known_gaps/` when the index brackets gain an
+# interior-comment gate.
+
+int main():
+    Vector[int] v = [10, 20, 30]
+    int r = v[
+        # SEN index
+        0
+    ]
+    print(r)
+    return 0

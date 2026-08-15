@@ -71,8 +71,9 @@ Dict[String, int] DICT_ORPHAN = {
 
 int main():
     # ── TupleLiteral × {leading, trailing, orphan-pre-close} ──
-    # (Multi-element tuples only — single-elem is a known gap; see
-    # tests/fixtures/known_gaps/fmt_collection_literal_interior_tuple_single_elem.gg)
+    # (Multi-element tuples only — the single-element spelling `(x,)` does not
+    # route through the delimited-list chokepoint and has its own fixture:
+    # tests/fixtures/fmt_collection_literal_interior_tuple_single_elem.gg)
     auto tup_leading = (
         # SEN tuple-leading-first
         1,
@@ -94,12 +95,11 @@ int main():
 
     # ── StructLiteral-shape (parsed as Call in fmt-only) × {leading, trailing, orphan} ──
     # NOTE: fmt runs BEFORE semantic rewrite, so `Entry(...)` is Expr::Call
-    # in fmt's view — NOT Expr::StructLiteral. The struct-shape Call-args
-    # sub-case is a filed known gap (interior comment escapes ONE LEVEL up
-    # instead of to col 0): see
-    # `tests/fixtures/known_gaps/fmt_collection_literal_interior_call_args.gg`.
-    # These fixtures still assert the outer-scope leading-comment case,
-    # which the round retires class-wide via the Array/Tuple/Dict dispatch.
+    # in fmt's view — NOT Expr::StructLiteral. The call-argument list is gated
+    # like every other fill-emitted list, and its nested-literal cell has its
+    # own fixture:
+    # `tests/fixtures/fmt_collection_literal_interior_call_args.gg`.
+    # These rows assert the outer-scope leading-comment case.
     Entry struct_a = Entry(1, 2)
     Entry struct_b = Entry(3, 4)
 
