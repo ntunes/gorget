@@ -10,8 +10,15 @@
 # It RE-PARSES and it is IDEMPOTENT, which is exactly why no round-trip property
 # could see it: `equip [T]Cell[T]:` is a well-formed header that means the same
 # thing. What it is not is what the author wrote, and a bulk `gg fmt` sweep
-# would have rewritten all 42 generic `equip` headers in the tree
-# (`grep -rn '^equip \[' lib tests/fixtures examples compiler`).
+# would have rewritten every generic `equip` header in the tree.
+#
+# POPULATION AND RULE, because "how many" was wrong three times: committed `.gg`
+# SOURCE files only — a `.expected` golden copy is not swept, and this track's
+# own equip fixtures are not pre-existing exposure:
+#     grep -rn --include='*.gg' '^equip \[' lib tests/fixtures examples compiler \
+#       | grep -v fmt_suite_layout/equip_generic_params_space.gg \
+#       | grep -v fmt_suite_layout/header_colon_anchor_bracketed.gg
+# → 41 headers across 9 files (regenerate; do not quote a remembered figure).
 #
 # AXIS — every shape the header's first render can take, because the separator
 # is written once and each of these reaches it differently:

@@ -9987,6 +9987,59 @@ void main():
 }
 
 /// gorget-js snag #15f: `gg fmt` must PRESERVE an integer literal's RADIX,
+// ══════════════════════════════════════════════════════════════════════
+// The fmt-fixture BODY: marker lookups must not see the fixture's own header
+// ══════════════════════════════════════════════════════════════════════
+
+/// `formatted` with the fixture's own LEADING COMMENT BLOCK removed.
+///
+/// A fmt fixture explains itself in a header of `#` lines, and `gg fmt`
+/// reproduces that header in its output. Every assertion that searches the
+/// output for a marker is therefore shadowed by any header line that happens to
+/// mention it, and the failure is silent in BOTH directions:
+///
+///   * a `find`-the-first-line lookup measures the HEADER line instead of the
+///     cell — so the test is red for the wrong reason, and cannot go green when
+///     the behaviour is fixed, because a comment line can never satisfy a
+///     positional claim;
+///   * a `contains` assertion is SATISFIED by the header — so it can never go
+///     red, and reads as coverage while guarding nothing.
+///
+/// Both have happened here. The class was found at four instances (two
+/// graduated fixtures, a known-gap repro, and `fmt_radix_preserved`, whose
+/// `-0x10` needle its own header spells), and each was fixed by rewording the
+/// header — an invariant-asserting comment with no enforcer, which is exactly
+/// what this class keeps defeating.
+///
+/// Skipping the header retires it at the LOOKUP, which is the write site: no
+/// needle list to maintain, nothing to keep in sync, and header wording is free
+/// again. Only the CONTIGUOUS leading run of comment/blank lines is dropped, so
+/// a fixture whose cells are themselves comments inside a body keeps every one
+/// of them.
+fn fmt_body(formatted: &str) -> &str {
+    let mut offset = 0usize;
+    for line in formatted.split_inclusive('\n') {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            offset += line.len();
+        } else {
+            break;
+        }
+    }
+    &formatted[offset..]
+}
+
+/// The first line of the fixture's BODY containing `needle` — the marker
+/// lookup, header-immune. See [`fmt_body`].
+fn fmt_body_line_with<'a>(formatted: &'a str, needle: &str) -> Option<&'a str> {
+    fmt_body(formatted).lines().find(|l| l.contains(needle))
+}
+
+/// True iff the fixture's BODY contains `needle`. See [`fmt_body`].
+fn fmt_body_contains(formatted: &str, needle: &str) -> bool {
+    fmt_body(formatted).contains(needle)
+}
+
 /// hex digit-case, and `_` grouping instead of rewriting every literal to
 /// decimal (`0x5C` -> `92`, the reported bug). The lexer discards radix — all
 /// four forms lex to one `IntLiteral` — so the formatter recovers the author's
@@ -10039,7 +10092,10 @@ fn fmt_radix_preserved() {
         "f\"fs={0x10}\"", // f-string interpolation (synthetic-span operand)
     ] {
         assert!(
-            formatted.contains(needle),
+            // BODY, not the whole output: this fixture's own header spells
+            // `-0x10` while explaining the axis, so a whole-output `contains`
+            // was satisfied by the prose and could never go red.
+            fmt_body_contains(&formatted, needle),
             "gg fmt dropped integer-literal radix: `{needle}` is missing from \
              the formatted output (rewritten to decimal?).\n=== formatted ===\n{formatted}"
         );
@@ -10483,7 +10539,7 @@ fn fmt_block_header_trailing_comment_stays_on_header() {
         ("SENTINEL-for", "for i in 0..3:"),
         ("SENTINEL-case", "case 0:"),
     ] {
-        let line_with_sentinel = formatted.lines().find(|l| l.contains(sentinel));
+        let line_with_sentinel = fmt_body_line_with(&formatted, sentinel);
         assert!(
             line_with_sentinel.is_some(),
             "sentinel {sentinel} vanished from formatted output.\n=== Formatted ===\n{formatted}"
@@ -10578,7 +10634,7 @@ fn fmt_inlined_arm_trailing_comment_preserved() {
 
     // Sentinel MUST live on the same line as `else: return`, not on a
     // standalone `#` line.
-    let line_with_sentinel = formatted.lines().find(|l| l.contains("propagate throw sentinel"));
+    let line_with_sentinel = fmt_body_line_with(&formatted, "propagate throw sentinel");
     assert!(
         line_with_sentinel.is_some(),
         "sentinel vanished from formatted output.\n=== Formatted ===\n{formatted}"
@@ -10711,6 +10767,12 @@ fn fmt_comment_adjacent_blank_lines() {
         );
     }
 
+    // ⚠ These lookups deliberately do NOT go through `fmt_body`: this
+    // fixture's cells include TOP-LEVEL comment adjacency, so its cells and its
+    // leading comment block are the same region and stripping the header would
+    // strip the subject. The helper is for fixtures whose cells live in the
+    // body; this one is the enumerated exception.
+    //
     // ── Negative cells: the pre-fix GLUED/MOVED shapes must be ABSENT. ──
     let negatives: &[(&str, &str)] = &[
         // glued top-level comments (blank between stripped)
@@ -10941,7 +11003,7 @@ fn fmt_preserves_check_verdict_for_iterable_move_modifier() {
     .expect("read for_iterable_move_modifier.gg");
     let formatted = gorget::formatter::format_source_infallible(&source);
     assert!(
-        formatted.contains("for i in ^coll:"),
+        fmt_body_contains(&formatted, "for i in ^coll:"),
         "paren predicate over-fired: a bare move-iterable gained parens.\n{formatted}"
     );
 }
@@ -10964,7 +11026,7 @@ fn fmt_preserves_check_verdict_call_arg_move_sigil() {
     .expect("read call_arg_move_sigil.gg");
     let formatted = gorget::formatter::format_source_infallible(&source);
     assert!(
-        formatted.contains("take(^a)"),
+        fmt_body_contains(&formatted, "take(^a)"),
         "paren predicate over-fired: a bare move argument gained parens.\n{formatted}"
     );
 }
@@ -11538,9 +11600,7 @@ fn fmt_multiline_trailing_comment_stays_attached() {
     // The header's own prose is comment-at-column-0 by construction; the cells
     // are the only lines this test reasons about, and each carries a sentinel.
     let hash_col = |sentinel: &str| -> usize {
-        let line = formatted
-            .lines()
-            .find(|l| l.contains(sentinel))
+        let line = fmt_body_line_with(&formatted, sentinel)
             .unwrap_or_else(|| panic!("sentinel `{sentinel}` vanished.\n{formatted}"));
         line.find('#')
             .unwrap_or_else(|| panic!("sentinel line has no `#`: {line:?}"))
@@ -14669,7 +14729,7 @@ fn fmt_trailing_comment_align_columns() {
     // (max_lhs 11 = 3 mod STRIDE), so col 20 both before and after.
     assert_eq!(hash_col_of(&f, "# I1a"), 20, "multi-comment first # aligns");
     assert_eq!(hash_col_of(&f, "# I2"), 20);
-    let i_line = f.lines().find(|l| l.contains("# I1a")).unwrap();
+    let i_line = fmt_body_line_with(&f, "# I1a").unwrap();
     assert!(
         i_line.contains("# I1a") && i_line.contains("# I1b"),
         "both comments stay on the same line: {i_line:?}"
@@ -15176,7 +15236,7 @@ fn fmt_collection_literal_interior_tuple_single_elem() {
     // The trailing comma must survive the exploded form, or `(x,)`
     // re-parses as a parenthesised expression and the tuple is gone.
     assert!(
-        formatted.contains("        42,\n    )"),
+        fmt_body_contains(&formatted, "        42,\n    )"),
         "single-elem tuple lost its trailing comma in the exploded form — \
          the output re-parses as `(42)`, a different program.\n\
          === Formatted ===\n{formatted}"
@@ -15255,7 +15315,7 @@ fn fmt_collection_literal_interior_call_args() {
     // The ancestor half of the canonical form: the ARGUMENT TUPLE has no
     // comment of its own and must break anyway, because its child did.
     assert!(
-        formatted.contains("Entry(\n        1,\n"),
+        fmt_body_contains(&formatted, "Entry(\n        1,\n"),
         "the ancestor argument tuple did NOT break — the canonical form \
          requires every ancestor container on the path to a commented \
          container to break too.\n=== Formatted ===\n{formatted}"
@@ -15454,7 +15514,7 @@ fn fmt_delimited_list_window_safety() {
     // The string literal must come through untouched — it doubles as the
     // adversarial probe for the scan.
     assert!(
-        formatted.contains("String s = \"a)b\""),
+        fmt_body_contains(&formatted, "String s = \"a)b\""),
         "the `\"a)b\"` default was altered.\n=== Formatted ===\n{formatted}"
     );
 }
@@ -15484,7 +15544,7 @@ fn fmt_delimited_list_generic_args_window() {
         "b.pick[Callable[void(int)]](c)",
     ] {
         assert!(
-            formatted.contains(shape),
+            fmt_body_contains(&formatted, shape),
             "`{shape}` did not survive formatting intact — a `(` inside the \
              generic-args region was treated as the argument tuple's \
              opener.\n=== Formatted ===\n{formatted}"
@@ -49535,9 +49595,7 @@ fn fmt_multiline_header_trailing_comment_stays_on_header() {
     let formatted = gorget::formatter::format_source_infallible(&source);
 
     let sentinel = "# multi-line header trailing";
-    let line = formatted
-        .lines()
-        .find(|l| l.contains(sentinel))
+    let line = fmt_body_line_with(&formatted, sentinel)
         .unwrap_or_else(|| panic!("sentinel {sentinel:?} vanished from:\n{formatted}"));
     assert!(
         line.contains("struct S[T]:"),
@@ -49572,9 +49630,7 @@ fn known_gap_fmt_cross_region_trailing_claim() {
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
     let formatted = gorget::formatter::format_source_infallible(&source);
 
-    let line = formatted
-        .lines()
-        .find(|l| l.contains("# SEN B"))
+    let line = fmt_body_line_with(&formatted, "# SEN B")
         .unwrap_or_else(|| panic!("sentinel `# SEN B` vanished:\n{formatted}"));
     assert!(
         line.contains("](6)"),
@@ -49592,7 +49648,11 @@ fn known_gap_fmt_cross_region_trailing_claim() {
 /// then the type with nothing between them, alone among the language's headers.
 /// The result RE-PARSES and is IDEMPOTENT, so no round-trip property could see
 /// it — it was found by eye while authoring a multi-line equip-header cell, and
-/// a bulk sweep would have rewritten all 42 generic `equip` headers in the tree.
+/// a bulk sweep would have rewritten every generic `equip` header in the tree —
+/// 41 of them across 9 files, counting committed `.gg` SOURCES only (a
+/// `.expected` golden copy is not swept, and this track's own equip fixtures
+/// are not pre-existing exposure). The fixture header carries the exact
+/// regeneration command; do not quote a remembered figure.
 ///
 /// One assertion per AXIS CELL, so a partial regression fingers which shape it
 /// broke; the file itself is form-pinned by `fmt_suite_layout_form_preservation`
