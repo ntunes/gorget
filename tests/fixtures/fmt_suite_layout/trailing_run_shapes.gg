@@ -1,0 +1,56 @@
+# ==== MULTI-LINE TRAILING COMMENT · run SHAPE and CARRIER (AXIS C)
+#
+# A run is: an OWN-LINE comment directly below a TRAILING head (or below
+# another continuation of that head), `#` at the SAME column, no blank line and
+# no code line between. Four conditions, and each is only pinned by its own
+# negative.
+#
+# POSITIVE cells — run LENGTH: one continuation · three continuations.
+# POSITIVE cells — CARRIER: struct field (in `trailing_run_detach.gg`) ·
+#   STATEMENT · ENUM VARIANT · TRAIT ITEM. A fixture whose name claims
+#   "multi-line trailing comment" while sampling one carrier is an anecdote.
+#
+# NEGATIVE cells — the three discriminators, each of which must NOT join:
+#   * a `#` at a DIFFERENT column from the head's;
+#   * a BLANK LINE between head and candidate;
+#   * a CODE LINE between head and candidate.
+# Each falls back to being an ordinary own-line comment leading what follows.
+#
+# Continuations are emitted on THEIR OWN LINES, never collapsed onto the head's
+# (`# one  # two` re-lexes as ONE comment token, so a collapse is silent and
+# survives a second pass).
+#
+# RED, observed on the pre-fix build: every continuation detached — to the
+# following member's indent where one followed, to column 0 where none did.
+
+enum Kind:
+    Alpha()     # variant head: the enum-variant carrier for a run,
+                # variant cont-1: which is a different sibling loop
+                # variant cont-2: from the struct-field one
+    Beta()      # one-continuation head: the count-1 cell,
+                # one-continuation cont-1: exactly one line below
+
+trait Shape:
+    int area()    # trait-item head: the trait-item carrier,
+                  # trait-item cont-1: three continuations below it,
+                  # trait-item cont-2: which is the count->=3 cell,
+                  # trait-item cont-3: and the outer bound of the run
+
+void statement_carrier():
+    int a = 1    # stmt head: the STATEMENT carrier
+                 # stmt cont-1: continues the statement's own comment
+    print(a)
+
+struct Negatives:
+    int a    # neg-column head: the candidate below sits at a DIFFERENT
+    # neg-column other: column, so it is not a continuation
+    int b    # neg-blank head: a blank line separates the candidate
+
+    # neg-blank other: so it leads `int c` instead
+    int c    # neg-code head: a code line separates the candidate
+    int d
+    # neg-code other: so it leads `int e`
+    int e
+
+void main():
+    statement_carrier()

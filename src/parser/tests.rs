@@ -1711,3 +1711,384 @@ fn d29_legacy_throws_signature_unchanged() {
     let t = f.throws.explicit_type().expect("throws clause");
     assert!(matches!(&t.node, Type::Named { name, .. } if name.node == "E"));
 }
+
+// ── `Block` position fields: the two Core #14 pins ───────────
+//
+// `Block` carries two source positions and they mean DIFFERENT lines. Both are
+// write-site facts nothing downstream can recover, and each has a consumer that
+// silently does the wrong thing when the value drifts — so each gets a pin
+// rather than a comment.
+//
+//   * `header_start` is on the owning construct's FIRST line. The formatter's
+//     orphan-pre-close flush compares a comment's column against the INDENT of
+//     that line; seeded from the colon instead, a WRAPPED header puts it on a
+//     continuation line indented at or past the body, and the column test then
+//     refuses every comment written inside the block.
+//   * `span.start` is on the header's LAST line (the colon's, at the sites that
+//     have one). The blank/lookback logic walks BACK from it, so a value on the
+//     BODY's own line starts every such walk one line below its target.
+//
+// The assertions are the PROPERTIES those consumers depend on, not per-probe
+// line numbers: an expected-line table has to be re-derived by hand for every
+// clause in every probe, and the first thing it does when a probe grows a
+// clause is go wrong.
+
+/// One collected block, flattened to what these pins assert. Owned values: the
+/// visitor trait cannot hand out references that outlive its walk.
+///
+/// Deliberately NOT recording `Block::layout`: every probe below spells an
+/// INDENTED suite, so there is nothing to filter, and reading the author's
+/// suite spelling outside the formatter is what
+/// `suite_layout_is_read_only_by_the_formatter` exists to stop. If a probe ever
+/// grows an inline suite, these assertions fail loudly on it rather than
+/// quietly skipping it.
+struct BlockProbe {
+    header_start: usize,
+    span_start: usize,
+    first_stmt_start: Option<usize>,
+}
+
+/// Collect every `Block` reachable from a module.
+fn collect_blocks(module: &Module) -> Vec<BlockProbe> {
+    use crate::parser::visitor::{walk_block, ExprVisitor};
+
+    struct C {
+        out: Vec<BlockProbe>,
+    }
+    impl ExprVisitor for C {
+        fn visit_block(&mut self, block: &Block) {
+            self.out.push(BlockProbe {
+                header_start: block.header_start,
+                span_start: block.span.start,
+                first_stmt_start: block.stmts.first().map(|s| s.span.start),
+            });
+            walk_block(self, block);
+        }
+    }
+
+    let mut c = C { out: Vec::new() };
+    for item in &module.items {
+        let body = match &item.node {
+            Item::Function(f) => match &f.body {
+                FunctionBody::Block(b) => Some(b),
+                _ => None,
+            },
+            Item::Test(t) => Some(&t.body),
+            Item::Bench(b) => Some(&b.body),
+            Item::SuiteSetup(x) => Some(&x.body),
+            Item::SuiteTeardown(x) => Some(&x.body),
+            Item::MetaTypeFunc(m) => Some(&m.body),
+            _ => None,
+        };
+        if let Some(b) = body {
+            c.visit_block(b);
+        }
+    }
+    c.out
+}
+
+/// 1-based source line number of `pos`.
+fn line_no_of(src: &str, pos: usize) -> usize {
+    src[..pos.min(src.len())].matches('\n').count() + 1
+}
+
+/// Leading-space count of the source line containing `pos`.
+fn line_indent_of(src: &str, pos: usize) -> usize {
+    let ls = src[..pos.min(src.len())].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    src[ls..].chars().take_while(|c| *c == ' ').count()
+}
+
+/// Why a probe is spelled the way it is — the disposition that makes this table
+/// a decision record instead of a list.
+///
+/// A probe only DISCRIMINATES `Block::header_start` when the construct's header
+/// is WRAPPED: unwrapped, the colon sits on the construct's own first line, a
+/// colon-seeded `header_start` has the right indent by accident, and the probe
+/// cannot fail. So every row must either wrap, or say WHY no wrapped spelling
+/// exists — and the reason is then an explicit, greppable, reviewable artifact
+/// rather than prose that nobody re-checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeKind {
+    /// The header is wrapped, so the pins can see a colon-seeded value.
+    Wrapped,
+    /// No legal spelling separates the construct's first line from the colon's,
+    /// so no wrapped form exists and no probe of this construct can ever fail.
+    /// The string is the reason. What is CHECKED is that the reason is not
+    /// CONTRADICTED by the probe's own spelling — a `NotWrappable` row whose
+    /// header already spans lines fails. That catches a reason falsified by the
+    /// source in front of it; it does NOT catch a reason that is false about
+    /// the LANGUAGE while the probe is written flat to match (the `test`/`bench`
+    /// shape: a false belief produces a consistent pair). What guards that
+    /// direction is the CELL in `wrapped_header_anchor.gg`, which fails when
+    /// the row is unwired. Checking the reason itself would need a token-kind
+    /// scan of the header; the rule it would check is "the header holds no
+    /// token that can span source lines".
+    NotWrappable(&'static str),
+}
+use ProbeKind::*;
+
+/// The probe corpus: one source per block-carrying construct, each carrying its
+/// [`ProbeKind`] disposition.
+///
+/// ⚠ THIS TABLE'S TOTALITY WAS A SELECTION THREE TIMES. First `meta while` was
+/// said to be covered by an unwrapped cell; then `for`, `with`, `meta if`,
+/// `meta for`, `meta type f()`, both match-arm positions, `select` arms and
+/// closures were spelled FLAT while their wiring rows leaked a real comment
+/// when unwired; then `test`/`bench` were excluded by the REASON "the name is a
+/// single token, so it cannot wrap" — which conflates *one token* with *one
+/// line*. Gorget has triple-quoted multi-line strings, so a `test` name spans
+/// lines, and unwiring the `test` row escaped a real comment with every gate
+/// green.
+///
+/// The rule that survives measurement is therefore NOT "keyword-only" but:
+/// **a header holding no token that can span source lines**. Each
+/// `NotWrappable` row states its reason in those terms, and
+/// `block_probe_dispositions_are_decided` checks the shape of every row.
+///
+/// The enumeration in `tests/fixtures/fmt_suite_layout/wrapped_header_anchor.gg`
+/// is DERIVED from this table; `parser_header_start_wiring_census`
+/// (tests/lints.rs) is what stops a new wiring row from joining without one.
+const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
+    ("fn, WRAPPED signature", "int f(int a_long_one,\n      int b_long_one):\n    return a_long_one\n", Wrapped),
+    ("if / elif, WRAPPED conditions", "void f(int i,\n       int j):\n    if (i <\n        3):\n        print(1)\n    elif (j >\n        9):\n        print(2)\n", Wrapped),
+    // ⚠ THE `else:` CLAUSES ARE AN ENUMERATION, NOT A SAMPLE. There are SEVEN
+    // else-body `parse_block*` WIRING CALLS in the parser (statement-`if`,
+    // for-else, while-else, match-else, select-else, meta-if-else,
+    // meta-match-else), all of them in `src/parser/stmt.rs`, and every one of
+    // them has its OWN row below, adjacent to the construct it belongs to.
+    //
+    // Seven wiring CALLS is not seven else ANCHORS, and the sentence above is
+    // exact only in the census's terms: the match-EXPRESSION
+    // (`parse_match_expr`, src/parser/expr.rs) is an EIGHTH `else:` that wires
+    // `Block::header_start`, via `parse_arm_body` — which
+    // `parser_header_start_wiring_census` counts as the wiring site itself
+    // rather than counting its callers, so both counts are right. It is
+    // guarded elsewhere, not here: mis-wiring its `parse_arm_body(else_start)`
+    // to `parse_arm_body(start)` reds `fmt_suite_layout_form_preservation`.
+    // (The `else` clauses that carry no `Block` at all — the `if`-EXPRESSION
+    // else (src/parser/expr.rs:2126), the conditional-TYPE else
+    // (src/parser/mod.rs:940), the item-level `meta if` else
+    // (src/parser/mod.rs:1000) — have no `header_start` to wire, so they are
+    // outside this table's subject. That RECONCILES with the census command:
+    // `grep -rn "Keyword::Else" src/parser/` returns TWELVE hits — the seven
+    // wiring calls above, the eighth `parse_match_expr` anchor
+    // (src/parser/expr.rs:2169), these three, and `Parser::match_elif`
+    // (src/parser/mod.rs:230), which consumes `else if` AS an `elif` and so
+    // opens no else clause of any kind.)
+    //
+    // These rows were once carried INSIDE the neighbouring `Wrapped`
+    // probes, where the strict per-block rule (see `ProbeKind::Wrapped`) would
+    // have failed them; the fix split them out, and the split then kept only
+    // two of them — a deleted row is invisible to the next reader, and the
+    // totality of this table has already been a selection three times, so one
+    // representative `else:` row is not enough. The reason is identical for all
+    // seven by construction, which is the point: it is stated seven times so
+    // that removing one is visible.
+    //
+    // ⚠ AND THESE ROWS ARE THE ONLY GATE ON THESE SEVEN ELSE-BODY ANCHORS
+    // (the eighth, the match-EXPRESSION, is gated by the fmt fixture named
+    // above), because for four of the seven NO OUTPUT CELL CAN EXIST.
+    // `Block::header_start`'s sole
+    // consumer is `line_indent_of` in `emit_orphan_comments_before_close`
+    // (src/formatter/mod.rs) — it reads the anchor line's INDENT and nothing
+    // else. An `else:` for `if` / `for` / `while` / `meta if` sits at exactly
+    // its construct's indent, so anchoring the else body on the `if` line
+    // instead of the `else` line is OBSERVATIONALLY IDENTICAL for every input:
+    // measured, mis-wiring `parse_if_stmt`'s else to `start.start` leaves
+    // `gg fmt` byte-identical on a probe carrying comments at four columns
+    // around the boundary. (The other three — match / select / meta match — put
+    // their `else:` at the `case` indent, one level deeper, so those DO move
+    // output; the match-else mis-wire drags a column-8 comment into the else
+    // body at column 12.) What these rows pin is the anchor's LINE, not its
+    // column: a mis-wire puts `header_start` several lines above the body, and
+    // `block_probe_dispositions_are_decided` reads that as a spanning header
+    // and fails. RED-verified per row — with the rows absent, the same
+    // `parse_if_stmt` mis-wire left `--lib` and `--test lints` fully green.
+    ("if `else:` clause", "void f(int i):\n    if i < 3:\n        print(1)\n    else:\n        print(3)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
+    ("while, WRAPPED condition", "void f(int i,\n       int j):\n    while (i <\n        j):\n        print(i)\n", Wrapped),
+    ("for, WRAPPED iterable", "void f(int a,\n       int b):\n    for i in [a,\n            b]:\n        print(i)\n", Wrapped),
+    ("for `else:` clause", "void f():\n    for i in [1, 2]:\n        print(i)\n    else:\n        print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
+    ("while + while-else", "void f():\n    while false:\n        print(1)\n    else:\n        print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
+    ("loop", "void f():\n    loop:\n        break\n", NotWrappable("`loop` and the colon, adjacent — no token between them")),
+    ("unsafe", "void f():\n    unsafe:\n        print(1)\n", NotWrappable("`unsafe` and the colon, adjacent")),
+    ("with … as …, WRAPPED binding", "int mk(int a,\n       int b):\n    return a + b\n\nvoid f(int r,\n       int s):\n    with mk(\n            r, s) as held:\n        print(held)\n", Wrapped),
+    ("named scope", "void f():\n    cleanup:\n        print(1)\n", NotWrappable("an identifier is one token and identifiers cannot span lines")),
+    ("on error", "void f():\n    on error:\n        print(1)\n", NotWrappable("`on error` and the colon, adjacent")),
+    ("do:", "void f():\n    int d = do:\n        1\n    print(d)\n", NotWrappable("`do` and the colon, adjacent")),
+    ("match arm, WRAPPED pattern", "void f(Option[int] x,\n       int y):\n    match x:\n        case Some(\n                v):\n            print(v + y)\n", Wrapped),
+    // The DISCRIMINATING `else:` probe: the else BODY's header is the `else`
+    // clause line, not the `match` line — which is what keeps an arms-level
+    // tail beside a match `else:` claimed at the MATCH level instead of being
+    // pulled inside the else body.
+    ("match `else:` clause", "void f(Option[int] x):\n    match x:\n        case Some(v):\n            print(v)\n        else:\n            print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
+    ("select arm, WRAPPED op", "void f(int a,\n       int b):\n    select:\n        case int v = c(\n                ).recv():\n            print(v + a + b)\n", Wrapped),
+    ("select `else:` clause", "void f():\n    select:\n        case int v = c().recv():\n            print(v)\n        else:\n            print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
+    ("closure body, WRAPPED params", "void f(int p,\n       int q):\n    Callable[void(int, int)] g = (int a_long_one,\n                                 int b_long_one):\n        print(a_long_one)\n    g(p, q)\n", Wrapped),
+    ("catch", "void f(int x):\n    int a = fallible(x) catch (e):\n        print(1)\n        0\n", NotWrappable("the LHS wraps, but the row's value is the LHS's own start, so a wrapped spelling moves both together — see BREAK C in the fixture")),
+    ("rethrow", "int f(int x) throws String:\n    int a = fallible(x) rethrow (String e):\n        print(1)\n        e\n    return a\n", NotWrappable("same as `catch`: the value IS the LHS's start")),
+    ("meta if / elif, WRAPPED conditions", "void f[T](int a,\n          int b):\n    meta if (bitwidth(T) >\n            4096):\n        print(a)\n    elif (bitwidth(T) >\n            2048):\n        print(b)\n", Wrapped),
+    ("meta if `else:` clause", "void f[T]():\n    meta if bitwidth(T) > 4096:\n        print(1)\n    else:\n        print(3)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
+    ("meta for, WRAPPED range", "void f(int a,\n       int b):\n    meta for i in [1,\n            2]:\n        print(i + a + b)\n", Wrapped),
+    // WRAPPED, and it has to be: an unwrapped `meta while cond:` has its colon
+    // on the `meta` line, so a colon-seeded `header_start` has the same indent
+    // as the right answer and the probe cannot fail. Wrapping is what separates
+    // the construct's FIRST line from the colon's.
+    ("meta while, WRAPPED condition", "void f[T](int a,\n          int b):\n    meta while (bitwidth(T) >\n            128):\n        print(a + b)\n", Wrapped),
+    ("meta match arm, WRAPPED case expr", "void f[T](int a,\n          int b):\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(a + b)\n", Wrapped),
+    ("meta match `else:` clause", "void f[T]():\n    meta match typename(T):\n        case \"int\":\n            print(1)\n        else:\n            print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
+    ("test body, WRAPPED multi-line name", "test \"\"\"a\n        b\"\"\":\n    print(1)\n", Wrapped),
+    ("bench body, WRAPPED multi-line name", "bench \"\"\"a\n        b\"\"\":\n    print(1)\n", Wrapped),
+    ("suite setup / teardown", "suite setup:\n    print(1)\n\nsuite teardown:\n    print(2)\n", NotWrappable("`suite setup` / `suite teardown` and the colon, adjacent")),
+    ("meta type fn, WRAPPED params", "meta type W(Type a_long_one,\n            Type b_long_one):\n    return a_long_one\n", Wrapped),
+];
+
+/// Every probe row is DECIDED, and a `NotWrappable` reason must survive being
+/// CONTRADICTED by its own probe's spelling rather than being taken on faith.
+///
+/// This is the guard the class owes (Core #6). The table's totality was a
+/// selection three times, and the third time the miss was not an omission but a
+/// FALSE REASON: `test`/`bench` were excluded because "the name is a single
+/// token, so it cannot wrap", which conflates *one token* with *one line*.
+/// Gorget's triple-quoted strings are one token spanning many lines.
+///
+/// So a reason is not free text. A row claiming `NotWrappable` must survive the
+/// mechanical form of its own claim: format the probe and check the construct's
+/// header really does occupy ONE line. If the probe's own spelling already
+/// wraps, this fails. What it does NOT reach is a reason false about the
+/// LANGUAGE whose probe is written flat to match — the `test`/`bench` shape
+/// itself, where a false belief produces a consistent pair; the artifact that
+/// closes that direction is the cell in `wrapped_header_anchor.gg`, which fails
+/// when the row is unwired. Both halves are stated at
+/// [`ProbeKind::NotWrappable`].
+#[test]
+fn block_probe_dispositions_are_decided() {
+    assert!(
+        BLOCK_PROBES.len() >= 20,
+        "the probe corpus shrank to {} rows — a construct lost its probe.",
+        BLOCK_PROBES.len()
+    );
+
+    for (label, src, kind) in BLOCK_PROBES {
+        // Every row parses, whatever its disposition.
+        let module = parse(src);
+        let blocks = collect_blocks(&module);
+        assert!(!blocks.is_empty(), "{label}: probe holds no block");
+
+        match kind {
+            ProbeKind::Wrapped => {
+                // A WRAPPED probe must actually wrap: some block's HEADER must
+                // occupy more than one line, i.e. its body's first statement
+                // sits >= 2 lines below the construct's first line.
+                //
+                // ⚠ Comparing `header_start` against `span.start` does NOT work
+                // here: rows 1-4 (catch/rethrow, arm bodies, select arms,
+                // closures) pass the construct's own start as the block span
+                // too, so the two coincide by construction even when the header
+                // wraps. The header's LINE SPAN is the property that holds for
+                // every row.
+                // EVERY block, not just one. `.any()` let a multi-construct
+                // probe pass while only ONE construct wrapped — flattening just
+                // the `elif` in the if/elif/else probe killed that
+                // discriminator with the guard green.
+                let flat: Vec<usize> = blocks
+                    .iter()
+                    .filter_map(|b| b.first_stmt_start.map(|first| (b, first)))
+                    .filter(|(b, first)| {
+                        line_no_of(src, *first) - line_no_of(src, b.header_start) <= 1
+                    })
+                    .map(|(b, _)| line_no_of(src, b.header_start))
+                    .collect();
+                assert!(
+                    flat.is_empty(),
+                    "{label}: labelled `Wrapped`, but the block(s) headed at \
+                     source line(s) {flat:?} have a ONE-LINE header — a \
+                     colon-seeded `header_start` has the right value there by \
+                     accident, so that construct's discriminator is dead even \
+                     though the probe as a whole passes.\n{src}"
+                );
+            }
+            ProbeKind::NotWrappable(reason) => {
+                assert!(
+                    reason.len() > 20,
+                    "{label}: `NotWrappable` with a reason too terse to check \
+                     ({reason:?}). State WHY no token in the header can span \
+                     source lines."
+                );
+                // The mechanical form of the claim: no block in the probe has a
+                // header that already spans lines. (A row whose reason is false
+                // in the `test`/`bench` way fails here the moment someone adds
+                // the multi-line spelling to the probe.)
+                let spans_lines = blocks.iter().any(|b| match b.first_stmt_start {
+                    Some(first) => line_no_of(src, first) - line_no_of(src, b.header_start) > 1,
+                    None => false,
+                });
+                assert!(
+                    !spans_lines,
+                    "{label}: labelled `NotWrappable` ({reason:?}), but this \
+                     probe's own header ALREADY spans lines — so the reason is \
+                     false and the row owes a `Wrapped` disposition.\n{src}"
+                );
+            }
+        }
+    }
+}
+
+/// `Block::header_start` sits on a line LESS INDENTED than the block's body —
+/// which is exactly what the formatter's column-based membership test needs,
+/// and exactly what a colon-seeded value loses on a wrapped header.
+#[test]
+fn block_header_start_is_on_the_constructs_first_line() {
+    for (label, src, _) in BLOCK_PROBES {
+        let module = parse(src);
+        let blocks = collect_blocks(&module);
+        assert!(!blocks.is_empty(), "{label}: no blocks collected");
+        for b in &blocks {
+            let Some(first) = b.first_stmt_start else { continue };
+            let header_indent = line_indent_of(src, b.header_start);
+            let body_indent = line_indent_of(src, first);
+            assert!(
+                header_indent < body_indent,
+                "{label}: `header_start` (line {}, indent {header_indent}) is not \
+                 LESS indented than the block body (line {}, indent {body_indent}). \
+                 A position at or past the body's indent is a CONTINUATION line of \
+                 a wrapped header, and the formatter's orphan-pre-close flush — \
+                 whose rule is 'indented past the header line' — then refuses every \
+                 comment written inside the block.\nin:\n{src}",
+                line_no_of(src, b.header_start),
+                line_no_of(src, first),
+            );
+            assert!(
+                b.header_start <= b.span_start,
+                "{label}: `header_start` is AFTER `span.start`. The construct \
+                 begins at or before the introducer that opens its body.\nin:\n{src}"
+            );
+        }
+    }
+}
+
+/// `Block::span.start` sits STRICTLY ABOVE the block's first statement — i.e.
+/// on the header's last line, not on the body's own.
+///
+/// The walk-BACK consumers (the author-blank probe above a clause, the comments
+/// that lead it) start from this position, so a value on the body's line puts
+/// them one line past everything they are looking for. `meta while` is the site
+/// that got this wrong: it took its span AFTER consuming the colon, which is the
+/// NEWLINE token at the start of the body's line.
+#[test]
+fn block_span_start_is_on_the_headers_last_line() {
+    for (label, src, _) in BLOCK_PROBES {
+        let module = parse(src);
+        for b in collect_blocks(&module) {
+            let Some(first) = b.first_stmt_start else { continue };
+            assert!(
+                line_no_of(src, b.span_start) < line_no_of(src, first),
+                "{label}: `Block.span.start` is on line {}, the same line as the \
+                 block's first statement ({}). It must be on the header's LAST \
+                 line; every walk-BACK consumer starts one line below its target \
+                 otherwise.\nin:\n{src}",
+                line_no_of(src, b.span_start),
+                line_no_of(src, first),
+            );
+        }
+    }
+}

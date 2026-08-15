@@ -17,12 +17,18 @@
 # is green on both binaries by construction, so its own red comes from
 # breaking the mechanism: add 1 to the reserve this cell installs and the
 # 120 half breaks.
+#
+# ⚠ Both names lost one character when the equip header gained the SEPARATOR
+# between its generic-parameter list and the equipped type (`equip [T] X:`, not
+# `equip [T]X:`). The header is one column wider, so the same boundary pair is
+# one character shorter — the cell still measures exactly 120 and 121, which is
+# the property, and the widths are re-derived, not guessed.
 
 trait AlphaBound:
     int alpha(self)
 
-equip [Taaa] at120_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[Taaa] with AlphaBound via alpha_field:
+equip [Taaa] at120_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[Taaa] with AlphaBound via alpha_field:
     int alpha(self): 1
 
-equip [Taaa] at121_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[Taaa] with AlphaBound via alpha_field:
+equip [Taaa] at121_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx[Taaa] with AlphaBound via alpha_field:
     int alpha(self): 1

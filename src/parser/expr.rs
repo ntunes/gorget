@@ -519,6 +519,8 @@ impl Parser {
                         stmts: vec![throw_stmt],
                         span,
                         layout: SuiteLayout::Inline,
+                        // No header at all — the wrap is the parser's.
+                        header_start: span.start,
                     }),
                     span,
                 ))
@@ -532,6 +534,8 @@ impl Parser {
                         stmts: vec![return_stmt],
                         span,
                         layout: SuiteLayout::Inline,
+                        // No header at all — see the `throw` arm.
+                        header_start: span.start,
                     }),
                     span,
                 ))
@@ -702,8 +706,9 @@ impl Parser {
 
             // Do expression
             Token::Keyword(Keyword::Do) => {
+                let do_kw = self.peek_span();
                 self.advance();
-                let body = self.parse_block()?;
+                let body = self.parse_block(do_kw.start)?;
                 let end = self.previous_span();
                 // The author typed `do`.
                 Ok(Spanned::new(
@@ -1847,8 +1852,9 @@ impl Parser {
 
         // Body: either single expression on same line, or indented block
         let body = if self.check(&Token::Newline) {
-            // Multi-line closure body
-            let block = self.parse_block_body(start)?;
+            // Multi-line closure body. `start` is the closure's `(`, on its
+            // own first line.
+            let block = self.parse_block_body(start, start.start)?;
             let span = block.span;
             Spanned::new(Expr::Block(block), span)
         } else {
@@ -1879,6 +1885,8 @@ impl Parser {
                     )],
                     span: body_span,
                     layout: SuiteLayout::Inline,
+                    // The body was written on the closure header's own line.
+                    header_start: start.start,
                 },
             };
             // Build prelude stmts. Iterate in declaration order.

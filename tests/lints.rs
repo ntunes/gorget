@@ -10769,12 +10769,12 @@ fn doc_source_citations_name_the_right_line() {
     // row belongs here only when the cite is measured CORRECT and the sentence
     // genuinely names no symbol at that line.
     const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
-        ("103", "src/formatter/mod.rs:41", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
+        ("103", "src/formatter/mod.rs:42", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("143", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
         ("220", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("469", "src/formatter/mod.rs:709", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("493", "src/formatter/mod.rs:1653", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("587", "src/formatter/mod.rs:2239", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("469", "src/formatter/mod.rs:885", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("493", "src/formatter/mod.rs:2141", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("587", "src/formatter/mod.rs:2755", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
@@ -12400,6 +12400,1079 @@ fn item_module_is_constructed_only_by_the_loader() {
     );
 }
 
+/// RAW-TEXT ACCESS TO FIXTURE-DERIVED FORMATTER OUTPUT IS DENY-BY-DEFAULT.
+///
+/// A fmt fixture explains itself in a header of `#` lines, and `gg fmt`
+/// reproduces that header in its output. Any assertion that searches the whole
+/// output can be shadowed by a header line, silently and in both directions: a
+/// first-line lookup measures the HEADER (red for the wrong reason, and unable
+/// to go green when the behaviour is fixed, since a comment line can never
+/// satisfy a positional claim), and a `contains` assertion is SATISFIED by the
+/// header (can never go red, reads as coverage, guards nothing).
+/// `fmt_body` / `fmt_body_line_with` / `fmt_body_contains` (tests/integration.rs)
+/// skip the header; this lint is what keeps access N+1 from going around them.
+///
+/// **WHY THIS IS KEYED ON ACCESS, NOT ON SEARCH METHODS.** Four rounds of this
+/// class produced the same defect in a new costume each time — header rewording,
+/// then 13 routings plus a table, then a ratchet that detected `.find(` /
+/// `.position(` and was blind to `contains(`, to `.lines().any(…)` (an instance
+/// the same commit had hand-fixed), and to a live `.rposition(`. Enumerating
+/// costumes schedules the next round. So the subject here is the ACCESS:
+///
+///   * a binding whose initializer is a formatting call is RAW TEXT;
+///   * a function CALLED with such a binding — at ANY argument position, on a
+///     one-line or a WRAPPED call — is a
+///     raw-text consumer, and its `&str` parameters are raw text too, ALL of
+///     them (the rule taints the callee's whole `&str` surface rather than the
+///     matching parameter, so a helper cannot launder raw text by shuffling its
+///     signature); this is the hop that let `hash_col_of` hide behind ~25 call
+///     sites;
+///   * every METHOD CALL and every SLICE on raw text must be routed through the
+///     helpers or carry an allowlist row with its reason.
+///
+/// The consumer rule is applied **TO A FIXED POINT**, so it is
+/// DEPTH-INDEPENDENT: a function that becomes a consumer only because of a
+/// param-derived entry is scanned too, and so on until nothing new appears.
+/// Applying it ONCE — the shape this lint shipped with — resolved exactly one
+/// hop and left two-hop raw text invisible, with a live instance already
+/// present: `fmt_sentinel_idx`, reached only through `fmt_sentinel_line` and
+/// `fmt_line_after_sentinel`, carrying the column-0 header skip for the whole
+/// `fmt_sentinel_*` family. Deleting that predicate left the LINT green — the
+/// four `fmt_collection_literal_interior_*` consumers do catch it, so what was
+/// missing was the ROUTING record, not every net.
+///
+/// The same rule is applied AT ANY ARGUMENT POSITION, which is a separate axis
+/// from depth: keying on the first argument alone hid five live accesses in
+/// three `assert_fill_pack*` helpers (see their ALLOWED rows), all of whose
+/// call sites pass the text second, at every depth.
+///
+/// And ACROSS A WRAPPED ARGUMENT LIST — a third axis, closed the same way and
+/// for the same reason. A wrapped call puts the binding on a line of its own,
+/// so a LINE-LOCAL walk-back starts from an empty head and resolves no callee
+/// AT ALL: `f(\n    "0x",\n    &raw,\n)` was invisible at every depth and every
+/// position, and — unlike the other two axes — this one was reachable from live
+/// code by a WHITESPACE-ONLY reflow, which silently retired a census row (the
+/// reflow re-check at the end of this docstring).
+///
+/// The allowlist names ALLOWED ACCESSES, not forbidden costumes, so a search
+/// spelling nobody has written yet — `.rfind(`, `.match_indices(`,
+/// `for l in x.split('\n')`, `x[a..b].contains(…)` — is RED by construction.
+///
+/// **Honest scope.** This is the read-site guard. The write-site fix would be a
+/// typed carrier whose only accessors are body-scoped, making raw text
+/// unreachable rather than merely flagged; measured at 115 bindings and ~430
+/// mentions to migrate, it was judged disproportionate for a test harness.
+/// **The rule's REACH, stated so it can be attacked rather than trusted.** The
+/// taint starts at a `let` whose initializer names a `FMT_SOURCES` producer and
+/// travels FORWARD through call ARGUMENTS into `&str` parameters, to a fixed
+/// point. Neither DEPTH, nor argument POSITION, nor a WRAPPED argument list
+/// bounds it any more. What it does not follow — seven shapes, each PROBED
+/// rather than reasoned about, so the next reader can re-run them:
+///   1. a struct FIELD holding raw text (`s.text.contains(…)`) — no live
+///      instance;
+///   2. a CLOSURE parameter or capture receiving it — no live instance;
+///   3. a helper RETURNING raw text untouched (`fn f(t: &str) -> &str { t }`):
+///      with no method call and no slice there is no access to disposition, and
+///      the result binding is clean. Measured GREEN. This one is
+///      indistinguishable from legitimate routing BY CONSTRUCTION — de-tainting
+///      at a return is exactly what `fmt_body` does — so what carries the
+///      guarantee is that every helper which TOUCHES the text has its access in
+///      the table below with a reason;
+///   4. raw text that never becomes a `let` binding: a producer call used as a
+///      temporary (`format_source_infallible(src).contains(…)` — live at
+///      tests/integration.rs:9762, header-immune only because its source is a
+///      synthetic in-test string with no fixture header), or a fixture-
+///      formatting helper that is not itself registered in `FMT_SOURCES`
+///      (`fmt_delimited_list_fixture`, :15356 — measured: its nine-test family
+///      makes ZERO direct accesses, routing everything through the sentinel
+///      helpers, so no live exposure).
+/// The next three share ONE root cause: this lint reads SOURCE TEXT with raw
+/// delimiter scans — the walk-back in FRONT of an occurrence (shapes 5, 7) and
+/// the byte immediately AFTER it (shape 6) — with no awareness of string
+/// literals, receivers or macros. Each was probed against a CONTROL differing
+/// only in the named feature, so the mechanism is isolated, not merely asserted:
+///   5. an EARLIER ARGUMENT that is a STRING LITERAL containing `(` — the scan
+///      breaks on the paren INSIDE the literal and resolves the wrong token or
+///      none. `plant_strlit("expected (foo", &formatted)` measured GREEN; the
+///      same call with the paren deleted from the literal is RED. No live
+///      instance;
+///   6. a PARENTHESISED RECEIVER — the access scan reads the byte that follows
+///      the name, and for `(&formatted).probe()` that byte is `)`, so neither
+///      the method nor a slice is seen. Measured GREEN; the idiomatic
+///      `formatted.probe()` is RED. No live instance;
+///   7. a MACRO forwarding raw text into a fn — `plant_macro!(&formatted)`
+///      expanding to `plant_macro_helper($t)`. The trailing `!` makes the
+///      identifier scan in front of the `(` yield an empty string, so no callee
+///      resolves. Measured GREEN; calling `plant_macro_helper(&formatted)`
+///      directly is RED. Zero live risk today —
+///      `grep -c "macro_rules!" tests/integration.rs` → 0.
+/// The POSITIVE claim, stated at the walk-back's real granularity, which is
+/// TEXTUAL: a binding is followed into a callee when a backward scan from the
+/// occurrence — over balanced delimiters, across a wrapped argument list, at
+/// any argument position and any depth — reaches the `(` that opens the
+/// argument list and finds an identifier immediately in front of it. It is a
+/// delimiter scan, not a parse, so a shape that hides that `(` or that
+/// identifier from a raw byte walk is outside it (5 and 7). On the ACCESS side
+/// the claim is equally textual: an access is seen when the byte right after
+/// the binding's name is `.` — followed by an identifier and `(` — or `[`, on
+/// that line or on a `.`-continuation folded into it; a shape that puts
+/// anything else there is outside (6). The list is what is KNOWN to fall
+/// outside, never a proof that nothing else does.
+///
+/// SHRINK-ONLY. A row belongs here when the access is genuinely header-immune —
+/// it searches something that is not fixture output, or the predicate already
+/// excludes comment lines, or the needle is a code shape no comment line can
+/// have. Adding a row to silence a new fmt assertion is the wrong move: route it.
+///
+/// **Break-and-verify (nine costumes, all RED-verified):**
+/// `formatted.contains(needle)`; reverting an `fmt_body(&formatted).lines().any(…)`
+/// to `formatted.lines().any(…)`; a `.rposition(` lookup; a novel
+/// `for line in formatted.split('\n')` loop; and — for the fixed point — a
+/// TWO-hop plant (`f(&formatted)` forwards to `g(text)`, which does
+/// `text.contains(…)`) plus a THREE-hop variant, which reds identically and is
+/// what makes the depth-independence claim above a measurement rather than an
+/// argument. For argument position: `plant_second_arg("0x", &formatted)`, which
+/// was GREEN under the first-argument-only rule and is RED now, and a THIRD
+/// position behind a nested call carrying its own comma —
+/// `plant_third_arg(&format!("{}, {}", "0x", 1), 7, &formatted)` — which
+/// exercises the balanced walk-back to the enclosing `(`. For the WRAP:
+/// `f(\n    "0x",\n    &formatted,\n)`, which was GREEN while the walk-back was
+/// line-local — the binding sits on a line whose head is empty, so no callee
+/// resolved at any depth or position — and is RED now.
+///
+/// **The guard survives a REFLOW of its own call sites, measured.** The wrap
+/// hole was not hypothetical: reflowing the two live `assert_fill_pack_greedy`
+/// calls (tests/integration.rs:15932, :16652) the way rustfmt does when a call
+/// outgrows the width budget — whitespace only, no semantic change — dropped
+/// the census from 59 to 58 under the line-local rule, deleting the row that
+/// records the one ACCIDENTAL green in the table below, and the ratchet message
+/// then read as an instruction to remove it. A coverage row that a cosmetic
+/// edit can silently retire is a guard that cannot catch its own class, so the
+/// re-check is: reflow both sites, confirm the census holds at 59, revert.
+#[test]
+fn fmt_raw_text_access_is_routed_or_reasoned() {
+    /// (enclosing fn, method or `[slice]`, why the access is header-immune).
+    const ALLOWED: &[(&str, &str, &str)] = &[
+        // THE SANCTIONED RAW-ACCESS SITE: the helpers themselves. This is the
+        // one place raw text is touched on purpose — the read-site equivalent
+        // of a carrier's single `full_text()` escape.
+        ("fmt_body", "split_inclusive", "the helper's own header skip"),
+        ("fmt_body", "[slice]", "the helper's own header skip"),
+        // Whole-output SHAPE claims: the assertion is about the file's overall
+        // form, not about locating a cell, so the header is part of the subject.
+        ("fmt_comment_only_file_preserved", "trim_end_matches", "a comment-only file — the header IS the subject"),
+        ("fmt_comment_only_file_preserved", "starts_with", "asserts the file does not START with whitespace"),
+        ("fmt_comment_only_live_victim_is_fixed_point", "trim_end_matches", "trailing-newline normalization, whole-file"),
+        ("fmt_suite_layout_form_preservation", "lines", "scans every line for trailing whitespace — whole-file by design"),
+        ("fmt_multiline_arg_indent_pins_continuation_column", "lines", "walks every line to measure continuation columns"),
+        ("fmt_tail_reserve_boundary_matrix", "lines", "measures the width of every line; a header line is a legitimate row"),
+        ("fmt_preserves_noreturn_qualifier", "matches", "counts occurrences across the file; count-neutral to the header"),
+        ("fmt_preserves_noreturn_qualifier", "lines", "builds a diagnostic excerpt inside the `assert_eq!` message — it decides nothing, so a header line in it cannot change pass/fail"),
+        // Predicate already excludes comment lines.
+        ("fmt_catch_multi_stmt_no_do_wrap", "lines", "predicate skips all `#` lines"),
+        ("fmt_catch_rethrow_single_stmt_no_do_wrap", "lines", "predicate skips all `#` lines"),
+        ("fmt_catch_rethrow_single_stmt_terminal_axis", "lines", "predicate skips all `#` lines"),
+        ("fmt_sentinel_idx", "lines", "predicate skips column-0 comment lines — exactly the fixture-header skip, and the ONE site that carries it for the whole `fmt_sentinel_*` family"),
+        // The two forwarders. Neither holds a predicate of its own; both are
+        // header-immune only because `fmt_sentinel_idx` above is.
+        ("fmt_sentinel_line", "lines", "a one-line forwarder: `nth()` off `fmt_sentinel_idx`, which is where the skip lives"),
+        ("fmt_line_after_sentinel", "lines", "indexes off `fmt_sentinel_idx`, which skips the header"),
+        // The needle is a code shape no comment line can have.
+        ("fmt_import_group_single_blank", "lines", "predicates match `from std.`/`from mylib.` prefixes; a `#` line cannot"),
+        ("fmt_preserves_intra_block_blank_lines", "find", "locates `struct Point:`, a code shape"),
+        ("fmt_preserves_intra_block_blank_lines", "[slice]", "slices between two located code shapes"),
+        ("fmt_container_last_interior_comment_stays_inside", "lines", "marker conjoined with an exact indent, which a column-0 header line cannot have"),
+        ("fmt_equip_generic_params_keep_separator", "lines", "exact-line equality against a code header; header prose cannot equal it"),
+        ("fmt_tail_reserve_inline_body_escape_preserves_the_suite_form", "contains", "needle is an indented code window"),
+        ("fmt_tail_reserve_narrow_separator_survives", "contains", "needle is a code window"),
+        ("fmt_tail_reserve_exploded_path_close_line_is_unenforced", "contains", "needle is a multi-line code window; header lines all start `#`"),
+        // Searches text whose header has already been stripped.
+        ("fmt_fill_pack_comma_axis", "contains", "searches `fill_pack_body` output, header already removed"),
+        ("fmt_fill_pack_width_boundary_axis", "contains", "searches `fill_pack_body` output, header already removed"),
+        ("fmt_fill_pack_width_boundary_axis", "lines", "searches `fill_pack_body` output, header already removed"),
+        // The fill-pack ASSERTION HELPERS. Invisible until the consumer rule
+        // stopped keying on the FIRST argument — every call site passes the
+        // text second (`assert_fill_pack_width(name, &body, …)`).
+        // `assert_fill_pack_width` (tests/integration.rs:15931, :16173, :16204,
+        // :16374) and `assert_no_trailing_comma_before_close` (:15976, :15998,
+        // :16086, :16174) are fed `fill_pack_body` output at every one of those
+        // sites, and `fill_pack_body` strips the header through `fmt_body`
+        // (:15799).
+        ("assert_fill_pack_width", "lines", "every caller passes `fill_pack_body` output, header already removed"),
+        ("assert_no_trailing_comma_before_close", "lines", "every caller passes `fill_pack_body` output, header already removed"),
+        // Not formatter output at all: `allowed_overflow: &[&str]`
+        // (tests/integration.rs:15822) is the caller's list of excuse
+        // fragments. The `&` + `str` param filter cannot tell a slice OF strs
+        // from a str, so the receiver is raw text only by classification.
+        ("assert_fill_pack_width", "iter", "the receiver is `allowed_overflow: &[&str]`, the caller's excuse list — not formatter output; the `&`+`str` param filter cannot see the slice"),
+        // ⚠ THE ONE ACCIDENTAL GREEN IN THIS TABLE, written down as such.
+        // `assert_fill_pack_greedy` has two callers and they do NOT agree:
+        // :15932 passes header-stripped `fill_pack_body` output, but :16652
+        // passes RAW `tail_reserve_format` output (:16566-16572 does no header
+        // stripping — it is one of this lint's own FMT_SOURCES), so the whole
+        // `fmt_tail_reserve` matrix runs the greedy model over text that still
+        // carries the fixture header. It is immune only because the model
+        // engages solely on a break line followed by a STRICTLY DEEPER indented
+        // line, and `gg fmt` normalizes top-level comments to column 0 — so a
+        // header line can never BE that continuation, and a header line ending
+        // in a comma never has one. Measured, not assumed: an indented header
+        // continuation planted in `fmt_tail_reserve/a1_fn_throws.gg` came back
+        // flattened to column 0 and the matrix stayed green. If the formatter
+        // ever preserves comment indentation, this row is the first thing to
+        // re-check — route :16652 through `fmt_body` instead.
+        ("assert_fill_pack_greedy", "lines", "one caller (:16652) feeds it RAW `tail_reserve_format` output; header-immune only because the greedy model needs a strictly-deeper continuation and `gg fmt` flattens top-level comments to column 0"),
+        // Surfaced only once the detector learned to join WRAPPED method
+        // chains — the blind spot that let a routed `.any(…)` be reverted
+        // undetected. Each disposition checked at the site.
+        ("fmt_radix_preserved", "lines", "walks from a located code line; the header cannot satisfy the skip_while"),
+        ("fmt_comment_only_file_preserved", "lines", "counts comment lines in a comment-ONLY file — the header IS the subject"),
+        ("fmt_else_catch_rethrow_no_do_wrap_on_move_tail", "lines", "predicate skips all `#` lines"),
+        ("fmt_one_tuple_type_keeps_comma", "lines", "filters `#` lines OUT to build a code-only view — the header skip, stronger"),
+        ("fmt_preserves_author_parens", "lines", "filters `#` lines OUT to build a code-only view; its own comment records the trap"),
+        ("fmt_trailing_comment_struct_last_no_dedent", "lines", "marker conjoined with a code-shape predicate"),
+        ("fmt_trailing_comment_match_else_no_dedent", "lines", "marker conjoined with a code-shape predicate"),
+        ("fmt_tail_reserve_inline_body_escape_preserves_the_suite_form", "lines", "measures every line's width; a header line is a legitimate row"),
+        ("fmt_tail_reserve_narrow_suppressed_half", "lines", "matches a code prefix a `#` line cannot have"),
+        ("fmt_tail_reserve_narrow_multiline_item_column", "lines", "matches a code prefix a `#` line cannot have"),
+        ("fmt_tail_reserve_exploded_path_close_line_is_unenforced", "lines", "matches `]` exactly; a comment line cannot equal it"),
+        ("fmt_prerender_column_binary_chain_stays_in_budget", "lines", "measures every line's width; a header line is a legitimate row"),
+        ("fmt_fill_suffix_overrun_stays_in_budget", "lines", "measures every line's width; a header line is a legitimate row"),
+        // The reasoned INAPPLICABLE case: its cells ARE top-level comments, so
+        // its cells and the header are the same region.
+        ("fmt_comment_adjacent_blank_lines", "contains", "cells ARE top-level comment adjacency — stripping the header strips the subject"),
+    ];
+
+    let content =
+        fs::read_to_string("tests/integration.rs").expect("cannot read tests/integration.rs");
+    let lines: Vec<&str> = content.lines().collect();
+
+    // fn boundaries
+    let mut bounds: Vec<(String, usize)> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let t = l.trim_start();
+        if let Some(rest) = t.strip_prefix("fn ").or_else(|| t.strip_prefix("pub fn ")) {
+            bounds.push((rest.split(['(', '<']).next().unwrap_or("?").to_string(), i));
+        }
+    }
+    let span = |k: usize| -> (usize, usize) {
+        (bounds[k].1, bounds.get(k + 1).map_or(lines.len(), |b| b.1))
+    };
+    const FMT_SOURCES: [&str; 4] = [
+        "format_source_infallible",
+        "tail_reserve_format",
+        "fill_pack_body",
+        "format_source_result",
+    ];
+    let ident_at = |l: &str, at: usize| -> bool {
+        l[..at].chars().next_back().is_none_or(|c| !c.is_alphanumeric() && c != '_')
+    };
+
+    // (1) formatted-text bindings per fn, in fns that touch a fixture.
+    let mut binds: Vec<(usize, Vec<String>)> = Vec::new();
+    for k in 0..bounds.len() {
+        let (i, end) = span(k);
+        let body = lines[i..end].join("\n");
+        if !(body.contains("tests/fixtures/")
+            || body.contains("fill_pack_body(")
+            || body.contains("tail_reserve_format("))
+        {
+            continue;
+        }
+        let mut b: Vec<String> = Vec::new();
+        for j in i..end {
+            let t = lines[j].trim_start();
+            let Some(rest) = t.strip_prefix("let ") else { continue };
+            let rest = rest.strip_prefix("mut ").unwrap_or(rest);
+            let Some(name) = rest.split([':', ' ', '=']).next() else { continue };
+            if name.is_empty() || !name.chars().all(|c| c.is_lowercase() || c == '_' || c.is_numeric()) {
+                continue;
+            }
+            let init = lines[j..(j + 2).min(end)].join(" ");
+            if FMT_SOURCES.iter().any(|f| init.contains(f)) && !b.iter().any(|x| x == name) {
+                b.push(name.to_string());
+            }
+        }
+        if !b.is_empty() {
+            binds.push((k, b));
+        }
+    }
+
+    // (2) a fn CALLED with a formatted binding consumes raw text; (3) its
+    // `&str` params are raw text too.
+    //
+    // ⚠ AT ANY ARGUMENT POSITION. Matching the binding only where it follows
+    // the open paren — `f(raw)` — resolves the FIRST argument and nothing else,
+    // so `f(other, &raw)` never made `f` a consumer and everything the callee
+    // did to the text was invisible AT EVERY DEPTH, because the rule the fixed
+    // point iterates never fired. Not hypothetical: five live accesses in
+    // `assert_fill_pack_width`, `assert_fill_pack_greedy` and
+    // `assert_no_trailing_comma_before_close` hid behind exactly this, since
+    // every one of their call sites passes the text SECOND. Position is
+    // orthogonal to depth — closing depth alone left this open.
+    //
+    // ⚠ TO A FIXED POINT, not once. Applying (2)+(3) a single time resolves
+    // exactly ONE hop: a function that becomes a consumer only *because* of a
+    // param-derived entry is never scanned, so raw text two hops from its
+    // binding is invisible. That is not a hypothetical — `fmt_sentinel_idx`
+    // (tests/integration.rs) is reached only from `fmt_sentinel_line` and
+    // `fmt_line_after_sentinel`, which are themselves one-hop consumers, and it
+    // carries the column-0 header skip for the entire `fmt_sentinel_*` family:
+    // under the one-pass rule its `.lines()` was in neither the census nor the
+    // allowlist, and deleting the skip predicate left THIS LINT green (the four
+    // `fmt_collection_literal_interior_*` tests do go red on it — what was
+    // missing was the routing record, not every net).
+    // Iterating until nothing new appears makes the rule DEPTH-INDEPENDENT
+    // instead of one-hop deep, which is what the rule always claimed to be.
+
+    // The callee whose ARGUMENT LIST holds the raw-text binding occurring at
+    // byte offset `at` — independent of which argument it is. First argument:
+    // the `(` sits right there. Later argument: the binding follows a `,`, so
+    // walk back over balanced delimiters to the `(` that opens this argument
+    // list, and take the identifier before it. `(`, `)`, `[`, `]` and `,` are
+    // ASCII, so every byte index below lands on a char boundary.
+    let callee_of_arg = |l: &str, at: usize| -> Option<String> {
+        let head = l[..at].trim_end();
+        // `f(x, &raw)` passes by reference; the `&` is not part of the shape.
+        let head = head.strip_suffix('&').unwrap_or(head).trim_end();
+        let bytes = head.as_bytes();
+        let open = match *bytes.last()? {
+            b'(' => head.len() - 1,
+            b',' => {
+                let mut depth = 0usize;
+                let mut p = head.len() - 1; // the `,`
+                loop {
+                    if p == 0 {
+                        return None;
+                    }
+                    p -= 1;
+                    match bytes[p] {
+                        b')' | b']' => depth += 1,
+                        b'(' | b'[' if depth > 0 => depth -= 1,
+                        b'(' => break p,
+                        // Reached an unclosed `[` first: this comma separates
+                        // elements of an array/index expression, not the
+                        // arguments of a call.
+                        b'[' => return None,
+                        _ => {}
+                    }
+                }
+            }
+            _ => return None,
+        };
+        head[..open]
+            .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .next()
+            .filter(|c| !c.is_empty())
+            .map(str::to_string)
+    };
+
+    // How many preceding lines the walk-back may reach for a WRAPPED argument
+    // list. Widening it can only ADD consumers (never remove one), so it is a
+    // conservative knob, not a correctness one; measured on today's tree, 5 and
+    // 12 give the identical census (59 rows, 0 added, 0 lost), so no live call
+    // site is anywhere near the edge.
+    const WRAP_LOOKBACK: usize = 5;
+
+    let mut consumers: Vec<String> = Vec::new();
+    loop {
+        let size = |cs: &Vec<String>, bs: &Vec<(usize, Vec<String>)>| -> usize {
+            cs.len() + bs.iter().map(|(_, b)| b.len()).sum::<usize>()
+        };
+        let before = size(&consumers, &binds);
+        for (k, b) in &binds {
+            let (i, end) = span(*k);
+            for j in i..end {
+                // ⚠ ARGUMENT LISTS WRAP, exactly as method chains do (the
+                // `logical` join below). A wrapped call puts the binding on a
+                // line of its own, so a LINE-LOCAL walk-back starts from an
+                // empty head, `callee_of_arg` resolves nothing, and everything
+                // the callee does to the text is invisible at every depth and
+                // every position — the same "the rule the fixed point iterates
+                // never fires" failure as the first-argument-only shape above.
+                // The preceding lines are therefore joined in front of line `j`
+                // for the walk-back only; `from = base` keeps the OCCURRENCE
+                // search on line `j`, so nothing is scanned twice.
+                let jstart = j.saturating_sub(WRAP_LOOKBACK).max(i);
+                let joined = format!("{} {}", lines[jstart..j].join(" "), lines[j]);
+                let base = joined.len() - lines[j].len();
+                let l: &str = &joined;
+                for name in b {
+                    let mut from = base;
+                    while let Some(rel) = l[from..].find(name.as_str()) {
+                        let at = from + rel;
+                        from = at + name.len();
+                        let Some(callee) = callee_of_arg(l, at) else { continue };
+                        if ![
+                            "assert", "panic", "format", "println", "Some", "Ok", "if", "for",
+                        ]
+                        .contains(&callee.as_str())
+                            && !consumers.iter().any(|x| *x == callee)
+                        {
+                            consumers.push(callee);
+                        }
+                    }
+                }
+            }
+        }
+        for k in 0..bounds.len() {
+            if !consumers.contains(&bounds[k].0) {
+                continue;
+            }
+            let (i, end) = span(k);
+            let sig = lines[i..(i + 6).min(end)].join(" ");
+            let mut params: Vec<String> = Vec::new();
+            for seg in sig.split(',') {
+                if let Some((nm, ty)) = seg.split_once(':') {
+                    // `&str` and `&'a str` alike — the lifetime is noise here.
+                    if ty.contains('&') && ty.contains("str") {
+                        // The name is whatever follows the last `(` (the first
+                        // parameter carries the `fn name(` prefix) or the segment
+                        // itself for later parameters.
+                        let nm = nm.rsplit('(').next().unwrap_or(nm).trim();
+                        if !nm.is_empty() && nm.chars().all(|c| c.is_lowercase() || c == '_') {
+                            params.push(nm.to_string());
+                        }
+                    }
+                }
+            }
+            if !params.is_empty() {
+                // De-duplicated: the loop below re-derives the same params on
+                // every iteration, and a duplicated name would double-count
+                // every access it reaches.
+                match binds.iter_mut().find(|(bk, _)| *bk == k) {
+                    Some((_, b)) => {
+                        for p in params {
+                            if !b.iter().any(|x| *x == p) {
+                                b.push(p);
+                            }
+                        }
+                    }
+                    None => binds.push((k, params)),
+                }
+            }
+        }
+        if size(&consumers, &binds) == before {
+            break;
+        }
+    }
+
+    // (4) every METHOD CALL and SLICE on raw text.
+    //
+    // ⚠ Method chains WRAP. `formatted\n    .lines()\n    .any(…)` puts the
+    // receiver and the call on different source lines, and a line-local scan
+    // sees neither — which is exactly how the sharpest plant (reverting a
+    // routed `.any(…)` back to raw) slipped past the first version of this
+    // detector. Each line is therefore joined with the continuation lines that
+    // follow it, so the chain is one string.
+    let logical = |j: usize, end: usize| -> String {
+        let mut out = lines[j].to_string();
+        let mut k = j + 1;
+        while k < end && lines[k].trim_start().starts_with('.') {
+            out.push_str(lines[k].trim_start());
+            k += 1;
+        }
+        out
+    };
+    let mut flagged: Vec<(usize, String, String)> = Vec::new();
+    for (k, b) in &binds {
+        let (i, end) = span(*k);
+        let fname = bounds[*k].0.clone();
+        for j in i..end {
+            if lines[j].trim_start().starts_with('.') {
+                continue; // already folded into the line above
+            }
+            let joined = logical(j, end);
+            let l: &str = &joined;
+            if l.trim_start().starts_with("//") {
+                continue;
+            }
+            for name in b {
+                let mut from = 0usize;
+                while let Some(rel) = l[from..].find(name.as_str()) {
+                    let at = from + rel;
+                    from = at + name.len();
+                    if !ident_at(l, at) {
+                        continue;
+                    }
+                    let rest = &l[at + name.len()..];
+                    if let Some(tail) = rest.strip_prefix('.') {
+                        let m: String =
+                            tail.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                        if !m.is_empty() && tail[m.len()..].starts_with('(') {
+                            flagged.push((j + 1, fname.clone(), m));
+                        }
+                    } else if rest.starts_with('[') {
+                        flagged.push((j + 1, fname.clone(), "[slice]".to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    for (ln, f, m) in &flagged {
+        println!("raw text access: tests/integration.rs:{ln}  fn {f}  .{m}");
+    }
+
+    let unlisted: Vec<String> = flagged
+        .iter()
+        .filter(|(_, f, m)| !ALLOWED.iter().any(|(af, am, _)| af == f && am == m))
+        .map(|(ln, f, m)| format!("  tests/integration.rs:{ln} (fn {f}) — `.{m}`"))
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "raw access to fixture-derived formatter output:\n{}\n\n\
+         A fmt fixture's own HEADER is part of the formatted output, so an \
+         assertion that touches the raw text can be shadowed by a header line \
+         — silently, in both directions. Route it through `fmt_body` / \
+         `fmt_body_line_with` / `fmt_body_contains`. Only add an ALLOWED row \
+         when the access is genuinely header-immune, and say why.",
+        unlisted.join("\n")
+    );
+
+    const EXPECTED_RAW_ACCESSES: usize = 59;
+    assert_eq!(
+        flagged.len(),
+        EXPECTED_RAW_ACCESSES,
+        "the raw-access count moved ({} vs {EXPECTED_RAW_ACCESSES}). UP means a \
+         new assertion touches raw text. DOWN means the access was routed or \
+         deleted — CHECK THAT AT THE SITE before ratcheting: a row that vanishes \
+         after an edit which changed no assertion (a reflow, a rename, a moved \
+         argument) is this lint losing sight of the access, not the access going \
+         away, and ratcheting it away deletes the coverage. Regenerate with:\n  \
+         cargo test --test lints fmt_raw_text_access_is_routed_or_reasoned -- --nocapture",
+        flagged.len()
+    );
+
+    let dead: Vec<String> = ALLOWED
+        .iter()
+        .filter(|(af, am, _)| !flagged.iter().any(|(_, f, m)| f == af && m == am))
+        .map(|(af, am, _)| format!("{af}/.{am}"))
+        .collect();
+    assert!(
+        dead.is_empty(),
+        "allowlist row(s) that no longer excuse anything: {dead:?} — the access \
+         was routed or deleted. Confirm that AT THE SITE (the same edit that \
+         merely hides an access from the scan empties its row), then DELETE the \
+         row; the list is shrink-only."
+    );
+}
+
+/// THE `Block::header_start` WIRING CENSUS — a new suite cannot join without a
+/// probe, and a probe cannot be excluded without a stated reason.
+///
+/// `header_start` is a write-site fact: each caller of `parse_block` /
+/// `parse_block_or_inline_stmt` / `parse_block_body` states which position is
+/// its construct's FIRST line. Nothing downstream can recover it, and a wrong
+/// value is SILENT — the formatter's orphan-pre-close flush simply refuses
+/// every comment written inside that block, which reads as "no comments here".
+///
+/// **This guard exists because the coverage table was a selection three times.**
+/// First `meta while` was said to be guarded by an unwrapped cell; then nine
+/// rows (`for`, `with`, `meta if`, `meta for`, `meta type f()`, both match-arm
+/// positions, `select` arms, closures) had no wrapped probe at all; then
+/// `test`/`bench` were excluded by a FALSE REASON — "the name is a single
+/// token, so it cannot wrap" — which conflates *one token* with *one line*
+/// (Gorget's triple-quoted strings are one token spanning many). Each time,
+/// unwiring a row escaped a real comment with every gate green. A fourth
+/// hand-derived list would be the same artifact again, so the pair of guards
+/// is:
+///
+///   * THIS lint — the wiring sites are censused per enclosing function, so a
+///     NEW suite shows up as a new row and has to be classified;
+///   * `block_probe_dispositions_are_decided` (src/parser/tests.rs) — every
+///     `BLOCK_PROBES` row is either `Wrapped` (checked: its header really does
+///     span lines) or `NotWrappable(reason)` (checked: its header really does
+///     not). What that catches is a CONTRADICTION between a row's label and its
+///     own spelling; it does NOT catch a reason that is false about the
+///     LANGUAGE while the probe is written flat to match — the `test`/`bench`
+///     shape, where a false belief produces a consistent pair. The artifact
+///     that closes that direction is the CELL in `wrapped_header_anchor.gg`,
+///     which fails when the row is unwired. (Stated the same way at
+///     `ProbeKind::NotWrappable`'s own doc, which is the authority.)
+///
+/// The enumeration in `tests/fixtures/fmt_suite_layout/wrapped_header_anchor.gg`
+/// is DERIVED from that table; this row-count pair is what keeps the table
+/// complete.
+///
+/// **Break-and-verify (both RED-verified when this landed):** add a
+/// `parse_block(...)` call in a new parser function ⇒ an unclassified row ⇒
+/// RED; delete a `BLOCK_PROBES` row ⇒ the probe count moves ⇒ RED.
+#[test]
+fn parser_header_start_wiring_census() {
+    // (file, enclosing fn, number of header_start-passing calls). Regenerate:
+    //   cargo test --test lints parser_header_start_wiring_census -- --nocapture
+    const CENSUS: &[(&str, &str, usize)] = &[
+        // REGENERATED FROM THE SCAN, not written by hand — the
+        // hand-written first draft named four functions that do not
+        // exist (`parse_function_def` is `finish_function_def`,
+        // `parse_prefix` is `parse_prefix_inner`) and invented rows for
+        // `parse_match_arm_inner` / `parse_meta_for_match_item`, which
+        // call `parse_arm_body` and are not wiring sites themselves.
+        ("src/parser/expr.rs", "parse_closure", 1),
+        ("src/parser/expr.rs", "parse_prefix_inner", 1),
+        ("src/parser/mod.rs", "finish_function_def", 1),
+        ("src/parser/mod.rs", "parse_arm_body", 1),
+        ("src/parser/mod.rs", "parse_bench_def", 1),
+        ("src/parser/mod.rs", "parse_block", 1),
+        ("src/parser/mod.rs", "parse_block_or_inline_stmt", 1),
+        ("src/parser/mod.rs", "parse_body_or_expr", 1),
+        ("src/parser/mod.rs", "parse_meta_type", 1),
+        ("src/parser/mod.rs", "parse_suite_block", 2),
+        ("src/parser/mod.rs", "parse_test_def", 1),
+        ("src/parser/stmt.rs", "parse_for_stmt", 2),
+        ("src/parser/stmt.rs", "parse_if_stmt", 3),
+        ("src/parser/stmt.rs", "parse_loop_stmt", 1),
+        ("src/parser/stmt.rs", "parse_match_stmt", 1),
+        ("src/parser/stmt.rs", "parse_meta_for_stmt", 1),
+        ("src/parser/stmt.rs", "parse_meta_if_stmt", 3),
+        ("src/parser/stmt.rs", "parse_meta_match_arm_body", 1),
+        ("src/parser/stmt.rs", "parse_meta_while_stmt", 1),
+        ("src/parser/stmt.rs", "parse_named_scope", 1),
+        ("src/parser/stmt.rs", "parse_on_error_stmt", 1),
+        ("src/parser/stmt.rs", "parse_select_stmt", 2),
+        ("src/parser/stmt.rs", "parse_unsafe_stmt", 1),
+        ("src/parser/stmt.rs", "parse_while_stmt", 2),
+        ("src/parser/stmt.rs", "parse_with_stmt", 1),
+    ];
+
+    let needles = [
+        "self.parse_block(",
+        "self.parse_block_or_inline_stmt(",
+        "self.parse_block_body(",
+    ];
+
+    let mut found: Vec<(String, String, usize)> = Vec::new();
+    // READ_DIR, not a hardcoded list. The list was `expr.rs`/`mod.rs`/`stmt.rs`
+    // — 3 of `src/parser/`'s 9 files — which made this lint's own claim ("a NEW
+    // suite cannot join without showing up") true only for the current file
+    // layout. A wiring call planted in `pattern.rs` left the whole suite green.
+    // Same "the enumeration is a selection" shape this lint exists to stop, one
+    // level up.
+    let mut parser_files: Vec<String> = fs::read_dir("src/parser")
+        .expect("cannot read src/parser")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    parser_files.sort();
+    assert!(
+        parser_files.len() >= 8,
+        "only {} file(s) found under src/parser — the scan is reading nothing.",
+        parser_files.len()
+    );
+    for file in &parser_files {
+        let content =
+            fs::read_to_string(file.as_str()).unwrap_or_else(|e| panic!("cannot read {file}: {e}"));
+        let mut current = String::from("<file scope>");
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for line in content.lines() {
+            let t = line.trim_start();
+            if (t.starts_with("fn ") || t.starts_with("pub fn ") || t.starts_with("pub(super) fn ")
+                || t.starts_with("pub(crate) fn "))
+                && line.starts_with("    ")
+            {
+                current = t
+                    .trim_start_matches("pub(super) ")
+                    .trim_start_matches("pub(crate) ")
+                    .trim_start_matches("pub ")
+                    .trim_start_matches("fn ")
+                    .split(['(', '<'])
+                    .next()
+                    .unwrap_or("?")
+                    .to_string();
+            }
+            if t.starts_with("//") {
+                continue;
+            }
+            let n: usize = needles.iter().map(|nd| line.matches(nd).count()).sum();
+            if n == 0 {
+                continue;
+            }
+            // The DEFINITIONS call nothing; only bodies do.
+            match counts.last_mut() {
+                Some((f, c)) if *f == current => *c += n,
+                _ => counts.push((current.clone(), n)),
+            }
+        }
+        // Merge repeats of the same fn (a fn interrupted by a nested item).
+        let mut merged: Vec<(String, usize)> = Vec::new();
+        for (f, c) in counts {
+            match merged.iter_mut().find(|(mf, _)| *mf == f) {
+                Some((_, mc)) => *mc += c,
+                None => merged.push((f, c)),
+            }
+        }
+        for (f, c) in merged {
+            found.push((file.clone(), f, c));
+        }
+    }
+
+    for (file, f, c) in &found {
+        println!("header_start wiring: {file}  fn {f}  x{c}");
+    }
+
+    let mut got: Vec<(String, String, usize)> = found;
+    got.sort();
+    let mut want: Vec<(String, String, usize)> = CENSUS
+        .iter()
+        .map(|(a, b, c)| (a.to_string(), b.to_string(), *c))
+        .collect();
+    want.sort();
+    assert_eq!(
+        got, want,
+        "the `Block::header_start` wiring census changed.\n\nEvery caller states \
+         which position is its construct's FIRST line, and a wrong value is \
+         SILENT — the formatter's orphan flush refuses every comment written \
+         inside that block. A NEW row therefore owes:\n\
+         (1) the right value at the call site (the construct's first line, NOT \
+         the colon — a wrapped header puts the colon on a continuation line \
+         indented at or past the body);\n\
+         (2) a `BLOCK_PROBES` row in src/parser/tests.rs, WRAPPED if any token \
+         in its header can span source lines, else `NotWrappable` with the \
+         reason — which `block_probe_dispositions_are_decided` then holds \
+         against the probe's own spelling;\n\
+         (3) a cell in tests/fixtures/fmt_suite_layout/wrapped_header_anchor.gg \
+         if it is wrappable.\n\n\
+         Regenerate this table with:\n  \
+         cargo test --test lints parser_header_start_wiring_census -- --nocapture"
+    );
+
+    // The probe corpus must not shrink below the wiring it covers. Counting
+    // rows (not matching them 1:1 — several wiring sites are clause siblings of
+    // one construct) keeps this a TRIGGER: a new wiring row forces a decision
+    // above, and a deleted probe row trips here.
+    // 30 = 26 + the four `else:` clauses (statement-`if`, for, select, meta-if)
+    // that were carried inside neighbouring probes and dropped when those were
+    // split; all SEVEN else-body wiring calls now have their own row.
+    const EXPECTED_BLOCK_PROBES_ROWS: usize = 30;
+    let probes = fs::read_to_string("src/parser/tests.rs")
+        .expect("cannot read src/parser/tests.rs");
+    let table = probes
+        .split("const BLOCK_PROBES:")
+        .nth(1)
+        .and_then(|t| t.split("];").next())
+        .expect("BLOCK_PROBES table not found");
+    let rows = table
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("(\"") && (t.ends_with("Wrapped),") || t.contains("NotWrappable("))
+        })
+        .count();
+    assert_eq!(
+        rows, EXPECTED_BLOCK_PROBES_ROWS,
+        "the `BLOCK_PROBES` row count moved ({rows} vs \
+         {EXPECTED_BLOCK_PROBES_ROWS}). A DROP means a construct lost its probe \
+         — the direction that goes silent. Bump with the new row's disposition."
+    );
+}
+
+/// THE ORPHAN-PRE-CLOSE CENSUS. Every `self.emitter.dedent()` in
+/// `src/formatter/mod.rs` is a block CLOSING, and a block that closes without
+/// having claimed the comment written after its last child leaks that comment
+/// outward — to the enclosing scope's next hook, in the worst case to the
+/// module flush at column 0, where it reads as documentation of the NEXT item.
+///
+/// **Shape-detected per row, never a bare count.** A count stays green with a
+/// site missing (that is exactly how a hookless loop shipped once before), so
+/// this lint classifies each row by the EVIDENCE immediately above it and RED's
+/// on any row it cannot classify. The class vocabulary is the design's, not a
+/// list invented here:
+///
+///   * `Routed` — the row closes a statement suite whose body went through
+///     `format_block_stmts`, which carries the flush for the whole family.
+///   * `Container` — struct / enum / trait / equip / extern block: children are
+///     members, not statements, so the container calls the flush itself.
+///   * `NestedItems` — the item-level `meta if` branch bodies, whose flush
+///     lives in the shared `format_nested_items` producer (one per arm).
+///   * `ArmContainer` — match statement / select / meta match / match
+///     EXPRESSION: children are ARMS, so the routed chokepoint is structurally
+///     absent and each calls the flush on its own span.
+///   * `Site13` — the `meta for …:` block INSIDE a match statement. It owns its
+///     own indent/child/dedent, so it needs its own flush anchored on ITS
+///     header; with only the match container's flush its tail is re-parented to
+///     the arms level.
+///   * `ClosureRouting` — the closure body paths, which route through
+///     `format_closure_post_prelude` (the prelude-skipping one cannot delegate
+///     to `format_block_stmts` and takes the flush explicitly).
+///   * `Bracketed` — `format_bracketed_broken_with_comments`, the
+///     collection-literal shape that had the orphan-pre-close POSITION before
+///     the rest of the family did.
+///
+/// The scope is `src/formatter/mod.rs` PLUS an assertion that `doc.rs` still
+/// contains zero `dedent()` calls — so a future one there trips this guard
+/// instead of escaping its scope.
+///
+/// **Break-and-verify, two ways (both RED-verified when this landed):**
+///   1. delete one flush call (e.g. the one in `format_struct`) — that row's
+///      evidence disappears, it classifies as UNKNOWN, RED;
+///   2. add a bare `self.emitter.indent(); … self.emitter.dedent();` pair
+///      anywhere — the new row has no evidence, UNKNOWN, RED.
+/// Restore, green.
+///
+/// ⚠ The three existing hook lints CANNOT see this chokepoint:
+/// `.emit_orphan_comments_before_close(` contains none of the strings they
+/// count. This is their sibling, not a modification of them.
+#[test]
+fn formatter_dedent_close_census() {
+    #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+    enum Class {
+        Routed,
+        Container,
+        NestedItems,
+        ArmContainer,
+        Site13,
+        ClosureRouting,
+        Bracketed,
+        Unknown,
+    }
+    use Class::*;
+
+    /// Expected row count per class. Regenerate with
+    ///   cargo test --test lints formatter_dedent_close_census -- --nocapture
+    const EXPECTED: &[(Class, usize)] = &[
+        (Routed, 30),
+        (Container, 5),
+        (NestedItems, 3),
+        (ArmContainer, 4),
+        (Site13, 1),
+        (ClosureRouting, 2),
+        (Bracketed, 1),
+    ];
+    /// Every `dedent()` in the file is one of the classes above.
+    const EXPECTED_TOTAL: usize = 46;
+
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let lines: Vec<&str> = content.lines().collect();
+
+    // `doc.rs` owns no indentation state today; if it grows a `dedent()` this
+    // census stops covering the file that has it.
+    let doc = fs::read_to_string("src/formatter/doc.rs").expect("cannot read doc.rs");
+    assert_eq!(
+        doc.matches("dedent()").count(),
+        0,
+        "`src/formatter/doc.rs` grew a `dedent()`. This census only scans \
+         `mod.rs`; extend its scope (and classify the new rows) rather than \
+         letting a block close outside the guard."
+    );
+
+    // Classify each `dedent()` by the evidence in the window above it, up to
+    // the matching `indent()` (or 60 lines, whichever comes first).
+    let mut rows: Vec<(usize, String, Class)> = Vec::new();
+    let mut current_fn = String::from("<file scope>");
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        if (t.starts_with("fn ") || t.starts_with("pub fn ")) && line.starts_with("    ") {
+            current_fn = t
+                .trim_start_matches("pub ")
+                .trim_start_matches("fn ")
+                .split(['(', '<'])
+                .next()
+                .unwrap_or("?")
+                .to_string();
+        }
+        if t.starts_with("//") || !line.contains("self.emitter.dedent()") {
+            continue;
+        }
+        let start = i.saturating_sub(60);
+        let mut class = Unknown;
+        for w in (start..i).rev() {
+            let wl = lines[w];
+            let wt = wl.trim_start();
+            if wt.starts_with("//") {
+                continue;
+            }
+            if wl.contains("self.emitter.indent()") {
+                break;
+            }
+            if wl.contains(".emit_orphan_comments_before_close(") {
+                // The ARGUMENT names the anchor, and the anchor names the class.
+                class = if wl.contains("(s.span.start")
+                    || wl.contains("(e.span.start")
+                    || wl.contains("(t.span.start")
+                    || wl.contains("(eb.span.start")
+                {
+                    Container
+                } else if wl.contains("(stmt.span.start") || wl.contains("(expr.span.start") {
+                    ArmContainer
+                } else if wl.contains("(span.start") {
+                    Site13
+                } else {
+                    Unknown
+                };
+                break;
+            }
+            if wl.contains("self.format_nested_items(") {
+                class = NestedItems;
+                break;
+            }
+            if wl.contains("self.format_closure_post_prelude(") {
+                class = ClosureRouting;
+                break;
+            }
+            if wl.contains("self.format_block_stmts(") {
+                class = Routed;
+                break;
+            }
+            if wl.contains("self.emit_comments_before(container_end)") {
+                class = Bracketed;
+                break;
+            }
+        }
+        rows.push((i + 1, current_fn.clone(), class));
+    }
+
+    // Printed so the constants above can be regenerated from the scan itself.
+    for (ln, f, c) in &rows {
+        println!("dedent row: src/formatter/mod.rs:{ln}  fn {f}  {c:?}");
+    }
+
+    let unknown: Vec<String> = rows
+        .iter()
+        .filter(|(_, _, c)| *c == Unknown)
+        .map(|(ln, f, _)| format!("  src/formatter/mod.rs:{ln} (fn {f})"))
+        .collect();
+    assert!(
+        unknown.is_empty(),
+        "UNCLASSIFIED block close(s) — every `dedent()` in the formatter must \
+         be attributable to one of the orphan-pre-close classes, because a \
+         block that closes without claiming its tail comment leaks it \
+         outward:\n{}\n\nIf the new row genuinely closes a block that can hold \
+         an author's tail comment, give it a flush \
+         (`emit_orphan_comments_before_close(<owning construct's first line>, \
+         <block end>)`). If it closes something else, say which class it is and \
+         teach this scan to see it — never widen the scan to swallow it \
+         silently.",
+        unknown.join("\n")
+    );
+
+    assert_eq!(
+        rows.len(),
+        EXPECTED_TOTAL,
+        "the formatter's `dedent()` count moved ({} vs {EXPECTED_TOTAL}). That \
+         is fine — but the per-class table below must move with it, and the new \
+         row needs a class.",
+        rows.len()
+    );
+
+    for (class, want) in EXPECTED {
+        let got = rows.iter().filter(|(_, _, c)| c == class).count();
+        assert_eq!(
+            got, *want,
+            "orphan-pre-close census: {class:?} rows moved ({got} vs {want}). \
+             A DROP is the dangerous direction — it means a block close lost \
+             its flush and its tail comments now escape. Re-derive with \
+             `cargo test --test lints formatter_dedent_close_census -- --nocapture`."
+        );
+    }
+}
+
+/// THE CLAIM-SITE CENSUS. `Formatter::comment_cursor` advances at exactly ONE
+/// place, and every hook that takes a comment off it goes through the one
+/// claim/emit pair.
+///
+/// Why it has to be one place: a trailing comment continued on the lines below
+/// it is ONE logical comment, so whichever hook claims the HEAD must claim the
+/// whole run — otherwise the run splits and its continuation lines end up
+/// documenting whatever follows them. That rule is not enforceable by review
+/// across four hooks; it is enforceable by there being one cursor advance.
+///
+/// **Break-and-verify (both RED-verified when this landed):** add a bare
+/// `self.comment_cursor += 1;` in any hook — the advance count moves and this
+/// fires; add a new caller of `claim_run_at_cursor` without a census row — the
+/// caller count moves and this fires. The needle set covers `-=`,
+/// `mem::replace`/`mem::swap` (via `&mut`) and plain assignment too, so a
+/// bypassing claimer cannot dodge it by moving the cursor some other way.
+#[test]
+fn formatter_comment_claim_site_census() {
+    /// The functions that may claim a comment, and why each does.
+    const CLAIMERS: &[(&str, &str)] = &[
+        ("emit_comments_before", "leading comments before a sibling's start"),
+        ("emit_remaining_comments", "the EOF flush"),
+        ("emit_trailing_comment_after", "a same-source-line trailing comment"),
+        ("claim_header_trailing_comments", "an inline suite's header comment, emitted after its body"),
+        ("emit_orphan_comments_before_close", "the orphan-pre-close flush"),
+    ];
+    /// `comment_cursor += 1` sites — BOTH inside `claim_run_at_cursor` (the
+    /// head, then each continuation).
+    const EXPECTED_CURSOR_ADVANCES: usize = 2;
+
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let lines: Vec<&str> = content.lines().collect();
+
+    let mut advances: Vec<(usize, String)> = Vec::new();
+    let mut claim_calls: Vec<(usize, String)> = Vec::new();
+    let mut current_fn = String::from("<file scope>");
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        if (t.starts_with("fn ") || t.starts_with("pub fn ")) && line.starts_with("    ") {
+            current_fn = t
+                .trim_start_matches("pub ")
+                .trim_start_matches("fn ")
+                .split(['(', '<'])
+                .next()
+                .unwrap_or("?")
+                .to_string();
+        }
+        if t.starts_with("//") {
+            continue;
+        }
+        // ANY mutation of the cursor, not just `+= 1`. `+=` alone would miss a
+        // `-=` rewind (which is the one way the inner-before-outer flush
+        // ordering can break) and a `mem::replace`/`mem::swap`/`&mut` alias,
+        // each of which moves the cursor without ever spelling an increment.
+        // The needle set is the FIELD in any mutating position.
+        let cursor_mutation = ["self.comment_cursor +=", "self.comment_cursor -=",
+                               "self.comment_cursor =", "&mut self.comment_cursor"];
+        if cursor_mutation.iter().any(|n| line.contains(n)) {
+            advances.push((i + 1, current_fn.clone()));
+        }
+        if line.contains("self.claim_run_at_cursor(") {
+            claim_calls.push((i + 1, current_fn.clone()));
+        }
+    }
+
+    let stray: Vec<String> = advances
+        .iter()
+        .filter(|(_, f)| f != "claim_run_at_cursor")
+        .map(|(ln, f)| format!("  src/formatter/mod.rs:{ln} (fn {f})"))
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "`comment_cursor` advanced OUTSIDE `claim_run_at_cursor`:\n{}\n\nA hook \
+         that advances the cursor itself can take a multi-line trailing \
+         comment's HEAD and leave its continuation lines behind, which splits \
+         the run and re-parents its tail. Route the claim through \
+         `claim_run_at_cursor` + `emit_claimed_run` and add a row to CLAIMERS \
+         with the reason this position claims.",
+        stray.join("\n")
+    );
+    assert_eq!(
+        advances.len(),
+        EXPECTED_CURSOR_ADVANCES,
+        "the number of cursor advances inside `claim_run_at_cursor` changed \
+         ({} vs {EXPECTED_CURSOR_ADVANCES}). Expected exactly two: the head, \
+         and each continuation of its run.",
+        advances.len()
+    );
+
+    let mut callers: Vec<String> = claim_calls.iter().map(|(_, f)| f.clone()).collect();
+    callers.sort();
+    callers.dedup();
+    let mut expected: Vec<String> = CLAIMERS.iter().map(|(f, _)| (*f).to_string()).collect();
+    expected.sort();
+    assert_eq!(
+        callers,
+        expected,
+        "the set of comment CLAIM SITES changed.\n\nEvery claimer is listed in \
+         CLAIMERS with the reason it claims; a new cursor-advancing site with \
+         no row is exactly the drift this census exists to catch. Sites found: \
+         {claim_calls:?}"
+    );
+}
+
 #[test]
 fn formatter_child_collection_loop_census() {
     /// Hook state a census row expects.
@@ -12436,11 +13509,17 @@ fn formatter_child_collection_loop_census() {
         // `format_nested_items`, when the nested-item blank preservation
         // landed — four copies of the loop were four chances to omit it, and
         // one of them omitting it is exactly what the snag was. The surviving
-        // `for (cond, items) in &mi.elif_branches` row is the BRANCH walk, not
+        // surviving `mi.elif_branches` row is the BRANCH walk, not
         // a child-collection loop: it emits the `elif` HEADER (with its own
         // leading-comment hook, hence `Leading`, exactly like the statement-level
-        // `format_elif_else_blocks` row above) and delegates the items.
-        ("format_item", "for (cond, items) in &mi.elif_branches {", Leading),
+        // `format_elif_else_blocks` row above) and delegates the items. It is
+        // INDEXED (`enumerate`) because each branch's orphan-flush ceiling is
+        // the NEXT clause's header, which the walk has to look ahead for.
+        (
+            "format_item",
+            "for (bi, (cond, items)) in mi.elif_branches.iter().enumerate() {",
+            Leading,
+        ),
         ("format_item", "for inner in items {", None_),
         ("format_nested_items", "for (i, item) in items.iter().enumerate() {", Both),
         ("format_struct", "for (i, field) in s.fields.iter().enumerate() {", Both),
@@ -13891,23 +14970,69 @@ fn suite_layout_is_read_only_by_the_formatter() {
 /// **Break-and-verify (Core #13, RED-verified 2026-08-11):** flip
 /// `parse_block_or_inline_stmt`'s `SuiteLayout::Inline` to `NextLine` and the
 /// per-variant counts below fire.
+///
+/// **It censuses `Block::header_start` too, in the same rows** (Layering rule 3
+/// — one writer axis, one census). That field is the other thing a `Block`
+/// construction cannot recover afterwards: which source line the owning
+/// construct STARTS on. `span.start` is not a substitute — it is whatever
+/// introducer the parser had in hand, which is the colon at most sites and on
+/// a wrapped header sits on a continuation line indented at or past the body.
+/// `Block::synthetic` carries its own row: it has no author header, so it
+/// writes its own span start, and nothing reads it (the formatter's flush never
+/// reaches a synthesized block).
 #[test]
 fn parser_suite_layout_writer_census() {
-    // (file, NextLine writes, Inline writes, rationale)
-    const CENSUS: &[(&str, usize, usize, &str)] = &[
+    // (file, NextLine writes, Inline writes, header_start writes, rationale)
+    const CENSUS: &[(&str, usize, usize, usize, &str)] = &[
         // `parse_block_body` IS the indented-suite grammar
         // (`NEWLINE INDENT stmt* DEDENT`) and is the sole NextLine writer;
         // `parse_block_or_inline_stmt`'s one-liner path is the Inline one.
-        ("src/parser/mod.rs", 1, 1, "parse_block_body · parse_block_or_inline_stmt"),
+        ("src/parser/mod.rs", 1, 1, 2, "parse_block_body · parse_block_or_inline_stmt"),
         // `on error <stmt>` (colon-less inline) · `meta match` inline arm body.
-        ("src/parser/stmt.rs", 0, 2, "on error inline · meta match inline arm"),
+        ("src/parser/stmt.rs", 0, 2, 2, "on error inline · meta match inline arm"),
         // The three SYNTHETIC wraps: `throw x` and `return x` in expression
         // position, and the expression-bodied destructuring closure. No author
         // wrote a suite at any of them, so emitting one would invent syntax.
-        ("src/parser/expr.rs", 0, 3, "throw wrap · return wrap · closure body wrap"),
+        ("src/parser/expr.rs", 0, 3, 3, "throw wrap · return wrap · closure body wrap"),
+        // `Block::synthetic` — no author spelling and no author header.
+        ("src/parser/ast.rs", 1, 0, 1, "Block::synthetic"),
+        // Not a writer: the probe collector COPIES the field into its own
+        // struct, which the scan cannot tell from an init. Kept as an
+        // explicit row so the count is decided rather than excused.
+        ("src/parser/tests.rs", 0, 0, 1, "BlockProbe field copy in the probe collector"),
     ];
 
-    for (path, want_next, want_inline, rationale) in CENSUS {
+    // EVERY `src/parser/*.rs`, read from the directory — a file absent from
+    // CENSUS must have ZERO writes, which is what makes the table total. The
+    // hardcoded 4-file list this replaces let a raw `Block` literal planted in
+    // `pattern.rs` pass the whole suite: the same "the enumeration is a
+    // selection" shape the censuses exist to stop, one level up.
+    let mut parser_files: Vec<String> = fs::read_dir("src/parser")
+        .expect("cannot read src/parser")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    parser_files.sort();
+    assert!(
+        parser_files.len() >= 8,
+        "only {} file(s) found under src/parser — the scan is reading nothing.",
+        parser_files.len()
+    );
+    let rows: Vec<(&str, usize, usize, usize, &str)> = parser_files
+        .iter()
+        .map(|f| {
+            CENSUS
+                .iter()
+                .find(|(p, ..)| p == f)
+                .copied()
+                // A file with no CENSUS row is asserted to write NOTHING, so a
+                // new writer anywhere under src/parser trips this.
+                .unwrap_or((f.as_str(), 0, 0, 0, "no row: this file writes neither field"))
+        })
+        .collect();
+
+    for (path, want_next, want_inline, want_header, rationale) in &rows {
         let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
         // Count WRITES only — a `SuiteLayout::X` in a `==` comparison is a
         // read, and the parser has none, but be explicit rather than lucky.
@@ -13921,14 +15046,23 @@ fn parser_suite_layout_writer_census() {
             .filter(|l| !l.trim_start().starts_with("//") && !l.contains("=="))
             .filter(|l| l.contains("SuiteLayout::Inline"))
             .count();
+        // A field INIT (`header_start,` / `header_start: <expr>,`), never the
+        // parameter declarations (`header_start: usize`) or the prose.
+        let got_header = content
+            .lines()
+            .map(|l| l.trim())
+            .filter(|t| !t.starts_with("//"))
+            .filter(|t| t.starts_with("header_start") && t.ends_with(',') && !t.contains("usize"))
+            .count();
         assert_eq!(
-            (got_next, got_inline),
-            (*want_next, *want_inline),
-            "R41 T-FMT-C `SuiteLayout` writer census changed in `{path}` \
-             (expected sites: {rationale}).\n\n\
+            (got_next, got_inline, got_header),
+            (*want_next, *want_inline, *want_header),
+            "R41 T-FMT-C `SuiteLayout` / `Block::header_start` writer census \
+             changed in `{path}` (expected sites: {rationale}).\n\n\
              A new `Block` construction in the parser must decide, at the only \
              layer that can: did the author indent this suite, or write it on \
-             the header's line? A construction outside the parser has no author \
+             the header's line? And WHERE does the owning construct's first \
+             line begin? A construction outside the parser has no author \
              spelling at all and goes through `Block::synthetic`.\n\n\
              Bump the row with the new site's rationale."
         );

@@ -1,0 +1,80 @@
+# ==== ORPHAN-PRE-CLOSE · ARM containers (AXIS A)
+#
+# These four containers hold ARMS, not statements, so the routed statement-body
+# chokepoint is structurally absent from them and each needs its own flush.
+#
+# TWO CELLS PER CONTAINER, because one column samples one claim path:
+#   * a BODY-INDENT tail — claimed by the ARM's own flush and stays in the arm;
+#   * an ARMS-INDENT tail — refused by the arm's column test (its `#` is not
+#     indented past the arm's header) and claimed by the CONTAINER's flush.
+# A cell named for the container that samples only one of them would pass with
+# half the mechanism missing.
+#
+# CONTAINERS: match statement · select · meta match · match EXPRESSION
+# PLUS SITE 13 — the `meta for …:` block INSIDE a match statement. It owns its
+# own indent, child and dedent, so it gets its own flush: with only the match
+# container's flush its tail is accepted at the ARMS level, one block out from
+# where it was written. Both its cells appear, including the variant where the
+# `meta for` is the match's LAST arm.
+#
+# RED, observed on the pre-fix build: every marker escaped to column 0 or to
+# the enclosing function's indent.
+
+void arm_containers(int x):
+    match x:
+        case 1:
+            print(1)
+            # body-indent tail in a match-statement arm
+        # arms-indent tail in the match statement
+    select:
+        case int v = chan_a().recv():
+            print(v)
+            # body-indent tail in a select arm
+        # arms-indent tail in the select
+    print(x)
+
+Chan[int] chan_a():
+    return Chan[int](1)
+
+void meta_arm_containers[T]():
+    meta match typename(T):
+        case "int":
+            print(1)
+            # body-indent tail in a meta-match arm
+        # arms-indent tail in the meta match
+
+int match_expression(int x):
+    int r = match x:
+        case 1:
+            10
+            # body-indent tail in a match-EXPRESSION arm
+        else:
+            20
+        # arms-indent tail in the match expression
+    return r
+
+void site_13_middle(int x):
+    match x:
+        meta for k in 0..1:
+            case k:
+                print(k)
+                # body-indent tail in a meta-for match item
+            # header-indent tail in the meta-for match item
+        case 9:
+            print(9)
+
+void site_13_last(int x):
+    match x:
+        case 9:
+            print(9)
+        meta for k in 0..1:
+            case k:
+                print(k)
+            # header-indent tail in a LAST meta-for match item
+
+void main():
+    arm_containers(1)
+    meta_arm_containers[int]()
+    print(match_expression(1))
+    site_13_middle(0)
+    site_13_last(0)

@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use crate::lexer::token::{StringKind, StringLiteral, StringSegment, Token};
 use crate::parser::ast::*;
+use crate::parser::comments::CommentTable;
 use crate::span::{Span, Spanned};
 
 // ══════════════════════════════════════════════════════════════
@@ -170,6 +171,71 @@ impl Emitter {
             self.buf.push_str(s);
         }
     }
+
+    /// Add one CONTINUATION line of a multi-line trailing comment: a fresh
+    /// output line carrying `pad` spaces then `text`, spliced ahead of the
+    /// buffer's trailing newline exactly like [`inject_before_newline`].
+    ///
+    /// Returns the buffer offset of the pad's FIRST space — the run the
+    /// aligner may later re-space when it moves the whole comment run to its
+    /// group's column.
+    ///
+    /// The line break belongs here rather than at the caller: `'\n'` is the
+    /// emitter's to write, and `formatter_no_raw_newline_outside_emitter`
+    /// enforces it.
+    fn inject_continuation_line(&mut self, pad: usize, text: &str) -> usize {
+        let line = Self::continuation_line(pad, text);
+        // The pad starts one byte past the `\n` this line begins with. When
+        // the buffer ends in `\n` the injection pops it first, so the whole
+        // spliced run starts at `len - 1`; otherwise it appends at `len`.
+        let line_nl = if self.buf.ends_with('\n') {
+            self.buf.len() - 1
+        } else {
+            self.buf.len()
+        };
+        self.inject_before_newline(&line);
+        line_nl + 1
+    }
+
+    /// The same continuation line, spliced at a RECORDED position rather than
+    /// at the buffer's tail — the deferred header-comment path, whose target
+    /// line stopped being the last one while the body rendered. Returns the
+    /// number of bytes inserted (the caller shifts the offsets it invalidated).
+    fn insert_continuation_line_at(&mut self, at: usize, pad: usize, text: &str) -> usize {
+        let line = Self::continuation_line(pad, text);
+        self.insert_at(at, &line);
+        line.len()
+    }
+
+    /// `\n` + `pad` spaces + `text`. The ONE place a continuation line's bytes
+    /// are built, so the line break stays the emitter's to write.
+    fn continuation_line(pad: usize, text: &str) -> String {
+        let mut line = String::with_capacity(1 + pad + text.len());
+        line.push('\n');
+        for _ in 0..pad {
+            line.push(' ');
+        }
+        line.push_str(text);
+        line
+    }
+
+    /// Splice `s` into the buffer at `at`, an offset the caller recorded
+    /// earlier. Used by the deferred header-comment path, whose target line is
+    /// no longer the buffer's last one by the time the comment is emitted.
+    fn insert_at(&mut self, at: usize, s: &str) {
+        self.buf.insert_str(at, s);
+    }
+
+    /// End of the output LINE containing `at` — the position a deferred
+    /// header comment is spliced to, resolved at EMISSION time from an anchor
+    /// recorded at CLAIM time.
+    fn line_end_from(&self, at: usize) -> usize {
+        let at = at.min(self.buf.len());
+        self.buf[at..]
+            .find('\n')
+            .map(|off| at + off)
+            .unwrap_or(self.buf.len())
+    }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -194,6 +260,55 @@ struct TrailingAlign {
     /// True iff this is a header-line trailing comment (`struct B:  # hdr`,
     /// `if flags:  # b`). Header comments never join a body group.
     is_header: bool,
+    /// Width of the rewritable space run that starts at `buf_offset`.
+    ///
+    /// `TRAILING_COMMENT_GAP` for a head — the gap the writer injected between
+    /// the code and the `#`. For a CONTINUATION line it is the WHOLE leading
+    /// pad, because the line has no LHS of its own: its `#` column is entirely
+    /// made of that pad. The mutating half splices over exactly this many
+    /// bytes, so writer and rewriter cannot disagree per entry.
+    gap_len: usize,
+    /// True iff this entry is a continuation line of the head recorded before
+    /// it. A continuation carries no LHS, never drives its group's column, and
+    /// is rewritten to whatever column its head lands at.
+    is_continuation: bool,
+}
+
+/// A claimed comment plus the continuation lines that belong to it — the unit
+/// every comment hook takes off the cursor. See
+/// [`Formatter::claim_run_at_cursor`].
+struct RunClaim {
+    head: String,
+    /// The head's continuation lines, in source order. Empty for an ordinary
+    /// single-line comment, which is the overwhelmingly common case.
+    conts: Vec<String>,
+    /// SOURCE offset of the head's `#` — the blank-ABOVE probe position.
+    head_start: usize,
+    /// SOURCE end of the run's LAST line — the blank-BELOW probe position.
+    last_end: usize,
+}
+
+/// What [`Formatter::claim_header_trailing_comments`] took off the cursor: the
+/// claimed runs plus the buffer position that identifies the HEADER's output
+/// line, recorded at claim time and resolved to that line's end at emission.
+struct HeaderClaim {
+    runs: Vec<RunClaim>,
+    anchor: usize,
+}
+
+/// Where [`Formatter::emit_claimed_run`] puts a claimed run.
+#[derive(Clone, Copy)]
+enum EmitPos {
+    /// Each line on its own output line at the emitter's current indent — the
+    /// leading-comment and EOF flushes, and the orphan-pre-close flush.
+    OwnLine,
+    /// The head is injected onto the buffer's CURRENT last line after the
+    /// canonical gap; continuations follow on their own lines under its `#`.
+    Inline { is_header: bool },
+    /// Like `Inline`, but onto the output line containing `anchor` — a
+    /// position recorded when the comment was CLAIMED, because the body that
+    /// follows the header renders in between and may itself end the line.
+    AtAnchor { anchor: usize, is_header: bool },
 }
 
 /// Column geometry derived for one recorded entry from the EMITTED buffer.
@@ -204,6 +319,9 @@ struct AlignGeom {
     lhs_width: usize,
     comment_len: usize,
     is_header: bool,
+    /// Indices (into the entry list) of the continuation lines belonging to
+    /// this head — they move to whatever column the head lands at.
+    conts: Vec<usize>,
 }
 
 /// Owner-ratified alignment constants (FMT CANON PAIR). Column =
@@ -227,10 +345,21 @@ fn round_up_to_stride(x: usize) -> usize {
 
 /// Pure planning half of the trailing-comment aligner: given the emitted
 /// buffer and the recorded entries (in buf order), return the gap rewrites
-/// `(buf_offset, new_gap_len)` to apply, sorted LAST→FIRST so earlier
-/// offsets stay valid as each is spliced in. Reads only `&str` + typed
-/// entries so the mutating half can borrow `buf` mutably afterward.
-fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usize)> {
+/// `(buf_offset, old_gap_len, new_gap_len)` to apply, sorted LAST→FIRST so
+/// earlier offsets stay valid as each is spliced in. Reads only `&str` +
+/// typed entries so the mutating half can borrow `buf` mutably afterward.
+///
+/// ⚠ **Entries MUST be in increasing `buf_offset` order.** The single walk
+/// below advances a scan cursor monotonically, so an out-of-order entry would
+/// silently take the previous entry's line geometry. Emission order gives the
+/// invariant for free everywhere except the one path that injects BACK into an
+/// earlier line (`EmitPos::AtAnchor`), which re-sorts itself in — see
+/// `record_trailing_align`.
+fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usize, usize)> {
+    debug_assert!(
+        entries.windows(2).all(|w| w[0].buf_offset <= w[1].buf_offset),
+        "plan_trailing_aligns requires entries in buffer order"
+    );
     if entries.len() < 2 {
         return Vec::new();
     }
@@ -239,17 +368,30 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
     // Entries are recorded in emission order → `buf_offset` strictly
     // increasing. Walk the buffer once, deriving each entry's output line
     // (newline count), line start, indent width, and LHS width.
+    //
+    // A CONTINUATION entry is not a geometry of its own: it is folded into the
+    // head recorded before it, whose column it follows. Only its output LINE
+    // is kept, because that is what the head's group-adjacency test measures
+    // from.
     let mut geoms: Vec<AlignGeom> = Vec::with_capacity(entries.len());
+    let mut cont_line: Vec<usize> = vec![0; entries.len()];
     let mut scan = 0usize;
     let mut nl_count = 0usize;
     let mut line_start = 0usize;
-    for e in entries {
+    for (ei, e) in entries.iter().enumerate() {
         while scan < e.buf_offset && scan < bytes.len() {
             if bytes[scan] == b'\n' {
                 nl_count += 1;
                 line_start = scan + 1;
             }
             scan += 1;
+        }
+        if e.is_continuation {
+            cont_line[ei] = nl_count;
+            if let Some(head) = geoms.last_mut() {
+                head.conts.push(ei);
+            }
+            continue;
         }
         // Indent width = leading spaces on this output line (the emitter
         // writes exactly `indent*4` spaces before content).
@@ -273,6 +415,7 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
             lhs_width,
             comment_len: e.comment_len,
             is_header: e.is_header,
+            conts: Vec::new(),
         });
     }
 
@@ -298,6 +441,13 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
     // on any interior blank / standalone-comment / no-trailing-comment line
     // falls out for free — such a line carries no entry, so the output-line
     // delta jumps ≥ 2.
+    //
+    // A head's CONTINUATION lines sit between it and the next member, so
+    // adjacency is measured from the run's LAST line: a multi-line trailing
+    // comment is one logical comment and must not split the alignment group.
+    let last_line = |g: &AlignGeom| -> usize {
+        g.conts.last().map(|&i| cont_line[i]).unwrap_or(g.output_line)
+    };
     let mut groups: Vec<Vec<AlignGeom>> = Vec::new();
     for g in deduped {
         let start_new = match groups.last().and_then(|grp| grp.last()) {
@@ -305,7 +455,7 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
             Some(prev) => {
                 prev.is_header
                     || g.is_header
-                    || g.output_line != prev.output_line + 1
+                    || g.output_line != last_line(prev) + 1
                     || g.indent_width != prev.indent_width
             }
         };
@@ -316,7 +466,7 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
         }
     }
 
-    let mut rewrites: Vec<(usize, usize)> = Vec::new();
+    let mut rewrites: Vec<(usize, usize, usize)> = Vec::new();
     for group in &groups {
         if group.len() < 2 {
             continue;
@@ -392,7 +542,20 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
             let g = &group[i];
             // `align_col ≥ max_lhs + MIN_GAP ≥ lhs_width + MIN_GAP`, so the
             // new gap is always ≥ MIN_GAP.
-            rewrites.push((g.buf_offset, align_col - g.lhs_width));
+            rewrites.push((g.buf_offset, TRAILING_COMMENT_GAP, align_col - g.lhs_width));
+            // The head's continuation lines move with its `#`. A continuation
+            // carries no LHS, so its whole leading pad becomes the head's
+            // final `#` column. Continuations of an EXCLUDED head (one the
+            // budget guard dropped) or of a singleton group are not listed
+            // here and keep the natural pad the writer gave them — which is
+            // already the head's own `#` column.
+            for &ci in &g.conts {
+                rewrites.push((
+                    entries[ci].buf_offset,
+                    entries[ci].gap_len,
+                    indent_width + align_col,
+                ));
+            }
         }
     }
 
@@ -487,8 +650,20 @@ struct ComprehensionReserves {
 
 pub struct Formatter {
     emitter: Emitter,
-    comments: Vec<Spanned<String>>,
+    /// The parser's typed comment sideband. Every attachment fact this
+    /// formatter needs — where the `#` is, its column, whether code precedes
+    /// it, whether it continues the comment above — is READ from here, never
+    /// re-derived by scanning `source` for a newline.
+    comments: CommentTable,
+    /// Forward-only cursor into `comments`. It advances at exactly ONE place,
+    /// [`Formatter::claim_run_at_cursor`], so "claim a head ⇒ claim its whole
+    /// run" cannot be bypassed by a new claimer.
     comment_cursor: usize,
+    /// Where `comment_cursor` stood at the previous orphan-pre-close flush.
+    /// Read only by that flush's `debug_assert`, which is how the
+    /// inner-before-outer ordering (an outer flush must never see a comment an
+    /// inner block claimed) is CHECKED rather than merely stated.
+    last_flush_cursor: usize,
     /// Sideband recorded at the `emit_trailing_comment_after` chokepoint:
     /// one entry per injected trailing comment, consumed by the
     /// `align_trailing_comments` post-pass (owner-directed R40 alignment).
@@ -516,11 +691,12 @@ pub struct Formatter {
 }
 
 impl Formatter {
-    pub fn new(comments: Vec<Spanned<String>>, source: Rc<str>) -> Self {
+    pub fn new(comments: CommentTable, source: Rc<str>) -> Self {
         Self {
             emitter: Emitter::new(),
             comments,
             comment_cursor: 0,
+            last_flush_cursor: 0,
             trailing_aligns: Vec::new(),
             source,
             tail_reserve: 0,
@@ -803,7 +979,7 @@ impl Formatter {
         // inside a broken multi-line collection from reverting to decimal
         // (gorget-js snag #15f). Comment interleaving stays inert because
         // `comments` is empty regardless of source content.
-        let mut fmt = Formatter::new(vec![], self.source.clone());
+        let mut fmt = Formatter::new(CommentTable::empty(), self.source.clone());
         fmt.tail_reserve = reserve;
         fmt.budget = budget;
         fmt.emitter.indent = base_indent;
@@ -877,16 +1053,14 @@ impl Formatter {
     /// sample in the scout's first prototype).
     fn emit_comments_before(&mut self, pos: usize) {
         while self.comment_cursor < self.comments.len() {
-            if self.comments[self.comment_cursor].span.start >= pos {
+            if self.comments[self.comment_cursor].hash_pos() >= pos {
                 break;
             }
-            let c_end = self.comments[self.comment_cursor].span.end;
-            self.emitter.write(&self.comments[self.comment_cursor].node);
-            self.emitter.newline();
-            self.comment_cursor += 1;
-            if self.blank_line_follows(c_end) {
-                self.emitter.blank_line();
-            }
+            // CLAIM SITE 1 of 5 — leading comments. Claiming the run keeps a
+            // head and its continuation lines together even when `pos` falls
+            // between them.
+            let claim = self.claim_run_at_cursor();
+            self.emit_claimed_run(claim, EmitPos::OwnLine);
         }
     }
 
@@ -901,19 +1075,342 @@ impl Formatter {
     fn emit_remaining_comments(&mut self) {
         let mut first = true;
         while self.comment_cursor < self.comments.len() {
-            let c_start = self.comments[self.comment_cursor].span.start;
-            let c_end = self.comments[self.comment_cursor].span.end;
+            let c_start = self.comments[self.comment_cursor].hash_pos();
             if first {
                 first = false;
                 if self.blank_line_directly_above(c_start) {
                     self.emitter.blank_line();
                 }
             }
-            self.emitter.write(&self.comments[self.comment_cursor].node);
-            self.emitter.newline();
+            // CLAIM SITE 2 of 5 — the EOF flush.
+            let claim = self.claim_run_at_cursor();
+            self.emit_claimed_run(claim, EmitPos::OwnLine);
+        }
+    }
+
+    // ── The claiming chokepoint ─────────────────────────────
+    //
+    // A trailing comment continued on the lines below it is ONE logical
+    // comment (`CommentTable`'s `continues`), so whichever hook claims the
+    // HEAD must claim the whole run — otherwise the run splits and the
+    // continuation lines document whatever follows them. That rule lives in
+    // exactly one pair of functions, and `comment_cursor` advances in exactly
+    // one of them, so a new claimer cannot take a head and leave its tail.
+    //
+    // `formatter_comment_claim_site_census` (tests/lints.rs) pins the set of
+    // callers with a reason per site; an unattributed cursor advance is RED.
+
+    /// A claimed comment: the head plus the continuation lines that belong to
+    /// it. Produced ONLY by [`Formatter::claim_run_at_cursor`].
+    ///
+    /// Carries the two SOURCE positions its emitter needs for blank fidelity —
+    /// the head's start (the blank ABOVE the run) and the last member's end
+    /// (the blank BELOW it). The book: "a blank above or below a comment, or
+    /// between two comments, is a deliberate break and is kept."
+    fn claim_run_at_cursor(&mut self) -> RunClaim {
+        debug_assert!(self.comment_cursor < self.comments.len());
+        let head_idx = self.comment_cursor;
+        let head_entry = &self.comments[head_idx];
+        let head_start = head_entry.hash_pos();
+        let head = head_entry.text.clone();
+        let mut last_end = head_entry.span.end;
+        // THE ONE cursor advance.
+        self.comment_cursor += 1;
+        let mut conts = Vec::new();
+        while self.comment_cursor < self.comments.len()
+            && self.comments[self.comment_cursor].continues == Some(head_idx)
+        {
+            let e = &self.comments[self.comment_cursor];
+            conts.push(e.text.clone());
+            last_end = e.span.end;
+            // THE ONE cursor advance (same statement, continuation half).
             self.comment_cursor += 1;
-            if self.blank_line_follows(c_end) {
-                self.emitter.blank_line();
+        }
+        RunClaim {
+            head,
+            conts,
+            head_start,
+            last_end,
+        }
+    }
+
+    /// Emit a claimed run at the given position.
+    ///
+    /// The three positions are what the four claim sites actually need: two
+    /// emit standalone lines, one injects onto the line the buffer is
+    /// currently on, and one injects onto a line recorded EARLIER (the inline
+    /// suite, whose body renders between claim and emission).
+    ///
+    /// A run's continuation lines are ALWAYS emitted on their own lines, never
+    /// collapsed onto the head's (`# one  # two` re-lexes as a single comment
+    /// token, so the collapse is silent and idempotent).
+    fn emit_claimed_run(&mut self, claim: RunClaim, at: EmitPos) {
+        // Set by the `AtAnchor` arm: true iff the splice landed at the end of
+        // the buffer, i.e. the construct it belongs to is finished.
+        let mut spliced_to_end = false;
+        match at {
+            EmitPos::OwnLine => {
+                self.emitter.write(&claim.head);
+                self.emitter.newline();
+                for cont in &claim.conts {
+                    self.emitter.write(cont);
+                    self.emitter.newline();
+                }
+            }
+            EmitPos::Inline { is_header } => {
+                let mut inlined = String::with_capacity(claim.head.len() + TRAILING_COMMENT_GAP);
+                for _ in 0..TRAILING_COMMENT_GAP {
+                    inlined.push(' ');
+                }
+                inlined.push_str(&claim.head);
+                // Record the gap-start for the aligner BEFORE the injection.
+                // The buffer currently ends `...LHS\n`; `inject_before_newline`
+                // pops that `\n`, so the first gap space lands where the `\n`
+                // sits now (`buf.len() - 1`). If the buffer does NOT end in
+                // `\n` (rare — the sibling emit didn't newline-terminate), the
+                // injection appends, so the gap starts at `buf.len()`.
+                let buf_offset = if self.emitter.buf.ends_with('\n') {
+                    self.emitter.buf.len() - 1
+                } else {
+                    self.emitter.buf.len()
+                };
+                self.emitter.inject_before_newline(&inlined);
+                self.record_trailing_align(TrailingAlign {
+                    buf_offset,
+                    comment_len: claim.head.chars().count(),
+                    is_header,
+                    gap_len: TRAILING_COMMENT_GAP,
+                    is_continuation: false,
+                });
+                self.emit_continuation_lines(buf_offset, TRAILING_COMMENT_GAP, &claim.conts);
+            }
+            EmitPos::AtAnchor { anchor, is_header } => {
+                // The header's own line, resolved NOW: at claim time the body
+                // had not been rendered, and on a multi-line inline body it is
+                // the body that owns the buffer's last line.
+                let mut at = self.emitter.line_end_from(anchor);
+                let mut spliced = String::with_capacity(claim.head.len() + TRAILING_COMMENT_GAP);
+                for _ in 0..TRAILING_COMMENT_GAP {
+                    spliced.push(' ');
+                }
+                spliced.push_str(&claim.head);
+                let head_offset = at;
+                self.emitter.insert_at(at, &spliced);
+                self.shift_trailing_aligns_from(at, spliced.len());
+                self.record_trailing_align(TrailingAlign {
+                    buf_offset: head_offset,
+                    comment_len: claim.head.chars().count(),
+                    is_header,
+                    gap_len: TRAILING_COMMENT_GAP,
+                    is_continuation: false,
+                });
+                at += spliced.len();
+                // Continuations follow on their own lines, under the head's
+                // `#`, still spliced at the recorded position.
+                let head_col = self.emitted_hash_col(head_offset, TRAILING_COMMENT_GAP);
+                for cont in &claim.conts {
+                    let written = self.emitter.insert_continuation_line_at(at, head_col, cont);
+                    self.shift_trailing_aligns_from(at, written);
+                    self.record_trailing_align(TrailingAlign {
+                        buf_offset: at + 1,
+                        comment_len: cont.chars().count(),
+                        is_header: false,
+                        gap_len: head_col,
+                        is_continuation: true,
+                    });
+                    at += written;
+                }
+                // Whether this splice ended the construct — see
+                // `owns_blank_below` below.
+                spliced_to_end = self.emitter.buf[at..].trim_end_matches('\n').is_empty();
+            }
+        }
+        // Blank fidelity: an author blank directly BELOW the run is
+        // paragraphing and survives. Asked ONCE, of the run's LAST member — by
+        // construction no blank can sit inside a run.
+        //
+        // For an INLINE head with no continuations the blank below is already
+        // owned by the sibling loop's `has_blank_line_between`, which walks up
+        // from the next sibling and finds the head's own CODE line. Add
+        // continuation lines and that walk stops on a comment line instead and
+        // reports "no blank" — so the run's emitter owns the cell exactly when
+        // the run has a tail. (`blank_line()` is a no-op when the buffer is
+        // already blank-terminated, so the two never double-count.)
+        //
+        // `AtAnchor` owns it under the same rule PLUS one more condition: the
+        // splice must have ended the construct. When the body continues below
+        // the spliced run there is no position in the output that corresponds
+        // to "below the run" — the author's blank sat between the header's
+        // comment and a body that now precedes it — so nothing is emitted
+        // rather than something in the wrong place.
+        let owns_blank_below = match at {
+            EmitPos::OwnLine => true,
+            EmitPos::Inline { .. } => !claim.conts.is_empty(),
+            EmitPos::AtAnchor { .. } => !claim.conts.is_empty() && spliced_to_end,
+        };
+        if owns_blank_below && self.blank_line_follows(claim.last_end) {
+            self.emitter.blank_line();
+        }
+    }
+
+    /// Emit a run's continuation lines under a head whose `#` is at the
+    /// buffer offset `head_gap_offset` (+ `head_gap_len` for the gap it sits
+    /// behind). The column is derived from the head's TYPED record, never by
+    /// searching the emitted buffer for a `#` — a head whose own TEXT contains
+    /// a `#` (`# see #42`) would mis-column its run and break idempotence.
+    fn emit_continuation_lines(
+        &mut self,
+        head_gap_offset: usize,
+        head_gap_len: usize,
+        conts: &[String],
+    ) {
+        if conts.is_empty() {
+            return;
+        }
+        let head_col = self.emitted_hash_col(head_gap_offset, head_gap_len);
+        for cont in conts {
+            let buf_offset = self.emitter.inject_continuation_line(head_col, cont);
+            self.record_trailing_align(TrailingAlign {
+                buf_offset,
+                comment_len: cont.chars().count(),
+                is_header: false,
+                gap_len: head_col,
+                is_continuation: true,
+            });
+        }
+    }
+
+    /// The CHARACTER column at which a trailing comment's `#` was emitted,
+    /// from the typed record of its gap: the gap starts at `gap_offset` and is
+    /// `gap_len` wide, so the `#` sits that far past the line start.
+    ///
+    /// ⚠ Unit trap: `gap_offset` is a BYTE offset and the answer is a
+    /// character column, so the prefix is measured with `chars().count()` —
+    /// the same byte/char distinction `plan_trailing_aligns` makes for its LHS
+    /// widths.
+    fn emitted_hash_col(&self, gap_offset: usize, gap_len: usize) -> usize {
+        let buf = &self.emitter.buf;
+        let gap_offset = gap_offset.min(buf.len());
+        let line_start = buf[..gap_offset].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        buf[line_start..gap_offset].chars().count() + gap_len
+    }
+
+    /// Record an aligner entry, keeping `trailing_aligns` in BUFFER order.
+    ///
+    /// Emission order gives that for free — except on the deferred
+    /// header-comment path, which splices BACK into an earlier line after
+    /// later entries have already been recorded. `plan_trailing_aligns` walks
+    /// its scan cursor monotonically and would silently mis-attribute an
+    /// out-of-order entry, so the insert is sorted rather than pushed.
+    fn record_trailing_align(&mut self, entry: TrailingAlign) {
+        let at = self
+            .trailing_aligns
+            .partition_point(|e| e.buf_offset <= entry.buf_offset);
+        self.trailing_aligns.insert(at, entry);
+    }
+
+    /// THE ORPHAN-PRE-CLOSE FLUSH — the shared chokepoint for a comment
+    /// written after a block's LAST child, called immediately before the
+    /// block's `dedent()`.
+    ///
+    /// Such a comment leads no next child and trails no previous one, so no
+    /// sibling hook claims it and it falls out to whatever hook fires next —
+    /// in the worst case the module-level flush at column 0, which reads as
+    /// "this documents the NEXT item". This flush claims it at the still-open
+    /// body indent instead.
+    ///
+    /// **Membership is the language's own layout rule, read from typed
+    /// metadata:** an own-line comment whose `#` column is STRICTLY GREATER
+    /// than the indent of the block's HEADER line, and whose `#` starts before
+    /// the block's recorded end, was written inside the block.
+    ///
+    /// Three load-bearing properties:
+    ///
+    ///  * **COLUMN decides, not the span.** A block's `span.end` is its DEDENT
+    ///    token, whose span reaches into the NEXT code line — so a span
+    ///    ceiling alone drags a column-0 comment written for the next item
+    ///    into the closing block. The negative cells in the fixture net pin
+    ///    exactly that.
+    ///  * **It claims a PREFIX and stops.** `comment_cursor` is forward-only,
+    ///    so the first comment failing either test must `break`; skipping one
+    ///    and continuing would emit the rest out of order.
+    ///  * **INNER blocks flush before OUTER containers.** Emission order gives
+    ///    this for free (an inner `dedent()` precedes its outer one), and every
+    ///    nested flush site depends on it: the forward-only prefix claim then
+    ///    guarantees an outer flush never sees a comment an inner one owns.
+    ///    The `debug_assert` below is that invariant's guard.
+    ///
+    /// `header_start` is any byte on the OWNING CONSTRUCT's FIRST source line
+    /// — for statement suites the typed `Block::header_start` field, for the
+    /// container/arm families the node's own span start. Not the block's
+    /// `span.start`, which is the COLON: on a wrapped header the colon sits on
+    /// a continuation line indented at or past the body, and the column test
+    /// would then refuse everything.
+    ///
+    /// A run's continuation lines never reach here: they belong to their head
+    /// and are claimed with it at the claiming chokepoint
+    /// (`claim_run_at_cursor`), whose call-site census is the guard.
+    fn emit_orphan_comments_before_close(&mut self, header_start: usize, block_end: usize) {
+        // The inner-before-outer ordering, checked rather than asserted in
+        // prose: every flush must see the cursor at or past where the previous
+        // one left it. A rewind is the one way an outer flush could re-emit a
+        // comment an inner block already claimed.
+        debug_assert!(
+            self.comment_cursor >= self.last_flush_cursor,
+            "the comment cursor REWOUND between flushes ({} -> {}); an outer \
+             flush can now re-emit a comment an inner block already claimed",
+            self.last_flush_cursor,
+            self.comment_cursor,
+        );
+        self.last_flush_cursor = self.comment_cursor;
+        let header_col = self.line_indent_of(header_start);
+        let mut first = true;
+        while self.comment_cursor < self.comments.len() {
+            let c = &self.comments[self.comment_cursor];
+            if c.hash_pos() >= block_end || !c.is_own_line() || c.hash_col <= header_col {
+                break;
+            }
+            // CLAIM SITE 5 of 5 — the orphan-pre-close flush.
+            let claim = self.claim_run_at_cursor();
+            // Same blank-awareness as `emit_remaining_comments`: an author
+            // blank ABOVE the orphan run is paragraphing and survives.
+            if first {
+                first = false;
+                if self.blank_line_directly_above(claim.head_start) {
+                    self.emitter.blank_line();
+                }
+            }
+            self.emit_claimed_run(claim, EmitPos::OwnLine);
+        }
+    }
+
+    /// Character count of the leading whitespace on the source line containing
+    /// `pos` — the line's INDENT, not the column of `pos` itself (a container
+    /// header may carry `public ` before its keyword and still be at indent 0,
+    /// and a mid-line anchor is entirely normal).
+    fn line_indent_of(&self, pos: usize) -> usize {
+        let bytes = self.source.as_bytes();
+        let mut i = pos.min(bytes.len());
+        while i > 0 && bytes[i - 1] != b'\n' {
+            i -= 1;
+        }
+        let mut n = 0usize;
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+            i += 1;
+            n += 1;
+        }
+        n
+    }
+
+    /// Shift the recorded aligner offsets that a back-injection invalidated.
+    ///
+    /// `buf_offset` is an ABSOLUTE position, so inserting `len` bytes at `at`
+    /// moves every entry at or after it. Without this the aligner splices over
+    /// a stale offset — silent, mid-line corruption rather than a panic.
+    fn shift_trailing_aligns_from(&mut self, at: usize, len: usize) {
+        for e in &mut self.trailing_aligns {
+            if e.buf_offset >= at {
+                e.buf_offset += len;
             }
         }
     }
@@ -942,9 +1439,10 @@ impl Formatter {
     /// trailing after container). Only comments in `(start, end)` are
     /// collection-literal-interior and need the broken path.
     fn has_interior_comments(&self, start: usize, end: usize) -> bool {
-        self.comments[self.comment_cursor..]
+        self.comments
+            .from(self.comment_cursor)
             .iter()
-            .any(|c| c.span.start > start && c.span.start < end)
+            .any(|c| c.hash_pos() > start && c.hash_pos() < end)
     }
 
     /// Interior-comment exploded emission (Core #4 producer chokepoint):
@@ -1370,51 +1868,60 @@ impl Formatter {
     ///
     /// Safe in both directions: the cursor is monotone, so nothing is emitted
     /// twice, and `emit_remaining_comments` flushes anything a caller drops.
-    fn claim_header_trailing_comments(&mut self, header_anchor_end: usize) -> Vec<String> {
-        let mut claimed = Vec::new();
+    ///
+    /// **The claim takes the WHOLE run.** When the header's trailing comment
+    /// is the head of a multi-line run, the continuation lines below it are
+    /// part of the same logical comment; leaving them on the cursor split the
+    /// run — and when the inline suite was its block's last statement, the
+    /// orphan flush then saw a run member with no head.
+    ///
+    /// **The ANCHOR is recorded here, not at emission.** The comment belongs
+    /// on the HEADER's output line, and by the time the body has rendered that
+    /// line may no longer be the buffer's last one (a multi-line inline child
+    /// — `if true: int x = match y:  # note` — ends on the BODY's last line).
+    /// Recording `buf.len()` now and resolving it to that line's end later
+    /// puts the comment where the author wrote it, and the result re-parses
+    /// and is a fixpoint. Emitting at claim time instead is not an option: the
+    /// body has not been written yet and would land AFTER the comment.
+    fn claim_header_trailing_comments(&mut self, header_anchor_end: usize) -> HeaderClaim {
+        let mut runs = Vec::new();
+        let anchor = self.emitter.buf.len();
         while self.comment_cursor < self.comments.len() {
-            let c = &self.comments[self.comment_cursor];
-            let comment_start = c.span.start;
+            let comment_start = self.comments[self.comment_cursor].hash_pos();
             if comment_start > self.source.len() {
                 break;
             }
-            let Some(anchor) = self.last_real_content_before(header_anchor_end) else {
+            let Some(content_end) = self.last_real_content_before(header_anchor_end) else {
                 break;
             };
-            if comment_start < anchor {
+            if comment_start < content_end {
                 break;
             }
-            if self.source[anchor..comment_start].contains('\n') {
+            if self.source[content_end..comment_start].contains('\n') {
                 break;
             }
-            claimed.push(c.node.clone());
-            self.comment_cursor += 1;
+            // CLAIM SITE 4 of 5 — the deferred header hook (inline suites and
+            // inline arm bodies).
+            runs.push(self.claim_run_at_cursor());
         }
-        claimed
+        HeaderClaim { runs, anchor }
     }
 
     /// Emit comments claimed by [`claim_header_trailing_comments`], now that
     /// the inline suite body has been written. Mirrors the injection half of
-    /// `emit_trailing_comment_after` (two-space gap, spliced ahead of the
-    /// trailing newline, recorded for the R40 aligner as a HEADER comment so
-    /// it is never grouped with body lines).
-    fn emit_claimed_header_comments(&mut self, claimed: Vec<String>) {
-        for comment in claimed {
-            let comment_len = comment.chars().count();
-            let mut inlined = String::with_capacity(comment.len() + TRAILING_COMMENT_GAP);
-            inlined.push_str(&" ".repeat(TRAILING_COMMENT_GAP));
-            inlined.push_str(&comment);
-            let buf_offset = if self.emitter.buf.ends_with('\n') {
-                self.emitter.buf.len() - 1
-            } else {
-                self.emitter.buf.len()
-            };
-            self.emitter.inject_before_newline(&inlined);
-            self.trailing_aligns.push(TrailingAlign {
-                buf_offset,
-                comment_len,
-                is_header: true,
-            });
+    /// `emit_trailing_comment_after` — the canonical `TRAILING_COMMENT_GAP`
+    /// gap, recorded for the aligner as a HEADER comment so it is never
+    /// grouped with body lines — but splices onto the line the claim recorded
+    /// rather than the buffer's current last one.
+    fn emit_claimed_header_comments(&mut self, claim: HeaderClaim) {
+        for run in claim.runs {
+            self.emit_claimed_run(
+                run,
+                EmitPos::AtAnchor {
+                    anchor: claim.anchor,
+                    is_header: true,
+                },
+            );
         }
     }
 
@@ -1489,8 +1996,7 @@ impl Formatter {
         //     skipped) → hits `)` at end of `m()` → no `\n` between
         //     `)` and `# x` → fire.
         while self.comment_cursor < self.comments.len() {
-            let c = &self.comments[self.comment_cursor];
-            let comment_start = c.span.start;
+            let comment_start = self.comments[self.comment_cursor].hash_pos();
             if comment_start > self.source.len() {
                 break;
             }
@@ -1516,31 +2022,12 @@ impl Formatter {
                 break;
             }
             // Same-line trailing: inject inline with the canonical gap.
-            let comment_len = c.node.chars().count();
-            let mut inlined = String::with_capacity(c.node.len() + TRAILING_COMMENT_GAP);
-            for _ in 0..TRAILING_COMMENT_GAP {
-                inlined.push(' ');
-            }
-            inlined.push_str(&c.node);
-            // Record the gap-start for the R40 aligner BEFORE the injection.
-            // The buffer currently ends `...LHS\n`; `inject_before_newline`
-            // pops that `\n`, so the first gap space lands where the `\n`
-            // sits now (`buf.len() - 1`). If the buffer does NOT end in `\n`
-            // (rare — sibling emit didn't newline-terminate), the injection
-            // appends, so the gap starts at `buf.len()`. (`c` is no longer
-            // borrowed past `inlined`, so the mutable pushes below are fine.)
-            let buf_offset = if self.emitter.buf.ends_with('\n') {
-                self.emitter.buf.len() - 1
-            } else {
-                self.emitter.buf.len()
-            };
-            self.emitter.inject_before_newline(&inlined);
-            self.trailing_aligns.push(TrailingAlign {
-                buf_offset,
-                comment_len,
-                is_header,
-            });
-            self.comment_cursor += 1;
+            //
+            // CLAIM SITE 3 of 5 — the trailing-comment hook, and the one that
+            // owns a multi-line run's HEAD. Claiming the run here is what
+            // keeps its continuation lines with the member they annotate.
+            let claim = self.claim_run_at_cursor();
+            self.emit_claimed_run(claim, EmitPos::Inline { is_header });
         }
     }
 
@@ -1557,13 +2044,14 @@ impl Formatter {
     fn align_trailing_comments(&mut self) {
         let entries = std::mem::take(&mut self.trailing_aligns);
         let rewrites = plan_trailing_aligns(&self.emitter.buf, &entries);
-        // Already sorted LAST→FIRST; each gap is exactly the injected run of
-        // `TRAILING_COMMENT_GAP` ASCII spaces at `[off, off + GAP)` (ASCII →
-        // valid char boundaries).
-        for (off, new_gap) in rewrites {
+        // Already sorted LAST→FIRST; each gap is exactly the run of ASCII
+        // spaces the writer injected at `[off, off + old_gap)` — the entry's
+        // OWN width, since a continuation line's pad is its whole `#` column
+        // rather than the constant (ASCII → valid char boundaries).
+        for (off, old_gap, new_gap) in rewrites {
             self.emitter
                 .buf
-                .replace_range(off..off + TRAILING_COMMENT_GAP, &" ".repeat(new_gap));
+                .replace_range(off..off + old_gap, &" ".repeat(new_gap));
         }
     }
 
@@ -1765,7 +2253,17 @@ impl Formatter {
     /// `formatter_child_collection_loop_census` (tests/lints.rs) carries the row
     /// that makes it a guarantee rather than a habit — a new loop with its own
     /// copy of the hooks shows up there and has to be classified.
-    fn format_nested_items(&mut self, items: &[Spanned<Item>]) {
+    /// `header_start` anchors the branch's own clause line; `block_end` is the
+    /// NEXT clause's header (or the whole `meta if`'s end for the last branch)
+    /// — a per-branch ceiling, because with one ceiling for all three the
+    /// then-branch's flush would swallow the elif branch's leading comment and
+    /// document the wrong branch.
+    fn format_nested_items(
+        &mut self,
+        items: &[Spanned<Item>],
+        header_start: usize,
+        block_end: usize,
+    ) {
         for (i, item) in items.iter().enumerate() {
             if i > 0 && self.has_blank_line_between(items[i - 1].span.end, item.span.start) {
                 self.emitter.blank_line();
@@ -1776,6 +2274,9 @@ impl Formatter {
             self.format_item(item);
             self.emit_trailing_comment_after(item.span.end, false);
         }
+        // NESTED-ITEMS flush — the item-level `meta if` branch bodies are the
+        // third face of the tail-orphan class: one producer, three arms.
+        self.emit_orphan_comments_before_close(header_start, block_end);
     }
 
     fn format_item(&mut self, item: &Spanned<Item>) {
@@ -1899,9 +2400,18 @@ impl Formatter {
                 self.emit_trailing_comment_after_header(mi.condition.span.end);
                 self.emitter.newline();
                 self.emitter.indent();
-                self.format_nested_items(&mi.then_items);
+                // Tight per-branch ceiling: the NEXT clause's header, so a
+                // leading comment of the next branch's first item is not
+                // swallowed by this one.
+                let then_end = mi
+                    .elif_branches
+                    .first()
+                    .map(|(c, _)| c.span.start)
+                    .or(mi.else_branch.as_ref().map(|(k, _)| k.start))
+                    .unwrap_or(mi.span.end);
+                self.format_nested_items(&mi.then_items, mi.condition.span.start, then_end);
                 self.emitter.dedent();
-                for (cond, items) in &mi.elif_branches {
+                for (bi, (cond, items)) in mi.elif_branches.iter().enumerate() {
                     // Blank, then leading comments, then the header — the order
                     // every clause site keeps.
                     if self.blank_before_clause(cond.span.start) {
@@ -1915,7 +2425,13 @@ impl Formatter {
                     self.emit_trailing_comment_after_header(cond.span.end);
                     self.emitter.newline();
                     self.emitter.indent();
-                    self.format_nested_items(items);
+                    let elif_end = mi
+                        .elif_branches
+                        .get(bi + 1)
+                        .map(|(c, _)| c.span.start)
+                        .or(mi.else_branch.as_ref().map(|(k, _)| k.start))
+                        .unwrap_or(mi.span.end);
+                    self.format_nested_items(items, cond.span.start, elif_end);
                     self.emitter.dedent();
                 }
                 if let Some((else_kw, ref else_items)) = mi.else_branch {
@@ -1942,7 +2458,7 @@ impl Formatter {
                     self.emit_comments_before(anchor);
                     self.emit_else_header(anchor);
                     self.emitter.indent();
-                    self.format_nested_items(else_items);
+                    self.format_nested_items(else_items, else_kw.start, mi.span.end);
                     self.emitter.dedent();
                 }
             }
@@ -2287,7 +2803,11 @@ impl Formatter {
         // R39 snag #2 sub-task 5b: `struct S:  # header` shape —
         // header trailing comment stays on the header line, not
         // dedented into the body.
-        self.emit_trailing_comment_after_header(s.name.span.end);
+        // The header's `:`, not the container NAME: on a MULTI-LINE header
+        // (`struct S[\n    T\n]:  # x`) the name is on an earlier source line,
+        // so a same-line test against it rejects the header's own comment and
+        // drops it into the body as a leading comment of the first member.
+        self.emit_trailing_comment_after_header(s.header_colon_span.end);
         self.emitter.indent();
         // R37 empty-body chip: an empty struct body must emit `pass` so the
         // reformatted source PARSES. The parser rejects `struct X:` with no
@@ -2330,6 +2850,8 @@ impl Formatter {
                 self.emit_trailing_comment_after(field.span.end, false);
             }
         }
+        // CONTAINER flush — a comment after the last field.
+        self.emit_orphan_comments_before_close(s.span.start, s.span.end);
         self.emitter.dedent();
     }
 
@@ -2377,7 +2899,11 @@ impl Formatter {
         self.emitter.write(":");
         self.emitter.newline();
         // R39 snag #2 sub-task 5b: `enum E:  # header` shape.
-        self.emit_trailing_comment_after_header(e.name.span.end);
+        // The header's `:`, not the container NAME: on a MULTI-LINE header
+        // (`struct S[\n    T\n]:  # x`) the name is on an earlier source line,
+        // so a same-line test against it rejects the header's own comment and
+        // drops it into the body as a leading comment of the first member.
+        self.emit_trailing_comment_after_header(e.header_colon_span.end);
         self.emitter.indent();
         // R37 empty-body chip: mirror format_struct — an empty enum body
         // must emit `pass` so the reformatted source parses.
@@ -2406,6 +2932,8 @@ impl Formatter {
                 self.emit_trailing_comment_after(variant.span.end, false);
             }
         }
+        // CONTAINER flush — a comment after the last variant.
+        self.emit_orphan_comments_before_close(e.span.start, e.span.end);
         self.emitter.dedent();
     }
 
@@ -2454,7 +2982,11 @@ impl Formatter {
         // — for the same-line-header shape, `t.name.span.end` is on the
         // same source line as the `:`, so the helper's newline scan
         // covers `extends`-list variants without extra tracking.
-        self.emit_trailing_comment_after_header(t.name.span.end);
+        // The header's `:`, not the container NAME: on a MULTI-LINE header
+        // (`struct S[\n    T\n]:  # x`) the name is on an earlier source line,
+        // so a same-line test against it rejects the header's own comment and
+        // drops it into the body as a leading comment of the first member.
+        self.emit_trailing_comment_after_header(t.header_colon_span.end);
         self.emitter.indent();
         // R37 empty-body chip: mirror format_struct — an empty trait body
         // must emit `pass` so the reformatted source parses.
@@ -2510,6 +3042,8 @@ impl Formatter {
                 self.emit_trailing_comment_after(item.span.end, false);
             }
         }
+        // CONTAINER flush — a comment after the last trait item.
+        self.emit_orphan_comments_before_close(t.span.start, t.span.end);
         self.emitter.dedent();
     }
 
@@ -2534,10 +3068,22 @@ impl Formatter {
         };
         if let Some(ref gp) = e.generic_params {
             let tail = self.measured_reserve(|s| {
+                // The separator below is part of what follows the bracket
+                // list on its own last line, so the reserve has to charge for
+                // it — otherwise the list is measured one column narrower than
+                // it lands.
+                s.emitter.write(" ");
                 s.format_type(&e.type_);
                 with_onward(s);
             });
             self.with_tail_reserve(tail, |f| f.format_generic_params_wrapped(gp));
+            // `equip [T] Cell[T]:` — the separator every other header in the
+            // language writes between a generic-parameter list and what it
+            // parameterizes. Without it the equipped type welds onto the `]`
+            // (`equip [T]Cell[T]:`), which re-parses and is idempotent, and is
+            // therefore an edit to the author's spelling that no round-trip
+            // property can see.
+            self.emitter.write(" ");
         }
         let type_tail = self.measured_reserve(with_onward);
         self.with_tail_reserve(type_tail, |s| s.format_type(&e.type_));
@@ -2552,12 +3098,16 @@ impl Formatter {
         }
         self.emitter.write(":");
         self.emitter.newline();
-        // R39 snag #2 sub-task 5b: `equip S:  # x`, `equip S with T:  # x`,
-        // `equip S via f:  # x` — anchor on the type's own span end.
-        // For the same-line-header shape, whatever `with T` / `via f`
-        // sits between anchor and `:` stays on the same source line, so
-        // the helper's newline scan is unaffected.
-        self.emit_trailing_comment_after_header(e.type_.span.end);
+        // `equip S:  # x`, `equip S with T:  # x`, `equip S via f:  # x` —
+        // anchor on the header's own `:`, which is on the header's LAST
+        // source line whatever the shape (a wrapped `[T]` list, a `with T`
+        // tail). The colon is optional in the blank form; that form has no
+        // body and therefore no header line to trail, so the equipped TYPE's
+        // end is the fallback.
+        let equip_anchor = e
+            .header_colon_span
+            .map_or(e.type_.span.end, |c| c.end);
+        self.emit_trailing_comment_after_header(equip_anchor);
         self.emitter.indent();
         if e.items.is_empty() {
             self.emitter.write("pass");
@@ -2574,6 +3124,8 @@ impl Formatter {
                 self.emit_trailing_comment_after(method.span.end, false);
             }
         }
+        // CONTAINER flush — a comment after the last method.
+        self.emit_orphan_comments_before_close(e.span.start, e.span.end);
         self.emitter.dedent();
     }
 
@@ -2741,7 +3293,10 @@ impl Formatter {
         // A block always carries one today (`parse_item`'s block-vs-inline
         // disambiguation REQUIRES the string literal), but the field is an
         // Option, so fall back to the `extern` keyword's own position.
-        let header_anchor_end = eb.abi.as_ref().map_or(eb.span.start, |a| a.span.end);
+        // The header's `:` — on the header's LAST source line whatever
+        // precedes it. (The ABI string's end, which this used to use, is on
+        // the same line for `extern "C":` and is now redundant.)
+        let header_anchor_end = eb.header_colon_span.end;
         self.emitter.write("extern");
         if let Some(ref abi) = eb.abi {
             self.emitter.write(" ");
@@ -2767,6 +3322,8 @@ impl Formatter {
             self.format_function(&func.node);
             self.emit_trailing_comment_after(func.span.end, false);
         }
+        // CONTAINER flush — a comment after the last extern declaration.
+        self.emit_orphan_comments_before_close(eb.span.start, eb.span.end);
         self.emitter.dedent();
     }
 
@@ -3227,6 +3784,22 @@ impl Formatter {
             self.format_stmt(stmt);
             self.emit_trailing_comment_after(stmt.span.end, false);
         }
+        // THE ROUTED flush — statement suites share the container class's
+        // tail-orphan hole, and this is the one function every one of them
+        // reaches (fn / if / elif / else / while / for / for-else / loop /
+        // unsafe / with / named scope / on error / do / catch / rethrow /
+        // match-arm / select-arm / test / bench / suite setup+teardown / the
+        // `meta` suites / closures). It runs at the BODY indent — its callers
+        // own the surrounding `indent()`/`dedent()` — so the flush lands at
+        // the right column here.
+        //
+        // Indented suites ONLY, for two reasons: an INLINE suite has no body
+        // of its own to orphan into, and `format_inline_suite` routes THROUGH
+        // this function while the buffer sits mid-line, where emitting a
+        // standalone comment line would split the statement.
+        if block.layout == SuiteLayout::NextLine {
+            self.emit_orphan_comments_before_close(block.header_start, block.span.end);
+        }
     }
 
     /// gorget-arena snag #3 (R39) + #3b reconciliation (R40): true iff the
@@ -3624,6 +4197,14 @@ impl Formatter {
             self.format_stmt(stmt);
             self.emit_trailing_comment_after(stmt.span.end, false);
         }
+        // CLOSURE ROUTING: the prelude-skipping loop is the ONE statement body
+        // that cannot delegate to `format_block_stmts` (that would re-emit the
+        // parser-synthesized destructure binds), so it owes the routed
+        // chokepoint's tail flush explicitly. Without it a plain closure is
+        // fixed and a DESTRUCTURING one is not — the same class, half done.
+        if block.layout == SuiteLayout::NextLine {
+            self.emit_orphan_comments_before_close(block.header_start, block.span.end);
+        }
     }
 
     /// True iff the author left a blank line above a CLAUSE header
@@ -3981,7 +4562,7 @@ impl Formatter {
                             self.emit_comments_before(arm.span.start);
                             self.format_match_arm(arm);
                         }
-                        crate::parser::ast::MatchItem::MetaFor { vars, range, arm_template, span: _ } => {
+                        crate::parser::ast::MatchItem::MetaFor { vars, range, arm_template, span } => {
                             self.emitter.write("meta for ");
                             let joined = vars.iter().map(|v| v.node.as_str()).collect::<Vec<_>>().join(", ");
                             self.emitter.write(&joined);
@@ -3992,6 +4573,14 @@ impl Formatter {
                             self.emitter.newline();
                             self.emitter.indent();
                             self.format_match_arm(arm_template);
+                            // SITE 13 — the `meta for …:` block INSIDE a
+                            // match statement owns its own indent, child and
+                            // dedent, so it gets its own flush anchored on
+                            // ITS header line. With only the match
+                            // container's flush the tail is re-parented to
+                            // the ARMS level, one block out from where it
+                            // was written.
+                            self.emit_orphan_comments_before_close(span.start, span.end);
                             self.emitter.dedent();
                         }
                     }
@@ -4011,6 +4600,18 @@ impl Formatter {
                     self.format_block_stmts(else_body);
                     self.emitter.dedent();
                 }
+                // ARM-CONTAINER flush. The children here are ARMS, not
+                // statements, so `format_block_stmts` — the routed
+                // chokepoint — is structurally absent and this container
+                // needs its own. Anchored on the CONTAINER's header line: a
+                // body-indent tail was already claimed by the arm's own
+                // flush, and a tail at the arms' indent fails the arm's
+                // column test and is claimed here.
+                //
+                // ⚠ The `SuiteLayout::NextLine` guard has no subject at an
+                // arm container — it carries no `Block` — which is benign,
+                // not an omission.
+                self.emit_orphan_comments_before_close(stmt.span.start, stmt.span.end);
                 self.emitter.dedent();
             }
             Stmt::Select { arms, else_arm } => {
@@ -4072,6 +4673,8 @@ impl Formatter {
                     self.format_block_stmts(else_body);
                     self.emitter.dedent();
                 }
+                // ARM-CONTAINER flush — see `Stmt::Match`.
+                self.emit_orphan_comments_before_close(stmt.span.start, stmt.span.end);
                 self.emitter.dedent();
             }
             Stmt::With { bindings, body } => {
@@ -4243,6 +4846,8 @@ impl Formatter {
                         self.emitter.dedent();
                     }
                 }
+                // ARM-CONTAINER flush — see `Stmt::Match`.
+                self.emit_orphan_comments_before_close(stmt.span.start, stmt.span.end);
                 self.emitter.dedent();
             }
             Stmt::MetaWhile { condition, body, .. } => {
@@ -5252,6 +5857,9 @@ impl Formatter {
                     // line — `Emitter::newline` is idempotent at line start.
                     self.emitter.newline();
                 }
+                // ARM-CONTAINER flush — the expression-position match, whose
+                // children are arms. See `Stmt::Match`.
+                self.emit_orphan_comments_before_close(expr.span.start, expr.span.end);
                 self.emitter.dedent();
             }
             Expr::Block(block) => {

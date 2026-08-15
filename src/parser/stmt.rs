@@ -163,7 +163,7 @@ impl Parser {
         self.advance(); // consume "error" (contextual identifier)
         if self.check(&Token::Colon) {
             // Block form: on error:\n    stmts
-            let body = self.parse_block()?;
+            let body = self.parse_block(start.start)?;
             let end = self.previous_span();
             Ok(Spanned::new(Stmt::OnError { body }, start.merge(end)))
         } else {
@@ -175,6 +175,7 @@ impl Parser {
                 stmts: vec![stmt],
                 span: start.merge(end),
                 layout: SuiteLayout::Inline,
+                header_start: start.start,
             };
             Ok(Spanned::new(Stmt::OnError { body }, start.merge(end)))
         }
@@ -254,19 +255,25 @@ impl Parser {
         let start = self.peek_span();
         self.expect_keyword(Keyword::If)?;
         let condition = self.parse_expr()?;
-        let then_body = self.parse_block_or_inline_stmt()?;
+        let then_body = self.parse_block_or_inline_stmt(start.start)?;
 
         let mut elif_branches = Vec::new();
         let mut else_body = None;
 
         while self.match_elif() {
+            // ⚠ The clause keyword's span, captured BEFORE the condition is
+            // parsed: after `parse_expr` a `previous_span()` would name the
+            // CONDITION's last token, which a wrapped condition puts on a
+            // later line.
+            let clause = self.previous_span();
             let elif_cond = self.parse_expr()?;
-            let elif_body = self.parse_block_or_inline_stmt()?;
+            let elif_body = self.parse_block_or_inline_stmt(clause.start)?;
             elif_branches.push((elif_cond, elif_body));
         }
 
         if self.match_keyword(Keyword::Else) {
-            else_body = Some(self.parse_block_or_inline_stmt()?);
+            let clause = self.previous_span();
+            else_body = Some(self.parse_block_or_inline_stmt(clause.start)?);
         }
 
         let end = self.previous_span();
@@ -292,10 +299,11 @@ impl Parser {
         let ownership = self.parse_ownership_modifier();
 
         let iterable = self.parse_expr()?;
-        let body = self.parse_block()?;
+        let body = self.parse_block(start.start)?;
 
         let else_body = if self.match_keyword(Keyword::Else) {
-            Some(self.parse_block()?)
+            let clause = self.previous_span();
+            Some(self.parse_block(clause.start)?)
         } else {
             None
         };
@@ -317,10 +325,11 @@ impl Parser {
         let start = self.peek_span();
         self.expect_keyword(Keyword::While)?;
         let condition = self.parse_expr()?;
-        let body = self.parse_block()?;
+        let body = self.parse_block(start.start)?;
 
         let else_body = if self.match_keyword(Keyword::Else) {
-            Some(self.parse_block()?)
+            let clause = self.previous_span();
+            Some(self.parse_block(clause.start)?)
         } else {
             None
         };
@@ -339,7 +348,7 @@ impl Parser {
     fn parse_loop_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Loop)?;
-        let body = self.parse_block()?;
+        let body = self.parse_block(start.start)?;
         let end = self.previous_span();
         Ok(Spanned::new(Stmt::Loop { body }, start.merge(end)))
     }
@@ -360,7 +369,8 @@ impl Parser {
             }
 
             if self.match_keyword(Keyword::Else) {
-                match self.parse_block() {
+                let clause = self.previous_span();
+                match self.parse_block(clause.start) {
                     Ok(block) => else_arm = Some(block),
                     Err(e) => {
                         self.errors.push(e);
@@ -446,7 +456,8 @@ impl Parser {
             }
 
             if self.match_keyword(Keyword::Else) {
-                else_arm = Some(self.parse_block()?);
+                let clause = self.previous_span();
+                else_arm = Some(self.parse_block(clause.start)?);
                 continue;
             }
 
@@ -456,7 +467,8 @@ impl Parser {
             let op = self.parse_select_op()?;
 
             self.expect(&Token::Colon)?;
-            let body = self.parse_block_body(arm_start)?;
+            // `arm_start` is the `case` keyword — the arm's own first line.
+            let body = self.parse_block_body(arm_start, arm_start.start)?;
 
             let arm_end = body.span;
             arms.push(SelectArm {
@@ -527,7 +539,7 @@ impl Parser {
             }
         }
 
-        let body = self.parse_block()?;
+        let body = self.parse_block(start.start)?;
         let end = self.previous_span();
 
         Ok(Spanned::new(
@@ -575,7 +587,7 @@ impl Parser {
     fn parse_unsafe_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
         self.expect_keyword(Keyword::Unsafe)?;
-        let body = self.parse_block()?;
+        let body = self.parse_block(start.start)?;
         let end = self.previous_span();
         Ok(Spanned::new(Stmt::Unsafe { body }, start.merge(end)))
     }
@@ -948,19 +960,22 @@ impl Parser {
     fn parse_meta_if_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
         self.expect_keyword(Keyword::If)?;
         let condition = self.parse_expr()?;
-        let then_body = self.parse_block()?;
+        let then_body = self.parse_block(start.start)?;
 
         let mut elif_branches = Vec::new();
         let mut else_body = None;
 
         while self.match_elif() {
+            // ⚠ Captured BEFORE the condition — see `parse_if_stmt`.
+            let clause = self.previous_span();
             let elif_cond = self.parse_expr()?;
-            let elif_body = self.parse_block()?;
+            let elif_body = self.parse_block(clause.start)?;
             elif_branches.push((elif_cond, elif_body));
         }
 
         if self.match_keyword(Keyword::Else) {
-            else_body = Some(self.parse_block()?);
+            let clause = self.previous_span();
+            else_body = Some(self.parse_block(clause.start)?);
         }
 
         let end = self.previous_span();
@@ -993,7 +1008,7 @@ impl Parser {
 
     fn parse_meta_for_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
         let (vars, range) = self.parse_meta_for_vars()?;
-        let body = self.parse_block()?;
+        let body = self.parse_block(start.start)?;
         let end = self.previous_span();
         let span = start.merge(end);
         Ok(Spanned::new(
@@ -1059,18 +1074,24 @@ impl Parser {
             }
 
             if self.match_keyword(Keyword::Else) {
+                // The `else` keyword was just consumed — its span is the
+                // clause's first line.
+                let kw = self.previous_span();
                 let clause_start = self.peek_span();
                 self.expect(&Token::Colon)?;
-                let body = self.parse_meta_match_arm_body(clause_start)?;
+                let body = self.parse_meta_match_arm_body(clause_start, kw.start)?;
                 else_arm = Some(body);
                 continue;
             }
 
+            // ⚠ Captured BEFORE the case EXPRESSION is parsed: a wrapped case
+            // expression would leave `previous_span()` on a continuation line.
+            let case_kw = self.peek_span();
             self.expect_keyword(Keyword::Case)?;
             let case_expr = self.parse_expr()?;
             let clause_start = self.peek_span();
             self.expect(&Token::Colon)?;
-            let body = self.parse_meta_match_arm_body(clause_start)?;
+            let body = self.parse_meta_match_arm_body(clause_start, case_kw.start)?;
             arms.push((case_expr, body));
         }
 
@@ -1098,9 +1119,18 @@ impl Parser {
     /// clause header, or for the comments that lead it) needs. Anchoring at
     /// the NEWLINE token instead put it on the line BELOW, one line past
     /// everything such a walk is looking for.
-    fn parse_meta_match_arm_body(&mut self, start: Span) -> Result<Block, ParseError> {
+    ///
+    /// `header_start` is the arm's own FIRST line — the `case` keyword (which
+    /// the caller must capture BEFORE parsing the case EXPRESSION, since a
+    /// wrapped case expression puts `previous_span()` on a later line) or the
+    /// `else`. `start`, the colon, cannot stand in for it.
+    fn parse_meta_match_arm_body(
+        &mut self,
+        start: Span,
+        header_start: usize,
+    ) -> Result<Block, ParseError> {
         if self.check(&Token::Newline) {
-            self.parse_block_body(start)
+            self.parse_block_body(start, header_start)
         } else {
             // Single inline statement
             let stmt_start = self.peek_span();
@@ -1110,6 +1140,7 @@ impl Parser {
                 stmts: vec![stmt],
                 span: stmt_start.merge(span),
                 layout: SuiteLayout::Inline,
+                header_start,
             })
         }
     }
@@ -1117,9 +1148,15 @@ impl Parser {
     fn parse_meta_while_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
         self.expect_keyword(Keyword::While)?;
         let condition = self.parse_expr()?;
-        self.expect(&Token::Colon)?;
+        // The COLON, captured before it is consumed. This site used to take
+        // `peek_span()` AFTER the colon, which put `Block.span.start` on the
+        // BODY's own line — one line below everything the blank/lookback logic
+        // that reads it walks back for. `header_start` is separately the `meta`
+        // keyword, since a header-INDENT question wants the header's FIRST line
+        // and the colon's line is its LAST.
         let block_start = self.peek_span();
-        let body = self.parse_block_body(block_start)?;
+        self.expect(&Token::Colon)?;
+        let body = self.parse_block_body(block_start, start.start)?;
         let end = self.previous_span();
         let span = start.merge(end);
         Ok(Spanned::new(
@@ -1143,7 +1180,7 @@ impl Parser {
     fn parse_named_scope(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
         let name = self.expect_identifier()?;
-        let body = self.parse_block()?;
+        let body = self.parse_block(start.start)?;
         let end = self.previous_span();
         Ok(Spanned::new(
             Stmt::NamedScope { name, body },

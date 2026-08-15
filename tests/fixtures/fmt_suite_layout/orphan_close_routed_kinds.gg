@@ -1,0 +1,83 @@
+# ==== ORPHAN-PRE-CLOSE · one cell per author-visible ROUTED block kind (AXIS A)
+#
+# Every one of these suites reaches the flush through `format_block_stmts` —
+# but that is an IMPLEMENTATION fact, and a fixture that assumes it stops being
+# a net the moment a kind grows its own emitter. One cell per kind, derived
+# from the dedent census's ROUTED rows.
+#
+# CELLS: loop · unsafe · named scope · `do:` · indented `on error` ·
+#        `with … as …:` · `catch (…)` · `rethrow (…)` · statement `meta for` ·
+#        `meta while` · `meta type f()`
+#
+# ⚠ The `meta while` cell here is a ROUTED-KIND cell and nothing more. It does
+# NOT discriminate `Block::header_start`'s meta-while wiring: an unwrapped
+# `meta while cond:` has its colon on the `meta` line, so a colon-seeded anchor
+# has the same indent as the right answer and this cell stays green under that
+# break. The discriminating cell is the WRAPPED one, in
+# `wrapped_header_anchor.gg`.
+#
+# RED, observed on the pre-fix build: every `# tail in …` marker dedented one
+# level out of its block (or to column 0 where the block was the function's
+# last statement).
+
+struct Res:
+    int v
+
+int fallible(int x) throws String:
+    if x < 0:
+        throw "negative"
+    return x
+
+void routed_kinds():
+    loop:
+        break
+        # tail in loop body
+    unsafe:
+        print(1)
+        # tail in unsafe body
+    cleanup:
+        print(2)
+        # tail in named scope body
+    int d = do:
+        3
+        # tail in do body
+    on error:
+        print(4)
+        # tail in on error body
+    Res r = Res(5)
+    with r as held:
+        print(held.v)
+        # tail in with body
+    print(d)
+
+int catch_kinds(int x):
+    int a = fallible(x) catch (e):
+        print("recovered")
+        0
+        # tail in catch body
+    return a
+
+int rethrow_kind(int x) throws String:
+    int b = fallible(x) rethrow (String e):
+        print("wrapping")
+        e
+        # tail in rethrow body
+    return b
+
+void meta_kinds[T]():
+    meta for i in 0..2:
+        print(i)
+        # tail in meta for body
+    meta while bitwidth(T) > 128:
+        print("impossible")
+        # tail in meta while body
+    print(1)
+
+meta type Wrapped(Type t):
+    return t
+    # tail in meta type fn body
+
+void main():
+    routed_kinds()
+    print(catch_kinds(1))
+    meta_kinds[int]()

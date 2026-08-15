@@ -604,6 +604,47 @@ impl fmt::Display for Keyword {
     }
 }
 
+/// Where a comment sits on its own source line.
+///
+/// The lexer has TWO comment producers and they ARE the two placements — a
+/// comment-only line is scanned by `emit_comment_token`, a comment after code
+/// by the `#` arm of `tokenize_line_content` — so the placement is recorded at
+/// the producer rather than re-derived downstream by scanning back for a
+/// newline (Layering rule 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommentPlacement {
+    /// Nothing but whitespace precedes the `#` on its source line.
+    OwnLine,
+    /// Code precedes the `#` on its source line.
+    Trailing,
+}
+
+/// A comment token's payload: the text plus the LEXICAL attachment facts the
+/// lexer knows for free and every downstream reader would otherwise have to
+/// reconstruct from the source bytes.
+///
+/// `Token::Comment`'s span is normalized by BOTH producers to start at the `#`
+/// itself, so `span.start` means one thing on one axis. (It used to mean the
+/// LINE start for a comment-only line and the `#` for a trailing one — one
+/// axis, two meanings.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentToken {
+    /// The comment text, `#` included, to end of line.
+    pub text: String,
+    /// Byte offset of the comment's own line start (base-offset applied, like
+    /// every span position). `line_start == previous_comment.span.end + 1`
+    /// is exactly "directly below, nothing in between" — a comment token's
+    /// span ends AT the `\n`, so the next line begins one byte later. That is
+    /// how `CommentTable::build` decides run membership without re-reading the
+    /// source.
+    pub line_start: usize,
+    /// CHARACTER column of the `#` on its line. Char, not byte: a trailing
+    /// comment's line may hold non-ASCII code before the `#`, and the column
+    /// is a display quantity.
+    pub hash_col: usize,
+    pub placement: CommentPlacement,
+}
+
 /// The final token type emitted by the indentation-aware lexer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
@@ -704,7 +745,7 @@ pub enum Token {
     DocComment(String),
 
     // Comments
-    Comment(String),
+    Comment(CommentToken),
 
     // End of file
     Eof,

@@ -1,0 +1,29 @@
+# ==== HEADER-COLON ANCHOR · multi-line container header (AXIS D, struct cell)
+#
+# ⚠ INPUT→OUTPUT, not a fixpoint — see the `.expected` companion. `gg fmt`
+# REJOINS a wrapped header, so the wrapped spelling exists only on pass one;
+# pass two is a fixpoint on the rejoined form.
+#
+# A container's header-line trailing comment used to be anchored on the
+# container NAME. On a MULTI-LINE header the name is on an EARLIER source line,
+# so the same-line test correctly rejected the comment — and it then fell to
+# the body loop and came out as a LEADING comment of the first field, i.e.
+# documenting `T x`. The anchor is the header's `:`, the one position that is
+# on the header's LAST source line whatever the header's shape.
+#
+# RED, observed on the pre-fix build: the comment was emitted on its own line
+# at body indent, above the struct's only field, instead of staying on the
+# rejoined header line.
+#
+# ⚠ NO LINE OF THIS HEADER MAY SPELL the cell's marker, or the rejoined header
+# text the assertion checks for. The test finds its cell by searching the
+# formatted output for the marker and taking the FIRST match, so a header
+# mention shadows the real cell — and a header comment line can never satisfy
+# the positional half, so the test would be stuck RED.
+struct S[
+    T
+]:  # multi-line header trailing
+    T x
+
+int main():
+    return 0

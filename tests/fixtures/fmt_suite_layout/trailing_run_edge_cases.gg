@@ -1,0 +1,33 @@
+# ==== MULTI-LINE TRAILING COMMENT · the two edge cells (AXIS C)
+#
+# CELL 1 — a head whose TEXT contains a `#`. The continuation's column comes
+#   from the head's TYPED aligner record (gap offset + gap width), never from
+#   searching the emitted buffer backwards for a `#`. A buffer search finds the
+#   `#` INSIDE the head's own text, so the continuation is placed too far
+#   right — and, worse, further right again on the NEXT pass, so the file is
+#   not idempotent. The harness runs a second pass on every cell, which is what
+#   pins this one.
+#   ⚠ The head is deliberately a SINGLETON (no second commented member). In an
+#   ACTIVE alignment group the post-pass rewrites the continuation's column
+#   anyway and the writer's mistake is invisible; only an unaligned run leaves
+#   the writer's own column standing.
+#
+# CELL 2 — a run whose head is long enough that the aligner's budget guard
+#   EXCLUDES its group member. An excluded head is not realigned, and its
+#   continuations keep the natural pad the writer gave them — which is already
+#   the head's own `#` column, so the run stays intact either way.
+#
+# Both are FIXPOINT cells; the second pass is the assertion.
+
+struct Refs:
+    int a    # see #42 for why this is a byte and not a word — the head's own
+             # text contains a `#`, which a buffer search would find instead
+    int b
+
+struct Wide:
+    int s    # a run whose head would exceed the budget at the group column,
+             # so the aligner's guard drops a member and nobody is realigned
+    int a_very_long_field_name_that_drives_the_group_column_far_right    # short
+
+void main():
+    print(1)

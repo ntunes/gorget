@@ -1,0 +1,48 @@
+# ==== HEADER-COLON ANCHOR · the other containers (AXIS D)
+#
+# ⚠ INPUT→OUTPUT, not a fixpoint — see the `.expected` companion. `gg fmt`
+# REJOINS a wrapped header onto one line, so the wrapped spelling exists only
+# on pass one.
+#
+# The struct cell lives in `header_colon_anchor_multiline.gg`; these are its
+# siblings in the one spelling that PARSES for each — the BRACKETED GENERIC
+# parameter list. Two spellings that cannot be written are named here rather
+# than silently omitted:
+#   * a wrapped `extends` list (`trait T extends\n  A,\n  B:`) is a PARSE
+#     ERROR — the list has no bracket to hold the line open;
+#   * a wrapped `extern` header is likewise a parse error — `extern "C":` has
+#     no bracket either.
+#
+# The EQUIP cell is GREEN AT HEAD for the ANCHOR question: its old anchor was
+# the equipped TYPE's span end, which on this shape is accidentally on the
+# header's last line already. It is kept as an axis cell and RED-verified by
+# BREAK-AND-WATCH: anchor on the equip block's own `span.start` and the comment
+# drops into the body.
+#
+# The equip line's SEPARATOR (`equip [T] Cell[T]:`, not `equip [T]Cell[T]:`) is
+# not this file's subject — `equip_generic_params_space.gg` owns that axis.
+#
+# RED, observed on the pre-fix build: the enum and trait comments were emitted
+# on their own line at body indent, as a leading comment of the first member.
+
+enum Choice[
+    T
+]:  # enum multi-line header trailing
+    One(T)
+
+trait Holder[
+    T
+]:  # trait multi-line header trailing
+    T get(self)
+
+struct Cell[T]:
+    T v
+
+equip [
+    T
+] Cell[T]:  # equip multi-line header trailing
+    T get(self):
+        return self.v
+
+void main():
+    print(1)

@@ -1,0 +1,101 @@
+# ==== ORPHAN-PRE-CLOSE · clause and definition block kinds (AXIS A)
+#
+# The rest of axis A's routed rows: the clause bodies a control-flow statement
+# owns beyond its first, and the definition blocks that are not containers.
+#
+# CELLS: elif body · else body · for-else · while-else · match-ARM body ·
+#        match-statement ELSE body · select ELSE body · meta-match CASE body ·
+#        meta-match ELSE body · test · bench · suite setup · suite teardown ·
+#        closure body · DESTRUCTURING-closure body
+#
+# The list is DERIVED from the dedent census's ROUTED rows, not from a guess at
+# which kinds share an emitter: shared routing is an IMPLEMENTATION fact, and a
+# fixture that assumes it stops being a net the moment one kind grows its own
+# emitter.
+#
+# ⚠ The destructuring-closure cell is its own row: that body cannot delegate to
+# the shared statement-body emitter (it would re-emit the parser-synthesized
+# destructure binds), so it takes the flush explicitly. Without that, a plain
+# closure is fixed and a destructuring one is not — the same class, half done.
+#
+# RED, observed on the pre-fix build: every marker dedented out of its clause —
+# one level out for the elif / else / for-else / while-else / match-arm /
+# meta-match-case / closure cells, and all the way to the enclosing function's
+# indent or COLUMN 0 for the match-statement else, the select else, the
+# meta-match else, and the test / bench / suite bodies.
+
+void clause_bodies(int x):
+    if x == 1:
+        print(1)
+    elif x == 2:
+        print(2)
+        # tail in elif body
+    else:
+        print(3)
+        # tail in else body
+    for i in [1]:
+        print(i)
+    else:
+        print(0)
+        # tail in for-else body
+    while false:
+        print(4)
+    else:
+        print(5)
+        # tail in while-else body
+    match x:
+        case 1:
+            print(6)
+            # tail in match arm body
+        else:
+            print(7)
+            # tail in match-statement else body
+    select:
+        case int v = chan().recv():
+            print(v)
+        else:
+            print(8)
+            # tail in select else body
+
+Chan[int] chan():
+    return Chan[int](1)
+
+void meta_clause_bodies[T]():
+    meta match typename(T):
+        case "int":
+            print(1)
+            # tail in meta-match case body
+        else:
+            print(2)
+            # tail in meta-match else body
+
+void closures():
+    Callable[void()] plain = ():
+        print(7)
+        # tail in closure body
+    plain()
+    Callable[void((int, int))] destructured = ((int a, int b)):
+        print(a + b)
+        # tail in destructuring closure body
+    destructured((1, 2))
+
+test "orphan in a test body":
+    print(8)
+    # tail in test body
+
+bench "orphan in a bench body":
+    print(9)
+    # tail in bench body
+
+suite setup:
+    print(10)
+    # tail in suite setup body
+
+suite teardown:
+    print(11)
+    # tail in suite teardown body
+
+void main():
+    clause_bodies(2)
+    meta_clause_bodies[int]()
+    closures()

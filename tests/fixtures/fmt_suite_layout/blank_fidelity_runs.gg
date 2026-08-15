@@ -1,0 +1,48 @@
+# ==== BLANK FIDELITY around comment runs and orphan flushes
+#
+# The book's rule: "a blank above or below a comment, or between two comments,
+# is a deliberate break and is kept." Two of the three cells below are places
+# where the ordinary blank machinery goes BLIND, so the run emitter and the
+# orphan flush own them explicitly.
+#
+# CELLS:
+#   * blank ABOVE an orphan tail run — the flush asks the same
+#     directly-above question the EOF flush asks, once, of the run's first
+#     line;
+#   * blank BELOW a run in a STATEMENT body — the sibling loop's walk-back
+#     stops on a COMMENT line and reports "no blank", so with continuation
+#     lines present the run's own emitter owns the cell;
+#   * blank BELOW a run in a CONTAINER tail — same mechanism, different loop;
+#   * the NO-RUN CONTROL — a plain single-line trailing comment with a blank
+#     below it, where the walk-back still works and the two must not
+#     double-count into two blanks.
+#
+# GREEN ON ARRIVAL — RED-verified by BREAK-AND-WATCH: delete the
+# `blank_line_directly_above` check in the orphan flush and the first cell
+# loses its blank; delete the run emitter's `blank_line_follows` check and the
+# second and third lose theirs.
+
+struct Members:
+    int a    # container-tail head: a run in a container,
+             # container-tail cont-1: with an author blank BELOW it
+
+    int b    # the no-run CONTROL: ONE line, blank below, exactly one blank
+
+    int c
+
+void statement_bodies():
+    int a = 1    # stmt head: a run inside a statement body,
+                 # stmt cont-1: with an author blank BELOW it
+
+    int b = 2
+    print(a + b)
+
+void orphan_blank_above():
+    print(1)
+
+    # blank ABOVE this orphan tail run is the author's paragraphing
+    # and the second line of the same run
+
+void main():
+    statement_bodies()
+    orphan_blank_above()

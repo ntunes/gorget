@@ -21,10 +21,11 @@
 #   (`expected INDENT, found 'else'`). The other five cells were latent: their
 #   suites always exploded, which hid the same pre-wired ordering.
 #
-# ⚠ CHOSEN BEHAVIOUR for a MULTI-LINE inline child (`if true: int x = match y:`
-#   with a header comment): DEFER lands the comment after the child's LAST
-#   line. It reparses and no comment is lost, but the comment MOVES. That cell
-#   lives in `inline_multiline_child_comment.gg`.
+# The MULTI-LINE inline child (`if true: int x = match y:` with a header
+#   comment) is the cell where the header's line is no longer the buffer's last
+#   one at emission time; the claim records the header's position and the
+#   emission resolves it, so the comment stays on the header line there too.
+#   That cell lives in `inline_multiline_child_comment.gg`.
 
 int arm_comment(int x):
     int r = match x:
