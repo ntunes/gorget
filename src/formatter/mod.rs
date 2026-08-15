@@ -707,11 +707,12 @@ impl Formatter {
     /// scope's next comment hook and dedents to column 0 — the same bug
     /// in miniature (pass 1 R2 fold).
     ///
-    /// `container_end` MUST be the AST-recorded EXCLUSIVE end of the
-    /// container (position of the byte AFTER the closing bracket, matching
-    /// logos' end-exclusive convention — verified at `src/parser/expr.rs`
-    /// `parse_array_or_comprehension` which merges `start.merge(previous_span())`
-    /// where `previous_span` returns the `]` token span end-exclusive).
+    /// `container_end` is the EXCLUSIVE end of the container (the byte
+    /// AFTER the closing bracket). For AST-span gates it comes from the
+    /// node's recorded span (logos' end-exclusive convention); for the
+    /// scan-derived gates it is one past the scanned close delimiter —
+    /// both satisfy the same contract (output-review corrected the older
+    /// "MUST be AST-recorded" claim, falsified by the scan-derived seven).
     fn format_bracketed_broken_with_comments<E>(
         &mut self,
         open: &str,
@@ -4498,14 +4499,13 @@ impl Formatter {
                 // 1-tuple, so the broken path is safe for this shape too.
                 let has_interior = self.has_interior_comments(expr.span.start, expr.span.end);
                 if elems.len() == 1 && !has_interior {
-                    debug_assert!(
-                        !has_interior,
-                        "single-element tuple took the flat `(x,)` path with an \
-                         interior comment — the comment will escape. The two \
-                         `has_interior_comments` evaluations (here and in \
-                         `emit_delimited_list`) are NOT redundant: collapsing \
-                         them reopens the escape."
-                    );
+                    // The two `has_interior_comments` evaluations (here and in
+                    // `emit_delimited_list`) are NOT redundant: collapsing them
+                    // reopens the `(x,)` interior-comment escape. Enforced by
+                    // `formatter_collection_literal_interior_hook_dispatch`'s
+                    // EXPECTED_INTERIOR_CHECK == 2 pin, not by an assert (a
+                    // debug_assert inside this `!has_interior` branch would be
+                    // tautological — output-review catch).
                     self.emitter.write("(");
                     self.format_expr(&elems[0]);
                     self.emitter.write(",)");
