@@ -1,0 +1,46 @@
+# R42 tail-reserve boundary cell.
+#
+# C10 · the method chain's PER-SEGMENT install, as distinct from the
+# group-level one in `c10_method_chain.gg`. The chain here is far over
+# budget, so it BREAKS in both halves and every segment owns a line at the
+# continuation indent — the column its pre-render assumed. Only the LAST
+# segment inherits the caller's tail (the header's `:`), and that is the
+# value this cell pins: neutralise it and the last segment's line goes to
+# 121.
+#
+# BOUNDARY PAIR. The two declarations below are the SAME shape one column
+# apart: the first is exactly 120 columns wide with its caller-emitted
+# suffix counted, the second exactly 121.
+#
+# RED, recorded against the PRE-FIX binary built from this track's own
+# base commit. NOT a single flat over-budget line: the chain is already
+# BROKEN in both halves — every segment owns a line, which is exactly the
+# shape this cell needs — so the over-budget line is the 121 half's LAST
+# SEGMENT line, at exactly 121 columns, while its 120 twin's last segment
+# sits at exactly 120. The last segment measured its own argument list
+# without the header's `:`.
+#
+# GREEN: the 121 declaration breaks and nothing in this file exceeds 120,
+# AND the 120 twin still formats FLAT at exactly 120 columns. That second
+# half is the OVER-reserve guard — the one a careless net omits — and it
+# is green on both binaries by construction, so its own red comes from
+# breaking the mechanism: add 1 to the reserve this cell installs and the
+# 120 half breaks.
+
+struct ProbeChain:
+    int f
+
+equip ProbeChain:
+    ProbeChain step_with_a_long_method_name(self, int x): self
+
+    bool terminal_predicate_with_args(self, int x, int y): self.f == x
+
+void probe_seg(int qq):
+    ProbeChain pc = ProbeChain(1)
+    if pc.step_with_a_long_method_name(1).step_with_a_long_method_name(2).step_with_a_long_method_name(3).terminal_predicate_with_args(at120_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, 2):
+        print(1)
+
+void probe_seg(int qq):
+    ProbeChain pc = ProbeChain(1)
+    if pc.step_with_a_long_method_name(1).step_with_a_long_method_name(2).step_with_a_long_method_name(3).terminal_predicate_with_args(at121_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx, 2):
+        print(1)

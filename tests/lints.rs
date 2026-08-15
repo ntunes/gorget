@@ -10770,18 +10770,17 @@ fn doc_source_citations_name_the_right_line() {
     // genuinely names no symbol at that line.
     const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
         ("103", "src/formatter/mod.rs:41", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
-        ("138", "src/formatter/doc.rs:325", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
-        ("200", "src/formatter/doc.rs:189", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("358", "src/formatter/mod.rs:484", "the blank-collapse loop INSIDE `fn format`, whose name is 25 lines up"),
-        ("362", "src/formatter/mod.rs:480", "the `align_trailing_comments()` call, named in prose without backticks"),
-        ("371", "src/formatter/mod.rs:1358", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("465", "src/formatter/mod.rs:1845", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("143", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
+        ("220", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
+        ("469", "src/formatter/mod.rs:709", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("493", "src/formatter/mod.rs:1653", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("587", "src/formatter/mod.rs:2239", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
     // outlived its reason and has to go, which is what makes the list shrink
     // instead of quietly accumulating. And the count may not grow.
-    const HEURISTIC_BLIND_CEILING: usize = 7;
+    const HEURISTIC_BLIND_CEILING: usize = 6;
     assert!(
         HEURISTIC_BLIND.len() <= HEURISTIC_BLIND_CEILING,
         "the heuristic-blind allowlist GREW ({} > {HEURISTIC_BLIND_CEILING}). \
@@ -11874,7 +11873,24 @@ fn fmt_precedence_check_arm_count() {
     /// per form (`format_prefix_operand` 8 sites, `format_postfix_receiver`
     /// still 8), and both are load-bearing: emitting `(await f()) + 1`
     /// without the prefix helper's parens re-parses as `Await(f() + 1)`.
-    const EXPECTED: usize = 27;
+    ///
+    /// R42 tail-reserve bump 27 → 29, and NEITHER is a new arm. A caller that
+    /// must reserve width for what it writes after an operand has to
+    /// pre-render that text to measure it, and the pre-render necessarily
+    /// spells the same helper call a second time. The two mirrors:
+    ///   * `Expr::Range` — the START operand's reserve measures `..` plus the
+    ///     END operand, whose emission goes through `format_prefix_operand`.
+    ///   * `Expr::Rethrow` — the LHS's reserve measures the bare-form
+    ///     ` rethrow <transform>` tail, whose emission goes through
+    ///     `format_binop_operand`.
+    /// A mirror runs on a throwaway sub-`Formatter`, so it cannot change what
+    /// is emitted; what it CAN do is drift from the emission beside it, which
+    /// is why both are spelled identically to their emitting twin. This guard
+    /// still catches what it was written for: a genuinely NEW `format_expr`
+    /// arm that emits a sub-expression without consulting a helper leaves the
+    /// count at 29 while the arm count rises, and one that DOES consult a
+    /// helper pushes it to 30.
+    const EXPECTED: usize = 29;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -14456,18 +14472,21 @@ fn formatter_list_emit_fill_census() {
     ///     All delimiter-scan misses route through it, including the
     ///     sibling-anchor propagation, so this stays one site regardless of
     ///     how many callers can miss.
-    ///   * two in `format_method_chain` — chain segments are pre-rendered
+    ///   * two in `format_chain_segment` — chain segments are pre-rendered
     ///     into a sub-formatter whose comment sideband is EMPTY, so a real
     ///     gate there would be dead code reading as a live one. That escape
     ///     is filed with a repro (`known_gaps/fmt_delimited_list_pre_render_above.gg`);
-    ///     these two sites are its structural marker in the source.
+    ///     these two sites are its structural marker in the source. (They
+    ///     moved out of `format_method_chain` when the segment emission was
+    ///     factored into one spelling shared by the emission and the R42
+    ///     tail-reserve measurement — the same two sites, re-attributed.)
     ///
     /// A pattern match (`if let Gate::UngatedCarveOut(reason) = gate`) is
     /// NOT a construction and is excluded by requiring the `("` opener.
     const EXPECTED_CARVE_OUTS: &[(&str, &str)] = &[
         ("gate_or_scan_miss", "scan miss"),
-        ("format_method_chain", "chain segment generic args: empty sideband"),
-        ("format_method_chain", "chain segment call args: empty sideband"),
+        ("format_chain_segment", "chain segment generic args: empty sideband"),
+        ("format_chain_segment", "chain segment call args: empty sideband"),
     ];
     /// Non-canonical one-item-per-line sites. A tripwire pinned at zero.
     const EXPECTED_SURROUND: usize = 0;
@@ -14486,7 +14505,36 @@ fn formatter_list_emit_fill_census() {
     ///      /write\(", "\)/{print NR"\t"fn}' src/formatter/mod.rs`
     /// (comment lines excluded, as below). A change here means the family
     /// grew or shrank — reconcile the TODO enumeration with it.
+    ///
+    /// The count EXCLUDES measurement mirrors (below), which is what keeps
+    /// this number comparable across the R42 tail reserve: a mirror emits
+    /// into a throwaway sub-formatter and can re-parent nothing.
     const EXPECTED_WRITE_SEP: usize = 23;
+    /// MEASUREMENT MIRRORS of the loops above: a hand-rolled comma loop has
+    /// to be re-walked to measure what follows one of its items, and the
+    /// re-walk necessarily spells the separator again.
+    ///
+    /// These are NOT list emitters. The mirror runs inside a
+    /// `measured_reserve` closure, on a sub-`Formatter` at probe width whose
+    /// output is measured and thrown away — it never reaches the buffer, so
+    /// the interior-comment escape the census above exists to count cannot
+    /// happen here.
+    ///
+    /// A rise means either a new hand-rolled loop gained a tail measurement
+    /// (fine — its emitter half must appear above too) or a real emitter was
+    /// mis-spelled onto a sub-formatter (not fine). Reconcile against the
+    /// emitter count, which is pinned separately and did NOT move.
+    const EXPECTED_MEASUREMENT_MIRRORS: usize = 11;
+    /// Functions that exist ONLY to be run inside a `measured_reserve`
+    /// closure. Their writes land on a throwaway sub-`Formatter` exactly like
+    /// an inline mirror's do — but because they are METHODS, the receiver is
+    /// spelled `self` and the "written on `self`" test above cannot see it.
+    ///
+    /// Kept in step with the MEASUREMENT-ONLY rows of
+    /// `formatter_header_suffix_census`, which dispositions the same set from
+    /// the other direction; a function that appears in one and not the other
+    /// is a disagreement to resolve, not a label to copy.
+    const MEASUREMENT_ONLY_FNS: &[&str] = &["format_trait_bound_tail", "format_expr_if_tail"];
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -14494,6 +14542,7 @@ fn formatter_list_emit_fill_census() {
     let mut surround = 0usize;
     let mut group = 0usize;
     let mut write_sep = 0usize;
+    let mut measurement_mirrors = 0usize;
     let mut delimited_list_sites = 0usize;
     let mut ungated_texts = 0usize;
     let mut carve_outs: Vec<(String, String)> = Vec::new();
@@ -14524,7 +14573,19 @@ fn formatter_list_emit_fill_census() {
         // would make both shapes the same token and this census blind.
         surround += line.matches("doc::surround(").count();
         group += line.matches("doc::group(").count();
-        write_sep += line.matches("write(\", \")").count();
+        // A separator written on the OUTER formatter is an emitter; one
+        // written on a `measured_reserve` closure's sub-formatter is a
+        // mirror. `self` is a keyword, so "the receiver is literally `self`"
+        // is a structural test, not a naming convention: no sub-formatter can
+        // ever be bound to it.
+        let on_self = line.matches("self.emitter.write(\", \")").count();
+        let any = line.matches("write(\", \")").count();
+        if MEASUREMENT_ONLY_FNS.contains(&current_fn.as_str()) {
+            measurement_mirrors += any;
+        } else {
+            write_sep += on_self;
+            measurement_mirrors += any - on_self;
+        }
         delimited_list_sites += line.matches("self.emit_delimited_list(").count();
         if current_fn != "emit_delimited_list" {
             ungated_texts += line.matches(".emit_delimited_texts(").count();
@@ -14587,8 +14648,17 @@ fn formatter_list_emit_fill_census() {
     assert_eq!(group, EXPECTED_GROUP, "`doc::group(` site count changed.{msg}");
     assert_eq!(
         write_sep, EXPECTED_WRITE_SEP,
-        "`write(\", \")` separator-loop count changed — a list is emitted with a \
-         hand-rolled comma loop that can never wrap.{msg}"
+        "`self.emitter.write(\", \")` separator-loop count changed — a list is \
+         emitted with a hand-rolled comma loop that can never wrap.{msg}"
+    );
+    assert_eq!(
+        measurement_mirrors, EXPECTED_MEASUREMENT_MIRRORS,
+        "the count of comma-loop MEASUREMENT MIRRORS (a `\", \"` written on a \
+         sub-formatter rather than on `self`) changed. A mirror re-walks a \
+         hand-rolled loop to measure what follows one of its items and emits \
+         nothing; a real emitter mis-spelled onto a sub-formatter would show \
+         up here while the emitter count above stayed put, which is exactly \
+         the confusion this split exists to prevent.{msg}"
     );
 }
 
@@ -14796,5 +14866,604 @@ fn formatter_verbatim_emit_arm_count() {
          Offending lines:\n{}",
         offenders.len(),
         offenders.join("\n")
+    );
+}
+
+/// R42 Core #4 guard, ITEM-POSITION half: a pre-rendered element that will be
+/// spliced into a `Doc` must be built through `element_to_string_reserving`,
+/// which takes its tail as an EXPLICIT parameter, so the reserve cannot be
+/// forgotten by writing the shorter spelling.
+///
+/// The bare `element_to_string` survives for the one position that genuinely
+/// has no tail of its own, and that position is named below. A second bare
+/// call is the regression this pins: escape (c) — a sub-render blind to what
+/// its parent appends after it — reopens silently, because the output still
+/// re-parses and is still idempotent. Only the width moves.
+#[test]
+fn formatter_pre_rendered_items_carry_their_reserve() {
+    /// Bare `self.element_to_string(` call sites. ONE, and it is not an item:
+    /// the comprehension's loop VARIABLE, which is interpolated into a
+    /// `format!("for {var} in {iter}")` string rather than spliced as its own
+    /// `Doc` leaf — so the ELEMENT's reserve already covers the line it lands
+    /// on, and giving the variable its own would double-charge it.
+    const EXPECTED_BARE: usize = 1;
+
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let mut bare = 0usize;
+    for line in content.lines() {
+        let t = line.trim_start();
+        if t.starts_with("//") || t.starts_with("///") {
+            continue;
+        }
+        // `element_to_string(` only — `element_to_string_at(`,
+        // `_reserving(` and `_unbounded(` all fail the `(` adjacency test.
+        bare += line.matches(".element_to_string(").count();
+    }
+    assert_eq!(
+        bare, EXPECTED_BARE,
+        "R42 escape-(c) adoption ratchet: `self.element_to_string(` site count \
+         changed ({bare} vs {EXPECTED_BARE}).\n\n\
+         A pre-rendered element is spliced onto a line that CONTINUES after \
+         it — the separating `,`, the list's close, and whatever the list's \
+         own caller writes after that. A sub-render at the full budget is \
+         blind to all of it and overruns by exactly that much, while still \
+         re-parsing and still being idempotent, so no other gate can see it.\n\n\
+         Build the element through `element_to_string_reserving(base_indent, \
+         reserve, f)` and state its tail. If the new site genuinely has no \
+         tail, say WHY here and bump the count — but check first: `no tail` \
+         is what every one of the ten list kinds looked like before this \
+         class was measured."
+    );
+}
+
+/// R42 Core #4 guard, HEADER-PRODUCER half: every function that writes a
+/// header SUFFIX — the text a header emits AFTER a width-decided render, on
+/// the same line — either installs a tail reserve or is dispositioned here.
+///
+/// A colon-only needle would be blind to half the family: ` throws T`, `!`,
+/// ` = "sym"` and ` = Type` are suffixes too, and the census that green-lights
+/// them is a census that green-lights the extern class this track exists to
+/// close. The needle therefore covers all of them.
+///
+/// Two halves, because a fn-level check alone has a hole. The DISPOSITION set
+/// catches a suffix written in a NEW function; the pinned SITE TOTAL catches
+/// one written as a new arm inside `format_stmt` or `format_expr`, which
+/// already reserve elsewhere and would otherwise absorb it silently.
+///
+/// # The DISCOVERY SWEEP that closed the family
+///
+/// This census pins the HEADER-suffix half. The wider question — *is there any
+/// other position where a caller writes text after a width-decided render?* —
+/// was answered once, by sweeping every `emitter.write*` whose preceding
+/// emission is a `format_*` / `write_doc` / `element_to_string*` /
+/// `emit_delimited_*` call. Recorded HERE rather than in a scratch file,
+/// because a declaration of closure that cannot be re-run is not a
+/// declaration:
+///
+/// ```text
+/// STRICT  (the immediately preceding CODE line is a render) : 82
+/// LOOSE   (a render within the preceding 5 code lines)      : 272   (STRICT ⊆ LOOSE)
+///
+/// disposition of all 272:
+///   233  RESERVED — the enclosing fn installs a tail reserve
+///     4  NOT-A-CARRIER — the write closes the render's own construct
+///    35  non-carriers, by kind:
+///          reserve-0 verified   format_test · format_bench · format_suite_setup
+///                               · format_suite_teardown · format_extern_block
+///                               · format_attributes · format_call_arg
+///          charged at caller    format_function_header_tail · format_inline_suite
+///          measurement only     format_expr_if_tail · format_trait_bound_tail
+///          width-exempt         format_import (the `from` list + the dotted path)
+///          no Doc layer         format_pattern (filed feature gap)
+///          not a header         format_string_lit (f-string internals)
+///          write PRECEDES the render — the loose window over-captures:
+///                               try_inline_single_terminal_stmts
+///                               · format_closure_body · format_expr_maybe_parens
+/// ```
+///
+/// Regenerate with the needle this test already carries (`suffix` below) run
+/// against `src/formatter/mod.rs` with the preceding-line rule; a rise in the
+/// LOOSE count that is not matched by a row above is a new carrier position.
+/// The sweep is what found `format_const_decl`, `format_static_decl`,
+/// `format_param`, `format_trait_bound`, `format_newtype`,
+/// `format_generic_param`, `format_closure_param` and
+/// `format_assert_return_expr` — eight carriers no enumerated row named, each
+/// now pinned by a boundary cell under `tests/fixtures/fmt_tail_reserve/`.
+#[test]
+fn formatter_header_suffix_census() {
+    /// Disposition per function. `true` = the function installs a reserve
+    /// somewhere; `false` = it does not, and the string says why that is
+    /// correct. Every `false` row was VERIFIED by reading the render path
+    /// from the header's start to the suffix and confirming it reaches no
+    /// `write_doc` — never by copying a label.
+    const CENSUS: &[(&str, bool, &str)] = &[
+        ("emit_else_header", false, "NO CARRIER: `else:` is written at line start; nothing width-decided precedes it"),
+        ("format_arm_body", false, "CHARGED AT THE CALLER: ` do:` and the inline body are measured by `arm_body_reserve`, which the four callers install around their own header render — a reserve installed HERE could never reach it"),
+        ("format_attributes", false, "RESERVE-0 VERIFIED: an attribute's `k = v` is text on both sides; no attribute-arg form reaches `write_doc`"),
+        ("format_bench", false, "RESERVE-0 VERIFIED: `bench \"name\":` is a quoted string plus a colon, both plain text"),
+        ("format_call_arg", false, "RESERVE-0 VERIFIED: a named argument's `name` is text, so nothing width-decided precedes the ` = `"),
+        ("format_const_decl", true, ""),
+        ("format_elif_else_blocks", true, ""),
+        ("format_enum", true, ""),
+        ("format_equip", true, ""),
+        ("format_expr", true, ""),
+        ("format_expr_if_tail", false, "MEASUREMENT ONLY: this helper exists to be run inside `measured_reserve`; it never emits into the output buffer"),
+        ("format_extern_block", false, "RESERVE-0 VERIFIED: `extern \"C\":` is a quoted string plus a colon"),
+        ("format_function_header_tail", false, "CHARGED AT THE CALLER: this function IS the suffix — `format_function` measures it and installs it around the parameter list"),
+        ("format_inline_suite", false, "CHARGED AT THE CALLER: `write(header_suffix)` runs AFTER the header expression is already emitted, so a reserve installed here could never reach that fit test — `inline_suite_reserve` / `suite_header_reserve` measure it at the if/elif/meta-case sites instead. Its `\"\"`-suffix caller (`on error`, B9's ratified NO-COLON inline form) has no carrier at all: the header is literal text"),
+        ("format_item", true, ""),
+        ("format_match_arm", true, ""),
+        ("format_param", true, ""),
+        ("format_static_decl", true, ""),
+        ("format_stmt", true, ""),
+        ("format_string_lit", false, "NOT A HEADER: the `:` is an f-string format spec INSIDE a literal — the broad needle over-captures it"),
+        ("format_struct", true, ""),
+        ("format_suite_setup", false, "NO CARRIER: `suite setup:` is a whole-header literal with no render at all"),
+        ("format_suite_teardown", false, "NO CARRIER: `suite teardown:` likewise"),
+        ("format_test", false, "RESERVE-0 VERIFIED: `test \"name\":`, as `format_bench`"),
+        ("format_trait", true, ""),
+        ("format_trait_bound", true, ""),
+        ("format_trait_bound_tail", false, "MEASUREMENT ONLY: the remainder walk `format_trait_bound` runs inside `measured_reserve`"),
+        ("format_trait_extends_and_colon", true, ""),
+        ("format_type_alias", true, ""),
+    ];
+    /// Header-suffix WRITE sites PER FUNCTION, pinned so a new arm inside a
+    /// function that already reserves — `format_stmt` and `format_expr` are
+    /// giant match statements — cannot slip in under an existing `true` row.
+    ///
+    /// Per-function rather than a single grand total: a raw total nets a
+    /// compensating add-and-remove inside the same function to zero, which is
+    /// exactly the shape a refactor produces and exactly the one a guard must
+    /// not sleep through.
+    const EXPECTED_SITES_PER_FN: &[(&str, usize)] = &[
+        ("emit_else_header", 1),
+        ("format_arm_body", 2),
+        ("format_attributes", 1),
+        ("format_bench", 1),
+        ("format_call_arg", 1),
+        ("format_const_decl", 2),
+        ("format_elif_else_blocks", 3),
+        ("format_enum", 1),
+        ("format_equip", 2),
+        ("format_expr", 22),
+        ("format_expr_if_tail", 2),
+        ("format_extern_block", 1),
+        ("format_function_header_tail", 5),
+        ("format_inline_suite", 1),
+        ("format_item", 6),
+        ("format_match_arm", 2),
+        ("format_param", 2),
+        ("format_static_decl", 2),
+        ("format_stmt", 29),
+        ("format_string_lit", 1),
+        ("format_struct", 1),
+        ("format_suite_setup", 1),
+        ("format_suite_teardown", 1),
+        ("format_test", 1),
+        ("format_trait", 3),
+        ("format_trait_bound", 1),
+        ("format_trait_bound_tail", 1),
+        ("format_trait_extends_and_colon", 2),
+        ("format_type_alias", 2),
+    ];
+
+    // `format_inline_suite\(` unqualified, not `\(":"`: the `on error` caller
+    // passes `""` as its suffix, and a needle that only matches the colon
+    // spelling does not cover its own family. The `""` site's disposition is
+    // NO CARRIER (B9's ratified ruling — the inline `on error` form takes no
+    // colon and its header is literal text), which is a disposition it has to
+    // EARN in the table below rather than get by evading the scan.
+    let suffix = regex::Regex::new(
+        r#"\.write\("[^"]*:[^"]*"\)|format_inline_suite\(|format_arm_body\(|\.write\(" throws "\)|\.write\("!"\)|\.write\(" = "\)"#,
+    )
+    .expect("suffix needle compiles");
+    let reserve = regex::Regex::new(
+        r"with_tail_reserve\(|with_exact_tail_reserve\(|inline_suite_reserve\(|suite_header_reserve\(|arm_body_reserve\(|measured_reserve\(|element_to_string_reserving\(",
+    )
+    .expect("reserve needle compiles");
+    let fn_decl = regex::Regex::new(r"^(?:pub(?:\(crate\))? )?fn ([a-z_0-9]+)")
+        .expect("fn needle compiles");
+
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let mut current = String::from("<top>");
+    let mut sites: std::collections::BTreeMap<String, usize> = Default::default();
+    let mut reserves: std::collections::BTreeSet<String> = Default::default();
+    let mut total = 0usize;
+    for line in content.lines() {
+        let t = line.trim_start();
+        if let Some(c) = fn_decl.captures(t) {
+            current = c[1].to_string();
+        }
+        if t.starts_with("//") {
+            continue;
+        }
+        if suffix.is_match(line) {
+            *sites.entry(current.clone()).or_default() += 1;
+            total += 1;
+        }
+        if reserve.is_match(line) {
+            reserves.insert(current.clone());
+        }
+    }
+
+    let observed: Vec<(String, bool)> = sites
+        .keys()
+        .map(|f| (f.clone(), reserves.contains(f)))
+        .collect();
+    let expected: Vec<(String, bool)> = CENSUS
+        .iter()
+        .map(|(f, r, _)| ((*f).to_string(), *r))
+        .collect();
+
+    assert_eq!(
+        observed, expected,
+        "R42 header-suffix census in `src/formatter/mod.rs` changed.\n\n\
+         A HEADER SUFFIX is text a header writes AFTER a width-decided render, \
+         on the same line: `:`, ` throws T`, `!`, ` = \"sym\"`, ` = Type`, or an \
+         inline suite / arm body. The render before it cannot see any of it, so \
+         it measures its own width against the full budget and the line \
+         overruns by exactly the suffix.\n\n\
+         A NEW function here must install a reserve around the render it \
+         precedes — `with_tail_reserve` for a fixed suffix, `measured_reserve` \
+         for one containing rendered content — or be added to CENSUS with \
+         `false` AND the verified reason its path reaches no `write_doc`. \
+         Copying an existing `false` label is how two rows in the brief's own \
+         seed turned out to be wrong."
+    );
+    let observed_counts: Vec<(String, usize)> =
+        sites.iter().map(|(f, n)| (f.clone(), *n)).collect();
+    let expected_counts: Vec<(String, usize)> = EXPECTED_SITES_PER_FN
+        .iter()
+        .map(|(f, n)| ((*f).to_string(), *n))
+        .collect();
+    assert_eq!(
+        observed_counts, expected_counts,
+        "R42 header-suffix SITE COUNTS changed (total {total}). The \
+         disposition table above cannot see this: a new suffix written as an \
+         arm inside `format_stmt` or `format_expr` lands in a function that \
+         already reserves elsewhere, so the fn-level check passes while the \
+         new arm has no reserve at all. Find the new site, give it its \
+         disposition, and bump its row."
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// R42 · the WIDTH RATCHET — the output-side class guard
+// ══════════════════════════════════════════════════════════════
+//
+// Every other guard in this file watches the SOURCE for a shape. This one
+// watches the OUTPUT for the property, which is what makes it carrier-
+// agnostic: it does not care whether a line overran because of a fill
+// packer, a group, a pre-rendered item, a postfix operator or a carrier
+// nobody has named yet.
+//
+// **What it honestly guards**: regressions anywhere, and any family that has
+// corpus instances. **What it cannot see**: a family with ZERO instances in
+// the corpus. Those are the fixture set's job — and because the round's own
+// fixtures live under `tests/fixtures/**`, which IS one of the roots, a
+// family that had no instance acquires one the moment its cell lands.
+
+/// The corpus roots, REPLICATED from the standing walk
+/// (`tests/integration.rs::fmt_output_reparses_corpus_wide`) rather than
+/// imported: the two live in different test binaries and Rust gives no way to
+/// share a nested fn across them.
+///
+/// A hand-synced duplicate drifts, and the drift is not hypothetical — the
+/// first draft of this guard carried THREE roots and left out `compiler/`,
+/// which is where three live instances of the class it was written to retire
+/// were sitting. `width_ratchet_roots_agree_with_the_standing_walk` below is
+/// the scan that makes the duplication safe.
+const WIDTH_RATCHET_ROOTS: &[&str] = &["tests/fixtures", "lib", "examples", "compiler"];
+
+/// The ratified budget (`docs/define-gorget/decisions.md`, FMT CANON PAIR).
+const WIDTH_RATCHET_BUDGET: usize = 120;
+
+/// Why a formatted line is allowed past the budget. Keyed by CLASSIFIER, never
+/// by `path:line` — content moves, and a location-keyed allowlist rots into a
+/// list of places nobody can re-derive.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum OverBudget {
+    /// A standalone comment. No formatter reflows prose.
+    CommentLine,
+    /// Code that fits once the trailing comment is stripped.
+    ///
+    /// NOT "the line contains a `#`" — that naive spelling would exempt
+    /// `extern … = "sym"  # note`, which is the caller-suffix class itself.
+    /// Charging a comment's width would also make CODE layout depend on
+    /// COMMENT text, which is the same never-reflow-prose doctrine one step
+    /// out.
+    CommentTail,
+    /// The `from … import` name list: the one UNDELIMITED list in the
+    /// language, width-exempt by ratified decision until the parenthesized
+    /// form lands.
+    Import,
+    /// The doctrinal unbreakable atom: no break could have saved this line,
+    /// because its widest ELEMENT does not fit ALONE at this indent.
+    Atom,
+    /// An inline-BODY collision: the author put a suite, arm or closure body
+    /// on its header's line, and the body's leading unbreakable text exceeds
+    /// what remains. Converting the layout would overwrite the author's own
+    /// choice, so the residual stands.
+    InlineBody,
+    /// A break WOULD have narrowed this line, and none was taken. Not an
+    /// escape — a missing capability, and the residual category, so a NEW
+    /// overrun of any unrecognised shape lands here and trips the ceiling.
+    Unbroken,
+}
+
+/// Mask every quoted-string body with `_`, preserving length, so a delimiter
+/// or comma INSIDE a literal is never mistaken for structure.
+fn width_ratchet_mask_strings(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut in_str: Option<char> = None;
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match in_str {
+            Some(q) => {
+                out.push('_');
+                if c == '\\' {
+                    if let Some(n) = chars.next() {
+                        let _ = n;
+                        out.push('_');
+                    }
+                } else if c == q {
+                    in_str = None;
+                }
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    in_str = Some(c);
+                }
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+fn width_ratchet_classify(line: &str) -> OverBudget {
+    const CLOSERS: [char; 3] = [')', ']', '}'];
+    const OPENERS: [char; 3] = ['(', '[', '{'];
+
+    let stripped = line.trim_start();
+    let indent = line.chars().count() - stripped.chars().count();
+    let masked = width_ratchet_mask_strings(line);
+    let m_stripped = masked.trim().to_string();
+
+    if stripped.starts_with('#') {
+        return OverBudget::CommentLine;
+    }
+    if stripped.starts_with("from ") && stripped.contains(" import ") {
+        return OverBudget::Import;
+    }
+    if let Some(idx) = masked.find('#') {
+        let head: String = line.chars().take(masked[..idx].chars().count()).collect();
+        if head.trim_end().chars().count() <= WIDTH_RATCHET_BUDGET {
+            return OverBudget::CommentTail;
+        }
+    }
+
+    // ATOM: could ANY break have saved this line? Cut at the LAST unquoted
+    // closing delimiter — what follows is the CALLER's suffix, not an element
+    // — but count the delimiter RUN itself, because `Doc::Fill` charges its
+    // close to the last item's own fit test. Then split what remains at the
+    // boundaries a break can actually exploit: the list separator and the
+    // assignment `=`.
+    let mut body: &str = &m_stripped;
+    let mut close_run = 0usize;
+    if let Some(cut) = body.rfind(CLOSERS) {
+        close_run = body[cut..].chars().take_while(|c| CLOSERS.contains(c)).count();
+        body = &body[..cut];
+    }
+    let body = body.trim_start_matches(OPENERS);
+    let widest = body
+        .split(',')
+        .flat_map(|s| s.split(" = "))
+        .map(|s| s.trim().chars().count())
+        .max()
+        .unwrap_or(0);
+    if indent + widest + close_run > WIDTH_RATCHET_BUDGET {
+        return OverBudget::Atom;
+    }
+
+    // INLINE BODY: a header's `:` followed by MORE CONTENT on the same line.
+    if m_stripped.contains("): ") && !m_stripped.ends_with("): ") {
+        return OverBudget::InlineBody;
+    }
+    let header_kw = ["if ", "elif ", "else:", "case ", "for ", "while "];
+    if header_kw.iter().any(|k| m_stripped.starts_with(k)) {
+        if let Some(idx) = m_stripped.rfind(": ") {
+            if m_stripped[idx + 2..].trim().len() > 0 {
+                return OverBudget::InlineBody;
+            }
+        }
+    }
+
+    OverBudget::Unbroken
+}
+
+/// Format every `.gg` file under the roots and return each over-budget line
+/// with its classification. Skips inputs that do not PARSE, exactly as the
+/// standing walk does — 29 fixtures are deliberate reject cases, and the
+/// infallible entry point panics on them.
+fn width_ratchet_scan() -> Vec<(String, usize, OverBudget, String)> {
+    let mut rows = Vec::new();
+    for root in WIDTH_RATCHET_ROOTS {
+        walk_gg_files(Path::new(root), &mut |path: &Path| {
+            let Ok(src) = fs::read_to_string(path) else { return };
+            let Ok(formatted) = gorget::formatter::format_source_result(&src) else { return };
+            for (i, line) in formatted.lines().enumerate() {
+                // CHARACTERS, not bytes: the budget is a display property,
+                // and a byte count inflates every line holding a non-ASCII
+                // literal into a false positive.
+                if line.chars().count() <= WIDTH_RATCHET_BUDGET {
+                    continue;
+                }
+                rows.push((
+                    path.display().to_string(),
+                    i + 1,
+                    width_ratchet_classify(line),
+                    line.to_string(),
+                ));
+            }
+        });
+    }
+    rows.sort();
+    rows
+}
+
+/// E5 — the ROOTS-AGREEMENT scan. `WIDTH_RATCHET_ROOTS` is a hand-synced
+/// duplicate of the standing walk's array, so the duplication is checked
+/// rather than trusted.
+#[test]
+fn width_ratchet_roots_agree_with_the_standing_walk() {
+    let content = fs::read_to_string("tests/integration.rs")
+        .expect("cannot read tests/integration.rs");
+    let needle = r#"for root in ["tests/fixtures", "lib", "examples", "compiler"] {"#;
+    assert!(
+        content.contains(needle),
+        "the standing corpus walk's root array in \
+         `tests/integration.rs::fmt_output_reparses_corpus_wide` no longer \
+         reads `{needle}`. `WIDTH_RATCHET_ROOTS` in this file is a hand-synced \
+         duplicate of it — reconcile the two, then update this needle. \
+         Leaving them to drift is exactly how a root with live instances of a \
+         class got left out of the guard written to retire that class."
+    );
+    for root in WIDTH_RATCHET_ROOTS {
+        assert!(
+            needle.contains(&format!("\"{root}\"")),
+            "root `{root}` is in WIDTH_RATCHET_ROOTS but not in the standing walk"
+        );
+    }
+}
+
+/// THE WIDTH RATCHET. Every formatted line past the ratified 120-column
+/// budget must match a declared escape category, and no category may exceed
+/// its seeded ceiling.
+///
+/// Both halves matter. The category check catches an overrun of a shape
+/// nobody classified; the CEILINGS catch a new overrun of a shape that
+/// already has a legitimate instance — which is the far commoner regression,
+/// and the reason a residual category (`Unbroken`) does not make the guard
+/// toothless.
+///
+/// SHRINK-ONLY: a ceiling that measures LOWER than its constant should be
+/// tightened, and the test says so on stderr.
+#[test]
+fn fmt_no_new_over_budget_lines() {
+    // ── The ATTRIBUTED SEED ────────────────────────────────────────────────
+    //
+    // A bare total would be useless here: ~90% of the over-budget lines in
+    // this tree are DOCTRINAL escapes, and a single number that absorbs them
+    // absorbs a live defect just as quietly. Each category is therefore
+    // ceilinged on its own, and the two small ones are enumerated row by row.
+    //
+    // Regenerate every figure below with the scan itself:
+    //   cargo test --test lints fmt_no_new_over_budget_lines -- --nocapture
+    // which prints the per-category tally it measured.
+
+    /// Standalone author prose. No formatter in this family reflows comments.
+    const CEIL_COMMENT_LINE: usize = 10;
+    /// Code that fits once its trailing comment is stripped.
+    const CEIL_COMMENT_TAIL: usize = 11;
+    /// `from … import` name lists — ratified width-exempt.
+    const CEIL_IMPORT: usize = 129;
+    /// The doctrinal unbreakable atom.
+    const CEIL_ATOM: usize = 168;
+    /// Inline-BODY collisions. TWO rows, both deliberate:
+    ///   * `tests/fixtures/fmt_fill_pack/closure_params.gg` — the `cl_over`
+    ///     cell, whose element fits alone at 119 and whose `): 0` carries it
+    ///     to 122.
+    ///   * `tests/fixtures/fmt_tail_reserve/inline_body_escape.gg` — the
+    ///     escape's own cell, where the body's leading unbreakable text
+    ///     exceeds the budget even after the header breaks.
+    const CEIL_INLINE_BODY: usize = 2;
+    /// A break would have narrowed the line and none was taken. FOUR rows,
+    /// each a NAMED feature gap filed in `TODO.md`, none of them closable by
+    /// a reserve:
+    ///   * `examples/toml_config.gg` — a `Stmt::VarDecl` initializer. The arm
+    ///     emits no `Doc` at all, so no fit test ever runs.
+    ///   * `tests/fixtures/parser_trailing_comma_ctor_pattern.gg` —
+    ///     `format_pattern` has no `Doc` layer; pattern wrapping is its own
+    ///     unimplemented feature.
+    ///   * `tests/fixtures/parser_trailing_comma_variant_fields.gg` — an enum
+    ///     tuple-variant field list, a hand-rolled comma loop whose element
+    ///     types produce no `Doc` either.
+    ///   * `tests/fixtures/known_gaps/fmt_prerender_column_binary_chain.gg`
+    ///     and its live twin in `tests/fixtures/self_host_lowerer/` — a
+    ///     binary chain's FIRST operand is pre-rendered for the continuation
+    ///     column but spliced at the caller's, so its own sub-render believes
+    ///     it has ~23 more columns than it does. A DISTINCT root from the
+    ///     caller-suffix class: the reserve there is correct, the start
+    ///     column is not.
+    const CEIL_UNBROKEN: usize = 5;
+
+    let rows = width_ratchet_scan();
+    assert!(
+        rows.len() > 50,
+        "the width scan found only {} over-budget lines across {:?} — the \
+         roots moved or the formatter stopped producing output. Fix the \
+         scanner, do not lower the ceilings.",
+        rows.len(),
+        WIDTH_RATCHET_ROOTS
+    );
+
+    let tally = |k: OverBudget| rows.iter().filter(|r| r.2 == k).count();
+    let checks: &[(OverBudget, usize, &str)] = &[
+        (OverBudget::CommentLine, CEIL_COMMENT_LINE, "CEIL_COMMENT_LINE"),
+        (OverBudget::CommentTail, CEIL_COMMENT_TAIL, "CEIL_COMMENT_TAIL"),
+        (OverBudget::Import, CEIL_IMPORT, "CEIL_IMPORT"),
+        (OverBudget::Atom, CEIL_ATOM, "CEIL_ATOM"),
+        (OverBudget::InlineBody, CEIL_INLINE_BODY, "CEIL_INLINE_BODY"),
+        (OverBudget::Unbroken, CEIL_UNBROKEN, "CEIL_UNBROKEN"),
+    ];
+
+    eprintln!("[fmt_no_new_over_budget_lines] measured tally:");
+    for (kind, ceiling, name) in checks {
+        eprintln!("  {kind:?} = {} (ceiling {name} = {ceiling})", tally(*kind));
+    }
+
+    let mut failures: Vec<String> = Vec::new();
+    for (kind, ceiling, name) in checks {
+        let n = tally(*kind);
+        if n > *ceiling {
+            let offenders: Vec<String> = rows
+                .iter()
+                .filter(|r| r.2 == *kind)
+                .map(|(p, l, _, text)| {
+                    format!("    {p}:{l} ({} cols) {}", text.chars().count(), text.trim())
+                })
+                .collect();
+            failures.push(format!(
+                "  {kind:?}: {n} lines, ceiling {name} = {ceiling}\n{}",
+                offenders.join("\n")
+            ));
+        }
+        if n < *ceiling {
+            eprintln!(
+                "[fmt_no_new_over_budget_lines] {kind:?} measured {n} < {name} = {ceiling} \
+                 — TIGHTEN the ceiling; this ratchet only shrinks."
+            );
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "R42 WIDTH RATCHET: formatted output grew past the ratified \
+         120-column budget.\n\n{}\n\n\
+         The budget is a property of the EMITTED LINE, not of a list \
+         considered in isolation — a suffix the caller writes after a Doc \
+         counts. If the new line is a genuine RULED escape, it must fall into \
+         one of the declared categories AND its ceiling has to be raised \
+         deliberately, with the ruling cited. If it is not, the carrier that \
+         emitted it is missing its tail reserve: install it around the \
+         width-decided render, immediately, and add the cell's boundary pair \
+         under `tests/fixtures/fmt_tail_reserve/`.\n\n\
+         ⚠ The category is a CLASSIFIER, never a `path:line` — content moves. \
+         An `Unbroken` row is NOT an escape: it is a position with no fit \
+         test at all, and it belongs in `TODO.md` as a named feature gap.",
+        failures.join("\n\n")
     );
 }

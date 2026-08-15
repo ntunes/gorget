@@ -10,14 +10,25 @@
 #   cl_empty  empty              `()` — the zero-parameter closure
 #   cl_flat   fits-flat          one line, no trailing comma
 #   cl_fill   needs-fill         greedy packing at the block continuation indent
-#   cl_over   single-over-width  the one closure parameter does not fit on the open
-#                                line, so it breaks to the continuation indent — and
-#                                being wider than the budget it overflows even there
+#   cl_over   suffix-over-width  the one closure parameter does not fit on the open
+#                                line, so it breaks to the continuation indent —
+#                                where it FITS ALONE at 119 columns. The line
+#                                reaches 122 because of the `): 0` its CALLER
+#                                writes after the close.
 #
-# NOTE the acknowledged, PRE-EXISTING width blind spot this cell also documents:
-# the `: <body>` tail is written by the emitter AFTER the Doc is rendered, so it
-# is invisible to the packer's fit test and can push the last line past the
-# budget. Same shape as `throws` / `:` after a parameter list.
+# ⚠ cl_over is NOT an unbreakable atom, and this header used to say it was
+# ("being wider than the budget it overflows even there" — contradicted by the
+# NOTE two paragraphs down, which named the caller suffix as the cause). It is
+# A8's INLINE-BODY CLOSURE escape: the parameter list has already broken as far
+# as it can, the element sits alone at the minimum column with no interior break
+# opportunity of its own, and the inline body still rides the same line. Widening
+# "atom" to cover it would swallow the whole caller-suffix class — the exact
+# class the tail reserve exists to close.
+#
+# The `: <body>` tail is NO LONGER invisible to the packer: R42 carries it into
+# the fit test as `doc::Renderer::tail_reserve`, which is why the OTHER rows here
+# are now decided with their suffix counted. cl_over is what remains after that:
+# the reserve is charged correctly and no break can spend it.
 #
 # RED source per row: cl_fill / cl_over are TRUE pre-fix REDs (one closure
 # parameter per line with a trailing comma, and `): body` hanging off a bare `)`

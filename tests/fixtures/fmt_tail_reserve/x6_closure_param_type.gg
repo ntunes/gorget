@@ -1,0 +1,38 @@
+# R42 tail-reserve boundary cell.
+#
+# DISCOVERED CARRIER · `format_closure_param`, plain form — an explicitly
+# typed closure parameter's TYPE owes ` name`.
+#
+# BOUNDARY PAIR. The two declarations below are the SAME shape one column
+# apart: the first is exactly 120 columns wide with its caller-emitted
+# suffix counted, the second exactly 121.
+#
+# RED, recorded against the PRE-FIX binary built from this track's own
+# base commit. NOT a single flat over-budget line: the enclosing closure
+# parameter list is already BROKEN in both halves — that is the point of
+# putting the boundary on an ITEM rather than on the signature — so the
+# over-budget line is the 121 half's continuation-indented ITEM line, at
+# exactly 121 columns, while its 120 twin's item line sits at exactly 120.
+# The inner carrier measured the item's own type without the ` name): 0`
+# the caller was going to write after it.
+#
+# GREEN: the 121 declaration breaks and nothing in this file exceeds 120,
+# AND the 120 twin still formats FLAT at exactly 120 columns. That second
+# half is the OVER-reserve guard — the one a careless net omits — and it
+# is green on both binaries by construction, so its own red comes from
+# breaking the mechanism: add 1 to the reserve this cell installs and the
+# 120 half breaks.
+
+struct ProbeKeyTypeName:
+    int k
+
+struct ProbeValueTypeNameAa:
+    int v
+
+Dict[ProbeKeyTypeName, ProbeValueTypeNameAa] probe_make(): {}
+
+void main():
+    auto probe_closure = (int aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, Dict[ProbeKeyTypeName, ProbeValueTypeNameAa] at120_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx): 0
+
+void main():
+    auto probe_closure = (int aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, Dict[ProbeKeyTypeName, ProbeValueTypeNameAa] at121_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx): 0

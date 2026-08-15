@@ -1,0 +1,20 @@
+# R42 tail-reserve boundary cell — GRADUATED from `known_gaps/`.
+#
+# The filed repro for the whole class: the fill packer could not see
+# CALLER-EMITTED text after a list's closing delimiter. This extern's
+# parameter list ends INSIDE the 120 budget, so the packer kept it flat — and
+# the ` = "symbol"` suffix carried the line to 144 columns.
+#
+# RED, recorded against the PRE-FIX binary built from this track's own base
+# commit: ONE line of 144 columns.
+# GREEN: two lines, 96 and 51.
+#
+# This is the over-by-24 instance, not a boundary cell — the exact 120/121
+# pair for the same suffix kind is `a1_extern_symbol.gg`. Both are kept: the
+# instance is what was filed and what a reader will look for; the pair is what
+# would notice a one-column drift.
+
+extern void gl_vertex_attrib_pointer(int index, int size, int type_, int normalized, int stride, int offset) = "gorget_gl_vertex_attrib_pointer"
+
+void main():
+    print(1)

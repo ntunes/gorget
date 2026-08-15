@@ -15772,10 +15772,20 @@ fn fill_pack_body(name: &str) -> String {
 }
 
 /// No emitted line exceeds the budget, EXCEPT the lines named in
-/// `allowed_overflow` — each a single element that cannot fit alone at its
-/// continuation indent. (Caller-emitted suffixes after the close are the other
-/// escape, invisible to the packer — filed; these cells are suffix-free.) Widths are CHARACTER counts, because the
-/// budget is a display property.
+/// `allowed_overflow`. Widths are CHARACTER counts, because the budget is a
+/// display property.
+///
+/// Two things this docstring used to claim and no longer does. It said every
+/// excused line is "a single element that cannot fit alone at its
+/// continuation indent" — `closure_params.gg`'s element DOES fit alone at its
+/// indent, and the line overruns because of the `): 0` its caller writes
+/// after the close; it is the inline-BODY closure escape, not an atom, and
+/// widening "atom" to cover it would swallow this track's whole headline
+/// class. And it said "these cells are suffix-free" — `params.gg` ends `):`
+/// and `closure_params.gg` ends `): 0`, so they never were.
+///
+/// Caller-emitted suffixes after the close are no longer invisible to the
+/// packer: `doc::Renderer::tail_reserve` carries them into the fit test.
 fn assert_fill_pack_width(name: &str, body: &str, allowed_overflow: &[&str]) {
     for line in body.lines() {
         let width = line.chars().count();
@@ -15807,7 +15817,21 @@ fn assert_fill_pack_width(name: &str, body: &str, allowed_overflow: &[&str]) {
 /// early (the classic off-by-one in a fill) fails here even though every line
 /// is within budget. Only valid for fill-broken lists of flat scalar elements;
 /// the comment-broken shape is one-per-line BY DESIGN and is excluded.
-fn assert_fill_pack_greedy(name: &str, body: &str) {
+///
+/// **The model charges the CALLER'S SUFFIX, and only on the last element.**
+/// It used to charge a flat one-character terminator everywhere, which was the
+/// packer's own arithmetic before `doc::Renderer::tail_reserve` existed. With
+/// the reserve, a list whose flat-with-suffix width is 121 breaks — and the
+/// no-suffix model reads that as "broke early" and points the reader at
+/// WEAKENING the reserve. The fix belongs in the MODEL.
+///
+/// Being output-only, the model has no access to the reserve, so it recovers
+/// the suffix the one way it can: when the cut below landed on a CLOSING
+/// DELIMITER, everything from there to the end of the line is what the caller
+/// still writes, and that is exactly what the reserve charged. When the cut
+/// landed on a `", "` separator the element is NOT last, nothing but a comma
+/// follows it, and charging a suffix there would produce false GREENs.
+fn assert_fill_pack_greedy(label: &str, body: &str) {
     let lines: Vec<&str> = body.lines().collect();
     for i in 0..lines.len().saturating_sub(1) {
         let prev = lines[i];
@@ -15831,8 +15855,6 @@ fn assert_fill_pack_greedy(name: &str, body: &str) {
         }
         // First element on the continuation line: everything before whichever
         // comes first — the `", "` separator or the list's closing delimiter.
-        // (Stopping at the close also drops any caller-emitted suffix such as
-        // `] b = ok()` or `):`, which is not part of the list.)
         let rest = next.trim_start();
         let cut = [", ", ")", "]", "}"]
             .iter()
@@ -15840,15 +15862,24 @@ fn assert_fill_pack_greedy(name: &str, body: &str) {
             .min()
             .unwrap_or(rest.len());
         let first_elem = &rest[..cut];
+        // The terminator this element would have carried on `prev`: a bare
+        // comma when another element follows it, and — when the cut landed on
+        // a CLOSE, i.e. this is the LAST element — the close plus every
+        // character the caller writes after it.
+        let terminator = if cut < rest.len() && !rest[cut..].starts_with(", ") {
+            rest[cut..].trim_end().chars().count()
+        } else {
+            1
+        };
         // What placing it on `prev` would have cost: the text already there
-        // (minus the comma the break wrote), `", "`, the element, and a
-        // one-character terminator — a comma, or a closing delimiter.
+        // (minus the comma the break wrote), `", "`, the element, and that
+        // terminator.
         let prev_cols = prev_trimmed.chars().count();
         let lead = if prev_trimmed.ends_with(',') { 1 } else { 0 };
-        let needed = prev_cols - lead + 2 * lead + first_elem.chars().count() + 1;
+        let needed = prev_cols - lead + 2 * lead + first_elem.chars().count() + terminator;
         assert!(
             needed > FILL_PACK_MAX_WIDTH,
-            "fmt_fill_pack/{name}: the packer broke early — `{first_elem}` would have \
+            "{label}: the packer broke early — `{first_elem}` would have \
              fitted on the previous line at {needed} columns (budget {FILL_PACK_MAX_WIDTH}).\n\
              prev: {prev}\nnext: {next}"
         );
@@ -15865,7 +15896,7 @@ fn assert_fill_pack(name: &str, expected: &str, allowed_overflow: &[&str]) {
         "fmt_fill_pack/{name}: formatted output changed.\n=== got ===\n{body}"
     );
     assert_fill_pack_width(name, &body, allowed_overflow);
-    assert_fill_pack_greedy(name, &body);
+    assert_fill_pack_greedy(&format!("fmt_fill_pack/{name}"), &body);
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let path = manifest_dir.join("tests/fixtures/fmt_fill_pack").join(name);
@@ -15990,6 +16021,11 @@ void cl_over():
     auto h = (
         VeryLongClosureParameterTypeNameForTheOverWidthCell aSingleClosureParameterWhoseWidthExceedsTheWholeLineBudget): 0
 "#,
+        // `cl_over` is A8's INLINE-BODY CLOSURE escape, NOT an unbreakable
+        // atom: the element FITS ALONE at its continuation indent (119
+        // columns) and the line reaches 122 only because of the `): 0` the
+        // caller writes after the close. The reserve is charged correctly;
+        // there is simply no break left to spend. See the fixture header.
         &["aSingleClosureParameterWhoseWidthExceedsTheWholeLineBudget"],
     );
 }
@@ -16327,6 +16363,390 @@ fn fmt_fill_pack_width_unit_axis() {
     let path = manifest_dir.join("tests/fixtures/fmt_fill_pack/width_unit.gg");
     let source = std::fs::read_to_string(&path).expect("read width_unit.gg");
     assert_fmt_round_trips("fmt_fill_pack/width_unit.gg", &source);
+}
+
+// ── R42 · the TAIL-RESERVE boundary matrix ──────────────────────
+//
+// `tests/fixtures/fmt_tail_reserve/` — one file per CELL of the
+// suffix-kind × width-decided-carrier axis. Each file holds BOTH halves of
+// its boundary pair: a construct whose flat-with-suffix width is exactly 120
+// (must stay FLAT — the OVER-reserve guard, the half a careless net omits)
+// and its twin at exactly 121 (must BREAK — the under-reserve guard). Every
+// file's own header states which cell it samples and where its RED came from.
+//
+// The 121 half is red against the pre-fix compiler by construction. The 120
+// half is green on both binaries — its red is the break-and-watch each header
+// spells out (add 1 to the reserve that cell installs).
+
+/// Every cell in the matrix, with the over-budget lines it is ALLOWED to
+/// emit. An empty allowlist is the normal case; a non-empty one is always a
+/// RULED escape, named in the fixture's own header.
+///
+/// The list is the census the directory is pinned against, so a fixture
+/// cannot be added without being classified or deleted without being noticed.
+const FMT_TAIL_RESERVE_FIXTURES: &[(&str, &[&str])] = &[
+    // ── A · header-level write sites ──
+    ("a1_extern_symbol.gg", &[]),
+    // The filed repro itself, graduated out of `known_gaps/`. Not a boundary
+    // cell (it is over-by-24), which is why the pair above exists too.
+    ("graduated_fill_suffix_overrun.gg", &[]),
+    ("a1_fn_block_colon.gg", &[]),
+    ("a1_fn_expr_body.gg", &[]),
+    ("a1_fn_throws.gg", &[]),
+    ("a1_fn_bang.gg", &[]),
+    ("a1_decl_no_suffix.gg", &[]),
+    ("a2_generic_params_nonempty.gg", &[]),
+    ("a2_generic_params_empty.gg", &[]),
+    ("a3_struct_header.gg", &[]),
+    ("a4_enum_header.gg", &[]),
+    ("a5_trait_extends.gg", &[]),
+    ("a6_equip_with_via.gg", &[]),
+    ("a7_type_alias.gg", &[]),
+    ("a8_closure_block_body.gg", &[]),
+    ("a8_closure_inline_body.gg", &[]),
+    ("a10_generic_args_vardecl.gg", &[]),
+    ("a10_generic_args_fn_return.gg", &[]),
+    // ── B · statement / expression headers ──
+    ("b1_stmt_header_fill.gg", &[]),
+    ("b1_stmt_header_group.gg", &[]),
+    ("b1_inline_suite_boundary.gg", &[]),
+    ("b6_expr_if.gg", &[]),
+    ("b6_expr_match.gg", &[]),
+    ("b10_with_binding.gg", &[]),
+    ("b10_meta_if_header.gg", &[]),
+    ("b10_select_arm.gg", &[]),
+    ("b11_arm_case_inline.gg", &[]),
+    ("b11_arm_catch_composite.gg", &[]),
+    ("b11_arm_do_suffix.gg", &[]),
+    // ── C · escape (c), the pre-rendered item's blindness ──
+    ("c_nested_close_call_arg.gg", &[]),
+    ("c_nested_close_collection.gg", &[]),
+    ("exploded_path_reserve.gg", &[]),
+    // C10's two `Doc::Group`-clothed method-chain installs. The pair is
+    // deliberate and each cell was RED-verified against a build with ONLY its
+    // own carrier neutralised: the first pins the GROUP-level consumption
+    // (`write_doc` on the chain's `Doc::Group`), the second the PER-SEGMENT
+    // one (the last segment's inherited reserve), and neither cell can see
+    // the other's value — each stays GREEN under the other's neutralisation,
+    // so one cell does NOT close both halves. Both keep their `at120_`/
+    // `at121_` markers on the CHAIN, never in the function name: a marker in
+    // the signature would put both harness assertions on the `format_function`
+    // header line, i.e. on family A1's carrier, leaving the chain unmeasured.
+    // `p_postfix_chained.gg` is NOT this carrier — it is a FieldAccess chain
+    // and never reaches `format_method_chain`.
+    ("c10_method_chain.gg", &[]),
+    ("c10_method_chain_segment.gg", &[]),
+    // ── The carriers the header census and the discovery sweep found ──
+    //
+    // Each installs a reserve on an INNER render, at a position the §3 set
+    // never enumerated, and NONE has a near-boundary corpus instance — so
+    // these cells are their only coverage, and each was RED-verified against
+    // a build with ITS OWN carrier's reserve neutralised (not merely against
+    // the pre-fix binary, where every reserve is absent at once).
+    ("x1_const_decl_type.gg", &[]),
+    ("x2_static_decl_type.gg", &[]),
+    ("x3_param_type.gg", &[]),
+    ("x4_generic_param_bound.gg", &[]),
+    ("x5_newtype_inner_type.gg", &[]),
+    ("x6_closure_param_type.gg", &[]),
+    ("x7_closure_param_destructure.gg", &[]),
+    ("x8_assert_return_operator.gg", &[]),
+    ("x9_precedence_wrap_close.gg", &[]),
+    // ── P · postfix operator tails ──
+    ("p_postfix_field.gg", &[]),
+    ("p_postfix_chained.gg", &[]),
+    // ── O · infix / statement operator tails ──
+    ("o_operator_as.gg", &[]),
+    ("o_operator_index_assign.gg", &[]),
+    ("o_operator_compound_assign.gg", &[]),
+    ("o_operator_range.gg", &[]),
+    // ── break-only-if-it-NARROWS ──
+    // The suppressed half's line is STILL over budget — the string is an
+    // unbreakable atom — but it is one line of 145 instead of two lines the
+    // wider of which was 147. That is the whole point of the rule.
+    ("narrow_suppressed_half.gg", &["    f(\"aaaa"]),
+    ("narrow_separator_survives.gg", &["\"aaaaaaaaaaaa"]),
+    ("narrow_multiline_item_carveout.gg", &[]),
+    // ── ruled escapes and POS guards ──
+    // Two overruns, both the inline-BODY collision escape: the body's leading
+    // unbreakable text exceeds the budget even after the header breaks.
+    ("inline_body_escape.gg", &["String s = \"aaaa", "if aaaaaaaa"]),
+    ("pos_reserve_does_not_leak.gg", &[]),
+    // The two DOCTRINAL escapes: the width-exempt import list and an
+    // unbreakable atom.
+    ("pos_doctrinal_escapes_hold.gg", &["from std.collections import", "String atom = \"aaaa"]),
+];
+
+/// Cells NOT enrolled in the fill-pack GREEDY model, each with the reason.
+///
+/// The model reconstructs a FILL packer's arithmetic from output alone and is
+/// valid only for fill-broken lists of FLAT SCALAR elements. A cell whose
+/// break came from somewhere else — a paren-wrapped binary chain, a
+/// `Doc::Group` softline, a multi-line element — is outside its domain, and
+/// forcing it through would mean weakening the model for everyone.
+const FMT_TAIL_RESERVE_NOT_GREEDY: &[(&str, &str)] = &[
+    (
+        "c_nested_close_call_arg.gg",
+        "the argument is a paren-wrapped BINARY CHAIN, not a flat scalar \
+         element: its break comes from a Doc::Group softline, which the \
+         fill model has no arithmetic for",
+    ),
+    (
+        "exploded_path_reserve.gg",
+        "the comment-bearing EXPLODED shape is one element per line BY \
+         DESIGN — the model's own docstring excludes it",
+    ),
+    (
+        "narrow_separator_survives.gg",
+        "the outer call's single argument is a MULTI-LINE array literal; the \
+         model measures a continuation line's first element as if it ended \
+         there, which a multi-line element does not",
+    ),
+    (
+        "narrow_multiline_item_carveout.gg",
+        "the whole point of the cell is a MULTI-LINE element — the shape the \
+         model cannot measure",
+    ),
+    // The four discovered-carrier cells whose ELEMENT is a generic type. The
+    // model finds the element's end by scanning for the first `, ` or close
+    // delimiter, so `Dict[K, V] name` reads to it as an element `Dict[K`
+    // followed by another — a fragment, not the element. Same domain limit as
+    // the rows above: flat SCALAR elements only.
+    (
+        "x3_param_type.gg",
+        "the element is `Dict[K, V] name`, whose own `, ` the model reads as \
+         an element boundary",
+    ),
+    (
+        "x4_generic_param_bound.gg",
+        "the element is a trait bound over a generic type — same interior `, `",
+    ),
+    (
+        "x6_closure_param_type.gg",
+        "the element is a generic-typed closure parameter — same interior `, `",
+    ),
+    (
+        "x7_closure_param_destructure.gg",
+        "the element is a destructure pattern holding a generic type — same \
+         interior `, `",
+    ),
+];
+
+fn tail_reserve_format(name: &str) -> String {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_tail_reserve").join(name);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read fmt_tail_reserve/{name}: {e}"));
+    gorget::formatter::format_source_infallible(&source)
+}
+
+/// The directory and the census agree — a cell cannot be added without a
+/// disposition or deleted without a red.
+#[test]
+fn fmt_tail_reserve_census_is_complete() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fmt_tail_reserve");
+    let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+        .expect("read tests/fixtures/fmt_tail_reserve")
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            (p.extension().and_then(|x| x.to_str()) == Some("gg"))
+                .then(|| p.file_name().unwrap().to_string_lossy().into_owned())
+        })
+        .collect();
+    on_disk.sort();
+    let mut pinned: Vec<String> = FMT_TAIL_RESERVE_FIXTURES
+        .iter()
+        .map(|(n, _)| (*n).to_string())
+        .collect();
+    pinned.sort();
+    assert_eq!(
+        on_disk, pinned,
+        "R42 tail-reserve fixture census drifted. \
+         `tests/fixtures/fmt_tail_reserve/` and `FMT_TAIL_RESERVE_FIXTURES` \
+         must agree — a cell added without a disposition row is a cell nobody \
+         classified, and one deleted from the directory is coverage lost \
+         silently."
+    );
+}
+
+/// THE matrix assertion, applied to every cell:
+///
+///   * the `at120_` half — where the cell has one — formats FLAT at EXACTLY
+///     120 columns. Exactly, not "at most": a cell whose 120 half drifted to
+///     119 has stopped testing the boundary and would not notice a
+///     one-column over-reserve.
+///   * NO line exceeds 120, except the ruled escapes this cell declares.
+///   * the output re-parses and a second pass is byte-identical.
+#[test]
+fn fmt_tail_reserve_boundary_matrix() {
+    for (name, allowed_overflow) in FMT_TAIL_RESERVE_FIXTURES {
+        let formatted = tail_reserve_format(name);
+
+        let at120: Vec<&str> = formatted.lines().filter(|l| l.contains("at120_")).collect();
+        assert!(
+            at120.len() <= 1,
+            "fmt_tail_reserve/{name}: the 120 marker must name exactly one \
+             line; found {} (a marker that appears twice measures the wrong \
+             one).",
+            at120.len()
+        );
+        if let Some(line) = at120.first() {
+            assert_eq!(
+                line.chars().count(),
+                120,
+                "fmt_tail_reserve/{name}: the 120 half must stay FLAT at \
+                 EXACTLY 120 columns — it is the over-reserve guard.\n{line}"
+            );
+        }
+
+        for line in formatted.lines() {
+            let width = line.chars().count();
+            if width <= 120 {
+                continue;
+            }
+            assert!(
+                allowed_overflow.iter().any(|frag| line.contains(frag)),
+                "fmt_tail_reserve/{name}: line is {width} columns and is not \
+                 one of the escapes this cell declares.\n{line}"
+            );
+        }
+
+        // ENROLLMENT in the fill-pack GREEDY model. Placement in a directory
+        // enrolls nothing — this call does. A flat-with-suffix boundary is
+        // precisely the shape whose reserve-caused break the model's OLD
+        // no-suffix form read as "the packer broke early", so running these
+        // through the corrected model is what keeps the correction honest.
+        if !FMT_TAIL_RESERVE_NOT_GREEDY.iter().any(|(n, _)| n == name) {
+            assert_fill_pack_greedy(&format!("fmt_tail_reserve/{name}"), &formatted);
+        }
+
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let path = manifest_dir.join("tests/fixtures/fmt_tail_reserve").join(name);
+        let source = std::fs::read_to_string(&path).expect("re-read fixture");
+        assert_fmt_round_trips(&format!("fmt_tail_reserve/{name}"), &source);
+    }
+}
+
+/// The inline-BODY collision escape, SUITE member — the cell whose subject is
+/// what does NOT change. Width may break the HEADER; it never re-decides the
+/// suite's FORM.
+#[test]
+fn fmt_tail_reserve_inline_body_escape_preserves_the_suite_form() {
+    let formatted = tail_reserve_format("inline_body_escape.gg");
+
+    // (i) breakable condition, body fits: the header broke and the body still
+    // rides the header's LAST line.
+    assert!(
+        formatted.contains("        and aaaaaaaaaaaaaaaaaaaaaaaaaaaaa == 1): print(1)\n"),
+        "the breakable-condition cell must break its HEADER and keep the body \
+         inline on the header's last line.\n{formatted}"
+    );
+
+    // (ii) the body's leading unbreakable text exceeds the budget: the header
+    // breaks as far as it can and the line STILL overruns, inline.
+    let over: Vec<&str> = formatted
+        .lines()
+        .filter(|l| l.chars().count() > 120)
+        .collect();
+    assert_eq!(
+        over.len(),
+        2,
+        "expected exactly the two ruled overruns.\n{formatted}"
+    );
+    assert!(
+        over[0].contains("): String s = \""),
+        "the body-prefix cell must keep its suite INLINE while overrunning — \
+         converting the layout to save width would overwrite the author's own \
+         choice.\n{}",
+        over[0]
+    );
+
+    // (iii) unbreakable condition: nothing breaks at all, form preserved.
+    assert!(
+        over[1].trim_start().starts_with("if aaaa") && over[1].ends_with(": print("),
+        "the unbreakable-condition cell must stay a one-liner header.\n{}",
+        over[1]
+    );
+}
+
+/// break-only-if-it-NARROWS · the suppressed half. Pre-fix this was TWO lines,
+/// the wider of them 147 columns; the break bought nothing.
+#[test]
+fn fmt_tail_reserve_narrow_suppressed_half() {
+    let formatted = tail_reserve_format("narrow_suppressed_half.gg");
+    let line = formatted
+        .lines()
+        .find(|l| l.trim_start().starts_with("f(\""))
+        .expect("the one-item call line");
+    assert_eq!(
+        line.chars().count(),
+        145,
+        "the suppressed half must stay on ONE line — breaking would move the \
+         item from column 6 to column 8 and make the line WIDER.\n{line}"
+    );
+    assert!(
+        line.trim_end().ends_with("\")"),
+        "the whole call must be on this single line.\n{line}"
+    );
+}
+
+/// break-only-if-it-NARROWS · the separator survives. The suppression is
+/// restricted to a one-item list precisely so this cannot regress.
+#[test]
+fn fmt_tail_reserve_narrow_separator_survives() {
+    let formatted = tail_reserve_format("narrow_separator_survives.gg");
+    assert!(
+        formatted.contains("[1,"),
+        "the `, ` separating a suppressed item from its predecessor must be \
+         emitted regardless of the suppression — dropping it silently changes \
+         the program.\n{formatted}"
+    );
+}
+
+/// break-only-if-it-NARROWS · the multi-line-item carve-out asserts the
+/// CONTINUATION COLUMN, not a width. A multi-line item was pre-rendered for
+/// the continuation indent; splicing it at the caller's column would place its
+/// own continuation lines two columns off, and the result would still be
+/// idempotent and re-parse.
+#[test]
+fn fmt_tail_reserve_narrow_multiline_item_column() {
+    let formatted = tail_reserve_format("narrow_multiline_item_carveout.gg");
+    let line = formatted
+        .lines()
+        .find(|l| l.trim_start().starts_with("g(1111"))
+        .expect("the multi-line item's first line");
+    let indent = line.len() - line.trim_start().len();
+    assert_eq!(
+        indent, 8,
+        "a multi-line item ALWAYS breaks, landing at the continuation column \
+         (8) it was pre-rendered for — never spliced at the caller's column \
+         (6).\n{line}"
+    );
+}
+
+/// The exploded comment-bearing path: elements fill under an EXACT reserve of
+/// 1, and the CLOSE line is emitted as-is because nothing fit-tests it.
+#[test]
+fn fmt_tail_reserve_exploded_path_close_line_is_unenforced() {
+    let formatted = tail_reserve_format("exploded_path_reserve.gg");
+    // The 120 element (119 + its comma) stayed flat; the 121 one broke.
+    assert!(
+        formatted.contains(", 555555555)),\n"),
+        "the 119+comma element must stay flat.\n{formatted}"
+    );
+    assert!(
+        formatted.contains("4444444444,\n            probe_entry(11111, 22222, 33333, 44444, 5555555559)),\n"),
+        "the 120+comma element must break under the reserve-1 clause.\n{formatted}"
+    );
+    // Residual, pinned as EMITTED rather than asserted to be in budget: this
+    // path is a hand-rolled loop with no fit test, so the close line's width
+    // is whatever the outer indent makes it.
+    let close = formatted
+        .lines()
+        .find(|l| l.trim() == "]")
+        .expect("the close line");
+    assert_eq!(close.chars().count(), 5, "close line emitted at the outer indent");
 }
 
 // ── Examples (programs under examples/) ─────────────────────────
@@ -49121,14 +49541,45 @@ fn known_gap_fmt_multiline_header_trailing_comment() {
 
 // ==== R41 orchestrator: the fill-suffix width gap (known_gaps) ==============
 
-/// KNOWN GAP: caller-emitted suffixes after a list close are invisible to the
-/// fill packer, so this extern formats to a ~148-char line at MAX_WIDTH=120.
-/// Asserts the INTENDED output property: no formatted line exceeds 120 chars.
-/// Un-ignore when the packer accounts for caller suffixes (TODO.md).
+/// KNOWN GAP, filed by the R42 tail-reserve track and NOT closable by it: a
+/// binary chain's FIRST operand is pre-rendered for the CONTINUATION column
+/// while it is spliced at the CALLER's, so its own sub-render measures from
+/// ~23 columns too far left and keeps a nested call flat that should break.
+/// A sibling root of the caller-suffix class, on the START-COLUMN axis rather
+/// than the tail axis — the reserve reaching this sub-render is correct.
+///
+/// Asserts the INTENDED property: no formatted line exceeds 120. Un-ignore
+/// when the first operand is pre-rendered for the column it lands at. Live
+/// twin: `tests/fixtures/self_host_lowerer/lower_expr.gg`'s
+/// `df_param_is_result` declaration, counted in the width ratchet's
+/// `Unbroken` category (`tests/lints.rs::fmt_no_new_over_budget_lines`).
 #[test]
-#[ignore = "KNOWN GAP: fill packer cannot see caller-emitted suffixes (extern = \"symbol\") — lines overrun 120; filed 2026-08-11"]
+#[ignore = "KNOWN GAP: a binary chain's first operand is pre-rendered for the continuation \
+    column but spliced at the caller's; filed by R42 Track C"]
+fn fmt_prerender_column_binary_chain_stays_in_budget() {
+    let src = std::fs::read_to_string(
+        "tests/fixtures/known_gaps/fmt_prerender_column_binary_chain.gg",
+    )
+    .unwrap();
+    let out = gorget::formatter::format_source_result(&src).expect("fixture parses");
+    let over: Vec<String> = out
+        .lines()
+        .filter(|l| l.chars().count() > 120)
+        .map(|l| format!("{} chars: {}", l.chars().count(), l))
+        .collect();
+    assert!(over.is_empty(), "lines over 120 chars:\n{}", over.join("\n"));
+}
+
+/// The filed fill-suffix repro, GRADUATED out of `known_gaps/` and
+/// un-ignored: caller-emitted text after a list's close is now carried down as
+/// the renderer's `tail_reserve`, so this extern breaks instead of running to
+/// 144 columns. Asserts the property, not a spelling: no formatted line
+/// exceeds 120.
+#[test]
 fn fmt_fill_suffix_overrun_stays_in_budget() {
-    let src = std::fs::read_to_string("tests/fixtures/known_gaps/fmt_fill_suffix_overrun.gg").unwrap();
+    let src =
+        std::fs::read_to_string("tests/fixtures/fmt_tail_reserve/graduated_fill_suffix_overrun.gg")
+            .unwrap();
     let out = gorget::formatter::format_source_result(&src).expect("fixture parses");
     let over: Vec<String> = out
         .lines()
@@ -49473,9 +49924,16 @@ fn fmt_form_synonym_elif_canonicalized() {
 ///
 /// The per-fixture cells above pin the shapes this round knew to look for.
 /// This one pins the property, corpus-wide: whatever the formatter emits for
-/// any program in `tests/fixtures`, `lib`, or `examples`, feeding it back to
-/// the parser produces zero errors — and a second pass is byte-identical, so
-/// nothing is lost on the way through.
+/// any program under the FOUR roots — `tests/fixtures`, `lib`, `examples` and
+/// `compiler` — feeding it back to the parser produces zero errors, and a
+/// second pass is byte-identical, so nothing is lost on the way through.
+///
+/// (This paragraph said "three roots" while the walk below named four, and the
+/// fourth is the one whose omission from a later guard hid three live defects.
+/// The root array is duplicated in `tests/lints.rs::WIDTH_RATCHET_ROOTS`,
+/// which cannot import a nested fn from another test binary;
+/// `width_ratchet_roots_agree_with_the_standing_walk` keys on the literal
+/// array line below, so changing it means changing that needle too.)
 ///
 /// It is the standing guard for the class that motivated the whole track: a
 /// name-string re-emitted with its escapes decoded produced a file that no

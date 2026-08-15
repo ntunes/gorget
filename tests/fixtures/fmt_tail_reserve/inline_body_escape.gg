@@ -1,0 +1,41 @@
+# R42 tail-reserve boundary cell.
+#
+# The inline-BODY collision escape, SUITE member — all three values of its
+# axis, which is the CONDITION's BREAKABILITY.
+#
+#   (i) breakable condition, body fits — the HEADER breaks under the reserve
+#       and the line lands in budget. The suite FORM is untouched: the body
+#       still rides the header's last line.
+#   (ii) breakable condition, body's LEADING UNBREAKABLE TEXT alone exceeds
+#       the remaining budget — the header breaks as far as it can and the line
+#       STILL overruns. No break can save it: the body manages its own budget
+#       from its first fit-tested node onward, so only its unbreakable prefix
+#       binds, and here that prefix is a whole `String s = "…"`. Converting the
+#       suite to a block form WOULD fit, and is exactly what the ratified
+#       author-suite-choice preservation forbids — so the residual stands.
+#       THIS is the escape; it is a ruling, not a gap, so no known_gaps entry
+#       is owed.
+#   (iii) unbreakable condition — nothing breaks anywhere, the overrun stands,
+#       the form is preserved.
+#
+# Width never re-decides the suite's FORM. The header may break; the line
+# overruns only when the body's leading unbreakable text exceeds the budget.
+#
+# RED, recorded against the PRE-FIX binary built from this track's own base
+# commit: cell (i) emitted a 126-column line whose BODY's call arguments were
+# split instead — the header stayed flat and the packer mangled the body.
+# Cells (ii) and (iii) are unchanged by the fix and pin the ruling.
+
+bool probe_pred(int a, int b): true
+
+void breakable_condition_body_fits(int aaaaaaaaaaaaaaaaaaaaaaaaaaaaa):
+    if probe_pred(aaaaaaaaaaaaaaaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaaaaaaaaaaaaaaa) and aaaaaaaaaaaaaaaaaaaaaaaaaaaaa == 1: print(1)
+    print(2)
+
+void breakable_condition_body_prefix_over_budget(int aaaaaaaaaaaaaaaaaaaaaaaaaaaaa):
+    if probe_pred(aaaaaaaaaaaaaaaaaaaaaaaaaaaaa, 1) and aaaaaaaaaaaaaaaaaaaaaaaaaaaaa == 1: String s = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    print(3)
+
+void unbreakable_condition(int aaaaaaaaaaaaaaaaaaaaaaaaaaaaa):
+    if aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: print(1)
+    print(4)

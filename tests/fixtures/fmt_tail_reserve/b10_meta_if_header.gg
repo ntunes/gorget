@@ -1,0 +1,28 @@
+# R42 tail-reserve boundary cell.
+#
+# B10 · a reserve-1 meta header (`meta if …:`), the colon-header family.
+#
+# BOUNDARY PAIR. The two declarations below are the SAME shape one column
+# apart: the first is exactly 120 columns wide with its caller-emitted
+# suffix counted, the second exactly 121.
+#
+# RED, recorded against the PRE-FIX binary built from this track's own
+# base commit: the 121 declaration formats to a SINGLE 121-column line —
+# the packer measured its list without the caller's suffix.
+#
+# GREEN: the 121 declaration breaks and nothing in this file exceeds 120,
+# AND the 120 twin still formats FLAT at exactly 120 columns. That second
+# half is the OVER-reserve guard — the one a careless net omits — and it
+# is green on both binaries by construction, so its own red comes from
+# breaking the mechanism: add 1 to the reserve this cell installs and the
+# 120 half breaks.
+
+bool probe_flag(int a, int b, int c, int d): true
+
+void main():
+    meta if probe_flag(1111111, 2222222, 3333333, at120_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx):
+        print(1)
+
+void main():
+    meta if probe_flag(1111111, 2222222, 3333333, at121_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx):
+        print(1)

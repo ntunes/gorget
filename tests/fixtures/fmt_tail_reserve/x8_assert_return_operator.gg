@@ -1,0 +1,31 @@
+# R42 tail-reserve boundary cell.
+#
+# DISCOVERED CARRIER · `format_assert_return_expr` — family O inside the
+# assert-postcondition walk, which has its OWN binary recursion rather
+# than going through `format_binary_chain`. The inner `+`'s left operand
+# is a real render whose tail is ` + <right>`.
+#
+# BOUNDARY PAIR. The two declarations below are the SAME shape one column
+# apart: the first is exactly 120 columns wide with its caller-emitted
+# suffix counted, the second exactly 121.
+#
+# RED, recorded against the PRE-FIX binary built from this track's own
+# base commit: the 121 declaration formats to a SINGLE 121-column line —
+# the packer measured its list without the caller's suffix.
+#
+# GREEN: the 121 declaration breaks and nothing in this file exceeds 120,
+# AND the 120 twin still formats FLAT at exactly 120 columns. That second
+# half is the OVER-reserve guard — the one a careless net omits — and it
+# is green on both binaries by construction, so its own red comes from
+# breaking the mechanism: add 1 to the reserve this cell installs and the
+# 120 half breaks.
+
+int probe_idx(int a, int b, int c, int d): 0
+
+int probe_three(int lo):
+    assert return >= probe_idx(11111, 22222, 33333, at120_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) + 7
+    return lo
+
+int probe_three(int lo):
+    assert return >= probe_idx(11111, 22222, 33333, at121_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) + 7
+    return lo

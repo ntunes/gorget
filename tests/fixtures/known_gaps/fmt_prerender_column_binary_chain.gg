@@ -1,0 +1,44 @@
+# KNOWN GAP (fmt width) — the PRE-RENDER COLUMN, a sibling root of the
+# caller-suffix class and NOT closable by a tail reserve.
+#
+# `format_binary_chain` pre-renders each operand through `element_to_string`,
+# which seeds the throwaway formatter's cursor at the CONTINUATION indent
+# (`indent + 1`). That is right for every operand after the first: the Doc
+# wraps them in `Indent`, so a broken chain really does place them there. It is
+# WRONG for operand ZERO, which is spliced at the CALLER's current column —
+# right after `bool df_param_is_result = (` — in BOTH the flat and the broken
+# layout, because nothing precedes it in the Doc.
+#
+# The gap between the two columns is the whole defect. Below, the sub-render
+# measures from column 32 while its text lands at column 55, so it believes it
+# has 23 more columns than it does and keeps a call flat that should break. The
+# tail reserve is charged CORRECTLY here (the `.category` postfix and the
+# ` == …` operator both reach the sub-render); it is the START COLUMN that is
+# wrong, which is why no reserve can close this.
+#
+# Live twin in the corpus: `tests/fixtures/self_host_lowerer/lower_expr.gg`,
+# the `df_param_is_result` declaration — 128 columns, unchanged by the R42
+# tail reserve and counted in the width ratchet's `Unbroken` category.
+#
+# INTENDED: no formatted line exceeds 120. Un-ignore
+# `fmt_prerender_column_binary_chain_stays_in_budget` when the first operand
+# is pre-rendered for the column it is actually spliced at.
+
+struct Category:
+    int category
+
+Category enum_category_of(int gmod, int param_type): Category(1)
+
+int ENUM_CAT_RESULT = 1
+
+void driver(int gmod):
+    if gmod == 1:
+        if gmod == 2:
+            if gmod == 3:
+                if gmod == 4:
+                    if gmod == 5:
+                        if gmod == 6:
+                            bool df_param_is_result = (enum_category_of(gmod, callee_param_types_of(gmod, 111111)).category == ENUM_CAT_RESULT)
+                            print(df_param_is_result)
+
+int callee_param_types_of(int i, int j): 0

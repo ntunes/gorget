@@ -1,0 +1,23 @@
+# R42 tail-reserve boundary cell.
+#
+# break-only-if-it-NARROWS · the SEPARATOR cell. The suppression is restricted
+# to `i == 0 && i == last` — the ONE-ITEM list — and this fixture is why.
+#
+# At `i > 0` the `>=` corner IS reachable: a one-character open delimiter plus
+# a one-character first item lands the second item EXACTLY on the continuation
+# column, so a rule spelled `i == 0` alone (or with no index test at all) fires
+# there too. The natural minimal implementation of "suppress the newline"
+# at that position silently DROPS the `, ` separator, producing output that
+# still re-parses — as a DIFFERENT program — and no width assertion can see it.
+#
+# The restriction kills the hazard structurally and loses nothing: the one-item
+# shape was always the motivating cell.
+#
+# There is no pre-fix RED — the shipped rule cannot reach this corner. Its red
+# is a break-and-watch: widen the suppression predicate to `i == 0` (or drop
+# the index test) and rebuild; the `, ` between `1` and the string disappears.
+#
+# The overrun below is the DOCTRINAL unbreakable-atom escape.
+
+void main():
+    print([1, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"], 2)

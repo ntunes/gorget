@@ -1,0 +1,23 @@
+# R42 tail-reserve boundary cell.
+#
+# POS · the reserve does NOT leak across a `newline()`. Every install is a
+# scoped `with_tail_reserve` that restores on exit, and `format_module` asserts
+# the reserve is back to zero when the module closes.
+#
+# The shape that would expose a leak: a SUFFIXED header (the extern, whose
+# reserve is the whole ` = "gorget_…"` clause) immediately followed by an
+# UNSUFFIXED declaration sitting at EXACTLY 120 columns. If the extern's
+# reserve survived its scope, the declaration below would be charged ~36
+# columns it does not owe and would break.
+#
+# POS cell: no pre-fix RED, because nothing here is supposed to change. Its red
+# is a break-and-watch — drop the restore from `with_tail_reserve` and the
+# 120-column declaration below breaks.
+
+extern int probe_extern_with_a_suffix(int aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, int b) = "gorget_probe_symbol_name_xxxxxxxx"
+
+trait ProbeTrait:
+    int probe_decl_immediately_after_a_suffixed_header(int aaaaaaaaaaaaaaaaaaaaaaaaaa, int bbbbbbbbbbbbbbbbbbbbbbbbbbbb)
+
+int probe_plain_fn_after_a_suffixed_sibling(int aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa):
+    return 1

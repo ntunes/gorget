@@ -44,7 +44,8 @@ int deep(int x):
     return r
 
 void over_width(int a_long_input_parameter_name_for_the_width_cell):
-    if a_long_input_parameter_name_for_the_width_cell == 1: int an_intentionally_long_local_binding_name = a_long_input_parameter_name_for_the_width_cell
+    if (a_long_input_parameter_name_for_the_width_cell
+        == 1): int an_intentionally_long_local_binding_name = a_long_input_parameter_name_for_the_width_cell
     print(2)
 
 void main():
