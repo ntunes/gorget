@@ -46435,6 +46435,29 @@ fn sound_callable_amp_param_ices() {
     run_gg("known_gaps/sound_callable_amp_param_ices.gg", "11\n11");
 }
 
+/// KNOWN GAP (R42) — the DOCUMENTED two-field postcondition form
+/// `assert return.0 <= return.1` fails to PARSE: the parser's rewrite
+/// substitutes only the leading `return`. Asserts the INTENDED accept
+/// (check succeeds), so it is RED at HEAD (parse error at `return.1`).
+/// Un-ignore when the postcondition rewrite substitutes every `return`.
+#[test]
+#[ignore = "KNOWN GAP (R42): `assert return.0 <= return.1` (documented) fails to parse; \
+asserts the INTENDED accept. Un-ignore when the rewrite substitutes every `return`."]
+fn assert_return_second_field_parses() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path =
+        manifest_dir.join("tests/fixtures/known_gaps/assert_return_second_field_parse.gg");
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture_path),
+        "assert_return_second_field_parse",
+    );
+    assert!(
+        output.status.success(),
+        "documented `assert return.0 <= return.1` form rejected:\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 /// KNOWN GAP (R42) — indexing a TYPE NAME (`int[2]` in expression position)
 /// passes `gg check`, then the DEBUG build ICEs in IR lowering and the RELEASE
 /// build silently miscompiles (prints 0). Core #10: check must reject what the

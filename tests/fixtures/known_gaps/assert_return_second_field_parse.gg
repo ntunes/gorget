@@ -1,0 +1,16 @@
+# KNOWN GAP (filed 2026-08-15 from the R42 Track-D brief-review pass 9,
+# orchestrator-verified): the DOCUMENTED postcondition form comparing two
+# fields of a tuple return value — `assert return.0 <= return.1`
+# (docs/language-design.md + docs/language-reference.md both show it) —
+# does NOT parse: only the LEADING `return` is substituted by the parser's
+# postcondition rewrite; the second occurrence errs "expected identifier,
+# found integer" at `return.1`. Docs-vs-parser divergence (Core #8: the
+# documented form is the intended one).
+# INTENDED: the form parses, checks, and enforces the postcondition.
+# Wired test: assert_return_second_field_parses (tests/integration.rs, #[ignore]d).
+(int, int) two():
+    assert return.0 <= return.1
+    return (1, 2)
+
+void main():
+    print(two().0)
