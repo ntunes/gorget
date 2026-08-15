@@ -14745,9 +14745,10 @@ fn fmt_author_paren_dedup_class() {
 /// **THE LENS — what "a paren write" means here, stated because the first cut
 /// of this guard got it wrong.** It counts paren CHARACTERS inside any string
 /// literal handed to `emitter.write` / `write_preformatted` / `doc::text`, plus
-/// the delimiter arguments of the list emitters named in `EMITTERS` below
-/// (derived from the file, which is how the first cut of that list came to miss
-/// a member that exists). Not the
+/// the delimiter arguments of the list emitters named in `EMITTERS` below —
+/// derived from the file rather than from memory, which is how the first cut of
+/// that list came to carry two spellings that do not exist while missing one
+/// that does. Not the
 /// spelling `write("(")`: `write(" catch (")`, `write("):")`, `write(",)")`,
 /// `write(".await()")` and `emit_delimited_list("(", ")", …)` all emit parens
 /// too, and this file uses those spellings twenty times. A lens keyed on the
