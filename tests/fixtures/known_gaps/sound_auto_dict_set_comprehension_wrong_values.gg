@@ -1,0 +1,19 @@
+# KNOWN GAP (filed 2026-08-15, surfaced by the R42 Track-B EXECUTOR while
+# probing residual comment shapes, orchestrator-verified): `auto`-typed DICT
+# and SET comprehensions over a plain `Vector[int]` produce SILENT WRONG
+# VALUES — `auto dc = {x: x * 10 for x in xs}` gives `dc[1]` == 3 (expected
+# 10) and `auto sc = {x for x in xs}` gives `sc.len()` == 0 (expected 3).
+# Both check clean and run without error — a wrong-code cell, worse than the
+# filed resource-element comprehension CRASH family (that family's
+# Vector[int] LIST cell is correct; these dict/set forms are not).
+# The explicitly-typed range form CC-FAILs (a second cell of the same root).
+# Likely root: the name-prefix element-type inference debt (the filed rule-2
+# entry) mis-typing the comprehension's accumulator.
+# INTENDED: dc[1] == 10, sc.len() == 3.
+# Wired test: sound_auto_dict_set_comprehension_values (tests/integration.rs, #[ignore]d).
+void main():
+    Vector[int] xs = [1, 2, 3]
+    auto dc = {x: x * 10 for x in xs}
+    auto sc = {x for x in xs}
+    print(dc[1])
+    print(sc.len())

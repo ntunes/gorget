@@ -46435,6 +46435,21 @@ fn sound_callable_amp_param_ices() {
     run_gg("known_gaps/sound_callable_amp_param_ices.gg", "11\n11");
 }
 
+/// KNOWN GAP (R42) — `auto`-typed dict/set comprehensions over a plain
+/// `Vector[int]` produce SILENT WRONG VALUES (dc[1] == 3 not 10; sc.len()
+/// == 0 not 3); both check clean and run without error. Asserts the INTENDED
+/// values, so it is RED at HEAD. Distinct from the resource-element
+/// comprehension crash family (whose Vector[int] LIST cell is correct).
+#[test]
+#[ignore = "KNOWN GAP (R42): auto dict/set comprehensions over Vector[int] give wrong values; \
+asserts the INTENDED 10/3 output. See TODO.md."]
+fn sound_auto_dict_set_comprehension_values() {
+    run_gg(
+        "known_gaps/sound_auto_dict_set_comprehension_wrong_values.gg",
+        "10\n3",
+    );
+}
+
 /// KNOWN GAP (R42) — the internal postcondition alias `__return__` is
 /// spellable in ordinary user source (`int x = __return__` checks, builds,
 /// prints 0) — a reserved-name leak. Asserts the INTENDED check-time reject,
