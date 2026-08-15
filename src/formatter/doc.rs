@@ -69,13 +69,28 @@ pub enum Doc {
     /// `Formatter::element_to_string` pre-renders sub-elements for), and
     /// packing resumes. At least one item is always placed per line.
     ///
-    /// Two shapes still exceed the budget, and both are ruled, not accidental:
-    /// a single item too wide to fit alone at the continuation indent (the
-    /// doctrinal unbreakable-atom escape), and a ONE-ITEM list whose break
-    /// would not narrow anything — `break-only-if-it-NARROWS` in
-    /// `render_fill` suppresses that break, so the item stays on the caller's
-    /// line at the CALLER's column rather than being spent a newline for no
-    /// gain.
+    /// THREE shapes still exceed the budget, and all three are ruled, not
+    /// accidental:
+    ///
+    ///  1. a single item too wide to fit ALONE at the continuation indent —
+    ///     the doctrinal unbreakable-atom escape. Note the scope: "too wide to
+    ///     fit alone", never "the line happens to hold one long token", and
+    ///     widening it to the latter would swallow shapes 2 and 3 whole.
+    ///  2. a ONE-ITEM list whose break would not narrow anything —
+    ///     `break-only-if-it-NARROWS` in `render_fill` suppresses that break,
+    ///     so the item stays on the caller's line at the CALLER's column
+    ///     rather than being spent a newline for no gain.
+    ///  3. an INLINE-BODY collision: the list closes in budget, and the text
+    ///     the CALLER writes after it — a suite/arm/closure body the author
+    ///     put on the header's line — carries the line past it anyway. The
+    ///     element FITS alone; the tail is what does not. Live cell:
+    ///     `tests/fixtures/fmt_fill_pack/closure_params.gg`'s `cl_over`, whose
+    ///     element fits at 119 and whose `): 0` reaches 122.
+    ///
+    /// `tests/lints.rs::fmt_no_new_over_budget_lines` counts all three as
+    /// separate categories, and that separation is the guard: collapsing them
+    /// into one "atom" bucket is how a live defect hides inside a doctrinal
+    /// escape.
     ///
     /// `close` is owned by the node rather than being a sibling `Text` because
     /// the fit test for the LAST item must include the closing delimiter's

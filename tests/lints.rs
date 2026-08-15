@@ -10770,12 +10770,12 @@ fn doc_source_citations_name_the_right_line() {
     // genuinely names no symbol at that line.
     const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
         ("103", "src/formatter/mod.rs:41", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
-        ("143", "src/formatter/doc.rs:412", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
-        ("218", "src/formatter/doc.rs:198", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("455", "src/formatter/mod.rs:708", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("459", "src/formatter/mod.rs:703", "the `align_trailing_comments()` call, named in prose without backticks"),
-        ("468", "src/formatter/mod.rs:1642", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("562", "src/formatter/mod.rs:2228", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("143", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
+        ("222", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
+        ("459", "src/formatter/mod.rs:709", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("463", "src/formatter/mod.rs:704", "the `align_trailing_comments()` call, named in prose without backticks"),
+        ("472", "src/formatter/mod.rs:1653", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("566", "src/formatter/mod.rs:2239", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
@@ -14931,6 +14931,46 @@ fn formatter_pre_rendered_items_carry_their_reserve() {
 /// catches a suffix written in a NEW function; the pinned SITE TOTAL catches
 /// one written as a new arm inside `format_stmt` or `format_expr`, which
 /// already reserve elsewhere and would otherwise absorb it silently.
+///
+/// # The DISCOVERY SWEEP that closed the family
+///
+/// This census pins the HEADER-suffix half. The wider question — *is there any
+/// other position where a caller writes text after a width-decided render?* —
+/// was answered once, by sweeping every `emitter.write*` whose preceding
+/// emission is a `format_*` / `write_doc` / `element_to_string*` /
+/// `emit_delimited_*` call. Recorded HERE rather than in a scratch file,
+/// because a declaration of closure that cannot be re-run is not a
+/// declaration:
+///
+/// ```text
+/// STRICT  (the immediately preceding CODE line is a render) : 82
+/// LOOSE   (a render within the preceding 5 code lines)      : 272   (STRICT ⊆ LOOSE)
+///
+/// disposition of all 272:
+///   233  RESERVED — the enclosing fn installs a tail reserve
+///     4  NOT-A-CARRIER — the write closes the render's own construct
+///    35  non-carriers, by kind:
+///          reserve-0 verified   format_test · format_bench · format_suite_setup
+///                               · format_suite_teardown · format_extern_block
+///                               · format_attributes · format_call_arg
+///          charged at caller    format_function_header_tail · format_inline_suite
+///          measurement only     format_expr_if_tail · format_trait_bound_tail
+///          width-exempt         format_import (the `from` list + the dotted path)
+///          no Doc layer         format_pattern (filed feature gap)
+///          not a header         format_string_lit (f-string internals)
+///          write PRECEDES the render — the loose window over-captures:
+///                               try_inline_single_terminal_stmts
+///                               · format_closure_body · format_expr_maybe_parens
+/// ```
+///
+/// Regenerate with the needle this test already carries (`suffix` below) run
+/// against `src/formatter/mod.rs` with the preceding-line rule; a rise in the
+/// LOOSE count that is not matched by a row above is a new carrier position.
+/// The sweep is what found `format_const_decl`, `format_static_decl`,
+/// `format_param`, `format_trait_bound`, `format_newtype`,
+/// `format_generic_param`, `format_closure_param` and
+/// `format_assert_return_expr` — eight carriers no enumerated row named, each
+/// now pinned by a boundary cell under `tests/fixtures/fmt_tail_reserve/`.
 #[test]
 fn formatter_header_suffix_census() {
     /// Disposition per function. `true` = the function installs a reserve
@@ -14952,6 +14992,7 @@ fn formatter_header_suffix_census() {
         ("format_expr_if_tail", false, "MEASUREMENT ONLY: this helper exists to be run inside `measured_reserve`; it never emits into the output buffer"),
         ("format_extern_block", false, "RESERVE-0 VERIFIED: `extern \"C\":` is a quoted string plus a colon"),
         ("format_function_header_tail", false, "CHARGED AT THE CALLER: this function IS the suffix — `format_function` measures it and installs it around the parameter list"),
+        ("format_inline_suite", false, "CHARGED AT THE CALLER: `write(header_suffix)` runs AFTER the header expression is already emitted, so a reserve installed here could never reach that fit test — `inline_suite_reserve` / `suite_header_reserve` measure it at the if/elif/meta-case sites instead. Its `\"\"`-suffix caller (`on error`, B9's ratified NO-COLON inline form) has no carrier at all: the header is literal text"),
         ("format_item", true, ""),
         ("format_match_arm", true, ""),
         ("format_param", true, ""),
@@ -14968,13 +15009,54 @@ fn formatter_header_suffix_census() {
         ("format_trait_extends_and_colon", true, ""),
         ("format_type_alias", true, ""),
     ];
-    /// Total header-suffix WRITE sites. Pinned so a new arm inside a function
-    /// that already reserves — `format_stmt` and `format_expr` are giant
-    /// match statements — cannot slip in under an existing `true` row.
-    const EXPECTED_SITES: usize = 98;
+    /// Header-suffix WRITE sites PER FUNCTION, pinned so a new arm inside a
+    /// function that already reserves — `format_stmt` and `format_expr` are
+    /// giant match statements — cannot slip in under an existing `true` row.
+    ///
+    /// Per-function rather than a single grand total: a raw total nets a
+    /// compensating add-and-remove inside the same function to zero, which is
+    /// exactly the shape a refactor produces and exactly the one a guard must
+    /// not sleep through.
+    const EXPECTED_SITES_PER_FN: &[(&str, usize)] = &[
+        ("emit_else_header", 1),
+        ("format_arm_body", 2),
+        ("format_attributes", 1),
+        ("format_bench", 1),
+        ("format_call_arg", 1),
+        ("format_const_decl", 2),
+        ("format_elif_else_blocks", 3),
+        ("format_enum", 1),
+        ("format_equip", 2),
+        ("format_expr", 22),
+        ("format_expr_if_tail", 2),
+        ("format_extern_block", 1),
+        ("format_function_header_tail", 5),
+        ("format_inline_suite", 1),
+        ("format_item", 6),
+        ("format_match_arm", 2),
+        ("format_param", 2),
+        ("format_static_decl", 2),
+        ("format_stmt", 29),
+        ("format_string_lit", 1),
+        ("format_struct", 1),
+        ("format_suite_setup", 1),
+        ("format_suite_teardown", 1),
+        ("format_test", 1),
+        ("format_trait", 3),
+        ("format_trait_bound", 1),
+        ("format_trait_bound_tail", 1),
+        ("format_trait_extends_and_colon", 2),
+        ("format_type_alias", 2),
+    ];
 
+    // `format_inline_suite\(` unqualified, not `\(":"`: the `on error` caller
+    // passes `""` as its suffix, and a needle that only matches the colon
+    // spelling does not cover its own family. The `""` site's disposition is
+    // NO CARRIER (B9's ratified ruling — the inline `on error` form takes no
+    // colon and its header is literal text), which is a disposition it has to
+    // EARN in the table below rather than get by evading the scan.
     let suffix = regex::Regex::new(
-        r#"\.write\("[^"]*:[^"]*"\)|format_inline_suite\(":"|format_arm_body\(|\.write\(" throws "\)|\.write\("!"\)|\.write\(" = "\)"#,
+        r#"\.write\("[^"]*:[^"]*"\)|format_inline_suite\(|format_arm_body\(|\.write\(" throws "\)|\.write\("!"\)|\.write\(" = "\)"#,
     )
     .expect("suffix needle compiles");
     let reserve = regex::Regex::new(
@@ -15031,14 +15113,20 @@ fn formatter_header_suffix_census() {
          Copying an existing `false` label is how two rows in the brief's own \
          seed turned out to be wrong."
     );
+    let observed_counts: Vec<(String, usize)> =
+        sites.iter().map(|(f, n)| (f.clone(), *n)).collect();
+    let expected_counts: Vec<(String, usize)> = EXPECTED_SITES_PER_FN
+        .iter()
+        .map(|(f, n)| ((*f).to_string(), *n))
+        .collect();
     assert_eq!(
-        total, EXPECTED_SITES,
-        "R42 header-suffix SITE count changed ({total} vs {EXPECTED_SITES}). \
-         The per-function table above cannot see this: a new suffix written as \
-         an arm inside `format_stmt` or `format_expr` lands in a function that \
-         already reserves elsewhere, and the fn-level check passes while the \
+        observed_counts, expected_counts,
+        "R42 header-suffix SITE COUNTS changed (total {total}). The \
+         disposition table above cannot see this: a new suffix written as an \
+         arm inside `format_stmt` or `format_expr` lands in a function that \
+         already reserves elsewhere, so the fn-level check passes while the \
          new arm has no reserve at all. Find the new site, give it its \
-         disposition, and bump this."
+         disposition, and bump its row."
     );
 }
 

@@ -784,8 +784,7 @@ impl Formatter {
     }
 
     /// The single sub-render primitive behind `element_to_string_at`,
-    /// `element_to_string_reserving`, `element_to_string_unbounded` and
-    /// `measure_leading_text`.
+    /// `element_to_string_reserving` and `measure_leading_text`.
     fn sub_render(
         &self,
         base_indent: usize,
@@ -810,14 +809,25 @@ impl Formatter {
         fmt.emitter.indent = base_indent;
         fmt.emitter.at_line_start = false;
         // Seed the CURSOR too, not just the indent level. The rendered string
-        // is spliced back in at column `base_indent * 4` — either as a broken
-        // list's continuation-indented element, or as the fill packer's next
-        // line — so a sub-render that measures from column 0 believes it has
+        // is spliced back in at column `base_indent * 4` — as a broken list's
+        // continuation-indented element, or as the fill packer's next line —
+        // so a sub-render that measures from column 0 believes it has
         // `base_indent * 4` more columns than it does, and emits lines that
-        // overflow the budget by exactly that much. Seeding makes the
-        // assumption self-consistent: an element that decides to break becomes
-        // multi-line, and a multi-line element is always placed at precisely
-        // the column it assumed.
+        // overflow the budget by exactly that much.
+        //
+        // ⚠ The assumption is self-consistent at those two splice positions
+        // and NOT at a third, which this round filed rather than inherited:
+        // a `Doc::Group`-clothed carrier's FIRST piece — a binary chain's
+        // operand zero, a method chain's root — is spliced at the CALLER's
+        // current column, because nothing precedes it in the Doc. There the
+        // seed is wrong by (caller column − `base_indent * 4`), measured at 23
+        // columns on the live corpus line, and the sub-render keeps a nested
+        // call flat that should have broken. Repro:
+        // `tests/fixtures/known_gaps/fmt_prerender_column_binary_chain.gg`,
+        // asserted by the `#[ignore]`d
+        // `fmt_prerender_column_binary_chain_stays_in_budget`. The fix is a
+        // start-column parameter here, not a reserve — the reserve reaching
+        // those pieces is already correct.
         fmt.emitter.col = base_indent * 4;
         f(&mut fmt);
         fmt.emitter.finish()
