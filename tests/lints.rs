@@ -12400,6 +12400,141 @@ fn item_module_is_constructed_only_by_the_loader() {
     );
 }
 
+/// THE MARKER-LOOKUP RATCHET — a fmt assertion may not search a fixture's own
+/// header.
+///
+/// A fmt fixture explains itself in a header of `#` lines, and `gg fmt`
+/// reproduces that header in its output. A lookup that searches the whole
+/// output for a marker is therefore shadowed by any header line that mentions
+/// it, and the failure is silent in BOTH directions: a first-line lookup
+/// measures the HEADER (red for the wrong reason, and unable to go green when
+/// the behaviour is fixed, since a comment line can never satisfy a positional
+/// claim), and a `contains` assertion is SATISFIED by the header (can never go
+/// red, reads as coverage, guards nothing).
+///
+/// The class was found at FOUR instances and fixed twice by rewording headers —
+/// an invariant-asserting comment with no enforcer, which is what the class
+/// kept defeating. `fmt_body` / `fmt_body_line_with` / `fmt_body_contains`
+/// (tests/integration.rs) retire it at the LOOKUP; this ratchet is what stops
+/// lookup N+1 from going around them.
+///
+/// SHRINK-ONLY. The allowlist holds the lookups that genuinely search something
+/// else (process stdout/stderr, an inline source string with no fixture header)
+/// or that carry a STRONGER guard of their own (a predicate that skips every
+/// comment line, not just the header). Adding a row to silence a new fmt lookup
+/// is the wrong move — route it instead.
+///
+/// **Break-and-verify (both RED-verified when this landed):** add
+/// `formatted.lines().find(|l| l.contains(…))` to any fmt test ⇒ the raw-lookup
+/// count rises ⇒ RED; route it ⇒ green.
+#[test]
+fn fmt_marker_lookups_go_through_the_body_helper() {
+    /// Raw first-line lookups that are NOT header-shadowable, with the reason.
+    /// Keyed by enclosing fn, since line numbers drift.
+    const ALLOWED: &[(&str, &str)] = &[
+        // Stronger guard: these skip EVERY comment line, not just the header.
+        ("fmt_else_catch_rethrow_no_do_wrap_on_move_tail", "predicate skips all `#` lines"),
+        ("fmt_catch_multi_stmt_no_do_wrap", "predicate skips all `#` lines"),
+        ("fmt_catch_rethrow_single_stmt_no_do_wrap", "predicate skips all `#` lines"),
+        ("fmt_catch_rethrow_single_stmt_terminal_axis", "predicate skips all `#` lines"),
+        ("fmt_sentinel_idx", "predicate skips all `#` lines"),
+        ("code_line", "filters out every `#` line before the find — its own comment records the vacuity trap this class is"),
+        // The marker is conjoined with a CODE-SHAPE predicate that no comment
+        // line can satisfy.
+        ("fmt_trailing_comment_struct_last_no_dedent", "marker conjoined with a code-shape predicate"),
+        ("fmt_trailing_comment_match_else_no_dedent", "marker conjoined with a code-shape predicate"),
+        ("fmt_tail_reserve_narrow_suppressed_half", "matches a code prefix a `#` line cannot have"),
+        ("fmt_tail_reserve_narrow_multiline_item_column", "matches a code prefix a `#` line cannot have"),
+        ("fmt_tail_reserve_exploded_path_close_line_is_unenforced", "matches `]` exactly; a comment line cannot equal it"),
+        // Searches text already stripped of its header by `fill_pack_body`.
+        ("fmt_fill_pack_width_boundary_axis", "searches `fill_pack_body` output, header already removed"),
+        ("fmt_import_group_single_blank", "predicates match `from std.`/`from mylib.` prefixes; a `#` line cannot"),
+        // NOT fixture output: process stdout/stderr, or a non-fmt stream.
+        ("parse_clone_stats", "process stdout"),
+        ("run_one_fixture", "compiler stderr / a zipped diff, not fixture output"),
+        ("self_host_full_program", "compiler stderr / a zipped diff"),
+        ("first_diff_line", "a zipped diff of two outputs"),
+        ("self_host_emit_cc_run", "compiler stderr"),
+    ];
+    /// Every raw lookup must be one of the rows above.
+    const EXPECTED_RAW: usize = 20;
+
+    let content =
+        fs::read_to_string("tests/integration.rs").expect("cannot read tests/integration.rs");
+    let lines: Vec<&str> = content.lines().collect();
+
+    let mut current = String::from("<file scope>");
+    let mut raw: Vec<(usize, String)> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix("fn ").or_else(|| t.strip_prefix("pub fn ")) {
+            current = rest.split(['(', '<']).next().unwrap_or("?").to_string();
+        }
+        if t.starts_with("//") {
+            continue;
+        }
+        if !(t.contains(".find(") || t.contains(".position(")) {
+            continue;
+        }
+        // A LINE-WISE lookup: the receiver is an iterator over lines, not a
+        // single line. `line.find('"')` is a substring search INSIDE one line
+        // and cannot be shadowed by anything.
+        if t.contains("line.find(") || t.contains("l.find(") || t.contains("s.find(") {
+            continue;
+        }
+        let window = lines[i.saturating_sub(3)..=i].join("\n");
+        if !window.contains(".lines()") && !window.contains("lines.iter()") {
+            continue;
+        }
+        // Already routed: the text being searched came from `fmt_body`.
+        if window.contains("fmt_body") {
+            continue;
+        }
+        raw.push((i + 1, current.clone()));
+    }
+
+    for (ln, f) in &raw {
+        println!("raw marker lookup: tests/integration.rs:{ln}  fn {f}");
+    }
+
+    let unlisted: Vec<String> = raw
+        .iter()
+        .filter(|(_, f)| !ALLOWED.iter().any(|(a, _)| a == f))
+        .map(|(ln, f)| format!("  tests/integration.rs:{ln} (fn {f})"))
+        .collect();
+    assert!(
+        unlisted.is_empty(),
+        "raw first-line marker lookup(s) outside the body helper:\n{}\n\n\
+         A fmt fixture's own HEADER is part of the formatted output, so a lookup \
+         that searches the whole output can be shadowed by a header line — \
+         silently, in both directions. Route it through `fmt_body_line_with` / \
+         `fmt_body_contains`. Only add an ALLOWED row when the text searched is \
+         NOT fixture output, or the predicate already excludes comment lines.",
+        unlisted.join("\n")
+    );
+
+    assert_eq!(
+        raw.len(),
+        EXPECTED_RAW,
+        "the raw marker-lookup count moved ({} vs {EXPECTED_RAW}). UP means a \
+         new lookup bypassed the helper; DOWN is good and should be ratcheted \
+         here (this list is shrink-only). Regenerate with:\n  \
+         cargo test --test lints fmt_marker_lookups_go_through_the_body_helper -- --nocapture",
+        raw.len()
+    );
+
+    let dead: Vec<&str> = ALLOWED
+        .iter()
+        .map(|(f, _)| *f)
+        .filter(|a| !raw.iter().any(|(_, f)| f == a))
+        .collect();
+    assert!(
+        dead.is_empty(),
+        "allowlist row(s) that no longer excuse anything: {dead:?} — the lookup \
+         was routed or deleted. DELETE the row; the list is shrink-only."
+    );
+}
+
 /// THE `Block::header_start` WIRING CENSUS — a new suite cannot join without a
 /// probe, and a probe cannot be excluded without a stated reason.
 ///

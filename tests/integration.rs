@@ -9986,7 +9986,6 @@ void main():
     );
 }
 
-/// gorget-js snag #15f: `gg fmt` must PRESERVE an integer literal's RADIX,
 // ══════════════════════════════════════════════════════════════════════
 // The fmt-fixture BODY: marker lookups must not see the fixture's own header
 // ══════════════════════════════════════════════════════════════════════
@@ -10040,6 +10039,7 @@ fn fmt_body_contains(formatted: &str, needle: &str) -> bool {
     fmt_body(formatted).contains(needle)
 }
 
+/// gorget-js snag #15f: `gg fmt` must PRESERVE an integer literal's RADIX,
 /// hex digit-case, and `_` grouping instead of rewriting every literal to
 /// decimal (`0x5C` -> `92`, the reported bug). The lexer discards radix — all
 /// four forms lex to one `IntLiteral` — so the formatter recovers the author's
@@ -10111,9 +10111,7 @@ fn fmt_radix_preserved() {
     // than one line, and the element that was pushed onto a continuation line
     // still carries its radix" — which is the property that was ever meant,
     // stated without assuming the one-element-per-line shape.
-    let arr_line = formatted
-        .lines()
-        .find(|l| l.contains("Vector[int] arr"))
+    let arr_line = fmt_body_line_with(&formatted, "Vector[int] arr")
         .expect("the arr vardecl is missing from the formatted output");
     let after_open = arr_line
         .split_once("= [")
@@ -11282,9 +11280,7 @@ fn fmt_preserves_extern_abi_marshalling() {
     fn marshalled_call(path: &Path, label: &str) -> String {
         let out = build_with_timeout(gg_command("build").arg("--emit-c-lir").arg(path), label);
         let stdout = String::from_utf8_lossy(&out.stdout);
-        stdout
-            .lines()
-            .find(|l| l.contains("= puts("))
+        fmt_body_line_with(&stdout, "= puts(")
             .unwrap_or_else(|| {
                 panic!("no `= puts(` call in --emit-c-lir output for {label}:\n{stdout}")
             })
@@ -14549,9 +14545,7 @@ fn fmt_trailing_comment_axis_all_classes() {
     ];
 
     for (sentinel, owning_prefix) in checks {
-        let line = formatted
-            .lines()
-            .find(|l| l.contains(sentinel))
+        let line = fmt_body_line_with(&formatted, sentinel)
             .unwrap_or_else(|| {
                 panic!(
                     "R39 snag #2 axis regression: sentinel `{sentinel}` \
@@ -14635,9 +14629,7 @@ fn fmt_trailing_comment_axis_source_runs() {
 /// or it cannot see the failure class (Core #13). Behaviour-neutral for the
 /// all-ASCII fixtures; load-bearing for `fmt_fill_pack/width_unit.gg`.
 fn hash_col_of(formatted: &str, sentinel: &str) -> usize {
-    let line = formatted
-        .lines()
-        .find(|l| l.contains(sentinel))
+    let line = fmt_body_line_with(formatted, sentinel)
         .unwrap_or_else(|| {
             panic!(
                 "align: sentinel `{sentinel}` missing from formatted output \
@@ -14922,9 +14914,7 @@ fn fmt_snag_2_trailing_comment_repro() {
         ("# belongs to else", "            pass"),
     ];
     for (sentinel, owning_prefix) in checks {
-        let line = formatted
-            .lines()
-            .find(|l| l.contains(sentinel))
+        let line = fmt_body_line_with(&formatted, sentinel)
             .unwrap_or_else(|| {
                 panic!(
                     "R39 snag #2 REPRO regression: `{sentinel}` missing \
@@ -15002,9 +14992,7 @@ fn fmt_collection_literal_interior_comment_leading() {
         ("# SEN tuple-leading-mid", "        "),
     ];
     for (sentinel, expected_prefix) in leading_expectations {
-        let line = formatted
-            .lines()
-            .find(|l| l.contains(sentinel))
+        let line = fmt_body_line_with(&formatted, sentinel)
             .unwrap_or_else(|| {
                 panic!(
                     "R39 collit-escape leading-comment regression: \
@@ -15053,9 +15041,7 @@ fn fmt_collection_literal_interior_comment_trailing() {
         ("# SEN tuple-trailing-last", "        3,"),
     ];
     for (sentinel, owning_prefix) in trailing_pairs {
-        let line = formatted
-            .lines()
-            .find(|l| l.contains(sentinel))
+        let line = fmt_body_line_with(&formatted, sentinel)
             .unwrap_or_else(|| {
                 panic!(
                     "R39 collit-escape trailing-comment MISSING: `{sentinel}`\n\
@@ -15095,7 +15081,7 @@ fn fmt_collection_literal_interior_comment_orphan_pre_close() {
         ("# SEN tuple-orphan-pre-close", "        ", "    )"),
     ];
     for (sentinel, own_prefix, close_line) in orphan_expectations {
-        let lines: Vec<&str> = formatted.lines().collect();
+        let lines: Vec<&str> = fmt_body(&formatted).lines().collect();
         let idx = lines.iter().position(|l| l.contains(sentinel))
             .unwrap_or_else(|| {
                 panic!(
@@ -15141,9 +15127,7 @@ fn fmt_collection_literal_interior_comment_nested() {
     // Inner is at indent-4 (as an element of outer); its interior is
     // indent-8. So the sentinel MUST appear at exactly 8 spaces.
     let sentinel = "# SEN array-nested-inner";
-    let line = formatted
-        .lines()
-        .find(|l| l.contains(sentinel))
+    let line = fmt_body_line_with(&formatted, sentinel)
         .unwrap_or_else(|| {
             panic!(
                 "R39 collit-escape nested-comment MISSING: `{sentinel}`\n\
@@ -15707,9 +15691,7 @@ fn fmt_resources_gg_comment_positions_preserved() {
     // at column 0. Pre-fix bug relocated it to the top-level scope AFTER
     // the closing `]`.
     let anchor = "# GorgetString — multi-alias";
-    let anchor_line = formatted
-        .lines()
-        .find(|l| l.contains(anchor))
+    let anchor_line = fmt_body_line_with(&formatted, anchor)
         .unwrap_or_else(|| {
             panic!(
                 "R39 collit-escape FLAGSHIP: anchor comment `{anchor}` \
@@ -15809,13 +15791,13 @@ fn fill_pack_body(name: &str) -> String {
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("cannot read fmt_fill_pack/{name}: {e}"));
     let formatted = gorget::formatter::format_source_infallible(&source);
-    let body_start = formatted
+    // `fmt_body` IS this operation — the header skip, with one definition.
+    assert!(
+        !fmt_body(&formatted).is_empty(),
+        "fmt_fill_pack/{name} has no code lines"
+    );
+    let mut body: String = fmt_body(&formatted)
         .lines()
-        .position(|l| !l.starts_with('#') && !l.trim().is_empty())
-        .unwrap_or_else(|| panic!("fmt_fill_pack/{name} has no code lines"));
-    let mut body: String = formatted
-        .lines()
-        .skip(body_start)
         .collect::<Vec<_>>()
         .join("\n");
     body.push('\n');
@@ -16403,9 +16385,7 @@ fn fmt_fill_pack_width_unit_axis() {
 
     // And the packer measures elements in characters: each `"naïve café"` is 12
     // characters but 14 bytes, so a byte measure would break the list earlier.
-    let pack_line = body
-        .lines()
-        .find(|l| l.contains("Vector[String] p"))
+    let pack_line = fmt_body_line_with(&body, "Vector[String] p")
         .expect("wu_pack line");
     assert_eq!(pack_line.chars().count(), 107);
     assert_eq!(pack_line.matches("naïve").count(), 6, "six elements packed");
@@ -49690,7 +49670,10 @@ fn fmt_equip_generic_params_keep_separator() {
     // The WRAPPED cell: the bracket list breaks onto a continuation line, and
     // the close `]` must STILL be followed by the separator and the type.
     assert!(
-        formatted
+        // BODY, not the whole output. This one is latently safe only because
+        // the header spells the WELDED form (which fails the first conjunct) —
+        // "immune by construction" has to be true, not lucky.
+        fmt_body(&formatted)
             .lines()
             .any(|l| l.contains("] Wide[") && !l.contains("]Wide[")),
         "equip separator lost after a BROKEN bracket list — the close `]` must \
