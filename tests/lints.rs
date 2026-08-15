@@ -14545,7 +14545,9 @@ fn fmt_author_paren_dedup_class() {
 /// **THE LENS — what "a paren write" means here, stated because the first cut
 /// of this guard got it wrong.** It counts paren CHARACTERS inside any string
 /// literal handed to `emitter.write` / `write_preformatted` / `doc::text`, plus
-/// the two delimiter arguments of the `emit_delimited_*` family. Not the
+/// the delimiter arguments of the list emitters named in `EMITTERS` below
+/// (derived from the file, which is how the first cut of that list came to miss
+/// a member that exists). Not the
 /// spelling `write("(")`: `write(" catch (")`, `write("):")`, `write(",)")`,
 /// `write(".await()")` and `emit_delimited_list("(", ")", …)` all emit parens
 /// too, and this file uses those spellings twenty times. A lens keyed on the
@@ -14560,7 +14562,16 @@ fn fmt_author_paren_dedup_class() {
 ///    that row's count;
 ///  * a whole new function writing bare `"("` / `")"` → RED, `UNCLASSIFIED`.
 ///
-/// ⚠ **Stated boundaries — two, both measured, neither claimed away.**
+/// ⚠ **Stated boundaries — three, all measured, none claimed away.**
+///
+/// (0) The scan reads `src/formatter/mod.rs` ONLY. `src/formatter/doc.rs` is
+/// the other place a paren could be emitted from, and its production region
+/// (everything above the `#[cfg(test)]` at `doc.rs:626`) emits none — its only
+/// paren-bearing literals are inside the test module. Re-verify with
+/// `awk 'NR<626' src/formatter/doc.rs | grep -n '"[^"]*[()]'` before assuming
+/// it still holds; the `doc::surround*` primitives themselves take their
+/// delimiters as parameters, so the literals live at the `mod.rs` call sites
+/// this scan does read.
 ///
 /// (1) The lens reads LITERAL text. A paren assembled at runtime — interpolated
 /// into a `format!` from a computed value, or carried inside a variable — is
@@ -14630,14 +14641,27 @@ fn fmt_paren_emission_census() {
         ("wrap_multiline_expr_in_parens", 2, Expression),
     ];
 
-    /// The emitting calls whose string arguments reach the output.
+    /// The emitting calls whose string arguments reach the output — DERIVED
+    /// from the file (`grep -n "fn emit_delimited\|fn surround"
+    /// src/formatter/{mod,doc}.rs`), not enumerated from memory. The first cut
+    /// of this list was written from an imagined family: it carried two
+    /// spellings that do not exist (`emit_delimited_list_with`,
+    /// `emit_delimited_fill`) while omitting `emit_delimited_texts`, which is
+    /// real, passes its delimiters straight to `doc::surround_fill`, and has a
+    /// live call site — so a paren emitted through it was invisible here.
+    ///
+    /// A NEW member of the family is not this lint's to catch: the sibling
+    /// `formatter_list_emit_fill_census` counts the list emitters themselves
+    /// and reds on an unregistered one (measured — it is what fires on a new
+    /// `emit_delimited_texts` wrapper while this census stays green). That
+    /// census owns "a new list emitter"; this one owns "which parens reach the
+    /// output".
     const EMITTERS: &[&str] = &[
         "emitter.write(",
         "emitter.write_preformatted(",
         "doc::text(",
         "emit_delimited_list(",
-        "emit_delimited_list_with(",
-        "emit_delimited_fill(",
+        "emit_delimited_texts(",
         "surround_fill(",
     ];
 
