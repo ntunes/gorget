@@ -21687,6 +21687,15 @@ fn format_expr_canonical(expr: &Expr) -> String {
         }
         Expr::NoneLiteral => "None".to_string(),
         Expr::Identifier(name) => name.clone(),
+        // LANE PARITY, not a spelling preference: the self-host parser still
+        // builds the postcondition return value as `EIdentifier("__return__")`
+        // (`tests/fixtures/self_host_parser/parser.gg`) and its canonical
+        // printer emits the identifier's name verbatim
+        // (`self_host_parser/format.gg`). Both halves of this always-pass
+        // diagnostic must print the same text, so the Rust half prints what
+        // the self-host AST spells. When the self-host adopts a typed return
+        // -value node, both sides change in the same commit.
+        Expr::ReturnValue => "__return__".to_string(),
         Expr::SelfExpr => "self".to_string(),
         Expr::It => "it".to_string(),
         Expr::Path { segments } => segments

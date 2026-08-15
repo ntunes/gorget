@@ -10769,12 +10769,12 @@ fn doc_source_citations_name_the_right_line() {
     // row belongs here only when the cite is measured CORRECT and the sentence
     // genuinely names no symbol at that line.
     const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
-        ("103", "src/formatter/mod.rs:42", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
+        ("103", "src/formatter/mod.rs:43", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("143", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
         ("220", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("469", "src/formatter/mod.rs:885", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("493", "src/formatter/mod.rs:2141", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("587", "src/formatter/mod.rs:2755", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("469", "src/formatter/mod.rs:913", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("493", "src/formatter/mod.rs:2180", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("587", "src/formatter/mod.rs:2794", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
@@ -11890,7 +11890,17 @@ fn fmt_precedence_check_arm_count() {
     /// arm that emits a sub-expression without consulting a helper leaves the
     /// count at 29 while the arm count rises, and one that DOES consult a
     /// helper pushes it to 30.
-    const EXPECTED: usize = 29;
+    ///
+    /// R42 Track D bump 29 → 31, both in `format_assert_return_expr` and both
+    /// on the SAME operand: that emitter hand-rolled its `Expr::BinaryOp`
+    /// re-emission and bypassed this chokepoint entirely, so
+    /// `assert return >= a * (b + c)` came back as `>= a * b + c` — a
+    /// postcondition that FLIPPED from trap to pass at runtime. Its right
+    /// operand now goes through `format_binop_operand`, spelled twice for the
+    /// reason above: once in the tail MEASUREMENT, once in the emission. (The
+    /// left operand stays on the flat spine walk — a chain break at the TOP
+    /// level would emit `assert (return\n    >= x)`, which does not re-parse.)
+    const EXPECTED: usize = 31;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -13340,7 +13350,12 @@ fn formatter_child_collection_loop_census() {
         ("format_stmt", "for item in arms {", Leading),
         ("format_stmt", "for arm in arms {", Leading),
         ("format_stmt", "for (case_expr, body) in arms {", Leading),
-        ("format_expr", "for arm in arms {", Leading),
+        // R42 Track D: the expression match moved out of `format_expr` into
+        // `format_expr_inner` — `format_expr` is now the author-paren wrapper
+        // that delegates to it. The SCOPE is re-pointed, never the count:
+        // a census that reports 0 because its scope emptied is the guard
+        // silently retiring itself.
+        ("format_expr_inner", "for arm in arms {", Leading),
         // R41 T-FMT-C: the closure post-prelude loop moved out of `format_expr`
         // into its own `format_closure_post_prelude`, so the indented and
         // (unreachable-for-parser-output) fallback paths share ONE emitter
@@ -13728,12 +13743,12 @@ fn formatter_collection_literal_interior_hook_dispatch() {
 
 /// R39 fmt collection-literal interior-comment escape (Core #4 + #15e Q2
 /// class-fix pair with `formatter_collection_literal_interior_hook_dispatch`,
-/// 2026-08-09): pins the number of `Expr::*Literal` arms in `format_expr`
-/// in `src/formatter/mod.rs` at exactly 4. Precedent:
+/// 2026-08-09): pins the number of `Expr::*Literal` arms in
+/// `format_expr_inner` in `src/formatter/mod.rs` at exactly 4. Precedent:
 /// `container_literal_arms_count` at line 1021 scans `infer_expr` for
 /// `Expr::*Literal` arms in the typechecker.
 ///
-/// Every collection-literal `format_expr` arm MUST reach the delimited-list
+/// Every collection-literal expression arm MUST reach the delimited-list
 /// chokepoint `Formatter::emit_delimited_list`, which is what consults the
 /// comment side-table before the `Doc` layer. Adding a 5th arm (e.g. a
 /// separately-spelled `Expr::SetLiteral`) bumps this count, forcing its
@@ -13749,11 +13764,13 @@ fn formatter_collection_literal_interior_hook_dispatch() {
 /// added silently can no longer leave a "balanced" pair behind it.
 ///
 /// **Break-and-verify:** insert `Expr::SetLiteral(_) => {}` into
-/// `format_expr`'s match body; this test fires with `5 vs expected 4`.
+/// `format_expr_inner`'s match body; this test fires with `5 vs expected 4`.
 ///
 /// **Scope:** counts only lines that begin with `Expr::*Literal(` /
-/// `Expr::StructLiteral {` INSIDE the `format_expr` fn body, keyed off
-/// the `fn format_expr(` header + brace-depth tracking. The
+/// `Expr::StructLiteral {` INSIDE the `format_expr_inner` fn body, keyed off
+/// the `fn format_expr_inner(` header + brace-depth tracking (R42 Track D
+/// moved the match there; `format_expr` is now the author-paren wrapper, and
+/// keying on it would silently scope this census to an empty function). The
 /// `Return(Some)` carve-out at ~line 1619 that pattern-matches
 /// `Expr::TupleLiteral` in `format_stmt`'s `Return` arm is a DIFFERENT
 /// fn — the scope guard excludes it.
@@ -13803,7 +13820,7 @@ fn formatter_literal_arms_dispatch_count() {
         if trimmed.starts_with("//") {
             continue;
         }
-        if !in_format_expr && trimmed.starts_with("fn format_expr(") {
+        if !in_format_expr && trimmed.starts_with("fn format_expr_inner(") {
             in_format_expr = true;
             depth = 0;
         }
@@ -13812,7 +13829,7 @@ fn formatter_literal_arms_dispatch_count() {
         }
         depth += line.matches('{').count() as i32;
         depth -= line.matches('}').count() as i32;
-        if depth <= 0 && !trimmed.starts_with("fn format_expr(") {
+        if depth <= 0 && !trimmed.starts_with("fn format_expr_inner(") {
             in_format_expr = false;
             continue;
         }
@@ -14437,8 +14454,11 @@ fn formatter_suite_layout_hook_census() {
         ("format_closure_post_prelude", "self.format_block_stmts(block);", Plain),
         ("format_elif_else_blocks", "self.format_block_stmts(body);", Layout),
         ("format_elif_else_blocks", "self.format_block_stmts(else_body);", Both),
-        ("format_expr", "self.format_block_stmts(block);", Plain),
-        ("format_expr", "self.format_block_stmts(body);", Plain),
+        // R42 Track D: the expression match lives in `format_expr_inner` now
+        // (`format_expr` became the author-paren wrapper around it). Scope
+        // re-pointed, counts untouched.
+        ("format_expr_inner", "self.format_block_stmts(block);", Plain),
+        ("format_expr_inner", "self.format_block_stmts(body);", Plain),
         ("format_function", "self.format_block_stmts(block);", Plain),
         ("format_inline_suite", "self.format_block_stmts(block);", Plain),
         ("format_item", "self.format_block_stmts(&mtf.body);", Plain),
@@ -15929,8 +15949,13 @@ fn formatter_header_suffix_census() {
         ("format_elif_else_blocks", true, ""),
         ("format_enum", true, ""),
         ("format_equip", true, ""),
-        ("format_expr", true, ""),
         ("format_expr_if_tail", false, "MEASUREMENT ONLY: this helper exists to be run inside `measured_reserve`; it never emits into the output buffer"),
+        // R42 Track D: the giant expression match is `format_expr_inner` now.
+        // The row is RE-POINTED, not dropped — `format_expr` itself keeps no
+        // header-suffix write (it writes only the author's parens, and charges
+        // the closing ones through `with_tail_reserve` around the delegation),
+        // so it no longer appears in this census at all.
+        ("format_expr_inner", true, ""),
         ("format_extern_block", false, "RESERVE-0 VERIFIED: `extern \"C\":` is a quoted string plus a colon"),
         ("format_function_header_tail", false, "CHARGED AT THE CALLER: this function IS the suffix — `format_function` measures it and installs it around the parameter list"),
         ("format_inline_suite", false, "CHARGED AT THE CALLER: `write(header_suffix)` runs AFTER the header expression is already emitted, so a reserve installed here could never reach that fit test — `inline_suite_reserve` / `suite_header_reserve` measure it at the if/elif/meta-case sites instead. Its `\"\"`-suffix caller (`on error`, B9's ratified NO-COLON inline form) has no carrier at all: the header is literal text"),
@@ -15968,8 +15993,8 @@ fn formatter_header_suffix_census() {
         ("format_elif_else_blocks", 3),
         ("format_enum", 1),
         ("format_equip", 2),
-        ("format_expr", 22),
         ("format_expr_if_tail", 2),
+        ("format_expr_inner", 22),
         ("format_extern_block", 1),
         ("format_function_header_tail", 5),
         ("format_inline_suite", 1),
