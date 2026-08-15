@@ -3323,13 +3323,22 @@ fn self_host_iter_protocol_equip_default_shortname() {
              `dm_mangled = eq_target + \"__\" + tmeth.name` (gated by tc_gate) missing",
         );
     }
-    // (3) the short-name override must stay GATED on the typed iterator-protocol
+    // (3) the short-name overrides must stay GATED on the typed iterator-protocol
     //     predicate — unconditional short-naming breaks non-iterator equips
-    //     (cf. the Writer.flush −85 regression).
-    if !module_body.contains("is_iterator_protocol_trait(tname)") {
+    //     (cf. the Writer.flush −85 regression). Each arm's gate is pinned
+    //     INDIVIDUALLY: a single any-occurrence probe stayed green when one arm
+    //     lost its gate while the sibling kept it (the `_sp` suffix keeps the
+    //     two needles from matching each other).
+    if !module_body.contains("tc_gate_sp = is_iterator_protocol_trait(tname)") {
         missing.push(
-            "lower.gg: the `is_iterator_protocol_trait(tname)` gate for the equip-default \
-             short-name overrides is missing — the override must stay typed-predicate-gated",
+            "lower.gg did_split arm: its `tc_gate_sp = is_iterator_protocol_trait(tname)` \
+             typed-predicate gate is missing — the short-name override must stay gated",
+        );
+    }
+    if !module_body.contains("tc_gate = is_iterator_protocol_trait(tname)") {
+        missing.push(
+            "lower.gg not-did_split arm: its `tc_gate = is_iterator_protocol_trait(tname)` \
+             typed-predicate gate is missing — the short-name override must stay gated",
         );
     }
     // (4) nullary-factory static-ret list carries BOTH default AND one.
@@ -5269,6 +5278,13 @@ fn self_host_safety_walker_is_exhaustive() {
 ///   (c) No raw `184` literal lingers in `lir_lower.gg`, AND every GorgetMap /
 ///       GorgetSet `ResourceMetadata`/`LirStructDef` size site reads the named
 ///       constant rather than a bare integer (so all 9 stay single-sourced).
+///
+/// Canon-fragility note (pre-A2 census, 2026-08-15): the two-token needles here
+/// survive fmt canonicalization only on line-width HEADROOM — the matched rows
+/// are ~106 chars against the 120 wrap, so a future rename/widening that pushes
+/// them past 120 splits the needle across lines. The failure mode is LOUD
+/// (missing-site red, never a silent pass), which is why this is a note and not
+/// a rewrite; if it ever reds after a pure-fmt change, join wrapped lines first.
 #[test]
 fn self_host_gorget_map_struct_size() {
     const EXPECTED_SIZE: usize = 192;
