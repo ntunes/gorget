@@ -19,8 +19,17 @@ node's span, the same way it recovers comments, behind a re-lex check that makes
 stale span harmless (see [String literals and the verbatim
 chokepoint](#string-literals-and-the-verbatim-chokepoint)).
 
-What neither input preserves is genuinely lost: original whitespace, line breaks
-that don't matter, redundant parentheses, the order of an import list. Everything
+There is a third input, smaller than either: the parser's own **trivia
+sidebands** — the comment table, and the author's grouping parentheses. A
+grouping paren carries no semantics (`parse_paren_expr` returns the inner
+expression unchanged), which is exactly what makes it authorial: `(y % 4) == 0`
+tells a reader which sub-expression to bind first, and the formatter is not
+entitled to that edit. The parser records the wrapped span, one entry per
+layer, and the emitter reads it — see [Author
+parentheses](#author-parentheses).
+
+What none of the three inputs preserves is genuinely lost: original whitespace,
+line breaks that don't matter, the order of an import list. Everything
 else round-trips, and the formatter goes out of its way to preserve a handful of
 facts that *look* cosmetic but are semantically load-bearing on re-parse
 (visibility on statics, the `:`-vs-`= "sym"` shape of a function body, the
@@ -577,6 +586,53 @@ non-ASCII stays raw.
 No `.gg` source can reach that path, which is exactly why the escape policy lives in a
 free function with unit cells of its own (`src/formatter/mod.rs:6400`) instead of a
 fixture that would be green for the wrong reason.
+
+### Author parentheses
+
+A grouping paren is the one authorial form the AST cannot carry at all. Comments
+are partitioned out of the token stream; a literal's radix survives at its span.
+But `parse_paren_expr`'s parenthesized-expression branch returns the INNER
+expression node, unchanged — after it, `(a + b) + c` and `a + b + c` are the same
+tree. The parser is therefore the only place that knows a paren was written, and
+it records the wrapped expression's span in a trivia table
+(`src/parser/parens.rs`), one entry per layer, the same sideband idea as the
+comment table. There is deliberately no `Expr::Paren` node: a wrapper every
+semantic pass had to see through is one pass away from a mis-analysis, and the
+formatter is the only consumer.
+
+The emitter's rule is **`max(author_layers, required)` per node**, never
+`author + required`. The sum has no fixed point: the formatter's added pair
+re-parses as another author paren on the next run, so `(` becomes `((` becomes
+`(((`. Taking the maximum instead means one paren on the page satisfies both
+readings. `format_expr` emits the author's layers and delegates the expression
+match to `format_expr_inner`; the two sites that add a paren of their own stand
+down when an author layer covers the SAME node:
+
+- `format_expr_maybe_parens` — the precedence wrap, shared by the operand
+  emitters;
+- `wrap_multiline_expr_in_parens` — the broken-chain wrap, which is the second
+  documented use of `IfBreak`. A chain that breaks across lines emits its
+  continuations as `+ b` / `?? b`, and a bare leading-operator continuation is
+  not valid Gorget, so the pair appears in broken mode only:
+  `IfBreak { flat: "", broken: "(" }`. That is what makes the wrap invisible
+  when the chain fits, and load-bearing when it does not.
+
+Suppression is **same-span only**. A paren on a different node never cancels a
+required one, because nothing then guarantees the reparse-required paren is on
+the page at all: on `for i in (^start)..end:` the author's paren sits on
+`^start` and the required wrap on the range, so both are emitted —
+`((^start)..end)`, idempotent, re-parsing to the same program.
+
+Two consequences worth stating, because both look like bugs from a distance:
+
+- The flattener has to ask too. `collect_binary_operands` flattens same-operator
+  left-nested chains, and a sub-chain the author parenthesised has the identical
+  AST — so the check runs at every recursion step, and a paren-grouped pair
+  stays ONE operand of a broken chain instead of splitting across lines.
+- Speculation has to unwind the log. `parse_expr` is reachable under
+  `Parser::try_parse` (a generic argument's array size), so the backtrack path
+  truncates the push-log; otherwise an abandoned parse leaves a phantom layer
+  and the fallback parse records the same paren twice.
 
 ### Function body shapes
 

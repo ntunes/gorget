@@ -5392,11 +5392,21 @@ impl Formatter {
     ///     re-emitted as `apply_once(^(int x): x + n, 3)` it is REJECTED
     ///     `E_OwnershipMismatch` — the move-CLOSURE became a moved argument.
     ///
-    /// The parens are not "author paren preservation" (no `Paren` node
-    /// exists, and span recovery would silently fall back to the canonical
-    /// spelling, reopening the flip with the guard green). They are a pure
-    /// function of the parsed program: emit exactly the parens the reparse
-    /// requires, and no others.
+    /// These parens are REQUIRED, and required parens are never suppressed:
+    /// they are a pure function of the parsed program, emitted whether or not
+    /// the author wrote one here. What the author's own parens add is a
+    /// SECOND, independent layer — `format_expr` emits
+    /// `max(author_layers, required)` per node, and "per node" is the whole
+    /// safety property. On `(^start..end)` the author's paren and this one
+    /// land on the SAME node, so one pair serves both and the output is
+    /// unchanged. On `(^start)..end` they land on DIFFERENT nodes — the
+    /// author's on `^start`, this one on the range — and both appear:
+    /// `((^start)..end)`, which re-parses to the same rejected program.
+    ///
+    /// The thing that would re-open the flips above is DIFFERENT-NODE
+    /// suppression: dropping this wrap because some other node happens to
+    /// carry a paren that makes the reparse work. Nothing guarantees that,
+    /// which is why suppression is same-span only.
     fn format_ownership_modifier_operand(&mut self, operand: &Spanned<Expr>) {
         let wrap = emits_leading_ownership_sigil(&operand.node);
         self.format_expr_maybe_parens(operand, wrap);
