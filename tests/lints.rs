@@ -10770,12 +10770,12 @@ fn doc_source_citations_name_the_right_line() {
     // genuinely names no symbol at that line.
     const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
         ("103", "src/formatter/mod.rs:41", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
-        ("138", "src/formatter/doc.rs:325", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
-        ("200", "src/formatter/doc.rs:189", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("358", "src/formatter/mod.rs:484", "the blank-collapse loop INSIDE `fn format`, whose name is 25 lines up"),
-        ("362", "src/formatter/mod.rs:480", "the `align_trailing_comments()` call, named in prose without backticks"),
-        ("371", "src/formatter/mod.rs:1358", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("465", "src/formatter/mod.rs:1845", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("143", "src/formatter/doc.rs:412", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
+        ("218", "src/formatter/doc.rs:198", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
+        ("451", "src/formatter/mod.rs:708", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("455", "src/formatter/mod.rs:703", "the `align_trailing_comments()` call, named in prose without backticks"),
+        ("464", "src/formatter/mod.rs:1642", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("558", "src/formatter/mod.rs:2228", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
@@ -11874,7 +11874,24 @@ fn fmt_precedence_check_arm_count() {
     /// per form (`format_prefix_operand` 8 sites, `format_postfix_receiver`
     /// still 8), and both are load-bearing: emitting `(await f()) + 1`
     /// without the prefix helper's parens re-parses as `Await(f() + 1)`.
-    const EXPECTED: usize = 27;
+    ///
+    /// R42 tail-reserve bump 27 → 29, and NEITHER is a new arm. A caller that
+    /// must reserve width for what it writes after an operand has to
+    /// pre-render that text to measure it, and the pre-render necessarily
+    /// spells the same helper call a second time. The two mirrors:
+    ///   * `Expr::Range` — the START operand's reserve measures `..` plus the
+    ///     END operand, whose emission goes through `format_prefix_operand`.
+    ///   * `Expr::Rethrow` — the LHS's reserve measures the bare-form
+    ///     ` rethrow <transform>` tail, whose emission goes through
+    ///     `format_binop_operand`.
+    /// A mirror runs on a throwaway sub-`Formatter`, so it cannot change what
+    /// is emitted; what it CAN do is drift from the emission beside it, which
+    /// is why both are spelled identically to their emitting twin. This guard
+    /// still catches what it was written for: a genuinely NEW `format_expr`
+    /// arm that emits a sub-expression without consulting a helper leaves the
+    /// count at 29 while the arm count rises, and one that DOES consult a
+    /// helper pushes it to 30.
+    const EXPECTED: usize = 29;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -14456,18 +14473,21 @@ fn formatter_list_emit_fill_census() {
     ///     All delimiter-scan misses route through it, including the
     ///     sibling-anchor propagation, so this stays one site regardless of
     ///     how many callers can miss.
-    ///   * two in `format_method_chain` — chain segments are pre-rendered
+    ///   * two in `format_chain_segment` — chain segments are pre-rendered
     ///     into a sub-formatter whose comment sideband is EMPTY, so a real
     ///     gate there would be dead code reading as a live one. That escape
     ///     is filed with a repro (`known_gaps/fmt_delimited_list_pre_render_above.gg`);
-    ///     these two sites are its structural marker in the source.
+    ///     these two sites are its structural marker in the source. (They
+    ///     moved out of `format_method_chain` when the segment emission was
+    ///     factored into one spelling shared by the emission and the R42
+    ///     tail-reserve measurement — the same two sites, re-attributed.)
     ///
     /// A pattern match (`if let Gate::UngatedCarveOut(reason) = gate`) is
     /// NOT a construction and is excluded by requiring the `("` opener.
     const EXPECTED_CARVE_OUTS: &[(&str, &str)] = &[
         ("gate_or_scan_miss", "scan miss"),
-        ("format_method_chain", "chain segment generic args: empty sideband"),
-        ("format_method_chain", "chain segment call args: empty sideband"),
+        ("format_chain_segment", "chain segment generic args: empty sideband"),
+        ("format_chain_segment", "chain segment call args: empty sideband"),
     ];
     /// Non-canonical one-item-per-line sites. A tripwire pinned at zero.
     const EXPECTED_SURROUND: usize = 0;
@@ -14486,7 +14506,26 @@ fn formatter_list_emit_fill_census() {
     ///      /write\(", "\)/{print NR"\t"fn}' src/formatter/mod.rs`
     /// (comment lines excluded, as below). A change here means the family
     /// grew or shrank — reconcile the TODO enumeration with it.
+    ///
+    /// The count EXCLUDES measurement mirrors (below), which is what keeps
+    /// this number comparable across the R42 tail reserve: a mirror emits
+    /// into a throwaway sub-formatter and can re-parent nothing.
     const EXPECTED_WRITE_SEP: usize = 23;
+    /// MEASUREMENT MIRRORS of the loops above: a hand-rolled comma loop has
+    /// to be re-walked to measure what follows one of its items, and the
+    /// re-walk necessarily spells the separator again.
+    ///
+    /// These are NOT list emitters. The mirror runs inside a
+    /// `measured_reserve` closure, on a sub-`Formatter` at probe width whose
+    /// output is measured and thrown away — it never reaches the buffer, so
+    /// the interior-comment escape the census above exists to count cannot
+    /// happen here.
+    ///
+    /// A rise means either a new hand-rolled loop gained a tail measurement
+    /// (fine — its emitter half must appear above too) or a real emitter was
+    /// mis-spelled onto a sub-formatter (not fine). Reconcile against the
+    /// emitter count, which is pinned separately and did NOT move.
+    const EXPECTED_MEASUREMENT_MIRRORS: usize = 8;
 
     let content = fs::read_to_string("src/formatter/mod.rs")
         .expect("cannot read src/formatter/mod.rs");
@@ -14494,6 +14533,7 @@ fn formatter_list_emit_fill_census() {
     let mut surround = 0usize;
     let mut group = 0usize;
     let mut write_sep = 0usize;
+    let mut measurement_mirrors = 0usize;
     let mut delimited_list_sites = 0usize;
     let mut ungated_texts = 0usize;
     let mut carve_outs: Vec<(String, String)> = Vec::new();
@@ -14524,7 +14564,14 @@ fn formatter_list_emit_fill_census() {
         // would make both shapes the same token and this census blind.
         surround += line.matches("doc::surround(").count();
         group += line.matches("doc::group(").count();
-        write_sep += line.matches("write(\", \")").count();
+        // A separator written on the OUTER formatter is an emitter; one
+        // written on a `measured_reserve` closure's sub-formatter is a
+        // mirror. `self` is a keyword, so "the receiver is literally `self`"
+        // is a structural test, not a naming convention: no sub-formatter can
+        // ever be bound to it.
+        write_sep += line.matches("self.emitter.write(\", \")").count();
+        measurement_mirrors += line.matches("write(\", \")").count()
+            - line.matches("self.emitter.write(\", \")").count();
         delimited_list_sites += line.matches("self.emit_delimited_list(").count();
         if current_fn != "emit_delimited_list" {
             ungated_texts += line.matches(".emit_delimited_texts(").count();
@@ -14587,8 +14634,17 @@ fn formatter_list_emit_fill_census() {
     assert_eq!(group, EXPECTED_GROUP, "`doc::group(` site count changed.{msg}");
     assert_eq!(
         write_sep, EXPECTED_WRITE_SEP,
-        "`write(\", \")` separator-loop count changed — a list is emitted with a \
-         hand-rolled comma loop that can never wrap.{msg}"
+        "`self.emitter.write(\", \")` separator-loop count changed — a list is \
+         emitted with a hand-rolled comma loop that can never wrap.{msg}"
+    );
+    assert_eq!(
+        measurement_mirrors, EXPECTED_MEASUREMENT_MIRRORS,
+        "the count of comma-loop MEASUREMENT MIRRORS (a `\", \"` written on a \
+         sub-formatter rather than on `self`) changed. A mirror re-walks a \
+         hand-rolled loop to measure what follows one of its items and emits \
+         nothing; a real emitter mis-spelled onto a sub-formatter would show \
+         up here while the emitter count above stayed put, which is exactly \
+         the confusion this split exists to prevent.{msg}"
     );
 }
 

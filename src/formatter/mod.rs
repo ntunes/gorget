@@ -628,6 +628,23 @@ impl Formatter {
             + self.measure_leading_text(|s| s.format_block_stmts(block))
     }
 
+    /// B1's two SUITE-LAYOUT cells in one call, for a header whose body is a
+    /// `Block`: an INDENTED suite owes only the header's `:`; an INLINE one
+    /// also owes the separating space and the body's leading unbreakable
+    /// prefix.
+    ///
+    /// Callers compute this BEFORE their clause-header blank/comment hooks —
+    /// it reads only the AST, so hoisting is free, and it keeps the hooks
+    /// adjacent to the `format_block_stmts` call that
+    /// `formatter_suite_layout_hook_census` classifies them by.
+    fn suite_header_reserve(&self, body: &Block) -> usize {
+        if body.layout == SuiteLayout::Inline {
+            self.inline_suite_reserve(":", body)
+        } else {
+            1
+        }
+    }
+
     /// The reserve a `case`/`catch`/`rethrow` header owes for whatever
     /// `format_arm_body` writes on the header's OWN line — EXCLUDING the
     /// caller's own `:`, which each caller spells for itself.
@@ -2305,6 +2322,37 @@ impl Formatter {
         self.emitter.dedent();
     }
 
+    /// An enum variant's tuple-field list.
+    ///
+    /// A HAND-ROLLED comma loop, not a fill-emitted list: each field type is
+    /// its own width-decided render, charged for the rest of the list plus
+    /// the `)`. ⚠ FEATURE GAP, named rather than silently inherited: a
+    /// `Type::Named` with no generic args produces NO Doc at all, so a wide
+    /// variant has no fit test anywhere and cannot break — the same
+    /// no-Doc-layer shape as `format_pattern` and the var-decl initializer.
+    /// Filed in `TODO.md`; a reserve cannot close it, only a Doc layer can.
+    ///
+    /// Factored out of the variant loop so the loop's leading/trailing comment
+    /// hooks stay inside `formatter_child_collection_loop_census`'s window.
+    fn format_variant_tuple_fields(&mut self, types: &[Spanned<Type>]) {
+        self.emitter.write("(");
+        for (i, ty) in types.iter().enumerate() {
+            if i > 0 {
+                self.emitter.write(", ");
+            }
+            let rest = &types[i + 1..];
+            let tail = self.measured_reserve(|s| {
+                for t in rest {
+                    s.emitter.write(", ");
+                    s.format_type(t);
+                }
+                s.emitter.write(")");
+            });
+            self.with_tail_reserve(tail, |s| s.format_type(ty));
+        }
+        self.emitter.write(")");
+    }
+
     fn format_enum(&mut self, e: &EnumDef) {
         self.format_doc_comment(&e.doc_comment);
         self.format_attributes(&e.attributes);
@@ -2339,26 +2387,7 @@ impl Formatter {
                 self.emitter.write(&variant.node.name.node);
                 match &variant.node.fields {
                     VariantFields::Unit => {}
-                    VariantFields::Tuple(types) => {
-                        self.emitter.write("(");
-                        for (i, ty) in types.iter().enumerate() {
-                            if i > 0 {
-                                self.emitter.write(", ");
-                            }
-                            // Hand-rolled comma loop: each field type is
-                            // charged for the rest of the list plus the `)`.
-                            let rest = &types[i + 1..];
-                            let tail = self.measured_reserve(|s| {
-                                for t in rest {
-                                    s.emitter.write(", ");
-                                    s.format_type(t);
-                                }
-                                s.emitter.write(")");
-                            });
-                            self.with_tail_reserve(tail, |s| s.format_type(ty));
-                        }
-                        self.emitter.write(")");
-                    }
+                    VariantFields::Tuple(types) => self.format_variant_tuple_fields(types),
                 }
                 self.emitter.newline();
                 // R39 snag #2: trailing-hook for `Variant()  # doc`
@@ -2806,6 +2835,21 @@ impl Formatter {
             "[", "]", Gate::Span(gp.span.start, gp.span.end), &gp.node.params,
             |p| (p.span.start, p.span.end),
             |f, p| f.format_generic_param(&p.node),
+        );
+    }
+
+    /// Format a parenthesized CLOSURE-parameter list with wrapping.
+    ///
+    /// Named like its four siblings rather than spelled inline at the
+    /// `Expr::Closure` arm: `formatter_list_emit_fill_census` counts
+    /// `self.emit_delimited_list(` call sites, so a list emitter written
+    /// inside a closure — where the receiver is not `self` — would leave the
+    /// census one short while the list kind still existed.
+    fn format_closure_params_wrapped(&mut self, params: &[Spanned<ClosureParam>], gate: Gate) {
+        self.emit_delimited_list(
+            "(", ")", gate, params,
+            |p| (p.span.start, p.span.end),
+            |f, p| f.format_closure_param(&p.node),
         );
     }
 
@@ -3564,12 +3608,8 @@ impl Formatter {
             // loops. Claim it at branch indent first.
             self.emit_comments_before(cond.span.start);
             self.emitter.write("elif ");
-            // B2 — the `elif` sibling of B1, with the same two layout cells.
-            let cond_tail = if body.layout == SuiteLayout::Inline {
-                self.inline_suite_reserve(":", body)
-            } else {
-                1
-            };
+            // B2 — the `elif` sibling of B1, same two layout cells.
+            let cond_tail = self.suite_header_reserve(body);
             self.with_tail_reserve(cond_tail, |s| s.format_expr(cond));
             if body.layout == SuiteLayout::Inline {
                 self.format_inline_suite(":", body, cond.span.end);
@@ -3810,14 +3850,8 @@ impl Formatter {
                 else_body,
             } => {
                 self.emitter.write("if ");
-                // B1 — the two SUITE-LAYOUT cells are different reserves: an
-                // indented suite owes only the `:`, an INLINE suite also owes
-                // the space and the body's leading unbreakable prefix.
-                let cond_tail = if then_body.layout == SuiteLayout::Inline {
-                    self.inline_suite_reserve(":", then_body)
-                } else {
-                    1
-                };
+                // B1 — the two suite-layout cells.
+                let cond_tail = self.suite_header_reserve(then_body);
                 self.with_tail_reserve(cond_tail, |s| s.format_expr(condition));
                 if then_body.layout == SuiteLayout::Inline {
                     self.format_inline_suite(":", then_body, condition.span.end);
@@ -4079,6 +4113,9 @@ impl Formatter {
                 self.emitter.newline();
                 self.emitter.indent();
                 for (case_expr, body) in arms {
+                    // B10 — the `meta match` case arm. Computed FIRST so the
+                    // clause hooks below stay adjacent to their suite call.
+                    let case_tail = self.suite_header_reserve(body);
                     // Clause-header class, `case` face — see the statement-match
                     // arm loop. Anchored at the case EXPRESSION, which sits on
                     // the clause's own source line.
@@ -4087,13 +4124,6 @@ impl Formatter {
                     }
                     self.emit_comments_before(case_expr.span.start);
                     self.emitter.write("case ");
-                    // B10 — the `meta match` case arm, carrying B1's two
-                    // suite-layout cells.
-                    let case_tail = if body.layout == SuiteLayout::Inline {
-                        self.inline_suite_reserve(":", body)
-                    } else {
-                        1
-                    };
                     self.with_tail_reserve(case_tail, |s| s.format_expr(case_expr));
                     if body.layout == SuiteLayout::Inline {
                         self.format_inline_suite(":", body, case_expr.span.end);
@@ -5213,12 +5243,9 @@ impl Formatter {
                     s.emitter.write(":");
                     s.format_closure_body(body, params);
                 });
+                let params_gate = self.gate_or_scan_miss(params_gate);
                 self.with_tail_reserve(params_tail, |s| {
-                    s.emit_delimited_list(
-                        "(", ")", s.gate_or_scan_miss(params_gate), params,
-                        |p| (p.span.start, p.span.end),
-                        |f, p| f.format_closure_param(&p.node),
-                    )
+                    s.format_closure_params_wrapped(params, params_gate)
                 });
                 // R41 T-FMT-C: the colon and the separator are SEPARATE
                 // writes. Writing `": "` unconditionally and then newlining
