@@ -1119,6 +1119,7 @@ fn qualify_expr(expr: &mut Spanned<Expr>, vm: &HashMap<String, String>) {
         | Expr::BoolLiteral(_)
         | Expr::NoneLiteral
         | Expr::SelfExpr
+        | Expr::ReturnValue
         | Expr::It
         | Expr::StringLiteral(_, _) => {}
 

@@ -1541,6 +1541,13 @@ fn resolve_expr(
         | Expr::FloatLiteral(_)
         | Expr::BoolLiteral(_)
         | Expr::NoneLiteral
+        // The postcondition return value resolves to nothing: the IR lowering
+        // materializes the return slot directly from the typed node. (Before
+        // the typed node this leaf arrived as `Identifier("__return__")` and
+        // was carved out of the undefined-name check below; that carve-out
+        // stays, because a USER may still spell `__return__` in ordinary
+        // source — see the string guard in the `Identifier` arm.)
+        | Expr::ReturnValue
         | Expr::It => {}
 
         // `self` is bound as an ordinary parameter (DefKind::Variable,
@@ -1576,8 +1583,19 @@ fn resolve_expr(
                     resolution_map.insert(expr.span.start, def_id);
                 }
                 None => {
-                    // Don't error on built-in functions like `print`, or synthetic
-                    // identifiers like `__return__` (bound during IR lowering).
+                    // Don't error on built-in functions like `print`.
+                    //
+                    // `__return__` is no longer a compiler-produced spelling —
+                    // the postcondition return value is the typed
+                    // `Expr::ReturnValue` leaf, which never reaches this arm.
+                    // The name carve-out survives only as a USER-spelling
+                    // shield: `int x = __return__` checks and builds today, so
+                    // dropping the guard would be an accept→reject change on
+                    // ordinary source. That oddity is filed
+                    // (`tests/fixtures/known_gaps/user_spelled_dunder_return_accepted.gg`),
+                    // and closing it is a three-lane change (the self-host
+                    // parser + resolver copies mirror this convention), not a
+                    // formatter one.
                     //
                     // Also skip when `name` is a known enum-variant name: the loader's
                     // pre-merge variant qualifier (`build_variant_map_from_all` in

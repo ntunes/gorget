@@ -253,6 +253,13 @@ impl<'a> BorrowChecker<'a> {
             | Expr::FloatLiteral(_)
             | Expr::BoolLiteral(_)
             | Expr::NoneLiteral
+            // The postcondition return value is the function's own return
+            // slot, materialized by the lowering: no user binding is read, so
+            // there is no liveness or dead-write fact to record. (Verbatim
+            // forward of the pre-typed-node behaviour: the placeholder
+            // identifier had no `resolution_map` entry, so the `Identifier`
+            // arm below was already inert for it.)
+            | Expr::ReturnValue
             | Expr::It => {}
 
             // D2-rider scout: a `self` read counts for the dead-write lint —

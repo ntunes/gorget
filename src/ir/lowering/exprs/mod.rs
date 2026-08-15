@@ -248,6 +248,14 @@ fn lower_expr_inner(
             }
         }
 
+        // The postcondition's `return` IS the function's return slot, which the
+        // IR pins at `LocalId(0)`. The arm carries that semantic itself: before
+        // the typed node, `emit_postcondition_checks` had to plant a
+        // `__return__` → `_0` name alias so the placeholder identifier would
+        // resolve through `lookup_local`, which is exactly the name-matching
+        // the typed node retires.
+        Expr::ReturnValue => Operand::Copy(Place::local(LocalId(0))),
+
         Expr::BinaryOp { left, op, right } => {
             lower_binary_op(ctx, builder, left, *op, right)
         }

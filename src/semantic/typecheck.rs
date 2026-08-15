@@ -1622,6 +1622,16 @@ impl<'a> TypeChecker<'a> {
                 self.current_self_type.unwrap_or(self.types.error_id)
             }
 
+            // BEHAVIOUR-PRESERVING forward of the placeholder identifier this
+            // node replaced: `__return__` resolved to nothing, so this arm's
+            // predecessor returned `error_id` and the postcondition condition
+            // went UNTYPED (`assert return >= "hello"` in an `int` function
+            // checks clean). Typing it to the enclosing function's return type
+            // would be an accept→reject change; the gap is filed
+            // (`tests/fixtures/known_gaps/assert_return_condition_untyped.gg`
+            // + its `#[ignore]`d test) and closed on its own round.
+            Expr::ReturnValue => self.types.error_id,
+
             Expr::It => {
                 // Implicit closure parameter — use type from enclosing ImplicitClosure
                 self.implicit_it_type.unwrap_or(self.types.error_id)

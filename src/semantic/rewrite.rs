@@ -565,7 +565,8 @@ fn rename_expr(expr: &mut Spanned<Expr>, aliases: &rustc_hash::FxHashMap<String,
             }
         }
         Expr::MetaOpToken(_) | Expr::IntLiteral(_) | Expr::FloatLiteral(_)
-        | Expr::BoolLiteral(_) | Expr::NoneLiteral | Expr::SelfExpr | Expr::It => {}
+        | Expr::BoolLiteral(_) | Expr::NoneLiteral | Expr::SelfExpr
+        | Expr::ReturnValue | Expr::It => {}
     }
 }
 
@@ -914,7 +915,8 @@ fn rewrite_expr(expr: &mut Spanned<Expr>, res: &ResolutionMap, scopes: &ScopeTab
         // Leaf nodes
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::StringLiteral(_, _) | Expr::NoneLiteral
-        | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It => {}
+        | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. }
+        | Expr::ReturnValue | Expr::It => {}
     }
 
     // Rewrite field_value(val, "field") → val.field (for literal usage outside meta for)
