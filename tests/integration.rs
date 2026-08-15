@@ -16422,6 +16422,29 @@ const FMT_TAIL_RESERVE_FIXTURES: &[(&str, &[&str])] = &[
     ("c_nested_close_call_arg.gg", &[]),
     ("c_nested_close_collection.gg", &[]),
     ("exploded_path_reserve.gg", &[]),
+    // C10's two `Doc::Group`-clothed method-chain installs. The pair is
+    // deliberate: the first pins the GROUP-level consumption of the caller's
+    // reserve, the second the PER-SEGMENT one, and neither cell can see the
+    // other's value. `p_postfix_chained.gg` is NOT this carrier — it is a
+    // FieldAccess chain and never reaches `format_method_chain`.
+    ("c10_method_chain.gg", &[]),
+    ("c10_method_chain_segment.gg", &[]),
+    // ── The carriers the header census and the discovery sweep found ──
+    //
+    // Each installs a reserve on an INNER render, at a position the §3 set
+    // never enumerated, and NONE has a near-boundary corpus instance — so
+    // these cells are their only coverage, and each was RED-verified against
+    // a build with ITS OWN carrier's reserve neutralised (not merely against
+    // the pre-fix binary, where every reserve is absent at once).
+    ("x1_const_decl_type.gg", &[]),
+    ("x2_static_decl_type.gg", &[]),
+    ("x3_param_type.gg", &[]),
+    ("x4_generic_param_bound.gg", &[]),
+    ("x5_newtype_inner_type.gg", &[]),
+    ("x6_closure_param_type.gg", &[]),
+    ("x7_closure_param_destructure.gg", &[]),
+    ("x8_assert_return_operator.gg", &[]),
+    ("x9_precedence_wrap_close.gg", &[]),
     // ── P · postfix operator tails ──
     ("p_postfix_field.gg", &[]),
     ("p_postfix_chained.gg", &[]),
@@ -16476,6 +16499,29 @@ const FMT_TAIL_RESERVE_NOT_GREEDY: &[(&str, &str)] = &[
         "narrow_multiline_item_carveout.gg",
         "the whole point of the cell is a MULTI-LINE element — the shape the \
          model cannot measure",
+    ),
+    // The four discovered-carrier cells whose ELEMENT is a generic type. The
+    // model finds the element's end by scanning for the first `, ` or close
+    // delimiter, so `Dict[K, V] name` reads to it as an element `Dict[K`
+    // followed by another — a fragment, not the element. Same domain limit as
+    // the rows above: flat SCALAR elements only.
+    (
+        "x3_param_type.gg",
+        "the element is `Dict[K, V] name`, whose own `, ` the model reads as \
+         an element boundary",
+    ),
+    (
+        "x4_generic_param_bound.gg",
+        "the element is a trait bound over a generic type — same interior `, `",
+    ),
+    (
+        "x6_closure_param_type.gg",
+        "the element is a generic-typed closure parameter — same interior `, `",
+    ),
+    (
+        "x7_closure_param_destructure.gg",
+        "the element is a destructure pattern holding a generic type — same \
+         interior `, `",
     ),
 ];
 

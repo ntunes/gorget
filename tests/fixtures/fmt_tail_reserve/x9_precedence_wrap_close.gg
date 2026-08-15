@@ -1,0 +1,35 @@
+# R42 tail-reserve boundary cell.
+#
+# DISCOVERED CARRIER · `format_expr_maybe_parens` — the precedence wrap's
+# own `)`, charged at the ONE place that knows whether the wrap fired.
+# Before this it was charged at `format_postfix_receiver` only, so the
+# binop and prefix operand emitters were silently missing it. The wrap is
+# taken at a PREFIX operand here — `-(a + b)` — because that position
+# renders directly rather than through a pre-render, so the cell measures
+# the `)` charge and not the separate pre-render-column defect filed in
+# `known_gaps/fmt_prerender_column_binary_chain.gg`.
+#
+# BOUNDARY PAIR. The two declarations below are the SAME shape one column
+# apart: the first is exactly 120 columns wide with its caller-emitted
+# suffix counted, the second exactly 121.
+#
+# RED, recorded against the PRE-FIX binary built from this track's own
+# base commit: the 121 declaration formats to a SINGLE 121-column line —
+# the packer measured its list without the caller's suffix.
+#
+# GREEN: the 121 declaration breaks and nothing in this file exceeds 120,
+# AND the 120 twin still formats FLAT at exactly 120 columns. That second
+# half is the OVER-reserve guard — the one a careless net omits — and it
+# is green on both binaries by construction, so its own red comes from
+# breaking the mechanism: add 1 to the reserve this cell installs and the
+# 120 half breaks.
+
+int probe_idx(int a, int b, int c, int d): 0
+
+void main():
+    int rr = -(probe_idx(11111, 22222, 33333, at120_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) + probe_idx(1, 2, 3, 4))
+    print(rr)
+
+void main():
+    int rr = -(probe_idx(11111, 22222, 33333, at121_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx) + probe_idx(1, 2, 3, 4))
+    print(rr)
