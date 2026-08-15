@@ -1866,8 +1866,15 @@ const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
     // guarded elsewhere, not here: mis-wiring its `parse_arm_body(else_start)`
     // to `parse_arm_body(start)` reds `fmt_suite_layout_form_preservation`.
     // (The `else` clauses that carry no `Block` at all — the `if`-EXPRESSION
-    // else, the conditional-TYPE else, the item-level `meta if` else — have no
-    // `header_start` to wire, so they are outside this table's subject.)
+    // else (src/parser/expr.rs:2126), the conditional-TYPE else
+    // (src/parser/mod.rs:940), the item-level `meta if` else
+    // (src/parser/mod.rs:1000) — have no `header_start` to wire, so they are
+    // outside this table's subject. That RECONCILES with the census command:
+    // `grep -rn "Keyword::Else" src/parser/` returns TWELVE hits — the seven
+    // wiring calls above, the eighth `parse_match_expr` anchor
+    // (src/parser/expr.rs:2169), these three, and `Parser::match_elif`
+    // (src/parser/mod.rs:230), which consumes `else if` AS an `elif` and so
+    // opens no else clause of any kind.)
     //
     // These rows were once carried INSIDE the neighbouring `Wrapped`
     // probes, where the strict per-block rule (see `ProbeKind::Wrapped`) would

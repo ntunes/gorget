@@ -12420,7 +12420,8 @@ fn item_module_is_constructed_only_by_the_loader() {
 /// costumes schedules the next round. So the subject here is the ACCESS:
 ///
 ///   * a binding whose initializer is a formatting call is RAW TEXT;
-///   * a function CALLED with such a binding — at ANY argument position — is a
+///   * a function CALLED with such a binding — at ANY argument position, on a
+///     one-line or a WRAPPED call — is a
 ///     raw-text consumer, and its `&str` parameters are raw text too, ALL of
 ///     them (the rule taints the callee's whole `&str` surface rather than the
 ///     matching parameter, so a helper cannot launder raw text by shuffling its
@@ -12445,6 +12446,14 @@ fn item_module_is_constructed_only_by_the_loader() {
 /// three `assert_fill_pack*` helpers (see their ALLOWED rows), all of whose
 /// call sites pass the text second, at every depth.
 ///
+/// And ACROSS A WRAPPED ARGUMENT LIST — a third axis, closed the same way and
+/// for the same reason. A wrapped call puts the binding on a line of its own,
+/// so a LINE-LOCAL walk-back starts from an empty head and resolves no callee
+/// AT ALL: `f(\n    "0x",\n    &raw,\n)` was invisible at every depth and every
+/// position, and — unlike the other two axes — this one was reachable from live
+/// code by a WHITESPACE-ONLY reflow, which silently retired a census row (the
+/// reflow re-check at the end of this docstring).
+///
 /// The allowlist names ALLOWED ACCESSES, not forbidden costumes, so a search
 /// spelling nobody has written yet — `.rfind(`, `.match_indices(`,
 /// `for l in x.split('\n')`, `x[a..b].contains(…)` — is RED by construction.
@@ -12456,9 +12465,9 @@ fn item_module_is_constructed_only_by_the_loader() {
 /// **The rule's REACH, stated so it can be attacked rather than trusted.** The
 /// taint starts at a `let` whose initializer names a `FMT_SOURCES` producer and
 /// travels FORWARD through call ARGUMENTS into `&str` parameters, to a fixed
-/// point. Neither DEPTH nor argument POSITION bounds it any more. What it does
-/// not follow — four shapes, each PROBED this round rather than reasoned about,
-/// so the next reader can re-run them:
+/// point. Neither DEPTH, nor argument POSITION, nor a WRAPPED argument list
+/// bounds it any more. What it does not follow — seven shapes, each PROBED
+/// rather than reasoned about, so the next reader can re-run them:
 ///   1. a struct FIELD holding raw text (`s.text.contains(…)`) — no live
 ///      instance;
 ///   2. a CLOSURE parameter or capture receiving it — no live instance;
@@ -12477,16 +12486,45 @@ fn item_module_is_constructed_only_by_the_loader() {
 ///      (`fmt_delimited_list_fixture`, :15356 — measured: its nine-test family
 ///      makes ZERO direct accesses, routing everything through the sentinel
 ///      helpers, so no live exposure).
-/// Anything reachable by "let-bound from a producer, then passed as an
-/// argument" IS covered; the list above is what is known to fall outside that
-/// sentence, not a proof that nothing else does.
+/// The next three share ONE root cause: this lint reads SOURCE TEXT with raw
+/// delimiter scans — the walk-back in FRONT of an occurrence (shapes 5, 7) and
+/// the byte immediately AFTER it (shape 6) — with no awareness of string
+/// literals, receivers or macros. Each was probed against a CONTROL differing
+/// only in the named feature, so the mechanism is isolated, not merely asserted:
+///   5. an EARLIER ARGUMENT that is a STRING LITERAL containing `(` — the scan
+///      breaks on the paren INSIDE the literal and resolves the wrong token or
+///      none. `plant_strlit("expected (foo", &formatted)` measured GREEN; the
+///      same call with the paren deleted from the literal is RED. No live
+///      instance;
+///   6. a PARENTHESISED RECEIVER — the access scan reads the byte that follows
+///      the name, and for `(&formatted).probe()` that byte is `)`, so neither
+///      the method nor a slice is seen. Measured GREEN; the idiomatic
+///      `formatted.probe()` is RED. No live instance;
+///   7. a MACRO forwarding raw text into a fn — `plant_macro!(&formatted)`
+///      expanding to `plant_macro_helper($t)`. The trailing `!` makes the
+///      identifier scan in front of the `(` yield an empty string, so no callee
+///      resolves. Measured GREEN; calling `plant_macro_helper(&formatted)`
+///      directly is RED. Zero live risk today —
+///      `grep -c "macro_rules!" tests/integration.rs` → 0.
+/// The POSITIVE claim, stated at the walk-back's real granularity, which is
+/// TEXTUAL: a binding is followed into a callee when a backward scan from the
+/// occurrence — over balanced delimiters, across a wrapped argument list, at
+/// any argument position and any depth — reaches the `(` that opens the
+/// argument list and finds an identifier immediately in front of it. It is a
+/// delimiter scan, not a parse, so a shape that hides that `(` or that
+/// identifier from a raw byte walk is outside it (5 and 7). On the ACCESS side
+/// the claim is equally textual: an access is seen when the byte right after
+/// the binding's name is `.` — followed by an identifier and `(` — or `[`, on
+/// that line or on a `.`-continuation folded into it; a shape that puts
+/// anything else there is outside (6). The list is what is KNOWN to fall
+/// outside, never a proof that nothing else does.
 ///
 /// SHRINK-ONLY. A row belongs here when the access is genuinely header-immune —
 /// it searches something that is not fixture output, or the predicate already
 /// excludes comment lines, or the needle is a code shape no comment line can
 /// have. Adding a row to silence a new fmt assertion is the wrong move: route it.
 ///
-/// **Break-and-verify (eight costumes, all RED-verified):**
+/// **Break-and-verify (nine costumes, all RED-verified):**
 /// `formatted.contains(needle)`; reverting an `fmt_body(&formatted).lines().any(…)`
 /// to `formatted.lines().any(…)`; a `.rposition(` lookup; a novel
 /// `for line in formatted.split('\n')` loop; and — for the fixed point — a
@@ -12497,7 +12535,20 @@ fn item_module_is_constructed_only_by_the_loader() {
 /// was GREEN under the first-argument-only rule and is RED now, and a THIRD
 /// position behind a nested call carrying its own comma —
 /// `plant_third_arg(&format!("{}, {}", "0x", 1), 7, &formatted)` — which
-/// exercises the balanced walk-back to the enclosing `(`.
+/// exercises the balanced walk-back to the enclosing `(`. For the WRAP:
+/// `f(\n    "0x",\n    &formatted,\n)`, which was GREEN while the walk-back was
+/// line-local — the binding sits on a line whose head is empty, so no callee
+/// resolved at any depth or position — and is RED now.
+///
+/// **The guard survives a REFLOW of its own call sites, measured.** The wrap
+/// hole was not hypothetical: reflowing the two live `assert_fill_pack_greedy`
+/// calls (tests/integration.rs:15932, :16652) the way rustfmt does when a call
+/// outgrows the width budget — whitespace only, no semantic change — dropped
+/// the census from 59 to 58 under the line-local rule, deleting the row that
+/// records the one ACCIDENTAL green in the table below, and the ratchet message
+/// then read as an instruction to remove it. A coverage row that a cosmetic
+/// edit can silently retire is a guard that cannot catch its own class, so the
+/// re-check is: reflow both sites, confirm the census holds at 59, revert.
 #[test]
 fn fmt_raw_text_access_is_routed_or_reasoned() {
     /// (enclosing fn, method or `[slice]`, why the access is header-immune).
@@ -12715,6 +12766,13 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
             .map(str::to_string)
     };
 
+    // How many preceding lines the walk-back may reach for a WRAPPED argument
+    // list. Widening it can only ADD consumers (never remove one), so it is a
+    // conservative knob, not a correctness one; measured on today's tree, 5 and
+    // 12 give the identical census (59 rows, 0 added, 0 lost), so no live call
+    // site is anywhere near the edge.
+    const WRAP_LOOKBACK: usize = 5;
+
     let mut consumers: Vec<String> = Vec::new();
     loop {
         let size = |cs: &Vec<String>, bs: &Vec<(usize, Vec<String>)>| -> usize {
@@ -12724,9 +12782,22 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
         for (k, b) in &binds {
             let (i, end) = span(*k);
             for j in i..end {
+                // ⚠ ARGUMENT LISTS WRAP, exactly as method chains do (the
+                // `logical` join below). A wrapped call puts the binding on a
+                // line of its own, so a LINE-LOCAL walk-back starts from an
+                // empty head, `callee_of_arg` resolves nothing, and everything
+                // the callee does to the text is invisible at every depth and
+                // every position — the same "the rule the fixed point iterates
+                // never fires" failure as the first-argument-only shape above.
+                // The preceding lines are therefore joined in front of line `j`
+                // for the walk-back only; `from = base` keeps the OCCURRENCE
+                // search on line `j`, so nothing is scanned twice.
+                let jstart = j.saturating_sub(WRAP_LOOKBACK).max(i);
+                let joined = format!("{} {}", lines[jstart..j].join(" "), lines[j]);
+                let base = joined.len() - lines[j].len();
+                let l: &str = &joined;
                 for name in b {
-                    let l = lines[j];
-                    let mut from = 0usize;
+                    let mut from = base;
                     while let Some(rel) = l[from..].find(name.as_str()) {
                         let at = from + rel;
                         from = at + name.len();
@@ -12863,8 +12934,11 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
         flagged.len(),
         EXPECTED_RAW_ACCESSES,
         "the raw-access count moved ({} vs {EXPECTED_RAW_ACCESSES}). UP means a \
-         new assertion touches raw text; DOWN is good and should be ratcheted \
-         here (shrink-only). Regenerate with:\n  \
+         new assertion touches raw text. DOWN means the access was routed or \
+         deleted — CHECK THAT AT THE SITE before ratcheting: a row that vanishes \
+         after an edit which changed no assertion (a reflow, a rename, a moved \
+         argument) is this lint losing sight of the access, not the access going \
+         away, and ratcheting it away deletes the coverage. Regenerate with:\n  \
          cargo test --test lints fmt_raw_text_access_is_routed_or_reasoned -- --nocapture",
         flagged.len()
     );
@@ -12877,7 +12951,9 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
     assert!(
         dead.is_empty(),
         "allowlist row(s) that no longer excuse anything: {dead:?} — the access \
-         was routed or deleted. DELETE the row; the list is shrink-only."
+         was routed or deleted. Confirm that AT THE SITE (the same edit that \
+         merely hides an access from the scan empties its row), then DELETE the \
+         row; the list is shrink-only."
     );
 }
 
