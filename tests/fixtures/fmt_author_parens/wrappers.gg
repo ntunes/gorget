@@ -1,0 +1,71 @@
+# AUTHOR-PAREN PRESERVATION — the SHARED-SPAN (transparent wrapper) axis.
+#
+# The table is keyed by SPAN, and the author layer belongs to exactly ONE node
+# per key. Some AST nodes REUSE a child's span, so two nodes answer to the same
+# key; if both emit the layer, the parens double on every pass — and none of
+# these shapes appears parenthesised anywhere in the corpus, so the corpus-wide
+# round-trip gate cannot see it.
+#
+# The shared-span class was enumerated MECHANICALLY on this tree (every corpus
+# file parsed, every parent/child expression pair with equal spans reported):
+#     ImplicitClosure -> BinaryOp / Call ...... 4 occurrences
+#     Closure         -> Block ................ 49
+#     Catch           -> Do .................. 19
+#     Rethrow         -> Do ................... 3
+#     Block           -> BinaryOp / IntLiteral / StringLiteral ... 8
+#     TupleFieldAccess-> Identifier ........... 21
+# One cell per member below. `ImplicitClosure` is the one that needed a code
+# change (its arm re-enters `format_expr_inner`, bypassing the layer emission,
+# so the body emits it once); the others were MEASURED not to double, because
+# the wrapper does not route its same-span child back through `format_expr`.
+#
+# RED: `it_closure`'s cell is red on a build whose `ImplicitClosure` arm calls
+# `format_expr` instead of `format_expr_inner` — `xs.map((it * 2))` becomes
+# `((it * 2))`, then 4 parens, then 8. The other cells are POS pins: they are
+# green on the pre-fix binary for the ordinary reason (the paren is deleted
+# there too — so they are red pre-fix as preservation cells) and their point
+# here is the STABILITY assertion over three passes.
+
+int it_closure(Vector[int] xs):
+    Vector[int] ys = xs.map((it * 2))
+    return ys[0]
+
+int arm_body(int n):
+    match n:
+        case 1:
+            return (n + 2)
+        else:
+            return (n * 3)
+
+int branch_body(int a, int b):
+    if a > b:
+        return (a + b)
+    return (a - b)
+
+int parse_it(String s) throws String:
+    if s == "":
+        throw "empty"
+    return s.len()
+
+int catch_body(String s):
+    return parse_it(s)! catch (e): (0 - 1)
+
+int rethrow_body(String s) throws String:
+    return parse_it(s)! rethrow (String e): (e + "!")
+
+int closure_body(int n):
+    Callable[int(int)] g = (int x): (x + n)
+    return g(1)
+
+int tuple_field(int a, int b):
+    (int, int) t = (a, b)
+    return (t).0
+
+void main():
+    Vector[int] xs = [1, 2, 3]
+    print(it_closure(xs))
+    print(arm_body(1))
+    print(branch_body(3, 1))
+    print(catch_body(""))
+    print(closure_body(2))
+    print(tuple_field(4, 5))

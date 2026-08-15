@@ -1,0 +1,61 @@
+# `assert return` — the postcondition emitter's own paren and keyword cells.
+#
+# The condition's `return` is the typed `Expr::ReturnValue` node, and the node
+# spells the keyword. Before it, the value was an `Identifier("__return__")`
+# placeholder that the statement handler special-cased by NAME — and any
+# costume where the placeholder was not the whole left operand fell through to
+# the generic expression path, which printed the internal spelling into the
+# user's file.
+#
+# Cells:
+#   * `return.0` / `return.x` / `return.len()` — the three POSTFIX-LEAF
+#     costumes (tuple index, struct field, method call). RED on the pre-fix
+#     binary: each formats to `return__return__.0` / `.x` / `.len()`, and the
+#     formatted file is REJECTED with E_UndefinedName — an accept→reject flip
+#     caused by `gg fmt` alone. Asserted by CHECKING fmt's output rather than
+#     by text identity, because the tuple RETURN TYPE `(int, int)` is subject
+#     to a separate filed gap (the 1-tuple/type paren churn) that would make a
+#     text assertion fail for an unrelated reason.
+#   * `assert return >= a * (b + c)` — the author-paren cell. RED on a build
+#     whose assert-return emitter does not route its operands through
+#     `format_binop_operand`: the paren is deleted, `>= a * b + c` means
+#     something else, and the postcondition stops firing. The RUNTIME half of
+#     that flip is `assert_return_flip.gg`.
+#   * `over_budget` — the LAYOUT cell. An over-budget postcondition breaks its
+#     OPERAND (which parenthesises itself) while the TOP-LEVEL condition stays
+#     flat: a top-level break emits `assert (return\n    >= x)`, which does not
+#     re-parse, because the postcondition is recognised by the `return` keyword
+#     sitting immediately after `assert`. Pins the shape and idempotence.
+
+struct Pair:
+    int x
+    int y
+
+(int, int) make_tuple(int a):
+    assert return.0 <= 100
+    return (a, a + 1)
+
+Pair make_pair(int a):
+    assert return.x <= 100
+    return Pair(a, a + 1)
+
+String make_name(String s):
+    assert return.len() < 20
+    return s + "!"
+
+int scaled(int a, int b, int c):
+    assert return >= a * (b + c)
+    return a * (b + c)
+
+int over_budget(int alpha_operand, int beta_operand, int gamma_operand, int delta_operand):
+    assert return >= alpha_operand * (beta_operand + gamma_operand) + delta_operand * alpha_operand + beta_operand * gamma_operand + delta_operand
+    return alpha_operand * (beta_operand + gamma_operand) + delta_operand * alpha_operand + beta_operand * gamma_operand + delta_operand
+
+void main():
+    (int, int) t = make_tuple(2)
+    print(t.0)
+    Pair p = make_pair(3)
+    print(p.x)
+    print(make_name("hey"))
+    print(scaled(2, 3, 4))
+    print(over_budget(1, 2, 3, 4))

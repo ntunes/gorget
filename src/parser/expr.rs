@@ -194,7 +194,8 @@ fn contains_it(expr: &Spanned<Expr>) -> bool {
         // Leaves — no sub-expressions
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::StringLiteral(_, _) | Expr::NoneLiteral
-        | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } => false,
+        | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. }
+        | Expr::ReturnValue => false,
     }
 }
 
@@ -1644,8 +1645,18 @@ impl Parser {
             let end = self.previous_span();
             Ok(Spanned::new(Expr::TupleLiteral(items), start.merge(end)))
         } else {
-            // Parenthesized expression
+            // Parenthesized expression. The parens carry no semantics — the
+            // node returned is the inner expression, unchanged — so this is
+            // the ONE place in the compiler that knows the author wrote a
+            // grouping paren here, and the only place that can record it
+            // without guessing. Recorded as lexical trivia on the parser,
+            // alongside comments; see `super::parens::AuthorParenTable` for
+            // why it is a sideband and not an AST node.
+            //
+            // Nested author parens push the SAME inner span once per layer,
+            // so the layer count falls out of the multiplicity.
             self.expect(&Token::RParen)?;
+            self.author_paren_spans.push(first.span);
             Ok(first)
         }
     }

@@ -636,6 +636,18 @@ pub enum Expr {
     Identifier(String),
     SelfExpr,
 
+    /// The value a function is about to return, as spelled `return` inside an
+    /// `assert return` postcondition.
+    ///
+    /// A TYPED node rather than the old `Identifier("__return__")` string
+    /// convention: the placeholder made every consumer name-match to recognise
+    /// it (Layering "no name matching"), and any consumer that did not — the
+    /// formatter's postfix path — re-emitted the placeholder spelling verbatim
+    /// into user-visible source. Producer: `parse_assert_stmt`. Consumers:
+    /// the formatter (emits `return`), the IR lowering (materializes the
+    /// return slot).
+    ReturnValue,
+
     /// Qualified path: `Point.origin`, `List.Nil`
     Path {
         segments: Vec<Spanned<String>>,
@@ -1232,7 +1244,7 @@ pub enum Stmt {
     },
 
     /// assert return <condition> [, message] — postcondition checked at every return site.
-    /// `return` in the condition binds to the return value (represented as `Expr::Identifier("__return__")`).
+    /// `return` in the condition binds to the return value (represented as [`Expr::ReturnValue`]).
     AssertReturn {
         condition: Spanned<Expr>,
         message: Option<Spanned<Expr>>,

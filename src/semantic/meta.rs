@@ -2463,7 +2463,8 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         // Leaf nodes — no recursion needed
         Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
         | Expr::NoneLiteral
-        | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. } | Expr::It => {}
+        | Expr::Identifier(_) | Expr::SelfExpr | Expr::Path { .. }
+        | Expr::ReturnValue | Expr::It => {}
         // StringLiteral handled below
         Expr::StringLiteral(_, _) => {}
     }

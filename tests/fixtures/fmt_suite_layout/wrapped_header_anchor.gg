@@ -92,14 +92,18 @@
 # typed value in `BLOCK_PROBES` rather than as prose here — which is what makes
 # a deleted or relabelled row visible instead of silent.
 #
-# ⚠ Three authoring traps this file works around: a wrapped bare `if` condition
-# is a 10-error parse failure, so the PARENTHESIZED form is used; the wrapped-FN
-# cell only discriminates in its ALIGNED-CONTINUATION spelling (a hanging `):`
-# at column 0 lets any anchor pass); and the `with` cell wraps a CALL's argument
-# list rather than a parenthesized expression, because `gg fmt` deletes grouping
-# parens and `with (r + 0) as held:` comes back as `with r + 0 as held:`, which
-# does NOT re-parse (10 errors). That is the filed paren-deletion gap, not this
-# axis — but it is why this cell is spelled with a call.
+# ⚠ Two authoring traps this file works around: a wrapped bare `if` condition
+# is a 10-error parse failure, so the PARENTHESIZED form is used; and the
+# wrapped-FN cell only discriminates in its ALIGNED-CONTINUATION spelling (a
+# hanging `):` at column 0 lets any anchor pass).
+#
+# The `with` cell wraps a CALL's argument list. That spelling is now one
+# costume among several rather than a dodge: `with (r + 0) as held:` used to
+# come back from `gg fmt` as `with r + 0 as held:`, which does NOT re-parse,
+# so the paren form could not be used here. Author grouping parens are
+# preserved now, and the paren-form `with` header is pinned as its own cell in
+# `tests/fixtures/fmt_author_parens/` — this file keeps the call spelling
+# because that is the shape its BREAK-A row was measured on.
 #
 # RED, observed by BREAK-AND-WATCH on this tree — every row measured, each
 # break reverted and the tree confirmed restored-green afterwards. The indents

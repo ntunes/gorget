@@ -2393,9 +2393,14 @@ fn lower_return(
     }
 }
 
-/// Emit postcondition checks (`assert return`) at a return site.
-/// Temporarily registers `__return__` as a local alias for `LocalId(0)` (the return slot),
-/// then lowers each accumulated postcondition as a regular assert.
+/// Emit postcondition checks (`assert return`) at a return site: lower each
+/// accumulated postcondition as a regular assert.
+///
+/// The condition's `return` is the typed `Expr::ReturnValue` leaf, and its
+/// `lower_expr` arm reads `LocalId(0)` — the return slot — directly. No name
+/// alias is planted here: the old `__return__` → `_0` registration existed
+/// only so a placeholder IDENTIFIER would resolve through `lookup_local`, and
+/// with the typed node nothing looks the value up by name.
 fn emit_postcondition_checks(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -2403,9 +2408,6 @@ fn emit_postcondition_checks(
     if ctx.func_state.postconditions.is_empty() {
         return;
     }
-    // Register __return__ → _0 so the postcondition expression can reference the return value
-    let ret_type = builder.locals[0].type_id;
-    ctx.register_local("__return__", LocalId(0), ret_type);
 
     let postconditions = ctx.func_state.postconditions.clone();
     for (condition, message) in &postconditions {

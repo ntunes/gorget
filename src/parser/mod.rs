@@ -1,6 +1,7 @@
 pub mod ast;
 pub mod comments;
 pub mod expr;
+pub mod parens;
 pub mod pattern;
 pub mod stmt;
 pub mod types;
@@ -59,6 +60,22 @@ pub struct Parser {
     /// See [`comments::CommentTable`] for what each entry carries and where
     /// each fact is written.
     pub comments: comments::CommentTable,
+    /// Push-log of the spans the author wrapped in a GROUPING paren, one entry
+    /// per layer — folded into [`parens::AuthorParenTable`] at parse end by
+    /// [`Parser::author_paren_table`].
+    ///
+    /// A LOG, not a count map, because speculation has to be able to unwind
+    /// it: [`Parser::try_parse`] truncates it back to the saved length on the
+    /// backtrack path, and "truncate to a length" is a `Vec` operation. Without
+    /// that, a speculative parse that recorded a paren and was then abandoned
+    /// would leave a phantom layer behind, the fallback parse would record the
+    /// same paren AGAIN, and `gg fmt` would multiply the author's parens on
+    /// every pass.
+    ///
+    /// Written at exactly one site — `parse_paren_expr`'s
+    /// parenthesized-expression branch — so a CALL's or a TUPLE's parens can
+    /// never be mistaken for the author's grouping.
+    author_paren_spans: Vec<Span>,
     /// True when parsing inside an `extern "C":` block or `extern "C"` inline declaration.
     /// Controls whether `cstr` is accepted as a type.
     in_extern_c: bool,
@@ -143,6 +160,7 @@ impl Parser {
             expr_depth: 0,
             in_extern_c: false,
             comments,
+            author_paren_spans: Vec::new(),
             next_interp_offset: interp_base,
             pending_speculative_error: None,
         }
@@ -2183,21 +2201,44 @@ impl Parser {
     /// Speculatively attempt a parse. If the closure returns `None`, the parser
     /// position is restored to where it was before the attempt.
     ///
-    /// Note: only `pos` is saved/restored — `errors` are retained even on
-    /// backtrack. This is intentional: speculative paths rarely push errors,
-    /// and any that do are acceptable diagnostics.
+    /// Note: `errors` are retained even on backtrack. This is intentional:
+    /// speculative paths rarely push errors, and any that do are acceptable
+    /// diagnostics.
+    ///
+    /// **What IS unwound is every APPEND-ONLY log a speculative parse can
+    /// write to**, and today that is `pos` plus the author-paren push-log. A
+    /// speculation that parsed `int[(2)]` and was then abandoned would
+    /// otherwise leave a phantom paren layer behind, and the fallback parse
+    /// would record the same paren a second time — `gg fmt` then multiplies
+    /// the author's parens on every pass (measured 3× → 9× → 27×), invisible
+    /// to the corpus round-trip gate because no corpus file has that shape.
+    ///
+    /// This is THE backtracking construct, not one of several: `self.pos` is
+    /// written at exactly two sites in the whole parser — `advance()` moving
+    /// forward, and the restore below — which the `tests/lints.rs` census
+    /// `parser_position_restore_sites_are_pinned` holds to that count with a
+    /// per-site attribution. A new speculation primitive has to face that
+    /// census, and therefore this truncate.
     fn try_parse<F, T>(&mut self, f: F) -> Option<T>
     where
         F: FnOnce(&mut Self) -> Option<T>,
     {
         let saved_pos = self.pos;
+        let saved_parens = self.author_paren_spans.len();
         match f(self) {
             Some(result) => Some(result),
             None => {
                 self.pos = saved_pos;
+                self.author_paren_spans.truncate(saved_parens);
                 None
             }
         }
+    }
+
+    /// Fold the author-paren push-log into the typed table the formatter
+    /// reads. Called once, after the parse, by the formatter's entry point.
+    pub fn author_paren_table(&self) -> parens::AuthorParenTable {
+        parens::AuthorParenTable::build(&self.author_paren_spans)
     }
 
     /// Parse optional generic parameters (`[T, U]`). Returns `None` if not present.

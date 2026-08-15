@@ -27,10 +27,10 @@ Each invocation formats a single file.
   decides the cases below: where the language accepts more than one *spelling*
   of the same thing, the formatter keeps the one you wrote. Which escape spelled
   a character, which quotes wrapped a string, the base of a number, `byte`
-  versus `uint8`, `await x` versus `x.await()` — these are choices you made for
-  a reader, and re-spelling them is not the formatter's job. What the formatter
-  owns is layout: indentation, wrapping, spacing, blank-line runs, comment
-  columns.
+  versus `uint8`, `await x` versus `x.await()`, the parentheses you added to
+  show what groups first — these are choices you made for a reader, and
+  re-spelling them is not the formatter's job. What the formatter owns is
+  layout: indentation, wrapping, spacing, blank-line runs, comment columns.
 - **Re-parseable.** The output is always a program the compiler accepts, and it
   parses to the same tree as the input.
 - **Idempotent.** `gg fmt` applied to already-formatted source is a no-op:
@@ -108,6 +108,21 @@ construct chosen for you — that is a rewriting tool's job, not the formatter's
 
 The single exception is the pure keyword synonym `else if`, which carries no
 information `elif` does not; it is canonicalized to `elif`.
+
+**Your parentheses stay.** A grouping paren that the precedence rules make
+redundant is still how you tell a reader what binds first, so the formatter
+keeps it:
+
+```gorget
+bool leap = (y % 4) == 0 and ((y % 100) != 0 or (y % 400) == 0)
+int total = base + (rate * hours)     # stays parenthesised
+```
+
+The formatter may still ADD a paren of its own next to yours when re-parsing
+demands one — an expression that starts with an ownership sigil is the case that
+comes up, where `for i in (^start)..end:` is emitted as
+`for i in ((^start)..end):` — but it never removes what you wrote, and the
+result is stable: running `gg fmt` again changes nothing.
 
 ### Line width and wrapping
 

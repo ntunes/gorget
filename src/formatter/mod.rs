@@ -5,6 +5,7 @@ use std::rc::Rc;
 use crate::lexer::token::{StringKind, StringLiteral, StringSegment, Token};
 use crate::parser::ast::*;
 use crate::parser::comments::CommentTable;
+use crate::parser::parens::AuthorParenTable;
 use crate::span::{Span, Spanned};
 
 // ══════════════════════════════════════════════════════════════
@@ -675,6 +676,17 @@ pub struct Formatter {
     /// stays `Clone`-cheap and sub-formatters (the `element_to_string_at`
     /// helper) can pass a trivial empty source without allocating.
     source: Rc<str>,
+    /// The parser's author-grouping-paren sideband: how many paren layers the
+    /// author wrote around the node at each span. `gg fmt` changes the layout
+    /// it owns and nothing the author spelled, and a grouping paren is spelled.
+    ///
+    /// Behind an `Rc` because `sub_render` builds a FRESH sub-Formatter for
+    /// every pre-rendered element, and those elements carry their original
+    /// spans — a sub-formatter without the table would delete the author's
+    /// parens inside a broken chain or collection while keeping them
+    /// everywhere else, and (because the output still re-parses) no round-trip
+    /// gate would notice.
+    author_parens: Rc<AuthorParenTable>,
     /// Width the caller has committed to emitting after the Doc that is about
     /// to be rendered, on that Doc's LAST line. Read by `write_doc` — the one
     /// splice chokepoint — and handed to the renderer, whose
@@ -691,7 +703,16 @@ pub struct Formatter {
 }
 
 impl Formatter {
-    pub fn new(comments: CommentTable, source: Rc<str>) -> Self {
+    /// The author-paren table is a REQUIRED parameter, not a builder step: a
+    /// sub-formatter that silently defaulted it to empty would delete the
+    /// author's parens in exactly the positions that are pre-rendered, and the
+    /// output would still re-parse. Making the caller name the table forces
+    /// the question at every construction site.
+    pub fn new(
+        comments: CommentTable,
+        source: Rc<str>,
+        author_parens: Rc<AuthorParenTable>,
+    ) -> Self {
         Self {
             emitter: Emitter::new(),
             comments,
@@ -699,9 +720,16 @@ impl Formatter {
             last_flush_cursor: 0,
             trailing_aligns: Vec::new(),
             source,
+            author_parens,
             tail_reserve: 0,
             budget: RenderBudget::Layout,
         }
+    }
+
+    /// How many grouping-paren layers the author wrote around the node at
+    /// `span` — the formatter's single read of the parser's paren sideband.
+    fn author_paren_layers(&self, span: Span) -> usize {
+        self.author_parens.layers(span)
     }
 
     // ── Tail reserve: scoped install + the measurement primitives ──
@@ -979,7 +1007,18 @@ impl Formatter {
         // inside a broken multi-line collection from reverting to decimal
         // (gorget-js snag #15f). Comment interleaving stays inert because
         // `comments` is empty regardless of source content.
-        let mut fmt = Formatter::new(CommentTable::empty(), self.source.clone());
+        // The author-paren table travels with the source for the same reason
+        // the source itself does: the elements rendered here carry their
+        // ORIGINAL spans, so a parenthesised expression must keep its parens
+        // whether it is rendered inline or pre-rendered into a broken chain.
+        // Pinned by `fmt_author_paren_table_reaches_sub_formatters` in
+        // tests/lints.rs — an un-threaded sub-render deletes author parens
+        // while staying idempotent, which no round-trip gate can see.
+        let mut fmt = Formatter::new(
+            CommentTable::empty(),
+            self.source.clone(),
+            Rc::clone(&self.author_parens),
+        );
         fmt.tail_reserve = reserve;
         fmt.budget = budget;
         fmt.emitter.indent = base_indent;
@@ -3603,11 +3642,16 @@ impl Formatter {
     ///     + b
     ///     + c
     /// ```
+    /// `chain_span` is the span of the WHOLE chain node — the `Expr::BinaryOp`
+    /// the caller is emitting, not its left child. It is what decides whether
+    /// an author paren already covers the broken-chain wrap, and keying that
+    /// off `left.span` would suppress the wrap on the wrong node.
     fn format_binary_chain(
         &mut self,
         left: &Spanned<Expr>,
         op: BinaryOp,
         right: &Spanned<Expr>,
+        chain_span: Span,
     ) {
         let outer_left_bp = binary_op_left_bp(op);
         let outer_right_assoc = binary_op_is_right_assoc(op);
@@ -3624,7 +3668,7 @@ impl Formatter {
         if outer_right_assoc {
             operands.push(left);
         } else {
-            collect_binary_operands(left, op, &mut operands);
+            collect_binary_operands(left, op, &mut operands, &self.author_parens);
         }
         operands.push(right);
 
@@ -3693,7 +3737,8 @@ impl Formatter {
             docs.remove(0), // first operand
             doc::indent(doc::concat(docs)),
         ]);
-        let bin_doc = wrap_multiline_expr_in_parens(inner);
+        let bin_doc =
+            wrap_multiline_expr_in_parens(inner, self.author_paren_layers(chain_span) > 0);
         self.write_doc(&bin_doc);
     }
 
@@ -4739,7 +4784,9 @@ impl Formatter {
                 self.emitter.newline();
             }
             Stmt::AssertReturn { condition, message } => {
-                self.emitter.write("assert return");
+                // Only the `assert ` keyword: the condition's own left-spine
+                // leaf is `Expr::ReturnValue`, which spells `return` itself.
+                self.emitter.write("assert ");
                 // Family O — the assert-postcondition sibling.
                 let tail = self.measured_reserve(|s| {
                     if let Some(msg) = message {
@@ -5189,14 +5236,47 @@ impl Formatter {
 
     // ── Expressions ─────────────────────────────────────────
 
-    /// Format an expression for `assert return`, replacing `__return__` with `return`.
+    /// Format an `assert return` condition, keeping the TOP LEVEL flat.
+    ///
+    /// The condition cannot be handed wholesale to `format_expr`: its chain
+    /// path may break at the top level, and a broken chain wraps itself in
+    /// parens (`wrap_multiline_expr_in_parens`) — `assert (return\n    >= x)`
+    /// does NOT re-parse, because `parse_assert_stmt` recognises a
+    /// postcondition by the `return` keyword sitting immediately after
+    /// `assert`. So this walks the condition's own left spine — the chain of
+    /// pairings whose leftmost leaf is `Expr::ReturnValue` — emitting each
+    /// operator flat.
+    ///
+    /// What it does NOT hand-roll is the operands. Each one goes through
+    /// `format_binop_operand`, the same precedence chokepoint every other
+    /// infix emission uses, so an operand that needs parentheses gets them:
+    /// re-emitting `assert return >= a * (b + c)` as `>= a * b + c` flipped
+    /// the postcondition from trap to pass at RUNTIME. An operand may break
+    /// internally — it parenthesises itself when it does, which re-parses.
     fn format_assert_return_expr(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
-            Expr::Identifier(name) if name == "__return__" => {
-                // __return__ is a parser-internal placeholder; the surrounding
-                // assert-return handler emits the keyword.
-            }
             Expr::BinaryOp { left, op, right } => {
+                let outer_left_bp = binary_op_left_bp(*op);
+                let outer_right_assoc = binary_op_is_right_assoc(*op);
+                // The left spine NEVER needs parens, and this is structural
+                // rather than lucky: the parser builds the spine from a flat
+                // token run, so a left child's operator always binds at least
+                // as tightly as the outer one — exactly the condition under
+                // which `needs_parens_as_binop_operand` reports `false`. The
+                // author cannot force the other shape either, since
+                // `assert (return ...) < x` does not parse as a postcondition
+                // at all. Asserted rather than asserted-in-prose (Core #14):
+                // if it ever fires, the emission that follows is wrong and the
+                // fix is upstream, not a paren here (which would not re-parse).
+                debug_assert!(
+                    !needs_parens_as_binop_operand(
+                        &left.node,
+                        outer_left_bp,
+                        BinOpPos::Left,
+                        outer_right_assoc,
+                    ),
+                    "assert-return left spine wants parens; `assert (return …)` does not re-parse",
+                );
                 // Family O in the assert-postcondition walk: this arm emits
                 // the operator BETWEEN two renders, so the left one is charged
                 // for ` op ` plus the right one's leading unbreakable text.
@@ -5204,23 +5284,35 @@ impl Formatter {
                     s.emitter.write(" ");
                     s.emitter.write(binary_op_str(*op));
                     s.emitter.write(" ");
-                    s.format_assert_return_expr(right);
+                    s.format_binop_operand(right, outer_left_bp, BinOpPos::Right, outer_right_assoc);
                 });
                 self.with_tail_reserve(tail, |s| s.format_assert_return_expr(left));
                 self.emitter.write(" ");
                 self.emitter.write(binary_op_str(*op));
                 self.emitter.write(" ");
-                self.format_assert_return_expr(right);
+                self.format_binop_operand(right, outer_left_bp, BinOpPos::Right, outer_right_assoc);
             }
+            // The spine's leaf — `Expr::ReturnValue` itself, or any postfix
+            // wrapper around it (`return.0`, `return.x`, `return.len()`) —
+            // renders through the normal expression path, which spells the
+            // keyword from the typed node.
             _ => self.format_expr(expr),
         }
     }
 
-    /// Emit `format_expr(expr)`, wrapping in `(...)` when `should_wrap` is true.
+    /// Emit `format_expr(expr)`, wrapping in `(...)` when `should_wrap` is true
+    /// AND the author has not already written a paren around this same node.
     /// Used by the paren-aware operand emitters (FMT-A, Round XXXVI) so a
     /// wrap-then-render path lives in ONE place — no ad-hoc `if { emit("(") ... }`
     /// scattered across every arm.
+    ///
+    /// The dedup is one half of `max(author, required)` (see `format_expr`):
+    /// the required paren is still on the page, it is just SHARED with the
+    /// author's rather than stacked on top of it. Suppression is same-span
+    /// only — a paren on a DIFFERENT node never cancels this one, because
+    /// nothing then guarantees the reparse-required paren is emitted at all.
     fn format_expr_maybe_parens(&mut self, expr: &Spanned<Expr>, should_wrap: bool) {
+        let should_wrap = should_wrap && self.author_paren_layers(expr.span) == 0;
         if should_wrap {
             self.emitter.write("(");
             // The precedence wrap's own `)` is a caller-emitted tail like any
@@ -5300,11 +5392,21 @@ impl Formatter {
     ///     re-emitted as `apply_once(^(int x): x + n, 3)` it is REJECTED
     ///     `E_OwnershipMismatch` — the move-CLOSURE became a moved argument.
     ///
-    /// The parens are not "author paren preservation" (no `Paren` node
-    /// exists, and span recovery would silently fall back to the canonical
-    /// spelling, reopening the flip with the guard green). They are a pure
-    /// function of the parsed program: emit exactly the parens the reparse
-    /// requires, and no others.
+    /// These parens are REQUIRED, and required parens are never suppressed:
+    /// they are a pure function of the parsed program, emitted whether or not
+    /// the author wrote one here. What the author's own parens add is a
+    /// SECOND, independent layer — `format_expr` emits
+    /// `max(author_layers, required)` per node, and "per node" is the whole
+    /// safety property. On `(^start..end)` the author's paren and this one
+    /// land on the SAME node, so one pair serves both and the output is
+    /// unchanged. On `(^start)..end` they land on DIFFERENT nodes — the
+    /// author's on `^start`, this one on the range — and both appear:
+    /// `((^start)..end)`, which re-parses to the same rejected program.
+    ///
+    /// The thing that would re-open the flips above is DIFFERENT-NODE
+    /// suppression: dropping this wrap because some other node happens to
+    /// carry a paren that makes the reparse work. Nothing guarantees that,
+    /// which is why suppression is same-span only.
     fn format_ownership_modifier_operand(&mut self, operand: &Spanned<Expr>) {
         let wrap = emits_leading_ownership_sigil(&operand.node);
         self.format_expr_maybe_parens(operand, wrap);
@@ -5468,7 +5570,49 @@ impl Formatter {
         self.emitter.write_preformatted(&text);
     }
 
+    /// THE expression chokepoint — and the one owner of the author's own
+    /// grouping parens.
+    ///
+    /// `gg fmt` changes the layout it owns and nothing the author spelled, and
+    /// `(y % 4) == 0` is spelled: the parens carry no semantics, which is
+    /// exactly what makes them authorial — the author who wrote them was
+    /// telling a reader which grouping to see first.
+    ///
+    /// The rule is `max(author_layers, required)`, never `author + required`:
+    /// one paren on the page satisfies both readings. Adding the required pair
+    /// on top of the author's would ACCRETE without bound, because the next
+    /// `gg fmt` pass re-parses the added pair as another author paren
+    /// (`(` → `((` → `(((`). The two dedup sites that implement the `max` are
+    /// `format_expr_maybe_parens` (suppresses the precedence wrap when an
+    /// author layer already covers the same node) and
+    /// `wrap_multiline_expr_in_parens` (same, for the broken-chain wrap).
+    ///
+    /// The layers are emitted HERE and nowhere else, so each span key is
+    /// spelled by exactly one node. A transparent wrapper that shares its
+    /// body's span (`Expr::ImplicitClosure`) therefore delegates to
+    /// `format_expr_inner`, bypassing this emission — otherwise the two nodes
+    /// would emit the same layer twice and `xs.map((it * 2))` would double its
+    /// parens on every pass.
     fn format_expr(&mut self, expr: &Spanned<Expr>) {
+        let layers = self.author_paren_layers(expr.span);
+        for _ in 0..layers {
+            self.emitter.write("(");
+        }
+        // The closing parens are a committed tail on this expression's last
+        // line, like any other caller-emitted suffix.
+        self.with_tail_reserve(layers, |s| s.format_expr_inner(expr));
+        for _ in 0..layers {
+            self.emitter.write(")");
+        }
+    }
+
+    /// The expression dispatch itself. Every arm is reached through
+    /// [`Formatter::format_expr`], which owns the author-paren layer emission
+    /// — the ONE exception is the transparent `ImplicitClosure` wrapper, whose
+    /// arm re-enters here directly because it shares its body's span. That
+    /// caller count is pinned at 2 by `fmt_author_paren_dedup_class` in
+    /// tests/lints.rs.
+    fn format_expr_inner(&mut self, expr: &Spanned<Expr>) {
         match &expr.node {
             Expr::IntLiteral(n) => {
                 let text = self.int_literal_text(*n, expr.span);
@@ -5487,6 +5631,12 @@ impl Formatter {
             Expr::NoneLiteral => self.emitter.write("None"),
             Expr::Identifier(name) => self.emitter.write(name),
             Expr::SelfExpr => self.emitter.write("self"),
+            // ONE owner for the keyword: the node that MEANS the return value
+            // spells it, wherever it appears — bare (`assert return >= 0`) or
+            // under a postfix wrapper (`assert return.0 <= 100`). The
+            // `Stmt::AssertReturn` handler writes only `assert `; a second
+            // writer there would double-emit the wrapped forms.
+            Expr::ReturnValue => self.emitter.write("return"),
             Expr::Path { segments } => {
                 for (i, seg) in segments.iter().enumerate() {
                     if i > 0 {
@@ -5506,7 +5656,7 @@ impl Formatter {
                 self.format_prefix_operand(operand, prefix_bp);
             }
             Expr::BinaryOp { left, op, right } => {
-                self.format_binary_chain(left, *op, right);
+                self.format_binary_chain(left, *op, right, expr.span);
             }
             Expr::Call {
                 callee,
@@ -5729,7 +5879,8 @@ impl Formatter {
                         doc::text(format!("?? {rhs_s}")),
                     ])),
                 ]);
-                let nil_doc = wrap_multiline_expr_in_parens(inner);
+                let nil_doc =
+                    wrap_multiline_expr_in_parens(inner, self.author_paren_layers(expr.span) > 0);
                 self.write_doc(&nil_doc);
             }
             Expr::Move { expr } => {
@@ -5969,7 +6120,16 @@ impl Formatter {
                 // ImplicitClosure is a parser artifact wrapping `it` expressions.
                 // The formatter emits the body directly — the `it` keyword inside
                 // already serves as the implicit parameter marker.
-                self.format_expr(body);
+                //
+                // TRANSPARENT WRAPPER: this node REUSES its body's span, so two
+                // nodes share one author-paren key. The author layer belongs to
+                // exactly one node per key, so this arm re-enters
+                // `format_expr_inner` and lets the body emit it —
+                // `self.format_expr(body)` would emit the same layer a second
+                // time and `xs.map((it * 2))` would double its parens on every
+                // pass. This is the ONLY sanctioned second caller of
+                // `format_expr_inner`, pinned by `fmt_author_paren_dedup_class`.
+                self.format_expr_inner(body);
             }
             Expr::ListComprehension {
                 expr,
@@ -6963,6 +7123,8 @@ fn emits_leading_ownership_sigil(expr: &Expr) -> bool {
         | Expr::NoneLiteral
         | Expr::Identifier(_)
         | Expr::SelfExpr
+        // Emits the `return` keyword.
+        | Expr::ReturnValue
         | Expr::Path { .. }
         | Expr::UnaryOp { .. }
         | Expr::Deref { .. }
@@ -7027,8 +7189,9 @@ pub fn format_source_result(source: &str) -> Result<String, Vec<crate::errors::P
     if !parser.errors.is_empty() {
         return Err(parser.errors);
     }
+    let author_parens = Rc::new(parser.author_paren_table());
     let comments = parser.comments;
-    Ok(Formatter::new(comments, Rc::from(source)).format(&module))
+    Ok(Formatter::new(comments, Rc::from(source), author_parens).format(&module))
 }
 
 /// Infallible convenience: panics if the source has parse errors.
@@ -7115,14 +7278,35 @@ fn collect_method_chain<'a>(
 /// Flatten a left-associative binary expression chain of the same operator.
 /// `a + b + c` is parsed as `(a + b) + c`. This collects `[a, b]` into `operands`
 /// (the caller adds `c`).
+///
+/// **A sub-chain the author PARENTHESISED is not flattened.** `(a + b) + c`
+/// has the same AST as `a + b + c`, so flattening it would delete the parens
+/// before any emitter could preserve them — the author-paren rule has to be
+/// applied here, where the shape is still visible. The check runs at EVERY
+/// recursion step, not only on the outermost left child: a top-level-only
+/// variant still deletes the parens in `(a + b) + c + d`, where the grouped
+/// pair sits one level down the left spine.
+///
+/// The table arrives as a PARAMETER rather than through a `Formatter`
+/// receiver: this is a free function and the flatten decision should read from
+/// the same one source of truth as the emitters, not from ambient state.
+///
+/// Layout consequence, intended: a paren-grouped pair stays ONE operand of a
+/// broken chain instead of splitting across lines. Idempotent, because the
+/// guard depends only on `author_paren_layers`, which the format never
+/// decreases (it emits `max(author, required)` layers), so no node can flip
+/// flattened → unflattened between passes.
 fn collect_binary_operands<'a>(
     expr: &'a Spanned<Expr>,
     target_op: BinaryOp,
     operands: &mut Vec<&'a Spanned<Expr>>,
+    author_parens: &AuthorParenTable,
 ) {
     match &expr.node {
-        Expr::BinaryOp { left, op, right } if *op == target_op => {
-            collect_binary_operands(left, target_op, operands);
+        Expr::BinaryOp { left, op, right }
+            if *op == target_op && author_parens.layers(expr.span) == 0 =>
+        {
+            collect_binary_operands(left, target_op, operands, author_parens);
             operands.push(right);
         }
         _ => {
@@ -7158,12 +7342,25 @@ fn collect_binary_operands<'a>(
 /// counts callers and asserts the class-invariant. Guards:
 /// `fmt_binary_chain_round_trips` (parse+idempotence) and
 /// `fmt_round_trip_semantic` (build+run) in `tests/integration.rs`.
-fn wrap_multiline_expr_in_parens(inner: doc::Doc) -> doc::Doc {
-    doc::group(doc::concat(vec![
-        doc::if_break(doc::text(""), doc::text("(")),
-        inner,
-        doc::if_break(doc::text(""), doc::text(")")),
-    ]))
+///
+/// **`author_paren_covers`** is the second half of `max(author, required)`
+/// (see `Formatter::format_expr`): when the author already wrote a paren
+/// around this very node, `format_expr` has emitted it and this wrap must
+/// stand down. Emitting both would not merely be noise — the next `gg fmt`
+/// pass re-parses the added pair as a further author paren, so the parens
+/// multiply on every pass. Every caller passes the flag computed from the
+/// span of the node it is wrapping (the WHOLE chain's span, not its left
+/// child's).
+fn wrap_multiline_expr_in_parens(inner: doc::Doc, author_paren_covers: bool) -> doc::Doc {
+    let (open, close) = if author_paren_covers {
+        (doc::text(""), doc::text(""))
+    } else {
+        (
+            doc::if_break(doc::text(""), doc::text("(")),
+            doc::if_break(doc::text(""), doc::text(")")),
+        )
+    };
+    doc::group(doc::concat(vec![open, inner, close]))
 }
 
 /// Build a Doc for a comprehension expression with line-width-aware wrapping.

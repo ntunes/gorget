@@ -208,13 +208,14 @@ impl Parser {
         if self.check(&Token::Keyword(Keyword::Return)) {
             let ret_span = self.peek_span();
             self.advance(); // consume `return`
-            // Build a synthetic identifier for the return value
-            let return_ident = Spanned::new(
-                Expr::Identifier("__return__".to_string()),
-                ret_span,
-            );
+            // The return value is a TYPED leaf, not a synthetic identifier.
+            // A `__return__` placeholder made every downstream consumer
+            // recognise the postcondition value by NAME, and a consumer that
+            // did not (the formatter's postfix-receiver path) printed the
+            // placeholder spelling straight back into the user's source.
+            let return_value = Spanned::new(Expr::ReturnValue, ret_span);
             // Parse the rest as an infix continuation (e.g., `>= 0`)
-            let condition = self.parse_expr_with_lhs(return_ident)?;
+            let condition = self.parse_expr_with_lhs(return_value)?;
 
             let message = if self.match_token(&Token::Comma) {
                 Some(self.parse_expr()?)

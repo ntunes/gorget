@@ -53,6 +53,7 @@ pub fn walk_expr<V: ExprVisitor + ?Sized>(v: &mut V, expr: &Spanned<Expr>) {
         | Expr::NoneLiteral
         | Expr::Identifier(_)
         | Expr::SelfExpr
+        | Expr::ReturnValue
         | Expr::Path { .. }
         | Expr::It => {}
 

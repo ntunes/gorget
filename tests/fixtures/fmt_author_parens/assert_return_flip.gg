@@ -1,0 +1,22 @@
+# `assert return` — the RUNTIME behaviour-flip cell.
+#
+# `under(2, 3, 4)` returns 12 and promises `>= a * (b + c)` = 14, so running
+# this program TRAPS (T_AssertFailed, exit 101). The pre-fix formatter dropped
+# the operand's parens and re-emitted the postcondition as `>= a * b + c` = 10,
+# which 12 satisfies: the formatted program EXITS 0 and prints 12. A `gg fmt`
+# run silently deleted a postcondition.
+#
+# The harness for this cell does not merely format-and-compare text: it formats
+# the file, BUILDS THE FORMATTED OUTPUT, runs it, and asserts the trap is still
+# there. Text comparison is not enough — the flip is a runtime fact.
+#
+# RED (pre-fix binary): formatted output runs to completion, exit 0, stdout
+# `12`. Post-fix: trap, exit 101.
+
+int under(int a, int b, int c):
+    assert return >= a * (b + c)
+    return 12
+
+void main():
+    int v = under(2, 3, 4)
+    print(v)
