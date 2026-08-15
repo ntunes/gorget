@@ -1813,8 +1813,16 @@ enum ProbeKind {
     Wrapped,
     /// No legal spelling separates the construct's first line from the colon's,
     /// so no wrapped form exists and no probe of this construct can ever fail.
-    /// The string is the reason, and it is CHECKED: the rule is "the header
-    /// holds no token that can span source lines".
+    /// The string is the reason. What is CHECKED is that the reason is not
+    /// CONTRADICTED by the probe's own spelling — a `NotWrappable` row whose
+    /// header already spans lines fails. That catches a reason falsified by the
+    /// source in front of it; it does NOT catch a reason that is false about
+    /// the LANGUAGE while the probe is written flat to match (the `test`/`bench`
+    /// shape: a false belief produces a consistent pair). What guards that
+    /// direction is the CELL in `wrapped_header_anchor.gg`, which fails when
+    /// the row is unwired. Checking the reason itself would need a token-kind
+    /// scan of the header; the rule it would check is "the header holds no
+    /// token that can span source lines".
     NotWrappable(&'static str),
 }
 use ProbeKind::*;
@@ -1842,35 +1850,35 @@ use ProbeKind::*;
 /// (tests/lints.rs) is what stops a new wiring row from joining without one.
 const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
     ("fn, WRAPPED signature", "int f(int a_long_one,\n      int b_long_one):\n    return a_long_one\n", Wrapped),
-    ("if / elif / else, WRAPPED conditions", "void f(int i):\n    if (i <\n        3):\n        print(1)\n    elif (i >\n        9):\n        print(2)\n    else:\n        print(3)\n", Wrapped),
-    ("while, WRAPPED condition", "void f(int i):\n    while (i <\n        3):\n        print(i)\n", Wrapped),
-    ("for, WRAPPED iterable + for-else", "void f():\n    for i in [1,\n            2]:\n        print(i)\n    else:\n        print(0)\n", Wrapped),
+    ("if / elif, WRAPPED conditions", "void f(int i,\n       int j):\n    if (i <\n        3):\n        print(1)\n    elif (j >\n        9):\n        print(2)\n", Wrapped),
+    ("while, WRAPPED condition", "void f(int i,\n       int j):\n    while (i <\n        j):\n        print(i)\n", Wrapped),
+    ("for, WRAPPED iterable", "void f(int a,\n       int b):\n    for i in [a,\n            b]:\n        print(i)\n", Wrapped),
     ("while + while-else", "void f():\n    while false:\n        print(1)\n    else:\n        print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
     ("loop", "void f():\n    loop:\n        break\n", NotWrappable("`loop` and the colon, adjacent — no token between them")),
     ("unsafe", "void f():\n    unsafe:\n        print(1)\n", NotWrappable("`unsafe` and the colon, adjacent")),
-    ("with … as …, WRAPPED binding", "int mk(int a):\n    return a\n\nvoid f(int r):\n    with mk(\n            r) as held:\n        print(held)\n", Wrapped),
+    ("with … as …, WRAPPED binding", "int mk(int a,\n       int b):\n    return a + b\n\nvoid f(int r,\n       int s):\n    with mk(\n            r, s) as held:\n        print(held)\n", Wrapped),
     ("named scope", "void f():\n    cleanup:\n        print(1)\n", NotWrappable("an identifier is one token and identifiers cannot span lines")),
     ("on error", "void f():\n    on error:\n        print(1)\n", NotWrappable("`on error` and the colon, adjacent")),
     ("do:", "void f():\n    int d = do:\n        1\n    print(d)\n", NotWrappable("`do` and the colon, adjacent")),
-    ("match arm, WRAPPED pattern", "void f(Option[int] x):\n    match x:\n        case Some(\n                v):\n            print(v)\n", Wrapped),
+    ("match arm, WRAPPED pattern", "void f(Option[int] x,\n       int y):\n    match x:\n        case Some(\n                v):\n            print(v + y)\n", Wrapped),
     // The DISCRIMINATING `else:` probe: the else BODY's header is the `else`
     // clause line, not the `match` line — which is what keeps an arms-level
     // tail beside a match `else:` claimed at the MATCH level instead of being
     // pulled inside the else body.
-    ("match, WRAPPED pattern + else", "void f(Option[int] x):\n    match x:\n        case Some(\n                v):\n            print(v)\n        else:\n            print(0)\n", Wrapped),
-    ("select arm, WRAPPED op + else", "void f():\n    select:\n        case int v = c(\n                ).recv():\n            print(v)\n        else:\n            print(0)\n", Wrapped),
-    ("closure body, WRAPPED params", "void f():\n    Callable[void(int, int)] g = (int a_long_one,\n                                 int b_long_one):\n        print(a_long_one)\n    g(1, 2)\n", Wrapped),
+    ("match `else:` clause", "void f(Option[int] x):\n    match x:\n        case Some(v):\n            print(v)\n        else:\n            print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
+    ("select arm, WRAPPED op", "void f(int a,\n       int b):\n    select:\n        case int v = c(\n                ).recv():\n            print(v + a + b)\n", Wrapped),
+    ("closure body, WRAPPED params", "void f(int p,\n       int q):\n    Callable[void(int, int)] g = (int a_long_one,\n                                 int b_long_one):\n        print(a_long_one)\n    g(p, q)\n", Wrapped),
     ("catch", "void f(int x):\n    int a = fallible(x) catch (e):\n        print(1)\n        0\n", NotWrappable("the LHS wraps, but the row's value is the LHS's own start, so a wrapped spelling moves both together — see BREAK C in the fixture")),
     ("rethrow", "int f(int x) throws String:\n    int a = fallible(x) rethrow (String e):\n        print(1)\n        e\n    return a\n", NotWrappable("same as `catch`: the value IS the LHS's start")),
-    ("meta if / elif / else, WRAPPED conditions", "void f[T]():\n    meta if (bitwidth(T) >\n            4096):\n        print(1)\n    elif (bitwidth(T) >\n            2048):\n        print(2)\n    else:\n        print(3)\n", Wrapped),
-    ("meta for, WRAPPED range", "void f():\n    meta for i in [1,\n            2]:\n        print(i)\n", Wrapped),
+    ("meta if / elif, WRAPPED conditions", "void f[T](int a,\n          int b):\n    meta if (bitwidth(T) >\n            4096):\n        print(a)\n    elif (bitwidth(T) >\n            2048):\n        print(b)\n", Wrapped),
+    ("meta for, WRAPPED range", "void f(int a,\n       int b):\n    meta for i in [1,\n            2]:\n        print(i + a + b)\n", Wrapped),
     // WRAPPED, and it has to be: an unwrapped `meta while cond:` has its colon
     // on the `meta` line, so a colon-seeded `header_start` has the same indent
     // as the right answer and the probe cannot fail. Wrapping is what separates
     // the construct's FIRST line from the colon's.
-    ("meta while, WRAPPED condition", "void f[T]():\n    meta while (bitwidth(T) >\n            128):\n        print(1)\n", Wrapped),
-    ("meta match arm, WRAPPED case expr", "void f[T]():\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(1)\n", Wrapped),
-    ("meta match, WRAPPED case expr + else", "void f[T]():\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(1)\n        else:\n            print(0)\n", Wrapped),
+    ("meta while, WRAPPED condition", "void f[T](int a,\n          int b):\n    meta while (bitwidth(T) >\n            128):\n        print(a + b)\n", Wrapped),
+    ("meta match arm, WRAPPED case expr", "void f[T](int a,\n          int b):\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(a + b)\n", Wrapped),
+    ("meta match `else:` clause", "void f[T]():\n    meta match typename(T):\n        case \"int\":\n            print(1)\n        else:\n            print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
     ("test body, WRAPPED multi-line name", "test \"\"\"a\n        b\"\"\":\n    print(1)\n", Wrapped),
     ("bench body, WRAPPED multi-line name", "bench \"\"\"a\n        b\"\"\":\n    print(1)\n", Wrapped),
     ("suite setup / teardown", "suite setup:\n    print(1)\n\nsuite teardown:\n    print(2)\n", NotWrappable("`suite setup` / `suite teardown` and the colon, adjacent")),
@@ -1917,16 +1925,25 @@ fn block_probe_dispositions_are_decided() {
                 // too, so the two coincide by construction even when the header
                 // wraps. The header's LINE SPAN is the property that holds for
                 // every row.
-                let wraps = blocks.iter().any(|b| match b.first_stmt_start {
-                    Some(first) => line_no_of(src, first) - line_no_of(src, b.header_start) > 1,
-                    None => false,
-                });
+                // EVERY block, not just one. `.any()` let a multi-construct
+                // probe pass while only ONE construct wrapped — flattening just
+                // the `elif` in the if/elif/else probe killed that
+                // discriminator with the guard green.
+                let flat: Vec<usize> = blocks
+                    .iter()
+                    .filter_map(|b| b.first_stmt_start.map(|first| (b, first)))
+                    .filter(|(b, first)| {
+                        line_no_of(src, *first) - line_no_of(src, b.header_start) <= 1
+                    })
+                    .map(|(b, _)| line_no_of(src, b.header_start))
+                    .collect();
                 assert!(
-                    wraps,
-                    "{label}: labelled `Wrapped`, but every block's header \
-                     occupies ONE line — so a colon-seeded `header_start` has \
-                     the right value by accident and this probe can never \
-                     fail.\n{src}"
+                    flat.is_empty(),
+                    "{label}: labelled `Wrapped`, but the block(s) headed at \
+                     source line(s) {flat:?} have a ONE-LINE header — a \
+                     colon-seeded `header_start` has the right value there by \
+                     accident, so that construct's discriminator is dead even \
+                     though the probe as a whole passes.\n{src}"
                 );
             }
             ProbeKind::NotWrappable(reason) => {
@@ -1948,7 +1965,7 @@ fn block_probe_dispositions_are_decided() {
                     !spans_lines,
                     "{label}: labelled `NotWrappable` ({reason:?}), but this \
                      probe's own header ALREADY spans lines — so the reason is \
-                     false and the row owes a `Wrapped` disposition.\\n{src}"
+                     false and the row owes a `Wrapped` disposition.\n{src}"
                 );
             }
         }

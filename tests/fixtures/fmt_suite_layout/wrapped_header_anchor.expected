@@ -68,6 +68,12 @@
 # A named scope's identifier is one token AND identifiers cannot span lines —
 # both halves are needed, which is the whole lesson below.
 #
+# CONSIDERED AND DELEGATED, so a reader can tell it was not forgotten: the
+# bracketed CONTAINER headers (`struct` / `enum` / `trait` / `equip`) carry no
+# `Block` at all — their header-line anchor is `header_colon_span`, not
+# `Block::header_start` — so their cells live in
+# `header_colon_anchor_bracketed.gg`.
+#
 # ⚠ THIS LIST WAS A SELECTION THREE TIMES, and the third time is why the guards
 # exist. It first said row 9 was covered by an unwrapped cell (false after the
 # meta-while span hoist). It then said "one cell per value-needing row" while
