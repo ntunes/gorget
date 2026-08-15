@@ -16414,8 +16414,10 @@ const FMT_TAIL_RESERVE_FIXTURES: &[(&str, &[&str])] = &[
     ("b6_expr_match.gg", &[]),
     ("b10_with_binding.gg", &[]),
     ("b10_meta_if_header.gg", &[]),
+    ("b10_select_arm.gg", &[]),
     ("b11_arm_case_inline.gg", &[]),
     ("b11_arm_catch_composite.gg", &[]),
+    ("b11_arm_do_suffix.gg", &[]),
     // ── C · escape (c), the pre-rendered item's blindness ──
     ("c_nested_close_call_arg.gg", &[]),
     ("c_nested_close_collection.gg", &[]),

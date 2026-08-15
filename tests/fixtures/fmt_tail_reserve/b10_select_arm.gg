@@ -1,0 +1,34 @@
+# R42 tail-reserve boundary cell.
+#
+# B10 · the `select` arm — a MULTI-RENDER header whose reserves are
+# MEASURED to the NEXT render's first break opportunity: the `.recv():`
+# tail here, the `.send(` head on the sibling arm. One row per header
+# would under-specify it, and a whole-arm-text reserve would be the wrong
+# KIND.
+#
+# BOUNDARY PAIR. The two declarations below are the SAME shape one column
+# apart: the first is exactly 120 columns wide with its caller-emitted
+# suffix counted, the second exactly 121.
+#
+# RED, recorded against the PRE-FIX binary built from this track's own
+# base commit: the 121 declaration formats to a SINGLE 121-column line —
+# the packer measured its list without the caller's suffix.
+#
+# GREEN: the 121 declaration breaks and nothing in this file exceeds 120,
+# AND the 120 twin still formats FLAT at exactly 120 columns. That second
+# half is the OVER-reserve guard — the one a careless net omits — and it
+# is green on both binaries by construction, so its own red comes from
+# breaking the mechanism: add 1 to the reserve this cell installs and the
+# 120 half breaks.
+
+int probe_chan(int a, int b): 0
+
+void main():
+    select:
+        case int received = probe_chan(1111111, at120_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx).recv():
+            print(received)
+
+void main():
+    select:
+        case int received = probe_chan(1111111, at121_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx).recv():
+            print(received)
