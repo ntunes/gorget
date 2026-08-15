@@ -10771,11 +10771,11 @@ fn doc_source_citations_name_the_right_line() {
     const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
         ("103", "src/formatter/mod.rs:41", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("143", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
-        ("222", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("459", "src/formatter/mod.rs:709", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("463", "src/formatter/mod.rs:704", "the `align_trailing_comments()` call, named in prose without backticks"),
-        ("472", "src/formatter/mod.rs:1653", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("566", "src/formatter/mod.rs:2239", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("220", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
+        ("457", "src/formatter/mod.rs:709", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("461", "src/formatter/mod.rs:704", "the `align_trailing_comments()` call, named in prose without backticks"),
+        ("470", "src/formatter/mod.rs:1653", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("564", "src/formatter/mod.rs:2239", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has

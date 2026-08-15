@@ -141,9 +141,7 @@ each `Group` it calls `measure_flat` (`src/formatter/doc.rs:586`) — which retu
 single-line width, or `None` when the subtree cannot be flattened at all — and renders
 flat iff `current_col + width + tail_reserve <= max_width`, else broken
 (`src/formatter/doc.rs:433-448`). The maximum line width is `MAX_WIDTH = 120`
-(`src/formatter/doc.rs:10`); `tail_reserve` is what the CALLER has committed to
-writing after this Doc on the same line, and it is the subject of [The tail
-reserve](#the-tail-reserve) below.
+(`src/formatter/doc.rs:10`).
 
 Two things make `measure_flat` return `None`: a `HardLine`, and a `Text` that already
 contains newlines. The second is not a corner case — it is how a *pre-rendered
