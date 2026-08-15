@@ -7,6 +7,10 @@
 #   right — and, worse, further right again on the NEXT pass, so the file is
 #   not idempotent. The harness runs a second pass on every cell, which is what
 #   pins this one.
+#   ⚠ The head is deliberately a SINGLETON (no second commented member). In an
+#   ACTIVE alignment group the post-pass rewrites the continuation's column
+#   anyway and the writer's mistake is invisible; only an unaligned run leaves
+#   the writer's own column standing.
 #
 # CELL 2 — a run whose head is long enough that the aligner's budget guard
 #   EXCLUDES its group member. An excluded head is not realigned, and its
@@ -16,10 +20,9 @@
 # Both are FIXPOINT cells; the second pass is the assertion.
 
 struct Refs:
-    int a       # see #42 for why this is a byte and not a word — the head's
-                # own text contains a `#`, which a buffer search would find
-    int b       # a second member, so the group has two entries and the
-                # aligner actually picks a column
+    int a    # see #42 for why this is a byte and not a word — the head's own
+             # text contains a `#`, which a buffer search would find instead
+    int b
 
 struct Wide:
     int s    # a run whose head would exceed the budget at the group column,
