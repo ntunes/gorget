@@ -436,11 +436,11 @@ enum Gate {
 /// The width budget a `Formatter`'s Doc renders are decided against, and what
 /// those renders are FOR.
 ///
-/// A TYPED three-state rather than a bare `max_width: usize`: two of the three
-/// states are MEASUREMENT probes whose widths (`usize::MAX`, `0`) are chosen to
-/// force an extreme, and recovering "this is a probe" from the number would be
-/// a sentinel read of a write-site fact. `doc::RenderPurpose` carries the same
-/// distinction across the boundary into the renderer.
+/// A TYPED state rather than a bare `max_width: usize`: one of the two is a
+/// MEASUREMENT probe whose width is chosen to force an extreme, and recovering
+/// "this is a probe" from the number would be a sentinel read of a write-site
+/// fact. `doc::RenderPurpose` carries the same distinction across the boundary
+/// into the renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RenderBudget {
     /// Real layout at the ratified 120-column budget.
@@ -590,11 +590,12 @@ impl Formatter {
     /// measurement probe.
     ///
     /// Inside a probe the reserve cannot change the outcome — at width 0 every
-    /// break opportunity breaks regardless of it, and at `usize::MAX` none of
-    /// them does — so the measurement would be pure cost. Skipping it also
-    /// CAPS the recursion: a remainder measure (a type's following siblings, a
-    /// param loop's tail) would otherwise measure its own remainder once per
-    /// level, which is exponential in nesting depth rather than linear.
+    /// break opportunity breaks regardless of it — so the measurement would be
+    /// pure cost. Skipping it also CAPS the recursion: a remainder measure (a
+    /// type's following siblings, a param loop's tail) would otherwise measure
+    /// its own remainder once per level, which is exponential in nesting depth
+    /// rather than linear, and it is what keeps the measured corpus cost at
+    /// ~4% rather than unbounded.
     fn measured_reserve(&self, f: impl FnOnce(&mut Formatter)) -> usize {
         if self.budget != RenderBudget::Layout {
             return 0;

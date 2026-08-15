@@ -279,10 +279,10 @@ pub fn render_at(doc: &Doc, max_width: usize, start_col: usize, base_indent: usi
 }
 
 /// What a render is FOR. A TYPED fact written at the call site, never
-/// reconstructed from `max_width`: a probe width (`0` / `usize::MAX`) is a
-/// *consequence* of measuring, and reading the purpose back out of it would be
-/// a sentinel read of a write-site fact — the same shape the layering rules
-/// reject everywhere else.
+/// reconstructed from `max_width`: a probe width is a *consequence* of
+/// measuring, and reading the purpose back out of it would be a sentinel read
+/// of a write-site fact — the same shape the layering rules reject everywhere
+/// else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderPurpose {
     /// A real layout decision. The rendered text is spliced into the output
@@ -290,13 +290,19 @@ pub enum RenderPurpose {
     /// `break-only-if-it-NARROWS` suppression in `render_fill`.
     Layout,
     /// A measurement pre-render: the text is measured and thrown away. The
-    /// width is a probe (`usize::MAX` — never break, giving the flat text;
-    /// `0` — break everywhere, so the first line is the leading UNBREAKABLE
-    /// text), which makes "would a break narrow this line?" meaningless, so
-    /// the suppression rule is inert here. Without this gate the rule fires
-    /// inside the width-0 probe and glues short one-item tails (`f(x)`,
-    /// `[x]`, `{k: v}`) onto the measured first line, over-reserving every
-    /// caller that measures a leading prefix.
+    /// width is a PROBE — today always `0`, which makes every break
+    /// opportunity break so the first line is exactly the leading UNBREAKABLE
+    /// text — and at a probe width "would a break narrow this line?" is
+    /// meaningless, so the suppression rule is inert here.
+    ///
+    /// Without this gate the rule fires inside the probe and glues short
+    /// one-item tails (`f(x)`, `[x]`, `{k: v}`) onto the measured first line,
+    /// over-reserving every caller that measures a leading prefix.
+    ///
+    /// The gate is a TYPED flag rather than a `max_width == 0` test because
+    /// the width is a consequence of measuring, not the fact itself: a second
+    /// probe width would otherwise have to remember to opt in, and would be
+    /// correct only by accident.
     Measure,
 }
 
