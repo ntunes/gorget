@@ -46435,6 +46435,29 @@ fn sound_callable_amp_param_ices() {
     run_gg("known_gaps/sound_callable_amp_param_ices.gg", "11\n11");
 }
 
+/// KNOWN GAP (R42) — the internal postcondition alias `__return__` is
+/// spellable in ordinary user source (`int x = __return__` checks, builds,
+/// prints 0) — a reserved-name leak. Asserts the INTENDED check-time reject,
+/// so it is RED at HEAD. Un-ignore when the reject lands on ALL lanes
+/// (Core #9: three SH parser copies + SH resolve mirror the convention).
+#[test]
+#[ignore = "KNOWN GAP (R42): user-spelled __return__ accepted in ordinary source; asserts the \
+INTENDED reserved-identifier reject. Cross-lane item — see TODO.md."]
+fn user_spelled_dunder_return_rejected() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path =
+        manifest_dir.join("tests/fixtures/known_gaps/user_spelled_dunder_return_accepted.gg");
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture_path),
+        "user_spelled_dunder_return_accepted",
+    );
+    assert!(
+        !output.status.success(),
+        "user-spelled __return__ accepted: `int x = __return__` should be a \
+         reserved-identifier error, but gg check succeeded",
+    );
+}
+
 /// KNOWN GAP (R42) — the postcondition value `return` is UNTYPED:
 /// `assert return >= "hello"` in an `int` fn passes `gg check`. Asserts the
 /// INTENDED check-time reject, so it is RED at HEAD (check succeeds).

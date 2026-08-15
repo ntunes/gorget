@@ -1,0 +1,14 @@
+# KNOWN GAP (filed 2026-08-15 from the R42 Track-D brief-review pass 11,
+# orchestrator-verified): the compiler's INTERNAL postcondition alias
+# `__return__` is spellable in ORDINARY user source — `int x = __return__`
+# passes `gg check`, builds, and prints 0 (the resolve-side guard for the
+# postcondition rewrite shields the name globally). A user identifier that
+# silently binds a compiler-internal slot is a reserved-name leak.
+# INTENDED: check-time reject (undefined name / reserved identifier) —
+# an accept->reject change that binds Core #9's all-lanes obligation
+# (three self-host parser copies + self-host resolve mirror the
+# convention), so it lands as its own cross-lane track, not a rider.
+# Wired test: user_spelled_dunder_return_rejected (tests/integration.rs, #[ignore]d).
+void main():
+    int x = __return__
+    print(x)
