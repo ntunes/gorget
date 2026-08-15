@@ -1,0 +1,63 @@
+# AUTHOR-PAREN PRESERVATION — the CHAIN-FLATTENER axis.
+#
+# `a + b + c` parses as `(a + b) + c`, so `collect_binary_operands` flattens
+# same-operator left-nested chains back into one operand list. A sub-chain the
+# author PARENTHESISED has the identical AST — which is exactly why the paren
+# has to be consulted during the flatten: once the chain is flat, no emitter
+# downstream can tell the two apart.
+#
+# OPERATOR costumes (3-operand): `+` on ints, `and`, `or`, `+` on Strings — one
+# per operator family that flattens, because the guard lives in a shared free
+# function and a per-operator regression would be invisible in a single cell.
+# DEPTH costume: `((a + b)) + c` — two layers on the flattened child.
+#
+# LEFT-SPINE cells (≥4 operands): `(a + b) + c + d` and `(p and q) and s and t`.
+# These are the ones that kill the plausible WRONG implementation — a guard
+# applied only to the chain's top-level left child. Three-operand cells pass
+# under that variant; here the grouped pair sits one level down the spine, so
+# only a check at EVERY recursion step keeps it.
+#
+# MID-CHAIN cell (`a + (b + c) + d`) is a POS PIN, not a red: a mid-chain group
+# is a RIGHT child, which the flatten never descends into and
+# `needs_parens_as_binop_operand` already requires parens for. It is green on
+# the pre-fix binary and on every broken variant tried, and it is here so a
+# future "simplification" that drops the right-operand paren rule is caught.
+#
+# RED (pre-fix binary): every 3-operand + depth cell loses its parens
+# (`a + b + c`, `p and q and r`, `p or q or r`, `"x" + y + z`, `a + b + c`).
+# RED (top-level-only flattener-guard variant): the two left-spine cells lose
+# theirs while every 3-operand cell stays green.
+
+int three(int a, int b, int c):
+    return (a + b) + c
+
+bool three_and(bool p, bool q, bool r):
+    return (p and q) and r
+
+bool three_or(bool p, bool q, bool r):
+    return (p or q) or r
+
+String three_str(String y, String z):
+    return ("x" + y) + z
+
+int double_layer(int a, int b, int c):
+    return ((a + b)) + c
+
+int spine4(int a, int b, int c, int d):
+    return (a + b) + c + d
+
+bool spine4_and(bool p, bool q, bool s, bool t):
+    return (p and q) and s and t
+
+int mid_chain(int a, int b, int c, int d):
+    return a + (b + c) + d
+
+void main():
+    print(three(1, 2, 3))
+    print(three_and(true, true, true))
+    print(three_or(false, false, true))
+    print(three_str("y", "z"))
+    print(double_layer(1, 2, 3))
+    print(spine4(1, 2, 3, 4))
+    print(spine4_and(true, true, true, true))
+    print(mid_chain(1, 2, 3, 4))

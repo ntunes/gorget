@@ -1,0 +1,36 @@
+# AUTHOR-PAREN PRESERVATION — the OWNERSHIP-SIGIL axis.
+#
+# `for i in (^start)..end:` is the shape where preservation and the formatter's
+# OWN required wrap meet on two different nodes. The `^` is stripped by a token
+# pre-pass into the enclosing node's `ownership` field, so an expression that
+# legitimately STARTS with a sigil has to be parenthesised by
+# `format_ownership_modifier_operand` or it round-trips into a DIFFERENT AST.
+# The author's paren sits on `^start`; the required wrap belongs to the RANGE.
+#
+# RATIFIED output: `((^start)..end)` — the author's paren plus the formatter's
+# required one, both on the page, idempotent. Suppressing the range's wrap
+# because a DIFFERENT node happens to carry a paren is the one thing the design
+# refuses: same-span suppression only.
+#
+# Both cells are TEXT-ONLY, deliberately: `for i in (^start)..end:` and
+# `for i in (^start..end):` are REJECTED (E_MoveInOperandPosition) before and
+# after this change — that is the point, the reject must survive the round
+# trip. The pre-fix binary rewrote the first spelling to the second, a
+# different AST that happens to reject for a different reason. Sigil cells that
+# RUN live in `sigil_run.gg`.
+#
+#   * `(^start)..end` → `((^start)..end)`. RED on the pre-fix binary, which
+#     prints `(^start..end)`.
+#   * `(^start..end)` → unchanged. POS PIN: the sigil sits INSIDE the author's
+#     paren, so the author's paren and the formatter's required wrap are the
+#     SAME node and E1's same-span dedup emits exactly one pair. No red is
+#     constructible against any variant tried; it is here because removing that
+#     dedup reproduces accretion at exactly this position.
+
+void iterate(int start, int end):
+    for i in (^start)..end:
+        print(i)
+
+void iterate_inner(int start, int end):
+    for i in (^start..end):
+        print(i)

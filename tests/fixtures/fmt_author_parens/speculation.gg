@@ -1,0 +1,28 @@
+# AUTHOR-PAREN PRESERVATION — the SPECULATION/BACKTRACK cell.
+#
+# `Parser::try_parse` restores `self.pos` on a failed speculation, and
+# `parse_expr` is reachable UNDER speculation (generic-type-args → `parse_type`
+# → array-size `parse_expr`). A paren recorded inside an abandoned attempt is a
+# PHANTOM: the fallback parse records the same paren again, and the layer count
+# grows every pass. Measured on this shape before the truncate landed:
+# 3× → 9× → 27× parens per pass, with `fmt_output_reparses_corpus_wide` GREEN
+# throughout — no corpus file has this shape.
+#
+# The fix is the chokepoint: `try_parse`'s `None` arm truncates the push-log to
+# its saved length, so an abandoned speculation leaves nothing behind.
+#
+# ⚠ TEXT-ONLY, deliberately, and NOT wired to build or run. `int[N]` as a
+# generic argument is a LIVE, PRE-EXISTING defect of its own (check passes,
+# debug ICEs, release miscompiles) filed separately — building this file would
+# red an unrelated gate with a panic that has nothing to do with parens, and
+# quietly swapping the shape would bury that defect instead. The RUNNABLE
+# fingerprint of the same mechanism, using a generic callee that resolves, is
+# `speculation_run.gg`.
+#
+# RED (a build without the `try_parse` truncate): the parens multiply on each
+# pass. Green on the pre-fix binary only in the sense that it deletes them.
+
+void main():
+    Vector[int] buf = [1, 2, 3]
+    int a = buf[int[(2)]]
+    print(a)

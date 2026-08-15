@@ -1,0 +1,43 @@
+# AUTHOR-PAREN PRESERVATION — the original filing's fixture, graduated.
+#
+# A redundant paren is not noise: it is how a reader is told which sub-expression
+# to bind first. `(y % 4) == 0 and ((y % 100) != 0 or (y % 400) == 0)` says the
+# arithmetic groups before the comparisons; the same line with every paren
+# stripped means exactly the same thing to the compiler and something noticeably
+# harder to a human. The formatter is not entitled to that edit.
+#
+# WRITE SITE: `parse_paren_expr`'s parenthesized-expression branch does
+# `expect(RParen); Ok(first)` — the AST node IS the inner expression, so the
+# paren layer would be gone before any pass could see it. That branch records
+# the wrapped span as parser trivia (`src/parser/parens.rs`), one entry per
+# layer, and the formatter emits `max(author_layers, required)`: the author's
+# parens and the ones precedence demands share the page instead of stacking.
+#
+# CELL AXIS: three costumes of ONE class — a redundant group around a
+# higher-precedence binary operand, a redundant group around a whole arithmetic
+# sub-term, and a redundant group around a cast in condition position. The outer
+# `(… or …)` group is NOT asserted by the test: the formatter re-emits that pair
+# from precedence, so it would pass for a reason unrelated to preservation.
+#
+# This fixture does NOT sample the accretion shape (a chain long enough to
+# break), the flattener shape (`(a + b) + c`), the wrapper shapes, or the
+# structural NEGs — those are the sibling cells in this directory.
+#
+# RED (pre-fix binary, all three cells):
+#     (y % 4) == 0 and ((y % 100) != 0 …)  →  y % 4 == 0 and (y % 100 != 0 …)
+#     n + (n * shift)                      →  n + n * shift
+#     if (slen as bool):                   →  if slen as bool:
+
+bool is_leap(int y):
+    return (y % 4) == 0 and ((y % 100) != 0 or (y % 400) == 0)
+
+int scaled(int n, int shift):
+    return n + (n * shift)
+
+bool nonempty(int slen):
+    if (slen as bool):
+        return true
+    return false
+
+void main():
+    print(f"{is_leap(2024)} {scaled(3, 4)} {nonempty(2)}")

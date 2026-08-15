@@ -1,0 +1,52 @@
+# AUTHOR-PAREN PRESERVATION — the STRUCTURAL-NEG axis: parens that are NOT the
+# author's grouping, and must never gain a layer.
+#
+# The table is written at exactly ONE site: `parse_paren_expr`'s parenthesized-
+# EXPRESSION branch. Every paren below belongs to a different grammar
+# production and never reaches it:
+#   * a CALL's argument list ..... parsed by the call-argument parser
+#   * a TUPLE literal ............ the comma branch of `parse_paren_expr`,
+#                                  which returns a `TupleLiteral` node instead
+#   * a ONE-TUPLE `(e,)` ......... same branch, single element + trailing comma
+#   * a PATTERN `case (a, b):` ... the pattern parser
+#   * a TYPE `(int, int)` ........ the type parser
+#   * a CLOSURE parameter list ... `parse_closure`, before the expression parser
+#
+# DISPOSITION: the tuple-adjacent cells (tuple literal, one-tuple) are the only
+# ones with a constructible red — an over-recording break in the tuple branch
+# reddens them. The pattern / type / call-arg / closure-param cells are
+# STRUCTURALLY immune (no path from those parsers to the recording site exists
+# at all), so they are POS pins with no red available; they pin that the write
+# site stays singular.
+#
+# ⚠ The ONE-TUPLE cell is spelled in LOCAL-DECL position only, and asserts that
+# no paren is GAINED rather than asserting the text: `gg fmt` drops the trailing
+# comma of a one-tuple TYPE (`(int,)` → `(int)`), a live filed gap
+# (`tests/fixtures/known_gaps/fmt_one_tuple_type_comma_drop.gg`), and in
+# return-type position that gap eats the whole shape.
+
+int takes_two(int a, int b):
+    return a + b
+
+int tuple_cells():
+    (int, int) pair = (1, 2)
+    (int,) single = (7,)
+    return pair.0 + pair.1 + single.0
+
+int pattern_cell(int a, int b):
+    (int, int) t = (a, b)
+    match t:
+        case (1, 2):
+            return 12
+        else:
+            return 0
+
+int closure_param_cell(int n):
+    Callable[int(int)] g = (int x): x + n
+    return g(1)
+
+void main():
+    print(takes_two(1, 2))
+    print(tuple_cells())
+    print(pattern_cell(1, 2))
+    print(closure_param_cell(2))

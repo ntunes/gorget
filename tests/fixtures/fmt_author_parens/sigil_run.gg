@@ -1,0 +1,22 @@
+# AUTHOR-PAREN PRESERVATION — the RUNNABLE ownership-sigil cells.
+#
+#   * `apply_once((^(int x): x + n), 3)` ... POS PIN, same mechanism on a move
+#     CLOSURE argument. Re-emitted without the paren this is
+#     `apply_once(^(int x): x + n, 3)`, which is REJECTED
+#     (E_OwnershipMismatch) — the move-closure would become a moved argument.
+#   * `ConsumeCallable[int(int)] g = (^(int x): x + 1)` ... RED on the pre-fix
+#     binary, which deletes the paren. (`Callable[int(int)] g = (^(…))` is not
+#     the cell to use: that spelling does not typecheck at all,
+#     E_ClosureKindMismatch.)
+#
+# Wired to RUN: the point of the last two cells is that the ownership reading
+# survives, and only a build+run proves it.
+
+int apply_once(ConsumeCallable[int(int)] f, int x):
+    return f(x)
+
+void main():
+    int n = 5
+    print(apply_once((^(int x): x + n), 3))
+    ConsumeCallable[int(int)] g = (^(int x): x + 1)
+    print(apply_once(g, 1))

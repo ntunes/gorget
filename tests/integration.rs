@@ -9901,6 +9901,12 @@ fn assert_fmt_round_trip_semantic(
 
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let reformatted_path = tmp.path().join(fixture);
+    // A fixture named with a SUBDIRECTORY (`fmt_author_parens/costumes.gg`)
+    // needs that directory to exist in the tempdir before the write.
+    if let Some(parent) = reformatted_path.parent() {
+        std::fs::create_dir_all(parent)
+            .unwrap_or_else(|e| panic!("cannot create tempdir path for {fixture}: {e}"));
+    }
     std::fs::write(&reformatted_path, &reformatted)
         .unwrap_or_else(|e| panic!("cannot write reformatted {fixture}: {e}"));
 
@@ -11636,25 +11642,6 @@ fn fmt_multiline_trailing_comment_stays_attached() {
     );
 }
 
-/// KNOWN GAP (R41 T-FMT-B, filed 2026-08-11): `gg fmt` DELETES the author's
-/// grouping parentheses.
-///
-/// `parse_paren_expr`'s parenthesized-expression branch (`src/parser/expr.rs:1641-1645`)
-/// does `expect(RParen); Ok(first)` — the AST node IS the inner expression, so the
-/// paren layer never reaches the formatter and only the parens the formatter's own
-/// precedence rules demand come back. Redundant author parens are how a reader is
-/// told what binds first; deleting them is an edit to the user's source, not a
-/// canonicalization.
-///
-/// One cell per costume so a partial fix fingers what it missed: a group around a
-/// higher-precedence binary operand, a group around a whole arithmetic sub-term,
-/// and a group around a cast in condition position. The fixture's outer
-/// `(… or …)` is deliberately NOT asserted — the formatter re-emits that one from
-/// precedence, so it would be green for a reason unrelated to this gap.
-///
-/// Asserts the INTENDED preserved output, so it is RED at HEAD. Un-ignore and
-/// graduate the fixture out of `known_gaps/` the round the paren-emission
-/// chokepoint lands (the prototype's idempotence blocker is in the TODO entry).
 /// KNOWN GAP (R42): `gg fmt` drops the trailing comma of a ONE-TUPLE TYPE
 /// (`(int,)` → `(int)`) while the value spelling keeps its comma — a
 /// form-changing round trip. Asserts the INTENDED preserved spelling, so it
@@ -11682,11 +11669,30 @@ fn fmt_one_tuple_type_keeps_comma() {
     );
 }
 
+/// `gg fmt` PRESERVES the author's grouping parentheses.
+///
+/// `parse_paren_expr`'s parenthesized-expression branch records the wrapped
+/// expression's span as parser trivia (`src/parser/parens.rs`), because the AST
+/// node it returns IS the inner expression and nothing downstream could
+/// otherwise know a paren was written. The formatter emits
+/// `max(author_layers, required)` — one paren on the page satisfies both
+/// readings, and stacking them would multiply on every pass.
+///
+/// This is the original filing's fixture, graduated out of `known_gaps/`. One
+/// cell per costume so a partial regression fingers what it missed: a group
+/// around a higher-precedence binary operand, one around a whole arithmetic
+/// sub-term, and one around a cast in condition position. The fixture's outer
+/// `(… or …)` is deliberately NOT asserted — the formatter re-emits that pair
+/// from precedence, so it would be green for a reason unrelated to this
+/// mechanism. The wider net (chain flattening, breaking chains, wrappers,
+/// sigils, speculation, structural NEGs) is `tests/fixtures/fmt_author_parens/`.
+///
+/// RED-verified against the pre-fix binary, which printed `y % 4 == 0`,
+/// `n + n * shift` and `if slen as bool:`.
 #[test]
-#[ignore = "known gap (R41 T-FMT-B): gg fmt deletes the author's grouping parens; un-ignore when the paren-emission chokepoint lands"]
 fn fmt_preserves_author_parens() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture = manifest_dir.join("tests/fixtures/known_gaps/fmt_paren_deletion.gg");
+    let fixture = manifest_dir.join("tests/fixtures/fmt_author_parens/paren_deletion.gg");
     let source = std::fs::read_to_string(&fixture)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
     let formatted = gorget::formatter::format_source_infallible(&source);
@@ -11711,6 +11717,333 @@ fn fmt_preserves_author_parens() {
              === formatted (code lines) ===\n{code}"
         );
     }
+}
+
+// ══════════════════════════════════════════════════════════════
+// Author-paren preservation — the wide net (R42 Track D)
+// ══════════════════════════════════════════════════════════════
+//
+// `gg fmt` changes the layout it owns and nothing the author spelled. A
+// grouping paren is spelled, carries no semantics, and is therefore invisible
+// in the AST — the parser records it as trivia and the formatter emits
+// `max(author, required)`.
+//
+// The net is split by what each cell can PROVE:
+//   * TEXT cells — the paren is in the output, the output re-parses, and three
+//     passes are byte-identical (accretion is the failure mode that a single
+//     pass cannot see).
+//   * SEMANTIC cells — the fixture is built and RUN, before and after `gg fmt`,
+//     and the stdout must match. A paren that changes meaning shows up here.
+//   * CHECK cells — `gg fmt`'s own output is fed back to `gg check`, for the
+//     costumes where the failure mode was an accept→reject flip.
+//   * The TRAP cell — `gg fmt`'s output is BUILT AND RUN and must still trap.
+//
+// Fixture placement: `tests/fixtures/fmt_author_parens/`, a subdirectory, so
+// none of these join the top-level `runtime_parity_corpus` scan.
+
+/// Every author-paren TEXT cell: `(fixture, [substrings that must survive])`.
+///
+/// The substrings are matched against the formatted BODY (the header comment
+/// quotes the same shapes to document them, and a whole-file search would pass
+/// on the prose while the code was still being rewritten).
+const FMT_AUTHOR_PAREN_TEXT_CELLS: &[(&str, &[&str])] = &[
+    (
+        "costumes.gg",
+        &[
+            "(not x) and y",
+            "(*b) + 1",
+            "(a).len()",
+            "if (slen as bool):",
+            "n + (n * shift)",
+            "(((x)))",
+            "f\"{(a + b) * c}\"",
+        ],
+    ),
+    (
+        "chain_flatten.gg",
+        &[
+            "(a + b) + c\n",
+            "(p and q) and r",
+            "(p or q) or r",
+            "(\"x\" + y) + z",
+            "((a + b)) + c",
+            "(a + b) + c + d",
+            "(p and q) and s and t",
+            "a + (b + c) + d",
+        ],
+    ),
+    (
+        "wrappers.gg",
+        &[
+            "xs.map((it * 2))",
+            "return (n + 2)",
+            "return (n * 3)",
+            "return (a + b)",
+            "catch (e): (0 - 1)",
+            "rethrow (String e): (e + \"!\")",
+            "(int x): (x + n)",
+            "return (t).0",
+        ],
+    ),
+    (
+        "sigil_wrap.gg",
+        &["for i in ((^start)..end):", "for i in (^start..end):"],
+    ),
+    (
+        "sigil_run.gg",
+        &[
+            "apply_once((^(int x): x + n), 3)",
+            "ConsumeCallable[int(int)] g = (^(int x): x + 1)",
+        ],
+    ),
+    (
+        "with_header.gg",
+        &["with (r + 0) as held:"],
+    ),
+    (
+        "speculation.gg",
+        &["buf[int[(2)]]"],
+    ),
+    (
+        "speculation_run.gg",
+        &["ident[int[(2)]](3)"],
+    ),
+    (
+        "assert_return.gg",
+        &[
+            "assert return.0 <= 100",
+            "assert return.x <= 100",
+            "assert return.len() < 20",
+            "assert return >= a * (b + c)",
+            // The over-budget cell: the top-level condition stays FLAT and the
+            // OPERAND breaks, parenthesising itself.
+            "assert return >= (alpha_operand * (beta_operand + gamma_operand)\n",
+        ],
+    ),
+    (
+        "broken_chains.gg",
+        &[
+            "return (alpha_operand\n",
+            "return (maybe_alpha\n",
+            "+ (gamma_operand * delta_operand)\n",
+        ],
+    ),
+];
+
+/// Author parens survive `gg fmt`, the output re-parses, and THREE passes are
+/// byte-identical.
+///
+/// The three-pass assertion is the load-bearing half. The reverted R41
+/// prototype was correct on pass 1 and added a paren layer on every pass after,
+/// because it emitted `author + required` where the rule has to be `max`.
+///
+/// RED-verified per cell against the pre-fix binary (parens deleted); the
+/// `broken_chains.gg` cells are byte-identical there and take their red from
+/// the ADDITIVE variant instead — see that fixture's header.
+#[test]
+fn fmt_author_parens_survive_and_are_stable() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for (fixture, cells) in FMT_AUTHOR_PAREN_TEXT_CELLS {
+        let path = manifest_dir
+            .join("tests/fixtures/fmt_author_parens")
+            .join(fixture);
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+
+        let first = gorget::formatter::format_source_infallible(&source);
+        for cell in *cells {
+            assert!(
+                fmt_body_contains(&first, cell),
+                "author paren lost in {fixture}: `{cell}` is not in the \
+                 formatted body.\n=== formatted ===\n{first}"
+            );
+        }
+
+        // Re-parse + idempotence (pass 1 vs pass 2).
+        assert_fmt_round_trips(fixture, &source);
+
+        // Pass 3: accretion that needs two passes to become visible.
+        let second = gorget::formatter::format_source_infallible(&first);
+        let third = gorget::formatter::format_source_infallible(&second);
+        assert_eq!(
+            second, third,
+            "author parens ACCRETE in {fixture} — pass 3 differs from pass 2.\n\
+             === pass 2 ===\n{second}\n=== pass 3 ===\n{third}"
+        );
+    }
+}
+
+/// The structural NEG axis: parens that are NOT the author's grouping must
+/// never gain a layer.
+///
+/// The recording site is `parse_paren_expr`'s parenthesized-EXPRESSION branch
+/// alone. A call's argument list, a tuple literal, a pattern, a type and a
+/// closure parameter list are parsed elsewhere and can never reach it.
+///
+/// ⚠ The one-tuple cell asserts that no paren is GAINED, not the exact text:
+/// `gg fmt` drops the trailing comma of a one-tuple TYPE (`(int,)` → `(int)`),
+/// a separately filed live gap
+/// (`tests/fixtures/known_gaps/fmt_one_tuple_type_comma_drop.gg`).
+#[test]
+fn fmt_author_parens_no_layer_gained_on_structural_parens() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_author_parens/structural_neg.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    for cell in [
+        "print(takes_two(1, 2))",     // call arg list
+        "(int, int) pair = (1, 2)",   // tuple literal + tuple type
+        "= (7,)",                     // one-tuple VALUE keeps its comma
+        "case (1, 2):",               // pattern
+        "Callable[int(int)] g = (int x): x + n", // closure param list
+    ] {
+        assert!(
+            fmt_body_contains(&formatted, cell),
+            "a structural paren gained or lost a layer: `{cell}` is not in the \
+             formatted body.\n=== formatted ===\n{formatted}"
+        );
+    }
+    // No doubled structural paren anywhere.
+    for doubled in ["((1, 2))", "((7,))", "takes_two((1, 2))"] {
+        assert!(
+            !fmt_body_contains(&formatted, doubled),
+            "a structural paren GAINED a layer: `{doubled}` appears in the \
+             formatted body.\n=== formatted ===\n{formatted}"
+        );
+    }
+}
+
+/// The SEMANTIC half: every runnable author-paren fixture is built and run
+/// before and after `gg fmt`, and the stdout must be identical.
+///
+/// A paren that survives as text but changes the program's meaning — or one
+/// deleted from a position where it was load-bearing — shows up here and
+/// nowhere else. Expected stdout regenerated from the ORIGINAL fixture.
+#[test]
+fn fmt_author_parens_round_trip_semantic() {
+    let corpus: &[(&str, &str)] = &[
+        ("fmt_author_parens/paren_deletion.gg", "true 15 true"),
+        (
+            "fmt_author_parens/costumes.gg",
+            "true\n2\n5\n1\n15\n9\n1",
+        ),
+        (
+            "fmt_author_parens/chain_flatten.gg",
+            "6\ntrue\ntrue\nxyz\n6\n10\ntrue\n10",
+        ),
+        ("fmt_author_parens/broken_chains.gg", "24\n26\n26"),
+        ("fmt_author_parens/wrappers.gg", "2\n3\n4\n-1\n3\n4"),
+        ("fmt_author_parens/sigil_run.gg", "8\n2"),
+        ("fmt_author_parens/structural_neg.gg", "3\n10\n12\n3"),
+        ("fmt_author_parens/with_header.gg", "2"),
+        ("fmt_author_parens/speculation_run.gg", "3"),
+        ("fmt_author_parens/assert_return.gg", "2\n3\nhey!\n14\n19"),
+    ];
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for (fixture, expected_stdout) in corpus {
+        assert_fmt_round_trip_semantic(&manifest_dir, fixture, expected_stdout);
+    }
+}
+
+/// `gg fmt`'s OUTPUT must still CHECK — the assert-return postfix costumes.
+///
+/// `assert return.0 <= 100` used to format to `assert return__return__.0 <= 100`:
+/// the postcondition emitter special-cased the placeholder identifier by name
+/// and its `_` fallback printed the internal spelling verbatim whenever the
+/// left-spine leaf was WRAPPED in a postfix node. The formatted file was then
+/// rejected with E_UndefinedName — an accept→reject flip caused by `gg fmt`
+/// alone, on documented syntax.
+///
+/// Asserted by CHECKING the output rather than by matching text: the tuple
+/// return type in this fixture is subject to a separate filed paren gap, so a
+/// text-identity assertion would fail for an unrelated reason.
+///
+/// RED-verified: on the pre-fix binary this check reports three
+/// `undefined name `return__return__`` errors.
+#[test]
+fn fmt_assert_return_output_still_checks() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_author_parens/assert_return.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // BODY only: the fixture's own header comment names the placeholder while
+    // documenting it, and a whole-file search would fire on the prose.
+    assert!(
+        !fmt_body_contains(&formatted, "__return__"),
+        "`gg fmt` emitted the parser's internal postcondition spelling into the \
+         user's source.\n=== formatted ===\n{formatted}"
+    );
+
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let out_path = tmp.path().join("assert_return.gg");
+    std::fs::write(&out_path, &formatted).expect("write formatted");
+    let check = gg_command("check")
+        .arg(&out_path)
+        .output()
+        .expect("run gg check");
+    assert!(
+        check.status.success(),
+        "`gg fmt` output does NOT check:\nstdout:\n{}\nstderr:\n{}\n\
+         === formatted ===\n{formatted}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr),
+    );
+}
+
+/// The postcondition that `gg fmt` used to DELETE — a runtime cell, because the
+/// flip is a runtime fact.
+///
+/// `under(2, 3, 4)` returns 12 and promises `>= a * (b + c)` = 14, so the
+/// program traps. The pre-fix formatter re-emitted the condition as
+/// `>= a * b + c` = 10, which 12 satisfies: the formatted program ran to
+/// completion and printed 12. Text comparison cannot catch that — this test
+/// formats the fixture, BUILDS THE FORMATTED OUTPUT, runs it, and asserts the
+/// trap survived.
+///
+/// RED-verified: pre-fix, the formatted program exits 0 with stdout `12`.
+#[test]
+fn fmt_assert_return_flip_still_traps() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_author_parens/assert_return_flip.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let out_path = tmp.path().join("assert_return_flip.gg");
+    std::fs::write(&out_path, &formatted).expect("write formatted");
+
+    let build = build_with_timeout(
+        gg_command("build").arg(&out_path),
+        "assert_return_flip.gg (reformatted)",
+    );
+    assert!(
+        build.status.success(),
+        "Build FAILED for the reformatted postcondition fixture:\n{}\n{}",
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+    let exe = tmp.path().join("assert_return_flip");
+    let run = run_with_timeout(
+        &mut Command::new(&exe),
+        "assert_return_flip.gg (reformatted)",
+    );
+    assert!(
+        !run.status.success(),
+        "`gg fmt` DELETED a postcondition: the reformatted program completed \
+         instead of trapping.\nstdout:\n{}\n=== formatted ===\n{formatted}",
+        String::from_utf8_lossy(&run.stdout),
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("T_AssertFailed"),
+        "the reformatted program failed for the WRONG reason — expected the \
+         postcondition trap.\nstderr:\n{stderr}\n=== formatted ===\n{formatted}"
+    );
 }
 
 /// The CLASS-RETIRING guard (Core #6): a hand-written projection of every

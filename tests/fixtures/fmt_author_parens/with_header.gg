@@ -1,0 +1,24 @@
+# AUTHOR-PAREN PRESERVATION — the `with (…) as` cell, and the one costume where
+# deleting a paren produced OUTPUT THAT DOES NOT PARSE.
+#
+# `with <expr> as <name>:` needs its binding expression parenthesised when the
+# expression is anything but a bare identifier or a call: the header parser
+# reads `expr as name` and `r + 0 as held` is not a shape it accepts. So
+# deleting the author's paren here is not cosmetic — it is a `gg fmt` run that
+# turns a valid file into an unparseable one.
+#
+# RED (pre-fix binary), verbatim:
+#     with (r + 0) as held:   →   with r + 0 as held:
+#     $ gg check <output>
+#     error: expected expected '<expr> as <name>' or bare identifier in
+#            with-binding, found
+#       ┌─ 6:10
+#       │ with r + 0 as held:
+#     … 5 parse errors in total; `gg fmt` then drops the orphaned body.
+#
+# Post-fix the paren survives, the output re-parses, and this fixture RUNS.
+
+void main():
+    int r = 2
+    with (r + 0) as held:
+        print(held)

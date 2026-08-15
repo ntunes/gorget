@@ -1,0 +1,16 @@
+# AUTHOR-PAREN PRESERVATION — the RUNNABLE speculation fingerprint.
+#
+# `ident[int[(2)]](3)` sends the parser through the same generic-type-argument
+# speculation as `speculation.gg`, but with a callee that RESOLVES, so the
+# program compiles and prints 3. (Without the generic declaration the same
+# spelling link-fails.) The speculation SUCCEEDS here, so this cell pins the
+# non-backtracking half of the path: the paren recorded during a successful
+# speculative parse must survive.
+#
+# RED (pre-fix binary): `ident[int[2]](3)` — the paren is deleted.
+
+int ident[T](int x):
+    return x
+
+void main():
+    print(ident[int[(2)]](3))

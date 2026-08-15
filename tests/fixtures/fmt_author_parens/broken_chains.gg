@@ -1,0 +1,48 @@
+# AUTHOR-PAREN PRESERVATION — the ACCRETION axis: author parens on and inside
+# chains that BREAK across lines. This is where the reverted R41 prototype died,
+# so these cells are the ones that must never go green-by-accident.
+#
+# A broken chain gets a paren pair of its OWN from `wrap_multiline_expr_in_parens`
+# (a bare leading-operator continuation does not re-parse). Stacking that pair on
+# top of the author's is `author + required`, which has NO FIXED POINT: pass 2
+# reads the added pair as another author paren, pass 3 as a third. The rule is
+# `max` — one paren on the page satisfies both readings — so every cell here is
+# asserted STABLE over THREE passes, not merely correct once.
+#
+# Cells:
+#   * `whole_chain_paren` — an author paren around a `+` chain that breaks.
+#     The E2 suppression cell.
+#   * `nil_chain_paren` — the same for `??` (`Expr::DefaultOp`), which is the
+#     SECOND caller of the broken-chain wrap. Missing it is the Core #4 sibling
+#     trap: `+` chains would be idempotent while `??` chains multiplied.
+#   * `operand_in_broken` — a REDUNDANT author paren on an OPERAND of a broken
+#     chain: `+ (gamma * delta) +`, where `*` already binds tighter, so nothing
+#     in the precedence rules would put that pair back. Chain operands are
+#     PRE-RENDERED through a fresh sub-`Formatter`, which makes this the
+#     dedicated isolator for the table's `Rc` threading: a sub-formatter built
+#     without the table deletes this paren while the output still re-parses and
+#     stays idempotent — invisible to every round-trip gate. (A paren that
+#     precedence REQUIRES, `alpha * (beta + gamma)`, is the wrong cell here: it
+#     comes back on every build, including the broken ones.)
+#
+# RED: NOT the pre-fix binary — the first two cells are byte-identical there
+# (the formatter's own wrap happens to print the same text), which is the
+# green-on-arrival trap this header exists to name. Their red comes from the
+# ADDITIVE variant (`wrap_multiline_expr_in_parens` ignoring `author_paren_covers`):
+# the parens multiply on every pass. `operand_in_broken` IS red on the pre-fix
+# binary (paren deleted) and red again on a build whose `sub_render` does not
+# clone the table into the sub-formatter.
+
+int whole_chain_paren(int alpha_operand, int beta_operand, int gamma_operand, int delta_operand):
+    return (alpha_operand + beta_operand + gamma_operand * delta_operand + alpha_operand * beta_operand + gamma_operand + delta_operand)
+
+int nil_chain_paren(Option[int] maybe_alpha, int beta_operand, int gamma_operand, int delta_operand):
+    return (maybe_alpha ?? beta_operand + gamma_operand * delta_operand + beta_operand * gamma_operand + delta_operand + beta_operand)
+
+int operand_in_broken(int alpha_operand, int beta_operand, int gamma_operand, int delta_operand):
+    return alpha_operand * beta_operand + (gamma_operand * delta_operand) + alpha_operand * gamma_operand + beta_operand * delta_operand + alpha_operand
+
+void main():
+    print(whole_chain_paren(1, 2, 3, 4))
+    print(nil_chain_paren(None, 2, 3, 4))
+    print(operand_in_broken(1, 2, 3, 4))
