@@ -12400,137 +12400,317 @@ fn item_module_is_constructed_only_by_the_loader() {
     );
 }
 
-/// THE MARKER-LOOKUP RATCHET — a fmt assertion may not search a fixture's own
-/// header.
+/// RAW-TEXT ACCESS TO FIXTURE-DERIVED FORMATTER OUTPUT IS DENY-BY-DEFAULT.
 ///
 /// A fmt fixture explains itself in a header of `#` lines, and `gg fmt`
-/// reproduces that header in its output. A lookup that searches the whole
-/// output for a marker is therefore shadowed by any header line that mentions
-/// it, and the failure is silent in BOTH directions: a first-line lookup
-/// measures the HEADER (red for the wrong reason, and unable to go green when
-/// the behaviour is fixed, since a comment line can never satisfy a positional
-/// claim), and a `contains` assertion is SATISFIED by the header (can never go
-/// red, reads as coverage, guards nothing).
+/// reproduces that header in its output. Any assertion that searches the whole
+/// output can be shadowed by a header line, silently and in both directions: a
+/// first-line lookup measures the HEADER (red for the wrong reason, and unable
+/// to go green when the behaviour is fixed, since a comment line can never
+/// satisfy a positional claim), and a `contains` assertion is SATISFIED by the
+/// header (can never go red, reads as coverage, guards nothing).
+/// `fmt_body` / `fmt_body_line_with` / `fmt_body_contains` (tests/integration.rs)
+/// skip the header; this lint is what keeps access N+1 from going around them.
 ///
-/// The class was found at FOUR instances and fixed twice by rewording headers —
-/// an invariant-asserting comment with no enforcer, which is what the class
-/// kept defeating. `fmt_body` / `fmt_body_line_with` / `fmt_body_contains`
-/// (tests/integration.rs) retire it at the LOOKUP; this ratchet is what stops
-/// lookup N+1 from going around them.
+/// **WHY THIS IS KEYED ON ACCESS, NOT ON SEARCH METHODS.** Four rounds of this
+/// class produced the same defect in a new costume each time — header rewording,
+/// then 13 routings plus a table, then a ratchet that detected `.find(` /
+/// `.position(` and was blind to `contains(`, to `.lines().any(…)` (an instance
+/// the same commit had hand-fixed), and to a live `.rposition(`. Enumerating
+/// costumes schedules the next round. So the subject here is the ACCESS:
 ///
-/// SHRINK-ONLY. The allowlist holds the lookups that genuinely search something
-/// else (process stdout/stderr, an inline source string with no fixture header)
-/// or that carry a STRONGER guard of their own (a predicate that skips every
-/// comment line, not just the header). Adding a row to silence a new fmt lookup
-/// is the wrong move — route it instead.
+///   * a binding whose initializer is a formatting call is RAW TEXT;
+///   * a function CALLED with such a binding is a raw-text consumer, and its
+///     `&str` parameters are raw text too — the hop that let `hash_col_of` hide
+///     behind ~25 call sites;
+///   * every METHOD CALL and every SLICE on raw text must be routed through the
+///     helpers or carry an allowlist row with its reason.
 ///
-/// **Break-and-verify (both RED-verified when this landed):** add
-/// `formatted.lines().find(|l| l.contains(…))` to any fmt test ⇒ the raw-lookup
-/// count rises ⇒ RED; route it ⇒ green.
+/// The allowlist names ALLOWED ACCESSES, not forbidden costumes, so a search
+/// spelling nobody has written yet — `.rfind(`, `.match_indices(`,
+/// `for l in x.split('\n')`, `x[a..b].contains(…)` — is RED by construction.
+///
+/// **Honest scope.** This is the read-site guard. The write-site fix would be a
+/// typed carrier whose only accessors are body-scoped, making raw text
+/// unreachable rather than merely flagged; measured at 115 bindings and ~430
+/// mentions to migrate, it was judged disproportionate for a test harness.
+/// Two residual dodges this cannot see: raw text reaching a consumer through a
+/// struct field or a closure capture rather than a `&str` parameter. Neither
+/// exists today.
+///
+/// SHRINK-ONLY. A row belongs here when the access is genuinely header-immune —
+/// it searches something that is not fixture output, or the predicate already
+/// excludes comment lines, or the needle is a code shape no comment line can
+/// have. Adding a row to silence a new fmt assertion is the wrong move: route it.
+///
+/// **Break-and-verify (four costumes, all RED-verified when this landed):**
+/// `formatted.contains(needle)`; reverting an `fmt_body(&formatted).lines().any(…)`
+/// to `formatted.lines().any(…)`; a `.rposition(` lookup; and a novel
+/// `for line in formatted.split('\n')` loop.
 #[test]
-fn fmt_marker_lookups_go_through_the_body_helper() {
-    /// Raw first-line lookups that are NOT header-shadowable, with the reason.
-    /// Keyed by enclosing fn, since line numbers drift.
-    const ALLOWED: &[(&str, &str)] = &[
-        // Stronger guard: these skip EVERY comment line, not just the header.
-        ("fmt_else_catch_rethrow_no_do_wrap_on_move_tail", "predicate skips all `#` lines"),
-        ("fmt_catch_multi_stmt_no_do_wrap", "predicate skips all `#` lines"),
-        ("fmt_catch_rethrow_single_stmt_no_do_wrap", "predicate skips all `#` lines"),
-        ("fmt_catch_rethrow_single_stmt_terminal_axis", "predicate skips all `#` lines"),
-        ("fmt_sentinel_idx", "predicate skips all `#` lines"),
-        ("code_line", "filters out every `#` line before the find — its own comment records the vacuity trap this class is"),
-        // The marker is conjoined with a CODE-SHAPE predicate that no comment
-        // line can satisfy.
-        ("fmt_trailing_comment_struct_last_no_dedent", "marker conjoined with a code-shape predicate"),
-        ("fmt_trailing_comment_match_else_no_dedent", "marker conjoined with a code-shape predicate"),
-        ("fmt_tail_reserve_narrow_suppressed_half", "matches a code prefix a `#` line cannot have"),
-        ("fmt_tail_reserve_narrow_multiline_item_column", "matches a code prefix a `#` line cannot have"),
-        ("fmt_tail_reserve_exploded_path_close_line_is_unenforced", "matches `]` exactly; a comment line cannot equal it"),
-        // Searches text already stripped of its header by `fill_pack_body`.
-        ("fmt_fill_pack_width_boundary_axis", "searches `fill_pack_body` output, header already removed"),
-        ("fmt_import_group_single_blank", "predicates match `from std.`/`from mylib.` prefixes; a `#` line cannot"),
-        // NOT fixture output: process stdout/stderr, or a non-fmt stream.
-        ("parse_clone_stats", "process stdout"),
-        ("run_one_fixture", "compiler stderr / a zipped diff, not fixture output"),
-        ("self_host_full_program", "compiler stderr / a zipped diff"),
-        ("first_diff_line", "a zipped diff of two outputs"),
-        ("self_host_emit_cc_run", "compiler stderr"),
+fn fmt_raw_text_access_is_routed_or_reasoned() {
+    /// (enclosing fn, method or `[slice]`, why the access is header-immune).
+    const ALLOWED: &[(&str, &str, &str)] = &[
+        // THE SANCTIONED RAW-ACCESS SITE: the helpers themselves. This is the
+        // one place raw text is touched on purpose — the read-site equivalent
+        // of a carrier's single `full_text()` escape.
+        ("fmt_body", "split_inclusive", "the helper's own header skip"),
+        ("fmt_body", "[slice]", "the helper's own header skip"),
+        // Whole-output SHAPE claims: the assertion is about the file's overall
+        // form, not about locating a cell, so the header is part of the subject.
+        ("fmt_comment_only_file_preserved", "trim_end_matches", "a comment-only file — the header IS the subject"),
+        ("fmt_comment_only_file_preserved", "starts_with", "asserts the file does not START with whitespace"),
+        ("fmt_comment_only_live_victim_is_fixed_point", "trim_end_matches", "trailing-newline normalization, whole-file"),
+        ("fmt_suite_layout_form_preservation", "lines", "scans every line for trailing whitespace — whole-file by design"),
+        ("fmt_multiline_arg_indent_pins_continuation_column", "lines", "walks every line to measure continuation columns"),
+        ("fmt_tail_reserve_boundary_matrix", "lines", "measures the width of every line; a header line is a legitimate row"),
+        ("fmt_preserves_noreturn_qualifier", "matches", "counts occurrences across the file; count-neutral to the header"),
+        ("fmt_preserves_noreturn_qualifier", "lines", "counts occurrences across the file"),
+        // Predicate already excludes comment lines.
+        ("fmt_catch_multi_stmt_no_do_wrap", "lines", "predicate skips all `#` lines"),
+        ("fmt_catch_rethrow_single_stmt_no_do_wrap", "lines", "predicate skips all `#` lines"),
+        ("fmt_catch_rethrow_single_stmt_terminal_axis", "lines", "predicate skips all `#` lines"),
+        ("fmt_sentinel_line", "lines", "predicate skips column-0 comment lines, which is exactly the fixture header"),
+        ("fmt_line_after_sentinel", "lines", "indexes off `fmt_sentinel_idx`, which skips the header"),
+        // The needle is a code shape no comment line can have.
+        ("fmt_import_group_single_blank", "lines", "predicates match `from std.`/`from mylib.` prefixes; a `#` line cannot"),
+        ("fmt_preserves_intra_block_blank_lines", "find", "locates `struct Point:`, a code shape"),
+        ("fmt_preserves_intra_block_blank_lines", "[slice]", "slices between two located code shapes"),
+        ("fmt_container_last_interior_comment_stays_inside", "lines", "marker conjoined with an exact indent, which a column-0 header line cannot have"),
+        ("fmt_equip_generic_params_keep_separator", "lines", "exact-line equality against a code header; header prose cannot equal it"),
+        ("fmt_tail_reserve_inline_body_escape_preserves_the_suite_form", "contains", "needle is an indented code window"),
+        ("fmt_tail_reserve_narrow_separator_survives", "contains", "needle is a code window"),
+        ("fmt_tail_reserve_exploded_path_close_line_is_unenforced", "contains", "needle is a multi-line code window; header lines all start `#`"),
+        // Searches text whose header has already been stripped.
+        ("fmt_fill_pack_comma_axis", "contains", "searches `fill_pack_body` output, header already removed"),
+        ("fmt_fill_pack_width_boundary_axis", "contains", "searches `fill_pack_body` output, header already removed"),
+        ("fmt_fill_pack_width_boundary_axis", "lines", "searches `fill_pack_body` output, header already removed"),
+        // Surfaced only once the detector learned to join WRAPPED method
+        // chains — the blind spot that let a routed `.any(…)` be reverted
+        // undetected. Each disposition checked at the site.
+        ("fmt_radix_preserved", "lines", "walks from a located code line; the header cannot satisfy the skip_while"),
+        ("fmt_comment_only_file_preserved", "lines", "counts comment lines in a comment-ONLY file — the header IS the subject"),
+        ("fmt_else_catch_rethrow_no_do_wrap_on_move_tail", "lines", "predicate skips all `#` lines"),
+        ("fmt_one_tuple_type_keeps_comma", "lines", "filters `#` lines OUT to build a code-only view — the header skip, stronger"),
+        ("fmt_preserves_author_parens", "lines", "filters `#` lines OUT to build a code-only view; its own comment records the trap"),
+        ("fmt_trailing_comment_struct_last_no_dedent", "lines", "marker conjoined with a code-shape predicate"),
+        ("fmt_trailing_comment_match_else_no_dedent", "lines", "marker conjoined with a code-shape predicate"),
+        ("fmt_tail_reserve_inline_body_escape_preserves_the_suite_form", "lines", "measures every line's width; a header line is a legitimate row"),
+        ("fmt_tail_reserve_narrow_suppressed_half", "lines", "matches a code prefix a `#` line cannot have"),
+        ("fmt_tail_reserve_narrow_multiline_item_column", "lines", "matches a code prefix a `#` line cannot have"),
+        ("fmt_tail_reserve_exploded_path_close_line_is_unenforced", "lines", "matches `]` exactly; a comment line cannot equal it"),
+        ("fmt_prerender_column_binary_chain_stays_in_budget", "lines", "measures every line's width; a header line is a legitimate row"),
+        ("fmt_fill_suffix_overrun_stays_in_budget", "lines", "measures every line's width; a header line is a legitimate row"),
+        // The reasoned INAPPLICABLE case: its cells ARE top-level comments, so
+        // its cells and the header are the same region.
+        ("fmt_comment_adjacent_blank_lines", "contains", "cells ARE top-level comment adjacency — stripping the header strips the subject"),
     ];
-    /// Every raw lookup must be one of the rows above.
-    const EXPECTED_RAW: usize = 20;
 
     let content =
         fs::read_to_string("tests/integration.rs").expect("cannot read tests/integration.rs");
     let lines: Vec<&str> = content.lines().collect();
 
-    let mut current = String::from("<file scope>");
-    let mut raw: Vec<(usize, String)> = Vec::new();
-    for (i, line) in lines.iter().enumerate() {
-        let t = line.trim_start();
+    // fn boundaries
+    let mut bounds: Vec<(String, usize)> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        let t = l.trim_start();
         if let Some(rest) = t.strip_prefix("fn ").or_else(|| t.strip_prefix("pub fn ")) {
-            current = rest.split(['(', '<']).next().unwrap_or("?").to_string();
+            bounds.push((rest.split(['(', '<']).next().unwrap_or("?").to_string(), i));
         }
-        if t.starts_with("//") {
+    }
+    let span = |k: usize| -> (usize, usize) {
+        (bounds[k].1, bounds.get(k + 1).map_or(lines.len(), |b| b.1))
+    };
+    const FMT_SOURCES: [&str; 4] = [
+        "format_source_infallible",
+        "tail_reserve_format",
+        "fill_pack_body",
+        "format_source_result",
+    ];
+    let ident_at = |l: &str, at: usize| -> bool {
+        l[..at].chars().next_back().is_none_or(|c| !c.is_alphanumeric() && c != '_')
+    };
+
+    // (1) formatted-text bindings per fn, in fns that touch a fixture.
+    let mut binds: Vec<(usize, Vec<String>)> = Vec::new();
+    for k in 0..bounds.len() {
+        let (i, end) = span(k);
+        let body = lines[i..end].join("\n");
+        if !(body.contains("tests/fixtures/")
+            || body.contains("fill_pack_body(")
+            || body.contains("tail_reserve_format("))
+        {
             continue;
         }
-        if !(t.contains(".find(") || t.contains(".position(")) {
-            continue;
+        let mut b: Vec<String> = Vec::new();
+        for j in i..end {
+            let t = lines[j].trim_start();
+            let Some(rest) = t.strip_prefix("let ") else { continue };
+            let rest = rest.strip_prefix("mut ").unwrap_or(rest);
+            let Some(name) = rest.split([':', ' ', '=']).next() else { continue };
+            if name.is_empty() || !name.chars().all(|c| c.is_lowercase() || c == '_' || c.is_numeric()) {
+                continue;
+            }
+            let init = lines[j..(j + 2).min(end)].join(" ");
+            if FMT_SOURCES.iter().any(|f| init.contains(f)) && !b.iter().any(|x| x == name) {
+                b.push(name.to_string());
+            }
         }
-        // A LINE-WISE lookup: the receiver is an iterator over lines, not a
-        // single line. `line.find('"')` is a substring search INSIDE one line
-        // and cannot be shadowed by anything.
-        if t.contains("line.find(") || t.contains("l.find(") || t.contains("s.find(") {
-            continue;
+        if !b.is_empty() {
+            binds.push((k, b));
         }
-        let window = lines[i.saturating_sub(3)..=i].join("\n");
-        if !window.contains(".lines()") && !window.contains("lines.iter()") {
-            continue;
-        }
-        // Already routed: the text being searched came from `fmt_body`.
-        if window.contains("fmt_body") {
-            continue;
-        }
-        raw.push((i + 1, current.clone()));
     }
 
-    for (ln, f) in &raw {
-        println!("raw marker lookup: tests/integration.rs:{ln}  fn {f}");
+    // (2) a fn CALLED with a formatted binding consumes raw text; (3) its
+    // `&str` params are raw text too.
+    let mut consumers: Vec<String> = Vec::new();
+    for (k, b) in &binds {
+        let (i, end) = span(*k);
+        for j in i..end {
+            for name in b {
+                let pat = format!("({name}");
+                let pat_ref = format!("(&{name}");
+                for p in [&pat, &pat_ref] {
+                    if let Some(at) = lines[j].find(p.as_str()) {
+                        let head = &lines[j][..at];
+                        if let Some(callee) = head
+                            .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+                            .next()
+                            .filter(|c| !c.is_empty())
+                        {
+                            if !["assert", "panic", "format", "println", "Some", "Ok", "if", "for"]
+                                .contains(&callee)
+                                && !consumers.iter().any(|x| x == callee)
+                            {
+                                consumers.push(callee.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for k in 0..bounds.len() {
+        if !consumers.contains(&bounds[k].0) {
+            continue;
+        }
+        let (i, end) = span(k);
+        let sig = lines[i..(i + 6).min(end)].join(" ");
+        let mut params: Vec<String> = Vec::new();
+        for seg in sig.split(',') {
+            if let Some((nm, ty)) = seg.split_once(':') {
+                // `&str` and `&'a str` alike — the lifetime is noise here.
+                if ty.contains('&') && ty.contains("str") {
+                    // The name is whatever follows the last `(` (the first
+                    // parameter carries the `fn name(` prefix) or the segment
+                    // itself for later parameters.
+                    let nm = nm.rsplit('(').next().unwrap_or(nm).trim();
+                    if !nm.is_empty() && nm.chars().all(|c| c.is_lowercase() || c == '_') {
+                        params.push(nm.to_string());
+                    }
+                }
+            }
+        }
+        if !params.is_empty() {
+            match binds.iter_mut().find(|(bk, _)| *bk == k) {
+                Some((_, b)) => b.extend(params),
+                None => binds.push((k, params)),
+            }
+        }
     }
 
-    let unlisted: Vec<String> = raw
+    // (4) every METHOD CALL and SLICE on raw text.
+    //
+    // ⚠ Method chains WRAP. `formatted\n    .lines()\n    .any(…)` puts the
+    // receiver and the call on different source lines, and a line-local scan
+    // sees neither — which is exactly how the sharpest plant (reverting a
+    // routed `.any(…)` back to raw) slipped past the first version of this
+    // detector. Each line is therefore joined with the continuation lines that
+    // follow it, so the chain is one string.
+    let logical = |j: usize, end: usize| -> String {
+        let mut out = lines[j].to_string();
+        let mut k = j + 1;
+        while k < end && lines[k].trim_start().starts_with('.') {
+            out.push_str(lines[k].trim_start());
+            k += 1;
+        }
+        out
+    };
+    let mut flagged: Vec<(usize, String, String)> = Vec::new();
+    for (k, b) in &binds {
+        let (i, end) = span(*k);
+        let fname = bounds[*k].0.clone();
+        for j in i..end {
+            if lines[j].trim_start().starts_with('.') {
+                continue; // already folded into the line above
+            }
+            let joined = logical(j, end);
+            let l: &str = &joined;
+            if l.trim_start().starts_with("//") {
+                continue;
+            }
+            for name in b {
+                let mut from = 0usize;
+                while let Some(rel) = l[from..].find(name.as_str()) {
+                    let at = from + rel;
+                    from = at + name.len();
+                    if !ident_at(l, at) {
+                        continue;
+                    }
+                    let rest = &l[at + name.len()..];
+                    if let Some(tail) = rest.strip_prefix('.') {
+                        let m: String =
+                            tail.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                        if !m.is_empty() && tail[m.len()..].starts_with('(') {
+                            flagged.push((j + 1, fname.clone(), m));
+                        }
+                    } else if rest.starts_with('[') {
+                        flagged.push((j + 1, fname.clone(), "[slice]".to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    for (ln, f, m) in &flagged {
+        println!("raw text access: tests/integration.rs:{ln}  fn {f}  .{m}");
+    }
+
+    let unlisted: Vec<String> = flagged
         .iter()
-        .filter(|(_, f)| !ALLOWED.iter().any(|(a, _)| a == f))
-        .map(|(ln, f)| format!("  tests/integration.rs:{ln} (fn {f})"))
+        .filter(|(_, f, m)| !ALLOWED.iter().any(|(af, am, _)| af == f && am == m))
+        .map(|(ln, f, m)| format!("  tests/integration.rs:{ln} (fn {f}) — `.{m}`"))
         .collect();
     assert!(
         unlisted.is_empty(),
-        "raw first-line marker lookup(s) outside the body helper:\n{}\n\n\
-         A fmt fixture's own HEADER is part of the formatted output, so a lookup \
-         that searches the whole output can be shadowed by a header line — \
-         silently, in both directions. Route it through `fmt_body_line_with` / \
-         `fmt_body_contains`. Only add an ALLOWED row when the text searched is \
-         NOT fixture output, or the predicate already excludes comment lines.",
+        "raw access to fixture-derived formatter output:\n{}\n\n\
+         A fmt fixture's own HEADER is part of the formatted output, so an \
+         assertion that touches the raw text can be shadowed by a header line \
+         — silently, in both directions. Route it through `fmt_body` / \
+         `fmt_body_line_with` / `fmt_body_contains`. Only add an ALLOWED row \
+         when the access is genuinely header-immune, and say why.",
         unlisted.join("\n")
     );
 
+    const EXPECTED_RAW_ACCESSES: usize = 53;
     assert_eq!(
-        raw.len(),
-        EXPECTED_RAW,
-        "the raw marker-lookup count moved ({} vs {EXPECTED_RAW}). UP means a \
-         new lookup bypassed the helper; DOWN is good and should be ratcheted \
-         here (this list is shrink-only). Regenerate with:\n  \
-         cargo test --test lints fmt_marker_lookups_go_through_the_body_helper -- --nocapture",
-        raw.len()
+        flagged.len(),
+        EXPECTED_RAW_ACCESSES,
+        "the raw-access count moved ({} vs {EXPECTED_RAW_ACCESSES}). UP means a \
+         new assertion touches raw text; DOWN is good and should be ratcheted \
+         here (shrink-only). Regenerate with:\n  \
+         cargo test --test lints fmt_raw_text_access_is_routed_or_reasoned -- --nocapture",
+        flagged.len()
     );
 
-    let dead: Vec<&str> = ALLOWED
+    let dead: Vec<String> = ALLOWED
         .iter()
-        .map(|(f, _)| *f)
-        .filter(|a| !raw.iter().any(|(_, f)| f == a))
+        .filter(|(af, am, _)| !flagged.iter().any(|(_, f, m)| f == af && m == am))
+        .map(|(af, am, _)| format!("{af}/.{am}"))
         .collect();
     assert!(
         dead.is_empty(),
-        "allowlist row(s) that no longer excuse anything: {dead:?} — the lookup \
+        "allowlist row(s) that no longer excuse anything: {dead:?} — the access \
          was routed or deleted. DELETE the row; the list is shrink-only."
     );
 }
@@ -12614,8 +12794,27 @@ fn parser_header_start_wiring_census() {
     ];
 
     let mut found: Vec<(String, String, usize)> = Vec::new();
-    for file in ["src/parser/expr.rs", "src/parser/mod.rs", "src/parser/stmt.rs"] {
-        let content = fs::read_to_string(file).unwrap_or_else(|e| panic!("cannot read {file}: {e}"));
+    // READ_DIR, not a hardcoded list. The list was `expr.rs`/`mod.rs`/`stmt.rs`
+    // — 3 of `src/parser/`'s 9 files — which made this lint's own claim ("a NEW
+    // suite cannot join without showing up") true only for the current file
+    // layout. A wiring call planted in `pattern.rs` left the whole suite green.
+    // Same "the enumeration is a selection" shape this lint exists to stop, one
+    // level up.
+    let mut parser_files: Vec<String> = fs::read_dir("src/parser")
+        .expect("cannot read src/parser")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    parser_files.sort();
+    assert!(
+        parser_files.len() >= 8,
+        "only {} file(s) found under src/parser — the scan is reading nothing.",
+        parser_files.len()
+    );
+    for file in &parser_files {
+        let content =
+            fs::read_to_string(file.as_str()).unwrap_or_else(|e| panic!("cannot read {file}: {e}"));
         let mut current = String::from("<file scope>");
         let mut counts: Vec<(String, usize)> = Vec::new();
         for line in content.lines() {
@@ -12656,7 +12855,7 @@ fn parser_header_start_wiring_census() {
             }
         }
         for (f, c) in merged {
-            found.push((file.to_string(), f, c));
+            found.push((file.clone(), f, c));
         }
     }
 
@@ -14545,9 +14744,43 @@ fn parser_suite_layout_writer_census() {
         ("src/parser/expr.rs", 0, 3, 3, "throw wrap · return wrap · closure body wrap"),
         // `Block::synthetic` — no author spelling and no author header.
         ("src/parser/ast.rs", 1, 0, 1, "Block::synthetic"),
+        // Not a writer: the probe collector COPIES the field into its own
+        // struct, which the scan cannot tell from an init. Kept as an
+        // explicit row so the count is decided rather than excused.
+        ("src/parser/tests.rs", 0, 0, 1, "BlockProbe field copy in the probe collector"),
     ];
 
-    for (path, want_next, want_inline, want_header, rationale) in CENSUS {
+    // EVERY `src/parser/*.rs`, read from the directory — a file absent from
+    // CENSUS must have ZERO writes, which is what makes the table total. The
+    // hardcoded 4-file list this replaces let a raw `Block` literal planted in
+    // `pattern.rs` pass the whole suite: the same "the enumeration is a
+    // selection" shape the censuses exist to stop, one level up.
+    let mut parser_files: Vec<String> = fs::read_dir("src/parser")
+        .expect("cannot read src/parser")
+        .map(|e| e.expect("dir entry").path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rs"))
+        .map(|p| p.to_string_lossy().replace('\\', "/"))
+        .collect();
+    parser_files.sort();
+    assert!(
+        parser_files.len() >= 8,
+        "only {} file(s) found under src/parser — the scan is reading nothing.",
+        parser_files.len()
+    );
+    let rows: Vec<(&str, usize, usize, usize, &str)> = parser_files
+        .iter()
+        .map(|f| {
+            CENSUS
+                .iter()
+                .find(|(p, ..)| p == f)
+                .copied()
+                // A file with no CENSUS row is asserted to write NOTHING, so a
+                // new writer anywhere under src/parser trips this.
+                .unwrap_or((f.as_str(), 0, 0, 0, "no row: this file writes neither field"))
+        })
+        .collect();
+
+    for (path, want_next, want_inline, want_header, rationale) in &rows {
         let content = fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
         // Count WRITES only — a `SuiteLayout::X` in a `==` comparison is a
         // read, and the parser has none, but be explicit rather than lucky.
