@@ -1825,7 +1825,11 @@ const BLOCK_PROBES: &[(&str, &str)] = &[
     ("rethrow", "int f(int x) throws String:\n    int a = fallible(x) rethrow (String e):\n        print(1)\n        e\n    return a\n"),
     ("meta if / elif / else", "void f[T]():\n    meta if bitwidth(T) > 4096:\n        print(1)\n    elif bitwidth(T) > 2048:\n        print(2)\n    else:\n        print(3)\n"),
     ("meta for", "void f():\n    meta for i in 0..2:\n        print(i)\n"),
-    ("meta while", "void f[T]():\n    meta while bitwidth(T) > 128:\n        print(1)\n"),
+    // WRAPPED, and it has to be: an unwrapped `meta while cond:` has its colon
+    // on the `meta` line, so a colon-seeded `header_start` has the same indent
+    // as the right answer and the probe cannot fail. Wrapping is what separates
+    // the construct's FIRST line from the colon's.
+    ("meta while, WRAPPED condition", "void f[T]():\n    meta while (bitwidth(T) >\n            128):\n        print(1)\n"),
     ("meta match arm, WRAPPED case expr", "void f[T]():\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(1)\n"),
     ("meta match + else", "void f[T]():\n    meta match typename(T):\n        case \"int\":\n            print(1)\n        else:\n            print(0)\n"),
     ("test body", "test \"t\":\n    print(1)\n"),

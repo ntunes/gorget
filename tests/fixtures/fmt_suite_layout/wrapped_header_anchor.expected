@@ -22,12 +22,18 @@
 #   row 7 (function bodies)                  — wrapped fn signature
 #   row 8 (meta-match arm bodies)            — wrapped `meta match` case arm
 #   row 1 (catch/rethrow bodies)             — wrapped `catch` header
+#   row 9 (`meta while`)                     — wrapped `meta while` condition
 #   the bracketed CONTAINER header           — enum/trait/equip cells live in
 #                                              `header_colon_anchor_bracketed.gg`
-# Row 9 (`meta while`) has its DISCRIMINATOR in the UNWRAPPED `meta while` cell
-# of `orphan_close_routed_kinds.gg`: that parser's block span starts on the
-# BODY line, so the unwrapped spelling already discriminates and no wrapped one
-# is needed.
+#
+# ⚠ ROW 9 NEEDS ITS OWN WRAPPED CELL, and for a while it did not have one. The
+# `meta while` parser used to take its block span AFTER consuming the colon, so
+# `Block.span.start` landed on the BODY's own line and even the UNWRAPPED cell
+# in `orphan_close_routed_kinds.gg` discriminated. Hoisting that span onto the
+# colon (parser hygiene, output-neutral) removed the accident: an unwrapped
+# `meta while cond:` has its colon on the `meta` line, so a colon-seeded anchor
+# now has the same indent as row 9's value and NO unwrapped cell can go red.
+# Wrapping is what separates them again.
 #
 # ⚠ Two authoring traps this file works around: a wrapped bare `if` condition
 # is a 10-error parse failure, so the PARENTHESIZED form is used; and the
@@ -38,9 +44,14 @@
 #   * value `header_start` from the block's own `span.start` (the colon):
 #       wrapped-while tail  8 -> 4     wrapped-if tail       8 -> 4
 #       wrapped-elif tail   8 -> 4     wrapped-fn tail       4 -> 0
-#       wrapped meta-elif   8 -> 4     wrapped meta-while*   8 -> 4
-#     (* the UNWRAPPED `meta while` cell in `orphan_close_routed_kinds.gg` —
-#      row 9's discriminator, RED under the same break)
+#       wrapped meta-elif   8 -> 4     wrapped meta-while    8 -> 4
+#       wrapped meta-match case tail  12 -> 8
+#     Every one of those cells is in THIS file; the unwrapped siblings in
+#     `orphan_close_routed_kinds.gg` stay green under this break, which is why
+#     they are routed-kind cells and not discriminators.
+#   * ROW 9: unwire meta-while's `header_start` (pass the colon-derived block
+#       span instead of the `meta` keyword) — wrapped meta-while tail 8 -> 4,
+#       and nothing else moves
 #   * ROW 1: seed the catch/rethrow body from the colon instead of the LHS's
 #       first line —              wrapped-catch tail  8 -> 4
 #   * ROW 6: capture the `elif` clause span AFTER parsing the condition —
@@ -65,6 +76,11 @@ int wrapped_signature(int a_long_parameter_name, int another_long_parameter_name
     print(a_long_parameter_name)
     return another_long_parameter_name
     # tail in a wrapped-signature body
+
+void wrapped_meta_while[T]():
+    meta while bitwidth(T) > 128:
+        print("impossible")
+        # tail in a wrapped meta-while body
 
 void wrapped_meta_clauses[T]():
     meta if bitwidth(T) > 4096:
@@ -93,6 +109,7 @@ int wrapped_catch(int x):
 
 void main():
     wrapped_while(1)
+    wrapped_meta_while[int]()
     wrapped_if(1)
     print(wrapped_signature(1, 2))
     wrapped_meta_clauses[int]()

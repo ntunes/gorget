@@ -9,11 +9,12 @@
 #        `with … as …:` · `catch (…)` · `rethrow (…)` · statement `meta for` ·
 #        `meta while` · `meta type f()`
 #
-# ⚠ The `meta while` cell is the DISCRIMINATOR for the `Block::header_start`
-# field's meta-while row: that parser takes its block span AFTER consuming the
-# colon, so `Block.span.start` is the NEWLINE on the BODY's own line — a
-# header-indent test against it claims nothing. The cell stays RED with the
-# flush wired but the field unwired.
+# ⚠ The `meta while` cell here is a ROUTED-KIND cell and nothing more. It does
+# NOT discriminate `Block::header_start`'s meta-while wiring: an unwrapped
+# `meta while cond:` has its colon on the `meta` line, so a colon-seeded anchor
+# has the same indent as the right answer and this cell stays green under that
+# break. The discriminating cell is the WRAPPED one, in
+# `wrapped_header_anchor.gg`.
 #
 # RED, observed on the pre-fix build: every `# tail in …` marker dedented one
 # level out of its block (or to column 0 where the block was the function's
