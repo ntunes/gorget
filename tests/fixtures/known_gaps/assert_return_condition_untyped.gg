@@ -1,0 +1,14 @@
+# KNOWN GAP (filed 2026-08-15 from the R42 Track-D brief-review pass 10,
+# orchestrator-verified): the postcondition value `return` is UNTYPED in the
+# typechecker — `assert return >= "hello"` inside an `int` function passes
+# `gg check` ("OK: no semantic errors"). The comparison int >= String should
+# be a type error; the postcondition's `return` carries the enclosing
+# function's return type by intent.
+# INTENDED: check-time reject (type mismatch in the postcondition).
+# Wired test: assert_return_condition_typechecks (tests/integration.rs, #[ignore]d).
+int f(int a):
+    assert return >= "hello"
+    return a
+
+void main():
+    print(f(3))
