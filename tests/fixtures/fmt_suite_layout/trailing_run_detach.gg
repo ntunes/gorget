@@ -11,9 +11,14 @@
 #           the NEXT member — so "inherited by nested envs" documented `depth`.
 #   cellB — a run on the LAST member. No next member to lead, so the lines fell
 #           through to the module flush at COLUMN 0, escaping the struct.
-#   cellA-last — the member BELOW a run still shares the alignment group's `#`
-#           column: continuation lines carry no trailing entry of their own, so
-#           group adjacency is measured from the run's LAST line.
+#   the member BELOW a run (the third assertion) still shares the alignment
+#           group's `#` column: continuation lines carry no trailing entry of
+#           their own, so group adjacency is measured from the run's LAST line.
+#
+# ⚠ No line of this header may SPELL one of the cell markers below. The
+# assertions locate their cells by searching for the marker text, and the first
+# line that contains it wins — a header mention at column 0 is found first and
+# every column comparison then reads 0.
 #
 # RED, observed on the pre-fix build: in the first struct both continuation
 # lines came out at MEMBER indent (4) above `int depth`, and `int depth`'s own

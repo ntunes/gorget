@@ -16,8 +16,12 @@
 # faces are asserted: a container-only fix cannot close this by halves.
 #
 # RED, observed on the pre-fix build: all five container markers at column 0,
-# `# trailing in fn body` at column 0, and the if/while/for markers at indent 4
+# the function-body marker at column 0, and the if/while/for markers at indent 4
 # instead of 8.
+#
+# ⚠ No line of this header may SPELL one of the markers below. The assertions
+# locate their cells by marker text, and a header mention at column 0 is found
+# before the real cell.
 #
 # The property test `fmt_container_last_interior_comment_stays_inside` asserts
 # the indent of each cell by name; this file's own harness row asserts the
