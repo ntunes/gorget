@@ -1,0 +1,27 @@
+# R42 tail-reserve boundary cell.
+#
+# B6 · expression-position `if` — a MULTI-RENDER header: each branch's
+# tail is the NEXT clause keyword plus that clause's leading text.
+#
+# BOUNDARY PAIR. The two declarations below are the SAME shape one column
+# apart: the first is exactly 120 columns wide with its caller-emitted
+# suffix counted, the second exactly 121.
+#
+# RED, recorded against the PRE-FIX binary built from this track's own
+# base commit: the 121 declaration formats to a SINGLE 121-column line —
+# the packer measured its list without the caller's suffix.
+#
+# GREEN: the 121 declaration breaks and nothing in this file exceeds 120,
+# AND the 120 twin still formats FLAT at exactly 120 columns. That second
+# half is the OVER-reserve guard — the one a careless net omits — and it
+# is green on both binaries by construction, so its own red comes from
+# breaking the mechanism: add 1 to the reserve this cell installs and the
+# 120 half breaks.
+
+bool probe_pred(int a, int b): true
+
+void main():
+    int r_at120_ = if probe_pred(11111, nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx): 1111111 else: 2222222
+
+void main():
+    int r_at121_ = if probe_pred(11111, nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx): 1111111 else: 2222222

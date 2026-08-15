@@ -4886,19 +4886,32 @@ impl Formatter {
                 });
                 self.format_postfix_receiver(object, index_tail);
                 self.emitter.write("[");
+                // Family O — the INDEX EXPRESSION's own tail: the `]` this arm
+                // writes below PLUS whatever the enclosing statement still
+                // writes (` = 7`, ` += 7`), which arrives through the ambient
+                // reserve because `with_tail_reserve` is additive. Charging
+                // only the receiver (family P, just above) leaves
+                // `v[<packed call>] = 7` overrunning by exactly the
+                // statement operator — measured, and its own §4 cell.
                 if let Expr::Range { start, end, inclusive: false, colon: true } = &index.node {
                     // D22 slice: `[a:b]`, `[a:]`, `[:b]`, `[:]`. Endpoints
                     // are inside `[...]` — precedence resets, so no wrap
                     // logic needed for the operands.
                     if let Some(s) = start {
-                        self.format_expr(s);
+                        let slice_tail = 1 + self.measured_reserve(|f| {
+                            f.emitter.write(":");
+                            if let Some(e) = end {
+                                f.format_expr(e);
+                            }
+                        });
+                        self.with_tail_reserve(slice_tail, |f| f.format_expr(s));
                     }
                     self.emitter.write(":");
                     if let Some(e) = end {
-                        self.format_expr(e);
+                        self.with_tail_reserve(1, |f| f.format_expr(e));
                     }
                 } else {
-                    self.format_expr(index);
+                    self.with_tail_reserve(1, |f| f.format_expr(index));
                 }
                 self.emitter.write("]");
             }
@@ -5022,9 +5035,16 @@ impl Formatter {
                 // `": "` / `" elif "` / `" else: "` plus the following
                 // render's own leading unbreakable text.
                 self.emitter.write("if ");
+                // Each measurement runs to the END of the clause chain, never
+                // just to the next branch: the width-0 probe truncates at the
+                // first REAL break opportunity, and when a branch is an atom
+                // (`1111111`) there is none, so the boundary carries on into
+                // ` else: `. Stopping at the next branch under-reserved a
+                // measured 121-char line.
                 let cond_tail = self.measured_reserve(|s| {
                     s.emitter.write(": ");
                     s.format_expr(then_branch);
+                    s.format_expr_if_tail(elif_branches, else_branch.as_deref());
                 });
                 self.with_tail_reserve(cond_tail, |s| s.format_expr(condition));
                 self.emitter.write(": ");
@@ -5038,6 +5058,7 @@ impl Formatter {
                     let elif_cond_tail = self.measured_reserve(|s| {
                         s.emitter.write(": ");
                         s.format_expr(body);
+                        s.format_expr_if_tail(rest, else_branch.as_deref());
                     });
                     self.with_tail_reserve(elif_cond_tail, |s| s.format_expr(cond));
                     self.emitter.write(": ");

@@ -1,0 +1,22 @@
+# R42 tail-reserve boundary cell.
+#
+# POS · the TWO DOCTRINAL escapes are left alone. Neither is this track's to
+# close, and a future over-eager width fix that tried would trip here.
+#
+#   * `from … import` — the one undelimited list. Bare names on continuation
+#     lines would re-parse as new statements in indentation-based syntax, so
+#     the list is width-EXEMPT until the parenthesized form lands. The line
+#     below is 129 columns and MUST stay one line.
+#   * an unbreakable ATOM too wide to fit alone at its indent. No break
+#     anywhere can narrow the 152-column line below, and spending one would
+#     only make it two lines instead of one.
+#
+# POS cell: no pre-fix RED, because nothing here is supposed to change. Its red
+# is a break-and-watch — teach the import emitter to wrap, or delete
+# `break-only-if-it-NARROWS`, and the corresponding half goes red.
+
+from std.collections import AlphaTypeName, BetaTypeName, GammaTypeName, DeltaTypeName, EpsilonTypeName, ZetaTypeName, EtaTypeName
+
+void main():
+    String atom = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    print(atom)

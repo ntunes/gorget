@@ -1,0 +1,27 @@
+# R42 tail-reserve boundary cell.
+#
+# break-only-if-it-NARROWS · the MULTI-LINE ITEM carve-out. A one-item list
+# whose item cannot render flat ALWAYS breaks, even when the suppression
+# condition otherwise holds.
+#
+# `    f(` puts the packer at column 6 with a continuation column of 8, so the
+# geometric half of the suppression predicate is satisfied. But the item was
+# PRE-RENDERED assuming the continuation column: splicing it at column 6 would
+# put its own continuation lines two columns left of where their indentation
+# was computed for. The assertion is therefore about the COLUMN, not about
+# width — the result stays idempotent and re-parses either way, which is
+# exactly why nothing else would catch it.
+#
+# There is no pre-fix RED (the carve-out preserves the pre-existing shape). Its
+# red is a break-and-watch: delete the `flat.is_some()` clause from the
+# suppression predicate in `render_fill` and rebuild; `g(`'s arguments splice
+# at column 6 while their continuation stays at 12, and the assertion below
+# that the inner call opens at column 8 fails.
+
+int g(int a, int b, int c, int d, int e, int f, int h, int i, int j, int k, int l, int m, int n, int o): 0
+
+void f(int x):
+    print(x)
+
+void main():
+    f(g(111111111, 222222222, 333333333, 444444444, 555555555, 666666666, 777777777, 888888888, 999999999, 101010101, 111111111, 121212121, 131313131, 141414141, 151515151))

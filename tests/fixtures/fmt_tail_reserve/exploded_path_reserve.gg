@@ -1,0 +1,34 @@
+# R42 tail-reserve boundary cell.
+#
+# The EXPLODED comment-bearing path. An interior comment routes this list away
+# from the fill packer and into the hand-rolled one-element-per-line emitter,
+# which writes a `,` after EVERY element — including the last. Each element is
+# therefore rendered under an EXACT reserve of 1: exact, not additive, because
+# a live caller reserve belongs to the CLOSE line and charging it here would
+# over-reserve every element line by ~25 columns.
+#
+# BOUNDARY PAIR: the first entry is 119 columns plus its comma = exactly 120
+# and stays flat; the second is 120 plus its comma = 121 and breaks.
+#
+# RED, recorded against the PRE-FIX binary built from this track's own base
+# commit: the second entry formats to a single 121-column line.
+#
+# TWO residuals, named rather than implied — this path is a hand-rolled loop
+# with no `Doc::Fill` and no fit test anywhere, so NOTHING enforces a width on:
+#   * the CLOSE line (`    ]` below, 5 columns) plus whatever the caller writes
+#     after it. Outer indent + close + suffix is short in every real shape; a
+#     hypothetical overrun there is out of scope and is not enforced.
+#   * a trailing comment on an element line (`1,    # one`) — the comment's
+#     width is never charged, by the same never-reflow-prose doctrine that
+#     exempts standalone comments.
+
+int probe_entry(int a, int b, int c, int d, int e): 0
+
+void main():
+    Vector[int] table = [
+        # a leading interior comment routes this list to the exploded path
+        probe_entry(1111111111, 2222222222, 3333333333, 4444444444, probe_entry(11111, 22222, 33333, 44444, 555555555)),
+        probe_entry(1111111111, 2222222222, 3333333333, 4444444444, probe_entry(11111, 22222, 33333, 44444, 5555555559)),
+        probe_entry(1, 2, 3, 4, 5),
+    ]
+    print(table.len())

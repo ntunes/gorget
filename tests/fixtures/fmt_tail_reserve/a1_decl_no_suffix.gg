@@ -1,0 +1,12 @@
+# R42 tail-reserve boundary cell.
+#
+# A1 POS · NO suffix at all (a trait-method DECLARATION). The 120 half
+# guards over-reserving: with no suffix there is nothing to charge, so an
+# exactly-120 signature must stay flat.
+#
+# POS cell: there is no pre-fix RED, because nothing here is supposed to
+# change. It guards the OVER-reserve direction — add 1 to the reserve and
+# this cell goes red.
+
+trait ProbeTrait:
+    int at120_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx(int aaa, int bbb)

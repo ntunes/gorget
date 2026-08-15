@@ -1,0 +1,23 @@
+# R42 tail-reserve boundary cell.
+#
+# break-only-if-it-NARROWS · the SUPPRESSED half. A ONE-ITEM list whose open
+# delimiter sits at or LEFT of its own continuation column: `    f(` puts the
+# packer at column 6 while the continuation column is 8. Breaking would move
+# the item to the RIGHT, buying a second line that is WIDER than the one it
+# replaced — the break narrows nothing, so it is not spent.
+#
+# ZERO corpus instances: this cell's evidence is this fixture.
+#
+# RED, recorded against the PRE-FIX binary built from this track's own base
+# commit: it emits TWO lines — `    f(` (6) plus a 147-column continuation.
+# GREEN: ONE line of 145 columns. Still over budget (the string is an
+# unbreakable atom and no formatter can fix that), but strictly narrower than
+# the shape the break produced, and one line instead of two.
+#
+# The overrun below is the DOCTRINAL unbreakable-atom escape, not a defect.
+
+void f(String s):
+    print(s)
+
+void main():
+    f("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
