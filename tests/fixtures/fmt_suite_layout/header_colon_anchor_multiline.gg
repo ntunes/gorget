@@ -12,10 +12,14 @@
 # on the header's LAST source line whatever the header's shape.
 #
 # RED, observed on the pre-fix build: the comment was emitted on its own line
-# at body indent, above `T x`, instead of staying on the rejoined
-# `struct S[T]:` header line. (The marker text is deliberately not quoted here:
-# the assertion locates its cell by sentinel, and a quote in this header would
-# be found first.)
+# at body indent, above the struct's only field, instead of staying on the
+# rejoined header line.
+#
+# ⚠ NO LINE OF THIS HEADER MAY SPELL the cell's marker, or the rejoined header
+# text the assertion checks for. The test finds its cell by searching the
+# formatted output for the marker and taking the FIRST match, so a header
+# mention shadows the real cell — and a header comment line can never satisfy
+# the positional half, so the test would be stuck RED.
 struct S[
     T
 ]:  # multi-line header trailing

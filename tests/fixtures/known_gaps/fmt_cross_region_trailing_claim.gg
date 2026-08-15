@@ -21,15 +21,21 @@
 # is the kind that gets ratified by accident).
 #
 # INTENDED (asserted by the `#[ignore]`d
-# `known_gap_fmt_cross_region_trailing_claim`): the comment stays with the CALL,
-# after `](6)`, and the last type argument keeps no comment of its own.
+# `known_gap_fmt_cross_region_trailing_claim`): the call's own comment stays with
+# the CALL, on the line that closes it, and the last type argument keeps no
+# comment of its own.
 #
-# OBSERVED (both before and after the R42 comment-attachment work):
-#     auto b = wrap[
-#         int,
-#         # SEN gb-interior
-#         String,    # SEN B      <- documents the TYPE ARGUMENT now
-#     ](6)
+# OBSERVED (both before and after the R42 comment-attachment work): the call's
+# comment is re-emitted as a trailing comment on the last TYPE ARGUMENT, one
+# line above the line that closes the call, and the closing line comes back
+# bare.
+#
+# ⚠ NO LINE OF THIS HEADER MAY SPELL A CELL MARKER, or the closing-call text
+# the assertion looks for. The test locates its cell by searching the formatted
+# output for the marker and taking the FIRST line that matches, so a header
+# mention is found first — and a header comment line can never contain the
+# closing text, so the test would stay RED even after the gap is fixed. The two
+# markers and the closing text are therefore described here, never quoted.
 
 auto b = wrap[
     int,
