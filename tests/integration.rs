@@ -16423,10 +16423,17 @@ const FMT_TAIL_RESERVE_FIXTURES: &[(&str, &[&str])] = &[
     ("c_nested_close_collection.gg", &[]),
     ("exploded_path_reserve.gg", &[]),
     // C10's two `Doc::Group`-clothed method-chain installs. The pair is
-    // deliberate: the first pins the GROUP-level consumption of the caller's
-    // reserve, the second the PER-SEGMENT one, and neither cell can see the
-    // other's value. `p_postfix_chained.gg` is NOT this carrier — it is a
-    // FieldAccess chain and never reaches `format_method_chain`.
+    // deliberate and each cell was RED-verified against a build with ONLY its
+    // own carrier neutralised: the first pins the GROUP-level consumption
+    // (`write_doc` on the chain's `Doc::Group`), the second the PER-SEGMENT
+    // one (the last segment's inherited reserve), and neither cell can see
+    // the other's value — each stays GREEN under the other's neutralisation,
+    // so one cell does NOT close both halves. Both keep their `at120_`/
+    // `at121_` markers on the CHAIN, never in the function name: a marker in
+    // the signature would put both harness assertions on the `format_function`
+    // header line, i.e. on family A1's carrier, leaving the chain unmeasured.
+    // `p_postfix_chained.gg` is NOT this carrier — it is a FieldAccess chain
+    // and never reaches `format_method_chain`.
     ("c10_method_chain.gg", &[]),
     ("c10_method_chain_segment.gg", &[]),
     // ── The carriers the header census and the discovery sweep found ──

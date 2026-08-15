@@ -321,13 +321,25 @@ tail of its own, and a `tests/lints.rs` ratchet pins that at one. This is how
 leaf before grouping them — the wrapping is decided over the *segments*, while each
 segment is formatted by an ordinary recursive call.
 
-The throwaway formatter is seeded with both the indent level *and* the column its
-output will be spliced at (`element_to_string_at`, `src/formatter/mod.rs:761`). It has
-to be: a sub-render that measured from column 0 would believe it had a whole
-indentation's worth of extra budget, and emit lines that overflow by exactly that
-much once spliced. Seeding makes the assumption self-consistent — an element that
-decides to break becomes multi-line, and a multi-line element is always placed at
-precisely the column it assumed.
+The throwaway formatter is seeded with both the indent level *and* a starting column
+(`element_to_string_at`, `src/formatter/mod.rs:761`). It has to be: a sub-render that
+measured from column 0 would believe it had a whole indentation's worth of extra
+budget, and emit lines that overflow by exactly that much once spliced. The seed it
+is given is the **continuation column**
+(`base_indent * 4`), and it is self-consistent at the two splice positions that land
+there: a broken list's continuation-indented element, and the fill packer's next
+line.
+
+It is *not* self-consistent at a third position, and that gap is filed rather than
+papered over. A `Doc::Group`-clothed carrier's FIRST piece — a binary chain's operand
+zero, a method chain's root — is spliced at the **caller's** current column, because
+nothing in the Doc precedes it. The sub-render still measured from the continuation
+column, so it believes it has the difference in extra budget and can keep a nested
+call flat that should have broken. The repro is
+`tests/fixtures/known_gaps/fmt_prerender_column_binary_chain.gg`, asserted by the
+`#[ignore]`d `fmt_prerender_column_binary_chain_stays_in_budget`; the fix is a
+start-column parameter on the sub-render, not a change to the reserve, which already
+reaches those pieces correctly.
 
 ### The tail reserve
 
@@ -456,10 +468,21 @@ After the walk, `format` runs a single-pass collapse over the whole buffer: any 
 of 3+ consecutive newlines is squeezed to 2 (i.e. at most one blank line)
 (`src/formatter/mod.rs:709-724`), and a trailing newline is guaranteed
 (`src/formatter/mod.rs:725-728`). Blank lines *between* top-level items and between
-trait/equip members are inserted explicitly during the walk via `blank_line`
-(`src/formatter/mod.rs:130`, `:3303`, `:3303`). The trailing-comment aligner runs
-before this collapse (`src/formatter/mod.rs:704`) and is unaffected by it — the
-collapse only removes newlines, never touches a within-line gap.
+trait/equip members are inserted explicitly during the walk, at three CALL sites —
+one per clause of that sentence:
+
+- `format_module`'s top-level item loop calls `blank_line` (`src/formatter/mod.rs:1729`);
+- the trait-member loop calls `blank_line` (`src/formatter/mod.rs:2467`);
+- the equip-member loop calls `blank_line` (`src/formatter/mod.rs:2568`).
+
+Two neighbours are deliberately *not* cited there: `Emitter::blank_line` itself
+(`src/formatter/mod.rs:130`) is the definition, and `blank_line_follows`
+(`src/formatter/mod.rs:3303`) is a comment-flush predicate. Neither is an insertion
+site, so citing either would say nothing about where the walk inserts.
+
+The trailing-comment aligner `align_trailing_comments` runs before this collapse
+(`src/formatter/mod.rs:704`) and is unaffected by it — the collapse only removes
+newlines, never touches a within-line gap.
 
 ### Import sorting
 

@@ -10772,16 +10772,15 @@ fn doc_source_citations_name_the_right_line() {
         ("103", "src/formatter/mod.rs:41", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("143", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
         ("220", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("457", "src/formatter/mod.rs:709", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("461", "src/formatter/mod.rs:704", "the `align_trailing_comments()` call, named in prose without backticks"),
-        ("470", "src/formatter/mod.rs:1653", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("564", "src/formatter/mod.rs:2239", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("469", "src/formatter/mod.rs:709", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("493", "src/formatter/mod.rs:1653", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("587", "src/formatter/mod.rs:2239", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
     // outlived its reason and has to go, which is what makes the list shrink
     // instead of quietly accumulating. And the count may not grow.
-    const HEURISTIC_BLIND_CEILING: usize = 7;
+    const HEURISTIC_BLIND_CEILING: usize = 6;
     assert!(
         HEURISTIC_BLIND.len() <= HEURISTIC_BLIND_CEILING,
         "the heuristic-blind allowlist GREW ({} > {HEURISTIC_BLIND_CEILING}). \
