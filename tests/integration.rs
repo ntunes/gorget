@@ -11756,6 +11756,10 @@ const FMT_AUTHOR_PAREN_TEXT_CELLS: &[(&str, &[&str])] = &[
             "if (slen as bool):",
             "n + (n * shift)",
             "(((x)))",
+            // The REDUNDANT interior paren — the cell with a real red (see the
+            // fixture header). Its precedence-REQUIRED sibling is asserted too,
+            // but only as the contrast: that one comes back from precedence.
+            "f\"{a + (b * c)}\"",
             "f\"{(a + b) * c}\"",
         ],
     ),
@@ -11927,7 +11931,7 @@ fn fmt_author_parens_round_trip_semantic() {
         ("fmt_author_parens/paren_deletion.gg", "true 15 true"),
         (
             "fmt_author_parens/costumes.gg",
-            "true\n2\n5\n1\n15\n9\n1",
+            "true\n2\n5\n1\n15\n9\n1\n1",
         ),
         (
             "fmt_author_parens/chain_flatten.gg",

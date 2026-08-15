@@ -15,9 +15,13 @@
 # Both cells are TEXT-ONLY, deliberately: `for i in (^start)..end:` and
 # `for i in (^start..end):` are REJECTED (E_MoveInOperandPosition) before and
 # after this change — that is the point, the reject must survive the round
-# trip. The pre-fix binary rewrote the first spelling to the second, a
-# different AST that happens to reject for a different reason. Sigil cells that
-# RUN live in `sigil_run.gg`.
+# trip. Measured, so the cell claims no more than it can show: the two
+# spellings parse to the IDENTICAL AST (spans stripped, `gg parse` output
+# diffs clean — the sigil pre-pass strips `^` into the node's `ownership`
+# field either way) and reject with the SAME error at the SAME span. So what
+# the pre-fix rewrite changed was the author's TEXT, not the program — the
+# formatter moved a paren the author had placed on `^start` onto the range.
+# Sigil cells that RUN live in `sigil_run.gg`.
 #
 #   * `(^start)..end` → `((^start)..end)`. RED on the pre-fix binary, which
 #     prints `(^start..end)`.

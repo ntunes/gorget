@@ -16,22 +16,26 @@
 #   * `(((x)))` ............... the DEPTH cell: three layers, pinning that the
 #                               layer count is the push multiplicity and not a
 #                               boolean
-#   * `f"{(a + b) * c}"` ...... an f-string INTERIOR — a POS PIN, see below.
+#   * `f"{a + (b * c)}"` ..... an f-string INTERIOR carrying a REDUNDANT paren
+#   * `f"{(a + b) * c}"` ...... the same position with a REQUIRED one
 #
 # RED (pre-fix binary, this fixture): `not x and y`, `*b + 1`, `a.len()`,
-# `if slen as bool:`, `n + n * shift`, `x` — every cell but the f-string one.
+# `if slen as bool:`, `n + n * shift`, `x` — every cell but the two f-string
+# ones, which the pre-fix binary preserves (it never re-renders an interior).
 #
-# ⚠ The f-string cell has NO constructible red, and the header says so rather
-# than implying coverage it does not have. Interpolation bodies never reach the
-# paren table at all (a SEPARATE `Parser` parses them and its table is
-# discarded, and its synthetic span space is disjoint from any real offset), and
-# they are re-emitted from the literal's own segment text. Break-and-watch,
-# measured on this tree: forcing `string_literal_text` to `None` — the verbatim
-# recovery this cell was thought to rest on — leaves `f"{(a + b) * c}"`
-# UNCHANGED, while it reds seven `fmt_form_string_*` tests that guard the
-# escape/quote/multiline forms. What this cell pins, then, is that
-# interpolation interiors stay out of the paren mechanism: it goes red if
-# preservation ever starts rewriting inside a literal.
+# ⚠ THE TWO F-STRING CELLS ARE NOT THE SAME CELL, and the difference is why
+# both are here. Interpolation interiors never reach the author-paren table:
+# they are parsed by a SEPARATE `Parser` whose table is discarded, at synthetic
+# offsets disjoint from any real source offset. What keeps the author's spelling
+# is a two-layer verbatim path — `string_literal_text` recovers the whole
+# literal's lexeme, and the fallback re-emits each interpolation from its stored
+# segment text. Break BOTH layers (force `string_literal_text` to `None` AND
+# re-format the interior through `format_expr` instead of writing `expr_text`)
+# and the redundant cell goes RED — measured, `f"{a + (b * c)}"` comes back as
+# `f"{a + b * c}"`. The REQUIRED cell stays green under that same break, because
+# `needs_parens_as_binop_operand` puts its pair back: it is green for a reason
+# unrelated to preservation, which is exactly the accidentally-correct trap, and
+# it is kept only as the contrast that makes the redundant cell's red meaningful.
 
 bool flag(bool x, bool y):
     return (not x) and y
@@ -53,7 +57,11 @@ int scaled(int n, int shift):
 int depth3(int x):
     return (((x)))
 
-int interp(int a, int b, int c):
+int interp_redundant(int a, int b, int c):
+    String s = f"{a + (b * c)}"
+    return s.len()
+
+int interp_required(int a, int b, int c):
     String s = f"{(a + b) * c}"
     return s.len()
 
@@ -64,4 +72,5 @@ void main():
     print(cast_cell(2))
     print(scaled(3, 4))
     print(depth3(9))
-    print(interp(1, 2, 3))
+    print(interp_redundant(1, 2, 3))
+    print(interp_required(1, 2, 3))

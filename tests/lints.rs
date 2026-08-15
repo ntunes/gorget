@@ -14508,6 +14508,191 @@ fn fmt_author_paren_dedup_class() {
     );
 }
 
+/// TOTAL CENSUS of paren EMISSION in the formatter, classified per function —
+/// the guard that pins the SIZE of the expression-wrapping set, not merely the
+/// identity of its members.
+///
+/// The sibling guard above checks that the two known dedup sites still consult
+/// the table. That cannot see the failure that matters here: a THIRD function
+/// that writes a paren around an expression. Such a site emits unconditionally,
+/// so its pair re-parses as an author paren on the next `gg fmt` run and the
+/// parens multiply — the exact class the round was opened to retire, in a new
+/// costume. A count of the known members is blind to it; only an enumeration of
+/// ALL paren writes, with a disposition per row, is not (Core #15e Q2/Q3).
+///
+/// **The classification test, applied to every row:** can this paren ever
+/// re-parse through `parse_paren_expr`'s parenthesized-EXPRESSION branch — the
+/// author-paren table's sole write site?
+///
+///  * **STRUCTURAL** — no. The paren belongs to another grammar production
+///    (argument list, tuple literal, type, pattern, closure params, variant
+///    fields, attribute args). Re-parsing it lands in the call/tuple/type/
+///    pattern parser, which never records a layer, so it can never collide with
+///    an author paren and never accretes. Immune by construction.
+///  * **EXPRESSION** — yes. The paren wraps an expression that re-parses
+///    through the grouping branch, so it MUST be deduped against the author's
+///    layer or it accretes. Exactly three rows may carry this disposition:
+///    `format_expr` (the layer emission itself — one owner per span key),
+///    `format_expr_maybe_parens` (the precedence wrap, suppressed on same-span)
+///    and `wrap_multiline_expr_in_parens` (the broken-chain wrap, ditto).
+///
+/// A new paren write anywhere in the formatter changes some row's count or adds
+/// an unlisted function, and is RED until its author classifies it — at which
+/// point an EXPRESSION disposition is a deliberate, reviewed decision that also
+/// owes a dedup.
+///
+/// **Break-and-verify, measured on this tree (both plants reverted):**
+///  * a bare `emitter.write("(")` planted around an expression emission inside
+///    an EXISTING function → RED on that row's count
+///    (`format_expr_inner 2` vs expected `1`);
+///  * a whole NEW paren-writing function → RED with the row printed as
+///    `brand_new_paren_helper  2  UNCLASSIFIED`.
+///
+/// ⚠ **Stated boundary, also measured.** This census sees paren WRITES, so it
+/// cannot see the other face of the hole: a TRANSPARENT WRAPPER that reuses a
+/// child's span and routes through `format_expr` would double-emit an EXISTING
+/// write, moving no count. What that direction actually costs was probed rather
+/// than assumed — rerouting `Expr::Catch`'s same-span recovery child through
+/// `format_expr` (instead of `format_arm_body`) reds
+/// `formatter_header_suffix_census` and `formatter_suite_layout_hook_census`
+/// immediately, and produced NO paren accretion, because the author layer is
+/// keyed on the node the parser recorded and that reroute does not make two
+/// nodes share it. The accreting shape needs literal span REUSE, which is what
+/// `Expr::ImplicitClosure` alone has (it wraps `body` at `body.span`); that
+/// spelling is pinned by the `format_expr_inner` caller count above, and
+/// `tests/fixtures/fmt_author_parens/wrappers.gg` carries a cell per censused
+/// shared-span pair kind. Those two, not this lint, are the net for that
+/// direction.
+#[test]
+fn fmt_paren_emission_census() {
+    #[derive(PartialEq, Eq, Debug, Clone, Copy)]
+    enum Paren {
+        /// Belongs to another grammar production; cannot reach the author-paren
+        /// write site on re-parse.
+        Structural,
+        /// Wraps an expression; MUST be deduped against the author's layer.
+        Expression,
+    }
+    use Paren::*;
+
+    /// Every function in `src/formatter/mod.rs` that emits a `(` or `)`, with
+    /// its site count and disposition. Counts cover BOTH layers: the imperative
+    /// `emitter.write("(")` / `write(")")` and the Doc layer's
+    /// `doc::text("(")` / `doc::text(")")`.
+    const CENSUS: &[(&str, usize, Paren)] = &[
+        ("format_item", 3, Structural),                  // import list / meta-item args
+        ("format_attributes", 2, Structural),            // `@attr(args)`
+        ("format_variant_tuple_fields", 3, Structural),  // `Variant(int, int)`
+        ("format_newtype", 2, Structural),               // `type Name(Inner)`
+        ("format_stmt", 1, Structural),                  // the `)` closing `.send(`
+        ("format_type", 7, Structural),                  // tuple + function types
+        ("format_fn_type_params", 1, Structural),        // `int(int, int)`
+        ("format_pattern", 6, Structural),               // `case (a, b)` / `Some(x)`
+        ("format_closure_param", 3, Structural),         // `(int x)`
+        // The ONE-TUPLE LITERAL `(x,)`. Structural despite living in the
+        // expression dispatch: the parser's COMMA branch builds a
+        // `TupleLiteral` and returns before the grouping branch, so this pair
+        // never records a layer. Pinned by `structural_neg.gg`'s one-tuple cell.
+        ("format_expr_inner", 1, Structural),
+        // ── The expression-wrapping set: exactly three, all deduped ──
+        ("format_expr", 2, Expression),
+        ("format_expr_maybe_parens", 2, Expression),
+        ("wrap_multiline_expr_in_parens", 2, Expression),
+    ];
+
+    let content = fs::read_to_string("src/formatter/mod.rs")
+        .expect("cannot read src/formatter/mod.rs");
+    let mut actual: Vec<(String, usize)> = Vec::new();
+    let mut current_fn = String::from("<top-level>");
+    for line in content.lines() {
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix("fn ").or_else(|| t.strip_prefix("pub fn ")) {
+            current_fn = rest.split(['(', '<']).next().unwrap_or("").to_string();
+        }
+        if t.starts_with("//") {
+            continue;
+        }
+        let n = line.matches("emitter.write(\"(\")").count()
+            + line.matches("emitter.write(\")\")").count()
+            + line.matches("doc::text(\"(\")").count()
+            + line.matches("doc::text(\")\")").count();
+        if n == 0 {
+            continue;
+        }
+        match actual.last_mut() {
+            Some((f, c)) if *f == current_fn => *c += n,
+            _ => actual.push((current_fn.clone(), n)),
+        }
+    }
+    // Fold the repeated-visit case (a function's writes split by a nested fn).
+    let mut folded: Vec<(String, usize)> = Vec::new();
+    for (f, c) in actual {
+        match folded.iter_mut().find(|(g, _)| *g == f) {
+            Some((_, total)) => *total += c,
+            None => folded.push((f, c)),
+        }
+    }
+    folded.sort();
+
+    let mut expected: Vec<(String, usize)> =
+        CENSUS.iter().map(|(f, c, _)| (f.to_string(), *c)).collect();
+    expected.sort();
+
+    let render = |rows: &[(String, usize)]| -> String {
+        rows.iter()
+            .map(|(f, c)| {
+                let d = CENSUS
+                    .iter()
+                    .find(|(g, _, _)| g == f)
+                    .map(|(_, _, d)| format!("{d:?}"))
+                    .unwrap_or_else(|| "UNCLASSIFIED".to_string());
+                format!("  {f:35} {c:>2}  {d}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    assert_eq!(
+        folded,
+        expected,
+        "the formatter's paren-emission census changed.\n\n\
+         === MEASURED ===\n{}\n\n=== EXPECTED ===\n{}\n\n\
+         Classify the new (or moved) site with ONE question: can this paren \
+         re-parse through `parse_paren_expr`'s parenthesized-EXPRESSION branch?\n\
+         NO  → STRUCTURAL. It belongs to a call/tuple/type/pattern/param \
+         production, whose parser never records an author layer, so it cannot \
+         collide and cannot accrete. Add the row and move on.\n\
+         YES → EXPRESSION. It wraps an expression, so an unconditional write \
+         ACCRETES: the next `gg fmt` pass re-parses your pair as an author \
+         paren and adds another. It must dedup against \
+         `author_paren_layers(<the wrapped node's span>)` — same-span only — \
+         and joins the three-member set below, which is a design decision, not \
+         a lint edit.\n\n\
+         The expression-wrapping set is `format_expr` (the author-layer \
+         emission), `format_expr_maybe_parens` (precedence wrap) and \
+         `wrap_multiline_expr_in_parens` (broken-chain wrap).",
+        render(&folded),
+        render(&expected),
+    );
+
+    let expression_set: Vec<&str> = CENSUS
+        .iter()
+        .filter(|(_, _, d)| *d == Expression)
+        .map(|(f, _, _)| *f)
+        .collect();
+    assert_eq!(
+        expression_set,
+        vec![
+            "format_expr",
+            "format_expr_maybe_parens",
+            "wrap_multiline_expr_in_parens"
+        ],
+        "the EXPRESSION-WRAPPING paren set changed size or membership. Every \
+         member must dedup against the author's layer on the SAME node; a \
+         fourth member is a new accretion source unless it does."
+    );
+}
+
 /// The author-paren table must reach EVERY sub-`Formatter`.
 ///
 /// `sub_render` builds a fresh `Formatter` for each pre-rendered element — a

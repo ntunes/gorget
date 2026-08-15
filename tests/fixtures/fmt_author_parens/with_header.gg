@@ -12,9 +12,10 @@
 #     $ gg check <output>
 #     error: expected expected '<expr> as <name>' or bare identifier in
 #            with-binding, found
-#       ┌─ 6:10
+#       ┌─ :10
 #       │ with r + 0 as held:
-#     … 5 parse errors in total; `gg fmt` then drops the orphaned body.
+#     then `expected expression, found INDENT`, then 8x `expected type, found
+#     DEDENT` — `10 parse error(s) found`, and `gg fmt` drops the orphaned body.
 #
 # Post-fix the paren survives, the output re-parses, and this fixture RUNS.
 
