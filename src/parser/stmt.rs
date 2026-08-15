@@ -1148,12 +1148,14 @@ impl Parser {
     fn parse_meta_while_stmt(&mut self, start: Span) -> Result<Spanned<Stmt>, ParseError> {
         self.expect_keyword(Keyword::While)?;
         let condition = self.parse_expr()?;
-        self.expect(&Token::Colon)?;
-        // ⚠ `block_start` here is the NEWLINE token on the BODY's line — this
-        // site takes `peek_span()` AFTER consuming the colon, unlike every
-        // other suite. `header_start` is the `meta` keyword, which is what a
-        // header-INDENT question must read.
+        // The COLON, captured before it is consumed. This site used to take
+        // `peek_span()` AFTER the colon, which put `Block.span.start` on the
+        // BODY's own line — one line below everything the blank/lookback logic
+        // that reads it walks back for. `header_start` is separately the `meta`
+        // keyword, since a header-INDENT question wants the header's FIRST line
+        // and the colon's line is its LAST.
         let block_start = self.peek_span();
+        self.expect(&Token::Colon)?;
         let body = self.parse_block_body(block_start, start.start)?;
         let end = self.previous_span();
         let span = start.merge(end);

@@ -1711,3 +1711,185 @@ fn d29_legacy_throws_signature_unchanged() {
     let t = f.throws.explicit_type().expect("throws clause");
     assert!(matches!(&t.node, Type::Named { name, .. } if name.node == "E"));
 }
+
+// ── `Block` position fields: the two Core #14 pins ───────────
+//
+// `Block` carries two source positions and they mean DIFFERENT lines. Both are
+// write-site facts nothing downstream can recover, and each has a consumer that
+// silently does the wrong thing when the value drifts — so each gets a pin
+// rather than a comment.
+//
+//   * `header_start` is on the owning construct's FIRST line. The formatter's
+//     orphan-pre-close flush compares a comment's column against the INDENT of
+//     that line; seeded from the colon instead, a WRAPPED header puts it on a
+//     continuation line indented at or past the body, and the column test then
+//     refuses every comment written inside the block.
+//   * `span.start` is on the header's LAST line (the colon's, at the sites that
+//     have one). The blank/lookback logic walks BACK from it, so a value on the
+//     BODY's own line starts every such walk one line below its target.
+//
+// The assertions are the PROPERTIES those consumers depend on, not per-probe
+// line numbers: an expected-line table has to be re-derived by hand for every
+// clause in every probe, and the first thing it does when a probe grows a
+// clause is go wrong.
+
+/// One collected block, flattened to what these pins assert. Owned values: the
+/// visitor trait cannot hand out references that outlive its walk.
+///
+/// Deliberately NOT recording `Block::layout`: every probe below spells an
+/// INDENTED suite, so there is nothing to filter, and reading the author's
+/// suite spelling outside the formatter is what
+/// `suite_layout_is_read_only_by_the_formatter` exists to stop. If a probe ever
+/// grows an inline suite, these assertions fail loudly on it rather than
+/// quietly skipping it.
+struct BlockProbe {
+    header_start: usize,
+    span_start: usize,
+    first_stmt_start: Option<usize>,
+}
+
+/// Collect every `Block` reachable from a module.
+fn collect_blocks(module: &Module) -> Vec<BlockProbe> {
+    use crate::parser::visitor::{walk_block, ExprVisitor};
+
+    struct C {
+        out: Vec<BlockProbe>,
+    }
+    impl ExprVisitor for C {
+        fn visit_block(&mut self, block: &Block) {
+            self.out.push(BlockProbe {
+                header_start: block.header_start,
+                span_start: block.span.start,
+                first_stmt_start: block.stmts.first().map(|s| s.span.start),
+            });
+            walk_block(self, block);
+        }
+    }
+
+    let mut c = C { out: Vec::new() };
+    for item in &module.items {
+        let body = match &item.node {
+            Item::Function(f) => match &f.body {
+                FunctionBody::Block(b) => Some(b),
+                _ => None,
+            },
+            Item::Test(t) => Some(&t.body),
+            Item::Bench(b) => Some(&b.body),
+            Item::SuiteSetup(x) => Some(&x.body),
+            Item::SuiteTeardown(x) => Some(&x.body),
+            Item::MetaTypeFunc(m) => Some(&m.body),
+            _ => None,
+        };
+        if let Some(b) = body {
+            c.visit_block(b);
+        }
+    }
+    c.out
+}
+
+/// 1-based source line number of `pos`.
+fn line_no_of(src: &str, pos: usize) -> usize {
+    src[..pos.min(src.len())].matches('\n').count() + 1
+}
+
+/// Leading-space count of the source line containing `pos`.
+fn line_indent_of(src: &str, pos: usize) -> usize {
+    let ls = src[..pos.min(src.len())].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    src[ls..].chars().take_while(|c| *c == ' ').count()
+}
+
+/// The probe corpus: one source per block-carrying construct, WRAPPED wherever
+/// wrapping is legal, since a wrapped header is the only shape where the two
+/// positions land on different lines.
+const BLOCK_PROBES: &[(&str, &str)] = &[
+    ("fn, WRAPPED signature", "int f(int a_long_one,\n      int b_long_one):\n    return a_long_one\n"),
+    ("if / elif / else, WRAPPED conditions", "void f(int i):\n    if (i <\n        3):\n        print(1)\n    elif (i >\n        9):\n        print(2)\n    else:\n        print(3)\n"),
+    ("while, WRAPPED condition", "void f(int i):\n    while (i <\n        3):\n        print(i)\n"),
+    ("for + for-else", "void f():\n    for i in [1]:\n        print(i)\n    else:\n        print(0)\n"),
+    ("while + while-else", "void f():\n    while false:\n        print(1)\n    else:\n        print(0)\n"),
+    ("loop", "void f():\n    loop:\n        break\n"),
+    ("unsafe", "void f():\n    unsafe:\n        print(1)\n"),
+    ("with … as …", "void f(int r):\n    with r as held:\n        print(held)\n"),
+    ("named scope", "void f():\n    cleanup:\n        print(1)\n"),
+    ("on error", "void f():\n    on error:\n        print(1)\n"),
+    ("do:", "void f():\n    int d = do:\n        1\n    print(d)\n"),
+    ("match arm", "void f(int x):\n    match x:\n        case 1:\n            print(1)\n"),
+    // The DISCRIMINATING `else:` probe: the else BODY's header is the `else`
+    // clause line, not the `match` line — which is what keeps an arms-level
+    // tail beside a match `else:` claimed at the MATCH level instead of being
+    // pulled inside the else body.
+    ("match + else", "void f(int x):\n    match x:\n        case 1:\n            print(1)\n        else:\n            print(0)\n"),
+    ("select arm + else", "void f():\n    select:\n        case int v = c().recv():\n            print(v)\n        else:\n            print(0)\n"),
+    ("closure body", "void f():\n    Callable[void()] g = ():\n        print(1)\n    g()\n"),
+    ("catch", "void f(int x):\n    int a = fallible(x) catch (e):\n        print(1)\n        0\n"),
+    ("rethrow", "int f(int x) throws String:\n    int a = fallible(x) rethrow (String e):\n        print(1)\n        e\n    return a\n"),
+    ("meta if / elif / else", "void f[T]():\n    meta if bitwidth(T) > 4096:\n        print(1)\n    elif bitwidth(T) > 2048:\n        print(2)\n    else:\n        print(3)\n"),
+    ("meta for", "void f():\n    meta for i in 0..2:\n        print(i)\n"),
+    ("meta while", "void f[T]():\n    meta while bitwidth(T) > 128:\n        print(1)\n"),
+    ("meta match arm, WRAPPED case expr", "void f[T]():\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(1)\n"),
+    ("meta match + else", "void f[T]():\n    meta match typename(T):\n        case \"int\":\n            print(1)\n        else:\n            print(0)\n"),
+    ("test body", "test \"t\":\n    print(1)\n"),
+    ("bench body", "bench \"b\":\n    print(1)\n"),
+    ("suite setup / teardown", "suite setup:\n    print(1)\n\nsuite teardown:\n    print(2)\n"),
+    ("meta type fn", "meta type W(Type t):\n    return t\n"),
+];
+
+/// `Block::header_start` sits on a line LESS INDENTED than the block's body —
+/// which is exactly what the formatter's column-based membership test needs,
+/// and exactly what a colon-seeded value loses on a wrapped header.
+#[test]
+fn block_header_start_is_on_the_constructs_first_line() {
+    for (label, src) in BLOCK_PROBES {
+        let module = parse(src);
+        let blocks = collect_blocks(&module);
+        assert!(!blocks.is_empty(), "{label}: no blocks collected");
+        for b in &blocks {
+            let Some(first) = b.first_stmt_start else { continue };
+            let header_indent = line_indent_of(src, b.header_start);
+            let body_indent = line_indent_of(src, first);
+            assert!(
+                header_indent < body_indent,
+                "{label}: `header_start` (line {}, indent {header_indent}) is not \
+                 LESS indented than the block body (line {}, indent {body_indent}). \
+                 A position at or past the body's indent is a CONTINUATION line of \
+                 a wrapped header, and the formatter's orphan-pre-close flush — \
+                 whose rule is 'indented past the header line' — then refuses every \
+                 comment written inside the block.\nin:\n{src}",
+                line_no_of(src, b.header_start),
+                line_no_of(src, first),
+            );
+            assert!(
+                b.header_start <= b.span_start,
+                "{label}: `header_start` is AFTER `span.start`. The construct \
+                 begins at or before the introducer that opens its body.\nin:\n{src}"
+            );
+        }
+    }
+}
+
+/// `Block::span.start` sits STRICTLY ABOVE the block's first statement — i.e.
+/// on the header's last line, not on the body's own.
+///
+/// The walk-BACK consumers (the author-blank probe above a clause, the comments
+/// that lead it) start from this position, so a value on the body's line puts
+/// them one line past everything they are looking for. `meta while` is the site
+/// that got this wrong: it took its span AFTER consuming the colon, which is the
+/// NEWLINE token at the start of the body's line.
+#[test]
+fn block_span_start_is_on_the_headers_last_line() {
+    for (label, src) in BLOCK_PROBES {
+        let module = parse(src);
+        for b in collect_blocks(&module) {
+            let Some(first) = b.first_stmt_start else { continue };
+            assert!(
+                line_no_of(src, b.span_start) < line_no_of(src, first),
+                "{label}: `Block.span.start` is on line {}, the same line as the \
+                 block's first statement ({}). It must be on the header's LAST \
+                 line; every walk-BACK consumer starts one line below its target \
+                 otherwise.\nin:\n{src}",
+                line_no_of(src, b.span_start),
+                line_no_of(src, first),
+            );
+        }
+    }
+}

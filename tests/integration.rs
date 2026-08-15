@@ -49686,10 +49686,14 @@ fn fmt_fill_suffix_overrun_stays_in_budget() {
 //
 // FIXTURE PLACEMENT: `tests/fixtures/fmt_form_preservation/` is a
 // SUBDIRECTORY, for the reason spelled out at the `fmt_silent_drops` block
-// above (`runtime_parity_corpus` and `fmt_idempotent` enumerate with a
-// top-level `read_dir`; a top-level fmt fixture would blow
-// `RUNTIME_DIFF_NONMATCH_CEILING`, which Core #9 ⊕ forbids raising for a
-// round's own inflow). Every fixture below is wired to a NAMED test by hand.
+// above. Precisely: `runtime_parity_corpus` enumerates with a top-level
+// `read_dir`, so a TOP-LEVEL fmt fixture would RUN there, and a divergent
+// self-host output would blow `RUNTIME_DIFF_NONMATCH_CEILING`, which Core #9 ⊕
+// forbids raising for a round's own inflow. A fmt-text fixture neither needs to
+// run there nor may risk it — and the subdirectory pattern buys STRONGER
+// coverage anyway (a pinned census, a form assertion, re-parse and idempotence,
+// versus top-level idempotence alone). Every fixture below is wired to a NAMED
+// test by hand.
 //
 // Each fixture is written in the form it must KEEP, so the assertion is
 // byte-exact identity: format it, and nothing moves. Idempotence and
