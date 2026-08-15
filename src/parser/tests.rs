@@ -1851,8 +1851,40 @@ use ProbeKind::*;
 const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
     ("fn, WRAPPED signature", "int f(int a_long_one,\n      int b_long_one):\n    return a_long_one\n", Wrapped),
     ("if / elif, WRAPPED conditions", "void f(int i,\n       int j):\n    if (i <\n        3):\n        print(1)\n    elif (j >\n        9):\n        print(2)\n", Wrapped),
+    // ⚠ THE `else:` CLAUSES ARE AN ENUMERATION, NOT A SAMPLE. There are SEVEN
+    // else-body wiring calls in the parser (statement-`if`, for-else,
+    // while-else, match-else, select-else, meta-if-else, meta-match-else) and
+    // every one of them has its OWN row below, adjacent to the construct it
+    // belongs to. They were once carried INSIDE the neighbouring `Wrapped`
+    // probes, where the strict per-block rule (see `ProbeKind::Wrapped`) would
+    // have failed them; the fix split them out, and the split then kept only
+    // two of them — a deleted row is invisible to the next reader, and the
+    // totality of this table has already been a selection three times, so one
+    // representative `else:` row is not enough. The reason is identical for all
+    // seven by construction, which is the point: it is stated seven times so
+    // that removing one is visible.
+    //
+    // ⚠ AND THESE ROWS ARE THE ONLY GATE ON THE ELSE-BODY ANCHOR, because for
+    // four of the seven NO OUTPUT CELL CAN EXIST. `Block::header_start`'s sole
+    // consumer is `line_indent_of` in `emit_orphan_comments_before_close`
+    // (src/formatter/mod.rs) — it reads the anchor line's INDENT and nothing
+    // else. An `else:` for `if` / `for` / `while` / `meta if` sits at exactly
+    // its construct's indent, so anchoring the else body on the `if` line
+    // instead of the `else` line is OBSERVATIONALLY IDENTICAL for every input:
+    // measured, mis-wiring `parse_if_stmt`'s else to `start.start` leaves
+    // `gg fmt` byte-identical on a probe carrying comments at four columns
+    // around the boundary. (The other three — match / select / meta match — put
+    // their `else:` at the `case` indent, one level deeper, so those DO move
+    // output; the match-else mis-wire drags a column-8 comment into the else
+    // body at column 12.) What these rows pin is the anchor's LINE, not its
+    // column: a mis-wire puts `header_start` several lines above the body, and
+    // `block_probe_dispositions_are_decided` reads that as a spanning header
+    // and fails. RED-verified per row — with the rows absent, the same
+    // `parse_if_stmt` mis-wire left `--lib` and `--test lints` fully green.
+    ("if `else:` clause", "void f(int i):\n    if i < 3:\n        print(1)\n    else:\n        print(3)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
     ("while, WRAPPED condition", "void f(int i,\n       int j):\n    while (i <\n        j):\n        print(i)\n", Wrapped),
     ("for, WRAPPED iterable", "void f(int a,\n       int b):\n    for i in [a,\n            b]:\n        print(i)\n", Wrapped),
+    ("for `else:` clause", "void f():\n    for i in [1, 2]:\n        print(i)\n    else:\n        print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
     ("while + while-else", "void f():\n    while false:\n        print(1)\n    else:\n        print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
     ("loop", "void f():\n    loop:\n        break\n", NotWrappable("`loop` and the colon, adjacent — no token between them")),
     ("unsafe", "void f():\n    unsafe:\n        print(1)\n", NotWrappable("`unsafe` and the colon, adjacent")),
@@ -1867,10 +1899,12 @@ const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
     // pulled inside the else body.
     ("match `else:` clause", "void f(Option[int] x):\n    match x:\n        case Some(v):\n            print(v)\n        else:\n            print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
     ("select arm, WRAPPED op", "void f(int a,\n       int b):\n    select:\n        case int v = c(\n                ).recv():\n            print(v + a + b)\n", Wrapped),
+    ("select `else:` clause", "void f():\n    select:\n        case int v = c().recv():\n            print(v)\n        else:\n            print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
     ("closure body, WRAPPED params", "void f(int p,\n       int q):\n    Callable[void(int, int)] g = (int a_long_one,\n                                 int b_long_one):\n        print(a_long_one)\n    g(p, q)\n", Wrapped),
     ("catch", "void f(int x):\n    int a = fallible(x) catch (e):\n        print(1)\n        0\n", NotWrappable("the LHS wraps, but the row's value is the LHS's own start, so a wrapped spelling moves both together — see BREAK C in the fixture")),
     ("rethrow", "int f(int x) throws String:\n    int a = fallible(x) rethrow (String e):\n        print(1)\n        e\n    return a\n", NotWrappable("same as `catch`: the value IS the LHS's start")),
     ("meta if / elif, WRAPPED conditions", "void f[T](int a,\n          int b):\n    meta if (bitwidth(T) >\n            4096):\n        print(a)\n    elif (bitwidth(T) >\n            2048):\n        print(b)\n", Wrapped),
+    ("meta if `else:` clause", "void f[T]():\n    meta if bitwidth(T) > 4096:\n        print(1)\n    else:\n        print(3)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
     ("meta for, WRAPPED range", "void f(int a,\n       int b):\n    meta for i in [1,\n            2]:\n        print(i + a + b)\n", Wrapped),
     // WRAPPED, and it has to be: an unwrapped `meta while cond:` has its colon
     // on the `meta` line, so a colon-seeded `header_start` has the same indent
@@ -1885,8 +1919,8 @@ const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
     ("meta type fn, WRAPPED params", "meta type W(Type a_long_one,\n            Type b_long_one):\n    return a_long_one\n", Wrapped),
 ];
 
-/// Every probe row is DECIDED, and a `NotWrappable` reason is CHECKED rather
-/// than believed.
+/// Every probe row is DECIDED, and a `NotWrappable` reason must survive being
+/// CONTRADICTED by its own probe's spelling rather than being taken on faith.
 ///
 /// This is the guard the class owes (Core #6). The table's totality was a
 /// selection three times, and the third time the miss was not an omission but a
@@ -1896,9 +1930,13 @@ const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
 ///
 /// So a reason is not free text. A row claiming `NotWrappable` must survive the
 /// mechanical form of its own claim: format the probe and check the construct's
-/// header really does occupy ONE line. If a wrapped spelling exists, the source
-/// itself says so and this fails — which is exactly what would have caught
-/// `test`/`bench` before the reviewer did.
+/// header really does occupy ONE line. If the probe's own spelling already
+/// wraps, this fails. What it does NOT reach is a reason false about the
+/// LANGUAGE whose probe is written flat to match — the `test`/`bench` shape
+/// itself, where a false belief produces a consistent pair; the artifact that
+/// closes that direction is the cell in `wrapped_header_anchor.gg`, which fails
+/// when the row is unwired. Both halves are stated at
+/// [`ProbeKind::NotWrappable`].
 #[test]
 fn block_probe_dispositions_are_decided() {
     assert!(

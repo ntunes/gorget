@@ -24,10 +24,15 @@
 #   * `parser_header_start_wiring_census` (tests/lints.rs) censuses the parser's
 #     `header_start` wiring sites per enclosing function, so a NEW suite cannot
 #     join without showing up and being classified;
-#   * `block_probe_dispositions_are_decided` (src/parser/tests.rs) CHECKS each
-#     disposition against the source: a `Wrapped` row whose header occupies one
-#     line fails, and a `NotWrappable` row whose header already spans lines
-#     fails. A false reason cannot survive as prose.
+#   * `block_probe_dispositions_are_decided` (src/parser/tests.rs) holds each
+#     disposition against the probe's own spelling: a `Wrapped` row whose header
+#     occupies one line fails, and a `NotWrappable` row whose header already
+#     spans lines fails. What that catches is a CONTRADICTION between a row's
+#     label and its source; it does NOT catch a reason false about the LANGUAGE
+#     whose probe is written flat to match — the `test`/`bench` shape below,
+#     where a false belief produces a consistent pair. The artifact that closes
+#     THAT direction is the cell in this file, which fails when its row is
+#     unwired.
 #
 # A construct is VALUE-NEEDING iff some LEGAL spelling puts its FIRST line on a
 # different line from the position a careless implementation would fall back to.
@@ -61,7 +66,8 @@
 #   row 4  closure parameter list ................ BREAK C
 #
 # NON-VALUE-NEEDING — the rule is **a header holding no token that can span
-# source lines**, and every one of these is checked by the disposition test:
+# source lines**, and every one of these carries its own `NotWrappable` row,
+# held against its probe's spelling by the disposition test:
 #   `loop:` · `unsafe:` · `on error:` · a named scope `name:` · `do:` ·
 #   `suite setup:` · `suite teardown:` · and EVERY `else:` clause (statement-if,
 #   for-else, while-else, match-else, select-else, meta-else, meta-match-else).
@@ -82,8 +88,9 @@
 # LINE. Gorget has triple-quoted multi-line strings, so a `test` name spans
 # lines; unwiring the `test` row escaped a real comment 4 -> 0 with every gate
 # green. "Keyword-only" was the wrong abstraction twice; the rule above is the
-# one that survives measurement, and it is now machine-checked rather than
-# asserted here.
+# one that survives measurement, and each row now carries its disposition as a
+# typed value in `BLOCK_PROBES` rather than as prose here — which is what makes
+# a deleted or relabelled row visible instead of silent.
 #
 # ⚠ Three authoring traps this file works around: a wrapped bare `if` condition
 # is a 10-error parse failure, so the PARENTHESIZED form is used; the wrapped-FN

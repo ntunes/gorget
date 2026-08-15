@@ -12426,6 +12426,15 @@ fn item_module_is_constructed_only_by_the_loader() {
 ///   * every METHOD CALL and every SLICE on raw text must be routed through the
 ///     helpers or carry an allowlist row with its reason.
 ///
+/// The consumer rule is applied **TO A FIXED POINT**, so it is
+/// DEPTH-INDEPENDENT: a function that becomes a consumer only because of a
+/// param-derived entry is scanned too, and so on until nothing new appears.
+/// Applying it ONCE — the shape this lint shipped with — resolved exactly one
+/// hop and left two-hop raw text invisible, with a live instance already
+/// present: `fmt_sentinel_idx`, reached only through `fmt_sentinel_line` and
+/// `fmt_line_after_sentinel`, carrying the column-0 header skip for the whole
+/// `fmt_sentinel_*` family. Deleting that predicate left every gate green.
+///
 /// The allowlist names ALLOWED ACCESSES, not forbidden costumes, so a search
 /// spelling nobody has written yet — `.rfind(`, `.match_indices(`,
 /// `for l in x.split('\n')`, `x[a..b].contains(…)` — is RED by construction.
@@ -12434,19 +12443,24 @@ fn item_module_is_constructed_only_by_the_loader() {
 /// typed carrier whose only accessors are body-scoped, making raw text
 /// unreachable rather than merely flagged; measured at 115 bindings and ~430
 /// mentions to migrate, it was judged disproportionate for a test harness.
-/// Two residual dodges this cannot see: raw text reaching a consumer through a
-/// struct field or a closure capture rather than a `&str` parameter. Neither
-/// exists today.
+/// The residual dodges are now exactly TWO — raw text reaching a consumer
+/// through a struct FIELD, or through a CLOSURE CAPTURE, rather than through a
+/// `&str` parameter. Neither exists today. Call-chain DEPTH is no longer one of
+/// them; only these two shapes route raw text past the parameter rule.
 ///
 /// SHRINK-ONLY. A row belongs here when the access is genuinely header-immune —
 /// it searches something that is not fixture output, or the predicate already
 /// excludes comment lines, or the needle is a code shape no comment line can
 /// have. Adding a row to silence a new fmt assertion is the wrong move: route it.
 ///
-/// **Break-and-verify (four costumes, all RED-verified when this landed):**
+/// **Break-and-verify (six costumes, all RED-verified):**
 /// `formatted.contains(needle)`; reverting an `fmt_body(&formatted).lines().any(…)`
-/// to `formatted.lines().any(…)`; a `.rposition(` lookup; and a novel
-/// `for line in formatted.split('\n')` loop.
+/// to `formatted.lines().any(…)`; a `.rposition(` lookup; a novel
+/// `for line in formatted.split('\n')` loop; and — for the fixed point — a
+/// TWO-hop plant (`f(&formatted)` forwards to `g(text)`, which does
+/// `text.contains(…)`) plus a THREE-hop variant, which reds identically and is
+/// what makes the depth-independence claim above a measurement rather than an
+/// argument.
 #[test]
 fn fmt_raw_text_access_is_routed_or_reasoned() {
     /// (enclosing fn, method or `[slice]`, why the access is header-immune).
@@ -12465,12 +12479,15 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
         ("fmt_multiline_arg_indent_pins_continuation_column", "lines", "walks every line to measure continuation columns"),
         ("fmt_tail_reserve_boundary_matrix", "lines", "measures the width of every line; a header line is a legitimate row"),
         ("fmt_preserves_noreturn_qualifier", "matches", "counts occurrences across the file; count-neutral to the header"),
-        ("fmt_preserves_noreturn_qualifier", "lines", "counts occurrences across the file"),
+        ("fmt_preserves_noreturn_qualifier", "lines", "builds a diagnostic excerpt inside the `assert_eq!` message — it decides nothing, so a header line in it cannot change pass/fail"),
         // Predicate already excludes comment lines.
         ("fmt_catch_multi_stmt_no_do_wrap", "lines", "predicate skips all `#` lines"),
         ("fmt_catch_rethrow_single_stmt_no_do_wrap", "lines", "predicate skips all `#` lines"),
         ("fmt_catch_rethrow_single_stmt_terminal_axis", "lines", "predicate skips all `#` lines"),
-        ("fmt_sentinel_line", "lines", "predicate skips column-0 comment lines, which is exactly the fixture header"),
+        ("fmt_sentinel_idx", "lines", "predicate skips column-0 comment lines — exactly the fixture-header skip, and the ONE site that carries it for the whole `fmt_sentinel_*` family"),
+        // The two forwarders. Neither holds a predicate of its own; both are
+        // header-immune only because `fmt_sentinel_idx` above is.
+        ("fmt_sentinel_line", "lines", "a one-line forwarder: `nth()` off `fmt_sentinel_idx`, which is where the skip lives"),
         ("fmt_line_after_sentinel", "lines", "indexes off `fmt_sentinel_idx`, which skips the header"),
         // The needle is a code shape no comment line can have.
         ("fmt_import_group_single_blank", "lines", "predicates match `from std.`/`from mylib.` prefixes; a `#` line cannot"),
@@ -12563,59 +12580,92 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
 
     // (2) a fn CALLED with a formatted binding consumes raw text; (3) its
     // `&str` params are raw text too.
+    //
+    // ⚠ TO A FIXED POINT, not once. Applying (2)+(3) a single time resolves
+    // exactly ONE hop: a function that becomes a consumer only *because* of a
+    // param-derived entry is never scanned, so raw text two hops from its
+    // binding is invisible. That is not a hypothetical — `fmt_sentinel_idx`
+    // (tests/integration.rs) is reached only from `fmt_sentinel_line` and
+    // `fmt_line_after_sentinel`, which are themselves one-hop consumers, and it
+    // carries the column-0 header skip for the entire `fmt_sentinel_*` family:
+    // under the one-pass rule its `.lines()` was in neither the census nor the
+    // allowlist, and deleting the skip predicate left every gate green.
+    // Iterating until nothing new appears makes the rule DEPTH-INDEPENDENT
+    // instead of one-hop deep, which is what the rule always claimed to be.
     let mut consumers: Vec<String> = Vec::new();
-    for (k, b) in &binds {
-        let (i, end) = span(*k);
-        for j in i..end {
-            for name in b {
-                let pat = format!("({name}");
-                let pat_ref = format!("(&{name}");
-                for p in [&pat, &pat_ref] {
-                    if let Some(at) = lines[j].find(p.as_str()) {
-                        let head = &lines[j][..at];
-                        if let Some(callee) = head
-                            .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
-                            .next()
-                            .filter(|c| !c.is_empty())
-                        {
-                            if !["assert", "panic", "format", "println", "Some", "Ok", "if", "for"]
-                                .contains(&callee)
-                                && !consumers.iter().any(|x| x == callee)
+    loop {
+        let size = |cs: &Vec<String>, bs: &Vec<(usize, Vec<String>)>| -> usize {
+            cs.len() + bs.iter().map(|(_, b)| b.len()).sum::<usize>()
+        };
+        let before = size(&consumers, &binds);
+        for (k, b) in &binds {
+            let (i, end) = span(*k);
+            for j in i..end {
+                for name in b {
+                    let pat = format!("({name}");
+                    let pat_ref = format!("(&{name}");
+                    for p in [&pat, &pat_ref] {
+                        if let Some(at) = lines[j].find(p.as_str()) {
+                            let head = &lines[j][..at];
+                            if let Some(callee) = head
+                                .rsplit(|c: char| !(c.is_alphanumeric() || c == '_'))
+                                .next()
+                                .filter(|c| !c.is_empty())
                             {
-                                consumers.push(callee.to_string());
+                                if ![
+                                    "assert", "panic", "format", "println", "Some", "Ok", "if",
+                                    "for",
+                                ]
+                                .contains(&callee)
+                                    && !consumers.iter().any(|x| x == callee)
+                                {
+                                    consumers.push(callee.to_string());
+                                }
                             }
                         }
                     }
                 }
             }
         }
-    }
-    for k in 0..bounds.len() {
-        if !consumers.contains(&bounds[k].0) {
-            continue;
-        }
-        let (i, end) = span(k);
-        let sig = lines[i..(i + 6).min(end)].join(" ");
-        let mut params: Vec<String> = Vec::new();
-        for seg in sig.split(',') {
-            if let Some((nm, ty)) = seg.split_once(':') {
-                // `&str` and `&'a str` alike — the lifetime is noise here.
-                if ty.contains('&') && ty.contains("str") {
-                    // The name is whatever follows the last `(` (the first
-                    // parameter carries the `fn name(` prefix) or the segment
-                    // itself for later parameters.
-                    let nm = nm.rsplit('(').next().unwrap_or(nm).trim();
-                    if !nm.is_empty() && nm.chars().all(|c| c.is_lowercase() || c == '_') {
-                        params.push(nm.to_string());
+        for k in 0..bounds.len() {
+            if !consumers.contains(&bounds[k].0) {
+                continue;
+            }
+            let (i, end) = span(k);
+            let sig = lines[i..(i + 6).min(end)].join(" ");
+            let mut params: Vec<String> = Vec::new();
+            for seg in sig.split(',') {
+                if let Some((nm, ty)) = seg.split_once(':') {
+                    // `&str` and `&'a str` alike — the lifetime is noise here.
+                    if ty.contains('&') && ty.contains("str") {
+                        // The name is whatever follows the last `(` (the first
+                        // parameter carries the `fn name(` prefix) or the segment
+                        // itself for later parameters.
+                        let nm = nm.rsplit('(').next().unwrap_or(nm).trim();
+                        if !nm.is_empty() && nm.chars().all(|c| c.is_lowercase() || c == '_') {
+                            params.push(nm.to_string());
+                        }
                     }
                 }
             }
-        }
-        if !params.is_empty() {
-            match binds.iter_mut().find(|(bk, _)| *bk == k) {
-                Some((_, b)) => b.extend(params),
-                None => binds.push((k, params)),
+            if !params.is_empty() {
+                // De-duplicated: the loop below re-derives the same params on
+                // every iteration, and a duplicated name would double-count
+                // every access it reaches.
+                match binds.iter_mut().find(|(bk, _)| *bk == k) {
+                    Some((_, b)) => {
+                        for p in params {
+                            if !b.iter().any(|x| *x == p) {
+                                b.push(p);
+                            }
+                        }
+                    }
+                    None => binds.push((k, params)),
+                }
             }
+        }
+        if size(&consumers, &binds) == before {
+            break;
         }
     }
 
@@ -12692,7 +12742,7 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
         unlisted.join("\n")
     );
 
-    const EXPECTED_RAW_ACCESSES: usize = 53;
+    const EXPECTED_RAW_ACCESSES: usize = 54;
     assert_eq!(
         flagged.len(),
         EXPECTED_RAW_ACCESSES,
@@ -12740,7 +12790,13 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
 ///   * `block_probe_dispositions_are_decided` (src/parser/tests.rs) — every
 ///     `BLOCK_PROBES` row is either `Wrapped` (checked: its header really does
 ///     span lines) or `NotWrappable(reason)` (checked: its header really does
-///     not). A false reason fails there instead of surviving as prose.
+///     not). What that catches is a CONTRADICTION between a row's label and its
+///     own spelling; it does NOT catch a reason that is false about the
+///     LANGUAGE while the probe is written flat to match — the `test`/`bench`
+///     shape, where a false belief produces a consistent pair. The artifact
+///     that closes that direction is the CELL in `wrapped_header_anchor.gg`,
+///     which fails when the row is unwired. (Stated the same way at
+///     `ProbeKind::NotWrappable`'s own doc, which is the authority.)
 ///
 /// The enumeration in `tests/fixtures/fmt_suite_layout/wrapped_header_anchor.gg`
 /// is DERIVED from that table; this row-count pair is what keeps the table
@@ -12881,7 +12937,8 @@ fn parser_header_start_wiring_census() {
          indented at or past the body);\n\
          (2) a `BLOCK_PROBES` row in src/parser/tests.rs, WRAPPED if any token \
          in its header can span source lines, else `NotWrappable` with the \
-         reason — which `block_probe_dispositions_are_decided` then checks;\n\
+         reason — which `block_probe_dispositions_are_decided` then holds \
+         against the probe's own spelling;\n\
          (3) a cell in tests/fixtures/fmt_suite_layout/wrapped_header_anchor.gg \
          if it is wrappable.\n\n\
          Regenerate this table with:\n  \
@@ -12892,7 +12949,10 @@ fn parser_header_start_wiring_census() {
     // rows (not matching them 1:1 — several wiring sites are clause siblings of
     // one construct) keeps this a TRIGGER: a new wiring row forces a decision
     // above, and a deleted probe row trips here.
-    const EXPECTED_BLOCK_PROBES_ROWS: usize = 26;
+    // 30 = 26 + the four `else:` clauses (statement-`if`, for, select, meta-if)
+    // that were carried inside neighbouring probes and dropped when those were
+    // split; all SEVEN else-body wiring calls now have their own row.
+    const EXPECTED_BLOCK_PROBES_ROWS: usize = 30;
     let probes = fs::read_to_string("src/parser/tests.rs")
         .expect("cannot read src/parser/tests.rs");
     let table = probes
