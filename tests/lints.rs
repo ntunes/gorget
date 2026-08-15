@@ -5095,11 +5095,16 @@ fn self_host_embedded_libstd_table_count() {
 /// failed the Core #8 reference-grade bar).
 ///
 /// This lint pins exhaustiveness STRUCTURALLY: it derives the full `Expr`/`Stmt`
-/// variant set from `ast.gg` and asserts the walker has a `case <Variant>(` arm
-/// for each. A new AST variant that carries a sub-expression but isn't added to
-/// the walker re-opens the escape hole — this fails until the arm is added.
+/// variant set from `ast.gg`, derives the set of variants the walker actually
+/// has an arm for, and asserts the second covers the first. A new AST variant
+/// that carries a sub-expression but isn't added to the walker re-opens the
+/// escape hole — this fails until the arm is added.
 ///
-/// **If this fails:** add the missing `case <Variant>(...)` arm to
+/// Both arm spellings count — `case V(payload):` AND the nullary `case V:` —
+/// because `gg fmt` canonicalization rewrites between them (it drops the empty
+/// parens). See `matched_variants` below.
+///
+/// **If this fails:** add the missing `case <Variant>` arm to
 /// `check_carrier_ops_expr` (for `E*`) or `check_carrier_ops_stmt` (for `S*`) in
 /// typecheck.gg, recursing into every sub-expression / body the variant carries
 /// (model it on the same variant's arm in `resolve.gg::resolve_expr`).
@@ -5147,6 +5152,41 @@ fn self_host_safety_walker_is_exhaustive() {
         out
     }
 
+    /// The SET of variant names a walker body actually matches on.
+    ///
+    /// Derived from the arm SYNTAX, never from one hardcoded spelling: the
+    /// nullary arm has TWO legal spellings and `gg fmt` rewrites between them.
+    /// Canonicalization drops the empty parens (`case ENoneLiteral():` becomes
+    /// `case ENoneLiteral:`), so the old `contains("case {v}(")` probe went
+    /// blind on exactly the nullary arms and reported 7 present-and-correct
+    /// arms (ENoneLiteral, ESelfExpr, EIt, SBreak, SContinue, SPass, SMeta) as
+    /// MISSING — a fake Core #8 one-sided-reject alarm on a canonical corpus.
+    ///
+    /// The terminator is what pins the whole name: `(` for a payload arm, `:`
+    /// for a nullary one. Without it a bare prefix probe would let `case EItem`
+    /// satisfy the check for `EIt`.
+    fn matched_variants(body: &str) -> std::collections::HashSet<String> {
+        let mut out = std::collections::HashSet::new();
+        for line in body.lines() {
+            let Some(rest) = line.trim_start().strip_prefix("case ") else {
+                continue;
+            };
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if name.is_empty() {
+                continue;
+            }
+            // `name` is ASCII by construction, so byte-slicing at its length
+            // is safe.
+            if matches!(rest[name.len()..].chars().next(), Some('(') | Some(':')) {
+                out.insert(name);
+            }
+        }
+        out
+    }
+
     // Restrict the search to the walker function bodies so unrelated `case E…`
     // arms elsewhere in typecheck.gg don't mask a missing one.
     fn body_of<'a>(src: &'a str, fn_sig_prefix: &str) -> &'a str {
@@ -5177,16 +5217,18 @@ fn self_host_safety_walker_is_exhaustive() {
     let expr_body = body_of(&tc, "void check_safety_expr(");
     let stmt_body = body_of(&tc, "void check_safety_stmt(");
 
+    let expr_arms = matched_variants(expr_body);
+    let stmt_arms = matched_variants(stmt_body);
+
     let mut missing_expr = Vec::new();
     for v in &expr_variants {
-        // `case EName(` for payload variants, `case EName()` for nullary.
-        if !expr_body.contains(&format!("case {v}(")) {
+        if !expr_arms.contains(v) {
             missing_expr.push(v.clone());
         }
     }
     let mut missing_stmt = Vec::new();
     for v in &stmt_variants {
-        if !stmt_body.contains(&format!("case {v}(")) {
+        if !stmt_arms.contains(v) {
             missing_stmt.push(v.clone());
         }
     }
@@ -5198,9 +5240,11 @@ fn self_host_safety_walker_is_exhaustive() {
          carrier-operator reject and the self-host would silently miscompile it \
          (AGENTS.md Core #8 one-sided-reject regression).\n  \
          missing Expr arms: {missing_expr:?}\n  missing Stmt arms: {missing_stmt:?}\n\
-         Add the `case <Variant>(...)` arm to check_carrier_ops_expr / \
-         check_carrier_ops_stmt in typecheck.gg, recursing into every \
-         sub-expression the variant carries (mirror resolve.gg::resolve_expr).",
+         Add the arm to check_carrier_ops_expr / check_carrier_ops_stmt in \
+         typecheck.gg — `case <Variant>(...):` when it carries a payload, \
+         `case <Variant>:` when it is nullary (both spellings satisfy this \
+         lint) — recursing into every sub-expression the variant carries \
+         (mirror resolve.gg::resolve_expr).",
     );
 }
 
@@ -15959,7 +16003,13 @@ fn formatter_no_raw_newline_outside_emitter() {
 /// the very class it exists to retire (Core #15e Q2: "can this guard catch
 /// its OWN class?"). So this asserts a PROPERTY of each predicate instead:
 /// wherever the parser tests for the move glyph in an ownership context, it
-/// must test for BOTH glyphs on that same line.
+/// must test for BOTH glyphs in that same STATEMENT.
+///
+/// **Statement, not physical line.** Co-occurrence is a property of the
+/// statement; `gg fmt` re-wraps a long `or`-chain onto one predicate per line
+/// without changing its meaning, so a per-line reading of this property is
+/// canon-fragile and reports correct code as an offender. `logical_lines`
+/// below rejoins bracket continuations before the check.
 ///
 /// It is deliberately symmetric — it also fails if a `TOK_BANG` test is
 /// REPLACED by a bare `TOK_CARET` test, which would silently retire the `!`
@@ -16043,6 +16093,61 @@ fn sh_parser_caret_predicate_siblings() {
         real_files.len(),
     );
 
+    /// Join physical lines into LOGICAL statements.
+    ///
+    /// The property asserted below is a CO-OCCURRENCE one — `TOK_BANG` and
+    /// `TOK_CARET` must be tested *together* — and that is a property of the
+    /// STATEMENT, not of a physical line. A per-line check is therefore
+    /// canon-fragile: `gg fmt`'s width-120 fill splits a long `or`-chain onto
+    /// one predicate per line, which made this lint report 12 one-sided
+    /// offenders across the three parser copies on a canonicalized corpus
+    /// while the source was perfectly correct.
+    ///
+    /// A statement continues while bracket depth is non-zero — the only
+    /// continuation form the self-host parsers use. Quote state is tracked so
+    /// a bracket inside a string literal cannot unbalance the scan.
+    ///
+    /// Returns `(1-based physical line where the statement STARTS, joined
+    /// text)` so diagnostics still cite a line a human can open.
+    fn logical_lines(code: &[String]) -> Vec<(usize, String)> {
+        let mut out: Vec<(usize, String)> = Vec::new();
+        let mut depth = 0i32;
+        let mut cur = String::new();
+        let mut start = 0usize;
+        for (i, line) in code.iter().enumerate() {
+            if depth == 0 {
+                start = i;
+                cur.clear();
+            } else {
+                cur.push(' ');
+            }
+            cur.push_str(line.trim());
+            let mut in_str = false;
+            let mut esc = false;
+            for c in line.chars() {
+                if esc {
+                    esc = false;
+                    continue;
+                }
+                match c {
+                    '\\' if in_str => esc = true,
+                    '"' => in_str = !in_str,
+                    '(' | '[' | '{' if !in_str => depth += 1,
+                    ')' | ']' | '}' if !in_str => depth -= 1,
+                    _ => {}
+                }
+            }
+            if depth <= 0 {
+                depth = 0;
+                out.push((start + 1, std::mem::take(&mut cur)));
+            }
+        }
+        if !cur.is_empty() {
+            out.push((start + 1, cur));
+        }
+        out
+    }
+
     // ---- check every ownership-context TOK_BANG predicate ----------------
     let mut offenders: Vec<String> = Vec::new();
     let mut checked = 0usize;
@@ -16065,13 +16170,20 @@ fn sh_parser_caret_predicate_siblings() {
             })
             .collect();
 
-        for (i, line) in code.iter().enumerate() {
-            if !mentions_move_token(line, "TOK_BANG") {
+        // Statement-level, NOT physical-line-level — see `logical_lines`.
+        let stmts = logical_lines(&code);
+
+        for (i, (lineno, stmt)) in stmts.iter().enumerate() {
+            if !mentions_move_token(stmt, "TOK_BANG") {
                 continue;
             }
-            // Excluded? Look a few lines down for the anchoring content.
-            let window_end = (i + 1 + LOOKAHEAD).min(code.len());
-            let window = code[i..window_end].join("\n");
+            // Excluded? Look a few statements down for the anchoring content.
+            let window_end = (i + 1 + LOOKAHEAD).min(stmts.len());
+            let window = stmts[i..window_end]
+                .iter()
+                .map(|(_, s)| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
             if let Some((anchor, _why)) =
                 EXCLUSION_ANCHORS.iter().find(|(a, _)| window.contains(a))
             {
@@ -16080,12 +16192,12 @@ fn sh_parser_caret_predicate_siblings() {
                 continue;
             }
             checked += 1;
-            if !mentions_move_token(line, "TOK_CARET") {
+            if !mentions_move_token(stmt, "TOK_CARET") {
                 offenders.push(format!(
                     "{}:{} — tests TOK_BANG without a TOK_CARET sibling:\n      {}",
                     path.display(),
-                    i + 1,
-                    line.trim(),
+                    lineno,
+                    stmt.trim(),
                 ));
             }
         }
@@ -16093,22 +16205,26 @@ fn sh_parser_caret_predicate_siblings() {
         // Symmetry: a caret-only ownership predicate would silently retire
         // the `!` glyph early. Every ownership-context TOK_CARET test must
         // likewise name TOK_BANG.
-        for (i, line) in code.iter().enumerate() {
-            if !mentions_move_token(line, "TOK_CARET") {
+        for (i, (lineno, stmt)) in stmts.iter().enumerate() {
+            if !mentions_move_token(stmt, "TOK_CARET") {
                 continue;
             }
-            let window_end = (i + 1 + LOOKAHEAD).min(code.len());
-            let window = code[i..window_end].join("\n");
+            let window_end = (i + 1 + LOOKAHEAD).min(stmts.len());
+            let window = stmts[i..window_end]
+                .iter()
+                .map(|(_, s)| s.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
             if EXCLUSION_ANCHORS.iter().any(|(a, _)| window.contains(a)) {
                 continue;
             }
-            if !mentions_move_token(line, "TOK_BANG") {
+            if !mentions_move_token(stmt, "TOK_BANG") {
                 offenders.push(format!(
                     "{}:{} — tests TOK_CARET without a TOK_BANG sibling (the retired \
                      glyph is still ACCEPTED until D27 Round B retires it):\n      {}",
                     path.display(),
-                    i + 1,
-                    line.trim(),
+                    lineno,
+                    stmt.trim(),
                 ));
             }
         }
