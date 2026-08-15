@@ -13,11 +13,14 @@
 #   * a wrapped `extern` header is likewise a parse error — `extern "C":` has
 #     no bracket either.
 #
-# The EQUIP cell is GREEN AT HEAD: its old anchor was the equipped TYPE's span
-# end, which on this shape is accidentally on the header's last line already.
-# It is kept as an axis cell and RED-verified by BREAK-AND-WATCH: point the
-# equip anchor back at `e.type_.span.end` and put the `[T]` list on its own
-# wrapped line, and the comment drops into the body.
+# The EQUIP cell is GREEN AT HEAD for the ANCHOR question: its old anchor was
+# the equipped TYPE's span end, which on this shape is accidentally on the
+# header's last line already. It is kept as an axis cell and RED-verified by
+# BREAK-AND-WATCH: anchor on the equip block's own `span.start` and the comment
+# drops into the body.
+#
+# The equip line's SEPARATOR (`equip [T] Cell[T]:`, not `equip [T]Cell[T]:`) is
+# not this file's subject — `equip_generic_params_space.gg` owns that axis.
 #
 # RED, observed on the pre-fix build: the enum and trait comments were emitted
 # on their own line at body indent, as a leading comment of the first member.
@@ -31,7 +34,7 @@ trait Holder[T]:    # trait multi-line header trailing
 struct Cell[T]:
     T v
 
-equip [T]Cell[T]:    # equip multi-line header trailing
+equip [T] Cell[T]:    # equip multi-line header trailing
     T get(self):
         return self.v
 

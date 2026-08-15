@@ -354,7 +354,7 @@ fn round_up_to_stride(x: usize) -> usize {
 /// silently take the previous entry's line geometry. Emission order gives the
 /// invariant for free everywhere except the one path that injects BACK into an
 /// earlier line (`EmitPos::AtAnchor`), which re-sorts itself in — see
-/// `record_trailing_align_at`.
+/// `record_trailing_align`.
 fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usize, usize)> {
     debug_assert!(
         entries.windows(2).all(|w| w[0].buf_offset <= w[1].buf_offset),
@@ -3068,10 +3068,22 @@ impl Formatter {
         };
         if let Some(ref gp) = e.generic_params {
             let tail = self.measured_reserve(|s| {
+                // The separator below is part of what follows the bracket
+                // list on its own last line, so the reserve has to charge for
+                // it — otherwise the list is measured one column narrower than
+                // it lands.
+                s.emitter.write(" ");
                 s.format_type(&e.type_);
                 with_onward(s);
             });
             self.with_tail_reserve(tail, |f| f.format_generic_params_wrapped(gp));
+            // `equip [T] Cell[T]:` — the separator every other header in the
+            // language writes between a generic-parameter list and what it
+            // parameterizes. Without it the equipped type welds onto the `]`
+            // (`equip [T]Cell[T]:`), which re-parses and is idempotent, and is
+            // therefore an edit to the author's spelling that no round-trip
+            // property can see.
+            self.emitter.write(" ");
         }
         let type_tail = self.measured_reserve(with_onward);
         self.with_tail_reserve(type_tail, |s| s.format_type(&e.type_));

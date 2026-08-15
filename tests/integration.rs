@@ -49073,6 +49073,7 @@ const FMT_SUITE_LAYOUT_FIXTURES: &[&str] = &[
     "closure_body.gg",
     "do_expr.gg",
     "else_header_trailing_comment.gg",
+    "equip_generic_params_space.gg",
     "expr_match.gg",
     "header_colon_anchor_bracketed.gg",
     "header_colon_anchor_multiline.gg",
@@ -49583,29 +49584,76 @@ fn known_gap_fmt_cross_region_trailing_claim() {
     );
 }
 
-/// KNOWN GAP — `gg fmt` deletes the space between an `equip` block's generic
-/// parameter list and the equipped type (`equip [T] Cell[T]:` →
-/// `equip [T]Cell[T]:`).
+/// An `equip` block's generic-parameter list is separated from the equipped
+/// type by a space — `equip [T] Cell[T]:`, the spelling
+/// `docs/language-reference.md` documents and the whole corpus is written in.
 ///
-/// The output re-parses and is idempotent, which is why nothing caught it. The
-/// corpus has 42 generic `equip` headers, so a bulk sweep would bake the wrong
-/// spelling into every one of them.
+/// `gg fmt` used to delete it: the header emitter wrote the parameter list and
+/// then the type with nothing between them, alone among the language's headers.
+/// The result RE-PARSES and is IDEMPOTENT, so no round-trip property could see
+/// it — it was found by eye while authoring a multi-line equip-header cell, and
+/// a bulk sweep would have rewritten all 42 generic `equip` headers in the tree.
 ///
-/// Found by the R42 comment-attachment track (a multi-line equip-header cell);
-/// out of that track's scope — a header SPACING defect, not a comment one.
+/// One assertion per AXIS CELL, so a partial regression fingers which shape it
+/// broke; the file itself is form-pinned by `fmt_suite_layout_form_preservation`
+/// against its `.expected` (the wrapped cell re-packs, so the fixture is an
+/// INPUT→OUTPUT cell).
 #[test]
-#[ignore = "known gap: `gg fmt` drops the space after an equip block's generic-params list; un-ignore when the equip header emitter writes the separator"]
-fn known_gap_fmt_equip_generic_space() {
+fn fmt_equip_generic_params_keep_separator() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture = manifest_dir.join("tests/fixtures/known_gaps/fmt_equip_generic_params_space.gg");
+    let fixture =
+        manifest_dir.join("tests/fixtures/fmt_suite_layout/equip_generic_params_space.gg");
     let source = std::fs::read_to_string(&fixture)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
     let formatted = gorget::formatter::format_source_infallible(&source);
 
+    // (cell, the header text that must survive)
+    let cells: &[(&str, &str)] = &[
+        ("plain", "equip [T] Cell[T]:"),
+        ("with-trait", "equip [T] Boxed[T] with Shown:"),
+        ("bounded param", "equip [Shown T] Boxed[T] with Printed:"),
+        ("multi-param", "equip [K, V] Pair[K, V]:"),
+        ("via", "equip [T] Wrapper[T] via inner:"),
+        // The NON-generic control: no list, so no separator to lose. It is what
+        // makes the others a claim about the generic-params separator rather
+        // than about equip headers in general.
+        ("non-generic control", "equip Plain:"),
+    ];
+    for (cell, want) in cells {
+        assert!(
+            formatted.lines().any(|l| l.trim_end() == *want),
+            "equip separator lost in the {cell} cell — expected a line \
+             `{want}`.\n\n=== formatted ===\n{formatted}"
+        );
+    }
+
+    // The WRAPPED cell: the bracket list breaks onto a continuation line, and
+    // the close `]` must STILL be followed by the separator and the type.
     assert!(
-        formatted.contains("equip [T] Cell[T]:"),
-        "the space between the equip generic-params list and the equipped type \
-         was deleted.\n\n=== formatted ===\n{formatted}"
+        formatted
+            .lines()
+            .any(|l| l.contains("] Wide[") && !l.contains("]Wide[")),
+        "equip separator lost after a BROKEN bracket list — the close `]` must \
+         be followed by a space and the equipped type.\n\n\
+         === formatted ===\n{formatted}"
+    );
+    // The class-wide sweep, over CODE lines only: the fixture's header records
+    // the RED spellings verbatim, and prose that documents a defect must not
+    // read as the defect.
+    let welded: Vec<&str> = formatted
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .filter(|l| {
+            ["]Wide[", "]Cell[", "]Pair[", "]Boxed[", "]Wrapper["]
+                .iter()
+                .any(|w| l.contains(w))
+        })
+        .collect();
+    assert!(
+        welded.is_empty(),
+        "an equipped type is welded to its generic-params list:\n  {}\n\n\
+         === formatted ===\n{formatted}",
+        welded.join("\n  ")
     );
 }
 

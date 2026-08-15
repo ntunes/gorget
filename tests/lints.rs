@@ -12614,7 +12614,9 @@ fn formatter_dedent_close_census() {
 /// **Break-and-verify (both RED-verified when this landed):** add a bare
 /// `self.comment_cursor += 1;` in any hook — the advance count moves and this
 /// fires; add a new caller of `claim_run_at_cursor` without a census row — the
-/// caller count moves and this fires.
+/// caller count moves and this fires. The needle set covers `-=`,
+/// `mem::replace`/`mem::swap` (via `&mut`) and plain assignment too, so a
+/// bypassing claimer cannot dodge it by moving the cursor some other way.
 #[test]
 fn formatter_comment_claim_site_census() {
     /// The functions that may claim a comment, and why each does.
@@ -12650,9 +12652,14 @@ fn formatter_comment_claim_site_census() {
         if t.starts_with("//") {
             continue;
         }
-        // Any mutation of the cursor, not just `+= 1`: the needle is the
-        // ASSIGNMENT, so a bypassing claimer cannot dodge it by stepping two.
-        if line.contains("self.comment_cursor +=") || line.contains("self.comment_cursor =") {
+        // ANY mutation of the cursor, not just `+= 1`. `+=` alone would miss a
+        // `-=` rewind (which is the one way the inner-before-outer flush
+        // ordering can break) and a `mem::replace`/`mem::swap`/`&mut` alias,
+        // each of which moves the cursor without ever spelling an increment.
+        // The needle set is the FIELD in any mutating position.
+        let cursor_mutation = ["self.comment_cursor +=", "self.comment_cursor -=",
+                               "self.comment_cursor =", "&mut self.comment_cursor"];
+        if cursor_mutation.iter().any(|n| line.contains(n)) {
             advances.push((i + 1, current_fn.clone()));
         }
         if line.contains("self.claim_run_at_cursor(") {

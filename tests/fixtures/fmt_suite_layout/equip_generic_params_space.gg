@@ -1,0 +1,98 @@
+# ==== EQUIP HEADER · the separator between the generic-parameter list and the
+#                     equipped type
+#
+# `equip [T] Cell[T]:` is the documented canonical spelling
+# (`docs/language-reference.md`, every occurrence), and it is what the whole
+# corpus is written in. `gg fmt` used to delete the space — the equip header
+# emitter wrote the parameter list and then the type with nothing between them,
+# alone among the language's headers.
+#
+# It RE-PARSES and it is IDEMPOTENT, which is exactly why no round-trip property
+# could see it: `equip [T]Cell[T]:` is a well-formed header that means the same
+# thing. What it is not is what the author wrote, and a bulk `gg fmt` sweep
+# would have rewritten all 42 generic `equip` headers in the tree
+# (`grep -rn '^equip \[' lib tests/fixtures examples compiler`).
+#
+# AXIS — every shape the header's first render can take, because the separator
+# is written once and each of these reaches it differently:
+#   * plain            `equip [T] Cell[T]:`
+#   * with-trait       `equip [T] Boxed[T] with Shown:`
+#   * BOUNDED param    `equip [Shown T] Boxed[T] with Printed:`
+#   * MULTI-param      `equip [K, V] Pair[K, V]:`
+#   * via              `equip [T] Wrapper[T] via inner:`
+#   * WRAPPED list     an over-width header whose bracket list BREAKS onto a
+#     continuation line — the close `]` must STILL be followed by the separator
+#     and the type. This is the cell the tail-reserve half of the fix serves:
+#     the separator is part of what follows the list on its own last line, so
+#     the list's width budget has to charge for it or the list is measured one
+#     column narrower than it lands.
+#
+# ⚠ INPUT→OUTPUT, not a fixpoint — see the `.expected` companion: the wrapped
+# cell's list is re-packed, so the authored spelling exists only on pass one.
+#
+# RED, measured against the pre-fix binary — this branch's tip immediately
+# BEFORE the equip fix, not the round's base (the defect predates the whole
+# track, so the round's base binary reds it for the same reason and proves
+# nothing about this commit). Every generic cell came back welded:
+#     equip [T]Cell[T]:                    equip [T]Boxed[T] with Shown:
+#     equip [Shown T]Boxed[T] with Printed:   equip [K, V]Pair[K, V]:
+#     equip [T]Wrapper[T] via inner:
+#     …DDDDDDDDDDDDDDDDDDDDDD,\n    EEEEEEEEEEEEEEEEEEEEEE]Wide[…   (wrapped)
+# while the NON-GENERIC control `equip Plain:` was unaffected — which is what
+# makes this the generic-params separator and not a general header defect.
+
+trait Shown:
+    String show(self)
+
+trait Printed:
+    String printed(self)
+
+struct Cell[T]:
+    T v
+
+equip [T] Cell[T]:
+    T get(self):
+        return self.v
+
+struct Boxed[T]:
+    T inner
+
+equip [T] Boxed[T] with Shown:
+    String show(self):
+        return "boxed"
+
+equip [Shown T] Boxed[T] with Printed:
+    String printed(self):
+        return self.inner.show()
+
+struct Pair[K, V]:
+    K key
+    V value
+
+equip [K, V] Pair[K, V]:
+    K first(self):
+        return self.key
+
+struct Wrapper[T]:
+    T inner
+
+equip [T] Wrapper[T] via inner:
+    int tag(self):
+        return 1
+
+struct Wide[AAAAAAAAAAAAAAAAAAAAAA, BBBBBBBBBBBBBBBBBBBBBB, CCCCCCCCCCCCCCCCCCCCCC, DDDDDDDDDDDDDDDDDDDDDD, EEEEEEEEEEEEEEEEEEEEEE]:
+    AAAAAAAAAAAAAAAAAAAAAA a
+
+equip [AAAAAAAAAAAAAAAAAAAAAA, BBBBBBBBBBBBBBBBBBBBBB, CCCCCCCCCCCCCCCCCCCCCC, DDDDDDDDDDDDDDDDDDDDDD, EEEEEEEEEEEEEEEEEEEEEE] Wide[AAAAAAAAAAAAAAAAAAAAAA, BBBBBBBBBBBBBBBBBBBBBB, CCCCCCCCCCCCCCCCCCCCCC, DDDDDDDDDDDDDDDDDDDDDD, EEEEEEEEEEEEEEEEEEEEEE]:
+    AAAAAAAAAAAAAAAAAAAAAA first(self):
+        return self.a
+
+struct Plain:
+    int v
+
+equip Plain:
+    int get(self):
+        return self.v
+
+void main():
+    print(1)
