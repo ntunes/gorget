@@ -10774,8 +10774,8 @@ fn doc_source_citations_name_the_right_line() {
         ("200", "src/formatter/doc.rs:189", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
         ("358", "src/formatter/mod.rs:484", "the blank-collapse loop INSIDE `fn format`, whose name is 25 lines up"),
         ("362", "src/formatter/mod.rs:480", "the `align_trailing_comments()` call, named in prose without backticks"),
-        ("371", "src/formatter/mod.rs:1346", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("465", "src/formatter/mod.rs:1833", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("371", "src/formatter/mod.rs:1358", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("465", "src/formatter/mod.rs:1845", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
