@@ -67,13 +67,21 @@ pub enum Doc {
     /// written, the line breaks to the **block continuation indent**
     /// (`indent_level + 1`, i.e. `(outer + 1) * 4` spaces — the very column
     /// `Formatter::element_to_string` pre-renders sub-elements for), and
-    /// packing resumes. At least one item is always placed per line, so the
-    /// only line that may exceed the budget is one holding a single item that
-    /// does not fit alone at the continuation indent.
+    /// packing resumes. At least one item is always placed per line.
+    ///
+    /// Two shapes still exceed the budget, and both are ruled, not accidental:
+    /// a single item too wide to fit alone at the continuation indent (the
+    /// doctrinal unbreakable-atom escape), and a ONE-ITEM list whose break
+    /// would not narrow anything — `break-only-if-it-NARROWS` in
+    /// `render_fill` suppresses that break, so the item stays on the caller's
+    /// line at the CALLER's column rather than being spent a newline for no
+    /// gain.
     ///
     /// `close` is owned by the node rather than being a sibling `Text` because
     /// the fit test for the LAST item must include the closing delimiter's
-    /// width (otherwise the final line can overrun by `close.len()`).
+    /// width (otherwise the final line can overrun by `close.len()`). The
+    /// renderer's `tail_reserve` extends that same accounting to the text the
+    /// list's own CALLER writes after the close.
     /// There is **no trailing comma** in a fill-broken list; the
     /// one-item-per-line-with-comma shape lives in
     /// `Formatter::format_bracketed_broken_with_comments` (comment-bearing
@@ -250,6 +258,8 @@ pub fn render(doc: &Doc, max_width: usize) -> String {
         out: String::new(),
         col: 0,
         max_width,
+        tail_reserve: 0,
+        measuring: false,
     };
     renderer.render_doc(doc, 0, Mode::Break);
     renderer.out
@@ -258,10 +268,61 @@ pub fn render(doc: &Doc, max_width: usize) -> String {
 /// Render a Doc tree starting at a given column and base indentation level.
 /// Used by the hybrid formatter to splice Doc output into the Emitter's buffer.
 pub fn render_at(doc: &Doc, max_width: usize, start_col: usize, base_indent: usize) -> String {
+    render_at_reserving(
+        doc,
+        max_width,
+        start_col,
+        base_indent,
+        0,
+        RenderPurpose::Layout,
+    )
+}
+
+/// What a render is FOR. A TYPED fact written at the call site, never
+/// reconstructed from `max_width`: a probe width (`0` / `usize::MAX`) is a
+/// *consequence* of measuring, and reading the purpose back out of it would be
+/// a sentinel read of a write-site fact — the same shape the layering rules
+/// reject everywhere else.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderPurpose {
+    /// A real layout decision. The rendered text is spliced into the output
+    /// buffer, so every width-driven rule applies — including the last-item
+    /// `break-only-if-it-NARROWS` suppression in `render_fill`.
+    Layout,
+    /// A measurement pre-render: the text is measured and thrown away. The
+    /// width is a probe (`usize::MAX` — never break, giving the flat text;
+    /// `0` — break everywhere, so the first line is the leading UNBREAKABLE
+    /// text), which makes "would a break narrow this line?" meaningless, so
+    /// the suppression rule is inert here. Without this gate the rule fires
+    /// inside the width-0 probe and glues short one-item tails (`f(x)`,
+    /// `[x]`, `{k: v}`) onto the measured first line, over-reserving every
+    /// caller that measures a leading prefix.
+    Measure,
+}
+
+/// Render a Doc tree the way `render_at` does, additionally reserving
+/// `tail_reserve` characters on the doc's LAST line for text the CALLER will
+/// emit right after it.
+///
+/// The reserve is the Wadler/Prettier `fits(rest)` algebra restored one step
+/// past the delimiter: `Doc::Fill` already charges its own `close` to the
+/// last item's fit test for exactly this reason, and the caller's suffix is
+/// the same quantity one layer out. Consumed at exactly two fit tests — the
+/// `Doc::Group` flat test and the `Doc::Fill` last-item test.
+pub fn render_at_reserving(
+    doc: &Doc,
+    max_width: usize,
+    start_col: usize,
+    base_indent: usize,
+    tail_reserve: usize,
+    purpose: RenderPurpose,
+) -> String {
     let mut renderer = Renderer {
         out: String::new(),
         col: start_col,
         max_width,
+        tail_reserve,
+        measuring: purpose == RenderPurpose::Measure,
     };
     renderer.render_doc(doc, base_indent, Mode::Break);
     renderer.out
@@ -279,6 +340,32 @@ struct Renderer {
     out: String,
     col: usize,
     max_width: usize,
+    /// Width the CALLER has committed to emitting after this Doc, on the
+    /// doc's own LAST line — an extern's ` = "symbol"`, a header's `:`, the
+    /// `close` of an enclosing list.
+    ///
+    /// **What the number covers** (the one statement of it; every consumer
+    /// cites this comment rather than re-deriving it): the caller's tail on
+    /// the doc's final line **up to the NEXT RENDER'S FIRST BREAK
+    /// OPPORTUNITY**. A following render's LEADING LITERALS — its open
+    /// delimiter, its `= ` — count INTO the reserve, because `Doc::Text` is
+    /// pushed with no fit test; only from that render's first fit-tested node
+    /// onward does it manage its own budget. Both neighbouring readings are
+    /// measured-wrong: stopping at the next breakable REGION under-reserves by
+    /// the leading literal, and charging the whole following region
+    /// over-reserves and breaks lines that were in budget.
+    ///
+    /// Consuming it at EVERY `Group`/`Fill` fit test — not only the outermost
+    /// — is safe-not-exact: an inner node may break one step early, but no
+    /// line can overrun. The exactly-120 POS fixtures are what guard that
+    /// over-reserve direction. A doc spliced in several pieces charges the
+    /// reserve to each piece, the same residual.
+    tail_reserve: usize,
+    /// True when this render is a MEASUREMENT probe (`RenderPurpose::Measure`)
+    /// rather than a layout decision. Gates `render_fill`'s
+    /// break-only-if-it-NARROWS suppression, which has no meaning at a probe
+    /// width.
+    measuring: bool,
 }
 
 impl Renderer {
@@ -326,7 +413,13 @@ impl Renderer {
                 // Measure flat width. If it fits, render flat; otherwise break.
                 let flat_width = measure_flat(inner);
                 if let Some(w) = flat_width {
-                    if self.col + w <= self.max_width {
+                    // `tail_reserve` (see its field doc) is what the caller
+                    // still writes on this line after the group closes. A
+                    // group's flat test is ALL-OR-NOTHING — there is no
+                    // break-only-if-it-NARROWS analogue here, because a group
+                    // that does not fit falls back to its own break positions
+                    // rather than choosing between two columns for one atom.
+                    if self.col + w + self.tail_reserve <= self.max_width {
                         self.render_doc(inner, indent_level, Mode::Flat);
                         return;
                     }
@@ -373,19 +466,54 @@ impl Renderer {
             // the closing delimiter for the last one (a fill-broken list has
             // no trailing comma).
             let lead = if i == 0 { 0 } else { 2 };
-            let tail = if i == last { close_width } else { 1 };
+            let tail = if i == last {
+                // The LAST item is followed by the close AND by whatever the
+                // caller writes after it — see `tail_reserve`'s field doc.
+                close_width + self.tail_reserve
+            } else {
+                1
+            };
             // A multi-line (or HardLine-bearing) item measures `None`: it can
             // never share a line, so it always takes the break branch. That
             // puts it at exactly the continuation indent — the column
             // `element_to_string` pre-rendered it for.
-            let fits = measure_flat(item)
-                .is_some_and(|w| self.col + lead + w + tail <= self.max_width);
+            let flat = measure_flat(item);
+            let fits = flat.is_some_and(|w| self.col + lead + w + tail <= self.max_width);
+
+            // **break-only-if-it-NARROWS.** A break is worth spending only
+            // when it moves the item LEFT: the continuation column must be
+            // strictly left of where the item would otherwise start. For a
+            // one-item list opened at or left of the continuation column
+            // (`f(`, `[`, `{` under a short head) breaking narrows nothing —
+            // it buys a second line whose content is just as wide, or wider.
+            //
+            // Deliberately narrow, and each clause earns its place:
+            //  * `flat.is_some()` — a MULTI-LINE item always breaks. Its text
+            //    was pre-rendered assuming the continuation column, so
+            //    splicing it here would place it at the wrong COLUMN.
+            //  * `!self.measuring` — inert inside a measurement probe, where
+            //    "narrower" is meaningless (see `measuring`).
+            //  * `i == 0 && i == last` — the ONE-ITEM list. `i == 0` alone
+            //    also fires on the first of several items, and at `i > 0` the
+            //    `>=` corner is reachable (a 1-char open plus a 1-char first
+            //    item lands exactly ON the continuation column), where the
+            //    natural spelling would drop the `, ` separator.
+            //
+            // The `fits` test — not this one — continues to drive the MODE
+            // below; suppression decides only whether a newline is emitted,
+            // and the separator is written regardless.
+            let suppress_break = !fits
+                && flat.is_some()
+                && !self.measuring
+                && i == 0
+                && i == last
+                && INDENT_WIDTH * cont_indent >= self.col + lead;
 
             if i > 0 {
                 self.out.push(',');
                 self.col += 1;
             }
-            if fits {
+            if fits || suppress_break {
                 if i > 0 {
                     self.out.push(' ');
                     self.col += 1;
@@ -737,11 +865,73 @@ mod tests {
     }
 
     #[test]
-    fn test_fill_single_over_width_item_breaks_and_overflows_alone() {
+    fn test_fill_single_over_width_item_does_not_spend_an_unnarrowing_break() {
+        // break-only-if-it-NARROWS: the one-item list opens at column 1 while
+        // its continuation column is 4, so breaking would move the item to the
+        // RIGHT and leave the line wider still. The break is suppressed and
+        // the item stays on the caller's line.
+        //
+        // RE-PINNED deliberately: this cell previously asserted the
+        // unconditional break (`"(\n    aaa…)"`), which spent a newline to
+        // make the overrun worse.
         let items = vec![text("aaaaaaaaaaaaaaaaaaaaaaaaa")];
         assert_eq!(
             render(&surround_fill("(", items, ")"), 10),
+            "(aaaaaaaaaaaaaaaaaaaaaaaaa)"
+        );
+    }
+
+    #[test]
+    fn test_fill_single_over_width_item_still_breaks_when_the_break_narrows() {
+        // The other half of the same rule: with the list opened far to the
+        // RIGHT of the continuation column, breaking genuinely narrows, so the
+        // break is spent. `render_at` starts the cursor at column 30 with a
+        // base indent of 0, giving a continuation column of 4.
+        let items = vec![text("aaaaaaaaaaaaaaaaaaaaaaaaa")];
+        assert_eq!(
+            render_at(&surround_fill("(", items, ")"), 40, 30, 0),
             "(\n    aaaaaaaaaaaaaaaaaaaaaaaaa)"
+        );
+    }
+
+    #[test]
+    fn test_fill_suppression_is_inert_in_a_measurement_probe() {
+        // At a probe width the rule has no meaning, and ungated it would GLUE
+        // a short one-item tail onto the measured first line — over-reserving
+        // every caller that measures a leading prefix.
+        let items = vec![text("x")];
+        let doc = surround_fill("(", items, ")");
+        assert_eq!(
+            render_at_reserving(&doc, 0, 0, 0, 0, RenderPurpose::Measure),
+            "(\n    x)"
+        );
+        // The same doc rendered for LAYOUT at width 0 suppresses the break —
+        // the flag, not the width, is what decides.
+        assert_eq!(
+            render_at_reserving(&doc, 0, 0, 0, 0, RenderPurpose::Layout),
+            "(x)"
+        );
+    }
+
+    #[test]
+    fn test_tail_reserve_is_charged_to_the_last_item_and_the_group() {
+        // Fill: `(alpha, beta)` is exactly 13 and fits at width 13 — but not
+        // when the caller has committed to writing 1 more character after it.
+        let items = vec![text("alpha"), text("beta")];
+        assert_eq!(
+            render_at_reserving(&surround_fill("(", items, ")"), 13, 0, 0, 1,
+                                RenderPurpose::Layout),
+            "(alpha,\n    beta)"
+        );
+        // Group: the flat test sees nothing after itself without the reserve.
+        let g = group(concat(vec![text("a"), line(), text("b")]));
+        assert_eq!(
+            render_at_reserving(&g, 3, 0, 0, 0, RenderPurpose::Layout),
+            "a b"
+        );
+        assert_eq!(
+            render_at_reserving(&g, 3, 0, 0, 1, RenderPurpose::Layout),
+            "a\nb"
         );
     }
 

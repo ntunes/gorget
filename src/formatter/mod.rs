@@ -415,6 +415,11 @@ fn plan_trailing_aligns(buf: &str, entries: &[TrailingAlign]) -> Vec<(usize, usi
 /// crosses the boundary as data, not as an absence). Every
 /// `UngatedCarveOut` carries the reason it is one, and
 /// `formatter_list_emit_fill_census` pins the whole set.
+///
+/// `Copy` because a caller that also MEASURES its list (the R42 tail reserve's
+/// leading-text pre-render) must hand the very same gate to both renders —
+/// two independently-derived gates would be two sources of truth.
+#[derive(Clone, Copy)]
 enum Gate {
     /// Consult the sideband over `(open_delim_pos, one_past_close_delim)`.
     /// `open_delim_pos` is the byte offset of the OPEN delimiter itself —
@@ -426,6 +431,58 @@ enum Gate {
     /// sideband, or a delimiter scan that found nothing), never a
     /// "not implemented yet".
     UngatedCarveOut(&'static str),
+}
+
+/// The width budget a `Formatter`'s Doc renders are decided against, and what
+/// those renders are FOR.
+///
+/// A TYPED three-state rather than a bare `max_width: usize`: two of the three
+/// states are MEASUREMENT probes whose widths (`usize::MAX`, `0`) are chosen to
+/// force an extreme, and recovering "this is a probe" from the number would be
+/// a sentinel read of a write-site fact. `doc::RenderPurpose` carries the same
+/// distinction across the boundary into the renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RenderBudget {
+    /// Real layout at the ratified 120-column budget.
+    Layout,
+    /// Measurement probe: break at EVERY opportunity, so the first line is
+    /// exactly the leading UNBREAKABLE text. Consumer: `measure_leading_text`,
+    /// the reserve primitive for a MEASURED tail.
+    ///
+    /// There is deliberately NO whole-flat (`usize::MAX`) sibling. It would
+    /// have exactly one plausible consumer — charging a pre-rendered `Group`
+    /// item the flat width of its later siblings — and that charge is
+    /// measurably wrong; `comprehension_reserves` records the measurement.
+    BreakEverywhere,
+}
+
+impl RenderBudget {
+    fn width(self) -> usize {
+        match self {
+            RenderBudget::Layout => doc::MAX_WIDTH,
+            RenderBudget::BreakEverywhere => 0,
+        }
+    }
+
+    fn purpose(self) -> doc::RenderPurpose {
+        match self {
+            RenderBudget::Layout => doc::RenderPurpose::Layout,
+            RenderBudget::BreakEverywhere => doc::RenderPurpose::Measure,
+        }
+    }
+}
+
+/// The escape-(c) reserves for a comprehension's three pre-rendered pieces
+/// (`Formatter::comprehension_reserves`).
+struct ComprehensionReserves {
+    /// Base indent LEVEL the pieces are pre-rendered for.
+    indent: usize,
+    /// Reserve for the element (or `key: value`) render.
+    element: usize,
+    /// Reserve for the iterable render.
+    iterable: usize,
+    /// Reserve for the optional `if` condition render.
+    condition: usize,
 }
 
 pub struct Formatter {
@@ -443,6 +500,19 @@ pub struct Formatter {
     /// stays `Clone`-cheap and sub-formatters (the `element_to_string_at`
     /// helper) can pass a trivial empty source without allocating.
     source: Rc<str>,
+    /// Width the caller has committed to emitting after the Doc that is about
+    /// to be rendered, on that Doc's LAST line. Read by `write_doc` — the one
+    /// splice chokepoint — and handed to the renderer, whose
+    /// `Renderer::tail_reserve` field doc in `doc.rs` is the single statement
+    /// of exactly what the number covers (including the safe-not-exact
+    /// inner-node charging and the multi-splice residual). Installed by
+    /// `with_tail_reserve` (additive) and, in the one sanctioned exception,
+    /// `with_exact_tail_reserve`.
+    tail_reserve: usize,
+    /// Whether this Formatter's Doc renders are real layout or a measurement
+    /// probe. `Layout` for the real one; the probe variants are reached only
+    /// through the two measurement primitives below.
+    budget: RenderBudget,
 }
 
 impl Formatter {
@@ -453,7 +523,143 @@ impl Formatter {
             comment_cursor: 0,
             trailing_aligns: Vec::new(),
             source,
+            tail_reserve: 0,
+            budget: RenderBudget::Layout,
         }
+    }
+
+    // ── Tail reserve: scoped install + the measurement primitives ──
+
+    /// Run `f` with `extra` MORE characters reserved on the line's tail, then
+    /// restore. Additive by design: a nested list inside a suffixed header
+    /// inherits its parent's reserve for free, and a chain of postfix
+    /// operators accumulates its own tails as it recurses.
+    ///
+    /// **Scope-tightness rule:** install the reserve IMMEDIATELY around the
+    /// width-decided render it charges — never around a larger region that
+    /// also emits other things. `format_type`'s recursive arms honour this by
+    /// installing their INTRA-type tails as they recurse, so each inner
+    /// `write_doc` sees exactly its own true remaining tail; that is what
+    /// makes the rule hold at every level rather than only the outermost.
+    fn with_tail_reserve<R>(&mut self, extra: usize, f: impl FnOnce(&mut Self) -> R) -> R {
+        let saved = self.tail_reserve;
+        self.tail_reserve = saved + extra;
+        let r = f(self);
+        self.tail_reserve = saved;
+        r
+    }
+
+    /// Run `f` with the tail reserve REPLACED by `value` (not added to), then
+    /// restore.
+    ///
+    /// The one sanctioned exception to additive-only, and it exists for one
+    /// caller: `format_bracketed_broken_with_comments` re-renders every
+    /// element on its own line ending in `,`, so a live caller reserve would
+    /// be charged to element renders that are nowhere near the caller's
+    /// suffix (~25 columns of over-reserve per element).
+    fn with_exact_tail_reserve<R>(&mut self, value: usize, f: impl FnOnce(&mut Self) -> R) -> R {
+        let saved = self.tail_reserve;
+        self.tail_reserve = value;
+        let r = f(self);
+        self.tail_reserve = saved;
+        r
+    }
+
+    /// Width in CHARACTERS of `f`'s LEADING UNBREAKABLE text — everything up
+    /// to its first fit-tested node.
+    ///
+    /// THE reserve primitive for a MEASURED tail. Rendering at width 0 makes
+    /// every break opportunity break, so the FIRST LINE is precisely the
+    /// leading literal run: `" = Dict["` for `type A[T] = Dict[…]`, not `" = "`
+    /// (which under-reserves by the open delimiter — a measured 121-char line)
+    /// and not the whole flat type (which over-reserves and breaks lines that
+    /// were in budget). See `doc::Renderer::tail_reserve` for why that is the
+    /// boundary.
+    ///
+    /// Taking the FIRST LINE also makes the trailing-newline question moot:
+    /// statements newline-terminate, so a whole-text measurement would have to
+    /// trim or over-count by exactly 1 — a defect planted in the measuring
+    /// instrument. And a body that cannot render on one line still yields a
+    /// correct leading prefix here, so there is no separate escape to detect.
+    fn measure_leading_text(&self, f: impl FnOnce(&mut Formatter)) -> usize {
+        let s = self.sub_render(0, 0, RenderBudget::BreakEverywhere, f);
+        s.lines().next().unwrap_or("").chars().count()
+    }
+
+    /// `measure_leading_text`, skipped when this Formatter is itself a
+    /// measurement probe.
+    ///
+    /// Inside a probe the reserve cannot change the outcome — at width 0 every
+    /// break opportunity breaks regardless of it, and at `usize::MAX` none of
+    /// them does — so the measurement would be pure cost. Skipping it also
+    /// CAPS the recursion: a remainder measure (a type's following siblings, a
+    /// param loop's tail) would otherwise measure its own remainder once per
+    /// level, which is exponential in nesting depth rather than linear.
+    fn measured_reserve(&self, f: impl FnOnce(&mut Formatter)) -> usize {
+        if self.budget != RenderBudget::Layout {
+            return 0;
+        }
+        self.measure_leading_text(f)
+    }
+
+    /// The reserve a block header owes when the author put the suite INLINE on
+    /// the header's own line: the header suffix (`":"`, or `""` at `on error`),
+    /// the separating space, and the body's LEADING UNBREAKABLE PREFIX.
+    ///
+    /// The prefix, NOT the body's whole flat width — the body manages its own
+    /// budget from its first fit-tested node onward, so charging the whole
+    /// thing breaks in-budget headers whose body fit-tests a few characters in.
+    ///
+    /// Installed at the CALLER, around the HEADER-expression render:
+    /// `format_inline_suite` runs after the header expression is already
+    /// emitted, so a reserve installed inside it could never reach the
+    /// header's fit test.
+    ///
+    /// When the header cannot absorb the reserve the line still overruns —
+    /// that is the ruled inline-BODY collision escape (suite member), and
+    /// converting the suite to a block form to save width would overwrite the
+    /// author's own layout choice.
+    fn inline_suite_reserve(&self, header_suffix: &str, block: &Block) -> usize {
+        if self.budget != RenderBudget::Layout {
+            return 0;
+        }
+        header_suffix.chars().count()
+            + 1
+            + self.measure_leading_text(|s| s.format_block_stmts(block))
+    }
+
+    /// The reserve a `case`/`catch`/`rethrow` header owes for whatever
+    /// `format_arm_body` writes on the header's OWN line — EXCLUDING the
+    /// caller's own `:`, which each caller spells for itself.
+    ///
+    /// Mirrors `format_arm_body`'s dispatch exactly:
+    ///   * author-spelled `do:` suite → a FIXED 4 (` do:`), so a `case` arm's
+    ///     total tail there is 5;
+    ///   * an indented (`NextLine`) suite → 0, the body owns its own lines;
+    ///   * an inline expression body → the space plus the body's leading
+    ///     unbreakable prefix — the inline-BODY collision escape's arm member.
+    fn arm_body_reserve(&self, body: &Spanned<Expr>) -> usize {
+        if self.budget != RenderBudget::Layout {
+            return 0;
+        }
+        if let Expr::Do {
+            author_spelled: true,
+            ..
+        } = &body.node
+        {
+            return 4;
+        }
+        let block_opt = match &body.node {
+            Expr::Block(block) => Some(block),
+            Expr::Do { body, .. } => Some(body),
+            _ => None,
+        };
+        if let Some(block) = block_opt {
+            if block.layout == SuiteLayout::NextLine {
+                return 0;
+            }
+        }
+        1 + self.measure_leading_text(|s| s.format_expr(body))
     }
 
     pub fn format(mut self, module: &Module) -> String {
@@ -540,6 +746,35 @@ impl Formatter {
         base_indent: usize,
         f: impl FnOnce(&mut Formatter),
     ) -> String {
+        self.sub_render(base_indent, 0, RenderBudget::Layout, f)
+    }
+
+    /// Escape-(c) variant: pre-render an element that will be spliced back in
+    /// with `reserve` characters still to come on its OWN last line — the
+    /// separating `,` for a non-last fill item, or `close + tail_reserve` for
+    /// the last one.
+    ///
+    /// The reserve is an EXPLICIT parameter, never ambient state: one source
+    /// of truth, visible at the call site, and impossible to leave set.
+    fn element_to_string_reserving(
+        &self,
+        base_indent: usize,
+        reserve: usize,
+        f: impl FnOnce(&mut Formatter),
+    ) -> String {
+        self.sub_render(base_indent, reserve, RenderBudget::Layout, f)
+    }
+
+    /// The single sub-render primitive behind `element_to_string_at`,
+    /// `element_to_string_reserving`, `element_to_string_unbounded` and
+    /// `measure_leading_text`.
+    fn sub_render(
+        &self,
+        base_indent: usize,
+        reserve: usize,
+        budget: RenderBudget,
+        f: impl FnOnce(&mut Formatter),
+    ) -> String {
         // Sub-formatter for Doc-tree rendering has no user comments to
         // interleave (the outer Formatter owns the sideband + cursor) —
         // the trailing-comment helpers find no matching ranges because
@@ -552,6 +787,8 @@ impl Formatter {
         // (gorget-js snag #15f). Comment interleaving stays inert because
         // `comments` is empty regardless of source content.
         let mut fmt = Formatter::new(vec![], self.source.clone());
+        fmt.tail_reserve = reserve;
+        fmt.budget = budget;
         fmt.emitter.indent = base_indent;
         fmt.emitter.at_line_start = false;
         // Seed the CURSOR too, not just the indent level. The rendered string
@@ -571,14 +808,18 @@ impl Formatter {
     /// Render a Doc tree at the current cursor position and write it
     /// into the output buffer. The Doc handles line-break decisions.
     fn write_doc(&mut self, doc: &doc::Doc) {
-        let rendered = doc::render_at(
+        let rendered = doc::render_at_reserving(
             doc,
-            doc::MAX_WIDTH,
+            self.budget.width(),
             // `current_col()`, never the raw `col`: at line start the indent
             // has not been written yet, so the raw field reads 0 while the Doc
             // will actually be placed at `indent * 4`.
             self.emitter.current_col(),
             self.emitter.indent,
+            // The caller's committed tail — see `Formatter::tail_reserve` and,
+            // for what the number covers, `doc::Renderer::tail_reserve`.
+            self.tail_reserve,
+            self.budget.purpose(),
         );
         self.emitter.write_preformatted(&rendered);
     }
@@ -728,7 +969,19 @@ impl Formatter {
         for elem in elems {
             let (elem_start, elem_end) = span_of(elem);
             self.emit_comments_before(elem_start);
-            format_elem(self, elem);
+            // Reserve EXACTLY 1 — the `,` written below, unconditionally,
+            // after every element including the last. Exactly, not additively:
+            // a live caller reserve belongs to the CLOSE line, not to these
+            // element lines, and charging it here over-reserves each of them.
+            //
+            // What has NO enforcement here, stated rather than implied: the
+            // CLOSE line. This path is a hand-rolled loop — no `Doc::Fill`, no
+            // fit test — so `close` is written at the outer indent and the
+            // caller's suffix follows it unmeasured. Outer indent + close +
+            // suffix is short in every real shape; a hypothetical overrun
+            // there is out of scope and not enforced. The trailing comment an
+            // element line may carry is likewise not fit-tested.
+            self.with_exact_tail_reserve(1, |f| format_elem(f, elem));
             self.emitter.write(",");
             self.emitter.newline();
             self.emit_trailing_comment_after(elem_end, false);
@@ -841,9 +1094,22 @@ impl Formatter {
                 return;
             }
         }
+        // Escape (c), closed for all ten list kinds at once: an item's
+        // sub-render renders at the full budget and so is blind to whatever
+        // its parent appends after it on its OWN last line. Charge it — the
+        // separating `,` for every item but the last, and for the last one the
+        // list's `close` plus this Formatter's live tail reserve (the caller's
+        // suffix, which lands on the same line as the close).
+        let last = elems.len().saturating_sub(1);
+        let last_reserve = close.chars().count() + self.tail_reserve;
+        let base_indent = self.emitter.indent + 1;
         let items: Vec<String> = elems
             .iter()
-            .map(|e| self.element_to_string(|f| format_elem(f, e)))
+            .enumerate()
+            .map(|(i, e)| {
+                let reserve = if i == last { last_reserve } else { 1 };
+                self.element_to_string_reserving(base_indent, reserve, |f| format_elem(f, e))
+            })
             .collect();
         self.emit_delimited_texts(open, close, items);
     }
@@ -1439,6 +1705,15 @@ impl Formatter {
             self.emit_trailing_comment_after(item.span.end, false);
             emitted += 1;
         }
+        // LEAK GUARD (Core #14 — the invariant gets an enforcer, not a
+        // comment). Every `with_tail_reserve` / `with_exact_tail_reserve`
+        // restores on exit, so a non-zero reserve here means some scope was
+        // left open — which would silently over-reserve every later line in
+        // the module rather than fail.
+        debug_assert_eq!(
+            self.tail_reserve, 0,
+            "tail reserve leaked out of a `with_tail_reserve` scope"
+        );
     }
 
     // ── Items ───────────────────────────────────────────────
@@ -1517,9 +1792,19 @@ impl Formatter {
                 match &mt.rhs {
                     MetaTypeRhs::Plain(t) => self.format_type(t),
                     MetaTypeRhs::Conditional { then_type, condition, else_type } => {
-                        self.format_type(then_type);
+                        // Family O — the meta-conditional type arms: operator
+                        // text (` if ` / ` else `) written BETWEEN renders.
+                        let then_tail = self.measured_reserve(|s| {
+                            s.emitter.write(" if ");
+                            s.format_expr(condition);
+                        });
+                        self.with_tail_reserve(then_tail, |s| s.format_type(then_type));
                         self.emitter.write(" if ");
-                        self.format_expr(condition);
+                        let cond_tail = self.measured_reserve(|s| {
+                            s.emitter.write(" else ");
+                            s.format_type(else_type);
+                        });
+                        self.with_tail_reserve(cond_tail, |s| s.format_expr(condition));
                         self.emitter.write(" else ");
                         self.format_type(else_type);
                     }
@@ -1541,7 +1826,21 @@ impl Formatter {
                 self.emitter.write("(");
                 for (i, p) in mtf.params.iter().enumerate() {
                     if i > 0 { self.emitter.write(", "); }
-                    self.format_param(&p.node);
+                    // B10 — `Item::MetaTypeFunc` is a RESERVED row, not the
+                    // reserve-0 one an earlier reading assumed: its param loop
+                    // reaches `write_doc` through `format_param` →
+                    // `format_type` → `format_generic_args_wrapped`. The loop
+                    // is hand-rolled, so each param is its OWN width-decided
+                    // render with its own tail.
+                    let rest = &mtf.params[i + 1..];
+                    let tail = self.measured_reserve(|s| {
+                        for q in rest {
+                            s.emitter.write(", ");
+                            s.format_param(&q.node);
+                        }
+                        s.emitter.write("):");
+                    });
+                    self.with_tail_reserve(tail, |s| s.format_param(&p.node));
                 }
                 self.emitter.write("):");
                 self.emitter.newline();
@@ -1566,7 +1865,8 @@ impl Formatter {
                 // first definition), and an author blank above `elif:`/`else:`
                 // was deleted because a clause header is not an item either.
                 self.emitter.write("meta if ");
-                self.format_expr(&mi.condition);
+                // B10 — `Item::MetaIf`, FIXED 1.
+                self.with_tail_reserve(1, |s| s.format_expr(&mi.condition));
                 self.emitter.write(":");
                 self.emit_trailing_comment_after_header(mi.condition.span.end);
                 self.emitter.newline();
@@ -1581,7 +1881,8 @@ impl Formatter {
                     }
                     self.emit_comments_before(cond.span.start);
                     self.emitter.write("elif ");
-                    self.format_expr(cond);
+                    // B10 — the item-level `meta elif` twin, FIXED 1.
+                    self.with_tail_reserve(1, |s| s.format_expr(cond));
                     self.emitter.write(":");
                     self.emit_trailing_comment_after_header(cond.span.end);
                     self.emitter.newline();
@@ -1782,6 +2083,54 @@ impl Formatter {
         if f.returns_borrowed {
             self.emitter.write("borrowed ");
         }
+        // Window rule (`delim_pos_after`): anchor PAST the generic-PARAMS
+        // region when the function is generic — a generic param's default
+        // or bound can otherwise sit between the name and the `(`.
+        let anchor = f.generic_params.as_ref().map_or(f.name.span.end, |gp| gp.span.end);
+        let params_gate = self.gate_or_scan_miss(self.paren_tuple_gate(
+            anchor,
+            f.span.end,
+            f.params.first().map(|p| p.span.start),
+            f.params.last().map(|p| p.span.end),
+        ));
+
+        // ── R42 tail reserves (rows A1, A2, and A10's fn-return-type cell) ──
+        //
+        // Every width-decided render in this header has caller-emitted text
+        // still to come on the same line. Each reserve is installed
+        // IMMEDIATELY around the render it charges (the scope-tightness rule),
+        // and each one measures the caller's tail up to the NEXT render's
+        // first break opportunity — see `doc::Renderer::tail_reserve`.
+        //
+        // A1 — the parameter list: the throws clause plus the body opener,
+        // which for an expression body carries on into the expression's own
+        // leading unbreakable text. Residual, NAMED rather than implied: an
+        // expression body whose leading unbreakable text alone exceeds the
+        // remaining budget still overruns — no break can save that line.
+        let header_tail = self.measured_reserve(|s| s.format_function_header_tail(f));
+        // A2 — the generic parameter list. EXACT, not approximated: when the
+        // value-parameter list is non-empty its own Fill fit-tests right after
+        // the `(`, so the tail is that one character; when it is empty
+        // `format_params_wrapped` short-circuits to the literal `()` with no
+        // fit test anywhere, so the tail runs on through it to A1's.
+        let generic_params_tail = if f.params.is_empty() {
+            2 + header_tail
+        } else {
+            1
+        };
+        // A10 — the return type. Its tail is ` name` plus the leading literal
+        // of whichever list comes next (`[` of the generic params, `(` of the
+        // value params, or `()` and onward when both are empty).
+        let return_tail = self.measured_reserve(|s| {
+            s.emitter.write(" ");
+            s.emitter.write(&f.name.node);
+            if let Some(ref gp) = f.generic_params {
+                s.format_generic_params_wrapped(gp);
+            }
+            s.format_params_wrapped(&f.params, params_gate);
+            s.format_function_header_tail(f);
+        });
+
         // type-first: `ReturnType name(params)`
         // Bare tuple return: emit `T1, T2` not `(T1, T2)` in return position
         if let Type::Tuple(types) = &f.return_type.node {
@@ -1789,39 +2138,34 @@ impl Formatter {
                 if i > 0 {
                     self.emitter.write(", ");
                 }
-                self.format_type(ty);
+                // A bare tuple return is emitted member-by-member, so each
+                // member's tail is the rest of the tuple plus `return_tail`.
+                let rest = &types[i + 1..];
+                let member_tail = return_tail
+                    + self.measured_reserve(|s| {
+                        for t in rest {
+                            s.emitter.write(", ");
+                            s.format_type(t);
+                        }
+                    });
+                self.with_tail_reserve(member_tail, |s| s.format_type(ty));
             }
         } else {
-            self.format_type(&f.return_type);
+            self.with_tail_reserve(return_tail, |s| s.format_type(&f.return_type));
         }
         self.emitter.write(" ");
         self.emitter.write(&f.name.node);
         if let Some(ref gp) = f.generic_params {
-            self.format_generic_params_wrapped(gp);
+            self.with_tail_reserve(generic_params_tail, |s| {
+                s.format_generic_params_wrapped(gp)
+            });
         }
-        // Window rule (`delim_pos_after`): anchor PAST the generic-PARAMS
-        // region when the function is generic — a generic param's default
-        // or bound can otherwise sit between the name and the `(`.
-        let anchor = f.generic_params.as_ref().map_or(f.name.span.end, |gp| gp.span.end);
-        let params_gate = self.paren_tuple_gate(
-            anchor,
-            f.span.end,
-            f.params.first().map(|p| p.span.start),
-            f.params.last().map(|p| p.span.end),
-        );
-        self.format_params_wrapped(&f.params, self.gate_or_scan_miss(params_gate));
-        match &f.throws {
-            ThrowsSpec::Explicit(throws) => {
-                self.emitter.write(" throws ");
-                self.format_type(throws);
-            }
-            // D29/A31 bare `!` inferred-error-set signature (`int f()!:`).
-            ThrowsSpec::Inferred(_) => self.emitter.write("!"),
-            ThrowsSpec::No => {}
-        }
+        self.with_tail_reserve(header_tail, |s| {
+            s.format_params_wrapped(&f.params, params_gate)
+        });
+        self.format_function_header_tail(f);
         match &f.body {
             FunctionBody::Block(block) => {
-                self.emitter.write(":");
                 // R39 gorget-arena verdict follow-up (owner 2026-08-09):
                 // preserve `int f(int x): # doc` trailing comment on the
                 // function-header line — same class as R39 block-header
@@ -1835,18 +2179,38 @@ impl Formatter {
                 self.format_block_stmts(block);
                 self.emitter.dedent();
             }
+            _ => self.emitter.newline(),
+        }
+    }
+
+    /// Everything a function header writes AFTER its parameter list's `)`, on
+    /// the same line: the throws spec, the body opener (`:` / `: ` / ` = "…"`),
+    /// and — for an expression body — the expression itself, which continues on
+    /// that line.
+    ///
+    /// ONE spelling, shared by the real emission and by A1's reserve
+    /// measurement, so the two cannot drift. Writes no newline and takes no
+    /// indent; the block body's own lines stay with the caller.
+    fn format_function_header_tail(&mut self, f: &FunctionDef) {
+        match &f.throws {
+            ThrowsSpec::Explicit(throws) => {
+                self.emitter.write(" throws ");
+                self.format_type(throws);
+            }
+            // D29/A31 bare `!` inferred-error-set signature (`int f()!:`).
+            ThrowsSpec::Inferred(_) => self.emitter.write("!"),
+            ThrowsSpec::No => {}
+        }
+        match &f.body {
+            FunctionBody::Block(_) => self.emitter.write(":"),
             FunctionBody::Expression(expr) => {
                 self.emitter.write(": ");
                 self.format_expr(expr);
-                self.emitter.newline();
             }
-            FunctionBody::Declaration => {
-                self.emitter.newline();
-            }
+            FunctionBody::Declaration => {}
             FunctionBody::Extern(sym) => {
                 self.emitter.write(" = ");
                 self.emit_quoted_string(&sym.node, Some(sym.span));
-                self.emitter.newline();
             }
         }
     }
@@ -1887,7 +2251,8 @@ impl Formatter {
         self.emitter.write("struct ");
         self.emitter.write(&s.name.node);
         if let Some(ref gp) = s.generic_params {
-            self.format_generic_params_wrapped(gp);
+            // A3 — FIXED 1: the header's `:`.
+            self.with_tail_reserve(1, |f| f.format_generic_params_wrapped(gp));
         }
         self.emitter.write(":");
         self.emitter.newline();
@@ -1947,7 +2312,8 @@ impl Formatter {
         self.emitter.write("enum ");
         self.emitter.write(&e.name.node);
         if let Some(ref gp) = e.generic_params {
-            self.format_generic_params_wrapped(gp);
+            // A4 — FIXED 1: the header's `:`.
+            self.with_tail_reserve(1, |f| f.format_generic_params_wrapped(gp));
         }
         self.emitter.write(":");
         self.emitter.newline();
@@ -1979,7 +2345,17 @@ impl Formatter {
                             if i > 0 {
                                 self.emitter.write(", ");
                             }
-                            self.format_type(ty);
+                            // Hand-rolled comma loop: each field type is
+                            // charged for the rest of the list plus the `)`.
+                            let rest = &types[i + 1..];
+                            let tail = self.measured_reserve(|s| {
+                                for t in rest {
+                                    s.emitter.write(", ");
+                                    s.format_type(t);
+                                }
+                                s.emitter.write(")");
+                            });
+                            self.with_tail_reserve(tail, |s| s.format_type(ty));
                         }
                         self.emitter.write(")");
                     }
@@ -1993,15 +2369,10 @@ impl Formatter {
         self.emitter.dedent();
     }
 
-    fn format_trait(&mut self, t: &TraitDef) {
-        self.format_doc_comment(&t.doc_comment);
-        self.format_attributes(&t.attributes);
-        self.format_visibility(&t.visibility, t.explicit_visibility);
-        self.emitter.write("trait ");
-        self.emitter.write(&t.name.node);
-        if let Some(ref gp) = t.generic_params {
-            self.format_generic_params_wrapped(gp);
-        }
+    /// A trait header's tail after the generic-parameter list: the `extends`
+    /// supertrait list and the closing `:`. ONE spelling, shared by the
+    /// emission and by A5's reserve measurement.
+    fn format_trait_extends_and_colon(&mut self, t: &TraitDef) {
         if !t.extends.is_empty() {
             self.emitter.write(" extends ");
             for (i, bound) in t.extends.iter().enumerate() {
@@ -2011,10 +2382,33 @@ impl Formatter {
                     // round-trips.
                     self.emitter.write(" & ");
                 }
-                self.format_trait_bound(bound);
+                let rest = &t.extends[i + 1..];
+                let tail = self.measured_reserve(|s| {
+                    for b in rest {
+                        s.emitter.write(" & ");
+                        s.format_trait_bound(b);
+                    }
+                    s.emitter.write(":");
+                });
+                self.with_tail_reserve(tail, |s| s.format_trait_bound(bound));
             }
         }
         self.emitter.write(":");
+    }
+
+    fn format_trait(&mut self, t: &TraitDef) {
+        self.format_doc_comment(&t.doc_comment);
+        self.format_attributes(&t.attributes);
+        self.format_visibility(&t.visibility, t.explicit_visibility);
+        self.emitter.write("trait ");
+        self.emitter.write(&t.name.node);
+        if let Some(ref gp) = t.generic_params {
+            // A5 — MEASURED: the `extends` clause's leading unbreakable text
+            // (or, with no supertraits, just the `:`).
+            let tail = self.measured_reserve(|s| s.format_trait_extends_and_colon(t));
+            self.with_tail_reserve(tail, |f| f.format_generic_params_wrapped(gp));
+        }
+        self.format_trait_extends_and_colon(t);
         self.emitter.newline();
         // R39 snag #2 sub-task 5b: `trait T:  # header` / `trait T extends A:  # x`
         // — for the same-line-header shape, `t.name.span.end` is on the
@@ -2044,7 +2438,22 @@ impl Formatter {
                                 if i > 0 {
                                     self.emitter.write(" & ");
                                 }
-                                self.format_trait_bound(bound);
+                                // B10-adjacent: `TraitItem::AssociatedType`
+                                // reaches `write_doc` through
+                                // `format_trait_bound` → `format_type`, so it
+                                // is a RESERVED row, not a reserve-0 one.
+                                let rest = &at.bounds[i + 1..];
+                                let tail = self.measured_reserve(|s| {
+                                    for b in rest {
+                                        s.emitter.write(" & ");
+                                        s.format_trait_bound(b);
+                                    }
+                                    if let Some(ref d) = at.default {
+                                        s.emitter.write(" = ");
+                                        s.format_type(d);
+                                    }
+                                });
+                                self.with_tail_reserve(tail, |s| s.format_trait_bound(bound));
                             }
                         }
                         if let Some(ref default) = at.default {
@@ -2066,13 +2475,36 @@ impl Formatter {
 
     fn format_equip(&mut self, e: &EquipBlock) {
         self.emitter.write("equip ");
+        // A6 — three width-decided renders in one header (`[T]`, the equipped
+        // type, the `with` trait), each charged for exactly what still follows
+        // it up to the next render's first break opportunity.
+        let via_and_colon = |s: &mut Formatter| {
+            if let Some(ref via) = e.via_field {
+                s.emitter.write(" via ");
+                s.emitter.write(&via.node);
+            }
+            s.emitter.write(":");
+        };
+        let with_onward = |s: &mut Formatter| {
+            if let Some(ref trait_) = e.trait_ {
+                s.emitter.write(" with ");
+                s.format_type(&trait_.trait_name);
+            }
+            via_and_colon(s);
+        };
         if let Some(ref gp) = e.generic_params {
-            self.format_generic_params_wrapped(gp);
+            let tail = self.measured_reserve(|s| {
+                s.format_type(&e.type_);
+                with_onward(s);
+            });
+            self.with_tail_reserve(tail, |f| f.format_generic_params_wrapped(gp));
         }
-        self.format_type(&e.type_);
+        let type_tail = self.measured_reserve(with_onward);
+        self.with_tail_reserve(type_tail, |s| s.format_type(&e.type_));
         if let Some(ref trait_) = e.trait_ {
             self.emitter.write(" with ");
-            self.format_type(&trait_.trait_name);
+            let trait_tail = self.measured_reserve(via_and_colon);
+            self.with_tail_reserve(trait_tail, |s| s.format_type(&trait_.trait_name));
         }
         if let Some(ref via) = e.via_field {
             self.emitter.write(" via ");
@@ -2181,7 +2613,14 @@ impl Formatter {
         self.emitter.write("type ");
         self.emitter.write(&ta.name.node);
         if let Some(ref gp) = ta.generic_params {
-            self.format_generic_params_wrapped(gp);
+            // A7 — MEASURED, and the whole-flat reading is WRONG here: the
+            // tail is `" = Dict["`, not `" = "` + the flat type. Charging the
+            // whole type breaks aliases that were in budget.
+            let tail = self.measured_reserve(|s| {
+                s.emitter.write(" = ");
+                s.format_type(&ta.type_);
+            });
+            self.with_tail_reserve(tail, |f| f.format_generic_params_wrapped(gp));
         }
         self.emitter.write(" = ");
         self.format_type(&ta.type_);
@@ -2388,31 +2827,82 @@ impl Formatter {
     ///     .map(f)
     ///     .collect()
     /// ```
+    /// The C10 reserves a comprehension's pre-rendered pieces need.
+    ///
+    /// Same broken-layout rule as the chain carriers: `build_comprehension_doc`
+    /// puts a `softline` before the close, so in BROKEN mode the element, the
+    /// `for` clause and the `if` clause each own a line and NONE of them
+    /// carries the close or the caller's tail. All three reserves are
+    /// therefore 0, and the FLAT decision is taken by the enclosing group's
+    /// own fit test, which now consumes `tail_reserve`.
+    ///
+    /// The function survives as the ONE place that statement is written down —
+    /// a bare `element_to_string` at the three call sites would leave the next
+    /// reader to re-derive it, and re-deriving it as "the clause text that
+    /// follows me when flat" is precisely the over-reserve that degraded 291
+    /// already-in-budget chain hunks when the binary chain was spelled that
+    /// way.
+    fn comprehension_reserves(&self) -> ComprehensionReserves {
+        ComprehensionReserves {
+            indent: self.emitter.indent + 1,
+            element: 0,
+            iterable: 0,
+            condition: 0,
+        }
+    }
+
+    /// One `.method[GA](args)` segment of a method chain. ONE spelling,
+    /// shared by the emission and by C10's flat measurement.
+    fn format_chain_segment(
+        &mut self,
+        method: &Spanned<String>,
+        generic_args: &Option<Vec<Spanned<Type>>>,
+        args: &[Spanned<CallArg>],
+    ) {
+        self.emitter.write(".");
+        self.emitter.write(&method.node);
+        // DECLARED carve-outs. This runs on the sub-`Formatter` built by
+        // `element_to_string*`, whose comment sideband is EMPTY — a
+        // `Gate::Span` would evaluate against no comments and read as a live
+        // gate while being dead code. The escape is real (a comment inside a
+        // chain segment's arguments re-parents), and it belongs to the
+        // pre-render-ABOVE mechanism: the chain itself must decide before it
+        // pre-renders. Filed with a repro in `TODO.md`.
+        if let Some(ga) = generic_args {
+            let r = Gate::UngatedCarveOut("chain segment generic args: empty sideband");
+            self.format_generic_args_wrapped(ga, r);
+        }
+        let r = Gate::UngatedCarveOut("chain segment call args: empty sideband");
+        self.format_call_args_wrapped(args, r);
+    }
+
     fn format_method_chain(&mut self, expr: &Spanned<Expr>) {
         let (root, segments) = collect_method_chain(expr);
-        let root_str = self.element_to_string(|f| f.format_expr(root));
+
+        // C10, method-chain carrier — the same rule as the binary chain: a
+        // pre-rendered piece is charged only what CERTAINLY shares its line,
+        // which for a `Doc::Group`-clothed carrier is the BROKEN layout. Each
+        // segment then owns a line, so only the LAST inherits the caller's
+        // tail; the root and the intermediate segments carry nothing. The FLAT
+        // case is decided by the enclosing group's own fit test, which now
+        // consumes `tail_reserve`.
+        let base = self.tail_reserve;
+        let last = segments.len().saturating_sub(1);
+
+        let root_reserve = if segments.is_empty() { base } else { 0 };
+        let root_str = self
+            .element_to_string_reserving(self.emitter.indent + 1, root_reserve, |f| {
+                f.format_expr(root)
+            });
 
         let mut parts = Vec::with_capacity(segments.len() + 1);
         // Format each .method(args) segment as a string
-        for (method, generic_args, args) in &segments {
-            let seg_str = self.element_to_string(|f| {
-                f.emitter.write(".");
-                f.emitter.write(&method.node);
-                // DECLARED carve-outs. `f` here is the sub-`Formatter`
-                // built by `element_to_string`, whose comment sideband is
-                // EMPTY — a `Gate::Span` would evaluate against no
-                // comments and read as a live gate while being dead code.
-                // The escape is real (a comment inside a chain segment's
-                // arguments re-parents), and it belongs to the
-                // pre-render-ABOVE mechanism: the chain itself must decide
-                // before it pre-renders. Filed with a repro in `TODO.md`.
-                if let Some(ga) = generic_args {
-                    let r = Gate::UngatedCarveOut("chain segment generic args: empty sideband");
-                    f.format_generic_args_wrapped(ga, r);
-                }
-                let r = Gate::UngatedCarveOut("chain segment call args: empty sideband");
-                f.format_call_args_wrapped(args, r);
-            });
+        for (i, (method, generic_args, args)) in segments.iter().enumerate() {
+            let reserve = if i == last { base } else { 0 };
+            let seg_str =
+                self.element_to_string_reserving(self.emitter.indent + 1, reserve, |f| {
+                    f.format_chain_segment(method, generic_args, args)
+                });
             parts.push(seg_str);
         }
 
@@ -2471,12 +2961,38 @@ impl Formatter {
         // the LEFT operand of the leftmost pairing; positions >0 are all
         // in RIGHT positions of successively-nested left-assoc pairings
         // (or the single right-operand of a right-assoc op).
+        // C10, binary-chain carrier. **What a pre-rendered piece may be
+        // charged is what CERTAINLY shares its line**, and for a
+        // `Doc::Group`-clothed carrier that is the BROKEN layout: each
+        // operand then owns a line, so only the LAST one carries anything —
+        // the `)` that `wrap_multiline_expr_in_parens` appends in broken mode,
+        // plus the caller's own tail.
+        //
+        // The FLAT case needs nothing here: the enclosing `Doc::Group`'s own
+        // fit test now consumes `tail_reserve`, so it decides flat-vs-broken
+        // with the caller's suffix already counted. Charging each operand the
+        // whole REMAINING CHAIN instead — the tempting "what shares its line
+        // when flat" reading — measured as a corpus-wide degradation: 291
+        // already-broken, already-in-budget chain hunks re-broke into nested
+        // paren-wrapped fragments, because the reserve forced each operand's
+        // own sub-render to break internally. Safe-not-exact must not become
+        // pessimistic-and-wrong.
+        //
+        // ⚠ Track D rewrites `wrap_multiline_expr_in_parens` after this
+        // change; the `+ 1` below is the coupling between the two.
+        let base = self.tail_reserve;
+        let last = operands.len().saturating_sub(1);
         let operand_strs: Vec<String> = operands
             .iter()
             .enumerate()
             .map(|(i, o)| {
                 let position = if i == 0 { BinOpPos::Left } else { BinOpPos::Right };
-                self.element_to_string(|f| {
+                let reserve = if i == last {
+                    base + usize::from(operands.len() > 1)
+                } else {
+                    0
+                };
+                self.element_to_string_reserving(self.emitter.indent + 1, reserve, |f| {
                     f.format_binop_operand(o, outer_left_bp, position, outer_right_assoc);
                 })
             })
@@ -2891,6 +3407,70 @@ impl Formatter {
         self.emitter.newline();
     }
 
+    /// A closure's body — everything the `Expr::Closure` arm writes AFTER its
+    /// `:`. ONE spelling, shared by the emission and by A8's reserve
+    /// measurement, so the block-body and inline-body cells fall out of the
+    /// same code rather than a duplicated layout test.
+    fn format_closure_body(&mut self, body: &Spanned<Expr>, params: &[Spanned<ClosureParam>]) {
+        // Total prelude stmts injected by the parser for tuple destructuring.
+        let prelude_skip: usize = params
+            .iter()
+            .filter_map(|p| p.node.destructure.as_ref().map(|b| b.len()))
+            .sum();
+        let Expr::Block(ref block) = body.node else {
+            self.emitter.write(" ");
+            self.format_expr(body);
+            return;
+        };
+        let post_prelude: Vec<&Spanned<Stmt>> = block.stmts.iter().skip(prelude_skip).collect();
+        // R41 T-FMT-C: layout-GATED, not layout-only. `NextLine` means the
+        // author indented the body and it stays indented; `Inline` still has
+        // to pick WHICH inline form, because the parser normalizes an
+        // expression body into `Block { ..prelude.., Return(e) }` and that
+        // `return` is the parser's spelling, not the author's.
+        //
+        // The old code inferred the form from the shape
+        // (`post_prelude.len() == 1 && Stmt::Return`), which COLLAPSED an
+        // author-indented single-`return` body onto the header. A
+        // multi-statement indented body survived, which is why a fixture
+        // carrying only that shape would have been green throughout.
+        if block.layout != SuiteLayout::Inline {
+            self.emitter.newline();
+            self.emitter.indent();
+            self.format_closure_post_prelude(block, &post_prelude, prelude_skip);
+            self.emitter.dedent();
+            return;
+        }
+        self.emitter.write(" ");
+        let inline_expr = if post_prelude.len() == 1 {
+            match &post_prelude[0].node {
+                Stmt::Return(Some(e)) => Some(e.clone()),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        if let Some(expr) = inline_expr {
+            self.format_expr(&expr);
+            return;
+        }
+        // A non-`return` inline shape — `(int x): throw "a"` is a synthetic
+        // `Block { Throw }` with no expression form. Route it through the
+        // shared single-terminal inliner rather than exploding it onto its
+        // own line.
+        let tail: Vec<Spanned<Stmt>> = post_prelude.iter().map(|s| (*s).clone()).collect();
+        if !self.try_inline_single_terminal_stmts(&tail) {
+            // Unreachable for parser output: an `Inline` closure body is
+            // always a one-statement synthetic wrap. Emit the suite rather
+            // than drop it (Core #10 — never silently discard what the author
+            // wrote).
+            self.emitter.newline();
+            self.emitter.indent();
+            self.format_closure_post_prelude(block, &post_prelude, prelude_skip);
+            self.emitter.dedent();
+        }
+    }
+
     /// Emit an indented closure body, skipping the parser-synthesized
     /// destructure prelude.
     ///
@@ -2984,7 +3564,13 @@ impl Formatter {
             // loops. Claim it at branch indent first.
             self.emit_comments_before(cond.span.start);
             self.emitter.write("elif ");
-            self.format_expr(cond);
+            // B2 — the `elif` sibling of B1, with the same two layout cells.
+            let cond_tail = if body.layout == SuiteLayout::Inline {
+                self.inline_suite_reserve(":", body)
+            } else {
+                1
+            };
+            self.with_tail_reserve(cond_tail, |s| s.format_expr(cond));
             if body.layout == SuiteLayout::Inline {
                 self.format_inline_suite(":", body, cond.span.end);
             } else {
@@ -3041,24 +3627,21 @@ impl Formatter {
                     SharedKind::None => {}
                 }
                 // type-first: `type name = expr`
-                self.format_type(type_);
+                //
+                // A10's var-decl cell. The type's tail is ` name = ` PLUS the
+                // initializer's leading unbreakable text: an atomic init (a
+                // literal, an identifier) goes straight through the Emitter
+                // with no fit test anywhere, so the whole of it rides on this
+                // line and stopping the reserve at ` = ` under-reserves.
+                let decl_tail = self.measured_reserve(|s| {
+                    s.emitter.write(" ");
+                    s.format_var_decl_pattern(type_, pattern);
+                    s.emitter.write(" = ");
+                    s.format_expr(value);
+                });
+                self.with_tail_reserve(decl_tail, |s| s.format_type(type_));
                 self.emitter.write(" ");
-                // For auto declarations with tuple patterns, emit bare (no parens):
-                // `auto a, b = ...` not `auto (a, b) = ...`
-                if matches!(&type_.node, Type::Inferred) {
-                    if let Pattern::Tuple(pats) = &pattern.node {
-                        for (i, p) in pats.iter().enumerate() {
-                            if i > 0 {
-                                self.emitter.write(", ");
-                            }
-                            self.format_pattern(p);
-                        }
-                    } else {
-                        self.format_pattern(pattern);
-                    }
-                } else {
-                    self.format_pattern(pattern);
-                }
+                self.format_var_decl_pattern(type_, pattern);
                 self.emitter.write(" = ");
                 self.format_expr(value);
                 self.emitter.newline();
@@ -3068,13 +3651,28 @@ impl Formatter {
                 self.emitter.newline();
             }
             Stmt::Assign { target, value } => {
-                self.format_expr(target);
+                // Family O — a statement operator written BETWEEN two renders.
+                // The target's own render is blind to the ` = <value…>` that
+                // lands on its line; the value's leading unbreakable text
+                // counts in, exactly as at the var-decl above.
+                let tail = self.measured_reserve(|s| {
+                    s.emitter.write(" = ");
+                    s.format_expr(value);
+                });
+                self.with_tail_reserve(tail, |s| s.format_expr(target));
                 self.emitter.write(" = ");
                 self.format_expr(value);
                 self.emitter.newline();
             }
             Stmt::CompoundAssign { target, op, value } => {
-                self.format_expr(target);
+                // Family O, compound costume.
+                let tail = self.measured_reserve(|s| {
+                    s.emitter.write(" ");
+                    s.emitter.write(compound_op_str(*op));
+                    s.emitter.write(" ");
+                    s.format_expr(value);
+                });
+                self.with_tail_reserve(tail, |s| s.format_expr(target));
                 self.emitter.write(" ");
                 self.emitter.write(compound_op_str(*op));
                 self.emitter.write(" ");
@@ -3142,7 +3740,10 @@ impl Formatter {
                 // ownership sigil BEFORE parsing the iterable expression, so
                 // an iterable whose own emission leads with `&`/`!`/`^` must
                 // be parenthesised or the reparse steals it into `ownership`.
-                self.format_ownership_modifier_operand(iterable);
+                //
+                // B4 — FIXED 1: the header's `:`. (A `for` suite is always
+                // indented; there is no inline `for` layout to measure.)
+                self.with_tail_reserve(1, |s| s.format_ownership_modifier_operand(iterable));
                 self.emitter.write(":");
                 // R39 gorget-arena block-header trailing (owner 2026-08-09):
                 // preserve `for x in xs:  # comment` as trailing on the header
@@ -3175,7 +3776,8 @@ impl Formatter {
                 else_body,
             } => {
                 self.emitter.write("while ");
-                self.format_expr(condition);
+                // B3 — FIXED 1.
+                self.with_tail_reserve(1, |s| s.format_expr(condition));
                 self.emitter.write(":");
                 self.emit_trailing_comment_after_header(condition.span.end);
                 self.emitter.newline();
@@ -3208,7 +3810,15 @@ impl Formatter {
                 else_body,
             } => {
                 self.emitter.write("if ");
-                self.format_expr(condition);
+                // B1 — the two SUITE-LAYOUT cells are different reserves: an
+                // indented suite owes only the `:`, an INLINE suite also owes
+                // the space and the body's leading unbreakable prefix.
+                let cond_tail = if then_body.layout == SuiteLayout::Inline {
+                    self.inline_suite_reserve(":", then_body)
+                } else {
+                    1
+                };
+                self.with_tail_reserve(cond_tail, |s| s.format_expr(condition));
                 if then_body.layout == SuiteLayout::Inline {
                     self.format_inline_suite(":", then_body, condition.span.end);
                 } else {
@@ -3227,7 +3837,8 @@ impl Formatter {
                 else_arm,
             } => {
                 self.emitter.write("match ");
-                self.format_expr(scrutinee);
+                // B5 — FIXED 1.
+                self.with_tail_reserve(1, |s| s.format_expr(scrutinee));
                 self.emitter.write(":");
                 self.emit_trailing_comment_after_header(scrutinee.span.end);
                 self.emitter.newline();
@@ -3254,7 +3865,8 @@ impl Formatter {
                             let joined = vars.iter().map(|v| v.node.as_str()).collect::<Vec<_>>().join(", ");
                             self.emitter.write(&joined);
                             self.emitter.write(" in ");
-                            self.format_expr(range);
+                            // B10 — `MatchItem::MetaFor`, FIXED 1.
+                            self.with_tail_reserve(1, |s| s.format_expr(range));
                             self.emitter.write(":");
                             self.emitter.newline();
                             self.emitter.indent();
@@ -3292,19 +3904,33 @@ impl Formatter {
                     }
                     self.emit_comments_before(arm.span.start);
                     self.emitter.write("case ");
+                    // B10 — the `select` arm is a MULTI-RENDER header: two or
+                    // three width-decided renders with DIFFERENT tails, so one
+                    // row per header would under-specify it. Each reserve is
+                    // MEASURED to the next render's first break opportunity —
+                    // the `.send(` head, the `.recv():` tail — never the whole
+                    // arm text.
                     match &arm.op {
                         SelectOp::Recv { type_, name, channel } => {
-                            self.format_type(type_);
+                            let type_tail = self.measured_reserve(|s| {
+                                s.emitter.write(" ");
+                                s.emitter.write(&name.node);
+                                s.emitter.write(" = ");
+                                s.format_expr(channel);
+                            });
+                            self.with_tail_reserve(type_tail, |s| s.format_type(type_));
                             self.emitter.write(" ");
                             self.emitter.write(&name.node);
                             self.emitter.write(" = ");
-                            self.format_expr(channel);
+                            self.with_tail_reserve(8, |s| s.format_expr(channel));
                             self.emitter.write(".recv()");
                         }
                         SelectOp::Send { channel, value } => {
-                            self.format_expr(channel);
+                            // `.send(` — the value's own render fit-tests from
+                            // inside the parens onward.
+                            self.with_tail_reserve(6, |s| s.format_expr(channel));
                             self.emitter.write(".send(");
-                            self.format_expr(value);
+                            self.with_tail_reserve(2, |s| s.format_expr(value));
                             self.emitter.write(")");
                         }
                     }
@@ -3336,7 +3962,23 @@ impl Formatter {
                     // Q3 PRESERVE: the bare `with r:` form is not shorthand
                     // the formatter gets to expand — `with r as r:` is a
                     // different thing to read.
-                    self.format_expr(&binding.expr);
+                    //
+                    // B10 — a NON-LAST binding's tail is the `as` alias plus
+                    // `", "` plus the NEXT binding's leading text (MEASURED);
+                    // the last one's is the alias plus the header's `:`.
+                    let rest = &bindings[i + 1..];
+                    let tail = self.measured_reserve(|s| {
+                        if binding.explicit_as {
+                            s.emitter.write(" as ");
+                            s.emitter.write(&binding.name.node);
+                        }
+                        for b in rest {
+                            s.emitter.write(", ");
+                            s.format_expr(&b.expr);
+                        }
+                        s.emitter.write(":");
+                    });
+                    self.with_tail_reserve(tail, |s| s.format_expr(&binding.expr));
                     if binding.explicit_as {
                         self.emitter.write(" as ");
                         self.emitter.write(&binding.name.node);
@@ -3357,7 +3999,15 @@ impl Formatter {
             }
             Stmt::Assert { condition, message } => {
                 self.emitter.write("assert ");
-                self.format_expr(condition);
+                // Family O — the `, <message>` an assert writes after its
+                // condition is on the condition's own line.
+                let tail = self.measured_reserve(|s| {
+                    if let Some(msg) = message {
+                        s.emitter.write(", ");
+                        s.format_expr(msg);
+                    }
+                });
+                self.with_tail_reserve(tail, |s| s.format_expr(condition));
                 if let Some(msg) = message {
                     self.emitter.write(", ");
                     self.format_expr(msg);
@@ -3366,7 +4016,14 @@ impl Formatter {
             }
             Stmt::AssertReturn { condition, message } => {
                 self.emitter.write("assert return");
-                self.format_assert_return_expr(condition);
+                // Family O — the assert-postcondition sibling.
+                let tail = self.measured_reserve(|s| {
+                    if let Some(msg) = message {
+                        s.emitter.write(", ");
+                        s.format_expr(msg);
+                    }
+                });
+                self.with_tail_reserve(tail, |s| s.format_assert_return_expr(condition));
                 if let Some(msg) = message {
                     self.emitter.write(", ");
                     self.format_expr(msg);
@@ -3392,7 +4049,8 @@ impl Formatter {
                 ..
             } => {
                 self.emitter.write("meta if ");
-                self.format_expr(condition);
+                // B10 — `Stmt::MetaIf`, FIXED 1.
+                self.with_tail_reserve(1, |s| s.format_expr(condition));
                 self.emitter.write(":");
                 self.emitter.newline();
                 self.emitter.indent();
@@ -3405,7 +4063,8 @@ impl Formatter {
                 let joined = vars.iter().map(|v| v.node.as_str()).collect::<Vec<_>>().join(", ");
                 self.emitter.write(&joined);
                 self.emitter.write(" in ");
-                self.format_expr(range);
+                // B10 — `Stmt::MetaFor`, FIXED 1.
+                self.with_tail_reserve(1, |s| s.format_expr(range));
                 self.emitter.write(":");
                 self.emitter.newline();
                 self.emitter.indent();
@@ -3414,7 +4073,8 @@ impl Formatter {
             }
             Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
                 self.emitter.write("meta match ");
-                self.format_expr(scrutinee);
+                // B10 — `Stmt::MetaMatch`, FIXED 1.
+                self.with_tail_reserve(1, |s| s.format_expr(scrutinee));
                 self.emitter.write(":");
                 self.emitter.newline();
                 self.emitter.indent();
@@ -3427,7 +4087,14 @@ impl Formatter {
                     }
                     self.emit_comments_before(case_expr.span.start);
                     self.emitter.write("case ");
-                    self.format_expr(case_expr);
+                    // B10 — the `meta match` case arm, carrying B1's two
+                    // suite-layout cells.
+                    let case_tail = if body.layout == SuiteLayout::Inline {
+                        self.inline_suite_reserve(":", body)
+                    } else {
+                        1
+                    };
+                    self.with_tail_reserve(case_tail, |s| s.format_expr(case_expr));
                     if body.layout == SuiteLayout::Inline {
                         self.format_inline_suite(":", body, case_expr.span.end);
                     } else {
@@ -3463,7 +4130,8 @@ impl Formatter {
             }
             Stmt::MetaWhile { condition, body, .. } => {
                 self.emitter.write("meta while ");
-                self.format_expr(condition);
+                // B10 — `Stmt::MetaWhile`, FIXED 1.
+                self.with_tail_reserve(1, |s| s.format_expr(condition));
                 self.emitter.write(":");
                 self.emitter.newline();
                 self.emitter.indent();
@@ -3514,12 +4182,59 @@ impl Formatter {
         }
     }
 
+    /// The remaining clauses of an expression-position `if`, from a given
+    /// point on. Used only to MEASURE a branch expression's tail (B6) — the
+    /// emission walks the clauses itself.
+    fn format_expr_if_tail(
+        &mut self,
+        elifs: &[(Spanned<Expr>, Spanned<Expr>)],
+        else_branch: Option<&Spanned<Expr>>,
+    ) {
+        for (cond, body) in elifs {
+            self.emitter.write(" elif ");
+            self.format_expr(cond);
+            self.emitter.write(": ");
+            self.format_expr(body);
+        }
+        if let Some(e) = else_branch {
+            self.emitter.write(" else: ");
+            self.format_expr(e);
+        }
+    }
+
+    /// The declared name(s) of a `Stmt::VarDecl`. Factored out so the emission
+    /// and A10's var-decl tail measurement share one spelling.
+    fn format_var_decl_pattern(&mut self, type_: &Spanned<Type>, pattern: &Spanned<Pattern>) {
+        // For auto declarations with tuple patterns, emit bare (no parens):
+        // `auto a, b = ...` not `auto (a, b) = ...`
+        if matches!(&type_.node, Type::Inferred) {
+            if let Pattern::Tuple(pats) = &pattern.node {
+                for (i, p) in pats.iter().enumerate() {
+                    if i > 0 {
+                        self.emitter.write(", ");
+                    }
+                    self.format_pattern(p);
+                }
+                return;
+            }
+        }
+        self.format_pattern(pattern);
+    }
+
     fn format_match_arm(&mut self, arm: &MatchArm) {
         self.emitter.write("case ");
+        // B7 / B11. The GUARD is the arm header's width-decided render (the
+        // pattern has no Doc layer at all — pattern wrapping is its own,
+        // unimplemented feature). Its tail is the arm's `:` plus whatever
+        // `format_arm_body` puts on this same line: nothing for an indented
+        // suite (B7's block-body cell), ` do:` for an author-spelled `do`
+        // suite, or the space plus the body's leading prefix for an inline
+        // expression body (B11's arm member of the inline-BODY escape).
         self.format_pattern(&arm.pattern);
         if let Some(ref guard) = arm.guard {
             self.emitter.write(" if ");
-            self.format_expr(guard);
+            let guard_tail = 1 + self.arm_body_reserve(&arm.body);
+            self.with_tail_reserve(guard_tail, |s| s.format_expr(guard));
         }
         self.emitter.write(":");
         // R39 gorget-arena block-header trailing: preserve `case P:  # comment`
@@ -3572,13 +4287,23 @@ impl Formatter {
                 }
             }
             Type::Array { element, size } => {
-                self.format_type(element);
+                // A10 composition: a type's recursive arms install their own
+                // INTRA-type tails ADDITIVELY as they recurse, so each inner
+                // `write_doc` sees exactly its true remaining tail — the
+                // scope-tightness rule holding at every level, not just the
+                // outermost. `[size]` is the element's tail here.
+                let tail = self.measured_reserve(|s| {
+                    s.emitter.write("[");
+                    s.format_expr(size);
+                    s.emitter.write("]");
+                });
+                self.with_tail_reserve(tail, |s| s.format_type(element));
                 self.emitter.write("[");
                 self.format_expr(size);
                 self.emitter.write("]");
             }
             Type::Slice { element } => {
-                self.format_type(element);
+                self.with_tail_reserve(2, |s| s.format_type(element));
                 self.emitter.write("[]");
             }
             Type::Tuple(types) => {
@@ -3587,7 +4312,17 @@ impl Formatter {
                     if i > 0 {
                         self.emitter.write(", ");
                     }
-                    self.format_type(ty);
+                    // Tail of member `i`: `", "` plus the NEXT member's leading
+                    // unbreakable text, or `")"` for the last one.
+                    let rest = &types[i + 1..];
+                    let tail = self.measured_reserve(|s| {
+                        for t in rest {
+                            s.emitter.write(", ");
+                            s.format_type(t);
+                        }
+                        s.emitter.write(")");
+                    });
+                    self.with_tail_reserve(tail, |s| s.format_type(ty));
                 }
                 self.emitter.write(")");
             }
@@ -3600,39 +4335,72 @@ impl Formatter {
                 // an unnamed parameter's sigil is spelled AFTER the type
                 // (`int &`, `String !`) — uniform with the named form
                 // (`Message &msg`) and with `Type::Ref`/`Type::Owned` above.
-                self.format_type(return_type);
+                // A10 composition again: the return type's tail is `(` plus
+                // the first param's leading text (the param loop is
+                // hand-rolled, so no Fill fit-tests after the `(`), and each
+                // param's tail is its ownership sigil plus the rest of the
+                // list.
+                let fn_tail = self.measured_reserve(|s| {
+                    s.emitter.write("(");
+                    s.format_fn_type_params(params, param_ownerships, 0);
+                    s.emitter.write(")");
+                });
+                self.with_tail_reserve(fn_tail, |s| s.format_type(return_type));
                 self.emitter.write("(");
-                for (i, p) in params.iter().enumerate() {
-                    if i > 0 {
-                        self.emitter.write(", ");
-                    }
-                    self.format_type(p);
-                    if let Some(ownership) = param_ownerships.get(i) {
-                        match ownership {
-                            Ownership::MutableBorrow => self.emitter.write(" &"),
-                            // D27 Round A: `Type ^` in fn-type param list (was `Type !`).
-                            Ownership::Move => self.emitter.write(" ^"),
-                            Ownership::Borrow => {}
-                        }
-                    }
-                }
+                self.format_fn_type_params(params, param_ownerships, 0);
                 self.emitter.write(")");
             }
             Type::Ref(inner) => {
-                self.format_type(inner);
+                self.with_tail_reserve(2, |s| s.format_type(inner));
                 self.emitter.write(" &");
             }
             Type::Owned(inner) => {
-                self.format_type(inner);
+                self.with_tail_reserve(2, |s| s.format_type(inner));
                 // D27 Round A: type-arg suffix `Vector[T ^]` (was `Vector[T !]`).
                 self.emitter.write(" ^");
             }
             Type::Pointer(inner) => {
-                self.format_type(inner);
+                self.with_tail_reserve(1, |s| s.format_type(inner));
                 self.emitter.write("*");
             }
             Type::SelfType => self.emitter.write("Self"),
             Type::Inferred => self.emitter.write("auto"),
+        }
+    }
+
+    /// The `Type::Function` parameter list, from index `from` onward. Factored
+    /// out so the emission and the A10 tail measurement share one spelling.
+    fn format_fn_type_params(
+        &mut self,
+        params: &[Spanned<Type>],
+        param_ownerships: &[Ownership],
+        from: usize,
+    ) {
+        for (i, p) in params.iter().enumerate().skip(from) {
+            if i > from {
+                self.emitter.write(", ");
+            }
+            let sigil_w = match param_ownerships.get(i) {
+                Some(Ownership::MutableBorrow) | Some(Ownership::Move) => 2,
+                _ => 0,
+            };
+            let tail = sigil_w
+                + self.measured_reserve(|s| {
+                    if i + 1 < params.len() {
+                        s.emitter.write(", ");
+                        s.format_fn_type_params(params, param_ownerships, i + 1);
+                    }
+                    s.emitter.write(")");
+                });
+            self.with_tail_reserve(tail, |s| s.format_type(p));
+            if let Some(ownership) = param_ownerships.get(i) {
+                match ownership {
+                    Ownership::MutableBorrow => self.emitter.write(" &"),
+                    // D27 Round A: `Type ^` in fn-type param list (was `Type !`).
+                    Ownership::Move => self.emitter.write(" ^"),
+                    Ownership::Borrow => {}
+                }
+            }
         }
     }
 
@@ -3754,9 +4522,21 @@ impl Formatter {
 
     /// FMT-A helper: emit a postfix-operator receiver, wrapping in parens
     /// when the receiver's own precedence would misparse against the postfix.
-    fn format_postfix_receiver(&mut self, receiver: &Spanned<Expr>) {
+    ///
+    /// FAMILY P (R42) — the postfix operator the caller is about to write
+    /// lands on the RECEIVER's own last line: a packed call whose `)` ends in
+    /// budget can still be carried past it by a `.field` the packer never saw.
+    /// `operator_tail` is that operator's text up to ITS first break
+    /// opportunity (`.name` wholly fixed; `[` plus the index's leading text;
+    /// `!`; `?.name`; `.await()`), and it is a REQUIRED parameter precisely so
+    /// a ninth postfix site cannot silently skip it — the chokepoint installs
+    /// it, the caller only states it. Additive, so a chain of postfixes
+    /// accumulates its own tails.
+    fn format_postfix_receiver(&mut self, receiver: &Spanned<Expr>, operator_tail: usize) {
         let wrap = needs_parens_as_postfix_receiver(&receiver.node);
-        self.format_expr_maybe_parens(receiver, wrap);
+        // The precedence wrap's own closing `)` is part of the tail too.
+        let tail = operator_tail + usize::from(wrap);
+        self.with_tail_reserve(tail, |s| s.format_expr_maybe_parens(receiver, wrap));
     }
 
     /// R41 T-FMT-A: emit an expression at a position where the parser runs
@@ -3997,7 +4777,6 @@ impl Formatter {
             } => {
                 // FMT-A: callee is a postfix-position receiver (bp 35). A
                 // BinaryOp callee like `(f + g)(x)` must stay wrapped.
-                self.format_postfix_receiver(callee);
                 let (ga_gate, args_gate) = self.callee_arg_gates(
                     callee.span.end,
                     generic_args.as_deref(),
@@ -4005,6 +4784,19 @@ impl Formatter {
                     args.first().map(|a| a.span.start),
                     args.last().map(|a| a.span.end),
                 );
+                // P — the callee's tail is the argument list's open delimiter
+                // (`[` or `(`), or the whole literal `()` when there is no
+                // fit-tested node after it at all.
+                let callee_tail = self.measured_reserve(|s| {
+                    if let Some(ga) = generic_args {
+                        s.format_generic_args_wrapped(
+                            ga,
+                            ga_gate.expect("generic args present => generic-args gate derived"),
+                        );
+                    }
+                    s.format_call_args_wrapped(args, args_gate);
+                });
+                self.format_postfix_receiver(callee, callee_tail);
                 if let Some(ga) = generic_args {
                     self.format_generic_args_wrapped(
                         ga,
@@ -4027,9 +4819,6 @@ impl Formatter {
                 } else {
                     // FMT-A: receiver at postfix bp 35 — wrap infix/prefix
                     // receivers like `(a + b).foo()`.
-                    self.format_postfix_receiver(receiver);
-                    self.emitter.write(".");
-                    self.emitter.write(&method.node);
                     let (ga_gate, args_gate) = self.callee_arg_gates(
                         method.span.end,
                         generic_args.as_deref(),
@@ -4037,6 +4826,22 @@ impl Formatter {
                         args.first().map(|a| a.span.start),
                         args.last().map(|a| a.span.end),
                     );
+                    // P — `.method` plus the argument list's open delimiter.
+                    let recv_tail = self.measured_reserve(|s| {
+                        s.emitter.write(".");
+                        s.emitter.write(&method.node);
+                        if let Some(ga) = generic_args {
+                            s.format_generic_args_wrapped(
+                                ga,
+                                ga_gate
+                                    .expect("generic args present => generic-args gate derived"),
+                            );
+                        }
+                        s.format_call_args_wrapped(args, args_gate);
+                    });
+                    self.format_postfix_receiver(receiver, recv_tail);
+                    self.emitter.write(".");
+                    self.emitter.write(&method.node);
                     if let Some(ga) = generic_args {
                         self.format_generic_args_wrapped(
                             ga,
@@ -4048,15 +4853,17 @@ impl Formatter {
             }
             Expr::FieldAccess { object, field } => {
                 // FMT-A: object at postfix bp 35.
-                self.format_postfix_receiver(object);
+                // P — `.name` is wholly fixed text, no break opportunity.
+                self.format_postfix_receiver(object, 1 + field.node.chars().count());
                 self.emitter.write(".");
                 self.emitter.write(&field.node);
             }
             Expr::TupleFieldAccess { object, index } => {
                 // FMT-A: object at postfix bp 35.
-                self.format_postfix_receiver(object);
+                let index_text = index.to_string();
+                self.format_postfix_receiver(object, 1 + index_text.chars().count());
                 self.emitter.write(".");
-                self.emitter.write(&index.to_string());
+                self.emitter.write(&index_text);
             }
             Expr::Index { object, index } => {
                 // FMT-A: object at postfix bp 35. `index` is inside `[...]`
@@ -4068,7 +4875,16 @@ impl Formatter {
                 // user's source shape via the marker rather than
                 // canonicalising every Range payload to `:` (which would
                 // also rewrite standalone `for i in a..b` iterables).
-                self.format_postfix_receiver(object);
+                // P — `[` plus the index expression's leading unbreakable
+                // text. ⚠ Family O's `v[…] = 7` costume is NOT covered here:
+                // this charges the INDEX RECEIVER; the index EXPRESSION's own
+                // render carries `]` plus the statement operator, and that is
+                // installed at the assignment sites.
+                let index_tail = self.measured_reserve(|s| {
+                    s.emitter.write("[");
+                    s.format_expr(index);
+                });
+                self.format_postfix_receiver(object, index_tail);
                 self.emitter.write("[");
                 if let Expr::Range { start, end, inclusive: false, colon: true } = &index.node {
                     // D22 slice: `[a:b]`, `[a:]`, `[:b]`, `[:]`. Endpoints
@@ -4102,17 +4918,30 @@ impl Formatter {
                 // wrapper, and the `Index` arm above catches that shape
                 // before falling here. A standalone Range emits `..`/`..=`
                 // regardless of the `colon` marker.
+                // Family O — the range costume: `..` / `..=` plus the end
+                // operand's leading unbreakable text ride on the START
+                // operand's line.
+                let op_text = if *inclusive { "..=" } else { ".." };
                 if let Some(s) = start {
-                    self.format_binop_operand(s, 23, BinOpPos::Left, false);
+                    let start_tail = self.measured_reserve(|f| {
+                        f.emitter.write(op_text);
+                        if let Some(e) = end {
+                            f.format_prefix_operand(e, 24);
+                        }
+                    });
+                    self.with_tail_reserve(start_tail, |f| {
+                        f.format_binop_operand(s, 23, BinOpPos::Left, false)
+                    });
                 }
-                self.emitter.write(if *inclusive { "..=" } else { ".." });
+                self.emitter.write(op_text);
                 if let Some(e) = end {
                     self.format_prefix_operand(e, 24);
                 }
             }
             Expr::OptionalChain { object, field } => {
                 // FMT-A: object at postfix bp 35.
-                self.format_postfix_receiver(object);
+                // P — `?.name`, all fixed text.
+                self.format_postfix_receiver(object, 2 + field.node.chars().count());
                 self.emitter.write("?.");
                 self.emitter.write(&field.node);
             }
@@ -4130,10 +4959,16 @@ impl Formatter {
                 // out leading `.` at `src/lexer/mod.rs:161`). Same fix R36
                 // applied to `format_binary_chain`; this arm was missed at
                 // that time (gorget-js snag #15 Class 2).
-                let lhs_s = self.element_to_string(|f| {
+                // C10, nil-coalesce carrier — same broken-layout rule as the
+                // two chains above: the RHS inherits the caller's reserve plus
+                // the `)` the paren wrap appends when broken; the LHS owns its
+                // own line and carries nothing.
+                let base = self.tail_reserve;
+                let indent = self.emitter.indent + 1;
+                let lhs_s = self.element_to_string_reserving(indent, 0, |f| {
                     f.format_binop_operand(lhs, 3, BinOpPos::Left, false);
                 });
-                let rhs_s = self.element_to_string(|f| {
+                let rhs_s = self.element_to_string_reserving(indent, base + 1, |f| {
                     f.format_binop_operand(rhs, 3, BinOpPos::Right, false);
                 });
                 let inner = doc::concat(vec![
@@ -4161,7 +4996,8 @@ impl Formatter {
                 // FMT-A: Propagate is POSTFIX at bp 35 — a bare BinaryOp
                 // operand like `(a + b)!` needs wrap, else `a + b!` reparses
                 // as `Add(a, Propagate(b))`.
-                self.format_postfix_receiver(expr);
+                // P — the propagate `!`.
+                self.format_postfix_receiver(expr, 1);
                 self.emitter.write("!");
             }
             Expr::MutableBorrow { expr } => {
@@ -4180,15 +5016,35 @@ impl Formatter {
                 elif_branches,
                 else_branch,
             } => {
+                // B6 — the expression-position `if` is a MULTI-RENDER header:
+                // every branch expression and every following clause keyword
+                // shares ONE line, so each render's tail is the next
+                // `": "` / `" elif "` / `" else: "` plus the following
+                // render's own leading unbreakable text.
                 self.emitter.write("if ");
-                self.format_expr(condition);
+                let cond_tail = self.measured_reserve(|s| {
+                    s.emitter.write(": ");
+                    s.format_expr(then_branch);
+                });
+                self.with_tail_reserve(cond_tail, |s| s.format_expr(condition));
                 self.emitter.write(": ");
-                self.format_expr(then_branch);
-                for (cond, body) in elif_branches {
+                let then_tail = self.measured_reserve(|s| {
+                    s.format_expr_if_tail(elif_branches, else_branch.as_deref());
+                });
+                self.with_tail_reserve(then_tail, |s| s.format_expr(then_branch));
+                for (i, (cond, body)) in elif_branches.iter().enumerate() {
                     self.emitter.write(" elif ");
-                    self.format_expr(cond);
+                    let rest = &elif_branches[i + 1..];
+                    let elif_cond_tail = self.measured_reserve(|s| {
+                        s.emitter.write(": ");
+                        s.format_expr(body);
+                    });
+                    self.with_tail_reserve(elif_cond_tail, |s| s.format_expr(cond));
                     self.emitter.write(": ");
-                    self.format_expr(body);
+                    let body_tail = self.measured_reserve(|s| {
+                        s.format_expr_if_tail(rest, else_branch.as_deref());
+                    });
+                    self.with_tail_reserve(body_tail, |s| s.format_expr(body));
                 }
                 if let Some(else_branch) = else_branch {
                     self.emitter.write(" else: ");
@@ -4201,7 +5057,11 @@ impl Formatter {
                 else_arm,
             } => {
                 self.emitter.write("match ");
-                self.format_expr(scrutinee);
+                // B6 — `Expr::Match` writes `":"` and then a NEWLINE, so its
+                // scrutinee tail is FIXED 1. A measured whole-arm reserve here
+                // would be the wrong KIND and would break in-budget scrutinees
+                // corpus-wide.
+                self.with_tail_reserve(1, |s| s.format_expr(scrutinee));
                 self.emitter.write(":");
                 self.emitter.newline();
                 self.emitter.indent();
@@ -4320,83 +5180,31 @@ impl Formatter {
                     params.first().map(|p| p.span.start),
                     params.last().map(|p| p.span.end),
                 );
-                self.emit_delimited_list(
-                    "(", ")", self.gate_or_scan_miss(params_gate), params,
-                    |p| (p.span.start, p.span.end),
-                    |f, p| f.format_closure_param(&p.node),
-                );
+                // A8 — the closure-parameter list's reserve SPLITS on the
+                // BODY-LAYOUT axis. A block-bodied closure owes only its `:`;
+                // an INLINE-bodied one owes the `:`, the space, and the body's
+                // leading unbreakable prefix — it is the THIRD inline-BODY
+                // sibling, and it is invisible to the `format_inline_suite` /
+                // `format_arm_body` needles because it writes its body inline
+                // inside this very arm. Measuring `":"` + the body and taking
+                // the leading text yields both cells from one spelling.
+                let params_tail = self.measured_reserve(|s| {
+                    s.emitter.write(":");
+                    s.format_closure_body(body, params);
+                });
+                self.with_tail_reserve(params_tail, |s| {
+                    s.emit_delimited_list(
+                        "(", ")", s.gate_or_scan_miss(params_gate), params,
+                        |p| (p.span.start, p.span.end),
+                        |f, p| f.format_closure_param(&p.node),
+                    )
+                });
                 // R41 T-FMT-C: the colon and the separator are SEPARATE
                 // writes. Writing `": "` unconditionally and then newlining
                 // left `(int x): ` — a trailing space — on every block-bodied
                 // closure, which the corpus-wide sweep would have baked in.
                 self.emitter.write(":");
-                // Total prelude stmts injected by the parser for tuple destructuring.
-                let prelude_skip: usize = params
-                    .iter()
-                    .filter_map(|p| p.node.destructure.as_ref().map(|b| b.len()))
-                    .sum();
-                if let Expr::Block(ref block) = body.node {
-                    let post_prelude: Vec<&Spanned<Stmt>> =
-                        block.stmts.iter().skip(prelude_skip).collect();
-                    // R41 T-FMT-C: layout-GATED, not layout-only. `NextLine`
-                    // means the author indented the body and it stays
-                    // indented; `Inline` still has to pick WHICH inline form,
-                    // because the parser normalizes an expression body into
-                    // `Block { ..prelude.., Return(e) }` and that `return` is
-                    // the parser's spelling, not the author's.
-                    //
-                    // The old code inferred the form from the shape
-                    // (`post_prelude.len() == 1 && Stmt::Return`), which
-                    // COLLAPSED an author-indented single-`return` body onto
-                    // the header. A multi-statement indented body survived,
-                    // which is why a fixture carrying only that shape would
-                    // have been green throughout.
-                    if block.layout == SuiteLayout::Inline {
-                        self.emitter.write(" ");
-                        let inline_expr = if post_prelude.len() == 1 {
-                            match &post_prelude[0].node {
-                                Stmt::Return(Some(e)) => Some(e.clone()),
-                                _ => None,
-                            }
-                        } else {
-                            None
-                        };
-                        if let Some(expr) = inline_expr {
-                            self.format_expr(&expr);
-                        } else {
-                            // A non-`return` inline shape — `(int x): throw "a"`
-                            // is a synthetic `Block { Throw }` with no
-                            // expression form. Route it through the shared
-                            // single-terminal inliner rather than exploding it
-                            // onto its own line.
-                            let tail: Vec<Spanned<Stmt>> =
-                                post_prelude.iter().map(|s| (*s).clone()).collect();
-                            if !self.try_inline_single_terminal_stmts(&tail) {
-                                // Unreachable for parser output: an `Inline`
-                                // closure body is always a one-statement
-                                // synthetic wrap. Emit the suite rather than
-                                // drop it (Core #10 — never silently discard
-                                // what the author wrote).
-                                self.emitter.newline();
-                                self.emitter.indent();
-                                self.format_closure_post_prelude(
-                                    block,
-                                    &post_prelude,
-                                    prelude_skip,
-                                );
-                                self.emitter.dedent();
-                            }
-                        }
-                    } else {
-                        self.emitter.newline();
-                        self.emitter.indent();
-                        self.format_closure_post_prelude(block, &post_prelude, prelude_skip);
-                        self.emitter.dedent();
-                    }
-                } else {
-                    self.emitter.write(" ");
-                    self.format_expr(body);
-                }
+                self.format_closure_body(body, params);
             }
             Expr::ImplicitClosure { body } => {
                 // ImplicitClosure is a parser artifact wrapping `it` expressions.
@@ -4411,7 +5219,6 @@ impl Formatter {
                 iterable,
                 condition,
             } => {
-                let expr_s = self.element_to_string(|f| f.format_expr(expr));
                 let var_s = self.element_to_string(|f| f.format_pattern(variable));
                 let own_prefix = match ownership {
                     Ownership::Borrow => "",
@@ -4419,9 +5226,13 @@ impl Formatter {
                     // D27 Round A: comprehension for-binder `^` (was `!`).
                     Ownership::Move => "^",
                 };
-                let iter_s = self.element_to_string(|f| f.format_expr(iterable));
+                let r = self.comprehension_reserves();
+                let expr_s =
+                    self.element_to_string_reserving(r.indent, r.element, |f| f.format_expr(expr));
+                let iter_s = self
+                    .element_to_string_reserving(r.indent, r.iterable, |f| f.format_expr(iterable));
                 let cond_s = condition.as_ref().map(|c| {
-                    self.element_to_string(|f| f.format_expr(c))
+                    self.element_to_string_reserving(r.indent, r.condition, |f| f.format_expr(c))
                 });
                 let comp_doc = build_comprehension_doc(
                     "[", &expr_s, &var_s, own_prefix, &iter_s, cond_s.as_deref(), "]",
@@ -4435,16 +5246,18 @@ impl Formatter {
                 iterable,
                 condition,
             } => {
-                let kv_s = self.element_to_string(|f| {
+                let vars_s = variables.iter().map(|v| v.node.as_str())
+                    .collect::<Vec<_>>().join(", ");
+                let r = self.comprehension_reserves();
+                let kv_s = self.element_to_string_reserving(r.indent, r.element, |f| {
                     f.format_expr(key);
                     f.emitter.write(": ");
                     f.format_expr(value);
                 });
-                let vars_s = variables.iter().map(|v| v.node.as_str())
-                    .collect::<Vec<_>>().join(", ");
-                let iter_s = self.element_to_string(|f| f.format_expr(iterable));
+                let iter_s = self
+                    .element_to_string_reserving(r.indent, r.iterable, |f| f.format_expr(iterable));
                 let cond_s = condition.as_ref().map(|c| {
-                    self.element_to_string(|f| f.format_expr(c))
+                    self.element_to_string_reserving(r.indent, r.condition, |f| f.format_expr(c))
                 });
                 let comp_doc = build_comprehension_doc(
                     "{", &kv_s, &vars_s, "", &iter_s, cond_s.as_deref(), "}",
@@ -4457,10 +5270,13 @@ impl Formatter {
                 iterable,
                 condition,
             } => {
-                let expr_s = self.element_to_string(|f| f.format_expr(expr));
-                let iter_s = self.element_to_string(|f| f.format_expr(iterable));
+                let r = self.comprehension_reserves();
+                let expr_s =
+                    self.element_to_string_reserving(r.indent, r.element, |f| f.format_expr(expr));
+                let iter_s = self
+                    .element_to_string_reserving(r.indent, r.iterable, |f| f.format_expr(iterable));
                 let cond_s = condition.as_ref().map(|c| {
-                    self.element_to_string(|f| f.format_expr(c))
+                    self.element_to_string_reserving(r.indent, r.condition, |f| f.format_expr(c))
                 });
                 let comp_doc = build_comprehension_doc(
                     "{", &expr_s, &variable.node, "", &iter_s, cond_s.as_deref(), "}",
@@ -4507,7 +5323,11 @@ impl Formatter {
                     // debug_assert inside this `!has_interior` branch would be
                     // tautological — output-review catch).
                     self.emitter.write("(");
-                    self.format_expr(&elems[0]);
+                    // Family O — the 1-tuple's `,)` tail. It does not route
+                    // through the chokepoint (the trailing comma IS the
+                    // syntax, not a packing choice), so its element render
+                    // needs its own charge.
+                    self.with_tail_reserve(2, |s| s.format_expr(&elems[0]));
                     self.emitter.write(",)");
                 } else {
                     self.emit_delimited_list(
@@ -4568,7 +5388,15 @@ impl Formatter {
             }
             Expr::As { expr, type_ } => {
                 // FMT-A: `as` is bp 31/32 (left-assoc). Operand at LEFT position.
-                self.format_binop_operand(expr, 31, BinOpPos::Left, false);
+                // Family O — the ` as <type>` costume: operator text written
+                // BETWEEN two renders.
+                let as_tail = self.measured_reserve(|s| {
+                    s.emitter.write(" as ");
+                    s.format_type(type_);
+                });
+                self.with_tail_reserve(as_tail, |s| {
+                    s.format_binop_operand(expr, 31, BinOpPos::Left, false)
+                });
                 self.emitter.write(" as ");
                 self.format_type(type_);
             }
@@ -4586,7 +5414,8 @@ impl Formatter {
                     self.emitter.write("await ");
                     self.format_prefix_operand(inner, 2);
                 } else {
-                    self.format_postfix_receiver(inner);
+                    // P — the postfix `.await()` form, 8 fixed characters.
+                    self.format_postfix_receiver(inner, 8);
                     self.emitter.write(".await()");
                 }
             }
@@ -4652,10 +5481,36 @@ impl Formatter {
                 // parsed at bp 2 (see parser). If the transform contains
                 // a nested `rethrow` (a Rethrow expression at bp 1), it's
                 // 1 <= 2-1 = 1, WRAP. (Catch bp 1 also wraps.)
-                self.format_binop_operand(expr, 1, BinOpPos::Left, false);
+                // B11 — `rethrow` is a MULTI-RENDER header, one disposition per
+                // render: the LHS is charged for the whole ` rethrow (…):`
+                // composite plus the arm body's inline part, and the bound
+                // error TYPE is charged for ` name):` plus the same.
+                let rethrow_lhs_tail = self.measured_reserve(|s| {
+                    if let Some((error_type, error_name)) = error_binding {
+                        s.emitter.write(" rethrow (");
+                        s.format_type(error_type);
+                        s.emitter.write(" ");
+                        s.emitter.write(&error_name.node);
+                        s.emitter.write("):");
+                    } else {
+                        s.emitter.write(" rethrow ");
+                        s.format_binop_operand(transform, 1, BinOpPos::Right, false);
+                    }
+                }) + if error_binding.is_some() {
+                    self.arm_body_reserve(transform)
+                } else {
+                    0
+                };
+                self.with_tail_reserve(rethrow_lhs_tail, |s| {
+                    s.format_binop_operand(expr, 1, BinOpPos::Left, false)
+                });
                 if let Some((error_type, error_name)) = error_binding {
                     self.emitter.write(" rethrow (");
-                    self.format_type(error_type);
+                    // ` ` + name + `):` — 3 fixed chars around the name.
+                    let type_tail = 3
+                        + error_name.node.chars().count()
+                        + self.arm_body_reserve(transform);
+                    self.with_tail_reserve(type_tail, |s| s.format_type(error_type));
                     self.emitter.write(" ");
                     self.emitter.write(&error_name.node);
                     self.emitter.write("):");
@@ -4677,7 +5532,17 @@ impl Formatter {
             }
             Expr::Catch { expr, error_binding, recovery } => {
                 // FMT-A: LHS at Catch bp 1 — same story as Rethrow LHS.
-                self.format_binop_operand(expr, 1, BinOpPos::Left, false);
+                // B11 — the `catch` composite: `" catch ("` + the binding
+                // name + `"):"` — 10 fixed chars — plus whatever
+                // `format_arm_body` writes inline. The four `format_arm_body`
+                // callers do NOT share one value; assuming they did
+                // under-reserves this one by the composite's width.
+                let catch_tail = 10
+                    + error_binding.node.chars().count()
+                    + self.arm_body_reserve(recovery);
+                self.with_tail_reserve(catch_tail, |s| {
+                    s.format_binop_operand(expr, 1, BinOpPos::Left, false)
+                });
                 self.emitter.write(" catch (");
                 self.emitter.write(&error_binding.node);
                 self.emitter.write("):");
