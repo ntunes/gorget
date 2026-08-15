@@ -12421,7 +12421,7 @@ fn item_module_is_constructed_only_by_the_loader() {
 ///
 ///   * a binding whose initializer is a formatting call is RAW TEXT;
 ///   * a function CALLED with such a binding — at ANY argument position, on a
-///     one-line or a WRAPPED call — is a
+///     one-line call or a WRAPPED one (within the `WRAP_LOOKBACK` window) — is a
 ///     raw-text consumer, and its `&str` parameters are raw text too, ALL of
 ///     them (the rule taints the callee's whole `&str` surface rather than the
 ///     matching parameter, so a helper cannot launder raw text by shuffling its
@@ -12447,7 +12447,9 @@ fn item_module_is_constructed_only_by_the_loader() {
 /// call sites pass the text second, at every depth.
 ///
 /// And ACROSS A WRAPPED ARGUMENT LIST — a third axis, closed the same way and
-/// for the same reason. A wrapped call puts the binding on a line of its own,
+/// for the same reason, up to `WRAP_LOOKBACK` lines (see the const's
+/// measurements — census-identical at every probed window length, so no live
+/// site leans on the bound). A wrapped call puts the binding on a line of its own,
 /// so a LINE-LOCAL walk-back starts from an empty head and resolves no callee
 /// AT ALL: `f(\n    "0x",\n    &raw,\n)` was invisible at every depth and every
 /// position, and — unlike the other two axes — this one was reachable from live
@@ -12465,8 +12467,9 @@ fn item_module_is_constructed_only_by_the_loader() {
 /// **The rule's REACH, stated so it can be attacked rather than trusted.** The
 /// taint starts at a `let` whose initializer names a `FMT_SOURCES` producer and
 /// travels FORWARD through call ARGUMENTS into `&str` parameters, to a fixed
-/// point. Neither DEPTH, nor argument POSITION, nor a WRAPPED argument list
-/// bounds it any more. What it does not follow — seven shapes, each PROBED
+/// point. Neither DEPTH nor argument POSITION bounds it, and a WRAPPED
+/// argument list does not either within the `WRAP_LOOKBACK` window. What it
+/// does not follow — eight shapes, each PROBED
 /// rather than reasoned about, so the next reader can re-run them:
 ///   1. a struct FIELD holding raw text (`s.text.contains(…)`) — no live
 ///      instance;
@@ -12486,8 +12489,8 @@ fn item_module_is_constructed_only_by_the_loader() {
 ///      (`fmt_delimited_list_fixture`, :15356 — measured: its nine-test family
 ///      makes ZERO direct accesses, routing everything through the sentinel
 ///      helpers, so no live exposure).
-/// The next three share ONE root cause: this lint reads SOURCE TEXT with raw
-/// delimiter scans — the walk-back in FRONT of an occurrence (shapes 5, 7) and
+/// The next four share ONE root cause: this lint reads SOURCE TEXT with raw
+/// delimiter scans — the walk-back in FRONT of an occurrence (shapes 5, 7, 8) and
 /// the byte immediately AFTER it (shape 6) — with no awareness of string
 /// literals, receivers or macros. Each was probed against a CONTROL differing
 /// only in the named feature, so the mechanism is isolated, not merely asserted:
@@ -12505,14 +12508,19 @@ fn item_module_is_constructed_only_by_the_loader() {
 ///      identifier scan in front of the `(` yield an empty string, so no callee
 ///      resolves. Measured GREEN; calling `plant_macro_helper(&formatted)`
 ///      directly is RED. Zero live risk today —
-///      `grep -c "macro_rules!" tests/integration.rs` → 0.
+///      `grep -c "macro_rules!" tests/integration.rs` → 0;
+///   8. a COMMENT LINE inside a wrapped argument list, sitting between the
+///      previous `,` and the raw-text argument — the joined prefix then ends
+///      in comment text, not `(` or `,`, so the walk-back bails before it
+///      starts. Measured GREEN; the byte-identical call with the comment
+///      removed is RED. No live instance.
 /// The POSITIVE claim, stated at the walk-back's real granularity, which is
 /// TEXTUAL: a binding is followed into a callee when a backward scan from the
 /// occurrence — over balanced delimiters, across a wrapped argument list, at
 /// any argument position and any depth — reaches the `(` that opens the
 /// argument list and finds an identifier immediately in front of it. It is a
 /// delimiter scan, not a parse, so a shape that hides that `(` or that
-/// identifier from a raw byte walk is outside it (5 and 7). On the ACCESS side
+/// identifier from a raw byte walk is outside it (5, 7 and 8). On the ACCESS side
 /// the claim is equally textual: an access is seen when the byte right after
 /// the binding's name is `.` — followed by an identifier and `(` — or `[`, on
 /// that line or on a `.`-continuation folded into it; a shape that puts

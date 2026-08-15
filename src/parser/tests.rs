@@ -1870,7 +1870,8 @@ const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
     // (src/parser/mod.rs:940), the item-level `meta if` else
     // (src/parser/mod.rs:1000) — have no `header_start` to wire, so they are
     // outside this table's subject. That RECONCILES with the census command:
-    // `grep -rn "Keyword::Else" src/parser/` returns TWELVE hits — the seven
+    // `grep -rn "Keyword::Else" src/parser/` returns THIRTEEN hits — twelve
+    // code sites plus this comment's own quotation of the needle: the seven
     // wiring calls above, the eighth `parse_match_expr` anchor
     // (src/parser/expr.rs:2169), these three, and `Parser::match_elif`
     // (src/parser/mod.rs:230), which consumes `else if` AS an `elif` and so
