@@ -10772,9 +10772,9 @@ fn doc_source_citations_name_the_right_line() {
         ("103", "src/formatter/mod.rs:42", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("143", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
         ("220", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("469", "src/formatter/mod.rs:879", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("493", "src/formatter/mod.rs:2128", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("587", "src/formatter/mod.rs:2742", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("469", "src/formatter/mod.rs:885", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("493", "src/formatter/mod.rs:2141", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("587", "src/formatter/mod.rs:2755", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has

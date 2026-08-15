@@ -659,6 +659,11 @@ pub struct Formatter {
     /// [`Formatter::claim_run_at_cursor`], so "claim a head ⇒ claim its whole
     /// run" cannot be bypassed by a new claimer.
     comment_cursor: usize,
+    /// Where `comment_cursor` stood at the previous orphan-pre-close flush.
+    /// Read only by that flush's `debug_assert`, which is how the
+    /// inner-before-outer ordering (an outer flush must never see a comment an
+    /// inner block claimed) is CHECKED rather than merely stated.
+    last_flush_cursor: usize,
     /// Sideband recorded at the `emit_trailing_comment_after` chokepoint:
     /// one entry per injected trailing comment, consumed by the
     /// `align_trailing_comments` post-pass (owner-directed R40 alignment).
@@ -691,6 +696,7 @@ impl Formatter {
             emitter: Emitter::new(),
             comments,
             comment_cursor: 0,
+            last_flush_cursor: 0,
             trailing_aligns: Vec::new(),
             source,
             tail_reserve: 0,
@@ -1345,11 +1351,18 @@ impl Formatter {
     /// and are claimed with it at the claiming chokepoint
     /// (`claim_run_at_cursor`), whose call-site census is the guard.
     fn emit_orphan_comments_before_close(&mut self, header_start: usize, block_end: usize) {
+        // The inner-before-outer ordering, checked rather than asserted in
+        // prose: every flush must see the cursor at or past where the previous
+        // one left it. A rewind is the one way an outer flush could re-emit a
+        // comment an inner block already claimed.
         debug_assert!(
-            self.comment_cursor <= self.comments.len(),
-            "comment cursor must stay monotone — an inner flush that rewound \
-             it would let this outer flush re-emit an inner block's comment"
+            self.comment_cursor >= self.last_flush_cursor,
+            "the comment cursor REWOUND between flushes ({} -> {}); an outer \
+             flush can now re-emit a comment an inner block already claimed",
+            self.last_flush_cursor,
+            self.comment_cursor,
         );
+        self.last_flush_cursor = self.comment_cursor;
         let header_col = self.line_indent_of(header_start);
         let mut first = true;
         while self.comment_cursor < self.comments.len() {
