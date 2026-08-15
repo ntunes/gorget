@@ -12400,6 +12400,187 @@ fn item_module_is_constructed_only_by_the_loader() {
     );
 }
 
+/// THE `Block::header_start` WIRING CENSUS — a new suite cannot join without a
+/// probe, and a probe cannot be excluded without a stated reason.
+///
+/// `header_start` is a write-site fact: each caller of `parse_block` /
+/// `parse_block_or_inline_stmt` / `parse_block_body` states which position is
+/// its construct's FIRST line. Nothing downstream can recover it, and a wrong
+/// value is SILENT — the formatter's orphan-pre-close flush simply refuses
+/// every comment written inside that block, which reads as "no comments here".
+///
+/// **This guard exists because the coverage table was a selection three times.**
+/// First `meta while` was said to be guarded by an unwrapped cell; then nine
+/// rows (`for`, `with`, `meta if`, `meta for`, `meta type f()`, both match-arm
+/// positions, `select` arms, closures) had no wrapped probe at all; then
+/// `test`/`bench` were excluded by a FALSE REASON — "the name is a single
+/// token, so it cannot wrap" — which conflates *one token* with *one line*
+/// (Gorget's triple-quoted strings are one token spanning many). Each time,
+/// unwiring a row escaped a real comment with every gate green. A fourth
+/// hand-derived list would be the same artifact again, so the pair of guards
+/// is:
+///
+///   * THIS lint — the wiring sites are censused per enclosing function, so a
+///     NEW suite shows up as a new row and has to be classified;
+///   * `block_probe_dispositions_are_decided` (src/parser/tests.rs) — every
+///     `BLOCK_PROBES` row is either `Wrapped` (checked: its header really does
+///     span lines) or `NotWrappable(reason)` (checked: its header really does
+///     not). A false reason fails there instead of surviving as prose.
+///
+/// The enumeration in `tests/fixtures/fmt_suite_layout/wrapped_header_anchor.gg`
+/// is DERIVED from that table; this row-count pair is what keeps the table
+/// complete.
+///
+/// **Break-and-verify (both RED-verified when this landed):** add a
+/// `parse_block(...)` call in a new parser function ⇒ an unclassified row ⇒
+/// RED; delete a `BLOCK_PROBES` row ⇒ the probe count moves ⇒ RED.
+#[test]
+fn parser_header_start_wiring_census() {
+    // (file, enclosing fn, number of header_start-passing calls). Regenerate:
+    //   cargo test --test lints parser_header_start_wiring_census -- --nocapture
+    const CENSUS: &[(&str, &str, usize)] = &[
+        // REGENERATED FROM THE SCAN, not written by hand — the
+        // hand-written first draft named four functions that do not
+        // exist (`parse_function_def` is `finish_function_def`,
+        // `parse_prefix` is `parse_prefix_inner`) and invented rows for
+        // `parse_match_arm_inner` / `parse_meta_for_match_item`, which
+        // call `parse_arm_body` and are not wiring sites themselves.
+        ("src/parser/expr.rs", "parse_closure", 1),
+        ("src/parser/expr.rs", "parse_prefix_inner", 1),
+        ("src/parser/mod.rs", "finish_function_def", 1),
+        ("src/parser/mod.rs", "parse_arm_body", 1),
+        ("src/parser/mod.rs", "parse_bench_def", 1),
+        ("src/parser/mod.rs", "parse_block", 1),
+        ("src/parser/mod.rs", "parse_block_or_inline_stmt", 1),
+        ("src/parser/mod.rs", "parse_body_or_expr", 1),
+        ("src/parser/mod.rs", "parse_meta_type", 1),
+        ("src/parser/mod.rs", "parse_suite_block", 2),
+        ("src/parser/mod.rs", "parse_test_def", 1),
+        ("src/parser/stmt.rs", "parse_for_stmt", 2),
+        ("src/parser/stmt.rs", "parse_if_stmt", 3),
+        ("src/parser/stmt.rs", "parse_loop_stmt", 1),
+        ("src/parser/stmt.rs", "parse_match_stmt", 1),
+        ("src/parser/stmt.rs", "parse_meta_for_stmt", 1),
+        ("src/parser/stmt.rs", "parse_meta_if_stmt", 3),
+        ("src/parser/stmt.rs", "parse_meta_match_arm_body", 1),
+        ("src/parser/stmt.rs", "parse_meta_while_stmt", 1),
+        ("src/parser/stmt.rs", "parse_named_scope", 1),
+        ("src/parser/stmt.rs", "parse_on_error_stmt", 1),
+        ("src/parser/stmt.rs", "parse_select_stmt", 2),
+        ("src/parser/stmt.rs", "parse_unsafe_stmt", 1),
+        ("src/parser/stmt.rs", "parse_while_stmt", 2),
+        ("src/parser/stmt.rs", "parse_with_stmt", 1),
+    ];
+
+    let needles = [
+        "self.parse_block(",
+        "self.parse_block_or_inline_stmt(",
+        "self.parse_block_body(",
+    ];
+
+    let mut found: Vec<(String, String, usize)> = Vec::new();
+    for file in ["src/parser/expr.rs", "src/parser/mod.rs", "src/parser/stmt.rs"] {
+        let content = fs::read_to_string(file).unwrap_or_else(|e| panic!("cannot read {file}: {e}"));
+        let mut current = String::from("<file scope>");
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for line in content.lines() {
+            let t = line.trim_start();
+            if (t.starts_with("fn ") || t.starts_with("pub fn ") || t.starts_with("pub(super) fn ")
+                || t.starts_with("pub(crate) fn "))
+                && line.starts_with("    ")
+            {
+                current = t
+                    .trim_start_matches("pub(super) ")
+                    .trim_start_matches("pub(crate) ")
+                    .trim_start_matches("pub ")
+                    .trim_start_matches("fn ")
+                    .split(['(', '<'])
+                    .next()
+                    .unwrap_or("?")
+                    .to_string();
+            }
+            if t.starts_with("//") {
+                continue;
+            }
+            let n: usize = needles.iter().map(|nd| line.matches(nd).count()).sum();
+            if n == 0 {
+                continue;
+            }
+            // The DEFINITIONS call nothing; only bodies do.
+            match counts.last_mut() {
+                Some((f, c)) if *f == current => *c += n,
+                _ => counts.push((current.clone(), n)),
+            }
+        }
+        // Merge repeats of the same fn (a fn interrupted by a nested item).
+        let mut merged: Vec<(String, usize)> = Vec::new();
+        for (f, c) in counts {
+            match merged.iter_mut().find(|(mf, _)| *mf == f) {
+                Some((_, mc)) => *mc += c,
+                None => merged.push((f, c)),
+            }
+        }
+        for (f, c) in merged {
+            found.push((file.to_string(), f, c));
+        }
+    }
+
+    for (file, f, c) in &found {
+        println!("header_start wiring: {file}  fn {f}  x{c}");
+    }
+
+    let mut got: Vec<(String, String, usize)> = found;
+    got.sort();
+    let mut want: Vec<(String, String, usize)> = CENSUS
+        .iter()
+        .map(|(a, b, c)| (a.to_string(), b.to_string(), *c))
+        .collect();
+    want.sort();
+    assert_eq!(
+        got, want,
+        "the `Block::header_start` wiring census changed.\n\nEvery caller states \
+         which position is its construct's FIRST line, and a wrong value is \
+         SILENT — the formatter's orphan flush refuses every comment written \
+         inside that block. A NEW row therefore owes:\n\
+         (1) the right value at the call site (the construct's first line, NOT \
+         the colon — a wrapped header puts the colon on a continuation line \
+         indented at or past the body);\n\
+         (2) a `BLOCK_PROBES` row in src/parser/tests.rs, WRAPPED if any token \
+         in its header can span source lines, else `NotWrappable` with the \
+         reason — which `block_probe_dispositions_are_decided` then checks;\n\
+         (3) a cell in tests/fixtures/fmt_suite_layout/wrapped_header_anchor.gg \
+         if it is wrappable.\n\n\
+         Regenerate this table with:\n  \
+         cargo test --test lints parser_header_start_wiring_census -- --nocapture"
+    );
+
+    // The probe corpus must not shrink below the wiring it covers. Counting
+    // rows (not matching them 1:1 — several wiring sites are clause siblings of
+    // one construct) keeps this a TRIGGER: a new wiring row forces a decision
+    // above, and a deleted probe row trips here.
+    const EXPECTED_BLOCK_PROBES_ROWS: usize = 26;
+    let probes = fs::read_to_string("src/parser/tests.rs")
+        .expect("cannot read src/parser/tests.rs");
+    let table = probes
+        .split("const BLOCK_PROBES:")
+        .nth(1)
+        .and_then(|t| t.split("];").next())
+        .expect("BLOCK_PROBES table not found");
+    let rows = table
+        .lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            t.starts_with("(\"") && (t.ends_with("Wrapped),") || t.contains("NotWrappable("))
+        })
+        .count();
+    assert_eq!(
+        rows, EXPECTED_BLOCK_PROBES_ROWS,
+        "the `BLOCK_PROBES` row count moved ({rows} vs \
+         {EXPECTED_BLOCK_PROBES_ROWS}). A DROP means a construct lost its probe \
+         — the direction that goes silent. Bump with the new row's disposition."
+    );
+}
+
 /// THE ORPHAN-PRE-CLOSE CENSUS. Every `self.emitter.dedent()` in
 /// `src/formatter/mod.rs` is a block CLOSING, and a block that closes without
 /// having claimed the comment written after its last child leaks that comment

@@ -1798,62 +1798,169 @@ fn line_indent_of(src: &str, pos: usize) -> usize {
     src[ls..].chars().take_while(|c| *c == ' ').count()
 }
 
-/// The probe corpus: one source per block-carrying construct, WRAPPED wherever
-/// wrapping is legal, since a wrapped header is the only shape where the two
-/// positions land on different lines.
+/// Why a probe is spelled the way it is — the disposition that makes this table
+/// a decision record instead of a list.
 ///
-/// "Wherever wrapping is legal" is a TOTAL claim and was twice a selection —
-/// `for`, `with`, `meta if`, `meta for`, `meta type f()`, both match-arm
-/// positions, `select` arms and closures were all spelled FLAT while their
-/// wiring rows leaked a real comment when unwired. The constructs left flat
-/// here are the KEYWORD-ONLY headers (`loop:`, `unsafe:`, `on error:`, a named
-/// scope, `do:`, `test`/`bench`/`suite`, and every `else:` clause): their first
-/// line IS the colon's line by construction, so there is nothing to wrap. The
-/// authoritative per-row enumeration, with the break that reds each row, lives
-/// in `tests/fixtures/fmt_suite_layout/wrapped_header_anchor.gg`.
-const BLOCK_PROBES: &[(&str, &str)] = &[
-    ("fn, WRAPPED signature", "int f(int a_long_one,\n      int b_long_one):\n    return a_long_one\n"),
-    ("if / elif / else, WRAPPED conditions", "void f(int i):\n    if (i <\n        3):\n        print(1)\n    elif (i >\n        9):\n        print(2)\n    else:\n        print(3)\n"),
-    ("while, WRAPPED condition", "void f(int i):\n    while (i <\n        3):\n        print(i)\n"),
-    ("for, WRAPPED iterable + for-else", "void f():\n    for i in [1,\n            2]:\n        print(i)\n    else:\n        print(0)\n"),
-    ("while + while-else", "void f():\n    while false:\n        print(1)\n    else:\n        print(0)\n"),
-    ("loop", "void f():\n    loop:\n        break\n"),
-    ("unsafe", "void f():\n    unsafe:\n        print(1)\n"),
-    ("with … as …, WRAPPED binding", "int mk(int a):\n    return a\n\nvoid f(int r):\n    with mk(\n            r) as held:\n        print(held)\n"),
-    ("named scope", "void f():\n    cleanup:\n        print(1)\n"),
-    ("on error", "void f():\n    on error:\n        print(1)\n"),
-    ("do:", "void f():\n    int d = do:\n        1\n    print(d)\n"),
-    ("match arm, WRAPPED pattern", "void f(Option[int] x):\n    match x:\n        case Some(\n                v):\n            print(v)\n"),
+/// A probe only DISCRIMINATES `Block::header_start` when the construct's header
+/// is WRAPPED: unwrapped, the colon sits on the construct's own first line, a
+/// colon-seeded `header_start` has the right indent by accident, and the probe
+/// cannot fail. So every row must either wrap, or say WHY no wrapped spelling
+/// exists — and the reason is then an explicit, greppable, reviewable artifact
+/// rather than prose that nobody re-checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeKind {
+    /// The header is wrapped, so the pins can see a colon-seeded value.
+    Wrapped,
+    /// No legal spelling separates the construct's first line from the colon's,
+    /// so no wrapped form exists and no probe of this construct can ever fail.
+    /// The string is the reason, and it is CHECKED: the rule is "the header
+    /// holds no token that can span source lines".
+    NotWrappable(&'static str),
+}
+use ProbeKind::*;
+
+/// The probe corpus: one source per block-carrying construct, each carrying its
+/// [`ProbeKind`] disposition.
+///
+/// ⚠ THIS TABLE'S TOTALITY WAS A SELECTION THREE TIMES. First `meta while` was
+/// said to be covered by an unwrapped cell; then `for`, `with`, `meta if`,
+/// `meta for`, `meta type f()`, both match-arm positions, `select` arms and
+/// closures were spelled FLAT while their wiring rows leaked a real comment
+/// when unwired; then `test`/`bench` were excluded by the REASON "the name is a
+/// single token, so it cannot wrap" — which conflates *one token* with *one
+/// line*. Gorget has triple-quoted multi-line strings, so a `test` name spans
+/// lines, and unwiring the `test` row escaped a real comment with every gate
+/// green.
+///
+/// The rule that survives measurement is therefore NOT "keyword-only" but:
+/// **a header holding no token that can span source lines**. Each
+/// `NotWrappable` row states its reason in those terms, and
+/// `block_probe_dispositions_are_decided` checks the shape of every row.
+///
+/// The enumeration in `tests/fixtures/fmt_suite_layout/wrapped_header_anchor.gg`
+/// is DERIVED from this table; `parser_header_start_wiring_census`
+/// (tests/lints.rs) is what stops a new wiring row from joining without one.
+const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
+    ("fn, WRAPPED signature", "int f(int a_long_one,\n      int b_long_one):\n    return a_long_one\n", Wrapped),
+    ("if / elif / else, WRAPPED conditions", "void f(int i):\n    if (i <\n        3):\n        print(1)\n    elif (i >\n        9):\n        print(2)\n    else:\n        print(3)\n", Wrapped),
+    ("while, WRAPPED condition", "void f(int i):\n    while (i <\n        3):\n        print(i)\n", Wrapped),
+    ("for, WRAPPED iterable + for-else", "void f():\n    for i in [1,\n            2]:\n        print(i)\n    else:\n        print(0)\n", Wrapped),
+    ("while + while-else", "void f():\n    while false:\n        print(1)\n    else:\n        print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
+    ("loop", "void f():\n    loop:\n        break\n", NotWrappable("`loop` and the colon, adjacent — no token between them")),
+    ("unsafe", "void f():\n    unsafe:\n        print(1)\n", NotWrappable("`unsafe` and the colon, adjacent")),
+    ("with … as …, WRAPPED binding", "int mk(int a):\n    return a\n\nvoid f(int r):\n    with mk(\n            r) as held:\n        print(held)\n", Wrapped),
+    ("named scope", "void f():\n    cleanup:\n        print(1)\n", NotWrappable("an identifier is one token and identifiers cannot span lines")),
+    ("on error", "void f():\n    on error:\n        print(1)\n", NotWrappable("`on error` and the colon, adjacent")),
+    ("do:", "void f():\n    int d = do:\n        1\n    print(d)\n", NotWrappable("`do` and the colon, adjacent")),
+    ("match arm, WRAPPED pattern", "void f(Option[int] x):\n    match x:\n        case Some(\n                v):\n            print(v)\n", Wrapped),
     // The DISCRIMINATING `else:` probe: the else BODY's header is the `else`
     // clause line, not the `match` line — which is what keeps an arms-level
     // tail beside a match `else:` claimed at the MATCH level instead of being
     // pulled inside the else body.
-    ("match, WRAPPED pattern + else", "void f(Option[int] x):\n    match x:\n        case Some(\n                v):\n            print(v)\n        else:\n            print(0)\n"),
-    ("select arm, WRAPPED op + else", "void f():\n    select:\n        case int v = c(\n                ).recv():\n            print(v)\n        else:\n            print(0)\n"),
-    ("closure body, WRAPPED params", "void f():\n    Callable[void(int, int)] g = (int a_long_one,\n                                 int b_long_one):\n        print(a_long_one)\n    g(1, 2)\n"),
-    ("catch", "void f(int x):\n    int a = fallible(x) catch (e):\n        print(1)\n        0\n"),
-    ("rethrow", "int f(int x) throws String:\n    int a = fallible(x) rethrow (String e):\n        print(1)\n        e\n    return a\n"),
-    ("meta if / elif / else, WRAPPED conditions", "void f[T]():\n    meta if (bitwidth(T) >\n            4096):\n        print(1)\n    elif (bitwidth(T) >\n            2048):\n        print(2)\n    else:\n        print(3)\n"),
-    ("meta for, WRAPPED range", "void f():\n    meta for i in [1,\n            2]:\n        print(i)\n"),
+    ("match, WRAPPED pattern + else", "void f(Option[int] x):\n    match x:\n        case Some(\n                v):\n            print(v)\n        else:\n            print(0)\n", Wrapped),
+    ("select arm, WRAPPED op + else", "void f():\n    select:\n        case int v = c(\n                ).recv():\n            print(v)\n        else:\n            print(0)\n", Wrapped),
+    ("closure body, WRAPPED params", "void f():\n    Callable[void(int, int)] g = (int a_long_one,\n                                 int b_long_one):\n        print(a_long_one)\n    g(1, 2)\n", Wrapped),
+    ("catch", "void f(int x):\n    int a = fallible(x) catch (e):\n        print(1)\n        0\n", NotWrappable("the LHS wraps, but the row's value is the LHS's own start, so a wrapped spelling moves both together — see BREAK C in the fixture")),
+    ("rethrow", "int f(int x) throws String:\n    int a = fallible(x) rethrow (String e):\n        print(1)\n        e\n    return a\n", NotWrappable("same as `catch`: the value IS the LHS's start")),
+    ("meta if / elif / else, WRAPPED conditions", "void f[T]():\n    meta if (bitwidth(T) >\n            4096):\n        print(1)\n    elif (bitwidth(T) >\n            2048):\n        print(2)\n    else:\n        print(3)\n", Wrapped),
+    ("meta for, WRAPPED range", "void f():\n    meta for i in [1,\n            2]:\n        print(i)\n", Wrapped),
     // WRAPPED, and it has to be: an unwrapped `meta while cond:` has its colon
     // on the `meta` line, so a colon-seeded `header_start` has the same indent
     // as the right answer and the probe cannot fail. Wrapping is what separates
     // the construct's FIRST line from the colon's.
-    ("meta while, WRAPPED condition", "void f[T]():\n    meta while (bitwidth(T) >\n            128):\n        print(1)\n"),
-    ("meta match arm, WRAPPED case expr", "void f[T]():\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(1)\n"),
-    ("meta match, WRAPPED case expr + else", "void f[T]():\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(1)\n        else:\n            print(0)\n"),
-    ("test body", "test \"t\":\n    print(1)\n"),
-    ("bench body", "bench \"b\":\n    print(1)\n"),
-    ("suite setup / teardown", "suite setup:\n    print(1)\n\nsuite teardown:\n    print(2)\n"),
-    ("meta type fn, WRAPPED params", "meta type W(Type a_long_one,\n            Type b_long_one):\n    return a_long_one\n"),
+    ("meta while, WRAPPED condition", "void f[T]():\n    meta while (bitwidth(T) >\n            128):\n        print(1)\n", Wrapped),
+    ("meta match arm, WRAPPED case expr", "void f[T]():\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(1)\n", Wrapped),
+    ("meta match, WRAPPED case expr + else", "void f[T]():\n    meta match typename(T):\n        case (\"i\" +\n                \"nt\"):\n            print(1)\n        else:\n            print(0)\n", Wrapped),
+    ("test body, WRAPPED multi-line name", "test \"\"\"a\n        b\"\"\":\n    print(1)\n", Wrapped),
+    ("bench body, WRAPPED multi-line name", "bench \"\"\"a\n        b\"\"\":\n    print(1)\n", Wrapped),
+    ("suite setup / teardown", "suite setup:\n    print(1)\n\nsuite teardown:\n    print(2)\n", NotWrappable("`suite setup` / `suite teardown` and the colon, adjacent")),
+    ("meta type fn, WRAPPED params", "meta type W(Type a_long_one,\n            Type b_long_one):\n    return a_long_one\n", Wrapped),
 ];
+
+/// Every probe row is DECIDED, and a `NotWrappable` reason is CHECKED rather
+/// than believed.
+///
+/// This is the guard the class owes (Core #6). The table's totality was a
+/// selection three times, and the third time the miss was not an omission but a
+/// FALSE REASON: `test`/`bench` were excluded because "the name is a single
+/// token, so it cannot wrap", which conflates *one token* with *one line*.
+/// Gorget's triple-quoted strings are one token spanning many lines.
+///
+/// So a reason is not free text. A row claiming `NotWrappable` must survive the
+/// mechanical form of its own claim: format the probe and check the construct's
+/// header really does occupy ONE line. If a wrapped spelling exists, the source
+/// itself says so and this fails — which is exactly what would have caught
+/// `test`/`bench` before the reviewer did.
+#[test]
+fn block_probe_dispositions_are_decided() {
+    assert!(
+        BLOCK_PROBES.len() >= 20,
+        "the probe corpus shrank to {} rows — a construct lost its probe.",
+        BLOCK_PROBES.len()
+    );
+
+    for (label, src, kind) in BLOCK_PROBES {
+        // Every row parses, whatever its disposition.
+        let module = parse(src);
+        let blocks = collect_blocks(&module);
+        assert!(!blocks.is_empty(), "{label}: probe holds no block");
+
+        match kind {
+            ProbeKind::Wrapped => {
+                // A WRAPPED probe must actually wrap: some block's HEADER must
+                // occupy more than one line, i.e. its body's first statement
+                // sits >= 2 lines below the construct's first line.
+                //
+                // ⚠ Comparing `header_start` against `span.start` does NOT work
+                // here: rows 1-4 (catch/rethrow, arm bodies, select arms,
+                // closures) pass the construct's own start as the block span
+                // too, so the two coincide by construction even when the header
+                // wraps. The header's LINE SPAN is the property that holds for
+                // every row.
+                let wraps = blocks.iter().any(|b| match b.first_stmt_start {
+                    Some(first) => line_no_of(src, first) - line_no_of(src, b.header_start) > 1,
+                    None => false,
+                });
+                assert!(
+                    wraps,
+                    "{label}: labelled `Wrapped`, but every block's header \
+                     occupies ONE line — so a colon-seeded `header_start` has \
+                     the right value by accident and this probe can never \
+                     fail.\n{src}"
+                );
+            }
+            ProbeKind::NotWrappable(reason) => {
+                assert!(
+                    reason.len() > 20,
+                    "{label}: `NotWrappable` with a reason too terse to check \
+                     ({reason:?}). State WHY no token in the header can span \
+                     source lines."
+                );
+                // The mechanical form of the claim: no block in the probe has a
+                // header that already spans lines. (A row whose reason is false
+                // in the `test`/`bench` way fails here the moment someone adds
+                // the multi-line spelling to the probe.)
+                let spans_lines = blocks.iter().any(|b| match b.first_stmt_start {
+                    Some(first) => line_no_of(src, first) - line_no_of(src, b.header_start) > 1,
+                    None => false,
+                });
+                assert!(
+                    !spans_lines,
+                    "{label}: labelled `NotWrappable` ({reason:?}), but this \
+                     probe's own header ALREADY spans lines — so the reason is \
+                     false and the row owes a `Wrapped` disposition.\\n{src}"
+                );
+            }
+        }
+    }
+}
 
 /// `Block::header_start` sits on a line LESS INDENTED than the block's body —
 /// which is exactly what the formatter's column-based membership test needs,
 /// and exactly what a colon-seeded value loses on a wrapped header.
 #[test]
 fn block_header_start_is_on_the_constructs_first_line() {
-    for (label, src) in BLOCK_PROBES {
+    for (label, src, _) in BLOCK_PROBES {
         let module = parse(src);
         let blocks = collect_blocks(&module);
         assert!(!blocks.is_empty(), "{label}: no blocks collected");
@@ -1891,7 +1998,7 @@ fn block_header_start_is_on_the_constructs_first_line() {
 /// NEWLINE token at the start of the body's line.
 #[test]
 fn block_span_start_is_on_the_headers_last_line() {
-    for (label, src) in BLOCK_PROBES {
+    for (label, src, _) in BLOCK_PROBES {
         let module = parse(src);
         for b in collect_blocks(&module) {
             let Some(first) = b.first_stmt_start else { continue };

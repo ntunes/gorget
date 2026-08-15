@@ -15,7 +15,20 @@
 # written at the one indented-suite parser, pointing at the owning construct's
 # FIRST line.
 #
-# THE ROW LIST IS A TOTAL ENUMERATION, DERIVED BY MEASUREMENT, not a selection.
+# THE ROW LIST IS DERIVED FROM A TYPED TABLE, NOT WRITTEN HERE. The authority
+# is `BLOCK_PROBES` in `src/parser/tests.rs`: every block-carrying construct has
+# a row there carrying a TYPED disposition — `Wrapped`, or
+# `NotWrappable(reason)`. Two guards keep it honest, which is why this list is
+# now a derivation rather than a claim:
+#
+#   * `parser_header_start_wiring_census` (tests/lints.rs) censuses the parser's
+#     `header_start` wiring sites per enclosing function, so a NEW suite cannot
+#     join without showing up and being classified;
+#   * `block_probe_dispositions_are_decided` (src/parser/tests.rs) CHECKS each
+#     disposition against the source: a `Wrapped` row whose header occupies one
+#     line fails, and a `NotWrappable` row whose header already spans lines
+#     fails. A false reason cannot survive as prose.
+#
 # A construct is VALUE-NEEDING iff some LEGAL spelling puts its FIRST line on a
 # different line from the position a careless implementation would fall back to.
 # There are exactly two such fallbacks, so there are two breaks, and each row
@@ -37,6 +50,8 @@
 #   row 5  `meta elif` condition ................. BREAK A
 #   row 5  `meta for` range ...................... BREAK A
 #   row 5  `meta type f(…)` parameter list ....... BREAK A
+#   row 5  `test "…":` name ...................... BREAK A
+#   row 5  `bench "…":` name ..................... BREAK A
 #   row 9  `meta while` condition ................ BREAK A
 #   row 8  `meta match` case expression .......... BREAK A
 #   row 1  `catch` / `rethrow` LHS ............... BREAK C
@@ -45,26 +60,24 @@
 #   row 3  `select` arm operation ................ BREAK C
 #   row 4  closure parameter list ................ BREAK C
 #
-# NON-VALUE-NEEDING — a KEYWORD-ONLY header, where the construct's first line
-# IS the colon's line by construction, so no legal spelling can separate them
-# and no cell can ever go red:
+# NON-VALUE-NEEDING — the rule is **a header holding no token that can span
+# source lines**, and every one of these is checked by the disposition test:
 #   `loop:` · `unsafe:` · `on error:` · a named scope `name:` · `do:` ·
-#   `test "…":` · `bench "…":` · `suite setup:` · `suite teardown:` ·
-#   and EVERY `else:` clause (statement-if, for-else, while-else, match-else,
-#   select-else, meta-else, meta-match-else).
-# The string in `test`/`bench` and the identifier in a named scope are single
-# tokens; they cannot wrap either.
+#   `suite setup:` · `suite teardown:` · and EVERY `else:` clause (statement-if,
+#   for-else, while-else, match-else, select-else, meta-else, meta-match-else).
+# A named scope's identifier is one token AND identifiers cannot span lines —
+# both halves are needed, which is the whole lesson below.
 #
-#   the bracketed CONTAINER header — enum/trait/equip cells live in
-#   `header_colon_anchor_bracketed.gg`
-#
-# ⚠ THIS LIST WAS A SELECTION TWICE. It first said row 9 was covered by an
-# unwrapped cell (false after the meta-while span hoist); it then said "one cell
-# per value-needing row" while `for`, `with`, `meta if`, `meta for`, `meta type
-# f()`, both match-arm positions, `select` arms and closures had none — nine
-# rows, every one of which leaks a real comment out of its block when unwired,
-# with every gate green. Re-derive by MEASUREMENT before trusting it again: add
-# a wrapped spelling of the construct, unwire its row, and look.
+# ⚠ THIS LIST WAS A SELECTION THREE TIMES, and the third time is why the guards
+# exist. It first said row 9 was covered by an unwrapped cell (false after the
+# meta-while span hoist). It then said "one cell per value-needing row" while
+# nine rows had none. It then excluded `test`/`bench` with the reason "the name
+# is a single token, so it cannot wrap" — which conflates ONE TOKEN with ONE
+# LINE. Gorget has triple-quoted multi-line strings, so a `test` name spans
+# lines; unwiring the `test` row escaped a real comment 4 -> 0 with every gate
+# green. "Keyword-only" was the wrong abstraction twice; the rule above is the
+# one that survives measurement, and it is now machine-checked rather than
+# asserted here.
 #
 # ⚠ Three authoring traps this file works around: a wrapped bare `if` condition
 # is a 10-error parse failure, so the PARENTHESIZED form is used; the wrapped-FN
@@ -219,6 +232,16 @@ void wrapped_closure():
         print(a_long_parameter_name)
         # tail in a wrapped closure body
     g(1, 2)
+
+test """a wrapped test name, whose closing line is indented
+        past the body""":
+    print(1)
+    # tail in a wrapped test body
+
+bench """a wrapped bench name, whose closing line is indented
+        past the body""":
+    print(2)
+    # tail in a wrapped bench body
 
 int fallible(int x) throws String:
     if x < 0:
