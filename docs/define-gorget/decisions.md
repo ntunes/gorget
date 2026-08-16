@@ -2361,9 +2361,47 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   and documented; what the spec still OWES is the resolution rule and its failure
   case — the docs never state what a bare name means when it is NOT a variant of the
   scrutinee, nor which scope resolves it, and that silence is what let Rust gg and
-  ggdef diverge on the reference's own example. Related, still open for the owner:
-  whether an unresolved constructor-shaped pattern should be rejected and whether a
-  non-final catch-all should be an unreachable-arm error.
+  ggdef diverge on the reference's own example. The two related questions that entry
+  left open are RULED in the next entry.
+- 2026-08-16 — **🎯 THE SILENT ARM-KILLER = REJECT, on two rules (owner, live session).**
+  A `case` naming something that does not exist must not silently become a catch-all.
+  Ratified pair, both compile ERRORS:
+  **(1) UNREACHABLE-ARM.** Any arm following a catch-all — a bare binding, `_`, or
+  `else` — is a compile error (Rust's `unreachable_patterns`, promoted from lint to
+  error). This is the broad net: it catches the typo'd VARIANT, the typo'd CONSTANT,
+  and it works on non-enum scrutinees.
+  **(2) BARE NAME ON AN ENUM SCRUTINEE MUST RESOLVE.** Where the scrutinee's type is
+  an enum, a bare identifier in the arm's TOP-LEVEL pattern must resolve to a variant
+  of that enum or to a `const`/`static`; otherwise it is an error whose diagnostic
+  points at `else:` for a catch-all. This closes rule (1)'s one blind spot — a typo in
+  the LAST arm, where nothing below it becomes unreachable.
+  **Bindings are NOT removed and cannot be:** `Pattern::Binding` is how destructuring
+  names payloads (`case Custom(r, g, b):`), how guards name the scrutinee
+  (`case x if is_even(x):`), and how the `is` operator introduces names into the
+  following `then` block (reference:1930). All six bare-binding sites in the corpus
+  match on `int` and are unaffected by (2).
+  **Why the semantics were not changed instead:** a bare identifier in a pattern is a
+  DECLARATION, so `case Satx:` is shape-identical to an intentional binding — no rule
+  can distinguish typo from intent by shape, and deciding it by CAPITALISATION (the
+  Haskell/OCaml answer) is banned here as semantics-from-identifier-shape. Rust has
+  the identical hazard and answers it with diagnostics, not semantics
+  (`unreachable_patterns` + `non_snake_case` + `bindings_with_variant_name`); this is
+  that answer, with (2) added because Gorget also resolves bare names to CONSTANTS.
+  **Precedent — this project has already been bitten by this exact class:** before
+  2026-05-13 a bare `case CONST_NAME:` always shadowed the constant with a fresh
+  binding, "so the FIRST `case` arm always matched (every input went down it)", found
+  during self-host `format_gir.gg` work (`tests/fixtures/const_match_pattern.gg`
+  header). It was fixed for constants only; the variant flavour stayed live until now.
+  **Measured exposure:** the arm-killer reproduces at HEAD on both lanes with
+  `gg check` clean, and the two engines print DIFFERENT output for the same accepted
+  program (Rust gg `typo-arm/typo-arm` — two arms dead; ggdef `mon-arm/sat-arm`),
+  which is Core #8 ≥2 bugs.
+  **OPEN for the implementing scout:** whether rule (2) extends to NESTED pattern
+  positions — `case Some(v):` where the payload type is itself an enum would reject a
+  legitimate destructuring bind under a naive reading, while `case Some(None):` must
+  keep working. Decide with the scout, not in the brief.
+  Accept/reject change ⇒ Core #9: lands on all three lanes with cross-lane NEG
+  conformance fixtures, in its OWN round (not the R42 formatter round).
 - 2026-08-11 — **🎯 PARENTHESIZED IMPORT FORM RATIFIED (owner, live session, after
   measuring that Gorget's import name-list is the language's ONE undelimited list —
   hence unwrappable — while every peer ships a bracketed form).** `from env import

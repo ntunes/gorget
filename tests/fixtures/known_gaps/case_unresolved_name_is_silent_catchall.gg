@@ -1,0 +1,52 @@
+# KNOWN GAP — SILENT WRONG-CODE, both lanes, `gg check` clean.
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is the
+# pattern SPELLING. `gg fmt` at HEAD rewrites `case Satx():` -> `case Satx:`,
+# which swaps the AST node kind (Constructor -> Binding) and destroys the cell.
+#
+# A `case` arm naming something that does not exist silently becomes a
+# CATCH-ALL that kills every arm below it. Here the FIRST arm names `Satx`,
+# which is not a variant of `Day` — so on Rust gg both `Mon` and `Sat` are
+# swallowed and two live arms are dead, while `gg check` reports
+# "OK: no semantic errors".
+#
+# Measured at HEAD (2026-08-16), scrutinee returned from a function so nothing
+# const-folds:
+#     gg check  -> OK: no semantic errors        (rc 0, no warning of any kind)
+#     Rust gg   -> typo-arm / typo-arm           (Mon AND Sat both swallowed)
+#     ggdef     -> mon-arm / sat-arm             (the bogus arm never matches)
+# One accepted program, two different behaviours => Core #8, >= 2 bugs.
+#
+# INTENDED (ratified 2026-08-16, docs/define-gorget/decisions.md): this program
+# is REJECTED at check time, by either ratified rule —
+#   (1) UNREACHABLE-ARM: the arms after the catch-all are unreachable; and
+#   (2) BARE/CONSTRUCTOR NAME ON AN ENUM SCRUTINEE MUST RESOLVE: `Satx` is not
+#       a variant of `Day`, and the diagnostic points at `else:` for a catch-all.
+# Bindings stay legal where they mean something: `case Custom(r, g, b):`
+# destructuring and `case x if pred(x):` guards are unaffected.
+#
+# Wired test: known_gap_case_unresolved_name_rejected (tests/integration.rs,
+# #[ignore]d). It asserts the REJECTION, so it fails today and goes green when
+# the ratified rules land.
+enum Day:
+    Mon()
+    Sat()
+
+Day pick(int n):
+    if n == 0:
+        return Day.Mon()
+    return Day.Sat()
+
+String label(Day d):
+    match d:
+        case Satx():
+            return "typo-arm"
+        case Mon():
+            return "mon-arm"
+        case Sat():
+            return "sat-arm"
+        else:
+            return "else-arm"
+
+void main():
+    print(label(pick(0)))
+    print(label(pick(1)))

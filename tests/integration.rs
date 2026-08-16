@@ -49760,6 +49760,40 @@ fn d27_caret_fn_type_sigil_before_type_error() {
 /// passes its callable as a parameter. It shares the fn-type param-suffix
 /// parse position, not the callee shape.)
 #[test]
+#[ignore = "KNOWN GAP (ratified 2026-08-16, define-gorget ledger; surfaced by the \
+R42 A2 style review): a `case` arm naming something that does not exist silently \
+becomes a CATCH-ALL that kills every arm below it. Measured at HEAD: `gg check` says \
+\"OK: no semantic errors\" and the program prints typo-arm/typo-arm, two live arms \
+dead; ggdef prints mon-arm/sat-arm for the SAME accepted program (Core #8, >= 2 bugs). \
+INTENDED: REJECT, by either ratified rule -- (1) UNREACHABLE-ARM (arms after a \
+catch-all are an error) or (2) a bare/constructor name on an ENUM scrutinee must \
+resolve to a variant or const, with the diagnostic pointing at `else:`. Un-ignore when \
+the two rules land; bindings stay legal where they mean something (`case Custom(r, g, \
+b):`, `case x if pred(x):`)."]
+fn known_gap_case_unresolved_name_rejected() {
+    // Asserts the RATIFIED behaviour, not today's. The message text is not yet
+    // fixed by the design, so this pins only that the program is REJECTED --
+    // tighten to the real diagnostic code when the rules land.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .join("tests/fixtures/known_gaps/case_unresolved_name_is_silent_catchall.gg");
+    assert!(fixture_path.exists(), "Fixture not found: {}", fixture_path.display());
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture_path),
+        "known_gaps/case_unresolved_name_is_silent_catchall.gg",
+    );
+
+    assert!(
+        !output.status.success(),
+        "`gg check` must REJECT a `case` arm whose name resolves to nothing -- it is \
+         a silent catch-all that kills every arm below it. Today it exits 0 with \
+         \"OK: no semantic errors\" and the program prints typo-arm/typo-arm.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+#[test]
 #[ignore = "KNOWN GAP (filed R41 T-RB0): calling a Callable-typed LOCAL \
 VARIABLE with a consuming arg ICEs at src/ir/lowering/mod.rs:2114 (Tier 2a \
 consume-site violation, `untracked source consumed`). gg check passes. \
