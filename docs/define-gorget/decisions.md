@@ -2363,6 +2363,39 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   scrutinee, nor which scope resolves it, and that silence is what let Rust gg and
   ggdef diverge on the reference's own example. The two related questions that entry
   left open are RULED in the next entry.
+- 2026-08-16 — **🎯 A2 STYLE REVIEW: FIVE FORMATTER CANON CALLS RULED (owner, live
+  session).** All five ride ONE regeneration of the A2 sweep, sequenced after the
+  case-spelling fix.
+  **(1) KEYWORD-ARGUMENT SPACING = TIGHT.** `f(x=1)`, not `f(x = 1)` — the sweep's
+  spaced canon is REVERSED. Rationale: Gorget is Python-like and PEP 8 writes kwargs
+  tight precisely so a keyword argument does not read like an assignment statement.
+  Pure whitespace inside a construct, no authored information at stake, so this is the
+  one call decided on convention alone. Measured exposure at the time of ruling: 126
+  sites / 41 files.
+  **(2) BLANK LINES = PRESERVE-AND-CAP, IN EVERY MEMBER CONTAINER.** The rule already
+  ratified for top-level items on 2026-08-09 (preserve AUTHOR-written blanks; collapse
+  runs of 2+ to exactly one) now governs `trait`, `equip` and `extern "C":` bodies too.
+  This REPLACES two opposite-direction behaviours the sweep exposed: unconditional
+  INSERTION of one blank between `trait`/`equip` members (+192 measured) and DELETION
+  of author blank lines separating comment-headed groups inside `extern "C":` (−117
+  measured, entirely comment-adjacent — the members themselves were always packed,
+  `format_extern_block` has no blank emitter at all). Reference point: gofmt, rustfmt
+  and Black all preserve-and-cap; none manufactures blanks and none deletes a single
+  separator.
+  **(3)+(4) THE MAGIC TRAILING COMMA (Black's rule) IS ADOPTED.** A trailing comma in
+  a list is the AUTHOR'S SIGNAL to keep that list exploded; its absence means the
+  formatter may pack. This replaces BOTH the vertical collapse of hand-aligned literals
+  (61 hunks / 10 files, every 4×4 matrix in `math3d.gg`) AND the absence of any
+  trailing-comma canon (today the formatter deletes the comma when packing and adds one
+  when exploding, so the token carries no meaning). One mechanism, two calls: the
+  trailing comma stops being noise the formatter shuffles and becomes explicit,
+  greppable author intent.
+  **(5) `compiler/data/resources.gg` = NO SPECIAL RULING; RE-MEASURE after (2)+(3).**
+  The hand-built data table lost its record structure (3130 → 1106 lines, 353 → 12
+  blank lines; each `ResourceEntry(...)` was exploded so related fields group per line
+  and the sweep packed them to the 120 budget). Most of that is downstream of (2) and
+  (3); what survives them is the honest signal that this file wants a `# fmt: off`-style
+  escape rather than an exception carved into the canon.
 - 2026-08-16 — **🎯 THE SILENT ARM-KILLER = REJECT, on two rules (owner, live session).**
   A `case` naming something that does not exist must not silently become a catch-all.
   Ratified pair, both compile ERRORS:
