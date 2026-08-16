@@ -2396,6 +2396,25 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   and the sweep packed them to the 120 budget). Most of that is downstream of (2) and
   (3); what survives them is the honest signal that this file wants a `# fmt: off`-style
   escape rather than an exception carved into the canon.
+  **(6) IMPORT NAME LISTS = PRESERVE AUTHOR ORDER.** The alphabetical sort of imported
+  member names is REMOVED (both `from X import a, b, c` and `import X.{a, b, c}`;
+  `src/formatter/mod.rs:3183` and the `ImportStmt::From` twin at `:3209`). It destroyed
+  deliberate reading order — `CollectionKind, CkNotCollection, CkVector, …` became
+  `CkDeque, …, CollectionKind`, moving the enum TYPE from the front of its own variant
+  list to the end. Prior art was surveyed and mandates nothing here: isort and rustfmt
+  sort flat (rustfmt's only privileged item is the `self` keyword, not a semantic
+  relation); gofmt sorts import PATHS and Go has no member lists; Prettier and Black do
+  not sort members at all. The languages that care about type-with-variants express it
+  in SYNTAX rather than in a sort — Haskell's `import Data.Map (Map(..))`, Elm's
+  `exposing (Msg(..))` make the type and its constructors ONE import item. A
+  semantic sort is also not implementable here without a layering inversion: the
+  formatter would need to resolve names across modules to know `CkVector` belongs to
+  `CollectionKind`. ⊕ Removing the sort also CLOSES a filed defect documented at the
+  sort site: because sorting makes emitted order differ from source order, the
+  forward-only comment cursor cannot keep a comment with its name, so "a comment inside
+  a grouped import still leaves the group". POSSIBLE FUTURE, filed separately, not part
+  of this: a bundled import form (`from schema import CollectionKind(..)`) that makes
+  the relationship expressible.
 - 2026-08-16 — **🎯 THE SILENT ARM-KILLER = REJECT, on two rules (owner, live session).**
   A `case` naming something that does not exist must not silently become a catch-all.
   Ratified pair, both compile ERRORS:
