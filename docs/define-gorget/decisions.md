@@ -2323,9 +2323,47 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   remains an ADDABLE D43-era extension, deliberately not chosen now. Accept/reject
   change ⇒ Core #9: lands cross-lane with a NEG conformance fixture + the SH parser
   mirrors, same round as its fix (a small W2 rider, not the fmt track). SEPARATE
-  axis, still open: ATTRIBUTES above `extern` blocks (`@link(name = …)` — the
-  standard FFI idiom, plausibly a missing CARRY feature, not a reject) vs above
-  `equip` — filed with the discard-family entry for its own decision.
+  axis — RULED 2026-08-16, see below: ATTRIBUTES above `extern`/`equip` blocks.
+- 2026-08-16 — **🎯 ATTRIBUTES ABOVE `equip` / `extern` BLOCKS = REJECT (owner, live
+  session; closes the h5 knob the 2026-08-11 entry left open).** An attribute written
+  above an `equip` or `extern "C":` block is a PARSE-TIME REJECTION with a teaching
+  diagnostic, joining the h1-h4 reject-rider (same mechanism: `parse_item` consumes
+  the modifier/attribute list, then dispatches to sub-parsers that take neither, so
+  the annotation is discarded before any later pass — `gg fmt` included — can see it;
+  a Core #10 silent-drop). Rejecting makes the fmt-deletion defect impossible by
+  construction rather than fixing it downstream. **The `@link`-as-missing-CARRY-feature
+  premise the earlier entry recorded is WITHDRAWN as unfounded, measured 2026-08-16:**
+  `@link` is not a Gorget feature and never was — it occurs exactly ONCE tree-wide, in
+  the formatter fixture `tests/fixtures/fmt_form_preservation/name_string_attr_string.gg`
+  where the name is merely a vehicle for testing escape round-tripping inside an
+  attribute argument; the manifest has no link directives; and native linking is
+  hardcoded in `src/main.rs` (`-lm`, `-ldl`) with SQLite bundled into the runtime so
+  users need no external flag. The language reference specifies attributes only on
+  function / struct / enum / trait definitions (`@test`, `@inline`), never on blocks.
+  If real FFI link directives are ever wanted, their home is the manifest
+  (`gorget.toml`, D44) — linking is a build concern, not a source annotation — and
+  that is a feature proposal, not this axis. Accept/reject change ⇒ Core #9: NEG
+  conformance fixture + SH parser mirrors, same round as the fix.
+- 2026-08-16 — **🎯 `case` NULLARY-VARIANT PATTERN SPELLING = PRESERVE THE AUTHOR'S
+  (owner, live session, at the A2 style review).** `gg fmt` must not rewrite
+  `case X():` → `case X:` (nor the reverse, nor the qualified forms): `X()` stays
+  `X()`, `X` stays `X`, `Color.Red` stays `Color.Red`, `Color.Red()` stays
+  `Color.Red()`. An explicit `()` mandate was considered and WITHDRAWN. Rationale —
+  a formatter may canonicalize two spellings only when they are semantically
+  identical in ALL cases (the `elif`/`else if` test); these are identical only when
+  the name resolves to a variant of the scrutinee, and when it does not, one is a
+  constructor pattern that should fail to resolve while the other is silently a
+  variable binding, i.e. a catch-all. Measured: the A2 sweep rewrote 912 lines /
+  109 files, of which 790 changed the AST node kind (`Pattern::Constructor` →
+  `Pattern::Binding`) and 38 became `Pattern::Literal`; only the 84 qualified sites
+  were AST-identical. Same class of harm as author-paren deletion (R42 Track D), so
+  shipping both in one release would have been incoherent. The bare form stays legal
+  and documented; what the spec still OWES is the resolution rule and its failure
+  case — the docs never state what a bare name means when it is NOT a variant of the
+  scrutinee, nor which scope resolves it, and that silence is what let Rust gg and
+  ggdef diverge on the reference's own example. Related, still open for the owner:
+  whether an unresolved constructor-shaped pattern should be rejected and whether a
+  non-final catch-all should be an unreachable-arm error.
 - 2026-08-11 — **🎯 PARENTHESIZED IMPORT FORM RATIFIED (owner, live session, after
   measuring that Gorget's import name-list is the language's ONE undelimited list —
   hence unwrappable — while every peer ships a bracketed form).** `from env import
