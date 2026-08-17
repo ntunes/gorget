@@ -64,10 +64,9 @@ fn test_from_import_mixed_alias() {
 fn test_from_import_wildcard() {
     let module = parse("from std.math import *\n");
     assert_eq!(module.items.len(), 1);
-    if let Item::Import(ImportStmt::From { names, wildcard, glob_types, .. }) = &module.items[0].node {
+    if let Item::Import(ImportStmt::From { names, wildcard, .. }) = &module.items[0].node {
         assert!(*wildcard);
         assert!(names.is_empty());
-        assert!(glob_types.is_empty());
     } else {
         panic!("expected From import");
     }

@@ -2420,7 +2420,7 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   mechanism, one more position.
   **(6) IMPORT NAME LISTS = PRESERVE AUTHOR ORDER.** The alphabetical sort of imported
   member names is REMOVED (both `from X import a, b, c` and `import X.{a, b, c}`;
-  `src/formatter/mod.rs:3183` and the `ImportStmt::From` twin at `:3209`). It destroyed
+  `src/formatter/mod.rs:3183` and the `ImportStmt::From` twin at `:3219`). It destroyed
   deliberate reading order — `CollectionKind, CkNotCollection, CkVector, …` became
   `CkDeque, …, CollectionKind`, moving the enum TYPE from the front of its own variant
   list to the end. Prior art was surveyed and mandates nothing here: isort and rustfmt

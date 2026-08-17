@@ -1552,8 +1552,10 @@ impl Parser {
         //  - bare module wildcard `*` (must be the only item: `from X import *`)
         //  - `EnumName.*` glob syntax
         //  - `Y as Z` alias syntax
-        let mut names = Vec::new();
-        let mut glob_types = Vec::new();
+        // ONE vector, in AUTHOR ORDER. Partitioning plain names from globs as
+        // they are parsed would destroy the order irrecoverably, and the
+        // formatter is required to re-emit the list as written.
+        let mut names: Vec<ImportName> = Vec::new();
         let mut wildcard = false;
 
         // Bare `*` as first (and only) token after `import` → module wildcard.
@@ -1564,35 +1566,25 @@ impl Parser {
             return Ok(ImportStmt::From {
                 path,
                 names,
-                glob_types,
                 wildcard,
                 span: start.merge(end),
             });
         }
 
-        let first_name = self.expect_name()?;
-        if self.match_token(&Token::Dot) && self.match_token(&Token::Star) {
-            glob_types.push(first_name);
-        } else {
-            let alias = if self.match_keyword(Keyword::As) {
-                Some(self.expect_name()?)
-            } else {
-                None
-            };
-            names.push(ImportName { name: first_name, alias });
-        }
-
-        while self.match_token(&Token::Comma) {
+        loop {
             let name = self.expect_name()?;
             if self.match_token(&Token::Dot) && self.match_token(&Token::Star) {
-                glob_types.push(name);
+                names.push(ImportName { name, alias: None, glob: true });
             } else {
                 let alias = if self.match_keyword(Keyword::As) {
                     Some(self.expect_name()?)
                 } else {
                     None
                 };
-                names.push(ImportName { name, alias });
+                names.push(ImportName { name, alias, glob: false });
+            }
+            if !self.match_token(&Token::Comma) {
+                break;
             }
         }
 
@@ -1602,7 +1594,6 @@ impl Parser {
         Ok(ImportStmt::From {
             path,
             names,
-            glob_types,
             wildcard,
             span: start.merge(end),
         })

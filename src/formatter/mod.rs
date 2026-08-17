@@ -3209,27 +3209,55 @@ impl Formatter {
                 self.format_dotted_path(path);
                 self.emitter.newline();
             }
-            ImportStmt::Grouped { path, names, .. } => {
+            ImportStmt::Grouped { path, names, span } => {
                 self.emitter.write("import ");
                 self.format_dotted_path(path);
                 self.emitter.write(".");
-                let mut sorted: Vec<&str> = names.iter().map(|n| n.node.as_str()).collect();
-                sorted.sort_unstable();
-                // The one DECLARED carve-out from the gate, and the only
-                // direct `emit_delimited_texts` caller. It has no `Gate`
-                // at all: the names are SORTED, so emitted order is not
-                // source order, and the comment cursor is forward-only —
-                // interleaving per element would flush a later name's
-                // comment against an earlier one. A comment inside a
-                // grouped import therefore still leaves the group; that
-                // is a real defect, filed with the residual family in
-                // `TODO.md`, and closing it needs an order-aware cursor
-                // rather than a gate here.
-                let items: Vec<String> = sorted.iter().map(|n| (*n).to_string()).collect();
-                self.emit_delimited_texts("{", "}", items);
+                // AUTHOR ORDER (ratified 2026-08-16, canon call 6). The
+                // alphabetical sort that used to live here destroyed
+                // deliberate reading order — `CollectionKind, CkNotCollection,
+                // CkVector, …` came back with the enum TYPE moved from the
+                // front of its own variant list to the end.
+                //
+                // Removing it also RETIRES this position's carve-out from the
+                // interior-comment gate. The carve-out's whole reason was the
+                // sort: emitted order was not source order, and the comment
+                // cursor is forward-only, so interleaving per element would
+                // have flushed a later name's comment against an earlier one.
+                // With emitted order == source order the group routes through
+                // `emit_delimited_list` like every other list, which buys it
+                // the interior-comment gate and the magic trailing comma at
+                // once — the honour set and the gate set are the same set.
+                //
+                // The window rule holds at both ends: between the path's last
+                // segment and the first name lies only `.{`, and between the
+                // last name and the statement's end lies only `}` — no string
+                // literal can appear in either. A miss routes through the ONE
+                // `gate_or_scan_miss` fallback like every other scanned site,
+                // so the carve-out count does not grow with this caller.
+                let open_pos = self.delim_pos_after(
+                    path.last().map_or(span.start, |p| p.span.end),
+                    names.first().map_or(span.end, |n| n.span.start),
+                    b'{',
+                );
+                let close_pos = self.delim_pos_after(
+                    names.last().map_or(span.start, |n| n.span.end),
+                    span.end,
+                    b'}',
+                );
+                let gate = self
+                    .gate_or_scan_miss(open_pos.zip(close_pos).map(|(o, c)| (o, c + 1)));
+                self.emit_delimited_list(
+                    "{",
+                    "}",
+                    gate,
+                    names,
+                    |n| (n.span.start, n.span.end),
+                    |f, n| f.emitter.write(&n.node),
+                );
                 self.emitter.newline();
             }
-            ImportStmt::From { path, names, glob_types, wildcard, .. } => {
+            ImportStmt::From { path, names, wildcard, .. } => {
                 self.emitter.write("from ");
                 self.format_dotted_path(path);
                 self.emitter.write(" import ");
@@ -3238,26 +3266,26 @@ impl Formatter {
                     self.emitter.newline();
                     return;
                 }
-                // Merge regular names (with optional `as` alias) and glob types
-                // (with .* suffix), then sort.
-                let mut sorted: Vec<String> = names
-                    .iter()
-                    .map(|n| match &n.alias {
-                        Some(a) => format!("{} as {}", n.name.node, a.node),
-                        None => n.name.node.clone(),
-                    })
-                    .collect();
-                for gt in glob_types {
-                    sorted.push(format!("{}.*", gt.node));
-                }
-                sorted.sort_unstable();
+                // AUTHOR ORDER, and ONE list: plain names and `Type.*` globs
+                // interleave in the source, and `ImportName::glob` is what
+                // tells them apart at emit time. Reading them out of two
+                // vectors — as this did — re-ordered every glob to one end of
+                // the list no matter what the author wrote, which no amount of
+                // sort-deletion fixes.
+                //
                 // No wrapping for `from` imports — bare names on new lines
                 // would be parsed as new statements in indentation-based syntax.
-                for (j, name) in sorted.iter().enumerate() {
+                for (j, n) in names.iter().enumerate() {
                     if j > 0 {
                         self.emitter.write(", ");
                     }
-                    self.emitter.write(name);
+                    self.emitter.write(&n.name.node);
+                    if n.glob {
+                        self.emitter.write(".*");
+                    } else if let Some(a) = &n.alias {
+                        self.emitter.write(" as ");
+                        self.emitter.write(&a.node);
+                    }
                 }
                 self.emitter.newline();
             }
@@ -7841,11 +7869,23 @@ void main():
     }
 
     #[test]
-    fn test_import_name_sorting() {
-        // Names within `from` imports should be sorted alphabetically.
+    fn test_import_names_keep_author_order() {
+        // Names INSIDE an import keep the order the author wrote (ratified
+        // 2026-08-16, canon call 6). The name of this test used to claim the
+        // opposite; the alphabetical sort it pinned destroyed deliberate
+        // reading order, moving an enum TYPE from the front of its own variant
+        // list to the end. The STATEMENT-level order of the import block is a
+        // different axis and is still sorted.
         let input = "from std.io import Writer, Reader, Closer\n";
         let output = fmt(input);
-        assert_eq!(output, "from std.io import Closer, Reader, Writer\n");
+        assert_eq!(output, "from std.io import Writer, Reader, Closer\n");
+
+        // Both spellings, and the glob entry that used to be re-ordered to the
+        // end of the list no matter where the author put it.
+        let grouped = "import std.sync.{Mutex, Arc}\n";
+        assert_eq!(fmt(grouped), grouped);
+        let glob_first = "from xtd.log import LogLevel.*, Alpha\n";
+        assert_eq!(fmt(glob_first), glob_first);
     }
 
     #[test]

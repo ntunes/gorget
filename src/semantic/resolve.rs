@@ -223,8 +223,8 @@ pub fn collect_top_level(
     // All enums are now defined in scope, so we can look them up and register
     // their variants as bare names (shadowing any prelude variant with the same name).
     for item in &module.items {
-        if let Item::Import(ImportStmt::From { glob_types, .. }) = &item.node {
-            for glob_name in glob_types {
+        if let Item::Import(ImportStmt::From { names, .. }) = &item.node {
+            for glob_name in names.iter().filter(|n| n.glob).map(|n| &n.name) {
                 // Register the type itself as Import (in case it wasn't in `names`)
                 let _ = scopes.define(glob_name.node.clone(), DefKind::Import, glob_name.span);
                 // Find the enum's variant info and bring each variant into scope
@@ -979,12 +979,19 @@ fn collect_import(import: &ImportStmt, scopes: &mut ScopeTable, errors: &mut Vec
                 }
             }
         }
-        ImportStmt::From { names, glob_types, wildcard, .. } => {
+        ImportStmt::From { names, wildcard, .. } => {
             // Module-level wildcard `from X import *` registers nothing up front —
             // the wildcard expansion happens in a post-merge fixup pass once the
             // imported module's public names are visible in the parent scope.
+            //
+            // `names` is one AUTHOR-ORDERED vector holding both spellings, so
+            // the two passes below FILTER rather than read two fields. Plain
+            // names still go first and globs second, independently of how the
+            // author interleaved them: a glob defined ahead of a plain name of
+            // the same spelling would turn the plain one's silent duplicate
+            // into a reported error.
             if !*wildcard {
-                for n in names {
+                for n in names.iter().filter(|n| !n.glob) {
                     let local = n.local_name();
                     if let Err(e) = scopes.define(local.node.clone(), DefKind::Import, local.span) {
                         errors.push(e);
@@ -993,7 +1000,7 @@ fn collect_import(import: &ImportStmt, scopes: &mut ScopeTable, errors: &mut Vec
             }
             // Glob type names (`EnumName.*`) register the type itself as Import (if not already).
             // Their variant registration happens in the second pass of collect_top_level.
-            for name in glob_types {
+            for name in names.iter().filter(|n| n.glob).map(|n| &n.name) {
                 // Silently ignore duplicate: the type may already be imported by a regular name.
                 let _ = scopes.define(name.node.clone(), DefKind::Import, name.span);
             }
@@ -2391,8 +2398,8 @@ struct Point:
                 names: vec![ImportName {
                     name: Spanned { node: "helper".to_string(), span: Span::new(100, 106) },
                     alias: None,
+                    glob: false,
                 }],
-                glob_types: vec![],
                 wildcard: false,
                 span: dummy,
             }),
@@ -2447,8 +2454,8 @@ struct Point:
                 names: vec![ImportName {
                     name: Spanned { node: "public_fn".to_string(), span: Span::new(100, 109) },
                     alias: None,
+                    glob: false,
                 }],
-                glob_types: vec![],
                 wildcard: false,
                 span: dummy,
             }),
@@ -2496,10 +2503,9 @@ struct Point:
             node: Item::Import(ImportStmt::From {
                 path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
                 names: vec![
-                    ImportName { name: Spanned { node: "present_fn".to_string(), span: Span::new(1, 2) }, alias: None },
-                    ImportName { name: Spanned { node: "missing_fn".to_string(), span: Span::new(3, 4) }, alias: None },
+                    ImportName { name: Spanned { node: "present_fn".to_string(), span: Span::new(1, 2) }, alias: None, glob: false },
+                    ImportName { name: Spanned { node: "missing_fn".to_string(), span: Span::new(3, 4) }, alias: None, glob: false },
                 ],
-                glob_types: vec![],
                 wildcard: false,
                 span: dummy,
             }),
@@ -2539,8 +2545,8 @@ struct Point:
                 names: vec![ImportName {
                     name: Spanned { node: "real_fn".to_string(), span: Span::new(1, 2) },
                     alias: Some(Spanned { node: "r".to_string(), span: Span::new(3, 4) }),
+                    glob: false,
                 }],
-                glob_types: vec![],
                 wildcard: false,
                 span: dummy,
             }),
@@ -2578,8 +2584,8 @@ struct Point:
                 names: vec![ImportName {
                     name: Spanned { node: "MyAlias".to_string(), span: Span::new(1, 2) },
                     alias: None,
+                    glob: false,
                 }],
-                glob_types: vec![],
                 wildcard: false,
                 span: dummy,
             }),
@@ -2618,8 +2624,8 @@ struct Point:
                 names: vec![ImportName {
                     name: Spanned { node: "Secret".to_string(), span: Span::new(200, 206) },
                     alias: None,
+                    glob: false,
                 }],
-                glob_types: vec![],
                 wildcard: false,
                 span: dummy,
             }),
@@ -2666,8 +2672,11 @@ struct Point:
         let import_item = Spanned {
             node: Item::Import(ImportStmt::From {
                 path: vec![Spanned { node: "mymod".to_string(), span: dummy }],
-                names: vec![],
-                glob_types: vec![Spanned { node: "Status".to_string(), span: Span::new(300, 306) }],
+                names: vec![ImportName {
+                    name: Spanned { node: "Status".to_string(), span: Span::new(300, 306) },
+                    alias: None,
+                    glob: true,
+                }],
                 wildcard: false,
                 span: dummy,
             }),

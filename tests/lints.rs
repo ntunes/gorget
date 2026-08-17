@@ -10832,15 +10832,14 @@ fn doc_source_citations_name_the_right_line() {
         ("112", "src/formatter/mod.rs:43", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("152", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
         ("229", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("505", "src/formatter/mod.rs:913", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("551", "src/formatter/mod.rs:2204", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("692", "src/formatter/mod.rs:2818", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("513", "src/formatter/mod.rs:913", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("722", "src/formatter/mod.rs:2818", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
     // outlived its reason and has to go, which is what makes the list shrink
     // instead of quietly accumulating. And the count may not grow.
-    const HEURISTIC_BLIND_CEILING: usize = 6;
+    const HEURISTIC_BLIND_CEILING: usize = 5;
     assert!(
         HEURISTIC_BLIND.len() <= HEURISTIC_BLIND_CEILING,
         "the heuristic-blind allowlist GREW ({} > {HEURISTIC_BLIND_CEILING}). \
@@ -13786,6 +13785,86 @@ fn formatter_child_collection_loop_census() {
     );
 }
 
+/// An import NAME LIST is emitted in the AUTHOR'S ORDER (ratified
+/// 2026-08-16). Two tripwires, because the sort could come back in two
+/// different disguises:
+///
+///   1. `format_import` contains no sort of any kind. The alphabetical sort
+///      that used to live there destroyed deliberate reading order — a
+///      `CollectionKind, CkNotCollection, CkVector, …` list came back with the
+///      enum TYPE moved from the front of its own variant list to the end.
+///      (The STATEMENT-level order of the import block is a different axis and
+///      is still sorted, in `format_module`.)
+///
+///   2. `ImportName` carries the `glob` flag, and `ImportStmt::From` has no
+///      second name vector. Deleting the sort alone was NOT sufficient: the
+///      parser used to PARTITION plain names from `Type.*` globs as it parsed,
+///      so the formatter re-emitted every glob at one end of the list however
+///      the author interleaved them — a re-ordering no sort-deletion can undo,
+///      and one that no corpus file can catch (there are zero glob imports
+///      tree-wide). Re-introducing a `glob_types` field is the shape that
+///      brings it back.
+///
+/// **Break-and-verify:** add `sorted.sort_unstable()` back to `format_import`
+/// (tripwire 1), or re-split the names into a second vector (tripwire 2).
+#[test]
+fn formatter_import_emits_source_order() {
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Body of `fn format_import`, by brace depth from its header.
+    let start = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("fn format_import("))
+        .expect("`fn format_import` not found in src/formatter/mod.rs");
+    let mut depth = 0i32;
+    let mut end = start;
+    let mut seen_open = false;
+    for (i, line) in lines.iter().enumerate().skip(start) {
+        depth += line.matches('{').count() as i32;
+        if line.contains('{') {
+            seen_open = true;
+        }
+        depth -= line.matches('}').count() as i32;
+        if seen_open && depth <= 0 {
+            end = i;
+            break;
+        }
+    }
+    assert!(end > start, "could not delimit `format_import`'s body");
+    let body = lines[start..=end].join("\n");
+    let offenders: Vec<&str> = body
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .filter(|l| l.contains(".sort"))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "`format_import` sorts its name list again:\n  {}\n\nImport NAME lists \
+         keep the AUTHOR's order (ratified 2026-08-16). The statement-level \
+         order of the import block is a different axis and lives in \
+         `format_module`.",
+        offenders.join("\n  ")
+    );
+
+    let ast = fs::read_to_string("src/parser/ast.rs").expect("cannot read src/parser/ast.rs");
+    assert!(
+        !ast.contains("glob_types"),
+        "`ImportStmt::From` grew a second name vector again (`glob_types`). \
+         Plain and `Type.*` glob entries interleave in one author-written \
+         list, so they must share ONE ordered vector discriminated by the \
+         typed `ImportName::glob` — partitioning them at parse time loses the \
+         relative order for good, and NO corpus file can catch it (there are \
+         zero glob imports tree-wide)."
+    );
+    assert!(
+        ast.contains("pub glob: bool,"),
+        "`ImportName::glob` is gone — the typed discriminator that lets plain \
+         and glob entries share one author-ordered vector."
+    );
+}
+
 /// The SECOND axis of the blank-line class: every `blank_line()` EMIT SITE in
 /// `src/formatter/mod.rs`, attributed to its enclosing fn and classified by the
 /// predicate that guards it.
@@ -16610,28 +16689,32 @@ fn formatter_list_emit_fill_census() {
     /// kind can no longer reach fill packing without passing the
     /// interior-comment gate on the way.
     const EXPECTED_SURROUND_FILL: usize = 1;
-    /// One `self.emit_delimited_list(` per GATED list kind. Nine: the
+    /// One `self.emit_delimited_list(` per GATED list kind. Ten: the
     /// parameter list, call args, generic params, generic args, closure
     /// params, the array/set literal arm, the multi-element tuple arm, the
-    /// dict literal arm, and the fmt-unreachable `Expr::StructLiteral` arm
+    /// dict literal arm, the fmt-unreachable `Expr::StructLiteral` arm
     /// (kept converted so the class rule has no exception — see
     /// `formatter_collection_literal_interior_hook_dispatch`, which pins
-    /// that unreachability).
+    /// that unreachability), and the GROUPED IMPORT.
+    ///
+    /// The grouped import was the tenth kind and the last hold-out. Its
+    /// carve-out existed for exactly one reason — the names were SORTED, so
+    /// emitted order was not source order and the forward-only comment cursor
+    /// could not interleave per element. The 2026-08-16 canon removed the
+    /// sort, the reason evaporated, and the group now routes through the
+    /// chokepoint like everything else.
     ///
     /// This is the census that replaced the ten-way `doc::surround_fill`
     /// count, and it keeps the same property: adding a list kind is a
     /// CONSCIOUS choice, visible as a number.
-    const EXPECTED_DELIMITED_LIST_SITES: usize = 9;
-    /// DIRECT `emit_delimited_texts` callers outside the chokepoint. One:
-    /// the grouped-import group, the single declared carve-out — its names
-    /// are SORTED, so emitted order is not source order and the
-    /// forward-only comment cursor cannot interleave per element.
+    const EXPECTED_DELIMITED_LIST_SITES: usize = 10;
+    /// DIRECT `emit_delimited_texts` callers outside the chokepoint. ZERO —
+    /// the grouped import was the only one, and it now goes through the gate.
     ///
     /// COUNTING METHOD: the dotted spelling `.emit_delimited_texts(`
-    /// returns 2 raw hits — the chokepoint's own internal call and this
-    /// caller (the DEFINITION has no dot) — and the internal call is
-    /// excluded by fn scope below. The dot-less spelling would return 3.
-    const EXPECTED_UNGATED_TEXTS: usize = 1;
+    /// returns 1 raw hit — the chokepoint's own internal call (the DEFINITION
+    /// has no dot) — and that call is excluded by fn scope below.
+    const EXPECTED_UNGATED_TEXTS: usize = 0;
     /// LEXICAL `Gate::UngatedCarveOut("…")` construction sites, pinned as
     /// an exact (enclosing fn, reason) set so each carve-out is attributed
     /// rather than merely counted. Three:

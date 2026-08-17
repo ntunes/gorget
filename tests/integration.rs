@@ -16740,8 +16740,8 @@ void di_over():
 fn fmt_fill_pack_import_group_kind() {
     assert_fill_pack(
         "import_group.gg",
-        r#"import std.collections.{Alpha, Beta, Delta, Epsilon, Eta, Gamma, Iota, Kappa, Lambda, Mu, Nu, Omicron, Pi, Rho, Theta,
-    Xi, Zeta}
+        r#"import std.collections.{Alpha, Beta, Gamma, Delta, Epsilon, Zeta, Eta, Theta, Iota, Kappa, Lambda, Mu, Nu, Xi, Omicron,
+    Pi, Rho}
 import std.io.{Alpha, Beta, Gamma}
 import std.math.{
     ASingleImportedNameWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetCanonicalSourceFormatter}
@@ -22966,8 +22966,18 @@ fn format_import_canonical(imp: &ImportStmt) -> String {
             if *wildcard {
                 return format!("from {module_path} import *");
             }
+            // GLOB ENTRIES ARE FILTERED OUT ON PURPOSE. This is the RUST HALF
+            // of the `parser_comparison` oracle; its hand-synced Gorget twin is
+            // `tests/fixtures/self_host_parser/format.gg`, whose AST has no
+            // glob field at all — so a `Type.*` entry is invisible to it and
+            // must stay invisible here. Before `ImportName::glob` existed the
+            // globs lived in a separate `glob_types` vector this printer never
+            // read, and the merge into ONE author-ordered vector must not
+            // change what it emits. Keep in sync with
+            // `self_host_parser/format.gg`.
             let name_list = names
                 .iter()
+                .filter(|n| !n.glob)
                 .map(|n| match &n.alias {
                     Some(a) => format!("{} as {}", n.name.node, a.node),
                     None => n.name.node.clone(),
@@ -50812,6 +50822,35 @@ fn fmt_form_synonym_case_nullary_paren_nested() {
 #[test]
 fn fmt_form_synonym_is_nullary_paren() {
     assert_fmt_form_preserved("synonym_is_nullary_paren.gg");
+}
+
+/// The AUTHOR'S ORDER of an import NAME LIST — both spellings, and the glob
+/// axis that the sort-deletion alone does not fix. RED pre-fix (measured):
+/// every list came back alphabetised.
+///
+/// ⚠ The glob cells needed a SECOND red, because the pre-fix binary conflates
+/// two mechanisms. Break-and-watch, recorded: re-partitioning the emit as
+/// `plain names, then globs` — which is exactly what deleting the two sorts
+/// WITHOUT the write-site fix produces — turns all three glob cells red,
+/// including `LogLevel.*, Logger`, which is ACCIDENTALLY GREEN against the
+/// pre-fix binary because that glob happens to sort before its neighbour.
+#[test]
+fn fmt_form_import_author_order() {
+    assert_fmt_form_preserved("import_author_order.gg");
+}
+
+/// GRADUATED from a filed defect: an interior comment inside a GROUPED IMPORT
+/// escaped the group and re-emerged at column 0, documenting the next item.
+/// The group was the single declared `Gate::UngatedCarveOut`, and its whole
+/// stated reason was the name SORT — emitted order was not source order, so
+/// the forward-only comment cursor could not interleave per element. Removing
+/// the sort removed the reason; the group now routes through
+/// `emit_delimited_list` and the gate keeps the comment with its name.
+/// RED pre-fix (measured): packed to `import std.math.{abs, sqrt}` with the
+/// comment dedented onto the following item.
+#[test]
+fn fmt_import_group_interior_comment_stays_inside() {
+    assert_fmt_form_preserved("import_group_interior_comment.gg");
 }
 
 /// SYNONYM — the two BINDING pattern positions, neither of which the corpus
