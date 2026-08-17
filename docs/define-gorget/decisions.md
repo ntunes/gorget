@@ -2437,6 +2437,39 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   a grouped import still leaves the group". POSSIBLE FUTURE, filed separately, not part
   of this: a bundled import form (`from schema import CollectionKind(..)`) that makes
   the relationship expressible.
+- 2026-08-17 — **🎯 THE `for x in xs` IDIOM: GUIDANCE SHIPS AS A REPO LINT + THE BOOK;
+  NO WARN-BY-DEFAULT COMPILER WARNING, "at least not yet" (owner, live session).**
+  The broad "prefer `for-in` over an index loop" guidance is STYLE, and style
+  warnings in the compiler devalue the whole warning channel — once readers scroll
+  past style output they scroll past the probable-defect warnings too. Every
+  neighbouring language keeps this class outside the compiler: Go ships no warnings
+  at all, Rust's `rustc` warns conservatively while style lives in the OPT-IN clippy
+  (and the exact analogue, `needless_range_loop`, is a clippy lint, not a compiler
+  warning — warn-by-default for eleven years and still carrying open issues where its
+  suggestion does not compile or silently deletes a panic), TypeScript defers to
+  ESLint, C# to IDE-level configurable severity.
+  **The counter-argument, recorded because it is real and may reopen this:** a repo
+  lint reaches only this corpus, while agents and newcomers writing Gorget never run
+  it — so the compiler is the ONLY channel that teaches the language's own idiom to
+  the people the LLM-correctness goal is about. That asymmetry does not apply to most
+  languages and is why "not yet" rather than "no".
+  **A NARROW, DEFECT-SHAPED subset remains a legitimate future warning** and is
+  explicitly NOT what this ruling refuses: `.get(i).unwrap()` where `i` is bounded by
+  that same collection's `len()` is provably infallible — dead error handling that
+  lies to the reader about a failure that cannot occur. Mechanically detectable,
+  unambiguous fix, near-zero false positives. That is a probable-defect diagnostic,
+  not a style one.
+  **BLOCKER on any compiler diagnostic, either shape: there is no statement-level
+  suppression.** Attributes attach to ITEMS, so the only "I meant this" is
+  function-granularity — one legitimate byte-cursor would silence the diagnostic for
+  its whole function, exactly backwards. Adding `@allow(...)` at statement level is
+  new syntax AND reopens the same-day ruling that closed the `@fmt(...)` family at one
+  member. Settle suppression before revisiting warn-by-default.
+  ⚠ **Sequencing constraint on the ruled work itself (measured, not assumed):** the
+  lint must not precede the TYPE HOLES, or it fires where no legal idiomatic spelling
+  exists; and the book must not teach the idiom while its MUTABLE form double-frees
+  (the CRITICAL filing of the same day) or while it teaches `zip(a,b)` / `range(n)` /
+  `enumerate(c)`, none of which exist. Fix-first, promote-second.
 - 2026-08-16 — **🎯 `@fmt(skip)` ON ITEMS = RATIFIED, AND THE FAMILY IS CLOSED AT ONE
   MEMBER (owner, live session).** The formatter escape hatch is an ATTRIBUTE, not a
   magic comment: `@fmt(skip)` above an item leaves that item's source emitted
