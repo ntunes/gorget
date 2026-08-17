@@ -2405,11 +2405,14 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   trailing comma stops being noise the formatter shuffles and becomes explicit,
   greppable author intent.
   **(5) `compiler/data/resources.gg` = NO SPECIAL RULING; RE-MEASURE after (2)+(3).**
-  The hand-built data table lost its record structure (3130 → 1106 lines, 353 → 12
-  blank lines; each `ResourceEntry(...)` was exploded so related fields group per line
-  and the sweep packed them to the 120 budget). Most of that is downstream of (2) and
-  (3); what survives them is the honest signal that this file wants a `# fmt: off`-style
-  escape rather than an exception carved into the canon.
+  The hand-built data table lost its record structure (measured PRE-4b at 3130 → 1106
+  lines, 353 → 12 blank lines; each `ResourceEntry(...)` was exploded so related fields
+  group per line and the sweep packed them to the 120 budget). Most of that is downstream
+  of (2) and (3); what survives them is the honest signal that this file wants a
+  `# fmt: off`-style escape rather than an exception carved into the canon.
+  ⚠ **RE-MEASURED post-4b, as this ruling required: 3130 → 1468 lines, 353 → 341 blanks.**
+  Preserve-and-cap SAVED the paragraphing, so paragraph loss is NO LONGER a reason to
+  mark this file; what remains is the ENTRY-FIELD packing.
   **(2-bis) BLANK LINES INSIDE AN EXPLODED CONTAINER = PRESERVE-AND-CAP TOO (owner,
   2026-08-16, folded at the scout's measurement).** Ruling (2) extends from member
   containers to multi-line list literals: blank lines the author wrote BETWEEN elements
@@ -2444,8 +2447,31 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   only GROUPS other declarations and introduces no name of its own — `equip …:` and
   `extern "C":` — cannot; attach to the members instead. **Every position either HONOURS
   an attribute or REJECTS it with a teaching diagnostic; the silently-dropping set is
-  empty BY CONSTRUCTION** (measured 2026-08-17: 14 of 22 positions silently drop today,
-  which is the defect this rule retires).
+  empty BY CONSTRUCTION** (measured 2026-08-17: **21 of 34** positions silently drop today,
+  which is the defect this rule retires — the earlier "12 of 19" and "14 of 22" were both
+  selections that hid their own gaps).
+  ⚙ **ORCHESTRATOR APPLICATION 2026-08-17, changing no ruled verdict.** Probing all 34
+  positions showed the two-branch statement (names-something / groups-declarations) leaves
+  four constructs with NO subject at all — `meta assert`, `meta log`, `suite setup`,
+  `suite teardown` group no *declarations* and name nothing, so neither branch reaches them
+  (Core #15e Q4, a category error no widening of a branch fixes). Restating the SAME rule
+  as ONE predicate covers all 34 with no residue and flips nothing the owner ruled:
+  **HONOUR iff the construct DECLARES A NAME OF ITS OWN; otherwise REJECT.** Groupings
+  still reject (unchanged); statement-groups and compile-time statements now reject as an
+  ANSWER rather than falling off the rule. Two consequences worth naming: the enumeration
+  above OMITS the `meta` declaration forms (`meta int M = 5`, `meta type Num = int`,
+  `meta type Pick(int n):`) which the PRINCIPLE puts in the HONOUR set; and
+  **`import` / `from … import` is settled as REJECT** — it binds names from elsewhere and
+  declares nothing of its own. That one row is the only judgement call here and reverses
+  cleanly on its own if the owner prefers otherwise.
+  ⚠ **SCOPE BOUNDARY (`@fmt(skip)` round).** Five positions where an attribute does not
+  parse at all today — trait method, nested fn, enum variant, struct field, extern-block
+  member — KEEP their parse error for now; adding attribute parsing there is a real
+  widening (new AST fields, new loops, ×3 self-host copies) and is filed separately. Note
+  the rule's remedy clause "attach to the members instead" is **VACUOUS for `extern "C":`**
+  rather than merely unimplemented: an extern declaration has no body to skip, so
+  REJECT-the-block with no member alternative is the correct END STATE there, not a gap.
+  For trait methods it IS a gap.
   **This SUPERSEDES the case-by-case treatment and subsumes h5** (2026-08-16, attributes
   above `equip`/`extern` blocks = parse-time REJECT), which stops being a special case
   and becomes a CONSEQUENCE — an `equip` block exports nothing of its own, exactly the
@@ -2454,12 +2480,16 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   supported (clause (e) of the `@fmt(skip)` entry, now withdrawn); that call reversed a
   ratified owner ruling and should have been an owner ask.
   **Consequence for `@fmt(skip)`:** it works on equip METHODS and every other declaration
-  — which is what the corpus needs, since all 16 `math3d.gg` markers are methods, and
-  method granularity freezes less formatting than a whole block would.
-  ⚠ One position the rule does not obviously settle: `import` / `from … import`
-  introduces names from ELSEWHERE rather than declaring them. Decide it explicitly when
-  the class guard lands rather than letting it fall out of an implementation detail.
-  Accept/reject change ⇒ Core #9: all three lanes + cross-lane NEG conformance fixtures.
+  — which is what the corpus needs, since every `math3d.gg` marker is on a method (the
+  sweep's 16 hunks fall across 28 distinct (block, method) cells; 16 is the HUNK count and
+  must not be quoted as a method count), and method granularity freezes less formatting
+  than a whole block would.
+  Accept/reject change ⇒ Core #9: all three lanes + cross-lane NEG pins. ⚠ Those pins are
+  **per-lane driver tests, NOT a `spectests/` conformance fixture** — `spec_conformance.rs`
+  reads only `spectests/run` (a RUN-outcome tier, wrong category for a rejection) and
+  `spectests/parse-error/` is empty with no harness enumerating it, so a fixture dropped
+  there could never go RED. Core #9 permits per-lane driver tests explicitly; building the
+  `parse-error` tier's runner is separate work.
 - 2026-08-17 — **🎯 THE `for x in xs` IDIOM: GUIDANCE SHIPS AS A REPO LINT + THE BOOK;
   NO WARN-BY-DEFAULT COMPILER WARNING, "at least not yet" (owner, live session).**
   The broad "prefer `for-in` over an index loop" guidance is STYLE, and style
@@ -2497,11 +2527,22 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   MEMBER (owner, live session).** The formatter escape hatch is an ATTRIBUTE, not a
   magic comment: `@fmt(skip)` above an item leaves that item's source emitted
   BYTE-FOR-BYTE. **Why an attribute beats `# fmt: skip`:** Gorget already validates
-  attributes against an allowlist and rejects the rest (`E_UnknownDirective`,
-  `src/semantic/mod.rs:165-219`), so a typo'd `@fmt(skpi)` FAILS THE BUILD while a
-  typo'd `# fmt: skpi` silently does nothing and is discovered only when a sweep
-  quietly reformats the thing it was meant to protect — the silent-no-op shape this
-  round ruled against three times. Black / Prettier / clang-format use magic comments
+  attributes against an allowlist and rejects the rest (`E_UnknownDirective`; the
+  allowlist is at `src/semantic/mod.rs:219` inside `validate_attributes` at `:204-231`
+  — `:165-200` is the SEPARATE `directive` mechanism), so a typo'd `@fmt(skpi)` FAILS
+  THE BUILD while a typo'd `# fmt: skpi` silently does nothing and is discovered only
+  when a sweep quietly reformats the thing it was meant to protect — the silent-no-op
+  shape this round ruled against three times.
+  ⚠ **THAT RATIONALE IS FALSE AT HEAD and repairing it is part of the ratified work
+  (measured 2026-08-17): `gg fmt` runs NO semantic validation** — `src/main.rs:3540`
+  calls the parse-only `format_source_result`, so `gg fmt` on a file carrying
+  `@bogusattr` reformats it, exit 0, no diagnostic; the SWEEP eats the file long before
+  any build fails. Worse, in the silently-dropping positions the formatter DELETES the
+  attribute line outright (measured: 5 attribute lines in, 1 out — only the one above a
+  FUNCTION survives), which is silent data loss under `--in-place`. So the check must run
+  on the path `gg fmt` actually takes, and it must key on the WHOLE allowlist, not on the
+  name `fmt` — a check keyed on `fmt` catches `@fmt(skpi)` and misses `@fmtt(skip)`,
+  i.e. it cannot catch its own class (Core #15e Q2). Black / Prettier / clang-format use magic comments
   because Python, JS and C++ have no lightweight validated annotation at those
   positions; Gorget does, and rustfmt — the language shaped like this one — uses it
   (`#[rustfmt::skip]`). **Granularity is sufficient, measured:** both real cases are
@@ -2523,38 +2564,59 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   markers fail silently; revisit only if a genuine multi-item case appears.
   **Scope of work — ⚠ CORRECTED 2026-08-17 by the implementation scout; the original
   paragraph under-scoped this in one load-bearing way.** (a) **EQUIP METHODS ARE
-  REQUIRED, not a "verify" footnote:** every one of `lib/xtd/math3d.gg`'s 41 sweep hunks
+  REQUIRED, not a "verify" footnote:** every one of `lib/xtd/math3d.gg`'s sweep hunks
   is inside an equip METHOD and not one is a top-level item, so a top-level-only
-  implementation covers **0%** of that target. Equip-method support is the harder half
-  and carries the round's only self-host change (~11 lines in `parse_equip_item`, in 3
-  real `parser.gg` copies; unmarked it yields 2 parse errors plus a phantom
-  `void fmt(skip)` method — measured by running a self-host driver). (b) **THE
-  SILENT-DROP SURFACE IS 14 OF 22 ATTRIBUTE POSITIONS** (corrected 2026-08-17 by the
-  brief gauntlet, which probed all 22 at HEAD: 6 REJECT / 14 silently dropped / 2 parse
-  error, `import` and `from … import` being two separate dropping arms; the scout's
-  "12 of 19" undercounted), not just `static`/`const`:
+  implementation covers **0%** of that target. ⚠ **FIGURES CORRECTED 2026-08-17 (Phase-4b
+  landed after the scout ran; regenerate before quoting):** the sweep is **16 hunks**, not
+  41 — 103 changed source lines, **0** outside an equip block, touching **28 distinct
+  (block, method) cells** across 5 equip blocks. 16 is the HUNK count and was wrongly
+  reused as a method count. Equip-method support is the harder half and carries **TWO**
+  self-host changes, both mandatory, both in 3 real `parser.gg` copies: the attribute port
+  in `parse_equip_item`, AND the REJECT mirrors in `parse_module`'s item loop (a different
+  function needing per-keyword dispatch that does not exist there — without them the SH
+  lane ACCEPTS what Rust gg rejects). Unmarked, an equip-method marker yields 2 parse
+  errors plus a phantom `void fmt(skip)` method — measured by running a self-host driver. (b) **THE
+  SILENT-DROP SURFACE IS 21 OF 34 ATTRIBUTE POSITIONS** (corrected twice on 2026-08-17 by
+  the brief gauntlet: the scout's "12 of 19" undercounted, pass 1's "14 of 22" was itself a
+  selection, and pass 2 probed **34** at HEAD — 21 silently dropped / 13 REJECT-or-parse-error,
+  `import` and `from … import` being two separate dropping arms), not just `static`/`const`:
   trait, bench, equip method, equip block, static, module-var, const, type alias,
   newtype, extern block, import, suite and meta items all accept an attribute and
   silently discard it — `@fmt(skip)` on a type alias would have BEEN the silent-no-op
-  bug this feature exists to prevent. The class fix is CHEAPER than per-position AST
-  fields and directly discharges the h5 ruling: ONE `reject_dropped_attributes` guard at
-  `parse_item`'s dispatch makes the drop set empty by construction (corpus census shows
-  zero conflicts, so it can be fatal on day one). (c) **The skip RE-INDENTS — it is not
+  bug this feature exists to prevent. The class fix directly discharges the h5 ruling, and
+  it has **TWO halves** — a single `parse_item` dispatch guard is NOT enough (corrected
+  2026-08-17): trait, bench and equip METHOD do not drop in `parse_item` at all (their
+  sub-parsers DO store the attributes), they die later at `validate_attributes`'s
+  `_ => continue`, so the fix is the `parse_item` guard **AND** the `validate_attributes`
+  widening. It can be fatal on day one: the corpus census shows **78** own-line attributes,
+  **0** of them above a non-honouring construct, so no burn-down ratchet is needed. (c) **The skip RE-INDENTS — it is not
   a raw byte copy.** Interior layout byte-exact, indentation level canonical: a raw copy
   emits files that DO NOT RE-PARSE when the source indent differs from canonical (`gg
   check` rejected the formatter's own output in the prototype). (d) The whole-buffer
-  blank-line normalizer (`src/formatter/mod.rs:910-927`) collapses real double blanks
+  blank-line normalizer (`src/formatter/mod.rs:1005-1024`) collapses real double blanks
   inside a skipped span — it needs protected byte ranges. (e) ⚠ **WITHDRAWN 2026-08-17 — it contradicted the
   same-day h5 ruling.** The orchestrator had ruled the `equip` BLOCK position supported;
   h5 rejects attributes there. h5 STANDS, and the unifying rule below supersedes both. ggdef needs nothing
   (it reuses the Rust parser, never reads attributes). Canonical printers do not shift.
-  ⊕ Measured end-to-end on the prototype: `resources.gg` 3130→1106 lines unmarked
-  becomes 3132→3123 with 67,667 bytes of table BYTE-EXACT; all 16 marked math3d methods
-  byte-exact; both idempotent. ⚠ Marking an item BLINDS every test asserting on its
-  swept form — `COLLECTION_BUILTIN_METHODS` must NOT be marked (it drops
+  ⊕ Measured on the prototype, then ⚠ **RE-MEASURED 2026-08-17 at a post-4b HEAD, which
+  moved every figure:** `resources.gg` unmarked is 3130→**1468** lines (not 1106) with
+  blanks 353→**341** (not 12) — 4b's preserve-and-cap SAVED the paragraphing, which retires
+  paragraph loss as a reason to mark anything. What still justifies a mark is the
+  ENTRY-FIELD packing in `resources.gg` and the 4×4 GRID collapse in `math3d.gg`.
+  `resources.gg` has **7** statics, not 6, so "2 statics, not 6" is doubly stale — the
+  marked set is a JUDGEMENT over the touched cells, never a count.
+  ⚠ Marking an item BLINDS every test asserting on its swept form —
+  `COLLECTION_BUILTIN_METHODS` must NOT be marked (it drops
   `fmt_resources_gg_comment_positions_preserved`'s indent-12 comment count 15→0, and
-  that guard's own doc says NEVER LOWER THIS FLOOR); the correct marked set is 2 statics,
-  not 6. "Layout changed" is not "layout damaged".
+  that guard's own doc says NEVER LOWER THIS FLOOR). ⚠ **And a mark can leave a guard
+  GREEN while it stops measuring**, which that rule does not catch: 104 of the same
+  guard's *exactly-tight* `interior_count >= 138` floor lies inside the two items a naive
+  marked set would freeze, so three-quarters of it would be satisfied by verbatim
+  byte pass-through. Every guard surviving a mark owes a POST-MARK VACUITY RE-MEASURE and
+  a narrower mark or a compensating assertion. ⚠ Never mark an item carrying a PENDING
+  ratified canonicalization — `Ray.new` is in the touched set and the sweep converts
+  `Vec3 !origin` → `Vec3 ^origin` there, which marking would freeze.
+  "Layout changed" is not "layout damaged".
   Accept/reject change ⇒ Core #9: all three lanes + cross-lane conformance fixtures.
   **⚠ SEQUENCING: this BLOCKS the A2 sweep.** The sweep is a one-way flattening of
   hand-built structure, so the marker must exist and the affected files must be marked
