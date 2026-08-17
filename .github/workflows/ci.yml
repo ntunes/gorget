@@ -120,11 +120,13 @@ jobs:
         run: cargo build --release
 
       # Drives every fixture build through `--backend=llvm` (see gg_command in
-      # tests/integration.rs). Tests that exercise paths the LLVM backend
-      # doesn't yet support — self-host comparisons, hot-reload, tracing, plus
-      # ~17 known LLVM regressions tracked in project_llvm_backend.md — short-
-      # circuit via `skip_under_llvm()` so the suite stays green and gates
-      # against new regressions while we work the residual list down.
+      # tests/integration.rs). `skip_under_llvm()` short-circuits the handful of
+      # tests that READ THE EMITTED `.c` — under `--backend=llvm` there is no
+      # `.c` to inspect, so those are a C-backend contract rather than an LLVM
+      # gap, and each call site says so. It is NOT a known-regression mechanism:
+      # every one of its call sites is that same emitted-`.c` case. Genuine
+      # LLVM-lane gaps are filed in TODO.md with a `known_gaps` repro, not
+      # skipped here.
       - name: Integration tests (LLVM backend)
         run: cargo test --test integration --release -- --test-threads=4
         env:

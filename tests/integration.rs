@@ -50387,6 +50387,43 @@ fn known_gap_case_unresolved_name_rejected() {
     );
 }
 
+/// KNOWN GAP — the LLVM backend never emits the SDL runtime blob, so any
+/// `xtd.sdl` call fails at LINK (`undefined reference to gorget_sdl_init`)
+/// while the C backend builds clean.
+///
+/// DISTINCT from gorget-arena snag #1: that is a missing struct TYPEDEF failing
+/// at shim COMPILE (`unknown type name 'GorgetSDLWindow'`). This fixture
+/// mentions no struct at all, so the shim compiles and the failure is at link.
+/// Snag #1's fix (extend the type-collection walk) emits no function bodies and
+/// cannot close this. `gfx_demo`/`breakout` are snag #1; `sdl_hello` is this.
+#[test]
+#[ignore = "known gap (R42): LLVM never emits the SDL runtime blob — any xtd.sdl call fails at link with undefined reference to gorget_sdl_*, while C builds clean; distinct from snag #1 (typedef/compile). Un-ignore when the blob is emitted under --backend=llvm"]
+fn known_gap_llvm_sdl_runtime_blob() {
+    // BUILD-only: initialising a real video subsystem in a harness would be
+    // environment-dependent, so the assertion is that it LINKS.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/llvm_sdl_runtime_blob_not_emitted.gg");
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let output = build_with_timeout(
+        Command::new(env!("CARGO_BIN_EXE_gg"))
+            .arg("build")
+            .arg("--backend=llvm")
+            .arg(&fixture),
+        "known_gaps/llvm_sdl_runtime_blob_not_emitted.gg",
+    );
+
+    assert!(
+        output.status.success(),
+        "an `xtd.sdl` call must LINK under --backend=llvm — it already builds on \
+         the C backend. Today the SDL runtime blob is never emitted, so the \
+         symbols do not exist.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 /// KNOWN GAP — `std.io.stdin_eof()` binds a runtime symbol that does not
 /// exist. `grep -rn 'gorget_stdin_eof'` returns exactly one hit: the
 /// declaration at `lib/std/io.gg:92`. Every block-mate around it lives in

@@ -1,0 +1,42 @@
+# KNOWN GAP — LLVM backend never emits the SDL runtime blob; the link fails.
+#
+# Calling any `xtd.sdl` function builds on the C backend and fails to LINK under
+# `--backend=llvm`:
+#
+#     gg build                 -> rc 0
+#     gg build --backend=llvm  -> undefined reference to `gorget_sdl_init'
+#                                 undefined reference to `gorget_sdl_quit'
+#
+# Measured at HEAD (2026-08-17) on this exact six-line program.
+#
+# ⚠ DISTINCT FROM gorget-arena snag #1, and this fixture is shaped to prove it.
+# Snag #1 is a missing C TYPEDEF for a struct defined in an FFI-only module, and
+# it fails at shim COMPILE time with `unknown type name 'GorgetSDLWindow'`.
+# THIS program mentions no struct at all -- `sdl_init(int)` and `sdl_quit()` are
+# both scalar-only -- so the shim compiles fine and the failure lands at LINK:
+# the SDL runtime blob was never emitted, so the symbols do not exist. Snag #1's
+# stated fix (extend the shim's type-collection walk) emits no function bodies
+# and therefore cannot close this. Do not merge the two entries.
+#
+# In the wild this is what makes `examples/sdl_hello.gg` fail on the LLVM lane
+# while building clean on C -- 15 undefined `gorget_sdl_*` references. The two
+# sibling examples that fail under LLVM (`gfx_demo`, `breakout`) fail the OTHER
+# way, at shim compile, and those two ARE snag #1.
+#
+# INTENDED: this builds and prints `ok` on BOTH backends. The C backend already
+# does; the LLVM backend must emit the same runtime blob when an `xtd.sdl`
+# symbol is reachable.
+#
+# ⚠ This fixture requires the SDL headers/libs that the C lane already needs; it
+# is a BUILD-only assertion and is never run (initialising a real video
+# subsystem in a test harness would be environment-dependent).
+#
+# Wired test: known_gap_llvm_sdl_runtime_blob (tests/integration.rs, #[ignore]d).
+# It asserts the LLVM build SUCCEEDS, so it fails today and goes green when the
+# blob is emitted. Graduate it out of `known_gaps/` that round.
+from xtd.sdl import sdl_init, sdl_quit, SDL_INIT_VIDEO
+
+void main():
+    sdl_init(SDL_INIT_VIDEO)
+    sdl_quit()
+    print("ok")
