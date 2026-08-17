@@ -1531,8 +1531,32 @@ impl Formatter {
         self.emitter.write(open);
         self.emitter.newline();
         self.emitter.indent();
+        let mut prev_end: Option<usize> = None;
         for elem in elems {
             let (elem_start, elem_end) = span_of(elem);
+            // PRESERVE-AND-CAP inside an EXPLODED container (ratified
+            // 2026-08-16, canon call 2-bis): the author's paragraphing between
+            // elements survives, and the whole-buffer collapse caps a run at
+            // one. Only BETWEEN elements — a blank right after the open
+            // delimiter has no paragraph to separate and is dropped, which is
+            // why this is keyed on `prev_end` rather than on the element index.
+            //
+            // ORDER IS LOAD-BEARING, and it is the same order every clause and
+            // member emitter keeps: blank, THEN leading comments. Reversed, a
+            // blank / comment / element run comes out comment-then-blank and
+            // the comment detaches from the element it documents.
+            //
+            // `has_blank_line_between`, never a raw `source[prev..start]` scan:
+            // the predicate reports only the blank ABOVE the leading-comment
+            // RUN, while the blanks BELOW and BETWEEN that run's comments are
+            // owned by `emit_comments_before` (`blank_line_follows`). A raw
+            // scan sees all of them and emits two.
+            if let Some(prev) = prev_end {
+                if self.has_blank_line_between(prev, elem_start) {
+                    self.emitter.blank_line();
+                }
+            }
+            prev_end = Some(elem_end);
             self.emit_comments_before(elem_start);
             // Reserve EXACTLY 1 — the `,` written below, unconditionally,
             // after every element including the last. Exactly, not additively:

@@ -34,7 +34,7 @@ else round-trips, and the formatter goes out of its way to preserve a handful of
 facts that *look* cosmetic but are semantically load-bearing on re-parse
 (visibility on statics, the `:`-vs-`= "sym"` shape of a function body, the
 author's suite layout). The goal is **idempotence**: `fmt(fmt(x)) == fmt(x)`,
-which the unit tests assert directly (`src/formatter/mod.rs:7447`, `:7747`, and
+which the unit tests assert directly (`src/formatter/mod.rs:7471`, `:7771`, and
 many more).
 
 ## The `gg fmt` command
@@ -51,7 +51,7 @@ modes, all keyed off one entry point:
 The public API is one function, and its return type is the interesting part:
 
 ```rust
-// src/formatter/mod.rs:6485
+// src/formatter/mod.rs:6509
 pub fn format_source_result(source: &str) -> Result<String, Vec<ParseError>> {
     let mut parser = crate::parser::Parser::new(source);
     let module = parser.parse_module();
@@ -68,7 +68,7 @@ build would simply be **absent** from the result — silent data loss on the use
 file. Refusing is the only safe answer: on any parse error the driver renders the
 diagnostics and exits non-zero *without* writing to disk or printing a partial
 format. Call sites that are contractually fed valid Gorget (unit tests, fixtures) use
-`format_source_infallible` (`src/formatter/mod.rs:7225`), which panics rather than
+`format_source_infallible` (`src/formatter/mod.rs:7249`), which panics rather than
 returning a truncated file.
 
 What `gg fmt` still does not do is run semantic analysis: type errors, ownership
@@ -277,6 +277,15 @@ and the same shape reaches trait signatures and extern declarations, which share
 parameter-list emitter. Both re-parse and both are idempotent; the trailing comma is
 the existing exploded-list canon, not a new spelling invented here.
 
+Third, once a container is exploded its elements occupy whole lines, so the
+author's blank lines BETWEEN them become expressible — and are therefore kept,
+under the same preserve-and-cap rule the member containers follow. The
+asymmetry is worth naming: a blank line survives in an EXPLODED list and cannot
+survive in a fill-broken one, because a fill-broken list has no per-element
+line to hang it on. That is not a special case for lists but the general shape
+of the formatter's bargain — it owns layout, and a blank can only be preserved
+where the chosen layout has somewhere to put it.
+
 The gate's open position is the **open delimiter itself**, never the first element's
 start — a comment between `(` and the first argument is before every element and
 would otherwise fall outside the window. Container literals and generic *parameters*
@@ -325,8 +334,8 @@ spelling is almost always `element_to_string_reserving`, which additionally stat
 what the caller will write after the spliced element — see [The tail
 reserve](#the-tail-reserve); the bare form survives for the one position with no
 tail of its own, and a `tests/lints.rs` ratchet pins that at one. This is how
-`format_method_chain` (`src/formatter/mod.rs:3613`) and `format_binary_chain`
-(`src/formatter/mod.rs:3670`) turn each chain segment / operand into a `Doc::Text`
+`format_method_chain` (`src/formatter/mod.rs:3637`) and `format_binary_chain`
+(`src/formatter/mod.rs:3694`) turn each chain segment / operand into a `Doc::Text`
 leaf before grouping them — the wrapping is decided over the *segments*, while each
 segment is formatted by an ordinary recursive call.
 
@@ -509,8 +518,8 @@ second and later blanks of a run.
 The exception set is CLOSED at two sites, both in `format_module`, and both
 about SECTIONS rather than items. The directives loop calls
 `blank_line` between the directive block and the first import
-(`src/formatter/mod.rs:2206`); the imports loop calls `blank_line` between the
-std and non-std groups (`src/formatter/mod.rs:2231`). These separate regions the
+(`src/formatter/mod.rs:2230`); the imports loop calls `blank_line` between the
+std and non-std groups (`src/formatter/mod.rs:2255`). These separate regions the
 formatter itself reorders, so there is no author position to read — the blank
 belongs to the emitted layout, not to the source. Everything after them —
 `format_module`'s own rest loop, nested items, struct fields, enum variants,
@@ -535,32 +544,32 @@ newlines, never touches a within-line gap.
 
 ### Import sorting
 
-`format_module` (`src/formatter/mod.rs:2160`) partitions items into leading
+`format_module` (`src/formatter/mod.rs:2184`) partitions items into leading
 directives, imports, and "the rest" — the partition stops at the first non-import,
-non-directive item (`past_imports`, `src/formatter/mod.rs:2165-2178`), so only the
+non-directive item (`past_imports`, `src/formatter/mod.rs:2189-2202`), so only the
 *leading* import block is reordered. Within that block imports are sorted with
-std/`xtd` libraries first, then alphabetically (`src/formatter/mod.rs:2180-2193`;
-`is_std_import` at `src/formatter/mod.rs:7266`). Names *inside* an import are also
+std/`xtd` libraries first, then alphabetically (`src/formatter/mod.rs:2204-2217`;
+`is_std_import` at `src/formatter/mod.rs:7290`). Names *inside* an import are also
 sorted: `import a.{X, Y}` groups are sorted alphabetically and fill-packed, so a
-long group packs across continuation lines (`src/formatter/mod.rs:3182-3194`), and
+long group packs across continuation lines (`src/formatter/mod.rs:3206-3218`), and
 `from a import …` name lists are sorted too — but
 **not** wrapped, because in indentation-based syntax a bare name on a fresh line would
-re-parse as a new statement (`src/formatter/mod.rs:3218-3229`).
+re-parse as a new statement (`src/formatter/mod.rs:3242-3253`).
 
 ### Type-first re-printing and bare-tuple positions
 
 Gorget is type-first (`int x = 5`), and the formatter prints declarations that way:
-`format_param` emits `type [&|!]name` (`src/formatter/mod.rs:3086-3136`), `VarDecl`
-emits `type name = expr` (`src/formatter/mod.rs:4398-4448`). Ownership sigils (`&`,
+`format_param` emits `type [&|!]name` (`src/formatter/mod.rs:3110-3160`), `VarDecl`
+emits `type name = expr` (`src/formatter/mod.rs:4422-4472`). Ownership sigils (`&`,
 `!`) print *immediately before the name*, via `format_ownership_prefix`
-(`src/formatter/mod.rs:6516`), matching the language rule that the sigil binds the
+(`src/formatter/mod.rs:6540`), matching the language rule that the sigil binds the
 binding, not the type.
 
 Several positions canonicalize a tuple to its **bare** (parens-free) spelling because
 that is the idiomatic form the parser accepts: function return types
-(`src/formatter/mod.rs:2707-2715`), `return a, b` (`src/formatter/mod.rs:4463-4473`),
-`auto a, b = …` destructuring (`src/formatter/mod.rs:4998-5015`), and `for x, y in …`
-patterns (`src/formatter/mod.rs:4503-4512`).
+(`src/formatter/mod.rs:2731-2739`), `return a, b` (`src/formatter/mod.rs:4487-4497`),
+`auto a, b = …` destructuring (`src/formatter/mod.rs:5022-5039`), and `for x, y in …`
+patterns (`src/formatter/mod.rs:4527-4536`).
 
 ### Visibility: the load-bearing "cosmetic" cases
 
@@ -569,13 +578,13 @@ cannot say which the author wrote — and both directions of guessing are wrong.
 Emitting a keyword only for `Private` deletes every explicit `public` in the tree;
 emitting one unconditionally rewrites every declaration that relies on the default.
 The parser therefore records which spelling it consumed, on `explicit_visibility`,
-and `format_visibility` (`src/formatter/mod.rs:2620`) reads that fact and nothing
+and `format_visibility` (`src/formatter/mod.rs:2644`) reads that fact and nothing
 else: **the keyword is emitted iff one was written.** Nine declaration kinds carry
 the flag, and `formatter_visibility_emit_site_count` in `tests/lints.rs` cross-checks
 the emit sites against the carriers so a tenth kind cannot quietly skip the path.
 
 Statics invert the default and keep their own rule (`format_static_decl`,
-`src/formatter/mod.rs:3301-3321`). They are private-by-default, so `public` is
+`src/formatter/mod.rs:3325-3345`). They are private-by-default, so `public` is
 emitted whenever the value *is* public — for a parsed static that means the author
 wrote it, and for a synthesised one it stops the emission from silently flipping the
 declaration to private and breaking cross-module imports — while `private` is emitted
@@ -585,13 +594,13 @@ the tree.
 ### String literals and the verbatim chokepoint
 
 A string literal is emitted **verbatim first**: `format_string_lit`
-(`src/formatter/mod.rs:6619`) asks for the author's own lexeme and, when it can have
+(`src/formatter/mod.rs:6643`) asks for the author's own lexeme and, when it can have
 it, writes exactly that. Quote style, the prefix letter, which escape spelled a
 character, the f-string brace form and — the case that makes a long `"""` block
 readable — its physical line layout all survive, because nothing was regenerated.
 
 Recovery goes through one helper, `Formatter::verbatim`
-(`src/formatter/mod.rs:5478`), and it is the same helper behind every other form the
+(`src/formatter/mod.rs:5502`), and it is the same helper behind every other form the
 AST drops: an integer's radix and digit grouping, a float's trailing zeros, `b'A'`
 versus `65`, `byte` versus `uint8`, and the quoted **name-strings** the AST stores
 decoded (test and bench names, snapshot names, attribute string arguments, extern ABI
@@ -601,7 +610,7 @@ the class rather than a habit of each arm; `formatter_verbatim_emit_arm_count` i
 
 **The property: a recovered lexeme is re-lexed and compared before it is trusted.**
 `verbatim` slices the source at the node's span, hands the slice to
-`relex_single_token` (`src/formatter/mod.rs:6682`) — which asks the *real lexer* and
+`relex_single_token` (`src/formatter/mod.rs:6706`) — which asks the *real lexer* and
 returns a token only when the slice lexes cleanly into exactly one value-bearing
 token covering the whole slice — and then checks that token against the value the
 caller is about to emit. Asking the lexer rather than mirroring its rules is the
@@ -617,14 +626,14 @@ no longer denotes this node — `format_string_lit` rebuilds the literal from it
 `StringKind` prefix (`r"`, `b"`, `c"`, `f"`, `"""`, `"`) and its segment list,
 re-emitting interpolation segments as `{expr_text[:spec]}` from the stored source text
 rather than re-formatting the embedded expression. Bodies are escaped by
-`canonical_string_escape` (`src/formatter/mod.rs:6729`): raw strings pass through,
+`canonical_string_escape` (`src/formatter/mod.rs:6753`): raw strings pass through,
 `{`/`}` double inside f-strings, every control character is escaped — C0 and DEL as
 `\xHH`, C1 (`0x80-0x9F`) as `\u{XX}`, because the lexer rejects `\x` above `0x7F` and a
 raw C1 byte would plant an invisible control character in the user's source. Printable
 non-ASCII stays raw.
 
 No `.gg` source can reach that path, which is exactly why the escape policy lives in a
-free function with unit cells of its own (`src/formatter/mod.rs:6445`) instead of a
+free function with unit cells of its own (`src/formatter/mod.rs:6469`) instead of a
 fixture that would be green for the wrong reason.
 
 ### Author parentheses
@@ -676,11 +685,11 @@ Two consequences worth stating, because both look like bugs from a distance:
 
 ### Function body shapes
 
-`format_function` (`src/formatter/mod.rs:2630`) preserves the four distinct body
+`format_function` (`src/formatter/mod.rs:2654`) preserves the four distinct body
 shapes the AST distinguishes, each of which round-trips to a different construct:
 block body (`:` + indented stmts), expression body (`: expr` on one line), a bare
 declaration (signature + newline, for trait method signatures), and an extern body
-(`= "symbol"`) (`src/formatter/mod.rs:2794-2798`).
+(`= "symbol"`) (`src/formatter/mod.rs:2818-2822`).
 
 ## `meta` constructs
 
@@ -688,15 +697,15 @@ Compile-time `meta` forms are kept verbatim — the formatter does **not** evalu
 expand them (that is Pass 0's job; see chapter 6). They re-print as written:
 
 - **Item-level**: `meta const`, `meta type` (plain / conditional / call RHS variants
-  at `src/formatter/mod.rs:2345-2379`), `meta type … (params)` functions, `meta assert`,
-  `meta if`/`elif`/`else` over *items* (`src/formatter/mod.rs:2417-2492`), and
-  `meta log` — all in `format_item` (`src/formatter/mod.rs:2307-2507`).
-- **Statement-level**: `meta if` (`:4838`), `meta for` (`:4855`), `meta match`
-  (`:4868`), `meta while` (`:4923`), `meta const` (`:4933`), `meta log` (`:4940`) in
+  at `src/formatter/mod.rs:2369-2403`), `meta type … (params)` functions, `meta assert`,
+  `meta if`/`elif`/`else` over *items* (`src/formatter/mod.rs:2441-2516`), and
+  `meta log` — all in `format_item` (`src/formatter/mod.rs:2331-2531`).
+- **Statement-level**: `meta if` (`:4862`), `meta for` (`:4879`), `meta match`
+  (`:4892`), `meta while` (`:4947`), `meta const` (`:4957`), `meta log` (`:4964`) in
   `format_stmt`.
 - **Expression-level**: `meta`-prefixed operators — `a meta[op] b` for infix
-  (`src/formatter/mod.rs:6431-6436`) and `meta <op>` token form
-  (`src/formatter/mod.rs:6437-6440`).
+  (`src/formatter/mod.rs:6455-6460`) and `meta <op>` token form
+  (`src/formatter/mod.rs:6461-6464`).
 
 The AST is deliberately structured so that `meta if`/`meta for` carry their bodies as
 *real* statements/items (so resolution and the rest of the pipeline can see inside
@@ -708,12 +717,12 @@ with the self-host AST-canonicalizer, below, which *does* collapse them.)
 
 A `match` arm list can contain a `meta for` that templates arms. The formatter handles
 the `MatchItem::MetaFor` variant inline inside the `Stmt::Match` walk
-(`src/formatter/mod.rs:4558-4571`): it prints `meta for vars in range:` and then the
+(`src/formatter/mod.rs:4582-4595`): it prints `meta for vars in range:` and then the
 single `arm_template` indented beneath it, rather than treating it as a regular arm.
 
 ## Match arms and guards
 
-`format_match_arm` (`src/formatter/mod.rs:5028`) prints `case <pattern>`, then — **if
+`format_match_arm` (`src/formatter/mod.rs:5052`) prints `case <pattern>`, then — **if
 the arm has a guard** — ` if <guard>`. The arm body is laid out two ways
 according to the author's `Block.layout`: an indented `Block` becomes a newline
 plus indented statements, and everything else is printed inline after the colon.
@@ -736,7 +745,7 @@ arm.
 > suppresses match guards for canonical output." That is **not** true of the Rust
 > `gg fmt` here — `MatchArm.guard` is a real AST field
 > (`src/parser/ast.rs:1007`) and the production formatter emits it verbatim
-> (`src/formatter/mod.rs:5027-5030`). The guard-suppression behavior belongs to the
+> (`src/formatter/mod.rs:5051-5054`). The guard-suppression behavior belongs to the
 > *self-host AST-debug canonicalizer* (`tests/fixtures/self_host_*/format.gg`), a
 > different program with a different purpose — see "In the self-host" below.
 
@@ -766,7 +775,7 @@ trailing comments after the last item).
 
 A leading flush would move every end-of-line comment onto its own line, so a comment
 that *trails* its node is claimed before the cursor can reach it.
-`emit_trailing_comment_after(prev_end)` (`src/formatter/mod.rs:2003`) asks one
+`emit_trailing_comment_after(prev_end)` (`src/formatter/mod.rs:2027`) asks one
 question — is this comment's start on the same source line as the previous emit's
 last character? — and if so injects it after the emitted line, ahead of the newline
 that statement already wrote. A comment separated by a line break fails that test and

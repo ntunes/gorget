@@ -11007,6 +11007,86 @@ fn fmt_closure_body_blanks() {
     );
 }
 
+// PRESERVE-AND-CAP inside an EXPLODED CONTAINER (ratified 2026-08-16, canon
+// call 2-bis). A list carrying an interior comment falls back to one element
+// per line; `format_bracketed_broken_with_comments` had no blank emitter, so
+// every author paragraph break between its elements was deleted — 341 of
+// `compiler/data/resources.gg`'s 353 blank lines are that one cell.
+//
+// The fixture is a FIXED POINT, which is what makes it pin an emission ORDER
+// and not merely a count: `blank_line()` runs BEFORE `emit_comments_before`,
+// the order every clause and member emitter keeps. Measured with the two
+// swapped: the blank COUNT is identical and every comment detaches from the
+// element it documents, gluing to the element above.
+//
+// RED against the pre-change binary (measured): five author blanks deleted.
+#[test]
+fn fmt_exploded_container_blanks() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_blank_lines/exploded_containers.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert_eq!(
+        source, formatted,
+        "exploded-container blank preservation regressed — the fixture is a \
+         FIXED POINT.\n=== author wrote ===\n{source}\n=== formatter emitted \
+         ===\n{formatted}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "exploded-container blanks not idempotent");
+
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(
+        reparse.errors.is_empty(),
+        "exploded-container blank output does not re-parse: {:?}",
+        reparse.errors.first()
+    );
+}
+
+/// The two exploded-container cells that are NOT fixed points, so they need an
+/// input and an expected text: a RUN of two author blanks caps to exactly one,
+/// and a blank adjacent to the OPEN or CLOSE delimiter is dropped — the rule is
+/// keyed on the PREVIOUS ELEMENT, so the first element has nothing to separate
+/// from.
+///
+/// RED against the pre-change binary (measured): every blank was deleted, which
+/// is accidentally right for the delimiter-adjacent cells and wrong for the
+/// run — which is why this asserts the whole text rather than a blank count.
+#[test]
+fn fmt_exploded_container_blank_collapse() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path =
+        manifest_dir.join("tests/fixtures/fmt_blank_lines/exploded_containers_collapse.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let actual = fmt_body(&formatted);
+
+    const EXPECTED: &str = "\
+void main():
+    Vector[int] xs = [
+        # first
+        1,
+
+        2,
+
+        3,
+    ]
+    print(xs.len())
+";
+    assert_eq!(
+        actual, EXPECTED,
+        "exploded-container blank cap/drop regressed.\n=== actual ===\n{actual}\
+         \n=== expected ===\n{EXPECTED}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+}
+
 // R39 gorget-arena verdict fold: opinionated golden-file test. Any fmt
 // behavior change on the canonical sample must be either INTENDED (update
 // expected file same commit) or REGRESSION (fix formatter). See fixture

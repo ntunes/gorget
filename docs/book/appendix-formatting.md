@@ -69,6 +69,12 @@ members of a `trait`, the methods of an `equip` block, the declarations in an
 or a closure body. Wherever you can write two things one after another, the
 space you leave between them is yours.
 
+It reaches inside a **list that is exploded** — one element per line — too, so a
+long table of entries keeps the paragraphs you grouped it into. The one place a
+blank cannot survive is a list the formatter *packed*: several elements share a
+line there, so there is nowhere for a paragraph break to sit. A blank line is
+kept wherever the layout has somewhere to put it.
+
 ### Suite layout is yours
 
 Gorget accepts two spellings for a suite: on the header's own line, or indented
