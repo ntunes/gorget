@@ -1,0 +1,62 @@
+# CRITICAL — DOUBLE FREE from safe, ordinary syntax. BOTH backends.
+#
+# `unwrap()` on an `Option` payload that is BORROWED out of a collection frees
+# the payload the collection still owns. `gg check` reports "OK: no semantic
+# errors" (rc 0, no diagnostic), `gg build` exits 0 on C AND on `--backend=llvm`,
+# and the program dies SIGABRT (rc 134).
+#
+# ⚠ NO ASSIGNMENT AND NO LOOP ARE REQUIRED. This is a READ. It is a DISTINCT
+# mechanism from the `for x in coll: x = v` element-rebind double free (filed
+# separately, whose root cause is the for-loop element binder); the for-loop
+# spelling of this shape crashes too, which shows the loop is incidental rather
+# than causal.
+#
+# ⚠ THE DISCRIMINATOR IS `unwrap()`, NOT THE CONTAINER OR THE ELEMENT TYPE.
+# An earlier version of this fixture claimed the cell was "a Vector[Option[heap]]
+# element" and was measurably too narrow — cell 2 below has a STRUCT element
+# whose Option is a FIELD, and it crashes identically. Measured at HEAD
+# (2026-08-17), C and LLVM:
+#
+#     CRASHES (rc 134):
+#       Vector[Option[String]]  -> .get().unwrap() then .unwrap()
+#       Vector[Option[String]]  -> `for o in d: o.unwrap()`
+#       Vector[Holder]          -> h.f.unwrap()   (Option is a struct FIELD)
+#     CORRECT (rc 0):
+#       the same reads with a `match o: case Some(s)` readback  <- match is SAFE
+#       binding the element and never unwrapping the payload
+#       Vector[String] .get(0).unwrap()      (payload is not an Option)
+#       Vector[Option[int]]                  (scalar payload)
+#       bare Option[String], no container    (payload not borrowed)
+#
+# So: a BORROWED Option payload + `unwrap()`. `match` destructuring of the very
+# same value is fine, which is what localises this to unwrap's payload handling
+# rather than to the collection read or the Option type.
+#
+# ⚠ THE PAYLOAD MUST BE HEAP-FORCED. `[Some("lit")]` runs CLEAN — a string
+# literal is static and never freed, so a literal-payload fixture is a FALSE
+# NEGATIVE that would sit green forever. `mk()` forces a real heap allocation
+# the optimizer cannot fold away.
+#
+# INTENDED: this program prints `aa` then `bb` and exits 0. Crashing on a read is
+# never acceptable, and there is nothing here to reject — every construct is
+# safe, documented, ordinary Gorget.
+#
+# Wired test: security_unwrap_borrowed_payload_double_free (tests/security.rs,
+# #[ignore]d), asserting the INTENDED output. Drop the #[ignore] when unwrap
+# stops freeing a payload it does not own.
+String mk(String a, String b):
+    return a + b
+
+struct Holder:
+    Option[String] f
+
+void main():
+    # Cell 1 — element type IS Option[heap].
+    Vector[Option[String]] d = [Some(mk("a", "a"))]
+    Option[String] o = d.get(0).unwrap()
+    print(o.unwrap())
+
+    # Cell 2 — element is a STRUCT; the Option is a FIELD. Same crash.
+    Vector[Holder] v = [Holder(Some(mk("b", "b")))]
+    Holder h = v.get(0).unwrap()
+    print(h.f.unwrap())

@@ -1296,20 +1296,23 @@ fn security_amp_for_in_element_assign_double_free() {
 
 #[test]
 #[ignore = "SECURITY KNOWN GAP (found 2026-08-17 by the Track-E brief-review, \
-orchestrator-reproduced): reading an element out of a Vector[Option[<heap type>]] \
-and unwrapping it DOUBLE FREES and SIGABRTs on BOTH backends, while `gg check` \
-reports \"OK: no semantic errors\". NO assignment and NO loop are involved — this \
-is a READ — so it is a DISTINCT mechanism from the for-in element-rebind double \
-free, not the same bug in another costume. Discriminator is a COLLECTION ELEMENT \
-of type Option[heap]: scalar payloads and container-free Options are both fine, \
-and a LITERAL payload is a false negative. Un-ignore when the element read stops \
-corrupting the heap."]
-fn security_vector_option_heap_payload_double_free() {
-    // INTENDED: an ordinary read prints the payload and exits 0. There is
+orchestrator-reproduced and axis-corrected): `unwrap()` on an Option payload \
+BORROWED out of a collection frees what the collection still owns — DOUBLE FREE, \
+SIGABRT, BOTH backends, while `gg check` reports \"OK: no semantic errors\". NO \
+assignment and NO loop are involved — this is a READ — so it is a DISTINCT \
+mechanism from the for-in element-rebind double free, not the same bug in \
+another costume. The discriminator is `unwrap()`, NOT the container or the \
+element type: a `match o: case Some(s)` readback of the very same value is rc 0, \
+binding without unwrapping is rc 0, and a struct element whose Option is a FIELD \
+crashes identically (cell 2). Scalar payloads, container-free Options and \
+LITERAL payloads are all false negatives. Un-ignore when unwrap stops freeing a \
+payload it does not own."]
+fn security_unwrap_borrowed_payload_double_free() {
+    // INTENDED: an ordinary read prints both payloads and exits 0. There is
     // nothing to reject here — every construct is safe, documented Gorget.
     security_safe(
-        "attack_100_vector_option_heap_payload_double_free",
-        "aa",
+        "attack_100_unwrap_borrowed_payload_double_free",
+        "aa\nbb",
     );
 }
 
