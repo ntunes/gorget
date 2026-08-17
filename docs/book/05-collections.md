@@ -92,7 +92,7 @@ Vector[int] empty = Vector[int]()    # empty vector with explicit type
 Vector[String] names = Vector[String]()
 
 # Pre-allocate when you know the size — avoids reallocation during growth.
-Vector[int] big = Vector[int](cap=10_000)
+Vector[int] big = Vector[int](cap = 10_000)
 ```
 
 ### Basic Operations

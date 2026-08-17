@@ -1827,7 +1827,7 @@ with Arena(4096) as pool:
     # pool.bytes_used() shows total arena consumption
 
 # One-shot allocator — only this constructor uses the arena
-Vector[int] v = Vector[int](alloc=pool)
+Vector[int] v = Vector[int](alloc = pool)
 ```
 
 The compiler enforces safety: escape analysis prevents arena-scoped data from outliving its allocator (compile-time error, not a runtime crash).

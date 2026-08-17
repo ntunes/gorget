@@ -321,7 +321,7 @@ the value namespace, and context picks the right one.
 
 ### print — infallible builtin / Writer primitives — typed-error
 
-The compiler builtin `print(v, terminator="\n", file=stdout)` is the
+The compiler builtin `print(v, terminator = "\n", file = stdout)` is the
 script ergonomic for stdout writes; it panics on failure (rare for
 stdout). For typed-error callers, write directly on the `Writer`
 primitives:

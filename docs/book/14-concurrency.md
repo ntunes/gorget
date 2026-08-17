@@ -354,7 +354,7 @@ async void handler(Config &cfg, int request_id):
     print(f"request {request_id} → {host} ({ms}ms)")
 
 async void main():
-    shared Config cfg = Config(timeout_ms=5000, upstream_host="localhost")
+    shared Config cfg = Config(timeout_ms = 5000, upstream_host = "localhost")
     Channel[Config] updates = Channel[Config](1)
 
     spawn config_manager(&cfg, updates)
@@ -363,7 +363,7 @@ async void main():
     for i in 0..5:
         spawn handler(&cfg, i)
 
-    updates.send(Config(timeout_ms=1000, upstream_host="prod.example.com"))
+    updates.send(Config(timeout_ms = 1000, upstream_host = "prod.example.com"))
 ```
 
 The `with cfg:` block in the handler reads both fields while the lock is held, then
