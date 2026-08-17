@@ -50387,6 +50387,30 @@ fn known_gap_case_unresolved_name_rejected() {
     );
 }
 
+/// KNOWN GAP — `Dict[K, Option[<heap>]].values()` loses the payload type,
+/// carrying the Option's scalar representation instead. Two faces, one root,
+/// both `gg check`-clean: the `unwrap()` readback SILENTLY prints `0` where
+/// the payload is `"aa"`, and the `match` readback makes the generated C fail
+/// to compile (`incompatible types when assigning to type 'Str' from type
+/// 'int64_t'` — a raw C error reaching the user, which
+/// `docs/language-design.md:120` forbids).
+///
+/// DISTINCT from the `unwrap()`-on-a-borrowed-payload DOUBLE FREE
+/// (`security/attack_100_unwrap_borrowed_payload_double_free.gg`): there the
+/// discriminator is `unwrap()` and `match` is safe, and the program CRASHES.
+/// Here neither readback crashes and both are broken, so it is a typing defect
+/// in `values()` rather than the payload-ownership defect.
+#[test]
+#[ignore = "known gap (R42): Dict.values() mis-types an Option[heap] payload as int64_t — the unwrap readback silently prints 0, the match readback fails to compile; un-ignore when values() carries the payload type"]
+fn known_gap_dict_values_option_payload() {
+    // INTENDED: both loops print `aa`. Face 2 alone makes the program
+    // unbuildable at HEAD, so this fails today.
+    run_gg(
+        "known_gaps/dict_values_option_payload_mistyped.gg",
+        "aa\naa",
+    );
+}
+
 /// KNOWN GAP — calling a `Callable[...]`-typed LOCAL VARIABLE with a
 /// consuming argument panics the lowerer (`Tier 2a consume-site violation`,
 /// src/ir/lowering/mod.rs:2114). `gg check` passes, so this is a

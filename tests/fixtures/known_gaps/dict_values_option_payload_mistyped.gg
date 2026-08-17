@@ -1,0 +1,60 @@
+# KNOWN GAP — `Dict[K, Option[<heap>]].values()` MIS-TYPES THE PAYLOAD.
+# Two faces, one root. Both are `gg check`-clean.
+#
+# Iterating a Dict's values where the value type is `Option[<heap type>]` loses
+# the payload's type: the slot is treated as `int64_t` rather than the payload
+# type. What that produces depends only on how the payload is read back.
+#
+# Measured at HEAD (2026-08-17), C backend:
+#
+#   FACE 1 — `unwrap()` readback: SILENT WRONG ANSWER.
+#     `gg check` -> "OK: no semantic errors"; `gg build` -> 0; runs -> prints `0`
+#     where the payload is the String "aa". No diagnostic anywhere. By Core #8
+#     this is the worse of the two: a loud failure is strictly better than a
+#     silent wrong answer.
+#
+#   FACE 2 — `match v: case Some(s)` readback: BROKEN C REACHES THE USER.
+#     `gg check` -> "OK: no semantic errors"; `gg build` -> exit 1 with
+#         error: incompatible types when assigning to type 'Str' from type 'int64_t'
+#     A C-compile failure of generated code is by definition an ICE and must
+#     never surface as a raw `.c:` error -- `docs/language-design.md:120` already
+#     promises errors point at source, not at generated C.
+#
+# The `int64_t` in face 2's message is what identifies the shared root: the
+# payload slot carries the Option's scalar representation instead of the
+# payload's own type, so face 1 prints that scalar (`0`) and face 2 fails to
+# assign it to a `Str`.
+#
+# ⚠ DISTINCT from the `unwrap()`-on-a-borrowed-payload DOUBLE FREE filed
+# separately (`security/attack_100_unwrap_borrowed_payload_double_free.gg`).
+# That one CRASHES and its discriminator is `unwrap()` -- `match` is safe there.
+# Here BOTH readbacks are broken and neither crashes, so it is a typing defect
+# in `values()`, not the payload-ownership defect.
+#
+# ⚠ THE PAYLOAD MUST BE HEAP-FORCED (`mk()`), per the sibling family: a string
+# literal is static, and a literal-payload probe is a false negative.
+#
+# INTENDED: both loops print `aa`.
+#
+# Wired test: known_gap_dict_values_option_payload (tests/integration.rs,
+# #[ignore]d), asserting the INTENDED output. It fails today -- face 2 alone
+# makes the program unbuildable -- and goes green when `values()` carries the
+# payload type. Graduate it out of `known_gaps/` that round.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Dict[String, Option[String]] d = {}
+    d.put("k", Some(mk("a", "a")))
+
+    # FACE 1 — prints `0` at HEAD instead of `aa`.
+    for v in d.values():
+        print(v.unwrap())
+
+    # FACE 2 — makes the C fail to compile at HEAD.
+    for v in d.values():
+        match v:
+            case Some(s):
+                print(s)
+            else:
+                print("none")
