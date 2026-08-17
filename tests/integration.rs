@@ -50387,6 +50387,42 @@ fn known_gap_case_unresolved_name_rejected() {
     );
 }
 
+/// KNOWN GAP — `std.io.stdin_eof()` binds a runtime symbol that does not
+/// exist. `grep -rn 'gorget_stdin_eof'` returns exactly one hit: the
+/// declaration at `lib/std/io.gg:92`. Every block-mate around it lives in
+/// `runtime_io.c`, so this is one missing runtime function. `gg check` is
+/// clean; `gg build` dies with `implicit declaration of function
+/// 'gorget_stdin_eof'` — a raw C error reaching the user.
+///
+/// This is what blocks `examples/agentic_loop.gg` from building once its
+/// typed-error rot is repaired, so it is a stdlib hole with an example on top
+/// of it rather than example rot.
+#[test]
+#[ignore = "known gap (R42): std.io.stdin_eof() binds gorget_stdin_eof, which is implemented nowhere — gg check clean, gg build dies with an implicit declaration; un-ignore when the runtime symbol lands in runtime_io.c"]
+fn known_gap_stdlib_stdin_eof_builds() {
+    // Asserts the BUILD succeeds. The boolean value is not the subject — the
+    // harness supplies no stdin, so pinning it would pin the environment.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/stdlib_stdin_eof_no_runtime_symbol.gg");
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let output = build_with_timeout(
+        gg_command("build").arg(&fixture),
+        "known_gaps/stdlib_stdin_eof_no_runtime_symbol.gg",
+    );
+
+    assert!(
+        output.status.success(),
+        "`std.io.stdin_eof()` must BUILD — it is shipped stdlib surface. Today \
+         `gg check` is clean and the C compile dies with `implicit declaration \
+         of function 'gorget_stdin_eof'`, because that symbol exists nowhere in \
+         the tree.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 /// KNOWN GAP — `Dict[K, Option[<heap>]].values()` loses the payload type,
 /// carrying the Option's scalar representation instead. Two faces, one root,
 /// both `gg check`-clean: the `unwrap()` readback SILENTLY prints `0` where

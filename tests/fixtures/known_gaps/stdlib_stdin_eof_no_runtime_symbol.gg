@@ -1,0 +1,48 @@
+# KNOWN GAP — a SHIPPED STDLIB FUNCTION THAT CAN NEVER BUILD.
+#
+# `std.io.stdin_eof()` is declared as an extern binding to the runtime symbol
+# `gorget_stdin_eof`, and that symbol EXISTS NOWHERE IN THE TREE. Calling it
+# type-checks and then fails at C compile with a raw compiler error:
+#
+#     gg check  -> OK: no semantic errors        (rc 0, no diagnostic)
+#     gg build  -> error: implicit declaration of function 'gorget_stdin_eof'
+#                  C compiler exited with: exit status: 1
+#
+# Measured at HEAD (2026-08-17). `grep -rn 'gorget_stdin_eof'` over the whole
+# repo returns exactly ONE hit -- the declaration itself, `lib/std/io.gg:92`:
+#
+#     extern bool stdin_eof() = "gorget_stdin_eof"
+#
+# Every block-mate around it is implemented in `src/backend/c/runtime/runtime_io.c`
+# (`gorget_term_cols`, `gorget_term_rows`, `gorget_input`, `gorget_readline`,
+# `gorget_getchar`), so this is one missing runtime function, not a missing
+# subsystem.
+#
+# TWO defects, per Core #8:
+#   (1) the runtime symbol is missing -- a stdlib surface that cannot be used;
+#   (2) a C-compile failure of GENERATED code reached the user as a raw `.c:`
+#       error. `docs/language-design.md:120` already promises errors point at
+#       source, not at generated C. That half is the already-filed
+#       check-clean-then-C-error class; this fixture is a live instance of it.
+#
+# Consequence in the wild: this is what actually blocks `examples/agentic_loop.gg`
+# from building once its typed-error rot is repaired -- so it is not "example
+# rot", it is a stdlib hole with an example sitting on top of it.
+#
+# ⚠ The RIGHT fix is to implement `gorget_stdin_eof` in `runtime_io.c`. Do NOT
+# "fix" this by deleting the declaration from `lib/std/io.gg` -- that removes a
+# documented stdlib function to make a red go away, and the checking half of
+# defect (2) would remain unguarded.
+#
+# INTENDED: this program builds and prints `false` (stdin is not at EOF when a
+# terminal or an empty pipe is attached; the test harness supplies no input, so
+# the assertion is on BUILDING at all, not on the boolean).
+#
+# Wired test: known_gap_stdlib_stdin_eof_builds (tests/integration.rs,
+# #[ignore]d). It asserts the build SUCCEEDS, so it fails today and goes green
+# when the runtime symbol lands. Graduate it out of `known_gaps/` that round.
+from std.io import stdin_eof
+
+void main():
+    bool e = stdin_eof()
+    print(e)
