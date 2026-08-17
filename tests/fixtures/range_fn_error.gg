@@ -1,5 +1,13 @@
 # There is no `range()` function. Integer sequences are `0..n` / `a..=b`.
 # Expected: undefined name (or equivalent check/parse error).
+#
+# Core #12 disposition: this pin is GREEN ON ARRIVAL — `range` was never a
+# builtin, so there is no pre-fix compiler to red it against. What it pins is
+# the ABSENCE: that no future round re-introduces a `range()` callable, and
+# that the book/reference keep teaching `..` instead. Break-and-watch confirms
+# it can see its own class — prepend `int range(int n): return n` to this file
+# and `gg check` reports "OK: no semantic errors", so `check_gg_fails(...,
+# "undefined")` goes RED the moment the name resolves.
 void main():
     for i in range(10):
         print(i)
