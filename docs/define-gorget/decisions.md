@@ -2465,10 +2465,37 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   somebody deliberately adds it. Deferred, not chosen: a REGION form (`@fmt(off)` /
   paired markers) — the next-item form covers both known cases, and unbalanced region
   markers fail silently; revisit only if a genuine multi-item case appears.
-  **Scope of work:** attributes are today on function/struct/enum/trait defs
-  (`docs/language-reference.md:654/731/758/832`) — `static`/`const` items need the
-  grammar row added, and equip-method attribute support must be verified. The skipped
-  span is re-emitted verbatim from source, which makes idempotence automatic.
+  **Scope of work — ⚠ CORRECTED 2026-08-17 by the implementation scout; the original
+  paragraph under-scoped this in one load-bearing way.** (a) **EQUIP METHODS ARE
+  REQUIRED, not a "verify" footnote:** every one of `lib/xtd/math3d.gg`'s 41 sweep hunks
+  is inside an equip METHOD and not one is a top-level item, so a top-level-only
+  implementation covers **0%** of that target. Equip-method support is the harder half
+  and carries the round's only self-host change (~11 lines in `parse_equip_item`, in 3
+  real `parser.gg` copies; unmarked it yields 2 parse errors plus a phantom
+  `void fmt(skip)` method — measured by running a self-host driver). (b) **THE
+  SILENT-DROP SURFACE IS 12 OF 19 ATTRIBUTE POSITIONS**, not just `static`/`const`:
+  trait, bench, equip method, equip block, static, module-var, const, type alias,
+  newtype, extern block, import, suite and meta items all accept an attribute and
+  silently discard it — `@fmt(skip)` on a type alias would have BEEN the silent-no-op
+  bug this feature exists to prevent. The class fix is CHEAPER than per-position AST
+  fields and directly discharges the h5 ruling: ONE `reject_dropped_attributes` guard at
+  `parse_item`'s dispatch makes the drop set empty by construction (corpus census shows
+  zero conflicts, so it can be fatal on day one). (c) **The skip RE-INDENTS — it is not
+  a raw byte copy.** Interior layout byte-exact, indentation level canonical: a raw copy
+  emits files that DO NOT RE-PARSE when the source indent differs from canonical (`gg
+  check` rejected the formatter's own output in the prototype). (d) The whole-buffer
+  blank-line normalizer (`src/formatter/mod.rs:910-927`) collapses real double blanks
+  inside a skipped span — it needs protected byte ranges. (e) The `equip` BLOCK position
+  is SUPPORTED (an `equip` is an `Item`, so the ratification permits it, ~2 lines) but
+  the corpus marks METHODS, which is more precise and freezes less. ggdef needs nothing
+  (it reuses the Rust parser, never reads attributes). Canonical printers do not shift.
+  ⊕ Measured end-to-end on the prototype: `resources.gg` 3130→1106 lines unmarked
+  becomes 3132→3123 with 67,667 bytes of table BYTE-EXACT; all 16 marked math3d methods
+  byte-exact; both idempotent. ⚠ Marking an item BLINDS every test asserting on its
+  swept form — `COLLECTION_BUILTIN_METHODS` must NOT be marked (it drops
+  `fmt_resources_gg_comment_positions_preserved`'s indent-12 comment count 15→0, and
+  that guard's own doc says NEVER LOWER THIS FLOOR); the correct marked set is 2 statics,
+  not 6. "Layout changed" is not "layout damaged".
   Accept/reject change ⇒ Core #9: all three lanes + cross-lane conformance fixtures.
   **⚠ SEQUENCING: this BLOCKS the A2 sweep.** The sweep is a one-way flattening of
   hand-built structure, so the marker must exist and the affected files must be marked
