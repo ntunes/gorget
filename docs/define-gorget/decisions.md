@@ -2437,6 +2437,29 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   a grouped import still leaves the group". POSSIBLE FUTURE, filed separately, not part
   of this: a bundled import form (`from schema import CollectionKind(..)`) that makes
   the relationship expressible.
+- 2026-08-17 — **🎯 THE ATTRIBUTE-POSITION RULE, in one sentence (owner, live session):
+  ATTRIBUTES ATTACH TO DECLARATIONS, NOT TO GROUPINGS.** A construct that introduces a
+  NAME can carry an attribute — function, method (INCLUDING an equip method), struct,
+  enum, trait, `static`, `const`, type alias, newtype, `test`, `bench`. A construct that
+  only GROUPS other declarations and introduces no name of its own — `equip …:` and
+  `extern "C":` — cannot; attach to the members instead. **Every position either HONOURS
+  an attribute or REJECTS it with a teaching diagnostic; the silently-dropping set is
+  empty BY CONSTRUCTION** (measured 2026-08-17: 14 of 22 positions silently drop today,
+  which is the defect this rule retires).
+  **This SUPERSEDES the case-by-case treatment and subsumes h5** (2026-08-16, attributes
+  above `equip`/`extern` blocks = parse-time REJECT), which stops being a special case
+  and becomes a CONSEQUENCE — an `equip` block exports nothing of its own, exactly the
+  reasoning h5 already used for visibility. It also RESOLVES a self-contradiction the
+  orchestrator introduced the same day by unilaterally ruling the `equip`-block position
+  supported (clause (e) of the `@fmt(skip)` entry, now withdrawn); that call reversed a
+  ratified owner ruling and should have been an owner ask.
+  **Consequence for `@fmt(skip)`:** it works on equip METHODS and every other declaration
+  — which is what the corpus needs, since all 16 `math3d.gg` markers are methods, and
+  method granularity freezes less formatting than a whole block would.
+  ⚠ One position the rule does not obviously settle: `import` / `from … import`
+  introduces names from ELSEWHERE rather than declaring them. Decide it explicitly when
+  the class guard lands rather than letting it fall out of an implementation detail.
+  Accept/reject change ⇒ Core #9: all three lanes + cross-lane NEG conformance fixtures.
 - 2026-08-17 — **🎯 THE `for x in xs` IDIOM: GUIDANCE SHIPS AS A REPO LINT + THE BOOK;
   NO WARN-BY-DEFAULT COMPILER WARNING, "at least not yet" (owner, live session).**
   The broad "prefer `for-in` over an index loop" guidance is STYLE, and style
@@ -2518,9 +2541,9 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   emits files that DO NOT RE-PARSE when the source indent differs from canonical (`gg
   check` rejected the formatter's own output in the prototype). (d) The whole-buffer
   blank-line normalizer (`src/formatter/mod.rs:910-927`) collapses real double blanks
-  inside a skipped span — it needs protected byte ranges. (e) The `equip` BLOCK position
-  is SUPPORTED (an `equip` is an `Item`, so the ratification permits it, ~2 lines) but
-  the corpus marks METHODS, which is more precise and freezes less. ggdef needs nothing
+  inside a skipped span — it needs protected byte ranges. (e) ⚠ **WITHDRAWN 2026-08-17 — it contradicted the
+  same-day h5 ruling.** The orchestrator had ruled the `equip` BLOCK position supported;
+  h5 rejects attributes there. h5 STANDS, and the unifying rule below supersedes both. ggdef needs nothing
   (it reuses the Rust parser, never reads attributes). Canonical printers do not shift.
   ⊕ Measured end-to-end on the prototype: `resources.gg` 3130→1106 lines unmarked
   becomes 3132→3123 with 67,667 bytes of table BYTE-EXACT; all 16 marked math3d methods
