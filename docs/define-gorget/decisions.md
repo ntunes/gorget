@@ -2366,12 +2366,26 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
 - 2026-08-16 — **🎯 A2 STYLE REVIEW: FIVE FORMATTER CANON CALLS RULED (owner, live
   session).** All five ride ONE regeneration of the A2 sweep, sequenced after the
   case-spelling fix.
-  **(1) KEYWORD-ARGUMENT SPACING = TIGHT.** `f(x=1)`, not `f(x = 1)` — the sweep's
-  spaced canon is REVERSED. Rationale: Gorget is Python-like and PEP 8 writes kwargs
-  tight precisely so a keyword argument does not read like an assignment statement.
-  Pure whitespace inside a construct, no authored information at stake, so this is the
-  one call decided on convention alone. Measured exposure at the time of ruling: 126
-  sites / 41 files.
+  **(1) KEYWORD-ARGUMENT SPACING = SPACED — `f(a = 1)`. ⚠ REVERSED SAME DAY; the
+  first ruling (tight `f(x=1)`) is WITHDRAWN and rested on a PARTIAL reading of PEP 8.**
+  PEP 8 is not one rule here but TWO, discriminated by ANNOTATION: it says omit the
+  spaces "when used to indicate a keyword argument, or … a default value for an
+  UNANNOTATED function parameter", and then explicitly "**however, if a parameter has
+  an annotation, use spaces around the `=` sign**" (`def munge(sep: AnyStr = None)`).
+  Gorget is TYPE-FIRST — every parameter is annotated, always — so PEP 8's own
+  discriminator selects the SPACED branch, and the corpus already agrees
+  (`String greet(String name = "world")`, `int f(int x = boom())`). Tight call sites
+  would split the language's own `=` spacing between declaration and call; Python
+  escapes that only because its unannotated defs are tight too. The
+  reads-like-an-assignment rationale is also weak here: introducing a variable in
+  Gorget is type-first (`int x = 1`) and there is no assignment-as-expression, so
+  `x = 1` inside a call can only be a named argument. Neighbours agree — among
+  languages spelling named arguments `name = value`, Kotlin
+  (`drawSquare(sideLength = 10, …)`) and Scala both use spaces; C#/Swift use `label:`
+  and Ada `=>`. NET EFFECT: the formatter's existing spaced behaviour is correct and
+  this canon call needs NO code change (it leaves R42 Phase 4b). ⊕ Doc defect to fix in
+  the write-through: `docs/language-reference.md:5032` spells `cap=n` tight, against
+  the spaced form used elsewhere.
   **(2) BLANK LINES = PRESERVE-AND-CAP, IN EVERY MEMBER CONTAINER.** The rule already
   ratified for top-level items on 2026-08-09 (preserve AUTHOR-written blanks; collapse
   runs of 2+ to exactly one) now governs `trait`, `equip` and `extern "C":` bodies too.
