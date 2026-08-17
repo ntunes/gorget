@@ -732,6 +732,103 @@ impl Formatter {
         self.author_parens.layers(span)
     }
 
+    /// The byte offset just past every AUTHOR grouping `)` that closes at
+    /// `end`, skipping whitespace and comments on the way.
+    ///
+    /// An element's recorded span STOPS BEFORE the author's `)`, because
+    /// `parse_paren_expr` returns the inner node and pushes the paren to a
+    /// sideband. So any source scan that starts at an element's end and looks
+    /// for the container's own delimiter can lock onto the AUTHOR's paren
+    /// instead — the mechanism behind both the trailing-comma probe below and
+    /// the closing-delimiter scan in `paren_tuple_gate`. This is the single
+    /// anchor advance both use.
+    ///
+    /// ⚠ SKIPPING, not a byte count. `x + ( y )` puts whitespace between the
+    /// inner node's end and its `)`, so `end + layers` lands on a space and the
+    /// caller then reads the WRONG decisive byte. Measured both ways.
+    fn advance_past_author_parens(&self, end: usize) -> usize {
+        let bytes = self.source.as_bytes();
+        let mut i = end;
+        for _ in 0..self.author_parens.layers_ending_at(end) {
+            // Whitespace and comments may sit between the wrapped node and its
+            // closing paren; nothing else can.
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'#' => {
+                        while i < bytes.len() && bytes[i] != b'\n' {
+                            i += 1;
+                        }
+                    }
+                    b if b.is_ascii_whitespace() => i += 1,
+                    _ => break,
+                }
+            }
+            // Core #14 — the invariant gets an enforcer, not a comment. Every
+            // key ending here has its `)` immediately after it, because
+            // `parse_paren_expr`'s grouping branch is the table's SOLE write
+            // site: tuples, calls, patterns and types span their OWN parens and
+            // push nothing.
+            debug_assert_eq!(
+                bytes.get(i).copied(),
+                Some(b')'),
+                "author-paren advance from {end} landed on {:?}, not `)` — the \
+                 paren table recorded a layer whose closing paren is not where \
+                 the sole write site puts it",
+                bytes.get(i).map(|b| *b as char),
+            );
+            if bytes.get(i).copied() != Some(b')') {
+                return i;
+            }
+            i += 1;
+        }
+        i
+    }
+
+    /// True iff the AUTHOR wrote a trailing comma after the last element of a
+    /// delimited list — the magic-trailing-comma signal (Black's rule): a
+    /// trailing comma means KEEP THIS LIST EXPLODED, its absence means the
+    /// formatter may pack.
+    ///
+    /// `last_elem_end` is the last element's span end. The read is a
+    /// DECISIVE-BYTE one: advance past any author grouping `)` that closes
+    /// there, then take the first byte that is neither whitespace nor comment.
+    /// `,` is the author's comma; anything else — the close delimiter, or a
+    /// byte belonging to whatever follows — is not. Total by construction:
+    /// there is no shape with no arm.
+    ///
+    /// ⚠ THE `#`-TO-EOL SCAN IS ITS OWN, deliberately, and must NOT be routed
+    /// through the comment-table-aware `delim_pos_after`. This probe runs on
+    /// sub-`Formatter`s too, and `element_to_string` builds those with an EMPTY
+    /// comment table BY DESIGN — so a comment-table lookup is VACUOUS there and
+    /// a `,` inside a comment reads as an author comma. Measured: the formatter
+    /// then INVENTS a trailing comma nobody wrote and cascades a one-line chain
+    /// into seven. Zero corpus files exercise the cell; it lives on
+    /// `fmt_magic_comma_inside_comment.gg` and on the source pin
+    /// `formatter_magic_comma_probe_is_self_contained`.
+    ///
+    /// No upper bound is wanted or available. The gate's `container_end` is
+    /// exactly the thing this read refuses to depend on (it does not exist at a
+    /// carve-out), and `source.len()` would be WRONG rather than merely loose:
+    /// in `[a.map(f).filter(g), b]` it reads the OUTER list's separator as the
+    /// segment's own comma.
+    fn author_trailing_comma(&self, last_elem_end: usize) -> bool {
+        let bytes = self.source.as_bytes();
+        let mut i = self.advance_past_author_parens(last_elem_end);
+        while i < bytes.len() {
+            match bytes[i] {
+                b'#' => {
+                    while i < bytes.len() && bytes[i] != b'\n' {
+                        i += 1;
+                    }
+                }
+                b',' => return true,
+                b if b.is_ascii_whitespace() => i += 1,
+                _ => return false,
+            }
+        }
+        false
+    }
+
     // ── Tail reserve: scoped install + the measurement primitives ──
 
     /// Run `f` with `extra` MORE characters reserved on the line's tail, then
@@ -1531,8 +1628,32 @@ impl Formatter {
         self.emitter.write(open);
         self.emitter.newline();
         self.emitter.indent();
+        let mut prev_end: Option<usize> = None;
         for elem in elems {
             let (elem_start, elem_end) = span_of(elem);
+            // PRESERVE-AND-CAP inside an EXPLODED container (ratified
+            // 2026-08-16, canon call 2-bis): the author's paragraphing between
+            // elements survives, and the whole-buffer collapse caps a run at
+            // one. Only BETWEEN elements — a blank right after the open
+            // delimiter has no paragraph to separate and is dropped, which is
+            // why this is keyed on `prev_end` rather than on the element index.
+            //
+            // ORDER IS LOAD-BEARING, and it is the same order every clause and
+            // member emitter keeps: blank, THEN leading comments. Reversed, a
+            // blank / comment / element run comes out comment-then-blank and
+            // the comment detaches from the element it documents.
+            //
+            // `has_blank_line_between`, never a raw `source[prev..start]` scan:
+            // the predicate reports only the blank ABOVE the leading-comment
+            // RUN, while the blanks BELOW and BETWEEN that run's comments are
+            // owned by `emit_comments_before` (`blank_line_follows`). A raw
+            // scan sees all of them and emits two.
+            if let Some(prev) = prev_end {
+                if self.has_blank_line_between(prev, elem_start) {
+                    self.emitter.blank_line();
+                }
+            }
+            prev_end = Some(elem_end);
             self.emit_comments_before(elem_start);
             // Reserve EXACTLY 1 — the `,` written below, unconditionally,
             // after every element including the last. Exactly, not additively:
@@ -1635,7 +1756,24 @@ impl Formatter {
                  does not hold, so an interior comment escapes here"
             );
         }
-        if let Gate::Span(interior_start, container_end) = gate {
+        // THE MAGIC TRAILING COMMA (Black's rule, ratified 2026-08-16): a
+        // trailing comma is the AUTHOR saying KEEP THIS EXPLODED; its absence
+        // means the formatter may pack. It is a property of the SOURCE, so the
+        // read is deliberately GATE-INDEPENDENT — it must not live inside the
+        // `Gate::Span` arm below.
+        //
+        // Why that matters, measured: `format_chain_segment` hands
+        // `Gate::UngatedCarveOut` straight into `format_call_args_wrapped` for
+        // EVERY method chain of 2+ segments, so a gate-dependent read would
+        // silently DELETE the author's comma in `xs.map(f).filter(\n  g,\n)` —
+        // inside a LAND kind, and outside the DEFER set. Unlike the comment
+        // table, the SOURCE does travel into the sub-formatter, so this read
+        // works there.
+        let magic = elems.last().is_some_and(|e| {
+            let (_, last_end) = span_of(e);
+            self.author_trailing_comma(last_end)
+        });
+        if let Gate::Span(interior_start, _) = gate {
             // Provenance guard: the gate's open position must BE the open
             // delimiter. A guessed or drifted offset would silently widen
             // or narrow the window instead of failing, which is the whole
@@ -1647,17 +1785,43 @@ impl Formatter {
                  delimiter (source byte: {:?})",
                 self.source.as_bytes().get(interior_start).map(|b| *b as char),
             );
-            if self.has_interior_comments(interior_start, container_end) {
-                self.format_bracketed_broken_with_comments(
-                    open,
-                    close,
-                    container_end,
-                    elems,
-                    span_of,
-                    |f, e| format_elem(f, e),
-                );
-                return;
+        }
+        let gated = match gate {
+            Gate::Span(interior_start, container_end) => {
+                self.has_interior_comments(interior_start, container_end)
             }
+            Gate::UngatedCarveOut(_) => false,
+        };
+        if magic || gated {
+            // `container_end` is the EXCLUSIVE end of the container — except
+            // at a CARVE-OUT, where there is no gate to take it from and the
+            // magic comma is the only thing that can route us here. The
+            // NARROWED CONTRACT there: pass the LAST ELEMENT'S END, which is
+            // provably inert, because `container_end` is used for exactly one
+            // thing — the orphan-comment flush before the close — and a
+            // carve-out fires only on a formatter whose comment sideband is
+            // EMPTY (asserted at the top of this function, and again here so
+            // the narrowing carries its own enforcer rather than a comment).
+            let container_end = match gate {
+                Gate::Span(_, ce) => ce,
+                Gate::UngatedCarveOut(_) => {
+                    debug_assert!(
+                        self.comments.is_empty(),
+                        "the narrowed `container_end` at a carve-out is only \
+                         inert while the comment sideband is empty"
+                    );
+                    elems.last().map_or(0, |e| span_of(e).1)
+                }
+            };
+            self.format_bracketed_broken_with_comments(
+                open,
+                close,
+                container_end,
+                elems,
+                span_of,
+                |f, e| format_elem(f, e),
+            );
+            return;
         }
         // Escape (c), closed for all ten list kinds at once: an item's
         // sub-render renders at the full budget and so is blind to whatever
@@ -1727,11 +1891,19 @@ impl Formatter {
     ///    end when the function is generic, else at the name;
     ///  * a closing-delimiter search runs from the LAST element's span end.
     ///
-    /// Between such an anchor and the delimiter, only whitespace, commas
-    /// and comments can appear. If a caller cannot advance its anchor —
-    /// because the gate it would anchor on MISSED — it must not fall back
-    /// to the pre-anchor position; it propagates the miss instead (see
-    /// `gate_or_scan_miss`).
+    /// Between such an anchor and the delimiter, only whitespace, commas,
+    /// comments — and the AUTHOR's own grouping parens — can appear. That
+    /// last one is not a caveat but a live hazard: an element's span STOPS
+    /// BEFORE the author's `)`, because `parse_paren_expr` returns the inner
+    /// node and pushes the paren to a sideband, so a `)` search started at
+    /// the last element's end locks onto the AUTHOR's paren instead of the
+    /// container's and truncates the window. Callers scanning for a CLOSING
+    /// delimiter must advance through `advance_past_author_parens` first;
+    /// `paren_tuple_gate` does.
+    ///
+    /// If a caller cannot advance its anchor — because the gate it would
+    /// anchor on MISSED — it must not fall back to the pre-anchor position;
+    /// it propagates the miss instead (see `gate_or_scan_miss`).
     fn delim_pos_after(&self, from: usize, upto: usize, ch: u8) -> Option<usize> {
         let bytes = self.source.as_bytes();
         let hi = upto.min(bytes.len());
@@ -1774,7 +1946,13 @@ impl Formatter {
     ) -> Option<(usize, usize)> {
         let upto = first_elem_start.unwrap_or(outer_end);
         let lp = self.delim_pos_after(anchor, upto, b'(')?;
-        let rp = self.delim_pos_after(last_elem_end.unwrap_or(lp), outer_end, b')')?;
+        // The `)` search must start PAST any AUTHOR grouping paren that closes
+        // at the last element's end, or it locks onto the author's `)` instead
+        // of the container's and truncates the window — which parked an
+        // interior comment OUTSIDE the gate and re-parented it to the enclosing
+        // block. Same anchor advance the trailing-comma probe uses.
+        let rp_from = last_elem_end.map_or(lp, |e| self.advance_past_author_parens(e));
+        let rp = self.delim_pos_after(rp_from, outer_end, b')')?;
         Some((lp, rp + 1))
     }
 
@@ -3034,7 +3212,13 @@ impl Formatter {
             self.emitter.newline();
         } else {
             for (i, item) in t.items.iter().enumerate() {
-                if i > 0 {
+                // PRESERVE-AND-CAP, the member-container rule: keep the blanks
+                // the author wrote between members (the whole-buffer collapse
+                // caps a run at one), and manufacture none. This loop used to
+                // INSERT one unconditionally.
+                if i > 0
+                    && self.has_blank_line_between(t.items[i - 1].span.end, item.span.start)
+                {
                     self.emitter.blank_line();
                 }
                 self.emit_comments_before(item.span.start);
@@ -3153,7 +3337,11 @@ impl Formatter {
             self.emitter.newline();
         } else {
             for (i, method) in e.items.iter().enumerate() {
-                if i > 0 {
+                // PRESERVE-AND-CAP — see `format_trait`'s member loop. This
+                // one also used to INSERT a blank unconditionally.
+                if i > 0
+                    && self.has_blank_line_between(e.items[i - 1].span.end, method.span.start)
+                {
                     self.emitter.blank_line();
                 }
                 self.emit_comments_before(method.span.start);
@@ -3175,27 +3363,55 @@ impl Formatter {
                 self.format_dotted_path(path);
                 self.emitter.newline();
             }
-            ImportStmt::Grouped { path, names, .. } => {
+            ImportStmt::Grouped { path, names, span } => {
                 self.emitter.write("import ");
                 self.format_dotted_path(path);
                 self.emitter.write(".");
-                let mut sorted: Vec<&str> = names.iter().map(|n| n.node.as_str()).collect();
-                sorted.sort_unstable();
-                // The one DECLARED carve-out from the gate, and the only
-                // direct `emit_delimited_texts` caller. It has no `Gate`
-                // at all: the names are SORTED, so emitted order is not
-                // source order, and the comment cursor is forward-only —
-                // interleaving per element would flush a later name's
-                // comment against an earlier one. A comment inside a
-                // grouped import therefore still leaves the group; that
-                // is a real defect, filed with the residual family in
-                // `TODO.md`, and closing it needs an order-aware cursor
-                // rather than a gate here.
-                let items: Vec<String> = sorted.iter().map(|n| (*n).to_string()).collect();
-                self.emit_delimited_texts("{", "}", items);
+                // AUTHOR ORDER (ratified 2026-08-16, canon call 6). The
+                // alphabetical sort that used to live here destroyed
+                // deliberate reading order — `CollectionKind, CkNotCollection,
+                // CkVector, …` came back with the enum TYPE moved from the
+                // front of its own variant list to the end.
+                //
+                // Removing it also RETIRES this position's carve-out from the
+                // interior-comment gate. The carve-out's whole reason was the
+                // sort: emitted order was not source order, and the comment
+                // cursor is forward-only, so interleaving per element would
+                // have flushed a later name's comment against an earlier one.
+                // With emitted order == source order the group routes through
+                // `emit_delimited_list` like every other list, which buys it
+                // the interior-comment gate and the magic trailing comma at
+                // once — the honour set and the gate set are the same set.
+                //
+                // The window rule holds at both ends: between the path's last
+                // segment and the first name lies only `.{`, and between the
+                // last name and the statement's end lies only `}` — no string
+                // literal can appear in either. A miss routes through the ONE
+                // `gate_or_scan_miss` fallback like every other scanned site,
+                // so the carve-out count does not grow with this caller.
+                let open_pos = self.delim_pos_after(
+                    path.last().map_or(span.start, |p| p.span.end),
+                    names.first().map_or(span.end, |n| n.span.start),
+                    b'{',
+                );
+                let close_pos = self.delim_pos_after(
+                    names.last().map_or(span.start, |n| n.span.end),
+                    span.end,
+                    b'}',
+                );
+                let gate = self
+                    .gate_or_scan_miss(open_pos.zip(close_pos).map(|(o, c)| (o, c + 1)));
+                self.emit_delimited_list(
+                    "{",
+                    "}",
+                    gate,
+                    names,
+                    |n| (n.span.start, n.span.end),
+                    |f, n| f.emitter.write(&n.node),
+                );
                 self.emitter.newline();
             }
-            ImportStmt::From { path, names, glob_types, wildcard, .. } => {
+            ImportStmt::From { path, names, wildcard, .. } => {
                 self.emitter.write("from ");
                 self.format_dotted_path(path);
                 self.emitter.write(" import ");
@@ -3204,26 +3420,26 @@ impl Formatter {
                     self.emitter.newline();
                     return;
                 }
-                // Merge regular names (with optional `as` alias) and glob types
-                // (with .* suffix), then sort.
-                let mut sorted: Vec<String> = names
-                    .iter()
-                    .map(|n| match &n.alias {
-                        Some(a) => format!("{} as {}", n.name.node, a.node),
-                        None => n.name.node.clone(),
-                    })
-                    .collect();
-                for gt in glob_types {
-                    sorted.push(format!("{}.*", gt.node));
-                }
-                sorted.sort_unstable();
+                // AUTHOR ORDER, and ONE list: plain names and `Type.*` globs
+                // interleave in the source, and `ImportName::glob` is what
+                // tells them apart at emit time. Reading them out of two
+                // vectors — as this did — re-ordered every glob to one end of
+                // the list no matter what the author wrote, which no amount of
+                // sort-deletion fixes.
+                //
                 // No wrapping for `from` imports — bare names on new lines
                 // would be parsed as new statements in indentation-based syntax.
-                for (j, name) in sorted.iter().enumerate() {
+                for (j, n) in names.iter().enumerate() {
                     if j > 0 {
                         self.emitter.write(", ");
                     }
-                    self.emitter.write(name);
+                    self.emitter.write(&n.name.node);
+                    if n.glob {
+                        self.emitter.write(".*");
+                    } else if let Some(a) = &n.alias {
+                        self.emitter.write(" as ");
+                        self.emitter.write(&a.node);
+                    }
                 }
                 self.emitter.newline();
             }
@@ -3347,7 +3563,7 @@ impl Formatter {
         self.emit_trailing_comment_after_header(header_anchor_end);
         self.emitter.newline();
         self.emitter.indent();
-        for func in &eb.items {
+        for (i, func) in eb.items.iter().enumerate() {
             // R41 T-FMT-A (S1 N13): this child-collection loop was the ONE
             // such loop in the formatter with NO comment hooks at all, so
             // every comment interior to an `extern:` block escaped the block
@@ -3357,6 +3573,17 @@ impl Formatter {
             // loops exactly; `formatter_child_collection_loop_census` in
             // tests/lints.rs now pins the whole family so the next such
             // loop cannot ship hookless.
+            //
+            // PRESERVE-AND-CAP: it was also the one member loop with NO blank
+            // emitter of any kind, so an author's paragraph break between
+            // comment-headed groups of declarations was DELETED. This is an
+            // addition, not a removal — the sibling loops above manufactured a
+            // blank, this one erased them.
+            if i > 0
+                && self.has_blank_line_between(eb.items[i - 1].span.end, func.span.start)
+            {
+                self.emitter.blank_line();
+            }
             self.emit_comments_before(func.span.start);
             self.format_function(&func.node);
             self.emit_trailing_comment_after(func.span.end, false);
@@ -4237,7 +4464,21 @@ impl Formatter {
             self.format_block_stmts(block);
             return;
         }
-        for stmt in post_prelude {
+        for (i, stmt) in post_prelude.iter().enumerate() {
+            // PRESERVE-AND-CAP, the same author-conditioned guard
+            // `format_block_stmts` carries — this loop is its stand-in for a
+            // DESTRUCTURING closure, so without it a plain closure kept the
+            // author's paragraphing and a destructuring one silently lost it.
+            // Found by the blank-policy column of
+            // `formatter_child_collection_loop_census`.
+            if i > 0
+                && self.has_blank_line_between(
+                    post_prelude[i - 1].span.end,
+                    stmt.span.start,
+                )
+            {
+                self.emitter.blank_line();
+            }
             self.emit_comments_before(stmt.span.start);
             self.format_stmt(stmt);
             self.emit_trailing_comment_after(stmt.span.end, false);
@@ -5180,14 +5421,17 @@ impl Formatter {
             Pattern::Wildcard => self.emitter.write("_"),
             Pattern::Literal(expr) => self.format_expr(expr),
             Pattern::Binding(name) => self.emitter.write(name),
-            Pattern::Constructor { path, fields } => {
+            Pattern::Constructor { path, fields, paren_spelled } => {
                 for (i, seg) in path.iter().enumerate() {
                     if i > 0 {
                         self.emitter.write(".");
                     }
                     self.emitter.write(&seg.node);
                 }
-                if !fields.is_empty() {
+                // `!fields.is_empty()` is not belt-and-braces: it keeps a
+                // SYNTHESISED constructor that has fields but no author
+                // (`paren_spelled: false`) emitting legal syntax.
+                if !fields.is_empty() || *paren_spelled {
                     self.emitter.write("(");
                     for (i, field) in fields.iter().enumerate() {
                         if i > 0 {
@@ -5217,10 +5461,10 @@ impl Formatter {
                 }
             }
             Pattern::Rest => self.emitter.write(".."),
-            Pattern::DotShorthand { variant, fields } => {
+            Pattern::DotShorthand { variant, fields, paren_spelled } => {
                 self.emitter.write(".");
                 self.emitter.write(&variant.node);
-                if !fields.is_empty() {
+                if !fields.is_empty() || *paren_spelled {
                     self.emitter.write("(");
                     for (i, field) in fields.iter().enumerate() {
                         if i > 0 {
@@ -7779,11 +8023,23 @@ void main():
     }
 
     #[test]
-    fn test_import_name_sorting() {
-        // Names within `from` imports should be sorted alphabetically.
+    fn test_import_names_keep_author_order() {
+        // Names INSIDE an import keep the order the author wrote (ratified
+        // 2026-08-16, canon call 6). The name of this test used to claim the
+        // opposite; the alphabetical sort it pinned destroyed deliberate
+        // reading order, moving an enum TYPE from the front of its own variant
+        // list to the end. The STATEMENT-level order of the import block is a
+        // different axis and is still sorted.
         let input = "from std.io import Writer, Reader, Closer\n";
         let output = fmt(input);
-        assert_eq!(output, "from std.io import Closer, Reader, Writer\n");
+        assert_eq!(output, "from std.io import Writer, Reader, Closer\n");
+
+        // Both spellings, and the glob entry that used to be re-ordered to the
+        // end of the list no matter where the author put it.
+        let grouped = "import std.sync.{Mutex, Arc}\n";
+        assert_eq!(fmt(grouped), grouped);
+        let glob_first = "from xtd.log import LogLevel.*, Alpha\n";
+        assert_eq!(fmt(glob_first), glob_first);
     }
 
     #[test]

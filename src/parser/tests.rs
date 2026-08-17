@@ -64,10 +64,9 @@ fn test_from_import_mixed_alias() {
 fn test_from_import_wildcard() {
     let module = parse("from std.math import *\n");
     assert_eq!(module.items.len(), 1);
-    if let Item::Import(ImportStmt::From { names, wildcard, glob_types, .. }) = &module.items[0].node {
+    if let Item::Import(ImportStmt::From { names, wildcard, .. }) = &module.items[0].node {
         assert!(*wildcard);
         assert!(names.is_empty());
-        assert!(glob_types.is_empty());
     } else {
         panic!("expected From import");
     }
@@ -1341,7 +1340,7 @@ fn test_dot_shorthand_pattern_unit() {
         if let FunctionBody::Block(block) = &f.body {
             if let Stmt::Match { arms, .. } = &block.stmts[0].node {
                 if let Some(arm) = arms[0].arm() {
-                    assert!(matches!(&arm.pattern.node, Pattern::DotShorthand { variant, fields }
+                    assert!(matches!(&arm.pattern.node, Pattern::DotShorthand { variant, fields, .. }
                         if variant.node == "Red" && fields.is_empty()));
                     return;
                 }
@@ -1360,7 +1359,7 @@ fn test_dot_shorthand_pattern_with_binding() {
         if let FunctionBody::Block(block) = &f.body {
             if let Stmt::Match { arms, .. } = &block.stmts[0].node {
                 if let Some(arm) = arms[0].arm() {
-                    assert!(matches!(&arm.pattern.node, Pattern::DotShorthand { variant, fields }
+                    assert!(matches!(&arm.pattern.node, Pattern::DotShorthand { variant, fields, .. }
                         if variant.node == "Blue" && fields.len() == 1));
                     return;
                 }

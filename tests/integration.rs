@@ -4681,9 +4681,7 @@ fn parser_trailing_comma_cascade() {
 fn parser_trailing_comma_call_args() {
     run_gg(
         "parser_trailing_comma_call_args.gg",
-        "this is a deliberately long first argument literal string|\
-         this is a deliberately long middle argument literal string|\
-         this is a deliberately long final argument literal string",
+        "first|middle|final",
     );
 }
 
@@ -4691,9 +4689,7 @@ fn parser_trailing_comma_call_args() {
 fn parser_trailing_comma_dict_entries() {
     run_gg(
         "parser_trailing_comma_dict_entries.gg",
-        "long_resource_value_alpha_lorem\n\
-         long_resource_value_beta_ipsum\n\
-         long_resource_value_gamma_dolor",
+        "va\nvb\nvg",
     );
 }
 
@@ -10862,6 +10858,429 @@ fn fmt_comment_adjacent_blank_lines_source_runs() {
     run_gg("fmt_comment_adjacent_blank_lines.gg", "10");
 }
 
+// PRESERVE-AND-CAP in every MEMBER CONTAINER (ratified 2026-08-16, canon call
+// 2). `trait` and `equip` member loops used to INSERT a blank between every
+// pair of members unconditionally; `format_extern_block` had no blank emitter
+// at all, so an author's paragraph break inside an `extern "C":` block was
+// DELETED. Both are now the same author-conditioned
+// `has_blank_line_between` guard the `struct` / `enum` / block-statement loops
+// already carried.
+//
+// The assertion is BYTE-EXACT over the fixture's item region, so a
+// manufactured blank, a deleted blank and an uncapped run each fail with the
+// two texts printed. Cells, per container: (a) no author blank, (b) one author
+// blank, (c) a blank ABOVE a leading comment, (d) a 2-run capped to one.
+// `struct` / `enum` ride along as controls.
+//
+// RED, measured against the pre-change binary and in OPPOSITE directions:
+// trait/equip gained a blank at cell (a); extern lost its blanks at (b), (c)
+// and (d).
+#[test]
+fn fmt_member_container_blanks() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_blank_lines/member_containers.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Header-immune: `fmt_body` drops the fixture's own leading comment block,
+    // which `gg fmt` reproduces verbatim, so the assertion is about the items.
+    let actual = fmt_body(&formatted);
+
+    const EXPECTED: &str = "\
+trait Shape:
+    float area(self)
+    float perimeter(self)
+
+    float width(self)
+
+    # geometry group
+    float height(self)
+
+    float depth(self)
+
+struct Point:
+    int x
+    int y
+
+    # grouped by meaning
+    int z
+
+    int w
+
+enum Direction:
+    North
+    South
+
+    # vertical
+    Up
+
+    Down
+
+equip Point:
+    int sum(self):
+        return self.x + self.y
+    int diff(self):
+        return self.x - self.y
+
+    int prod(self):
+        return self.x * self.y
+
+    # helpers
+    int neg(self):
+        return 0 - self.x
+
+    int dbl(self):
+        return self.x + self.x
+
+extern \"C\":
+    int c_open(int a)
+    int c_close(int a)
+
+    int c_flush(int a)
+
+    # the write family
+    int c_write(int a)
+
+    int c_read(int a)
+
+void main():
+    print(1)
+";
+    assert_eq!(
+        actual, EXPECTED,
+        "member-container blank-line preserve-and-cap regressed.\n\
+         === actual ===\n{actual}\n=== expected ===\n{EXPECTED}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "member-container blanks not idempotent");
+
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(
+        reparse.errors.is_empty(),
+        "member-container blank output does not re-parse: {:?}",
+        reparse.errors.first()
+    );
+}
+
+/// The member-container rule's SIBLING, at the one statement-body loop that
+/// cannot delegate to `format_block_stmts`: a closure whose parameter
+/// DESTRUCTURES gets a parser-injected bind prelude, so its body is emitted by
+/// `format_closure_post_prelude`. That loop had no blank emitter at all, so an
+/// author's paragraphing inside a destructuring closure was DELETED while the
+/// identical plain closure beside it kept its own.
+///
+/// Found by the blank-policy column added to
+/// `formatter_child_collection_loop_census` this round — it was the last
+/// child-collection loop reporting "emits no blank".
+///
+/// RED against the pre-change binary (measured): the blank inside `f`'s body
+/// was stripped; `g`'s (the plain-parameter CONTROL) survived.
+#[test]
+fn fmt_closure_body_blanks() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_blank_lines/closure_bodies.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert_eq!(
+        source, formatted,
+        "closure-body blank preservation regressed — the fixture is a FIXED \
+         POINT.\n=== author wrote ===\n{source}\n=== formatter emitted ===\n{formatted}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "closure-body blanks not idempotent");
+
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(
+        reparse.errors.is_empty(),
+        "closure-body blank output does not re-parse: {:?}",
+        reparse.errors.first()
+    );
+}
+
+// PRESERVE-AND-CAP inside an EXPLODED CONTAINER (ratified 2026-08-16, canon
+// call 2-bis). A list carrying an interior comment falls back to one element
+// per line; `format_bracketed_broken_with_comments` had no blank emitter, so
+// every author paragraph break between its elements was deleted — 341 of
+// `compiler/data/resources.gg`'s 353 blank lines are that one cell.
+//
+// The fixture is a FIXED POINT, which is what makes it pin an emission ORDER
+// and not merely a count: `blank_line()` runs BEFORE `emit_comments_before`,
+// the order every clause and member emitter keeps. Measured with the two
+// swapped: the blank COUNT is identical and every comment detaches from the
+// element it documents, gluing to the element above.
+//
+// RED against the pre-change binary (measured): five author blanks deleted.
+#[test]
+fn fmt_exploded_container_blanks() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_blank_lines/exploded_containers.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert_eq!(
+        source, formatted,
+        "exploded-container blank preservation regressed — the fixture is a \
+         FIXED POINT.\n=== author wrote ===\n{source}\n=== formatter emitted \
+         ===\n{formatted}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "exploded-container blanks not idempotent");
+
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(
+        reparse.errors.is_empty(),
+        "exploded-container blank output does not re-parse: {:?}",
+        reparse.errors.first()
+    );
+}
+
+/// The two exploded-container cells that are NOT fixed points, so they need an
+/// input and an expected text: a RUN of two author blanks caps to exactly one,
+/// and a blank adjacent to the OPEN or CLOSE delimiter is dropped — the rule is
+/// keyed on the PREVIOUS ELEMENT, so the first element has nothing to separate
+/// from.
+///
+/// RED against the pre-change binary (measured): every blank was deleted, which
+/// is accidentally right for the delimiter-adjacent cells and wrong for the
+/// run — which is why this asserts the whole text rather than a blank count.
+#[test]
+fn fmt_exploded_container_blank_collapse() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path =
+        manifest_dir.join("tests/fixtures/fmt_blank_lines/exploded_containers_collapse.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let actual = fmt_body(&formatted);
+
+    const EXPECTED: &str = "\
+void main():
+    Vector[int] xs = [
+        # first
+        1,
+
+        2,
+
+        3,
+    ]
+    print(xs.len())
+";
+    assert_eq!(
+        actual, EXPECTED,
+        "exploded-container blank cap/drop regressed.\n=== actual ===\n{actual}\
+         \n=== expected ===\n{EXPECTED}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+}
+
+// ══════════════════════════════════════════════════════════════
+// THE MAGIC TRAILING COMMA (ratified 2026-08-16, canon calls 3+4)
+// ══════════════════════════════════════════════════════════════
+//
+// A trailing comma is the AUTHOR saying KEEP THIS LIST EXPLODED; its absence
+// lets the formatter pack. Before this the token carried no meaning at all —
+// the formatter deleted it when packing and added one when exploding.
+//
+// It is a disjunct at the existing `emit_delimited_list` chokepoint, so the
+// honour set IS the gated set: routing a list kind through the chokepoint buys
+// it the interior-comment gate and the magic comma together. That equality is
+// about the KIND SET only; PROPAGATION is asymmetric (a nested comment reaches
+// every ancestor, a nested magic comma explodes only its own list), which
+// `honoured_kinds.gg`'s `nested_magic` cell pins.
+//
+// FIXTURE PLACEMENT: `tests/fixtures/fmt_magic_comma/`, a SUBDIRECTORY, for
+// the reason spelled out at the `fmt_form_preservation` block — a top-level fmt
+// fixture would be RUN by `runtime_parity_corpus`.
+
+/// Format `fixture` under `fmt_magic_comma/` and assert it is a FIXED POINT,
+/// re-parses, and is stable under a second pass.
+fn assert_magic_comma_fixed_point(fixture: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir
+        .join("tests/fixtures/fmt_magic_comma")
+        .join(fixture);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert_eq!(
+        source, formatted,
+        "magic trailing comma: {fixture} is not a FIXED POINT.\n\
+         === author wrote ===\n{source}\n=== formatter emitted ===\n{formatted}"
+    );
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "{fixture}: not idempotent");
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(
+        reparse.errors.is_empty(),
+        "{fixture}: output does not re-parse ({:?})",
+        reparse.errors.first()
+    );
+}
+
+/// THE HONOURED SET — one cell per gated list kind, each paired with its
+/// no-comma PACKED control, plus the `(x,)` one-tuple exemption and the
+/// nested-propagation cell.
+///
+/// RED pre-fix (measured): every author comma was deleted and every list
+/// packed; the packed controls and `(7,)` did not move, which is what makes
+/// them controls rather than more of the same cell.
+#[test]
+fn fmt_magic_comma_honoured_kinds() {
+    assert_magic_comma_fixed_point("honoured_kinds.gg");
+}
+
+/// AN AUTHOR GROUPING PAREN ON THE LAST ELEMENT — the four TIGHT cells.
+///
+/// An element's recorded span stops BEFORE the author's `)`, so without an
+/// anchor advance the probe's decisive byte is the paren rather than the comma
+/// and the author's trailing comma is SILENTLY DELETED inside a LAND kind.
+///
+/// RED pre-fix (measured): all four packed with the comma deleted.
+///
+/// BREAK-AND-WATCH (a), both halves: reverting the advance to the OBVIOUS
+/// exact-span lookup reds `p2`, `p3` and `p4`; `p1` correctly stays GREEN,
+/// because a BRACKET element's `span_of` IS the wrapped node's span and the
+/// two helpers coincide there. That is why the CALL costumes are here — for a
+/// `Spanned<CallArg>` the exact-span lookup misses BOTH costumes.
+///
+/// ⚠ This file alone cannot see break (b) — all four cells stay green under a
+/// byte-count advance. The SPACED pair below is what catches it.
+#[test]
+fn fmt_magic_comma_author_paren_cells() {
+    assert_magic_comma_fixed_point("author_paren_cells.gg");
+}
+
+/// The same axis, SPACED (`y + ( 2 )`) — the pair that catches a byte-count
+/// advance. Whitespace sits between the wrapped node's end and its `)`, so an
+/// advance that counts bytes instead of skipping lands on the space and reads
+/// the wrong decisive byte.
+///
+/// Not a fixed point (the formatter normalises the interior spacing), so the
+/// assertion is on the exact expected text.
+///
+/// RED pre-fix (measured): both packed with the comma deleted. BREAK-AND-WATCH:
+/// with a byte-count advance both cells pack and lose their comma while the
+/// TIGHT sibling stays green.
+#[test]
+fn fmt_magic_comma_author_paren_cells_spaced() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir
+        .join("tests/fixtures/fmt_magic_comma/author_paren_cells_spaced.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let actual = fmt_body(&formatted);
+
+    const EXPECTED: &str = "\
+int add3(int a, int b, int c):
+    return a + b + c
+
+void main():
+    int y = 1
+    Vector[int] s1 = [
+        1,
+        y + (2),
+    ]
+    int s2 = add3(
+        1,
+        2,
+        y + (3),
+    )
+    print(s1.len() + s2)
+";
+    assert_eq!(
+        actual, EXPECTED,
+        "a SPACED author grouping paren on the last element lost its trailing \
+         comma.\n=== actual ===\n{actual}\n=== expected ===\n{EXPECTED}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(reparse.errors.is_empty(), "output does not re-parse");
+}
+
+/// GATE-INDEPENDENCE — the probe must work at an UNGATED CARVE-OUT.
+///
+/// `format_chain_segment` hands `Gate::UngatedCarveOut` into
+/// `format_call_args_wrapped` for every method chain of 2+ segments, so a
+/// gate-dependent read would SILENTLY DELETE the author's comma there — inside
+/// a LAND kind, and outside the DEFER set.
+///
+/// RED, both polarities: the (+) cell reds against the pre-change binary (comma
+/// deleted, chain packed). The (−) false-positive twin cannot red that way —
+/// the behaviour it guards does not exist pre-change — so it is BREAK-AND-WATCH:
+/// widening the probe past the close delimiter (the `source.len()` window the
+/// ruling refuses) makes the nested `filter(…)` read the OUTER list's separator
+/// as its own comma and explode for a comma nobody wrote. Both halves observed,
+/// then restored.
+#[test]
+fn fmt_magic_comma_at_a_chain_carve_out() {
+    assert_magic_comma_fixed_point("chain_carve_out.gg");
+}
+
+/// The SECOND ENTRANCE to the exploded emitter that the magic comma opens:
+/// comma-exploded and comment-FREE. Every option-E blank-line cell reaches that
+/// emitter through the interior-comment gate; this one does not.
+#[test]
+fn fmt_magic_comma_blank_lines_comma_exploded() {
+    assert_magic_comma_fixed_point("blank_lines_comma_exploded.gg");
+}
+
+/// A `,` INSIDE A COMMENT is not an author comma — the cell with ZERO corpus
+/// witnesses.
+///
+/// The probe runs on sub-`Formatter`s, which `element_to_string` builds with an
+/// EMPTY comment table BY DESIGN, so any comment-table lookup is vacuous there.
+/// RED is BREAK-AND-WATCH: re-implementing `author_trailing_comma` as the
+/// comment-table-aware WINDOW scan the first prototype used invents a trailing
+/// comma inside `g(1)` and cascades this one-line chain into seven. Observed,
+/// then restored.
+///
+/// Not a fixed point — the chain packs and its comment escapes to the block,
+/// which is the SEPARATELY FILED pre-render-above defect and not this canon's
+/// business — so the assertion is on the exact expected text.
+#[test]
+fn fmt_magic_comma_comment_is_not_a_comma() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path =
+        manifest_dir.join("tests/fixtures/fmt_magic_comma/comment_not_a_comma.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let actual = fmt_body(&formatted);
+
+    const EXPECTED: &str = "\
+int g(int a):
+    return a
+
+void main():
+    Vector[int] xs = [1, 2, 3]
+    int n = xs.map((int v): v * 2).filter((int v): v > g(1)).len()
+    # a, b
+    print(n)
+";
+    assert_eq!(
+        actual, EXPECTED,
+        "a `,` inside a comment was read as an author trailing comma.\n\
+         === actual ===\n{actual}\n=== expected ===\n{EXPECTED}"
+    );
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+}
+
 // R39 gorget-arena verdict fold: opinionated golden-file test. Any fmt
 // behavior change on the canonical sample must be either INTENDED (update
 // expected file same commit) or REGRESSION (fix formatter). See fixture
@@ -11920,6 +12339,74 @@ fn fmt_author_parens_survive_and_are_stable() {
              === pass 2 ===\n{second}\n=== pass 3 ===\n{third}"
         );
     }
+}
+
+/// GRADUATED from a known gap: an interior comment written after a
+/// paren-carrying LAST ELEMENT stays inside the container it annotates.
+///
+/// An element's recorded span stops BEFORE the author's `)` — `parse_paren_expr`
+/// returns the inner node and sidebands the paren — so `paren_tuple_gate`'s
+/// closing-delimiter scan locked onto the AUTHOR's paren rather than the
+/// container's and truncated the gated window until the comment fell outside
+/// it. Fixed by `advance_past_author_parens`, the one anchor advance the
+/// magic-comma probe also uses.
+///
+/// RED pre-fix, measured, BOTH costumes: costume 1's comment landed after the
+/// call at enclosing-block indent; costume 2's escaped the inner call into the
+/// outer one. The no-author-paren CONTROL was correct in both binaries, which
+/// is what makes the paren the discriminator rather than the comment.
+///
+/// ⚠ The damaged output was IDEMPOTENT and re-parsed cleanly, so no round-trip
+/// gate could ever see it. Hence the whole-text assertion.
+#[test]
+fn fmt_author_paren_comment_after_paren_last_element() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/fmt_author_parens/comment_after_paren_last_element.gg");
+    let src = std::fs::read_to_string(&fixture).expect("fixture unreadable");
+    let formatted = gorget::formatter::format_source_infallible(&src);
+    let actual = fmt_body(&formatted);
+
+    const EXPECTED: &str = "\
+void sink(int a, int b):
+    print(a + b)
+
+int add1(int a):
+    return a
+
+void main():
+    # COSTUME 1 — the element IS the parenthesised expression
+    sink(
+        1,
+        (2 + 3),
+        # after the paren'd last arg
+    )
+    int y = 2
+    # COSTUME 2 — the paren sits at the TAIL of a larger element
+    print(
+        add1(
+            1 + (y),
+            # tail of a binary whose rhs is parenthesised
+        ),
+    )
+    # CONTROL — same shape, no author paren. Always behaved correctly.
+    sink(
+        1,
+        2 + 3,
+        # control
+    )
+";
+    assert_eq!(
+        actual, EXPECTED,
+        "a comment written after a paren-carrying last element moved.\n\
+         === actual ===\n{actual}\n=== expected ===\n{EXPECTED}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(reparse.errors.is_empty(), "output does not re-parse");
 }
 
 /// The structural NEG axis: parens that are NOT the author's grouping must
@@ -16515,8 +17002,8 @@ void di_over():
 fn fmt_fill_pack_import_group_kind() {
     assert_fill_pack(
         "import_group.gg",
-        r#"import std.collections.{Alpha, Beta, Delta, Epsilon, Eta, Gamma, Iota, Kappa, Lambda, Mu, Nu, Omicron, Pi, Rho, Theta,
-    Xi, Zeta}
+        r#"import std.collections.{Alpha, Beta, Gamma, Delta, Epsilon, Zeta, Eta, Theta, Iota, Kappa, Lambda, Mu, Nu, Xi, Omicron,
+    Pi, Rho}
 import std.io.{Alpha, Beta, Gamma}
 import std.math.{
     ASingleImportedNameWhoseRenderedWidthAloneExceedsTheEntireLineWidthBudgetOfTheGorgetCanonicalSourceFormatter}
@@ -16580,6 +17067,12 @@ void cm_comment():
         222222,
         333333,
     ]
+
+void cm_magic():
+    Vector[int] d = [
+        1,
+        2,
+    ]
 "#,
         "=== got ===\n{body}"
     );
@@ -16600,6 +17093,14 @@ void cm_comment():
     assert!(
         body.contains("        111111,    # first"),
         "comment-broken elements keep their trailing comments at the canon gap"
+    );
+    // The MAGIC-COMMA cause, isolated: no comment, and short enough to pack
+    // comfortably, so the author's trailing comma is the only thing holding it
+    // exploded. Pre-fix this packed to `[1, 2]` with the comma deleted.
+    assert!(
+        body.contains("    Vector[int] d = [\n        1,\n        2,\n    ]"),
+        "a list kept exploded by the AUTHOR's trailing comma alone must stay \
+         exploded, one element per line"
     );
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -21920,7 +22421,13 @@ fn format_pattern_canonical(pat: &Pattern) -> String {
         Pattern::Wildcard => "_".to_string(),
         Pattern::Binding(name) => name.clone(),
         Pattern::Literal(expr) => format_expr_canonical(&expr.node),
-        Pattern::Constructor { path, fields } => {
+        // `paren_spelled` is DELIBERATELY ignored here (`..`). This is the RUST
+        // HALF of the `parser_comparison` oracle; its hand-synced Gorget twin is
+        // `tests/fixtures/self_host_parser/format.gg` (`PConstructor` arm), whose
+        // AST has no such field. Teaching this printer to emit `()` for a
+        // paren-spelled nullary variant would mismatch every self-host file.
+        // Keep in sync with `self_host_parser/format.gg`.
+        Pattern::Constructor { path, fields, .. } => {
             let name = path
                 .iter()
                 .map(|s| s.node.as_str())
@@ -21951,7 +22458,8 @@ fn format_pattern_canonical(pat: &Pattern) -> String {
             parts.join(" | ")
         }
         Pattern::Rest => "..".to_string(),
-        Pattern::DotShorthand { variant, fields } => {
+        // `paren_spelled` deliberately ignored — see the `Constructor` arm above.
+        Pattern::DotShorthand { variant, fields, .. } => {
             if fields.is_empty() {
                 format!(".{}", variant.node)
             } else {
@@ -22734,8 +23242,18 @@ fn format_import_canonical(imp: &ImportStmt) -> String {
             if *wildcard {
                 return format!("from {module_path} import *");
             }
+            // GLOB ENTRIES ARE FILTERED OUT ON PURPOSE. This is the RUST HALF
+            // of the `parser_comparison` oracle; its hand-synced Gorget twin is
+            // `tests/fixtures/self_host_parser/format.gg`, whose AST has no
+            // glob field at all — so a `Type.*` entry is invisible to it and
+            // must stay invisible here. Before `ImportName::glob` existed the
+            // globs lived in a separate `glob_types` vector this printer never
+            // read, and the merge into ONE author-ordered vector must not
+            // change what it emits. Keep in sync with
+            // `self_host_parser/format.gg`.
             let name_list = names
                 .iter()
+                .filter(|n| !n.glob)
                 .map(|n| match &n.alias {
                     Some(a) => format!("{} as {}", n.name.node, a.node),
                     None => n.name.node.clone(),
@@ -49738,63 +50256,16 @@ fn d27_caret_fn_type_sigil_before_type_error() {
 //   sh_resolver_equip_self_receiver_res_missing.gg    -> WIRED below
 //   gorget_arena_snag_1_llvm_ffi_only_typedef/        -> WIRED below (2 cells)
 //   (fmt_snag_2_multiline_header_trailing/ was one of these; the gap is
-//    closed and the reproducer graduated to `tests/fixtures/fmt_suite_layout/`)
+//    closed and the reproducer graduated to `tests/fixtures/fmt_suite_layout/`.
+//    fmt_comment_escapes_call_with_author_paren.gg likewise: closed by the
+//    author-paren anchor advance, graduated to
+//    `tests/fixtures/fmt_author_parens/comment_after_paren_last_element.gg`)
 //   snag53_nested_struct_field_mut.expected           -> NOT a wiring row: it
 //       is the expected-output DATA COMPANION of the already-wired
 //       `snag53_nested_struct_field_mut.gg`, not a reproducer of its own.
 //
 // Every one asserts the INTENDED behaviour and is `#[ignore]`d with a
 // citation, so it flips green the round the bug is fixed. Wire, don't fix.
-
-/// KNOWN GAP — calling a `Callable[...]`-typed LOCAL VARIABLE with a
-/// consuming argument panics the lowerer (`Tier 2a consume-site violation`,
-/// src/ir/lowering/mod.rs:2114). `gg check` passes, so this is a
-/// crash-on-valid-program.
-///
-/// GLYPH-INDEPENDENT: the retired-glyph twin panics with a byte-identical
-/// message, so it is NOT a D27 issue. The INDEXED-callee form of the same
-/// program compiles and runs on the Rust lane — see
-/// `callable_bang_arr_indexed_callee`, the one in-corpus cell of that shape —
-/// so the hole is specific to calling a Callable-typed local BINDING.
-/// (`d27_sh_caret_fntype_param_suffix` is NOT an indexed-callee twin: it
-/// passes its callable as a parameter. It shares the fn-type param-suffix
-/// parse position, not the callee shape.)
-#[test]
-#[ignore = "KNOWN GAP (found 2026-08-17 during the R42 Phase-4b brief review, \
-build-and-run): when the LAST argument of a call carries an AUTHOR GROUPING PAREN, \
-an interior comment after it ESCAPES the call and re-parents to the enclosing block. \
-`parse_paren_expr` returns the inner node and sidebands the paren, so the element span \
-excludes the author's `)`; `paren_tuple_gate`'s `)` scan then locks onto the AUTHOR's \
-paren and truncates `container_end`. The control (same shape, no author paren) is \
-correct, so the paren is the discriminator. The damaged output is IDEMPOTENT, so no \
-round-trip gate can see it. Un-ignore when the gate's window is anchored past the \
-author's paren layers (`author_paren_layers`)."]
-fn known_gap_fmt_comment_escapes_call_with_author_paren() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture = manifest_dir
-        .join("tests/fixtures/known_gaps/fmt_comment_escapes_call_with_author_paren.gg");
-    let src = std::fs::read_to_string(&fixture).expect("fixture unreadable");
-    let formatted = gorget::formatter::format_source_infallible(&src);
-
-    // INTENDED: the comment stays INSIDE the call it annotates. Today it is
-    // emitted after the call's closing paren, at block indent.
-    let body = fmt_body(&formatted);
-    let comment_line = body
-        .lines()
-        .position(|l| l.contains("after the paren"))
-        .expect("marker comment vanished entirely");
-    let close_line = body
-        .lines()
-        .position(|l| l.trim() == ")" || l.trim_end().ends_with("))"))
-        .expect("call close not found");
-
-    assert!(
-        comment_line < close_line,
-        "the comment must stay INSIDE the call it annotates — today the author grouping \
-         paren on the last argument truncates the gate window and the comment escapes to \
-         the enclosing block.\n--- formatted ---\n{formatted}"
-    );
-}
 
 #[test]
 #[ignore = "KNOWN GAP (ratified 2026-08-16, define-gorget ledger; surfaced by the \
@@ -49830,6 +50301,19 @@ fn known_gap_case_unresolved_name_rejected() {
     );
 }
 
+/// KNOWN GAP — calling a `Callable[...]`-typed LOCAL VARIABLE with a
+/// consuming argument panics the lowerer (`Tier 2a consume-site violation`,
+/// src/ir/lowering/mod.rs:2114). `gg check` passes, so this is a
+/// crash-on-valid-program.
+///
+/// GLYPH-INDEPENDENT: the retired-glyph twin panics with a byte-identical
+/// message, so it is NOT a D27 issue. The INDEXED-callee form of the same
+/// program compiles and runs on the Rust lane — see
+/// `callable_bang_arr_indexed_callee`, the one in-corpus cell of that shape —
+/// so the hole is specific to calling a Callable-typed local BINDING.
+/// (`d27_sh_caret_fntype_param_suffix` is NOT an indexed-callee twin: it
+/// passes its callable as a parameter. It shares the fn-type param-suffix
+/// parse position, not the callee shape.)
 #[test]
 #[ignore = "KNOWN GAP (filed R41 T-RB0): calling a Callable-typed LOCAL \
 VARIABLE with a consuming arg ICEs at src/ir/lowering/mod.rs:2114 (Tier 2a \
@@ -50546,6 +51030,79 @@ fn fmt_form_visibility_private_forms() {
 #[test]
 fn fmt_form_synonym_elif_canonicalized() {
     assert_fmt_form_preserved("synonym_elif_canonicalized.gg");
+}
+
+/// SYNONYM — the NULLARY-VARIANT PATTERN paren spelling, `case` position.
+/// `X()`/`X`, `A.B()`/`A.B`, `.V()`/`.V`, `None()`/`None`, an Or-arm
+/// alternative, and a fielded control. RED pre-fix (measured): every
+/// paren-spelled cell came back bare — `case Sun():` → `case Sun:`,
+/// `case Color.Red():` → `case Color.Red:`, `case .Red():` → `case .Red:`,
+/// `case None():` → `case None:`, Or-arm stripped.
+///
+/// ⚠ `case Sat:` and `case None:` CANNOT go red either way — they parse to
+/// `Pattern::Binding` / `Pattern::Literal`, which carry no paren information.
+/// They pin the ABSENCE of a `()` mandate; verified by the inverted-predicate
+/// break, under which they stayed put while `case Color.Green:` and
+/// `case .Green:` wrongly gained parens.
+#[test]
+fn fmt_form_synonym_case_nullary_paren() {
+    assert_fmt_form_preserved("synonym_case_nullary_paren.gg");
+}
+
+/// SYNONYM — a nullary variant NESTED inside a fielded pattern, the cell the
+/// `case X()`-only framing misses (and the only content of the two
+/// `match_nested_enum.gg` corpus files). RED pre-fix (measured):
+/// `case Some(Color.Red()):` → `case Some(Color.Red):`.
+#[test]
+fn fmt_form_synonym_case_nullary_paren_nested() {
+    assert_fmt_form_preserved("synonym_case_nullary_paren_nested.gg");
+}
+
+/// SYNONYM — the same spelling OUTSIDE a `case` arm: the `is` / `is not`
+/// expression positions, which share `parse_pattern`. RED pre-fix (measured):
+/// `c is not Color.Red():` → `c is not Color.Red`.
+#[test]
+fn fmt_form_synonym_is_nullary_paren() {
+    assert_fmt_form_preserved("synonym_is_nullary_paren.gg");
+}
+
+/// The AUTHOR'S ORDER of an import NAME LIST — both spellings, and the glob
+/// axis that the sort-deletion alone does not fix. RED pre-fix (measured):
+/// every list came back alphabetised.
+///
+/// ⚠ The glob cells needed a SECOND red, because the pre-fix binary conflates
+/// two mechanisms. Break-and-watch, recorded: re-partitioning the emit as
+/// `plain names, then globs` — which is exactly what deleting the two sorts
+/// WITHOUT the write-site fix produces — turns all three glob cells red,
+/// including `LogLevel.*, Logger`, which is ACCIDENTALLY GREEN against the
+/// pre-fix binary because that glob happens to sort before its neighbour.
+#[test]
+fn fmt_form_import_author_order() {
+    assert_fmt_form_preserved("import_author_order.gg");
+}
+
+/// GRADUATED from a filed defect: an interior comment inside a GROUPED IMPORT
+/// escaped the group and re-emerged at column 0, documenting the next item.
+/// The group was the single declared `Gate::UngatedCarveOut`, and its whole
+/// stated reason was the name SORT — emitted order was not source order, so
+/// the forward-only comment cursor could not interleave per element. Removing
+/// the sort removed the reason; the group now routes through
+/// `emit_delimited_list` and the gate keeps the comment with its name.
+/// RED pre-fix (measured): packed to `import std.math.{abs, sqrt}` with the
+/// comment dedented onto the following item.
+#[test]
+fn fmt_import_group_interior_comment_stays_inside() {
+    assert_fmt_form_preserved("import_group_interior_comment.gg");
+}
+
+/// SYNONYM — the two BINDING pattern positions, neither of which the corpus
+/// exercises: a list-comprehension `for` pattern and a var-decl destructure.
+/// Both shapes were probed (parse + `gg check`) rather than assumed. RED
+/// pre-fix (measured): `[1 for Color.Red() in cs]` → `[1 for Color.Red in cs]`
+/// and `auto Color.Red() = c` → `auto Color.Red = c`.
+#[test]
+fn fmt_form_synonym_case_nullary_paren_bindings() {
+    assert_fmt_form_preserved("synonym_case_nullary_paren_bindings.gg");
 }
 
 /// CLASS GUARD — `gg fmt` output must RE-PARSE, for every `.gg` file in the

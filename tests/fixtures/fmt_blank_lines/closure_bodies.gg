@@ -1,0 +1,52 @@
+# PRESERVE-AND-CAP in a CLOSURE BODY — the sibling of the member-container
+# rule, at the one statement-body loop that cannot delegate to
+# `format_block_stmts`.
+#
+# A closure whose parameter DESTRUCTURES a tuple gets a parser-injected prelude
+# of bind statements, so its body is emitted by `format_closure_post_prelude`
+# rather than by `format_block_stmts`. That loop had no blank emitter, so the
+# author's paragraphing inside a destructuring closure was DELETED while the
+# identical plain closure below it kept its own.
+#
+# AXIS: closure parameter shape {destructuring, plain} × author blank
+# {present, absent}. All FOUR cells are here, and each plain-parameter cell is
+# the CONTROL for its destructuring twin — it was always correct, and pins that
+# this change did not disturb `format_block_stmts`:
+#   f  destructuring × blank PRESENT   ← the defect
+#   g  plain         × blank PRESENT   ← control
+#   h  destructuring × blank ABSENT    ← no blank may be MANUFACTURED
+#   k  plain         × blank ABSENT    ← control
+#
+# ⚠ OMITTED, deliberately: the third value of the blank axis, a 2-RUN capped to
+# one. Capping is not this loop's business — it is the whole-buffer collapse in
+# `format`, which runs once over the finished output and is therefore
+# loop-independent. Sampling it here would pin the same mechanism a fifth time
+# (`member_containers.gg` and `exploded_containers_collapse.gg` already carry
+# it) and would cost this file its fixed-point property for nothing.
+#
+# RED against the pre-change binary, measured: the blank inside `f`'s body was
+# stripped; `g`'s survived. Found by the blank-policy column of
+# `formatter_child_collection_loop_census`, which reported this loop as the one
+# remaining child-collection loop emitting no blank at all.
+#
+# This file is a FIXED POINT: `gg fmt` must return it byte-for-byte.
+void main():
+    Callable[int((int, int))] f = ((int x, int y)):
+        int s = x + y
+
+        int t = s * 2
+        return t
+    Callable[int(int)] g = (int n):
+        int s = n + 1
+
+        int t = s * 2
+        return t
+    Callable[int((int, int))] h = ((int a, int b)):
+        int u = a * b
+        int v = u + 1
+        return v
+    Callable[int(int)] k = (int m):
+        int u = m * 2
+        int v = u + 1
+        return v
+    print(f((1, 2)) + g(3) + h((2, 5)) + k(4))

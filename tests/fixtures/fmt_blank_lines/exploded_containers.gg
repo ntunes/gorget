@@ -1,0 +1,69 @@
+# PRESERVE-AND-CAP inside an EXPLODED CONTAINER (canon call 2-bis).
+#
+# A list that carries an interior comment falls back to one element per line
+# with a trailing comma. `format_bracketed_broken_with_comments` had no blank
+# emitter, so every author paragraph break BETWEEN elements was deleted — 341 of
+# `compiler/data/resources.gg`'s 353 blank lines are this one cell.
+#
+# AXIS: where the blank sits relative to the leading-comment run × run length ×
+# position in the list.
+#   (a) blank between two COMMENT-FREE elements     → kept        [was DROPPED]
+#   (b) blank ABOVE a leading comment               → kept, ABOVE [was DROPPED]
+#   (c) blank BELOW a comment                       → kept, in place (unchanged)
+#   (d) blank BETWEEN two comments                  → kept, in place (unchanged)
+#   (e) a nested exploded list                      → the same rule recursively
+# The two cells that are NOT fixed points — a 2-run capped to one, and a blank
+# right after the OPEN delimiter, which is dropped because the rule is keyed on
+# the PREVIOUS element rather than on an index — live in the sibling fixture
+# `exploded_containers_collapse.gg`, asserted against an exact expected text.
+#
+# ⚠ (b) IS THE CELL THAT ACTUALLY OCCURS. At this commit the emitter is only
+# reachable through the interior-comment gate, and `resources.gg` — the file
+# this change exists for — has a leading comment above EVERY element with the
+# blank above it. So the comment-free cells are the ones reality does not
+# contain, and (b) is the one that pays.
+#
+# ⚠ (b) ALSO PINS AN EMISSION ORDER, not just a count. `blank_line()` runs
+# BEFORE `emit_comments_before`, the order every clause and member emitter
+# keeps. The inverted order yields the IDENTICAL blank COUNT, so only a
+# positional assertion can tell them apart — measured: with the two swapped,
+# each comment detaches from the element it documents and glues to the element
+# above it. This fixture is a FIXED POINT, so it sees that.
+#
+# RED against the pre-change binary, measured: cells (a) and (b) came back with
+# the blank deleted; (c) and (d) were already correct and pin no-regression.
+void main():
+    Vector[int] xs = [
+        # first group
+        1,
+        2,
+
+        3,
+
+        # second group
+        4,
+        # a comment with a blank below it
+
+        5,
+        # first
+
+        # second
+        6,
+    ]
+    Vector[Vector[int]] nested = [
+        # outer head
+        [
+            # inner head
+            7,
+
+            8,
+        ],
+
+        [
+            # inner tail
+            9,
+
+            10,
+        ],
+    ]
+    print(xs.len() + nested.len())

@@ -10831,16 +10831,15 @@ fn doc_source_citations_name_the_right_line() {
     const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
         ("112", "src/formatter/mod.rs:43", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("152", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
-        ("229", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("478", "src/formatter/mod.rs:913", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("502", "src/formatter/mod.rs:2180", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("643", "src/formatter/mod.rs:2794", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("232", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
+        ("582", "src/formatter/mod.rs:1010", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("791", "src/formatter/mod.rs:2972", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
     // outlived its reason and has to go, which is what makes the list shrink
     // instead of quietly accumulating. And the count may not grow.
-    const HEURISTIC_BLIND_CEILING: usize = 6;
+    const HEURISTIC_BLIND_CEILING: usize = 5;
     assert!(
         HEURISTIC_BLIND.len() <= HEURISTIC_BLIND_CEILING,
         "the heuristic-blind allowlist GREW ({} > {HEURISTIC_BLIND_CEILING}). \
@@ -13007,7 +13006,13 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
         unlisted.join("\n")
     );
 
-    const EXPECTED_RAW_ACCESSES: usize = 59;
+    // 60: R42 Phase 4b added ONE row — `fmt_fill_pack_comma_axis` gained a
+    // fifth `.contains`, for the `cm_magic` cell (a list kept exploded by the
+    // AUTHOR's trailing comma alone). It rides the existing ALLOWED row for
+    // that fn: the access searches `fill_pack_body` output, whose header is
+    // already removed, so it is header-immune for the same reason its four
+    // siblings are.
+    const EXPECTED_RAW_ACCESSES: usize = 60;
     assert_eq!(
         flagged.len(),
         EXPECTED_RAW_ACCESSES,
@@ -13566,6 +13571,31 @@ fn formatter_child_collection_loop_census() {
     }
     use Hooks::*;
 
+    /// BLANK-LINE POLICY a census row expects.
+    ///
+    /// A census keyed on `blank_line()` CALL SITES is structurally blind to a
+    /// container that has NO call — which is exactly what
+    /// `format_extern_block` was: the one member loop that never got a blank
+    /// emitter, so every author paragraph break inside an `extern "C":` block
+    /// was deleted. You cannot enumerate a MISSING call by grepping for calls;
+    /// here the absence is a ROW with a value, not an absence.
+    ///
+    /// DERIVED from the loop body, exactly the way `lead` / `trail` are. A
+    /// hand-written annotation on `CENSUS` could never flip, so the
+    /// break-and-verify would silently degrade into a comment.
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+    enum Blanks {
+        /// The `blank_line()` call is guarded by `has_blank_line_between` —
+        /// the author's paragraphing is preserved and nothing is manufactured.
+        /// This is the ratified member-container rule.
+        AuthorConditioned,
+        /// The loop emits a blank on a rule of its OWN (a section transition,
+        /// or one between every child). Every such row states why.
+        Rule,
+        /// The loop emits no blank at all. Every such row states why.
+        None_,
+    }
+
     // (enclosing fn, loop header text, expected hook state).
     //
     // Rationale for the non-`Both` rows:
@@ -13578,10 +13608,16 @@ fn formatter_child_collection_loop_census() {
     //   * `format_item`'s `Item::Module` loop is a SYNTHETIC container built by
     //     the loader for an imported module, not a source-level block, so it
     //     has no interior comments of its own to preserve.
-    const CENSUS: &[(&str, &str, Hooks)] = &[
-        ("format_module", "for item in &directives {", Both),
-        ("format_module", "for item in &imports {", Both),
-        ("format_module", "for (i, item) in rest.iter().enumerate() {", Both),
+    const CENSUS: &[(&str, &str, Hooks, Blanks)] = &[
+        // The TWO `Blanks::Rule` rows, and the whole exception set. Both are
+        // about SECTIONS rather than items: one blank between the directive
+        // block and the first import, one between the std and non-std import
+        // GROUPS. Those regions are reordered by the formatter itself, so
+        // there is no author position to read — the blank belongs to the
+        // emitted layout, not to the source.
+        ("format_module", "for item in &directives {", Both, Blanks::Rule),
+        ("format_module", "for item in &imports {", Both, Blanks::Rule),
+        ("format_module", "for (i, item) in rest.iter().enumerate() {", Both, Blanks::AuthorConditioned),
         // R41 fold: the four `meta if` nested-item loops (then / the elif
         // branch walk / the elif body / else) collapsed into ONE producer,
         // `format_nested_items`, when the nested-item blank preservation
@@ -13597,30 +13633,47 @@ fn formatter_child_collection_loop_census() {
             "format_item",
             "for (bi, (cond, items)) in mi.elif_branches.iter().enumerate() {",
             Leading,
+            Blanks::AuthorConditioned,
         ),
-        ("format_item", "for inner in items {", None_),
-        ("format_nested_items", "for (i, item) in items.iter().enumerate() {", Both),
-        ("format_struct", "for (i, field) in s.fields.iter().enumerate() {", Both),
-        ("format_enum", "for (i, variant) in e.variants.iter().enumerate() {", Both),
-        ("format_trait", "for (i, item) in t.items.iter().enumerate() {", Both),
-        ("format_equip", "for (i, method) in e.items.iter().enumerate() {", Both),
-        ("format_extern_block", "for func in &eb.items {", Both),
-        ("format_block_stmts", "for (i, stmt) in block.stmts.iter().enumerate() {", Both),
-        ("format_elif_else_blocks", "for (cond, body) in elif_branches {", Leading),
-        ("format_stmt", "for item in arms {", Leading),
-        ("format_stmt", "for arm in arms {", Leading),
-        ("format_stmt", "for (case_expr, body) in arms {", Leading),
+        // The one `Blanks::None_` row: a SYNTHETIC container built by the
+        // loader for an imported module, so it has no author-written source
+        // region of its own — no blanks to preserve and none to manufacture.
+        // Same reason it is knowingly hookless.
+        ("format_item", "for inner in items {", None_, Blanks::None_),
+        ("format_nested_items", "for (i, item) in items.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_struct", "for (i, field) in s.fields.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_enum", "for (i, variant) in e.variants.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_trait", "for (i, item) in t.items.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_equip", "for (i, method) in e.items.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_extern_block", "for (i, func) in eb.items.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_block_stmts", "for (i, stmt) in block.stmts.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_elif_else_blocks", "for (cond, body) in elif_branches {", Leading, Blanks::AuthorConditioned),
+        ("format_stmt", "for item in arms {", Leading, Blanks::AuthorConditioned),
+        ("format_stmt", "for arm in arms {", Leading, Blanks::AuthorConditioned),
+        ("format_stmt", "for (case_expr, body) in arms {", Leading, Blanks::AuthorConditioned),
         // R42 Track D: the expression match moved out of `format_expr` into
         // `format_expr_inner` — `format_expr` is now the author-paren wrapper
         // that delegates to it. The SCOPE is re-pointed, never the count:
         // a census that reports 0 because its scope emptied is the guard
         // silently retiring itself.
-        ("format_expr_inner", "for arm in arms {", Leading),
+        ("format_expr_inner", "for arm in arms {", Leading, Blanks::AuthorConditioned),
         // R41 T-FMT-C: the closure post-prelude loop moved out of `format_expr`
         // into its own `format_closure_post_prelude`, so the indented and
         // (unreachable-for-parser-output) fallback paths share ONE emitter
         // instead of two copies of the hook pair.
-        ("format_closure_post_prelude", "for stmt in post_prelude {", Both),
+        //
+        // It is `format_block_stmts`' stand-in for a DESTRUCTURING closure, so
+        // its blank policy has to match that of its twin. This row is what the
+        // blank-policy column found on its first run: the loop reported
+        // `None_` while `format_block_stmts` reported `AuthorConditioned`,
+        // i.e. a destructuring closure was silently losing the paragraphing an
+        // otherwise identical plain closure kept.
+        (
+            "format_closure_post_prelude",
+            "for (i, stmt) in post_prelude.iter().enumerate() {",
+            Both,
+            Blanks::AuthorConditioned,
+        ),
     ];
 
     /// Child emitters that put their argument on its own source line(s), so a
@@ -13645,7 +13698,7 @@ fn formatter_child_collection_loop_census() {
     let mut depth: i32 = 0;
     // (enclosing fn, header text, has_leading, has_trailing)
     let mut open_loops: Vec<(String, String, i32, String)> = Vec::new();
-    let mut found: Vec<(String, String, Hooks)> = Vec::new();
+    let mut found: Vec<(String, String, Hooks, Blanks)> = Vec::new();
 
     for line in &src {
         let trimmed = line.trim_start();
@@ -13692,6 +13745,13 @@ fn formatter_child_collection_loop_census() {
                     if emits_children && per_line {
                         let lead = body.contains(".emit_comments_before(");
                         let trail = body.contains(".emit_trailing_comment_after(");
+                        // The blank-policy column, derived the same way. Both
+                        // author predicates count: `blank_before_clause` IS
+                        // `has_blank_line_between(0, anchor)` (see its body),
+                        // so a clause-header loop is author-conditioned too.
+                        let emits_blank = body.contains(".emitter.blank_line()");
+                        let author_blank = body.contains("has_blank_line_between")
+                            || body.contains("blank_before_clause");
                         found.push((
                             owner,
                             header,
@@ -13699,6 +13759,11 @@ fn formatter_child_collection_loop_census() {
                                 (true, true) => Both,
                                 (true, false) => Leading,
                                 _ => None_,
+                            },
+                            match (emits_blank, author_blank) {
+                                (true, true) => Blanks::AuthorConditioned,
+                                (true, false) => Blanks::Rule,
+                                (false, _) => Blanks::None_,
                             },
                         ));
                     }
@@ -13712,11 +13777,11 @@ fn formatter_child_collection_loop_census() {
         }
     }
 
-    let mut got: Vec<(String, String, Hooks)> = found;
+    let mut got: Vec<(String, String, Hooks, Blanks)> = found;
     got.sort();
-    let mut want: Vec<(String, String, Hooks)> = CENSUS
+    let mut want: Vec<(String, String, Hooks, Blanks)> = CENSUS
         .iter()
-        .map(|(f, h, s)| (f.to_string(), h.to_string(), *s))
+        .map(|(f, h, s, b)| (f.to_string(), h.to_string(), *s, *b))
         .collect();
     want.sort();
 
@@ -13733,6 +13798,259 @@ fn formatter_child_collection_loop_census() {
          the child emit and `emit_trailing_comment_after(child.span.end, false)` \
          after it, mirroring `format_trait` / `format_equip` — then add the row \
          here with its rationale."
+    );
+}
+
+/// The magic-comma probe must NOT be re-implemented via the comment table.
+///
+/// `author_trailing_comma` does its own `#`-to-EOL skipping, and that is not a
+/// style choice. The probe runs on SUB-`Formatter`s — `element_to_string`
+/// builds those with `CommentTable::empty()` BY DESIGN, so a comment-table
+/// lookup answers "not a comment" for every byte of every comment there. The
+/// measured consequence of routing it through the comment-table-aware
+/// `delim_pos_after` instead: a `,` written inside a comment reads as the
+/// author's, and the formatter INVENTS a trailing comma nobody wrote, cascading
+/// a one-line method chain into seven.
+///
+/// This is the round's one defect with ZERO corpus witnesses, which is exactly
+/// when a cheap source pin earns its line. The behavioural cell lives at
+/// `tests/fixtures/fmt_magic_comma/comment_not_a_comma.gg`.
+///
+/// **Break-and-verify:** add any `self.comments` reference to the probe's body.
+#[test]
+fn formatter_magic_comma_probe_is_self_contained() {
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let start = content
+        .find("fn author_trailing_comma(")
+        .expect("`fn author_trailing_comma` not found in src/formatter/mod.rs");
+    let body = &content[start..];
+    let end = body
+        .find("\n    }\n")
+        .expect("cannot delimit `author_trailing_comma`'s body");
+    let body = &body[..end];
+    for needle in ["self.comments", "delim_pos_after"] {
+        assert!(
+            !body.contains(needle),
+            "`author_trailing_comma` now references `{needle}`. The probe must \
+             skip `#`-to-EOL ITSELF: it runs on sub-`Formatter`s whose comment \
+             sideband is EMPTY by design, so a comment-table lookup is vacuous \
+             there and a `,` inside a comment reads as the author's — which \
+             makes the formatter invent a trailing comma nobody wrote."
+        );
+    }
+}
+
+/// An import NAME LIST is emitted in the AUTHOR'S ORDER (ratified
+/// 2026-08-16). Two tripwires, because the sort could come back in two
+/// different disguises:
+///
+///   1. `format_import` contains no sort of any kind. The alphabetical sort
+///      that used to live there destroyed deliberate reading order — a
+///      `CollectionKind, CkNotCollection, CkVector, …` list came back with the
+///      enum TYPE moved from the front of its own variant list to the end.
+///      (The STATEMENT-level order of the import block is a different axis and
+///      is still sorted, in `format_module`.)
+///
+///   2. `ImportName` carries the `glob` flag, and `ImportStmt::From` has no
+///      second name vector. Deleting the sort alone was NOT sufficient: the
+///      parser used to PARTITION plain names from `Type.*` globs as it parsed,
+///      so the formatter re-emitted every glob at one end of the list however
+///      the author interleaved them — a re-ordering no sort-deletion can undo,
+///      and one that no corpus file can catch (there are zero glob imports
+///      tree-wide). Re-introducing a `glob_types` field is the shape that
+///      brings it back.
+///
+/// **Break-and-verify:** add `sorted.sort_unstable()` back to `format_import`
+/// (tripwire 1), or re-split the names into a second vector (tripwire 2).
+#[test]
+fn formatter_import_emits_source_order() {
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Body of `fn format_import`, by brace depth from its header.
+    let start = lines
+        .iter()
+        .position(|l| l.trim_start().starts_with("fn format_import("))
+        .expect("`fn format_import` not found in src/formatter/mod.rs");
+    let mut depth = 0i32;
+    let mut end = start;
+    let mut seen_open = false;
+    for (i, line) in lines.iter().enumerate().skip(start) {
+        depth += line.matches('{').count() as i32;
+        if line.contains('{') {
+            seen_open = true;
+        }
+        depth -= line.matches('}').count() as i32;
+        if seen_open && depth <= 0 {
+            end = i;
+            break;
+        }
+    }
+    assert!(end > start, "could not delimit `format_import`'s body");
+    let body = lines[start..=end].join("\n");
+    let offenders: Vec<&str> = body
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .filter(|l| l.contains(".sort"))
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "`format_import` sorts its name list again:\n  {}\n\nImport NAME lists \
+         keep the AUTHOR's order (ratified 2026-08-16). The statement-level \
+         order of the import block is a different axis and lives in \
+         `format_module`.",
+        offenders.join("\n  ")
+    );
+
+    let ast = fs::read_to_string("src/parser/ast.rs").expect("cannot read src/parser/ast.rs");
+    assert!(
+        !ast.contains("glob_types"),
+        "`ImportStmt::From` grew a second name vector again (`glob_types`). \
+         Plain and `Type.*` glob entries interleave in one author-written \
+         list, so they must share ONE ordered vector discriminated by the \
+         typed `ImportName::glob` — partitioning them at parse time loses the \
+         relative order for good, and NO corpus file can catch it (there are \
+         zero glob imports tree-wide)."
+    );
+    assert!(
+        ast.contains("pub glob: bool,"),
+        "`ImportName::glob` is gone — the typed discriminator that lets plain \
+         and glob entries share one author-ordered vector."
+    );
+}
+
+/// The SECOND axis of the blank-line class: every `blank_line()` EMIT SITE in
+/// `src/formatter/mod.rs`, attributed to its enclosing fn and classified by the
+/// predicate that guards it.
+///
+/// The loop census above is keyed on child-collection LOOPS, which is the axis
+/// that can see a container with no blank emitter at all. It is blind in the
+/// other direction: a blank emitted from a NON-loop position (a clause header,
+/// a comment flush) has no row there, and so does a loop whose body calls a
+/// CLOSURE rather than a `self.format_*` method — that loop fails the census's
+/// `emits_children` test and is invisible to it. The two censuses together are
+/// the total population.
+///
+/// The ratified canon is PRESERVE-AND-CAP: the formatter keeps the blank lines
+/// the author wrote and manufactures none. So every emit site must be guarded
+/// by an author predicate, and the RULE set — sites that emit on a rule of the
+/// formatter's own — is closed at the two `format_module` SECTION TRANSITIONS.
+/// A new manufactured blank cannot ship silently: it arrives here as a RULE row
+/// with no entry.
+///
+/// **Break-and-verify:** drop the `has_blank_line_between` guard from any
+/// member loop (the manufacturing shape this canon retired) and that fn's row
+/// flips AUTHOR → RULE, which this test rejects.
+#[test]
+fn formatter_blank_emit_site_census() {
+    /// Predicates that make an emit AUTHOR-CONDITIONED. `blank_before_clause`
+    /// is `has_blank_line_between(0, anchor)` (see its body), and the two
+    /// comment-flush predicates read the source the same way.
+    const AUTHOR_PREDICATES: &[&str] = &[
+        "has_blank_line_between",
+        "blank_before_clause",
+        "blank_line_directly_above",
+        "blank_line_follows",
+    ];
+
+    /// (enclosing fn, AUTHOR-conditioned?, count). TOTAL over the third column
+    /// is the site count, so a new site is a diff here whatever it does.
+    ///
+    /// The two RULE rows and their reasons:
+    ///   * `format_module` × 2 — the SECTION transitions (directives → the
+    ///     first import; std ↔ non-std import groups). These separate emitted
+    ///     SECTIONS the formatter itself reorders, so there is no author
+    ///     position to read: the blank belongs to the layout, not to the
+    ///     source. Both predate the canon and are the closed exception set.
+    const EXPECTED: &[(&str, bool, usize)] = &[
+        ("emit_claimed_run", true, 1),
+        ("emit_orphan_comments_before_close", true, 1),
+        ("emit_remaining_comments", true, 1),
+        ("format_block_stmts", true, 1),
+        // The EXPLODED-container emitter. Its loop calls the `format_elem`
+        // CLOSURE rather than a `self.format_*` method, so it fails
+        // `formatter_child_collection_loop_census`' `emits_children` test and
+        // has no row there — this census is the only one that sees it.
+        ("format_bracketed_broken_with_comments", true, 1),
+        ("format_closure_post_prelude", true, 1),
+        ("format_elif_else_blocks", true, 2),
+        ("format_enum", true, 1),
+        ("format_equip", true, 1),
+        ("format_expr_inner", true, 2),
+        ("format_extern_block", true, 1),
+        ("format_item", true, 2),
+        ("format_module", false, 2),
+        ("format_module", true, 1),
+        ("format_nested_items", true, 1),
+        ("format_stmt", true, 8),
+        ("format_struct", true, 1),
+        ("format_trait", true, 1),
+    ];
+
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let src: Vec<&str> = content.lines().collect();
+
+    let mut cur_fn = String::from("<file scope>");
+    let mut in_tests = false;
+    let mut found: Vec<(String, bool)> = Vec::new();
+    for (i, line) in src.iter().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("mod tests") {
+            in_tests = true;
+        }
+        if line.starts_with("    ") {
+            let after_vis = t
+                .strip_prefix("pub(crate) fn ")
+                .or_else(|| t.strip_prefix("pub fn "))
+                .or_else(|| t.strip_prefix("fn "));
+            if let Some(rest) = after_vis {
+                cur_fn = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+            }
+        }
+        if !line.contains("blank_line()") || t.starts_with("//") {
+            continue;
+        }
+        if in_tests {
+            // `Emitter::blank_line`'s own unit test, not a formatter emit.
+            continue;
+        }
+        // The guard sits directly above the call — a short window, so a
+        // predicate belonging to an unrelated earlier statement cannot leak in.
+        let window = src[i.saturating_sub(6)..i].join("\n");
+        let author = AUTHOR_PREDICATES.iter().any(|p| window.contains(p));
+        found.push((cur_fn.clone(), author));
+    }
+
+    let mut got: Vec<(String, bool, usize)> = Vec::new();
+    for (f, a) in &found {
+        match got.iter_mut().find(|(gf, ga, _)| gf == f && ga == a) {
+            Some(row) => row.2 += 1,
+            None => got.push((f.clone(), *a, 1)),
+        }
+    }
+    got.sort();
+    let mut want: Vec<(String, bool, usize)> = EXPECTED
+        .iter()
+        .map(|(f, a, n)| (f.to_string(), *a, *n))
+        .collect();
+    want.sort();
+
+    assert_eq!(
+        got, want,
+        "the `blank_line()` EMIT-SITE census in `src/formatter/mod.rs` changed.\
+         \n\ngot:  {got:#?}\nwant: {want:#?}\n\n\
+         A row that moved from author-conditioned (`true`) to rule (`false`) is \
+         a MANUFACTURED blank — the formatter inventing paragraphing the author \
+         did not write, which the 2026-08-16 preserve-and-cap canon retired \
+         everywhere except the two `format_module` section transitions. A NEW \
+         site needs a row here, with its guarding predicate; a site that loses \
+         its guard needs the guard back, not a row."
     );
 }
 
@@ -16427,28 +16745,32 @@ fn formatter_list_emit_fill_census() {
     /// kind can no longer reach fill packing without passing the
     /// interior-comment gate on the way.
     const EXPECTED_SURROUND_FILL: usize = 1;
-    /// One `self.emit_delimited_list(` per GATED list kind. Nine: the
+    /// One `self.emit_delimited_list(` per GATED list kind. Ten: the
     /// parameter list, call args, generic params, generic args, closure
     /// params, the array/set literal arm, the multi-element tuple arm, the
-    /// dict literal arm, and the fmt-unreachable `Expr::StructLiteral` arm
+    /// dict literal arm, the fmt-unreachable `Expr::StructLiteral` arm
     /// (kept converted so the class rule has no exception — see
     /// `formatter_collection_literal_interior_hook_dispatch`, which pins
-    /// that unreachability).
+    /// that unreachability), and the GROUPED IMPORT.
+    ///
+    /// The grouped import was the tenth kind and the last hold-out. Its
+    /// carve-out existed for exactly one reason — the names were SORTED, so
+    /// emitted order was not source order and the forward-only comment cursor
+    /// could not interleave per element. The 2026-08-16 canon removed the
+    /// sort, the reason evaporated, and the group now routes through the
+    /// chokepoint like everything else.
     ///
     /// This is the census that replaced the ten-way `doc::surround_fill`
     /// count, and it keeps the same property: adding a list kind is a
     /// CONSCIOUS choice, visible as a number.
-    const EXPECTED_DELIMITED_LIST_SITES: usize = 9;
-    /// DIRECT `emit_delimited_texts` callers outside the chokepoint. One:
-    /// the grouped-import group, the single declared carve-out — its names
-    /// are SORTED, so emitted order is not source order and the
-    /// forward-only comment cursor cannot interleave per element.
+    const EXPECTED_DELIMITED_LIST_SITES: usize = 10;
+    /// DIRECT `emit_delimited_texts` callers outside the chokepoint. ZERO —
+    /// the grouped import was the only one, and it now goes through the gate.
     ///
     /// COUNTING METHOD: the dotted spelling `.emit_delimited_texts(`
-    /// returns 2 raw hits — the chokepoint's own internal call and this
-    /// caller (the DEFINITION has no dot) — and the internal call is
-    /// excluded by fn scope below. The dot-less spelling would return 3.
-    const EXPECTED_UNGATED_TEXTS: usize = 1;
+    /// returns 1 raw hit — the chokepoint's own internal call (the DEFINITION
+    /// has no dot) — and that call is excluded by fn scope below.
+    const EXPECTED_UNGATED_TEXTS: usize = 0;
     /// LEXICAL `Gate::UngatedCarveOut("…")` construction sites, pinned as
     /// an exact (enclosing fn, reason) set so each carve-out is attributed
     /// rather than merely counted. Three:

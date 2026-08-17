@@ -1,0 +1,34 @@
+# ==== T-FMT-B — the AUTHOR'S ORDER of an import NAME LIST.
+# SCOPE CLAIM: the names INSIDE an import, on both spellings —
+# `import a.{X, Y}` and `from a import x, y`. NOT the statement-level order of
+# the import block itself, which stays sorted (std/xtd first, then
+# alphabetical) and is a different axis the ruling does not touch; every
+# statement below is already in that canonical position, which is what lets
+# this be a byte-exact fixed point.
+#
+# AXIS: spelling {grouped, from} × entry kind {plain, aliased, glob `Type.*`} ×
+# where the glob sits {only, first, middle, last}.
+#
+# Pre-fix RED (measured, per line):
+#   `import std.sync.{Mutex, Arc, Condvar}` → `{Arc, Condvar, Mutex}`
+#   `from std.math import sin, cos, abs`    → `abs, cos, sin`
+#   `from std.math import sin as msin, …`   → `cos as mcos, sin as msin, tan`
+#   `from xtd.log import Zeta, Beta.*, …`   → `Beta.*, Delta.*, Gamma, Zeta`
+#
+# ⚠ THE GLOB CELLS ARE THE SHARP ONES, and one of them is ACCIDENTALLY GREEN.
+# Deleting the two sorts is NOT sufficient: `parse_from_import` used to
+# PARTITION plain names from `Type.*` globs as it parsed, into two vectors, so
+# the formatter re-emitted every glob at one end of the list however the author
+# interleaved them. `LogLevel.*, Logger` survives that — the glob happens to
+# sort before its neighbour — and only a GLOB-FIRST or GLOB-MIDDLE interleaving
+# exposes it. Both are below. The write-site fix is one ordered vector carrying
+# a typed `ImportName::glob`.
+from std.math import sin, cos, abs
+from std.math import sin as msin, cos as mcos, tan
+import std.sync.{Mutex, Arc, Condvar}
+from xtd.log import LogLevel.*, Logger
+from xtd.log import LogLevel.*, Alpha
+from xtd.log import Zeta, Beta.*, Gamma, Delta.*
+
+void main():
+    print(1)

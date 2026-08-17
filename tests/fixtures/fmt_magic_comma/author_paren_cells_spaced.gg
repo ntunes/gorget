@@ -1,0 +1,34 @@
+# MAGIC TRAILING COMMA × a SPACED AUTHOR GROUPING PAREN on the LAST ELEMENT.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output. It is an INPUT, not a fixed point — the formatter normalises `( 2 )`
+# to `(2)` — so its output is asserted as an exact text by
+# `fmt_magic_comma_author_paren_cells_spaced`.
+#
+# THE TWO CELLS THIS FILE EXISTS FOR, and why the tight sibling cannot carry
+# them: the advance past an author `)` must SKIP whitespace and comments before
+# each paren, not count bytes. `x + ( y )` puts space between the wrapped
+# node's end and its `)`, so a byte-count advance lands on the SPACE and the
+# probe then reads the wrong decisive byte. Measured: under that break all four
+# TIGHT cells in `author_paren_cells.gg` stay GREEN and only these two red —
+# without this pair the net cannot see the break at all.
+#
+#   s1  bracket  `[1, y + ( 2 ),]`
+#   s2  call     `add3(1, 2, y + ( 3 ),)`
+#
+# RED against the pre-change binary, measured: both packed with the comma
+# deleted.
+#
+# BREAK-AND-WATCH: replace the skipping advance in
+# `advance_past_author_parens` with a plain byte-count advance. Both cells pack
+# and lose their comma (in a debug build the `debug_assert_eq!` fires first,
+# reporting that the advance landed on `' '` rather than `)`), while the tight
+# sibling stays green.
+int add3(int a, int b, int c):
+    return a + b + c
+
+void main():
+    int y = 1
+    Vector[int] s1 = [1, y + ( 2 ),]
+    int s2 = add3(1, 2, y + ( 3 ),)
+    print(s1.len() + s2)

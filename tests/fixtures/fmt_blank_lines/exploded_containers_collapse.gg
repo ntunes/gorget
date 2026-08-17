@@ -1,0 +1,26 @@
+# PRESERVE-AND-CAP inside an EXPLODED CONTAINER — the two cells that are not
+# fixed points, so this file is an INPUT and its output is asserted separately
+# by `fmt_exploded_container_blank_collapse`.
+#
+#   (e) a RUN of two author blanks between elements → capped to exactly one
+#   (f) a blank right after the OPEN delimiter      → dropped, because the rule
+#       is keyed on the PREVIOUS ELEMENT and the first element has none. Same
+#       for a blank between the last element and the close.
+#
+# RED against the pre-change binary, measured: both runs and the leading blank
+# were deleted — indistinguishable from the correct (f) answer at the top, and
+# WRONG at (e), which is why the assertion is on the whole text rather than on a
+# blank count.
+void main():
+    Vector[int] xs = [
+
+        # first
+        1,
+
+
+        2,
+
+        3,
+
+    ]
+    print(xs.len())

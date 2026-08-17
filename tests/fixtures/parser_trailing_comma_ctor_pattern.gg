@@ -7,9 +7,15 @@
 # parseability AND the trailing-comma-preserved `print(...)` call at
 # the arm body.  The pattern-site trailing-comma cell is covered
 # end-to-end by the SH bootstrap's fmt sweep round-trip
-# (`sh_bootstrap_stage2_double_free_after_fmt_sweep`).  Filed
-# language-follow-up (formatter permissive stripping of trailing
-# commas at match-arm ctor patterns) — not this brief's fix.
+# (`sh_bootstrap_stage2_double_free_after_fmt_sweep`).
+#
+# The match-arm constructor-pattern position is a DEFER row of the
+# magic-trailing-comma axis, filed under TODO.md's fill-emitter-chokepoint
+# family entry ("the residual OUTSIDE the fill-emitter chokepoint", sub-item
+# (3)) — `format_pattern` is a hand-rolled `write(", ")` loop with no `Doc`
+# layer, so it neither honours the comma nor passes the interior-comment gate.
+# Routing it through `emit_delimited_list` buys both at once. (The header used
+# to cite a "filed language-follow-up" that did not exist.)
 struct Point:
     int abscissa_axis_coordinate
     int ordinate_axis_coordinate

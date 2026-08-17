@@ -5883,7 +5883,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
             }
-            Pattern::Constructor { path, fields } => {
+            Pattern::Constructor { path, fields, .. } => {
                 let variant_name = path.last().map(|s| s.node.as_str()).unwrap_or("");
                 let field_types = self.resolve_variant_field_types(scrutinee_type, variant_name);
                 // Arity gate: when we know the payload/field list, wrong arity is a type error
@@ -5921,7 +5921,7 @@ impl<'a> TypeChecker<'a> {
                     self.assign_pattern_types(alt, scrutinee_type);
                 }
             }
-            Pattern::DotShorthand { variant, fields } => {
+            Pattern::DotShorthand { variant, fields, .. } => {
                 let field_types = self.resolve_variant_field_types(scrutinee_type, &variant.node);
                 for (i, field_pat) in fields.iter().enumerate() {
                     if let Some(&field_tid) = field_types.get(i) {

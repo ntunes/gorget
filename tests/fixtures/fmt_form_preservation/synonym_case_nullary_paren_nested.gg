@@ -1,0 +1,27 @@
+# ==== T-FMT-B — SYNONYM: a NULLARY variant nested INSIDE a fielded pattern.
+# SCOPE CLAIM: the recursive cell only — `case Some(Color.Red()):` versus
+# `case Some(Color.Green):`. The OUTER node is fielded, so its own parens are
+# mandatory and unaffected; what is at stake is the inner nullary spelling,
+# which `format_pattern` reaches through its own recursion. This is the cell
+# the `case X()`-only framing misses, and it is the only content of the two
+# `match_nested_enum.gg` corpus files.
+# Pre-fix RED (measured): `case Some(Color.Red()):` came back
+# `case Some(Color.Green)`-style, i.e. `case Some(Color.Red):`.
+enum Color:
+    Red
+    Green
+    Custom(int, int, int)
+
+int nested(Option[Color] o):
+    match o:
+        case Some(Color.Red()):
+            return 1
+        case Some(Color.Green):
+            return 2
+        case Some(Color.Custom(r, g, b)):
+            return r + g + b
+        else:
+            return 0
+
+void main():
+    print(nested(Some(Color.Red())) + nested(Some(Color.Green())))

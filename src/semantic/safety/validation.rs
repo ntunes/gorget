@@ -346,16 +346,18 @@ pub(super) fn collect_imported_defs(
                             }
                         }
                     }
-                    ImportStmt::From { names, glob_types, wildcard, .. } => {
-                        for n in names {
+                    ImportStmt::From { names, wildcard, .. } => {
+                        // Skip GLOB entries — enum type imports are used
+                        // implicitly through their variants, which may not
+                        // appear in resolution_map. They share `names` with the
+                        // plain entries (one author-ordered vector), so the
+                        // skip is a filter rather than a field that is ignored.
+                        for n in names.iter().filter(|n| !n.glob) {
                             let local = n.local_name();
                             if let Some(def_id) = scopes.lookup(&local.node) {
                                 out.push((def_id, local.node.clone(), local.span));
                             }
                         }
-                        // Skip glob_types — enum type imports are used implicitly
-                        // through their variants, which may not appear in resolution_map
-                        let _ = glob_types;
                         // Skip module-level wildcard — names are user-driven via
                         // their use sites; the wildcard itself doesn't have a
                         // single binding span.

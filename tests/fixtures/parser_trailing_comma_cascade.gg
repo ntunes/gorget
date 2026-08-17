@@ -7,10 +7,16 @@
 # the trailing `,` as demanding a next arg, and its fallback advances past
 # the closing `)`, cascading the sibling ctor into the current arg list.
 #
-# Uses long string args in the outer + inner ctors so `gg fmt --in-place`
-# keeps ALL ctor arg lists (outer + inner) in their multi-line form with
-# trailing commas preserved — fixture stable under formatter
-# canonicalization at BOTH nesting levels.
+# The long DESCRIPTION strings this fixture used to carry were a DODGE: they
+# padded each outer ctor past the width budget so `gg fmt` would keep it
+# multi-line and its trailing comma would survive. The 2026-08-16
+# magic-trailing-comma canon RETIRES that dodge — the comma itself is now the
+# author's keep-this-exploded signal, at any width — so the descriptions are
+# short again and the shape holds on its own. Do not re-pad them.
+#
+# (The header used to claim the INNER ctors were multi-line too. They never
+# were, and are not now: the nesting axis this fixture covers is the Vector
+# literal's own trailing comma wrapping outer ctors that each carry one.)
 #
 # EXPECTED SEMANTIC (both Rust gg and, post-fix, the SH):
 #   Each outer `Outer(...)` ctor takes exactly its declared count of args
@@ -42,21 +48,21 @@ void main():
     Vector[Outer] xs = [
         Outer(
             1,
-            Inner(10, "inner_first_alpha_label", "inner_first_alpha_description"),
+            Inner(10, "inner_first_alpha_label", "d1"),
             "outer_first_alpha_label",
-            "outer_first_alpha_description",
+            "d2",
         ),
         Outer(
             2,
-            Inner(20, "inner_second_beta_label", "inner_second_beta_description"),
+            Inner(20, "inner_second_beta_label", "d3"),
             "outer_second_beta_label",
-            "outer_second_beta_description",
+            "d4",
         ),
         Outer(
             3,
-            Inner(30, "inner_third_gamma_label", "inner_third_gamma_description"),
+            Inner(30, "inner_third_gamma_label", "d5"),
             "outer_third_gamma_label",
-            "outer_third_gamma_description",
+            "d6",
         ),
     ]
     print(f"count={xs.len()}")

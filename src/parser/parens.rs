@@ -38,6 +38,7 @@ use crate::span::Span;
 #[derive(Debug, Clone, Default)]
 pub struct AuthorParenTable {
     layers: HashMap<(usize, usize), usize>,
+    ends_at: HashMap<usize, usize>,
 }
 
 impl AuthorParenTable {
@@ -45,6 +46,7 @@ impl AuthorParenTable {
     pub fn empty() -> Self {
         Self {
             layers: HashMap::new(),
+            ends_at: HashMap::new(),
         }
     }
 
@@ -53,12 +55,42 @@ impl AuthorParenTable {
     /// Nested parens push the SAME inner span once per layer (`((a))` pushes
     /// `a`'s span twice), so the layer count falls out of the multiplicity —
     /// no separate depth bookkeeping.
+    ///
+    /// The second index is by END offset alone, for the consumer that has a
+    /// position rather than a span (see [`Self::layers_ending_at`]). It is
+    /// built here rather than derived on demand so the table stays the single
+    /// source of truth for both questions.
     pub fn build(spans: &[Span]) -> Self {
         let mut layers: HashMap<(usize, usize), usize> = HashMap::new();
+        let mut ends_at: HashMap<usize, usize> = HashMap::new();
         for span in spans {
             *layers.entry((span.start, span.end)).or_insert(0) += 1;
+            *ends_at.entry(span.end).or_insert(0) += 1;
         }
-        Self { layers }
+        Self { layers, ends_at }
+    }
+
+    /// How many grouping-paren layers CLOSE at byte offset `end` — i.e. how
+    /// many author `)` sit (past whitespace and comments) immediately after it.
+    ///
+    /// Distinct from [`Self::layers`], which is keyed by the EXACT span of the
+    /// wrapped node, and the distinction is load-bearing for any consumer that
+    /// holds a POSITION rather than the wrapped node's span. Two shapes make
+    /// the exact-span lookup return 0 while an author `)` is still there:
+    ///
+    ///  * a BINARY node is spanned `lhs.merge(paren-stripped rhs)`, so for
+    ///    `x + (y)` the whole-node key is `[x.start, y.end]` while the recorded
+    ///    key is `[y.start, y.end]` — different keys, same END;
+    ///  * a CALL ARGUMENT is a `Spanned<CallArg>` spanned from the argument's
+    ///    own start, which for `f(1, (2 + 3))` is the author's `(` — again a
+    ///    different key with the same END.
+    ///
+    /// Summing across DIFFERENT spans that share an end is correct, not an
+    /// over-count: same-offset keys NEST. `(a + (b))` records `[b.start,
+    /// b.end]` for the inner paren and `[a.start, b.end]` for the outer, and
+    /// the source does carry two `)` after `b`.
+    pub fn layers_ending_at(&self, end: usize) -> usize {
+        self.ends_at.get(&end).copied().unwrap_or(0)
     }
 
     /// How many grouping-paren layers the author wrote around the node at

@@ -1,0 +1,28 @@
+# ==== T-FMT-B — an interior comment inside a GROUPED IMPORT stays inside it.
+# SCOPE CLAIM: the comment-placement cell only, for `import a.{X, Y}`. The
+# author-ORDER cells live in `import_author_order.gg`.
+#
+# This was a FILED DEFECT: the grouped import was the single declared
+# `Gate::UngatedCarveOut` from the interior-comment gate, and the comment
+# escaped the group and re-emerged at COLUMN 0 documenting the next item.
+# Removing the name sort (canon call 6, 2026-08-16) removed the carve-out's
+# whole reason — emitted order is now source order, so the forward-only comment
+# cursor can interleave per element — and the group routes through
+# `emit_delimited_list` like every other list. The gate then keeps the comment
+# with the name below it, and the list stays exploded because it carries one.
+#
+# Pre-fix RED (measured): the whole group packed to
+# `import std.math.{abs, sqrt}` and `# SEN import-group` came back at column 0,
+# above `int main():`.
+#
+# ⚠ The inline spelling `{sqrt, # c, abs}` does NOT parse — a line comment
+# swallows the rest of the line — so the multi-line form is the only repro.
+import std.math.{
+    sqrt,
+    # SEN import-group
+    abs,
+}
+
+int main():
+    print(1)
+    return 0

@@ -6,14 +6,19 @@
 # Emit site: the `ImportStmt::Grouped` arm of `format_import` ->
 # `emit_delimited_texts("{", "}", ..)` -> `doc::surround_fill`.
 #
-# ⚠ This is the ONE list kind that calls `emit_delimited_texts` DIRECTLY,
-# bypassing the delimited-list chokepoint — the single declared carve-out from
-# the interior-comment gate, because the names are SORTED and the comment cursor
-# is forward-only. A comment inside a grouped import therefore still leaves the
-# group; that is filed, not fixed. Do not "fix" this by routing the group
-# through `emit_delimited_list`: the gate would interleave comments against
-# reordered elements. Adding a SECOND direct caller trips
-# `formatter_list_emit_fill_census`.
+# This kind used to be the ONE that called `emit_delimited_texts` DIRECTLY, as
+# the single declared carve-out from the interior-comment gate. The reason was
+# the alphabetical name SORT: emitted order was not source order, and the
+# comment cursor is forward-only, so per-element interleaving would have
+# flushed a later name's comment against an earlier one. The 2026-08-16 canon
+# removed the sort (names keep the AUTHOR's order), the reason went with it,
+# and the group now routes through `emit_delimited_list` like every other list
+# — which is why a comment inside a grouped import now stays inside it
+# (`fmt_import_group_interior_comment_stays_inside`). `EXPECTED_UNGATED_TEXTS`
+# is 0 and `EXPECTED_DELIMITED_LIST_SITES` is 10.
+#
+# ⚠ The names below are in AUTHOR order, NOT alphabetical. That is the point:
+# an alphabetised expectation here is a regression, not a tidy-up.
 #
 # Axis cell claim (Core #12 — `list kind x fit` for the IMPORT-GROUP kind ONLY):
 #   std.io       fits-flat          one line, no trailing comma

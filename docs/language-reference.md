@@ -3838,7 +3838,7 @@ String literals are validated at compile time by the lexer. Internal string oper
 | `String()` | New empty string |
 | `String(s)` | New owned string with content `s` — a `String` (string/char literals, f-strings, or a `String` variable) |
 | `String(n)` | New empty string with at least `n` bytes of pre-allocated capacity; `n` may be any integer type |
-| `String(cap=n)` | Named-argument form of the capacity constructor |
+| `String(cap = n)` | Named-argument form of the capacity constructor |
 
 Any other argument type is a compile-time error — to convert a value to text, use an f-string: `String(f"{x}")` (or just `f"{x}"`).
 
@@ -5021,15 +5021,15 @@ from std.collections import Vector
 
 void main():
     PoolAllocator pool = PoolAllocator(128, 32)
-    Vector[int] v = Vector[int](alloc=pool)
+    Vector[int] v = Vector[int](alloc = pool)
     v.push(10)
     v.push(20)
     print(f"used: {pool.used_blocks()}")
 ```
 
-The `alloc=` parameter is accepted by `Vector`, `Dict`, `HashMap`, `Set`, `HashSet`, `Channel`, and `String` constructors, and by the allocator constructors themselves: an allocator built with `alloc=a` draws its own struct and backing buffer from `a` and releases them back to `a` on `destroy` — the one-shot spelling of the nesting rule below (`Arena inner = Arena(cap=1024, alloc=outer)`). `TrackingAllocator(alloc=a)` instruments allocator `a` specifically rather than the currently active one. On a `String` constructor `alloc=` composes with the content and capacity forms — `String(alloc=a)`, `String("text", alloc=a)`, `String(cap=n, alloc=a)`, `String(n, alloc=a)` — and the string records the allocator, so growth reallocations stay in it. The bare `String(alloc=a)` form pre-allocates the minimum capacity (16 bytes) from the allocator so the binding takes effect.
+The `alloc=` parameter is accepted by `Vector`, `Dict`, `HashMap`, `Set`, `HashSet`, `Channel`, and `String` constructors, and by the allocator constructors themselves: an allocator built with `alloc = a` draws its own struct and backing buffer from `a` and releases them back to `a` on `destroy` — the one-shot spelling of the nesting rule below (`Arena inner = Arena(cap = 1024, alloc = outer)`). `TrackingAllocator(alloc = a)` instruments allocator `a` specifically rather than the currently active one. On a `String` constructor `alloc=` composes with the content and capacity forms — `String(alloc = a)`, `String("text", alloc = a)`, `String(cap = n, alloc = a)`, `String(n, alloc = a)` — and the string records the allocator, so growth reallocations stay in it. The bare `String(alloc = a)` form pre-allocates the minimum capacity (16 bytes) from the allocator so the binding takes effect.
 
-Constructors with a single capacity parameter (`Arena`, `TlsfAllocator`, `FixedBufferAllocator`, `Channel`, `String`, and the collection reserves) accept it positionally or as `cap=n`; supplying both, or duplicating any named argument, is a compile error. `PoolAllocator`, `FallbackAllocator`, and `TrackingAllocator` have no capacity axis, so `cap=` is rejected there. `FixedBufferAllocator` requires its capacity (a zero-byte buffer could never allocate); the others fall back to their runtime defaults when it is omitted.
+Constructors with a single capacity parameter (`Arena`, `TlsfAllocator`, `FixedBufferAllocator`, `Channel`, `String`, and the collection reserves) accept it positionally or as `cap = n`; supplying both, or duplicating any named argument, is a compile error. `PoolAllocator`, `FallbackAllocator`, and `TrackingAllocator` have no capacity axis, so `cap=` is rejected there. `FixedBufferAllocator` requires its capacity (a zero-byte buffer could never allocate); the others fall back to their runtime defaults when it is omitted.
 
 **Escape analysis**
 

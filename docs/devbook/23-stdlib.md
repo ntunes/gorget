@@ -132,8 +132,8 @@ trait-vtable dispatch (`lib/std/hash.gg:42-84`).
 ## 23.4 Capacity constructors
 
 There is no `with_capacity`. Every collection constructor takes an optional
-`cap` named argument: `Vector[int](cap=1000)`, `Dict[String, int](cap=64)`,
-`Set[String](cap=32)`, `String(cap=256)`. (Named arguments use `=`, never
+`cap` named argument: `Vector[int](cap = 1000)`, `Dict[String, int](cap = 64)`,
+`Set[String](cap = 32)`, `String(cap = 256)`. (Named arguments use `=`, never
 `:` — the colon form is a parse error.) The compiler handles `cap` in
 two places:
 
@@ -150,7 +150,7 @@ two places:
   an integer capacity nor String content (round-32, Core #8 — non-string args
   used to reach `gorget_string_from_str` and die as a cc/llc internal error).
 
-- **GIR lowering** turns `Vector[T](cap=n)` into a `…__new` extern call
+- **GIR lowering** turns `Vector[T](cap = n)` into a `…__new` extern call
   followed by a `…__reserve` call. `src/ir/lowering/exprs/calls.rs:967-1026`:
   it finds the `cap` arg, lowers the fresh-allocation call, takes a mutable
   borrow of the result, and emits `{mangled}__reserve(ptr, cap)`. The `alloc=`

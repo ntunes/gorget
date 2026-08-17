@@ -2032,7 +2032,7 @@ fn substitute_block(block: &mut Block, env: &FxHashMap<String, MetaValue>, type_
 
 fn substitute_pattern(pattern: &mut Spanned<Pattern>, env: &FxHashMap<String, MetaValue>, type_env: &FxHashMap<String, Type>) {
     match &mut pattern.node {
-        Pattern::Constructor { path, fields } => {
+        Pattern::Constructor { path, fields, .. } => {
             // Substitute the last path segment if it is a meta string variable
             // e.g. `case vname(c):` with vname="IntCol" → `case IntCol(c):`
             if let Some(last) = path.last_mut() {

@@ -1,0 +1,75 @@
+# ==== T-FMT-B — SYNONYM: the NULLARY-VARIANT PATTERN paren spelling, in `case`.
+# SCOPE CLAIM: `X()` vs `X`, `A.B()` vs `A.B`, `.V()` vs `.V`, `None()` vs
+# `None` — at the TOP LEVEL of a `case` arm, plus an Or-arm alternative and a
+# FIELDED control. The nullary spellings build the SAME AST node (with fields
+# the parens are mandatory), so the choice is authorial information the AST
+# must now carry (`paren_spelled`). Sibling cells live in
+# `synonym_case_nullary_paren_nested.gg` (nullary nested in a fielded ctor),
+# `synonym_is_nullary_paren.gg` (`is` / `is not`) and
+# `synonym_case_nullary_paren_bindings.gg` (comprehension `for`, var-decl).
+# Pre-fix RED (measured against the pre-change binary): `case Sun():` came back
+# `case Sun:`, `case Color.Red():` → `case Color.Red:`, `case .Red():` →
+# `case .Red:`, `case None():` → `case None:`, and the Or-arm stripped too.
+# ⚠ TWO CELLS HERE CANNOT GO RED, EITHER WAY, and pin only the ABSENCE of a
+# `()` mandate: `case Sat:` parses to `Pattern::Binding` and `case None:` to
+# `Pattern::Literal(NoneLiteral)` — neither node carries paren information, so
+# no mutation of the Constructor/DotShorthand emit predicate can move them.
+# Verified: under the deliberately inverted predicate they stayed put, while
+# `case Color.Green:` → `case Color.Green()` and `case .Green:` → `.Green()`.
+enum Color:
+    Red
+    Green
+    Custom(int, int, int)
+
+enum Day:
+    Sat
+    Sun
+
+int classify(Color c):
+    match c:
+        case Color.Red():
+            return 1
+        case Color.Green:
+            return 2
+        case Color.Custom(r, g, b):
+            return r + g + b
+        else:
+            return 0
+
+int weekend(Day d):
+    match d:
+        case Sat:
+            return 6
+        case Sun():
+            return 7
+        else:
+            return 0
+
+int shorthand(Color c):
+    match c:
+        case .Red():
+            return 1
+        case .Green:
+            return 2
+        else:
+            return 0
+
+int prelude(Option[int] o):
+    match o:
+        case Some(v):
+            return v
+        case None():
+            return -1
+        else:
+            return 0
+
+int or_arm(Color c):
+    match c:
+        case Color.Red() | Color.Custom(_, _, _):
+            return 1
+        else:
+            return 0
+
+void main():
+    print(classify(Color.Red()) + weekend(Day.Sun()) + shorthand(Color.Green()))
+    print(prelude(Some(3)) + or_arm(Color.Red()))

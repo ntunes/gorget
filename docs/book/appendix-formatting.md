@@ -27,10 +27,11 @@ Each invocation formats a single file.
   decides the cases below: where the language accepts more than one *spelling*
   of the same thing, the formatter keeps the one you wrote. Which escape spelled
   a character, which quotes wrapped a string, the base of a number, `byte`
-  versus `uint8`, `await x` versus `x.await()`, the parentheses you added to
-  show what groups first — these are choices you made for a reader, and
-  re-spelling them is not the formatter's job. What the formatter owns is
-  layout: indentation, wrapping, spacing, blank-line runs, comment columns.
+  versus `uint8`, `await x` versus `x.await()`, `case Idle()` versus
+  `case Idle`, the parentheses you added to show what groups first — these are
+  choices you made for a reader, and re-spelling them is not the formatter's
+  job. What the formatter owns is layout: indentation, wrapping, spacing,
+  blank-line runs, comment columns.
 - **Re-parseable.** The output is always a program the compiler accepts, and it
   parses to the same tree as the input.
 - **Idempotent.** `gg fmt` applied to already-formatted source is a no-op:
@@ -45,7 +46,8 @@ Blocks are indented four spaces per level, Python-style — indentation is the
 block structure, and the formatter normalizes it.
 
 The formatter preserves the blank lines you write as paragraph breaks, and
-collapses any run of consecutive blank lines down to a single one. A blank line
+collapses any run of consecutive blank lines down to a single one. It never adds
+one you did not write. A blank line
 keeps its meaning next to comments, too: a blank above or below a comment, or
 between two comments, is a deliberate break and is kept. That includes a blank
 above a clause header — the space you leave between a long branch body and the
@@ -60,6 +62,18 @@ if ready:
 else:
     wait()
 ```
+
+The rule holds **inside every container**, not just between top-level items: the
+members of a `trait`, the methods of an `equip` block, the declarations in an
+`extern "C":` block, struct fields, enum variants, the statements of a function
+or a closure body. Wherever you can write two things one after another, the
+space you leave between them is yours.
+
+It reaches inside a **list that is exploded** — one element per line — too, so a
+long table of entries keeps the paragraphs you grouped it into. The one place a
+blank cannot survive is a list the formatter *packed*: several elements share a
+line there, so there is nowhere for a paragraph break to sit. A blank line is
+kept wherever the layout has somewhere to put it.
 
 ### Suite layout is yours
 
@@ -106,6 +120,22 @@ The same holds for `await x` versus `x.await()`, for the bare `with r:` against
 explicit `static int counter = 0`. If you ever want the opposite — one canonical
 construct chosen for you — that is a rewriting tool's job, not the formatter's.
 
+A **nullary variant pattern** is in the same family. `Idle` and `Idle()` match
+the same thing, and the parentheses are how you say "this is a variant, not a
+name I am binding" — so both spellings are kept, wherever a pattern is legal:
+
+```gorget
+match state:
+    case Idle():                 # stays parenthesised
+    case Mode.Fast:              # …and a bare qualified variant stays bare
+    case .Slow():                # dot-shorthand keeps its choice too
+```
+
+This is not cosmetic. A bare name in a pattern is *also* the spelling of a
+binding, so `case Idle:` and `case Idle():` differ exactly when the name does
+not resolve to a variant — one fails, the other silently matches everything.
+Rewriting one into the other would trade a compile error for a catch-all.
+
 The single exception is the pure keyword synonym `else if`, which carries no
 information `elif` does not; it is canonicalized to `elif`.
 
@@ -129,7 +159,8 @@ result is stable: running `gg fmt` again changes nothing.
 Lines are budgeted at **120 columns** — counted in characters, so accented
 letters and emoji cost one column each, not one per byte.
 
-A list that fits stays on one line. A list that doesn't is **packed**: the
+A list that fits stays on one line, *unless you say otherwise* — see the
+trailing comma below. A list that doesn't fit is **packed**: the
 formatter fills each line up to the budget and then wraps, rather than exploding
 every element onto a line of its own. Continuation lines are indented one level
 in from the line the list started on, and the closing bracket follows the last
@@ -146,11 +177,10 @@ generic parameters and arguments, closure parameters, array, tuple and
 dictionary literals, and grouped imports.
 
 A packed list carries **no trailing comma** — the closing bracket is right after
-the last element, so there is nowhere for one to sit. The exception is a list
-whose elements carry comments: comments belong to the lines they annotate, so
-such a list falls back to one element per line, *with* a trailing comma and a
-closing bracket on its own line. Those two shapes are the whole vocabulary; you
-never have to choose between them.
+the last element, so there is nowhere for one to sit. The other shape is one
+element per line, *with* a trailing comma and a closing bracket on its own line.
+A list takes that shape when its elements carry comments (comments belong to the
+lines they annotate), and when you ask for it:
 
 One element can be wider than the whole budget — a long qualified name, a deeply
 generic type. The formatter puts it on its own continuation line and lets it
@@ -168,6 +198,43 @@ long. The parenthesized form `from x import (a, b, c)` is ratified and retires
 this exemption when it lands: parentheses suspend newline-significance the way
 they do in an expression, and the name list then packs at 120 like every other
 list.
+
+### The trailing comma is yours to write
+
+**Write a trailing comma after the last element and the list stays exploded** —
+one element per line — however comfortably it would have fitted. Leave it off and
+the formatter packs as usual. It is the one layout decision the formatter hands
+back to you, and you make it in the code rather than in a directive above it:
+
+```gorget
+Vector[String] verbs = ["get", "put", "post"]      # packs — no comma, no opinion
+
+Vector[String] methods = [
+    "get",
+    "put",
+    "post",                                        # …this comma keeps it open
+]
+```
+
+Use it where the vertical form is the readable one: a table you will keep adding
+rows to, a call whose arguments each deserve their own comment, a list whose order
+is the point. Diffs get smaller too — adding a row touches one line instead of
+rewrapping the paragraph.
+
+This is honoured wherever a list can wrap: parameter lists, call and method-call
+arguments, generic parameters and arguments, closure parameters, array, set,
+tuple and dictionary literals, and grouped imports. It is not yet honoured in a
+few positions that have no wrapping layer of their own — enum tuple-variant field
+lists, patterns, tuple and function types, `with` bindings, attribute arguments —
+where the comma is still dropped; those are being routed through the same
+machinery.
+
+The one place a trailing comma means something else is the **one-element tuple**:
+`(x,)` is how the language spells a 1-tuple at all, so the comma there is syntax,
+not a layout signal, and nothing is inferred from it.
+
+A trailing comma is a signal, never a requirement: a list you never comma stays
+packed forever, and both shapes are equally idiomatic.
 
 ## Comments
 

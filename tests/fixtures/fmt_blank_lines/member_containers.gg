@@ -1,0 +1,83 @@
+# PRESERVE-AND-CAP inside a MEMBER CONTAINER: `trait`, `equip`, `extern "C":`.
+#
+# AXIS: container × author-blank presence × comment adjacency × run length.
+# Every container below carries the same four cells, in this order:
+#   (a) NO author blank between two members      → none emitted
+#   (b) ONE author blank between two members     → kept
+#   (c) a blank ABOVE a leading comment          → kept, above the comment
+#   (d) a run of TWO author blanks               → capped to one
+#
+# RED against the pre-change binary, measured, and in OPPOSITE directions:
+#   trait / equip — cell (a) came back WITH a manufactured blank (the loops
+#                   inserted one between every pair of members unconditionally)
+#   extern        — cells (b), (c) and (d) came back with the author's blanks
+#                   DELETED (`format_extern_block` had no blank emitter at all)
+# `struct` / `enum` are CONTROLS: they already preserve-and-cap, and pin that
+# this change did not disturb them.
+#
+# The expected output is asserted BYTE-EXACT by `fmt_member_container_blanks`;
+# only the (d) rows move, each losing exactly its second blank.
+
+trait Shape:
+    float area(self)
+    float perimeter(self)
+
+    float width(self)
+
+    # geometry group
+    float height(self)
+
+
+    float depth(self)
+
+struct Point:
+    int x
+    int y
+
+    # grouped by meaning
+    int z
+
+
+    int w
+
+enum Direction:
+    North
+    South
+
+    # vertical
+    Up
+
+
+    Down
+
+equip Point:
+    int sum(self):
+        return self.x + self.y
+    int diff(self):
+        return self.x - self.y
+
+    int prod(self):
+        return self.x * self.y
+
+    # helpers
+    int neg(self):
+        return 0 - self.x
+
+
+    int dbl(self):
+        return self.x + self.x
+
+extern "C":
+    int c_open(int a)
+    int c_close(int a)
+
+    int c_flush(int a)
+
+    # the write family
+    int c_write(int a)
+
+
+    int c_read(int a)
+
+void main():
+    print(1)

@@ -425,12 +425,13 @@ pub enum ImportStmt {
     /// Also supports glob: `from xtd.log import LogLevel.*`
     /// Also supports aliasing: `from std.math import sin as msin`
     /// Also supports module-level wildcard: `from std.math import *`
-    /// Glob names are in `glob_types`; they import the type + all its variants bare.
     From {
         path: Vec<Spanned<String>>,
+        /// Every imported name, plain and glob alike, in the order the AUTHOR
+        /// WROTE THEM. `ImportName::glob` tells the two apart. One vector, not
+        /// two: the spellings interleave freely in the source, so a partition
+        /// at parse time loses the relative order for good.
         names: Vec<ImportName>,
-        /// Type names imported with `.*` — bring type + all variants into scope.
-        glob_types: Vec<Spanned<String>>,
         /// True for module-level wildcard `from X import *` — bind all
         /// public names from the module into the current scope.
         wildcard: bool,
@@ -444,6 +445,13 @@ pub enum ImportStmt {
 pub struct ImportName {
     pub name: Spanned<String>,
     pub alias: Option<Spanned<String>>,
+    /// True for the glob spelling `Type.*`, which imports the type AND all its
+    /// variants bare. A typed flag on the entry, not a second vector: the two
+    /// spellings interleave in one author-written list, and partitioning them
+    /// as they are parsed destroys that order irrecoverably — the formatter
+    /// then cannot re-emit what the author wrote however faithful it is.
+    /// A glob entry never carries an alias (`Type.* as X` is not syntax).
+    pub glob: bool,
 }
 
 impl ImportName {
@@ -1087,6 +1095,15 @@ pub enum Pattern {
     Constructor {
         path: Vec<Spanned<String>>,
         fields: Vec<Spanned<Pattern>>,
+        /// True when the author WROTE the argument-list parens. Only
+        /// informative for the NULLARY case: with fields the parens are
+        /// mandatory, without them `Color.Red` and `Color.Red()` build the
+        /// SAME node, so the choice is authorial information the formatter
+        /// would otherwise invent or delete. Same family as
+        /// `ArrayLiteralSpelling`. Compiler passes that SYNTHESISE a
+        /// constructor pattern (the loader's variant-qualification rewrite)
+        /// write `false`; only the parser has an author to speak for.
+        paren_spelled: bool,
     },
 
     /// Tuple destructure: (x, y, z)
@@ -1103,6 +1120,9 @@ pub enum Pattern {
     DotShorthand {
         variant: Spanned<String>,
         fields: Vec<Spanned<Pattern>>,
+        /// See `Pattern::Constructor::paren_spelled`: `.Red` and `.Red()`
+        /// build the same node.
+        paren_spelled: bool,
     },
 }
 
