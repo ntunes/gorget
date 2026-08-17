@@ -42,8 +42,11 @@
 # INTENDED: the comment stays inside the call, exactly as the control does.
 # Wired test: known_gap_fmt_comment_escapes_call_with_author_paren
 # (tests/integration.rs, #[ignore]d).
-# TWO COSTUMES, both measured 2026-08-17. The paren-at-the-TAIL costume is the
-# one a naive fix MISSES: `author_paren_layers` is keyed by the EXACT span of the
+# TWO COSTUMES, both measured 2026-08-17. In a CALL a naive exact-span fix
+# misses BOTH (a call element is a `Spanned<CallArg>` spanned
+# `start.merge(value.span)` with `start` at the author's `(`, expr.rs:2260-2304);
+# in a BRACKET list the element span coincides with the wrapped node, so
+# costume 1 is found there and only the tail costume escapes: `author_paren_layers` is keyed by the EXACT span of the
 # WRAPPED node, while `parse_infix` spans a binary as `lhs.merge(paren-stripped
 # rhs)`, so a lookup on the element span returns 0 for `x + (y)` even though the
 # author's `)` still sits before the delimiter. The fix must advance past every
