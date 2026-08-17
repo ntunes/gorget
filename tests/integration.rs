@@ -50387,6 +50387,38 @@ fn known_gap_case_unresolved_name_rejected() {
     );
 }
 
+/// KNOWN GAP — a MODULE-LEVEL global's initializer is not type-checked, and the
+/// backends then disagree: `gg check` is clean, the C lane fails with a raw gcc
+/// error, and the LLVM lane BUILDS, RUNS and prints garbage. The identical
+/// mismatch as a LOCAL is correctly rejected with `E_TypeMismatch`, so the check
+/// exists and is simply not called at this write site (Core #4).
+///
+/// Distinct from the filed SELF-HOST entries on the same syntax — this is Rust
+/// gg, where only the module-level position leaks.
+#[test]
+#[ignore = "known gap (R42): a module-level global's initializer is not typechecked — gg check clean, C fails with a raw gcc error, LLVM builds and prints garbage, while the same mismatch as a local is correctly rejected; un-ignore when the module-level position is checked"]
+fn known_gap_global_initializer_type_mismatch_rejected() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/global_initializer_type_mismatch_unchecked.gg");
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture),
+        "known_gaps/global_initializer_type_mismatch_unchecked.gg",
+    );
+
+    assert!(
+        !output.status.success(),
+        "`gg check` must REJECT a module-level `int zz = \"not an int\"` exactly as \
+         it rejects the same mismatch as a local. Today it exits 0 with \"OK: no \
+         semantic errors\", the C lane then fails with a raw gcc error, and the \
+         LLVM lane builds and prints garbage.\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
 /// KNOWN GAP — the LLVM backend never emits the SDL runtime blob, so any
 /// `xtd.sdl` call fails at LINK (`undefined reference to gorget_sdl_init`)
 /// while the C backend builds clean.

@@ -1,0 +1,42 @@
+# KNOWN GAP — a MODULE-LEVEL global's initializer is not type-checked at all,
+# and the two backends then DISAGREE about what to do with the garbage.
+#
+# `int zz = "not an int"` at module level:
+#     gg check                  -> "OK: no semantic errors"   (rc 0, no diagnostic)
+#     gg build (C)              -> rc 1, a raw gcc error reaching the user
+#     gg build --backend=llvm   -> rc 0, BUILDS
+#     ./the-binary (LLVM)       -> rc 0, prints garbage (e.g. 187650881467040)
+#
+# Measured at HEAD (2026-08-17).
+#
+# ⚠ THE SAME MISMATCH AS A LOCAL IS CORRECTLY REJECTED:
+#     void main():
+#         int zz = "not an int"      -> error[E_TypeMismatch]
+# So the check EXISTS and is simply not called at the module-level position.
+# That makes this a missing call at one write site, not a missing capability —
+# the same shape as the filed undefined-type-name hole, and a Core #4
+# chokepoint fix rather than a new analysis.
+#
+# THREE defects by Core #8, from one accepted program:
+#   (1) a program that must be REJECTED is accepted at check time;
+#   (2) the C lane surfaces a raw `.c:` compiler error to the user, which
+#       `docs/language-design.md:120` already forbids;
+#   (3) the LLVM lane SILENTLY MISCOMPILES it — builds, runs, prints garbage.
+#       "Both backends are wrong in different ways" is two bugs, not one, and
+#       the silent one is the worse of the two.
+#
+# ⚠ DISTINCT from the filed SELF-HOST entries on the same syntax. Those record
+# `gg-selfhost` accepting `int x = "s"`; this is RUST gg, where the local form
+# is correctly rejected and only the module-level position leaks. Do not merge
+# them: different lane, different write site.
+#
+# INTENDED: `gg check` REJECTS this with `E_TypeMismatch`, exactly as it does
+# for the local form, on both lanes.
+#
+# Wired test: known_gap_global_initializer_type_mismatch_rejected
+# (tests/integration.rs, #[ignore]d). It asserts the REJECTION, so it fails
+# today and goes green when the module-level position is checked.
+int zz = "not an int"
+
+void main():
+    print(zz)
