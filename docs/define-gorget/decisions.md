@@ -2396,6 +2396,14 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   and the sweep packed them to the 120 budget). Most of that is downstream of (2) and
   (3); what survives them is the honest signal that this file wants a `# fmt: off`-style
   escape rather than an exception carved into the canon.
+  **(2-bis) BLANK LINES INSIDE AN EXPLODED CONTAINER = PRESERVE-AND-CAP TOO (owner,
+  2026-08-16, folded at the scout's measurement).** Ruling (2) extends from member
+  containers to multi-line list literals: blank lines the author wrote BETWEEN elements
+  of an exploded container are preserved, runs of 2+ collapsed to one. Measured on
+  `compiler/data/resources.gg`: 3130 lines / 353 blanks today → 1106/12 under the
+  current canon → 1139/12 with the other six fixes → **1468/341 with this rule**, which
+  is the only variant that restores the file's paragraphing. Same principle, same
+  mechanism, one more position.
   **(6) IMPORT NAME LISTS = PRESERVE AUTHOR ORDER.** The alphabetical sort of imported
   member names is REMOVED (both `from X import a, b, c` and `import X.{a, b, c}`;
   `src/formatter/mod.rs:3183` and the `ImportStmt::From` twin at `:3209`). It destroyed
