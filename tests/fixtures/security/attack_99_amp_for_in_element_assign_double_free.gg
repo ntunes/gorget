@@ -1,0 +1,34 @@
+# SECURITY — DOUBLE FREE from SAFE, SPEC-DOCUMENTED syntax. Both backends.
+#
+# `for x in &coll` is the documented way to mutate elements in place
+# (docs/language-reference.md:1374, and §9.6's subscript/borrow table names it
+# as the spelling that writes through). Assigning to the loop binding over a
+# `Vector[String]` double-frees the element storage:
+#
+#     gg check  ->  OK: no semantic errors            (rc 0, no diagnostic)
+#     gg run    ->  free(): double free detected in tcache 2
+#                   terminated by SIGABRT (signal 6)
+#
+# Measured 2026-08-17 on the C backend and reproduced on LLVM. The element type
+# matters: a heap-owning element (String) double-frees; a scalar element does
+# not, so this samples the resource cell deliberately.
+#
+# WHY THIS IS SEVERE, beyond the crash: the program is accepted by the safety
+# pass with no diagnostic at all, so a memory-safety violation reaches runtime
+# from ordinary safe code that the language reference teaches. It is not a
+# misuse of an escape hatch — there is no `unsafe` here and no ownership
+# operator.
+#
+# ⚠ Related but DISTINCT from the filed `&`-write-through gap (§9.1's status
+# note: the compiler drops the write for a by-value element type). That one
+# SILENTLY LOSES a write; this one CORRUPTS THE HEAP.
+#
+# INTENDED: either the assignment writes through (the specified behaviour) or
+# the program is REJECTED at check time with a teaching diagnostic. Crashing is
+# neither.
+void main():
+    Vector[String] d = ["aa", "bb"]
+    for s in &d:
+        s = "zz"
+    print(d.get(0).unwrap())
+    print(d.get(1).unwrap())

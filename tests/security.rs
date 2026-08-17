@@ -1277,6 +1277,24 @@ fn sec_92_static_set_runtime() {
 // ════════════════════════════════════════════════════════════════════════════
 
 #[test]
+#[ignore = "SECURITY KNOWN GAP (found + verified 2026-08-17 by the for-in idiom \
+scout, orchestrator-reproduced): `for s in &d: s = \"zz\"` over a Vector[String] \
+DOUBLE FREES and SIGABRTs on BOTH backends, while `gg check` reports \"OK: no \
+semantic errors\". The syntax is safe and spec-documented (language-reference.md:1374 \
+teaches `for x in &coll` as the in-place mutation form) — no unsafe, no ownership \
+operator. Distinct from the filed `&`-write-through gap, which silently LOSES a \
+write; this one corrupts the heap. Un-ignore when the assignment either writes \
+through or is rejected at check time."]
+fn security_amp_for_in_element_assign_double_free() {
+    // INTENDED: the documented in-place mutation writes through. Today the
+    // program is accepted and then double-frees, so this asserts the SPEC.
+    security_safe(
+        "attack_99_amp_for_in_element_assign_double_free",
+        "zz\nzz",
+    );
+}
+
+#[test]
 fn cow_bareassign_owned_string_no_leak() {
     // `String v = sb` with `sb` a heap-owned String (`a + b`), both live to
     // scope exit. Baseline leaked sb's 23-byte buffer.
