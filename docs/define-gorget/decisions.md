@@ -2423,6 +2423,42 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   a grouped import still leaves the group". POSSIBLE FUTURE, filed separately, not part
   of this: a bundled import form (`from schema import CollectionKind(..)`) that makes
   the relationship expressible.
+- 2026-08-16 — **🎯 `@fmt(skip)` ON ITEMS = RATIFIED, AND THE FAMILY IS CLOSED AT ONE
+  MEMBER (owner, live session).** The formatter escape hatch is an ATTRIBUTE, not a
+  magic comment: `@fmt(skip)` above an item leaves that item's source emitted
+  BYTE-FOR-BYTE. **Why an attribute beats `# fmt: skip`:** Gorget already validates
+  attributes against an allowlist and rejects the rest (`E_UnknownDirective`,
+  `src/semantic/mod.rs:165-219`), so a typo'd `@fmt(skpi)` FAILS THE BUILD while a
+  typo'd `# fmt: skpi` silently does nothing and is discovered only when a sweep
+  quietly reformats the thing it was meant to protect — the silent-no-op shape this
+  round ruled against three times. Black / Prettier / clang-format use magic comments
+  because Python, JS and C++ have no lightweight validated annotation at those
+  positions; Gorget does, and rustfmt — the language shaped like this one — uses it
+  (`#[rustfmt::skip]`). **Granularity is sufficient, measured:** both real cases are
+  item-granular — `compiler/data/resources.gg`'s table is a top-level
+  `public static Vector[ResourceEntry] RESOURCES = [...]`, and `lib/xtd/math3d.gg`'s
+  4x4 matrices sit inside methods (`Mat4 identity():`) whose entire body IS the matrix.
+  Nothing needs to reach an expression, so the grammar is not extended past items.
+  **THE FAMILY IS DELIBERATELY CLOSED AT ONE MEMBER.** `@fmt(explode)` / `@fmt(pack)`
+  are REJECTED as a category: they are STYLE OPTIONS, not escapes, and they are also
+  redundant — the MAGIC TRAILING COMMA ratified the same day already expresses
+  explode-vs-pack, in the code itself rather than in metadata above it; a second
+  spelling for one meaning is what the one-canonical-way rule forbids (the rule that
+  retired `pow()` for `**`). `@fmt(width=...)` and any per-file configuration are
+  refused for the gofmt reason: strictness is the feature, and every knob is a
+  bikeshed plus a fragmented corpus. The closure is ENFORCED, not merely stated — an
+  unratified `@fmt(align)` is rejected by the existing directive allowlist until
+  somebody deliberately adds it. Deferred, not chosen: a REGION form (`@fmt(off)` /
+  paired markers) — the next-item form covers both known cases, and unbalanced region
+  markers fail silently; revisit only if a genuine multi-item case appears.
+  **Scope of work:** attributes are today on function/struct/enum/trait defs
+  (`docs/language-reference.md:654/731/758/832`) — `static`/`const` items need the
+  grammar row added, and equip-method attribute support must be verified. The skipped
+  span is re-emitted verbatim from source, which makes idempotence automatic.
+  Accept/reject change ⇒ Core #9: all three lanes + cross-lane conformance fixtures.
+  **⚠ SEQUENCING: this BLOCKS the A2 sweep.** The sweep is a one-way flattening of
+  hand-built structure, so the marker must exist and the affected files must be marked
+  BEFORE the sweep is regenerated.
 - 2026-08-16 — **🎯 THE SILENT ARM-KILLER = REJECT, on two rules (owner, live session).**
   A `case` naming something that does not exist must not silently become a catch-all.
   Ratified pair, both compile ERRORS:
