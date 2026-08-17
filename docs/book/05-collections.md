@@ -663,19 +663,8 @@ bool has_even = s.any((int x): x % 2 == 0)   # true
 Several functions are available without any import. They work with any collection
 that implements the `Iterable` trait.
 
-### range
-
-Creates a range of integers. Used in `for` loops and comprehensions:
-
-```gorget
-for i in range(5):
-    print(f"{i}")          # 0, 1, 2, 3, 4
-
-for i in range(2, 8):
-    print(f"{i}")          # 2, 3, 4, 5, 6, 7
-```
-
-The range syntax `0..5` is equivalent to `range(0, 5)`.
+Integer sequences use the `..` / `..=` operators (`0..5`, `2..8`), not a
+`range()` function. See [Chapter 3](03-control-flow.md).
 
 ### enumerate
 

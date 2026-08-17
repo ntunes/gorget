@@ -103,7 +103,7 @@ from xtd.csv import parse_table, CsvTable
 CsvTable table = parse_table(csv_text).unwrap()
 print(f"rows: {table.row_count()}, cols: {table.col_count()}")
 
-for i in range(table.row_count()):
+for i in 0..table.row_count():
     String name = table.get_named(i, "name")
     print(name)
 ```

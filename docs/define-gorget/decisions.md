@@ -2491,8 +2491,8 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   ⚠ **Sequencing constraint on the ruled work itself (measured, not assumed):** the
   lint must not precede the TYPE HOLES, or it fires where no legal idiomatic spelling
   exists; and the book must not teach the idiom while its MUTABLE form double-frees
-  (the CRITICAL filing of the same day) or while it teaches `zip(a,b)` / `range(n)` /
-  `enumerate(c)`, none of which exist. Fix-first, promote-second.
+  (the CRITICAL filing of the same day) or while it teaches `zip(a,b)` /
+  `enumerate(c)`, neither of which exists as a free function. Fix-first, promote-second.
 - 2026-08-16 — **🎯 `@fmt(skip)` ON ITEMS = RATIFIED, AND THE FAMILY IS CLOSED AT ONE
   MEMBER (owner, live session).** The formatter escape hatch is an ATTRIBUTE, not a
   magic comment: `@fmt(skip)` above an item leaves that item's source emitted

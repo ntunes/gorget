@@ -3519,7 +3519,7 @@ void f(): int x = 42;
 === if_else ===
 void f(): if (x > 0): print(x); else: print(0);;
 === for_loop ===
-void f(): for i in range(10): print(i);;
+void f(): for i in 0..10: print(i);;
 === match ===
 void f(): match x: case 1: print(1); case _: print(0);;
 === method_call ===
@@ -40972,6 +40972,12 @@ fn amp_bind_declsigil_error() {
 #[test]
 fn mutable_keyword_error() {
     check_gg_fails("mutable_keyword_error.gg", "expected");
+}
+
+/// There is no `range()` function — integer sequences are `0..n`.
+#[test]
+fn range_fn_error() {
+    check_gg_fails("range_fn_error.gg", "undefined");
 }
 
 /// D10(a): a module-level `static G = &BASE` initializer is the same

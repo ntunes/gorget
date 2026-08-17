@@ -21,7 +21,6 @@ without any import:
 |----------|-------------|
 | `print(x, terminator = "\n", file = stdout)` | Print `x` (Displayable) to stdout or stderr. Pass `terminator = ""` for no newline, `terminator = "\t"` for TSV, `terminator = ", "` for CSV. |
 | `len(x)` | Length of any `Measurable` |
-| `range(start, end)` | Create an integer range (also `0..5` syntax) |
 | `enumerate(collection)` | Iterate with `(index, element)` pairs |
 | `zip(a, b)` | Combine two collections element-by-element |
 | `map(collection, fn)` | Transform elements |

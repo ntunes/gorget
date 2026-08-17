@@ -32,7 +32,8 @@ need prior exposure to follow along.
    The `String` type (unified, provenance-inferred), f-string interpolation,
    `Vector`, `Dict`, `HashMap`, `Set`, `HashSet`, arrays, tuples, slices,
    comprehensions, higher-order methods (`map`, `filter`, `fold`, `reduce`,
-   `any`, `all`, `sort`), built-in functions (`range`, `enumerate`, `zip`, `type`).
+   `any`, `all`, `sort`), built-in functions (`enumerate`, `zip`, `type`). Integer
+   sequences use `..` / `..=` (see Chapter 3).
 
 6. **[Structs and Enums](06-structs-enums.md)**
    Defining structs, field access, methods via `equip`, enums with payloads,

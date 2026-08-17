@@ -25,7 +25,7 @@ void main():
     # Statements inside functions
     test_parse("=== vardecl ===", "void f():\n    int x = 42\n")
     test_parse("=== if_else ===", "void f():\n    if x > 0:\n        print(x)\n    else:\n        print(0)\n")
-    test_parse("=== for_loop ===", "void f():\n    for i in range(10):\n        print(i)\n")
+    test_parse("=== for_loop ===", "void f():\n    for i in 0..10:\n        print(i)\n")
     test_parse("=== match ===", "void f():\n    match x:\n        case 1:\n            print(1)\n        else:\n            print(0)\n")
     test_parse("=== method_call ===", "void f():\n    v.push(42)\n")
     test_parse("=== assign ===", "void f():\n    x = 10\n")

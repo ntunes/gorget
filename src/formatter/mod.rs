@@ -8079,7 +8079,7 @@ void main():
 
     #[test]
     fn test_list_comprehension_idempotent() {
-        let input = "void main():\n    auto items = [x * 2 for x in range(10) if x > 0]\n";
+        let input = "void main():\n    auto items = [x * 2 for x in 0..10 if x > 0]\n";
         let first = fmt(input);
         let second = fmt(&first);
         assert_eq!(first, second);

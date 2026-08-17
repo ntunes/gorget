@@ -1368,7 +1368,7 @@ for_stmt = "for" pattern { "," pattern } "in" [ "&" | "!" ] expr ":" block
            [ "else" ":" block ] ;
 ```
 
-Iterates over a collection or range. The optional ownership modifier before the iterable controls ownership:
+Iterates over a collection or an integer range (`0..n`, `1..=n` — see §7.10). The optional ownership modifier before the iterable controls ownership:
 
 | Form                               | Meaning                              |
 |------------------------------------|--------------------------------------|
@@ -3390,7 +3390,6 @@ The following functions are available without import:
 |---------------|-------------------------|---------------------------------|
 | `print`       | `void(T, terminator: String = "\n", file: File = stdout)` | Print `T` (Displayable) to stdout/stderr. `terminator=` overrides the trailing string (Python `end=` / Swift `terminator:`); pass `""` to suppress the newline, `"\t"` for TSV, `", "` for CSV. Infallible — panics on I/O failure. |
 | `len`         | `int(Measurable)`       | Length — delegates to `x.len()` |
-| `range`       | `Range(int, int)`       | Create a range                  |
 | `enumerate`   | `Iterator(Collection)`  | Iterate with index              |
 | `zip`         | `Iterator(A, B)`        | Combine two iterators           |
 | `map`         | `Iterator(Collection, fn)` | Transform elements           |
@@ -5576,7 +5575,7 @@ test "config serialization":
 
 test "fibonacci sequence":
     List[int] results = List[int]()
-    for i in range(10):
+    for i in 0..10:
         results.push(fib(i))
     snapshot "fib_10" results
 ```

@@ -38,4 +38,4 @@ void main():
 
     test_resolve("=== closure ===", "void f():\n    auto add = (int a, int b): return a + b\n")
 
-    test_resolve("=== for_loop ===", "void f():\n    for i in range(10):\n        print(i)\n")
+    test_resolve("=== for_loop ===", "void f():\n    for i in 0..10:\n        print(i)\n")
