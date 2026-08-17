@@ -758,3 +758,56 @@ owner closed that gauntlet by hand at 8 with exactly this gate's logic. The gate
 codifies the judgment that was already being exercised; the residual risk it accepts
 is the record-grade tail, and the expected cost of the pure-minor passes it retires
 was the lowest-value spend in the system.
+
+## 13. Fold verbatim — why the orchestrator's summary is a defect source
+
+The gauntlet's failure mode is not the reviewer missing something. It is the
+orchestrator *folding* what the reviewer found.
+
+A review pass returns findings in the reviewer's own words, carrying three things
+that look like padding and are not: the **subject** of the claim, the **measured
+figures**, and the **cited sites**. Summarising a finding into a shorter sentence
+reliably drops at least one of them, and the drop is invisible — the artifact still
+reads fluently, the fold looks applied, and the loss surfaces one pass later as a
+fresh blocking finding. Measured over one formatter brief that ran thirteen
+sequential passes: after the fifth pass, the majority of blocking findings were
+defects introduced by folds rather than defects in the work under review.
+
+Three shapes recur, all of them orchestrator-side:
+
+**Compression that loses the subject.** A minor reading "the census prints 26 rows
+across 11 files — 21 real hits across 7 files, 2 ledger rows and 3 false positives"
+was folded as "state the census's expected shape". The restated version has no
+subject: a reader cannot tell which census, and every number is gone. The next pass
+raised a blocking finding that the lost figures would have prevented.
+
+**Correction without propagation.** A ruling lands in the paragraph it corrects while
+the *enclosing section* goes on stating the old fact. Four consecutive blocking
+findings in that same brief were this shape — a corrected clause whose siblings still
+contradicted it, including one where a lane-gate list still said "formatter-only" after
+the change had been ruled AST-shaped. The countermeasure is mechanical and cheap:
+after every fold, re-read the whole enclosing section, then grep the correction in its
+*instruction* form (edit-asserts catch a missing fold; only a grep catches a surviving
+contradiction — Core #15c).
+
+**Over-correction.** A reviewer says a rule has no subject for some case; the fold
+answers "applies everywhere"; the widened rule then swallows cases that were never in
+scope. One such fold turned a documentation fix into an instruction that would have
+rewritten runtime output, protocol text inside a string literal, and a code sample in
+another language.
+
+The fix is structural rather than a resolution to be more careful:
+
+1. **Transcribe verbatim.** Fold each finding in the reviewer's own words. Length is
+   not the cost being optimised; a brief exists to be executed exactly once.
+2. **Stack folds as marked, numbered addenda** — one per review generation — each with
+   an explicit precedence line (later beats earlier beats body). A correction never
+   silently rewrites the body, because a silent rewrite is unauditable: no later pass
+   can tell what the body used to say.
+3. **State the precedence in the artifact**, so an executor reading only the body knows
+   it is not the whole spec, and a reviewer can check lower layers for contradictions
+   rather than assuming the top layer is complete.
+
+The precedence chain is not bureaucracy. It is what makes fold fidelity *checkable* by
+the next fresh pass: the reviewer can diff the addendum against its source report and
+confirm, item by item, that nothing mutated in transcription.
