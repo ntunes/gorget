@@ -9,8 +9,20 @@
 # identical plain closure below it kept its own.
 #
 # AXIS: closure parameter shape {destructuring, plain} × author blank
-# {present, absent, 2-run}. The plain closure is the CONTROL — it was always
-# correct, and pins that this change did not disturb `format_block_stmts`.
+# {present, absent}. All FOUR cells are here, and each plain-parameter cell is
+# the CONTROL for its destructuring twin — it was always correct, and pins that
+# this change did not disturb `format_block_stmts`:
+#   f  destructuring × blank PRESENT   ← the defect
+#   g  plain         × blank PRESENT   ← control
+#   h  destructuring × blank ABSENT    ← no blank may be MANUFACTURED
+#   k  plain         × blank ABSENT    ← control
+#
+# ⚠ OMITTED, deliberately: the third value of the blank axis, a 2-RUN capped to
+# one. Capping is not this loop's business — it is the whole-buffer collapse in
+# `format`, which runs once over the finished output and is therefore
+# loop-independent. Sampling it here would pin the same mechanism a fifth time
+# (`member_containers.gg` and `exploded_containers_collapse.gg` already carry
+# it) and would cost this file its fixed-point property for nothing.
 #
 # RED against the pre-change binary, measured: the blank inside `f`'s body was
 # stripped; `g`'s survived. Found by the blank-policy column of
@@ -33,4 +45,8 @@ void main():
         int u = a * b
         int v = u + 1
         return v
-    print(f((1, 2)) + g(3) + h((2, 5)))
+    Callable[int(int)] k = (int m):
+        int u = m * 2
+        int v = u + 1
+        return v
+    print(f((1, 2)) + g(3) + h((2, 5)) + k(4))

@@ -11140,6 +11140,78 @@ fn fmt_magic_comma_honoured_kinds() {
     assert_magic_comma_fixed_point("honoured_kinds.gg");
 }
 
+/// AN AUTHOR GROUPING PAREN ON THE LAST ELEMENT — the four TIGHT cells.
+///
+/// An element's recorded span stops BEFORE the author's `)`, so without an
+/// anchor advance the probe's decisive byte is the paren rather than the comma
+/// and the author's trailing comma is SILENTLY DELETED inside a LAND kind.
+///
+/// RED pre-fix (measured): all four packed with the comma deleted.
+///
+/// BREAK-AND-WATCH (a), both halves: reverting the advance to the OBVIOUS
+/// exact-span lookup reds `p2`, `p3` and `p4`; `p1` correctly stays GREEN,
+/// because a BRACKET element's `span_of` IS the wrapped node's span and the
+/// two helpers coincide there. That is why the CALL costumes are here — for a
+/// `Spanned<CallArg>` the exact-span lookup misses BOTH costumes.
+///
+/// ⚠ This file alone cannot see break (b) — all four cells stay green under a
+/// byte-count advance. The SPACED pair below is what catches it.
+#[test]
+fn fmt_magic_comma_author_paren_cells() {
+    assert_magic_comma_fixed_point("author_paren_cells.gg");
+}
+
+/// The same axis, SPACED (`y + ( 2 )`) — the pair that catches a byte-count
+/// advance. Whitespace sits between the wrapped node's end and its `)`, so an
+/// advance that counts bytes instead of skipping lands on the space and reads
+/// the wrong decisive byte.
+///
+/// Not a fixed point (the formatter normalises the interior spacing), so the
+/// assertion is on the exact expected text.
+///
+/// RED pre-fix (measured): both packed with the comma deleted. BREAK-AND-WATCH:
+/// with a byte-count advance both cells pack and lose their comma while the
+/// TIGHT sibling stays green.
+#[test]
+fn fmt_magic_comma_author_paren_cells_spaced() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir
+        .join("tests/fixtures/fmt_magic_comma/author_paren_cells_spaced.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let actual = fmt_body(&formatted);
+
+    const EXPECTED: &str = "\
+int add3(int a, int b, int c):
+    return a + b + c
+
+void main():
+    int y = 1
+    Vector[int] s1 = [
+        1,
+        y + (2),
+    ]
+    int s2 = add3(
+        1,
+        2,
+        y + (3),
+    )
+    print(s1.len() + s2)
+";
+    assert_eq!(
+        actual, EXPECTED,
+        "a SPACED author grouping paren on the last element lost its trailing \
+         comma.\n=== actual ===\n{actual}\n=== expected ===\n{EXPECTED}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(reparse.errors.is_empty(), "output does not re-parse");
+}
+
 /// GATE-INDEPENDENCE — the probe must work at an UNGATED CARVE-OUT.
 ///
 /// `format_chain_segment` hands `Gate::UngatedCarveOut` into

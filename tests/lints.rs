@@ -13609,6 +13609,12 @@ fn formatter_child_collection_loop_census() {
     //     the loader for an imported module, not a source-level block, so it
     //     has no interior comments of its own to preserve.
     const CENSUS: &[(&str, &str, Hooks, Blanks)] = &[
+        // The TWO `Blanks::Rule` rows, and the whole exception set. Both are
+        // about SECTIONS rather than items: one blank between the directive
+        // block and the first import, one between the std and non-std import
+        // GROUPS. Those regions are reordered by the formatter itself, so
+        // there is no author position to read — the blank belongs to the
+        // emitted layout, not to the source.
         ("format_module", "for item in &directives {", Both, Blanks::Rule),
         ("format_module", "for item in &imports {", Both, Blanks::Rule),
         ("format_module", "for (i, item) in rest.iter().enumerate() {", Both, Blanks::AuthorConditioned),
@@ -13629,6 +13635,10 @@ fn formatter_child_collection_loop_census() {
             Leading,
             Blanks::AuthorConditioned,
         ),
+        // The one `Blanks::None_` row: a SYNTHETIC container built by the
+        // loader for an imported module, so it has no author-written source
+        // region of its own — no blanks to preserve and none to manufacture.
+        // Same reason it is knowingly hookless.
         ("format_item", "for inner in items {", None_, Blanks::None_),
         ("format_nested_items", "for (i, item) in items.iter().enumerate() {", Both, Blanks::AuthorConditioned),
         ("format_struct", "for (i, field) in s.fields.iter().enumerate() {", Both, Blanks::AuthorConditioned),

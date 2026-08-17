@@ -1,0 +1,63 @@
+# MAGIC TRAILING COMMA × an AUTHOR GROUPING PAREN on the LAST ELEMENT.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and it is written in the form the formatter must KEEP.
+#
+# An element's recorded span STOPS BEFORE the author's `)` — `parse_paren_expr`
+# returns the inner node and pushes the grouping paren to a sideband — so the
+# comma probe's decisive byte is the paren, not the comma, unless it advances
+# past every author layer that closes at that position first. Without the
+# advance the author's trailing comma is SILENTLY DELETED inside a LAND kind:
+# a Core #10 silent drop, on the ruling that took the brief four review passes
+# to state.
+#
+# AXIS = costume × container. FOUR cells, all fixed points:
+#   p1  bracket  the element IS the parenthesised expression   `[1, (2 + 3),]`
+#   p2  bracket  the paren sits at the TAIL of a larger element `[1, y + (2),]`
+#   p3  call     element-IS-paren                    `add3(1, 2, (3 + 4),)`
+#   p4  call     paren-at-the-TAIL                   `add3(1, 2, y + (3),)`
+#
+# The two SPACED variants of the same axis (`y + ( 2 )`) are NOT fixed points —
+# the formatter normalises the interior spacing — so they live in the sibling
+# input fixture `author_paren_cells_spaced.gg`. ⚠ THEY ARE NOT OPTIONAL: all
+# four cells here stay GREEN under a byte-count advance, so this file alone
+# cannot see that break.
+#
+# RED against the pre-change binary, measured: all four packed with the comma
+# deleted.
+#
+# BREAK-AND-WATCH, both halves recorded:
+#   (a) revert the advance to the OBVIOUS exact-span lookup
+#       (`author_paren_layers(<element span>)`) → p2, p3 and p4 RED; p1 stays
+#       GREEN, correctly — a BRACKET element's `span_of` IS the wrapped node's
+#       span, so the two helpers coincide there. That green cell is not a gap;
+#       it is why the CALL costumes are here.
+#   (b) replace the skipping advance with a byte-count advance → this file
+#       stays green and the SPACED sibling reds.
+int add3(int a, int b, int c):
+    return a + b + c
+
+void main():
+    int y = 1
+    Vector[int] p1 = [
+        1,
+        (2 + 3),
+    ]
+    Vector[int] p2 = [
+        1,
+        y + (2),
+    ]
+    int p3 = add3(
+        1,
+        2,
+        (3 + 4),
+    )
+    int p4 = add3(
+        1,
+        2,
+        y + (3),
+    )
+    # CONTROL — the same shapes with NO author comma must still pack.
+    Vector[int] c1 = [1, (2 + 3)]
+    int c2 = add3(1, 2, y + (3))
+    print(p1.len() + p2.len() + p3 + p4 + c1.len() + c2)
