@@ -1,0 +1,21 @@
+# `exec` used ALONE — no other `std.os` / `std.process` symbol in the program.
+#
+# This is the cell `exec_builtin.gg` cannot reach: that fixture also imports
+# `getenv`, whose `n == "gorget_getenv"` arm pulls in PROCESS_RUNTIME, so the
+# `ExecResult` typedef and the `gorget_exec` prototype arrive for free and the
+# fixture passes no matter what the `exec` arm does. Here `exec` is the only
+# process symbol, so the runtime chunk must be selected by the `exec` arm itself
+# or the generated C does not compile.
+#
+# RED-verified 2026-08-17 against the pre-fix binary: `gg run` died with
+# `implicit declaration of function 'gorget_exec'` from the C compiler (a raw
+# `.c:` error leaking to the user, exit 1).
+#
+# Cause: the runtime-selection predicate tested `starts_with("gorget_exec_")`
+# WITH a trailing underscore, so it matched `gorget_exec_output` and missed the
+# bare `gorget_exec`.
+from std.process import exec
+
+void main():
+    int code = exec("exit 7")
+    print(code)

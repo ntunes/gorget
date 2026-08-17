@@ -1,6 +1,6 @@
 # Snake — console game
 #
-# Demonstrates: stdlib modules (std.random, std.time, std.io, std.os),
+# Demonstrates: stdlib modules (std.random, std.time, std.io, std.process),
 # enums, structs, vectors, mutable borrow parameters, pattern matching,
 # game loop, ANSI terminal escape codes, string interpolation.
 #
@@ -11,7 +11,7 @@ from std.collections import Vector
 from std.random import rand, seed
 from std.time import time, sleep_ms
 from std.io import getchar, term_cols, term_rows
-from std.os import exec
+from std.process import exec
 
 enum Direction:
     Up()

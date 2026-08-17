@@ -2503,7 +2503,7 @@ pub(super) fn emit_runtime_modules(out: &mut String, module: &LirModule, _struct
         || n.starts_with("gorget_signal_") || n == "gorget_getpid");
 
     // Process — also needed when spawn is used (ExecResult typedef lives here)
-    if needs_spawn || has(&|n| n.starts_with("gorget_process_") || n.starts_with("gorget_exec_") || n == "gorget_getenv" || n == "gorget_setenv") {
+    if needs_spawn || has(&|n| n.starts_with("gorget_process_") || n.starts_with("gorget_exec") || n == "gorget_getenv" || n == "gorget_setenv") {
         out.push_str(crate::backend::c::c_runtime::PROCESS_RUNTIME);
     }
 

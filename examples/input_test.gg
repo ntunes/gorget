@@ -2,7 +2,7 @@
 # Press keys to see their codes, Q to quit.
 
 from std.io import getchar
-from std.os import exec
+from std.process import exec
 
 void main():
     # Test 1: ANSI clear screen

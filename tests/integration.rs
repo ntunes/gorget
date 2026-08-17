@@ -18126,6 +18126,16 @@ has_path
 42");
 }
 
+/// `exec` ALONE, with no other process/env symbol to pull PROCESS_RUNTIME in.
+/// `exec_builtin` cannot see this cell — it also imports `getenv`, whose own
+/// arm emits the runtime chunk, so it stays green however the `exec` arm
+/// behaves. RED-verified against the pre-fix binary: `implicit declaration of
+/// function 'gorget_exec'`.
+#[test]
+fn exec_alone_no_env() {
+    run_gg("exec_alone_no_env.gg", "7");
+}
+
 #[test]
 fn print_builtin() {
     run_gg("print_builtin.gg", "hello world");
