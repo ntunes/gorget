@@ -144,7 +144,6 @@ const int KW_VIA = 66
 const int KW_WHERE = 67
 const int KW_EXTENDS = 68
 const int KW_MOVE = 69
-const int KW_MUTABLE = 70
 const int KW_ASSERT = 71
 const int KW_CONST = 72
 const int KW_UNSAFE = 73
@@ -447,8 +446,6 @@ int keyword_tag(Token tok):
                     return KW_EXTENDS
                 case KwMove:
                     return KW_MOVE
-                case KwMutable:
-                    return KW_MUTABLE
                 case KwAssert:
                     return KW_ASSERT
                 case KwConst:
@@ -2002,7 +1999,7 @@ equip Parser:
         # Skip &, !, ^, move, mutable before args
         if self.check_tok(TOK_AMP) or self.check_tok(TOK_BANG) or self.check_tok(TOK_CARET):
             self.advance()
-        elif self.check_kw(KW_MOVE) or self.check_kw(KW_MUTABLE):
+        elif self.check_kw(KW_MOVE):
             self.advance()
 
     SpannedExpr parse_call_arg(&self):
@@ -3082,13 +3079,9 @@ equip Parser:
     # ── Var decl detection (lookahead) ───────────────────────
 
     bool try_detect_var_decl(&self):
-        # A var decl looks like: [mutable] Type name = ...
+        # A var decl looks like: Type name = ...
         # Type can be: keyword, Ident, Ident[...], (T, T), etc.
         # After type, must be Ident followed by =
-
-        # Skip optional 'mutable' keyword
-        if self.check_kw(KW_MUTABLE):
-            self.advance()
 
         # Skip the type
         if not self.skip_type_lookahead():
@@ -3203,9 +3196,6 @@ equip Parser:
 
     Stmt parse_var_decl(&self):
         int own = OWN_BORROW
-        if self.check_kw(KW_MUTABLE):
-            own = OWN_MUTABLE
-            self.advance()
         SpannedType ty = self.parse_type()
         String name = ""
         if self.check_tok(TOK_LPAREN):
@@ -3246,9 +3236,6 @@ equip Parser:
     # Like parse_var_decl but captures name_span for RES entry (used in select arms)
     Stmt parse_select_var_decl(&self):
         int own = OWN_BORROW
-        if self.check_kw(KW_MUTABLE):
-            own = OWN_MUTABLE
-            self.advance()
         SpannedType ty = self.parse_type()
         SpannedToken name_tok = self.advance()
         String name = token_ident(name_tok.lex_token)
@@ -3420,9 +3407,6 @@ equip Parser:
         if self.check_kw(KW_MOVE):
             own = OWN_MOVE
             self.advance()
-        elif self.check_kw(KW_MUTABLE):
-            own = OWN_MUTABLE
-            self.advance()
 
         SpannedType ty = self.parse_type()
         # Handle ownership markers between type and name
@@ -3434,9 +3418,6 @@ equip Parser:
             self.advance()
         elif self.check_kw(KW_MOVE):
             own = OWN_MOVE
-            self.advance()
-        elif self.check_kw(KW_MUTABLE):
-            own = OWN_MUTABLE
             self.advance()
         SpannedToken name_tok = self.advance()
         String pname = token_ident(name_tok.lex_token)

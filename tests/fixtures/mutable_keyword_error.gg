@@ -1,0 +1,8 @@
+# `mutable` is not a keyword. The old param spelling `Type mutable x` is
+# gone; write-through is `&`.
+# Expected: parse error.
+void f(int mutable x):
+    pass
+
+void main():
+    f(1)

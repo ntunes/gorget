@@ -152,8 +152,8 @@ backtracking. `try_parse` (`mod.rs:1937`) saves `pos`, runs a closure
 returning `Option<T>`, and restores `pos` on `None`. Because the whole
 parser state-of-record is just the `pos` cursor (the token arrays are
 immutable after construction), backtracking is a single integer
-assignment — cheap. It's used for, e.g., the `mutable type ownership
-name =` variable-declaration probe (`stmt.rs:655`) and the generic
+assignment — cheap. It's used for, e.g., the `type [sigil] name =`
+variable-declaration probe (`stmt.rs`) and the generic
 method-call-vs-index disambiguation (`expr.rs:1095`, see below).
 
 ## Pratt expression parsing

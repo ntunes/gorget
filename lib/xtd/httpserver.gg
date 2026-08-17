@@ -1048,7 +1048,7 @@ String http_etag(String content):
 HttpServerResponse http_serve_file(String base_dir, HttpRequest req):
     if req.path.contains(".."):
         return HttpServerResponse.bad_request("invalid path")
-    mutable String file_path = path_join(base_dir, req.path)
+    String file_path = path_join(base_dir, req.path)
     if is_dir(file_path):
         file_path = path_join(file_path, "index.html")
     if not file_exists(file_path):

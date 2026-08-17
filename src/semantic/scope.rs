@@ -93,7 +93,8 @@ pub struct DefInfo {
     pub span: Span,
     pub scope: ScopeId,
     pub type_id: Option<TypeId>,
-    /// Whether this variable was declared with `mutable` (only meaningful for Variable kind).
+    /// Whether the binding is assignable. Locals default to assignable;
+    /// `const` is the opt-out. Write-through to a caller is `&`, not this flag.
     pub is_mutable: bool,
     /// Whether this variable is a function parameter (borrowed from caller, safe to re-bind).
     pub is_param: bool,

@@ -40968,6 +40968,12 @@ fn amp_bind_declsigil_error() {
     );
 }
 
+/// `mutable` is not a keyword — the retired prefix is a generic parse error.
+#[test]
+fn mutable_keyword_error() {
+    check_gg_fails("mutable_keyword_error.gg", "expected");
+}
+
 /// D10(a): a module-level `static G = &BASE` initializer is the same
 /// named-`&`-bind class — must REJECT with `E_LocalBorrowBind`.
 #[test]

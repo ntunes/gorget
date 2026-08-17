@@ -2163,7 +2163,7 @@ void main():
 | 12 | **Array syntax** | C-style: `int[5]` fixed array, `Vector[int]` growable; `int[]` slices are `String`-only today (see §24) |
 | 13 | **Operator overloading** | Via traits (like Rust) |
 | 14 | **Type aliases** | `type Name = String` |
-| 15 | **Mutability** | Mutable by default, `const` for immutable. No `mut` keyword. |
+| 15 | **Mutability** | Mutable by default, `const` for immutable. Write-through is `&`. No `mut`/`mutable` keyword. |
 | 16 | **Associated type access** | `Self.Item` (uppercase Self, dot access) |
 | 17 | **Expression arms** | `:` for both single-line and block arms (no `=>`). Disambiguated by same-line vs newline+indent. |
 
@@ -2181,7 +2181,7 @@ void main():
 | Borrowing | bare / `&` / `!` | `&` / `&mut` / move | N/A | Implicit |
 | Lifetimes | Fully inferred (no annotations) | Signature-only + `'a` | N/A | N/A |
 | Generics | `[T]` | `<T>` | `[T]` | `<T>` |
-| Mutability | Mutable default + `const` | `let` default + `mut` | Default mutable | `final`/`const` |
+| Mutability | Mutable default + `const`; write-through `&` | `let` default + `mut` | Default mutable | `final`/`const` |
 | Error handling | `throws` + Result capture | `Result` + `?` | Exceptions | Exceptions |
 | Closures | `(params):` + `it` | `\|params\|` | `lambda` | `->` (Java) |
 | Inheritance | Traits only | Traits only | Classes | Classes |

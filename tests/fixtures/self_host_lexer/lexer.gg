@@ -31,7 +31,7 @@ enum Keyword:
     KwAsync  KwAwait  KwSpawn
     KwUnsafe  KwExtern
     KwSelfLower  KwSelfUpper
-    KwMove  KwMutable
+    KwMove
     KwTest  KwSuite  KwBench  KwIt  KwAssert
     KwShared  KwMeta  KwSelect  KwRethrow  KwCatch  KwSnapshot
     KwBlocking  KwUnchecked  KwPrivate  KwNoreturn
@@ -241,8 +241,6 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwSelfUpper())
     elif s == "move":
         return Some(KwMove())
-    elif s == "mutable":
-        return Some(KwMutable())
     elif s == "test":
         return Some(KwTest())
     elif s == "suite":

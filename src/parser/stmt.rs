@@ -99,9 +99,6 @@ impl Parser {
             // auto — type-inferred variable declaration
             Token::Keyword(Keyword::Auto) => self.parse_auto_var_decl(),
 
-            // mutable — prefix for mutable variable declaration
-            Token::Keyword(Keyword::Mutable) => self.parse_decl_or_expr_stmt(),
-
             // Named scope: `identifier: \n    body` — mid-function drop zone.
             _ if self.check_identifier_colon_block() => self.parse_named_scope(),
 
@@ -667,8 +664,8 @@ impl Parser {
     }
 
     /// Try to parse a declaration (type name = expr) or fall back to expression statement.
-    /// Handles: `type name = expr`, `mutable type name = expr`, `mutable auto name = expr`,
-    /// and ownership modifiers (`type &name = expr`, `type mutable name = expr`, etc.).
+    /// Handles: `type name = expr`, and the retired-and-rejected decl-sigil
+    /// form `type &name = expr` (D10(a)).
     fn parse_decl_or_expr_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
         let start = self.peek_span();
 
@@ -677,7 +674,7 @@ impl Parser {
         // `pending_speculative_error` on `Parser` for the promotion protocol.
         let _ = self.take_promotable_error();
 
-        // Speculatively try: [mutable] type [ownership] name =
+        // Speculatively try: type [ownership] name =
         //
         // The binding name must be a plain identifier. A reserved keyword in
         // this position (after a successfully-parsed type + optional ownership
@@ -697,18 +694,7 @@ impl Parser {
         // parse error, which is correct. Implicit-`it` closures are unaffected:
         // they never go through this var-decl path.
         match self.try_parse(|p| {
-            let has_mutable_prefix = if p.check_keyword(Keyword::Mutable) {
-                p.advance();
-                true
-            } else {
-                false
-            };
-
-            let type_ = if has_mutable_prefix && p.check_keyword(Keyword::Auto) {
-                let auto_start = p.peek_span();
-                p.advance();
-                Spanned::new(Type::Inferred, auto_start)
-            } else {
+            let type_ = {
                 // D35 (Advisory A1, 2026-07-28): `parse_type` can fail with
                 // `FunctionTypeParamSigilBeforeType` on `Callable[void(&int)] cb`
                 // in local-decl position — a shape that's unambiguously a
@@ -736,26 +722,22 @@ impl Parser {
             // D10(a) (decisions.md, ratified 2026-07-06): a `&` sigil between
             // the type and the name (`Vector[int] &r = a`) is the decl-sigil
             // form of a local `&`-bind — rejected. Historically the sigil was
-            // silently DISCARDED here (only `mutable` set `is_mutable`; `&`,
-            // `!`, `move` were consumed and dropped, so `T &r = a` bound a
-            // plain value copy while reading as a reference decl). Track the
-            // `&` span so the caller can raise the teaching diagnostic; the
-            // no-`=` shapes keep their existing diagnosis.
+            // silently DISCARDED here (`&`, `!`, `move` were consumed and
+            // dropped, so `T &r = a` bound a plain value copy while reading
+            // as a reference decl). Track the `&` span so the caller can
+            // raise the teaching diagnostic; the no-`=` shapes keep their
+            // existing diagnosis.
             let mut amp_span: Option<Span> = None;
-            let is_mutable = if !has_mutable_prefix
-                && (p.check(&Token::Ampersand)
-                    || p.check(&Token::Bang)
-                    || p.check_keyword(Keyword::Mutable)
-                    || p.check_keyword(Keyword::Move))
+            if p.check(&Token::Ampersand)
+                || p.check(&Token::Bang)
+                || p.check_keyword(Keyword::Move)
             {
                 let ownership_tok = p.advance();
                 if matches!(ownership_tok.node, Token::Ampersand) {
                     amp_span = Some(ownership_tok.span);
                 }
-                matches!(ownership_tok.node, Token::Keyword(Keyword::Mutable))
-            } else {
-                has_mutable_prefix
-            };
+            }
+            let is_mutable = false;
 
             match p.peek() {
                 Token::Identifier(_) => {

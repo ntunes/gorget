@@ -33,7 +33,7 @@ struct Game:
     int score
     bool game_over
 
-void spawn_food(Game mutable game):
+void spawn_food(Game &game):
     loop:
         int fx = rand() % (game.width - 2) + 1
         int fy = rand() % (game.height - 2) + 1
@@ -48,7 +48,7 @@ void spawn_food(Game mutable game):
             game.food_y = fy
             break
 
-void update(Game mutable game):
+void update(Game &game):
     Position head = game.body.get(game.body.len() - 1).unwrap()
     int new_x = head.x
     int new_y = head.y
@@ -72,7 +72,7 @@ void update(Game mutable game):
     game.body.push(Position(new_x, new_y))
     if new_x == game.food_x and new_y == game.food_y:
         game.score = game.score + 1
-        spawn_food(mutable game)
+        spawn_food(&game)
     else:
         game.body.remove(0)
 
@@ -122,7 +122,7 @@ void main():
     body.push(Position(w / 2 - 1, h / 2))
     body.push(Position(w / 2, h / 2))
     Game game = Game(body, Right(), 0, 0, w, h, 0, false)
-    spawn_food(mutable game)
+    spawn_food(&game)
 
     # Set terminal to non-blocking input (preserves output newline handling)
     exec("stty -icanon -echo min 0 time 0")
@@ -146,7 +146,7 @@ void main():
             game.dir = Left()
         elif last_key == 100:
             game.dir = Right()
-        update(mutable game)
+        update(&game)
         if game.game_over:
             break
         render(game)

@@ -298,6 +298,17 @@ fn test_mutable_param() {
     }
 }
 
+#[test]
+fn test_retired_mutable_param_does_not_parse() {
+    // `mutable` is an identifier. The old param spelling `Type mutable x`
+    // binds the name `mutable` and then chokes on the leftover `x`.
+    let (_module, errors) = parse_with_errors("void f(int mutable x):\n    pass\n");
+    assert!(
+        !errors.is_empty(),
+        "expected a parse error for `int mutable x` param, got none"
+    );
+}
+
 // ── Trait ───────────────────────────────────────────────────
 
 #[test]
@@ -348,15 +359,6 @@ fn test_var_decl_with_it_binding_rejected() {
     // rejects a keyword in binding-name position with a clear error.
     let (_module, errors) = parse_with_errors("void main():\n    int it = 5\n");
     assert!(!errors.is_empty(), "expected a parse error for `int it = 5`");
-    let rendered = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
-    assert!(
-        rendered.contains("reserved keyword") && rendered.contains("it"),
-        "expected a 'reserved keyword' error mentioning `it`, got: {rendered}"
-    );
-
-    // `mutable` prefix variant is rejected the same way.
-    let (_module, errors) = parse_with_errors("void main():\n    mutable int it = 42\n");
-    assert!(!errors.is_empty(), "expected a parse error for `mutable int it = 42`");
     let rendered = errors.iter().map(|e| e.to_string()).collect::<Vec<_>>().join("\n");
     assert!(
         rendered.contains("reserved keyword") && rendered.contains("it"),

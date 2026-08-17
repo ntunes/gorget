@@ -1336,6 +1336,19 @@ mod tests {
     }
 
     #[test]
+    fn test_mutable_is_an_identifier() {
+        assert!(Keyword::from_str("mutable").is_none());
+        let tokens = lex("mutable\n");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier(crate::intern::intern("mutable")),
+                Token::Newline,
+            ]
+        );
+    }
+
+    #[test]
     fn test_operators() {
         let tokens = lex("a + b == c\n");
         assert_eq!(

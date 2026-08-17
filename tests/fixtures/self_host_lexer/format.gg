@@ -157,8 +157,6 @@ String describe_keyword_canonical(Keyword kw):
             return "kw:Self"
         case KwMove():
             return "kw:move"
-        case KwMutable():
-            return "kw:mutable"
         case KwTest():
             return "kw:test"
         case KwSuite():

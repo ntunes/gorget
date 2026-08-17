@@ -150,8 +150,10 @@ Smart-pointer / concurrency *types* — `Box`, `Shared`, `Weak`, `Mutex`, `RwLoc
 **Ownership keywords:**
 
 ```
-move  mutable
+move
 ```
+
+Write-through is the `&` sigil, not a keyword. There is no `mutable` keyword: locals are mutable by default (`const` is the opt-out), and a write that should reach the caller is spelled `&` at the parameter and the call site (`void f(Type &x)` / `f(&x)`).
 
 **Testing keywords:**
 

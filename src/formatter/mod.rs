@@ -4603,7 +4603,7 @@ impl Formatter {
         match &stmt.node {
             Stmt::VarDecl {
                 is_const,
-                is_mutable,
+                is_mutable: _,
                 shared,
                 type_,
                 pattern,
@@ -4611,8 +4611,6 @@ impl Formatter {
             } => {
                 if *is_const {
                     self.emitter.write("const ");
-                } else if *is_mutable {
-                    self.emitter.write("mutable ");
                 }
                 match shared {
                     SharedKind::Auto => self.emitter.write("shared "),

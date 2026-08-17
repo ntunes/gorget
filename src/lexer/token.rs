@@ -375,7 +375,6 @@ pub enum Keyword {
 
     // Ownership keywords
     Move,
-    Mutable,
 
     // Testing
     Test,
@@ -494,7 +493,6 @@ impl Keyword {
             Keyword::SelfUpper => "Self",
             Keyword::Catch => "catch",
             Keyword::Move => "move",
-            Keyword::Mutable => "mutable",
             Keyword::Test => "test",
             Keyword::Suite => "suite",
             Keyword::Bench => "bench",
@@ -584,7 +582,6 @@ impl Keyword {
             "Self" => Some(Keyword::SelfUpper),
             "catch" => Some(Keyword::Catch),
             "move" => Some(Keyword::Move),
-            "mutable" => Some(Keyword::Mutable),
             "test" => Some(Keyword::Test),
             "suite" => Some(Keyword::Suite),
             "bench" => Some(Keyword::Bench),
