@@ -101,8 +101,8 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 | f-string interpolation — opt-in, type-safe, calls `.to_string()` | Significant whitespace as the *sole* block mechanism (the meta system provides structured alternatives for codegen) |
 | Exhaustive pattern matching with destructuring and guards | Semicolons as mandatory noise — infer or make optional |
 | Comptime / meta system — compile-time computation that replaces macros and codegen scripts | Operator overloading without convention — `<<` meaning stream insertion (C++) |
-| Pipe operator (`\|>`) — left-to-right composition, no inside-out nesting | Implicit falsy coercions (`0 == false`, `"" == false`) |
 | `for/else` and `while/else` — loop-completion semantics without extra flags | Verbosity for its own sake — names earn their length |
+| | Implicit falsy coercions (`0 == false`, `"" == false`) |
 | Curated trait-exposed dual spellings — `len(x)`/`x.len()` via `Measurable`, `map`/`filter` as free fn and method. NOT general UFCS: a universal free-fn↔method equivalence would let any `&`-taking free function mutate through method syntax with no `&` at the call site (violating the mutation-acknowledgment rule, §4.5's one sanctioned exception) and would add a second spelling for every call (see "Multiple incompatible ways" opposite) — abandoned as a target 2026-07-06 (decision ledger D16) | Magic / spooky action at a distance — behavior visible at the call site or nowhere |
 | | Multiple incompatible ways to do the same common task |
 

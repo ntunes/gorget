@@ -1195,10 +1195,9 @@ P1-infra reviewers' recommendation.
   consumer") — rejected because flow describes ALL argument passing while move
   uniquely means THE SOURCE DIES; the direction breaks at assign/param positions;
   `|` is Gorget's busiest glyph (bitor, `|=`, live or-patterns incl. a leading-`|`
-  parse arm, `pattern.rs:32-34`); and the flow prior is better saved for future
-  `|>`-style dataflow. `move` keyword rejected (owner prefers a sigil; it remains
-  the strongest-prior fallback — already reserved, already parses in closure
-  position). `take` rejected (live `.take(n)` method, 135+ hits). `~` disqualified
+  parse arm, `pattern.rs:32-34`). `move` keyword rejected (owner prefers a sigil;
+  it remains the strongest-prior fallback — already reserved, already parses in
+  closure position). `take` rejected (live `.take(n)` method, 135+ hits). `~` disqualified
   (prefix bitnot). `&&` runner-up (C++ rvalue prior, two chars). Scout census:
   ~870 move-sigil sites across four corpora (⚠ CORRECTED by the wave-census scout
   2026-07-11: **~1,114** — the A33 figure omitted `lib/` [224, a missing FIFTH
