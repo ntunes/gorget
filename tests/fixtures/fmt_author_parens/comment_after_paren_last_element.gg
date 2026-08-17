@@ -1,0 +1,56 @@
+# AUTHOR PARENS — an interior comment after a paren-carrying LAST ELEMENT
+# stays inside the container it annotates.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, so sweeping it would bake whatever the formatter does today in as the
+# author's intent.
+#
+# GRADUATED from `known_gaps/fmt_comment_escapes_call_with_author_paren.gg`.
+# The defect: the comment was emitted AFTER the call's closing paren, at
+# enclosing-block indent, so it documented the next statement instead. The
+# control below — the same shape with no author paren — was always correct, so
+# the author paren was the discriminator.
+#
+# ROOT: `parse_paren_expr` returns the INNER node and pushes the grouping paren
+# to a sideband, so an element's recorded span STOPS BEFORE the author's `)`.
+# `paren_tuple_gate`'s closing-delimiter scan starts at that span end and so
+# locked onto the AUTHOR's `)` rather than the call's, truncating the gated
+# window until the comment fell outside it.
+#
+# ⚠ TWO COSTUMES, and the OBVIOUS fix catches neither reliably. An exact-span
+# lookup in the author-paren table works only when the element's span IS the
+# wrapped node's span:
+#   * COSTUME 1, the element IS the parenthesised expression. In a BRACKET list
+#     the two spans coincide and an exact-span lookup finds it; in a CALL they
+#     do not, because a call argument is a `Spanned<CallArg>` spanned from the
+#     argument's own start.
+#   * COSTUME 2, the paren sits at the TAIL of a larger element. A binary node
+#     is spanned `lhs.merge(paren-stripped rhs)`, so its span key differs from
+#     the recorded one in BOTH containers.
+# The fix advances past every layer whose span ENDS AT the element's end
+# (`AuthorParenTable::layers_ending_at`), which covers both.
+#
+# ⚠ The damaged output was IDEMPOTENT and re-parsed cleanly, so no round-trip
+# gate could ever see it. Only an explicit placement assertion can — which is
+# why this fixture asserts the whole expected text.
+void sink(int a, int b):
+    print(a + b)
+
+int add1(int a):
+    return a
+
+void main():
+    # COSTUME 1 — the element IS the parenthesised expression
+    sink(1, (2 + 3)
+        # after the paren'd last arg
+    )
+    int y = 2
+    # COSTUME 2 — the paren sits at the TAIL of a larger element
+    print(add1(
+        1 + (y)
+        # tail of a binary whose rhs is parenthesised
+    ))
+    # CONTROL — same shape, no author paren. Always behaved correctly.
+    sink(1, 2 + 3
+        # control
+    )

@@ -10831,9 +10831,9 @@ fn doc_source_citations_name_the_right_line() {
     const HEURISTIC_BLIND: &[(&str, &str, &str)] = &[
         ("112", "src/formatter/mod.rs:43", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("152", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
-        ("229", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("513", "src/formatter/mod.rs:913", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("722", "src/formatter/mod.rs:2818", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("232", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
+        ("582", "src/formatter/mod.rs:1010", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("791", "src/formatter/mod.rs:2972", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
@@ -13006,7 +13006,13 @@ fn fmt_raw_text_access_is_routed_or_reasoned() {
         unlisted.join("\n")
     );
 
-    const EXPECTED_RAW_ACCESSES: usize = 59;
+    // 60: R42 Phase 4b added ONE row — `fmt_fill_pack_comma_axis` gained a
+    // fifth `.contains`, for the `cm_magic` cell (a list kept exploded by the
+    // AUTHOR's trailing comma alone). It rides the existing ALLOWED row for
+    // that fn: the access searches `fill_pack_body` output, whose header is
+    // already removed, so it is header-immune for the same reason its four
+    // siblings are.
+    const EXPECTED_RAW_ACCESSES: usize = 60;
     assert_eq!(
         flagged.len(),
         EXPECTED_RAW_ACCESSES,
@@ -13783,6 +13789,46 @@ fn formatter_child_collection_loop_census() {
          after it, mirroring `format_trait` / `format_equip` — then add the row \
          here with its rationale."
     );
+}
+
+/// The magic-comma probe must NOT be re-implemented via the comment table.
+///
+/// `author_trailing_comma` does its own `#`-to-EOL skipping, and that is not a
+/// style choice. The probe runs on SUB-`Formatter`s — `element_to_string`
+/// builds those with `CommentTable::empty()` BY DESIGN, so a comment-table
+/// lookup answers "not a comment" for every byte of every comment there. The
+/// measured consequence of routing it through the comment-table-aware
+/// `delim_pos_after` instead: a `,` written inside a comment reads as the
+/// author's, and the formatter INVENTS a trailing comma nobody wrote, cascading
+/// a one-line method chain into seven.
+///
+/// This is the round's one defect with ZERO corpus witnesses, which is exactly
+/// when a cheap source pin earns its line. The behavioural cell lives at
+/// `tests/fixtures/fmt_magic_comma/comment_not_a_comma.gg`.
+///
+/// **Break-and-verify:** add any `self.comments` reference to the probe's body.
+#[test]
+fn formatter_magic_comma_probe_is_self_contained() {
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let start = content
+        .find("fn author_trailing_comma(")
+        .expect("`fn author_trailing_comma` not found in src/formatter/mod.rs");
+    let body = &content[start..];
+    let end = body
+        .find("\n    }\n")
+        .expect("cannot delimit `author_trailing_comma`'s body");
+    let body = &body[..end];
+    for needle in ["self.comments", "delim_pos_after"] {
+        assert!(
+            !body.contains(needle),
+            "`author_trailing_comma` now references `{needle}`. The probe must \
+             skip `#`-to-EOL ITSELF: it runs on sub-`Formatter`s whose comment \
+             sideband is EMPTY by design, so a comment-table lookup is vacuous \
+             there and a `,` inside a comment reads as the author's — which \
+             makes the formatter invent a trailing comma nobody wrote."
+        );
+    }
 }
 
 /// An import NAME LIST is emitted in the AUTHOR'S ORDER (ratified

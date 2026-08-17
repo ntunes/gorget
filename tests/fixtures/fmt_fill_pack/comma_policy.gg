@@ -3,27 +3,37 @@
 # SUBJECT: this fixture asserts `gg fmt` OUTPUT (byte-for-byte, in
 # `fmt_fill_pack_comma_axis`) — a bulk `gg fmt` sweep MUST EXCLUDE it.
 #
-# The ratified asymmetry, in one file (Core #12 — this file samples the `comma`
-# axis ONLY):
-#   cm_fill     fill-broken       NO trailing comma: the close follows the last
-#                                 element inline, so there is nothing for a
-#                                 trailing comma to sit before.
-#   cm_over     over-width single NO trailing comma either — the lone element is
-#                                 also the last one.
-#   cm_comment  comment-broken    KEEPS the trailing comma, one element per line.
-#                                 A list with an INTERIOR COMMENT cannot be
-#                                 packed (the packer's elements are pre-rendered
-#                                 strings from a sub-formatter with an empty
-#                                 comment sideband), so the delimited-list
-#                                 chokepoint diverts it to
-#                                 `format_bracketed_broken_with_comments`, whose
-#                                 shape is unchanged by this track.
+# ⚠ THE REASON CHANGED IN 2026-08-16, THOUGH THE FIRST TWO ROWS DID NOT.
+# `cm_fill` and `cm_over` used to be comma-free because a PACKED list has
+# nowhere for a trailing comma to sit. Under the magic-trailing-comma canon
+# they are comma-free because THE AUTHOR WROTE NO COMMA — a trailing comma is
+# now the author's keep-this-exploded signal, so an input that carried one
+# would NOT pack at all. The assertion is unchanged; the reason under it is
+# not, which is exactly the kind of accidentally-green row Core #15e Q6 warns
+# about.
+#
+# The rows (Core #12 — this file samples the `comma` axis ONLY):
+#   cm_fill     fill-broken       NO author comma, so the formatter may pack;
+#                                 the close follows the last element inline.
+#   cm_over     over-width single NO author comma either.
+#   cm_comment  comment-broken    the INTERIOR-COMMENT cause, ISOLATED: its
+#                                 input carries NO author comma, so the comment
+#                                 gate alone is what explodes it. (It used to
+#                                 carry one, which made it a two-cause cell the
+#                                 moment the magic comma landed.) The exploded
+#                                 shape emits a trailing comma on output, as it
+#                                 always has.
+#   cm_magic    comma-broken      the MAGIC-COMMA cause, isolated: no comment,
+#                                 and short enough to pack comfortably, so the
+#                                 author's trailing comma is the only thing
+#                                 keeping it exploded.
 #
 # RED source per row: cm_fill / cm_over are TRUE pre-fix REDs (pre-fix they DO
-# carry a trailing comma). cm_comment is INVARIANT by design — it is the control
-# that proves the two shapes stayed distinct; its red is break-and-restore
-# (make `emit_delimited_list` ignore its `Gate` and always pre-render, and the
-# comment is re-parented out of the literal entirely).
+# carry a trailing comma on output). cm_comment's red is break-and-restore
+# (make `emit_delimited_list` ignore its `Gate` and always pre-render — the
+# comment is then re-parented out of the literal entirely). cm_magic is a TRUE
+# pre-fix RED: the pre-change binary packs it to one line and deletes the
+# comma.
 void cm_fill():
     Vector[int] a = [111111, 222222, 333333, 444444, 555555, 666666, 777777, 888888, 999999, 101010, 111011, 121212, 131313]
 
@@ -34,5 +44,11 @@ void cm_comment():
     Vector[int] c = [
         111111,  # first
         222222,
-        333333,
+        333333
+    ]
+
+void cm_magic():
+    Vector[int] d = [
+        1,
+        2,
     ]

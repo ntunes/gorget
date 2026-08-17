@@ -1,0 +1,49 @@
+# MAGIC TRAILING COMMA — a `,` INSIDE A COMMENT is not an author comma.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output.
+#
+# THE CELL HAS ZERO CORPUS WITNESSES. It exists because the comma probe runs on
+# SUB-formatters too — `element_to_string` builds those with an EMPTY comment
+# table BY DESIGN, so any comment-table lookup is VACUOUS there. A probe that
+# asks the table whether a byte is inside a comment gets "no" for every byte of
+# every comment, and a `,` written inside one reads as the author's.
+#
+# RED, break-and-watch (the probe has no pre-fix behaviour to red against):
+# re-implementing `author_trailing_comma` as the comment-table-aware WINDOW
+# scan the first prototype used turns the chain below into
+#
+#     int n = xs
+#         .map((int v): v * 2)
+#         .filter(
+#             (int v): (v
+#                 > g(
+#                     1,        <- a comma NOBODY wrote
+#                 )))
+#         .len()
+#
+# i.e. a one-line chain cascaded into seven. Restored, the chain stays on ONE
+# line and no comma appears. This file is NOT a fixed point: the chain packs and
+# the comment leaves it (see the last paragraph), so the assertion is on the
+# exact expected TEXT.
+#
+# ⚠ The ratified DECISIVE-BYTE contract is stronger than the window scan on
+# this input in a second way: the first byte that is neither whitespace nor
+# comment decides, so a `#` the probe fails to recognise TERMINATES the scan
+# (answer: no comma) instead of letting it run on into the comment. That is why
+# the self-contained `#`-to-EOL skip and the vacuous table give the SAME answer
+# here, and why the window scan does not. The source pin
+# `formatter_magic_comma_probe_is_self_contained` guards the other direction.
+#
+# The comment escaping the chain below is the SEPARATELY FILED pre-render-above
+# defect, unchanged by this canon and not what this fixture is about.
+int g(int a):
+    return a
+
+void main():
+    Vector[int] xs = [1, 2, 3]
+    int n = xs.map((int v): v * 2).filter((int v): v > g(
+        1
+        # a, b
+    )).len()
+    print(n)

@@ -4681,9 +4681,7 @@ fn parser_trailing_comma_cascade() {
 fn parser_trailing_comma_call_args() {
     run_gg(
         "parser_trailing_comma_call_args.gg",
-        "this is a deliberately long first argument literal string|\
-         this is a deliberately long middle argument literal string|\
-         this is a deliberately long final argument literal string",
+        "first|middle|final",
     );
 }
 
@@ -4691,9 +4689,7 @@ fn parser_trailing_comma_call_args() {
 fn parser_trailing_comma_dict_entries() {
     run_gg(
         "parser_trailing_comma_dict_entries.gg",
-        "long_resource_value_alpha_lorem\n\
-         long_resource_value_beta_ipsum\n\
-         long_resource_value_gamma_dolor",
+        "va\nvb\nvg",
     );
 }
 
@@ -11087,6 +11083,132 @@ void main():
     assert_eq!(formatted, second, "not idempotent");
 }
 
+// ══════════════════════════════════════════════════════════════
+// THE MAGIC TRAILING COMMA (ratified 2026-08-16, canon calls 3+4)
+// ══════════════════════════════════════════════════════════════
+//
+// A trailing comma is the AUTHOR saying KEEP THIS LIST EXPLODED; its absence
+// lets the formatter pack. Before this the token carried no meaning at all —
+// the formatter deleted it when packing and added one when exploding.
+//
+// It is a disjunct at the existing `emit_delimited_list` chokepoint, so the
+// honour set IS the gated set: routing a list kind through the chokepoint buys
+// it the interior-comment gate and the magic comma together. That equality is
+// about the KIND SET only; PROPAGATION is asymmetric (a nested comment reaches
+// every ancestor, a nested magic comma explodes only its own list), which
+// `honoured_kinds.gg`'s `nested_magic` cell pins.
+//
+// FIXTURE PLACEMENT: `tests/fixtures/fmt_magic_comma/`, a SUBDIRECTORY, for
+// the reason spelled out at the `fmt_form_preservation` block — a top-level fmt
+// fixture would be RUN by `runtime_parity_corpus`.
+
+/// Format `fixture` under `fmt_magic_comma/` and assert it is a FIXED POINT,
+/// re-parses, and is stable under a second pass.
+fn assert_magic_comma_fixed_point(fixture: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir
+        .join("tests/fixtures/fmt_magic_comma")
+        .join(fixture);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert_eq!(
+        source, formatted,
+        "magic trailing comma: {fixture} is not a FIXED POINT.\n\
+         === author wrote ===\n{source}\n=== formatter emitted ===\n{formatted}"
+    );
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "{fixture}: not idempotent");
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(
+        reparse.errors.is_empty(),
+        "{fixture}: output does not re-parse ({:?})",
+        reparse.errors.first()
+    );
+}
+
+/// THE HONOURED SET — one cell per gated list kind, each paired with its
+/// no-comma PACKED control, plus the `(x,)` one-tuple exemption and the
+/// nested-propagation cell.
+///
+/// RED pre-fix (measured): every author comma was deleted and every list
+/// packed; the packed controls and `(7,)` did not move, which is what makes
+/// them controls rather than more of the same cell.
+#[test]
+fn fmt_magic_comma_honoured_kinds() {
+    assert_magic_comma_fixed_point("honoured_kinds.gg");
+}
+
+/// GATE-INDEPENDENCE — the probe must work at an UNGATED CARVE-OUT.
+///
+/// `format_chain_segment` hands `Gate::UngatedCarveOut` into
+/// `format_call_args_wrapped` for every method chain of 2+ segments, so a
+/// gate-dependent read would SILENTLY DELETE the author's comma there — inside
+/// a LAND kind, and outside the DEFER set.
+///
+/// RED, both polarities: the (+) cell reds against the pre-change binary (comma
+/// deleted, chain packed). The (−) false-positive twin cannot red that way —
+/// the behaviour it guards does not exist pre-change — so it is BREAK-AND-WATCH:
+/// widening the probe past the close delimiter (the `source.len()` window the
+/// ruling refuses) makes the nested `filter(…)` read the OUTER list's separator
+/// as its own comma and explode for a comma nobody wrote. Both halves observed,
+/// then restored.
+#[test]
+fn fmt_magic_comma_at_a_chain_carve_out() {
+    assert_magic_comma_fixed_point("chain_carve_out.gg");
+}
+
+/// The SECOND ENTRANCE to the exploded emitter that the magic comma opens:
+/// comma-exploded and comment-FREE. Every option-E blank-line cell reaches that
+/// emitter through the interior-comment gate; this one does not.
+#[test]
+fn fmt_magic_comma_blank_lines_comma_exploded() {
+    assert_magic_comma_fixed_point("blank_lines_comma_exploded.gg");
+}
+
+/// A `,` INSIDE A COMMENT is not an author comma — the cell with ZERO corpus
+/// witnesses.
+///
+/// The probe runs on sub-`Formatter`s, which `element_to_string` builds with an
+/// EMPTY comment table BY DESIGN, so any comment-table lookup is vacuous there.
+/// RED is BREAK-AND-WATCH: re-implementing `author_trailing_comma` as the
+/// comment-table-aware WINDOW scan the first prototype used invents a trailing
+/// comma inside `g(1)` and cascades this one-line chain into seven. Observed,
+/// then restored.
+///
+/// Not a fixed point — the chain packs and its comment escapes to the block,
+/// which is the SEPARATELY FILED pre-render-above defect and not this canon's
+/// business — so the assertion is on the exact expected text.
+#[test]
+fn fmt_magic_comma_comment_is_not_a_comma() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path =
+        manifest_dir.join("tests/fixtures/fmt_magic_comma/comment_not_a_comma.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let actual = fmt_body(&formatted);
+
+    const EXPECTED: &str = "\
+int g(int a):
+    return a
+
+void main():
+    Vector[int] xs = [1, 2, 3]
+    int n = xs.map((int v): v * 2).filter((int v): v > g(1)).len()
+    # a, b
+    print(n)
+";
+    assert_eq!(
+        actual, EXPECTED,
+        "a `,` inside a comment was read as an author trailing comma.\n\
+         === actual ===\n{actual}\n=== expected ===\n{EXPECTED}"
+    );
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+}
+
 // R39 gorget-arena verdict fold: opinionated golden-file test. Any fmt
 // behavior change on the canonical sample must be either INTENDED (update
 // expected file same commit) or REGRESSION (fix formatter). See fixture
@@ -12145,6 +12267,74 @@ fn fmt_author_parens_survive_and_are_stable() {
              === pass 2 ===\n{second}\n=== pass 3 ===\n{third}"
         );
     }
+}
+
+/// GRADUATED from a known gap: an interior comment written after a
+/// paren-carrying LAST ELEMENT stays inside the container it annotates.
+///
+/// An element's recorded span stops BEFORE the author's `)` — `parse_paren_expr`
+/// returns the inner node and sidebands the paren — so `paren_tuple_gate`'s
+/// closing-delimiter scan locked onto the AUTHOR's paren rather than the
+/// container's and truncated the gated window until the comment fell outside
+/// it. Fixed by `advance_past_author_parens`, the one anchor advance the
+/// magic-comma probe also uses.
+///
+/// RED pre-fix, measured, BOTH costumes: costume 1's comment landed after the
+/// call at enclosing-block indent; costume 2's escaped the inner call into the
+/// outer one. The no-author-paren CONTROL was correct in both binaries, which
+/// is what makes the paren the discriminator rather than the comment.
+///
+/// ⚠ The damaged output was IDEMPOTENT and re-parsed cleanly, so no round-trip
+/// gate could ever see it. Hence the whole-text assertion.
+#[test]
+fn fmt_author_paren_comment_after_paren_last_element() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/fmt_author_parens/comment_after_paren_last_element.gg");
+    let src = std::fs::read_to_string(&fixture).expect("fixture unreadable");
+    let formatted = gorget::formatter::format_source_infallible(&src);
+    let actual = fmt_body(&formatted);
+
+    const EXPECTED: &str = "\
+void sink(int a, int b):
+    print(a + b)
+
+int add1(int a):
+    return a
+
+void main():
+    # COSTUME 1 — the element IS the parenthesised expression
+    sink(
+        1,
+        (2 + 3),
+        # after the paren'd last arg
+    )
+    int y = 2
+    # COSTUME 2 — the paren sits at the TAIL of a larger element
+    print(
+        add1(
+            1 + (y),
+            # tail of a binary whose rhs is parenthesised
+        ),
+    )
+    # CONTROL — same shape, no author paren. Always behaved correctly.
+    sink(
+        1,
+        2 + 3,
+        # control
+    )
+";
+    assert_eq!(
+        actual, EXPECTED,
+        "a comment written after a paren-carrying last element moved.\n\
+         === actual ===\n{actual}\n=== expected ===\n{EXPECTED}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "not idempotent");
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(reparse.errors.is_empty(), "output does not re-parse");
 }
 
 /// The structural NEG axis: parens that are NOT the author's grouping must
@@ -16805,6 +16995,12 @@ void cm_comment():
         222222,
         333333,
     ]
+
+void cm_magic():
+    Vector[int] d = [
+        1,
+        2,
+    ]
 "#,
         "=== got ===\n{body}"
     );
@@ -16825,6 +17021,14 @@ void cm_comment():
     assert!(
         body.contains("        111111,    # first"),
         "comment-broken elements keep their trailing comments at the canon gap"
+    );
+    // The MAGIC-COMMA cause, isolated: no comment, and short enough to pack
+    // comfortably, so the author's trailing comma is the only thing holding it
+    // exploded. Pre-fix this packed to `[1, 2]` with the comma deleted.
+    assert!(
+        body.contains("    Vector[int] d = [\n        1,\n        2,\n    ]"),
+        "a list kept exploded by the AUTHOR's trailing comma alone must stay \
+         exploded, one element per line"
     );
 
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -49980,63 +50184,16 @@ fn d27_caret_fn_type_sigil_before_type_error() {
 //   sh_resolver_equip_self_receiver_res_missing.gg    -> WIRED below
 //   gorget_arena_snag_1_llvm_ffi_only_typedef/        -> WIRED below (2 cells)
 //   (fmt_snag_2_multiline_header_trailing/ was one of these; the gap is
-//    closed and the reproducer graduated to `tests/fixtures/fmt_suite_layout/`)
+//    closed and the reproducer graduated to `tests/fixtures/fmt_suite_layout/`.
+//    fmt_comment_escapes_call_with_author_paren.gg likewise: closed by the
+//    author-paren anchor advance, graduated to
+//    `tests/fixtures/fmt_author_parens/comment_after_paren_last_element.gg`)
 //   snag53_nested_struct_field_mut.expected           -> NOT a wiring row: it
 //       is the expected-output DATA COMPANION of the already-wired
 //       `snag53_nested_struct_field_mut.gg`, not a reproducer of its own.
 //
 // Every one asserts the INTENDED behaviour and is `#[ignore]`d with a
 // citation, so it flips green the round the bug is fixed. Wire, don't fix.
-
-/// KNOWN GAP — calling a `Callable[...]`-typed LOCAL VARIABLE with a
-/// consuming argument panics the lowerer (`Tier 2a consume-site violation`,
-/// src/ir/lowering/mod.rs:2114). `gg check` passes, so this is a
-/// crash-on-valid-program.
-///
-/// GLYPH-INDEPENDENT: the retired-glyph twin panics with a byte-identical
-/// message, so it is NOT a D27 issue. The INDEXED-callee form of the same
-/// program compiles and runs on the Rust lane — see
-/// `callable_bang_arr_indexed_callee`, the one in-corpus cell of that shape —
-/// so the hole is specific to calling a Callable-typed local BINDING.
-/// (`d27_sh_caret_fntype_param_suffix` is NOT an indexed-callee twin: it
-/// passes its callable as a parameter. It shares the fn-type param-suffix
-/// parse position, not the callee shape.)
-#[test]
-#[ignore = "KNOWN GAP (found 2026-08-17 during the R42 Phase-4b brief review, \
-build-and-run): when the LAST argument of a call carries an AUTHOR GROUPING PAREN, \
-an interior comment after it ESCAPES the call and re-parents to the enclosing block. \
-`parse_paren_expr` returns the inner node and sidebands the paren, so the element span \
-excludes the author's `)`; `paren_tuple_gate`'s `)` scan then locks onto the AUTHOR's \
-paren and truncates `container_end`. The control (same shape, no author paren) is \
-correct, so the paren is the discriminator. The damaged output is IDEMPOTENT, so no \
-round-trip gate can see it. Un-ignore when the gate's window is anchored past the \
-author's paren layers (`author_paren_layers`)."]
-fn known_gap_fmt_comment_escapes_call_with_author_paren() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture = manifest_dir
-        .join("tests/fixtures/known_gaps/fmt_comment_escapes_call_with_author_paren.gg");
-    let src = std::fs::read_to_string(&fixture).expect("fixture unreadable");
-    let formatted = gorget::formatter::format_source_infallible(&src);
-
-    // INTENDED: the comment stays INSIDE the call it annotates. Today it is
-    // emitted after the call's closing paren, at block indent.
-    let body = fmt_body(&formatted);
-    let comment_line = body
-        .lines()
-        .position(|l| l.contains("after the paren"))
-        .expect("marker comment vanished entirely");
-    let close_line = body
-        .lines()
-        .position(|l| l.trim() == ")" || l.trim_end().ends_with("))"))
-        .expect("call close not found");
-
-    assert!(
-        comment_line < close_line,
-        "the comment must stay INSIDE the call it annotates — today the author grouping \
-         paren on the last argument truncates the gate window and the comment escapes to \
-         the enclosing block.\n--- formatted ---\n{formatted}"
-    );
-}
 
 #[test]
 #[ignore = "KNOWN GAP (ratified 2026-08-16, define-gorget ledger; surfaced by the \
@@ -50072,6 +50229,19 @@ fn known_gap_case_unresolved_name_rejected() {
     );
 }
 
+/// KNOWN GAP — calling a `Callable[...]`-typed LOCAL VARIABLE with a
+/// consuming argument panics the lowerer (`Tier 2a consume-site violation`,
+/// src/ir/lowering/mod.rs:2114). `gg check` passes, so this is a
+/// crash-on-valid-program.
+///
+/// GLYPH-INDEPENDENT: the retired-glyph twin panics with a byte-identical
+/// message, so it is NOT a D27 issue. The INDEXED-callee form of the same
+/// program compiles and runs on the Rust lane — see
+/// `callable_bang_arr_indexed_callee`, the one in-corpus cell of that shape —
+/// so the hole is specific to calling a Callable-typed local BINDING.
+/// (`d27_sh_caret_fntype_param_suffix` is NOT an indexed-callee twin: it
+/// passes its callable as a parameter. It shares the fn-type param-suffix
+/// parse position, not the callee shape.)
 #[test]
 #[ignore = "KNOWN GAP (filed R41 T-RB0): calling a Callable-typed LOCAL \
 VARIABLE with a consuming arg ICEs at src/ir/lowering/mod.rs:2114 (Tier 2a \

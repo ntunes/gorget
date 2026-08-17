@@ -1,0 +1,109 @@
+# MAGIC TRAILING COMMA — the HONOURED SET, one cell per gated list kind.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and it is written in the form the formatter must KEEP.
+#
+# A trailing comma is the AUTHOR saying KEEP THIS EXPLODED; its absence lets
+# the formatter pack. The honour set is exactly the `emit_delimited_list`
+# kinds — routing a list kind through that chokepoint buys it the
+# interior-comment gate AND the magic comma together, so the honour set and the
+# gate set are the same set BY CONSTRUCTION. That is a claim about the KIND
+# SET; it says nothing about PROPAGATION (see the note at the bottom).
+#
+# AXIS = list kind × {author comma, no comma}. The no-comma twin of every cell
+# is the PACKED control immediately after it: same list, same width, no comma,
+# stays on one line. Without those twins the fixture would only show that
+# exploded lists stay exploded.
+#
+# CELLS, one per honoured kind:
+#   1 fn / method / trait / extern parameter list
+#   2 call + method-call arguments
+#   3 generic parameters `[T]`
+#   4 generic arguments `[int]`
+#   5 closure parameters
+#   6 array / set literal
+#   7 tuple literal, 2+ elements
+#   8 dict literal
+#   9 grouped import   (joined the honoured set when the name sort was removed)
+#  10 `Expr::StructLiteral` — fmt-UNREACHABLE (the parser never builds one from
+#     source), so it has no cell here; it is kept routed through the chokepoint
+#     as class hygiene and pinned unreachable by
+#     `formatter_collection_literal_interior_hook_dispatch`.
+#
+# NEVER: the 1-element tuple `(x,)`. Its comma IS the syntax that makes it a
+# tuple rather than a parenthesised expression, not a layout signal. Black
+# exempts the same shape. The cell is at the bottom and must stay on one line.
+#
+# RED against the pre-change binary, measured: every author comma was DELETED
+# and every list packed.
+#
+# ⚠ PROPAGATION IS ASYMMETRIC, and cell `nested_magic` pins it. An interior
+# COMMENT is visible to every ancestor, because the gate reads the whole
+# container span. A magic comma is PER-CONTAINER: the probe's window is the
+# last element's span-end to the close, so a nested magic comma explodes only
+# its OWN list, and the parent then rides the ordinary "a multi-line item never
+# shares a line" rule.
+import std.io.{Alpha, Beta}
+import std.sync.{
+    Mutex,
+    Arc,
+}
+
+int packed_params(int a, int b):
+    return a + b
+
+int magic_params(
+    int a,
+    int b,
+):
+    return a + b
+
+int ident[T](T v):
+    return 1
+
+void main():
+    int a = 1
+    int packed_call = packed_params(1, 2)
+    int magic_call = packed_params(
+        1,
+        2,
+    )
+    int packed_generic = ident[int](3)
+    int magic_generic = ident[
+        int,
+    ](3)
+    Callable[int(int, int)] packed_closure = (int x, int y): x + y
+    Callable[int(int, int)] magic_closure = (
+        int x,
+        int y,
+    ): x + y
+    Vector[int] packed_array = [1, 2, 3]
+    Vector[int] magic_array = [
+        1,
+        2,
+        3,
+    ]
+    Set[int] magic_set = {
+        1,
+        2,
+    }
+    auto packed_tuple = (1, 2)
+    auto magic_tuple = (
+        1,
+        2,
+    )
+    Dict[String, int] packed_dict = {"a": 1, "b": 2}
+    Dict[String, int] magic_dict = {
+        "a": 1,
+        "b": 2,
+    }
+    Vector[Vector[int]] nested_magic = [
+        [
+            1,
+            2,
+        ], [3, 4]]
+    auto one_tuple = (7,)
+    print(a + packed_call + magic_call + packed_generic + magic_generic)
+    print(packed_closure(1, 2) + magic_closure(1, 2) + packed_array.len())
+    print(magic_array.len() + magic_set.len() + packed_tuple._0 + magic_tuple._0)
+    print(packed_dict.len() + magic_dict.len() + nested_magic.len() + one_tuple._0)

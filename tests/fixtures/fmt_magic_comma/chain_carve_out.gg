@@ -1,0 +1,44 @@
+# MAGIC TRAILING COMMA — the read is GATE-INDEPENDENT, so it works at a
+# CARVE-OUT too.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and it is written in the form the formatter must KEEP.
+#
+# `format_chain_segment` hands `Gate::UngatedCarveOut` straight into
+# `format_call_args_wrapped` for EVERY method chain of 2+ segments, because a
+# chain segment is pre-rendered into a sub-formatter whose COMMENT table is
+# empty. If the comma probe lived inside the `Gate::Span` arm it would be dead
+# there, and the author's comma would be SILENTLY DELETED inside a LAND kind
+# and outside the DEFER set — a Core #10 silent drop.
+#
+# It is not forced. Unlike the comment table, the SOURCE does travel into the
+# sub-formatter, so a source read works there; the probe is therefore taken
+# before the gate is consulted.
+#
+# CELLS, both polarities:
+#   (+) `magic_in_chain` — a 2+-segment chain whose INNER call carries an
+#       author trailing comma. Stays exploded.
+#   (−) `no_comma_in_chain` — a chain segment with NO comma, NESTED where a
+#       separator follows it. Stays packed. This is the false-positive twin:
+#       the probe must not read the OUTER list's separator as the segment's own
+#       comma, which is what an unbounded `source.len()` window would do.
+#
+# RED, both halves recorded:
+#   (+) against the pre-change binary — the comma was deleted and the chain
+#       packed.
+#   (−) BREAK-AND-WATCH — the behaviour it guards does not exist pre-change, so
+#       it cannot red that way. Widening the probe past the enclosing
+#       delimiter makes the `(−)` cell read the OUTER list's `,` and explode
+#       `filter(g)` for a comma nobody wrote.
+int g(int v):
+    return v
+
+void main():
+    Vector[int] xs = [1, 2, 3]
+    Vector[int] magic_in_chain = xs
+        .map((int v): v * 2)
+        .filter(
+            (int v): g(v) > 2,
+        )
+    Vector[Vector[int]] no_comma_in_chain = [xs.map((int v): v * 2).filter((int v): g(v) > 2), xs]
+    print(magic_in_chain.len() + no_comma_in_chain.len())

@@ -1,17 +1,22 @@
 # R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
 # cell: BRACE terminator × dict entries.  RED-verifies the trailing-
-# comma-cascade fix at the dict-literal site (parser.gg:2947 pre-fix
-# line).  Uses long-string keys/values so `gg fmt --in-place` keeps
-# the dict in its multi-line form with the trailing comma preserved.
+# comma-cascade fix at the dict-literal site (parser.gg:2947 pre-fix line).
+#
+# The long string keys and values this fixture used to carry were a DODGE: they
+# padded the dict past the width budget so `gg fmt` would keep it multi-line and
+# the trailing comma would survive. The 2026-08-16 magic-trailing-comma canon
+# RETIRES that dodge — the comma itself is now the author's
+# keep-this-exploded signal, at any width — so they are short again and the
+# shape holds on its own. Do not re-pad it.
 void main():
     Dict[String, String] resource_metadata = {
-        "long_resource_key_alpha": "long_resource_value_alpha_lorem",
-        "long_resource_key_beta": "long_resource_value_beta_ipsum",
-        "long_resource_key_gamma": "long_resource_value_gamma_dolor",
+        "ka": "va",
+        "kb": "vb",
+        "kg": "vg",
     }
-    String ka = "long_resource_key_alpha"
-    String kb = "long_resource_key_beta"
-    String kg = "long_resource_key_gamma"
+    String ka = "ka"
+    String kb = "kb"
+    String kg = "kg"
     print(resource_metadata.get(&ka).unwrap())
     print(resource_metadata.get(&kb).unwrap())
     print(resource_metadata.get(&kg).unwrap())

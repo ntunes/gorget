@@ -1,0 +1,41 @@
+# MAGIC TRAILING COMMA × PRESERVE-AND-CAP: the SECOND ENTRANCE to the exploded
+# emitter.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and it is written in the form the formatter must KEEP.
+#
+# The exploded emitter (`format_bracketed_broken_with_comments`) used to be
+# reachable ONLY through the interior-comment gate, so every cell of the
+# blank-line net arrived there with a comment. The magic comma opens a second
+# door: a list can now arrive exploded by an AUTHOR COMMA with no comment in it
+# at all. This fixture is that door.
+#
+# CELLS:
+#   (a) `paragraphed` — a blank between two elements of a comment-FREE list
+#       that is exploded by the AUTHOR COMMA alone. RED against the pre-change
+#       binary, measured: the whole list packed to `[1, 2, 3, 4]` and the blank
+#       went with it.
+#   (b) `mixed` — BOTH doors open at once: a comma-exploded list that also
+#       carries a leading comment, so the blank must still land ABOVE the
+#       comment rather than between it and its element. Not a new RED (the
+#       comment alone already exploded this one pre-change); it pins that the
+#       two entrances compose.
+#
+# The cap and delimiter-adjacent cells are the same emitter and are covered by
+# `fmt_blank_lines/exploded_containers_collapse.gg`, which is an INPUT fixture
+# because they are not fixed points.
+void main():
+    Vector[int] paragraphed = [
+        1,
+        2,
+
+        3,
+        4,
+    ]
+    Vector[int] mixed = [
+        1,
+
+        # second group
+        2,
+    ]
+    print(paragraphed.len() + mixed.len())

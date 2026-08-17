@@ -10,9 +10,16 @@
 # covered by the SH bootstrap's fmt sweep round-trip
 # (`sh_bootstrap_stage2_double_free_after_fmt_sweep`) which processes
 # the whole non-SH tree including files that DO declare variants across
-# multiple lines with trailing commas.  Filed language-follow-up
-# (formatter permissive stripping of trailing commas at enum variant
-# declarations) — not this brief's fix.
+# multiple lines with trailing commas.
+#
+# The enum variant DECLARATION position is a DEFER row of the
+# magic-trailing-comma axis, filed under TODO.md's fill-emitter-chokepoint
+# family entry ("the residual OUTSIDE the fill-emitter chokepoint", sub-item
+# (3)) — `format_variant_tuple_fields` is a hand-rolled `write(", ")` loop with
+# no `Doc` layer, so it neither honours the comma nor passes the
+# interior-comment gate. Routing it through `emit_delimited_list` buys both at
+# once. (The header used to cite a "filed language-follow-up" that did not
+# exist.)
 struct FirstLongFieldType:
     int a
 

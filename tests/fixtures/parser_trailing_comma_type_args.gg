@@ -1,21 +1,25 @@
 # R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
 # cell: BRACKET terminator × generic type args (parse_type_args).
-# RED-verifies the trailing-comma-cascade fix.  Uses many type params
-# with long names so `gg fmt --in-place` keeps the type-args list in
-# its multi-line form with the trailing comma preserved (fixture is
-# stable under formatter canonicalization).
+# RED-verifies the trailing-comma-cascade fix.
+#
+# The long type-parameter names this fixture used to carry were a DODGE: they
+# padded the list past the width budget so `gg fmt` would keep it multi-line
+# and the trailing comma would survive. The 2026-08-16 magic-trailing-comma
+# canon RETIRES that dodge — the comma itself is now the author's
+# keep-this-exploded signal, at any width — so the names are short again and
+# the shape holds on its own. Do not re-pad it.
 struct Quintuple[
-    LongTypeArgAlpha,
-    LongTypeArgBeta,
-    LongTypeArgGamma,
-    LongTypeArgDelta,
-    LongTypeArgEpsilon,
+    A,
+    B,
+    C,
+    D,
+    E,
 ]:
-    LongTypeArgAlpha first
-    LongTypeArgBeta second
-    LongTypeArgGamma third
-    LongTypeArgDelta fourth
-    LongTypeArgEpsilon fifth
+    A first
+    B second
+    C third
+    D fourth
+    E fifth
 
 void main():
     Quintuple[int, int, int, int, int] v = Quintuple[int, int, int, int, int](10, 20, 30, 40, 50)

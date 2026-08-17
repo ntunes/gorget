@@ -1,38 +1,34 @@
 # R39 Phase 2e per-shape regression fixture (Core #12 axis coverage) —
 # cell: PAREN terminator × function definition params (parse_params).
-# RED-verifies the trailing-comma-cascade fix.  Uses many params with
-# long names so `gg fmt --in-place` keeps the param list in its
-# multi-line form with the trailing comma preserved (fixture is stable
-# under formatter canonicalization).  A closure with long params covers
-# the parse_closure_expr site (per-iter param_idx counter axis).
-int sum_seven_ints(
-    int first_input,
-    int second_input,
-    int third_input,
-    int fourth_input,
-    int fifth_input,
-    int sixth_input,
-    int seventh_input,
+# RED-verifies the trailing-comma-cascade fix.  A closure with its own
+# trailing comma covers the parse_closure_expr site (per-iter param_idx
+# counter axis).
+#
+# The long parameter names this fixture used to carry were a DODGE: they padded
+# the lists past the width budget so `gg fmt` would keep them multi-line and the
+# trailing commas would survive. The 2026-08-16 magic-trailing-comma canon
+# RETIRES that dodge — the comma itself is now the author's
+# keep-this-exploded signal, at any width — so the names are short again and the
+# shape holds on its own. Do not re-pad it.
+int sum_seven(
+    int a,
+    int b,
+    int c,
+    int d,
+    int e,
+    int f,
+    int g,
 ):
-    return (first_input
-        + second_input
-        + third_input
-        + fourth_input
-        + fifth_input
-        + sixth_input
-        + seventh_input)
+    return a + b + c + d + e + f + g
 
 void main():
-    int total = sum_seven_ints(1, 2, 3, 4, 5, 6, 7)
+    int total = sum_seven(1, 2, 3, 4, 5, 6, 7)
     print(f"{total}")
     auto square_sum = (
-        int alpha_side_length,
-        int beta_side_length,
-        int gamma_side_length,
-        int delta_side_length,
-    ): (alpha_side_length * alpha_side_length
-        + beta_side_length * beta_side_length
-        + gamma_side_length * gamma_side_length
-        + delta_side_length * delta_side_length)
-    int s = square_sum(1, 2, 3, 4)
-    print(f"{s}")
+        int p,
+        int q,
+        int r,
+        int s,
+    ): p * p + q * q + r * r + s * s
+    int t = square_sum(1, 2, 3, 4)
+    print(f"{t}")
