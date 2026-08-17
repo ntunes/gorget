@@ -1295,6 +1295,25 @@ fn security_amp_for_in_element_assign_double_free() {
 }
 
 #[test]
+#[ignore = "SECURITY KNOWN GAP (found 2026-08-17 by the Track-E brief-review, \
+orchestrator-reproduced): reading an element out of a Vector[Option[<heap type>]] \
+and unwrapping it DOUBLE FREES and SIGABRTs on BOTH backends, while `gg check` \
+reports \"OK: no semantic errors\". NO assignment and NO loop are involved — this \
+is a READ — so it is a DISTINCT mechanism from the for-in element-rebind double \
+free, not the same bug in another costume. Discriminator is a COLLECTION ELEMENT \
+of type Option[heap]: scalar payloads and container-free Options are both fine, \
+and a LITERAL payload is a false negative. Un-ignore when the element read stops \
+corrupting the heap."]
+fn security_vector_option_heap_payload_double_free() {
+    // INTENDED: an ordinary read prints the payload and exits 0. There is
+    // nothing to reject here — every construct is safe, documented Gorget.
+    security_safe(
+        "attack_100_vector_option_heap_payload_double_free",
+        "aa",
+    );
+}
+
+#[test]
 fn cow_bareassign_owned_string_no_leak() {
     // `String v = sb` with `sb` a heap-owned String (`a + b`), both live to
     // scope exit. Baseline leaked sb's 23-byte buffer.
