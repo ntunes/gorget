@@ -12133,6 +12133,39 @@ fn fmt_one_tuple_type_keeps_comma() {
     );
 }
 
+/// KNOWN GAP (R42): `gg fmt` SILENTLY DELETES an attribute line above any
+/// construct whose parser arm discards attributes — the line never reaches
+/// the AST, and the formatter prints from the AST. Exit 0, no diagnostic;
+/// `--in-place` loses the source from disk. Core #10 for the formatter.
+///
+/// Asserts every attribute line SURVIVES, so it is RED at HEAD (observed:
+/// 5 in, 1 out — only the FUNCTION control round-trips). Un-ignore and
+/// graduate the fixture out of `known_gaps/` the round those positions
+/// honour or reject the attribute.
+#[test]
+#[ignore = "known gap (R42): gg fmt deletes attribute lines above static/type/newtype/const; un-ignore when those positions honour or reject"]
+fn fmt_does_not_delete_attribute_lines() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_silently_deletes_attribute_line.gg");
+    let source = std::fs::read_to_string(&fixture)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", fixture.display()));
+    let attr_lines = |s: &str| {
+        s.lines()
+            .filter(|l| l.trim_start().starts_with("@bogusattr"))
+            .count()
+    };
+    let before = attr_lines(&source);
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let after = attr_lines(&formatted);
+    assert_eq!(
+        after, before,
+        "gg fmt deleted {} of {before} attribute lines the author wrote.\n\
+         === formatted ===\n{formatted}",
+        before - after
+    );
+}
+
 /// `gg fmt` PRESERVES the author's grouping parentheses.
 ///
 /// `parse_paren_expr`'s parenthesized-expression branch records the wrapped

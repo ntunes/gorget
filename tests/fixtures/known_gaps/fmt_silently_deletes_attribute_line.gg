@@ -1,0 +1,48 @@
+# KNOWN GAP (R42) — `gg fmt` SILENTLY DELETES a line the author wrote.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is what
+# `gg fmt` does to an attribute line, so sweeping it bakes the defect in.
+#
+# An attribute above a construct whose parser arm DISCARDS attributes never
+# reaches the AST, and the formatter prints from the AST — so the line is gone
+# from the output. Exit 0, no diagnostic; with `gg fmt --in-place` the source
+# is lost from disk. Core #10 (lower-or-reject) applied to the formatter: it
+# must preserve the line or refuse to format, never quietly drop it.
+#
+# Measured at HEAD (2026-08-17), `gg fmt` on this file:
+#     attribute lines in : 5
+#     attribute lines out: 1        (only the one above a FUNCTION survives)
+#     exit 0, no diagnostic of any kind
+#
+# The surviving `keeps_it` costume is the CONTROL and the discriminator: the
+# `function` arm stores attributes, so the same spelling round-trips there.
+# The other four sample four cells of the dropping-position axis (static,
+# type alias, newtype, const decl). They are a SAMPLE, not the axis — the
+# full position set is larger, and pinning it is the class guard's job.
+#
+# INTENDED: an unknown attribute is REJECTED (`E_UnknownDirective`), so
+# `gg fmt` refuses to format exactly as it already does for a parse error
+# ("N parse error(s) found; refusing to format", exit 1). A KNOWN attribute in
+# these positions is HONOURED and round-trips — attributes attach to
+# DECLARATIONS, and every construct here introduces a name (ratified
+# 2026-08-17, docs/define-gorget/decisions.md).
+#
+# Wired test: fmt_does_not_delete_attribute_lines (tests/integration.rs,
+# #[ignore]d). It asserts every attribute line SURVIVES, so it is RED at HEAD
+# and goes green when the positions honour or reject. Graduate it out of
+# known_gaps/ the round that lands.
+@bogusattr
+void keeps_it():
+    print(1)
+
+@bogusattr
+public static int S = 7
+
+@bogusattr
+type Alias = int
+
+@bogusattr
+newtype Meters(int)
+
+@bogusattr
+const int C = 3
