@@ -1,0 +1,38 @@
+# KNOWN GAP — Core #8 SOUNDNESS: an UNDEFINED TYPE NAME is silently accepted
+# in 9 of 10 type positions. Measured at HEAD 2026-08-17.
+#
+# The resolver CAN reject undefined types — the LOCAL-BINDING position proves
+# it: `Zorblatt s = "hello"` is correctly rejected with 1 error. Every OTHER
+# position accepts garbage:
+#   - function parameters and return types
+#   - struct fields
+#   - tuple elements
+#   - every generic argument
+#   - Callable types
+#
+# Measured on this file: `gg check` -> "OK: no semantic errors".
+# `gg run` on the struct-field cell -> the backend emits broken C and the user
+# sees a raw `C compiler exited with: exit status: 1`, which
+# docs/language-design.md:120 already forbids ("errors should point to source,
+# not generated C"). In other cells the scout measured programs that BUILD AND
+# RUN SUCCESSFULLY with an undefined type.
+#
+# Not `str`-specific: `Zorblatt` is an arbitrary name that resolves to nothing.
+# This is the ROOT CAUSE of examples/md2html.gg's five-month invisible
+# breakage (it uses the removed `str` keyword and nothing complained).
+#
+# Because ONE position already rejects, this is a MISSING CALL at 9 write
+# sites — a Core #4 chokepoint fix, not 9 independent repairs.
+#
+# INTENDED: every type position rejects an unresolvable type name, with the
+# same diagnostic the local-binding position already produces.
+# Wired test: known_gap_undefined_type_name_rejected (tests/integration.rs,
+# #[ignore]d).
+struct Holder:
+    Zorblatt field
+
+int takes(Zorblatt x):
+    return 7
+
+void main():
+    print(takes(3))

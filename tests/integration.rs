@@ -50274,6 +50274,37 @@ fn d27_caret_fn_type_sigil_before_type_error() {
 // citation, so it flips green the round the bug is fixed. Wire, don't fix.
 
 #[test]
+#[ignore = "KNOWN GAP (Core #8 soundness, found 2026-08-17 by the example-rot scout, \
+orchestrator-verified): an UNDEFINED TYPE NAME is silently accepted in 9 of 10 type \
+positions. `Zorblatt s = \"hello\"` (a LOCAL binding) is correctly REJECTED, while a \
+struct field and a function parameter of the same undefined type both report \"OK: no \
+semantic errors\". Garbage types then reach the backend, which emits broken C (a raw \
+`C compiler exited with` leaking to the user) or in some cells builds and runs. The one \
+rejecting position proves the capability exists, so this is a missing call at 9 write \
+sites — a Core #4 chokepoint fix. Un-ignore when every type position rejects an \
+unresolvable name."]
+fn known_gap_undefined_type_name_rejected() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/undefined_type_name_accepted.gg");
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture),
+        "known_gaps/undefined_type_name_accepted.gg",
+    );
+
+    assert!(
+        !output.status.success(),
+        "`gg check` must REJECT an undefined type name in EVERY position — today it \
+         rejects only the local-binding position and accepts struct fields, params, \
+         return types, tuple elements, generic arguments and Callable types, letting \
+         garbage reach the backend.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+#[test]
 #[ignore = "KNOWN GAP (ratified 2026-08-16, define-gorget ledger; surfaced by the \
 R42 A2 style review): a `case` arm naming something that does not exist silently \
 becomes a CATCH-ALL that kills every arm below it. Measured at HEAD: `gg check` says \
