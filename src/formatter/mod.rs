@@ -3034,7 +3034,13 @@ impl Formatter {
             self.emitter.newline();
         } else {
             for (i, item) in t.items.iter().enumerate() {
-                if i > 0 {
+                // PRESERVE-AND-CAP, the member-container rule: keep the blanks
+                // the author wrote between members (the whole-buffer collapse
+                // caps a run at one), and manufacture none. This loop used to
+                // INSERT one unconditionally.
+                if i > 0
+                    && self.has_blank_line_between(t.items[i - 1].span.end, item.span.start)
+                {
                     self.emitter.blank_line();
                 }
                 self.emit_comments_before(item.span.start);
@@ -3153,7 +3159,11 @@ impl Formatter {
             self.emitter.newline();
         } else {
             for (i, method) in e.items.iter().enumerate() {
-                if i > 0 {
+                // PRESERVE-AND-CAP — see `format_trait`'s member loop. This
+                // one also used to INSERT a blank unconditionally.
+                if i > 0
+                    && self.has_blank_line_between(e.items[i - 1].span.end, method.span.start)
+                {
                     self.emitter.blank_line();
                 }
                 self.emit_comments_before(method.span.start);
@@ -3347,7 +3357,7 @@ impl Formatter {
         self.emit_trailing_comment_after_header(header_anchor_end);
         self.emitter.newline();
         self.emitter.indent();
-        for func in &eb.items {
+        for (i, func) in eb.items.iter().enumerate() {
             // R41 T-FMT-A (S1 N13): this child-collection loop was the ONE
             // such loop in the formatter with NO comment hooks at all, so
             // every comment interior to an `extern:` block escaped the block
@@ -3357,6 +3367,17 @@ impl Formatter {
             // loops exactly; `formatter_child_collection_loop_census` in
             // tests/lints.rs now pins the whole family so the next such
             // loop cannot ship hookless.
+            //
+            // PRESERVE-AND-CAP: it was also the one member loop with NO blank
+            // emitter of any kind, so an author's paragraph break between
+            // comment-headed groups of declarations was DELETED. This is an
+            // addition, not a removal — the sibling loops above manufactured a
+            // blank, this one erased them.
+            if i > 0
+                && self.has_blank_line_between(eb.items[i - 1].span.end, func.span.start)
+            {
+                self.emitter.blank_line();
+            }
             self.emit_comments_before(func.span.start);
             self.format_function(&func.node);
             self.emit_trailing_comment_after(func.span.end, false);
@@ -4237,7 +4258,21 @@ impl Formatter {
             self.format_block_stmts(block);
             return;
         }
-        for stmt in post_prelude {
+        for (i, stmt) in post_prelude.iter().enumerate() {
+            // PRESERVE-AND-CAP, the same author-conditioned guard
+            // `format_block_stmts` carries — this loop is its stand-in for a
+            // DESTRUCTURING closure, so without it a plain closure kept the
+            // author's paragraphing and a destructuring one silently lost it.
+            // Found by the blank-policy column of
+            // `formatter_child_collection_loop_census`.
+            if i > 0
+                && self.has_blank_line_between(
+                    post_prelude[i - 1].span.end,
+                    stmt.span.start,
+                )
+            {
+                self.emitter.blank_line();
+            }
             self.emit_comments_before(stmt.span.start);
             self.format_stmt(stmt);
             self.emit_trailing_comment_after(stmt.span.end, false);

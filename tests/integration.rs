@@ -10862,6 +10862,151 @@ fn fmt_comment_adjacent_blank_lines_source_runs() {
     run_gg("fmt_comment_adjacent_blank_lines.gg", "10");
 }
 
+// PRESERVE-AND-CAP in every MEMBER CONTAINER (ratified 2026-08-16, canon call
+// 2). `trait` and `equip` member loops used to INSERT a blank between every
+// pair of members unconditionally; `format_extern_block` had no blank emitter
+// at all, so an author's paragraph break inside an `extern "C":` block was
+// DELETED. Both are now the same author-conditioned
+// `has_blank_line_between` guard the `struct` / `enum` / block-statement loops
+// already carried.
+//
+// The assertion is BYTE-EXACT over the fixture's item region, so a
+// manufactured blank, a deleted blank and an uncapped run each fail with the
+// two texts printed. Cells, per container: (a) no author blank, (b) one author
+// blank, (c) a blank ABOVE a leading comment, (d) a 2-run capped to one.
+// `struct` / `enum` ride along as controls.
+//
+// RED, measured against the pre-change binary and in OPPOSITE directions:
+// trait/equip gained a blank at cell (a); extern lost its blanks at (b), (c)
+// and (d).
+#[test]
+fn fmt_member_container_blanks() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_blank_lines/member_containers.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+
+    // Header-immune: `fmt_body` drops the fixture's own leading comment block,
+    // which `gg fmt` reproduces verbatim, so the assertion is about the items.
+    let actual = fmt_body(&formatted);
+
+    const EXPECTED: &str = "\
+trait Shape:
+    float area(self)
+    float perimeter(self)
+
+    float width(self)
+
+    # geometry group
+    float height(self)
+
+    float depth(self)
+
+struct Point:
+    int x
+    int y
+
+    # grouped by meaning
+    int z
+
+    int w
+
+enum Direction:
+    North
+    South
+
+    # vertical
+    Up
+
+    Down
+
+equip Point:
+    int sum(self):
+        return self.x + self.y
+    int diff(self):
+        return self.x - self.y
+
+    int prod(self):
+        return self.x * self.y
+
+    # helpers
+    int neg(self):
+        return 0 - self.x
+
+    int dbl(self):
+        return self.x + self.x
+
+extern \"C\":
+    int c_open(int a)
+    int c_close(int a)
+
+    int c_flush(int a)
+
+    # the write family
+    int c_write(int a)
+
+    int c_read(int a)
+
+void main():
+    print(1)
+";
+    assert_eq!(
+        actual, EXPECTED,
+        "member-container blank-line preserve-and-cap regressed.\n\
+         === actual ===\n{actual}\n=== expected ===\n{EXPECTED}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "member-container blanks not idempotent");
+
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(
+        reparse.errors.is_empty(),
+        "member-container blank output does not re-parse: {:?}",
+        reparse.errors.first()
+    );
+}
+
+/// The member-container rule's SIBLING, at the one statement-body loop that
+/// cannot delegate to `format_block_stmts`: a closure whose parameter
+/// DESTRUCTURES gets a parser-injected bind prelude, so its body is emitted by
+/// `format_closure_post_prelude`. That loop had no blank emitter at all, so an
+/// author's paragraphing inside a destructuring closure was DELETED while the
+/// identical plain closure beside it kept its own.
+///
+/// Found by the blank-policy column added to
+/// `formatter_child_collection_loop_census` this round — it was the last
+/// child-collection loop reporting "emits no blank".
+///
+/// RED against the pre-change binary (measured): the blank inside `f`'s body
+/// was stripped; `g`'s (the plain-parameter CONTROL) survived.
+#[test]
+fn fmt_closure_body_blanks() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures/fmt_blank_lines/closure_bodies.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert_eq!(
+        source, formatted,
+        "closure-body blank preservation regressed — the fixture is a FIXED \
+         POINT.\n=== author wrote ===\n{source}\n=== formatter emitted ===\n{formatted}"
+    );
+
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "closure-body blanks not idempotent");
+
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(
+        reparse.errors.is_empty(),
+        "closure-body blank output does not re-parse: {:?}",
+        reparse.errors.first()
+    );
+}
+
 // R39 gorget-arena verdict fold: opinionated golden-file test. Any fmt
 // behavior change on the canonical sample must be either INTENDED (update
 // expected file same commit) or REGRESSION (fix formatter). See fixture

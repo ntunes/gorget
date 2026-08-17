@@ -46,7 +46,8 @@ Blocks are indented four spaces per level, Python-style — indentation is the
 block structure, and the formatter normalizes it.
 
 The formatter preserves the blank lines you write as paragraph breaks, and
-collapses any run of consecutive blank lines down to a single one. A blank line
+collapses any run of consecutive blank lines down to a single one. It never adds
+one you did not write. A blank line
 keeps its meaning next to comments, too: a blank above or below a comment, or
 between two comments, is a deliberate break and is kept. That includes a blank
 above a clause header — the space you leave between a long branch body and the
@@ -61,6 +62,12 @@ if ready:
 else:
     wait()
 ```
+
+The rule holds **inside every container**, not just between top-level items: the
+members of a `trait`, the methods of an `equip` block, the declarations in an
+`extern "C":` block, struct fields, enum variants, the statements of a function
+or a closure body. Wherever you can write two things one after another, the
+space you leave between them is yours.
 
 ### Suite layout is yours
 

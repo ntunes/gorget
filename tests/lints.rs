@@ -10833,8 +10833,8 @@ fn doc_source_citations_name_the_right_line() {
         ("152", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
         ("229", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
         ("496", "src/formatter/mod.rs:913", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("520", "src/formatter/mod.rs:2180", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
-        ("661", "src/formatter/mod.rs:2794", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("542", "src/formatter/mod.rs:2180", "the import sort_by; the sentence names the std/`xtd` ordering it implements"),
+        ("683", "src/formatter/mod.rs:2794", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
@@ -13566,6 +13566,31 @@ fn formatter_child_collection_loop_census() {
     }
     use Hooks::*;
 
+    /// BLANK-LINE POLICY a census row expects.
+    ///
+    /// A census keyed on `blank_line()` CALL SITES is structurally blind to a
+    /// container that has NO call — which is exactly what
+    /// `format_extern_block` was: the one member loop that never got a blank
+    /// emitter, so every author paragraph break inside an `extern "C":` block
+    /// was deleted. You cannot enumerate a MISSING call by grepping for calls;
+    /// here the absence is a ROW with a value, not an absence.
+    ///
+    /// DERIVED from the loop body, exactly the way `lead` / `trail` are. A
+    /// hand-written annotation on `CENSUS` could never flip, so the
+    /// break-and-verify would silently degrade into a comment.
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+    enum Blanks {
+        /// The `blank_line()` call is guarded by `has_blank_line_between` —
+        /// the author's paragraphing is preserved and nothing is manufactured.
+        /// This is the ratified member-container rule.
+        AuthorConditioned,
+        /// The loop emits a blank on a rule of its OWN (a section transition,
+        /// or one between every child). Every such row states why.
+        Rule,
+        /// The loop emits no blank at all. Every such row states why.
+        None_,
+    }
+
     // (enclosing fn, loop header text, expected hook state).
     //
     // Rationale for the non-`Both` rows:
@@ -13578,10 +13603,10 @@ fn formatter_child_collection_loop_census() {
     //   * `format_item`'s `Item::Module` loop is a SYNTHETIC container built by
     //     the loader for an imported module, not a source-level block, so it
     //     has no interior comments of its own to preserve.
-    const CENSUS: &[(&str, &str, Hooks)] = &[
-        ("format_module", "for item in &directives {", Both),
-        ("format_module", "for item in &imports {", Both),
-        ("format_module", "for (i, item) in rest.iter().enumerate() {", Both),
+    const CENSUS: &[(&str, &str, Hooks, Blanks)] = &[
+        ("format_module", "for item in &directives {", Both, Blanks::Rule),
+        ("format_module", "for item in &imports {", Both, Blanks::Rule),
+        ("format_module", "for (i, item) in rest.iter().enumerate() {", Both, Blanks::AuthorConditioned),
         // R41 fold: the four `meta if` nested-item loops (then / the elif
         // branch walk / the elif body / else) collapsed into ONE producer,
         // `format_nested_items`, when the nested-item blank preservation
@@ -13597,30 +13622,43 @@ fn formatter_child_collection_loop_census() {
             "format_item",
             "for (bi, (cond, items)) in mi.elif_branches.iter().enumerate() {",
             Leading,
+            Blanks::AuthorConditioned,
         ),
-        ("format_item", "for inner in items {", None_),
-        ("format_nested_items", "for (i, item) in items.iter().enumerate() {", Both),
-        ("format_struct", "for (i, field) in s.fields.iter().enumerate() {", Both),
-        ("format_enum", "for (i, variant) in e.variants.iter().enumerate() {", Both),
-        ("format_trait", "for (i, item) in t.items.iter().enumerate() {", Both),
-        ("format_equip", "for (i, method) in e.items.iter().enumerate() {", Both),
-        ("format_extern_block", "for func in &eb.items {", Both),
-        ("format_block_stmts", "for (i, stmt) in block.stmts.iter().enumerate() {", Both),
-        ("format_elif_else_blocks", "for (cond, body) in elif_branches {", Leading),
-        ("format_stmt", "for item in arms {", Leading),
-        ("format_stmt", "for arm in arms {", Leading),
-        ("format_stmt", "for (case_expr, body) in arms {", Leading),
+        ("format_item", "for inner in items {", None_, Blanks::None_),
+        ("format_nested_items", "for (i, item) in items.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_struct", "for (i, field) in s.fields.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_enum", "for (i, variant) in e.variants.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_trait", "for (i, item) in t.items.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_equip", "for (i, method) in e.items.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_extern_block", "for (i, func) in eb.items.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_block_stmts", "for (i, stmt) in block.stmts.iter().enumerate() {", Both, Blanks::AuthorConditioned),
+        ("format_elif_else_blocks", "for (cond, body) in elif_branches {", Leading, Blanks::AuthorConditioned),
+        ("format_stmt", "for item in arms {", Leading, Blanks::AuthorConditioned),
+        ("format_stmt", "for arm in arms {", Leading, Blanks::AuthorConditioned),
+        ("format_stmt", "for (case_expr, body) in arms {", Leading, Blanks::AuthorConditioned),
         // R42 Track D: the expression match moved out of `format_expr` into
         // `format_expr_inner` — `format_expr` is now the author-paren wrapper
         // that delegates to it. The SCOPE is re-pointed, never the count:
         // a census that reports 0 because its scope emptied is the guard
         // silently retiring itself.
-        ("format_expr_inner", "for arm in arms {", Leading),
+        ("format_expr_inner", "for arm in arms {", Leading, Blanks::AuthorConditioned),
         // R41 T-FMT-C: the closure post-prelude loop moved out of `format_expr`
         // into its own `format_closure_post_prelude`, so the indented and
         // (unreachable-for-parser-output) fallback paths share ONE emitter
         // instead of two copies of the hook pair.
-        ("format_closure_post_prelude", "for stmt in post_prelude {", Both),
+        //
+        // It is `format_block_stmts`' stand-in for a DESTRUCTURING closure, so
+        // its blank policy has to match that of its twin. This row is what the
+        // blank-policy column found on its first run: the loop reported
+        // `None_` while `format_block_stmts` reported `AuthorConditioned`,
+        // i.e. a destructuring closure was silently losing the paragraphing an
+        // otherwise identical plain closure kept.
+        (
+            "format_closure_post_prelude",
+            "for (i, stmt) in post_prelude.iter().enumerate() {",
+            Both,
+            Blanks::AuthorConditioned,
+        ),
     ];
 
     /// Child emitters that put their argument on its own source line(s), so a
@@ -13645,7 +13683,7 @@ fn formatter_child_collection_loop_census() {
     let mut depth: i32 = 0;
     // (enclosing fn, header text, has_leading, has_trailing)
     let mut open_loops: Vec<(String, String, i32, String)> = Vec::new();
-    let mut found: Vec<(String, String, Hooks)> = Vec::new();
+    let mut found: Vec<(String, String, Hooks, Blanks)> = Vec::new();
 
     for line in &src {
         let trimmed = line.trim_start();
@@ -13692,6 +13730,13 @@ fn formatter_child_collection_loop_census() {
                     if emits_children && per_line {
                         let lead = body.contains(".emit_comments_before(");
                         let trail = body.contains(".emit_trailing_comment_after(");
+                        // The blank-policy column, derived the same way. Both
+                        // author predicates count: `blank_before_clause` IS
+                        // `has_blank_line_between(0, anchor)` (see its body),
+                        // so a clause-header loop is author-conditioned too.
+                        let emits_blank = body.contains(".emitter.blank_line()");
+                        let author_blank = body.contains("has_blank_line_between")
+                            || body.contains("blank_before_clause");
                         found.push((
                             owner,
                             header,
@@ -13699,6 +13744,11 @@ fn formatter_child_collection_loop_census() {
                                 (true, true) => Both,
                                 (true, false) => Leading,
                                 _ => None_,
+                            },
+                            match (emits_blank, author_blank) {
+                                (true, true) => Blanks::AuthorConditioned,
+                                (true, false) => Blanks::Rule,
+                                (false, _) => Blanks::None_,
                             },
                         ));
                     }
@@ -13712,11 +13762,11 @@ fn formatter_child_collection_loop_census() {
         }
     }
 
-    let mut got: Vec<(String, String, Hooks)> = found;
+    let mut got: Vec<(String, String, Hooks, Blanks)> = found;
     got.sort();
-    let mut want: Vec<(String, String, Hooks)> = CENSUS
+    let mut want: Vec<(String, String, Hooks, Blanks)> = CENSUS
         .iter()
-        .map(|(f, h, s)| (f.to_string(), h.to_string(), *s))
+        .map(|(f, h, s, b)| (f.to_string(), h.to_string(), *s, *b))
         .collect();
     want.sort();
 
@@ -13733,6 +13783,134 @@ fn formatter_child_collection_loop_census() {
          the child emit and `emit_trailing_comment_after(child.span.end, false)` \
          after it, mirroring `format_trait` / `format_equip` — then add the row \
          here with its rationale."
+    );
+}
+
+/// The SECOND axis of the blank-line class: every `blank_line()` EMIT SITE in
+/// `src/formatter/mod.rs`, attributed to its enclosing fn and classified by the
+/// predicate that guards it.
+///
+/// The loop census above is keyed on child-collection LOOPS, which is the axis
+/// that can see a container with no blank emitter at all. It is blind in the
+/// other direction: a blank emitted from a NON-loop position (a clause header,
+/// a comment flush) has no row there, and so does a loop whose body calls a
+/// CLOSURE rather than a `self.format_*` method — that loop fails the census's
+/// `emits_children` test and is invisible to it. The two censuses together are
+/// the total population.
+///
+/// The ratified canon is PRESERVE-AND-CAP: the formatter keeps the blank lines
+/// the author wrote and manufactures none. So every emit site must be guarded
+/// by an author predicate, and the RULE set — sites that emit on a rule of the
+/// formatter's own — is closed at the two `format_module` SECTION TRANSITIONS.
+/// A new manufactured blank cannot ship silently: it arrives here as a RULE row
+/// with no entry.
+///
+/// **Break-and-verify:** drop the `has_blank_line_between` guard from any
+/// member loop (the manufacturing shape this canon retired) and that fn's row
+/// flips AUTHOR → RULE, which this test rejects.
+#[test]
+fn formatter_blank_emit_site_census() {
+    /// Predicates that make an emit AUTHOR-CONDITIONED. `blank_before_clause`
+    /// is `has_blank_line_between(0, anchor)` (see its body), and the two
+    /// comment-flush predicates read the source the same way.
+    const AUTHOR_PREDICATES: &[&str] = &[
+        "has_blank_line_between",
+        "blank_before_clause",
+        "blank_line_directly_above",
+        "blank_line_follows",
+    ];
+
+    /// (enclosing fn, AUTHOR-conditioned?, count). TOTAL over the third column
+    /// is the site count, so a new site is a diff here whatever it does.
+    ///
+    /// The two RULE rows and their reasons:
+    ///   * `format_module` × 2 — the SECTION transitions (directives → the
+    ///     first import; std ↔ non-std import groups). These separate emitted
+    ///     SECTIONS the formatter itself reorders, so there is no author
+    ///     position to read: the blank belongs to the layout, not to the
+    ///     source. Both predate the canon and are the closed exception set.
+    const EXPECTED: &[(&str, bool, usize)] = &[
+        ("emit_claimed_run", true, 1),
+        ("emit_orphan_comments_before_close", true, 1),
+        ("emit_remaining_comments", true, 1),
+        ("format_block_stmts", true, 1),
+        ("format_closure_post_prelude", true, 1),
+        ("format_elif_else_blocks", true, 2),
+        ("format_enum", true, 1),
+        ("format_equip", true, 1),
+        ("format_expr_inner", true, 2),
+        ("format_extern_block", true, 1),
+        ("format_item", true, 2),
+        ("format_module", false, 2),
+        ("format_module", true, 1),
+        ("format_nested_items", true, 1),
+        ("format_stmt", true, 8),
+        ("format_struct", true, 1),
+        ("format_trait", true, 1),
+    ];
+
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+    let src: Vec<&str> = content.lines().collect();
+
+    let mut cur_fn = String::from("<file scope>");
+    let mut in_tests = false;
+    let mut found: Vec<(String, bool)> = Vec::new();
+    for (i, line) in src.iter().enumerate() {
+        let t = line.trim_start();
+        if t.starts_with("mod tests") {
+            in_tests = true;
+        }
+        if line.starts_with("    ") {
+            let after_vis = t
+                .strip_prefix("pub(crate) fn ")
+                .or_else(|| t.strip_prefix("pub fn "))
+                .or_else(|| t.strip_prefix("fn "));
+            if let Some(rest) = after_vis {
+                cur_fn = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+            }
+        }
+        if !line.contains("blank_line()") || t.starts_with("//") {
+            continue;
+        }
+        if in_tests {
+            // `Emitter::blank_line`'s own unit test, not a formatter emit.
+            continue;
+        }
+        // The guard sits directly above the call — a short window, so a
+        // predicate belonging to an unrelated earlier statement cannot leak in.
+        let window = src[i.saturating_sub(6)..i].join("\n");
+        let author = AUTHOR_PREDICATES.iter().any(|p| window.contains(p));
+        found.push((cur_fn.clone(), author));
+    }
+
+    let mut got: Vec<(String, bool, usize)> = Vec::new();
+    for (f, a) in &found {
+        match got.iter_mut().find(|(gf, ga, _)| gf == f && ga == a) {
+            Some(row) => row.2 += 1,
+            None => got.push((f.clone(), *a, 1)),
+        }
+    }
+    got.sort();
+    let mut want: Vec<(String, bool, usize)> = EXPECTED
+        .iter()
+        .map(|(f, a, n)| (f.to_string(), *a, *n))
+        .collect();
+    want.sort();
+
+    assert_eq!(
+        got, want,
+        "the `blank_line()` EMIT-SITE census in `src/formatter/mod.rs` changed.\
+         \n\ngot:  {got:#?}\nwant: {want:#?}\n\n\
+         A row that moved from author-conditioned (`true`) to rule (`false`) is \
+         a MANUFACTURED blank — the formatter inventing paragraphing the author \
+         did not write, which the 2026-08-16 preserve-and-cap canon retired \
+         everywhere except the two `format_module` section transitions. A NEW \
+         site needs a row here, with its guarding predicate; a site that loses \
+         its guard needs the guard back, not a row."
     );
 }
 
