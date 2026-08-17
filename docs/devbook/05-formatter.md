@@ -799,8 +799,8 @@ expand them (that is Pass 0's job; see chapter 6). They re-print as written:
   at `src/formatter/mod.rs:2523-2557`), `meta type … (params)` functions, `meta assert`,
   `meta if`/`elif`/`else` over *items* (`src/formatter/mod.rs:2595-2670`), and
   `meta log` — all in `format_item` (`src/formatter/mod.rs:2485-2685`).
-- **Statement-level**: `meta if` (`:5044`), `meta for` (`:5061`), `meta match`
-  (`:5074`), `meta while` (`:5129`), `meta const` (`:5139`), `meta log` (`:5146`) in
+- **Statement-level**: `meta if` (`:5061`), `meta for` (`:5072`), `meta match`
+  (`:5085`), `meta while` (`:5140`), `meta const` (`:5150`), `meta log` (`:5157`) in
   `format_stmt`.
 - **Expression-level**: `meta`-prefixed operators — `a meta[op] b` for infix
   (`src/formatter/mod.rs:6637-6642`) and `meta <op>` token form
