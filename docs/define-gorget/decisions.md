@@ -2529,7 +2529,10 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   and carries the round's only self-host change (~11 lines in `parse_equip_item`, in 3
   real `parser.gg` copies; unmarked it yields 2 parse errors plus a phantom
   `void fmt(skip)` method — measured by running a self-host driver). (b) **THE
-  SILENT-DROP SURFACE IS 12 OF 19 ATTRIBUTE POSITIONS**, not just `static`/`const`:
+  SILENT-DROP SURFACE IS 14 OF 22 ATTRIBUTE POSITIONS** (corrected 2026-08-17 by the
+  brief gauntlet, which probed all 22 at HEAD: 6 REJECT / 14 silently dropped / 2 parse
+  error, `import` and `from … import` being two separate dropping arms; the scout's
+  "12 of 19" undercounted), not just `static`/`const`:
   trait, bench, equip method, equip block, static, module-var, const, type alias,
   newtype, extern block, import, suite and meta items all accept an attribute and
   silently discard it — `@fmt(skip)` on a type alias would have BEEN the silent-no-op
