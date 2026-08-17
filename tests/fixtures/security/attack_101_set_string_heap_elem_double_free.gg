@@ -1,0 +1,50 @@
+# CRITICAL — DOUBLE FREE from READ-ONLY iteration of a `Set[String]`.
+# BOTH backends. `gg check` clean.
+#
+# A `Set[String]` built from HEAP-allocated elements is constructed with the
+# byte-based `gorget_ordered_set_new` variant rather than `_new_str`, so it has
+# `key_drop=NULL` and no `key_materialize` -- it cannot own its heap keys.
+# Iterating it READ-ONLY twice then double-frees:
+#
+#     gg check                 -> OK: no semantic errors   (rc 0, no diagnostic)
+#     gg build / --backend=llvm-> rc 0
+#     run                      -> SIGABRT (rc 134), C AND LLVM
+#
+# ⚠⚠ THIS CELL IS WHY `Core #15e Q6` EXISTS. The failure needs TWO reads, and
+# every previous measurement used one. Measured at HEAD (2026-08-17):
+#
+#     literal elements, two read-only loops   -> rc 0   <- FALSE NEGATIVE
+#     HEAP elements, ONE read-only loop       -> rc 0   <- ACCIDENTALLY CORRECT
+#     HEAP elements, TWO read-only loops      -> rc 134 <- the defect
+#
+# So a fixture with literal elements proves nothing, and a fixture with one loop
+# proves nothing either. It was on the strength of a one-loop/literal probe that
+# this shape was twice reported "does not crash". DO NOT reduce this fixture to
+# one loop or to literal elements.
+#
+# ⚠ NO ASSIGNMENT ANYWHERE. This is pure reading. It is therefore a DISTINCT
+# mechanism from both the for-loop element REBIND double free and the
+# `unwrap()`-on-a-borrowed-payload double free -- three different producers
+# reachable from safe syntax, sharing one symptom.
+#
+# The underlying defect is filed as the `Set[String]` byte-variant-ctor entry in
+# TODO.md, which recorded it as a LEAK plus a byte-vs-content dedup difference.
+# It is worse than that: with heap elements it corrupts the allocator. The leak
+# and the dedup difference are real and are the same root -- one missing `_str`
+# ctor selection -- but severity follows the crash.
+#
+# INTENDED: this program prints `aa` and `bb`, twice, and exits 0. There is
+# nothing to reject: a set of Strings iterated twice is ordinary Gorget.
+#
+# Wired test: security_set_string_heap_elem_double_free (tests/security.rs,
+# #[ignore]d), asserting the INTENDED output. Drop the #[ignore] when the
+# str-keyed ctor is selected for resource-typed elements.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Set[String] s = {mk("a", "a"), mk("b", "b")}
+    for e in s:
+        print(e)
+    for e in s:
+        print(e)

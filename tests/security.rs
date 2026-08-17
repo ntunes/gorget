@@ -1295,6 +1295,24 @@ fn security_amp_for_in_element_assign_double_free() {
 }
 
 #[test]
+#[ignore = "SECURITY KNOWN GAP (found 2026-08-17 by the Track-E brief-review pass 3, \
+orchestrator-reproduced): a Set[String] built from HEAP elements uses the byte-based \
+gorget_ordered_set_new instead of _new_str, so it has key_drop=NULL and cannot own its \
+keys -- READ-ONLY iteration twice then DOUBLE FREES, SIGABRT on BOTH backends, while \
+`gg check` reports \"OK: no semantic errors\". NO assignment anywhere, so it is a THIRD \
+mechanism distinct from the for-in element rebind and from unwrap-on-a-borrowed-payload. \
+⚠ The cell needs TWO loops and HEAP elements: one loop is ACCIDENTALLY CORRECT and \
+literal elements are a false negative -- which is how this was twice reported as not \
+crashing. Un-ignore when the str-keyed ctor is selected for resource-typed elements."]
+fn security_set_string_heap_elem_double_free() {
+    // INTENDED: reading a set of Strings twice prints them twice and exits 0.
+    security_safe(
+        "attack_101_set_string_heap_elem_double_free",
+        "aa\nbb\naa\nbb",
+    );
+}
+
+#[test]
 #[ignore = "SECURITY KNOWN GAP (found 2026-08-17 by the Track-E brief-review, \
 orchestrator-reproduced and axis-corrected): `unwrap()` on an Option payload \
 BORROWED out of a collection frees what the collection still owns — DOUBLE FREE, \
