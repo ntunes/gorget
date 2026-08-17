@@ -1,0 +1,20 @@
+# ==== T-FMT-B — SYNONYM: the nullary paren spelling OUTSIDE a `case` arm.
+# SCOPE CLAIM: the `is` / `is not` EXPRESSION positions. The same
+# `parse_pattern` entry serves them, so the preserved spelling is not a
+# `case`-only property — the corpus already carried a live
+# `if bb.term is not GTNone():` that the formatter rewrote.
+# Pre-fix RED (measured): `c is not Color.Red():` came back
+# `c is not Color.Red`, `c is Color.Green()` came back `c is Color.Green`.
+enum Color:
+    Red
+    Green
+
+int is_expr(Color c):
+    if c is not Color.Red():
+        return 0
+    if c is Color.Green():
+        return 1
+    return 2
+
+void main():
+    print(is_expr(Color.Red()) + is_expr(Color.Green()))

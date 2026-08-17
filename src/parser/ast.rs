@@ -1087,6 +1087,15 @@ pub enum Pattern {
     Constructor {
         path: Vec<Spanned<String>>,
         fields: Vec<Spanned<Pattern>>,
+        /// True when the author WROTE the argument-list parens. Only
+        /// informative for the NULLARY case: with fields the parens are
+        /// mandatory, without them `Color.Red` and `Color.Red()` build the
+        /// SAME node, so the choice is authorial information the formatter
+        /// would otherwise invent or delete. Same family as
+        /// `ArrayLiteralSpelling`. Compiler passes that SYNTHESISE a
+        /// constructor pattern (the loader's variant-qualification rewrite)
+        /// write `false`; only the parser has an author to speak for.
+        paren_spelled: bool,
     },
 
     /// Tuple destructure: (x, y, z)
@@ -1103,6 +1112,9 @@ pub enum Pattern {
     DotShorthand {
         variant: Spanned<String>,
         fields: Vec<Spanned<Pattern>>,
+        /// See `Pattern::Constructor::paren_spelled`: `.Red` and `.Red()`
+        /// build the same node.
+        paren_spelled: bool,
     },
 }
 

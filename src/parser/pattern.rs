@@ -172,13 +172,17 @@ impl Parser {
                     self.expect(&Token::RParen)?;
                     let end = self.previous_span();
                     Ok(Spanned::new(
-                        Pattern::DotShorthand { variant, fields },
+                        Pattern::DotShorthand { variant, fields, paren_spelled: true },
                         start.merge(end),
                     ))
                 } else {
                     let end = variant.span;
                     Ok(Spanned::new(
-                        Pattern::DotShorthand { variant, fields: Vec::new() },
+                        Pattern::DotShorthand {
+                            variant,
+                            fields: Vec::new(),
+                            paren_spelled: false,
+                        },
                         start.merge(end),
                     ))
                 }
@@ -211,7 +215,7 @@ impl Parser {
             self.expect(&Token::RParen)?;
             let end = self.previous_span();
             Ok(Spanned::new(
-                Pattern::Constructor { path, fields },
+                Pattern::Constructor { path, fields, paren_spelled: true },
                 start.merge(end),
             ))
         } else if path.len() == 1 {
@@ -227,6 +231,7 @@ impl Parser {
                 Pattern::Constructor {
                     path,
                     fields: Vec::new(),
+                    paren_spelled: false,
                 },
                 start.merge(end),
             ))

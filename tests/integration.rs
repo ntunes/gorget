@@ -21920,7 +21920,13 @@ fn format_pattern_canonical(pat: &Pattern) -> String {
         Pattern::Wildcard => "_".to_string(),
         Pattern::Binding(name) => name.clone(),
         Pattern::Literal(expr) => format_expr_canonical(&expr.node),
-        Pattern::Constructor { path, fields } => {
+        // `paren_spelled` is DELIBERATELY ignored here (`..`). This is the RUST
+        // HALF of the `parser_comparison` oracle; its hand-synced Gorget twin is
+        // `tests/fixtures/self_host_parser/format.gg` (`PConstructor` arm), whose
+        // AST has no such field. Teaching this printer to emit `()` for a
+        // paren-spelled nullary variant would mismatch every self-host file.
+        // Keep in sync with `self_host_parser/format.gg`.
+        Pattern::Constructor { path, fields, .. } => {
             let name = path
                 .iter()
                 .map(|s| s.node.as_str())
@@ -21951,7 +21957,8 @@ fn format_pattern_canonical(pat: &Pattern) -> String {
             parts.join(" | ")
         }
         Pattern::Rest => "..".to_string(),
-        Pattern::DotShorthand { variant, fields } => {
+        // `paren_spelled` deliberately ignored — see the `Constructor` arm above.
+        Pattern::DotShorthand { variant, fields, .. } => {
             if fields.is_empty() {
                 format!(".{}", variant.node)
             } else {
@@ -50546,6 +50553,50 @@ fn fmt_form_visibility_private_forms() {
 #[test]
 fn fmt_form_synonym_elif_canonicalized() {
     assert_fmt_form_preserved("synonym_elif_canonicalized.gg");
+}
+
+/// SYNONYM — the NULLARY-VARIANT PATTERN paren spelling, `case` position.
+/// `X()`/`X`, `A.B()`/`A.B`, `.V()`/`.V`, `None()`/`None`, an Or-arm
+/// alternative, and a fielded control. RED pre-fix (measured): every
+/// paren-spelled cell came back bare — `case Sun():` → `case Sun:`,
+/// `case Color.Red():` → `case Color.Red:`, `case .Red():` → `case .Red:`,
+/// `case None():` → `case None:`, Or-arm stripped.
+///
+/// ⚠ `case Sat:` and `case None:` CANNOT go red either way — they parse to
+/// `Pattern::Binding` / `Pattern::Literal`, which carry no paren information.
+/// They pin the ABSENCE of a `()` mandate; verified by the inverted-predicate
+/// break, under which they stayed put while `case Color.Green:` and
+/// `case .Green:` wrongly gained parens.
+#[test]
+fn fmt_form_synonym_case_nullary_paren() {
+    assert_fmt_form_preserved("synonym_case_nullary_paren.gg");
+}
+
+/// SYNONYM — a nullary variant NESTED inside a fielded pattern, the cell the
+/// `case X()`-only framing misses (and the only content of the two
+/// `match_nested_enum.gg` corpus files). RED pre-fix (measured):
+/// `case Some(Color.Red()):` → `case Some(Color.Red):`.
+#[test]
+fn fmt_form_synonym_case_nullary_paren_nested() {
+    assert_fmt_form_preserved("synonym_case_nullary_paren_nested.gg");
+}
+
+/// SYNONYM — the same spelling OUTSIDE a `case` arm: the `is` / `is not`
+/// expression positions, which share `parse_pattern`. RED pre-fix (measured):
+/// `c is not Color.Red():` → `c is not Color.Red`.
+#[test]
+fn fmt_form_synonym_is_nullary_paren() {
+    assert_fmt_form_preserved("synonym_is_nullary_paren.gg");
+}
+
+/// SYNONYM — the two BINDING pattern positions, neither of which the corpus
+/// exercises: a list-comprehension `for` pattern and a var-decl destructure.
+/// Both shapes were probed (parse + `gg check`) rather than assumed. RED
+/// pre-fix (measured): `[1 for Color.Red() in cs]` → `[1 for Color.Red in cs]`
+/// and `auto Color.Red() = c` → `auto Color.Red = c`.
+#[test]
+fn fmt_form_synonym_case_nullary_paren_bindings() {
+    assert_fmt_form_preserved("synonym_case_nullary_paren_bindings.gg");
 }
 
 /// CLASS GUARD — `gg fmt` output must RE-PARSE, for every `.gg` file in the

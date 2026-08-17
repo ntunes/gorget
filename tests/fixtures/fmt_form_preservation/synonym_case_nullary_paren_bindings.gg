@@ -1,0 +1,25 @@
+# ==== T-FMT-B — SYNONYM: the nullary paren spelling at the two BINDING
+# pattern positions.
+# SCOPE CLAIM: the list-comprehension `for` pattern and the var-decl
+# destructure — the two `parse_pattern` call sites the corpus has NO instance
+# of, so these cells are net-new coverage rather than corpus-driven. Both were
+# PROBED, not assumed: each shape parses, `gg check`s clean, and was measured
+# against the pre-change binary.
+# Pre-fix RED (measured): `[1 for Color.Red() in cs]` came back
+# `[1 for Color.Red in cs]`, and `auto Color.Red() = c` came back
+# `auto Color.Red = c`.
+enum Color:
+    Red
+    Green
+
+struct Wrap:
+    int v
+
+void main():
+    Vector[Color] cs = [Color.Red(), Color.Green()]
+    Vector[int] ones = [1 for Color.Red() in cs]
+    Vector[Wrap] ws = [Wrap(1), Wrap(2)]
+    Vector[int] inners = [w.v for Wrap(w) in ws]
+    Color c = Color.Red()
+    auto Color.Red() = c
+    print(ones.len() + inners.len())

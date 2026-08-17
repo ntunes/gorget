@@ -606,7 +606,7 @@ pub fn lower_pattern_condition(
             FunctionBuilder::const_bool(true)
         }
 
-        Pattern::Constructor { path, fields } => {
+        Pattern::Constructor { path, fields, .. } => {
             let variant_name = if let Some(last) = path.last() {
                 last.node.clone()
             } else {
@@ -808,7 +808,7 @@ pub fn emit_pattern_bindings(
             }
         }
 
-        Pattern::Constructor { path, fields } => {
+        Pattern::Constructor { path, fields, .. } => {
             let variant_name = if let Some(last) = path.last() {
                 last.node.clone()
             } else {
@@ -1077,7 +1077,7 @@ pub fn emit_pattern_bindings(
             }
         }
 
-        Pattern::DotShorthand { variant, fields } => {
+        Pattern::DotShorthand { variant, fields, .. } => {
             // Look up enum name from scrutinee type (same as Constructor)
             let enum_name = ctx.type_registry.type_name(scrut_type)
                 .or_else(|| {

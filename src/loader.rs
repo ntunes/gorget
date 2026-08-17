@@ -1289,10 +1289,12 @@ fn qualify_pattern(pattern: &mut Spanned<Pattern>, vm: &HashMap<String, String>)
                         Spanned::new(vname, span),
                     ],
                     fields: vec![],
+                    // Synthesised: the author wrote a bare `Debug`, no parens.
+                    paren_spelled: false,
                 };
             }
         }
-        Pattern::Constructor { path, fields } => {
+        Pattern::Constructor { path, fields, .. } => {
             // If already qualified, leave as-is
             if path.len() == 1 {
                 let vname = path[0].node.clone();

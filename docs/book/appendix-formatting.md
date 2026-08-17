@@ -27,10 +27,11 @@ Each invocation formats a single file.
   decides the cases below: where the language accepts more than one *spelling*
   of the same thing, the formatter keeps the one you wrote. Which escape spelled
   a character, which quotes wrapped a string, the base of a number, `byte`
-  versus `uint8`, `await x` versus `x.await()`, the parentheses you added to
-  show what groups first — these are choices you made for a reader, and
-  re-spelling them is not the formatter's job. What the formatter owns is
-  layout: indentation, wrapping, spacing, blank-line runs, comment columns.
+  versus `uint8`, `await x` versus `x.await()`, `case Idle()` versus
+  `case Idle`, the parentheses you added to show what groups first — these are
+  choices you made for a reader, and re-spelling them is not the formatter's
+  job. What the formatter owns is layout: indentation, wrapping, spacing,
+  blank-line runs, comment columns.
 - **Re-parseable.** The output is always a program the compiler accepts, and it
   parses to the same tree as the input.
 - **Idempotent.** `gg fmt` applied to already-formatted source is a no-op:
@@ -105,6 +106,22 @@ The same holds for `await x` versus `x.await()`, for the bare `with r:` against
 `with make() as r:`, and for a module-level `int counter = 0` against the
 explicit `static int counter = 0`. If you ever want the opposite — one canonical
 construct chosen for you — that is a rewriting tool's job, not the formatter's.
+
+A **nullary variant pattern** is in the same family. `Idle` and `Idle()` match
+the same thing, and the parentheses are how you say "this is a variant, not a
+name I am binding" — so both spellings are kept, wherever a pattern is legal:
+
+```gorget
+match state:
+    case Idle():                 # stays parenthesised
+    case Mode.Fast:              # …and a bare qualified variant stays bare
+    case .Slow():                # dot-shorthand keeps its choice too
+```
+
+This is not cosmetic. A bare name in a pattern is *also* the spelling of a
+binding, so `case Idle:` and `case Idle():` differ exactly when the name does
+not resolve to a variant — one fails, the other silently matches everything.
+Rewriting one into the other would trade a compile error for a catch-all.
 
 The single exception is the pure keyword synonym `else if`, which carries no
 information `elif` does not; it is canonicalized to `elif`.

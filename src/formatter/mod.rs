@@ -5180,14 +5180,17 @@ impl Formatter {
             Pattern::Wildcard => self.emitter.write("_"),
             Pattern::Literal(expr) => self.format_expr(expr),
             Pattern::Binding(name) => self.emitter.write(name),
-            Pattern::Constructor { path, fields } => {
+            Pattern::Constructor { path, fields, paren_spelled } => {
                 for (i, seg) in path.iter().enumerate() {
                     if i > 0 {
                         self.emitter.write(".");
                     }
                     self.emitter.write(&seg.node);
                 }
-                if !fields.is_empty() {
+                // `!fields.is_empty()` is not belt-and-braces: it keeps a
+                // SYNTHESISED constructor that has fields but no author
+                // (`paren_spelled: false`) emitting legal syntax.
+                if !fields.is_empty() || *paren_spelled {
                     self.emitter.write("(");
                     for (i, field) in fields.iter().enumerate() {
                         if i > 0 {
@@ -5217,10 +5220,10 @@ impl Formatter {
                 }
             }
             Pattern::Rest => self.emitter.write(".."),
-            Pattern::DotShorthand { variant, fields } => {
+            Pattern::DotShorthand { variant, fields, paren_spelled } => {
                 self.emitter.write(".");
                 self.emitter.write(&variant.node);
-                if !fields.is_empty() {
+                if !fields.is_empty() || *paren_spelled {
                     self.emitter.write("(");
                     for (i, field) in fields.iter().enumerate() {
                         if i > 0 {

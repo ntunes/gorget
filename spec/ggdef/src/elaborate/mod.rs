@@ -2926,7 +2926,7 @@ impl Elaborator {
             ast::Pattern::Wildcard => Ok(Pattern::Wildcard),
             ast::Pattern::Binding(name) => Ok(Pattern::Binding(name.clone())),
             ast::Pattern::Literal(e) => Ok(Pattern::Literal(Box::new(self.elaborate_expr(e)?))),
-            ast::Pattern::Constructor { path, fields } => {
+            ast::Pattern::Constructor { path, fields, .. } => {
                 let variant = path
                     .last()
                     .ok_or_else(|| ElabError::new("empty constructor path", pat.span))?
@@ -2938,7 +2938,7 @@ impl Elaborator {
                 }
                 Ok(Pattern::Variant { variant, fields: fs })
             }
-            ast::Pattern::DotShorthand { variant, fields } => {
+            ast::Pattern::DotShorthand { variant, fields, .. } => {
                 let mut fs = Vec::with_capacity(fields.len());
                 for f in fields {
                     fs.push(self.elaborate_pattern(f)?);

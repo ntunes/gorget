@@ -459,6 +459,24 @@ Reading the *shape* instead of the layout is the trap this replaces, and it
 fails in both directions — a synthetic `Block { Throw }` is not an indented
 suite, and a one-statement indented suite is not a one-liner.
 
+A **nullary variant pattern** is the same story one layer down. `case Idle:`
+and `case Idle():` are the same match, and a zero-field
+`Pattern::Constructor` is what both a parenthesised nullary and a qualified
+bare name (`Mode.Fast`) parse to — so a formatter that always emits `()` and
+one that never does are each wrong for half the corpus. `paren_spelled` on
+`Pattern::Constructor` and `Pattern::DotShorthand` carries the choice, written
+at the four parser branches that did or did not consume the `(`. It is the
+`ArrayLiteralSpelling` shape: the node already exists and already reaches the
+formatter, so the bit belongs on it rather than in a span-keyed sideband. The
+emit rule is `!fields.is_empty() || paren_spelled` — the first disjunct keeps a
+*synthesised* constructor (the loader's variant-qualification rewrite, which
+has no author and writes `false`) emitting legal syntax.
+
+The distinction is not cosmetic either: an unqualified bare name in a pattern is
+also the spelling of a *binding*, so the two forms diverge exactly when the name
+is not a variant of the scrutinee — one fails to resolve, the other silently
+becomes a catch-all.
+
 Two positions accept only one spelling, and the emitters there deliberately
 carry no layout read: a statement-position `match` rejects `else: stmt`, and
 `on error`'s inline form is colon-less (`on error stmt`), so the inline emitter
