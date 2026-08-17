@@ -49760,6 +49760,43 @@ fn d27_caret_fn_type_sigil_before_type_error() {
 /// passes its callable as a parameter. It shares the fn-type param-suffix
 /// parse position, not the callee shape.)
 #[test]
+#[ignore = "KNOWN GAP (found 2026-08-17 during the R42 Phase-4b brief review, \
+build-and-run): when the LAST argument of a call carries an AUTHOR GROUPING PAREN, \
+an interior comment after it ESCAPES the call and re-parents to the enclosing block. \
+`parse_paren_expr` returns the inner node and sidebands the paren, so the element span \
+excludes the author's `)`; `paren_tuple_gate`'s `)` scan then locks onto the AUTHOR's \
+paren and truncates `container_end`. The control (same shape, no author paren) is \
+correct, so the paren is the discriminator. The damaged output is IDEMPOTENT, so no \
+round-trip gate can see it. Un-ignore when the gate's window is anchored past the \
+author's paren layers (`author_paren_layers`)."]
+fn known_gap_fmt_comment_escapes_call_with_author_paren() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_comment_escapes_call_with_author_paren.gg");
+    let src = std::fs::read_to_string(&fixture).expect("fixture unreadable");
+    let formatted = gorget::formatter::format_source_infallible(&src);
+
+    // INTENDED: the comment stays INSIDE the call it annotates. Today it is
+    // emitted after the call's closing paren, at block indent.
+    let body = fmt_body(&formatted);
+    let comment_line = body
+        .lines()
+        .position(|l| l.contains("after the paren"))
+        .expect("marker comment vanished entirely");
+    let close_line = body
+        .lines()
+        .position(|l| l.trim() == ")" || l.trim_end().ends_with("))"))
+        .expect("call close not found");
+
+    assert!(
+        comment_line < close_line,
+        "the comment must stay INSIDE the call it annotates — today the author grouping \
+         paren on the last argument truncates the gate window and the comment escapes to \
+         the enclosing block.\n--- formatted ---\n{formatted}"
+    );
+}
+
+#[test]
 #[ignore = "KNOWN GAP (ratified 2026-08-16, define-gorget ledger; surfaced by the \
 R42 A2 style review): a `case` arm naming something that does not exist silently \
 becomes a CATCH-ALL that kills every arm below it. Measured at HEAD: `gg check` says \
