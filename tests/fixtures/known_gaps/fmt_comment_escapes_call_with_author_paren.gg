@@ -42,10 +42,26 @@
 # INTENDED: the comment stays inside the call, exactly as the control does.
 # Wired test: known_gap_fmt_comment_escapes_call_with_author_paren
 # (tests/integration.rs, #[ignore]d).
+# TWO COSTUMES, both measured 2026-08-17. The paren-at-the-TAIL costume is the
+# one a naive fix MISSES: `author_paren_layers` is keyed by the EXACT span of the
+# WRAPPED node, while `parse_infix` spans a binary as `lhs.merge(paren-stripped
+# rhs)`, so a lookup on the element span returns 0 for `x + (y)` even though the
+# author's `)` still sits before the delimiter. The fix must advance past every
+# layer whose span ENDS AT the element's end, not just an exact-span hit.
 void sink(int a, int b):
     print(a + b)
 
+int add1(int a):
+    return a
+
 void main():
+    # COSTUME 1 — the element IS the parenthesised expression
     sink(1, (2 + 3)
         # after the paren'd last arg
     )
+    int y = 2
+    # COSTUME 2 — the paren sits at the TAIL of a larger element
+    print(add1(
+        1 + (y)
+        # tail of a binary whose rhs is parenthesised
+    ))
