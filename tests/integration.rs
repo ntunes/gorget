@@ -18326,6 +18326,15 @@ struct ExampleEntryPoint {
 
 /// Every shipped example must BUILD, on every lane.
 ///
+/// ⚠ **The corpus convention this gate enforces: EVERY top-level
+/// `examples/*.gg` IS an entry point, and a package directory has exactly ONE,
+/// named `main.gg`.** Helper modules live in a subdirectory beside a `main.gg`;
+/// a `.gg` in a directory with no `main.gg` is classified by nothing and fails
+/// the gate BY NAME. That convention is what lets discovery stay a shape test
+/// instead of a source-shape heuristic, and it is why a non-`main` helper
+/// dropped at the top level gets a comprehensible message instead of a raw
+/// linker error.
+///
 /// One looping test rather than one test per example, because discovery is a
 /// runtime list and Rust cannot generate test functions from one. ALL failures
 /// are collected and reported together — a loop that returned on the first
