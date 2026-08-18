@@ -2439,6 +2439,34 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   a grouped import still leaves the group". POSSIBLE FUTURE, filed separately, not part
   of this: a bundled import form (`from schema import CollectionKind(..)`) that makes
   the relationship expressible.
+- 2026-08-18 — **🎯 EVERYTHING RUNS UNDER A SANITIZER (owner, live session). MEMORY
+  SAFETY IS THE LANGUAGE'S PURPOSE, SO AN UNSANITIZED SUITE IS NOT A SUITE.**
+  Owner: *"we should be running everything under a sanitizer"* — in response to the
+  measured coverage below. This is a STANDING OBJECTIVE, not a one-round task.
+  **What forced it (measured 2026-08-18):** of **2100** top-level fixtures, **13**
+  carry an inline sanitize assertion and 175 more live in `tests/fixtures/security/`.
+  **2087 — 99.4% — never run under a sanitizer at all**; they get an stdout compare
+  and nothing else. A stdout compare cannot observe a use-after-free, so for memory
+  safety the corpus is close to unarmed.
+  **The consequence, stated plainly:** every memory-safety defect found in R42 — an
+  `unwrap()`-on-borrowed-payload double free, a `Set[String]` heap-element double
+  free reachable from READ-ONLY code, the `for`-loop element rebind double free, a
+  silent LLVM miscompile of an unchecked global initializer — was found
+  **INCIDENTALLY**, by a reviewer hand-building an ASan probe while investigating
+  something else. Two were sitting in the corpus as PASSING tests. The number of
+  such defects we have found is therefore a function of how often somebody happened
+  to look, not of how many exist. That is the defect this ruling retires.
+  **Shape (Core #6, env-gate → burn down → fatal).** The rollout is determined by
+  the corpus-wide ASan+UBSan census now running: a gate cannot be switched on while
+  it reds N fixtures. Expected form is a separate CI job (mirroring the
+  `llvm-backend` job so the main gate's wall-clock is unaffected) running the corpus
+  under `--sanitize`, plus a **shrink-only allowlist** of known-dirty fixtures so the
+  count can only go down and a NEWLY dirty fixture reds on arrival. Each allowlist
+  row cites its filed defect. ⚠ Do not design the rollout before the census lands —
+  the dirty count decides between "flip it on now" and "burn down first".
+  ⚠ **`--sanitize` is `-fsanitize=address,undefined`** (`src/main.rs`), so this buys
+  UB detection as well as memory errors; `assert_gg_sanitize_clean`
+  (`tests/integration.rs`) is the in-tree precedent for build-and-run shape.
 - 2026-08-18 — **🎯 THE BARE `for x in coll` BINDING IS A MUTABLE PRIVATE COPY, NOT A
   READ-ONLY BORROW (owner, live session). THE REFERENCE IS WRONG AND GETS CORRECTED.**
   Assigning to the loop binding in the BARE form — `for x in coll: x = v` — writes to a
