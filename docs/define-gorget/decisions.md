@@ -2519,11 +2519,25 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   ⚠ **SCOPE BOUNDARY (`@fmt(skip)` round).** Five positions where an attribute does not
   parse at all today — trait method, nested fn, enum variant, struct field, extern-block
   member — KEEP their parse error for now; adding attribute parsing there is a real
-  widening (new AST fields, new loops, ×3 self-host copies) and is filed separately. Note
-  the rule's remedy clause "attach to the members instead" is **VACUOUS for `extern "C":`**
-  rather than merely unimplemented: an extern declaration has no body to skip, so
-  REJECT-the-block with no member alternative is the correct END STATE there, not a gap.
-  For trait methods it IS a gap.
+  widening (new AST fields, new loops, ×3 self-host copies) and is filed separately.
+  ⚠ **CORRECTION 2026-08-18 (orchestrator, R43) — the clause that stood here was
+  MEASURABLY FALSE and is STRUCK.** It read: the remedy clause "attach to the members
+  instead" is *VACUOUS for `extern "C":`* rather than merely unimplemented, because an
+  extern declaration has no body to skip, so REJECT-the-block with no member alternative
+  is the correct END STATE there, not a gap. An extern declaration has no *body*, but it
+  has a *signature layout*, and `gg fmt` rewrites it — alignment collapse and
+  long-signature wrapping. Regenerate with
+  `for f in lib/xtd/metal.gg lib/xtd/gl.gg lib/std/iter.gg; do gg fmt $f > /tmp/q.fmt; echo "$f $(diff $f /tmp/q.fmt | grep -c '^<')"; done`
+  — measured at HEAD 2026-08-18: **metal.gg 98, gl.gg 34, iter.gg 36** source lines
+  rewritten, and `lib/xtd/metal.gg:266` is an `extern "C":` block whose members are a
+  hand-built one-line-per-FFI-entry table: the corpus's LARGEST single sweep-damage site,
+  and exactly the shape this feature exists to protect. Under the one-predicate rule an
+  extern-block MEMBER **declares a name of its own ⇒ HONOUR**; the position was filed in
+  the wrong bucket. `extern "C":` is therefore a GAP of the SAME kind as trait methods,
+  and both are filed — for trait methods it IS a gap, and for extern-block members it is
+  too. Whether an FFI table *should* be wrapped at all is a separate owner call
+  ("layout changed" vs "layout damaged"); what is settled is that the escape hatch may
+  not be foreclosed by a false factual premise.
   **This SUPERSEDES the case-by-case treatment and subsumes h5** (2026-08-16, attributes
   above `equip`/`extern` blocks = parse-time REJECT), which stops being a special case
   and becomes a CONSEQUENCE — an `equip` block exports nothing of its own, exactly the
