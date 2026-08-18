@@ -51026,6 +51026,25 @@ fn known_gap_case_unresolved_name_rejected() {
     );
 }
 
+/// KNOWN GAP (CRITICAL) — a container literal mints its ELEMENT TYPE from the
+/// source operand BEFORE that operand is materialized, so a borrow-typed source
+/// yields `Vector[Ptr(T)]`: 8-byte slots, no elem vtable. The correctly-cloned
+/// value is stored 8-bytes-wide and freed.
+///
+/// No for-loop, no `&`, live at HEAD: `gg check` clean, both backends rc 0 with
+/// `len()==1` and the element reading back EMPTY (ASan: abort). **ggdef prints
+/// the correct `bb`** — Core #8, the oracle is right and both production
+/// backends are wrong.
+///
+/// `Ptr(T)` is not `is_resource_type`, so the bogus element type launders the
+/// value past the fatal `ShallowCopyOfResource` validator. This is also Track
+/// E's precondition — its step (b) composes ASan-clean only once this lands.
+#[test]
+#[ignore = "known gap (R42, CRITICAL): container literals mint their element type from a pre-materialization borrow, silently losing the element on both backends while ggdef is correct; un-ignore when the minted slot type equals the materialized operand type"]
+fn known_gap_container_literal_borrow_elem_type() {
+    run_gg("known_gaps/container_literal_mints_borrow_elem_type.gg", "1\nbb");
+}
+
 /// KNOWN GAP — `Option[T].and_then(closure)` whose closure body is a METHOD
 /// CALL returning `Option[U]` typechecks clean and emits broken code on BOTH
 /// lanes (C: `incompatible types … from '__gg_Option__int64_t'`; LLVM: `llc …
