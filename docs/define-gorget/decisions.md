@@ -2439,6 +2439,31 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   a grouped import still leaves the group". POSSIBLE FUTURE, filed separately, not part
   of this: a bundled import form (`from schema import CollectionKind(..)`) that makes
   the relationship expressible.
+- 2026-08-18 — **🎯 THE BARE `for x in coll` BINDING IS A MUTABLE PRIVATE COPY, NOT A
+  READ-ONLY BORROW (owner, live session). THE REFERENCE IS WRONG AND GETS CORRECTED.**
+  Assigning to the loop binding in the BARE form — `for x in coll: x = v` — writes to a
+  private copy at the binding; the collection is untouched and the program is ACCEPTED.
+  The `&` form (`for x in &coll`) keeps its ratified write-through semantics, and `^`
+  keeps its move semantics; only the bare form was in question.
+  **What forced the ruling:** the implementation and the reference disagree, and the
+  double-free fix could not proceed without knowing which is normative. Measured at HEAD:
+  `Vector[int]` + `x = x + 10` prints `11/12` then `1/2` — a real, observable private copy
+  — while `Vector[String]` + `s = "zz"` **SIGABRTs (double free)**. Meanwhile
+  `docs/language-reference.md:1375` says `for x in coll` is *"Immutable borrow (collection
+  intact)"* and `:2919` says *"Bare for-loop iteration creates a read-only borrow"*.
+  ⚠ The "materializes a private copy" language at `:1750`/`:2847` that an executor brief
+  leaned on is about a **subscript bound to a local** (`Vector[int] row = matrix[0]`), a
+  DIFFERENT construct — so the brief had forbidden the reject route by citing text that
+  does not govern the case, while the text that does govern it pointed the other way. The
+  brief-review gauntlet caught that (Track E pass 6) and escalated rather than guessing.
+  **Consequences:** (a) `String` (and every heap element type) is FIXED to behave like
+  `int` — private copy, no crash; (b) `:1375`'s table row and `:2919`'s sentence are
+  CORRECTED to say the bare binding is a mutable private copy; (c) no currently-working
+  program breaks, which is why this beat the read-only-reject alternative; (d) the
+  split-by-element-type option was REJECTED — the same syntax must not mean two different
+  things depending on whether the element is heap-allocated (Core #15e Q1).
+  ⚠ Doc write-through is MANDATORY and is part of the fix, not a follow-up: a reference
+  that contradicts the implementation is what produced this ambiguity in the first place.
 - 2026-08-17 — **🎯 THE ATTRIBUTE-POSITION RULE, in one sentence (owner, live session):
   ATTRIBUTES ATTACH TO DECLARATIONS, NOT TO GROUPINGS.** A construct that introduces a
   NAME can carry an attribute — function, method (INCLUDING an equip method), struct,
