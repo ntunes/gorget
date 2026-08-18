@@ -6,9 +6,15 @@
 
 **⚠ ROUND XLII (R42) CLOSED 2026-08-18 — UNDER AN OWNER-GRANTED CONVERGENCE WAIVER** (clauses (a)+(c) failed: net +37, filed 12, closed 25 — regen `scripts/convergence.sh 125 586 12`; recorded in DONE.md as a WAIVER, not compliance, and NOT precedent — the next round starts from the rule). Round-close battery FULL and GREEN on both lanes: C integration 2402/0 · LLVM integration 2402/0 · spec_conformance 3/0 · security (ASan) 151/0 · ggdef 180/0 · lints 150/0 · lib 1171/0.
 
-**⚠ CONVERGENCE BASELINE FOR R43: kg=134, todo=614** (regen the close verdict with `scripts/convergence.sh 134 614 <filed>`).
+**⚠ CONVERGENCE BASELINE FOR R43: kg=135, todo=614** (regen the close verdict with `scripts/convergence.sh 135 614 <filed>`). ⚠ **CORRECTED from the handover's 134 at R43 open:** `4ba2bbdb` (R42's close-out cardinal-rule fix) added the CRITICAL container-literal repro AFTER the baseline was written, so 134 would have counted R42's own inflow as R43's. Re-measure the baseline with `scripts/convergence.sh` at HEAD, never inherit it.
 
-**⚠ AUTONOMY: R43 NOT YET OPENED — awaiting owner go.**
+**⚠ AUTONOMY: R43 OPENED 2026-08-18 — owner go GRANTED.**
+
+**▶ ROUND XLIII (R43) — HEADLINE: MEMORY SAFETY** (owner 2026-08-18: "we need to nail memory safety, otherwise gorget loses its purpose"). Parallel tracks, disjoint file zones:
+- **M1 (headline) — the container-literal element-type mint.** CRITICAL, silent data loss + heap-UAF from four lines of ordinary syntax, both backends, oracle-adjudicated wrong. Re-reproduced at HEAD at round open (prints `1` then an EMPTY line where `bb` is correct). Scout running. Precondition for Track E.
+- **4c — `@fmt(skip)` on items.** Brief folded to `/tmp/r43/brief4c.md` (ADDENDUM-3 > ADDENDUM-2 > body); pass-3's 10 BLOCKING + 7 MINOR all ACCEPTED and dispositioned. Brief-review pass 4 running; streak 0, needs TWO successive clean passes.
+- **A2-0 — the magic trailing comma**, A2's owner-agreed step zero. Scout running; its central question is whether the comma is a DELIBERATE typed formatter mechanism or merely accidentally correct — the corpus may not be made to depend on an accident.
+- **A2 — the bulk `gg fmt` sweep** follows 4c + A2-0. Owner-gated: reviewable state → critical style review → ONE fmt-only commit.
 
 **▶ R43 OPENER — 4c then A2, in that order (handed over from R42, owner-agreed 2026-08-18).**
 
