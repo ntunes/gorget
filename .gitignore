@@ -2,8 +2,12 @@
 /target
 # Generated C files and compiled binaries from `gg build`
 tests/fixtures/*.c
-examples/*/main.c
-examples/*/main
+# `**` not `*`: discovery accepts `examples/**/main.gg` at ANY depth, so a
+# nested package's artifacts must be ignored at any depth too. (`examples/*/…`
+# alone left `examples/a/b/main` visible while `examples/a/b/main.gg` was a
+# perfectly legal entry point.)
+examples/**/main.c
+examples/**/main
 # ...and the TOP-LEVEL half of the same thing. `gg build` has no output flag
 # for a linked executable and writes beside the SOURCE, so `examples/foo.gg`
 # builds to `examples/foo` + `examples/foo.c`. Expressed as a PROPERTY, not a

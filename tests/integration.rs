@@ -18154,10 +18154,11 @@ const EXPECTED_ENTRY_POINTS: usize = 29;
 /// The `(example, lane)` cells that are NOT expected to build cleanly.
 ///
 /// Every row is a CLAIM with a citation, and BOTH directions are gated so a
-/// row cannot rot into a false invariant comment. When a row starts passing,
-/// the gate reds — a fixed defect must retire its row. When a row names an
-/// example that no longer exists, the orphan check in the test reds — the
-/// forward lookup runs from discovery and would never reach such a row.
+/// row cannot rot into a false invariant comment. Forward: when a row starts
+/// passing, the gate reds — a fixed defect must retire its row. Reverse: every
+/// row must be REACHABLE by the lookup that validates it, so a row naming an
+/// undiscovered example, or shadowed by an earlier row with the same
+/// `(example, lane)` key, reds too. Exactly one row per key.
 const EXAMPLE_BUILD_EXPECTATIONS: &[(&str, Lane, ExampleExpectation)] = &[
     // Deliberate teaching examples: both files say so on line 1.
     (
@@ -18345,14 +18346,17 @@ struct ExampleEntryPoint {
 
 /// Every shipped example must BUILD, on every lane.
 ///
-/// ⚠ **The corpus convention this gate enforces: EVERY top-level
+/// ⚠ **The corpus convention this gate ASSUMES: EVERY top-level
 /// `examples/*.gg` IS an entry point, and a package directory has exactly ONE,
 /// named `main.gg`.** Helper modules live in a subdirectory beside a `main.gg`;
 /// a `.gg` in a directory with no `main.gg` is classified by nothing and fails
 /// the gate BY NAME. That convention is what lets discovery stay a shape test
 /// instead of a source-shape heuristic, and it is why a non-`main` helper
 /// dropped at the top level gets a comprehensible message instead of a raw
-/// linker error.
+/// linker error. ⚠ **ASSUMES, not enforces** — the top-level half IS enforced
+/// (every such file is built), but a SECOND entry point inside a package
+/// directory is silently classified as a library module and never gated; see
+/// limitation 2 below.
 ///
 /// One looping test rather than one test per example, because discovery is a
 /// runtime list and Rust cannot generate test functions from one. ALL failures
@@ -18380,7 +18384,8 @@ struct ExampleEntryPoint {
 /// 2. **A SECOND entry point inside a package directory is classified as a
 ///    library module** and is never gated. Deliberate: detecting "has its own
 ///    `main`" would be the source-shape heuristic the discovery rule rejects.
-///    The convention it enforces is one entry point per package directory,
+///    The convention it ASSUMES — and this limitation is exactly where the
+///    assumption is unbacked — is one entry point per package directory,
 ///    named `main.gg`.
 /// 3. **Building is not running.** Running the examples is deferred. Nothing
 ///    here is evidence that an example WORKS — only that it compiles and
@@ -18458,29 +18463,59 @@ fn examples_build_on_every_lane() {
         ));
     }
 
-    // ── The reverse direction: no ORPHANED expectation rows ───
+    // ── The reverse direction: EVERY ROW MUST BE REACHABLE ────
     //
-    // The table is otherwise only ever consulted via the lookup FROM discovery
-    // (`.find(...)` per discovered entry point), so a row naming an example
-    // that no longer exists is INVISIBLE to it: delete the example, lower the
-    // constant as the message above asks, and the gate goes green with a stale
-    // claim — and a stale citation — still in the table. That is the one
-    // false-invariant-comment shape the forward lookup structurally cannot see
+    // The table is otherwise only ever consulted via the forward lookup FROM
+    // discovery (`.find(...)` per discovered entry point). A row that lookup
+    // never reaches is a claim — and a citation — that NOTHING can check, so
+    // it rots silently: the exact false-invariant-comment shape this table's
+    // own doc forbids, and the one the forward lookup structurally cannot see
     // (Core #14, and Core #15e Q2: can this guard catch its OWN class?).
     //
-    // EVERY row is checked on EVERY lane, not just the rows whose lane matches
-    // this run: entry-point discovery comes from `git ls-files` and is
-    // lane-independent, so an orphan is an orphan on both lanes and should red
-    // on whichever runs first rather than only on the lane its row names.
-    for (path, row_lane, expectation) in EXAMPLE_BUILD_EXPECTATIONS {
+    // Rather than enumerate the ways a row can go unreachable — that is an
+    // instance fix, and there turned out to be two — assert the PROPERTY
+    // directly: for every row, the lookup for that row's own key must resolve
+    // to THAT row. Both known failures fall out of it, and so does any future
+    // third (a discovery filter, a lane added to `Lane`, a key that stops
+    // being a `(path, lane)` pair):
+    //   * the example is not discovered at all — an ORPHANED row; or
+    //   * an EARLIER row carries the same `(example, lane)` key and SHADOWS
+    //     this one, so which claim is enforced depends on table ORDER.
+    //
+    // The check runs over EVERY row on EVERY lane, not just rows whose lane
+    // matches this run: entry-point discovery comes from `git ls-files` and is
+    // lane-independent, so unreachability is lane-independent too and should
+    // red on whichever lane runs first rather than only on the lane its row
+    // names.
+    for (i, (path, row_lane, expectation)) in EXAMPLE_BUILD_EXPECTATIONS.iter().enumerate() {
         if !entry_points.iter().any(|e| &e.path == path) {
             failures.push(format!(
-                "EXAMPLE_BUILD_EXPECTATIONS has a row for `{path}` [{row_lane:?}], but \
-                 that is not a discovered entry point. A row for an example that no \
-                 longer exists is a claim nothing can check — DELETE the row in the same \
-                 commit as the example, or restore the example. (Leaving it also means a \
-                 later example re-added under the same name silently inherits an \
-                 expectation from a different era.) The orphaned row pins: {}",
+                "EXAMPLE_BUILD_EXPECTATIONS row {i} names `{path}` [{row_lane:?}], which is \
+                 NOT a discovered entry point, so the forward lookup never reaches it and \
+                 its claim is never checked. Either the example was deleted and the row \
+                 must go with it, or the row was added before (or instead of) its example. \
+                 DELETE the row in the same commit as the example, or add/restore the \
+                 example. (Leaving it also means an example later added under this name \
+                 silently inherits an expectation from a different era.) The unreachable \
+                 row pins: {}",
+                expectation.describe()
+            ));
+            continue;
+        }
+        let winner = EXAMPLE_BUILD_EXPECTATIONS
+            .iter()
+            .position(|(p, l, _)| p == path && l == row_lane)
+            .expect("the row being checked matches its own key");
+        if winner != i {
+            failures.push(format!(
+                "EXAMPLE_BUILD_EXPECTATIONS row {i} is UNREACHABLE: row {winner} carries the \
+                 same `({path}, {row_lane:?})` key, and the forward lookup takes the FIRST \
+                 match — so row {i} is never validated, and WHICH claim is enforced depends \
+                 on table ORDER. The table is keyed by (example, lane) but grouped by CAUSE, \
+                 so one example can plausibly land in two groups. Keep exactly ONE row per \
+                 key.\n    row {winner} (enforced):                {}\n    row {i} \
+                 (shadowed, never validated): {}",
+                EXAMPLE_BUILD_EXPECTATIONS[winner].2.describe(),
                 expectation.describe()
             ));
         }

@@ -23,10 +23,24 @@ jobs:
       # the `spec_conformance_llvm` lane needs `llc` HERE, in the default-backend
       # job — without it all ~220 fixtures BUILD-FAIL ("Failed to run 'llc'") and
       # trip the MATCH-count floor. Mirrors the `llvm-backend` job's install step.
-      - name: Install LLVM
+      #
+      # SDL2: `examples_build_on_every_lane` (tests/integration.rs) is the FIRST
+      # currently-run test that COMPILES an SDL program — three C-lane cells
+      # (`sdl_hello`, `gfx_demo`, `breakout/main`) have no expectation row and so
+      # must build cleanly. Every other SDL touch in the suite is `#[ignore]`d.
+      # All THREE dev packages are required, not just `libsdl2-dev`: measured,
+      # `gg build` hands the C compiler `-lSDL2 -lSDL2_image -lSDL2_ttf` for all
+      # three examples. `add_sdl_flags` (src/main.rs:206-232) decides `needs_image`
+      # / `needs_ttf` with `source.contains("GORGET_USE_SDL_IMAGE")` over the
+      # GENERATED code — which always contains that string, because the `#ifdef`
+      # guard in `src/backend/c/runtime/sdl_runtime.c` spells it. So both sublibs
+      # are requested for ANY SDL program, on either branch of that function: via
+      # `pkg-config --libs sdl2 SDL2_image SDL2_ttf` (which FAILS as a whole if
+      # any one `.pc` is missing) or via the plain `-l` fallback.
+      - name: Install LLVM and SDL2
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm clang
+          sudo apt-get install -y llvm clang libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
 
       - name: Cache cargo
         uses: actions/cache@v5
@@ -102,10 +116,21 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install LLVM
+      # SDL2 here is FORWARD INSURANCE, not a present need — measured, and stated
+      # honestly so nobody trusts a claim that is not true. On this lane the three
+      # SDL examples ask the C compiler for `-lm` ONLY: `gfx_demo` and
+      # `breakout/main` die at shim compile on `unknown type name 'GorgetSDLWindow'`
+      # (gorget-arena snag #1) and `sdl_hello` dies at link on `undefined reference
+      # to gorget_sdl_init` (the SDL runtime blob is never emitted under LLVM), all
+      # BEFORE any SDL header or library is touched. Both are filed defects that
+      # `examples_build_on_every_lane` pins by SYMBOL. The moment either is fixed,
+      # this lane starts compiling and linking SDL for real — and would then red on
+      # a missing dependency, in an unrelated round, for a reason no one is looking
+      # for. Installing it now costs seconds and removes that trap.
+      - name: Install LLVM and SDL2
         run: |
           sudo apt-get update
-          sudo apt-get install -y llvm clang
+          sudo apt-get install -y llvm clang libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
 
       - name: Cache cargo
         uses: actions/cache@v5
