@@ -171,3 +171,38 @@ jobs:
           GG_BACKEND: llvm
           GG_BUILD_TIMEOUT_SECS: 600
           GG_TEST_TIMEOUT_SECS: 600
+
+  sanitize-sweep:
+    name: Sanitize sweep (ASan+UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM and SDL2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm clang libsdl2-dev libsdl2-image-dev libsdl2-ttf-dev
+
+      - name: Build
+        run: cargo build
+
+      # Runs the whole fixture corpus under -fsanitize=address,undefined and
+      # diffs against tests/sanitize/{CORRUPTION,LEAK}_ALLOWLIST.txt.
+      #
+      # A SEPARATE JOB on purpose: ~25 min at parallelism 8, so it must not
+      # extend the main gate's wall-clock. It exists because 99.4% of the corpus
+      # (2087 of 2100 fixtures) ran an stdout compare and nothing else — and an
+      # stdout compare cannot observe a use-after-free. Every memory-safety
+      # defect found in R42 was found incidentally by a hand-built ASan probe.
+      #
+      # The cheap half of this gate — the allowlists are shrink-only, and every
+      # corruption row carries a justification — is `sanitize_allowlists_shrink_only`
+      # in tests/lints.rs, which runs in the main job on every commit.
+      - name: Sanitize sweep
+        run: JOBS=8 scripts/sanitize_sweep.sh
+        env:
+          GG_BUILD_TIMEOUT_SECS: 600

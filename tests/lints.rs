@@ -6436,6 +6436,67 @@ fn docs_plans_removed_and_define_gorget_is_ledger_only() {
 /// docs/devbook/30 (excellence system). Compacted 2026-07-25 from 64.6KB.
 /// The ceiling only ever ratchets DOWN (a further compaction re-seeds it);
 /// raising it requires owner sign-off.
+/// The sanitize sweep's allowlists are SHRINK-ONLY, and every corruption row
+/// carries a justification.
+///
+/// The sweep itself (`scripts/sanitize_sweep.sh`, ~25 min) is a separate CI job.
+/// This is the cheap half: a pure file read that runs in the normal lint gate,
+/// so the *invariant* is enforced on every commit even though the sweep is not.
+///
+/// Why two lists rather than one: memory corruption is a soundness hole and
+/// leaks are resource debt. A single merged list would let a use-after-free hide
+/// behind 316 leaks — which is not hypothetical, it is how a `Set[String]`
+/// double free sat filed as a MED *leak* for three weeks in R42.
+#[test]
+fn sanitize_allowlists_shrink_only() {
+    const CORRUPTION_CEILING: usize = 2;
+    const LEAK_CEILING: usize = 316;
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let read = |name: &str| -> Vec<String> {
+        let p = root.join("tests/sanitize").join(name);
+        let body = std::fs::read_to_string(&p)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", p.display()));
+        body.lines()
+            .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+            .map(|l| l.to_string())
+            .collect()
+    };
+
+    let corrupt = read("CORRUPTION_ALLOWLIST.txt");
+    let leaks = read("LEAK_ALLOWLIST.txt");
+
+    assert!(
+        corrupt.len() <= CORRUPTION_CEILING,
+        "MEMORY-CORRUPTION allowlist grew to {} (ceiling {CORRUPTION_CEILING}). \
+         Adding a row here ships a known use-after-free / double-free / overflow \
+         — memory safety is this language's entire claim. Fix the defect, or get \
+         an owner decision and file it. When you FIX one, lower the ceiling in \
+         the same commit.",
+        corrupt.len()
+    );
+    assert!(
+        leaks.len() <= LEAK_CEILING,
+        "LEAK allowlist grew to {} (ceiling {LEAK_CEILING}). A new leak shipped. \
+         Fix it, or justify the row and raise this deliberately. When you burn \
+         some down, lower the ceiling in the same commit — that is the only way \
+         this backlog actually shrinks.",
+        leaks.len()
+    );
+
+    // Every corruption row must say WHY it is tolerated. A bare name is how an
+    // allowlist turns into a parking lot (Core #14: an assertion with no
+    // enforcing guard is rot).
+    for row in &corrupt {
+        let cols: Vec<&str> = row.split('\t').collect();
+        assert!(
+            cols.len() >= 3 && cols[2].trim().len() > 40,
+            "corruption allowlist row lacks a justification: {row:?}\n\
+             Format: <fixture> TAB <kind> TAB <why it is here, and what retires it>"
+        );
+    }
+}
+
 #[test]
 fn agents_md_size_ratchet() {
     // The evidence home the header and this message promise must actually exist.

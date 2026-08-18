@@ -1,0 +1,18 @@
+# MEMORY-CORRUPTION ALLOWLIST — sanitize sweep (ASan)
+#
+# Use-after-free, double free, buffer overflow, stack-use-after-scope. These are
+# SOUNDNESS holes: memory safety is the language's entire claim, so this list is
+# meant to be SHORT, every row individually filed and justified, and to SHRINK
+# every round. It is deliberately separate from the leak list — one merged list
+# would let a use-after-free hide behind three hundred leaks, which is exactly
+# how a `Set[String]` double free sat filed as a MED *leak* for three weeks.
+#
+# Format: <fixture-stem> <TAB> <sanitizer-kind> <TAB> <why it is here>
+# A row with no justification is a bug in this file.
+#
+# ⚠ SHRINK-ONLY. Adding a row means shipping a known memory-corruption bug —
+# it needs an owner decision and a filed TODO entry, not a quiet append.
+
+sh_gg_run_propagates_signal_death	ASAN_stack-buffer-overflow	FILED (TODO.md, comprehension emitter): a type-changing comprehension pushes with the SOURCE element size, memcpy'ing 64 bytes out of an 8-byte stack temp. ⚠ This fixture's WIRED TEST asserts exit==139 and depends on that crash — see its header. Fixing the emitter turns that test red, which means the fix worked; re-point the fixture at a deliberate null deref rather than weakening it. This row retires WITH that fix.
+
+stack_guard_deep_recursion	ASAN_stack-overflow	INTENTIONAL, not a defect: the fixture's whole purpose is to prove the stack guard fires on unbounded recursion. ASan reports the overflow it is designed to cause. This row is permanent unless the fixture is retired.
