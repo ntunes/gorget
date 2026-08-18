@@ -1,8 +1,9 @@
 from xtd.toml import parse, TomlValue
+from std.conv import ParseError
 
 void main():
     String raw = "[server]\nhost = \"localhost\"\nport = 8080\n\n[database]\nurl = \"postgres://localhost/mydb\"\npool_size = 5"
-    Result[TomlValue, String] result = parse(raw)
+    Result[TomlValue, ParseError] result = parse(raw)
     match result:
         case Ok(doc):
             TomlValue server = doc.get("server")

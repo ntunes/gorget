@@ -12,8 +12,15 @@ from xtd.http import post, HttpResponse
 from xtd.json import Json, json_parse, json_stringify
 from std.collections import Vector, Dict
 from std.os import getenv
-from std.conv import int_to_str
+from std.conv import int_to_str, ParseError
 from std.io import input, stdin_eof
+
+# Navigate an optional JSON node. `get`/`at` return `Option[Json]` because a
+# key or index may be absent, and the two providers below answer with
+# different shapes -- a missing branch is expected, not exceptional, so it
+# degrades to `Null` (whose `as_str()` is the empty string).
+Json or_null(Option[Json] node):
+    return node.unwrap_or(Json.Null())
 
 # Build the JSON messages array from parallel role/content vectors.
 Json build_messages(Vector[String] loop_roles, Vector[String] loop_contents):
@@ -115,9 +122,9 @@ void main():
                 contents.pop()
                 continue
 
-            Result[Json, String] parsed = json_parse(http_resp.body_text)
+            Result[Json, ParseError] parsed = json_parse(http_resp.body_text)
             if parsed.is_error():
-                String err_msg = "JSON error: " + parsed.unwrap_error()
+                String err_msg = "JSON error: " + parsed.unwrap_error().display()
                 print(err_msg)
                 roles.pop()
                 contents.pop()
@@ -129,10 +136,15 @@ void main():
             String assistant_text = ""
             if use_anthropic:
                 # Anthropic: { "content": [{ "text": "..." }] }
-                assistant_text = resp_json.get("content").at(0).get("text").as_str()
+                Json content = or_null(resp_json.get("content"))
+                Json block = or_null(content.at(0))
+                assistant_text = or_null(block.get("text")).as_str()
             else:
                 # OpenAI: { "choices": [{ "message": { "content": "..." } }] }
-                assistant_text = resp_json.get("choices").at(0).get("message").get("content").as_str()
+                Json choices = or_null(resp_json.get("choices"))
+                Json choice = or_null(choices.at(0))
+                Json message = or_null(choice.get("message"))
+                assistant_text = or_null(message.get("content")).as_str()
 
             String display = "\n" + assistant_text + "\n"
             print(display)
