@@ -1,0 +1,48 @@
+# KNOWN GAP — `Option[T].and_then(closure)` with a METHOD-CALL body emits broken
+# code on BOTH lanes, while `gg check` reports clean.
+#
+#     gg check                 -> OK: no semantic errors   (rc 0, no diagnostic)
+#     gg build (C)             -> rc 1
+#         error: incompatible types when assigning to type 'int64_t'
+#                {aka 'long int'} from type '__gg_Option__int64_t'
+#     gg build --backend=llvm  -> rc 1
+#         llc: error: '%v23' defined with type 'ptr' but expected 'i64'
+#
+# Measured at HEAD (2026-08-18).
+#
+# ⚠ THE DISCRIMINATOR IS THE METHOD-CALL BODY, not `and_then` itself. Control,
+# measured working (prints 8):
+#     Option[int] o = Some(7)
+#     Option[int] r = o.and_then((int b): Some(b + 1))    # bare Some(...) body
+# A closure whose body CALLS A METHOD returning `Option[U]` is the failing cell;
+# a closure whose body constructs the Option inline is fine.
+#
+# ⚠ WHY THIS HID BEHIND AN EXISTING ENTRY. `TODO.md`'s bare-`None()` residual
+# entry states that `.and_then/.flat_map/.or_else/.map/.map_err` "correctly wrap
+# the closure return via `extract_fn_return_type`". That is TRUE AT TYPECHECK —
+# which is exactly why this defect is invisible there and only surfaces in the
+# emitted code. The two are different layers, not the same bug; do not merge.
+# Also distinct from the filed SELF-HOST combinator segfault (different lane) and
+# from the ggdef combinator subset gap (different axis).
+#
+# The C message names the shape precisely: an `__gg_Option__int64_t` is being
+# assigned into an `int64_t` slot, i.e. the closure's `Option` return is being
+# unwrapped one level too early — or the destination slot was typed from the
+# payload rather than from the closure's declared return.
+#
+# INTENDED: this builds on both lanes and prints `7`.
+#
+# Wired test: known_gap_option_and_then_method_call_body (tests/integration.rs,
+# #[ignore]d), asserting the INTENDED output. It fails today and goes green when
+# the closure's `Option` return type reaches the destination slot.
+struct Box2:
+    int v
+
+equip Box2:
+    Option[int] pick(self):
+        return Some(self.v)
+
+void main():
+    Option[Box2] o = Some(Box2(7))
+    Option[int] r = o.and_then((Box2 b): b.pick())
+    print(r.unwrap())

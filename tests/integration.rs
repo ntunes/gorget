@@ -50387,6 +50387,23 @@ fn known_gap_case_unresolved_name_rejected() {
     );
 }
 
+/// KNOWN GAP — `Option[T].and_then(closure)` whose closure body is a METHOD
+/// CALL returning `Option[U]` typechecks clean and emits broken code on BOTH
+/// lanes (C: `incompatible types … from '__gg_Option__int64_t'`; LLVM: `llc …
+/// defined with type 'ptr' but expected 'i64'`). A closure body that builds the
+/// Option inline (`(int b): Some(b + 1)`) is fine, so the method call is the
+/// discriminator.
+///
+/// Distinct from the filed bare-`None()` residual, which observes that
+/// `.and_then` wraps the closure return correctly via `extract_fn_return_type`
+/// — true AT TYPECHECK, which is exactly why this hides there and only shows in
+/// the emitted code.
+#[test]
+#[ignore = "known gap (R42): Option.and_then with a method-call closure body typechecks clean then emits broken code on both lanes; un-ignore when the closure's Option return reaches the destination slot"]
+fn known_gap_option_and_then_method_call_body() {
+    run_gg("known_gaps/option_and_then_method_call_body.gg", "7");
+}
+
 /// KNOWN GAP — a MODULE-LEVEL global's initializer is not type-checked, and the
 /// backends then disagree: `gg check` is clean, the C lane fails with a raw gcc
 /// error, and the LLVM lane BUILDS, RUNS and prints garbage. The identical
