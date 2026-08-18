@@ -18061,6 +18061,546 @@ top: Eve
 top: Grace");
 }
 
+// ── The examples BUILD gate ─────────────────────────────────────
+//
+// `run_example` above is OPT-IN: it builds, runs and diffs, but only for the
+// examples somebody remembered to wire. Nothing asserted that an example WAS
+// wired, so three separate migrations walked past `examples/` and rotted
+// shipped programs for months. The gate below closes that class:
+//
+//   every discovered entry point must `gg build` cleanly ON EVERY LANE,
+//   except cells in one expectation table keyed by (example, lane).
+
+/// The backend lane this test run gates. The expectation table is keyed by
+/// `(entry point, Lane)` and not by entry point alone, because three examples
+/// build cleanly on the C lane and fail under LLVM.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum Lane {
+    C,
+    Llvm,
+}
+
+impl Lane {
+    fn current() -> Lane {
+        match gg_backend().as_deref() {
+            None => Lane::C,
+            Some("llvm") => Lane::Llvm,
+            Some(other) => panic!(
+                "examples_build_on_every_lane: unrecognised GG_BACKEND={other:?}. The \
+                 expectation table is keyed by (example, lane); silently treating an \
+                 unknown lane as one of the known ones would gate the wrong column. \
+                 Add the lane to `Lane` and give every table row a cell for it."
+            ),
+        }
+    }
+}
+
+/// What a listed `(example, lane)` cell is expected to DO. A cell that is
+/// absent from the table means "must build cleanly on that lane".
+enum ExampleExpectation {
+    /// `gg build` fails during semantic analysis with exactly this set of
+    /// diagnostic codes AND exactly this many errors.
+    ///
+    /// The TOTAL is pinned as well as the SET because a set alone hides
+    /// MULTIPLICITY: adding a second `E_UndefinedName` site to
+    /// `type_errors.gg` leaves the code set unchanged while the tail moves
+    /// from `3 semantic error(s) found` to `4`. `agentic_loop`'s pre-repair
+    /// shape was `E_TypeMismatch`×1 + `E_NoMethodFound`×2 — real
+    /// multiplicity, not a hypothetical.
+    SemanticErrors {
+        codes: &'static [&'static str],
+        total: usize,
+    },
+    /// `gg build` fails AFTER semantic analysis — at C-compile or at link —
+    /// and the diagnostics name this Gorget runtime symbol.
+    ///
+    /// The pin is the SYMBOL, not the stage and not the message. Every build
+    /// failure exits 1, and a C-lane LINK failure reports the COMPILE tail, so
+    /// "stage" discriminates nothing. The surrounding sentence is toolchain-
+    /// version-dependent — the SAME defect reads `implicit declaration of
+    /// function 'gorget_stdin_eof'` at C-compile and `undefined reference to
+    /// 'gorget_stdin_eof'` at LLVM link. The symbol is ours and stable.
+    ToolchainFailure {
+        symbol: &'static str,
+        cites: &'static str,
+    },
+}
+
+/// Number of entry points `git ls-files examples/` is expected to discover.
+///
+/// BUMP this when you add an example; LOWER it when you delete one. It is an
+/// exact equality, not a floor, deliberately: a floor cannot see GROWTH, so
+/// "raise it when the corpus grows" would be an unenforced convention and the
+/// slack would let a later deletion vanish silently.
+const EXPECTED_ENTRY_POINTS: usize = 29;
+
+/// The `(example, lane)` cells that are NOT expected to build cleanly.
+///
+/// Every row is a CLAIM with a citation. When a row starts passing, the gate
+/// reds — a fixed defect must retire its row rather than sit here as a false
+/// invariant comment.
+const EXAMPLE_BUILD_EXPECTATIONS: &[(&str, Lane, ExampleExpectation)] = &[
+    // Deliberate teaching examples: both files say so on line 1.
+    (
+        "examples/borrow_errors.gg",
+        Lane::C,
+        ExampleExpectation::SemanticErrors {
+            codes: &["E_UseAfterMove", "E_DoubleMove", "E_MoveInLoop"],
+            total: 3,
+        },
+    ),
+    (
+        "examples/borrow_errors.gg",
+        Lane::Llvm,
+        ExampleExpectation::SemanticErrors {
+            codes: &["E_UseAfterMove", "E_DoubleMove", "E_MoveInLoop"],
+            total: 3,
+        },
+    ),
+    (
+        "examples/type_errors.gg",
+        Lane::C,
+        ExampleExpectation::SemanticErrors {
+            codes: &[
+                "E_DuplicateDefinition",
+                "E_UndefinedName",
+                "E_MissingTraitMethod",
+            ],
+            total: 3,
+        },
+    ),
+    (
+        "examples/type_errors.gg",
+        Lane::Llvm,
+        ExampleExpectation::SemanticErrors {
+            codes: &[
+                "E_DuplicateDefinition",
+                "E_UndefinedName",
+                "E_MissingTraitMethod",
+            ],
+            total: 3,
+        },
+    ),
+    // Blocked on a filed stdlib hole, not on example rot: `std.io.stdin_eof()`
+    // binds `gorget_stdin_eof`, a runtime symbol implemented nowhere
+    // (declaration at `lib/std/io.gg:92`). The example's typed-error rot IS
+    // repaired; this is the wall behind it.
+    (
+        "examples/agentic_loop.gg",
+        Lane::C,
+        ExampleExpectation::ToolchainFailure {
+            symbol: "gorget_stdin_eof",
+            cites: "TODO.md: `std.io.stdin_eof()` binds a runtime symbol that exists \
+                    nowhere; repro tests/fixtures/known_gaps/stdlib_stdin_eof_no_runtime_symbol.gg",
+        },
+    ),
+    (
+        "examples/agentic_loop.gg",
+        Lane::Llvm,
+        ExampleExpectation::ToolchainFailure {
+            symbol: "gorget_stdin_eof",
+            cites: "TODO.md: `std.io.stdin_eof()` binds a runtime symbol that exists \
+                    nowhere; repro tests/fixtures/known_gaps/stdlib_stdin_eof_no_runtime_symbol.gg",
+        },
+    ),
+    // LLVM shim COMPILE failure — the shim's type walk never emits the struct
+    // typedef. Both of these use `xtd.gfx`, which passes an SDL window struct.
+    (
+        "examples/gfx_demo.gg",
+        Lane::Llvm,
+        ExampleExpectation::ToolchainFailure {
+            symbol: "GorgetSDLWindow",
+            cites: "filed gorget-arena snag #1 — LLVM shim misses the struct typedef",
+        },
+    ),
+    (
+        "examples/breakout/main.gg",
+        Lane::Llvm,
+        ExampleExpectation::ToolchainFailure {
+            symbol: "GorgetSDLWindow",
+            cites: "filed gorget-arena snag #1 — LLVM shim misses the struct typedef",
+        },
+    ),
+    // A DIFFERENT defect from snag #1, and deliberately cited separately: this
+    // one is an LLVM LINK failure because the SDL runtime blob is never
+    // emitted. Snag #1's fix extends a type walk and emits no function bodies,
+    // so it cannot close this.
+    (
+        "examples/sdl_hello.gg",
+        Lane::Llvm,
+        ExampleExpectation::ToolchainFailure {
+            symbol: "gorget_sdl_init",
+            cites: "TODO.md: the LLVM backend never emits the SDL runtime blob; repro \
+                    tests/fixtures/known_gaps/llvm_sdl_runtime_blob_not_emitted.gg",
+        },
+    ),
+];
+
+/// How a tracked path under `examples/` is classified.
+#[derive(PartialEq, Eq, Debug)]
+enum ExamplePathClass {
+    /// `examples/<name>.gg`, or `examples/**/main.gg` at any depth.
+    EntryPoint,
+    /// A `.gg` in a directory that also holds a `main.gg`.
+    LibraryModule,
+    /// A tracked non-`.gg` file.
+    Documentation,
+    /// Anything else — the gate fails, BY NAME.
+    Unrecognised,
+}
+
+/// Every tracked path under `examples/`, from git rather than a disk walk.
+///
+/// `run_example` builds IN PLACE and cleans up only AFTER its asserts, so a
+/// filesystem walk picks up `main`/`main.c` artifacts from a concurrent test
+/// (or leftovers from a failed one) and would classify them as corpus.
+///
+/// The spawn asserts here are EARLY and HARD, unlike every other failure this
+/// gate reports: `git ls-files` outside a repo exits 128 with EMPTY stdout, so
+/// an unchecked `.output()` yields zero entry points, zero builds and a PASS.
+/// There is nothing meaningful to collect when discovery itself failed.
+fn tracked_example_paths() -> Vec<String> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let out = Command::new("git")
+        .args(["ls-files", "-z", "examples/"])
+        .current_dir(&manifest_dir)
+        .output()
+        .expect("git ls-files failed to spawn — the examples gate must run inside the repo");
+    assert!(
+        out.status.success(),
+        "git ls-files exited {:?}; refusing to gate an unknown file set (an empty \
+         census must never read as a clean corpus)",
+        out.status.code()
+    );
+    let mut paths: Vec<String> = out
+        .stdout
+        .split(|b| *b == 0)
+        .filter(|s| !s.is_empty())
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .collect();
+    assert!(
+        !paths.is_empty(),
+        "git ls-files returned no tracked paths under examples/ — the scan is broken, \
+         not the tree"
+    );
+    paths.sort();
+    paths
+}
+
+/// Classify one tracked path. `all` is the full tracked set, needed to answer
+/// "does this directory have a `main.gg`".
+fn classify_example_path(path: &str, all: &[String]) -> ExamplePathClass {
+    let Some(rest) = path.strip_prefix("examples/") else {
+        return ExamplePathClass::Unrecognised;
+    };
+    if !path.ends_with(".gg") {
+        return ExamplePathClass::Documentation;
+    }
+    if !rest.contains('/') {
+        // EVERY top-level `examples/*.gg` IS an entry point. Helper modules
+        // live in a subdirectory beside a `main.gg` — that convention is what
+        // lets this rule stay a shape test instead of a source-shape heuristic.
+        return ExamplePathClass::EntryPoint;
+    }
+    if path.ends_with("/main.gg") {
+        return ExamplePathClass::EntryPoint;
+    }
+    let dir = &path[..path.rfind('/').expect("checked for '/' above")];
+    let package_main = format!("{dir}/main.gg");
+    if all.iter().any(|p| p == &package_main) {
+        return ExamplePathClass::LibraryModule;
+    }
+    ExamplePathClass::Unrecognised
+}
+
+/// One discovered entry point plus the sources it needs in the temp dir.
+struct ExampleEntryPoint {
+    /// Repo-relative path of the `.gg` that gets built.
+    path: String,
+    /// Repo-relative `.gg` sources to copy: the whole package for a
+    /// `<pkg>/main.gg`, just itself for a top-level example.
+    sources: Vec<String>,
+    /// Path of the built source RELATIVE to the temp dir.
+    rel: String,
+}
+
+/// Every shipped example must BUILD, on every lane.
+///
+/// One looping test rather than one test per example, because discovery is a
+/// runtime list and Rust cannot generate test functions from one. ALL failures
+/// are collected and reported together — a loop that returned on the first
+/// would hide the rest.
+///
+/// Builds are HERMETIC (a per-example temp dir) and the gate runs
+/// MULTI-THREADED, deliberately, alongside the `run_example` tests above.
+/// `gg build` has no output flag for a linked executable and writes
+/// `examples/<name>` / `examples/<name>.c` beside the SOURCE — the exact paths
+/// `run_example` execs. Building in place therefore races the wired tests: the
+/// linker chmods after creating, so a concurrent exec dies `rc=126 Permission
+/// denied` (measured ~16% of execs). Serialising the suite would only hide
+/// that until someone else's sweep. Copying the sources out is the fix, and
+/// the executable-exists assert below is what proves the build happened THERE.
+///
+/// ## What this gate does NOT cover — do not read it as more than it is
+///
+/// 1. **An UNIMPORTED library module beside a package `main.gg` rots
+///    invisibly.** Nothing compiles it, so this gate cannot see it. All
+///    library modules are reachable from their package main today, so the
+///    hole is prospective rather than live. It is NOT uncoverable — `gg check`
+///    on a rotted unimported module does return rc=1, so a check-based sweep
+///    over library modules would catch it. That is a different gate.
+/// 2. **A SECOND entry point inside a package directory is classified as a
+///    library module** and is never gated. Deliberate: detecting "has its own
+///    `main`" would be the source-shape heuristic the discovery rule rejects.
+///    The convention it enforces is one entry point per package directory,
+///    named `main.gg`.
+/// 3. **Building is not running.** Running the examples is deferred. Nothing
+///    here is evidence that an example WORKS — only that it compiles and
+///    links. The 15 `run_example` tests above are the ones that also run.
+#[test]
+fn examples_build_on_every_lane() {
+    let lane = Lane::current();
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let tracked = tracked_example_paths();
+
+    // ── Discovery: total or loud ──────────────────────────────
+    let mut failures: Vec<String> = Vec::new();
+    let mut entry_points: Vec<ExampleEntryPoint> = Vec::new();
+
+    for path in &tracked {
+        match classify_example_path(path, &tracked) {
+            ExamplePathClass::EntryPoint => {
+                let (sources, rel) = if let Some(dir) = path.strip_suffix("/main.gg") {
+                    let prefix = format!("{dir}/");
+                    let srcs: Vec<String> = tracked
+                        .iter()
+                        .filter(|p| p.starts_with(&prefix) && p.ends_with(".gg"))
+                        .cloned()
+                        .collect();
+                    (srcs, "main.gg".to_string())
+                } else {
+                    let base = path
+                        .rsplit('/')
+                        .next()
+                        .expect("a tracked path always has a last component")
+                        .to_string();
+                    (vec![path.clone()], base)
+                };
+                entry_points.push(ExampleEntryPoint {
+                    path: path.clone(),
+                    sources,
+                    rel,
+                });
+            }
+            ExamplePathClass::LibraryModule | ExamplePathClass::Documentation => {}
+            ExamplePathClass::Unrecognised => failures.push(format!(
+                "UNCLASSIFIED tracked path `{path}`. Every tracked path under \
+                 examples/ must be an entry point (`examples/<name>.gg` or \
+                 `examples/**/main.gg`), a library module (a `.gg` in a directory \
+                 that also holds a `main.gg`), or documentation (a tracked \
+                 non-`.gg`). A `.gg` in a directory with NO `main.gg` is none of \
+                 those and would be gated by nothing — give the directory a \
+                 `main.gg`, or move the file."
+            )),
+        }
+    }
+
+    // The count is COMPARED for exact equality but its mismatch is COLLECTED,
+    // not panicked: an early abort here would stop a newly-added, non-building
+    // example from ever reaching the build loop, and would contradict the
+    // "collect ALL failures" rule above.
+    if entry_points.len() != EXPECTED_ENTRY_POINTS {
+        let listing: Vec<&str> = entry_points.iter().map(|e| e.path.as_str()).collect();
+        failures.push(format!(
+            "discovered {} entry points, expected EXPECTED_ENTRY_POINTS = {}. BUMP the \
+             constant when you add an example; LOWER it when you delete one — one line, \
+             in the same commit, so the change is reviewed. A new example needs no test, \
+             no table row and no expectation; that is all discovery asks. Discovered:\n  {}",
+            entry_points.len(),
+            EXPECTED_ENTRY_POINTS,
+            listing.join("\n  ")
+        ));
+    }
+
+    // ── Build every entry point, hermetically ─────────────────
+    for entry in &entry_points {
+        let tmp = tempfile::TempDir::new().expect("tempdir");
+        // Copy the SOURCES, from the tracked list — never a recursive directory
+        // copy, which would race `run_example`'s in-place artifacts.
+        for src in &entry.sources {
+            let rel = src
+                .strip_prefix("examples/")
+                .expect("tracked under examples/");
+            let rel = match entry.path.strip_suffix("/main.gg") {
+                Some(dir) => src
+                    .strip_prefix(&format!("{dir}/"))
+                    .expect("package source under the package dir"),
+                None => rel,
+            };
+            let dest = tmp.path().join(rel);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent).expect("create temp package dir");
+            }
+            std::fs::copy(manifest_dir.join(src), &dest)
+                .unwrap_or_else(|e| panic!("copying tracked source {src} into the temp dir: {e}"));
+        }
+
+        let source = tmp.path().join(&entry.rel);
+        let out = build_with_timeout(gg_command("build").arg(&source), &entry.path);
+        let ok = out.status.success();
+        // Diagnostics go to STDERR; stdout is empty on a failure. Scan both so
+        // the gate cannot be fooled by a stream change, and never treat stderr
+        // OUTPUT as failure — a SUCCESSFUL build writes ~1KB of gcc warnings.
+        let mut diagnostics = String::from_utf8_lossy(&out.stderr).into_owned();
+        diagnostics.push_str(&String::from_utf8_lossy(&out.stdout));
+
+        let expectation = EXAMPLE_BUILD_EXPECTATIONS
+            .iter()
+            .find(|(p, l, _)| *p == entry.path && *l == lane)
+            .map(|(_, _, e)| e);
+
+        match expectation {
+            None => {
+                if !ok {
+                    let hint = if entry.path.matches('/').count() == 1 {
+                        " (Reminder: EVERY top-level examples/*.gg IS an entry point and \
+                          must build on its own; helper modules belong in a subdirectory \
+                          beside a main.gg.)"
+                    } else {
+                        ""
+                    };
+                    failures.push(format!(
+                        "{} [{lane:?}]: expected a CLEAN build, got exit {:?}.{hint}\n{}",
+                        entry.path,
+                        out.status.code(),
+                        indent_diagnostics(&diagnostics)
+                    ));
+                } else if !tmp.path().join(entry.rel.trim_end_matches(".gg")).exists() {
+                    // The one artifact BOTH lanes produce (LLVM emits `main` +
+                    // `main.ll` and no `.c`). Its presence in the TEMP dir is
+                    // what proves the build happened there and not in place.
+                    failures.push(format!(
+                        "{} [{lane:?}]: built successfully but produced no executable in \
+                         the temp dir. `gg build` writes beside the SOURCE, so this means \
+                         the gate built somewhere else — it is no longer hermetic.",
+                        entry.path
+                    ));
+                }
+            }
+            Some(ExampleExpectation::SemanticErrors { codes, total }) => {
+                if ok {
+                    failures.push(format!(
+                        "{} [{lane:?}]: listed as failing semantic analysis, but it BUILDS \
+                         now. If that is intended, DELETE its row from \
+                         EXAMPLE_BUILD_EXPECTATIONS in the same commit.",
+                        entry.path
+                    ));
+                } else {
+                    let observed = observed_error_codes(&diagnostics);
+                    let mut expected: Vec<String> =
+                        codes.iter().map(|c| (*c).to_string()).collect();
+                    expected.sort();
+                    expected.dedup();
+                    if observed != expected {
+                        failures.push(format!(
+                            "{} [{lane:?}]: diagnostic code SET changed.\n  expected: {:?}\n  \
+                             observed: {:?}\n{}",
+                            entry.path,
+                            expected,
+                            observed,
+                            indent_diagnostics(&diagnostics)
+                        ));
+                    }
+                    let observed_total = observed_semantic_error_total(&diagnostics);
+                    if observed_total != Some(*total) {
+                        failures.push(format!(
+                            "{} [{lane:?}]: semantic error TOTAL changed — expected {}, \
+                             observed {:?}. The total is pinned as well as the set because \
+                             a set alone hides multiplicity.\n{}",
+                            entry.path,
+                            total,
+                            observed_total,
+                            indent_diagnostics(&diagnostics)
+                        ));
+                    }
+                }
+            }
+            Some(ExampleExpectation::ToolchainFailure { symbol, cites }) => {
+                if ok {
+                    failures.push(format!(
+                        "{} [{lane:?}]: listed as failing at the toolchain on `{symbol}`, but \
+                         it BUILDS now. If the underlying defect is fixed, DELETE its row \
+                         from EXAMPLE_BUILD_EXPECTATIONS in the same commit. Cited: {cites}",
+                        entry.path
+                    ));
+                } else if !diagnostics.contains(symbol) {
+                    failures.push(format!(
+                        "{} [{lane:?}]: still fails, but the diagnostics no longer name \
+                         `{symbol}` — the MECHANISM changed underneath the cell, so its \
+                         citation is now false. Re-diagnose and re-pin. Cited: {cites}\n{}",
+                        entry.path,
+                        indent_diagnostics(&diagnostics)
+                    ));
+                }
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "examples_build_on_every_lane [{lane:?}]: {} failure(s):\n\n{}",
+        failures.len(),
+        failures.join("\n\n")
+    );
+}
+
+/// Sorted, de-duplicated `E_*` codes quoted in `diagnostics`.
+///
+/// Matches on the `error[` + `]` substring rather than a whole coloured line:
+/// the output carries ANSI escapes on a non-TTY, and they wrap the code rather
+/// than sitting inside it. gcc's `[-Werror=...]` suffixes read `error=`, not
+/// `error[`, so they do not collide.
+fn observed_error_codes(diagnostics: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = diagnostics;
+    while let Some(at) = rest.find("error[") {
+        rest = &rest[at + "error[".len()..];
+        if let Some(close) = rest.find(']') {
+            let code = &rest[..close];
+            if !code.is_empty() && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                out.push(code.to_string());
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The count from `gg build`'s `N semantic error(s) found` tail.
+///
+/// `gg check` prints `N error(s) found` instead; this gate is on BUILD, so the
+/// build spelling is what it reads.
+fn observed_semantic_error_total(diagnostics: &str) -> Option<usize> {
+    const TAIL: &str = " semantic error(s) found";
+    let at = diagnostics.rfind(TAIL)?;
+    let digits: String = diagnostics[..at]
+        .chars()
+        .rev()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.chars().rev().collect::<String>().parse().ok()
+}
+
+/// Indent captured diagnostics so a multi-failure report stays readable.
+fn indent_diagnostics(diagnostics: &str) -> String {
+    diagnostics
+        .lines()
+        .map(|l| format!("    | {l}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 // ══════════════════════════════════════════════════════════════
 // Builtin function tests
 // ══════════════════════════════════════════════════════════════

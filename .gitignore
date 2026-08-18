@@ -4,6 +4,20 @@
 tests/fixtures/*.c
 examples/*/main.c
 examples/*/main
+# ...and the TOP-LEVEL half of the same thing. `gg build` has no output flag
+# for a linked executable and writes beside the SOURCE, so `examples/foo.gg`
+# builds to `examples/foo` + `examples/foo.c`. Expressed as a PROPERTY, not a
+# name list: there is no non-broad glob for an EXTENSIONLESS binary, so a hand
+# list would need one line per example and would silently miss the next one's
+# binary — exactly the rot `examples_build_on_every_lane` exists to retire.
+# The negations are load-bearing: a bare `examples/*` makes `git add
+# examples/<new>.gg` REFUSE, and the new example then never enters the corpus.
+# Placed here, ABOVE the LLVM-artifact patterns below, so those still win for
+# `*.ll` / `__gorget_*` (last matching pattern wins in .gitignore).
+examples/*
+!examples/*.*
+!examples/*/
+examples/*.c
 tests/fixtures/*_error
 tests/fixtures/*_asan
 tests/fixtures/*_dbg
