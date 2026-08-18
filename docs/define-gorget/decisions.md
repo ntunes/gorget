@@ -2500,11 +2500,20 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   trigger does not fire (30/30 probes byte-identical stdout); this changes formatting, not
   accept/reject or what accepted programs do.
   **WIDTH RULE (orchestrator, derived from this ruling — reversible, zero live
-  instances):** an author row is preserved even past the 120-column budget, and a distinct
-  `OverBudget::AuthorRow` ratchet category is seeded at its measured **0**, so any future
-  over-budget author row surfaces as a visible ratchet bump instead of a silent overrun.
-  Re-wrapping the row would contradict "the author's newlines say where to break"; seeding
-  the category keeps the decision auditable. Owner may reverse at nil cost.
+  instances):** an author row is preserved even past the 120-column budget. Re-wrapping it
+  would contradict "the author's newlines say where to break". Owner may reverse at nil cost.
+  ⚠ **GUARD MECHANISM CORRECTED 2026-08-18, same day, by brief-review — the first
+  formulation was UNIMPLEMENTABLE.** It said to seed a distinct `OverBudget::AuthorRow`
+  ratchet category at its measured 0. Measured: a real 121-column preserved row classifies
+  as **`Unbroken`, 6 > ceiling 5**, because `width_ratchet_classify` (`tests/lints.rs`) is
+  PURE-TEXT and has no author-row discriminator — two live `Unbroken` rows are textually
+  indistinguishable from a preserved one. Worse, the fixture that would demonstrate the
+  category lives under a `WIDTH_RATCHET_ROOTS` root with no exclusion list, so the seed is
+  forced to 1 — meaning the only reachable outcome of the rule as written was **raising
+  `CEIL_UNBROKEN`, which the rule itself forbids**. The residual `Unbroken` category
+  ALREADY guards this class. **Corrected mechanism: no new category; `CEIL_UNBROKEN` stays
+  5; the over-budget author row is asserted inline in `tests/integration.rs`.** The
+  preservation rule above is unchanged — only its guard is.
 - 2026-08-18 — **🎯 EVERYTHING RUNS UNDER A SANITIZER (owner, live session). MEMORY
   SAFETY IS THE LANGUAGE'S PURPOSE, SO AN UNSANITIZED SUITE IS NOT A SUITE.**
   Owner: *"we should be running everything under a sanitizer"* — in response to the
