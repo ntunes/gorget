@@ -1,3 +1,24 @@
+# ⚠⚠ THIS FIXTURE'S ORACLE IS A COMPILER BUG. READ BEFORE "FIXING" A RED HERE.
+#
+# The wired test asserts exit == 139 and "segmentation" in stderr. The SIGSEGV is
+# NOT scaffolding and NOT intentional: it is a live comprehension-emitter defect
+# (filed in TODO.md), where the result-push uses the SOURCE element size, so a
+# `Vector[String] -> Vector[int]` comprehension memcpy's 64 bytes out of an
+# 8-byte stack temp. Minimal, book-level, no sanitizer needed:
+#
+#     void main():
+#         Vector[String] words = ["ab", "cde"]
+#         Vector[int] r = [w.len() for w in words]      # SIGSEGV, rc 139
+#         print(r.get(0).unwrap())
+#
+# The longhand `for` loop with `.push()` is clean. So WHEN THAT DEFECT IS FIXED,
+# THIS TEST GOES RED — and that red means the fix WORKED. Re-point this fixture
+# at a deliberate SIGSEGV (a null deref) instead of weakening the assertion, and
+# do not "fix" the comprehension back.
+#
+# (Found 2026-08-18 by the corpus-wide ASan census, which is also how the
+# mechanism — wrong elem_size at the push, a write-site defect — was identified.)
+#
 # Regression (Round XXV Track A subsumed at scout stage 2026-08-02):
 # SH driver's `gg run` already propagates signal-death — verified live.
 #
