@@ -133,7 +133,7 @@ String table_cell(String tag, String content, String align):
         return "<" + tag + ">" + render_inline(content) + "</" + tag + ">"
     return "<" + tag + " style=\"text-align: " + align + "\">" + render_inline(content) + "</" + tag + ">"
 
-(str, int) parse_table(Vector[String] lines, int start):
+(String, int) parse_table(Vector[String] lines, int start):
     Vector[String] out = Vector[String]()
     String sep = lines.get(start + 1).unwrap()
     Vector[String] aligns = parse_alignments(sep)
@@ -344,7 +344,7 @@ String convert(String markdown):
                 if in_ol:
                     out.push("</ol>")
                     in_ol = false
-                (str, int) result = parse_table(lines, i)
+                (String, int) result = parse_table(lines, i)
                 out.push(result._0)
                 i = i + result._1
                 continue
