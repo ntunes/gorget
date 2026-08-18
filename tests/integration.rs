@@ -18126,6 +18126,23 @@ enum ExampleExpectation {
     },
 }
 
+impl ExampleExpectation {
+    /// One-line rendering for a failure message, so an ORPHANED row reports
+    /// what it claimed — and, for a toolchain cell, the defect it cited —
+    /// instead of only its key. Whoever has to decide "delete this row or
+    /// restore that example?" needs the claim in front of them.
+    fn describe(&self) -> String {
+        match self {
+            ExampleExpectation::SemanticErrors { codes, total } => {
+                format!("SemanticErrors {{ codes: {codes:?}, total: {total} }}")
+            }
+            ExampleExpectation::ToolchainFailure { symbol, cites } => {
+                format!("ToolchainFailure {{ symbol: `{symbol}` }} — cited: {cites}")
+            }
+        }
+    }
+}
+
 /// Number of entry points `git ls-files examples/` is expected to discover.
 ///
 /// BUMP this when you add an example; LOWER it when you delete one. It is an
@@ -18136,9 +18153,11 @@ const EXPECTED_ENTRY_POINTS: usize = 29;
 
 /// The `(example, lane)` cells that are NOT expected to build cleanly.
 ///
-/// Every row is a CLAIM with a citation. When a row starts passing, the gate
-/// reds — a fixed defect must retire its row rather than sit here as a false
-/// invariant comment.
+/// Every row is a CLAIM with a citation, and BOTH directions are gated so a
+/// row cannot rot into a false invariant comment. When a row starts passing,
+/// the gate reds — a fixed defect must retire its row. When a row names an
+/// example that no longer exists, the orphan check in the test reds — the
+/// forward lookup runs from discovery and would never reach such a row.
 const EXAMPLE_BUILD_EXPECTATIONS: &[(&str, Lane, ExampleExpectation)] = &[
     // Deliberate teaching examples: both files say so on line 1.
     (
@@ -18366,6 +18385,10 @@ struct ExampleEntryPoint {
 /// 3. **Building is not running.** Running the examples is deferred. Nothing
 ///    here is evidence that an example WORKS — only that it compiles and
 ///    links. The 15 `run_example` tests above are the ones that also run.
+/// 4. **Only `.gg` sources are copied into the temp dir.** No package has a
+///    non-`.gg` source today, so this is inert; if one ever gains a manifest
+///    or a data file the hermetic build fails LOUDLY (a missing input, not a
+///    silent pass), and the copy filter is the place to widen.
 #[test]
 fn examples_build_on_every_lane() {
     let lane = Lane::current();
@@ -18422,13 +18445,45 @@ fn examples_build_on_every_lane() {
         let listing: Vec<&str> = entry_points.iter().map(|e| e.path.as_str()).collect();
         failures.push(format!(
             "discovered {} entry points, expected EXPECTED_ENTRY_POINTS = {}. BUMP the \
-             constant when you add an example; LOWER it when you delete one — one line, \
-             in the same commit, so the change is reviewed. A new example needs no test, \
-             no table row and no expectation; that is all discovery asks. Discovered:\n  {}",
+             constant when you add an example. When you DELETE one, lower the constant \
+             AND RETIRE any EXAMPLE_BUILD_EXPECTATIONS row that names it — both in the \
+             same commit, so the change is reviewed. (Lowering the constant alone leaves \
+             a row claiming something about a file that no longer exists; the orphan \
+             check below catches that, but the two edits belong together.) A new example \
+             needs no test, no table row and no expectation; that is all discovery asks. \
+             Discovered:\n  {}",
             entry_points.len(),
             EXPECTED_ENTRY_POINTS,
             listing.join("\n  ")
         ));
+    }
+
+    // ── The reverse direction: no ORPHANED expectation rows ───
+    //
+    // The table is otherwise only ever consulted via the lookup FROM discovery
+    // (`.find(...)` per discovered entry point), so a row naming an example
+    // that no longer exists is INVISIBLE to it: delete the example, lower the
+    // constant as the message above asks, and the gate goes green with a stale
+    // claim — and a stale citation — still in the table. That is the one
+    // false-invariant-comment shape the forward lookup structurally cannot see
+    // (Core #14, and Core #15e Q2: can this guard catch its OWN class?).
+    //
+    // EVERY row is checked on EVERY lane, not just the rows whose lane matches
+    // this run: entry-point discovery comes from `git ls-files` and is
+    // lane-independent, so an orphan is an orphan on both lanes and should red
+    // on whichever runs first rather than only on the lane its row names.
+    for (path, row_lane, expectation) in EXAMPLE_BUILD_EXPECTATIONS {
+        if !entry_points.iter().any(|e| &e.path == path) {
+            failures.push(format!(
+                "EXAMPLE_BUILD_EXPECTATIONS has a row for `{path}` [{row_lane:?}], but \
+                 that is not a discovered entry point. A row for an example that no \
+                 longer exists is a claim nothing can check — DELETE the row in the same \
+                 commit as the example, or restore the example. (Leaving it also means a \
+                 later example re-added under the same name silently inherits an \
+                 expectation from a different era.) The orphaned row pins: {}",
+                expectation.describe()
+            ));
+        }
     }
 
     // ── Build every entry point, hermetically ─────────────────
