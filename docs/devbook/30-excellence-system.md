@@ -811,3 +811,49 @@ The fix is structural rather than a resolution to be more careful:
 The precedence chain is not bureaucracy. It is what makes fold fidelity *checkable* by
 the next fresh pass: the reviewer can diff the addendum against its source report and
 confirm, item by item, that nothing mutated in transcription.
+
+## §14 — The reference lags the implementation
+
+`docs/language-reference.md` was written **after** the compiler, and has not
+caught up everywhere (owner, 2026-08-18). That inverts the usual reading of a
+doc-vs-code conflict.
+
+The general guidance — *the code shows what IS, the docs show what's INTENDED* —
+holds for `docs/language-design.md`, `docs/book/` and `docs/devbook/`, which were
+written to state intent. It does **not** automatically hold for the reference,
+which in places records a later author's reconstruction of behaviour rather than
+a decision. So a reference-vs-code conflict is an **open question**, not
+doc-wins; a load-bearing one is an **owner ask**.
+
+**The measured case.** Track E (the `for … in` element-assignment double free)
+needed to know what assigning to a bare loop binding means. The reference said:
+
+- `:1375` — the form table's `for x in coll` row: *"Immutable borrow (collection intact)"*
+- `:2919` — *"Bare for-loop iteration creates a read-only borrow"*
+
+The implementation had given it private-copy semantics for years:
+`Vector[int]` + `x = x + 10` prints `11/12` then `1/2` — a real, observable
+private copy — while `Vector[String]` SIGABRTed, which was the defect under
+repair.
+
+Two failure modes showed up around this, both worth recognising:
+
+1. **The brief cited text that did not govern the case.** It forbade the
+   reject route by quoting "materializes a private copy" from `:1750`/`:2847` —
+   which is about a *subscript bound to a local* (`Vector[int] row = matrix[0]`),
+   a different construct. The governing sentences said the opposite. Three review
+   passes flagged the citation as unreplaced before one traced what it actually
+   said.
+2. **The brief then instructed the executor to write the unratified position
+   into the docs** — i.e. to ratify a semantics by transcription. The review
+   caught that and escalated instead of guessing.
+
+The owner ruled **private copy**: no working program breaks (int already behaves
+that way), heap element types are repaired to match, and the reference is
+corrected. Split-by-element-type was rejected — the same syntax must not mean two
+things depending on whether the element is heap-allocated (Core #15e Q1).
+
+**The rule this yields:** when the reference disagrees with measured behaviour,
+neither side is automatically right. Measure the behaviour, read the *governing*
+sentence rather than the nearest plausible one, and if the answer is load-bearing,
+ask the owner. Then fix whichever artifact was wrong — here, the reference.
