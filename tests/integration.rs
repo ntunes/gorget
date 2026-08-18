@@ -51045,6 +51045,73 @@ fn known_gap_container_literal_borrow_elem_type() {
     run_gg("known_gaps/container_literal_mints_borrow_elem_type.gg", "1\nbb");
 }
 
+/// KNOWN GAP — an `equip` function with NO `self` parameter is an ASSOCIATED
+/// function. `Pt.helper(2)` works (builds, runs, prints 3); calling it through
+/// an INSTANCE is accepted by `gg check` and then fails to build on BOTH
+/// backends, because the receiver is silently bound as an extra argument the
+/// callee has no parameter for. C: "too many arguments to function
+/// `Pt__helper`". LLVM: "'%v3' defined with type 'ptr' but expected 'i64'".
+///
+/// The associated-call form working is what proves this is a MISSING REJECTION
+/// rather than a missing feature — the callee is fine, the CALL is wrong.
+/// Core #10 (no arm may accept a call it cannot lower) + Core #8 (both backends
+/// fail on an accepted program, so the fix is to reject it).
+#[test]
+#[ignore = "known gap (R43): a no-`self` equip function called through an instance is accepted by `gg check` and then fails to build on BOTH backends; un-ignore when check rejects the receiver-vs-associated mismatch and points at `Pt.helper(2)`"]
+fn known_gap_equip_no_self_fn_called_on_instance() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/equip_no_self_fn_called_on_instance.gg");
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture),
+        "known_gaps/equip_no_self_fn_called_on_instance.gg",
+    );
+
+    assert!(
+        !output.status.success(),
+        "`gg check` must REJECT calling a no-`self` equip function through an \
+         instance — today it accepts, and BOTH backends then fail at codegen (C: \
+         too many arguments to `Pt__helper`; LLVM: type 'ptr' but expected \
+         'i64'). The correct form `Pt.helper(2)` builds and runs, so the \
+         capability exists and only the rejection is missing.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
+/// KNOWN GAP — `equip Pt(Shifter):` is a mis-spelling of
+/// `equip Pt with Shifter:`. `gg check` accepts it, the block's methods are
+/// then silently DROPPED, and the program dies at LINK time on a mangled
+/// internal symbol the user never wrote ("undefined reference to `Pt__shift`").
+/// The correct spelling builds and runs.
+///
+/// Core #10 silent drop: user syntax accepted and discarded rather than lowered
+/// or rejected. A linker error naming a mangled symbol is the worst available
+/// diagnostic for what is simply a wrong keyword.
+#[test]
+#[ignore = "known gap (R43): `equip T(Trait):` is accepted by `gg check`, its methods are silently dropped, and the build dies at link on a mangled symbol; un-ignore when check rejects it and teaches the `equip T with Trait:` spelling"]
+fn known_gap_equip_paren_trait_spelling_silently_dropped() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/equip_paren_trait_spelling_silently_dropped.gg");
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture),
+        "known_gaps/equip_paren_trait_spelling_silently_dropped.gg",
+    );
+
+    assert!(
+        !output.status.success(),
+        "`gg check` must REJECT `equip T(Trait):` with a diagnostic teaching the \
+         `equip T with Trait:` spelling — today it accepts, silently drops every \
+         method in the block, and the user gets `undefined reference to \
+         `Pt__shift`` from the linker.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+}
+
 /// KNOWN GAP — `Option[T].and_then(closure)` whose closure body is a METHOD
 /// CALL returning `Option[U]` typechecks clean and emits broken code on BOTH
 /// lanes (C: `incompatible types … from '__gg_Option__int64_t'`; LLVM: `llc …

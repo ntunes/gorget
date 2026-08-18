@@ -1,0 +1,33 @@
+# KNOWN GAP. `equip Pt(Shifter):` is a MIS-SPELLING of `equip Pt with Shifter:`.
+# `gg check` accepts it, then the whole equip block's methods are silently
+# DROPPED and the program dies at LINK time on a mangled internal symbol the
+# user never wrote.
+#
+# Measured 2026-08-18 at HEAD:
+#     gg check   -> "OK: no semantic errors"   (rc 0)
+#     gg build   -> ld: undefined reference to `Pt__shift'
+#     the correct spelling `equip Pt with Shifter:` -> builds, runs, prints 2
+#
+# This is a Core #10 SILENT DROP: user syntax is accepted and then discarded
+# rather than lowered or rejected. The failure surfaces as a linker error naming
+# a mangled symbol, which is the worst possible diagnostic for what is simply a
+# wrong keyword.
+#
+# INTENDED: `gg check` REJECTS `equip Pt(Shifter):` with a teaching diagnostic
+# naming the correct `equip Pt with Shifter:` spelling. (Whichever way the
+# grammar currently reads the parenthesised form, no accepted reading may
+# silently discard the block's methods.)
+trait Shifter:
+    int shift(self)
+
+struct Pt:
+    int x
+
+equip Pt(Shifter):
+    int shift(self):
+        return self.x + 1
+
+int main():
+    Pt p = Pt(1)
+    print(p.shift())
+    return 0

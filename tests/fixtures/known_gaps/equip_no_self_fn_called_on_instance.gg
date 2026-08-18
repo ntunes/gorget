@@ -1,0 +1,35 @@
+# KNOWN GAP. An `equip` function declared WITHOUT a `self` parameter is an
+# ASSOCIATED function: the correct call form is `Pt.helper(2)`, which works.
+# Calling it through an INSTANCE (`p.helper(2)`) is accepted by `gg check` and
+# then FAILS TO BUILD ON BOTH BACKENDS — the receiver is silently bound as an
+# extra argument that the callee has no parameter for.
+#
+# Measured 2026-08-18 at HEAD:
+#     gg check                  -> "OK: no semantic errors"   (rc 0)
+#     gg build (C)              -> C compiler error:
+#                                  "too many arguments to function 'Pt__helper'"
+#     gg build --backend=llvm   -> llc error: "'%v3' defined with type 'ptr'
+#                                  but expected 'i64'"
+#     Pt.helper(2) (the correct form) -> builds, runs, prints 3
+#
+# The associated-function form working is what proves this is a MISSING
+# REJECTION and not a missing feature: the callee is fine, the CALL is wrong.
+#
+# Core #10 (lower-or-reject: no arm may accept a call it cannot lower) and
+# Core #8 (both backends fail, differently, on an accepted program => the fix is
+# to make the language REJECT it, with a teaching diagnostic pointing at the
+# associated-function call form).
+#
+# INTENDED: `gg check` REJECTS `p.helper(2)` with a diagnostic naming the
+# receiver-vs-associated mismatch and suggesting `Pt.helper(2)`.
+struct Pt:
+    int x
+
+equip Pt:
+    int helper(int a):
+        return a + 1
+
+int main():
+    Pt p = Pt(1)
+    print(p.helper(2))
+    return 0
