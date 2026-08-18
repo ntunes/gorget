@@ -2472,10 +2472,39 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   rule when a preserved author row exceeds the 120-column budget (it must not silently
   overrun the `fmt_no_new_over_budget_lines` ratchet); and whether grouping preservation
   requires the comma or composes with it independently. **Idempotence is non-negotiable.**
-  ⚠ **CONSEQUENCE UNDER MEASUREMENT:** if grouping preservation also rescues
-  `compiler/data/resources.gg`'s entry-field packing, then `@fmt(skip)` is not needed for
-  the A2 sweep at all and Phase 4c leaves A2's critical path. That is a measurement, not
-  a judgement — the scout returns SUBSUMED or an enumerated RESIDUE.
+  ✅ **CONSEQUENCE, NOW MEASURED (Track-G scout, 2026-08-18): SUBSUMED — `@fmt(skip)` is
+  NOT needed for the A2 sweep, and Phase 4c leaves A2's critical path.** Grouping
+  preservation rescues BOTH halves of what the older `@fmt(skip)` clause said still
+  justified a mark. Measured with a row-signature fidelity metric, author tabular sites
+  preserved, HEAD → prototype: `compiler/data/resources.gg` 0→40 of 46 ·
+  `self_host_lowerer/lir_lower.gg` 0→35 of 35 · `lib/xtd/math3d.gg` 0→12 of 12 ·
+  `lib/xtd/p2p.gg` 0→1 of 1. The 6-site residue is NOT entry-field packing and
+  `@fmt(skip)` could not have fixed it either — all 6 sit inside
+  `COLLECTION_BUILTIN_METHODS`, the one static this ledger explicitly forbids marking, and
+  they degrade identically before and after, so nothing gets worse.
+  ⚠ **CENSUS CORRECTED:** the earlier "49 sites in 4 files" was narrow. Re-measured:
+  **109 tabular sites across 13 files**; `resources.gg` alone holds 46, not 1, and nine
+  files were missed entirely, three of them `self_host_*`. Regenerate rather than quoting.
+  ⚠ **THE DAMAGE IS LIVE AT HEAD, NOT HYPOTHETICAL.** `compiler/data/resources.gg` already
+  carries an author magic comma on a hand-grouped 4-line/25-word table
+  (`RUST_PRESCAN_MUTATOR_FALLBACK`), and `gg fmt` shreds it to 25 lines, one word per
+  line, today. Verify: `gg fmt compiler/data/resources.gg | grep -A 27 RUST_PRESCAN_MUTATOR_FALLBACK`.
+  That single site RED-verifies the mechanism on the live corpus with no fixture authoring.
+  ⚠ **AN ENGAGEMENT GUARD IS LOAD-BEARING, NOT A REFINEMENT:** preservation engages only
+  where the author expressed a between-element break. The naive form of this ruling breaks
+  three pinned fixtures (demonstrated: removing the guard REDs
+  `fmt_magic_comma_author_paren_cells_spaced` with exactly the predicted half-exploded
+  shape).
+  ⚠ **NO LANE PORT.** `self_host_*/format*.gg` are AST debug-printers, not source
+  formatters — there is no self-host source formatter to port to. Core #9's semantic
+  trigger does not fire (30/30 probes byte-identical stdout); this changes formatting, not
+  accept/reject or what accepted programs do.
+  **WIDTH RULE (orchestrator, derived from this ruling — reversible, zero live
+  instances):** an author row is preserved even past the 120-column budget, and a distinct
+  `OverBudget::AuthorRow` ratchet category is seeded at its measured **0**, so any future
+  over-budget author row surfaces as a visible ratchet bump instead of a silent overrun.
+  Re-wrapping the row would contradict "the author's newlines say where to break"; seeding
+  the category keeps the decision auditable. Owner may reverse at nil cost.
 - 2026-08-18 — **🎯 EVERYTHING RUNS UNDER A SANITIZER (owner, live session). MEMORY
   SAFETY IS THE LANGUAGE'S PURPOSE, SO AN UNSANITIZED SUITE IS NOT A SUITE.**
   Owner: *"we should be running everything under a sanitizer"* — in response to the
