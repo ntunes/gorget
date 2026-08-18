@@ -2439,6 +2439,43 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   a grouped import still leaves the group". POSSIBLE FUTURE, filed separately, not part
   of this: a bundled import form (`from schema import CollectionKind(..)`) that makes
   the relationship expressible.
+- 2026-08-18 — **🎯 THE AUTHOR'S LINE GROUPING IS PRESERVED INSIDE AN EXPLODED
+  CONTAINER (owner, live session). THE MAGIC COMMA SAYS *EXPLODE*; THE AUTHOR'S OWN
+  NEWLINES SAY *WHERE TO BREAK*.**
+  **What forced the ruling:** the A2 bulk `gg fmt` sweep destroys hand-built tabular
+  literals, and the already-ratified magic trailing comma does **not** rescue them.
+  Measured at HEAD on `lib/xtd/math3d.gg:211` (a 4×4 identity matrix authored as a grid):
+  today's sweep flattens it to a single ~100-column line, and adding a magic trailing
+  comma explodes it to **16 lines, one float per line** — the exploded emitter writes one
+  element per line unconditionally. Both outcomes destroy the grid. Regenerate with
+  `gg fmt lib/xtd/math3d.gg | sed -n '/Mat4 identity/,/^$/p'` and the same with a comma
+  appended to the last element.
+  **Scope — this is a CLASS, not `math3d.gg`:** the census found tabular sites in four
+  files — `lib/xtd/math3d.gg`, `tests/fixtures/self_host_lowerer/lir_lower.gg` (the
+  largest, and a SELF-HOST lane fixture, so Core #9 binds), `lib/xtd/p2p.gg`,
+  `compiler/data/resources.gg`. Regenerate the census rather than quoting these counts.
+  **Alternatives rejected.** (a) `@fmt(skip)` on each grid-bearing item — the ledger's own
+  earlier position (see the `@fmt(skip)` entry's "what still justifies a mark" clause),
+  rejected because it is N instance escapes where one class fix exists (Core #4), it
+  FREEZES the whole item so ratified canon changes (`!`→`^`, sigil placement) stop
+  applying inside it forever, and it would sequence A2 behind the stalled Phase-4c track.
+  (b) Accepting the flattening — already ruled unacceptable for strictly lesser damage
+  (the `Vec3 lerp` 118-column collapse).
+  **Why this shape.** It is a one-position extension of the ratified blank-line
+  preservation rule, it reads an AUTHOR-SOURCE fact through a typed probe at the single
+  `emit_delimited_list` chokepoint exactly as `author_trailing_comma` and
+  `AuthorParenTable` already do (Layering rules 2/3 — not a shape heuristic, not
+  name-matching), and canon changes still apply inside the preserved container. gofmt is
+  the precedent.
+  ⚠ **OPEN, delegated to the Track-G scout, not decided here:** the precise preservation
+  contract (element-to-line assignment only, or intra-line column alignment too); the
+  rule when a preserved author row exceeds the 120-column budget (it must not silently
+  overrun the `fmt_no_new_over_budget_lines` ratchet); and whether grouping preservation
+  requires the comma or composes with it independently. **Idempotence is non-negotiable.**
+  ⚠ **CONSEQUENCE UNDER MEASUREMENT:** if grouping preservation also rescues
+  `compiler/data/resources.gg`'s entry-field packing, then `@fmt(skip)` is not needed for
+  the A2 sweep at all and Phase 4c leaves A2's critical path. That is a measurement, not
+  a judgement — the scout returns SUBSUMED or an enumerated RESIDUE.
 - 2026-08-18 — **🎯 EVERYTHING RUNS UNDER A SANITIZER (owner, live session). MEMORY
   SAFETY IS THE LANGUAGE'S PURPOSE, SO AN UNSANITIZED SUITE IS NOT A SUITE.**
   Owner: *"we should be running everything under a sanitizer"* — in response to the
@@ -2669,6 +2706,13 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   blanks 353→**341** (not 12) — 4b's preserve-and-cap SAVED the paragraphing, which retires
   paragraph loss as a reason to mark anything. What still justifies a mark is the
   ENTRY-FIELD packing in `resources.gg` and the 4×4 GRID collapse in `math3d.gg`.
+  ⚠ **SUPERSEDED IN PART 2026-08-18** by the author-line-grouping ruling (top of this
+  ledger): **the `math3d.gg` GRID half is no longer a reason to mark** — grouping
+  preservation is the ruled remedy for it, and for the whole tabular class across four
+  files. The `resources.gg` ENTRY-FIELD half stands **only until measured**: if grouping
+  preservation rescues it too, this clause justifies no mark at all and Phase 4c leaves
+  A2's critical path. Do not cite this sentence as live justification for marking
+  anything without re-reading the 2026-08-18 entry first.
   `resources.gg` has **7** statics, not 6, so "2 statics, not 6" is doubly stale — the
   marked set is a JUDGEMENT over the touched cells, never a count.
   ⚠ Marking an item BLINDS every test asserting on its swept form —
