@@ -1025,6 +1025,15 @@ is worth having the list in one place, because each was found the hard way:
 - **Code fences.** Lines inside a fenced block that begin `## ` inflate a `grep -c '^## '`
   count — again, wrong in the direction that looks like success.
 
+**⚠ And the defences do NOT compose naively — composing two of them can manufacture a THIRD
+false green.** A fold agent, hardening a probe against both the markup form and the
+code-fence form, stripped markup first and then detected fences on the stripped copy. But
+stripping markup removes backticks, so fence detection on that copy reports **everything as
+unfenced**. It caught the error only because it re-ran the check on the original and found
+its own written claim ("four inside code fences") was wrong — the real answer was three — and
+then corrected its own text with an asserting script. **Apply each defence to the ORIGINAL
+text and intersect the results; never chain transformations and probe the last one.**
+
 **The rule.** The criterion is **instruction-site classification**, never a count and never an
 absence. Enumerate the sites where the text functions as an INSTRUCTION, classify each as
 live or marked, and assert on that classification. A count may be reported as colour; it may
