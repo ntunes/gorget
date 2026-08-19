@@ -51066,6 +51066,22 @@ fn known_gap_container_literal_borrow_elem_type() {
     run_gg("known_gaps/container_literal_mints_borrow_elem_type.gg", "1\nbb");
 }
 
+/// KNOWN GAP — `@derive(Hashable)` on a struct with a `float` field LINK-FAILS:
+/// the generated `K__hash` calls `double__hash`, which nothing defines.
+/// `gg check` says "OK: no semantic errors", then the linker reports
+/// `undefined reference to \`double__hash'`. The int-field sibling builds and
+/// runs, so this is a per-scalar-type hole in the derive's hash-helper table,
+/// not a broken derive.
+///
+/// INTENDED: prints `1` — either the helper is emitted, or `gg check` REJECTS
+/// the derive with a diagnostic naming the field whose type has no hash helper.
+/// A linker error naming a mangled internal symbol is neither.
+#[test]
+#[ignore = "known gap (R43): @derive(Hashable) on a float field link-fails on `double__hash` while gg check passes; un-ignore when the helper is emitted or the derive is rejected with a teaching diagnostic"]
+fn known_gap_derive_hashable_float_field_link_failure() {
+    run_gg("known_gaps/derive_hashable_float_field_link_failure.gg", "1");
+}
+
 /// KNOWN GAP — MEMORY UNSAFE on BOTH backends from ten lines of ordinary safe
 /// Gorget: a `Callable` bound to a LOCAL whose signature takes a STRUCT-typed
 /// `&` param SEGFAULTS when called.

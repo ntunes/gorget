@@ -1,0 +1,32 @@
+# KNOWN GAP. `@derive(Hashable)` on a struct with a `float` field produces a
+# LINK FAILURE: the generated `K__hash` calls `double__hash`, which nothing
+# defines. Eight lines of ordinary Gorget, `gg check` clean.
+#
+# Measured 2026-08-19 at HEAD:
+#     gg check  -> "OK: no semantic errors"   (rc 0)
+#     gg build  -> dh.c:(.text.K__hash+0x50): undefined reference to `double__hash'
+#                  collect2: error: ld returned 1 exit status
+#
+# The user's diagnostic for deriving a standard trait on a standard scalar field
+# is a linker error naming a mangled symbol they never wrote. Same class as the
+# `equip T(Trait):` mis-spelling already filed: `gg check` accepts, the failure
+# surfaces at link, and the message points at compiler-internal naming.
+#
+# ⚠ The int-field sibling works, so this is a per-scalar-type hole in the
+# derive's hash-helper table, not a broken derive: swap `float f` for `int i`
+# and the same program builds and prints `1`.
+#
+# INTENDED: prints `1`. Either the derive emits a `double__hash` helper, or
+# `gg check` REJECTS the derive with a teaching diagnostic naming the field
+# whose type has no hash helper. A link error is neither.
+#
+# Wired test: known_gap_derive_hashable_float_field_link_failure
+# (tests/integration.rs, #[ignore]d).
+@derive(Equatable, Hashable)
+struct K:
+    float f
+
+void main():
+    Set[K] s = Set[K]()
+    s.add(K(1.5))
+    print(s.len())
