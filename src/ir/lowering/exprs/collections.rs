@@ -6,7 +6,7 @@ use crate::ir::types::*;
 use crate::parser::ast::{self, Block, Expr, Pattern, Stmt};
 use crate::span::Spanned;
 
-use super::super::context::LoweringContext;
+use super::super::context::{LoweringContext, SlotType};
 use super::{lower_expr, infer_operand_type_full, infer_collection_element_type};
 use super::calls::pack_trait_object_for_smart_ptr_ctor;
 
@@ -107,8 +107,8 @@ pub(super) fn lower_array_literal(
         // DECLARED, and passing it as `Known` mis-sizes every non-trait-box
         // `Vector[T]` (measured: a garbage read on a `Vector[(int, int)]`).
         let slot = match (override_is_trait_box, nonempty_expected_override) {
-            (true, Some(target)) => crate::ir::lowering::context::SlotType::Known(target),
-            _ => crate::ir::lowering::context::SlotType::FromOperand,
+            (true, Some(target)) => SlotType::Known(target),
+            _ => SlotType::FromOperand,
         };
         let (first_owned, etype) = ctx.materialize_for_slot(
             builder, first, &elems[0], slot,
@@ -210,7 +210,7 @@ pub(super) fn lower_array_literal(
             // the same deref arm the first element did.
             let (elem_val, _) = ctx.materialize_for_slot(
                 builder, elem_val, elem_expr,
-                crate::ir::lowering::context::SlotType::Known(etype),
+                SlotType::Known(etype),
                 crate::ir::ImplicitCloneReason::ConsumingArg);
             let elem_val = if let Some(ref name) = etype_name {
                 pack_trait_object_for_smart_ptr_ctor(ctx, builder, elem_val, name)
@@ -316,7 +316,7 @@ fn lower_set_literal_from_array(
     // ktable bridge) as well as sizing the slot wrong.
     let (first, etype) = ctx.materialize_for_slot(
         builder, first, &elems[0],
-        crate::ir::lowering::context::SlotType::FromOperand,
+        SlotType::FromOperand,
         crate::ir::ImplicitCloneReason::ConsumingArg);
 
     // ⭐ WRITE THE ELEMENT TYPE THROUGH, exactly as `lower_dict_literal` does
@@ -393,7 +393,7 @@ fn lower_set_literal_from_array(
         // `Known` target, reaching the same materialization the first did.
         let (val, _) = ctx.materialize_for_slot(
             builder, val, elem_expr,
-            crate::ir::lowering::context::SlotType::Known(etype),
+            SlotType::Known(etype),
             crate::ir::ImplicitCloneReason::ConsumingArg);
         insert_elem(ctx, builder, val);
     }
@@ -502,11 +502,11 @@ pub(super) fn lower_dict_literal(
     // `I64` fallback — so it is INFERRED, never `Known`.)
     let (first_key, key_type) = ctx.materialize_for_slot(
         builder, first_key, &pairs[0].0,
-        crate::ir::lowering::context::SlotType::FromOperand,
+        SlotType::FromOperand,
         crate::ir::ImplicitCloneReason::ConsumingArg);
     let (first_val, val_type) = ctx.materialize_for_slot(
         builder, first_val, &pairs[0].1,
-        crate::ir::lowering::context::SlotType::FromOperand,
+        SlotType::FromOperand,
         crate::ir::ImplicitCloneReason::ConsumingArg);
 
     // Compute mangled dict type name
@@ -552,11 +552,11 @@ pub(super) fn lower_dict_literal(
         // genuine `Known` targets — and they reach the same deref arm.
         let (k, _) = ctx.materialize_for_slot(
             builder, k, key_expr,
-            crate::ir::lowering::context::SlotType::Known(key_type),
+            SlotType::Known(key_type),
             crate::ir::ImplicitCloneReason::ConsumingArg);
         let (v, _) = ctx.materialize_for_slot(
             builder, v, val_expr,
-            crate::ir::lowering::context::SlotType::Known(val_type),
+            SlotType::Known(val_type),
             crate::ir::ImplicitCloneReason::ConsumingArg);
         insert_pair(ctx, builder, dict_local, dict_type, &put_fn, k, v, key_type, val_type, key_expr, val_expr);
     }
@@ -702,7 +702,7 @@ fn collection_accumulator_type(ctx: &mut LoweringContext, base: &str, elem_type:
 /// `lir_args.is_empty()`, so a producer that passes its own `SizeOf` argument
 /// silently disables the very upgrade it needs. Mirrors `lower_dict_literal`'s
 /// `Dict__K__V__new`.
-fn collection_ctor_name(ctx: &mut LoweringContext, base: &str, elem_type: TypeId) -> String {
+fn collection_ctor_name(ctx: &LoweringContext, base: &str, elem_type: TypeId) -> String {
     let elem_c = type_id_to_mangle_name(ctx, elem_type);
     format!("{base}__{elem_c}__new")
 }
