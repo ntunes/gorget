@@ -970,7 +970,31 @@ dispositions and check the number; and use the report's own numbering rather tha
 of two passes'. Anything requiring a decision the report leaves open is emitted as
 `ESCALATE:` rather than resolved.
 
-The agent's value is precisely that it has nothing else to do. An orchestrator holding five
+The agent's value is precisely that it has nothing else to do.
+
+**And the role's first outing produced the rule that finishes the set.** The dedicated fold
+agent — whose entire job is to not retype literals — retyped two of them while drafting: a
+duplicated line in one captured block, mangled em-dashes and a mangled `4×4` in another. It
+caught both, and how it caught them is the point. It did not catch them by re-reading its own
+paste. It caught them by *diffing the paste against a freshly-captured file*, then repairing
+by splicing the real output in through an asserting script.
+
+**Reading back is not verification; diffing is.** A human or a model re-reading its own
+transcription is checking the transcription against its memory of the source, which is the
+same faculty that produced the error. The only sound check is mechanical: capture the source
+again, diff, and assert. That the failure recurred under the role created specifically to
+prevent it is the strongest available evidence that no amount of care substitutes for a diff.
+
+The same outing showed what the mechanical shape buys. Its verification was not an assertion
+of completeness but a set of commands: `grep -c` on the disposition headings matching the
+report's own verdict counts; every `PASTE` confirmed by script to be a verbatim substring of
+the report; the whole report confirmed present by containment test rather than by eye; the
+pre-fold brief confirmed byte-unchanged by diff. It also recovered five earlier-pass minors
+that were about to be dropped for the third time, and flagged three cited line numbers that
+did not reproduce — one of which pointed at unrelated text, so editing it blindly would have
+corrupted a different sentence.
+
+ An orchestrator holding five
 tracks will always, under pressure, apply a careful procedure to the cheap items and
 approximate on the expensive one — and approximation is the entire failure mode. Giving the
 job to an agent with a single task and no competing context removes the pressure that
