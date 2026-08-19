@@ -689,6 +689,36 @@ tree or a stale driver, not a failed fix.
 
 ---
 
+## A verification command that names a worktree is already dead
+
+Scouts are told to checkpoint their prototypes and harnesses to `/tmp`, because agent
+worktrees are pruned at round close and anything living only in one is lost. That rule is
+necessary and it is not sufficient, because it protects the wrong half of the artifact.
+
+The scripts survive. The paths inside them do not. A harness written inside an agent
+worktree naturally hardcodes that worktree — the compiler binary it built, the fixture tree
+it swept, the output directory it wrote. Copy the script to `/tmp` and every one of those
+paths still points at a directory that will be deleted. Three such harnesses, all faithfully
+checkpointed, were re-run in one round after their worktrees were pruned. All three failed.
+**None of them said so.** One reported every row as `chk=127 bld=127`, which a reader
+skimming for a diff would take as uniform. Another printed `TOTAL guess-sites across the
+corpus: 0` — a clean, confident, entirely vacuous zero, in the same round that a vacuous
+sweep had already been promoted into a ratified design decision.
+
+Two rules follow, and the second is the one that keeps being missed.
+
+**Make the harness self-locating, or make it take its inputs as arguments.** A script that
+receives the `gg` binary as `$1` and resolves the repo from its own location survives being
+copied anywhere. A script that knows where it was born does not.
+
+**Every harness needs its own non-vacuity token, and you must state what yours is.** The
+generic advice — "check `grep -c '^OK'` is non-zero before trusting a sweep" — is right for
+a sweep that emits `OK` rows and useless for one that does not; applied to the wrong script
+it is itself a vacuous check. Before a harness's output can support a claim, name the
+specific string or count whose absence means *the instrument did not run*, and assert on it.
+A result that looks the same whether the tool worked or not is not evidence, however many
+rows it prints.
+
 ## A scout report mixes measurements and predictions; a brief must keep them apart
 
 The scout-before-you-brief rule exists because briefs built on stale premises are this
