@@ -34,8 +34,12 @@ offset "field access" that returns garbage.
 Passing a NAMED FUNCTION with a properly-typed `Thing &` signature
 side-steps this bug (see
 `rust_gg_bug_callable_amp_struct_iterator_segv/repro.gg` for the
-named-fn variant — which has a different bug, but confirms the
-closure-inference path is the specific failure here).
+named-fn variant, which confirms the closure-inference path is the
+specific failure here). ⚠ Updated R43 Track C: that named-fn variant
+had a SECOND, unrelated bug — the indirect-call argument ABI — which
+is now FIXED and its test is live. The closure-literal defect on this
+page is untouched by that fix: its root is parameter-type inference,
+not the calling convention.
 
 ## Fix direction (speculative)
 
@@ -53,17 +57,19 @@ correctly per top-level fixture `generic_callable.gg`.
 - R39 Phase 2e Option C helper design was blocked (closure literal
   `(p): p.parse_type_with_ownership()` for the parse-item callback
   would have been the cleanest idiomatic shape, but this bug forces
-  either a NAMED function callback (also broken — see
-  `rust_gg_bug_callable_amp_struct_iterator_segv`) or a design
-  rewrite without Callable-typed params).
+  either a NAMED function callback (also broken AT THE TIME — see
+  `rust_gg_bug_callable_amp_struct_iterator_segv`, FIXED in R43 Track C)
+  or a design rewrite without Callable-typed params).
 - The fallback (single `bool consume_comma_or_tok(&self, int)`
   helper with no Callable / no closure literal) shipped instead.
 
 ## Related bugs
 
 - `rust_gg_bug_callable_amp_struct_iterator_segv` — named-fn callback
-  with the same Callable-typed struct-ref param SIGSEGVs when
-  invoked in a `Vector.get().unwrap()` iterator body.
+  with the same Callable-typed struct-ref param. **FIXED (R43 Track C)**:
+  it was the indirect-call argument ABI, guessed from the argument's
+  shape instead of written from the callee's declared ownership; its
+  test is now LIVE. A different root from this page's defect.
 - `rust_gg_bug_generic_mono_parser_scale` — related but only
   manifests at parser.gg scale; may or may not be a downstream of
   this bug.
