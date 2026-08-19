@@ -3923,7 +3923,7 @@ impl<'a> FuncLowering<'a> {
             // by-value large aggregate also leaves `Auto` here, so the terminal
             // state is a shrinking allowlist, not an assert. Census:
             //   GG_REPORT_CLOSURE_ABI_GUESS=1 gg build <fixture>
-            // Ratchet: `closure_abi_guess_census` in tests/integration.rs.
+            // Ratchet: `closure_abi_declared_signature_census` in tests/integration.rs.
             if by_ptr.is_empty()
                 && !user_args.is_empty()
                 && std::env::var_os("GG_REPORT_CLOSURE_ABI_GUESS").is_some()

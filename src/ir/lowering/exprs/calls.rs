@@ -40,7 +40,7 @@ use super::{lower_expr, infer_operand_type_full,
 /// one helper so a third arm cannot appear un-instrumented.
 ///
 /// Census: `GG_REPORT_CALLABLE_SIG_ERASED=1 gg build <fixture>`;
-/// ratchet: `closure_abi_guess_census` in tests/integration.rs.
+/// ratchet: `closure_abi_declared_signature_census` in tests/integration.rs.
 fn report_callable_sig_erased(callable_name: &str, arm: &str, args: usize) {
     if std::env::var_os("GG_REPORT_CALLABLE_SIG_ERASED").is_some() {
         eprintln!("[callable-sig-erased] callee={callable_name} arm={arm} args={args}");
