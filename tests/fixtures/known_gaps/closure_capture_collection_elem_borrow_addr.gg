@@ -1,0 +1,31 @@
+# KNOWN GAP — a closure that captures a COLLECTION-ELEMENT BORROW and returns it
+# yields a raw ADDRESS instead of the element's value.
+#
+# `gg check` is clean and both backends exit 0; the program prints something like
+# `187651284390560` where `42` is correct.
+#
+# AXIS CELL: capture source = `.get(i).unwrap()` on a local `Vector[int]`;
+# capture form = an UNANNOTATED closure (`auto f = (): ...`). The ANNOTATED form
+# `Callable[Ref[int]()] f = (): v.get(0).unwrap()` prints the correct `42` on both
+# backends, so the two forms DISAGREE with each other — which is the sharper
+# statement of the defect, and why this fixture pins the unannotated one.
+#
+# ⚠ THIS IS NOT THE CONTAINER-LITERAL MINT, and it is not fixed by it. Measured
+# against the compiler both BEFORE and AFTER that fix: the address is printed
+# either way. The literal mints a slot from an unmaterialized operand; this is a
+# CLOSURE CAPTURE that never materializes the captured borrow at all, so the
+# closure environment stores the pointer and the call returns it.
+#
+# Closure capture IS a documented ownership boundary — `docs/devbook/11` lists it
+# among the positions where the destination must own — so a captured borrow owes
+# the same materialization every other consuming position performs.
+#
+# INTENDED: prints `42` on both backends.
+#
+# Wired test: known_gap_closure_capture_collection_elem_borrow (tests/integration.rs,
+# #[ignore]d).
+
+void main():
+    Vector[int] v = [42, 7]
+    auto f = (): v.get(0).unwrap()
+    print(f())

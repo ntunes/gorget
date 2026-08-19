@@ -1,0 +1,44 @@
+# KNOWN GAP — SELF-HOST LANE ONLY. A `@derive(Hashable, Equatable)` key/element
+# type used in a Dict or Set does not survive the self-host lowerer's dead-code
+# elimination: the generated hasher's own callees are never marked reachable, so
+# the emitted C fails to LINK.
+#
+#   undefined reference to `FxHasher__write_int'
+#   undefined reference to `FxHasher__write_string'
+#   undefined reference to `hash_of__Named'
+#
+# Rust gg compiles, links and runs this correctly on both backends — this is a
+# LANE DIVERGENCE, not a language question.
+#
+# AXIS CELL: self-host lane × `@derive(Hashable, Equatable)` struct × used as a
+# Dict key AND as a Set element. The DCE root seeding reaches `T__hash` / `T__eq`
+# themselves (`lir_codegen.gg`, the `collect_hashable_key_types` seeding loop) but
+# the transitive walk does not reach the `FxHasher` methods those hashers call,
+# nor the `hash_of__T` glue.
+#
+# ⚠ PRE-EXISTING, and measured as such rather than assumed: reproduced against
+# the UNMODIFIED self-host driver, before the typed set allocator landed. Same
+# family as the corpus's `method_generic_trait_dispatch` CC-FAIL
+# (`undefined reference to Point__custom_hash__FxHasher`).
+#
+# ⚠ Also affects the live fixtures `dict_user_key_hashable.gg` and
+# `set_user_key_hashable.gg` on the self-host lane.
+#
+# INTENDED: links on the self-host lane and prints `1` then `true`, matching
+# Rust gg.
+#
+# Wired test: known_gap_sh_derive_hashable_key_dce (tests/integration.rs,
+# #[ignore]d).
+
+@derive(Hashable, Equatable)
+struct Named:
+    String name
+    int n
+
+void main():
+    Dict[Named, int] d = Dict[Named, int]()
+    d.set(Named("a", 1), 7)
+    print(d.len())
+    Set[Named] s = Set[Named]()
+    s.add(Named("a", 1))
+    print(s.contains(Named("a", 1)))

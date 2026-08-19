@@ -51115,6 +51115,40 @@ fn set_literal_key_channel_owned() {
     run_gg("set_literal_key_channel_owned.gg", "1\ntrue\ntrue\ntrue");
 }
 
+/// KNOWN GAP — a closure capturing a COLLECTION-ELEMENT BORROW and returning it
+/// yields a raw ADDRESS. `gg check` clean, both backends exit 0.
+///
+/// The ANNOTATED form (`Callable[Ref[int]()] f = (): v.get(0).unwrap()`) prints
+/// the correct `42` on both backends while the UNANNOTATED form prints an
+/// address — the two disagree, which is the sharper statement of the defect.
+///
+/// ⚠ NOT the container-literal mint and NOT fixed by it: measured against the
+/// compiler both before and after that fix, the address is printed either way.
+/// Closure capture is a documented ownership boundary (devbook/11), so a
+/// captured borrow owes the same materialization every consuming position does.
+#[test]
+#[ignore = "known gap (R43 M1): a closure capturing a collection-element borrow returns the ADDRESS, not the value, while the type-annotated form of the same expression returns the value; un-ignore when capture materializes the borrow"]
+fn known_gap_closure_capture_collection_elem_borrow() {
+    run_gg("known_gaps/closure_capture_collection_elem_borrow_addr.gg", "42");
+}
+
+/// KNOWN GAP — SELF-HOST LANE ONLY. A `@derive(Hashable, Equatable)` Dict key /
+/// Set element does not survive the self-host lowerer's DCE: the generated
+/// hasher's own callees are never marked reachable, so the emitted C fails to
+/// LINK (`undefined reference to FxHasher__write_int` / `hash_of__Named`).
+/// Rust gg compiles, links and runs it correctly on both backends — a LANE
+/// DIVERGENCE, not a language question.
+///
+/// ⚠ PRE-EXISTING, measured against the UNMODIFIED self-host driver rather than
+/// assumed. Same family as the corpus's `method_generic_trait_dispatch` CC-FAIL.
+/// Also affects the live `dict_user_key_hashable` / `set_user_key_hashable` on
+/// the SH lane.
+#[test]
+#[ignore = "known gap (R43 M1): the self-host lowerer's DCE drops the FxHasher callees of a @derive(Hashable) key type, so a Dict/Set over one fails to LINK on the SH lane while Rust gg runs it correctly; un-ignore when the DCE walk reaches the hasher's transitive callees"]
+fn known_gap_sh_derive_hashable_key_dce() {
+    run_gg("known_gaps/sh_derive_hashable_key_dce_link_fail.gg", "1\ntrue");
+}
+
 /// ⭐ The SET literal must select its KEY CHANNEL from the element type, and
 /// this is the ONLY instrument that can see it for the all-primitive member.
 ///
