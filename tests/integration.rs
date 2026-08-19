@@ -51066,6 +51066,28 @@ fn known_gap_container_literal_borrow_elem_type() {
     run_gg("known_gaps/container_literal_mints_borrow_elem_type.gg", "1\nbb");
 }
 
+/// KNOWN GAP — MEMORY UNSAFE on BOTH backends from ten lines of ordinary safe
+/// Gorget: a `Callable` bound to a LOCAL whose signature takes a STRUCT-typed
+/// `&` param SEGFAULTS when called.
+///
+/// ⚠ The discriminator is a COMBINATION, measured as a 2×2 and narrower than
+/// any of the three entries filed against this family:
+///   LOCAL × `int &`    → OK (prints 2)
+///   LOCAL × `struct &` → **SIGSEGV rc 139 on C AND LLVM**
+///   PARAM × `struct &` → OK (prints 2)
+///   direct call, no `Callable`, `struct &` → OK (prints 2)
+/// So it is neither "indirect calls are broken" nor "struct `&` params are
+/// broken" — it is the LOCAL binding combined with a struct-typed `&` param.
+///
+/// ⚠ `tests/fixtures/callable_ref_param.gg` samples `Callable[int(Counter &)]`
+/// — a struct `&` param — and PASSES, because it passes the callable as a
+/// PARAMETER. It covers the adjacent WORKING cell of this 2×2 (Core #12).
+#[test]
+#[ignore = "known gap (R43): a LOCAL-bound `Callable` with a struct-typed `&` param SIGSEGVs on both backends while the parameter-passed form works; un-ignore when the local-bound form carries the same `&` calling convention"]
+fn known_gap_callable_local_struct_amp_param_segv() {
+    run_gg("known_gaps/callable_local_struct_amp_param_segv.gg", "2");
+}
+
 /// KNOWN GAP — an `equip` function with NO `self` parameter is an ASSOCIATED
 /// function. `Pt.helper(2)` works (builds, runs, prints 3); calling it through
 /// an INSTANCE is accepted by `gg check` and then fails to build on BOTH

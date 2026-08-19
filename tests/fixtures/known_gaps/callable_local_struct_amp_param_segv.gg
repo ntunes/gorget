@@ -1,0 +1,48 @@
+# KNOWN GAP — MEMORY UNSAFE, BOTH BACKENDS, from ten lines of ordinary safe
+# Gorget. A `Callable` bound to a LOCAL, whose signature takes a STRUCT-typed
+# `&` param, SEGFAULTS when called.
+#
+# ⚠ THE DISCRIMINATOR IS A COMBINATION — measured as a 2x2 on 2026-08-19, and
+# it is NARROWER than any of the three entries filed against this family:
+#
+#   binding | param type | result
+#   --------|------------|--------------------------------
+#   LOCAL   | int &      | OK, prints 2
+#   LOCAL   | struct &   | SIGSEGV rc 139 on C AND LLVM   <-- this fixture
+#   PARAM   | struct &   | OK, prints 2
+#   (direct call, no Callable, struct &)  OK, prints 2
+#
+# So it is NOT "indirect calls are broken" (a param-passed Callable with the
+# same struct `&` signature works), and NOT "struct `&` params are broken"
+# (the direct call and the param form both work). It is the LOCAL binding
+# combined with a struct-typed `&` parameter.
+#
+# ⚠ WHY THE EXISTING FIXTURE DOES NOT CATCH IT: `tests/fixtures/callable_ref_param.gg`
+# samples `Callable[int(Counter &)]` — a struct `&` param — and PASSES, because
+# it passes the callable as a PARAMETER. It covers the adjacent WORKING cell of
+# the same 2x2. Core #12: a green cell may be green for a reason unrelated to
+# what you think it tests, and a fixture set that samples one value of a typed
+# axis is an anecdote.
+#
+# Measured 2026-08-19 at HEAD:
+#     gg check                -> "OK: no semantic errors"  (rc 0)
+#     gg build (C)            -> rc 0, then the binary exits 139 (SIGSEGV)
+#     gg build --backend=llvm -> rc 0, then the binary exits 139 (SIGSEGV)
+#
+# INTENDED: prints `2` on both backends — the callee writes through the `&`.
+#
+# Wired test: known_gap_callable_local_struct_amp_param_segv (tests/integration.rs,
+# #[ignore]d). Un-ignore when the local-bound callable carries the same `&`
+# calling convention the parameter-passed form already gets.
+struct P:
+    int n
+
+void bump(P &p):
+    p.n = p.n + 1
+
+int main():
+    Callable[void(P &)] f = bump
+    P p = P(1)
+    f(&p)
+    print(p.n)
+    return 0
