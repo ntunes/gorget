@@ -921,6 +921,27 @@ is to stop exercising it.**
   a reader does. Run it before the reviewer does, and land the survivors as an explicit
   **ARTIFACT REGISTRY** section rather than trusting prose to carry them.
 
+- **(e) Before writing the instruction, diff it against the remedy CLAUSE BY CLAUSE and
+  list what the remedy said that your instruction does not.** Write that list down — an
+  explicit `ORPHAN CLAUSES:` line, even when it reads `none`. This is the rule that
+  subsumes (a): dropping half a remedy is invisible while you are writing, because the half
+  you kept reads complete. It only becomes visible when the two texts are set side by side
+  and the leftovers are named. Measured: a reviewer who applied this to one round's fold
+  found it would have caught **all five** of that pass's blocking findings, where rules
+  (a)-(d) between them caught none of the five.
+
+A worked failure that shows why paraphrase is never safe, even when it is faithful in
+spirit. A scout specified a corpus guard as *"the multiset of ROW SIGNATURES must survive
+`gg fmt`"*, restricted to comma-bearing containers. The fold rewrote that as *"the number of
+author-authored rows in the source equals the number of rows in the formatted output"* — a
+reasonable-sounding restatement that preserves the subject, the direction and the intent.
+It is also wrong in a way that matters: a container regrouped from two rows of two into one
+row of one and one of three has the **same row count** and a **different signature
+multiset**. The rewritten guard was measured GREEN on exactly the class it existed to
+retire, while the scout's original exits non-zero on that pair. Pasting the sentence would
+have cost nothing; rewriting it produced a guard that could not catch its own class — the
+Core #15e Q2 failure, introduced by the fold rather than by the design.
+
 The deeper reading: a brief accumulates two different kinds of content. **Judgements**
 compress well and survive rewriting. **Artifacts** — paths, identifiers, commands, counts,
 file names — do not compress at all, and every generation of editing sheds them. Keep them
