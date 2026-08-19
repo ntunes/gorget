@@ -51066,6 +51066,52 @@ fn known_gap_container_literal_borrow_elem_type() {
     run_gg("known_gaps/container_literal_mints_borrow_elem_type.gg", "1\nbb");
 }
 
+/// KNOWN GAP — CROSS-LANE accept/reject divergence on the reserved keyword
+/// `via`. Rust gg ACCEPTS the declaration `int via(int x):` and then REJECTS
+/// every call ("expected expression, found `via`", pointing at the CALL, not
+/// the declaration); the self-host accepts both and RUNS the program. One
+/// accepted program, three fates — Core #8 (>= 2 bugs) and Core #9 (the lanes
+/// must agree).
+///
+/// INTENDED: reject AT THE DECLARATION with a diagnostic naming `via` as a
+/// reserved keyword. Accepting a name and then making every use of it
+/// unparseable is neither lowering it nor rejecting it (Core #10).
+#[test]
+#[ignore = "known gap (R43): `via` is reserved; Rust gg accepts the declaration then rejects every call while the self-host accepts both. Un-ignore when the declaration is rejected with a teaching diagnostic on both lanes"]
+fn known_gap_reserved_keyword_via_as_fn_name() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/reserved_keyword_via_as_fn_name.gg");
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let output = build_with_timeout(
+        gg_command("check").arg(&fixture),
+        "known_gaps/reserved_keyword_via_as_fn_name.gg",
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        !output.status.success(),
+        "`gg check` must REJECT a function named with the reserved keyword `via`.\n{combined}"
+    );
+    // ⚠ Strip the fixture PATH before matching: the path contains the word
+    // "reserved" (it is in the fixture's own name), so a naive
+    // `combined.contains("reserved")` matches the filename echoed in the
+    // diagnostic header and passes GREEN ON ARRIVAL. Measured 2026-08-19.
+    let diagnostic_only = combined.replace(&fixture.display().to_string(), "<FIXTURE>");
+    assert!(
+        diagnostic_only.contains("reserved"),
+        "the diagnostic must name `via` as RESERVED and point at the DECLARATION. Today it \
+         says \"expected expression, found `via`\" at the CALL site (rc 1), blaming the use \
+         for a defect in the declaration, and never uses the word `reserved` at \
+         all.\n{diagnostic_only}"
+    );
+}
+
 /// KNOWN GAP — `@derive(Hashable)` on a struct with a `float` field LINK-FAILS:
 /// the generated `K__hash` calls `double__hash`, which nothing defines.
 /// `gg check` says "OK: no semantic errors", then the linker reports

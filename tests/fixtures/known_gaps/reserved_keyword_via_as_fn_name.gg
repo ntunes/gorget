@@ -1,0 +1,33 @@
+# KNOWN GAP — CROSS-LANE ACCEPT/REJECT DIVERGENCE (Core #8, >= 2 bugs).
+# `via` is a RESERVED KEYWORD (`src/lexer/token.rs`, equip delegation), but the
+# two lanes disagree about a function NAMED `via`, and Rust gg disagrees with
+# ITSELF:
+#
+#   Rust gg : ACCEPTS the declaration `int via(int x):` ...
+#             ... then REJECTS every call with
+#             "error: expected expression, found 'via'" pointing at the CALL.
+#   self-host: ACCEPTS both, and RUNS the program.
+#
+# So one accepted program has three different fates across the lanes, and the
+# user's diagnostic blames the call site for a defect in the declaration.
+#
+# Measured 2026-08-19 at HEAD:
+#     gg check  -> error: expected expression, found 'via'   (at the CALL)
+#     the declaration itself draws no diagnostic at all
+#
+# INTENDED: REJECT AT THE DECLARATION, with a teaching diagnostic naming `via`
+# as a reserved keyword and pointing at the name. Accepting a name and then
+# making every use of it unparseable is the worst of both -- it is neither
+# "lower it" nor "reject it" (Core #10), and the lanes must agree (Core #9).
+#
+# ⚠ This fixture asserts the INTENDED accept/reject shape, not today's. It is a
+# NEGATIVE: the wired test asserts `gg check` FAILS *with a diagnostic that
+# names the declaration*, which is why it cannot simply assert stdout.
+#
+# Wired test: known_gap_reserved_keyword_via_as_fn_name (tests/integration.rs,
+# #[ignore]d).
+int via(int x):
+    return x + 1
+
+void main():
+    print(via(1))
