@@ -3903,11 +3903,12 @@ impl<'a> FuncLowering<'a> {
             // platform ABI hands large aggregates over in a hidden-pointer slot.
             //
             // Params whose ownership is not known HERE keep whatever the
-            // by-value promotion above decided: `operand_param_ownerships`
-            // returns empty when the callable's GIR type was erased (a
-            // `Callable[..]` PARAMETER is typed `unit`, a container element
-            // `fn() -> i64`), and empty means UNKNOWN, not "no borrows". Those
-            // sites are what the `GG_REPORT_CLOSURE_ABI_GUESS` guard reports.
+            // by-value promotion above decided: `declared_closure_param_by_ptr`
+            // returns empty when the signature reached NEITHER of its two
+            // channels (a container element's `FnPtr` carries no params, and an
+            // `auto`-bound callable publishes nothing), and empty means
+            // UNKNOWN, not "no borrows". Those sites are exactly what the
+            // `GG_REPORT_CLOSURE_ABI_GUESS` guard below reports.
             let by_ptr = self.declared_closure_param_by_ptr(args.first(), emit_name);
             for (i, is_ptr) in by_ptr.iter().enumerate().take(user_abis.len()) {
                 if *is_ptr {
