@@ -20,6 +20,17 @@
 #   order fix alone      : no channel selected at all
 #   BOTH                 : every cell fixed
 #
+# ⭐ POSITION AXIS, CROSSED WITH THE TYPE AXIS. The element type is minted from
+# element 0 and elements 1..N land in the slot it minted — DIFFERENT code paths.
+# A net that only ever puts the borrow at position 0 leaves the second unguarded:
+# deleting the 1..N materialization leaves every position-0 cell GREEN while
+# `Set[int] out = {99, s}` answers `false` to a `contains` of a member.
+#
+# ⚠ Chosen by MEASUREMENT. Under that deletion, at position 1:
+#   int    -> `false`  -- DISCRIMINATES
+#   String -> correct  -- green on arrival, NOT claimed as coverage
+#   Ps     -> correct  -- green on arrival, NOT claimed as coverage
+#
 # RED-VERIFIED against the pre-fix compiler (both backends) — every cell below
 # printed `false` for its `contains`, including the ordered/unordered pair and
 # the primitive. Note that `Set[Pt{int,int}]` from an OWNED source is
@@ -68,6 +79,15 @@ void set_int_from_borrow():
     Set[int] out = {s}
     print(out.contains(20))
 
+# ⭐ CROSSED CELL: element TYPE `int` x borrow POSITION 1 (not 0). Element 0 is a
+# static literal, so the slot is minted from it and the borrow lands in an
+# already-minted slot. RED under a 1..N-materialization deletion: `false`.
+void set_int_from_borrow_at_position_1():
+    Vector[int] v = [10, 20]
+    auto s = v.get(1).unwrap()
+    Set[int] out = {99, s}
+    print(out.contains(20))
+
 # The plain-literal forms must keep working — they were already correct, and a
 # producer realignment is exactly the change that could break them.
 void plain_literals_unchanged():
@@ -85,4 +105,5 @@ void main():
     set_resource_struct_from_borrow()
     set_value_struct_from_borrow()
     set_int_from_borrow()
+    set_int_from_borrow_at_position_1()
     plain_literals_unchanged()

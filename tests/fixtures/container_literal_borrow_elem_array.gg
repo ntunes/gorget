@@ -28,6 +28,33 @@
 # so the bogus element type launders the value past the `ShallowCopyOfResource`
 # validator, and the address it reads back is a live allocation. ggdef is the
 # only instrument that adjudicates that cell.
+#
+# ⭐ POSITION AXIS, CROSSED WITH THE TYPE AXIS. The element type is minted from
+# element 0 and the remaining elements land in the slot it minted, so the two
+# groups take DIFFERENT code paths — position 0 asks for a slot to be minted,
+# positions 1..N are handed one. A net that only ever puts the borrow at
+# position 0 leaves the second path unguarded: deleting the 1..N materialization
+# leaves every position-0 fixture GREEN while `Vector[int] out = [7, s]` reads
+# back a raw address.
+#
+# ⚠ Choose the crossed cell by MEASUREMENT, not symmetry. Under that deletion:
+#   int    at position 1 -> `7` then an ADDRESS   -- DISCRIMINATES
+#   String at position 1 -> correct               -- green on arrival, useless
+#   Pt     at position 1 -> correct               -- green on arrival, useless
+# so the crossed cell below is `int`, and the String/struct crossings are
+# deliberately NOT claimed as coverage for this axis.
+#
+# ⭐ BORROW-SOURCE AXIS. `.get(i).unwrap()` on a local is only ONE way to obtain
+# an internal borrow, and a fixture set that samples one value of an axis is an
+# anecdote. The four other sources below all produced a wrong answer pre-fix and
+# are fixed by the same change:
+#   `&`-parameter          -- the borrow crosses a function boundary
+#   struct FIELD read      -- no method call at all
+#   `Dict.get().unwrap()`  -- a different collection's view
+#   nested chain `i.xs.get(1)` -- field-then-element
+# OMITTED and named rather than claimed: view-returning USER methods and
+# function returns, which reach the literal as ordinary owned values on this
+# path; and for-loop elements, whose own defect is filed separately.
 
 struct Pt:
     int x
@@ -36,6 +63,9 @@ struct Pt:
 struct Named:
     String name
     int n
+
+struct Boxed:
+    Vector[int] xs
 
 enum Shape:
     Circle(String)
@@ -58,6 +88,17 @@ void float_cell():
     auto s = v.get(1).unwrap()
     Vector[float] out = [s]
     print(out.get(0).unwrap())
+
+# ⭐ CROSSED CELL: element TYPE `int` x borrow POSITION 1 (not 0). The literal's
+# first element is a STATIC LITERAL, so the slot is minted from it and the borrow
+# lands in an ALREADY-MINTED slot — the 1..N path. RED under a 1..N-materialization
+# deletion: prints `7` then a raw address (measured `187651156263592`).
+void int_cell_borrow_at_position_1():
+    Vector[int] v = [10, 20]
+    auto s = v.get(1).unwrap()
+    Vector[int] out = [7, s]
+    print(out.get(0).unwrap())
+    print(out.get(1).unwrap())
 
 void bool_cell():
     Vector[bool] v = [false, true]
@@ -111,9 +152,44 @@ void enum_payload_cell():
         case Shape.Sq(n):
             print(n)
 
+# ⭐ BORROW-SOURCE CELL: a `&` PARAMETER — the borrow crosses a call boundary.
+Vector[int] from_amp_param(Vector[int] &v):
+    auto s = v.get(1).unwrap()
+    Vector[int] out = [s]
+    return out
+
+# ⭐ BORROW-SOURCE CELL: a struct FIELD read, with no method call involved.
+void from_struct_field():
+    Named h = Named("bb", 2)
+    Vector[String] outs = [h.name]
+    print(outs.get(0).unwrap())
+    Vector[int] outi = [h.n]
+    print(outi.get(0).unwrap())
+
+# ⭐ BORROW-SOURCE CELL: `Dict.get().unwrap()` — a different collection's view.
+void from_dict_get():
+    Dict[String, int] d = {"k": 20}
+    auto s = d.get("k").unwrap()
+    Vector[int] out = [s]
+    print(out.get(0).unwrap())
+
+# ⭐ BORROW-SOURCE CELL: a NESTED chain — field, then element.
+void from_nested_chain():
+    Boxed b = Boxed([10, 20])
+    auto s = b.xs.get(1).unwrap()
+    Vector[int] out = [s]
+    print(out.get(0).unwrap())
+
 void main():
+    Vector[int] amp_src = [10, 20]
+    Vector[int] amp_out = from_amp_param(&amp_src)
+    print(amp_out.get(0).unwrap())
+    from_struct_field()
+    from_dict_get()
+    from_nested_chain()
     string_cell()
     int_cell()
+    int_cell_borrow_at_position_1()
     float_cell()
     bool_cell()
     value_struct_cell()

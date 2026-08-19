@@ -19,6 +19,27 @@
 #                              so the lookup missed entirely (want `7`)
 # The KEY cell is the sharper one: a wrong key slot does not merely return a
 # wrong value, it makes the entry unreachable.
+#
+# ⭐ POSITION AXIS, CROSSED WITH THE KEY/VALUE AXIS. The K and V types are minted
+# from PAIR 0 and pairs 1..N land in the slots it minted, so the two groups take
+# DIFFERENT code paths. A net that only ever puts the borrow in pair 0 leaves the
+# second path unguarded: deleting the 1..N materialization leaves every pair-0
+# fixture GREEN while both crossed cells below ICE the compiler.
+#
+# ⚠ THE TWO CROSSED CELLS ARE GREEN ON THE PRE-FIX COMPILER, and that is not a
+# defect in them — it is the whole reason they are here. Pre-fix, the dict
+# materialized pairs 1..N inside `stage_dict_arg`; only the pair-0 MINT was
+# wrong. So a pair-1 borrow was already handled, and no pre-fix red is possible
+# for this cell. Their red is obtained the other way (Core #12): BREAK the
+# mechanism they guard — delete the 1..N materialization — and they ICE.
+#
+# ⚠ Chosen by MEASUREMENT. Under that deletion, at pair 1:
+#   String KEY   -> ICE   -- DISCRIMINATES
+#   String VALUE -> ICE   -- DISCRIMINATES
+#   int VALUE    -> correct, green on arrival -- NOT claimed as coverage
+# The ICE is a `Tier 2a consume-site violation` at `src/ir/lowering/mod.rs:2114`
+# ("untracked source consumed (ownership not decided)") — a compiler panic, not a
+# wrong answer, which is why these two cells are worth their own functions.
 
 struct Pt:
     int x
@@ -39,6 +60,22 @@ void borrowed_key_string():
     Vector[String] v = ["aa", "bb"]
     auto s = v.get(1).unwrap()
     Dict[String, int] out = {s: 7}
+    print(out.get("bb").unwrap())
+
+# ⭐ CROSSED CELL: borrowed String VALUE at PAIR 1 (not pair 0). Pair 0 is fully
+# static, so the Dict__K__V slot is minted from it and the borrow lands in an
+# already-minted slot. RED under a 1..N-materialization deletion: compiler ICE.
+void borrowed_value_string_at_pair_1():
+    Vector[String] v = ["aa", "bb"]
+    auto s = v.get(1).unwrap()
+    Dict[String, String] out = {"k0": "zz", "k1": s}
+    print(out.get("k1").unwrap())
+
+# ⭐ CROSSED CELL: borrowed String KEY at PAIR 1. Same path, the key channel.
+void borrowed_key_string_at_pair_1():
+    Vector[String] v = ["aa", "bb"]
+    auto s = v.get(1).unwrap()
+    Dict[String, int] out = {"k0": 1, s: 7}
     print(out.get("bb").unwrap())
 
 void borrowed_value_int():
@@ -66,6 +103,8 @@ void borrowed_value_resource_struct():
 void main():
     borrowed_value_string()
     borrowed_key_string()
+    borrowed_value_string_at_pair_1()
+    borrowed_key_string_at_pair_1()
     borrowed_value_int()
     borrowed_value_struct()
     borrowed_value_resource_struct()

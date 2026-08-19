@@ -51081,7 +51081,7 @@ fn container_literal_borrow_elem_type_minimal() {
 fn container_literal_borrow_elem_array() {
     run_gg(
         "container_literal_borrow_elem_array.gg",
-        "bb\n20\n2.500000\ntrue\n3\n4\nbb\n2\n2\n3\nbb\nbb",
+        "20\nbb\n2\n20\n20\nbb\n20\n7\n20\n2.500000\ntrue\n3\n4\nbb\n2\n2\n3\nbb\nbb",
     );
 }
 
@@ -51092,7 +51092,7 @@ fn container_literal_borrow_elem_array() {
 fn container_literal_borrow_elem_dict() {
     run_gg(
         "container_literal_borrow_elem_dict.gg",
-        "1\nbb\n7\n20\n3\n4\nbb\n2",
+        "1\nbb\n7\nbb\n7\n20\n3\n4\nbb\n2",
     );
 }
 
@@ -51105,7 +51105,7 @@ fn container_literal_borrow_elem_dict() {
 fn container_literal_borrow_elem_set() {
     run_gg(
         "container_literal_borrow_elem_set.gg",
-        "1\ntrue\ntrue\ntrue\ntrue\ntrue\n2\ntrue\n2\n0",
+        "1\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n2\ntrue\n2\n0",
     );
 }
 
@@ -51132,22 +51132,6 @@ fn known_gap_closure_capture_collection_elem_borrow() {
     run_gg("known_gaps/closure_capture_collection_elem_borrow_addr.gg", "42");
 }
 
-/// KNOWN GAP — SELF-HOST LANE ONLY. A `@derive(Hashable, Equatable)` Dict key /
-/// Set element does not survive the self-host lowerer's DCE: the generated
-/// hasher's own callees are never marked reachable, so the emitted C fails to
-/// LINK (`undefined reference to FxHasher__write_int` / `hash_of__Named`).
-/// Rust gg compiles, links and runs it correctly on both backends — a LANE
-/// DIVERGENCE, not a language question.
-///
-/// ⚠ PRE-EXISTING, measured against the UNMODIFIED self-host driver rather than
-/// assumed. Same family as the corpus's `method_generic_trait_dispatch` CC-FAIL.
-/// Also affects the live `dict_user_key_hashable` / `set_user_key_hashable` on
-/// the SH lane.
-#[test]
-#[ignore = "known gap (R43 M1): the self-host lowerer's DCE drops the FxHasher callees of a @derive(Hashable) key type, so a Dict/Set over one fails to LINK on the SH lane while Rust gg runs it correctly; un-ignore when the DCE walk reaches the hasher's transitive callees"]
-fn known_gap_sh_derive_hashable_key_dce() {
-    run_gg("known_gaps/sh_derive_hashable_key_dce_link_fail.gg", "1\ntrue");
-}
 
 /// ⭐ The SET literal must select its KEY CHANNEL from the element type, and
 /// this is the ONLY instrument that can see it for the all-primitive member.

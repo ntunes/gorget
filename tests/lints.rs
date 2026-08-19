@@ -17970,9 +17970,28 @@ fn container_literal_arms_mint_from_materialized_operand() {
     let src = fs::read_to_string("src/ir/lowering/exprs/collections.rs")
         .expect("read src/ir/lowering/exprs/collections.rs");
 
-    // The three producers that mint a destination element type. A fourth
-    // literal arm added here without a `materialize_for_slot` call is the next
-    // instance of this class, and it fails this test rather than shipping.
+    // ── THE SUBJECT SET, and what is deliberately OUT of it ──
+    //
+    // IN: the three arms that mint a destination element type FROM AN ELEMENT
+    // OPERAND. These are the class.
+    //
+    // OUT, and why — `collections.rs` has nine `lower_*` arms, so the boundary
+    // has to be stated or the next reader cannot tell an omission from a
+    // decision:
+    //   * `lower_list_comprehension` / `lower_string_comprehension` /
+    //     `lower_dict_comprehension` / `lower_set_comprehension` — these mint
+    //     from a hardcoded accumulator type (`SizeOf(I64_TYPE)` and friends),
+    //     NOT from an element operand, so `materialize_for_slot` has no operand
+    //     to be handed and the invariant does not apply as written. They have
+    //     their OWN filed defect — a comprehension that CHANGES element type
+    //     pushes at the SOURCE element's size — which is a different mechanism
+    //     with a different fix, and folding it in here would produce a guard
+    //     that fires on the wrong thing.
+    //   * `lower_optional_chain` / `lower_range_expr` — no element slot at all.
+    //
+    // A fourth MINTING arm added without a `materialize_for_slot` call is the
+    // next instance of this class, and it fails this test rather than shipping.
+    // A new COMPREHENSION arm is not this guard's business.
     const MINTING_ARMS: [&str; 3] = [
         "fn lower_array_literal(",
         "fn lower_dict_literal(",
