@@ -69,11 +69,12 @@ members of a `trait`, the methods of an `equip` block, the declarations in an
 or a closure body. Wherever you can write two things one after another, the
 space you leave between them is yours.
 
-It reaches inside a **list that is exploded** — one element per line — too, so a
-long table of entries keeps the paragraphs you grouped it into. The one place a
-blank cannot survive is a list the formatter *packed*: several elements share a
-line there, so there is nowhere for a paragraph break to sit. A blank line is
-kept wherever the layout has somewhere to put it.
+It reaches inside a **list that is exploded** too — a list broken across lines
+because you asked for it — so a long table of entries keeps the paragraphs you
+grouped it into. The one place a blank cannot survive is a list the formatter
+*packed*: the formatter chose those line breaks, so there is no boundary of yours
+for a paragraph break to sit on. A blank line is kept wherever the layout has
+somewhere to put it.
 
 ### Suite layout is yours
 
@@ -161,8 +162,8 @@ letters and emoji cost one column each, not one per byte.
 
 A list that fits stays on one line, *unless you say otherwise* — see the
 trailing comma below. A list that doesn't fit is **packed**: the
-formatter fills each line up to the budget and then wraps, rather than exploding
-every element onto a line of its own. Continuation lines are indented one level
+formatter fills each line up to the budget and then wraps, rather than breaking it
+into a vertical list. Continuation lines are indented one level
 in from the line the list started on, and the closing bracket follows the last
 element:
 
@@ -177,18 +178,20 @@ generic parameters and arguments, closure parameters, array, tuple and
 dictionary literals, and grouped imports.
 
 A packed list carries **no trailing comma** — the closing bracket is right after
-the last element, so there is nowhere for one to sit. The other shape is one
-element per line, *with* a trailing comma and a closing bracket on its own line.
-A list takes that shape when its elements carry comments (comments belong to the
-lines they annotate), and when you ask for it:
+the last element, so there is nowhere for one to sit. The other shape is
+**exploded**: broken across lines *with* a trailing comma and a closing bracket on
+its own line — one element per line unless you grouped them yourself, which the
+next section is about. A list takes that shape when its elements carry comments
+(comments belong to the lines they annotate), and when you ask for it:
 
 One element can be wider than the whole budget — a long qualified name, a deeply
 generic type. The formatter puts it on its own continuation line and lets it
-overrun rather than breaking it somewhere meaningless. Three things can push a
+overrun rather than breaking it somewhere meaningless. Four things can push a
 line past 120: that single over-wide element; text the formatter writes after a
 list's closing bracket — the `= "symbol"` of an `extern` declaration, or the `:`
-that ends a signature — which the packer does not measure; and an **import
-line**, which is exempt from the budget entirely.
+that ends a signature — which the packer does not measure; an **import line**,
+which is exempt from the budget entirely; and a **row you grouped yourself**
+inside an exploded list, which is kept as you wrote it and never re-wrapped.
 
 The import exemption is a consequence of the syntax, not a preference. A `from x
 import a, b, c` name list is the one list in the language with no delimiter
@@ -202,7 +205,7 @@ list.
 ### The trailing comma is yours to write
 
 **Write a trailing comma after the last element and the list stays exploded** —
-one element per line — however comfortably it would have fitted. Leave it off and
+broken across lines, however comfortably it would have fitted. Leave it off and
 the formatter packs as usual. It is the one layout decision the formatter hands
 back to you, and you make it in the code rather than in a directive above it:
 
@@ -235,6 +238,46 @@ not a layout signal, and nothing is inferred from it.
 
 A trailing comma is a signal, never a requirement: a list you never comma stays
 packed forever, and both shapes are equally idiomatic.
+
+### Your line grouping is yours too
+
+The comma says the list stays open. It does not say where the breaks go — you do.
+Inside an exploded list, the formatter keeps the lines you grouped the elements
+into:
+
+```gorget
+Vector[String] mutators = [
+    "push", "pop", "set", "insert", "remove", "clear", "sort", "sorted",
+    "reverse", "swap", "swap_remove", "extend", "append", "truncate",
+]
+```
+
+Twenty-five names on four lines is a decision, and one name per line would be
+twenty-five lines of scrolling. So the pair of rules is: **the trailing comma says
+keep this open; your own newlines say where to break.** Write every element on its
+own line and that is what you get; group them into rows and the rows stay.
+
+Three things are worth knowing about the edges.
+
+**It preserves rows, not columns.** If you padded the elements into aligned
+columns, the padding collapses to a single space after each comma — the rows
+survive, the alignment does not. The formatter rewrites elements as it goes, so a
+column you measured by hand would be wrong the moment one of them changed width.
+
+**The brackets stay canonical.** The opening bracket ends its line, the closing one
+gets its own line with the trailing comma before it, and the rows are indented one
+level. Where you put the brackets is the formatter's to normalize; where you put the
+elements is yours.
+
+**A row you wrote is never re-wrapped**, even past the 120-column budget. The row is
+the unit you chose, so the formatter will not second-guess it — if a row runs long,
+that is your call to make and yours to change.
+
+There is nothing to preserve in a list you wrote on one line, so `[1, 2, 3,]`
+becomes the plain one-element-per-line shape. And grouping alone is not a request to
+explode: without the trailing comma the list is packed as usual, rows and all.
+Otherwise every list you ever saved would be frozen in whatever shape it happened to
+have, and `gg fmt` would stop normalizing anything.
 
 ## Comments
 

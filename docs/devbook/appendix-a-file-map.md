@@ -34,7 +34,7 @@ file is called out. "Pipeline stage" follows the order above. Files marked
 | `src/lir/` | ~22,000 | LIR | SSA-form low-level IR and the GIR→LIR lowering pass. Sole production lowering target. |
 | `src/bir/` | ~6,300 | BIR | Backend IR — a typed newtype over `LirModule` guaranteeing canonical high-level ops are expanded to primitives before a backend sees them. |
 | `src/backend/` | ~17,200 (Rust) | Codegen | C and LLVM backends. The C runtime is no longer embedded as a Rust string — it lives in ~62 external `.c` files under `c/runtime/` (~14,670 LOC, pulled in via `include_str!`) and is counted separately, as are the vendored C amalgamations (~282k lines; see below). |
-| `src/formatter/` | ~3,200 | Tooling | Source formatter (`gg fmt`), Wadler-style pretty-printer. |
+| `src/formatter/` | ~9,300 | Tooling | Source formatter (`gg fmt`), Wadler-style pretty-printer. |
 
 ## Top-level files
 
@@ -220,8 +220,8 @@ binary alongside the generated runtime.
 | `parser/stmt.rs` | ~1,018 | Statement parsing. |
 | `parser/tests.rs` | ~1,564 | Parser unit tests. |
 | `parser/{visitor,pattern,types}.rs` | ~940 total | AST visitor; pattern parsing; type parsing. |
-| `formatter/mod.rs` | ~2,633 | `gg fmt` formatter logic. |
-| `formatter/doc.rs` | ~558 | Wadler-style document combinators. |
+| `formatter/mod.rs` | ~8,200 | `gg fmt` formatter logic. |
+| `formatter/doc.rs` | ~1,100 | Wadler-style document combinators. |
 
 ## Where to start reading
 

@@ -230,10 +230,13 @@ one (see [The magic trailing comma](#the-magic-trailing-comma)).
 line, *with* a trailing comma, built from `Group`/`Line`/`IfBreak`. `IfBreak` is what
 makes that comma conditional: `IfBreak { flat: "", broken: "," }`, so a flat list has
 no trailing comma and a broken one does (`src/formatter/doc.rs:213-216`, exercised at
-`doc.rs:723` and `:753`). No production call site uses it — a comment-bearing list
-reaches the same exploded shape imperatively, through
-`format_bracketed_broken_with_comments`, because comments cannot survive the
-pre-render that fill packing depends on. The `formatter_list_emit_fill_census` lint
+`doc.rs:723` and `:753`). No production call site uses it — an exploded list is
+emitted imperatively instead, through `format_bracketed_broken_with_comments`,
+because comments cannot survive the pre-render that fill packing depends on. That
+emitter is a strict generalisation of `surround`'s shape rather than a copy of it:
+one item per line is what it produces when the author expressed no grouping of
+their own, and where they did, their rows are kept (see [The author's line
+grouping](#the-authors-line-grouping)). The `formatter_list_emit_fill_census` lint
 counts both spellings — and the chokepoint's own call sites and carve-outs — so that
 opting a list out of the canon, or out of the gate, stays a visible decision.
 
@@ -286,12 +289,13 @@ and the same shape reaches trait signatures and extern declarations, which share
 parameter-list emitter. Both re-parse and both are idempotent; the trailing comma is
 the existing exploded-list canon, not a new spelling invented here.
 
-Third, once a container is exploded its elements occupy whole lines, so the
-author's blank lines BETWEEN them become expressible — and are therefore kept,
-under the same preserve-and-cap rule the member containers follow. The
-asymmetry is worth naming: a blank line survives in an EXPLODED list and cannot
-survive in a fill-broken one, because a fill-broken list has no per-element
-line to hang it on. That is not a special case for lists but the general shape
+Third, once a container is exploded its elements occupy lines of their own — one
+per line by default, or the author's own rows where they wrote them — so the
+author's blank lines BETWEEN them become expressible, and are therefore kept, under
+the same preserve-and-cap rule the member containers follow. The asymmetry is worth
+naming: a blank line survives in an EXPLODED list and cannot survive in a
+fill-broken one, because a fill-broken list has no line boundary between elements to
+hang it on. That is not a special case for lists but the general shape
 of the formatter's bargain — it owns layout, and a blank can only be preserved
 where the chosen layout has somewhere to put it.
 
@@ -386,6 +390,72 @@ the gated window and let an interior comment escape the call it annotated.
 The one-element tuple `(x,)` is exempt and always will be: there the comma IS the
 syntax that makes it a tuple rather than a parenthesised expression, not a layout
 signal. Black exempts the same shape.
+
+### The author's line grouping
+
+The magic comma says a list is EXPLODED. It does not say where the breaks go, and
+one element per line is only the answer when the author offered no other. A
+hand-grouped table is the case it is not:
+
+```gorget
+Vector[String] mutators = [
+    "push", "pop", "set", "insert", "remove", "clear", "sort", "sorted",
+    "reverse", "swap", "swap_remove", "extend", "append", "truncate",
+]
+```
+
+Twenty-five names on four lines is a decision — the rows carry meaning, the diff of
+adding one is a single line, and one-name-per-line is twenty-five lines of scrolling.
+So the rule is a pair: **the magic trailing comma says EXPLODE; the author's own
+newlines say WHERE TO BREAK.**
+
+The mechanism is one probe, `Formatter::author_line_break_between`, read at one
+place — the top of `format_bracketed_broken_with_comments`, before any element is
+rendered. It answers, for two adjacent elements, whether the author wrote a line
+break between them; the emitter turns those answers into an element-to-line
+assignment and follows it. Reading the pre-pass before rendering is what makes an
+element's own HEIGHT irrelevant to its neighbours: a nested container that explodes
+to five lines does not move the element the author put beside it.
+
+Four properties, each of which is a decision rather than an implementation detail.
+
+**The ENGAGEMENT GUARD.** Preservation engages only when the author expressed at
+least one break BETWEEN elements. A container written on a single line carries no
+grouping, so it keeps the one-element-per-line canon; without the guard `[1, 2, y,]`
+would come back as a single half-exploded row nobody asked for. This is what keeps
+the rule layout-PRESERVING rather than layout-INVENTING, and it is the reason the
+grouping is not an independent explode trigger either: with no magic comma and no
+interior comment the list is PACKED, rows and all, because a formatter that froze
+every list into the shape it was last saved in would stop being a normaliser.
+
+**ASSIGNMENT, never columns.** Which elements share a line is preserved; the padding
+*within* a line is not. gofmt aligns columns and can afford to, because gofmt never
+rewrites elements. This formatter does — `!`→`^`, `( 2 )`→`(2)`, quote and radix
+normalisation — so any column the author measured is invalidated by the canon changes
+travelling with it, and preserving one would hand the formatter a second CONTINUOUS
+layout dimension it cannot keep idempotent. Element-to-line is DISCRETE and survives
+element rewriting.
+
+**Delimiters and indent stay canonical.** The open delimiter breaks, the close takes
+its own line with the trailing comma, and rows sit at the block indent. An author's
+`false))` hugging or paren-aligned continuation is not reproduced: those are the
+formatter's to decide, and the author's rows are expressible without them.
+
+**A preserved row is not re-wrapped**, however far past the budget it runs. The
+alternative — re-flowing a row the author wrote — would answer a question the ruling
+already answered in the other direction, and a row is exactly the unit the author
+chose. The residual `Unbroken` category of the width ratchet is what keeps such a
+line visible rather than silently permitted.
+
+The probe reads SOURCE, like the magic comma's and for the same reason: it runs on
+the sub-`Formatter`s `element_to_string` builds, and the comment side-table does not
+travel into those while the source does. It shares the magic comma's paren advance
+too, and that one is not optional — an element's recorded span ends at the WRAPPED
+node, so a newline the author wrote between a node and its own `)` sits in the region
+between this element and the next, and a scan from the bare span end reads it as a
+break the author did not make. That cell is corpus-neutral, which is precisely why it
+is pinned at the SOURCE by `formatter_author_grouping_reads_one_site` rather than
+left to an output gate that cannot see it.
 
 ### Splicing the two layers together
 
@@ -488,13 +558,17 @@ onto the measured prefix and over-reserve every caller downstream.
 
 Two positions are outside the mechanism, and both are ruled rather than pending:
 
-- **The exploded comment-bearing path.** When an interior comment routes a list to
-  `format_bracketed_broken_with_comments`, every element is re-rendered on its own
-  line ending in `,`, so each is charged an EXACT reserve of 1 — exact, not additive,
-  because a live caller reserve belongs to the CLOSE line and would over-reserve
-  every element by tens of columns. That path is a hand-rolled loop with no `Fill`
-  and no fit test, so the close line itself has no enforcement at all: it is written
-  at the outer indent and the caller's suffix follows it unmeasured.
+- **The exploded path.** When an interior comment or a magic trailing comma routes a
+  list to `format_bracketed_broken_with_comments`, every element is re-rendered
+  under an EXACT reserve — exact, not additive, because a live caller reserve
+  belongs to the CLOSE line and would over-reserve every element by tens of columns.
+  The number is what this element's own tail actually costs: **1** for the `,` when
+  the element ENDS its row, **2** for the `, ` when the next element continues the
+  row beside it. That path is a hand-rolled loop with no `Fill` and no fit test, so
+  the close line itself has no enforcement at all: it is written at the outer indent
+  and the caller's suffix follows it unmeasured — and neither has a preserved
+  author ROW, which is not re-wrapped however wide it runs (see [The author's line
+  grouping](#the-authors-line-grouping)).
 - **The inline-BODY collision.** When the author put a suite, a match arm, or a
   closure body INLINE on its header's line, the header is charged for the `:`, the
   separating space, and the body's leading unbreakable prefix. A breakable header
@@ -948,10 +1022,14 @@ routed to an imperative exploded emission that re-renders each element on the ou
 formatter, so the ordinary leading, trailing and orphan-before-close hooks all fire
 at the list's interior indent. `format_bracketed_broken_with_comments`
 (`src/formatter/mod.rs:1658`) is that emission: per element it flushes leading
-comments, renders, writes `,` and a newline, then claims a trailing comment; after
-the last element it flushes once more against the container's end, which is what
-catches a comment sitting on its own line between the last element and the closing
-delimiter.
+comments, renders, and writes `,`; where the element ENDS a row it then breaks the
+line and claims a trailing comment, and where the next element continues the row
+beside it, a space follows the comma instead. Skipping the two hooks mid-row is
+sound rather than a silent drop, and for a reason worth stating: a `#` comment runs
+to end of line, so a comment anywhere between two elements PUTS a newline between
+them — which ends the row, and fires the hooks. After the last element the emitter
+flushes once more against the container's end, which is what catches a comment
+sitting on its own line between the last element and the closing delimiter.
 
 Clause and block HEADERS get the same treatment one level up, and the layout decides
 where the comment goes. When the suite is indented, the header owns its line, so the
