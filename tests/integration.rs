@@ -14761,12 +14761,21 @@ fn cow_loop_bare_param_comprehension() {
     run_gg("known_gaps/cow_loop_bare_param_comprehension.gg", "2\n2\n4");
 }
 
+/// LIVE REGRESSION FIXTURE (was a known gap; un-ignored 2026-08-19, R43 Track
+/// PRUNE). The tuple-field ASSIGN silent no-op — `t.0 = v` falling to
+/// `lower_assign`'s `_ =>` fall-through and being SILENTLY DISCARDED — is FIXED.
+/// It was fixed as bycatch, with no one un-ignoring the test, so the mechanism
+/// sat with no live regression net.
+///
+/// Measured 2026-08-19: prints `13 / 10` on C AND LLVM, which is the INTENDED
+/// output this fixture always asserted. The prior header claimed "compiler
+/// currently prints 10,10 (both writes lost)" — that is now FALSE and is
+/// corrected here rather than left as rot (Core #14).
+///
+/// ⚠ It stays in `known_gaps/` deliberately: moving the file registers a
+/// non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING`, and Core #9 ⊕ forbids
+/// raising that ceiling for own inflow. The self-host lane still lags.
 #[test]
-#[ignore = "CoW 2G tuple-field ASSIGN silent no-op: `t.0 = v` falls to \
-lower_assign's `_ => // not yet supported` and is SILENTLY DISCARDED (Core #8 \
-miscompile — must lower or reject, never drop). Only the RECEIVER shape works. \
-Asserts 13,10; compiler currently prints 10,10 (both writes lost). See TODO \
-'CoW 2G tuple-field assign silent no-op'."]
 fn cow_loop_bare_param_tuple_assign() {
     run_gg("known_gaps/cow_loop_bare_param_tuple_assign.gg", "13\n10");
 }
@@ -48477,10 +48486,22 @@ fn self_host_lowerer_driver_rejects_combinator_option_is_error() {
 ///
 /// ⚠ Closing this does NOT close the tuple get-chain — measured, it does not:
 /// `resolve_ptr_field_place` is struct-field-specific (`field_name: &str`).
+/// LIVE REGRESSION FIXTURE (was a known gap; un-ignored 2026-08-19, R43 Track
+/// PRUNE). The `&`-of-a-get-chain field write-through is FIXED — measured
+/// 2026-08-19 as `11 / 42` on C AND LLVM, matching ggdef and matching the
+/// INTENDED output this fixture always asserted.
+///
+/// ⚠ The doc comment above still describes the PRE-FIX state ("RED-verified at
+/// HEAD: C `10 / 42`, LLVM `10 / 42`") — that was true when written and is the
+/// RED evidence for this fixture, so it is kept as history, but it is no longer
+/// the current behaviour. The `#[ignore]` reason that asserted the drop is
+/// deleted rather than left contradicting the code (Core #14).
+///
+/// ⚠ Stays in `known_gaps/` deliberately — see the sibling note on
+/// `cow_loop_bare_param_tuple_assign`: moving it registers a non-MATCH against
+/// `RUNTIME_DIFF_NONMATCH_CEILING`, which Core #9 ⊕ forbids raising for own
+/// inflow.
 #[test]
-#[ignore = "KNOWN GAP: `&`-of-a-get-chain field drops the write on C and LLVM while ggdef is \
-correct; the assign face already works. Asserts the INTENDED write-through; TODO.md. Un-ignore \
-when the field place resolver grows a method-chain arm."]
 fn sound_structchain_amp_writethrough() {
     run_gg(
         "known_gaps/sound_structchain_amp_writethrough.gg",
