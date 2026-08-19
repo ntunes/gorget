@@ -51178,8 +51178,15 @@ fn set_literal_selects_key_channel_by_element_type() {
     let fixture = manifest_dir.join("tests/fixtures/set_literal_key_channel_owned.gg");
     let tmp = tempfile::TempDir::new().expect("tempdir");
     let out_base = tmp.path().join("set_key_channel");
+    // CARGO_BIN_EXE_gg (not `gg_command`) → the default C backend regardless of
+    // GG_BACKEND, so the emitted `.c` this test reads always exists; under
+    // `GG_BACKEND=llvm` the LLVM backend emits only `.ll`/exe and there would be
+    // no C to grep. The channels asserted here are a C-emit concern, and the
+    // BEHAVIOUR they produce is covered on both backends by
+    // `container_literal_borrow_elem_set` / `set_literal_key_channel_owned`.
     let out = build_with_timeout(
-        gg_command("build")
+        Command::new(env!("CARGO_BIN_EXE_gg"))
+            .arg("build")
             .arg("--emit-c")
             .arg(&fixture)
             .arg("-o")
