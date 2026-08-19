@@ -17936,3 +17936,99 @@ fn indirect_call_abi_decision_sites() {
          with a comment naming the invariant."
     );
 }
+
+/// ⭐ R43 M1 CLASS-RETIREMENT GUARD (Core #6) — a container-literal arm may not
+/// MINT its destination's element type from an operand it has not MATERIALIZED.
+///
+/// THE CLASS THIS RETIRES. Three literal arms each inferred their element type
+/// from the raw lowered operand and materialized it afterwards. A borrow-typed
+/// source therefore minted `Vector[Ptr(T)]` / `Dict__Ptr__…` / a byte-hashed
+/// `GorgetSet` — 8-byte slots with no element vtable — and the correctly
+/// emitted clone was stored 8 bytes wide and then freed. It cost 13 of 15
+/// element-type cells, on both backends, with `gg check` clean and ggdef
+/// printing the right answer. `Ptr(T)` is not `is_resource_type`, so the bogus
+/// element type laundered the value straight past the fatal
+/// `ShallowCopyOfResource` validator — the runtime guard that exists for this
+/// class structurally cannot see it, which is why the guard has to be here.
+///
+/// WHY A SOURCE LINT AND NOT A RUNTIME INVARIANT. The defect is emission ORDER
+/// — *when* the type is minted relative to materialization — and order is not
+/// recoverable from the artifact a runtime validator inspects. Only the source
+/// can say which came first.
+///
+/// WHAT IT ASSERTS. Inside each minting arm, the element type feeding the mint
+/// comes from `materialize_for_slot` — the single call that both materializes
+/// an operand and reports the type of the value it produced. A bare
+/// `infer_operand_type_full` binding in these functions is the pre-fix shape:
+/// it types an operand nobody has materialized yet.
+///
+/// ⚠ THIS GUARD CAN CATCH ITS OWN CLASS (Core #15e Q2). Reverting any one arm
+/// to `let etype = infer_operand_type_full(...)` trips it — and that is exactly
+/// the edit that reintroduces the defect.
+#[test]
+fn container_literal_arms_mint_from_materialized_operand() {
+    let src = fs::read_to_string("src/ir/lowering/exprs/collections.rs")
+        .expect("read src/ir/lowering/exprs/collections.rs");
+
+    // The three producers that mint a destination element type. A fourth
+    // literal arm added here without a `materialize_for_slot` call is the next
+    // instance of this class, and it fails this test rather than shipping.
+    const MINTING_ARMS: [&str; 3] = [
+        "fn lower_array_literal(",
+        "fn lower_dict_literal(",
+        "fn lower_set_literal_from_array(",
+    ];
+
+    let mut failures: Vec<String> = Vec::new();
+    for sig in MINTING_ARMS {
+        let start = src.find(sig).unwrap_or_else(|| {
+            panic!(
+                "cannot locate `{sig}` — this lint's subject moved. Re-derive the \
+                 arm list; do NOT delete the row to make the test pass."
+            )
+        });
+        // Body runs to the next item at column 0 (a doc comment or a fn).
+        let rest = &src[start + sig.len()..];
+        let end = ["\n/// ", "\nfn ", "\npub(super) fn "]
+            .iter()
+            .filter_map(|marker| rest.find(marker))
+            .min()
+            .unwrap_or(rest.len());
+        let body = &rest[..end];
+
+        if !body.contains("materialize_for_slot") {
+            failures.push(format!(
+                "`{sig}` mints an element type but never calls `materialize_for_slot`"
+            ));
+        }
+        // The pre-fix shape, spelled exactly: binding a type off an operand
+        // that has not been through a consuming-position materializer.
+        if body.contains("= infer_operand_type_full(") {
+            failures.push(format!(
+                "`{sig}` still binds a type from a bare `infer_operand_type_full` — \
+                 that is the pre-materialization mint this guard retires"
+            ));
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "R43 M1 ORDERING GUARD: a container-literal arm mints its destination \
+         element type from an operand it has not materialized.\n\n{}\n\n\
+         The element slot does not exist until materialization produces the \
+         value that defines it, so take BOTH from one call:\n\
+         \x20   let (owned, etype) = ctx.materialize_for_slot(\n\
+         \x20       builder, operand, expr, SlotType::FromOperand, reason);\n\n\
+         Pass `SlotType::Known(t)` ONLY where `t` is the slot's DECLARED type. \
+         Where the \"destination type\" is itself INFERRED — \
+         `infer_collection_element_type` recovers it by stripping a mangled name \
+         and falls back to `I64` — the destination does not know its slot, and \
+         passing that guess as `Known` mis-sizes it exactly as the defect did. \
+         Both directions are pinned: `box_trait_vector_lit` dies if \
+         `FromOperand` is blanket; `sound_amp_v_i_tuple_field_writethrough` and \
+         `sound_tuple_getchain_writethrough` die if `Known` is.\n\n\
+         If a NEW literal arm was added, route it through `materialize_for_slot` \
+         and add it to MINTING_ARMS.",
+        failures.join("\n")
+    );
+}

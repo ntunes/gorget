@@ -133,7 +133,7 @@ All clone-at-boundary logic funnels through **two** methods on `LoweringContext`
 emission; per the layering doctrine, the decision lives in one place and the
 diagnostic (`warn_implicit_clone`) fires from the same chokepoint.
 
-### `ensure_owned_at_boundary` (`context.rs:2309`)
+### `ensure_owned_at_boundary` (`context.rs:2562`)
 
 Unconditional "clone if this is any kind of borrow." Used at boundaries that
 have **no concept of last-use** — the function body is leaving the value behind
@@ -143,14 +143,15 @@ regardless. Its decision tree:
   through `GlobalRefPtr` (the LIR `GlobalAddr+Load` is a shallow struct copy
   that aliases the global's heap buffer). Skipped for
   `string_literal_view_globals` — those are immortal `.rodata` `cap==0` views,
-  so the consumer's drop is a no-op (`context.rs:2340`).
-- **`Ptr(T)` / `MutPtr(T)`** → clone the pointee via `clone_fn_for_ptr(T)`. The
-  test is `pointee_type`, so a `&`-param's `MutPtr` resolves here exactly like a
-  bare param's `Ptr`. Cannot move through a pointer (the callee can't know
-  whether the caller still needs it).
+  so the consumer's drop is a no-op (`context.rs:2593`).
+- **`Ptr(T)` / `MutPtr(T)`** → ask `ptr_materialization_kind(T)`, the one
+  accessor that says what producing an owned value out of a pointer requires.
+  The test is `pointee_type`, so a `&`-param's `MutPtr` resolves here exactly
+  like a bare param's `Ptr`. Cannot move through a pointer (the callee can't
+  know whether the caller still needs it).
 - **By-value resource that is a borrow** (`is_ref_local || is_bare_param ||
   is_cow_borrow`, or an `Untracked` resource) → clone via `clone_fn_for_ptr`
-  (`context.rs:2420`). The one escape is the `!`-param deref-temp, which MOVES
+  (`context.rs:3473`). The one escape is the `!`-param deref-temp, which MOVES
   via `maybe_move_owning_param_ctor_temp` — an owning param already transferred
   ownership to the callee, so there is nothing to clone.
 - **Owned drop-tracked locals and non-resource locals** → pass through unchanged.
@@ -160,18 +161,18 @@ the caller keeps ownership and the boundary owes exactly **one** clone. That one
 clone is the hand-written count — driving it to zero would hand the caller's own
 buffer across the boundary and double-free it.
 
-### `ensure_owned_at_consuming_arg` (`context.rs:2488`)
+### `ensure_owned_at_consuming_arg` (`context.rs:2741`)
 
 Last-use-*aware* "clone if borrow OR not last-use." Used at consuming positions
 where the caller *might* still use the local after the call, so the helper takes
 the AST argument expression to call `is_last_use_at(name, span)`
-(`context.rs:1381`) on named-local identifiers. Its rule:
+(`context.rs:1389`) on named-local identifiers. Its rule:
 
-1. `Ptr(T)` borrow → clone through the pointer (`context.rs:2503`) — **except an
+1. `Ptr(T)` borrow → clone through the pointer (`context.rs:2755`) — **except an
    *owning* `!` resource param** (recorded via `is_owning_param` / `set_owning_param`,
    the caller transferred ownership) at its **last use**, non-string, single-use:
    that **MOVES** — `set_owned` + `move_zero_and_mark` on the param pointer slot
-   (`maybe_move_owning_param_ctor_temp`, `context.rs:2279`, gorget-arena snag #1).
+   (`maybe_move_owning_param_ctor_temp`, `context.rs:2532`, gorget-arena snag #1).
    This restores the `!`=move=zero-cost
    contract: a `!` param is owned, so putting it into a collection / returning it /
    passing it to another consuming position transfers rather than copies. (The
@@ -187,12 +188,25 @@ the AST argument expression to call `is_last_use_at(name, span)`
    - named local **not** at its last use → clone (source still live);
    - last-use, drop-tracked, owned named local → no clone (caller `MoveZero`s).
 
-Both helpers emit the clone via `clone_fn_for_ptr(T)` (`context.rs:2166`), which
-reads the type's clone-fn name off its `TypeDef`
-(`clone_fn_name_for_def`) — resolving to `gorget_string_clone_to_owned`,
-`gorget_array_clone`, `gorget_map_clone`, `gorget_set_clone`, or a
-compiler-generated `{Type}__clone`. No name matching: the runtime symbol comes
-from typed registry metadata, never a substring test on the type name.
+Both helpers route the pointer case through `ptr_materialization_kind`
+(`context.rs:2303`), the single source of truth for the `Ptr`→owned axis. It has
+three answers, and the reason it is one accessor rather than a test at each site
+is that the sites used to disagree: two of them had no deref arm at all, so a
+`Ptr(int)` sailed through as a raw address.
+
+- **Clone** — the pointee has a clone fn. Emitted via `clone_fn_for_ptr(T)`,
+  which reads the name off the type's `TypeDef` (`clone_fn_name_for_def`),
+  resolving to `gorget_string_clone_to_owned`, `gorget_array_clone`,
+  `gorget_map_clone`, `gorget_set_clone`, or a compiler-generated
+  `{Type}__clone`. No name matching: the runtime symbol comes from typed
+  registry metadata, never a substring test on the type name.
+- **Deref-load** — a primitive or a plain value struct. These are Copy
+  semantics, so a by-value load of the pointee is a memcpy at the backend and
+  yields a fully independent value. Reaching this arm requires knowing the
+  destination is not itself a pointer slot, which is why it is available through
+  `materialize_for_slot` and not to a caller that has no slot to name.
+- **Pass-through** — a resource with no owning representation to produce
+  (`Box[Trait]` at an element position). The pointer stands.
 
 ### Why two helpers
 
@@ -221,6 +235,42 @@ ownership" from "clone and keep."
 > human-readable boundary list lives in the spec
 > (`docs/language-reference.md` §9.6, kept in sync with the two enums). A fixed
 > hard-coded count in a doc drifts; the enums don't.
+
+### Container literals: the materializer mints the slot
+
+A container literal is a materialization point with a property none of the other
+boundaries has — **its destination does not exist yet.** `out.push(x)` and
+`S(name)` and `return x` all land in a slot whose type is already declared
+somewhere; `Vector[T] out = [x]` has to *mint* the element slot, and the only
+thing it can mint it from is the element.
+
+That makes ORDER load-bearing. The element type must be taken from the
+materialized value, never from the raw operand: a borrow-typed source describes
+itself as `Ptr(T)`, and a slot minted from `Ptr(T)` is one pointer wide and
+carries no element drop / clone / materialize hooks. The clone still gets
+emitted — the ownership machinery is not what fails — but it is stored into a
+slot too narrow to hold it, and freed on the collection's behalf by a vtable
+that was never installed.
+
+So the arms take both halves from one call:
+
+```rust
+let (owned_elem, elem_type) =
+    ctx.materialize_for_slot(builder, elem, expr, SlotType::FromOperand, reason);
+```
+
+`materialize_for_slot` materializes the operand and reports the type of the value
+it produced, so *minted slot type == materialized operand type* holds by
+construction rather than by two predicates agreeing. The array literal mints
+`Vector__<elem>`, the dict `Dict__K__V`, and the set `Set__<elem>` — and each
+writes that element type through into the runtime constructor it emits, because
+the downstream readers that install element and key behaviour recover it from
+exactly there. A set whose constructor does not carry its element type gets a
+byte-hashed key table: two equal strings hash differently and a `contains` of a
+value that is in the set answers `false`.
+
+The tuple literal is the shape the others follow — it has always materialized
+first and re-inferred afterwards.
 
 Every implicit clone now carries its `ImplicitCloneReason` not just in the
 side-car diagnostic but **on the emitted instruction** — a typed
@@ -457,10 +507,10 @@ let elem_is_binding = matches!(pattern.node, Pattern::Binding(_));
 (`for_loops.rs:458-471`). When it fires, the element is read through
 `index_load_borrow` (which returns the raw element pointer on a `Ptr`-typed dst,
 `src/lir/lower/insts.rs:1014-1024`) and tagged `set_cow_borrow`
-(`context.rs:2397`), with **no** `drops.register_local` — the collection owns the
+(`context.rs:3450`), with **no** `drops.register_local` — the collection owns the
 buffer, so a per-element drop would double-free it. The element's
 `BorrowOrigin` is `CollectionElement` / `CowBorrowPending`, recognised
-downstream by `is_cow_borrow` (`context.rs:2420`). Tuple-destructuring patterns
+downstream by `is_cow_borrow` (`context.rs:3473`). Tuple-destructuring patterns
 and direct-collection elements keep the old clone path.
 
 **Why this is sound.** The loop body can only do three things with `x`, and each
@@ -471,11 +521,30 @@ is already handled:
   match scrutinees) resolve through a `Ptr` base too — see the enum extension
   below. No copy needed.
 - **Carry it past an owning boundary** (`out.push(x)`, `return Some(x)`, struct
-  field init, closure capture). Every such boundary deep-clones a `Ptr` source
-  *unconditionally*: `ensure_owned_at_boundary` Case 1 (`context.rs:1854`) and
-  `ensure_owned_at_consuming_arg` rule 1 (`context.rs:1963`) both clone through
-  the pointer via `clone_fn_for_ptr`. This is the exact mechanism that makes a
-  borrowed `Vector[T]` parameter safe — the for-element alias is no different.
+  field init, closure capture). Every such boundary materializes a `Ptr` source:
+  `ensure_owned_at_boundary` Case 1 (`context.rs:2562`) and
+  `ensure_owned_at_consuming_arg` Case 1 (`context.rs:2741`) both consult
+  `ptr_materialization_kind`, the single accessor that decides what producing an
+  owned value out of a `Ptr(T)` requires — a deep clone through
+  `clone_fn_for_ptr` where the pointee has one, a by-value load where it is a
+  primitive or a plain value struct, and a pass-through where the pointee has no
+  owning representation at all (`Box[Trait]`). This is the exact mechanism that
+  makes a borrowed `Vector[T]` parameter safe — the for-element alias is no
+  different.
+
+  The *slot* the materialized value lands in is a separate question from the
+  *value*, and a boundary that mints its own destination type must answer both
+  together. `materialize_for_slot` (`context.rs:2369`) is that answer: it
+  materializes an operand and reports the type of the value it produced, in one
+  call. A destination whose type is DECLARED — a struct field, a return
+  signature, a `Ptr`/`MutPtr` target — passes `SlotType::Known(t)` and keeps its
+  declared width, so a widening destination such as `Vector[Box[Trait]]` still
+  gets its trait-object slot and its packing adapter. A destination that does
+  not exist yet passes `SlotType::FromOperand` and takes the type back from the
+  call. The distinction is DECLARED-vs-INFERRED rather than "is a type
+  available": a helper that recovers an element type by stripping a mangled name
+  and falls back to `I64` has not told the caller what the slot is, and treating
+  that guess as declared mis-sizes the slot.
 - **Consume it** (`consume(^x)`). Statically rejected by the safety pass:
   `check_move` (`src/semantic/safety/origins.rs:495-502`) emits `MoveInLoop` for
   a `!`-move of a non-loop-local inside a loop body, and the for-pattern binding
