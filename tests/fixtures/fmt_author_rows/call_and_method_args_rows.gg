@@ -1,0 +1,47 @@
+# AUTHOR LINE GROUPING — the METHOD costumes of the parameter/argument kinds.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and it is written in the form the formatter must KEEP.
+#
+# `honoured_kinds_rows.gg` samples the FREE-FUNCTION costume of the two biggest
+# kinds — a `fn` parameter list and a plain call's arguments. Those two kinds
+# each have a METHOD costume that reaches the same chokepoint by a different
+# route, and a per-costume regression would show in only one of them:
+#
+#   * a METHOD's parameter list, inside `equip` (`format_params_wrapped` again,
+#     but reached from the equip-member walk rather than the item walk);
+#   * a METHOD CALL's argument list, `recv.m(...)`, which is a single-segment
+#     call and therefore still `Gate::Span` — its 2+-segment sibling is the
+#     carve-out cell in `chain_carve_out_rows.gg`;
+#   * a CONSTRUCTOR call's arguments, the shape most corpus tables are built
+#     from.
+#
+# AXIS NOTE (Core #12): kind × costume, not kind alone. The name of this file is
+# a claim about the METHOD/CONSTRUCTOR costumes only; the free-function ones live
+# next door.
+#
+# RED against the pre-change binary, measured: not a fixed point — all three
+# lists come back one element per line.
+struct Vec3:
+    int x
+    int y
+    int z
+
+equip Vec3:
+    int weighted(
+        self, int wx,
+        int wy, int wz,
+    ):
+        return self.x * wx + self.y * wy + self.z * wz
+
+void main():
+    int y = 3
+    Vec3 v = Vec3(
+        1, 2,
+        y,
+    )
+    int w = v.weighted(
+        10, 20,
+        30,
+    )
+    print(w)

@@ -1,0 +1,94 @@
+# AUTHOR LINE GROUPING — the HONOURED SET, one cell per REACHABLE list kind.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and it is written in the form the formatter must KEEP.
+#
+# Ratified 2026-08-18: the magic trailing comma says EXPLODE; the author's own
+# newlines say WHERE TO BREAK. The honour set is the `emit_delimited_list`
+# kinds, because the grouping decision lives at the one exploded emitter that
+# chokepoint routes to — so it is the same set as the magic comma's, BY
+# CONSTRUCTION.
+#
+# SCOPE OF THE NAME — this file covers all NINE fmt-REACHABLE kinds:
+#   1 fn / method parameter list           6 array literal
+#   2 call + method-call arguments         7 set literal
+#   3 generic parameters `[T]`             8 tuple literal, 2+ elements
+#   4 generic arguments `[int]`            9 dict literal
+#   5 closure parameters                  10 grouped import
+# (ten rows above, nine kinds: the array and set literals share one arm.)
+#
+# NOT COVERED, and it cannot be: `Expr::StructLiteral`, the tenth
+# `emit_delimited_list` site, is fmt-UNREACHABLE — the parser builds none from
+# source. It stays routed through the chokepoint as class hygiene and is pinned
+# unreachable by `formatter_collection_literal_interior_hook_dispatch`. Every
+# OTHER list in the language is a hand-rolled `write(", ")` comma loop with no
+# exploded emitter at all (pinned as a count by
+# `formatter_list_emit_fill_census`'s `EXPECTED_WRITE_SEP`), so grouping
+# preservation is structurally inapplicable there.
+#
+# EVERY cell is RAGGED — two rows, unequal — on purpose. A cell whose elements
+# all sit on ONE line has no between-element break, so the engagement guard
+# correctly leaves it at one-per-line; a net built from those would be green for
+# the wrong reason. That cell has its own file, `single_row_multiline.gg`.
+#
+# The grouped-import cell names three REAL `std.sync` types and uses none of
+# them: this file is a LAYOUT fixture, the import is here for its rows, and
+# constructing a `std.sync` handle is a runtime concern that belongs nowhere
+# near a formatter cell. The names are real so the import RESOLVES; three
+# unused-import warnings on stderr are the deliberate price, and stdout — which
+# is what `fmt_author_rows_round_trip_semantic` compares — is unaffected.
+#
+# RED against the pre-change binary, measured: NOT a fixed point — every one of
+# the ten cells is shredded to one element per line.
+from std.collections import Vector
+import std.sync.{
+    AtomicInt, Barrier,
+    CondVar,
+}
+
+int add5(
+    int a, int b,
+    int c, int d,
+    int e,
+):
+    return a + b + c + d + e
+
+int pick[
+    T, U,
+    V,
+](T a, U b, V c):
+    return 1
+
+void main():
+    int y = 4
+    int sum = add5(
+        1, 2,
+        3, y,
+        5,
+    )
+    int pk = pick[
+        int, String,
+        bool,
+    ](1, "x", true)
+    Callable[int(int, int, int)] cl = (
+        int p, int q,
+        int r,
+    ): p + q + r
+    Vector[int] arr = [
+        1, 2, 3,
+        4, 5, y,
+    ]
+    Set[int] st = {
+        1, 2,
+        3, y,
+    }
+    auto tup = (
+        1, 2,
+        3, y,
+    )
+    Dict[String, int] dd = {
+        "a": 1, "b": 2,
+        "c": 3, "d": y,
+    }
+    print(sum + pk + cl(1, 2, 3) + arr.len() + st.len())
+    print(tup._0 + dd.len())

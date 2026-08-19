@@ -1,0 +1,36 @@
+# AUTHOR LINE GROUPING — the NESTED cell: a MULTI-LINE element on a row.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture is a deliberately
+# UNFORMATTED INPUT — the assertion is on what `gg fmt` turns it INTO
+# (`fmt_author_rows_multiline_elem_shares_row`, exact text). A sweep would
+# rewrite it into its own expected output and the cell would go green-vacuous.
+#
+# AXIS = grouping shape, NESTED cell. The outer list is exploded by its own
+# magic comma and hand-grouped into two rows. Its FIRST element is an inner list
+# that is itself exploded by its own magic comma, and the author put `[3, 4]` on
+# the same line as the inner list's closing bracket.
+#
+# ⚠ WHAT THIS PINS. The row decision is made from the AUTHOR's source spans, and
+# it is made BEFORE any element is rendered — so an element whose own render
+# spans several output lines does not disturb the assignment of its NEIGHBOURS.
+# The inner list keeps its own rows for its own reason (the propagation is
+# per-container, exactly as it is for the magic comma), and the outer row that
+# STARTS with it still carries `[3, 4]`.
+#
+# The result is a row whose first element is many lines tall. That reads oddly
+# and is nonetheless right: the author asked for it, and the alternative — a
+# rule that silently re-flows a row containing a multi-line element — is a
+# second layout dimension with no ratification behind it.
+#
+# RED against the pre-change binary, measured: not a fixed point — the outer
+# list comes back with each of its three elements on its own line.
+from std.collections import Vector
+
+void main():
+    int y = 2
+    Vector[Vector[int]] xs = [
+        [1,
+         y,], [3, 4],
+        [5, 6],
+    ]
+    print(xs.len())

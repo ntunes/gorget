@@ -11281,6 +11281,488 @@ void main():
     assert_eq!(formatted, second, "not idempotent");
 }
 
+
+// ══════════════════════════════════════════════════════════════
+// AUTHOR LINE GROUPING (ratified 2026-08-18)
+// ══════════════════════════════════════════════════════════════
+//
+// *The magic trailing comma says EXPLODE; the author's own newlines say WHERE
+// TO BREAK.* Inside a container the magic comma (or an interior comment) has
+// already exploded, the author's element-to-line assignment survives — so a
+// hand-grouped table keeps its rows instead of becoming one element per line.
+//
+// The mechanism is one probe at one chokepoint: `author_line_break_between`,
+// read by `format_bracketed_broken_with_comments`. Both facts are pinned in
+// `tests/lints.rs` by `formatter_author_grouping_reads_one_site`, and the
+// property itself is ratcheted corpus-wide by
+// `fmt_author_row_grouping_survives_formatting`.
+//
+// THE ENGAGEMENT GUARD is what keeps this a layout-PRESERVING rule rather than
+// a layout-INVENTING one: preservation engages only where the author expressed
+// at least one break BETWEEN elements. Three cells below are negatives that pin
+// it, and each says in its header how it was RED-verified — none of them can
+// red against the pre-change binary, because they assert behaviour the feature
+// PRESERVES.
+//
+// FIXTURE PLACEMENT: `tests/fixtures/fmt_author_rows/`, a SUBDIRECTORY, for the
+// reason spelled out at the `fmt_form_preservation` block — a top-level fmt
+// fixture would be RUN by `runtime_parity_corpus`.
+
+/// Format `fixture` under `fmt_author_rows/` and assert it is a FIXED POINT,
+/// re-parses, and is stable under a second pass.
+fn assert_author_rows_fixed_point(fixture: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir
+        .join("tests/fixtures/fmt_author_rows")
+        .join(fixture);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    assert_eq!(
+        source, formatted,
+        "author line grouping: {fixture} is not a FIXED POINT.\n\
+         === author wrote ===\n{source}\n=== formatter emitted ===\n{formatted}"
+    );
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "{fixture}: not idempotent");
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(
+        reparse.errors.is_empty(),
+        "{fixture}: output does not re-parse ({:?})",
+        reparse.errors.first()
+    );
+}
+
+/// Format `fixture` under `fmt_author_rows/` and assert its BODY equals
+/// `expected` exactly, then that the output is idempotent and re-parses.
+///
+/// Used for the cells whose author text is a deliberately UNFORMATTED input —
+/// a fixed-point assertion cannot express "this input must become THAT".
+fn assert_author_rows_formats_to(fixture: &str, expected: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir
+        .join("tests/fixtures/fmt_author_rows")
+        .join(fixture);
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let actual = fmt_body(&formatted);
+    assert_eq!(
+        actual, expected,
+        "author line grouping: {fixture} did not format to its expected \
+         shape.\n=== actual ===\n{actual}\n=== expected ===\n{expected}"
+    );
+    let second = gorget::formatter::format_source_infallible(&formatted);
+    assert_eq!(formatted, second, "{fixture}: not idempotent");
+    let mut reparse = gorget::parser::Parser::new(&formatted);
+    let _ = reparse.parse_module();
+    assert!(
+        reparse.errors.is_empty(),
+        "{fixture}: output does not re-parse ({:?})",
+        reparse.errors.first()
+    );
+}
+
+/// THE HONOURED SET — one cell per fmt-REACHABLE gated list kind, every one of
+/// them RAGGED so the engagement guard is genuinely engaged.
+///
+/// The tenth `emit_delimited_list` site, `Expr::StructLiteral`, is
+/// fmt-unreachable and is NAMED in the fixture header rather than sampled —
+/// the convention `fmt_magic_comma/honoured_kinds.gg` already set.
+///
+/// RED pre-fix (measured): not a fixed point; all ten cells shredded to one
+/// element per line.
+#[test]
+fn fmt_author_rows_honoured_kinds() {
+    assert_author_rows_fixed_point("honoured_kinds_rows.gg");
+}
+
+/// The METHOD and CONSTRUCTOR costumes of the parameter/argument kinds — the
+/// routes `honoured_kinds_rows.gg` reaches only in their free-function form.
+///
+/// RED pre-fix (measured): not a fixed point; all three lists one per line.
+#[test]
+fn fmt_author_rows_call_and_method_args() {
+    assert_author_rows_fixed_point("call_and_method_args_rows.gg");
+}
+
+/// RAGGED rows — 3 / 1 / 2. A uniform table is also what a column-counting
+/// implementation would produce by accident; an uneven one can only come from
+/// reading the author's newlines.
+///
+/// RED pre-fix (measured): not a fixed point; six elements on six lines.
+#[test]
+fn fmt_author_rows_ragged() {
+    assert_author_rows_fixed_point("ragged_rows.gg");
+}
+
+/// The LIVE-CORPUS shape: a copy of `compiler/data/resources.gg`'s hand-grouped
+/// 25-element name table, which `gg fmt` used to return as 25 lines. The corpus
+/// original is watched by signature; this copy pins it by name and exact text so
+/// the cell survives the corpus changing.
+///
+/// RED pre-fix (measured): not a fixed point; 25 lines, one word each.
+#[test]
+fn fmt_author_rows_corpus_table_survives() {
+    assert_author_rows_fixed_point("resources_prescan_table_survives.gg");
+}
+
+/// An INTERIOR COMMENT on its own line, with NO magic comma anywhere — the
+/// other disjunct of `magic || gated`, and the comment-ORDER pin.
+///
+/// RED pre-fix (measured): not a fixed point; six elements on six lines.
+#[test]
+fn fmt_author_rows_interior_comment_without_comma() {
+    assert_author_rows_fixed_point("interior_comment_without_comma.gg");
+}
+
+/// A TRAILING comment per row. The hook that attaches it reads `elem_end`'s
+/// SOURCE line, so mid-row it would steal the comment belonging to the row's
+/// LAST element — it fires only where a row ends.
+///
+/// RED pre-fix (measured): not a fixed point; six elements on six lines with
+/// the comments re-attached to whatever landed beneath them.
+#[test]
+fn fmt_author_rows_trailing_comment_per_row() {
+    assert_author_rows_fixed_point("trailing_comment_per_row.gg");
+}
+
+/// A BLANK LINE between two rows: the 2026-08-16 preserve-and-cap rule and the
+/// 2026-08-18 grouping rule compose. `has_blank_line_between` walks BACKWARD, so
+/// consulted mid-row it reads the line above the shared one and emits a blank
+/// nobody wrote — it is gated on the row START.
+///
+/// RED pre-fix (measured): not a fixed point; six elements on six lines.
+#[test]
+fn fmt_author_rows_blank_line_between_rows() {
+    assert_author_rows_fixed_point("blank_line_between_rows.gg");
+}
+
+/// The `Gate::UngatedCarveOut` cell: a 2+-segment method chain pre-renders its
+/// argument list into a sub-`Formatter` with an EMPTY comment sideband, so the
+/// magic comma is the only route to the exploded emitter and the probe runs on
+/// the sub-formatter. Both the source and the author-paren table travel there;
+/// the comment table deliberately does not.
+///
+/// RED pre-fix (measured): not a fixed point; `add4`'s four arguments on four
+/// lines.
+#[test]
+fn fmt_author_rows_at_a_chain_carve_out() {
+    assert_author_rows_fixed_point("chain_carve_out_rows.gg");
+}
+
+/// ⭐ AN AUTHOR GROUPING PAREN THAT SPANS A LINE BREAK — the cell nothing else
+/// in the tree can see.
+///
+/// An element's recorded span ends at the WRAPPED NODE, so an author `)`
+/// written after it falls in the region between this element and the next. A
+/// probe reading the bare `source[prev_end..cur_start]` sees the newline the
+/// author put between `(1` and its own `)` and splits the row. The anchor is
+/// `advance_past_author_parens(prev_end)`, exactly as its sibling
+/// `author_trailing_comma` needs.
+///
+/// ⚠ CORPUS-NEUTRAL: 2898 corpus files format identically with and without the
+/// anchor, so no ratchet, round-trip, idempotence or reparse gate moves. This
+/// cell and the source pin `formatter_author_grouping_reads_one_site` are the
+/// only two things that see it.
+///
+/// RED-verified against an anchor-less build (measured): both rows split, giving
+/// `(1),` / `2,` / `3, y,`.
+#[test]
+fn fmt_author_rows_author_paren_spans_rows() {
+    const EXPECTED: &str = "\
+from std.collections import Vector
+
+void main():
+    int y = 4
+    Vector[int] xs = [
+        (1), 2,
+        3, y,
+    ]
+    Vector[int] ys = [
+        (5), 6,
+        7, y,
+    ]
+    print(xs.len() + ys.len())
+";
+    assert_author_rows_formats_to("author_paren_spans_rows.gg", EXPECTED);
+}
+
+/// The NESTED cell: an element whose own render spans several output lines
+/// still shares its row with the neighbour the author put beside it. The row
+/// decision is taken from author spans BEFORE anything is rendered, so an
+/// element's height cannot disturb its neighbours' assignment.
+///
+/// RED pre-fix (measured): the outer list's three elements come back on three
+/// lines.
+#[test]
+fn fmt_author_rows_multiline_elem_shares_row() {
+    const EXPECTED: &str = "\
+from std.collections import Vector
+
+void main():
+    int y = 2
+    Vector[Vector[int]] xs = [
+        [
+            1,
+            y,
+        ], [3, 4],
+        [5, 6],
+    ]
+    print(xs.len())
+";
+    assert_author_rows_formats_to("multiline_elem_shares_row.gg", EXPECTED);
+}
+
+/// NEGATIVE — a multi-line container whose elements all sit on ONE line has no
+/// break BETWEEN elements, so there is no grouping to preserve and the
+/// engagement guard returns it to the one-element-per-line magic-comma shape.
+///
+/// NO PRE-FIX RED IS POSSIBLE (preserved behaviour, not added behaviour).
+/// RED-verified by BREAKING the mechanism: with the engagement guard removed,
+/// the output keeps the author's single row and this assertion reds.
+#[test]
+fn fmt_author_rows_single_row_is_not_a_grouping() {
+    const EXPECTED: &str = "\
+from std.collections import Vector
+
+void main():
+    int y = 3
+    Vector[int] xs = [
+        1,
+        2,
+        y,
+    ]
+    print(xs.len())
+";
+    assert_author_rows_formats_to("single_row_multiline.gg", EXPECTED);
+}
+
+/// NEGATIVE — the container is written entirely on ONE line, delimiters
+/// included. Same conclusion as its sibling above and for the same reason, but
+/// a different author shape: there the break after `[` exists, here nothing
+/// does.
+///
+/// NO PRE-FIX RED IS POSSIBLE. RED-verified by BREAKING the mechanism: with the
+/// engagement guard removed the list comes out as a single half-exploded row.
+#[test]
+fn fmt_author_rows_single_line_container_is_not_a_row() {
+    const EXPECTED: &str = "\
+from std.collections import Vector
+
+void main():
+    int y = 3
+    Vector[int] xs = [
+        1,
+        2,
+        y,
+    ]
+    print(xs.len())
+";
+    assert_author_rows_formats_to("single_line_container_is_not_a_row.gg", EXPECTED);
+}
+
+/// NEGATIVE — no magic comma, so nothing exploded and the rows are PACKED away.
+/// Author grouping is not an independent explode signal; it only says WHERE to
+/// break inside a container something else already exploded.
+///
+/// ⚠ This is the cell that keeps `gg fmt` a normaliser. If preservation ever
+/// became its own trigger, every packed multi-line list in the corpus would
+/// freeze into whatever shape it was last saved in.
+///
+/// NO PRE-FIX RED IS POSSIBLE. RED-verified by BREAKING the mechanism: routing
+/// on `magic || gated || engaged` leaves both containers in their author rows.
+#[test]
+fn fmt_author_rows_no_comma_still_packs() {
+    const EXPECTED: &str = "\
+from std.collections import Vector
+
+struct Point:
+    int x
+    int y
+    int z
+
+void main():
+    int y = 6
+    Vector[int] xs = [1, 2, 3, 4, 5, y]
+    Point p = Point(1, 2, y)
+    print(xs.len() + p.x + p.z)
+";
+    assert_author_rows_formats_to("no_comma_still_packs.gg", EXPECTED);
+}
+
+/// NEGATIVE / BOUNDARY — rows are preserved, COLUMNS are not. gofmt aligns
+/// columns because gofmt never rewrites elements; this formatter does
+/// (`!`→`^`, `( 2 )`→`(2)`, quote and radix normalisation), so any column the
+/// author measured is invalidated by the canon changes travelling with it.
+/// Element-to-line is DISCRETE and survives element rewriting.
+///
+/// The ROW half of this expectation IS red at HEAD (nine elements on nine
+/// lines); the PADDING half is RED-verified by BREAKING the mechanism —
+/// teaching the emitter to reproduce intra-row spacing reds it.
+#[test]
+fn fmt_author_rows_column_padding_is_not_preserved() {
+    const EXPECTED: &str = "\
+from std.collections import Vector
+
+void main():
+    int y = 6
+    Vector[int] xs = [
+        1, 200, 30000,
+        4, 5, 6,
+        70, 8, y,
+    ]
+    print(xs.len())
+";
+    assert_author_rows_formats_to("column_padding_not_preserved.gg", EXPECTED);
+}
+
+/// WIDTH — a preserved author row is NOT re-wrapped, past 120 columns.
+///
+/// Asserted INLINE rather than as a `.gg` file, deliberately: every directory
+/// under `tests/fixtures/` is a `WIDTH_RATCHET_ROOTS` root, so a fixture
+/// carrying a deliberate overrun would land in `fmt_no_new_over_budget_lines`'s
+/// `Unbroken` category and force `CEIL_UNBROKEN` up — turning a width GUARD
+/// into a width ALLOWANCE. No ratchet-root file carries a deliberate overrun.
+///
+/// ⚠ The residual `Unbroken` category already guards this class; there is no
+/// `OverBudget::AuthorRow`, and there cannot be one — `width_ratchet_classify`
+/// is pure text with no author-row discriminator.
+///
+/// Wired to RUN (§the run corpus below cannot carry it, for the reason above):
+/// the source is written to a tempdir and built+run BEFORE and AFTER `gg fmt`,
+/// with a whole-stdout diff, so the width claim is not a text-only assertion.
+///
+/// RED pre-fix (measured): the row is shredded to one element per line and no
+/// line exceeds the budget — i.e. the over-budget row is exactly what the
+/// feature ADDS, which is why the ratified answer is "do not re-wrap" rather
+/// than "wrap it".
+#[test]
+fn fmt_author_rows_preserved_row_is_not_rewrapped() {
+    const SOURCE: &str = "\
+from std.collections import Vector
+
+void main():
+    int y = 6
+    Vector[String] xs = [
+        \"alpha_one\", \"bravo_two\", \"charlie_three\", \"delta_four\", \"echo_five\", \"foxtrot_six\", \"golf_seven\", \"india_nine\", \"juliet_ten\",
+        \"hotel_eight\",
+    ]
+    print(xs.len() + y)
+";
+    let formatted = gorget::formatter::format_source_infallible(SOURCE);
+    assert_eq!(
+        formatted, SOURCE,
+        "an over-budget AUTHOR ROW was re-wrapped. Clause 6 of the grouping \
+         ruling: a preserved author row is not re-wrapped, past 120 \
+         columns.\n=== formatted ===\n{formatted}"
+    );
+    let widest = formatted.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+    assert!(
+        widest > 120,
+        "the over-budget cell no longer overruns ({widest} columns) — it is \
+         asserting nothing. Widen the row."
+    );
+
+    // The SEMANTIC half, on this backend: build+run the source and the
+    // formatted text and compare whole stdout. The two are byte-identical here
+    // (the file is a fixed point), so this is a positive control on the cell
+    // itself as much as on the formatter.
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let src_path = tmp.path().join("author_row_overrun.gg");
+    std::fs::write(&src_path, SOURCE).expect("write source");
+    let src_stdout = build_and_run_capture_stdout(&src_path, "author_row_overrun (source)");
+    let fmt_path = tmp.path().join("author_row_overrun_fmt.gg");
+    std::fs::write(&fmt_path, &formatted).expect("write formatted");
+    let fmt_stdout =
+        build_and_run_capture_stdout(&fmt_path, "author_row_overrun (reformatted)");
+    assert_eq!(
+        src_stdout.trim(),
+        fmt_stdout.trim(),
+        "SEMANTIC DRIFT — `gg fmt` changed the program's stdout for the \
+         over-budget author-row cell."
+    );
+    assert_eq!(src_stdout.trim(), "16", "the cell's own stdout moved");
+}
+
+/// The SEMANTIC half of the family: every fixture is built and run before and
+/// after `gg fmt`, and the stdout must be identical.
+///
+/// Exact text, idempotence and re-parse are necessary and NOT sufficient — a
+/// layout change that altered what the program DOES would satisfy all three.
+/// This is the gate that proves the change is semantically inert, and it runs
+/// on whichever backend `GG_BACKEND` selects, so both are covered by the two
+/// standing sweeps.
+///
+/// Expected stdout regenerated from the ORIGINAL fixture.
+#[test]
+fn fmt_author_rows_round_trip_semantic() {
+    let corpus: &[(&str, &str)] = &[
+        ("fmt_author_rows/honoured_kinds_rows.gg", "32\n5"),
+        ("fmt_author_rows/call_and_method_args_rows.gg", "140"),
+        ("fmt_author_rows/ragged_rows.gg", "6"),
+        ("fmt_author_rows/resources_prescan_table_survives.gg", "25"),
+        ("fmt_author_rows/interior_comment_without_comma.gg", "6"),
+        ("fmt_author_rows/trailing_comment_per_row.gg", "6"),
+        ("fmt_author_rows/blank_line_between_rows.gg", "6"),
+        ("fmt_author_rows/chain_carve_out_rows.gg", "10"),
+        ("fmt_author_rows/author_paren_spans_rows.gg", "8"),
+        ("fmt_author_rows/multiline_elem_shares_row.gg", "3"),
+        ("fmt_author_rows/single_row_multiline.gg", "3"),
+        ("fmt_author_rows/single_line_container_is_not_a_row.gg", "3"),
+        ("fmt_author_rows/no_comma_still_packs.gg", "13"),
+        ("fmt_author_rows/column_padding_not_preserved.gg", "9"),
+    ];
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    for (fixture, expected_stdout) in corpus {
+        assert_fmt_round_trip_semantic(&manifest_dir, fixture, expected_stdout);
+    }
+}
+
+/// EVERY fixture in the family is covered by the run corpus above — a claim
+/// that rots the moment someone adds a fifteenth file, which is why it is a
+/// test and not a sentence.
+///
+/// The one deliberate exception is the over-budget cell, which cannot be a
+/// `.gg` file under a ratchet root and is run from a tempdir by
+/// `fmt_author_rows_preserved_row_is_not_rewrapped` instead.
+#[test]
+fn fmt_author_rows_every_fixture_is_run() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dir = manifest_dir.join("tests/fixtures/fmt_author_rows");
+    let harness = std::fs::read_to_string(manifest_dir.join("tests/integration.rs"))
+        .expect("cannot read tests/integration.rs");
+    let mut missing: Vec<String> = Vec::new();
+    let mut n = 0usize;
+    for entry in std::fs::read_dir(&dir).expect("cannot read fmt_author_rows/").flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("gg") {
+            continue;
+        }
+        n += 1;
+        let name = path.file_name().unwrap().to_string_lossy().to_string();
+        if !harness.contains(&format!("(\"fmt_author_rows/{name}\", \"")) {
+            missing.push(name);
+        }
+    }
+    assert!(
+        n >= 14,
+        "the fmt_author_rows family shrank to {n} fixtures — it is seeded at \
+         14 and each one is a named axis cell. Removing one removes a cell."
+    );
+    assert!(
+        missing.is_empty(),
+        "these `fmt_author_rows/` fixtures are not in \
+         `fmt_author_rows_round_trip_semantic`'s corpus, so nothing RUNS \
+         them: {missing:?}\n\n\
+         Exact text, idempotence and re-parse are necessary and not \
+         sufficient: a layout change that altered what the program DOES would \
+         satisfy all three. Add the row with the stdout measured from the \
+         ORIGINAL fixture."
+    );
+}
+
 // R39 gorget-arena verdict fold: opinionated golden-file test. Any fmt
 // behavior change on the canonical sample must be either INTENDED (update
 // expected file same commit) or REGRESSION (fix formatter). See fixture

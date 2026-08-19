@@ -17984,16 +17984,25 @@ fn formatter_author_grouping_reads_one_site() {
 
 // ── The author ROW-FIDELITY scanner ─────────────────────────────────────────
 //
-// A coarse, string- and comment-aware bracket walk. It answers one question
-// per bracketed region: **on which physical line does each top-level element
-// begin?** That vector — the ROW SIGNATURE — is the author fact the ruling
-// preserves, and it is computed identically from the AUTHOR source and from
-// the FORMATTED output, so the two are directly comparable.
+// A coarse, string- and comment-aware bracket walk. It answers one question per
+// bracketed region: **which elements share an output ROW?** That vector of
+// row sizes — the ROW SIGNATURE — is the author fact the ruling preserves, and
+// it is computed identically from the AUTHOR source and from the FORMATTED
+// output, so the two are directly comparable.
 //
-// Coarse is deliberate and safe here: any lexing quirk (an interpolated
-// f-string body, a quoting normalization) is applied to BOTH sides, so it
-// perturbs the two signature multisets the same way rather than inventing a
-// difference. What it must not do is disagree with the FORMATTER about the
+// ⚠ A ROW IS DEFINED THE WAY THE MECHANISM DEFINES IT, and the difference is
+// not cosmetic: element *i* CONTINUES the previous row iff it STARTS on the
+// line where element *i-1* ENDED — never merely "begins on the same line as its
+// neighbour". A grouping paren, a nested container or any multi-line element
+// makes the two readings diverge, and the start-line reading then reports a
+// lost row for output that is exactly right. Measured on
+// `fmt_author_rows/author_paren_spans_rows.gg`, where `(1\n)` and `2` are one
+// author row and the start-line reading calls them two.
+//
+// Coarse LEXING is deliberate and safe here: any quirk (an interpolated
+// f-string body, a quoting normalisation) applies to BOTH sides, so it perturbs
+// the two signature multisets the same way rather than inventing a difference.
+// What the scanner must not do is disagree with the FORMATTER about the
 // author's trailing comma, and that is pinned separately below.
 
 /// One bracketed region.
@@ -18005,7 +18014,7 @@ struct RowSite {
     line1: usize,
     /// Top-level separator commas inside the region.
     commas: usize,
-    /// Elements beginning on each occupied line, in line order.
+    /// Elements per ROW, in order.
     rows: Vec<usize>,
     /// The AUTHOR wrote a trailing comma before the close — the magic-comma
     /// signal. Read as the last significant byte at this region's own level.
@@ -18013,11 +18022,19 @@ struct RowSite {
 }
 
 impl RowSite {
-    /// TABULAR: some line begins two or more elements. This is exactly the
-    /// shape the magic trailing comma alone CANNOT express — one element per
-    /// line is what it already means — so it is the set the ruling adds.
+    /// TABULAR: some row holds two or more elements. This is exactly the shape
+    /// the magic trailing comma alone CANNOT express — one element per line is
+    /// what it already means — so it is the set the ruling adds.
     fn tabular(&self) -> bool {
         self.rows.iter().any(|&c| c >= 2)
+    }
+    /// The author expressed at least one break BETWEEN elements — the
+    /// ENGAGEMENT GUARD's own condition, mirrored. A region whose elements all
+    /// share one row carries no grouping to preserve, and the formatter
+    /// correctly returns it to the one-element-per-line shape; counting it as a
+    /// subject would make the ratchet red on ratified behaviour.
+    fn engaged(&self) -> bool {
+        self.rows.len() >= 2
     }
     fn multi_line(&self) -> bool {
         self.line1 > self.line0
@@ -18027,15 +18044,44 @@ impl RowSite {
 struct RowFrame {
     open: u8,
     line0: usize,
-    /// (line, count) in first-seen order.
-    lines: Vec<(usize, usize)>,
+    /// (start_line, end_line) per element, in order.
+    elems: Vec<(usize, usize)>,
     commas: usize,
-    /// An element is expected next: set at the open delimiter and after every
-    /// top-level comma, cleared by the first byte that begins one.
-    pending: bool,
-    /// Last significant byte at THIS frame's level — a child's close
-    /// delimiter counts, its interior does not.
+    /// The element under construction: `None` until its first byte.
+    cur: Option<(usize, usize)>,
+    /// Last significant byte at THIS frame's level — a child's close delimiter
+    /// counts, its interior does not.
     last: u8,
+}
+
+impl RowFrame {
+    /// Record a significant byte at this frame's level on `line`: it either
+    /// opens the pending element or extends it.
+    fn mark(&mut self, line: usize) {
+        match &mut self.cur {
+            Some((_, end)) => *end = line,
+            None => self.cur = Some((line, line)),
+        }
+    }
+    fn close_element(&mut self) {
+        if let Some(e) = self.cur.take() {
+            self.elems.push(e);
+        }
+    }
+    /// Group the elements into rows: a new row starts wherever an element
+    /// begins on a LATER line than its predecessor ended on.
+    fn rows(&self) -> Vec<usize> {
+        let mut rows: Vec<usize> = Vec::new();
+        let mut prev_end: Option<usize> = None;
+        for (start, end) in &self.elems {
+            match prev_end {
+                Some(p) if *start == p => *rows.last_mut().expect("a row is open") += 1,
+                _ => rows.push(1),
+            }
+            prev_end = Some(*end);
+        }
+        rows
+    }
 }
 
 fn author_row_scan(src: &str) -> Vec<RowSite> {
@@ -18072,20 +18118,16 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
         // A close delimiter that matches the innermost frame is that frame's
         // own terminator, never an element of it.
         let closes_top = stack.last().is_some_and(|f| closer(f.open) == c);
-        if !closes_top {
+        if !closes_top && c != b',' {
             if let Some(f) = stack.last_mut() {
-                if f.pending {
-                    match f.lines.last_mut() {
-                        Some((l, n)) if *l == line => *n += 1,
-                        _ => f.lines.push((line, 1)),
-                    }
-                    f.pending = false;
-                }
-                f.last = c;
+                f.mark(line);
             }
         }
         if c == b'"' || c == b'\'' {
             let q = c;
+            if let Some(f) = stack.last_mut() {
+                f.last = c;
+            }
             i += 1;
             while i < bytes.len() {
                 if bytes[i] == b'\\' {
@@ -18094,6 +18136,10 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
                 }
                 if bytes[i] == b'\n' {
                     line += 1;
+                    // A multi-line literal extends its element.
+                    if let Some(f) = stack.last_mut() {
+                        f.mark(line);
+                    }
                 }
                 if bytes[i] == q {
                     i += 1;
@@ -18104,27 +18150,35 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
             continue;
         }
         if OPENERS.contains(&c) {
+            if let Some(f) = stack.last_mut() {
+                f.last = c;
+            }
             stack.push(RowFrame {
                 open: c,
                 line0: line,
-                lines: Vec::new(),
+                elems: Vec::new(),
                 commas: 0,
-                pending: true,
+                cur: None,
                 last: c,
             });
             i += 1;
             continue;
         }
         if closes_top {
-            let f = stack.pop().expect("closes_top implies a frame");
+            let mut f = stack.pop().expect("closes_top implies a frame");
+            f.close_element();
             out.push(RowSite {
                 line0: f.line0,
                 line1: line,
                 commas: f.commas,
-                rows: f.lines.iter().map(|(_, n)| *n).collect(),
+                rows: f.rows(),
                 author_comma: f.last == b',',
             });
+            // The child's close delimiter is a significant byte of the PARENT's
+            // current element, and it is what carries that element's END line
+            // past the child's interior — the author-paren case.
             if let Some(p) = stack.last_mut() {
+                p.mark(line);
                 p.last = c;
             }
             i += 1;
@@ -18133,10 +18187,14 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
         if c == b',' {
             if let Some(f) = stack.last_mut() {
                 f.commas += 1;
-                f.pending = true;
+                f.last = c;
+                f.close_element();
             }
             i += 1;
             continue;
+        }
+        if let Some(f) = stack.last_mut() {
+            f.last = c;
         }
         i += 1;
     }
@@ -18148,7 +18206,9 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
 fn author_subject_signatures(src: &str) -> Vec<Vec<usize>> {
     author_row_scan(src)
         .into_iter()
-        .filter(|s| s.multi_line() && s.commas > 0 && s.author_comma && s.tabular())
+        .filter(|s| {
+            s.multi_line() && s.commas > 0 && s.author_comma && s.engaged() && s.tabular()
+        })
         .map(|s| s.rows)
         .collect()
 }
@@ -18159,7 +18219,7 @@ fn author_subject_signatures(src: &str) -> Vec<Vec<usize>> {
 fn formatted_signatures(src: &str) -> Vec<Vec<usize>> {
     author_row_scan(src)
         .into_iter()
-        .filter(|s| s.multi_line() && s.commas > 0 && s.tabular())
+        .filter(|s| s.multi_line() && s.commas > 0 && s.engaged() && s.tabular())
         .map(|s| s.rows)
         .collect()
 }
@@ -18290,7 +18350,7 @@ fn fmt_author_row_grouping_survives_formatting() {
     /// corpus lost the very shape this guard watches — which would make the
     /// guard vacuous while staying green, the failure mode a bare pass cannot
     /// show you (Core #15e Q2).
-    const MIN_SUBJECT_SITES: usize = 1;
+    const MIN_SUBJECT_SITES: usize = 24;
     /// The SCANNER's own non-vacuity floor, on a population three orders of
     /// magnitude larger than the subject set: if the walk stops finding
     /// multi-line comma-bearing regions at all, the roots moved or the
@@ -18371,9 +18431,10 @@ fn fmt_author_row_grouping_survives_formatting() {
          explodes.\n\n{}\n\n\
          Ratified 2026-08-18: the magic trailing comma says EXPLODE; the \
          author's own newlines say WHERE TO BREAK. A signature is the vector \
-         of elements-per-occupied-line, so `[4, 4, 4, 4]` is a four-row table \
-         and `[1, 1, 1, 1]` is the one-per-line shape the magic comma already \
-         meant. Losing a tabular signature means the exploded emitter stopped \
+         of elements PER ROW — and a row CONTINUES where an element starts on \
+         the line its predecessor ended on — so `[4, 4, 4, 4]` is a four-row \
+         table and `[1, 1, 1, 1]` is the one-per-line shape the magic comma \
+         already meant. Losing a tabular signature means the exploded emitter stopped \
          honouring `author_line_break_between`, or a new list emitter reached \
          the exploded shape without it.",
         failures.join("\n")

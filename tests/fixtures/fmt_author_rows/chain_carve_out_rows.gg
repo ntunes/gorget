@@ -1,0 +1,41 @@
+# AUTHOR LINE GROUPING — the `Gate::UngatedCarveOut` cell of the GATE axis.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and it is written in the form the formatter must KEEP.
+#
+# AXIS = gate ∈ {`Gate::Span`, `Gate::UngatedCarveOut`}. Every other cell in this
+# family arrives through `Gate::Span`. A method chain of 2+ segments is
+# PRE-RENDERED into a sub-`Formatter`, and `format_chain_segment` hands its
+# argument list `Gate::UngatedCarveOut` — there is no comment sideband to gate
+# on, so the magic comma is the ONLY thing that can route the list to the
+# exploded emitter, and the grouping probe runs on that sub-formatter.
+#
+# ⚠ THE PROPERTY THIS CELL BUYS: both the SOURCE and the author-paren table
+# travel into the sub-`Formatter`
+# (`fmt_author_paren_table_reaches_sub_formatters`), while the comment table
+# deliberately does not. A grouping probe built on the comment table would be
+# vacuous exactly here and this cell would silently shred — the same reason
+# `author_trailing_comma` carries its own `#`-to-EOL scan instead of asking the
+# comment table.
+#
+# RED against the pre-change binary, measured: not a fixed point — the four
+# arguments of `add4` come back on four lines.
+struct Acc:
+    int v
+
+equip Acc:
+    Acc add4(self, int a, int b, int c, int d):
+        return Acc(self.v + a + b + c + d)
+
+    int get(self):
+        return self.v
+
+void main():
+    Acc a = Acc(0)
+    int r = a
+        .add4(
+            1, 2,
+            3, 4,
+        )
+        .get()
+    print(r)
