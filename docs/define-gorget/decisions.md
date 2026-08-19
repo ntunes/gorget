@@ -2397,7 +2397,15 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   separator.
   **(3)+(4) THE MAGIC TRAILING COMMA (Black's rule) IS ADOPTED.** A trailing comma in
   a list is the AUTHOR'S SIGNAL to keep that list exploded; its absence means the
-  formatter may pack. This replaces BOTH the vertical collapse of hand-aligned literals
+  formatter may pack.
+  ⚠ **ERRATUM 2026-08-19 — THE "REPLACES THE VERTICAL COLLAPSE" HALF OF THE NEXT SENTENCE
+  IS FALSE AND IS STRUCK.** The comma does NOT rescue hand-aligned literals: the exploded
+  emitter writes one element per line unconditionally, so a magic comma turns a 4×4 matrix
+  into 16 one-value lines. Measured 2026-08-18 — see the author-line-grouping entry at the
+  top of this ledger, which regenerates it. The comma trades a FLATTEN for a SHRED; the
+  hand-aligned-literal problem is solved by AUTHOR LINE-GROUPING PRESERVATION, not by the
+  comma. The claim below stands only for the second half.
+  This replaces the vertical collapse of hand-aligned literals
   (61 hunks / 10 files, every 4×4 matrix in `math3d.gg`) AND the absence of any
   trailing-comma canon (today the formatter deletes the comma when packing and adds one
   when exploding, so the token carries no meaning). One mechanism, two calls: the
