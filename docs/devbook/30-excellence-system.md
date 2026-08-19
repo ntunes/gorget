@@ -857,3 +857,71 @@ things depending on whether the element is heap-allocated (Core #15e Q1).
 neither side is automatically right. Measure the behaviour, read the *governing*
 sentence rather than the nearest plausible one, and if the answer is load-bearing,
 ask the owner. Then fix whichever artifact was wrong — here, the reference.
+
+## §15 — The fold is the measured bottleneck, so mechanise it
+
+By the end of R43 the gauntlet had stopped finding design defects and started finding
+*fold* defects. Track G ran five brief-review passes and its fifth reported: *"Design:
+still sound. No mechanism defect in four passes; every finding this pass is a fold
+artifact."* The blocking counts across that track — 5, 4, 4, 4 — were not measuring the
+design. They were measuring the orchestrator's transcription of the previous pass.
+
+Four distinct pathologies appeared, each caught only by a later pass, and each defeating
+the rule written after the one before it.
+
+**(1) Dropping the operative half.** A two-part remedy folds as its first part. The
+canonical instance: a reviewer wrote "re-point the citation **and lower
+`HEURISTIC_BLIND_CEILING`**"; the fold kept the first clause. The gate stayed red, and the
+executor would have been left with roughly thirty further repoints and no instruction
+covering them.
+
+**(2) Inverting a conditional.** A remedy offered a disjunction — *update the allowlist row
+if the citation is still blind, **or** delete it and lower the ceiling if it resolves*. The
+fold wrote "do both". Measured, both branches were wrong: the row had to be UPDATED and the
+ceiling had to STAY, because lowering it with five rows present trips a different assert.
+An unconditional instruction is not a safe over-approximation of a conditional one.
+
+**(3) Inverting a remedy outright.** A reviewer wrote that `Ptr`-only was the conservative
+reading and that widening to `MutPtr` was a separate, measured change. The fold mandated
+the widening as required. Both premises the fold invented were false, and executing it
+would have skipped a chokepoint at five return boundaries — on the very axis a filed
+double-free had lived on. **A subject-level check cannot see this class**: the disposition
+is about the right topic and says the opposite thing.
+
+**(4) Retyping a literal command.** A remedy said to restore a grep *verbatim*. The fold
+retyped `element per line` as `one per line`. The real command returns five hits; the
+retyped one returns three, omitting precisely the site the finding existed to catch. A
+retyped literal is the most dangerous of the four because it looks authoritative and fails
+silently — the executor runs it, fixes what it finds, reports a total, and ships the defect.
+
+Three successive self-imposed rules failed against these: "fold verbatim, never
+summarised", then "quote the remedy", then "quote the remedy paragraph specifically". Each
+degraded in practice into quoting the *finding* — the paragraph describing the problem —
+and then paraphrasing the fix anyway. The lesson is Core #15 turned on the orchestrator:
+**judgement about what is operative is exactly the faculty that keeps failing, so the fix
+is to stop exercising it.**
+
+### The rules that work, because they are mechanical
+
+- **(a) Paste the remedy verbatim AS the instruction, then add an explicit `DELTA:` line**
+  stating what changes. Never paraphrase; never quote the finding in place of the remedy.
+- **(b) Re-run every literal command a remedy contains** and paste the real output. Never
+  retype one.
+- **(c) Check each disposition against the SIGN of its source remedy**, not just its
+  subject — pathology (3) is invisible to a subject check.
+- **(d) On a REWRITE, hunt artifact loss.** Rewriting a brief is legitimate when the
+  precedence stack itself has become the defect: R43 rewrote two briefs from 1,868 and
+  1,707 lines down to 290 and 238 after their blocking counts stopped falling. But a
+  rewrite has its own failure mode, and it is not the fold's. **Conclusions survive;
+  enumerations, paths and deliverables vanish.** Both R43 rewrites were measured with a
+  script over backticked identifiers: **70 and 104 dropped referents**, including the
+  prototype patch path, the probe files the executor had been told to reproduce, the name
+  of the guard function, and the name of the known-RED test. Every reviewer's first job
+  after a rewrite is hunting for what it dropped — and the mechanical check finds more than
+  a reader does. Run it before the reviewer does, and land the survivors as an explicit
+  **ARTIFACT REGISTRY** section rather than trusting prose to carry them.
+
+The deeper reading: a brief accumulates two different kinds of content. **Judgements**
+compress well and survive rewriting. **Artifacts** — paths, identifiers, commands, counts,
+file names — do not compress at all, and every generation of editing sheds them. Keep them
+in a section that is appended to and never rewritten.
