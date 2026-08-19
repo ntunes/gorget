@@ -1,0 +1,123 @@
+# REGRESSION — the ARRAY literal arm of the container-literal element-type mint.
+#
+# AXIS CELL: container kind = ARRAY literal; borrow source = `.get(i).unwrap()`
+# on a local `Vector[T]`; element TYPE = every cell below, which is the axis
+# that broke. Dict and Set are the sibling arms and have their own fixtures
+# (`container_literal_borrow_elem_dict.gg`, `..._set.gg`) — this file makes NO
+# claim about them.
+#
+# THE DEFECT: the literal minted its destination element type from the source
+# operand BEFORE that operand was materialized, so a borrow-typed source minted
+# `Vector[Ptr(T)]` — 8-byte slots with no element drop/clone/materialize vtable
+# — and the correctly-emitted clone was then stored 8 bytes wide and freed.
+#
+# RED-VERIFIED against the pre-fix compiler (both backends), per cell:
+#   String            -> `1` then an EMPTY line          (want `bb`)
+#   int               -> `187651717399208`, an ADDRESS   (want `20`)
+#   float             -> `0.000000`                      (want `2.500000`)
+#   bool              -> `true` — ACCIDENTALLY CORRECT, because a non-null
+#                        pointer read as a bool is `true`. Pinned so it cannot
+#                        break silently; it proves nothing on its own.
+#   value struct      -> `187650616189616` then `0`      (want `3` then `4`)
+#   resource struct   -> EMPTY then `0`                  (want `bb` then `2`)
+#   nested Vector     -> trap[T_UnwrapNone] on the inner get
+#   Option payload    -> `none`                          (want `bb`)
+#   enum payload      -> prints nothing for the payload  (want `bb`)
+#
+# `int` is NOT a control and NOT ASan-visible: `Ptr(T)` is not a resource type,
+# so the bogus element type launders the value past the `ShallowCopyOfResource`
+# validator, and the address it reads back is a live allocation. ggdef is the
+# only instrument that adjudicates that cell.
+
+struct Pt:
+    int x
+    int y
+
+struct Named:
+    String name
+    int n
+
+enum Shape:
+    Circle(String)
+    Sq(int)
+
+void string_cell():
+    Vector[String] v = ["aa", "bb"]
+    auto s = v.get(1).unwrap()
+    Vector[String] out = [s]
+    print(out.get(0).unwrap())
+
+void int_cell():
+    Vector[int] v = [10, 20]
+    auto s = v.get(1).unwrap()
+    Vector[int] out = [s]
+    print(out.get(0).unwrap())
+
+void float_cell():
+    Vector[float] v = [1.5, 2.5]
+    auto s = v.get(1).unwrap()
+    Vector[float] out = [s]
+    print(out.get(0).unwrap())
+
+void bool_cell():
+    Vector[bool] v = [false, true]
+    auto s = v.get(1).unwrap()
+    Vector[bool] out = [s]
+    print(out.get(0).unwrap())
+
+void value_struct_cell():
+    Vector[Pt] v = [Pt(1, 2), Pt(3, 4)]
+    auto s = v.get(1).unwrap()
+    Vector[Pt] out = [s]
+    auto p = out.get(0).unwrap()
+    print(p.x)
+    print(p.y)
+
+void resource_struct_cell():
+    Vector[Named] v = [Named("aa", 1), Named("bb", 2)]
+    auto s = v.get(1).unwrap()
+    Vector[Named] out = [s]
+    auto p = out.get(0).unwrap()
+    print(p.name)
+    print(p.n)
+
+void nested_vector_cell():
+    Vector[Vector[int]] v = [[1, 2], [3, 4]]
+    auto s = v.get(1).unwrap()
+    Vector[Vector[int]] out = [s]
+    auto inner = out.get(0).unwrap()
+    print(inner.len())
+    print(inner.get(0).unwrap())
+
+void option_payload_cell():
+    Vector[Option[String]] v = [Some("aa"), Some("bb")]
+    auto s = v.get(1).unwrap()
+    Vector[Option[String]] out = [s]
+    auto o = out.get(0).unwrap()
+    match o:
+        case Some(x):
+            print(x)
+        else:
+            print("none")
+
+void enum_payload_cell():
+    Vector[Shape] v = [Shape.Circle("aa"), Shape.Circle("bb")]
+    auto s = v.get(1).unwrap()
+    Vector[Shape] out = [s]
+    auto e = out.get(0).unwrap()
+    match e:
+        case Shape.Circle(x):
+            print(x)
+        case Shape.Sq(n):
+            print(n)
+
+void main():
+    string_cell()
+    int_cell()
+    float_cell()
+    bool_cell()
+    value_struct_cell()
+    resource_struct_cell()
+    nested_vector_cell()
+    option_payload_cell()
+    enum_payload_cell()

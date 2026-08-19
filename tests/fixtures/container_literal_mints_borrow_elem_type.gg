@@ -1,0 +1,40 @@
+# REGRESSION (graduated from `known_gaps/`) — the minimal repro of the
+# container-literal element-type mint, kept at the exact shape it was filed
+# with.
+#
+# AXIS CELL: array literal × `String` element × `.get(i).unwrap()` borrow source.
+# ONE cell. The axis-complete nets are `container_literal_borrow_elem_array.gg`
+# (9 type cells), `..._dict.gg` (key and value) and `..._set.gg` (both key
+# channels, ordered and unordered).
+#
+# THE DEFECT: the literal minted its destination element type from the source
+# operand BEFORE that operand was materialized, so a borrow-typed source minted
+# `Vector[Ptr(T)]` — 8-byte slots with no element drop/clone/materialize vtable.
+# The clone WAS emitted correctly; it was the SLOT that was wrong, which is why
+# the ownership machinery looked innocent.
+#
+# RED pre-fix, on BOTH backends: prints `1` and then an EMPTY line. `gg check`
+# returned "OK: no semantic errors" and both backends exited 0 — while ggdef
+# printed the correct `bb`. Core #8: one accepted program, three lanes, the
+# oracle right and both production backends wrong.
+#
+# WHY A GREEN SUITE CARRIED IT FOR SO LONG: `Ptr(T)` is not `is_resource_type`,
+# so the bogus element type laundered the value straight past the fatal
+# `ShallowCopyOfResource` validator — the guard that exists for exactly this
+# class could not see it. Under ASan the String cell aborts
+# (allocation-size-too-big, `0xbe` freed-poison read as a length), but the `int`
+# cell is ASan-CLEAN and reads back a live address, so the sanitizer is blind to
+# half the class and ggdef is the only instrument that adjudicates it.
+#
+# No for-loop, no `&` sigil, no patch. Four lines of ordinary syntax.
+
+Vector[String] mk():
+    Vector[String] v = ["aa", "bb"]
+    auto s = v.get(1).unwrap()
+    Vector[String] out = [s]
+    return out
+
+void main():
+    Vector[String] r = mk()
+    print(r.len())
+    print(r.get(0).unwrap())

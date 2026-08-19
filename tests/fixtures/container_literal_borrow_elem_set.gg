@@ -1,0 +1,88 @@
+# REGRESSION — the SET literal arm of the container-literal element-type mint,
+# on the BORROW source axis.
+#
+# AXIS CELL: container kind = SET literal (`Set[T]` ordered AND `HashSet[T]`
+# unordered); borrow source = `.get(i).unwrap()`; element TYPE = String (the
+# string-hash channel), user-hashable struct WITH a resource field, user-hashable
+# struct with ONLY primitives, and a bare primitive.
+#
+# THE SET NEEDED TWO FIXES AT ONCE, and this fixture is the one that proves it.
+# The set was the only literal that typed its accumulator with the BARE
+# `GorgetSet` and emitted the raw runtime ctor with a `SizeOf` argument, while
+# the dict writes `Dict__K__V` through. Both key channels read exactly what that
+# withheld. But writing the element type through is not enough on its own: the
+# type being written through was still minted PRE-materialization, so a borrowed
+# element mangled to an opaque `Ptr` name and selected NEITHER channel.
+#
+# MEASURED, same binary, three configurations (see also the emitted-symbol pins
+# in `set_literal_selects_key_channel_by_element_type`):
+#   write-site fix alone : every OWNED cell fixed, every BORROW cell UNCHANGED
+#   order fix alone      : no channel selected at all
+#   BOTH                 : every cell fixed
+#
+# RED-VERIFIED against the pre-fix compiler (both backends) — every cell below
+# printed `false` for its `contains`, including the ordered/unordered pair and
+# the primitive. Note that `Set[Pt{int,int}]` from an OWNED source is
+# ACCIDENTALLY correct on output; from a BORROW source it is not, which is why
+# the borrow axis is the one that discriminates here and the owned axis needs
+# the symbol-grep pin instead.
+
+@derive(Hashable, Equatable)
+struct Ps:
+    String name
+    int n
+
+@derive(Hashable, Equatable)
+struct Pt:
+    int x
+    int y
+
+void set_string_from_borrow():
+    Vector[String] v = ["aa", "bb"]
+    auto s = v.get(1).unwrap()
+    Set[String] out = {s}
+    print(out.len())
+    print(out.contains("bb"))
+
+void hashset_string_from_borrow():
+    Vector[String] v = ["aa", "bb"]
+    auto s = v.get(1).unwrap()
+    HashSet[String] out = {s}
+    print(out.contains("bb"))
+
+void set_resource_struct_from_borrow():
+    Vector[Ps] v = [Ps("aa", 1), Ps("bb", 2)]
+    auto s = v.get(1).unwrap()
+    Set[Ps] out = {s}
+    print(out.contains(Ps("bb", 2)))
+
+void set_value_struct_from_borrow():
+    Vector[Pt] v = [Pt(1, 2), Pt(3, 4)]
+    auto s = v.get(1).unwrap()
+    Set[Pt] out = {s}
+    print(out.contains(Pt(3, 4)))
+
+void set_int_from_borrow():
+    Vector[int] v = [10, 20]
+    auto s = v.get(1).unwrap()
+    Set[int] out = {s}
+    print(out.contains(20))
+
+# The plain-literal forms must keep working — they were already correct, and a
+# producer realignment is exactly the change that could break them.
+void plain_literals_unchanged():
+    Set[String] a = {"aa", "bb"}
+    print(a.len())
+    print(a.contains("aa"))
+    Set[int] b = {1, 2, 2}
+    print(b.len())
+    Set[String] e = Set[String]()
+    print(e.len())
+
+void main():
+    set_string_from_borrow()
+    hashset_string_from_borrow()
+    set_resource_struct_from_borrow()
+    set_value_struct_from_borrow()
+    set_int_from_borrow()
+    plain_literals_unchanged()

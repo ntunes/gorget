@@ -51055,23 +51055,132 @@ fn known_gap_case_unresolved_name_rejected() {
     );
 }
 
-/// KNOWN GAP (CRITICAL) — a container literal mints its ELEMENT TYPE from the
-/// source operand BEFORE that operand is materialized, so a borrow-typed source
-/// yields `Vector[Ptr(T)]`: 8-byte slots, no elem vtable. The correctly-cloned
-/// value is stored 8-bytes-wide and freed.
+/// GRADUATED from `known_gaps/` — a container literal used to mint its ELEMENT
+/// TYPE from the source operand BEFORE that operand was materialized, so a
+/// borrow-typed source yielded `Vector[Ptr(T)]`: 8-byte slots, no elem vtable,
+/// with the correctly-cloned value stored 8 bytes wide and then freed.
 ///
-/// No for-loop, no `&`, live at HEAD: `gg check` clean, both backends rc 0 with
-/// `len()==1` and the element reading back EMPTY (ASan: abort). **ggdef prints
-/// the correct `bb`** — Core #8, the oracle is right and both production
-/// backends are wrong.
+/// This is the ORIGINAL minimal repro, kept at its original shape (Core #12: a
+/// graduated repro keeps the shape it was filed with). The axis-complete nets
+/// are `container_literal_borrow_elem_{array,dict,set}`.
 ///
-/// `Ptr(T)` is not `is_resource_type`, so the bogus element type launders the
-/// value past the fatal `ShallowCopyOfResource` validator. This is also Track
-/// E's precondition — its step (b) composes ASan-clean only once this lands.
+/// RED pre-fix: `1` then an EMPTY line, on BOTH backends, `gg check` clean and
+/// rc 0 — while ggdef printed the correct `bb`. `Ptr(T)` is not
+/// `is_resource_type`, so the bogus element type laundered the value past the
+/// fatal `ShallowCopyOfResource` validator, which is why a green suite carried
+/// it.
 #[test]
-#[ignore = "known gap (R42, CRITICAL): container literals mint their element type from a pre-materialization borrow, silently losing the element on both backends while ggdef is correct; un-ignore when the minted slot type equals the materialized operand type"]
-fn known_gap_container_literal_borrow_elem_type() {
-    run_gg("known_gaps/container_literal_mints_borrow_elem_type.gg", "1\nbb");
+fn container_literal_borrow_elem_type_minimal() {
+    run_gg("container_literal_mints_borrow_elem_type.gg", "1\nbb");
+}
+
+/// The ARRAY literal arm × the element-TYPE axis, which is the axis that broke
+/// (9 cells; 8 measured WRONG pre-fix, `bool` accidentally correct). Cell-by-cell
+/// RED evidence is in the fixture header.
+#[test]
+fn container_literal_borrow_elem_array() {
+    run_gg(
+        "container_literal_borrow_elem_array.gg",
+        "bb\n20\n2.500000\ntrue\n3\n4\nbb\n2\n2\n3\nbb\nbb",
+    );
+}
+
+/// The DICT literal arm — BOTH the key and the value mint sites. The borrowed
+/// KEY cell is the sharp one: pre-fix it hashed as a pointer, so the entry was
+/// unreachable and the lookup trapped rather than merely returning garbage.
+#[test]
+fn container_literal_borrow_elem_dict() {
+    run_gg(
+        "container_literal_borrow_elem_dict.gg",
+        "1\nbb\n7\n20\n3\n4\nbb\n2",
+    );
+}
+
+/// The SET literal arm on the BORROW axis, ordered AND unordered. Pre-fix every
+/// `contains` printed `false`. This arm needed the ordering fix and the
+/// write-site fix TOGETHER — see the fixture header for the three measured
+/// configurations, and `set_literal_selects_key_channel_by_element_type` for the
+/// emitted-symbol pins that output equality cannot provide.
+#[test]
+fn container_literal_borrow_elem_set() {
+    run_gg(
+        "container_literal_borrow_elem_set.gg",
+        "1\ntrue\ntrue\ntrue\ntrue\ntrue\n2\ntrue\n2\n0",
+    );
+}
+
+/// The SET literal's key-channel selection on the OWNED source axis.
+#[test]
+fn set_literal_key_channel_owned() {
+    run_gg("set_literal_key_channel_owned.gg", "1\ntrue\ntrue\ntrue");
+}
+
+/// ⭐ The SET literal must select its KEY CHANNEL from the element type, and
+/// this is the ONLY instrument that can see it for the all-primitive member.
+///
+/// A set literal whose element is a user-hashable struct of ONLY primitives
+/// prints the same thing whether the ktable bridge is wired or the element is
+/// byte-hashed — byte-hashing two ints happens to agree. So an output assertion
+/// on that cell is VACUOUS (Core #15e Q6: a green cell green for the wrong
+/// reason). The emitted C is where the difference is visible.
+///
+/// Both channels are asserted because they are read off DIFFERENT facts and a
+/// producer that supplies one closes only half the class:
+///   * `gorget_ordered_set_new_str` is selected from the monomorphized ctor
+///     NAME (`Set__GorgetString__new`), by the LIR ctor-arg synthesis — which is
+///     gated on the arg list being EMPTY, so a producer that passes its own
+///     `SizeOf` silently disables it;
+///   * `__gorget_ktable_hash__` is wired from the accumulator TYPE
+///     (`Set__<elem>`), by the collection-bridge pass.
+///
+/// RED pre-fix: BOTH counts are zero for the literal — the set typed its local
+/// with the bare `GorgetSet` and emitted the raw runtime symbol, so neither
+/// channel had anything to read. The explicit `Set[T]()` constructor was always
+/// correct on both, which is what made this sibling-site drift rather than a
+/// missing feature.
+#[test]
+fn set_literal_selects_key_channel_by_element_type() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir.join("tests/fixtures/set_literal_key_channel_owned.gg");
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let out_base = tmp.path().join("set_key_channel");
+    let out = build_with_timeout(
+        gg_command("build")
+            .arg("--emit-c")
+            .arg(&fixture)
+            .arg("-o")
+            .arg(&out_base),
+        "set_literal_key_channel_owned (--emit-c)",
+    );
+    assert!(
+        out.status.success(),
+        "build failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let c_path = out_base.with_extension("c");
+    let emitted = std::fs::read_to_string(&c_path)
+        .unwrap_or_else(|e| panic!("cannot read emitted C at {}: {e}", c_path.display()));
+
+    let new_str = emitted.matches("gorget_ordered_set_new_str").count();
+    let ktable = emitted.matches("__gorget_ktable_hash__").count();
+
+    // > 1 rather than > 0: the runtime prelude DECLARES both symbols, so a count
+    // of exactly 1 is the declaration alone and means the call site is absent.
+    // This is the discriminator, and getting it wrong reads as a pass.
+    assert!(
+        new_str > 1,
+        "set literal with `String` elements did not select the string-hash ctor: \
+         `gorget_ordered_set_new_str` appears {new_str}x in the emitted C (1 = the \
+         declaration only, i.e. no call site). The literal is byte-hashing its keys, \
+         so an equal-by-value String key misses."
+    );
+    assert!(
+        ktable > 1,
+        "set literal with a user-hashable struct element did not wire the ktable \
+         bridge: `__gorget_ktable_hash__` appears {ktable}x in the emitted C. \
+         ⚠ The all-primitive member prints the CORRECT answer while unwired, so \
+         this assertion is the only thing that sees it."
+    );
 }
 
 /// KNOWN GAP — CROSS-LANE accept/reject divergence on the reserved keyword

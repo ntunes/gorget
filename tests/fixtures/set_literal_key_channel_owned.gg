@@ -1,0 +1,59 @@
+# REGRESSION — the SET literal's KEY-CHANNEL selection on the OWNED source
+# axis. Sibling of `container_literal_borrow_elem_set.gg`, which covers the
+# BORROW axis; the two axes failed for DIFFERENT reasons and were fixed by
+# DIFFERENT halves of the change, so neither file substitutes for the other.
+#
+# AXIS CELL: set literal × owned (heap-forced) element × the two key channels —
+#   (a) `String` elements     -> `gorget_ordered_set_new_str` (string hashing)
+#   (b) user-hashable structs -> the `__gorget_ktable_hash__` bridge
+# Both must select, or the class is not closed: they are read off DIFFERENT
+# channels (the ctor NAME and the accumulator TYPE respectively).
+#
+# RED pre-fix: the `String` and resource-struct cells print `false` for a
+# `contains` of a value that IS in the set — the element was byte-hashed instead
+# of string-hashed, so an equal-by-value key missed.
+#
+# ⚠ The all-primitive `Pt{int,int}` cell prints `true` BOTH before and after
+# from an owned source — it is ACCIDENTALLY correct, because byte-hashing a
+# struct of two ints happens to agree with the ktable. Output equality is
+# VACUOUS for that cell; it is pinned by an emitted-symbol grep in
+# `set_literal_selects_key_channel_by_element_type` instead. It is included here
+# so the two files' cell sets line up, NOT because this file adjudicates it.
+#
+# The strings are heap-forced through `cat` rather than written as literals: a
+# literal is a false negative for this class, since a `.rodata` view does not
+# exercise the key_drop / key_materialize hooks the channel selection installs.
+
+@derive(Hashable, Equatable)
+struct Ps:
+    String name
+    int n
+
+@derive(Hashable, Equatable)
+struct Pt:
+    int x
+    int y
+
+String cat(String a, String b):
+    return a + b
+
+void string_channel():
+    String s = cat("a", "b")
+    Set[String] out = {s}
+    print(out.len())
+    print(out.contains("ab"))
+
+void ktable_channel_with_resource():
+    Ps p = Ps(cat("a", "b"), 2)
+    Set[Ps] out = {p}
+    print(out.contains(Ps("ab", 2)))
+
+void ktable_channel_all_primitive():
+    Pt p = Pt(3, 4)
+    Set[Pt] out = {p}
+    print(out.contains(Pt(3, 4)))
+
+void main():
+    string_channel()
+    ktable_channel_with_resource()
+    ktable_channel_all_primitive()

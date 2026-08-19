@@ -1,0 +1,71 @@
+# REGRESSION — the DICT literal arm of the container-literal element-type mint.
+#
+# AXIS CELL: container kind = DICT literal; borrow source = `.get(i).unwrap()`
+# on a local `Vector[T]`; BOTH the KEY position and the VALUE position, which
+# are separate mint sites (`Dict__K__V` is minted from both operands, and each
+# was inferred pre-materialization). Element TYPE covers String, int, a plain
+# value struct and a resource-carrying struct.
+#
+# THE MECHANISM, and why it is the dict's own fixture rather than a line in the
+# array's: the dict's materializer used to live INSIDE `stage_dict_arg`, which
+# runs AFTER `Dict__K__V` is minted. So the mint saw `Ptr(T)` for a borrowed key
+# or value and produced 8-byte slots with no key/val vtable. The fix hoists the
+# materializer OUT of `stage_dict_arg` to both `insert_pair` call sites, above
+# the mint.
+#
+# RED-VERIFIED against the pre-fix compiler (both backends):
+#   borrowed VALUE (String) -> `1` then an EMPTY line       (want `bb`)
+#   borrowed KEY   (String) -> trap[T_UnwrapNone] — the key hashed as a pointer,
+#                              so the lookup missed entirely (want `7`)
+# The KEY cell is the sharper one: a wrong key slot does not merely return a
+# wrong value, it makes the entry unreachable.
+
+struct Pt:
+    int x
+    int y
+
+struct Named:
+    String name
+    int n
+
+void borrowed_value_string():
+    Vector[String] v = ["aa", "bb"]
+    auto s = v.get(1).unwrap()
+    Dict[String, String] out = {"k": s}
+    print(out.len())
+    print(out.get("k").unwrap())
+
+void borrowed_key_string():
+    Vector[String] v = ["aa", "bb"]
+    auto s = v.get(1).unwrap()
+    Dict[String, int] out = {s: 7}
+    print(out.get("bb").unwrap())
+
+void borrowed_value_int():
+    Vector[int] v = [10, 20]
+    auto s = v.get(1).unwrap()
+    Dict[String, int] out = {"k": s}
+    print(out.get("k").unwrap())
+
+void borrowed_value_struct():
+    Vector[Pt] v = [Pt(1, 2), Pt(3, 4)]
+    auto s = v.get(1).unwrap()
+    Dict[String, Pt] out = {"k": s}
+    auto p = out.get("k").unwrap()
+    print(p.x)
+    print(p.y)
+
+void borrowed_value_resource_struct():
+    Vector[Named] v = [Named("aa", 1), Named("bb", 2)]
+    auto s = v.get(1).unwrap()
+    Dict[String, Named] out = {"k": s}
+    auto p = out.get("k").unwrap()
+    print(p.name)
+    print(p.n)
+
+void main():
+    borrowed_value_string()
+    borrowed_key_string()
+    borrowed_value_int()
+    borrowed_value_struct()
+    borrowed_value_resource_struct()
