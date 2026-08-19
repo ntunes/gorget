@@ -10893,8 +10893,8 @@ fn doc_source_citations_name_the_right_line() {
         ("112", "src/formatter/mod.rs:43", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("152", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
         ("232", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("582", "src/formatter/mod.rs:1010", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("791", "src/formatter/mod.rs:2972", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("582", "src/formatter/mod.rs:1046", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("791", "src/formatter/mod.rs:3083", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
@@ -15720,7 +15720,7 @@ fn fmt_hand_rolled_operator_emission_census() {
 /// ⚠ **The closure emitter's layout read has NO ROW HERE, and its `Plain` row
 /// does not mean "no layout question at this site".** A closure suite reaches
 /// `format_block_stmts` through `format_closure_post_prelude`, so the census
-/// sees the delegating call, not the read at `src/formatter/mod.rs:3856` that
+/// sees the delegating call, not the read at `src/formatter/mod.rs:3967` that
 /// chose the spelling. Independently measured (`if true || block.layout == ...`
 /// at that read): this census stays GREEN while
 /// `tests/fixtures/fmt_suite_layout/closure_body.gg` loses its fixpoint AND
@@ -17044,7 +17044,7 @@ fn formatter_list_emit_fill_census() {
 ///
 /// So the two counts are pinned against each other. `format_static_decl` is the
 /// one deliberate non-caller: statics are private-by-DEFAULT, the inverse
-/// convention, and it carries its own rule (`src/formatter/mod.rs:1894-1910`).
+/// convention, and it carries its own rule (`src/formatter/mod.rs:2005-2021`).
 /// A mismatch means either a new carrier that skipped the path, or a carrier
 /// removed without its emit site — both worth a look.
 #[test]
