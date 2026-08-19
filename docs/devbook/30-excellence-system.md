@@ -1000,6 +1000,44 @@ approximate on the expensive one — and approximation is the entire failure mod
 job to an agent with a single task and no competing context removes the pressure that
 produces the defect, rather than adding another rule the same pressure will bypass.
 
+### Cross the axes, or the net guards half the fix
+
+Core #12 says a fixture set that samples one value of a typed axis is an anecdote. There is
+a second-order version of that rule, and in one round it independently defeated two
+otherwise-careful fixture nets, both written by executors who had RED-verified every cell
+they wrote.
+
+**Sampling each axis is not the same as sampling the product.** A net can cover axis A at
+several values, cover axis B at several values, and still never test a single cell where a
+non-default A meets a non-default B. Every fixture passes, every cell is genuinely red
+before the fix and green after, and the net is still blind to half the change.
+
+Two measured instances, same round, different subsystems:
+
+- A formatter net had a **grouping-paren** axis and an **interior-comment** axis and never
+  crossed them. A comment sitting between a node and its own grouping paren was therefore
+  untested — and that is precisely the shape on which the shipped build aborted the compiler
+  with `exit 101`, on a program HEAD formatted correctly.
+- A lowering net had a **borrow-source** axis and an **element-position** axis and never
+  crossed them: every fixture put the borrow at position 0, and every multi-element literal
+  used static literals after it. Half the new function's call sites were consequently
+  unguarded. The reviewer proved it mechanically rather than by argument — **deleting only
+  the later-position call sites left all eight new fixtures, the new guard and 664 further
+  tests green**, while the same build ICE'd on a borrow in position 2 and returned a raw
+  address for a two-element literal.
+
+The mechanical test for net adequacy is that second measurement, and it generalises:
+**delete part of your fix and see whether the net notices.** A net that stays green while
+half the implementation is removed is not a net; it is a description of the paths you
+happened to think of. This is Core #13's "demonstrate a red" applied to coverage rather
+than to gates — and unlike a review it can be run by the author, before anyone else sees
+the diff.
+
+**The rule.** When a fix has two or more typed axes, enumerate the PRODUCT and name every
+cell you are not covering. When the fix introduces a new function with several call sites,
+partition the call sites by which axis value reaches them, and require at least one fixture
+per partition. Then delete each partition in turn and confirm the net goes red.
+
 ### A hit count is never the criterion in an artifact that quotes itself
 
 Corrections in a long-lived brief get verified with a grep: *"this phrase must no longer
