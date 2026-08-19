@@ -1,0 +1,42 @@
+# KNOWN GAP — a TRAILING comment binds to the FIRST element on its source line,
+# not the element it follows.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture is an UNFORMATTED
+# INPUT whose subject is what `gg fmt` does to it.
+#
+# The author wrote three elements on one line and a trailing comment after the
+# LAST of them. The container has a magic comma but no break BETWEEN elements,
+# so the engagement guard correctly returns it to the one-element-per-line shape
+# — and the comment comes back attached to `1`, two lines above the `3` it
+# annotates:
+#
+#     Vector[int] xs = [
+#         1,    # annotates 3
+#         2,
+#         3,
+#     ]
+#
+# MECHANISM: `emit_trailing_comment_after(elem_end, ..)` claims any comment on
+# elem_end's SOURCE LINE. When several elements share that line, the first hook
+# to run claims it, and the cursor is forward-only, so the elements that actually
+# precede the comment never get a chance.
+#
+# INTENDED: the comment stays with the element it follows — `3,    # annotates 3`.
+# A comment that silently changes which line it documents is the misattribution
+# class the formatter's comment machinery exists to prevent.
+#
+# PRE-EXISTING, and measured byte-identical on the pre-change binary: this is NOT
+# a regression from the author-line-grouping work. That feature makes the shape
+# RARER (a preserved row keeps the comment beside the row it annotates) without
+# touching the underlying binding.
+#
+# Wired as `#[ignore]`d `known_gap_fmt_trailing_comment_binds_to_first_on_line`
+# in tests/integration.rs, asserting the INTENDED output. Un-ignore it in the
+# commit that fixes the binding.
+from std.collections import Vector
+
+void main():
+    Vector[int] xs = [
+        1, 2, 3,  # annotates 3
+    ]
+    print(xs.len())

@@ -11533,6 +11533,63 @@ void main():
     assert_author_rows_formats_to("author_paren_holds_a_comment.gg", EXPECTED);
 }
 
+/// ⭐ A COMMENT AT A CHILD'S CLOSE — the near-twin of the paren x comment cell
+/// that means the OPPOSITE, and the shape that broke the ratchet twice.
+///
+/// `author_line_break_between` reads the region between two elements' SPANS. An
+/// author grouping paren's delimiters lie OUTSIDE the element's span, so a
+/// comment between them breaks the outer row (`author_paren_holds_a_comment.gg`).
+/// A call's argument list, a tuple, a nested literal and a closure's parameter
+/// list are spanned INCLUDING their delimiters, so a comment inside them belongs
+/// to the ELEMENT and the outer row must NOT break — which is what both
+/// containers here assert.
+///
+/// The second one is this feature's OWN IDIOM: a nested container with author
+/// rows. It is here because the corpus ratchet, which has no AST, cannot tell
+/// the two shapes apart; two syntactic proxies were built for the distinction
+/// and both fired on legal code. The ratchet now abstains where a comment sits
+/// beneath a site, and this exact-text cell adjudicates it instead.
+///
+/// RED-verified against the proxy build: the ratchet reported
+/// `1 author row signature(s) lost: [[1, 1, 2]]` for BOTH containers while
+/// `gg fmt` destroyed nothing.
+#[test]
+fn fmt_author_rows_nested_comment_at_child_close() {
+    const EXPECTED: &str = "\
+from std.collections import Vector
+
+int f(int a, int b):
+    return a + b
+
+void main():
+    Vector[int] calls = [
+        f(
+            1,    # at the child close
+            2,
+        ), 20,
+        30, 40,
+    ]
+    Vector[Vector[int]] xs = [
+        [
+            1,    # top row
+            2,
+        ], [
+            3,
+            4,
+        ],
+        [
+            5,
+            6,
+        ], [
+            7,
+            8,
+        ],
+    ]
+    print(calls.len() + xs.len())
+";
+    assert_author_rows_formats_to("nested_comment_at_child_close.gg", EXPECTED);
+}
+
 /// The NESTED cell: an element whose own render spans several output lines
 /// still shares its row with the neighbour the author put beside it. The row
 /// decision is taken from author spans BEFORE anything is rendered, so an
@@ -11730,6 +11787,50 @@ void main():
     assert_eq!(src_stdout.trim(), "16", "the cell's own stdout moved");
 }
 
+/// KNOWN GAP — a TRAILING comment binds to the FIRST element on its source
+/// line, not the element it follows.
+///
+/// `emit_trailing_comment_after(elem_end, ..)` claims any comment on
+/// `elem_end`'s SOURCE line. When several elements share that line, the first
+/// hook to run claims it, and the forward-only cursor gives the elements that
+/// actually precede the comment no second chance — so `[\n 1, 2, 3,  # note\n]`
+/// comes back with the note on `1`, two lines above the `3` it annotates.
+///
+/// PRE-EXISTING and measured byte-identical on the pre-change binary: NOT a
+/// regression from the author-line-grouping work, which makes the shape rarer
+/// (a preserved row keeps the comment beside the row it annotates) without
+/// touching the binding.
+///
+/// The assertion below is the INTENDED output. Un-ignore it in the commit that
+/// fixes the binding.
+#[test]
+#[ignore = "known gap: a trailing comment binds to the first element on its source line, not the one it follows"]
+fn known_gap_fmt_trailing_comment_binds_to_first_on_line() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir
+        .join("tests/fixtures/known_gaps/fmt_trailing_comment_binds_to_first_on_line.gg");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let formatted = gorget::formatter::format_source_infallible(&source);
+    let actual = fmt_body(&formatted);
+    const INTENDED: &str = "\
+from std.collections import Vector
+
+void main():
+    Vector[int] xs = [
+        1,
+        2,
+        3,    # annotates 3
+    ]
+    print(xs.len())
+";
+    assert_eq!(
+        actual, INTENDED,
+        "a trailing comment was re-parented to the first element on its source \
+         line.\n=== actual ===\n{actual}\n=== intended ===\n{INTENDED}"
+    );
+}
+
 /// The SEMANTIC half of the family: every fixture is built and run before and
 /// after `gg fmt`, and the stdout must be identical.
 ///
@@ -11753,6 +11854,7 @@ fn fmt_author_rows_round_trip_semantic() {
         ("fmt_author_rows/chain_carve_out_rows.gg", "10"),
         ("fmt_author_rows/author_paren_spans_rows.gg", "8"),
         ("fmt_author_rows/author_paren_holds_a_comment.gg", "8"),
+        ("fmt_author_rows/nested_comment_at_child_close.gg", "8"),
         ("fmt_author_rows/multiline_elem_shares_row.gg", "3"),
         ("fmt_author_rows/single_row_multiline.gg", "3"),
         ("fmt_author_rows/single_line_container_is_not_a_row.gg", "3"),
@@ -11792,9 +11894,9 @@ fn fmt_author_rows_every_fixture_is_run() {
         }
     }
     assert!(
-        n >= 15,
+        n >= 16,
         "the fmt_author_rows family shrank to {n} fixtures — it is seeded at \
-         15 and each one is a named axis cell. Removing one removes a cell."
+         16 and each one is a named axis cell. Removing one removes a cell."
     );
     assert!(
         missing.is_empty(),

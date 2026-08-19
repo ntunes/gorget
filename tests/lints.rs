@@ -17946,9 +17946,18 @@ fn formatter_author_grouping_reads_one_site() {
          something else.\n\n\
          This clause is also what makes the emitter's own `debug_assert` TRUE \
          rather than merely asserted: without it that assertion ABORTED `gg fmt` \
-         on a legal program (exit 101). The behavioural cell is \
-         `tests/fixtures/fmt_author_rows/author_paren_holds_a_comment.gg`, and \
-         the ratchet's scanner carries the same rule in `RowFrame::rows`."
+         on a legal program (exit 101).\n\n\
+         ⚠ WHAT THIS ASSERTION DOES AND DOES NOT GUARANTEE. It is a SPELLING \
+         check, so it proves the read is WRITTEN, never that it is REACHED — \
+         `if false && bytes[..].contains(&b'#')` satisfies it, measured. That \
+         is a limit of the technique, not an oversight, and it is why the cell \
+         has a BEHAVIOURAL adjudicator: \
+         `tests/fixtures/fmt_author_rows/author_paren_holds_a_comment.gg` reds \
+         under exactly that defeat (the emitter's `debug_assert` fires and its \
+         harness test panics), and the ratchet's scanner carries the matching \
+         abstention rule in `RowFrame::rows`. This pin exists to make the \
+         DELETION of the clause loud and to carry the reasoning to whoever \
+         removes it; the fixture is what makes its ABSENCE fatal."
     );
     assert!(
         body.contains("self.advance_past_author_parens(prev_end)"),
@@ -18036,6 +18045,10 @@ struct RowSite {
     /// The AUTHOR wrote a trailing comma before the close — the magic-comma
     /// signal. Read as the last significant byte at this region's own level.
     author_comma: bool,
+    /// A comment lies somewhere inside a CHILD region of this site, so this
+    /// scanner cannot tell whose AST span it falls in — see `RowFrame::rows`.
+    /// Such a site is NOT adjudicated on the author side.
+    child_comment: bool,
 }
 
 impl RowSite {
@@ -18069,6 +18082,9 @@ struct RowFrame {
     /// A comment has been seen at THIS frame's level since the last element
     /// closed. Consumed by the next element that opens.
     pending_comment: bool,
+    /// A comment was seen anywhere BELOW this frame. Propagated unconditionally
+    /// at every close; the sites carrying it abstain rather than guess.
+    child_comment: bool,
     /// Last significant byte at THIS frame's level — a child's close delimiter
     /// counts, its interior does not.
     last: u8,
@@ -18208,6 +18224,7 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
                 commas: 0,
                 cur: None,
                 pending_comment: false,
+                child_comment: false,
                 last: c,
             });
             i += 1;
@@ -18222,25 +18239,48 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
                 commas: f.commas,
                 rows: f.rows(),
                 author_comma: f.last == b',',
+                child_comment: f.child_comment,
             });
             // The child's close delimiter is a significant byte of the PARENT's
             // current element, and it is what carries that element's END line
             // past the child's interior — the author-paren case.
             //
-            // ⚠ AND AN UNCONSUMED COMMENT PROPAGATES OUT WITH IT. A comment the
-            // child saw but no child element ever claimed was TRAILING inside
-            // the child, so at the parent's level it sits between the parent's
-            // current element and whatever follows — which is exactly the
-            // region `author_line_break_between` scans. That is the difference
-            // between `[(1 # note\n), 2,]`, where the comment escapes a
-            // grouping paren and breaks the outer row, and `[f(a, # c\n b), 2,]`,
-            // where the child's own element `b` consumes it and the outer row
-            // is untouched. Both measured; the emitter agrees with both.
-            let escaped_comment = f.pending_comment;
+            // ⚠ A COMMENT BELOW THIS FRAME MAKES THE SITE UNADJUDICABLE, and
+            // the site ABSTAINS rather than guessing. Whether such a comment
+            // breaks the OUTER row depends on whose AST span it falls in, and
+            // this scanner has no AST: `parse_paren_expr` returns the WRAPPED
+            // node and files the paren in a sideband, so an author grouping
+            // paren's delimiters lie OUTSIDE the element's span and a comment
+            // between them DOES break the outer row — while a call's argument
+            // list, a tuple, a nested literal and a closure's parameter list are
+            // all spanned INCLUDING their delimiters, so a comment inside them
+            // does not.
+            //
+            // Two successive syntactic proxies for that distinction were built
+            // and both were wrong, each on a shape the previous one missed:
+            // propagating out of EVERY close reds on `[f(1, 2 # c\n), 20, 30,
+            // 40,]` and on `[[1, 2, # c\n], [3, 4,], [5, 6,],]` — the second
+            // being this feature's own idiom; restricting it to `(` with no
+            // commas and a non-callee byte before it still reds on a closure
+            // parameter list, `[(int x # c\n): x + 1, (int y): y + 2, …]`. A
+            // guard that fires on legal code is worse than one that misses a
+            // case, because its only exits are reshaping correct code or
+            // allowlisting a defect that does not exist.
+            //
+            // So the rule is ABSTENTION, and it is total rather than another
+            // proxy: any site with a comment anywhere beneath it leaves the
+            // author-side subject. The cost is stated rather than hidden — the
+            // paren x comment cell is then adjudicated ONLY by its exact-text
+            // fixture (`fmt_author_rows/author_paren_holds_a_comment.gg`), which
+            // is the stronger pin anyway. Comments at a site's OWN level are
+            // unaffected and still break its rows, which is what keeps
+            // `interior_comment_without_comma.gg` and
+            // `trailing_comment_per_row.gg` inside the subject set.
+            let comment_below = f.pending_comment || f.child_comment;
             if let Some(p) = stack.last_mut() {
                 p.mark(line);
                 p.last = c;
-                p.pending_comment |= escaped_comment;
+                p.child_comment |= comment_below;
             }
             i += 1;
             continue;
@@ -18268,7 +18308,12 @@ fn author_subject_signatures(src: &str) -> Vec<Vec<usize>> {
     author_row_scan(src)
         .into_iter()
         .filter(|s| {
-            s.multi_line() && s.commas > 0 && s.author_comma && s.engaged() && s.tabular()
+            s.multi_line()
+                && s.commas > 0
+                && s.author_comma
+                && s.engaged()
+                && s.tabular()
+                && !s.child_comment
         })
         .map(|s| s.rows)
         .collect()
@@ -18411,7 +18456,16 @@ fn fmt_author_row_grouping_survives_formatting() {
     /// corpus lost the very shape this guard watches — which would make the
     /// guard vacuous while staying green, the failure mode a bare pass cannot
     /// show you (Core #15e Q2).
-    const MIN_SUBJECT_SITES: usize = 26;
+    ///
+    /// ⚠ LOWERED 26 → 24 ONCE, DELIBERATELY, and this note is the reason the
+    /// constant's own assert demands. The two sites that left are the paren x
+    /// comment cell's, which now ABSTAIN: a comment beneath a site makes it
+    /// unadjudicable by a scanner with no AST (see `RowFrame::rows`). They did
+    /// not leave the tree — they moved to a stronger pin, the exact-text
+    /// fixture `fmt_author_rows/author_paren_holds_a_comment.gg`. Abstaining is
+    /// what a guard does instead of firing on legal code; it is not licence to
+    /// lower this again for a shrink nobody chose.
+    const MIN_SUBJECT_SITES: usize = 24;
     /// The SCANNER's own non-vacuity floor, on a population three orders of
     /// magnitude larger than the subject set: if the walk stops finding
     /// multi-line comma-bearing regions at all, the roots moved or the

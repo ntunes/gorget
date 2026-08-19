@@ -1,0 +1,47 @@
+# AUTHOR LINE GROUPING — a COMMENT AT A CHILD'S CLOSE. Two costumes, and the
+# second is this feature's own idiom.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture is a deliberately
+# UNFORMATTED INPUT — the assertion is on what `gg fmt` turns it INTO
+# (`fmt_author_rows_nested_comment_at_child_close`, exact text). A sweep would
+# rewrite it into its own expected output and the cell would go green-vacuous.
+#
+# AXES CROSSED: the NESTING axis (a call's argument list; a nested container)
+# × the COMMENT axis, at the position that discriminates them — the CHILD'S
+# CLOSE. Its sibling `author_paren_holds_a_comment.gg` puts the comment inside an
+# author GROUPING paren; here it sits inside a region whose delimiters belong to
+# the element's own AST span. The two look almost identical in source and mean
+# opposite things.
+#
+# ⚠ WHAT IT PINS. `author_line_break_between` reads the region between two
+# elements' SPANS. A grouping paren's delimiters lie OUTSIDE the element's span
+# (`parse_paren_expr` returns the wrapped node), so a comment between them breaks
+# the outer row. A call, a tuple, a nested literal and a closure parameter list
+# are all spanned INCLUDING their delimiters, so a comment inside them is inside
+# the ELEMENT and the outer row must NOT break. Both outer rows below are
+# therefore preserved exactly as written, comment and all.
+#
+# ⚠ AND IT PINS THE RATCHET, which is where this shape actually bit. The corpus
+# row-fidelity guard has no AST, so it cannot tell these two apart; two
+# successive syntactic proxies for the distinction were built and both fired on
+# legal code — the second one on `xs` below, the very idiom this feature exists
+# to serve. The guard now ABSTAINS on any site with a comment beneath it, and
+# this fixture is what adjudicates the cell instead.
+#
+# RED-verified (Core #12): against the proxy build, the ratchet reported
+# `1 author row signature(s) lost: [[1, 1, 2]]` for BOTH containers while
+# `gg fmt` destroyed nothing — a fatal guard failing on correct code, whose only
+# exits were reshaping the code or allowlisting a defect that did not exist.
+from std.collections import Vector
+
+int f(int a, int b):
+    return a + b
+
+void main():
+    Vector[int] calls = [f(1, 2 # at the child close
+), 20,
+        30, 40,]
+    Vector[Vector[int]] xs = [[1, 2, # top row
+], [3, 4,],
+        [5, 6,], [7, 8,],]
+    print(calls.len() + xs.len())
