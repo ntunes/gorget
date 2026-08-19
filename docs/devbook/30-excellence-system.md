@@ -942,6 +942,40 @@ retire, while the scout's original exits non-zero on that pair. Pasting the sent
 have cost nothing; rewriting it produced a guard that could not catch its own class — the
 Core #15e Q2 failure, introduced by the fold rather than by the design.
 
+### The rules were not enough, so the fold became its own role
+
+Five mechanical rules did not stop the bleeding. The seventh review pass on one track
+produced the diagnosis that mattered, and it was not about any rule's content:
+
+> *"All four `ORPHAN CLAUSES: none` claims are false, and the disposition carrying ten
+> items has no orphan line at all. **The rule was applied to the four cheap dispositions
+> and skipped on the expensive one.**"*
+
+That is a resource-allocation failure, not a knowledge failure. The orchestrator knew the
+rule, wrote the rule, and skipped it precisely where the transcription was longest — which
+is exactly where the findings were densest. Across one round, roughly ten folds were done
+as a side-task by an agent simultaneously running five tracks, and **every one introduced a
+defect**, in a round where the underlying designs kept passing review untouched. One track
+reached seven passes with no mechanism defect ever found; every finding in it was a fold
+artifact.
+
+The structural fix is to stop treating folding as something the orchestrator does between
+other things. **The fold is its own role, with its own agent and its own clean context.**
+Its brief is a seven-step procedure with no judgement calls: enumerate the findings and
+write the counts down; concatenate the report verbatim; emit one fixed-shape disposition per
+finding (`PASTE:` the remedy, `DELTA:` the instruction, `ORPHAN CLAUSES:` the leftovers);
+verify the orphan list clause by clause with explicit instruction to spend the MOST care on
+the LONGEST disposition; re-run every literal rather than retyping it; count the
+dispositions and check the number; and use the report's own numbering rather than a hybrid
+of two passes'. Anything requiring a decision the report leaves open is emitted as
+`ESCALATE:` rather than resolved.
+
+The agent's value is precisely that it has nothing else to do. An orchestrator holding five
+tracks will always, under pressure, apply a careful procedure to the cheap items and
+approximate on the expensive one — and approximation is the entire failure mode. Giving the
+job to an agent with a single task and no competing context removes the pressure that
+produces the defect, rather than adding another rule the same pressure will bypass.
+
 The deeper reading: a brief accumulates two different kinds of content. **Judgements**
 compress well and survive rewriting. **Artifacts** — paths, identifiers, commands, counts,
 file names — do not compress at all, and every generation of editing sheds them. Keep them
