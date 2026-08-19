@@ -1,10 +1,11 @@
 # REGRESSION — the ARRAY literal arm of the container-literal element-type mint.
 #
-# AXIS CELL: container kind = ARRAY literal; borrow source = `.get(i).unwrap()`
-# on a local `Vector[T]`; element TYPE = every cell below, which is the axis
-# that broke. Dict and Set are the sibling arms and have their own fixtures
-# (`container_literal_borrow_elem_dict.gg`, `..._set.gg`) — this file makes NO
-# claim about them.
+# AXIS CELLS: container kind = ARRAY literal, crossed over THREE axes — element
+# TYPE (9 cells, the axis that broke), borrow POSITION (0 and 1), and borrow
+# SOURCE (5 values). Each axis is enumerated below with the cells it omits named
+# rather than left implicit. Dict and Set are the sibling arms and have their own
+# fixtures (`container_literal_borrow_elem_dict.gg`, `..._set.gg`) — this file
+# makes NO claim about them.
 #
 # THE DEFECT: the literal minted its destination element type from the source
 # operand BEFORE that operand was materialized, so a borrow-typed source minted
@@ -46,12 +47,13 @@
 #
 # ⭐ BORROW-SOURCE AXIS. `.get(i).unwrap()` on a local is only ONE way to obtain
 # an internal borrow, and a fixture set that samples one value of an axis is an
-# anecdote. The four other sources below all produced a wrong answer pre-fix and
-# are fixed by the same change:
-#   `&`-parameter          -- the borrow crosses a function boundary
-#   struct FIELD read      -- no method call at all
-#   `Dict.get().unwrap()`  -- a different collection's view
-#   nested chain `i.xs.get(1)` -- field-then-element
+# anecdote. Measured pre-fix, on the rebuilt `12adaa56` binary:
+#   `&`-parameter              -> `187651301880488`  -- the borrow crosses a call
+#   `Dict.get().unwrap()`      -> `187650409718960`  -- another collection's view
+#   nested chain `i.xs.get(1)` -> `187651397046952`  -- field-then-element
+#   struct FIELD read          -> EMPTY on its STRING half; its `int` half
+#                                 printed `2` CORRECTLY pre-fix, so only the
+#                                 String half of that cell is load-bearing here
 # OMITTED and named rather than claimed: view-returning USER methods and
 # function returns, which reach the literal as ordinary owned values on this
 # path; and for-loop elements, whose own defect is filed separately.
