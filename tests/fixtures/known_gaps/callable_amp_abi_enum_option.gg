@@ -1,0 +1,29 @@
+# REGRESSION PIN — indirect-call `&`-param ABI, TYPE axis cell: **enum /
+# `Option[int]`** (a non-resource aggregate that is NOT a user struct), through
+# an ANNOTATED LOCAL `Callable`. This cell is the one the C backend's own
+# comment names as "by-value non-resource aggregate", and it was broken at base
+# exactly like the struct cells — enum payloads are not a separate class.
+#
+# RED-VERIFIED against the PRE-fix compiler (`git checkout -- src && cargo build`):
+#     C    -> rc 139 (SIGSEGV)
+#     LLVM -> rc 139 (SIGSEGV)
+# POST-fix both backends print `7`.
+#
+# LANE AXIS (self-host driver): rc 139 — same class, filed separately.
+#
+# WHY known_gaps/: zero parity-corpus inflow; the LIVE test asserts on C + LLVM.
+#
+# INTENDED: `7` (the callee replaces the whole `Option` through the `&`).
+void bump(Option[int] &o):
+    o = Some(7)
+
+int main():
+    Callable[void(Option[int] &)] f = bump
+    Option[int] o = Some(1)
+    f(&o)
+    match o:
+        case Some(v):
+            print(v)
+        else:
+            print(-1)
+    return 0

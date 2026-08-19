@@ -170,6 +170,79 @@ impl<'a> FuncLowering<'a> {
         }
     }
 
+    /// The callee's DECLARED per-parameter ownership sigils for an operand
+    /// that holds a callable (`Callable[T]` local, escaped closure, any
+    /// `FnPtr`-typed local), read from `GirType::FnPtr::param_ownerships`.
+    ///
+    /// This is the typed fact the indirect-call ABI must be WRITTEN from
+    /// (devbook/24 rules 2 and 4): a `&` (`Ownership::MutableBorrow`) param is
+    /// a **pointer** in the callee's declared signature — which is exactly what
+    /// the `__adapt_*` shim emitter derives from `LirFunction.params` — so the
+    /// call site forwards the pointer and never dereferences it.
+    ///
+    /// Returns an EMPTY vec when the operand's GIR type is not an `FnPtr`,
+    /// which is the *unknown* case, not the *no-borrows* case: a
+    /// `Callable[..]` PARAMETER's GIR local type is erased to `unit`, and a
+    /// container element's is `fn() -> i64`. Callers must leave such args
+    /// alone rather than tagging them by value; the
+    /// `GG_REPORT_CLOSURE_ABI_GUESS` guard reports exactly those sites.
+    pub(super) fn operand_param_ownerships(
+        &self,
+        operand: &Operand,
+    ) -> Vec<crate::parser::ast::Ownership> {
+        match operand {
+            Operand::Copy(place) | Operand::Move(place) => {
+                let idx = place.local.0 as usize;
+                let Some(local) = self.gir_func.locals.get(idx) else {
+                    return Vec::new();
+                };
+                match self.gir_types.get(local.type_id) {
+                    Some(GirType::FnPtr { param_ownerships, .. }) => param_ownerships.clone(),
+                    _ => Vec::new(),
+                }
+            }
+            Operand::Constant(_) => Vec::new(),
+        }
+    }
+
+    /// Per-parameter "the callee declares a POINTER here" for an indirect
+    /// (`Callable`/closure) call — the fact `Inst::CallClosure`'s `arg_abis`
+    /// must be written from.
+    ///
+    /// Two channels carry the ONE fact, in preference order, because the
+    /// callable's declared signature reaches this point by two routes:
+    ///  1. the closure operand's own `GirType::FnPtr` (annotated locals,
+    ///     escaped closures), and
+    ///  2. the module's declared `fn_param_abis`, published at the GIR call
+    ///     site under [`crate::ir::abi::indirect_callee_key`] — the route that
+    ///     survives the `Callable[..]` PARAMETER's erasure to `unit`.
+    ///
+    /// An EMPTY result means the signature reached neither channel (a
+    /// container element, an `auto`-bound callable): that is *unknown*, not
+    /// *no borrows*, and the caller must leave those args as the by-value
+    /// promotion left them.
+    pub(super) fn declared_closure_param_by_ptr(
+        &self,
+        closure_operand: Option<&Operand>,
+        synthetic_callee: &str,
+    ) -> Vec<bool> {
+        use crate::ir::lowering::context::ParamABI;
+        if let Some(op) = closure_operand {
+            let owns = self.operand_param_ownerships(op);
+            if !owns.is_empty() {
+                return owns
+                    .iter()
+                    .map(|o| *o == crate::parser::ast::Ownership::MutableBorrow)
+                    .collect();
+            }
+        }
+        let key = crate::ir::abi::indirect_callee_key(synthetic_callee, &self.lir_func.name);
+        self.fn_param_abis
+            .get(&key)
+            .map(|abis| abis.iter().map(|a| *a == ParamABI::ByMutPtr).collect())
+            .unwrap_or_default()
+    }
+
     pub(super) fn operand_lir_type(&self, operand: &Operand) -> LirType {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => {

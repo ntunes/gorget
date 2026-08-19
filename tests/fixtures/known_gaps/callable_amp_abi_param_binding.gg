@@ -1,0 +1,69 @@
+# REGRESSION PIN — indirect-call `&`-param ABI, BINDING-FORM axis cell:
+# the `Callable[..]` PARAMETER (the ERASED-SIGNATURE provenance).
+#
+# ⚠ THIS IS THE CELL WHOSE FACT CHANNEL IS EMPTY AT THE LIR WRITE SITE. A
+# `Callable[..]` parameter's GIR local type is erased to `unit`, so the closure
+# operand carries no `FnPtr` signature by the time `Inst::CallClosure` is built.
+# The declared param ABIs are therefore PUBLISHED at the GIR call site (the last
+# point where the signature is in scope) into `fn_param_abis` under
+# `abi::indirect_callee_key`, and read back at the LIR write site. Both shapes
+# below take that route:
+#   - direct `apply(bump, &p)`             — `&`-param called straight through
+#   - the `Vector.get().unwrap()` iterator — the shape filed as a HIGH SIGSEGV
+#
+# RED-VERIFIED against the PRE-fix compiler (`git checkout -- src && cargo build`,
+# then re-run — `git apply -R` alone does NOT rebuild):
+#     C    -> rc 139 (SIGSEGV)
+#     LLVM -> rc 139 (SIGSEGV)
+# POST-fix both backends print `2` `1` `2`.
+#
+# ⚠ The `apply(bump, &p)` half is green-on-arrival on the C/LLVM lanes in
+# ISOLATION (it was one of the accidentally-correct cells: the pre-fix guess
+# forwarded the pointer because the arg's root is itself a borrow parameter).
+# It is RED here only because the iterator half shares the program. Kept in one
+# fixture deliberately: they are the same provenance, and the isolated form is
+# separately pinned green by `tests/fixtures/callable_ref_param.gg` (top level).
+#
+# LANE AXIS (self-host driver): `apply(bump, &p)` -> rc 0, prints `2` (correct);
+# the iterator half is not separately measured on the SH lane. The SH lane's own
+# indirect-call ABI defect is filed in TODO.md.
+#
+# WHY known_gaps/: zero parity-corpus inflow; the LIVE test asserts on C + LLVM.
+#
+# INTENDED: `2` `1` `2`.
+from std.collections import Vector
+
+struct P:
+    int n
+
+struct Thing:
+    int val
+
+void bump(P &p):
+    p.n = p.n + 1
+
+int get_val(Thing &t):
+    return t.val
+
+void apply(Callable[void(P &)] f, P &p):
+    f(&p)
+
+Vector[int] map_thing(Vector[Thing] xs, Callable[int(Thing &)] f):
+    Vector[int] out = []
+    int i = 0
+    while i < xs.len():
+        Thing t = xs.get(i).unwrap()
+        out.push(f(&t))
+        i = i + 1
+    return out
+
+int main():
+    P p = P(1)
+    apply(bump, &p)
+    print(p.n)
+
+    Vector[Thing] xs = [Thing(1), Thing(2)]
+    Vector[int] r = map_thing(xs, get_val)
+    print(r.get(0).unwrap())
+    print(r.get(1).unwrap())
+    return 0

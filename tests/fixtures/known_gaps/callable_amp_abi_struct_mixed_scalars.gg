@@ -1,0 +1,32 @@
+# REGRESSION PIN — indirect-call `&`-param ABI, TYPE axis cell: **mixed
+# register-class struct** (`struct{bool,float}`), through an ANNOTATED LOCAL
+# `Callable`. Distinct cell from the all-int structs: the platform ABI assigns
+# these fields to DIFFERENT register classes, so a by-value/by-pointer mismatch
+# can corrupt differently from the integer cells.
+#
+# RED-VERIFIED against the PRE-fix compiler (`git checkout -- src && cargo build`):
+#     C    -> rc 139 (SIGSEGV)
+#     LLVM -> rc 139 (SIGSEGV)
+# POST-fix both backends print `true` / `2.000000`.
+#
+# LANE AXIS (self-host driver): rc 139 — same class, filed separately.
+#
+# WHY known_gaps/: zero parity-corpus inflow (`runtime_parity_corpus` does not
+# descend subdirectories); the LIVE test still asserts on C AND LLVM.
+#
+# INTENDED: `true` then `2.000000`.
+struct BF:
+    bool ok
+    float v
+
+void bump(BF &s):
+    s.ok = true
+    s.v = s.v + 1.0
+
+int main():
+    Callable[void(BF &)] f = bump
+    BF s = BF(false, 1.0)
+    f(&s)
+    print(s.ok)
+    print(s.v)
+    return 0

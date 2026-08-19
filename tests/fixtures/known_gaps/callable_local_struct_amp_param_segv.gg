@@ -1,39 +1,42 @@
-# KNOWN GAP — MEMORY UNSAFE, BOTH BACKENDS, from ten lines of ordinary safe
-# Gorget. A `Callable` bound to a LOCAL, whose signature takes a STRUCT-typed
-# `&` param, SEGFAULTS when called.
+# REGRESSION PIN — indirect-call `&`-param ABI, TYPE axis cell: **8-byte
+# non-resource struct** (`struct{int}`), through an ANNOTATED LOCAL `Callable`.
+# This is the original repro of the defect the R43 Track C write-site fix
+# retired; its test is LIVE (not `#[ignore]`d) and asserts the intended output.
 #
-# ⚠ THE DISCRIMINATOR IS A COMBINATION — measured as a 2x2 on 2026-08-19, and
-# it is NARROWER than any of the three entries filed against this family:
+# THE DEFECT IT PINS: at an indirect call each argument's pointer-vs-value ABI
+# was GUESSED from the ARGUMENT's pointee shape at two independent backend read
+# sites, instead of being WRITTEN from the CALLEE's declared parameter
+# ownership. The guess coincides with the truth for scalars and for
+# resource-containing aggregates and DIVERGES for a non-resource aggregate
+# behind a `&` — so the call site passed the struct BY VALUE into a callee (and
+# an `__adapt_*` shim) declared to take a pointer.
 #
-#   binding | param type | result
-#   --------|------------|--------------------------------
-#   LOCAL   | int &      | OK, prints 2
-#   LOCAL   | struct &   | SIGSEGV rc 139 on C AND LLVM   <-- this fixture
-#   PARAM   | struct &   | OK, prints 2
-#   (direct call, no Callable, struct &)  OK, prints 2
+# RED-VERIFIED against the PRE-fix compiler (`git checkout -- src && cargo build`,
+# then re-run — reverting a patch does NOT rebuild the binary):
+#     gg check              -> rc 0, "OK: no semantic errors"
+#     C    -> builds rc 0, binary rc 139 (SIGSEGV), no output
+#     LLVM -> builds rc 0, binary rc 139 (SIGSEGV), no output
+# POST-fix both backends print `2`.
 #
-# So it is NOT "indirect calls are broken" (a param-passed Callable with the
-# same struct `&` signature works), and NOT "struct `&` params are broken"
-# (the direct call and the param form both work). It is the LOCAL binding
-# combined with a struct-typed `&` parameter.
+# ⚠ THE 2x2 THAT FIRST FRAMED THIS DEFECT WAS TOO NARROW — recorded so the
+# narrowing is not re-derived. It read "LOCAL + struct& breaks, LOCAL + int& and
+# PARAM + struct& work". Measured across the full type axis, the LOCAL binding
+# was broken for EVERY non-resource aggregate (struct 8B/16B/40B, mixed
+# register classes, nested structs, `Option[int]`), and the surviving green
+# cells (`int`, `float`, `bool`, `String`, `Vector`, `Dict`, `struct{String}`)
+# were green only ACCIDENTALLY — they are pinned as such in
+# callable_amp_abi_scalar_cells.gg and callable_amp_abi_resource_cells.gg.
 #
-# ⚠ WHY THE EXISTING FIXTURE DOES NOT CATCH IT: `tests/fixtures/callable_ref_param.gg`
-# samples `Callable[int(Counter &)]` — a struct `&` param — and PASSES, because
-# it passes the callable as a PARAMETER. It covers the adjacent WORKING cell of
-# the same 2x2. Core #12: a green cell may be green for a reason unrelated to
-# what you think it tests, and a fixture set that samples one value of a typed
-# axis is an anecdote.
+# LANE AXIS (self-host driver, `--emit-c` -> cc -> run): rc 139. The self-host
+# has its OWN indirect-call ABI defect (it never forms the pointer at all) and
+# is 0/13 across this net's type cells; filed in TODO.md.
 #
-# Measured 2026-08-19 at HEAD:
-#     gg check                -> "OK: no semantic errors"  (rc 0)
-#     gg build (C)            -> rc 0, then the binary exits 139 (SIGSEGV)
-#     gg build --backend=llvm -> rc 0, then the binary exits 139 (SIGSEGV)
+# WHY IT STAYS IN known_gaps/: `runtime_parity_corpus` reads only
+# `tests/fixtures/*.gg` and never descends subdirectories, so the LIVE test
+# asserts on C AND LLVM with ZERO self-host parity-corpus inflow. Graduating it
+# to the top level while the SH lane still fails it WOULD be new parity debt.
 #
 # INTENDED: prints `2` on both backends — the callee writes through the `&`.
-#
-# Wired test: known_gap_callable_local_struct_amp_param_segv (tests/integration.rs,
-# #[ignore]d). Un-ignore when the local-bound callable carries the same `&`
-# calling convention the parameter-passed form already gets.
 struct P:
     int n
 

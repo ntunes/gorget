@@ -14,6 +14,38 @@ use super::{lower_expr, infer_operand_type_full,
             ensure_task_group_type_def, get_or_register_type,
             resolve_option_result_variant, lower_string_interpolation};
 
+/// Publish an indirect callee's DECLARED param ABIs into
+/// `fn_param_abis`, keyed by [`crate::ir::abi::indirect_callee_key`].
+///
+/// GIR→LIR erases a `Callable[..]` PARAMETER's type to `unit`, so by the time
+/// `Inst::CallClosure` is built the callee's `&`-ness is unrecoverable from the
+/// operand and the backends guess it from the ARGUMENT's shape instead — the
+/// R43 Track C defect. This is the last point in the pipeline where the
+/// declared signature is still in scope, so the fact is written here and read
+/// there (devbook/24 rule 4, resolve once + write through) rather than
+/// reconstructed downstream.
+///
+/// The key is per-call-site: the synthetic name embeds a per-function local id
+/// and would otherwise collide across functions.
+fn publish_indirect_callee_abis(
+    ctx: &mut LoweringContext,
+    builder: &FunctionBuilder,
+    callable_name: &str,
+    sig_params: &[TypeId],
+    sig_owns: &[Ownership],
+) {
+    let abis: Vec<ParamABI> = sig_params
+        .iter()
+        .zip(sig_owns.iter())
+        .map(|(&pt, own)| ctx.compute_param_abi(pt, own.clone()))
+        .collect();
+    if abis.is_empty() {
+        return;
+    }
+    let key = crate::ir::abi::indirect_callee_key(callable_name, &builder.name);
+    ctx.fn_param_abis.insert(key, abis);
+}
+
 pub(super) fn lower_call_arg(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -1876,6 +1908,17 @@ pub(super) fn lower_call(
                     // the same callable local match.
                     ctx.fn_sigs.insert(callable_name.clone(), (sig_params.clone(), UNIT_TYPE));
                     ctx.fn_param_ownerships.insert(callable_name.clone(), sig_owns.clone());
+                    // R43 Track C: PUBLISH the declared param ABI for this
+                    // indirect callee. A `Callable[..]` PARAMETER's GIR local
+                    // type is `unit` — the signature is erased before GIR→LIR —
+                    // so `Inst::CallClosure` lowering cannot recover the
+                    // callee's `&`-ness from the operand's type and both
+                    // backends fall back to guessing from the ARGUMENT's shape.
+                    // This is the one place the declared signature is still in
+                    // scope, so it writes the fact into the module's declared
+                    // single source of truth for param passing, keyed per call
+                    // site (`abi::indirect_callee_key`).
+                    publish_indirect_callee_abis(ctx, builder, &callable_name, &sig_params, &sig_owns);
                     for (i, arg) in args.iter().enumerate() {
                         // Track B1 A-2 Option (b), 2026-07-27: the pre-fix
                         // "already-a-pointer bare-arg forwarding" shortcut (a
@@ -1941,6 +1984,11 @@ pub(super) fn lower_call(
                 if let (Some(sig_params), Some(sig_owns)) = (sig_params, sig_owns) {
                     ctx.fn_sigs.insert(callable_name.clone(), (sig_params.clone(), fn_ret));
                     ctx.fn_param_ownerships.insert(callable_name.clone(), sig_owns.clone());
+                    // R43 Track C: same publication as the `UNIT_TYPE` arm — an
+                    // escaped-closure local keeps its `FnPtr` type, so LIR can
+                    // usually read the ownerships off the operand, but the two
+                    // arms must not disagree about where the fact comes from.
+                    publish_indirect_callee_abis(ctx, builder, &callable_name, &sig_params, &sig_owns);
                     for (i, arg) in args.iter().enumerate() {
                         // Track B1 A-2 Option (b), 2026-07-27: same retirement as
                         // the UNIT_TYPE arm above. The bare-arg-`is_param_borrow_unique`

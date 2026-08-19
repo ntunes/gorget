@@ -1,0 +1,31 @@
+# REGRESSION PIN — indirect-call `&`-param ABI, TYPE axis cell: **nested
+# non-resource struct** (`struct{struct{int}}`), through an ANNOTATED LOCAL
+# `Callable`. Samples the transitive-resource query's negative side: the
+# pointee is an aggregate whose FIELD is an aggregate, and neither holds a
+# heap resource.
+#
+# RED-VERIFIED against the PRE-fix compiler (`git checkout -- src && cargo build`):
+#     C    -> rc 139 (SIGSEGV)
+#     LLVM -> rc 139 (SIGSEGV)
+# POST-fix both backends print `2`.
+#
+# LANE AXIS (self-host driver): rc 139 — same class, filed separately.
+#
+# WHY known_gaps/: zero parity-corpus inflow; the LIVE test asserts on C + LLVM.
+#
+# INTENDED: `2`.
+struct Inner:
+    int n
+
+struct Outer:
+    Inner inner
+
+void bump(Outer &o):
+    o.inner.n = o.inner.n + 1
+
+int main():
+    Callable[void(Outer &)] f = bump
+    Outer o = Outer(Inner(1))
+    f(&o)
+    print(o.inner.n)
+    return 0

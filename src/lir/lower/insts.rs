@@ -3884,6 +3884,36 @@ impl<'a> FuncLowering<'a> {
                     }
                 }
             }
+            // ── The indirect-call argument ABI is a WRITE, not a guess ──────
+            // The invariant, spelled once: **an argument's ABI at an indirect
+            // call is the CALLEE's DECLARED parameter ABI** — the same fact the
+            // `__adapt_*` shim emitter derives from `LirFunction.params`
+            // (`src/backend/c_lir/mod.rs`, adapter emission). A `&`
+            // (`MutableBorrow`) param is a POINTER in that declared signature,
+            // so the call site forwards the pointer.
+            //
+            // Leaving it `Auto` here made BOTH backends reconstruct the
+            // decision from the ARGUMENT's pointee SHAPE
+            // (`is_aggregate() && !contains_resource`) — two independent
+            // guesses at one missing fact. The guess coincides with the truth
+            // for scalars and for resource aggregates, and DIVERGES for a
+            // non-resource aggregate behind a `&`: the call site then passed
+            // the struct by value where the callee (and its adapter) declared
+            // `void*` — SIGSEGV, or a silently lost write-through where the
+            // platform ABI hands large aggregates over in a hidden-pointer slot.
+            //
+            // Params whose ownership is not known HERE keep whatever the
+            // by-value promotion above decided: `operand_param_ownerships`
+            // returns empty when the callable's GIR type was erased (a
+            // `Callable[..]` PARAMETER is typed `unit`, a container element
+            // `fn() -> i64`), and empty means UNKNOWN, not "no borrows". Those
+            // sites are what the `GG_REPORT_CLOSURE_ABI_GUESS` guard reports.
+            let by_ptr = self.declared_closure_param_by_ptr(args.first(), emit_name);
+            for (i, is_ptr) in by_ptr.iter().enumerate().take(user_abis.len()) {
+                if *is_ptr {
+                    user_abis[i] = crate::ir::abi::AbiKind::Ptr;
+                }
+            }
             let is_void_ret = matches!(ret_ty, LirType::Void);
             let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
             self.push_inst(bb, Inst::CallClosure {

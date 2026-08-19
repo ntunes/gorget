@@ -1,0 +1,51 @@
+# KNOWN GAP — MEMORY UNSAFE, BOTH BACKENDS. `auto f = bump` (an INFERRED local
+# bound to a named `&`-param function) loses the borrow entirely: the callable's
+# declared signature is never registered, so the argument loop takes the legacy
+# fallback and passes the struct/scalar BY VALUE where the callee expects a
+# pointer.
+#
+# ⚠ DISTINCT FROM THE ANNOTATED-LOCAL CELL, and the discriminator is the GIR,
+# not the symptom. For `Callable[void(P &)] f = bump` the GIR passes a real
+# pointer (`_7 = borrow_mut _4`) and only the ABI TAG was wrong — fixed by
+# writing the tag from the callee's declared ownership. For `auto f = bump` the
+# GIR is `_1 = const @bump` with `_1: unit` and the call is
+# `call @__callable_1(copy _1, copy _3)` — a VALUE copy of a struct TEMP. No ABI
+# tag can repair that: the pointer is never formed, and the argument is not even
+# the user's variable. Verify:
+#     gg build --emit-gir tests/fixtures/known_gaps/callable_amp_auto_local_lost_write.gg
+#
+# The fix belongs at the `auto`-declaration site — the callable's declared
+# signature must reach `callable_param_types` / `callable_param_ownerships` for
+# an inferred binding exactly as it does for an annotated one — after which the
+# arg loop takes the `lower_call_arg` path and the ABI write site already
+# handles the rest. Filed in TODO.md.
+#
+# ⚠ IT KILLS THE `int &` CELL TOO, which the annotated-local defect did not:
+# the scalar cell was accidentally correct there because a pointer WAS formed.
+# Here nothing is.
+#
+# RED-VERIFIED at HEAD (with the indirect-call ABI write site landed):
+#     C    -> rc 139 (SIGSEGV)
+#     LLVM -> rc 139 (SIGSEGV)
+#     self-host driver -> rc 139
+#
+# INTENDED: `2` then `2`.
+struct P:
+    int n
+
+void bump(P &p):
+    p.n = p.n + 1
+
+void bump_int(int &n):
+    n = n + 1
+
+int main():
+    auto f = bump
+    P p = P(1)
+    f(&p)
+    print(p.n)
+    auto g = bump_int
+    int k = 1
+    g(&k)
+    print(k)
+    return 0

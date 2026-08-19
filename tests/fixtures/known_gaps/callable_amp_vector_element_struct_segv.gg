@@ -1,0 +1,43 @@
+# KNOWN GAP — MEMORY UNSAFE, BOTH BACKENDS. A `Callable` stored as a VECTOR
+# ELEMENT and called with a STRUCT-typed `&` argument SIGSEGVs, while the
+# identical program with an `int` element type runs correctly.
+#
+# ⚠ THIS IS THE CELL THE IN-CORPUS FIXTURE MISSES. `tests/fixtures/callable_amp_arr_indexed_callee.gg`
+# pins the same shape with `Callable[void(int &)]` and is GREEN — but only
+# accidentally: a scalar pointee was never subject to the by-value guess.
+# Flip ONLY the element type to a struct and the cell dies. Verify:
+#     gg build tests/fixtures/callable_amp_arr_indexed_callee.gg   # runs
+#     gg build tests/fixtures/known_gaps/callable_amp_vector_element_struct_segv.gg  # rc 139
+#
+# MECHANISM (measured with `gg build --emit-gir`): the element's GIR type is
+# `fn() -> i64` — a ZERO-PARAM FnPtr — because the container-element inferrer's
+# signature lookup misses and falls back. So the callee's declared ownership is
+# absent from BOTH channels the indirect-call ABI write site reads (the
+# operand's `FnPtr::param_ownerships` is empty, and no declared ABI is published
+# for this call site), and the backends fall back to guessing from the
+# argument's shape — which is the R43 Track C defect, surviving here because the
+# fact never reaches the write site. The pointer IS formed correctly
+# (`_7 = borrow_mut _4`); only the ABI tag is missing.
+#
+# Fix belongs at the element-type inferrer: the callable alias signature must be
+# populated for `Vector[Callable[...]]` element types. Filed in TODO.md.
+#
+# RED-VERIFIED at HEAD (with the indirect-call ABI write site landed):
+#     C    -> rc 139 (SIGSEGV)
+#     LLVM -> rc 139 (SIGSEGV)
+#     self-host driver -> rc 139
+#
+# INTENDED: `2`.
+struct P:
+    int n
+
+void bump(P &p):
+    p.n = p.n + 1
+
+int main():
+    Vector[Callable[void(P &)]] arr = []
+    arr.push(bump)
+    P p = P(1)
+    arr[0](&p)
+    print(p.n)
+    return 0

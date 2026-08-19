@@ -1,0 +1,46 @@
+# REGRESSION PIN — indirect-call `&`-param ABI, TYPE axis cell: **40-byte
+# non-resource struct** (`struct{5 x int}`), through an ANNOTATED LOCAL
+# `Callable`. THE MOST DANGEROUS CELL IN THE TYPE AXIS, and the reason this
+# net must run on BOTH backends: at base the two backends disagree on the
+# SYMPTOM while sharing the defect.
+#
+# RED-VERIFIED against the PRE-fix compiler (`git checkout -- src && cargo build`):
+#     C    -> rc 0, prints `1` `5` `7` `9`   <-- SILENT WRONG ANSWER, not a crash
+#     LLVM -> rc 139 (SIGSEGV)
+# POST-fix both backends print `2` `5` `8` `9`.
+#
+# ⚠ A C-ONLY OR EXIT-CODE-ONLY GATE CALLS THE BASE BEHAVIOUR GREEN. On AAPCS64
+# a >16-byte composite travels in a caller-allocated hidden-pointer slot, so
+# the by-value/by-pointer mismatch loses the write-through instead of faulting,
+# and ASan sees nothing. The exact-stdout assertion is what catches it.
+#
+# LANE AXIS (self-host driver, `--emit-c` -> cc -> run): rc 0, prints
+# `1` `5` `7` `9` — the same SILENT class on the showcase lane. The SH lane's
+# own indirect-call ABI defect is filed separately in TODO.md; the direct-call
+# control (`bump(&r)`, no `Callable`) prints `2/5/8/9` on the SH lane, which is
+# what isolates it to the indirect call.
+#
+# WHY known_gaps/: zero self-host parity-corpus inflow — `runtime_parity_corpus`
+# never descends subdirectories — while the LIVE test still asserts on C + LLVM.
+#
+# INTENDED: `2` `5` `8` `9`.
+struct R:
+    int a
+    int b
+    int c
+    int d
+    int e
+
+void bump(R &r):
+    r.a = r.a + 1
+    r.c = r.c + 1
+
+int main():
+    Callable[void(R &)] f = bump
+    R r = R(1, 5, 7, 9, 11)
+    f(&r)
+    print(r.a)
+    print(r.b)
+    print(r.c)
+    print(r.d)
+    return 0

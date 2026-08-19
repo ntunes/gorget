@@ -1,0 +1,58 @@
+# KEEP-GREEN PIN — indirect-call ABI, SIGIL axis cell: **BY-VALUE aggregate
+# params** (bare, no `&`) through ANNOTATED LOCAL `Callable`s, at both sides of
+# the small-aggregate threshold: `struct{int}` (8B, promoted to
+# `AbiKind::ByValue` at the LIR write site) and `struct{5 x int}` (40B, which
+# stays `AbiKind::Auto` because `is_small_aggregate` is <= 16 bytes).
+#
+# ⚠ THIS IS THE PIN THAT SAYS WHY THE BACKENDS' `AbiKind::Auto` ARMS MUST STAY.
+# The `&`-param fix makes those arms dead FOR `&` ARGS ONLY. A large by-value
+# aggregate parameter still depends on them: the adapter shim is emitted as
+# `int64_t __adapt_peek_large(void* __env, __gg_R __p0)` — struct BY VALUE — and
+# only the `Auto` read arm makes the call site load and pass the struct.
+#
+# ⚠ RED-VERIFICATION IS **PLATFORM-DEPENDENT, AND THIS BOX CANNOT SEE IT.**
+# Measured on aarch64 with the `Auto` arm deleted (`AbiKind::Auto => false` in
+# `src/backend/c_lir/mod.rs`, rebuilt):
+#     rc 0, still prints `2` / `12`  <-- GREEN. The emitted C is nevertheless
+#     mismatched: the call site casts to `int64_t(*)(void*, void*)` and passes
+#     a POINTER into a shim declared to take `__gg_R` by value. AAPCS64 hands a
+#     >16-byte composite over in a hidden-pointer slot, so the wrong value
+#     lands in the right register and the mismatch is SILENT here (`--sanitize`
+#     clean, empty stderr).
+#     On x86-64 SysV that struct is passed on the STACK, so the callee reads
+#     garbage. **The x86_64 CI cell of this same test is the instrument** — the
+#     fixture rides both backends on the documented x86_64 runner, which is why
+#     no separate platform fixture is authored.
+# The small (8B) half IS locally sensitive: it is tagged `ByValue` at the write
+# site, so a write-site regression that dropped that promotion shows up here.
+#
+# LANE AXIS (self-host driver): rc 0, prints `2` / `12` — the SH lane agrees on
+# the by-value cells (its defect is on the `&` cells).
+#
+# WHY known_gaps/: zero parity-corpus inflow; the LIVE test asserts on C + LLVM.
+#
+# INTENDED: `2` then `12`.
+struct P:
+    int n
+
+struct R:
+    int a
+    int b
+    int c
+    int d
+    int e
+
+int peek_small(P p):
+    return p.n + 1
+
+int peek_large(R r):
+    return r.a + r.e
+
+int main():
+    Callable[int(P)] fs = peek_small
+    Callable[int(R)] fl = peek_large
+    P p = P(1)
+    R r = R(1, 5, 7, 9, 11)
+    print(fs(p))
+    print(fl(r))
+    return 0

@@ -1,0 +1,58 @@
+# KEEP-GREEN PIN — indirect-call `&`-param ABI, TYPE axis cells: **resource
+# aggregates** (`String`, `Vector[int]`, `Dict[String,int]`, and a user struct
+# CONTAINING a `String`) through ANNOTATED LOCAL `Callable`s.
+#
+# ⚠ GREEN ON ARRIVAL — AND THAT IS THE POINT. The pre-fix backends excluded
+# resource-containing aggregates from their by-value guess, so these four cells
+# were correct for a reason unrelated to the callee's declared `&`. They pin
+# that writing the ABI from the declared ownership keeps them correct — and
+# they are the cells a naive "tag every aggregate by value" change would break.
+#
+# RED-VERIFIED BY BREAKING THE MECHANISM (Core #12's break-and-watch):
+#     break: `src/backend/c_lir/mod.rs`, `Inst::CallClosure` emit —
+#            `let needs_deref = pointee.is_some();`
+#     result: rc 0 but WRONG output `hi` / `2` / `1` / `hi` (every write-through
+#             silently lost — the exact-stdout assertion is what catches it).
+#     restore -> `hi!` / `3` / `2` / `hi!`.
+#
+# LANE AXIS (self-host driver): `String &` -> rc 0 printing `hi` (write lost),
+# `Vector[int] &` -> rc 0 printing `2`, `Dict &` -> rc 0 printing `1`,
+# `struct{String} &` -> rc 0 printing `hi`. All four are SILENT wrong answers
+# on the showcase lane; filed separately in TODO.md.
+#
+# WHY known_gaps/: zero parity-corpus inflow; the LIVE test asserts on C + LLVM.
+#
+# INTENDED: `hi!`, `3`, `2`, `hi!`.
+struct S:
+    String name
+
+void bump_string(String &s):
+    s = s + "!"
+
+void bump_vector(Vector[int] &v):
+    v.push(9)
+
+void bump_dict(Dict[String, int] &d):
+    d["b"] = 2
+
+void bump_struct_res(S &s):
+    s.name = s.name + "!"
+
+int main():
+    Callable[void(String &)] fs = bump_string
+    Callable[void(Vector[int] &)] fv = bump_vector
+    Callable[void(Dict[String, int] &)] fd = bump_dict
+    Callable[void(S &)] fr = bump_struct_res
+    String s = "hi"
+    Vector[int] v = [1, 2]
+    Dict[String, int] d = {"a": 1}
+    S r = S("hi")
+    fs(&s)
+    fv(&v)
+    fd(&d)
+    fr(&r)
+    print(s)
+    print(v.len())
+    print(d.len())
+    print(r.name)
+    return 0

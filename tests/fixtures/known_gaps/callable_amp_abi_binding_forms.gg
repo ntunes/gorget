@@ -1,0 +1,63 @@
+# REGRESSION PIN — indirect-call `&`-param ABI, BINDING-FORM axis (the LOCAL
+# family): a `Callable` LOCAL called inside a LOOP · called TWICE · declared in
+# a NON-`main` function · REASSIGNED before the call. Param type fixed at
+# `struct{int} &` so the binding form is the only variable.
+#
+# ⚠ THE BINDING AXIS IS NOT CLOSED BY THIS FIXTURE, BY CONSTRUCTION. The
+# remaining binding cells are still broken and are pinned by their own
+# `#[ignore]`d repros, not silently omitted:
+#   - `auto f = bump`               -> callable_amp_auto_local_lost_write.gg
+#   - Vector element `arr[0](&p)`   -> callable_amp_vector_element_struct_segv.gg
+#   - Dict element  `d["k"](&p)`    -> callable_amp_dict_element_struct_segv.gg
+#   - struct FIELD `h.f(&v)`        -> known_gaps/sound_callable_struct_field_call_link_fail.gg (link failure, filed)
+#   - returned `make()(&v)`         -> known_gaps/sound_callable_amp_returned_callee_segv.gg (filed)
+#   - `Callable[..] &` PARAMETER    -> known_gaps/sound_callable_amp_param_ices.gg (ICE, filed)
+# The PARAMETER binding (non-`&`) is pinned green by callable_amp_abi_param_binding.gg.
+#
+# RED-VERIFIED against the PRE-fix compiler (`git checkout -- src && cargo build`):
+#     C    -> rc 139 (SIGSEGV)
+#     LLVM -> rc 139 (SIGSEGV)
+# POST-fix both backends print `4` `3` `2` `3`.
+#
+# LANE AXIS (self-host driver): rc 139 — same class, filed separately.
+#
+# WHY known_gaps/: zero parity-corpus inflow; the LIVE test asserts on C + LLVM.
+#
+# INTENDED: `4` (three loop bumps), `3` (two bumps), `2` (helper fn), `3` (reassigned to bump_twice).
+struct P:
+    int n
+
+void bump(P &p):
+    p.n = p.n + 1
+
+void bump_twice(P &p):
+    p.n = p.n + 2
+
+int in_helper():
+    Callable[void(P &)] f = bump
+    P p = P(1)
+    f(&p)
+    return p.n
+
+int main():
+    Callable[void(P &)] f = bump
+    P loop_p = P(1)
+    int i = 0
+    while i < 3:
+        f(&loop_p)
+        i = i + 1
+    print(loop_p.n)
+
+    P twice_p = P(1)
+    f(&twice_p)
+    f(&twice_p)
+    print(twice_p.n)
+
+    print(in_helper())
+
+    Callable[void(P &)] g = bump
+    g = bump_twice
+    P re_p = P(1)
+    g(&re_p)
+    print(re_p.n)
+    return 0

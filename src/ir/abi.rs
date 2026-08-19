@@ -8,6 +8,24 @@
 //! a WASM backend all read the same `AbiKind` tags and emit their own
 //! marshalling code.
 
+/// The `GirModule::fn_param_abis` key for an INDIRECT call site — a call
+/// through a `Callable`/closure value, whose synthetic callee name is
+/// `__callable_<local>` or `__gorget_closure_call_<local>`.
+///
+/// Those synthetic names embed a **per-function** local id, so they are not
+/// unique module-wide: `__callable_2` in two different functions are two
+/// different callables with two different signatures, and a bare-name key
+/// would let the last writer's ABI decide the other's call site. Qualifying
+/// with the enclosing function makes the key unique.
+///
+/// Both ends build the key through THIS function — the writer in GIR lowering
+/// (`exprs/calls.rs`, the only place the callable's declared signature is
+/// still in scope) and the reader in LIR lowering (`Inst::CallClosure`) — so
+/// the two spellings cannot drift apart. Never format this key by hand.
+pub fn indirect_callee_key(synthetic_callee: &str, enclosing_fn: &str) -> String {
+    format!("{synthetic_callee}@{enclosing_fn}")
+}
+
 /// How a parameter value is marshalled across the extern ABI boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AbiKind {

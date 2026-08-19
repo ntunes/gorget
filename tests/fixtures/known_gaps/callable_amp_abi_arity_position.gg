@@ -1,0 +1,54 @@
+# REGRESSION PIN — indirect-call `&`-param ABI, ARITY / POSITION axis:
+# `&` in the SECOND slot after a by-value scalar · TWO `&` params of the same
+# struct type · a MIXED `struct &` + `int &` signature with a NON-VOID return.
+# All through ANNOTATED LOCAL `Callable`s.
+#
+# The ABI is written PER PARAM, so a fix that tagged only the first argument,
+# or that tagged all args uniformly, fails here while the single-`&` cells stay
+# green. That is what this fixture samples that the type-axis cells cannot.
+#
+# RED-VERIFIED against the PRE-fix compiler (`git checkout -- src && cargo build`):
+#     C    -> rc 139 (SIGSEGV)
+#     LLVM -> rc 139 (SIGSEGV)
+# POST-fix both backends print `6` `2` `12` `2` `6` `8`.
+#
+# LANE AXIS (self-host driver): rc 139 on all three shapes — same class,
+# filed separately in TODO.md.
+#
+# WHY known_gaps/: zero parity-corpus inflow; the LIVE test asserts on C + LLVM.
+#
+# INTENDED: `6` `2` `12` `2` `6` `8`.
+struct P:
+    int n
+
+void amp_second(int k, P &p):
+    p.n = p.n + k
+
+void two_amps(P &a, P &b):
+    a.n = a.n + 1
+    b.n = b.n + 2
+
+int mixed_ret(P &p, int &k):
+    p.n = p.n + 1
+    k = k + 1
+    return p.n + k
+
+int main():
+    Callable[void(int, P &)] f2 = amp_second
+    Callable[void(P &, P &)] ftwo = two_amps
+    Callable[int(P &, int &)] fmix = mixed_ret
+    P p = P(1)
+    f2(5, &p)
+    print(p.n)
+    P a = P(1)
+    P b = P(10)
+    ftwo(&a, &b)
+    print(a.n)
+    print(b.n)
+    P m = P(1)
+    int k = 5
+    int r = fmix(&m, &k)
+    print(m.n)
+    print(k)
+    print(r)
+    return 0

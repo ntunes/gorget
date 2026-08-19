@@ -1,0 +1,35 @@
+# KNOWN GAP — MEMORY UNSAFE, BOTH BACKENDS. The DICT-element sibling of
+# `callable_amp_vector_element_struct_segv.gg`: a `Callable` stored as a dict
+# VALUE and called with a STRUCT-typed `&` argument SIGSEGVs, while the same
+# program with an `int` element type (`tests/fixtures/callable_amp_dict_indexed_callee.gg`)
+# is green — accidentally, because a scalar pointee escaped the by-value guess.
+#
+# Both container costumes are listed here rather than folded into one entry: the
+# element-type inferrer has a per-container path, so a fix at one is not
+# automatically a fix at the other (Core #4 — fix the class, but PIN each
+# sibling).
+#
+# MECHANISM: identical to the Vector cell — the element's GIR type is
+# `fn() -> i64` (zero-param FnPtr from the inferrer's fallback), so the callee's
+# declared `&` never reaches the indirect-call ABI write site and both backends
+# fall back to the shape guess. Verify with `gg build --emit-gir`.
+#
+# RED-VERIFIED at HEAD (with the indirect-call ABI write site landed):
+#     C    -> rc 139 (SIGSEGV)
+#     LLVM -> rc 139 (SIGSEGV)
+#     self-host driver -> rc 139
+#
+# INTENDED: `2`.
+struct P:
+    int n
+
+void bump(P &p):
+    p.n = p.n + 1
+
+int main():
+    Dict[String, Callable[void(P &)]] d = {}
+    d["k"] = bump
+    P p = P(1)
+    d["k"](&p)
+    print(p.n)
+    return 0

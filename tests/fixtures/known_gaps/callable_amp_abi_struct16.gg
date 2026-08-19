@@ -1,0 +1,36 @@
+# REGRESSION PIN — indirect-call `&`-param ABI, TYPE axis cell: **16-byte
+# non-resource struct** (`struct{int,int}`), through an ANNOTATED LOCAL
+# `Callable`. Sibling of `callable_local_struct_amp_param_segv.gg` (8B cell).
+#
+# WHY IT LIVES IN known_gaps/: `runtime_parity_corpus` (tests/integration.rs)
+# reads only `tests/fixtures/*.gg` and never descends subdirectories, so this
+# net asserts fully on C AND LLVM through its LIVE test while adding ZERO
+# self-host parity-corpus inflow. The self-host lane still MIS-LOWERS this
+# shape (measured below), so a top-level placement would be new parity debt.
+#
+# RED-VERIFIED against the PRE-fix compiler (`git checkout -- src && cargo build`,
+# then re-run — reverting a patch does NOT rebuild):
+#     C    -> rc 139 (SIGSEGV), no output
+#     LLVM -> rc 139 (SIGSEGV), no output
+# POST-fix both backends print `2` / `4`.
+#
+# LANE AXIS (measured with the self-host driver, `--emit-c` -> cc -> run):
+#     self-host -> rc 139. The SH lane has its OWN indirect-call ABI defect
+#     (it never forms the pointer at all); filed separately in TODO.md.
+#
+# INTENDED: the callee writes through the `&`, so `2` then `4`.
+struct Q:
+    int a
+    int b
+
+void bump(Q &q):
+    q.a = q.a + 1
+    q.b = q.b + 2
+
+int main():
+    Callable[void(Q &)] f = bump
+    Q q = Q(1, 2)
+    f(&q)
+    print(q.a)
+    print(q.b)
+    return 0

@@ -1,0 +1,47 @@
+# KEEP-GREEN PIN — indirect-call `&`-param ABI, TYPE axis cells: **scalars**
+# (`int`, `float`, `bool`) through ANNOTATED LOCAL `Callable`s.
+#
+# ⚠ GREEN ON ARRIVAL — AND THAT IS THE POINT. These three cells were already
+# correct before the fix, but only ACCIDENTALLY: the pre-fix backends decided
+# pointer-vs-value by asking "is the pointee an aggregate?", and a scalar never
+# is, so the pointer happened to survive. They pin that the fix (writing the
+# ABI from the callee's declared `&`) does not flip the cells the old guess got
+# right by luck.
+#
+# RED-VERIFIED BY BREAKING THE MECHANISM (Core #12's break-and-watch, since no
+# pre-fix red exists for a green-on-arrival cell):
+#     break: `src/backend/c_lir/mod.rs`, `Inst::CallClosure` emit —
+#            `let needs_deref = pointee.is_some();`  (i.e. deref every pointer arg)
+#     result: rc 139 (SIGSEGV) on C.   restore -> rc 0, `2` / `2.000000` / `true`.
+#
+# LANE AXIS (self-host driver): `int &` -> rc 139, `float &` -> rc 139,
+# `bool &` -> rc 139. The showcase lane is WORSE than Rust gg on these cells —
+# it fails the ones Rust gg gets right. Filed separately in TODO.md.
+#
+# WHY known_gaps/: zero parity-corpus inflow (`runtime_parity_corpus` does not
+# descend subdirectories); the LIVE test still asserts on C AND LLVM.
+#
+# INTENDED: `2`, `2.000000`, `true`.
+void bump_int(int &n):
+    n = n + 1
+
+void bump_float(float &x):
+    x = x + 1.0
+
+void flip_bool(bool &b):
+    b = not b
+
+int main():
+    Callable[void(int &)] fi = bump_int
+    Callable[void(float &)] ff = bump_float
+    Callable[void(bool &)] fb = flip_bool
+    int n = 1
+    float x = 1.0
+    bool b = false
+    fi(&n)
+    ff(&x)
+    fb(&b)
+    print(n)
+    print(x)
+    print(b)
+    return 0

@@ -4746,14 +4746,22 @@ fn rust_gg_bug_closure_struct_capture_no_persist() {
     );
 }
 
+/// R43 Track C — LIVE: `Callable[T(Struct &)]` + named-fn callback +
+/// `Vector.get().unwrap()` iterator body. RED at base (rc 139 on C and LLVM),
+/// green once the indirect-call argument ABI is written from the callee's
+/// declared parameter ownership.
+///
+/// ⚠ The three fix directions this gap was filed with — a stale stack slot for
+/// `t`, wrapper-mangled calling convention, drop-elab freeing `t` in the loop —
+/// were all REFUTED: the GIR passes a correct pointer (`_18 = borrow_mut _8`),
+/// and only the ABI TAG was missing, because a `Callable[..]` PARAMETER's GIR
+/// type is erased to `unit`. The declared ABIs are now published at the GIR
+/// call site (`abi::indirect_callee_key`) and read at the LIR write site.
+///
+/// Stays in `known_gaps/` (out of `runtime_parity_corpus`) with a LIVE test:
+/// the self-host lane still mis-lowers indirect `&` calls.
 #[test]
-#[ignore = "KNOWN GAP (R39 Phase 2e probe 2026-08-09): `Callable[T(Struct &)]` + \
-named-fn callback + `Vector.get().unwrap()` iterator body → SIGSEGV. \
-The direct (non-iterator) shape works — see tests/fixtures/callable_ref_param.gg. \
-Blocked R39 Option C helper design's named-fn callback fallback. \
-Fixture + mechanism speculation at \
-tests/fixtures/known_gaps/rust_gg_bug_callable_amp_struct_iterator_segv/README.md."]
-fn rust_gg_bug_callable_amp_struct_iterator_segv() {
+fn callable_amp_struct_iterator_body_writes_through() {
     run_gg(
         "known_gaps/rust_gg_bug_callable_amp_struct_iterator_segv/repro.gg",
         "1\n2",
@@ -51128,26 +51136,165 @@ fn known_gap_derive_hashable_float_field_link_failure() {
     run_gg("known_gaps/derive_hashable_float_field_link_failure.gg", "1");
 }
 
-/// KNOWN GAP — MEMORY UNSAFE on BOTH backends from ten lines of ordinary safe
-/// Gorget: a `Callable` bound to a LOCAL whose signature takes a STRUCT-typed
-/// `&` param SEGFAULTS when called.
-///
-/// ⚠ The discriminator is a COMBINATION, measured as a 2×2 and narrower than
-/// any of the three entries filed against this family:
-///   LOCAL × `int &`    → OK (prints 2)
-///   LOCAL × `struct &` → **SIGSEGV rc 139 on C AND LLVM**
-///   PARAM × `struct &` → OK (prints 2)
-///   direct call, no `Callable`, `struct &` → OK (prints 2)
-/// So it is neither "indirect calls are broken" nor "struct `&` params are
-/// broken" — it is the LOCAL binding combined with a struct-typed `&` param.
-///
-/// ⚠ `tests/fixtures/callable_ref_param.gg` samples `Callable[int(Counter &)]`
-/// — a struct `&` param — and PASSES, because it passes the callable as a
-/// PARAMETER. It covers the adjacent WORKING cell of this 2×2 (Core #12).
+// ── R43 Track C — the indirect-call argument-ABI net ────────────────────────
+//
+// At an indirect (`Callable`/closure) call each argument's pointer-vs-value ABI
+// used to be GUESSED from the argument's pointee SHAPE at two independent
+// backend read sites; it is now WRITTEN at one LIR site from the CALLEE's
+// declared parameter ownership (`src/lir/lower/insts.rs`, `Inst::CallClosure`),
+// with the erased-signature provenance publishing its declared ABIs at the GIR
+// call site (`abi::indirect_callee_key`).
+//
+// ⚠ THE WHOLE NET LIVES IN `known_gaps/` WITH **LIVE** TESTS, DELIBERATELY.
+// `runtime_parity_corpus` (this file) reads only `tests/fixtures/*.gg` and
+// never descends subdirectories, so every fixture below is fully asserted on C
+// AND LLVM — and on the x86_64 CI runner in both backends, which is what tests
+// the platform half of the ABI — while adding ZERO self-host parity-corpus
+// inflow. The self-host lane still mis-lowers this shape (0 of 13 type cells
+// correct: 8 crash, 5 rc-0 silent wrong answers), so promoting any of these to
+// the top level would be new parity debt, not coverage.
+//
+// Each fixture's header records which CELL of which AXIS it samples and its
+// RED evidence (pre-fix run, or break-and-watch for the green-on-arrival ones).
+
+/// TYPE axis, 8-byte non-resource struct through an annotated LOCAL — the
+/// original repro of the indirect-call `&`-param ABI defect. RED at base:
+/// `gg check` clean, then SIGSEGV rc 139 on C and LLVM.
 #[test]
-#[ignore = "known gap (R43): a LOCAL-bound `Callable` with a struct-typed `&` param SIGSEGVs on both backends while the parameter-passed form works; un-ignore when the local-bound form carries the same `&` calling convention"]
-fn known_gap_callable_local_struct_amp_param_segv() {
+fn callable_local_struct_amp_param_writes_through() {
     run_gg("known_gaps/callable_local_struct_amp_param_segv.gg", "2");
+}
+
+/// TYPE axis, 16-byte non-resource struct. RED at base: rc 139 on both backends.
+#[test]
+fn callable_amp_abi_struct16_writes_through() {
+    run_gg("known_gaps/callable_amp_abi_struct16.gg", "2\n4");
+}
+
+/// TYPE axis, 40-byte non-resource struct — the cell whose base SYMPTOM
+/// DIVERGES by backend: C exits 0 printing the unmutated `1 5 7 9` (a silent
+/// lost write-through, ASan-clean) while LLVM SIGSEGVs. An exit-code-only or
+/// C-only gate calls the defect green here.
+#[test]
+fn callable_amp_abi_struct40_writes_through() {
+    run_gg("known_gaps/callable_amp_abi_struct40.gg", "2\n5\n8\n9");
+}
+
+/// TYPE axis, mixed register-class struct (`{bool,float}`). RED at base: rc 139.
+#[test]
+fn callable_amp_abi_struct_mixed_scalars_writes_through() {
+    run_gg("known_gaps/callable_amp_abi_struct_mixed_scalars.gg", "true\n2.000000");
+}
+
+/// TYPE axis, nested non-resource struct. RED at base: rc 139 on both backends.
+#[test]
+fn callable_amp_abi_struct_nested_writes_through() {
+    run_gg("known_gaps/callable_amp_abi_struct_nested.gg", "2");
+}
+
+/// TYPE axis, enum/`Option[int]` — a non-resource aggregate that is not a user
+/// struct. RED at base: rc 139 on both backends.
+#[test]
+fn callable_amp_abi_enum_option_writes_through() {
+    run_gg("known_gaps/callable_amp_abi_enum_option.gg", "7");
+}
+
+/// TYPE axis KEEP-GREEN, scalar cells (`int`/`float`/`bool`) — correct before
+/// the fix only ACCIDENTALLY (a scalar is never an aggregate, so the old shape
+/// guess forwarded the pointer). RED demonstrated by breaking the read site
+/// (`needs_deref = pointee.is_some()`) → rc 139.
+#[test]
+fn callable_amp_abi_scalar_cells_stay_by_pointer() {
+    run_gg("known_gaps/callable_amp_abi_scalar_cells.gg", "2\n2.000000\ntrue");
+}
+
+/// TYPE axis KEEP-GREEN, resource aggregates (`String`/`Vector`/`Dict`/
+/// `struct{String}`) — excluded from the old guess, so accidentally correct.
+/// RED demonstrated by breaking the read site → rc 0 with every write-through
+/// silently lost (`hi/2/1/hi`).
+#[test]
+fn callable_amp_abi_resource_cells_stay_by_pointer() {
+    run_gg("known_gaps/callable_amp_abi_resource_cells.gg", "hi!\n3\n2\nhi!");
+}
+
+/// ARITY/POSITION axis: `&` in the second slot, two `&` params, and a mixed
+/// `struct &` + `int &` signature with a non-void return. RED at base: rc 139.
+#[test]
+fn callable_amp_abi_arity_position_writes_through() {
+    run_gg("known_gaps/callable_amp_abi_arity_position.gg", "6\n2\n12\n2\n6\n8");
+}
+
+/// BINDING-FORM axis (LOCAL family): loop, twice, non-`main` function,
+/// reassigned. RED at base: rc 139 on both backends. The still-broken binding
+/// cells are pinned by their own `#[ignore]`d repros — see the fixture header.
+#[test]
+fn callable_amp_abi_binding_forms_write_through() {
+    run_gg("known_gaps/callable_amp_abi_binding_forms.gg", "4\n3\n2\n3");
+}
+
+/// BINDING-FORM axis, the `Callable[..]` PARAMETER provenance — the one whose
+/// GIR type is erased to `unit`, so the declared ABI has to be published at the
+/// GIR call site and read back at the LIR write site. Includes the
+/// `Vector.get().unwrap()` iterator shape filed as a HIGH SIGSEGV. RED at base:
+/// rc 139 on both backends.
+#[test]
+fn callable_amp_abi_param_binding_writes_through() {
+    run_gg("known_gaps/callable_amp_abi_param_binding.gg", "2\n1\n2");
+}
+
+/// SIGIL axis KEEP-GREEN: BY-VALUE aggregate params stay by value, at both
+/// sides of the ≤16-byte small-aggregate threshold. This is the pin that says
+/// why the backends' `AbiKind::Auto` read arms must STAY — the 40-byte
+/// by-value param still depends on them. ⚠ Its red is PLATFORM-DEPENDENT:
+/// deleting the `Auto` arm is SILENT on aarch64 (hidden-pointer slot) and the
+/// x86_64 CI cell of this test is the instrument. See the fixture header.
+#[test]
+fn callable_amp_abi_byvalue_pins_stay_by_value() {
+    run_gg("known_gaps/callable_amp_abi_byvalue_pins.gg", "2\n12");
+}
+
+/// SIGIL axis NEG: a BARE argument into a `&` param through a `Callable` local
+/// must still be REJECTED at check time. Green on arrival; RED demonstrated by
+/// disabling the indirect-path ownership check (`if false && expected != found`
+/// in `src/semantic/safety/helpers.rs`) → `gg check` rc 0, "OK: no semantic
+/// errors".
+#[test]
+fn callable_amp_abi_bare_arg_rejected() {
+    check_gg_fails(
+        "known_gaps/callable_amp_abi_bare_arg_rejected.gg",
+        "E_OwnershipMismatch",
+    );
+}
+
+/// KNOWN GAP — `auto f = bump` loses the borrow entirely: the callable's
+/// declared signature is never registered for an INFERRED binding, so the arg
+/// loop takes the legacy fallback and passes a VALUE copy of a struct TEMP. No
+/// ABI tag can repair it — the pointer is never formed. Distinct from the
+/// annotated-LOCAL cell (which passes a correct pointer and only mis-tagged
+/// it), and it kills the `int &` cell too.
+#[test]
+#[ignore = "known gap (R43): `auto f = bump` never registers the callable's declared signature, so the `&` argument is lowered as a value copy of a temp; un-ignore when the inferred binding populates the same callable-signature channel the annotated binding does"]
+fn known_gap_callable_amp_auto_local_lost_write() {
+    run_gg("known_gaps/callable_amp_auto_local_lost_write.gg", "2\n2");
+}
+
+/// KNOWN GAP — a `Callable` VECTOR ELEMENT called with a struct-typed `&`
+/// argument SIGSEGVs; the in-corpus `callable_amp_arr_indexed_callee.gg` pins
+/// the same shape with an `int` element and is green only accidentally. The
+/// element's GIR type is `fn() -> i64` (the inferrer's zero-param fallback), so
+/// the callee's declared ownership reaches neither ABI channel.
+#[test]
+#[ignore = "known gap (R43): the container-element type inferrer falls back to a zero-param FnPtr, so a Vector-stored callable's declared `&` never reaches the indirect-call ABI write site; un-ignore when the element signature is populated"]
+fn known_gap_callable_amp_vector_element_struct_segv() {
+    run_gg("known_gaps/callable_amp_vector_element_struct_segv.gg", "2");
+}
+
+/// KNOWN GAP — the DICT-element sibling of the Vector cell above. Pinned
+/// separately because the element-type inferrer has a per-container path.
+#[test]
+#[ignore = "known gap (R43): dict-element sibling of the Vector cell — the element signature is not populated, so the declared `&` never reaches the indirect-call ABI write site"]
+fn known_gap_callable_amp_dict_element_struct_segv() {
+    run_gg("known_gaps/callable_amp_dict_element_struct_segv.gg", "2");
 }
 
 /// KNOWN GAP — an `equip` function with NO `self` parameter is an ASSOCIATED

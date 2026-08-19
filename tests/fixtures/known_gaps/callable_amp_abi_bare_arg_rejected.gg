@@ -1,0 +1,33 @@
+# NEGATIVE PIN — indirect-call `&`-param ABI, SIGIL axis cell: a BARE argument
+# passed to a `&` parameter through a `Callable` LOCAL must be REJECTED at
+# check time, not silently accepted and mis-lowered.
+#
+# This is the other half of the sigil axis: `f(&p)` (accepted, write-through —
+# see callable_local_struct_amp_param_segv.gg) versus `f(p)` here. Making the
+# `&` call convention correct must NOT make the bare call legal.
+#
+# ⚠ GREEN ON ARRIVAL (it rejected before the fix too), so it is RED-VERIFIED BY
+# BREAKING THE MECHANISM (Core #12's break-and-watch):
+#     break: `src/semantic/safety/helpers.rs`, the INDIRECT-path arm of the
+#            ownership-mismatch check — `if false && expected != found {`
+#     result: `gg check` -> rc 0, "OK: no semantic errors"  <-- the guard is gone
+#     restore: `gg check` -> rc 1, `error[E_OwnershipMismatch]`
+#
+# The assertion deliberately matches the DIAGNOSTIC CODE, not the fixture path
+# (a path substring would match the error header and green vacuously).
+#
+# WHY known_gaps/: zero parity-corpus inflow; the LIVE test asserts the reject.
+#
+# INTENDED: `gg check` FAILS with `error[E_OwnershipMismatch]`.
+struct P:
+    int n
+
+void bump(P &p):
+    p.n = p.n + 1
+
+int main():
+    Callable[void(P &)] f = bump
+    P p = P(1)
+    f(p)
+    print(p.n)
+    return 0
