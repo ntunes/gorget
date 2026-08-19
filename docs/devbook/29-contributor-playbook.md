@@ -689,6 +689,49 @@ tree or a stale driver, not a failed fix.
 
 ---
 
+## When the guard is hard to write, the state should have been unconstructable
+
+A guard that keeps escaping its own class is telling you something. Not that the guard
+needs another clause — that the invariant it defends should never have been representable.
+
+The container-literal element-type defect is the worked example. A literal minted its
+destination element type from the source operand *before* that operand was materialized, so
+a borrow-typed source produced 8-byte slots with no element vtable: silent data loss on both
+backends from four lines of ordinary code. The obvious fix was a guard asserting that the
+minted slot type equals the materialized operand's type. That guard was written, and then
+spent four review passes failing to cover its own class. It could not see the dict arm,
+which mints through a mangled type name and calls its constructor with no arguments at all.
+It could not see the tuple arm, which mints through a separate registration path. The
+proposed second layer — a rule over collection type definitions — turned out to be
+inexpressible, because collection metadata carries no element type and tuples carry no
+collection kind. Every round of strengthening found another member in a new costume.
+
+The reason is visible once stated. Two facts were being kept in agreement: the type the
+destination was minted with, and the type the operand ended up having. A guard can only ever
+*check* that agreement after the fact. The reference-grade move is to make the two facts one
+fact — have materialization **produce** the type, and hand the caller both the owned operand
+and the type in a single return. Then the container-literal arms cannot mint a type that
+differs from what was materialized, because they receive both from the same call. The
+invariant holds by construction, and the guard demotes to a backstop for paths nobody has
+written yet.
+
+The same shape appeared twice more in the same round, which is what makes it a rule rather
+than an anecdote. A design that had each of twenty-two call sites classify its own
+destination — passing an enum describing what kind of slot it was — looked typed and safe,
+but it still reconstructed at the call site information the destination already knew. And a
+compiler panic on a set literal built from a borrow looked like a case for a check-time
+rejection, until the constructor path was measured and found to select the correct
+string-aware constructor already: the literal was simply sibling-site drift, and the
+"rejection" would have made users pay for an implementation defect in a program that was
+perfectly meaningful.
+
+**The litmus test.** When you are strengthening a guard for the second time, stop and ask
+which two facts it is holding in agreement, and whether one of them can be *derived* from
+the other instead. If it can, the guard was the symptom. Layering rule 4 — resolve once,
+write through — is the same principle stated from the other end: a downstream reader that
+gets to disagree with an upstream writer is a bug waiting for a guard, and the fix is to
+remove the opportunity to disagree, not to police it.
+
 ## The playbook in one paragraph
 
 When a fix feels complex, you are at the wrong layer: trace the buggy read to
