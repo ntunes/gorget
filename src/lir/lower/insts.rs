@@ -3914,6 +3914,26 @@ impl<'a> FuncLowering<'a> {
                     user_abis[i] = crate::ir::abi::AbiKind::Ptr;
                 }
             }
+            // GUARD G1 (Core #6) — "the declared ABI never reached this write
+            // site". An indirect call with user args whose callee signature is
+            // in NEITHER channel is precisely the state in which the backends
+            // must guess from the argument's shape, which is the defect class
+            // this write site retires. Reported, not fatal: a legitimately
+            // by-value large aggregate also leaves `Auto` here, so the terminal
+            // state is a shrinking allowlist, not an assert. Census:
+            //   GG_REPORT_CLOSURE_ABI_GUESS=1 gg build <fixture>
+            // Ratchet: `closure_abi_guess_census` in tests/integration.rs.
+            if by_ptr.is_empty()
+                && !user_args.is_empty()
+                && std::env::var_os("GG_REPORT_CLOSURE_ABI_GUESS").is_some()
+            {
+                eprintln!(
+                    "[closure-abi-unknown] fn={} callee={} args={}",
+                    self.lir_func.name,
+                    emit_name,
+                    user_args.len()
+                );
+            }
             let is_void_ret = matches!(ret_ty, LirType::Void);
             let result = if is_void_ret { None } else { dst.map(|_| self.lir_func.next_value()) };
             self.push_inst(bb, Inst::CallClosure {

@@ -17839,3 +17839,100 @@ fn fmt_no_new_over_budget_lines() {
         failures.join("\n\n")
     );
 }
+
+/// R43 Track C ARM-COUNT RATCHET (Core #4/#6) — the indirect-call argument-ABI
+/// decision must stay at ONE write site with TWO backend readers.
+///
+/// The defect this ratchet retires: each argument's pointer-vs-value ABI at a
+/// `Callable`/closure call was reconstructed from the ARGUMENT's pointee shape
+/// at two INDEPENDENT backend read sites, because the LIR write site left every
+/// `&`-arg `AbiKind::Auto`. Two independent reconstructions of one missing fact
+/// is why both backends agreed on the wrong answer (Core #8 — that agreement
+/// was the red flag, not the pass).
+///
+/// Three counts, each pinning a different way the class could come back:
+///
+///   1. `ClosureDispatchKind` has exactly TWO variants. A third dispatch kind
+///      is a third indirect-call flavour that must pass through the same ABI
+///      write, so it has to be added here deliberately.
+///   2. `declared_closure_param_by_ptr` — the accessor that reads the callee's
+///      declared ownership — is CALLED from exactly ONE site. More than one
+///      means the decision is being made in more than one place again.
+///   3. The backends BRANCH on `AbiKind::Auto` at exactly TWO places, one per
+///      backend. Those two arms are deliberately KEPT (a >16-byte by-value
+///      closure param still depends on them — `is_small_aggregate` is <=16B —
+///      and deleting them emits a pointer against a by-value shim, which is
+///      SILENT on AAPCS64 and broken on x86-64 SysV). What must not happen is
+///      a THIRD independent reconstruction appearing in a new backend or a new
+///      emit path: that one gets the declared tag, not a shape heuristic.
+#[test]
+fn indirect_call_abi_decision_sites() {
+    // (1) dispatch kinds
+    let lir = fs::read_to_string("src/lir/mod.rs").expect("read src/lir/mod.rs");
+    let enum_start = lir
+        .find("pub enum ClosureDispatchKind {")
+        .expect("ClosureDispatchKind enum not found in src/lir/mod.rs — re-derive this lint");
+    let enum_body_end = lir[enum_start..]
+        .find("\n}")
+        .expect("unterminated ClosureDispatchKind enum");
+    let enum_body = &lir[enum_start..enum_start + enum_body_end];
+    let variants = ["CallableParam", "EscapedClosure"]
+        .iter()
+        .filter(|v| enum_body.contains(**v))
+        .count();
+    let variant_lines = enum_body
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with("//") && !t.starts_with("pub enum") && t.ends_with(',')
+        })
+        .count();
+    assert_eq!(
+        (variants, variant_lines),
+        (2, 2),
+        "`ClosureDispatchKind` gained or lost a variant.\n\n\
+         A new indirect-call dispatch kind must route through the SAME argument-ABI \
+         write in `src/lir/lower/insts.rs` (`declared_closure_param_by_ptr`), or its \
+         arguments fall back to the backends' shape guess — the R43 Track C defect, in \
+         a new costume. Add the kind to this lint once it does."
+    );
+
+    // (2) the single write path
+    let insts = fs::read_to_string("src/lir/lower/insts.rs").expect("read insts.rs");
+    let write_sites = insts.matches("self.declared_closure_param_by_ptr(").count();
+    assert_eq!(
+        write_sites, 1,
+        "the callee's declared param ownership is now read at {write_sites} sites in \
+         `src/lir/lower/insts.rs`, not 1.\n\n\
+         The indirect-call argument ABI has ONE write site by design (devbook/24 rule 3, \
+         one source of truth per axis). If a second indirect-call construction genuinely \
+         appeared, centralise the ABI write instead of copying the call."
+    );
+
+    // (3) the two backend readers — kept, but not multiplied
+    let mut readers: Vec<(&str, usize)> = Vec::new();
+    for f in ["src/backend/c_lir/mod.rs", "src/backend/llvm/mod.rs"] {
+        let src = fs::read_to_string(f).unwrap_or_else(|e| panic!("read {f}: {e}"));
+        let n = src
+            .lines()
+            // Comment lines legitimately DISCUSS the `Auto` arms (the comment
+            // explaining why they are kept is right beside them), so a prose
+            // mention must not read as a decision site.
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .filter(|l| l.contains("AbiKind::Auto") && (l.contains("=>") || l.contains("matches!")))
+            .count();
+        readers.push((f, n));
+    }
+    let total: usize = readers.iter().map(|(_, n)| *n).sum();
+    assert_eq!(
+        total, 2,
+        "the number of backend sites that BRANCH on `AbiKind::Auto` changed: {readers:?} \
+         (expected exactly one per backend).\n\n\
+         Those two arms are deliberately kept for the by-value aggregate path. A THIRD \
+         one means a new emit path is reconstructing the pointer-vs-value ABI from the \
+         argument's SHAPE instead of reading the declared tag the LIR write site now \
+         provides — that is the class this ratchet exists to stop (devbook/24 rule 2).\n\n\
+         If a legitimate new backend appears, extend the file list AND raise the count \
+         with a comment naming the invariant."
+    );
+}

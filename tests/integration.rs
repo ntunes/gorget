@@ -51297,6 +51297,156 @@ fn known_gap_callable_amp_dict_element_struct_segv() {
     run_gg("known_gaps/callable_amp_dict_element_struct_segv.gg", "2");
 }
 
+/// R43 Track C GUARD RATCHET (Core #6) — the two arms that partition
+/// "the callee's declared signature never reached the ABI decision".
+///
+/// The defect this round retired was an ABI **guessed** from the argument's
+/// shape because the declared fact was missing. The fix writes the fact, but
+/// two provenances still lose it before it can be written, and prose cannot
+/// keep them from spreading — so both are instrumented and their SETS are
+/// pinned here:
+///
+///   * **G1 `[closure-abi-unknown]`** (`src/lir/lower/insts.rs`, at
+///     `Inst::CallClosure` construction) — the declared ownership reached
+///     NEITHER channel (the operand's `FnPtr::param_ownerships` nor the
+///     published `fn_param_abis` entry), so the backends must guess.
+///   * **G2 `[callable-sig-erased]`** (`src/ir/lowering/exprs/calls.rs`, both
+///     legacy-fallback arms) — the callable's signature was erased before the
+///     ARGUMENT LOOP, so the sigil is dropped and the arg is lowered as a
+///     value. No downstream ABI tag can repair that.
+///
+/// ⚠ THE TWO ARMS ARE NOT REDUNDANT, and this test is what proves it — each
+/// list below contains a fixture the OTHER arm does not see:
+///   G1-only: the container-element fixtures (their element signature is
+///            present but EMPTY, so the arg loop takes the sidecar path and
+///            only the write site notices the fact is missing).
+///   G2-only: the escaped-closure fixtures (their `FnPtr` type DOES carry
+///            params, so G1 is satisfied, while the sidecar miss still sends
+///            the args down the legacy path).
+///
+/// ⚠ SHRINK-ONLY. A row may be REMOVED when its underlying gap is fixed —
+/// never added. A new reporting site means a new provenance lost the declared
+/// signature: fix it at the producer, or the guard has been weakened to keep
+/// the suite green, which is the failure mode this ratchet exists to prevent.
+///
+/// Re-measure by hand with:
+///   GG_REPORT_CLOSURE_ABI_GUESS=1 GG_REPORT_CALLABLE_SIG_ERASED=1 \
+///     cargo run -- build <fixture.gg>
+#[test]
+fn closure_abi_declared_signature_census() {
+    // Fixtures whose indirect calls reach the ABI write site with NO declared
+    // ownership. Each is a filed gap; see TODO.md.
+    const G1_EXPECTED: &[&str] = &[
+        // Container-element callables: the element-type inferrer falls back to
+        // a zero-param `FnPtr`, so the declared `&` is lost. The `int`-element
+        // fixtures below are GREEN only accidentally (a scalar pointee escaped
+        // the old shape guess) — which is why they are here, in the guard, and
+        // not treated as coverage.
+        "callable_amp_arr_indexed_callee.gg",
+        "callable_amp_dict_indexed_callee.gg",
+        "callable_bang_arr_indexed_callee.gg",
+        // The struct-element cells of the same shape, which actually SEGV.
+        "known_gaps/callable_amp_vector_element_struct_segv.gg",
+        "known_gaps/callable_amp_dict_element_struct_segv.gg",
+        // `auto f = bump` — no signature registered at all for an inferred
+        // binding, so it trips BOTH arms.
+        "known_gaps/callable_amp_auto_local_lost_write.gg",
+    ];
+    // Fixtures that take a legacy fallback in the GIR argument loop.
+    const G2_EXPECTED: &[&str] = &[
+        "closure_escape.gg",
+        "closure_partial_application.gg",
+        "closure_returning_closure.gg",
+        "known_gaps/callable_amp_auto_local_lost_write.gg",
+    ];
+    // Controls: these MUST stay silent on both arms. They are the cells the
+    // write-site fix covers; a regression that stopped writing the declared
+    // ABI would light them up here before any behaviour test noticed on this
+    // platform (the 40-byte cell is silently wrong, not a crash, on AAPCS64).
+    const SILENT_EXPECTED: &[&str] = &[
+        "callable_ref_param.gg",
+        "known_gaps/callable_local_struct_amp_param_segv.gg",
+        "known_gaps/callable_amp_abi_struct40.gg",
+        "known_gaps/callable_amp_abi_param_binding.gg",
+        "known_gaps/callable_amp_abi_byvalue_pins.gg",
+        "known_gaps/callable_amp_abi_resource_cells.gg",
+    ];
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut all: Vec<&str> = Vec::new();
+    all.extend_from_slice(G1_EXPECTED);
+    all.extend_from_slice(G2_EXPECTED);
+    all.extend_from_slice(SILENT_EXPECTED);
+    all.sort_unstable();
+    all.dedup();
+
+    let scratch = std::env::temp_dir().join(format!("gg_abi_census_{}", std::process::id()));
+    std::fs::create_dir_all(&scratch).expect("create census scratch");
+
+    let mut g1_seen: Vec<String> = Vec::new();
+    let mut g2_seen: Vec<String> = Vec::new();
+    for rel in &all {
+        let src = manifest_dir.join("tests/fixtures").join(rel);
+        assert!(src.exists(), "census fixture missing: {}", src.display());
+        // Build in scratch so the census never races the behaviour tests over
+        // the fixture's own `.c`/binary paths.
+        let stem = src.file_stem().unwrap().to_string_lossy().to_string();
+        let dst = scratch.join(format!("{stem}.gg"));
+        std::fs::copy(&src, &dst).expect("copy census fixture");
+        let out = build_with_timeout(
+            gg_command("build")
+                .arg(&dst)
+                .env("GG_REPORT_CLOSURE_ABI_GUESS", "1")
+                .env("GG_REPORT_CALLABLE_SIG_ERASED", "1"),
+            rel,
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        if stderr.contains("[closure-abi-unknown]") {
+            g1_seen.push((*rel).to_string());
+        }
+        if stderr.contains("[callable-sig-erased]") {
+            g2_seen.push((*rel).to_string());
+        }
+    }
+    let _ = std::fs::remove_dir_all(&scratch);
+
+    // NON-VACUITY (Core #13): a census that reports nothing cannot distinguish
+    // anything. Both arms must still have a live member, or the instrument —
+    // not the tree — is what changed.
+    assert!(
+        !g1_seen.is_empty() && !g2_seen.is_empty(),
+        "the ABI-census instrument reported NOTHING on either arm ({} fixtures built). \
+         Either both gaps were fixed (then shrink both lists to empty in the SAME commit \
+         and say so) or the env-gated reporters were removed/renamed and this test is \
+         now vacuous.",
+        all.len(),
+    );
+
+    let mut g1_expected: Vec<String> = G1_EXPECTED.iter().map(|s| s.to_string()).collect();
+    let mut g2_expected: Vec<String> = G2_EXPECTED.iter().map(|s| s.to_string()).collect();
+    g1_expected.sort();
+    g2_expected.sort();
+    g1_seen.sort();
+    g2_seen.sort();
+
+    assert_eq!(
+        g1_seen, g1_expected,
+        "the set of indirect-call sites with NO declared param ABI changed.\n\
+         ADDED rows are a regression: a provenance lost the callee's declared signature \
+         before `Inst::CallClosure` was built, so both backends are guessing the \
+         pointer-vs-value ABI from the argument's shape again — fix it at the producer.\n\
+         REMOVED rows are a win: delete them from G1_EXPECTED in the same commit."
+    );
+    assert_eq!(
+        g2_seen, g2_expected,
+        "the set of indirect calls taking a LEGACY-FALLBACK argument loop changed.\n\
+         ADDED rows are a regression: the callable's declared signature was erased before \
+         the argument loop, which drops the call-site sigil — no downstream ABI tag can \
+         repair it (Core #10).\n\
+         REMOVED rows are a win: delete them from G2_EXPECTED in the same commit."
+    );
+}
+
 /// KNOWN GAP — an `equip` function with NO `self` parameter is an ASSOCIATED
 /// function. `Pt.helper(2)` works (builds, runs, prints 3); calling it through
 /// an INSTANCE is accepted by `gg check` and then fails to build on BOTH

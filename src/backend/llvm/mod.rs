@@ -7295,6 +7295,18 @@ fn emit_inst(
                     // Non-small-aggregate `Auto` only widens when the
                     // pointer's pointee is a non-resource struct (i.e. a
                     // locally-built tuple/struct value, not a borrow).
+                    //
+                    // ⚠ "not a borrow" is no longer INFERRED here. The
+                    // distinction this shape test used to approximate is now
+                    // WRITTEN upstream: a `&`-declared param is tagged
+                    // `AbiKind::Ptr` at the LIR write site
+                    // (`src/lir/lower/insts.rs`, `declared_closure_param_by_ptr`),
+                    // so a borrow never reaches this arm. What does reach it is
+                    // the >16-byte BY-VALUE aggregate, which has no tag of its
+                    // own — that is why the arm is kept rather than deleted,
+                    // and `indirect_call_abi_decision_sites` (tests/lints.rs)
+                    // pins it to one site per backend so a third independent
+                    // reconstruction cannot reappear.
                     auto_struct_pointee.and_then(|sid| {
                         if crate::lir::queries::struct_contains_resource(sid, module) {
                             None

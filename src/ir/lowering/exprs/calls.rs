@@ -27,6 +27,26 @@ use super::{lower_expr, infer_operand_type_full,
 ///
 /// The key is per-call-site: the synthetic name embeds a per-function local id
 /// and would otherwise collide across functions.
+/// GUARD G2 (Core #6/#10) — "the callable's declared SIGNATURE was erased
+/// before the argument loop". Both indirect-call arms fall back to a legacy
+/// path when the `callable_param_types` / `callable_param_ownerships` sidecars
+/// miss; on that path the sigil is dropped and the argument is lowered as a
+/// VALUE, so no downstream ABI tag can repair it.
+///
+/// ⚠ G2 IS NOT REDUNDANT WITH G1 (the LIR write-site reporter). When the
+/// signature is erased the argument is already a value in the GIR, so there is
+/// no pointer-with-aggregate-pointee for a backend-side or write-site check to
+/// see: the two guards partition the class. Both fallbacks report through this
+/// one helper so a third arm cannot appear un-instrumented.
+///
+/// Census: `GG_REPORT_CALLABLE_SIG_ERASED=1 gg build <fixture>`;
+/// ratchet: `closure_abi_guess_census` in tests/integration.rs.
+fn report_callable_sig_erased(callable_name: &str, arm: &str, args: usize) {
+    if std::env::var_os("GG_REPORT_CALLABLE_SIG_ERASED").is_some() {
+        eprintln!("[callable-sig-erased] callee={callable_name} arm={arm} args={args}");
+    }
+}
+
 fn publish_indirect_callee_abis(
     ctx: &mut LoweringContext,
     builder: &FunctionBuilder,
@@ -1934,6 +1954,7 @@ pub(super) fn lower_call(
                         call_args.push(lower_call_arg(ctx, builder, arg, param_type, &callable_name, i));
                     }
                 } else {
+                    report_callable_sig_erased(&callable_name, "unit-param", args.len());
                     for arg in args {
                         // Legacy fallback: for borrow params passed to callable,
                         // preserve the pointer (don't auto-deref). The adapter
@@ -1998,6 +2019,7 @@ pub(super) fn lower_call(
                         call_args.push(lower_call_arg(ctx, builder, arg, param_type, &callable_name, i));
                     }
                 } else {
+                    report_callable_sig_erased(&callable_name, "fnptr-local", args.len());
                     for arg in args {
                         call_args.push(lower_expr(ctx, builder, &arg.node.value));
                     }

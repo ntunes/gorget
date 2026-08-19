@@ -3223,11 +3223,27 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
             //     any user struct transitively containing one of those)
             //   - by-value for non-resource aggregates (e.g. `Option[int]`)
             //
-            // Getting this wrong is an ABI mismatch that's silent on AAPCS64
-            // (macOS arm64 passes large structs via a hidden-pointer slot,
-            // which the adapter happens to read as a valid `void*`) but
-            // SIGSEGVs on x86-64 SysV. That's what hid the httpserver_before/
-            // middleware/router{,_extended} regressions from local runs.
+            // Getting this wrong is an ABI mismatch whose SYMPTOM depends on
+            // the aggregate's SIZE, and the size condition is narrower than
+            // this comment used to claim:
+            //   - **> 16 bytes**: SILENT on AAPCS64. A large composite travels
+            //     in a caller-allocated hidden-pointer slot, so a pointer
+            //     passed where the adapter expects the struct still lands in
+            //     the right register and the program exits 0 with an unmutated
+            //     value (measured: the 40-byte cell prints `1 5 7 9` instead of
+            //     `2 5 8 9`, sanitizer-clean). That silence is what hid the
+            //     httpserver_before / middleware / router{,_extended}
+            //     regressions from local aarch64 runs.
+            //   - **<= 16 bytes**: SIGSEGVs on AAPCS64 too (measured: the 8-
+            //     and 16-byte cells, both backends). arm64 is NOT the safe
+            //     platform this comment once implied.
+            // On x86-64 SysV a >16-byte composite goes on the STACK instead,
+            // so the same mismatch reads garbage rather than staying silent.
+            // ⚠ That x86-64 half is asserted by a FIXTURE, not by this prose:
+            // `tests/fixtures/known_gaps/callable_amp_abi_*` run on the
+            // documented x86_64 CI runner in BOTH backends, and
+            // `callable_amp_abi_byvalue_pins.gg` is the by-value cell that
+            // depends on the `AbiKind::Auto` arm below.
             //
             // The original check only named five runtime structs as
             // "resource"; user structs that contained resources (e.g.
@@ -3246,6 +3262,22 @@ fn emit_inst(out: &mut String, inst: &Inst, ctx: &EmitContext, loc: &(String, u3
                     } else { false }
                 };
                 let needs_deref = match abi {
+                    // ⚠ THE `Auto` ARM IS DELIBERATELY KEPT, and it is NOT the
+                    // decision for a `&` param any more. Since R43 Track C the
+                    // LIR write site tags every argument whose callee declares
+                    // `&` as `AbiKind::Ptr` (`src/lir/lower/insts.rs`,
+                    // `declared_closure_param_by_ptr`), so this arm no longer
+                    // sees them. What still reaches it is the BY-VALUE
+                    // aggregate path: `is_small_aggregate` is <= 16 bytes, so a
+                    // larger by-value closure param stays `Auto` and depends on
+                    // this shape test to be loaded and passed by value.
+                    // Deleting the arm emits a pointer against a shim declared
+                    // `__adapt_f(void*, __gg_T)` — measured SILENT on aarch64
+                    // (rc 0, wrong value, sanitizer-clean) and broken on x86-64
+                    // SysV. Guarded by `indirect_call_abi_decision_sites`
+                    // (tests/lints.rs), which pins this reconstruction to one
+                    // site per backend.
+                    //
                     // ByValue was promoted for small non-union aggregates.
                     // Only honour it when the pointee is a non-resource
                     // aggregate — resource aggregates must stay by-pointer
