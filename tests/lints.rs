@@ -10893,8 +10893,8 @@ fn doc_source_citations_name_the_right_line() {
         ("112", "src/formatter/mod.rs:43", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("152", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
         ("232", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("656", "src/formatter/mod.rs:1049", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("865", "src/formatter/mod.rs:3086", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("669", "src/formatter/mod.rs:1076", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("878", "src/formatter/mod.rs:3125", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
@@ -15720,7 +15720,7 @@ fn fmt_hand_rolled_operator_emission_census() {
 /// ⚠ **The closure emitter's layout read has NO ROW HERE, and its `Plain` row
 /// does not mean "no layout question at this site".** A closure suite reaches
 /// `format_block_stmts` through `format_closure_post_prelude`, so the census
-/// sees the delegating call, not the read at `src/formatter/mod.rs:3970` that
+/// sees the delegating call, not the read at `src/formatter/mod.rs:4009` that
 /// chose the spelling. Independently measured (`if true || block.layout == ...`
 /// at that read): this census stays GREEN while
 /// `tests/fixtures/fmt_suite_layout/closure_body.gg` loses its fixpoint AND
@@ -17044,7 +17044,7 @@ fn formatter_list_emit_fill_census() {
 ///
 /// So the two counts are pinned against each other. `format_static_decl` is the
 /// one deliberate non-caller: statics are private-by-DEFAULT, the inverse
-/// convention, and it carries its own rule (`src/formatter/mod.rs:2008-2024`).
+/// convention, and it carries its own rule (`src/formatter/mod.rs:2047-2063`).
 /// A mismatch means either a new carrier that skipped the path, or a carrier
 /// removed without its emit site — both worth a look.
 #[test]
@@ -17934,6 +17934,23 @@ fn formatter_author_grouping_reads_one_site() {
         );
     }
     assert!(
+        body.contains("contains(&b'#')"),
+        "`author_line_break_between` no longer answers `true` for a `#` between \
+         two elements.\n\n\
+         The `#` window is deliberately WIDER than the `\\n` window — unanchored, \
+         where the newline scan is anchored past the author's grouping parens. A \
+         comment written INSIDE those parens (`[(1 # note\\n), 2,]`) sits before \
+         the `)`, so an anchored-only scan reads the row as CONTINUING; the \
+         emitter's leading- and trailing-comment hooks fire only at a row START, \
+         and the comment is then re-parented to the next row where it documents \
+         something else.\n\n\
+         This clause is also what makes the emitter's own `debug_assert` TRUE \
+         rather than merely asserted: without it that assertion ABORTED `gg fmt` \
+         on a legal program (exit 101). The behavioural cell is \
+         `tests/fixtures/fmt_author_rows/author_paren_holds_a_comment.gg`, and \
+         the ratchet's scanner carries the same rule in `RowFrame::rows`."
+    );
+    assert!(
         body.contains("self.advance_past_author_parens(prev_end)"),
         "`author_line_break_between` no longer anchors on \
          `self.advance_past_author_parens(prev_end)`.\n\n\
@@ -18044,11 +18061,14 @@ impl RowSite {
 struct RowFrame {
     open: u8,
     line0: usize,
-    /// (start_line, end_line) per element, in order.
-    elems: Vec<(usize, usize)>,
+    /// (start_line, end_line, preceded_by_comment) per element, in order.
+    elems: Vec<(usize, usize, bool)>,
     commas: usize,
     /// The element under construction: `None` until its first byte.
-    cur: Option<(usize, usize)>,
+    cur: Option<(usize, usize, bool)>,
+    /// A comment has been seen at THIS frame's level since the last element
+    /// closed. Consumed by the next element that opens.
+    pending_comment: bool,
     /// Last significant byte at THIS frame's level — a child's close delimiter
     /// counts, its interior does not.
     last: u8,
@@ -18059,8 +18079,11 @@ impl RowFrame {
     /// opens the pending element or extends it.
     fn mark(&mut self, line: usize) {
         match &mut self.cur {
-            Some((_, end)) => *end = line,
-            None => self.cur = Some((line, line)),
+            Some((_, end, _)) => *end = line,
+            None => {
+                self.cur = Some((line, line, self.pending_comment));
+                self.pending_comment = false;
+            }
         }
     }
     fn close_element(&mut self) {
@@ -18068,14 +18091,34 @@ impl RowFrame {
             self.elems.push(e);
         }
     }
-    /// Group the elements into rows: a new row starts wherever an element
-    /// begins on a LATER line than its predecessor ended on.
+    /// Group the elements into rows. A new row starts where an element begins
+    /// on a LATER line than its predecessor ended on — **or** where a COMMENT
+    /// separates it from its predecessor.
+    ///
+    /// ⚠ THE COMMENT CLAUSE IS NOT A REFINEMENT, it is the emitter's rule.
+    /// `Formatter::author_line_break_between` answers `true` for any `#`
+    /// between two elements, because the emitter's comment hooks fire only at a
+    /// row START and a row continued past a comment would re-parent it. Without
+    /// the same clause here, this scanner disagrees with the thing it is
+    /// ratcheting on exactly one shape — a `#` inside an author grouping paren,
+    /// where the `)` lands the next element back on the comment's own line —
+    /// and reports a lost row for output that is correct. Measured on
+    /// `fmt_author_rows/author_paren_holds_a_comment.gg`.
+    ///
+    /// This is the THIRD site of the row predicate (probe, emitter assert,
+    /// this scanner) and the second time two of them drifted. What caught both
+    /// drifts was this ratchet running over live corpus content, which is the
+    /// argument for an OUTPUT ratchet over a source pin: it cannot be fooled by
+    /// the two implementations agreeing on the wrong thing, only by the corpus
+    /// lacking the shape.
     fn rows(&self) -> Vec<usize> {
         let mut rows: Vec<usize> = Vec::new();
         let mut prev_end: Option<usize> = None;
-        for (start, end) in &self.elems {
+        for (start, end, after_comment) in &self.elems {
             match prev_end {
-                Some(p) if *start == p => *rows.last_mut().expect("a row is open") += 1,
+                Some(p) if *start == p && !*after_comment => {
+                    *rows.last_mut().expect("a row is open") += 1
+                }
                 _ => rows.push(1),
             }
             prev_end = Some(*end);
@@ -18106,6 +18149,11 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
             continue;
         }
         if c == b'#' {
+            // A comment at this frame's level ENDS the current row — the same
+            // answer `author_line_break_between` gives. See `RowFrame::rows`.
+            if let Some(f) = stack.last_mut() {
+                f.pending_comment = true;
+            }
             while i < bytes.len() && bytes[i] != b'\n' {
                 i += 1;
             }
@@ -18159,6 +18207,7 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
                 elems: Vec::new(),
                 commas: 0,
                 cur: None,
+                pending_comment: false,
                 last: c,
             });
             i += 1;
@@ -18177,9 +18226,21 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
             // The child's close delimiter is a significant byte of the PARENT's
             // current element, and it is what carries that element's END line
             // past the child's interior — the author-paren case.
+            //
+            // ⚠ AND AN UNCONSUMED COMMENT PROPAGATES OUT WITH IT. A comment the
+            // child saw but no child element ever claimed was TRAILING inside
+            // the child, so at the parent's level it sits between the parent's
+            // current element and whatever follows — which is exactly the
+            // region `author_line_break_between` scans. That is the difference
+            // between `[(1 # note\n), 2,]`, where the comment escapes a
+            // grouping paren and breaks the outer row, and `[f(a, # c\n b), 2,]`,
+            // where the child's own element `b` consumes it and the outer row
+            // is untouched. Both measured; the emitter agrees with both.
+            let escaped_comment = f.pending_comment;
             if let Some(p) = stack.last_mut() {
                 p.mark(line);
                 p.last = c;
+                p.pending_comment |= escaped_comment;
             }
             i += 1;
             continue;
@@ -18350,7 +18411,7 @@ fn fmt_author_row_grouping_survives_formatting() {
     /// corpus lost the very shape this guard watches — which would make the
     /// guard vacuous while staying green, the failure mode a bare pass cannot
     /// show you (Core #15e Q2).
-    const MIN_SUBJECT_SITES: usize = 24;
+    const MIN_SUBJECT_SITES: usize = 26;
     /// The SCANNER's own non-vacuity floor, on a population three orders of
     /// magnitude larger than the subject set: if the walk stops finding
     /// multi-line comma-bearing regions at all, the roots moved or the

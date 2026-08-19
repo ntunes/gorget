@@ -850,19 +850,46 @@ impl Formatter {
     /// this is not a harmless conservative fallback: it silently discards
     /// exactly the grouping this probe exists to preserve.
     ///
+    /// ⚠ A COMMENT ANYWHERE IN THE UNANCHORED REGION IS A BREAK, and that is
+    /// the one thing the anchor must NOT hide. The anchor exists to skip the
+    /// author's grouping parens; a `#` written INSIDE them
+    /// (`[(1 # note\n), 2,]`) sits before the `)` and therefore before the
+    /// anchor, so an anchored-only scan reads that row as continuing. It must
+    /// not: the emitter's leading- and trailing-comment hooks fire only where a
+    /// row STARTS, so a row continued past a comment has no hook to emit it at
+    /// and the comment is re-parented to the next row. Answering `true` here
+    /// keeps the comment on the element it annotates — the shape HEAD already
+    /// produced — and it is what makes the emitter's row-continuation invariant
+    /// TRUE rather than merely asserted.
+    ///
+    /// The two reads therefore have deliberately different windows: `#` over
+    /// `[prev_end, cur_start)`, `\n` over `[anchored, cur_start)`. A `#` runs to
+    /// end of line, so it always brings a newline with it — the disagreement is
+    /// only ever about WHICH SIDE of the `)` that newline falls on.
+    ///
     /// Like `author_trailing_comma` this is a SOURCE property, which is what
     /// lets it work on the sub-`Formatter`s `element_to_string` builds: the
     /// source travels into them, the comment table deliberately does not.
     /// Reading an author LAYOUT fact from source is not a layering violation
     /// — the parser keeps no record of it — but that is the conclusion, not
-    /// the argument; a typed `rows` on the spanned nodes is a filed open
-    /// question, not a shape anyone has ratified.
+    /// the argument; whether the parser should instead record the author's rows
+    /// as typed metadata is an open question filed in `TODO.md`, not a shape
+    /// anyone has ratified.
     fn author_line_break_between(&self, prev_end: usize, cur_start: usize) -> bool {
         let bytes = self.source.as_bytes();
-        let lo = self.advance_past_author_parens(prev_end).min(bytes.len());
+        let raw_lo = prev_end.min(bytes.len());
         let hi = cur_start.min(bytes.len());
-        if lo >= hi {
+        if raw_lo >= hi {
             // Degenerate or reordered spans: fall back to the canonical break.
+            return true;
+        }
+        // The UNANCHORED window, so a comment inside an author grouping paren
+        // cannot be skipped past. See the doc comment above.
+        if bytes[raw_lo..hi].contains(&b'#') {
+            return true;
+        }
+        let lo = self.advance_past_author_parens(prev_end).min(bytes.len());
+        if lo >= hi {
             return true;
         }
         bytes[lo..hi].contains(&b'\n')
@@ -1707,13 +1734,23 @@ impl Formatter {
         let mut prev_end: Option<usize> = None;
         for (i, elem) in elems.iter().enumerate() {
             let (elem_start, elem_end) = span_of(elem);
-            // A row CONTINUES only where the author wrote no newline, and the
-            // comment hooks below are skipped exactly there. That is sound
-            // rather than a silent drop (Core #10/#14): a `#` comment runs to
-            // end of line, so a comment anywhere in the span between two
-            // elements PUTS a newline in it — which makes `starts_line` true
-            // and the hooks fire. The `debug_assert` makes the reasoning
-            // checkable instead of merely written down.
+            // A row CONTINUES only where the author expressed no break, and
+            // the two comment hooks below are skipped exactly there — so a
+            // continued row must never hold a comment, or the comment would be
+            // re-parented to the NEXT row instead of staying on the element it
+            // annotates.
+            //
+            // That is a property `author_line_break_between` GUARANTEES rather
+            // than one this loop hopes for: the probe answers `true` for any
+            // `#` in the unanchored region between two elements, which is
+            // precisely why its `#` window is wider than its `\n` window. The
+            // `debug_assert` is the enforcer of that coupling (Core #14) — it
+            // reads the same unanchored region the probe does, so the two
+            // cannot drift apart silently. It is not a claim about a hazard
+            // that merely has not happened: an earlier version of this assert
+            // scanned a NARROWER region than the probe and aborted `gg fmt` on
+            // a legal program, which is what a guard and its subject
+            // disagreeing looks like.
             let at_line_start = starts_line[i];
             let next_starts_line = starts_line.get(i + 1).copied().unwrap_or(true);
             debug_assert!(
@@ -1723,8 +1760,10 @@ impl Formatter {
                         let (lo, hi) = (p.min(b.len()), elem_start.min(b.len()));
                         lo >= hi || !b[lo..hi].contains(&b'#')
                     }),
-                "a continued row holds a `#` between elements — the comment \
-                 hooks are skipped there, so the comment would be dropped"
+                "a continued row holds a `#` between elements — \
+                 `author_line_break_between` must have answered `true` here, \
+                 and the two comment hooks fire only at a row start, so this \
+                 comment would be re-parented to the next row"
             );
             // PRESERVE-AND-CAP inside an EXPLODED container (ratified
             // 2026-08-16, canon call 2-bis): the author's paragraphing between

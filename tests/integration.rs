@@ -9986,8 +9986,13 @@ fn build_and_run_capture_stdout(fixture_path: &Path, label: &str) -> String {
         String::from_utf8_lossy(&run.stdout),
         String::from_utf8_lossy(&run.stderr),
     );
-    // Clean up build artefacts alongside the fixture.
+    // Clean up build artefacts alongside the fixture. BOTH backends' generated
+    // sources: `.c` for the LIR/C backend and `.ll` for `--backend=llvm`. The
+    // `.ll` was missing, so every LLVM run of a round-trip corpus left one
+    // beside each fixture it built — invisible in `git status` (they are
+    // ignored) and therefore accumulating unnoticed in the fixture tree.
     let _ = std::fs::remove_file(dir.join(format!("{stem}.c")));
+    let _ = std::fs::remove_file(dir.join(format!("{stem}.ll")));
     let _ = std::fs::remove_file(&exe_path);
     String::from_utf8_lossy(&run.stdout).to_string()
 }
@@ -10441,7 +10446,7 @@ fn fmt_catch_rethrow_single_stmt_no_do_wrap() {
     // Positive control: no code line should emit `catch (...): do:` /
     // `rethrow (...): do:` / `else: do:` for a SINGLE-stmt body whose sole
     // stmt is Stmt::Throw/Return/Expr. The R39 follow-up mirrors the F/G
-    // carve-out into `Expr::Do` at `src/formatter/mod.rs:2226`. Comment
+    // carve-out into `Expr::Do` at `src/formatter/mod.rs:2265`. Comment
     // lines are skipped so the header can document the retired defect.
     let bad_code_line = formatted.lines().find(|line| {
         let trimmed = line.trim_start();
@@ -11489,6 +11494,45 @@ void main():
     assert_author_rows_formats_to("author_paren_spans_rows.gg", EXPECTED);
 }
 
+/// ⭐ THE PAREN × COMMENT CELL — a `#` written INSIDE the author's grouping.
+///
+/// The anchor axis and the comment axis each had cells; the PAIR had none, and
+/// the pair is exactly where the probe's two reads disagree. A `#` inside the
+/// parens sits BEFORE the `)`, so it is before the anchor — an anchored-only
+/// scan reads the row as continuing, and the comment hooks fire only at a row
+/// START. `author_line_break_between` therefore reads `#` over the UNANCHORED
+/// region and `\n` over the anchored one.
+///
+/// The expected comment placement below is BYTE-IDENTICAL to the pre-change
+/// binary's: this cell asserts the grouping feature did not MOVE a comment,
+/// which is the strongest form that claim can take.
+///
+/// RED-verified twice against the intermediate that anchored BOTH reads:
+/// `gg fmt` ABORTED on this file (exit 101, "a continued row holds a `#`
+/// between elements"); with the assertion neutralised to model a release
+/// build, the comment was not dropped but RELOCATED onto the following row,
+/// where it reads as documenting `3, 4`. Both measured, then restored.
+#[test]
+fn fmt_author_rows_author_paren_holds_a_comment() {
+    const EXPECTED: &str = "\
+from std.collections import Vector
+
+void main():
+    Vector[int] xs = [
+        (1),    # inside the paren
+        2,
+        3, 4,
+    ]
+    Vector[int] ys = [
+        (5),    # spaced, the sibling costume
+        6,
+        7, 8,
+    ]
+    print(xs.len() + ys.len())
+";
+    assert_author_rows_formats_to("author_paren_holds_a_comment.gg", EXPECTED);
+}
+
 /// The NESTED cell: an element whose own render spans several output lines
 /// still shares its row with the neighbour the author put beside it. The row
 /// decision is taken from author spans BEFORE anything is rendered, so an
@@ -11708,6 +11752,7 @@ fn fmt_author_rows_round_trip_semantic() {
         ("fmt_author_rows/blank_line_between_rows.gg", "6"),
         ("fmt_author_rows/chain_carve_out_rows.gg", "10"),
         ("fmt_author_rows/author_paren_spans_rows.gg", "8"),
+        ("fmt_author_rows/author_paren_holds_a_comment.gg", "8"),
         ("fmt_author_rows/multiline_elem_shares_row.gg", "3"),
         ("fmt_author_rows/single_row_multiline.gg", "3"),
         ("fmt_author_rows/single_line_container_is_not_a_row.gg", "3"),
@@ -11747,9 +11792,9 @@ fn fmt_author_rows_every_fixture_is_run() {
         }
     }
     assert!(
-        n >= 14,
+        n >= 15,
         "the fmt_author_rows family shrank to {n} fixtures — it is seeded at \
-         14 and each one is a named axis cell. Removing one removes a cell."
+         15 and each one is a named axis cell. Removing one removes a cell."
     );
     assert!(
         missing.is_empty(),
@@ -13703,7 +13748,7 @@ fn fmt_long_binop_continuation_parses() {
 ///
 /// Round XXXVII D27 Round A: the move-sigil twin now asserts CARET, not the
 /// retired `!` — the formatter emits `^` at the D35 type-arg suffix
-/// (`src/formatter/mod.rs:1657`) as the D27 sigil-economy migration.
+/// (`src/formatter/mod.rs:1684`) as the D27 sigil-economy migration.
 #[test]
 fn fmt_d35_fn_type_sigil_round_trips() {
     // `&` variant — the exemplar case from D35's ratification.
