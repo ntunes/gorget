@@ -69,7 +69,6 @@ pub(super) fn lower_array_literal(
     // Box[Concrete] (8B void*) — Round XIX Track N2 cell F.
     let elem_type = if !elems.is_empty() {
         let first = lower_expr(ctx, builder, &elems[0]);
-        let inferred_etype = infer_operand_type_full(ctx, &first, builder);
         // ⚠ NARROW to the trait-box destination (cell F's stated intent). Taking
         // the context override UNCONDITIONALLY mis-sizes elem slots whenever the
         // surrounding expected type is less precise than the real element — e.g.
@@ -93,11 +92,27 @@ pub(super) fn lower_array_literal(
                 _ => false,
             }
         });
-        let etype = if override_is_trait_box {
-            nonempty_expected_override.unwrap_or(inferred_etype)
-        } else {
-            inferred_etype
+        // ⭐ MATERIALIZE FIRST, THEN MINT. The element slot does not exist yet,
+        // so `FromOperand` is the honest answer and the type comes back FROM
+        // the materialization — "minted slot type == materialized operand type"
+        // by construction. Minting first and materializing afterwards is what
+        // made `Vector[T] out = [borrowed_elem]` allocate 8-byte `Ptr` slots
+        // with no element vtable and then store a 32-byte clone into them.
+        //
+        // The one `Known` case is the trait-box destination: `Vector[Box[Trait]]
+        // = [Box.new(Concrete)]` must size for the 16B TraitObj, and the packing
+        // adapter below reconciles the operand to it. Everywhere else the
+        // "expected" element type is recovered by `infer_collection_element_type`
+        // — a mangled-name strip with an `I64` fallback — so it is INFERRED, not
+        // DECLARED, and passing it as `Known` mis-sizes every non-trait-box
+        // `Vector[T]` (measured: a garbage read on a `Vector[(int, int)]`).
+        let slot = match (override_is_trait_box, nonempty_expected_override) {
+            (true, Some(target)) => crate::ir::lowering::context::SlotType::Known(target),
+            _ => crate::ir::lowering::context::SlotType::FromOperand,
         };
+        let (first_owned, etype) = ctx.materialize_for_slot(
+            builder, first, &elems[0], slot,
+            crate::ir::ImplicitCloneReason::ConsumingArg);
         // Type the fresh local as the monomorphized `Vector__<elem>` (carries
         // the element type for a downstream `v[i]` / `for x in v` / element-drop)
         // rather than the bare `GorgetArray`. Mirrors `lower_dict_literal`'s
@@ -149,16 +164,11 @@ pub(super) fn lower_array_literal(
             Some(GirType::Named(n)) => Some(n.clone()),
             _ => None,
         };
-        // Push first element.
-        // SCOUT-PROTO #1a (Defect A): route the element through the SAME
-        // consuming-position helper push/put/set/ctor use, so a LIVE named
-        // resource source is CLONED (not moved) and a dead/temp source is
-        // moved. The bespoke elem_mode below only chose Move|Copy with NO
-        // clone-if-live path — a live owned local became a Move → "read after
-        // MoveZero" panic; a live Shared became a shallow Copy → under-incref.
+        // Push first element. It was already routed through the shared
+        // consuming-position materializer ABOVE, by `materialize_for_slot` —
+        // that call is what produced `etype`, so re-materializing here would
+        // double-clone.
         let elem_local = builder.add_local(etype, None);
-        let first_owned = ctx.ensure_owned_at_consuming_arg(
-            builder, first, &elems[0], crate::ir::ImplicitCloneReason::ConsumingArg);
         let first_owned = if let Some(ref name) = etype_name {
             pack_trait_object_for_smart_ptr_ctor(ctx, builder, first_owned, name)
         } else {
@@ -194,10 +204,14 @@ pub(super) fn lower_array_literal(
         for elem_expr in &elems[1..] {
             let elem_val = lower_expr(ctx, builder, elem_expr);
             let el = builder.add_local(etype, None);
-            // SCOUT-PROTO #1a (Defect A): clone-if-live / move-if-dead via the
-            // shared consuming-position helper (see the first-element note).
-            let elem_val = ctx.ensure_owned_at_consuming_arg(
-                builder, elem_val, elem_expr, crate::ir::ImplicitCloneReason::ConsumingArg);
+            // Clone-if-live / move-if-dead via the shared consuming-position
+            // materializer. For elements 2..N the slot IS declared — the first
+            // element minted it — so this is a genuine `Known`, and it reaches
+            // the same deref arm the first element did.
+            let (elem_val, _) = ctx.materialize_for_slot(
+                builder, elem_val, elem_expr,
+                crate::ir::lowering::context::SlotType::Known(etype),
+                crate::ir::ImplicitCloneReason::ConsumingArg);
             let elem_val = if let Some(ref name) = etype_name {
                 pack_trait_object_for_smart_ptr_ctor(ctx, builder, elem_val, name)
             } else {
@@ -259,28 +273,28 @@ fn lower_set_literal_from_array(
     builder: &mut FunctionBuilder,
     elems: &[Spanned<Expr>],
 ) -> Operand {
-    let set_type = ctx.type_mapper.lookup_named("GorgetSet").unwrap_or(UNIT_TYPE);
-
     // Determine ordering BEFORE any mutation of ctx.func_state.expected_type.
     // The non-empty branch below overrides expected_type to the element type
-    // at :224 (before the :231 call site), so reading after that yields
+    // before the accumulator is built, so reading after that yields
     // collection_kind(int)==None → unordered → silent bug.  Capturing here
     // at function entry is the only safe read point.
     let is_ordered = ctx.func_state.expected_type
         .and_then(|et| ctx.type_registry.collection_kind(et))
         == Some(CollectionKind::OrderedSet);
-    let new_fn = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+    // Protocol base for the monomorphized accumulator type / ctor name.
+    // `Set__T__new` and `HashSet__T__new` both family-route through the
+    // resources table; the `Set__` prefix is what selects the ORDERED runtime
+    // ctor (`src/lir/lower/calls.rs`), so ordering stays typed, not guessed.
+    let base = if is_ordered { "Set" } else { "HashSet" };
 
     if elems.is_empty() {
         // Empty set — infer element size from expected type if available.
         let elem_size_type = ctx.func_state.expected_type
             .map(|et| infer_collection_element_type(ctx, et))
             .unwrap_or(I64_TYPE);
-        let set_local = builder.call_extern(
-            new_fn,
-            vec![Operand::Constant(Constant::SizeOf(elem_size_type))],
-            set_type,
-        );
+        let set_type = collection_accumulator_type(ctx, base, elem_size_type);
+        let new_fn = collection_ctor_name(ctx, base, elem_size_type);
+        let set_local = builder.call_extern(&new_fn, vec![], set_type);
         ctx.set_owned(builder, set_local);
         ctx.drops.register_local(set_local, set_type, &ctx.type_registry);
         return FunctionBuilder::copy(set_local);
@@ -296,13 +310,30 @@ fn lower_set_literal_from_array(
     }
 
     let first = lower_expr(ctx, builder, &elems[0]);
-    let etype = infer_operand_type_full(ctx, &first, builder);
+    // ⭐ MATERIALIZE FIRST, THEN MINT — the array/dict inversion, applied to the
+    // set. Without it a borrow-typed element mints `Ptr(T)`, which mangles to an
+    // opaque name and therefore selects NEITHER key channel (no `_str`, no
+    // ktable bridge) as well as sizing the slot wrong.
+    let (first, etype) = ctx.materialize_for_slot(
+        builder, first, &elems[0],
+        crate::ir::lowering::context::SlotType::FromOperand,
+        crate::ir::ImplicitCloneReason::ConsumingArg);
 
-    let set_local = builder.call_extern(
-        new_fn,
-        vec![Operand::Constant(Constant::SizeOf(etype))],
-        set_type,
-    );
+    // ⭐ WRITE THE ELEMENT TYPE THROUGH, exactly as `lower_dict_literal` does
+    // for `Dict__K__V`. The set was the ONE literal that typed its local with
+    // the BARE `GorgetSet` and emitted the raw runtime symbol with a `SizeOf`
+    // argument — and BOTH downstream key channels read precisely what that
+    // withheld: `set_elem_type_from_monomorphized` (the `_str` hash selection)
+    // reads the monomorphized ctor NAME, and `wire_collection_bridges` (the
+    // user-hashable ktable) reads the accumulator TYPE. The explicit `Set[T]()`
+    // constructor has always been correct on both channels for this reason;
+    // the literal was sibling-site drift from it. The `SizeOf` argument was
+    // itself load-bearing in the wrong direction — it defeated the
+    // `lir_args.is_empty()` gate that performs the `_str` upgrade, so the
+    // upgrade could never run. Layering rule 4: resolve once, write through.
+    let set_type = collection_accumulator_type(ctx, base, etype);
+    let new_fn = collection_ctor_name(ctx, base, etype);
+    let set_local = builder.call_extern(&new_fn, vec![], set_type);
     ctx.set_owned(builder, set_local);
     ctx.drops.register_local(set_local, set_type, &ctx.type_registry);
 
@@ -358,6 +389,12 @@ fn lower_set_literal_from_array(
             ctx.func_state.expected_type = Some(elem_t);
         }
         let val = lower_expr(ctx, builder, elem_expr);
+        // Elements 2..N land in the slot the first element minted — a genuine
+        // `Known` target, reaching the same materialization the first did.
+        let (val, _) = ctx.materialize_for_slot(
+            builder, val, elem_expr,
+            crate::ir::lowering::context::SlotType::Known(etype),
+            crate::ir::ImplicitCloneReason::ConsumingArg);
         insert_elem(ctx, builder, val);
     }
     ctx.func_state.expected_type = saved_expected;
@@ -455,8 +492,22 @@ pub(super) fn lower_dict_literal(
     ctx.func_state.expected_type = val_expected_override;
     let first_val = lower_expr(ctx, builder, &pairs[0].1);
     ctx.func_state.expected_type = saved_expected;
-    let key_type = infer_operand_type_full(ctx, &first_key, builder);
-    let val_type = infer_operand_type_full(ctx, &first_val, builder);
+    // ⭐ MATERIALIZE FIRST, THEN MINT — same inversion as the array literal, and
+    // the reason the materializer moved OUT of `stage_dict_arg`: staging ran
+    // AFTER `Dict__K__V` was minted, so a borrow-typed key or value minted
+    // `Dict__Ptr__…` (8-byte slots, no key/val vtable) and the clone was stored
+    // into it. The K and V slots do not exist until this call returns, so
+    // `FromOperand` is the honest answer for both. (`val_expected_override`
+    // comes from `infer_collection_element_type` — a mangled-name strip with an
+    // `I64` fallback — so it is INFERRED, never `Known`.)
+    let (first_key, key_type) = ctx.materialize_for_slot(
+        builder, first_key, &pairs[0].0,
+        crate::ir::lowering::context::SlotType::FromOperand,
+        crate::ir::ImplicitCloneReason::ConsumingArg);
+    let (first_val, val_type) = ctx.materialize_for_slot(
+        builder, first_val, &pairs[0].1,
+        crate::ir::lowering::context::SlotType::FromOperand,
+        crate::ir::ImplicitCloneReason::ConsumingArg);
 
     // Compute mangled dict type name
     let key_c = type_id_to_mangle_name(ctx, key_type);
@@ -497,6 +548,16 @@ pub(super) fn lower_dict_literal(
         ctx.func_state.expected_type = val_expected_override;
         let v = lower_expr(ctx, builder, val_expr);
         ctx.func_state.expected_type = saved_expected;
+        // Pairs 2..N land in slots the first pair already minted, so these are
+        // genuine `Known` targets — and they reach the same deref arm.
+        let (k, _) = ctx.materialize_for_slot(
+            builder, k, key_expr,
+            crate::ir::lowering::context::SlotType::Known(key_type),
+            crate::ir::ImplicitCloneReason::ConsumingArg);
+        let (v, _) = ctx.materialize_for_slot(
+            builder, v, val_expr,
+            crate::ir::lowering::context::SlotType::Known(val_type),
+            crate::ir::ImplicitCloneReason::ConsumingArg);
         insert_pair(ctx, builder, dict_local, dict_type, &put_fn, k, v, key_type, val_type, key_expr, val_expr);
     }
 
@@ -536,25 +597,21 @@ fn insert_pair(
 /// here; the per-elem local is intentionally NOT drop-registered so it
 /// won't fire a scope-exit drop on the data the dict now owns. For
 /// non-resource operands, pass through unchanged.
+///
+/// ⚠ This helper does NOT materialize. The consuming-position materialization
+/// (clone-if-live / move-if-dead, plus the `Ptr`→owned answer) happens at both
+/// `insert_pair` CALL SITES, *above* the `Dict__K__V` mint — see
+/// `lower_dict_literal`. It used to live here, which put it AFTER the mint and
+/// let a borrow-typed key or value mint `Dict__Ptr__…`. Re-adding it here would
+/// double-clone.
 fn stage_dict_arg(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     op: Operand,
     ty: TypeId,
-    arg_expr: &Spanned<Expr>,
+    _arg_expr: &Spanned<Expr>,
 ) -> Operand {
     use crate::ir::instructions::AssignMode;
-    // Defect A (dict-literal sibling): route through the SAME consuming-position
-    // helper the array literal / push / put / ctor use, so a LIVE named resource
-    // source is CLONED (not moved — `Dict[K,Bag] d = {"k": a}` then read `a.tag`
-    // was a "read after MoveZero" panic) and a dead temp is left to be moved.
-    // This also ADMITS refcount handles (Shared/Weak/Channel), which
-    // `is_resource_type` excludes — a live Shared value was shallow-aliased with
-    // no incref (the under-incref class). The by-value clone the helper emits for
-    // a refcount handle is the incref; put memcpys it into the slot, whose
-    // val_drop balances it.
-    let op = ctx.ensure_owned_at_consuming_arg(
-        builder, op, arg_expr, crate::ir::ImplicitCloneReason::ConsumingArg);
     // Primitives pass straight through: the backend auto-takes the address of
     // the by-value operand for the put's `void* value` param. Deep resources
     // AND refcount handles need the fresh-slot + MoveZero staging below (so the
@@ -629,6 +686,25 @@ fn stage_dict_arg(
 fn collection_accumulator_type(ctx: &mut LoweringContext, base: &str, elem_type: TypeId) -> TypeId {
     let elem_c = type_id_to_mangle_name(ctx, elem_type);
     ctx.ensure_collection_type(&format!("{base}__{elem_c}"))
+}
+
+/// The monomorphized constructor name for a freshly-built collection local
+/// (`Set__GorgetString__new`), the SECOND half of writing the element type
+/// through. The accumulator TYPE feeds `wire_collection_bridges` (the
+/// user-hashable ktable channel); the ctor NAME feeds
+/// `set_elem_type_from_monomorphized` (the string-hash `_str` channel). They
+/// are different channels reading the same invariant, so a producer that
+/// supplies only one closes only half the class — emit both from the same
+/// `elem_type`, never from two separately-derived facts.
+///
+/// Emitting the monomorphized name rather than the raw runtime symbol is also
+/// what lets the LIR ctor-arg synthesis run at all: it is gated on
+/// `lir_args.is_empty()`, so a producer that passes its own `SizeOf` argument
+/// silently disables the very upgrade it needs. Mirrors `lower_dict_literal`'s
+/// `Dict__K__V__new`.
+fn collection_ctor_name(ctx: &mut LoweringContext, base: &str, elem_type: TypeId) -> String {
+    let elem_c = type_id_to_mangle_name(ctx, elem_type);
+    format!("{base}__{elem_c}__new")
 }
 
 /// Map a TypeId to a C-compatible mangle fragment for dict/set type names.

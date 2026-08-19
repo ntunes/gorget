@@ -36,6 +36,35 @@ pub enum ParamABI {
     ByMutPtr,
 }
 
+/// What producing an owned value out of a `Ptr(T)` / `MutPtr(T)` requires.
+/// Read only through [`LoweringContext::ptr_materialization_kind`] — see that
+/// method for why this is one accessor and not three call-site policies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PtrMaterialization {
+    /// Deep-clone through the pointer with this clone fn.
+    Clone(String),
+    /// Load the pointee by value — primitives and plain value structs.
+    DerefLoad,
+    /// No owning representation exists for this pointee; the pointer stands.
+    PassThrough,
+}
+
+/// What a destination slot knows about its own type at a materialization site.
+///
+/// The distinction is DECLARED-vs-INFERRED, not "does a type exist". Almost
+/// every collection destination can produce *a* type; the ones that produce it
+/// by stripping a mangled name (with a fallback) do not actually know their
+/// slot, and treating that guess as declared mis-sizes the slot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotType {
+    /// The slot's DECLARED type: a struct field's declared type, a return
+    /// signature, a `Ptr`/`MutPtr` target.
+    Known(TypeId),
+    /// The slot does not exist yet — it is MINTED from the materialized
+    /// operand. Always materializes.
+    FromOperand,
+}
+
 /// Metadata for a shared variable's hidden local and wrapper.
 #[derive(Debug, Clone, Copy)]
 pub struct SharedLocalInfo {
@@ -2258,6 +2287,145 @@ impl<'a> LoweringContext<'a> {
         None
     }
 
+    /// The ONE policy for turning a `Ptr(T)` / `MutPtr(T)` operand into a value
+    /// an owning destination can hold. Layering rule 3 (one source of truth per
+    /// axis): every `Ptr`→owned decision reads THIS accessor. Three sites used
+    /// to answer it independently and disagreed — `ensure_owned_at_boundary`
+    /// and `ensure_owned_at_consuming_arg` had no deref arm at all (so a
+    /// `Ptr(int)` sailed through as a raw address), while `auto_clone_if_ptr`
+    /// had one. A caller that re-derives this from `clone_fn_for_ptr` /
+    /// `is_resource_type` at its own site is re-opening that divergence.
+    ///
+    /// Polarity note: the discriminator is the POINTEE, and it covers `Ptr` and
+    /// `MutPtr` alike — `pointee_type` already unifies them, while every gate
+    /// that hand-rolled the test was `Ptr`-only (the asymmetry recorded as a
+    /// double-free at `stmts/mod.rs`'s owning-param carve-out).
+    pub(crate) fn ptr_materialization_kind(&self, pointee: TypeId) -> PtrMaterialization {
+        if let Some(clone_fn) = self.clone_fn_for_ptr(pointee) {
+            return PtrMaterialization::Clone(clone_fn);
+        }
+        if !self.type_registry.is_resource_type(pointee) {
+            // Primitives and plain value structs are Copy-semantics: a by-value
+            // load of the pointee is a memcpy at the backend and yields a fully
+            // independent owned value.
+            return PtrMaterialization::DerefLoad;
+        }
+        // A resource with no clone fn has no owning representation to produce
+        // (`Box[Trait]` at a literal element position is the live example).
+        // Passing the pointer through preserves today's behaviour rather than
+        // inventing an ownership transfer the type cannot express.
+        PtrMaterialization::PassThrough
+    }
+
+    /// Emit a by-value load of `Ptr(inner)` into a fresh local. Only valid when
+    /// [`Self::ptr_materialization_kind`] answered [`PtrMaterialization::DerefLoad`].
+    fn emit_deref_load(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        local: LocalId,
+        inner: TypeId,
+    ) -> Operand {
+        let deref_place = crate::ir::instructions::Place {
+            local,
+            projections: vec![crate::ir::instructions::Projection::Deref],
+        };
+        let tmp = builder.add_local(inner, None);
+        builder.assign(
+            crate::ir::instructions::Place::local(tmp),
+            Operand::Copy(deref_place),
+        );
+        crate::ir::builder::FunctionBuilder::copy(tmp)
+    }
+
+    /// Materialize `operand` for a destination slot AND report the type of the
+    /// value produced — in ONE call.
+    ///
+    /// This inverts the dependency that made the container-literal mint unsound.
+    /// The literal arms used to infer their element type from the operand and
+    /// materialize it *afterwards*, so a borrow-typed source minted a
+    /// `Vector[Ptr(T)]`: 8-byte slots with no element drop/clone/materialize
+    /// vtable, into which the (correctly emitted) clone was then stored and
+    /// freed. Because the arms now obtain the operand and its type from this
+    /// single call, "minted slot type == materialized operand type" holds BY
+    /// CONSTRUCTION rather than by two predicates agreeing.
+    ///
+    /// `slot` says what the destination already knows about itself:
+    /// * [`SlotType::Known`] — the slot's DECLARED type (a struct field's
+    ///   declared type, a return signature, a `Ptr`/`MutPtr` target). A
+    ///   pointer-typed slot is left holding a pointer; anything else
+    ///   materializes and the DECLARED type is reported, so a widening
+    ///   destination (`Vector[Box[Trait]]` from a `Box[Concrete]` element)
+    ///   still gets its declared slot width and its packing adapter.
+    /// * [`SlotType::FromOperand`] — the slot does not exist yet; it is minted
+    ///   from what this call produces. This is the container-literal case and
+    ///   it ALWAYS materializes.
+    ///
+    /// ⚠ Callers pass `Known` only for a DECLARED type. Where the "destination
+    /// type" is itself INFERRED — `infer_collection_element_type` recovers it by
+    /// stripping a mangled name and falls back to `I64` — the destination does
+    /// not actually know its slot, and passing that guess as `Known` mis-sizes
+    /// the slot exactly as the defect this call exists to close. Those sites
+    /// pass `FromOperand`.
+    pub fn materialize_for_slot(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        operand: Operand,
+        arg_expr: &crate::span::Spanned<crate::parser::ast::Expr>,
+        slot: SlotType,
+        reason: crate::ir::ImplicitCloneReason,
+    ) -> (Operand, TypeId) {
+        if let SlotType::Known(target) = slot {
+            // A pointer-typed destination holds a pointer: materializing into
+            // it would store a value where the slot expects an address. This is
+            // the gate the six hand-rolled `if !matches!(.., GirType::Ptr(_))`
+            // tests were each re-deriving, now asked once.
+            if self.pointee_type(target).is_some() {
+                return (operand, target);
+            }
+        }
+        let owned = self.materialize_owned_operand(builder, operand, arg_expr, reason);
+        let produced =
+            crate::ir::lowering::exprs::infer_operand_type_full(self, &owned, builder);
+        match slot {
+            SlotType::Known(target) => (owned, target),
+            SlotType::FromOperand => (owned, produced),
+        }
+    }
+
+    /// Materialize an operand into an owned value for a non-pointer destination.
+    /// Shared body of [`Self::materialize_for_slot`]: the consuming-position
+    /// clone-if-live / move-if-dead decision, followed by the `Ptr`→owned policy
+    /// from [`Self::ptr_materialization_kind`] for anything still pointer-typed.
+    fn materialize_owned_operand(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        operand: Operand,
+        arg_expr: &crate::span::Spanned<crate::parser::ast::Expr>,
+        reason: crate::ir::ImplicitCloneReason,
+    ) -> Operand {
+        let owned = self.ensure_owned_at_consuming_arg(builder, operand, arg_expr, reason);
+        // `ensure_owned_at_consuming_arg` clones through a pointer whenever the
+        // pointee has a clone fn. What it cannot do is DEREF, because it does
+        // not know whether its caller's slot is a `Ref[T]` (pass the pointer)
+        // or a bare `T` (load the value). Here the slot is known non-pointer,
+        // so the load is the right answer and this is the only place that can
+        // say so.
+        let local = match &owned {
+            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.local,
+            _ => return owned,
+        };
+        let Some(inner) = self.pointee_type(builder.local_type(local)) else {
+            return owned;
+        };
+        match self.ptr_materialization_kind(inner) {
+            PtrMaterialization::DerefLoad => self.emit_deref_load(builder, local, inner),
+            // `Clone` was already discharged by `ensure_owned_at_consuming_arg`
+            // above; reaching it here would mean the clone did not fire, and
+            // passing the pointer on is the pre-existing behaviour.
+            PtrMaterialization::Clone(_) | PtrMaterialization::PassThrough => owned,
+        }
+    }
+
     /// Return the borrow-view function name for a type whose runtime supports
     /// drop-safe cap=0 views — the typed eligibility read for the lazy
     /// loop-carried CoW bind (`emit_lazy_loopcarried_borrow`). Phase 1:
@@ -2462,11 +2630,13 @@ impl<'a> LoweringContext<'a> {
         // live here because this function doesn't know the target slot's type.
         // Struct field init calls this per-field — when both source and target
         // are `Ref[T]`, we want pass-through, not deref. The Ref[T] → T deref
-        // is handled at the specific sites that know their target is bare T:
+        // is handled at the sites that know their target is a bare `T`:
         // VarDecl, return statement, expression-body function return, call args
-        // (via `auto_clone_if_ptr`).
+        // (via `auto_clone_if_ptr`), and container-literal element slots (via
+        // `materialize_for_slot`, which asks the slot first and only then
+        // reaches the shared `DerefLoad` arm).
         if let Some(inner) = self.pointee_type(local_type) {
-            if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
+            if let PtrMaterialization::Clone(clone_fn) = self.ptr_materialization_kind(inner) {
                 self.warn_clone_and_hit(builder, span, inner, reason);
                 let cloned = builder.call_clone(
                     &clone_fn,
@@ -2583,8 +2753,13 @@ impl<'a> LoweringContext<'a> {
         let arg_type = builder.local_type(local);
 
         // Case 1: Ptr(T) — always clone to materialize.
+        //
+        // The `DerefLoad` answer is deliberately NOT taken here: this helper
+        // does not know its caller's slot, and a `Ref[T]` destination must keep
+        // the pointer. The sites that DO know reach it through
+        // `materialize_for_slot`, which asks the slot before materializing.
         if let Some(inner) = self.pointee_type(arg_type) {
-            if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
+            if let PtrMaterialization::Clone(clone_fn) = self.ptr_materialization_kind(inner) {
                 self.warn_clone_and_hit(builder, arg_expr.span, inner, reason);
                 let cloned = builder.call_clone(
                     &clone_fn,
@@ -2776,37 +2951,38 @@ impl<'a> LoweringContext<'a> {
                     // String Ptr params: read-through without clone.
                     // Strings are immutable — no clone needed on access.
                     // Cloning only at ownership boundaries (CoW materialization).
+                    //
+                    // ⚠ This carve-out is a CALL-ARG policy (CoW's
+                    // default-borrow at a plain call), NOT part of the
+                    // `Ptr`→owned answer, so it sits ABOVE the shared accessor
+                    // rather than inside it. Folding it in would silently make
+                    // every owning destination stop cloning strings.
                     if self.type_mapper.is_string_type(inner) {
                         return operand;
                     }
-                    if let Some(clone_fn) = self.clone_fn_for_ptr(inner) {
-                        self.warn_clone_and_hit(builder, span, inner, crate::ir::ImplicitCloneReason::CallArg);
-                        let cloned = builder.call_clone(
-                            &clone_fn,
-                            vec![crate::ir::builder::FunctionBuilder::copy(place.local)],
-                            inner,
-                            crate::ir::ImplicitCloneReason::CallArg,
-                        );
-                        self.drops.register_local(cloned, inner, &self.type_registry);
-                        self.set_owned(builder, cloned);
-                        return crate::ir::builder::FunctionBuilder::copy(cloned);
-                    }
-                    // Ptr to a non-resource, non-string value type — e.g. reading a
-                    // `Ref[int]` (from `v.get()` / a `Ref[T]` field) where the callee
-                    // expects `int`. Deref to load the pointee value. Primitives are
-                    // scalars; simple user value structs are Copy-semantics, so a
-                    // by-value load is just a memcpy at the backend.
-                    if !self.type_registry.is_resource_type(inner) {
-                        let deref_place = crate::ir::instructions::Place {
-                            local: place.local,
-                            projections: vec![crate::ir::instructions::Projection::Deref],
-                        };
-                        let tmp = builder.add_local(inner, None);
-                        builder.assign(
-                            crate::ir::instructions::Place::local(tmp),
-                            Operand::Copy(deref_place),
-                        );
-                        return crate::ir::builder::FunctionBuilder::copy(tmp);
+                    match self.ptr_materialization_kind(inner) {
+                        PtrMaterialization::Clone(clone_fn) => {
+                            self.warn_clone_and_hit(builder, span, inner, crate::ir::ImplicitCloneReason::CallArg);
+                            let cloned = builder.call_clone(
+                                &clone_fn,
+                                vec![crate::ir::builder::FunctionBuilder::copy(place.local)],
+                                inner,
+                                crate::ir::ImplicitCloneReason::CallArg,
+                            );
+                            self.drops.register_local(cloned, inner, &self.type_registry);
+                            self.set_owned(builder, cloned);
+                            return crate::ir::builder::FunctionBuilder::copy(cloned);
+                        }
+                        // Ptr to a non-resource, non-string value type — e.g. reading a
+                        // `Ref[int]` (from `v.get()` / a `Ref[T]` field) where the callee
+                        // expects `int`. Deref to load the pointee value. Primitives are
+                        // scalars; simple user value structs are Copy-semantics, so a
+                        // by-value load is just a memcpy at the backend.
+                        PtrMaterialization::DerefLoad => {
+                            let local = place.local;
+                            return self.emit_deref_load(builder, local, inner);
+                        }
+                        PtrMaterialization::PassThrough => {}
                     }
                 }
             }
