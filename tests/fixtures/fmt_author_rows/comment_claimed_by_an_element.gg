@@ -1,0 +1,53 @@
+# AUTHOR LINE GROUPING — a comment CLAIMED BY AN ELEMENT, in both positions.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture is a deliberately
+# UNFORMATTED INPUT — the assertion is on what `gg fmt` turns it INTO
+# (`fmt_author_rows_comment_claimed_by_an_element`, exact text). A sweep would
+# rewrite it into its own expected output and the cell would go green-vacuous.
+#
+# AXIS = WHO OWNS a comment between two elements. Its siblings put a comment
+# where nobody claims it — `author_paren_holds_a_comment.gg` (unclaimed inside a
+# grouping paren) and `nested_comment_at_child_close.gg` (unclaimed at a child's
+# close). Here an element CLAIMS it, in the two ways an element can:
+#
+#   `claimed_in_child`  the comment opens the grouping paren's element, so it is
+#                       claimed INSIDE a child region. The outer row still breaks
+#                       — the comment lies between `10`'s span-end and the
+#                       wrapped node's start, which is exactly what the probe
+#                       reads — so `10` stands alone and `(a + b), 20` share the
+#                       next row.
+#   `claimed_mid_elem`  the comment interrupts `a + b` between its own operands,
+#                       so it is claimed by the element it sits inside. It is NOT
+#                       a break between `a + b` and `20`, and those two keep
+#                       their row.
+#
+# ⚠ WHAT IT PINS, and it is the RATCHET as much as the formatter. The corpus
+# guard has no AST, so it tracks comments by frame. Tracking only the UNCLAIMED
+# ones made both shapes above false-positive on legal code while `gg fmt`
+# honoured the author exactly: a comment claimed inside a child never propagated,
+# so the site did not abstain and reported `[[3, 2]]` lost; and a comment claimed
+# mid-element was never cleared, so it leaked onto the NEXT element and reported
+# `[[1, 1, 2]]` lost. ABSTENTION is about whether a comment EXISTS below a site,
+# never about who ended up owning it — and a comment inside an element belongs to
+# that element.
+#
+# RED-verified (Core #12) against the pre-remedy build, quoted as the ratchet
+# actually prints it for THIS file as committed:
+#
+#   tests/fixtures/fmt_author_rows/comment_claimed_by_an_element.gg:
+#     2 author row signature(s) lost: [[3, 2], [1, 1, 2]]
+#
+# — the first signature is `claimed_in_child`, the second `claimed_mid_elem`,
+# both with `gg fmt` destroying nothing.
+from std.collections import Vector
+
+void main():
+    int a = 1
+    int b = 2
+    Vector[int] claimed_in_child = [10, (# c
+ a + b), 20,
+        30, 40,]
+    Vector[int] claimed_mid_elem = [a + # c
+ b, 20,
+        30, 40,]
+    print(claimed_in_child.len() + claimed_mid_elem.len())

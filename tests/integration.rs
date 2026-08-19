@@ -11413,13 +11413,42 @@ fn fmt_author_rows_corpus_table_survives() {
     assert_author_rows_fixed_point("resources_prescan_table_survives.gg");
 }
 
-/// An INTERIOR COMMENT on its own line, with NO magic comma anywhere — the
-/// other disjunct of `magic || gated`, and the comment-ORDER pin.
+/// The INTERIOR-COMMENT trigger, BOTH disjuncts of `magic || gated`, and the
+/// comment-ORDER pin.
 ///
-/// RED pre-fix (measured): not a fixed point; six elements on six lines.
+/// `gated_only` carries an interior comment and NO trailing comma, so nothing
+/// but the comment explodes it — the cell that had no fixture at all while this
+/// file was called `interior_comment_without_comma.gg` and asserted in its own
+/// header that it had no comma, ending `5, y,`. `both` has comment and comma
+/// together. A fixture's NAME is a claim about scope (Core #12); this one is
+/// true because the missing cell was ADDED.
+///
+/// Not a fixed point — the exploded emitter writes a trailing comma onto
+/// `gated_only`, which the author did not — so the assertion is exact text.
+///
+/// RED pre-fix (measured): all twelve elements come back one per line.
 #[test]
-fn fmt_author_rows_interior_comment_without_comma() {
-    assert_author_rows_fixed_point("interior_comment_without_comma.gg");
+fn fmt_author_rows_interior_comment_triggers() {
+    const EXPECTED: &str = "\
+from std.collections import Vector
+
+void main():
+    int y = 6
+    Vector[int] gated_only = [
+        1, 2,
+        # the second row
+        3, 4,
+        5, y,
+    ]
+    Vector[int] both = [
+        1, 2,
+        # the second row
+        3, 4,
+        5, y,
+    ]
+    print(gated_only.len() + both.len())
+";
+    assert_author_rows_formats_to("interior_comment_triggers.gg", EXPECTED);
 }
 
 /// A TRAILING comment per row. The hook that attaches it reads `elem_end`'s
@@ -11550,9 +11579,10 @@ void main():
 /// and both fired on legal code. The ratchet now abstains where a comment sits
 /// beneath a site, and this exact-text cell adjudicates it instead.
 ///
-/// RED-verified against the proxy build: the ratchet reported
-/// `1 author row signature(s) lost: [[1, 1, 2]]` for BOTH containers while
-/// `gg fmt` destroyed nothing.
+/// RED-verified against the proxy build, quoted as the ratchet actually prints
+/// it for this file as committed — two containers, one line:
+/// `2 author row signature(s) lost: [[1, 1, 2], [1, 1, 2]]` — while `gg fmt`
+/// destroyed nothing.
 #[test]
 fn fmt_author_rows_nested_comment_at_child_close() {
     const EXPECTED: &str = "\
@@ -11588,6 +11618,50 @@ void main():
     print(calls.len() + xs.len())
 ";
     assert_author_rows_formats_to("nested_comment_at_child_close.gg", EXPECTED);
+}
+
+/// ⭐ A comment CLAIMED BY AN ELEMENT — the other half of the ownership axis.
+///
+/// Its siblings put a comment where nobody claims it (inside a grouping paren,
+/// at a child's close). Here an element claims it, in the two ways one can:
+/// by OPENING on it inside a child region, and by EXTENDING through it
+/// mid-element. The outer row still breaks in the first — the comment lies
+/// between `10`'s span-end and the wrapped node's start, which is what the
+/// probe reads — and does NOT break in the second, where the comment is inside
+/// `a + b`.
+///
+/// ⚠ This cell pins the RATCHET as much as the formatter. Tracking only
+/// UNCLAIMED comments made both shapes false-positive on legal code while
+/// `gg fmt` honoured the author exactly: `[[3, 2]]` lost for the first,
+/// `[[1, 1, 2]]` for the second. Abstention is about whether a comment EXISTS
+/// below a site, never about who owns it — and a comment inside an element
+/// belongs to that element.
+///
+/// RED-verified against the pre-remedy build, quoted as the ratchet actually
+/// prints it for this file as committed:
+/// `2 author row signature(s) lost: [[3, 2], [1, 1, 2]]` — the first signature
+/// is the claimed-in-child container, the second the claimed-mid-element one.
+#[test]
+fn fmt_author_rows_comment_claimed_by_an_element() {
+    const EXPECTED: &str = "\
+from std.collections import Vector
+
+void main():
+    int a = 1
+    int b = 2
+    Vector[int] claimed_in_child = [
+        10,    # c
+        (a + b), 20,
+        30, 40,
+    ]
+    Vector[int] claimed_mid_elem = [
+        a + b, 20,
+        # c
+        30, 40,
+    ]
+    print(claimed_in_child.len() + claimed_mid_elem.len())
+";
+    assert_author_rows_formats_to("comment_claimed_by_an_element.gg", EXPECTED);
 }
 
 /// The NESTED cell: an element whose own render spans several output lines
@@ -11848,13 +11922,14 @@ fn fmt_author_rows_round_trip_semantic() {
         ("fmt_author_rows/call_and_method_args_rows.gg", "140"),
         ("fmt_author_rows/ragged_rows.gg", "6"),
         ("fmt_author_rows/resources_prescan_table_survives.gg", "25"),
-        ("fmt_author_rows/interior_comment_without_comma.gg", "6"),
+        ("fmt_author_rows/interior_comment_triggers.gg", "12"),
         ("fmt_author_rows/trailing_comment_per_row.gg", "6"),
         ("fmt_author_rows/blank_line_between_rows.gg", "6"),
         ("fmt_author_rows/chain_carve_out_rows.gg", "10"),
         ("fmt_author_rows/author_paren_spans_rows.gg", "8"),
         ("fmt_author_rows/author_paren_holds_a_comment.gg", "8"),
         ("fmt_author_rows/nested_comment_at_child_close.gg", "8"),
+        ("fmt_author_rows/comment_claimed_by_an_element.gg", "9"),
         ("fmt_author_rows/multiline_elem_shares_row.gg", "3"),
         ("fmt_author_rows/single_row_multiline.gg", "3"),
         ("fmt_author_rows/single_line_container_is_not_a_row.gg", "3"),
@@ -11894,9 +11969,9 @@ fn fmt_author_rows_every_fixture_is_run() {
         }
     }
     assert!(
-        n >= 16,
+        n >= 17,
         "the fmt_author_rows family shrank to {n} fixtures — it is seeded at \
-         16 and each one is a named axis cell. Removing one removes a cell."
+         17 and each one is a named axis cell. Removing one removes a cell."
     );
     assert!(
         missing.is_empty(),

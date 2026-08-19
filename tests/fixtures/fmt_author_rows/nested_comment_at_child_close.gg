@@ -29,9 +29,13 @@
 # this fixture is what adjudicates the cell instead.
 #
 # RED-verified (Core #12): against the proxy build, the ratchet reported
-# `1 author row signature(s) lost: [[1, 1, 2]]` for BOTH containers while
-# `gg fmt` destroyed nothing — a fatal guard failing on correct code, whose only
-# exits were reshaping the code or allowlisting a defect that did not exist.
+#
+#   tests/fixtures/fmt_author_rows/nested_comment_at_child_close.gg:
+#     2 author row signature(s) lost: [[1, 1, 2], [1, 1, 2]]
+#
+# — one per container, from THIS file as committed, while `gg fmt` destroyed
+# nothing. A fatal guard failing on correct code, whose only exits were
+# reshaping the code or allowlisting a defect that did not exist.
 from std.collections import Vector
 
 int f(int a, int b):

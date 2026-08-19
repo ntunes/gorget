@@ -18079,11 +18079,19 @@ struct RowFrame {
     commas: usize,
     /// The element under construction: `None` until its first byte.
     cur: Option<(usize, usize, bool)>,
-    /// A comment has been seen at THIS frame's level since the last element
-    /// closed. Consumed by the next element that opens.
+    /// A comment at THIS frame's level that no element has claimed yet. It is
+    /// claimed by whichever element next OPENS *or* EXTENDS — a comment written
+    /// mid-element (`a + # c\n b`) belongs to the element it interrupts, and
+    /// must not leak onto the next one as a spurious row break.
     pending_comment: bool,
-    /// A comment was seen anywhere BELOW this frame. Propagated unconditionally
-    /// at every close; the sites carrying it abstain rather than guess.
+    /// STICKY: a comment was seen at this frame's level at any point, whether or
+    /// not an element went on to claim it. This is the flag that propagates,
+    /// because ABSTENTION is about whether a comment EXISTS below a site, never
+    /// about who ended up owning it.
+    saw_comment: bool,
+    /// STICKY: a comment was seen anywhere BELOW this frame — set from a closing
+    /// child's `saw_comment` or its own `child_comment`. A site carrying it
+    /// abstains rather than guessing whose AST span the comment falls in.
     child_comment: bool,
     /// Last significant byte at THIS frame's level — a child's close delimiter
     /// counts, its interior does not.
@@ -18095,7 +18103,15 @@ impl RowFrame {
     /// opens the pending element or extends it.
     fn mark(&mut self, line: usize) {
         match &mut self.cur {
-            Some((_, end, _)) => *end = line,
+            // EXTENDING the current element claims the comment as well as
+            // opening one does: `[a + # c\n b, 20, …]` puts the comment INSIDE
+            // `a + b`, so it is not a break between `a + b` and `20`. Leaving it
+            // pending here leaked it onto the next element and split a row the
+            // formatter keeps.
+            Some((_, end, _)) => {
+                *end = line;
+                self.pending_comment = false;
+            }
             None => {
                 self.cur = Some((line, line, self.pending_comment));
                 self.pending_comment = false;
@@ -18169,6 +18185,7 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
             // answer `author_line_break_between` gives. See `RowFrame::rows`.
             if let Some(f) = stack.last_mut() {
                 f.pending_comment = true;
+                f.saw_comment = true;
             }
             while i < bytes.len() && bytes[i] != b'\n' {
                 i += 1;
@@ -18224,6 +18241,7 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
                 commas: 0,
                 cur: None,
                 pending_comment: false,
+                saw_comment: false,
                 child_comment: false,
                 last: c,
             });
@@ -18272,11 +18290,14 @@ fn author_row_scan(src: &str) -> Vec<RowSite> {
             // author-side subject. The cost is stated rather than hidden — the
             // paren x comment cell is then adjudicated ONLY by its exact-text
             // fixture (`fmt_author_rows/author_paren_holds_a_comment.gg`), which
-            // is the stronger pin anyway. Comments at a site's OWN level are
-            // unaffected and still break its rows, which is what keeps
-            // `interior_comment_without_comma.gg` and
-            // `trailing_comment_per_row.gg` inside the subject set.
-            let comment_below = f.pending_comment || f.child_comment;
+            // is the stronger pin anyway. Only a comment BELOW a site abstains
+            // it, so `interior_comment_triggers.gg` and
+            // `trailing_comment_per_row.gg` stay in the subject set — their
+            // comments sit at the site's own level, with no child region to be
+            // ambiguous about. Their `[2, 2, 2]` rows come from the AUTHOR'S
+            // NEWLINES, which is what the ratchet adjudicates; the comments are
+            // simply not what put the row boundaries there.
+            let comment_below = f.saw_comment || f.child_comment;
             if let Some(p) = stack.last_mut() {
                 p.mark(line);
                 p.last = c;
@@ -18465,7 +18486,7 @@ fn fmt_author_row_grouping_survives_formatting() {
     /// fixture `fmt_author_rows/author_paren_holds_a_comment.gg`. Abstaining is
     /// what a guard does instead of firing on legal code; it is not licence to
     /// lower this again for a shrink nobody chose.
-    const MIN_SUBJECT_SITES: usize = 24;
+    const MIN_SUBJECT_SITES: usize = 25;
     /// The SCANNER's own non-vacuity floor, on a population three orders of
     /// magnitude larger than the subject set: if the walk stops finding
     /// multi-line comma-bearing regions at all, the roots moved or the
