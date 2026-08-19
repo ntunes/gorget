@@ -10441,7 +10441,7 @@ fn fmt_catch_rethrow_single_stmt_no_do_wrap() {
     // Positive control: no code line should emit `catch (...): do:` /
     // `rethrow (...): do:` / `else: do:` for a SINGLE-stmt body whose sole
     // stmt is Stmt::Throw/Return/Expr. The R39 follow-up mirrors the F/G
-    // carve-out into `Expr::Do` at `src/formatter/mod.rs:2223`. Comment
+    // carve-out into `Expr::Do` at `src/formatter/mod.rs:2226`. Comment
     // lines are skipped so the header can document the retired defect.
     let bad_code_line = formatted.lines().find(|line| {
         let trimmed = line.trim_start();
@@ -13221,7 +13221,7 @@ fn fmt_long_binop_continuation_parses() {
 ///
 /// Round XXXVII D27 Round A: the move-sigil twin now asserts CARET, not the
 /// retired `!` — the formatter emits `^` at the D35 type-arg suffix
-/// (`src/formatter/mod.rs:1654`) as the D27 sigil-economy migration.
+/// (`src/formatter/mod.rs:1657`) as the D27 sigil-economy migration.
 #[test]
 fn fmt_d35_fn_type_sigil_round_trips() {
     // `&` variant — the exemplar case from D35's ratification.

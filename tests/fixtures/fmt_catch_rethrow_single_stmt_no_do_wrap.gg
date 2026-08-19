@@ -4,7 +4,7 @@
 # Post-Track-G, `catch (e):` / `rethrow (e):` bodies whose parser-synthesized
 # `Expr::Do` wrap contains a SINGLE terminal-expression stmt (Stmt::Expr /
 # Return / Throw) still round-trip through `format_expr(Expr::Do)` at
-# `src/formatter/mod.rs:2223`, which unconditionally emits `do:` — so
+# `src/formatter/mod.rs:2226`, which unconditionally emits `do:` — so
 # `catch (e):\n    fallback(x)` reformats to `catch (e): do:\n    fallback(x)`.
 # Same class as snag #15b (move-tail `E_MoveInOperandPosition` regression
 # for Throw/Return in these positions after the D27 emit swap): the parser

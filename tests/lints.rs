@@ -10893,8 +10893,8 @@ fn doc_source_citations_name_the_right_line() {
         ("112", "src/formatter/mod.rs:43", "the four-space indent arithmetic; the sentence's names are doc.rs's INDENT_WIDTH"),
         ("152", "src/formatter/doc.rs:433", "the Group flat/break decision; MAX_WIDTH and current_col are named as the inputs"),
         ("232", "src/formatter/doc.rs:213", "the trailing-comma construction; `IfBreak` is the enum variant it builds"),
-        ("582", "src/formatter/mod.rs:1046", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
-        ("791", "src/formatter/mod.rs:3083", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
+        ("582", "src/formatter/mod.rs:1049", "the blank-collapse loop INSIDE `fn format`, whose name is ~25 lines up"),
+        ("791", "src/formatter/mod.rs:3086", "`FunctionBody::Extern`'s `= \"symbol\"` arm, inside `format_function`"),
     ];
     // SHRINK-ONLY, ENFORCED (Core #14 — the words are not the guard). Every row
     // must still be LIVE: if the cite it excuses no longer fails, the row has
@@ -15720,7 +15720,7 @@ fn fmt_hand_rolled_operator_emission_census() {
 /// ⚠ **The closure emitter's layout read has NO ROW HERE, and its `Plain` row
 /// does not mean "no layout question at this site".** A closure suite reaches
 /// `format_block_stmts` through `format_closure_post_prelude`, so the census
-/// sees the delegating call, not the read at `src/formatter/mod.rs:3967` that
+/// sees the delegating call, not the read at `src/formatter/mod.rs:3970` that
 /// chose the spelling. Independently measured (`if true || block.layout == ...`
 /// at that read): this census stays GREEN while
 /// `tests/fixtures/fmt_suite_layout/closure_body.gg` loses its fixpoint AND
@@ -17044,7 +17044,7 @@ fn formatter_list_emit_fill_census() {
 ///
 /// So the two counts are pinned against each other. `format_static_decl` is the
 /// one deliberate non-caller: statics are private-by-DEFAULT, the inverse
-/// convention, and it carries its own rule (`src/formatter/mod.rs:2005-2021`).
+/// convention, and it carries its own rule (`src/formatter/mod.rs:2008-2024`).
 /// A mismatch means either a new carrier that skipped the path, or a carrier
 /// removed without its emit site — both worth a look.
 #[test]
@@ -17837,5 +17837,545 @@ fn fmt_no_new_over_budget_lines() {
          An `Unbroken` row is NOT an escape: it is a position with no fit \
          test at all, and it belongs in `TODO.md` as a named feature gap.",
         failures.join("\n\n")
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// R43 · AUTHOR LINE GROUPING — the two guards
+// ══════════════════════════════════════════════════════════════
+//
+// Ratified 2026-08-18: *the magic trailing comma says EXPLODE; the author's
+// own newlines say WHERE TO BREAK.* Inside an exploded container the author's
+// element-to-line assignment survives, so a hand-grouped table keeps its rows.
+//
+// Two guards, on two different axes, because one cannot do both jobs:
+//
+//   * `formatter_author_grouping_reads_one_site` is a SOURCE pin — the probe
+//     stays self-contained and is read at exactly ONE chokepoint, so a second
+//     read site cannot appear silently (the sibling-site-drift class).
+//   * `fmt_author_row_grouping_survives_formatting` is an OUTPUT ratchet — it
+//     formats the live corpus and asserts the property itself, so it is blind
+//     to how the preservation is spelled and cannot be defeated by moving the
+//     code.
+
+/// SOURCE PIN for the author-grouping probe: one definition, one reader, no
+/// comment-table dependency.
+///
+/// Three assertions, each retiring a different way the mechanism has degraded
+/// in its siblings:
+///
+///   1. **`author_line_break_between` is self-contained, and anchored on
+///      `advance_past_author_parens`.** Two halves of one rule about which
+///      sidebands the probe may read.
+///
+///      *No comment table* — same rule, same reason as
+///      `formatter_magic_comma_probe_is_self_contained`: the probe runs on the
+///      sub-`Formatter`s `element_to_string` builds, and those carry
+///      `CommentTable::empty()` BY DESIGN, so a comment-table lookup there
+///      answers "not a comment" for every byte of every comment.
+///
+///      *The author-paren table, yes* — it DOES travel into those
+///      sub-formatters (`fmt_author_paren_table_reaches_sub_formatters`), and
+///      the probe is wrong without it. An AST span ends INSIDE the author's
+///      grouping parens, so scanning from a bare `prev_end` puts those parens
+///      in the scanned region and reads a newline between a node and its own
+///      `)` as a break BETWEEN elements. Measured: `[(1\n), 2,\n 3, 4,]` loses
+///      the author's first row. ⚠ NOTHING ELSE CAN SEE THIS — the shape is
+///      corpus-neutral (0 of 2898 corpus files change either way), so no
+///      output ratchet, round-trip or idempotence gate reds on it. That is
+///      exactly when a source pin earns its line, and it is why the anchor is
+///      asserted here rather than described in a comment. The behavioural
+///      cell is `tests/fixtures/fmt_author_rows/author_paren_spans_rows.gg`.
+///   2. **It is READ at exactly one site.** The author-grouping decision
+///      belongs at the one exploded-list emitter; a second reader is the
+///      sibling-site-drift class (Core #4), where two positions decide the
+///      same question and drift apart.
+///   3. **That emitter itself has exactly one call site.** `emit_delimited_list`
+///      is the chokepoint every fill-emitted list funnels through, and
+///      `format_bracketed_broken_with_comments` is the exploded branch it
+///      routes to. A SECOND call to the exploded emitter would reach the
+///      grouping logic without passing the gate that decided to explode —
+///      the same shape `formatter_list_emit_fill_census` pins one layer up.
+///
+/// **Break-and-verify:** add `self.comments` to the probe's body (1); call
+/// `self.author_line_break_between(` from a second function (2); call
+/// `self.format_bracketed_broken_with_comments(` from a second function (3).
+#[test]
+fn formatter_author_grouping_reads_one_site() {
+    /// `self.author_line_break_between(` readers. ONE: the author-grouping
+    /// pre-pass at the top of `format_bracketed_broken_with_comments`.
+    const EXPECTED_PROBE_READERS: usize = 1;
+    /// `self.format_bracketed_broken_with_comments(` call sites. ONE: the
+    /// `magic || gated` branch of `emit_delimited_list`.
+    const EXPECTED_EXPLODED_EMIT_SITES: usize = 1;
+
+    let content =
+        fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
+
+    // (1) self-containment, delimited exactly as the sibling pin delimits its
+    // own probe: from the `fn` header to the first `\n    }\n`.
+    let start = content
+        .find("fn author_line_break_between(")
+        .expect("`fn author_line_break_between` not found in src/formatter/mod.rs");
+    let body = &content[start..];
+    let end = body
+        .find("\n    }\n")
+        .expect("cannot delimit `author_line_break_between`'s body");
+    let body = &body[..end];
+    for needle in ["self.comments", "delim_pos_after"] {
+        assert!(
+            !body.contains(needle),
+            "`author_line_break_between` now references `{needle}`. The probe \
+             reads the SOURCE and the AUTHOR-PAREN table, and nothing else: it \
+             runs on sub-`Formatter`s whose comment sideband is EMPTY by \
+             design, so a comment-table lookup is vacuous there — the same \
+             trap `author_trailing_comma` carries its own `#`-to-EOL scan to \
+             avoid."
+        );
+    }
+    assert!(
+        body.contains("self.advance_past_author_parens(prev_end)"),
+        "`author_line_break_between` no longer anchors on \
+         `self.advance_past_author_parens(prev_end)`.\n\n\
+         An AST span ends at the WRAPPED NODE, inside the author's grouping \
+         parens — so a scan from the bare `prev_end` includes those parens, \
+         and a newline the author wrote between a node and its own `)` reads \
+         as a break BETWEEN elements. `[(1\\n), 2,\\n 3, 4,]` then loses the \
+         row the author wrote. The ratified sibling `author_trailing_comma` \
+         needs the same advance for the same reason.\n\n\
+         ⚠ NO OTHER GATE SEES THIS: the shape is corpus-neutral, so the row \
+         ratchet, idempotence, reparse and the round-trip all stay GREEN with \
+         the anchor removed. The behavioural cell is \
+         `tests/fixtures/fmt_author_rows/author_paren_spans_rows.gg`."
+    );
+
+    // (2) and (3): count call sites on non-comment lines, so prose naming a
+    // spelling does not count.
+    let mut probe_readers = 0usize;
+    let mut exploded_emit_sites = 0usize;
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("//") || trimmed.starts_with("///") {
+            continue;
+        }
+        probe_readers += line.matches("self.author_line_break_between(").count();
+        exploded_emit_sites += line
+            .matches("self.format_bracketed_broken_with_comments(")
+            .count();
+    }
+
+    let msg = "\n\nThe author's line grouping is decided in ONE place, for the \
+               same reason the magic comma is: two positions deciding the same \
+               question drift apart, and the one that drifts is invisible \
+               until a corpus file is shredded. If a new emitter needs the \
+               exploded shape, route it through \
+               `Formatter::emit_delimited_list` — do not call the exploded \
+               emitter, or re-read the probe, from a second site.";
+    assert_eq!(
+        probe_readers, EXPECTED_PROBE_READERS,
+        "`self.author_line_break_between(` reader count changed.{msg}"
+    );
+    assert_eq!(
+        exploded_emit_sites, EXPECTED_EXPLODED_EMIT_SITES,
+        "`self.format_bracketed_broken_with_comments(` call-site count \
+         changed.{msg}"
+    );
+}
+
+// ── The author ROW-FIDELITY scanner ─────────────────────────────────────────
+//
+// A coarse, string- and comment-aware bracket walk. It answers one question
+// per bracketed region: **on which physical line does each top-level element
+// begin?** That vector — the ROW SIGNATURE — is the author fact the ruling
+// preserves, and it is computed identically from the AUTHOR source and from
+// the FORMATTED output, so the two are directly comparable.
+//
+// Coarse is deliberate and safe here: any lexing quirk (an interpolated
+// f-string body, a quoting normalization) is applied to BOTH sides, so it
+// perturbs the two signature multisets the same way rather than inventing a
+// difference. What it must not do is disagree with the FORMATTER about the
+// author's trailing comma, and that is pinned separately below.
+
+/// One bracketed region.
+#[derive(Debug, Clone)]
+struct RowSite {
+    /// 1-based line of the open delimiter.
+    line0: usize,
+    /// 1-based line of the close delimiter.
+    line1: usize,
+    /// Top-level separator commas inside the region.
+    commas: usize,
+    /// Elements beginning on each occupied line, in line order.
+    rows: Vec<usize>,
+    /// The AUTHOR wrote a trailing comma before the close — the magic-comma
+    /// signal. Read as the last significant byte at this region's own level.
+    author_comma: bool,
+}
+
+impl RowSite {
+    /// TABULAR: some line begins two or more elements. This is exactly the
+    /// shape the magic trailing comma alone CANNOT express — one element per
+    /// line is what it already means — so it is the set the ruling adds.
+    fn tabular(&self) -> bool {
+        self.rows.iter().any(|&c| c >= 2)
+    }
+    fn multi_line(&self) -> bool {
+        self.line1 > self.line0
+    }
+}
+
+struct RowFrame {
+    open: u8,
+    line0: usize,
+    /// (line, count) in first-seen order.
+    lines: Vec<(usize, usize)>,
+    commas: usize,
+    /// An element is expected next: set at the open delimiter and after every
+    /// top-level comma, cleared by the first byte that begins one.
+    pending: bool,
+    /// Last significant byte at THIS frame's level — a child's close
+    /// delimiter counts, its interior does not.
+    last: u8,
+}
+
+fn author_row_scan(src: &str) -> Vec<RowSite> {
+    const OPENERS: [u8; 3] = [b'(', b'[', b'{'];
+    let closer = |b: u8| match b {
+        b'(' => b')',
+        b'[' => b']',
+        b'{' => b'}',
+        _ => 0,
+    };
+    let bytes = src.as_bytes();
+    let mut i = 0usize;
+    let mut line = 1usize;
+    let mut stack: Vec<RowFrame> = Vec::new();
+    let mut out: Vec<RowSite> = Vec::new();
+
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'\n' {
+            line += 1;
+            i += 1;
+            continue;
+        }
+        if c == b'#' {
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if c.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        // A close delimiter that matches the innermost frame is that frame's
+        // own terminator, never an element of it.
+        let closes_top = stack.last().is_some_and(|f| closer(f.open) == c);
+        if !closes_top {
+            if let Some(f) = stack.last_mut() {
+                if f.pending {
+                    match f.lines.last_mut() {
+                        Some((l, n)) if *l == line => *n += 1,
+                        _ => f.lines.push((line, 1)),
+                    }
+                    f.pending = false;
+                }
+                f.last = c;
+            }
+        }
+        if c == b'"' || c == b'\'' {
+            let q = c;
+            i += 1;
+            while i < bytes.len() {
+                if bytes[i] == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if bytes[i] == b'\n' {
+                    line += 1;
+                }
+                if bytes[i] == q {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        if OPENERS.contains(&c) {
+            stack.push(RowFrame {
+                open: c,
+                line0: line,
+                lines: Vec::new(),
+                commas: 0,
+                pending: true,
+                last: c,
+            });
+            i += 1;
+            continue;
+        }
+        if closes_top {
+            let f = stack.pop().expect("closes_top implies a frame");
+            out.push(RowSite {
+                line0: f.line0,
+                line1: line,
+                commas: f.commas,
+                rows: f.lines.iter().map(|(_, n)| *n).collect(),
+                author_comma: f.last == b',',
+            });
+            if let Some(p) = stack.last_mut() {
+                p.last = c;
+            }
+            i += 1;
+            continue;
+        }
+        if c == b',' {
+            if let Some(f) = stack.last_mut() {
+                f.commas += 1;
+                f.pending = true;
+            }
+            i += 1;
+            continue;
+        }
+        i += 1;
+    }
+    out
+}
+
+/// The AUTHOR-side subject set: multi-line, comma-bearing, carrying the
+/// author's own trailing comma, and TABULAR. Returned as row signatures.
+fn author_subject_signatures(src: &str) -> Vec<Vec<usize>> {
+    author_row_scan(src)
+        .into_iter()
+        .filter(|s| s.multi_line() && s.commas > 0 && s.author_comma && s.tabular())
+        .map(|s| s.rows)
+        .collect()
+}
+
+/// The OUTPUT-side set: every multi-line comma-bearing TABULAR region,
+/// whatever put it there. No author-comma restriction — the question is only
+/// whether the author's shape is PRESENT in the output.
+fn formatted_signatures(src: &str) -> Vec<Vec<usize>> {
+    author_row_scan(src)
+        .into_iter()
+        .filter(|s| s.multi_line() && s.commas > 0 && s.tabular())
+        .map(|s| s.rows)
+        .collect()
+}
+
+/// Multiset difference: the author signatures the output does not contain.
+fn lost_signatures(author: &[Vec<usize>], formatted: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let mut pool: Vec<Vec<usize>> = formatted.to_vec();
+    let mut lost = Vec::new();
+    for sig in author {
+        match pool.iter().position(|f| f == sig) {
+            Some(idx) => {
+                pool.swap_remove(idx);
+            }
+            None => lost.push(sig.clone()),
+        }
+    }
+    lost
+}
+
+/// AGREEMENT PIN (Core #13 — verify the verifier). The scanner's
+/// `author_comma` read is a SECOND implementation of the same author fact
+/// `Formatter::author_trailing_comma` reads, and two implementations of one
+/// fact drift. So the two are checked against each other on the cells where
+/// they could disagree, using the formatter's own OBSERVABLE consequence: a
+/// magic comma EXPLODES the container, its absence lets the formatter pack.
+///
+/// Two cells cannot be discriminated this way and say so rather than pretend:
+/// a comma followed by a comment, and a comma that is only INSIDE a comment,
+/// both sit next to an interior comment, which explodes the container by
+/// itself. Their formatter half is pinned behaviourally instead, by
+/// `tests/fixtures/fmt_magic_comma/comment_not_a_comma.gg` (via
+/// `fmt_magic_comma_comment_is_not_a_comma`) — here only the SCANNER's
+/// verdict is asserted.
+#[test]
+fn author_row_scanner_agrees_with_the_magic_comma_probe() {
+    // (source, the scanner's expected `author_comma`, discriminable by explode)
+    let cells: &[(&str, bool, bool)] = &[
+        // Plain author comma before the close.
+        ("void main():\n    Vector[int] xs = [1, 2,]\n    print(xs.len())\n", true, true),
+        // No author comma — the formatter may pack.
+        ("void main():\n    Vector[int] xs = [1, 2]\n    print(xs.len())\n", false, true),
+        // An author GROUPING paren on the last element: the `)` sits BEFORE
+        // the comma, so neither read may lose it.
+        ("void main():\n    int y = 1\n    Vector[int] xs = [1, y + (2),]\n    print(xs.len())\n", true, true),
+        // Comma, then a comment, then the close.
+        ("void main():\n    Vector[int] xs = [\n        1, 2,\n        # tail\n    ]\n    print(xs.len())\n", true, false),
+        // The comma lives only INSIDE a comment: not the author's.
+        ("void main():\n    Vector[int] xs = [\n        1, 2  # ,\n    ]\n    print(xs.len())\n", false, false),
+    ];
+
+    let mut checked = 0usize;
+    for (src, want_comma, discriminable) in cells {
+        let sites = author_row_scan(src);
+        // The `[ … ]` literal is the only bracketed region in each cell that
+        // carries a top-level comma.
+        let site = sites
+            .iter()
+            .find(|s| s.commas > 0 && s.line0 > 0)
+            .unwrap_or_else(|| panic!("no comma-bearing region found in:\n{src}"));
+        assert_eq!(
+            site.author_comma, *want_comma,
+            "the row scanner read the author trailing comma wrong in:\n{src}"
+        );
+        if !*discriminable {
+            continue;
+        }
+        checked += 1;
+        let formatted = gorget::formatter::format_source_result(src)
+            .unwrap_or_else(|e| panic!("the agreement cell does not format: {e:?}\n{src}"));
+        let exploded = formatted.contains("[\n");
+        assert_eq!(
+            exploded, *want_comma,
+            "SCANNER/FORMATTER DISAGREEMENT on the author trailing comma.\n\
+             The row scanner said `author_comma = {}`, while \
+             `Formatter::author_trailing_comma` {} the container.\n\
+             The scanner reads BACKWARD from the close delimiter and the \
+             formatter reads FORWARD from the last element's end; they are two \
+             implementations of one author fact, and the ratchet that consumes \
+             the scanner is only as trustworthy as this agreement.\n\
+             === source ===\n{src}=== formatted ===\n{formatted}",
+            site.author_comma,
+            if exploded { "EXPLODED" } else { "PACKED" },
+        );
+    }
+    assert!(
+        checked >= 3,
+        "the agreement pin discriminated only {checked} cells against the \
+         formatter — it has gone vacuous. Fix the cells, do not lower this."
+    );
+}
+
+/// THE AUTHOR ROW-FIDELITY RATCHET (Core #6 — the class guard for the
+/// grouping ruling).
+///
+/// Formats every `.gg` file under the corpus roots and asserts the property
+/// the ruling states: **an author TABULAR row signature inside a container the
+/// author's own trailing comma explodes must still be present in the output.**
+///
+/// Why the predicate is *comma-bearing sites only*: a list with no magic comma
+/// is one the formatter may PACK, and packing legitimately re-flows the
+/// author's rows. Without the restriction the guard reds on ~100 corpus sites
+/// whose only exit is an allowlist that green-lights the very class the guard
+/// exists to retire (Core #15e Q2).
+///
+/// Why signatures and not text: the formatter rewrites elements as it goes
+/// (`!`→`^`, `( 2 )`→`(2)`) and re-indents to the canonical block indent, so a
+/// text comparison would red on every canon change. The element-to-line
+/// ASSIGNMENT is the discrete fact the ruling preserves, and it survives
+/// element rewriting — which is also why the ruling preserves rows and not
+/// columns.
+///
+/// **This guard is FATAL from day one**, not env-gated: its allowlist is EMPTY
+/// on arrival, so there is nothing to burn down, and an env-gated ratchet with
+/// no live population simply never runs.
+///
+/// **Break-and-verify:** delete the `starts_line` pre-pass from
+/// `format_bracketed_broken_with_comments` — `compiler/data/resources.gg`'s
+/// hand-grouped 4-row table comes back as 25 lines and this test names it.
+#[test]
+fn fmt_author_row_grouping_survives_formatting() {
+    /// Files whose author rows are knowingly NOT preserved. SHRINK-ONLY, and
+    /// EMPTY on arrival — a row here is a defect with a filed reason, never a
+    /// way to silence a red.
+    const LOST_ALLOWLIST: &[(&str, &str)] = &[];
+    /// The subject set may only GROW. Regenerate with
+    ///   cargo test --test lints fmt_author_row_grouping_survives_formatting -- --nocapture
+    /// which prints what it measured. A subject set that SHRANK means the
+    /// corpus lost the very shape this guard watches — which would make the
+    /// guard vacuous while staying green, the failure mode a bare pass cannot
+    /// show you (Core #15e Q2).
+    const MIN_SUBJECT_SITES: usize = 1;
+    /// The SCANNER's own non-vacuity floor, on a population three orders of
+    /// magnitude larger than the subject set: if the walk stops finding
+    /// multi-line comma-bearing regions at all, the roots moved or the
+    /// formatter stopped emitting, and every later count is meaningless.
+    const MIN_MULTILINE_SITES: usize = 600;
+
+    let mut subject_sites = 0usize;
+    let mut multiline_sites = 0usize;
+    let mut files_scanned = 0usize;
+    let mut failures: Vec<String> = Vec::new();
+
+    for root in WIDTH_RATCHET_ROOTS {
+        walk_gg_files(Path::new(root), &mut |path: &Path| {
+            let Ok(src) = fs::read_to_string(path) else { return };
+            // Skip inputs that do not PARSE, exactly as the width scan does:
+            // the deliberate reject fixtures panic the infallible entry point.
+            let Ok(formatted) = gorget::formatter::format_source_result(&src) else { return };
+            files_scanned += 1;
+            multiline_sites += author_row_scan(&src)
+                .iter()
+                .filter(|s| s.multi_line() && s.commas > 0)
+                .count();
+            let author = author_subject_signatures(&src);
+            subject_sites += author.len();
+            if author.is_empty() {
+                return;
+            }
+            let lost = lost_signatures(&author, &formatted_signatures(&formatted));
+            if lost.is_empty() {
+                return;
+            }
+            let rel = path.display().to_string().replace('\\', "/");
+            if LOST_ALLOWLIST.iter().any(|(p, _)| *p == rel) {
+                return;
+            }
+            failures.push(format!(
+                "  {rel}: {} author row signature(s) lost: {:?}",
+                lost.len(),
+                lost
+            ));
+        });
+    }
+
+    eprintln!(
+        "[fmt_author_row_grouping_survives_formatting] files={files_scanned} \
+         multi-line comma-bearing regions={multiline_sites} \
+         AUTHOR tabular+exploded subject sites={subject_sites}"
+    );
+
+    assert!(
+        multiline_sites >= MIN_MULTILINE_SITES,
+        "the row scan found only {multiline_sites} multi-line comma-bearing \
+         regions across {:?} — the roots moved or the formatter stopped \
+         producing output. Fix the scanner; do not lower the floor.",
+        WIDTH_RATCHET_ROOTS
+    );
+    assert!(
+        subject_sites >= MIN_SUBJECT_SITES,
+        "the AUTHOR tabular+exploded subject set SHRANK to {subject_sites} \
+         (floor {MIN_SUBJECT_SITES}). This guard is now watching fewer shapes \
+         than it was seeded with — a green run no longer means the property \
+         holds, it means there is nothing left to check. Restore the corpus \
+         shape, or state in this constant why the class genuinely left the \
+         tree."
+    );
+    assert!(
+        LOST_ALLOWLIST.is_empty(),
+        "the lost-row allowlist GREW to {} row(s). It is SHRINK-ONLY and \
+         seeded EMPTY: a row here asserts that a corpus file's author rows are \
+         knowingly destroyed by `gg fmt`, which needs a filed defect and a \
+         repro, not a constant.",
+        LOST_ALLOWLIST.len()
+    );
+    assert!(
+        failures.is_empty(),
+        "R43 AUTHOR ROW-GROUPING RATCHET: `gg fmt` destroyed an author's line \
+         grouping inside a container the author's own trailing comma \
+         explodes.\n\n{}\n\n\
+         Ratified 2026-08-18: the magic trailing comma says EXPLODE; the \
+         author's own newlines say WHERE TO BREAK. A signature is the vector \
+         of elements-per-occupied-line, so `[4, 4, 4, 4]` is a four-row table \
+         and `[1, 1, 1, 1]` is the one-per-line shape the magic comma already \
+         meant. Losing a tabular signature means the exploded emitter stopped \
+         honouring `author_line_break_between`, or a new list emitter reached \
+         the exploded shape without it.",
+        failures.join("\n")
     );
 }

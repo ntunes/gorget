@@ -836,16 +836,19 @@ impl Formatter {
     /// share an output line, so a hand-grouped table keeps its rows instead of
     /// being shredded to one element per line.
     ///
-    /// What it reads and why the FORWARD read is sound HERE: the span between
-    /// the previous element's end and this one's start is exactly the region
-    /// that holds the separator, and a newline the author wrote after that
-    /// separator lies INSIDE it. An author grouping `)` sits BEFORE the
-    /// separator, so it cannot hide such a newline — no
-    /// `advance_past_author_parens` is needed. The one thing the paren can do
-    /// is put a newline of its OWN in the span (`(a\n), b`), which reports a
-    /// break the reader sees as none; that direction falls back to the
-    /// canonical one-element-per-line shape, which is what this emitter did
-    /// before. Over-reporting is safe; under-reporting would not be.
+    /// What it reads: the span between the two elements, which is exactly the
+    /// region holding the separator — so a newline the author wrote after that
+    /// separator lies inside it.
+    ///
+    /// ⚠ THE ANCHOR IS `advance_past_author_parens(prev_end)`, NOT `prev_end`,
+    /// for the same reason `author_trailing_comma` needs it: an AST span ends
+    /// at the wrapped node, INSIDE the author's grouping parens, so those
+    /// parens fall in the scanned region and a newline the author put between
+    /// a node and its own `)` is read as a break BETWEEN elements. Measured:
+    /// `[(1\n), 2,\n 3, 4,]` — where the author put `(1)` and `2` on one row —
+    /// comes out with them on separate rows without the advance. Under-reading
+    /// this is not a harmless conservative fallback: it silently discards
+    /// exactly the grouping this probe exists to preserve.
     ///
     /// Like `author_trailing_comma` this is a SOURCE property, which is what
     /// lets it work on the sub-`Formatter`s `element_to_string` builds: the
@@ -856,7 +859,7 @@ impl Formatter {
     /// question, not a shape anyone has ratified.
     fn author_line_break_between(&self, prev_end: usize, cur_start: usize) -> bool {
         let bytes = self.source.as_bytes();
-        let lo = prev_end.min(bytes.len());
+        let lo = self.advance_past_author_parens(prev_end).min(bytes.len());
         let hi = cur_start.min(bytes.len());
         if lo >= hi {
             // Degenerate or reordered spans: fall back to the canonical break.
