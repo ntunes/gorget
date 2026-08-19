@@ -1000,6 +1000,41 @@ approximate on the expensive one — and approximation is the entire failure mod
 job to an agent with a single task and no competing context removes the pressure that
 produces the defect, rather than adding another rule the same pressure will bypass.
 
+### A hit count is never the criterion in an artifact that quotes itself
+
+Corrections in a long-lived brief get verified with a grep: *"this phrase must no longer
+appear"*, or *"this grep must return N"*. In an artifact that embeds its own review history
+verbatim — which is the discipline that stops findings being lost — that criterion is
+guaranteed to rot, and it rots in the direction that reads like success.
+
+Measured across one fold on one track: a plain grep for a struck phrase went from **5 hits to
+23**, and a wrap-tolerant one from **9 to 27**, while the two actual INSTRUCTION sites — one
+marked, one still live — **did not move at all.** Every new hit was a quotation, arriving
+because the fold had faithfully embedded a report that discussed the phrase. The number grew
+by a factor of four and carried exactly zero information about whether the defect was fixed.
+
+The same round produced four distinct ways a verification grep returns a false green, and it
+is worth having the list in one place, because each was found the hard way:
+
+- **Line-wrapping.** A phrase split across two source lines returns zero hits, which reads as
+  clean. One such grep was a correction's own success criterion, reporting PASS while failing.
+- **Quotation versus instruction.** Hits accumulate in embedded evidence while the live
+  instruction stands. Five quotation hits read as "handled"; zero at least looks anomalous.
+- **Inflection and case.** A key on `NARROWER` cannot see `narrowed` or `narrowing` — which
+  survived in the same bullet, including its bold headline, in a repo file.
+- **Code fences.** Lines inside a fenced block that begin `## ` inflate a `grep -c '^## '`
+  count — again, wrong in the direction that looks like success.
+
+**The rule.** The criterion is **instruction-site classification**, never a count and never an
+absence. Enumerate the sites where the text functions as an INSTRUCTION, classify each as
+live or marked, and assert on that classification. A count may be reported as colour; it may
+never be the gate.
+
+And the corollary, learned when a fold agent read the source of a probe a reviewer had handed
+it and found it neither case-tolerant nor portable: **verify-the-verifier applies to
+instruments you are given, not only to gates you run.** Read a probe before trusting its
+silence, and state the probe form you used alongside the result.
+
 The deeper reading: a brief accumulates two different kinds of content. **Judgements**
 compress well and survive rewriting. **Artifacts** — paths, identifiers, commands, counts,
 file names — do not compress at all, and every generation of editing sheds them. Keep them
