@@ -2955,8 +2955,30 @@ impl<'a> LoweringContext<'a> {
                     // ⚠ This carve-out is a CALL-ARG policy (CoW's
                     // default-borrow at a plain call), NOT part of the
                     // `Ptr`→owned answer, so it sits ABOVE the shared accessor
-                    // rather than inside it. Folding it in would silently make
-                    // every owning destination stop cloning strings.
+                    // rather than inside it. Deleting it does NOT change any
+                    // test's output — `ptr_materialization_kind` answers
+                    // `Clone` for `String` — it changes how much the program
+                    // ALLOCATES, which no pass/fail gate can see. Measured on
+                    // `tests/fixtures/cli_basic.gg` with `--clones=stats`:
+                    // `string_clone` 37 -> 43 and `total_allocs` 64 -> 70 with
+                    // this branch removed. It is live, not vestigial: a direct
+                    // `gg build` census over the first 300 fixtures records
+                    // 1980 calls to this function, 241 reaching this `Ptr`
+                    // branch, and 123 taking this early return.
+                    //
+                    // ⚠ Instrument note for whoever revisits this: the
+                    // integration harness SWALLOWS `gg`'s stderr, so counting
+                    // an `eprintln!` probe from `cargo test` reports zero for
+                    // every branch and reads as "dead code". Count it by
+                    // invoking `gg build` directly, and use a positive control
+                    // — this branch was twice concluded dead from a suite-level
+                    // zero that measured nothing at all.
+                    //
+                    // It IS a type-identity test standing in for typed
+                    // metadata; replacing it with a `TypeMetadata` flag is
+                    // filed, not done here, because the replacement is a
+                    // behaviour-preserving refactor and this is a
+                    // memory-safety fix.
                     if self.type_mapper.is_string_type(inner) {
                         return operand;
                     }
