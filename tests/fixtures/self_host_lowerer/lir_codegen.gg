@@ -1854,6 +1854,20 @@ Vector[String] hashable_key_fn_names(LirModule m, String type_c):
     return result
 
 # Walk LIR and collect every user-struct key used in a Dict/Set ctor.
+# The element type carried by a typed SET allocator name
+# (`__gorget_ordered_set_new_sized_T` / `__gorget_set_new_sized_T`), or "" if
+# this is not one. ONE parser, used by every reader of these names — the ctor
+# expansion AND the key-bridge collector. They must agree: a collector that
+# missed a name the expansion accepts would wire `hash_fn` to a bridge function
+# that was never emitted, which is a LINK error, and one that accepted a name
+# the expansion missed would emit dead bridges.
+String typed_set_ctor_elem(String name):
+    if name.starts_with("__gorget_ordered_set_new_sized_"):
+        return name.slice(31, name.len())
+    if name.starts_with("__gorget_set_new_sized_"):
+        return name.slice(23, name.len())
+    return ""
+
 Vector[String] collect_hashable_key_types(LirModule m):
     Vector[String] keys = []
     int fi = 0
@@ -1876,28 +1890,62 @@ Vector[String] collect_hashable_key_types(LirModule m):
                         orig_name = oname
                     else:
                         pass
+                String key_ty = ""
                 if is_runtime_dict_or_set_ctor(mapped_name) and orig_name.len() > 0:
-                    String key_ty = extract_user_hashable_key(orig_name, m)
-                    if key_ty.len() > 0:
-                        bool already = false
-                        int hki = 0
-                        while hki < keys.len():
-                            if keys.get(hki).unwrap() == key_ty:
-                                already = true
-                                break
-                            hki += 1
-                        if not already:
-                            keys.push(key_ty.clone())
+                    key_ty = extract_user_hashable_key(orig_name, m)
+                else:
+                    # The typed set allocator carries its element type in the
+                    # name itself and is never mapped to a runtime symbol, so
+                    # the ctor gate above cannot see it.
+                    String tsc_elem = typed_set_ctor_elem(mapped_name)
+                    if tsc_elem.len() > 0 and not is_primitive_hashable_key(tsc_elem):
+                        key_ty = tsc_elem
+                if key_ty.len() > 0:
+                    bool already = false
+                    int hki = 0
+                    while hki < keys.len():
+                        if keys.get(hki).unwrap() == key_ty:
+                            already = true
+                            break
+                        hki += 1
+                    if not already:
+                        keys.push(key_ty.clone())
                 ii += 1
             bi += 1
         fi += 1
     return keys
 
+# Does `eq_fn_name`'s SECOND parameter take its argument BY VALUE?
+#
+# `emit_func_forward_decls` spells a param as a pointer when it is `LT_VOID` or
+# `lir_is_ptr`, and as its concrete C type otherwise — so that same pair of
+# tests, and NOT the raw type id, is what decides whether the callee wants a
+# value. (`LT_VOID` alone is not enough: a pointer-typed param is spelled
+# `void*` too, and reading only `LT_VOID` derefs it wrongly — measured, it is a
+# hard C error on `Ps__eq`.) Reading the same predicate the declaration reads
+# keeps the bridge and the forward decl driven by ONE fact.
+#
+# An eq fn with fewer than two params cannot be called by the key table at all;
+# `false` leaves the pointer form, which the C compiler then rejects loudly
+# rather than miscompiling.
+bool eq_second_param_is_by_value(LirModule m, String eq_fn_name):
+    int fi = 0
+    while fi < m.functions.len():
+        if m.functions.get(fi).unwrap().name == eq_fn_name:
+            if m.functions.get(fi).unwrap().params.len() < 2:
+                return false
+            int p1 = m.functions.get(fi).unwrap().params.get(1).unwrap()
+            if p1 == LT_VOID:
+                return false
+            return not lir_is_ptr(p1)
+        fi += 1
+    return false
+
 # Emit the per-key static bridges. Only emits bridges for keys whose
 # T__hash / T__eq are actually resolvable in the module — keys without
 # a Hashable+Equatable impl get omitted (the runtime falls back to
 # byte-FNV / memcmp for those, which is the only sensible default).
-String emit_hashable_key_bridges(LirModule m):
+String emit_hashable_key_bridges(LirModule m, Vector[String] sn):
     Vector[String] keys = collect_hashable_key_types(m)
     String out = ""
     int ki = 0
@@ -1907,8 +1955,23 @@ String emit_hashable_key_bridges(LirModule m):
         if names.len() == 2:
             String hn = names.get(0).unwrap()
             String en = names.get(1).unwrap()
+            # `T__eq`'s SECOND parameter's ABI VARIES BY TYPE, so the bridge
+            # cannot use one spelling. A resource-bearing key
+            # (`Ps{String, int}`) declares `bool Ps__eq(void*, void*)` and takes
+            # the pointer straight; an all-primitive key (`Pt{int, int}`)
+            # declares `bool Pt__eq(void*, __gg_Pt)` and needs the value.
+            # The key table hands both sides over as `const void*`, so the
+            # bridge DEREFERENCES exactly when the callee wants a value.
+            #
+            # The discriminator is the DECLARED param type, read off the
+            # function itself — not a guess from resource-ness. Getting it
+            # wrong is a hard C error either way (`incompatible type for
+            # argument 2`), so both directions are compiler-checked.
             out = out + "static uint64_t __gorget_ktable_hash__" + ty + "(const void* __kp) { int64_t __h_state = 0; " + hn + "(__kp, &__h_state); return (uint64_t)__h_state; }\n"
-            out = out + "static bool __gorget_ktable_eq__" + ty + "(const void* __a, const void* __b) { return " + en + "(__a, __b); }\n"
+            String eq_arg = "__b"
+            if eq_second_param_is_by_value(m, en):
+                eq_arg = "*(const " + find_c_struct_name(ty, m, sn) + "*)__b"
+            out = out + "static bool __gorget_ktable_eq__" + ty + "(const void* __a, const void* __b) { return " + en + "(__a, " + eq_arg + "); }\n"
         ki += 1
     return out
 
@@ -1924,7 +1987,48 @@ String emit_dict_ctor_wiring(int dst, String mapped_name, String original_name, 
     if not is_runtime_dict_or_set_ctor(mapped_name):
         return ""
     String key_ty = extract_user_hashable_key(original_name, m)
-    if key_ty.len() == 0:
+    return emit_key_table_wiring(dst, key_ty, m)
+
+# Expand a typed set allocator to its runtime ctor plus the element wiring the
+# element type entitles it to. Both key channels are selected HERE, from the one
+# `elem_tyname` the producer wrote through, so they cannot disagree:
+#   * a String element selects `*_set_new_str`, which installs the string hash /
+#     eq / key_materialize hooks (byte-hashing a 32-byte `Str` struct hashes the
+#     data POINTER, so two equal strings miss each other);
+#   * a user-hashable element gets the `__gorget_ktable_hash__T` bridge, via the
+#     same shared helper the dict ctor path uses.
+# A primitive element needs neither and takes the runtime's byte-FNV fallback,
+# which is correct for it.
+String emit_typed_set_ctor(int dst, String elem_tyname, bool ordered, LirModule m, Vector[String] sn):
+    String elem_c = resolve_sizeof_c_type(elem_tyname, m, sn)
+    String out = ""
+    if elem_c == "Str" or elem_c == "GorgetString":
+        if ordered:
+            out = v(dst) + " = gorget_ordered_set_new_str();"
+        else:
+            out = v(dst) + " = gorget_set_new_str();"
+    else:
+        if ordered:
+            out = v(dst) + " = gorget_ordered_set_new(sizeof(" + elem_c + "));"
+        else:
+            out = v(dst) + " = gorget_set_new(sizeof(" + elem_c + "));"
+    return out + emit_key_table_wiring(dst, elem_tyname, m)
+
+# Wire a key table's hash / eq / key_drop / key_clone fn-pointers for a
+# USER-hashable key or element type. Shared by the two producers that can
+# reach it, because they arrive with the key type in hand by different
+# routes: the general ctor path recovers it from the monomorphized ORIGINAL
+# NAME (`Dict__K__V`), and the typed set allocator carries it in its magic
+# name (`__gorget_ordered_set_new_sized_T`). Splitting them would leave one
+# collection silently byte-hashing — which is exactly the defect the typed
+# set allocator exists to close.
+#
+# Returns "" for a primitive / unresolvable key: the runtime's byte-FNV +
+# memcmp fallback is correct for those, and is the only sensible default.
+String emit_key_table_wiring(int dst, String key_ty, LirModule m):
+    if dst < 0 or key_ty.len() == 0:
+        return ""
+    if is_primitive_hashable_key(key_ty):
         return ""
     Vector[String] names = hashable_key_fn_names(m, key_ty)
     if names.len() < 2:
@@ -5828,6 +5932,26 @@ String emit_call_extern_with(int dst, String raw_name, Vector[int] args,
                     sized_out = sized_out + " " + v(dst) + ".elem_materialize = (__gorget_drop_fn)gorget_string_materialize_inplace;"
             return sized_out
         return ";"
+    # Typed SET allocator — the set's counterpart to the array's
+    # `__gorget_array_new_sized_T` and the dict's `__gorget_dict_new_sized_`.
+    # The set literal used to emit the RAW runtime symbol with a hardcoded
+    # `OpConstI64(8)` element size, which withheld the element type from every
+    # downstream reader: the key table saw no user-hashable element (so a
+    # `@derive(Hashable, Equatable)` struct was byte-hashed and an equal-by-value
+    # key missed), the String element never reached `*_new_str` (so two equal
+    # strings hashed differently), and an aggregate element got an 8-byte slot.
+    # The array and dict already wrote their element type through here; the set
+    # was the one collection that did not.
+    #
+    # Ordered and unordered are separate magic names rather than a flag, because
+    # the runtime ctor pair differs and the ordering is already decided by typed
+    # `collection_kind` at the producer — re-deriving it here would be a second
+    # source of truth.
+    String tsc_ty = typed_set_ctor_elem(name)
+    if tsc_ty.len() > 0:
+        if dst >= 0:
+            return emit_typed_set_ctor(dst, tsc_ty, name.starts_with("__gorget_ordered_"), m, sn)
+        return ";"
     if name.starts_with("__gorget_dict_new_sized_"):
         if dst >= 0:
             String rest_kv_d = name.slice(24, name.len())
@@ -8168,7 +8292,7 @@ String generate_c(LirModule m):
     # call `T__hash` / `T__eq`) and BEFORE function bodies that
     # reference `__gorget_ktable_hash__T` / `__gorget_ktable_eq__T` via
     # ctor wiring.
-    out = out + emit_hashable_key_bridges(m)
+    out = out + emit_hashable_key_bridges(m, sn)
 
     # Box[Trait] vtable `__drop` wrapper FORWARD-DECLS — must precede the
     # deferred vtable globals below (their initializers take

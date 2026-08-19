@@ -5537,11 +5537,22 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # OrderedSet/Set CollectionKind discriminator).
                     int set_acc_tid = collection_accumulator_tid(&gmod, "set", set_elem, "", "")
                     int set_acc = add_local(&ctx, set_acc_tid, None)
-                    Vector[Operand] set_new_args = [OpConstI64(8)]
+                    # Write the element type THROUGH into the constructor, as the
+                    # array literal does with `__gorget_array_new_sized_<T>` and
+                    # the dict with `__gorget_dict_new_sized_<K>__GGSEP__<V>`.
+                    # The set was the one collection still emitting the RAW
+                    # runtime symbol with a hardcoded `OpConstI64(8)` size, which
+                    # withheld the element type from every downstream reader:
+                    # a `@derive(Hashable, Equatable)` element got no key-table
+                    # bridge and was byte-hashed, a String element never reached
+                    # `*_new_str`, and an aggregate element got an 8-byte slot.
+                    # `lir_codegen.gg::emit_typed_set_ctor` expands this and
+                    # selects both key channels from this one name.
+                    String set_ctor = "__gorget_set_new_sized_" + set_elem
                     if eali_set_ordered:
-                        emit(&ctx, GICallExtern(set_acc, "gorget_ordered_set_new", set_new_args))
-                    else:
-                        emit(&ctx, GICallExtern(set_acc, "gorget_set_new", set_new_args))
+                        set_ctor = "__gorget_ordered_set_new_sized_" + set_elem
+                    Vector[Operand] set_new_args = []
+                    emit(&ctx, GICallExtern(set_acc, set_ctor, set_new_args))
                     register_local_for_drop(&ctx, set_acc, set_acc_tid, &gmod)
                     # Lower + add each element. Elements are independently typed
                     # (clear the Set destination expected_type around each).
