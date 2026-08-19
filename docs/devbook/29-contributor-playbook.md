@@ -689,6 +689,40 @@ tree or a stale driver, not a failed fix.
 
 ---
 
+## A scout report mixes measurements and predictions; a brief must keep them apart
+
+The scout-before-you-brief rule exists because briefs built on stale premises are this
+tree's most expensive mistake. There is a subtler version of the same failure, and it
+survives every premise check: **the brief inherits the scout's predictions with the
+confidence of its measurements.**
+
+A scout report is not uniform. Some of its sentences are measurements — *"I built both
+binaries and diffed the emitted C; here is the one-token difference"*. Others are
+predictions the scout made from those measurements and did not test — *"the burn-down should
+reach zero"*, *"this lane has no ABI layer, so it is exempt"*, *"these cells are the same
+root, so the fix closes them"*. Both kinds arrive in the same voice, in the same document,
+under the same headings. Copying the report faithfully copies that flattening into the
+brief, where the executor reads every sentence as established.
+
+The measured case: a scout produced an excellent root diagnosis, independently confirmed by
+the next reviewer, and alongside it three predictions. The reviewer refuted all three. The
+lane it declared exempt turned out to have its own copy of the defective mechanism — and a
+worse one, failing on a cell the primary lane got right, which raised the finding from two
+bugs to at least three. The burn-down it expected to reach zero could not, because most of
+its sites were exactly the erased provenances the fix cannot tag. And two cells it labelled
+as belonging to the closed root were still segfaulting under its own prototype.
+
+None of this is a criticism of the scout. Predicting is part of scouting, and a scout that
+refuses to generalise is not much use. The defect is in the transmission: the brief author
+reads a strong document, absorbs its authority, and does not re-derive which sentences carry
+evidence.
+
+**The rule.** When writing a brief from a scout report, mark every load-bearing claim as
+MEASURED or PREDICTED, and give the predicted ones a verification command instead of an
+instruction. A prediction in a brief is an assignment, not a fact. This composes with the
+verification-command register: a claim with a command is checkable, and the act of trying to
+write the command for a prediction is usually what reveals that nobody ran it.
+
 ## When the guard is hard to write, the state should have been unconstructable
 
 A guard that keeps escaping its own class is telling you something. Not that the guard
