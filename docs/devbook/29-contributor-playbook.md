@@ -796,6 +796,56 @@ write through — is the same principle stated from the other end: a downstream 
 gets to disagree with an upstream writer is a bug waiting for a guard, and the fix is to
 remove the opportunity to disagree, not to police it.
 
+## A control that shares the broken harness is not a control
+
+The strongest-sounding sentence in a defect report is *"and I reproduced it against the
+unmodified base, so it is pre-existing."* It is worth exactly as much as the harness both
+runs shared — which can be nothing.
+
+A round filed a self-host lane divergence: a `@derive(Hashable, Equatable)` dictionary key
+failed to LINK on the self-host lane (`undefined reference to FxHasher__write_int`) while
+the Rust compiler ran the same program correctly. The reporter did the responsible thing
+and re-ran it against the unmodified driver. Same failure. Filed as pre-existing, with a
+committed repro and an `#[ignore]`d test.
+
+The bug did not exist. The ad-hoc harness passed `tests/fixtures/self_host_lowerer` as the
+library directory, where the stdlib `lib/` belongs. `FxHasher` and `hash_of` are stdlib
+symbols, so of course they were unresolved — by the harness, in both runs, identically.
+The comparison was *sound*; every premise underneath it was false. A/B testing two
+configurations that differ only in the thing you changed cannot detect a defect in the
+part they hold in common, and "it fails on the base too" is precisely the observation a
+broken-in-common harness produces.
+
+**What caught it** was not scrutiny of the reasoning. It was wiring the known-gap test off
+the ad-hoc harness and onto the real lane — where it PASSED. That is the mechanical rule
+worth keeping:
+
+> **A known-gap test that passes is either a fixed bug or a fictional one.** Both demand
+> action, and you cannot tell which from the green alone.
+
+This is Core #13 (verify the verifier) pointed at the *control* rather than the gate. The
+existing rules cover the gate that never goes red; this is the sibling failure — a control
+that goes red for a reason unrelated to the subject. The procedures:
+
+- **A control must be run through the SHIPPING harness, not your triage scaffolding.**
+  If the real lane has a driver, a test wrapper, or a fixture runner, the control runs
+  there. A `/tmp` script proves things about the `/tmp` script.
+- **Before filing "pre-existing", make the harness succeed at something.** A positive
+  control on the *harness* — one program that must link and run — separates "the compiler
+  is broken" from "my invocation is". The leak-detection positive-control rule generalises:
+  an instrument that has never been seen to *succeed* is as uninformative as a gate that
+  has never been seen to fail.
+- **Prefer wiring the repro into the committed suite over reproducing it by hand**, even
+  during triage. The suite already knows the library paths, the lane flags, and the
+  driver's calling convention — every one of which is a place a hand-rolled probe silently
+  diverges. This is a second, independent reason for the rule that every filed defect ships
+  a durable fixture rather than a `/tmp` scratch file.
+
+**The litmus test.** When a report says "reproduced on the base", ask what the two runs
+shared. If they shared a harness the shipping tests do not use, you have measured the
+harness. The finding is not wrong yet — but it is unverified, and the cheapest way to
+verify it is to make the failure appear somewhere the project already trusts.
+
 ## The playbook in one paragraph
 
 When a fix feels complex, you are at the wrong layer: trace the buggy read to
