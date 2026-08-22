@@ -29,9 +29,15 @@
 #
 # WHAT COUNTS (no other reading is available):
 #   FILED   = a NEW TODO work item (a `- **` bullet in a categorized
-#             section) or a NEW tests/fixtures/known_gaps/*.gg fixture.
-#   CLOSED  = a TODO work item REMOVED, or a known_gaps fixture graduated
-#             out / deleted.
+#             section) or a NEW known_gaps/*.gg fixture that is an OPEN GAP
+#             -- i.e. it has an #[ignore]d test asserting the intended
+#             behaviour, or no wired test at all.
+#   CLOSED  = a TODO work item REMOVED, or a known_gaps fixture GRADUATED
+#             (its #[ignore] removed) / deleted.
+#   NOT A GAP AT ALL = a known_gaps fixture referenced ONLY by LIVE tests.
+#             That is the regression net of a bug already FIXED, parked in
+#             that directory because `runtime_parity_corpus` never descends
+#             subdirectories. It is not filed work and never was.
 #   NEITHER = rewriting, narrowing, or re-scoping an existing entry;
 #             splitting one fused bullet into several (a counting
 #             correction, not new work); amending an entry in place;
@@ -71,6 +77,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Scratch for the known_gaps classification below; removed on every exit path.
+TMP_ALL=$(mktemp); TMP_STATUS=$(mktemp); TMP_IGN=$(mktemp)
+TMP_LIVE=$(mktemp); TMP_NETS=$(mktemp)
+trap 'rm -f "$TMP_ALL" "$TMP_STATUS" "$TMP_IGN" "$TMP_LIVE" "$TMP_NETS"' EXIT
+
 # Prose sections: `## ` headings that hold narrative, not filed work. Bullets
 # here are commentary and queue pointers. `### UNOWNED, HIGH SEVERITY` nests
 # under the handover but DOES hold real items, so it is re-admitted.
@@ -109,7 +120,42 @@ if [ -n "$stray_filings" ]; then
   exit 1
 fi
 
-known_gaps=$(find tests/fixtures/known_gaps -name '*.gg' | wc -l | tr -d ' ')
+# A committed repro in known_gaps/ is an OPEN GAP only if it still has an
+# #[ignore]d test asserting the INTENDED behaviour, or no wired test at all.
+# A fixture referenced ONLY by LIVE tests is the opposite of a gap: it is the
+# regression net of a bug that has been FIXED, parked in that directory because
+# `runtime_parity_corpus` never descends subdirectories. Counting those as gaps
+# made the metric PUNISH the wide, axis-complete nets Core #11/#12 demand, and
+# taxed the compliant placement -- measured at R43, where 12 of 22 new fixtures
+# were live nets for that round's own fixes and scored as 12 new gaps.
+#
+# ⚠ ONLY-live is the load-bearing word. Three R43 fixtures carry an #[ignore]d
+# test AND a live reference (membership in a control array such as
+# SILENT_EXPECTED). Those are still OPEN -- the ignored test is the one making
+# a claim about intended behaviour. "Any live reference ⇒ not a gap" scored
+# 15/7 against the hand-checked truth of 12/10.
+#
+# Graduating a fixture (removing its #[ignore]) therefore counts as a CLOSURE
+# here, which is exactly what the WHAT-COUNTS block above means by graduation.
+known_gaps=$(
+  find tests/fixtures/known_gaps -name '*.gg' -exec basename {} .gg \; | sort -u > "$TMP_ALL"
+  awk '
+    /#\[ignore/                       { ign = 1; next }
+    /^[[:space:]]*fn [A-Za-z0-9_]+\(/ { cur_ign = ign; ign = 0 }
+    {
+      line = $0
+      while (match(line, /known_gaps\/[A-Za-z0-9_]+\.gg/)) {
+        ref = substr(line, RSTART + 11, RLENGTH - 11 - 3)
+        printf "%s %s\n", ref, (cur_ign ? "IGNORED" : "LIVE")
+        line = substr(line, RSTART + RLENGTH)
+      }
+    }
+  ' tests/integration.rs | sort -u > "$TMP_STATUS"
+  awk '$2=="IGNORED"{print $1}' "$TMP_STATUS" | sort -u > "$TMP_IGN"
+  awk '$2=="LIVE"   {print $1}' "$TMP_STATUS" | sort -u > "$TMP_LIVE"
+  comm -23 "$TMP_LIVE" "$TMP_IGN" > "$TMP_NETS"      # live-ONLY = closed-bug nets
+  comm -23 "$TMP_ALL"  "$TMP_NETS" | wc -l | tr -d ' '
+)
 
 todo_items=$(awk -v prose_re="$PROSE_RE" '
   /^## /  { in_prose = ($0 ~ prose_re); sub_admit = 0; next }
