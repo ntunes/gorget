@@ -235,6 +235,57 @@ writing it still rejects the aggregate-init mover shapes that D10(b)
 ADDENDUM 3 ratified as accepted — which is a Core #9 lane gap to file, not an
 oracle verdict to obey.
 
+### The oracle is fallible too (owner 2026-08-22)
+
+`ggdef` is the definitional oracle, and the temptation it creates is to treat
+its answer as the definition. It is not. It is an *implementation* of the
+definition, and it fails in three distinct ways that must not be collapsed
+into one another:
+
+| mode | what it means | what it is NOT |
+|---|---|---|
+| **BLIND** | adjudicates VALUE semantics; cannot observe memory invalidation at all | not a soundness verdict — it cleanly accepts live heap-UAFs |
+| **LAGGING** | has not yet implemented a ratified decision | a lane gap (Core #9), not a verdict about the language |
+| **WRONG** | its own answer is simply incorrect | not a reason to doubt a well-grounded diagnosis |
+
+The first two were already written down. The third is the owner's addition,
+and it closes the loophole the other two leave open: a reader who has ruled
+out blindness and lag can still be wrong to defer, because the oracle can
+just be *mistaken*.
+
+**Why this matters more than it looks.** The whole point of an oracle is that
+it settles arguments, so an oracle believed infallible converts every one of
+its errors into a ratified error — and the more the project leans on it, the
+more expensive that becomes. This is Core #8 pointed at the reference itself:
+*reference-grade is the bar, not parity with a possibly-wrong reference.*
+Three-way agreement between ggdef, C, and LLVM on a wrong answer is not a
+pass; it is three bugs, and the usual remedy is to make the language REJECT
+the program.
+
+**The same applies to Rust `gg`**, for a different reason: it is being
+succeeded by the self-host (§9). "The self-host differs from Rust `gg`" is
+therefore not automatically a self-host bug — where the self-host is right
+and Rust is wrong, that is a succession milestone, the Rust side gets fixed
+as oracle hygiene, and the self-host is never dumbed down to match.
+
+**The procedure**, because a principle without one decays into a slogan:
+
+1. Run the shape through the oracle during triage — this is unchanged, and
+   disagreement is still a finding rather than a curiosity.
+2. Report the oracle's answer **labelled as the oracle's answer**, never as
+   the verdict. Intended semantics come from the docs and first principles.
+3. Where lanes AGREE, ask separately whether the agreed answer is *correct*.
+   Agreement is evidence about consistency, never about truth.
+4. **If you are UNSURE which side of a disagreement is right, that is an
+   OWNER ASK** — an explicit open question carrying the evidence for both
+   readings. Not a guess, and not resolved by deferring to whichever lane
+   feels authoritative.
+
+Step 4 is a third owner-ask category alongside the two in the round lifecycle
+(a genuine design decision; permission to close a non-convergent round). It
+exists because the failure it prevents is silent: a wrong guess about which
+oracle is right does not announce itself, it just becomes the new baseline.
+
 ## 5. Invariant comments and false records
 
 Core #14 ("an invariant-asserting comment needs an enforcing guard, or it gets

@@ -2845,3 +2845,43 @@ rejects. Implementation rides the W2 reject-rider with h1-h3; the accept-surface
 change lands cross-lane per Core #9 with NEG conformance fixtures per Core #11
 (the known_gaps repro owed by the visibility entry's deferred-until-ruled logic is
 discharged by those fixtures landing WITH the reject).
+
+## GGDEF'S AUTHORITY — THE ORACLE IS FALLIBLE (owner 2026-08-22)
+
+**`ggdef` is an IMPLEMENTATION of the definition; it is not the definition.**
+The owner's ruling, verbatim in substance: *the reference (ggdef) could be wrong
+too sometimes — raise with me if you are unsure about that.*
+
+This bears directly on the define-gorget project's own premise, which is why it
+is recorded here and not only in the process files. The executable definition
+exists so that arguments about intended semantics can be SETTLED rather than
+relitigated; the failure mode that creates is that every error in the oracle is
+silently promoted to a ratified error, and the more the project leans on ggdef,
+the more expensive each one becomes. Core #8 turned on the reference itself:
+**reference-grade is the bar, not parity with a possibly-wrong reference.**
+
+**Three distinct failure modes, not to be collapsed** (extended treatment,
+devbook/30 §4):
+- **BLIND** — adjudicates VALUE semantics, structurally cannot observe memory
+  invalidation. A clean ggdef run over a live heap-UAF is not a soundness
+  verdict. ASan on the real backends adjudicates memory validity.
+- **LAGGING** — has not yet implemented a ratified decision. A Core #9 lane
+  gap, not a verdict about the language.
+- **WRONG** — the answer is simply incorrect. This is the mode that was missing,
+  and it is the one that closes the loophole: having ruled out blindness and
+  lag, a reader could still be wrong to defer.
+
+**Consequences for adjudication.** Agreement is evidence about CONSISTENCY,
+never about TRUTH: ggdef + C + LLVM agreeing on a wrong answer is ≥3 bugs, and
+the usual remedy is to make the language REJECT the program (typecheck error +
+negative fixture). The adjudicated-parity split stays the truth axis for
+succession (self-host over Rust `gg`), but "ADJ-MATCH" now means *three
+implementations agree*, which is a strong prior and not a proof.
+
+**⛔ PROCEDURE — a THIRD owner-ask category**, alongside a genuine design
+decision and permission to close a non-convergent round: **if you are UNSURE
+which side of an oracle disagreement is right, ASK.** Carry the evidence for
+both readings; do not guess, and do not resolve it by deferring to whichever
+lane feels authoritative. The failure this prevents is silent — a wrong guess
+about which oracle is right does not announce itself, it just becomes the new
+baseline.
