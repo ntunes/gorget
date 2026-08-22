@@ -12,6 +12,36 @@ dangling pointer bugs — at compile time, not runtime.
 2. When the owner goes out of scope, the value is **dropped** (freed).
 3. Ownership can be **transferred** (moved) using `!`.
 4. After a move, the source variable is **invalid** — using it is a compile error.
+5. An owner drops **everything it owns, recursively**. A collection owns its
+   elements, a struct owns its fields, an enum owns its payload — so dropping
+   one drops all of them, all the way down.
+
+Rule 5 is what makes rule 2 complete. Nothing in Gorget is owned by "no one":
+an element sitting in a `Vector` is owned by that vector, so when the vector
+dies the element's destructor runs too — you never write the cleanup, and you
+can never forget it.
+
+```gorget
+struct Holder:
+    int id
+    String name
+
+equip Holder with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+
+void main():
+    Vector[Holder] v = Vector[Holder]()
+    v.push(Holder(1, "aa"))
+    v.push(Holder(2, "bb"))
+    # v goes out of scope here: it drops element 1, then element 2 —
+    # each running Holder's drop body AND freeing its String field.
+```
+
+Elements of one container drop in **forward** order (index order for `Vector`
+and `Deque`, insertion order for `Dict` and `Set`); separate locals in a scope
+drop in **reverse declaration** order, so a value can still see the values it
+was built from while it cleans up.
 
 ---
 
