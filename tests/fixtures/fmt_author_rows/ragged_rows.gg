@@ -1,0 +1,26 @@
+# AUTHOR LINE GROUPING — the RAGGED-ROWS cell of the grouping-shape axis.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and it is written in the form the formatter must KEEP.
+#
+# AXIS = grouping shape ∈ {uniform rows · RAGGED rows · single row · nested}.
+# This is the RAGGED cell: rows of 3, 1 and 2 elements. Its uniform sibling is
+# `resources_prescan_table_survives.gg`, its single-row sibling
+# `single_row_multiline.gg`, its nested sibling `multiline_elem_shares_row.gg`.
+#
+# Ragged matters on its own because a uniform table is also what a
+# column-counting implementation would produce by accident: preserving 3/1/2 can
+# only come from reading the AUTHOR's newlines.
+#
+# RED against the pre-change binary, measured: not a fixed point — the six
+# elements come back on six lines.
+from std.collections import Vector
+
+void main():
+    int y = 6
+    Vector[int] xs = [
+        1, 2, 3,
+        4,
+        5, y,
+    ]
+    print(xs.len())

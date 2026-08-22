@@ -1,0 +1,28 @@
+# AUTHOR LINE GROUPING — the ONE-LINE-CONTAINER cell, and it is a NEGATIVE.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture is a deliberately
+# UNFORMATTED INPUT — the assertion is on what `gg fmt` turns it INTO
+# (`fmt_author_rows_single_line_container_is_not_a_row`, exact text). A sweep
+# would rewrite it into its own expected output and the cell would go
+# green-vacuous.
+#
+# AXIS = grouping shape × container spans one line. The author wrote the whole
+# container INCLUDING its delimiters on one line, with a magic trailing comma.
+# The comma still says EXPLODE; there is no author newline anywhere, so there is
+# nothing to say WHERE — and the ENGAGEMENT GUARD hands the list to the ratified
+# one-element-per-line shape rather than inventing a single half-exploded row.
+#
+# The distinction from `single_row_multiline.gg` is the OPEN DELIMITER's line:
+# there the author broke after `[`, here not at all. Both must reach the same
+# output, and for the same reason — no break BETWEEN elements.
+#
+# NO PRE-FIX RED IS POSSIBLE (this is preserved behaviour, not added
+# behaviour). RED-verified by BREAKING the mechanism: with the engagement guard
+# removed, the list comes out as `[\n        1, 2, y,\n    ]` and the
+# exact-text assertion reds. Restored after measuring.
+from std.collections import Vector
+
+void main():
+    int y = 3
+    Vector[int] xs = [1, 2, y,]
+    print(xs.len())

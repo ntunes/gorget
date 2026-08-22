@@ -1,0 +1,44 @@
+# AUTHOR LINE GROUPING — the NO-COMMA cell of the comma axis, a NEGATIVE.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture is a deliberately
+# UNFORMATTED INPUT — the assertion is on what `gg fmt` turns it INTO
+# (`fmt_author_rows_no_comma_still_packs`, exact text). A sweep would rewrite it
+# into its own expected output and the cell would go green-vacuous.
+#
+# AXIS = comma present/absent. Both containers below are hand-grouped into rows
+# and NEITHER carries a magic trailing comma, so neither is exploded at all —
+# the formatter PACKS them, which discards the rows. That is correct and
+# ratified: author line grouping is not an independent explode signal, it only
+# says WHERE to break inside a container something else already exploded.
+#
+# ⚠ THIS IS THE CELL THAT KEEPS THE FEATURE HONEST. If preservation ever became
+# its own trigger, every packed multi-line list in the corpus would freeze into
+# whatever shape it was last saved in, and `gg fmt` would stop being a
+# normaliser. Two kinds are sampled — array literal and constructor call args —
+# because the trigger lives at the shared chokepoint and a per-kind regression
+# would show in only one.
+#
+# NO PRE-FIX RED IS POSSIBLE (this is preserved behaviour). RED-verified by
+# BREAKING the mechanism: making the author-break probe an independent explode
+# trigger — routing to `format_bracketed_broken_with_comments` on
+# `magic || gated || engaged` — leaves both containers exploded into their
+# author rows and the exact-text assertion reds. Restored after measuring.
+from std.collections import Vector
+
+struct Point:
+    int x
+    int y
+    int z
+
+void main():
+    int y = 6
+    Vector[int] xs = [
+        1, 2,
+        3, 4,
+        5, y
+    ]
+    Point p = Point(
+        1, 2,
+        y
+    )
+    print(xs.len() + p.x + p.z)

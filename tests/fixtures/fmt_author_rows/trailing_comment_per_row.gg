@@ -1,0 +1,33 @@
+# AUTHOR LINE GROUPING — a TRAILING comment on each row.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and it is written in the form the formatter must KEEP.
+#
+# AXIS = interior comment present, in its TRAILING costume (same source line as
+# the last element of a row), crossed with rows of 2.
+#
+# ⚠ THE ORDERING CLAIM THIS PINS, and it is the one the row logic can silently
+# get wrong: `emit_trailing_comment_after(elem_end)` attaches a comment sitting
+# on `elem_end`'s SOURCE line. Mid-row that line's comment belongs to the LAST
+# element on the row, not to the one being emitted — so the hook must fire only
+# where the row ENDS. Fire it per element instead and `# first row` is emitted
+# after `1`, splitting the row it annotates.
+#
+# The column the comments sit at is `align_trailing_comments`' doing, not this
+# feature's: trailing comments in a run are aligned to a common column AFTER the
+# walk. Element-to-line assignment is what the ruling preserves; intra-line
+# padding it does not touch, in either direction.
+#
+# RED against the pre-change binary, measured: not a fixed point — six elements
+# on six lines, each comment re-attached to whichever element happened to land
+# beneath it.
+from std.collections import Vector
+
+void main():
+    int y = 6
+    Vector[int] xs = [
+        1, 2,       # first row
+        3, 4,       # second row
+        5, y,
+    ]
+    print(xs.len())

@@ -829,6 +829,72 @@ impl Formatter {
         false
     }
 
+    /// True iff the AUTHOR wrote a line break between two ADJACENT elements of
+    /// a delimited list (ratified 2026-08-18): *the magic trailing comma says
+    /// EXPLODE; the author's own newlines say WHERE TO BREAK.* Inside an
+    /// already-exploded container the author's grouping decides which elements
+    /// share an output line, so a hand-grouped table keeps its rows instead of
+    /// being shredded to one element per line.
+    ///
+    /// What it reads: the span between the two elements, which is exactly the
+    /// region holding the separator — so a newline the author wrote after that
+    /// separator lies inside it.
+    ///
+    /// ⚠ THE ANCHOR IS `advance_past_author_parens(prev_end)`, NOT `prev_end`,
+    /// for the same reason `author_trailing_comma` needs it: an AST span ends
+    /// at the wrapped node, INSIDE the author's grouping parens, so those
+    /// parens fall in the scanned region and a newline the author put between
+    /// a node and its own `)` is read as a break BETWEEN elements. Measured:
+    /// `[(1\n), 2,\n 3, 4,]` — where the author put `(1)` and `2` on one row —
+    /// comes out with them on separate rows without the advance. Under-reading
+    /// this is not a harmless conservative fallback: it silently discards
+    /// exactly the grouping this probe exists to preserve.
+    ///
+    /// ⚠ A COMMENT ANYWHERE IN THE UNANCHORED REGION IS A BREAK, and that is
+    /// the one thing the anchor must NOT hide. The anchor exists to skip the
+    /// author's grouping parens; a `#` written INSIDE them
+    /// (`[(1 # note\n), 2,]`) sits before the `)` and therefore before the
+    /// anchor, so an anchored-only scan reads that row as continuing. It must
+    /// not: the emitter's leading- and trailing-comment hooks fire only where a
+    /// row STARTS, so a row continued past a comment has no hook to emit it at
+    /// and the comment is re-parented to the next row. Answering `true` here
+    /// keeps the comment on the element it annotates — the shape HEAD already
+    /// produced — and it is what makes the emitter's row-continuation invariant
+    /// TRUE rather than merely asserted.
+    ///
+    /// The two reads therefore have deliberately different windows: `#` over
+    /// `[prev_end, cur_start)`, `\n` over `[anchored, cur_start)`. A `#` runs to
+    /// end of line, so it always brings a newline with it — the disagreement is
+    /// only ever about WHICH SIDE of the `)` that newline falls on.
+    ///
+    /// Like `author_trailing_comma` this is a SOURCE property, which is what
+    /// lets it work on the sub-`Formatter`s `element_to_string` builds: the
+    /// source travels into them, the comment table deliberately does not.
+    /// Reading an author LAYOUT fact from source is not a layering violation
+    /// — the parser keeps no record of it — but that is the conclusion, not
+    /// the argument; whether the parser should instead record the author's rows
+    /// as typed metadata is an open question filed in `TODO.md`, not a shape
+    /// anyone has ratified.
+    fn author_line_break_between(&self, prev_end: usize, cur_start: usize) -> bool {
+        let bytes = self.source.as_bytes();
+        let raw_lo = prev_end.min(bytes.len());
+        let hi = cur_start.min(bytes.len());
+        if raw_lo >= hi {
+            // Degenerate or reordered spans: fall back to the canonical break.
+            return true;
+        }
+        // The UNANCHORED window, so a comment inside an author grouping paren
+        // cannot be skipped past. See the doc comment above.
+        if bytes[raw_lo..hi].contains(&b'#') {
+            return true;
+        }
+        let lo = self.advance_past_author_parens(prev_end).min(bytes.len());
+        if lo >= hi {
+            return true;
+        }
+        bytes[lo..hi].contains(&b'\n')
+    }
+
     // ── Tail reserve: scoped install + the measurement primitives ──
 
     /// Run `f` with `extra` MORE characters reserved on the line's tail, then
@@ -1628,9 +1694,77 @@ impl Formatter {
         self.emitter.write(open);
         self.emitter.newline();
         self.emitter.indent();
+        // AUTHOR LINE GROUPING (ratified 2026-08-18): the magic trailing comma
+        // says EXPLODE; the author's own newlines say WHERE TO BREAK. Inside
+        // this exploded container the author's grouping survives — a
+        // hand-grouped 4-row table stays four rows instead of becoming 25
+        // lines.
+        //
+        // `starts_line[i]` = element i begins a new OUTPUT line. Element 0
+        // always does: the open delimiter has already broken canonically.
+        //
+        // ENGAGEMENT GUARD, and it is load-bearing: preservation engages only
+        // when the author expressed AT LEAST ONE break BETWEEN elements. A
+        // container written entirely on one line carries no grouping to
+        // preserve, so it keeps the ratified one-element-per-line magic-comma
+        // shape. Without the guard `[1, y + (2),]` comes out as a one-row
+        // half-exploded list nobody asked for, and three pinned fixtures
+        // change.
+        //
+        // ASSIGNMENT ONLY, never columns: which elements share a line is
+        // DISCRETE and survives the canon rewrites riding the same sweep
+        // (`!`→`^`, `( 2 )`→`(2)`), which is exactly what an intra-line column
+        // would not. The delimiters and the block indent stay canonical too —
+        // this preserves the author's rows, not the author's alignment.
+        let author_breaks: Vec<bool> = (0..elems.len())
+            .map(|i| {
+                i > 0 && {
+                    let (_, prev_end) = span_of(&elems[i - 1]);
+                    let (cur_start, _) = span_of(&elems[i]);
+                    self.author_line_break_between(prev_end, cur_start)
+                }
+            })
+            .collect();
+        let engaged = author_breaks.iter().any(|b| *b);
+        let starts_line: Vec<bool> = author_breaks
+            .iter()
+            .enumerate()
+            .map(|(i, b)| i == 0 || !engaged || *b)
+            .collect();
         let mut prev_end: Option<usize> = None;
-        for elem in elems {
+        for (i, elem) in elems.iter().enumerate() {
             let (elem_start, elem_end) = span_of(elem);
+            // A row CONTINUES only where the author expressed no break, and
+            // the two comment hooks below are skipped exactly there — so a
+            // continued row must never hold a comment, or the comment would be
+            // re-parented to the NEXT row instead of staying on the element it
+            // annotates.
+            //
+            // That is a property `author_line_break_between` GUARANTEES rather
+            // than one this loop hopes for: the probe answers `true` for any
+            // `#` in the unanchored region between two elements, which is
+            // precisely why its `#` window is wider than its `\n` window. The
+            // `debug_assert` is the enforcer of that coupling (Core #14) — it
+            // reads the same unanchored region the probe does, so the two
+            // cannot drift apart silently. It is not a claim about a hazard
+            // that merely has not happened: an earlier version of this assert
+            // scanned a NARROWER region than the probe and aborted `gg fmt` on
+            // a legal program, which is what a guard and its subject
+            // disagreeing looks like.
+            let at_line_start = starts_line[i];
+            let next_starts_line = starts_line.get(i + 1).copied().unwrap_or(true);
+            debug_assert!(
+                at_line_start
+                    || prev_end.map_or(true, |p: usize| {
+                        let b = self.source.as_bytes();
+                        let (lo, hi) = (p.min(b.len()), elem_start.min(b.len()));
+                        lo >= hi || !b[lo..hi].contains(&b'#')
+                    }),
+                "a continued row holds a `#` between elements — \
+                 `author_line_break_between` must have answered `true` here, \
+                 and the two comment hooks fire only at a row start, so this \
+                 comment would be re-parented to the next row"
+            );
             // PRESERVE-AND-CAP inside an EXPLODED container (ratified
             // 2026-08-16, canon call 2-bis): the author's paragraphing between
             // elements survives, and the whole-buffer collapse caps a run at
@@ -1648,13 +1782,20 @@ impl Formatter {
             // RUN, while the blanks BELOW and BETWEEN that run's comments are
             // owned by `emit_comments_before` (`blank_line_follows`). A raw
             // scan sees all of them and emits two.
+            //
+            // Both hooks and the blank are gated on `at_line_start`: a
+            // continued row has no line of its own for a blank or a standalone
+            // comment to occupy, and the backward walk would read the line
+            // ABOVE the shared one and emit a blank the author never wrote.
             if let Some(prev) = prev_end {
-                if self.has_blank_line_between(prev, elem_start) {
+                if at_line_start && self.has_blank_line_between(prev, elem_start) {
                     self.emitter.blank_line();
                 }
             }
             prev_end = Some(elem_end);
-            self.emit_comments_before(elem_start);
+            if at_line_start {
+                self.emit_comments_before(elem_start);
+            }
             // Reserve EXACTLY 1 — the `,` written below, unconditionally,
             // after every element including the last. Exactly, not additively:
             // a live caller reserve belongs to the CLOSE line, not to these
@@ -1667,10 +1808,22 @@ impl Formatter {
             // suffix is short in every real shape; a hypothetical overrun
             // there is out of scope and not enforced. The trailing comment an
             // element line may carry is likewise not fit-tested.
-            self.with_exact_tail_reserve(1, |f| format_elem(f, elem));
+            //
+            // On a CONTINUED row the tail is `", "` — two characters, not one
+            // — because the next element follows on this same line.
+            let reserve = if next_starts_line { 1 } else { 2 };
+            self.with_exact_tail_reserve(reserve, |f| format_elem(f, elem));
             self.emitter.write(",");
-            self.emitter.newline();
-            self.emit_trailing_comment_after(elem_end, false);
+            if next_starts_line {
+                self.emitter.newline();
+                // Only at a row END: `emit_trailing_comment_after` attaches a
+                // comment sitting on elem_end's SOURCE line, and mid-row that
+                // line's comment belongs to the LAST element on the row, not
+                // to this one.
+                self.emit_trailing_comment_after(elem_end, false);
+            } else {
+                self.emitter.write(" ");
+            }
         }
         // Orphan-comment flush before close (pass 1 R2): a comment on its
         // own line between the last element and the closing bracket has no

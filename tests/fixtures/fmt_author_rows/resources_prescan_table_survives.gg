@@ -1,0 +1,38 @@
+# AUTHOR LINE GROUPING — the LIVE-CORPUS shape, and the UNIFORM-ROWS cell.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and it is written in the form the formatter must KEEP.
+#
+# This is the shape the ruling was made for, copied from the one place in the
+# tree that already carries it: `RUST_PRESCAN_MUTATOR_FALLBACK` in
+# `compiler/data/resources.gg`, a hand-grouped 4-row / 25-element name table
+# with an author trailing comma. `gg fmt` used to return it as 25 lines, and
+# that is the whole argument for the feature — nobody wrote a fixture to find
+# this, the corpus was already carrying it.
+#
+# UNIFORM-ROWS cell of the grouping-shape axis (its ragged sibling is
+# `ragged_rows.gg`), and the STRING element-type cell: every element here is a
+# `String` literal, so the row logic is exercised on a token the formatter can
+# also rewrite (quote normalisation) — assignment is discrete and survives that,
+# which is the same reason columns are not preserved.
+#
+# ⚠ WHY A COPY AND NOT JUST THE CORPUS FILE. `compiler/data/resources.gg` is
+# guarded by `fmt_author_row_grouping_survives_formatting`, which watches the
+# whole corpus by SIGNATURE. That guard goes vacuous the moment someone edits
+# the table — which is exactly what a live corpus file is for. This copy is
+# pinned by NAME and by exact text, so the cell survives the corpus changing
+# underneath it. The two are complementary, not redundant.
+#
+# RED against the pre-change binary, measured: not a fixed point — the table
+# comes back as 25 lines, one word per line.
+from std.collections import Vector
+
+public static Vector[String] PRESCAN_MUTATOR_FALLBACK = [
+    "push", "pop", "set", "insert", "remove", "clear", "sort", "sorted",
+    "reverse", "swap", "swap_remove", "extend", "append", "truncate",
+    "retain", "dedup", "resize", "reserve", "replace", "drain", "fill",
+    "put", "remove_key", "sort_by", "sort_by_key",
+]
+
+void main():
+    print(PRESCAN_MUTATOR_FALLBACK.len())

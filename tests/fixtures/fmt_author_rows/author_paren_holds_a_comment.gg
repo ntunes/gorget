@@ -1,0 +1,44 @@
+# AUTHOR LINE GROUPING — the PAREN × COMMENT cell. A `#` INSIDE the grouping.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture is a deliberately
+# UNFORMATTED INPUT — the assertion is on what `gg fmt` turns it INTO
+# (`fmt_author_rows_author_paren_holds_a_comment`, exact text). A sweep would
+# rewrite it into its own expected output and the cell would go green-vacuous.
+#
+# AXES CROSSED, and crossing them is the whole point: the ANCHOR axis (an author
+# grouping paren spanning a line break, `author_paren_spans_rows.gg`) × the
+# COMMENT axis (`interior_comment_without_comma.gg`,
+# `trailing_comment_per_row.gg`). Each axis had cells; the PAIR had none, and
+# the pair is where the two reads disagree.
+#
+# ⚠ WHAT IT PINS. `author_line_break_between` anchors past the author's grouping
+# parens so that a newline between a node and its own `)` is not read as a break
+# between ELEMENTS. A `#` written inside those parens sits BEFORE the `)` — so
+# it is before the anchor, and an anchored-only scan reads this row as
+# continuing. It must not. The emitter's leading- and trailing-comment hooks
+# fire only where a row STARTS, so a row continued past a comment has no hook to
+# emit it at, and the comment is re-parented to the NEXT row. The probe
+# therefore reads `#` over the UNANCHORED region and `\n` over the anchored one.
+#
+# The expected output below is BYTE-IDENTICAL to what the pre-change binary
+# produces for the comment's placement — this cell asserts that the grouping
+# feature did not MOVE a comment, which is the strongest form the claim can take.
+#
+# RED-verified against the shipped-but-wrong intermediate (Core #12): with the
+# probe anchored for BOTH reads, `gg fmt` ABORTED on this file — exit 101,
+# `panicked at src/formatter/mod.rs: a continued row holds a '#' between
+# elements`. With that debug assertion neutralised (modelling a release build)
+# the comment is not dropped but RELOCATED, off `(1)` and onto the following
+# row. Both were measured; the shipped probe produces neither.
+from std.collections import Vector
+
+void main():
+    Vector[int] xs = [(1 # inside the paren
+), 2,
+        3, 4,
+    ]
+    Vector[int] ys = [( 5  # spaced, the sibling costume
+ ), 6,
+        7, 8,
+    ]
+    print(xs.len() + ys.len())

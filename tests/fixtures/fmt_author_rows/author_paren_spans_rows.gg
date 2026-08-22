@@ -1,0 +1,46 @@
+# AUTHOR LINE GROUPING — an AUTHOR GROUPING PAREN that spans a line break.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture is a deliberately
+# UNFORMATTED INPUT — the assertion is on what `gg fmt` turns it INTO
+# (`fmt_author_rows_author_paren_spans_rows`, exact text). A sweep would rewrite
+# it into its own expected output and the cell would go green-vacuous.
+#
+# AXIS = the ANCHOR the row probe reads from. An element's recorded span ends at
+# the WRAPPED NODE, so an author grouping `)` written after it lies OUTSIDE the
+# span and INSIDE the region between this element and the next. A probe reading
+# the bare `source[prev_end..cur_start]` therefore sees the newline the author
+# put between `(1` and its own `)` and calls it a break BETWEEN elements — and
+# the author's first row is silently split. `author_line_break_between` anchors
+# on `advance_past_author_parens(prev_end)` for exactly this reason, which is
+# the same reason its sibling `author_trailing_comma` does.
+#
+# ⚠ NOTHING ELSE IN THE TREE CAN SEE THIS CELL. It is corpus-neutral: 2898
+# corpus files format identically with and without the anchor, so no output
+# ratchet, no round-trip, no idempotence and no reparse gate moves. That is what
+# makes this fixture — and the source pin
+# `formatter_author_grouping_reads_one_site` — the only two things standing
+# between the anchor and a future reader who deletes it as redundant.
+#
+# TWO cells, because the paren costume matters and the sibling family already
+# measured that: TIGHT `(1\n)` and SPACED `( 3\n )`. Both must keep their row.
+#
+# RED-verified against the anchor-less build (Core #12): both rows split, giving
+#     Vector[int] xs = [
+#         (1),
+#         2,
+#         3, y,
+#     ]
+# — while every gate in the tree stayed green. Restored after measuring.
+from std.collections import Vector
+
+void main():
+    int y = 4
+    Vector[int] xs = [(1
+), 2,
+        3, y,
+    ]
+    Vector[int] ys = [( 5
+ ), 6,
+        7, y,
+    ]
+    print(xs.len() + ys.len())

@@ -1,0 +1,31 @@
+# AUTHOR LINE GROUPING — the SINGLE-ROW cell, and it is a NEGATIVE.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture is a deliberately
+# UNFORMATTED INPUT — the assertion is on what `gg fmt` turns it INTO
+# (`fmt_author_rows_single_row_is_not_a_grouping`, exact text). A sweep would
+# rewrite it into its own expected output and the cell would go green-vacuous.
+#
+# AXIS = grouping shape, SINGLE-ROW cell: the container spans several lines, but
+# every element sits on ONE of them, so the author expressed no break BETWEEN
+# elements and there is no grouping to preserve. The ENGAGEMENT GUARD leaves the
+# list at the ratified one-element-per-line magic-comma shape.
+#
+# ⚠ THIS IS THE CELL THE GUARD EXISTS FOR. Without it, `[\n 1, 2, y,\n]` comes
+# back as a half-exploded one-row list nobody asked for; measured, three corpus
+# fixtures change and `fmt_magic_comma_author_paren_cells_spaced` reds.
+#
+# NO PRE-FIX RED IS POSSIBLE — the pre-change binary emits exactly the expected
+# text, because this is the behaviour the guard PRESERVES rather than one it
+# adds. RED-verified the other way (Core #12), by BREAKING the mechanism: with
+# the engagement guard removed from
+# `Formatter::format_bracketed_broken_with_comments`, the output becomes the
+# author's own one-row shape and the exact-text assertion reds. Restored after
+# measuring.
+from std.collections import Vector
+
+void main():
+    int y = 3
+    Vector[int] xs = [
+        1, 2, y,
+    ]
+    print(xs.len())

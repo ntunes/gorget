@@ -1,0 +1,46 @@
+# AUTHOR LINE GROUPING — the INTERIOR-COMMENT trigger, BOTH disjuncts.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and its second container is written in the form the formatter must
+# KEEP.
+#
+# AXIS = which disjunct routed the list to the exploded emitter. The chokepoint
+# is `magic || gated`, and the author's rows must survive on EITHER:
+#
+#   `gated_only`  an interior comment and NO trailing comma. Nothing but the
+#                 comment explodes this list — and the emitter still writes a
+#                 trailing comma on the way out, so this container is NOT a
+#                 fixed point and its shape is asserted as exact text.
+#   `both`        an interior comment AND the author's trailing comma. Both
+#                 disjuncts true at once.
+#
+# It also pins the comment ORDER, which the row logic could break and no
+# signature check would notice: a standalone comment stays on its own line,
+# above the row it introduces, at the interior indent.
+#
+# ⚠ THIS FILE USED TO BE NAMED FOR A CELL IT DID NOT CONTAIN. As
+# `interior_comment_without_comma.gg` it asserted in its own header that "there
+# is no comma anywhere" while ending `5, y,` — so the `gated`-only disjunct was
+# exercised by NO fixture in the family, and the name said otherwise. A fixture's
+# name is a claim about SCOPE (Core #12); this one is now true because the cell
+# was ADDED, not because the claim was narrowed.
+#
+# RED against the pre-change binary, measured: neither container is honoured —
+# all twelve elements come back one per line.
+from std.collections import Vector
+
+void main():
+    int y = 6
+    Vector[int] gated_only = [
+        1, 2,
+        # the second row
+        3, 4,
+        5, y
+    ]
+    Vector[int] both = [
+        1, 2,
+        # the second row
+        3, 4,
+        5, y,
+    ]
+    print(gated_only.len() + both.len())

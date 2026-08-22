@@ -1,0 +1,34 @@
+# AUTHOR LINE GROUPING — COLUMNS ARE NOT PRESERVED. A NEGATIVE, and a boundary.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture is a deliberately
+# UNFORMATTED INPUT — the assertion is on what `gg fmt` turns it INTO
+# (`fmt_author_rows_column_padding_is_not_preserved`, exact text). A sweep would
+# rewrite it into its own expected output and the cell would go green-vacuous.
+#
+# The ruling preserves element-to-LINE ASSIGNMENT and nothing else. The author
+# hand-aligned three columns below; the rows survive, the padding collapses to a
+# single space after each comma.
+#
+# ⚠ WHY THIS IS THE RIGHT BOUNDARY, not a missing feature. gofmt aligns columns
+# — and gofmt never rewrites the elements themselves. This formatter does:
+# `!`→`^`, `( 2 )`→`(2)`, quote normalisation, radix-preserving literal
+# rewrites, all riding the same sweep. Any column the author measured is
+# invalidated by the canon changes travelling with it, so preserving one would
+# hand the formatter a second CONTINUOUS layout dimension it cannot keep
+# idempotent. Element-to-line is DISCRETE and survives element rewriting.
+#
+# NO PRE-FIX RED IS POSSIBLE for the padding half — the pre-change binary also
+# collapses padding (it collapses the rows too). RED-verified by BREAKING the
+# mechanism: teaching the emitter to reproduce the author's intra-row spacing
+# makes the exact-text assertion red. The ROW half of the expected output IS
+# red at HEAD — nine elements come back on nine lines.
+from std.collections import Vector
+
+void main():
+    int y = 6
+    Vector[int] xs = [
+        1,   200, 30000,
+        4,   5,   6,
+        70,  8,   y,
+    ]
+    print(xs.len())

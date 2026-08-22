@@ -10,7 +10,7 @@
 # 16 sites in gorget-js: main.gg 9, parser.gg 5, eval.gg 2.
 #
 # RETIRED R39 Track G (2026-08-09) by extending `format_arm_body` at
-# `src/formatter/mod.rs:1135+` to also handle `Expr::Do { body }` — the
+# `src/formatter/mod.rs:1201+` to also handle `Expr::Do { body }` — the
 # parser wraps indented catch/rethrow bodies as `Expr::Do` via
 # `parse_body_or_expr`, not `Expr::Block`. Track F only covered the
 # `Expr::Block` single-`Stmt::Expr` case.

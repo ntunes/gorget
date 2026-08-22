@@ -1,0 +1,30 @@
+# AUTHOR LINE GROUPING — a BLANK LINE between two rows.
+#
+# MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
+# output, and it is written in the form the formatter must KEEP.
+#
+# AXIS = blank line inside/not, crossed with rows of 2. The two author facts
+# compose: the blank separates paragraphs of rows (PRESERVE-AND-CAP, ratified
+# 2026-08-16), the newlines inside a paragraph decide its rows (ratified
+# 2026-08-18). Neither may eat the other.
+#
+# ⚠ WHAT WOULD BREAK IT: `has_blank_line_between` walks BACKWARD from the
+# element's start, so on a CONTINUED row — where the previous element sits on
+# the same source line — the walk steps past the shared line and reads the line
+# ABOVE it. Consulting it mid-row therefore emits a blank the author never
+# wrote, in the middle of a row. The blank probe is gated on the row START for
+# exactly that reason.
+#
+# RED against the pre-change binary, measured: not a fixed point — six elements
+# on six lines, with the blank surviving between the second and third.
+from std.collections import Vector
+
+void main():
+    int y = 6
+    Vector[int] xs = [
+        1, 2,
+
+        3, 4,
+        5, y,
+    ]
+    print(xs.len())

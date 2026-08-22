@@ -34,7 +34,7 @@ else round-trips, and the formatter goes out of its way to preserve a handful of
 facts that *look* cosmetic but are semantically load-bearing on re-parse
 (visibility on statics, the `:`-vs-`= "sym"` shape of a function body, the
 author's suite layout). The goal is **idempotence**: `fmt(fmt(x)) == fmt(x)`,
-which the unit tests assert directly (`src/formatter/mod.rs:7653`, `:7953`, and
+which the unit tests assert directly (`src/formatter/mod.rs:7806`, `:8106`, and
 many more).
 
 ## The `gg fmt` command
@@ -51,7 +51,7 @@ modes, all keyed off one entry point:
 The public API is one function, and its return type is the interesting part:
 
 ```rust
-// src/formatter/mod.rs:6691
+// src/formatter/mod.rs:6844
 pub fn format_source_result(source: &str) -> Result<String, Vec<ParseError>> {
     let mut parser = crate::parser::Parser::new(source);
     let module = parser.parse_module();
@@ -68,7 +68,7 @@ build would simply be **absent** from the result — silent data loss on the use
 file. Refusing is the only safe answer: on any parse error the driver renders the
 diagnostics and exits non-zero *without* writing to disk or printing a partial
 format. Call sites that are contractually fed valid Gorget (unit tests, fixtures) use
-`format_source_infallible` (`src/formatter/mod.rs:7431`), which panics rather than
+`format_source_infallible` (`src/formatter/mod.rs:7584`), which panics rather than
 returning a truncated file.
 
 What `gg fmt` still does not do is run semantic analysis: type errors, ownership
@@ -230,10 +230,13 @@ one (see [The magic trailing comma](#the-magic-trailing-comma)).
 line, *with* a trailing comma, built from `Group`/`Line`/`IfBreak`. `IfBreak` is what
 makes that comma conditional: `IfBreak { flat: "", broken: "," }`, so a flat list has
 no trailing comma and a broken one does (`src/formatter/doc.rs:213-216`, exercised at
-`doc.rs:723` and `:753`). No production call site uses it — a comment-bearing list
-reaches the same exploded shape imperatively, through
-`format_bracketed_broken_with_comments`, because comments cannot survive the
-pre-render that fill packing depends on. The `formatter_list_emit_fill_census` lint
+`doc.rs:723` and `:753`). No production call site uses it — an exploded list is
+emitted imperatively instead, through `format_bracketed_broken_with_comments`,
+because comments cannot survive the pre-render that fill packing depends on. That
+emitter is a strict generalisation of `surround`'s shape rather than a copy of it:
+one item per line is what it produces when the author expressed no grouping of
+their own, and where they did, their rows are kept (see [The author's line
+grouping](#the-authors-line-grouping)). The `formatter_list_emit_fill_census` lint
 counts both spellings — and the chokepoint's own call sites and carve-outs — so that
 opting a list out of the canon, or out of the gate, stays a visible decision.
 
@@ -286,12 +289,13 @@ and the same shape reaches trait signatures and extern declarations, which share
 parameter-list emitter. Both re-parse and both are idempotent; the trailing comma is
 the existing exploded-list canon, not a new spelling invented here.
 
-Third, once a container is exploded its elements occupy whole lines, so the
-author's blank lines BETWEEN them become expressible — and are therefore kept,
-under the same preserve-and-cap rule the member containers follow. The
-asymmetry is worth naming: a blank line survives in an EXPLODED list and cannot
-survive in a fill-broken one, because a fill-broken list has no per-element
-line to hang it on. That is not a special case for lists but the general shape
+Third, once a container is exploded its elements occupy lines of their own — one
+per line by default, or the author's own rows where they wrote them — so the
+author's blank lines BETWEEN them become expressible, and are therefore kept, under
+the same preserve-and-cap rule the member containers follow. The asymmetry is worth
+naming: a blank line survives in an EXPLODED list and cannot survive in a
+fill-broken one, because a fill-broken list has no line boundary between elements to
+hang it on. That is not a special case for lists but the general shape
 of the formatter's bargain — it owns layout, and a blank can only be preserved
 where the chosen layout has somewhere to put it.
 
@@ -387,9 +391,88 @@ The one-element tuple `(x,)` is exempt and always will be: there the comma IS th
 syntax that makes it a tuple rather than a parenthesised expression, not a layout
 signal. Black exempts the same shape.
 
+### The author's line grouping
+
+The magic comma says a list is EXPLODED. It does not say where the breaks go, and
+one element per line is only the answer when the author offered no other. A
+hand-grouped table is the case it is not:
+
+```gorget
+Vector[String] mutators = [
+    "push", "pop", "set", "insert", "remove", "clear", "sort", "sorted",
+    "reverse", "swap", "swap_remove", "extend", "append", "truncate",
+]
+```
+
+Twenty-five names on four lines is a decision — the rows carry meaning, the diff of
+adding one is a single line, and one-name-per-line is twenty-five lines of scrolling.
+So the rule is a pair: **the magic trailing comma says EXPLODE; the author's own
+newlines say WHERE TO BREAK.**
+
+The mechanism is one probe, `Formatter::author_line_break_between`, read at one
+place — the top of `format_bracketed_broken_with_comments`, before any element is
+rendered. It answers, for two adjacent elements, whether the author wrote a line
+break between them; the emitter turns those answers into an element-to-line
+assignment and follows it. Reading the pre-pass before rendering is what makes an
+element's own HEIGHT irrelevant to its neighbours: a nested container that explodes
+to five lines does not move the element the author put beside it.
+
+Four properties, each of which is a decision rather than an implementation detail.
+
+**The ENGAGEMENT GUARD.** Preservation engages only when the author expressed at
+least one break BETWEEN elements. A container written on a single line carries no
+grouping, so it keeps the one-element-per-line canon; without the guard `[1, 2, y,]`
+would come back as a single half-exploded row nobody asked for. This is what keeps
+the rule layout-PRESERVING rather than layout-INVENTING, and it is the reason the
+grouping is not an independent explode trigger either: with no magic comma and no
+interior comment the list is PACKED, rows and all, because a formatter that froze
+every list into the shape it was last saved in would stop being a normaliser.
+
+**ASSIGNMENT, never columns.** Which elements share a line is preserved; the padding
+*within* a line is not. gofmt aligns columns and can afford to, because gofmt never
+rewrites elements. This formatter does — `!`→`^`, `( 2 )`→`(2)`, quote and radix
+normalisation — so any column the author measured is invalidated by the canon changes
+travelling with it, and preserving one would hand the formatter a second CONTINUOUS
+layout dimension it cannot keep idempotent. Element-to-line is DISCRETE and survives
+element rewriting.
+
+**Delimiters and indent stay canonical.** The open delimiter breaks, the close takes
+its own line with the trailing comma, and rows sit at the block indent. An author's
+`false))` hugging or paren-aligned continuation is not reproduced: those are the
+formatter's to decide, and the author's rows are expressible without them.
+
+**A preserved row is not re-wrapped**, however far past the budget it runs. The
+alternative — re-flowing a row the author wrote — would answer a question the ruling
+already answered in the other direction, and a row is exactly the unit the author
+chose. The residual `Unbroken` category of the width ratchet is what keeps such a
+line visible rather than silently permitted.
+
+The probe reads SOURCE, like the magic comma's and for the same reason: it runs on
+the sub-`Formatter`s `element_to_string` builds, and the comment side-table does not
+travel into those while the source does. It shares the magic comma's paren advance
+too, and that one is not optional — an element's recorded span ends at the WRAPPED
+node, so a newline the author wrote between a node and its own `)` sits in the region
+between this element and the next, and a scan from the bare span end reads it as a
+break the author did not make. That cell is corpus-neutral, which is precisely why it
+is pinned at the SOURCE by `formatter_author_grouping_reads_one_site` rather than
+left to an output gate that cannot see it.
+
+The advance is shared, but the WINDOW is not, and the difference is the probe's one
+genuine subtlety. A `#` is read over the UNANCHORED region, a `\n` over the anchored
+one. The reason is that the two things the advance is meant to skip are not the same
+thing: the `)` is layout the formatter owns, while a comment written inside the
+parens is content it must not move. Skip past the comment and the row reads as
+continuing, the leading and trailing hooks — which fire only at a row START — never
+run for it, and the comment is re-parented to the next row, where it silently begins
+documenting something else. So the wider window is what makes *a continued row never
+holds a comment* a guarantee instead of a hope, which is the invariant the emitter's
+own `debug_assert` enforces. The pair — an anchor and a comment in the same
+region — is exercised by
+`tests/fixtures/fmt_author_rows/author_paren_holds_a_comment.gg`.
+
 ### Splicing the two layers together
 
-The bridge is `write_doc` (`src/formatter/mod.rs:1139`). It renders the `Doc` with
+The bridge is `write_doc` (`src/formatter/mod.rs:1205`). It renders the `Doc` with
 `doc::render_at` — passing the emitter's *current column and indent level as the
 starting state* so the wrapping decision accounts for text already on the line — then
 writes the pre-rendered (newline-bearing) string back via `Emitter::write_preformatted`
@@ -405,19 +488,19 @@ budget.
 
 A subtlety of the hybrid design: the imperative layer frequently needs a *string*
 for a sub-expression to drop into a `Doc::Text`. It gets one via `element_to_string`
-(`src/formatter/mod.rs:1053`), which spins up a throwaway `Formatter` (with no
+(`src/formatter/mod.rs:1119`), which spins up a throwaway `Formatter` (with no
 comments), runs a closure against it, and returns its buffer. In production the
 spelling is almost always `element_to_string_reserving`, which additionally states
 what the caller will write after the spliced element — see [The tail
 reserve](#the-tail-reserve); the bare form survives for the one position with no
 tail of its own, and a `tests/lints.rs` ratchet pins that at one. This is how
-`format_method_chain` (`src/formatter/mod.rs:3819`) and `format_binary_chain`
-(`src/formatter/mod.rs:3876`) turn each chain segment / operand into a `Doc::Text`
+`format_method_chain` (`src/formatter/mod.rs:3972`) and `format_binary_chain`
+(`src/formatter/mod.rs:4029`) turn each chain segment / operand into a `Doc::Text`
 leaf before grouping them — the wrapping is decided over the *segments*, while each
 segment is formatted by an ordinary recursive call.
 
 The throwaway formatter is seeded with both the indent level *and* a starting column
-(`element_to_string_at`, `src/formatter/mod.rs:1062`). It has to be: a sub-render that
+(`element_to_string_at`, `src/formatter/mod.rs:1128`). It has to be: a sub-render that
 measured from column 0 would believe it had a whole indentation's worth of extra
 budget, and emit lines that overflow by exactly that much once spliced. The seed it
 is given is the **continuation column**
@@ -488,13 +571,17 @@ onto the measured prefix and over-reserve every caller downstream.
 
 Two positions are outside the mechanism, and both are ruled rather than pending:
 
-- **The exploded comment-bearing path.** When an interior comment routes a list to
-  `format_bracketed_broken_with_comments`, every element is re-rendered on its own
-  line ending in `,`, so each is charged an EXACT reserve of 1 — exact, not additive,
-  because a live caller reserve belongs to the CLOSE line and would over-reserve
-  every element by tens of columns. That path is a hand-rolled loop with no `Fill`
-  and no fit test, so the close line itself has no enforcement at all: it is written
-  at the outer indent and the caller's suffix follows it unmeasured.
+- **The exploded path.** When an interior comment or a magic trailing comma routes a
+  list to `format_bracketed_broken_with_comments`, every element is re-rendered
+  under an EXACT reserve — exact, not additive, because a live caller reserve
+  belongs to the CLOSE line and would over-reserve every element by tens of columns.
+  The number is what this element's own tail actually costs: **1** for the `,` when
+  the element ENDS its row, **2** for the `, ` when the next element continues the
+  row beside it. That path is a hand-rolled loop with no `Fill` and no fit test, so
+  the close line itself has no enforcement at all: it is written at the outer indent
+  and the caller's suffix follows it unmeasured — and neither has a preserved
+  author ROW, which is not re-wrapped however wide it runs (see [The author's line
+  grouping](#the-authors-line-grouping)).
 - **The inline-BODY collision.** When the author put a suite, a match arm, or a
   closure body INLINE on its header's line, the header is charged for the `:`, the
   separating space, and the body's leading unbreakable prefix. A breakable header
@@ -579,8 +666,8 @@ detaches from the clause it documents.
 
 After the walk, `format` runs a single-pass collapse over the whole buffer: any run
 of 3+ consecutive newlines is squeezed to 2 (i.e. at most one blank line)
-(`src/formatter/mod.rs:1010-1025`), and a trailing newline is guaranteed
-(`src/formatter/mod.rs:1026-1029`). That collapse is the CAP half of the rule.
+(`src/formatter/mod.rs:1076-1091`), and a trailing newline is guaranteed
+(`src/formatter/mod.rs:1092-1095`). That collapse is the CAP half of the rule.
 
 The PRESERVE half happens during the walk, and the rule is uniform: **a blank
 line is emitted where the author wrote one, and nowhere else.** Every emit site
@@ -595,8 +682,8 @@ second and later blanks of a run.
 The exception set is CLOSED at two sites, both in `format_module`, and both
 about SECTIONS rather than items. The directives loop calls
 `blank_line` between the directive block and the first import
-(`src/formatter/mod.rs:2384`); the imports loop calls `blank_line` between the
-std and non-std groups (`src/formatter/mod.rs:2409`). These separate regions the
+(`src/formatter/mod.rs:2537`); the imports loop calls `blank_line` between the
+std and non-std groups (`src/formatter/mod.rs:2562`). These separate regions the
 formatter itself reorders, so there is no author position to read — the blank
 belongs to the emitted layout, not to the source. Everything after them —
 `format_module`'s own rest loop, nested items, struct fields, enum variants,
@@ -616,27 +703,27 @@ Two neighbours are deliberately not cited above: `Emitter::blank_line` itself
 (`src/formatter/mod.rs:132`) is the definition, not an emit site.
 
 The trailing-comment aligner `align_trailing_comments` runs before this collapse
-(`src/formatter/mod.rs:1005`) and is unaffected by it — the collapse only removes
+(`src/formatter/mod.rs:1071`) and is unaffected by it — the collapse only removes
 newlines, never touches a within-line gap.
 
 ### Import sorting
 
 Two axes, and only one of them is sorted.
 
-The STATEMENT axis is. `format_module` (`src/formatter/mod.rs:2338`) partitions
+The STATEMENT axis is. `format_module` (`src/formatter/mod.rs:2491`) partitions
 items into leading directives, imports, and "the rest" — the partition stops at the
 first non-import, non-directive item (`past_imports`,
-`src/formatter/mod.rs:2343-2356`), so only the *leading* import block is reordered.
+`src/formatter/mod.rs:2496-2509`), so only the *leading* import block is reordered.
 Within that block imports are sorted with std/`xtd` libraries first, then
-alphabetically (`src/formatter/mod.rs:2358-2371`; `is_std_import` at
-`src/formatter/mod.rs:7472`).
+alphabetically (`src/formatter/mod.rs:2511-2524`; `is_std_import` at
+`src/formatter/mod.rs:7625`).
 
 The NAME axis is not. The names inside an import keep the order the author wrote,
 on both spellings: `import a.{X, Y}` groups are fill-packed in source order, so a
-long group packs across continuation lines (`src/formatter/mod.rs:3366-3413`), and a
+long group packs across continuation lines (`src/formatter/mod.rs:3519-3566`), and a
 `from a import …` name list is emitted in source order too — but **not** wrapped,
 because in indentation-based syntax a bare name on a fresh line would re-parse as a
-new statement (`src/formatter/mod.rs:3414-3445`). Ordering a name list is a
+new statement (`src/formatter/mod.rs:3567-3598`). Ordering a name list is a
 statement the author is making — a `CollectionKind, CkNotCollection, CkVector, …`
 list puts the enum type at the head of its own variants — and a formatter that
 alphabetises it deletes that statement while preserving every character of it.
@@ -658,17 +745,17 @@ inside it.
 ### Type-first re-printing and bare-tuple positions
 
 Gorget is type-first (`int x = 5`), and the formatter prints declarations that way:
-`format_param` emits `type [&|!]name` (`src/formatter/mod.rs:3264-3314`), `VarDecl`
-emits `type name = expr` (`src/formatter/mod.rs:4604-4654`). Ownership sigils (`&`,
+`format_param` emits `type [&|!]name` (`src/formatter/mod.rs:3417-3467`), `VarDecl`
+emits `type name = expr` (`src/formatter/mod.rs:4757-4807`). Ownership sigils (`&`,
 `!`) print *immediately before the name*, via `format_ownership_prefix`
-(`src/formatter/mod.rs:6722`), matching the language rule that the sigil binds the
+(`src/formatter/mod.rs:6875`), matching the language rule that the sigil binds the
 binding, not the type.
 
 Several positions canonicalize a tuple to its **bare** (parens-free) spelling because
 that is the idiomatic form the parser accepts: function return types
-(`src/formatter/mod.rs:2885-2893`), `return a, b` (`src/formatter/mod.rs:4669-4679`),
-`auto a, b = …` destructuring (`src/formatter/mod.rs:5204-5221`), and `for x, y in …`
-patterns (`src/formatter/mod.rs:4709-4718`).
+(`src/formatter/mod.rs:3038-3046`), `return a, b` (`src/formatter/mod.rs:4822-4832`),
+`auto a, b = …` destructuring (`src/formatter/mod.rs:5357-5374`), and `for x, y in …`
+patterns (`src/formatter/mod.rs:4862-4871`).
 
 ### Visibility: the load-bearing "cosmetic" cases
 
@@ -677,13 +764,13 @@ cannot say which the author wrote — and both directions of guessing are wrong.
 Emitting a keyword only for `Private` deletes every explicit `public` in the tree;
 emitting one unconditionally rewrites every declaration that relies on the default.
 The parser therefore records which spelling it consumed, on `explicit_visibility`,
-and `format_visibility` (`src/formatter/mod.rs:2798`) reads that fact and nothing
+and `format_visibility` (`src/formatter/mod.rs:2951`) reads that fact and nothing
 else: **the keyword is emitted iff one was written.** Nine declaration kinds carry
 the flag, and `formatter_visibility_emit_site_count` in `tests/lints.rs` cross-checks
 the emit sites against the carriers so a tenth kind cannot quietly skip the path.
 
 Statics invert the default and keep their own rule (`format_static_decl`,
-`src/formatter/mod.rs:3507-3527`). They are private-by-default, so `public` is
+`src/formatter/mod.rs:3660-3680`). They are private-by-default, so `public` is
 emitted whenever the value *is* public — for a parsed static that means the author
 wrote it, and for a synthesised one it stops the emission from silently flipping the
 declaration to private and breaking cross-module imports — while `private` is emitted
@@ -693,13 +780,13 @@ the tree.
 ### String literals and the verbatim chokepoint
 
 A string literal is emitted **verbatim first**: `format_string_lit`
-(`src/formatter/mod.rs:6825`) asks for the author's own lexeme and, when it can have
+(`src/formatter/mod.rs:6978`) asks for the author's own lexeme and, when it can have
 it, writes exactly that. Quote style, the prefix letter, which escape spelled a
 character, the f-string brace form and — the case that makes a long `"""` block
 readable — its physical line layout all survive, because nothing was regenerated.
 
 Recovery goes through one helper, `Formatter::verbatim`
-(`src/formatter/mod.rs:5684`), and it is the same helper behind every other form the
+(`src/formatter/mod.rs:5837`), and it is the same helper behind every other form the
 AST drops: an integer's radix and digit grouping, a float's trailing zeros, `b'A'`
 versus `65`, `byte` versus `uint8`, and the quoted **name-strings** the AST stores
 decoded (test and bench names, snapshot names, attribute string arguments, extern ABI
@@ -709,7 +796,7 @@ the class rather than a habit of each arm; `formatter_verbatim_emit_arm_count` i
 
 **The property: a recovered lexeme is re-lexed and compared before it is trusted.**
 `verbatim` slices the source at the node's span, hands the slice to
-`relex_single_token` (`src/formatter/mod.rs:6888`) — which asks the *real lexer* and
+`relex_single_token` (`src/formatter/mod.rs:7041`) — which asks the *real lexer* and
 returns a token only when the slice lexes cleanly into exactly one value-bearing
 token covering the whole slice — and then checks that token against the value the
 caller is about to emit. Asking the lexer rather than mirroring its rules is the
@@ -725,14 +812,14 @@ no longer denotes this node — `format_string_lit` rebuilds the literal from it
 `StringKind` prefix (`r"`, `b"`, `c"`, `f"`, `"""`, `"`) and its segment list,
 re-emitting interpolation segments as `{expr_text[:spec]}` from the stored source text
 rather than re-formatting the embedded expression. Bodies are escaped by
-`canonical_string_escape` (`src/formatter/mod.rs:6935`): raw strings pass through,
+`canonical_string_escape` (`src/formatter/mod.rs:7088`): raw strings pass through,
 `{`/`}` double inside f-strings, every control character is escaped — C0 and DEL as
 `\xHH`, C1 (`0x80-0x9F`) as `\u{XX}`, because the lexer rejects `\x` above `0x7F` and a
 raw C1 byte would plant an invisible control character in the user's source. Printable
 non-ASCII stays raw.
 
 No `.gg` source can reach that path, which is exactly why the escape policy lives in a
-free function with unit cells of its own (`src/formatter/mod.rs:6651`) instead of a
+free function with unit cells of its own (`src/formatter/mod.rs:6804`) instead of a
 fixture that would be green for the wrong reason.
 
 ### Author parentheses
@@ -784,11 +871,11 @@ Two consequences worth stating, because both look like bugs from a distance:
 
 ### Function body shapes
 
-`format_function` (`src/formatter/mod.rs:2808`) preserves the four distinct body
+`format_function` (`src/formatter/mod.rs:2961`) preserves the four distinct body
 shapes the AST distinguishes, each of which round-trips to a different construct:
 block body (`:` + indented stmts), expression body (`: expr` on one line), a bare
 declaration (signature + newline, for trait method signatures), and an extern body
-(`= "symbol"`) (`src/formatter/mod.rs:2972-2976`).
+(`= "symbol"`) (`src/formatter/mod.rs:3125-3129`).
 
 ## `meta` constructs
 
@@ -796,15 +883,15 @@ Compile-time `meta` forms are kept verbatim — the formatter does **not** evalu
 expand them (that is Pass 0's job; see chapter 6). They re-print as written:
 
 - **Item-level**: `meta const`, `meta type` (plain / conditional / call RHS variants
-  at `src/formatter/mod.rs:2523-2557`), `meta type … (params)` functions, `meta assert`,
-  `meta if`/`elif`/`else` over *items* (`src/formatter/mod.rs:2595-2670`), and
-  `meta log` — all in `format_item` (`src/formatter/mod.rs:2485-2685`).
-- **Statement-level**: `meta if` (`:5061`), `meta for` (`:5072`), `meta match`
-  (`:5085`), `meta while` (`:5140`), `meta const` (`:5150`), `meta log` (`:5157`) in
+  at `src/formatter/mod.rs:2676-2710`), `meta type … (params)` functions, `meta assert`,
+  `meta if`/`elif`/`else` over *items* (`src/formatter/mod.rs:2748-2823`), and
+  `meta log` — all in `format_item` (`src/formatter/mod.rs:2638-2838`).
+- **Statement-level**: `meta if` (`:5214`), `meta for` (`:5225`), `meta match`
+  (`:5238`), `meta while` (`:5293`), `meta const` (`:5303`), `meta log` (`:5310`) in
   `format_stmt`.
 - **Expression-level**: `meta`-prefixed operators — `a meta[op] b` for infix
-  (`src/formatter/mod.rs:6637-6642`) and `meta <op>` token form
-  (`src/formatter/mod.rs:6643-6646`).
+  (`src/formatter/mod.rs:6790-6795`) and `meta <op>` token form
+  (`src/formatter/mod.rs:6796-6799`).
 
 The AST is deliberately structured so that `meta if`/`meta for` carry their bodies as
 *real* statements/items (so resolution and the rest of the pipeline can see inside
@@ -816,12 +903,12 @@ with the self-host AST-canonicalizer, below, which *does* collapse them.)
 
 A `match` arm list can contain a `meta for` that templates arms. The formatter handles
 the `MatchItem::MetaFor` variant inline inside the `Stmt::Match` walk
-(`src/formatter/mod.rs:4764-4777`): it prints `meta for vars in range:` and then the
+(`src/formatter/mod.rs:4917-4930`): it prints `meta for vars in range:` and then the
 single `arm_template` indented beneath it, rather than treating it as a regular arm.
 
 ## Match arms and guards
 
-`format_match_arm` (`src/formatter/mod.rs:5234`) prints `case <pattern>`, then — **if
+`format_match_arm` (`src/formatter/mod.rs:5387`) prints `case <pattern>`, then — **if
 the arm has a guard** — ` if <guard>`. The arm body is laid out two ways
 according to the author's `Block.layout`: an indented `Block` becomes a newline
 plus indented statements, and everything else is printed inline after the colon.
@@ -844,7 +931,7 @@ arm.
 > suppresses match guards for canonical output." That is **not** true of the Rust
 > `gg fmt` here — `MatchArm.guard` is a real AST field
 > (`src/parser/ast.rs:1015`) and the production formatter emits it verbatim
-> (`src/formatter/mod.rs:5233-5236`). The guard-suppression behavior belongs to the
+> (`src/formatter/mod.rs:5386-5389`). The guard-suppression behavior belongs to the
 > *self-host AST-debug canonicalizer* (`tests/fixtures/self_host_*/format.gg`), a
 > different program with a different purpose — see "In the self-host" below.
 
@@ -867,14 +954,14 @@ relation between neighbours that no single token knows.
 
 Interleaving is span-driven and one-directional: before emitting an item, field,
 variant, statement, or branch body, the walker calls `emit_comments_before(pos)`
-(`src/formatter/mod.rs:1190`), which flushes every comment whose `#` precedes `pos`,
+(`src/formatter/mod.rs:1256`), which flushes every comment whose `#` precedes `pos`,
 each on its own line, advancing the cursor. After the whole module is walked,
-`emit_remaining_comments` (`src/formatter/mod.rs:1211`) flushes whatever is left (e.g.
+`emit_remaining_comments` (`src/formatter/mod.rs:1277`) flushes whatever is left (e.g.
 trailing comments after the last item).
 
 A leading flush would move every end-of-line comment onto its own line, so a comment
 that *trails* its node is claimed before the cursor can reach it.
-`emit_trailing_comment_after(prev_end)` (`src/formatter/mod.rs:2181`) asks one
+`emit_trailing_comment_after(prev_end)` (`src/formatter/mod.rs:2334`) asks one
 question — is this comment's start on the same source line as the previous emit's
 last character? — and if so injects it after the emitted line, ahead of the newline
 that statement already wrote. A comment separated by a line break fails that test and
@@ -890,7 +977,7 @@ concept, defined once in the table; a doc comment cannot join a run, because an
 own-line `#/` lexes as a different token that never enters this table at all.
 
 Consumption is a single pair of functions. `claim_run_at_cursor`
-(`src/formatter/mod.rs:1246`) is the ONLY place the cursor advances: it takes the
+(`src/formatter/mod.rs:1312`) is the ONLY place the cursor advances: it takes the
 comment at the cursor plus every continuation of it, so whichever hook claims a HEAD
 takes the whole run. `emit_claimed_run` then places it, at one of three typed
 positions — on its own lines at the current indent (the leading and EOF flushes, and
@@ -910,7 +997,7 @@ looks like a gap in the run of commented lines and splits the alignment group.
 
 A comment written after a block's LAST child leads no next child and trails no previous
 one, so no sibling hook claims it. `emit_orphan_comments_before_close`
-(`src/formatter/mod.rs:1489`) is the shared chokepoint that does — it takes the block's
+(`src/formatter/mod.rs:1555`) is the shared chokepoint that does — it takes the block's
 `header_start` and its end, and every closing block calls it immediately before its
 `dedent()`.
 
@@ -947,11 +1034,21 @@ chokepoint](#interior-comments-and-the-delimited-list-chokepoint) — the list i
 routed to an imperative exploded emission that re-renders each element on the outer
 formatter, so the ordinary leading, trailing and orphan-before-close hooks all fire
 at the list's interior indent. `format_bracketed_broken_with_comments`
-(`src/formatter/mod.rs:1619`) is that emission: per element it flushes leading
-comments, renders, writes `,` and a newline, then claims a trailing comment; after
-the last element it flushes once more against the container's end, which is what
-catches a comment sitting on its own line between the last element and the closing
-delimiter.
+(`src/formatter/mod.rs:1685`) is that emission: per element it flushes leading
+comments, renders, and writes `,`; where the element ENDS a row it then breaks the
+line and claims a trailing comment, and where the next element continues the row
+beside it, a space follows the comma instead. Skipping the two hooks mid-row is
+sound rather than a silent drop, and the reason is not that a comment cannot occur
+there but that the row predicate GUARANTEES it does not: a comment anywhere between
+two elements is itself a break, so the row ends and the hooks fire. The guarantee
+has to be stated that way round, because the tempting version — *a `#` runs to end
+of line, so it always brings a newline* — is true and does not imply it. The
+newline a `#` brings can land on the far side of an author grouping `)`
+(`[(1 # note\n), 2,]`), which the row scan skips past; the comment scan therefore
+reads the WIDER, unanchored window, and a row continued past a comment is
+unreachable rather than merely unobserved. After the last element the emitter
+flushes once more against the container's end, which is what catches a comment
+sitting on its own line between the last element and the closing delimiter.
 
 Clause and block HEADERS get the same treatment one level up, and the layout decides
 where the comment goes. When the suite is indented, the header owns its line, so the
