@@ -276,8 +276,18 @@ as oracle hygiene, and the self-host is never dumbed down to match.
    the verdict. Intended semantics come from the docs and first principles.
 3. Where lanes AGREE, ask separately whether the agreed answer is *correct*.
    Agreement is evidence about consistency, never about truth.
-4. **A BOTH-WRONG row is an OWNER ASK** (owner 2026-08-22, sharpening the
-   rule above). BOTH-WRONG is a *tracked category*, not a feeling: the parity
+4. **A BOTH-WRONG row is an OWNER ASK — but ONLY where the semantics are NOT
+   YET RATIFIED** (owner 2026-08-22: *"just use common sense and be reasonable.
+   If you ever feel ggdef could be wrong about something not yet ratified, then
+   raise it with me"*). **Where the ledger already rules, there is nothing to
+   ask**: ggdef is simply wrong or lagging against a standing decision, and the
+   answer is to fix ggdef and file it. Escalating a settled question is its own
+   defect — the D37 entry records a round lost to exactly that, and the check is
+   Core #15e Q1: *is this asymmetry a defect, or two positions with different
+   RATIFIED semantics?* **So the sequence is: read the ledger FIRST, then ask
+   only about the cells it leaves open.**
+
+   BOTH-WRONG is a *tracked category*, not a feeling: the parity
    adjudicator in `self_host_runtime_diff` reports it when **Rust `gg` and the
    self-host AGREE on an output and ggdef, having run cleanly to a `Value`,
    DISAGREES**. Raise it whether or not you feel unsure, with the evidence for
