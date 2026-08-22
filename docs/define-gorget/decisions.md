@@ -2879,8 +2879,12 @@ succession (self-host over Rust `gg`), but "ADJ-MATCH" now means *three
 implementations agree*, which is a strong prior and not a proof.
 
 **⛔ PROCEDURE — a THIRD owner-ask category**, alongside a genuine design
-decision and permission to close a non-convergent round: **if you are UNSURE
-which side of an oracle disagreement is right, ASK.** Carry the evidence for
+decision and permission to close a non-convergent round: **a BOTH-WRONG row is
+an OWNER ASK** (owner 2026-08-22). BOTH-WRONG is the adjudicator's own tracked
+category — Rust `gg` and the self-host AGREE on an output, and ggdef, having run
+cleanly to a `Value`, DISAGREES — reported by `self_host_runtime_diff`. Raise it
+whether or not you feel unsure; a confident wrong reading is precisely the case
+a confidence-gated rule never catches. Carry the evidence for
 both readings; do not guess, and do not resolve it by deferring to whichever
 lane feels authoritative. The failure this prevents is silent — a wrong guess
 about which oracle is right does not announce itself, it just becomes the new

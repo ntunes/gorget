@@ -276,10 +276,28 @@ as oracle hygiene, and the self-host is never dumbed down to match.
    the verdict. Intended semantics come from the docs and first principles.
 3. Where lanes AGREE, ask separately whether the agreed answer is *correct*.
    Agreement is evidence about consistency, never about truth.
-4. **If you are UNSURE which side of a disagreement is right, that is an
-   OWNER ASK** — an explicit open question carrying the evidence for both
-   readings. Not a guess, and not resolved by deferring to whichever lane
+4. **A BOTH-WRONG row is an OWNER ASK** (owner 2026-08-22, sharpening the
+   rule above). BOTH-WRONG is a *tracked category*, not a feeling: the parity
+   adjudicator in `self_host_runtime_diff` reports it when **Rust `gg` and the
+   self-host AGREE on an output and ggdef, having run cleanly to a `Value`,
+   DISAGREES**. Raise it whether or not you feel unsure, with the evidence for
+   both readings. Not a guess, and not resolved by deferring to whichever lane
    feels authoritative.
+
+   **Why category-gated beats confidence-gated.** The first draft of this rule
+   said "if you are UNSURE, ask" — which depends on the agent NOTICING that it
+   is unsure, and a confident wrong reading is exactly the case that never
+   triggers it. BOTH-WRONG fires off a computed row instead, so it works with a
+   weaker reader (Core #15: make rigor mechanical, not clever). The gate already
+   prints the three-way — stem, agreed output, ggdef's output — so the ask
+   assembles itself.
+
+   **Note what does NOT route here.** A static rejection routes UNADJ, not
+   BOTH-WRONG; so do out-of-subset programs, float-render HOLDs (D8), traps,
+   fuel exhaustion, and ICEs. BOTH-WRONG is specifically *two implementations
+   agreeing against a clean definitional answer* — which is why it is worth an
+   owner's attention: it is the one configuration where "the lanes agree"
+   carries real weight AND the definition says otherwise.
 
 Step 4 is a third owner-ask category alongside the two in the round lifecycle
 (a genuine design decision; permission to close a non-convergent round). It
