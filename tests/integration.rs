@@ -34807,13 +34807,25 @@ done",
 /// fixtures, and turns every intentional north-star run (the documented
 /// invocation below) into a gate instead of a printout.
 ///
-/// Run it with:
-///   GG_RUNTIME_DIFF=1 cargo test --test integration --release self_host_runtime_diff -- --nocapture
+/// Runs BY DEFAULT (owner 2026-08-22); opt out with GG_RUNTIME_DIFF=0.
+/// For the printed census:
+///   cargo test --test integration --release self_host_runtime_diff -- --nocapture
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_runtime_diff() {
-    if std::env::var("GG_RUNTIME_DIFF").as_deref() != Ok("1") {
-        // Diagnostic-only: opt in via GG_RUNTIME_DIFF=1.
+    // DEFAULT-ON (owner 2026-08-22). This gate used to be opt-IN, and the
+    // failure mode was measured: AGENTS.md never named `GG_RUNTIME_DIFF`, so
+    // the round-close battery could be GREEN on every listed target while this
+    // ceiling assert never executed at all. non-MATCH drifted 148 -> 151 across
+    // R42 with nothing able to see it. A gate that never RUNS is strictly worse
+    // than one that has never been seen to fail (Core #13).
+    //
+    // Opt OUT with GG_RUNTIME_DIFF=0 -- CI does exactly that in both integration
+    // jobs; the round-close battery is where this is meant to bite. Measured
+    // 2026-08-22: ~2.5 min with the self-host driver already cached, ~12 min
+    // cold, where the driver BUILD dominates and the census itself is the
+    // smaller half.
+    if std::env::var("GG_RUNTIME_DIFF").as_deref() == Ok("0") {
         return;
     }
 
@@ -35451,7 +35463,22 @@ fn self_host_runtime_diff() {
     // raises. OWNER-ASK GRANTED 2026-08-10 for a documented raise; SH
     // follow-up TODOs filed per family. Lowering back to 142 requires
     // porting the inflow fixtures to SH.
-    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 148;
+    // 2026-08-22: RESEEDED 148 -> 151, OWNER-GRANTED, and the debt is named
+    // rather than absorbed. These three are R42's own unported parity inflow --
+    // added between R41 close (e62fef9d) and R43 baseline (4ba2bbdb), found only
+    // when R43 ran this gate for the first time since. All three are CC-FAIL:
+    // the self-host emits C that will not compile.
+    //   exec_alone_no_env                       unknown type name `ExecResult`
+    //   fmt_delimited_list_generic_args_window  undefined `P2__pick__Callable__GorgetClosure`
+    //   fmt_delimited_list_interior_comment     undefined `Box2__pick__int64_t`
+    // The latter two are ONE class: a generic-method monomorphization the SH
+    // lane never emits. Porting them is filed (TODO.md, Self-host parity) and
+    // LOWERS this number -- lowering needs no sign-off; raising does.
+    //
+    // ⚠ This raise was sanctioned ONLY because the inflow is PRE-EXISTING from
+    // the raising round's point of view. Core #9 ⊕ forbids raising it for a
+    // round's OWN inflow, with no exemption; the fix there is to port.
+    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 151;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: non-MATCH ceiling skipped (debug profile — same \

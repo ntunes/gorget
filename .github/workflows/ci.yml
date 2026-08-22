@@ -79,6 +79,12 @@ jobs:
       - name: Integration tests
         run: cargo test --test integration -- --test-threads=1
         env:
+          # The self-host parity census is default-ON for the round-close battery
+          # (owner 2026-08-22). CI opts out: it already pays for two full sweeps,
+          # and here the cost is the COLD self-host driver build (~12 min), not
+          # the census itself (~2.5 min once the driver is cached) -- both
+          # measured 2026-08-22.
+          GG_RUNTIME_DIFF: "0"
           GG_BUILD_TIMEOUT_SECS: 600
           GG_TEST_TIMEOUT_SECS: 600
           # Every stage self-compile deadline (the fixed-point + clone-ceiling
@@ -155,6 +161,8 @@ jobs:
       - name: Integration tests (LLVM backend)
         run: cargo test --test integration --release -- --test-threads=4
         env:
+          # Opts out of the default-ON self-host parity census; see the C job.
+          GG_RUNTIME_DIFF: "0"
           GG_BACKEND: llvm
           GG_BUILD_TIMEOUT_SECS: 600
           GG_TEST_TIMEOUT_SECS: 600
