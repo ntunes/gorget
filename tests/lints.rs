@@ -18698,6 +18698,13 @@ fn fmt_author_row_grouping_survives_formatting() {
     /// fixture `fmt_author_rows/author_paren_holds_a_comment.gg`. Abstaining is
     /// what a guard does instead of firing on legal code; it is not licence to
     /// lower this again for a shrink nobody chose.
+    ///
+    /// ⬆ THEN RAISED 24 → 25 when `interior_comment_triggers.gg` replaced
+    /// `interior_comment_without_comma.gg`: the rename added a second, genuinely
+    /// adjudicable container (`gated_only` — a comment and NO author comma, the
+    /// disjunct no fixture in the family previously exercised). A RAISE needs no
+    /// defence the way a lowering does; it is recorded only so the 26 → 24 note
+    /// above is not read as describing the current value.
     const MIN_SUBJECT_SITES: usize = 25;
     /// The SCANNER's own non-vacuity floor, on a population three orders of
     /// magnitude larger than the subject set: if the walk stops finding
