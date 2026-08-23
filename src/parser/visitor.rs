@@ -452,3 +452,228 @@ pub fn walk_block<V: ExprVisitor + ?Sized>(v: &mut V, block: &Block) {
         v.visit_stmt(stmt);
     }
 }
+
+// ─── Child enumeration — THE one source of truth for "what are an
+//     expression's sub-expressions" (devbook/24 Layering rule 3) ─────────
+//
+// R44 Track E. Every pass whose contract is to REACH EVERY expression
+// position — a rewriter, an instance collector, a "does any sub-expression
+// have property P" predicate — routes its recursion through here instead of
+// hand-rolling a `match` that ends in `_ => {}`. A hand-rolled walker that
+// silently skips a position is the defect class this replaces: the skipped
+// position produces a MISSING diagnostic, a lost generic instance, or a
+// silent under-capture, and nothing in the type system notices.
+//
+// THREE STRUCTURAL GUARDS, all plain compile errors, no lint needed:
+//   1. EVERY VARIANT IS MATCHED — no `_ =>` arm, so adding an `Expr` variant
+//      fails to compile here.
+//   2. EVERY FIELD IS NAMED — no `..` in any pattern, so adding a *field* to
+//      an existing variant fails to compile here.
+//   3. EVERY BOUND FIELD IS USED — `#[deny(unused_variables)]`, so a child
+//      field that is destructured but never forwarded fails to compile.
+//
+// Fields that genuinely are not child expressions are written `field: _`,
+// which is an explicit acknowledgement rather than a silent skip.
+//
+// ⚠ WHAT THESE GUARDS DO NOT CATCH (state it, do not pretend otherwise):
+//   - a field whose type CHANGES from non-`Expr` to `Expr`-bearing while its
+//     pattern stays `field: _`;
+//   - a child forwarded to the wrong callback, or forwarded under a
+//     condition;
+//   - a `Vec` child iterated partially;
+//   - anything on the `Stmt`, `Pattern` or `Type` axes. `Expr` and `Stmt` are
+//     mutually recursive, so a gap in `Stmt` loses positions just as surely.
+//     `Type` is not closed over `Expr` here either — and that population is
+//     not theoretical: `Type::Array`'s `size` is a real `Expr` behind a
+//     `Type`, and it carries a live defect (see TODO.md, `types.rs` `_ => 0`).
+// Those need the positional fixture net, not a type-level guard.
+
+/// Apply `on_expr` to every DIRECT child expression of `e`, and `on_block` to
+/// every [`Block`] it directly owns. Does NOT recurse — the caller decides
+/// whether to descend, which keeps this usable by both full traversals and
+/// depth-limited ones.
+///
+/// ⚠ The explicit `<'a>` on the callbacks is LOAD-BEARING: it is what lets a
+/// caller COLLECT the children into a `Vec` and walk them afterwards. An
+/// elided-lifetime signature fails to compile at such a call site (`E0521`),
+/// and collect-then-walk is the only spelling available to a caller that
+/// needs `&mut` state in both callbacks (two closures over the same `&mut`
+/// state is `E0524`). Do not "simplify" the lifetimes away.
+#[deny(unused_variables)]
+pub fn visit_expr_children<'a>(
+    e: &'a Expr,
+    on_expr: &mut dyn FnMut(&'a Spanned<Expr>),
+    on_block: &mut dyn FnMut(&'a Block),
+) {
+    match e {
+        // ── Leaves ──
+        Expr::IntLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::BoolLiteral(_)
+        | Expr::NoneLiteral
+        | Expr::Identifier(_)
+        | Expr::SelfExpr
+        | Expr::ReturnValue
+        | Expr::It
+        | Expr::MetaOpToken(_) => {}
+        Expr::Path { segments: _ } => {}
+
+        // ── Single-operand wrappers ──
+        Expr::Move { expr }
+        | Expr::Propagate { expr }
+        | Expr::MutableBorrow { expr }
+        | Expr::Deref { expr }
+        | Expr::ImplicitClosure { body: expr } => on_expr(expr),
+        Expr::As { expr, type_: _ } => on_expr(expr),
+        Expr::Await { expr, prefix_form: _ } => on_expr(expr),
+        Expr::Spawn { expr, unchecked: _ } => on_expr(expr),
+        Expr::SpawnBlocking { expr, unchecked: _ } => on_expr(expr),
+        Expr::Is { expr, negated: _, pattern: _ } => on_expr(expr),
+        Expr::UnaryOp { op: _, operand } => on_expr(operand),
+        Expr::FieldAccess { object, field: _ } => on_expr(object),
+        Expr::OptionalChain { object, field: _ } => on_expr(object),
+        Expr::TupleFieldAccess { object, index: _ } => on_expr(object),
+        Expr::Closure { is_move: _, is_async: _, params: _, body } => on_expr(body),
+
+        // ── Two-operand ──
+        Expr::BinaryOp { left, op: _, right } => {
+            on_expr(left);
+            on_expr(right);
+        }
+        Expr::MetaOpInfix { left, op_name: _, right } => {
+            on_expr(left);
+            on_expr(right);
+        }
+        Expr::DefaultOp { lhs, rhs } => {
+            on_expr(lhs);
+            on_expr(rhs);
+        }
+        Expr::Index { object, index } => {
+            on_expr(object);
+            on_expr(index);
+        }
+        Expr::Catch { expr, error_binding: _, recovery } => {
+            on_expr(expr);
+            on_expr(recovery);
+        }
+        Expr::Rethrow { expr, error_binding: _, transform } => {
+            on_expr(expr);
+            on_expr(transform);
+        }
+
+        // ── Calls ──
+        Expr::Call { callee, generic_args: _, args } => {
+            on_expr(callee);
+            for a in args {
+                on_expr(&a.node.value);
+            }
+        }
+        Expr::MethodCall { receiver, method: _, generic_args: _, args } => {
+            on_expr(receiver);
+            for a in args {
+                on_expr(&a.node.value);
+            }
+        }
+        // ⚠ NOT a leaf: `.Ok(expr)` carries real argument expressions.
+        Expr::DotShorthand { variant: _, args } => {
+            for a in args {
+                on_expr(&a.node.value);
+            }
+        }
+
+        // ── Literals with children ──
+        Expr::ArrayLiteral(items, _) => {
+            for i in items {
+                on_expr(i);
+            }
+        }
+        Expr::TupleLiteral(items) => {
+            for i in items {
+                on_expr(i);
+            }
+        }
+        Expr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                on_expr(k);
+                on_expr(v);
+            }
+        }
+        Expr::StructLiteral { name: _, generic_args: _, args } => {
+            for a in args {
+                on_expr(a);
+            }
+        }
+        // ⚠ The pre-parsed interpolation expressions are the REAL children.
+        // `walk_expr` above synthesises fake `Identifier` nodes from
+        // `lit.segments` with `Span::dummy()` instead, so a visitor built on
+        // it cannot see a method call inside `f"{...}"`. That is the
+        // "arm exists but under-recurses" hole a no-catch-all `match` cannot
+        // detect on its own — which is why guard 3 exists.
+        Expr::StringLiteral(_, interps) => {
+            for i in interps {
+                on_expr(i);
+            }
+        }
+
+        // ── Control-flow expressions ──
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
+            on_expr(condition);
+            on_expr(then_branch);
+            for (c, b) in elif_branches {
+                on_expr(c);
+                on_expr(b);
+            }
+            if let Some(eb) = else_branch {
+                on_expr(eb);
+            }
+        }
+        Expr::Match { scrutinee, arms, else_arm } => {
+            on_expr(scrutinee);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    on_expr(g);
+                }
+                on_expr(&arm.body);
+            }
+            if let Some(eb) = else_arm {
+                on_expr(eb);
+            }
+        }
+        Expr::Range { start, end, inclusive: _, colon: _ } => {
+            if let Some(s) = start {
+                on_expr(s);
+            }
+            if let Some(en) = end {
+                on_expr(en);
+            }
+        }
+
+        // ── Comprehensions ──
+        Expr::ListComprehension { expr, variable: _, ownership: _, iterable, condition } => {
+            on_expr(iterable);
+            on_expr(expr);
+            if let Some(c) = condition {
+                on_expr(c);
+            }
+        }
+        Expr::SetComprehension { expr, variable: _, iterable, condition } => {
+            on_expr(iterable);
+            on_expr(expr);
+            if let Some(c) = condition {
+                on_expr(c);
+            }
+        }
+        Expr::DictComprehension { key, value, variables: _, iterable, condition } => {
+            on_expr(iterable);
+            on_expr(key);
+            on_expr(value);
+            if let Some(c) = condition {
+                on_expr(c);
+            }
+        }
+
+        // ── Block-bearing ──
+        Expr::Block(block) => on_block(block),
+        Expr::Do { body, author_spelled: _ } => on_block(body),
+    }
+}

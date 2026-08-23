@@ -2876,6 +2876,154 @@ async void main():
         );
     }
 
+    // ─── §3.8b Purity recursion reaches EVERY expression position ──
+    //
+    // R44 Track E. `purity_walk_expr` delegates its recursion to the one
+    // exhaustive child enumeration, `parser::visitor::visit_expr_children`.
+    // Before that, it hand-rolled a `match` that silently skipped 11 of the
+    // 47 `Expr` variants (9 of them child-bearing) and UNDER-RECURSED
+    // `StringLiteral` by ignoring the parsed interpolation expressions.
+    //
+    // Consequence: a function whose ONLY effectful call sits in a skipped
+    // position was inferred `Pure`, so `is_yield_point_call` answered "not a
+    // yield point" and the `CompoundYieldRace` warning went SILENTLY MISSING
+    // on a genuinely racy program. That is a missing diagnostic, not a wrong
+    // one — invisible on any green dashboard.
+    //
+    // AXIS: which `Expr` variant hides the effectful call. One test per cell.
+    // Cells covered below: `StringLiteral` interpolation (the under-recursion
+    // half), `DefaultOp` (`??`), `Do` (`do:`), `SetComprehension`,
+    // `DictComprehension`, `DotShorthand` (`.Variant(arg)`).
+    // Cells NOT covered, and why: `Catch`/`Rethrow` need a `throws` callee
+    // (their children are reached through the same chokepoint arm as
+    // `DefaultOp`, which is exercised here); `OptionalChain` and `Block` are
+    // reached by the same one-child / block-callback arms as `FieldAccess`
+    // and `Do`; `MetaOpInfix` exists only inside `meta` evaluation, which
+    // never reaches purity inference.
+    //
+    // RED-VERIFIED by break-and-watch: restoring the pre-absorption
+    // `validation.rs` from HEAD makes ALL SIX of these fail (no warning).
+
+    /// Shared harness: `hidden()` is the function under test. It is racy only
+    /// if purity inference SEES the `sleep` call buried inside `hidden`.
+    fn compound_yield_race_probe(hidden: &str) -> bool {
+        let source = format!(
+            "\
+{hidden}
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    with x:
+        x = x + hidden()
+"
+        );
+        let warnings = check_warnings(&source);
+        has_warning(&warnings, |k| {
+            matches!(k,
+                crate::semantic::errors::SemanticWarningKind::CompoundYieldRace { shared_name, .. }
+                if shared_name == "x")
+        })
+    }
+
+    #[test]
+    fn purity_sees_effect_inside_fstring_interpolation() {
+        assert!(
+            compound_yield_race_probe(
+                "\
+int hidden():
+    String s = f\"{sleep(1)}\"
+    return 1
+"
+            ),
+            "CompoundYieldRace went missing: the `sleep` call inside the \
+             f-string interpolation was not reached by purity inference"
+        );
+    }
+
+    #[test]
+    fn purity_sees_effect_inside_default_op() {
+        assert!(
+            compound_yield_race_probe(
+                "\
+int hidden():
+    Option[int] o = None
+    return o ?? sleep(1)
+"
+            ),
+            "CompoundYieldRace went missing: the `sleep` call in the `??` \
+             right-hand side was not reached by purity inference"
+        );
+    }
+
+    #[test]
+    fn purity_sees_effect_inside_do_block() {
+        assert!(
+            compound_yield_race_probe(
+                "\
+int hidden():
+    int v = do:
+        sleep(1)
+    return v
+"
+            ),
+            "CompoundYieldRace went missing: the `sleep` call inside the \
+             `do:` block expression was not reached by purity inference"
+        );
+    }
+
+    #[test]
+    fn purity_sees_effect_inside_set_comprehension() {
+        assert!(
+            compound_yield_race_probe(
+                "\
+int hidden():
+    Set[int] s = {sleep(1) for k in 0..1}
+    return 1
+"
+            ),
+            "CompoundYieldRace went missing: the `sleep` call in the \
+             set-comprehension body was not reached by purity inference"
+        );
+    }
+
+    #[test]
+    fn purity_sees_effect_inside_dict_comprehension() {
+        assert!(
+            compound_yield_race_probe(
+                "\
+int hidden():
+    Dict[int, int] d = {k: sleep(1) for k in 0..1}
+    return 1
+"
+            ),
+            "CompoundYieldRace went missing: the `sleep` call in the \
+             dict-comprehension value was not reached by purity inference"
+        );
+    }
+
+    #[test]
+    fn purity_sees_effect_inside_dot_shorthand_arg() {
+        assert!(
+            compound_yield_race_probe(
+                "\
+enum Tag:
+    Plain
+    Numbered(int)
+
+int hidden():
+    Tag t = .Numbered(sleep(1))
+    return 1
+"
+            ),
+            "CompoundYieldRace went missing: the `sleep` call in the \
+             `.Variant(arg)` shorthand argument was not reached by purity \
+             inference"
+        );
+    }
+
     // ─── §3.9 Closure Captures With Binding Tests ───────────────
 
     #[test]

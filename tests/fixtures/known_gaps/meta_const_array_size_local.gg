@@ -1,0 +1,33 @@
+# R44 Track E — a `meta` constant used as an ARRAY SIZE in a LOCAL DECLARATION.
+#
+# AXIS: array-size position. This fixture samples the LOCAL-VARIABLE cell.
+# Siblings (same axis, other cells):
+#   meta_const_array_size_param.gg    — function PARAMETER type
+#   meta_const_array_size_return.gg   — function RETURN type
+#   the STRUCT-FIELD cell is NOT covered: `struct S: int[3] data` is
+#   check-clean but fails the C compile even with a LITERAL size, a separate
+#   pre-existing defect filed in TODO.md ("struct field of fixed-array type").
+#
+# RED-VERIFIED at HEAD 4a16e4c5 (pre-fix): `gg check` rc 1,
+#   `type mismatch: expected `int[0]`, found `int[3]``
+# because `meta.rs:1894 substitute_type` dropped the SIZE expression of
+# `Type::Array` on the floor, so `N` never became `3` and `types.rs`
+# resolved the unevaluated size to 0.
+#
+# ⚠ WHY THIS LIVES IN `known_gaps/` DESPITE PASSING: placement, not status.
+# `runtime_parity_corpus` (tests/integration.rs) auto-scans every TOP-LEVEL
+# `tests/fixtures/*.gg`, and the self-host lane cannot compile this shape at
+# all — its parser has NO `Type[N]` array-type production, so `int[N]` in a
+# type position parses as `TNamed("int", [N])` (generic arguments) and
+# `TArray` is never constructed from source. A top-level row would therefore
+# be own-round non-MATCH inflow against `RUNTIME_DIFF_NONMATCH_CEILING`,
+# which Core #9 ⊕ forbids outright. The test below is LIVE, not `#[ignore]`d:
+# the Rust behaviour asserted here is the CORRECT behaviour and a regression
+# goes red immediately. Promote to top-level the moment the self-host lane
+# grows fixed-size array types (filed in TODO.md).
+meta int N = 3
+
+int main():
+    int[N] a = [10, 20, 30]
+    print(a[0] + a[1] + a[2])
+    return 0

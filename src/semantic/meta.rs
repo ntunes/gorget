@@ -1891,12 +1891,22 @@ fn validate_type(ty: &Type, value: &MetaValue, span: Span) -> Result<(), Semanti
 
 // ── Type substitution ──
 
-fn substitute_type(ty: &mut Spanned<Type>, type_env: &FxHashMap<String, Type>) {
+/// Substitute a type in place.
+///
+/// ⚠ `env` (the META-VALUE environment) is threaded here, not just
+/// `type_env`, because `Type::Array`'s `size` is a real `Expr` sitting
+/// behind a `Type` — the ONLY `Type` -> `Expr` edge in the whole enum.
+/// A `Type` walker that only substitutes TYPES silently leaves
+/// `int[N]`'s `N` unsubstituted, and the size then resolves to 0.
+/// That is not a feature list, it is the structural fact: whenever a
+/// new `Type` variant carries an `Expr`, this match stops compiling
+/// (no catch-all) and the same question has to be answered for it.
+fn substitute_type(ty: &mut Spanned<Type>, env: &FxHashMap<String, MetaValue>, type_env: &FxHashMap<String, Type>) {
     match &mut ty.node {
         Type::Named { name, generic_args } => {
             // Recurse into generic args first
             for arg in generic_args.iter_mut() {
-                substitute_type(arg, type_env);
+                substitute_type(arg, env, type_env);
             }
             if let Some(replacement) = type_env.get(&name.node) {
                 if generic_args.is_empty() {
@@ -1909,21 +1919,24 @@ fn substitute_type(ty: &mut Spanned<Type>, type_env: &FxHashMap<String, Type>) {
                 }
             }
         }
-        Type::Array { element, .. } => substitute_type(element, type_env),
-        Type::Slice { element } => substitute_type(element, type_env),
+        Type::Array { element, size } => {
+            substitute_type(element, env, type_env);
+            substitute_expr(size, env, type_env);
+        }
+        Type::Slice { element } => substitute_type(element, env, type_env),
         Type::Tuple(elems) => {
             for e in elems {
-                substitute_type(e, type_env);
+                substitute_type(e, env, type_env);
             }
         }
         Type::Function { return_type, params, .. } => {
-            substitute_type(return_type, type_env);
+            substitute_type(return_type, env, type_env);
             for p in params {
-                substitute_type(p, type_env);
+                substitute_type(p, env, type_env);
             }
         }
         Type::Ref(inner) | Type::Owned(inner) | Type::Pointer(inner) => {
-            substitute_type(inner, type_env);
+            substitute_type(inner, env, type_env);
         }
         Type::Primitive(_) | Type::SelfType | Type::Inferred => {}
     }
@@ -1935,9 +1948,9 @@ fn substitute_item(item: &mut Item, env: &FxHashMap<String, MetaValue>, type_env
     match item {
         Item::Function(f) => substitute_function(f, env, type_env),
         Item::Equip(eq) => {
-            substitute_type(&mut eq.type_, type_env);
+            substitute_type(&mut eq.type_, env, type_env);
             if let Some(trait_) = &mut eq.trait_ {
-                substitute_type(&mut trait_.trait_name, type_env);
+                substitute_type(&mut trait_.trait_name, env, type_env);
             }
             for method in &mut eq.items {
                 substitute_function(&mut method.node, env, type_env);
@@ -1945,30 +1958,30 @@ fn substitute_item(item: &mut Item, env: &FxHashMap<String, MetaValue>, type_env
         }
         Item::Struct(s) => {
             for field in &mut s.fields {
-                substitute_type(&mut field.node.type_, type_env);
+                substitute_type(&mut field.node.type_, env, type_env);
             }
         }
         Item::Enum(e) => {
             for variant in &mut e.variants {
                 if let VariantFields::Tuple(types) = &mut variant.node.fields {
                     for ty in types {
-                        substitute_type(ty, type_env);
+                        substitute_type(ty, env, type_env);
                     }
                 }
             }
         }
         Item::TypeAlias(ta) => {
-            substitute_type(&mut ta.type_, type_env);
+            substitute_type(&mut ta.type_, env, type_env);
         }
         Item::Newtype(nt) => {
-            substitute_type(&mut nt.inner_type, type_env);
+            substitute_type(&mut nt.inner_type, env, type_env);
         }
         Item::ConstDecl(c) => {
-            substitute_type(&mut c.type_, type_env);
+            substitute_type(&mut c.type_, env, type_env);
             substitute_expr(&mut c.value, env, type_env);
         }
         Item::StaticDecl(s) => {
-            substitute_type(&mut s.type_, type_env);
+            substitute_type(&mut s.type_, env, type_env);
             substitute_expr(&mut s.value, env, type_env);
         }
         Item::Trait(t) => {
@@ -1977,7 +1990,7 @@ fn substitute_item(item: &mut Item, env: &FxHashMap<String, MetaValue>, type_env
                     TraitItem::Method(f) => substitute_function(f, env, type_env),
                     TraitItem::AssociatedType(at) => {
                         if let Some(default) = &mut at.default {
-                            substitute_type(default, type_env);
+                            substitute_type(default, env, type_env);
                         }
                     }
                 }
@@ -2007,15 +2020,15 @@ fn substitute_item(item: &mut Item, env: &FxHashMap<String, MetaValue>, type_env
 }
 
 fn substitute_function(f: &mut FunctionDef, env: &FxHashMap<String, MetaValue>, type_env: &FxHashMap<String, Type>) {
-    substitute_type(&mut f.return_type, type_env);
+    substitute_type(&mut f.return_type, env, type_env);
     for param in &mut f.params {
-        substitute_type(&mut param.node.type_, type_env);
+        substitute_type(&mut param.node.type_, env, type_env);
         if let Some(default) = &mut param.node.default {
             substitute_expr(default, env, type_env);
         }
     }
     if let Some(throws) = f.throws.explicit_type_mut() {
-        substitute_type(throws, type_env);
+        substitute_type(throws, env, type_env);
     }
     match &mut f.body {
         FunctionBody::Block(block) => substitute_block(block, env, type_env),
@@ -2165,7 +2178,7 @@ fn expand_match_meta_for(
 fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env: &FxHashMap<String, Type>) {
     match stmt {
         Stmt::VarDecl { type_, value, .. } => {
-            substitute_type(type_, type_env);
+            substitute_type(type_, env, type_env);
             substitute_expr(value, env, type_env);
         }
         Stmt::Expr(expr) => {
@@ -2248,7 +2261,7 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
             for arm in arms {
                 match &mut arm.op {
                     SelectOp::Recv { type_, channel, .. } => {
-                        substitute_type(type_, type_env);
+                        substitute_type(type_, env, type_env);
                         substitute_expr(channel, env, type_env);
                     }
                     SelectOp::Send { channel, value } => {
@@ -2333,7 +2346,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
             }
             substitute_expr(callee, env, type_env);
             if let Some(ga) = generic_args {
-                for ty in ga { substitute_type(ty, type_env); }
+                for ty in ga { substitute_type(ty, env, type_env); }
             }
             for arg in args {
                 substitute_expr(&mut arg.node.value, env, type_env);
@@ -2342,7 +2355,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         Expr::MethodCall { receiver, generic_args, args, .. } => {
             substitute_expr(receiver, env, type_env);
             if let Some(ga) = generic_args {
-                for ty in ga { substitute_type(ty, type_env); }
+                for ty in ga { substitute_type(ty, env, type_env); }
             }
             for arg in args {
                 substitute_expr(&mut arg.node.value, env, type_env);
@@ -2390,7 +2403,7 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         Expr::Closure { params, body, .. } => {
             for param in params {
                 if let Some(ty) = &mut param.node.type_ {
-                    substitute_type(ty, type_env);
+                    substitute_type(ty, env, type_env);
                 }
             }
             substitute_expr(body, env, type_env);
@@ -2425,13 +2438,13 @@ fn substitute_expr(expr: &mut Spanned<Expr>, env: &FxHashMap<String, MetaValue>,
         }
         Expr::StructLiteral { generic_args, args, .. } => {
             if let Some(ga) = generic_args {
-                for ty in ga { substitute_type(ty, type_env); }
+                for ty in ga { substitute_type(ty, env, type_env); }
             }
             for arg in args { substitute_expr(arg, env, type_env); }
         }
         Expr::As { expr: inner, type_ } => {
             substitute_expr(inner, env, type_env);
-            substitute_type(type_, type_env);
+            substitute_type(type_, env, type_env);
         }
         Expr::Is { expr: inner, .. } => {
             substitute_expr(inner, env, type_env);

@@ -878,7 +878,13 @@ fn d29_propagate_walker_arm_coverage() {
         ("src/ir/lowering/liveness.rs", 1),
         ("src/loader.rs", 2),
         ("src/parser/expr.rs", 2),
-        ("src/parser/visitor.rs", 1),
+        // R44 Track E (2026-08-23): 1 → 2. The child-enumeration CHOKEPOINT
+        // `visit_expr_children` adds a SECOND `Expr::Propagate` arm in this
+        // file — it is the one exhaustive enumeration of an expression's
+        // children, so the transparent wrapper this lint pins must appear in
+        // it by construction (its `match` has no `_ =>` arm, so rustc, not
+        // this count, is what actually forces it).
+        ("src/parser/visitor.rs", 2),
         ("src/semantic/meta.rs", 2),
         ("src/semantic/resolve.rs", 1),
         ("src/semantic/rewrite.rs", 2),
@@ -886,7 +892,18 @@ fn d29_propagate_walker_arm_coverage() {
         ("src/semantic/safety/helpers.rs", 5),
         ("src/semantic/safety/origins.rs", 1),
         ("src/semantic/safety/return_borrows.rs", 2),
-        ("src/semantic/safety/validation.rs", 1),
+        // R44 Track E (2026-08-23): 1 → 0, and this is MORE coverage, not
+        // less. `purity_walk_expr`'s hand-rolled child walk — which owned the
+        // `Expr::Propagate` arm counted here, and silently skipped 11 of the
+        // 47 variants — was ABSORBED into the chokepoint. The wrapper arm now
+        // lives once, in `src/parser/visitor.rs`, under rustc exhaustiveness.
+        //
+        // ⚠ This drop is NOT self-justified prose: the routing is asserted
+        // mechanically by `expr_stmt_walker_population_is_pinned` below, which
+        // computes this walker's `[ROUTED]` disposition from its own body and
+        // goes RED if it ever stops calling the chokepoint. Do not restore an
+        // arm here; that would re-open the hole this closed.
+        ("src/semantic/safety/validation.rs", 0),
         ("src/semantic/typecheck.rs", 7),
     ];
     for (file, expected) in EXPECTED {
@@ -894,7 +911,7 @@ fn d29_propagate_walker_arm_coverage() {
         let count = content.matches("Expr::Propagate").count();
         assert_eq!(
             count, *expected,
-            "`Expr::Propagate` arm coverage changed in {file}: {count} vs              {expected}.\n\n             The D29 mark is a TRANSPARENT wrapper: every AST walker that has a              `Expr::Move`/wrapper group must see THROUGH it, and `_ => {{}}`              catch-alls make a missing arm silent (missed use → conservative              clone; lost generic instance → undefined symbol; silent              under-capture). If you removed an arm, restore it (or justify +              lower the count). If you are adding a NEW wrapper Expr variant,              extend the wrapper group in EVERY file in this table (the              sibling-sweep obligation), then bump the counts.",
+            "`Expr::Propagate` arm coverage changed in {file}: {count} vs              {expected}.\n\n             The D29 mark is a TRANSPARENT wrapper: every AST walker that has a              `Expr::Move`/wrapper group must see THROUGH it, and `_ => {{}}`              catch-alls make a missing arm silent (missed use → conservative              clone; lost generic instance → undefined symbol; silent              under-capture).\n\n             ⚠ A DROP IS NOT AUTOMATICALLY A REGRESSION, and 'restore the              arm' is the WRONG remedy when the walker was ROUTED. Ask which              of these happened:\n             (a) The walker now DELEGATES its recursion to the child-enumeration              chokepoint `parser::visitor::visit_expr_children`. Then it has MORE              coverage, not less — the wrapper arm lives once, in              `src/parser/visitor.rs`, under rustc exhaustiveness. Lower this              file's count to match and let              `expr_stmt_walker_population_is_pinned` hold the routing: it              computes the `[ROUTED]` disposition from the walker's own body,              so the drop stays machine-checked rather than justified in prose.              Do NOT re-add an arm — that re-opens the hole the routing closed.\n             (b) An arm was genuinely deleted from a still-hand-rolled walker.              Restore it.\n\n             If you are adding a NEW wrapper Expr variant, extend the wrapper              group in EVERY file in this table (the sibling-sweep obligation),              then bump the counts.",
         );
     }
 }
@@ -14314,6 +14331,14 @@ fn formatter_collection_literal_interior_hook_dispatch() {
             "src/parser/visitor.rs",
             "Expr::StructLiteral { args, .. } => {",
         ),
+        // R44 Track E: the child-enumeration chokepoint's arm. A PATTERN —
+        // it destructures every field by name (no `..`) because the
+        // chokepoint's second structural guard is `E0027`, so a new field on
+        // `Expr::StructLiteral` must fail to compile there.
+        (
+            "src/parser/visitor.rs",
+            "Expr::StructLiteral { name: _, generic_args: _, args } => {",
+        ),
         (
             "src/parser/expr.rs",
             "Expr::StructLiteral { args, .. } => args.iter().any(contains_it),",
@@ -14352,6 +14377,9 @@ fn formatter_collection_literal_interior_hook_dispatch() {
          ZERO `Expr::StructLiteral` — the sole producer being \
          `rewrite_struct_calls` in semantic analysis, which `gg fmt` never \
          reaches.\n\n\
+         ⚠ The allowlist is compared as a SORTED Vec, not a set: if a file \
+         gains N mentions with the SAME text, add that row N times or the \
+         assert stays red.\n\n\
          If the new mention is another PATTERN, add it to the allowlist \
          above with its file and snippet. If it is a CONSTRUCTION, the \
          unreachability claim is now FALSE: the formatter arm becomes \
@@ -19073,5 +19101,402 @@ fn known_gaps_passing_allowlist_shrink_only() {
          `#[ignore]`d test silently starts passing. Only the census observes that. Measured \
          2026-08-23: the full run is 1 min 47 s over all 99 rows, so there is no cost \
          argument for leaving it out of the main job."
+    );
+}
+
+// ══════════════════════════════════════════════════════════════
+// R44 Track E — the `Expr`/`Stmt` WALKER POPULATION, pinned as a SET
+// ══════════════════════════════════════════════════════════════
+
+/// A `match` block must name at least this many distinct `Expr::`/`Stmt::`
+/// variants to count as a walker. Below the threshold the population fills
+/// with small local predicates and the set stops being reviewable.
+///
+/// ⚠ THIS IS THE GUARD'S DOCUMENTED HOLE, measured: a hand-rolled walker that
+/// names only FOUR variants is invisible to this lint (dropping a probe
+/// walker from 5 variants to 4 puts the census back to its previous size).
+/// The trade is deliberate — a lower threshold buys noise, not coverage — but
+/// it must be written down rather than discovered.
+const WALKER_MIN_NODE_VARIANTS: usize = 5;
+
+fn is_ident_byte(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// Byte index just past a whole-word `match` keyword in `line`.
+fn find_match_keyword(line: &str) -> Option<usize> {
+    let bytes = line.as_bytes();
+    let mut from = 0usize;
+    while let Some(rel) = line[from..].find("match") {
+        let start = from + rel;
+        let end = start + "match".len();
+        let before_ok = start == 0 || !is_ident_byte(bytes[start - 1]);
+        let after_ok = end >= bytes.len() || !is_ident_byte(bytes[end]);
+        if before_ok && after_ok {
+            return Some(end);
+        }
+        from = end;
+    }
+    None
+}
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+/// The function name declared on `line`, if it declares one.
+fn fn_decl_name(line: &str) -> Option<String> {
+    let mut rest = line.trim_start();
+    if let Some(after_pub) = rest.strip_prefix("pub") {
+        let after_vis = if after_pub.starts_with('(') {
+            let close = after_pub.find(')')?;
+            &after_pub[close + 1..]
+        } else {
+            after_pub
+        };
+        if !after_vis.starts_with(|c: char| c.is_whitespace()) {
+            return None;
+        }
+        rest = after_vis.trim_start();
+    }
+    for kw in ["const ", "async ", "unsafe "] {
+        if let Some(r) = rest.strip_prefix(kw) {
+            rest = r.trim_start();
+        }
+    }
+    let after_fn = rest.strip_prefix("fn ")?;
+    let name: String = after_fn
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .collect();
+    if name.is_empty() { None } else { Some(name) }
+}
+
+/// Every distinct `Expr::Variant` / `Stmt::Variant` named in `body`.
+fn node_variants_named(body: &str) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let bytes = body.as_bytes();
+    for prefix in ["Expr::", "Stmt::"] {
+        let mut from = 0usize;
+        while let Some(rel) = body[from..].find(prefix) {
+            let start = from + rel;
+            let after = start + prefix.len();
+            let before_ok = start == 0 || !is_ident_byte(bytes[start - 1]);
+            let name: String = body[after..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            if before_ok && !name.is_empty() {
+                out.insert(format!("{prefix}{name}"));
+            }
+            from = after;
+        }
+    }
+    out
+}
+
+/// Run the walker census over `src/`, returning one sorted row per walker:
+/// `path::fn [DISPOSITION]`.
+///
+/// The scan is deliberately textual and deliberately simple, so that a
+/// reviewer can re-derive it by hand. Its boundaries are stated in the
+/// lint's docstring.
+fn walker_population() -> Vec<String> {
+    let mut rows: Vec<String> = Vec::new();
+    let mut files = walkdir_rs("src");
+    files.sort();
+    for path in files {
+        let text = fs::read_to_string(&path).unwrap_or_default();
+        let lines: Vec<&str> = text.split('\n').collect();
+        let path_str = path.display().to_string();
+        let n = lines.len();
+        let mut i = 0usize;
+        while i < n {
+            if lines[i].trim_start().starts_with("//") {
+                i += 1;
+                continue;
+            }
+            let Some(kw_end) = find_match_keyword(lines[i]) else {
+                i += 1;
+                continue;
+            };
+            // Brace-scan the match block.
+            let mut depth: i32 = 0;
+            let mut started = false;
+            let mut body = String::new();
+            let mut j = i;
+            while j < n {
+                body.push_str(lines[j]);
+                body.push('\n');
+                let seg = if j == i { &lines[j][kw_end..] } else { lines[j] };
+                for ch in seg.chars() {
+                    if ch == '{' {
+                        depth += 1;
+                        started = true;
+                    } else if ch == '}' {
+                        depth -= 1;
+                    }
+                }
+                if started && depth <= 0 {
+                    break;
+                }
+                j += 1;
+            }
+            if node_variants_named(&body).len() >= WALKER_MIN_NODE_VARIANTS {
+                // Enclosing fn: nearest preceding declaration at strictly
+                // smaller indentation (a nested helper that already closed
+                // must not claim the block).
+                let mindent = indent_of(lines[i]);
+                let mut fn_name = "<none>".to_string();
+                for k in (0..=i).rev() {
+                    if let Some(name) = fn_decl_name(lines[k]) {
+                        if k == i || indent_of(lines[k]) < mindent {
+                            fn_name = name;
+                            break;
+                        }
+                    }
+                }
+                // ⚠ The CHOKEPOINT row is identified by its coordinates, not
+                // by a property of its text: it is the one function whose ROLE
+                // this whole lint exists to protect, and there is no textual
+                // signal that distinguishes "is the accessor" from "calls the
+                // accessor". Naming it once, here, in a test, is the honest
+                // spelling — it is not a compiler decision taken on a name.
+                let disposition =
+                    if (path_str.as_str(), fn_name.as_str()) == (CHOKEPOINT_FILE, CHOKEPOINT_FN) {
+                        "CHOKEPOINT"
+                    } else if body.contains("visit_expr_children(") {
+                        "ROUTED"
+                    } else {
+                        "HAND-ROLLED"
+                    };
+                rows.push(format!("{path_str}::{fn_name} [{disposition}]"));
+            }
+            i = if j > i { j + 1 } else { i + 1 };
+        }
+    }
+    rows.sort();
+    rows
+}
+
+const CHOKEPOINT_FILE: &str = "src/parser/visitor.rs";
+const CHOKEPOINT_FN: &str = "visit_expr_children";
+
+/// R44 Track E — CLASS-RETIRING GUARD (CLAUDE.md Core #4 step 3, Core #6).
+///
+/// The defect class: a hand-written `match` over `Expr`/`Stmt` whose contract
+/// is to REACH EVERY position, but whose catch-all silently declines to
+/// recurse. The skipped position yields a MISSING diagnostic, a lost generic
+/// instance, or a silent under-capture — never a wrong answer anyone can see.
+/// The fix is `parser::visitor::visit_expr_children`, the one exhaustive child
+/// enumeration, whose three rustc-level guards (no `_ =>` arm, no `..` in any
+/// pattern, `#[deny(unused_variables)]`) make a new variant, a new field, or a
+/// bound-but-unforwarded child a COMPILE ERROR.
+///
+/// ⚠ Those three guards fire INSIDE the chokepoint only. **Nothing they do
+/// binds walker N+1** — the next hand-rolled, un-routed walker somebody
+/// writes. Measured before this lint existed: inserting a fresh hand-rolled
+/// `Expr` walker into `src/` gave `cargo build` rc 0 with ZERO warnings and a
+/// fully green `cargo test --test lints`.
+///
+/// So this lint pins the POPULATION AS A SET, not as a count. A count cannot
+/// see which N: it goes green again the moment an unrelated walker is deleted.
+/// The set puts the new walker's own row in `found`, absent from `EXPECTED`,
+/// and the `assert_eq!` names it.
+///
+/// **Disposition is COMPUTED, never asserted in prose** (that is the whole
+/// point — a `ROUTED` label a human types is a claim; a `ROUTED` label derived
+/// from the block's own text is a check). `ROUTED` means the walker's match
+/// block calls the chokepoint. A walker that quietly stops routing flips to
+/// `HAND-ROLLED` and this test goes red.
+///
+/// ### What to do when this fires
+/// * **You added a walker.** Route its recursion through
+///   `visit_expr_children` and add the row with `[ROUTED]`. If it genuinely
+///   needs per-variant local actions, make its match EXHAUSTIVE (no `_ =>`)
+///   and add the row with `[HAND-ROLLED]` — a deliberate, reviewed decision.
+/// * **You deleted one.** Delete its row.
+/// * **A row flipped `ROUTED` → `HAND-ROLLED`.** Someone took a walker off the
+///   chokepoint. That is the regression this exists to catch; restore it.
+///
+/// ### What this guard does NOT reach — state it, do not over-trust it
+/// * Walkers naming fewer than `WALKER_MIN_NODE_VARIANTS` variants
+///   (measured hole, see that constant).
+/// * `Pattern` and `Type` walkers, and `if let` / `matches!` destructuring:
+///   the census keys on `match` over `Expr`/`Stmt`. That omission is NOT
+///   theoretical — `Type::Array`'s `size` is a real `Expr` behind a `Type`,
+///   and that population carried both of the array-size defects this round
+///   touched (one fixed in `semantic/meta.rs`, one filed against
+///   `semantic/types.rs`).
+/// * A `match` nested inside an already-counted block: the outer block
+///   consumes it.
+/// * Braces inside string literals or comments confuse the brace scan.
+///   Deliberately simple, and stable: any drift shows up as a changed row.
+///
+/// **Break-and-watch (Core #13, and Core #15e Q2 — can the guard catch its own
+/// class?):** paste a throwaway `match` over five `Expr::` variants with a
+/// `_ => {}` into any file under `src/`, run this test, and watch its row
+/// appear in `found` and the assert go RED. Verified by doing exactly that.
+#[test]
+fn expr_stmt_walker_population_is_pinned() {
+    /// Every `match` block in `src/` naming ≥5 distinct `Expr::`/`Stmt::`
+    /// variants, as `path::fn [DISPOSITION]`. Derived by the scan below —
+    /// do not hand-edit a row to make the test pass; edit the code, or add
+    /// the row deliberately.
+    const EXPECTED: &[&str] = &[
+    "src/formatter/mod.rs::effective_outer_bp [HAND-ROLLED]",
+    "src/formatter/mod.rs::emits_leading_ownership_sigil [HAND-ROLLED]",
+    "src/formatter/mod.rs::format_expr_inner [HAND-ROLLED]",
+    "src/formatter/mod.rs::format_stmt [HAND-ROLLED]",
+    "src/ir/lowering/closures.rs::detect_mutations_in_stmt [HAND-ROLLED]",
+    "src/ir/lowering/closures.rs::find_return_type_in_block [HAND-ROLLED]",
+    "src/ir/lowering/closures.rs::infer_closure_return_type [HAND-ROLLED]",
+    "src/ir/lowering/closures.rs::visit_expr [HAND-ROLLED]",
+    "src/ir/lowering/closures.rs::visit_stmt [HAND-ROLLED]",
+    "src/ir/lowering/context.rs::count_name_in_expr [HAND-ROLLED]",
+    "src/ir/lowering/context.rs::count_name_uses_in_stmt [HAND-ROLLED]",
+    "src/ir/lowering/context.rs::expr_has_await [HAND-ROLLED]",
+    "src/ir/lowering/context.rs::infer_type_from_expr [HAND-ROLLED]",
+    "src/ir/lowering/context.rs::stmt_has_await [HAND-ROLLED]",
+    "src/ir/lowering/exprs/mod.rs::lower_expr_inner [HAND-ROLLED]",
+    "src/ir/lowering/exprs/mod.rs::place_expr_type_only [HAND-ROLLED]",
+    "src/ir/lowering/exprs/mod.rs::resolve_projection_root_local [HAND-ROLLED]",
+    "src/ir/lowering/exprs/mod.rs::try_resolve_field_place [HAND-ROLLED]",
+    "src/ir/lowering/exprs/mod.rs::try_resolve_place [HAND-ROLLED]",
+    "src/ir/lowering/exprs/mod.rs::try_resolve_tuple_field_place [HAND-ROLLED]",
+    "src/ir/lowering/functions.rs::collect_loop_reassigned [HAND-ROLLED]",
+    "src/ir/lowering/functions.rs::count_uses_in_block [HAND-ROLLED]",
+    "src/ir/lowering/functions.rs::count_uses_in_expr [HAND-ROLLED]",
+    "src/ir/lowering/functions.rs::cow_after_expr_moves [HAND-ROLLED]",
+    "src/ir/lowering/functions.rs::cow_after_stmt [HAND-ROLLED]",
+    "src/ir/lowering/functions.rs::extract_path_for_mut [HAND-ROLLED]",
+    "src/ir/lowering/functions.rs::prescan_block [HAND-ROLLED]",
+    "src/ir/lowering/generics/mod.rs::infer_expr_ast_type [HAND-ROLLED]",
+    "src/ir/lowering/generics/mod.rs::scan_expr [HAND-ROLLED]",
+    "src/ir/lowering/generics/mod.rs::scan_stmt [HAND-ROLLED]",
+    "src/ir/lowering/generics/mod.rs::walk_expr_for_method_calls [HAND-ROLLED]",
+    "src/ir/lowering/generics/mod.rs::walk_stmt_for_method_calls [HAND-ROLLED]",
+    "src/ir/lowering/generics/substitute.rs::substitute_expr_types [HAND-ROLLED]",
+    "src/ir/lowering/generics/substitute.rs::substitute_stmt_types [HAND-ROLLED]",
+    "src/ir/lowering/liveness.rs::uses_expr [HAND-ROLLED]",
+    "src/ir/lowering/liveness.rs::walk_stmt [HAND-ROLLED]",
+    "src/ir/lowering/mod.rs::enum_variant_and_args [HAND-ROLLED]",
+    "src/ir/lowering/mod.rs::eval_const_expr [HAND-ROLLED]",
+    "src/ir/lowering/mod.rs::eval_static_init [HAND-ROLLED]",
+    "src/ir/lowering/mod.rs::literal_to_global_init_arg [HAND-ROLLED]",
+    "src/ir/lowering/mod.rs::root_static [HAND-ROLLED]",
+    "src/ir/lowering/mod.rs::visit_expr [HAND-ROLLED]",
+    "src/ir/lowering/resolver_diag.rs::expr_shape_chain_inner [HAND-ROLLED]",
+    "src/ir/lowering/stmts/assigns.rs::lower_assign [HAND-ROLLED]",
+    "src/ir/lowering/stmts/mod.rs::lower_stmt [HAND-ROLLED]",
+    "src/loader.rs::expr_mentions_iter [HAND-ROLLED]",
+    "src/loader.rs::qualify_expr [HAND-ROLLED]",
+    "src/loader.rs::qualify_stmt [HAND-ROLLED]",
+    "src/loader.rs::stmt_mentions_iter [HAND-ROLLED]",
+    "src/parser/expr.rs::contains_it [HAND-ROLLED]",
+    "src/parser/expr.rs::parse_infix [HAND-ROLLED]",
+    "src/parser/expr.rs::parse_postfix [HAND-ROLLED]",
+    "src/parser/expr.rs::parse_prefix_inner [HAND-ROLLED]",
+    "src/parser/expr.rs::stmt_contains_it [HAND-ROLLED]",
+    "src/parser/pattern.rs::parse_single_pattern [HAND-ROLLED]",
+    "src/parser/visitor.rs::visit_expr_children [CHOKEPOINT]",
+    "src/parser/visitor.rs::walk_expr [HAND-ROLLED]",
+    "src/parser/visitor.rs::walk_stmt [HAND-ROLLED]",
+    "src/resources.rs::expr_kind [HAND-ROLLED]",
+    "src/semantic/meta.rs::eval_delayed_expr [HAND-ROLLED]",
+    "src/semantic/meta.rs::eval_expr [HAND-ROLLED]",
+    "src/semantic/meta.rs::eval_meta_stmt [HAND-ROLLED]",
+    "src/semantic/meta.rs::evaluate_delayed_meta_block [HAND-ROLLED]",
+    "src/semantic/meta.rs::fixup_calls_in_block [HAND-ROLLED]",
+    "src/semantic/meta.rs::fixup_calls_in_expr [HAND-ROLLED]",
+    "src/semantic/meta.rs::recurse_delayed_meta_in_stmt [HAND-ROLLED]",
+    "src/semantic/meta.rs::stmt_has_delayed_meta [HAND-ROLLED]",
+    "src/semantic/meta.rs::substitute_expr [HAND-ROLLED]",
+    "src/semantic/meta.rs::substitute_stmt [HAND-ROLLED]",
+    "src/semantic/resolve.rs::resolve_expr [HAND-ROLLED]",
+    "src/semantic/resolve.rs::resolve_stmt [HAND-ROLLED]",
+    "src/semantic/rewrite.rs::rename_expr [HAND-ROLLED]",
+    "src/semantic/rewrite.rs::rename_stmt [HAND-ROLLED]",
+    "src/semantic/rewrite.rs::rewrite_expr [HAND-ROLLED]",
+    "src/semantic/rewrite.rs::rewrite_stmt [HAND-ROLLED]",
+    "src/semantic/safety/check_expr.rs::check_expr [HAND-ROLLED]",
+    "src/semantic/safety/check_expr.rs::check_interpolation_expr [HAND-ROLLED]",
+    "src/semantic/safety/check_stmt.rs::check_stmt [HAND-ROLLED]",
+    "src/semantic/safety/helpers.rs::arena_backed_source [HAND-ROLLED]",
+    "src/semantic/safety/helpers.rs::expr_contains_yield_point [HAND-ROLLED]",
+    "src/semantic/safety/helpers.rs::expr_is_place [HAND-ROLLED]",
+    "src/semantic/safety/helpers.rs::find_get_chain_taint_root [HAND-ROLLED]",
+    "src/semantic/safety/helpers.rs::find_mut_mark_root [HAND-ROLLED]",
+    "src/semantic/safety/helpers.rs::find_root_def_id [HAND-ROLLED]",
+    "src/semantic/safety/helpers.rs::find_root_def_id_with_path [HAND-ROLLED]",
+    "src/semantic/safety/helpers.rs::find_shared_ref_in_expr_spanned [HAND-ROLLED]",
+    "src/semantic/safety/helpers.rs::find_stale_in_condition [HAND-ROLLED]",
+    "src/semantic/safety/helpers.rs::find_with_tracked_in_condition [HAND-ROLLED]",
+    "src/semantic/safety/helpers.rs::lvalue_value_type [HAND-ROLLED]",
+    "src/semantic/safety/origins.rs::compute_expr_origin [HAND-ROLLED]",
+    "src/semantic/safety/origins.rs::is_string_typed_expr [HAND-ROLLED]",
+    "src/semantic/safety/return_borrows.rs::build_aliases_from_stmt [HAND-ROLLED]",
+    "src/semantic/safety/return_borrows.rs::collect_param_indices [HAND-ROLLED]",
+    "src/semantic/safety/return_borrows.rs::trace_expr_to_params [HAND-ROLLED]",
+    "src/semantic/safety/return_borrows.rs::trace_stmt_returns_to_params [HAND-ROLLED]",
+    "src/semantic/safety/validation.rs::purity_walk_expr [ROUTED]",
+    "src/semantic/safety/validation.rs::purity_walk_stmt [HAND-ROLLED]",
+    "src/semantic/type_utils.rs::expr_is_borrow_bind [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::check_stmt [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::infer_expr [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::stmt_contains_return [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::stmt_has_loop_break [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::stmt_terminates [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::visit_stmt [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::walk_expr [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::walk_expr [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::walk_expr [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::walk_stmt [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::walk_stmt [HAND-ROLLED]",
+    "src/semantic/typecheck.rs::walk_stmt [HAND-ROLLED]",
+    ];
+
+    let found = walker_population();
+    let expected_sorted: Vec<String> = {
+        let mut v: Vec<String> = EXPECTED.iter().map(|s| (*s).to_string()).collect();
+        v.sort();
+        v
+    };
+
+    // The chokepoint's own row must be present — otherwise the whole set is
+    // measuring a population with no producer to route to.
+    let chokepoint_row = format!("{CHOKEPOINT_FILE}::{CHOKEPOINT_FN} [CHOKEPOINT]");
+    assert!(
+        found.contains(&chokepoint_row),
+        "the child-enumeration chokepoint `{chokepoint_row}` is not in the \
+         walker population. Either it was deleted/renamed/moved, or it fell \
+         below the {WALKER_MIN_NODE_VARIANTS}-variant threshold — both mean \
+         this guard is now pinning a population with nothing to route to."
+    );
+
+    assert_eq!(
+        found, expected_sorted,
+        "\n\nThe `Expr`/`Stmt` WALKER POPULATION changed.\n\n\
+         Each row is a `match` block in `src/` naming at least \
+         {WALKER_MIN_NODE_VARIANTS} distinct `Expr::`/`Stmt::` variants, with \
+         its disposition COMPUTED from the block's own text:\n\
+         \x20 CHOKEPOINT  — `{CHOKEPOINT_FILE}::{CHOKEPOINT_FN}`, the one \
+         exhaustive child enumeration.\n\
+         \x20 ROUTED      — the block delegates its recursion to that \
+         chokepoint.\n\
+         \x20 HAND-ROLLED — the block enumerates children itself.\n\n\
+         A NEW row means a new hand-rolled walker. That is the defect class \
+         this guard retires: if its contract is to reach every expression \
+         position, route its recursion through `visit_expr_children` \
+         (`src/parser/visitor.rs`) instead of hand-rolling a `match` that \
+         ends in `_ => {{}}`. If it genuinely needs per-variant local \
+         actions, make the match EXHAUSTIVE and add the row deliberately.\n\n\
+         A row that flipped ROUTED -> HAND-ROLLED means a walker was taken \
+         OFF the chokepoint. Restore it.\n\n\
+         A REMOVED row means a walker was deleted — drop its row.\n\n\
+         Do NOT 'fix' this by lowering `WALKER_MIN_NODE_VARIANTS` or by \
+         deleting rows until it goes green: a guard whose escape hatch is \
+         weakening itself is not a guard."
     );
 }

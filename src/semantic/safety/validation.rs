@@ -1,6 +1,7 @@
 use rustc_hash::FxHashMap;
 
 use crate::parser::ast::*;
+use crate::parser::visitor::visit_expr_children;
 use crate::span::{Span, Spanned};
 
 use crate::semantic::errors::{SemanticError, SemanticErrorKind};
@@ -661,75 +662,34 @@ fn purity_walk_expr(
             purity_walk_expr(inner, scopes, resolution_map, acc, callees);
         }
         _ => {
-            // Generic sub-expression walk for all other variants
-            visit_expr_children(expr, |child| {
+            // Generic sub-expression walk for all other variants. Recursion is
+            // DELEGATED to the one exhaustive child enumeration
+            // (`crate::parser::visitor::visit_expr_children`) rather than
+            // hand-rolled here: the local copy this replaced silently skipped
+            // 11 of the 47 `Expr` variants, 9 of them child-bearing (`??`,
+            // `catch`, `?.`, set/dict comprehensions, `Block`, `Do`,
+            // `DotShorthand`, `MetaOpInfix`), which made purity analysis miss
+            // real effects inside those positions. See the chokepoint's header
+            // for the three compile-time guards that keep it total.
+            //
+            // ⚠ COLLECT-THEN-WALK, deliberately: two closures capturing `acc`
+            // and `callees` at once is `E0524`. The children are collected
+            // first, then walked. Order between the two lists is immaterial —
+            // `Purity::join` is `std::cmp::max` and `callees` is a set the
+            // call-graph pass takes a fixpoint over.
+            let mut child_exprs: Vec<&Spanned<Expr>> = Vec::new();
+            let mut child_blocks: Vec<&Block> = Vec::new();
+            visit_expr_children(
+                &expr.node,
+                &mut |child| child_exprs.push(child),
+                &mut |block| child_blocks.push(block),
+            );
+            for child in child_exprs {
                 purity_walk_expr(child, scopes, resolution_map, acc, callees);
-            });
-        }
-    }
-}
-
-/// Visit all direct child expressions of an expression node.
-/// This avoids having to enumerate every AST variant for purity walking.
-fn visit_expr_children(expr: &Spanned<Expr>, mut visit: impl FnMut(&Spanned<Expr>)) {
-    match &expr.node {
-        Expr::IntLiteral(_) | Expr::FloatLiteral(_) | Expr::BoolLiteral(_)
-        | Expr::NoneLiteral | Expr::SelfExpr | Expr::It | Expr::Identifier(_)
-        | Expr::Path { .. } => {}
-        Expr::BinaryOp { left, right, .. } => { visit(left); visit(right); }
-        Expr::UnaryOp { operand, .. } => visit(operand),
-        Expr::MutableBorrow { expr: inner } | Expr::Move { expr: inner }
-        | Expr::Propagate { expr: inner }
-        | Expr::Deref { expr: inner } => visit(inner),
-        Expr::Rethrow { expr: inner, transform, .. } => { visit(inner); visit(transform); }
-        Expr::If { condition, then_branch, elif_branches, else_branch } => {
-            visit(condition); visit(then_branch);
-            for (cond, body) in elif_branches { visit(cond); visit(body); }
-            if let Some(e) = else_branch { visit(e); }
-        }
-        Expr::Index { object, index } => { visit(object); visit(index); }
-        Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => visit(object),
-        Expr::TupleLiteral(items) | Expr::ArrayLiteral(items, _) => {
-            for item in items { visit(item); }
-        }
-        Expr::StructLiteral { args, .. } => {
-            for arg in args { visit(arg); }
-        }
-        Expr::Closure { body, .. } | Expr::ImplicitClosure { body } => visit(body),
-        Expr::ListComprehension { expr, iterable, condition, .. } => {
-            visit(expr); visit(iterable);
-            if let Some(c) = condition { visit(c); }
-        }
-        Expr::As { expr: inner, .. } | Expr::Is { expr: inner, .. } => visit(inner),
-        Expr::Range { start, end, .. } => {
-            if let Some(s) = start { visit(s); }
-            if let Some(e) = end { visit(e); }
-        }
-        Expr::StringLiteral(_, _) => {
-            // Interpolation segments are text-only at the AST level; no child exprs to walk
-        }
-        Expr::Call { callee, args, .. } => {
-            visit(callee);
-            for arg in args { visit(&arg.node.value); }
-        }
-        Expr::MethodCall { receiver, args, .. } => {
-            visit(receiver);
-            for arg in args { visit(&arg.node.value); }
-        }
-        Expr::Await { expr: inner, .. } | Expr::Spawn { expr: inner, .. } | Expr::SpawnBlocking { expr: inner, .. } => {
-            visit(inner);
-        }
-        Expr::Match { scrutinee, arms, else_arm } => {
-            visit(scrutinee);
-            for arm in arms {
-                if let Some(guard) = &arm.guard { visit(guard); }
-                visit(&arm.body);
             }
-            if let Some(e) = else_arm { visit(e); }
+            for block in child_blocks {
+                purity_walk_block(block, scopes, resolution_map, acc, callees);
+            }
         }
-        Expr::DictLiteral(pairs) => {
-            for (k, v) in pairs { visit(k); visit(v); }
-        }
-        _ => {} // remaining niche variants — conservative (treated as pure)
     }
 }
