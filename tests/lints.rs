@@ -19100,11 +19100,11 @@ fn known_gaps_passing_allowlist_shrink_only() {
 /// against them; **three (B, C, E) leave this ENTIRE lint GREEN** while the
 /// self-host accepts and lowers a use-after-move that `gg check` rejects.
 ///
-/// | break | edit | this lint | the only outcome cell(s) that move |
+/// | break | edit | this lint | outcome cell(s) MEASURED to move (regenerate: apply the break, `gg build tests/fixtures/self_host_lowerer/driver.gg`, then run every `tests/fixtures/liveness/` cell through the driver and diff rc + emitted bytes against the pristine census) |
 /// |---|---|---|---|
-/// | A | `match_has_catch_all` tail `return false` -> `return true` | RED (body pin) | 7 of the 8 new reject cells |
-/// | **B** | an exhaustiveness proxy fused INSIDE the body ("every unguarded arm is a `PConstructor`/`PDotShorthand`") — signature, tail and both call sites untouched | **GREEN** | `n2_nested_uam` (6476 B) — `s5_join_int_nonexh` stays green |
-/// | **C** | the same proxy consulted AT the divergence gate by a SEPARATE helper, nested under the pinned gate line so its text survives; `match_has_catch_all` byte-identical | **GREEN** | `match_nested_refutable_diverge_use_after_move_reject` (6103 B), and nothing else |
+/// | A | `match_has_catch_all` tail `return false` -> `return true` | RED (body pin) | 8 of the 10 fall-through reject cells — every one except the two `if_no_else_*` sibling cells, which `elsebranches_have_uncond` owns (measured at the CURRENT cell set; an older figure of "7 of 8" predates the R9/R10 cells) |
+/// | **B** | an exhaustiveness proxy fused INSIDE the body ("every unguarded arm is a `PConstructor`/`PDotShorthand`") — signature, tail and all three `match_has_catch_all` call sites untouched | **GREEN** | **FIVE cells, not one** — `n2_nested_uam` (6476 B), `match_nested_refutable_diverge_use_after_move_reject` (6103 B), `ematch_join_nested_refutable_use_after_move_reject` (7296 B), `match_exhaustive_no_catchall_diverge_reject` (5237 B), `match_exhaustive_no_catchall_join_reject` (5394 B). Necessarily so: B weakens `match_has_catch_all` ITSELF, and all three match-side consumers call it. `s5_join_int_nonexh` stays GREEN — that discrimination is real, and is why both it and `n2_nested_uam` ship |
+/// | **C** | the same proxy consulted AT the divergence gate by a SEPARATE helper, nested under the pinned gate line so its text survives; `match_has_catch_all` byte-identical | **GREEN** | **TWO cells** — `match_nested_refutable_diverge_use_after_move_reject` (6103 B) and `match_exhaustive_no_catchall_diverge_reject` (5237 B), i.e. both DIVERGENCE-GATE cells and nothing else (C is consulted only at that one consumer) |
 /// | **E** | `if arm.guard is None:` deleted from the body | **GREEN** | `match_guarded_catchall_use_after_move_reject` (4359 B), and nothing else |
 /// | F | the SIBLING predicate's tail weakened | RED (body pin) | `if_no_else_join_use_after_move_reject` (3504 B), and nothing else |
 /// | JOIN | the `SMatch` join's argument replaced by a constant | RED (argument pin) | `s5`, `n2`, the guard cell, the join FP pin |
@@ -19142,12 +19142,25 @@ fn known_gaps_passing_allowlist_shrink_only() {
 /// the `elif`-chain join and the `SMetaIf` join. Both are
 /// `elsebranches_have_uncond` consumers whose two siblings ARE celled, and both
 /// are covered at the call-site level by the argument pins above; that is the
-/// whole defence. Also unsampled at the liveness level: the `PBinding`-variant
-/// vs `PBinding`-non-variant split inside `match_has_catch_all`
-/// (`tests/fixtures/exhaustiveness/neg_bare_variant.gg` and
-/// `pos_binding_catchall.gg` are the pair that sample it for the exhaustiveness
-/// check), and a `bool` scrutinee (`case true:` / `case false:`), which has no
-/// cell anywhere.
+/// whole defence.
+///
+/// ⚠ The `PBinding`-variant vs `PBinding`-non-variant split inside
+/// `match_has_catch_all` is NOT merely unsampled — it is a FILED WRONG-ACCEPT.
+/// `match_has_catch_all` credits an unguarded `PBinding` as a catch-all without
+/// consulting the enum's variant list, so a refutable `case Value:` arm is
+/// treated as covering every path. Repro
+/// `tests/fixtures/known_gaps/sh_variant_binding_credited_as_catchall.gg` +
+/// the `#[ignore]`d `sh_variant_binding_credited_as_catchall_intended`; see the
+/// `TODO.md` bullet beginning "`match_has_catch_all` credits an unguarded
+/// `PBinding`". The exhaustiveness half of the same split IS sampled, by
+/// `tests/fixtures/exhaustiveness/neg_bare_variant.gg` and
+/// `pos_binding_catchall.gg`. Fixing it is a DESIGN question, not a deletion:
+/// dropping the `case PBinding(_): return true` arm was measured to OVER-REJECT
+/// a genuine `case other:` catch-all, so the classifier has to become
+/// variant-aware — which widens the ARMS-ONLY signature this lint pins.
+///
+/// Still genuinely unsampled: a `bool` scrutinee (`case true:` / `case false:`),
+/// which has no cell anywhere.
 #[test]
 fn self_host_match_fallthrough_predicates_pinned() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -19226,13 +19239,16 @@ fn self_host_match_fallthrough_predicates_pinned() {
             n, 1,
             "expected EXACTLY ONE `{needle}` in self_host_typechecker/typecheck.gg ({what}), \
              found {n}.\n\
-             Each of the three consumers must ask the fall-through question through the SAME \
-             classifier; replacing one with a constant, or adding a fourth consumer that does \
-             not ask, is how this class drifted before.\n\
-             ⚠ THIS PIN IS A CHANGE-DETECTOR, NOT A STRUCTURAL GUARANTEE — of the seven \
-             measured weakenings it catches only the two that edit a call site (see the doc \
-             comment's table). The acceptance gate is the OUTCOME CELLS in \
-             `self_host_driver_rejects_liveness`.",
+             Each of the SEVEN consumers (the array above is the total census) must ask the \
+             fall-through question through the SAME classifier; replacing one with a constant \
+             is how this class drifted before.\n\
+             ⚠ AND THIS PIN CANNOT SEE AN EIGHTH CONSUMER THAT DOES NOT ASK — it asserts \
+             `== 1` on each of the seven KNOWN lines, so a new site that never calls a \
+             classifier adds no line for it to count. Only the OUTCOME CELLS cover that.\n\
+             ⚠ THIS PIN IS A CHANGE-DETECTOR, NOT A STRUCTURAL GUARANTEE — of the NINE \
+             measured weakenings it catches only the FOUR whose edit lands on a pinned line \
+             (JOIN, GATE-OFF, R9, R10 — see the doc comment's table). The acceptance gate is \
+             the OUTCOME CELLS in `self_host_driver_rejects_liveness`.",
         );
     }
 
@@ -19258,7 +19274,7 @@ fn self_host_match_fallthrough_predicates_pinned() {
              `ctx`/`types` in has to widen this signature.\n\
              ⚠ That makes the pin a CHANGE-DETECTOR, NOT a structural guarantee: a fusion \
              written INSIDE the body, or in a separate predicate called at a consumer, needs no \
-             signature change at all, and ALL SEVEN measured weakenings left this pin green.\n\
+             signature change at all, and ALL NINE measured weakenings left this pin green.\n\
              A second verdict bit (irrefutable coverage) is a NEW design and takes its own \
              gauntlet. Whether it is implemented by widening this predicate or by a separate \
              one, the OUTCOME CELLS in `self_host_driver_rejects_liveness` are the acceptance \
@@ -19291,8 +19307,9 @@ fn self_host_match_fallthrough_predicates_pinned() {
              That tail is what makes the classifier say \"a construct with no catch-all can fall \
              through\" — dropping it silently converts an under-approximation into an \
              over-approximation and the move checker stops seeing the fall-through path.\n\
-             ⚠ CHANGE-DETECTOR ONLY: five of the seven measured weakenings preserve this tail, \
-             three of them (B, C, E in the doc comment's table) leaving the WHOLE lint green."
+             ⚠ CHANGE-DETECTOR ONLY: EIGHT of the NINE measured weakenings preserve this tail \
+             (only A weakens `match_has_catch_all`'s, only F the sibling's), three of them \
+             (B, C, E in the doc comment's table) leaving the WHOLE lint green."
         );
         for token in ["ctx", "types", "exhaust"] {
             assert!(

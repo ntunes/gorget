@@ -51566,9 +51566,10 @@ fn self_host_driver_rejects_d26_compound_assign() {
 
 // ── R44 Track F: the match-fall-through / exhaustiveness gap set ────────
 //
-// Four durable repros filed by the round that ported match exhaustiveness to
-// the self-host. Each asserts the INTENDED behaviour, so each is RED today and
-// graduates (un-ignore + move out of `known_gaps/`) in the round that fixes it.
+// Five durable repros filed by the round that ported match exhaustiveness to
+// the self-host — four by the track, the fifth by its output-review. Each
+// asserts the INTENDED behaviour, so each is RED today and graduates
+// (un-ignore + move out of `known_gaps/`) in the round that fixes it.
 
 #[test]
 #[serial(self_host_lowerer_driver)]
@@ -51611,6 +51612,59 @@ fn sh_field_off_method_call_untyped_intended() {
         stderr.contains("error[E_NonExhaustiveMatch]")
             && stderr.contains("non-exhaustive match: missing variants: Halt"),
         "INTENDED diagnostic missing.\nstderr:\n{stderr}",
+    );
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "KNOWN GAP (filed 2026-08-23, R44 Track F output-review): the self-host \
+move checker's fall-through classifier `match_has_catch_all` \
+(self_host_typechecker/typecheck.gg) credits an UNGUARDED `PBinding` as a \
+catch-all WITHOUT consulting the enum's variant list — the exact ambiguity the \
+ported exhaustiveness check avoids by deciding `PBinding` inside \
+`collect_covered_variants`, which has `all_variants` in hand. `case Value:` \
+parses as a `PBinding`, so a REFUTABLE arm is credited as covering every path \
+and the move checker never sees the fall-through. Reachable today only in \
+composition with the filed `RTRef` hole \
+(known_gaps/sh_field_off_method_call_untyped.gg), which leaves the scrutinee \
+untyped so the exhaustiveness check bails first. Measured, rc off each binary, \
+stderr to files: Rust `gg check` rc 1 with BOTH `E_NonExhaustiveMatch` (missing \
+`Next`, `Halt`) and `E_UseAfterMove`; self-host driver rc 0, 9248 bytes of C. \
+Either fix flips it to a reject, so this test accepts EITHER intended \
+diagnostic. FIX SHAPE IS A DESIGN QUESTION, NOT A DELETION: removing the \
+`case PBinding(_): return true` arm was MEASURED to over-reject a genuine \
+irrefutable catch-all (`case other:` goes rc 0/3616 B -> rc 1 `E_UseAfterMove`), \
+so the classifier must become VARIANT-AWARE — which needs the variant list \
+threaded into a predicate whose ARMS-ONLY signature \
+`self_host_match_fallthrough_predicates_pinned` deliberately pins. See the \
+TODO.md bullet beginning \"`match_has_catch_all` credits an unguarded \
+`PBinding`\". Un-ignore and graduate out of known_gaps/ when it lands."]
+fn sh_variant_binding_credited_as_catchall_intended() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture =
+        manifest_dir.join("tests/fixtures/known_gaps/sh_variant_binding_credited_as_catchall.gg");
+    assert!(fixture.exists(), "repro missing: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "sh_variant_binding_credited_as_catchall_intended",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout_bytes = out.stdout.len();
+    assert!(
+        !out.status.success(),
+        "INTENDED: the self-host must REJECT this program, as Rust gg does. A bare \
+         `case Value:` names a VARIANT, so the match neither covers every variant nor \
+         provides a catch-all and `print(s)` reads a moved value. exit={:?}, \
+         {stdout_bytes} bytes of C emitted.\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("error[E_NonExhaustiveMatch]") || stderr.contains("error[E_UseAfterMove]"),
+        "INTENDED diagnostic missing: expected `E_NonExhaustiveMatch` (what the RTRef \
+         peel yields) or `E_UseAfterMove` (what a variant-aware `match_has_catch_all` \
+         yields).\nstderr:\n{stderr}",
     );
 }
 
