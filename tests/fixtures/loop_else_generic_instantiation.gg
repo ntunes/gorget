@@ -1,0 +1,83 @@
+# A generic instantiation whose ONLY occurrence is inside a loop-ELSE body.
+#
+# WHAT THIS PINS. Generic discovery walks a statement tree looking for the
+# instantiations it must monomorphise. The `Stmt::If` arm has always walked its
+# `else_body`; the `Stmt::While` and `Stmt::For` arms swallowed theirs with a
+# `..` pattern, on BOTH the Rust lane (`src/ir/lowering/generics/mod.rs`
+# `scan_stmt` + `walk_stmt_for_method_calls`) and the self-host lane
+# (`tests/fixtures/self_host_lowerer/lower_generics.gg`
+# `discover_generic_calls_stmt`). A loop-else body is the one place a generic
+# call can hide from all three.
+#
+# THREE DISTINCT SYMPTOMS, all measured before the fix — this is why the
+# fixture asserts OUTPUT and not a symbol count:
+#   - generic FUNCTION in a loop-else: `gg check` clean, then
+#     `undefined reference to 'identity__int64_t'` (C and LLVM alike).
+#   - generic STRUCT in a loop-else: Rust gg PANICS —
+#     "GIR module failed validation (1 errors)".
+#   - the same generic struct on the SELF-HOST lane: compiles, links, runs,
+#     exits 0 and prints `0` instead of `7`. A silent wrong answer.
+#
+# AXES COVERED: loop kind {for, while} x instantiation kind {generic function,
+# generic struct}. The `for` cells iterate a RANGE and a SET because those are
+# the two iterable cells whose else body the self-host lowerer actually lowers;
+# Vector / Dict / String / String.bytes() silently drop the whole else body on
+# the self-host lane — a separate, filed defect with its own `known_gaps`
+# repros, and the reason a Vector loop here would pin nothing.
+#
+# Every loop is entered with runtime-computed bounds that are equal (so the
+# body never runs and the else always does), never literals, so const-folding
+# cannot elide the loop.
+
+from std.collections import Vector
+
+T identity[T](T x):
+    return x
+
+struct Pair[T]:
+    T a
+    T b
+
+int main():
+    Vector[int] sizer = Vector[int]()
+    sizer.push(1)
+    sizer.push(2)
+    sizer.push(3)
+    int lo = sizer.len()
+    int hi = sizer.len()
+
+    # for-else over a RANGE, generic FUNCTION only in the else body
+    for x in lo..hi:
+        print(x)
+    else:
+        print(identity(99))
+
+    # for-else over a RANGE, generic STRUCT only in the else body
+    for y in lo..hi:
+        print(y)
+    else:
+        Pair[int] p = Pair[int](3, 4)
+        print(p.a + p.b)
+
+    # for-else over an empty SET, generic FUNCTION only in the else body
+    Set[String] names = Set[String]()
+    for n in names:
+        print(n)
+    else:
+        print(identity("only-in-else"))
+
+    # while-else, generic FUNCTION only in the else body
+    int countdown = lo - hi
+    while countdown > 0:
+        countdown = countdown - 1
+    else:
+        print(identity(77))
+
+    # while-else, generic STRUCT only in the else body
+    while countdown > 0:
+        countdown = countdown - 1
+    else:
+        Pair[String] q = Pair[String]("left", "right")
+        print(q.a + "-" + q.b)
+
+    return 0

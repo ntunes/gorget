@@ -509,13 +509,23 @@ impl GenericCollector {
                     self.scan_block(else_body);
                 }
             }
-            Stmt::While { condition, body, .. } => {
+            // `else_body` is walked for the same reason the `Stmt::If` sibling
+            // above walks its own: a generic call whose ONLY instantiation sits
+            // in a loop-else body must still be discovered, or the mono'd body
+            // is never emitted and the link fails on `<fn>__<targs>`.
+            Stmt::While { condition, body, else_body } => {
                 self.scan_expr(condition);
                 self.scan_block(body);
+                if let Some(else_body) = else_body {
+                    self.scan_block(else_body);
+                }
             }
-            Stmt::For { iterable, body, .. } => {
+            Stmt::For { iterable, body, else_body, .. } => {
                 self.scan_expr(iterable);
                 self.scan_block(body);
+                if let Some(else_body) = else_body {
+                    self.scan_block(else_body);
+                }
             }
             Stmt::Match { scrutinee, arms, else_arm } => {
                 self.scan_expr(scrutinee);
@@ -1048,11 +1058,14 @@ impl GenericCollector {
                     self.walk_block_for_method_calls(b, env);
                 }
             }
-            Stmt::While { condition, body, .. } => {
+            Stmt::While { condition, body, else_body } => {
                 self.walk_expr_for_method_calls(condition, env);
                 self.walk_block_for_method_calls(body, env);
+                if let Some(b) = else_body {
+                    self.walk_block_for_method_calls(b, env);
+                }
             }
-            Stmt::For { pattern, iterable, body, .. } => {
+            Stmt::For { pattern, iterable, body, else_body, .. } => {
                 self.walk_expr_for_method_calls(iterable, env);
                 // Narrow: if iterable is Vector[T]/VectorIter[T]/etc., bind the
                 // loop var to T so method calls on the element resolve. This
@@ -1067,6 +1080,11 @@ impl GenericCollector {
                 }
                 self.walk_block_for_method_calls(body, env);
                 env.restore(snapshot);
+                // The else body runs OUTSIDE the loop, so it is walked after
+                // the loop-variable binding is restored — but it is walked.
+                if let Some(b) = else_body {
+                    self.walk_block_for_method_calls(b, env);
+                }
             }
             Stmt::Match { scrutinee, arms, else_arm } => {
                 self.walk_expr_for_method_calls(scrutinee, env);

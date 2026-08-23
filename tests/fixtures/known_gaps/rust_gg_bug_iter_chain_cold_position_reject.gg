@@ -1,0 +1,49 @@
+# KNOWN GAP (Rust gg lane; the SELF-HOST lane COMPILES AND RUNS both shapes
+# correctly — a succession milestone, not a regression).
+#
+# A `Vector.iter()` trait-equip chain that appears ONLY inside certain
+# syntactic positions is REJECTED outright:
+#
+#     error[E_NoMethodFound]: no method `iter` found on type `Vector[int]`
+#
+# and the diagnostic's span points at `<std.collections>:26:1`, a blank line.
+#
+# ORDER-DEPENDENT, therefore a defect and not a rule: adding ONE unrelated
+# earlier `v.iter().any(...)` anywhere in the program makes the IDENTICAL
+# expression compile. Acceptance that depends on program order is not sanctioned
+# by anything in `docs/language-design.md` or `docs/book/`.
+#
+# The affected positions measured so far: f-string interpolation · assert
+# condition · dict-literal value · match-expression arm · list-comprehension
+# body · `as`-cast operand · `is`-pattern operand. Two of them are in this
+# fixture (list-comprehension body, `is`-pattern operand); they are the two the
+# self-host lane also still fails on for SEPARATE, distinct reasons (a
+# comprehension mangling corruption that truncates the receiver prefix to
+# `int64_t__any`, and an `Option__int64_t`-from-`int` typing error), so this one
+# file pins both lanes' work on the same two shapes.
+#
+# ROOT CAUSE NOT LOCATED. It is NOT `apply_inferred_method_targs`
+# (`Expr::StringLiteral(_, interp_exprs)` IS handled there) — it is a
+# typecheck-time defect upstream of that pass.
+#
+# GRADUATES to a live top-level fixture when a cold trait-equip chain is
+# accepted at every position.
+
+from std.collections import Vector
+
+bool gt_five(int x):
+    return x > 5
+
+int main():
+    Vector[int] v = Vector[int]()
+    v.push(3)
+    v.push(9)
+
+    # POSITION: list-comprehension body (chain appears nowhere else)
+    Vector[bool] xs = [v.iter().any(gt_five) for i in 0..1]
+    print(xs.get(0).unwrap())
+
+    # POSITION: `is`-pattern operand
+    bool found = v.iter().find(gt_five) is Some(_)
+    print(found)
+    return 0

@@ -3960,13 +3960,19 @@ void resolve_param_type_var(int old_type_id, int new_type_id, int scope_id, Scop
             scopes.set_def_type(i, new_type_id)
         i = i + 1
 
-# ── Lazy-iterator phase 1b Blocker #1: method-targs-only recording walk ──
+# ── Method-targs-only recording walk: the snapshot rationale ──
 #
-# For an EXPLICITLY-typed binding (`int total = v.iter().fold(0, f)`), the
-# SVarDecl arm takes the annotation and NEVER infers the initializer, so the
+# Wherever the per-arm type-check logic does NOT infer an expression, the
 # EMethodCall inference arm — the SOLE writer of `expr_method_targs` — never
 # runs for the bare-form (no-turbofish) Iterator terminals, and the lowerer
-# emits a CALLED-but-never-DEFINED bare symbol (link fail).
+# emits a CALLED-but-never-DEFINED bare symbol (link fail). An explicitly-typed
+# binding (`int total = v.iter().fold(0, f)`) is the shape that surfaced it —
+# the SVarDecl arm takes the annotation and never infers the initializer — but
+# it is NOT the only one: assignment RHS, compound-assign RHS, `return`
+# payloads, `if`/`while`/`assert` conditions and every nested expression
+# position had the same hole. That is why the recording walk is now driven from
+# ONE chokepoint at `type_check_stmt`'s entry over an EXHAUSTIVE traversal,
+# instead of from per-arm call sites.
 #
 # TWO side-effect channels must both be neutralized:
 #  1. the BINDING TYPE — the naive fix (`var_type_id = infer_expr_type(init)`)
@@ -3981,9 +3987,19 @@ void resolve_param_type_var(int old_type_id, int new_type_id, int scope_id, Scop
 #     only the receiver) does immediately after — RUN-regressed
 #     `string_chained_methods` (`data.trim().to_upper().len()` → the `.to_upper`
 #     dispatched to the char overload). We SNAPSHOT `expr_types` and RESTORE it
-#     after the walk, so the ONLY net change is the new `expr_method_targs`
-#     entries — `walk_expr_closures` then re-derives `expr_types` exactly as it
-#     would have without this walk. (RUN-confirmed both directions.)
+#     after the walk, so `walk_expr_closures` re-derives `expr_types` exactly as
+#     it would have without this walk. (RUN-confirmed both directions.)
+#
+# ⚠ `expr_types` is the ONLY table restored. The walk also persists
+# `expr_method_targs` (the point of the exercise) and — a real, deliberate
+# consequence — `expr_link_types` entries that `infer_expr_type` writes for the
+# chain links it visits. Those persist because they are keyed on the call's
+# UNIQUE `span.end` (see the NOTE below), not on the shared `span.start`, so
+# the clobbering channel that forces the `expr_types` snapshot does not exist
+# for them: a link's entry can only be re-written by an inference of that SAME
+# link. `lower_types.gg` reads `expr_link_types` FIRST for every EMethodCall,
+# so a wrong entry would surface as WRONG OUTPUT, not as a link error — the
+# corpus runtime-diff is the instrument that adjudicates it.
 #
 # NOTE: `expr_method_targs` is keyed on the call's UNIQUE `span.end`, NOT the
 # shared span.start. So the OUTER terminal (`.fold`) and the INNER receiver
@@ -3994,29 +4010,234 @@ void resolve_param_type_var(int old_type_id, int new_type_id, int scope_id, Scop
 # is still checked at the READ sites (lower.gg's call-site + discovery walk) as
 # a cheap belt-and-suspenders cross-check — it is no longer the load-bearing
 # disambiguator (`span.end` is), it just guards against a stale entry.
+# ── Method-targ recording: THE ONE PRODUCER (Core #4 chokepoint) ──
+#
+# Exhaustive over `enum Expr` in ast.gg. The SOLE recording action is the
+# `EMethodCall` arm (delegating to `infer_expr_type`, the sole writer of
+# `expr_method_targs`); every other arm exists only to RECURSE, so no
+# syntactic position can hide a method call from the recorder. Statement
+# bodies carried by expressions (EBlock/EDo/EClosure/EMatch) are NOT walked
+# here — `walk_expr_closures` routes those through `type_check_stmts`, which
+# re-enters this chokepoint per statement.
+# ⚠ `EIf` is the ONE hole in that hand-off: `walk_expr_closures_inner` has no
+# `EIf` arm, so the statement bodies of an IF-EXPRESSION are reached by
+# nothing. Filed in TODO.md with a `known_gaps` repro; widening that walker is
+# the fix, not widening this one (this walker must stay expression-shallow or
+# it re-enters the `expr_types` clobbering channel the snapshot exists for).
 void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match sexpr.expr:
-        case EMethodCall(recv_box, _, margs, _):
-            # Infer the whole method call (side effect: records the method
-            # targs into `expr_method_targs`). `infer_expr_type` already walks
-            # the receiver + args, so we do NOT descend manually here.
-            int _ignore = infer_expr_type(sexpr, scopes, &types, &ctx)
-        case ECall(callee_box, cargs, _):
-            record_method_targs_in_expr(*callee_box, &scopes, &types, &ctx)
-            for a in cargs:
-                record_method_targs_in_expr(a.value, &scopes, &types, &ctx)
-        case EFieldAccess(obj, _):
-            record_method_targs_in_expr(*obj, &scopes, &types, &ctx)
-        case EBinaryOp(l, _, r):
-            record_method_targs_in_expr(*l, &scopes, &types, &ctx)
-            record_method_targs_in_expr(*r, &scopes, &types, &ctx)
-        case EUnaryOp(_, inner):
-            record_method_targs_in_expr(*inner, &scopes, &types, &ctx)
-        case EIndex(b, i):
-            record_method_targs_in_expr(*b, &scopes, &types, &ctx)
-            record_method_targs_in_expr(*i, &scopes, &types, &ctx)
-        else:
+        case EIntLiteral(_):
             pass
+        case EFloatLiteral(_):
+            pass
+        case EBoolLiteral(_):
+            pass
+        case EStringLiteral(_, _):
+            pass
+        case ECharLiteral(_):
+            pass
+        case ENoneLiteral():
+            pass
+        case EIdentifier(_):
+            pass
+        case ESelfExpr():
+            pass
+        case EIt():
+            pass
+        case EBinaryOp(r0, _, r2):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+            record_method_targs_in_expr(*r2, &scopes, &types, &ctx)
+        case EUnaryOp(_, r1):
+            record_method_targs_in_expr(*r1, &scopes, &types, &ctx)
+        case ECall(r0, r1, _):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+            for __aR1 in r1:
+                record_method_targs_in_expr(__aR1.value, &scopes, &types, &ctx)
+        case EMethodCall(_, _, margs, _):
+            # `infer_expr_type` walks the receiver and records THIS call's
+            # method targs. It does NOT record targs for method calls nested
+            # in the ARGUMENTS, so recurse into those explicitly.
+            int _ignore = infer_expr_type(sexpr, scopes, &types, &ctx)
+            for __marg in margs:
+                record_method_targs_in_expr(__marg.value, &scopes, &types, &ctx)
+        case EFieldAccess(r0, _):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case EIndex(r0, r1):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+            record_method_targs_in_expr(*r1, &scopes, &types, &ctx)
+        case ERange(r0, r1, _):
+            if r0 is Some(__bR0):
+                record_method_targs_in_expr(*__bR0, &scopes, &types, &ctx)
+            if r1 is Some(__bR1):
+                record_method_targs_in_expr(*__bR1, &scopes, &types, &ctx)
+        case EIf(r0, _, r2):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+            for __ebR2 in r2:
+                if __ebR2.condition is Some(__cR2):
+                    record_method_targs_in_expr(__cR2, &scopes, &types, &ctx)
+        case EMatch(r0, r1):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+            for __armR1 in r1:
+                if __armR1.guard is Some(__gR1):
+                    record_method_targs_in_expr(__gR1, &scopes, &types, &ctx)
+        case EClosure(_, _):
+            pass
+        case EImplicitClosure(r0):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case EArrayLiteral(r0):
+            for __eR0 in r0:
+                record_method_targs_in_expr(__eR0, &scopes, &types, &ctx)
+        case ETupleLiteral(r0):
+            for __eR0 in r0:
+                record_method_targs_in_expr(__eR0, &scopes, &types, &ctx)
+        case EDictLiteral(r0, r1):
+            for __eR0 in r0:
+                record_method_targs_in_expr(__eR0, &scopes, &types, &ctx)
+            for __eR1 in r1:
+                record_method_targs_in_expr(__eR1, &scopes, &types, &ctx)
+        case EStructLiteral(_, _, r2):
+            for __eR2 in r2:
+                record_method_targs_in_expr(__eR2, &scopes, &types, &ctx)
+        case EDotShorthand(_, r1):
+            for __aR1 in r1:
+                record_method_targs_in_expr(__aR1.value, &scopes, &types, &ctx)
+        case ETry(r0):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case EMove(r0):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case EPropagate(r0):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case EMutableBorrow(r0):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case EDeref(r0):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case EAs(r0, _):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case EBlock(_):
+            pass
+        case EListComp(r0, _, r2, r3):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+            record_method_targs_in_expr(*r2, &scopes, &types, &ctx)
+            if r3 is Some(__bR3):
+                record_method_targs_in_expr(*__bR3, &scopes, &types, &ctx)
+        case ESetComp(r0, _, r2, r3):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+            record_method_targs_in_expr(*r2, &scopes, &types, &ctx)
+            if r3 is Some(__bR3):
+                record_method_targs_in_expr(*__bR3, &scopes, &types, &ctx)
+        case EDictComp(r0, r1, _, r3, r4):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+            record_method_targs_in_expr(*r1, &scopes, &types, &ctx)
+            record_method_targs_in_expr(*r3, &scopes, &types, &ctx)
+            if r4 is Some(__bR4):
+                record_method_targs_in_expr(*__bR4, &scopes, &types, &ctx)
+        case EDefaultOp(r0, r1):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+            record_method_targs_in_expr(*r1, &scopes, &types, &ctx)
+        case EIs(r0, _, _):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case EDo(_):
+            pass
+        case EAwait(r0):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case ESpawn(r0):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case ESpawnBlocking(r0):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+        case ERethrow(r0, _, _, r3):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+            record_method_targs_in_expr(*r3, &scopes, &types, &ctx)
+        case ECatch(r0, _, r2):
+            record_method_targs_in_expr(*r0, &scopes, &types, &ctx)
+            record_method_targs_in_expr(*r2, &scopes, &types, &ctx)
+        case EFString(_, r1, _):
+            for __eR1 in r1:
+                record_method_targs_in_expr(__eR1, &scopes, &types, &ctx)
+
+# Statement-level half of the chokepoint. SHALLOW (see `stmt_has_method_call`).
+void record_method_targs_in_stmt(Stmt s, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    match s:
+        case SVarDecl(_, _, t2, _, _, _):
+            record_method_targs_in_expr(t2, &scopes, &types, &ctx)
+        case SAssign(t0, t1):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+            record_method_targs_in_expr(t1, &scopes, &types, &ctx)
+        case SCompoundAssign(t0, _, t2):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+            record_method_targs_in_expr(t2, &scopes, &types, &ctx)
+        case SExpr(t0):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+        case SReturn(t0):
+            if t0 is Some(__xT0):
+                record_method_targs_in_expr(__xT0, &scopes, &types, &ctx)
+        case SThrow(t0):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+        case SBreak():
+            pass
+        case SContinue():
+            pass
+        case SPass():
+            pass
+        case SMeta():
+            pass
+        case SMetaFor(_, t1, _):
+            record_method_targs_in_expr(t1, &scopes, &types, &ctx)
+        case SMetaIf(t0, _, t2):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+            for __ebT2 in t2:
+                if __ebT2.condition is Some(__cT2):
+                    record_method_targs_in_expr(__cT2, &scopes, &types, &ctx)
+        case SMetaConst(_, t1):
+            record_method_targs_in_expr(t1, &scopes, &types, &ctx)
+        case SMetaForMatch(_, t1, t2):
+            record_method_targs_in_expr(t1, &scopes, &types, &ctx)
+            for __armT2 in t2:
+                if __armT2.guard is Some(__gT2):
+                    record_method_targs_in_expr(__gT2, &scopes, &types, &ctx)
+        case SMetaMatch(t0, t1, _):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+            for __maT1 in t1:
+                record_method_targs_in_expr(__maT1.case_value, &scopes, &types, &ctx)
+        case SMetaWhile(t0, _):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+        case SFor(_, t1, _, _, _):
+            record_method_targs_in_expr(t1, &scopes, &types, &ctx)
+        case SWhile(t0, _, _):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+        case SLoop(_):
+            pass
+        case SIf(t0, _, t2):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+            for __ebT2 in t2:
+                if __ebT2.condition is Some(__cT2):
+                    record_method_targs_in_expr(__cT2, &scopes, &types, &ctx)
+        case SMatch(t0, t1):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+            for __armT1 in t1:
+                if __armT1.guard is Some(__gT1):
+                    record_method_targs_in_expr(__gT1, &scopes, &types, &ctx)
+        case SWith(t0, _, _):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+        case SAssert(t0, _):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+        case SAssertReturn(t0, _):
+            record_method_targs_in_expr(t0, &scopes, &types, &ctx)
+        case SNamedScope(_, _):
+            pass
+        case SSelect(t0):
+            for __saT0 in t0:
+                match __saT0.op:
+                    case SORecv(_, _, __seT0):
+                        record_method_targs_in_expr(__seT0, &scopes, &types, &ctx)
+                    case SOSend(__scT0, __svT0):
+                        record_method_targs_in_expr(__scT0, &scopes, &types, &ctx)
+                        record_method_targs_in_expr(__svT0, &scopes, &types, &ctx)
+        case SOnError(_):
+            pass
+        case SItem(_):
+            pass
+        case SSnapshot(_, _, t2):
+            record_method_targs_in_expr(t2, &scopes, &types, &ctx)
 
 # True iff `fe` is a call to one of the four Option/Result tag-check
 # intrinsics (`is_none`/`is_some`/`is_ok`/`is_error`). This EXACT set is the
@@ -4035,43 +4256,366 @@ bool fstring_interp_is_tag_check(SpannedExpr fe):
             return false
     return false
 
-# True iff `sexpr` syntactically contains an EMethodCall anywhere. Cheap
-# structural pre-check so the explicit-typed-binding path only pays for the
-# `expr_types` snapshot/restore when a method call is actually present (plain
-# bindings — array literals, identifiers, … — touch nothing).
+# CHOKEPOINT GATE — exhaustive over `enum Expr` in ast.gg. Cheap structural
+# pre-check so the expr_types snapshot/restore is only paid when a method
+# call is actually present. Guarded by the arm-exhaustiveness lint.
 bool expr_has_method_call(SpannedExpr sexpr):
     match sexpr.expr:
-        case EMethodCall(_, _, _, _):
-            return true
-        case ECall(callee_box, cargs, _):
-            if expr_has_method_call(*callee_box):
+        case EIntLiteral(_):
+            return false
+        case EFloatLiteral(_):
+            return false
+        case EBoolLiteral(_):
+            return false
+        case EStringLiteral(_, _):
+            return false
+        case ECharLiteral(_):
+            return false
+        case ENoneLiteral():
+            return false
+        case EIdentifier(_):
+            return false
+        case ESelfExpr():
+            return false
+        case EIt():
+            return false
+        case EBinaryOp(h0, _, h2):
+            if expr_has_method_call(*h0):
                 return true
-            for a in cargs:
-                if expr_has_method_call(a.value):
+            if expr_has_method_call(*h2):
+                return true
+            return false
+        case EUnaryOp(_, h1):
+            if expr_has_method_call(*h1):
+                return true
+            return false
+        case ECall(h0, h1, _):
+            if expr_has_method_call(*h0):
+                return true
+            for __aH1 in h1:
+                if expr_has_method_call(__aH1.value):
                     return true
             return false
-        case EFieldAccess(obj, _):
-            return expr_has_method_call(*obj)
-        case EBinaryOp(l, _, r):
-            return expr_has_method_call(*l) or expr_has_method_call(*r)
-        case EUnaryOp(_, inner):
-            return expr_has_method_call(*inner)
-        case EIndex(b, i):
-            return expr_has_method_call(*b) or expr_has_method_call(*i)
-        else:
+        case EMethodCall(_, _, _, _):
+            return true
+        case EFieldAccess(h0, _):
+            if expr_has_method_call(*h0):
+                return true
             return false
+        case EIndex(h0, h1):
+            if expr_has_method_call(*h0):
+                return true
+            if expr_has_method_call(*h1):
+                return true
+            return false
+        case ERange(h0, h1, _):
+            if h0 is Some(__bH0):
+                if expr_has_method_call(*__bH0):
+                    return true
+            if h1 is Some(__bH1):
+                if expr_has_method_call(*__bH1):
+                    return true
+            return false
+        case EIf(h0, _, h2):
+            if expr_has_method_call(*h0):
+                return true
+            for __ebH2 in h2:
+                if __ebH2.condition is Some(__cH2):
+                    if expr_has_method_call(__cH2):
+                        return true
+            return false
+        case EMatch(h0, h1):
+            if expr_has_method_call(*h0):
+                return true
+            for __armH1 in h1:
+                if __armH1.guard is Some(__gH1):
+                    if expr_has_method_call(__gH1):
+                        return true
+            return false
+        case EClosure(_, _):
+            return false
+        case EImplicitClosure(h0):
+            if expr_has_method_call(*h0):
+                return true
+            return false
+        case EArrayLiteral(h0):
+            for __eH0 in h0:
+                if expr_has_method_call(__eH0):
+                    return true
+            return false
+        case ETupleLiteral(h0):
+            for __eH0 in h0:
+                if expr_has_method_call(__eH0):
+                    return true
+            return false
+        case EDictLiteral(h0, h1):
+            for __eH0 in h0:
+                if expr_has_method_call(__eH0):
+                    return true
+            for __eH1 in h1:
+                if expr_has_method_call(__eH1):
+                    return true
+            return false
+        case EStructLiteral(_, _, h2):
+            for __eH2 in h2:
+                if expr_has_method_call(__eH2):
+                    return true
+            return false
+        case EDotShorthand(_, h1):
+            for __aH1 in h1:
+                if expr_has_method_call(__aH1.value):
+                    return true
+            return false
+        case ETry(h0):
+            if expr_has_method_call(*h0):
+                return true
+            return false
+        case EMove(h0):
+            if expr_has_method_call(*h0):
+                return true
+            return false
+        case EPropagate(h0):
+            if expr_has_method_call(*h0):
+                return true
+            return false
+        case EMutableBorrow(h0):
+            if expr_has_method_call(*h0):
+                return true
+            return false
+        case EDeref(h0):
+            if expr_has_method_call(*h0):
+                return true
+            return false
+        case EAs(h0, _):
+            if expr_has_method_call(*h0):
+                return true
+            return false
+        case EBlock(_):
+            return false
+        case EListComp(h0, _, h2, h3):
+            if expr_has_method_call(*h0):
+                return true
+            if expr_has_method_call(*h2):
+                return true
+            if h3 is Some(__bH3):
+                if expr_has_method_call(*__bH3):
+                    return true
+            return false
+        case ESetComp(h0, _, h2, h3):
+            if expr_has_method_call(*h0):
+                return true
+            if expr_has_method_call(*h2):
+                return true
+            if h3 is Some(__bH3):
+                if expr_has_method_call(*__bH3):
+                    return true
+            return false
+        case EDictComp(h0, h1, _, h3, h4):
+            if expr_has_method_call(*h0):
+                return true
+            if expr_has_method_call(*h1):
+                return true
+            if expr_has_method_call(*h3):
+                return true
+            if h4 is Some(__bH4):
+                if expr_has_method_call(*__bH4):
+                    return true
+            return false
+        case EDefaultOp(h0, h1):
+            if expr_has_method_call(*h0):
+                return true
+            if expr_has_method_call(*h1):
+                return true
+            return false
+        case EIs(h0, _, _):
+            if expr_has_method_call(*h0):
+                return true
+            return false
+        case EDo(_):
+            return false
+        case EAwait(h0):
+            if expr_has_method_call(*h0):
+                return true
+            return false
+        case ESpawn(h0):
+            if expr_has_method_call(*h0):
+                return true
+            return false
+        case ESpawnBlocking(h0):
+            if expr_has_method_call(*h0):
+                return true
+            return false
+        case ERethrow(h0, _, _, h3):
+            if expr_has_method_call(*h0):
+                return true
+            if expr_has_method_call(*h3):
+                return true
+            return false
+        case ECatch(h0, _, h2):
+            if expr_has_method_call(*h0):
+                return true
+            if expr_has_method_call(*h2):
+                return true
+            return false
+        case EFString(_, h1, _):
+            for __eH1 in h1:
+                if expr_has_method_call(__eH1):
+                    return true
+            return false
+    return false
 
-# Record bare-form method-targs for an explicitly-typed binding initializer
-# WITHOUT perturbing `expr_types` or the binding type. Snapshots `expr_types`,
-# runs the recording walk (which writes `expr_method_targs` — KEPT — and
-# `expr_types` — DISCARDED), then restores the snapshot so `walk_expr_closures`
-# re-derives `expr_types` exactly as it would have. Gated on a method call
-# being present so plain initializers are untouched.
-void record_method_targs_preserving_expr_types(SpannedExpr init_expr, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
-    if not expr_has_method_call(init_expr):
+# CHOKEPOINT GATE (statement level) — SHALLOW over `enum Stmt`: this
+# statement's OWN expressions only. Nested `Vector[Stmt]` bodies are reached
+# because `type_check_stmts` invokes `type_check_stmt` — and therefore this
+# chokepoint — for every nested statement in turn.
+bool stmt_has_method_call(Stmt s):
+    match s:
+        case SVarDecl(_, _, q2, _, _, _):
+            if expr_has_method_call(q2):
+                return true
+            return false
+        case SAssign(q0, q1):
+            if expr_has_method_call(q0):
+                return true
+            if expr_has_method_call(q1):
+                return true
+            return false
+        case SCompoundAssign(q0, _, q2):
+            if expr_has_method_call(q0):
+                return true
+            if expr_has_method_call(q2):
+                return true
+            return false
+        case SExpr(q0):
+            if expr_has_method_call(q0):
+                return true
+            return false
+        case SReturn(q0):
+            if q0 is Some(__xQ0):
+                if expr_has_method_call(__xQ0):
+                    return true
+            return false
+        case SThrow(q0):
+            if expr_has_method_call(q0):
+                return true
+            return false
+        case SBreak():
+            return false
+        case SContinue():
+            return false
+        case SPass():
+            return false
+        case SMeta():
+            return false
+        case SMetaFor(_, q1, _):
+            if expr_has_method_call(q1):
+                return true
+            return false
+        case SMetaIf(q0, _, q2):
+            if expr_has_method_call(q0):
+                return true
+            for __ebQ2 in q2:
+                if __ebQ2.condition is Some(__cQ2):
+                    if expr_has_method_call(__cQ2):
+                        return true
+            return false
+        case SMetaConst(_, q1):
+            if expr_has_method_call(q1):
+                return true
+            return false
+        case SMetaForMatch(_, q1, q2):
+            if expr_has_method_call(q1):
+                return true
+            for __armQ2 in q2:
+                if __armQ2.guard is Some(__gQ2):
+                    if expr_has_method_call(__gQ2):
+                        return true
+            return false
+        case SMetaMatch(q0, q1, _):
+            if expr_has_method_call(q0):
+                return true
+            for __maQ1 in q1:
+                if expr_has_method_call(__maQ1.case_value):
+                    return true
+            return false
+        case SMetaWhile(q0, _):
+            if expr_has_method_call(q0):
+                return true
+            return false
+        case SFor(_, q1, _, _, _):
+            if expr_has_method_call(q1):
+                return true
+            return false
+        case SWhile(q0, _, _):
+            if expr_has_method_call(q0):
+                return true
+            return false
+        case SLoop(_):
+            return false
+        case SIf(q0, _, q2):
+            if expr_has_method_call(q0):
+                return true
+            for __ebQ2 in q2:
+                if __ebQ2.condition is Some(__cQ2):
+                    if expr_has_method_call(__cQ2):
+                        return true
+            return false
+        case SMatch(q0, q1):
+            if expr_has_method_call(q0):
+                return true
+            for __armQ1 in q1:
+                if __armQ1.guard is Some(__gQ1):
+                    if expr_has_method_call(__gQ1):
+                        return true
+            return false
+        case SWith(q0, _, _):
+            if expr_has_method_call(q0):
+                return true
+            return false
+        case SAssert(q0, _):
+            if expr_has_method_call(q0):
+                return true
+            return false
+        case SAssertReturn(q0, _):
+            if expr_has_method_call(q0):
+                return true
+            return false
+        case SNamedScope(_, _):
+            return false
+        case SSelect(q0):
+            for __saQ0 in q0:
+                match __saQ0.op:
+                    case SORecv(_, _, __seQ0):
+                        if expr_has_method_call(__seQ0):
+                            return true
+                    case SOSend(__scQ0, __svQ0):
+                        if expr_has_method_call(__scQ0):
+                            return true
+                        if expr_has_method_call(__svQ0):
+                            return true
+            return false
+        case SOnError(_):
+            return false
+        case SItem(_):
+            return false
+        case SSnapshot(_, _, q2):
+            if expr_has_method_call(q2):
+                return true
+            return false
+    return false
+
+# THE ONE CALL SITE's entry point: record bare-form method-targs for every
+# expression THIS statement carries, WITHOUT perturbing `expr_types` or any
+# binding type. Snapshots `expr_types`, runs the recording walk (which writes
+# `expr_method_targs` — KEPT — and `expr_types` — DISCARDED), then restores the
+# snapshot so `walk_expr_closures` re-derives `expr_types` exactly as it would
+# have. Gated on a method call being present (`stmt_has_method_call`) so the
+# `Dict.clone()` snapshot is paid only by statements that can need it.
+void record_method_targs_for_stmt(Stmt s, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    if not stmt_has_method_call(s):
         return
     Dict[int, int] saved_expr_types = types.expr_types.clone()
-    record_method_targs_in_expr(init_expr, &scopes, &types, &ctx)
+    record_method_targs_in_stmt(s, &scopes, &types, &ctx)
     types.expr_types = saved_expr_types
 
 # ── Sized-int literal range check (ValueOutOfRange) ──────────
@@ -4415,6 +4959,11 @@ void type_check_stmts(Vector[Stmt] stmts, int scope_id, ScopeTable &scopes, Type
     resolve_closure_types_from_calls(stmts, scope_id, &scopes, &types, &ctx)
 
 void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
+    # Core #4 ONE-PRODUCER CHOKEPOINT: record bare-form method targs for
+    # EVERY expression this statement carries, at EVERY syntactic position,
+    # BEFORE the per-arm logic runs. Replaces the two hand-wired call sites
+    # (SVarDecl-explicit + SExpr) that left 20 of 30 measured positions unwired.
+    record_method_targs_for_stmt(s, &scopes, &types, &ctx)
     match s:
         case SVarDecl(stype, name, init_expr, line, col, flags):
             bool is_inferred = false
@@ -4429,13 +4978,6 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
                 # ValueOutOfRange: reject a literal initializer that does not fit
                 # the declared sized-int type (`int8 x = 200`), matching Rust gg.
                 check_sized_int_literal_range(init_expr, var_type_id, types, &ctx)
-                # Lazy-iterator phase 1b Blocker #1: for an explicitly-typed
-                # binding the initializer is otherwise never inferred, so the
-                # method-targs side-table stays empty for bare-form Iterator
-                # terminals. Record them WITHOUT touching `var_type_id` (the
-                # binding stays the annotated type — the array-literal canary)
-                # and WITHOUT perturbing `expr_types` (snapshot/restored).
-                record_method_targs_preserving_expr_types(init_expr, &scopes, &types, &ctx)
             else:
                 # Phase 2: infer type from initializer expression
                 var_type_id = infer_expr_type(init_expr, scopes, &types, &ctx)
@@ -4502,6 +5044,14 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             ctx.loop_depth = ctx.loop_depth + 1
             type_check_stmts(body, scope_id, &scopes, &types, &ctx)
             ctx.loop_depth = ctx.loop_depth - 1
+            # The else body runs OUTSIDE the loop (loop_depth already
+            # restored), and it IS type-checked — the SWhile sibling below has
+            # always done this. Without it, nothing inside a `for … else` else
+            # block is checked at all, and in particular the method-targ
+            # chokepoint (driven per statement from `type_check_stmt`'s entry)
+            # never sees it, so a bare Iterator terminal there emits an
+            # undefined `VectorIter__…__any`.
+            type_check_stmts(else_body, scope_id, &scopes, &types, &ctx)
 
         case SWhile(cond, body, else_body):
             if has_is_patterns(cond.expr):
@@ -4548,17 +5098,6 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             type_check_stmts(body, scope_id, &scopes, &types, &ctx)
 
         case SExpr(sexpr):
-            # Lazy-iterator bare-form method-targ recording (sibling of the
-            # SVarDecl arm, caf102fd): a bare terminal call as a STATEMENT
-            # (`v.iter().for_each(f)`) is never inferred top-down —
-            # `walk_expr_closures` only infers the RECEIVER of an EMethodCall,
-            # not the outer call — so the method-targs side-table stays empty
-            # and the lowerer emits a CALLED-but-never-DEFINED bare symbol
-            # (`VectorIter__int64_t__for_each` etc.). Record them WITHOUT
-            # perturbing `expr_types` (snapshot/restored inside the helper),
-            # mirroring the explicitly-typed SVarDecl arm. (Sibling-site drift:
-            # caf102fd wired this into SVarDecl only.)
-            record_method_targs_preserving_expr_types(sexpr, &scopes, &types, &ctx)
             walk_expr_closures(sexpr, scope_id, &scopes, &types, &ctx)
 
         case SAssign(target, value):

@@ -1,0 +1,67 @@
+# KNOWN GAP (self-host lane only) — `for … else` over a Vector / Dict / String
+# / String.bytes() SILENTLY DROPS THE WHOLE ELSE BODY.
+#
+# Rust gg (C and LLVM) prints all six lines. The self-host driver prints only
+# `range-else` and `set-else`: the four `lower_for_*` arms in
+# `tests/fixtures/self_host_lowerer/lower_loops.gg` never lower the else block.
+# The program compiles, links, runs and EXITS 0 — a silent wrong answer, not a
+# loud failure, which is why nothing caught it.
+#
+#   lower_for_vector       — else dropped
+#   lower_for_dict         — else dropped
+#   lower_for_string       — else dropped
+#   lower_for_string_bytes — else dropped
+#   lower_for_range        — CORRECT (control)
+#   lower_for_set          — CORRECT (control)
+#
+# ⚠ Do NOT write a marker-grep guard for this: `grep -c lower_fail` on the
+# emitted C gives 1 for the Vector/Dict arms and 0 for the String/bytes arms,
+# so a grep-based check is structurally blind to half the class. Assert the
+# OUTPUT, which is what the test below does.
+#
+# The two control cells are deliberate: they are what makes a partial fix
+# visible, and they are the cells the live fixture
+# `tests/fixtures/loop_else_generic_instantiation.gg` is allowed to use.
+#
+# GRADUATES to a live top-level fixture when all four arms lower the else body.
+
+from std.collections import Vector
+
+int main():
+    Vector[int] v = Vector[int]()
+    for a in v:
+        print(a)
+    else:
+        print("vector-else")
+
+    Dict[String, int] d = Dict[String, int]()
+    for k in d:
+        print(k)
+    else:
+        print("dict-else")
+
+    String s = ""
+    for c in s:
+        print(c)
+    else:
+        print("string-else")
+
+    for b in s.bytes():
+        print(b)
+    else:
+        print("bytes-else")
+
+    int lo = v.len()
+    int hi = v.len()
+    for r in lo..hi:
+        print(r)
+    else:
+        print("range-else")
+
+    Set[int] st = Set[int]()
+    for e in st:
+        print(e)
+    else:
+        print("set-else")
+
+    return 0

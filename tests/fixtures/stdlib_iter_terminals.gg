@@ -94,22 +94,16 @@ int main():
         case None:
             print("empty_min=none")
 
-    # any / all / count / sum / fold via method form.
-    # ⚠ BOUND TO LOCALS DELIBERATELY — a LANE GAP, not a style choice.
-    # Rust gg compiles these inlined inside the interpolation fine
-    # (`fstring_method_chain.gg` covers that shape). The SELF-HOST does not:
-    # it emits `__gg_VectorIter__int64_t` assigned from `int` and the C
-    # fails to compile, tripping `self_host_runtime`. Filed in TODO.md.
-    # Re-inline only once the self-host lane handles it.
-    bool any_gt5 = v.iter().any(gt_five)
-    bool all_gt5 = v.iter().all(gt_five)
-    int count_v = v.iter().count()
-    int fold_v = v.iter().fold(0, add)
-    int sum_v = v.iter().sum()
-    print(f"any_gt5={any_gt5}")
-    print(f"all_gt5={all_gt5}")
-    print(f"count={count_v}")
-    print(f"sum={sum_v}")
-    print(f"fold={fold_v}")
+    # any / all / count / sum / fold via method form, INLINED inside the
+    # interpolation — the idiomatic shape, and on purpose: the self-host lane
+    # reaches the method-targ recorder at every syntactic position, so an
+    # f-string interpolation mangles the terminal exactly like a bare
+    # expression does. (These five were bound to locals for months to dodge a
+    # self-host recorder hole; the hole is closed, so the dodge is gone.)
+    print(f"any_gt5={v.iter().any(gt_five)}")
+    print(f"all_gt5={v.iter().all(gt_five)}")
+    print(f"count={v.iter().count()}")
+    print(f"sum={v.iter().sum()}")
+    print(f"fold={v.iter().fold(0, add)}")
 
     return 0

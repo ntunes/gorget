@@ -1,0 +1,54 @@
+# KNOWN GAP (self-host lane only; Rust gg compiles and runs this correctly).
+#
+# A LAZY-ADAPTER chain (`.map` / `.filter` …) terminated inside an f-string
+# interpolation link-fails on the self-host lane:
+#
+#     undefined reference to
+#     `MapIter__VectorIter__int64_t__int64_t__int64_t__GorgetClosure__fold__int64_t__GorgetClosure'
+#
+# The method-targ RECORDER now reaches every syntactic position, so the symbol
+# is mangled CORRECTLY — this is the consumer half: the lowerer's separate
+# adapter-instance discovery walk, `discover_adapter_chain_expr`
+# (`tests/fixtures/self_host_lowerer/lower_generics.gg`), is still a
+# hand-maintained 8-arm traversal that never visits an f-string interpolation,
+# so the adapter instance is never registered and no body is emitted.
+#
+# It is the FOURTH member of the partial-walker class: `proto_walk_expr` and
+# `proto_walk_stmts` were made exhaustive over `ast.gg`'s variant sets; this
+# walker (and `discover_mono_method_insts_expr`, `discover_transitive_expr`,
+# `discover_generic_calls_expr`) were not, and each keeps its own arm list.
+#
+# This is the exact residual that keeps the committed corpus fixture
+# `tests/fixtures/fstring_method_chain.gg` at CC-FAIL on the self-host lane —
+# it went from 6 C errors to this single link error. The PLAIN terminal chains
+# in that fixture now compile and link.
+#
+# GRADUATES to a live top-level fixture when the adapter-chain discovery walk
+# is exhaustive.
+
+from std.collections import Vector
+
+int double(int x):
+    return x * 2
+
+int add(int a, int b):
+    return a + b
+
+Vector[int] mk():
+    Vector[int] v = Vector[int]()
+    v.push(3)
+    v.push(9)
+    return v
+
+int main():
+    Vector[int] v = mk()
+    # Warm-up, load-bearing: without ANY earlier `v.iter()` use, Rust gg
+    # REJECTS the interpolated chain outright with a bogus
+    # `E_NoMethodFound: no method 'iter' found on type 'Vector[int]'` at
+    # `<std.collections>:26:1` — a SEPARATE order-dependent Rust defect, filed
+    # as `rust_gg_bug_iter_chain_cold_position_reject.gg`. Keeping the warm-up
+    # is what makes this fixture isolate the SELF-HOST adapter-discovery hole
+    # instead of tripping over that one first.
+    print(v.iter().fold(0, add))
+    print(f"mapped_fold={v.iter().map(double).fold(0, add)}")
+    return 0

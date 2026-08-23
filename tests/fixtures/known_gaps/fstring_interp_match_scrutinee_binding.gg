@@ -1,0 +1,55 @@
+# KNOWN GAP (Rust gg lane; the SELF-HOST lane compiles this and prints BOTH
+# lines correctly — `local=6` / `direct=6`. A succession milestone: the
+# reference is the lane that is wrong here.)
+#
+# A pattern binding taken from a MATCH ON A METHOD-CALL SCRUTINEE has no type
+# by the time f-string interpolation is checked:
+#
+#     error[E_NonPrintableInterpolation]: cannot interpolate `m` of type
+#     `<error>` in string
+#
+# DISCRIMINATOR (this is the whole finding): the SAME match, over the SAME
+# `Option[int]`, is fine when the scrutinee is a LOCAL. Only the direct
+# method-call scrutinee loses the binding type, and only when the binding is
+# interpolated — `print(m)` on the identical binding compiles and prints the
+# right value. So it is the interpolation type-check reading a binding the
+# match arm never got a resolved type for, not the match itself.
+#
+# ⚠ This is NOT the "f-strings swallow error classes" defect
+# (`known_gaps/sound_fstring_suppresses_sigil_reject.gg`): that one SUPPRESSES
+# a reject that should fire; this one FIRES a reject that should not. Do not
+# conflate them when triaging.
+#
+# It is also distinct from the method-targ recorder class — the recorder reaches
+# a match scrutinee correctly on both lanes (see
+# `tests/fixtures/iter_terminal_stmt_positions.gg`, which pins that position
+# with `print(n)` precisely so this defect does not red it).
+#
+# GRADUATES to a live top-level fixture when the direct-scrutinee binding
+# carries its type into interpolation checking.
+
+from std.collections import Vector
+
+bool is_even(int x):
+    return x % 2 == 0
+
+int main():
+    Vector[int] vi = Vector[int]()
+    vi.push(6)
+    vi.push(7)
+
+    # CONTROL — scrutinee bound to a local first: compiles, prints `local=6`.
+    Option[int] r = vi.iter().find(is_even)
+    match r:
+        case Some(n):
+            print(f"local={n}")
+        case None:
+            print("local=none")
+
+    # THE GAP — scrutinee is the method call itself.
+    match vi.iter().find(is_even):
+        case Some(m):
+            print(f"direct={m}")
+        case None:
+            print("direct=none")
+    return 0
