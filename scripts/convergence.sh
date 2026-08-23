@@ -172,8 +172,22 @@ known_gaps=$(
   awk '
     /^[[:space:]]*#\[ignore/          { ign = 1; next }
     /^[[:space:]]*fn [A-Za-z0-9_]+\(/ { cur_ign = ign; ign = 0 }
+    # (3) COMMENTS ARE NOT REFERENCES -- the deflating sibling of defect (2), found by the
+    # R44 Track-G census and reproduced by the parent: a fixture path mentioned in a COMMENT
+    # inside a LIVE test marks that fixture live-referenced. For a fixture with no wired test
+    # it flips "open gap" to "closed-bug net" and the count drops with NO WORK DONE (measured
+    # 96 -> 95 from one comment line). Direction matters: defect (2) inflated, this one DELETES
+    # a filed gap. Skip whole-line comments, and strip a trailing // when it is not inside a
+    # string literal (even number of quotes before it).
+    /^[[:space:]]*(\/\/|\*|\/\*)/ { next }
     {
       line = $0
+      ci = index(line, "//")
+      if (ci > 0) {
+        before = substr(line, 1, ci - 1)
+        q = gsub(/"/, "\"", before)
+        if (q % 2 == 0) line = before
+      }
       while (match(line, /known_gaps\/[A-Za-z0-9_\/]+\.gg/)) {
         ref = substr(line, RSTART + 11, RLENGTH - 11 - 3)
         sub(/\/.*$/, "", ref)          # a nested citation belongs to its DIRECTORY unit
