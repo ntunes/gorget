@@ -137,20 +137,51 @@ fi
 #
 # Graduating a fixture (removing its #[ignore]) therefore counts as a CLOSURE
 # here, which is exactly what the WHAT-COUNTS block above means by graduation.
+# ⚠ TWO DEFECTS FIXED 2026-08-23, both found by the R44 Track-G census, both
+# mine from the R43 rebuild. They made this script over-count OPEN GAPS by 7:
+#
+#  (1) NESTED FIXTURES WERE UNREFERENCEABLE. The inventory keyed on `basename`
+#      while the reference regex forbade `/`, so a fixture at
+#      `known_gaps/<dir>/repro.gg` could never match a citation and counted as
+#      open forever -- and four different `repro.gg` files collapsed to ONE row
+#      under `sort -u`. 15 nested files became 10 permanently-open phantoms.
+#      Both sides now key on the path RELATIVE to known_gaps/, which is exactly
+#      how tests/integration.rs already spells them.
+#
+#  (2) THE IGNORE DETECTOR MATCHED PROSE. `/#\[ignore/` fires anywhere on a
+#      line, so any COMMENT mentioning `#[ignore]` marked the next `fn` as
+#      ignored -- including integration.rs:7792, whose comment records that the
+#      `#[ignore]` was REMOVED BECAUSE THE BUG WAS FIXED. 32 comment lines
+#      qualify. The attribute is now anchored to the start of its own line.
+#
+# This is a COUNTING CORRECTION (NEITHER filed nor closed) and it moves the raw
+# number with no work done, so it lands BETWEEN rounds and the -7 belongs to the
+# NEXT baseline -- never to a round claiming compliance. Same rule the fused-entry
+# note above states.
 known_gaps=$(
-  find tests/fixtures/known_gaps -name '*.gg' -exec basename {} .gg \; | sort -u > "$TMP_ALL"
+  # A UNIT is one filed gap: a top-level fixture, or a whole repro DIRECTORY.
+  # A multi-file repro (entry point + the modules it imports) is ONE gap, not N
+  # -- six of its support files had no citation of their own and each counted as
+  # a separate permanently-open row.
+  { find tests/fixtures/known_gaps -maxdepth 1 -name '*.gg' | sed 's|.*/||; s|\.gg$||'
+    find tests/fixtures/known_gaps -mindepth 1 -maxdepth 1 -type d | sed 's|.*/||'
+  } | sort -u > "$TMP_ALL"
+  # Scan EVERY test target that cites a repro, not just integration.rs: lints.rs
+  # and security.rs carry citations too, and security.rs's ignored tests were a
+  # population this metric could not see at all.
   awk '
-    /#\[ignore/                       { ign = 1; next }
+    /^[[:space:]]*#\[ignore/          { ign = 1; next }
     /^[[:space:]]*fn [A-Za-z0-9_]+\(/ { cur_ign = ign; ign = 0 }
     {
       line = $0
-      while (match(line, /known_gaps\/[A-Za-z0-9_]+\.gg/)) {
+      while (match(line, /known_gaps\/[A-Za-z0-9_\/]+\.gg/)) {
         ref = substr(line, RSTART + 11, RLENGTH - 11 - 3)
+        sub(/\/.*$/, "", ref)          # a nested citation belongs to its DIRECTORY unit
         printf "%s %s\n", ref, (cur_ign ? "IGNORED" : "LIVE")
         line = substr(line, RSTART + RLENGTH)
       }
     }
-  ' tests/integration.rs | sort -u > "$TMP_STATUS"
+  ' tests/integration.rs tests/lints.rs tests/security.rs | sort -u > "$TMP_STATUS"
   awk '$2=="IGNORED"{print $1}' "$TMP_STATUS" | sort -u > "$TMP_IGN"
   awk '$2=="LIVE"   {print $1}' "$TMP_STATUS" | sort -u > "$TMP_LIVE"
   comm -23 "$TMP_LIVE" "$TMP_IGN" > "$TMP_NETS"      # live-ONLY = closed-bug nets

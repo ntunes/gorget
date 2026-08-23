@@ -820,8 +820,27 @@ broken-in-common harness produces.
 the ad-hoc harness and onto the real lane — where it PASSED. That is the mechanical rule
 worth keeping:
 
-> **A known-gap test that passes is either a fixed bug or a fictional one.** Both demand
-> action, and you cannot tell which from the green alone.
+> **A known-gap test that passes is a fixed bug, a fictional one, or a BLIND one.** All three
+> demand action, and you cannot tell which from the green alone.
+
+The third branch was added after a census built and ran all 98 `#[ignore]`d known-gap tests at
+once. Twelve passed, and **none of them was a graduation.** Every one passed because its
+assertion could not observe the gap it was parked for: eight were self-host-lane gaps asserted
+through the Rust-lane runner, two were clone-count pathologies asserted on stdout, and two pinned
+today's behaviour on a question the ledger has not ratified. A two-branch rule sends the reader to
+un-ignore all twelve, which would delete the tree's only record of ten live defects.
+
+The near-miss is the instructive part. Two shared-carrier fixtures produced *correct* self-host
+output and read exactly like graduations. They were not: the lowerer still gates the shared carrier
+on a primitive-type check its own comment calls a live filed gap, and neither fixture contains a
+`spawn` — so a single-threaded program cannot observe whether sharing exists at all. Every `spawn`
+sibling still fails. The discriminator was never the green; it was **whether the assertion is
+wired to a mechanism that could go red.**
+
+So the triage order is: ask what the assertion can SEE before asking what it says. A blind row is
+not retired by un-ignoring it and not retired by deleting it — it is retired by giving it an
+oracle that can fail, which is Core #12's authoring obligation arriving one layer earlier than
+usual.
 
 This is Core #13 (verify the verifier) pointed at the *control* rather than the gate. The
 existing rules cover the gate that never goes red; this is the sibling failure — a control
