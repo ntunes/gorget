@@ -1,0 +1,44 @@
+# KNOWN GAP — durable repro for the STAGING-MOVE class at the SLICE write site.
+#
+# `Vector[String] s1 = v[a:b]` lowers to
+#     _s = index_load _v, _range
+#     [Mv] _dst = copy _s
+#          move_zero _s          <- the staging site's own zero
+#     ...  call @gorget_array_clone(copy _s)   <- a REAL later read of _s
+# i.e. a move out of a source that is still read. It is benign TODAY only
+# because the backend elides the zero when drop-tracking proves the read
+# unobservable — which the MoveZero-as-kill liveness always concludes here.
+# Core #8 forbids treating that as a pass.
+#
+# ⚠ The gap is the WRITE SITE, not this program's output: at HEAD this fixture
+# builds clean and prints the right thing. The only instrument that can observe
+# the defect is `GG_STAGING_MOVE_GUARD=fatal`, so the `#[ignore]`d test asserts
+# the INTENDED state — zero `StagingMoveIntoOwnedSlot` violations under the
+# promoter — which is RED at HEAD (`BUILD_RC=101`, 2 violations, first at
+# `@main bb0 i23`) by construction. Graduate it (un-ignore, delete this copy,
+# drop the ledger row in `tests/gaps/STAGING_MOVE_BURNDOWN.txt`, lower the
+# lint's TRIP_CEILING) the round the slice write site routes through
+# `LoweringContext::assign_with_move_follow_through`.
+#
+# A copy of the live `tests/fixtures/d22_slice_vector_string.gg` rather than a
+# hand-minimised program: every smaller shape tried reduces to a DIFFERENT,
+# already-fatal validator (`local _N read after MoveZero in bbK`), which is a
+# false negative for this class.
+#
+# D22 colon-slice × Vector[String] (droppable element) — exercises the
+# runtime `elem_clone` deep-clone branch in `gorget_array_slice`
+# (`src/backend/c/runtime/runtime_array.c:475-479`), which never fires for
+# `Vector[int]`. Core #12 element-type axis: the POD cell (Vector[int]) says
+# nothing about the droppable-element cell.
+void main():
+    Vector[String] v = ["alpha", "beta", "gamma", "delta"]
+    int a = 1
+    int b = 3
+    Vector[String] s1 = v[a:b]
+    print(f"[a:b] {s1.get(0).unwrap()},{s1.get(1).unwrap()}")
+    Vector[String] s2 = v[:]
+    print(f"[:] len={s2.len()} {s2.get(0).unwrap()},{s2.get(3).unwrap()}")
+    # Mutate the source AFTER the slice — the slice is an independent OWNED
+    # value (D15 semantics), so the earlier snapshot survives.
+    v.push("epsilon")
+    print(f"after push {v.len()} s1[0]={s1.get(0).unwrap()}")

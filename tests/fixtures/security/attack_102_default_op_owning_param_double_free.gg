@@ -1,0 +1,41 @@
+# `??` on an OWNING (`!`) param carrier — double-free, ASan-confirmed.
+#
+# `lower_expr`'s identifier arm peels a non-Copy param's pointer with
+# `_t = copy _p.*`, leaving `_t` a SHALLOW copy of the pointee that does not own
+# its payload (the typed provenance bit is `Local::deref_of_owning_param`). The
+# `??` lowering's case-(a)/(b) discriminator tested the post-deref temp for
+# Ptr-ness, saw a plain `Option[T]`, and took the "source owns its data" path —
+# so the Move-extract zeroed only the COPY's payload field while the param's own
+# slot kept pointing at the same Vector and stayed registered for drop. Both
+# dropped.
+#
+# Fixed by reading the typed provenance instead of re-deriving the shape.
+#
+# ⚠ PLACEMENT: this fixture may NOT go top-level in `tests/fixtures/`. The
+# self-host lane REJECTS `??` with a `Vector` payload
+# (`E_DefaultOpRhsTypeMismatch`, re-measured this round), so a top-level
+# placement would enter `runtime_parity_corpus` as a non-MATCH row and grow a
+# ceiling Core #9 ⊕ forbids raising for a round's own inflow. The SH over-
+# rejection is filed separately in `TODO.md`.
+#
+# RED-verified at the pre-fix compiler: RUN_RC 134, ASan
+# `attempting double-free`. Expected stdout: `2` then `done`.
+Vector[int] mkv(int n):
+    Vector[int] v = []
+    v.push(n)
+    v.push(n)
+    return v
+
+Vector[int] fb():
+    Vector[int] f = []
+    f.push(9)
+    return f
+
+void take(Option[Vector[int]] ^o):
+    Vector[int] got = o ?? fb()
+    print(got.len())
+
+void main():
+    Option[Vector[int]] o = Some(mkv(7))
+    take(^o)
+    print("done")

@@ -19785,3 +19785,188 @@ fn self_host_match_fallthrough_predicates_pinned() {
         assert!(fixture.exists(), "the outcome cell fixture {} is missing.", fixture.display());
     }
 }
+
+// ── The staging-move consume-guard's runway must actually be DRIVEN ─────────
+//
+// `StagingMoveIntoOwnedSlot` (`src/ir/validate.rs`) catches a staging site that
+// moves an owned source which is still LIVE. A new consume-site class is FATAL
+// the instant it lands — the validator has no env-gate runway — so the class
+// enters through the non-fatal `assign_warnings` list and
+// `GG_STAGING_MOVE_GUARD=fatal` promotes it for burn-down runs (Core #6's
+// ladder: env-gate → burn down → fatal).
+//
+// The measured hazard with exactly that shape is that nothing ever SETS the
+// promoter: the precedent `GG_RETURN_SLOT_GUARD` occurs three times in the
+// whole tree and all three are in `src/`. And the promoter — not class
+// membership — is what separates the two burned-down rows from the defects the
+// class was built for, since every violation of the staging shape carries the
+// same class. So an unwired promoter leaves the guard silent on its own target
+// class, which is worse than not shipping it.
+
+/// Extract the LIVE (non-comment) lines of one job from a GitHub Actions
+/// workflow. A job starts at `  <name>:` (two-space indent under `jobs:`) and
+/// ends at the next two-space-indented key.
+///
+/// "Live" is the whole point: the house `ci.contains("…")` substring idiom is
+/// satisfied by a COMMENTED-OUT step, which is a blind guard in embryo. This
+/// helper drops every line whose first non-space character is `#`, so a
+/// commented step reads as absent — see the positive control in
+/// `staging_move_guard_wired_into_ci`, which asserts exactly that.
+fn live_lines_of_ci_job(ci: &str, job: &str) -> Vec<String> {
+    let head = format!("  {job}:");
+    let mut out = Vec::new();
+    let mut inside = false;
+    for line in ci.lines() {
+        if line.trim_end() == head {
+            inside = true;
+            continue;
+        }
+        if inside {
+            // A new two-space-indented key ends the job block.
+            let indent = line.len() - line.trim_start().len();
+            if !line.trim().is_empty()
+                && indent <= 2
+                && line.trim_start().starts_with(|c: char| c.is_ascii_alphabetic())
+            {
+                break;
+            }
+            if line.trim_start().starts_with('#') {
+                continue;
+            }
+            out.push(line.to_string());
+        }
+    }
+    out
+}
+
+#[test]
+fn staging_move_guard_wired_into_ci() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let ci_path = root.join(".github/workflows/ci.yml");
+    let ci = fs::read_to_string(&ci_path).expect("ci.yml readable");
+
+    // POSITIVE CONTROL (Core #13 / Core #15e Q2): the predicate below must be
+    // able to catch its own class. Comment the step out and it has to read as
+    // absent — otherwise this lint green-lights precisely the failure it was
+    // written to retire, which is what a bare `ci.contains(...)` does.
+    let commented: String = ci
+        .lines()
+        .map(|l| {
+            if l.contains("staging_move_burndown.sh") || l.contains("GG_STAGING_MOVE_GUARD") {
+                format!("#{l}")
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let control = live_lines_of_ci_job(&commented, "test");
+    assert!(
+        !control.iter().any(|l| l.contains("staging_move_burndown.sh")),
+        "the CI-wiring predicate cannot see a commented-out step — it would \
+         green-light the exact class it exists to catch (Core #15e Q2)."
+    );
+
+    let live = live_lines_of_ci_job(&ci, "test");
+    assert!(
+        !live.is_empty(),
+        "could not locate job `test` in {} — the job was renamed or the parser \
+         drifted; fix `live_lines_of_ci_job` rather than deleting this lint.",
+        ci_path.display()
+    );
+    assert!(
+        live.iter()
+            .any(|l| l.contains("run: scripts/staging_move_burndown.sh --check")),
+        "job `test` in .github/workflows/ci.yml does not RUN \
+         `scripts/staging_move_burndown.sh --check` on a live step.\n\
+         `GG_STAGING_MOVE_GUARD` has no other driver, and the env var — not class \
+         membership — is what separates the burned-down rows from this class's target \
+         defects, so an unwired promoter is silent on both. A guard CI does not run is \
+         not a guard."
+    );
+    // The VALUE-BEARING spelling, not the bare name: a var mentioned in prose,
+    // or set to something other than `fatal`, promotes nothing.
+    assert!(
+        live.iter().any(|l| l.contains("GG_STAGING_MOVE_GUARD: fatal")),
+        "job `test` in .github/workflows/ci.yml does not set \
+         `GG_STAGING_MOVE_GUARD: fatal` on a live step. The name alone is not the \
+         wiring — only `fatal` promotes the class out of the non-fatal \
+         `assign_warnings` list (`src/ir/lowering/mod.rs`)."
+    );
+}
+
+/// Shrink-only ratchet on the staging-move burn-down ledger.
+///
+/// The rows are OUTCOMES — each one was produced by RUNNING the compiler under
+/// the promoter, not by counting a pattern in source text. `--check` reconciles
+/// the TRIP set by set equality over the whole corpus, so it already catches a
+/// new violation; this ratchet is the follow-on half: it makes every removal
+/// lower a constant VISIBLY IN THE DIFF, so a burn-down notch cannot be spent
+/// twice, and it keeps the CLEAN side from being quietly emptied.
+#[test]
+fn staging_move_burndown_shrink_only() {
+    // Two open write-site defects at the class's introduction, both real
+    // read-after-move (benign today only because the backend elides the zero,
+    // which Core #8 forbids treating as a pass). Lower this when one is fixed.
+    const TRIP_CEILING: usize = 2;
+    // The four staging sites the class was found through, plus the `??`
+    // deref-copy cell. Never let this shrink below the sites the fix touched.
+    const CLEAN_FLOOR: usize = 5;
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("tests/gaps/STAGING_MOVE_BURNDOWN.txt");
+    let body = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+
+    let mut trips: Vec<String> = Vec::new();
+    let mut cleans: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        let mut it = t.split_whitespace();
+        let kind = it.next().unwrap_or_default();
+        let fixture = it.next().unwrap_or_default().to_string();
+        match kind {
+            "TRIP" => trips.push(fixture),
+            "CLEAN" => cleans.push(fixture),
+            other => panic!(
+                "STAGING_MOVE_BURNDOWN.txt row kind {other:?} is neither TRIP nor CLEAN"
+            ),
+        }
+    }
+
+    for f in trips.iter().chain(cleans.iter()) {
+        assert!(
+            root.join(f).exists(),
+            "STAGING_MOVE_BURNDOWN.txt cites {f:?}, which does not exist. A ledger \
+             pointing at nothing is how a ratchet becomes decoration (Core #14)."
+        );
+    }
+
+    // EXACT, not `<=` — same reasoning as `known_gaps_passing_allowlist_shrink_only`.
+    // A ceiling counts rows but does not identify them, so `<=` lets a fixed row be
+    // swapped for a new one with no signal.
+    assert_eq!(
+        trips.len(),
+        TRIP_CEILING,
+        "staging-move burn-down has {} TRIP row(s), TRIP_CEILING says {TRIP_CEILING}.\n\
+         GREW? A staging site moved an owned-but-live source — a live aliasing hazard. \
+         ⛔ This ledger is SHRINK-ONLY: fix the WRITE SITE (route it through \
+         `LoweringContext::assign_with_move_follow_through`, which asks `owns AND dead`), \
+         do not park it.\n\
+         SHRANK? That is the win — lower TRIP_CEILING in this same commit so the notch is \
+         recorded and cannot be spent again.\n\
+         Regenerate with `scripts/staging_move_burndown.sh --sweep`.",
+        trips.len()
+    );
+    assert!(
+        cleans.len() >= CLEAN_FLOOR,
+        "staging-move burn-down has {} CLEAN row(s), floor is {CLEAN_FLOOR}. The CLEAN \
+         rows are the gate's other side (Core #13: a gate that fires on everything is no \
+         more evidence than one that never fires). Removing one silently drops a \
+         positive control.",
+        cleans.len()
+    );
+}

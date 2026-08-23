@@ -6818,6 +6818,124 @@ fn snag41_match_scrutinee_consume() {
     );
 }
 
+// ── The STAGING-MOVE class: `owns ∧ dead`, asked once at the chokepoint ──
+//
+// Four lowering sites staged a `Result` carrier / recovery value into an owned
+// slot and each asked `drops.is_moved(src)` — which is not the consume rule.
+// An OWNED source that is still LIVE past the staging point got moved anyway,
+// emitting `[Mv] _dst = copy _src; move_zero _src` with a real later read; the
+// backend elides that zero whenever drop-tracking proves it unobservable, so
+// the two slots alias one buffer. All four sites now route through
+// `LoweringContext::assign_with_move_follow_through`, which asks `owns ∧ dead`
+// and clones when the source survives (Core #1 write site, Core #4 class).
+//
+// The read-side guard for the same invariant is the
+// `StagingMoveIntoOwnedSlot` consume-site class (`GG_STAGING_MOVE_GUARD`,
+// burned down by `scripts/staging_move_burndown.sh`). It exists because the
+// defect PLANTS ITS OWN ALIBI: `Liveness::compute` counts `MoveZero` as a kill,
+// so the site's own `move_zero` makes the normal instrument read "sound".
+//
+// Every one of the four cells below was RED-verified at the pre-fix compiler:
+// `BUILD_RC=0`, `RUN_RC=134`, on BOTH the C and LLVM backends, and all four
+// MATCH on the self-host lane.
+
+/// Build a `known_gaps/` fixture with `GG_STAGING_MOVE_GUARD=fatal` and assert
+/// the INTENDED state: **zero** `StagingMoveIntoOwnedSlot` violations.
+///
+/// The two remaining write sites in this class are invisible to stdout — at
+/// HEAD both fixtures build clean and print the right answer, and both are
+/// ASan-clean, because the aliasing is benign only by the backend's zero
+/// elision. The promoter is the only instrument that observes them, so it is
+/// what the durable repro asserts. The assertion is therefore RED at HEAD by
+/// construction (Core #12's RED-verify discharged on arrival) and turns green
+/// the round the write site is fixed, which is what forces graduation.
+fn assert_no_staging_move_violation(fixture: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures").join(fixture);
+    let out_dir = std::env::temp_dir().join(format!("gg_staging_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&out_dir);
+    let out_bin = out_dir.join("out.bin");
+    let output = build_with_timeout(
+        gg_command("build")
+            .arg(&path)
+            .arg("--emit-gir")
+            .arg("-o")
+            .arg(&out_bin)
+            .env("GG_STAGING_MOVE_GUARD", "fatal"),
+        fixture,
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let _ = std::fs::remove_dir_all(&out_dir);
+    assert!(
+        !stderr.contains("StagingMoveIntoOwnedSlot"),
+        "{fixture}: the staging site still moves an owned-but-live source.\n\
+         Fix the WRITE SITE — route it through \
+         `LoweringContext::assign_with_move_follow_through`, which asks \
+         `owns AND dead` — then GRADUATE this test: un-ignore it, delete the \
+         known_gaps copy, drop the row from tests/gaps/STAGING_MOVE_BURNDOWN.txt \
+         and lower TRIP_CEILING in tests/lints.rs.\n\nstderr:\n{stderr}"
+    );
+    assert!(
+        output.status.success(),
+        "{fixture}: build failed under GG_STAGING_MOVE_GUARD=fatal for some \
+         reason OTHER than this class.\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP (TODO.md): the SLICE write site (`Vector[T] s = v[a:b]`) \
+stages the slice with a move out of a source that is read again, emitting its \
+own MoveZero. Benign today ONLY because the backend elides the zero, which \
+Core #8 forbids passing. Asserts the INTENDED state (zero \
+StagingMoveIntoOwnedSlot violations under GG_STAGING_MOVE_GUARD=fatal) and is \
+RED at HEAD by construction. Fixture lives in tests/fixtures/known_gaps/ so it \
+stays out of the runtime-diff corpus; the live copy is \
+tests/fixtures/d22_slice_vector_string.gg. Un-ignore + delete the copy + drop \
+the tests/gaps/STAGING_MOVE_BURNDOWN.txt row when the write site is fixed."]
+fn staging_move_slice_into_owned() {
+    assert_no_staging_move_violation("known_gaps/staging_move_slice_into_owned.gg");
+}
+
+#[test]
+#[ignore = "KNOWN GAP (TODO.md): the MATCH-ARM write site \
+(`assign_match_arm_to_result`) stages the arm value with a move out of a \
+source that is read again, emitting its own MoveZero — the slice cell's \
+sibling in a different costume. Benign today ONLY because the backend elides \
+the zero (Core #8). Asserts the INTENDED state (zero \
+StagingMoveIntoOwnedSlot violations under GG_STAGING_MOVE_GUARD=fatal) and is \
+RED at HEAD by construction. The live copy is \
+tests/fixtures/snag31_match_arm_move_into_owned.gg. Un-ignore + delete the \
+copy + drop the tests/gaps/STAGING_MOVE_BURNDOWN.txt row when fixed."]
+fn staging_move_match_arm_into_owned() {
+    assert_no_staging_move_violation("known_gaps/staging_move_match_arm_into_owned.gg");
+}
+
+#[test]
+fn autoprop_carrier_live_twice() {
+    // Cell 1 of 4 — `emit_result_auto_propagate`'s carrier staging.
+    run_gg("autoprop_carrier_live_twice.gg", "6");
+}
+
+#[test]
+fn rethrow_carrier_live_twice() {
+    // Cell 2 of 4 — `lower_rethrow_expr`'s carrier staging.
+    run_gg("rethrow_carrier_live_twice.gg", "6");
+}
+
+#[test]
+fn catch_carrier_live_twice() {
+    // Cell 3 of 4 — `lower_catch_expr`'s CARRIER staging. Double-free.
+    run_gg("catch_carrier_live_twice.gg", "3\n3");
+}
+
+#[test]
+fn catch_recovery_named_live() {
+    // Cell 4 of 4 — `lower_catch_expr`'s RECOVERY staging. A different
+    // signature: the recovery value is live AND mutated afterwards, so the
+    // alias is a heap-USE-AFTER-FREE via realloc, not a double free.
+    run_gg("catch_recovery_named_live.gg", "7\n7");
+}
+
 #[test]
 fn snag31_match_arm_move_into_owned() {
     // Snag #31: Tier 2a consume-site validator panicked on `Completion

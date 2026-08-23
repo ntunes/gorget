@@ -1,0 +1,43 @@
+# STAGING-MOVE net, cell 3 of 4 on the STAGING-SITE axis:
+#   `lower_catch_expr`'s CARRIER staging (`src/ir/lowering/exprs/mod.rs`).
+#
+# The carrier `r` is an OWNED, NAMED local that is LIVE past the first `catch`.
+# The staging assign used to ask `drops.is_moved(src)` — which is not the
+# consume rule — and moved `r` out from under its own second read, emitting
+# `[Mv] _v = copy _r; move_zero _r` on a live source. The backend elides that
+# zero whenever drop-tracking proves it unobservable (which the MoveZero-as-kill
+# liveness always does here), so `first` and `r` ended up aliasing one buffer:
+# rc 134, ASan `attempting double-free`. Fixed by routing the site through
+# `LoweringContext::assign_with_move_follow_through`, which asks `owns AND dead`
+# and clones when the source survives.
+#
+# RED-verified at the pre-fix compiler on BOTH backends: BUILD_RC 0, RUN_RC 134
+# (`free(): double free detected in tcache 2`) on C and on LLVM. With the guard
+# landed but the write-site fix not yet applied, `GG_STAGING_MOVE_GUARD=fatal`
+# gave BUILD_RC 101 —
+# `StagingMoveIntoOwnedSlot(dst: Result__Vector__int64_t__GorgetString)` at
+# `@main bb0 i3`. The self-host lane compiles and RUNS this correctly (`3/3`).
+#
+# The payload is HEAP-FORCED (a Vector built by push, never a literal) — a
+# literal payload is a measured false negative for this class.
+Vector[int] mkv(int n):
+    Vector[int] v = []
+    v.push(n)
+    v.push(n + 1)
+    v.push(n + 2)
+    return v
+
+Vector[int] fallback():
+    Vector[int] f = []
+    f.push(0)
+    return f
+
+Result[Vector[int], String] mkr():
+    return Ok(mkv(5))
+
+void main():
+    Result[Vector[int], String] r = mkr()
+    Vector[int] first = r catch (e): fallback()
+    print(first.len())
+    Vector[int] second = r catch (e): fallback()
+    print(second.len())

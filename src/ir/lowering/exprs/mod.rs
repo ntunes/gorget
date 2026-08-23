@@ -1069,17 +1069,19 @@ fn lower_expr_inner(
             let result_type = if option_preserving { lhs_type } else { inner_type };
 
             // Pick the right staging shape for the source.
-            //   (a) Source is a bare named local that owns its data — use
+            //   (a) Source is a bare local that owns its data — use
             //       directly as `scrut_place`; subsequent Move-extract
             //       zeros the source's Some_0 (correct: source's drop is
             //       a no-op on zeroed payload via cap=0 / NULL-pointer).
-            //   (b) Source is a borrowed Ptr (non-Copy param) — clone the
-            //       whole Option into a fresh owned local first, then use
-            //       that. Necessary because Move-extracting from a borrow
-            //       would zero the caller's slot, and Borrow-extracting
-            //       + cloning the inner value tripped a separate alias
-            //       (the user's match-on-result_id later observed both an
-            //       extracted-then-zeroed scrut and the alive result_id).
+            //   (b) Source does NOT own its payload — clone the whole
+            //       Option into a fresh owned local first, then use that.
+            //       Necessary because Move-extracting from a non-owner
+            //       zeros only the copy's payload field and leaves the real
+            //       owner's slot pointing at the same buffer, so both drop.
+            //       Borrow-extracting + cloning the inner value instead
+            //       tripped a separate alias (the user's match-on-result_id
+            //       later observed both an extracted-then-zeroed scrut and
+            //       the alive result_id).
             //   (c) Source is a constant / complex operand — stage Copy
             //       into a fresh local.
             let raw_src_place = if let Operand::Copy(ref p) | Operand::Move(ref p) = lhs_val {
@@ -1091,6 +1093,18 @@ fn lower_expr_inner(
                     ctx.type_registry.get(lty),
                     Some(crate::ir::types::GirType::Ptr(_) | crate::ir::types::GirType::MutPtr(_))
                 ) || ctx.is_ref_local(builder, p.local)
+                    // A DEREF-COPY of an owning `!` param reaches here with the
+                    // pointer already peeled (`_t = copy _p.*`), so neither the
+                    // Ptr-shape test nor `is_ref_local` sees it — and it does
+                    // NOT own its payload: the param's own slot still points at
+                    // the same buffer and is still registered for drop, so a
+                    // Move-extract double-frees (regression fixture
+                    // `tests/fixtures/security/attack_102_default_op_owning_param_double_free.gg`,
+                    // ASan-armed via `security_safe_no_leak`). The typed bit
+                    // that records the provenance is `deref_of_owning_param`, set by
+                    // the identifier deref arm above; read it rather than
+                    // re-deriving the shape.
+                    || builder.locals[p.local.0 as usize].deref_of_owning_param.is_some()
             } else { false };
             let scrut_place = if src_is_borrowed {
                 // Clone the whole Option via its `_clone` runtime helper
@@ -4291,14 +4305,16 @@ pub fn emit_result_auto_propagate(
     let (work_place, owns_work) = if let Some(src) = src_local {
         if is_resource {
             let val_local = builder.add_local(result_type, None);
-            builder.assign_mode(
-                crate::ir::instructions::AssignMode::Move,
-                Place::local(val_local),
+            // Staging site 1 of 4 (Core #4): the ownership decision lives in
+            // the chokepoint, which asks `owns ∧ dead` — a carrier that is
+            // still read after this propagation is CLONED, not moved.
+            ctx.assign_with_move_follow_through(
+                builder,
+                val_local,
                 result_operand,
+                crate::ir::instructions::AssignMode::Move,
+                Some(prop_span),
             );
-            if !ctx.drops.is_moved(src) {
-                ctx.move_zero_and_mark(builder, src);
-            }
             (Place::local(val_local), true)
         } else {
             // Read straight from the source — no copy.
@@ -4624,21 +4640,15 @@ fn lower_rethrow_expr(
     let val_type = infer_operand_type_full(ctx, &val, builder);
     let val_local = builder.add_local(val_type, None);
     let val_mode = mode_for(ctx, builder, &val, val_type);
-    // Tier 1c: snapshot the source before assign_mode consumes the
-    // operand, so we can mark it moved after a Move-mode assign.
-    // Without this, the source Result shares heap data with val_local;
-    // both drop at scope exit → double-free now that Result is Resource.
-    let val_src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) = val {
-        if p.projections.is_empty() { Some(p.local) } else { None }
-    } else { None };
-    builder.assign_mode(val_mode, Place::local(val_local), val);
-    if matches!(val_mode, crate::ir::instructions::AssignMode::Move) {
-        if let Some(src_local) = val_src_local {
-            if !ctx.drops.is_moved(src_local) {
-                ctx.move_zero_and_mark(builder, src_local);
-            }
-        }
-    }
+    // Staging site 2 of 4 (Core #4): route the carrier staging through the
+    // one chokepoint that owns the move-vs-clone decision. Without an
+    // ownership decision the source Result shares heap data with val_local
+    // and both drop at scope exit → double-free now that Result is Resource;
+    // with `is_moved` as the only question, a carrier that is still LIVE past
+    // the rethrow gets moved anyway.
+    ctx.assign_with_move_follow_through(
+        builder, val_local, val, val_mode, Some(inner.span),
+    );
 
     // Look up Ok/Error field types from the Result type definition
     let (ok_field_type, err_field_type) = extract_result_field_types(ctx, val_type);
@@ -4765,21 +4775,13 @@ fn lower_catch_expr(
     let val_type = infer_operand_type_full(ctx, &val, builder);
     let val_local = builder.add_local(val_type, None);
     let val_mode = mode_for(ctx, builder, &val, val_type);
-    // Tier 1c: snapshot the source before assign_mode consumes the
-    // operand, so we can mark it moved after a Move-mode assign.
-    // Without this, the source Result shares heap data with val_local;
-    // both drop at scope exit → double-free now that Result is Resource.
-    let val_src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) = val {
-        if p.projections.is_empty() { Some(p.local) } else { None }
-    } else { None };
-    builder.assign_mode(val_mode, Place::local(val_local), val);
-    if matches!(val_mode, crate::ir::instructions::AssignMode::Move) {
-        if let Some(src_local) = val_src_local {
-            if !ctx.drops.is_moved(src_local) {
-                ctx.move_zero_and_mark(builder, src_local);
-            }
-        }
-    }
+    // Staging site 3 of 4 (Core #4): the CARRIER staging. Routed through the
+    // chokepoint so the decision is `owns ∧ dead` — `r catch (e): …` twice
+    // over one owned `r` used to move the carrier out from under its own
+    // second read (double-free; `catch_carrier_live_twice.gg`).
+    ctx.assign_with_move_follow_through(
+        builder, val_local, val, val_mode, Some(inner.span),
+    );
 
     // Look up Ok/Error field types from the Result type definition
     let (ok_field_type, err_field_type) = extract_result_field_types(ctx, val_type);
@@ -4865,29 +4867,19 @@ fn lower_catch_expr(
     // `lower_match_stmt_as_expr` post-loop fallthrough fix.
     if !builder.is_terminated() {
         let recovery_mode = mode_for(ctx, builder, &recovery_val, ok_field_type);
-        // Mirror the Ok/Error payload move-out above (the `val_local` path): a
-        // Move-mode assign from an OWNING temp/local must zero+mark the source,
-        // else the recovery's heap data is moved into `result_local` AND dropped
-        // again at the merge → double-free. Only the bare/atom recoveries
-        // (`catch (e): e` / a static `"literal"`) dodged it; an ALLOCATING
-        // recovery (`catch (e): "[" + e + "]"`, a concat/fn-call returning an
-        // owned String) hit it. The `is_moved` guard keeps `catch (e): e`
-        // (already-moved err binding) a no-op.
-        let recovery_src_local = if let Operand::Copy(ref p) | Operand::Move(ref p) =
-            recovery_val
-        {
-            if p.projections.is_empty() { Some(p.local) } else { None }
-        } else {
-            None
-        };
-        builder.assign_mode(recovery_mode, Place::local(result_local), recovery_val);
-        if matches!(recovery_mode, crate::ir::instructions::AssignMode::Move) {
-            if let Some(src_local) = recovery_src_local {
-                if !ctx.drops.is_moved(src_local) {
-                    ctx.move_zero_and_mark(builder, src_local);
-                }
-            }
-        }
+        // Staging site 4 of 4 (Core #4): the RECOVERY value. A Move-mode
+        // assign from an OWNING temp/local must zero+mark the source, else the
+        // recovery's heap data is moved into `result_local` AND dropped again
+        // at the merge → double-free (an ALLOCATING recovery such as
+        // `catch (e): "[" + e + "]"` hit that). But `is_moved` alone is the
+        // wrong question in the other direction: `catch (e): fb` over a named
+        // `fb` that is MUTATED afterwards used to move `fb`'s buffer out and
+        // leave both aliasing it — realloc, then heap-UAF
+        // (`catch_recovery_named_live.gg`). The chokepoint asks `owns ∧ dead`
+        // and clones when the source survives.
+        ctx.assign_with_move_follow_through(
+            builder, result_local, recovery_val, recovery_mode, Some(recovery.span),
+        );
         builder.jump(merge_bb);
     }
 

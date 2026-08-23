@@ -2325,6 +2325,38 @@ pub enum ConsumeSiteClass {
     /// count is burned down to zero; `GG_RETURN_SLOT_GUARD=fatal`
     /// promotes it for burn-down runs. See `docs/devbook/25`.
     AssignIntoReturnSlot { dst_type: String },
+    /// `Inst::Assign { dst, value }` that is sound under the normal
+    /// liveness rule ONLY because the site emitted its own `MoveZero` on
+    /// the source — the **staging move** shape:
+    ///
+    /// ```text
+    /// [Mv] _dst = copy _src
+    ///      move_zero _src        // <- emitted by the same lowering site
+    ///      ... copy _src ...     // <- a REAL later read
+    /// ```
+    ///
+    /// `Liveness::compute` counts `MoveZero` as a kill (`liveness.rs`,
+    /// `MoveZeroPolicy::Kills`), so `live_after(_src)` is `false` at the
+    /// assign and [`validate_assign_consume`] returns "sound". **The defect
+    /// is its own alibi**: the very instruction that creates the aliasing
+    /// hazard is what makes the guard pass it. No walk over the instruction
+    /// stream can observe the class; only the counterfactual can.
+    ///
+    /// So this class re-asks the same question against a
+    /// [`MoveZeroPolicy::Blind`] liveness — "would the source still be read
+    /// if the `MoveZero` were not there?" — and fires when the answer is
+    /// yes. The consequence in the backend is a live aliasing hazard: the
+    /// zero is elided whenever drop-tracking proves it unobservable (which
+    /// the `Kills` liveness just concluded), leaving `_dst` and `_src`
+    /// pointing at one buffer — double-free at scope exit, or a
+    /// use-after-free if the survivor reallocs.
+    ///
+    /// RUNWAY: emitted NON-FATALLY (routed to the `assign_warnings` list in
+    /// `lowering/mod.rs`) until its corpus count is burned down to zero;
+    /// `GG_STAGING_MOVE_GUARD=fatal` promotes it for burn-down runs, and
+    /// `scripts/staging_move_burndown.sh` runs that promotion in CI. See
+    /// `docs/devbook/25`.
+    StagingMoveIntoOwnedSlot { dst_type: String },
 }
 
 /// A single consume-site finding. The Phase 1 sweep emits these as
@@ -2402,6 +2434,8 @@ impl std::fmt::Display for ConsumeSiteClass {
                 write!(f, "AssignIntoOwnedSlot(dst: {})", dst_type),
             Self::AssignIntoReturnSlot { dst_type } =>
                 write!(f, "AssignIntoReturnSlot(dst: {})", dst_type),
+            Self::StagingMoveIntoOwnedSlot { dst_type } =>
+                write!(f, "StagingMoveIntoOwnedSlot(dst: {})", dst_type),
         }
     }
 }
@@ -2441,7 +2475,16 @@ pub fn validate_consume_sites(module: &Module) -> Vec<ConsumeSiteWarning> {
     let clone_fns = module.type_registry.clone_fn_names_set();
     for func in &module.functions {
         let liveness = Liveness::compute(func);
-        for_each_consume_site(func, module, &liveness, &clone_fns, |w| warnings.push(w));
+        // Second instrument, for the `StagingMoveIntoOwnedSlot` class only:
+        // the same analysis with `MoveZero` neutralised, so a staging site
+        // that manufactures its own alibi can still be seen. Consulted ONLY
+        // after the normal run has already returned "sound" — the shared
+        // kill edge is untouched for every other consumer.
+        let liveness_mz_blind = Liveness::compute_move_zero_blind(func);
+        for_each_consume_site(
+            func, module, &liveness, &liveness_mz_blind, &clone_fns,
+            |w| warnings.push(w),
+        );
     }
     warnings
 }
@@ -2539,10 +2582,17 @@ pub fn validate_clone_reasons(module: &Module) -> CloneReasonCensus {
 /// (built once via [`TypeRegistry::clone_fn_names_set`]); threaded
 /// through so [`preceded_by_clone`] can match producers without
 /// inspecting the callee string.
+///
+/// `liveness_mz_blind` is the [`MoveZeroPolicy::Blind`] companion run. It
+/// is consulted for exactly one class — `StagingMoveIntoOwnedSlot`, in the
+/// `Assign` arm — and only after `liveness` has already judged the site
+/// sound. See that variant's doc for why the class is invisible to the
+/// normal instrument.
 fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
     func: &Function,
     module: &Module,
     liveness: &Liveness,
+    liveness_mz_blind: &Liveness,
     clone_fns: &rustc_hash::FxHashSet<String>,
     mut emit: F,
 ) {
@@ -2822,14 +2872,25 @@ fn for_each_consume_site<F: FnMut(ConsumeSiteWarning)>(
                     let dst_type = registry.type_name(dst_local.type_id)
                         .unwrap_or_else(|| format!("ty{}", dst_local.type_id.0));
                     let class = if is_return_place {
-                        ConsumeSiteClass::AssignIntoReturnSlot { dst_type }
+                        ConsumeSiteClass::AssignIntoReturnSlot { dst_type: dst_type.clone() }
                     } else {
-                        ConsumeSiteClass::AssignIntoOwnedSlot { dst_type }
+                        ConsumeSiteClass::AssignIntoOwnedSlot { dst_type: dst_type.clone() }
                     };
                     if let Some(w) = validate_assign_consume(
                         func, registry, liveness, clone_fns, value, &bb.instructions, b, i,
                         class,
                     ) {
+                        emit(w);
+                    } else if let Some(w) = validate_assign_consume(
+                        func, registry, liveness_mz_blind, clone_fns, value,
+                        &bb.instructions, b, i,
+                        ConsumeSiteClass::StagingMoveIntoOwnedSlot { dst_type },
+                    ) {
+                        // Sound under the normal rule, unsound once the
+                        // site's own `MoveZero` stops vouching for it —
+                        // the staging-move class. Its runway is the
+                        // sibling `GG_STAGING_MOVE_GUARD` promoter in
+                        // `lowering/mod.rs`.
                         emit(w);
                     }
                 }

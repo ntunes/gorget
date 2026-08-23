@@ -567,7 +567,7 @@ get its address. For a value receiver that is correct; for a for-element that is
 that mis-reads the tag — and it would invalidate the source (`Move` +
 `drops.unregister` + `move_zero_and_mark`), zeroing a collection element.
 
-`build_enum_recv_ptr` (`src/ir/lowering/exprs/methods.rs:63`) is the chokepoint
+`build_enum_recv_ptr` (`src/ir/lowering/exprs/methods.rs:144`) is the chokepoint
 that distinguishes the two. The carve-out is, again, fully typed:
 
 ```rust
@@ -576,11 +576,11 @@ let is_collection_borrow = recv_is_ptr
     && ctx.is_cow_borrow(builder, place.local);
 ```
 
-(`methods.rs:77-79`). When true it passes the pointer **through** (the slot
+(`methods.rs:158-160`). When true it passes the pointer **through** (the slot
 already holds the `Ptr(enum)`) and returns an `is_collection_borrow` flag that
-tells the four enum-extern call sites (`methods.rs:733,887,1256`, and the
-`unwrap_or`/`unwrap` pair at `:794`/`:824`) to skip the `Move` signal and the
-`move_zero_and_mark`. Match scrutinees need no migration: `TagOf` /
+tells the enum-extern call sites (`methods.rs:1014`, `:1168`, `:1611`) to skip
+the `Move` signal and the `move_zero_and_mark`. Match scrutinees need no
+migration: `TagOf` /
 `EnumFieldLoad` already auto-deref a `Ptr` base (`resolve_struct_id` peels the
 `Ptr`; `EnumFieldLoad`'s Ptr-base `Load`, `src/lir/lower/insts.rs:1315-1323`).
 
@@ -1386,6 +1386,49 @@ C backend's old per-runtime-fn zero was removed because it duplicated the same
 bytes — see the comment block at
 `src/backend/c_lir/emit_call_extern.rs:900`. There is no `zero_arg_indices` in
 the backend anymore.
+
+### Staging is a boundary too — and `MoveZero` is not evidence of one
+
+The `Result` family stages its carrier before it reads the tag: `catch`,
+`rethrow` and auto-propagation all copy the carrier into a fresh local so the
+destructive Ok/Error field loads read from a slot the extractor owns, and
+`catch`'s recovery arm stages the recovery value into the merged result slot.
+Each of those is an **ownership boundary in its own right**, so the same rule
+applies as at any consuming position: *move if the source owns and is dead,
+clone if it is a borrow or still live.* All four sites route through
+`LoweringContext::assign_with_move_follow_through` (`context.rs`), which asks
+that question once for the class.
+
+The reason this is worth its own section is the shape of the failure when the
+question is asked wrong. A staging site that moves a **live** owned source emits
+
+```text
+[Mv] _dst = copy _src
+     move_zero _src
+     …
+     _t = call @gorget_array_clone(copy _src)   ; a REAL later read
+```
+
+and the `move_zero` is *elided* by the backend exactly when drop-tracking proves
+the read unobservable — which the analysis above concludes precisely because the
+`MoveZero` is there. `_dst` and `_src` then alias one buffer: a double free at
+scope exit, or a use-after-free if the survivor reallocs first.
+
+That circularity is why the read-side guard for this class,
+`ConsumeSiteClass::StagingMoveIntoOwnedSlot` (`src/ir/validate.rs`), cannot use
+the ordinary liveness run. `Liveness::compute` counts `MoveZero` as a kill, so
+the defect is its own alibi and every walk over the instruction stream reports
+the site sound. The class re-asks the same question against a second,
+`MoveZeroPolicy::Blind` liveness — *would the source still be read if the
+`MoveZero` were not there?* — and only for the `Assign` class, only after the
+normal run has already answered "sound". The shared kill edge is untouched: it
+is the right answer for every other consumer.
+
+Its promoter is `GG_STAGING_MOVE_GUARD=fatal`, burned down by
+`scripts/staging_move_burndown.sh --check`, which CI runs. That wiring is part
+of the guard, not an extra: a consume class has no env-gate runway on the
+validator, so the env var — not class membership — is what separates the
+remaining burn-down rows from the defects the class exists to catch.
 
 ## The view discriminator (`cap==0`)
 

@@ -1,0 +1,32 @@
+# STAGING-MOVE net, cell 1 of 4 on the STAGING-SITE axis:
+#   `emit_result_auto_propagate`'s carrier staging
+#   (`src/ir/lowering/exprs/mod.rs`).
+#
+# Reached WITHOUT a `!` mark: auto-propagation fires at `lower_expr`'s exit
+# whenever a `Result`-typed operand lands in a non-`Result` slot inside a
+# `throws` function, so a bare identifier is a legal carrier here — which is
+# what makes the "owned NAMED carrier, still live" cell reachable at this site
+# at all. (`r!` is rejected: `!` attaches to a fallible CALL, so it can never
+# name a live local.)
+#
+# RED-verified at the pre-fix compiler on BOTH backends: BUILD_RC 0, RUN_RC 134
+# on C and on LLVM. The self-host lane compiles and RUNS it correctly (`6`).
+Vector[int] mkv(int n):
+    Vector[int] v = []
+    v.push(n)
+    v.push(n + 1)
+    v.push(n + 2)
+    return v
+
+Result[Vector[int], String] mkr():
+    return Ok(mkv(5))
+
+int run() throws String:
+    Result[Vector[int], String] r = mkr()
+    Vector[int] first = r
+    Vector[int] second = r
+    return first.len() + second.len()
+
+void main():
+    int n = run()! catch (e): -1
+    print(n)
