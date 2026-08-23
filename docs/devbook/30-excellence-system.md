@@ -794,6 +794,34 @@ chapter and that file ever disagree, `AGENTS.md` wins and this chapter is
 stale — fix it in the same round (Core #9 spans docs). The exception is §9,
 which is open thinking `AGENTS.md` deliberately does not carry.*
 
+### The sanitizer has its own false green: never wrap an ASan binary in `stdbuf`
+
+Two probe idioms this tree relies on are individually correct and *mutually
+destructive*. A comprehension miscompile prints its correct output before it
+crashes, so reading it without `stdbuf -o0` shows the right answer and hides the
+fault — which is why one brief made `stdbuf` mandatory. But prefixing an
+ASan-instrumented binary with `stdbuf` aborts before `main` with *"ASan runtime does
+not come first in initial library list"*, exits 1, and produces an **empty**
+sanitizer classification. A classifier that greps that empty output for
+`ERROR: AddressSanitizer` finds nothing and reports the fixture clean.
+
+So the mandatory-`stdbuf` rule and the sanitize gate, composed, yield a false
+GREEN on exactly the memory-safety cells the gate exists to catch. The rule is
+per-probe, not global: `stdbuf` for ordering questions on a plain build, never on a
+sanitized one.
+
+A second, quieter one in the same family: under `detect_leaks=1`, LeakSanitizer's
+exit path skips the stdio flush, so a leaking fixture's stdout arrives **empty**. A
+harness that asserts on stdout will read that as a mismatch, or — worse — as a pass
+if the expectation is also empty.
+
+Both share the shape the earlier entries in this section have: the instrument and
+the subject interact, and the interaction is invisible unless someone runs the
+composed command and looks at what came back rather than at the exit code. The
+general defence is the one Core #13 already states — demonstrate the probe going
+RED on a known-bad input in the exact configuration you will use it — which catches
+all three of these mechanically, without anyone having to know about them.
+
 ## 12. The two-clean-pass convergence gate (owner 2026-08-11)
 
 The original gauntlet terminal condition — keep launching fresh reviewers until one
