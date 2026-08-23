@@ -1,0 +1,88 @@
+# KNOWN GAP repro — the self-host move checker's fall-through classifier
+# `match_has_catch_all` (`tests/fixtures/self_host_typechecker/typecheck.gg`)
+# credits an UNGUARDED `PBinding` as a catch-all WITHOUT consulting the enum's
+# variant list. `case Value:` parses as a `PBinding`, not a `PConstructor`, and
+# whether a bare name is an irrefutable catch-all or names a VARIANT cannot be
+# decided without `all_variants` in hand — the exact ambiguity the ported
+# exhaustiveness check goes to lengths to avoid by deciding `PBinding` inside
+# `collect_covered_variants` instead of in the pre-resolution scan.
+#
+# CELL: pattern shape = BARE UNQUALIFIED VARIANT NAME x consumer = the move
+# checker's fall-through question (all three `match_has_catch_all` consumers:
+# the `SMatch` join, the `EMatch` join, the `live_stmt_diverges` divergence
+# gate). The exhaustiveness half of this same pattern shape is sampled by
+# `tests/fixtures/exhaustiveness/neg_bare_variant.gg` (refutable) and
+# `pos_binding_catchall.gg` (irrefutable); the LIVENESS half — this cell — had
+# no sample, and is named as unsampled in the doc comment of the `tests/lints.rs`
+# guard `self_host_match_fallthrough_predicates_pinned`.
+#
+# INTENDED: this program is REJECTED on BOTH lanes. Rust `gg check` already
+# rejects it TWICE — `E_NonExhaustiveMatch` (missing `Next`, `Halt`) and
+# `E_UseAfterMove` at `print(s)`. The self-host ACCEPTS it and lowers C.
+#
+# TWO MECHANISMS COMPOSE, and either fix alone flips this fixture to a reject:
+#   1. the filed `infer_expr_type`/`RTRef` hole (see
+#      `known_gaps/sh_field_off_method_call_untyped.gg`) leaves the scrutinee
+#      `nodes.get(i).unwrap().kind` UNTYPED, so the newly-ported exhaustiveness
+#      check conservatively bails and never emits `E_NonExhaustiveMatch`;
+#   2. `match_has_catch_all` then tells the move checker there is no
+#      fall-through, so the moved `s` is treated as re-initialised on every
+#      path and `E_UseAfterMove` is never emitted either.
+# Landing (1) makes this reject with `E_NonExhaustiveMatch`; landing (2) makes
+# it reject with `E_UseAfterMove`. The `#[ignore]`d test accepts either, because
+# either is the intended REJECT — what must never happen is the accept.
+#
+# ⚠ THE OBVIOUS FIX IS WRONG, AND WAS MEASURED WRONG. Deleting the
+# `case PBinding(_): return true` arm makes THIS program reject — and makes the
+# self-host OVER-REJECT a genuine irrefutable catch-all. Measured, on rebuilt
+# drivers, rc read off the binary with stderr to a file:
+#
+#   probe                                     pristine        PBinding arm deleted
+#   this fixture                              rc 0, 9248 B    rc 1, 0 B, E_UseAfterMove
+#   the same shape with `case other:`         rc 0, 3616 B    rc 1, 0 B, E_UseAfterMove
+#   (a NON-variant binding, i.e. a real catch-all — must stay ACCEPTED)
+#
+# So the fix has to be VARIANT-AWARE, which needs the enum's variant list
+# threaded into a predicate whose ARMS-ONLY signature the lint deliberately
+# pins (that widening is the fusion route the guard exists to block). That
+# interaction is a DESIGN question — see the `TODO.md` bullet beginning
+# "`match_has_catch_all` credits an unguarded `PBinding` as a catch-all".
+#
+# REGENERATE (never trust the bytes above — Core #5):
+#   ./target/debug/gg check tests/fixtures/known_gaps/sh_variant_binding_credited_as_catchall.gg
+#   ./target/debug/gg build tests/fixtures/self_host_lowerer/driver.gg
+#   ./tests/fixtures/self_host_lowerer/driver \
+#       tests/fixtures/known_gaps/sh_variant_binding_credited_as_catchall.gg \
+#       lib --lir-c > /tmp/out.c 2> /tmp/out.err ; echo $?; wc -c /tmp/out.c
+#
+# The seed String is HEAP-FORCED (`mk()` concatenates) rather than a literal, so
+# the moved-from read is a real allocation if the self-host ever starts dropping
+# the `^`-moved parameter. Measured today the emitted binary prints the
+# moved-from contents and is ASan-clean; the defect is the ACCEPT, not a
+# currently-observable runtime trap.
+enum Kind:
+    Value()
+    Next()
+    Halt()
+
+struct Node:
+    Kind kind
+    int payload
+
+String mk():
+    return "gg" + "-payload"
+
+void sink(String ^x):
+    pass
+
+void probe(Vector[Node] nodes, int i):
+    String s = mk()
+    sink(^s)
+    match nodes.get(i).unwrap().kind:
+        case Value:
+            s = "reinit"
+    print(s)
+
+void main():
+    Vector[Node] a = [Node(Kind.Halt(), 1)]
+    probe(a, 0)

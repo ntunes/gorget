@@ -1,0 +1,20 @@
+# CELL: predicate input = GUARDEDNESS. Every variant of `Color` is named, but
+# the `Blue` arm carries a guard — and a guard does not guarantee the arm runs,
+# so it cannot count as coverage. Dropping the `arm.guard is None` filter from
+# the coverage collector makes this program wrongly ACCEPTED.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void show(Color c, bool flag):
+    match c:
+        case Color.Red():
+            print("red")
+        case Color.Green():
+            print("green")
+        case Color.Blue() if flag:
+            print("blue")
+
+void main():
+    show(Color.Blue(), false)

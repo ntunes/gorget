@@ -27,7 +27,7 @@ from ids import NO_DEF, NO_TYPE
 from scope import ScopeTable, DefKind, DefInfo, ScopeKind, SkEquipBlock, SkFunction
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
 from scope import DkVariable, DkConst, DkStatic, DkGenericParam
-from scope import get_def_at, get_scope_at, Scope
+from scope import get_def_at, get_scope_at, Scope, enum_variants_of
 from types import TypeTable, ResolvedType, ast_type_to_resolved, get_stype_at
 from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
 from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, RTRef, get_rtype_at, get_int_at
@@ -36,7 +36,7 @@ from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type, default_op_carrier_inner_type, default_op_carrier_shape_equals
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name, primitive_satisfies_trait
 from std.conv import int_to_str
-from diagnostic import Diagnostic, DkDerefNonBox, DkDefaultOpNonOptional, DkDefaultOpRhsTypeMismatch, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound, DkAmpInOperandPosition, DkMoveInOperandPosition
+from diagnostic import Diagnostic, DkNonExhaustiveMatch, DkDerefNonBox, DkDefaultOpNonOptional, DkDefaultOpRhsTypeMismatch, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound, DkAmpInOperandPosition, DkMoveInOperandPosition
 from format_types import describe_type
 
 # ── Fallback def lookup by name ──────────────────────────────
@@ -1942,9 +1942,34 @@ bool live_stmt_diverges(Stmt s):
                     has_unconditional_else = true
             return has_unconditional_else
         case SMatch(_scrut, arms):
-            # A match is exhaustive (typecheck enforces it), so it diverges iff
-            # every arm body diverges.
+            # Diverges iff EVERY arm body diverges AND the arm list has an
+            # unguarded catch-all. Without one, a scrutinee value that matches no
+            # arm falls straight out of the `match`, the join IS reached, and the
+            # pre-match move-state must survive — so a `match` with no catch-all
+            # never diverges however its arms end. Rust gates the same way, on its
+            # separate `else_arm` (`src/semantic/safety/check_stmt.rs:1362-1368`).
+            # This is the THIRD consumer of `match_has_catch_all`, alongside the
+            # two join sites (`safety_commit` in the `SMatch` / `EMatch` arms), and
+            # the twin of the `SIf` arm's `has_unconditional_else` ten lines up.
+            #
+            # DELIBERATE, RATIFIED SH↔Rust DIVERGENCE — never "corrected" toward
+            # Rust: `match_has_catch_all` also credits an unguarded `case _:` /
+            # `case x:` arm, which Rust does not (it keys on a syntactic `else_arm`
+            # alone and so falsely rejects the wildcard twin). The self-host is
+            # strictly MORE precise here. See the `TODO.md` entry beginning
+            # "production OVER-REJECTION (false positive), from RV-D pass-1"
+            # (grep `check_stmt.rs:1217-1222` in `TODO.md`).
+            #
+            # NOT gated on `check_match_exhaustiveness`'s verdict: a
+            # variant-exhaustive match with NO catch-all still returns false here,
+            # which over-rejects a provably-safe shape exactly as Rust does. That
+            # known false positive is pinned by driver cells (see
+            # `tests/fixtures/liveness/match_exhaustive_no_catchall_*.gg`) and the
+            # fall-through classifier is pinned by the `tests/lints.rs` guard
+            # `self_host_match_fallthrough_predicates_pinned`.
             if arms.len() == 0:
+                return false
+            if not match_has_catch_all(arms):
                 return false
             for arm in arms:
                 if not live_stmts_diverge(arm.body):
@@ -2049,7 +2074,28 @@ void safety_commit(Dict[int, int] acc, bool has_fallthrough, bool any_reached, S
 # path skips the match (no fall-through). Conservative by construction: a
 # variant-exhaustive match with NO catch-all returns false → the join keeps the
 # pre-branch fall-through, exactly as production does for a match with no
-# explicit `else_arm` (check_stmt.rs:1217-1223).
+# explicit `else_arm` (`src/semantic/safety/check_stmt.rs:1362-1368` — the
+# `Stmt::Match` arm; `:1216-1222` is the `Stmt::If` twin).
+#
+# ⚠ That conservatism is a LIVE FALSE POSITIVE, not a neutral choice, and it is
+# one at all THREE consumers (the `SMatch` and `EMatch` `safety_commit` joins and
+# the `live_stmt_diverges` `SMatch` divergence gate): a
+# genuinely variant-exhaustive `match` with no catch-all cannot fall through, so
+# folding the pre-branch state in over-rejects a safe program. It is pinned, not
+# hidden — `tests/fixtures/liveness/match_exhaustive_no_catchall_join_reject.gg`
+# and `..._diverge_reject.gg` wire the current REJECT behaviour into
+# `self_host_driver_rejects_liveness` and MOVE to the accepts array when the
+# precise rule lands.
+#
+# ⚠ The precise rule is NOT "or the match is exhaustive". This module now computes
+# an exhaustiveness verdict (`check_match_exhaustiveness`), and that verdict
+# credits a REFUTABLE nested sub-pattern as full coverage of its outer variant —
+# faithful to Rust, and a filed Core #8 wrong-accept (`TODO.md`, the entry
+# beginning "`collect_covered_variants` counts a REFUTABLE NESTED SUB-PATTERN").
+# Fusing it in here would make the self-host ACCEPT a genuine use-after-move.
+# A second, IRREFUTABLE-coverage bit is the design that closes the false positive,
+# and it is a new design with its own gauntlet — see the `tests/lints.rs` guard
+# `self_host_match_fallthrough_predicates_pinned` for what watches this.
 bool match_has_catch_all(Vector[MatchArm] arms):
     for arm in arms:
         if arm.guard is None:
@@ -3136,6 +3182,183 @@ void assign_pattern_types(SpannedPattern pattern, int scrutinee_type, int scope_
         else:
             pass
 
+
+# ── Match exhaustiveness (Core #9 lane parity with Rust gg) ─────────────
+#
+# The language rule (docs/language-design.md:1189): "Exhaustive - compiler
+# error if cases aren't covered. Uses `else` as catch-all (not `case _`)."
+# Twin of Rust gg `check_match_exhaustiveness` (src/semantic/typecheck.rs:5569).
+#
+# The INVARIANT ported (not the mechanism): an else-less match whose scrutinee
+# is an ENUM must, through its UNGUARDED arms, name every variant of that enum
+# -- unless one unguarded arm is a syntactic catch-all, which covers all of
+# them. A non-enum scrutinee has no closed universe and is exempt.
+#
+# Mechanism differences from Rust, all forced by the self-host AST:
+#  * Rust carries `else_arm` as a separate field and short-circuits on
+#    `has_else`. The self-host PARSER desugars `else:` into a plain
+#    `MatchArm(PWildcard, None, body)` (`self_host_typechecker/parser.gg:3148`
+#    — the copy this module shares; `self_host_parser/` and
+#    `self_host_resolver/` carry their own), so there is no
+#    has_else flag: the catch-all scan subsumes it. The scan therefore runs
+#    FIRST, before any type resolution, so a match with an `else` is never
+#    gated on the scrutinee's type resolving (matching Rust's short-circuit
+#    order, which returns before touching the type).
+#  * `Stmt`/`Expr` match nodes carry no span of their own, so the diagnostic
+#    is anchored at the SCRUTINEE's span (Rust anchors at the whole-match
+#    span). Same site, tighter caret.
+# ⚠ VARIANT-INDEPENDENT catch-alls ONLY. `PBinding` is DELIBERATELY absent:
+# whether a bare name is a catch-all or names a variant cannot be decided
+# without the enum's variant list, so it is classified inside
+# `collect_covered_variants` (which has `all_variants`) and NOT here.
+# Measured 2026-08-22: including PBinding here made the pre-scan short-circuit
+# on `case Red:` and the self-host ACCEPTED a match Rust rejects
+# (probe `neg_bare_variant.gg`). This mirrors Rust's structure exactly --
+# its `has_else` short-circuit is likewise variant-independent, and
+# `Pattern::Binding` is decided later with `all_variants` in hand
+# (src/semantic/typecheck.rs:5833-5840).
+bool pattern_is_syntactic_catchall(Pattern p):
+    match p:
+        case PWildcard():
+            return true
+        case PRest():
+            return true
+        else:
+            return false
+
+# Strip a qualified prefix: "Color.Blue" -> "Blue". Same normalization
+# `resolve_variant_field_types` performs (typecheck.gg).
+String bare_variant_name(String qualified):
+    int dot_pos = -1
+    int ci = 0
+    while ci < qualified.len():
+        if qualified.char_at(ci) == ".":
+            dot_pos = ci
+        ci = ci + 1
+    if dot_pos < 0:
+        return qualified
+    String out = ""
+    int di = dot_pos + 1
+    while di < qualified.len():
+        out = out + qualified.char_at(di)
+        di = di + 1
+    return out
+
+# Recursively collect which variants a pattern covers; sets `has_catchall`
+# when the pattern matches every value. Twin of Rust
+# `collect_covered_variants` (src/semantic/typecheck.rs:5822).
+void collect_covered_variants(Pattern p, Vector[String] all_variants, Vector[String] &covered, Vector[bool] &has_catchall):
+    match p:
+        case PWildcard():
+            has_catchall.push(true)
+        case PRest():
+            has_catchall.push(true)
+        case PBinding(nm):
+            if all_variants.contains(nm):
+                covered.push(nm)
+            else:
+                has_catchall.push(true)
+        case PConstructor(nm, _sub):
+            covered.push(bare_variant_name(nm))
+        case PDotShorthand(nm, _sub):
+            covered.push(bare_variant_name(nm))
+        case POr(alts):
+            for alt in alts:
+                collect_covered_variants(alt.pat, all_variants, &covered, &has_catchall)
+        case PLiteral(lit):
+            # Only the `None` literal names a variant; other literals
+            # (ints, strings) cover no enum variant.
+            match lit.expr:
+                case ENoneLiteral():
+                    covered.push("None")
+                else:
+                    pass
+        case PTuple(_elems):
+            pass
+
+# Peel `&`-borrow wrappers off a scrutinee type: a collection read
+# (`v.get(i)`) or a borrowed param yields an element REFERENCE, and a match
+# on a reference matches the referent's variants. Depth-capped exactly as
+# Rust (src/semantic/typecheck.rs:5594-5600).
+int peel_refs_for_match(int tid, TypeTable types):
+    int cur = tid
+    int depth = 0
+    while depth < 8:
+        if cur < 0 or cur >= types.types.len():
+            return cur
+        ResolvedType rt = get_rtype_at(types.types, cur)
+        match rt:
+            case RTRef(inner):
+                cur = inner
+                depth = depth + 1
+            else:
+                return cur
+    return cur
+
+void check_match_exhaustiveness(int scrutinee_type, Vector[MatchArm] arms, Span span, ScopeTable scopes, TypeTable types, ResolveContext &ctx):
+    # (1) Syntactic catch-all short-circuit -- subsumes Rust's `has_else`
+    #     (the parser desugars `else:` to an unguarded PWildcard arm) and
+    #     Rust's in-loop `has_catchall` break. Runs BEFORE type resolution
+    #     so an `else`-terminated match never depends on the scrutinee type.
+    for pre_arm in arms:
+        if pre_arm.guard is None:
+            if pattern_is_syntactic_catchall(pre_arm.pattern.pat):
+                return
+    if scrutinee_type < 0 or scrutinee_type >= types.types.len():
+        return
+    # (2) Only ENUM scrutinees have a closed universe.
+    int resolved = peel_refs_for_match(scrutinee_type, types)
+    if resolved < 0 or resolved >= types.types.len():
+        return
+    int enum_def = -1
+    match get_rtype_at(types.types, resolved):
+        case RTDefined(d):
+            enum_def = d
+        case RTGeneric(d, _args):
+            enum_def = d
+        else:
+            return
+    if enum_def < 0:
+        return
+    bool is_enum = false
+    match scopes.get_def(enum_def).kind:
+        case DkEnum():
+            is_enum = true
+        else:
+            pass
+    if not is_enum:
+        return
+    Vector[String] all_variants = enum_variants_of(scopes, enum_def)
+    if all_variants.len() == 0:
+        return
+    # (3) Collect coverage from UNGUARDED arms only -- a guard does not
+    #     guarantee the arm runs, so it cannot count as coverage
+    #     (src/semantic/typecheck.rs:5637-5639, `if arm.guard.is_some() {
+    #     continue; // guarded arms don't guarantee coverage }`).
+    Vector[String] covered = Vector[String]()
+    Vector[bool] has_catchall = Vector[bool]()
+    for arm in arms:
+        if arm.guard is None:
+            collect_covered_variants(arm.pattern.pat, all_variants, &covered, &has_catchall)
+    if has_catchall.len() > 0:
+        return
+    Vector[String] missing = Vector[String]()
+    for v in all_variants:
+        if not covered.contains(v):
+            missing.push(v)
+    if missing.len() == 0:
+        return
+    # Message is byte-identical to Rust gg's Display impl
+    # (src/semantic/errors.rs:1652-1658): ", "-joined, declaration order.
+    String joined = ""
+    int mi = 0
+    while mi < missing.len():
+        if mi > 0:
+            joined = joined + ", "
+        joined = joined + missing.get(mi).unwrap()
+        mi = mi + 1
+    ctx.diagnostics.push(Diagnostic.error(span, DkNonExhaustiveMatch(), "non-exhaustive match: missing variants: " + joined))
+
 # ── Resolve variant field types from a scrutinee type ─────
 
 Vector[int] resolve_variant_field_types(int scrutinee_type, String variant_name, ScopeTable scopes, TypeTable types):
@@ -3799,6 +4022,7 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             # return inside a match scrutinee slips past the check.
             walk_expr_closures(*scrutinee, scope_id, &scopes, &types, &ctx)
             int scrut_type = infer_expr_type(SpannedExpr((*scrutinee).expr, (*scrutinee).span), scopes, &types, &ctx)
+            check_match_exhaustiveness(scrut_type, arms, (*scrutinee).span, scopes, types, &ctx)
             for arm in arms:
                 if scrut_type >= 0:
                     assign_pattern_types(arm.pattern, scrut_type, scope_id, &scopes, &types, &ctx)
@@ -5078,6 +5302,7 @@ void type_check_stmt(Stmt s, int scope_id, ScopeTable &scopes, TypeTable &types,
             # expression-form fix at :3556.
             walk_expr_closures(expr, scope_id, &scopes, &types, &ctx)
             int scrutinee_type = infer_expr_type(expr, scopes, &types, &ctx)
+            check_match_exhaustiveness(scrutinee_type, arms, expr.span, scopes, types, &ctx)
             for arm in arms:
                 if scrutinee_type >= 0:
                     assign_pattern_types(arm.pattern, scrutinee_type, scope_id, &scopes, &types, &ctx)

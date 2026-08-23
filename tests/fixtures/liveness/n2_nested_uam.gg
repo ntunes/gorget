@@ -1,0 +1,61 @@
+# AXIS CELL: scrutinee type = ENUM with COMPLETE top-level variant coverage but
+# a REFUTABLE NESTED sub-pattern x consumer = the `safety_commit` JOIN in
+# `check_safety_stmt`'s `SMatch` arm. Its divergence-gate twin is
+# `match_nested_refutable_diverge_use_after_move_reject.gg`.
+#
+# `Outer.Wrap` and `Outer.Nil` are every variant of `Outer`, but the `Wrap` arm
+# only matches when the payload is `Inner.Red()`. `main` passes
+# `Outer.Wrap(Inner.Blue())`, so control falls out of the match with `s` still
+# moved and `print(s)` is a use-after-move -- rejected by `gg check` with
+# `error[E_UseAfterMove]`.
+#
+# ⚠ SPELLING IS LOAD-BEARING: every top-level arm is a QUALIFIED USER-enum
+# constructor, and no prelude variant (`Some`/`None`/`Ok`/`Error`) appears in a
+# top-level arm pattern. `tests/fixtures/self_host_typechecker/parser.gg` -- the
+# copy the typechecker and lowerer share; `self_host_parser/` and
+# `self_host_resolver/` carry their own -- lowers `None` and `None()` to
+# `PLiteral(ENoneLiteral)`, NOT `PConstructor` (the `KW_NONE` branch runs before
+# the constructor branch), so an `Option[T]` spelling of this shape is INVISIBLE
+# to the syntactic one-bit proxy used in the RED-verification break below and
+# would leave the cell green under its own break. Two earlier measurements of
+# this cell silently substituted user enums for exactly this reason.
+#
+# ⚠ NOTE what this cell does NOT claim: it is not a guard against the
+# typechecker's exhaustiveness verdict being WRONG here. That verdict credits
+# `Outer.Wrap(Inner.Red())` as full coverage of `Outer.Wrap`, faithfully to Rust
+# and faithfully to a filed Core #8 wrong-accept (`TODO.md`, the entry beginning
+# "`collect_covered_variants` counts a REFUTABLE NESTED SUB-PATTERN"). What the
+# cell guards is that the MOVE CHECKER never consults that verdict.
+#
+# RED-VERIFY (fuse the verdict into the classifier's BODY): give
+# `match_has_catch_all` a second `return true` for the case "every unguarded arm
+# is a `PConstructor`/`PDotShorthand`" -- signature unchanged, conservative tail
+# `return false` still present, none of `ctx`/`types`/`exhaust` mentioned, every
+# call site untouched -- so `cargo test --test lints
+# self_host_match_fallthrough_predicates_pinned` stays GREEN under it. Rebuild
+# the driver. Measured: this cell flips rc 1 -> rc 0, 6476 bytes of C, while
+# `s5_join_int_nonexh.gg` stays GREEN -- which is the whole reason both cells
+# ship.
+enum Inner:
+    Red()
+    Blue()
+
+enum Outer:
+    Wrap(Inner)
+    Nil()
+
+void sink(String ^x):
+    pass
+
+void probe(Outer o):
+    String s = "hello"
+    sink(^s)
+    match o:
+        case Outer.Wrap(Inner.Red()):
+            s = "a"
+        case Outer.Nil():
+            s = "b"
+    print(s)
+
+void main():
+    probe(Outer.Wrap(Inner.Blue()))

@@ -1,0 +1,33 @@
+# KNOWN GAP repro — LANE SPLIT at the PARSER on an inline `case` arm body.
+#
+# Rust `gg` REJECTS this at parse: `error: expected 'case', found '='`. The
+# self-host parser ACCEPTS it and lowers 3054 bytes of C (this exact file —
+# byte counts quoted for a DIFFERENT spelling of the same idea are worthless).
+# Measured, all four cells, rc read directly off each binary:
+#
+#   `case 0: s = "a"`      (inline ASSIGNMENT)   Rust rc 1  ·  self-host rc 0
+#   `case 0: int q = 5`    (inline DECLARATION)  Rust rc 1  ·  self-host rc 0
+#   `case 0: print("a")`   (inline CALL stmt)    Rust rc 0  ·  self-host rc 0
+#   `case 0: return`       (inline `return`)     Rust rc 0  ·  self-host rc 0
+#
+# So the subject is NOT "statements on an inline arm" — Rust accepts those. Rust
+# parses an inline `case` arm body as an EXPRESSION and therefore rejects
+# exactly the two forms that are statements-but-not-expressions: assignment and
+# declaration. The self-host parses it as a suite.
+#
+# ⚠ WHICH LANE IS WRONG IS AN OPEN QUESTION, not a bug with a known direction.
+# Rust accepts inline suites for `if`/`else`, for function bodies and for
+# expression-match arms, and `docs/language-reference.md` prints that form — but
+# the reference is written after the implementation and a reference-vs-code
+# conflict is an open question, never doc-wins. Do NOT "fix" either lane from
+# this file; the direction is an owner call.
+#
+# INTENDED once the direction is ratified as "loosen Rust `gg`": ACCEPTED by
+# both lanes, printing `a`.
+void main():
+    String s = "x"
+    match 0:
+        case 0: s = "a"
+        else:
+            s = "b"
+    print(s)

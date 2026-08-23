@@ -1,0 +1,42 @@
+# KNOWN GAP repro — the self-host's `infer_expr_type` returns NO_TYPE for a
+# FIELD READ whose receiver is a METHOD CALL, because the `EFieldAccess` arm in
+# `tests/fixtures/self_host_typechecker/infer.gg` only handles an `RTDefined`
+# receiver and `nodes.get(i).unwrap()` is an `RTRef(Node)` — there is no
+# `RTRef` arm, so it falls through to `return NO_TYPE`.
+#
+# INTENDED: this program is REJECTED with
+#   error[E_NonExhaustiveMatch]: non-exhaustive match: missing variants: Halt
+# on BOTH lanes. Rust `gg check` already does (it peels the ref). The self-host
+# ACCEPTS it and lowers ~7.8 KB of C, because the exhaustiveness check
+# conservatively bails when the scrutinee type is unknown.
+#
+# MEASURED (self-host driver, `--lir-c`):
+#   `n.kind`                        (field off a LOCAL)        -> typed, rejects
+#   `ks.get(i).unwrap()`            (method call, no field)    -> typed, rejects
+#   `nodes[i].kind`                 (field off an INDEX)       -> typed, rejects
+#   `nodes.get(i).unwrap().kind`    (field off a METHOD CALL)  -> NO_TYPE, ACCEPTS
+#
+# The same shape is already pinned on the Rust lane by
+# `tests/fixtures/field_off_element_match_nonexhaustive_error.gg`; this repro is
+# the self-host half. The gap is NOT in `check_match_exhaustiveness` — it is one
+# layer up, at the write site, and it silently disables every type-directed
+# check on this expression shape, not just exhaustiveness.
+enum Kind:
+    Value()
+    Next()
+    Halt()
+
+struct Node:
+    Kind kind
+    int payload
+
+int walk(Vector[Node] nodes, int i):
+    match nodes.get(i).unwrap().kind:
+        case Kind.Value():
+            return 1
+        case Kind.Next():
+            return 2
+
+void main():
+    Vector[Node] a = [Node(Kind.Value(), 1)]
+    print(walk(a, 0))

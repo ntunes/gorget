@@ -1,0 +1,12 @@
+# CELL: scrutinee type = NON-ENUM. An `int` has no closed universe of values, so
+# there is nothing to be exhaustive over and the check must exempt it — even
+# though this `match` plainly does not cover every `int`.
+void show(int n):
+    match n:
+        case 1:
+            print("one")
+        case 2:
+            print("two")
+
+void main():
+    show(3)

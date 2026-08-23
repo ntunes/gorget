@@ -1,0 +1,17 @@
+# CELL: pattern shape = DOT SHORTHAND (`.Red()`), a distinct AST node from the
+# qualified constructor form and therefore a separate arm of the coverage
+# collector.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void show(Color c):
+    match c:
+        case .Red():
+            print("red")
+        case .Green():
+            print("green")
+
+void main():
+    show(Color.Blue())

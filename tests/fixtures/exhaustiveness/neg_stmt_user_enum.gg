@@ -1,0 +1,17 @@
+# CELL: call site = STATEMENT `match` · enum kind = user NON-GENERIC ·
+# pattern shape = QUALIFIED constructors. `Color.Blue` is never named and there
+# is no `else`, so this must be rejected with `E_NonExhaustiveMatch`.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void show(Color c):
+    match c:
+        case Color.Red():
+            print("red")
+        case Color.Green():
+            print("green")
+
+void main():
+    show(Color.Blue())

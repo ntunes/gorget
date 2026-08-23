@@ -1,0 +1,40 @@
+# AXIS CELL: pattern kind = `PWildcard` written as `case _:` (as opposed to the
+# `else:` spelling, which the parser desugars to the same node). The two
+# spellings are the same node to the self-host and DIFFERENT to Rust, which is
+# what this cell exists to pin.
+#
+# ⚠ DELIBERATE, RATIFIED SH<->Rust DIVERGENCE -- never "corrected" toward Rust.
+# `gg check` REJECTS this program (rc 1, `E_UseAfterMove`) because its
+# fall-through suppression keys on a syntactic `else_arm` alone and does not
+# credit an unguarded `case _:`. The arm IS a catch-all, so Rust is
+# over-rejecting a provably-safe program and the self-host is strictly more
+# precise. See the `TODO.md` entry beginning "production OVER-REJECTION (false
+# positive), from RV-D pass-1" (grep `check_stmt.rs:1217-1222` in `TODO.md`).
+#
+# This is also the only cell in the net that catches a "faithful-to-Rust"
+# reimplementation of the divergence gate that keys on the desugared `else:`
+# arm's degenerate `Span(start, start)` sentinel instead of on the pattern:
+# `match_else_arm_diverge_accept.gg` passes such an implementation, this does not.
+#
+# RED-VERIFY (make the gate unconditional): same break as
+# `match_else_arm_diverge_accept.gg` -- replace the `SMatch` arm of
+# `live_stmt_diverges` with a bare `return false`. Measured: this cell flips
+# rc 0 -> rc 1 (E_UseAfterMove, 0 bytes of C).
+void sink(String ^x):
+    pass
+
+void probe(int n, bool c):
+    String s = "hello"
+    if c:
+        sink(^s)
+        match n:
+            case 1:
+                return
+            case 2:
+                return
+            case _:
+                return
+    print(s)
+
+void main():
+    probe(3, true)

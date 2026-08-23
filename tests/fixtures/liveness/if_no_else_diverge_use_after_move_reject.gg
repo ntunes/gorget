@@ -1,0 +1,37 @@
+# AXIS CELL: consumer = the `SIf` DIVERGENCE twin — the `has_unconditional_else`
+# accumulator inlined in `live_stmt_diverges`'s `SIf` arm
+# (self_host_typechecker/typecheck.gg). That is a FOURTH consumer of the
+# fall-through question, distinct from the three `safety_commit` JOIN consumers
+# of `elsebranches_have_uncond`.
+#
+# ⚠ `if_no_else_join_use_after_move_reject.gg` CANNOT see this one. Its `if`
+# body does not diverge, so `live_stmt_diverges` returns at the first check and
+# never reaches the accumulator's tail; it watches the JOIN consumer. This cell
+# watches the DIVERGENCE consumer. Same predicate family, different consumer —
+# and a per-consumer weakening is invisible to every cell but its own.
+#
+# The inner `if a: / elif b:` chain has every branch `return`, but there is NO
+# unconditional `else`, so control can reach the end of the outer `if` body with
+# `s` still moved. `print(s)` is then a use-after-move, and `gg check` rejects it
+# with `error[E_UseAfterMove]`.
+#
+# RED-VERIFY (weaken the twin's tail): in `live_stmt_diverges`'s `SIf` arm change
+# `return has_unconditional_else` to `return true` and rebuild the driver.
+# Measured: this cell flips rc 1 -> rc 0, 4046 bytes of C, and it is the ONLY
+# outcome cell that moves — the sibling JOIN cell, every match cell, both accept
+# canaries and all eleven pre-existing driver cells stay GREEN.
+void sink(String ^x):
+    pass
+
+void probe(bool a, bool b, bool c):
+    String s = "hello"
+    if c:
+        sink(^s)
+        if a:
+            return
+        elif b:
+            return
+    print(s)
+
+void main():
+    probe(false, false, true)

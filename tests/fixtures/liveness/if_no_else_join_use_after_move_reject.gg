@@ -1,0 +1,33 @@
+# AXIS CELL: predicate IDENTITY = `elsebranches_have_uncond`, the SIBLING of
+# `match_has_catch_all`. The two answer the identical question -- "can control
+# fall out of this construct without entering a branch?" -- for `if`/`elif`
+# chains and for `match` respectively, and `elsebranches_have_uncond` has THREE
+# `safety_commit` consumers of its own (the `SIf`, `SElif` and `EIf` joins) plus
+# an inlined twin in `live_stmt_diverges`'s `SIf` arm. Before this cell, every
+# artefact in the net watched `match_has_catch_all` and NOTHING watched the
+# sibling, so a weakening of the sibling was invisible to all of them.
+#
+# `c` is false, so the `if` body never runs, the join is reached with `s` still
+# moved, and `print(s)` is a use-after-move -- rejected by `gg check` with
+# `error[E_UseAfterMove]`.
+#
+# RED-VERIFY (weaken the sibling's tail): `elsebranches_have_uncond` has exactly
+# ONE `return false`; change it to `return true` and rebuild the driver.
+# Measured: this cell flips rc 1 -> rc 0, 3504 bytes of C, and it is the ONLY
+# outcome cell that moves -- every other reject cell, both accept canaries and
+# all eleven pre-existing driver cells stay GREEN. (The `tests/lints.rs` body pin
+# ALSO fires here, because it covers both classifiers; that is belt-and-braces,
+# not a substitute -- three of the nine measured weakenings leave the WHOLE
+# lint green.)
+void sink(String ^x):
+    pass
+
+void probe(bool c):
+    String s = "hello"
+    sink(^s)
+    if c:
+        s = "a"
+    print(s)
+
+void main():
+    probe(false)

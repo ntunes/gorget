@@ -1,0 +1,10 @@
+# CELL: enum kind = PRELUDE `Option[T]`. The prelude enums are registered by the
+# resolver rather than declared in the module, so their variant lists come from a
+# different write site than a user enum's.
+void show(Option[int] o):
+    match o:
+        case Some(n):
+            print(n)
+
+void main():
+    show(None())

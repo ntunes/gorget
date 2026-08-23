@@ -1,0 +1,39 @@
+# KNOWN GAP repro — BOTH compilers OVER-REJECT this memory-safe program.
+#
+# JOIN-site sibling of `sh_exhaustive_match_not_credited_as_diverging.gg`. Here
+# every arm RE-INITIALISES `s` instead of diverging, and `Tag.A`/`Tag.B` are
+# every variant of `Tag`, so `print(s)` reads a live value on every path. Both
+# move checkers fold the pre-branch (still-moved) state back in at the join
+# whenever the fall-through classifier says no catch-all is present, and a
+# variant-exhaustive match with no catch-all says exactly that — so both emit
+# `E_UseAfterMove`.
+#
+# INTENDED: ACCEPTED by both lanes, printing
+#   a
+#   b
+#
+# Same remedy and same caveat as the divergence sibling: it takes the SECOND,
+# irrefutable-coverage verdict bit, not the bare exhaustiveness verdict. The
+# current REJECT behaviour is pinned meanwhile by
+# `tests/fixtures/liveness/match_exhaustive_no_catchall_join_reject.gg`, which
+# MOVES to `self_host_driver_accepts_liveness` when this graduates.
+enum Tag:
+    A(int)
+    B(int)
+
+void sink(String ^x):
+    pass
+
+void probe(Tag g):
+    String s = "hello"
+    sink(^s)
+    match g:
+        case Tag.A(_):
+            s = "a"
+        case Tag.B(_):
+            s = "b"
+    print(s)
+
+void main():
+    probe(Tag.A(1))
+    probe(Tag.B(2))

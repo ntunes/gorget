@@ -1,0 +1,31 @@
+# AXIS CELL: scrutinee type = NON-ENUM (int) x consumer = the `safety_commit`
+# JOIN in `check_safety_stmt`'s `SMatch` arm. The divergence-gate cell for the
+# same scrutinee type is `match_no_catchall_diverge_use_after_move_reject.gg`.
+#
+# `n` is neither 1 nor 2, so the fall-through path reaches `print(s)` with `s`
+# still moved. An int scrutinee has no closed universe of values, so NO
+# exhaustiveness verdict -- present or future, one bit or two -- can ever credit
+# this match as covering everything. That is what makes the cell load-bearing:
+# it stays RED under any fusion of an exhaustiveness verdict into the
+# fall-through question, and stays GREEN under the correct second-bit design.
+#
+# RED-VERIFY (break the JOIN consumer): in self_host_typechecker/typecheck.gg
+# replace
+#   `safety_commit(m_acc, not match_has_catch_all(arms), m_reached, &state)`
+# with `safety_commit(m_acc, false, m_reached, &state)` and rebuild the driver.
+# Measured: this cell flips rc 1 -> rc 0, 4293 bytes of C.
+void sink(String ^x):
+    pass
+
+void probe(int n):
+    String s = "hello"
+    sink(^s)
+    match n:
+        case 1:
+            s = "a"
+        case 2:
+            s = "b"
+    print(s)
+
+void main():
+    probe(3)

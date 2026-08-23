@@ -1,0 +1,18 @@
+# CELL: catch-all shape = UNGUARDED `PBinding` whose name is NOT a variant
+# (`case other:`). This is the POSITIVE twin of `neg_bare_variant.gg`: the same
+# AST node, and only the enum's variant list tells the two apart. A design that
+# classifies `PBinding` syntactically gets exactly one of this pair right.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void show(Color c):
+    match c:
+        case Color.Red():
+            print("red")
+        case other:
+            print("other")
+
+void main():
+    show(Color.Blue())

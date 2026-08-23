@@ -1,0 +1,46 @@
+# KNOWN GAP repro — BOTH compilers OVER-REJECT this memory-safe program.
+#
+# `Tag.A` and `Tag.B` are every variant of `Tag` and both arms `return`, so no
+# value of `g` can fall out of the `match` and `print(s)` is unreachable from
+# the branch that moved `s`. Both move checkers classify fall-through
+# SYNTACTICALLY — Rust on a literal `else_arm`, the self-host on
+# `match_has_catch_all` — and neither consults an exhaustiveness verdict at the
+# DIVERGENCE site, so both emit `E_UseAfterMove`.
+#
+# INTENDED: ACCEPTED by both lanes, printing
+#   sunk
+#   hello
+#
+# The fix is a SECOND verdict bit recording IRREFUTABLE coverage. The bare
+# exhaustiveness verdict the typechecker computes is NOT that bit: it credits a
+# REFUTABLE nested sub-pattern as full coverage, so fusing it in here would
+# accept a genuine use-after-move (see `TODO.md`, the entry beginning
+# "`collect_covered_variants` counts a REFUTABLE NESTED SUB-PATTERN", and the
+# live NEG cell `tests/fixtures/liveness/
+# match_nested_refutable_diverge_use_after_move_reject.gg` that catches it).
+#
+# Its JOIN-site sibling is `sh_exhaustive_match_not_credited_at_join.gg`. The
+# current REJECT behaviour is pinned meanwhile by
+# `tests/fixtures/liveness/match_exhaustive_no_catchall_diverge_reject.gg`,
+# which MOVES to `self_host_driver_accepts_liveness` when this graduates.
+enum Tag:
+    A(int)
+    B(int)
+
+void sink(String ^x):
+    print("sunk")
+
+void probe(Tag g, bool c):
+    String s = "hello"
+    if c:
+        sink(^s)
+        match g:
+            case Tag.A(_):
+                return
+            case Tag.B(_):
+                return
+    print(s)
+
+void main():
+    probe(Tag.A(1), true)
+    probe(Tag.A(1), false)

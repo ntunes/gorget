@@ -1,0 +1,33 @@
+# AXIS CELL: the OVER-REJECTION canary for the divergence gate. Identical to
+# `match_no_catchall_diverge_use_after_move_reject.gg` except for the literal
+# `else:` arm, which the parser desugars to an unguarded `PWildcard` arm. Every
+# path through the `match` now diverges, so `print(s)` is unreachable from the
+# branch that moved `s` and the program is legal. `gg check` accepts it (rc 0).
+#
+# Without this cell the divergence gate's measurement is degenerate: "no new
+# rejections" is also what an INERT gate produces. This cell is what
+# distinguishes a working gate from one whose predicate is never consulted.
+#
+# RED-VERIFY (make the gate unconditional): in
+# self_host_typechecker/typecheck.gg replace the `SMatch` arm of
+# `live_stmt_diverges` with a bare `return false`, so no `match` ever diverges.
+# Measured: this cell flips rc 0 -> rc 1 (E_UseAfterMove, 0 bytes of C), and so
+# does `match_wildcard_arm_diverge_accept.gg`.
+void sink(String ^x):
+    pass
+
+void probe(int n, bool c):
+    String s = "hello"
+    if c:
+        sink(^s)
+        match n:
+            case 1:
+                return
+            case 2:
+                return
+            else:
+                return
+    print(s)
+
+void main():
+    probe(3, true)

@@ -1,0 +1,43 @@
+# AXIS CELL: scrutinee type = ENUM with COMPLETE top-level coverage and ALL
+# IRREFUTABLE sub-patterns x consumer = the DIVERGENCE gate. Its join-site twin
+# is `match_exhaustive_no_catchall_join_reject.gg`.
+#
+# ⚠ THIS CELL PINS A KNOWN FALSE POSITIVE, not a bug being fixed. No value of
+# `Tag` skips this `match` and every arm `return`s, so `print(s)` is genuinely
+# unreachable and the program is memory-safe. Both compilers reject it anyway,
+# because both classify fall-through SYNTACTICALLY (an `else`/catch-all arm) and
+# neither consults an exhaustiveness verdict here. The self-host is wired to the
+# CURRENT behaviour deliberately, so the regression cannot silently flip.
+#
+# GRADUATION: when the precise rule lands -- a SECOND verdict bit recording
+# IRREFUTABLE coverage, which is a new design with its own gauntlet -- this cell
+# MOVES to `self_host_driver_accepts_liveness` and its `known_gaps` repro
+# `tests/fixtures/known_gaps/sh_exhaustive_match_not_credited_as_diverging.gg`
+# graduates with it. The bare exhaustiveness verdict the typechecker already
+# computes is NOT that bit: it credits a REFUTABLE nested sub-pattern as full
+# coverage (see the `TODO.md` entry beginning "`collect_covered_variants` counts
+# a REFUTABLE NESTED SUB-PATTERN"), so fusing it in would accept a real
+# use-after-move -- which is exactly what
+# `match_nested_refutable_diverge_use_after_move_reject.gg` catches.
+#
+# RED-VERIFY (pre-fix HEAD): ACCEPTED, rc 0, 5237 bytes of C.
+enum Tag:
+    A(int)
+    B(int)
+
+void sink(String ^x):
+    pass
+
+void probe(Tag g, bool c):
+    String s = "hello"
+    if c:
+        sink(^s)
+        match g:
+            case Tag.A(_):
+                return
+            case Tag.B(_):
+                return
+    print(s)
+
+void main():
+    probe(Tag.A(1), true)

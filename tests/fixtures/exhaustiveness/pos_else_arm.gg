@@ -1,0 +1,18 @@
+# CELL: catch-all shape = literal `else:`. The parser desugars it to an
+# unguarded `PWildcard` arm, so the check's pre-scan short-circuits on it BEFORE
+# any type resolution — which is why an `else`-terminated match is never gated
+# on the scrutinee's type resolving.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void show(Color c):
+    match c:
+        case Color.Red():
+            print("red")
+        else:
+            print("other")
+
+void main():
+    show(Color.Blue())

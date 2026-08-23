@@ -1,0 +1,15 @@
+# CELL: call site = EXPRESSION `match` (the `EMatch` walker, a different
+# consumer from the statement form) · enum kind = user NON-GENERIC ·
+# pattern shape = QUALIFIED constructors.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+String name_of(Color c):
+    return match c:
+        case Color.Red(): "red"
+        case Color.Green(): "green"
+
+void main():
+    print(name_of(Color.Blue()))

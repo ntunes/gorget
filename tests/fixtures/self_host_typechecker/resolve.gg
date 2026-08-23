@@ -248,13 +248,17 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
         scopes.define(cname, DkImport(), !Span(0, 0))
 
     # Register Option[T] and Result[T,E] enum types with variants
-    if scopes.define("Option", DkEnum(), !Span(0, 0)) is Some(_):
+    if scopes.define("Option", DkEnum(), !Span(0, 0)) is Some(opt_def):
         scopes.define("Some", DkVariant(), !Span(0, 0))
         scopes.define("None", DkVariant(), !Span(0, 0))
+        Vector[String] opt_variants = ["Some", "None"]
+        scopes.enum_variant_names.put(opt_def, !opt_variants)
 
-    if scopes.define("Result", DkEnum(), !Span(0, 0)) is Some(_):
+    if scopes.define("Result", DkEnum(), !Span(0, 0)) is Some(res_def):
         scopes.define("Ok", DkVariant(), !Span(0, 0))
         scopes.define("Error", DkVariant(), !Span(0, 0))
+        Vector[String] res_variants = ["Ok", "Error"]
+        scopes.enum_variant_names.put(res_def, !res_variants)
 
     # D26: the compiler-internal `ArithError` prelude enum — payload-free
     # variants for the two error channels of the fallible arithmetic
@@ -263,9 +267,11 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
     # they register via `alloc_def` (allocated WITHOUT a bare-name scope
     # insertion), mirroring the non-generic user-enum path below.
     # Twin registration: Rust gg `src/semantic/resolve.rs` (`ArithError`).
-    if scopes.define("ArithError", DkEnum(), !Span(0, 0)) is Some(_):
+    if scopes.define("ArithError", DkEnum(), !Span(0, 0)) is Some(ae_def):
         scopes.alloc_def("Overflow", DkVariant(), !Span(0, 0))
         scopes.alloc_def("DivByZero", DkVariant(), !Span(0, 0))
+        Vector[String] ae_variants = ["Overflow", "DivByZero"]
+        scopes.enum_variant_names.put(ae_def, !ae_variants)
 
     # Collect all top-level items
     for item in module.items:
@@ -283,7 +289,18 @@ void collect_item(Item item, ScopeTable &scopes, TypeTable types):
             scopes.define(s.name, DkStruct(), !Span(0, 0))
 
         case IEnum(e):
-            scopes.define(e.name, DkEnum(), !Span(0, 0))
+            # Register the enum's ordered variant names against its TYPED
+            # def_id — the single write site for `enum_variant_names`
+            # (scope.gg), read back by `check_match_exhaustiveness`. This is
+            # the resolver PRE-PASS, so an enum declared AFTER the function
+            # that matches on it is already registered when the body is
+            # checked (Rust gg builds `enum_variants` in the same pre-pass
+            # position, src/semantic/typecheck.rs).
+            if scopes.define(e.name, DkEnum(), !Span(0, 0)) is Some(e_def):
+                Vector[String] e_variants = Vector[String]()
+                for ev in e.variants:
+                    e_variants.push(ev.name)
+                scopes.enum_variant_names.put(e_def, !e_variants)
             bool is_generic = e.type_params.len() > 0
             for v in e.variants:
                 if is_generic:
