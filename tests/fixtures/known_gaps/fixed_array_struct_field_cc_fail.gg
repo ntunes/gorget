@@ -3,7 +3,7 @@
 #
 # ⚠ The size here is a LITERAL, so this is NOT the `meta`-constant array-size
 # defect R44 Track E fixed (that one was a `gg check` REJECTION and now has
-# live fixtures, `tests/fixtures/meta_const_array_size_*.gg`). It is also
+# live fixtures, `tests/fixtures/known_gaps/meta_const_array_size_*.gg`). It is also
 # distinct from its two filed cousins that share the `void value not ignored`
 # C symptom — `catch` on a VOID fallible call, and `&(*b).0` tuple-field
 # through a Box deref (`known_gaps/sound_amp_box_tuple_field_cc_fail.gg`).

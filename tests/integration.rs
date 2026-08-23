@@ -26515,6 +26515,70 @@ fn shared_with_check_then_act() {
     build_gg_expect_warning("shared_with_check_then_act.gg", "condition may no longer hold");
 }
 
+// ─── W_CompoundYieldRace: the RHS walker under-recurses (FILED GAP) ────────
+//
+// `src/semantic/safety/helpers.rs:333 expr_contains_yield_point` hand-rolls its
+// recursion and ends in `_ => false` (`helpers.rs:375`), so an effectful call
+// wrapped in any child-bearing `Expr` variant it forgot is invisible and the
+// `CompoundYieldRace` warning goes SILENTLY MISSING on a racy program. It is the
+// sibling consumer of the purity walker R44 Track E routed through
+// `parser::visitor::visit_expr_children`; this second walker on the same warning
+// path was left hand-rolled. Filed in TODO.md — file, do not fix: the conversion
+// is its own phase, and it must retire the class (route this walker through the
+// chokepoint) rather than add three arms.
+//
+// AXIS = the `Expr` variant wrapping the effectful call in the compound
+// assignment's RHS. All four cells live in ONE fixture over four distinct shared
+// variables, so each test names its own cell in the expected message and the
+// CONTROL is measured on the very same file — a positive control for the
+// harness, not a separate program that might differ for some other reason.
+//
+// MEASURED at the fixture's landing commit: `gg check` rc 0 and exactly ONE
+// `compound assignment reads shared …` warning, for `ctrl`. Break-and-watch on
+// `expr_contains_yield_point` (add `ListComprehension`/`StringLiteral`/
+// `DictLiteral` arms, rebuild) makes ALL FOUR fire; restoring drops back to one.
+// The three `#[ignore]`d tests below therefore assert the INTENDED state and are
+// RED at HEAD by construction. Un-ignore all three the round the walker is
+// converted, and promote the fixture out of `known_gaps/`.
+
+/// CONTROL — the same fixture, the same `hidden()`, a bare `Call` in the RHS.
+/// This one warns today. If it ever stops, the three ignored siblings below
+/// stop meaning anything, so this test is what keeps them honest.
+#[test]
+fn compound_yield_race_rhs_direct_call_control() {
+    check_gg_warns(
+        "known_gaps/compound_yield_race_rhs_walker_underrecurses.gg",
+        "compound assignment reads shared `ctrl`",
+    );
+}
+
+#[test]
+#[ignore = "filed gap: expr_contains_yield_point's `_ => false` skips ListComprehension, so the CompoundYieldRace warning is silently missing; un-ignore when the walker is routed through visit_expr_children"]
+fn compound_yield_race_rhs_list_comprehension() {
+    check_gg_warns(
+        "known_gaps/compound_yield_race_rhs_walker_underrecurses.gg",
+        "compound assignment reads shared `lc`",
+    );
+}
+
+#[test]
+#[ignore = "filed gap: expr_contains_yield_point's `_ => false` skips StringLiteral interpolations, so the CompoundYieldRace warning is silently missing; un-ignore when the walker is routed through visit_expr_children"]
+fn compound_yield_race_rhs_fstring_interpolation() {
+    check_gg_warns(
+        "known_gaps/compound_yield_race_rhs_walker_underrecurses.gg",
+        "compound assignment reads shared `fs`",
+    );
+}
+
+#[test]
+#[ignore = "filed gap: expr_contains_yield_point's `_ => false` skips DictLiteral, so the CompoundYieldRace warning is silently missing; un-ignore when the walker is routed through visit_expr_children"]
+fn compound_yield_race_rhs_dict_literal() {
+    check_gg_warns(
+        "known_gaps/compound_yield_race_rhs_walker_underrecurses.gg",
+        "compound assignment reads shared `dl`",
+    );
+}
+
 #[test]
 fn shared_stale_writeback() {
     // Worker increments to 1; main's stale snapshot=0 overwrites it back to 0.

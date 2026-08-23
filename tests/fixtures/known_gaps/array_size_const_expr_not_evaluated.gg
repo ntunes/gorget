@@ -52,7 +52,7 @@
 #
 # NOT the `meta`-constant cell: `meta int N = 3` + `int[N]` was a DIFFERENT
 # producer (`semantic/meta.rs substitute_type` dropping the size expression),
-# fixed in R44 Track E and pinned live by `tests/fixtures/meta_const_array_size_*.gg`.
+# fixed in R44 Track E and pinned live by `tests/fixtures/known_gaps/meta_const_array_size_*.gg`.
 # This repro deliberately contains no `meta` at all.
 int main():
     int[2 + 1] a = [10, 20, 30]

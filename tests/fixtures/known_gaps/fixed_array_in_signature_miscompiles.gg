@@ -4,7 +4,7 @@
 # ⚠ The size here is a LITERAL. This is NOT the `meta`-constant array-size
 # defect that R44 Track E fixed in `semantic/meta.rs substitute_type` — that
 # one was a `gg check` REJECTION (`expected int[0], found int[3]`) and is now
-# a live regression fixture (`tests/fixtures/meta_const_array_size_*.gg`).
+# a live regression fixture (`tests/fixtures/known_gaps/meta_const_array_size_*.gg`).
 # This one survives with `int[3]` spelled out, so it is a strictly separate,
 # older defect in how a fixed-size array crosses a call boundary.
 #
