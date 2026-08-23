@@ -1,0 +1,637 @@
+1 M6 M5 borrow marker rides in the TYPE, so `??` type-equality test sees `int &` vs `int`
+2 M5 M2/M7 typechecker computes comprehension elem type and throws it away; 7 emitters re-guess
+3 M11 - owner knob: widen the fmt author-line-grouping engagement predicate
+4 M1 M9 `via` reserved kw: Rust accepts decl+rejects calls, SH accepts both
+5 M7 M3 @derive(Hashable) per-scalar-type hole -> undefined double__hash
+6 M9 M4c no-self equip fn via instance accepted then codegen fails
+7 M4a M9 `equip Pt(Shifter):` misparse silently discards the method block
+8 M6 M8 closure env stores captured Ptr without materializing; 2 spellings disagree
+9 M3 - override_is_trait_box name-match is the array-literal slot gate
+10 M3 - auto_clone_if_ptr String carve-out = type-identity test for typed metadata
+11 M5 M2 comprehension accumulator mis-TYPED end to end (size+dtor+ctor-name channels)
+12 M13 - 99.4% of corpus never runs under a sanitizer
+13 M3 - add_sdl_flags links by contains() on generated C source; predicate always true
+14 M5 M7 Option.and_then w/ method-call closure body: return type lost
+15 M2 M9 module-level global initializer not typechecked; check exists, not called at that site
+16 M1 - LLVM backend never emits the SDL runtime blob (C does)
+17 M3 M13 extern binds gorget_stdin_eof; symbol exists nowhere, nothing verifies
+18 M5 M7 Dict[K,Option[heap]].values() mis-types payload as int64_t
+19 M8 M6 unwrap() on borrowed Option payload frees what collection owns
+20 M4a - parser arms DISCARD attributes -> gg fmt deletes 4 of 5 attribute lines
+21 M2 M9 resolver CAN reject undefined types, not called at 9 of 10 type positions
+22 M3 M2 C runtime-chunk selector: 759 symbols via 2 drifting substring predicate lists
+23 M13 - examples gated on BUILD only; RUN half opt-in for 15
+24 M15 M16 for-in idiom campaign; Vector.zip is EAGER -> 9.9x slower
+25 M15 M13 Dict.iter clones map ~4x/elem and leaks; guard is stdout-blind
+26 M4a M13 for over non-iterable silently discarded (5 bare returns); ratchet only sees `_ =>`
+27 M12 - book teaches zip()/enumerate() as free fns; they are methods
+28 M8 M6 `for x in &coll` + assign to binding = double free
+29 M13 - 21 fixtures carry MUST-EXCLUDE header nothing enforces
+30 M13 - fmt_magic_comma dir has no census lint
+31 M10 - implement @fmt(skip) (ratified 2026-08-16)
+32 M9 M10 `case` naming a nonexistent variant becomes a silent catch-all
+33 M9 - bare Result in T position silently unwraps/early-returns, no mark
+34 M7 M4c catch on a VOID fallible call: void cell not handled in lowering
+35 M2 M12 C runtime exit(1) x59 bypasses the error model taxonomy
+36 M12 M10 book flagship example uncompilable (read_file declared infallible)
+37 M8 - throw <catch-binding> in a match arm: ownership tag gap -> Tier2a panic
+38 M8 M5 compound-index-assign lowering mis-tags ownership; D2 registration reverted
+39 M1 - SH mirror of typecheck.gg case ECatch still reverted
+40 M14 - sweep compiles 18.6k identical SH lines twice via 14 symlinks
+41 M3 M2/M7 3 LIR sites name-strip "Vector__" with no "Deque__" sibling arm
+42 M1 - Expr::Catch recovery-type check not in ggdef subset
+43 M4b M7 register_collection_method_sigs has no Deque arm -> `_ => {}`
+44 M1 M7 combinator family's STRING axis outside ggdef subset
+45 M8 - calls.rs:371 clone not registered for drops -> would mint double-free
+46 M17 M13 methods.rs:2815 consuming-arg fix-up clone appears unreachable (0 fires)
+47 M4c M3 .enumerate() bound to a local emits nonexistent gorget_array_enumerate
+48 M11 - .enumerate() on Vector but not Set: ergonomic asymmetry
+49 M2 M3 three parallel builtin-method registries (Layering rule 3)
+50 M1 M7 SH gorget_map_swap_remove_opt returns None for resource Option payload
+51 M11 - three builtin return-types disagree with Rust convention
+52 M2 - two independent checks both fire on compound D10(a) shapes
+53 M7 - 5 un-fixtured operand contexts (axis completeness)
+54 M7 M4a push onto a TUPLE FIELD of a &-param silently dropped (struct-field works)
+55 M17 - Track C-GUARD consumption-limb census lives only in /tmp
+56 M13 - 3 of 4 fixtures cited as a guard do not guard (measured by disabling)
+57 M7 - six more uncovered-and-broken by-value cells (third undercount)
+58 M13 M7 fake-coverage trap: by-value struct carrying a resource is green before AND after
+59 M4b M7 exclusivity check misses comprehensions/match guards/3 inline aggregates
+60 M4b - the D10 guard must be an exhaustive no-wildcard Expr match
+61 M9 M11 D10 model covers reader-vs-writer only; writer x writer has no rule
+62 M5 M3 operator-overload resolution recorded nowhere -> consumers must name-match
+63 M14 - integration.rs &msg[..100] panics on non-ASCII boundary
+64 M2 M4a E_NonPrintableInterpolation wired on f-string path, not print() path
+65 M2 - single-owner carve-out missing at 3 of 6 consuming positions
+66 M13 - 3 fixtures read as coverage but CANNOT FAIL
+67 M7 M2 `&` in owning position: >=7-costume class, 3 callee-bearing still open
+68 M2 - drop-taint formation reject does not cover literal-element positions
+69 M17 M7 durable-repro status record for the &-in-owning-position class
+70 M14 - self_host_bootstrap_fixed_point uses fixed /tmp paths, collides
+71 M8 - reassigning through a &-param never drops the old pointee
+72 M13 M8 ownership-laundering rule taught the guard to ignore its own bug class
+73 M2 M8 4 expression-body return sites don't move-zero the owning ! param
+74 M6 M5 &/!-param auto-deref reads the wrong typed bit (both are Borrowed{Param})
+75 M15 - String &-param bind costs one clone; other resources are zero-cost
+76 M13 - promote AssignIntoReturnSlot from warning partition to fatal
+77 M4b M7 D10 exclusivity is a syntactic check spread over 3 call-shaped arms
+78 M1 - ggdef lags the non-Add binary-op static reject
+79 M6 M8 !-param Box consumption ABI passes &slot; callee frees a stack address
+80 M3 M2 Box__<inner>__drop defined twice (two name-composing emitters)
+81 M2 M8 two drop paths call the user drop only, skipping field drops
+82 M17 M2 record correction: compound-path double-eval is NOT closed
+83 M10 - FULL LAZY CoW campaign (owner-confirmed model)
+84 M1 - SH still loses the write Rust fixed (FAMILY-1 &-projection)
+85 M2 M4a maybe_auto_propagate expected_type set on free+method paths, not indirect
+86 M13 M3 arm-set lints compare syntactic Expr:: arms; type-driven domain invisible
+87 M6 - resolve_tuple_field_type returns I64_TYPE on a MISS instead of None
+88 M4c M7 &(*b).0 tuple field through Box deref: mangled type referenced never emitted
+89 M2 - auto-propagation admitted at free-call arg, rejected at method-call arg
+90 M1 M15 SH lowerer clones a borrow-bound bare Resource; Rust borrows
+91 M15 - lib/xtd read-only-&-param sweep (NeedlessMutableBorrow)
+92 M11 M8 refcount PARAM/boundary ownership model: unresolved design tension
+93 M1 M5 SH GtFnPtr missing the param_ownerships axis Rust just added
+94 M7 M2 custom-Index type + resource element + add overload still ICEs
+95 M5 M7 closure-body &-of-self/param formation emits int32 where void* expected
+96 M3 - is_elem_borrow_read name-whitelist -> typed borrow_read field
+97 M6 M3 GuardAccept lumps Guard/ReadGuard/WriteGuard; read back by name
+98 M7 - E2 samples 10 of 12 wrapper x face cells
+99 M5 - trailing comment owner re-derived from line position, not carried
+100 M10 - owner-ruled match-scrutinee materialize, not implemented
+101 M10 - owner-ruled removal of W_CowBorrowMutation, not implemented
+102 M8 - temp resource default to Dict.get_or leaks on HIT
+103 M8 - resource-valued get_or/get_or_put double-free in BOTH compilers
+104 M10 - CoW lazy borrow-by-default L1+L2 track
+105 M7 M8 Set[String] never selects the str-keyed ctor -> no key_drop
+106 M1 M4b SH CoW scan never walks ESelfExpr
+107 M1 M15 SH method_mutates_receiver over-marks read-only generic params
+108 M2 - the 4 comprehension emitters emit loops with no save/restore
+109 M3 M4b pre-header prescan is an UNTYPED AST walk; can't resolve user mutators
+110 M1 - String.push_char + 8 typed is_mutating builtins outside ggdef subset
+111 M4b - cow_after_expr_moves does not recurse Expr::Range/tuple/lit/if
+112 M8 M17 move-despite-later-read residuals after the Rust-lane fix
+113 M1 M7 SH field_clone_c missing Weak/Channel retain arms
+114 M13 - no exercising fixture reaches emit_recursive_enum_clones w/ refcount payload
+115 M3 - retire 3 sanctioned {Family}__ prefix routing sites
+116 M1 M7 SH Shared[Vector[T]].get() wrapper references payload C type unemitted
+117 M5 - apply_collect_target_rewrites resets self param .ownership to bare
+118 M7 M1 compute_method_mutates_self classifies NON-generic equips only
+119 M3 - name-collision gate on an UNRESOLVABLE projection stays read-only
+120 M4b - scan does not trace self reborrowed into a local
+121 M7 - &-bind write-through gated on inner==EIdentifier; projections value-copy
+122 M17 - CoW materialization durable reference (THE RULE)
+123 M10 - extend dead-write diagnostic to method-rooted dead temps
+124 M15 - extend auto-move-at-last-use to post-materialize parameters
+125 M2 - ensure_owned_at_boundary migration: 5 specialized sites remain
+126 M13 M3 HEURISTIC_BLIND allowlist keyed by path:LINE, rots on every doc edit
+127 M5 M11 author row grouping re-read from SOURCE instead of typed AST metadata
+128 M12 - every LOC figure in appendix-a-file-map.md stale
+129 M12 - decisions.md describes pre-ruling formatter as current
+130 M4b - whole-fn CoW scan cannot see interprocedural closure mutation
+131 M4b M11 is_cow_unsafe_at heuristic is not lifetime-aware
+132 M16 - explicit reference semantics phase 2 not started
+133 M4b - borrow checker misses field assignment + method-call ownership transfer
+134 M1 - SH compound v[i].f += n evaluates base+idx twice; Rust resolves once
+135 M1 M2 SH amp_object_base EIndex arm double-evaluates on decline
+136 M2 - lower_call_arg MutableBorrow arm has the pattern Track F guarded elsewhere
+137 M15 - lower_call_arg Move arm unconditionally clones the Ptr(T) operand
+138 M15 - lower_call_arg G2 projected-root arm deep-clones the whole root
+139 M1 - SH typechecker has NO exhaustiveness checking at all
+140 M1 M13 3 fixtures CC-FAIL on SH; no gate could see the drift
+141 M2 - record_method_targs_preserving_expr_types wired at 2 of 30 positions
+142 M1 - SH mis-lowers an iterator terminal inline in an f-string
+143 M1 - SH top-level static with nested struct ctor arg reads 0
+144 M1 - PENDING PARITY BACKLOG (composite: many SH-lane bugs)
+145 M1 - stdlib_io/trait-dispatch residual roots (composite)
+146 M1 - ROUND-41 residuals (composite)
+147 M1 - ROUND-42 residuals (composite)
+148 M1 - SH DCE/monomorph drops a called user fn: 6 roots (composite)
+149 M1 - two SH-lane WRONG-OUTPUT parity newcomers
+150 M1 - 3 driver-embedded lexer copies lack the \xHH arm
+151 M14 - fmt-sweep bootstrap test mutates the shared working tree
+152 M1 - SH resolver records no RES edge for `self`
+153 M13 - four *_comparison tests are diagnostic-always-pass, not run
+154 M1 - SH standalone-parser copy may lack the EDo-wrap for throw-expr
+155 M1 - SH slice arm narrower than Rust's is_collection_type predicate
+156 M1 - 3B next-layer typing SH residual
+157 M1 - SH check lane emits none of the Rust W_* warnings
+158 M5 - SH getter-slot producer should emit LoBorrowed; predicate then deletable
+159 M17 - verified NOT a Core #4 miss; note retained
+160 M2 - lower_equip_block inlines a hand-synced copy of lower_function's param loop
+161 M3 - payload-name-slicing sibling sites in the SH lowerer
+162 M17 - EMPTY bullet: ROUND-9 follow-up header with zero content (counting artifact)
+163 M14 - test_tags is a timing-nondeterministic flake in the lock-in snapshot net
+164 M6 M1 EAs as-cast: eas_from defaults to I64 when eas_loc<0 (sentinel) [composite]
+165 M1 M3 SH Dict arm routes Dict and HashMap to one ctor; Rust splits [composite]
+166 M5 - bare-GorgetArray element-type loss (upstream type loss) [composite]
+167 M1 - SH method-generic mono + meta_* deep gaps [composite]
+168 M1 - SH iterator-family CC-FAILs [composite]
+169 M17 - queue pointer: DEFERRED behind (1)/CoW
+170 M8 - GIR-validator panic on loop-reassigned !-param pushed into a collection
+171 M15 M4b is_single_use liveness gate is conservative -> extra clones
+172 M5 M1 Dict.get_or_put(k, bare None) CC-FAILs on __gg_Option__int64_t typing
+173 M8 - Box[T:resource] drop-glue leak
+174 M8 - String-!-into-collection leak
+175 M5 - nested generic-param field falls through to error_id (shallow subst)
+176 M17 - redundant duplicated disjunct in is_string_type
+177 M1 M8 SH under-drops for-loop inline iterable literal
+178 M9 - builtin collection value args not typechecked against V
+179 M4c - Dict.update(key,val) typechecks then hard C error
+180 M3 M7 extract_elem_type_id_from_type_name can't recover Channel's elem type
+181 M1 - SH lacks a borrow-check diagnostic pass; NEG fixtures compile
+182 M17 - Core #5 self-correct: the parity-undercount claim was FALSE
+183 M5 - cross-type map types the accumulator as the RECEIVER's element type
+184 M8 M7 struct with only a ptr-handle resource field never collected -> no drop
+185 M8 M17 Option[Resource] drop-elaboration leak residual
+186 M1 M5 SH collect_equip runs BEFORE alias resolution -> scalar alias accepted
+187 M2 - three near-duplicate materialize-static-receiver sites
+188 M7 M6 Shared.at uses the I64 default for non-int element types
+189 M13 - Track A soundness guarantees verified but never ratcheted into fixtures
+190 M15 M3 conservative static-receiver block: only for/index statics optimize
+191 M1 - SH mirror of builtin-ctor named-arg VALIDATION
+192 M3 M1 SH runtime-arg ABI is a hand-maintained name+index allow-list
+193 M1 M8 SH !-param double-drop at exit (Rust drops once)
+194 M1 M4a SH closure-call ABI: void-returning call bodies DROP the tail value
+195 M13 - EnumInit SSOT: no bare-variant-collision fixture runs THROUGH the SH
+196 M1 M2 SH registers extern RETURN types only, not PARAM types
+197 M1 - SH parity backlog (surfaced by runtime_diff) [composite]
+198 M17 - PARITY MAP measurement record
+199 M1 - SH parity gaps pinned by Chain D (:b spec, display dispatch) [composite]
+200 M1 - SH miscompiles Vector[T]-of-Box passed as a fn PARAM
+201 M3 - enum-category migration Phase 2: burn Option/Result name-matches to 0
+202 M5 - (T){0} type-loss / aggregate-as-I64 family (upstream type loss)
+203 M8 M1 SH match-arm String payload clones but never drops
+204 M1 - SH option_result_combinators segfault
+205 M17 - SH fossil audit deferred (#4/#5)
+206 M1 M2 SH never ported the centralized auto-prop hook; still per-position
+207 M1 M8 SH Vector[Result]/Vector[Option] element drop not wired [composite]
+208 M1 - OPEN self-host bugs, Rust gg is oracle [composite]
+209 M2 M1 lower_match_expr omits what lower_match_stmt does (guards, name-map)
+210 M1 - SH runtime-type-decl gaps: undefined wrapper calls [composite]
+211 M3 M1 SH re-spells runtime ABI as name-lists; the typed registry exists
+212 M1 - CHAIN 3 runtime-parity backlog [composite]
+213 M1 - SH typechecker bool-predicate gap (mirror Rust) [composite]
+214 M1 M4a SAssert/SAssertReturn unhandled in SH lower_stmt
+215 M1 - 3 SH runtime gaps: print(true)->1, float add -> 0
+216 M1 - SH Bug B stage 2: __gorget_box_clone link marker
+217 M1 - SH symmetric port of the typed clone reason
+218 M1 - SH parser copies lack bare-return-type ownership sigil
+219 M6 M5 SH var_type falls through to I64_TYPE for EFieldAccess-as-method
+220 M5 M1 SH tc_types.expr_types write-through covers a subset of Expr arms
+221 M1 - SH typed Diagnostic sweep: 42 of 47 sites unmigrated
+222 M1 - SH check_comparison residual gaps (8 mismatches)
+223 M1 M16 self-host LLVM backend (a whole lane to replicate)
+224 M6 - SH -1 unresolved-type sentinel fed into get_rtype_at
+225 M1 - SH miscompiles in-place dict.get(k).unwrap().push(v) -> SIGSEGV
+226 M3 M2 two cstr-returning registries hand-synced, desynced once
+227 M5 M1 SH lowers None() as a ctor defaulting to Option[int] regardless of context
+228 M3 - byte-by-byte Box-inner-name extraction loops (fossil)
+229 M17 - stale "memset bug" comment + get-mutate-set dance
+230 M1 M4a SH lexer: nested string in f-string interpolation truncates the match
+231 M2 - for-else across 4 lower_for_* fns; centralize a shared tail emitter
+232 M4a M2 parser parses then DISCARDS while-else; SWhile has no else field
+233 M1 M3 SH has NO semantic-reject mechanism; guess_return_type name-match
+234 M2 M3 builtin_method_type vs GORGET_STRING_VIEW: two parallel String lists
+235 M3 - float math-runtime symbols escape the C NAME-PREFIX include gate
+236 M4c - s.debug() passes check, fails at LINK on undefined S__debug
+237 M5 - f-string interpolation error CARET mislocated (span not carried)
+238 M1 - SH f-string interpolation arg-ORDERING bug
+239 M17 - retire the now-dead SharedHeap machinery
+240 M1 M8 enum-payload C-only leak (C/LLVM divergence)
+241 M13 - integration harness asserts STDOUT ONLY, masking the leak/UAF class
+242 M1 M5 SH primitive-equip instance-method body lowers self/params as void*
+243 M7 - deeper-chain / non-bare-base field receivers still value-copy
+244 M5 M1 chained-adapter return type registers as an int placeholder
+245 M1 M5 SH closure tail-value bodies mis-typed as UNIT; String double-free
+246 M1 - SH closure_fstring_capture residual on the .map/filter HOF desugar
+247 M17 - closure Increment 4 record pointer (residuals follow)
+248 M3 M1 SH router tests .enumerate() before .bytes() in one elif chain
+249 M1 - SH typechecker rejects the catch (e): error binding
+250 M1 M5 token_string_val x3 parser copies drop the format spec
+251 M17 M3 mangle_trait_name .contains("[") fossil around a fixed bug
+252 M2 M1 SH if/block-as-value path lacks the nl_snapshot/restore the stmt path has
+253 M2 - cstr->GorgetString remap missing on the inline IFunction extern arm
+254 M1 - does SH lower_catch_expr have the err-binding gap Rust fixed?
+255 M1 M8 SH unwrap()/unwrap_error() on a String payload leaks
+256 M2 - mono enum-variant ctor omits fn_move_params (struct arm has it)
+257 M1 - SH parity triage backlog [composite]
+258 M1 M2 named-arg interception covers {Vector,Deque}; Rust covers 5 types
+259 M7 - Set[String] literal doesn't reach the _str ctor [composite]
+260 M2 - qualified variant-ctor lowers args through a separate loop, no size hint
+261 M1 - SH emits zero userspace HOF wrapper bodies for bare free-fn HOF calls
+262 M1 - burndown queue [composite]
+263 M4a M1 SH match *(box_field) drops the arm body
+264 M5 M1 get_fn_param_types scans only already-lowered fns -> silent None
+265 M7 - the None-peel peels GtPtr only, not GtMutPtr
+266 M8 M1 SH catch-bound error payload leaks PErr.msg
+267 M3 - residual WRITE-side name-derivations in the enum-category channel
+268 M1 - SH doesn't fold module-level meta consts
+269 M17 - stale "currently DEAD CODE" claim corrected
+270 M13 M9 3 latent stdlib bugs in lib/xtd modules nothing imports
+271 M4a M1 SH print(X, file=stderr) drops the file= named arg
+272 M1 - propagate the lexer keyword/StringKind alignment to 5 more SH dirs
+273 M2 - branch-merging-expression helper: 3 sites share a hand discipline
+274 M6 M4a SH silent-fallback audit: /* [bug] */ comments + I64/""/int64_t defaults
+275 M1 - SH diagnostic-code parity (E_/W_ headers)
+276 M5 M1 SH panic spans emit <unknown>:0:0
+277 M3 - retire runtime_fn_returns_cstr name-list for typed provenance
+278 M1 - SH phase 2c drop-emission flip (SH lacks the drop machinery)
+279 M1 - SH phase 2c site 2b root cause (SSA slot-numbering shift)
+280 M2 - audit method-chain sites for LoBorrowed propagation gaps
+281 M1 - ggdef models NO match exhaustiveness; structurally cannot express it
+282 M1 - ggdef contradicts ratified D37 (no container-element destructors)
+283 M1 - ggdef runs 3 programs gg check correctly rejects
+284 M1 M2 E_ClosureKindMismatch call-arg sibling ggdef still accepts
+285 M1 - does ggdef model `is` with bindings? probe owed
+286 M1 - non-Add binary-op static reject not in ggdef
+287 M1 - D29 follow-ups: SH residual gaps [composite]
+288 M10 - THE RATIFIED ENFORCEMENT-WAVE PLAN
+289 M10 - D27 A2 bulk sweep
+290 M10 - D27 Round B (reject ! at parse)
+291 M10 - D23 throws totality invariant
+292 M10 - D11 trap normalization
+293 M10 - D12 D4 enforcement
+294 M10 - D15+D22 slice surface
+295 M10 - D17 read_file becomes throws
+296 M10 - D10 exclusivity package
+297 M10 - D14 get_or become views
+298 M10 - P1-D spectests migration bulk
+299 M10 - D30 narrow-type overflow traps uniformly
+300 M10 - D45 E0 kill the fictions
+301 M10 - D45 E1 the model gets real users
+302 M10 - D45 E2 sets (alias unions)
+303 M10 - D45 E3 subtraction (catch/case arms)
+304 M10 - D45 E4 history + concurrency
+305 M10 - D45 A38-a diagnostic registry as toolchain data
+306 M10 - D45 A38-b E_MissingFallibleMark split by fix direction
+307 M10 - D45 A38-c structured fix-its with applicability
+308 M10 - D45 A38-d machine output + terminal hygiene
+309 M10 M13 D45 A38-e check=>build guard ratchet
+310 M10 - D45 A38-f determinism fixture
+311 M10 - D45 A38-g frozen runtime grammars
+312 M16 M13 LLM-correctness KPI benchmark
+313 M1 M8 ggdef run_custom_drop skips droppable fields and elements
+314 M1 - drop_struct_collection_fields: 5 ggdef sub-defects
+315 M14 - ggdef big-step eval recurses on the native stack -> SIGABRT
+316 M1 - Callable-valued indirect-call family outside ggdef's subset
+317 M1 - struct-value ctor patterns outside ggdef's subset
+318 M1 M4a ggdef silent mis-modeling must become a loud ElabError (10 fixtures)
+319 M1 - 29 MATCH fixtures are ggdef-ILLFORMED
+320 M13 - the D8 float-HOLD heuristic can MASK a real BOTH-WRONG
+321 M1 - ggdef has NO match-exhaustiveness static check [composite]
+322 M1 - ggdef subset gaps: select/channels/match guards/while-else
+323 M10 - D18 const-eval fault mirror
+324 M10 - D19 remove break <value>
+325 M1 - ggdef error-unwind drop timing (function exit vs block exit)
+326 M5 M1 ggdef never types match-arm pattern bindings; type-gated rules skip them
+327 M1 - trap_shift conformance fixture blocked on ggdef modeling shift
+328 M13 - trap_assert_cmp conformance fixture missing
+329 M2 - LLVM block_exit_labels twin pre-pass drifts from the emit
+330 M5 - message-form assert trap renders at <unknown>:0:0
+331 M13 - T3c positive throws differential smith tier
+332 M13 - T3b equip-method receiver-position extension
+333 M1 - SH emits an UNGUARDED out-of-range shift (lone silent-UB lane)
+334 M1 M10 D8 float chain: ggdef float formatting not D9-compliant
+335 M9 M1 ggdef eval delegates semantics to the HOST language, unspecified
+336 M3 M2 ggdef out-of-subset mechanism is TWO name-keyed EXCLUDE lists
+337 M14 - ggdef frontmatter errors on unknown top-level block keys
+338 M14 - ggdef frontmatter Expect is run-tier-only
+339 M1 - ggdef closure bodies inherit the enclosing fn's throws context
+340 M2 - diagnostic codes wired for semantic enums, not lex/parse enums
+341 M13 - combinator-route spectest twin missing
+342 M2 M5 rarer bounds-class sites still trap span-less
+343 M4b - collect_covered_variants counts a REFUTABLE nested sub-pattern as coverage
+344 M4b M4c turbofish call w/ field/index/self receiver: catch-all walker miss
+345 M4b - two user-visible faces from two DIFFERENT catch-all walkers
+346 M5 - auto f = bump never registers the callable's declared signature
+347 M3 - parenthesized binop dict key misparses via a closure-lookahead heuristic
+348 M1 - main throws int drops the exit code on LLVM, not on C
+349 M12 M13 ~933 doc code blocks compiled by NO harness
+350 M10 - D33 comprehension sigil rider ratified-unimplemented
+351 M16 - exponent float literals do not parse
+352 M12 M11 reference specifies 3 visibility defaults; 2 unenforced
+353 M10 - D26 shift-fallible Route B lowering gap
+354 M4b - the +! auto-infer walker deliberately skips closure bodies
+355 M1 - D26 SH lane lag (Route B, typecheck rejects, auto-infer)
+356 M2 - qualified match arm patterns skip the discriminant tag check
+357 M7 - Vector[T] where T is a ByValue opaque handle SEGVs
+358 M3 M1 SH: bare-name opaque handles miss type_runtime_map registration
+359 M1 - SH lower_shared_var_decl doesn't handle non-scalar inners
+360 M8 - shared(rwlock) String init + with-block double-frees on both backends
+361 M4a M9 bare push on a shared Vector outside `with` is a silent no-op
+362 M12 M9 reference claims bare shared access is rejected; it is not
+363 M1 M7 SH mis-lowers EVERY indirect & call: 0 of 13 type cells correct
+364 M8 M1 Callable[void(String !)] call panics Rust gg; SH is correct
+365 M1 - standalone e = a.enumerate() rejected by Rust, accepted by SH
+366 M3 M7 Shared[T].get() alias shape not covered by is_guard_struct_type
+367 M7 M3 xhigh review: 15 findings, deref-coercion unimplemented [composite]
+368 M9 - bogus field on a smart-pointer/guard WRAPPER accepted
+369 M5 - generic-trait-default throws E bodies lower unsubstituted [composite]
+370 M7 M5 throws-callee whose declared T is itself Result prints garbage
+371 M7 - D36 read-face auto-deref on Mutex[Box[Trait]]/Guard[Box[Trait]]
+372 M4a - lower_for_dict's `_ =>` silently binds ZEROS for a 3-tuple pattern
+373 M4a M1 nested destructure over a Dict value falls to else "__v" on both lanes
+374 M4a - lower_var_decl's `_ =>` is a silent no-op arm
+375 M1 - the gg-selfhost BUILD path silently accepts ill-typed programs
+376 M8 M4c bare callable identifier at a collection-put panics the IR lowering
+377 M2 - ctor named args bind POSITIONALLY (free-fn/method paths were wired)
+378 M5 M7 comprehension over a nested Vector segfaults
+379 M8 - assigning a String element inside `for … in &coll` is a heap-UAF
+380 M9 - int a = int[2] passes check, debug ICE, release silent miscompile
+381 M7 M4c a Callable-typed &-PARAMETER ICEs the compiler
+382 M7 - non-identifier-callee class: two cells remain post-Track-K
+383 M3 M7 a Callable-typed STRUCT FIELD call is lowered as a user method call
+384 M4c - spawn child(&cfg) passes check and does not compile
+385 M13 M12 E_BorrowAcrossAwait has no positive control; may be a dead guard
+386 M13 M12 E_SpawnWithBorrowedRef has no positive control; may be a dead guard
+387 M12 - thread.spawn is a doc fossil across 6 sites
+388 M4a - f-string interp typecheck BLANKET-SUPPRESSES all errors [composite]
+389 M2 - default-arg fill wired for free fns, not equip methods [composite]
+390 M10 - CAMPAIGN NEXT-WAVE (owner-decided designs) [composite]
+391 M10 - cast-via-construction language redesign
+392 M10 - error-model language direction draft
+393 M7 - generic-struct ctor patterns lack field-type resolution
+394 M9 - wrong ctor name on a struct scrutinee: empty field_types skips the gate
+395 M11 - cross-module int bindings require public: spec ambiguity
+396 M1 - SH typechecker has the identical type-name-in-value-position bug
+397 M9 - Type.instance_field type-checks clean and runs to a silent 0
+398 M4c - variant-as-HOF-value checks clean but CC-FAILs
+399 M1 - SH typechecker has NO call-site ownership check at all
+400 M16 - gg fmt --fix-ownership auto-insertion
+401 M9 - & on a TEMPORARY into a & param accepted but is a dead write
+402 M3 - PRELUDE ARC: retire EVERY Option/Result name-match
+403 M16 - From-on-bare-rethrow implicit conversion feature
+404 M9 M6 escaping slice (int[]) silently miscompiles; reject at check
+405 M2 - aggregate-literal auto-prop desync: 3 same-class positions remain
+406 M2 M9 method-resolution totality blocked; two registries to collapse
+407 M1 - SH lowerer driver OMITS a borrow-check pass
+408 M4b - safety-pass branch-divergence audit (which sites need save/restore)
+409 M16 - caller_location() builtin + multi-frame stack walking
+410 M2 - retire the 7 residual consumer-side maybe_auto_propagate nets
+411 M9 - importing ANY name from a module silently exposes ALL its names
+412 M11 - for-loop iterator-invalidation is root-granular; field paths?
+413 M11 - moving a field out of a bare borrowed self stays accepted
+414 M11 - disjoint-sibling MOVE over-rejects; partial-move widening undecided
+415 M11 M9 general must-use on Result
+416 M11 - return-position capture asymmetry (block body vs expr body)
+417 M10 M9 String(3) prints empty; D20 ruled reject-with-fix-it
+418 M10 - D13 two-step: reject bare allocator locals, then RAII
+419 M9 M7 is_collection_assignment accepts any literal regardless of elem type
+420 M9 - Ordinal builtin trait never registered -> wrong-signature equip compiles
+421 M4c - phantom static methods pass gg check, fail at build/link [composite]
+422 M4a - imported-module typecheck errors are TRUNCATED (suppressed)
+423 M1 - SH EStructLiteral arm lacks production's ref-typed-field skip
+424 M16 - to_string/String(int) rejections need a fix-it
+425 M16 - tail-call optimization
+426 M5 - ast_type_to_resolved binds stale Import placeholders in type positions
+427 M13 - 18 fix-it messages emit advice never verified to compile
+428 M16 - E_NotIndexable text should name .nth(i)/.key_at(i) once they land
+429 M5 - E_MoveWithoutOperator renders the ROOT name, not the sub-place
+430 M16 - forward / cross-module const-refs in a const initializer
+431 M16 - lexical wrapping { } scope
+432 M2 - static-decl initializers not type-checked (local form is)
+433 M16 - @[no_alloc] function annotation
+434 M3 - match fall-through suppression keys on the syntactic else_arm only
+435 M16 - cascading second E_AwaitNonFuture (diagnostic polish)
+436 M4b - widen W_RecursiveBareParamMaterialize to mutual recursion
+437 M16 - W_RecursiveBareParamMaterialize downgrade heuristic
+438 M2 - OWNER DIRECTIVE: retire sidecars + parallel structures (audit sweep)
+439 M1 - LLVM does not honor alloc= into a bare Arena the way C does
+440 M1 - LLVM backend drops the C typedef for FFI-only-module structs
+441 M3 - infer_collection_element_type decides from mangled NAME PREFIXES
+442 M2 - guard-temp statement-end drop is Stmt::Expr-only
+443 M5 M6 SH emits int32 -> void* assignments Apple clang rejects
+444 M5 M3 tag large by-value aggregates with AbiKind::ByValue at the write site
+445 M2 M17 hand-unrolled 2-level near-duplicate of a transitive query
+446 M3 M2 THREE parallel hand-lists decide aggregate-return ABI by symbol NAME
+447 M2 M1 LLVM re-implements printf format fixing instead of the shared helper
+448 M17 - Inst::InlineC has ZERO producers but three costs
+449 M5 - LIR Slot drops Local.ownership at the GIR->LIR boundary
+450 M2 - last_error_fn duplicated VERBATIM in two files
+451 M2 M5 LLVM re-derives type sizes at 41 sites [composite]
+452 M8 - rethrow (String e) leaks the transformed error String
+453 M2 - LLVM sizeof_struct_by_name disagrees with the canonical size [composite]
+454 M5 - LLVM variadic-sret path computes the fn type then DISCARDS varargs
+455 M1 - x86_64 LLVM residuals [composite]
+456 M3 - name-matched is_unmonomorphized_wrapper (T/U/V substring test)
+457 M2 - static collection prologue doesn't set .val_drop/.elem_drop
+458 M3 - burn-down round: remaining name-matching [composite]
+459 M8 - match-arm-binding leak (owned String error payload not dropped)
+460 M8 M2 custom-drop struct as a FIELD leaks its inner fields
+461 M3 - mangled-name inner-type slicing in unwrap/expect/unwrap_or lowering
+462 M5 M6 enum_category not registered for Result w/ user error enum -> I64 default
+463 M4b M7 is_resource_type descends STRUCT fields only, not enum payloads
+464 M3 M2 three enum-side drop-name sites reconstruct tn+"__drop" unguarded
+465 M1 - leak_string_heavy fails under LLVM on x86_64 CI
+466 M6 - push_char on a String-view & binding ICEs (view vs owned ABI)
+467 M4c - nested index-assign rooted at windows/chunks ICEs
+468 M3 - insts.rs __clone name-match kill deferred (ABI trap)
+469 M5 - CallExtern carries no clone reason field
+470 M2 - unify the 7 lower_for_* functions (~80% duplicated scaffold)
+471 M5 M2 ~50+ runtime panic sites carry no file:line:col
+472 M2 - stdlib narrow-waist phase 2c residual
+473 M5 - C backend local val_types/ptr_pointee fixup phases re-derive upstream facts
+474 M16 - decompose emit_call_extern.rs
+475 M1 M2 resources build-tooling as the cross-language single source of truth
+476 M7 - Box[T].x / Guard[T].x through a generic fn prints garbage
+477 M7 - a bare Guard[T] param that mutates a field calls a nonexistent symbol
+478 M4a M6 ReadGuard[T] field writes are silently DISCARDED
+479 M7 - Guard[T] in any AGGREGATE position fails to compile
+480 M7 M3 returning a Guard[T] calls a nonexistent runtime symbol
+481 M3 - a USER struct named Guard collides with the builtin when generic
+482 M3 - fs[i](10) parser disambiguator greedily parses a generic call
+483 M4a - expect("custom msg")'s message argument is DROPPED at lowering
+484 M17 - dead unwrap_error abort() combinator paths
+485 M13 - LLVM --sanitize is SILENTLY DROPPED: an LLVM ASan run is vacuous
+486 M1 - LLVM in-loop allocas per iteration -> stack exhaustion (C has none)
+487 M8 - residual Rust-gg leak cohort after the print-temp fix [composite]
+488 M8 M2 trait-dispatch display result never drop-registered
+489 M7 M8 print-temp site-C: clone-of-non-string-aggregate temp unregistered
+490 M5 M8 match-struct-literal memcpy over-read (size mismatch)
+491 M4b - has_side_effects omits Inst::CallRuntime
+492 M3 - consuming positions identified by METHOD NAME
+493 M3 - hardcoded gorget_panic lowering at assert
+494 M16 - drop-elaboration remaining cleanup
+495 M3 - emit_name.contains("option") picks the message wording
+496 M8 - closure-return-String 2 byte/call leak
+497 M5 M6 LIR extern decl hardcodes an i64 return for unwrap_error mangles
+498 M7 M16 scalar-FLOAT static const-init uses %g, not bit-exact
+499 M5 - Rust gg infers a Callable closure param as int64_t, ignoring the sig
+500 M6 M8 closure capture mode: &self-method mutations don't persist
+501 M4b - generic user-fn monomorphization SKIPPED at parser.gg scale
+502 M10 - D39 phase A dense index-map layout
+503 M10 - D39 phase B StableMap/StableSet extraction
+504 M10 - D39 phase C .nth(i)/.key_at(i) accessors
+505 M4b - W_RecursiveBareParamMaterialize misses mutual cycles (201 clones, 0 warns)
+506 M15 - CoW COST CONTRACT campaign (elision precondition computed, unused)
+507 M12 - reference advertises @inline; it is rejected at HEAD
+508 M15 - stage-0/1 clone ceilings raised; charter is hand-optimal
+509 M17 - ROUND-33 shape (round-planning record) [composite]
+510 M11 - ECS / data-oriented compilation-speed owner question
+511 M15 - 65-71% of attributed clones are ONE class: read-only value-aggregate binds
+512 M12 - two design docs disagree on whether #13 covers BINDS
+513 M15 - CoWMaterialization residual 1.13M attributed hits
+514 M13 - instrument v2: mint CloneIds at the LIR layer
+515 M13 - ratchet-ify bench_stages.sh
+516 M14 - bootstrap stage binaries are O0-compiled and dominate the chain
+517 M14 - share self-compile artifacts across the heavy self-host tests
+518 M13 - --clones=stats unsupported under LLVM: that lane is UNMEASURED
+519 M15 M17 self-compile clone-elision near-exhausted; measured NO-GOs recorded
+520 M17 M14 sweep wall-time regression premise REFUTED by bisect
+521 M13 - dynamic dead-clone (wasted-clone) detector
+522 M3 M1 the mutates-receiver axis lives in FOUR hand-synced places
+523 M4b - the SMeta* family falls through BOTH lanes' mutation scans
+524 M4a M1 SH has NO dispatch arm for unsafe/select; silently divergent output
+525 M4a - Rust lower_stmt's Select dispatch DISCARDS else_arm
+526 M15 - builtin_method_mutates deep-clones per classification query
+527 M14 - bootstrap_fixed_point wall ~867s (timing expectation)
+528 M15 - pending targets exposed by the stage-1 clone ceiling
+529 M13 - per-reason clone budgets
+530 M15 - systemic ~400 coll.get(i).unwrap() clone-binds
+531 M15 - pick the next at-site clone CLASS deliberately
+532 M5 - MaterializeReason is GIR-only; dropped via `..` at the LIR boundary
+533 M15 - #13 borrow-default step 2 (return-view lazy materialization)
+534 M15 - close the CPython gap on 2 benchmark cases
+535 M13 - macro-benchmark suite (the very-fast pillar's missing evidence)
+536 M1 M15 SH print(f"…") materializes a temp per call; Rust splices
+537 M1 M15 SH over-clones Rust by ~5 on dataframe_tier2_joins
+538 M13 - bench corpus does not exercise lazy CoW
+539 M13 - the SH parity CEILING gate never runs at round close
+540 M2 - Stmt::VarDecl's INITIALIZER has no Doc layer
+541 M2 - format_pattern has NO Doc layer
+542 M2 - enum tuple-variant field lists have no Doc layer
+543 M5 - a Doc::Group carrier's FIRST piece is rendered at the wrong column
+544 M13 - FIVE *_comparison tests remain FLOORLESS always-pass diagnostics
+545 M1 - the indexed-callee callable shape TIMES OUT on the SH runtime lane
+546 M13 - fuzz_roundtrip gates its assert on parser.errors.is_empty()
+547 M3 M1 REGISTRY (306) and RUNTIME_FNS (299) diverged by SEVEN entries
+548 M5 - migrate the remaining phase-D proxy reads to Local.ownership
+549 M3 M13 the ggdef corpus gates auto-discover by NAME PREFIX and drift RED
+550 M3 - promote retborrow_* fixtures (named to dodge the name-keyed gate)
+551 M13 - security_safe_no_leak mis-reports where LeakSanitizer is absent
+552 M13 M3 HEURISTIC_BLIND allowlist keyed on DOC LINE NUMBERS
+553 M17 - the LEDGER cites a known_gaps repro that was never committed
+554 M13 - add a SH regression fixture for v.map(named_fn) on a direct collection
+555 M14 - c_emit_comparison reads TORN shared-driver state under sweep load
+556 M14 - shared_with_check_then_act is run-to-run nondeterministic
+557 M3 - is_elem_borrow_read accessor name-set over-includes
+558 M3 - sibling hand-spelled name lists not retired onto the new accessor
+559 M6 M4b map_binop unknown-op returns OP_ADD (default standing for unknown)
+560 M2 M13 no arm-count lint forces a future LLVM Inst through the twin pre-pass
+561 M8 M13 producer-side leak validator (the structural class fix)
+562 M4a - lower_fail SILENTLY drops unhandled constructs to a stdout comment
+563 M13 - full-code-list pin test for the diagnostic registry
+564 M13 - convert the manual ASan leak sweep into an executable ratchet
+565 M2 - capped-drain landing follow-ups (Core #4 siblings) [composite]
+566 M4b - DeadBareParamWrite lint follow-ups (breadth) [composite]
+567 M13 - gorget-smith follow-ups (fuzzer tiers)
+568 M13 - widen g1_projected_materialize_sites_untrack files[] if a site is added
+569 M1 M8 SH struct with a Mutex field + another droppable field double-frees
+570 M1 - ROUND-33 shared-override follow-ups [composite]
+571 M1 - ROUND-39 T2 spawn/blocking follow-ups [composite]
+572 M1 - ROUND-16 remaining increments [composite]
+573 M1 - ROUND-16 phase-2 follow-ups (narrowings vs the Rust ref) [composite]
+574 M1 - Shared[T] cluster residuals [composite]
+575 M1 - inline-closure-spawn is a separate SH lowering path
+576 M1 - Inc-B RWLock pending follow-ups [composite]
+577 M8 - the NEW Core #8 register_param bug [composite]
+578 M1 M8 ROUND-11 Inc-1 follow-ups: un-awaited Task locals leak in the SH
+579 M1 - keystone spawn-OPAQUE-PARAM support
+580 M1 - SH lowerer UNDER-INCREFS a live Shared source at a consuming position
+581 M8 - gorget_shared_drop does not free the INNER resource at refcount 0
+582 M8 - Weak[T].upgrade()-in-match leaks the upgraded Shared
+583 M6 - calling a ByValue-self method through a &/! ref param yields garbage
+584 M5 M3 ambiguous Task[T] collection falls through a task_type_fns.len()==1 gate
+585 M8 M1 SH sync-primitive: Mutex/RWLock lock-object leak [composite]
+586 M1 - DEEP TRACK: the shared facade desugar + spawn-token wrapper
+587 M8 - shared(atomic) AtomicInt leaks
+588 M3 M2 three parallel name-keyed sync-ctor dispatch sites
+589 M4a - gg build --scheduler= is SILENTLY IGNORED [composite]
+590 M3 - retire the Rust map_stdlib_name sync instance-method entries
+591 M9 - spawn captures don't check stale shared-derived data
+592 M6 - gg fmt drops the trailing comma of a ONE-TUPLE TYPE
+593 M12 M2 the DOCUMENTED postcondition form does not parse
+594 M5 - the postcondition value `return` is UNTYPED
+595 M5 - auto-typed DICT and SET comprehensions compute wrong results
+596 M9 - the internal __return__ alias is spellable in ordinary user source
+597 M13 - known_gaps fixtures wired to the WRONG lane can never go red
+598 M3 - 44 name.node == "self" receiver-determination sites to rewire
+599 M4a - gorget.toml parse ERRORS are discarded
+600 M16 M11 import path model: file-relative, no package src root
+601 M2 - fmt interior-comment escape: shapes outside the fill chokepoint
+602 M14 - macOS dev box cannot run the self-host net locally [composite]
+603 M1 - GG_IMPL endgame: one installed gg that IS the chosen implementation
+604 M2 - --release silently IGNORED on 3 build sub-paths
+605 M6 - self-host exec is shell-based (argv modeled as a string)
+606 M16 - LSP server
+607 M17 - move regex to dev-dependencies
+608 M13 - no live successor for sim's UninitializedRead check
+609 M2 - usage/CLI errors collapse into exit 1 at ~50 sites
+610 M2 - internal runtime panics exit 1, colliding with the compile-error code
+611 M16 - DWARF line-table debug info
+612 M3 - gg fmt CLI arg parsing skips only `--`-prefixed args
+613 M12 - reference claims a post-meta-for exhaustiveness validation that is absent
+614 M12 - devbook cites the wrong line for format_source_result
+615 M10 - parenthesized import form (ratified, not built)
+616 M10 - meta diamond inference (designed, never built)
+617 M10 - the iterator-surface residue (method-level generic inference)
+618 M9 M12 narrow-type overflow is unenforced at the declared width
+619 M3 - f-string int+float emits a hardcoded %lld spec, leaking C warnings
+620 M16 - gg build leaves the emitted .c in the cwd
+621 M12 - book one-liners (uncompilable examples)
+622 M17 - dogfood next domain deferred (planning record)
+623 M10 - sigil pass outcomes: ** ratified but unimplemented
+624 M3 - DOC honesty: validators claim structural but use name.starts_with [composite]
+625 M16 - documentation chain: deepen the 2 deferred narrative stubs
+626 M12 - DOC TRACK: book-ify docs/book + docs/devbook
+627 M12 - book/12-borrowing MutationWhileBorrowed is REFUTED-BY-RUN
+628 M12 - book accuracy + completeness fixes
+629 M12 - doc-drift items not yet in the honesty-audit catalog
+630 M13 - learnability field test (the pillar with zero measurement)
+631 M16 - competitive positioning doc
+632 M12 - 23-holds disposition
+633 M12 - doc slice 4: the ggdef devbook chapter
+634 M12 - book/19-stdlib teaches a PHANTOM Arena API
+635 M16 - reimplement EntityPool atop a value-less SlotMap
+636 M14 - self-host debugging gotcha: driver.gg is not the lib_dir
+637 M17 - stale test comments (retracted claims, wrong #[ignore] status)
