@@ -1,0 +1,42 @@
+# STAGING-MOVE net, cell 4 of 4 on the STAGING-SITE axis:
+#   `lower_catch_expr`'s RECOVERY staging (`src/ir/lowering/exprs/mod.rs`).
+#
+# A DIFFERENT signature from `catch_carrier_live_twice.gg`: there the live
+# source is the CARRIER, here it is the RECOVERY VALUE. `fb` is an owned, named
+# local that is live past the `catch` AND is then MUTATED. The staging assign
+# moved it without asking `owns AND dead`, so `got` and `fb` aliased one buffer;
+# growing `fb` reallocs it and `got[0]` then reads freed memory — a
+# heap-USE-AFTER-FREE, not a double free.
+#
+# RED-verified at the pre-fix compiler on BOTH backends: BUILD_RC 0, RUN_RC 134
+# on C and on LLVM; ASan reports `heap-use-after-free`. With the guard landed
+# but the write-site fix not yet applied, `GG_STAGING_MOVE_GUARD=fatal` gave
+# BUILD_RC 101 — `StagingMoveIntoOwnedSlot(dst: Vector__int64_t)` at
+# `@main bb2 i3`. The self-host lane compiles and RUNS this correctly (`7/7`).
+#
+# The mutation after the catch is load-bearing: without it the alias is benign
+# on this corpus and the fixture would be green before and after the fix.
+Vector[int] mkv(int n):
+    Vector[int] v = []
+    v.push(n)
+    v.push(n + 1)
+    v.push(n + 2)
+    return v
+
+Result[Vector[int], String] mkerr():
+    return Error("boom")
+
+void main():
+    Vector[int] fb = mkv(7)
+    Result[Vector[int], String] r = mkerr()
+    Vector[int] got = r catch (e): fb
+    print(got[0])
+    fb.push(20)
+    fb.push(21)
+    fb.push(22)
+    fb.push(23)
+    fb.push(24)
+    fb.push(25)
+    fb.push(26)
+    fb.push(27)
+    print(got[0])

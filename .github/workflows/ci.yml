@@ -95,6 +95,29 @@ jobs:
         env:
           GG_BUILD_TIMEOUT_SECS: 600
 
+      # The `StagingMoveIntoOwnedSlot` consume-site class has NO env-gate runway
+      # on the validator (a new consume class is fatal the instant it lands), so
+      # it enters through the non-fatal `assign_warnings` list and
+      # `GG_STAGING_MOVE_GUARD=fatal` promotes it. THIS STEP is what sets the
+      # promoter. Its precedent, `GG_RETURN_SLOT_GUARD`, has never been set by
+      # anything outside `src/` — a runway nothing drives is theatre, and the
+      # env var (not class membership) is what separates the two burned-down
+      # rows from the defects the class was built for, so with the var unset the
+      # guard is silent on those too.
+      #
+      # Measured 2026-08-23 at 39-49 s over all 2109 top-level fixtures
+      # (`time scripts/staging_move_burndown.sh --check`): it reconciles the
+      # TRIP set by SET EQUALITY over the whole corpus — so a NEW violation
+      # anywhere reds the gate — and probes the CLEAN rows for the other side.
+      # `--emit-gir` stops before the C backend and the linker, which is why the
+      # whole corpus is affordable per-commit: every single build lands under a
+      # second (verified by running the gate green with the deadline set to 1 s).
+      - name: staging-move consume-guard burn-down
+        run: scripts/staging_move_burndown.sh --check
+        env:
+          GG_STAGING_MOVE_GUARD: fatal
+          GG_BUILD_TIMEOUT_SECS: 600
+
       # The remaining test targets. Enumerated here rather than left to
       # `cargo test` because the other steps need per-target thread counts and
       # env. The `every_test_target_runs_in_ci` lint asserts this list stays

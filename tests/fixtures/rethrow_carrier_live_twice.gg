@@ -1,0 +1,30 @@
+# STAGING-MOVE net, cell 2 of 4 on the STAGING-SITE axis:
+#   `lower_rethrow_expr`'s carrier staging (`src/ir/lowering/exprs/mod.rs`).
+#
+# Same defect as `catch_carrier_live_twice.gg` in a different costume: `rethrow`
+# stages the `Result` carrier with its own copy of the `is_moved` idiom, so an
+# owned NAMED carrier that is live past the first `rethrow` was moved out from
+# under its own second read. This cell is why the fix belongs in the shared
+# chokepoint and not at one call site (Core #4).
+#
+# RED-verified at the pre-fix compiler on BOTH backends: BUILD_RC 0, RUN_RC 134
+# on C and on LLVM. The self-host lane compiles and RUNS it correctly (`6`).
+Vector[int] mkv(int n):
+    Vector[int] v = []
+    v.push(n)
+    v.push(n + 1)
+    v.push(n + 2)
+    return v
+
+Result[Vector[int], String] mkr():
+    return Ok(mkv(5))
+
+int run() throws String:
+    Result[Vector[int], String] r = mkr()
+    Vector[int] first = r rethrow (String e): "boom1"
+    Vector[int] second = r rethrow (String e): "boom2"
+    return first.len() + second.len()
+
+void main():
+    int n = run()! catch (e): -1
+    print(n)

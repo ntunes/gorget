@@ -2030,10 +2030,38 @@ pub fn lower_module(
         let is_return_slot = |w: &crate::ir::validate::ConsumeSiteWarning| {
             matches!(w.class, crate::ir::validate::ConsumeSiteClass::AssignIntoReturnSlot { .. })
         };
+        // `StagingMoveIntoOwnedSlot` is the second class on this runway —
+        // a SIBLING of the return-slot one, never a widening of it: two
+        // classes sharing one promoter would make each other's burn-down
+        // unobservable. It gets its own env var, and the promoter is wired
+        // into CI (`.github/workflows/ci.yml`, job `test`, via
+        // `scripts/staging_move_burndown.sh`) so the runway is actually
+        // exercised — a class nothing ever promotes is theatre, not a guard.
+        //
+        // ⚠ The env var, NOT class membership, is what separates the
+        // burned-down rows from the rest: every violation of the staging
+        // shape carries this one class.
+        let staging_move_fatal = std::env::var("GG_STAGING_MOVE_GUARD")
+            .map(|v| v == "fatal")
+            .unwrap_or(false);
+        let is_staging_move = |w: &crate::ir::validate::ConsumeSiteWarning| {
+            matches!(
+                w.class,
+                crate::ir::validate::ConsumeSiteClass::StagingMoveIntoOwnedSlot { .. }
+            )
+        };
         let (fatal_warnings, assign_warnings): (Vec<_>, Vec<_>) = warnings
             .iter()
             .cloned()
-            .partition(|w| return_slot_fatal || !is_return_slot(w));
+            .partition(|w| {
+                if is_return_slot(w) {
+                    return_slot_fatal
+                } else if is_staging_move(w) {
+                    staging_move_fatal
+                } else {
+                    true
+                }
+            });
         if !fatal_warnings.is_empty() || !assign_warnings.is_empty() {
             use std::io::Write;
             use rustc_hash::FxHashMap;
@@ -2059,6 +2087,8 @@ pub fn lower_module(
                         => "AssignIntoOwnedSlot".to_string(),
                     crate::ir::validate::ConsumeSiteClass::AssignIntoReturnSlot { .. }
                         => "AssignIntoReturnSlot".to_string(),
+                    crate::ir::validate::ConsumeSiteClass::StagingMoveIntoOwnedSlot { .. }
+                        => "StagingMoveIntoOwnedSlot".to_string(),
                 };
                 *by_class.entry(class_key.clone()).or_insert(0) += 1;
                 *by_class_violation

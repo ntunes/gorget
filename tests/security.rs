@@ -1402,6 +1402,34 @@ fn cow_bareassign_owned_string_no_leak() {
     );
 }
 
+/// `??` on an OWNING (`!`) param carrier — the deref-copy cell of the
+/// carrier-ownership axis.
+///
+/// `lower_expr`'s identifier arm peels a non-Copy param's pointer into a temp
+/// that is a SHALLOW copy of the pointee, so the temp does NOT own the payload
+/// even though its type is a plain `Option[T]`. The `??` lowering asked the
+/// post-deref temp for Ptr-ness, got "no", and took the source-owns path — the
+/// Move-extract zeroed only the copy's payload field while the param's slot
+/// kept the same buffer and stayed registered for drop. Both dropped.
+///
+/// RED-verified against the pre-fix compiler: `RUN_RC=134`, ASan
+/// `attempting double-free`. The payload is heap-forced (a `Vector` built by
+/// push) — a literal payload is a measured false negative for this class.
+///
+/// ⚠ Lives in `security/` rather than top-level `tests/fixtures/` because the
+/// self-host lane rejects `??` with a `Vector` payload
+/// (`E_DefaultOpRhsTypeMismatch`); a top-level placement would add a non-MATCH
+/// parity row for the round's own inflow (Core #9 ⊕). The SH over-rejection is
+/// filed separately.
+#[test]
+fn security_default_op_owning_param_double_free() {
+    // INTENDED: the unwrap prints the payload's length and the program exits 0.
+    security_safe_no_leak(
+        "attack_102_default_op_owning_param_double_free",
+        "2\ndone",
+    );
+}
+
 #[test]
 fn cow_bareassign_return_alias_no_leak() {
     // Heap-owned String bare-assigned, then RETURNED (escapes the frame).

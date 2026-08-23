@@ -2195,28 +2195,61 @@ impl<'a> LoweringContext<'a> {
         self.drops.mark_moved(local);
     }
 
-    /// Assign `operand` into an EXISTING `dst` local under `mode`, pairing a
-    /// Move-mode assign with the required MoveZero + mark_moved on the source
-    /// (when the source is a bare, drop-registered place local that is not
-    /// already moved). Bare `builder.assign_mode(Move, …)` without this guard
-    /// is a use-after-free hazard — the source's scope-exit drop re-frees the
-    /// buffer the new dst now owns. The Move-follow-through guard here is the
-    /// same pattern `lower_var_decl` uses at
-    /// `src/ir/lowering/stmts/mod.rs:1189-1198` (Pattern::Binding) and
+    /// Assign `operand` into an EXISTING `dst` local under `mode`, deciding
+    /// per the CoW consume-site rule whether the source may be MOVED or must
+    /// be CLONED, and pairing a Move-mode assign with the required MoveZero +
+    /// mark_moved on the source.
+    ///
+    /// **The question this helper asks is `owns ∧ dead`, not `is_moved`.**
+    /// `is_moved` only answers "has some earlier site already taken this
+    /// slot" — it says nothing about whether the source is still READ
+    /// downstream. A staging site that moves an owned local which is live
+    /// past the staging point produces
+    ///
+    /// ```text
+    /// [Mv] _dst = copy _src
+    ///      move_zero _src
+    ///      ... copy _src ...     // a real later read
+    /// ```
+    ///
+    /// — and the `move_zero` is elided by the backend whenever drop-tracking
+    /// proves it unobservable, so `_dst` and `_src` end up aliasing one heap
+    /// buffer: double-free at scope exit, or a use-after-free if the survivor
+    /// reallocs. `caller_src_span` is what makes the liveness half answerable
+    /// (`source_live_past`); pass the span of the SOURCE EXPRESSION. `None`
+    /// means "no liveness information at this call site" and keeps the plain
+    /// move-follow-through behaviour.
+    ///
+    /// The Move-follow-through half is the same pattern `lower_var_decl` uses
+    /// at `src/ir/lowering/stmts/mod.rs:1189-1198` (Pattern::Binding) and
     /// `:1236-1245` (Pattern::Tuple).
     ///
-    /// The validator that diagnoses the missing guard is
-    /// `validate_move_follow_through` at `src/ir/validate.rs:1787`; when this
-    /// helper fires the write-side invariant, the read-side never trips
-    /// (Core #1: fix at the write site).
+    /// The read-side validator for the missing move-follow-through is
+    /// `validate_move_follow_through` (`src/ir/validate.rs`); the read-side
+    /// validator for the live-source half is the
+    /// `StagingMoveIntoOwnedSlot` consume-site class. When this helper
+    /// answers correctly neither trips (Core #1: fix at the write site).
     pub fn assign_with_move_follow_through(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         dst: LocalId,
         operand: Operand,
         mode: crate::ir::instructions::AssignMode,
+        caller_src_span: Option<crate::span::Span>,
     ) {
         use crate::ir::instructions::{AssignMode, Place};
+        if mode == AssignMode::Move {
+            if let Some(span) = caller_src_span {
+                if let Some(cloned) = self.clone_live_staging_source(builder, dst, &operand, span) {
+                    builder.assign_mode(
+                        AssignMode::Move,
+                        Place::local(dst),
+                        crate::ir::builder::FunctionBuilder::copy(cloned),
+                    );
+                    return;
+                }
+            }
+        }
         builder.assign_mode(mode, Place::local(dst), operand.clone());
         if mode == AssignMode::Move {
             if let Operand::Copy(ref place) | Operand::Move(ref place) = operand {
@@ -2228,6 +2261,51 @@ impl<'a> LoweringContext<'a> {
                 }
             }
         }
+    }
+
+    /// The `dead` half of the consume rule, answered once for every staging
+    /// site: if the source of a Move-mode staging assign is still LIVE past
+    /// `span`, the move is illegal and the boundary owes a clone. Returns the
+    /// fresh clone's local, or `None` when the move is legal (source dead, or
+    /// not a bare owned place, or the type has no clone fn).
+    ///
+    /// Kept beside [`assign_with_move_follow_through`] rather than inlined at
+    /// each staging site: the four `Result`-family staging sites
+    /// (`emit_result_auto_propagate`, `lower_rethrow_expr`, and both assigns
+    /// in `lower_catch_expr`) all asked `is_moved` independently and all got
+    /// the same wrong answer (Core #4 — fix the class at the producer).
+    fn clone_live_staging_source(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        dst: LocalId,
+        operand: &Operand,
+        span: crate::span::Span,
+    ) -> Option<LocalId> {
+        let place = match operand {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            Operand::Constant(_) => return None,
+        };
+        if !place.projections.is_empty() || place.local == dst {
+            return None;
+        }
+        // Already taken by an earlier site — there is nothing left to alias.
+        if self.drops.is_moved(place.local) {
+            return None;
+        }
+        if !self.source_live_past(operand, span, builder) {
+            return None;
+        }
+        let src_type = builder.local_type(place.local);
+        let inner = self.pointee_type(src_type).unwrap_or(src_type);
+        let clone_fn = self.clone_fn_for_ptr(inner)?;
+        let reason = crate::ir::ImplicitCloneReason::ConsumingArg;
+        self.warn_clone_and_hit(builder, span, inner, reason);
+        Some(builder.call_clone(
+            &clone_fn,
+            vec![crate::ir::builder::FunctionBuilder::copy(place.local)],
+            inner,
+            reason,
+        ))
     }
 
     /// Materialize `operand` into a FRESH addressable local of `inner_type`,
@@ -2257,7 +2335,7 @@ impl<'a> LoweringContext<'a> {
         mode: crate::ir::instructions::AssignMode,
     ) -> LocalId {
         let tmp = builder.add_local(inner_type, None);
-        self.assign_with_move_follow_through(builder, tmp, operand, mode);
+        self.assign_with_move_follow_through(builder, tmp, operand, mode, None);
         tmp
     }
 

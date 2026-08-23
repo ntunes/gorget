@@ -1,0 +1,45 @@
+# Burn-down ledger for the `StagingMoveIntoOwnedSlot` consume-site class.
+#
+# The class fires when an `Assign` into an owned slot is sound ONLY because the
+# staging site emitted its own `MoveZero` on the source — `[Mv] _dst = copy
+# _src; move_zero _src` with a real later read of `_src`. `Liveness::compute`
+# counts `MoveZero` as a kill, so the defect vouches for itself and the
+# always-fatal consume-site validator passes it; the class re-asks the question
+# against a `MoveZeroPolicy::Blind` liveness. See `src/ir/validate.rs`.
+#
+# The class has NO env-gate runway on the validator (a new consume class is
+# fatal the instant it lands), so it enters through the non-fatal
+# `assign_warnings` list and `GG_STAGING_MOVE_GUARD=fatal` promotes it. THIS
+# FILE is what makes that promotion observable: `scripts/staging_move_burndown.sh
+# --check` runs it in CI and this ledger is the expected outcome.
+#
+# Row kinds — both are OUTCOMES of running the compiler, not source-text counts:
+#   TRIP  <fixture> <n_violations>   must STILL violate under the promoter.
+#                                    If it stops, the write-site was fixed:
+#                                    DELETE the row and lower the lint's
+#                                    CEILING in the same commit.
+#   CLEAN <fixture>                  must NOT violate — the positive controls
+#                                    that keep the guard from being trivially
+#                                    satisfiable (Core #13: a gate that cannot
+#                                    go red proves nothing, and one that reds on
+#                                    everything proves nothing either).
+#
+# ⛔ SHRINK-ONLY. A new TRIP row means a NEW live aliasing hazard was
+# introduced — fix the write site, do not park it here.
+#
+# Regenerate the TRIP set over the whole corpus with:
+#   scripts/staging_move_burndown.sh --sweep
+
+# ── TRIP: open write-site defects (each is a real read-after-move; benign today
+#    only because the backend elides the zero, which Core #8 forbids passing) ──
+TRIP  tests/fixtures/d22_slice_vector_string.gg           2
+TRIP  tests/fixtures/snag31_match_arm_move_into_owned.gg  1
+
+# ── CLEAN: the four staging sites this class was found through, all fixed,
+#    plus the `??` deref-copy cell (which lives in a SUBDIRECTORY the
+#    corpus sweep never descends into, so only a CLEAN row reaches it) ──
+CLEAN tests/fixtures/autoprop_carrier_live_twice.gg
+CLEAN tests/fixtures/rethrow_carrier_live_twice.gg
+CLEAN tests/fixtures/catch_carrier_live_twice.gg
+CLEAN tests/fixtures/catch_recovery_named_live.gg
+CLEAN tests/fixtures/security/attack_102_default_op_owning_param_double_free.gg

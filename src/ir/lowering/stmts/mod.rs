@@ -1690,7 +1690,10 @@ fn lower_shared_var_decl(
             // Initialize facade with atomic load
             let init_val = super::exprs::emit_atomic_load(ctx, builder, hidden_local, inner_type, &atomic_name);
             let mode_fi = resource_assign_mode(ctx, inner_type);
-            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi);
+            // `None`: `init_val` is a fresh temp minted by the emit_* helper
+            // one line up — dead by construction, no source expression to ask
+            // liveness about.
+            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi, None);
         }
 
         SharedStrategy::ArcOnly => {
@@ -1722,7 +1725,10 @@ fn lower_shared_var_decl(
 
             let init_val = super::exprs::emit_shared_get(ctx, builder, hidden_local, inner_type);
             let mode_fi = resource_assign_mode(ctx, inner_type);
-            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi);
+            // `None`: `init_val` is a fresh temp minted by the emit_* helper
+            // one line up — dead by construction, no source expression to ask
+            // liveness about.
+            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi, None);
         }
 
         SharedStrategy::ArcRwLock => {
@@ -1778,7 +1784,10 @@ fn lower_shared_var_decl(
 
             let init_val = super::exprs::emit_rwlock_read_get(ctx, builder, rwlock_local, inner_type);
             let mode_fi = resource_assign_mode(ctx, inner_type);
-            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi);
+            // `None`: `init_val` is a fresh temp minted by the emit_* helper
+            // one line up — dead by construction, no source expression to ask
+            // liveness about.
+            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi, None);
         }
 
         SharedStrategy::ArcMutex => {
@@ -1832,7 +1841,10 @@ fn lower_shared_var_decl(
             // Init facade: Shared.get() → Mutex, then lock → get → release
             let init_val = super::exprs::emit_shared_mutex_lock_get(ctx, builder, hidden_local, mutex_type, inner_type);
             let mode_fi = resource_assign_mode(ctx, inner_type);
-            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi);
+            // `None`: `init_val` is a fresh temp minted by the emit_* helper
+            // one line up — dead by construction, no source expression to ask
+            // liveness about.
+            ctx.assign_with_move_follow_through(builder, facade_local, init_val, mode_fi, None);
         }
     }
 }

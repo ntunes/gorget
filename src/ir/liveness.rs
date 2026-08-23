@@ -125,12 +125,53 @@ pub struct Liveness {
     live_after: Vec<Vec<LocalBitSet>>,
 }
 
+/// Whether `MoveZero` counts as a DEF (a kill) for a liveness run.
+///
+/// The two policies answer two genuinely different questions, and the
+/// consume-site validator needs both:
+///
+/// * [`MoveZeroPolicy::Kills`] — the DEFAULT and the semantic truth for
+///   every consumer that asks "may this local still be read?". After
+///   `move_zero _x` the slot is logically dead; a later read is
+///   `UseAfterMove` and a separate validator's business.
+/// * [`MoveZeroPolicy::Blind`] — asks "would this local still be read if
+///   the `MoveZero` were not there?". This is the ONLY question that can
+///   observe a *staging* move that invents its own `MoveZero`: such a site
+///   emits `[Mv] dst = copy src; move_zero src` on a source that is read
+///   again downstream, so under `Kills` **the defect is its own alibi** and
+///   no walk over the instruction stream can see it.
+///
+/// `Blind` is consulted ONLY as a second opinion, for the `Assign`
+/// consume-site class, and only after the `Kills` run has already returned
+/// "sound" (`src/ir/validate.rs`). The shared kill edge itself is never
+/// altered — every other `is_live_after` consumer keeps the `Kills`
+/// semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoveZeroPolicy {
+    /// `MoveZero` is a def: the local's value stops being live there.
+    Kills,
+    /// `MoveZero` contributes neither a def nor a read — reads downstream
+    /// of it keep the local live across the move.
+    Blind,
+}
+
 impl Liveness {
     /// Compute liveness for `func`. Empty / malformed functions return an
     /// empty result — the validator simply sees no live-out information,
     /// which is the safe default for the consume-site rule (it errs toward
     /// "source is dead" only when explicitly proven so).
     pub fn compute(func: &Function) -> Self {
+        Self::compute_with(func, MoveZeroPolicy::Kills)
+    }
+
+    /// [`Liveness::compute`] with `MoveZero` treated as neither def nor
+    /// read — see [`MoveZeroPolicy::Blind`] for why this second instrument
+    /// exists and what it is allowed to be used for.
+    pub fn compute_move_zero_blind(func: &Function) -> Self {
+        Self::compute_with(func, MoveZeroPolicy::Blind)
+    }
+
+    fn compute_with(func: &Function, mz: MoveZeroPolicy) -> Self {
         let n_blocks = func.blocks.len();
         if n_blocks == 0 {
             return Self { live_after: Vec::new() };
@@ -148,7 +189,7 @@ impl Liveness {
         let mut uses: Vec<LocalBitSet> = Vec::with_capacity(n_blocks);
         let mut defs: Vec<LocalBitSet> = Vec::with_capacity(n_blocks);
         for bb in func.blocks.iter() {
-            let (u, d) = compute_block_use_def(bb, n_locals);
+            let (u, d) = compute_block_use_def(bb, n_locals, mz);
             uses.push(u);
             defs.push(d);
         }
@@ -249,7 +290,7 @@ impl Liveness {
                 let inst = &bb.instructions[k];
                 // live_before(inst k) = (live_after(k) - defs(k)) ∪ uses(k).
                 inst_defs_scratch.clear();
-                collect_inst_defs_into(inst, &mut inst_defs_scratch);
+                collect_inst_defs_into(inst, &mut inst_defs_scratch, mz);
                 for d in &inst_defs_scratch {
                     current.remove(*d);
                 }
@@ -285,7 +326,7 @@ impl Liveness {
 /// after `_x = ...` the previous live-set for `_x` is rewritten by this
 /// new definition; uses inside the same instruction's RHS are read first
 /// (we add them in `collect_inst_reads`).
-fn collect_inst_defs_into(inst: &Instruction, defs: &mut Vec<u32>) {
+fn collect_inst_defs_into(inst: &Instruction, defs: &mut Vec<u32>, mz: MoveZeroPolicy) {
     match inst {
         Instruction::Assign { dst, .. } => {
             // Only bare-local assigns kill the local. Projection writes
@@ -322,13 +363,22 @@ fn collect_inst_defs_into(inst: &Instruction, defs: &mut Vec<u32>) {
         | Instruction::CallExtern { dst: Some(d), .. } => {
             defs.push(d.0);
         }
-        Instruction::MoveZero { place } if place.projections.is_empty() => {
+        Instruction::MoveZero { place }
+            if place.projections.is_empty() && mz == MoveZeroPolicy::Kills =>
+        {
             // MoveZero conceptually transfers ownership and zeroes the
             // source slot. For liveness purposes this is a "kill": the
             // local's value stops being live (the next read would be
             // UseAfterMove). Treating MoveZero as a def here is what
             // makes the consume-site rule's "live_after = false after
             // a Move" hold automatically.
+            //
+            // ⚠ That automatic hold is also a BLIND SPOT, which is why
+            // [`MoveZeroPolicy::Blind`] exists: a staging site that emits
+            // its own `move_zero` on a still-read source satisfies the
+            // consume-site rule *because of the instruction that creates
+            // the bug*. The `Blind` policy skips this arm so the validator
+            // can ask the counterfactual. See `MoveZeroPolicy`.
             defs.push(place.local.0);
         }
         // No definition: side-effects only, projections, drops.
@@ -443,7 +493,11 @@ fn collect_inst_reads_into(inst: &Instruction, reads: &mut Vec<u32>) {
 /// Standard formulation:
 /// - USE[B] = locals read in B before any definition of them in B.
 /// - DEF[B] = locals defined anywhere in B.
-fn compute_block_use_def(bb: &super::BasicBlock, n_locals: usize) -> (LocalBitSet, LocalBitSet) {
+fn compute_block_use_def(
+    bb: &super::BasicBlock,
+    n_locals: usize,
+    mz: MoveZeroPolicy,
+) -> (LocalBitSet, LocalBitSet) {
     let mut use_set = LocalBitSet::with_capacity(n_locals);
     let mut def_set = LocalBitSet::with_capacity(n_locals);
     let mut reads_scratch: Vec<u32> = Vec::new();
@@ -458,7 +512,7 @@ fn compute_block_use_def(bb: &super::BasicBlock, n_locals: usize) -> (LocalBitSe
             }
         }
         defs_scratch.clear();
-        collect_inst_defs_into(inst, &mut defs_scratch);
+        collect_inst_defs_into(inst, &mut defs_scratch, mz);
         for d in &defs_scratch {
             def_set.insert(*d);
         }
@@ -860,6 +914,108 @@ mod tests {
         let live = Liveness::compute(&func);
         // After the MoveZero (inst 1): _1 is dead.
         assert!(!live.is_live_after(LocalId(1), BlockId(0), 1));
+    }
+
+    /// The staging-move shape, and the two policies giving OPPOSITE answers on
+    /// it — which is the whole reason [`MoveZeroPolicy::Blind`] exists.
+    ///
+    /// ```text
+    /// 0: _1 = 7
+    /// 1: [Mv] _2 = copy _1        <- the staging assign
+    /// 2:      move_zero _1        <- emitted by the same site
+    /// 3:      _3 = copy _1        <- a REAL later read
+    /// ```
+    ///
+    /// Under `Kills`, `_1` is dead after instruction 1 — the site's own
+    /// `MoveZero` vouches for it, so the consume-site validator reads the
+    /// staging assign as sound. Under `Blind`, `_1` is live after instruction
+    /// 1, because the read at 3 is real. The `Blind` answer is the one that
+    /// matches what the backend actually does: it elides the zero exactly when
+    /// drop-tracking proves the read unobservable, leaving `_1` and `_2`
+    /// aliasing one buffer.
+    #[test]
+    fn move_zero_blind_sees_the_read_the_kill_policy_hides() {
+        let func = Function {
+            name: "f".into(),
+            params: vec![],
+            return_type: UNIT_TYPE,
+            locals: vec![
+                mk_local(UNIT_TYPE),
+                mk_local(I64_TYPE),
+                mk_local(I64_TYPE),
+                mk_local(I64_TYPE),
+            ],
+            blocks: vec![BasicBlock {
+                instructions: vec![
+                    Instruction::Assign { mode: AssignMode::Copy,
+                        dst: Place::local(LocalId(1)),
+                        value: Operand::Constant(Constant::I64(7)) },
+                    Instruction::Assign { mode: AssignMode::Move,
+                        dst: Place::local(LocalId(2)),
+                        value: Operand::Copy(Place::local(LocalId(1))) },
+                    Instruction::MoveZero { place: Place::local(LocalId(1)) },
+                    Instruction::Assign { mode: AssignMode::Copy,
+                        dst: Place::local(LocalId(3)),
+                        value: Operand::Copy(Place::local(LocalId(1))) },
+                ],
+                terminator: Some(Terminator::Return(Operand::Constant(Constant::Unit))),
+                span_map: vec![None, None, None, None],
+                terminator_span: None,
+            }],
+            is_test_fn: false,
+            display_name: None,
+            def_span: None,
+            with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
+        };
+
+        let kills = Liveness::compute(&func);
+        let blind = Liveness::compute_move_zero_blind(&func);
+        // At the staging assign (inst 1) the two policies DISAGREE — that
+        // disagreement is exactly the `StagingMoveIntoOwnedSlot` finding.
+        assert!(!kills.is_live_after(LocalId(1), BlockId(0), 1));
+        assert!(blind.is_live_after(LocalId(1), BlockId(0), 1));
+        // And they AGREE everywhere the disagreement would be a false
+        // positive: after the real read, `_1` is dead under both.
+        assert!(!kills.is_live_after(LocalId(1), BlockId(0), 3));
+        assert!(!blind.is_live_after(LocalId(1), BlockId(0), 3));
+    }
+
+    /// The correct sibling: same staging shape, NO later read. Both policies
+    /// must agree that the source is dead, or the guard built on `Blind` would
+    /// fire on every honest move in the corpus.
+    #[test]
+    fn move_zero_blind_agrees_when_there_is_no_later_read() {
+        let func = Function {
+            name: "f".into(),
+            params: vec![],
+            return_type: UNIT_TYPE,
+            locals: vec![mk_local(UNIT_TYPE), mk_local(I64_TYPE), mk_local(I64_TYPE)],
+            blocks: vec![BasicBlock {
+                instructions: vec![
+                    Instruction::Assign { mode: AssignMode::Copy,
+                        dst: Place::local(LocalId(1)),
+                        value: Operand::Constant(Constant::I64(7)) },
+                    Instruction::Assign { mode: AssignMode::Move,
+                        dst: Place::local(LocalId(2)),
+                        value: Operand::Copy(Place::local(LocalId(1))) },
+                    Instruction::MoveZero { place: Place::local(LocalId(1)) },
+                ],
+                terminator: Some(Terminator::Return(Operand::Constant(Constant::Unit))),
+                span_map: vec![None, None, None],
+                terminator_span: None,
+            }],
+            is_test_fn: false,
+            display_name: None,
+            def_span: None,
+            with_refresh_pairs: Vec::new(),
+            inner_shared_spawns: Vec::new(),
+        };
+
+        let kills = Liveness::compute(&func);
+        let blind = Liveness::compute_move_zero_blind(&func);
+        assert!(!kills.is_live_after(LocalId(1), BlockId(0), 1));
+        assert!(!blind.is_live_after(LocalId(1), BlockId(0), 1));
     }
 
     /// Empty function (no blocks) returns an empty Liveness without panic.
