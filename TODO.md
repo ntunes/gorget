@@ -12,6 +12,36 @@
 
 **⚠ ROUND XLIII (R43) CLOSED 2026-08-22 — UNDER AN OWNER-GRANTED CONVERGENCE WAIVER** (clauses (a)+(c) failed: net +35, filed 50, closed 15 — the verdict is quoted verbatim in the DONE entry; recorded there as a WAIVER, **not** as compliance, and **NOT precedent** — R44 starts from the rule). Headline MEMORY SAFETY: two silent-corruption CRITICALs closed at their WRITE sites (M1 container-literal element-type mint; C indirect-call argument ABI), plus Track G author line-grouping. Battery FULL and GREEN both lanes: C integration 2445/0 · LLVM 2445/0 · ggdef 173/0 all targets · spec_conformance 3/0 · security 151/0 · lints 155/0 · lib 1171/0. See DONE.md 2026-08-22.
 
+**⚖ OWNER DECISION 2026-08-23 — `TODO.md` SPLITS: HANDOVER HERE, ITEMS IN A `todo/` DIRECTORY.**
+Agreed with the owner; **land BETWEEN rounds** (it is counting-neutral and moves the raw number with
+no work done, so it belongs in a baseline — same rule as this round's two re-baselines).
+- **`todo/` — one FILE PER ITEM**, filename = stable id. **TOML front-matter** above a `+++` fence for
+  the scalar fields (`id`, `mechanism`, `areas`, `lane`, `severity`, `cites`, `repro`, `filed`);
+  **raw markdown body below it, byte-identical to today's prose.** TOML for scalars because it has no
+  Norway problem and no implicit typing; the narrative never enters a string at all, so a 637-item
+  conversion cannot mangle it by escaping. Rationale: the bodies carry measurements and refuted
+  remedies, and that narrative demonstrably stopped an executor implementing a measured-wrong rule
+  this round.
+- **`TODO.md` keeps** the handover block (AGENTS.md already names it THE session-state doc), the
+  operating invariants, and a **GENERATED** index. ⚠ The index is generated + lint-enforced current
+  (regenerate → diff → fail if stale); a hand-kept index of 637 rows is the "parallel lists kept in
+  sync by hand" smell AGENTS.md names. The hot-list becomes **pointers (ids), not restated prose** —
+  restating is a drift source today.
+- **CLOSURE = `git rm` the file + the `DONE.md` entry.** Matches today's semantics (closure IS
+  removal), keeps `todo/` a genuinely pending set, keeps the arbiter trivial (count files), and git
+  history preserves the item's whole life (`git log --diff-filter=D`). ⛔ NOT `status = "closed"`
+  in place — that grows the directory forever and puts the arbiter back to interpreting field values,
+  which is the class that has produced THREE defects in it this round.
+- **Two lints fall out and both retire measured classes:** every `cites` entry must resolve (Track H
+  measured **106 of 263** items with decayed citations), and no entry may reference a deleted doc
+  (four entries this round cite a doc deleted whole, and read as live).
+- ⚠ **The arbiter gets rewritten to count files and must be RED-VERIFIED in both directions** before
+  it is trusted — it has been wrong three times this round, every time from regex-over-prose.
+- ⚠ **SEQUENCING: the directory move does NOT depend on Track I's census** (it is justified by
+  parallel-agent edits to one 4,000-line file and by prose-parsing defects). **Only the `mechanism`
+  FIELD depends on the census** proving that vocabulary can be controlled and small. Long tail ⇒ move
+  anyway, drop that field.
+
 **⚖ OWNER RULINGS 2026-08-23 — BOTH BINDING ON EVERY TRACK.**
 **(1) A mandated `known_gaps` repro counts WITH its TODO bullet, not as a second filing.** Landed in
 `scripts/convergence.sh` and RED-verified; an UNCITED gap fixture still counts on its own.
