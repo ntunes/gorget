@@ -104,9 +104,38 @@ int proto_inst_targ_tid(ProtoMethInst pmi, int i, GirModule &gmod):
         return proto_method_targ_tid(pmi.method_targs.get(i).unwrap(), &gmod)
     return resolved_to_gir_type(pmi.method_targ_tids.get(i).unwrap(), &gmod)
 
-# walk an expression collecting method-generic call sites.
+# EXHAUSTIVE over `enum Expr` in ast.gg (Core #4 one-producer). The recording
+# action lives ONLY in the EMethodCall arm; every other arm exists to RECURSE,
+# so no syntactic position can hide a method-generic call from proto discovery.
 void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
     match sexpr.expr:
+        case EIntLiteral(_):
+            pass
+        case EFloatLiteral(_):
+            pass
+        case EBoolLiteral(_):
+            pass
+        case EStringLiteral(_, _):
+            pass
+        case ECharLiteral(_):
+            pass
+        case ENoneLiteral():
+            pass
+        case EIdentifier(_):
+            pass
+        case ESelfExpr():
+            pass
+        case EIt():
+            pass
+        case EBinaryOp(p0, _, p2):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+            proto_walk_expr(*p2, &gmod, &out, &seen)
+        case EUnaryOp(_, p1):
+            proto_walk_expr(*p1, &gmod, &out, &seen)
+        case ECall(p0, p1, _):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+            for __aP1 in p1:
+                proto_walk_expr(__aP1.value, &gmod, &out, &seen)
         case EMethodCall(recv_box, mname, margs, mtargs):
             proto_walk_expr(*recv_box, &gmod, &out, &seen)
             for a in margs:
@@ -142,53 +171,205 @@ void proto_walk_expr(SpannedExpr sexpr, GirModule &gmod, Vector[ProtoMethInst] &
                             if not seen.contains(sym_b):
                                 seen.put(sym_b.clone(), true)
                                 out.push(ProtoMethInst(recv_name_b, mname, [], bm_tids, sym_b))
-        case ECall(callee_box, cargs, _):
-            proto_walk_expr(*callee_box, &gmod, &out, &seen)
-            for a in cargs:
-                proto_walk_expr(a.value, &gmod, &out, &seen)
-        case EFieldAccess(obj, _):
-            proto_walk_expr(*obj, &gmod, &out, &seen)
-        case EBinaryOp(l, _, r):
-            proto_walk_expr(*l, &gmod, &out, &seen)
-            proto_walk_expr(*r, &gmod, &out, &seen)
-        case EUnaryOp(_, inner):
-            proto_walk_expr(*inner, &gmod, &out, &seen)
-        case EIndex(b, i):
-            proto_walk_expr(*b, &gmod, &out, &seen)
-            proto_walk_expr(*i, &gmod, &out, &seen)
-        else:
-            pass
+        case EFieldAccess(p0, _):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case EIndex(p0, p1):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+            proto_walk_expr(*p1, &gmod, &out, &seen)
+        case ERange(p0, p1, _):
+            if p0 is Some(__bP0):
+                proto_walk_expr(*__bP0, &gmod, &out, &seen)
+            if p1 is Some(__bP1):
+                proto_walk_expr(*__bP1, &gmod, &out, &seen)
+        case EIf(p0, p1, p2):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+            proto_walk_stmts(p1, &gmod, &out, &seen)
+            for __ebP2 in p2:
+                if __ebP2.condition is Some(__cP2):
+                    proto_walk_expr(__cP2, &gmod, &out, &seen)
+                proto_walk_stmts(__ebP2.body, &gmod, &out, &seen)
+        case EMatch(p0, p1):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+            for __armP1 in p1:
+                if __armP1.guard is Some(__gP1):
+                    proto_walk_expr(__gP1, &gmod, &out, &seen)
+                proto_walk_stmts(__armP1.body, &gmod, &out, &seen)
+        case EClosure(_, p1):
+            proto_walk_stmts(p1, &gmod, &out, &seen)
+        case EImplicitClosure(p0):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case EArrayLiteral(p0):
+            for __eP0 in p0:
+                proto_walk_expr(__eP0, &gmod, &out, &seen)
+        case ETupleLiteral(p0):
+            for __eP0 in p0:
+                proto_walk_expr(__eP0, &gmod, &out, &seen)
+        case EDictLiteral(p0, p1):
+            for __eP0 in p0:
+                proto_walk_expr(__eP0, &gmod, &out, &seen)
+            for __eP1 in p1:
+                proto_walk_expr(__eP1, &gmod, &out, &seen)
+        case EStructLiteral(_, _, p2):
+            for __eP2 in p2:
+                proto_walk_expr(__eP2, &gmod, &out, &seen)
+        case EDotShorthand(_, p1):
+            for __aP1 in p1:
+                proto_walk_expr(__aP1.value, &gmod, &out, &seen)
+        case ETry(p0):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case EMove(p0):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case EPropagate(p0):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case EMutableBorrow(p0):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case EDeref(p0):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case EAs(p0, _):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case EBlock(p0):
+            proto_walk_stmts(p0, &gmod, &out, &seen)
+        case EListComp(p0, _, p2, p3):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+            proto_walk_expr(*p2, &gmod, &out, &seen)
+            if p3 is Some(__bP3):
+                proto_walk_expr(*__bP3, &gmod, &out, &seen)
+        case ESetComp(p0, _, p2, p3):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+            proto_walk_expr(*p2, &gmod, &out, &seen)
+            if p3 is Some(__bP3):
+                proto_walk_expr(*__bP3, &gmod, &out, &seen)
+        case EDictComp(p0, p1, _, p3, p4):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+            proto_walk_expr(*p1, &gmod, &out, &seen)
+            proto_walk_expr(*p3, &gmod, &out, &seen)
+            if p4 is Some(__bP4):
+                proto_walk_expr(*__bP4, &gmod, &out, &seen)
+        case EDefaultOp(p0, p1):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+            proto_walk_expr(*p1, &gmod, &out, &seen)
+        case EIs(p0, _, _):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case EDo(p0):
+            proto_walk_stmts(p0, &gmod, &out, &seen)
+        case EAwait(p0):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case ESpawn(p0):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case ESpawnBlocking(p0):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+        case ERethrow(p0, _, _, p3):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+            proto_walk_expr(*p3, &gmod, &out, &seen)
+        case ECatch(p0, _, p2):
+            proto_walk_expr(*p0, &gmod, &out, &seen)
+            proto_walk_expr(*p2, &gmod, &out, &seen)
+        case EFString(_, p1, _):
+            for __eP1 in p1:
+                proto_walk_expr(__eP1, &gmod, &out, &seen)
 
+# EXHAUSTIVE over `enum Stmt` (DEEP — recurses into nested statement bodies).
 void proto_walk_stmts(Vector[Stmt] stmts, GirModule &gmod, Vector[ProtoMethInst] &out, Dict[String, bool] &seen):
     for stmt in stmts:
         match stmt:
-            case SVarDecl(_, _, init, _, _, _):
-                proto_walk_expr(init, &gmod, &out, &seen)
-            case SExpr(e):
-                proto_walk_expr(e, &gmod, &out, &seen)
-            case SReturn(opt):
-                match opt:
-                    case Some(e):
-                        proto_walk_expr(e, &gmod, &out, &seen)
-                    case None:
-                        pass
-            case SAssign(_, e):
-                proto_walk_expr(e, &gmod, &out, &seen)
-            case SIf(c, tb, elifs):
-                proto_walk_expr(c, &gmod, &out, &seen)
-                proto_walk_stmts(tb, &gmod, &out, &seen)
-                for el in elifs:
-                    proto_walk_stmts(el.body, &gmod, &out, &seen)
-            case SWhile(c, b, eb):
-                proto_walk_expr(c, &gmod, &out, &seen)
-                proto_walk_stmts(b, &gmod, &out, &seen)
-                proto_walk_stmts(eb, &gmod, &out, &seen)
-            case SFor(_, p_iter, b, _, eb):
-                proto_walk_expr(p_iter, &gmod, &out, &seen)
-                proto_walk_stmts(b, &gmod, &out, &seen)
-                proto_walk_stmts(eb, &gmod, &out, &seen)
-            else:
+            case SVarDecl(_, _, w2, _, _, _):
+                proto_walk_expr(w2, &gmod, &out, &seen)
+            case SAssign(w0, w1):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+                proto_walk_expr(w1, &gmod, &out, &seen)
+            case SCompoundAssign(w0, _, w2):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+                proto_walk_expr(w2, &gmod, &out, &seen)
+            case SExpr(w0):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+            case SReturn(w0):
+                if w0 is Some(__xW0):
+                    proto_walk_expr(__xW0, &gmod, &out, &seen)
+            case SThrow(w0):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+            case SBreak():
                 pass
+            case SContinue():
+                pass
+            case SPass():
+                pass
+            case SMeta():
+                pass
+            case SMetaFor(_, w1, w2):
+                proto_walk_expr(w1, &gmod, &out, &seen)
+                proto_walk_stmts(w2, &gmod, &out, &seen)
+            case SMetaIf(w0, w1, w2):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+                proto_walk_stmts(w1, &gmod, &out, &seen)
+                for __ebW2 in w2:
+                    if __ebW2.condition is Some(__cW2):
+                        proto_walk_expr(__cW2, &gmod, &out, &seen)
+                    proto_walk_stmts(__ebW2.body, &gmod, &out, &seen)
+            case SMetaConst(_, w1):
+                proto_walk_expr(w1, &gmod, &out, &seen)
+            case SMetaForMatch(_, w1, w2):
+                proto_walk_expr(w1, &gmod, &out, &seen)
+                for __armW2 in w2:
+                    if __armW2.guard is Some(__gW2):
+                        proto_walk_expr(__gW2, &gmod, &out, &seen)
+                    proto_walk_stmts(__armW2.body, &gmod, &out, &seen)
+            case SMetaMatch(w0, w1, w2):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+                for __maW1 in w1:
+                    proto_walk_expr(__maW1.case_value, &gmod, &out, &seen)
+                    proto_walk_stmts(__maW1.body, &gmod, &out, &seen)
+                proto_walk_stmts(w2, &gmod, &out, &seen)
+            case SMetaWhile(w0, w1):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+                proto_walk_stmts(w1, &gmod, &out, &seen)
+            case SFor(_, w1, w2, _, w4):
+                proto_walk_expr(w1, &gmod, &out, &seen)
+                proto_walk_stmts(w2, &gmod, &out, &seen)
+                proto_walk_stmts(w4, &gmod, &out, &seen)
+            case SWhile(w0, w1, w2):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+                proto_walk_stmts(w1, &gmod, &out, &seen)
+                proto_walk_stmts(w2, &gmod, &out, &seen)
+            case SLoop(w0):
+                proto_walk_stmts(w0, &gmod, &out, &seen)
+            case SIf(w0, w1, w2):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+                proto_walk_stmts(w1, &gmod, &out, &seen)
+                for __ebW2 in w2:
+                    if __ebW2.condition is Some(__cW2):
+                        proto_walk_expr(__cW2, &gmod, &out, &seen)
+                    proto_walk_stmts(__ebW2.body, &gmod, &out, &seen)
+            case SMatch(w0, w1):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+                for __armW1 in w1:
+                    if __armW1.guard is Some(__gW1):
+                        proto_walk_expr(__gW1, &gmod, &out, &seen)
+                    proto_walk_stmts(__armW1.body, &gmod, &out, &seen)
+            case SWith(w0, _, w2):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+                proto_walk_stmts(w2, &gmod, &out, &seen)
+            case SAssert(w0, _):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+            case SAssertReturn(w0, _):
+                proto_walk_expr(w0, &gmod, &out, &seen)
+            case SNamedScope(_, w1):
+                proto_walk_stmts(w1, &gmod, &out, &seen)
+            case SSelect(w0):
+                for __saW0 in w0:
+                    match __saW0.op:
+                        case SORecv(_, _, __seW0):
+                            proto_walk_expr(__seW0, &gmod, &out, &seen)
+                        case SOSend(__scW0, __svW0):
+                            proto_walk_expr(__scW0, &gmod, &out, &seen)
+                            proto_walk_expr(__svW0, &gmod, &out, &seen)
+                    proto_walk_stmts(__saW0.body, &gmod, &out, &seen)
+            case SOnError(w0):
+                proto_walk_stmts(w0, &gmod, &out, &seen)
+            case SItem(_):
+                pass
+            case SSnapshot(_, _, w2):
+                proto_walk_expr(w2, &gmod, &out, &seen)
+
 
 # ── Lazy-iterator transitive adapter-instance discovery ──────────
 #
@@ -662,12 +843,18 @@ void discover_generic_calls_stmt(Stmt stmt, Dict[String, bool] &seen, Vector[Gen
                     case None:
                         pass
                 discover_generic_calls_stmts(eb.body, &seen, &instances, &tparams)
-        case SWhile(cond, body, _):
+        # The loop-else body is walked for the same reason the SIf arm above
+        # walks its else branch: a generic call whose ONLY instantiation sits
+        # in a loop-else body must still be discovered, or the mono'd body is
+        # never emitted and the link fails on `<fn>__<targs>`.
+        case SWhile(cond, body, else_body):
             discover_generic_calls_expr(cond, &seen, &instances, &tparams)
             discover_generic_calls_stmts(body, &seen, &instances, &tparams)
-        case SFor(_, iter_expr, body, _, _):
+            discover_generic_calls_stmts(else_body, &seen, &instances, &tparams)
+        case SFor(_, iter_expr, body, _, else_body):
             discover_generic_calls_expr(iter_expr, &seen, &instances, &tparams)
             discover_generic_calls_stmts(body, &seen, &instances, &tparams)
+            discover_generic_calls_stmts(else_body, &seen, &instances, &tparams)
         case SMatch(scrutinee, arms):
             discover_generic_calls_expr(scrutinee, &seen, &instances, &tparams)
             for arm in arms:

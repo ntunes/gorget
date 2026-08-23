@@ -1,0 +1,130 @@
+# Method-generic Iterator terminals in BARE (no-turbofish) form, one per
+# STATEMENT position that carries an expression.
+#
+# WHAT THIS PINS — the PRODUCER half of method-targ recording. A recorded
+# terminal mangles to `VectorIter__<elem>__<method>__<targs>`; an UNRECORDED
+# one emits the BARE `VectorIter__<elem>__<method>`, which is never declared or
+# defined, so the C compiler infers `int` and the assignment to the real struct
+# type fails to compile (or the link fails). The recorder is driven from ONE
+# chokepoint at `type_check_stmt`'s entry (self_host_typechecker/typecheck.gg);
+# before that it was wired at two arms only, and the six statement positions
+# below were all unreached on the self-host lane.
+#
+# AXES SAMPLED, deliberately:
+#  - statement position: assign RHS · compound-assign RHS · return payload ·
+#    if condition · while condition · assert condition · match scrutinee.
+#  - ELEMENT TYPE: int · String · float — because the mangled receiver name is
+#    part of the symbol, a per-type hole is invisible to a single-type net.
+# Every cell uses a DIFFERENT (element type, terminal) pair, so each position
+# owns a DISTINCT mangled symbol. That matters: the lowerer's proto-discovery
+# dedups emitted mono bodies module-wide on the mangled symbol, so a fixture
+# where two positions share a symbol would let one position mask the other.
+#
+# WHAT THIS DOES NOT PIN: the CONSUMER half (whether the mono'd BODY is
+# emitted) is only weakly covered here — one position per FILE is what isolates
+# that, and `tests/fixtures/stdlib_iter_terminals.gg` plus the expression-
+# nesting positions cover the rest of the class.
+#
+# Operands are runtime-built vectors, never literals, so const-folding cannot
+# elide the chains.
+
+from std.collections import Vector
+
+bool is_even(int x):
+    return x % 2 == 0
+
+bool gt_five(int x):
+    return x > 5
+
+int add(int a, int b):
+    return a + b
+
+bool is_long(String s):
+    return s.len() > 3
+
+bool gt_half(float f):
+    return f > 0.5
+
+bool all_ints_pass(Vector[int] v):
+    # POSITION: return payload
+    return v.iter().all(gt_five)
+
+int main():
+    Vector[int] vi = Vector[int]()
+    vi.push(6)
+    vi.push(7)
+    vi.push(8)
+
+    Vector[String] vs = Vector[String]()
+    vs.push("alpha")
+    vs.push("beta")
+
+    Vector[float] vf = Vector[float]()
+    vf.push(0.25)
+    vf.push(0.75)
+
+    # POSITION: assignment RHS
+    bool flag = false
+    flag = vi.iter().any(gt_five)
+    print(f"assign_rhs={flag}")
+
+    # POSITION: compound-assignment RHS
+    int total = 100
+    total += vi.iter().fold(0, add)
+    print(f"compound_rhs={total}")
+
+    # POSITION: return payload (via the helper above)
+    print(f"return_payload={all_ints_pass(vi)}")
+
+    # POSITION: if condition
+    if vs.iter().any(is_long):
+        print("if_cond=yes")
+    else:
+        print("if_cond=no")
+
+    # POSITION: while condition
+    int guard = 0
+    while vs.iter().all(is_long) and guard < 1:
+        guard = guard + 1
+    print(f"while_cond={guard}")
+
+    # POSITION: assert condition — OMITTED CELL, deliberately.
+    # `assert vf.iter().any(gt_half), "…"` link-fails on the RUST lane against
+    # a bare `VectorIter__double__any`: Rust's own `apply_inferred_method_targs`
+    # traversal does not reach an assert condition. The self-host lane handles
+    # it. The repro lives in `known_gaps/rust_gg_bug_assert_cond_iter_targs.gg`
+    # with an `#[ignore]`d test asserting the CORRECT output; it graduates here
+    # when the Rust traversal is made exhaustive.
+    bool half_seen = vf.iter().any(gt_half)
+    print(f"float_elem_type={half_seen}")
+
+    # POSITION: inside a `for … else` ELSE BODY.
+    # Not a new expression position — a REACHABILITY one. The chokepoint runs
+    # per statement, so it only sees a nested block if the per-arm logic
+    # recurses into it; the self-host `SFor` arm bound `else_body` and never
+    # type-checked it (its `SWhile` sibling always did), so nothing inside a
+    # for-else was checked at all and this chain emitted a bare
+    # `VectorIter__int64_t__find`. Iterates a range: the self-host lowerer
+    # drops a Vector loop's else body wholesale (filed separately).
+    int edge = vi.len()
+    for _unused in edge..edge:
+        print(_unused)
+    else:
+        # `vs` (String elements) and `find`: a pair used by no other position,
+        # so this cell owns `VectorIter__GorgetString__find__GorgetClosure`.
+        Option[String] in_else = vs.iter().find(is_long)
+        print(in_else.unwrap())
+
+    # POSITION: match scrutinee.
+    # `print(n)` and NOT `f"…{n}"`: interpolating a binding that came from a
+    # match on a METHOD-CALL scrutinee reports the binding as `<error>`
+    # (E_NonPrintableInterpolation) — a separate, filed defect. Using the
+    # f-string here would make this fixture red for an unrelated reason.
+    print("match_scrutinee=")
+    match vi.iter().find(is_even):
+        case Some(n):
+            print(n)
+        case None:
+            print("none")
+
+    return 0

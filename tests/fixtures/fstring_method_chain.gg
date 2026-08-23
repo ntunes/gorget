@@ -1,7 +1,18 @@
-# F-string interpolation segments now go through the typecheck rewriter
-# so iterator-method chains inside `{...}` get the same mangling as bare
+# F-string interpolation segments go through the typecheck rewriter so
+# iterator-method chains inside `{...}` get the same mangling as bare
 # expressions. Previously this link-failed against an un-mangled symbol;
 # users had to bind the result to a local first.
+#
+# LANE STATUS (measured, not assumed):
+#  - Rust gg (C + LLVM): all four chains compile, link and run.
+#  - self-host: the three PLAIN terminal chains compile and link — the
+#    method-targ recorder reaches every syntactic position. The ADAPTER
+#    chain (`.map(double).fold(...)`) still link-fails against
+#    `MapIter__…__fold__…`, because the lowerer's separate
+#    `discover_adapter_chain_expr` walk (lower_generics.gg) is still a
+#    partial 8-arm traversal that never sees an f-string interpolation.
+#    Filed in TODO.md with a `known_gaps` repro; do NOT read this fixture
+#    as evidence that the self-host lane is clean on adapter chains.
 
 bool is_even(int x):
     return x % 2 == 0

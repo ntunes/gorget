@@ -4495,6 +4495,172 @@ fn stdlib_iter_terminals() {
     );
 }
 
+// ── R44 Track D: loop-else walker class + the method-targ recorder chokepoint ──
+
+/// A generic instantiation whose ONLY occurrence is a loop-ELSE body.
+/// RED-verified at the pre-fix compiler in three distinct costumes: `gg check`
+/// clean then `undefined reference to 'identity__int64_t'` for the generic
+/// FUNCTION cells (C and LLVM), a `GIR module failed validation` PANIC (rc 101)
+/// for the generic STRUCT cells, and — on the self-host lane — `0` / `-`
+/// printed instead of `7` / `left-right` with rc 0. The `for` cells iterate a
+/// range and a Set on purpose; the self-host lowerer silently drops the else
+/// body of a Vector/Dict/String/bytes loop
+/// (`known_gaps/sh_forelse_else_body_dropped.gg`).
+#[test]
+fn loop_else_generic_instantiation() {
+    run_gg(
+        "loop_else_generic_instantiation.gg",
+        "99\n7\nonly-in-else\n77\nleft-right",
+    );
+}
+
+/// Bare-form method-generic Iterator terminals, one per STATEMENT position,
+/// each on a DIFFERENT element type so every position owns a distinct mangled
+/// symbol (the lowerer dedups emitted mono bodies module-wide on that symbol,
+/// so a shared one would let one position mask another). RED-verified on the
+/// pre-fix self-host driver: 7 C errors, `incompatible types when assigning to
+/// type '__gg_VectorIter__int64_t' from type 'int'` and friends. Green on the
+/// Rust lane before and after — this fixture's red lives on the SH lane.
+#[test]
+fn iter_terminal_stmt_positions() {
+    run_gg(
+        "iter_terminal_stmt_positions.gg",
+        "assign_rhs=true\ncompound_rhs=121\nreturn_payload=true\nif_cond=yes\nwhile_cond=1\nfloat_elem_type=true\nalpha\nmatch_scrutinee=\n6",
+    );
+}
+
+// KNOWN GAP (filed R44 Track D) — a closure whose `for … else` else body reads
+// an outer local does not capture it: `collect_free_vars::visit_stmt`
+// (src/ir/lowering/closures.rs) walks the loop body and swallows `else_body`
+// with `..`, while its `Stmt::If` sibling walks it. Prints `0` instead of `99`
+// with rc 0 and empty stderr on C, LLVM AND the self-host — the SILENT tier of
+// the loop-else walker class. Un-ignore + promote out of known_gaps/ when the
+// closure walkers (and their four self-host twins in lower_closures.gg) walk
+// the loop-else body.
+#[test]
+#[ignore = "KNOWN GAP: closure free-var collection skips a for/while-else body — \
+prints 0 instead of 99 on all three lanes, rc 0; TODO.md."]
+fn closure_forelse_freevar_outer_local() {
+    run_gg("known_gaps/closure_forelse_freevar_outer_local.gg", "99");
+}
+
+// KNOWN GAP (filed R44 Track D) — Rust `apply_inferred_method_targs`
+// (src/semantic/typecheck.rs) is a non-exhaustive traversal ending in a bare
+// `_ => {}`, so an Iterator terminal in an ASSERT CONDITION keeps its bare
+// mangling: `undefined reference to 'VectorIter__double__any'`. The self-host
+// lane is CORRECT here. The float element type is load-bearing — an int
+// receiver would link off the warm-up and read as an accidental green.
+#[test]
+#[ignore = "KNOWN GAP: Rust apply_inferred_method_targs misses the assert-condition \
+position — undefined reference to VectorIter__double__any; TODO.md."]
+fn rust_gg_bug_assert_cond_iter_targs() {
+    run_gg("known_gaps/rust_gg_bug_assert_cond_iter_targs.gg", "true\nassert_cond=ok");
+}
+
+// KNOWN GAP (filed R44 Track D) — Rust gg REJECTS a `Vector.iter()` chain that
+// appears only in a list-comprehension body or an `is`-pattern operand
+// (`E_NoMethodFound`, bogus `<std.collections>:26:1` span), while accepting the
+// identical expression the moment any unrelated earlier use exists. Order-
+// dependent acceptance ⇒ a defect. Root cause NOT located; it is upstream of
+// `apply_inferred_method_targs`. The same two shapes are the self-host lane's
+// last two failures, for separate reasons (comprehension mangling corruption;
+// `Option__int64_t`-from-`int`), so this file pins both lanes' work.
+#[test]
+#[ignore = "KNOWN GAP: Rust gg rejects a cold Vector.iter() chain at 7 syntactic \
+positions (order-dependent E_NoMethodFound); TODO.md."]
+fn rust_gg_bug_iter_chain_cold_position_reject() {
+    run_gg("known_gaps/rust_gg_bug_iter_chain_cold_position_reject.gg", "true\ntrue");
+}
+
+// KNOWN GAP (filed R44 Track D) — interpolating a binding that came from a
+// match on a METHOD-CALL scrutinee reports it as `<error>`
+// (E_NonPrintableInterpolation) on the Rust lane; the same match over a LOCAL
+// is fine, and `print(m)` on the identical binding works. The self-host lane
+// prints both lines correctly. NOT the "f-strings swallow error classes"
+// defect (known_gaps/sound_fstring_suppresses_sigil_reject.gg) — that one
+// suppresses a reject that should fire; this one fires one that should not.
+#[test]
+#[ignore = "KNOWN GAP: f-string interpolation of a binding from a method-call match \
+scrutinee reports type <error>; TODO.md."]
+fn fstring_interp_match_scrutinee_binding() {
+    run_gg("known_gaps/fstring_interp_match_scrutinee_binding.gg", "local=6\ndirect=6");
+}
+
+/// KNOWN GAP (filed R44 Track D), SELF-HOST lane — `for … else` over a Vector,
+/// Dict, String or String.bytes() silently drops the WHOLE else body; range and
+/// Set (the two control cells in the fixture) are correct. Rust gg prints all
+/// six lines. Compiles, links, runs, exits 0 — a silent wrong answer.
+/// ⚠ Deliberately asserts the OUTPUT: `grep -c lower_fail` on the emitted C
+/// gives 1 for the Vector/Dict arms and 0 for the String/bytes arms, so a
+/// marker-grep guard is structurally blind to half the class.
+#[test]
+#[ignore = "KNOWN GAP: self-host lower_for_{vector,dict,string,string_bytes} drop the \
+loop-else body silently; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_forelse_else_body_dropped() {
+    sh_known_gap_expect(
+        "known_gaps/sh_forelse_else_body_dropped.gg",
+        "sh_forelse_else_body_dropped",
+        "vector-else\ndict-else\nstring-else\nbytes-else\nrange-else\nset-else",
+    );
+}
+
+/// KNOWN GAP (filed R44 Track D), SELF-HOST lane — an Iterator terminal inside
+/// an IF-EXPRESSION branch is reached by no walker: the recording chokepoint is
+/// expression-shallow by design and `walk_expr_closures_inner` (typecheck.gg)
+/// has no `EIf` arm, so the branch's statement bodies are never re-entered.
+/// `undefined reference to 'VectorIter__int64_t__any'`. Rust gg prints `true`.
+#[test]
+#[ignore = "KNOWN GAP: self-host walk_expr_closures_inner has no EIf arm — an \
+if-EXPRESSION branch never reaches the method-targ recorder; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_if_expr_body_iter_targs() {
+    sh_known_gap_expect(
+        "known_gaps/sh_if_expr_body_iter_targs.gg",
+        "sh_if_expr_body_iter_targs",
+        "true",
+    );
+}
+
+/// KNOWN GAP (filed R44 Track D), SELF-HOST lane — a LAZY-ADAPTER chain
+/// (`.map`/`.filter`) terminated inside an f-string interpolation link-fails:
+/// the recorder mangles the symbol correctly, but the lowerer's separate
+/// `discover_adapter_chain_expr` walk (lower_generics.gg, 8 arms) never visits
+/// an interpolation, so no adapter body is emitted. This is the exact residual
+/// keeping `fstring_method_chain.gg` at CC-FAIL on the self-host lane.
+#[test]
+#[ignore = "KNOWN GAP: self-host discover_adapter_chain_expr is a partial walker — \
+adapter chain in an f-string link-fails on MapIter__…__fold__…; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_adapter_chain_fstring_interp() {
+    sh_known_gap_expect(
+        "known_gaps/sh_adapter_chain_fstring_interp.gg",
+        "sh_adapter_chain_fstring_interp",
+        "12\nmapped_fold=24",
+    );
+}
+
+/// Shared body for the SELF-HOST-lane `known_gaps` pins above: build (cached)
+/// the self-host lowerer driver, emit C for the fixture, compile and run it,
+/// and assert the CORRECT output — the output Rust gg already produces. Each
+/// caller is `#[ignore]`d until its lane gap closes.
+fn sh_known_gap_expect(fixture_rel: &str, tag: &str, expected: &str) {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures").join(fixture_rel);
+    let tmp_root = std::env::temp_dir().join(format!("gg_{}_{}", tag, std::process::id()));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    match self_host_emit_cc_run(&driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh") {
+        Ok(stdout) => assert_eq!(
+            stdout, expected,
+            "self-host emit-cc-run stdout for {fixture_rel} must match the Rust-lane output"
+        ),
+        Err(outcome) => panic!("self-host emit/cc/run failed for {fixture_rel}: {outcome:?}"),
+    }
+}
+
 #[test]
 fn stdlib_iter_join() {
     run_gg(

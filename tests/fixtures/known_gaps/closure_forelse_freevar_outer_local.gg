@@ -1,0 +1,39 @@
+# KNOWN GAP (C, LLVM **and** self-host — a THREE-LANE silent wrong answer).
+#
+# A closure whose `for … else` ELSE BODY reads an outer local does not capture
+# that local: `src/ir/lowering/closures.rs` `collect_free_vars::visit_stmt`
+# walks the loop BODY of a `Stmt::For` / `Stmt::While` but swallows `else_body`
+# with a `..` pattern, exactly as its `Stmt::If` sibling does NOT. The free
+# variable is never collected, so the capture slot is never populated.
+#
+# SYMPTOM: prints `0` instead of `99`. rc 0, empty stderr, `gg check` clean, on
+# ALL THREE LANES. Nothing fails loudly. This is the SILENT tier of the
+# loop-else walker class — strictly worse than the LOUD tier (an
+# `undefined reference` that stops the build), because a green suite hides it.
+#
+# NOT closed by the generic-discovery fix in `generics/mod.rs::scan_stmt` —
+# measured under that patch and re-confirmed at clean HEAD. It is a DIFFERENT
+# member of the same class and needs its own arm fix, plus the self-host twins
+# in `lower_closures.gg` (`cc_collect_stmt`, `closure_stmt_has_capture`,
+# `stmt_mutates_any`, `stmt_has_nested_closure`).
+#
+# `outer` is written from a runtime-built vector's length so const-folding
+# cannot substitute the literal.
+#
+# GRADUATES to a live top-level fixture when the closure walkers walk the
+# loop-else body on both lanes.
+
+from std.collections import Vector
+
+int main():
+    Vector[int] sizer = Vector[int]()
+    sizer.push(1)
+    int outer = 99 - sizer.len() + 1
+    Vector[int] v = Vector[int]()
+    Callable[int()] f = ():
+        for x in v:
+            return x
+        else:
+            return outer
+    print(f())
+    return 0

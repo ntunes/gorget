@@ -1,0 +1,43 @@
+# KNOWN GAP (self-host lane only; Rust gg compiles and runs this correctly).
+#
+# A method-generic Iterator terminal inside an IF-EXPRESSION branch is never
+# reached by the method-targ recorder, so the lowerer emits the BARE symbol and
+# the C link fails:
+#
+#     undefined reference to `VectorIter__int64_t__any'
+#
+# ROOT CAUSE, located: the one-producer recording chokepoint in
+# `tests/fixtures/self_host_typechecker/typecheck.gg` is exhaustive over
+# `enum Expr` but deliberately does NOT descend into the `Vector[Stmt]` bodies
+# an expression can carry — it relies on `walk_expr_closures` routing those
+# through `type_check_stmts`, which re-enters the chokepoint per statement.
+# `walk_expr_closures_inner` matches 8 of the 44 `Expr` variants and has NO
+# `EIf` arm, so an if-EXPRESSION's branch bodies are reached by nothing. It is
+# the third member of the same partial-walker class the chokepoint retired on
+# the recorder side.
+#
+# THE FIX IS TO WIDEN `walk_expr_closures_inner`, not this walker: the recording
+# walk must stay expression-shallow or it re-enters the `expr_types`
+# span.start-clobbering channel that its snapshot/restore exists to prevent
+# (RUN-confirmed both directions — see the rationale comment above
+# `record_method_targs_in_expr`).
+#
+# GRADUATES to a live top-level fixture when `walk_expr_closures_inner` reaches
+# every expression that carries statement bodies.
+
+from std.collections import Vector
+
+bool gt_five(int x):
+    return x > 5
+
+Vector[int] mk():
+    Vector[int] v = Vector[int]()
+    v.push(3)
+    v.push(9)
+    return v
+
+int main():
+    Vector[int] v = mk()
+    bool b = if v.len() > 0: v.iter().any(gt_five) else: false
+    print(b)
+    return 0

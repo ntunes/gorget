@@ -1,0 +1,57 @@
+# KNOWN GAP (Rust gg lane; the SELF-HOST lane is CORRECT here — a succession
+# milestone, not a regression).
+#
+# A method-generic Iterator terminal in an ASSERT CONDITION never has its
+# inferred method type-arguments written back into the AST, so the lowerer
+# mangles the BARE symbol and the link fails:
+#
+#     undefined reference to `VectorIter__double__any'
+#
+# ROOT CAUSE: `src/semantic/typecheck.rs` `apply_inferred_method_targs` — the
+# Pass-4.5 traversal that writes inferred targs back into the AST so an
+# inferred call is indistinguishable from a turbofish one — is a
+# hand-maintained, NON-exhaustive walk that ends in a bare `_ => {}`. The
+# statement half (`walk_stmt`) does not reach an assert condition, and the
+# expression half (`walk_expr`) is missing `DictLiteral`, `Match`, the
+# comprehension family, `Cast` and `Is`. Same class as the self-host recorder
+# hole that Track D closed with a one-producer chokepoint; the fix shape is the
+# same (exhaustive traversal derived from the AST enum).
+#
+# ⚠ THE ELEMENT TYPE IS LOAD-BEARING. `Vector[float]` is used on purpose: the
+# earlier `Vector[int]` chain warms up `VectorIter__int64_t__any__GorgetClosure`
+# module-wide, so an int assert condition would LINK for a reason unrelated to
+# what this fixture claims to test — an accidentally-correct green. Keep the
+# assert on a receiver whose element type appears nowhere else.
+#
+# The warm-up chain is also load-bearing in the other direction: WITHOUT any
+# earlier `v.iter()` use, Rust gg instead REJECTS the program outright with a
+# bogus `E_NoMethodFound: no method 'iter' found on type 'Vector[int]'` — a
+# separate, order-dependent defect filed alongside this one
+# (`rust_gg_bug_iter_chain_cold_position_reject.gg`). This fixture keeps the
+# warm-up so it isolates the LINK failure and not the reject.
+#
+# GRADUATES to a live top-level fixture when `apply_inferred_method_targs` is
+# exhaustive over both the Stmt and the Expr variant sets.
+
+from std.collections import Vector
+
+bool gt_five(int x):
+    return x > 5
+
+bool gt_half(float f):
+    return f > 0.5
+
+int main():
+    Vector[int] vi = Vector[int]()
+    vi.push(6)
+    vi.push(7)
+    # warm-up: makes the int terminal reachable, so the failure below is a LINK
+    # failure at the assert position and not the cold-position reject.
+    print(vi.iter().any(gt_five))
+
+    Vector[float] vf = Vector[float]()
+    vf.push(0.25)
+    vf.push(0.75)
+    assert vf.iter().any(gt_half), "at least one float above a half"
+    print("assert_cond=ok")
+    return 0
