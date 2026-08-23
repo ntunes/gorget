@@ -29,9 +29,21 @@
 #
 # WHAT COUNTS (no other reading is available):
 #   FILED   = a NEW TODO work item (a `- **` bullet in a categorized
-#             section) or a NEW known_gaps/*.gg fixture that is an OPEN GAP
-#             -- i.e. it has an #[ignore]d test asserting the intended
+#             section), or a NEW known_gaps/*.gg OPEN GAP that NO TODO bullet
+#             cites -- i.e. it has an #[ignore]d test asserting the intended
 #             behaviour, or no wired test at all.
+#
+#             ⚠ OWNER RULING 2026-08-23: A MANDATED REPRO COUNTS WITH ITS
+#             BULLET, NOT AS A SECOND FILING. The cardinal rule REQUIRES a
+#             durable known_gaps repro for every filed reproducible bug, so
+#             counting the repro separately charged +2 for one discovery --
+#             and clause (a) then demanded FOUR closures for it, while filing
+#             the SAME bug WITHOUT the mandated repro cost only two. The
+#             metric was rewarding a cardinal-rule violation. Measured live:
+#             one review-required filing turned a track's net -1 into +0.
+#             A repro CITED by a TODO bullet is that bullet's evidence.
+#             An UNCITED gap fixture still counts on its own, so a gap filed
+#             as a fixture with no bullet stays visible to this gate.
 #   CLOSED  = a TODO work item REMOVED, or a known_gaps fixture GRADUATED
 #             (its #[ignore] removed) / deleted.
 #   NOT A GAP AT ALL = a known_gaps fixture referenced ONLY by LIVE tests.
@@ -80,7 +92,8 @@ cd "$(dirname "$0")/.."
 # Scratch for the known_gaps classification below; removed on every exit path.
 TMP_ALL=$(mktemp); TMP_STATUS=$(mktemp); TMP_IGN=$(mktemp)
 TMP_LIVE=$(mktemp); TMP_NETS=$(mktemp)
-trap 'rm -f "$TMP_ALL" "$TMP_STATUS" "$TMP_IGN" "$TMP_LIVE" "$TMP_NETS"' EXIT
+TMP_CITED=$(mktemp); TMP_EXEMPT=$(mktemp)
+trap 'rm -f "$TMP_ALL" "$TMP_STATUS" "$TMP_IGN" "$TMP_LIVE" "$TMP_NETS" "$TMP_CITED" "$TMP_EXEMPT"' EXIT
 
 # Prose sections: `## ` headings that hold narrative, not filed work. Bullets
 # here are commentary and queue pointers. `### UNOWNED, HIGH SEVERITY` nests
@@ -199,7 +212,13 @@ known_gaps=$(
   awk '$2=="IGNORED"{print $1}' "$TMP_STATUS" | sort -u > "$TMP_IGN"
   awk '$2=="LIVE"   {print $1}' "$TMP_STATUS" | sort -u > "$TMP_LIVE"
   comm -23 "$TMP_LIVE" "$TMP_IGN" > "$TMP_NETS"      # live-ONLY = closed-bug nets
-  comm -23 "$TMP_ALL"  "$TMP_NETS" | wc -l | tr -d ' '
+  # OWNER RULING 2026-08-23 (see WHAT COUNTS above): a repro CITED by a TODO
+  # bullet is that bullet's evidence, not a second filing. Subtract those too;
+  # an UNCITED gap fixture still counts on its own.
+  grep -oE 'known_gaps/[A-Za-z0-9_/]+\.gg' TODO.md 2>/dev/null \
+    | sed 's|^known_gaps/||; s|\.gg$||; s|/.*$||' | sort -u > "$TMP_CITED"
+  cat "$TMP_NETS" "$TMP_CITED" | sort -u > "$TMP_EXEMPT"
+  comm -23 "$TMP_ALL"  "$TMP_EXEMPT" | wc -l | tr -d ' '
 )
 
 todo_items=$(awk -v prose_re="$PROSE_RE" '
