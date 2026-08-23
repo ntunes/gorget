@@ -18795,3 +18795,283 @@ fn fmt_author_row_grouping_survives_formatting() {
         failures.join("\n")
     );
 }
+
+// ===========================================================================
+// known_gaps GRADUATION RATCHET (Core #6 applied to the durable-repro contract)
+// ===========================================================================
+
+/// **A `known_gaps` fixture whose bug got fixed must be GRADUATED, not left
+/// `#[ignore]`d.** AGENTS.md "Task Continuity" makes the durable repro
+/// mandatory and says it "graduates to a live regression fixture the same round
+/// the bug is fixed" — but nothing in the suite ever RUNS an `#[ignore]`d test,
+/// so that second half was prose, and prose rots (devbook/25). A gap fixed as a
+/// side effect of an unrelated round stays filed forever: it inflates
+/// `scripts/convergence.sh`'s `known_gaps` count and leaves a TODO item
+/// describing a bug that no longer exists.
+///
+/// The behavioural instrument is `scripts/known_gaps_census.sh`, which runs the
+/// whole ignored roster and IS wired into CI (main job) — measured 1 min 47 s
+/// for all 99 rows, regenerate with `time scripts/known_gaps_census.sh`. ⚠ An
+/// earlier draft of this line said "~20 min", a pre-batching remnant: that
+/// figure is exactly the argument someone would use to DELETE the CI step, and
+/// the assertion that would stop them is 250 lines below in this same function.
+/// Regenerate it or drop it; never carry it. This is the cheap half that runs in
+/// the normal lint gate: the census's finding set is committed as
+/// `tests/gaps/PASSING_ALLOWLIST.txt` and may only ever SHRINK, mirroring
+/// `sanitize_allowlists_shrink_only` next door.
+///
+/// ⚠ A PASSING ignored test is a FINDING, not a graduation. Measured at R44:
+/// **every** passing row was passing because its assertion could not observe
+/// the gap it was parked for — an SH-lane gap wired to the Rust-lane `run_gg`,
+/// or a clone-count pathology asserted on stdout. Un-ignoring those would have
+/// deleted the tree's only record of live defects. Hence the REASON CODE on
+/// every row: `BLIND-LANE` and `BLIND-PERF` rows are owed a REWIRED ASSERTION,
+/// `PINS-TODAY` rows are owed an owner decision — none of the three is owed an
+/// un-ignore.
+///
+/// Can this guard catch its own class (Core #15e Q2)? The census can: its class
+/// is "an ignored known_gaps test silently starts passing", and running the
+/// roster is exactly that observation. This lint catches the follow-on class —
+/// a row appearing in the allowlist without adjudication, or a graduation that
+/// forgot to remove its row. Neither half sees a gap whose test was never
+/// written; that residual is the durable-repro rule itself, not this ratchet.
+#[test]
+fn known_gaps_passing_allowlist_shrink_only() {
+    // R44 census: 12 of the 98 ignored known_gaps tests passed at HEAD, every
+    // one adjudicated NOT-a-graduation. Eight were SH-lane gaps asserted via
+    // the Rust-lane `run_gg`; rewiring them onto `assert_self_host_stdout` took
+    // six of them RED, so 12 → 6. Lower this again when a row is retired.
+    //
+    // `BLIND-LANE` is deliberately NOT a code: a test asserting the wrong lane
+    // is a bug to fix (rewire it), never a row to file. `CELL-BLIND` is the
+    // survivor — right lane, but a cell whose output the defect cannot change.
+    const CEILING: usize = 6;
+    const CODES: &[&str] = &["CELL-BLIND", "BLIND-PERF", "PINS-TODAY"];
+
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = root.join("tests/gaps/PASSING_ALLOWLIST.txt");
+    let body = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let rows: Vec<(String, String)> = body
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#') && !l.trim().is_empty())
+        .map(|l| {
+            let mut it = l.split_whitespace();
+            (
+                it.next().unwrap_or_default().to_string(),
+                it.next().unwrap_or_default().to_string(),
+            )
+        })
+        .collect();
+
+    // EXACT, not `<=`. A ceiling counts rows; it does not identify them, so a
+    // contributor could delete a genuinely-graduated row and add an
+    // unadjudicated one in the same commit and stay green — a ratchet notch
+    // lost with no signal. Equality forces every removal to lower the constant
+    // and every addition to raise it, VISIBLY IN THE DIFF, which is what the
+    // message below actually promises (Core #14: an invariant asserted in an
+    // error string and enforced nowhere is rot).
+    assert_eq!(
+        rows.len(),
+        CEILING,
+        "known_gaps PASSING allowlist has {} row(s), CEILING says {CEILING}.\n\
+         GREW? An `#[ignore]`d known_gaps test started passing and was parked instead of \
+         adjudicated. Adjudicate it: GRADUATE it (un-ignore + move the fixture out of \
+         known_gaps/ + close the TODO item) if the gap is genuinely fixed, or REWIRE its \
+         assertion onto the axis the filing names if it is green-on-arrival.\n\
+         SHRANK? That is the win — lower CEILING in this same commit so the notch is \
+         recorded and cannot be spent again.\n\
+         Regenerate with `scripts/known_gaps_census.sh --check`.",
+        rows.len()
+    );
+
+    for (name, code) in &rows {
+        assert!(
+            CODES.contains(&code.as_str()),
+            "PASSING allowlist row {name:?} has reason code {code:?}, which is not one of \
+             {CODES:?}. A bare name is how an allowlist becomes a parking lot (Core #14)."
+        );
+    }
+
+    // Derive the live roster from source and reconcile. This is what makes the
+    // ratchet SELF-CLEANING: graduating a test (or deleting it) leaves a row
+    // pointing at nothing, and the lint says so.
+    //
+    // ⚠ The ignore detector matches `#[ignore` ONLY in ATTRIBUTE POSITION.
+    // `scripts/convergence.sh`'s detector matches the bare substring anywhere,
+    // so a doc comment that MENTIONS `#[ignore]` marks the next test as
+    // ignored — four live tests were miscounted as open gaps that way at R44.
+    // Do not relax this to a `contains`.
+    let mut ignored_kg: std::collections::BTreeSet<String> = Default::default();
+    for entry in fs::read_dir(root.join("tests")).expect("read tests/") {
+        let p = entry.expect("dir entry").path();
+        if p.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = fs::read_to_string(&p).expect("read test file");
+        let mut ign = false;
+        let mut cur: Option<String> = None;
+        let mut cur_is_ign = false;
+        for line in text.lines() {
+            let t = line.trim_start();
+            if t.starts_with("#[ignore") {
+                ign = true;
+                continue;
+            }
+            if let Some(rest) = t.strip_prefix("fn ").or_else(|| t.strip_prefix("pub fn ")) {
+                let name: String =
+                    rest.chars().take_while(|c| c.is_alphanumeric() || *c == '_').collect();
+                if !name.is_empty() {
+                    cur = Some(name);
+                    cur_is_ign = ign;
+                }
+                ign = false;
+                continue;
+            }
+            if cur_is_ign && line.contains("known_gaps/") {
+                if let Some(ref n) = cur {
+                    ignored_kg.insert(n.clone());
+                }
+            }
+        }
+    }
+
+    let stale: Vec<&String> = rows
+        .iter()
+        .map(|(n, _)| n)
+        .filter(|n| !ignored_kg.contains(*n))
+        .collect();
+    assert!(
+        stale.is_empty(),
+        "PASSING allowlist row(s) name no `#[ignore]`d known_gaps test: {stale:?}. \
+         Either the test was graduated (delete the row and lower the CEILING in the same \
+         commit — that is the win this ratchet exists to record) or it was renamed \
+         (update the row)."
+    );
+
+    // Registry integrity: a test that RUNS a known_gaps fixture must name one
+    // that EXISTS, otherwise the durable repro evaporated and the filing lost
+    // its evidence.
+    //
+    // ⚠ CODE ONLY, NOT COMMENTS. A doc comment saying "graduated from
+    // `known_gaps/X.gg`" is CORRECT history, and X is *supposed* to be gone —
+    // flagging those turns a working record into six false failures (measured
+    // when this check was first written). The discriminator is a `"` before the
+    // path: an argument, not prose. Glob mentions (`known_gaps/rust_gg_bug_*`)
+    // live in comments and fall out for the same reason.
+    // ⚠ THE WHOLE PATH, not just its first component. The first cut of this
+    // check consumed `[A-Za-z0-9_]` only, so `"known_gaps/snag52b/decode.gg"`
+    // collapsed to `snag52b` and the DIRECTORY's existence satisfied it —
+    // renaming any of the 15 nested `.gg` files left the lint green. That is
+    // the identical nested-repro blind spot this round found in
+    // `scripts/convergence.sh`; a guard that reproduces the bug it was written
+    // beside is worse than none (Core #15e Q2).
+    //
+    // Two spellings carry a nested fixture, and only the first is one literal:
+    //   run_gg("known_gaps/snag52b/decode.gg", …)      -> the path is complete
+    //   run_gg_dir("known_gaps/snag52b", "decode.gg", …) -> the FILE is the NEXT
+    //                                                      string argument
+    //
+    // (Writing those paths out is safe as of `f918ff45`: `scripts/convergence.sh`
+    // used to match `known_gaps/<path>.gg` anywhere on a line, so a real citation
+    // in a comment inside a LIVE fn registered a LIVE reference and silently
+    // reclassified that fixture from OPEN GAP to not-a-gap — measured, one
+    // comment line moved the arbiter 96 → 95 with no work done. It now skips
+    // comments. Do not restore placeholders here; the concrete spellings are
+    // what make the two-arm logic below legible.)
+    let kg_dir = root.join("tests/fixtures/known_gaps");
+    let next_literal = |after: &str| -> Option<String> {
+        let s = after.find('"')?;
+        let rest = &after[s + 1..];
+        let e = rest.find('"')?;
+        Some(rest[..e].to_string())
+    };
+    let mut dangling: Vec<String> = Vec::new();
+    for entry in fs::read_dir(root.join("tests")).expect("read tests/") {
+        let p = entry.expect("dir entry").path();
+        if p.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let text = fs::read_to_string(&p).expect("read test file");
+        let lines: Vec<&str> = text.lines().collect();
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with('*') {
+                continue;
+            }
+            let mut rest = *line;
+            while let Some(k) = rest.find("\"known_gaps/") {
+                rest = &rest[k + "\"known_gaps/".len()..];
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '/' | '.' | '-'))
+                    .collect();
+                if name.is_empty() {
+                    continue;
+                }
+                let mut report = |what: String| {
+                    dangling.push(format!(
+                        "{}:{} -> known_gaps/{what}",
+                        p.file_name().unwrap().to_string_lossy(),
+                        i + 1
+                    ))
+                };
+                if name.ends_with(".gg") {
+                    // Complete path — `dir/repro.gg` or `top_level.gg`.
+                    if !kg_dir.join(&name).exists() {
+                        report(name.clone());
+                    }
+                } else if kg_dir.join(format!("{name}.gg")).exists() {
+                    // STEM spelling: `assert_gg_sanitize_clean` takes a path
+                    // relative to tests/fixtures/ WITHOUT the extension and
+                    // appends `.gg` itself. Caught by this lint on its own first
+                    // real use — the check had only the `.gg` and directory
+                    // cases and reported a fixture that was sitting right there.
+                } else if !kg_dir.join(&name).is_dir() {
+                    report(name.clone());
+                } else {
+                    // Bare directory: the `.gg` is the next string argument,
+                    // which a rustfmt'd call may push onto a following line.
+                    // `rest` still begins at the literal's CLOSING quote — step
+                    // over it, or `next_literal` reads that quote as an opening
+                    // one and returns the `", "` between the two arguments.
+                    let after: String = rest.chars().skip(name.len()).collect();
+                    let tail = after.strip_prefix('"').unwrap_or(&after).to_string();
+                    let candidate = next_literal(&tail).or_else(|| {
+                        lines
+                            .get(i + 1..(i + 3).min(lines.len()))
+                            .and_then(|w| w.iter().find_map(|l| next_literal(l)))
+                    });
+                    if let Some(f) = candidate {
+                        if f.ends_with(".gg") && !kg_dir.join(&name).join(&f).exists() {
+                            report(format!("{name}/{f}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        dangling.is_empty(),
+        "test file(s) cite a known_gaps fixture that does not exist: {dangling:#?}. \
+         A filed defect's durable repro must be COMMITTED (AGENTS.md \"Task Continuity\": \
+         the /tmp triage repro evaporates, the fixture is the record)."
+    );
+
+    // The BEHAVIOURAL half must actually be invoked. This lint can only observe
+    // someone RECORDING that an ignored test started passing; the census is
+    // what observes the passing. Shipping the cheap half alone leaves the class
+    // unretired — the exact failure `every_test_target_runs_in_ci` was written
+    // for after `--test lints` sat unwired for months ("A guard CI does not run
+    // is not a guard"), reproduced here for a script instead of a target.
+    let ci = fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("ci.yml readable");
+    assert!(
+        ci.contains("known_gaps_census.sh --check"),
+        "scripts/known_gaps_census.sh --check is not run by .github/workflows/ci.yml.\n\
+         This lint is the CHEAP half of a two-part guard and cannot catch the class on its \
+         own: it fires when a human EDITS tests/gaps/PASSING_ALLOWLIST.txt, never when an \
+         `#[ignore]`d test silently starts passing. Only the census observes that. Measured \
+         2026-08-23: the full run is 1 min 47 s over all 99 rows, so there is no cost \
+         argument for leaving it out of the main job."
+    );
+}

@@ -69,6 +69,32 @@ jobs:
       - name: Structural guard ratchets
         run: cargo test --test lints
 
+      # The BEHAVIOURAL half of the known_gaps graduation ratchet, whose cheap
+      # half (`known_gaps_passing_allowlist_shrink_only`) is in the step above.
+      #
+      # It runs every `#[ignore]`d test that cites a known_gaps fixture and
+      # asserts the PASS set still equals tests/gaps/PASSING_ALLOWLIST.txt
+      # exactly. The lint alone cannot catch the class: it only fires when a
+      # human EDITS the allowlist, so it observes someone RECORDING that an
+      # ignored test started passing — never the passing itself. That
+      # observation is this script, and a script nobody invokes is prose with a
+      # shebang (compare the comment on the step above: "A guard CI does not run
+      # is not a guard").
+      #
+      # IN THE MAIN JOB, not a separate one like the sanitize sweep: measured
+      # 2026-08-23 at 1 min 47 s for all 99 rows (regenerate with
+      # `time scripts/known_gaps_census.sh`), versus ~25 min for the sweep. The
+      # marginal cost is smaller still — the step's `cargo test --no-run --tests`
+      # builds the integration binary the later steps need anyway, so it moves
+      # that build earlier rather than adding it. Per-commit is the right
+      # cadence here: a gap fixed as a side effect of an unrelated round should
+      # be caught in the commit that fixes it, while the mechanism is still in
+      # someone's head, not at the next round close.
+      - name: known_gaps graduation census
+        run: scripts/known_gaps_census.sh --check
+        env:
+          GG_BUILD_TIMEOUT_SECS: 600
+
       # The remaining test targets. Enumerated here rather than left to
       # `cargo test` because the other steps need per-target thread counts and
       # env. The `every_test_target_runs_in_ci` lint asserts this list stays

@@ -1,0 +1,41 @@
+# KNOWN GAP — a DEDUPLICATED duplicate element in a `Set[String]` literal is
+# never freed. LeakSanitizer only; stdout is correct.
+#
+#     gg check                    -> OK: no semantic errors
+#     gg build / --backend=llvm   -> rc 0
+#     run (detect_leaks=0)        -> rc 0, prints 2 / aa / bb   (CORRECT)
+#     run (detect_leaks=1)        -> rc 99, LeakSanitizer:
+#                                    Direct leak of 3 byte(s) in 1 object(s)
+#                                    ... gorget_str_cat -> mk -> main
+#
+# The set correctly rejects the second `mk("a", "a")` as a duplicate (content
+# hashing works — `len()` is 2, not 3) and then drops the rejected key on the
+# floor without freeing it. The insert path owns the key it did not store.
+#
+# ⚠ HEAP-FORCED, DELIBERATELY. `{"aa", "aa", "bb"}` with string LITERALS is a
+# FALSE NEGATIVE: a literal key is static, so there is nothing to leak and the
+# fixture goes green while the bug is untouched (AGENTS.md "Task Continuity":
+# leaks need a heap-forced value, not a literal). `mk()` concatenates at
+# runtime, so every element is a fresh `gorget_str_cat` allocation.
+#
+# ⚠ DISTINCT MECHANISM from the `Set[String]` byte-vs-str CTOR SELECTION defect
+# (`tests/fixtures/security/attack_101_set_string_heap_elem_double_free.gg`,
+# which was a DOUBLE FREE from `key_drop=NULL`). That one is fixed — the literal
+# now selects `gorget_ordered_set_new_str` and its fixture is LSan-clean, which
+# is exactly why the two are cleanly separable: this leak survives the str-keyed
+# ctor and lives on the DUPLICATE-REJECTION path, which the other fixture never
+# exercises because all of its elements are distinct.
+#
+# INTENDED: prints `2`, `aa`, `bb` and leaks nothing.
+#
+# Wired test: `set_string_dup_elem_leak` (tests/integration.rs, `#[ignore]`d),
+# asserting the INTENDED output under `--sanitize` + `detect_leaks=1`. Graduate
+# it out of `known_gaps/` when the insert path frees the rejected key.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Set[String] s = {mk("a", "a"), mk("a", "a"), mk("b", "b")}
+    print(s.len())
+    for e in s:
+        print(e)

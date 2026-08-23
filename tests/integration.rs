@@ -4585,9 +4585,19 @@ fixture lives in tests/fixtures/known_gaps/ so it stays OUT of the \
 runtime-diff corpus. Un-ignore + PROMOTE to a top-level tests/fixtures/*.gg \
 corpus fixture when the full-class scalar-equip lowering lands (see TODO.md \
 \"R43-B FOLLOW-UP\")."]
+#[serial(self_host_lowerer_driver)]
 fn equip_on_primitive_scalar_variants() {
-    run_gg(
+    // R44 census: this asserted the RUST lane while the filed gap is on the
+    // SELF-HOST — green on arrival, and green after a fix too, so it pinned
+    // nothing (Core #12). Rewired onto the lane the gap lives on.
+    //
+    // ⚠ THE FILED SYMPTOM HAS MOVED. It was a CC-FAIL (`undefined reference to
+    // int64_t__scaled`). At HEAD the SH driver never reaches `cc`: it rejects
+    // during check with `error[E_UnsupportedOperator]: operator '+' is not
+    // defined for type 'uint'`. Still broken, earlier in the pipeline.
+    assert_self_host_stdout(
         "known_gaps/equip_on_primitive_scalar_variants.gg",
+        "equip_scalar_variants",
         "43.000000\nfalse\n42",
     );
 }
@@ -5275,8 +5285,16 @@ fn catch_binding_throw_in_match_arm_ice() {
 #[test]
 #[ignore = "KNOWN GAP (SH lane): `for (i, b) in s.bytes().enumerate()` over-reads \
 the i64 slot on the self-host lane (0,16961,1,66 vs 0,65,1,66); Rust gg is correct; TODO.md."]
+#[serial(self_host_lowerer_driver)]
 fn sh_bytes_enumerate_i64_overread() {
-    run_gg("known_gaps/sh_bytes_enumerate_i64_overread.gg", "0\n65\n1\n66");
+    // R44 census: was wired to `run_gg` (the Rust lane, already correct), so it
+    // could never observe its own SH-lane gap. Rewired; SH prints
+    // `0 / 16961 / 1 / 66` at HEAD — the filed symptom, unchanged.
+    assert_self_host_stdout(
+        "known_gaps/sh_bytes_enumerate_i64_overread.gg",
+        "sh_bytes_enum",
+        "0\n65\n1\n66",
+    );
 }
 
 // PERF PATHOLOGY — Track I sibling filing (2026-07-28). `Ownership::Move if
@@ -5575,36 +5593,17 @@ fn dict_swap_remove_vector_value() {
     // SELF-HOST lane, so the assertion runs the fixture through the SH
     // driver — wiring it to `run_gg` (the Rust lane) would be GREEN ON
     // ARRIVAL, since Rust gg already produces this output.
-    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let lib_dir = manifest_dir.join("lib");
-    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
-    let fixture =
-        manifest_dir.join("tests/fixtures/known_gaps/dict_swap_remove_vector_value.gg");
-    let tmp_root = std::env::temp_dir()
-        .join(format!("gg_kg_dict_swap_vec_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
-    let result = self_host_emit_cc_run(
-        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
-    );
-    let _ = std::fs::remove_dir_all(&tmp_root);
-    match result {
-        Ok(stdout) => assert_eq!(
-            stdout,
-            "\
+    assert_self_host_stdout(
+        "known_gaps/dict_swap_remove_vector_value.gg",
+        "dict_swap_vec",
+        "\
 len=3
 taken_len=3
 taken0=20 taken1=21 taken2=22
 len=2
 k=1 first=10
 k=3 first=30",
-            "SH lane must reproduce Rust gg for Dict[int, Vector[int]].swap_remove \
-             (Option[Resource] payload lift)"
-        ),
-        Err(outcome) => panic!(
-            "SH dict_swap_remove_vector_value emit/cc/run failed: {outcome:?}"
-        ),
-    }
+    );
 }
 
 #[test]
@@ -5615,23 +5614,10 @@ k=3 first=30",
 fn dict_swap_remove_nested_resource() {
     // T-RB0: body was EMPTY — see the sibling above for why the assertion
     // runs on the SELF-HOST lane rather than through `run_gg`.
-    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let lib_dir = manifest_dir.join("lib");
-    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
-    let fixture =
-        manifest_dir.join("tests/fixtures/known_gaps/dict_swap_remove_nested_resource.gg");
-    let tmp_root = std::env::temp_dir()
-        .join(format!("gg_kg_dict_swap_nested_{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
-    let result = self_host_emit_cc_run(
-        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
-    );
-    let _ = std::fs::remove_dir_all(&tmp_root);
-    match result {
-        Ok(stdout) => assert_eq!(
-            stdout,
-            "\
+    assert_self_host_stdout(
+        "known_gaps/dict_swap_remove_nested_resource.gg",
+        "dict_swap_nested",
+        "\
 len=3
 taken_len=3
 taken0=b1
@@ -5640,13 +5626,7 @@ taken2=b3
 len=2
 k=1 first=a1
 k=3 first=c1",
-            "SH lane must reproduce Rust gg for Dict[int, Vector[String]].swap_remove \
-             (nested Option[Resource] payload lift)"
-        ),
-        Err(outcome) => panic!(
-            "SH dict_swap_remove_nested_resource emit/cc/run failed: {outcome:?}"
-        ),
-    }
+    );
 }
 
 #[test]
@@ -7578,9 +7558,15 @@ runtime-diff-only; the fixture lives in tests/fixtures/known_gaps/ so it \
 stays OUT of the runtime-diff corpus). Un-ignore + promote when generic-equip \
 classification lands (mirror the fn_sigs generic-instances pre-pass). See \
 TODO.md."]
+#[serial(self_host_lowerer_driver)]
 fn cow_named_recv_generic_equip_gap() {
-    run_gg(
+    // R44 census: the ignore reason says "Rust already satisfies it — the gap
+    // is self-host runtime-diff-only", and the body then asserted the RUST
+    // lane. Rewired onto the SH lane, which prints `Y / Y` at HEAD (the write
+    // goes through where Rust materializes) — the filed symptom, unchanged.
+    assert_self_host_stdout(
         "known_gaps/generic_equip_mutator_named_recv.gg",
+        "generic_equip_named_recv",
         "\
 Y
 A",
@@ -7990,6 +7976,40 @@ drop shape
 drop 8
 drop 7
 drop 7",
+    );
+}
+
+/// KNOWN GAP (R44 Track G, orchestrator-reproduced): a `Set[String]` literal
+/// that DEDUPLICATES a heap element leaks the rejected key. Content hashing is
+/// correct (`len()` is 2, not 3) and stdout is correct; the insert path simply
+/// never frees the key it declined to store.
+///
+/// Only LeakSanitizer can see this, which is why it is wired to
+/// `assert_gg_sanitize_clean` (`detect_leaks=1`) and not to `run_gg`.
+///
+/// ⚠ NOT the `Set[String]` byte-vs-str ctor defect — that one was a DOUBLE FREE
+/// from `key_drop=NULL`, it is fixed (the literal now selects
+/// `gorget_ordered_set_new_str`), and its fixture
+/// `security/attack_101_set_string_heap_elem_double_free.gg` is LSan-clean.
+/// This one survives that fix because it lives on the duplicate-rejection path,
+/// which that fixture never reaches — all of its elements are distinct.
+///
+/// Un-ignore + promote out of `known_gaps/` when the rejected key is freed.
+#[test]
+#[ignore = "KNOWN GAP (R44 Track G): a Set[String] literal that DEDUPLICATES a \
+HEAP element leaks the rejected key -- LeakSanitizer reports `Direct leak of 3 \
+byte(s)` from gorget_str_cat, rc 99, while stdout is correct (2 / aa / bb) and \
+detect_leaks=0 exits 0. Distinct from the byte-vs-str ctor double free \
+(security/attack_101_*, now fixed and LSan-clean): this is the \
+duplicate-rejection path. Fixture: tests/fixtures/known_gaps/\
+set_string_dup_elem_leak.gg. TODO.md."]
+fn set_string_dup_elem_leak() {
+    assert_gg_sanitize_clean(
+        "known_gaps/set_string_dup_elem_leak",
+        "\
+2
+aa
+bb",
     );
 }
 
@@ -25948,11 +25968,18 @@ fn shared_rwlock_concat_init_double_free() {
 #[test]
 #[ignore = "SH-BLOCKED (Track D+E output-review B1, 2026-08-06): SH lane blocked by \
 the reverted `< PRIM_COUNT` gate + SH `op_consume` non-scalar-inner gap (TODO.md). \
-The Rust class-fix IS proven -- this test passes on the C backend via run_gg. \
-Fixture MOVED to `known_gaps/` (out of runtime_diff auto-scan). Un-ignore + move \
+The Rust class-fix IS proven. Fixture MOVED to `known_gaps/` (out of runtime_diff \
+auto-scan). ASSERTS THE SH LANE (R44 census: the old run_gg wiring measured the \
+Rust lane, which the sentence above already calls correct — green on arrival). \
+SH at HEAD: rc 134, `free(): double free detected in tcache 2`. Un-ignore + move \
 back once the SH op_consume follow-up lands."]
+#[serial(self_host_lowerer_driver)]
 fn shared_spawn_amp_param() {
-    run_gg("known_gaps/shared_spawn_amp_param.gg", "hello world-forced!");
+    assert_self_host_stdout(
+        "known_gaps/shared_spawn_amp_param.gg",
+        "shared_spawn_amp_param",
+        "hello world-forced!",
+    );
 }
 
 // GRADUATED to tests/fixtures/security/guard_get_into_dict_put_double_free.gg
@@ -26085,11 +26112,21 @@ fn shared_fstring_init() {
 #[test]
 #[ignore = "SH-BLOCKED (Track D+E output-review B1, 2026-08-06): the `with v:` block \
 requires the SH shared machinery; SH silently falls non-scalar shared through to \
-plain var-decl (the reverted `< PRIM_COUNT` gate). The Rust class-fix IS proven -- \
-this test passes on the C backend. Fixture MOVED to `known_gaps/`. Un-ignore + \
-move back once the SH op_consume follow-up (TODO.md) lands."]
+plain var-decl (the reverted `< PRIM_COUNT` gate). The Rust class-fix IS proven. \
+Fixture MOVED to `known_gaps/`. ⚠ THIS CELL HAS NO `spawn`, so the SH lane prints \
+the RIGHT ANSWER (`1`) with the sharing entirely absent — R44 measured 0 \
+occurrences of rwlock/pthread_mutex/gorget_shared in the SH-emitted C against 137 \
+in Rust gg's. It is ACCIDENTALLY CORRECT (Core #15e Q6), not fixed, which is why \
+it stays ignored: the assertion below cannot go red for this gap and the sibling \
+`spawn` cells are the ones that can. Un-ignore + move back once the SH op_consume \
+follow-up (TODO.md) lands."]
+#[serial(self_host_lowerer_driver)]
 fn shared_vector_ctor_init() {
-    run_gg("known_gaps/shared_vector_ctor_init.gg", "1");
+    assert_self_host_stdout(
+        "known_gaps/shared_vector_ctor_init.gg",
+        "shared_vector_ctor_init",
+        "1",
+    );
 }
 
 #[test]
@@ -26114,31 +26151,51 @@ fn shared_struct_call_returned() {
 
 #[test]
 #[ignore = "SH-BLOCKED (Track D+E output-review B1, 2026-08-06): ArcRwLock + `with s:` \
-requires SH's shared machinery. The Rust class-fix IS proven -- this test passes on \
-the C backend. Fixture MOVED to `known_gaps/`. Un-ignore + move back once the SH \
-op_consume follow-up (TODO.md) lands."]
+requires SH's shared machinery. The Rust class-fix IS proven. Fixture MOVED to \
+`known_gaps/`. ⚠ NO `spawn` in this cell, so the SH lane prints the right answer \
+(`hello`) with no synchronisation emitted at all — see the sibling note on \
+`shared_vector_ctor_init`; ACCIDENTALLY CORRECT, not fixed. Un-ignore + move back \
+once the SH op_consume follow-up (TODO.md) lands."]
+#[serial(self_host_lowerer_driver)]
 fn shared_rwlock_call_init() {
-    run_gg("known_gaps/shared_rwlock_call_init.gg", "hello");
+    assert_self_host_stdout(
+        "known_gaps/shared_rwlock_call_init.gg",
+        "shared_rwlock_call_init",
+        "hello",
+    );
 }
 
 #[test]
 #[ignore = "SH-BLOCKED (Track D+E output-review B1, 2026-08-06): spawn + `&`-param on \
 non-scalar `shared Vector` requires SH's shared machinery + shared-spawn dispatch. \
-The Rust class-fix IS proven -- this test passes on the C backend. Fixture MOVED \
-to `known_gaps/`. Un-ignore + move back once the SH op_consume follow-up (TODO.md) \
-lands."]
+The Rust class-fix IS proven. Fixture MOVED to `known_gaps/`. ASSERTS THE SH LANE \
+(R44 census). This is one of the three `spawn` cells that CAN see the gap — SH \
+prints `1` at HEAD where `3` is correct. Un-ignore + move back once the SH \
+op_consume follow-up (TODO.md) lands."]
+#[serial(self_host_lowerer_driver)]
 fn shared_spawn_grow_vector() {
-    run_gg("known_gaps/shared_spawn_grow_vector.gg", "3");
+    assert_self_host_stdout(
+        "known_gaps/shared_spawn_grow_vector.gg",
+        "shared_spawn_grow_vector",
+        "3",
+    );
 }
 
 #[test]
 #[ignore = "SH-BLOCKED (Track D+E output-review B1, 2026-08-06): spawn + `&`-param on \
 non-scalar `shared String` + PendingSharedAsync path requires SH's shared machinery. \
-The Rust class-fix IS proven -- this test passes on the C backend. Fixture MOVED \
-to `known_gaps/`. Un-ignore + move back once the SH op_consume follow-up (TODO.md) \
-lands."]
+The Rust class-fix IS proven. Fixture MOVED to `known_gaps/`. ASSERTS THE SH LANE \
+(R44 census). A `spawn` cell, so it CAN see the gap — SH aborts at HEAD (rc 134, \
+`free(): double free detected in tcache 2`), i.e. the SH-lane face of this class is \
+memory-unsafe, not merely wrong. Un-ignore + move back once the SH op_consume \
+follow-up (TODO.md) lands."]
+#[serial(self_host_lowerer_driver)]
 fn shared_spawn_async_bump() {
-    run_gg("known_gaps/shared_spawn_async_bump.gg", "hello world!");
+    assert_self_host_stdout(
+        "known_gaps/shared_spawn_async_bump.gg",
+        "shared_spawn_async_bump",
+        "hello world!",
+    );
 }
 
 // ── Control cells (green at HEAD, must stay green after the class-fix) ──
@@ -34393,6 +34450,54 @@ fn self_host_emit_cc_run(
     Ok(String::from_utf8_lossy(&run.stdout).trim_end().to_string())
 }
 
+/// Assert a fixture's stdout **on the SELF-HOST lane**: emit C with the
+/// self-host driver, `cc` it, run it, compare.
+///
+/// **Use this, not `run_gg`, whenever the filed gap lives on the SH lane.**
+/// `run_gg` drives Rust gg, so a test parked for an SH-lane defect that calls
+/// it asserts the lane that is *already correct*: it is green the day it is
+/// written and green the day the gap is fixed, so its `#[ignore]` guards
+/// nothing (Core #12, "green on arrival is not coverage"). R44's census
+/// measured eight such tests — every one of them passing, none of them a
+/// graduation — which is why this helper exists instead of an eighth copy of
+/// the same thirty lines (Core #4: centralize at the producer).
+///
+/// ⚠ PARTIAL EXTRACTION, and nothing forces the next test through it. The ten
+/// known_gaps SH-lane tests route here, but `self_host_emit_cc_run` still has
+/// ~21 other call sites in this file, several of them the identical
+/// `build_gg_dir_cached` -> `tmp_root` -> `match { Ok => assert_eq!, Err =>
+/// panic! }` shape. There is no arm-count lint, so a new SH-lane test can still
+/// be a paste. Converting the mechanical ones is filed in TODO.md; until it
+/// lands, "use this helper" is a convention, not a guard.
+///
+/// `tag` disambiguates the scratch directory; keep it short and unique.
+/// A driver failure, `cc` failure, crash or timeout panics with the outcome —
+/// which is the *correct* red for a still-open SH gap.
+fn assert_self_host_stdout(fixture_rel: &str, tag: &str, expected: &str) {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures").join(fixture_rel);
+    assert!(fixture.exists(), "Fixture not found: {}", fixture.display());
+
+    let tmp_root = std::env::temp_dir().join(format!("gg_sh_{tag}_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let result = self_host_emit_cc_run(
+        &driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "sh",
+    );
+    let _ = std::fs::remove_dir_all(&tmp_root);
+
+    match result {
+        Ok(stdout) => assert_eq!(
+            stdout.trim(),
+            expected.trim(),
+            "SELF-HOST lane output mismatch for {fixture_rel}",
+        ),
+        Err(outcome) => panic!("self-host emit/cc/run failed for {fixture_rel}: {outcome:?}"),
+    }
+}
+
 /// Full corpus of `.gg` fixtures (read_dir + ext=="gg" + sort), mirroring the
 /// corpus enumeration in `c_emit_comparison`.
 fn runtime_parity_corpus(manifest_dir: &Path) -> Vec<PathBuf> {
@@ -36125,6 +36230,13 @@ fn assert_gg_sanitize_clean(stem: &str, expected: &str) {
     let fixture = manifest_dir.join("tests/fixtures").join(format!("{stem}.gg"));
     assert!(fixture.exists(), "fixture not found: {}", fixture.display());
 
+    // `stem` may name a SUBDIRECTORY (`known_gaps/foo`), which is how a filed
+    // leak's durable repro is spelled. Only the last component may reach the
+    // scratch path and the output binary name — interpolating the slash made
+    // `gg build -o` write into a directory that does not exist, and the failure
+    // read as "the sanitize build is broken" rather than "the harness cannot
+    // spell this path".
+    let stem = stem.rsplit('/').next().unwrap_or(stem);
     let tmp_root = std::env::temp_dir().join(format!(
         "gg_elemdrop_asan_{}_{}_{}",
         stem,
@@ -47578,20 +47690,31 @@ fn release_flag_optimizes_at_o2() {
 // ════════════════════════════════════════════════════════════════════════════
 
 /// KNOWN GAP — B1: a `&`-arg naming a BY-VALUE place silently loses the write.
-/// Measured at HEAD on C (identical on LLVM): every one of the nine rows prints
-/// the UNCHANGED seed. ggdef prints the incremented value for the five rows in
-/// its subset, so the definition lane is right and both production backends are
-/// wrong (Core #8).
+/// Measured at HEAD on C (identical on LLVM): every one of the original nine
+/// rows printed the UNCHANGED seed. ggdef prints the incremented value for the
+/// rows in its subset, so the definition lane was right and both production
+/// backends were wrong (Core #8).
 ///
-/// PARTIAL along the field-type axis (Core #12) — do NOT read this as complete.
-/// Covered: `int` · `float` · `bool` · plain struct · tuple · Dict value ·
+/// FIFTEEN ROWS as of R44 — the fixture grew by six, and this comment grew with
+/// it rather than staying a nine-row description of a fifteen-row file.
+/// Covered here: `int` · `float` · `bool` · plain struct · tuple · Dict value ·
 /// Vector element, plus two rows with NO struct at all (`&vv[0]`, `&dd["k"]` on
-/// plain locals), which is a widening of the filed "by-value FIELD" framing.
-/// The remaining cells of the axis — user enum with a VALUE payload, the
-/// resource/value contrast INSIDE each type kind, `Option[int]`, generic struct
-/// field, nested collection, generic function — are covered by the sibling
-/// fixtures `cow_amp_projection_type_axis` and
-/// `cow_amp_projection_resource_value_split`, added with the fix.
+/// plain locals) — a widening of the filed "by-value FIELD" framing — plus rows
+/// 10-15: user ENUM field · `Option[int]` field · GENERIC struct field · NESTED
+/// collection element · GENERIC function callee · MATCH-BINDING root.
+///
+/// ⚠ FOUR of those six are a deliberate SECOND sample, not first coverage.
+/// `cow_amp_projection_type_axis` already covers the value-payload enum,
+/// `Option[int]` field, generic struct field and nested collection element (its
+/// own header names them). Only the GENERIC FUNCTION CALLEE and the
+/// MATCH-BINDING ROOT were uncovered anywhere before R44. They are duplicated
+/// here on purpose: the filing that enumerated them asked for the ENUM cell in
+/// THIS repro specifically, and all fifteen rows now regress together under one
+/// chokepoint break, which is the property a net wants.
+///
+/// STILL IN THE SIBLINGS, not here: the resource/value contrast INSIDE each type
+/// kind (`cow_amp_projection_type_axis` and
+/// `cow_amp_projection_resource_value_split`, added with the fix).
 /// The thin-pointer cells of the same axis (`String`, `Vector[int]` fields — the
 /// two that used to work by accident) are the live control
 /// `security.rs::sound_amp_field_thinptr_control_safe`, and the whole-bare-local
@@ -47600,7 +47723,11 @@ fn release_flag_optimizes_at_o2() {
 /// GRADUATED from `known_gaps` with the Family-1 chokepoint (`try_resolve_place`
 /// as the single place producer for both `&`-formation faces). RED-verified
 /// against the pre-fix compiler at that commit: printed
-/// `10 / 10.000000 / false / 10 ×6`, i.e. all nine rows dropped the write.
+/// `10 / 10.000000 / false / 10 ×6`, i.e. all nine rows AS THEY THEN WERE
+/// dropped the write. Rows 10-15 were added later (R44) and RED-verified as
+/// part of the whole net: short-circuiting `try_resolve_place` to `None`
+/// regresses all FIFTEEN at once, to
+/// `10 / 10.000000 / false / 10 ×6 / RED / 10 / 10 / 10 / 9 / 10`.
 #[test]
 fn sound_amp_byvalue_place_writethrough() {
     run_gg(
@@ -47610,6 +47737,12 @@ fn sound_amp_byvalue_place_writethrough() {
 11.000000
 true
 11
+11
+11
+11
+11
+11
+BLUE
 11
 11
 11

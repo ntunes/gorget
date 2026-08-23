@@ -1294,20 +1294,78 @@ fn security_amp_for_in_element_assign_double_free() {
     );
 }
 
+/// GRADUATED 2026-08-23 (R44 Track G census). The `Set[String]` byte-vs-str
+/// ctor defect is fixed: `lower_set_literal_from_array`
+/// (`src/ir/lowering/exprs/collections.rs`) now writes the element type through,
+/// so the literal selects `gorget_ordered_set_new_str` and the set can own its
+/// heap keys. The fix landed as a side effect of R43's container-literal
+/// element-type work, under a different headline, which is why the entry stayed
+/// open for four days after the bug stopped existing — and why the census that
+/// found it is now a CI gate.
+///
+/// The cell still needs TWO read loops and HEAP elements: one loop is
+/// accidentally correct and literal elements are a false negative, which is how
+/// this shape was twice reported as not crashing (Core #15e Q6). Do not
+/// simplify the fixture.
+///
+/// RED-VERIFY — break `gorget_ordered_set_new_str` to return the byte-keyed
+/// `gorget_dict_new(sizeof(GorgetString), 0)` (same arity, so the break is
+/// exactly `key_drop=NULL` and nothing else), then this test fails with
+/// `AddressSanitizer: attempting double-free`. Verified 2026-08-23. Either
+/// route works, but ⚠ **the C runtime is EMBEDDED IN THE COMPILER BINARY**, so:
+///   * source route — edit `src/backend/c/runtime/runtime_set.c` **and then
+///     `cargo build`**. Rebuilding only the fixture is a NO-OP; the break
+///     silently does not apply and you get rc 0 with correct output, which
+///     reads as "the bug is gone". Two people hit this.
+///   * emitted-C route — `gg build --sanitize <fixture>`, edit the
+///     `gorget_ordered_set_new_str` body in the generated `.c`, then
+///     `cc -O0 -g -o broken broken.c -lm -lpthread` and run it. No compiler
+///     rebuild needed.
+///
+/// ⚠ `security_safe` runs with `detect_leaks=0`, so it guards the double free,
+/// not the leak. The leak half was checked separately and is also gone (rc 0
+/// under `detect_leaks=1`), and the live-source cell below is the one wired to
+/// `security_safe_no_leak`.
 #[test]
-#[ignore = "SECURITY KNOWN GAP (found 2026-08-17 by the Track-E brief-review pass 3, \
-orchestrator-reproduced): a Set[String] built from HEAP elements uses the byte-based \
-gorget_ordered_set_new instead of _new_str, so it has key_drop=NULL and cannot own its \
-keys -- READ-ONLY iteration twice then DOUBLE FREES, SIGABRT on BOTH backends, while \
-`gg check` reports \"OK: no semantic errors\". NO assignment anywhere, so it is a THIRD \
-mechanism distinct from the for-in element rebind and from unwrap-on-a-borrowed-payload. \
-⚠ The cell needs TWO loops and HEAP elements: one loop is ACCIDENTALLY CORRECT and \
-literal elements are a false negative -- which is how this was twice reported as not \
-crashing. Un-ignore when the str-keyed ctor is selected for resource-typed elements."]
 fn security_set_string_heap_elem_double_free() {
     // INTENDED: reading a set of Strings twice prints them twice and exits 0.
     security_safe(
         "attack_101_set_string_heap_elem_double_free",
+        "aa\nbb\naa\nbb",
+    );
+}
+
+/// LIVE-SOURCE cell of the set-literal element-ownership axis — the sibling of
+/// `security_set_string_heap_elem_double_free` (whose elements are dead
+/// temporaries). Building a `Set[String]` from live named locals must CLONE
+/// them, and the sources are read afterwards.
+///
+/// ⚠ Those reads are a FORWARD guard, not a demonstrated one: forcing the
+/// literal to move a live local was measured NOT to change this output, because
+/// `key_materialize` deep-copies the key and the `MoveZero` is elided. What the
+/// cell actually pins is the source-liveness AXIS (its other value is the
+/// sibling) and a leaked clone on this path.
+///
+/// This cell was BLOCKED, not merely uncovered: the clone-if-live picker for set
+/// literals had been reverted because a live element's clone leaked into the
+/// byte-variant set, leaving `Set[String] s = {x, y}` as a validator panic. The
+/// same ctor-selection fix unblocked it, so the axis is covered on both values
+/// for the first time.
+///
+/// Wired to `security_safe_no_leak` (`detect_leaks=1`) rather than
+/// `security_safe`, because the failure mode this cell risks is a LEAKED CLONE,
+/// which is stdout-invisible and which a `detect_leaks=0` run passes.
+///
+/// ⚠ THIS ONE COULD NOT BE MADE RED — four breaks of the set-literal ownership
+/// path all left it green, because `_new_str`'s `key_materialize` deep-copies
+/// the key inside `gorget_set_add` and hides the caller-side decision. The
+/// fixture header enumerates all four and states what the cell pins instead (it
+/// was a validator PANIC before the fix, and the sources must survive). It is a
+/// boundary/control cell, not a mechanism guard — do not cite it as one.
+#[test]
+fn set_string_live_source_elements_safe() {
+    security_safe_no_leak(
+        "set_string_live_source_elements",
         "aa\nbb\naa\nbb",
     );
 }
