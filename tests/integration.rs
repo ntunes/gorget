@@ -25821,6 +25821,59 @@ done",
 // Meta (Compile-Time) Tests
 // ═══════════════════════════════════════════════════════════════
 
+// ── R44 Track E: a `meta` constant as an ARRAY SIZE ─────────────
+//
+// `meta.rs substitute_type` used to drop `Type::Array`'s SIZE expression on
+// the floor (`Type::Array { element, .. }`), so `N` in `int[N]` was never
+// substituted and the size silently resolved to 0. Every cell below was
+// `gg check` rc 1 with ``expected `int[0]`, found `int[3]``` before the fix.
+//
+// AXIS = array-size position. Cells: local decl (live, wired to RUN),
+// fn parameter, fn return type. The STRUCT-FIELD cell is not covered here —
+// it is blocked by a separate, older defect (see `known_gaps`).
+//
+// ⚠ These three tests are LIVE (not `#[ignore]`d) but their fixtures live in
+// `known_gaps/` for PLACEMENT reasons only: `runtime_parity_corpus` auto-scans
+// top-level `tests/fixtures/*.gg`, and the self-host lane has NO `Type[N]`
+// array-type production at all, so a top-level row would be own-round
+// non-MATCH inflow against `RUNTIME_DIFF_NONMATCH_CEILING` — forbidden by
+// Core #9 ⊕. Same precedent as `cow_loop_bare_param_tuple_assign`. Promote
+// when the self-host grows fixed-size array types (filed in TODO.md).
+
+#[test]
+fn meta_const_array_size_local() {
+    // 10 + 20 + 30
+    run_gg("known_gaps/meta_const_array_size_local.gg", "60");
+}
+
+#[test]
+fn meta_const_array_size_param() {
+    // ACCEPTANCE is this cell's point. The RUNTIME is blocked by an unrelated
+    // filed gap — a fixed-size array in a function SIGNATURE miscompiles even
+    // with a LITERAL size (`known_gaps/fixed_array_in_signature_miscompiles.gg`)
+    // — so the run assertion lives in the `#[ignore]`d sibling below with the
+    // CORRECT expected output, per "Don't redesign around compiler gaps".
+    check_gg_ok("known_gaps/meta_const_array_size_param.gg");
+}
+
+#[test]
+#[ignore = "blocked by known_gaps/fixed_array_in_signature_miscompiles.gg — fixed-size array params miscompile even with a literal size; un-ignore when that lands"]
+fn meta_const_array_size_param_runs() {
+    run_gg("known_gaps/meta_const_array_size_param.gg", "60");
+}
+
+#[test]
+fn meta_const_array_size_return() {
+    // Same split as the parameter cell above, same filed blocker.
+    check_gg_ok("known_gaps/meta_const_array_size_return.gg");
+}
+
+#[test]
+#[ignore = "blocked by known_gaps/fixed_array_in_signature_miscompiles.gg — fixed-size array returns miscompile even with a literal size; un-ignore when that lands"]
+fn meta_const_array_size_return_runs() {
+    run_gg("known_gaps/meta_const_array_size_return.gg", "60");
+}
+
 #[test]
 fn meta_basic() {
     run_gg("meta_basic.gg", "1024\n512\n1.0\ntrue\n70\n99\n100");
@@ -26626,6 +26679,70 @@ fn shared_with_check_then_act() {
     // never checked the warning at all (it's on stderr). We assert the warning +
     // clean build/run instead, and leave the racy stdout unpinned.
     build_gg_expect_warning("shared_with_check_then_act.gg", "condition may no longer hold");
+}
+
+// ─── W_CompoundYieldRace: the RHS walker under-recurses (FILED GAP) ────────
+//
+// `src/semantic/safety/helpers.rs:333 expr_contains_yield_point` hand-rolls its
+// recursion and ends in `_ => false` (`helpers.rs:375`), so an effectful call
+// wrapped in any child-bearing `Expr` variant it forgot is invisible and the
+// `CompoundYieldRace` warning goes SILENTLY MISSING on a racy program. It is the
+// sibling consumer of the purity walker R44 Track E routed through
+// `parser::visitor::visit_expr_children`; this second walker on the same warning
+// path was left hand-rolled. Filed in TODO.md — file, do not fix: the conversion
+// is its own phase, and it must retire the class (route this walker through the
+// chokepoint) rather than add three arms.
+//
+// AXIS = the `Expr` variant wrapping the effectful call in the compound
+// assignment's RHS. All four cells live in ONE fixture over four distinct shared
+// variables, so each test names its own cell in the expected message and the
+// CONTROL is measured on the very same file — a positive control for the
+// harness, not a separate program that might differ for some other reason.
+//
+// MEASURED at the fixture's landing commit: `gg check` rc 0 and exactly ONE
+// `compound assignment reads shared …` warning, for `ctrl`. Break-and-watch on
+// `expr_contains_yield_point` (add `ListComprehension`/`StringLiteral`/
+// `DictLiteral` arms, rebuild) makes ALL FOUR fire; restoring drops back to one.
+// The three `#[ignore]`d tests below therefore assert the INTENDED state and are
+// RED at HEAD by construction. Un-ignore all three the round the walker is
+// converted, and promote the fixture out of `known_gaps/`.
+
+/// CONTROL — the same fixture, the same `hidden()`, a bare `Call` in the RHS.
+/// This one warns today. If it ever stops, the three ignored siblings below
+/// stop meaning anything, so this test is what keeps them honest.
+#[test]
+fn compound_yield_race_rhs_direct_call_control() {
+    check_gg_warns(
+        "known_gaps/compound_yield_race_rhs_walker_underrecurses.gg",
+        "compound assignment reads shared `ctrl`",
+    );
+}
+
+#[test]
+#[ignore = "filed gap: expr_contains_yield_point's `_ => false` skips ListComprehension, so the CompoundYieldRace warning is silently missing; un-ignore when the walker is routed through visit_expr_children"]
+fn compound_yield_race_rhs_list_comprehension() {
+    check_gg_warns(
+        "known_gaps/compound_yield_race_rhs_walker_underrecurses.gg",
+        "compound assignment reads shared `lc`",
+    );
+}
+
+#[test]
+#[ignore = "filed gap: expr_contains_yield_point's `_ => false` skips StringLiteral interpolations, so the CompoundYieldRace warning is silently missing; un-ignore when the walker is routed through visit_expr_children"]
+fn compound_yield_race_rhs_fstring_interpolation() {
+    check_gg_warns(
+        "known_gaps/compound_yield_race_rhs_walker_underrecurses.gg",
+        "compound assignment reads shared `fs`",
+    );
+}
+
+#[test]
+#[ignore = "filed gap: expr_contains_yield_point's `_ => false` skips DictLiteral, so the CompoundYieldRace warning is silently missing; un-ignore when the walker is routed through visit_expr_children"]
+fn compound_yield_race_rhs_dict_literal() {
+    check_gg_warns(
+        "known_gaps/compound_yield_race_rhs_walker_underrecurses.gg",
+        "compound assignment reads shared `dl`",
+    );
 }
 
 #[test]
@@ -43427,6 +43544,65 @@ fn sound_amp_box_tuple_field_cc_fail() {
         "ERR(propagated)",
     );
 }
+
+// ══════════════════════════════════════════════════════════════
+// R44 Track E — fixed-size-array gaps found while fixing the
+// `meta`-constant array-size defect. All three are SEPARATE from that
+// fix and reproduce with a LITERAL size or with no `meta` at all.
+// ══════════════════════════════════════════════════════════════
+
+/// KNOWN GAP — an array size that is a CONST EXPRESSION (not a bare integer
+/// literal) is silently resolved to ZERO by `src/semantic/types.rs:535-542`'s
+/// `_ => 0` arm.
+///
+/// TWO FACES: (a) wrong REJECTION — `int[2 + 1] a = […]` is rc 1 with
+/// ``expected `int[0]`, found `int[3]` ``, as is a const-generic
+/// `void g[const int N](int[N] xs)` call; (b) wrong ACCEPTANCE — the same
+/// expression as a STRUCT FIELD is rc 0 through `gg build`, emitting
+/// `struct __gg_Buf { uint8_t data; }` for a three-element int array.
+///
+/// Causation proved by break-and-watch (`_ => 0` → `_ => 99` flips both
+/// rejecting probes to ``expected `int[99]` ``). The language reference's
+/// `struct FixedArray[T, const int N]: T[N] data` does NOT go through this
+/// arm — `T[N]` in a field position parses as `Type::Named { generic_args }`,
+/// measured rc 0 both at HEAD and under the break — so fixing this cannot
+/// regress it. See the fixture header and `TODO.md`.
+#[test]
+#[ignore = "KNOWN GAP: a non-literal array size resolves to 0 (`types.rs` `_ => 0`), which both \
+wrongly REJECTS `int[2 + 1] a = […]` and wrongly ACCEPTS an `int[2 + 1]` struct field as `int[0]`. \
+Asserts the INTENDED size-3 behaviour; TODO.md. Un-ignore when const-expr array sizes are \
+evaluated."]
+fn array_size_const_expr_not_evaluated() {
+    run_gg("known_gaps/array_size_const_expr_not_evaluated.gg", "60");
+}
+
+/// KNOWN GAP — a fixed-size array in a function SIGNATURE (parameter or
+/// return type) is check-clean, builds, and prints GARBAGE. Reproduces with a
+/// LITERAL size, so it is not the `meta`-constant array-size defect fixed in
+/// R44 Track E (that one was a `gg check` rejection; its live fixtures are
+/// `meta_const_array_size_*.gg`). The LOCAL-VARIABLE cell works.
+#[test]
+#[ignore = "KNOWN GAP: a fixed-size array as a fn parameter or return type miscompiles to garbage \
+(check-clean, rc 0, uninitialised values) even with a literal size. Asserts the INTENDED output; \
+TODO.md. Un-ignore when fixed arrays get a real call-boundary ABI."]
+fn fixed_array_in_signature_miscompiles() {
+    run_gg("known_gaps/fixed_array_in_signature_miscompiles.gg", "60\n60");
+}
+
+/// KNOWN GAP — a struct FIELD of fixed-size-array type is check-clean and then
+/// fails the C compile (`void value not ignored as it ought to be`), with the
+/// raw generated-C error leaking to the user. Reproduces with a LITERAL size.
+/// Distinct from its two filed cousins sharing that C symptom (`catch` on a
+/// void fallible call; `&(*b).0` tuple field through a Box deref): the
+/// discriminator is the field's TYPE, with no `catch`, `Box` or tuple present.
+#[test]
+#[ignore = "KNOWN GAP: a struct field of fixed-array type passes `gg check` then fails the C build \
+with `void value not ignored as it ought to be`, even with a literal size. Asserts the INTENDED \
+output; TODO.md. Un-ignore when the array field gets an element type at emit."]
+fn fixed_array_struct_field_cc_fail() {
+    run_gg("known_gaps/fixed_array_struct_field_cc_fail.gg", "60");
+}
+
 
 /// FAMILY-1 — the OBJECT domain of an `&<projection>` auto-propagate argument:
 /// a `Box` deref object (`&(*b).r`) and a `Guard[T]` auto-deref object (`&g.r`).

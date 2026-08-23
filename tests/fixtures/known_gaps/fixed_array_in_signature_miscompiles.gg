@@ -1,0 +1,41 @@
+# DURABLE REPRO — a FIXED-SIZE ARRAY in a function SIGNATURE (parameter or
+# return type) is check-clean, BUILDS, and then prints GARBAGE.
+#
+# ⚠ The size here is a LITERAL. This is NOT the `meta`-constant array-size
+# defect that R44 Track E fixed in `semantic/meta.rs substitute_type` — that
+# one was a `gg check` REJECTION (`expected int[0], found int[3]`) and is now
+# a live regression fixture (`tests/fixtures/known_gaps/meta_const_array_size_*.gg`).
+# This one survives with `int[3]` spelled out, so it is a strictly separate,
+# older defect in how a fixed-size array crosses a call boundary.
+#
+# WRONG TODAY (measured 2026-08-23 at HEAD 4a16e4c5 + Track E, C backend):
+#     gg check → OK: no semantic errors
+#     gg run   → rc 0, prints two garbage integers, e.g.
+#                  54606144574115712
+#                  562947785007776
+#                (values vary run to run — uninitialised stack)
+#
+# AXIS SAMPLED: the two SIGNATURE cells, parameter and return type. Both are
+# in this one file because they share the symptom and (very likely) the
+# mechanism: a fixed-size array has no by-value ABI, so the callee reads a
+# slot that was never filled. The LOCAL-VARIABLE cell WORKS and is pinned
+# live by `meta_const_array_size_local.gg` (prints 60), which is what makes
+# this a signature-position defect rather than an arrays-are-broken defect.
+# The STRUCT-FIELD cell is a different symptom (a C-compile failure) and has
+# its own repro: `known_gaps/fixed_array_struct_field_cc_fail.gg`.
+#
+# INTENDED (asserted below):
+#     60
+#     60
+int total(int[3] xs):
+    return xs[0] + xs[1] + xs[2]
+
+int[3] make():
+    return [10, 20, 30]
+
+int main():
+    int[3] a = [10, 20, 30]
+    print(total(a))
+    int[3] b = make()
+    print(b[0] + b[1] + b[2])
+    return 0

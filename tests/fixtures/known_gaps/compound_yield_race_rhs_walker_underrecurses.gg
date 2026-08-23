@@ -1,0 +1,97 @@
+# DURABLE REPRO — the `W_CompoundYieldRace` warning goes SILENTLY MISSING when
+# the yield point sits inside a child-bearing expression in the compound
+# assignment's RHS. A missing diagnostic on a genuinely racy program: nothing
+# turns red, nothing is printed, the race ships.
+#
+# MECHANISM: `src/semantic/safety/helpers.rs:333 expr_contains_yield_point`
+# hand-rolls its recursion over 20 of the 47 `Expr` variants and ends in
+# `_ => false` (`helpers.rs:375`). Any child-bearing variant among the other 27
+# hides the call from the walk, so the `&&` at
+# `src/semantic/safety/check_stmt.rs:392` never fires.
+#
+# THE SET, not a selection (regenerate: diff the `Expr::` names in
+# `helpers.rs:333-376` against `awk '/^pub enum Expr \{/,/^\}/' src/parser/ast.rs`).
+# 17 of the 27 unhandled variants are child-bearing and therefore hiding places:
+#   Block · Catch · DictComprehension · DictLiteral · Do · DotShorthand ·
+#   ImplicitClosure · ListComprehension · Match · MetaOpInfix · Range ·
+#   Rethrow · SetComprehension · Spawn · SpawnBlocking · StringLiteral ·
+#   StructLiteral
+# The other 10 are genuine leaves (BoolLiteral, FloatLiteral, Identifier,
+# IntLiteral, It, MetaOpToken, NoneLiteral, Path, ReturnValue, SelfExpr).
+# ⚠ `Expr::Closure` is a DELIBERATE `false` ("closures execute separately") and
+# must stay one. `ImplicitClosure` is listed above because it is NOT deliberate
+# — the sibling walker `find_shared_ref_in_expr_spanned` (`helpers.rs:135`) DOES
+# recurse it while treating `Closure` as opaque, so the two disagree today.
+# Rule its disposition with the conversion; do not assume it copies `Closure`.
+#
+# This is the SIBLING CONSUMER of the purity walker R44 Track E fixed: that
+# round routed `purity_walk_expr` through the one exhaustive child enumeration
+# so `fn_purity` stops lying, and this second walker on the SAME warning path
+# was left hand-rolled. The two axes are independent — Track E's fixtures cover
+# "which variant hides the call inside the CALLEE's body"; this one covers
+# "which variant hides the call in the RACY ASSIGNMENT'S OWN RHS".
+#
+# AXIS = the `Expr` variant wrapping the effectful call in the RHS.
+#   `ctrl` — bare `Call`               → the CONTROL. Warns today (live test).
+#   `lc`   — `ListComprehension` body  → SILENT. WRONG.
+#   `fs`   — `StringLiteral` interp    → SILENT. WRONG.
+#   `dl`   — `DictLiteral` value       → SILENT. WRONG.
+# Cells NOT sampled, and why: the other twelve forgotten variants share the
+# same `_ => false` arm and the same one-line remedy (route this walker through
+# `parser::visitor::visit_expr_children`, exactly as Track E did for
+# `purity_walk_expr`); three costumes are enough to pin the class, and a
+# variant-complete net arrives with the conversion.
+#
+# MEASURED AT HEAD (`gg check`, rc 0, stderr read from a FILE not a pipeline):
+#     exactly ONE `compound assignment reads shared ...` warning — for `ctrl`.
+# CAUSATION PROVED by break-and-watch: adding `ListComprehension` /
+# `StringLiteral` / `DictLiteral` arms to `expr_contains_yield_point` and
+# rebuilding makes ALL FOUR warnings fire; restoring drops back to one.
+#
+# CORRECT BEHAVIOUR (what the `#[ignore]`d tests assert): all FOUR assignments
+# warn. Every one of them reads the shared variable, calls a `HasSideEffects`
+# function that may release the `with` token, then writes the stale value back.
+#
+# ⚠ NON-CONSTANT BY CONSTRUCTION: the comprehension bound and the dict key are
+# `v.len()` on a heap `Vector`, never a literal, so no present or future
+# const-folder can elide the wrapping expression and accidentally green a cell.
+#
+# `hidden()` is `HasSideEffects` because it calls the extern builtin `print`
+# (`src/semantic/purity.rs::calls_extern`). NOTE for whoever edits this file:
+# `sleep` — which the lib-level tests in `src/semantic/safety/tests.rs` use —
+# does NOT resolve at the CLI (`error[E_UndefinedName]`), so it cannot be used
+# in a `gg check` fixture.
+#
+# Filed in TODO.md; graduates to a live fixture (un-ignore the three tests)
+# the round `expr_contains_yield_point` is routed through the chokepoint.
+
+int hidden():
+    print("effect")
+    return 1
+
+async void worker(int &counter):
+    counter = counter + 1
+
+async void main():
+    Vector[int] v = [1]
+    shared int ctrl = 0
+    shared int lc = 0
+    shared int fs = 0
+    shared int dl = 0
+    Task[void] t0 = spawn worker(&ctrl)
+    Task[void] t1 = spawn worker(&lc)
+    Task[void] t2 = spawn worker(&fs)
+    Task[void] t3 = spawn worker(&dl)
+    with ctrl:
+        ctrl = ctrl + hidden()
+    with lc:
+        lc = lc + [hidden() for i in 0..v.len()].len()
+    with fs:
+        fs = fs + f"{hidden()}".len()
+    with dl:
+        dl = dl + {v.len(): hidden()}.len()
+    t0.await()
+    t1.await()
+    t2.await()
+    t3.await()
+    print(ctrl + lc + fs + dl)

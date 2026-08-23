@@ -1,0 +1,30 @@
+# R44 Track E — a `meta` constant used as an ARRAY SIZE in a PARAMETER type.
+#
+# AXIS: array-size position. This fixture samples the FUNCTION-PARAMETER cell.
+# Siblings: meta_const_array_size_local.gg (local decl),
+#           meta_const_array_size_return.gg (return type).
+#
+# RED-VERIFIED at HEAD 4a16e4c5 (pre-fix) — see the sibling's header for the
+# mechanism. The parameter's `int[N]` resolved to `int[0]`, so passing a real
+# `int[3]` was a type mismatch.
+#
+# ⚠ WHY THIS LIVES IN `known_gaps/` DESPITE PASSING: placement, not status.
+# `runtime_parity_corpus` (tests/integration.rs) auto-scans every TOP-LEVEL
+# `tests/fixtures/*.gg`, and the self-host lane cannot compile this shape at
+# all — its parser has NO `Type[N]` array-type production, so `int[N]` in a
+# type position parses as `TNamed("int", [N])` (generic arguments) and
+# `TArray` is never constructed from source. A top-level row would therefore
+# be own-round non-MATCH inflow against `RUNTIME_DIFF_NONMATCH_CEILING`,
+# which Core #9 ⊕ forbids outright. The test below is LIVE, not `#[ignore]`d:
+# the Rust behaviour asserted here is the CORRECT behaviour and a regression
+# goes red immediately. Promote to top-level the moment the self-host lane
+# grows fixed-size array types (filed in TODO.md).
+meta int N = 3
+
+int total(int[N] xs):
+    return xs[0] + xs[1] + xs[2]
+
+int main():
+    int[3] a = [10, 20, 30]
+    print(total(a))
+    return 0

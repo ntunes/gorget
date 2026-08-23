@@ -1,0 +1,60 @@
+# DURABLE REPRO — an ARRAY SIZE that is a CONST EXPRESSION rather than a bare
+# integer literal is silently resolved to ZERO.
+#
+# MECHANISM: `src/semantic/types.rs:535-542` `ast_type_to_resolved`'s
+# `ast::Type::Array` arm reads the size with
+#
+#     let array_size = match &size.node {
+#         ast::Expr::IntLiteral(n) => *n as usize,
+#         _ => 0, // Can't evaluate at this stage
+#     };
+#
+# A literal is the ONLY spelling it understands; everything else mints `0`.
+# That is a Core #10 silent drop: the compiler discards what the user wrote
+# and substitutes a guess.
+#
+# ⚠ TWO FACES, and they point in OPPOSITE directions — a fix must close both:
+#
+#   (a) WRONG REJECTION. A valid program is refused:
+#         int[2 + 1] a = [10, 20, 30]
+#       → gg check rc 1, ``type mismatch: expected `int[0]`, found `int[3]` ``
+#       The same face appears on a const-generic signature — `void
+#       g[const int N](int[N] xs)` called with an `int[3]` is rc 1 with the
+#       identical message.
+#
+#   (b) WRONG ACCEPTANCE. An invalid typing is shipped SILENTLY:
+#         struct Buf:
+#             int[2 + 1] data
+#       → gg check rc 0 AND gg build rc 0, with the field emitted as
+#         `struct __gg_Buf { uint8_t data; }` — a three-element int array
+#         typed as a single byte. rc 0 all the way to a binary.
+#
+# CAUSATION PROVED BY BREAK-AND-WATCH (2026-08-23, R44 Track E, my own run):
+# replacing `_ => 0` with `_ => 99` and rebuilding flips BOTH the `int[2 + 1]`
+# local and the `int[N]` const-generic call to ``expected `int[99]` `` — so
+# this arm, not the substitution pass, is the producer.
+#
+# ⚠ WHAT AN HONEST REJECTION WOULD *NOT* BREAK — measured, not inferred.
+# The language reference's `struct FixedArray[T, const int N]: T[N] data`
+# (`docs/language-reference.md`) is rc 0 at HEAD **and rc 0 under a break at
+# this arm**: `gg parse` shows `T[N]` in a field position parsing as
+# `Type::Named { "T", generic_args: [N] }` — `Ident[…]` is GENERIC-ARGUMENT
+# syntax — so `Type::Array` is STRUCTURALLY UNREACHABLE from it and no change
+# here can regress that example. The shapes that DO depend on this arm are
+# `int[2 + 1]` and `int[N]` in a function signature. Warn about THOSE.
+#
+# INTENDED (asserted below): the size expression is const-evaluated, so
+# `int[2 + 1]` is an `int[3]` and this runs. That is the spec's own answer —
+# `docs/language-reference.md:455`/`:458` give
+# `array_type = type "[" const_expr "]"` with "Size must be a compile-time
+# constant". Expected output:
+#     60
+#
+# NOT the `meta`-constant cell: `meta int N = 3` + `int[N]` was a DIFFERENT
+# producer (`semantic/meta.rs substitute_type` dropping the size expression),
+# fixed in R44 Track E and pinned live by `tests/fixtures/known_gaps/meta_const_array_size_*.gg`.
+# This repro deliberately contains no `meta` at all.
+int main():
+    int[2 + 1] a = [10, 20, 30]
+    print(a[0] + a[1] + a[2])
+    return 0

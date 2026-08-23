@@ -1,0 +1,36 @@
+# DURABLE REPRO — a STRUCT FIELD of FIXED-SIZE ARRAY type is check-clean and
+# then FAILS THE C COMPILE, with a raw generated-C error leaking to the user.
+#
+# ⚠ The size here is a LITERAL, so this is NOT the `meta`-constant array-size
+# defect R44 Track E fixed (that one was a `gg check` REJECTION and now has
+# live fixtures, `tests/fixtures/known_gaps/meta_const_array_size_*.gg`). It is also
+# distinct from its two filed cousins that share the `void value not ignored`
+# C symptom — `catch` on a VOID fallible call, and `&(*b).0` tuple-field
+# through a Box deref (`known_gaps/sound_amp_box_tuple_field_cc_fail.gg`).
+# The discriminator here is the field's TYPE: a fixed-size array declared as
+# a struct member, with no `catch`, no `Box` and no tuple anywhere.
+#
+# WRONG TODAY (measured 2026-08-23 at HEAD 4a16e4c5 + Track E, C backend):
+#     gg check → OK: no semantic errors
+#     gg build → rc 1
+#                <tmp>.c: In function 'main':
+#                <tmp>.c:NNNN: error: void value not ignored as it ought to be
+#                    __v22 = *(void *)(__v21);
+# The array field is emitted with no element type, so the read of `b.data[0]`
+# lowers to a `void` load. Note the second defect riding along, already filed
+# in its own right: a C-compile failure of GENERATED code is an ICE and must
+# never surface as a raw `.c:` error — it should render with the Gorget span.
+#
+# SIBLING CELL: the SIGNATURE positions (parameter / return) are check-clean,
+# BUILD, and print garbage instead — `known_gaps/fixed_array_in_signature_miscompiles.gg`.
+# The LOCAL-VARIABLE cell WORKS (live: `meta_const_array_size_local.gg`).
+#
+# INTENDED (asserted below):
+#     60
+struct Buf:
+    int[3] data
+
+int main():
+    Buf b = Buf([10, 20, 30])
+    print(b.data[0] + b.data[1] + b.data[2])
+    return 0
