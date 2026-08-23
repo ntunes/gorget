@@ -961,6 +961,61 @@ layers to an evidence appendix, and state explicitly **what the old text stopped
 saying**. That last step is what keeps consolidation from becoming the silent rewrite
 the precedence rule exists to forbid.
 
+## §16 — Gate on design stability, not on clean passes (owner 2026-08-23)
+
+The two-clean-passes gate assumed something that stops being true once reviewers get
+strong enough to build: that a pass finding nothing is evidence the artifact is ready.
+Measured over one round of six tracks and 52 review passes, it never fired once.
+
+The trajectories tell the story. Blocking counts per pass:
+
+    Track D  9 → 6 → 5 → 4 → 4 → 5 → 3 → 2      converging
+    Track F  8 → 6 → 4 → 5 → 1 → 1 → 1 → 1 → 1 → 3
+    Track B  3 → 3 → 1 → 3 → 3 → 3 → 4 → 3      flat
+    Track E 10 → 5 → 3 → 4 → 3 → 1 → 3 → 5      rising
+    Track A  7 → 8 → 6 → 10 → 3 → 4 → 6 → 5     never converged; rebuilt
+    Track C  9 → 10 → 6 → 4 → 5 → 6             never converged; split
+
+Track F is the instructive one: it sat at "1 blocking" for five consecutive passes, and
+it was a **different genuine blocker every time** — a missing second output of the ported
+function, a remedy naming the wrong analysis, an over-rejection measured on a rebuilt
+driver, a fused table row hiding two shapes with opposite correct answers. Those are not
+a artifact failing to converge. They are an artifact whose *shape* was still moving.
+
+Two things had changed since the gate was written. First, the reviewers had started
+**executing**: instrumenting a validator and dumping ownership tags, building two
+self-host drivers to compare a gate's cells, applying a prototype and diffing the emitted
+C, running a burn-down over the full 2105-fixture corpus. A pass that builds finds what a
+pass that reads cannot, so "no findings" stops being reachable while real work remains.
+Second — and this is the uncomfortable half — **30 of the 52 passes refuted a prior pass
+or an orchestrator decision rather than the source.** A large part of the blocking load
+was the review-and-fold apparatus auditing itself.
+
+So zero-blocking measured *depth*, not *readiness*. The replacement measures readiness
+directly:
+
+> **Two successive passes with no DESIGN finding.** DESIGN means exactly four things —
+> the fix shape, the site set, the scope boundary, the guard mechanism. Everything else
+> is DETAIL: citations, stale coordinates, missing table cells, wordings, folds that were
+> ordered and not performed. Detail is a minor annotation and the executor's punch list.
+> It never holds a track in review.
+
+The gate is falsifiable and was checked against the round that produced it. Applying it
+retroactively, Track D passes — its late findings are matrix completeness and a wrong
+reason for a surviving conclusion — and Track F does not, because its late findings kept
+moving the shape. That matched the independent judgement about which was ready, and gave
+it a reason instead of a feeling.
+
+Two cautions the round also earned. A reviewer that fixes what it finds becomes its own
+reviewer, and the measured failure rate of built-and-measured fixes here was high: six
+consecutive agents on one track each built a remedy and each was partly refuted by the
+next — while their *measurements* held up nearly every time. Strong reviewers are
+excellent instruments and unreliable architects, which is exactly what deep local context
+with no global view produces. And the orchestrator is a defect source in its own right:
+every decision layer it adds is new surface for the next pass to audit, which is why the
+convention is now that a reviewer's fix block is operative verbatim and the orchestrator
+decides scope and routing rather than restating findings.
+
 ## §14 — The reference lags the implementation
 
 `docs/language-reference.md` was written **after** the compiler, and has not

@@ -42,6 +42,17 @@ no work done, so it belongs in a baseline — same rule as this round's two re-b
   FIELD depends on the census** proving that vocabulary can be controlled and small. Long tail ⇒ move
   anyway, drop that field.
 
+**⚖ OWNER RULING 2026-08-23 (third) — THE CONVERGENCE GATE IS **DESIGN STABILITY**, not clean passes.**
+Landed in AGENTS.md (replacing the zero-blocking gate) with the evidence in devbook/30 §16.
+**Two successive passes with NO DESIGN finding ⇒ launch the executor.** DESIGN = fix shape · site set ·
+scope boundary · guard mechanism. **DETAIL — citations, stale coordinates, missing table cells,
+wordings, un-performed folds — is a MINOR ANNOTATION and the executor's punch list, never a blocker.**
+Reviewers tag BOTH axes; the orchestrator may promote a misfiled detail, which resets the streak.
+⇒ Measured basis: across 52 passes the zero-blocking gate **never fired once**, because reviewers that
+BUILD keep finding NEW real defects — one track sat at "1 blocking" for five passes, each a *different*
+genuine blocker. It measured depth, not readiness. **30 of those 52 passes refuted a prior pass or an
+orchestrator decision rather than the source.**
+
 **⚖ OWNER RULINGS 2026-08-23 — BOTH BINDING ON EVERY TRACK.**
 **(1) A mandated `known_gaps` repro counts WITH its TODO bullet, not as a second filing.** Landed in
 `scripts/convergence.sh` and RED-verified; an UNCITED gap fixture still counts on its own.
