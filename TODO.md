@@ -12,6 +12,17 @@
 
 **⚠ ROUND XLIII (R43) CLOSED 2026-08-22 — UNDER AN OWNER-GRANTED CONVERGENCE WAIVER** (clauses (a)+(c) failed: net +35, filed 50, closed 15 — the verdict is quoted verbatim in the DONE entry; recorded there as a WAIVER, **not** as compliance, and **NOT precedent** — R44 starts from the rule). Headline MEMORY SAFETY: two silent-corruption CRITICALs closed at their WRITE sites (M1 container-literal element-type mint; C indirect-call argument ABI), plus Track G author line-grouping. Battery FULL and GREEN both lanes: C integration 2445/0 · LLVM 2445/0 · ggdef 173/0 all targets · spec_conformance 3/0 · security 151/0 · lints 155/0 · lib 1171/0. See DONE.md 2026-08-22.
 
+**⚖ OWNER RULINGS 2026-08-23 — BOTH BINDING ON EVERY TRACK.**
+**(1) A mandated `known_gaps` repro counts WITH its TODO bullet, not as a second filing.** Landed in
+`scripts/convergence.sh` and RED-verified; an UNCITED gap fixture still counts on its own.
+**(2) FIX INLINE — unless the problem is REALLY DISJOINT, in which case FILE.** Owner: *"Fixing
+inline was always the idea. But only if the fix scope does not creep too much. For really disjoint
+problems that are discovered on a track, a filing should be done instead of fixing inline."*
+⇒ **The discriminator is SCOPE CREEP.** Same mechanism / write site / class as the track is already
+fixing ⇒ INLINE (leaving it is the Core #4 instance-fix failure). Different subsystem or unrelated
+mechanism ⇒ FILE, properly, with its repro — which now costs one unit, not two. An ambiguous call is
+reported, not resolved by quietly doing the bigger thing.
+
 **⚠ CONVERGENCE BASELINE FOR R44: kg=17, todo=628** (⚠ **RE-BASELINED TWICE.** First from the recorded kg=103 → 96, fixing three classifier defects. Then 96 → **17** on the **OWNER RULING 2026-08-23: a mandated `known_gaps` repro counts WITH its TODO bullet, not as a second filing.** The cardinal rule REQUIRES the repro, so charging it separately made one discovery cost +2 and made clause (a) demand FOUR closures for it — while filing the same bug WITHOUT the required repro cost only two. The metric was rewarding a cardinal-rule violation; measured live when one review-required filing turned a track's net −1 into +0. An UNCITED gap fixture still counts on its own. Both re-baselines are COUNTING CORRECTIONS measured at the R44 opening commit `3c35d986`, so no round earns credit for them.) (⚠ **RE-BASELINED 2026-08-23** from the originally-recorded kg=103. The arbiter's gap classifier had THREE defects, all from the R43 rebuild: a multi-file repro directory counted as N gaps instead of one, nested repros could never be reference-matched, an `#[ignore` substring matched COMMENT PROSE, and only `integration.rs` was scanned. Found by the R44 Track-G census and independently re-derived to the same 96 before landing. Per the script's own fused-entry rule this is a COUNTING CORRECTION — it is measured at the R44 opening commit `3c35d986` so the −7 lands in the BASELINE and R44 earns no credit for it.) — ⚠ **THE COUNTER CHANGED at R43 close (owner-ruled).** `scripts/convergence.sh` no longer counts a FIXED bug's live regression net as a gap, so the known_gaps figure dropped 156 → 103 with no work done; R43-and-earlier numbers are NOT comparable to R44's. **Regenerate BOTH numbers at HEAD with `scripts/convergence.sh` and never inherit them** (read its exit code WITHOUT a pipeline — `| tail` masks it, measured this round).
 
 **✅ OWNER CALLS ANSWERED AND ALL THREE LANDED 2026-08-22 — nothing outstanding from the R43 close:**
