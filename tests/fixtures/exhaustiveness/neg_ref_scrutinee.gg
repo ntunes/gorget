@@ -1,0 +1,19 @@
+# CELL: scrutinee shape = `&`-BORROWED. A collection read yields an element
+# REFERENCE, and a `match` on a reference matches the referent's variants — so
+# the check must peel `&` wrappers before asking whether the scrutinee is an
+# enum. Without the peel this program is silently ACCEPTED.
+enum Kind:
+    Value()
+    Next()
+    Halt()
+
+int walk(Vector[Kind] ks, int i):
+    match ks.get(i).unwrap():
+        case Kind.Value():
+            return 1
+        case Kind.Next():
+            return 2
+
+void main():
+    Vector[Kind] a = [Kind.Halt()]
+    print(walk(a, 0))

@@ -19075,3 +19075,271 @@ fn known_gaps_passing_allowlist_shrink_only() {
          argument for leaving it out of the main job."
     );
 }
+
+/// The two FALL-THROUGH classifiers in the self-host move checker, pinned.
+///
+/// `match_has_catch_all` and its sibling `elsebranches_have_uncond`
+/// (`tests/fixtures/self_host_typechecker/typecheck.gg`) both answer one
+/// question — *can control leave this construct without entering a branch?* —
+/// for `match` and for `if`/`elif` chains.
+///
+/// **SEVEN CONSUMERS ASK IT, AND THE CONSUMER IS THE AXIS.** Three call
+/// `match_has_catch_all` (the `SMatch` join, the `EMatch` join, the
+/// `live_stmt_diverges` divergence gate); three call `elsebranches_have_uncond`
+/// (the `SMetaIf`, `SIf` and `elif`-chain joins); and the seventh is the
+/// `has_unconditional_else` twin inlined in `live_stmt_diverges`'s `SIf` arm.
+/// A weakening applied at ONE consumer — an `and`-extension of that call's
+/// argument, say — is invisible to the guards below AND to every outcome cell
+/// except that consumer's own. Measured, twice, on built drivers. So the
+/// argument pins below are total over consumers, and each consumer that has an
+/// outcome cell has its OWN cell.
+///
+/// ⚠ WHAT THESE PINS ARE, EXACTLY: **CHANGE-DETECTORS, NOT STRUCTURAL
+/// GUARANTEES.** They watch source TEXT, and text is not the property that
+/// matters. **NINE** distinct weakenings were built, compiled and measured
+/// against them; **three (B, C, E) leave this ENTIRE lint GREEN** while the
+/// self-host accepts and lowers a use-after-move that `gg check` rejects.
+///
+/// | break | edit | this lint | the only outcome cell(s) that move |
+/// |---|---|---|---|
+/// | A | `match_has_catch_all` tail `return false` -> `return true` | RED (body pin) | 7 of the 8 new reject cells |
+/// | **B** | an exhaustiveness proxy fused INSIDE the body ("every unguarded arm is a `PConstructor`/`PDotShorthand`") — signature, tail and both call sites untouched | **GREEN** | `n2_nested_uam` (6476 B) — `s5_join_int_nonexh` stays green |
+/// | **C** | the same proxy consulted AT the divergence gate by a SEPARATE helper, nested under the pinned gate line so its text survives; `match_has_catch_all` byte-identical | **GREEN** | `match_nested_refutable_diverge_use_after_move_reject` (6103 B), and nothing else |
+/// | **E** | `if arm.guard is None:` deleted from the body | **GREEN** | `match_guarded_catchall_use_after_move_reject` (4359 B), and nothing else |
+/// | F | the SIBLING predicate's tail weakened | RED (body pin) | `if_no_else_join_use_after_move_reject` (3504 B), and nothing else |
+/// | JOIN | the `SMatch` join's argument replaced by a constant | RED (argument pin) | `s5`, `n2`, the guard cell, the join FP pin |
+/// | GATE-OFF | the divergence gate made unconditional | RED (argument pin) | both accept canaries |
+/// | R9 | the `SIf` divergence twin's tail `return has_unconditional_else` -> `return true` | RED (argument pin) | `if_no_else_diverge_use_after_move_reject` (4046 B), and nothing else |
+/// | R10 | the `EMatch` join's argument `and`-extended with a separate helper | RED (argument pin) | `ematch_join_nested_refutable_use_after_move_reject` (7296 B) — its `SMatch` twin `n2_nested_uam` stays green |
+///
+/// So do not read a green run of this lint as "the invariant holds".
+///
+/// **THE ACCEPTANCE GATE IS THE OUTCOME CELLS**, not this lint: the
+/// `tests/fixtures/liveness/` fixtures wired into
+/// `self_host_driver_rejects_liveness` observe ACCEPT/REJECT on real programs,
+/// which is the property. Division of labour, one line each:
+///   * argument pins  — a CALL-SITE swap at any of the SEVEN consumers (a
+///                      constant, or an `and`-extension: these compare the WHOLE
+///                      trimmed line, so appended text is caught too);
+///   * signature pins — a fusion done by THREADING `ctx`/`types` in, which has
+///                      to widen a parameter list;
+///   * body pins      — a crude silent weakening of either classifier's tail;
+///   * non-enum cells — a crude weakening, observed at the program level;
+///   * nested-refutable JOIN cell  — a verdict fused inside the predicate BODY;
+///   * nested-refutable EMATCH cell — the same, at the expression-match join;
+///   * nested-refutable DIVERGENCE cell — a verdict consulted at the divergence
+///                      gate by ANY predicate, including a separate one;
+///   * guarded-catch-all cell — the `arm.guard is None` input;
+///   * if-no-else JOIN cell — the SIBLING predicate at a join;
+///   * if-no-else DIVERGENCE cell — the SIBLING predicate's inlined twin.
+/// Every cell is blind to every consumer but its own: the join cells cannot see
+/// the divergence consumer, the `SMatch` cell cannot see the `EMatch` one, and
+/// the sibling's join cell cannot see the sibling's divergence twin — each of
+/// those three was measured, not argued.
+///
+/// NAMED-OMITTED cells (Core #15b — an omission stated is not an omission
+/// hidden). **FIVE of the seven consumers have an outcome cell; TWO do not** —
+/// the `elif`-chain join and the `SMetaIf` join. Both are
+/// `elsebranches_have_uncond` consumers whose two siblings ARE celled, and both
+/// are covered at the call-site level by the argument pins above; that is the
+/// whole defence. Also unsampled at the liveness level: the `PBinding`-variant
+/// vs `PBinding`-non-variant split inside `match_has_catch_all`
+/// (`tests/fixtures/exhaustiveness/neg_bare_variant.gg` and
+/// `pos_binding_catchall.gg` are the pair that sample it for the exhaustiveness
+/// check), and a `bool` scrutinee (`case true:` / `case false:`), which has no
+/// cell anywhere.
+#[test]
+fn self_host_match_fallthrough_predicates_pinned() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let canonical = root.join("tests/fixtures/self_host_typechecker/typecheck.gg");
+    let src = fs::read_to_string(&canonical)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", canonical.display()));
+
+    // The other self_host_* trees are symlink farms onto this one file. If a
+    // copy is ever de-symlinked it becomes an UNGUARDED second definition, so
+    // the farm is part of what this lint pins.
+    let canonical_real = canonical
+        .canonicalize()
+        .expect("canonicalize self_host_typechecker/typecheck.gg");
+    let mut divergent: Vec<String> = Vec::new();
+    for dir in ["self_host_check", "self_host_lowerer"] {
+        let p = root.join("tests/fixtures").join(dir).join("typecheck.gg");
+        if !p.exists() {
+            continue;
+        }
+        let canon = p
+            .canonicalize()
+            .unwrap_or_else(|e| panic!("canonicalize {}: {e}", p.display()));
+        if canon != canonical_real {
+            divergent.push(p.display().to_string());
+        }
+    }
+    assert!(
+        divergent.is_empty(),
+        "these self_host_*/typecheck.gg are no longer symlinks onto \
+         self_host_typechecker/typecheck.gg: {divergent:?}. The pins below read ONE file; a \
+         real second copy is an unguarded second definition of both fall-through classifiers. \
+         Either restore the symlink or widen this lint to every real copy."
+    );
+
+    let count = |needle: &str| src.lines().filter(|l| l.trim() == needle).count();
+
+    // ── ARGUMENT PINS — ALL SEVEN CONSUMERS ────────────────────────────────
+    // The axis is the CONSUMER, not the predicate: a weakening applied at one
+    // consumer is invisible to every outcome cell but that consumer's own, so
+    // the census has to be total over consumers. Note these compare the WHOLE
+    // trimmed line, not a substring — an `and`-extension of an argument appends
+    // text after the substring and would leave a `grep -c` unchanged.
+    let arg_sites: [(&str, &str); 7] = [
+        (
+            "safety_commit(m_acc, not match_has_catch_all(arms), m_reached, &state)",
+            "the SMatch statement join",
+        ),
+        (
+            "safety_commit(em_acc, not match_has_catch_all(arms), em_reached, &state)",
+            "the EMatch expression join",
+        ),
+        (
+            "if not match_has_catch_all(arms):",
+            "the live_stmt_diverges SMatch divergence gate",
+        ),
+        (
+            "safety_commit(mi_acc, not elsebranches_have_uncond(else_branches), mi_reached, &state)",
+            "the SMetaIf (compile-time `meta if`) join",
+        ),
+        (
+            "safety_commit(if_acc, not elsebranches_have_uncond(else_branches), if_reached, &state)",
+            "the SIf statement join",
+        ),
+        (
+            "safety_commit(eif_acc, not elsebranches_have_uncond(elif_branches), eif_reached, &state)",
+            "the elif-chain join",
+        ),
+        (
+            "return has_unconditional_else",
+            "the live_stmt_diverges SIf divergence twin",
+        ),
+    ];
+    for (needle, what) in arg_sites {
+        let n = count(needle);
+        assert_eq!(
+            n, 1,
+            "expected EXACTLY ONE `{needle}` in self_host_typechecker/typecheck.gg ({what}), \
+             found {n}.\n\
+             Each of the three consumers must ask the fall-through question through the SAME \
+             classifier; replacing one with a constant, or adding a fourth consumer that does \
+             not ask, is how this class drifted before.\n\
+             ⚠ THIS PIN IS A CHANGE-DETECTOR, NOT A STRUCTURAL GUARANTEE — of the seven \
+             measured weakenings it catches only the two that edit a call site (see the doc \
+             comment's table). The acceptance gate is the OUTCOME CELLS in \
+             `self_host_driver_rejects_liveness`.",
+        );
+    }
+
+    // ── SIGNATURE PINS — both classifiers stay ARMS-ONLY / BRANCHES-ONLY ───
+    let sig_sites: [(&str, &str); 2] = [
+        (
+            "bool match_has_catch_all(Vector[MatchArm] arms):",
+            "MatchArm (ast.gg) carries a pattern, an optional guard and a body",
+        ),
+        (
+            "bool elsebranches_have_uncond(Vector[ElseBranch] ebs):",
+            "ElseBranch (ast.gg) carries an optional condition and a body",
+        ),
+    ];
+    for (needle, carries) in sig_sites {
+        let n = count(needle);
+        assert_eq!(
+            n, 1,
+            "the signature `{needle}` is gone or duplicated in \
+             self_host_typechecker/typecheck.gg (found {n}).\n\
+             The argument type is the point: {carries} — no variant list and no type table — so \
+             an exhaustiveness verdict is not computable from it, and a fusion done by threading \
+             `ctx`/`types` in has to widen this signature.\n\
+             ⚠ That makes the pin a CHANGE-DETECTOR, NOT a structural guarantee: a fusion \
+             written INSIDE the body, or in a separate predicate called at a consumer, needs no \
+             signature change at all, and ALL SEVEN measured weakenings left this pin green.\n\
+             A second verdict bit (irrefutable coverage) is a NEW design and takes its own \
+             gauntlet. Whether it is implemented by widening this predicate or by a separate \
+             one, the OUTCOME CELLS in `self_host_driver_rejects_liveness` are the acceptance \
+             gate — and `match_nested_refutable_diverge_use_after_move_reject.gg` is the one a \
+             separate predicate will trip.",
+        );
+    }
+
+    // ── BODY PINS — the conservative tail, and no verdict plumbing ─────────
+    let lines: Vec<&str> = src.lines().collect();
+    for (sig, name) in [
+        ("bool match_has_catch_all(Vector[MatchArm] arms):", "match_has_catch_all"),
+        ("bool elsebranches_have_uncond(Vector[ElseBranch] ebs):", "elsebranches_have_uncond"),
+    ] {
+        let start = lines.iter().position(|l| l.trim() == sig).unwrap_or_else(|| {
+            panic!("{name}: signature not found (the signature pin above should have caught this)")
+        });
+        // Body = up to the next TOP-LEVEL construct (column-0, non-comment).
+        let mut end = lines.len();
+        for (i, l) in lines.iter().enumerate().skip(start + 1) {
+            if !l.is_empty() && !l.starts_with(char::is_whitespace) && !l.starts_with('#') {
+                end = i;
+                break;
+            }
+        }
+        let body = lines[start + 1..end].join("\n");
+        assert!(
+            body.lines().any(|l| l.trim() == "return false"),
+            "{name}'s conservative tail `return false` is gone.\n\
+             That tail is what makes the classifier say \"a construct with no catch-all can fall \
+             through\" — dropping it silently converts an under-approximation into an \
+             over-approximation and the move checker stops seeing the fall-through path.\n\
+             ⚠ CHANGE-DETECTOR ONLY: five of the seven measured weakenings preserve this tail, \
+             three of them (B, C, E in the doc comment's table) leaving the WHOLE lint green."
+        );
+        for token in ["ctx", "types", "exhaust"] {
+            assert!(
+                !body.contains(token),
+                "{name}'s body now mentions `{token}`.\n\
+                 The fall-through question is deliberately NOT gated on the exhaustiveness \
+                 verdict `check_match_exhaustiveness` computes: that verdict credits a REFUTABLE \
+                 nested sub-pattern as full coverage (faithful to Rust, and a filed Core #8 \
+                 wrong-accept), so fusing it in makes the self-host ACCEPT a genuine \
+                 use-after-move — measured, on `tests/fixtures/liveness/n2_nested_uam.gg` and \
+                 `..._nested_refutable_diverge_use_after_move_reject.gg`.\n\
+                 ⚠ CHANGE-DETECTOR ONLY: a fusion written without those tokens (a helper \
+                 predicate over `arms` alone, or one called at the gate) leaves this pin green — \
+                 measured, breaks B and C. The OUTCOME CELLS are the acceptance gate."
+            );
+        }
+    }
+
+    // ── The outcome cells this lint defers to must actually be WIRED ───────
+    // A guard whose failure message points at another guard is worthless if
+    // that other guard is not running (devbook/25: "a guard CI does not run is
+    // not a guard"). This is the cheap half of the pair; the fixtures are the
+    // half that observes the property.
+    let integration = fs::read_to_string(root.join("tests/integration.rs"))
+        .expect("tests/integration.rs readable");
+    for cell in [
+        "match_no_catchall_diverge_use_after_move_reject",
+        "s5_join_int_nonexh",
+        "n2_nested_uam",
+        "match_nested_refutable_diverge_use_after_move_reject",
+        "match_guarded_catchall_use_after_move_reject",
+        "ematch_join_nested_refutable_use_after_move_reject",
+        "if_no_else_join_use_after_move_reject",
+        "if_no_else_diverge_use_after_move_reject",
+        "match_exhaustive_no_catchall_diverge_reject",
+        "match_exhaustive_no_catchall_join_reject",
+        "match_else_arm_diverge_accept",
+        "match_wildcard_arm_diverge_accept",
+    ] {
+        assert!(
+            integration.contains(cell),
+            "the outcome cell `{cell}` is no longer wired into tests/integration.rs. \
+             This lint's failure messages name the outcome cells as the acceptance gate for \
+             the fall-through classifiers; unwiring one silently demotes the gate to the text \
+             pins, which three measured weakenings are known to slip past entirely.",
+        );
+        let fixture = root.join(format!("tests/fixtures/liveness/{cell}.gg"));
+        assert!(fixture.exists(), "the outcome cell fixture {} is missing.", fixture.display());
+    }
+}

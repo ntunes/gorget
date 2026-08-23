@@ -31464,9 +31464,35 @@ fn self_host_driver_rejects_liveness() {
     // / reject_consuming_self_use_after_move.gg / reject_consume_callable_double.gg,
     // adjudicated by ggdef + C + LLVM + self-host in tests/spec_conformance.rs). Those
     // are covered STRONGER there (the registry `E_`-code axis, not just the message),
-    // so they are dropped from this driver-only list. The five below stay here as
-    // driver-level message + box-rule + halt-before-lowering assertions.
-    let reject_fixtures: [(&str, &str); 5] = [
+    // so they are dropped from this driver-only list. The five that remain (the
+    // first five rows of the array) stay here as driver-level message +
+    // box-rule + halt-before-lowering assertions.
+    // ── The match/if FALL-THROUGH cells ────────────────────────────────
+    // The remaining TEN rows are OUTCOME cells for the two fall-through classifiers
+    // in self_host_typechecker/typecheck.gg — `match_has_catch_all` and its
+    // sibling `elsebranches_have_uncond`. They observe ACCEPT/REJECT, not source
+    // text, which is why they see weakenings the `tests/lints.rs` text pins are
+    // measurably blind to; see `self_host_match_fallthrough_predicates_pinned`
+    // for the per-route table.
+    //
+    // ⚠ THE AXIS IS THE CONSUMER, NOT THE PREDICATE. Seven sites ask "can
+    // control fall out of this construct?" — the `SMatch` join, the `EMatch`
+    // join and the `live_stmt_diverges` divergence gate (all three via
+    // `match_has_catch_all`); the `SMetaIf`, `SIf` and `elif`-chain joins (via
+    // `elsebranches_have_uncond`); and the `has_unconditional_else` twin
+    // inlined in `live_stmt_diverges`'s `SIf` arm. A weakening applied at ONE
+    // consumer is invisible to every cell but that consumer's own — measured,
+    // repeatedly — so each consumer needs its own cell.
+    // ⚠ FIVE of the seven have one below; TWO DO NOT — the `elif`-chain join
+    // and the `SMetaIf` join. Both are `elsebranches_have_uncond` consumers
+    // whose two siblings ARE celled, and the lint pins all seven call sites by
+    // EXACT LINE (not substring), but the outcome-level omission is real.
+    //
+    // Two rows (`match_exhaustive_no_catchall_*`) pin a KNOWN FALSE POSITIVE
+    // and MOVE to `self_host_driver_accepts_liveness` when the second,
+    // irrefutable-coverage verdict bit lands; their headers carry the
+    // graduation note and their `known_gaps` repros.
+    let reject_fixtures: [(&str, &str); 15] = [
         // straight-line read after a `!`-consume -> use-after-move
         ("use_after_move_reject", "after it was moved"),
         // same place moved twice -> double move
@@ -31478,6 +31504,30 @@ fn self_host_driver_rejects_liveness() {
         // THE call-arm-order lock: `!self` method whose ARG reads the receiver
         // (`c.consume(c.width)`) -> receiver consumed at STEP 1 before the arg -> UAM
         ("consuming_self_arg_reads_receiver_reject", "after it was moved"),
+        // non-enum scrutinee x DIVERGENCE gate: all arms `return`, no catch-all
+        ("match_no_catchall_diverge_use_after_move_reject", "after it was moved"),
+        // non-enum scrutinee x JOIN: all arms reinit, no catch-all
+        ("s5_join_int_nonexh", "after it was moved"),
+        // enum, complete coverage, REFUTABLE nesting x JOIN
+        ("n2_nested_uam", "after it was moved"),
+        // enum, complete coverage, REFUTABLE nesting x DIVERGENCE gate — the
+        // only cell that sees a verdict fused at the gate by a SEPARATE predicate
+        ("match_nested_refutable_diverge_use_after_move_reject", "after it was moved"),
+        // GUARDEDNESS input: the sole catch-all arm carries a guard
+        ("match_guarded_catchall_use_after_move_reject", "after it was moved"),
+        // enum, complete coverage, REFUTABLE nesting x the EMATCH join — the
+        // expression-match twin of `n2_nested_uam`; neither can see the other's
+        // consumer weakened
+        ("ematch_join_nested_refutable_use_after_move_reject", "after it was moved"),
+        // SIBLING predicate `elsebranches_have_uncond` x the SIf JOIN
+        ("if_no_else_join_use_after_move_reject", "after it was moved"),
+        // SIBLING predicate family x the SIf DIVERGENCE twin
+        // (`has_unconditional_else`), which the JOIN cell above cannot reach
+        ("if_no_else_diverge_use_after_move_reject", "after it was moved"),
+        // KNOWN FALSE POSITIVE (graduates): enum, complete + irrefutable x DIVERGENCE
+        ("match_exhaustive_no_catchall_diverge_reject", "after it was moved"),
+        // KNOWN FALSE POSITIVE (graduates): enum, complete + irrefutable x JOIN
+        ("match_exhaustive_no_catchall_join_reject", "after it was moved"),
     ];
     for (name, expected_msg) in reject_fixtures {
         let fixture = manifest_dir.join(format!("tests/fixtures/liveness/{name}.gg"));
@@ -31534,6 +31584,14 @@ fn self_host_driver_accepts_liveness() {
         "consume_callable_once_accept",
         // `!self`-consume with NO post-use of the receiver -> legal
         "consuming_self_no_use_accept",
+        // OVER-REJECTION canary for the divergence gate: literal `else:` arm,
+        // every arm diverges -> the post-join read is unreachable. Without this
+        // cell "no new rejections" cannot tell a working gate from an inert one.
+        "match_else_arm_diverge_accept",
+        // Same shape spelled `case _:`. DELIBERATE SH<->Rust divergence — Rust
+        // REJECTS this (it keys on a syntactic `else_arm` alone); the self-host
+        // is strictly more precise. See the fixture header.
+        "match_wildcard_arm_diverge_accept",
     ];
     for name in legal_fixtures {
         let fixture = manifest_dir.join(format!("tests/fixtures/liveness/{name}.gg"));
@@ -31549,6 +31607,148 @@ fn self_host_driver_accepts_liveness() {
             "self-host driver REJECTED a LEGAL liveness program `{name}` — an \
              over-rejection in self_host_typechecker/typecheck.gg. exit={:?}\n\
              stderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            !stdout.trim().is_empty(),
+            "self-host driver accepted `{name}` but emitted no C — the legal path \
+             must lower. stderr:\n{stderr}",
+        );
+    }
+}
+
+// MATCH EXHAUSTIVENESS on the self-host lane (`docs/language-design.md`:
+// "Exhaustive — compiler error if cases aren't covered. Uses `else` as
+// catch-all (not `case _`)."). Until this landed the self-host typechecker
+// implemented NO exhaustiveness checking at all: a non-exhaustive `match` in
+// self-host sources was caught only because RUST gg compiled them, so the
+// guard evaporated exactly at succession, when the self-host starts compiling
+// itself as the primary reference.
+//
+// TWO LANES PER CELL, deliberately: every fixture is run through Rust `gg
+// check` AND through the self-host driver, and both must agree on rc, on the
+// `E_NonExhaustiveMatch` code and on the missing-variant list. A one-lane
+// assertion would let the lanes drift apart silently.
+//
+// AXES COVERED (Core #12): call site (statement `match` × expression `match`) ×
+// enum kind (user non-generic · user generic · prelude `Option` · prelude
+// `Result`) × pattern shape (qualified constructor · dot shorthand · bare
+// unqualified variant name · or-pattern · `None` literal · `PWildcard` ·
+// unguarded non-variant `PBinding`) × guardedness × `&`-borrowed scrutinee ×
+// non-enum scrutinee. The `neg_bare_variant`/`pos_binding_catchall` PAIR is the
+// load-bearing one: both are `PBinding` and only the enum's variant list tells
+// them apart, so a design that classifies `PBinding` syntactically gets exactly
+// one of the two right.
+//
+// NAMED-OMITTED cell: a scrutinee that is a FIELD READ OFF A METHOD-CALL RESULT
+// (`nodes.get(i).unwrap().kind`) is NOT covered here — the self-host's
+// `infer_expr_type` returns NO_TYPE for it, so the check conservatively bails
+// and the self-host still accepts `tests/fixtures/
+// field_off_element_match_nonexhaustive_error.gg`, which Rust rejects. That is a
+// separate, filed defect in the self-host's field-access type inference, not in
+// this check; its repro is
+// `tests/fixtures/known_gaps/sh_field_off_method_call_untyped.gg`.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_driver_rejects_non_exhaustive_match() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let dir = manifest_dir.join("tests/fixtures/exhaustiveness");
+
+    // (fixture stem, the exact missing-variant list both lanes must print)
+    let reject_cells: [(&str, &str); 9] = [
+        ("neg_stmt_user_enum", "Blue"),
+        ("neg_expr_user_enum", "Blue"),
+        ("neg_generic_enum", "Nothing"),
+        ("neg_option", "None"),
+        ("neg_result", "Error"),
+        ("neg_bare_variant", "Blue"),
+        ("neg_guarded_arm", "Blue"),
+        ("neg_ref_scrutinee", "Halt"),
+        ("neg_dot_shorthand", "Blue"),
+    ];
+    for (name, missing) in reject_cells {
+        let fixture = dir.join(format!("{name}.gg"));
+        assert!(fixture.exists(), "missing exhaustiveness fixture: {}", fixture.display());
+        let expected_msg = format!("non-exhaustive match: missing variants: {missing}");
+
+        // LANE 1 — Rust `gg check`.
+        let rust = build_with_timeout(gg_command("check").arg(&fixture), name);
+        let rust_err = String::from_utf8_lossy(&rust.stderr);
+        assert!(
+            !rust.status.success(),
+            "Rust `gg check` ACCEPTED a non-exhaustive match `{name}`.\nstderr:\n{rust_err}",
+        );
+        assert!(
+            rust_err.contains("error[E_NonExhaustiveMatch]") && rust_err.contains(&expected_msg),
+            "Rust `gg check` rejected `{name}` but not with the ratified \
+             `error[E_NonExhaustiveMatch]` + `{expected_msg}`.\nstderr:\n{rust_err}",
+        );
+
+        // LANE 2 — the self-host driver.
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_rejects_non_exhaustive_match",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !out.status.success(),
+            "self-host driver ACCEPTED a non-exhaustive match `{name}` that Rust gg \
+             rejects — `check_match_exhaustiveness` in \
+             self_host_typechecker/typecheck.gg regressed. exit={:?}\nstderr:\n{stderr}",
+            out.status.code(),
+        );
+        assert!(
+            stderr.contains("error[E_NonExhaustiveMatch]")
+                && stderr.contains(&expected_msg)
+                && stderr.contains('\u{250c}'),
+            "self-host driver rejected `{name}` but did not emit the ratified \
+             `error[E_NonExhaustiveMatch]` codespan headline with `{expected_msg}` \
+             (the message must stay byte-identical to Rust's, including the \
+             declaration-ordered missing-variant list).\nstderr:\n{stderr}",
+        );
+        assert!(
+            stdout.trim().is_empty(),
+            "self-host driver emitted C for the rejected `{name}` — the gate must \
+             halt BEFORE lowering. stdout bytes={}",
+            stdout.len(),
+        );
+    }
+
+    // The OVER-REJECTION guard. Without it, "the check fires" cannot be told
+    // apart from "the check fires on everything".
+    let accept_cells: [&str; 7] = [
+        "pos_all_variants",
+        "pos_else_arm",
+        "pos_wildcard_arm",
+        "pos_binding_catchall",
+        "pos_or_pattern",
+        "pos_int_scrutinee",
+        "pos_option_some_none",
+    ];
+    for name in accept_cells {
+        let fixture = dir.join(format!("{name}.gg"));
+        assert!(fixture.exists(), "missing exhaustiveness fixture: {}", fixture.display());
+
+        let rust = build_with_timeout(gg_command("check").arg(&fixture), name);
+        assert!(
+            rust.status.success(),
+            "Rust `gg check` REJECTED the exhaustive `{name}`.\nstderr:\n{}",
+            String::from_utf8_lossy(&rust.stderr),
+        );
+
+        let out = run_with_timeout(
+            Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+            "self_host_driver_rejects_non_exhaustive_match",
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "self-host driver REJECTED the EXHAUSTIVE program `{name}` — an \
+             over-rejection in `check_match_exhaustiveness`. exit={:?}\nstderr:\n{stderr}",
             out.status.code(),
         );
         assert!(
@@ -51362,6 +51562,117 @@ fn self_host_driver_rejects_d26_compound_assign() {
         "self-host rejected but not with the ratified D26 panic message.\n\
          stderr:\n{stderr}",
     );
+}
+
+// ── R44 Track F: the match-fall-through / exhaustiveness gap set ────────
+//
+// Four durable repros filed by the round that ported match exhaustiveness to
+// the self-host. Each asserts the INTENDED behaviour, so each is RED today and
+// graduates (un-ignore + move out of `known_gaps/`) in the round that fixes it.
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+#[ignore = "KNOWN GAP (filed 2026-08-23, R44 Track F): the self-host's \
+`infer_expr_type` returns NO_TYPE for a FIELD READ off a METHOD-CALL result \
+(`nodes.get(i).unwrap().kind`) — the `EFieldAccess` arm in \
+self_host_typechecker/infer.gg handles only an `RTDefined` receiver and has no \
+`RTRef` arm, so a borrowed element's field falls through to `return NO_TYPE`. \
+Measured: field-off-a-LOCAL, a bare method call, and field-off-an-INDEX all \
+type correctly; only field-off-a-METHOD-CALL does not. Consequence here: the \
+exhaustiveness check conservatively bails and the self-host ACCEPTS (7800 bytes \
+of C) a non-exhaustive match that Rust gg rejects — but the gap silently \
+disables EVERY type-directed check on this expression shape, not just this one. \
+FIX SHAPE: peel `RTRef` at the WRITE site before the field lookup (Core #1), \
+sharing one accessor with `check_match_exhaustiveness`'s `peel_refs_for_match` \
+rather than adding a second peel. It is a self-host TYPE-INFERENCE change with \
+corpus-wide blast radius, so it needs its own scout + measured corpus sweep. \
+The Rust half of this shape is already pinned by \
+tests/fixtures/field_off_element_match_nonexhaustive_error.gg. Un-ignore and \
+graduate out of known_gaps/ when the peel lands."]
+fn sh_field_off_method_call_untyped_intended() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture =
+        manifest_dir.join("tests/fixtures/known_gaps/sh_field_off_method_call_untyped.gg");
+    assert!(fixture.exists(), "repro missing: {}", fixture.display());
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "sh_field_off_method_call_untyped_intended",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "INTENDED: the self-host must reject a non-exhaustive match on a field \
+         read off a method-call result, as Rust gg does. exit={:?}\nstderr:\n{stderr}",
+        out.status.code(),
+    );
+    assert!(
+        stderr.contains("error[E_NonExhaustiveMatch]")
+            && stderr.contains("non-exhaustive match: missing variants: Halt"),
+        "INTENDED diagnostic missing.\nstderr:\n{stderr}",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-23, R44 Track F): BOTH compilers OVER-REJECT a \
+memory-safe program in which a variant-exhaustive `match` with no catch-all has \
+every arm DIVERGE. Both move checkers classify fall-through syntactically — \
+Rust on a literal `else_arm` (src/semantic/safety/check_stmt.rs, the \
+`Stmt::Match` arm), the self-host on `match_has_catch_all` — so both emit \
+E_UseAfterMove on a path that cannot be reached. FIX SHAPE: a SECOND verdict \
+bit recording IRREFUTABLE coverage; the bare exhaustiveness verdict is NOT it \
+(it credits a refutable nested sub-pattern as full coverage, so fusing it in \
+would accept a real use-after-move — see the live NEG cell \
+tests/fixtures/liveness/match_nested_refutable_diverge_use_after_move_reject.gg). \
+The current REJECT behaviour is pinned by \
+tests/fixtures/liveness/match_exhaustive_no_catchall_diverge_reject.gg, which \
+MOVES to self_host_driver_accepts_liveness when this graduates. JOIN-site \
+sibling: sh_exhaustive_match_not_credited_at_join.gg. Un-ignore and graduate \
+out of known_gaps/ when the second bit lands."]
+fn sh_exhaustive_match_not_credited_as_diverging_intended() {
+    run_gg(
+        "known_gaps/sh_exhaustive_match_not_credited_as_diverging.gg",
+        "sunk\nhello",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-23, R44 Track F): JOIN-site sibling of \
+sh_exhaustive_match_not_credited_as_diverging.gg — every arm RE-INITIALISES \
+instead of diverging, the enum is variant-exhaustive with no catch-all, and \
+both compilers still fold the pre-branch moved state back in at the join and \
+emit E_UseAfterMove. Same remedy (the second, irrefutable-coverage verdict \
+bit) and the same caveat about the bare exhaustiveness verdict. The current \
+REJECT behaviour is pinned by \
+tests/fixtures/liveness/match_exhaustive_no_catchall_join_reject.gg, which \
+MOVES to self_host_driver_accepts_liveness when this graduates. Un-ignore and \
+graduate out of known_gaps/ when the second bit lands."]
+fn sh_exhaustive_match_not_credited_at_join_intended() {
+    run_gg(
+        "known_gaps/sh_exhaustive_match_not_credited_at_join.gg",
+        "a\nb",
+    );
+}
+
+#[test]
+#[ignore = "KNOWN GAP (filed 2026-08-23, R44 Track F): LANE SPLIT at the PARSER. \
+Rust gg REJECTS an inline ASSIGNMENT or DECLARATION as a `case` arm body \
+(`case 0: s = \"a\"` -> `expected 'case', found '='`; `case 0: int q = 5` -> \
+`expected 'case', found identifier 'q'`) while the self-host parser ACCEPTS \
+both and lowers C. It is NOT `statements on an inline arm` generally: measured, \
+`case 0: print(\"a\")` and `case 0: return` are rc 0 on BOTH lanes. Rust parses \
+an inline arm body as an EXPRESSION and so rejects exactly the two forms that \
+are statements-but-not-expressions; the self-host parses a suite. WHICH LANE IS \
+WRONG IS AN OPEN QUESTION, not a bug with a settled direction — Rust accepts \
+inline suites for if/else, function bodies and expression-match arms, and \
+docs/language-reference.md prints that form, but the reference is written after \
+the implementation and a reference-vs-code conflict is an open question, never \
+doc-wins. Do NOT fix either lane from this test. This ignore asserts the \
+INTENDED result under the direction `loosen Rust gg`. Un-ignore and graduate \
+out of known_gaps/ when the direction is ratified and landed."]
+fn inline_assign_match_arm_lane_split_intended() {
+    run_gg("known_gaps/inline_assign_match_arm_lane_split.gg", "a");
 }
 
 // ── D26 F2 SH lane-lag `#[ignore]+citation` set (Core #9 sanctioned) ─────

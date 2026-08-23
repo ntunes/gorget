@@ -1,0 +1,16 @@
+# CELL: catch-all shape = `case _:` written explicitly. Same node as the
+# desugared `else:`, different source spelling.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void show(Color c):
+    match c:
+        case Color.Red():
+            print("red")
+        case _:
+            print("other")
+
+void main():
+    show(Color.Blue())

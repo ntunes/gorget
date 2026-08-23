@@ -1,0 +1,14 @@
+# CELL: enum kind = user GENERIC. A generic enum's variants register through a
+# different resolver path from a non-generic one (scope insertion vs
+# `alloc_def`), so its variant list is a separate cell of the enum-kind axis.
+enum Maybe[T]:
+    Just(T)
+    Nothing()
+
+void show(Maybe[int] m):
+    match m:
+        case Maybe.Just(v):
+            print(v)
+
+void main():
+    show(Maybe.Nothing())

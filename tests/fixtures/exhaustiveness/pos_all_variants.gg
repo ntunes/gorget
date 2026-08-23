@@ -1,0 +1,18 @@
+# CELL: the base POSITIVE control — every variant named, no catch-all. If this
+# fixture ever rejects, the check has become an over-rejection.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void show(Color c):
+    match c:
+        case Color.Red():
+            print("red")
+        case Color.Green():
+            print("green")
+        case Color.Blue():
+            print("blue")
+
+void main():
+    show(Color.Blue())

@@ -1,0 +1,36 @@
+# AXIS CELL: predicate INPUT = GUARDEDNESS. This is the only artefact in the
+# liveness net that samples the GUARDED value of the `arm.guard is None` test
+# inside `match_has_catch_all` (self_host_typechecker/typecheck.gg); every other
+# cell, and every text pin in `tests/lints.rs`, leave that input unsampled.
+#
+# The only catch-all arm (`case x if g:`) carries a guard, so it does NOT
+# guarantee a match: `main` passes `g == false` and `n == 7`, control falls out
+# of the `match` with `s` still moved, and `print(s)` is a use-after-move --
+# rejected by `gg check` with `error[E_UseAfterMove]`.
+#
+# RED-VERIFY (drop the guard test): delete `if arm.guard is None:` from
+# `match_has_catch_all` and de-indent its `match`. That edit preserves the
+# signature, preserves the conservative tail `return false`, mentions none of
+# `ctx`/`types`/`exhaust`, and touches no call site -- so the signature pins, all
+# three argument pins, both body pins AND every other outcome cell in this net
+# are measurably blind to it: `cargo test --test lints
+# self_host_match_fallthrough_predicates_pinned` stays GREEN under it. Rebuild
+# the driver. Measured: this cell flips rc 1 -> rc 0, 4359 bytes of C, with
+# every other cell and the whole lint GREEN.
+# If this cell does not go red under that break, STOP -- the fixture's guard is
+# not being consulted.
+void sink(String ^x):
+    pass
+
+void probe(int n, bool g):
+    String s = "hello"
+    sink(^s)
+    match n:
+        case 1:
+            s = "a"
+        case x if g:
+            s = "b"
+    print(s)
+
+void main():
+    probe(7, false)

@@ -1,0 +1,30 @@
+# AXIS CELL: scrutinee type = NON-ENUM (int) x consumer = the DIVERGENCE gate
+# (`live_stmt_diverges`'s `SMatch` arm in self_host_typechecker/typecheck.gg).
+# It samples nothing about the two `safety_commit` JOIN consumers — those are
+# `s5_join_int_nonexh.gg` and `n2_nested_uam.gg`.
+#
+# `n` is neither 1 nor 2, so control falls straight OUT of the `match` even
+# though every arm `return`s. The join after the `if` is therefore REACHED with
+# `s` still moved, and `print(s)` is a use-after-move. `gg check` rejects this
+# with `error[E_UseAfterMove]`; the self-host must too.
+#
+# RED-VERIFY (pre-fix HEAD): before the divergence gate consulted
+# `match_has_catch_all`, an all-arms-diverging `match` was credited as diverging
+# whatever its arms covered, the fall-through path vanished, and this program was
+# ACCEPTED AND LOWERED -- measured rc 0, 4155 bytes of C.
+void sink(String ^x):
+    pass
+
+void probe(int n, bool c):
+    String s = "hello"
+    if c:
+        sink(^s)
+        match n:
+            case 1:
+                return
+            case 2:
+                return
+    print(s)
+
+void main():
+    probe(3, true)

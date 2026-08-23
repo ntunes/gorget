@@ -1,0 +1,24 @@
+# CELL: pattern shape = BARE UNQUALIFIED VARIANT NAME (`case Red:`), which the
+# parser builds as a `PBinding`, not a `PConstructor`.
+#
+# ⚠ THIS IS THE CELL THAT CAUGHT THE PORT'S OWN BUG. Whether a bare name is a
+# catch-all or names a variant CANNOT be decided without the enum's variant
+# list, so classifying `PBinding` in the pre-resolution catch-all scan makes the
+# scan short-circuit here and SILENTLY ACCEPT this program. `PBinding` is
+# therefore decided later, inside `collect_covered_variants`, which has
+# `all_variants` in hand — mirroring Rust's structure exactly. The first seven
+# probes of the design all passed; only widening to this axis exposed it.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void show(Color c):
+    match c:
+        case Red:
+            print("red")
+        case Green:
+            print("green")
+
+void main():
+    show(Color.Blue())

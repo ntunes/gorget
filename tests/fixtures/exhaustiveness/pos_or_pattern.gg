@@ -1,0 +1,17 @@
+# CELL: pattern shape = OR-PATTERN. Coverage must be collected recursively
+# through every alternative, or this genuinely exhaustive match is falsely
+# rejected.
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void show(Color c):
+    match c:
+        case Color.Red() | Color.Green():
+            print("warm")
+        case Color.Blue():
+            print("cool")
+
+void main():
+    show(Color.Blue())

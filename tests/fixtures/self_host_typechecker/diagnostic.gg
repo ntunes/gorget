@@ -55,6 +55,7 @@ enum DiagKind:
     DkNoFieldFound         # `.field` absent on the receiver (E_NoFieldFound)
     DkNoMethodFound        # method absent on the receiver (E_NoMethodFound) — includes one-sided combinator reject
     DkTypeMismatch         # expected vs actual type disagreement (E_TypeMismatch)
+    DkNonExhaustiveMatch   # else-less match on an enum missing >=1 variant (E_NonExhaustiveMatch)
     # Split out of the former coarse DkTypeMismatch — each 1:1 with its registry code:
     DkDerefNonBox          # `*` on a non-`Box[T]` value (E_DerefNonBox)
     DkDefaultOpNonOptional # `??` on a non-Option/Result LHS (E_DefaultOpNonOptional)
@@ -145,6 +146,8 @@ String diag_kind_str(DiagKind kind):
             return "no-method-found"
         case DkTypeMismatch():
             return "type-mismatch"
+        case DkNonExhaustiveMatch():
+            return "non-exhaustive-match"
         case DkDerefNonBox():
             return "deref-non-box"
         case DkDefaultOpNonOptional():
@@ -249,6 +252,8 @@ String diag_kind_code(DiagKind kind):
             return "E_NoMethodFound"
         case DkTypeMismatch():
             return "E_TypeMismatch"
+        case DkNonExhaustiveMatch():
+            return "E_NonExhaustiveMatch"
         case DkDerefNonBox():
             return "E_DerefNonBox"
         case DkDefaultOpNonOptional():

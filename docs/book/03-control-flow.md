@@ -167,6 +167,84 @@ match direction:
         print("going west")
 ```
 
+### Exhaustiveness
+
+A `match` on an enum must account for **every** variant. The compiler knows the
+full set, so leaving one out is an error, not a silent fall-through:
+
+```gorget
+enum Direction:
+    North
+    South
+    East
+    West
+
+match direction:          # error: non-exhaustive match: missing variants: West
+    case North:
+        print("going north")
+    case South:
+        print("going south")
+    case East:
+        print("going east")
+```
+
+The error names the variants you forgot, in declaration order. Add them, or add
+an `else` — the catch-all that covers everything remaining:
+
+```gorget
+match direction:
+    case North:
+        print("going north")
+    else:
+        print("some other way")
+```
+
+A bare name works as a catch-all too, and binds the matched value:
+
+```gorget
+match direction:
+    case North:
+        print("going north")
+    case rest:
+        print("some other direction")
+```
+
+Two things do *not* count toward coverage.
+
+A **guarded** arm doesn't, because a guard can be false — the arm might not run
+even when the pattern fits:
+
+```gorget
+match direction:          # error: non-exhaustive match: missing variants: West
+    case North:
+        print("going north")
+    case South:
+        print("going south")
+    case East:
+        print("going east")
+    case West if windy:   # a guard is a maybe, so this covers nothing
+        print("going west")
+```
+
+And **non-enum** scrutinees aren't checked at all. An `int` or a `String` has no
+closed set of values for the compiler to compare against, so a `match` on one is
+accepted with whatever arms you give it. If you want a default, write it:
+
+```gorget
+match count:
+    case 0:
+        print("none")
+    case 1:
+        print("one")
+    else:
+        print("many")
+```
+
+This is why enums are worth reaching for. When the set of possibilities lives in
+the type, adding a variant turns every place that handles it into a compile
+error you have to answer — the compiler hands you the list of sites to update
+instead of leaving you to find them at runtime.
+
 ### Destructuring Payloads
 
 Enum variants with data can be destructured:
@@ -256,5 +334,6 @@ void stub():
 | Infinite loop | `loop:` | Exit with `break` |
 | Break / Continue | `break`, `continue` | Standard loop control |
 | Match | `match expr: case pattern: ...` | Destructuring, guards, expressions |
+| Exhaustiveness | every enum variant, or an `else` | Guards don't count; non-enums aren't checked |
 | Is | `if x is Pattern:` | Quick pattern check |
 | Pass | `pass` | No-op placeholder |

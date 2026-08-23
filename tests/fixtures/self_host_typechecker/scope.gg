@@ -98,8 +98,19 @@ struct ScopeTable:
     # variants, which are NOT in the value namespace nor the parallel name
     # table) records each variant here so `is_known_variant_name` is an O(K)
     # lookup rather than a linear scan of `definitions`. Mirrors Rust gg's
-    # `name_index` role for `is_known_variant_name` (src/semantic/scope.rs:195/442).
+    # `name_index` role for `is_known_variant_name` (`src/semantic/scope.rs:210`,
+    # populated at `:277`/`:385` — the previously-cited `:195/442` had decayed to
+    # bare closing braces).
     Dict[String, Vector[int]] variant_name_index
+    # Enum def_id → its variants' names, in DECLARATION ORDER. The single
+    # source of truth for match-exhaustiveness coverage (typecheck.gg
+    # `check_match_exhaustiveness`). Written ONCE per enum at the resolver
+    # pre-pass (`collect_item`'s IEnum arm + the three prelude enums), keyed
+    # by the TYPED def_id — never by name (a name-keyed sidecar collides
+    # across modules). Mirrors Rust gg's `enum_variants` map
+    # (`src/semantic/typecheck.rs:609`, `FxHashMap<DefId, EnumVariantInfo>`;
+    # read by `check_match_exhaustiveness` at `:5627`).
+    Dict[int, Vector[String]] enum_variant_names
 
 # ── Typed accessors ────
 
@@ -129,6 +140,16 @@ bool def_kind_is_variant(DefKind k):
             return true
         else:
             return false
+
+# The ordered variant-name list for an enum def_id, or an EMPTY vector when
+# `def_id` is not a registered enum. The ONE accessor for
+# `ScopeTable.enum_variant_names` — readers never index the Dict directly.
+Vector[String] enum_variants_of(ScopeTable scopes, int def_id):
+    if def_id < 0:
+        return Vector[String]()
+    if scopes.enum_variant_names.contains(def_id):
+        return scopes.enum_variant_names.get(def_id).unwrap().clone()
+    return Vector[String]()
 
 # Is `name` a known (non-generic) enum variant anywhere in the module?
 #
@@ -172,7 +193,8 @@ equip ScopeTable:
         NO_SCOPE,
         Dict[String, Vector[int]](),
         Vector[Vector[int]](),
-        Dict[String, Vector[int]]()
+        Dict[String, Vector[int]](),
+        Dict[int, Vector[String]]()
     )
 
     void init(&self):

@@ -1,0 +1,55 @@
+# AXIS CELL: consumer = the `EMatch` (expression-match) `safety_commit` JOIN.
+# The program is the SMatch join cell `n2_nested_uam.gg` rewritten so the match
+# is an EXPRESSION, which routes the commit through a DIFFERENT consumer of the
+# same classifier.
+#
+# ⚠ `n2_nested_uam.gg` CANNOT see a weakening applied only here, and the
+# converse holds too — measured. An earlier version of this net omitted an
+# EMatch cell on the reasoning that "an EMatch-only route must edit the `:2671`
+# call text, which the argument pin sees". That reasoning is FALSE for a
+# SUBSTRING pin: `and`-extending the argument appends text after the substring
+# and leaves a `grep -c` unchanged. (This tree's pin compares the WHOLE trimmed
+# line, so it does fire — but the cell is what makes the guarantee independent
+# of how the pin happens to be written.)
+#
+# `Outer.Wrap` and `Outer.Nil` are every variant of `Outer`, but the `Wrap` arm
+# only matches payload `Inner.Red()`. `main` passes `Outer.Wrap(Inner.Blue())`,
+# so control falls out of the match with `s` still moved and `print(s)` is a
+# use-after-move — rejected by `gg check` with `error[E_UseAfterMove]`.
+#
+# ⚠ SPELLING IS LOAD-BEARING: all-`PConstructor` top-level arms, no prelude
+# variant — see the note in `n2_nested_uam.gg`.
+#
+# RED-VERIFY (weaken THIS consumer only): `and`-extend the EMatch join's
+# argument with a separate exhaustiveness helper —
+#   `safety_commit(em_acc, not match_has_catch_all(arms) and not <helper>(arms),
+#                  em_reached, &state)`
+# leaving the `SMatch` join untouched — and rebuild the driver. Measured: this
+# cell flips rc 1 -> rc 0, 7296 bytes of C, while `n2_nested_uam.gg` — the same
+# program shape through the statement form — stays GREEN.
+enum Inner:
+    Red()
+    Blue()
+
+enum Outer:
+    Wrap(Inner)
+    Nil()
+
+void sink(String ^x):
+    pass
+
+int probe(Outer o):
+    String s = "hello"
+    sink(^s)
+    int n = match o:
+        case Outer.Wrap(Inner.Red()):
+            s = "a"
+            1
+        case Outer.Nil():
+            s = "b"
+            2
+    print(s)
+    return n
+
+void main():
+    print(probe(Outer.Wrap(Inner.Blue())))

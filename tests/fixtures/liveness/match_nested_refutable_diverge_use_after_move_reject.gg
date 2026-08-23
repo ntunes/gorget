@@ -1,0 +1,58 @@
+# AXIS CELL: scrutinee type = ENUM with COMPLETE top-level variant coverage but
+# a REFUTABLE NESTED sub-pattern x consumer = the DIVERGENCE gate
+# (`live_stmt_diverges`'s `SMatch` arm). Its join-site twin is
+# `n2_nested_uam.gg`; the two join cells cannot reach this consumer because
+# their arms REINIT rather than DIVERGE.
+#
+# `Tag.A` and `Tag.B` are every variant of `Tag`, but each arm only matches
+# payload `0`. `main` passes `Tag.A(1)`, so control falls out of the match with
+# `s` still moved and `print(s)` is a use-after-move -- rejected by `gg check`
+# with `error[E_UseAfterMove]`.
+#
+# This is the cell that trips when a contributor closes the divergence-gate
+# over-rejection (pinned by `match_exhaustive_no_catchall_diverge_reject.gg`)
+# with the ONE-BIT exhaustiveness verdict, by ANY route -- widening
+# `match_has_catch_all`, or wiring a separate predicate straight into the gate
+# and leaving `match_has_catch_all` byte-identical. It stays GREEN under the
+# correct two-bit design, because a refutable nested sub-pattern is not
+# irrefutably exhaustive.
+#
+# ⚠ SPELLING IS LOAD-BEARING: all-`PConstructor` top-level arms, no prelude
+# variant -- see the note in `n2_nested_uam.gg`.
+#
+# RED-VERIFY 1 (pre-fix HEAD): ACCEPTED, rc 0, 6103 bytes of C.
+# RED-VERIFY 2 (fuse the verdict AT THE GATE ONLY, leaving `match_has_catch_all`
+# byte-identical): add a helper implementing the one-bit rule (unguarded arms all
+# `PConstructor`/`PDotShorthand`) and nest it UNDER the pinned gate line, so the
+# argument pin's exact text survives:
+#   if not match_has_catch_all(arms):
+#       if not <helper>(arms):
+#           return false
+# Measured: this cell flips rc 1 -> rc 0, 6103 bytes of C, while `cargo test
+# --test lints self_host_match_fallthrough_predicates_pinned` stays GREEN and so
+# do both join cells, the guard cell, the sibling-predicate cell, the non-enum
+# divergence cell and all eleven pre-existing driver cells. It is the ONLY
+# artefact in the net that sees that route.
+# (Written the OBVIOUS way instead — `if not (match_has_catch_all(arms) or
+# <helper>(arms)):` — the gate's argument pin does fire. The nested form above is
+# the honest worst case, and it is the one measured here.)
+enum Tag:
+    A(int)
+    B(int)
+
+void sink(String ^x):
+    pass
+
+void probe(Tag g, bool c):
+    String s = "hello"
+    if c:
+        sink(^s)
+        match g:
+            case Tag.A(0):
+                return
+            case Tag.B(0):
+                return
+    print(s)
+
+void main():
+    probe(Tag.A(1), true)

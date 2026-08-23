@@ -1,0 +1,9 @@
+# CELL: enum kind = PRELUDE `Result[T, E]` — the second prelude enum, whose
+# variant list is written at its own registration site.
+void show(Result[int, String] r):
+    match r:
+        case Ok(n):
+            print(n)
+
+void main():
+    show(Ok(1))

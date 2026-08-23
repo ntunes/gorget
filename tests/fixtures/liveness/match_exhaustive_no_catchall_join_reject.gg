@@ -1,0 +1,40 @@
+# AXIS CELL: scrutinee type = ENUM with COMPLETE top-level coverage and ALL
+# IRREFUTABLE sub-patterns x consumer = the `safety_commit` JOIN in
+# `check_safety_stmt`'s `SMatch` arm. Its divergence twin is
+# `match_exhaustive_no_catchall_diverge_reject.gg`.
+#
+# ⚠ THIS CELL PINS A KNOWN FALSE POSITIVE, not a bug being fixed. Every arm
+# re-initialises `s` and no value of `Tag` skips the match, so `print(s)` reads a
+# live value on every path. Both compilers reject it anyway: the join folds the
+# pre-branch (still-moved) state back in whenever `match_has_catch_all` is false,
+# and a variant-exhaustive match with no catch-all is false there by design.
+#
+# GRADUATION: same second-verdict-bit design as the divergence twin; when it
+# lands this cell MOVES to `self_host_driver_accepts_liveness` and
+# `tests/fixtures/known_gaps/sh_exhaustive_match_not_credited_at_join.gg`
+# graduates with it.
+#
+# RED-VERIFY (break the JOIN consumer, not the divergence gate): in
+# `self_host_typechecker/typecheck.gg` replace
+#   `safety_commit(m_acc, not match_has_catch_all(arms), m_reached, &state)`
+# with `safety_commit(m_acc, false, m_reached, &state)` and rebuild the driver.
+# Measured: this cell flips rc 1 -> rc 0, 5394 bytes of C.
+enum Tag:
+    A(int)
+    B(int)
+
+void sink(String ^x):
+    pass
+
+void probe(Tag g):
+    String s = "hello"
+    sink(^s)
+    match g:
+        case Tag.A(_):
+            s = "a"
+        case Tag.B(_):
+            s = "b"
+    print(s)
+
+void main():
+    probe(Tag.A(1))

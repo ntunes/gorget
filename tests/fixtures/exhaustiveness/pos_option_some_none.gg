@@ -1,0 +1,14 @@
+# CELL: pattern shape = `PLiteral(ENoneLiteral)`. `None` and `None()` are lowered
+# by the parser to a LITERAL pattern, not a constructor — the `KW_NONE` branch
+# runs before the constructor branch — so a coverage collector that only credits
+# constructor patterns falsely rejects this exhaustive match. `Some(_)` plus
+# `None()` covers `Option[T]` completely.
+void show(Option[int] o):
+    match o:
+        case Some(n):
+            print(n)
+        case None():
+            print(0)
+
+void main():
+    show(None())
