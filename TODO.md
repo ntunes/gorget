@@ -42,6 +42,19 @@ no work done, so it belongs in a baseline — same rule as this round's two re-b
   FIELD depends on the census** proving that vocabulary can be controlled and small. Long tail ⇒ move
   anyway, drop that field.
 
+**⚖ ORCHESTRATOR CORRECTION 2026-08-23 — THE C1/C2 SPLIT IS DISSOLVED; TRACK C IS ONE TRACK, AFTER D.**
+I split Track C into a "self-contained" C1 and a deferred C2. Its first review measured that **two of
+C1's four edits depend on Track D** — edit 1 is verbatim what the OVERLAP RULING already assigns to D
+("C REBASES its env threading onto D's body, AFTER D lands"), and edit 2 targets the exact loop D's
+brief targets, a collision no layer had enumerated. **So the split was cut on the wrong axis.**
+⇒ **C is un-split and sequenced AFTER D lands**, when its brief can quote D's landed arm list instead
+of predicting it — the original argument for splitting, applied to the whole track. **⚠ C therefore
+does NOT land in R44.** Better stated than shipped: its own binding ruling forbids it starting.
+⚠ Also withdrawn: the `gorget_exec` over-selection premise is **measured FALSE** (nothing binds
+`gorget_executor_*`; the runtime's symbols are `__gorget_executor_*`; a built async program yields zero
+`ExecResult`), so the oracle-hygiene filing it mandated **would have filed a non-defect.** That premise
+had been called "the one directive sustained in full" — a premise's survival count is not evidence.
+
 **⚖ OWNER RULING 2026-08-23 (third) — THE CONVERGENCE GATE IS **DESIGN STABILITY**, not clean passes.**
 Landed in AGENTS.md (replacing the zero-blocking gate) with the evidence in devbook/30 §16.
 **Two successive passes with NO DESIGN finding ⇒ launch the executor.** DESIGN = fix shape · site set ·
