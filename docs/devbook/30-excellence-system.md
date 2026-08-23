@@ -891,6 +891,48 @@ The precedence chain is not bureaucracy. It is what makes fold fidelity *checkab
 the next fresh pass: the reviewer can diff the addendum against its source report and
 confirm, item by item, that nothing mutated in transcription.
 
+### The directive layer is the leak the verbatim rule does not plug (R44, 2026-08-23)
+
+Folding verbatim solves only half the problem, and the surviving half is worse,
+because it hides inside the remedy.
+
+An orchestrator's addendum has two jobs that look alike and are not. One is to
+**decide** — rule a scope, choose between options the reviewer left open, retract an
+earlier instruction. The other is to **restate** a finding so the executor sees it
+without reading the appendix. The first cannot be done by quoting; the second must
+never be done any other way. Restating is summarising with a different name, and it
+carries an aggravating factor a plain summary does not: the directive sits at the
+**top of the precedence chain**, so a compressed restatement *outranks* the verbatim
+text it compressed. The evidence is present, intact, and overruled.
+
+Three passes in one round found exactly this, each time in a layer written to prevent it:
+
+- A Track A addendum restated a pass-2 finding's six ordering steps as four and dropped
+  its verification checkpoint. Pass 3's verdict named the shape: the directive layer
+  "is itself a summary layer sitting at the TOP of the precedence chain."
+- A Track B addendum kept one half of a two-part finding — "struct-field: liveness
+  needed" — and dropped the other half, "collection/param: *no* liveness needed". The
+  surviving half then directed a condition the write site cannot evaluate, because the
+  relevant liveness belonged to the caller.
+- The same Track B addendum restated the defect's subject as a bijection from missing
+  fact to user-visible face. The next pass refuted it from the artifact's own exhibit
+  and called it "a fifth wrong spelling of the subject, inside the directive whose whole
+  job is to stop that."
+
+The rule that follows is mechanical, which is the only kind that survives a weaker
+orchestrator: **an addendum may DECIDE, never RESTATE.** Where a directive does not mean
+to narrow a finding, it cites instead of paraphrasing — *operative text: pass-N §X,
+unchanged* — which costs one line and makes the omission of any other line meaningful.
+
+There is a second-order lesson about *when* stacking stops paying. Track A reached five
+layers over an unedited body, and the reviewer's objection was no longer fidelity but
+navigability: an executor had to reconcile five layers to answer "what fixtures do I
+write?". At that point the correct move is not a sixth layer but consolidation — fold
+the corrections into the body at the granularity of each defective clause, demote the
+layers to an evidence appendix, and state explicitly **what the old text stopped
+saying**. That last step is what keeps consolidation from becoming the silent rewrite
+the precedence rule exists to forbid.
+
 ## §14 — The reference lags the implementation
 
 `docs/language-reference.md` was written **after** the compiler, and has not
