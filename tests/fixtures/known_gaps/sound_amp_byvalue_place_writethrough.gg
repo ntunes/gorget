@@ -1,16 +1,28 @@
 # REGRESSION FIXTURE — B1: a `&`-arg naming a BY-VALUE place must write THROUGH
 # to that place. Nine rows, all asserting the write reaches the caller:
 #     11 / 11.000000 / true / 11 / 11 / 11 / 11 / 11 / 11
+#     BLUE / 11 / 11 / 11 / 11 / 11        (rows 10-15)
 #
 # AXIS + CELL (Core #12): this samples the *projected TYPE* axis of the
 # `&`-argument face, on the BY-VALUE side — `int` · `float` · `bool` · value
 # struct · tuple · Dict value · Vector element, plus two rows with no struct at
-# all. The RESOURCE side of the same axis (`String`/`Vector`/`Dict`/resource
+# all, plus (rows 10-15) user ENUM field · `Option[int]` field · GENERIC struct
+# field · NESTED collection element · GENERIC function callee · MATCH-BINDING
+# root. The RESOURCE side of the same axis (`String`/`Vector`/`Dict`/resource
 # struct fields, which used to work by accident) is
 # `security/sound_amp_field_thinptr_control.gg`; the resource/value contrast
 # INSIDE each type kind is `cow_amp_projection_resource_value_split.gg`.
 #
-# RED-VERIFIED: against the pre-fix compiler this printed
+# ⚠ ROWS 10-15 WERE ENUMERATED AND THEN LOST. All six were in the original
+# scout's list, were measured broken at base and fixed by the same Family-1
+# chokepoint, and then fell out of two successive brief folds AND out of this
+# file — so for months the tree held a "wide" fixture that omitted six cells its
+# own filing named, including the ENUM cell that filing called out explicitly.
+# That is the axis-completeness failure Core #12 exists for: a green suite over
+# a partially-sampled axis is an anecdote wearing a net's name. Do not drop a
+# row here without moving its cell somewhere else and saying where.
+#
+# RED-VERIFIED: against the pre-fix compiler the original nine rows printed
 #     10 / 10.000000 / false / 10 / 10 / 10 / 10 / 10 / 10
 # — EVERY row dropped the callee's write on the floor, `gg check` clean, on both
 # backends, for ~5 months. ggdef printed the incremented value throughout: the
@@ -44,6 +56,13 @@
 #
 # Cited from TODO.md (CoW / ownership / High): "By-value-field `&`-arg
 # write-through is SILENTLY LOST".
+enum Colour:
+    Red()
+    Blue()
+
+struct Cell[T]:
+    T val
+
 struct Inner:
     int a
     int b
@@ -56,6 +75,8 @@ struct Holder:
     (int, int) tup
     Dict[String, int] d
     Vector[int] vec
+    Colour col
+    Option[int] opt
 
 int seed():
     return 10
@@ -78,12 +99,22 @@ void bump_struct(Inner &s):
 void bump_tuple((int, int) &t):
     t.0 = t.0 + 1
 
+void set_blue(Colour &c):
+    c = Colour.Blue()
+
+void set_some(Option[int] &o):
+    o = Some(seed() + 1)
+
+void bumpg[T](T &x):
+    x = x + 1
+
 void main():
     Dict[String, int] dd = Dict[String, int]()
     dd.put("k", seed())
     Vector[int] vv = Vector[int]()
     vv.push(seed())
-    Holder h = Holder(seed(), fseed(), false, Inner(seed(), 0), (seed(), 0), dd, vv)
+    Holder h = Holder(seed(), fseed(), false, Inner(seed(), 0), (seed(), 0), dd, vv,
+                      Colour.Red(), Some(seed()))
 
     # 1. scalar int field
     bump_int(&h.i)
@@ -124,3 +155,43 @@ void main():
     loose_dict.put("k", seed())
     bump_int(&loose_dict["k"])
     print(loose_dict["k"])
+
+    # 10. user-ENUM field — the cell the filing named and the repro omitted
+    set_blue(&h.col)
+    match h.col:
+        case Colour.Blue():
+            print("BLUE")
+        else:
+            print("RED")
+
+    # 11. Option[int] field
+    set_some(&h.opt)
+    print(h.opt.unwrap())
+
+    # 12. GENERIC struct field
+    Cell[int] cl = Cell[int](seed())
+    bump_int(&cl.val)
+    print(cl.val)
+
+    # 13. NESTED collection element — `&outer[0][1]`, two index projections
+    Vector[Vector[int]] outer = Vector[Vector[int]]()
+    Vector[int] inner = Vector[int]()
+    inner.push(seed())
+    inner.push(seed())
+    outer.push(inner)
+    bump_int(&outer[0][1])
+    print(outer[0][1])
+
+    # 14. GENERIC function as the callee
+    bumpg(&h.i)
+    print(h.i - 1)
+
+    # 15. MATCH-BINDING root — the `&`-arg's root is a match binding, not a
+    #     declared local
+    Option[Inner] mo = Some(Inner(seed(), 0))
+    match mo:
+        case Some(v):
+            bump_int(&v.a)
+            print(v.a)
+        else:
+            print("none")

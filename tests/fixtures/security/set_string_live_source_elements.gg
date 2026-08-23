@@ -1,0 +1,87 @@
+# REGRESSION FIXTURE — a `Set[String]` literal built from LIVE named locals must
+# CLONE each element (the source stays readable) and must own what it stores.
+#
+# AXIS + CELL (Core #12): this is the LIVE-SOURCE cell of the set-literal
+# element-ownership axis. Its sibling
+# `attack_101_set_string_heap_elem_double_free.gg` is the DEAD-SOURCE cell
+# (elements are temporaries from `mk(...)`, consumed straight into the literal).
+# The two together cover both values of the source-liveness axis; neither alone
+# does, and the live-source half is the one that was BLOCKED rather than merely
+# untested — see below.
+#
+# ⚠⚠ THIS CELL COULD NOT BE MADE RED, AND SAYING SO IS THE POINT (Core #12:
+# "if neither form of red is possible, say so in the header and state what it
+# pins instead"). FOUR deliberate breaks of the set-literal ownership path were
+# tried at HEAD and this fixture stayed GREEN through every one:
+#
+#   1. `gorget_ordered_set_new_str` -> the byte-keyed `gorget_dict_new(...)`
+#      (`src/backend/c/runtime/runtime_set.c`), i.e. `key_drop=NULL`. The
+#      SIBLING fixture double-frees under ASan; this one does not, because a
+#      byte-keyed set stores a shallow alias it never frees and `main` frees the
+#      original exactly once — no double free, no leak.
+#   2. `elem_mode` forced to `AssignMode::Move` in
+#      `lower_set_literal_from_array`. No effect: the upstream
+#      `materialize_for_slot` has already produced a fresh temp, so the move is
+#      of the temp.
+#   3. the clone-if-live `materialize_for_slot` deleted for elements 2..N.
+#   4. breaks 2 and 3 together — a live named local consumed with no clone AND
+#      forced Move. STILL green.
+#
+# The reason is `_new_str`'s `key_materialize`: the str-keyed map deep-copies
+# the key inside `gorget_set_add`, which makes the CALLER-side ownership
+# decision unobservable for this shape. So the caller-side clone-if-live picker
+# is NOT what this fixture guards, and any comment claiming otherwise is rot.
+#
+# WHAT IT ACTUALLY PINS, and why it is still worth committing:
+#   * THE SHAPE COMPILES AND RUNS AT ALL. At the base of the fix
+#     `Set[String] s = {x, y}` from live locals was a hard "shallow copy of
+#     resource" validator panic — the clone-if-live picker for set literals had
+#     been REVERTED because a live element's clone leaked into the byte-variant
+#     set. That is a genuine historical red; reproducing it needs a pre-fix
+#     compiler, which is why it is recorded here rather than re-run.
+#   * IT CLOSES THE SOURCE-LIVENESS AXIS, whose other value is the graduated
+#     sibling `attack_101_set_string_heap_elem_double_free.gg` (dead-source
+#     temporaries). Neither cell alone samples that axis.
+#   * A LEAKED CLONE ON THIS PATH still reds it, because it is wired to
+#     `security_safe_no_leak` (`detect_leaks=1`) rather than a stdout compare.
+#     That channel is live even though the four breaks above do not reach it.
+# Treat it as a BOUNDARY/CONTROL cell, not a mechanism guard.
+#
+# ⛔ WHAT IT DOES **NOT** PIN, though an earlier draft of this header claimed it
+# twice: "the sources survive, so `print(x)` / `print(y)` fail loudly if the
+# literal MOVED them". Break #4 above IS that case — a live named local consumed
+# with no clone AND forced Move — and it stayed GREEN, rc 0, correct stdout,
+# LSan-clean, reproduced independently. `key_materialize` deep-copies the key
+# and the `MoveZero` is elided, so the source is never observably dead. The
+# reads below are a CHEAP FORWARD HOPE, not a demonstrated guard: only a future
+# change that makes the source observably dead would red them.
+#
+# ⚠ HEAP-FORCED ELEMENTS. `mk()` concatenates at runtime so each element is a
+# real allocation; string LITERALS here would be a false negative, because a
+# static key has nothing to clone, leak or double-free.
+#
+# ⚠ ELEMENTS ARE READ AFTER THE SET IS BUILT — keep the reads, but do not read
+# them as coverage. See "WHAT IT DOES NOT PIN" above: break #4 moved a live
+# named local out of this literal and `print(x)` / `print(y)` still printed
+# correctly, so these reads are not a demonstrated move guard. They cost two
+# lines and would catch a future change that makes the source observably dead,
+# which is why they stay.
+#
+# Wired test: `set_string_live_source_elements_safe` (tests/security.rs), which
+# runs it under `--sanitize` with `detect_leaks=1`, so a leaked clone is a hard
+# failure and not just a stdout compare.
+#
+# INTENDED: aa / bb / aa / bb, exit 0, sanitizer-clean.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String x = mk("a", "a")
+    String y = mk("b", "b")
+    Set[String] s = {x, y}
+    for e in s:
+        print(e)
+    # Forward guard only — see the header: a forced MOVE of these locals was
+    # measured NOT to change this output.
+    print(x)
+    print(y)

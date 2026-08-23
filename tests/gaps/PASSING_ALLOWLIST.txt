@@ -1,0 +1,99 @@
+# PASSING ALLOWLIST — `#[ignore]`d known_gaps tests that PASS at HEAD
+#
+# The durable-repro contract (AGENTS.md "Task Continuity") says a filed bug gets
+# a `known_gaps/` fixture plus an `#[ignore]`d test asserting the INTENDED
+# behaviour, GRADUATED the round the bug is fixed. Nothing in the suite ever
+# runs an ignored test, so the second half was prose — and prose rots. The
+# executable half is `scripts/known_gaps_census.sh` (wired into CI as the
+# "known_gaps graduation census" step); this file is its committed baseline.
+#
+# A row here says: "this ignored test PASSES today, and here is why that is NOT
+# a graduation." Every row carries a REASON CODE and the evidence for it.
+#
+#   CELL-BLIND       the assertion is on the RIGHT lane, but THIS CELL's output
+#                    is insensitive to the defect, so it cannot go red however
+#                    broken the compiler is. Not fixable by rewiring — the row
+#                    must name the SIBLING cells that DO pin the class, and the
+#                    header must say why this one cannot (Core #12: a fixture
+#                    green for a reason unrelated to what it claims to test).
+#   BLIND-PERF       the filed gap is a clone/allocation pathology and the body
+#                    asserts only stdout, which the pathology does not change.
+#                    Fix: assert a clone-stats floor (`gg build --clones=stats`
+#                    → the `[clone-stats] array_clone=N` line the binary prints
+#                    at exit), then the test can go red.
+#   PINS-TODAY       the test asserts CURRENT behaviour while the open item is a
+#                    DESIGN question. Neither graduate nor rewire until the
+#                    semantics are ratified — it is an owner ask.
+#
+# ⚠ SHRINK-ONLY and EXACT, enforced by `known_gaps_passing_allowlist_shrink_only`
+# in tests/lints.rs (`assert_eq!` on the row count, so a row cannot be swapped
+# for another silently) and by `known_gaps_census.sh --check` (set equality
+# against the measured PASS set, so neither a new passer nor a stale row slips
+# through). Removing a row is the normal outcome — the test graduated, or its
+# assertion was rewired so it goes red again. ADDING one means an ignored test
+# silently started passing and nobody adjudicated it. A row is NEVER a place to
+# park a graduation you did not do.
+#
+# ⚠ A PASS IS NOT A VERDICT. Telling a blind cell from a real graduation needs
+# the MECHANISM, not the exit code — probe the axis the filing names and break
+# the cited fix site to watch the test go red (Core #13). Every row below was
+# adjudicated that way; the evidence is in the comment.
+#
+# HISTORY: R44's census opened this file with TWELVE rows, eight of them
+# `BLIND-LANE` — SH-lane gaps whose bodies called the Rust-lane `run_gg`. All
+# eight were rewired onto `assert_self_host_stdout`; six now go red on the lane
+# their gap lives on and left this list, and the two below survived because
+# their CELL, not their lane, is the blind part. That work discharged the
+# `known_gaps/` wrong-lane entry in TODO.md and is why `BLIND-LANE` is no longer
+# a valid code here: a wrong-lane row is a bug to fix, not a row to file.
+#
+# Regenerate: scripts/known_gaps_census.sh --check
+# (full run ~1 min 49 s; `--fast` ~13 s skips the self-host-driver rows)
+
+# ── CELL-BLIND: right lane, but this cell cannot observe the defect ─────────
+# Both rows assert the SELF-HOST lane, which is where their gap lives, and both
+# print the CORRECT answer there — because neither program contains a `spawn`,
+# and in a single-threaded program "ignore the sharing entirely" is
+# output-indistinguishable from "share correctly".
+#
+# The self-host is not implementing the sharing at all:
+# `tests/fixtures/self_host_lowerer/lower_stmt.gg` gates the shared carrier on
+# `shc_inner_ty < PRIM_COUNT`, and its own comment says "a non-scalar `shared`
+# falls through to the plain var-decl path — a live gap, filed". Measured
+# directly: the SH-emitted C for both fixtures contains ZERO occurrences of
+# `rwlock|pthread_mutex|gorget_shared`, against 137 in Rust gg's.
+#
+# The class IS pinned, by the three `spawn` siblings that can see it:
+# `shared_spawn_grow_vector` (SH prints 1, want 3), `shared_spawn_amp_param`
+# (rc 134, double free), `shared_spawn_async_bump` (rc 134). Retire these two
+# rows when the SH op_consume follow-up lands and all five graduate together.
+shared_vector_ctor_init CELL-BLIND
+shared_rwlock_call_init CELL-BLIND
+
+# ── BLIND-PERF: filed as an allocation pathology, asserted on stdout ────────
+# Both are Track-I sibling filings: an unconditional clone in a `lower_call_arg`
+# arm, O(N) (resp. O(N·data.len)) under recursion. The filings say in as many
+# words that "correct output survives" — so the stdout assertion cannot move,
+# before or after a fix. The pathology is LIVE at HEAD; measured with
+# `gg build --clones=stats <fixture>` then running the binary and reading the
+# `[clone-stats] array_clone=N` line it prints at exit:
+#   mutable_borrow_move_callee_recursive       array_clone=3   (linear in depth)
+#   mutable_borrow_projected_root_recursive    array_clone=15  (superlinear)
+# Retire each row by asserting a clone-count floor instead of stdout.
+mutable_borrow_move_callee_recursive BLIND-PERF
+mutable_borrow_projected_root_recursive BLIND-PERF
+
+# ── PINS-TODAY: the open item is a design question, not a bug ───────────────
+# gorget-sheets snag #58 (TODO.md): cross-module `int` bindings require
+# `public`. Both tests assert what the compiler does TODAY — the negative gets
+# `E_PrivateImport`, the positive works with `public` — so both are green and
+# both would need REWRITING, not un-ignoring, if the semantics changed. The
+# open question is whether module-level ints should be public by default; the
+# filing calls it a spec ambiguity, and `docs/language-reference.md` was written
+# after the implementation, so a reference-vs-code conflict here is an OWNER
+# ASK, never a scout's or an executor's guess (AGENTS.md "Scout before you
+# brief"). ⚠ These two are the tree's only durable repros that assert CURRENT
+# rather than INTENDED behaviour — a documented exception to the durable-repro
+# contract, kept because the intended behaviour is precisely what is undecided.
+snag58_private_int_import_fails PINS-TODAY
+snag58_public_int_import_ok PINS-TODAY
