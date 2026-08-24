@@ -1,0 +1,37 @@
+# NET G cell — the STAGE-1-ONLY class. list/vector arm.
+#
+# AXIS CELL: comp-kind = list `[...]`  ·  source = String (codepoints)  ·
+# destination = `auto` (the EMPTY result channel)  ·  FILTERED.
+#
+# ⚠ THIS CELL EXISTS BECAUSE NO ORDINARY GATE CAN SEE ITS CLASS. Every
+# self-host gate in the tree runs the STAGE-0 driver (the one Rust gg built),
+# and `self_host_bootstrap_fixed_point` compares emitted C *text*, not
+# behaviour. The filter travels through function PARAMETERS as a boxed
+# option; at HEAD that boxed form is not dereferenced at the dispatch
+# boundary, so EVERY FILTERED comprehension is wrong once the compiler is
+# compiled by itself. The fix flattens the parameter at the dispatch
+# boundary, which is what takes stage 1 from broken to correct.
+#
+# ⚠ DO NOT "TIDY" THE FLATTENED PARAMETER BACK INTO THE BOXED SHAPE. The
+# elegance-showcase rule actively invites that cleanup and it is the one
+# change this cell exists to catch. The wired test
+# `self_host_comprehension_stage1_net` builds a STAGE-1 binary and runs this
+# cell through it — that is the only instrument that sees the class.
+#
+# The `.len()` assertion is KEPT beside the element read on purpose: for this
+# class the LENGTH is the observable (a dropped filter changes the count),
+# while the element read is what catches a mint defect.
+#
+# RED-VERIFIED: stage 0 GREEN (this cell's RED lives only at stage 1); STAGE 1 at HEAD: see the test's own pre-fix run
+#
+# FIXTURE PLACEMENT: subdirectory (see any NET A cell's header).
+# LANE: self-host only.  STAGE: 0 AND 1.  RUNG: 1a (both real lanes agree).
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s0 = mk("ab", "c")
+    auto v = [c for c in s0 if c != mk("b", "")]
+    print(v.len())
+    print(v.get(0).unwrap())

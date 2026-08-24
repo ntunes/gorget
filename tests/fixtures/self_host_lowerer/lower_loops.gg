@@ -239,6 +239,22 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
             return
         lower_fail("SFor .bytes() over non-String iterable not yet implemented (coll type: " + coll_tn + ")")
         return
+    drive_loop_lowered(&ctx, pat, coll_local, coll_tn, probe_is_enumerate, for_write_through, body, else_body, &gmod, is_main)
+
+# ── The ONE loop-shape dispatcher, over an ALREADY-LOWERED iterable ──────
+#
+# Every loop shape the language has, chosen from the iterable's TYPED
+# `collection_kind` (never a name prefix). Split out of `lower_for` so the
+# three comprehension emitters in `lower_expr.gg` reach the SAME dispatch as
+# the statement-`for` instead of each hard-wiring one variant: the set and
+# dict comprehensions used to call `lower_for_vector` DIRECTLY, so a String
+# source hit `collection_element_type("GorgetString") == ""`, took the
+# `lower_fail` early return, and lowered NO LOOP AT ALL -- a silently EMPTY
+# set/dict at rc 0 (Core #10, measured). A Set source took the Vector
+# idx-walk and failed at cc. Mirrors Rust gg's single
+# `drive_comprehension_loop` chokepoint (`src/ir/lowering/stmts/for_loops.rs`,
+# cite by FUNCTION NAME).
+void drive_loop_lowered(LowerCtx &ctx, SpannedPattern pat, int coll_local, String coll_tn, bool probe_is_enumerate, bool for_write_through, Vector[Stmt] body, Vector[Stmt] else_body, GirModule &gmod, bool is_main):
     # Phase A — typed-metadata classification (CkVector/CkDeque) via
     # the lazy `resource_meta_for` accessor; retires the legacy
     # `starts_with("Vector__")` cascade per
@@ -313,6 +329,7 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # iterator if no iter() exists) and loops on `next() → Option[T]`
     # until None.
     lower_for_iterator(&ctx, pat, coll_local, coll_tn, body, else_body, &gmod, is_main)
+
 
 # Vector/Deque fast path: idx-based scaffold matching the manual idiom
 # users write today (`int i = 0; while i < x.len(): T v = x.get(i).unwrap();

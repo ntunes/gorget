@@ -108,7 +108,7 @@ GirFunction lower_function(FunctionDef fdef, GirModule &gmod):
             _fn_is_throws = true
         case None:
             pass
-    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks, false, !_cow_mut, !_cow_span, !_cow_clo, {}, [], {}, _fn_is_throws, {}, {}, "", {}, false, 0, [], [], [], {}, false)
+    LowerCtx ctx = LowerCtx([], !block_insts, !block_terms, 0, !_named_locals, !_lc_stk, !_lb_stk, "", "", "", false, fdef.name.clone(), DropElaborator(!_de_scopes), !_de_queue, -1, !_on_err_blocks, false, !_cow_mut, !_cow_span, !_cow_clo, {}, [], {}, _fn_is_throws, {}, {}, "", {}, false, 0, [], [], [], {}, false, -1, "", "", "", -1, -1, -1, -1)
 
     # Push the function-scope drop frame. Pop emits GIDropIfAlive for
     # every owned resource local registered during lowering (param or
@@ -469,7 +469,7 @@ void lower_equip_block(EquipBlock eqblk, GirModule &gmod, bool trait_is_register
                 _em_fn_is_throws = true
             case None:
                 pass
-        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2, false, !_cow_mut2, !_cow_span2, !_cow_clo2, {}, [], {}, _em_fn_is_throws, {}, {}, "", {}, false, 0, [], [], [], {}, false)
+        LowerCtx ctx = LowerCtx([], [], [], 0, !_named_locals2, !_lc_stk2, !_lb_stk2, "", "", "", false, mangled.clone(), DropElaborator(!_de_scopes2), !_de_queue2, -1, !_on_err_blocks2, false, !_cow_mut2, !_cow_span2, !_cow_clo2, {}, [], {}, _em_fn_is_throws, {}, {}, "", {}, false, 0, [], [], [], {}, false, -1, "", "", "", -1, -1, -1, -1)
         # bb0
         Vector[Instruction] init_insts = []
         ctx.block_insts.push(!init_insts)
@@ -1918,7 +1918,7 @@ void lower_closure_body(String call_name, Vector[int] !abi_param_types, int self
     Dict[String, bool] _cow_clo_c = {}
     # Closure bodies are not `throws` fns (no synthesized Result slot) →
     # fn_is_throws=false. (See LowerCtx.fn_is_throws.)
-    LowerCtx cctx = LowerCtx([], !cblock_insts, !cblock_terms, 0, !_cnamed, !_clc, !_clb, "", "", "", false, call_name.clone(), DropElaborator(!_cde_scopes), !_cde_queue, ret_type, !_con_err, false, !_cow_mut_c, !_cow_span_c, !_cow_clo_c, {}, [], {}, false, {}, {}, "", {}, false, 0, [], [], [], {}, false)
+    LowerCtx cctx = LowerCtx([], !cblock_insts, !cblock_terms, 0, !_cnamed, !_clc, !_clb, "", "", "", false, call_name.clone(), DropElaborator(!_cde_scopes), !_cde_queue, ret_type, !_con_err, false, !_cow_mut_c, !_cow_span_c, !_cow_clo_c, {}, [], {}, false, {}, {}, "", {}, false, 0, [], [], [], {}, false, -1, "", "", "", -1, -1, -1, -1)
 
     push_drop_scope(&cctx.drop_elab, DSK_FUNCTION)
 

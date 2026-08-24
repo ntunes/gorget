@@ -2475,12 +2475,16 @@ fn visit_rs_files(dir: &Path, f: &mut dyn FnMut(&Path)) {
 /// Ratchet: the comprehension dispatch in the SELF-HOST `lower_expr_inner`
 /// (`tests/fixtures/self_host_lowerer/lower_expr.gg`) is a 3-arm enumerated
 /// class — `EListComp` / `ESetComp` / `EDictComp`. Each routes through the
-/// shared `lower_*_comprehension` + `comp_make_*_acc` + `comp_synth_*_body`
-/// helpers (which reuse the run-proven `lower_for_range`/`lower_for_string`/
-/// `lower_for_vector` loop machinery). A future `E…Comp` variant that lands
-/// in the `else:` fallback would SILENTLY miscompile to a Unit stub (the
-/// pre-port behavior that made set/dict comps CRASH through the self-host),
-/// so this lint forces the next comprehension variant through the shared path.
+/// shared `lower_*_comprehension` helper, which opens a DEFERRED MINT
+/// (`comp_open`), synthesizes a bind-then-push body
+/// (`comp_synth_body_bound` / `comp_synth_dict_body_bound`), drives the
+/// run-proven loop machinery (`lower_for_range` for the range arm,
+/// `drive_loop_lowered` for every other source), and closes the mint from the
+/// MATERIALIZED result element (`comp_close` → `comp_mint_tid` /
+/// `comp_mint_ctor`). A future `E…Comp` variant that lands in the `else:`
+/// fallback would SILENTLY miscompile to a Unit stub (the pre-port behavior
+/// that made set/dict comps CRASH through the self-host), so this lint forces
+/// the next comprehension variant through the shared path.
 ///
 /// This is DISTINCT from `container_literal_arms_count` above: that lint scans
 /// the RUST `infer_expr` (typecheck) and already lists Set/Dict comprehension;
@@ -2488,11 +2492,10 @@ fn visit_rs_files(dir: &Path, f: &mut dyn FnMut(&Path)) {
 /// (GIR lowering). The two layers are pinned independently.
 ///
 /// **If this fails because a new arm was added:** the new `case E…Comp(...)`
-/// MUST call a shared `lower_*_comprehension` helper (not inline the loop, not
-/// fall into the `else:` Unit stub) AND — for a set-shaped comp — convert the
-/// raw `Box[SpannedExpr]` filter SENTINEL (`EIntLiteral(0)` = no `if`) to an
-/// `Option` via `setcomp_filter_opt` before feeding the synth body, else an
-/// unfiltered comp becomes `if 0:` → empty result. Then bump EXPECTED.
+/// MUST call a shared `lower_*_comprehension` helper — not inline the loop,
+/// and not fall into the `else:` Unit stub — so that its accumulator is minted
+/// by `comp_close` from the RESULT element rather than from the source or a
+/// scalar default. Then bump EXPECTED.
 /// **If an arm was removed:** lower EXPECTED to lock the new floor.
 #[test]
 fn self_host_comprehension_dispatch_arms_count() {
@@ -2525,10 +2528,337 @@ fn self_host_comprehension_dispatch_arms_count() {
          class. A new `E…Comp` variant MUST route through a shared \
          `lower_*_comprehension` helper — NOT fall into the `else:` Unit stub (which \
          silently miscompiles to a Unit local and CRASHES the comp through the \
-         self-host). Set-shaped comps must also convert the raw `Box[SpannedExpr]` \
-         filter SENTINEL (`EIntLiteral(0)`) to an `Option` via `setcomp_filter_opt`. \
+         self-host). Routing through the helper is also what makes the new arm's \
+         accumulator mint from the MATERIALIZED RESULT ELEMENT (`comp_open` … \
+         `comp_close` → `comp_mint_tid`/`comp_mint_ctor`) instead of from the \
+         source element or a scalar default. \
          Bump EXPECTED with a justification, or lower it if an arm was removed.",
     );
+}
+
+/// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings"
+/// + #6 "convert a recurring bug class into an executable guard"): the SET of
+/// **(enclosing function → `lower_for_*` callee) PAIRS** in the self-host
+/// `lower_expr.gg` that BYPASS the shared loop dispatcher.
+///
+/// ## Why PAIRS and not a count, and not a set of NAMES
+///
+/// The class this guards is "an expression emitter reaches into the loop
+/// machinery directly instead of going through `drive_loop_lowered`". The
+/// obvious guards both fail on it, measurably:
+///
+/// * A **COUNT** is green by construction. The relevant caller set is six
+///   before and six after the comprehension port — SAME COUNT, DIFFERENT SET
+///   (one member leaves, another arrives). A count cannot see that.
+/// * A set of **NAMES** is also green, and this is the subtle one. All three
+///   comprehension emitters legitimately keep calling `lower_for_range`
+///   directly for the range arm, so each is ALREADY in the name set. Pointing
+///   one emitter's NON-range arm back at `lower_for_vector` — the exact
+///   regression this lint exists to catch — produces **byte-identical** name
+///   census output: the member "cannot re-enter the set, because it never
+///   left". Set identity is not automatically sound; a set of the wrong NOUN
+///   is a count in disguise.
+///
+/// A (function → callee) PAIR distinguishes them: the regression above adds
+/// the row `lower_set_comprehension -> lower_for_vector`, and the failure
+/// message NAMES that row.
+///
+/// ## What the pinned set means
+///
+/// `range` is the one arm the comprehension emitters still call directly
+/// (three call sites, one per emitter), so its chokepoint cardinality is 3,
+/// not 1 — stated here rather than left implicit, because "L1: a set of one
+/// cannot be incomplete" is NOT the rung this arm sits on. Every OTHER source
+/// arm goes through `drive_loop_lowered`, which is where the element channel
+/// and the deferred accumulator mint are wired.
+///
+/// The Vector/Set/Dict HOF intercepts (`try_lower_*_hof`, `lower_*_fold`,
+/// `lower_*_any_all`, `lower_vector_find`, `lower_vector_reduce`) are
+/// legitimate members: they synthesize a loop over a receiver whose element
+/// type they already hold, and they are not comprehensions.
+///
+/// ## SHRINK-ONLY
+///
+/// A pair may LEAVE (that is progress toward the chokepoint) — the lint then
+/// tells you to delete its row. A pair that ARRIVES is a red. Do not "fix" a
+/// red by adding the row unless you have established that the new site cannot
+/// route through `drive_loop_lowered`; if it can, route it.
+///
+/// ## Regenerating the set
+///
+/// There is deliberately no companion census script: a second implementation
+/// of the same scan is a parallel list kept in sync by hand, and this round
+/// found twelve handed-over harnesses that had rotted. Run this test — on
+/// failure it prints the CURRENT set, worktree-relative, ready to paste.
+#[test]
+fn self_host_loop_dispatcher_bypass_pairs() {
+    /// The `lower_for_*` entry points. Longest-first is not needed because the
+    /// match requires the literal `name(`, so `lower_for_string(` cannot match
+    /// inside `lower_for_string_bytes(`.
+    const CALLEES: [&str; 7] = [
+        "lower_for_range",
+        "lower_for_vector",
+        "lower_for_dict",
+        "lower_for_set",
+        "lower_for_string_bytes",
+        "lower_for_string",
+        "lower_for_iterator",
+    ];
+
+    /// Baseline regenerated 2026-08-24 by running this test. 13 pairs.
+    ///
+    /// The three comprehension emitters appear ONLY with `lower_for_range`.
+    /// If one of them acquires a second callee, that is the regression — see
+    /// the doc-comment above.
+    const EXPECTED: [(&str, &str); 13] = [
+        ("lower_dict_comprehension", "lower_for_range"),
+        ("lower_dict_fold", "lower_for_dict"),
+        ("lower_list_comprehension", "lower_for_range"),
+        ("lower_set_any_all", "lower_for_set"),
+        ("lower_set_comprehension", "lower_for_range"),
+        ("lower_set_fold", "lower_for_set"),
+        ("lower_vector_any_all", "lower_for_vector"),
+        ("lower_vector_find", "lower_for_vector"),
+        ("lower_vector_fold", "lower_for_vector"),
+        ("lower_vector_reduce", "lower_for_vector"),
+        ("try_lower_dict_hof", "lower_for_dict"),
+        ("try_lower_set_hof", "lower_for_set"),
+        ("try_lower_vector_hof", "lower_for_vector"),
+    ];
+
+    // lower_expr.gg lives ONLY in self_host_lowerer (real file, not symlinked),
+    // so no double-count guard is needed.
+    let content =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower_expr.gg").unwrap_or_default();
+    assert!(
+        !content.is_empty(),
+        "self_host_lowerer/lower_expr.gg is missing or empty — the census would \
+         be vacuously green, which is the failure mode this lint's own doc \
+         warns about."
+    );
+
+    let mut current_fn = String::from("<toplevel>");
+    let mut found: Vec<(String, String)> = Vec::new();
+
+    for line in content.lines() {
+        // A column-0, non-comment line that ends in `:` and has a `(` is a
+        // function definition; the identifier immediately before `(` is its
+        // name.
+        let is_indented = line.starts_with(' ') || line.starts_with('\t');
+        if !is_indented && !line.trim_start().starts_with('#') && !line.trim().is_empty() {
+            if let Some(paren) = line.find('(') {
+                let head = &line[..paren];
+                if let Some(name) = head.rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next()
+                {
+                    if !name.is_empty()
+                        && name.chars().next().map_or(false, |c| c.is_lowercase() || c == '_')
+                        && line.trim_end().ends_with(':')
+                    {
+                        current_fn = name.to_string();
+                    }
+                }
+            }
+            // A definition line is never a call site.
+            continue;
+        }
+        // Strip the `.gg` line comment before scanning for calls.
+        let code = line.split('#').next().unwrap_or("");
+        for callee in CALLEES {
+            let needle = format!("{callee}(");
+            if code.contains(&needle) {
+                let pair = (current_fn.clone(), callee.to_string());
+                if !found.contains(&pair) {
+                    found.push(pair);
+                }
+            }
+        }
+    }
+    found.sort();
+
+    let expected: Vec<(String, String)> = EXPECTED
+        .iter()
+        .map(|(a, b)| (a.to_string(), b.to_string()))
+        .collect();
+
+    let arrived: Vec<&(String, String)> =
+        found.iter().filter(|p| !expected.contains(p)).collect();
+    let left: Vec<&(String, String)> =
+        expected.iter().filter(|p| !found.contains(p)).collect();
+
+    let render = |v: &[&(String, String)]| -> String {
+        v.iter()
+            .map(|(a, b)| format!("  {a} -> {b}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let current = found
+        .iter()
+        .map(|(a, b)| format!("        (\"{a}\", \"{b}\"),"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        arrived.is_empty(),
+        "NEW dispatcher-bypass PAIR(S) in self-host `lower_expr.gg`:\n{}\n\n\
+         An expression emitter is calling a `lower_for_*` entry point directly \
+         instead of routing through `drive_loop_lowered`. That bypasses the \
+         element channel and the DEFERRED ACCUMULATOR MINT, so the new site's \
+         accumulator will be minted from the source element or a scalar default \
+         instead of from the MATERIALIZED RESULT ELEMENT — the exact class this \
+         round closed.\n\n\
+         ⚠ Note a COUNT or a set of NAMES would be GREEN on this change: the \
+         comprehension emitters are already in the name set via their \
+         `lower_for_range` call. That is why the pin is over PAIRS.\n\n\
+         Route the new site through `drive_loop_lowered`, or — if it genuinely \
+         cannot (it is a HOF intercept over a receiver whose element type it \
+         already holds) — add its row to EXPECTED with that justification.\n\n\
+         Current set (paste to regenerate):\n{}",
+        render(&arrived),
+        current,
+    );
+
+    assert!(
+        left.is_empty(),
+        "dispatcher-bypass PAIR(S) DISAPPEARED from self-host `lower_expr.gg`:\n{}\n\n\
+         This is progress — a site now routes through the shared dispatcher. \
+         The pin is SHRINK-ONLY, so delete the stale row(s) from EXPECTED to \
+         lock the smaller set in.\n\n\
+         Current set (paste to regenerate):\n{}",
+        render(&left),
+        current,
+    );
+}
+
+/// Shrink-only pin over the self-host's ACCUMULATOR-PRODUCER sets, with a
+/// disposition per member.
+///
+/// Two sets over `tests/fixtures/self_host_lowerer/lower_expr.gg`:
+///   * **SET-1** — functions that mint an accumulator TYPE, i.e. call
+///     `collection_accumulator_tid`.
+///   * **SET-3** — functions that emit a RAW collection constructor: the bare
+///     `"gorget_array_new"` / `"gorget_set_new"` / `"gorget_ordered_set_new"` /
+///     `"gorget_dict_new"` / `"gorget_map_new"` runtime symbol, which carries a
+///     hardcoded element size and therefore withholds the element type from
+///     every downstream reader.
+///
+/// (SET-2, the loop-dispatcher bypass, is pinned as PAIRS by
+/// `self_host_loop_dispatcher_bypass_pairs` above — see its doc-comment for
+/// why a set of NAMES is degenerate there.)
+///
+/// ## ⚠ THIS PIN BLESSES NO MEMBER
+///
+/// A shrink-only membership pin reads as a clean bill unless it says
+/// otherwise. It is not one. Disposition per row over **SET-1 ∪ SET-3**, the
+/// TOTAL enumeration including the two members that LEFT this round:
+///
+/// | # | member | set | disposition |
+/// |---|---|---|---|
+/// | 1 | `comp_mint_tid` (+ its twin `comp_mint_ctor`) | SET-1 | **CLEAN — the chokepoint.** Mints strictly from the MATERIALIZED result element(s); every list/set/dict comprehension routes through it. |
+/// | 2 | `try_lower_set_hof` | SET-1 | **FIXED THIS ROUND, and it LEFT SET-3.** Its `filter` arm minted the result set with the raw `gorget_(ordered_)set_new` symbol and a hardcoded 8-byte key, at TWO emission sites (ordered and unordered) — measured wrong at rc 0 for `bool`, `String`, `@derive(Hashable)` structs with a resource field, and primitives-only structs whose discriminating field sits past byte 8. Now mints through the single producer `set_ctor_name` (`lower_types.gg`). Pinned by the nine `sethof_filter_*` cells in `tests/fixtures/self_host_comprehension/`. |
+/// | 3 | `comp_make_acc` | (was SET-3) | **FIXED THIS ROUND, and it LEFT SET-3.** Its untyped `else` branch — a bare `gorget_array_new(8)` for an empty element name — is DELETED. A non-empty element name is now the callers' contract, and the contract is ENFORCED by a `lower_abort` rather than asserted in a comment. |
+/// | 4 | `lower_expr_inner` | SET-1 **and** SET-3 | ⛔ **NOT CLEAN — DEFER, filed.** Its array-literal path leaves the element-type name empty for `auto v = []`, so the accumulator is `gorget_array_new(8)` with no elem drop / clone / materialize hooks; a later `push(<String>)` then prints a RAW POINTER at rc 0 on BOTH real lanes while ggdef prints the right answer — Core #8's trap in its cleanest form. Out of this round's scope: the root is the destination-declaration channel, not the comprehension mint. Durable repro `known_gaps/auto_empty_literal_push_string_raw_pointer.gg`; grep `TODO.md` for `auto EMPTY-COLLECTION LITERAL`. |
+/// | 5 | `try_lower_vector_hof` | SET-1 | ⛔ **NOT CLEAN — DEFER, TWO filed defects.** (a) cross-type `flat_map` mints from the INPUT element type (`(T) -> Vector[U]` is legal, so the result element is `U`); (b) the inline-closure `map` shape mints cross-type from the input too. Both wrong at rc 0. Durable repros `known_gaps/flat_map_cross_type_input_mint.gg` and `known_gaps/map_inline_closure_cross_type_input_mint.gg`; grep `TODO.md` for `cross-type` and `flat_map`. This is Core #4 in the flesh: the comprehension producer was fixed and a SIBLING producer still mints from the wrong channel. |
+///
+/// ## Residual the SET-only helper does NOT cover (Core #12: name the omitted cells)
+///
+/// `set_ctor_name` gives the SET ctor-name channel cardinality ONE. The other
+/// two collection kinds are NOT at one, and this pin does not pretend they
+/// are: regenerate with
+/// `grep -n '__gorget_.*_new_sized_' tests/fixtures/self_host_lowerer/lower_expr.gg tests/fixtures/self_host_lowerer/lower_types.gg`
+/// — the ARRAY magic name is hand-spelled at the array literal, in
+/// `comp_mint_ctor`, and in `comp_make_acc`; the DICT/MAP name at the dict
+/// literal and in `comp_mint_ctor`. That is a defensible scope boundary — a
+/// wrong spelling there fails LOUDLY at link, unlike the untyped-ctor class,
+/// which fails silently at rc 0 — but it is a boundary, not a closed class.
+///
+/// ## SHRINK-ONLY
+///
+/// A member that LEAVES is progress; delete its row and update the table's
+/// disposition. A member that ARRIVES is a red: a new producer is typing an
+/// accumulator, or emitting a raw ctor, outside the chokepoint.
+///
+/// Regenerate by running this test — on failure it prints the current sets.
+#[test]
+fn self_host_accumulator_producer_sets() {
+    /// Baseline regenerated 2026-08-24 by running this test.
+    const EXPECTED_SET1: [&str; 4] = [
+        "comp_mint_tid",
+        "lower_expr_inner",
+        "try_lower_set_hof",
+        "try_lower_vector_hof",
+    ];
+    /// Baseline regenerated 2026-08-24. `try_lower_set_hof` and
+    /// `comp_make_acc` both left this set this round — see the table above.
+    const EXPECTED_SET3: [&str; 1] = ["lower_expr_inner"];
+
+    const RAW_CTORS: [&str; 5] = [
+        "\"gorget_array_new\"",
+        "\"gorget_set_new\"",
+        "\"gorget_ordered_set_new\"",
+        "\"gorget_dict_new\"",
+        "\"gorget_map_new\"",
+    ];
+
+    let content =
+        fs::read_to_string("tests/fixtures/self_host_lowerer/lower_expr.gg").unwrap_or_default();
+    assert!(
+        !content.is_empty(),
+        "self_host_lowerer/lower_expr.gg is missing or empty — the census would \
+         be vacuously green."
+    );
+
+    let mut current_fn = String::from("<toplevel>");
+    let mut set1: Vec<String> = Vec::new();
+    let mut set3: Vec<String> = Vec::new();
+
+    for line in content.lines() {
+        let is_indented = line.starts_with(' ') || line.starts_with('\t');
+        if !is_indented && !line.trim_start().starts_with('#') && !line.trim().is_empty() {
+            if let Some(paren) = line.find('(') {
+                let head = &line[..paren];
+                if let Some(name) = head.rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next()
+                {
+                    if !name.is_empty()
+                        && name.chars().next().map_or(false, |c| c.is_lowercase() || c == '_')
+                        && line.trim_end().ends_with(':')
+                    {
+                        current_fn = name.to_string();
+                    }
+                }
+            }
+            continue;
+        }
+        let code = line.split('#').next().unwrap_or("");
+        if code.contains("collection_accumulator_tid(") && !set1.contains(&current_fn) {
+            set1.push(current_fn.clone());
+        }
+        if RAW_CTORS.iter().any(|c| code.contains(c)) && !set3.contains(&current_fn) {
+            set3.push(current_fn.clone());
+        }
+    }
+    set1.sort();
+    set3.sort();
+
+    let check = |label: &str, got: &[String], want: &[&str]| {
+        let want_v: Vec<String> = want.iter().map(|s| s.to_string()).collect();
+        if got == want_v.as_slice() {
+            return;
+        }
+        let arrived: Vec<&String> = got.iter().filter(|n| !want_v.contains(n)).collect();
+        let left: Vec<&String> = want_v.iter().filter(|n| !got.contains(n)).collect();
+        panic!(
+            "{label} membership changed in self-host `lower_expr.gg`.\n\
+             ARRIVED (a red — a NEW producer is outside the chokepoint): {arrived:?}\n\
+             LEFT    (progress — delete the row and update the disposition table): {left:?}\n\n\
+             ⚠ Read the disposition table in this test's doc-comment before \
+             touching the baseline: this pin BLESSES NO MEMBER, and two of its \
+             members carry filed, un-fixed defects.\n\n\
+             Current set (paste to regenerate): {got:?}"
+        );
+    };
+
+    check("SET-1 (mints an accumulator TYPE)", &set1, &EXPECTED_SET1);
+    check("SET-3 (emits a RAW collection ctor)", &set3, &EXPECTED_SET3);
 }
 
 /// Sibling-site-drift ratchet (CLAUDE.md invariant #4 "one fix, all siblings"

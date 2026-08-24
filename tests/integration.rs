@@ -2332,14 +2332,15 @@ fn gg_run_command() {
 /// recursion that `tests/security.rs` (`sec_45_deep_recursion_stack_overflow`)
 /// ratifies as an intentional stack overflow and that
 /// `stack_guard_runtime_deep_recursion` already pins. It replaced the previous
-/// oracle, `known_gaps/sound_comprehension_nested_vector_segv.gg`, which
+/// oracle, a nested-`Vector` comprehension fixture, which
 /// SIGSEGV'd only because of a comprehension-emitter defect (the accumulator
 /// was minted from the SOURCE element type, so the result-push copied the
 /// wrong element width). R44 fixed that on the Rust lane — `gg run` on it is
 /// now rc 0 printing `1` — and an oracle that rides on the defect under
-/// repair is not an oracle. The self-host lane still crashes on that program;
-/// that residual is pinned by `sound_comprehension_nested_vector_segv`
-/// (`#[ignore]`d, self-host-wired) and by
+/// repair is not an oracle. R44 Track K then fixed the self-host lane on the
+/// same program and GRADUATED it out of `known_gaps/`; it is now
+/// `tests/fixtures/self_host_comprehension/graduated_nested_vector_source.gg`,
+/// pinned live on both lanes by `self_host_comprehension_net` and
 /// `rust_comprehension_nested_vector_type_change_no_segv` below.
 #[test]
 fn gg_run_propagates_signal_death() {
@@ -4638,6 +4639,31 @@ fn known_gap_comprehension_over_bytes_narrow_elem_overread() {
         "known_gaps/comprehension_over_bytes_narrow_elem_overread.gg",
         "2\n65",
     );
+}
+
+/// KNOWN GAP: a comprehension over a `Heap[T]` — the SECOND SHAPE of the
+/// already-filed "no is-it-iterable gate in the front end" class (sibling
+/// repro: `known_gaps/comprehension_over_non_iterable_struct.gg`).
+///
+/// What DISCRIMINATES this shape from the sibling: the source is a real
+/// stdlib COLLECTION that the loop dispatcher's `CollectionKind` cascade
+/// recognises (`CkHeap`) and then drops through its `else`, rather than a
+/// user struct the cascade never matches at all. `Heap[T]` has no
+/// `iter()`/`next()` pair, so there is no element to materialize.
+///
+/// `gg check` accepts it (rc 0) on every lane; `gg build` on the Rust lane
+/// then panics in the IR lowerer. The self-host half now REJECTS loudly —
+/// pinned LIVE by `self_host_rejects_comprehension_over_heap` — which is
+/// strictly better than the silent empty collection it printed before, but a
+/// compiler abort is still not the reference-grade answer.
+///
+/// INTENDED (asserted below): a check-time rejection makes this program never
+/// reach lowering at all. Until that lands, this test records the
+/// accept-and-run reading and stays ignored.
+#[test]
+#[ignore = "known gap (R44): `gg check` accepts a comprehension over a non-iterable `Heap[T]` and the Rust lowerer then panics; un-ignore when the front end grows an is-it-iterable gate (both the comprehension and the statement form)"]
+fn known_gap_comprehension_over_heap_source() {
+    run_gg("known_gaps/comprehension_over_heap_source.gg", "2\ndone");
 }
 
 /// KNOWN GAP: a comprehension whose source is `.enumerate()` passes `gg check`
@@ -34011,19 +34037,31 @@ fn self_host_cli_pipeline() {
 /// fault" from /bin/sh; branded `SIGSEGV` from Rust would be nice-to-have but
 /// requires a fork/execvp-based new runtime API — not filed unless asked).
 ///
-/// ⚠ The fixture lives in `tests/fixtures/known_gaps/` even though THIS test
-/// is LIVE, and that placement is deliberate — `scripts/convergence.sh`
-/// ratifies exactly this case ("NOT A GAP AT ALL = a known_gaps fixture
-/// referenced ONLY by LIVE tests … parked in that directory because
-/// `runtime_parity_corpus` never descends subdirectories"). Two top-level
-/// scanners would otherwise pick it up and get the wrong answer:
-/// `runtime_parity_corpus` (`read_dir(tests/fixtures)`) stdout-diffs Rust
-/// against the self-host on LANGUAGE-SEMANTICS parity, which this fixture does
-/// not test — it is a `gg run` DRIVER property, and its SIGSEGV is supplied by
-/// a comprehension defect the self-host still carries, so it would count as a
-/// permanent CRASH row; and `scripts/sanitize_sweep.sh`
-/// (`find tests/fixtures -maxdepth 1`) sanitizes it on the RUST lane, which no
-/// longer corrupts. Do NOT move it back up.
+/// ⚠⚠ ORACLE REPOINTED (R44 Track K). This test used to run
+/// `known_gaps/sh_gg_run_propagates_signal_death.gg`, a nested-`Vector`
+/// type-changing comprehension whose SIGSEGV was supplied by a self-host
+/// COMPILER DEFECT — the list arm minting its accumulator from the SOURCE
+/// element type. Track K fixed that, so the old oracle now exits 0 printing
+/// `1`; its own fixture header predicted this red and said the answer is to
+/// retire the oracle, never to weaken the assertion or "fix" the
+/// comprehension back.
+///
+/// It now runs `tests/fixtures/stack_guard_deep_recursion.gg` — the same
+/// oracle the RUST half (`gg_run_propagates_signal_death`) was repointed at
+/// for the same reason: a BY-DESIGN depth-200000 non-tail recursion that
+/// `tests/security.rs` (`sec_45_deep_recursion_stack_overflow`) ratifies as an
+/// intentional stack overflow. An oracle that rides on a defect under repair
+/// is not an oracle. The old fixture's PROGRAM is preserved as a live
+/// regression cell at
+/// `tests/fixtures/self_host_comprehension/graduated_nested_vector_source.gg`.
+///
+/// ⚠ RLIMIT_STACK is pinned to a stock 8MB, exactly as the Rust half pins it:
+/// this program dies by SIGSEGV only at a stock stack limit, so an UNPINNED
+/// invocation makes the oracle host-conditional (a huge host stack makes it
+/// print 200000 and exit 0, which fails the assertion below with the actively
+/// misleading `got Some(0)`). `;` and NOT `&&`: on a host whose HARD limit is
+/// below 8MB the pin is a RAISE and fails, and with `&&` the shell would
+/// short-circuit and `gg` would never run.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn sh_gg_run_propagates_signal_death() {
@@ -34031,22 +34069,26 @@ fn sh_gg_run_propagates_signal_death() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let runtime_dir = manifest_dir.join("src/backend/c/runtime");
     let lib_dir = manifest_dir.join("stdlib");
-    let fixture =
-        manifest_dir.join("tests/fixtures/known_gaps/sh_gg_run_propagates_signal_death.gg");
+    let fixture = manifest_dir.join("tests/fixtures/stack_guard_deep_recursion.gg");
 
     let output = run_with_timeout(
-        Command::new(&driver_exe)
-            .arg("run")
+        Command::new("sh")
+            .arg("-c")
+            .arg("ulimit -S -s 8192; exec \"$0\" run \"$1\" \"$2\" \"$3\"")
+            .arg(&driver_exe)
             .arg(&fixture)
             .arg(format!("--runtime-dir={}", runtime_dir.display()))
             .arg(format!("--lib-dir={}", lib_dir.display())),
-        "sh driver run sh_gg_run_propagates_signal_death.gg",
+        "sh driver run stack_guard_deep_recursion.gg (pinned to 8MB)",
     );
 
     assert_eq!(
         output.status.code(),
         Some(139),
-        "SH `driver run` on a SIGSEGV program must propagate 128+11=139, not mask it.\
+        "SH `driver run` on a SIGSEGV program must propagate 128+11=139, not mask it \
+         — or the ulimit pin didn't take (host HARD stack limit below 8MB: look \
+         for `ulimit: error setting limit` on stderr; a huge host stack makes \
+         this program print 200000 and exit 0 instead).\
          \nstdout: {}\nstderr: {}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
@@ -35362,6 +35404,365 @@ fn assert_self_host_stdout(fixture_rel: &str, tag: &str, expected: &str) {
         ),
         Err(outcome) => panic!("self-host emit/cc/run failed for {fixture_rel}: {outcome:?}"),
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// R44 Track K — the self-host COMPREHENSION net
+// ══════════════════════════════════════════════════════════════════════════
+//
+// `tests/fixtures/self_host_comprehension/` holds one CELL PER FILE, each
+// beside a `<stem>.expected` sidecar carrying its exact expected stdout. Every
+// cell's header records which CELL OF WHICH AXIS it samples, the RED it was
+// verified against, and its PLACEMENT / LANE / STAGE / RUNG.
+//
+// ── Why a SUBDIRECTORY, not top-level `tests/fixtures/` ───────────────────
+// Top-level enrolment is automatic and directory-driven, so ~35 new cells
+// would land at once in: `runtime_parity_corpus` and its
+// `RUNTIME_DIFF_NONMATCH_CEILING` (Core #9 ⊕ forbids raising that for a
+// round's OWN inflow); the `-maxdepth 1` sanitize sweep; and the shrink-only
+// leak allowlist, where a leaking top-level cell cannot be allowlisted at
+// all. A subdirectory also makes SELF-HOST-ONLY wiring expressible, which is
+// what the lane disposition below needs. ⚠ This is a property of THESE cells,
+// not a general rule — decide per fixture.
+//
+// ── Why SELF-HOST-ONLY ────────────────────────────────────────────────────
+// This round changes no accept/reject and no accepted program's meaning: it
+// makes the self-host agree with an already-correct Rust lane. That is Core
+// #9's *implementation-internal* exemption (lanes share semantics, not
+// implementation), cited by name — NOT a silent lane gap. The Rust column was
+// measured for every cell while the `.expect` values were minted, and every
+// value except one IS a post-fix Rust==self-host agreement. The exception is
+// `list_bytessrc_narrow_elem`, where the RUST lane is the wrong one; its
+// header says so and the Rust half is separately filed with its own durable
+// repro and `#[ignore]`d test.
+//
+// ── Why DIRECTORY-DRIVEN rather than one named test per cell ──────────────
+// A new cell dropped into the directory is enrolled automatically — there is
+// no "forgot to wire it" hole, which is the failure mode a hand-written list
+// of 35 `#[test]` fns actually has. Per-cell verdicts survive: every cell gets
+// its own emit / cc / run, and every failure is reported by cell name, so a
+// co-resident failure cannot destroy a healthy cell's evidence (which is the
+// property DEC-K3-6's "one cell per FILE" exists to protect).
+//
+// The guard below can catch its own class (Core #15e Q2): a `.gg` without an
+// `.expect` FAILS rather than being skipped, and the cell count has a
+// shrink-only floor so silently deleting the net is a red.
+
+/// Cell count floor for `tests/fixtures/self_host_comprehension/`.
+///
+/// SHRINK-ONLY IN THE WRONG DIRECTION: raise it when the net grows, never
+/// lower it to make a red go away. A net that can be emptied without a test
+/// failing is not a net.
+const SELF_HOST_COMPREHENSION_CELL_FLOOR: usize = 39;
+
+/// The self-host COMPREHENSION net, stage 0.
+///
+/// Each cell is emitted by the self-host driver, `cc`'d, run, and its trimmed
+/// stdout compared against its committed `.expect`.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_comprehension_net() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let cells_dir = manifest_dir.join("tests/fixtures/self_host_comprehension");
+
+    let mut cells: Vec<PathBuf> = std::fs::read_dir(&cells_dir)
+        .unwrap_or_else(|e| panic!("self_host_comprehension dir unreadable: {e}"))
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |x| x == "gg"))
+        .collect();
+    cells.sort();
+
+    assert!(
+        cells.len() >= SELF_HOST_COMPREHENSION_CELL_FLOOR,
+        "self_host_comprehension: {} cells, floor is {}. Cells were DELETED. \
+         The floor is shrink-only in the wrong direction — raise it when the \
+         net grows, never lower it to clear a red.",
+        cells.len(),
+        SELF_HOST_COMPREHENSION_CELL_FLOOR,
+    );
+
+    // Every cell must carry an expectation. A `.gg` with no `.expect` is a
+    // cell that would otherwise be silently skipped — the exact shape of a
+    // guard that cannot catch its own class.
+    let missing: Vec<String> = cells
+        .iter()
+        .filter(|p| !p.with_extension("expected").exists())
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "self_host_comprehension: {} cell(s) have no `.expected` sidecar and would \
+         be silently unchecked: {}",
+        missing.len(),
+        missing.join(", "),
+    );
+
+    let tmp_root = std::env::temp_dir().join(format!("gg_shcomp_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+
+    let driver_exe = &driver_exe;
+    let lib_dir = &lib_dir;
+    let runtime_dir = &runtime_dir;
+    let tmp_root = &tmp_root;
+
+    let failures: Vec<String> = parallel_map_fixtures(&cells, |cell| {
+        let stem = cell.file_stem().unwrap().to_string_lossy().to_string();
+        let expected = match std::fs::read_to_string(cell.with_extension("expected")) {
+            Ok(s) => s.trim().to_string(),
+            Err(e) => return Some(format!("{stem}: .expect read failed: {e}")),
+        };
+        match self_host_emit_cc_run(driver_exe, lib_dir, runtime_dir, cell, tmp_root, "shcomp") {
+            Ok(stdout) => {
+                if stdout.trim() == expected {
+                    None
+                } else {
+                    Some(format!(
+                        "{stem}: WRONG-OUTPUT (expected {:?}, got {:?})",
+                        expected,
+                        stdout.trim(),
+                    ))
+                }
+            }
+            Err(outcome) => Some(format!("{stem}: {outcome:?}")),
+        }
+    })
+    .into_iter()
+    .flatten()
+    .collect();
+
+    let _ = std::fs::remove_dir_all(tmp_root);
+
+    assert!(
+        failures.is_empty(),
+        "self_host_comprehension: {} of {} cell(s) failed:\n  {}",
+        failures.len(),
+        cells.len(),
+        failures.join("\n  "),
+    );
+}
+
+/// Build a STAGE-1 self-host binary: the self-host compiler compiled BY
+/// ITSELF. Factored out of `run_bootstrap_stages`'s first half — that
+/// function deletes its stage-1 binary at four sites, so a caller that wants
+/// to RUN one has to build its own.
+///
+/// Returns the stage-1 executable's path inside `work_dir`.
+fn build_stage1_driver(
+    driver_exe: &Path,
+    driver_c: &Path,
+    driver_gg: &Path,
+    lib_dir: &Path,
+    work_dir: &Path,
+) -> Result<PathBuf, String> {
+    let _ = std::fs::create_dir_all(work_dir);
+
+    let body_out = run_with_deadline(
+        Command::new(driver_exe).arg(driver_gg).arg(lib_dir).arg("--lir-c"),
+        "build_stage1_driver stage0 -> stage1.c",
+        Duration::from_secs(env_or_load_adjusted_secs("GG_STAGE1_TIMEOUT_SECS", 600)),
+    );
+    if !body_out.status.success() {
+        return Err(format!(
+            "stage-0 driver failed: stderr={}",
+            String::from_utf8_lossy(&body_out.stderr),
+        ));
+    }
+    let stage1_body = String::from_utf8_lossy(&body_out.stdout).to_string();
+
+    let rust_c = std::fs::read_to_string(driver_c)
+        .map_err(|e| format!("failed to read driver.c at {}: {e}", driver_c.display()))?;
+    let preamble_end = rust_c
+        .find("\ntypedef struct __gg_")
+        .ok_or_else(|| "driver.c has no user-type typedef boundary".to_string())?;
+    let runtime_preamble = &rust_c[..preamble_end];
+
+    let stage1_c = work_dir.join("shcomp_stage1.c");
+    let stage1_bin = work_dir.join("shcomp_stage1");
+    std::fs::write(&stage1_c, format!("{runtime_preamble}\n{stage1_body}"))
+        .map_err(|e| format!("failed to write stage1.c: {e}"))?;
+
+    let cc_out = Command::new("cc")
+        .arg("-O0").arg("-w")
+        .arg("-o").arg(&stage1_bin)
+        .arg(&stage1_c)
+        .arg("-lm").arg("-lpthread")
+        .output()
+        .map_err(|e| format!("failed to spawn cc: {e}"))?;
+    if !cc_out.status.success() {
+        return Err(format!("stage-1 cc failed: {}", String::from_utf8_lossy(&cc_out.stderr)));
+    }
+    Ok(stage1_bin)
+}
+
+/// The STAGE-1 half of the comprehension net — the only instrument in this
+/// tree that can see its class.
+///
+/// ⚠ WHY THIS TEST HAS TO EXIST. Every other self-host gate runs the STAGE-0
+/// driver (the one Rust gg built), and `self_host_bootstrap_fixed_point`
+/// compares emitted C *text*, not behaviour. A defect that only appears once
+/// the compiler compiles itself is therefore invisible to all of them. That
+/// is not hypothetical: at HEAD, EVERY FILTERED comprehension is wrong at
+/// stage 1 — the filter travels through function PARAMETERS as a boxed option
+/// that was not dereferenced at the dispatch boundary. Measured on a
+/// pristine-HEAD stage-1 build, `stage1_list_strsrc_filt` is GREEN at stage 0
+/// and rc 101 at stage 1.
+///
+/// The two cells sample DIFFERENT dispatcher arms (list/vector and set) on
+/// purpose, so the pair is provably not one cell twice.
+///
+/// Cost: one stage-1 build (~2 min) plus two emit/cc/run.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_comprehension_stage1_net() {
+    let (driver_exe, driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let driver_gg = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.gg");
+    let cells_dir = manifest_dir.join("tests/fixtures/self_host_comprehension");
+
+    // The stage-1 cells, named by FILENAME (never by description).
+    const STAGE1_CELLS: [&str; 2] = ["stage1_list_strsrc_filt", "stage1_set_strsrc_filt"];
+
+    let work_dir = std::env::temp_dir().join(format!("gg_shcomp_s1_{}", std::process::id()));
+    let stage1_bin = match build_stage1_driver(&driver_exe, &driver_c, &driver_gg, &lib_dir, &work_dir) {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&work_dir);
+            panic!("self_host_comprehension_stage1_net: stage-1 build failed: {e}");
+        }
+    };
+
+    let mut failures: Vec<String> = Vec::new();
+    for stem in STAGE1_CELLS {
+        let cell = cells_dir.join(format!("{stem}.gg"));
+        assert!(cell.exists(), "stage-1 cell missing: {}", cell.display());
+        let expected = std::fs::read_to_string(cells_dir.join(format!("{stem}.expected")))
+            .unwrap_or_else(|e| panic!("{stem}: .expect read failed: {e}"))
+            .trim()
+            .to_string();
+
+        // Same CLI as the stage-0 driver: `<bin> F lib --emit-c --runtime-dir=<abs>`.
+        match self_host_emit_cc_run(&stage1_bin, &lib_dir, &runtime_dir, &cell, &work_dir, "s1") {
+            Ok(stdout) => {
+                if stdout.trim() != expected {
+                    failures.push(format!(
+                        "{stem}: STAGE-1 WRONG-OUTPUT (expected {:?}, got {:?})",
+                        expected,
+                        stdout.trim(),
+                    ));
+                }
+            }
+            Err(outcome) => failures.push(format!("{stem}: STAGE-1 {outcome:?}")),
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&work_dir);
+
+    assert!(
+        failures.is_empty(),
+        "self_host_comprehension_stage1_net: {} cell(s) failed on the STAGE-1 \
+         binary (they may well be green on the stage-0 driver — that is exactly \
+         the class this test exists for):\n  {}",
+        failures.len(),
+        failures.join("\n  "),
+    );
+}
+
+/// Assert the self-host driver REJECTS a comprehension whose source lowered no
+/// loop — loudly, on stderr, with no emitted C.
+///
+/// ⚠ `assert_self_host_stdout` cannot express a reject row, so this follows
+/// the `self_host_driver_rejects_*` template. ⚠ Its stdout assertion is
+/// deliberately NOT "empty": `lower_fail` writes its marker to STDOUT (it
+/// lands inside the emitted C as a comment), so a rejected program's stdout
+/// legitimately carries that marker. What must be absent is emitted C.
+fn assert_self_host_rejects_comprehension(fixture_rel: &str, tag: &str) {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures").join(fixture_rel);
+    assert!(fixture.exists(), "reject fixture missing: {}", fixture.display());
+
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        tag,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(
+        !out.status.success(),
+        "self-host driver ACCEPTED {fixture_rel} — a comprehension whose source \
+         lowered no loop must FAIL THE BUILD (Core #10 lower-or-reject), not \
+         return an unconstructed placeholder and print an empty collection at \
+         rc 0. exit={:?}\nstdout head:\n{}\nstderr:\n{stderr}",
+        out.status.code(),
+        &stdout.chars().take(300).collect::<String>(),
+    );
+    assert!(
+        stderr.contains("cannot lower a comprehension"),
+        "self-host driver exited non-zero on {fixture_rel} but printed no \
+         comprehension diagnostic to STDERR. The diagnostic must go to stderr: \
+         the tree's other in-lowerer abort writes to STDOUT, which would bury \
+         it inside the emitted C.\nstderr:\n{stderr}",
+    );
+    assert!(
+        !stdout.contains("int main("),
+        "self-host driver emitted C for a rejected program — the abort must \
+         halt BEFORE the module finishes lowering.\nstdout head:\n{}",
+        &stdout.chars().take(300).collect::<String>(),
+    );
+}
+
+/// REJECT ROW — a comprehension over a struct with no iterator.
+///
+/// AXIS CELL: source = a plain `struct` (no `iter()`/`next()` pair).
+/// Adjudicated by Core #10 (lower-or-reject), NEVER by a run of any form: the
+/// value a run produces here is `0`, which is the silently-empty collection
+/// this arm exists to eliminate, so copying it would be voting for the defect.
+///
+/// RED-VERIFIED on the pre-fix self-host driver: rc 0, stdout `0`. Rust gg
+/// already panics (rc 101) with the matching message — the SH lane was the
+/// lagging one, which is why this pin is wired here.
+///
+/// ⚠ The underlying front-end gap (no is-it-iterable gate; `gg check` accepts
+/// this program on every lane) is SEPARATELY FILED and is NOT what this test
+/// pins. A compiler abort is not the reference-grade answer — a check-time
+/// rejection is. This test pins only that the self-host lowerer refuses to
+/// trade a loud failure for a silent one.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_rejects_comprehension_over_non_iterable_struct() {
+    assert_self_host_rejects_comprehension(
+        "known_gaps/comprehension_over_non_iterable_struct.gg",
+        "self_host_rejects_comprehension_over_non_iterable_struct",
+    );
+}
+
+/// REJECT ROW — a comprehension over a `Heap[T]`.
+///
+/// AXIS CELL: source = `CkHeap`, the `CollectionKind` variant the dispatcher's
+/// cascade `else` swallows. It is a SECOND SHAPE of the already-filed
+/// no-is-it-iterable-gate class (a `Heap` has no `iter()`/`next()` pair
+/// either), NOT a second filing — which is why it ships as a repro under the
+/// existing bullet rather than a new one.
+///
+/// RED-VERIFIED on the pre-fix self-host driver: rc 0, stdout `0` / `done` —
+/// a silently empty collection. Rust gg panics (rc 101). ⚠ And the STATEMENT
+/// form of the same iteration prints `0` SILENTLY on the Rust lane too, which
+/// is the second defect Core #8 names; that half stays with the filed bullet.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn self_host_rejects_comprehension_over_heap() {
+    assert_self_host_rejects_comprehension(
+        "known_gaps/comprehension_over_heap_source.gg",
+        "self_host_rejects_comprehension_over_heap",
+    );
 }
 
 /// Full corpus of `.gg` fixtures (read_dir + ext=="gg" + sort), mirroring the
@@ -39158,6 +39559,7 @@ false
 3
 0
 2
+true
 14
 0
 true
@@ -39179,7 +39581,8 @@ true
 true
 false
 11
-2",
+2
+true",
     );
 }
 
@@ -50820,50 +51223,15 @@ fn sound_fstring_suppresses_sigil_reject() {
     );
 }
 
-/// KNOWN GAP — a comprehension over a NESTED `Vector` SEGFAULTS, with no sigil
-/// anywhere. `gg check` passes, `gg build` succeeds, the binary exits 139.
-///
-/// NOT sigil-related, which is the point: it surfaced while probing
-/// `&`-iterable element write-through, where the sigil spellings crashed and
-/// the natural conclusion was that `&` caused it. All four spellings crash —
-/// `[x.len() for x in a]`, `[x.len() for x in &a]`, `[grow(&x) for x in a]`,
-/// `[grow(&x) for x in &a]` — and the ALL-BARE form crashing is what proves the
-/// sigil incidental. A fix in the `&`-write-through family will not touch it.
-///
-/// Also a triage-hazard case study: an earlier probe of a DIFFERENT
-/// comprehension shape (`void` element function) exited 0 with the write merely
-/// lost, so the crash looked unreproducible. The shapes differ in whether the
-/// element expression produces a value.
-/// ⚠ REWIRED TO THE SELF-HOST LANE (R44) — it used to drive `run_gg`, i.e. the
-/// RUST compiler, and R44 fixed the Rust lane on exactly this program. Left on
-/// `run_gg` it would have started PASSING while `#[ignore]`d: green on
-/// `cargo test --test lints` (which only reads
-/// `tests/gaps/PASSING_ALLOWLIST.txt`) and RED in CI on
-/// `scripts/known_gaps_census.sh --check`, which is the only instrument that
-/// runs the ignored roster and asserts set equality. Graduating it instead is
-/// not available — the self-host lane still SIGSEGVs, and a top-level fixture
-/// would force self-host agreement — and `PASSING_ALLOWLIST.txt` has no code
-/// for a wrong-lane passer (`BLIND-LANE` was deliberately retired: "a
-/// wrong-lane row is a bug to fix, not a row to file").
-///
-/// So it now asserts the lane its gap actually lives on. Measured: the
-/// self-host driver is rc 139 on this program both before and after R44's
-/// steps 1+2, because the SH LIST arm still mints from
-/// `collection_element_type(coll_tn)` — the SOURCE collection's element name.
-/// That is routed to Track K. The Rust half is pinned live by
-/// `rust_comprehension_nested_vector_type_change_no_segv` below.
-#[test]
-#[ignore = "KNOWN GAP (SELF-HOST LANE): a comprehension over a nested Vector segfaults (exit 139) \
-on the self-host driver though gg check passes and no sigil is involved. The RUST lane was fixed in \
-R44 (deferred accumulator mint); the SH list arm still mints from the SOURCE element name. Asserts \
-the INTENDED output; TODO.md. Un-ignore when the SH list-arm mint is fixed (Track K)."]
-fn sound_comprehension_nested_vector_segv() {
-    assert_self_host_stdout(
-        "known_gaps/sound_comprehension_nested_vector_segv.gg",
-        "comp_nested_vector_segv",
-        "1",
-    );
-}
+// ── R44 Track K: the nested-Vector comprehension SEGV GRADUATED ──
+//
+// `known_gaps/sound_comprehension_nested_vector_segv.gg` and its `#[ignore]`d
+// self-host-wired test are GONE: the self-host list arm now mints its
+// accumulator from the RESULT element, so the program is rc 0 on both lanes.
+// It lives on as the LIVE cell
+// `tests/fixtures/self_host_comprehension/graduated_nested_vector_source.gg`,
+// whose header keeps the triage-hazard case study intact. The Rust half stays
+// pinned by `rust_comprehension_nested_vector_type_change_no_segv` below.
 
 /// RUST-ONLY live pin for R44's headline fix: a comprehension whose RESULT
 /// element type differs from its SOURCE element type must mint the accumulator
@@ -50873,9 +51241,11 @@ fn sound_comprehension_nested_vector_segv() {
 /// Why this is NOT a `tests/fixtures/*.gg` fixture (the shape
 /// `rust_named_recv_user_mutator_caller_untouched` documents): the top-level
 /// `runtime_parity_corpus` auto-scans every `tests/fixtures/*.gg`, so a fixture
-/// here would force self-host agreement and count as a permanent CRASH row
-/// while the SH list-arm mint is still routed to Track K — manufacturing
-/// own-round non-MATCH inflow for a defect this round is fixing, not creating.
+/// here would put a fresh own-inflow cell into `runtime_parity_corpus` and its
+/// `RUNTIME_DIFF_NONMATCH_CEILING`; the fixture instead lives in
+/// `tests/fixtures/self_host_comprehension/`, where the self-host half is
+/// pinned by `self_host_comprehension_net` and this test pins the Rust half.
+/// Both lanes are now rc 0 on it.
 ///
 /// Why it exists at all: after the signal-death fixture moved into
 /// `known_gaps/`, ZERO top-level fixtures exercise a source-element-type ≠
@@ -50891,7 +51261,7 @@ fn sound_comprehension_nested_vector_segv() {
 fn rust_comprehension_nested_vector_type_change_no_segv() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture =
-        manifest_dir.join("tests/fixtures/known_gaps/sound_comprehension_nested_vector_segv.gg");
+        manifest_dir.join("tests/fixtures/self_host_comprehension/graduated_nested_vector_source.gg");
     let run = build_with_timeout(
         gg_command("run").arg(&fixture),
         "rust_comprehension_nested_vector_type_change_no_segv",
@@ -50913,91 +51283,25 @@ fn rust_comprehension_nested_vector_type_change_no_segv() {
 }
 
 
-// ── R44 residual: the SELF-HOST comprehension accumulator (routed to Track K) ──
+// ── R44 Track K: the three self-host comprehension-mint repros GRADUATED ──
 //
-// R44 fixed the RUST lane: the accumulator mint is deferred until the loop body
-// has produced a MATERIALIZED element, so it is typed from the RESULT element
-// instead of a hardcoded scalar or the SOURCE collection's element name. The
-// self-host lowerer got only the CoW-2G hoist and the two Core #10 `OpConstUnit`
-// retirements; its element-name channel and typed constructor are Track K.
+// `known_gaps/sh_comprehension_{list_arm_source_derived_mint,
+// set_acc_scalar_hardcode, dict_value_channel}.gg` and their `#[ignore]`d
+// tests are GONE, because the gaps they filed are FIXED. The programs live on
+// as LIVE cells in `tests/fixtures/self_host_comprehension/`
+// (`graduated_list_arm_result_derived_mint`, `graduated_set_acc_element_type`,
+// `graduated_dict_value_channel`), where `self_host_comprehension_net` runs
+// them on every `cargo test` instead of skipping them.
 //
-// Measured over a 39-cell grid (kind x source x result-element x destination,
-// all String elements built at RUNTIME), the residual obeys TWO per-arm rules,
-// and the DESTINATION (`auto` vs typed) is NOT the discriminator — 13 of the 23
-// divergent cells carry a DECLARED destination:
-//
-//   * SET / DICT arms (range arm included): wrong iff ANY result-channel
-//     element is not `int`. The producers mint `Set__int64_t` /
-//     `Dict__int64_t__int64_t` with a literal-8 constructor.
-//   * LIST arm: wrong iff the SOURCE element name differs from the RESULT
-//     element name — it mints from `collection_element_type(coll_tn)`.
-//
-// The three tests below are one repro PER MECHANISM, not per cell. All three
-// assert the CORRECT output and all three drive `assert_self_host_stdout`:
-// the residual is self-host-only, so a `run_gg`-wired body would be GREEN ON
-// ARRIVAL (Core #12: worse than no fixture) and would add a
-// `scripts/known_gaps_census.sh --check` flip that
-// `tests/gaps/PASSING_ALLOWLIST.txt` has no code for — `BLIND-LANE` was
-// deliberately retired ("a wrong-lane row is a bug to fix, not a row to file").
-//
-// ⚠ Every String element in these fixtures is built at RUNTIME. With string
-// LITERALS the mis-sized 8-byte slot holds a distinct, stable pointer and a
-// broken cell reads CORRECT — the same false-negative class as a leak probe
-// written against a literal instead of a heap-forced value.
+// ⚠ Their headers' stated rule was measurably TOO NARROW and the graduated
+// copies correct it. It said the self-host set/dict arms were "wrong iff any
+// RESULT-CHANNEL element is not `int`". A set comprehension over a STRING
+// SOURCE with EVERY result channel `int` was ALSO wrong — silently empty at
+// rc 0 — because the element-type helper early-returned empty for a String
+// source and the comprehension then lowered no loop at all. No grid in the
+// round sampled a set or dict over a String source, so nothing falsified the
+// rule; the falsifiers now ship as `set_strsrc_allint` / `dict_strsrc_allint`.
 
-/// KNOWN GAP (SELF-HOST) — mechanism 1: the list arm mints from the SOURCE
-/// element name. Measured in the landed state: SH rc 139 (SIGSEGV); the
-/// ordered Rust lane prints `2` / `5` on C and on `--backend=llvm`.
-#[test]
-#[ignore = "KNOWN GAP (SELF-HOST LANE, R44 -> Track K): the SH list-comprehension arm mints its \
-accumulator from `collection_element_type(coll_tn)` — the SOURCE collection's element name — so a \
-`Vector[String] -> Vector[int]` comprehension SIGSEGVs (rc 139). The Rust lane was fixed in R44 \
-(deferred mint from the materialized RESULT element). Asserts the INTENDED output; TODO.md. \
-Un-ignore when the SH list-arm mint takes the result element type."]
-fn sh_comprehension_list_arm_source_derived_mint() {
-    assert_self_host_stdout(
-        "known_gaps/sh_comprehension_list_arm_source_derived_mint.gg",
-        "sh_comp_list_source_mint",
-        "2\n5",
-    );
-}
-
-/// KNOWN GAP (SELF-HOST) — mechanism 2: `comp_make_set_acc` hardcodes
-/// `int64_t` + a literal-8 constructor, so a `String` element lands in an
-/// 8-byte slot and is compared as a POINTER. Measured in the landed state: SH
-/// prints `2` / `false` at rc 0; the longhand `.add()` form and the ordered
-/// Rust lane both print `2` / `true`.
-#[test]
-#[ignore = "KNOWN GAP (SELF-HOST LANE, R44 -> Track K): `comp_make_set_acc` takes no element type \
-and mints `Set__int64_t` with a literal-8 ctor, so a `Set[String]` comprehension compares 8-byte \
-POINTERS — `contains` returns false at rc 0. The Rust lane was fixed in R44. Asserts the INTENDED \
-output; TODO.md. Un-ignore when the SH set/dict accumulator producers take an element type."]
-fn sh_comprehension_set_acc_scalar_hardcode() {
-    assert_self_host_stdout(
-        "known_gaps/sh_comprehension_set_acc_scalar_hardcode.gg",
-        "sh_comp_set_acc_hardcode",
-        "2\ntrue",
-    );
-}
-
-/// KNOWN GAP (SELF-HOST) — mechanism 3: the dict accumulator's VALUE channel.
-/// A fix that threads only the KEY (derivable from the source element) leaves
-/// this red. Measured in the landed state: SH prints `2` then a raw pointer at
-/// rc 0; the ordered Rust lane prints `2` / `three` on C and on
-/// `--backend=llvm`.
-#[test]
-#[ignore = "KNOWN GAP (SELF-HOST LANE, R44 -> Track K): `comp_make_dict_acc` hardcodes BOTH \
-channels (`Dict__int64_t__int64_t`, `gorget_dict_new(8, 8)`), so a `Dict[int, String]` \
-comprehension stores the VALUE in an 8-byte slot and prints a raw pointer at rc 0. The Rust lane \
-was fixed in R44. Asserts the INTENDED output; TODO.md. Un-ignore when the SH dict accumulator \
-producer takes key AND value element types."]
-fn sh_comprehension_dict_value_channel() {
-    assert_self_host_stdout(
-        "known_gaps/sh_comprehension_dict_value_channel.gg",
-        "sh_comp_dict_value",
-        "2\nthree",
-    );
-}
 
 
 // ── R44 out-of-reach residuals of the comprehension family (filed, not fixed) ──

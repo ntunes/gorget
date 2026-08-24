@@ -1,0 +1,42 @@
+# NET A cell — comprehension ACCUMULATOR MINT, source-container axis.
+#
+# AXIS CELL: comp-kind = set `{...}`  ·  SOURCE container = Dict[int, String]  ·  RESULT
+# element = int (the KEY).  The source axis is derived from the loop DISPATCHER's arm
+# set (`lower_for` + `drive_loop_lowered` + the emitters' direct
+# `lower_for_range` calls), not from `CollectionKind` — the enum cannot name
+# the `GorgetString` / iterator-protocol / `.bytes()` arms.
+#
+# WHAT IT PINS: the self-host lowerer mints a comprehension's accumulator from
+# the MATERIALIZED RESULT ELEMENT (`comp_mint_tid` / `comp_mint_ctor`), not
+# from the source element and not from a scalar hardcode. Elements are built
+# at RUNTIME on purpose: with string LITERALS the broken shape reads `true`,
+# so a literal-backed probe is a false negative for this class.
+#
+# RED-VERIFIED (self-host lane, pre-fix driver): silently EMPTY at rc 0 — prints `0` where `1` is correct
+# Post-fix self-host and the Rust lane both print the `.expect` contents.
+#
+# FIXTURE PLACEMENT: subdirectory, deliberately NOT top-level
+# `tests/fixtures/`.  Top-level enrolment is automatic and directory-driven,
+# which would put ~30 new own-inflow cells into `runtime_parity_corpus` /
+# `RUNTIME_DIFF_NONMATCH_CEILING` (Core #9 ⊕ forbids raising that for a
+# round's own inflow), into the `-maxdepth 1` sanitize sweep, and into the
+# shrink-only leak allowlist. This is a property of THESE cells, not a general
+# rule — decide per fixture.
+# LANE: self-host only. Core #9's implementation-internal exemption: this
+# round changes no accept/reject and no accepted program's meaning; it makes
+# the self-host agree with an already-correct Rust lane. The Rust column is
+# recorded in the `.expect` value, which is hand-checked against it.
+# STAGE: 0.   RUNG: 1a (both real lanes agree post-fix; held-fixed statement
+# control available).
+
+from std.collections import Set, Dict, HashSet
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Dict[int, String] d = Dict[int, String]()
+    d.put(3, mk("alp", "ha"))
+    auto v = {k for k in d}
+    print(v.len())
+    print(v.contains(3))

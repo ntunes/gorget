@@ -1,0 +1,39 @@
+# GRADUATED from `known_gaps/` (R44 Track K) — a comprehension over a NESTED
+# `Vector`.
+#
+# AXIS CELL: comp-kind = list `[...]` · source = `Vector[Vector[int]]` (an
+# AGGREGATE element) · result element = `int`. Source and result element
+# WIDTHS differ, which is what made the mis-mint fatal rather than merely
+# wrong: the accumulator was minted from the SOURCE element, so the
+# result-push copied the wrong element width and the binary SIGSEGV'd.
+#
+# ⚠ TRIAGE-HAZARD CASE STUDY, kept because it is the reason this cell exists.
+# It surfaced while probing `&`-iterable element write-through, where the
+# sigil spellings crashed and the natural conclusion was that `&` caused it.
+# All four spellings crash on the pre-fix compiler — `[x.len() for x in a]`,
+# `[x.len() for x in &a]`, `[grow(&x) for x in a]`, `[grow(&x) for x in &a]`
+# — and the ALL-BARE form crashing is what proves the sigil incidental. A fix
+# in the `&`-write-through family would not have touched it.
+# ⚠ And an earlier probe of a DIFFERENT comprehension shape (a `void` element
+# function) exited 0 with the write merely LOST, so the crash looked
+# unreproducible. The shapes differ in whether the element expression
+# produces a value. Do not "simplify" this cell into the void-element shape.
+#
+# RED-VERIFIED (self-host lane, pre-fix driver): rc 139 SIGSEGV.
+#
+# The RUST half is pinned separately and LIVE by
+# `rust_comprehension_nested_vector_type_change_no_segv`.
+#
+# FIXTURE PLACEMENT: subdirectory (see any NET A cell's header for the full
+# reasoning). LANE: self-host — this file is the self-host half of a pair.
+# STAGE: 0. RUNG: 1a (both real lanes agree post-fix).
+
+int seed():
+    return 1
+
+void main():
+    Vector[int] inner0 = [seed()]
+    Vector[int] inner1 = [seed() + 1]
+    Vector[Vector[int]] a = [inner0, inner1]
+    Vector[int] r = [x.len() for x in a]
+    print(r.get(0).unwrap())
