@@ -1,8 +1,17 @@
 # Fixture sources are tracked; compiled binaries and generated C/LLVM artifacts
-# are not. Deny-all plus a small EXTENSION allowlist, which fails SAFE: a new
-# fixture at any depth is tracked automatically, while every build output is
-# extensionless (`hello`, `driver`) or a .c/.h/.ll/.o — none of which any rule
-# below un-ignores, so no re-ignore catch-all is needed.
+# are not. Deny-all plus a small EXTENSION allowlist.
+#
+# ⚠ THIS DOES NOT FAIL SAFE, and the claim that it did was FALSE — corrected
+# 2026-08-24 after it silently swallowed a real file. A new fixture is tracked
+# only if its extension is ON THE LIST BELOW; anything else is dropped with no
+# error, and `git add <dir>` reports success while skipping it. That is how
+# `robustness_map/MANIFEST.tsv` — the baseline a CI step reads — got wired into
+# CI without ever being committed: 359 `.gg` cells tracked, the file measuring
+# them silently absent, and the step would crash on a fresh checkout.
+#
+# So: ADDING A FIXTURE WITH A NEW EXTENSION REQUIRES ADDING THAT EXTENSION HERE.
+# After `git add`, verify with `git ls-files <path>` — a silent skip looks
+# exactly like success.
 #
 # `!*/` is load-bearing: git will not descend into an excluded directory, so
 # directories must be un-ignored before the file rules can match inside them.
@@ -16,4 +25,5 @@
 !**/*.lock
 !**/*.md
 !**/*.sh
+!**/*.tsv
 !.gitignore
