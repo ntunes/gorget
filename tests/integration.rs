@@ -4704,6 +4704,28 @@ fn known_gap_map_inline_closure_cross_type_input_mint() {
     );
 }
 
+/// KNOWN GAP: `flat_map` that changes the element type mints its accumulator
+/// from the INPUT element type and prints a raw pointer at rc 0.
+///
+/// Two false invariant-asserting comments sit on the defect
+/// (`self_host_lowerer/lower_expr.gg:6775` and `:6791`, both claiming
+/// "flat_map preserves the element type"), contradicted by the typechecker's
+/// own signature `("Vector", "flat_map") => (T) -> Vector[U]`. Core #14: they
+/// get an enforcing guard or they get deleted — a reader who trusts them will
+/// reintroduce this bug while "cleaning up".
+///
+/// On the Rust lane a TYPED destination with a named callee is correct, so the
+/// destination declaration is the discriminator there; the self-host is
+/// reported wrong on both, a lane divergence where Rust is ahead.
+///
+/// Same class as the filed `map` sibling (accumulator minted from the input
+/// element type) at a different producer branch — Core #4.
+#[test]
+#[ignore = "known gap (R44): cross-type `flat_map` mints the accumulator from the INPUT element type; un-ignore when the closure's Vector[U] return type flows through to the accumulator, and delete the two false 'preserves the element type' comments"]
+fn known_gap_flat_map_cross_type_input_mint() {
+    run_gg("known_gaps/flat_map_cross_type_input_mint.gg", "2\ntag");
+}
+
 // KNOWN GAP (filed R44 Track D) — Rust `apply_inferred_method_targs`
 // (src/semantic/typecheck.rs) is a non-exhaustive traversal ending in a bare
 // `_ => {}`, so an Iterator terminal in an ASSERT CONDITION keeps its bare

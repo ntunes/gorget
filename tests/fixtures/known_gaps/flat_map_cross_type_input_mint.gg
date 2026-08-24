@@ -1,0 +1,49 @@
+# KNOWN GAP — `flat_map` that CHANGES the element type mints its accumulator
+# from the INPUT element type, printing a raw pointer at rc 0.
+#
+#     Vector[int] nums = [3, 4]
+#     auto v = nums.flat_map(tags)      # tags: (int) -> Vector[String]
+#     print(v.get(0).unwrap())          # prints e.g. 187651182920432, not "tag"
+#
+# ⚠ TWO FALSE INVARIANT-ASSERTING COMMENTS sit on the defect and must go
+# (Core #14 — an invariant comment needs an enforcing guard or it is deleted):
+# `self_host_lowerer/lower_expr.gg:6775` and `:6791` both assert
+#
+#     "flat_map preserves the element type -- the closure returns a Vector of
+#      the same element"
+#
+# which is FALSE against the typechecker's own signature at
+# `src/semantic/typecheck.rs:8212`: `("Vector", "flat_map") => (T) -> Vector[U]`,
+# whose comment even spells out the cross-type case. A reader who trusts the
+# self-host comment will "clean up" the fix straight back into this bug.
+#
+# ⚠ DISCRIMINATORS, measured:
+#   * Rust lane: `auto` destination is WRONG; a TYPED destination
+#     (`Vector[String] v = ...`) with a named callee is CORRECT (prints "tag").
+#   * Self-host lane: reported wrong on BOTH destinations, i.e. a lane
+#     divergence with a direction -- Rust is ahead here, so fix the self-host.
+#     (Rust-lane cells above are orchestrator-verified; the self-host column is
+#     the R44 Track-K pass-8 measurement across five drivers.)
+#
+# ⚠ DISTINCT from the filed `map` sibling: that entry is scoped to `map` in its
+# own text, and this is a different branch with its own mint site and its own
+# pair of false comments. Same CLASS (accumulator minted from the input element
+# type), different producer -- Core #4.
+#
+# INTENDED (asserted below): prints 2 then tag.
+# Measured 2026-08-24 by the R44 Track-K brief-review pass 8, Rust lane
+# orchestrator-verified.
+
+String mk(String a, String b):
+    return a + b
+
+Vector[String] tags(int n):
+    Vector[String] out = []
+    out.push(mk("t", "ag"))
+    return out
+
+void main():
+    Vector[int] nums = [3, 4]
+    auto v = nums.flat_map(tags)
+    print(v.len())
+    print(v.get(0).unwrap())
