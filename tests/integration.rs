@@ -4738,7 +4738,32 @@ fn known_gap_flat_map_cross_type_input_mint() {
 #[test]
 #[ignore = "known gap (R44): Dict.contains_key does not link on the self-host lane (Rust is correct); un-ignore when the self-host lowers/links contains_key"]
 fn known_gap_sh_dict_contains_key_link_failure() {
-    run_gg("known_gaps/sh_dict_contains_key_link_failure.gg", "HAS\n1");
+    // SELF-HOST lane deliberately: Rust is already correct here, so a run_gg body
+    // would be GREEN ON ARRIVAL and pin nothing (Core #12).
+    assert_self_host_stdout(
+        "known_gaps/sh_dict_contains_key_link_failure.gg",
+        "kg_dict_contains_key",
+        "HAS\n1",
+    );
+}
+
+/// KNOWN GAP (self-host lane): `@derive(Hashable)` on an ENUM emits a call to an
+/// undefined runtime symbol `H__write_int`, so the program does not link on the
+/// self-host lane, while Rust gg compiles and prints the right answer.
+///
+/// The discriminator is the receiver kind — the same derive on a STRUCT is clean
+/// on both lanes. Distinct from the filed `double__hash` sibling, a different
+/// missing symbol on a different derive path.
+#[test]
+#[ignore = "known gap (R44): @derive(Hashable) on an enum emits undefined H__write_int and fails to link on the self-host lane (Rust is correct); un-ignore when the self-host emits the enum hash writer"]
+fn known_gap_sh_derive_hashable_on_enum_link_failure() {
+    // SELF-HOST lane deliberately: Rust is already correct here, so a run_gg body
+    // would be GREEN ON ARRIVAL and pin nothing (Core #12).
+    assert_self_host_stdout(
+        "known_gaps/sh_derive_hashable_on_enum_link_failure.gg",
+        "kg_derive_hashable_enum",
+        "2\nHAS-a",
+    );
 }
 
 // KNOWN GAP (filed R44 Track D) — Rust `apply_inferred_method_targs`

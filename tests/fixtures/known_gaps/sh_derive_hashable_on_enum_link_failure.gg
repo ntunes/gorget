@@ -1,0 +1,35 @@
+# KNOWN GAP — SELF-HOST LANE. `@derive(Hashable)` on an ENUM emits a call to an
+# undefined runtime symbol `H__write_int`, so the program fails to LINK on the
+# self-host lane. Rust gg compiles it and prints the right answer.
+#
+# A lane divergence with a known direction: Rust is right, the self-host lags,
+# so the self-host is what gets fixed.
+#
+# ⚠ DISCRIMINATOR: the RECEIVER KIND. `@derive(Hashable)` on a STRUCT is clean
+# on both lanes; only the ENUM path emits the undefined symbol. Distinct from
+# the filed `double__hash` sibling, which is a different missing symbol on a
+# different derive path.
+#
+# Rust lane, orchestrator-verified 2026-08-24: prints 2 / HAS-a.
+# Self-host lane: link failure on undefined `H__write_int`
+# (R44 Track-K pass-11 measurement).
+#
+# INTENDED (asserted below): prints 2 then HAS-a on every lane.
+
+from std.collections import Set
+
+@derive(Hashable, Equatable)
+enum Color:
+    Red()
+    Green()
+    Blue()
+
+void main():
+    Set[Color] s = Set[Color]()
+    s.add(Color.Red())
+    s.add(Color.Blue())
+    print(f"{s.len()}")
+    if s.contains(Color.Red()):
+        print("HAS-a")
+    else:
+        print("MISS-a")
