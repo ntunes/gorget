@@ -1,0 +1,38 @@
+# KNOWN GAP — BOTH BACKENDS. A user function whose name happens to match a libc
+# symbol fails to compile with a raw C error, because user names reach the
+# emitted C UNMANGLED.
+#
+#     int abs(int x):          ->  error: conflicting types for 'abs'
+#         ...
+#
+# Measured 2026-08-24, one probe per name, all identical `conflicting types`:
+#     abs · div · remove · exit · free · read · write · index   COLLIDE
+#     open                                                      ok
+#
+# so it is not a curated keyword list, it is "whatever libc happens to declare"
+# -- which means the set is PLATFORM-DEPENDENT and silently different on macOS,
+# musl, or a newer glibc. A program that compiles for one user fails for another.
+#
+# ⚠ This is a LAYERING defect, not a naming policy question. The C-emit boundary
+# is the one place the runtime symbol name IS the contract; user-defined names
+# have no business sharing that namespace unmangled. Structs already mangle
+# (`__gg_Point`), so the mechanism exists and is simply not applied to functions.
+#
+# ⚠ The diagnostic is the other half of the defect: the user wrote Gorget and
+# gets a C compiler error naming a C symbol, with no indication that renaming
+# their function is the fix.
+#
+# INTENDED (asserted below): compiles and prints 7. `abs` is an ordinary
+# identifier in a language with no `abs` builtin; nothing in the Gorget spec
+# reserves it. A teaching rejection at check time would be an acceptable
+# alternative -- accept-then-fail-in-cc is not.
+#
+# Found 2026-08-24 by the robustness-map expansion; orchestrator-verified.
+
+int abs(int x):
+    if x < 0:
+        return 0 - x
+    return x
+
+void main():
+    print(abs(0 - 7))
