@@ -426,6 +426,27 @@ impl FunctionBuilder {
         })
     }
 
+    /// Call an extern function whose result lands in an ALREADY-RESERVED local.
+    ///
+    /// The comprehension accumulator needs this: its element type is only known
+    /// after the loop body has been lowered, but the body has to name the
+    /// accumulator local. So the local is reserved first (`add_local`), the body
+    /// is lowered, and the constructor is emitted afterwards into a pre-header
+    /// block that was deliberately left unterminated. `call_extern` cannot do
+    /// this — it mints its own destination.
+    pub fn call_extern_into(
+        &mut self,
+        dst: LocalId,
+        func: impl Into<String>,
+        args: Vec<Operand>,
+    ) {
+        self.emit(Instruction::CallExtern {
+            dst: Some(dst),
+            func: func.into(),
+            args,
+        });
+    }
+
     /// Call an extern function that returns void (output-parameter pattern).
     pub fn call_extern_void(
         &mut self,

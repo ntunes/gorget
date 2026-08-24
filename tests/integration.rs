@@ -142,9 +142,15 @@ fn gg_binary() -> &'static Path {
 /// Invoke the pre-built `gg` binary directly.
 ///
 /// When `GG_BACKEND=llvm` is set in the environment, append `--backend=llvm`
-/// to every `gg build` / `gg test` invocation. Other subcommands (`run`,
-/// `check`, `fmt`, …) ignore the flag so we don't pass it where the CLI
-/// rejects it.
+/// to `gg build`, `gg test` AND `gg run` (see the `matches!` below). `check`,
+/// `fmt` and friends do not get it, because the CLI rejects it there.
+///
+/// ⚠ `gg run` ACCEPTS the flag and IGNORES it: `src/main.rs`'s `"run" =>` arm
+/// hardcodes `try_build_ir(..., "c-lir", "native")` and `--backend` is merely
+/// swallowed by the `flags_with_values` skip-list. So the `gg_command("run")`
+/// tests execute the C backend even under `GG_BACKEND=llvm` — filed in
+/// TODO.md; do NOT "fix" this by adding flag forwarding without deciding what
+/// `gg run --backend=llvm` should mean.
 fn gg_command(subcommand: &str) -> Command {
     let mut cmd = Command::new(gg_binary());
     cmd.arg(subcommand);
@@ -2321,20 +2327,62 @@ fn gg_run_command() {
 /// must surface `128 + signo` from `gg run`, NOT silently exit 1. Otherwise a
 /// memory-safety bug is indistinguishable from a compile error at the
 /// `gg run` UX (has misled triage rounds — see TODO.md, Round XXIV Track B).
+///
+/// Oracle: `stack_guard_deep_recursion.gg`, a BY-DESIGN depth-200000 non-tail
+/// recursion that `tests/security.rs` (`sec_45_deep_recursion_stack_overflow`)
+/// ratifies as an intentional stack overflow and that
+/// `stack_guard_runtime_deep_recursion` already pins. It replaced the previous
+/// oracle, `known_gaps/sound_comprehension_nested_vector_segv.gg`, which
+/// SIGSEGV'd only because of a comprehension-emitter defect (the accumulator
+/// was minted from the SOURCE element type, so the result-push copied the
+/// wrong element width). R44 fixed that on the Rust lane — `gg run` on it is
+/// now rc 0 printing `1` — and an oracle that rides on the defect under
+/// repair is not an oracle. The self-host lane still crashes on that program;
+/// that residual is pinned by `sound_comprehension_nested_vector_segv`
+/// (`#[ignore]`d, self-host-wired) and by
+/// `rust_comprehension_nested_vector_type_change_no_segv` below.
 #[test]
 fn gg_run_propagates_signal_death() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let fixture_path = manifest_dir
-        .join("tests/fixtures/known_gaps/sound_comprehension_nested_vector_segv.gg");
+    let fixture_path = manifest_dir.join("tests/fixtures/stack_guard_deep_recursion.gg");
+    // Pin RLIMIT_STACK (soft) to a stock 8MB on the `gg run` process, exactly
+    // as `stack_guard_runtime_deep_recursion` pins the produced binary: this
+    // program dies by SIGSEGV only at a stock stack limit, so an UNPINNED
+    // invocation makes the oracle host-conditional. MEASURED on one build,
+    // one variable: `ulimit -S -s 8192` => rc 139 with "terminated by SIGSEGV
+    // (signal 11)"; `ulimit -S -s unlimited` => rc 0 printing "200000", which
+    // fails the assertion below with the actively misleading `got Some(0)` —
+    // it accuses the driver of losing signal propagation when the program
+    // simply did not overflow. Do NOT "simplify" this back to
+    // `gg_command("run")`; that silently re-opens the host-conditionality.
+    //
+    // `;` and NOT `&&`: on a host whose HARD stack limit is below 8MB the pin
+    // is a RAISE and fails. MEASURED (hard = soft = 4MB): with `&&` the shell
+    // short-circuits, `gg` never runs, and the oracle reports a bare rc 2;
+    // with `;` the `ulimit: error setting limit` breadcrumb still reaches
+    // stderr AND the program still overflows the smaller stack => rc 139 with
+    // the asserted SIGSEGV diagnostic. The assertion holds on every host that
+    // can run it at all.
+    //
+    // Dropping `gg_command`'s `--backend` flag here costs nothing: `gg run`
+    // hardcodes the C backend (`src/main.rs`'s `"run" =>` arm passes
+    // `"c-lir"`), so the flag was only ever swallowed.
     let output = build_with_timeout(
-        gg_command("run").arg(&fixture_path),
-        "sound_comprehension_nested_vector_segv.gg",
+        Command::new("sh")
+            .arg("-c")
+            .arg("ulimit -S -s 8192; exec \"$0\" run \"$1\"")
+            .arg(gg_binary())
+            .arg(&fixture_path),
+        "stack_guard_deep_recursion.gg (gg run pinned to 8MB)",
     );
     // Post-fix: 128 + SIGSEGV(11) = 139. Pre-fix: 1 silent.
     assert_eq!(
         output.status.code(),
         Some(139),
-        "gg run must propagate 128+SIGSEGV as exit 139, got {:?}\nstderr: {}",
+        "gg run must propagate 128+SIGSEGV as exit 139, got {:?} — or the \
+         ulimit pin didn't take (host HARD stack limit below 8MB: look for \
+         `ulimit: error setting limit` on stderr; a huge host stack makes \
+         this program print 200000 and exit 0 instead)\nstderr: {}",
         output.status.code(),
         String::from_utf8_lossy(&output.stderr),
     );
@@ -2343,11 +2391,9 @@ fn gg_run_propagates_signal_death() {
         stderr.contains("SIGSEGV") || stderr.contains("signal 11"),
         "gg run must emit a stderr diagnostic on signal death; got: {stderr:?}",
     );
-    // Clean up build artifacts left next to the fixture.
-    let dir = fixture_path.parent().unwrap();
-    let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
-    let _ = std::fs::remove_file(dir.join(format!("{stem}.c")));
-    let _ = std::fs::remove_file(dir.join(stem));
+    // No cleanup: `gg run` builds into a `tempfile::tempdir()` (`src/main.rs`),
+    // so it leaves nothing beside the fixture. (The previous body's
+    // remove_file calls were dead code asserting the opposite.)
 }
 
 #[test]
@@ -15766,15 +15812,44 @@ fn vector_windows_nested_index_assign_ice() {
     run_gg("known_gaps/vector_windows_nested_index_assign_ice.gg", "1");
 }
 
+/// GRADUATED (R44) from `known_gaps/`. The CoW-2G loop-carried bare-param
+/// hoist now runs on ALL SEVEN comprehension cells, on BOTH lanes.
+///
+/// ⚠ THIS FIXTURE SAMPLES ONE CELL of a 7-cell matrix — emitter × channel:
+///   BODY channel   (4 hoist call sites): list · set · dict-KEY · dict-VALUE
+///   FILTER channel (1 hoist, at the producer `drive_comprehension_loop`):
+///                  list · set · dict
+/// It is the list × BODY cell. `cow_loop_bare_param_comprehension_matrix.gg`
+/// covers the other six in one program; keep both — this one is the minimal
+/// shape a reader can hold in their head, that one is the net.
+/// (The header's older "list/string/dict/set" four-emitter claim was false:
+/// there is no string EMITTER — a `String` source flows through the list
+/// emitter — and the dict emitter carries TWO body-channel expressions.)
+///
+/// RED-verified pre-fix, measured on one build of each compiler:
+/// Rust `gg` printed `3/2/4` and the self-host driver `0/2/4`; both now print
+/// `2/2/4`, which is what the statement-`for` form of the same program prints
+/// on both lanes.
 #[test]
-#[ignore = "CoW 2G comprehension-loop sibling: the comprehension emitters \
-synthesize header/body/incr loops with no save/restore, so an in-body \
-materialize lands in the re-executing body — per-iteration throwaway by a \
-different route. LANE ASYMMETRY: the self-host fixes these FIRST (its \
-comprehensions desugar through lower_for_*). Asserts 2,2,4; compiler prints \
-3,2,4. See TODO 'CoW 2G comprehension-loop sibling'."]
 fn cow_loop_bare_param_comprehension() {
-    run_gg("known_gaps/cow_loop_bare_param_comprehension.gg", "2\n2\n4");
+    run_gg("cow_loop_bare_param_comprehension.gg", "2\n2\n4");
+}
+
+/// The OTHER SIX cells of the CoW-2G comprehension matrix (emitter x channel):
+/// BODY x {set, dict-KEY, dict-VALUE} and FILTER x {list, set, dict}. Its
+/// sibling above samples list x BODY; a partial regression that restored only
+/// one of the five hoist sites would leave that one green and trip this.
+///
+/// RED-verified per cell on one build of each compiler, `xs.len()` with the
+/// correct value 2: Rust `gg` printed `3/3/3/3/3/3` and the self-host driver
+/// `0/0/0/0/0/0`, while the in-program statement-`for` oracle printed the
+/// correct 2 on both. Post-fix both print all 2s, as does `--backend=llvm`.
+#[test]
+fn cow_loop_bare_param_comprehension_matrix() {
+    run_gg(
+        "cow_loop_bare_param_comprehension_matrix.gg",
+        "2\n2\n2\n2\n2\n2\n2\n4",
+    );
 }
 
 /// LIVE REGRESSION FIXTURE (was a known gap; un-ignored 2026-08-19, R43 Track
@@ -33754,12 +33829,25 @@ fn self_host_cli_pipeline() {
 /// XXIV Track B follow-up filing was a Core #12/#15d violation — source-read
 /// diagnosis missed the `system()` → /bin/sh → shell-signal-translation chain.
 ///
-/// This LIVE regression pin (previously `known_gaps/sh_gg_run_masks_signal_as_255.gg`,
-/// now graduated to `tests/fixtures/sh_gg_run_propagates_signal_death.gg`) asserts
-/// the SH driver behaviour: SH `driver run` on a SIGSEGV program exits 139 with
-/// non-empty stderr containing signal indication ("Segmentation fault" from
-/// /bin/sh; branded `SIGSEGV` from Rust would be nice-to-have but requires a
-/// fork/execvp-based new runtime API — not filed unless asked).
+/// This LIVE regression pin (previously `known_gaps/sh_gg_run_masks_signal_as_255.gg`)
+/// asserts the SH driver behaviour: SH `driver run` on a SIGSEGV program exits
+/// 139 with non-empty stderr containing signal indication ("Segmentation
+/// fault" from /bin/sh; branded `SIGSEGV` from Rust would be nice-to-have but
+/// requires a fork/execvp-based new runtime API — not filed unless asked).
+///
+/// ⚠ The fixture lives in `tests/fixtures/known_gaps/` even though THIS test
+/// is LIVE, and that placement is deliberate — `scripts/convergence.sh`
+/// ratifies exactly this case ("NOT A GAP AT ALL = a known_gaps fixture
+/// referenced ONLY by LIVE tests … parked in that directory because
+/// `runtime_parity_corpus` never descends subdirectories"). Two top-level
+/// scanners would otherwise pick it up and get the wrong answer:
+/// `runtime_parity_corpus` (`read_dir(tests/fixtures)`) stdout-diffs Rust
+/// against the self-host on LANGUAGE-SEMANTICS parity, which this fixture does
+/// not test — it is a `gg run` DRIVER property, and its SIGSEGV is supplied by
+/// a comprehension defect the self-host still carries, so it would count as a
+/// permanent CRASH row; and `scripts/sanitize_sweep.sh`
+/// (`find tests/fixtures -maxdepth 1`) sanitizes it on the RUST lane, which no
+/// longer corrupts. Do NOT move it back up.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn sh_gg_run_propagates_signal_death() {
@@ -33767,7 +33855,8 @@ fn sh_gg_run_propagates_signal_death() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let runtime_dir = manifest_dir.join("src/backend/c/runtime");
     let lib_dir = manifest_dir.join("stdlib");
-    let fixture = manifest_dir.join("tests/fixtures/sh_gg_run_propagates_signal_death.gg");
+    let fixture =
+        manifest_dir.join("tests/fixtures/known_gaps/sh_gg_run_propagates_signal_death.gg");
 
     let output = run_with_timeout(
         Command::new(&driver_exe)
@@ -35157,8 +35246,7 @@ fn collection_fill_bare_none() {
 /// read-only vs mutating, materialize only for the mutating ones). Filed in
 /// TODO.md.
 ///
-/// Why this is NOT a `tests/fixtures/*.gg` fixture (mirrors the reasoning on
-/// `rust_collection_fill_bare_none_no_segv` above): `runtime_parity_corpus`
+/// Why this is NOT a `tests/fixtures/*.gg` fixture: `runtime_parity_corpus`
 /// auto-scans every `tests/fixtures/*.gg`, so a fixture here would force
 /// self-host agreement and count as a permanent WRONG in `self_host_runtime_diff`
 /// (and the `cow_*` sweep). Until the self-host grows the `&self`
@@ -47919,8 +48007,14 @@ fn stack_guard_self_host_driver_deep_lowering() {
     // `sh -c 'ulimit && exec'` wrapper, then self-compile with `--lir-c`
     // (full lowering — the deepest lower_expr<->lower_expr_inner recursion
     // the self-host exercises, over its own ~900K concatenated lines).
-    // Soft-limit lowering is always permitted, so the pin never fails on
-    // hosts with smaller hard limits. 600s deadline: the solo self-compile
+    // ⚠ `ulimit -S -s 8192` is a LOWERING only when the current soft limit
+    // exceeds 8MB; on a host whose HARD limit is under 8MB it is a RAISE and
+    // FAILS (measured: `ulimit: error setting limit (Invalid argument)`,
+    // after which `&&` short-circuits and this command exits 2 without ever
+    // running the driver). That host state is exotic — GitHub's
+    // `ubuntu-latest` hard limit is unlimited — but the pin is not
+    // unconditional, and the assert message below would misattribute the
+    // failure to frame bloat. 600s deadline: the solo self-compile
     // is ~30s–1min user, but wall-clock under parallel cargo-test load is
     // 4-8× user (matches self_host_bootstrap).
     let emit = run_with_deadline(
@@ -50392,19 +50486,19 @@ fn sound_callable_amp_param_ices() {
     run_gg("known_gaps/sound_callable_amp_param_ices.gg", "11\n11");
 }
 
-/// KNOWN GAP (R42) — `auto`-typed dict/set comprehensions over a plain
-/// `Vector[int]` produce SILENT WRONG VALUES (dc[1] == 3 not 10; sc.len()
-/// == 0 not 3); both check clean and run without error. Asserts the INTENDED
-/// values, so it is RED at HEAD. Distinct from the resource-element
-/// comprehension crash family (whose Vector[int] LIST cell is correct).
+/// GRADUATED (R44) from `known_gaps/`. `auto`-typed dict/set comprehensions
+/// over a plain `Vector[int]` used to produce SILENT WRONG VALUES (`dc[1] == 3`
+/// not `10`; `sc.len() == 0` not `3`) while checking clean and running without
+/// error. Both now give the intended values because the accumulator is minted
+/// from the MATERIALIZED result element instead of a hardcoded
+/// `Dict__int64_t__int64_t` / source-derived guess.
+///
+/// RED-verified pre-fix on one build of each compiler: Rust `gg` printed `3/0`
+/// and the self-host driver `0/8`; both now print `10/3`. Also correct under
+/// `--backend=llvm`.
 #[test]
-#[ignore = "KNOWN GAP (R42): auto dict/set comprehensions over Vector[int] give wrong values; \
-asserts the INTENDED 10/3 output. See TODO.md."]
 fn sound_auto_dict_set_comprehension_values() {
-    run_gg(
-        "known_gaps/sound_auto_dict_set_comprehension_wrong_values.gg",
-        "10\n3",
-    );
+    run_gg("sound_auto_dict_set_comprehension_wrong_values.gg", "10\n3");
 }
 
 /// KNOWN GAP (R42) — the internal postcondition alias `__return__` is
@@ -50564,13 +50658,225 @@ fn sound_fstring_suppresses_sigil_reject() {
 /// comprehension shape (`void` element function) exited 0 with the write merely
 /// lost, so the crash looked unreproducible. The shapes differ in whether the
 /// element expression produces a value.
+/// ⚠ REWIRED TO THE SELF-HOST LANE (R44) — it used to drive `run_gg`, i.e. the
+/// RUST compiler, and R44 fixed the Rust lane on exactly this program. Left on
+/// `run_gg` it would have started PASSING while `#[ignore]`d: green on
+/// `cargo test --test lints` (which only reads
+/// `tests/gaps/PASSING_ALLOWLIST.txt`) and RED in CI on
+/// `scripts/known_gaps_census.sh --check`, which is the only instrument that
+/// runs the ignored roster and asserts set equality. Graduating it instead is
+/// not available — the self-host lane still SIGSEGVs, and a top-level fixture
+/// would force self-host agreement — and `PASSING_ALLOWLIST.txt` has no code
+/// for a wrong-lane passer (`BLIND-LANE` was deliberately retired: "a
+/// wrong-lane row is a bug to fix, not a row to file").
+///
+/// So it now asserts the lane its gap actually lives on. Measured: the
+/// self-host driver is rc 139 on this program both before and after R44's
+/// steps 1+2, because the SH LIST arm still mints from
+/// `collection_element_type(coll_tn)` — the SOURCE collection's element name.
+/// That is routed to Track K. The Rust half is pinned live by
+/// `rust_comprehension_nested_vector_type_change_no_segv` below.
 #[test]
-#[ignore = "KNOWN GAP: a comprehension over a nested Vector segfaults (exit 139) though gg check \
-passes and no sigil is involved. Asserts the INTENDED output; TODO.md. Un-ignore when the \
-nested-collection comprehension lowering is fixed. (Since Round XXIV Track B, `gg run` propagates \
-128+signo as exit 128+N with a stderr diagnostic — no longer silent exit 1.)"]
+#[ignore = "KNOWN GAP (SELF-HOST LANE): a comprehension over a nested Vector segfaults (exit 139) \
+on the self-host driver though gg check passes and no sigil is involved. The RUST lane was fixed in \
+R44 (deferred accumulator mint); the SH list arm still mints from the SOURCE element name. Asserts \
+the INTENDED output; TODO.md. Un-ignore when the SH list-arm mint is fixed (Track K)."]
 fn sound_comprehension_nested_vector_segv() {
-    run_gg("known_gaps/sound_comprehension_nested_vector_segv.gg", "1");
+    assert_self_host_stdout(
+        "known_gaps/sound_comprehension_nested_vector_segv.gg",
+        "comp_nested_vector_segv",
+        "1",
+    );
+}
+
+/// RUST-ONLY live pin for R44's headline fix: a comprehension whose RESULT
+/// element type differs from its SOURCE element type must mint the accumulator
+/// from the RESULT. `Vector[Vector[int]] -> Vector[int]` used to push with the
+/// SOURCE element width and SIGSEGV (exit 139).
+///
+/// Why this is NOT a `tests/fixtures/*.gg` fixture (the shape
+/// `rust_named_recv_user_mutator_caller_untouched` documents): the top-level
+/// `runtime_parity_corpus` auto-scans every `tests/fixtures/*.gg`, so a fixture
+/// here would force self-host agreement and count as a permanent CRASH row
+/// while the SH list-arm mint is still routed to Track K — manufacturing
+/// own-round non-MATCH inflow for a defect this round is fixing, not creating.
+///
+/// Why it exists at all: after the signal-death fixture moved into
+/// `known_gaps/`, ZERO top-level fixtures exercise a source-element-type ≠
+/// result-element-type comprehension (census: the 11 top-level fixtures
+/// containing a comprehension are all range-sourced, `Vector[int]`-sourced, or
+/// `String`→`String`, plus three check-time NEGs). The round's headline fix
+/// would otherwise ship with no live pin.
+///
+/// RED-verified: `gg run` on this program at HEAD is rc 139 with empty stdout
+/// and `terminated by SIGSEGV (signal 11)` on stderr; post-fix it is rc 0
+/// printing `1`.
+#[test]
+fn rust_comprehension_nested_vector_type_change_no_segv() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture =
+        manifest_dir.join("tests/fixtures/known_gaps/sound_comprehension_nested_vector_segv.gg");
+    let run = build_with_timeout(
+        gg_command("run").arg(&fixture),
+        "rust_comprehension_nested_vector_type_change_no_segv",
+    );
+    assert_eq!(
+        run.status.code(),
+        Some(0),
+        "a `Vector[Vector[int]] -> Vector[int]` comprehension must not crash on the \
+         RUST lane: the accumulator is minted from the MATERIALIZED result element, \
+         not the source element type. got {:?}\nstderr: {}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout).trim(),
+        "1",
+        "wrong value from a type-changing comprehension on the RUST lane",
+    );
+}
+
+
+// ── R44 residual: the SELF-HOST comprehension accumulator (routed to Track K) ──
+//
+// R44 fixed the RUST lane: the accumulator mint is deferred until the loop body
+// has produced a MATERIALIZED element, so it is typed from the RESULT element
+// instead of a hardcoded scalar or the SOURCE collection's element name. The
+// self-host lowerer got only the CoW-2G hoist and the two Core #10 `OpConstUnit`
+// retirements; its element-name channel and typed constructor are Track K.
+//
+// Measured over a 39-cell grid (kind x source x result-element x destination,
+// all String elements built at RUNTIME), the residual obeys TWO per-arm rules,
+// and the DESTINATION (`auto` vs typed) is NOT the discriminator — 13 of the 23
+// divergent cells carry a DECLARED destination:
+//
+//   * SET / DICT arms (range arm included): wrong iff ANY result-channel
+//     element is not `int`. The producers mint `Set__int64_t` /
+//     `Dict__int64_t__int64_t` with a literal-8 constructor.
+//   * LIST arm: wrong iff the SOURCE element name differs from the RESULT
+//     element name — it mints from `collection_element_type(coll_tn)`.
+//
+// The three tests below are one repro PER MECHANISM, not per cell. All three
+// assert the CORRECT output and all three drive `assert_self_host_stdout`:
+// the residual is self-host-only, so a `run_gg`-wired body would be GREEN ON
+// ARRIVAL (Core #12: worse than no fixture) and would add a
+// `scripts/known_gaps_census.sh --check` flip that
+// `tests/gaps/PASSING_ALLOWLIST.txt` has no code for — `BLIND-LANE` was
+// deliberately retired ("a wrong-lane row is a bug to fix, not a row to file").
+//
+// ⚠ Every String element in these fixtures is built at RUNTIME. With string
+// LITERALS the mis-sized 8-byte slot holds a distinct, stable pointer and a
+// broken cell reads CORRECT — the same false-negative class as a leak probe
+// written against a literal instead of a heap-forced value.
+
+/// KNOWN GAP (SELF-HOST) — mechanism 1: the list arm mints from the SOURCE
+/// element name. Measured in the landed state: SH rc 139 (SIGSEGV); the
+/// ordered Rust lane prints `2` / `5` on C and on `--backend=llvm`.
+#[test]
+#[ignore = "KNOWN GAP (SELF-HOST LANE, R44 -> Track K): the SH list-comprehension arm mints its \
+accumulator from `collection_element_type(coll_tn)` — the SOURCE collection's element name — so a \
+`Vector[String] -> Vector[int]` comprehension SIGSEGVs (rc 139). The Rust lane was fixed in R44 \
+(deferred mint from the materialized RESULT element). Asserts the INTENDED output; TODO.md. \
+Un-ignore when the SH list-arm mint takes the result element type."]
+fn sh_comprehension_list_arm_source_derived_mint() {
+    assert_self_host_stdout(
+        "known_gaps/sh_comprehension_list_arm_source_derived_mint.gg",
+        "sh_comp_list_source_mint",
+        "2\n5",
+    );
+}
+
+/// KNOWN GAP (SELF-HOST) — mechanism 2: `comp_make_set_acc` hardcodes
+/// `int64_t` + a literal-8 constructor, so a `String` element lands in an
+/// 8-byte slot and is compared as a POINTER. Measured in the landed state: SH
+/// prints `2` / `false` at rc 0; the longhand `.add()` form and the ordered
+/// Rust lane both print `2` / `true`.
+#[test]
+#[ignore = "KNOWN GAP (SELF-HOST LANE, R44 -> Track K): `comp_make_set_acc` takes no element type \
+and mints `Set__int64_t` with a literal-8 ctor, so a `Set[String]` comprehension compares 8-byte \
+POINTERS — `contains` returns false at rc 0. The Rust lane was fixed in R44. Asserts the INTENDED \
+output; TODO.md. Un-ignore when the SH set/dict accumulator producers take an element type."]
+fn sh_comprehension_set_acc_scalar_hardcode() {
+    assert_self_host_stdout(
+        "known_gaps/sh_comprehension_set_acc_scalar_hardcode.gg",
+        "sh_comp_set_acc_hardcode",
+        "2\ntrue",
+    );
+}
+
+/// KNOWN GAP (SELF-HOST) — mechanism 3: the dict accumulator's VALUE channel.
+/// A fix that threads only the KEY (derivable from the source element) leaves
+/// this red. Measured in the landed state: SH prints `2` then a raw pointer at
+/// rc 0; the ordered Rust lane prints `2` / `three` on C and on
+/// `--backend=llvm`.
+#[test]
+#[ignore = "KNOWN GAP (SELF-HOST LANE, R44 -> Track K): `comp_make_dict_acc` hardcodes BOTH \
+channels (`Dict__int64_t__int64_t`, `gorget_dict_new(8, 8)`), so a `Dict[int, String]` \
+comprehension stores the VALUE in an 8-byte slot and prints a raw pointer at rc 0. The Rust lane \
+was fixed in R44. Asserts the INTENDED output; TODO.md. Un-ignore when the SH dict accumulator \
+producer takes key AND value element types."]
+fn sh_comprehension_dict_value_channel() {
+    assert_self_host_stdout(
+        "known_gaps/sh_comprehension_dict_value_channel.gg",
+        "sh_comp_dict_value",
+        "2\nthree",
+    );
+}
+
+
+// ── R44 out-of-reach residuals of the comprehension family (filed, not fixed) ──
+//
+// All three are LOUD-or-SILENT on the RUST lane and are NOT closed by R44's
+// deferred accumulator mint, because their root causes live upstream of the
+// emitter (the typechecker) or in a different subsystem (monomorphisation
+// dedup). Each carries a durable repro; each asserts the CORRECT behaviour.
+
+/// KNOWN GAP — `gg check` ACCEPTS a comprehension over a type with no
+/// iterator. Not a too-narrow rule: there is no is-it-iterable gate at all
+/// (Core #15e Q4), and the typechecker's three comprehension arms discard the
+/// element type outright. The lowering then aborts (pre-R44 a LIR-validator
+/// panic; post-R44 an honest diagnostic naming the repro), while the
+/// STATEMENT-`for` form of the same program builds rc 0 and silently prints
+/// `total=0` — so the two forms disagree and NEITHER is right (Core #8).
+///
+/// The fix is a check-time rejection covering both forms, which changes
+/// accept/reject and therefore owes all three lanes plus a ggdef row.
+#[test]
+#[ignore = "KNOWN GAP (R44): `gg check` accepts `[x * 2 for x in p]` for a struct with no \
+`iter()`/`next()`, then the lowering aborts (rc 101), while the statement-`for` form of the same \
+program silently runs zero iterations. Core #10 wants a CHECK-TIME rejection on all three lanes. \
+Asserts the accept-and-run placeholder; REPLACE with the reject fixture when the gate lands. \
+See TODO.md."]
+fn comprehension_over_non_iterable_struct() {
+    run_gg("known_gaps/comprehension_over_non_iterable_struct.gg", "0");
+}
+
+/// KNOWN GAP — a comprehension whose RESULT element is a trait box emits a
+/// duplicate `Box__<Concrete>__drop`. Loud on every tree (HEAD rc 101 panic,
+/// post-R44 rc 1 cc-error), so nothing silently-wrong ships. Filed rather than
+/// inlined because the surviving error is a duplicate-symbol EMISSION —
+/// monomorphisation/dedup, a different subsystem.
+#[test]
+#[ignore = "KNOWN GAP (R44): `Vector[Box[Trait]] v = [Box.new(Concrete(..)) for i in 0..n]` fails \
+to link with `redefinition of 'Box__Concrete__drop'` (rc 1; rc 101 panic pre-R44). Asserts the \
+INTENDED output. Un-ignore when the duplicate drop-glue emission is deduped. See TODO.md."]
+fn comprehension_trait_box_element_dup_drop() {
+    run_gg("known_gaps/comprehension_trait_box_element_dup_drop.gg", "2\nR0");
+}
+
+/// KNOWN GAP — the worst class in the family: a comprehension that widens int
+/// to float prints `0.000000` at rc 0 on both backends, with `gg check` clean.
+/// The typechecker computes the element type and discards it, so no widening
+/// conversion is inserted. The identical arithmetic in a plain statement is
+/// REJECTED, so this is not a ratified policy (Core #15e Q1). Unchanged by
+/// R44's emitter rework — the fix is Layering rule 4 in the typechecker.
+#[test]
+#[ignore = "KNOWN GAP (R44): `Vector[float] r = [x * 1.5 for x in xs]` over a `Vector[int]` checks \
+clean, builds, and prints 0.000000 — a SILENT WRONG VALUE on both backends. Root cause is \
+`src/semantic/typecheck.rs` discarding the comprehension element type. Asserts the INTENDED \
+3.000000. See TODO.md."]
+fn comprehension_int_to_float_silent_zero() {
+    run_gg("known_gaps/comprehension_int_to_float_silent_zero.gg", "2\n3.000000");
 }
 
 // ── Guard/wrapper aggregate + boundary gaps (filed 2026-07-27) ───────────────

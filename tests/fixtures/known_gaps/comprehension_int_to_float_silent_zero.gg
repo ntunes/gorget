@@ -1,0 +1,38 @@
+# KNOWN GAP (R44) — a comprehension whose element expression WIDENS int to
+# float produces a SILENT WRONG VALUE: `0.000000`, at rc 0, on both backends.
+#
+# ⚠ THE ROOT CAUSE IS UPSTREAM OF THE EMITTER, which is why R44's comprehension
+# rework does not touch it. `src/semantic/typecheck.rs`'s comprehension arms
+# compute the element type and then throw it away (`let _ = elem_type;` /
+# `self.types.error_id`), so no float-widening conversion is ever inserted and
+# the int bits are reinterpreted as a double.
+#
+# MEASURED (C backend), unchanged by the R44 fix:
+#   `gg check` -> rc 0, "OK: no semantic errors"
+#   `gg build` -> rc 0
+#   run        -> `2` then `0.000000`   (intended: `2` then `3.000000`)
+#
+# ⚠ AND THE IDENTICAL ARITHMETIC IN A PLAIN STATEMENT IS REJECTED — so this is
+# not a ratified int/float policy, it is the comprehension path losing the
+# element type (Core #15e Q1 asked and answered).
+#
+# THIS IS THE WORST CLASS IN THE FAMILY: no crash, no diagnostic, a plausible
+# number. The reference-grade fix is Layering rule 4 — resolve the element type
+# once in the typechecker and write it through — which would also make the
+# deferred mint unnecessary. It changes accept/reject on EVERY comprehension,
+# so it is its own round, not an inline fix.
+#
+# INTENDED: `2` then `3.000000`.
+# Wired test: `comprehension_int_to_float_silent_zero` (tests/integration.rs,
+# #[ignore]d). Filed in TODO.md.
+Vector[int] src():
+    Vector[int] v = []
+    v.push(2)
+    v.push(4)
+    return v
+
+void main():
+    Vector[int] xs = src()
+    Vector[float] r = [x * 1.5 for x in xs]
+    print(r.len())
+    print(r.get(0).unwrap())

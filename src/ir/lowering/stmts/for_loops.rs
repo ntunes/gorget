@@ -371,50 +371,77 @@ pub(super) fn lower_for(
         "__for_elem".to_string()
     };
 
+    dispatch_for_source_with(
+        ctx, builder, &var_name, iter_op, iter_type, iterable, pattern,
+        iter_source_coll, write_through, else_arm,
+        &mut |ctx, builder| lower_block(ctx, builder, body),
+    );
+}
+
+/// The shared 5-way source dispatch that `lower_for` and the comprehension
+/// driver both route through — the Round XXIX caller gate, in ONE place.
+///
+/// Returns `false` when NO arm fired (the `None` + non-`Named` case, which at
+/// HEAD emits nothing at all). The statement-`for` ignores it (preserving HEAD
+/// behaviour byte-for-byte); the comprehension driver uses it to refuse to
+/// produce a silently-empty accumulator.
+///
+/// NOTE the four things this does NOT gate, because they happen in `lower_for`
+/// BEFORE this point: the CoW-2G pre-header hoist, the `Expr::Range` fast path,
+/// the `.enumerate()` fast path, and the alias-root sever.
+fn dispatch_for_source_with(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    var_name: &str,
+    iter_op: Operand,
+    iter_type: TypeId,
+    iterable: &Spanned<Expr>,
+    pattern: &Spanned<Pattern>,
+    iter_source_coll: Option<crate::ir::lowering::context::CollectionId>,
+    write_through: bool,
+    else_arm: Option<&Block>,
+    body_fn: &mut dyn FnMut(&mut LoweringContext, &mut FunctionBuilder),
+) -> bool {
     if ctx.type_mapper.is_string_type(iter_type) {
-        lower_for_string(ctx, builder, &var_name, iter_op, iterable, body, else_arm);
-    } else {
-        // Determine collection kind from type metadata (set by BuiltinTypeProtocol).
-        // Falls back to name-based detection, then Iterable/Iterator trait dispatch.
-        use crate::ir::types::CollectionKind;
-        // Derive `collection_kind` from `iter_type` (already pointee-resolved for
-        // the Copy/Move/non-Ptr branches above), not from the `iter_op` place.
-        // The place-keyed lookup only fired for Copy/Move operands, so a
-        // module-level `static Vector[…]` — lowered to `Constant(GlobalRef(name))`,
-        // not a place — dropped to None and the loop emitted nothing. `iter_type`
-        // resolves the static's `Vector__T` correctly regardless of operand shape.
-        // ⚠ KEEP the pointee unwrap: the `:170-171 else` path can leave `iter_type`
-        // as `Ptr(_)`, which would otherwise → None → drop.
-        let collection_kind = {
-            let tid = ctx.pointee_type(iter_type).unwrap_or(iter_type);
-            if let Some(GirType::Named(name)) = ctx.type_registry.get(tid) {
-                // Metadata-based: read `collection_kind` from the TypeDef.
-                // Both runtime singletons (GorgetArray/GorgetMap/GorgetSet —
-                // registered in `lowering/mod.rs`) and monomorphized aliases
-                // (Vector__T/Dict__K__V/... — registered via
-                // `register_collection_alias` in `lowering/types.rs:766`)
-                // carry `collection_kind` in their TypeMetadata. The earlier
-                // name-prefix fallback was dead — Phase A made it so.
-                ctx.type_registry.get_type_def(name)
-                    .and_then(|td| td.metadata.collection_kind)
+        lower_for_string_with(ctx, builder, var_name, iter_op, iterable, body_fn, else_arm);
+        return true;
+    }
+    use crate::ir::types::CollectionKind;
+    let collection_kind = {
+        let tid = ctx.pointee_type(iter_type).unwrap_or(iter_type);
+        if let Some(GirType::Named(name)) = ctx.type_registry.get(tid) {
+            ctx.type_registry.get_type_def(name)
+                .and_then(|td| td.metadata.collection_kind)
+        } else {
+            None
+        }
+    };
+    match collection_kind {
+        Some(CollectionKind::Array) => {
+            lower_for_array_with(ctx, builder, var_name, iter_op, body_fn, else_arm, pattern, iter_source_coll, write_through);
+            true
+        }
+        Some(CollectionKind::OrderedMap | CollectionKind::Map) => {
+            lower_for_dict_with(ctx, builder, iter_op, body_fn, else_arm, pattern);
+            true
+        }
+        Some(CollectionKind::OrderedSet | CollectionKind::Set) => {
+            lower_for_set_with(ctx, builder, var_name, iter_op, body_fn, else_arm);
+            true
+        }
+        None => {
+            if let Some(type_name) = ctx.type_registry.get(iter_type)
+                .and_then(|gt| if let GirType::Named(n) = gt { Some(n.clone()) } else { None })
+            {
+                // ⚠ NOT unconditionally `true`: `lower_for_iterable_with` has
+                // five paths that find no usable `iter()`/`next()` signature
+                // and lower NOTHING. Reporting `true` there told the caller a
+                // loop had been emitted when `body_fn` had never run — which
+                // is how the comprehension arms ended up asserting
+                // "body_fn always runs" over a value that was `None`.
+                lower_for_iterable_with(ctx, builder, var_name, iter_op, &type_name, body_fn, else_arm, pattern)
             } else {
-                None
-            }
-        };
-        match collection_kind {
-            Some(CollectionKind::Array) =>
-                lower_for_array(ctx, builder, &var_name, iter_op, body, else_arm, pattern, iter_source_coll, write_through),
-            Some(CollectionKind::OrderedMap | CollectionKind::Map) =>
-                lower_for_dict(ctx, builder, iter_op, body, else_arm, pattern),
-            Some(CollectionKind::OrderedSet | CollectionKind::Set) =>
-                lower_for_set(ctx, builder, &var_name, iter_op, body, else_arm),
-            None => {
-                // Try Iterable/Iterator trait dispatch for user-defined types
-                if let Some(type_name) = ctx.type_registry.get(iter_type)
-                    .and_then(|gt| if let GirType::Named(n) = gt { Some(n.clone()) } else { None })
-                {
-                    lower_for_iterable(ctx, builder, &var_name, iter_op, &type_name, body, else_arm, pattern);
-                }
+                false
             }
         }
     }
@@ -424,13 +451,22 @@ pub(super) fn lower_for(
 /// `pub(in crate::ir::lowering)`: also the loop shape behind String-based
 /// list comprehensions (`exprs/collections.rs::lower_string_comprehension`,
 /// Chain C item 7) — single UTF-8 pass, W3d lazy-source hook included.
-pub(in crate::ir::lowering) fn lower_for_string(
+
+/// `lower_for_string` with a caller-emitted body.
+///
+/// The string LIST COMPREHENSION needs this: its accumulator must be minted
+/// from the MATERIALIZED element type (devbook/11 §"Container literals: the
+/// materializer mints the slot"), so the comprehension has to run the shared
+/// consuming-position push itself rather than hand this loop a synthesized
+/// `acc.push(e)` AST — a synthesized push has to be told the accumulator's
+/// type up front, which is exactly the fact it is supposed to produce.
+fn lower_for_string_with(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     var_name: &str,
     iter_op: Operand,
     iterable_expr: &Spanned<Expr>,
-    body: &Block,
+    body_fn: &mut dyn FnMut(&mut LoweringContext, &mut FunctionBuilder),
     else_arm: Option<&Block>,
 ) {
     let owned_string_type = ctx.type_mapper.owned_string_type;
@@ -565,7 +601,7 @@ pub(in crate::ir::lowering) fn lower_for_string(
     ctx.set_owned_fresh(builder, ch_local);
 
     // Lower the body
-    lower_block(ctx, builder, body);
+    body_fn(ctx, builder);
 
     // byte_pos += cplen
     let new_pos = builder.bin_op(BinOp::Add, I64_TYPE, FunctionBuilder::copy(byte_pos), FunctionBuilder::copy(cplen));
@@ -665,12 +701,14 @@ fn bind_for_vector_element(
 }
 
 /// Lower `for elem in array: body` — iterate array elements by index.
-fn lower_for_array(
+
+/// `lower_for_array` with a caller-emitted body (P4 delegation probe).
+fn lower_for_array_with(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     var_name: &str,
     iter_op: Operand,
-    body: &Block,
+    body_fn: &mut dyn FnMut(&mut LoweringContext, &mut FunctionBuilder),
     else_arm: Option<&Block>,
     pattern: &Spanned<Pattern>,
     // The iterable's collection identity, derived by the caller from the AST
@@ -731,7 +769,7 @@ fn lower_for_array(
         ctx, builder, var_name, elem_is_binding, iter_local, idx, elem_type,
         write_through, iter_source_coll.clone(),
     ).is_some() {
-        lower_block(ctx, builder, body);
+        body_fn(ctx, builder);
 
         ctx.drops.pop_scope(builder, &ctx.type_registry);
         ctx.pop_loop();
@@ -769,7 +807,7 @@ fn lower_for_array(
         emit_pattern_bindings(ctx, builder, pattern, elem, elem_type);
     }
 
-    lower_block(ctx, builder, body);
+    body_fn(ctx, builder);
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
@@ -1005,11 +1043,13 @@ fn lower_for_enumerate(
 }
 
 /// Lower `for k, v in dict: body` — iterate Dict or HashMap entries.
-fn lower_for_dict(
+
+/// `lower_for_dict` with a caller-emitted body (P5 dispatcher probe).
+fn lower_for_dict_with(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     iter_op: Operand,
-    body: &Block,
+    body_fn: &mut dyn FnMut(&mut LoweringContext, &mut FunctionBuilder),
     else_arm: Option<&Block>,
     pattern: &Spanned<Pattern>,
 ) {
@@ -1108,7 +1148,7 @@ fn lower_for_dict(
         _ => {}
     }
 
-    lower_block(ctx, builder, body);
+    body_fn(ctx, builder);
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
@@ -1125,12 +1165,14 @@ fn lower_for_dict(
 }
 
 /// Lower `for elem in set: body` — iterate Set elements.
-fn lower_for_set(
+
+/// `lower_for_set` with a caller-emitted body (P5 dispatcher probe).
+fn lower_for_set_with(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     var_name: &str,
     iter_op: Operand,
-    body: &Block,
+    body_fn: &mut dyn FnMut(&mut LoweringContext, &mut FunctionBuilder),
     else_arm: Option<&Block>,
 ) {
     let (iter_local, iter_type) = init_borrow_iter_local(ctx, builder, iter_op);
@@ -1215,7 +1257,7 @@ fn lower_for_set(
     // (#11). No-ops for Copy-typed elements.
     ctx.drops.register_local(elem_local, elem_type, &ctx.type_registry);
 
-    lower_block(ctx, builder, body);
+    body_fn(ctx, builder);
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
@@ -1233,16 +1275,18 @@ fn lower_for_set(
 
 /// Lower `for var in iterable: body` for user-defined Iterable[T] types.
 /// Generates: iter = Type__iter(&collection); loop { opt = Iter__next(&iter); if None: break; var = opt.Some._0; body }
-fn lower_for_iterable(
+
+/// `lower_for_iterable` with a caller-emitted body (P5 dispatcher probe).
+fn lower_for_iterable_with(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     var_name: &str,
     iter_op: Operand,
     type_name: &str,
-    body: &Block,
+    body_fn: &mut dyn FnMut(&mut LoweringContext, &mut FunctionBuilder),
     else_arm: Option<&Block>,
     pattern: &Spanned<Pattern>,
-) {
+) -> bool {
     // 1. Find the iter() method for this type, or — if the type implements
     // Iterator directly (has `next()` but no `iter()`) — treat `self` as the
     // iterator by skipping the iter() call.
@@ -1270,19 +1314,19 @@ fn lower_for_iterable(
     if let Some(ref iter_fn) = iter_fn_name {
         let (_, ret) = match ctx.fn_sigs.get(iter_fn) {
             Some(sig) => sig.clone(),
-            None => return,
+            None => return false,
         };
         iter_ret_type = ret;
         iter_type_name = match ctx.type_registry.type_name(iter_ret_type) {
             Some(name) => name,
-            None => return,
+            None => return false,
         };
     } else if self_as_iterator {
         // Self-as-iterator: iter type = collection type.
         iter_ret_type = infer_operand_type_full(ctx, &iter_op, builder);
         iter_type_name = type_name.to_string();
     } else {
-        return;
+        return false;
     }
 
     // 3. Find the next() method for the iterator type
@@ -1296,13 +1340,13 @@ fn lower_for_iterable(
 
     let next_fn_name = match next_fn_name {
         Some(name) => name,
-        None => return,
+        None => return false,
     };
 
     // 4. Get the Option return type from next()
     let (_, option_ret_type) = match ctx.fn_sigs.get(&next_fn_name) {
         Some(sig) => sig.clone(),
-        None => return,
+        None => return false,
     };
 
     // Determine the element type from the Option type name (Option__T → T)
@@ -1379,7 +1423,7 @@ fn lower_for_iterable(
         emit_pattern_bindings(ctx, builder, pattern, elem_local, elem_type);
     }
 
-    lower_block(ctx, builder, body);
+    body_fn(ctx, builder);
 
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
@@ -1388,6 +1432,7 @@ fn lower_for_iterable(
 
     emit_else_arm_tail(ctx, builder, else_arm, &blocks);
     builder.switch_to(exit_bb);
+    true
 }
 
 /// Parse Dict/HashMap type name to extract key/value C type strings.
@@ -1455,6 +1500,24 @@ fn lower_for_range(
     body: &Block,
     else_arm: Option<&Block>,
 ) {
+    lower_for_range_with(
+        ctx, builder, var_name, start, end, inclusive,
+        &mut |ctx, builder| lower_block(ctx, builder, body),
+        else_arm,
+    );
+}
+
+/// `lower_for_range` with a caller-emitted body (P4 delegation probe).
+fn lower_for_range_with(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    var_name: &str,
+    start: &Spanned<Expr>,
+    end: &Spanned<Expr>,
+    inclusive: bool,
+    body_fn: &mut dyn FnMut(&mut LoweringContext, &mut FunctionBuilder),
+    else_arm: Option<&Block>,
+) {
     // Create loop variable — type inferred from the start expression.
     // For literal bounds (e.g. `0..n`) this gives I64_TYPE; for typed variables
     // (e.g. `start..end` where start: uint8) it preserves the narrower type.
@@ -1484,7 +1547,7 @@ fn lower_for_range(
     builder.switch_to(body_bb);
     ctx.push_loop(incr_bb, break_exit_bb, builder.locals.len() as u32);
     ctx.drops.push_scope(DropScopeKind::Loop);
-    lower_block(ctx, builder, body);
+    body_fn(ctx, builder);
     ctx.drops.pop_scope(builder, &ctx.type_registry);
     ctx.pop_loop();
     builder.jump(incr_bb);
@@ -1500,4 +1563,111 @@ fn lower_for_range(
 
     emit_else_arm_tail(ctx, builder, else_arm, &blocks);
     builder.switch_to(exit_bb);
+}
+
+/// The comprehension iteration driver: dispatch the SOURCE SHAPE exactly once
+/// for all three comprehension kinds.
+///
+/// Before this existed the source-shape dispatch was open-coded three times —
+/// list (range · string · collection), set (range only, `nop()` otherwise) and
+/// dict (range only, `nop()` otherwise) — which is why a fix to one arm never
+/// reached the other eight cells and why two of the nine were outright Core #10
+/// silent drops. The kinds now differ only in what they do with an element
+/// (`body_fn`), never in how they iterate.
+///
+/// `body_fn` runs at the push point with the loop variable bound and the filter
+/// already applied. On return the current block is the loop's exit.
+pub(in crate::ir::lowering) fn drive_comprehension_loop(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    var_name: &str,
+    iterable: &Spanned<Expr>,
+    condition: Option<&Spanned<Expr>>,
+    body_fn: &mut dyn FnMut(&mut LoweringContext, &mut FunctionBuilder),
+) -> bool {
+    // CoW-2G pre-header hoist, FILTER channel. A comprehension has TWO
+    // expression channels that can mutate a loop-carried bare param: the BODY
+    // (`comp_expr` / `key_expr` + `val_expr`), hoisted by each emitter because
+    // that is the only place the body expression is in scope, and the FILTER.
+    // The filter is centralized HERE — Layering §sibling-site-drift point 2,
+    // "prefer centralizing at the producer" — because this driver already
+    // receives `condition` and lowers it itself on every source shape, so one
+    // hoist closes the filter axis for all three emitters at once instead of a
+    // fourth, fifth and sixth consumer call. Without it the filter cells come
+    // out of this refactor WORSE than they went in (measured
+    // `xs.len()/ys.len()/a.len()`, correct `2/2/4`: HEAD `3/2/4` →
+    // body-calls-only `4/2/4` → with this hoist `2/2/4`, which is what the
+    // statement-`for` oracle prints for the same program).
+    if let Some(c) = condition {
+        let empty = crate::parser::ast::Block::synthetic(Vec::new(), c.span);
+        super::materialize_loop_carried_bare_params(
+            ctx, builder, &empty, Some(&c.node), None, c.span,
+        );
+    }
+    // ---- Source shape 1: a range ----
+    // Delegated like every other row, so the comprehension cannot drift from
+    // the statement-`for`'s range lowering.
+    if let Expr::Range { start: Some(start), end: Some(end), inclusive, .. } = &iterable.node {
+        let mut wrapped = |ctx: &mut LoweringContext, builder: &mut FunctionBuilder| {
+            let join_bb = condition.map(|cond_expr| {
+                let push_bb = builder.new_block();
+                let join_bb = builder.new_block();
+                let filter = lower_expr(ctx, builder, cond_expr);
+                builder.branch(filter, push_bb, join_bb);
+                builder.switch_to(push_bb);
+                join_bb
+            });
+            body_fn(ctx, builder);
+            if let Some(join_bb) = join_bb {
+                builder.jump(join_bb);
+                builder.switch_to(join_bb);
+            }
+        };
+        lower_for_range_with(
+            ctx, builder, var_name, start, end, *inclusive, &mut wrapped, None,
+        );
+        return true;
+    }
+
+    let iter_op = lower_expr(ctx, builder, iterable);
+    let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
+
+    // ---- Source shapes 2..N: the SHARED dispatcher ----
+    // `lower_for`'s 5-way `match collection_kind` IS the Round XXIX caller
+    // gate; an arm-level delegation bypasses it (measured: the comprehension
+    // still read `Field(2)` as a length on a `Set` source and printed an
+    // empty result at rc 0), so the comprehension routes through the same
+    // dispatch the statement-`for` uses. Auto-deref first — the
+    // statement-`for` does the same at its own
+    // `deref_ptr_collection_iterable` call.
+    let (iter_op, iter_type) =
+        crate::ir::lowering::exprs::deref_ptr_collection_iterable(ctx, builder, iter_op, iter_type);
+    let pattern = Spanned::new(Pattern::Binding(var_name.to_string()), iterable.span);
+    let mut wrapped = |ctx: &mut LoweringContext, builder: &mut FunctionBuilder| {
+        // Branch around the push, rejoining INSIDE the callee's loop scope so
+        // its `pop_scope` runs on BOTH edges (the string arm's pattern), and —
+        // for the string arm — BEFORE `byte_pos += cplen` so the filter cannot
+        // skip the position advance (termination).
+        let join_bb = condition.map(|cond_expr| {
+            let push_bb = builder.new_block();
+            let join_bb = builder.new_block();
+            let filter = lower_expr(ctx, builder, cond_expr);
+            builder.branch(filter, push_bb, join_bb);
+            builder.switch_to(push_bb);
+            join_bb
+        });
+        body_fn(ctx, builder);
+        if let Some(join_bb) = join_bb {
+            builder.jump(join_bb);
+            builder.switch_to(join_bb);
+        }
+    };
+    // ⚠ The status is RETURNED, never swallowed. A source with no usable
+    // iterator lowers NOTHING — `body_fn` never runs — and the caller cannot
+    // mint an accumulator from an element that was never produced. See
+    // `comprehension_source_not_iterable` in `exprs/collections.rs`.
+    dispatch_for_source_with(
+        ctx, builder, var_name, iter_op, iter_type, iterable, &pattern,
+        None, false, None, &mut wrapped,
+    )
 }

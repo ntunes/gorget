@@ -1,0 +1,47 @@
+# KNOWN GAP (R44) — `gg check` ACCEPTS a comprehension over a type with no
+# iterator, and there is no is-it-iterable gate anywhere in the front end.
+#
+# ⚠ THIS IS A CATEGORY ERROR, NOT A TOO-NARROW RULE (Core #15e Q4). The
+# typechecker's three comprehension arms (`src/semantic/typecheck.rs`,
+# `Expr::{List,Dict,Set}Comprehension`) call `infer_expr(iterable)`, DISCARD the
+# element type and return `error_id`. Nothing anywhere asks whether the source
+# can be iterated, so no widening of an existing rule reaches this — the rule
+# has to be created.
+#
+# MEASURED at HEAD and after R44's comprehension fix, on the C backend:
+#   `gg check`  -> rc 0, "OK: no semantic errors"      (both)
+#   `gg build`  -> HEAD: rc 101, LIR validator panic at src/lir/validate.rs
+#                  (a Field(2) read on a 2-field struct)
+#               -> R44: rc 101, an honest lowering diagnostic naming this file
+#                  (`comprehension_source_not_iterable`)
+# Both are LOUD, so nothing silently-wrong ships either way — but a compiler
+# ABORT is not the reference-grade answer.
+#
+# ⚠ AND THE STATEMENT-`for` FORM OF THE SAME PROGRAM DISAGREES, on the same
+# lane: `for x in p: total = total + x` builds rc 0 and prints `total=0`,
+# SILENTLY. So the comprehension aborts and the statement quietly does nothing.
+# Core #8: both-wrong is not a pass, and the divergence is a second defect.
+#
+# THE FIX is a check-time rejection (Core #10 lower-or-REJECT) covering BOTH
+# forms. It changes accept/reject, so it owes all three lanes (Core #9) plus a
+# ggdef conformance row — which is why R44 filed it instead of inlining it.
+#
+# INTENDED: `gg check` REJECTS this program with a teaching diagnostic naming
+# `Plain` as not iterable. The assertion below is the placeholder for the
+# accept-and-run reading and must be REPLACED by the reject fixture when the
+# gate lands — do not delete it, and do not "fix" it by making the lowering
+# emit an empty accumulator (that trades a loud failure for a silent one).
+#
+# Wired test: `comprehension_over_non_iterable_struct` (tests/integration.rs,
+# #[ignore]d). Filed in TODO.md.
+struct Plain:
+    int a
+    int b
+
+int mk():
+    return 7
+
+void main():
+    Plain p = Plain(mk(), mk() + 1)
+    Vector[int] r = [x * 2 for x in p]
+    print(r.len())

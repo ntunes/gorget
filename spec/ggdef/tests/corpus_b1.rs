@@ -114,6 +114,14 @@ const EXCLUDE: &[&str] = &[
     // on the STOP-and-report), so this exclusion accompanies the D31 slice.
     "cow_loop_bare_param_for_else.gg",
     "cow_loop_bare_param_push_char.gg",
+    // R44 Track A GRADUATIONS of the CoW-2G comprehension cells — both are
+    // COMPREHENSIONS, the same out-of-subset class as
+    // `cow_comprehension_amp_source.gg` above (`elaborate_expr` has no
+    // comprehension arm). Measured: b1 STOP-and-reported on the first of them
+    // the moment it graduated into the top-level corpus. The subset gap is
+    // already filed; do NOT re-file it.
+    "cow_loop_bare_param_comprehension.gg",
+    "cow_loop_bare_param_comprehension_matrix.gg",
     // NOTE: the 2T get-chain fixtures (`cow_taint_getchain_*`) all carry `equip R
     // with Drop`, so `gate_fixtures`'s `equip ` filter already routes them to B2
     // (corpus_b) — they are NOT in the B1 gate set and need no B1 exclusion.
