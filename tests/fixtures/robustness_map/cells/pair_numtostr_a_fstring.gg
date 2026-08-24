@@ -1,0 +1,4 @@
+# pair:numtostr (a) one f-string. Expected: x=5
+void main():
+    int n = 5
+    print(f"x={n}")

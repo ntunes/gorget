@@ -1,0 +1,20 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch8: the same generic equip block at String (TYPE axis cell).
+# Expected: alpha / alpha
+struct Container[T]:
+    T value
+
+equip Container[T]:
+    T get(self):
+        return self.value
+    Container[T] wrap(self):
+        return Container[T](self.value)
+
+void main():
+    Container[String] c = Container[String](mk("al", "pha"))
+    print(c.get())
+    Container[String] c2 = c.wrap()
+    print(c2.get())

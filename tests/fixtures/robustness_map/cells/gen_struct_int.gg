@@ -1,0 +1,8 @@
+# Ch8: a generic struct at int.
+# Expected: 42
+struct Container[T]:
+    T value
+
+void main():
+    Container[int] c = Container[int](42)
+    print(f"{c.value}")

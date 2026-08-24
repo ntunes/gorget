@@ -1,0 +1,15 @@
+# Ch8: a user-defined generic enum (variants need qualifying).
+# Expected: 42
+enum Either[A, B]:
+    Left(A)
+    Right(B)
+
+void main():
+    Either[int, String] val = Either.Left(42)
+    int out = 0
+    match val:
+        case Either.Left(v):
+            out = v
+        case Either.Right(s):
+            out = -1
+    print(f"{out}")

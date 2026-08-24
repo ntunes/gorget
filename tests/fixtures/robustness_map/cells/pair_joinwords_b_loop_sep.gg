@@ -1,0 +1,16 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:joinwords (b) loop, separator before all but the first. Expected: alpha-beta-gamma
+void main():
+    Vector[String] v = Vector[String]()
+    v.push(mk("al", "pha"))
+    v.push(mk("be", "ta"))
+    v.push(mk("gam", "ma"))
+    String out = ""
+    for i in 0..v.len():
+        if i > 0:
+            out += "-"
+        out += v[i]
+    print(out)

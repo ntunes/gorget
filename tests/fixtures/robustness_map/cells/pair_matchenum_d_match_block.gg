@@ -1,0 +1,17 @@
+# pair:matchenum (d) match statement, block arms. Expected: green
+enum Color:
+    Red
+    Green
+    Blue
+
+void main():
+    Color c = Color.Green()
+    String s = ""
+    match c:
+        case Color.Red:
+            s = "red"
+        case Color.Green:
+            s = "green"
+        case Color.Blue:
+            s = "blue"
+    print(s)

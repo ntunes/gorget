@@ -1,0 +1,21 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch8: equipping a generic struct with a trait; both instantiations get it.
+# Expected: 42 / 42
+trait Describable:
+    int code(self)
+
+struct Container[T]:
+    T value
+
+equip Container[T] with Describable:
+    int code(self):
+        return 42
+
+void main():
+    Container[int] c1 = Container[int](100)
+    Container[String] c2 = Container[String](mk("hel", "lo"))
+    print(f"{c1.code()}")
+    print(f"{c2.code()}")

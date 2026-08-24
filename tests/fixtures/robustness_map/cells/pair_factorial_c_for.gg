@@ -1,0 +1,6 @@
+# pair:factorial (c) for over a range. Expected: 120
+void main():
+    int acc = 1
+    for i in 1..6:
+        acc *= i
+    print(f"{acc}")

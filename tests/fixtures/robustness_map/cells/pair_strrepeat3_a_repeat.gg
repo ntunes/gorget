@@ -1,0 +1,8 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:strrepeat3 (a) repeat(3). Expected: ababab
+void main():
+    String s = mk("a", "b")
+    print(s.repeat(3))

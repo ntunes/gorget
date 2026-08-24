@@ -1,0 +1,8 @@
+# pair:sum1to10 (b) while loop. Expected: 55
+void main():
+    int total = 0
+    int i = 1
+    while i <= 10:
+        total += i
+        i += 1
+    print(f"{total}")

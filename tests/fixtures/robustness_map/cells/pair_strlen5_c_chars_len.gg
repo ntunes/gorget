@@ -1,0 +1,8 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:strlen5 (c) chars() then len(). Expected: 5
+void main():
+    String s = mk("hel", "lo")
+    print(f"{s.chars().len()}")

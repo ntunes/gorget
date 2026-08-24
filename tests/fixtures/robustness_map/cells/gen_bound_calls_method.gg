@@ -1,0 +1,17 @@
+# Ch8: a bounded generic that CALLS the bound trait's method.
+# Expected: num
+trait Printable:
+    String show(self)
+
+struct Num:
+    int val
+
+equip Num with Printable:
+    String show(self):
+        return "num"
+
+String render[Printable T](T x):
+    return x.show()
+
+void main():
+    print(render[Num](Num(42)))

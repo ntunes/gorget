@@ -1,0 +1,8 @@
+# Ch8: a type parameter used for a LOCAL variable's type.
+# Expected: 10
+T first[T](T a, T b):
+    T result = a
+    return result
+
+void main():
+    print(f"{first[int](10, 20)}")

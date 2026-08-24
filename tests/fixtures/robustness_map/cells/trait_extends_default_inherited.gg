@@ -1,0 +1,23 @@
+# Ch7: a default method inherited through an `extends` chain.
+# Expected: 14 / 107
+trait Base:
+    int value(self)
+    int doubled(self):
+        return self.value() * 2
+
+trait Extended extends Base:
+    int extra(self)
+
+struct Thing:
+    int x
+
+equip Thing with Extended:
+    int value(self):
+        return self.x
+    int extra(self):
+        return self.x + 100
+
+void main():
+    Thing t = Thing(7)
+    print(f"{t.doubled()}")
+    print(f"{t.extra()}")

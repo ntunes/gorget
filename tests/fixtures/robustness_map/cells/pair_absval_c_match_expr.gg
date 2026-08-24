@@ -1,0 +1,7 @@
+# pair:absval (c) match as an expression with a guard. Expected: 7
+void main():
+    int x = -7
+    int r = match x:
+        case v if v >= 0: v
+        else: -x
+    print(f"{r}")

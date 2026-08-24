@@ -1,0 +1,6 @@
+# pair:optmap (a) Option.map then unwrap_or. Expected: 42 / 0
+void main():
+    Option[int] a = Some(21)
+    Option[int] b = None()
+    print(f"{a.map((int x): x * 2).unwrap_or(0)}")
+    print(f"{b.map((int x): x * 2).unwrap_or(0)}")

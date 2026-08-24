@@ -1,0 +1,12 @@
+# pair:minmax (a) track min and max in a loop. Expected: 1 / 9
+void main():
+    Vector[int] v = [4, 1, 9, 3]
+    int lo = v[0]
+    int hi = v[0]
+    for x in v:
+        if x < lo:
+            lo = x
+        if x > hi:
+            hi = x
+    print(f"{lo}")
+    print(f"{hi}")

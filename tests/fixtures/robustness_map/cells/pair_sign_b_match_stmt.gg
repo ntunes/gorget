@@ -1,0 +1,13 @@
+# pair:sign (b) match statement with guards. Expected: -1 / 0 / 1
+int sign(int x):
+    int r = 0
+    match x:
+        case v if v < 0: r = -1
+        case v if v == 0: r = 0
+        else: r = 1
+    return r
+
+void main():
+    print(f"{sign(-3)}")
+    print(f"{sign(0)}")
+    print(f"{sign(5)}")

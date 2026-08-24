@@ -1,0 +1,4 @@
+# pair:power2_10 (c) fold over a comprehension. Expected: 1024
+void main():
+    Vector[int] v = [2 for i in 0..10]
+    print(f"{v.fold(1, (int acc, int x): acc * x)}")

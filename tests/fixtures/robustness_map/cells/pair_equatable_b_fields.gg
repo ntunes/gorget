@@ -1,0 +1,10 @@
+# pair:equatable (b) compare the fields by hand.
+# Expected: true
+struct Point:
+    int x
+    int y
+
+void main():
+    Point a = Point(1, 2)
+    Point b = Point(1, 2)
+    print(f"{a.x == b.x and a.y == b.y}")

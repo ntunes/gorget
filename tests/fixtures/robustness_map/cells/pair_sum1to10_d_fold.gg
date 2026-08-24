@@ -1,0 +1,4 @@
+# pair:sum1to10 (d) fold over a comprehension. Expected: 55
+void main():
+    Vector[int] v = [i for i in 1..11]
+    print(f"{v.fold(0, (int acc, int x): acc + x)}")

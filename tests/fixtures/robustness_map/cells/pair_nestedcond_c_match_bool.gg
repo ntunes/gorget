@@ -1,0 +1,9 @@
+# pair:nestedcond (c) match on the combined bool. Expected: both
+void main():
+    bool a = true
+    bool b = true
+    String r = "no"
+    match a and b:
+        case true: r = "both"
+        case false: r = "no"
+    print(r)

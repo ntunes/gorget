@@ -1,0 +1,21 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch7: a default trait method the type does not override.
+# Expected: hello Alice
+trait Greeter:
+    String name(self)
+    String greeting(self):
+        return "hello"
+
+struct English:
+    String person
+
+equip English with Greeter:
+    String name(self):
+        return self.person
+
+void main():
+    English e = English(mk("Al", "ice"))
+    print(f"{e.greeting()} {e.name()}")

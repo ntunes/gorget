@@ -1,0 +1,10 @@
+# Ch8: a generic function taking a Vector[T].
+# Expected: 3 / 1
+int count[T](Vector[T] v):
+    return v.len()
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    print(f"{count[int](a)}")
+    Vector[String] b = ["x"]
+    print(f"{count[String](b)}")

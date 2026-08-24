@@ -1,0 +1,6 @@
+# pair:setuniq (b) set comprehension. Expected: 3
+from std.collections import Set
+
+void main():
+    Set[int] s = {x for x in [1, 2, 2, 3, 3, 3]}
+    print(f"{s.len()}")

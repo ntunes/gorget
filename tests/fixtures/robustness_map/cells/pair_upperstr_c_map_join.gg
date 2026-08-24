@@ -1,0 +1,10 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:upperstr (c) map over chars then join. Expected: HELLO
+void main():
+    String s = mk("hel", "lo")
+    Vector[String] cs = s.chars()
+    Vector[String] up = cs.map((String c): c.to_upper())
+    print("".join(up))

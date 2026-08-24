@@ -1,0 +1,11 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:strlen5 (b) count characters in a loop. Expected: 5
+void main():
+    String s = mk("hel", "lo")
+    int n = 0
+    for c in s:
+        n += 1
+    print(f"{n}")

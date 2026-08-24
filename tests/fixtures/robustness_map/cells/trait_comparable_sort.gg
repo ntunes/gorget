@@ -1,0 +1,19 @@
+# Ch7: sorting a Vector of a Comparable struct.
+# Expected: 100 / 250 / 900
+struct Money:
+    int cents
+
+equip Money with Comparable:
+    int compare(self, Money other):
+        if self.cents < other.cents:
+            return -1
+        elif self.cents > other.cents:
+            return 1
+        return 0
+
+void main():
+    Vector[Money] v = [Money(900), Money(100), Money(250)]
+    v.sort()
+    print(f"{v[0].cents}")
+    print(f"{v[1].cents}")
+    print(f"{v[2].cents}")

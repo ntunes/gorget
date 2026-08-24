@@ -1,0 +1,21 @@
+# pair:safediv (a) Result + match. Expected: 5 / -1
+Result[int, String] div(int a, int b):
+    if b == 0:
+        return Error("divide by zero")
+    return Ok(a / b)
+
+void main():
+    int x = 0
+    match div(10, 2):
+        case Ok(v):
+            x = v
+        case Error(e):
+            x = -1
+    int y = 0
+    match div(10, 0):
+        case Ok(v):
+            y = v
+        case Error(e):
+            y = -1
+    print(f"{x}")
+    print(f"{y}")

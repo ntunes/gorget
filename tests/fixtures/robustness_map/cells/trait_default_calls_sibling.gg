@@ -1,0 +1,25 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch7: a default method that calls the trait's other methods.
+# Expected: Title: Body
+trait Summary:
+    String title(self)
+    String body(self)
+    String full(self):
+        return f"{self.title()}: {self.body()}"
+
+struct Post:
+    String t
+    String b
+
+equip Post with Summary:
+    String title(self):
+        return self.t
+    String body(self):
+        return self.b
+
+void main():
+    Post p = Post(mk("Ti", "tle"), mk("Bo", "dy"))
+    print(p.full())

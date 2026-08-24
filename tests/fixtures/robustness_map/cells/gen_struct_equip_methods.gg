@@ -1,0 +1,16 @@
+# Ch8: methods on a generic struct via `equip Container[T]:`.
+# Expected: 42 / 42
+struct Container[T]:
+    T value
+
+equip Container[T]:
+    T get(self):
+        return self.value
+    Container[T] wrap(self):
+        return Container[T](self.value)
+
+void main():
+    Container[int] c = Container[int](42)
+    print(f"{c.get()}")
+    Container[int] c2 = c.wrap()
+    print(f"{c2.get()}")

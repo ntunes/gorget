@@ -1,0 +1,12 @@
+# pair:structmake (c) factory function. Expected: 3 / 4
+struct Point:
+    int x
+    int y
+
+Point make(int a, int b):
+    return Point(a, b)
+
+void main():
+    Point p = make(3, 4)
+    print(f"{p.x}")
+    print(f"{p.y}")

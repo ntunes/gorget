@@ -1,0 +1,12 @@
+# pair:optmap (c) is_some guard then unwrap. Expected: 42 / 0
+void main():
+    Option[int] a = Some(21)
+    Option[int] b = None()
+    int x = 0
+    if a.is_some():
+        x = a.unwrap() * 2
+    int y = 0
+    if b.is_some():
+        y = b.unwrap() * 2
+    print(f"{x}")
+    print(f"{y}")

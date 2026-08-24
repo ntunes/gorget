@@ -1,0 +1,15 @@
+# Ch7: Cloneable gives an independent copy.
+# Expected: 1 / 99
+struct Point:
+    int x
+
+equip Point with Cloneable:
+    Point clone(self):
+        return Point(self.x)
+
+void main():
+    Point p = Point(1)
+    Point q = p.clone()
+    q.x = 99
+    print(f"{p.x}")
+    print(f"{q.x}")

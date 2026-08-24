@@ -1,0 +1,9 @@
+# pair:nestedcond (a) nested if statements. Expected: both
+void main():
+    bool a = true
+    bool b = true
+    String r = "no"
+    if a:
+        if b:
+            r = "both"
+    print(r)

@@ -1,0 +1,8 @@
+# Ch8: a generic function instantiated at int.
+# Expected: 42
+T identity[T](T x):
+    return x
+
+void main():
+    int a = identity[int](42)
+    print(f"{a}")

@@ -1,0 +1,16 @@
+# Ch7: Equatable enables == and !=.
+# Expected: true / false
+struct Point:
+    int x
+    int y
+
+equip Point with Equatable:
+    bool eq(self, Point other):
+        return self.x == other.x and self.y == other.y
+
+void main():
+    Point a = Point(1, 2)
+    Point b = Point(1, 2)
+    Point c = Point(9, 9)
+    print(f"{a == b}")
+    print(f"{a == c}")

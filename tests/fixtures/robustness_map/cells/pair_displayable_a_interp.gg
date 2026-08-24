@@ -1,0 +1,12 @@
+# pair:displayable (a) interpolate the value.
+# Expected: (3, 4)
+struct Point:
+    int x
+    int y
+
+equip Point with Displayable:
+    String display(self):
+        return f"({self.x}, {self.y})"
+
+void main():
+    print(f"{Point(3, 4)}")

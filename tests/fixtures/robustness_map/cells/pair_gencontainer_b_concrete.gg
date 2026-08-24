@@ -1,0 +1,17 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:gen_container (b) two hand-written structs.
+# Expected: 42 / alpha
+struct IntBox:
+    int value
+
+struct StrBox:
+    String value
+
+void main():
+    IntBox a = IntBox(42)
+    StrBox b = StrBox(mk("al", "pha"))
+    print(f"{a.value}")
+    print(b.value)

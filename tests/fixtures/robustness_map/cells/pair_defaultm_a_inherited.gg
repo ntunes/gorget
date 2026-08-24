@@ -1,0 +1,13 @@
+# pair:trait_default (a) inherit the trait's default method.
+# Expected: hello
+trait Greeter:
+    String greeting(self):
+        return "hello"
+
+struct A:
+    int x
+
+equip A with Greeter
+
+void main():
+    print(A(1).greeting())

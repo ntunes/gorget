@@ -1,0 +1,16 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:palindrome (c) compare first half to last half. Expected: true / false
+bool is_pal(String s):
+    Vector[String] cs = s.chars()
+    int n = cs.len()
+    for i in 0..n / 2:
+        if cs[i] != cs[n - 1 - i]:
+            return false
+    return true
+
+void main():
+    print(f"{is_pal(mk("race", "car"))}")
+    print(f"{is_pal(mk("hel", "lo"))}")

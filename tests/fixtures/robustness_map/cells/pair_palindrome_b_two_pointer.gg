@@ -1,0 +1,19 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:palindrome (b) two-pointer scan. Expected: true / false
+bool is_pal(String s):
+    Vector[String] cs = s.chars()
+    int i = 0
+    int j = cs.len() - 1
+    while i < j:
+        if cs[i] != cs[j]:
+            return false
+        i += 1
+        j -= 1
+    return true
+
+void main():
+    print(f"{is_pal(mk("race", "car"))}")
+    print(f"{is_pal(mk("hel", "lo"))}")

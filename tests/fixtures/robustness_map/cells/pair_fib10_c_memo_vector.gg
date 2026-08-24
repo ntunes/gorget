@@ -1,0 +1,6 @@
+# pair:fib10 (c) vector table. Expected: 55
+void main():
+    Vector[int] f = [0, 1]
+    for i in 2..11:
+        f.push(f[i - 1] + f[i - 2])
+    print(f"{f[10]}")

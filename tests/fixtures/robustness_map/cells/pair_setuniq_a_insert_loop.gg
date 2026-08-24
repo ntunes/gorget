@@ -1,0 +1,9 @@
+# pair:setuniq (a) insert in a loop. Expected: 3
+from std.collections import Set
+
+void main():
+    Vector[int] v = [1, 2, 2, 3, 3, 3]
+    Set[int] s = Set[int]()
+    for x in v:
+        s.insert(x)
+    print(f"{s.len()}")

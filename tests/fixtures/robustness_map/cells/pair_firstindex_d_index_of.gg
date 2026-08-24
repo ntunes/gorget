@@ -1,0 +1,4 @@
+# pair:firstindex (d) index_of. Expected: 2
+void main():
+    Vector[int] v = [10, 20, 30, 40]
+    print(f"{v.index_of(30).unwrap_or(-1)}")

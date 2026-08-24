@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:strfind (b) manual scan over characters. Expected: 3
+void main():
+    String s = mk("hel", "lo")
+    Vector[String] cs = s.chars()
+    int found = -1
+    for i in 0..cs.len() - 1:
+        if cs[i] == "l" and cs[i + 1] == "o":
+            found = i
+            break
+    print(f"{found}")

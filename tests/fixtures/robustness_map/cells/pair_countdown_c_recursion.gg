@@ -1,0 +1,9 @@
+# pair:countdown (c) recursion. Expected: 3 / 2 / 1
+void down(int n):
+    if n == 0:
+        return
+    print(f"{n}")
+    down(n - 1)
+
+void main():
+    down(3)

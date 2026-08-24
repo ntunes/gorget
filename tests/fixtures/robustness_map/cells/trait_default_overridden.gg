@@ -1,0 +1,23 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch7: a type overriding the trait's default method.
+# Expected: bonjour Bob
+trait Greeter:
+    String name(self)
+    String greeting(self):
+        return "hello"
+
+struct French:
+    String person
+
+equip French with Greeter:
+    String name(self):
+        return self.person
+    String greeting(self):
+        return "bonjour"
+
+void main():
+    French f = French(mk("B", "ob"))
+    print(f"{f.greeting()} {f.name()}")

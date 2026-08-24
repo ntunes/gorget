@@ -1,0 +1,8 @@
+# pair:flatten2 (a) nested for + push. Expected: 1,2,3,4
+void main():
+    Vector[Vector[int]] g = [[1, 2], [3, 4]]
+    Vector[int] flat = Vector[int]()
+    for row in g:
+        for x in row:
+            flat.push(x)
+    print(f"{flat[0]},{flat[1]},{flat[2]},{flat[3]}")

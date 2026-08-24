@@ -1,0 +1,6 @@
+# pair:power2_10 (a) multiply in a loop. Expected: 1024
+void main():
+    int acc = 1
+    for i in 0..10:
+        acc *= 2
+    print(f"{acc}")

@@ -1,0 +1,11 @@
+# pair:dayname (c) if/elif chain. Expected: Wed
+void main():
+    int d = 3
+    String name = "?"
+    if d == 1:
+        name = "Mon"
+    elif d == 2:
+        name = "Tue"
+    elif d == 3:
+        name = "Wed"
+    print(name)

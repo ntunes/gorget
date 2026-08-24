@@ -1,0 +1,5 @@
+# pair:sortasc (a) sort(). Expected: 1,2,3
+void main():
+    Vector[int] v = [3, 1, 2]
+    v.sort()
+    print(f"{v[0]},{v[1]},{v[2]}")

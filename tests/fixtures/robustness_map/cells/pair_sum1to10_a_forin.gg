@@ -1,0 +1,6 @@
+# pair:sum1to10 (a) for over a range. Expected: 55
+void main():
+    int total = 0
+    for i in 1..11:
+        total += i
+    print(f"{total}")

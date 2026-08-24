@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:palindrome (a) compare against the reversal. Expected: true / false
+bool is_pal(String s):
+    Vector[String] cs = s.chars()
+    Vector[String] rs = cs.reversed()
+    return "".join(cs) == "".join(rs)
+
+void main():
+    print(f"{is_pal(mk("race", "car"))}")
+    print(f"{is_pal(mk("hel", "lo"))}")

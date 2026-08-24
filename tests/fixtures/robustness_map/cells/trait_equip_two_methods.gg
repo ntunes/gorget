@@ -1,0 +1,20 @@
+# Ch7: a trait requiring two methods; both implemented.
+# Expected: 50 / rect 5x10
+trait Shape:
+    int area(self)
+    String describe(self)
+
+struct Rect:
+    int w
+    int h
+
+equip Rect with Shape:
+    int area(self):
+        return self.w * self.h
+    String describe(self):
+        return f"rect {self.w}x{self.h}"
+
+void main():
+    Rect r = Rect(5, 10)
+    print(f"{r.area()}")
+    print(r.describe())

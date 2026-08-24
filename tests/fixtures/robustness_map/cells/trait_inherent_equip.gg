@@ -1,0 +1,12 @@
+# Ch7: an inherent method -- equip with no trait.
+# Expected: 10
+struct Circle:
+    int radius
+
+equip Circle:
+    int diameter(self):
+        return self.radius * 2
+
+void main():
+    Circle c = Circle(5)
+    print(f"{c.diameter()}")

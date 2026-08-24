@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch8: two type parameters; the left one is returned.
+# Expected: 10
+A pick_left[A, B](A left, B right):
+    return left
+
+void main():
+    int x = pick_left[int, String](10, mk("ig", "nored"))
+    print(f"{x}")
