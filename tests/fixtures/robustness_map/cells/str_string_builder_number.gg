@@ -1,0 +1,9 @@
+# Ch2: String.push accepts numbers directly (documented mutation method).
+# Expected: n=42 ok=true
+void main():
+    String s = String()
+    s.push("n=")
+    s.push(42)
+    s.push(" ok=")
+    s.push(true)
+    print(s)

@@ -1,0 +1,7 @@
+# Ch5: mutate a vector nested inside a dict — `d[k].push(x)`.
+# Expected: 3
+void main():
+    Dict[String, Vector[int]] d = Dict[String, Vector[int]]()
+    d.put("a", [1, 2])
+    d["a"].push(3)
+    print(f"{d["a"].len()}")

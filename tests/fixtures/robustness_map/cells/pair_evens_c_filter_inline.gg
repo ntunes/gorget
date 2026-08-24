@@ -1,0 +1,6 @@
+# pair:filter_evens (c) .filter with an INLINE closure. Expected: 3 / 2,4,6
+void main():
+    Vector[int] v = [1, 2, 3, 4, 5, 6]
+    Vector[int] out = v.filter((int x): x % 2 == 0)
+    print(f"{out.len()}")
+    print(f"{out[0]},{out[1]},{out[2]}")

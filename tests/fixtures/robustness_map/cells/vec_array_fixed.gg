@@ -1,0 +1,8 @@
+# Ch5: a fixed-size array declared with an explicit length.
+# Expected: 1 / 99 / 5
+void main():
+    int[5] arr = [1, 2, 3, 4, 5]
+    print(f"{arr[0]}")
+    arr[2] = 99
+    print(f"{arr[2]}")
+    print(f"{arr[4]}")

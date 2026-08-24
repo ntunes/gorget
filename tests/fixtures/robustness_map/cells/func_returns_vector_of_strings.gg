@@ -1,0 +1,17 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch4+Ch5: a function that returns a vector of RUNTIME-BUILT strings.
+# Expected: 2 / n0 / n1
+Vector[String] labels(int n):
+    Vector[String] out = Vector[String]()
+    for i in 0..n:
+        out.push(mk("n", f"{i}"))
+    return out
+
+void main():
+    Vector[String] v = labels(2)
+    print(f"{v.len()}")
+    print(v[0])
+    print(v[1])

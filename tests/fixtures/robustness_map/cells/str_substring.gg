@@ -1,0 +1,9 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: substring(start, end) over a codepoint range.
+# Expected: hello
+void main():
+    String s = mk("hello", " world")
+    print(s.substring(0, 5))

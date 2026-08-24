@@ -1,0 +1,15 @@
+# Ch2/Ch9: parse a string to an int, and handle the failure case.
+# Expected: 42 / bad
+from std.conv import parse_int
+
+void main():
+    match parse_int("42"):
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print("bad")
+    match parse_int("nope"):
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print("bad")

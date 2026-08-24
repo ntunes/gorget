@@ -1,0 +1,11 @@
+# pair:opt_default (c) match. Expected: 42 / 7
+int or_default(Option[int] o):
+    match o:
+        case Some(v):
+            return v
+        case None:
+            return 7
+
+void main():
+    print(f"{or_default(Some(42))}")
+    print(f"{or_default(None())}")

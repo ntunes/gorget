@@ -1,0 +1,18 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch3: match on a RUNTIME-BUILT string.
+# Expected: stop / unknown
+void light(String c):
+    match c:
+        case "red":
+            print("stop")
+        case "green":
+            print("go")
+        else:
+            print("unknown")
+
+void main():
+    light(mk("r", "ed"))
+    light(mk("pur", "ple"))

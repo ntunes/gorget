@@ -1,0 +1,9 @@
+# Ch5: `auto v = []` then push ints — the empty-literal beginner spelling.
+# Expected: 2 / 1 / 2
+void main():
+    auto v = []
+    v.push(1)
+    v.push(2)
+    print(f"{v.len()}")
+    print(f"{v[0]}")
+    print(f"{v[1]}")

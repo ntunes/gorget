@@ -1,0 +1,8 @@
+# Ch5: clear() empties a vector.
+# Expected: 3 / 0 / true
+void main():
+    auto v = [1, 2, 3]
+    print(f"{v.len()}")
+    v.clear()
+    print(f"{v.len()}")
+    print(f"{v.is_empty()}")

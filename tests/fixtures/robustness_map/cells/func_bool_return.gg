@@ -1,0 +1,8 @@
+# Ch4: a predicate function.
+# Expected: true / false
+bool is_even(int n):
+    return n % 2 == 0
+
+void main():
+    print(f"{is_even(4)}")
+    print(f"{is_even(7)}")

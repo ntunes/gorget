@@ -1,0 +1,9 @@
+# Ch14: integer format specifiers in f-strings.
+# Expected: 00000042 / ff / FF / 0xff / 0b1010
+void main():
+    int n = 42
+    print(f"{n:08d}")
+    print(f"{255:x}")
+    print(f"{255:X}")
+    print(f"{255:#x}")
+    print(f"{10:#b}")

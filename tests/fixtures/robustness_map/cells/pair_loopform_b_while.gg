@@ -1,0 +1,6 @@
+# pair:loop_forms (b) while with a manual counter. Expected: 0 1 2
+void main():
+    int i = 0
+    while i < 3:
+        print(f"{i}")
+        i += 1

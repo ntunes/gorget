@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: chars() returns a Vector[String] of the individual characters.
+# Expected: 3 / a / b / c
+void main():
+    String s = mk("a", "bc")
+    Vector[String] cs = s.chars()
+    print(f"{cs.len()}")
+    for c in cs:
+        print(c)

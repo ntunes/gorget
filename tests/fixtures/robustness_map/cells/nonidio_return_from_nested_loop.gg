@@ -1,0 +1,12 @@
+# Return straight out of a doubly-nested loop instead of using flags.
+# Expected: 1,2
+String find_pair(Vector[int] v, int target):
+    for i in 0..v.len():
+        for j in 0..v.len():
+            if i != j and v[i] + v[j] == target:
+                return f"{i},{j}"
+    return "none"
+
+void main():
+    Vector[int] v = [1, 5, 9]
+    print(find_pair(v, 14))

@@ -1,0 +1,11 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: comprehension producing RUNTIME-BUILT strings.
+# Expected: 3 / n0 / n2
+void main():
+    Vector[String] v = [mk("n", f"{i}") for i in 0..3]
+    print(f"{v.len()}")
+    print(v[0])
+    print(v[2])

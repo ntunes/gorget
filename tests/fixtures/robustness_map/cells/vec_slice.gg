@@ -1,0 +1,9 @@
+# Ch5: colon-slice of a vector; bounds clamp.
+# Expected: 3 / 2,3,4 / 5
+void main():
+    auto v = [1, 2, 3, 4, 5]
+    auto mid = v[1:4]
+    print(f"{mid.len()}")
+    print(f"{mid[0]},{mid[1]},{mid[2]}")
+    auto all = v[0:1000]
+    print(f"{all.len()}")

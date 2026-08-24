@@ -1,0 +1,8 @@
+# Ch4: the simplest possible helper.
+# Expected: tick / tick
+void tick():
+    print("tick")
+
+void main():
+    tick()
+    tick()

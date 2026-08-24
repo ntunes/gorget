@@ -1,0 +1,16 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch9: return Option instead of a sentinel; bind with `is Some`.
+# Expected: alpha / no theme
+Option[String] setting(String key):
+    if key == "theme":
+        return Some(mk("al", "pha"))
+    return None()
+
+void main():
+    if setting("theme") is Some(t):
+        print(t)
+    if setting("font") is None:
+        print("no theme")

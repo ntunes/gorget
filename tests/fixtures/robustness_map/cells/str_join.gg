@@ -1,0 +1,10 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: join a vector of strings with a separator.
+# Expected: a-b-c
+void main():
+    String csv = mk("a,b", ",c")
+    Vector[String] parts = csv.split(",")
+    print("-".join(parts))

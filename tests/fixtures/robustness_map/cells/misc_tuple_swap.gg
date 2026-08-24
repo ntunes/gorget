@@ -1,0 +1,7 @@
+# Ch5: swap two variables via tuple unpacking.
+# Expected: 2 1
+void main():
+    int a = 1
+    int b = 2
+    auto x, y = (b, a)
+    print(f"{x} {y}")

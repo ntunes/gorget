@@ -1,0 +1,9 @@
+# Ch5: the same ragged nested vector, built with push instead of a literal.
+# Expected: 2 / 2 / 1
+void main():
+    Vector[Vector[int]] nested = Vector[Vector[int]]()
+    nested.push([1, 2])
+    nested.push([3])
+    print(f"{nested.len()}")
+    print(f"{nested[0].len()}")
+    print(f"{nested[1].len()}")

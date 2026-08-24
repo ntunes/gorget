@@ -1,0 +1,19 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: put / get with a RUNTIME-BUILT string key.
+# Expected: 30 / missing
+void main():
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put(mk("Al", "ice"), 30)
+    match ages.get(mk("Ali", "ce")):
+        case Some(a):
+            print(f"{a}")
+        case None:
+            print("missing")
+    match ages.get("Eve"):
+        case Some(a):
+            print(f"{a}")
+        case None:
+            print("missing")

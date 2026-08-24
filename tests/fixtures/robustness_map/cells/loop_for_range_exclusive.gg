@@ -1,0 +1,5 @@
+# Ch3: `0..5` is exclusive of the end.
+# Expected: 0 1 2 3 4
+void main():
+    for i in 0..5:
+        print(f"{i}")

@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: map over RUNTIME-BUILT strings.
+# Expected: ALPHA / BETA
+void main():
+    Vector[String] names = Vector[String]()
+    names.push(mk("al", "pha"))
+    names.push(mk("be", "ta"))
+    Vector[String] loud = names.map((String s): s.to_upper())
+    for s in loud:
+        print(s)

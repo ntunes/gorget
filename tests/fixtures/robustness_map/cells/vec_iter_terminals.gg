@@ -1,0 +1,8 @@
+# Ch5: eager iterator terminals — count / sum / min / max.
+# Expected: 5 / 150 / 10 / 50
+void main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+    print(f"{v.iter().count()}")
+    print(f"{v.iter().sum()}")
+    print(f"{v.iter().min().unwrap()}")
+    print(f"{v.iter().max().unwrap()}")

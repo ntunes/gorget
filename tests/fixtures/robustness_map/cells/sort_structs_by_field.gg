@@ -1,0 +1,17 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5+Ch6: sort a vector of records by one field — the classic report exercise.
+# Expected: Bob 25 / Alice 30
+struct Person:
+    String name
+    int age
+
+void main():
+    Vector[Person] ps = Vector[Person]()
+    ps.push(Person(mk("Al", "ice"), 30))
+    ps.push(Person(mk("B", "ob"), 25))
+    ps.sort((a, b): a.age - b.age)
+    for p in ps:
+        print(f"{p.name} {p.age}")

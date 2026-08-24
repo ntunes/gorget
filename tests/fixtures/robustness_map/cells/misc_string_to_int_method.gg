@@ -1,0 +1,6 @@
+# Ch2: `String.to_int()` — the reference names it as the parse entry point
+# (§"Casts between unrelated types ... Use String.to_int() for parsing").
+# Expected: 42
+void main():
+    String s = "4" + "2"
+    print(f"{s.to_int()}")

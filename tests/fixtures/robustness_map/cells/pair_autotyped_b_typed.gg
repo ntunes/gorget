@@ -1,0 +1,8 @@
+# pair:auto_vs_typed (b) every destination explicitly typed. Expected: 12 / 3
+void main():
+    int a = 5
+    int b = 7
+    int s = a + b
+    Vector[int] v = [1, 2, 3]
+    print(f"{s}")
+    print(f"{v.len()}")

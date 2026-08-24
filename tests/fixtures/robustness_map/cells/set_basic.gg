@@ -1,0 +1,16 @@
+# Ch5: Set — add is idempotent, `in` tests membership.
+# Expected: 2 / found / absent
+from std.collections import Set
+
+void main():
+    Set[int] s = Set[int]()
+    s.add(1)
+    s.add(2)
+    s.add(2)
+    print(f"{s.len()}")
+    if 1 in s:
+        print("found")
+    if 9 in s:
+        print("present")
+    else:
+        print("absent")

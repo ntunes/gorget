@@ -1,0 +1,9 @@
+# Ch5: min / max / sum over a vector.
+# Expected: 1 / 9 / 17
+from std.iter import Iterator
+
+void main():
+    Vector[int] v = [4, 1, 9, 3]
+    print(f"{v.iter().min().unwrap()}")
+    print(f"{v.iter().max().unwrap()}")
+    print(f"{v.iter().sum()}")

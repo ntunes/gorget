@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch3+Ch5: build a vector of RUNTIME-BUILT strings inside a loop.
+# Expected: 3 / n0 / n2
+void main():
+    Vector[String] v = Vector[String]()
+    for i in 0..3:
+        v.push(mk("n", f"{i}"))
+    print(f"{v.len()}")
+    print(v[0])
+    print(v[2])

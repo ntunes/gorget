@@ -1,0 +1,12 @@
+# Classic exercise: bubble sort written out by hand.
+# Expected: 1,2,3,4,5
+void main():
+    Vector[int] v = [5, 3, 1, 4, 2]
+    int n = v.len()
+    for i in 0..n:
+        for j in 0..(n - 1):
+            if v[j] > v[j + 1]:
+                int tmp = v[j]
+                v[j] = v[j + 1]
+                v[j + 1] = tmp
+    print(f"{v[0]},{v[1]},{v[2]},{v[3]},{v[4]}")

@@ -1,0 +1,7 @@
+# Ch3: nested loops — a small multiplication table.
+# Expected: 1 2 / 2 4
+void main():
+    for i in 1..3:
+        for j in 1..3:
+            print(f"{i * j}", terminator=" ")
+        print("")

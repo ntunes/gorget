@@ -1,0 +1,9 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:reverse_str (b) chars() then reversed() then join. Expected: olleh
+void main():
+    String s = mk("hel", "lo")
+    Vector[String] cs = s.chars()
+    print("".join(cs.reversed()))

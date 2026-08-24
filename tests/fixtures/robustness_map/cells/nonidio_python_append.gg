@@ -1,0 +1,6 @@
+# Python habit: `.append()` instead of `.push()`.
+# Expected: a clean rejection naming `append` and suggesting `push`.
+void main():
+    Vector[int] v = [1, 2]
+    v.append(3)
+    print(f"{v.len()}")

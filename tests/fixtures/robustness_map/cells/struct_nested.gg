@@ -1,0 +1,14 @@
+# Ch6: a struct with a struct field.
+# Expected: 1 / 2
+struct Point:
+    int x
+    int y
+
+struct Line:
+    Point a
+    Point b
+
+void main():
+    Line l = Line(Point(1, 0), Point(2, 0))
+    print(f"{l.a.x}")
+    print(f"{l.b.x}")

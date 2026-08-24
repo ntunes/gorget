@@ -1,0 +1,6 @@
+# Ch5: swap two elements in place.
+# Expected: 30,20,10
+void main():
+    auto v = [10, 20, 30]
+    v.swap(0, 2)
+    print(f"{v[0]},{v[1]},{v[2]}")

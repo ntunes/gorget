@@ -1,0 +1,6 @@
+# Ch5: reversed() flips the order.
+# Expected: 3,2,1
+void main():
+    Vector[int] v = [1, 2, 3]
+    Vector[int] r = v.reversed()
+    print(f"{r[0]},{r[1]},{r[2]}")

@@ -1,0 +1,17 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:struct_sum (c) comprehension of the field, then sum. Expected: 55
+from std.iter import Iterator
+
+struct Person:
+    String name
+    int age
+
+void main():
+    Vector[Person] ps = Vector[Person]()
+    ps.push(Person(mk("Al", "ice"), 30))
+    ps.push(Person(mk("B", "ob"), 25))
+    Vector[int] ages = [p.age for p in ps]
+    print(f"{ages.iter().sum()}")

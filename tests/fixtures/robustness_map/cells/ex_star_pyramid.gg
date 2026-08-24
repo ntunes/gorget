@@ -1,0 +1,5 @@
+# Classic: a star triangle built with string repetition.
+# Expected: * / ** / ***
+void main():
+    for i in 1..=3:
+        print("*".repeat(i))

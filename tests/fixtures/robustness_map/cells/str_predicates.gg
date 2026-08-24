@@ -1,0 +1,16 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: contains / starts_with / ends_with / is_empty.
+# Expected: true / true / true / false
+void main():
+    String s = mk("hello ", "world")
+    bool c = s.contains("lo w")
+    bool sw = s.starts_with("hello")
+    bool ew = s.ends_with("world")
+    bool em = s.is_empty()
+    print(f"{c}")
+    print(f"{sw}")
+    print(f"{ew}")
+    print(f"{em}")

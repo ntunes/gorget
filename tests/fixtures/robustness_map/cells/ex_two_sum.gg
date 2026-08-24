@@ -1,0 +1,9 @@
+# Classic: find the two indices summing to a target.
+# Expected: 1 2
+void main():
+    Vector[int] v = [2, 7, 11, 15]
+    int target = 18
+    for i in 0..v.len():
+        for j in (i + 1)..v.len():
+            if v[i] + v[j] == target:
+                print(f"{i} {j}")

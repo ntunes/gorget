@@ -1,0 +1,15 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: filter with the implicit `it`.
+# Expected: 2 / Alice / Charlie
+void main():
+    Vector[String] names = Vector[String]()
+    names.push(mk("Al", "ice"))
+    names.push(mk("B", "ob"))
+    names.push(mk("Char", "lie"))
+    Vector[String] long = names.filter(it.len() > 3)
+    print(f"{long.len()}")
+    for n in long:
+        print(n)

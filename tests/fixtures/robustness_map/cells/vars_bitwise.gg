@@ -1,0 +1,10 @@
+# Ch2: bitwise operators. NOTE `^` is XOR, not power: 12 ^ 10 == 6.
+# Expected: 8 / 14 / 6 / 24 / 1
+void main():
+    int a = 12
+    int b = 10
+    print(f"{a & b}")
+    print(f"{a | b}")
+    print(f"{a ^ b}")
+    print(f"{3 << 3}")
+    print(f"{8 >> 3}")

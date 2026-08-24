@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch6: a struct field holding a RUNTIME-BUILT string.
+# Expected: alpha / 30
+struct Person:
+    String name
+    int age
+
+void main():
+    Person p = Person(mk("al", "pha"), 30)
+    print(p.name)
+    print(f"{p.age}")

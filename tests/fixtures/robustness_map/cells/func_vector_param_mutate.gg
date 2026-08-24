@@ -1,0 +1,10 @@
+# Ch4/Ch12: mutate a caller's vector through a `&` parameter.
+# Expected: 4 / 99
+void append(Vector[int] &v, int x):
+    v.push(x)
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    append(&v, 99)
+    print(f"{v.len()}")
+    print(f"{v[3]}")

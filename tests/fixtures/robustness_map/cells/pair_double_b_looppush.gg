@@ -1,0 +1,7 @@
+# pair:double_ints (b) explicit loop and push. Expected: 2,4,6
+void main():
+    Vector[int] v = [1, 2, 3]
+    Vector[int] out = Vector[int]()
+    for x in v:
+        out.push(x * 2)
+    print(f"{out[0]},{out[1]},{out[2]}")

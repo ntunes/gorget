@@ -1,0 +1,9 @@
+# Demonstrates: push a runtime-built String into an auto-inferred vector, read it back.
+# Expected: alpha
+String mk(String a, String b):
+    return a + b
+
+void main():
+    auto v = []
+    v.push(mk("al", "pha"))
+    print(v.get(0).unwrap())

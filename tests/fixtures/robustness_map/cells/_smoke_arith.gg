@@ -1,0 +1,7 @@
+# Demonstrates: int arithmetic + f-string. Expected: 7 / 1 / 12
+void main():
+    int a = 3
+    int b = 4
+    print(f"{a + b}")
+    print(f"{b - a}")
+    print(f"{a * b}")

@@ -1,0 +1,19 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Classic: run-length encode a RUNTIME-BUILT string.
+# Expected: a3b2c1
+void main():
+    String s = mk("aaa", "bbc")
+    String out = String()
+    int i = 0
+    int n = s.len()
+    while i < n:
+        int run = 1
+        while i + run < n and s[i + run] == s[i]:
+            run += 1
+        out.push(s[i])
+        out.push(f"{run}")
+        i += run
+    print(out)

@@ -1,0 +1,9 @@
+# pair:opt_default (d) `is Some` binding. Expected: 42 / 7
+int or_default(Option[int] o):
+    if o is Some(v):
+        return v
+    return 7
+
+void main():
+    print(f"{or_default(Some(42))}")
+    print(f"{or_default(None())}")

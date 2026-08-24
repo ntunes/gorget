@@ -1,0 +1,6 @@
+# Ch5: dict comprehension.
+# Expected: 5 / 6
+void main():
+    Dict[int, int] doubled = {x: x * 2 for x in 0..5}
+    print(f"{doubled.len()}")
+    print(f"{doubled[3]}")

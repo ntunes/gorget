@@ -1,0 +1,9 @@
+# pair:filter_evens (b) loop with an if and a push. Expected: 3 / 2,4,6
+void main():
+    Vector[int] v = [1, 2, 3, 4, 5, 6]
+    Vector[int] out = Vector[int]()
+    for x in v:
+        if x % 2 == 0:
+            out.push(x)
+    print(f"{out.len()}")
+    print(f"{out[0]},{out[1]},{out[2]}")

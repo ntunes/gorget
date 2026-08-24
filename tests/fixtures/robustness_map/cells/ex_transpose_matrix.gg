@@ -1,0 +1,8 @@
+# Classic: transpose a 2x3 matrix into 3x2.
+# Expected: 1 4 / 2 5 / 3 6
+void main():
+    Vector[Vector[int]] m = [[1, 2, 3], [4, 5, 6]]
+    for c in 0..3:
+        for r in 0..2:
+            print(f"{m[r][c]}", terminator=" ")
+        print("")

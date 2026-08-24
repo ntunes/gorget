@@ -1,0 +1,7 @@
+# Ch5: add a collection element into an accumulator with `+=`.
+# Expected: 1
+void main():
+    Vector[int] v = [1, 2, 3]
+    int total = 0
+    total += v.get(0).unwrap()
+    print(f"{total}")

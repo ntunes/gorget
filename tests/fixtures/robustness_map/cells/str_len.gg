@@ -1,0 +1,9 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: len() counts codepoints of a runtime-built string.
+# Expected: 5
+void main():
+    String s = mk("hel", "lo")
+    print(f"{s.len()}")

@@ -1,0 +1,5 @@
+# pair:double_ints (a) comprehension. Expected: 2,4,6
+void main():
+    Vector[int] v = [1, 2, 3]
+    Vector[int] out = [x * 2 for x in v]
+    print(f"{out[0]},{out[1]},{out[2]}")

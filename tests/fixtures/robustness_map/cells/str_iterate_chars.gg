@@ -1,0 +1,10 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: `for ch in s` iterates codepoints.
+# Expected: a / b / c
+void main():
+    String s = mk("a", "bc")
+    for ch in s:
+        print(ch)

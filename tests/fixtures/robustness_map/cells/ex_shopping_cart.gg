@@ -1,0 +1,21 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Classic: total a cart of items with quantities.
+# Expected: apple x2 = 300 / bread x1 = 250 / total 550
+struct Item:
+    String name
+    int price
+    int qty
+
+void main():
+    Vector[Item] cart = Vector[Item]()
+    cart.push(Item(mk("ap", "ple"), 150, 2))
+    cart.push(Item(mk("bre", "ad"), 250, 1))
+    int total = 0
+    for it in cart:
+        int line = it.price * it.qty
+        total += line
+        print(f"{it.name} x{it.qty} = {line}")
+    print(f"total {total}")

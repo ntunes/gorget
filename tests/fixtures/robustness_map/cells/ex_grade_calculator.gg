@@ -1,0 +1,15 @@
+# Classic: map a score to a letter grade.
+# Expected: A / B / F
+String grade(int score):
+    if score >= 90:
+        return "A"
+    elif score >= 80:
+        return "B"
+    elif score >= 70:
+        return "C"
+    return "F"
+
+void main():
+    print(grade(95))
+    print(grade(85))
+    print(grade(40))

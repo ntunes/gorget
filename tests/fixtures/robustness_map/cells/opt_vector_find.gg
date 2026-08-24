@@ -1,0 +1,16 @@
+# Ch5/Ch9: find the first matching element — returns Option.
+# Expected: 30 / none
+from std.iter import Iterator
+
+void main():
+    Vector[int] v = [10, 20, 30, 40]
+    match v.iter().find((int x): x > 25):
+        case Some(hit):
+            print(f"{hit}")
+        case None:
+            print("none")
+    match v.iter().find((int x): x > 99):
+        case Some(hit):
+            print(f"{hit}")
+        case None:
+            print("none")

@@ -1,0 +1,9 @@
+# Ch4: recursion — factorial.
+# Expected: 3628800
+int factorial(int n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+void main():
+    print(f"{factorial(10)}")

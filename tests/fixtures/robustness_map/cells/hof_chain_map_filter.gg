@@ -1,0 +1,8 @@
+# Ch5: chain filter then map (methods, each producing a new vector).
+# Expected: 2 / 4 / 8
+void main():
+    Vector[int] numbers = [1, 2, 3, 4, 5]
+    Vector[int] out = numbers.filter((int x): x % 2 == 0).map((int x): x * 2)
+    print(f"{out.len()}")
+    print(f"{out[0]}")
+    print(f"{out[1]}")

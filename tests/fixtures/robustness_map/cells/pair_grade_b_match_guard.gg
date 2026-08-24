@@ -1,0 +1,10 @@
+# pair:grade (b) match with guards. Expected: B
+void main():
+    int score = 85
+    match score:
+        case s if s >= 90:
+            print("A")
+        case s if s >= 80:
+            print("B")
+        else:
+            print("F")

@@ -1,0 +1,12 @@
+# Ch9: match on Option.
+# Expected: got 42 / nothing
+void show(Option[int] o):
+    match o:
+        case Some(v):
+            print(f"got {v}")
+        case None:
+            print("nothing")
+
+void main():
+    show(Some(42))
+    show(None())

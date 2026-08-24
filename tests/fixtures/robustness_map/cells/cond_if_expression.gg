@@ -1,0 +1,12 @@
+# Ch3: `if` used as an expression.
+# Expected: 7 / item / items
+void main():
+    int x = -7
+    int abs_val = if x >= 0: x else: -x
+    print(f"{abs_val}")
+    int count = 1
+    String label = if count == 1: "item" else: "items"
+    print(label)
+    count = 3
+    String label2 = if count == 1: "item" else: "items"
+    print(label2)

@@ -1,0 +1,7 @@
+# Ch4: a closure capturing an outer local.
+# Expected: 15 / 30
+void main():
+    int x = 10
+    auto add_x = (int y): x + y
+    print(f"{add_x(5)}")
+    print(f"{add_x(20)}")

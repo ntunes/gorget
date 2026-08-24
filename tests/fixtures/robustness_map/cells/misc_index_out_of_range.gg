@@ -1,0 +1,8 @@
+# Ch10: indexing past the end must fail loudly, not return garbage.
+# Expected: "before" then a loud failure — never a printed garbage value.
+void main():
+    Vector[int] v = [1, 2, 3]
+    int i = 10
+    print("before")
+    print(f"{v[i]}")
+    print("after")

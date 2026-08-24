@@ -1,0 +1,8 @@
+# Ch5: remove(i) shifts down, insert(i, x) shifts up.
+# Expected: 20 / 10,30 / 10,99,30
+void main():
+    auto v = [10, 20, 30]
+    print(f"{v.remove(1).unwrap()}")
+    print(f"{v[0]},{v[1]}")
+    v.insert(1, 99)
+    print(f"{v[0]},{v[1]},{v[2]}")

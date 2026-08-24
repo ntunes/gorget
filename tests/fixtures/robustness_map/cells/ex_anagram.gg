@@ -1,0 +1,23 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Classic: anagram check by sorting the characters.
+# Expected: true / false
+bool is_anagram(String a, String b):
+    if a.len() != b.len():
+        return false
+    Vector[String] ca = a.chars()
+    Vector[String] cb = b.chars()
+    ca.sort()
+    cb.sort()
+    for i in 0..ca.len():
+        if ca[i] != cb[i]:
+            return false
+    return true
+
+void main():
+    bool x = is_anagram(mk("lis", "ten"), mk("sil", "ent"))
+    bool y = is_anagram(mk("he", "llo"), mk("wor", "ld"))
+    print(f"{x}")
+    print(f"{y}")

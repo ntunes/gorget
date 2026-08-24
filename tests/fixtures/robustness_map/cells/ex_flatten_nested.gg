@@ -1,0 +1,10 @@
+# Classic: flatten a list of lists.
+# Expected: 5 / 1,2,3,4,5
+void main():
+    Vector[Vector[int]] nested = [[1, 2], [3], [4, 5]]
+    Vector[int] flat = Vector[int]()
+    for inner in nested:
+        for x in inner:
+            flat.push(x)
+    print(f"{flat.len()}")
+    print(f"{flat[0]},{flat[1]},{flat[2]},{flat[3]},{flat[4]}")

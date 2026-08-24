@@ -1,0 +1,10 @@
+# Ch6: define a struct, construct it positionally, read its fields.
+# Expected: 1 / 2
+struct Point:
+    int x
+    int y
+
+void main():
+    Point p = Point(1, 2)
+    print(f"{p.x}")
+    print(f"{p.y}")

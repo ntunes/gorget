@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Classic: character-frequency histogram into a Dict.
+# Expected: a=2 / b=1 / c=1
+void main():
+    String s = mk("ab", "ca")
+    Dict[String, int] freq = Dict[String, int]()
+    for ch in s:
+        int prev = freq.get(ch).unwrap_or(0)
+        freq.put(ch, prev + 1)
+    for k, v in freq:
+        print(f"{k}={v}")

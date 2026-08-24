@@ -1,0 +1,6 @@
+# Ch5: reduce uses the first element as the seed.
+# Expected: 120
+void main():
+    Vector[int] numbers = [1, 2, 3, 4, 5]
+    int product = numbers.reduce((int a, int b): a * b)
+    print(f"{product}")

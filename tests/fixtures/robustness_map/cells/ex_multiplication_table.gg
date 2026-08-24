@@ -1,0 +1,7 @@
+# Classic: a 3x3 multiplication table with aligned columns.
+# Expected: rows "  1  2  3" / "  2  4  6" / "  3  6  9"
+void main():
+    for i in 1..=3:
+        for j in 1..=3:
+            print(f"{i * j:3d}", terminator="")
+        print("")

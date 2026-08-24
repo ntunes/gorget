@@ -1,0 +1,7 @@
+# Ch3: a while loop with a counter.
+# Expected: 0 1 2 3 4
+void main():
+    int count = 0
+    while count < 5:
+        print(f"{count}")
+        count += 1

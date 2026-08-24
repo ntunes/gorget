@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: two runtime-built strings compare by value.
+# Expected: true / false
+void main():
+    String a = mk("al", "pha")
+    String b = mk("alp", "ha")
+    String c = mk("be", "ta")
+    print(f"{a == b}")
+    print(f"{a == c}")

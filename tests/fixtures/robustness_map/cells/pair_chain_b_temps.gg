@@ -1,0 +1,7 @@
+# pair:chain_vs_temps (b) split across intermediate variables. Expected: 2 / 8
+void main():
+    Vector[int] v = [1, 2, 3, 4]
+    Vector[int] evens = v.filter((int x): x % 2 == 0)
+    Vector[int] out = evens.map((int x): x * 2)
+    print(f"{out.len()}")
+    print(f"{out[1]}")

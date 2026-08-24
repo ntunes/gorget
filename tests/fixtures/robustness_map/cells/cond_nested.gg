@@ -1,0 +1,11 @@
+# Ch3: nested conditionals.
+# Expected: teen
+void main():
+    int age = 15
+    if age >= 13:
+        if age <= 19:
+            print("teen")
+        else:
+            print("adult")
+    else:
+        print("child")

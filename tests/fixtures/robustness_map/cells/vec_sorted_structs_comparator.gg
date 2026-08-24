@@ -1,0 +1,12 @@
+# Ch5+Ch6: the non-mutating `sorted(cmp)` form on a vector of structs.
+# Expected: 25 / 30
+struct Person:
+    int age
+
+void main():
+    Vector[Person] ps = Vector[Person]()
+    ps.push(Person(30))
+    ps.push(Person(25))
+    Vector[Person] out = ps.sorted((a, b): a.age - b.age)
+    for p in out:
+        print(f"{p.age}")

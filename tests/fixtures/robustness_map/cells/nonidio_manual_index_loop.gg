@@ -1,0 +1,9 @@
+# Coming from C: index arithmetic instead of for-in.
+# Expected: 10 20 30
+void main():
+    Vector[int] v = [10, 20, 30]
+    int i = 0
+    int n = v.len()
+    while i < n:
+        print(f"{v[i]}")
+        i = i + 1

@@ -1,0 +1,13 @@
+# Ch6: an inherent method via `equip`.
+# Expected: 25
+struct Point:
+    int x
+    int y
+
+equip Point:
+    int magnitude_sq(self):
+        return self.x * self.x + self.y * self.y
+
+void main():
+    Point p = Point(3, 4)
+    print(f"{p.magnitude_sq()}")

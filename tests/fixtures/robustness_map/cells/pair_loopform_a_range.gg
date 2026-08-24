@@ -1,0 +1,4 @@
+# pair:loop_forms (a) for over a range. Expected: 0 1 2
+void main():
+    for i in 0..3:
+        print(f"{i}")

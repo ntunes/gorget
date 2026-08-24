@@ -1,0 +1,6 @@
+# Ch2: joining text and a number — beginners write `+` before they learn f-strings.
+# Expected: count: 3
+void main():
+    int n = 3
+    String s = "count: " + f"{n}"
+    print(s)

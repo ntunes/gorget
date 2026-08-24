@@ -1,0 +1,15 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Classic: reverse a RUNTIME-BUILT string, character by character.
+# Expected: olleh
+String reverse(String s):
+    String out = String()
+    int n = s.len()
+    for i in 0..n:
+        out.push(s[n - 1 - i])
+    return out
+
+void main():
+    print(reverse(mk("hel", "lo")))

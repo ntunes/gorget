@@ -1,0 +1,17 @@
+# Beginner habit: four levels of nested ifs instead of combined conditions.
+# Expected: ok
+void main():
+    int x = 5
+    if x > 0:
+        if x < 10:
+            if x % 2 == 1:
+                if x != 3:
+                    print("ok")
+                else:
+                    print("three")
+            else:
+                print("even")
+        else:
+            print("big")
+    else:
+        print("neg")

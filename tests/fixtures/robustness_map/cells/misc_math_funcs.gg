@@ -1,0 +1,10 @@
+# Ch2: sqrt / abs / floor from std.math.
+# Expected: 3.00 / 7 / 3
+from std.math import sqrt, floor
+
+void main():
+    print(f"{sqrt(9.0):.2f}")
+    int x = -7
+    int a = if x < 0: -x else: x
+    print(f"{a}")
+    print(f"{floor(3.7) as int}")

@@ -1,0 +1,15 @@
+# Classic exercise: linear search returning an Option index.
+# Expected: 2 / missing
+Option[int] find_index(Vector[int] v, int target):
+    for i in 0..v.len():
+        if v[i] == target:
+            return Some(i)
+    return None()
+
+void main():
+    Vector[int] v = [10, 20, 30, 40]
+    Option[int] hit = find_index(v, 30)
+    print(f"{hit.unwrap()}")
+    Option[int] miss = find_index(v, 99)
+    if miss is None:
+        print("missing")

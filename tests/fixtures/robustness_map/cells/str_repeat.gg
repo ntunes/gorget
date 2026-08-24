@@ -1,0 +1,9 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: repeat() duplicates a runtime-built string n times.
+# Expected: ababab
+void main():
+    String s = mk("a", "b")
+    print(s.repeat(3))

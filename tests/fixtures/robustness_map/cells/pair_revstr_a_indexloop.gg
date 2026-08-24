@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:reverse_str (a) index loop, push each char. Expected: olleh
+void main():
+    String s = mk("hel", "lo")
+    String out = String()
+    int n = s.len()
+    for i in 0..n:
+        out.push(s[n - 1 - i])
+    print(out)

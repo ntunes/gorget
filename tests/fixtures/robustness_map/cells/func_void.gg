@@ -1,0 +1,7 @@
+# Ch4: a void function used for its side effect.
+# Expected: Hello, Ada!
+void greet(String name):
+    print(f"Hello, {name}!")
+
+void main():
+    greet("Ada")

@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch3: branch on a runtime-built string.
+# Expected: matched
+void main():
+    String s = mk("go", "rget")
+    if s == "gorget":
+        print("matched")
+    else:
+        print("different")

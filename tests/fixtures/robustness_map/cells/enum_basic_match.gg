@@ -1,0 +1,16 @@
+# Ch6+Ch3: a nullary enum and an exhaustive match.
+# Expected: going north / going south
+enum Direction:
+    North
+    South
+
+void describe(Direction d):
+    match d:
+        case North:
+            print("going north")
+        case South:
+            print("going south")
+
+void main():
+    describe(Direction.North)
+    describe(Direction.South)

@@ -1,0 +1,7 @@
+# Ch3: a parenthesised arithmetic range endpoint — the instinctive spelling
+# in every hand-written sort/search loop.
+# Expected: 0 1 2
+void main():
+    int n = 4
+    for j in 0..(n - 1):
+        print(f"{j}")

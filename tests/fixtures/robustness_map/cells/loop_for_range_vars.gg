@@ -1,0 +1,7 @@
+# Ch3: range bounds from variables.
+# Expected: 2 3 4
+void main():
+    int lo = 2
+    int hi = 5
+    for i in lo..hi:
+        print(f"{i}")

@@ -1,0 +1,9 @@
+# Ch4: a local with the same name as an outer local in a nested scope.
+# Expected: 1 / 2 / 1
+void main():
+    int x = 1
+    print(f"{x}")
+    if true:
+        int y = 2
+        print(f"{y}")
+    print(f"{x}")

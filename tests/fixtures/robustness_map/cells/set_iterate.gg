@@ -1,0 +1,11 @@
+# Ch5: Set preserves insertion order when iterated.
+# Expected: 3 / 1 / 2
+from std.collections import Set
+
+void main():
+    Set[int] s = Set[int]()
+    s.add(3)
+    s.add(1)
+    s.add(2)
+    for x in s:
+        print(f"{x}")

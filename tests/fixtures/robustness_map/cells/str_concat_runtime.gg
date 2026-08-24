@@ -1,0 +1,9 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: concatenate two strings at runtime and print the result.
+# Expected: alpha
+void main():
+    String s = mk("al", "pha")
+    print(s)

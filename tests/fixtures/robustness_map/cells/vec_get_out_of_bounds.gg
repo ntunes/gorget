@@ -1,0 +1,14 @@
+# Ch5: get() returns None for an out-of-range index.
+# Expected: 10 / none
+void main():
+    auto v = [10]
+    match v.get(0):
+        case Some(x):
+            print(f"{x}")
+        case None:
+            print("none")
+    match v.get(5):
+        case Some(x):
+            print(f"{x}")
+        case None:
+            print("none")

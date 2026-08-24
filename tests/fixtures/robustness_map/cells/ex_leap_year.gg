@@ -1,0 +1,14 @@
+# Classic: leap-year rule.
+# Expected: true / false / true / false
+bool is_leap(int y):
+    if y % 400 == 0:
+        return true
+    if y % 100 == 0:
+        return false
+    return y % 4 == 0
+
+void main():
+    print(f"{is_leap(2000)}")
+    print(f"{is_leap(1900)}")
+    print(f"{is_leap(2024)}")
+    print(f"{is_leap(2023)}")

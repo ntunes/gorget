@@ -1,0 +1,10 @@
+# Classic: dedupe a list, preserving order.
+# Expected: 3 / 1,2,3
+void main():
+    Vector[int] v = [1, 2, 2, 3, 1]
+    Vector[int] out = Vector[int]()
+    for x in v:
+        if not out.contains(x):
+            out.push(x)
+    print(f"{out.len()}")
+    print(f"{out[0]},{out[1]},{out[2]}")

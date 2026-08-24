@@ -1,0 +1,17 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Classic exercise: word frequency, using unwrap_or instead of `??`.
+# Expected: a=2 / b=1
+void main():
+    Vector[String] words = Vector[String]()
+    words.push(mk("", "a"))
+    words.push(mk("", "b"))
+    words.push(mk("", "a"))
+    Dict[String, int] counts = Dict[String, int]()
+    for w in words:
+        int c = counts.get(w).unwrap_or(0)
+        counts.put(w, c + 1)
+    for k, v in counts:
+        print(f"{k}={v}")

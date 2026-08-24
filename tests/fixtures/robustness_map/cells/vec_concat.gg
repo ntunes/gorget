@@ -1,0 +1,8 @@
+# Ch5: `+` concatenates two vectors.
+# Expected: 5 / 1,2,3,4,5
+void main():
+    auto a = [1, 2, 3]
+    auto b = [4, 5]
+    auto c = a + b
+    print(f"{c.len()}")
+    print(f"{c[0]},{c[1]},{c[2]},{c[3]},{c[4]}")

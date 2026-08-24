@@ -1,0 +1,11 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch9: an Option carrying a RUNTIME-BUILT String.
+# Expected: alpha / fallback
+void main():
+    Option[String] o = Some(mk("al", "pha"))
+    print(o.unwrap())
+    Option[String] n = None()
+    print(n.unwrap_or("fallback"))

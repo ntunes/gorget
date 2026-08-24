@@ -1,0 +1,6 @@
+# Ch3: `pass` as a no-op placeholder.
+# Expected: done
+void main():
+    if false:
+        pass
+    print("done")

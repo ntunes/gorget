@@ -1,0 +1,8 @@
+# Ch5: map over a vector.
+# Expected: 5 / 2 / 10
+void main():
+    Vector[int] numbers = [1, 2, 3, 4, 5]
+    Vector[int] doubled = numbers.map((int x): x * 2)
+    print(f"{doubled.len()}")
+    print(f"{doubled[0]}")
+    print(f"{doubled[4]}")

@@ -1,0 +1,10 @@
+# Ch5: any / all.
+# Expected: true / true / false
+void main():
+    Vector[int] numbers = [1, 2, 3, 4, 5]
+    bool has_even = numbers.any((int x): x % 2 == 0)
+    bool all_positive = numbers.all((int x): x > 0)
+    bool all_even = numbers.all((int x): x % 2 == 0)
+    print(f"{has_even}")
+    print(f"{all_positive}")
+    print(f"{all_even}")

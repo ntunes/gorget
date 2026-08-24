@@ -1,0 +1,9 @@
+# Ch2: float arithmetic printed with an explicit precision spec.
+# Expected: 5.00 / 1.50 / 0.50 / 1.41
+void main():
+    float a = 3.0
+    float b = 2.0
+    print(f"{a + b:.2f}")
+    print(f"{a / b:.2f}")
+    print(f"{b / (a + 1.0):.2f}")
+    print(f"{2.0 ** 0.5:.2f}")

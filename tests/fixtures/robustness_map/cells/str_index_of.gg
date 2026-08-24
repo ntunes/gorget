@@ -1,0 +1,18 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: index_of returns Option[int] (codepoint index).
+# Expected: 5 / none
+void main():
+    String s = mk("hello", " world")
+    match s.index_of(" "):
+        case Some(i):
+            print(f"{i}")
+        case None:
+            print("none")
+    match s.index_of("zzz"):
+        case Some(i):
+            print(f"{i}")
+        case None:
+            print("none")

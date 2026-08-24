@@ -1,0 +1,10 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: vector literal whose elements are runtime-built strings.
+# Expected: alpha / beta
+void main():
+    auto v = [mk("al", "pha"), mk("be", "ta")]
+    print(v[0])
+    print(v[1])

@@ -1,0 +1,9 @@
+String mk(String a, String b):
+    return a + b
+
+
+# A long method chain on a runtime-built string.
+# Expected: HELLO-WORLD
+void main():
+    String s = mk("  hello ", "world  ")
+    print(s.trim().replace(" ", "-").to_upper())

@@ -1,0 +1,17 @@
+# Ch6: a `&self` method mutates the receiver.
+# Expected: 2
+struct Counter:
+    int value
+
+equip Counter:
+    void increment(&self):
+        self.value += 1
+
+    int get(self):
+        return self.value
+
+void main():
+    Counter c = Counter(0)
+    c.increment()
+    c.increment()
+    print(f"{c.get()}")

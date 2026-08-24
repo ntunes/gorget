@@ -1,0 +1,5 @@
+# Ch4: a no-argument closure.
+# Expected: hello
+void main():
+    auto greet = (): print("hello")
+    greet()

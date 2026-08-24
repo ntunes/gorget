@@ -1,0 +1,9 @@
+# Coming from Python/C: `while true:` with a break instead of a real condition.
+# Expected: 0 1 2
+void main():
+    int i = 0
+    while true:
+        if i >= 3:
+            break
+        print(f"{i}")
+        i += 1

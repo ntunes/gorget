@@ -1,0 +1,8 @@
+# Ch3+Ch2: build a string incrementally in a loop — the classic beginner pattern.
+# Expected: 0-1-2-3-
+void main():
+    String out = String()
+    for i in 0..4:
+        out.push(f"{i}")
+        out.push("-")
+    print(out)

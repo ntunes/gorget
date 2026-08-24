@@ -1,0 +1,9 @@
+# pair:sum_ints (b) while + index. Expected: 15
+void main():
+    Vector[int] v = [1, 2, 3, 4, 5]
+    int total = 0
+    int i = 0
+    while i < v.len():
+        total += v[i]
+        i += 1
+    print(f"{total}")

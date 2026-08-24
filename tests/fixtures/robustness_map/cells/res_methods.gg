@@ -1,0 +1,11 @@
+# Ch9: unwrap / unwrap_or / is_ok / is_error / unwrap_error.
+# Expected: 10 / 10 / 99 / true / true / fail
+void main():
+    Result[int, String] ok = Ok(10)
+    Result[int, String] err = Error("fail")
+    print(f"{ok.unwrap()}")
+    print(f"{ok.unwrap_or(0)}")
+    print(f"{err.unwrap_or(99)}")
+    print(f"{ok.is_ok()}")
+    print(f"{err.is_error()}")
+    print(err.unwrap_error())

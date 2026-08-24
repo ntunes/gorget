@@ -1,0 +1,5 @@
+# pair:sort_desc (c) sorted() then reversed(). Expected: 5,4,3,1,1
+void main():
+    Vector[int] v = [3, 1, 4, 1, 5]
+    Vector[int] out = v.sorted().reversed()
+    print(f"{out[0]},{out[1]},{out[2]},{out[3]},{out[4]}")

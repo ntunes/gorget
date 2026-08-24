@@ -1,0 +1,11 @@
+# Ch2: comparison and word-spelled logical operators.
+# Expected: true / false / true / true / false / true
+void main():
+    int a = 5
+    int b = 9
+    print(f"{a < b}")
+    print(f"{a == b}")
+    print(f"{a != b}")
+    print(f"{a < b and b < 100}")
+    print(f"{a > b and b < 100}")
+    print(f"{a > b or b < 100}")

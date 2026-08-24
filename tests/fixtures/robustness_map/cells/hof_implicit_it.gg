@@ -1,0 +1,15 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: the implicit `it` parameter for single-argument closures.
+# Expected: 5 / 3 / 7
+void main():
+    Vector[String] names = Vector[String]()
+    names.push(mk("Al", "ice"))
+    names.push(mk("B", "ob"))
+    names.push(mk("Char", "lie"))
+    Vector[int] lengths = names.map(it.len())
+    print(f"{lengths[0]}")
+    print(f"{lengths[1]}")
+    print(f"{lengths[2]}")

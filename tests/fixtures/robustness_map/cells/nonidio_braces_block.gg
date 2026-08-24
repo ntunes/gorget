@@ -1,0 +1,5 @@
+# C/Java habit: braces instead of indentation.
+# Expected: a clean rejection explaining that blocks are indentation-based.
+void main() {
+    print("hi")
+}

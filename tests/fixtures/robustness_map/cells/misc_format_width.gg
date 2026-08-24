@@ -1,0 +1,5 @@
+# Ch14: field width — needed for tables and receipts. Width is in the
+# documented format grammar `[#][0][width][.precision][type]`.
+# Expected: "[   42]"
+void main():
+    print(f"[{42:5d}]")

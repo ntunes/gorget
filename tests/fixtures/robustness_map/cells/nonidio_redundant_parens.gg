@@ -1,0 +1,8 @@
+# Habit from other languages: parenthesise every condition.
+# Expected: yes
+void main():
+    int x = 5
+    if ((x > 0) and (x < 10)):
+        print("yes")
+    else:
+        print("no")

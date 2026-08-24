@@ -1,0 +1,9 @@
+# Ch3: match expression with guards where NO guard is satisfied -> else arm.
+# Expected: F
+void main():
+    int score = 10
+    String g = match score:
+        case s if s >= 90: "A"
+        case s if s >= 80: "B"
+        else: "F"
+    print(g)

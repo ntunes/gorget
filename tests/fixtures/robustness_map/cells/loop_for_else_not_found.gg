@@ -1,0 +1,10 @@
+# Ch3: for-else — `else` RUNS when the loop completes without `break`.
+# Expected: not found
+void main():
+    Vector[int] items = [1, 2, 3]
+    for x in items:
+        if x == 99:
+            print("found")
+            break
+    else:
+        print("not found")

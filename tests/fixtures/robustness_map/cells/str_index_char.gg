@@ -1,0 +1,10 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: s[i] yields the i-th codepoint as a String.
+# Expected: h / o
+void main():
+    String s = mk("hel", "lo")
+    print(s[0])
+    print(s[4])

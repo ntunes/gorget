@@ -1,0 +1,5 @@
+# Python habit: `"ab" * 3` to repeat a string.
+# Expected: a clean rejection pointing at `.repeat(n)`.
+void main():
+    String s = "a" + "b"
+    print(s * 3)

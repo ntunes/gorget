@@ -1,0 +1,6 @@
+# Ch5: fold with an explicit initial accumulator.
+# Expected: 15
+void main():
+    Vector[int] numbers = [1, 2, 3, 4, 5]
+    int total = numbers.fold(0, (int acc, int x): acc + x)
+    print(f"{total}")

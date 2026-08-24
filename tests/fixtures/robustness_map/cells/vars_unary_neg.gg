@@ -1,0 +1,8 @@
+# Ch2: unary negation and `not`.
+# Expected: -5 / 5 / false / true
+void main():
+    int x = 5
+    print(f"{-x}")
+    print(f"{-(-x)}")
+    print(f"{not true}")
+    print(f"{not (x > 100)}")

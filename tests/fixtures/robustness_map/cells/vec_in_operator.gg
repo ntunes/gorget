@@ -1,0 +1,10 @@
+# Ch5: the `in` operator on a vector.
+# Expected: found / absent
+void main():
+    auto v = [10, 20, 30]
+    if 20 in v:
+        print("found")
+    if 99 in v:
+        print("present")
+    else:
+        print("absent")

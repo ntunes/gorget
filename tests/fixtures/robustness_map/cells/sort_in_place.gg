@@ -1,0 +1,6 @@
+# Ch5: sort() sorts ascending in place.
+# Expected: 1,1,3,4,5
+void main():
+    Vector[int] v = [3, 1, 4, 1, 5]
+    v.sort()
+    print(f"{v[0]},{v[1]},{v[2]},{v[3]},{v[4]}")

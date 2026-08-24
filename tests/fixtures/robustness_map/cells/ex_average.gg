@@ -1,0 +1,9 @@
+# Classic: average of a list, printed to two decimals.
+# Expected: 3.50
+void main():
+    Vector[int] v = [1, 2, 5, 6]
+    int total = 0
+    for x in v:
+        total += x
+    float avg = (total as float) / (v.len() as float)
+    print(f"{avg:.2f}")

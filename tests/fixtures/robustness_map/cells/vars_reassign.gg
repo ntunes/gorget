@@ -1,0 +1,9 @@
+# Ch1: reassigning a mutable local.
+# Expected: 1 / 2 / 10
+void main():
+    int x = 1
+    print(f"{x}")
+    x = 2
+    print(f"{x}")
+    x = x * 5
+    print(f"{x}")

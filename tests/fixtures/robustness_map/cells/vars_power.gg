@@ -1,0 +1,9 @@
+# Ch2: `**` exponentiation, right-associative, plus the compound form.
+# Expected: 1024 / 512 / 1024
+void main():
+    int r = 2 ** 10
+    print(f"{r}")
+    print(f"{2 ** 3 ** 2}")
+    int a = 2
+    a **= 10
+    print(f"{a}")

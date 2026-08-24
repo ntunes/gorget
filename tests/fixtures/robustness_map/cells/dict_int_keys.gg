@@ -1,0 +1,8 @@
+# Ch5: a dict with int keys.
+# Expected: 2 / 100
+void main():
+    Dict[int, int] d = Dict[int, int]()
+    d.put(1, 100)
+    d.put(2, 200)
+    print(f"{d.len()}")
+    print(f"{d[1]}")

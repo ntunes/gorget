@@ -1,0 +1,9 @@
+# Ch3: while-else — the `else` runs on normal completion.
+# Expected: 0 / 1 / 2 / exhausted
+void main():
+    int tries = 0
+    while tries < 3:
+        print(f"{tries}")
+        tries += 1
+    else:
+        print("exhausted")

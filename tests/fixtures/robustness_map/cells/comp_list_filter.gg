@@ -1,0 +1,7 @@
+# Ch5: comprehension with an `if` filter.
+# Expected: 5 / 0 / 8
+void main():
+    Vector[int] evens = [x for x in 0..10 if x % 2 == 0]
+    print(f"{evens.len()}")
+    print(f"{evens[0]}")
+    print(f"{evens[4]}")

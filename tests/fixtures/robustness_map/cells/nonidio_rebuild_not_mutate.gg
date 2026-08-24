@@ -1,0 +1,21 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Functional habit: rebuild the collection instead of mutating it.
+# Expected: 3 / alpha / beta / gamma
+Vector[String] with_added(Vector[String] src, String extra):
+    Vector[String] out = Vector[String]()
+    for s in src:
+        out.push(s)
+    out.push(extra)
+    return out
+
+void main():
+    Vector[String] v = Vector[String]()
+    v = with_added(v, mk("al", "pha"))
+    v = with_added(v, mk("be", "ta"))
+    v = with_added(v, mk("ga", "mma"))
+    print(f"{v.len()}")
+    for s in v:
+        print(s)

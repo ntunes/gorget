@@ -1,0 +1,7 @@
+# Ch5: dict literal, subscript read, len.
+# Expected: 10 / 20 / 2
+void main():
+    Dict[String, int] d = {"x": 10, "y": 20}
+    print(f"{d["x"]}")
+    print(f"{d["y"]}")
+    print(f"{d.len()}")

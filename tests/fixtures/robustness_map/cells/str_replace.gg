@@ -1,0 +1,9 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: replace a substring.
+# Expected: hello gorget
+void main():
+    String s = mk("hello ", "world")
+    print(s.replace("world", "gorget"))

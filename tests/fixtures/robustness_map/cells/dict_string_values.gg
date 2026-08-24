@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: dict VALUES that are RUNTIME-BUILT strings.
+# Expected: alpha / beta
+void main():
+    Dict[int, String] d = Dict[int, String]()
+    d.put(1, mk("al", "pha"))
+    d.put(2, mk("be", "ta"))
+    print(d[1])
+    print(d[2])

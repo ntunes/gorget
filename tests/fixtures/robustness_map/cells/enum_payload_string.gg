@@ -1,0 +1,17 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch6: an enum variant carrying a RUNTIME-BUILT string.
+# Expected: email alpha
+enum Contact:
+    Email(String)
+    Phone(String)
+
+void main():
+    Contact c = Contact.Email(mk("al", "pha"))
+    match c:
+        case Email(a):
+            print(f"email {a}")
+        case Phone(p):
+            print(f"phone {p}")

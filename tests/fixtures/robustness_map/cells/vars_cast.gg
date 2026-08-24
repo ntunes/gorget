@@ -1,0 +1,11 @@
+# Ch2: `as` casts between numeric types; float->int truncates toward zero.
+# Expected: 42.00 / 3 / -3 / 2.50
+void main():
+    float f = 42 as float
+    int n = 3.9 as int
+    int m = -3.9 as int
+    float half = (5 as float) / 2.0
+    print(f"{f:.2f}")
+    print(f"{n}")
+    print(f"{m}")
+    print(f"{half:.2f}")

@@ -1,0 +1,6 @@
+# Ch3: tuple unpacking in a for loop.
+# Expected: 1: one / 2: two
+void main():
+    Vector[(int, String)] pairs = [(1, "one"), (2, "two")]
+    for num, name in pairs:
+        print(f"{num}: {name}")

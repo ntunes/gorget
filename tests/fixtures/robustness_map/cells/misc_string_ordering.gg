@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: lexicographic comparison of RUNTIME-BUILT strings.
+# Expected: true / false
+void main():
+    String a = mk("app", "le")
+    String b = mk("bana", "na")
+    bool lt = a < b
+    bool gt = a > b
+    print(f"{lt}")
+    print(f"{gt}")

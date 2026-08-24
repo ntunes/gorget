@@ -1,0 +1,7 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:nested_call (a) fully nested calls. Expected: ABC
+void main():
+    print(mk(mk("a", "b"), "c").to_upper())

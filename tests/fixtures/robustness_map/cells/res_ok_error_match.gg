@@ -1,0 +1,12 @@
+# Ch9: match on Result.
+# Expected: ok 42 / err boom
+void show(Result[int, String] r):
+    match r:
+        case Ok(v):
+            print(f"ok {v}")
+        case Error(e):
+            print(f"err {e}")
+
+void main():
+    show(Ok(42))
+    show(Error("boom"))

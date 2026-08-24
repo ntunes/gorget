@@ -1,0 +1,10 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: a vector of vectors of RUNTIME-BUILT strings.
+# Expected: alpha / beta
+void main():
+    Vector[Vector[String]] m = [[mk("al", "pha")], [mk("be", "ta")]]
+    print(m[0][0])
+    print(m[1][0])

@@ -1,0 +1,9 @@
+# Ch4: one function calling another.
+# Expected: 13
+int square(int x): x * x
+
+int sum_of_squares(int a, int b):
+    return square(a) + square(b)
+
+void main():
+    print(f"{sum_of_squares(2, 3)}")

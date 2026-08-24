@@ -1,0 +1,10 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: `auto v = []` then push a RUNTIME-BUILT string, read back via get().unwrap().
+# Expected: alpha
+void main():
+    auto v = []
+    v.push(mk("al", "pha"))
+    print(v.get(0).unwrap())

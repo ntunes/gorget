@@ -1,0 +1,7 @@
+# Ch4: a function stored in a variable and called through it.
+# Expected: 7 / 12
+void main():
+    int(int, int) operation = (a, b): a + b
+    print(f"{operation(3, 4)}")
+    operation = (a, b): a * b
+    print(f"{operation(3, 4)}")

@@ -1,0 +1,16 @@
+# pair:prime (b) single exit point with a result flag. Expected: false / true
+bool is_prime(int n):
+    bool result = true
+    if n < 2:
+        result = false
+    else:
+        int i = 2
+        while i * i <= n:
+            if n % i == 0:
+                result = false
+            i += 1
+    return result
+
+void main():
+    print(f"{is_prime(91)}")
+    print(f"{is_prime(97)}")

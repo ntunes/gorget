@@ -1,0 +1,6 @@
+# Demonstrates: runtime-built string printed directly. Expected: alpha
+String mk(String a, String b):
+    return a + b
+
+void main():
+    print(mk("al", "pha"))

@@ -1,0 +1,8 @@
+# Ch5: Dict higher-order helpers take (key, value) as two arguments.
+# Expected: true / false
+void main():
+    Dict[String, int] scores = {"Alice": 90, "Bob": 75}
+    bool any_high = scores.any((String k, int v): v >= 90)
+    bool all_pass = scores.all((String k, int v): v >= 80)
+    print(f"{any_high}")
+    print(f"{all_pass}")

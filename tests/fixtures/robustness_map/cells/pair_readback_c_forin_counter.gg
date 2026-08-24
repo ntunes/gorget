@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:read_back (c) for-in with a counter. Expected: beta
+void main():
+    Vector[String] v = Vector[String]()
+    v.push(mk("al", "pha"))
+    v.push(mk("be", "ta"))
+    int i = 0
+    for s in v:
+        if i == 1:
+            print(s)
+        i += 1

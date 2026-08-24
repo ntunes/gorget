@@ -1,0 +1,10 @@
+# Ch4: a closure that writes through to a captured local.
+# Expected: 3
+void main():
+    int count = 0
+    auto increment = ():
+        count += 1
+    increment()
+    increment()
+    increment()
+    print(f"{count}")

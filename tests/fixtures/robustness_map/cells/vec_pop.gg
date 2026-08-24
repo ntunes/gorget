@@ -1,0 +1,12 @@
+# Ch5: pop() removes and returns the last element as an Option.
+# Expected: 30 / 2 / empty
+void main():
+    auto v = [10, 20, 30]
+    print(f"{v.pop().unwrap()}")
+    print(f"{v.len()}")
+    Vector[int] e = Vector[int]()
+    match e.pop():
+        case Some(x):
+            print(f"{x}")
+        case None:
+            print("empty")

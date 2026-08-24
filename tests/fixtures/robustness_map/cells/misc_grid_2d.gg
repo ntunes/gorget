@@ -1,0 +1,14 @@
+# Ch5: build a 2-D grid, mutate one cell, print rows.
+# Expected: 0 0 0 / 0 9 0
+void main():
+    Vector[Vector[int]] grid = Vector[Vector[int]]()
+    for r in 0..2:
+        Vector[int] row = Vector[int]()
+        for c in 0..3:
+            row.push(0)
+        grid.push(row)
+    grid[1][1] = 9
+    for row in grid:
+        for cell in row:
+            print(f"{cell}", terminator=" ")
+        print("")

@@ -1,0 +1,9 @@
+# Ch3: match used as an expression.
+# Expected: danger
+void main():
+    String color = "red"
+    String label = match color:
+        case "red": "danger"
+        case "green": "safe"
+        else: "neutral"
+    print(label)

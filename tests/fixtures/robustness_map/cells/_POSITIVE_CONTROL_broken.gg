@@ -1,0 +1,3 @@
+# POSITIVE CONTROL: deliberately wrong expected output. Must report MISMATCH.
+void main():
+    print("actual")

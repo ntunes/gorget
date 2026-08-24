@@ -1,0 +1,10 @@
+# Ch1: the five arithmetic operators on ints. Integer division truncates.
+# Expected: 10 / 4 / 21 / 2 / 1
+void main():
+    int a = 7
+    int b = 3
+    print(f"{a + b}")
+    print(f"{a - b}")
+    print(f"{a * b}")
+    print(f"{a / b}")
+    print(f"{a % b}")

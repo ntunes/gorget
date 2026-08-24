@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: zip() pairs two collections and stops at the shorter one.
+# Expected: alpha=1 / beta=2
+void main():
+    Vector[String] names = Vector[String]()
+    names.push(mk("al", "pha"))
+    names.push(mk("be", "ta"))
+    auto nums = [1, 2, 3]
+    for n, x in zip(names, nums):
+        print(f"{n}={x}")

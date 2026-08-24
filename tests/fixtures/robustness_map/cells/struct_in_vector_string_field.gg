@@ -1,0 +1,16 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5+Ch6: a vector of structs whose field is a RUNTIME-BUILT string.
+# Expected: alpha / beta
+struct Person:
+    String name
+    int age
+
+void main():
+    Vector[Person] ps = Vector[Person]()
+    ps.push(Person(mk("al", "pha"), 30))
+    ps.push(Person(mk("be", "ta"), 25))
+    for p in ps:
+        print(p.name)

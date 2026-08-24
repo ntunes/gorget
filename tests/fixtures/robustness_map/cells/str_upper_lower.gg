@@ -1,0 +1,10 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: to_upper / to_lower on a runtime-built string.
+# Expected: HELLO / hello
+void main():
+    String s = mk("hel", "lo")
+    print(s.to_upper())
+    print(s.to_upper().to_lower())

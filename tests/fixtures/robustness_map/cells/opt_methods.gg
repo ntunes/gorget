@@ -1,0 +1,10 @@
+# Ch9: unwrap / unwrap_or / is_some / is_none.
+# Expected: 42 / 42 / 0 / true / true
+void main():
+    Option[int] x = Some(42)
+    Option[int] y = None()
+    print(f"{x.unwrap()}")
+    print(f"{x.unwrap_or(0)}")
+    print(f"{y.unwrap_or(0)}")
+    print(f"{x.is_some()}")
+    print(f"{y.is_none()}")

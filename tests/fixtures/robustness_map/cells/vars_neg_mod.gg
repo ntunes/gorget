@@ -1,0 +1,7 @@
+# Ch2: `%` is remainder (sign follows dividend); `.mod()` is Euclidean.
+# Expected: -1 / 2
+void main():
+    int a = -7
+    int b = 3
+    print(f"{a % b}")
+    print(f"{a.mod(b)}")

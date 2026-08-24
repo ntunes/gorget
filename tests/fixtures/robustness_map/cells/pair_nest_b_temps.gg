@@ -1,0 +1,10 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:nested_call (b) one temporary per step. Expected: ABC
+void main():
+    String ab = mk("a", "b")
+    String abc = mk(ab, "c")
+    String up = abc.to_upper()
+    print(up)

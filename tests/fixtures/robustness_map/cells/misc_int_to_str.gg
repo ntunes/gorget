@@ -1,0 +1,7 @@
+# Ch2: number -> text via std.conv.
+# Expected: 42 / 3.14
+from std.conv import int_to_str, float_to_str
+
+void main():
+    print(int_to_str(42))
+    print(float_to_str(3.14))

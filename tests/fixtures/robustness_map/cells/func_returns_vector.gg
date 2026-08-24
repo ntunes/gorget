@@ -1,0 +1,13 @@
+# Ch4+Ch5: a function that builds and returns a vector.
+# Expected: 3 / 0 / 4
+Vector[int] squares(int n):
+    Vector[int] out = Vector[int]()
+    for i in 0..n:
+        out.push(i * i)
+    return out
+
+void main():
+    Vector[int] v = squares(3)
+    print(f"{v.len()}")
+    print(f"{v[0]}")
+    print(f"{v[2]}")

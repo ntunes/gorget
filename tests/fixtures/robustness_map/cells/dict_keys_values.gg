@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: keys() and values() in insertion order.
+# Expected: Alice / Bob / 30 / 25
+void main():
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put(mk("Al", "ice"), 30)
+    ages.put(mk("B", "ob"), 25)
+    for k in ages.keys():
+        print(k)
+    for v in ages.values():
+        print(f"{v}")

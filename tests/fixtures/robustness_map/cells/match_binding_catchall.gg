@@ -1,0 +1,9 @@
+# Ch3: a bare name arm is a catch-all that binds the value.
+# Expected: got 7
+void main():
+    int n = 7
+    match n:
+        case 0:
+            print("zero")
+        case rest:
+            print(f"got {rest}")

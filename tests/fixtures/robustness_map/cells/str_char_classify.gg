@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: character classification helpers on single-character strings.
+# Expected: true / false / true / false
+void main():
+    String s = mk("a", "1")
+    print(f"{s[0].is_alpha()}")
+    print(f"{s[0].is_digit()}")
+    print(f"{s[1].is_digit()}")
+    print(f"{s[1].is_alpha()}")

@@ -1,0 +1,8 @@
+# Ch5: same shape through a Dict.
+# Expected: 4
+void main():
+    Dict[String, int] m = Dict[String, int]()
+    m.put("k", 4)
+    int total = 0
+    total += m.get("k").unwrap()
+    print(f"{total}")

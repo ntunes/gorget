@@ -1,0 +1,16 @@
+# Ch6: enum variants carrying data, destructured in match.
+# Expected: circle 5 / rect 3x4
+enum Shape:
+    Circle(int)
+    Rectangle(int, int)
+
+void describe(Shape s):
+    match s:
+        case Circle(r):
+            print(f"circle {r}")
+        case Rectangle(w, h):
+            print(f"rect {w}x{h}")
+
+void main():
+    describe(Shape.Circle(5))
+    describe(Shape.Rectangle(3, 4))

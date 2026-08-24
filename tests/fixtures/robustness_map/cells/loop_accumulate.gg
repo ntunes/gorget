@@ -1,0 +1,7 @@
+# Ch3: sum a range with an accumulator — the archetypal first loop.
+# Expected: 45
+void main():
+    int total = 0
+    for i in 0..10:
+        total += i
+    print(f"{total}")

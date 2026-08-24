@@ -1,0 +1,8 @@
+# Ch5: a vector of vectors — indexing composes.
+# Expected: 2 / 3 / 1 / 6
+void main():
+    Vector[Vector[int]] m = [[1, 2, 3], [4, 5, 6]]
+    print(f"{m.len()}")
+    print(f"{m[0].len()}")
+    print(f"{m[0][0]}")
+    print(f"{m[1][2]}")

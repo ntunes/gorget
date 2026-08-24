@@ -1,0 +1,8 @@
+# Ch2: character <-> code point, the basis of every cipher exercise.
+# Expected: 97 / a / b
+from std.conv import ord, chr
+
+void main():
+    print(f"{ord("a")}")
+    print(chr(97))
+    print(chr(ord("a") + 1))

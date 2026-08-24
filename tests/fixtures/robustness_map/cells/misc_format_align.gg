@@ -1,0 +1,6 @@
+# Ch14: LEFT-alignment. NOT in the documented format grammar — beginners
+# reach for it constantly (Python/Rust both have it). UNSURE what the
+# language intends; recorded as a coverage question, not a claimed bug.
+# Expected (if supported): "[42   ]"
+void main():
+    print(f"[{42:<5d}]")

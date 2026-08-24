@@ -1,0 +1,7 @@
+# Ch5: set comprehension.
+# Expected: 5
+from std.collections import Set
+
+void main():
+    Set[int] even_set = {x for x in 0..10 if x % 2 == 0}
+    print(f"{even_set.len()}")

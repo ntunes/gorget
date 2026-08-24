@@ -1,0 +1,5 @@
+# pair:max_of (d) fold. Expected: 9
+void main():
+    Vector[int] v = [4, 1, 9, 3]
+    int best = v.fold(v[0], (int acc, int x): if x > acc: x else: acc)
+    print(f"{best}")

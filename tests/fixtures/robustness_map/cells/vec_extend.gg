@@ -1,0 +1,8 @@
+# Ch5: extend() appends every element of another vector.
+# Expected: 5 / 5
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [4, 5]
+    a.extend(b)
+    print(f"{a.len()}")
+    print(f"{a[4]}")

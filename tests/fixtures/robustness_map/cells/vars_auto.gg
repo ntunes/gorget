@@ -1,0 +1,9 @@
+# Ch1: `auto` infers the type from the initialiser.
+# Expected: 42 / true / 7
+void main():
+    auto n = 42
+    auto flag = true
+    auto sum = 3 + 4
+    print(f"{n}")
+    print(f"{flag}")
+    print(f"{sum}")

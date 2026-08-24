@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Classic: Caesar shift — needs char <-> code-point arithmetic.
+# Expected: def
+from std.conv import ord, chr
+
+void main():
+    String s = mk("ab", "c")
+    String out = String()
+    for ch in s:
+        out.push(chr(ord(ch) + 3))
+    print(out)

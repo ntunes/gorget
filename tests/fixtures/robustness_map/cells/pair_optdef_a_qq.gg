@@ -1,0 +1,6 @@
+# pair:opt_default (a) the ?? operator. Expected: 42 / 7
+void main():
+    Option[int] a = Some(42)
+    Option[int] b = None()
+    print(f"{a ?? 7}")
+    print(f"{b ?? 7}")

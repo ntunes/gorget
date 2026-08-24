@@ -1,0 +1,8 @@
+# Ch5: filter a vector.
+# Expected: 2 / 2 / 4
+void main():
+    Vector[int] numbers = [1, 2, 3, 4, 5]
+    Vector[int] evens = numbers.filter((int x): x % 2 == 0)
+    print(f"{evens.len()}")
+    print(f"{evens[0]}")
+    print(f"{evens[1]}")

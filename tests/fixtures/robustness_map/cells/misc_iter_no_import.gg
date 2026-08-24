@@ -1,0 +1,6 @@
+# Ch5: the book uses `.iter()` with no import anywhere in the chapter.
+# Expected: 5 / 150
+void main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+    print(f"{v.iter().count()}")
+    print(f"{v.iter().sum()}")

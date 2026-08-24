@@ -1,0 +1,8 @@
+# Ch5: the iterator-chain form with an eager terminal.
+# Expected: 50
+from std.iter import Iterator
+
+void main():
+    Vector[int] v = [10, 20, 30, 40]
+    int s = v.iter().filter((int x): x > 15).take(2).sum()
+    print(f"{s}")

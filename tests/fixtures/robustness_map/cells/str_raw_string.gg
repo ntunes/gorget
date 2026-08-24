@@ -1,0 +1,5 @@
+# Ch2: raw strings disable escape processing.
+# Expected: no \n escape here
+void main():
+    String raw = r"no \n escape here"
+    print(raw)

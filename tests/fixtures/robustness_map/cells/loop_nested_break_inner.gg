@@ -1,0 +1,8 @@
+# Ch3: `break` exits only the INNER loop.
+# Expected: 0,0 / 1,0
+void main():
+    for i in 0..2:
+        for j in 0..5:
+            if j == 1:
+                break
+            print(f"{i},{j}")

@@ -1,0 +1,7 @@
+# Ch5: list comprehension over a range.
+# Expected: 5 / 0 / 16
+void main():
+    Vector[int] squares = [x * x for x in 0..5]
+    print(f"{squares.len()}")
+    print(f"{squares[0]}")
+    print(f"{squares[4]}")

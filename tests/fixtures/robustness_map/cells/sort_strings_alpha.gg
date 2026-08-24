@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: sort RUNTIME-BUILT strings alphabetically.
+# Expected: apple / banana / cherry
+void main():
+    Vector[String] v = Vector[String]()
+    v.push(mk("bana", "na"))
+    v.push(mk("che", "rry"))
+    v.push(mk("ap", "ple"))
+    v.sort()
+    for s in v:
+        print(s)

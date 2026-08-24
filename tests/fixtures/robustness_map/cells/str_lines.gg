@@ -1,0 +1,8 @@
+# Ch2: lines() splits on newlines.
+# Expected: 3 / one / two / three
+void main():
+    String text = "one" + "\n" + "two" + "\n" + "three"
+    Vector[String] ls = text.lines()
+    print(f"{ls.len()}")
+    for l in ls:
+        print(l)

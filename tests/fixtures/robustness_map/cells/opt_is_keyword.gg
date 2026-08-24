@@ -1,0 +1,9 @@
+# Ch9: the `is` keyword for a quick pattern check with a binding.
+# Expected: found 42 / absent
+void main():
+    Option[int] o = Some(42)
+    if o is Some(v):
+        print(f"found {v}")
+    Option[int] n = None()
+    if n is None:
+        print("absent")

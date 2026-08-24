@@ -1,0 +1,9 @@
+# Ch5: len / is_empty on an empty and a non-empty vector.
+# Expected: 0 / true / 3 / false
+void main():
+    Vector[int] e = Vector[int]()
+    print(f"{e.len()}")
+    print(f"{e.is_empty()}")
+    auto v = [1, 2, 3]
+    print(f"{v.len()}")
+    print(f"{v.is_empty()}")

@@ -1,0 +1,9 @@
+# Beginner habit: one variable reused for several unrelated purposes.
+# Expected: 10 / 7 / 3
+void main():
+    int tmp = 10
+    print(f"{tmp}")
+    tmp = 3 + 4
+    print(f"{tmp}")
+    tmp = tmp - 4
+    print(f"{tmp}")

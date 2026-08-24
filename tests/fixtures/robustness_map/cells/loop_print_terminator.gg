@@ -1,0 +1,6 @@
+# Ch15: `terminator=` suppresses/overrides the newline (Python `end=`).
+# Expected: 1 2 3 then a newline
+void main():
+    for i in 1..4:
+        print(f"{i}", terminator=" ")
+    print("")

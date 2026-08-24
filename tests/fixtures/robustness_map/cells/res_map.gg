@@ -1,0 +1,7 @@
+# Ch9: map transforms Ok, leaves Error untouched.
+# Expected: 20 / fail
+void main():
+    Result[int, String] ok = Ok(10)
+    Result[int, String] err = Error("fail")
+    print(f"{ok.map((int x): x * 2).unwrap()}")
+    print(err.map((int x): x * 2).unwrap_error())

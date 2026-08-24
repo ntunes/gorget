@@ -1,0 +1,17 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:struct_sum (a) for-in over a vector of structs. Expected: 55
+struct Person:
+    String name
+    int age
+
+void main():
+    Vector[Person] ps = Vector[Person]()
+    ps.push(Person(mk("Al", "ice"), 30))
+    ps.push(Person(mk("B", "ob"), 25))
+    int total = 0
+    for p in ps:
+        total += p.age
+    print(f"{total}")

@@ -1,0 +1,8 @@
+# Ch4: pass a function/closure as an argument.
+# Expected: 10
+int apply(int(int) f, int x):
+    return f(x)
+
+void main():
+    int result = apply((n): n * 2, 5)
+    print(f"{result}")

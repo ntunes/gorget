@@ -1,0 +1,13 @@
+# Ch6: `.Variant` shorthand when the type is known from context.
+# Expected: east
+enum Direction:
+    North
+    East
+
+void main():
+    Direction d = .East
+    match d:
+        case North:
+            print("north")
+        case East:
+            print("east")

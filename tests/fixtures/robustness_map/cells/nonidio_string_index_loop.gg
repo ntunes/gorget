@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# C habit: index a string by position rather than iterating it.
+# Expected: h e l l o
+void main():
+    String s = mk("hel", "lo")
+    int i = 0
+    while i < s.len():
+        print(s[i], terminator=" ")
+        i += 1
+    print("")

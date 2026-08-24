@@ -1,0 +1,10 @@
+# Early exit from a void function with a bare `return`.
+# Expected: small
+void report(int x):
+    if x < 10:
+        print("small")
+        return
+    print("large")
+
+void main():
+    report(5)

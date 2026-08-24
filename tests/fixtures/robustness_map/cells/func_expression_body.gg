@@ -1,0 +1,8 @@
+# Ch4: expression-body shorthand.
+# Expected: 10 / true
+int double(int x): x * 2
+bool is_positive(int n): n > 0
+
+void main():
+    print(f"{double(5)}")
+    print(f"{is_positive(3)}")

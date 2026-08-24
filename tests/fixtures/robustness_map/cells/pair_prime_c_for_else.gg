@@ -1,0 +1,14 @@
+# pair:prime (c) for-else instead of a flag. Expected: false / true
+bool is_prime(int n):
+    if n < 2:
+        return false
+    for i in 2..n:
+        if i * i > n:
+            break
+        if n % i == 0:
+            return false
+    return true
+
+void main():
+    print(f"{is_prime(91)}")
+    print(f"{is_prime(97)}")

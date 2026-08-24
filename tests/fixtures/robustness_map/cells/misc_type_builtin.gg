@@ -1,0 +1,7 @@
+# Ch5: the documented `type()` built-in (language-reference §15).
+# Expected: int / Vector[int]
+void main():
+    int x = 42
+    print(type(x))
+    Vector[int] v = [1, 2, 3]
+    print(type(v))

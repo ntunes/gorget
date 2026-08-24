@@ -1,0 +1,13 @@
+# Ch5+Ch6: sort a vector of structs with a comparator — minimal form.
+# Expected: 25 / 30 / 40
+struct Person:
+    int age
+
+void main():
+    Vector[Person] ps = Vector[Person]()
+    ps.push(Person(30))
+    ps.push(Person(25))
+    ps.push(Person(40))
+    ps.sort((a, b): a.age - b.age)
+    for p in ps:
+        print(f"{p.age}")

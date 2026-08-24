@@ -1,0 +1,9 @@
+# Ch4/Ch12: a `&` parameter mutates the caller's value; the call site writes `&`.
+# Expected: 6
+void bump(int &n):
+    n += 1
+
+void main():
+    int x = 5
+    bump(&x)
+    print(f"{x}")

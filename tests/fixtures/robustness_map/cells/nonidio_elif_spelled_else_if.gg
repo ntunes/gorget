@@ -1,0 +1,10 @@
+# C/Java habit: `else if` on one line instead of `elif`.
+# Expected: a clean rejection pointing at `elif`.
+void main():
+    int x = 5
+    if x > 10:
+        print("big")
+    else if x > 0:
+        print("small")
+    else:
+        print("neg")

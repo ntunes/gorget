@@ -1,0 +1,7 @@
+# pair:sum_ints (a) for-in accumulator. Expected: 15
+void main():
+    Vector[int] v = [1, 2, 3, 4, 5]
+    int total = 0
+    for x in v:
+        total += x
+    print(f"{total}")

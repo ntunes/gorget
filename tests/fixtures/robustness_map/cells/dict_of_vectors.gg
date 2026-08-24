@@ -1,0 +1,9 @@
+# Ch5: a dict whose values are vectors (nested data — very common).
+# Expected: 2 / 3 / 5
+void main():
+    Dict[String, Vector[int]] d = Dict[String, Vector[int]]()
+    d.put("a", [1, 2, 3])
+    d.put("b", [4, 5])
+    print(f"{d.len()}")
+    print(f"{d["a"].len()}")
+    print(f"{d["b"][1]}")

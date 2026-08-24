@@ -1,0 +1,12 @@
+# Ch9: map / and_then / filter on Option.
+# Expected: 84 / 43 / true / true
+void main():
+    Option[int] some = Some(42)
+    Option[int] doubled = some.map((int x): x * 2)
+    print(f"{doubled.unwrap()}")
+    Option[int] chained = some.and_then((int x): Some(x + 1))
+    print(f"{chained.unwrap()}")
+    Option[int] kept = some.filter((int x): x > 40)
+    print(f"{kept.is_some()}")
+    Option[int] dropped = some.filter((int x): x > 50)
+    print(f"{dropped.is_none()}")

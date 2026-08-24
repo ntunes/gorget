@@ -1,0 +1,14 @@
+# pair:prime (a) early return from the loop. Expected: false / true
+bool is_prime(int n):
+    if n < 2:
+        return false
+    int i = 2
+    while i * i <= n:
+        if n % i == 0:
+            return false
+        i += 1
+    return true
+
+void main():
+    print(f"{is_prime(91)}")
+    print(f"{is_prime(97)}")

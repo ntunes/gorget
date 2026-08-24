@@ -1,0 +1,7 @@
+# Ch1: `const` declarations are usable like any other value.
+# Expected: 1024 / 500
+void main():
+    const int MAX_SIZE = 1024
+    const auto LIMIT = 500
+    print(f"{MAX_SIZE}")
+    print(f"{LIMIT}")

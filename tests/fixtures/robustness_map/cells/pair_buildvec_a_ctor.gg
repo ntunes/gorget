@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:build_strvec (a) explicit constructor. Expected: 3 / n0 / n2
+void main():
+    Vector[String] v = Vector[String]()
+    for i in 0..3:
+        v.push(mk("n", f"{i}"))
+    print(f"{v.len()}")
+    print(v[0])
+    print(v[2])

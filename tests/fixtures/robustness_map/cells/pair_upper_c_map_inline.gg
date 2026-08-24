@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:upper_strings (c) .map with an INLINE closure. Expected: ALPHA/BETA
+void main():
+    Vector[String] v = Vector[String]()
+    v.push(mk("al", "pha"))
+    v.push(mk("be", "ta"))
+    Vector[String] out = v.map((String s): s.to_upper())
+    print(out[0])
+    print(out[1])

@@ -1,0 +1,18 @@
+# Ch5: intersection / union / difference / is_subset.
+# Expected: 2 / 4 / 1 / false
+from std.collections import Set
+
+void main():
+    Set[int] a = Set[int]()
+    a.add(1)
+    a.add(2)
+    a.add(3)
+    Set[int] b = Set[int]()
+    b.add(2)
+    b.add(3)
+    b.add(4)
+    print(f"{a.intersection(b).len()}")
+    print(f"{a.union(b).len()}")
+    print(f"{a.difference(b).len()}")
+    bool sub = a.is_subset(b)
+    print(f"{sub}")

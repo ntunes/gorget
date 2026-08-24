@@ -1,0 +1,8 @@
+# Ch4: a multi-line closure — the last expression is the value.
+# Expected: 11
+void main():
+    auto process = (int x):
+        int result = x * 2
+        result += 1
+        result
+    print(f"{process(5)}")

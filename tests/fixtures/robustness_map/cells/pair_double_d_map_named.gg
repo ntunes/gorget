@@ -1,0 +1,7 @@
+# pair:double_ints (d) .map with a NAMED function. Expected: 2,4,6
+int twice(int x): x * 2
+
+void main():
+    Vector[int] v = [1, 2, 3]
+    Vector[int] out = v.map(twice)
+    print(f"{out[0]},{out[1]},{out[2]}")

@@ -1,0 +1,9 @@
+# Ch5/Ch11: assigning a vector to a new name, then mutating through it.
+# CoW says the borrow severs on the first mutation, so the source is unchanged.
+# Expected: 4 / 3
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = a
+    b.push(9)
+    print(f"{b.len()}")
+    print(f"{a.len()}")

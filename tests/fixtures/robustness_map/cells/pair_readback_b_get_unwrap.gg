@@ -1,0 +1,10 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:read_back (b) get().unwrap(). Expected: beta
+void main():
+    Vector[String] v = Vector[String]()
+    v.push(mk("al", "pha"))
+    v.push(mk("be", "ta"))
+    print(v.get(1).unwrap())

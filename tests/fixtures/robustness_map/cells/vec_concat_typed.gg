@@ -1,0 +1,8 @@
+# Ch5: `+` on two EXPLICITLY-typed vectors (companion to vec_concat, which uses `auto`).
+# Expected: 5 / 1,2,3,4,5
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [4, 5]
+    Vector[int] c = a + b
+    print(f"{c.len()}")
+    print(f"{c[0]},{c[1]},{c[2]},{c[3]},{c[4]}")

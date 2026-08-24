@@ -1,0 +1,7 @@
+# Ch1: print() takes any Displayable, so a bare int/bool needs no f-string.
+# Expected: 42 / true
+void main():
+    int x = 42
+    bool b = true
+    print(x)
+    print(b)

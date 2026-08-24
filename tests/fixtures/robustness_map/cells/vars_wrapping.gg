@@ -1,0 +1,8 @@
+# Ch2: the wrapping arithmetic forms never trap.
+# Expected: 7 / 6 / 12
+void main():
+    int a = 3
+    int b = 4
+    print(f"{a +% b}")
+    print(f"{10 -% b}")
+    print(f"{a *% b}")

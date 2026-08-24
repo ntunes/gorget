@@ -1,0 +1,7 @@
+# Ch4: reassign a function-typed variable — the book's own Ch4 example.
+# Expected: 7 / 12
+void main():
+    int(int, int) op = (a, b): a + b
+    print(f"{op(3, 4)}")
+    op = (a, b): a * b
+    print(f"{op(3, 4)}")

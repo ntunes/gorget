@@ -1,0 +1,6 @@
+# pair:max_of (b) iterator terminal. Expected: 9
+from std.iter import Iterator
+
+void main():
+    Vector[int] v = [4, 1, 9, 3]
+    print(f"{v.iter().max().unwrap()}")

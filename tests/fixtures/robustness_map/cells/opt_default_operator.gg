@@ -1,0 +1,9 @@
+# Ch9: the `??` default operator on a plain Option local.
+# Expected: 42 / 7
+void main():
+    Option[int] x = Some(42)
+    Option[int] y = None()
+    int a = x ?? 7
+    int b = y ?? 7
+    print(f"{a}")
+    print(f"{b}")

@@ -1,0 +1,7 @@
+# Ch5: push onto a literal-initialised vector.
+# Expected: 4 / 40
+void main():
+    auto v = [10, 20, 30]
+    v.push(40)
+    print(f"{v.len()}")
+    print(f"{v[3]}")

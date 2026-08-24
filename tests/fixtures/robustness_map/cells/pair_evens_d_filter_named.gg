@@ -1,0 +1,8 @@
+# pair:filter_evens (d) .filter with a NAMED predicate. Expected: 3 / 2,4,6
+bool even(int x): x % 2 == 0
+
+void main():
+    Vector[int] v = [1, 2, 3, 4, 5, 6]
+    Vector[int] out = v.filter(even)
+    print(f"{out.len()}")
+    print(f"{out[0]},{out[1]},{out[2]}")

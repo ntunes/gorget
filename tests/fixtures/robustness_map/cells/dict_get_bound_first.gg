@@ -1,0 +1,17 @@
+# Ch5/Ch9: bind the Option to a local before matching on it.
+# Expected: 30 / missing
+void main():
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put("Alice", 30)
+    Option[int] hit = ages.get("Alice")
+    match hit:
+        case Some(a):
+            print(f"{a}")
+        case None:
+            print("missing")
+    Option[int] miss = ages.get("Eve")
+    match miss:
+        case Some(a):
+            print(f"{a}")
+        case None:
+            print("missing")

@@ -1,0 +1,9 @@
+# Ch3+Ch5: build a vector inside a loop — the everyday beginner shape.
+# Expected: 5 / 0 / 8
+void main():
+    Vector[int] squares = Vector[int]()
+    for i in 0..5:
+        squares.push(i * i)
+    print(f"{squares.len()}")
+    print(f"{squares[0]}")
+    print(f"{squares[1] + squares[3]}")

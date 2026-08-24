@@ -1,0 +1,7 @@
+# Ch3: accumulate with `+=` in a loop (no builder).
+# Expected: xxxx
+void main():
+    String out = ""
+    for i in 0..4:
+        out += "x"
+    print(out)

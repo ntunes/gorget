@@ -1,0 +1,14 @@
+# Ch5: pop() on an explicitly-typed vector, result bound before use.
+# Expected: 30 / 2 / empty
+void main():
+    Vector[int] v = [10, 20, 30]
+    Option[int] last = v.pop()
+    print(f"{last.unwrap()}")
+    print(f"{v.len()}")
+    Vector[int] e = Vector[int]()
+    Option[int] none = e.pop()
+    match none:
+        case Some(x):
+            print(f"{x}")
+        case None:
+            print("empty")

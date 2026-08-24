@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Classic: find the longest word in a sentence.
+# Expected: quick
+void main():
+    String s = mk("the quick", " fox")
+    String best = ""
+    for w in s.split(" "):
+        if w.len() > best.len():
+            best = w
+    print(best)

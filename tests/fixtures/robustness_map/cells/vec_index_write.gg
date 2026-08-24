@@ -1,0 +1,7 @@
+# Ch5: subscript write.
+# Expected: 99 / 30
+void main():
+    auto v = [10, 20, 30]
+    v[0] = 99
+    print(f"{v[0]}")
+    print(f"{v[2]}")

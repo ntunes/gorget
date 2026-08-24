@@ -1,0 +1,11 @@
+# Ch1: type-first declarations of each primitive, printed.
+# Expected: 5 / true / hello / 3.14
+void main():
+    int x = 5
+    bool flag = true
+    String s = "hello"
+    float pi = 3.14159
+    print(f"{x}")
+    print(f"{flag}")
+    print(s)
+    print(f"{pi:.2f}")

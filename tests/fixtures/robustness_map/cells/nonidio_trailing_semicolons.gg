@@ -1,0 +1,5 @@
+# C/Java habit: a semicolon at the end of every statement.
+# Expected: either accepted as a no-op, or a clean rejection.
+void main():
+    int x = 5;
+    print(f"{x}");

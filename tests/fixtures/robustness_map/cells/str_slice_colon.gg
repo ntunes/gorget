@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: colon-slice on a runtime-built string, all four accept-forms.
+# Expected: ell / llo / hel / hello
+void main():
+    String s = mk("hel", "lo")
+    print(s[1:4])
+    print(s[2:])
+    print(s[:3])
+    print(s[:])

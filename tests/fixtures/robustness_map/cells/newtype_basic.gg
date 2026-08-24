@@ -1,0 +1,7 @@
+# Ch6: a newtype wraps an int; the inner value is read with `.0`.
+# Expected: 42
+newtype UserId(int)
+
+void main():
+    UserId id = UserId(42)
+    print(f"{id.0}")

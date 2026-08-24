@@ -1,0 +1,10 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch2: `+=` appends in place to a runtime-built string.
+# Expected: alpha!
+void main():
+    String s = mk("al", "pha")
+    s += "!"
+    print(s)

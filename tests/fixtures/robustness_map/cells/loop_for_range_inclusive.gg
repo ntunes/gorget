@@ -1,0 +1,5 @@
+# Ch3: `0..=3` includes the end.
+# Expected: 0 1 2 3
+void main():
+    for i in 0..=3:
+        print(f"{i}")

@@ -1,0 +1,9 @@
+# Ch5: a nested vector literal with rows of DIFFERENT lengths — what a
+# flatten / grouped-data exercise always looks like.
+# Expected: 3 / 2 / 1 / 2
+void main():
+    Vector[Vector[int]] nested = [[1, 2], [3], [4, 5]]
+    print(f"{nested.len()}")
+    print(f"{nested[0].len()}")
+    print(f"{nested[1].len()}")
+    print(f"{nested[2].len()}")

@@ -1,0 +1,6 @@
+# Classic: second-largest element.
+# Expected: 7
+void main():
+    Vector[int] v = [3, 9, 7, 1]
+    Vector[int] s = v.sorted()
+    print(f"{s[s.len() - 2]}")

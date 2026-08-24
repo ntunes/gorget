@@ -1,0 +1,6 @@
+# Ch3: iterate a vector directly.
+# Expected: 10 20 30
+void main():
+    Vector[int] v = [10, 20, 30]
+    for x in v:
+        print(f"{x}")

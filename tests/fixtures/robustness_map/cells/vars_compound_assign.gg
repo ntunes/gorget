@@ -1,0 +1,14 @@
+# Ch2: compound assignment operators.
+# Expected: 15 / 12 / 24 / 8 / 3
+void main():
+    int x = 10
+    x += 5
+    print(f"{x}")
+    x -= 3
+    print(f"{x}")
+    x *= 2
+    print(f"{x}")
+    x /= 3
+    print(f"{x}")
+    x %= 5
+    print(f"{x}")

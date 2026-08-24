@@ -1,0 +1,13 @@
+# Ch5+Ch6: a vector of structs.
+# Expected: 2 / 1 / 30
+struct Point:
+    int x
+    int y
+
+void main():
+    Vector[Point] pts = Vector[Point]()
+    pts.push(Point(1, 2))
+    pts.push(Point(10, 30))
+    print(f"{pts.len()}")
+    print(f"{pts[0].x}")
+    print(f"{pts[1].y}")

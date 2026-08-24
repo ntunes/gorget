@@ -1,0 +1,7 @@
+# Ch1: f-strings interpolate arbitrary expressions and escape braces by doubling.
+# Expected: sum=7 / {literal}
+void main():
+    int a = 3
+    int b = 4
+    print(f"sum={a + b}")
+    print(f"{{literal}}")

@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Classic: capitalise the first letter of every word.
+# Expected: Hello World
+void main():
+    String s = mk("hello ", "world")
+    Vector[String] words = s.split(" ")
+    Vector[String] out = Vector[String]()
+    for w in words:
+        out.push(w[0].to_upper() + w[1:])
+    print(" ".join(out))

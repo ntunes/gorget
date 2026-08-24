@@ -1,0 +1,11 @@
+# Ch3: combining conditions with and / or / not.
+# Expected: in-range / out
+void check(int x):
+    if x >= 0 and x <= 10:
+        print("in-range")
+    else:
+        print("out")
+
+void main():
+    check(5)
+    check(50)

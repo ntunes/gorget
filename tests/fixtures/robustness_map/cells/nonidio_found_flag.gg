@@ -1,0 +1,12 @@
+# Beginner habit: a `found` flag instead of for-else.
+# Expected: found
+void main():
+    Vector[int] v = [1, 2, 3]
+    bool found = false
+    for x in v:
+        if x == 2:
+            found = true
+    if found:
+        print("found")
+    else:
+        print("not found")

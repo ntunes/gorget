@@ -1,0 +1,8 @@
+# Ch4: pass a closure into a function that calls it twice.
+# Expected: 4 / 9
+int twice_apply(int(int) f, int a, int b):
+    return f(a) + f(b)
+
+void main():
+    print(f"{twice_apply((n): n * n, 2, 0)}")
+    print(f"{twice_apply((n): n * n, 3, 0)}")

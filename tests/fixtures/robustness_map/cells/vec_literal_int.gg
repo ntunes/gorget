@@ -1,0 +1,7 @@
+# Ch5: vector literal, subscript read, len.
+# Expected: 10 / 30 / 3
+void main():
+    auto v = [10, 20, 30]
+    print(f"{v[0]}")
+    print(f"{v[2]}")
+    print(f"{v.len()}")

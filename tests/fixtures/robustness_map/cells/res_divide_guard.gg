@@ -1,0 +1,18 @@
+# Ch9: a fallible operation returning Result — the divide-by-zero exercise.
+# Expected: 5 / cannot divide by zero
+Result[int, String] safe_div(int a, int b):
+    if b == 0:
+        return Error("cannot divide by zero")
+    return Ok(a / b)
+
+void main():
+    match safe_div(10, 2):
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print(e)
+    match safe_div(10, 0):
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print(e)

@@ -1,0 +1,20 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:dict_count (c) match on the bound Option. Expected: a=2 / b=1
+void main():
+    Vector[String] ws = Vector[String]()
+    ws.push(mk("", "a"))
+    ws.push(mk("", "b"))
+    ws.push(mk("", "a"))
+    Dict[String, int] c = Dict[String, int]()
+    for w in ws:
+        Option[int] cur = c.get(w)
+        match cur:
+            case Some(n):
+                c.put(w, n + 1)
+            case None:
+                c.put(w, 1)
+    for k, v in c:
+        print(f"{k}={v}")

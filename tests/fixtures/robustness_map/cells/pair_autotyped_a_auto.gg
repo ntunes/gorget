@@ -1,0 +1,8 @@
+# pair:auto_vs_typed (a) `auto` destinations throughout. Expected: 12 / 3
+void main():
+    auto a = 5
+    auto b = 7
+    auto s = a + b
+    auto v = [1, 2, 3]
+    print(f"{s}")
+    print(f"{v.len()}")

@@ -1,0 +1,15 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:dict_count (a) get().unwrap_or(0). Expected: a=2 / b=1
+void main():
+    Vector[String] ws = Vector[String]()
+    ws.push(mk("", "a"))
+    ws.push(mk("", "b"))
+    ws.push(mk("", "a"))
+    Dict[String, int] c = Dict[String, int]()
+    for w in ws:
+        c.put(w, c.get(w).unwrap_or(0) + 1)
+    for k, v in c:
+        print(f"{k}={v}")

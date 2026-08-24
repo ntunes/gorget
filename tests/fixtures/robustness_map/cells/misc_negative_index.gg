@@ -1,0 +1,6 @@
+# Ch2: negative index on a String counts from the end (language-reference
+# §String indexing). Beginners try this constantly.
+# Expected: o
+void main():
+    String s = "hello"
+    print(s[-1])

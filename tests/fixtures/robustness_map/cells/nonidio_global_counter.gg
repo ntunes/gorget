@@ -1,0 +1,12 @@
+# C habit: a module-level mutable counter.
+# Expected: 1 / 2
+int counter = 0
+
+void bump():
+    counter += 1
+
+void main():
+    bump()
+    print(f"{counter}")
+    bump()
+    print(f"{counter}")

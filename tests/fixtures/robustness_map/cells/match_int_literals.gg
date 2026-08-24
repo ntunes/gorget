@@ -1,0 +1,15 @@
+# Ch3: match on int literals with an else catch-all.
+# Expected: none / one / many
+void say(int n):
+    match n:
+        case 0:
+            print("none")
+        case 1:
+            print("one")
+        else:
+            print("many")
+
+void main():
+    say(0)
+    say(1)
+    say(7)

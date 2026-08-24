@@ -1,0 +1,11 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch4: a function that takes and returns runtime-built Strings.
+# Expected: ALPHA
+String shout(String s):
+    return s.to_upper()
+
+void main():
+    print(shout(mk("al", "pha")))

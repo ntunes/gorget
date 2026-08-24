@@ -1,0 +1,5 @@
+# pair:max_of (c) sort and take the last. Expected: 9
+void main():
+    Vector[int] v = [4, 1, 9, 3]
+    Vector[int] s = v.sorted()
+    print(f"{s[s.len() - 1]}")

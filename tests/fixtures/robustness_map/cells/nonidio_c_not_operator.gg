@@ -1,0 +1,6 @@
+# C/Java habit: `!cond` instead of `not cond`.
+# Expected: a clean rejection pointing at `not`.
+void main():
+    bool flag = false
+    if !flag:
+        print("yes")

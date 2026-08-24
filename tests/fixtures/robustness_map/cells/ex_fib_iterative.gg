@@ -1,0 +1,10 @@
+# Classic: fibonacci with a loop.
+# Expected: 0 1 1 2 3 5 8 13
+void main():
+    int a = 0
+    int b = 1
+    for i in 0..8:
+        print(f"{a}")
+        int next = a + b
+        a = b
+        b = next

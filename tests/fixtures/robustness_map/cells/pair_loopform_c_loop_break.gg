@@ -1,0 +1,8 @@
+# pair:loop_forms (c) infinite loop plus break. Expected: 0 1 2
+void main():
+    int i = 0
+    loop:
+        if i >= 3:
+            break
+        print(f"{i}")
+        i += 1

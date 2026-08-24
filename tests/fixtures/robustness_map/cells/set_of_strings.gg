@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: a Set of RUNTIME-BUILT strings deduplicates by value.
+# Expected: 2
+from std.collections import Set
+
+void main():
+    Set[String] s = Set[String]()
+    s.add(mk("al", "pha"))
+    s.add(mk("be", "ta"))
+    s.add(mk("alp", "ha"))
+    print(f"{s.len()}")

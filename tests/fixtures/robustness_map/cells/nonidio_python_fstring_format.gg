@@ -1,0 +1,5 @@
+# Python habit: printf-style `%` formatting.
+# Expected: a clean rejection pointing at f-strings.
+void main():
+    int x = 5
+    print("x = %d" % x)

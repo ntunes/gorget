@@ -1,0 +1,8 @@
+# pair:max_of (a) track the best in a loop. Expected: 9
+void main():
+    Vector[int] v = [4, 1, 9, 3]
+    int best = v[0]
+    for x in v:
+        if x > best:
+            best = x
+    print(f"{best}")

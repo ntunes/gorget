@@ -1,0 +1,8 @@
+# Ch2: what does a bare float print as? Documented nowhere in the book;
+# every existing fixture shows %f (6 decimals), so that is the expectation.
+# Expected: 3.140000 / 1.000000
+void main():
+    float a = 3.14
+    float b = 1.0
+    print(f"{a}")
+    print(f"{b}")

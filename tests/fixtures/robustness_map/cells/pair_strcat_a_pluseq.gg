@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:strcat (a) += in a loop over runtime pieces. Expected: abc
+void main():
+    Vector[String] parts = Vector[String]()
+    parts.push(mk("", "a"))
+    parts.push(mk("", "b"))
+    parts.push(mk("", "c"))
+    String out = ""
+    for p in parts:
+        out += p
+    print(out)

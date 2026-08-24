@@ -1,0 +1,8 @@
+# Ch5: `counts[word] += 1` — increment a value in place.
+# Expected: 3
+void main():
+    Dict[String, int] counts = Dict[String, int]()
+    counts.put("a", 1)
+    counts["a"] += 1
+    counts["a"] += 1
+    print(f"{counts["a"]}")

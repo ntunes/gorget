@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch5: sort_by_key — order strings by length.
+# Expected: fig / apple / banana
+void main():
+    Vector[String] words = Vector[String]()
+    words.push(mk("bana", "na"))
+    words.push(mk("f", "ig"))
+    words.push(mk("ap", "ple"))
+    words.sort_by_key((s): s.len())
+    for w in words:
+        print(w)

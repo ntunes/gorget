@@ -1,0 +1,3 @@
+# Demonstrates: hello world. Expected: "Hello, World!"
+void main():
+    print("Hello, World!")

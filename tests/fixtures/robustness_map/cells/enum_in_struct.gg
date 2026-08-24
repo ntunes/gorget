@@ -1,0 +1,21 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch6: struct + enum composed, matched on the field.
+# Expected: alpha -> mail
+enum Method:
+    Email
+    Mail
+
+struct Person:
+    String name
+    Method how
+
+void main():
+    Person p = Person(mk("al", "pha"), Method.Mail)
+    match p.how:
+        case Email:
+            print(f"{p.name} -> email")
+        case Mail:
+            print(f"{p.name} -> mail")

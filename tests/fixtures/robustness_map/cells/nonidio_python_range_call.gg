@@ -1,0 +1,5 @@
+# Python habit: `range(5)`. Gorget uses `0..5`; there is no range function.
+# Expected: a clean rejection naming `range` and pointing at `..`.
+void main():
+    for i in range(5):
+        print(f"{i}")

@@ -1,0 +1,9 @@
+# Ch5: subscript write inserts a new key and updates an existing one.
+# Expected: 3 / 30 / 99
+void main():
+    Dict[String, int] d = {"x": 10, "y": 20}
+    d["z"] = 30
+    d["x"] = 99
+    print(f"{d.len()}")
+    print(f"{d["z"]}")
+    print(f"{d["x"]}")

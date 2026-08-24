@@ -1,0 +1,18 @@
+# Ch5: membership test and index lookup.
+# Expected: true / false / 1 / missing
+void main():
+    auto v = [10, 20, 30]
+    bool has = v.contains(20)
+    bool no = v.contains(99)
+    print(f"{has}")
+    print(f"{no}")
+    match v.index_of(20):
+        case Some(i):
+            print(f"{i}")
+        case None:
+            print("missing")
+    match v.index_of(99):
+        case Some(i):
+            print(f"{i}")
+        case None:
+            print("missing")

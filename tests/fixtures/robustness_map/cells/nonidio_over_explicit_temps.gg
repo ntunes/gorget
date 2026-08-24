@@ -1,0 +1,9 @@
+# Java habit: a named, explicitly-typed temporary for every step.
+# Expected: 30
+void main():
+    int a = 5
+    int b = 6
+    int product = a * b
+    int result = product
+    int finalValue = result
+    print(f"{finalValue}")

@@ -1,0 +1,11 @@
+# Ch6: assign to a struct field.
+# Expected: 1 / 99
+struct Point:
+    int x
+    int y
+
+void main():
+    Point p = Point(1, 2)
+    print(f"{p.x}")
+    p.y = 99
+    print(f"{p.y}")

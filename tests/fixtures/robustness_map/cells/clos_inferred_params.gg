@@ -1,0 +1,5 @@
+# Ch4: closure parameter types can be inferred.
+# Expected: 7
+void main():
+    auto add = (a, b): a + b
+    print(f"{add(3, 4)}")
