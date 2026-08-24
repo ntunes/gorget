@@ -13,6 +13,7 @@
 !**/*.toml
 !**/*.expected
 !**/*.txt
+!**/*.tsv
 !**/*.lock
 !**/*.md
 !**/*.sh
