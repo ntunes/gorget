@@ -1,0 +1,41 @@
+# KNOWN GAP — BOTH LANES silently print a RAW POINTER for ordinary code, rc 0.
+#
+#     auto v = []
+#     v.push(mk("alp", "ha"))
+#     print(v.get(0).unwrap())     # prints e.g. 187650178232992, not "alpha"
+#
+# The `auto` empty-collection literal mints its array before the element type is
+# known, so the element is stored/read as an 8-byte scalar and a `String` comes
+# back out as its pointer value. No crash, no diagnostic -- the silently-wrong
+# cell.
+#
+# The TYPED destination is CORRECT (prints "alpha"):
+#
+#     Vector[String] v = []
+#
+# so the discriminator is the DESTINATION DECLARATION (`auto` vs typed), and the
+# element type is available at the first `push` -- this is a missing
+# write-through, not missing information (Layering rule 4: resolve once, write
+# through).
+#
+# ⚠ DISTINCT from the two filed siblings: TODO.md:269 is a COMPREHENSION
+# mis-typing its accumulator on the SELF-HOST lane; TODO.md:960 is a QUALIFIED
+# variant-ctor array-literal argument, also self-host. This one needs neither a
+# comprehension nor an enum constructor, and it is WRONG ON THE RUST LANE TOO.
+#
+# ⚠ ggdef (the definitional oracle) says `2` / `alpha!` for the equivalent
+# shape -- so BOTH real lanes agree on a WRONG answer, which under Core #8 is
+# >=2 bugs and never a parity pass.
+#
+# INTENDED (asserted below): prints 2 then alpha.
+# Measured 2026-08-24 by R44 Track-K brief-review pass 6, orchestrator-verified.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    auto v = []
+    v.push(mk("alp", "ha"))
+    v.push(mk("bet", "a"))
+    print(v.len())
+    print(v.get(0).unwrap())

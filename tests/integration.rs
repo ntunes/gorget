@@ -4656,6 +4656,30 @@ fn known_gap_comprehension_over_enumerate_cc_fail() {
     run_gg("known_gaps/comprehension_over_enumerate_cc_fail.gg", "2");
 }
 
+/// KNOWN GAP (both lanes): an `auto` empty-collection literal mints its array
+/// before the element type is known, so a pushed `String` is stored and read as
+/// an 8-byte scalar and comes back out as its raw pointer value — printed at
+/// rc 0 with no crash and no diagnostic.
+///
+/// The typed destination (`Vector[String] v = []`) is correct, so the
+/// discriminator is the destination declaration, and the element type IS
+/// available at the first `push` — a missing write-through rather than missing
+/// information (Layering rule 4: resolve once, write through).
+///
+/// Distinct from the comprehension accumulator gap (self-host, needs a
+/// comprehension) and the qualified variant-ctor literal gap (self-host, needs
+/// an enum constructor): this needs neither and is wrong on the Rust lane too.
+/// ggdef adjudicates the correct answer, so both real lanes agreeing here is
+/// Core #8's trap, not a parity pass.
+#[test]
+#[ignore = "known gap (R44): `auto v = []` + push(String) prints a raw pointer on both lanes because the array is minted before the element type is known; un-ignore when the element type is written through from the first push"]
+fn known_gap_auto_empty_literal_push_string_raw_pointer() {
+    run_gg(
+        "known_gaps/auto_empty_literal_push_string_raw_pointer.gg",
+        "2\nalpha",
+    );
+}
+
 // KNOWN GAP (filed R44 Track D) — Rust `apply_inferred_method_targs`
 // (src/semantic/typecheck.rs) is a non-exhaustive traversal ending in a bare
 // `_ => {}`, so an Iterator terminal in an ASSERT CONDITION keeps its bare
