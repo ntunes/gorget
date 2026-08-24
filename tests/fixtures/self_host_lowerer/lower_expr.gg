@@ -31,6 +31,7 @@ from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, Capture
 from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
 from lower import expr_kind, pat_kind, stmt_kind
+from lower import materialize_loop_carried_bare_params
 from lower import collection_kind_of, collection_kind_eq, int_vec_contains, method_mutates_receiver, cow_materialize_projected_root, mutinf_named_recv_writes_self, mutinf_projected_recv_writes_self, mutinf_expr_is_self_rooted
 from lower import inherit_borrow_from, set_field_borrow, cow_register_alias, decide_svardecl_emission
 from lower import classify_call_arg, is_consume_kind, op_consume, decide_operand_at_consuming_arg, decide_ptr_consume
@@ -7383,7 +7384,8 @@ int lower_dict_fold(LowerCtx &ctx, int recv, String recv_type_name, SpannedExpr 
 # ── List comprehension lowering ──────────────────────────
 # `[comp_expr for var in iterable if filter]` → a loop that builds an
 # array accumulator. Mirrors Rust `lower_list_comprehension`
-# (src/ir/lowering/exprs/collections.rs:509), but reuses the self-host's
+# (`src/ir/lowering/exprs/collections.rs` — cite it by FUNCTION NAME; every
+# line-number cite in this band was measured stale), but reuses the self-host's
 # existing run-proven `lower_for_*` loop machinery instead of re-emitting
 # the loop scaffold: synthesize an `acc.push(comp_expr)` body (wrapped in
 # `if filter:` for the filtered variant) and route it through
@@ -7404,9 +7406,11 @@ int lower_dict_fold(LowerCtx &ctx, int recv, String recv_type_name, SpannedExpr 
 # the `for c in s: stack.push(c)` idiom).
 int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_name, SpannedExpr iterable, Option[Box[SpannedExpr]] filt_opt, GirModule &gmod):
     Span span = comp_expr.span
+    materialize_loop_carried_bare_params(&ctx, &gmod, comp_expr.span.start)
     # ── RANGE base: `[x for x in start..end]` / `[x for x in start..=end]`.
     # The ERange's inclusive flag (`rng_incl`) threads into `lower_for_range`,
-    # which picks `<=` vs `<`. Mirrors collections.rs:520.
+    # which picks `<=` vs `<`. Mirrors the range arm of Rust's
+    # `drive_comprehension_loop` (`src/ir/lowering/stmts/for_loops.rs`).
     match iterable.expr:
         case ERange(start_opt, end_opt, rng_incl):
             match start_opt:
@@ -7427,9 +7431,31 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
                             # identical to before. (A range comp whose body
                             # changes the element type, e.g. `[float(x) for x
                             # in 0..n]`, is a known edge — same scalar-8-byte
-                            # limitation the Rust gg range-comp accumulator has,
-                            # collections.rs:520. The element type is recovered
-                            # from a TYPED VarDecl when one is present.)
+                            # limitation the Rust gg range-comp accumulator
+                            # USED to have.)
+                            #
+                            # ⚠ CORRECTED (R44). This paragraph used to end
+                            # "The element type is recovered from a TYPED
+                            # VarDecl when one is present." That was FALSE, and
+                            # measurably so: three lines below, `"int64_t"` is
+                            # hardcoded TWICE, and no VarDecl is consulted
+                            # anywhere on this path. Measured by outcome, with
+                            # an explicitly typed destination —
+                            # `Vector[String] ss = [int_to_str(i) for i in
+                            # 0..3]` — this arm prints a RAW POINTER as the
+                            # element. The Rust cite was false too: the mirror
+                            # is `lower_list_comprehension` in
+                            # `src/ir/lowering/exprs/collections.rs` (cite it by
+                            # FUNCTION NAME; every line-number cite in this band
+                            # had drifted).
+                            #
+                            # ⚠ AND THE RUST LANE NO LONGER HAS THIS
+                            # LIMITATION. R44 made the Rust comprehension mint
+                            # DEFERRED — the accumulator constructor is emitted
+                            # into a block left unterminated until the loop body
+                            # has produced a MATERIALIZED element — so it takes
+                            # the RESULT element type. This range arm is a
+                            # SURVIVING self-host residual, routed to Track K.
                             int racc_tid = collection_accumulator_tid(&gmod, "array", "int64_t", "", "")
                             int racc = comp_make_acc(&ctx, racc_tid, "int64_t", &gmod)
                             String racc_name = "__listcomp_acc_" + int_to_str(racc)
@@ -7474,9 +7500,28 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
         lower_for_string(&ctx, var_pat, coll_local, false, sbody, &gmod, false)
         return sacc
     # ── VECTOR base: idx-walk via `lower_for_vector`. Accumulator element
-    # type recovered from the SOURCE collection name (the element-preserving
-    # common case — `[x for x in v]`, `[x*2 for x in v]`); a body that
-    # changes the element type recovers it from a TYPED VarDecl when present.
+    # type recovered from the SOURCE collection name — correct ONLY for the
+    # element-PRESERVING case (`[x for x in v]`, `[x*2 for x in v]`).
+    #
+    # ⛔ KNOWN-WRONG for a body that CHANGES the element type, and this is the
+    # round's headline defect on this lane. The sentence that used to close
+    # this paragraph — "a body that changes the element type recovers it from a
+    # TYPED VarDecl when present" — was FALSE: `collection_element_type(coll_tn)`
+    # below reads the SOURCE collection's name and NOTHING consults a VarDecl.
+    # Measured by outcome on BOTH lanes at HEAD:
+    # `Vector[int] lens = [w.len() for w in words]` over a `Vector[String]`
+    # SIGSEGVs (rc 139) because the result-push copies at the SOURCE element's
+    # width.
+    #
+    # THE RULE: this arm is wrong iff the SOURCE element name differs from the
+    # RESULT element name.
+    #
+    # The RUST lane was FIXED in R44 (a DEFERRED mint taking the MATERIALIZED
+    # result element's type). The self-host residual is routed to Track K and
+    # pinned by `known_gaps/sh_comprehension_list_arm_source_derived_mint.gg`.
+    # Do NOT "fix" it by deriving the name from the comprehension BODY — four
+    # successive body/source-derived remedies were each BUILT and each broke a
+    # different cell.
     # Type the accumulator LOCAL with the element-carrying `Vector__<elem>`
     # (via the centralized helper) — NOT a bare GorgetArray — so an
     # auto-bound result is self-describing for a downstream `v[i]` / `for x
@@ -7539,20 +7584,42 @@ Vector[Stmt] comp_synth_body(String acc_name, SpannedExpr comp_expr, Option[Box[
 # `Set__int64_t`-typed accumulator. Same philosophy as
 # `lower_list_comprehension`: synthesize an `acc.add(comp_expr)` body
 # (wrapped in `if filter:` for the filtered variant) and route it through
-# the run-proven `lower_for_range` loop machinery. The destination VarDecl
-# lowers to a `Set__int64_t` LOCAL, so the accumulator is typed with that
-# same MANGLED element-carrying name (NOT the raw `GorgetSet`): the
-# mangled name carries the element metadata `resource_meta_for`/
-# `coll_elem_type_map` need (it routes to the `GorgetSet` runtime category
-# in `lir_lower.gg`) AND makes the comprehension result type match the
-# destination at the CoW/assignment boundary. This deliberately DIVERGES
-# from Rust's raw-`GorgetSet` set-comp shape (collections.rs:872), which
-# is correct for Rust but not for the self-host's mangled-name CoW layer.
+# the run-proven `lower_for_range` / `lower_for_vector` loop machinery.
 #
-# Range-only is sufficient (both corpus fixtures iterate `start..end`);
-# non-range falls back to Unit, the SAME as Rust (collections.rs:932).
+# ⛔ `Set__int64_t` IS A KNOWN-WRONG HARDCODE, NOT A DESIGN CHOICE — this
+# paragraph used to present it as one ("The destination VarDecl lowers to a
+# `Set__int64_t` LOCAL, so the accumulator is typed with that same MANGLED
+# element-carrying name"). `comp_make_set_acc` takes NO element-type parameter,
+# so the accumulator is `Set__int64_t` for EVERY element type, including
+# `String` — which is compared as an 8-byte POINTER, giving
+# `s.contains(runtime_built_string) == false` at rc 0. Measured; and with
+# string LITERALS the same broken shape reads `true`, so a literal-backed probe
+# is a false negative here.
+#
+# What IS correct in the mangled-name choice: the mangled name (rather than the
+# raw `GorgetSet`) carries the element metadata `resource_meta_for` /
+# `coll_elem_type_map` need, routes to the `GorgetSet` runtime category in
+# `lir_lower.gg`, and makes the comprehension result type match the destination
+# at the CoW/assignment boundary. The element name in it is the part that is
+# wrong. The set LITERAL path already does this correctly — see the comment
+# above `__gorget_set_new_sized_` in `lower_expr.gg`, which records why the raw
+# runtime symbol withholds the element type from every downstream reader.
+#
+# The Rust set-comp shape is `lower_set_comprehension` in
+# `src/ir/lowering/exprs/collections.rs` (cite by FUNCTION NAME — the old
+# `collections.rs:872` cite resolved to the ARRAY comp, and every line-number
+# cite in this band was measured stale). As of R44 Rust mints its accumulator
+# from the MATERIALIZED element, so there is no longer a raw-`GorgetSet`
+# divergence to preserve; the self-host residual is routed to Track K and
+# pinned by `known_gaps/sh_comprehension_set_acc_scalar_hardcode.gg`.
+#
+# ⚠ NOT range-only any more. The non-range base used to fall back to a Unit
+# constant — a Core #10 silent drop — and R44 retired it: a non-range source is
+# now lowered through `lower_for_vector`, which is what makes the element-type
+# hardcode above REACHABLE for non-`int` elements.
 int lower_set_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_name, SpannedExpr iterable, Option[Box[SpannedExpr]] filt_opt, GirModule &gmod):
     Span span = comp_expr.span
+    materialize_loop_carried_bare_params(&ctx, &gmod, comp_expr.span.start)
     match iterable.expr:
         case ERange(start_opt, end_opt, rng_incl):
             match start_opt:
@@ -7571,21 +7638,57 @@ int lower_set_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_nam
                     pass
         else:
             pass
-    # Non-range base: fall back to Unit, matching Rust (collections.rs:932).
-    int sfallback = add_local(&ctx, UNIT_TYPE, None)
-    emit(&ctx, GIAssign(sfallback, OpConstUnit()))
-    return sfallback
+    # Non-range base: lower it (Core #10 -- no silent drop).
+    bool set_write_through = false
+    SpannedExpr set_iter = for_iterable_mode(iterable, &set_write_through)
+    int set_saved_et = ctx.expected_type
+    ctx.expected_type = -1
+    int set_coll_local = lower_expr(&ctx, set_iter, &gmod)
+    ctx.expected_type = set_saved_et
+    set_coll_local = maybe_auto_propagate(&ctx, set_coll_local, &gmod)
+    String set_coll_tn = local_type_name(set_coll_local, ctx, &gmod)
+    SpannedPattern set_var_pat = SpannedPattern(PBinding(var_name), span)
+    int vsacc = comp_make_set_acc(&ctx, &gmod)
+    String vsacc_name = "__setcomp_acc_" + int_to_str(vsacc)
+    nl_put(&ctx, vsacc_name, vsacc)
+    Vector[Stmt] vsbody = comp_synth_set_body(vsacc_name, comp_expr, filt_opt, span)
+    lower_for_vector(&ctx, set_var_pat, set_coll_local, set_coll_tn, false, false, vsbody, &gmod, false)
+    return vsacc
 
-# Allocate a set comprehension accumulator. Typed as the MANGLED
-# `Set__int64_t` (8-byte int elements) so it matches the destination at
-# the CoW boundary and routes to the `GorgetSet` runtime category. Do NOT
-# reuse `comp_make_acc` — that hardcodes a `gorget_array_new`/sized-array
-# alloc (a 64-byte GorgetArray), which downstream code would treat as a
-# GorgetSet → heap corruption. Emit `gorget_set_new` directly with an
-# `OpConstI64(8)` element-size arg (mirror Rust collections.rs:884-888).
+# Allocate a set comprehension accumulator.
+#
+# ⛔ FILED DEFECT, DESCRIBED AS-IS — do not read the next sentence as a design
+# rule. This producer takes NO element-type parameter, so it types the
+# accumulator `Set__int64_t` and emits the RAW `gorget_set_new` /
+# `gorget_ordered_set_new` runtime symbol with a literal `OpConstI64(8)` size,
+# for EVERY element type. That is the current, KNOWN-WRONG behaviour for a
+# non-`int` element (routed to Track K; repro
+# `known_gaps/sh_comprehension_set_acc_scalar_hardcode.gg`).
+#
+# ⚠ AN EARLIER VERSION OF THIS COMMENT ORDERED THE HARDCODE PRESERVED —
+# "Emit `gorget_set_new` directly with an `OpConstI64(8)` element-size arg
+# (mirror Rust collections.rs:884-888)" — and it was false twice: it is the
+# instruction to keep the defect, and the cite resolved to the ARRAY comp
+# (which passes a TYPED `SizeOf`, not a literal 8). Cite Rust by FUNCTION NAME:
+# `lower_set_comprehension` in `src/ir/lowering/exprs/collections.rs`.
+#
+# THE CORRECT SHAPE ALREADY EXISTS IN THIS FILE, one collection over: the set
+# LITERAL emits `__gorget_set_new_sized_<T>` / `__gorget_ordered_set_new_sized_<T>`
+# with an EMPTY operand vector, and its own comment records why — the raw symbol
+# "withheld the element type from every downstream reader … a String element
+# never reached `*_new_str`". `comp_make_acc` (the LIST producer, in this same
+# file) shows the signature shape: it takes a `String elem_tyname` and branches
+# on it. The fix is that channel plus the typed ctor, at BOTH call sites.
+#
+# What IS correct here: do NOT reuse `comp_make_acc` — it allocs a
+# `gorget_array_new` sized ARRAY (a 64-byte GorgetArray) which downstream code
+# would treat as a GorgetSet → heap corruption.
 int comp_make_set_acc(LowerCtx &ctx, GirModule &gmod):
-    # Centralized collection-accumulator typing — Set comprehensions iterate
-    # `start..end`, so the element is scalar `int64_t` (`Set__int64_t`).
+    # Centralized collection-accumulator typing.
+    # ⛔ `"int64_t"` is a HARDCODE, not a derivation. The old comment here said
+    # "Set comprehensions iterate `start..end`, so the element is scalar
+    # `int64_t`" — false since R44 retired the non-range Unit fallback, which
+    # made every element type reachable on this path.
     int acc_tid = collection_accumulator_tid(&gmod, "set", "int64_t", "", "")
     int acc_local = add_local(&ctx, acc_tid, None)
     Vector[Operand] sn_args = [OpConstI64(8)]
@@ -7644,13 +7747,29 @@ Vector[Stmt] comp_synth_set_body(String acc_name, SpannedExpr comp_expr, Option[
 # builds a `Dict__int64_t__int64_t`-typed accumulator. Same philosophy as
 # the list and set comps; the optional filter (`EDictComp` 5th AST field)
 # threads through to the synth body, guarding the `.put` with `if filter:`.
-# The accumulator is typed with the MANGLED `Dict__int64_t__int64_t` name
-# (matching the destination VarDecl at the CoW boundary + routing to the
-# `GorgetMap` runtime category). Rust's dict-comp ALSO mangles
-# (collections.rs:812), so only the SET channel diverges from Rust.
-# Range-only; non-range → Unit (Rust collections.rs:863).
+#
+# ⛔ `Dict__int64_t__int64_t` IS A KNOWN-WRONG HARDCODE, on BOTH channels.
+# `comp_make_dict_acc` takes no key or value element type, so a
+# `Dict[int, String]` comprehension stores its VALUE in an 8-byte slot and
+# prints a raw pointer at rc 0, and a `Dict[String, int]` mis-keys. Measured;
+# routed to Track K; repro `known_gaps/sh_comprehension_dict_value_channel.gg`.
+# A fix that threads only the KEY (derivable from the source element) closes
+# half the class.
+#
+# What IS correct in the mangled-name choice: it matches the destination VarDecl
+# at the CoW boundary and routes to the `GorgetMap` runtime category. Rust's
+# dict-comp also mangles — `lower_dict_comprehension` in
+# `src/ir/lowering/exprs/collections.rs`, cited by FUNCTION NAME because the old
+# `collections.rs:812` cite resolved to the ARRAY comp's exit block. As of R44
+# Rust derives BOTH halves of the mangle from the MATERIALIZED key and value,
+# through a single `dict_mangled_name` chokepoint shared with the dict literal.
+#
+# ⚠ NOT range-only any more. The non-range base used to fall back to a Unit
+# constant — a Core #10 silent drop — and R44 retired it: a non-range source is
+# now lowered through `lower_for_vector`.
 int lower_dict_comprehension(LowerCtx &ctx, SpannedExpr key_expr, SpannedExpr val_expr, String var_name, SpannedExpr iterable, Option[Box[SpannedExpr]] filt_opt, GirModule &gmod):
     Span span = key_expr.span
+    materialize_loop_carried_bare_params(&ctx, &gmod, key_expr.span.start)
     match iterable.expr:
         case ERange(start_opt, end_opt, rng_incl):
             match start_opt:
@@ -7669,20 +7788,48 @@ int lower_dict_comprehension(LowerCtx &ctx, SpannedExpr key_expr, SpannedExpr va
                     pass
         else:
             pass
-    # Non-range base: fall back to Unit, matching Rust (collections.rs:863).
-    int dfallback = add_local(&ctx, UNIT_TYPE, None)
-    emit(&ctx, GIAssign(dfallback, OpConstUnit()))
-    return dfallback
+    # Non-range base: lower it (Core #10 -- no silent drop).
+    bool dict_write_through = false
+    SpannedExpr dict_iter = for_iterable_mode(iterable, &dict_write_through)
+    int dict_saved_et = ctx.expected_type
+    ctx.expected_type = -1
+    int dict_coll_local = lower_expr(&ctx, dict_iter, &gmod)
+    ctx.expected_type = dict_saved_et
+    dict_coll_local = maybe_auto_propagate(&ctx, dict_coll_local, &gmod)
+    String dict_coll_tn = local_type_name(dict_coll_local, ctx, &gmod)
+    SpannedPattern dict_var_pat = SpannedPattern(PBinding(var_name), span)
+    int vdacc = comp_make_dict_acc(&ctx, &gmod)
+    String vdacc_name = "__dictcomp_acc_" + int_to_str(vdacc)
+    nl_put(&ctx, vdacc_name, vdacc)
+    Vector[Stmt] vdbody = comp_synth_dict_body(vdacc_name, key_expr, val_expr, filt_opt, span)
+    lower_for_vector(&ctx, dict_var_pat, dict_coll_local, dict_coll_tn, false, false, vdbody, &gmod, false)
+    return vdacc
 
-# Allocate a dict comprehension accumulator. Typed as the MANGLED
-# `Dict__int64_t__int64_t` (8-byte key + 8-byte value). Mirrors the
-# `EDictLiteral` path (lower_expr.gg:2645-2662): `gorget_dict_new` with
-# `[OpConstI64(8), OpConstI64(8)]`. Do NOT reuse `comp_make_acc` (it
-# allocs a GorgetArray → heap corruption when treated as a GorgetMap).
+# Allocate a dict comprehension accumulator.
+#
+# ⛔ FILED DEFECT, DESCRIBED AS-IS. This producer takes NO key or value element
+# type, so it types the accumulator `Dict__int64_t__int64_t` and emits the RAW
+# `gorget_dict_new` with `[OpConstI64(8), OpConstI64(8)]`, for EVERY key and
+# value type. Current, KNOWN-WRONG behaviour for a non-`int` channel; routed to
+# Track K.
+#
+# ⚠ THE OLD COMMENT HERE CITED THE WRONG PATH THREE WAYS: it said this "Mirrors
+# the `EDictLiteral` path (lower_expr.gg:2645-2662)". `EDictLiteral` is lowered
+# elsewhere in this file (`grep -n EDictLiteral`), `:2645-2662` is String
+# `==`/`!=` operator lowering, and the real `EDictLiteral` path emits
+# `__gorget_dict_new_sized_<K>__GGSEP__<V>` whenever K and V are known — falling
+# back to `gorget_dict_new(8, 8)` ONLY for an unknown name. So the comment
+# described the FALLBACK branch as if it were the path, and pointed at a
+# different construct entirely. Cite by grep-anchor, never by line number.
+#
+# What IS correct here: do NOT reuse `comp_make_acc` — it allocs a GorgetArray,
+# which downstream code would treat as a GorgetMap → heap corruption.
 int comp_make_dict_acc(LowerCtx &ctx, GirModule &gmod):
-    # Centralized collection-accumulator typing — dict comprehensions iterate
-    # `start..end`, so key + value are scalar `int64_t`
-    # (`Dict__int64_t__int64_t`, ordered to match the destination VarDecl).
+    # Centralized collection-accumulator typing.
+    # ⛔ Both `"int64_t"`s are HARDCODES, not derivations. The old comment here
+    # said "dict comprehensions iterate `start..end`, so key + value are scalar
+    # `int64_t`" — false since R44 retired the non-range Unit fallback. The
+    # `map_ordered` kind IS deliberate (it matches the destination VarDecl).
     int acc_tid = collection_accumulator_tid(&gmod, "map_ordered", "", "int64_t", "int64_t")
     int acc_local = add_local(&ctx, acc_tid, None)
     Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]

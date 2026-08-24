@@ -2606,7 +2606,7 @@ fn lower_if(
 /// clone equals lazy-at-first-write; just an extra clone). UNDER-approximation
 /// re-creates the per-iteration throwaway, so the prescan errs toward MORE
 /// mutation markers.
-fn materialize_loop_carried_bare_params(
+pub(in crate::ir::lowering) fn materialize_loop_carried_bare_params(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
     body: &Block,

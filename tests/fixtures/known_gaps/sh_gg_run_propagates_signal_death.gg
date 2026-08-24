@@ -1,0 +1,103 @@
+# ⚠⚠ THIS FIXTURE'S SIGSEGV IS A COMPILER BUG, AND ONLY THE SELF-HOST LANE
+# STILL HAS IT. READ BEFORE "FIXING" A RED HERE.
+#
+# The wired test (`sh_gg_run_propagates_signal_death`) asserts exit == 139 and
+# "segmentation" in stderr from the SELF-HOST driver. The SIGSEGV is NOT
+# scaffolding and NOT intentional: it is a comprehension-emitter defect where
+# the result-push uses the SOURCE element size instead of the RESULT element
+# size, so a type-changing comprehension copies the wrong width out of an
+# 8-byte stack temp.
+#
+# LANE STATUS (R44):
+#   • RUST gg — FIXED. The emitters now defer the accumulator mint until the
+#     loop body has produced a MATERIALIZED element, so the slot is minted from
+#     the result element type. `gg run` on this program is rc 0 printing `1`,
+#     and `gg build --sanitize` on it is CLEAN (measured: zero ASan/Leak lines,
+#     with an unbounded-recursion control still reporting `stack-overflow` on
+#     the same build). Its `tests/sanitize/CORRUPTION_ALLOWLIST.txt` row
+#     retired WITH that fix, on its own stated terms.
+#   • SELF-HOST — STILL BROKEN, which is why this test is still green. The SH
+#     list arm mints from `collection_element_type(coll_tn)`, i.e. the SOURCE
+#     collection's element name. That is routed to R44 Track K.
+#
+# ⚠ TWO FIGURES, TWO SHAPES — do not merge them. Measured at HEAD under
+# `gg build --sanitize`, both `ERROR: AddressSanitizer: stack-buffer-overflow`:
+#   • THIS fixture's own nested program below
+#     (`Vector[Vector[int]] -> Vector[int]`)          => READ of size 64
+#   • the `Vector[String] -> Vector[int]` minimal form => READ of size 32
+#
+#         void main():
+#             Vector[String] words = ["ab", "cde"]
+#             Vector[int] r = [w.len() for w in words]   # SH: SIGSEGV, rc 139
+#             print(r.get(0).unwrap())
+#
+# The longhand `for` loop with `.push()` is clean on both lanes.
+#
+# ⛔ THE "RE-POINT THIS AT A DELIBERATE NULL DEREF" ORDER IS RETRACTED (R44).
+# It existed for a Rust-lane oracle (`gg_run_propagates_signal_death`) that has
+# since been re-pointed at `tests/fixtures/stack_guard_deep_recursion.gg` — an
+# intentional overflow that `tests/security.rs` ratifies — precisely so no
+# oracle rides on a defect under repair. THIS test needs no re-point: its
+# oracle is the SELF-HOST lane, whose defect is still live and filed. When
+# Track K lands, this test goes red, and THAT red means the fix worked; retire
+# the test then, do not weaken the assertion and do not "fix" the
+# comprehension back.
+#
+# (Found 2026-08-18 by the corpus-wide ASan census, which is also how the
+# mechanism — wrong elem_size at the push, a write-site defect — was identified.)
+#
+# Regression (Round XXV Track A subsumed at scout stage 2026-08-02):
+# SH driver's `gg run` already propagates signal-death — verified live.
+#
+# The Round XXIV Track B follow-up filed this as a defect (SH exits 255 silent
+# on SIGSEGV), but the filing was source-read (Core #12 / #15d violation):
+# the scout inspected `gorget_exec` and saw the `-1 → exit(-1) → 255` branch
+# but never actually built + ran. That branch fires only if the SHELL ITSELF
+# is signal-killed, never for a signal-killed user program.
+#
+# MEASURED at HEAD: `gorget_exec` uses `system()`, which invokes `/bin/sh -c
+# <cmd>`. When the child dies from SIGSEGV, /bin/sh translates the signal to
+# 128+signo = 139 (with a "Segmentation fault" stderr line) before exiting;
+# `system()` reports WIFEXITED=true, WEXITSTATUS=139. `gorget_exec` returns
+# 139. `exit(139)` gives 139. Both lanes are UX-distinguishable from a
+# compile error.
+#
+# Difference (nice-to-have, NOT a defect):
+#   • Rust `gg run` emits BRANDED stderr: `gg: <exe> terminated by SIGSEGV
+#     (signal 11)` (via `propagate_child_status` reading ExitStatusExt::signal).
+#   • SH driver emits SHELL stderr: `Segmentation fault` (via /bin/sh's own
+#     signal-translation on system()).
+#
+# Both are non-empty stderr + exit 139. Getting branded parity requires a
+# fork/execvp-based new runtime API (system() can't distinguish "shell
+# exited 139 because child SEGV'd" from "child intentionally exited 139").
+# Cost: medium; value: cosmetic. Not filed unless asked.
+#
+# This fixture is a LIVE regression pin: SH `driver run` propagates the
+# child's exit code (139) with signal-indicating stderr. Also a worked
+# example of Core #15d MIND-THE-PROBE (source-reading vs build-and-run) and
+# Core #15e Q1 (asymmetry vs ratified — verify before filing).
+#
+# ⚠ WHY A LIVE PIN LIVES IN `known_gaps/`. `scripts/convergence.sh` ratifies
+# exactly this placement — "NOT A GAP AT ALL = a known_gaps fixture referenced
+# ONLY by LIVE tests … parked in that directory because `runtime_parity_corpus`
+# never descends subdirectories". Two top-level scanners would otherwise pick
+# this up and get the wrong answer:
+#   • `runtime_parity_corpus` (a top-level `read_dir`) stdout-diffs Rust gg
+#     against the self-host on LANGUAGE-SEMANTICS parity. This fixture tests a
+#     `gg run` DRIVER property, not semantics, and its Rust half now passes
+#     while the SH half still SIGSEGVs — so it would be a permanent counted
+#     CRASH row for a defect already pinned by the test above.
+#   • `scripts/sanitize_sweep.sh` (`find tests/fixtures -maxdepth 1`)
+#     sanitizes the RUST lane, which no longer corrupts here.
+# Do NOT move it back to the top level.
+
+int seed():
+    return 1
+
+void main():
+    Vector[int] inner0 = [seed()]
+    Vector[int] inner1 = [seed() + 1]
+    Vector[Vector[int]] a = [inner0, inner1]
+    Vector[int] r = [x.len() for x in a]
+    print(r.get(0).unwrap())

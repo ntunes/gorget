@@ -1,8 +1,23 @@
 # Runtime-stack guard fixture (#37 flip, Fix B — see the stack_guard_*
 # tests in tests/integration.rs): deep recursion in the PRODUCED BINARY.
 # depth x frame must exceed a pinned stock 8MB stack and fit the pthread
-# main runner's 64MB explicit reserve — the test pins RLIMIT_STACK on
-# the binary's execution, so this is deterministic both ways.
+# main runner's 64MB explicit reserve.
+#
+# ⚠ THIS FIXTURE HAS TWO CONSUMERS, AND ITS DETERMINISM COMES FROM THE PIN.
+# Unpinned it is host-conditional: measured on one build, `ulimit -S -s 8192`
+# gives rc 139 with "terminated by SIGSEGV (signal 11)", while
+# `ulimit -S -s unlimited` gives rc 0 printing 200000. Both consumers
+# therefore wrap execution in `sh -c 'ulimit -S -s 8192; exec ...'`:
+#   * stack_guard_runtime_deep_recursion — pins the PRODUCED BINARY and
+#     asserts the overflow (EXPECT-FAIL until TCO lands).
+#   * gg_run_propagates_signal_death — pins `gg run` and asserts the driver
+#     surfaces 128+SIGSEGV = 139 with a signal diagnostic on stderr. It was
+#     re-pointed here in R44 from a comprehension fixture whose SIGSEGV was a
+#     compiler defect that round fixed; an intentional overflow is the stable
+#     oracle. A THIRD consumer must carry the pin too, or it is asserting on
+#     the host's stack limit.
+# It is also the sole row in tests/sanitize/CORRUPTION_ALLOWLIST.txt, marked
+# INTENTIONAL — a by-design ASAN_stack-overflow, not a filed defect.
 int deep(int n):
     if n == 0:
         return 0

@@ -1,0 +1,102 @@
+# CoW-2G loop-carried bare-param hoist: the SIX cells its sibling does not
+# sample. Together with `cow_loop_bare_param_comprehension.gg` (list x BODY)
+# this covers the whole emitter x channel matrix (Core #12 axis-completeness).
+#
+#     BODY channel   (4 hoist call sites, one per body EXPRESSION):
+#         list . set . dict-KEY . dict-VALUE
+#     FILTER channel (1 hoist, centralized at `drive_comprehension_loop`):
+#         list . set . dict
+#
+# Why the axis is emitter x CHANNEL and not just "emitter": a comprehension has
+# TWO expression positions that can mutate a loop-carried bare param, and a
+# dict has THREE (key, value, filter). Hoisting only the body left every filter
+# cell wrong; hoisting only the dict's value left every dict-KEY cell wrong.
+# The four body calls live at each emitter (the shared driver receives
+# `body_fn`, not the body expression, so it cannot scan it); the single filter
+# hoist lives at the driver, which does receive `condition`.
+#
+# THE SHAPE, identical in all six: `f*(Vector[int] xs)` takes a BARE by-value
+# param, so by CoW-default-borrow `xs` aliases the caller's `a` until mutated.
+# `drain_one(&xs)` mutates it inside the comprehension's loop. The pre-header
+# hoist must materialize a private copy ONCE: never -> the write-through
+# reaches the caller (`xs.len()` reads 4); per iteration -> the clone lands in
+# the re-executing body and is discarded (`xs.len()` reads 3).
+#
+# CORRECT OUTPUT: `2` from every cell, then `4` from the caller. Two drains off
+# a private copy of [1,2,3,4] leaves 2, and `a` is untouched. The statement-for
+# form of the same program prints 2 on both lanes and is the oracle.
+#
+# RED-VERIFIED pre-fix, one build of each compiler, per cell (`xs.len()`,
+# correct = 2):
+#     cell                 Rust gg   self-host driver
+#     body_set               3            0
+#     body_dict_key          3            0
+#     body_dict_val          3            0
+#     filter_list            3            0
+#     filter_set             3            0
+#     filter_dict            3            0
+# Non-constant operands throughout (`seed()`, `drain_one`) so const-fold cannot
+# elide the mutation.
+from std.collections import Set, Dict
+
+int seed():
+    return 1
+
+Vector[int] four():
+    Vector[int] v = []
+    v.push(seed())
+    v.push(seed() + 1)
+    v.push(seed() + 2)
+    v.push(seed() + 3)
+    return v
+
+int drain_one(Vector[int] &v):
+    v.pop()
+    return v.len()
+
+# ---- BODY channel ----------------------------------------------------------
+
+void body_set(Vector[int] xs):
+    Set[int] ys = {drain_one(&xs) for i in 0..2}
+    print(xs.len())
+
+void body_dict_key(Vector[int] xs):
+    Dict[int, int] ys = {drain_one(&xs): i for i in 0..2}
+    print(xs.len())
+
+void body_dict_val(Vector[int] xs):
+    Dict[int, int] ys = {i: drain_one(&xs) for i in 0..2}
+    print(xs.len())
+
+# ---- FILTER channel --------------------------------------------------------
+
+void filter_list(Vector[int] xs):
+    Vector[int] ys = [i for i in 0..2 if drain_one(&xs) >= 0]
+    print(xs.len())
+
+void filter_set(Vector[int] xs):
+    Set[int] ys = {i for i in 0..2 if drain_one(&xs) >= 0}
+    print(xs.len())
+
+void filter_dict(Vector[int] xs):
+    Dict[int, int] ys = {i: i for i in 0..2 if drain_one(&xs) >= 0}
+    print(xs.len())
+
+# ---- the statement-`for` ORACLE, same shape --------------------------------
+
+void oracle_stmt(Vector[int] xs):
+    Vector[int] ys = []
+    for i in 0..2:
+        ys.push(drain_one(&xs))
+    print(xs.len())
+
+void main():
+    Vector[int] a = four()
+    body_set(a)
+    body_dict_key(a)
+    body_dict_val(a)
+    filter_list(a)
+    filter_set(a)
+    filter_dict(a)
+    oracle_stmt(a)
+    print(a.len())

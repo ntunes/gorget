@@ -1,0 +1,55 @@
+# KNOWN GAP — SELF-HOST LANE ONLY (R44, routed to Track K).
+# MECHANISM 2 of 3: the SH SET/DICT accumulator producers hardcode a SCALAR
+# element type, so every non-`int` element goes into an 8-byte slot.
+#
+# `comp_make_set_acc` (tests/fixtures/self_host_lowerer/lower_expr.gg) takes NO
+# element-type parameter. It calls
+# `collection_accumulator_tid(&gmod, "set", "int64_t", "", "")` and emits
+# `gorget_ordered_set_new` with a literal `OpConstI64(8)`. Its dict twin
+# `comp_make_dict_acc` does the same with `Dict__int64_t__int64_t` and
+# `gorget_dict_new(8, 8)`.
+#
+# THE RULE, measured over a 39-cell grid: the SH set/dict arms are WRONG iff any
+# RESULT-CHANNEL element is not `int` — RANGE arm included, and regardless of
+# whether the destination is `auto` or explicitly typed. The destination is NOT
+# the discriminator.
+#
+# THE SYMPTOM IS A POINTER COMPARE. A `GorgetString` stored in an 8-byte slot is
+# compared as a pointer, so `s.len()` is right (2) and `s.contains(...)` is
+# wrong (`false`), at rc 0. That is why this fixture builds every element at
+# RUNTIME (`mk(a, b)`): with STRING LITERALS the pointers happen to be distinct
+# and stable and the same broken shape reads `true`. A literal is a false
+# negative here exactly as it is in a heap-forced leak probe.
+#
+# THE LONGHAND FORM IS CORRECT ON BOTH LANES — `Set[String] s = Set[String]()`
+# then `s.add(w)` in a statement-`for` gives `2` / `true`. So this is a
+# comprehension-vs-longhand divergence, not a Set semantics question.
+#
+# The RUST lane was FIXED in R44 (the deferred mint takes the MATERIALIZED
+# element's type, and the set ctor name is derived from it, which is what
+# selects the `_str` hash channel). Measured on the ordered Rust compiler, C
+# and `--backend=llvm`: rc 0 printing `2` then `true`.
+#
+# ⚠ WIRED TO THE SELF-HOST LANE (`assert_self_host_stdout`), NOT `run_gg` — the
+# residual is self-host-only, so a `run_gg`-wired body is GREEN ON ARRIVAL.
+#
+# Asserts the CORRECT output. Wired test:
+# `sh_comprehension_set_acc_scalar_hardcode` (tests/integration.rs,
+# #[ignore]d). Un-ignore when `comp_make_set_acc` / `comp_make_dict_acc` take
+# an element type (Track K). Filed in TODO.md.
+from std.collections import Set
+
+String mk(String a, String b):
+    return a + b
+
+String w0():
+    return mk("alp", "ha")
+
+String w1():
+    return mk("bet", "a")
+
+void main():
+    Vector[String] words = [w0(), w1()]
+    Set[String] s = {w for w in words}
+    print(s.len())
+    print(s.contains(mk("alp", "ha")))

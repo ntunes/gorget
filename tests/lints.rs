@@ -578,7 +578,18 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// future shrink once the analogous consolidation lands for
     /// `lower_var_decl`'s Pattern::Binding + Pattern::Tuple sites.
     /// Locking in the combined floor.
-    const BUDGET: usize = 95;
+    ///
+    /// SHRUNK 95 -> 89 (R44, comprehension accumulator mint). Two duplicate
+    /// per-element pickers were retired: `lower_array_literal` and
+    /// `lower_set_literal_from_array` each carried their own materialize ->
+    /// mode-pick -> `assign_mode` -> `MoveZero` closure, and both now call the
+    /// shared `element_assign_mode` / `store_and_push_element` in
+    /// `src/ir/lowering/exprs/collections.rs` alongside the three comprehension
+    /// emitters. REGENERATE, never quote: force this constant to 0, run
+    /// `cargo test --test lints no_growth_in_phase_d_proxy_reads`, read the
+    /// printed count, restore. (That is also a free Core #13 red on a gate an
+    /// executor otherwise never sees fail.)
+    const BUDGET: usize = 89;
 
     let count = count_phase_d_proxy_reads();
     assert!(
@@ -6466,7 +6477,18 @@ fn docs_plans_removed_and_define_gorget_is_ledger_only() {
 /// double free sat filed as a MED *leak* for three weeks in R42.
 #[test]
 fn sanitize_allowlists_shrink_only() {
-    const CORRUPTION_CEILING: usize = 2;
+    // 2 -> 1 (R44): `sh_gg_run_propagates_signal_death`'s
+    // `ASAN_stack-buffer-overflow` was FIXED, not relocated. Measured on one
+    // build of each compiler, `gg build --sanitize` then run under
+    // `ASAN_OPTIONS=detect_leaks=1`: pre-fix `ERROR: AddressSanitizer:
+    // stack-buffer-overflow` / `READ of size 64`, rc 1; post-fix rc 0 printing
+    // `1` with ZERO ASan/Leak lines — and an unbounded-recursion positive
+    // control on that SAME post-fix build still reported
+    // `ERROR: AddressSanitizer: stack-overflow`, so the sanitizer had not
+    // simply gone quiet. The row retired on its own stated terms ("This row
+    // retires WITH that fix"). The surviving row is INTENTIONAL, so the
+    // register now holds ZERO filed corruption defects.
+    const CORRUPTION_CEILING: usize = 1;
     const LEAK_CEILING: usize = 316;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -6637,13 +6659,25 @@ fn ratchet_a_lowering_dispatch_silent_fallthrough() {
     //   lower_var_decl      — non-Binding/Tuple VarDecl patterns (defensive:
     //                         parser+semantic gate these today, so unreachable —
     //                         but the arm is silent, not a loud `unreachable!`).
-    //   lower_for_dict      — `for (a,b,c) in dict` (Tuple arity != 2) → no
-    //                         bindings, garbage output.
+    //   lower_for_dict_with — `for (a,b,c) in dict` (Tuple arity != 2) → no
+    //                         bindings, garbage output. RENAMED in R44 from
+    //                         `lower_for_dict` when the six source-shape arms
+    //                         gained a `_with(body_fn)` form so the
+    //                         comprehension driver and the statement-`for`
+    //                         could share ONE dispatch. The offender did not
+    //                         move; only its name did. ⚠ TWO consumers in this
+    //                         file key on that NAME (here and the throwaway-
+    //                         fallback probe below), and renaming one without
+    //                         the other turns a green gate into a panic —
+    //                         filed as a Layering rule-2 / "No name matching"
+    //                         defect in TODO.md, since a lint that identifies
+    //                         its subject by a function name is exactly the
+    //                         shape the rule forbids.
     // BURNED DOWN (Target-2): `lower_assign` — its `_ =>` was the `xs.0 = v`
     // (Expr::TupleFieldAccess) silent drop; it now lowers tuple fields and its
     // `_ =>` is a loud `unreachable!` backed by the check-time
     // `check_assign_target_lvalue` gate (E_InvalidAssignTarget).
-    const ALLOWED: &[&str] = &["lower_var_decl", "lower_for_dict"];
+    const ALLOWED: &[&str] = &["lower_var_decl", "lower_for_dict_with"];
 
     let mut found: Vec<String> = Vec::new();
     for file in FILES {
@@ -6678,25 +6712,35 @@ fn ratchet_a_lowering_dispatch_silent_fallthrough() {
     // E_InvalidAssignTarget gate). Its dedicated fallback-presence guard is
     // `compound_assign_fieldaccess_fallback_present`.
     //
-    //   A4b: lower_for_dict's `Tuple(2)` arm binds each sub-pattern only via
-    //       `if let Binding(n) .. else \"__k\"/\"__v\"` — a nested destructure
+    //   A4b: lower_for_dict_with's `Tuple(2)` arm binds each sub-pattern only
+    //       via `if let Binding(n) .. else \"__k\"/\"__v\"` — a nested destructure
     //       (`for k,(a,b) in dict`) is silently dropped into a throwaway.
+    // ⚠ SECOND NAME-KEYED CONSUMER of the same function name (the ALLOWED set
+    // above is the first). R44 renamed `lower_for_dict` -> `lower_for_dict_with`
+    // and re-pinned BOTH; re-pinning only one leaves this `.expect` panicking
+    // with "not found" AFTER the other consumer has gone green, which reads as
+    // a fresh defect rather than an un-folded rename. Keying a lint on a
+    // function NAME is a Layering rule-2 / "No name matching" violation in its
+    // own right — the rename EXPOSED it, it did not create it. Filed in TODO.md.
+    const FOR_DICT_FN: &str = "lower_for_dict_with";
     let for_loops = fs::read_to_string("src/ir/lowering/stmts/for_loops.rs").unwrap_or_default();
     let for_dict = top_level_fn_bodies(&for_loops)
         .into_iter()
-        .find(|(n, _)| n == "lower_for_dict")
+        .find(|(n, _)| n == FOR_DICT_FN)
         .map(|(_, b)| b)
-        .expect("lower_for_dict not found");
+        .unwrap_or_else(|| panic!("{FOR_DICT_FN} not found in src/ir/lowering/stmts/for_loops.rs \
+— if it was RENAMED, re-pin BOTH name-keyed consumers in this test (this one and \
+the ALLOWED set above), not just one"));
     // Pin each throwaway side SEPARATELY (an `||` would stay green after a
     // value-side-only fix, hiding a half-landed A4b).
     assert!(
         for_dict.contains("\"__v\".to_string()"),
-        "lower_for_dict no longer uses the `__v` value-side throwaway fallback — the \
+        "{FOR_DICT_FN} no longer uses the `__v` value-side throwaway fallback — the \
          A4b nested-destructure offender may be (half-)fixed. Re-pin or remove (burn-down)."
     );
     assert!(
         for_dict.contains("\"__k\".to_string()"),
-        "lower_for_dict no longer uses the `__k` key-side throwaway fallback — the \
+        "{FOR_DICT_FN} no longer uses the `__k` key-side throwaway fallback — the \
          A4b nested-destructure offender may be (half-)fixed. Re-pin or remove (burn-down)."
     );
 }
@@ -18000,30 +18044,46 @@ fn container_literal_arms_mint_from_materialized_operand() {
 
     // ── THE SUBJECT SET, and what is deliberately OUT of it ──
     //
-    // IN: the three arms that mint a destination element type FROM AN ELEMENT
-    // OPERAND. These are the class.
+    // IN: every arm that mints a destination element type FROM AN ELEMENT
+    // OPERAND. That is the class.
     //
-    // OUT, and why — `collections.rs` has nine `lower_*` arms, so the boundary
-    // has to be stated or the next reader cannot tell an omission from a
-    // decision:
-    //   * `lower_list_comprehension` / `lower_string_comprehension` /
-    //     `lower_dict_comprehension` / `lower_set_comprehension` — these mint
-    //     from a hardcoded accumulator type (`SizeOf(I64_TYPE)` and friends),
-    //     NOT from an element operand, so `materialize_for_slot` has no operand
-    //     to be handed and the invariant does not apply as written. They have
-    //     their OWN filed defect — a comprehension that CHANGES element type
-    //     pushes at the SOURCE element's size — which is a different mechanism
-    //     with a different fix, and folding it in here would produce a guard
-    //     that fires on the wrong thing.
+    // ⚠ RE-PINNED IN R44, AND THE OLD EXCLUSION IS RETRACTED. This list used to
+    // hold three literal arms and EXCLUDE the comprehensions with the rationale
+    // "these mint from a hardcoded accumulator type … NOT from an element
+    // operand, so `materialize_for_slot` has no operand to be handed". That was
+    // true and it was the DEFECT: minting from a hardcoded `int64_t` /
+    // `Dict__int64_t__int64_t`, or from the SOURCE collection's element type,
+    // is what mis-sized the accumulator. R44 made the comprehension mint
+    // DEFERRED — the accumulator's constructor is emitted into a block left
+    // deliberately unterminated until the loop body has produced a MATERIALIZED
+    // element — so the comprehensions are now members of this class and belong
+    // in the subject set, not in the exclusion note.
+    //
+    // ⚠ THE REAL ENFORCEMENT FOR THE COMPREHENSION HALF IS TYPE-LEVEL, NOT
+    // TEXTUAL. `mint_accumulator_type` and `dict_mangled_name` take
+    // `&MaterializedElement`, whose fields are private to `mod materialized` in
+    // `collections.rs` and whose only constructor is `produce` (which calls
+    // `materialize_for_slot`). A caller is therefore not in a POSITION to hand
+    // a source-derived element type to a mint — the compiler rejects it. This
+    // lint is the cheap corroboration; do not treat it as the guard.
+    //
+    // OUT, and why — the boundary has to be stated or the next reader cannot
+    // tell an omission from a decision:
     //   * `lower_optional_chain` / `lower_range_expr` — no element slot at all.
+    //   * `lower_string_comprehension` — GONE. A `String` source is not a
+    //     separate emitter; it flows through `lower_list_comprehension` and is
+    //     dispatched by `drive_comprehension_loop`
+    //     (`src/ir/lowering/stmts/for_loops.rs`).
     //
-    // A fourth MINTING arm added without a `materialize_for_slot` call is the
+    // A new MINTING arm added without routing through the materializer is the
     // next instance of this class, and it fails this test rather than shipping.
-    // A new COMPREHENSION arm is not this guard's business.
-    const MINTING_ARMS: [&str; 3] = [
+    const MINTING_ARMS: [&str; 6] = [
         "fn lower_array_literal(",
         "fn lower_dict_literal(",
         "fn lower_set_literal_from_array(",
+        "fn lower_list_comprehension(",
+        "fn lower_set_comprehension(",
+        "fn lower_dict_comprehension(",
     ];
 
     let mut failures: Vec<String> = Vec::new();
@@ -18043,9 +18103,17 @@ fn container_literal_arms_mint_from_materialized_operand() {
             .unwrap_or(rest.len());
         let body = &rest[..end];
 
-        if !body.contains("materialize_for_slot") {
+        // Two spellings of the SAME materializer: the literal arms call
+        // `ctx.materialize_for_slot` directly; the comprehension arms go
+        // through `MaterializedElement::produce`, which is a thin wrapper whose
+        // only body is that call and whose return type is the thing the mints
+        // accept. Either is the invariant; neither is a third path.
+        if !body.contains("materialize_for_slot")
+            && !body.contains("MaterializedElement::produce")
+        {
             failures.push(format!(
-                "`{sig}` mints an element type but never calls `materialize_for_slot`"
+                "`{sig}` mints an element type but routes through neither \
+                 `materialize_for_slot` nor `MaterializedElement::produce`"
             ));
         }
         // The pre-fix shape, spelled exactly: binding a type off an operand

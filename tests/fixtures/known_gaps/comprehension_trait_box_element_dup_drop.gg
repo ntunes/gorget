@@ -1,0 +1,41 @@
+# KNOWN GAP (R44) — a comprehension whose RESULT element is a TRAIT BOX emits
+# a duplicate drop glue symbol.
+#
+# MEASURED, C backend, both LOUD (no silent miscompile either way):
+#   HEAD  -> `gg build` rc 101, panic at src/ir/lowering/mod.rs
+#   R44   -> `gg build` rc 1, cc error: `redefinition of 'Box__Robot__drop'`
+#   `gg check` -> rc 0 on both.
+#
+# ⚠ ROUTED, NOT UNNOTICED. R44 rebuilt the comprehension emitters around a
+# DEFERRED accumulator mint that takes its element type from the MATERIALIZED
+# element (`SlotType::FromOperand`). The array LITERAL has one carve-out the
+# comprehension deliberately does not copy: an `override_is_trait_box`
+# predicate that passes `SlotType::Known(target)` so a
+# `Vector[Box[Trait]] = [Box.new(Concrete)]` sizes for the 16-byte TraitObj
+# instead of the 8-byte `void*`. Mirroring that predicate in the comprehension
+# is a plausible fix, but the remaining error is a DUPLICATE SYMBOL EMISSION —
+# monomorphisation/dedup, a different subsystem from comprehension lowering —
+# so it was filed rather than inlined (the scope genuinely creeps).
+#
+# INTENDED: rc 0, printing `2` then `R0`.
+# Wired test: `comprehension_trait_box_element_dup_drop` (tests/integration.rs,
+# #[ignore]d). Filed in TODO.md.
+from std.collections import Vector
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot(Speaker):
+    String speak(self):
+        return self.id
+
+int lim():
+    return 2
+
+void main():
+    Vector[Box[Speaker]] v = [Box.new(Robot(f"R{i}")) for i in 0..lim()]
+    print(v.len())
+    print(v.get(0).unwrap().speak())

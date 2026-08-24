@@ -106,9 +106,31 @@ void lower_for(LowerCtx &ctx, SpannedPattern pat, SpannedExpr iter_expr, Vector[
     # persistent private copy across iterations rather than a per-iteration
     # throwaway clone (freed each pass → post-loop len 0). Placed in the SHARED
     # dispatch so every statement-for variant (range/vector/dict/set/string/
-    # iterator) is covered from ONE site — Core #4 (the comprehension entries that
-    # call the lower_for_* variants directly are a filed sibling gap; see the 2G
-    # note in TODO). `iter_expr.span.start` is at-or-before every body token.
+    # iterator) is covered from ONE site — Core #4. `iter_expr.span.start` is
+    # at-or-before every body token.
+    #
+    # ⚠ CORRECTED (R44). This comment used to say "the comprehension entries
+    # that call the lower_for_* variants directly are a filed sibling gap".
+    # That is no longer true: the three comprehension emitters in
+    # `lower_expr.gg` (`lower_list_comprehension`, `lower_set_comprehension`,
+    # `lower_dict_comprehension`) now each call
+    # `materialize_loop_carried_bare_params` themselves, because they build
+    # their own loop rather than routing through `lower_for`. All seven cells
+    # of the emitter x channel matrix (BODY x {list, set, dict-key, dict-value},
+    # FILTER x {list, set, dict}) are pinned by
+    # `tests/fixtures/cow_loop_bare_param_comprehension.gg` and
+    # `..._matrix.gg`, and both lanes print the statement-`for` oracle's answer.
+    #
+    # ⛔ THE RESIDUAL, NAMED SO THE CORRECTION DOES NOT SHIP A FRESH FALSE
+    # INVARIANT: THIRTEEN direct `lower_for_*` call sites in `lower_expr.gg`
+    # still bypass this hoist — the HOF adapters (`.map` / `.filter` / and
+    # friends), which build loops the same way but are not comprehensions.
+    # Regenerate the figure, never quote it:
+    #     grep -c 'lower_for_vector(\|lower_for_set(\|lower_for_dict(\|lower_for_range(\|lower_for_string(' \
+    #          tests/fixtures/self_host_lowerer/lower_expr.gg
+    # minus the SEVEN calls the three comprehension emitters make. Whether the
+    # HOF adapters can carry a loop-carried bare-param mutation at all is
+    # unmeasured — that is why they are named here rather than claimed clean.
     materialize_loop_carried_bare_params(&ctx, &gmod, iter_expr.span.start)
     # Range fast path — `for i in start..end` over a literal `ERange`.
     # Mirrors Rust's `lower_for` first branch (src/ir/lowering/stmts/

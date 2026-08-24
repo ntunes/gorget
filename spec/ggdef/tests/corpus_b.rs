@@ -143,6 +143,20 @@ const EXCLUDE: &[&str] = &[
     //   - `.push_char()` — outside the phase-0 builtin-method set (needs
     //     Increment B2, like the other B2-gated methods).
     "cow_loop_bare_param_push_char.gg",
+    // R44 Track A GRADUATIONS of the CoW-2G comprehension cells. Both are
+    // COMPREHENSIONS, and `elaborate_expr` has no comprehension arm, so ggdef
+    // reports "expression `unsupported` is outside the phase-0 subset" — the
+    // SAME class and the SAME citation as `cow_comprehension_amp_source.gg`
+    // above. Measured, not assumed: `cargo test -p ggdef` STOP-and-reported on
+    // `cow_loop_bare_param_comprehension.gg` the moment it graduated into the
+    // top-level corpus. The subset gap is already filed under
+    // ggdef / define-gorget ("Out of the ggdef phase-0 subset (no
+    // comprehension arm)") — do NOT re-file it.
+    //   - `[drain_one(&xs) for i in 0..2]` — the list x BODY channel cell.
+    "cow_loop_bare_param_comprehension.gg",
+    //   - the other six cells of the emitter x channel matrix (set / dict-key /
+    //     dict-value body, plus the three filter cells).
+    "cow_loop_bare_param_comprehension_matrix.gg",
     // 2T get-chain PRECISION guard: the write target is a USER-method-call
     // rvalue's field (`h.coll.get(0).name = v`). ggdef's frontend correctly
     // ACCEPTS it (no over-reject — the get-chain descent is Vector-kind-gated, so

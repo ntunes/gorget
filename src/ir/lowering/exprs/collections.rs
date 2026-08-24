@@ -3,7 +3,7 @@
 use crate::ir::builder::FunctionBuilder;
 use crate::ir::instructions::*;
 use crate::ir::types::*;
-use crate::parser::ast::{self, Block, Expr, Pattern, Stmt};
+use crate::parser::ast::{Expr, Pattern};
 use crate::span::Spanned;
 
 use super::super::context::{LoweringContext, SlotType};
@@ -139,25 +139,6 @@ pub(super) fn lower_array_literal(
         // is owned-equivalent at this site since the source temp is dead
         // immediately after the assign (only the new local + its borrow
         // are used).
-        let elem_mode = |ctx: &LoweringContext, builder: &FunctionBuilder, op: &Operand, ty: TypeId| {
-            use crate::ir::instructions::AssignMode;
-            if !ctx.type_registry.is_resource_type(ty) { return AssignMode::Copy; }
-            match op {
-                Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
-                    let src_ty = builder.local_type(p.local);
-                    if ctx.is_owned_local(builder, p.local)
-                        || (!ctx.is_named_local(p.local)
-                            && (ctx.type_registry.needs_drop(src_ty)
-                                || ctx.type_registry.is_resource_type(src_ty)))
-                    {
-                        AssignMode::Move
-                    } else {
-                        AssignMode::Copy
-                    }
-                }
-                _ => AssignMode::Copy,
-            }
-        };
         // Pack Box[Concrete]→Box[Trait] when the element slot is a trait-box
         // (cell F Class B). Named destination drives the pack adapter.
         let etype_name: Option<String> = match ctx.type_registry.get(etype) {
@@ -174,7 +155,7 @@ pub(super) fn lower_array_literal(
         } else {
             first_owned
         };
-        let first_mode = elem_mode(ctx, builder, &first_owned, etype);
+        let first_mode = element_assign_mode(ctx, builder, &first_owned, etype);
         let first_clone = first_owned.clone();
         builder.assign_mode(first_mode, Place::local(elem_local), first_owned);
         // Emit MoveZero + mark_moved so drop-tracking knows the source is
@@ -217,7 +198,7 @@ pub(super) fn lower_array_literal(
             } else {
                 elem_val
             };
-            let mode = elem_mode(ctx, builder, &elem_val, etype);
+            let mode = element_assign_mode(ctx, builder, &elem_val, etype);
             let elem_val_clone = elem_val.clone();
             builder.assign_mode(mode, Place::local(el), elem_val);
             if mode == crate::ir::instructions::AssignMode::Move {
@@ -337,31 +318,12 @@ fn lower_set_literal_from_array(
     ctx.set_owned(builder, set_local);
     ctx.drops.register_local(set_local, set_type, &ctx.type_registry);
 
-    let elem_mode = |ctx: &LoweringContext, builder: &FunctionBuilder, op: &Operand, ty: TypeId| {
-        use crate::ir::instructions::AssignMode;
-        if !ctx.type_registry.is_resource_type(ty) { return AssignMode::Copy; }
-        match op {
-            Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
-                let src_ty = builder.local_type(p.local);
-                if ctx.is_owned_local(builder, p.local)
-                    || (!ctx.is_named_local(p.local)
-                        && (ctx.type_registry.needs_drop(src_ty)
-                            || ctx.type_registry.is_resource_type(src_ty)))
-                {
-                    AssignMode::Move
-                } else {
-                    AssignMode::Copy
-                }
-            }
-            _ => AssignMode::Copy,
-        }
-    };
 
     // Insert first element with per-elem Move + MoveZero discipline
     // (parallel to lower_array_literal's element handling — sets share
     // the same consume-position semantics as arrays).
     let insert_elem = |ctx: &mut LoweringContext, builder: &mut FunctionBuilder, val: Operand| {
-        let mode = elem_mode(ctx, builder, &val, etype);
+        let mode = element_assign_mode(ctx, builder, &val, etype);
         let el = builder.add_local(etype, None);
         let val_clone = val.clone();
         builder.assign_mode(mode, Place::local(el), val);
@@ -500,19 +462,19 @@ pub(super) fn lower_dict_literal(
     // `FromOperand` is the honest answer for both. (`val_expected_override`
     // comes from `infer_collection_element_type` — a mangled-name strip with an
     // `I64` fallback — so it is INFERRED, never `Known`.)
-    let (first_key, key_type) = ctx.materialize_for_slot(
-        builder, first_key, &pairs[0].0,
-        SlotType::FromOperand,
-        crate::ir::ImplicitCloneReason::ConsumingArg);
-    let (first_val, val_type) = ctx.materialize_for_slot(
-        builder, first_val, &pairs[0].1,
-        SlotType::FromOperand,
-        crate::ir::ImplicitCloneReason::ConsumingArg);
+    let first_key_m = MaterializedElement::produce(
+        ctx, builder, first_key, &pairs[0].0, SlotType::FromOperand);
+    let first_val_m = MaterializedElement::produce(
+        ctx, builder, first_val, &pairs[0].1, SlotType::FromOperand);
 
-    // Compute mangled dict type name
-    let key_c = type_id_to_mangle_name(ctx, key_type);
-    let val_c = type_id_to_mangle_name(ctx, val_type);
-    let mangled = format!("Dict__{key_c}__{val_c}");
+    // The SINGLE `Dict__K__V` mangle chokepoint, shared with
+    // `lower_dict_comprehension`. Both construction sites route here, and both
+    // can only reach it with MATERIALIZED key/value types — this one used to
+    // re-wrap raw `materialize_for_slot` results in a struct literal, which is
+    // now unrepresentable (see `mod materialized`).
+    let mangled = dict_mangled_name(ctx, &first_key_m, &first_val_m);
+    let (first_key, key_type) = first_key_m.into_parts();
+    let (first_val, val_type) = first_val_m.into_parts();
 
     // Phase A: ensure_collection_type populates protocol-derived metadata
     // (collection_kind / drop_strategy / clone_fn) for downstream consumers
@@ -729,7 +691,271 @@ fn type_id_to_mangle_name(ctx: &LoweringContext, type_id: TypeId) -> String {
     "int64_t".to_string() // fallback
 }
 
-// ---- List Comprehensions ----
+// ---- The consuming-position element producer (shared by literals and comprehensions) ----
+
+/// An element that has been through the consuming-position materializer.
+///
+/// The ONLY way to build one is [`MaterializedElement::produce`], which calls
+/// `ctx.materialize_for_slot`. Every accumulator producer below takes a
+/// `&MaterializedElement` rather than a bare `TypeId`, so a caller is not in a
+/// position to hand a *source*-derived element type to a mint at all — the
+/// wrong type is unrepresentable, not merely discouraged (AGENTS.md Core #6 /
+/// #15e Q2: a guard that can catch its own class).
+///
+/// Doctrine: `docs/devbook/11-copy-on-write.md` §"Container literals: the
+/// materializer mints the slot" — *"The element type must be taken from the
+/// materialized value, never from the raw operand"* — and AGENTS.md
+/// §"Ownership at Consuming Positions", which names `push` literally.
+/// ⚠ The fields are PRIVATE TO THIS MODULE, and that is the whole guard.
+/// While `MaterializedElement` was a plain struct in the parent module, the
+/// claim above was FALSE: `lower_dict_literal` built one with a struct literal
+/// at the dict-mangle chokepoint, in the same file, bypassing `produce`
+/// entirely — a guard that green-lit the exact class it was written to retire
+/// (AGENTS.md Core #15e Q2). Moving it one module down makes that a COMPILE
+/// ERROR, so the claim is now enforced by the type system rather than asserted
+/// in prose (Core #14: an invariant-asserting comment needs an enforcing
+/// guard, or it gets deleted).
+mod materialized {
+    use super::*;
+
+    pub(super) struct MaterializedElement {
+        operand: Operand,
+        ty: TypeId,
+    }
+
+    impl MaterializedElement {
+        pub(super) fn produce(
+            ctx: &mut LoweringContext,
+            builder: &mut FunctionBuilder,
+            value: Operand,
+            expr: &Spanned<Expr>,
+            slot: SlotType,
+        ) -> Self {
+            let (operand, ty) = ctx.materialize_for_slot(
+                builder, value, expr, slot,
+                crate::ir::ImplicitCloneReason::ConsumingArg,
+            );
+            MaterializedElement { operand, ty }
+        }
+
+        /// The materialized element's TYPE — the only thing an accumulator
+        /// mint is ever allowed to read.
+        pub(super) fn ty(&self) -> TypeId { self.ty }
+
+        /// Consume into `(operand, ty)` for the store-and-push tail.
+        pub(super) fn into_parts(self) -> (Operand, TypeId) { (self.operand, self.ty) }
+    }
+}
+
+use materialized::MaterializedElement;
+
+/// Pick the assign mode for storing a materialized element into its slot.
+/// Lifted verbatim from `lower_array_literal`'s local closure so the literal
+/// and the comprehensions cannot drift (AGENTS.md Core #4: fix the class).
+///
+/// This is the limb that closes the `[resource-moves]` ICE. `builder.assign`
+/// is `AssignMode::Copy` (`builder.rs:243`), and `validate_read`
+/// (`src/ir/validate.rs:1370-1380`) rejects a Copy-mode read of a resource-typed
+/// source — *"shallow copy of resource"*. Materializing the operand alone does
+/// NOT fix that: it produces an OWNED resource, and a Copy-mode assign then
+/// shallow-copies the owned value, so the violation simply moves to the new
+/// local. Materialize **and** Move.
+fn element_assign_mode(
+    ctx: &LoweringContext,
+    builder: &FunctionBuilder,
+    op: &Operand,
+    ty: TypeId,
+) -> AssignMode {
+    if !ctx.type_registry.is_resource_type(ty) { return AssignMode::Copy; }
+    match op {
+        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
+            let src_ty = builder.local_type(p.local);
+            if ctx.is_owned_local(builder, p.local)
+                || (!ctx.is_named_local(p.local)
+                    && (ctx.type_registry.needs_drop(src_ty)
+                        || ctx.type_registry.is_resource_type(src_ty)))
+            {
+                AssignMode::Move
+            } else {
+                AssignMode::Copy
+            }
+        }
+        _ => AssignMode::Copy,
+    }
+}
+
+/// Store a materialized element into a fresh slot and hand a borrow of it to a
+/// runtime collection mutator (`gorget_array_push` / `gorget_set_add`).
+/// Mirrors `lower_array_literal`'s per-element tail, MoveZero included.
+fn store_and_push_element(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    elem: MaterializedElement,
+    acc_local: LocalId,
+    acc_type: TypeId,
+    mutator: &str,
+) {
+    let (operand, ty) = elem.into_parts();
+    let slot = builder.add_local(ty, None);
+    let mode = element_assign_mode(ctx, builder, &operand, ty);
+    let for_zero = operand.clone();
+    builder.assign_mode(mode, Place::local(slot), operand);
+    if mode == AssignMode::Move {
+        if let Operand::Copy(ref place) | Operand::Move(ref place) = for_zero {
+            if place.projections.is_empty()
+                && place.local != slot
+                && !ctx.drops.is_moved(place.local)
+            {
+                ctx.move_zero_and_mark(builder, place.local);
+            }
+        }
+    }
+    let slot_ref = builder.borrow(Place::local(slot), ctx.register_ptr_type(ty));
+    let acc_ref = builder.borrow_mut(Place::local(acc_local), ctx.register_mut_ptr_type(acc_type));
+    builder.call_extern(
+        mutator,
+        vec![FunctionBuilder::copy(acc_ref), FunctionBuilder::copy(slot_ref)],
+        UNIT_TYPE,
+    );
+}
+
+/// The comprehension accumulator producer: mint the accumulator TYPE from a
+/// materialized element and write it through onto the reserved local.
+/// Returns the monomorphized `Vector__<elem>` / `Set__<elem>` TypeId.
+fn mint_accumulator_type(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    acc_local: LocalId,
+    base: &str,
+    elem: &MaterializedElement,
+) -> TypeId {
+    let acc_type = collection_accumulator_type(ctx, base, elem.ty());
+    builder.set_local_type(acc_local, acc_type);
+    acc_type
+}
+
+/// The dict constructor-name producer — the SINGLE chokepoint for the
+/// `Dict__K__V` mangle. Two construction sites exist (the literal and the
+/// comprehension) and both route here, so the hand-rolled
+/// `"Dict__int64_t__int64_t"` string is unrepresentable (Core #4: N=2, and
+/// nothing stopped N+1). Takes the materialized KEY and VALUE, because
+/// `dict_key_type_from_monomorphized` (`src/lir/lower/types.rs:75`) needs BOTH
+/// halves of the mangle to select the `_str` key channel — a one-type ctor
+/// name returns `None` there and the sizes fall back to `(8, 8)`.
+fn dict_mangled_name(
+    ctx: &LoweringContext,
+    key: &MaterializedElement,
+    val: &MaterializedElement,
+) -> String {
+    let key_c = type_id_to_mangle_name(ctx, key.ty());
+    let val_c = type_id_to_mangle_name(ctx, val.ty());
+    format!("Dict__{key_c}__{val_c}")
+}
+
+// ---- Comprehensions ----
+
+
+/// Reserve a comprehension accumulator local plus the block its constructor
+/// will be emitted into, and enter a fresh block for the loop.
+///
+/// The accumulator's element type is only knowable from the MATERIALIZED
+/// element (`docs/devbook/11-copy-on-write.md` §"Container literals: the
+/// materializer mints the slot": *"the element type must be taken from the
+/// materialized value, never from the raw operand"*), and a comprehension's
+/// element only exists inside the loop. So the ctor block is left UNTERMINATED
+/// until [`close_accumulator_mint`] fills it. Minting up front is the whole
+/// defect: it can only be done from the SOURCE element type or a hardcoded
+/// guess, which is what sized a `Vector[Q]` accumulator at 8 bytes and
+/// installed `gorget_string_free` as a `Vector[int]`'s element destructor.
+struct PendingAccumulator {
+    local: LocalId,
+    mint_bb: BlockId,
+    entry_bb: BlockId,
+}
+
+fn reserve_accumulator(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    placeholder: TypeId,
+) -> PendingAccumulator {
+    let local = builder.add_local(placeholder, None);
+    ctx.set_owned(builder, local);
+    let mint_bb = builder.new_block();
+    let entry_bb = builder.new_block();
+    builder.jump(mint_bb);
+    builder.switch_to(entry_bb);
+    PendingAccumulator { local, mint_bb, entry_bb }
+}
+
+/// Emit the accumulator's constructor into the reserved block and rejoin.
+/// `ctor_args` is EMPTY for the monomorphized set/dict ctors: the LIR ctor-arg
+/// synthesis that performs the `_str` key-channel upgrade is gated on
+/// `lir_args.is_empty()` (`src/lir/lower/insts.rs:3716-3718` / `:3742`), so a
+/// producer that passes its own `SizeOf` silently disables the very upgrade it
+/// needs (ratified in `lower_set_literal_from_array`'s ctor-arg comment in
+/// this file — cite by grep-anchor: this diff moved ~470 lines and every
+/// line-number cite into it went stale).
+fn close_accumulator_mint(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    pending: &PendingAccumulator,
+    ctor: &str,
+    ctor_args: Vec<Operand>,
+    acc_type: TypeId,
+) {
+    let after_bb = builder.current_block;
+    builder.switch_to(pending.mint_bb);
+    builder.call_extern_into(pending.local, ctor, ctor_args);
+    ctx.drops.register_local(pending.local, acc_type, &ctx.type_registry);
+    builder.jump(pending.entry_bb);
+    builder.switch_to(after_bb);
+}
+
+/// A comprehension whose SOURCE lowered no loop at all: there is no element,
+/// therefore no element type, therefore no accumulator to mint.
+///
+/// This replaces three `.expect("comprehension body_fn always runs — the loop
+/// body is lowered unconditionally")` sites. That string was a FALSE invariant
+/// with no enforcing guard (AGENTS.md Core #14): `lower_for_iterable_with` has
+/// five paths that find no usable `iter()`/`next()` signature and lower
+/// nothing, so `body_fn` demonstrably does NOT always run. The three sites
+/// aborted with a message asserting exactly the thing that had just failed.
+///
+/// ⚠ WHY THIS IS STILL LOUD, and why it is not the reference-grade answer.
+/// Core #10 is lower-**or-reject**, and the reject belongs at CHECK time: the
+/// typechecker accepts `[x * 2 for x in p]` for a `p` with no `iter()` (it
+/// discards the comprehension's element type entirely and returns `error_id`
+/// — `src/semantic/typecheck.rs`, all three comprehension arms), and there is
+/// no "is this iterable?" gate anywhere in the front end. So the case has no
+/// SUBJECT to widen, not a rule that is too narrow (Core #15e Q4). Adding one
+/// changes accept/reject and therefore owes all three lanes (Core #9) plus the
+/// ggdef corpus — out of this track's reach, FILED with a durable repro at
+/// `tests/fixtures/known_gaps/comprehension_over_non_iterable_struct.gg` and a
+/// `TODO.md` bullet.
+///
+/// Until then this aborts LOUDLY rather than minting a placeholder
+/// accumulator: a silently-empty `Vector`/`Set`/`Dict` from a program the
+/// front end wrongly accepted is the Core #8 trap (a loud failure traded for a
+/// silent wrong value), and the statement-`for` form of the same program
+/// already runs zero iterations silently — that divergence is part of the
+/// filed defect, not something to "fix" by making the comprehension silent too.
+fn comprehension_source_not_iterable(
+    iterable: &Spanned<Expr>,
+    dispatched: bool,
+    kind: &str,
+) -> ! {
+    panic!(
+        "cannot lower a {kind} comprehension: its source expression at {:?} lowered no loop, so no element -- and hence no accumulator element type -- was ever produced (the source dispatched to an arm: {dispatched}). This is a program the TYPECHECKER should have accepted or rejected and did neither: the source has no usable `iter()`/`next()` pair, and there is no is-it-iterable gate in the front end. Filed in TODO.md with the repro `tests/fixtures/known_gaps/comprehension_over_non_iterable_struct.gg`; the fix is a check-time rejection on every lane, not a lowering fallback -- a placeholder accumulator here would trade a loud failure for a silently empty collection.",
+        iterable.span,
+    );
+}
+
+fn comprehension_var_name(variable: &Spanned<Pattern>) -> String {
+    match &variable.node {
+        Pattern::Binding(name) => name.clone(),
+        _ => "_comp_var".to_string(),
+    }
+}
 
 /// Lower `[expr for var in iterable if condition]` to a loop that builds an array.
 pub(super) fn lower_list_comprehension(
@@ -741,362 +967,56 @@ pub(super) fn lower_list_comprehension(
     condition: Option<&Spanned<Expr>>,
 ) -> Operand {
     let array_type = ctx.type_mapper.lookup_named("GorgetArray").unwrap_or(UNIT_TYPE);
-
-    // Only handle range iterables for now
-    if let Expr::Range { start: Some(start), end: Some(end), inclusive, .. } = &iterable.node {
-        // Create accumulator array (use I64 as default element size)
-        let acc_local = builder.call_extern(
-            "gorget_array_new",
-            vec![Operand::Constant(Constant::SizeOf(I64_TYPE))],
-            array_type,
+    // CoW-2G pre-header hoist, BODY channel. The statement-`for` performs it
+    // at the top of `lower_for` (`stmts/for_loops.rs`); a comprehension body is
+    // an EXPRESSION, and the shared driver never sees it (it receives
+    // `body_fn`, not the expression), so the hoist has to happen HERE, at each
+    // emitter, while the body expression is still in scope. It is fed through the `condition`
+    // slot because `cow_mutations_in_loop` already has an expression entry
+    // (`cow_after_expr_moves`). The FILTER channel is hoisted once at the
+    // producer instead — see `drive_comprehension_loop`.
+    // ⚠ There are FOUR body-channel calls, not three: the dict carries
+    // `key_expr` AND `val_expr`, and a val-only hoist leaves the key side
+    // wrong (measured `xs.len()/ys.len()/a.len()`, correct `2/2/4`: a set or
+    // dict comprehension came out of the dispatcher refactor at `4/2/4`,
+    // WORSE than HEAD's `3/2/4`, until its own call landed).
+    {
+        let empty = crate::parser::ast::Block::synthetic(Vec::new(), comp_expr.span);
+        crate::ir::lowering::stmts::materialize_loop_carried_bare_params(
+            ctx, builder, &empty, Some(&comp_expr.node), None, comp_expr.span,
         );
-        ctx.set_owned(builder, acc_local);
-        ctx.drops.register_local(acc_local, array_type, &ctx.type_registry);
-
-        // Create loop variable
-        let var_name = match &variable.node {
-            Pattern::Binding(name) => name.clone(),
-            _ => "_comp_var".to_string(),
-        };
-        let loop_var = builder.add_local(I64_TYPE, Some(&var_name));
-        let start_val = lower_expr(ctx, builder, start);
-        builder.assign(Place::local(loop_var), start_val);
-        ctx.register_local(&var_name, loop_var, I64_TYPE);
-
-        let header_bb = builder.new_block();
-        let body_bb = builder.new_block();
-        let push_bb = if condition.is_some() { Some(builder.new_block()) } else { None };
-        let incr_bb = builder.new_block();
-        let exit_bb = builder.new_block();
-
-        builder.jump(header_bb);
-
-        // Header: compare loop var with end
-        builder.switch_to(header_bb);
-        let end_val = lower_expr(ctx, builder, end);
-        let cmp_op = if *inclusive { CmpOp::Le } else { CmpOp::Lt };
-        let cond = builder.cmp(cmp_op, I64_TYPE, FunctionBuilder::copy(loop_var), end_val);
-        builder.branch(FunctionBuilder::copy(cond), body_bb, exit_bb);
-
-        // Body: optionally check condition
-        builder.switch_to(body_bb);
-        if let Some(cond_expr) = condition {
-            let filter = lower_expr(ctx, builder, cond_expr);
-            builder.branch(filter, push_bb.unwrap(), incr_bb);
-            builder.switch_to(push_bb.unwrap());
-        }
-
-        // Push element
-        let elem_val = lower_expr(ctx, builder, comp_expr);
-        let elem_type = infer_operand_type_full(ctx, &elem_val, builder);
-        let el = builder.add_local(elem_type, None);
-        builder.assign(Place::local(el), elem_val);
-        let el_ref = builder.borrow(Place::local(el), ctx.register_ptr_type(elem_type));
-        let arr_ref = builder.borrow_mut(Place::local(acc_local), ctx.register_mut_ptr_type(array_type));
-        builder.call_extern(
-            "gorget_array_push",
-            vec![FunctionBuilder::copy(arr_ref), FunctionBuilder::copy(el_ref)],
-            UNIT_TYPE,
-        );
-        builder.jump(incr_bb);
-
-        // Increment
-        builder.switch_to(incr_bb);
-        let one = Operand::Constant(Constant::I64(1));
-        let incremented = builder.bin_op(BinOp::Add, I64_TYPE, FunctionBuilder::copy(loop_var), one);
-        builder.assign(Place::local(loop_var), FunctionBuilder::copy(incremented));
-        builder.jump(header_bb);
-
-        // Exit
-        builder.switch_to(exit_bb);
-        FunctionBuilder::copy(acc_local)
-    } else {
-        // Non-range iterables (e.g. vector variables): iterate by index
-        let iter_op = lower_expr(ctx, builder, iterable);
-        let iter_type = infer_operand_type_full(ctx, &iter_op, builder);
-        // String base (Chain C item 7): `[c for c in s]` routes through the
-        // `lower_for_string` loop shape — the index-walk below is BYTE-
-        // indexed while `gorget_str_index` is CODEPOINT-indexed (OOB on
-        // multi-byte), and `infer_collection_element_type` knows only
-        // collection name shapes (String fell to I64 → `int64_t = Str` CC
-        // error).
-        {
-            let pointee = ctx.pointee_type(iter_type).unwrap_or(iter_type);
-            if ctx.type_mapper.is_string_type(pointee) {
-                return lower_string_comprehension(
-                    ctx, builder, comp_expr, variable, iterable, condition,
-                    iter_op,
-                );
-            }
-        }
-        // Track 1A: auto-deref a Ptr-typed non-string iterable (`[x*2 for x in
-        // &a]`, or a comprehension over a borrowed `Vector[T]` param). Without
-        // it the `iter_local.Field(2)` len-read below reads the pointer's own
-        // bytes instead of the collection's length → 0 iterations → a silently
-        // EMPTY result vector. The SAME deref the statement-for loop applies
-        // (shared `deref_ptr_collection_iterable`), so the comprehension can no
-        // longer drift from `lower_for`. Comprehension element WRITE-THROUGH is
-        // deferred — this is the READ fix only.
-        let (iter_op, iter_type) =
-            super::deref_ptr_collection_iterable(ctx, builder, iter_op, iter_type);
-        let iter_local = builder.add_local(iter_type, None);
-        // Phase C: iter_local is non-owning view of the source — Borrow.
-        let iter_mode = if ctx.type_registry.is_resource_type(iter_type) {
-            crate::ir::instructions::AssignMode::Borrow
-        } else {
-            crate::ir::instructions::AssignMode::Copy
-        };
-        builder.assign_mode(iter_mode, Place::local(iter_local), iter_op);
-
-        // Get element type from collection
-        let elem_type = infer_collection_element_type(ctx, iter_type);
-
-        // Create accumulator array with correct element size
-        let acc_local = builder.call_extern(
-            "gorget_array_new",
-            vec![Operand::Constant(Constant::SizeOf(elem_type))],
-            array_type,
-        );
-        ctx.set_owned(builder, acc_local);
-        ctx.drops.register_local(acc_local, array_type, &ctx.type_registry);
-
-        // idx = 0
-        let idx = builder.add_local(I64_TYPE, None);
-        builder.assign(Place::local(idx), Operand::Constant(Constant::I64(0)));
-
-        // len = iter.len (field index 2 of GorgetArray: {data, cap, len, elem_size})
-        let len = builder.add_local(I64_TYPE, None);
-        let len_place = Place {
-            local: iter_local,
-            projections: vec![Projection::Field(2)],
-        };
-        builder.assign(Place::local(len), Operand::Copy(len_place));
-
-        let header_bb = builder.new_block();
-        let body_bb = builder.new_block();
-        let push_bb = if condition.is_some() { Some(builder.new_block()) } else { None };
-        let incr_bb = builder.new_block();
-        let exit_bb = builder.new_block();
-
-        builder.jump(header_bb);
-
-        // Header: idx < len
-        builder.switch_to(header_bb);
-        let cond = builder.cmp(CmpOp::Lt, I64_TYPE, FunctionBuilder::copy(idx), FunctionBuilder::copy(len));
-        builder.branch(FunctionBuilder::copy(cond), body_bb, exit_bb);
-
-        // Body
-        builder.switch_to(body_bb);
-
-        // Register comprehension variable: elem = iter[idx]
-        let var_name = match &variable.node {
-            Pattern::Binding(name) => name.clone(),
-            _ => "_comp_var".to_string(),
-        };
-        let elem = builder.index_load(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
-        ctx.register_local(&var_name, elem, elem_type);
-
-        // Optionally check condition (filter)
-        if let Some(cond_expr) = condition {
-            let filter = lower_expr(ctx, builder, cond_expr);
-            builder.branch(filter, push_bb.unwrap(), incr_bb);
-            builder.switch_to(push_bb.unwrap());
-        }
-
-        // Push element
-        let elem_val = lower_expr(ctx, builder, comp_expr);
-        let pushed_elem_type = infer_operand_type_full(ctx, &elem_val, builder);
-        let el = builder.add_local(pushed_elem_type, None);
-        builder.assign(Place::local(el), elem_val);
-        let el_ref = builder.borrow(Place::local(el), ctx.register_ptr_type(pushed_elem_type));
-        let arr_ref = builder.borrow_mut(Place::local(acc_local), ctx.register_mut_ptr_type(array_type));
-        builder.call_extern(
-            "gorget_array_push",
-            vec![FunctionBuilder::copy(arr_ref), FunctionBuilder::copy(el_ref)],
-            UNIT_TYPE,
-        );
-        builder.jump(incr_bb);
-
-        // Increment
-        builder.switch_to(incr_bb);
-        let one = Operand::Constant(Constant::I64(1));
-        let incremented = builder.bin_op(BinOp::Add, I64_TYPE, FunctionBuilder::copy(idx), one);
-        builder.assign(Place::local(idx), FunctionBuilder::copy(incremented));
-        builder.jump(header_bb);
-
-        // Exit
-        builder.switch_to(exit_bb);
-        FunctionBuilder::copy(acc_local)
     }
-}
+    let pending = reserve_accumulator(ctx, builder, array_type);
+    let var_name = comprehension_var_name(variable);
 
-/// Lower `[expr for c in s if cond]` where the iterable is a String.
-///
-/// Docs-grounded shape (language-reference §Strings: `for ch in s:` yields
-/// codepoint Strings in a single UTF-8 pass): reuse `lower_for_string` with
-/// a SYNTHESIZED `acc.push(expr)` body. The push routes through the normal
-/// method-call consume machinery, so the clone-at-ownership-boundary of the
-/// cap=0 codepoint view comes for free (the `for ch in s: stack.push(ch)`
-/// shape is run-proven in-tree), and `lower_for_string`'s W3d hook covers
-/// lazy-eligible bases — NO new view-producer emit sites.
-///
-/// The ACCUMULATOR is typed as the mangled `Vector__GorgetString` via
-/// `ctx.ensure_collection_type` (the dict-comprehension precedent above) —
-/// NOT the bare erased `GorgetArray` of the list-comp arm: the typechecker
-/// returns `error_id` for comprehensions, so the GIR acc type ALONE carries
-/// the element story for the push consume-clone machinery, downstream
-/// element inference, and element drops.
-fn lower_string_comprehension(
-    ctx: &mut LoweringContext,
-    builder: &mut FunctionBuilder,
-    comp_expr: &Spanned<Expr>,
-    variable: &Spanned<Pattern>,
-    iterable: &Spanned<Expr>,
-    condition: Option<&Spanned<Expr>>,
-    iter_op: Operand,
-) -> Operand {
-    let owned_string_type = ctx.type_mapper.owned_string_type;
-    let acc_type = ctx.ensure_collection_type("Vector__GorgetString");
-    let acc_local = builder.call_extern(
+    let mut minted: Option<(TypeId, TypeId)> = None;
+    let dispatched;
+    {
+        let minted_ref = &mut minted;
+        let acc_local = pending.local;
+        let mut body_fn = |ctx: &mut LoweringContext, builder: &mut FunctionBuilder| {
+            let elem_val = lower_expr(ctx, builder, comp_expr);
+            let elem = MaterializedElement::produce(
+                ctx, builder, elem_val, comp_expr, SlotType::FromOperand);
+            let elem_type = elem.ty();
+            let acc_type = mint_accumulator_type(ctx, builder, acc_local, "Vector", &elem);
+            store_and_push_element(ctx, builder, elem, acc_local, acc_type, "gorget_array_push");
+            *minted_ref = Some((elem_type, acc_type));
+        };
+        dispatched = crate::ir::lowering::stmts::for_loops::drive_comprehension_loop(
+            ctx, builder, &var_name, iterable, condition, &mut body_fn);
+    }
+
+    let Some((elem_type, acc_type)) = minted else {
+        comprehension_source_not_iterable(iterable, dispatched, "list")
+    };
+    close_accumulator_mint(
+        ctx, builder, &pending,
         "gorget_array_new",
-        vec![Operand::Constant(Constant::SizeOf(owned_string_type))],
+        vec![Operand::Constant(Constant::SizeOf(elem_type))],
         acc_type,
     );
-    ctx.set_owned(builder, acc_local);
-    ctx.drops.register_local(acc_local, acc_type, &ctx.type_registry);
-    // Collision-free synthetic name so the synthesized AST body below can
-    // reference the accumulator through normal name resolution.
-    let acc_name = format!("__strcomp_acc_{}", acc_local.0);
-    ctx.register_local(&acc_name, acc_local, acc_type);
-
-    let var_name = match &variable.node {
-        Pattern::Binding(name) => name.clone(),
-        _ => "_comp_var".to_string(),
-    };
-
-    // Synthesize `acc.push(comp_expr)`, wrapped in `if condition:` for the
-    // filtered variant. `lower_for_string` rejoins the body to the
-    // `byte_pos += cplen` increment, so the filter cannot skip the
-    // position advance (termination stays correct).
-    let span = comp_expr.span;
-    let push_stmt = Stmt::Expr(Spanned::new(
-        Expr::MethodCall {
-            receiver: Box::new(Spanned::new(
-                Expr::Identifier(acc_name.clone()),
-                span,
-            )),
-            method: Spanned::new("push".to_string(), span),
-            generic_args: None,
-            args: vec![Spanned::new(
-                ast::CallArg {
-                    name: None,
-                    ownership: ast::Ownership::Borrow,
-                    value: comp_expr.clone(),
-                },
-                span,
-            )],
-        },
-        span,
-    ));
-    let body_stmts = if let Some(cond_expr) = condition {
-        vec![Spanned::new(
-            Stmt::If {
-                condition: cond_expr.clone(),
-                then_body: Block::synthetic(vec![Spanned::new(push_stmt, span)], span),
-                elif_branches: vec![],
-                else_body: None,
-            },
-            span,
-        )]
-    } else {
-        vec![Spanned::new(push_stmt, span)]
-    };
-    let body = Block::synthetic(body_stmts, span);
-
-    crate::ir::lowering::stmts::for_loops::lower_for_string(
-        ctx, builder, &var_name, iter_op, iterable, &body, None,
-    );
-    FunctionBuilder::copy(acc_local)
-}
-
-// ---- Dict and Set Comprehensions ----
-
-/// Lower `{key: value for var in iterable if condition}`.
-pub(super) fn lower_dict_comprehension(
-    ctx: &mut LoweringContext,
-    builder: &mut FunctionBuilder,
-    key_expr: &Spanned<Expr>,
-    val_expr: &Spanned<Expr>,
-    variables: &[Spanned<String>],
-    iterable: &Spanned<Expr>,
-    condition: Option<&Spanned<Expr>>,
-) -> Operand {
-    // Only handle range iterables for now
-    if let Expr::Range { start: Some(start), end: Some(end), inclusive, .. } = &iterable.node {
-        let var_name = if let Some(first) = variables.first() {
-            first.node.clone()
-        } else {
-            "_dict_comp_var".to_string()
-        };
-
-        // We need to infer dict type — use I64 placeholders.
-        // Phase A: ensure_collection_type populates protocol metadata.
-        let mangled = "Dict__int64_t__int64_t".to_string();
-        let dict_type = ctx.ensure_collection_type(&mangled);
-
-        let new_fn = format!("{mangled}__new");
-        let put_fn = format!("{mangled}__put");
-
-        let dict_local = builder.call_extern(&new_fn, vec![], dict_type);
-        // Tier 2a Phase 3: tag the fresh dict as Owned (mirrors
-        // lower_dict_literal + lower_set_comprehension at :543).
-        ctx.set_owned(builder, dict_local);
-
-        // Create loop variable
-        let loop_var = builder.add_local(I64_TYPE, Some(&var_name));
-        let start_val = lower_expr(ctx, builder, start);
-        builder.assign(Place::local(loop_var), start_val);
-        ctx.register_local(&var_name, loop_var, I64_TYPE);
-
-        let header_bb = builder.new_block();
-        let body_bb = builder.new_block();
-        let put_bb = if condition.is_some() { Some(builder.new_block()) } else { None };
-        let incr_bb = builder.new_block();
-        let exit_bb = builder.new_block();
-
-        builder.jump(header_bb);
-
-        builder.switch_to(header_bb);
-        let end_val = lower_expr(ctx, builder, end);
-        let cmp_op = if *inclusive { CmpOp::Le } else { CmpOp::Lt };
-        let cond = builder.cmp(cmp_op, I64_TYPE, FunctionBuilder::copy(loop_var), end_val);
-        builder.branch(FunctionBuilder::copy(cond), body_bb, exit_bb);
-
-        builder.switch_to(body_bb);
-        if let Some(cond_expr) = condition {
-            let filter = lower_expr(ctx, builder, cond_expr);
-            builder.branch(filter, put_bb.unwrap(), incr_bb);
-            builder.switch_to(put_bb.unwrap());
-        }
-
-        let k = lower_expr(ctx, builder, key_expr);
-        let v = lower_expr(ctx, builder, val_expr);
-        let dr = builder.borrow_mut(Place::local(dict_local), ctx.register_mut_ptr_type(dict_type));
-        builder.call_extern(&put_fn, vec![FunctionBuilder::copy(dr), k, v], UNIT_TYPE);
-        builder.jump(incr_bb);
-
-        builder.switch_to(incr_bb);
-        let one = Operand::Constant(Constant::I64(1));
-        let incremented = builder.bin_op(BinOp::Add, I64_TYPE, FunctionBuilder::copy(loop_var), one);
-        builder.assign(Place::local(loop_var), FunctionBuilder::copy(incremented));
-        builder.jump(header_bb);
-
-        builder.switch_to(exit_bb);
-        FunctionBuilder::copy(dict_local)
-    } else {
-        builder.nop();
-        Operand::Constant(Constant::Unit)
-    }
+    FunctionBuilder::copy(pending.local)
 }
 
 /// Lower `{expr for var in iterable if condition}` (set comprehension).
@@ -1108,78 +1028,128 @@ pub(super) fn lower_set_comprehension(
     iterable: &Spanned<Expr>,
     condition: Option<&Spanned<Expr>>,
 ) -> Operand {
-    let set_type = ctx.type_mapper.lookup_named("GorgetSet")
+    let set_type_placeholder = ctx.type_mapper.lookup_named("GorgetSet")
         .or_else(|| ctx.type_mapper.lookup_named("GorgetArray"))
         .unwrap_or(UNIT_TYPE);
 
-    // Determine ordering from expected_type before any mutation.
+    // Ordering comes from the declared destination, read BEFORE any mutation.
     let is_ordered = ctx.func_state.expected_type
         .and_then(|et| ctx.type_registry.collection_kind(et))
         == Some(CollectionKind::OrderedSet);
-    let new_fn = if is_ordered { "gorget_ordered_set_new" } else { "gorget_set_new" };
+    let base = if is_ordered { "Set" } else { "HashSet" };
 
-    // Only handle range iterables for now
-    if let Expr::Range { start: Some(start), end: Some(end), inclusive, .. } = &iterable.node {
-        let acc_local = builder.call_extern(
-            new_fn,
-            vec![Operand::Constant(Constant::SizeOf(I64_TYPE))],
-            set_type,
+    // CoW-2G pre-header hoist, BODY channel — see `lower_list_comprehension`
+    // for the full rationale. Its own call, not the list's: the four
+    // body-channel sites are list ×1, set ×1, dict ×2.
+    {
+        let empty = crate::parser::ast::Block::synthetic(Vec::new(), comp_expr.span);
+        crate::ir::lowering::stmts::materialize_loop_carried_bare_params(
+            ctx, builder, &empty, Some(&comp_expr.node), None, comp_expr.span,
         );
-        ctx.set_owned(builder, acc_local);
-        ctx.drops.register_local(acc_local, set_type, &ctx.type_registry);
-
-        let var_name = &variable.node;
-        let loop_var = builder.add_local(I64_TYPE, Some(var_name));
-        let start_val = lower_expr(ctx, builder, start);
-        builder.assign(Place::local(loop_var), start_val);
-        ctx.register_local(var_name, loop_var, I64_TYPE);
-
-        let header_bb = builder.new_block();
-        let body_bb = builder.new_block();
-        let push_bb = if condition.is_some() { Some(builder.new_block()) } else { None };
-        let incr_bb = builder.new_block();
-        let exit_bb = builder.new_block();
-
-        builder.jump(header_bb);
-
-        builder.switch_to(header_bb);
-        let end_val = lower_expr(ctx, builder, end);
-        let cmp_op = if *inclusive { CmpOp::Le } else { CmpOp::Lt };
-        let cond = builder.cmp(cmp_op, I64_TYPE, FunctionBuilder::copy(loop_var), end_val);
-        builder.branch(FunctionBuilder::copy(cond), body_bb, exit_bb);
-
-        builder.switch_to(body_bb);
-        if let Some(cond_expr) = condition {
-            let filter = lower_expr(ctx, builder, cond_expr);
-            builder.branch(filter, push_bb.unwrap(), incr_bb);
-            builder.switch_to(push_bb.unwrap());
-        }
-
-        let elem_val = lower_expr(ctx, builder, comp_expr);
-        let elem_type = infer_operand_type_full(ctx, &elem_val, builder);
-        let el = builder.add_local(elem_type, None);
-        builder.assign(Place::local(el), elem_val);
-        let el_ref = builder.borrow(Place::local(el), ctx.register_ptr_type(elem_type));
-        let set_ref = builder.borrow_mut(Place::local(acc_local), ctx.register_mut_ptr_type(set_type));
-        builder.call_extern(
-            "gorget_set_add",
-            vec![FunctionBuilder::copy(set_ref), FunctionBuilder::copy(el_ref)],
-            UNIT_TYPE,
-        );
-        builder.jump(incr_bb);
-
-        builder.switch_to(incr_bb);
-        let one = Operand::Constant(Constant::I64(1));
-        let incremented = builder.bin_op(BinOp::Add, I64_TYPE, FunctionBuilder::copy(loop_var), one);
-        builder.assign(Place::local(loop_var), FunctionBuilder::copy(incremented));
-        builder.jump(header_bb);
-
-        builder.switch_to(exit_bb);
-        FunctionBuilder::copy(acc_local)
-    } else {
-        builder.nop();
-        Operand::Constant(Constant::Unit)
     }
+    let pending = reserve_accumulator(ctx, builder, set_type_placeholder);
+    let var_name = variable.node.clone();
+
+    let mut minted: Option<(TypeId, String)> = None;
+    let dispatched;
+    {
+        let minted_ref = &mut minted;
+        let acc_local = pending.local;
+        let mut body_fn = |ctx: &mut LoweringContext, builder: &mut FunctionBuilder| {
+            let elem_val = lower_expr(ctx, builder, comp_expr);
+            let elem = MaterializedElement::produce(
+                ctx, builder, elem_val, comp_expr, SlotType::FromOperand);
+            // BOTH key channels off the SAME materialized type: the accumulator
+            // TYPE feeds `wire_collection_bridges` (user-hashable ktable), the
+            // ctor NAME feeds `set_elem_type_from_monomorphized` (the `_str`
+            // string-hash upgrade). A producer that supplies only one closes
+            // half the class (see `collection_ctor_name` and
+            // `mint_accumulator_type` in this file).
+            let acc_type = mint_accumulator_type(ctx, builder, acc_local, base, &elem);
+            let ctor = collection_ctor_name(ctx, base, elem.ty());
+            store_and_push_element(ctx, builder, elem, acc_local, acc_type, "gorget_set_add");
+            *minted_ref = Some((acc_type, ctor));
+        };
+        dispatched = crate::ir::lowering::stmts::for_loops::drive_comprehension_loop(
+            ctx, builder, &var_name, iterable, condition, &mut body_fn);
+    }
+
+    let Some((acc_type, ctor)) = minted else {
+        comprehension_source_not_iterable(iterable, dispatched, "set")
+    };
+    close_accumulator_mint(ctx, builder, &pending, &ctor, vec![], acc_type);
+    FunctionBuilder::copy(pending.local)
+}
+
+/// Lower `{key: value for var in iterable if condition}`.
+pub(super) fn lower_dict_comprehension(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    key_expr: &Spanned<Expr>,
+    val_expr: &Spanned<Expr>,
+    variables: &[Spanned<String>],
+    iterable: &Spanned<Expr>,
+    condition: Option<&Spanned<Expr>>,
+) -> Operand {
+    let dict_placeholder = ctx.type_mapper.lookup_named("GorgetMap")
+        .or_else(|| ctx.type_mapper.lookup_named("GorgetArray"))
+        .unwrap_or(UNIT_TYPE);
+    // CoW-2G pre-header hoist, BODY channel — TWICE, because a dict body has
+    // two expressions. See `lower_list_comprehension` for the full rationale;
+    // a val-only hoist leaves the KEY side unmaterialized.
+    {
+        let empty = crate::parser::ast::Block::synthetic(Vec::new(), key_expr.span);
+        crate::ir::lowering::stmts::materialize_loop_carried_bare_params(
+            ctx, builder, &empty, Some(&key_expr.node), None, key_expr.span,
+        );
+    }
+    {
+        let empty = crate::parser::ast::Block::synthetic(Vec::new(), val_expr.span);
+        crate::ir::lowering::stmts::materialize_loop_carried_bare_params(
+            ctx, builder, &empty, Some(&val_expr.node), None, val_expr.span,
+        );
+    }
+    let pending = reserve_accumulator(ctx, builder, dict_placeholder);
+    let var_name = variables.first()
+        .map(|v| v.node.clone())
+        .unwrap_or_else(|| "_dict_comp_var".to_string());
+
+    let mut minted: Option<(TypeId, String)> = None;
+    let dispatched;
+    {
+        let minted_ref = &mut minted;
+        let acc_local = pending.local;
+        let mut body_fn = |ctx: &mut LoweringContext, builder: &mut FunctionBuilder| {
+            let k_val = lower_expr(ctx, builder, key_expr);
+            let key = MaterializedElement::produce(
+                ctx, builder, k_val, key_expr, SlotType::FromOperand);
+            let v_val = lower_expr(ctx, builder, val_expr);
+            let val = MaterializedElement::produce(
+                ctx, builder, v_val, val_expr, SlotType::FromOperand);
+
+            // The SINGLE dict-mangle chokepoint, shared with `lower_dict_literal`.
+            let mangled = dict_mangled_name(ctx, &key, &val);
+            let dict_type = ctx.ensure_collection_type(&mangled);
+            builder.set_local_type(acc_local, dict_type);
+            let put_fn = format!("{mangled}__put");
+            ctx.consume_externs.insert(put_fn.clone());
+            let (key_op, key_ty) = key.into_parts();
+            let (val_op, val_ty) = val.into_parts();
+            insert_pair(
+                ctx, builder, acc_local, dict_type, &put_fn,
+                key_op, val_op, key_ty, val_ty, key_expr, val_expr,
+            );
+            *minted_ref = Some((dict_type, format!("{mangled}__new")));
+        };
+        dispatched = crate::ir::lowering::stmts::for_loops::drive_comprehension_loop(
+            ctx, builder, &var_name, iterable, condition, &mut body_fn);
+    }
+
+    let Some((acc_type, ctor)) = minted else {
+        comprehension_source_not_iterable(iterable, dispatched, "dict")
+    };
+    close_accumulator_mint(ctx, builder, &pending, &ctor, vec![], acc_type);
+    FunctionBuilder::copy(pending.local)
 }
 
 // ---- Optional Chaining ----
@@ -1270,7 +1240,8 @@ pub(super) fn lower_range_expr(
     // D22 open-end slice (`v[a:]` / `v[:]`): the range's end is None; pass
     // `i64::MAX` so the runtime clamp (`end > arr->len → arr->len`) reduces
     // it to the receiver's length at the actual slice call. The for-loop
-    // range fast path (`src/ir/lowering/stmts/for_loops.rs:136`) requires
+    // range fast path (the `Expr::Range { start: Some, end: Some }` arm of
+    // `lower_for`, `src/ir/lowering/stmts/for_loops.rs`) requires
     // Some(end) so it never observes the sentinel — only the slice path
     // does, and that path is guarded by the runtime clamp landed in the
     // same round (Track C, C-2). Pre-C-2, an open-end slice traps with the
