@@ -1,17 +1,33 @@
-# CoW 2G comprehension-loop sibling (OUT OF SCOPE — filed gap). The four
-# comprehension emitters (list/string/dict/set) synthesize their own header/
-# body/incr loops with NO save/restore, so an in-body materialize clone lands
-# inside the re-executing body block — the same per-iteration throwaway by a
-# different route. The 2G helper is statement-shaped and hooks lower_while/
-# lower_for/lower_loop; comprehension bodies are synthesized exprs (un-scouted
-# surface), so this is filed, not fixed here.
+# GRADUATED in R44 from `known_gaps/` — this is now a LIVE regression fixture.
 #
-# LANE ASYMMETRY (Core #9): the self-host mirror hooks inside its lower_for_*
-# bodies, which its comprehensions desugar THROUGH — so the SELF-HOST lane will
-# likely fix these shapes FIRST, inverting the usual Rust-leads ordering.
+# ⚠ SCOPE, stated so the NAME cannot over-claim (Core #12). This fixture is
+# ONE CELL of a 7-cell matrix: emitter x channel.
+#     BODY channel   -> list . set . dict-KEY . dict-VALUE   (4 hoist calls)
+#     FILTER channel -> list . set . dict                    (1 hoist, at the
+#                                                             shared producer)
+# This is the list x BODY cell. The other six live in
+# `cow_loop_bare_param_comprehension_matrix.gg`.
+# (An earlier header here claimed a "list/string/dict/set" FOUR-EMITTER class.
+# That was wrong twice: there is no string EMITTER -- a `String` source flows
+# through the LIST emitter -- and the dict emitter carries TWO body-channel
+# expressions, key and value, so a value-only hoist leaves the key side wrong.)
 #
-# Asserts the CORRECT output: private copy [1,2,3,4], two drains → len 2, ys
-# has 2 elements, caller stays 4. The compiler currently prints 3,2,4.
+# THE SHAPE: `f(Vector[int] xs)` takes a BARE by-value param, so by
+# CoW-default-borrow `xs` is a borrow alias into the caller's `a` until it is
+# mutated. The loop-carried mutation must be materialized ONCE in the loop's
+# PRE-HEADER: not never (the write-through reaches the caller) and not per
+# iteration (the clone lands in the re-executing body and is thrown away).
+# The comprehension emitters synthesize their own loop and so needed the same
+# `materialize_loop_carried_bare_params` hoist the statement-`for` performs.
+#
+# CORRECT OUTPUT `2 / 2 / 4`: a private copy of [1,2,3,4], two drains -> len 2,
+# ys has 2 elements, and the caller still sees 4. The statement-`for` form of
+# this exact program prints `2 / 2 / 4` on both lanes and is the oracle.
+#
+# RED-verified pre-fix on one build of each compiler: Rust `gg` printed
+# `3 / 2 / 4`, the self-host driver `0 / 2 / 4`.
+#
+# Wired test: `cow_loop_bare_param_comprehension` (tests/integration.rs).
 int drain_one(Vector[int] &v):
     v.pop()
     return v.len()

@@ -1,16 +1,22 @@
-# KNOWN GAP (filed 2026-08-15, surfaced by the R42 Track-B EXECUTOR while
-# probing residual comment shapes, orchestrator-verified): `auto`-typed DICT
-# and SET comprehensions over a plain `Vector[int]` produce SILENT WRONG
-# VALUES — `auto dc = {x: x * 10 for x in xs}` gives `dc[1]` == 3 (expected
-# 10) and `auto sc = {x for x in xs}` gives `sc.len()` == 0 (expected 3).
-# Both check clean and run without error — a wrong-code cell, worse than the
-# filed resource-element comprehension CRASH family (that family's
-# Vector[int] LIST cell is correct; these dict/set forms are not).
-# The explicitly-typed range form CC-FAILs (a second cell of the same root).
-# Likely root: the name-prefix element-type inference debt (the filed rule-2
-# entry) mis-typing the comprehension's accumulator.
-# INTENDED: dc[1] == 10, sc.len() == 3.
-# Wired test: sound_auto_dict_set_comprehension_values (tests/integration.rs, #[ignore]d).
+# GRADUATED in R44 from `known_gaps/` — this is now a LIVE regression fixture.
+#
+# It pins the `auto`-typed DICT and SET comprehension over a plain
+# `Vector[int]`. Before the fix these produced SILENT WRONG VALUES —
+# `auto dc = {x: x * 10 for x in xs}` gave `dc[1]` == 3 (expected 10) and
+# `auto sc = {x for x in xs}` gave `sc.len()` == 0 (expected 3) — while
+# checking clean and running without error, which is worse than the crash
+# cells of the same family. Root cause (R44): the comprehension emitters
+# minted their accumulator UP FRONT, before the loop body had produced an
+# element, so the element type could only be a hardcoded guess
+# (`Dict__int64_t__int64_t`) or the SOURCE collection's element type. The mint
+# is now DEFERRED into a block left unterminated until the body has run, and
+# takes its type from the MATERIALIZED element.
+#
+# RED-verified pre-fix on one build of each compiler: Rust `gg` printed 3 / 0,
+# the self-host driver 0 / 8. Both now print 10 / 3, on C and on
+# `--backend=llvm`.
+#
+# Wired test: `sound_auto_dict_set_comprehension_values` (tests/integration.rs).
 void main():
     Vector[int] xs = [1, 2, 3]
     auto dc = {x: x * 10 for x in xs}

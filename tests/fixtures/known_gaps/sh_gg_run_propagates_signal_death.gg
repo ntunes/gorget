@@ -1,20 +1,47 @@
-# ⚠⚠ THIS FIXTURE'S ORACLE IS A COMPILER BUG. READ BEFORE "FIXING" A RED HERE.
+# ⚠⚠ THIS FIXTURE'S SIGSEGV IS A COMPILER BUG, AND ONLY THE SELF-HOST LANE
+# STILL HAS IT. READ BEFORE "FIXING" A RED HERE.
 #
-# The wired test asserts exit == 139 and "segmentation" in stderr. The SIGSEGV is
-# NOT scaffolding and NOT intentional: it is a live comprehension-emitter defect
-# (filed in TODO.md), where the result-push uses the SOURCE element size, so a
-# `Vector[String] -> Vector[int]` comprehension memcpy's 64 bytes out of an
-# 8-byte stack temp. Minimal, book-level, no sanitizer needed:
+# The wired test (`sh_gg_run_propagates_signal_death`) asserts exit == 139 and
+# "segmentation" in stderr from the SELF-HOST driver. The SIGSEGV is NOT
+# scaffolding and NOT intentional: it is a comprehension-emitter defect where
+# the result-push uses the SOURCE element size instead of the RESULT element
+# size, so a type-changing comprehension copies the wrong width out of an
+# 8-byte stack temp.
 #
-#     void main():
-#         Vector[String] words = ["ab", "cde"]
-#         Vector[int] r = [w.len() for w in words]      # SIGSEGV, rc 139
-#         print(r.get(0).unwrap())
+# LANE STATUS (R44):
+#   • RUST gg — FIXED. The emitters now defer the accumulator mint until the
+#     loop body has produced a MATERIALIZED element, so the slot is minted from
+#     the result element type. `gg run` on this program is rc 0 printing `1`,
+#     and `gg build --sanitize` on it is CLEAN (measured: zero ASan/Leak lines,
+#     with an unbounded-recursion control still reporting `stack-overflow` on
+#     the same build). Its `tests/sanitize/CORRUPTION_ALLOWLIST.txt` row
+#     retired WITH that fix, on its own stated terms.
+#   • SELF-HOST — STILL BROKEN, which is why this test is still green. The SH
+#     list arm mints from `collection_element_type(coll_tn)`, i.e. the SOURCE
+#     collection's element name. That is routed to R44 Track K.
 #
-# The longhand `for` loop with `.push()` is clean. So WHEN THAT DEFECT IS FIXED,
-# THIS TEST GOES RED — and that red means the fix WORKED. Re-point this fixture
-# at a deliberate SIGSEGV (a null deref) instead of weakening the assertion, and
-# do not "fix" the comprehension back.
+# ⚠ TWO FIGURES, TWO SHAPES — do not merge them. Measured at HEAD under
+# `gg build --sanitize`, both `ERROR: AddressSanitizer: stack-buffer-overflow`:
+#   • THIS fixture's own nested program below
+#     (`Vector[Vector[int]] -> Vector[int]`)          => READ of size 64
+#   • the `Vector[String] -> Vector[int]` minimal form => READ of size 32
+#
+#         void main():
+#             Vector[String] words = ["ab", "cde"]
+#             Vector[int] r = [w.len() for w in words]   # SH: SIGSEGV, rc 139
+#             print(r.get(0).unwrap())
+#
+# The longhand `for` loop with `.push()` is clean on both lanes.
+#
+# ⛔ THE "RE-POINT THIS AT A DELIBERATE NULL DEREF" ORDER IS RETRACTED (R44).
+# It existed for a Rust-lane oracle (`gg_run_propagates_signal_death`) that has
+# since been re-pointed at `tests/fixtures/stack_guard_deep_recursion.gg` — an
+# intentional overflow that `tests/security.rs` ratifies — precisely so no
+# oracle rides on a defect under repair. THIS test needs no re-point: its
+# oracle is the SELF-HOST lane, whose defect is still live and filed. When
+# Track K lands, this test goes red, and THAT red means the fix worked; retire
+# the test then, do not weaken the assertion and do not "fix" the
+# comprehension back.
 #
 # (Found 2026-08-18 by the corpus-wide ASan census, which is also how the
 # mechanism — wrong elem_size at the push, a write-site defect — was identified.)
@@ -50,6 +77,20 @@
 # child's exit code (139) with signal-indicating stderr. Also a worked
 # example of Core #15d MIND-THE-PROBE (source-reading vs build-and-run) and
 # Core #15e Q1 (asymmetry vs ratified — verify before filing).
+#
+# ⚠ WHY A LIVE PIN LIVES IN `known_gaps/`. `scripts/convergence.sh` ratifies
+# exactly this placement — "NOT A GAP AT ALL = a known_gaps fixture referenced
+# ONLY by LIVE tests … parked in that directory because `runtime_parity_corpus`
+# never descends subdirectories". Two top-level scanners would otherwise pick
+# this up and get the wrong answer:
+#   • `runtime_parity_corpus` (a top-level `read_dir`) stdout-diffs Rust gg
+#     against the self-host on LANGUAGE-SEMANTICS parity. This fixture tests a
+#     `gg run` DRIVER property, not semantics, and its Rust half now passes
+#     while the SH half still SIGSEGVs — so it would be a permanent counted
+#     CRASH row for a defect already pinned by the test above.
+#   • `scripts/sanitize_sweep.sh` (`find tests/fixtures -maxdepth 1`)
+#     sanitizes the RUST lane, which no longer corrupts here.
+# Do NOT move it back to the top level.
 
 int seed():
     return 1
