@@ -13,9 +13,9 @@
 # Usage:
 #   scripts/convergence.sh                              # current counts
 #   scripts/convergence.sh <prev_kg> <prev_todo>        # full `Convergence:` line
-#   scripts/convergence.sh <prev_kg> <prev_todo> <filed> # + STRICT 2x VERDICT
+#   scripts/convergence.sh <prev_kg> <prev_todo> <filed> # + filed/closed report
 #
-# ── THIS SCRIPT IS THE ARBITER OF THE STRICT 2x RULE ──────────────────────
+# ── THIS SCRIPT MEASURES; IT NO LONGER GATES (owner 2026-08-23) ─────────────
 # Not prose in a DONE entry. A round that asserts compliance without quoting
 # this script's verdict line has not demonstrated it (measured twice: Round
 # XXVIII claimed "TODO strictly decreases" with TODO flat, and Round XXIX
@@ -239,33 +239,29 @@ if [ $# -ge 2 ]; then
     "$prev_kg" "$known_gaps" "$prev_todo" "$todo_items" "$net_str" "$prev_kg" "$prev_todo" \
     "${filed:+ $filed}"
 
-  fail=0
-  # Clause (c): the combined net strictly decreases.
-  if [ "$net" -ge 0 ]; then
-    echo "  ✗ CLAUSE (c) FAILS: net $net_str is not < 0. The round does not close. Add closures." >&2
-    fail=1
-  fi
-  # Clause (a): closed >= 2x filed, i.e. net <= -filed. Needs the round's
-  # declared filing count — the ONE number a human supplies. Everything else
-  # here is measured, so a wrong declaration is the only way to fake this.
+  # ── MEASUREMENT, NOT A GATE (owner 2026-08-23) ───────────────────────────
+  # The STRICT 2x RULE was REMOVED. It was failed repeatedly, and the rounds
+  # that failed it were the ones doing the most valuable work: a round that
+  # finds nine real defects -- three of them memory-safety -- is a GOOD round
+  # that the ratio scored as failing. Measuring inflow is useful; GATING on it
+  # selected against discovery.
+  #
+  # This block now REPORTS and always exits 0. Do not re-add a threshold here.
+  # What survives is an owner ruling, not arithmetic: FIX INLINE unless the
+  # defect is REALLY DISJOINT (discriminator: does the scope creep).
   if [ -n "$filed" ]; then
     closed=$(( filed - net ))
-    need=$(( -filed ))
-    if [ "$net" -le "$need" ]; then
-      printf '  ✓ CLAUSE (a) PASSES: filed %s, closed %s (net %s ≤ −%s) — ratio ≥ 2:1.\n' \
-        "$filed" "$closed" "$net_str" "$filed"
+    if [ "$closed" -ge 0 ]; then
+      printf '  declared filed %s · implied closed %s · measured net %s\n' "$filed" "$closed" "$net_str"
     else
-      printf '  ✗ CLAUSE (a) FAILS: filed %s ⇒ net must be ≤ −%s, but net is %s (closed %s, ratio %s:%s < 2:1).\n' \
-        "$filed" "$filed" "$net_str" "$closed" "$closed" "$filed" >&2
-      echo "     Close $(( 2 * filed - closed )) more item(s), or file fewer. No size/effort exemption exists." >&2
-      fail=1
+      # closed cannot be negative: the declaration undercounts what actually landed.
+      printf '  declared filed %s · measured net %s ⇒ %s MORE item(s) landed than were declared filed.\n' \
+        "$filed" "$net_str" "$(( -closed ))"
+      printf '     Re-count the round filings, or accept the declaration as a lower bound.\n'
     fi
   else
-    echo "  ⚠ CLAUSE (a) NOT CHECKED — pass the round's filing count as a 3rd argument." >&2
-    echo "     A round close that does not quote a clause-(a) verdict has not demonstrated it." >&2
-    fail=1
+    printf '  measured net %s (pass the round filing count as a 3rd arg to also report closed)\n' "$net_str"
   fi
-  [ "$fail" -eq 0 ] || exit 1
 else
   printf 'known_gaps=%s todo_items=%s\n' "$known_gaps" "$todo_items"
   echo "  (pass the previous round's two numbers + the round's filing count)"
