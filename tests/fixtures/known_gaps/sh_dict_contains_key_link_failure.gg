@@ -1,0 +1,29 @@
+# KNOWN GAP — SELF-HOST LANE. `Dict[String, int].contains_key(...)` does not
+# LINK on any self-host driver. Rust gg compiles and runs it correctly.
+#
+# This is a lane divergence with a known direction: Rust is right, the
+# self-host lags, so the self-host is what gets fixed (never dumb the Rust
+# side down to match -- and never reshape fixtures to avoid the gap, which is
+# how a workaround idiom becomes load-bearing).
+#
+# Rust lane, orchestrator-verified 2026-08-24: prints HAS / 1.
+# Self-host lane: link failure on all drivers (R44 Track-K pass-10 measurement).
+#
+# ⚠ WHY THIS IS FILED RATHER THAN WORKED AROUND: an earlier decision in the R44
+# Track-K brief turned this into a fixture-authoring workaround ("use v[key]
+# instead"), which buries the bug exactly the way the playbook forbids. The
+# workaround may still be used where a fixture's SUBJECT is something else, but
+# the gap itself is recorded here with a repro.
+#
+# INTENDED (asserted below): prints HAS then 1 on every lane.
+
+from std.collections import Dict
+
+void main():
+    Dict[String, int] d = {}
+    d.put("k0", 7)
+    if d.contains_key("k0"):
+        print("HAS")
+    else:
+        print("MISS")
+    print(d.len())

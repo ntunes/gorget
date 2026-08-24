@@ -4726,6 +4726,21 @@ fn known_gap_flat_map_cross_type_input_mint() {
     run_gg("known_gaps/flat_map_cross_type_input_mint.gg", "2\ntag");
 }
 
+/// KNOWN GAP (self-host lane): `Dict[String, int].contains_key(...)` does not
+/// link on any self-host driver, while Rust gg compiles and runs it correctly.
+/// A lane divergence with a known direction — Rust is right and the self-host
+/// lags, so the self-host is what gets fixed.
+///
+/// Filed rather than worked around: an earlier Track-K decision turned this into
+/// a fixture-authoring workaround ("use `v[key]`"), which buries the bug the way
+/// the playbook forbids. The Rust lane is asserted here; the self-host side is
+/// covered by the self-host drivers.
+#[test]
+#[ignore = "known gap (R44): Dict.contains_key does not link on the self-host lane (Rust is correct); un-ignore when the self-host lowers/links contains_key"]
+fn known_gap_sh_dict_contains_key_link_failure() {
+    run_gg("known_gaps/sh_dict_contains_key_link_failure.gg", "HAS\n1");
+}
+
 // KNOWN GAP (filed R44 Track D) — Rust `apply_inferred_method_targs`
 // (src/semantic/typecheck.rs) is a non-exhaustive traversal ending in a bare
 // `_ => {}`, so an Iterator terminal in an ASSERT CONDITION keeps its bare
