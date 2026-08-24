@@ -1,0 +1,43 @@
+# KNOWN GAP — RUST LANE. A comprehension over `String.bytes()` over-reads the
+# 1-byte element slot, producing garbage from UNINITIALIZED memory at rc 0.
+#
+#     Vector[int] v = [b for b in s0.bytes()]     # prints 16961, not 65
+#
+# 16961 == 0x4241 -- two bytes ("AB") read out of a one-byte slot. Under
+# `gg build --sanitize` the same program prints -4702111234475015615 ==
+# 0xBEBEBEBEBEBE4241: ASan's 0xBE poison read alongside the two real bytes, so
+# this is an UNINITIALIZED READ, not merely a wrong number. No crash, no
+# sanitizer report -- the silently-wrong-values cell, which is the dangerous one.
+#
+# The STATEMENT form of the identical iteration is CORRECT (prints 65):
+#
+#     for b in s0.bytes():
+#         v.push(b)
+#
+# so the discriminator is COMPREHENSION-vs-STATEMENT, and the mechanism is this
+# round's headline class: the accumulator is minted from the SOURCE element
+# (1 byte) rather than the RESULT element (i64).
+#
+# ⚠ DISTINCT from the filed sibling at TODO.md:922 on THREE axes: that one is
+# the SELF-HOST lane, the STATEMENT form, and requires `.enumerate()` -- and its
+# text explicitly records "Rust gg is correct", which this program falsifies for
+# the comprehension form. Same 16961 magic number, same 2-byte over-read, but a
+# different lane and a different construct.
+#
+# ⚠ AXIS: the RESULT-ELEMENT NARROW TYPE (u8 via .bytes()) is sampled by NO cell
+# in the comprehension corpus -- every grid samples {int, String, float}. That is
+# why this survived the round that fixed the same class for wide elements.
+#
+# INTENDED (asserted below): prints 2 then 65, exactly as the statement form does.
+# Core #8 (a known wrong answer is a defect, not a parity excuse) + Core #12
+# (an unsampled axis cell proves nothing about the sampled ones).
+# Measured 2026-08-24 by R44 Track-K brief-review pass 5, orchestrator-verified.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s0 = mk("A", "B")
+    Vector[int] v = [b for b in s0.bytes()]
+    print(v.len())
+    print(v.get(0).unwrap())

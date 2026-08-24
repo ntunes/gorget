@@ -1,0 +1,32 @@
+# KNOWN GAP — `gg check` ACCEPTS, then the C compiler FAILS on BOTH lanes.
+#
+#     auto t = [x for x in words.enumerate()]
+#
+# `gg check` rc 0 ("no semantic errors"); `gg build` rc 1 with a raw C
+# diagnostic reaching the user:
+#
+#     error: implicit declaration of function 'gorget_array_enumerate'
+#     error: incompatible types when assigning to type 'GorgetArray' from ...
+#
+# The runtime symbol the emitted C calls DOES NOT EXIST. The self-host lane
+# CC-FAILs on this too, so both lanes accept-then-fail -- which under Core #8 is
+# >=2 bugs, never a parity pass.
+#
+# ⚠ AXIS: `.enumerate()` is a SOURCE-EXPRESSION arm of the loop dispatcher that
+# the comprehension corpus does not sample. The comprehension source axis was
+# enumerated from `CollectionKind`'s 7 variants, but the dispatcher has ~10 arms
+# -- the non-enum arms (`.bytes()`, `.enumerate()`, ranges) are exactly where the
+# unsampled defects live. Deriving the axis from the ENUM rather than from the
+# DISPATCHER is what let this through.
+#
+# INTENDED (asserted below): either it lowers and runs, printing 2, or `gg check`
+# REJECTS it with a teaching diagnostic. What is not acceptable is accepting the
+# program and then failing in the C compiler (Core #10, lower-or-reject). The
+# assertion below encodes the LOWER outcome, since the statement form
+# `for (i, w) in words.enumerate()` is supported and idiomatic.
+# Measured 2026-08-24 by R44 Track-K brief-review pass 5, orchestrator-verified.
+
+void main():
+    Vector[String] words = ["a", "b"]
+    auto t = [x for x in words.enumerate()]
+    print(t.len())

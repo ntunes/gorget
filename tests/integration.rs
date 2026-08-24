@@ -4614,6 +4614,48 @@ fn known_gap_comprehension_tuple_target_over_dict_cc_fail() {
     );
 }
 
+/// KNOWN GAP (Rust lane): a comprehension over `String.bytes()` over-reads the
+/// 1-byte element slot, printing 16961 (0x4241 — two bytes out of a one-byte
+/// slot) instead of 65. Under `--sanitize` it prints 0xBEBEBEBEBEBE4241, so the
+/// bytes come from UNINITIALIZED memory: this is an uninitialized read that
+/// produces a wrong answer at rc 0 with no crash and no sanitizer report.
+///
+/// The STATEMENT form of the identical iteration is correct, so the
+/// discriminator is comprehension-vs-statement, and the mechanism is the
+/// accumulator being minted from the SOURCE element (1 byte) rather than the
+/// RESULT element (i64).
+///
+/// Distinct from the self-host sibling (`sh_bytes_enumerate_i64_overread`) on
+/// three axes: lane, construct, and the need for `.enumerate()` — that entry
+/// records "Rust gg is correct", which this program falsifies for the
+/// comprehension form. The result-element NARROW TYPE is an axis no cell in the
+/// comprehension corpus samples, which is why this survived the round that fixed
+/// the same class for wide elements.
+#[test]
+#[ignore = "known gap (R44): a comprehension over String.bytes() mints its accumulator from the 1-byte source element and over-reads it, printing 16961 (uninitialized bytes under ASan) instead of 65; un-ignore when the accumulator is minted from the RESULT element type"]
+fn known_gap_comprehension_over_bytes_narrow_elem_overread() {
+    run_gg(
+        "known_gaps/comprehension_over_bytes_narrow_elem_overread.gg",
+        "2\n65",
+    );
+}
+
+/// KNOWN GAP: a comprehension whose source is `.enumerate()` passes `gg check`
+/// (rc 0) and then fails in the C compiler on BOTH lanes — the emitted C calls
+/// `gorget_array_enumerate`, a runtime symbol that does not exist. Both lanes
+/// failing on an accepted program is >=2 bugs under Core #8, never a parity pass.
+///
+/// `.enumerate()` is a source-expression arm of the loop dispatcher that the
+/// comprehension corpus does not sample: the source axis was enumerated from
+/// `CollectionKind`'s 7 variants, but the dispatcher has ~10 arms, and the
+/// non-enum arms (`.bytes()`, `.enumerate()`, ranges) are exactly where the
+/// unsampled defects live.
+#[test]
+#[ignore = "known gap (R44): a comprehension over .enumerate() passes `gg check` and then fails to compile the emitted C on both lanes (undefined gorget_array_enumerate); un-ignore when the arm lowers, or flip to a rejection assertion if check is made to reject it"]
+fn known_gap_comprehension_over_enumerate_cc_fail() {
+    run_gg("known_gaps/comprehension_over_enumerate_cc_fail.gg", "2");
+}
+
 // KNOWN GAP (filed R44 Track D) — Rust `apply_inferred_method_targs`
 // (src/semantic/typecheck.rs) is a non-exhaustive traversal ending in a bare
 // `_ => {}`, so an Iterator terminal in an ASSERT CONDITION keeps its bare
