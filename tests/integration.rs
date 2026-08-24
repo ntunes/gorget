@@ -4590,6 +4590,30 @@ fn closure_forelse_freevar_outer_local() {
     run_gg("known_gaps/closure_forelse_freevar_outer_local.gg", "99");
 }
 
+/// KNOWN GAP: a comprehension with a TUPLE target pattern over a `Dict` source is
+/// accepted by `gg check` (rc 0) and then fails in the C compiler, leaking a raw
+/// C diagnostic to the user (`incompatible types when assigning to type 'Str'`).
+///
+/// The STATEMENT form of the identical iteration is completely correct, so the
+/// discriminator is comprehension-vs-statement at the same target pattern — not
+/// the tuple destructuring and not the Dict source. `for (k, v) in d` is
+/// documented idiomatic, so INTENDED is that this LOWERS and runs, printing what
+/// the statement form prints. Core #10 (lower-or-reject: no arm may accept what
+/// it cannot lower) + Core #8 (an accepted program that fails at codegen is a
+/// defect, never a parity excuse).
+///
+/// Succession note: the self-host lane REJECTS this rather than emitting broken
+/// C, so on this shape the self-host is MORE correct than Rust gg — fix the Rust
+/// side as oracle hygiene; never dumb the self-host down to match.
+#[test]
+#[ignore = "known gap (R44): a tuple-target comprehension over a Dict passes `gg check` and then fails to compile the emitted C; un-ignore when the comprehension arm lowers the tuple target the way the statement form already does"]
+fn known_gap_comprehension_tuple_target_over_dict_cc_fail() {
+    run_gg(
+        "known_gaps/comprehension_tuple_target_over_dict_cc_fail.gg",
+        "1\none!",
+    );
+}
+
 // KNOWN GAP (filed R44 Track D) — Rust `apply_inferred_method_targs`
 // (src/semantic/typecheck.rs) is a non-exhaustive traversal ending in a bare
 // `_ => {}`, so an Iterator terminal in an ASSERT CONDITION keeps its bare

@@ -1,0 +1,42 @@
+# KNOWN GAP — `gg check` ACCEPTS, then the C compiler FAILS on the emitted code.
+#
+# A comprehension whose TARGET PATTERN is a tuple, over a Dict source:
+#
+#     [mk(val, "!") for (k, val) in dsrc]
+#
+# `gg check` reports rc 0 ("no semantic errors"), then `gg build` exits 1 with a
+# raw C diagnostic leaking to the user:
+#
+#     error: incompatible types when assigning to type 'Str' from type 'i...'
+#
+# The STATEMENT form of the identical iteration is completely correct:
+#
+#     for (k, val) in dsrc:
+#         v.push(mk(val, "!"))
+#
+# so the discriminator is COMPREHENSION-vs-STATEMENT at the same target pattern,
+# not the tuple destructuring itself and not the Dict source. `for (k, v) in d`
+# is documented idiomatic (docs/book/05-collections.md).
+#
+# INTENDED (asserted below): this compiles and runs, printing the same thing the
+# statement form prints. The tuple target is a supported pattern, so the fix is
+# to LOWER it in the comprehension arm -- not to reject it. Core #10
+# (lower-or-reject: no arm may accept what it cannot lower) and Core #8 (an
+# accepted program that fails at codegen is a defect, never a parity excuse).
+#
+# LANE NOTE (succession): the SELF-HOST lane REJECTS this program rather than
+# emitting broken C, so on this shape the self-host is MORE correct than Rust gg
+# -- oracle hygiene says fix the Rust side; do not dumb the self-host down.
+# Measured 2026-08-24 by R44 Track-K brief-review pass 4, orchestrator-verified.
+
+from std.collections import Dict
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Dict[String, String] dsrc = {}
+    dsrc.put("alpha", "one")
+    auto v = [mk(val, "!") for (k, val) in dsrc]
+    print(v.len())
+    print(v.get(0).unwrap())
