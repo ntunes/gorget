@@ -1,0 +1,38 @@
+# KNOWN GAP — BOTH LANES. `.map()` with an INLINE CLOSURE that changes the
+# element type mints its accumulator from the INPUT element type, so a `String`
+# result comes back out as a raw pointer at rc 0.
+#
+#     Vector[int] nums = [3, 4]
+#     auto v = nums.map((int n): mk("t", "ag"))
+#     print(v.get(0).unwrap())    # prints e.g. 187651356173072, not "tag"
+#
+# ⚠ THE COMPREHENSION EQUIVALENT IS CORRECT (prints "tag"):
+#
+#     auto v = [mk("t", "ag") for n in nums]
+#
+# and that is the whole point: this is the SAME mint class R44 Track A fixed at
+# the comprehension producer, surviving at a SIBLING producer
+# (`try_lower_vector_hof`, whose own comment admits it mints from the input
+# element type). Core #4 -- fix the CLASS, not the instance: a producer-level
+# fix that leaves a sibling producer minting from the wrong channel has fixed
+# one site, not the class.
+#
+# ⚠ Named functions are FINE -- an earlier round gated cross-type `map` on
+# `fn_sigs` return types for named callees only, so the INLINE CLOSURE is the
+# discriminator, not `map` itself.
+#
+# INTENDED (asserted below): prints 2 then tag.
+#
+# This fixture pays the "No corpus fixture exercises it today" debt recorded on
+# the TODO entry, which had no durable repro. Measured 2026-08-24 by the R44
+# Track-K brief-review pass 7, orchestrator-verified: the entry called this
+# LATENT, but it reproduces ACTIVE at rc 0 with garbage output on both lanes.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[int] nums = [3, 4]
+    auto v = nums.map((int n): mk("t", "ag"))
+    print(v.len())
+    print(v.get(0).unwrap())

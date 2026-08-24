@@ -4680,6 +4680,30 @@ fn known_gap_auto_empty_literal_push_string_raw_pointer() {
     );
 }
 
+/// KNOWN GAP (both lanes): `.map()` with an INLINE CLOSURE that changes the
+/// element type mints its accumulator from the INPUT element type, so a String
+/// result is printed as a raw pointer at rc 0.
+///
+/// The comprehension equivalent is correct, which is the point: this is the same
+/// mint class R44 Track A fixed at the comprehension producer, surviving at a
+/// sibling producer (`try_lower_vector_hof`, whose own comment admits it mints
+/// from the input element type). Core #4 — a producer-level fix that leaves a
+/// sibling producer on the wrong channel fixed one site, not the class.
+///
+/// Named callees are fine (cross-type `map` was gated on `fn_sigs` return types
+/// for named functions only), so the inline closure is the discriminator.
+///
+/// Pays the "No corpus fixture exercises it today" debt on the TODO entry, which
+/// had no durable repro. The entry called this latent; it reproduces active.
+#[test]
+#[ignore = "known gap (R44): inline-closure cross-type `map` mints the accumulator from the INPUT element type and prints a raw pointer; un-ignore when the inline closure's return type is inferred at the map-accumulator gate"]
+fn known_gap_map_inline_closure_cross_type_input_mint() {
+    run_gg(
+        "known_gaps/map_inline_closure_cross_type_input_mint.gg",
+        "2\ntag",
+    );
+}
+
 // KNOWN GAP (filed R44 Track D) — Rust `apply_inferred_method_targs`
 // (src/semantic/typecheck.rs) is a non-exhaustive traversal ending in a bare
 // `_ => {}`, so an Iterator terminal in an ASSERT CONDITION keeps its bare
