@@ -69,6 +69,22 @@ jobs:
       - name: Structural guard ratchets
         run: cargo test --test lints
 
+      # The beginner-code robustness map: 358 cells of ORDINARY code, shapes
+      # taken from other languages' tutorials rather than from our own corpus,
+      # with hand-derived expectations and spelling-equivalence pairs.
+      #
+      # It measures what `--test integration` structurally cannot: that suite
+      # samples what the compiler's own self-host does, not what a person
+      # learning the language writes. A `match` EXPRESSION that ignored its arm
+      # guards -- a grade calculator returning "A" for every input -- survived
+      # 2113 fixtures and was caught here on the first run.
+      #
+      # Fails on any WORKS -> broken regression. 24s for 358 cells, so there is
+      # no excuse for running it only at round close: a guard CI does not run is
+      # not a guard.
+      - name: Beginner-code robustness map
+        run: python3 scripts/robustness_map.py
+
       # The BEHAVIOURAL half of the known_gaps graduation ratchet, whose cheap
       # half (`known_gaps_passing_allowlist_shrink_only`) is in the step above.
       #
