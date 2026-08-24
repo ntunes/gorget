@@ -1,0 +1,35 @@
+# KNOWN GAP — PARSER. An INLINE `case` arm body accepts an EXPRESSION but not a
+# STATEMENT, while an inline `if` body accepts either.
+#
+#     if d == 1: name = "Mon"        # ACCEPTED
+#     case 1:    name = "Mon"        # REJECTED: expected 'case', found '='
+#     case 1:    "Mon"               # ACCEPTED (expression arm)
+#     case 1:                        # ACCEPTED (block arm)
+#         name = "Mon"
+#
+# So the axis is INLINE-vs-BLOCK arm body, not `if`-vs-`case`: both constructs
+# are fine in block form, and `if` is fine inline. Only the inline `case` body
+# is restricted, and the restriction is a PARSE error naming `case`, which gives
+# the reader no hint that the fix is to indent the body onto the next line.
+#
+# ⚠ OWNER RULING 2026-08-24: THIS IS A DEFECT, NOT INTENDED STRICTNESS.
+# `if` and `case` are to be CONSISTENT and BOTH ACCEPTED. The inline case arm
+# must take a statement exactly as the inline `if` body does.
+#
+# ⚠ LANE NOTE: the self-host accepts all eight cells of this family, so the
+# self-host is the CORRECT lane here and Rust gg lags -- fix the Rust parser;
+# never dumb the self-host down to match.
+#
+# ⚠ HOW IT WAS FOUND: an equivalence pair. Four spellings of one day-name
+# lookup were run against each other; three worked and this one did not.
+#
+# INTENDED (asserted below): prints Mon.
+# Found 2026-08-24 by the robustness-map expansion; orchestrator-verified.
+
+void main():
+    String name = "?"
+    int d = 1
+    match d:
+        case 1: name = "Mon"
+        else: name = "other"
+    print(name)
