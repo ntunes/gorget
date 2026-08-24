@@ -1,0 +1,12 @@
+void main():
+    Vector[int] v = [10, 20, 30]
+    # (1) contains discarded, not bound
+    v.contains(20)
+    match v.index_of(20):
+        case Some(i):
+            print(f"a {i}")
+        case None:
+            print("a missing")
+
+void second():
+    pass

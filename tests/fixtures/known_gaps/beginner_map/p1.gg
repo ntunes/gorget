@@ -1,0 +1,5 @@
+void main():
+    auto v = [10, 20, 30]
+    print(type(v))
+    Vector[int] w = [10, 20, 30]
+    print(type(w))

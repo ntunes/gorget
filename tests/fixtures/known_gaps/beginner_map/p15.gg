@@ -1,0 +1,7 @@
+struct P:
+    int a
+
+void main():
+    Vector[int] v = [3, 1, 2]
+    v.sort_by_key((x): x)
+    print(f"{v[0]},{v[1]},{v[2]}")

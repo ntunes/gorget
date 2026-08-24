@@ -1,0 +1,9 @@
+int total(Vector[int] xs):
+    int t = 0
+    for x in xs:
+        t += x
+    return t
+
+void main():
+    auto v = [1, 2, 3]
+    print(f"{total(v)}")

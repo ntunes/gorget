@@ -1,0 +1,9 @@
+void main():
+    auto v = [1, 2, 3]
+    for i in 0..50:
+        v.push(i)
+    print(f"{v.len()}")
+    int total = 0
+    for x in v:
+        total += x
+    print(f"{total}")

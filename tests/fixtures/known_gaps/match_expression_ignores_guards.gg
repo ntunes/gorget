@@ -1,0 +1,41 @@
+# KNOWN GAP — BOTH BACKENDS. `match` used as an EXPRESSION ignores its arm
+# GUARDS entirely and always takes the FIRST arm.
+#
+#     return match s:
+#         case x if x >= 90: "A"
+#         case x if x >= 80: "B"
+#         case x if x >= 70: "C"
+#         else: "F"
+#
+# grade(85) prints "A" (correct: "B"); grade(10) prints "A" (correct: "F").
+# Every input takes arm one, so the guard expressions are evaluated as if they
+# were unconditional.
+#
+# ⚠ THE IDENTICAL GUARDS AS A `match` STATEMENT ARE CORRECT (B / F / A). So the
+# discriminator is EXPRESSION-vs-STATEMENT position, not the guards themselves
+# and not the scrutinee.
+#
+# This is a silent wrong-answer defect at rc 0 in a core control-flow construct,
+# on textbook code -- a grade calculator is a chapter-2 exercise in every
+# language tutorial. Core #8 (a known wrong answer is a defect, never a parity
+# excuse) + Core #10.
+#
+# ⚠ HOW IT WAS FOUND, and why the corpus missed it: an equivalence pair. The
+# statement spelling and the expression spelling of the same computation were
+# run against each other and disagreed. NO SINGLE SPELLING reveals it -- the
+# expression form is self-consistently wrong, and the statement form is right.
+#
+# INTENDED (asserted below): prints B, F, A.
+# Found 2026-08-24 by the beginner-code robustness map; orchestrator-verified.
+
+String grade(int s):
+    return match s:
+        case x if x >= 90: "A"
+        case x if x >= 80: "B"
+        case x if x >= 70: "C"
+        else: "F"
+
+void main():
+    print(grade(85))
+    print(grade(10))
+    print(grade(95))

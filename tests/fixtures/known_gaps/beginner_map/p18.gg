@@ -1,0 +1,37 @@
+void main():
+    int score = 85
+    # (1) match STATEMENT with guards
+    match score:
+        case s if s >= 90:
+            print("stmt A")
+        case s if s >= 80:
+            print("stmt B")
+        else:
+            print("stmt F")
+    # (2) match EXPRESSION with guards
+    String g = match score:
+        case s if s >= 90: "A"
+        case s if s >= 80: "B"
+        else: "F"
+    print(f"expr {g}")
+    # (3) match EXPRESSION with literal patterns, no guards
+    int n = 2
+    String k = match n:
+        case 1: "one"
+        case 2: "two"
+        else: "many"
+    print(f"lit {k}")
+    # (4) match EXPRESSION with guards, first guard TRUE
+    int hi = 95
+    String g2 = match hi:
+        case s if s >= 90: "A"
+        case s if s >= 80: "B"
+        else: "F"
+    print(f"expr2 {g2}")
+    # (5) match EXPRESSION with guards, no arm matches -> else
+    int lo = 10
+    String g3 = match lo:
+        case s if s >= 90: "A"
+        case s if s >= 80: "B"
+        else: "F"
+    print(f"expr3 {g3}")

@@ -1,0 +1,6 @@
+void take(String s):
+    print(s)
+
+void main():
+    auto v = [10, 20, 30]
+    take(v)

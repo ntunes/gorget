@@ -1,0 +1,9 @@
+void main():
+    auto v = [10, 20, 30]
+    bool has = v.contains(20)
+    print(f"{has}")
+    match v.index_of(20):
+        case Some(i):
+            print(f"idx {i}")
+        case None:
+            print("missing")

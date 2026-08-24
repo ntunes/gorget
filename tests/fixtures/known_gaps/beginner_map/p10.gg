@@ -1,0 +1,13 @@
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    d.put("a", 30)
+    # (1) unwrap_or
+    int x = d.get("a").unwrap_or(0)
+    print(f"{x}")
+    # (2) unwrap
+    int y = d.get("a").unwrap()
+    print(f"{y}")
+    # (3) bind the Option first, then ??
+    Option[int] o = d.get("a")
+    int z = o ?? 0
+    print(f"{z}")

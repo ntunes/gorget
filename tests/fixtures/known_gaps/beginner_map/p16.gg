@@ -1,0 +1,41 @@
+void case_a():
+    # single get().unwrap() on Vector[int], no loop
+    Vector[int] v = [1, 2, 3]
+    int x = v.get(1).unwrap()
+    print(f"a {x}")
+
+void case_b():
+    # get().unwrap() inside a loop, bound to a local first
+    Vector[int] v = [1, 2, 3]
+    int total = 0
+    for i in 0..v.len():
+        int x = v.get(i).unwrap()
+        total += x
+    print(f"b {total}")
+
+void case_c():
+    # get().unwrap() directly in a compound assignment
+    Vector[int] v = [1, 2, 3]
+    int total = 0
+    for i in 0..v.len():
+        total += v.get(i).unwrap()
+    print(f"c {total}")
+
+void case_d():
+    # get().unwrap() directly in a plain assignment, no loop
+    Vector[int] v = [1, 2, 3]
+    int total = 0
+    total += v.get(0).unwrap()
+    print(f"d {total}")
+
+void case_e():
+    # get().unwrap() interpolated directly
+    Vector[int] v = [1, 2, 3]
+    print(f"e {v.get(1).unwrap()}")
+
+void main():
+    case_a()
+    case_b()
+    case_c()
+    case_d()
+    case_e()
