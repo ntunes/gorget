@@ -1,0 +1,9 @@
+# float is documented as 64-bit IEEE-754 (language-reference S8 type table), and
+# IEEE-754 says -0.0 == 0.0 compares TRUE while the two have different bit
+# patterns. Operands come from functions so no constant folder decides it.
+# Expected: true
+float nz():
+    return -0.0
+
+void main():
+    print(f"{nz() == 0.0}")

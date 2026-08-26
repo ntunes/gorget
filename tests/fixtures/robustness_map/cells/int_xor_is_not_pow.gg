@@ -1,0 +1,5 @@
+# Ch2's own warning box, VERBATIM: "`^` is bitwise XOR, not power. 2 ^ 10 = 8".
+# The commonest arithmetic mis-read a Python user brings with them.
+# Expected: 8
+void main():
+    print(f"{2 ^ 10}")

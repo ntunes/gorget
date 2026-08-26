@@ -1,0 +1,21 @@
+# The type every parser ends up with: a Result whose success payload is itself an
+# Option. Both levels must destructure.
+# Expected: 42 / empty / bad
+Result[Option[int], String] look(int mode):
+    if mode == 0:
+        return Ok(Some(42))
+    if mode == 1:
+        return Ok(None())
+    return Error("bad")
+
+void main():
+    for m in 0..3:
+        match look(m):
+            case Ok(inner):
+                match inner:
+                    case Some(v):
+                        print(f"{v}")
+                    case None:
+                        print("empty")
+            case Error(e):
+                print(e)

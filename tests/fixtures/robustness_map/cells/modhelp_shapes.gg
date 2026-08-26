@@ -1,0 +1,19 @@
+# A sibling module for the multi-file cells. Ch15: "Each .gg file is a module.
+# The file name becomes the module name."
+int triple(int x):
+    return x * 3
+
+String label():
+    return "from-module"
+
+struct Point:
+    int x
+    int y
+
+enum Color:
+    Red
+    Green
+    Blue
+
+private int hidden_helper(int x):
+    return x + 100

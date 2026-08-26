@@ -1,0 +1,21 @@
+# Ch19 / std.io narrow waist: write_string reports the byte count it wrote, and
+# read_to_string gives it back.
+# Expected: 10 / round-trip
+from std.io import read_to_string, write_string, IoError
+from std.fs import delete_file
+
+void main():
+    String path = "/tmp/gg_map_io_typed.txt"
+    Result[int, IoError] wr = write_string(path, "round-trip")
+    match wr:
+        case Ok(n):
+            print(f"{n}")
+        case Error(e):
+            print(e.display())
+    Result[String, IoError] rr = read_to_string(path)
+    match rr:
+        case Ok(s):
+            print(s)
+        case Error(e):
+            print(e.display())
+    delete_file(path)

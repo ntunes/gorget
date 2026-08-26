@@ -1,0 +1,12 @@
+# Ch5, VERBATIM: `String sub = text[1:4]` is "ell", and slice bounds CLAMP.
+# The subject is a RUNTIME-built string, not a literal view.
+# Expected: ell / hello   (the third print is the empty string, which the
+#           harness strips off the end of stdout)
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String text = mk("hel", "lo")
+    print(text[1:4])
+    print(text[0:1000])
+    print(text[3:3])

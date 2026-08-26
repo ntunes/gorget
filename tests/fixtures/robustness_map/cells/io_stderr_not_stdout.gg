@@ -1,0 +1,9 @@
+# Ch19: stderr is a separate stream, and `print(x, file=stderr)` is the routing
+# form std.io documents. Anything written there must NOT appear in the program's
+# stdout -- the property every test harness depends on.
+# Expected: on-stdout
+from std.io import stderr
+
+void main():
+    print("on-stderr", file=stderr)
+    print("on-stdout")

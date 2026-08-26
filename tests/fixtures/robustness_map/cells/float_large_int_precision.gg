@@ -1,0 +1,14 @@
+# 2**53 is the last integer a 64-bit float represents exactly. 2**53 + 1 is NOT
+# representable, so converting it rounds DOWN to 2**53 -- which is why two
+# DIFFERENT ints compare EQUAL once they are floats. That equality IS the
+# precision loss made visible; `false` would mean the float is wider than an
+# IEEE double.
+# Expected: 9007199254740992.000000 / true
+from std.conv import int_to_float
+
+int big():
+    return 9007199254740993
+
+void main():
+    print(f"{int_to_float(big())}")
+    print(f"{int_to_float(big()) == int_to_float(9007199254740992)}")

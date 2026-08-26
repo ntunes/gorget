@@ -1,0 +1,8 @@
+# Ch2 formatting: a precision spec in an f-string. 1/3 to three places.
+# Expected: 0.333 / 0.33333333
+float third():
+    return 1.0 / 3.0
+
+void main():
+    print(f"{third():.3f}")
+    print(f"{third():.8f}")

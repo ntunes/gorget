@@ -1,0 +1,14 @@
+# Ch2: integer division. `%` has the sign of the DIVIDEND, which pins division to
+# truncation toward zero: -7 / 2 == -3, and -7 - (-3 * 2) == -1 == -7 % 3's sign
+# convention. Operands come from functions so this is a runtime division.
+# Expected: -3 / 3 / -3
+int a():
+    return -7
+
+int b():
+    return 2
+
+void main():
+    print(f"{a() / b()}")
+    print(f"{7 / b()}")
+    print(f"{7 / -2}")

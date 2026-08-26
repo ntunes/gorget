@@ -1,0 +1,6 @@
+# pair:shared_ctor. The bare constructor -- the type args are already on the
+# binding, exactly as Ch16 writes it for Box (`Box[int] b = Box(42)`).
+# Expected: 42
+void main():
+    Shared[int] s = Shared(42)
+    print(f"{s.get()}")

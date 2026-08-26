@@ -1,0 +1,9 @@
+# Underflow toward zero is gradual in IEEE-754, and 1e-320 is subnormal but
+# nonzero. A flush-to-zero implementation would print `true` on the first line.
+# Expected: false / true
+float tiny():
+    return 1.0e-320
+
+void main():
+    print(f"{tiny() == 0.0}")
+    print(f"{tiny() > 0.0}")

@@ -1,0 +1,8 @@
+# Ch15 "Visibility": "Private items are only accessible within the same module."
+# A CLEAN REJECTION naming the visibility rule is the correct outcome; the
+# expected stdout is what it would print if the private item leaked.
+# Expected: 105
+from modhelp_shapes import hidden_helper
+
+void main():
+    print(f"{hidden_helper(5)}")

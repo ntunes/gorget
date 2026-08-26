@@ -1,0 +1,10 @@
+# Iterating characters of a multi-byte string yields CHARACTERS, so the count
+# matches len() and each element is one code point.
+# Expected: 5 / é
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] cs = mk("h", "éllo").chars()
+    print(f"{cs.len()}")
+    print(cs.get(1).unwrap())

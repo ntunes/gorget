@@ -1,0 +1,5 @@
+# pair:smartptr_int. Ch16 Shared: many owners. Same program, one word changed.
+# Expected: 42
+void main():
+    Shared[int] p = Shared(42)
+    print(f"{p.get()}")

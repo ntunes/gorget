@@ -1,0 +1,12 @@
+# Ch2: "Integer overflow always panics (catches bugs)". The addend comes from a
+# function so constant folding cannot decide this at compile time.
+# Expected: the program must not print "after"; it should fail loudly.
+int one():
+    return 1
+
+void main():
+    int hi = 9223372036854775807
+    print("before")
+    int over = hi + one()
+    print(f"{over}")
+    print("after")

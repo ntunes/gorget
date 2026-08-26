@@ -1,0 +1,7 @@
+# The commonest real use of a meta constant: a loop bound / buffer size.
+# Expected: 0 / 1 / 2 / 3
+meta int STEPS = 4
+
+void main():
+    for i in 0..STEPS:
+        print(f"{i}")

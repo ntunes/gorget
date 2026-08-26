@@ -1,0 +1,30 @@
+# Ch10: a user enum as the error type, matched by variant at the boundary. The
+# shape every real program's error handling converges on.
+# Expected: 3 / too small / too big
+enum SizeError:
+    TooSmall
+    TooBig
+
+int check(int n) throws SizeError:
+    if n < 1:
+        throw SizeError.TooSmall()
+    if n > 10:
+        throw SizeError.TooBig()
+    return n
+
+void report(int n):
+    Result[int, SizeError] r = check(n)
+    match r:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            match e:
+                case SizeError.TooSmall():
+                    print("too small")
+                case SizeError.TooBig():
+                    print("too big")
+
+void main():
+    report(3)
+    report(0)
+    report(99)

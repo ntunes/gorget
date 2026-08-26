@@ -1,0 +1,11 @@
+# trap-codes.md T_Overflow: "an out-of-range shift count" (owner ruling: shift
+# out of range normalizes to T_Overflow).
+# Expected: the program must not print "after"; it should fail loudly.
+int sixty_four():
+    return 64
+
+void main():
+    print("before")
+    int r = 1 << sixty_four()
+    print(f"{r}")
+    print("after")

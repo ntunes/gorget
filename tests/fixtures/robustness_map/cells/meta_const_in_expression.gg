@@ -1,0 +1,11 @@
+# A meta constant used where a runtime value is expected: it must inline as a
+# plain int and take part in ordinary arithmetic and comparison.
+# Expected: 1034 / true
+meta int MAX_CONNECTIONS = 1024
+
+int ten():
+    return 10
+
+void main():
+    print(f"{MAX_CONNECTIONS + ten()}")
+    print(f"{ten() < MAX_CONNECTIONS}")

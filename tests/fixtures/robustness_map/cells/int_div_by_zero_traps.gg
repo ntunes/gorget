@@ -1,0 +1,10 @@
+# trap-codes.md T_DivByZero: "a / or % with a zero divisor".
+# Expected: the program must not print "after"; it should fail loudly.
+int zero():
+    return 0
+
+void main():
+    print("before")
+    int q = 10 / zero()
+    print(f"{q}")
+    print("after")

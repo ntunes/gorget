@@ -1,0 +1,12 @@
+# The refcount must come back DOWN when a clone dies. `bump` takes a clone and
+# lets it die at its own return, so the count returns to 1.
+# Expected: 1 / 2 / 1
+int bump(Shared[int] s):
+    Shared[int] mine = s.clone()
+    return mine.strong_count()
+
+void main():
+    Shared[int] s = Shared[int](42)
+    print(f"{s.strong_count()}")
+    print(f"{bump(s)}")
+    print(f"{s.strong_count()}")

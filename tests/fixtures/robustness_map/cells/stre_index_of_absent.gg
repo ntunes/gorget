@@ -1,0 +1,18 @@
+# Ch5: `index_of` returns Option[int]. Absent means None, not -1 -- that is the
+# reason the return type is an Option at all.
+# Expected: 5 / none
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("Hello", ", World!")
+    match s.index_of(","):
+        case Some(i):
+            print(f"{i}")
+        case None:
+            print("none")
+    match s.index_of("z"):
+        case Some(i):
+            print(f"{i}")
+        case None:
+            print("none")

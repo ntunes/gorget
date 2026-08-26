@@ -1,0 +1,10 @@
+# Ch16 + the element-size axis: the payload is a String built at RUNTIME, so a
+# wrong element size cannot hide behind a static literal.
+# Expected: alpha / 5
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Shared[String] s = Shared[String](mk("al", "pha"))
+    print(s.get())
+    print(f"{s.get().len()}")

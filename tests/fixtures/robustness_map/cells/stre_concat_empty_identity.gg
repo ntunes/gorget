@@ -1,0 +1,10 @@
+# The empty string is the identity of concatenation, from both sides.
+# Expected: abc / abc / true
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("ab", "c")
+    print(mk(s, ""))
+    print(mk("", s))
+    print(f"{mk(s, "") == s}")

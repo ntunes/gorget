@@ -1,0 +1,13 @@
+# Ch15 + Ch6: an imported enum, used with the qualified variant spelling.
+# Expected: green
+from modhelp_shapes import Color
+
+void main():
+    Color c = Color.Green()
+    match c:
+        case Color.Red():
+            print("red")
+        case Color.Green():
+            print("green")
+        case Color.Blue():
+            print("blue")

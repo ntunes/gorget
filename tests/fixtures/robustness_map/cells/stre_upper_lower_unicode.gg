@@ -1,0 +1,12 @@
+# UNSURE -- undocumented whether case mapping is Unicode-aware or ASCII-only.
+# Ch5 documents to_upper/to_lower without restricting them to ASCII, so the
+# reference-grade answer is the Unicode one. An ASCII-only implementation prints
+# the accented character unchanged, which is the finding either way.
+# Expected: HÉLLO / héllo
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("h", "éllo")
+    print(s.to_upper())
+    print(s.to_upper().to_lower())

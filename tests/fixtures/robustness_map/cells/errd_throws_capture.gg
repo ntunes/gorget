@@ -1,0 +1,21 @@
+# Ch10, VERBATIM shape: a `throws String` function, captured by the caller as a
+# Result with NO mark (the third row of Ch10's three-exits table).
+# Expected: 5 / division by zero
+int divide(int a, int b) throws String:
+    if b == 0:
+        throw "division by zero"
+    return a / b
+
+void main():
+    Result[int, String] ok = divide(10, 2)
+    match ok:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print(e)
+    Result[int, String] bad = divide(10, 0)
+    match bad:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print(e)

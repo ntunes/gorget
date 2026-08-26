@@ -1,0 +1,8 @@
+# Ch2: `*%` wraps too. INT_MAX *% 2 == -2 in two's complement.
+# Expected: -2
+int two():
+    return 2
+
+void main():
+    int hi = 9223372036854775807
+    print(f"{hi *% two()}")

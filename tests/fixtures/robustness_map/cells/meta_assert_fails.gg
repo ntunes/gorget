@@ -1,0 +1,9 @@
+# Ch17: "Failures are compile errors, not runtime errors." A CLEAN COMPILE-TIME
+# REJECTION naming the message is the correct outcome; the expected stdout below
+# is what the program would print if the assertion were wrongly let through.
+# Expected: ok
+meta int MAX_CONNECTIONS = 0
+meta assert MAX_CONNECTIONS > 0, "MAX_CONNECTIONS must be positive"
+
+void main():
+    print("ok")

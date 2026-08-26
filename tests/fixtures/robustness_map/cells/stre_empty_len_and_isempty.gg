@@ -1,0 +1,11 @@
+# Ch5 String methods on the degenerate input. The empty string is built at
+# RUNTIME (concatenating two empties) so it is not the static empty literal.
+# Expected: 0 / true / 0
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String e = mk("", "")
+    print(f"{e.len()}")
+    print(f"{e.is_empty()}")
+    print(f"{e.byte_len()}")

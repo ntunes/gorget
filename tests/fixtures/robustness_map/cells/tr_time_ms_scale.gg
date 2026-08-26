@@ -1,0 +1,11 @@
+# time_ms() and time() measure the SAME instant in different units, so the
+# millisecond reading must be about a thousand times the second reading. A
+# swapped or truncated unit shows up immediately.
+# Expected: true / true
+from std.time import time, time_ms
+
+void main():
+    int s = time()
+    int ms = time_ms()
+    print(f"{ms > s}")
+    print(f"{ms / 1000 - s <= 2}")

@@ -1,0 +1,8 @@
+# Ch5 `replace`: every occurrence, including overlapping-adjacent ones.
+# Expected: bbb / xyx
+String mk(String a, String b):
+    return a + b
+
+void main():
+    print(mk("aa", "a").replace("a", "b"))
+    print(mk("xa", "x").replace("a", "y"))

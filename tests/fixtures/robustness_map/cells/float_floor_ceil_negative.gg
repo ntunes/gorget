@@ -1,0 +1,16 @@
+# floor goes toward -inf, ceil toward +inf. The negative side is where people
+# expect truncation and get something else.
+# Expected: -2.000000 / -1.000000 / 1.000000 / 2.000000
+from std.math import floor, ceil
+
+float neg():
+    return -1.5
+
+float pos():
+    return 1.5
+
+void main():
+    print(f"{floor(neg())}")
+    print(f"{ceil(neg())}")
+    print(f"{floor(pos())}")
+    print(f"{ceil(pos())}")

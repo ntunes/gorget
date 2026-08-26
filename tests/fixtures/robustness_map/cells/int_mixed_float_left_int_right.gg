@@ -1,0 +1,16 @@
+# The same operator axis with the operands SWAPPED. Addition is commutative and
+# subtraction/division are not, but the RESULT TYPE must not depend on which side
+# the int is on -- that asymmetry is the finding this cell exists to expose.
+# Expected: 4.500000 / 0.500000 / 5.000000 / 1.250000 / false
+int a():
+    return 2
+
+float b():
+    return 2.5
+
+void main():
+    print(f"{b() + a()}")
+    print(f"{b() - a()}")
+    print(f"{b() * a()}")
+    print(f"{b() / a()}")
+    print(f"{b() < a()}")

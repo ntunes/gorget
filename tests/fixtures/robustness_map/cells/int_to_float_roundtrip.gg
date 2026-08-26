@@ -1,0 +1,7 @@
+# Ch2 conversions: int -> float is explicit through std.conv, never implicit.
+# Expected: 3.000000 / 2.500000
+from std.conv import int_to_float
+
+void main():
+    print(f"{int_to_float(3)}")
+    print(f"{int_to_float(5) / 2.0}")

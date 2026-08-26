@@ -1,0 +1,22 @@
+# Ch16: "Use Weak to break reference cycles (e.g. parent-child relationships
+# where both sides hold references)." The parent OWNS the child strongly; the
+# child points BACK weakly. With the cycle broken, the parent's strong count is
+# still 1 and the child's back-pointer still upgrades while the parent lives.
+# Expected: 1 / 7 / 3
+struct Child:
+    int v
+    Weak[Parent] up
+
+struct Parent:
+    int v
+
+void main():
+    Shared[Parent] p = Shared[Parent](Parent(7))
+    Child c = Child(3, p.downgrade())
+    print(f"{p.strong_count()}")
+    match c.up.upgrade():
+        case Some(u):
+            print(f"{u.get().v}")
+        case None:
+            print("parent was dropped")
+    print(f"{c.v}")

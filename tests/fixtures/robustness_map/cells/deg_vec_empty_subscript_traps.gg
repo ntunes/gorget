@@ -1,0 +1,11 @@
+# trap-codes.md T_Bounds. Subscripting is the CHECKED-but-fatal form; on an empty
+# vector every index is out of bounds.
+# Expected: the program must not print "after"; it should fail loudly.
+int zero():
+    return 0
+
+void main():
+    Vector[int] v = Vector[int]()
+    print("before")
+    print(f"{v[zero()]}")
+    print("after")

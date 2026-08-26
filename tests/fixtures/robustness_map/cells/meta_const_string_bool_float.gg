@@ -1,0 +1,10 @@
+# Ch17: the other meta constant types from the same block.
+# Expected: 2.1.0 / false / 3.141593
+meta String VERSION = "2.1.0"
+meta bool DEBUG = false
+meta float PI = 3.14159265358979
+
+void main():
+    print(VERSION)
+    print(f"{DEBUG}")
+    print(f"{PI:.6f}")

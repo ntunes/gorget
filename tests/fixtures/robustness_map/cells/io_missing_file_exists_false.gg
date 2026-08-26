@@ -1,0 +1,7 @@
+# The negative side of the same predicate: a path that was never created.
+# Expected: false / false
+from std.fs import file_exists, is_dir
+
+void main():
+    print(f"{file_exists("/tmp/gg_map_definitely_absent_9d3f.txt")}")
+    print(f"{is_dir("/tmp/gg_map_definitely_absent_9d3f.txt")}")

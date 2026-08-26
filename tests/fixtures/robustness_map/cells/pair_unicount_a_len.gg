@@ -1,0 +1,7 @@
+# pair:unicode_count. `.len()` is documented as the character count.
+# Expected: 5
+String mk(String a, String b):
+    return a + b
+
+void main():
+    print(f"{mk("h", "éllo").len()}")

@@ -1,0 +1,5 @@
+# Ch16: Shared is reference-counted. A freshly built one has exactly one owner.
+# Expected: 1
+void main():
+    Shared[int] s = Shared[int](42)
+    print(f"{s.strong_count()}")

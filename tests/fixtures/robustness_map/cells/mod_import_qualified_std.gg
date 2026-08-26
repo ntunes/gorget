@@ -1,0 +1,7 @@
+# Ch15 "Simple Import", VERBATIM: `import std.io` makes the module available by
+# its full name, so the call is spelled out.
+# Expected: 42
+import std.conv
+
+void main():
+    print(std.conv.int_to_str(42))

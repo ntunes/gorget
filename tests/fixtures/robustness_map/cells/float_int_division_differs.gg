@@ -1,0 +1,12 @@
+# Ch2: "division (integer division if both are int)". The same syntax means two
+# different operations depending on operand type -- the classic Python-2 trap.
+# Expected: 2 / 2.500000
+int i5():
+    return 5
+
+float f5():
+    return 5.0
+
+void main():
+    print(f"{i5() / 2}")
+    print(f"{f5() / 2.0}")

@@ -1,0 +1,6 @@
+# trap-codes.md T_Panic: an explicit panic(msg).
+# Expected: the program must not print "after"; it should fail loudly.
+void main():
+    print("before")
+    panic("stop here")
+    print("after")

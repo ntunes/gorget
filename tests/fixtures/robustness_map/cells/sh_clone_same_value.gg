@@ -1,0 +1,8 @@
+# Ch16: "Shared[T] allows multiple owners of the SAME value" -- both handles must
+# observe one value, not two copies.
+# Expected: 42 / 42
+void main():
+    Shared[int] s = Shared[int](42)
+    Shared[int] t = s.clone()
+    print(f"{s.get()}")
+    print(f"{t.get()}")

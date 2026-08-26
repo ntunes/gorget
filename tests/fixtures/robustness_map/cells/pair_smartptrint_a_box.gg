@@ -1,0 +1,5 @@
+# pair:smartptr_int. Ch16 Box: single owner, heap allocation.
+# Expected: 42
+void main():
+    Box[int] p = Box(42)
+    print(f"{p.get()}")

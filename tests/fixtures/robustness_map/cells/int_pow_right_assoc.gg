@@ -1,0 +1,4 @@
+# Ch2, VERBATIM: "2 ** 3 ** 2 is 2 ** (3 ** 2) = 512, matching Fortran/Python".
+# Expected: 512
+void main():
+    print(f"{2 ** 3 ** 2}")

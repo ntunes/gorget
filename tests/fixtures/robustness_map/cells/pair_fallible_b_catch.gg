@@ -1,0 +1,17 @@
+# pair:fallible_handling. Ch10's inline handler: `f()! catch (e): <value>`.
+# Expected: 8 / boom
+int inner(int x) throws String:
+    if x < 0:
+        throw "boom"
+    return x * 2
+
+void show(int x):
+    int v = inner(x)! catch (e): -1
+    if v == -1:
+        print("boom")
+    else:
+        print(f"{v}")
+
+void main():
+    show(4)
+    show(-1)

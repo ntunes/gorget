@@ -1,0 +1,13 @@
+# Ch10: `f()! catch (e): <value>` -- activate and handle inline, the form that
+# keeps the happy path straight.
+# Expected: 8 / -1
+int inner(int x) throws String:
+    if x < 0:
+        throw "boom"
+    return x * 2
+
+void main():
+    int good = inner(4)! catch (e): -1
+    print(f"{good}")
+    int bad = inner(-1)! catch (e): -1
+    print(f"{bad}")

@@ -1,0 +1,5 @@
+# Ch2, VERBATIM: "float f = 2.0 ** 0.5   # 1.414... (square root)".
+# Expected: 1.414214
+void main():
+    float f = 2.0 ** 0.5
+    print(f"{f:.6f}")

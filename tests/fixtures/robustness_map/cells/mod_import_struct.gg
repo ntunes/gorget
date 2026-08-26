@@ -1,0 +1,7 @@
+# Ch15: a TYPE crosses the module boundary the same way a function does.
+# Expected: 3
+from modhelp_shapes import Point
+
+void main():
+    Point p = Point(1, 2)
+    print(f"{p.x + p.y}")

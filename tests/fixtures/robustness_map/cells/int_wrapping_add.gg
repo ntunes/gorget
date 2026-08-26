@@ -1,0 +1,9 @@
+# Ch2 "Wrapping Arithmetic": `+%` is the opt-in wrapping form. INT_MAX +% 1
+# wraps to INT_MIN, which is the whole point of having the operator.
+# Expected: -9223372036854775808
+int one():
+    return 1
+
+void main():
+    int hi = 9223372036854775807
+    print(f"{hi +% one()}")

@@ -1,0 +1,20 @@
+# Popping from an empty Vector has no value to give, so the Option is None.
+# Expected: none / 1 / none
+void main():
+    Vector[int] v = Vector[int]()
+    match v.pop():
+        case Some(x):
+            print(f"{x}")
+        case None:
+            print("none")
+    v.push(1)
+    match v.pop():
+        case Some(x):
+            print(f"{x}")
+        case None:
+            print("none")
+    match v.pop():
+        case Some(x):
+            print(f"{x}")
+        case None:
+            print("none")

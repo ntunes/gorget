@@ -1,0 +1,13 @@
+# Ch19 / std.io: the TYPED whole-file read returns Result[String, IoError], so a
+# missing file is an Error value rather than a panic. This is the shape a program
+# that must not die on a bad path is supposed to use.
+# Expected: missing
+from std.io import read_to_string, IoError
+
+void main():
+    Result[String, IoError] r = read_to_string("/tmp/gg_map_definitely_absent_7a1c.txt")
+    match r:
+        case Ok(s):
+            print(s)
+        case Error(e):
+            print("missing")

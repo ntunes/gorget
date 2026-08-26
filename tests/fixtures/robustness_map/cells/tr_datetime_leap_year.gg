@@ -1,0 +1,11 @@
+# std.datetime's pure-Gorget calendar helpers: the leap-year rule, all four
+# cases (divisible by 4, by 100, by 400, and not).
+# Expected: 1 / 0 / 1 / 0 / 29
+from std.datetime import dt_is_leap, dt_days_in_month
+
+void main():
+    print(f"{dt_is_leap(2024)}")
+    print(f"{dt_is_leap(1900)}")
+    print(f"{dt_is_leap(2000)}")
+    print(f"{dt_is_leap(2023)}")
+    print(f"{dt_days_in_month(2024, 2)}")

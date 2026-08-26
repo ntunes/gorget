@@ -1,0 +1,11 @@
+# Ch2: the same check on the negative end.
+# Expected: the program must not print "after"; it should fail loudly.
+int one():
+    return 1
+
+void main():
+    int lo = -9223372036854775808
+    print("before")
+    int under = lo - one()
+    print(f"{under}")
+    print("after")

@@ -1,0 +1,11 @@
+# pair:option_payload_print. `pop()` instead of `get()` -- the same shape over
+# the CONSUMING accessor.
+# Expected: 7
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(7)
+    match v.pop():
+        case Some(x):
+            print(f"{x}")
+        case None:
+            print("none")

@@ -1,0 +1,10 @@
+# A Vector of Vectors where the inner ones are empty -- the shape every grid and
+# adjacency list starts as.
+# Expected: 2 / 0 / 0
+void main():
+    Vector[Vector[int]] grid = Vector[Vector[int]]()
+    grid.push(Vector[int]())
+    grid.push(Vector[int]())
+    print(f"{grid.len()}")
+    print(f"{grid.get(0).unwrap().len()}")
+    print(f"{grid.get(1).unwrap().len()}")

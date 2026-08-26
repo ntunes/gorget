@@ -1,0 +1,14 @@
+# Ch2: ArithError has a DivByZero variant -- "/ and % with rhs == 0". The
+# fallible operator is the documented way to RECOVER from an otherwise
+# uncatchable fault.
+# Expected: 0
+int zero():
+    return 0
+
+void main():
+    Result[int, ArithError] r = 10 /! zero()
+    match r:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print("0")

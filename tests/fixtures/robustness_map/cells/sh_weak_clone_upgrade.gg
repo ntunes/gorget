@@ -1,0 +1,12 @@
+# A Weak handle is itself clonable (the typechecker gives Weak.clone the receiver
+# type); the clone must upgrade to the same live value.
+# Expected: 42
+void main():
+    Shared[int] s = Shared[int](42)
+    Weak[int] w = s.downgrade()
+    Weak[int] w2 = w.clone()
+    match w2.upgrade():
+        case Some(u):
+            print(f"{u.get()}")
+        case None:
+            print("value was dropped")

@@ -1,0 +1,17 @@
+# A Vector of Results -- what a batch parse produces before it is partitioned.
+# Expected: 2 / 1
+void main():
+    Vector[Result[int, String]] rs = Vector[Result[int, String]]()
+    rs.push(Ok(1))
+    rs.push(Error("bad"))
+    rs.push(Ok(3))
+    int oks = 0
+    int errs = 0
+    for r in rs:
+        match r:
+            case Ok(v):
+                oks = oks + 1
+            case Error(e):
+                errs = errs + 1
+    print(f"{oks}")
+    print(f"{errs}")

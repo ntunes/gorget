@@ -1,0 +1,12 @@
+# Ch16 "Weak - Non-Owning References", VERBATIM.
+# Expected: 42
+void main():
+    Shared[int] s = Shared[int](42)
+    Weak[int] w = s.downgrade()
+
+    Option[Shared[int]] maybe = w.upgrade()
+    match maybe:
+        case Some(upgraded):
+            print(f"{upgraded.get()}")
+        case None:
+            print("value was dropped")

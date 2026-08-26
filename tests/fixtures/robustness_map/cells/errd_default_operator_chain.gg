@@ -1,0 +1,10 @@
+# Ch5/Ch9: the `??` default operator, chained past a missing key and a present
+# one. The everyday alternative to a match.
+# Expected: 0 / 30
+from std.collections import Dict
+
+void main():
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put("Alice", 30)
+    print(f"{ages.get("Eve") ?? 0}")
+    print(f"{ages.get("Alice") ?? 0}")

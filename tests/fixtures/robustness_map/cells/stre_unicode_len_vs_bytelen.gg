@@ -1,0 +1,10 @@
+# Ch5, VERBATIM: "s.len() -- character count; s.byte_len() -- byte count (may
+# differ for Unicode)". "hello" with an accented e is 5 characters, 6 bytes.
+# Expected: 5 / 6
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("h", "éllo")
+    print(f"{s.len()}")
+    print(f"{s.byte_len()}")

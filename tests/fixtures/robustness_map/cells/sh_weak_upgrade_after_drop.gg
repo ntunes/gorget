@@ -1,0 +1,15 @@
+# Ch16: "The value is dropped when the last owner goes away", and a Weak upgrade
+# after that must report None -- that is the whole reason upgrade returns Option.
+# The only strong owner lives inside `make`, so it is gone before the match.
+# Expected: value was dropped
+Weak[int] make():
+    Shared[int] s = Shared[int](42)
+    return s.downgrade()
+
+void main():
+    Weak[int] w = make()
+    match w.upgrade():
+        case Some(u):
+            print(f"{u.get()}")
+        case None:
+            print("value was dropped")

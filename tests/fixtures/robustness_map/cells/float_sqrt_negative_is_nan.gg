@@ -1,0 +1,10 @@
+# sqrt of a negative is NaN, not a trap -- floats signal out-of-domain in-band.
+# Expected: true
+from std.math import sqrt
+
+float neg():
+    return -1.0
+
+void main():
+    float r = sqrt(neg())
+    print(f"{r != r}")

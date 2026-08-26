@@ -1,0 +1,9 @@
+# Ch16: ".clone() -- refcount + 1". One owner, then two, and the clone sees the
+# same value.
+# Expected: 1 / 2 / 42
+void main():
+    Shared[int] s = Shared[int](42)
+    print(f"{s.strong_count()}")
+    Shared[int] t = s.clone()
+    print(f"{s.strong_count()}")
+    print(f"{t.get()}")

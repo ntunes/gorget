@@ -1,0 +1,9 @@
+# IEEE-754: NaN is the one value not equal to itself. This is the documented way
+# to TEST for NaN, and std.math exports NAN (Ch19 "Constants: PI, E, TAU,
+# INFINITY, NAN").
+# Expected: true / false
+from std.math import NAN
+
+void main():
+    print(f"{NAN != NAN}")
+    print(f"{NAN == NAN}")

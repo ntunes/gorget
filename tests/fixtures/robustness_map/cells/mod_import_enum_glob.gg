@@ -1,0 +1,14 @@
+# Ch15 "Glob Import", VERBATIM shape: `from M import Enum.*` brings the variants
+# into bare scope so `Green()` needs no qualifier.
+# Expected: green
+from modhelp_shapes import Color.*
+
+void main():
+    Color c = Green()
+    match c:
+        case Red():
+            print("red")
+        case Green():
+            print("green")
+        case Blue():
+            print("blue")

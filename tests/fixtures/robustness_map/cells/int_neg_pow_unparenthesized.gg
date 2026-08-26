@@ -1,0 +1,7 @@
+# Ch2, VERBATIM: "Unparenthesized -x ** 2 is rejected as ambiguous". A CLEAN
+# REJECTION is the correct outcome here; the expected stdout below is what the
+# `-(x ** 2)` reading would print, recorded so the cell has a value to compare.
+# Expected: -9
+void main():
+    int x = 3
+    print(f"{-x ** 2}")

@@ -1,0 +1,9 @@
+# trap-codes.md T_UnwrapError: `.unwrap()` on an Error panics uncatchably.
+# Expected: the program must not print "after"; it should fail loudly.
+Result[int, String] bad():
+    return Error("nope")
+
+void main():
+    print("before")
+    print(f"{bad().unwrap()}")
+    print("after")

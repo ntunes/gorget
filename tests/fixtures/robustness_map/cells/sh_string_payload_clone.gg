@@ -1,0 +1,11 @@
+# The same runtime-built String observed through a SECOND owner. If clone copies
+# the handle but not the payload correctly, this is where it shows.
+# Expected: alpha / alpha
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Shared[String] s = Shared[String](mk("al", "pha"))
+    Shared[String] t = s.clone()
+    print(s.get())
+    print(t.get())

@@ -1,0 +1,8 @@
+# Sorting and reversing nothing is a no-op, not a crash.
+# Expected: 0 / 0
+void main():
+    Vector[int] v = Vector[int]()
+    v.sort()
+    print(f"{v.len()}")
+    v.reverse()
+    print(f"{v.len()}")

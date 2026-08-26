@@ -1,0 +1,8 @@
+# Ch19 std.io exports `stdin_eof`. The harness gives every cell an EMPTY stdin,
+# so EOF is true immediately -- a program that reads input must be able to
+# discover it has none rather than blocking forever.
+# Expected: true
+from std.io import stdin_eof
+
+void main():
+    print(f"{stdin_eof()}")

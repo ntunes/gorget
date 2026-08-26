@@ -1,0 +1,10 @@
+# A Shared stored in a struct field -- the shape every cache/registry starts as.
+# Expected: 7 / 7
+struct Holder:
+    Shared[int] cell
+
+void main():
+    Shared[int] s = Shared[int](7)
+    Holder h = Holder(s.clone())
+    print(f"{h.cell.get()}")
+    print(f"{s.get()}")

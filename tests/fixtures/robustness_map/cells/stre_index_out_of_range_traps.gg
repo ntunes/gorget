@@ -1,0 +1,14 @@
+# trap-codes.md T_Bounds: an out-of-bounds index is a fault. A 3-character string
+# has no index 3.
+# Expected: the program must not print "after"; it should fail loudly.
+String mk(String a, String b):
+    return a + b
+
+int three():
+    return 3
+
+void main():
+    String s = mk("ab", "c")
+    print("before")
+    print(s[three()])
+    print("after")

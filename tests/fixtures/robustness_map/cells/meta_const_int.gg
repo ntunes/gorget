@@ -1,0 +1,8 @@
+# Ch17 "Meta Constants", VERBATIM: compile-time values inlined at every use.
+# Expected: 1024 / 65536
+meta int MAX_CONNECTIONS = 1024
+meta int BUFFER_SIZE = MAX_CONNECTIONS * 64
+
+void main():
+    print(f"{MAX_CONNECTIONS}")
+    print(f"{BUFFER_SIZE}")

@@ -1,0 +1,22 @@
+# One entry: len 1, the key found, an absent key still None. The key is built at
+# RUNTIME so the lookup cannot be answered by pointer identity on a literal.
+# Expected: 1 / 7 / none
+from std.collections import Dict
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    d.put(mk("ke", "y"), 7)
+    print(f"{d.len()}")
+    match d.get(mk("k", "ey")):
+        case Some(v):
+            print(f"{v}")
+        case None:
+            print("none")
+    match d.get("other"):
+        case Some(v):
+            print(f"{v}")
+        case None:
+            print("none")

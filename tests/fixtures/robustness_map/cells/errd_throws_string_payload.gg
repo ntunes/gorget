@@ -1,0 +1,16 @@
+# The error payload is a RUNTIME-built String, not a literal, so a wrong string
+# representation at the error boundary cannot hide behind a static view.
+# Expected: alpha-beta
+String mk(String a, String b):
+    return a + b
+
+int fail() throws String:
+    throw mk("alpha-", "beta")
+
+void main():
+    Result[int, String] r = fail()
+    match r:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print(e)
