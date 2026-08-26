@@ -29987,19 +29987,7 @@ fn self_host_bootstrap() {
 // SH source = additional self-compile clones. Measured array_clone=12,939,495
 // (+0.35% vs prior ceiling). Ceiling = measured + ~1%. String stayed under
 // prior ceiling. PROVISIONAL — reclaim same rules apply.
-//
-// Re-pinned UP 2026-08-24 (R44 Track K — the comprehension accumulator mint).
-// ⚠ THE OLD NUMBER WAS LOW BECAUSE ELEMENTS WERE NOT BEING CLONED AT ALL.
-// Pre-fix, a comprehension over String/struct elements minted its accumulator
-// as `gorget_array_new(8)` with NO elem_clone/elem_drop/elem_materialize hooks
-// -- it byte-copied an 8-byte slot, which is exactly why such comprehensions
-// printed raw pointers and segfaulted. Post-fix the emitted C carries
-// `gorget_array_new(sizeof(Str))` plus the full hook set (measured this session: 13,455,519; verified in the
-// emitted C at close: 16 elem_clone / 22 elem_drop / 12 elem_materialize).
-// So the increase is CORRECTNESS, not a lost move or an over-materialize: the
-// clones that now happen are the ones that always should have. PROVISIONAL --
-// reclaim rules unchanged; an optimization pass must re-seed DOWN.
-const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_600_000;
+const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_070_000;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to
@@ -30034,19 +30022,7 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_600_000;
 // (A.3), and the SH statement-level meta-for port (Track H). Each contributes
 // small per-call clone overhead — cumulative +0.03% on self-compile is
 // justified semantic cost. Ceiling = measured + ~1% headroom.
-//
-// Re-pinned UP 2026-08-24 (R44 Track K — the comprehension accumulator mint).
-// ⚠ THE OLD NUMBER WAS LOW BECAUSE ELEMENTS WERE NOT BEING CLONED AT ALL.
-// Pre-fix, a comprehension over String/struct elements minted its accumulator
-// as `gorget_array_new(8)` with NO elem_clone/elem_drop/elem_materialize hooks
-// -- it byte-copied an 8-byte slot, which is exactly why such comprehensions
-// printed raw pointers and segfaulted. Post-fix the emitted C carries
-// `gorget_array_new(sizeof(Str))` plus the full hook set (measured this session: 31,786,882; verified in the
-// emitted C at close: 16 elem_clone / 22 elem_drop / 12 elem_materialize).
-// So the increase is CORRECTNESS, not a lost move or an over-materialize: the
-// clones that now happen are the ones that always should have. PROVISIONAL --
-// reclaim rules unchanged; an optimization pass must re-seed DOWN.
-const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 32_110_000;
+const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_000_000;
 
 // ── Shared clone-ceiling machinery ─────────────────────────────────────────
 // Core invariant #4 (one fix, all siblings): both clone-ceiling ratchets —
@@ -30258,19 +30234,7 @@ fn self_host_clone_ceiling() {
 // (+0.75% vs prior). Justified — new SH REJECT chokepoint helpers (Track
 // A/C/D/E ~200 LOC) compile through the SH lowerer at stage-1 too.
 // Ceiling = measured + ~1%.
-//
-// Re-pinned UP 2026-08-24 (R44 Track K — the comprehension accumulator mint).
-// ⚠ THE OLD NUMBER WAS LOW BECAUSE ELEMENTS WERE NOT BEING CLONED AT ALL.
-// Pre-fix, a comprehension over String/struct elements minted its accumulator
-// as `gorget_array_new(8)` with NO elem_clone/elem_drop/elem_materialize hooks
-// -- it byte-copied an 8-byte slot, which is exactly why such comprehensions
-// printed raw pointers and segfaulted. Post-fix the emitted C carries
-// `gorget_array_new(sizeof(Str))` plus the full hook set (measured this session: 1,200,536,939; verified in the
-// emitted C at close: 16 elem_clone / 22 elem_drop / 12 elem_materialize).
-// So the increase is CORRECTNESS, not a lost move or an over-materialize: the
-// clones that now happen are the ones that always should have. PROVISIONAL --
-// reclaim rules unchanged; an optimization pass must re-seed DOWN.
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_212_550_000;
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_077_150_000;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -30290,19 +30254,7 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_212_550_000;
 // Re-pinned UP 2026-08-02 (Round XXVIII SH-typecheck surface growth, same
 // citation as stage-1 array ceiling): measured stage-1 string_clone=
 // 1,981,307,669 (+0.62% vs prior). Ceiling = measured + ~1%.
-//
-// Re-pinned UP 2026-08-24 (R44 Track K — the comprehension accumulator mint).
-// ⚠ THE OLD NUMBER WAS LOW BECAUSE ELEMENTS WERE NOT BEING CLONED AT ALL.
-// Pre-fix, a comprehension over String/struct elements minted its accumulator
-// as `gorget_array_new(8)` with NO elem_clone/elem_drop/elem_materialize hooks
-// -- it byte-copied an 8-byte slot, which is exactly why such comprehensions
-// printed raw pointers and segfaulted. Post-fix the emitted C carries
-// `gorget_array_new(sizeof(Str))` plus the full hook set (measured this session: 2,237,295,776; verified in the
-// emitted C at close: 16 elem_clone / 22 elem_drop / 12 elem_materialize).
-// So the increase is CORRECTNESS, not a lost move or an over-materialize: the
-// clones that now happen are the ones that always should have. PROVISIONAL --
-// reclaim rules unchanged; an optimization pass must re-seed DOWN.
-const STAGE1_STRING_CLONE_CEILING: u64 = 2_259_670_000;
+const STAGE1_STRING_CLONE_CEILING: u64 = 2_001_130_000;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
