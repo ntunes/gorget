@@ -1,0 +1,10 @@
+struct Leaf:
+    int v
+
+int borrow(Box[Leaf] b, int base):
+    Leaf fe = (*b).clone()
+    return base + fe.v
+
+void main():
+    Box[Leaf] bx = Box(Leaf(7))
+    print(borrow(bx, 10))

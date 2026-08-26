@@ -1,0 +1,6 @@
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Box[String] boxed = Box(mk("hel", "lo"))
+    print(boxed.len())

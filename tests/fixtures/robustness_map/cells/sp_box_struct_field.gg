@@ -1,0 +1,7 @@
+struct Pt:
+    int x
+    int y
+
+void main():
+    Box[Pt] b = Box(Pt(3, 4))
+    print((*b).x + (*b).y)

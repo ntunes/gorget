@@ -1,0 +1,5 @@
+void main():
+    Box[int] b = Box(42)
+    print(b.get())
+    b.set(100)
+    print(b.get())

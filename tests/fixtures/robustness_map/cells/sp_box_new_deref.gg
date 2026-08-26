@@ -1,0 +1,4 @@
+void main():
+    Box[int] b = Box(42)
+    int v = *b
+    print(v)

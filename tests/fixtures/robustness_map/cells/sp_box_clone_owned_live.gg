@@ -1,0 +1,8 @@
+struct Leaf:
+    int v
+
+void main():
+    Box[Leaf] bx = Box(Leaf(7))
+    Leaf fe = (*bx).clone()
+    print(fe.v)
+    print((*bx).v)

@@ -358,3 +358,11 @@ topic	cell	bucket	expected	actual	note
 06 Vector basics	vec_swap	WORKS	30,20,10	(matches)	
 06 Vector basics	vec_typed_empty_push_string	WORKS	1 / alpha	(matches)	
 06 Vector basics	vec_zip	WRONG	alpha=1 / beta=2	E_UndefinedName `zip`	ALREADY FILED: TODO.md ~286.
+18 smart pointers	sp_box_new_deref	WORKS	42	(matches)	Box(42) then *b. docs/book/16.
+18 smart pointers	sp_box_get_set	WORKS	42 / 100	(matches)	get/set round-trip, docs/book/16 verbatim.
+18 smart pointers	sp_box_autoderef_string	WORKS	5	(matches)	Box[String] auto-derefs to String.len(); runtime-built string.
+18 smart pointers	sp_box_struct_field	WORKS	7	(matches)	deref a boxed struct, read two fields.
+18 smart pointers	sp_box_clone_owned_dead	WRONG	17	(traps rc 134)	RUST-LANE DOUBLE FREE, filed + known_gaps repro. Owned `!` Box param, DEAD at the clone. Expected is the CORRECT answer, hand-derived; graduates to WORKS when fixed. ⚠ The SELF-HOST is correct on this cell -- the two lanes fail on OPPOSITE cells of the move-eligibility axis.
+18 smart pointers	sp_box_clone_borrowed_param	WORKS	17	(matches)	CORRECT ON THIS (Rust/C) LANE. ⚠ SELF-HOST DOUBLE-FREES here (filed) -- invisible to a single-lane run; the 3-lane runner is what catches it.
+18 smart pointers	sp_box_clone_owned_live	WORKS	7 / 7	(matches)	CORRECT ON THIS (Rust/C) LANE. ⚠ SELF-HOST DOUBLE-FREES here (filed). This cell is why "never came out of an Option match" was the wrong discriminator -- its immunity is LIVENESS.
+18 smart pointers	sp_box_deref_no_clone	WORKS	7	(matches)	CONTROL: bare deref, no clone. Immune on both lanes -- isolates the OPERATOR.

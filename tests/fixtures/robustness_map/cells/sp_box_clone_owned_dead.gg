@@ -1,0 +1,10 @@
+struct Leaf:
+    int v
+
+int take(Box[Leaf] !b, int base):
+    Leaf fe = (*b).clone()
+    return base + fe.v
+
+void main():
+    Box[Leaf] bx = Box(Leaf(7))
+    print(take(^bx, 10))
