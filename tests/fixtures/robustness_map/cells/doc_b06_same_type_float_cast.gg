@@ -1,0 +1,8 @@
+# docs/book/06-structs-enums.md:46 § "Methods" writes
+# `return (self.x * self.x + self.y * self.y) as float` on float fields -- an
+# `as float` on something that is ALREADY a float. This is that cast alone.
+# Expected: 3.000000
+void main():
+    float x = 3.0
+    float y = x as float
+    print(f"{y}")
