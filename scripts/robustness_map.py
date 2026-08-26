@@ -455,11 +455,31 @@ def main():
         for lane in lanes:
             bucket, actual = res[lane]
             base = row[LANE_COL[lane]]
+            # ⚠ A `_neg` cell asserts a REJECTION. The documentation says the
+            # program is a compile error, so REJECTED is its CORRECT state and
+            # WORKS is the regression -- the language got more permissive and the
+            # doc it mirrors now lies. Without this the drift scores as PROGRESS
+            # and invites someone to `--accept` a real regression into the
+            # baseline. Measured case: docs/book/12-borrowing.md:96 lists
+            # `f(x, &x)` under "These are compile errors" and it compiles today.
+            # ⚠ A NEGATIVE cell asserts a REJECTION: the documentation says the
+            # program is a compile error, so REJECTED is its CORRECT state and a
+            # drift to WORKS is the REGRESSION -- the language got more permissive
+            # and the doc it mirrors now lies. Measured case:
+            # docs/book/12-borrowing.md:96 lists `f(x, &x)` under "These are
+            # compile errors" and it compiles today.
+            #
+            # The marker is the BASELINE BUCKET, not the filename. Keying on a
+            # `_neg` suffix is name-matching to decide semantics, and it is
+            # measurably wrong here: `vars_unary_neg` is a cell about unary MINUS
+            # whose correct state is WORKS. The baseline records what correct
+            # looks like for each cell, which is precisely what a baseline is for.
+            good = "REJECTED" if row[COL_C] == "REJECTED" else "WORKS"
             if base:                       # never measured => nothing to regress from
-                if base == "WORKS" and bucket != "WORKS":
+                if base == good and bucket != good:
                     regressions.append((row[COL_CELL], f"[{lane}] {base} -> {bucket}: {actual}"))
-                elif base != "WORKS" and bucket == "WORKS":
-                    progress.append((row[COL_CELL], f"[{lane}] {base} -> WORKS"))
+                elif base != good and bucket == good:
+                    progress.append((row[COL_CELL], f"[{lane}] {base} -> {good}"))
             if args.accept:
                 row[LANE_COL[lane]] = bucket
             topics.setdefault(row[COL_TOPIC], {}).setdefault(lane, {})
