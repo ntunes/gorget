@@ -1,0 +1,20 @@
+# docs/language-design.md:1224 § "5.2 Pattern Matching" -- nested destructuring
+# with a guard (verbatim).
+# Expected: Adult: Ada / Minor: Bo / Error: nope
+struct User:
+    String name
+    int age
+
+void show(Result[User, String] response):
+    match response:
+        case Ok(User(name, age)) if age >= 18:
+            print(f"Adult: {name}")
+        case Ok(User(name, _)):
+            print(f"Minor: {name}")
+        case Error(e):
+            print(f"Error: {e}")
+
+void main():
+    show(Ok(User("Ada", 30)))
+    show(Ok(User("Bo", 10)))
+    show(Error("nope"))

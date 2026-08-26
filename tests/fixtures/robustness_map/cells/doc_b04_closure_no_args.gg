@@ -1,0 +1,5 @@
+# docs/book/04-functions.md:224 § "No-Argument Closures" (verbatim)
+# Expected: hello
+void main():
+    auto greet = (): print("hello")
+    greet()

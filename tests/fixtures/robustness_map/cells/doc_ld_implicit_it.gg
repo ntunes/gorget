@@ -1,0 +1,8 @@
+# docs/language-design.md:1545 § "7.1 Syntax: `(params):` + Implicit `it`" (verbatim shape)
+# Expected: 3 / 2
+void main():
+    Vector[int] numbers = [1, 2, 3]
+    auto doubled = numbers.map(it * 2)
+    auto big = numbers.filter(it > 1)
+    print(f"{doubled.len()}")
+    print(f"{big.len()}")

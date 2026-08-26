@@ -1,0 +1,10 @@
+# docs/book/04-functions.md:175 § "Capturing Variables" (verbatim)
+# Expected: 3   (the doc's own annotation)
+void main():
+    int count = 0
+    auto increment = (&count)():
+        count += 1
+    increment()
+    increment()
+    increment()
+    print(count)    # 3

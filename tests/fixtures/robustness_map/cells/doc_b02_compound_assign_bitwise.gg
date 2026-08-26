@@ -1,0 +1,12 @@
+# docs/book/02-types.md:191 § "Compound Assignment" (bitwise forms, y starts at 0xF0 = 240)
+# Expected: 240 / 241 / 964 / 120
+void main():
+    int y = 0xF0
+    y &= 0xFF
+    print(f"{y}")
+    y |= 0x01
+    print(f"{y}")
+    y <<= 2
+    print(f"{y}")
+    y >>= 3
+    print(f"{y}")

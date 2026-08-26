@@ -1,0 +1,17 @@
+# docs/book/03-control-flow.md:138 § "Basic Matching" (body verbatim, wrapped)
+# Expected: stop / go / unknown
+void show(String color):
+    match color:
+        case "red":
+            print("stop")
+        case "green":
+            print("go")
+        case "yellow":
+            print("caution")
+        else:
+            print("unknown")
+
+void main():
+    show("red")
+    show("green")
+    show("purple")

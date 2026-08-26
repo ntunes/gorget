@@ -1,0 +1,12 @@
+# docs/book/05-collections.md:251 § "Iteration with Adapters" -- sum/product/min/max.
+# Expected: 150 / 12000000 / 10 / 50   (the doc's own annotations)
+void main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+    int total       = v.iter().sum()              # 150
+    int prod        = v.iter().product()          # element product
+    Option[int] lo  = v.iter().min()              # Some(10)
+    Option[int] hi  = v.iter().max()              # Some(50)
+    print(f"{total}")
+    print(f"{prod}")
+    print(f"{lo.unwrap()}")
+    print(f"{hi.unwrap()}")

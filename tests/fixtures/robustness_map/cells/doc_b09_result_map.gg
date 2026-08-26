@@ -1,0 +1,9 @@
+# docs/book/09-option-result.md:282 § "Transforming Results" -- map.
+# Expected: 20 / fail   (the doc's own annotations)
+void main():
+    Result[int, String] ok = Ok(10)
+    Result[int, String] err = Error("fail")
+    Result[int, String] doubled = ok.map((int x): x * 2)      # Ok(20)
+    Result[int, String] still_err = err.map((int x): x * 2)   # Error("fail")
+    print(f"{doubled.unwrap()}")
+    print(still_err.unwrap_error())

@@ -1,0 +1,7 @@
+# docs/book/10-errors.md:65 § "Throwing an Error" (verbatim)
+# The doc says this is an ERROR. Expected: REJECTED.
+void helper():
+    throw "oops"    # ERROR: throw in non-throwing function
+
+void main():
+    helper()

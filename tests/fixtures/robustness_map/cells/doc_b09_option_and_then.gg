@@ -1,0 +1,9 @@
+# docs/book/09-option-result.md:121 § "Transforming Options" -- and_then.
+# Expected: 43 / true   (the doc's own annotations)
+void main():
+    Option[int] some = Some(42)
+    Option[int] none = None()
+    Option[int] chained = some.and_then((int x): Some(x + 1))   # Some(43)
+    Option[int] short = none.and_then((int x): Some(x + 1))     # None
+    print(f"{chained.unwrap()}")
+    print(f"{short.is_none()}")

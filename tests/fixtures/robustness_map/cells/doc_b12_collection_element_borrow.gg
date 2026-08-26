@@ -1,0 +1,10 @@
+# docs/book/12-borrowing.md:192 § "Collection Element Borrowing" (verbatim shape)
+# Expected: Alice
+struct Player:
+    String name
+    int score
+
+void main():
+    Vector[Player] players = [Player("Alice", 1), Player("Bob", 2)]
+    auto p = players.get(0).unwrap()  # p borrows player 0 - no copy
+    print(p.name)                     # read through the borrow - zero cost

@@ -1,0 +1,10 @@
+# docs/book/05-collections.md:209 § "Iteration with Adapters" -- take / skip.
+# Expected: 10 20 30 then 30 40 50   (the doc's own annotations)
+void main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+
+    for x in v.iter().take(3):
+        print(x)                # 10 20 30
+
+    for x in v.iter().skip(2):
+        print(x)                # 30 40 50

@@ -1,0 +1,16 @@
+# docs/language-reference.md:6328 § "19.15 `fields(T)`" (verbatim shape)
+# Point has two numeric fields.
+# Expected: 2
+struct Point:
+    float x
+    float y
+
+void count_numeric_fields[T]():
+    auto count = 0
+    meta for fname, ftype in fields(T):
+        meta if ftype is numeric:
+            count += 1
+    print(f"{count}")
+
+void main():
+    count_numeric_fields[Point]()

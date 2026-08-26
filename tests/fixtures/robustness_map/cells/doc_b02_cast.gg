@@ -1,0 +1,9 @@
+# docs/book/02-types.md:127 § "Type Casting" (verbatim, prints added)
+# Expected: 42.000000 / 3 / 255
+void main():
+    float f = 42 as float       # int to float
+    int n = 3.14 as int         # float to int (truncates toward zero)
+    uint8 b = 255 as uint8      # narrowing cast
+    print(f"{f}")
+    print(f"{n}")
+    print(f"{b}")

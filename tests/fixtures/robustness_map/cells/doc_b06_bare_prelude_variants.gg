@@ -1,0 +1,11 @@
+# docs/book/06-structs-enums.md:163 § "Bare Variants" (verbatim, prints added)
+# Expected: 42 / true / 100 / fail
+void main():
+    Option[int] x = Some(42)       # not Option.Some(42)
+    Option[int] y = None()
+    Result[int, String] ok = Ok(100)
+    Result[int, String] err = Error("fail")
+    print(f"{x.unwrap()}")
+    print(f"{y.is_none()}")
+    print(f"{ok.unwrap()}")
+    print(err.unwrap_error())

@@ -1,0 +1,6 @@
+# docs/book/03-control-flow.md:54 § "Tuple Unpacking" (verbatim)
+# Expected: 1: one / 2: two / 3: three
+void main():
+    auto pairs = [(1, "one"), (2, "two"), (3, "three")]
+    for num, name in pairs:
+        print(f"{num}: {name}")

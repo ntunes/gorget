@@ -1,0 +1,11 @@
+# docs/book/10-errors.md:227 + :244 § "`throws int` on Main" (the doc's shape).
+# The doc says the error path leaves main via `rethrow N`; taking that path must
+# be a loud failure (non-zero exit), never a silent exit 0.
+# Expected: 'before', then a loud failure
+String load(String path) throws String:
+    throw "no such file"
+
+void main() throws int:
+    print("before")
+    String cfg = load("config.json")! rethrow 1
+    print("unreachable")

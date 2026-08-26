@@ -1,0 +1,10 @@
+# docs/book/05-collections.md:531 § "List Comprehension" (verbatim, prints added)
+# Expected: 0,1,4,9,16 then the evens count (10)
+void main():
+    Vector[int] squares = [x * x for x in 0..5]
+    # [0, 1, 4, 9, 16]
+
+    Vector[int] evens = [x for x in 0..20 if x % 2 == 0]
+    # [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+    print(f"{squares[0]},{squares[1]},{squares[2]},{squares[3]},{squares[4]}")
+    print(f"{evens.len()}")

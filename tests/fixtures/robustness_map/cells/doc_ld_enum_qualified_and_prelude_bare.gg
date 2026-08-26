@@ -1,0 +1,18 @@
+# docs/language-design.md:888 § "4.2 Enums (Algebraic Data Types)" (verbatim shape,
+# with block-form match arms).
+# Expected: 42 / red
+enum Color:
+    Red
+    Green
+    Blue
+    Custom(uint8, uint8, uint8)
+
+void main():
+    Color c = Color.Red()              # user enum - qualified required
+    Option[int] x = Some(42)
+    print(f"{x.unwrap()}")
+    match c:
+        case Red:
+            print("red")
+        else:
+            print("other")

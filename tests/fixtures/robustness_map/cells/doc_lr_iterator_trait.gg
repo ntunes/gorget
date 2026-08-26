@@ -1,0 +1,17 @@
+# docs/language-reference.md:3532 § "Iterator[T]" (verbatim)
+# Expected: 0 / 1 / 2 / 3 / 4   (the doc's "prints 0 through 4")
+struct Counter:
+    int current
+    int max
+
+equip Counter with Iterator[int]:
+    Option[int] next(&self):
+        if self.current < self.max:
+            int val = self.current
+            self.current = self.current + 1
+            return Some(val)
+        return None()
+
+void main():
+    for i in Counter(0, 5):
+        print(f"{i}")  # prints 0 through 4

@@ -1,0 +1,17 @@
+# docs/book/11-ownership.md:175 § "Reviving a Moved Variable" (verbatim shape)
+# Expected: reply
+struct Message:
+    String sender
+    String text
+
+void consume(Message !msg):
+    print(msg.text)
+
+void read_it(Message msg):
+    print(msg.text)
+
+void main():
+    Message msg = Message("Alice", "hello")
+    consume(^msg)                            # msg is invalid
+    msg = Message("Bob", "reply")           # msg is valid again
+    read_it(msg)

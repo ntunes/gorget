@@ -1,0 +1,9 @@
+# docs/book/05-collections.md:100 § "Basic Operations" -- capacity().
+# The doc does not state a value, only "current allocated capacity", so the
+# only hand-derivable claim is capacity() >= len().
+# Expected: true
+void main():
+    auto v = [10, 20, 30]
+    v.push(40)
+    int cap = v.capacity()
+    print(f"{cap >= v.len()}")

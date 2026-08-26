@@ -1,0 +1,14 @@
+# docs/book/10-errors.md:126 § "Capturing as a Result" (verbatim main)
+# Expected: using port 8080
+int parse_port(String input) throws String:
+    if input.is_empty():
+        throw "empty input"
+    return 8080
+
+void main():
+    Result[int, String] result = parse_port("8080")
+    match result:
+        case Ok(port):
+            print(f"using port {port}")
+        case Error(msg):
+            print(f"bad port: {msg}")

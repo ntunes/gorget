@@ -1,0 +1,18 @@
+# docs/language-design.md:902 § "4.2 Enums (Algebraic Data Types)" (verbatim shape)
+# Expected: red / blue
+enum Color:
+    Red
+    Green
+    Blue
+
+void show(Color c):
+    match c:
+        case Red:   print("red")
+        case Green: print("green")
+        case Blue:  print("blue")
+
+void main():
+    Color c = .Red()           # -> Color.Red()
+    show(c)
+    c = .Blue()
+    show(c)

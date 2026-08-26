@@ -1,0 +1,17 @@
+# docs/book/11-ownership.md:68 § "Copy vs Resource Types" (verbatim minus the
+# commented-out use-after-move line)
+# Expected: 42 42 / hello / hello / hello / hello!   (the doc's own annotations)
+void main():
+    # Copy types - freely duplicated
+    int a = 42
+    int b = a          # a is still valid
+    print(f"{a} {b}")   # 42 42
+
+    # Resource types - bare-assign borrows (zero cost)
+    String s1 = "hello"
+    String s2 = s1     # s2 borrows from s1
+    print(s1)          # "hello"  - both names still valid
+    print(s2)          # "hello"
+    s2 = s2 + "!"      # mutation triggers clone - s1 unaffected
+    print(s1)          # "hello"
+    print(s2)          # "hello!"

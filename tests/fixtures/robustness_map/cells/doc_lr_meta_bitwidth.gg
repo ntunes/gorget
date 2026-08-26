@@ -1,0 +1,10 @@
+# docs/language-reference.md:6750 § "19.23 Numeric Type Inspection" -- bitwidth (verbatim)
+# Expected: 8 / 32 / 32 / 64   (the doc's own annotations)
+void show_bits[T]():
+    print(f"{bitwidth(T)}")
+
+void main():
+    show_bits[int8]()    # -> 8
+    show_bits[int32]()   # -> 32
+    show_bits[float32]() # -> 32
+    show_bits[float]()   # -> 64

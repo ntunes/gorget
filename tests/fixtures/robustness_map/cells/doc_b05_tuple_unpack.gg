@@ -1,0 +1,6 @@
+# docs/book/05-collections.md:498 § "Tuple Unpacking" (verbatim)
+# Expected: 10 / 20   (the doc's own annotations)
+void main():
+    auto x, y = (10, 20)
+    print(f"{x}")    # 10
+    print(f"{y}")    # 20

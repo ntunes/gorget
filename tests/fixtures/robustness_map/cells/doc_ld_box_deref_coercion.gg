@@ -1,0 +1,5 @@
+# docs/language-design.md:1883 § "9.4 Deref Coercion" (verbatim)
+# Expected: 5
+void main():
+    Box[String] boxed = Box.new(String("hello"))
+    print(f"{boxed.len()}")       # Box[String] auto-derefs to String

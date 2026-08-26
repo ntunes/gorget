@@ -1,0 +1,10 @@
+# docs/book/05-collections.md:165 § "Index Access and Ownership" (verbatim)
+# Expected: 3 / 2   (the doc's own annotations)
+void main():
+    Vector[Vector[int]] matrix = [[1, 2, 3], [4, 5, 6]]
+    Vector[int] row = matrix[0]    # borrow - CoW-severs on mutation; matrix still has both rows
+    print(f"{row.len()}")          # 3
+    print(f"{matrix.len()}")       # still 2
+
+    Vector[int] owned = matrix[0].clone()  # independent owned copy (explicit)
+    print(f"{owned.len()}")

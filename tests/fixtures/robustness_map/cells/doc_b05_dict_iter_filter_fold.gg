@@ -1,0 +1,11 @@
+# docs/book/05-collections.md:624 § "Dict and Set" -- the chained form (verbatim).
+# 90 + 85 = 175.
+# Expected: 175
+void main():
+    auto scores = {"Alice": 90, "Bob": 75, "Carol": 85}
+    # Filter, transform, then aggregate - direct .filter / .any can't chain like this:
+    int total_high = scores
+        .iter()
+        .filter(((String k, int v)): v >= 80)
+        .fold(0, (int acc, (String k, int v)): acc + v)
+    print(f"{total_high}")

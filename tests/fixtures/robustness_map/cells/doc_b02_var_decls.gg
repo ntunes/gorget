@@ -1,0 +1,13 @@
+# docs/book/02-types.md:13 § "Variable Declarations" (declarations verbatim, prints added)
+# Expected: 5 / 3.141590 / true / hello / A
+void main():
+    int x = 5
+    float pi = 3.14159
+    bool active = true
+    String greeting = "hello"
+    String letter = 'A'
+    print(f"{x}")
+    print(f"{pi}")
+    print(f"{active}")
+    print(greeting)
+    print(letter)

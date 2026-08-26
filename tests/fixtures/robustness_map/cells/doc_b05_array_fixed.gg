@@ -1,0 +1,8 @@
+# docs/book/05-collections.md:417 § "Arrays" (verbatim)
+# Expected: 1 / 99
+void main():
+    int[5] arr = [1, 2, 3, 4, 5]     # fixed C-level array
+    int first = arr[0]                 # subscript read: 1
+    arr[2] = 99                       # subscript write
+    print(f"{first}")
+    print(f"{arr[2]}")

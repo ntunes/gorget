@@ -1,0 +1,6 @@
+# docs/book/05-collections.md:517 § "Nested Tuples" (verbatim)
+# Expected: 1 / 2   (the doc's own annotations)
+void main():
+    auto nested = (1, (2, 3))
+    print(f"{nested.0}")        # 1
+    print(f"{nested.1.0}")      # 2

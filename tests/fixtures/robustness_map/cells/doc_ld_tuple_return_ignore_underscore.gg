@@ -1,0 +1,8 @@
+# docs/language-design.md:261 § "Multiple Return Values" -- the underscore form.
+# Expected: 2
+(int, int) divmod(int a, int b):
+    return (a / b, a % b)
+
+void main():
+    auto (_, remainder) = divmod(17, 5)
+    print(f"{remainder}")

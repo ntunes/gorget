@@ -1,0 +1,9 @@
+# docs/book/05-collections.md:577 § "Vector: any, all" (verbatim)
+# Expected: true / true   (the doc's own annotations)
+void main():
+    auto numbers = [1, 2, 3, 4, 5]
+
+    bool has_even = numbers.any((int x): x % 2 == 0)     # true
+    bool all_positive = numbers.all((int x): x > 0)      # true
+    print(f"{has_even}")
+    print(f"{all_positive}")

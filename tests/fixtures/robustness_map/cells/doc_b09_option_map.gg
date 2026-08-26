@@ -1,0 +1,9 @@
+# docs/book/09-option-result.md:112 § "Transforming Options" -- map.
+# Expected: 84 / true   (the doc's own annotations: Some(84), then None)
+void main():
+    Option[int] some = Some(42)
+    Option[int] doubled = some.map((int x): x * 2)    # Some(84)
+    Option[int] none = None()
+    Option[int] still_none = none.map((int x): x * 2) # None
+    print(f"{doubled.unwrap()}")
+    print(f"{still_none.is_none()}")

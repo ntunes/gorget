@@ -1,0 +1,10 @@
+# docs/language-design.md:966 § "4.3 Generics" (verbatim shape)
+# Expected: 9
+T max_of[Comparable T](T a, T b):
+    if a.compare(b) > 0:
+        return a
+    return b
+
+void main():
+    int m = max_of[int](4, 9)
+    print(f"{m}")

@@ -1,0 +1,15 @@
+# docs/book/06-structs-enums.md:103 § "Basic Enums" -- comparing two variant
+# values. language-reference.md:3407 says Equatable provides `==`, and :1134
+# lists Equatable among the derivable enum traits.
+# Expected: true / false
+@derive(Equatable)
+enum Direction:
+    North
+    South
+
+void main():
+    Direction d = Direction.North
+    bool same = d == Direction.North
+    bool diff = d == Direction.South
+    print(f"{same}")
+    print(f"{diff}")

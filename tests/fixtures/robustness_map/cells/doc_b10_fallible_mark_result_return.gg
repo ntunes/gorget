@@ -1,0 +1,13 @@
+# docs/book/10-errors.md:115 § "The fallible mark (`!`) and auto-propagation"
+# (verbatim shape: the return type is Result, not `throws`).
+# Expected: 84
+Result[int, String] parse_int_ok(String s):
+    return Ok(42)
+
+Result[int, String] double_parsed(String s):
+    int val = parse_int_ok(s)!     # peels Ok / propagates Error
+    return Ok(val * 2)
+
+void main():
+    Result[int, String] r = double_parsed("x")
+    print(f"{r.unwrap()}")

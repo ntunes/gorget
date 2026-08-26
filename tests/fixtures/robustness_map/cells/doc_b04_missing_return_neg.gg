@@ -1,0 +1,8 @@
+# docs/book/04-functions.md:34 § "Every Path Must Return" (verbatim)
+# The doc says this is an ERROR. Expected: REJECTED.
+int sign(int x):
+    if x > 0:
+        return 1      # error: what if x <= 0? control falls off the end
+
+void main():
+    print(f"{sign(1)}")

@@ -1,0 +1,11 @@
+# docs/book/10-errors.md:192 § "Recovering from Errors with `catch`" (verbatim main)
+# Expected: using port 8080
+int parse_port(String input) throws String:
+    if input.is_empty():
+        throw "empty input"
+    return 1
+
+void main():
+    String input = ""
+    int port = parse_port(input)! catch (e): 8080
+    print(f"using port {port}")

@@ -1,0 +1,9 @@
+# docs/book/03-control-flow.md:252 § "Destructuring Payloads" (verbatim)
+# Expected: got 42
+void main():
+    Option[int] result = Some(42)
+    match result:
+        case Some(value):
+            print(f"got {value}")
+        case None:
+            print("nothing")

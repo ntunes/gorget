@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:703 § "map and filter (free functions)" (verbatim)
+# Expected: 2,4,6 / 2  (filter keeps 2 and 4)
+void main():
+    auto doubled = map([1, 2, 3], (int x): x * 2)
+    auto evens = filter([1, 2, 3, 4], (int x): x % 2 == 0)
+    print(f"{doubled[0]},{doubled[1]},{doubled[2]}")
+    print(f"{evens.len()}")

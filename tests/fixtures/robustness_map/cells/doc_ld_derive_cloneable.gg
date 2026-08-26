@@ -1,0 +1,13 @@
+# docs/language-design.md:629 § "3.4.1 The `Cloneable` Trait" (verbatim shape)
+# Expected: Alice / 3 / 3
+@derive(Cloneable)
+struct Player:
+    String name
+    Vector[int] scores
+
+void main():
+    Player p1 = Player("Alice", [90, 85, 95])
+    Player p2 = p1.clone()
+    print(p2.name)
+    print(f"{p1.scores.len()}")
+    print(f"{p2.scores.len()}")

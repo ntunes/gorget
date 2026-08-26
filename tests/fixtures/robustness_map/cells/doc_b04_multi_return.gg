@@ -1,0 +1,8 @@
+# docs/book/04-functions.md:105 § "Multiple Return Values" (verbatim)
+# Expected: key: 42
+String, int parse(String line):
+    return "key", 42
+
+void main():
+    auto key, value = parse("key:42")
+    print(f"{key}: {value}")

@@ -1,0 +1,21 @@
+# docs/book/05-collections.md:362 § "Set Operations" (verbatim, lens printed)
+# Expected: 2 / 4 / 1 / false   (the doc's own annotations)
+void main():
+    Set[int] a = Set[int]()
+    a.add(1)
+    a.add(2)
+    a.add(3)
+
+    Set[int] b = Set[int]()
+    b.add(2)
+    b.add(3)
+    b.add(4)
+
+    Set[int] both = a.intersection(b)     # {2, 3}
+    Set[int] either = a.union(b)          # {1, 2, 3, 4}
+    Set[int] only_a = a.difference(b)     # {1}
+    bool sub = a.is_subset(b)             # false
+    print(f"{both.len()}")
+    print(f"{either.len()}")
+    print(f"{only_a.len()}")
+    print(f"{sub}")

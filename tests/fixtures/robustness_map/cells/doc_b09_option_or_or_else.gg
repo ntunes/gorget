@@ -1,0 +1,12 @@
+# docs/book/09-option-result.md:135 § "Transforming Options" -- or / or_else.
+# Expected: 42 / 77 / 99   (the doc's own annotations)
+void main():
+    Option[int] some = Some(42)
+    Option[int] none = None()
+    Option[int] alt = Some(77)
+    Option[int] from_some = some.or(alt)    # Some(42) - already has a value
+    Option[int] from_none = none.or(alt)    # Some(77) - falls back to alt
+    Option[int] lazy = none.or_else((): Some(99))  # Some(99)
+    print(f"{from_some.unwrap()}")
+    print(f"{from_none.unwrap()}")
+    print(f"{lazy.unwrap()}")

@@ -1,0 +1,18 @@
+# docs/language-design.md:1250 § "5.4 The `in` Keyword (Containment Check)".
+# The doc claims Vector, Set, Dict (keys), Array, String and Range all support it.
+# Expected: true / true / true / true
+void main():
+    Vector[String] roles = ["admin", "user"]
+    Set[int] s = Set[int]()
+    s.add(7)
+    Dict[String, int] d = {"k": 1}
+    String text = "hello world"
+
+    bool a = "admin" in roles
+    bool b = 7 in s
+    bool cc = "k" in d
+    bool dd = "world" in text
+    print(f"{a}")
+    print(f"{b}")
+    print(f"{cc}")
+    print(f"{dd}")

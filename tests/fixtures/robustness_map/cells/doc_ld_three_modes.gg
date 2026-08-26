@@ -1,0 +1,17 @@
+# docs/language-design.md:365 + :381 § "3.1 The Three Modes" (verbatim)
+# Expected: 5 / hello! / hello!
+void print_len(String s):
+    print(f"{s.len()}")
+
+void push_exclaim(String &s):
+    s += "!"
+
+void consume(String ^s):
+    print(s)
+
+void main():
+    String name = "hello"
+    print_len(name)          # immutable borrow - name still valid
+    push_exclaim(&name)      # mutable borrow - name still valid (now "hello!")
+    print(name)
+    consume(^name)           # moved - name is GONE after this

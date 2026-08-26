@@ -1,0 +1,10 @@
+# docs/book/12-borrowing.md:222 § "Collection Element Borrowing" (verbatim shape)
+# Expected: Alice
+struct Player:
+    String name
+    int score
+
+void main():
+    Vector[Player] players = [Player("Alice", 1)]
+    Player owned = players.get(0).unwrap().clone()  # deep clone
+    print(owned.name)

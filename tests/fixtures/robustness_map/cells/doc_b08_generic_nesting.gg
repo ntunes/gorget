@@ -1,0 +1,13 @@
+# docs/book/08-generics.md:117 § "Nesting Generics" (verbatim)
+# Expected: 99   (the doc's own annotation)
+struct Container[T]:
+    T value
+
+equip Container[T]:
+    T get(self):
+        return self.value
+
+void main():
+    Container[Container[int]] nested = Container[Container[int]](Container[int](99))
+    Container[int] inner = nested.get()
+    print(f"{inner.get()}")    # 99

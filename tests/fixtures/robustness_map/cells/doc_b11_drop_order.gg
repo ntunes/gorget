@@ -1,0 +1,12 @@
+# docs/book/11-ownership.md:234 § "Drop Order" (verbatim)
+# Expected: dropping second / dropping first   (the doc's own Output block)
+struct Resource:
+    String name
+
+equip Resource with Drop:
+    void drop(^self):
+        print(f"dropping {self.name}")
+
+void main():
+    Resource a = Resource("first")
+    Resource b = Resource("second")

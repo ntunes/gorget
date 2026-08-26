@@ -1,0 +1,22 @@
+# docs/book/11-ownership.md:155 § "Move in Function Calls" (verbatim).
+# NOTE the doc's parameter spelling here is `Message ^msg`; ch04:74 spells the
+# same thing `Message !msg`, and the quick reference says `!` goes in the name's
+# slot. This cell pins the ch11 spelling.
+# Expected: hello / archived
+struct Message:
+    String sender
+    String text
+
+void archive(Message m):
+    print("archived")
+
+void read_it(Message msg):         # borrows (default)
+    print(msg.text)
+
+void consume(Message ^msg):     # takes ownership
+    archive(msg)
+
+void main():
+    Message msg = Message("Alice", "hello")
+    read_it(msg)          # borrow - msg still valid
+    consume(^msg)      # move - msg now invalid

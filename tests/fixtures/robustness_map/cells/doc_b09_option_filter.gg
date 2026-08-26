@@ -1,0 +1,8 @@
+# docs/book/09-option-result.md:128 § "Transforming Options" -- filter.
+# Expected: 42 / true   (the doc's own annotations)
+void main():
+    Option[int] some = Some(42)
+    Option[int] kept = some.filter((int x): x > 40)       # Some(42)
+    Option[int] rejected = some.filter((int x): x > 50)   # None
+    print(f"{kept.unwrap()}")
+    print(f"{rejected.is_none()}")

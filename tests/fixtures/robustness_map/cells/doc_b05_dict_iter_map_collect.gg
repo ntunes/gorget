@@ -1,0 +1,12 @@
+# docs/book/05-collections.md:624 § "Dict and Set" -- the key-projection form (verbatim).
+# Two scores are >= 80.
+# Expected: 2
+void main():
+    auto scores = {"Alice": 90, "Bob": 75, "Carol": 85}
+    # Project to keys via destructuring; underscore ignores the value:
+    Vector[String] high_names = scores
+        .iter()
+        .filter(((String k, int v)): v >= 80)
+        .map(((String k, int _v)): k)
+        .collect()
+    print(f"{high_names.len()}")

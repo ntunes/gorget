@@ -1,0 +1,20 @@
+# docs/book/07-traits.md:129 § "Trait Inheritance" + :139, verbatim.
+# Expected: hi, I'm Alice
+trait Named:
+    String name(self)
+
+trait Greeter extends Named:
+    String greet(self)
+
+struct Person:
+    String first_name
+
+equip Person with Greeter:
+    String name(self):
+        return self.first_name
+    String greet(self):
+        return f"hi, I'm {self.name()}"
+
+void main():
+    Person p = Person("Alice")
+    print(p.greet())

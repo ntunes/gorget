@@ -1,0 +1,14 @@
+# docs/book/09-option-result.md:144 § "Transforming Options" -- flatten.
+# Expected: 100 / true / true   (the doc's own annotations)
+void main():
+    Option[Option[int]] nested = Some(Some(100))
+    Option[int] flat = nested.flatten()    # Some(100)
+
+    Option[Option[int]] outer_none = None()
+    Option[int] still_none = outer_none.flatten()    # None
+
+    Option[Option[int]] inner_none = Some(None())
+    Option[int] also_none = inner_none.flatten()     # None
+    print(f"{flat.unwrap()}")
+    print(f"{still_none.is_none()}")
+    print(f"{also_none.is_none()}")

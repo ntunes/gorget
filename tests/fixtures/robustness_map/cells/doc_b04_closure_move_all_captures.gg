@@ -1,0 +1,6 @@
+# docs/book/04-functions.md:210 § "Move Closures" (verbatim, call added)
+# Expected: got: hi
+void main():
+    String note = "hi"
+    auto all = ^(): print(f"got: {note}")       # move every capture
+    all()

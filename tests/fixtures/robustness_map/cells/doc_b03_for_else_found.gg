@@ -1,0 +1,11 @@
+# docs/book/03-control-flow.md:64 § "For-Else" (verbatim, target present)
+# Expected: found!
+void main():
+    auto items = [1, 2, 3]
+    int target = 2
+    for item in items:
+        if item == target:
+            print("found!")
+            break
+    else:
+        print("not found")

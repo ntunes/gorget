@@ -1,0 +1,8 @@
+# docs/book/04-functions.md:253 § "Passing Functions as Arguments" (verbatim)
+# Expected: 10   (the doc's own annotation)
+int apply(int(int) f, int x):
+    return f(x)
+
+void main():
+    int result = apply((n): n * 2, 5)
+    print(f"{result}")    # 10

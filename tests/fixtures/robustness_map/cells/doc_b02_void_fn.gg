@@ -1,0 +1,7 @@
+# docs/book/02-types.md:116 § "Void" (verbatim, call added)
+# Expected: Hello, Alice!
+void greet(String name):
+    print(f"Hello, {name}!")
+
+void main():
+    greet("Alice")

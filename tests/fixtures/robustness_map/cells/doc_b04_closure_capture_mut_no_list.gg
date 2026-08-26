@@ -1,0 +1,12 @@
+# docs/book/04-functions.md:175 § "Capturing Variables" -- the same task written
+# without the doc's explicit capture list. Pins whether the WHOLE feature is
+# missing or only the doc's spelling of it.
+# Expected: 3
+void main():
+    int count = 0
+    auto increment = ():
+        count += 1
+    increment()
+    increment()
+    increment()
+    print(count)

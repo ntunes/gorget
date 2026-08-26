@@ -1,0 +1,17 @@
+# docs/language-design.md:1393 § "6.1 The `throws` Model" (verbatim shape)
+# Expected: 8080 / wrapped: boom
+int parse_port(String input) throws String:
+    throw "bad"
+
+String load(String path) throws String:
+    throw "boom"
+
+String load_wrapped(String path) throws String:
+    String c = load(path)! rethrow (String e): f"wrapped: {e}"
+    return c
+
+void main():
+    int port = parse_port("x")! catch (e): 8080               # recover
+    print(f"{port}")
+    Result[String, String] r = load_wrapped("p")
+    print(r.unwrap_error())

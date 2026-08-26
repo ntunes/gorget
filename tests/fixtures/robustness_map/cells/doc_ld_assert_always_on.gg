@@ -1,0 +1,10 @@
+# docs/language-design.md:1517 § "6.5 Assert (Always-On)" (verbatim shape)
+# Expected: 'before', then a loud failure
+void process(Vector[int] data):
+    assert data.len() > 0, "data must not be empty"
+    print("processed")
+
+void main():
+    print("before")
+    Vector[int] empty = Vector[int]()
+    process(empty)

@@ -1,0 +1,8 @@
+# docs/book/05-collections.md:251 § "Iteration with Adapters" -- contains / join.
+# Expected: true / 10, 20, 30, 40, 50   (the doc's own annotations)
+void main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+    bool has50      = v.iter().contains(50)       # true
+    String csv      = v.iter().join(", ")         # "10, 20, 30, 40, 50"
+    print(f"{has50}")
+    print(csv)

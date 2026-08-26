@@ -1,0 +1,13 @@
+# docs/language-reference.md:6115 § "Restrictions" (verbatim shape)
+# Expected: integer / floating-point
+String type_label[T](T val):
+    meta if typename(T) == "int":
+        return "integer"
+    elif typename(T) == "float":
+        return "floating-point"
+    else:
+        return "other"
+
+void main():
+    print(type_label[int](1))
+    print(type_label[float](1.0))

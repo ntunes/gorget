@@ -1,0 +1,8 @@
+# docs/book/04-functions.md:157 § "Multi-Line Closures" (verbatim, call added)
+# Expected: 11
+void main():
+    auto process = (int x):
+        int result = x * 2
+        result += 1
+        result
+    print(f"{process(5)}")

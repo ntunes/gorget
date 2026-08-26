@@ -1,0 +1,11 @@
+# docs/book/05-collections.md:273 § "Iteration with Adapters" -- Dict.iter() yields
+# (K, V) tuples. Dict order is not documented, so this SUMS rather than prints.
+# Expected: 55  (30 + 25)
+void main():
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put("Alice", 30)
+    ages.put("Bob", 25)
+    int total = 0
+    for p in ages.iter():
+        total += p.1
+    print(f"{total}")

@@ -1,0 +1,11 @@
+# docs/book/02-types.md:158 § "Comparison" (every listed operator, x=5 y=3)
+# Expected: false / true / false / true / false / true
+void main():
+    int x = 5
+    int y = 3
+    print(f"{x == y}")
+    print(f"{x != y}")
+    print(f"{x < y}")
+    print(f"{x > y}")
+    print(f"{x <= y}")
+    print(f"{x >= y}")

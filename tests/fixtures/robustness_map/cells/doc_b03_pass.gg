@@ -1,0 +1,11 @@
+# docs/book/03-control-flow.md:316 § "Pass" (verbatim, call added)
+# Expected: done
+void stub():
+    pass
+
+void main():
+    bool condition = true
+    if condition:
+        pass       # TODO: implement later
+    stub()
+    print("done")

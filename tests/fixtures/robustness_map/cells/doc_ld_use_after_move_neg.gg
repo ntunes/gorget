@@ -1,0 +1,9 @@
+# docs/language-design.md:381 § "3.1 The Three Modes" -- the doc's commented-out
+# line, uncommented. Expected: REJECTED.
+void consume(String ^s):
+    print(s)
+
+void main():
+    String name = "hello"
+    consume(^name)           # moved - name is GONE after this
+    print(name)              # COMPILE ERROR: name was moved

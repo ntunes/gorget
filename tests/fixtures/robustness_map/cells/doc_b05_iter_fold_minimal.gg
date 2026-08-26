@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:238 § "Iteration with Adapters" -- fold, on its own.
+# fold(1, acc*x) over [10,20,30,40,50] = 12000000.
+# Expected: 12000000
+void main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+    int folded = v.iter().fold(1, (acc, x): acc * x)
+    print(f"{folded}")

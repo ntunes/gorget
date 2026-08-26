@@ -1,0 +1,6 @@
+# docs/book/05-collections.md:115 § "Sort" -- sort_by_key on Vector[int].
+# Expected: 1,2,3
+void main():
+    Vector[int] v = [3, 1, 2]
+    v.sort_by_key((x): x)
+    print(f"{v[0]},{v[1]},{v[2]}")

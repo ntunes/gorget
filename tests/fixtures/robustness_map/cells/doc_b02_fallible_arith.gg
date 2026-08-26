@@ -1,0 +1,14 @@
+# docs/book/02-types.md:241 § "Fallible Arithmetic" (verbatim)
+# Expected: 5 / -1   (the doc's own inline annotations)
+int add_or_throw(int a, int b):
+    return a +! b               # auto-infers `throws ArithError`
+
+void main():
+    int r = add_or_throw(2, 3)! catch (e): -1
+    print(r)                     # 5
+
+    # Capture form - the Result value is the destination.
+    Result[int, ArithError] r2 = 9223372036854775807 +! 1
+    match r2:
+        case Ok(v):  print(v)
+        case Error(e): print(-1)  # Overflow branch: prints -1

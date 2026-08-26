@@ -1,0 +1,14 @@
+# docs/book/03-control-flow.md:10 § "If / Elif / Else" (body verbatim, wrapped in a function)
+# Expected: positive / negative / zero
+void classify(int x):
+    if x > 0:
+        print("positive")
+    elif x < 0:
+        print("negative")
+    else:
+        print("zero")
+
+void main():
+    classify(5)
+    classify(-5)
+    classify(0)

@@ -1,0 +1,11 @@
+# docs/book/05-collections.md:51 § "Common String Methods" -- split / index_of / substring.
+# Expected: a / b / c / 5 / Hello   (the doc's own annotations)
+void main():
+    String s = "Hello, World!"
+    Vector[String] parts = "a,b,c".split(",")   # ["a", "b", "c"]
+    for p in parts:
+        print(p)
+    Option[int] pos = s.index_of(",")           # Some(5)
+    print(f"{pos.unwrap()}")
+    String sub = s.substring(0, 5)              # "Hello"
+    print(sub)

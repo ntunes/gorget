@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:51 § "Common String Methods" -- len vs byte_len.
+# "Hello, World!" is 13 ASCII characters, so both counts are 13.
+# Expected: 13 / 13
+void main():
+    String s = "Hello, World!"
+    print(f"{s.len()}")                       # character count
+    print(f"{s.byte_len()}")                  # byte count (may differ for Unicode)

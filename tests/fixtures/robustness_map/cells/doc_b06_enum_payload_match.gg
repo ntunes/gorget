@@ -1,0 +1,21 @@
+# docs/book/06-structs-enums.md:137 § "Enums with Payloads" + :149 § "Pattern Matching"
+# Expected: circle with radius 5.000000 / rectangle 3.000000 x 4.000000
+enum Shape:
+    Circle(float)
+    Rectangle(float, float)
+    Triangle(float, float, float)
+
+void show(Shape s):
+    match s:
+        case Circle(radius):
+            print(f"circle with radius {radius}")
+        case Rectangle(w, h):
+            print(f"rectangle {w} x {h}")
+        case Triangle(a, b, c):
+            print(f"triangle with sides {a}, {b}, {c}")
+
+void main():
+    Shape s = Shape.Circle(5.0)
+    Shape r = .Rectangle(3.0, 4.0)
+    show(s)
+    show(r)

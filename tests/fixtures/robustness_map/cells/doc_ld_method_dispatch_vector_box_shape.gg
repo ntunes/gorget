@@ -1,0 +1,27 @@
+# docs/language-design.md:1135 § "4.8 Method Dispatch" (verbatim shape)
+# Expected: circle / rect
+trait Shape:
+    void render(self)
+
+struct Circle:
+    float radius
+
+struct Rectangle:
+    float w
+    float h
+
+equip Circle with Shape:
+    void render(self):
+        print("circle")
+
+equip Rectangle with Shape:
+    void render(self):
+        print("rect")
+
+void main():
+    Vector[Box[Shape]] shapes = Vector[Box[Shape]]()
+    shapes.push(Box.new(Circle(5.0)))
+    shapes.push(Box.new(Rectangle(3.0, 4.0)))
+
+    for shape in shapes:
+        shape.render()        # vtable dispatch - could be Circle or Rectangle

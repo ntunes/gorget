@@ -1,0 +1,13 @@
+# docs/book/12-borrowing.md:80 § "Method Syntax" (verbatim)
+# Expected: 5
+struct Message:
+    int priority
+
+equip Message:
+    void set_priority(&self, int p):
+        self.priority = p
+
+void main():
+    Message msg = Message(1)
+    msg.set_priority(5)    # &self is implicit at call site
+    print(f"{msg.priority}")

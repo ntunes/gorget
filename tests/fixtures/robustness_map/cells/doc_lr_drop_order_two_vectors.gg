@@ -1,0 +1,18 @@
+# docs/language-reference.md:3520 § "Drop" (verbatim shape)
+# The doc's comment: "scope exit: b before a". b holds 3, 4 and a holds 1, 2.
+# Expected: 3 / 4 / 1 / 2
+struct Noisy:
+    int id
+
+equip Noisy with Drop:
+    void drop(^self):
+        print(f"{self.id}")
+
+void main():
+    Vector[Noisy] a = Vector[Noisy]()   # holds 1, 2
+    a.push(Noisy(1))
+    a.push(Noisy(2))
+    Vector[Noisy] b = Vector[Noisy]()   # holds 3, 4
+    b.push(Noisy(3))
+    b.push(Noisy(4))
+    # scope exit: b before a

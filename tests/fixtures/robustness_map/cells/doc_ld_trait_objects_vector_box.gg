@@ -1,0 +1,44 @@
+# docs/language-design.md:3375 § "36.4 Trait Objects and Dynamic Dispatch" (verbatim,
+# trimmed to three animals so the expected output is short)
+# Expected: Rex says woof! / Whiskers says mew / Shadow says MEOW!
+trait Animal:
+    String name(self)
+    String speak(self)
+
+    String describe(self):
+        return f"{self.name()} says {self.speak()}"
+
+struct Dog:
+    String name
+
+struct Cat:
+    String name
+    bool indoor
+
+equip Dog with Animal:
+    String name(self):
+        return self.name
+
+    String speak(self):
+        return "woof!"
+
+equip Cat with Animal:
+    String name(self):
+        return self.name
+
+    String speak(self):
+        if self.indoor:
+            return "mew"
+        return "MEOW!"
+
+void introduce_all(Vector[Box[Animal]] animals):
+    for animal in animals:
+        print(animal.describe())
+
+void main():
+    Vector[Box[Animal]] zoo = Vector[Box[Animal]]()
+    zoo.push(Box.new(Dog(String("Rex"))))
+    zoo.push(Box.new(Cat(String("Whiskers"), true)))
+    zoo.push(Box.new(Cat(String("Shadow"), false)))
+
+    introduce_all(zoo)

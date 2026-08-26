@@ -1,0 +1,15 @@
+# docs/book/03-control-flow.md:299 § "The `is` Keyword" (verbatim, bindings added)
+# Expected: got 42 / failed: boom / absent
+void main():
+    Option[int] result = Some(42)
+    Result[int, String] response = Error("boom")
+    Option[int] option = None()
+
+    if result is Some(value):
+        print(f"got {value}")
+
+    if response is Error(msg):
+        print(f"failed: {msg}")
+
+    if option is None:
+        print("absent")

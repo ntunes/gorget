@@ -1,0 +1,10 @@
+# docs/book/05-collections.md:238 § "Iteration with Adapters" -- any / find.
+# No element of [10,20,30,40,50] exceeds 100, so any() is false; the first
+# above 25 is 30.
+# Expected: false / 30
+void main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+    bool has_big   = v.iter().any((x): x > 100)
+    Option[int] hit = v.iter().find((x): x > 25)         # Some(30)
+    print(f"{has_big}")
+    print(f"{hit.unwrap()}")

@@ -1,0 +1,10 @@
+# docs/book/08-generics.md:125 § "Nesting Generics" (verbatim, prints added)
+# Expected: 0 / 0 / 3
+void main():
+    Vector[int] items = [1, 2, 3]
+    Vector[Vector[int]] grid = Vector[Vector[int]]()
+    Dict[String, Vector[int]] groups = Dict[String, Vector[int]]()
+    Option[Vector[int]] maybe_items = Some(items)
+    print(f"{grid.len()}")
+    print(f"{groups.len()}")
+    print(f"{maybe_items.unwrap().len()}")

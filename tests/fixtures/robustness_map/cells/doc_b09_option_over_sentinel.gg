@@ -1,0 +1,10 @@
+# docs/book/09-option-result.md:74 § "Return `Option`, Not a Sentinel" -- the shape
+# the chapter recommends, over the sentinel form it argues against.
+# Expected: dark
+void main():
+    Dict[String, String] settings = Dict[String, String]()
+    settings.put("theme", "dark")
+
+    Option[String] theme = settings.get("theme")
+    if theme is Some(t):
+        print(t)                     # bound once - no sentinel, no re-call

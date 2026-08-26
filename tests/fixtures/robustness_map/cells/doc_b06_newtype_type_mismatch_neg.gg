@@ -1,0 +1,10 @@
+# docs/book/06-structs-enums.md:221 § "Why Newtypes" (verbatim)
+# The doc says this is a COMPILE ERROR. Expected: REJECTED.
+newtype UserId(int)
+newtype AccountId(int)
+
+void transfer(UserId user, AccountId account, int amount):
+    print(f"{user.0} {account.0} {amount}")
+
+void main():
+    transfer(AccountId(1), UserId(2), 100)   # COMPILE ERROR: type mismatch

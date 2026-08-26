@@ -1,0 +1,10 @@
+# docs/book/05-collections.md:624 § "Dict and Set" -- the minimal Dict.iter()
+# ADAPTER chain. `for p in d.iter()` (no adapter) is a different path.
+# Expected: 2
+void main():
+    Dict[String, int] scores = Dict[String, int]()
+    scores.put("Alice", 90)
+    scores.put("Bob", 75)
+    scores.put("Carol", 85)
+    int n = scores.iter().count()
+    print(f"{n}")

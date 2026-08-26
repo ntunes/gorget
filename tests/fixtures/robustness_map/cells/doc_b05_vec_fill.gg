@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:145 § "Swap and Fill" -- fill(n, v).
+# Expected: 5 / 0,0,0,0,0   (the doc's own annotation)
+void main():
+    Vector[int] zeros = Vector[int]()
+    zeros.fill(5, 0)            # [0, 0, 0, 0, 0]
+    print(f"{zeros.len()}")
+    print(f"{zeros[0]},{zeros[1]},{zeros[2]},{zeros[3]},{zeros[4]}")

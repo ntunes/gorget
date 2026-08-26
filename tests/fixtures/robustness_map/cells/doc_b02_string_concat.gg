@@ -1,0 +1,7 @@
+# docs/book/02-types.md:84 § "Strings" (verbatim, print added)
+# Expected: hello world
+void main():
+    String greeting = "hello"
+    String name = "world"
+    String combined = greeting + " " + name   # concatenation creates new String
+    print(combined)

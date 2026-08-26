@@ -1,0 +1,10 @@
+# docs/book/03-control-flow.md:104 § "Infinite Loops" -- `loop:` + `break`.
+# The doc's body reads stdin; the loop/break SHAPE is kept, the I/O is not.
+# Expected: 0 / 1 / 2
+void main():
+    int i = 0
+    loop:
+        if i == 3:
+            break
+        print(f"{i}")
+        i += 1

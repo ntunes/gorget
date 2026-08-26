@@ -1,0 +1,9 @@
+# docs/book/05-collections.md:506 § "Tuple Unpacking" (verbatim, prints added)
+# Expected: Content-Type / 200
+String, int parse_header(String line):
+    return "Content-Type", 200
+
+void main():
+    auto name, code = parse_header("...")
+    print(name)
+    print(f"{code}")

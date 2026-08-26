@@ -1,0 +1,13 @@
+# docs/book/03-control-flow.md:90 § "While-Else" (verbatim; try_connect stubbed to always fail)
+# Expected: all attempts failed
+bool try_connect():
+    return false
+
+void main():
+    int tries = 0
+    while tries < 3:
+        if try_connect():
+            break
+        tries += 1
+    else:
+        print("all attempts failed")

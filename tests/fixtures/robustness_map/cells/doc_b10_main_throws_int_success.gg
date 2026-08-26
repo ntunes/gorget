@@ -1,0 +1,10 @@
+# docs/book/10-errors.md:244 § "`throws int` on Main" -- the success path.
+# The doc's comment: "implicit success -> exit 0".
+# Expected: served
+String load(String path) throws String:
+    return "cfg"
+
+void main() throws int:
+    String cfg = load("config.json")! rethrow 1
+    print("served")
+    # implicit success -> exit 0

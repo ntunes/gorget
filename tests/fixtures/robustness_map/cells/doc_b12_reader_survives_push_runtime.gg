@@ -1,0 +1,13 @@
+# docs/book/12-borrowing.md:17 § "The Borrowing Rules" -- runtime-built elements,
+# so the vector's buffer really reallocates and a stale view would be visible.
+# Expected: a
+String mk(String x, String y):
+    return x + y
+
+void main():
+    Vector[String] v = Vector[String]()
+    v.push(mk("", "a"))
+    v.push(mk("", "b"))
+    String s = v.get(0).unwrap()
+    v.push(mk("", "c"))
+    print(s)

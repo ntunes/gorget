@@ -1,0 +1,15 @@
+# docs/book/05-collections.md:611 § "Dict and Set" (verbatim, prints added)
+# scores = 90, 75, 85. any(v>=90)=true, all(v>=60)=true, filter(v>=80) keeps 2,
+# fold sums to 250.
+# Expected: true / true / 2 / 250
+void main():
+    auto scores = {"Alice": 90, "Bob": 75, "Carol": 85}
+
+    bool any_high  = scores.any((String k, int v): v >= 90)
+    bool all_pass  = scores.all((String k, int v): v >= 60)
+    auto passing   = scores.filter((String k, int v): v >= 80)
+    int  total     = scores.fold(0, (int acc, String k, int v): acc + v)
+    print(f"{any_high}")
+    print(f"{all_pass}")
+    print(f"{passing.len()}")
+    print(f"{total}")

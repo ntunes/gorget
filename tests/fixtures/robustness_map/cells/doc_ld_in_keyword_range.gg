@@ -1,0 +1,7 @@
+# docs/language-design.md:1250 § "5.4 The `in` Keyword" -- the RANGE claim on its own.
+# Expected: true / false
+void main():
+    bool inside = 3 in 0..10
+    bool outside = 30 in 0..10
+    print(f"{inside}")
+    print(f"{outside}")

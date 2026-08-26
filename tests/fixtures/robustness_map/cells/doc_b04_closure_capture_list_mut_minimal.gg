@@ -1,0 +1,9 @@
+# docs/book/04-functions.md:175 § "Capturing Variables" -- minimal form of the
+# doc's explicit capture-list closure syntax, one call instead of three.
+# Expected: 1
+void main():
+    int count = 0
+    auto increment = (&count)():
+        count += 1
+    increment()
+    print(count)

@@ -1,0 +1,16 @@
+# docs/book/12-borrowing.md:139 § "Automatic Inference" (verbatim, calls added)
+# Expected: hello / abc / abc
+String get_greeting():
+    return "hello"         # static / literal - always valid
+
+String identity(String s):
+    return s               # move or clone at the return boundary
+
+String forward(String s):
+    String local = s       # in-body alias (CoW borrow)
+    return local           # move/clone into the caller's owned result
+
+void main():
+    print(get_greeting())
+    print(identity("abc"))
+    print(forward("abc"))

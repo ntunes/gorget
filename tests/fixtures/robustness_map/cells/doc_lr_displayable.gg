@@ -1,0 +1,13 @@
+# docs/language-reference.md:3438 § "Displayable" (verbatim)
+# Expected: (1.000000, 2.000000)
+struct Point:
+    float x
+    float y
+
+equip Point with Displayable:
+    String display(self):
+        return f"({self.x}, {self.y})"
+
+void main():
+    Point p = Point(1.0, 2.0)
+    print(p.display())

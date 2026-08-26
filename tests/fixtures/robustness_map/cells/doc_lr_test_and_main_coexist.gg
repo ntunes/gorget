@@ -1,0 +1,10 @@
+# docs/language-reference.md:5673 § "18.9 Coexisting with `main()`" (verbatim)
+# Expected: 42
+int double(int x):
+    return x * 2
+
+test "double works":
+    assert double(3) == 6
+
+void main():
+    print(f"{double(21)}")

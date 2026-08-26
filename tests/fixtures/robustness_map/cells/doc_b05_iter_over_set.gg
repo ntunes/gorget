@@ -1,0 +1,12 @@
+# docs/book/05-collections.md:273 § "Iteration with Adapters" -- iterating a Set.
+# Set iteration order is not documented, so this counts rather than prints.
+# Expected: 2
+void main():
+    Set[int] s = Set[int]()
+    s.add(1)
+    s.add(2)
+    s.add(3)
+    int seen = 0
+    for x in s.iter().take(2):
+        seen += 1
+    print(f"{seen}")

@@ -1,0 +1,9 @@
+# docs/book/11-ownership.md:276 § "No Move in Loops" (verbatim)
+# The doc says this is a COMPILE ERROR. Expected: REJECTED.
+void consume(String !s):
+    print(s)
+
+void main():
+    String s = "hello"
+    for i in 0..3:
+        consume(^s)    # COMPILE ERROR: move in loop body

@@ -1,0 +1,9 @@
+# docs/book/03-control-flow.md:25 § "If as an Expression" (verbatim, x=-4 count=1)
+# Expected: 4 / item
+void main():
+    int x = -4
+    int count = 1
+    int abs_val = if x >= 0: x else: -x
+    String label = if count == 1: "item" else: "items"
+    print(f"{abs_val}")
+    print(label)

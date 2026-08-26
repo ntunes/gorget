@@ -1,0 +1,17 @@
+# docs/book/09-option-result.md:179 § "Optional Chaining (`?.`)" (verbatim shape,
+# with the types the surrounding prose implies).
+# Expected: Springfield / true
+struct Address:
+    String city
+
+struct User:
+    Option[Address] address
+
+void main():
+    Option[User] user = Some(User(Some(Address("Springfield"))))
+    Option[String] city = user?.address?.city
+    print(city.unwrap())
+
+    Option[User] nobody = None()
+    Option[String] no_city = nobody?.address?.city
+    print(f"{no_city.is_none()}")

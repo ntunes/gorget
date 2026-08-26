@@ -1,0 +1,16 @@
+# docs/book/10-errors.md:72 § "Throwing an Error" (verbatim, calls added)
+# Expected: 5 / division by zero
+int divide(int a, int b) throws String:
+    if b == 0:
+        throw "division by zero"
+    return a / b
+
+void show(int a, int b):
+    Result[int, String] r = divide(a, b)
+    match r:
+        case Ok(v):    print(f"{v}")
+        case Error(e): print(e)
+
+void main():
+    show(10, 2)
+    show(1, 0)

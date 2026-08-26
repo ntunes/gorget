@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:209 § "Iteration with Adapters" -- chain.
+# Expected: 10 20 30 40 50 100 200   (the doc's own annotation)
+void main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+    Vector[int] w = [100, 200]
+    for x in v.iter().chain(w.iter()):    # chain is VectorIter-specific
+        print(x)                # 10 20 30 40 50 100 200

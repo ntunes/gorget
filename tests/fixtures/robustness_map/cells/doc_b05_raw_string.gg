@@ -1,0 +1,5 @@
+# docs/book/05-collections.md:76 § "Raw Strings" (verbatim)
+# Expected: no \n escape here   (the doc's own annotation)
+void main():
+    String raw = r"no \n escape here"
+    print(raw)    # no \n escape here

@@ -1,0 +1,6 @@
+# docs/book/04-functions.md:205 § "Move Closures" (verbatim, call added)
+# Expected: got: hello
+void main():
+    String msg = "hello"
+    auto one = (^msg)(): print(f"got: {msg}")   # move just this capture
+    one()

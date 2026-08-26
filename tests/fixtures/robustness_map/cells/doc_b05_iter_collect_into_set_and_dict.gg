@@ -1,0 +1,10 @@
+# docs/book/05-collections.md:263 § "Iteration with Adapters" (verbatim, lens printed)
+# [1,1,2,3,3,3] has 3 distinct values; the pair list has 2 entries.
+# Expected: 3 / 2
+void main():
+    Vector[int] dups = [1, 1, 2, 3, 3, 3]
+    Set[int] uniq    = dups.iter().collect()                  # -> Set[int]
+    Vector[(int, int)] pairs = [(1, 10), (2, 20)]
+    Dict[int, int] d = pairs.iter().collect()                 # -> Dict[int, int]
+    print(f"{uniq.len()}")
+    print(f"{d.len()}")

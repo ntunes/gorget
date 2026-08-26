@@ -1,0 +1,18 @@
+# docs/book/03-control-flow.md:204 § "Exhaustiveness" (verbatim; a binding arm completes the match)
+# Expected: going north / some other direction
+enum Direction:
+    North
+    South
+    East
+    West
+
+void go(Direction direction):
+    match direction:
+        case North:
+            print("going north")
+        case rest:
+            print("some other direction")
+
+void main():
+    go(Direction.North)
+    go(Direction.East)

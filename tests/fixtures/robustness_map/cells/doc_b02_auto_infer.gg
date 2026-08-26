@@ -1,0 +1,11 @@
+# docs/book/02-types.md:28 § "Type Inference with `auto`" (verbatim, prints added)
+# Expected: 42 / hello / 3.140000 / true
+void main():
+    auto x = 42           # inferred as int
+    auto name = "hello"   # inferred as String
+    auto pi = 3.14        # inferred as float
+    auto flag = true      # inferred as bool
+    print(f"{x}")
+    print(name)
+    print(f"{pi}")
+    print(f"{flag}")

@@ -1,0 +1,12 @@
+# docs/book/06-structs-enums.md:190 § "Newtypes" + :198 § "Construction and Access"
+# Expected: 42 / 3.140000   (the doc's own annotations)
+newtype UserId(int)
+newtype Meters(float)
+newtype Milliseconds(int)
+
+void main():
+    UserId id = UserId(42)
+    Meters dist = Meters(3.14)
+
+    print(f"{id.0}")       # 42 - access inner value via .0
+    print(f"{dist.0}")     # 3.14

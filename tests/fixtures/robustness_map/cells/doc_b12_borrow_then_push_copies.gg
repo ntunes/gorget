@@ -1,0 +1,8 @@
+# docs/book/12-borrowing.md:233 § "Mutating a collection while a borrow is live"
+# (verbatim). The doc says the entry is COPIED at the push, not rejected.
+# Expected: 42   (the pre-push value)
+void main():
+    Vector[int] v = [42, 7]
+    auto entry = v.get(0).unwrap()  # borrows from v
+    v.push(42)                       # entry is copied here, not rejected
+    print(f"{entry}")                # the pre-push value

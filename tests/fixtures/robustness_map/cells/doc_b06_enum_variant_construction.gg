@@ -1,0 +1,16 @@
+# docs/book/06-structs-enums.md:116 § "Variant Construction" (verbatim)
+# The doc's own comments: "no parens needed for nullary" / "parens also accepted".
+# Expected: true / true
+enum Direction:
+    North
+    South
+    East
+    West
+
+void main():
+    Direction d = Direction.North     # no parens needed for nullary
+    Direction e = Direction.North()   # parens also accepted
+    bool a = d == Direction.North
+    bool b = e == Direction.North
+    print(f"{a}")
+    print(f"{b}")

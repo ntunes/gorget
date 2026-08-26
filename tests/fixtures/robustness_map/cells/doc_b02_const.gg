@@ -1,0 +1,8 @@
+# docs/book/02-types.md:42 § "Constants" (verbatim, prints added)
+# Expected: 1024 / 500
+const int MAX_SIZE = 1024
+const auto LIMIT = 500
+
+void main():
+    print(f"{MAX_SIZE}")
+    print(f"{LIMIT}")

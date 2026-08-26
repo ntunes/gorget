@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:673 § "enumerate" (verbatim)
+# Expected: 0: Alice / 1: Bob / 2: Carol   (the doc's own annotation)
+void main():
+    auto names = ["Alice", "Bob", "Carol"]
+
+    for i, name in enumerate(names):
+        print(f"{i}: {name}")

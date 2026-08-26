@@ -1,0 +1,13 @@
+# docs/book/05-collections.md:563 § "Vector: map, filter, fold, reduce" (verbatim)
+# Expected: 2,4,6,8,10 / 2 (evens.len()) / 15 / 120   (the doc's own annotations)
+void main():
+    auto numbers = [1, 2, 3, 4, 5]
+
+    Vector[int] doubled = numbers.map((int x): x * 2)     # [2, 4, 6, 8, 10]
+    Vector[int] evens = numbers.filter((int x): x % 2 == 0) # [2, 4]
+    int total = numbers.fold(0, (int acc, int x): acc + x) # 15
+    int product = numbers.reduce((int a, int b): a * b)    # 120
+    print(f"{doubled[0]},{doubled[1]},{doubled[2]},{doubled[3]},{doubled[4]}")
+    print(f"{evens.len()}")
+    print(f"{total}")
+    print(f"{product}")

@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:430 § "Arrays" (verbatim, lens printed)
+# Expected: 3 / 3
+void main():
+    auto dynamic = [1, 2, 3]          # Vector[int] - growable
+    int[3] fixed = [1, 2, 3]          # int[3] - fixed size, stack-allocated
+    print(f"{dynamic.len()}")
+    print(f"{fixed.len()}")

@@ -1,0 +1,10 @@
+# docs/book/02-types.md:221 § "Exponentiation with `**`" (verbatim, prints added)
+# Expected: 1024 / 1.414214 / 1024
+void main():
+    int r  = 2 ** 10          # 1024
+    float f = 2.0 ** 0.5      # 1.414... (square root)
+    int a  = 2
+    a **= 10                  # compound assign - a = 1024
+    print(f"{r}")
+    print(f"{f}")
+    print(f"{a}")

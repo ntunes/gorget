@@ -1,0 +1,15 @@
+# docs/book/03-control-flow.md:233 § "Exhaustiveness" (verbatim, wrapped)
+# Expected: none / one / many
+void show(int count):
+    match count:
+        case 0:
+            print("none")
+        case 1:
+            print("one")
+        else:
+            print("many")
+
+void main():
+    show(0)
+    show(1)
+    show(7)

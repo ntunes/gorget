@@ -1,0 +1,15 @@
+# docs/book/05-collections.md:301 § "Basic Operations" (verbatim, prints added)
+# Expected: 10 / 3 / 99 / 30   (the doc's own annotations)
+void main():
+    auto d = {"x": 10, "y": 20}
+
+    int val = d["x"]      # subscript read: 10
+    d["z"] = 30           # subscript write (insert)
+    d["x"] = 99           # subscript write (update)
+    int len = d.len()     # 3
+    int updated = d["x"]
+    int inserted = d["z"]
+    print(f"{val}")
+    print(f"{len}")
+    print(f"{updated}")
+    print(f"{inserted}")

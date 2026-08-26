@@ -1,0 +1,9 @@
+# docs/language-design.md:233 § "Integer Overflow" (verbatim, prints added)
+# Expected: 5 / true   (the second is the doc's "Error(Overflow) at capture")
+int add_or_throw(int a, int b): return a +! b       # auto-throws ArithError
+
+void main():
+    int ok = add_or_throw(2, 3)! catch (e): -1
+    print(f"{ok}")
+    Result[int, ArithError] r = 9223372036854775807 +! 1 # Error(Overflow) at capture
+    print(f"{r.is_error()}")

@@ -1,0 +1,9 @@
+# docs/book/12-borrowing.md:233 § "Mutating a collection while a borrow is live"
+# -- the doc writes `print(entry)` with no f-string. Its f-string sibling
+# (doc_b12_borrow_then_push_copies) is rejected as an uninterpolatable `int &`.
+# Expected: 42   (the pre-push value)
+void main():
+    Vector[int] v = [42, 7]
+    auto entry = v.get(0).unwrap()  # borrows from v
+    v.push(42)                       # entry is copied here, not rejected
+    print(entry)                     # the pre-push value
