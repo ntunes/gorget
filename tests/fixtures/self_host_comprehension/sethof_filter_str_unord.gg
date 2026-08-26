@@ -30,7 +30,7 @@
 #
 # FIXTURE PLACEMENT: subdirectory (see any NET A cell's header for the full
 # reasoning).  LANE: self-host only (Core #9 implementation-internal
-# exemption; the Rust column is what the `.expect` records).  STAGE: 0.
+# exemption; the Rust column is what the `.expected` records).  STAGE: 0.
 # RUNG: 2 — no constructible held-fixed control for a Set-HOF receiver; the
 # expected value is the Rust lane's, hand-checked against the definition
 # (`filter` preserves the receiver's element type and ordered-ness, so the

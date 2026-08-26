@@ -14,7 +14,7 @@
 #
 # RED-VERIFIED (self-host lane, pre-fix driver): cc-fail: `incompatible types when assigning to type
 # 'Option__GorgetString' from type 'int'`
-# Post-fix self-host and the Rust lane both print the `.expect` contents.
+# Post-fix self-host and the Rust lane both print the `.expected` contents.
 #
 # FIXTURE PLACEMENT: subdirectory, deliberately NOT top-level
 # `tests/fixtures/`.  Top-level enrolment is automatic and directory-driven,
@@ -26,7 +26,7 @@
 # LANE: self-host only. Core #9's implementation-internal exemption: this
 # round changes no accept/reject and no accepted program's meaning; it makes
 # the self-host agree with an already-correct Rust lane. The Rust column is
-# recorded in the `.expect` value, which is hand-checked against it.
+# recorded in the `.expected` value, which is hand-checked against it.
 # STAGE: 0.   RUNG: 1a (both real lanes agree post-fix; held-fixed statement
 # control available).
 

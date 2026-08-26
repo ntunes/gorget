@@ -6,23 +6,48 @@
 # ⚠ THIS CELL EXISTS BECAUSE NO ORDINARY GATE CAN SEE ITS CLASS. Every
 # self-host gate in the tree runs the STAGE-0 driver (the one Rust gg built),
 # and `self_host_bootstrap_fixed_point` compares emitted C *text*, not
-# behaviour. The filter travels through function PARAMETERS as a boxed
-# option; at HEAD that boxed form is not dereferenced at the dispatch
-# boundary, so EVERY FILTERED comprehension is wrong once the compiler is
-# compiled by itself. The fix flattens the parameter at the dispatch
-# boundary, which is what takes stage 1 from broken to correct.
+# behaviour.
 #
-# ⚠ DO NOT "TIDY" THE FLATTENED PARAMETER BACK INTO THE BOXED SHAPE. The
-# elegance-showcase rule actively invites that cleanup and it is the one
-# change this cell exists to catch. The wired test
-# `self_host_comprehension_stage1_net` builds a STAGE-1 binary and runs this
-# cell through it — that is the only instrument that sees the class.
+# THE ABLATION, MEASURED. On a pristine-HEAD stage-1 binary this cell is
+# rc 101 printing `0`; the SAME HEAD driver at stage 0 prints the correct
+# `2/a`. The round's rework of the filter path takes stage 1 to `2/a`.
+#
+# THE MECHANISM, PINNED — and it is NOT "a boxed parameter". The self-host
+# lowerer DOUBLE-FREES on `(*b).clone()` where `b` was bound by
+# `case Some(b)` on an `Option[Box[T]]`; the pre-fix filter path spelled
+# exactly `(*filt_box).clone()`, so a driver compiled BY THE SELF-HOST
+# corrupted the heap on every FILTERED comprehension while a driver compiled
+# by Rust gg did not. Durable repro, RED on the self-host lane at rc 134 and
+# correct on Rust: `known_gaps/sh_option_box_deref_clone_double_free.gg`
+# (`known_gap_sh_option_box_deref_clone_double_free`). Filed in `TODO.md`
+# (grep `stage-1-only`) — the compiler defect itself is UNFIXED.
+#
+# ⚠ WHAT ACTUALLY HAS TO STAY IS THE ABSENCE OF `(*box).clone()` ON THE
+# FILTER PATH — not this cell's flattened signature. All three arms now
+# clone a PLAIN value (`filt_e.clone()` in `comp_synth_body_bound`), and the
+# set/dict arms KEEP the `Option[Box[SpannedExpr]]` parameter and unpack it
+# with a bare `*fb`, which is measured green at stage 1. So the boxed
+# parameter was never the hazard; the clone-through-a-match-bound-Box was.
+# Re-demonstrated by a one-line ablation: change the set arm's
+# `sv_fe = *sv_fb` to `sv_fe = (*sv_fb).clone()` and
+# `self_host_comprehension_stage1_net` goes RED on `stage1_set_strsrc_filt`
+# (`0/false/false` for `2/true/true`) while all 39 stage-0 cells stay green.
+#
+# ⚠ Earlier triage ran four probes of the boxed-option-through-a-parameter
+# shape and found them all CORRECT. They were correct: none of them cloned
+# the deref. That is why the attribution stood unproven for a round — the
+# probe set sampled the parameter axis and not the operator axis.
+#
+# The wired test `self_host_comprehension_stage1_net` builds a STAGE-1
+# binary and runs this cell through it — that is the only instrument in the
+# tree that sees this class.
 #
 # The `.len()` assertion is KEPT beside the element read on purpose: for this
 # class the LENGTH is the observable (a dropped filter changes the count),
 # while the element read is what catches a mint defect.
 #
-# RED-VERIFIED: stage 0 GREEN (this cell's RED lives only at stage 1); STAGE 1 at HEAD: see the test's own pre-fix run
+# RED-VERIFIED: stage 0 at HEAD is GREEN (`2/a`) — this cell's RED lives ONLY
+# at stage 1, where a pristine-HEAD stage-1 binary is rc 101 printing `0`.
 #
 # FIXTURE PLACEMENT: subdirectory (see any NET A cell's header).
 # LANE: self-host only.  STAGE: 0 AND 1.  RUNG: 1a (both real lanes agree).

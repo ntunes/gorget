@@ -6662,6 +6662,13 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(it_dst, OpConstUnit()))
             return it_dst
         case EListComp(lc_comp_box, lc_var, lc_iter_box, lc_filt_opt):
+            # List comprehension `[expr for x in iter [if cond]]`. The 4th AST
+            # field is `Option[Box[SpannedExpr]]` like its two siblings below,
+            # but it is unpacked HERE and passed on FLATTENED. ⚠ Whichever
+            # spelling you prefer, the unpack must stay a BARE deref: a
+            # `(*fb).clone()` here re-arms a live self-host double-free that
+            # only the STAGE-1 net can see. Reasoning, measurements and the
+            # filing are on `lower_list_comprehension`.
             bool lc_has_filt = false
             SpannedExpr lc_filt_e = *lc_comp_box
             match lc_filt_opt:
@@ -7560,15 +7567,17 @@ int comp_close(LowerCtx &ctx, GirModule &gmod, CompSave sv):
         String comp_abort_msg = "cannot lower a comprehension: its source expression lowered no loop, "
         comp_abort_msg = comp_abort_msg + "so no element -- and hence no accumulator element type -- was ever produced"
         lower_abort(comp_abort_msg)
-        # Keep the CFG well-formed even here. An unterminated reserved block
-        # becomes an implicit `return`, which STRANDS the whole loop and the
-        # code after it -- measured as a program that printed nothing and
-        # exited with a garbage status. A no-element comprehension is a defect;
-        # a malformed function is a second one.
-        int fail_after = ctx.current_block
-        switch_to(&ctx, mint_bb)
-        set_terminator(&ctx, GTJump(entry_bb))
-        switch_to(&ctx, fail_after)
+        # `lower_abort` does not return (`lower.gg`: stderr diagnostic +
+        # `exit(1)`), so there is nothing to repair after it and no CFG left to
+        # keep well-formed -- same shape as `comp_make_acc`'s abort arm. The
+        # `return` below exists only to satisfy the return type.
+        #
+        # ⚠ IF `lower_abort` IS EVER DOWNGRADED to something that returns, this
+        # arm becomes a live bug: the reserved mint block would stay
+        # unterminated, which becomes an implicit `return` that STRANDS the
+        # whole loop and everything after it -- measured once as a program that
+        # printed nothing and exited with a garbage status. Terminate `mint_bb`
+        # here then, or do not downgrade.
         return acc
     int acc_tid = comp_mint_tid(&gmod, base, t0, t1)
     String ctor = comp_mint_ctor(&gmod, base, acc_tid, t0, t1)
@@ -7640,8 +7649,10 @@ Vector[Stmt] comp_synth_dict_body_bound(String acc_name, String kbind, String vb
 # (`src/ir/lowering/exprs/collections.rs` — cite it by FUNCTION NAME; every
 # line-number cite in this band was measured stale), but reuses the self-host's
 # existing run-proven `lower_for_*` loop machinery instead of re-emitting
-# the loop scaffold: synthesize an `acc.push(comp_expr)` body (wrapped in
-# `if filter:` for the filtered variant) and route it through
+# the loop scaffold: synthesize a BIND-THEN-PUSH body via
+# `comp_synth_body_bound` (the element is bound to a local first so
+# `comp_note_elem` sees its type before the push lowers; the whole thing sits
+# inside `if filter:` for the filtered variant) and route it through
 # `lower_for_string` (String base — single UTF-8 codepoint pass, matches
 # `for c in s:` semantics), `lower_for_range` (both-bounded `start..end`),
 # or `lower_for_vector` (general indexed collection). All three already
@@ -7657,6 +7668,29 @@ Vector[Stmt] comp_synth_dict_body_bound(String acc_name, String kbind, String vb
 # borrow alias; the synthesized `acc.push(ch)` clones it at the ownership
 # boundary via the normal method-call consume machinery (run-proven by
 # the `for c in s: stack.push(c)` idiom).
+#
+# ⚠ THE FILTER ARRIVES FLATTENED — `(bool has_filt, SpannedExpr filt_e)`, not
+# the `Option[Box[SpannedExpr]]` the AST carries and the two SIBLING arms
+# below still take. The asymmetry is a LIVE COMPILER GAP, not a taste call,
+# but the load-bearing half is NOT the signature — it is that NOTHING on the
+# filter path clones through a match-bound Box.
+#
+# The gap: the self-host lowerer DOUBLE-FREES on `(*b).clone()` where `b` was
+# bound by `case Some(b)` on an `Option[Box[T]]` (rc 134; Rust gg is correct).
+# The pre-fix filter path spelled exactly `(*filt_box).clone()`, so a driver
+# compiled BY THE SELF-HOST corrupted the heap on every FILTERED comprehension
+# while a driver compiled by Rust gg did not:
+# `self_host_comprehension/stage1_list_strsrc_filt.gg` is GREEN (`2/a`) at
+# stage 0 and rc 101 printing `0` at stage 1 on a pristine-HEAD build. Repro
+# `known_gaps/sh_option_box_deref_clone_double_free.gg`; filed in `TODO.md`
+# (grep `stage-1-only`); UNFIXED.
+#
+# So: the siblings keep the boxed parameter and are CORRECT at stage 1
+# because they unpack with a bare `*fb` and let `comp_synth_body_bound` clone
+# a PLAIN value. Re-flattening or un-flattening this signature is not the
+# hazard — reintroducing `(*box).clone()` anywhere on the filter path is, and
+# only `self_host_comprehension_stage1_net` can see it. Retire the asymmetry
+# when the gap is fixed, and re-run that test if you touch either shape.
 int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_name, SpannedExpr iterable, bool has_filt, SpannedExpr filt_e, GirModule &gmod):
     Span span = comp_expr.span
     materialize_loop_carried_bare_params(&ctx, &gmod, comp_expr.span.start)
@@ -7740,34 +7774,29 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
     coll_local = maybe_auto_propagate(&ctx, coll_local, &gmod)
     String coll_tn = local_type_name(coll_local, ctx, &gmod)
     SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
-    # ── VECTOR base: idx-walk via `lower_for_vector`. Accumulator element
-    # type recovered from the SOURCE collection name — correct ONLY for the
-    # element-PRESERVING case (`[x for x in v]`, `[x*2 for x in v]`).
+    # ── VECTOR base: idx-walk via `lower_for_vector`, reached through the
+    # shared `drive_loop_lowered` dispatcher.
     #
-    # ⛔ KNOWN-WRONG for a body that CHANGES the element type, and this is the
-    # round's headline defect on this lane. The sentence that used to close
-    # this paragraph — "a body that changes the element type recovers it from a
-    # TYPED VarDecl when present" — was FALSE: `collection_element_type(coll_tn)`
-    # below reads the SOURCE collection's name and NOTHING consults a VarDecl.
-    # Measured by outcome on BOTH lanes at HEAD:
-    # `Vector[int] lens = [w.len() for w in words]` over a `Vector[String]`
-    # SIGSEGVs (rc 139) because the result-push copies at the SOURCE element's
-    # width.
+    # The accumulator is DEFERRED-MINTED, so its element type comes from what
+    # the comprehension PRODUCES: `comp_reserve` reserves the local plus an
+    # unterminated mint block, the synthesized bind-then-push body publishes
+    # the MATERIALIZED element type through `comp_note_elem`, and `comp_close`
+    # emits the typed constructor once that type is known — mirroring the Rust
+    # lane's `reserve_accumulator` / close pair in
+    # `src/ir/lowering/exprs/collections.rs`.
     #
-    # THE RULE: this arm is wrong iff the SOURCE element name differs from the
-    # RESULT element name.
-    #
-    # The RUST lane was FIXED in R44 (a DEFERRED mint taking the MATERIALIZED
-    # result element's type). The self-host residual is routed to Track K and
-    # pinned by `known_gaps/sh_comprehension_list_arm_source_derived_mint.gg`.
-    # Do NOT "fix" it by deriving the name from the comprehension BODY — four
-    # successive body/source-derived remedies were each BUILT and each broke a
-    # different cell.
-    # Type the accumulator LOCAL with the element-carrying `Vector__<elem>`
-    # (via the centralized helper) — NOT a bare GorgetArray — so an
-    # auto-bound result is self-describing for a downstream `v[i]` / `for x
-    # in v`. The sized alloc (driven by `elem_name`) clones correctly at the
-    # push boundary, unchanged.
+    # ⚠ THE HISTORY THIS REPLACED, kept because it CONSTRAINS the shape rather
+    # than describing today's code. This arm used to recover the accumulator
+    # element from the SOURCE collection's name, which is right only when the
+    # body PRESERVES the element type: `Vector[int] lens = [w.len() for w in
+    # words]` over a `Vector[String]` SIGSEGV'd (rc 139) because the
+    # result-push copied at the SOURCE element's width. That program is now the
+    # LIVE cell `self_host_comprehension/graduated_nested_vector_source.gg`
+    # (Rust half: `rust_comprehension_nested_vector_type_change_no_segv`).
+    # Do NOT re-derive the element name from the comprehension BODY either —
+    # four successive body/source-derived remedies were each BUILT and each
+    # broke a different cell. The element type has to come from the
+    # MATERIALIZED local, which is exactly what `comp_note_elem` carries.
     CompSave vsv = comp_reserve(&ctx, &gmod, "array", false)
     int vacc = ctx.comp_acc
     String vacc_name = "__listcomp_acc_" + int_to_str(vacc)

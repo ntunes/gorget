@@ -1,0 +1,109 @@
+# KNOWN GAP — SELF-HOST LANE ONLY. `(*b).clone()` where `b` was bound by
+# `case Some(b)` on an `Option[Box[T]]` DOUBLE-FREES at runtime.
+#
+# AXIS CELL: lane = self-host (Rust gg is CORRECT here) · payload T =
+# {trivial struct, struct over a Box-bearing enum} · binding site = {local,
+# fn parameter} · operator = `.clone()` on the DEREF. Every listed cell was
+# measured. The two `.clone()`-less spellings are the immune controls; each
+# was measured GREEN as a standalone probe, and they lead this file so that
+# any surviving output localises the abort.
+#
+# ⚠ THIS IS A MEMORY-SAFETY DEFECT, not a wrong value: the self-host-compiled
+# binary aborts with `free(): double free detected in tcache 2` (rc 134).
+#
+# MEASURED — program held fixed, verdicts read from files, never off a pipe:
+#   Rust lane   `gg run <this file>`        -> rc 0, stdout `7/7/17/17/10`
+#   SH lane     driver --emit-c ; cc ; run  -> rc 134, stdout EMPTY, stderr
+#                                             `free(): double free detected
+#                                             in tcache 2`
+# ⚠ stdout is EMPTY, not the two control lines — the abort discards the
+# buffered output. Do not expect a PREFIX from a partially-repaired compiler;
+# the wired assertion is on the WHOLE intended output.
+#
+# What the harness prints when you run it with `--ignored` (measured, so you
+# can match it rather than guess): `Crashed { exit_code: None, stderr_first:
+# "free(): double free detected in tcache 2" }` — `exit_code` is None because
+# the process dies by SIGABRT; a shell renders the same death as rc 134.
+# The DISCRIMINATOR is narrow and was found by elimination, not by guessing:
+#   `Leaf fe = *fb`                        after Some(fb)  -> rc 0  ✅ (control 1)
+#   `Leaf fe = (*b).clone()` on a Box that
+#      never came out of an Option match                   -> rc 0  ✅ (control 2)
+#   `Leaf fe = (*fb).clone()` after Some(fb)               -> rc 134 ⛔
+# It reproduces with a LOCAL `Option[Box[T]]` and with a PARAMETER one, at one,
+# two and three parameter hops, and for both a trivial `T` and a `T` that is a
+# struct over a Box-bearing recursive enum. So neither hop count nor payload
+# shape is the discriminator — the MATCH-BOUND Box is.
+#
+# ⚠ WHY THIS MATTERS BEYOND ONE PROGRAM — it is the mechanism behind R44 Track
+# K's stage-1 class. The self-host's own comprehension filter path used to
+# spell exactly `(*filt_box).clone()`, so the STAGE-1 driver (the one the
+# self-host compiles) mis-lowered EVERY FILTERED comprehension while stage 0
+# stayed green. Track K removed the spelling; the compiler defect underneath is
+# THIS, and it is unfixed. Re-demonstrable in one line: change
+# `lower_expr.gg`'s set arm from `sv_fe = *sv_fb` to `sv_fe = (*sv_fb).clone()`
+# and `self_host_comprehension_stage1_net` goes RED on `stage1_set_strsrc_filt`
+# (`0/false/false` for `2/true/true`) while `self_host_comprehension_net` — all
+# 39 stage-0 cells — stays green.
+#
+# RED-VERIFIED on the LAGGING lane (self-host), not on Rust: the Rust lane is
+# green on arrival here and would pin nothing.
+#
+# Wired by the `#[ignore]`d `known_gap_sh_option_box_deref_clone_double_free`,
+# which asserts the INTENDED output. GRADUATE it (un-ignore + move to
+# `tests/fixtures/`) the round this is fixed.
+
+struct Leaf:
+    int v
+
+# CONTROL 2 — a Box that never passed through an Option match. Immune.
+int plain_box_clone(int seed):
+    Leaf f = Leaf(seed)
+    Box[Leaf] b = Box(f)
+    Leaf fe = (*b).clone()
+    return fe.v
+
+# CONTROL 1 — the same Option match, but a BARE deref. Immune.
+int some_deref_no_clone(Option[Box[Leaf]] o, int base):
+    match o:
+        case Some(fb):
+            Leaf fe = *fb
+            return base + fe.v
+        case None:
+            return base
+
+# THE DEFECT, through a PARAMETER.
+int some_deref_clone_param(Option[Box[Leaf]] o, int base):
+    match o:
+        case Some(fb):
+            Leaf fe = (*fb).clone()
+            return base + fe.v
+        case None:
+            return base
+
+void main():
+    Leaf f = Leaf(7)
+    Option[Box[Leaf]] o = Some(Box(f))
+
+    # CONTROL 1 (bare deref through a param) -> 7
+    print(some_deref_no_clone(o, 0))
+    # CONTROL 2 (clone of a non-Option Box) -> 7
+    print(plain_box_clone(7))
+
+    # THE DEFECT, on a LOCAL Option -> 17
+    Leaf g = Leaf(7)
+    Option[Box[Leaf]] local_o = Some(Box(g))
+    match local_o:
+        case Some(lb):
+            Leaf le = (*lb).clone()
+            print(10 + le.v)
+        case None:
+            print(10)
+
+    # THE DEFECT, through a PARAMETER -> 17
+    Leaf h = Leaf(7)
+    Option[Box[Leaf]] param_o = Some(Box(h))
+    print(some_deref_clone_param(param_o, 10))
+
+    # The None arm through the same parameter -> 10
+    Option[Box[Leaf]] none_o = None
+    print(some_deref_clone_param(none_o, 10))

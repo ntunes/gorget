@@ -1,28 +1,47 @@
-# NET G cell — the STAGE-1-ONLY class. set arm.
+# NET G cell — the STAGE-1 pair's SECOND dispatcher arm, and the ABLATION
+# HANDLE for the stage-1-only mechanism. set arm.
+#
+# ⚠ THIS CELL IS NOT ITSELF STAGE-1-ONLY — its list sibling
+# `stage1_list_strsrc_filt.gg` is. Read that one for the class; this one is
+# wrong at stage 0 too, and it is here for the two reasons below.
 #
 # AXIS CELL: comp-kind = set `{...}`  ·  source = String (codepoints)  ·
 # destination = `auto` (the EMPTY result channel)  ·  FILTERED.
 #
-# ⚠ THIS CELL EXISTS BECAUSE NO ORDINARY GATE CAN SEE ITS CLASS. Every
-# self-host gate in the tree runs the STAGE-0 driver (the one Rust gg built),
-# and `self_host_bootstrap_fixed_point` compares emitted C *text*, not
-# behaviour. The filter travels through function PARAMETERS as a boxed
-# option; at HEAD that boxed form is not dereferenced at the dispatch
-# boundary, so EVERY FILTERED comprehension is wrong once the compiler is
-# compiled by itself. The fix flattens the parameter at the dispatch
-# boundary, which is what takes stage 1 from broken to correct.
+# ⚠ IT STILL RUNS THROUGH AN INSTRUMENT NO ORDINARY GATE PROVIDES. Every
+# other self-host gate in the tree runs the STAGE-0 driver (the one Rust gg
+# built), and `self_host_bootstrap_fixed_point` compares emitted C *text*,
+# not behaviour.
 #
-# ⚠ DO NOT "TIDY" THE FLATTENED PARAMETER BACK INTO THE BOXED SHAPE. The
-# elegance-showcase rule actively invites that cleanup and it is the one
-# change this cell exists to catch. The wired test
-# `self_host_comprehension_stage1_net` builds a STAGE-1 binary and runs this
-# cell through it — that is the only instrument that sees the class.
+# WHAT IS MEASURED. A pristine-HEAD stage-1 binary prints `0/false/false`
+# here where `2/true/true` is correct; under the round's fix stage 1 prints
+# `2/true/true`. ⚠ Unlike its list sibling, THIS cell is wrong at stage 0
+# too (the same `0/false/false` — the §4 silent drop), so it is NOT by
+# itself evidence of a stage-1-only class. It is here so the stage-1 pair
+# samples a SECOND dispatcher arm and is provably not one cell twice.
+#
+# ⚠ THIS CELL IS ALSO THE ABLATION HANDLE FOR THE STAGE-1-ONLY MECHANISM.
+# That mechanism — the self-host lowerer double-freeing on `(*b).clone()`
+# where `b` came from `case Some(b)` on an `Option[Box[T]]` — is pinned by
+# `known_gaps/sh_option_box_deref_clone_double_free.gg` and filed in
+# `TODO.md` (grep `stage-1-only`). `lower_set_comprehension` still TAKES the
+# `Option[Box[SpannedExpr]]` filter parameter and is correct at stage 1
+# because it unpacks with a bare `*sv_fb`. Change that ONE line to
+# `(*sv_fb).clone()` and THIS cell goes RED at stage 1 (`0/false/false` for
+# `2/true/true`) while all 39 stage-0 cells stay green — measured, and the
+# cleanest demonstration in the tree that the hazard is the CLONE, not the
+# boxed parameter. Do not "tidy" that unpack.
+#
+# The wired test `self_host_comprehension_stage1_net` builds a STAGE-1
+# binary and runs this cell through it — that is the only instrument that
+# sees the class.
 #
 # The `.len()` assertion is KEPT beside the element read on purpose: for this
 # class the LENGTH is the observable (a dropped filter changes the count),
 # while the element read is what catches a mint defect.
 #
-# RED-VERIFIED: stage 0 at HEAD prints `0` where `2` is correct (the §4 silent drop); stage 1 at HEAD is wrong too
+# RED-VERIFIED: at HEAD this cell prints `0/false/false` where `2/true/true`
+# is correct — at stage 0 (the §4 silent drop) AND at stage 1.
 #
 # FIXTURE PLACEMENT: subdirectory (see any NET A cell's header).
 # LANE: self-host only.  STAGE: 0 AND 1.  RUNG: 1a (both real lanes agree).

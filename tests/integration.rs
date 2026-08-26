@@ -35416,7 +35416,7 @@ fn assert_self_host_stdout(fixture_rel: &str, tag: &str, expected: &str) {
 // verified against, and its PLACEMENT / LANE / STAGE / RUNG.
 //
 // ── Why a SUBDIRECTORY, not top-level `tests/fixtures/` ───────────────────
-// Top-level enrolment is automatic and directory-driven, so ~35 new cells
+// Top-level enrolment is automatic and directory-driven, so 39 new cells
 // would land at once in: `runtime_parity_corpus` and its
 // `RUNTIME_DIFF_NONMATCH_CEILING` (Core #9 ⊕ forbids raising that for a
 // round's OWN inflow); the `-maxdepth 1` sanitize sweep; and the shrink-only
@@ -35430,7 +35430,7 @@ fn assert_self_host_stdout(fixture_rel: &str, tag: &str, expected: &str) {
 // makes the self-host agree with an already-correct Rust lane. That is Core
 // #9's *implementation-internal* exemption (lanes share semantics, not
 // implementation), cited by name — NOT a silent lane gap. The Rust column was
-// measured for every cell while the `.expect` values were minted, and every
+// measured for every cell while the `.expected` values were minted, and every
 // value except one IS a post-fix Rust==self-host agreement. The exception is
 // `list_bytessrc_narrow_elem`, where the RUST lane is the wrong one; its
 // header says so and the Rust half is separately filed with its own durable
@@ -35445,7 +35445,7 @@ fn assert_self_host_stdout(fixture_rel: &str, tag: &str, expected: &str) {
 // property DEC-K3-6's "one cell per FILE" exists to protect).
 //
 // The guard below can catch its own class (Core #15e Q2): a `.gg` without an
-// `.expect` FAILS rather than being skipped, and the cell count has a
+// `.expected` FAILS rather than being skipped, and the cell count has a
 // shrink-only floor so silently deleting the net is a red.
 
 /// Cell count floor for `tests/fixtures/self_host_comprehension/`.
@@ -35458,7 +35458,7 @@ const SELF_HOST_COMPREHENSION_CELL_FLOOR: usize = 39;
 /// The self-host COMPREHENSION net, stage 0.
 ///
 /// Each cell is emitted by the self-host driver, `cc`'d, run, and its trimmed
-/// stdout compared against its committed `.expect`.
+/// stdout compared against its committed `.expected`.
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_comprehension_net() {
@@ -35485,7 +35485,7 @@ fn self_host_comprehension_net() {
         SELF_HOST_COMPREHENSION_CELL_FLOOR,
     );
 
-    // Every cell must carry an expectation. A `.gg` with no `.expect` is a
+    // Every cell must carry an expectation. A `.gg` with no `.expected` is a
     // cell that would otherwise be silently skipped — the exact shape of a
     // guard that cannot catch its own class.
     let missing: Vec<String> = cells
@@ -35513,7 +35513,7 @@ fn self_host_comprehension_net() {
         let stem = cell.file_stem().unwrap().to_string_lossy().to_string();
         let expected = match std::fs::read_to_string(cell.with_extension("expected")) {
             Ok(s) => s.trim().to_string(),
-            Err(e) => return Some(format!("{stem}: .expect read failed: {e}")),
+            Err(e) => return Some(format!("{stem}: .expected read failed: {e}")),
         };
         match self_host_emit_cc_run(driver_exe, lib_dir, runtime_dir, cell, tmp_root, "shcomp") {
             Ok(stdout) => {
@@ -35605,11 +35605,24 @@ fn build_stage1_driver(
 /// driver (the one Rust gg built), and `self_host_bootstrap_fixed_point`
 /// compares emitted C *text*, not behaviour. A defect that only appears once
 /// the compiler compiles itself is therefore invisible to all of them. That
-/// is not hypothetical: at HEAD, EVERY FILTERED comprehension is wrong at
-/// stage 1 — the filter travels through function PARAMETERS as a boxed option
-/// that was not dereferenced at the dispatch boundary. Measured on a
-/// pristine-HEAD stage-1 build, `stage1_list_strsrc_filt` is GREEN at stage 0
-/// and rc 101 at stage 1.
+/// is not hypothetical. MEASURED on a pristine-HEAD stage-1 build:
+/// `stage1_list_strsrc_filt` is GREEN at stage 0 (`2/a`) and rc 101 printing
+/// `0` at stage 1; the round's rework of the filter path takes stage 1 to
+/// `2/a`.
+///
+/// The MECHANISM is pinned, and it is not "a boxed parameter": the self-host
+/// lowerer DOUBLE-FREES on `(*b).clone()` where `b` was bound by
+/// `case Some(b)` on an `Option[Box[T]]`, and the pre-fix filter path spelled
+/// exactly `(*filt_box).clone()`. Durable repro
+/// `known_gaps/sh_option_box_deref_clone_double_free.gg` (rc 134 on the
+/// self-host lane, correct on Rust); the compiler defect is UNFIXED and filed
+/// in `TODO.md` (grep `stage-1-only`).
+///
+/// ⚠ Ablation handle, if you ever need to see this test earn its keep: change
+/// `lower_expr.gg`'s set arm from `sv_fe = *sv_fb` to `sv_fe = (*sv_fb).clone()`
+/// — `self_host_comprehension_net` stays green on all 39 stage-0 cells and THIS
+/// test goes RED on `stage1_set_strsrc_filt` (`0/false/false` for
+/// `2/true/true`). Measured.
 ///
 /// The two cells sample DIFFERENT dispatcher arms (list/vector and set) on
 /// purpose, so the pair is provably not one cell twice.
@@ -35642,7 +35655,7 @@ fn self_host_comprehension_stage1_net() {
         let cell = cells_dir.join(format!("{stem}.gg"));
         assert!(cell.exists(), "stage-1 cell missing: {}", cell.display());
         let expected = std::fs::read_to_string(cells_dir.join(format!("{stem}.expected")))
-            .unwrap_or_else(|e| panic!("{stem}: .expect read failed: {e}"))
+            .unwrap_or_else(|e| panic!("{stem}: .expected read failed: {e}"))
             .trim()
             .to_string();
 
@@ -51254,9 +51267,23 @@ fn sound_fstring_suppresses_sigil_reject() {
 /// `String`→`String`, plus three check-time NEGs). The round's headline fix
 /// would otherwise ship with no live pin.
 ///
-/// RED-verified: `gg run` on this program at HEAD is rc 139 with empty stdout
-/// and `terminated by SIGSEGV (signal 11)` on stderr; post-fix it is rc 0
-/// printing `1`.
+/// ⚠ GREEN ON ARRIVAL at this commit — the Rust lane was already fixed by
+/// `09911d51` ("stop minting the comprehension accumulator from the source"),
+/// EARLIER in this same round, so this is a REGRESSION pin, not a bug-fix pin.
+/// It is RED-verified against that commit's parent rather than against a
+/// promise; re-run the verification with:
+///
+/// ```text
+/// git checkout 09911d51^ -- src/ && cargo build
+/// ./target/debug/gg run tests/fixtures/self_host_comprehension/graduated_nested_vector_source.gg
+/// git checkout HEAD -- src/ && cargo build
+/// ```
+///
+/// Measured, program held fixed: at `09911d51^` it is **rc 139**, stdout
+/// EMPTY, stderr `gg: … terminated by SIGSEGV (signal 11)`; at this HEAD it is
+/// **rc 0** printing `1`. Do NOT re-date this to "at HEAD" — that phrasing was
+/// inherited from the round that fixed the Rust lane and was already false
+/// when this test was repointed at the graduated fixture.
 #[test]
 fn rust_comprehension_nested_vector_type_change_no_segv() {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -51357,6 +51384,60 @@ clean, builds, and prints 0.000000 — a SILENT WRONG VALUE on both backends. Ro
 3.000000. See TODO.md."]
 fn comprehension_int_to_float_silent_zero() {
     run_gg("known_gaps/comprehension_int_to_float_silent_zero.gg", "2\n3.000000");
+}
+
+/// KNOWN GAP — the MECHANISM under R44 Track K's stage-1 class, and the reason
+/// `lower_list_comprehension` takes a flattened filter. The self-host lowerer
+/// miscompiles `(*b).clone()` where `b` was bound by `case Some(b)` on an
+/// `Option[Box[T]]`: the emitted program DOUBLE-FREES (rc 134, `free(): double
+/// free detected in tcache 2`). Rust gg is correct on the identical program.
+///
+/// RED-VERIFIED on the LAGGING lane — which is why this runs through the
+/// SELF-HOST driver and NOT through `run_gg`. `gg run` on this fixture is rc 0
+/// printing `7/7/17/17/10`, so a Rust-wired body would be GREEN ON ARRIVAL and
+/// would pin nothing (Core #12). Through the self-host driver it is rc 134 with
+/// stdout EMPTY — the abort discards the buffered control lines.
+///
+/// The discriminator was found by ELIMINATION, and the two immune spellings
+/// ship inside the fixture as controls: a bare `*fb` (no clone) is rc 0, and
+/// `.clone()` on a Box that never came out of an Option match is rc 0. Neither
+/// parameter-hop count (1, 2, 3 all red) nor payload shape (trivial struct and
+/// a struct over a Box-bearing recursive enum both red) discriminates.
+///
+/// Verification command for the "this is the stage-1 mechanism" claim — a
+/// one-line ablation, measured this session:
+///
+/// ```text
+/// # in tests/fixtures/self_host_lowerer/lower_expr.gg, set arm:
+/// #   sv_fe = *sv_fb          ->   sv_fe = (*sv_fb).clone()
+/// cargo test --test integration self_host_comprehension -- --test-threads=1
+/// #   self_host_comprehension_net        ... ok      (all 39 STAGE-0 cells)
+/// #   self_host_comprehension_stage1_net ... FAILED
+/// #     stage1_set_strsrc_filt: STAGE-1 WRONG-OUTPUT
+/// #       (expected "2\ntrue\ntrue", got "0\nfalse\nfalse")
+/// ```
+///
+/// That is the whole stage-1-only signature: green when Rust gg compiles the
+/// driver, wrong when the self-host compiles itself.
+#[test]
+#[ignore = "KNOWN GAP (R44 Track K): the SELF-HOST lane double-frees (rc 134) on `(*b).clone()` \
+where `b` came from `case Some(b)` on an `Option[Box[T]]`; Rust gg prints the correct \
+7/7/17/17/10. This is the mechanism behind the stage-1-only filtered-comprehension class, and it \
+is why `lower_list_comprehension` carries a flattened filter parameter. Asserts the INTENDED \
+output on the SELF-HOST lane. Graduate it (un-ignore + move out of known_gaps/) when fixed, and \
+retire the flattening then. See TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_sh_option_box_deref_clone_double_free() {
+    assert_self_host_stdout(
+        "known_gaps/sh_option_box_deref_clone_double_free.gg",
+        "sh_optbox_deref_clone",
+        "\
+7
+7
+17
+17
+10",
+    );
 }
 
 // ── Guard/wrapper aggregate + boundary gaps (filed 2026-07-27) ───────────────
