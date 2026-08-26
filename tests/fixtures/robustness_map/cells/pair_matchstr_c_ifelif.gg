@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:matchstr (c) if/elif on string equality. Expected: greeting
+void main():
+    String s = mk("hel", "lo")
+    String kind = "other"
+    if s == "hello":
+        kind = "greeting"
+    elif s == "bye":
+        kind = "farewell"
+    print(kind)

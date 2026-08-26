@@ -1,0 +1,8 @@
+# pair:revvec (c) pop into a new vector. Expected: 3,2,1
+void main():
+    Vector[int] v = [1, 2, 3]
+    Vector[int] r = Vector[int]()
+    while v.len() > 0:
+        Option[int] top = v.pop()
+        r.push(top.unwrap_or(0))
+    print(f"{r[0]},{r[1]},{r[2]}")

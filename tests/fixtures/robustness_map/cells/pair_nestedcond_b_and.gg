@@ -1,0 +1,8 @@
+# pair:nestedcond (b) one if with `and`. Expected: both
+void main():
+    bool a = true
+    bool b = true
+    String r = "no"
+    if a and b:
+        r = "both"
+    print(r)

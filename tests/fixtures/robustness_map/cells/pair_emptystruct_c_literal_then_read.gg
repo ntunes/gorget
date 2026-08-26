@@ -1,0 +1,8 @@
+# pair:emptystruct (c) literal with both elements. Expected: 2 / 30
+struct P:
+    int age
+
+void main():
+    Vector[P] v = [P(30), P(25)]
+    print(f"{v.len()}")
+    print(f"{v[0].age}")

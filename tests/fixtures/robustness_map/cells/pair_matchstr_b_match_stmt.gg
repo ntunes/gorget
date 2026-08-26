@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:matchstr (b) match statement over String literals. Expected: greeting
+void main():
+    String s = mk("hel", "lo")
+    String kind = "other"
+    match s:
+        case "hello": kind = "greeting"
+        case "bye": kind = "farewell"
+        else: kind = "other"
+    print(kind)

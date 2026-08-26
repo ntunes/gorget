@@ -1,0 +1,9 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:strrepeat3 (c) join a comprehension. Expected: ababab
+void main():
+    String s = mk("a", "b")
+    Vector[String] parts = [s for i in 0..3]
+    print("".join(parts))

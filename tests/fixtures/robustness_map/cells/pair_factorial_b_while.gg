@@ -1,0 +1,8 @@
+# pair:factorial (b) while loop. Expected: 120
+void main():
+    int acc = 1
+    int i = 5
+    while i > 1:
+        acc *= i
+        i -= 1
+    print(f"{acc}")

@@ -1,0 +1,9 @@
+# pair:notcond (c) empty then-branch, work in the else. Expected: off
+void main():
+    bool flag = false
+    String s = ""
+    if flag:
+        s = "on"
+    else:
+        s = "off"
+    print(s)

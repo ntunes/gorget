@@ -1,0 +1,18 @@
+# Ch8: a trait DEFAULT method on a generic type.
+# Expected: 7 / 70
+trait Labeled:
+    int label(self)
+    int full_label(self):
+        return self.label() * 10
+
+struct Wrapper[T]:
+    T inner
+
+equip Wrapper[T] with Labeled:
+    int label(self):
+        return 7
+
+void main():
+    Wrapper[int] w = Wrapper[int](10)
+    print(f"{w.label()}")
+    print(f"{w.full_label()}")

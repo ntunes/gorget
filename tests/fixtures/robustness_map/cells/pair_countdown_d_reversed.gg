@@ -1,0 +1,5 @@
+# pair:countdown (d) for over a reversed vector. Expected: 3 / 2 / 1
+void main():
+    Vector[int] v = [1, 2, 3]
+    for i in v.reversed():
+        print(f"{i}")

@@ -1,0 +1,5 @@
+# pair:numtostr (c) join the pieces. Expected: x=5
+void main():
+    int n = 5
+    Vector[String] parts = ["x=", f"{n}"]
+    print("".join(parts))

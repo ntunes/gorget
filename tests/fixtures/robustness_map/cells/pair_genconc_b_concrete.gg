@@ -1,0 +1,15 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:generic_vs_concrete (b) two hand-specialized functions.
+# Expected: 42 / alpha
+int identity_int(int x):
+    return x
+
+String identity_str(String x):
+    return x
+
+void main():
+    print(f"{identity_int(42)}")
+    print(identity_str(mk("al", "pha")))

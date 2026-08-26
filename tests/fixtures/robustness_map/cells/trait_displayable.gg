@@ -1,0 +1,13 @@
+# Ch7: Displayable makes a struct interpolatable.
+# Expected: (3, 4)
+struct Point:
+    int x
+    int y
+
+equip Point with Displayable:
+    String display(self):
+        return f"({self.x}, {self.y})"
+
+void main():
+    Point p = Point(3, 4)
+    print(f"{p}")

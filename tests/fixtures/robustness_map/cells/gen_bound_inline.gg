@@ -1,0 +1,19 @@
+# Ch8: an inline trait bound `[Printable T]`.
+# Expected: num
+trait Printable:
+    String show(self)
+
+struct Num:
+    int val
+
+equip Num with Printable:
+    String show(self):
+        return "num"
+
+T echo[Printable T](T x):
+    return x
+
+void main():
+    Num n = Num(42)
+    Num m = echo[Num](n)
+    print(m.show())

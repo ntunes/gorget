@@ -1,0 +1,11 @@
+# Ch8: a generic struct holding a user struct (TYPE axis cell).
+# Expected: 7
+struct P:
+    int v
+
+struct Container[T]:
+    T value
+
+void main():
+    Container[P] c = Container[P](P(7))
+    print(f"{c.value.v}")

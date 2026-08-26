@@ -1,0 +1,8 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:strsplitjoin (c) replace the separator. Expected: a-b-c
+void main():
+    String csv = mk("a,b", ",c")
+    print(csv.replace(",", "-"))

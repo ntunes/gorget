@@ -1,0 +1,4 @@
+# pair:sum1to10 (c) closed form. Expected: 55
+void main():
+    int n = 10
+    print(f"{n * (n + 1) / 2}")

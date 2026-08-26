@@ -1,0 +1,11 @@
+# pair:sign (c) match expression with guards. Expected: -1 / 0 / 1
+int sign(int x):
+    return match x:
+        case v if v < 0: -1
+        case v if v == 0: 0
+        else: 1
+
+void main():
+    print(f"{sign(-3)}")
+    print(f"{sign(0)}")
+    print(f"{sign(5)}")

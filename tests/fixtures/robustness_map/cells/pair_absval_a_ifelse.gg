@@ -1,0 +1,9 @@
+# pair:absval (a) if/else statement. Expected: 7
+void main():
+    int x = -7
+    int r = 0
+    if x >= 0:
+        r = x
+    else:
+        r = -x
+    print(f"{r}")

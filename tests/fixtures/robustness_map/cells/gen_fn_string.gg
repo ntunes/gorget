@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch8: the SAME generic function instantiated at String (TYPE axis cell).
+# Expected: alpha
+T identity[T](T x):
+    return x
+
+void main():
+    String s = identity[String](mk("al", "pha"))
+    print(s)

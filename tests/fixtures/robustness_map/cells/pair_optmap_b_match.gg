@@ -1,0 +1,18 @@
+# pair:optmap (b) match. Expected: 42 / 0
+void main():
+    Option[int] a = Some(21)
+    Option[int] b = None()
+    int x = 0
+    match a:
+        case Some(v):
+            x = v * 2
+        case None:
+            x = 0
+    int y = 0
+    match b:
+        case Some(v):
+            y = v * 2
+        case None:
+            y = 0
+    print(f"{x}")
+    print(f"{y}")

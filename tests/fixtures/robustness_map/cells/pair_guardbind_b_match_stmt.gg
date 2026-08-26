@@ -1,0 +1,9 @@
+# pair:guardbind (b) match statement, guard reads the bound name. Expected: odd-small
+void main():
+    int n = 7
+    String k = ""
+    match n:
+        case v if v >= 10: k = "big"
+        case v if v % 2 == 0: k = "even-small"
+        else: k = "odd-small"
+    print(k)

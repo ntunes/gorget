@@ -1,0 +1,13 @@
+# pair:matchenum (a) match expression over a user enum. Expected: green
+enum Color:
+    Red
+    Green
+    Blue
+
+void main():
+    Color c = Color.Green()
+    String s = match c:
+        case Color.Red: "red"
+        case Color.Green: "green"
+        case Color.Blue: "blue"
+    print(s)

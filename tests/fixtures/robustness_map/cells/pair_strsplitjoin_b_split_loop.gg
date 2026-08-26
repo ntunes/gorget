@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:strsplitjoin (b) split then concatenate in a loop. Expected: a-b-c
+void main():
+    String csv = mk("a,b", ",c")
+    Vector[String] parts = csv.split(",")
+    String out = ""
+    for i in 0..parts.len():
+        if i > 0:
+            out += "-"
+        out += parts[i]
+    print(out)

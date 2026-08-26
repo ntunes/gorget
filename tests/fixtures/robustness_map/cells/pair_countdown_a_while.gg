@@ -1,0 +1,6 @@
+# pair:countdown (a) while with a decrement. Expected: 3 / 2 / 1
+void main():
+    int i = 3
+    while i > 0:
+        print(f"{i}")
+        i -= 1

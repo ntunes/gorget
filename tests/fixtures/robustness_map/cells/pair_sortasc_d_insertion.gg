@@ -1,0 +1,11 @@
+# pair:sortasc (d) hand-written insertion sort. Expected: 1,2,3
+void main():
+    Vector[int] v = [3, 1, 2]
+    for i in 1..v.len():
+        int key = v[i]
+        int j = i - 1
+        while j >= 0 and v[j] > key:
+            v[j + 1] = v[j]
+            j -= 1
+        v[j + 1] = key
+    print(f"{v[0]},{v[1]},{v[2]}")

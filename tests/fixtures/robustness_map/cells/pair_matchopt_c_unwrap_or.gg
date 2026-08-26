@@ -1,0 +1,6 @@
+# pair:matchopt (c) unwrap_or. Expected: 42 / 0
+void main():
+    Option[int] a = Some(42)
+    Option[int] b = None()
+    print(f"{a.unwrap_or(0)}")
+    print(f"{b.unwrap_or(0)}")

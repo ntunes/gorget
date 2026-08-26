@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch8: three instantiations of one generic in ONE program (monomorphization).
+# Expected: 42 / alpha / true
+T identity[T](T x):
+    return x
+
+void main():
+    print(f"{identity[int](42)}")
+    print(identity[String](mk("al", "pha")))
+    print(f"{identity[bool](true)}")

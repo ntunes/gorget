@@ -1,0 +1,8 @@
+# pair:power2_10 (b) recursion. Expected: 1024
+int pow2(int n):
+    if n == 0:
+        return 1
+    return 2 * pow2(n - 1)
+
+void main():
+    print(f"{pow2(10)}")

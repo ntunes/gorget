@@ -1,0 +1,11 @@
+# pair:structmake (b) construct then assign fields. Expected: 3 / 4
+struct Point:
+    int x
+    int y
+
+void main():
+    Point p = Point(0, 0)
+    p.x = 3
+    p.y = 4
+    print(f"{p.x}")
+    print(f"{p.y}")

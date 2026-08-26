@@ -1,0 +1,5 @@
+# pair:flatten2 (b) comprehension with two for-clauses. Expected: 1,2,3,4
+void main():
+    Vector[Vector[int]] g = [[1, 2], [3, 4]]
+    Vector[int] flat = [x for row in g for x in row]
+    print(f"{flat[0]},{flat[1]},{flat[2]},{flat[3]}")

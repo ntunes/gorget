@@ -1,0 +1,5 @@
+# pair:numtostr (b) concatenate a converted number. Expected: x=5
+void main():
+    int n = 5
+    String s = "x=" + f"{n}"
+    print(s)

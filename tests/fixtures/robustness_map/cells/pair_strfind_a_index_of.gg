@@ -1,0 +1,8 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:strfind (a) index_of. Expected: 3
+void main():
+    String s = mk("hel", "lo")
+    print(f"{s.index_of("lo").unwrap_or(-1)}")

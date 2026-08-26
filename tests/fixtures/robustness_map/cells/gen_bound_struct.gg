@@ -1,0 +1,10 @@
+# Ch8: a trait bound on a generic STRUCT's parameter.
+# Expected: 1 / 9
+struct SortedPair[Comparable T]:
+    T lo
+    T hi
+
+void main():
+    SortedPair[int] p = SortedPair[int](1, 9)
+    print(f"{p.lo}")
+    print(f"{p.hi}")

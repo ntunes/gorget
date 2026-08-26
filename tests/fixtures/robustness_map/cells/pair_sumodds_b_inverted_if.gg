@@ -1,0 +1,7 @@
+# pair:sumodds (b) inverted if, no continue. Expected: 25
+void main():
+    int total = 0
+    for i in 1..11:
+        if i % 2 == 1:
+            total += i
+    print(f"{total}")

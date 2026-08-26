@@ -1,0 +1,11 @@
+# pair:safediv (c) Option + the default operator. Expected: 5 / -1
+Option[int] div(int a, int b):
+    if b == 0:
+        return None()
+    return Some(a / b)
+
+void main():
+    int x = div(10, 2) ?? -1
+    int y = div(10, 0) ?? -1
+    print(f"{x}")
+    print(f"{y}")

@@ -1,0 +1,15 @@
+# pair:trait_default (b) override with an identical body.
+# Expected: hello
+trait Greeter:
+    String greeting(self):
+        return "hello"
+
+struct A:
+    int x
+
+equip A with Greeter:
+    String greeting(self):
+        return "hello"
+
+void main():
+    print(A(1).greeting())

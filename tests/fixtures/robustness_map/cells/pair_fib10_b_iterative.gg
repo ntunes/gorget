@@ -1,0 +1,9 @@
+# pair:fib10 (b) two-variable iteration. Expected: 55
+void main():
+    int a = 0
+    int b = 1
+    for i in 0..10:
+        int t = a + b
+        a = b
+        b = t
+    print(f"{a}")

@@ -1,0 +1,13 @@
+# Ch8: generics compose -- Container[Container[int]].
+# Expected: 99
+struct Container[T]:
+    T value
+
+equip Container[T]:
+    T get(self):
+        return self.value
+
+void main():
+    Container[Container[int]] nested = Container[Container[int]](Container[int](99))
+    Container[int] inner = nested.get()
+    print(f"{inner.get()}")

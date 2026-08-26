@@ -1,0 +1,11 @@
+# Ch8: the same generic function at a user struct (TYPE axis cell).
+# Expected: 7
+struct P:
+    int v
+
+T identity[T](T x):
+    return x
+
+void main():
+    P p = identity[P](P(7))
+    print(f"{p.v}")

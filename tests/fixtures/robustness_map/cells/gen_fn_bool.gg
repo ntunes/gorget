@@ -1,0 +1,8 @@
+# Ch8: the same generic function at bool (TYPE axis cell).
+# Expected: true
+T identity[T](T x):
+    return x
+
+void main():
+    bool b = identity[bool](true)
+    print(f"{b}")

@@ -1,0 +1,5 @@
+# pair:optfind (c) filter then take the first. Expected: 5
+void main():
+    Vector[int] v = [1, 2, 5, 7]
+    Vector[int] big = v.filter((int x): x > 3)
+    print(f"{big[0]}")

@@ -1,0 +1,10 @@
+# pair:optfind (a) loop with an early return. Expected: 5
+Option[int] first_big(Vector[int] v):
+    for x in v:
+        if x > 3:
+            return Some(x)
+    return None()
+
+void main():
+    Vector[int] v = [1, 2, 5, 7]
+    print(f"{first_big(v).unwrap_or(-1)}")

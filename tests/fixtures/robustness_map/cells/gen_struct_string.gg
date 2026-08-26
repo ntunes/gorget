@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch8: the same generic struct at String (TYPE axis cell).
+# Expected: alpha
+struct Container[T]:
+    T value
+
+void main():
+    Container[String] c = Container[String](mk("al", "pha"))
+    print(c.value)

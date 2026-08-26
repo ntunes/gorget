@@ -1,0 +1,9 @@
+# pair:revvec (b) backwards index loop. Expected: 3,2,1
+void main():
+    Vector[int] v = [1, 2, 3]
+    Vector[int] r = Vector[int]()
+    int i = v.len() - 1
+    while i >= 0:
+        r.push(v[i])
+        i -= 1
+    print(f"{r[0]},{r[1]},{r[2]}")

@@ -1,0 +1,10 @@
+# pair:firstindex (c) early return from a helper. Expected: 2
+int find(Vector[int] v, int target):
+    for i in 0..v.len():
+        if v[i] == target:
+            return i
+    return -1
+
+void main():
+    Vector[int] v = [10, 20, 30, 40]
+    print(f"{find(v, 30)}")

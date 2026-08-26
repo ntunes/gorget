@@ -1,0 +1,5 @@
+# pair:sortasc (c) sorted() copy. Expected: 1,2,3
+void main():
+    Vector[int] v = [3, 1, 2]
+    Vector[int] s = v.sorted()
+    print(f"{s[0]},{s[1]},{s[2]}")

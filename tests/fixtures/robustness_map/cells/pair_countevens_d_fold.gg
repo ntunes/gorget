@@ -1,0 +1,4 @@
+# pair:countevens (d) fold a 0/1 accumulator. Expected: 3
+void main():
+    Vector[int] v = [1, 2, 3, 4, 5, 6]
+    print(f"{v.fold(0, (int acc, int x): acc + (if x % 2 == 0: 1 else: 0))}")

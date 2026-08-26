@@ -1,0 +1,12 @@
+# pair:trait_vs_free (b) inherent equip method.
+# Expected: 50
+struct Rect:
+    int w
+    int h
+
+equip Rect:
+    int area(self):
+        return self.w * self.h
+
+void main():
+    print(f"{Rect(5, 10).area()}")

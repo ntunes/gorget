@@ -1,0 +1,8 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:upperstr (a) to_upper(). Expected: HELLO
+void main():
+    String s = mk("hel", "lo")
+    print(s.to_upper())

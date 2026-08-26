@@ -1,0 +1,8 @@
+# pair:factorial (a) recursion. Expected: 120
+int fact(int n):
+    if n <= 1:
+        return 1
+    return n * fact(n - 1)
+
+void main():
+    print(f"{fact(5)}")

@@ -1,0 +1,7 @@
+# pair:notcond (b) `flag == false`. Expected: off
+void main():
+    bool flag = false
+    String s = "on"
+    if flag == false:
+        s = "off"
+    print(s)

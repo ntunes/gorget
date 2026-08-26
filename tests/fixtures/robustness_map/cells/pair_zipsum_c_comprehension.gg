@@ -1,0 +1,6 @@
+# pair:zipsum (c) comprehension over indices. Expected: 11,22,33
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [10, 20, 30]
+    Vector[int] out = [a[i] + b[i] for i in 0..a.len()]
+    print(f"{out[0]},{out[1]},{out[2]}")

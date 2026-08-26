@@ -1,0 +1,5 @@
+# pair:absval (d) if used as an expression. Expected: 7
+void main():
+    int x = -7
+    int r = if x >= 0: x else: -x
+    print(f"{r}")

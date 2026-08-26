@@ -1,0 +1,16 @@
+# Ch7: declare a trait, equip a struct, call the method.
+# Expected: 50
+trait Shape:
+    int area(self)
+
+struct Rect:
+    int w
+    int h
+
+equip Rect with Shape:
+    int area(self):
+        return self.w * self.h
+
+void main():
+    Rect r = Rect(5, 10)
+    print(f"{r.area()}")

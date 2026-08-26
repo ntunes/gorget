@@ -1,0 +1,12 @@
+# pair:matchopt (a) match expression over an Option. Expected: 42 / 0
+void main():
+    Option[int] a = Some(42)
+    Option[int] b = None()
+    int x = match a:
+        case Some(v): v
+        case None: 0
+    int y = match b:
+        case Some(v): v
+        case None: 0
+    print(f"{x}")
+    print(f"{y}")

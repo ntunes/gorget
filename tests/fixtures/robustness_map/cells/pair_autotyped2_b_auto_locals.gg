@@ -1,0 +1,12 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:autotyped2 (b) auto for the locals. Expected: beta / 2
+void main():
+    auto s = mk("be", "ta")
+    Vector[String] v = Vector[String]()
+    v.push(s)
+    v.push(mk("gam", "ma"))
+    print(v[0])
+    print(f"{v.len()}")

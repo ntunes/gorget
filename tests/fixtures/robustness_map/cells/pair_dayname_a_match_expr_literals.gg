@@ -1,0 +1,9 @@
+# pair:dayname (a) match expression over int literals. Expected: Wed
+void main():
+    int d = 3
+    String name = match d:
+        case 1: "Mon"
+        case 2: "Tue"
+        case 3: "Wed"
+        else: "?"
+    print(name)

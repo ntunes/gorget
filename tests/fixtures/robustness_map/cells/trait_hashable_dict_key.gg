@@ -1,0 +1,21 @@
+# Ch7: Hashable + Equatable make a struct usable as a Dict key.
+# Expected: 7
+from std.hash import FxHasher
+
+struct Key:
+    int a
+    int b
+
+equip Key with Equatable:
+    bool eq(self, Key other):
+        return self.a == other.a and self.b == other.b
+
+equip Key with Hashable:
+    void hash(self, FxHasher &h):
+        self.a.hash(&h)
+        self.b.hash(&h)
+
+void main():
+    Dict[Key, int] d = Dict[Key, int]()
+    d.put(Key(1, 2), 7)
+    print(f"{d.get(Key(1, 2)).unwrap_or(0)}")

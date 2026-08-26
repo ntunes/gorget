@@ -1,0 +1,13 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:strfind (c) scan with substrings. Expected: 3
+void main():
+    String s = mk("hel", "lo")
+    int found = -1
+    for i in 0..s.len() - 1:
+        if s[i:i + 2] == "lo":
+            found = i
+            break
+    print(f"{found}")

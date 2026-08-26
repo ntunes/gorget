@@ -1,0 +1,10 @@
+# pair:zipsum (b) iter().zip(). Expected: 11,22,33
+from std.iter import Iterator
+
+void main():
+    Vector[int] a = [1, 2, 3]
+    Vector[int] b = [10, 20, 30]
+    Vector[int] out = Vector[int]()
+    for x, y in a.iter().zip(b.iter()):
+        out.push(x + y)
+    print(f"{out[0]},{out[1]},{out[2]}")

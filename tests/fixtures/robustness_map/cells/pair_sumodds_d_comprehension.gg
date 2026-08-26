@@ -1,0 +1,7 @@
+# pair:sumodds (d) comprehension with a guard. Expected: 25
+void main():
+    Vector[int] odds = [i for i in 1..11 if i % 2 == 1]
+    int total = 0
+    for x in odds:
+        total += x
+    print(f"{total}")

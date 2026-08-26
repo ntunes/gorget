@@ -1,0 +1,4 @@
+# pair:countdown (b) for over a range, subtracting. Expected: 3 / 2 / 1
+void main():
+    for i in 0..3:
+        print(f"{3 - i}")

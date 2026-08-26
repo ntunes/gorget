@@ -1,0 +1,10 @@
+# pair:absval (e) match statement, block arms. Expected: 7
+void main():
+    int x = -7
+    int r = 0
+    match x:
+        case v if v >= 0:
+            r = v
+        else:
+            r = -x
+    print(f"{r}")

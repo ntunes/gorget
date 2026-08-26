@@ -1,0 +1,11 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:strrepeat3 (b) concatenate in a loop. Expected: ababab
+void main():
+    String s = mk("a", "b")
+    String out = ""
+    for i in 0..3:
+        out += s
+    print(out)

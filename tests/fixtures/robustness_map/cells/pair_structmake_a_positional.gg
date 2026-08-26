@@ -1,0 +1,9 @@
+# pair:structmake (a) positional constructor. Expected: 3 / 4
+struct Point:
+    int x
+    int y
+
+void main():
+    Point p = Point(3, 4)
+    print(f"{p.x}")
+    print(f"{p.y}")

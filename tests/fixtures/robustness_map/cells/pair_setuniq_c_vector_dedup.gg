@@ -1,0 +1,8 @@
+# pair:setuniq (c) vector + contains check. Expected: 3
+void main():
+    Vector[int] v = [1, 2, 2, 3, 3, 3]
+    Vector[int] uniq = Vector[int]()
+    for x in v:
+        if not uniq.contains(x):
+            uniq.push(x)
+    print(f"{uniq.len()}")

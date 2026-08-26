@@ -1,0 +1,14 @@
+# pair:dayname (d) match statement, block arms. Expected: Wed
+void main():
+    int d = 3
+    String name = "?"
+    match d:
+        case 1:
+            name = "Mon"
+        case 2:
+            name = "Tue"
+        case 3:
+            name = "Wed"
+        else:
+            name = "?"
+    print(name)

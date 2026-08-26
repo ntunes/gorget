@@ -1,0 +1,13 @@
+# Ch7: @derive(Default) gives a zero value.
+# Expected: 0 / 0 / false
+@derive(Default)
+struct Config:
+    int width
+    int height
+    bool enabled
+
+void main():
+    Config c = Config.default()
+    print(f"{c.width}")
+    print(f"{c.height}")
+    print(f"{c.enabled}")

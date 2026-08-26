@@ -1,0 +1,10 @@
+# pair:emptystruct (b) typed destination, empty literal. Expected: 2 / 30
+struct P:
+    int age
+
+void main():
+    Vector[P] v = []
+    v.push(P(30))
+    v.push(P(25))
+    print(f"{v.len()}")
+    print(f"{v[0].age}")

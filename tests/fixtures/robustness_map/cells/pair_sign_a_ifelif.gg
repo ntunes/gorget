@@ -1,0 +1,12 @@
+# pair:sign (a) if/elif chain in a function. Expected: -1 / 0 / 1
+int sign(int x):
+    if x < 0:
+        return -1
+    elif x == 0:
+        return 0
+    return 1
+
+void main():
+    print(f"{sign(-3)}")
+    print(f"{sign(0)}")
+    print(f"{sign(5)}")

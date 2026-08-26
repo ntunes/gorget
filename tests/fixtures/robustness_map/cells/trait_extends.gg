@@ -1,0 +1,24 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch7: trait inheritance with `extends`.
+# Expected: hi, I'm Ada
+trait Named:
+    String name(self)
+
+trait Greeter extends Named:
+    String greet(self)
+
+struct Person:
+    String first_name
+
+equip Person with Greeter:
+    String name(self):
+        return self.first_name
+    String greet(self):
+        return f"hi, I'm {self.name()}"
+
+void main():
+    Person p = Person(mk("A", "da"))
+    print(p.greet())

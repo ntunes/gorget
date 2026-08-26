@@ -1,0 +1,9 @@
+# pair:safediv (b) Result + unwrap_or. Expected: 5 / -1
+Result[int, String] div(int a, int b):
+    if b == 0:
+        return Error("divide by zero")
+    return Ok(a / b)
+
+void main():
+    print(f"{div(10, 2).unwrap_or(-1)}")
+    print(f"{div(10, 0).unwrap_or(-1)}")

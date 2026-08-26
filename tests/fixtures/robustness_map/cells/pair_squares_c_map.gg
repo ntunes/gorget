@@ -1,0 +1,5 @@
+# pair:squares (c) map over a range-built vector. Expected: 1,4,9,16
+void main():
+    Vector[int] base = [i for i in 1..5]
+    Vector[int] v = base.map((int x): x * x)
+    print(f"{v[0]},{v[1]},{v[2]},{v[3]}")

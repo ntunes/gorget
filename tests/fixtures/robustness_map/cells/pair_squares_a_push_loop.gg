@@ -1,0 +1,6 @@
+# pair:squares (a) push in a loop. Expected: 1,4,9,16
+void main():
+    Vector[int] v = Vector[int]()
+    for i in 1..5:
+        v.push(i * i)
+    print(f"{v[0]},{v[1]},{v[2]},{v[3]}")

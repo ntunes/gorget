@@ -1,0 +1,10 @@
+# pair:firstindex (b) bool flag, no break. Expected: 2
+void main():
+    Vector[int] v = [10, 20, 30, 40]
+    int found = -1
+    bool done = false
+    for i in 0..v.len():
+        if not done and v[i] == 30:
+            found = i
+            done = true
+    print(f"{found}")

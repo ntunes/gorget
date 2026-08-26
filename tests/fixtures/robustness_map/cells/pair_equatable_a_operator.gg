@@ -1,0 +1,12 @@
+# pair:equatable (a) the == operator.
+# Expected: true
+struct Point:
+    int x
+    int y
+
+equip Point with Equatable:
+    bool eq(self, Point other):
+        return self.x == other.x and self.y == other.y
+
+void main():
+    print(f"{Point(1, 2) == Point(1, 2)}")

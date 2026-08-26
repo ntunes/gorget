@@ -1,0 +1,9 @@
+# pair:firstindex (a) for with break. Expected: 2
+void main():
+    Vector[int] v = [10, 20, 30, 40]
+    int found = -1
+    for i in 0..v.len():
+        if v[i] == 30:
+            found = i
+            break
+    print(f"{found}")

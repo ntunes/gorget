@@ -1,0 +1,14 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch8: a two-parameter generic struct.
+# Expected: 10 / world
+struct Pair[A, B]:
+    A first
+    B second
+
+void main():
+    Pair[int, String] p = Pair[int, String](10, mk("wor", "ld"))
+    print(f"{p.first}")
+    print(p.second)

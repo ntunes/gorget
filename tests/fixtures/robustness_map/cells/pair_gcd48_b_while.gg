@@ -1,0 +1,9 @@
+# pair:gcd48 (b) while-loop Euclid. Expected: 6
+void main():
+    int a = 48
+    int b = 18
+    while b != 0:
+        int t = b
+        b = a % b
+        a = t
+    print(f"{a}")

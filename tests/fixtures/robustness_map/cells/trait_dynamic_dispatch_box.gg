@@ -1,0 +1,26 @@
+# Design 4.8: a Vector of Box[Trait] dispatches dynamically.
+# Expected: 78 / 12
+trait Shape:
+    int area(self)
+
+struct Circle:
+    int r
+
+struct Rect:
+    int w
+    int h
+
+equip Circle with Shape:
+    int area(self):
+        return 3 * self.r * self.r
+
+equip Rect with Shape:
+    int area(self):
+        return self.w * self.h
+
+void main():
+    Vector[Box[Shape]] shapes = Vector[Box[Shape]]()
+    shapes.push(Box.new(Circle(5)))
+    shapes.push(Box.new(Rect(3, 4)))
+    for s in shapes:
+        print(f"{s.area()}")

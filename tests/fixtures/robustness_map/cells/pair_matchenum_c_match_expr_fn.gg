@@ -1,0 +1,14 @@
+# pair:matchenum (c) match expression as a function's return. Expected: green
+enum Color:
+    Red
+    Green
+    Blue
+
+String name(Color c):
+    return match c:
+        case Color.Red: "red"
+        case Color.Green: "green"
+        case Color.Blue: "blue"
+
+void main():
+    print(name(Color.Green()))

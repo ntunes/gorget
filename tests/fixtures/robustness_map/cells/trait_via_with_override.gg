@@ -1,0 +1,26 @@
+String mk(String a, String b):
+    return a + b
+
+
+# Ch7: `via` delegation with a block that overrides one method.
+# Expected: Outer: inner-label
+trait Showable:
+    String show(self)
+
+struct Inner:
+    String label
+
+equip Inner with Showable:
+    String show(self):
+        return self.label
+
+struct Outer:
+    Inner inner
+
+equip Outer with Showable via inner:
+    String show(self):
+        return f"Outer: {self.inner.show()}"
+
+void main():
+    Outer o = Outer(Inner(mk("inner", "-label")))
+    print(o.show())

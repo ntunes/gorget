@@ -79,11 +79,20 @@ jobs:
       # guards -- a grade calculator returning "A" for every input -- survived
       # 2113 fixtures and was caught here on the first run.
       #
-      # Fails on any WORKS -> broken regression. 24s for 358 cells, so there is
+      # Fails on any WORKS -> broken regression. ~7s for 553 cells, so there is
       # no excuse for running it only at round close: a guard CI does not run is
       # not a guard.
-      - name: Beginner-code robustness map
-        run: python3 scripts/robustness_map.py
+      #
+      # The LLVM lane runs the SAME cells through --backend=llvm and adds a
+      # CROSS-LANE DIVERGENCE gate: a cell where two backends disagree fails the
+      # build even when each is individually "green" against its own baseline.
+      # That is the thing a single-lane sweep structurally cannot see -- and it
+      # is not hypothetical: `+= v.get(0).unwrap()` is silently wrong on C and
+      # invalid IR on LLVM, and `Vector[Struct].sort(cmp)` is a silent no-op on
+      # C and unbuildable on LLVM. ~71s, and `llc` is already installed above
+      # for spec_conformance_llvm, so this costs a minute and no new dependency.
+      - name: Beginner-code robustness map (C + LLVM)
+        run: python3 scripts/robustness_map.py --lanes c,llvm
 
       # The BEHAVIOURAL half of the known_gaps graduation ratchet, whose cheap
       # half (`known_gaps_passing_allowlist_shrink_only`) is in the step above.
@@ -170,6 +179,16 @@ jobs:
         env:
           GG_BUILD_TIMEOUT_SECS: 600
           GG_TEST_TIMEOUT_SECS: 600
+
+      # The self-host lane of the robustness map. Placed HERE, after
+      # spec_conformance, because that step builds
+      # tests/fixtures/self_host_lowerer/driver (~1-2 min) and this reuses it --
+      # the sweep itself is ~5s for 553 cells. Worth its place: the self-host is
+      # measurably MORE correct than Rust gg on this corpus (90.4% vs 86.6%), so
+      # every cell where they disagree is a defect in one of them, and this is
+      # the gate that names which.
+      - name: Beginner-code robustness map (self-host lane)
+        run: python3 scripts/robustness_map.py --lanes c,llvm,selfhost
 
       - name: Security tests (ASan + UBSan)
         run: cargo test --test security -- --test-threads=1

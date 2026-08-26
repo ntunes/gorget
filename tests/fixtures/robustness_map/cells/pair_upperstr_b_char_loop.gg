@@ -1,0 +1,11 @@
+String mk(String a, String b):
+    return a + b
+
+
+# pair:upperstr (b) per-character loop. Expected: HELLO
+void main():
+    String s = mk("hel", "lo")
+    String out = ""
+    for c in s:
+        out += c.to_upper()
+    print(out)
