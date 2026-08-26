@@ -1,0 +1,10 @@
+# Ch2 "Fallible Arithmetic", VERBATIM: the capture form. INT_MAX +! 1 lands in
+# the Error branch with ArithError.Overflow.
+# Expected: -1
+void main():
+    Result[int, ArithError] r2 = 9223372036854775807 +! 1
+    match r2:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print("-1")

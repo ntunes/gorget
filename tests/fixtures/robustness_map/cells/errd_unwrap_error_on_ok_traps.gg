@@ -1,0 +1,10 @@
+# trap-codes.md T_UnwrapErrorOnOk: `.unwrap_error()` on an Ok is its own trap
+# class -- the mirror of the one above, and the one nobody remembers exists.
+# Expected: the program must not print "after"; it should fail loudly.
+Result[int, String] good():
+    return Ok(1)
+
+void main():
+    print("before")
+    print(good().unwrap_error())
+    print("after")

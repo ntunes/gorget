@@ -1,0 +1,10 @@
+# Ch17 "Conditional Compilation / Meta If", VERBATIM. The map runs on Linux, so
+# the first branch is the one that must survive.
+# Expected: running on Linux
+void main():
+    meta if platform() == "linux":
+        print("running on Linux")
+    elif platform() == "macos":
+        print("running on macOS")
+    else:
+        print("unknown platform")

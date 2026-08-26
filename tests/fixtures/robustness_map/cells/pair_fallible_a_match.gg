@@ -1,0 +1,20 @@
+# pair:fallible_handling. Ch10's capture form: annotate a Result, no mark.
+# Expected: 8 / boom
+int inner(int x) throws String:
+    if x < 0:
+        throw "boom"
+    return x * 2
+
+void main():
+    Result[int, String] a = inner(4)
+    match a:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print(e)
+    Result[int, String] b = inner(-1)
+    match b:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print(e)

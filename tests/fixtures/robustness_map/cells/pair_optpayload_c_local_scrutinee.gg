@@ -1,0 +1,12 @@
+# pair:option_payload_print. The same program with the scrutinee bound to a
+# local first -- one extra line, otherwise identical.
+# Expected: 7
+void main():
+    Vector[int] v = Vector[int]()
+    v.push(7)
+    Option[int] o = v.get(0)
+    match o:
+        case Some(x):
+            print(f"{x}")
+        case None:
+            print("none")

@@ -1,0 +1,14 @@
+# Ch16: "Weak[T] holds a NON-OWNING reference. It doesn't prevent the value from
+# being dropped." Non-owning means the strong count does not move -- that IS the
+# property that lets Weak break a cycle -- and the value is still reachable
+# through an upgrade while a strong owner lives.
+# Expected: 1 / 42
+void main():
+    Shared[int] s = Shared[int](42)
+    Weak[int] w = s.downgrade()
+    print(f"{s.strong_count()}")
+    match w.upgrade():
+        case Some(u):
+            print(f"{u.get()}")
+        case None:
+            print("value was dropped")

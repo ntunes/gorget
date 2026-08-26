@@ -1,0 +1,6 @@
+# pair:shared_ctor. `Shared.new(...)` -- the spelling Ch16 uses in its
+# Shared[Callable] example.
+# Expected: 42
+void main():
+    Shared[int] s = Shared.new(42)
+    print(f"{s.get()}")

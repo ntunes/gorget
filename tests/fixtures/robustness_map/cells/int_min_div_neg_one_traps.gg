@@ -1,0 +1,12 @@
+# trap-codes.md T_Overflow, listed explicitly: "a signed TYPE_MIN / -1".
+# The one division that overflows instead of dividing by zero.
+# Expected: the program must not print "after"; it should fail loudly.
+int neg_one():
+    return -1
+
+void main():
+    int lo = -9223372036854775808
+    print("before")
+    int q = lo / neg_one()
+    print(f"{q}")
+    print("after")

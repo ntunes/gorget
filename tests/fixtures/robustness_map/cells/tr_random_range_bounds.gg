@@ -1,0 +1,21 @@
+# rand_range(lo, hi) must stay within its bounds. The check is written to hold
+# whether `hi` is inclusive or exclusive -- that choice is a separate question
+# from whether the generator can escape its range at all.
+# Expected: true / true / 100
+from std.random import rand_range, seed
+
+void main():
+    seed(7)
+    bool all_in = true
+    bool any_below_ten = false
+    int n = 0
+    for i in 0..100:
+        int r = rand_range(0, 10)
+        n = n + 1
+        if r < 0 or r > 10:
+            all_in = false
+        if r < 10:
+            any_below_ten = true
+    print(f"{all_in}")
+    print(f"{any_below_ten}")
+    print(f"{n}")

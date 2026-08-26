@@ -1,0 +1,9 @@
+# trap-codes.md T_AssertFailed: a failing `assert` panics.
+# Expected: the program must not print "after"; it should fail loudly.
+int two():
+    return 2
+
+void main():
+    print("before")
+    assert two() == 3, "two is not three"
+    print("after")

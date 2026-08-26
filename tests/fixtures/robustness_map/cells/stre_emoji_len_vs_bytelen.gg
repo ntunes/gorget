@@ -1,0 +1,10 @@
+# A 4-byte code point (outside the BMP) beside two ASCII characters: 3
+# characters, 6 bytes. The wider case of the same rule.
+# Expected: 3 / 6
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "\u{1F600}b")
+    print(f"{s.len()}")
+    print(f"{s.byte_len()}")

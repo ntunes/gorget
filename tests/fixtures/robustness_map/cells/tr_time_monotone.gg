@@ -1,0 +1,11 @@
+# std.time.time() is seconds since the epoch. Its VALUE is not deterministic, so
+# the cell asserts the two properties that are: it is positive, and it never goes
+# backwards between two reads.
+# Expected: true / true
+from std.time import time
+
+void main():
+    int t1 = time()
+    int t2 = time()
+    print(f"{t1 > 0}")
+    print(f"{t2 >= t1}")

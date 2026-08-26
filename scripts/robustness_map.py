@@ -27,6 +27,32 @@ Three properties this script exists to preserve:
     expectation while disagreeing with each other, and two lanes can agree on a
     WRONG answer (AGENTS.md Core #8) while a third gets it right.
 
+Two of the five lanes exist because a VALUE lane is structurally blind to whole
+failure classes:
+
+  * THE SANITIZER LANE SEES MEMORY VALIDITY, WHICH NO VALUE LANE CAN.  A cell
+    that prints the right answer while double-freeing, leaking, or reading
+    uninitialised memory scores WORKS on every value lane -- the program's
+    stdout is the only observable they have. `asan` rebuilds the same cell with
+    `gg build --sanitize` (`-fsanitize=address,undefined`), runs it under
+    `detect_leaks=1`, and buckets any ASan/LSan/UBSan report as SANITIZE-FAIL,
+    which is a DIFFERENT outcome from a wrong value and gets its own column.
+    NB `--sanitize` is silently DROPPED under `--backend=llvm` (src/main.rs
+    parses it only on the C path), so this lane is C-ONLY and claims no LLVM
+    sanitizer coverage whatsoever.
+
+  * THE ggdef LANE SEES CORRECTNESS, WHICH LANE AGREEMENT CANNOT.  ggdef is the
+    definitional interpreter -- the executable language definition. Where three
+    production lanes agreeing only proves they share an implementation, ggdef
+    adjudicates against the DEFINITION, so it can catch the case all three real
+    lanes get wrong together (AGENTS.md Core #8's trap). That case is reported
+    under its own heading, BOTH-LANES-WRONG-ggdef-RIGHT. ggdef implements a
+    SUBSET (GGC): a cell it declines to elaborate has NO ggdef verdict, recorded
+    as NO-VERDICT -- which is emphatically not "ggdef agrees". ggdef is also not
+    infallible: it IMPLEMENTS the definition, it is not the definition, so a
+    disagreement is a finding to triage, not an automatic verdict against the
+    compiler.
+
 Lanes:
     c         `gg build`                       (default; the CI lane)
     llvm      `gg build --backend=llvm`        NB: --sanitize is silently dropped
@@ -34,10 +60,22 @@ Lanes:
                                                is NOT sanitizer coverage
     selfhost  self-host driver --emit-c | cc   needs the driver built once:
                                                `gg build tests/fixtures/self_host_lowerer/driver.gg`
+    asan      `gg build --sanitize`            C backend only; memory-validity,
+                                               not value. Adds SANITIZE-FAIL.
+    ggdef     `ggdef run`                      the definitional oracle; adds
+                                               NO-VERDICT for out-of-subset cells.
+                                               Needs `cargo build -p ggdef`.
+
+Only c/llvm/selfhost participate in the cross-lane divergence gate: `asan` is the
+same compiler as `c` with different cc flags (it would report a divergence for
+every SANITIZE-FAIL, which is not a cross-lane semantic disagreement), and ggdef
+is the oracle rather than a peer -- its disagreements get their own section.
 
 Usage:
     python3 scripts/robustness_map.py                    # C lane: report + gate
     python3 scripts/robustness_map.py --lanes c,llvm     # two lanes + divergences
+    python3 scripts/robustness_map.py --lanes c,asan     # + the sanitizer lane
+    python3 scripts/robustness_map.py --lanes c,ggdef    # + the definitional oracle
     python3 scripts/robustness_map.py --lanes all        # everything
     python3 scripts/robustness_map.py --topic 06         # one topic
     python3 scripts/robustness_map.py --accept           # fold progress into baseline
@@ -49,8 +87,24 @@ ROOT = pathlib.Path(subprocess.run(["git", "rev-parse", "--show-toplevel"],
                                    cwd=pathlib.Path(__file__).parent).stdout.strip())
 MAP = ROOT / "tests/fixtures/robustness_map"
 GG = ROOT / "target/debug/gg"
+GGDEF = ROOT / "target/debug/ggdef"
 DRIVER = ROOT / "tests/fixtures/self_host_lowerer/driver"
 JOIN = " / "   # the manifest joins output lines with this; compare like-for-like
+
+# Runtime sanitizer configuration for the `asan` lane. Mirrors
+# `ASAN_OPTS_LEAK_CHECK` (tests/security.rs) -- deliberately the SAME options the
+# `security_safe_no_leak` guard uses, so a cell that trips here trips there.
+# `detect_leaks=1` is the point: a leak is invisible to every value lane, and
+# `exitcode=99` makes a leak-only trip (which LSan reports at process EXIT, after
+# stdout is already correct) distinguishable from the program's own exit code.
+ASAN_OPTIONS = ("detect_leaks=1:halt_on_error=1:abort_on_error=0:print_summary=1"
+                ":allocator_may_return_null=1:exitcode=99")
+# What a sanitizer report LOOKS like on stderr. UBSan does NOT abort by default
+# (it is a -fsanitize-recover class), so it can only be seen by READING stderr --
+# an exit-code-only check misses the entire undefined-behaviour half of the lane.
+SANITIZER_MARKERS = ("ERROR: AddressSanitizer", "ERROR: LeakSanitizer",
+                     "SUMMARY: AddressSanitizer", "SUMMARY: UndefinedBehaviorSanitizer",
+                     "runtime error:")
 
 # MANIFEST.tsv columns. The first six are the original schema and keep their
 # positions, so every existing `cut -f3` / grep over the file still means what it
@@ -63,10 +117,20 @@ COL_LLVM, COL_SELFHOST = 6, 7
 # their buckets are identical, so a bucket-derived baseline reports that cell as
 # a NEW divergence on every single run. Measured -- 5 cells did exactly that.
 COL_DIVERGE = 8
-NCOLS = 9
-LANE_COL = {"c": COL_C, "llvm": COL_LLVM, "selfhost": COL_SELFHOST}
-ALL_LANES = ["c", "llvm", "selfhost"]
-BUCKETS = ["WORKS", "WRONG", "REJECTED", "BUILD-FAIL", "ICE", "TRAP"]
+# Appended AFTER the divergence column, again so every existing `cut -fN` keeps
+# meaning what it meant. Same "empty means never measured" rule as the lane
+# columns above -- and for ggdef, "never measured" is distinct from the recorded
+# verdict NO-VERDICT, which means "measured, and ggdef declined the program".
+COL_ASAN, COL_GGDEF = 9, 10
+NCOLS = 11
+LANE_COL = {"c": COL_C, "llvm": COL_LLVM, "selfhost": COL_SELFHOST,
+            "asan": COL_ASAN, "ggdef": COL_GGDEF}
+ALL_LANES = ["c", "llvm", "selfhost", "asan", "ggdef"]
+# The lanes that answer "what does this program print". Divergence is defined
+# over THESE only -- see the module docstring.
+VALUE_LANES = ["c", "llvm", "selfhost"]
+BUCKETS = ["WORKS", "WRONG", "REJECTED", "BUILD-FAIL", "ICE", "TRAP",
+           "SANITIZE-FAIL", "NO-VERDICT"]
 
 
 def _verdict(expected: str, r, actual: str):
@@ -120,7 +184,8 @@ def run_gg(cell: pathlib.Path, expected: str, tmp: pathlib.Path, backend=None):
     if b.returncode != 0:
         return _classify_build_failure(b.stderr)
     try:
-        r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
+        r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30,
+                           stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return "TRAP", "run timed out"
     return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()))
@@ -154,9 +219,90 @@ def run_selfhost(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
         # something unbuildable, which is a miscompile, not a diagnostic.
         return "BUILD-FAIL", "cc rejected self-host C"
     try:
-        r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30)
+        r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30,
+                           stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return "TRAP", "run timed out"
+    return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()))
+
+
+def run_asan(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
+    """Sanitizer lane: `gg build --sanitize` -> run under `detect_leaks=1`.
+
+    THE POINT OF THIS LANE is that the value lanes cannot see memory validity.
+    A double free, a leak, or a read of uninitialised memory can all coexist with
+    perfectly correct stdout -- and did: a Box `.clone()` on a dead owned param
+    double-frees while printing 17, and `[b for b in s.bytes()]` prints a WRONG
+    number at rc 0 with no crash at all.
+
+    A sanitizer report is its OWN bucket, never folded into WRONG. They are
+    different findings: WRONG means the program computed the wrong answer,
+    SANITIZE-FAIL means the program's MEMORY BEHAVIOUR is invalid regardless of
+    what it computed -- and the second is usually the more serious, because it is
+    the one that turns into a crash on someone else's allocator.
+
+    The report is read off STDERR, not off the exit code. UBSan does not abort by
+    default, so a `-fsanitize=undefined` trip exits 0 with a `runtime error:` line
+    and nothing else to see; an exit-code-only check is blind to it."""
+    exe = tmp / cell.stem
+    try:
+        b = subprocess.run([str(GG), "build", str(cell), "--sanitize", "-o", str(exe)],
+                           capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        return "BUILD-FAIL", "sanitize build timed out"
+    if b.returncode != 0:
+        return _classify_build_failure(b.stderr)
+    env = dict(os.environ, ASAN_OPTIONS=ASAN_OPTIONS)
+    try:
+        r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=120,
+                           env=env, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return "TRAP", "run timed out"
+    for line in r.stderr.splitlines():
+        if any(m in line for m in SANITIZER_MARKERS):
+            # Report the FIRST marker line: it names the class (double free,
+            # heap-use-after-free, leak, signed overflow) which is the finding.
+            return "SANITIZE-FAIL", line.strip()[:160]
+    return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()))
+
+
+def run_ggdef(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
+    """Definitional-oracle lane: `ggdef run`.
+
+    ggdef's exit codes are the ratified toolchain scheme (spec/ggdef/src/main.rs):
+    0 value, 1 static rejection, 2 usage, 101 trap, 103 fuel. Two of those need
+    splitting apart, because they answer opposite questions:
+
+      * exit 1 with `elaboration error` is ggdef DECLINING the program -- the
+        construct is outside GGC, the definitional subset. That is NO-VERDICT.
+        Scoring it REJECTED would be the worst available outcome here: it would
+        read on the dashboard as "the definition rejects this program", which is
+        a claim ggdef never made.
+      * exit 1 with a parse error or an `error[E_Code]` IS a verdict. ggdef shares
+        the PRODUCTION lexer/parser (its Cargo.toml path-deps `gorget` for exactly
+        that), so a parse rejection is the same rejection gg makes; and an
+        `error[E_Code]` is the ratified may-move static rejection.
+
+    `tmp` is unused -- ggdef interprets, so there is nothing to emit."""
+    del tmp
+    try:
+        r = subprocess.run([str(GGDEF), "run", str(cell)], capture_output=True,
+                           text=True, timeout=120, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return "NO-VERDICT", "ggdef timed out"
+    if r.returncode == 103:
+        return "NO-VERDICT", "fuel exhausted (ggdef totality guard, not a language outcome)"
+    if r.returncode == 2:
+        return "NO-VERDICT", "ggdef usage error"
+    if r.returncode == 1:
+        if "elaboration error" in r.stderr:
+            detail = r.stderr.strip().splitlines()[-1] if r.stderr.strip() else ""
+            return "NO-VERDICT", f"out of GGC subset: {detail[:140]}"
+        if "parse error(s)" in r.stderr:
+            return "REJECTED", "rejected at parse"
+        if "error[" in r.stderr:
+            return "REJECTED", "rejected at check"
+        return "REJECTED", "rejected (uncoded)"
     return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()))
 
 
@@ -164,6 +310,8 @@ LANE_RUNNER = {
     "c": lambda cell, exp, tmp: run_gg(cell, exp, tmp),
     "llvm": lambda cell, exp, tmp: run_gg(cell, exp, tmp, backend="llvm"),
     "selfhost": run_selfhost,
+    "asan": run_asan,
+    "ggdef": run_ggdef,
 }
 
 
@@ -182,6 +330,17 @@ def measure(row, lanes, scratch):
         finally:
             shutil.rmtree(d, ignore_errors=True)
     return out
+
+
+def oracle_key(result):
+    """`divergence_key`, but WORKS collapses to a single key. Used ONLY for the
+    ggdef comparison. Two lanes that are both WORKS matched the SAME hand-derived
+    expectation, so they agree by construction -- but their `actual` strings can
+    still differ in shape (a trap-expected cell records `trapped rc=101` on one
+    lane and `trapped rc=134` on another, both correctly WORKS). Feeding that to
+    the strict key would report a disagreement about the exit code of a cell whose
+    expectation is "a loud failure", which is not a disagreement about anything."""
+    return "WORKS" if result[0] == "WORKS" else divergence_key(result)
 
 
 def divergence_key(result):
@@ -214,6 +373,9 @@ def main():
     if "selfhost" in lanes and not DRIVER.exists():
         sys.exit("the self-host lane needs its driver built once:\n"
                  f"  {GG} build tests/fixtures/self_host_lowerer/driver.gg")
+    if "ggdef" in lanes and not GGDEF.exists():
+        sys.exit("the ggdef lane needs the definitional interpreter built once:\n"
+                 "  cargo build -p ggdef --bin ggdef")
 
     raw = (MAP / "MANIFEST.tsv").read_text().splitlines()
     header = raw[0]
@@ -235,7 +397,10 @@ def main():
                 (r[COL_CELL] for r in selected),
                 pool.map(lambda r: measure(r, lanes, scratch), selected)))
 
+    # Divergence is a question about VALUE lanes only (module docstring).
+    div_lanes = [l for l in lanes if l in VALUE_LANES]
     topics, regressions, progress, divergences, new_div = {}, [], [], [], []
+    both_wrong_ggdef_right, ggdef_disagree = [], []
     for row in rows:
         res = measured.get(row[COL_CELL])
         if res is None:
@@ -250,9 +415,9 @@ def main():
                     regressions.append((row[COL_CELL], f"CONTROL PASSED on {lane} - harness is blind"))
             continue
 
-        keys = {lane: divergence_key(r) for lane, r in res.items()}
+        keys = {lane: divergence_key(res[lane]) for lane in div_lanes}
         diverges = len(set(keys.values())) > 1
-        baseline_lanes = {lane: row[LANE_COL[lane]] for lane in lanes}
+        baseline_lanes = {lane: row[LANE_COL[lane]] for lane in div_lanes}
         # A divergence the baseline already records is a KNOWN one: it stays in
         # the report (that is the point of the category) but does not gate.
         baseline_diverges = (row[COL_DIVERGE] == "DIVERGENT"
@@ -261,6 +426,31 @@ def main():
             divergences.append((row[COL_CELL], res, baseline_diverges))
             if not baseline_diverges:
                 new_div.append(row[COL_CELL])
+
+        # ggdef adjudication. Two categories, and the difference matters:
+        #
+        #   BOTH-LANES-WRONG-ggdef-RIGHT -- every production lane measured on this
+        #     run is non-WORKS and the DEFINITION gets it right. This is the case
+        #     lane agreement structurally cannot find (Core #8): the real lanes can
+        #     be unanimous and unanimously wrong. Measured, not hypothetical:
+        #     `auto v = []` + `push(String)` prints a raw pointer on C AND LLVM
+        #     while ggdef prints the string.
+        #   ggdef-DISAGREES -- ggdef and a production lane reach different verdicts
+        #     in any other configuration. Triage material, NOT a verdict: ggdef
+        #     IMPLEMENTS the definition, it is not the definition, so it can lag a
+        #     ratified decision or simply be wrong.
+        #
+        # NO-VERDICT rows are excluded from both -- ggdef declining a program says
+        # nothing at all about that program.
+        if "ggdef" in lanes and div_lanes:
+            g_bucket, g_actual = res["ggdef"]
+            if g_bucket != "NO-VERDICT":
+                prod = {lane: res[lane] for lane in div_lanes}
+                if g_bucket == "WORKS" and all(b != "WORKS" for b, _ in prod.values()):
+                    both_wrong_ggdef_right.append((row[COL_CELL], prod, g_actual))
+                elif any(oracle_key(r) != oracle_key(res["ggdef"])
+                         for r in prod.values()):
+                    ggdef_disagree.append((row[COL_CELL], prod, (g_bucket, g_actual)))
 
         for lane in lanes:
             bucket, actual = res[lane]
@@ -275,9 +465,10 @@ def main():
             topics.setdefault(row[COL_TOPIC], {}).setdefault(lane, {})
             t = topics[row[COL_TOPIC]][lane]
             t[bucket] = t.get(bucket, 0) + 1
-        # Only a multi-lane run can say anything about divergence; a single-lane
-        # --accept must leave the recorded verdict alone rather than erase it.
-        if args.accept and len(lanes) > 1:
+        # Only a multi-VALUE-lane run can say anything about divergence; a
+        # single-lane --accept (or a `c,asan` run, which has one value lane) must
+        # leave the recorded verdict alone rather than erase it.
+        if args.accept and len(div_lanes) > 1:
             row[COL_DIVERGE] = "DIVERGENT" if diverges else ""
 
     for lane in lanes:
@@ -292,14 +483,58 @@ def main():
         n = sum(tot.values()) or 1
         print(f"{'TOTAL':<52} " + " ".join(f"{tot.get(b, 0):>10}" for b in BUCKETS))
         print(f"WORKS: {tot.get('WORKS', 0)}/{n} = {100 * tot.get('WORKS', 0) / n:.1f}%")
+        if lane == "asan":
+            # The headline number for this lane is NOT the WORKS share -- it is
+            # how many cells the sanitizer condemned. A cell can be WRONG here
+            # for the same reason it is WRONG on the C lane and that is already
+            # counted there; SANITIZE-FAIL is the column only this lane can fill.
+            print(f"SANITIZE-FAIL: {tot.get('SANITIZE-FAIL', 0)}/{n} "
+                  f"(memory-validity findings invisible to every value lane)")
+        if lane == "ggdef":
+            # NO-VERDICT is not a failure, it is an absence, so it must come out
+            # of the denominator -- otherwise the ggdef lane's "WORKS %" reads as
+            # a correctness score when it is mostly a subset-coverage score.
+            adjudicated = n - tot.get("NO-VERDICT", 0)
+            print(f"NO-VERDICT (outside the GGC subset): {tot.get('NO-VERDICT', 0)}/{n}")
+            if adjudicated:
+                print(f"WORKS among ADJUDICATED cells: {tot.get('WORKS', 0)}/{adjudicated} "
+                      f"= {100 * tot.get('WORKS', 0) / adjudicated:.1f}%")
 
-    if len(lanes) > 1:
+    if len(div_lanes) > 1:
         print(f"\n=== cross-lane divergences: {len(divergences)} "
               f"({len(new_div)} NOT in the baseline) ===")
         for cell, res, known in sorted(divergences):
             tag = "known" if known else "NEW"
-            detail = " | ".join(f"{lane}={res[lane][0]}:{res[lane][1][:60]}" for lane in lanes)
+            detail = " | ".join(f"{lane}={res[lane][0]}:{res[lane][1][:60]}" for lane in div_lanes)
             print(f"  [{tag}] {cell}: {detail}")
+
+    if "ggdef" in lanes and div_lanes:
+        print(f"\n=== BOTH-LANES-WRONG-ggdef-RIGHT: {len(both_wrong_ggdef_right)} ===")
+        print("    every production lane measured is non-WORKS; the DEFINITION is right.")
+        for cell, prod, g_actual in sorted(both_wrong_ggdef_right):
+            detail = " | ".join(f"{lane}={b}:{a[:50]}" for lane, (b, a) in prod.items())
+            print(f"  {cell}: ggdef={g_actual[:50]} vs {detail}")
+        print(f"\n=== ggdef disagrees with a production lane: {len(ggdef_disagree)} ===")
+        print("    triage material, not a verdict: ggdef implements the definition,")
+        print("    it is not the definition, and it can lag a ratified decision.")
+        for cell, prod, (g_bucket, g_actual) in sorted(ggdef_disagree):
+            detail = " | ".join(f"{lane}={b}:{a[:40]}" for lane, (b, a) in prod.items())
+            print(f"  {cell}: ggdef={g_bucket}:{g_actual[:40]} vs {detail}")
+
+    if "asan" in lanes:
+        san = [(row[COL_CELL], measured[row[COL_CELL]]["asan"][1])
+               for row in rows
+               if row[COL_CELL] in measured and row[COL_C] != "CONTROL"
+               and measured[row[COL_CELL]]["asan"][0] == "SANITIZE-FAIL"]
+        print(f"\n=== sanitizer findings (C lane only; --sanitize is dropped "
+              f"under --backend=llvm): {len(san)} ===")
+        for cell, detail in sorted(san):
+            # A cell that is WORKS on the C lane but SANITIZE-FAIL here is the
+            # headline: correct output, invalid memory. Flagged so it cannot be
+            # read as "already known to be broken".
+            c_bucket = measured[cell].get("c", ("?", ""))[0] if "c" in lanes else "?"
+            flag = "  <-- prints the RIGHT answer" if c_bucket == "WORKS" else ""
+            print(f"  {cell}: {detail}{flag}")
 
     if args.detail:
         for row in rows:

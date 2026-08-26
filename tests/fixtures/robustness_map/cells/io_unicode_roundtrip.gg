@@ -1,0 +1,15 @@
+# A multi-byte payload through the file boundary: byte_len must survive the
+# round trip, which a latin-1 truncation at the C edge would destroy.
+# Expected: 6 / 5
+from std.fs import read_file, write_file, delete_file
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String path = "/tmp/gg_map_io_unicode.txt"
+    write_file(path, mk("h", "éllo"))
+    String back = read_file(path)
+    print(f"{back.byte_len()}")
+    print(f"{back.len()}")
+    delete_file(path)

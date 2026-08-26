@@ -1,0 +1,15 @@
+# Ch19 std.fs: the shortcut pair. Write a file, read it back, delete it. The
+# content is built at RUNTIME so a wrong string ABI at the C boundary shows.
+# Expected: alpha-beta / true / false
+from std.fs import read_file, write_file, file_exists, delete_file
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String path = "/tmp/gg_map_io_roundtrip.txt"
+    write_file(path, mk("alpha-", "beta"))
+    print(read_file(path))
+    print(f"{file_exists(path)}")
+    delete_file(path)
+    print(f"{file_exists(path)}")

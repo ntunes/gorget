@@ -1,0 +1,12 @@
+# pair:fallible_handling. The Result method form on the captured value.
+# Expected: 8 / boom
+int inner(int x) throws String:
+    if x < 0:
+        throw "boom"
+    return x * 2
+
+void main():
+    Result[int, String] a = inner(4)
+    print(f"{a.unwrap_or(-1)}")
+    Result[int, String] b = inner(-1)
+    print(b.unwrap_error())

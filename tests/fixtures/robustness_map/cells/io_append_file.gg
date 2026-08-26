@@ -1,0 +1,10 @@
+# Ch19 std.fs.append_file: appending must EXTEND, not replace.
+# Expected: onetwo
+from std.fs import read_file, write_file, append_file, delete_file
+
+void main():
+    String path = "/tmp/gg_map_io_append.txt"
+    write_file(path, "one")
+    append_file(path, "two")
+    print(read_file(path))
+    delete_file(path)

@@ -1,0 +1,11 @@
+# Ch5 says len() counts CHARACTERS, so subscripting must index characters too,
+# not bytes -- otherwise the two APIs disagree about what position 1 means.
+# Expected: h / é / o
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("h", "éllo")
+    print(f"{s[0]}")
+    print(f"{s[1]}")
+    print(f"{s[4]}")

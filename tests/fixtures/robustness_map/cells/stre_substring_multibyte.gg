@@ -1,0 +1,10 @@
+# Ch5, VERBATIM shape: `s.substring(0, 5)`. On a multi-byte string the bounds
+# must be the same units len() counts.
+# Expected: hé / llo
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("h", "éllo")
+    print(s.substring(0, 2))
+    print(s.substring(2, 5))

@@ -1,0 +1,8 @@
+# Ch2, VERBATIM: "(-7).mod(3) is 2 (Euclidean modulo)" -- the result always
+# matches the divisor's sign.
+# Expected: 2
+int a():
+    return -7
+
+void main():
+    print(f"{a().mod(3)}")

@@ -1,0 +1,11 @@
+# UNSURE -- undocumented. Splitting the EMPTY string on a separator that does not
+# occur in it. The consistent answer (and Python's, and Rust's) is one part which
+# is itself empty; zero parts would make `split` non-total.
+# Expected: 1 / true
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] parts = mk("", "").split(",")
+    print(f"{parts.len()}")
+    print(f"{parts.get(0).unwrap().is_empty()}")

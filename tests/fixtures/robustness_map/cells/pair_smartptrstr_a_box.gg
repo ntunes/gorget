@@ -1,0 +1,10 @@
+# pair:smartptr_string. A heap-built String behind Box: the element-size axis of
+# the pair above.
+# Expected: alpha / 5
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Box[String] p = Box(mk("al", "pha"))
+    print(p.get())
+    print(f"{p.get().len()}")

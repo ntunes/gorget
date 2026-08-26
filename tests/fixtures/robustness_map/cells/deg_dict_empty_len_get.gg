@@ -1,0 +1,13 @@
+# Ch5 Dict: empty has size 0 and a lookup misses with None.
+# Expected: 0 / none / false
+from std.collections import Dict
+
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    print(f"{d.len()}")
+    match d.get("a"):
+        case Some(v):
+            print(f"{v}")
+        case None:
+            print("none")
+    print(f"{d.contains("a")}")

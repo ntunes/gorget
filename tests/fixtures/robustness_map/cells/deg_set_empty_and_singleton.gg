@@ -1,0 +1,11 @@
+# Ch5 Set: empty contains nothing; after one insert it contains exactly that.
+# Expected: 0 / false / 1 / true
+from std.collections import Set
+
+void main():
+    Set[int] s = Set[int]()
+    print(f"{s.len()}")
+    print(f"{s.contains(1)}")
+    s.add(1)
+    print(f"{s.len()}")
+    print(f"{s.contains(1)}")

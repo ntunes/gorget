@@ -1,0 +1,9 @@
+# Ch5 D22 colon-slice: a zero-width slice is empty, a full-width one is the whole
+# thing, and Ch5 states "bounds CLAMP; a slice never faults at runtime" -- so an
+# end past the length is the whole tail, not a trap.
+# Expected: 0 / 3 / 3
+void main():
+    Vector[int] v = [1, 2, 3]
+    print(f"{v[1:1].len()}")
+    print(f"{v[0:3].len()}")
+    print(f"{v[0:1000].len()}")

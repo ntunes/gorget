@@ -1,0 +1,16 @@
+# pair:dict_missing_default. The explicit match.
+# Expected: 30 / 0
+from std.collections import Dict
+
+void show(Dict[String, int] d, String k):
+    match d.get(k):
+        case Some(v):
+            print(f"{v}")
+        case None:
+            print("0")
+
+void main():
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put("Alice", 30)
+    show(ages, "Alice")
+    show(ages, "Eve")

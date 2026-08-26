@@ -1,0 +1,9 @@
+# Ch2 "Fallible Arithmetic", VERBATIM: `+!` auto-infers `throws ArithError`, and
+# the caller handles it with `! catch`.
+# Expected: 5
+int add_or_throw(int a, int b):
+    return a +! b
+
+void main():
+    int r = add_or_throw(2, 3)! catch (e): -1
+    print(f"{r}")

@@ -1,0 +1,9 @@
+# pair:dict_missing_default. Ch5, VERBATIM: `ages.get("Alice") ?? 0`.
+# Expected: 30 / 0
+from std.collections import Dict
+
+void main():
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put("Alice", 30)
+    print(f"{ages.get("Alice") ?? 0}")
+    print(f"{ages.get("Eve") ?? 0}")

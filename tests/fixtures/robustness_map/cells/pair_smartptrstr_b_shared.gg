@@ -1,0 +1,9 @@
+# pair:smartptr_string. The same payload behind Shared.
+# Expected: alpha / 5
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Shared[String] p = Shared(mk("al", "pha"))
+    print(p.get())
+    print(f"{p.get().len()}")

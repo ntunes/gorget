@@ -1,0 +1,6 @@
+# Shared over a collection: element read + length through the handle.
+# Expected: 3 / 20
+void main():
+    Shared[Vector[int]] v = Shared[Vector[int]]([10, 20, 30])
+    print(f"{v.slen()}")
+    print(f"{v.at(1)}")

@@ -1,0 +1,9 @@
+# Iterating an empty Dict runs zero times.
+# Expected: done
+from std.collections import Dict
+
+void main():
+    Dict[String, int] d = Dict[String, int]()
+    for k in d.keys():
+        print(k)
+    print("done")

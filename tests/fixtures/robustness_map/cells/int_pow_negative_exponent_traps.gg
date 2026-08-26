@@ -1,0 +1,10 @@
+# Ch2: "An integer overflow OR negative exponent traps uncatchably."
+# Expected: the program must not print "after"; it should fail loudly.
+int neg():
+    return -1
+
+void main():
+    print("before")
+    int r = 2 ** neg()
+    print(f"{r}")
+    print("after")

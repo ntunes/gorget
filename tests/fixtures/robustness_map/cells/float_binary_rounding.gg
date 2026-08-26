@@ -1,0 +1,12 @@
+# The single most-asked beginner question about floats: 0.1 + 0.2 != 0.3 in
+# binary floating point. If this prints `true`, the language is not IEEE-754.
+# Expected: false / 0.3
+float a():
+    return 0.1
+
+float b():
+    return 0.2
+
+void main():
+    print(f"{a() + b() == 0.3}")
+    print(f"{a() + b():.1f}")

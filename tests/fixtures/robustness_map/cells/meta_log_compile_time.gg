@@ -1,0 +1,11 @@
+# Ch17 "Meta Log", VERBATIM: the message goes to the COMPILER's output, so the
+# program's own stdout is unaffected. A meta log that leaked into stdout would
+# show up here as an extra line.
+# Expected: 4096
+meta int PAGE_SIZE = 4096
+meta int PAGES = 16
+
+meta log "page size:", PAGE_SIZE, "pages:", PAGES
+
+void main():
+    print(f"{PAGE_SIZE}")

@@ -1,0 +1,8 @@
+# Ch2, VERBATIM: "-7 % 3 is -1 (remainder)".
+# Expected: -1 / 1
+int a():
+    return -7
+
+void main():
+    print(f"{a() % 3}")
+    print(f"{7 % 3}")

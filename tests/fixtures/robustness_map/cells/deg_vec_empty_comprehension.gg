@@ -1,0 +1,6 @@
+# Ch5 comprehension over an empty source: an empty result, no special case.
+# Expected: 0
+void main():
+    Vector[int] src = Vector[int]()
+    Vector[int] doubled = [x * 2 for x in src]
+    print(f"{doubled.len()}")

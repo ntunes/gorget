@@ -1,0 +1,11 @@
+# Ch5: an empty Vector has length 0, and `.get(i)` returns Option -- None, not a
+# trap. That is the difference between `.get()` and subscripting.
+# Expected: 0 / none
+void main():
+    Vector[int] v = Vector[int]()
+    print(f"{v.len()}")
+    match v.get(0):
+        case Some(x):
+            print(f"{x}")
+        case None:
+            print("none")

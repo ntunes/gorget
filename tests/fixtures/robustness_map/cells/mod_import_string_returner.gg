@@ -1,0 +1,8 @@
+# The element-size axis at a module boundary: a String built inside the OTHER
+# module and returned across it.
+# Expected: from-module / 11
+from modhelp_shapes import label
+
+void main():
+    print(label())
+    print(f"{label().len()}")

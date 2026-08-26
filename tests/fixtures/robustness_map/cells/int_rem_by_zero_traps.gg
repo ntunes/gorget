@@ -1,0 +1,11 @@
+# trap-codes.md T_DivByZero covers `%` as well as `/`. The remainder sibling is
+# the one people forget; it must trap identically.
+# Expected: the program must not print "after"; it should fail loudly.
+int zero():
+    return 0
+
+void main():
+    print("before")
+    int r = 10 % zero()
+    print(f"{r}")
+    print("after")

@@ -1,0 +1,12 @@
+# Ch16 "Shared[Callable] for shared mutable captures", VERBATIM: two owners share
+# the same captured state, so both increments hit the same `counter`.
+# Expected: 2
+void main():
+    shared int counter = 0
+    Shared[Callable[void()]] tick = Shared.new((): counter = counter + 1)
+
+    Shared[Callable[void()]] a = tick.clone()
+    Shared[Callable[void()]] b = tick.clone()
+    a.get()()
+    b.get()()
+    print(f"{counter}")

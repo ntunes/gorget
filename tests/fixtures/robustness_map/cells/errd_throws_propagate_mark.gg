@@ -1,0 +1,24 @@
+# Ch10: the postfix `!` mark activates the error channel and propagates. Two
+# levels deep, so the propagation is a real hop and not a local return.
+# Expected: 4 / boom
+int inner(int x) throws String:
+    if x < 0:
+        throw "boom"
+    return x * 2
+
+int outer(int x) throws String:
+    return inner(x)!
+
+void main():
+    Result[int, String] a = outer(2)
+    match a:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print(e)
+    Result[int, String] b = outer(-1)
+    match b:
+        case Ok(v):
+            print(f"{v}")
+        case Error(e):
+            print(e)

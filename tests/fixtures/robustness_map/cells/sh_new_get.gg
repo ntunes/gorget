@@ -1,0 +1,5 @@
+# Book Ch16 "Shared - Reference-Counted Ownership", verbatim shape.
+# Expected: 42
+void main():
+    Shared[int] s = Shared[int](42)
+    print(f"{s.get()}")

@@ -1,0 +1,8 @@
+# Ch2 types table: int is 64-bit signed, min -9223372036854775808, max
+# 9223372036854775807 (language-reference S19 limits table).
+# Expected: 9223372036854775807 / -9223372036854775808
+void main():
+    int hi = 9223372036854775807
+    int lo = -9223372036854775808
+    print(f"{hi}")
+    print(f"{lo}")

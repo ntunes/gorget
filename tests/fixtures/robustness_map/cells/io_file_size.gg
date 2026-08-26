@@ -1,0 +1,9 @@
+# std.fs.file_size on a file whose byte length is known exactly.
+# Expected: 5
+from std.fs import write_file, file_size, delete_file
+
+void main():
+    String path = "/tmp/gg_map_io_size.txt"
+    write_file(path, "hello")
+    print(f"{file_size(path)}")
+    delete_file(path)

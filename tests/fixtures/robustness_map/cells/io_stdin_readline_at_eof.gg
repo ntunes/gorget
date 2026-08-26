@@ -1,0 +1,9 @@
+# Ch19, VERBATIM: `String line = readline()`. With stdin at EOF the read has
+# nothing to give, so the line must be empty and the program must still finish.
+# Expected: 0 / done
+from std.io import readline
+
+void main():
+    String line = readline()
+    print(f"{line.len()}")
+    print("done")

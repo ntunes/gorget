@@ -1,0 +1,13 @@
+# The element-TYPE axis of the same degenerate case: an empty Vector[String],
+# then one runtime-built element. A wrong element size shows here and not on the
+# int version.
+# Expected: 0 / 1 / alpha
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = Vector[String]()
+    print(f"{v.len()}")
+    v.push(mk("al", "pha"))
+    print(f"{v.len()}")
+    print(v.get(0).unwrap())

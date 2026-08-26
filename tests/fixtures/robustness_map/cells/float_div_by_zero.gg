@@ -1,0 +1,14 @@
+# UNSURE -- an OPEN QUESTION, recorded rather than guessed. trap-codes.md says
+# T_DivByZero is "a / or % with a zero divisor" WITHOUT qualifying the operand
+# type, so this expectation follows the registry: a loud failure. IEEE-754 would
+# instead say +inf, and `float` is documented as IEEE 64-bit. Whichever way the
+# owner ratifies it, one of the two documents must change.
+# Expected: the program must not print "after"; it should fail loudly.
+float zero():
+    return 0.0
+
+void main():
+    print("before")
+    float q = 1.0 / zero()
+    print(f"{q}")
+    print("after")

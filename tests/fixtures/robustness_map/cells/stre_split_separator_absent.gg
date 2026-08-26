@@ -1,0 +1,9 @@
+# The separator does not occur: the result is one part, the whole string.
+# Expected: 1 / abc
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] parts = mk("ab", "c").split(",")
+    print(f"{parts.len()}")
+    print(parts.get(0).unwrap())

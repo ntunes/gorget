@@ -1,0 +1,20 @@
+# Ch9: `and_then` chains short-circuit at the first None, three links deep.
+# 3 -> 6 -> 12 -> 24 completes; 60 -> 120 -> None stops the chain and the third
+# link never runs.
+# Expected: 24 / none
+Option[int] step(int x):
+    if x > 100:
+        return None()
+    return Some(x * 2)
+
+void main():
+    match step(3).and_then((a): step(a)).and_then((b): step(b)):
+        case Some(v):
+            print(f"{v}")
+        case None:
+            print("none")
+    match step(60).and_then((a): step(a)).and_then((b): step(b)):
+        case Some(v):
+            print(f"{v}")
+        case None:
+            print("none")

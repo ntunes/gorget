@@ -1,0 +1,11 @@
+# Every string contains the empty string, and starts_with/ends_with agree --
+# the identity that keeps search loops from needing a special case.
+# Expected: true / true / true
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("ab", "c")
+    print(f"{s.contains("")}")
+    print(f"{s.starts_with("")}")
+    print(f"{s.ends_with("")}")

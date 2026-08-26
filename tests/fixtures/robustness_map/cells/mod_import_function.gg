@@ -1,0 +1,7 @@
+# Ch15 "From Import", VERBATIM shape: pull a name from a sibling module into
+# scope and call it unqualified.
+# Expected: 12
+from modhelp_shapes import triple
+
+void main():
+    print(f"{triple(4)}")

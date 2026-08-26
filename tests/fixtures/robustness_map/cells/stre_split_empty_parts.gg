@@ -1,0 +1,11 @@
+# Ch5: `"a,b,c".split(",")` gives 3 parts. With an empty field in the middle
+# there are still 3 parts and the middle one is empty -- dropping it would
+# silently corrupt every CSV parser written in this language.
+# Expected: 3 / true
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] parts = mk("a,", ",b").split(",")
+    print(f"{parts.len()}")
+    print(f"{parts.get(1).unwrap().is_empty()}")

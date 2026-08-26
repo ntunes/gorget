@@ -1,0 +1,10 @@
+# A Vector of Shared handles to ONE value: the "many owners" case Ch16 names.
+# Expected: 3 / 42
+void main():
+    Shared[int] s = Shared[int](42)
+    Vector[Shared[int]] all = []
+    all.push(s.clone())
+    all.push(s.clone())
+    all.push(s.clone())
+    print(f"{all.len()}")
+    print(f"{all.get(1).unwrap().get()}")

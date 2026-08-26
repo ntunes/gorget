@@ -1,0 +1,9 @@
+# A Set holds each value once: inserting the same value twice leaves size 1.
+# Expected: 1
+from std.collections import Set
+
+void main():
+    Set[int] s = Set[int]()
+    s.add(3)
+    s.add(3)
+    print(f"{s.len()}")

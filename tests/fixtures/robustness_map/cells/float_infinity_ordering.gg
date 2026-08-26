@@ -1,0 +1,8 @@
+# Ch19: std.math exports INFINITY. It must compare greater than every finite
+# float and equal to itself.
+# Expected: true / true
+from std.math import INFINITY
+
+void main():
+    print(f"{INFINITY > 1.0e308}")
+    print(f"{INFINITY == INFINITY}")

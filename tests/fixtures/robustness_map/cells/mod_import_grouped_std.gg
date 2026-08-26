@@ -1,0 +1,7 @@
+# Ch15 "Grouped Import", VERBATIM: `import std.{io, fs, conv}`, then the members
+# used through their module names.
+# Expected: 42
+import std.{conv, math}
+
+void main():
+    print(std.conv.int_to_str(42))

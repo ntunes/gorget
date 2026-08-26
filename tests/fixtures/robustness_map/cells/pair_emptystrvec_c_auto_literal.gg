@@ -1,0 +1,11 @@
+# pair:empty_strvec. `auto v = []` -- the element type is only knowable from the
+# push. Written the way a learner writes it.
+# Expected: 1 / alpha
+String mk(String a, String b):
+    return a + b
+
+void main():
+    auto v = []
+    v.push(mk("al", "pha"))
+    print(f"{v.len()}")
+    print(v.get(0).unwrap())

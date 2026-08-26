@@ -1,0 +1,7 @@
+# The sign of zero survives printing: %f-style rendering shows -0.000000.
+# Expected: -0.000000
+float nz():
+    return -0.0
+
+void main():
+    print(f"{nz()}")

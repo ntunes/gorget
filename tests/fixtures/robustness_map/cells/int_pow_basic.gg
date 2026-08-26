@@ -1,0 +1,8 @@
+# Ch2 "Exponentiation with **", VERBATIM: `2 ** 10` is 1024, `a **= 10` is 1024.
+# Expected: 1024 / 1024
+void main():
+    int r = 2 ** 10
+    print(f"{r}")
+    int a = 2
+    a **= 10
+    print(f"{a}")

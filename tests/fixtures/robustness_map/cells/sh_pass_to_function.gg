@@ -1,0 +1,11 @@
+# Ch16 + the ownership rules: a Shared passed to a plain function is BORROWED
+# (AGENTS.md "Ownership at Consuming Positions"), so no operator is needed and
+# the caller keeps its handle.
+# Expected: 42 / 42
+int read_it(Shared[int] s):
+    return s.get()
+
+void main():
+    Shared[int] s = Shared[int](42)
+    print(f"{read_it(s)}")
+    print(f"{s.get()}")

@@ -1,0 +1,7 @@
+# pair:unicode_count. Via the character vector.
+# Expected: 5
+String mk(String a, String b):
+    return a + b
+
+void main():
+    print(f"{mk("h", "éllo").chars().len()}")

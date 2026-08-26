@@ -1,0 +1,5 @@
+# pair:shared_ctor. Ch16's own spelling: `Shared[int] s = Shared[int](42)`.
+# Expected: 42
+void main():
+    Shared[int] s = Shared[int](42)
+    print(f"{s.get()}")

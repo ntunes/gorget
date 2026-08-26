@@ -1,0 +1,10 @@
+# Ch16: a Shared over a user struct; read two fields through the handle.
+# Expected: 10 / 5000
+struct Config:
+    int max_connections
+    int timeout_ms
+
+void main():
+    Shared[Config] cfg = Shared[Config](Config(10, 5000))
+    print(f"{cfg.get().max_connections}")
+    print(f"{cfg.get().timeout_ms}")

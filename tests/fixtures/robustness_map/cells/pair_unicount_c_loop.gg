@@ -1,0 +1,11 @@
+# pair:unicode_count. Counted by hand in a loop -- what someone writes before
+# finding the method.
+# Expected: 5
+String mk(String a, String b):
+    return a + b
+
+void main():
+    int n = 0
+    for c in mk("h", "éllo").chars():
+        n = n + 1
+    print(f"{n}")

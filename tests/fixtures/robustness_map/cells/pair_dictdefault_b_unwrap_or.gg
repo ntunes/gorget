@@ -1,0 +1,9 @@
+# pair:dict_missing_default. The Option method form.
+# Expected: 30 / 0
+from std.collections import Dict
+
+void main():
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put("Alice", 30)
+    print(f"{ages.get("Alice").unwrap_or(0)}")
+    print(f"{ages.get("Eve").unwrap_or(0)}")

@@ -1,0 +1,9 @@
+# trap-codes.md T_UnwrapNone: `.unwrap()` on a None panics uncatchably.
+# Expected: the program must not print "after"; it should fail loudly.
+Option[int] nothing():
+    return None()
+
+void main():
+    print("before")
+    print(f"{nothing().unwrap()}")
+    print("after")

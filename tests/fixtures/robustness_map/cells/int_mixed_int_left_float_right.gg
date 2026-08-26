@@ -1,0 +1,20 @@
+# The mistake every Python user makes on day one, across the WHOLE operator axis
+# with the int on the LEFT. Mixed operands are documented as REJECTED for `**`
+# (E_TypeMismatchInPow) and nowhere else, and `<` already compares an int against
+# a float correctly, so the language has chosen promotion where it acts at all:
+# the reference-grade answers are the promoted ones below. A clean rejection
+# would be defensible too. What is NOT defensible is silently truncating the
+# float on some operators and promoting on others.
+# Expected: 4.500000 / -0.500000 / 5.000000 / 0.800000 / true
+int a():
+    return 2
+
+float b():
+    return 2.5
+
+void main():
+    print(f"{a() + b()}")
+    print(f"{a() - b()}")
+    print(f"{a() * b()}")
+    print(f"{a() / b()}")
+    print(f"{a() < b()}")

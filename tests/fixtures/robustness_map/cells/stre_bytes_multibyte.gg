@@ -1,0 +1,10 @@
+# `.bytes()` is the byte view, so its length is byte_len(), not len(). The two
+# must not be the same number for a non-ASCII string.
+# Expected: 6 / 5
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("h", "éllo")
+    print(f"{s.bytes().len()}")
+    print(f"{s.len()}")

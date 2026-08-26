@@ -1,0 +1,8 @@
+# Ch17 "Meta Assertions", VERBATIM: a satisfied compile-time assertion compiles
+# away and the program runs normally.
+# Expected: ok
+meta int MAX_CONNECTIONS = 1024
+meta assert MAX_CONNECTIONS > 0, "MAX_CONNECTIONS must be positive"
+
+void main():
+    print("ok")
