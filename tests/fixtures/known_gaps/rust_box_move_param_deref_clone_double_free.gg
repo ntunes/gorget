@@ -1,0 +1,43 @@
+# KNOWN GAP — RUST LANE. `gg check` reports no errors; the program then
+# DOUBLE-FREES at runtime (rc 134, `free(): double free detected in tcache 2`).
+# Twelve lines, using the language's own move operator.
+#
+#     int f(Box[Leaf] !b, int base):
+#         Leaf fe = (*b).clone()      # <- owned Box param, DEAD at the clone
+#         return base + fe.v
+#     ...
+#     print(f(^bx, 10))
+#
+# ⚠ THE DISCRIMINATOR IS MOVE-ELIGIBILITY AT THE CLONE, not the binder.
+# An earlier filing of the self-host sibling named "a Box bound by `case
+# Some(...)`" as the discriminator; that was measured WRONG. What actually
+# separates the cells is whether the Box is MOVE-ELIGIBLE where `.clone()`
+# runs -- the CoW table in AGENTS.md ("Ownership at Consuming Positions"):
+#
+#   borrowed, or owned-but-still-LIVE   -> self-host double-frees, Rust is fine
+#   owned and DEAD at the clone (this)  -> RUST double-frees, self-host is fine
+#
+# So the two lanes fail on OPPOSITE cells of one axis, and the earlier
+# "Rust gg is correct on the identical program" is false in general -- it was
+# true only of the cells that had been sampled.
+#
+# ⚠ A `Box` exists precisely to make double-free impossible by construction:
+# single owner, no implicit copy path, `^` or `.clone()` required at every
+# assignment. This is that guarantee failing in the lowering of the operator
+# that enforces it.
+#
+# INTENDED (asserted below): prints 17.
+# Found 2026-08-24 by the R44 Track-K confirming output-review; orchestrator-
+# verified (`gg check` rc 0, run rc 134).
+
+struct Leaf:
+    int v
+
+int box_move_param_clone(Box[Leaf] !b, int base):
+    Leaf fe = (*b).clone()
+    return base + fe.v
+
+void main():
+    Leaf f = Leaf(7)
+    Box[Leaf] bx = Box(f)
+    print(box_move_param_clone(^bx, 10))
