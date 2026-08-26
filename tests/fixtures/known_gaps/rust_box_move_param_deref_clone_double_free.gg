@@ -2,7 +2,7 @@
 # DOUBLE-FREES at runtime (rc 134, `free(): double free detected in tcache 2`).
 # Twelve lines, using the language's own move operator.
 #
-#     int f(Box[Leaf] !b, int base):
+#     int f(Box[Leaf] ^b, int base):
 #         Leaf fe = (*b).clone()      # <- owned Box param, DEAD at the clone
 #         return base + fe.v
 #     ...
@@ -33,7 +33,7 @@
 struct Leaf:
     int v
 
-int box_move_param_clone(Box[Leaf] !b, int base):
+int box_move_param_clone(Box[Leaf] ^b, int base):
     Leaf fe = (*b).clone()
     return base + fe.v
 

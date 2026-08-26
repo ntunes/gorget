@@ -1,7 +1,7 @@
 struct Leaf:
     int v
 
-int take(Box[Leaf] !b, int base):
+int take(Box[Leaf] ^b, int base):
     Leaf fe = (*b).clone()
     return base + fe.v
 
