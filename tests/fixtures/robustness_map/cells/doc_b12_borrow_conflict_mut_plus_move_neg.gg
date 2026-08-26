@@ -1,0 +1,13 @@
+# docs/book/12-borrowing.md:94 § "Borrow Conflicts" -- the third listed error.
+# The doc writes `f(&x, !x)`; the move sigil at a call site is `^` at HEAD, so
+# this cell uses `^x` and pins the CONFLICT, not the spelling.
+# Expected: REJECTED.
+struct S:
+    int v
+
+void f(S &a, S !b):
+    a.v += 1
+
+void main():
+    S x = S(0)
+    f(&x, ^x)         # mutable borrow + move of same value

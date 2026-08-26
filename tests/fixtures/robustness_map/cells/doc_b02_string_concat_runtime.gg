@@ -1,0 +1,10 @@
+# docs/book/02-types.md:84 § "Strings" -- runtime-built sibling
+# Expected: hello world
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String greeting = mk("hel", "lo")
+    String name = mk("wor", "ld")
+    String combined = greeting + " " + name
+    print(combined)

@@ -1,0 +1,12 @@
+# docs/book/11-ownership.md:211 § "Custom Drop" (verbatim)
+# Expected: using resource / dropping alpha   (the doc's own Output block)
+struct Resource:
+    String name
+
+equip Resource with Drop:
+    void drop(^self):
+        print(f"dropping {self.name}")
+
+void main():
+    Resource r = Resource("alpha")
+    print("using resource")

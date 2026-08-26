@@ -1,0 +1,21 @@
+# docs/book/10-errors.md:218 § "Transforming Errors with `rethrow`" (the doc's shape).
+# Expected: io: reading cfg: boom
+enum ConfigError:
+    Io(String)
+    Parse(String)
+
+String read_file(String path) throws String:
+    throw "boom"
+
+String load_config(String path) throws ConfigError:
+    String content = read_file(path)! rethrow (String e): ConfigError.Io(f"reading {path}: {e}")
+    return content
+
+void main():
+    Result[String, ConfigError] r = load_config("cfg")
+    match r:
+        case Ok(s):     print(s)
+        case Error(ce):
+            match ce:
+                case Io(m):    print(f"io: {m}")
+                case Parse(m): print(f"parse: {m}")

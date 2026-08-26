@@ -1,0 +1,8 @@
+# docs/book/08-generics.md:31 § "Generic Functions" (verbatim, call added)
+# Expected: left
+A pick_left[A, B](A left, B right):
+    return left
+
+void main():
+    String s = pick_left[String, int]("left", 7)
+    print(s)

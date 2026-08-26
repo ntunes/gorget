@@ -1,0 +1,14 @@
+# docs/book/12-borrowing.md:63 § "Mutable Borrows" (verbatim)
+# Expected: 5   (the doc's own annotation)
+struct Message:
+    String sender
+    String text
+    int priority
+
+void set_priority(Message &msg, int priority):
+    msg.priority = priority
+
+void main():
+    Message msg = Message("Alice", "hello", 1)
+    set_priority(&msg, 5)
+    print(f"{msg.priority}")    # 5

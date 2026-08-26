@@ -1,0 +1,12 @@
+# docs/book/02-types.md:142 § "Arithmetic" (every listed operator, x=7 y=3)
+# Expected: 10 / 4 / 21 / 2 / 1 / 1 / -7
+void main():
+    int x = 7
+    int y = 3
+    print(f"{x + y}")          # addition
+    print(f"{x - y}")          # subtraction
+    print(f"{x * y}")          # multiplication
+    print(f"{x / y}")          # division (integer division if both are int)
+    print(f"{x % y}")          # remainder (sign follows dividend)
+    print(f"{x.mod(y)}")       # Euclidean modulo (sign follows divisor)
+    print(f"{-x}")             # negation

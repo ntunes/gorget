@@ -1,0 +1,11 @@
+# docs/book/05-collections.md:624 § "Dict and Set" -- minimal Dict.iter() chain
+# WITH an adapter in the middle. `scores.iter().count()` (no adapter) is a
+# separate cell and behaves differently.
+# Expected: 2   (90 and 85 are >= 80)
+void main():
+    Dict[String, int] scores = Dict[String, int]()
+    scores.put("Alice", 90)
+    scores.put("Bob", 75)
+    scores.put("Carol", 85)
+    int n = scores.iter().filter(((String k, int v)): v >= 80).count()
+    print(f"{n}")

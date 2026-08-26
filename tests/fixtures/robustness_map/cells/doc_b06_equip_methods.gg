@@ -1,0 +1,20 @@
+# docs/book/06-structs-enums.md:46 § "Methods" + :57 (call site), verbatim.
+# The doc's magnitude() body is x*x + y*y, and its own annotation says 25.0.
+# Expected: 25.000000 / 4.000000 / 5.000000
+struct Point:
+    float x
+    float y
+
+equip Point:
+    float magnitude(self):
+        return (self.x * self.x + self.y * self.y) as float
+
+    Point translate(self, float dx, float dy):
+        return Point(self.x + dx, self.y + dy)
+
+void main():
+    Point p = Point(3.0, 4.0)
+    print(f"{p.magnitude()}")           # 25.0
+    Point p2 = p.translate(1.0, 1.0)
+    print(f"{p2.x}")
+    print(f"{p2.y}")

@@ -1,0 +1,9 @@
+# docs/book/04-functions.md:122 § "Recursion" (verbatim)
+# Expected: 3628800   (the doc's own annotation)
+int factorial(int n):
+    if n <= 1:
+        return 1
+    return n * factorial(n - 1)
+
+void main():
+    print(f"{factorial(10)}")    # 3628800

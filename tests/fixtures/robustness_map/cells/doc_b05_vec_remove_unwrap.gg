@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:176 § "Index Access and Ownership" (verbatim)
+# Expected: the removed row's first element (1), then matrix.len() == 1
+void main():
+    Vector[Vector[int]] matrix = [[1, 2, 3], [4, 5, 6]]
+    Vector[int] first = matrix.remove(0).unwrap()   # removes row 0, shifts row 1 down
+    print(f"{first[0]}")
+    print(f"{matrix.len()}")               # now 1

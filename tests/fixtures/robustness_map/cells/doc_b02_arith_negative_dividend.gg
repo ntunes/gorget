@@ -1,0 +1,8 @@
+# docs/book/02-types.md:142 § "Arithmetic" -- the sign claims, on a negative dividend.
+# The doc states: `%` sign follows the dividend, `.mod()` sign follows the divisor.
+# Expected: -1 / 2
+void main():
+    int x = -7
+    int y = 3
+    print(f"{x % y}")
+    print(f"{x.mod(y)}")

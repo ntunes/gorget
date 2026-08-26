@@ -1,0 +1,16 @@
+# docs/language-reference.md:6465 § "19.18 `enum_ordinal`" (verbatim shape)
+# Blue is ordinal 2, so the variants before it are Red and Green.
+# Expected: Red / Green
+enum Color:
+    Red
+    Green
+    Blue
+
+void print_before_blue[T]():
+    meta for i in 0..enum_ordinal(T, "Blue"):
+        meta for vname in variant_names(T):
+            meta if enum_ordinal(T, vname) == i:
+                print(vname)
+
+void main():
+    print_before_blue[Color]()

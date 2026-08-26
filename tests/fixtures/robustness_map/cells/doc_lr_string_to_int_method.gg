@@ -1,0 +1,7 @@
+# docs/language-reference.md:1917 claims a `String.to_int()` method. The Book
+# teaches `std.conv.parse_int` instead. Reference-vs-code = OPEN QUESTION.
+# Expected: 42
+void main():
+    String s = "42"
+    int n = s.to_int()
+    print(f"{n}")

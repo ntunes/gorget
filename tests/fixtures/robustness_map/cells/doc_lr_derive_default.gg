@@ -1,0 +1,15 @@
+# docs/language-reference.md:3570 § "Default" (verbatim shape)
+# The doc: "each field gets its zero value (`0` for int, `\"\"` for String)".
+# Expected: 0 / (empty)   -- an int 0 and an empty String
+@derive(Default)
+struct Config:
+    int timeout
+    String host
+
+void main():
+    Config c = Config.default()
+    print(f"{c.timeout}")
+    if c.host.is_empty():
+        print("(empty)")
+    else:
+        print(c.host)

@@ -1,0 +1,18 @@
+# docs/book/06-structs-enums.md:125 § "Dot-Shorthand" (verbatim)
+# Expected: south
+enum Direction:
+    North
+    South
+    East
+    West
+
+void main():
+    Direction d = .North          # type known from declaration
+    d = .South                    # type known from variable
+    match d:
+        case North:
+            print("north")
+        case South:
+            print("south")
+        else:
+            print("other")

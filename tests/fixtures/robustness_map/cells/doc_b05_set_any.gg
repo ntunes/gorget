@@ -1,0 +1,12 @@
+# docs/book/05-collections.md:648 § "Dict and Set" -- Set.any (verbatim)
+# Expected: true   (the doc's own annotation)
+from std.collections import Set
+
+void main():
+    Set[int] s = Set[int]()
+    s.add(1)
+    s.add(2)
+    s.add(3)
+
+    bool has_even = s.any((int x): x % 2 == 0)   # true
+    print(f"{has_even}")

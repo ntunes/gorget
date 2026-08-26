@@ -1,0 +1,13 @@
+# docs/book/12-borrowing.md:265 § "Branch Merging" (verbatim)
+# The doc says using `s` after the branch is an error. Expected: REJECTED.
+void consume(String !s):
+    print(s)
+
+void main():
+    bool condition = true
+    String s = "hello"
+    if condition:
+        consume(^s)
+    else:
+        pass
+    print(s)   # s treated as potentially moved - using it is an error

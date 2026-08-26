@@ -1,0 +1,12 @@
+# docs/book/12-borrowing.md:37 § "Immutable Borrows" (verbatim)
+# Expected: hello / hello
+struct Message:
+    String text
+
+void print_message(Message msg):    # immutable borrow (default)
+    print(msg.text)
+
+void main():
+    Message msg = Message("hello")
+    print_message(msg)    # borrowed - msg still valid
+    print_message(msg)    # can borrow again

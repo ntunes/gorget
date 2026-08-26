@@ -1,0 +1,10 @@
+# docs/language-design.md:545 § "3.3 Ownership (Copy-on-Write)" (verbatim)
+# Expected: hello / hello / hello / hello!
+void main():
+    String s1 = "hello"
+    String s2 = s1           # borrow - both names valid, no allocation
+    print(s1)
+    print(s2)
+    s2 += "!"
+    print(s1)
+    print(s2)

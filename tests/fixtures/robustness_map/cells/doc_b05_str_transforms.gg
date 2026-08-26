@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:51 § "Common String Methods" -- the transforms.
+# Expected: HELLO, WORLD! / hello, world! / Hello, Gorget!   (doc annotations)
+void main():
+    String s = "Hello, World!"
+    print(s.to_upper())                       # "HELLO, WORLD!"
+    print(s.to_lower())                       # "hello, world!"
+    print(s.replace("World", "Gorget"))       # "Hello, Gorget!"

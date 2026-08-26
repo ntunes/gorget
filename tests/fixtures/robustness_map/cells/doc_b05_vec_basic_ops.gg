@@ -1,0 +1,15 @@
+# docs/book/05-collections.md:100 § "Basic Operations" (verbatim, capacity() print dropped
+# because the allocated capacity is not a documented value)
+# Expected: 4 / 10 / 10 / 99 / 30 / 40
+void main():
+    auto v = [10, 20, 30]
+
+    v.push(40)            # append
+    int len = v.len()     # 4
+    int first = v[0]      # subscript read: 10
+    v[1] = 99             # subscript write
+    print(f"{len}")
+    print(f"{first}")
+
+    for x in v:
+        print(f"{x}")      # iterate

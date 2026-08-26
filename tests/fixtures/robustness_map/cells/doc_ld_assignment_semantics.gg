@@ -1,0 +1,19 @@
+# docs/language-design.md:596 § "3.4 Assignment Semantics" (verbatim minus the
+# commented-out use-after-move line)
+# Expected: 3 / 3 / 4 / 3 / 3   (the doc's own annotations, then c.len(), d.len())
+Vector[int] make_vec():
+    return [1, 2, 3]
+
+void main():
+    Vector[int] a = [1, 2, 3]
+
+    Vector[int] b = a          # borrow - b aliases a, zero cost
+    print(f"{b.len()}")        # 3 - read through the alias
+    b.push(4)                  # mutation severs the alias: b is cloned
+    print(f"{a.len()}")        # 3 (unchanged)
+    print(f"{b.len()}")        # 4
+
+    Vector[int] c = a.clone()  # explicit clone - independent up front
+    Vector[int] d = ^a         # move - a is consumed, d owns the data
+    print(f"{c.len()}")
+    print(f"{d.len()}")

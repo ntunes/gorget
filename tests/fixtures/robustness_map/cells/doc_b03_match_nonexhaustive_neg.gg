@@ -1,0 +1,19 @@
+# docs/book/03-control-flow.md:175 § "Exhaustiveness" (verbatim)
+# The doc says this is an ERROR. Expected: REJECTED (non-exhaustive: West missing).
+enum Direction:
+    North
+    South
+    East
+    West
+
+void go(Direction direction):
+    match direction:          # error: non-exhaustive match: missing variants: West
+        case North:
+            print("going north")
+        case South:
+            print("going south")
+        case East:
+            print("going east")
+
+void main():
+    go(Direction.North)

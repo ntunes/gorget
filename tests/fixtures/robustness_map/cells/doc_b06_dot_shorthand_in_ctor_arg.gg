@@ -1,0 +1,19 @@
+# docs/book/06-structs-enums.md:237 § "Combining Structs and Enums" -- the doc
+# writes `Person("Alice", .Email("alice@example.com"))`, i.e. dot-shorthand in a
+# CONSTRUCTOR ARGUMENT position. This cell isolates that one position.
+# Expected: email: alice@example.com
+enum ContactMethod:
+    Email(String)
+    Phone(String)
+
+struct Person:
+    String name
+    ContactMethod preferred_contact
+
+void main():
+    Person p = Person("Alice", .Email("alice@example.com"))
+    match p.preferred_contact:
+        case Email(addr):
+            print(f"email: {addr}")
+        case Phone(num):
+            print(f"call: {num}")

@@ -1,0 +1,4 @@
+# docs/book/01-getting-started.md:37 § "Your First Program" (verbatim)
+# Expected: Hello, World!
+void main():
+    print("Hello, World!")

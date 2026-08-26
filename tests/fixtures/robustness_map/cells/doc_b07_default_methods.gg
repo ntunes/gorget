@@ -1,0 +1,29 @@
+# docs/book/07-traits.md:77 § "Default Methods" + :101 (its main), verbatim.
+# Expected: hello Alice / bonjour Bob   (the doc's own annotations)
+trait Greeter:
+    String name(self)
+    String greeting(self):
+        return "hello"
+
+struct English:
+    String person
+
+struct French:
+    String person
+
+equip English with Greeter:
+    String name(self):
+        return self.person
+    # greeting() inherited - returns "hello"
+
+equip French with Greeter:
+    String name(self):
+        return self.person
+    String greeting(self):
+        return "bonjour"    # override the default
+
+void main():
+    English e = English("Alice")
+    French f = French("Bob")
+    print(f"{e.greeting()} {e.name()}")   # hello Alice
+    print(f"{f.greeting()} {f.name()}")   # bonjour Bob

@@ -1,0 +1,26 @@
+# docs/language-reference.md:3553 § "Iterable[T]" (verbatim, with the Counter and
+# NumberRange the section's surrounding text implies)
+# Expected: 1 / 2 / 3 / 4   (the doc's "prints 1 through 4")
+struct Counter:
+    int current
+    int max
+
+equip Counter with Iterator[int]:
+    Option[int] next(&self):
+        if self.current < self.max:
+            int val = self.current
+            self.current = self.current + 1
+            return Some(val)
+        return None()
+
+struct NumberRange:
+    int start
+    int end
+
+equip NumberRange with Iterable[int]:
+    Iterator[int] iter(&self):
+        return Counter(self.start, self.end)
+
+void main():
+    for n in NumberRange(1, 5):
+        print(f"{n}")  # prints 1 through 4

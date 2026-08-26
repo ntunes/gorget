@@ -1,0 +1,7 @@
+# docs/book/12-borrowing.md:17 § "The Borrowing Rules" (verbatim)
+# Expected: a   (the doc's own annotation)
+void main():
+    Vector[String] v = ["a", "b"]
+    String s = v.get(0).unwrap()   # a reader
+    v.push("c")                    # a write, while `s` is still live
+    print(s)                       # fine - prints "a"

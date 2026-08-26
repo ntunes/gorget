@@ -1,0 +1,8 @@
+# docs/language-design.md:1358 § "5.9 Comprehensions (Python-style)" (verbatim)
+# 0..10 gives 10 squares; 0..100 has 50 even numbers.
+# Expected: 10 / 50
+void main():
+    Vector[int] squares = [x * x for x in 0..10]
+    Vector[int] evens = [x for x in 0..100 if x % 2 == 0]
+    print(f"{squares.len()}")
+    print(f"{evens.len()}")

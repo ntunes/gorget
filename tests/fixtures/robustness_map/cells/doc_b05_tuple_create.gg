@@ -1,0 +1,8 @@
+# docs/book/05-collections.md:480 § "Tuples" (verbatim, prints added)
+# Expected: 10 / hello / true
+void main():
+    auto pair = (10, "hello")
+    auto triple = (1, 2.0, true)
+    print(f"{pair.0}")
+    print(f"{pair.1}")
+    print(f"{triple.2}")

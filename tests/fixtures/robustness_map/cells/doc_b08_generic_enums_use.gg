@@ -1,0 +1,11 @@
+# docs/book/08-generics.md:151 § "Generic Enums" (verbatim, prints added)
+# Expected: 42 / true / 100 / failed
+void main():
+    Option[int] x = Some(42)
+    Option[String] name = None()
+    Result[int, String] ok = Ok(100)
+    Result[int, String] err = Error("failed")
+    print(f"{x.unwrap()}")
+    print(f"{name.is_none()}")
+    print(f"{ok.unwrap()}")
+    print(err.unwrap_error())

@@ -1,0 +1,6 @@
+# docs/book/09-option-result.md:295 § "Transforming Results" -- and_then.
+# Expected: 11   (the doc's own annotation)
+void main():
+    Result[int, String] ok = Ok(10)
+    Result[int, String] chained = ok.and_then((int x): Ok(x + 1))   # Ok(11)
+    print(f"{chained.unwrap()}")

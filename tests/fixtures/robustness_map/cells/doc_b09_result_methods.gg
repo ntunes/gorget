@@ -1,0 +1,13 @@
+# docs/book/09-option-result.md:264 § "Common Methods" (verbatim, prints added)
+# Expected: 10 / 10 / 99 / 0 / true / true / fail   (the doc's own annotations)
+void main():
+    Result[int, String] ok = Ok(10)
+    Result[int, String] err = Error("fail")
+
+    print(f"{ok.unwrap()}")             # 10 - panics if Error
+    print(f"{ok.unwrap_or(0)}")         # 10 - eager
+    print(f"{err.unwrap_or(99)}")       # 99
+    print(f"{err.unwrap_or_else((String e): 0)}")  # 0 - lazy
+    print(f"{ok.is_ok()}")              # true
+    print(f"{err.is_error()}")          # true
+    print(err.unwrap_error())           # "fail"

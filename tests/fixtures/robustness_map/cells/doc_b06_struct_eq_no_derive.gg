@@ -1,0 +1,12 @@
+# docs/book/06-structs-enums.md:12 § "Definition" -- comparing two structs.
+# language-reference.md:3407 makes `==` the Equatable operator, and this struct
+# does not derive or equip Equatable, so the intended outcome is a REJECTION.
+# Expected: REJECTED (E_-coded: no Equatable impl for `P`).
+struct P:
+    int x
+
+void main():
+    P a = P(1)
+    P b = P(1)
+    bool eq = a == b
+    print(f"{eq}")

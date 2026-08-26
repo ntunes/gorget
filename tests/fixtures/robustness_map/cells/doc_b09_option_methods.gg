@@ -1,0 +1,14 @@
+# docs/book/09-option-result.md:91 § "Common Methods" (verbatim, prints added)
+# Expected: 42 / 42 / 42 / 0 / 42 / true / true   (the doc's own annotations)
+void main():
+    Option[int] x = Some(42)
+    Option[int] y = None()
+
+    int expected_val = x.expect("need a value")  # 42 - panics with message if None
+    print(f"{x.unwrap()}")               # 42 - panics if None
+    print(f"{expected_val}")
+    print(f"{x.unwrap_or(0)}")           # 42 - eager: default always evaluated
+    print(f"{y.unwrap_or(0)}")           # 0
+    print(f"{y.unwrap_or_else((): 42)}") # 42 - lazy: closure only called on None
+    print(f"{x.is_some()}")              # true
+    print(f"{y.is_none()}")              # true

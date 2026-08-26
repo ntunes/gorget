@@ -1,0 +1,16 @@
+# docs/language-design.md:1135 § "4.8 Method Dispatch" -- direct dispatch, the
+# control for the boxed-trait-object cell.
+# Expected: circle
+trait Shape:
+    void render(self)
+
+struct Circle:
+    float radius
+
+equip Circle with Shape:
+    void render(self):
+        print("circle")
+
+void main():
+    Circle c = Circle(5.0)
+    c.render()                # calls Circle_render() directly

@@ -1,0 +1,7 @@
+# docs/book/02-types.md:66 § "Numbers" -- the doc writes `int big = 9223372036854775807`
+# (int max). Its counterpart, int MIN, is the smallest value the type holds and
+# any beginner will write it the same way.
+# Expected: -9223372036854775808
+void main():
+    int lo = -9223372036854775808
+    print(f"{lo}")

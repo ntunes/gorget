@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:192 § "Concatenation" (verbatim)
+# Expected: 1,2,3,4,5   (the doc's own annotation)
+void main():
+    auto a = [1, 2, 3]
+    auto b = [4, 5]
+    auto c = a + b        # [1, 2, 3, 4, 5]
+    print(f"{c[0]},{c[1]},{c[2]},{c[3]},{c[4]}")

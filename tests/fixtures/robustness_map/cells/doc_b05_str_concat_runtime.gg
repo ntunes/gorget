@@ -1,0 +1,12 @@
+# docs/book/05-collections.md:28 § "Concatenation" -- runtime-built sibling.
+# Expected: hello world / hello!
+String mk(String x, String y):
+    return x + y
+
+void main():
+    String a = mk("hel", "lo")
+    String b = mk(" wor", "ld")
+    String c = a + b
+    a += "!"
+    print(c)
+    print(a)

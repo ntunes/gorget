@@ -1,0 +1,24 @@
+# docs/book/10-errors.md:42 § "Declaring a Throwing Function" (verbatim)
+# Expected: 8080 / not a number: abc / port out of range: 99999
+int parse_port(String input) throws String:
+    if input.is_empty():
+        throw "empty input"
+    Option[int] n = int.parse(input)
+    match n:
+        case Some(val):
+            if val < 1 or val > 65535:
+                throw f"port out of range: {val}"
+            return val
+        case None:
+            throw f"not a number: {input}"
+
+void show(String s):
+    Result[int, String] r = parse_port(s)
+    match r:
+        case Ok(v):    print(f"{v}")
+        case Error(e): print(e)
+
+void main():
+    show("8080")
+    show("abc")
+    show("99999")

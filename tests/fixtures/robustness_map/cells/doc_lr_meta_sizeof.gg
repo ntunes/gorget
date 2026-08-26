@@ -1,0 +1,14 @@
+# docs/language-reference.md:6221 § "19.13 Delayed-Context Builtins" (verbatim shape)
+# Expected: byte / word / long
+String size_class[Numeric T]():
+    meta if sizeof(T) == 1:
+        return "byte"
+    elif sizeof(T) == 4:
+        return "word"
+    else:
+        return "long"
+
+void main():
+    print(size_class[int8]())
+    print(size_class[int32]())
+    print(size_class[int64]())

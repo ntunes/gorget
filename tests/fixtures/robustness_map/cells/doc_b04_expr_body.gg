@@ -1,0 +1,10 @@
+# docs/book/04-functions.md:49 § "Expression-Body Shorthand" (verbatim, calls added)
+# Expected: 42 / false / 9.000000
+int double(int x): x * 2
+bool is_positive(int n): n > 0
+float square(float x): x * x
+
+void main():
+    print(f"{double(21)}")
+    print(f"{is_positive(-1)}")
+    print(f"{square(3.0)}")

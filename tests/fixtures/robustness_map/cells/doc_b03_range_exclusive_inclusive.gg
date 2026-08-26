@@ -1,0 +1,8 @@
+# docs/book/03-control-flow.md:36 § "Range Iteration" (verbatim)
+# Expected: 0..4 then 0..=5, one per line
+void main():
+    for i in 0..5:           # [0, 1, 2, 3, 4] - exclusive end
+        print(f"{i}")
+
+    for i in 0..=5:          # [0, 1, 2, 3, 4, 5] - inclusive end
+        print(f"{i}")

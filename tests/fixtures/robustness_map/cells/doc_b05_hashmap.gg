@@ -1,0 +1,10 @@
+# docs/book/05-collections.md:386 § "HashMap and HashSet" (verbatim)
+# Expected: 3   (the doc's own annotation)
+from std.collections import HashMap
+
+void main():
+    HashMap[String, int] counts = HashMap[String, int]()
+    counts.put("apple", 3)
+    counts.put("banana", 5)
+    int c = counts.get("apple") ?? 0      # 3
+    print(f"{c}")

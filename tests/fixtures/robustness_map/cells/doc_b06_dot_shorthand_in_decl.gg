@@ -1,0 +1,14 @@
+# docs/book/06-structs-enums.md:125 § "Dot-Shorthand" -- the same shorthand at a
+# typed DECLARATION rather than a constructor argument. Control cell.
+# Expected: email: bob@example.com
+enum ContactMethod:
+    Email(String)
+    Phone(String)
+
+void main():
+    ContactMethod m = .Email("bob@example.com")
+    match m:
+        case Email(addr):
+            print(f"email: {addr}")
+        case Phone(num):
+            print(f"call: {num}")

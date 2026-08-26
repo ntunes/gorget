@@ -1,0 +1,41 @@
+# docs/language-design.md:3261 § "36.2 Generic Binary Tree with Ownership".
+# The doc's own annotation for the in-order walk is: 1 2 3 4 5 6 7 8.
+# This cell prints them one per line.
+# Expected: 1 / 2 / 3 / 4 / 5 / 6 / 7 / 8
+public enum Tree[T]:
+    Node(T, Box[Tree[T]], Box[Tree[T]])
+    Leaf
+
+equip[Comparable & Displayable T] Tree[T]:
+    public static Tree[T] new():
+        return Tree.Leaf
+
+    public Tree[T] insert(self, T value):
+        match self:
+            case Leaf:
+                return Tree.Node(
+                    value,
+                    Box.new(Tree.Leaf),
+                    Box.new(Tree.Leaf),
+                )
+            case Node(v, left, right):
+                if value < v:
+                    return Tree.Node(v, Box.new(left.insert(value)), right)
+                elif value > v:
+                    return Tree.Node(v, left, Box.new(right.insert(value)))
+                else:
+                    return Tree.Node(v, left, right)  # duplicate, no-op
+
+    public void in_order(self):
+        match self:
+            case Node(v, left, right):
+                left.in_order()
+                print(f"{v}")
+            case Leaf:
+                pass
+
+void main():
+    Tree[int] t = Tree[int].new()
+    for x in [5, 3, 8, 1, 4, 7, 6, 2]:
+        t = t.insert(x)
+    t.in_order()

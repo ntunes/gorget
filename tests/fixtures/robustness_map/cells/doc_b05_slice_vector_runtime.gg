@@ -1,0 +1,8 @@
+# docs/book/05-collections.md:442 § "Slices" -- runtime-built source.
+# Expected: 2,3,4
+void main():
+    Vector[int] v = Vector[int]()
+    for i in 1..=5:
+        v.push(i)
+    Vector[int] mid = v[1:4]
+    print(f"{mid[0]},{mid[1]},{mid[2]}")

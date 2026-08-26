@@ -1,0 +1,7 @@
+# docs/book/02-types.md:66 § "Numbers" -- the float64 line on its own.
+# language-reference.md:201 says "The type of an unadorned float literal is
+# `float` (alias for `float64`)", and :416 lists `float` as an alias of float64.
+# Expected: 3.141593
+void main():
+    float64 precise = 3.141592653589793
+    print(f"{precise}")

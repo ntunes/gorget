@@ -1,0 +1,21 @@
+# docs/book/10-errors.md:86 § "The fallible mark (`!`) and auto-propagation"
+# (the doc's shape, with runnable helpers).
+# Expected: 84 / boom
+int step(String s) throws String:
+    if s == "bad":
+        throw "boom"
+    return 42
+
+int twice(String s) throws String:
+    int v = step(s)!     # mark: propagate if this fails
+    return v * 2
+
+void show(String s):
+    Result[int, String] r = twice(s)
+    match r:
+        case Ok(v):    print(f"{v}")
+        case Error(e): print(e)
+
+void main():
+    show("ok")
+    show("bad")

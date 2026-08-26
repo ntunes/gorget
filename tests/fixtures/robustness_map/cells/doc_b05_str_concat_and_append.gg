@@ -1,0 +1,9 @@
+# docs/book/05-collections.md:28 § "Concatenation" (verbatim, one print added)
+# Expected: hello world / hello!   (the doc's own annotations)
+void main():
+    String a = "hello"
+    String b = " world"
+    String c = a + b              # "hello world"
+    a += "!"                      # "hello!"
+    print(c)
+    print(a)

@@ -1,0 +1,13 @@
+# docs/book/05-collections.md:89 § "Creation" (verbatim, len prints added)
+# Expected: 3 / 0 / 0 / 0
+void main():
+    auto v = [10, 20, 30]                # literal - inferred as Vector[int]
+    Vector[int] empty = Vector[int]()    # empty vector with explicit type
+    Vector[String] names = Vector[String]()
+
+    # Pre-allocate when you know the size - avoids reallocation during growth.
+    Vector[int] big = Vector[int](cap = 10_000)
+    print(f"{v.len()}")
+    print(f"{empty.len()}")
+    print(f"{names.len()}")
+    print(f"{big.len()}")

@@ -1,0 +1,15 @@
+# docs/book/12-borrowing.md:204 § "Collection Element Borrowing" (verbatim)
+# Scores start 1, 2, 3. The direct place write adds 10 to element 0 (-> 11),
+# then the mutable iteration adds 10 to every element: 21, 12, 13.
+# Expected: 21 / 12 / 13
+struct Player:
+    String name
+    int score
+
+void main():
+    Vector[Player] players = [Player("A", 1), Player("B", 2), Player("C", 3)]
+    players[0].score += 10       # direct place mutation - players[0] changes
+    for p in &players:           # mutable iteration - write-through
+        p.score += 10
+    for q in players:
+        print(f"{q.score}")

@@ -1,0 +1,6 @@
+# docs/book/02-types.md:103 § "String Interpolation" (verbatim)
+# Expected: Name: Alice, Age: 30
+void main():
+    String name = "Alice"
+    int age = 30
+    print(f"Name: {name}, Age: {age}")

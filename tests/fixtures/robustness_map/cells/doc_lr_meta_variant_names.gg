@@ -1,0 +1,15 @@
+# docs/language-reference.md:6676 § "`variant_names(T)` and `variant_count(T)`" (verbatim shape)
+# Expected: count: 3 / Red / Green / Blue
+enum Color:
+    Red
+    Green
+    Blue
+
+void print_variants[T]():
+    meta if T is Enum:
+        print(f"count: {variant_count(T)}")
+        meta for vname in variant_names(T):
+            print(vname)
+
+void main():
+    print_variants[Color]()

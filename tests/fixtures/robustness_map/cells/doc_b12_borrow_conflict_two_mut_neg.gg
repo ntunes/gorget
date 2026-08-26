@@ -1,0 +1,11 @@
+# docs/book/12-borrowing.md:94 § "Borrow Conflicts" -- the first listed error.
+# The doc says: "These are compile errors". Expected: REJECTED.
+struct S:
+    int v
+
+void f(S &a, S &b):
+    a.v += 1
+
+void main():
+    S x = S(0)
+    f(&x, &x)         # two mutable borrows of same value

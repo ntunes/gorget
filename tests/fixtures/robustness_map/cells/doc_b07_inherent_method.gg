@@ -1,0 +1,12 @@
+# docs/book/07-traits.md:62 § "Inherent Methods" (verbatim)
+# Expected: 10.000000
+struct Circle:
+    float radius
+
+equip Circle:
+    float diameter(self):
+        return self.radius * 2.0
+
+void main():
+    Circle c = Circle(5.0)
+    print(f"{c.diameter()}")

@@ -1,0 +1,16 @@
+# docs/book/09-option-result.md:212 § "The Default Operator (`??`)" (verbatim shape).
+# Expected: Ada / 8080
+struct User:
+    String name
+
+struct Config:
+    int port
+
+void main():
+    Option[User] user = Some(User("Ada"))
+    String name = user?.name ?? "anonymous"
+    print(name)
+
+    Option[Config] config = None()
+    int port = config?.port ?? 8080
+    print(f"{port}")

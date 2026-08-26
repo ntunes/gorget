@@ -1,0 +1,13 @@
+# docs/book/05-collections.md:312 § "Iteration" -- `for k, v in ages`.
+# Dict iteration order is not documented, so this sums the values and the key
+# lengths rather than printing pairs in a guessed order.
+# Expected: 55  (30 + 25)
+void main():
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put("Alice", 30)
+    ages.put("Bob", 25)
+
+    int total = 0
+    for k, v in ages:
+        total += v
+    print(f"{total}")

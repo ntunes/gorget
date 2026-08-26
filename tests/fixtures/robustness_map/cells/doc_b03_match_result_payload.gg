@@ -1,0 +1,9 @@
+# docs/book/03-control-flow.md:261 § "Destructuring Payloads" (verbatim)
+# Expected: success: 100
+void main():
+    Result[int, String] r = Ok(100)
+    match r:
+        case Ok(v):
+            print(f"success: {v}")
+        case Error(msg):
+            print(f"failed: {msg}")

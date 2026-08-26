@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:133 § "Windows and Chunks" -- windows(3).
+# Expected: 1,2,3 / 2,3,4 / 3,4,5   (the doc's own annotation)
+void main():
+    auto v = [1, 2, 3, 4, 5]
+    Vector[Vector[int]] wins = v.windows(3)
+    for w in wins:
+        print(f"{w[0]},{w[1]},{w[2]}")

@@ -1,0 +1,9 @@
+# docs/book/05-collections.md:325 § "Lookup with Option" -- the `??` half, verbatim.
+# Expected: 30 / 0   (the doc's own annotation: "30, or 0 if missing")
+void main():
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put("Alice", 30)
+    int age = ages.get("Alice") ?? 0         # 30, or 0 if missing
+    int gone = ages.get("Eve") ?? 0
+    print(f"{age}")
+    print(f"{gone}")

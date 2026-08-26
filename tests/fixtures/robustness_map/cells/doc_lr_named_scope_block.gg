@@ -1,0 +1,7 @@
+# docs/language-reference.md:1477 § "6.16 Named Scope Block" (verbatim shape,
+# without the Task/spawn machinery)
+# Expected: in scope / after
+void main():
+    workers:                                  # scope named "workers"
+        print("in scope")
+    print("after")

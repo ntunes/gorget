@@ -1,0 +1,12 @@
+# docs/book/04-functions.md:12 § "Defining Functions" (verbatim, calls added)
+# Expected: 5 / 1.500000
+int add(int a, int b):
+    return a + b
+
+float average(float x, float y):
+    float sum = x + y
+    return sum / 2.0
+
+void main():
+    print(f"{add(2, 3)}")
+    print(f"{average(1.0, 2.0)}")

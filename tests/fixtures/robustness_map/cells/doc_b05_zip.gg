@@ -1,0 +1,8 @@
+# docs/book/05-collections.md:687 § "zip" (verbatim)
+# Expected: Alice is 30 / Bob is 25   (the doc's own annotation)
+void main():
+    auto names = ["Alice", "Bob"]
+    auto ages = [30, 25]
+
+    for name, age in zip(names, ages):
+        print(f"{name} is {age}")

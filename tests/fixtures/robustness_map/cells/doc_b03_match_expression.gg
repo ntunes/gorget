@@ -1,0 +1,9 @@
+# docs/book/03-control-flow.md:288 § "Match as an Expression" (verbatim)
+# Expected: safe
+void main():
+    String color = "green"
+    String label = match color:
+        case "red": "danger"
+        case "green": "safe"
+        else: "neutral"
+    print(label)

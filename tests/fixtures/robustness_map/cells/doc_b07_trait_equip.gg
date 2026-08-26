@@ -1,0 +1,20 @@
+# docs/book/07-traits.md:13 § "Defining a Trait" + :35 § "Equipping Types with Traits"
+# 3.14159 * 5 * 5 = 78.53975.
+# Expected: 78.539750 / circle with radius 5.000000
+trait Shape:
+    float area(self)
+    String describe(self)
+
+struct Circle:
+    float radius
+
+equip Circle with Shape:
+    float area(self):
+        return 3.14159 * self.radius * self.radius
+    String describe(self):
+        return f"circle with radius {self.radius}"
+
+void main():
+    Circle c = Circle(5.0)
+    print(f"{c.area()}")
+    print(c.describe())

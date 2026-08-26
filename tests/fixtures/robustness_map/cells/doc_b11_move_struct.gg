@@ -1,0 +1,10 @@
+# docs/book/11-ownership.md:141 § "Moving Values" (verbatim, print added)
+# Expected: hello
+struct Message:
+    String sender
+    String text
+
+void main():
+    Message msg = Message("Alice", "hello")
+    Message copy = ^msg    # msg is moved to copy
+    print(copy.text)

@@ -1,0 +1,9 @@
+# docs/book/02-types.md:66 § "Numbers" (verbatim, prints added)
+# Expected: 9223372036854775807 / 255 / 3.141593
+void main():
+    int big = 9223372036854775807    # int max
+    uint8 byte_val = 255
+    float64 precise = 3.141592653589793
+    print(f"{big}")
+    print(f"{byte_val}")
+    print(f"{precise}")

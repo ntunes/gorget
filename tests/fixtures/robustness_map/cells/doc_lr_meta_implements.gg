@@ -1,0 +1,11 @@
+# docs/language-reference.md:6805 § "19.24 `implements(T, \"Trait\")`" (verbatim)
+# Expected: 42 / true   (the doc's own annotations)
+String maybe_display[T](T val):
+    meta if implements(T, "Displayable"):
+        return f"{val}"
+    else:
+        return "<no display>"
+
+void main():
+    print(maybe_display[int](42))      # -> 42
+    print(maybe_display[bool](true))   # -> true

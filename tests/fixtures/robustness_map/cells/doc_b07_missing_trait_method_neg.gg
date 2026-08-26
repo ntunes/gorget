@@ -1,0 +1,17 @@
+# docs/book/07-traits.md:51 § "Equipping Types with Traits" (verbatim)
+# The doc says this is an ERROR. Expected: REJECTED.
+trait Shape:
+    float area(self)
+    String describe(self)
+
+struct Circle:
+    float radius
+
+equip Circle with Shape:
+    float area(self):
+        return 3.14159 * self.radius * self.radius
+    # ERROR: missing required method `describe`
+
+void main():
+    Circle c = Circle(1.0)
+    print(f"{c.area()}")

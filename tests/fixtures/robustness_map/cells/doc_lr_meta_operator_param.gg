@@ -1,0 +1,10 @@
+# docs/language-reference.md:6854 § "Call Site" (verbatim shape): an OPERATOR
+# passed as a `meta` parameter.
+# Expected: 13 / 30 / 7   (the doc's own annotations)
+T fold[T](T a, T b, meta op):
+    return a op b
+
+void main():
+    print(f"{fold[int](10, 3, +)}")   # -> 13
+    print(f"{fold[int](10, 3, *)}")   # -> 30
+    print(f"{fold[int](10, 3, -)}")   # -> 7

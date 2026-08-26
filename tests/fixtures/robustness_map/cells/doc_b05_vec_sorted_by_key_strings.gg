@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:115 § "Sort" -- sorted_by_key on Vector[String].
+# Expected: fig / apple / banana   (by length: 3, 5, 6)
+void main():
+    Vector[String] words = ["banana", "fig", "apple"]
+    Vector[String] sorted_by_len = words.sorted_by_key((s): s.len())
+    for w in sorted_by_len:
+        print(w)

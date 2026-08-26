@@ -1,0 +1,13 @@
+# docs/book/05-collections.md:133 § "Windows and Chunks" -- chunks(2).
+# Expected: 3 chunks, then [[1,2], [3,4], [5]]   (the doc's own annotation)
+void main():
+    auto v = [1, 2, 3, 4, 5]
+    Vector[Vector[int]] chs = v.chunks(2)
+    print(f"{chs.len()}")
+    for ch in chs:
+        String line = ""
+        for x in ch:
+            if line.len() > 0:
+                line += ","
+            line += f"{x}"
+        print(line)

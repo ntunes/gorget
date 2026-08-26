@@ -1,0 +1,10 @@
+# docs/language-design.md:261 § "Multiple Return Values" -- the explicitly-typed
+# destructuring spelling the doc gives right below the `auto` one.
+# Expected: 3 / 2
+(int, int) divmod(int a, int b):
+    return (a / b, a % b)
+
+void main():
+    (int, int) (q, r) = divmod(17, 5)
+    print(f"{q}")
+    print(f"{r}")

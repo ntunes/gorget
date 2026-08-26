@@ -1,0 +1,9 @@
+# docs/book/05-collections.md:325 § "Lookup with Option" -- the Option half.
+# Expected: 30 / true   (the doc annotates Some(30) and None)
+void main():
+    Dict[String, int] ages = Dict[String, int]()
+    ages.put("Alice", 30)
+    Option[int] result = ages.get("Alice")   # Some(30)
+    Option[int] missing = ages.get("Eve")    # None
+    print(f"{result.unwrap()}")
+    print(f"{missing.is_none()}")

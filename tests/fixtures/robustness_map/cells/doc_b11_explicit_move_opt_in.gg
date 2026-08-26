@@ -1,0 +1,6 @@
+# docs/book/11-ownership.md:68 § "Copy vs Resource Types" -- the explicit move.
+# Expected: world
+void main():
+    String s3 = "world"
+    String s4 = ^s3    # explicit move - s3 now invalid
+    print(s4)

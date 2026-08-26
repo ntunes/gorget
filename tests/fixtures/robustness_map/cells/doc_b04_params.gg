@@ -1,0 +1,7 @@
+# docs/book/04-functions.md:64 § "Parameters" (verbatim, call added)
+# Expected: Hello Alice, age 30
+String format_greeting(String name, int age):
+    return f"Hello {name}, age {age}"
+
+void main():
+    print(format_greeting("Alice", 30))

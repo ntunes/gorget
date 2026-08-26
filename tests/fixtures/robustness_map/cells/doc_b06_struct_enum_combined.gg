@@ -1,0 +1,29 @@
+# docs/book/06-structs-enums.md:237 § "Combining Structs and Enums" (verbatim)
+# Expected: email: alice@example.com / mail to Springfield
+struct Address:
+    String street
+    String city
+
+enum ContactMethod:
+    Email(String)
+    Phone(String)
+    Mail(Address)
+
+struct Person:
+    String name
+    ContactMethod preferred_contact
+
+void show(Person p):
+    match p.preferred_contact:
+        case Email(addr):
+            print(f"email: {addr}")
+        case Phone(num):
+            print(f"call: {num}")
+        case Mail(address):
+            print(f"mail to {address.city}")
+
+void main():
+    Person p = Person("Alice", .Email("alice@example.com"))
+    Person q = Person("Bob", .Mail(Address("1 Elm", "Springfield")))
+    show(p)
+    show(q)

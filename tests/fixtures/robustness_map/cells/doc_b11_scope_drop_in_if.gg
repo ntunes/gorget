@@ -1,0 +1,9 @@
+# docs/book/11-ownership.md:197 § "Scope and Drop" (verbatim)
+# Expected: temporary / after if
+void main():
+    if true:
+        String temp = "temporary"
+        print(temp)
+    # temp is dropped here - leaving the if block
+
+    print("after if")

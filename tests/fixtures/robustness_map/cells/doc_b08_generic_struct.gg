@@ -1,0 +1,15 @@
+# docs/book/08-generics.md:58 + :70 § "Generic Structs" (verbatim)
+# Expected: 10 / world   (the doc's own annotations)
+struct Container[T]:
+    T value
+
+struct Pair[A, B]:
+    A first
+    B second
+
+void main():
+    Container[int] c = Container[int](42)
+    Container[String] s = Container[String]("hello")
+    Pair[int, String] p = Pair[int, String](10, "world")
+    print(f"{p.first}")     # 10
+    print(f"{p.second}")    # world

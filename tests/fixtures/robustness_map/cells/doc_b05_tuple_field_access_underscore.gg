@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:490 § "Field Access" (verbatim)
+# The doc spells the second field `._1`, with an underscore.
+# Expected: 10 / 20   (the doc's own annotations)
+void main():
+    auto pair = (10, 20)
+    print(f"{pair.0}")     # 10
+    print(f"{pair._1}")    # 20

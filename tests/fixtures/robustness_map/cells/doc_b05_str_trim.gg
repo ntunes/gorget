@@ -1,0 +1,5 @@
+# docs/book/05-collections.md:51 § "Common String Methods" -- trim().
+# Expected: [abc]
+void main():
+    String padded = "   abc   "
+    print(f"[{padded.trim()}]")

@@ -1,0 +1,25 @@
+# docs/book/10-errors.md:261 § "Error-Path Cleanup with `on error`" (the doc's
+# block form, with a runnable resource).
+# Expected: closing / failed
+struct Handle:
+    String name
+
+equip Handle:
+    void close(self):
+        print("closing")
+
+String process(Handle f) throws String:
+    throw "failed"
+
+String open_and_process(String path) throws String:
+    Handle f = Handle(path)
+    on error:
+        f.close()
+    String content = process(f)!
+    return content
+
+void main():
+    Result[String, String] r = open_and_process("data.txt")
+    match r:
+        case Ok(s):    print(s)
+        case Error(e): print(e)

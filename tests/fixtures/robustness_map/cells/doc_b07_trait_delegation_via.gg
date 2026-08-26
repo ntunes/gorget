@@ -1,0 +1,20 @@
+# docs/book/07-traits.md:208 § "Trait Delegation with `via`" (verbatim, call added)
+# Expected: inner label
+trait Showable:
+    String show(self)
+
+struct Inner:
+    String label
+
+equip Inner with Showable:
+    String show(self):
+        return self.label
+
+struct Outer:
+    Inner inner
+
+equip Outer with Showable via inner
+
+void main():
+    Outer o = Outer(Inner("inner label"))
+    print(o.show())

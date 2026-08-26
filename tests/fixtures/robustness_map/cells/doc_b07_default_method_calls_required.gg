@@ -1,0 +1,21 @@
+# docs/book/07-traits.md:111 § "Default Methods" (verbatim, a type equipped and called)
+# Expected: Report: the body
+trait Summary:
+    String title(self)
+    String body(self)
+    String full(self):
+        return f"{self.title()}: {self.body()}"
+
+struct Article:
+    String heading
+    String text
+
+equip Article with Summary:
+    String title(self):
+        return self.heading
+    String body(self):
+        return self.text
+
+void main():
+    Article a = Article("Report", "the body")
+    print(a.full())

@@ -1,0 +1,17 @@
+# docs/language-design.md:1238 § "5.3 Match as Expression" (verbatim shape)
+# Expected: red / rgb(1, 2, 3)
+enum Color:
+    Red
+    Green
+    Custom(uint8, uint8, uint8)
+
+String label_of(Color color):
+    String label = match color:
+        case Red: "red"
+        case Green: "green"
+        case Custom(r, g, b): f"rgb({r}, {g}, {b})"
+    return label
+
+void main():
+    print(label_of(Color.Red()))
+    print(label_of(Color.Custom(1, 2, 3)))

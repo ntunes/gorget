@@ -1,0 +1,9 @@
+# docs/book/05-collections.md:294 § "Creation" (verbatim, prints added)
+# Expected: 2 / 10
+void main():
+    auto d = {"x": 10, "y": 20}              # literal - Dict[String, int]
+    Dict[String, int] empty = Dict[String, int]()   # explicit type
+    int n = d.len()
+    int x = d["x"]
+    print(f"{n}")
+    print(f"{x}")

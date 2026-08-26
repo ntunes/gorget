@@ -1,0 +1,11 @@
+# docs/book/12-borrowing.md:167 § "Structs Own Their Fields" (verbatim)
+# Expected: hello   (the doc's own annotation)
+struct Holder:
+    String name
+
+Holder make_holder(String s):
+    return Holder(s)       # field-store boundary - `s` is cloned into the field
+
+void main():
+    Holder h = make_holder("hello")
+    print(h.name)          # valid - h owns its own copy of the string

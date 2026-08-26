@@ -1,0 +1,13 @@
+# docs/book/12-borrowing.md:94 § "Borrow Conflicts" -- the second listed error.
+# The doc says: "These are compile errors". Expected: REJECTED.
+# The body prints so that ACCEPTANCE is visible as output rather than silence.
+struct S:
+    int v
+
+void f(S a, S &b):
+    b.v += 1
+    print(f"ran: {a.v}")
+
+void main():
+    S x = S(0)
+    f(x, &x)          # immutable + mutable borrow of same value

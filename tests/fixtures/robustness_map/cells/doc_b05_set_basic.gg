@@ -1,0 +1,13 @@
+# docs/book/05-collections.md:347 § "Sets" (verbatim)
+# Expected: 2 / found   (the doc's own annotation)
+from std.collections import Set
+
+void main():
+    Set[int] s = Set[int]()
+    s.add(1)
+    s.add(2)
+    s.add(2)           # no effect - already present
+    print(f"{s.len()}")  # 2
+
+    if 1 in s:
+        print("found")

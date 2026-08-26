@@ -1,0 +1,7 @@
+# docs/book/04-functions.md:139 § "Closures" (verbatim)
+# Expected: 15 / 30   (the doc's own annotations)
+void main():
+    int x = 10
+    auto add_x = (int y): x + y
+    print(f"{add_x(5)}")     # 15
+    print(f"{add_x(20)}")    # 30

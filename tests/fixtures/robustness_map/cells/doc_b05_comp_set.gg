@@ -1,0 +1,6 @@
+# docs/book/05-collections.md:541 § "Set Comprehension" (verbatim, len printed)
+# {0, 2, 4, 6, 8} -- five values.
+# Expected: 5
+void main():
+    Set[int] even_set = {x for x in 0..10 if x % 2 == 0}
+    print(f"{even_set.len()}")

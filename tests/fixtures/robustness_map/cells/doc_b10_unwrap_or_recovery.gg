@@ -1,0 +1,11 @@
+# docs/book/10-errors.md:145 § "Quick Recovery" (verbatim main)
+# Expected: listening on 8080
+int parse_port(String input) throws String:
+    if input.is_empty():
+        throw "empty input"
+    return 1
+
+void main():
+    Result[int, String] port_result = parse_port("")
+    int port = port_result.unwrap_or(8080)
+    print(f"listening on {port}")

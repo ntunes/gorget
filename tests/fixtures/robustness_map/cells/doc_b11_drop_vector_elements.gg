@@ -1,0 +1,15 @@
+# docs/book/11-ownership.md:24 § "The Ownership Rules" (verbatim)
+# The doc's comment: v drops element 1, then element 2.
+# Expected: drop 1 / drop 2
+struct Holder:
+    int id
+    String name
+
+equip Holder with Drop:
+    void drop(!self):
+        print(f"drop {self.id}")
+
+void main():
+    Vector[Holder] v = Vector[Holder]()
+    v.push(Holder(1, "aa"))
+    v.push(Holder(2, "bb"))

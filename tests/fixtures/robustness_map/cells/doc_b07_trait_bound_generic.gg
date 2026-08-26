@@ -1,0 +1,19 @@
+# docs/book/07-traits.md:179 § "Trait Bounds" (verbatim, a type equipped and called)
+# Expected: hi
+trait Printable:
+    String show(self)
+
+struct Tag:
+    String label
+
+equip Tag with Printable:
+    String show(self):
+        return self.label
+
+T echo[Printable T](T x):
+    return x
+
+void main():
+    Tag t = Tag("hi")
+    Tag back = echo[Tag](t)
+    print(back.show())

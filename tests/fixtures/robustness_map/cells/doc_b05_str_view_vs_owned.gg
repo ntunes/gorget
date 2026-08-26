@@ -1,0 +1,7 @@
+# docs/book/05-collections.md:17 § "String" (verbatim, prints added)
+# Expected: hello / ab
+void main():
+    String greeting = "hello"     # literal - view (no allocation)
+    String combined = "a" + "b"   # concatenation - owned (heap-allocated)
+    print(greeting)
+    print(combined)

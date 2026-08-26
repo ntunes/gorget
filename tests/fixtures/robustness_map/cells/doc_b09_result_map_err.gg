@@ -1,0 +1,7 @@
+# docs/book/09-option-result.md:289 § "Transforming Results" -- map_err.
+# "fail".len() == 4.
+# Expected: 4   (the doc's own annotation)
+void main():
+    Result[int, String] err = Error("fail")
+    Result[int, int] coded = err.map_err((String e): e.len())   # Error(4)
+    print(f"{coded.unwrap_error()}")

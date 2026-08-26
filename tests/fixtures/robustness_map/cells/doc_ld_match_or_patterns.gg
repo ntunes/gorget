@@ -1,0 +1,15 @@
+# docs/language-design.md:1213 § "5.2 Pattern Matching" -- Or-patterns (verbatim)
+# Expected: success / client error / other
+void classify(int status_code):
+    match status_code:
+        case 200 | 201 | 204:
+            print("success")
+        case 400 | 422:
+            print("client error")
+        else:
+            print("other")
+
+void main():
+    classify(201)
+    classify(422)
+    classify(500)

@@ -1,0 +1,13 @@
+# docs/book/12-borrowing.md:49 § "Immutable Borrows" (verbatim)
+# The doc's comment: "two immutable borrows of msg - allowed".
+# Expected: same
+struct Message:
+    String text
+
+void compare(Message a, Message b):
+    if a.text == b.text:
+        print("same")
+
+void main():
+    Message msg = Message("hello")
+    compare(msg, msg)    # two immutable borrows of msg - allowed

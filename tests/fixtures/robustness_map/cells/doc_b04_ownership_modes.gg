@@ -1,0 +1,24 @@
+# docs/book/04-functions.md:74 § "Ownership Modes" + :87 (call-site block), verbatim
+# Expected: hi / 5 / archived: hi
+struct Message:
+    String subject
+    int priority
+
+void archive(Message m):
+    print(f"archived: {m.subject}")
+
+void read(Message msg):         # immutable borrow (default)
+    print(msg.subject)
+
+void modify(Message &msg):      # mutable borrow
+    msg.priority = 5
+
+void consume(Message !msg):     # move - caller gives up ownership
+    archive(msg)
+
+void main():
+    Message msg = Message("hi", 1)
+    read(msg)           # borrow
+    modify(&msg)        # mutable borrow
+    print(f"{msg.priority}")
+    consume(^msg)       # move - msg is invalid after this

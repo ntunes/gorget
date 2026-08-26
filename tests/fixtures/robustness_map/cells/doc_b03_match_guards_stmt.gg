@@ -1,0 +1,18 @@
+# docs/book/03-control-flow.md:274 § "Guards" (verbatim, wrapped)
+# Expected: large / positive / zero / negative
+void show(int value):
+    match value:
+        case x if x > 100:
+            print("large")
+        case x if x > 0:
+            print("positive")
+        case 0:
+            print("zero")
+        else:
+            print("negative")
+
+void main():
+    show(500)
+    show(50)
+    show(0)
+    show(-5)

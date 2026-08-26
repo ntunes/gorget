@@ -1,0 +1,10 @@
+# docs/language-design.md:2101 § "14. Complete Example Program" -- the control for
+# doc_ld_doc_comment_inside_equip: the same `#/` doc comment on a top-level
+# function rather than inside an equip block.
+# Expected: 1
+#/ Returns one.
+int one():
+    return 1
+
+void main():
+    print(f"{one()}")

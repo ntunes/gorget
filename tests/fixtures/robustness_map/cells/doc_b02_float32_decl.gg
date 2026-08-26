@@ -1,0 +1,5 @@
+# docs/book/02-types.md:66 § "Numbers" -- the float32 sibling.
+# Expected: 1.500000
+void main():
+    float32 small = 1.5
+    print(f"{small}")

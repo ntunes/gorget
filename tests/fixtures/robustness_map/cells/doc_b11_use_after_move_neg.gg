@@ -1,0 +1,7 @@
+# docs/book/11-ownership.md:68 § "Copy vs Resource Types" -- the doc's
+# commented-out line, uncommented. It says: COMPILE ERROR: use after move.
+# Expected: REJECTED.
+void main():
+    String s3 = "world"
+    String s4 = ^s3    # explicit move - s3 now invalid
+    print(s3)          # COMPILE ERROR: use after move

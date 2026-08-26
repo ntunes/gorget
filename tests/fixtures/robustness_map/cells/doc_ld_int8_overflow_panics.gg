@@ -1,0 +1,8 @@
+# docs/language-design.md:214 § "Integer Overflow" (verbatim)
+# The doc's own comment: "panic: integer overflow (int8)".
+# Expected: 'before', then a loud failure
+void main():
+    print("before")
+    int8 x = 127
+    x += 1                    # panic: integer overflow (int8)
+    print(f"{x}")

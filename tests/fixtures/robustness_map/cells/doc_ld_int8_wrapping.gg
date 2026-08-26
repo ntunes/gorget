@@ -1,0 +1,9 @@
+# docs/language-design.md:221 § "Integer Overflow" (verbatim, prints added)
+# 127 +% 1 wraps to -128; 127 *% 2 = 254 mod 256 = -2.
+# Expected: -128 / -2   (the first is the doc's own annotation)
+void main():
+    int8 x = 127
+    int8 z = x +% 1                # z == -128 (wrapping add)
+    int8 w = x *% 2                # wrapping multiply
+    print(f"{z}")
+    print(f"{w}")

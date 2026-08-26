@@ -1,0 +1,12 @@
+# docs/language-reference.md:7000 § "Example - Type-Specific Dispatch" (verbatim)
+# Expected: integer / string   (the doc's own annotations)
+String type_name[T]():
+    meta match typename(T):
+        case "int":   return "integer"
+        case "float": return "floating-point"
+        case "String": return "string"
+        else:         return "other"
+
+void main():
+    print(type_name[int]())    # prints: integer
+    print(type_name[String]())    # prints: string

@@ -1,0 +1,10 @@
+# docs/book/09-option-result.md:301 § "Transforming Results" -- or.
+# Expected: 10 / 77   (the doc's own annotations)
+void main():
+    Result[int, String] ok = Ok(10)
+    Result[int, String] err = Error("fail")
+    Result[int, String] alt = Ok(77)
+    Result[int, String] from_ok = ok.or(alt)     # Ok(10) - already succeeded
+    Result[int, String] from_err = err.or(alt)   # Ok(77) - falls back to alt
+    print(f"{from_ok.unwrap()}")
+    print(f"{from_err.unwrap()}")

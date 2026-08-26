@@ -1,0 +1,10 @@
+# docs/book/02-types.md:208 § "Wrapping Arithmetic" (the three listed operators, at the boundary)
+# INT_MIN is derived from INT_MAX rather than written literally, because the
+# literal does not lex -- that is its own cell, doc_b02_int_min_literal.
+# Expected: -9223372036854775808 / 9223372036854775807 / -2
+void main():
+    int hi = 9223372036854775807
+    int lo = hi +% 1
+    print(f"{hi +% 1}")        # wrapping add
+    print(f"{lo -% 1}")        # wrapping subtract
+    print(f"{hi *% 2}")        # wrapping multiply

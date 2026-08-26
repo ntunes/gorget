@@ -1,0 +1,8 @@
+# docs/book/05-collections.md:51 § "Common String Methods" -- the doc says byte_len
+# "may differ for Unicode". "aéh" is 3 codepoints; é is 2 bytes in UTF-8... but
+# this cell uses a 3-char string whose bytes are 1+2+4 = 7 (a, é, and an emoji).
+# Expected: 3 / 7
+void main():
+    String s = "aé😀"
+    print(f"{s.len()}")
+    print(f"{s.byte_len()}")

@@ -1,0 +1,13 @@
+# docs/language-reference.md:6505 § "19.19 Compile-Time Loop Unrolling" (verbatim shape)
+# Expected: first / second / other
+void emit_labels[Numeric T]():
+    meta for i in 0..3:
+        meta if i == 0:
+            print("first")
+        elif i == 1:
+            print("second")
+        else:
+            print("other")
+
+void main():
+    emit_labels[int]()

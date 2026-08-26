@@ -1,0 +1,6 @@
+# docs/book/05-collections.md:145 § "Swap and Fill" -- swap(i, j).
+# Expected: 50,20,30,40,10   (the doc's own annotation)
+void main():
+    Vector[int] v = [10, 20, 30, 40, 50]
+    v.swap(0, 4)                # [50, 20, 30, 40, 10]
+    print(f"{v[0]},{v[1]},{v[2]},{v[3]},{v[4]}")

@@ -1,0 +1,10 @@
+# docs/book/05-collections.md:442 § "Slices" -- the Vector half.
+# Expected: 2,3,4 / 5 / 0   (the doc's own annotations: mid, clamped, empty)
+void main():
+    Vector[int] v = [1, 2, 3, 4, 5]
+    Vector[int] mid = v[1:4]           # [2, 3, 4] - independent OWNED copy
+    Vector[int] safe = v[0:1000]       # [1..5] - end clamps to v.len(); no fault
+    Vector[int] empty = v[3:1]         # [] - start > end yields empty
+    print(f"{mid[0]},{mid[1]},{mid[2]}")
+    print(f"{safe.len()}")
+    print(f"{empty.len()}")

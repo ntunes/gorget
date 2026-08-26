@@ -1,0 +1,32 @@
+# docs/book/08-generics.md:83 + :100 § "Methods on Generic Structs" (verbatim)
+# Expected: 42 / 42 / 10 / world   (the doc's own annotations)
+struct Container[T]:
+    T value
+
+struct Pair[A, B]:
+    A first
+    B second
+
+equip Container[T]:
+    T get(self):
+        return self.value
+
+    Container[T] wrap(self):
+        return Container[T](self.value)
+
+equip Pair[A, B]:
+    A get_first(self):
+        return self.first
+    B get_second(self):
+        return self.second
+
+void main():
+    Container[int] c = Container[int](42)
+    print(f"{c.get()}")              # 42
+
+    Container[int] c2 = c.wrap()
+    print(f"{c2.get()}")             # 42
+
+    Pair[int, String] p = Pair[int, String](10, "world")
+    print(f"{p.get_first()}")        # 10
+    print(f"{p.get_second()}")       # world

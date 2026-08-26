@@ -1,0 +1,8 @@
+# docs/book/12-borrowing.md:248 § "For-Loop Iteration" (verbatim)
+# The doc says this is an ERROR. Expected: REJECTED.
+void main():
+    Vector[int] items = [1, 2, 3]
+    int new_item = 9
+    for item in items:
+        print(f"{item}")
+        items.push(new_item)   # ERROR: cannot mutate during iteration

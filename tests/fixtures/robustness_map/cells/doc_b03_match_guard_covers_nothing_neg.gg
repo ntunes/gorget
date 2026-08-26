@@ -1,0 +1,22 @@
+# docs/book/03-control-flow.md:217 § "Exhaustiveness" (verbatim)
+# The doc says a guarded arm covers nothing, so this is non-exhaustive.
+# Expected: REJECTED.
+enum Direction:
+    North
+    South
+    East
+    West
+
+void go(Direction direction, bool windy):
+    match direction:          # error: non-exhaustive match: missing variants: West
+        case North:
+            print("going north")
+        case South:
+            print("going south")
+        case East:
+            print("going east")
+        case West if windy:   # a guard is a maybe, so this covers nothing
+            print("going west")
+
+void main():
+    go(Direction.North, true)

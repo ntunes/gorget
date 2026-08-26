@@ -1,0 +1,10 @@
+# docs/book/05-collections.md:397 § "HashMap and HashSet" (verbatim)
+# Expected: found
+from std.collections import HashSet
+
+void main():
+    HashSet[int] seen = HashSet[int]()
+    seen.add(10)
+    seen.add(20)
+    if 10 in seen:
+        print("found")

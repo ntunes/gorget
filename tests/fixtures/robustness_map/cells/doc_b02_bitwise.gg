@@ -1,0 +1,12 @@
+# docs/book/02-types.md:180 § "Bitwise" (every listed operator, x=12 y=10 n=2)
+# Expected: 8 / 14 / 6 / -13 / 48 / 3
+void main():
+    int x = 12
+    int y = 10
+    int n = 2
+    print(f"{x & y}")          # bitwise AND
+    print(f"{x | y}")          # bitwise OR
+    print(f"{x ^ y}")          # bitwise XOR
+    print(f"{~x}")             # bitwise NOT
+    print(f"{x << n}")         # left shift
+    print(f"{x >> n}")         # right shift

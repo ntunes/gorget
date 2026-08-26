@@ -1,0 +1,22 @@
+# docs/book/03-control-flow.md:152 § "Matching Enum Variants" (verbatim; the doc's arms are BARE)
+# Expected: going north / going west
+enum Direction:
+    North
+    South
+    East
+    West
+
+void go(Direction direction):
+    match direction:
+        case North:
+            print("going north")
+        case South:
+            print("going south")
+        case East:
+            print("going east")
+        case West:
+            print("going west")
+
+void main():
+    go(Direction.North)
+    go(Direction.West)

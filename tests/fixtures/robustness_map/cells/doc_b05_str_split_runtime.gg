@@ -1,0 +1,11 @@
+# docs/book/05-collections.md:51 § "Common String Methods" -- split on a
+# RUNTIME-built string, so the element size is not a compile-time literal.
+# Expected: a / b / c
+String mk(String x, String y):
+    return x + y
+
+void main():
+    String csv = mk("a,", mk("b,", "c"))
+    Vector[String] parts = csv.split(",")
+    for p in parts:
+        print(p)

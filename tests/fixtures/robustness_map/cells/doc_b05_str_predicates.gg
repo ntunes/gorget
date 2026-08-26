@@ -1,0 +1,14 @@
+# docs/book/05-collections.md:51 § "Common String Methods" -- the predicates.
+# Each result is bound to a bool local first: never evaluate the thing under
+# test inside an f-string.
+# Expected: true / true / true / false   (the doc's own annotations)
+void main():
+    String s = "Hello, World!"
+    bool a = s.starts_with("Hello")        # true
+    bool b = s.ends_with("World!")         # true
+    bool c = s.contains("World")           # true
+    bool d = s.is_empty()                  # false
+    print(f"{a}")
+    print(f"{b}")
+    print(f"{c}")
+    print(f"{d}")

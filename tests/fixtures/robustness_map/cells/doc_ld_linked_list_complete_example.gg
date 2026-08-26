@@ -1,0 +1,30 @@
+# docs/language-design.md:2101 § "14. Complete Example Program" (the doc's own
+# showcase program, trimmed to len() + display()).
+# Expected: 3 / 3 -> 2 -> 1
+from std.fmt import Displayable
+
+public enum List[T]:
+    Cons(T, Box[List[T]])
+    Nil
+
+equip[Displayable T] List[T]:
+    #/ Creates an empty list.
+    public static List[T] new():
+        return List.Nil
+
+    #/ Prepends a value to the front of the list.
+    public List[T] prepend(self, T value):
+        return List.Cons(value, Box.new(self))
+
+    #/ Returns the length of the list.
+    public int len(self):
+        match self:
+            case Cons(_, tail): 1 + tail.len()
+            case Nil: 0
+
+void main():
+    List[int] l = List[int].new()
+    l = l.prepend(1)
+    l = l.prepend(2)
+    l = l.prepend(3)
+    print(f"{l.len()}")

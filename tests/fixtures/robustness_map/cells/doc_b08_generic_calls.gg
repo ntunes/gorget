@@ -1,0 +1,17 @@
+# docs/book/08-generics.md:13 + :23 + :40 § "Generic Functions" / "Calling Generic Functions"
+# Expected: 42 / 3.140000 / hello / 10   (the doc's own annotations)
+T identity[T](T x): x
+
+T first[T](T a, T b):
+    T result = a
+    return result
+
+void main():
+    int a = identity[int](42)
+    float b = identity[float](3.14)
+    String c = identity[String]("hello")
+    int d = first[int](10, 20)
+    print(f"{a}")    # 42
+    print(f"{b}")    # 3.14
+    print(f"{c}")    # hello
+    print(f"{d}")    # 10

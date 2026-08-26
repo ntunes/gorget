@@ -1,0 +1,11 @@
+# docs/language-design.md:928 § "4.2.1 Option Sugar" (verbatim)
+# The doc writes `None` with NO parens here; docs/book/09 writes `None()`.
+# Expected: true / Alice
+void main():
+    Option[String] name = Some("Alice")
+    Option[int] age = None
+
+    bool absent = age.is_none()
+    print(f"{absent}")
+    if name is Some(n):
+        print(n)

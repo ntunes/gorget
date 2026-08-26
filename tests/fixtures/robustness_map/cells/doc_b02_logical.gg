@@ -1,0 +1,8 @@
+# docs/book/02-types.md:169 § "Logical" (verbatim operators, a=true b=false)
+# Expected: false / true / false
+void main():
+    bool a = true
+    bool b = false
+    print(f"{a and b}")        # logical AND (short-circuiting)
+    print(f"{a or b}")         # logical OR (short-circuiting)
+    print(f"{not a}")          # logical NOT

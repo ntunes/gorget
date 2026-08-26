@@ -1,0 +1,10 @@
+# docs/language-reference.md:6779 § "19.23 Numeric Type Inspection" -- min_val/max_val (verbatim)
+# Expected: [-128, 127] / [-2147483648, 2147483647]   (the doc's own annotations)
+void show_range[Signed T]():
+    meta const lo = min_val(T)
+    meta const hi = max_val(T)
+    print(f"[{lo}, {hi}]")
+
+void main():
+    show_range[int8]()   # -> [-128, 127]
+    show_range[int32]()  # -> [-2147483648, 2147483647]

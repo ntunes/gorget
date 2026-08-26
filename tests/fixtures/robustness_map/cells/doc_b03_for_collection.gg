@@ -1,0 +1,6 @@
+# docs/book/03-control-flow.md:46 § "Collection Iteration" (verbatim)
+# Expected: 10 / 20 / 30
+void main():
+    auto items = [10, 20, 30]
+    for x in items:
+        print(f"{x}")

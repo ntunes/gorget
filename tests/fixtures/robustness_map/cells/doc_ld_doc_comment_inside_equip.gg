@@ -1,0 +1,17 @@
+# docs/language-design.md:2101 § "14. Complete Example Program" writes `#/` doc
+# comments on the methods INSIDE its equip block. This cell isolates exactly that.
+# Expected: 1
+struct Box2:
+    int v
+
+equip Box2:
+    #/ Returns the stored value.
+    int get(self):
+        return self.value_or_one()
+
+    int value_or_one(self):
+        return 1
+
+void main():
+    Box2 b = Box2(1)
+    print(f"{b.get()}")

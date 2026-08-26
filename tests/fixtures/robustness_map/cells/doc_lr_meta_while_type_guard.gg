@@ -1,0 +1,12 @@
+# docs/language-reference.md:7048 § "Example - Type Guard" (verbatim)
+# The doc: only_if_int[int]() prints "matched-int" then "done"; only_if_int[float]()
+# prints just "done".
+# Expected: matched-int / done / done
+void only_if_int[T]():
+    meta while typeof(T) == "int":
+        print("matched-int")
+    print("done")
+
+void main():
+    only_if_int[int]()    # prints: matched-int\ndone
+    only_if_int[float]()  # prints: done
