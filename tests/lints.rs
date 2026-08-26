@@ -15063,7 +15063,20 @@ fn fmt_no_new_move_bang_in_migrated_corpora() {
         "compiler/data",
     ];
 
-    let count = count_bang_move_in_code(roots);
+    // ⚠ EXCLUDE the documentation-mirror cells. `robustness_map/cells/doc_*.gg`
+    // reproduce fenced examples from docs/book and docs/language-design VERBATIM,
+    // citing file and line in each header; their whole purpose is to answer "does
+    // what the documentation says actually work". Migrating their sigils would
+    // make them stop testing the documented spelling -- the fixture would be
+    // green while the doc it mirrors stayed wrong.
+    //
+    // Ten such cells carry `!name`, tracing to docs/book/04-functions.md:74,
+    // 11-ownership.md (five sites) and 12-borrowing.md (two). That is the real
+    // finding and it is FILED: the Book still teaches `!name` while `gg fmt`
+    // rewrites it to `^name`. When the docs migrate, these cells migrate with
+    // them and this exclusion can go.
+    let count = count_bang_move_in_code(roots)
+        - count_bang_move_in_code(&["tests/fixtures/robustness_map/cells"]);
     assert!(
         count <= CEILING,
         "D27 Round A shrink-only ratchet: {count} `!name`-move sites \
