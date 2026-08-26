@@ -1,0 +1,360 @@
+topic	cell	bucket	expected	actual	note
+00 harness controls	_POSITIVE_CONTROL_broken	CONTROL	this-is-not-what-it-prints	actual	Deliberately-wrong expectation; went RED on every batch.
+00 harness controls	_smoke_arith	WORKS	7 / 1 / 12	(matches)	
+00 harness controls	_smoke_hello	WORKS	Hello, World!	(matches)	
+00 harness controls	_smoke_mkstring	WORKS	alpha	(matches)	
+00 harness controls	_smoke_vecpush	WRONG	alpha	raw pointer	Duplicate; harness smoke cell.
+11 closures & higher-order	clos_basic	WORKS	15 / 30	(matches)	
+11 closures & higher-order	clos_counter_capture	WORKS	3	(matches)	
+11 closures & higher-order	clos_inferred_params	WORKS	7	(matches)	
+11 closures & higher-order	clos_multiline	WORKS	11	(matches)	
+11 closures & higher-order	clos_no_args	WORKS	hello	(matches)	
+11 closures & higher-order	clos_returned_from_call	WORKS	4 / 9	(matches)	
+12 comprehensions	comp_dict	WORKS	5 / 6	(matches)	
+12 comprehensions	comp_list_basic	WORKS	5 / 0 / 16	(matches)	
+12 comprehensions	comp_list_filter	WORKS	5 / 0 / 8	(matches)	
+12 comprehensions	comp_over_vector	WORKS	3 / 20 / 60	(matches)	
+12 comprehensions	comp_set	WORKS	5	(matches)	
+12 comprehensions	comp_strings	WORKS	3 / n0 / n2	(matches)	
+03 if/elif/else	cond_bool_chain	WORKS	in-range / out	(matches)	
+03 if/elif/else	cond_if_elif_else	WORKS	positive / negative / zero	(matches)	
+03 if/elif/else	cond_if_expression	WORKS	7 / item / items	(matches)	
+03 if/elif/else	cond_nested	WORKS	teen	(matches)	
+03 if/elif/else	cond_pass	WORKS	done	(matches)	
+03 if/elif/else	cond_string_compare	WORKS	matched	(matches)	
+07 Dict/Set basics	dict_compound_add_get_unwrap	WRONG	4	187651056370960 (garbage)	NEW. Same defect through a Dict receiver.
+07 Dict/Set basics	dict_contains_remove	WORKS	true / false / 30 / 0	(matches)	
+07 Dict/Set basics	dict_count_words	WRONG	a=2 / b=1	E_DefaultOpRhsTypeMismatch (build)	The canonical word-frequency exercise, killed by the filed root above.
+07 Dict/Set basics	dict_count_words_unwrap_or	WORKS	a=2 / b=1	(matches)	
+07 Dict/Set basics	dict_get_bound_first	WORKS	30 / missing	(matches)	
+07 Dict/Set basics	dict_get_or_default	WRONG	30 / 0	E_DefaultOpRhsTypeMismatch (build)	BOOK Ch5 verbatim: `int age = ages.get("Alice") ?? 0`. ALREADY FILED as HIGH (TODO.md ~248, from docs/language-design.md:2609).
+07 Dict/Set basics	dict_get_unwrap_or	WORKS	30 / 0	(matches)	
+07 Dict/Set basics	dict_hof_any_all	WORKS	true / false	(matches)	
+07 Dict/Set basics	dict_int_keys	WORKS	2 / 100	(matches)	
+07 Dict/Set basics	dict_iterate	WORKS	Alice: 30 / Bob: 25	(matches)	
+07 Dict/Set basics	dict_keys_values	WORKS	Alice / Bob / 30 / 25	(matches)	
+07 Dict/Set basics	dict_literal	WORKS	10 / 20 / 2	(matches)	
+07 Dict/Set basics	dict_of_vectors	WORKS	2 / 3 / 5	(matches)	
+07 Dict/Set basics	dict_put_get	WRONG	30 / missing	E_NonPrintableInterpolation on `int &` (build)	NEW COSTUME of the filed borrow-marker axis: match on `ages.get(k)` INLINE as the scrutinee binds `int &`.
+07 Dict/Set basics	dict_string_values	WORKS	alpha / beta	(matches)	
+07 Dict/Set basics	dict_subscript_write	WORKS	3 / 30 / 99	(matches)	
+09 enums & match	enum_basic_match	WORKS	going north / going south	(matches)	
+09 enums & match	enum_dot_shorthand	WORKS	east	(matches)	
+09 enums & match	enum_in_struct	WORKS	alpha -> mail	(matches)	
+09 enums & match	enum_payload_match	WORKS	circle 5 / rect 3x4	(matches)	
+09 enums & match	enum_payload_string	WORKS	email alpha	(matches)	
+14 classic exercises	ex_anagram	WORKS	true / false	(matches)	
+14 classic exercises	ex_average	WORKS	3.50	(matches)	
+14 classic exercises	ex_caesar_cipher	WORKS	def	(matches)	
+14 classic exercises	ex_char_frequency	WORKS	a=2 / b=1 / c=1	(matches)	
+14 classic exercises	ex_count_vowels	WORKS	3	(matches)	
+14 classic exercises	ex_fib_iterative	WORKS	0 / 1 / 1 / 2 / 3 / 5 / 8 / 13	(matches)	
+14 classic exercises	ex_find_max	WORKS	9	(matches)	
+14 classic exercises	ex_fizzbuzz	WORKS	1 / 2 / Fizz / 4 / Buzz / Fizz / 7 / 8 / Fizz / Buzz / 11 / Fizz / 13 / 14 / FizzBuzz	(matches)	
+14 classic exercises	ex_flatten_nested	WRONG	5 / 1,2,3,4,5	E_TypeMismatch expected `int[2]`, found `int[1]`	The flatten exercise. Same ragged-literal root.
+14 classic exercises	ex_grade_calculator	WORKS	A / B / F	(matches)	
+14 classic exercises	ex_is_prime	WORKS	2 / 3 / 5 / 7 / 11 / 13 / 17 / 19	(matches)	
+14 classic exercises	ex_leap_year	WORKS	true / false / true / false	(matches)	
+14 classic exercises	ex_longest_word	WORKS	quick	(matches)	
+14 classic exercises	ex_merge_sorted	WORKS	1,2,3,4,5,6	(matches)	
+14 classic exercises	ex_multiplication_table	WORKS	1  2  3 /   2  4  6 /   3  6  9	(matches)	
+14 classic exercises	ex_palindrome	WORKS	true / false	(matches)	
+14 classic exercises	ex_remove_duplicates	WORKS	3 / 1,2,3	(matches)	
+14 classic exercises	ex_reverse_string	WORKS	olleh	(matches)	
+14 classic exercises	ex_run_length_encode	WORKS	a3b2c1	(matches)	
+14 classic exercises	ex_second_largest	WORKS	7	(matches)	
+14 classic exercises	ex_shopping_cart	REJECTED-AND-THAT-IS-RIGHT	apple x2 = 300 / ... / total 550	parse error: expected pattern, found 'it' (+3 cascading)	DIAGNOSTIC POOR: `it` is the implicit-closure keyword, so rejecting it as a loop variable is defensible, but 4 cascading errors and none says 'it is a keyword'.
+14 classic exercises	ex_shopping_cart_total	WORKS	apple x2 = 300 / bread x1 = 250 / total 550	(matches)	
+14 classic exercises	ex_star_pyramid	WORKS	* / ** / ***	(matches)	
+14 classic exercises	ex_sum_list	WORKS	15	(matches)	
+14 classic exercises	ex_temperature	WORKS	32.00 / 212.00 / 98.60	(matches)	
+14 classic exercises	ex_title_case	WORKS	Hello World	(matches)	
+14 classic exercises	ex_transpose_matrix	WORKS	1 4  / 2 5  / 3 6	(matches)	
+14 classic exercises	ex_two_sum	WORKS	1 2	(matches)	
+14 classic exercises	ex_word_lengths	WORKS	the=3 / quick=5 / fox=3	(matches)	
+05 functions	func_as_argument	WORKS	10	(matches)	
+05 functions	func_basic	WORKS	7	(matches)	
+05 functions	func_bool_return	WORKS	true / false	(matches)	
+05 functions	func_calls_func	WORKS	13	(matches)	
+05 functions	func_closure_reassign	WRONG	7 / 12	7 / 7	Minimal form. Same on LLVM.
+05 functions	func_default_arg	WORKS	7 / 13	(matches)	
+05 functions	func_early_return	WORKS	negative / 0 / 4	(matches)	
+05 functions	func_expression_body	WORKS	10 / true	(matches)	
+05 functions	func_gcd	WORKS	6	(matches)	
+05 functions	func_multiple_returns	WORKS	key: 42	(matches)	
+05 functions	func_mutating_borrow	WORKS	6	(matches)	
+05 functions	func_recursion_factorial	WORKS	3628800	(matches)	
+05 functions	func_recursion_fib	WORKS	55	(matches)	
+05 functions	func_returns_vector	WORKS	3 / 0 / 4	(matches)	
+05 functions	func_returns_vector_of_strings	WORKS	2 / n0 / n1	(matches)	
+05 functions	func_shadow_param	WORKS	1 / 2 / 1	(matches)	
+05 functions	func_string_param_return	WORKS	ALPHA	(matches)	
+05 functions	func_type_value	WRONG	7 / 12	7 / 7	Book Ch4 example VERBATIM. Reassigning a function-typed variable is a silent no-op. Same on LLVM.
+05 functions	func_vector_param_mutate	WORKS	4 / 99	(matches)	
+05 functions	func_void	WORKS	Hello, Ada!	(matches)	
+05 functions	func_void_no_args	WORKS	tick / tick	(matches)	
+11 closures & higher-order	hof_any_all	WORKS	true / true / false	(matches)	
+11 closures & higher-order	hof_chain_map_filter	WORKS	2 / 4 / 8	(matches)	
+11 closures & higher-order	hof_filter	WORKS	2 / 2 / 4	(matches)	
+11 closures & higher-order	hof_filter_implicit_it	WORKS	2 / Alice / Charlie	(matches)	
+11 closures & higher-order	hof_fold	WORKS	15	(matches)	
+11 closures & higher-order	hof_implicit_it	WORKS	5 / 3 / 7	(matches)	
+11 closures & higher-order	hof_iter_chain	WORKS	50	(matches)	
+11 closures & higher-order	hof_map	WORKS	5 / 2 / 10	(matches)	
+11 closures & higher-order	hof_map_strings	WORKS	ALPHA / BETA	(matches)	
+11 closures & higher-order	hof_reduce	WORKS	120	(matches)	
+04 loops	loop_accumulate	WORKS	45	(matches)	
+04 loops	loop_break_continue	WORKS	1 / 3 / 5 / 7	(matches)	
+04 loops	loop_countdown	WORKS	3 / 2 / 1 / liftoff	(matches)	
+04 loops	loop_for_else_found	WORKS	found	(matches)	
+04 loops	loop_for_else_not_found	WORKS	not found	(matches)	
+04 loops	loop_for_range_exclusive	WORKS	0 / 1 / 2 / 3 / 4	(matches)	
+04 loops	loop_for_range_inclusive	WORKS	0 / 1 / 2 / 3	(matches)	
+04 loops	loop_for_range_vars	WORKS	2 / 3 / 4	(matches)	
+04 loops	loop_infinite_break	WORKS	0 / 1 / 2	(matches)	
+04 loops	loop_nested	WORKS	1 2  / 2 4	(matches)	
+04 loops	loop_nested_break_inner	WORKS	0,0 / 1,0	(matches)	
+04 loops	loop_over_vector	WORKS	10 / 20 / 30	(matches)	
+04 loops	loop_print_terminator	WORKS	1 2 3	(matches)	
+04 loops	loop_range_paren_endpoint	WRONG	0 / 1 / 2	parse error: expected ',', found '-'	`for j in 0..(n - 1)` does not parse; bare `0..n - 1` does. `(` after `..` is read as a tuple.
+04 loops	loop_range_step_manual	WORKS	0 / 2 / 4 / 6 / 8	(matches)	
+04 loops	loop_tuple_unpack	WORKS	1: one / 2: two	(matches)	
+04 loops	loop_while	WORKS	0 / 1 / 2 / 3 / 4	(matches)	
+04 loops	loop_while_else	WORKS	0 / 1 / 2 / exhausted	(matches)	
+09 enums & match	match_binding_catchall	WORKS	got 7	(matches)	
+09 enums & match	match_expr_guard	WRONG	B	A	NEW. `match` used as an EXPRESSION IGNORES GUARDS: the first arm always wins. The identical guards as a match STATEMENT are correct. Same on LLVM.
+09 enums & match	match_expr_guard_none_match	WRONG	F	A	NEW. Same defect: even when NO guard holds, the first arm wins instead of `else`.
+09 enums & match	match_expression	WORKS	danger	(matches)	
+09 enums & match	match_guard	WORKS	large / positive / zero	(matches)	
+09 enums & match	match_int_literals	WORKS	none / one / many	(matches)	
+09 enums & match	match_string_literals	WORKS	stop / unknown	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_dict_increment_in_place	WORKS	3	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_divide_by_zero	WORKS	'before', then a loud failure	before; trap[T_DivByZero]: division by zero at <file>:7:17; rc 101	Correct: traps with a source location.
+15 conversions, grids, formatting, runtime failures	misc_float_default_print	WORKS	3.140000 / 1.000000	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_format_align	UNSURE	[42   ]	[42]	`<` alignment is NOT in the documented format grammar, so the intended answer is unknown - but it is SILENTLY DROPPED rather than rejected. Same on LLVM.
+15 conversions, grids, formatting, runtime failures	misc_format_width	WORKS	[   42]	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_grid_2d	WORKS	0 0 0  / 0 9 0	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_index_out_of_range	WORKS	'before', then a loud failure	before; trap[T_Bounds]: index out of bounds: index 10, length 3 at <unknown>:0:0; rc 101	Correct behaviour, but the trap carries NO source location where the other two do.
+15 conversions, grids, formatting, runtime failures	misc_int_to_str	WORKS	42 / 3.14	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_iter_no_import	WRONG	5 / 150	E_NoMethodFound `iter`	Minimal form.
+15 conversions, grids, formatting, runtime failures	misc_math_funcs	WORKS	3.00 / 7 / 3	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_min_max_sum	WORKS	1 / 9 / 17	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_negative_index	WORKS	o	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_nested_dict_push	WORKS	3	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_ord_chr	WORKS	97 / a / b	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_parse_int	WORKS	42 / bad	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_string_number_concat	WORKS	count: 3	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_string_ordering	WORKS	true / false	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_string_to_int_method	UNSURE	42	E_NoMethodFound `to_int` on String	Only language-reference:1917 claims String.to_int(); the book teaches std.conv.parse_int, which works. Reference-vs-code conflict = open question.
+15 conversions, grids, formatting, runtime failures	misc_tuple_swap	WORKS	2 1	(matches)	
+15 conversions, grids, formatting, runtime failures	misc_type_builtin	WRONG	int / Vector[int]	parse error: expected expression, found 'type'	`type(x)` is documented in Book Ch5 AND language-reference S15 but does not parse.
+15 conversions, grids, formatting, runtime failures	misc_vector_alias_copy	WORKS	4 / 3	(matches)	
+08 structs & methods	newtype_basic	WORKS	42	(matches)	
+17 non-idiomatic but reasonable	nonidio_bare_return_void	WORKS	small	(matches)	
+17 non-idiomatic but reasonable	nonidio_braces_block	REJECTED-AND-THAT-IS-RIGHT	hi	error: expected type, found '{'	DIAGNOSTIC POOR: never mentions that blocks are indentation-based.
+17 non-idiomatic but reasonable	nonidio_c_logical_ops	REJECTED-AND-THAT-IS-RIGHT	yes	E_TypeMismatch expected bool found int; then E_AmpInOperandPosition	DIAGNOSTIC GOOD but MIS-ORDERED: the excellent E_AmpInOperandPosition text is preceded by a confusing type error. Neither mentions `and`.
+17 non-idiomatic but reasonable	nonidio_c_not_operator	REJECTED-AND-THAT-IS-RIGHT	yes	E_MoveInOperandPosition	DIAGNOSTIC EXCELLENT: explains the sigil, where it IS valid, and says 'read the place directly'. Does not name `not` as the fix.
+17 non-idiomatic but reasonable	nonidio_deep_nesting	WORKS	ok	(matches)	
+17 non-idiomatic but reasonable	nonidio_elif_spelled_else_if	WORKS	small	(matches)	
+17 non-idiomatic but reasonable	nonidio_found_flag	WORKS	found	(matches)	
+17 non-idiomatic but reasonable	nonidio_global_counter	WORKS	1 / 2	(matches)	
+17 non-idiomatic but reasonable	nonidio_long_chain	WORKS	HELLO-WORLD	(matches)	
+17 non-idiomatic but reasonable	nonidio_manual_index_loop	WORKS	10 / 20 / 30	(matches)	
+17 non-idiomatic but reasonable	nonidio_over_explicit_temps	WORKS	30	(matches)	
+17 non-idiomatic but reasonable	nonidio_python_append	REJECTED-AND-THAT-IS-RIGHT	3	E_NoMethodFound: no method `append` on Vector[int]	DIAGNOSTIC INCOMPLETE: no 'did you mean `push`' suggestion.
+17 non-idiomatic but reasonable	nonidio_python_fstring_format	REJECTED-AND-THAT-IS-RIGHT	x = 5	E_TypeMismatch; then E_UnsupportedOperator: `%` not defined for String	DIAGNOSTIC GOOD but does not point at f-strings; preceded by a confusing type error.
+17 non-idiomatic but reasonable	nonidio_python_len_builtin	WORKS	3 / 5	(matches)	
+17 non-idiomatic but reasonable	nonidio_python_range_call	REJECTED-AND-THAT-IS-RIGHT	0..4	E_UndefinedName: undefined name `range`	DIAGNOSTIC INCOMPLETE: correct rejection, but no hint pointing at `0..5`. This is the single most common Python carry-over; the compiler does emit did-you-mean elsewhere.
+17 non-idiomatic but reasonable	nonidio_rebuild_not_mutate	WORKS	3 / alpha / beta / gamma	(matches)	
+17 non-idiomatic but reasonable	nonidio_redundant_parens	WORKS	yes	(matches)	
+17 non-idiomatic but reasonable	nonidio_return_from_nested_loop	WORKS	1,2	(matches)	
+17 non-idiomatic but reasonable	nonidio_reuse_variable	WORKS	10 / 7 / 3	(matches)	
+17 non-idiomatic but reasonable	nonidio_string_index_loop	WORKS	h e l l o	(matches)	
+17 non-idiomatic but reasonable	nonidio_string_multiply	REJECTED-AND-THAT-IS-RIGHT	ababab	E_TypeMismatch; then E_UnsupportedOperator: `*` not defined for String - String supports +/+= only	DIAGNOSTIC GOOD (names what String DOES support) but does not point at `.repeat(n)`, and is preceded by a confusing type error.
+17 non-idiomatic but reasonable	nonidio_trailing_semicolons	REJECTED-AND-THAT-IS-RIGHT	5	error: unexpected character: ';'	DIAGNOSTIC TERSE but adequate; one error per semicolon, no 'statements need no terminator' hint.
+17 non-idiomatic but reasonable	nonidio_while_true_break	WORKS	0 / 1 / 2	(matches)	
+10 Option/Result & errors	opt_default_operator	WORKS	42 / 7	(matches)	
+10 Option/Result & errors	opt_is_keyword	WORKS	found 42 / absent	(matches)	
+10 Option/Result & errors	opt_map_and_then	WORKS	84 / 43 / true / true	(matches)	
+10 Option/Result & errors	opt_methods	WORKS	42 / 42 / 0 / true / true	(matches)	
+10 Option/Result & errors	opt_returning_function	WORKS	alpha / no theme	(matches)	
+10 Option/Result & errors	opt_some_none_match	WORKS	got 42 / nothing	(matches)	
+10 Option/Result & errors	opt_string_payload	WORKS	alpha / fallback	(matches)	
+10 Option/Result & errors	opt_vector_find	WRONG	30 / none	E_NonPrintableInterpolation on `<error>` (build)	NEW COSTUME: match on `v.iter().find(..)` inline binds `<error>`.
+16 spelling-equivalence pairs	pair_autotyped_a_auto	WORKS	12 / 3	(matches)	pair:auto_vs_typed.
+16 spelling-equivalence pairs	pair_autotyped_b_typed	WORKS	12 / 3	(matches)	pair:auto_vs_typed.
+16 spelling-equivalence pairs	pair_buildvec_a_ctor	WORKS	3 / n0 / n2	(matches)	pair:build_strvec.
+16 spelling-equivalence pairs	pair_buildvec_b_typed_empty_literal	WORKS	3 / n0 / n2	(matches)	pair:build_strvec.
+16 spelling-equivalence pairs	pair_buildvec_c_auto_empty_literal	WRONG	3 / n0 / n2	3 / raw pointer / raw pointer	pair:build_strvec. PAIR DIVERGENCE vs (a) ctor, (b) typed empty literal, (d) comprehension - all three correct. Same filed root.
+16 spelling-equivalence pairs	pair_buildvec_d_comprehension	WORKS	3 / n0 / n2	(matches)	pair:build_strvec.
+16 spelling-equivalence pairs	pair_chain_a_chained	WORKS	2 / 8	(matches)	pair:chain_vs_temps.
+16 spelling-equivalence pairs	pair_chain_b_temps	WORKS	2 / 8	(matches)	pair:chain_vs_temps.
+16 spelling-equivalence pairs	pair_count_a_unwrap_or	WORKS	a=2 / b=1	(matches)	pair:dict_count.
+16 spelling-equivalence pairs	pair_count_b_contains_subscript	WORKS	a=2 / b=1	(matches)	pair:dict_count.
+16 spelling-equivalence pairs	pair_count_c_match	WORKS	a=2 / b=1	(matches)	pair:dict_count.
+16 spelling-equivalence pairs	pair_double_a_comprehension	WORKS	2,4,6	(matches)	pair:double_ints.
+16 spelling-equivalence pairs	pair_double_b_looppush	WORKS	2,4,6	(matches)	pair:double_ints.
+16 spelling-equivalence pairs	pair_double_c_map_inline	WORKS	2,4,6	(matches)	pair:double_ints.
+16 spelling-equivalence pairs	pair_double_d_map_named	WORKS	2,4,6	(matches)	pair:double_ints.
+16 spelling-equivalence pairs	pair_evens_a_comprehension	WORKS	3 / 2,4,6	(matches)	pair:filter_evens.
+16 spelling-equivalence pairs	pair_evens_b_loopif	WORKS	3 / 2,4,6	(matches)	pair:filter_evens.
+16 spelling-equivalence pairs	pair_evens_c_filter_inline	WORKS	3 / 2,4,6	(matches)	pair:filter_evens.
+16 spelling-equivalence pairs	pair_evens_d_filter_named	WORKS	3 / 2,4,6	(matches)	pair:filter_evens.
+16 spelling-equivalence pairs	pair_grade_a_ifchain	WORKS	B	(matches)	pair:grade.
+16 spelling-equivalence pairs	pair_grade_b_match_guard	WORKS	B	(matches)	pair:grade.
+16 spelling-equivalence pairs	pair_grade_c_match_expr	WRONG	B	A	pair:grade. PAIR DIVERGENCE vs (a) if/elif chain and (b) match statement with guards - both correct. Same match-expression-guard root.
+16 spelling-equivalence pairs	pair_loopform_a_range	WORKS	0 / 1 / 2	(matches)	pair:loop_forms.
+16 spelling-equivalence pairs	pair_loopform_b_while	WORKS	0 / 1 / 2	(matches)	pair:loop_forms.
+16 spelling-equivalence pairs	pair_loopform_c_loop_break	WORKS	0 / 1 / 2	(matches)	pair:loop_forms.
+16 spelling-equivalence pairs	pair_max_a_looptrack	WORKS	9	(matches)	pair:max_of.
+16 spelling-equivalence pairs	pair_max_b_itermax	WORKS	9	(matches)	pair:max_of.
+16 spelling-equivalence pairs	pair_max_c_sorted_last	WORKS	9	(matches)	pair:max_of.
+16 spelling-equivalence pairs	pair_max_d_fold	WORKS	9	(matches)	pair:max_of.
+16 spelling-equivalence pairs	pair_nest_a_nested_calls	WORKS	ABC	(matches)	pair:nested_call.
+16 spelling-equivalence pairs	pair_nest_b_temps	WORKS	ABC	(matches)	pair:nested_call.
+16 spelling-equivalence pairs	pair_optdef_a_qq	WORKS	42 / 7	(matches)	pair:opt_default.
+16 spelling-equivalence pairs	pair_optdef_b_unwrap_or	WORKS	42 / 7	(matches)	pair:opt_default.
+16 spelling-equivalence pairs	pair_optdef_c_match	WORKS	42 / 7	(matches)	pair:opt_default.
+16 spelling-equivalence pairs	pair_optdef_d_is_some	WORKS	42 / 7	(matches)	pair:opt_default.
+16 spelling-equivalence pairs	pair_prime_a_early_return	WORKS	false / true	(matches)	pair:prime.
+16 spelling-equivalence pairs	pair_prime_b_single_exit	WORKS	false / true	(matches)	pair:prime.
+16 spelling-equivalence pairs	pair_prime_c_for_else	WORKS	false / true	(matches)	pair:prime.
+16 spelling-equivalence pairs	pair_readback_a_subscript	WORKS	beta	(matches)	pair:read_back.
+16 spelling-equivalence pairs	pair_readback_b_get_unwrap	WORKS	beta	(matches)	pair:read_back.
+16 spelling-equivalence pairs	pair_readback_c_forin_counter	WORKS	beta	(matches)	pair:read_back.
+16 spelling-equivalence pairs	pair_revstr_a_indexloop	WORKS	olleh	(matches)	pair:reverse_str.
+16 spelling-equivalence pairs	pair_revstr_b_chars_reversed	WORKS	olleh	(matches)	pair:reverse_str.
+16 spelling-equivalence pairs	pair_revstr_c_prepend	WORKS	olleh	(matches)	pair:reverse_str.
+16 spelling-equivalence pairs	pair_sortdesc_a_inline_cmp	WORKS	5,4,3,1,1	(matches)	pair:sort_desc.
+16 spelling-equivalence pairs	pair_sortdesc_b_named_cmp	WORKS	5,4,3,1,1	(matches)	pair:sort_desc.
+16 spelling-equivalence pairs	pair_sortdesc_c_sorted_reversed	WORKS	5,4,3,1,1	(matches)	pair:sort_desc.
+16 spelling-equivalence pairs	pair_strcat_a_pluseq	WORKS	abc	(matches)	pair:strcat.
+16 spelling-equivalence pairs	pair_strcat_b_builder_push	WORKS	abc	(matches)	pair:strcat.
+16 spelling-equivalence pairs	pair_strcat_c_join	WORKS	abc	(matches)	pair:strcat.
+16 spelling-equivalence pairs	pair_strcat_d_reassign_concat	WORKS	abc	(matches)	pair:strcat.
+16 spelling-equivalence pairs	pair_structsum_a_forin	WORKS	55	(matches)	pair:struct_sum.
+16 spelling-equivalence pairs	pair_structsum_b_fold	WORKS	55	(matches)	pair:struct_sum.
+16 spelling-equivalence pairs	pair_structsum_c_comprehension	WORKS	55	(matches)	pair:struct_sum.
+16 spelling-equivalence pairs	pair_sum_a_forin	WORKS	15	(matches)	pair:sum_ints.
+16 spelling-equivalence pairs	pair_sum_b_whileindex	WORKS	15	(matches)	pair:sum_ints.
+16 spelling-equivalence pairs	pair_sum_c_getunwrap	WRONG	15	938254419684720	pair:sum_ints. PAIR DIVERGENCE vs (a) for-in, (b) while+index, (d) fold, (e) iter().sum() - all four correct. Root below.
+16 spelling-equivalence pairs	pair_sum_d_fold	WORKS	15	(matches)	pair:sum_ints.
+16 spelling-equivalence pairs	pair_sum_e_itersum	WORKS	15	(matches)	pair:sum_ints.
+16 spelling-equivalence pairs	pair_upper_a_comprehension	WORKS	ALPHA / BETA	(matches)	pair:upper_strings.
+16 spelling-equivalence pairs	pair_upper_b_looppush	WORKS	ALPHA / BETA	(matches)	pair:upper_strings.
+16 spelling-equivalence pairs	pair_upper_c_map_inline	WORKS	ALPHA / BETA	(matches)	pair:upper_strings.
+16 spelling-equivalence pairs	pair_upper_d_map_named	WORKS	ALPHA / BETA	(matches)	pair:upper_strings.
+10 Option/Result & errors	res_divide_guard	WORKS	5 / cannot divide by zero	(matches)	
+10 Option/Result & errors	res_map	WORKS	20 / fail	(matches)	
+10 Option/Result & errors	res_methods	WORKS	10 / 10 / 99 / true / true / fail	(matches)	
+10 Option/Result & errors	res_ok_error_match	WORKS	ok 42 / err boom	(matches)	
+10 Option/Result & errors	res_throws	WORKS	5 / -1	(matches)	
+13 sorting & searching	search_binary	WORKS	3 / -1	(matches)	
+13 sorting & searching	search_linear	WORKS	2 / missing	(matches)	
+07 Dict/Set basics	set_basic	WORKS	2 / found / absent	(matches)	
+07 Dict/Set basics	set_iterate	WORKS	3 / 1 / 2	(matches)	
+07 Dict/Set basics	set_of_strings	WORKS	2	(matches)	
+07 Dict/Set basics	set_operations	WORKS	2 / 4 / 1 / false	(matches)	
+13 sorting & searching	sort_bubble_manual	WRONG	1,2,3,4,5	parse error (build)	Hand-written bubble sort. Same root.
+13 sorting & searching	sort_by_key_length	WRONG	fig / apple / banana	LINK FAIL: undefined reference to `int64_t__len`	Book Ch5 verbatim on Vector[String]. Compiles clean, fails at LINK. Works on Vector[int].
+13 sorting & searching	sort_descending_comparator	WORKS	5,4,3,1,1	(matches)	
+13 sorting & searching	sort_in_place	WORKS	1,1,3,4,5	(matches)	
+13 sorting & searching	sort_reverse_vector	WORKS	3,2,1	(matches)	
+13 sorting & searching	sort_sorted_copy	WORKS	1,3,4 / 3,1,4	(matches)	
+13 sorting & searching	sort_strings_alpha	WORKS	apple / banana / cherry	(matches)	
+13 sorting & searching	sort_structs_by_field	WRONG	Bob 25 / Alice 30	Alice 30 / Bob 25	Vector[Struct].sort(cmp) is a SILENT NO-OP on C; on LLVM the same source emits invalid IR (llc: 'ret i64 %v6' where %v6 is ptr).
+02 strings & formatting	str_append_inplace	WORKS	alpha!	(matches)	
+02 strings & formatting	str_build_in_loop	WORKS	0-1-2-3-	(matches)	
+02 strings & formatting	str_char_classify	WORKS	true / false / true / false	(matches)	
+02 strings & formatting	str_chars_vector	WORKS	3 / a / b / c	(matches)	
+02 strings & formatting	str_concat_in_loop	WORKS	xxxx	(matches)	
+02 strings & formatting	str_concat_runtime	WORKS	alpha	(matches)	
+02 strings & formatting	str_equality	WORKS	true / false	(matches)	
+02 strings & formatting	str_format_specs	WORKS	00000042 / ff / FF / 0xff / 0b1010	(matches)	
+02 strings & formatting	str_fstring_expr	WORKS	sum=7 / {literal}	(matches)	
+02 strings & formatting	str_index_char	WORKS	h / o	(matches)	
+02 strings & formatting	str_index_of	WORKS	5 / none	(matches)	
+02 strings & formatting	str_iterate_chars	WORKS	a / b / c	(matches)	
+02 strings & formatting	str_join	WORKS	a-b-c	(matches)	
+02 strings & formatting	str_len	WORKS	5	(matches)	
+02 strings & formatting	str_lines	WORKS	3 / one / two / three	(matches)	
+02 strings & formatting	str_number_to_string	WORKS	42 / 2	(matches)	
+02 strings & formatting	str_pad	WORKS	007 / 7..	(matches)	
+02 strings & formatting	str_predicates	WORKS	true / true / true / false	(matches)	
+02 strings & formatting	str_raw_string	WORKS	no \n escape here	(matches)	
+02 strings & formatting	str_repeat	WORKS	ababab	(matches)	
+02 strings & formatting	str_replace	WORKS	hello gorget	(matches)	
+02 strings & formatting	str_slice_colon	WORKS	ell / llo / hel / hello	(matches)	
+02 strings & formatting	str_split_loop	WORKS	3 / a / b / c	(matches)	
+02 strings & formatting	str_string_builder_number	WORKS	n=42 ok=true	(matches)	
+02 strings & formatting	str_substring	WORKS	hello	(matches)	
+02 strings & formatting	str_trim	WORKS	[hi]	(matches)	
+02 strings & formatting	str_upper_lower	WORKS	HELLO / hello	(matches)	
+08 structs & methods	struct_basic	WORKS	1 / 2	(matches)	
+08 structs & methods	struct_displayable	WORKS	(3, 4)	(matches)	
+08 structs & methods	struct_in_vector	WORKS	2 / 1 / 30	(matches)	
+08 structs & methods	struct_in_vector_string_field	WORKS	alpha / beta	(matches)	
+08 structs & methods	struct_method	WORKS	25	(matches)	
+08 structs & methods	struct_method_returns_struct	WORKS	4 / 6	(matches)	
+08 structs & methods	struct_mut_method	WORKS	2	(matches)	
+08 structs & methods	struct_mutate_field	WORKS	1 / 99	(matches)	
+08 structs & methods	struct_nested	WORKS	1 / 2	(matches)	
+08 structs & methods	struct_static_method	WORKS	0 / 0	(matches)	
+08 structs & methods	struct_string_field	WORKS	alpha / 30	(matches)	
+01 variables & arithmetic	vars_arith_basic	WORKS	10 / 4 / 21 / 2 / 1	(matches)	
+01 variables & arithmetic	vars_auto	WORKS	42 / true / 7	(matches)	
+01 variables & arithmetic	vars_bitwise	WORKS	8 / 14 / 6 / 24 / 1	(matches)	
+01 variables & arithmetic	vars_cast	WORKS	42.00 / 3 / -3 / 2.50	(matches)	
+01 variables & arithmetic	vars_comparison_logical	WORKS	true / false / true / true / false / true	(matches)	
+01 variables & arithmetic	vars_compound_assign	WORKS	15 / 12 / 24 / 8 / 3	(matches)	
+01 variables & arithmetic	vars_const	WORKS	1024 / 500	(matches)	
+01 variables & arithmetic	vars_declare	WORKS	5 / true / hello / 3.14	(matches)	
+01 variables & arithmetic	vars_float_math	WORKS	5.00 / 1.50 / 0.50 / 1.41	(matches)	
+01 variables & arithmetic	vars_int_overflow	WORKS	'before', then a loud failure	before; trap[T_Overflow]: integer overflow at <file>:6:19; rc 101	Correct: overflow traps, never wraps.
+01 variables & arithmetic	vars_int_swap	WORKS	a=2 b=1	(matches)	
+01 variables & arithmetic	vars_neg_mod	WORKS	-1 / 2	(matches)	
+01 variables & arithmetic	vars_power	WORKS	1024 / 512 / 1024	(matches)	
+01 variables & arithmetic	vars_print_bare_int	WORKS	42 / true	(matches)	
+01 variables & arithmetic	vars_reassign	WORKS	1 / 2 / 10	(matches)	
+01 variables & arithmetic	vars_unary_neg	WORKS	-5 / 5 / false / true	(matches)	
+01 variables & arithmetic	vars_wrapping	WORKS	7 / 6 / 12	(matches)	
+06 Vector basics	vec_array_fixed	WORKS	1 / 99 / 5	(matches)	
+06 Vector basics	vec_clear	WORKS	3 / 0 / true	(matches)	
+06 Vector basics	vec_compound_add_get_unwrap	WRONG	1	187650764399264 (garbage)	NEW. `total += v.get(0).unwrap()` reads garbage; `total = total + v.get(0).unwrap()` is correct, and `total += o.unwrap()` on a plain Option local is correct. LLVM refuses the IR: 'ptr where i64 expected' in the sadd.with.overflow call - the Option's POINTER is being added.
+06 Vector basics	vec_concat	WRONG	5 / 1,2,3,4,5	E_TypeMismatch expected `int[3]`, found `int[2]`	Book Ch5 `auto c = a + b` verbatim. `auto v = [..]` infers the FIXED-ARRAY type int[N].
+06 Vector basics	vec_concat_typed	WORKS	5 / 1,2,3,4,5	(matches)	
+06 Vector basics	vec_contains_index_of	WRONG	true / false / 1 / missing	true / false / 0 / 0	`bool h = v.contains(x)` bound to a local, then `match v.index_of(y)` on an auto-literal vector: wrong index AND Some(0) for an ABSENT element. Same on LLVM.
+06 Vector basics	vec_empty_auto_push_int	WORKS	2 / 1 / 2	(matches)	
+06 Vector basics	vec_empty_auto_push_string	WRONG	alpha	187650945262240 (raw pointer)	ALREADY FILED: known_gaps/auto_empty_literal_push_string_raw_pointer.gg. Same on LLVM.
+06 Vector basics	vec_empty_auto_push_string_subscript	WRONG	alpha	raw pointer	Same defect, read back with v[0]. Same on LLVM.
+06 Vector basics	vec_enumerate	WRONG	0:alpha / 1:beta	E_UndefinedName `enumerate`	ALREADY FILED: TODO.md ~286.
+06 Vector basics	vec_enumerate_free_fn	WRONG	0:alpha / 1:beta	E_UndefinedName `enumerate`	Duplicate; FILED.
+06 Vector basics	vec_enumerate_method	WORKS	0:10 / 1:20 / 2:30	(matches)	
+06 Vector basics	vec_extend	WORKS	5 / 5	(matches)	
+06 Vector basics	vec_get_out_of_bounds	WORKS	10 / none	(matches)	
+06 Vector basics	vec_in_operator	WORKS	found / absent	(matches)	
+06 Vector basics	vec_index_of_after_contains	WORKS	true / 1	(matches)	
+06 Vector basics	vec_index_write	WORKS	99 / 30	(matches)	
+06 Vector basics	vec_iter_terminals	WRONG	5 / 150 / 10 / 50	E_NoMethodFound `iter` on Vector[int]	`.iter()` needs `from std.iter import Iterator`, never mentioned in Book Ch5. Inconsistent: `for i,x in v.iter().enumerate()` resolves WITHOUT it.
+06 Vector basics	vec_iterate_strings	WORKS	alpha / beta	(matches)	
+06 Vector basics	vec_len_is_empty	WORKS	0 / true / 3 / false	(matches)	
+06 Vector basics	vec_literal_int	WORKS	10 / 30 / 3	(matches)	
+06 Vector basics	vec_literal_string_runtime	WORKS	alpha / beta	(matches)	
+06 Vector basics	vec_nested	WORKS	2 / 3 / 1 / 6	(matches)	
+06 Vector basics	vec_nested_ragged	WRONG	3 / 2 / 1 / 2	E_TypeMismatch expected `int[2]`, found `int[1]`	RAGGED nested literal rejected despite the declared Vector[Vector[int]]. Equal-length rows are accepted.
+06 Vector basics	vec_nested_ragged_built	WORKS	2 / 2 / 1	(matches)	
+06 Vector basics	vec_nested_strings	WORKS	alpha / beta	(matches)	
+06 Vector basics	vec_pop	WRONG	30 / 2 / empty	E_NonPrintableInterpolation on `int !` (build)	NEW COSTUME: match on `e.pop()` inline binds `int !`.
+06 Vector basics	vec_pop_typed	WORKS	30 / 2 / empty	(matches)	
+06 Vector basics	vec_push_in_loop	WORKS	5 / 0 / 10	(matches)	
+06 Vector basics	vec_push_int	WORKS	4 / 40	(matches)	
+06 Vector basics	vec_push_strings_in_loop	WORKS	3 / n0 / n2	(matches)	
+06 Vector basics	vec_remove_insert	WORKS	20 / 10,30 / 10,99,30	(matches)	
+06 Vector basics	vec_slice	WRONG	3 / 2,3,4 / 5	E_NoMethodFound `len` on int (build)	Slice of an auto-inferred literal. Bare form COMPILES and prints garbage (281474292334296).
+06 Vector basics	vec_slice_typed	WORKS	3 / 2,3,4 / 5 / 0	(matches)	
+06 Vector basics	vec_sort_by_key_strings	WRONG	fig / apple	LINK FAIL: `int64_t__len`	Minimal form: the closure parameter is typed int64_t regardless of the element type.
+06 Vector basics	vec_sort_structs_comparator	WRONG	25 / 30 / 40	30 / 25 / 40	Minimal form.
+06 Vector basics	vec_sorted_structs_comparator	WRONG	25 / 30	30 / 25	.sorted(cmp) sibling.
+06 Vector basics	vec_swap	WORKS	30,20,10	(matches)	
+06 Vector basics	vec_typed_empty_push_string	WORKS	1 / alpha	(matches)	
+06 Vector basics	vec_zip	WRONG	alpha=1 / beta=2	E_UndefinedName `zip`	ALREADY FILED: TODO.md ~286.
