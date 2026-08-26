@@ -1,0 +1,24 @@
+# Division by zero: the integer/float asymmetry, pinned.
+#
+# An INTEGER divisor of zero traps (T_DivByZero) because there is no answer in
+# the integer domain. A FLOAT divisor of zero does NOT trap: it follows IEEE
+# 754, yielding +/-inf for a nonzero numerator and NaN for 0.0/0.0.
+#
+# The asymmetry is representability, not convention -- float division by zero
+# has a defined answer and merely raises a status flag, so producing inf is the
+# correct result rather than a missed check. Every surveyed language splits it
+# this way; Python is the outlier that raises for both, and NumPy declines to
+# follow it because per-element exceptions make array math unusable.
+#
+# This fixture pins the FLOAT half, which runs to completion. The integer half
+# traps and is pinned by the trap-code fixtures.
+
+void main():
+    float a = 1.0
+    float b = 0.0
+    float pos = a / b
+    float neg = (0.0 - 1.0) / b
+    float nan = b / b
+    print(pos)
+    print(neg)
+    print(nan != nan)

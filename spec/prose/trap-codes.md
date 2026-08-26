@@ -49,7 +49,7 @@ its code, so **this registry file is the stability contract**.
 | Code | Class (`TrapKind`) |
 |---|---|
 | `T_Overflow` | `Overflow` — an overflowing checked `+`/`-`/`*`/`/`/`%`/`**`/unary-neg, a signed `TYPE_MIN / -1` (or `% -1`), an integer `**` with a negative exponent (domain fault — D28 amendment R3), or an out-of-range shift count (owner ruling 2026-07-10: shift-out-of-range normalizes to `T_Overflow`, no separate class) |
-| `T_DivByZero` | `DivByZero` — a `/` or `%` with a zero divisor |
+| `T_DivByZero` | `DivByZero` — an **integer** `/` or `%` with a zero divisor. FLOAT division by zero does NOT trap: it follows IEEE 754, yielding `±inf` for a nonzero numerator and `NaN` for `0.0/0.0`. The asymmetry is representability, not convention — integer division by zero has no answer in the integer domain, while float division by zero has a defined one. (Owner ruling 2026-08-26.) |
 | `T_Bounds` | `Bounds` — an out-of-bounds index |
 | `T_UnwrapNone` | `UnwrapNone` — `.unwrap()` on a `None` |
 | `T_UnwrapError` | `UnwrapError` — `.unwrap()` on an `Error` |

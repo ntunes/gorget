@@ -258,7 +258,7 @@ void main():
 ```gorget
 enum ArithError:
     Overflow       # add/sub/mul, shift range, signed INT_MIN/-1 div
-    DivByZero      # / and % with rhs == 0
+    DivByZero      # integer / and % with rhs == 0
 ```
 
 **Auto-inference.** A function body that syntactically contains any

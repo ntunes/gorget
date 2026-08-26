@@ -4591,6 +4591,22 @@ fn closure_forelse_freevar_outer_local() {
     run_gg("known_gaps/closure_forelse_freevar_outer_local.gg", "99");
 }
 
+/// Division by zero: the integer/float asymmetry, ratified 2026-08-26.
+///
+/// An integer divisor of zero traps (`T_DivByZero`); a float divisor of zero
+/// does NOT — it follows IEEE 754, yielding ±inf and NaN. The asymmetry is
+/// representability: integer division by zero has no answer in the integer
+/// domain, float division by zero has a defined one, so `inf` is the correct
+/// result rather than a missed check.
+///
+/// Pins the float half. Runs on C and LLVM (the harness appends `--backend`),
+/// so a lane that starts trapping floats — or one that stops producing NaN —
+/// reddens here.
+#[test]
+fn div_by_zero_int_traps_float_ieee() {
+    run_gg("div_by_zero_int_traps_float_ieee.gg", "inf\n-inf\ntrue");
+}
+
 /// KNOWN GAP: a comprehension with a TUPLE target pattern over a `Dict` source is
 /// accepted by `gg check` (rc 0) and then fails in the C compiler, leaking a raw
 /// C diagnostic to the user (`incompatible types when assigning to type 'Str'`).
