@@ -1,0 +1,35 @@
+# KNOWN GAP — `==` on a type with NO `Equatable` implementation is ACCEPTED and
+# silently answers `false`, for values that are equal.
+#
+#     enum Direction:
+#         North()
+#         South()
+#     Direction.North() == Direction.North()      # -> false
+#
+# Adding `@derive(Equatable)` makes it correct, so the discriminator is the
+# MISSING IMPL path, not the comparison itself. Structs behave identically.
+#
+# ⚠ This is the worst shape a defect can take: the most basic operation in the
+# language, accepted without a diagnostic, returning a WRONG answer that looks
+# like a legitimate result. A reader debugging `if a == b` has no reason to
+# suspect the compiler.
+#
+# INTENDED (asserted below): either it prints `equal`, or `gg check` REJECTS the
+# comparison with a diagnostic naming `Equatable` and suggesting `@derive`.
+# Accept-then-silently-answer-false is not a defensible option (Core #10:
+# lower-or-reject; Core #8: a known wrong answer is a defect).
+#
+# Found 2026-08-26 by the documentation-examples track (docs/book/06); the
+# Book's own chapter demonstrates `==` on such a type. Orchestrator-verified.
+
+enum Direction:
+    North()
+    South()
+
+void main():
+    Direction a = Direction.North()
+    Direction b = Direction.North()
+    if a == b:
+        print("equal")
+    else:
+        print("NOT-equal")
