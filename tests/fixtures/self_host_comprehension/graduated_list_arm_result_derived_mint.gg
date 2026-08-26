@@ -1,0 +1,43 @@
+# GRADUATED from `known_gaps/` (R44 Track K) — the LIST arm minting from the
+# SOURCE element instead of the RESULT element.
+#
+# AXIS CELL: comp-kind = list `[...]` · source = `Vector[String]` · result
+# element = `int`. The source and result element types DIFFER, which is the
+# whole point: an accumulator minted from the source would be a
+# `Vector[String]`.
+#
+# RED-VERIFIED (self-host lane, pre-fix driver): rc 139 SEGV.
+#
+# ⚠ THE RULE ITS `known_gaps` HEADER STATED WAS MEASURABLY TOO NARROW, and
+# correcting it is part of the graduation. That header said the self-host
+# set/dict arms are "WRONG iff any RESULT-CHANNEL element is not `int`". A
+# set comprehension over a STRING SOURCE with EVERY result channel `int`
+# (`{c.len() for c in s0}`) is ALSO wrong at HEAD — it prints an EMPTY
+# collection at rc 0 — because the element-type helper early-returned empty
+# for a String source and the comprehension then lowered NO LOOP AT ALL. No
+# grid in the round sampled a set or dict over a String source, so nothing
+# falsified the rule; the falsifiers now ship beside this file as
+# `set_strsrc_allint` and `dict_strsrc_allint`. The real rule is: the mint
+# was wrong whenever the accumulator's element type could not be recovered
+# from the DESTINATION, which the result element now supplies directly.
+#
+# FIXTURE PLACEMENT: subdirectory (see any NET A cell's header for the full
+# reasoning). LANE: self-host only — the Rust lane was already correct, so a
+# `run_gg`-wired body would be GREEN ON ARRIVAL and pin nothing. STAGE: 0.
+# RUNG: 1a (both real lanes agree post-fix; the longhand statement form of
+# each program is the held-fixed control and agrees on both lanes).
+
+String mk(String a, String b):
+    return a + b
+
+String w0():
+    return mk("alp", "ha")
+
+String w1():
+    return mk("bet", "a")
+
+void main():
+    Vector[String] words = [w0(), w1()]
+    Vector[int] v = [w.len() for w in words]
+    print(v.len())
+    print(v.get(0).unwrap())

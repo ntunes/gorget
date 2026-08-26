@@ -2811,6 +2811,33 @@ int collection_accumulator_tid(GirModule &gmod, String kind, String elem_name, S
     # four producer kinds above).
     return lookup_or_register_named(&gmod, "GorgetArray")
 
+# ── The set accumulator's CTOR-NAME channel (the twin of the tid above) ──
+# THE single producer of a set constructor's magic name. One decision has
+# two channels — the accumulator TYPE (`collection_accumulator_tid` above,
+# which carries the element story to every downstream reader) and the ctor
+# NAME (here, which `lir_codegen.gg::emit_typed_set_ctor` expands into BOTH
+# the key WIDTH and the `hash_fn`/`eq_fn`/`key_drop`/`key_clone` bridge).
+# A producer that supplies only one of the two closes half the class, so
+# they live side by side.
+#
+# The shape this retires: `GICallExtern(acc, "gorget_(ordered_)set_new",
+# [OpConstI64(8)])` — a raw runtime symbol with a HARDCODED 8-byte key. That
+# spelling is accidentally right for `int64_t`, too WIDE for `bool`, too
+# NARROW for any aggregate whose discriminating field sits past byte 8, and
+# it never reaches `*_new_str` for a `String` element or installs a
+# `@derive(Hashable)` key table. Rust gg mints the same result via
+# `gorget_set_new_like` (copying the receiver's hash/eq/order config); this
+# magic name is the self-host's equivalent, and `ordered` is one of its two
+# inputs, not the whole naming rule.
+#
+# Callers: the set LITERAL, the set COMPREHENSION's deferred mint
+# (`comp_mint_ctor`), and the Set-HOF `filter` intercept
+# (`try_lower_set_hof`) — all in `lower_expr.gg`.
+String set_ctor_name(String elem_name, bool ordered):
+    if ordered:
+        return "__gorget_ordered_set_new_sized_" + elem_name
+    return "__gorget_set_new_sized_" + elem_name
+
 # Return true when the init expression is a call to a known
 # `cstr`-returning runtime/extern function. Used at SVarDecl to
 # insert a `gorget_str_from_cstr` coercion before storing into a

@@ -1,0 +1,36 @@
+# NET B cell — comprehension TARGET-PATTERN axis.
+#
+# AXIS CELL: target pattern = `PWildcard` (`for _ in ...`).
+# The axis is typed and enumerated by the lowerer: `PBinding` · `PWildcard` ·
+# `PTuple`. Dispositions:
+#   PBinding  — LAND. Sampled by every other cell in this directory.
+#   PWildcard — LAND. This cell.
+#   PTuple    — NEVER for now, and FILED: `for (k, v) in d` inside a
+#               comprehension is accepted by `gg check` and then emits broken
+#               C on the Rust lane, while the SELF-HOST rejects it (a
+#               succession datapoint: SH correct, Rust lagging). Its root is
+#               UPSTREAM of the accumulator mint, so it is out of this
+#               round's scope. Durable repro + `#[ignore]`d test asserting the
+#               INTENDED output are committed — grep `TODO.md` for
+#               `comprehension` and `tuple`.
+#
+# WHAT IT PINS: a wildcard binder still drives the element channel. The mint
+# is deferred until the RESULT element type is known, and with `_` there is no
+# user-visible binder to read it from — the synthesized nonce carries it.
+#
+# RED-VERIFIED (self-host lane, pre-fix driver): cc-fail on the source iteration arm
+#
+# FIXTURE PLACEMENT: subdirectory (see any NET A cell's header).
+# LANE: self-host only.  STAGE: 0.  RUNG: 1a (both real lanes agree post-fix).
+
+from std.collections import Set
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Set[String] s = Set[String]()
+    s.add(mk("alp", "ha"))
+    auto v = [mk("x", "!") for _ in s]
+    print(v.len())
+    print(v.get(0).unwrap())

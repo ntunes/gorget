@@ -4,6 +4,8 @@
 
 from std.collections import Vector, Dict
 from std.conv import int_to_str, float_to_str
+from std.os import exit
+from std.io import stderr
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm
 from scope import ScopeTable, DefInfo
 from types import TypeTable, ResolvedType
@@ -489,6 +491,28 @@ struct LowerCtx:
     # fires on exactly the shapes Rust's collector marks (lane symmetry;
     # see rust_prescan_marks_method).
     bool cow_scope_mark_suppress
+    # ── R44 Track K: the comprehension DEFERRED-MINT channel ──────────
+    # A comprehension must mint its accumulator from the type it PRODUCES,
+    # not the type it iterates, and the result element type is knowable
+    # only from the LOWERED body. `comp_acc` is the accumulator local of
+    # the comprehension currently being lowered (-1 = none); `comp_base`
+    # the collection kind it must be minted as; `comp_w0`/`comp_w1` the
+    # synthesized element binders the mint watches for (w1 = the dict
+    # VALUE channel, "" for list/set); `comp_t0`/`comp_t1` the element
+    # type ids recorded when those binders lower; `comp_mint_bb` the block
+    # the constructor is emitted into once the element type is known and
+    # `comp_entry_bb` the block it rejoins. Armed by `comp_reserve`,
+    # consumed by `comp_note_elem`, closed by `comp_close` — which
+    # save/restores the whole channel so a NESTED comprehension cannot
+    # steal the outer one's.
+    int comp_acc
+    String comp_base
+    String comp_w0
+    String comp_w1
+    int comp_t0
+    int comp_t1
+    int comp_mint_bb
+    int comp_entry_bb
 
 # ── Helpers ──────────────────────────────────────────────
 
@@ -525,6 +549,20 @@ void nl_restore(LowerCtx &ctx, Dict[String, int] snap):
 # variant encountered during compilation.
 void lower_fail(String msg):
     print("/* [lower_fail] " + msg + " */")
+
+# The LOUD counterpart of `lower_fail` — a real diagnostic on STDERR (stdout
+# is the emitted-C channel, so a message printed there would be buried inside
+# the emitted program) plus a non-zero exit, mirroring `validate.gg`'s
+# fatal-validator path.
+#
+# Use this, never `lower_fail`, wherever the alternative would be to carry on
+# with a value the lowerer could not derive: lower-or-REJECT means a
+# construct the lowerer cannot handle FAILS THE BUILD rather than becoming a
+# silently empty collection or an unconstructed placeholder. `lower_fail` is
+# for a diagnostic breadcrumb beside a path that still lowers correctly.
+void lower_abort(String msg):
+    print("error: " + msg, file=stderr)
+    exit(1)
 
 # Diagnostics for silent-fallback sites. Earlier versions of the
 # self-host made several dispatch functions (map_binop,
@@ -2950,7 +2988,7 @@ GirFunction lower_suite_body(String fn_name, Vector[Stmt] body, GirModule &gmod)
     Dict[String, int] _sb_cow_span = {}
     Dict[String, bool] _sb_cow_clo = {}
     # suite setup/teardown bodies are void, non-throws → fn_is_throws=false.
-    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, false, {}, {}, "", {}, false, 0, [], [], [], {}, false)
+    LowerCtx sctx = LowerCtx([], [], [], 0, !_sb_named_locals, !_sb_lc_stk, !_sb_lb_stk, "", "", "", false, fn_name.clone(), DropElaborator(!_sb_de_scopes), !_sb_de_queue, -1, !_sb_on_err_blocks, false, !_sb_cow_mut, !_sb_cow_span, !_sb_cow_clo, {}, [], {}, false, {}, {}, "", {}, false, 0, [], [], [], {}, false, -1, "", "", "", -1, -1, -1, -1)
     Vector[Instruction] sinit = []
     sctx.block_insts.push(!sinit)
     sctx.block_terms.push(GTNone())
@@ -5175,7 +5213,7 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                         Dict[String, int] _cow_span3 = {}
                         Dict[String, bool] _cow_clo3 = {}
                         # Test bodies are void, non-throws → fn_is_throws=false.
-                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, false, {}, {}, "", {}, false, 0, [], [], [], {}, false)
+                        LowerCtx tctx = LowerCtx([], [], [], 0, !_named_locals3, !_lc_stk3, !_lb_stk3, "", "", "", false, test_fn_name.clone(), DropElaborator(!_de_scopes3), !_de_queue3, -1, !_on_err_blocks3, false, !_cow_mut3, !_cow_span3, !_cow_clo3, {}, [], {}, false, {}, {}, "", {}, false, 0, [], [], [], {}, false, -1, "", "", "", -1, -1, -1, -1)
                         Vector[Instruction] tinit = []
                         tctx.block_insts.push(!tinit)
                         tctx.block_terms.push(GTNone())

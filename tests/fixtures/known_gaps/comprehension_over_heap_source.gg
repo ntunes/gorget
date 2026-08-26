@@ -1,0 +1,51 @@
+# KNOWN GAP (R44) — SECOND SHAPE of the already-filed "no is-it-iterable gate
+# in the front end" class. NOT a second filing: the root is the same missing
+# rule, and its sibling repro is
+# `known_gaps/comprehension_over_non_iterable_struct.gg`. What DISCRIMINATES
+# this shape: the source is a `CkHeap`, i.e. a real stdlib COLLECTION that the
+# loop dispatcher's `CollectionKind` cascade recognises and then drops through
+# its `else`, rather than a user struct the cascade never matches at all. A
+# reader who thinks "collections are iterable" needs this row.
+#
+# `Heap[T]` has no `iter()`/`next()` pair, so a comprehension over one has no
+# element to materialize.
+#
+# MEASURED at HEAD, on the C backend:
+#   `gg check` (Rust)  -> rc 0, "OK: no semantic errors"
+#   `gg build` (Rust)  -> rc 101, the lowering panic in
+#                         `src/ir/lowering/exprs/collections.rs` whose own text
+#                         says a placeholder accumulator "would trade a loud
+#                         failure for a silently empty collection"
+#   self-host, pre-fix -> rc 0, prints `0` / `done` — EXACTLY the silently
+#                         empty collection the Rust panic exists to prevent
+#   self-host, R44     -> rc 1, an honest diagnostic on STDERR, no emitted C
+#
+# ⚠ AND THE STATEMENT FORM DISAGREES ON BOTH LANES: `for x in h: total = total
+# + x` builds rc 0 and prints `0`, SILENTLY, on the Rust lane. So the
+# comprehension aborts and the statement quietly does nothing — Core #8's
+# both-wrong row, and the second defect in this bullet.
+#
+# INTENDED: `gg check` REJECTS this program with a teaching diagnostic naming
+# `Heap[int]` as not iterable, on EVERY lane, for BOTH the comprehension and
+# the statement form. The assertion below is the placeholder for the
+# accept-and-run reading and must be REPLACED by the reject fixture when the
+# gate lands — do not delete it, and do not "fix" it by making the lowering
+# emit an empty accumulator.
+#
+# Wired tests: `known_gap_comprehension_over_heap_source` (Rust lane,
+# `#[ignore]`d, asserts the INTENDED output) and
+# `self_host_rejects_comprehension_over_heap` (self-host lane, LIVE — it pins
+# the loud rejection that R44 landed, which is strictly better than the silent
+# `0` but still not the reference-grade answer).
+from std.heap import Heap
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Heap[int] h = Heap[int].new()
+    h.push(3)
+    h.push(1)
+    auto v = [x + 1 for x in h]
+    print(v.len())
+    print(mk("do", "ne"))

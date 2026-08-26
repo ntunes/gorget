@@ -1,0 +1,52 @@
+# NET C cell — RESULT-ELEMENT NARROW-TYPE axis, and a SUCCESSION datapoint.
+#
+# AXIS CELL: result element = `u8` (a NARROW type). Every other cell in this
+# directory, and every grid this round inherited, samples only WIDE result
+# elements (`int`, `String`, `float`). Core #12 "go TYPE-first": an unsampled
+# TYPE cell proves nothing about the sampled ones, and measured, uncovered
+# TYPE cells broke ~1 in 2.
+#
+# ⚠ THIS CELL DOES NOT EXERCISE THE `.bytes()` DISPATCHER ARM. The emitter
+# lowers `.bytes()` as an EXPRESSION (`gorget_str_bytes` -> `Vector[u8]`) and
+# then takes the VEC-LIKE arm; `lower_for_string_bytes` is reachable only from
+# a statement `for`. What this cell samples is the vec-like arm over a NARROW
+# element. Do not re-label it as the `.bytes()`-arm cell.
+#
+# ⚠⚠ GREEN ON ARRIVAL ON THIS LANE — AND THAT IS THE POINT (Core #12: say so
+# in the header and state what it pins instead). The self-host lane prints the
+# CORRECT `3` / `65` at HEAD and after the fix. The lane that is WRONG is
+# RUST, which mints the accumulator from the 1-BYTE SOURCE element and
+# over-reads it — printing a multi-byte garbage value at rc 0 with no crash
+# and no sanitizer report (it stays inside the allocation). That defect is
+# FILED with its own durable repro and an `#[ignore]`d test asserting the
+# INTENDED value: `known_gaps/comprehension_over_bytes_narrow_elem_overread.gg`
+# / `known_gap_comprehension_over_bytes_narrow_elem_overread`. Grep `TODO.md`
+# for `SILENTLY WRONG VALUES FROM UNINITIALIZED MEMORY ON THE **RUST** LANE`.
+#
+# So this cell is wired SELF-HOST-ONLY *because the self-host is the correct
+# lane* — a succession datapoint (SH ahead, Rust lagging ⇒ fix Rust as oracle
+# hygiene, never dumb the self-host down). It exists because NOTHING ELSE PINS
+# THE SELF-HOST'S CORRECT ANSWER on the narrow-element axis: if a future
+# change made the SH lane mint from the source element too, both lanes would
+# then agree on the wrong answer, which is Core #8's trap in its cleanest
+# form. Break-and-watch RED-verified (the #12(d) authoring procedure): forcing
+# the accumulator element name to the source element turns this cell's second
+# line into the same multi-byte garbage.
+#
+# FIXTURE PLACEMENT: subdirectory (see any NET A cell's header).
+# LANE: self-host ONLY — a cross-lane wiring would be RED on Rust, and the
+# Rust half is already filed. STAGE: 0.
+# RUNG: 2 — the lanes DISAGREE, so neither adjudicates. The expected value is
+# derived by hand from the definition: `"ABC"` is three ASCII codepoints, so
+# `.bytes()` yields the three bytes 65, 66, 67; `v.len()` is 3 and `v[0]` is
+# 65 = 'A'. The held-fixed STATEMENT control agrees (`for b in s0.bytes():
+# v.push(b)` prints 65 on both lanes), which is what convicts the Rust lane.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s0 = mk("AB", "C")
+    Vector[int] v = [b for b in s0.bytes()]
+    print(v.len())
+    print(v.get(0).unwrap())

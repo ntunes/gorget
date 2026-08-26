@@ -26,9 +26,9 @@ from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_M
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 from lir_lower import resource_meta_for, is_guard_struct_type, guard_method_prefix, is_opaque_pointer_type, field_storage_holds_pointer
-from lower_loops import lower_for_string, lower_for_range, lower_for_vector, lower_for_dict, lower_for_set, parse_dict_kv_types, resolve_elem_type_id, for_iterable_mode
+from lower_loops import drive_loop_lowered, lower_for_string, lower_for_range, lower_for_vector, lower_for_dict, lower_for_set, parse_dict_kv_types, resolve_elem_type_id, for_iterable_mode
 from lower import LowerCtx, ResultPayloadTypes, DictKvNames, ClosureSig, CaptureCollector, FieldBorrowPair, FieldDerefResult, SVarDeclEmission
-from lower import lower_fail, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
+from lower import lower_fail, lower_abort, diag_bug, diag_warn, emit, new_block, switch_to, set_terminator
 from lower import add_local, add_local_with, add_local_inheriting, nl_get, nl_put, nl_contains
 from lower import expr_kind, pat_kind, stmt_kind
 from lower import materialize_loop_carried_bare_params
@@ -5548,10 +5548,10 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                     # bridge and was byte-hashed, a String element never reached
                     # `*_new_str`, and an aggregate element got an 8-byte slot.
                     # `lir_codegen.gg::emit_typed_set_ctor` expands this and
-                    # selects both key channels from this one name.
-                    String set_ctor = "__gorget_set_new_sized_" + set_elem
-                    if eali_set_ordered:
-                        set_ctor = "__gorget_ordered_set_new_sized_" + set_elem
+                    # selects both key channels from this one name. Minted by
+                    # the single producer `set_ctor_name` (lower_types.gg),
+                    # beside the accumulator-tid helper on the line above.
+                    String set_ctor = set_ctor_name(set_elem, eali_set_ordered)
                     Vector[Operand] set_new_args = []
                     emit(&ctx, GICallExtern(set_acc, set_ctor, set_new_args))
                     register_local_for_drop(&ctx, set_acc, set_acc_tid, &gmod)
@@ -6662,7 +6662,15 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
             emit(&ctx, GIAssign(it_dst, OpConstUnit()))
             return it_dst
         case EListComp(lc_comp_box, lc_var, lc_iter_box, lc_filt_opt):
-            return lower_list_comprehension(&ctx, *lc_comp_box, lc_var, *lc_iter_box, lc_filt_opt, &gmod)
+            bool lc_has_filt = false
+            SpannedExpr lc_filt_e = *lc_comp_box
+            match lc_filt_opt:
+                case Some(lc_fb):
+                    lc_has_filt = true
+                    lc_filt_e = *lc_fb
+                case None:
+                    pass
+            return lower_list_comprehension(&ctx, *lc_comp_box, lc_var, *lc_iter_box, lc_has_filt, lc_filt_e, &gmod)
         case ESetComp(sc_comp_box, sc_var, sc_iter_box, sc_filt_opt):
             # Set comprehension `{expr for x in iter [if cond]}`. The 4th
             # AST field is `Option[Box[SpannedExpr]]` (mirrors EListComp):
@@ -6772,9 +6780,17 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
     # ── flat_map: concatenate the Vector the closure returns per element ──
     # `v.flat_map(f)` ≡ `acc = []; for x in v: acc.extend(f(x))`. Mirrors
     # Rust gg's `expand_flat_map` (src/bir/lower.rs:2297) — per element call
-    # the closure (a Vector of the SAME element type, flat_map preserves the
-    # element type) and append its elements into the accumulator via
-    # `gorget_array_extend`. The synthesized `acc.extend(<closure body>)`
+    # the closure (which returns a Vector) and append its elements into the
+    # accumulator via `gorget_array_extend`. ⚠ `flat_map` is CROSS-TYPE:
+    # `src/semantic/typecheck.rs` types `("Vector","flat_map")` as
+    # `(T) -> Vector[U]`, so the RESULT element type is `U`, not the input's
+    # `T`. The mint below reads the INPUT element type and is therefore WRONG
+    # whenever U != T — a live, filed defect, not an invariant:
+    # `tests/fixtures/known_gaps/flat_map_cross_type_input_mint.gg` (grep
+    # TODO.md for "cross-type `flat_map` mints from the INPUT element type").
+    # The comprehension lowerer next door already mints from the MATERIALIZED
+    # result element (`comp_mint_tid`); this producer is the sibling that
+    # still does not. The synthesized `acc.extend(<closure body>)`
     # routes through the normal method dispatch (`extend` → gorget_array_extend,
     # lir_lower.gg:1559) — NOT the HOF intercept, since `extend` isn't a HOF.
     if mname == "flat_map":
@@ -6788,8 +6804,10 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             return -1
         String var_name = cparams.get(0).unwrap()
         SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
-        # Centralized collection-accumulator typing (flat_map preserves the
-        # element type — the closure returns a Vector of the same element).
+        # Centralized collection-accumulator typing. ⚠ `elem_name` is the
+        # INPUT element type; for a cross-type `flat_map` ((T) -> Vector[U])
+        # the accumulator must be minted from `U`. Known defect, filed with a
+        # durable repro — see the banner above.
         int acc_tid = collection_accumulator_tid(&gmod, "array", elem_name, "", "")
         int acc = comp_make_acc(&ctx, acc_tid, elem_name, &gmod)
         String acc_name = "__hof_acc_" + int_to_str(acc)
@@ -6895,10 +6913,13 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
 # inlining the explicit closure body via AST substitution (the SAME strategy
 # as `try_lower_vector_hof`). `is_ordered` is the TYPED CkOrderedSet/CkHashSet
 # discriminator resolved by the caller — it threads into `lower_for_set` (the
-# iteration walk) AND, for `filter`, picks the result set's ctor so the new
-# set preserves the receiver's ordered-ness (Rust mints the result via
-# `gorget_set_new_like`, mirroring src's hash/eq/order config; the self-host
-# mirrors it via the ordered-vs-unordered ctor split).
+# iteration walk) AND, for `filter`, is ONE OF THE TWO INPUTS to the result
+# set's ctor name. Rust mints the result via `gorget_set_new_like`, which
+# copies the receiver's key width and hash/eq/drop/clone config wholesale;
+# the self-host mirrors that with the SIZED, ELEMENT-KEYED magic name
+# (`set_ctor_name(elem_name, is_ordered)`, lower_types.gg), of which
+# ordered-ness is one input and the element type is the other. Ordered-ness
+# ALONE is not the naming rule — that was the defect this arm carried.
 #
 # Result types mirror Rust's `try_emit_set_hof`: fold → value, any/all →
 # bool, each → unit, filter → a fresh Set of the receiver's element type.
@@ -6907,8 +6928,13 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
 # extern dispatch, exactly as in Rust.
 #
 # Scope (per the Vector intercept): explicit NON-CAPTURING single-expression
-# closures over scalar/String elements; anything else returns -1 → the caller
-# falls through to the normal extern dispatch (no behavioural change).
+# closures; anything else returns -1 → the caller falls through to the normal
+# extern dispatch (no behavioural change). The ELEMENT type is NOT part of
+# the scope gate — the only element-side gate is `elem_name == "": return -1`
+# three lines below, so `@derive(Hashable)` STRUCT receivers route through
+# here exactly as `Set[int]` / `Set[String]` do (measured: their accumulator
+# in the emitted C is the one this function mints). Do not read this banner
+# as licence to drop struct-element cells from this arm's regression net.
 #
 # Returns the result local id (>= 0) when handled, or -1 to fall through.
 int try_lower_set_hof(LowerCtx &ctx, int recv, String recv_type_name, bool is_ordered, String mname, Vector[SpannedExpr] margs, SpannedExpr sexpr, GirModule &gmod):
@@ -6935,18 +6961,24 @@ int try_lower_set_hof(LowerCtx &ctx, int recv, String recv_type_name, bool is_or
         # accumulator typing (`collection_accumulator_tid` "set").
         int acc_tid = collection_accumulator_tid(&gmod, "set", elem_name, "", "")
         int acc = add_local(&ctx, acc_tid, None)
-        Vector[Operand] new_args = [OpConstI64(8)]
-        if is_ordered:
-            emit(&ctx, GICallExtern(acc, "gorget_ordered_set_new", new_args))
-        else:
-            emit(&ctx, GICallExtern(acc, "gorget_set_new", new_args))
+        Vector[Operand] new_args = []
+        # The result set's ctor comes from the SAME single producer as the
+        # set literal's and the set comprehension's (`set_ctor_name`,
+        # lower_types.gg). The shape it replaces here was
+        # `gorget_(ordered_)set_new` with a hardcoded `OpConstI64(8)`: the
+        # element type is resolved on the line above and was then not written
+        # through (Layering rule 4), so `Set[String]`, `Set[bool]` and every
+        # `@derive(Hashable)` element silently lost their key channel.
+        String hof_set_ctor = set_ctor_name(elem_name, is_ordered)
+        emit(&ctx, GICallExtern(acc, hof_set_ctor, new_args))
         register_local_for_drop(&ctx, acc, acc_tid, &gmod)
         String acc_name = "__set_hof_acc_" + int_to_str(acc)
         nl_put(&ctx, acc_name, acc)
         # Body: `if <closure body>: acc.add(<element>)`. The `.add` routes
         # through the normal method-call consume machinery (clone-at-boundary
-        # for the still-live per-iteration element), mirroring the set-comp's
-        # `comp_synth_set_body`.
+        # for the still-live per-iteration element), mirroring the set
+        # comprehension's synthesized body (`comp_synth_body_bound` with
+        # method `"add"`).
         SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
         SpannedExpr elem_ref = SpannedExpr(EIdentifier(var_name), span)
         Vector[SpannedType] no_targs = []
@@ -7381,6 +7413,227 @@ int lower_dict_fold(LowerCtx &ctx, int recv, String recv_type_name, SpannedExpr 
     lower_for_dict(&ctx, kv_pat, recv, recv_type_name, body, &gmod, false)
     return acc
 
+
+# ── R44 Track K: the comprehension accumulator's DEFERRED MINT ─────────
+#
+# A comprehension must mint its accumulator from the type it PRODUCES, not
+# the type it ITERATES. The result element type is knowable only from the
+# LOWERED body, and a comprehension's body exists only inside the loop — so
+# the accumulator's CONSTRUCTOR is emitted into a block left UNTERMINATED
+# until the body has bound its element. Mirrors the Rust lane's
+# `reserve_accumulator` / `close_accumulator_mint` pair (cite by FUNCTION
+# NAME: `src/ir/lowering/exprs/collections.rs`).
+#
+# Minting up front is the whole defect: it can only be done from the SOURCE
+# element name or a hardcoded `int64_t` guess, and BOTH are wrong the moment
+# the body changes the element type.
+struct CompSave:
+    int acc
+    String base
+    String w0
+    String w1
+    int t0
+    int t1
+    int mint_bb
+    int entry_bb
+
+# Reserve the accumulator local + the block its constructor will be emitted
+# into, arm the element channel, and enter a fresh block for the loop.
+# Returns the OUTER channel state to restore; the reserved accumulator is
+# `ctx.comp_acc` and the synthesized element binders are `ctx.comp_w0` /
+# `ctx.comp_w1`.
+CompSave comp_reserve(LowerCtx &ctx, GirModule &gmod, String base, bool needs_value):
+    CompSave sv = CompSave(ctx.comp_acc, ctx.comp_base.clone(), ctx.comp_w0.clone(), ctx.comp_w1.clone(), ctx.comp_t0, ctx.comp_t1, ctx.comp_mint_bb, ctx.comp_entry_bb)
+    String ph_name = "GorgetArray"
+    if base == "set":
+        ph_name = "GorgetSet"
+    if base == "map_ordered":
+        ph_name = "GorgetMap"
+    int ph_tid = lookup_or_register_named(&gmod, ph_name)
+    int acc = add_local(&ctx, ph_tid, None)
+    int mint_bb = new_block(&ctx)
+    int entry_bb = new_block(&ctx)
+    set_terminator(&ctx, GTJump(mint_bb))
+    switch_to(&ctx, entry_bb)
+    ctx.comp_acc = acc
+    ctx.comp_base = base.clone()
+    ctx.comp_w0 = "__compelem_" + int_to_str(acc)
+    if needs_value:
+        ctx.comp_w1 = "__compval_" + int_to_str(acc)
+    else:
+        ctx.comp_w1 = ""
+    ctx.comp_t0 = -1
+    ctx.comp_t1 = -1
+    ctx.comp_mint_bb = mint_bb
+    ctx.comp_entry_bb = entry_bb
+    return sv
+
+# The accumulator TYPE, derived from the MATERIALIZED element type(s) — the
+# only thing an accumulator mint is ever allowed to read.
+int comp_mint_tid(GirModule &gmod, String base, int t0, int t1):
+    if base == "map_ordered":
+        return collection_accumulator_tid(&gmod, "map_ordered", "", type_id_to_name(t0, &gmod), type_id_to_name(t1, &gmod))
+    if base == "set":
+        return collection_accumulator_tid(&gmod, "set", type_id_to_name(t0, &gmod), "", "")
+    return collection_accumulator_tid(&gmod, "array", type_id_to_name(t0, &gmod), "", "")
+
+# The typed constructor for that accumulator. Both key channels come off the
+# SAME derived name: the accumulator TYPE feeds the downstream element
+# metadata, the ctor NAME feeds the `_str` hash/key upgrade in
+# `lir_codegen.gg`. A producer that supplies only one closes half the class.
+String comp_mint_ctor(GirModule &gmod, String base, int acc_tid, int t0, int t1):
+    if base == "map_ordered":
+        return "__gorget_dict_new_sized_" + type_id_to_name(t0, &gmod) + "__GGSEP__" + type_id_to_name(t1, &gmod)
+    if base == "set":
+        String en = type_id_to_name(t0, &gmod)
+        bool acc_ordered = false
+        match resource_meta_for(&gmod, type_id_to_name(acc_tid, &gmod)):
+            case Some(acc_rmeta):
+                match acc_rmeta.collection_kind:
+                    case CkOrderedSet():
+                        acc_ordered = true
+                    else:
+                        pass
+            case None:
+                pass
+        return set_ctor_name(en, acc_ordered)
+    return "__gorget_array_new_sized_" + type_id_to_name(t0, &gmod)
+
+# The element channel's single consumer. Called from `lower_stmt`'s SVarDecl
+# arm for EVERY declaration; returns immediately unless the binder is one
+# this comprehension synthesized. As soon as every channel the accumulator
+# needs is known, the accumulator LOCAL is retyped — which has to happen
+# BEFORE the synthesized `acc.push/add/put` in the very next statement
+# lowers, because the emitted extern is `<AccTypeName>__<method>` and the
+# receiver's type name is what carries the element story to `lir_lower`.
+void comp_note_elem(LowerCtx &ctx, GirModule &gmod, String name):
+    if ctx.comp_acc < 0:
+        return
+    int slot = -1
+    if ctx.comp_w0 != "" and name == ctx.comp_w0:
+        slot = 0
+    elif ctx.comp_w1 != "" and name == ctx.comp_w1:
+        slot = 1
+    if slot < 0:
+        return
+    int lid = nl_get(ctx, name)
+    if lid < 0:
+        return
+    int tid = ctx.locals.get(lid).unwrap().type_id
+    if slot == 0:
+        ctx.comp_t0 = tid
+        ctx.comp_w0 = ""
+    else:
+        ctx.comp_t1 = tid
+        ctx.comp_w1 = ""
+    if ctx.comp_t0 < 0:
+        return
+    if ctx.comp_base == "map_ordered" and ctx.comp_t1 < 0:
+        return
+    refine_local_type(&ctx, ctx.comp_acc, comp_mint_tid(&gmod, ctx.comp_base, ctx.comp_t0, ctx.comp_t1))
+
+# Emit the accumulator's constructor into the reserved block, rejoin, and
+# restore the outer channel. `ctor_args` is EMPTY: the sized-ctor magic
+# (`__gorget_*_new_sized_*`) expands at C-emit into the runtime call plus the
+# element drop/clone/materialize registration, exactly as the LITERAL paths
+# do — a producer that passes its own literal `8` is the defect this closes.
+int comp_close(LowerCtx &ctx, GirModule &gmod, CompSave sv):
+    int acc = ctx.comp_acc
+    int t0 = ctx.comp_t0
+    int t1 = ctx.comp_t1
+    String base = ctx.comp_base.clone()
+    int mint_bb = ctx.comp_mint_bb
+    int entry_bb = ctx.comp_entry_bb
+    ctx.comp_acc = sv.acc
+    ctx.comp_base = sv.base.clone()
+    ctx.comp_w0 = sv.w0.clone()
+    ctx.comp_w1 = sv.w1.clone()
+    ctx.comp_t0 = sv.t0
+    ctx.comp_t1 = sv.t1
+    ctx.comp_mint_bb = sv.mint_bb
+    ctx.comp_entry_bb = sv.entry_bb
+    if t0 < 0 or (base == "map_ordered" and t1 < 0):
+        # The source lowered no loop at all: no element, therefore no element
+        # type, therefore no accumulator to mint. LOUD, never a placeholder —
+        # a silently-empty collection from a program the front end wrongly
+        # accepted is the Core #8 trap.
+        String comp_abort_msg = "cannot lower a comprehension: its source expression lowered no loop, "
+        comp_abort_msg = comp_abort_msg + "so no element -- and hence no accumulator element type -- was ever produced"
+        lower_abort(comp_abort_msg)
+        # Keep the CFG well-formed even here. An unterminated reserved block
+        # becomes an implicit `return`, which STRANDS the whole loop and the
+        # code after it -- measured as a program that printed nothing and
+        # exited with a garbage status. A no-element comprehension is a defect;
+        # a malformed function is a second one.
+        int fail_after = ctx.current_block
+        switch_to(&ctx, mint_bb)
+        set_terminator(&ctx, GTJump(entry_bb))
+        switch_to(&ctx, fail_after)
+        return acc
+    int acc_tid = comp_mint_tid(&gmod, base, t0, t1)
+    String ctor = comp_mint_ctor(&gmod, base, acc_tid, t0, t1)
+    refine_local_type(&ctx, acc, acc_tid)
+    int after_bb = ctx.current_block
+    switch_to(&ctx, mint_bb)
+    Vector[Operand] ctor_args = []
+    emit(&ctx, GICallExtern(acc, ctor, ctor_args))
+    register_local_for_drop(&ctx, acc, acc_tid, &gmod)
+    set_terminator(&ctx, GTJump(entry_bb))
+    switch_to(&ctx, after_bb)
+    return acc
+
+# Synthesize `[if filter:] <bind> ; acc.<method>(<bind>)`. The element is
+# bound to a synthesized local FIRST so its lowered type reaches
+# `comp_note_elem` before the consuming call is lowered; the bind stays
+# INSIDE the filter guard so a filtered-out element never evaluates the body
+# (the Rust driver wraps `body_fn` in the condition the same way).
+Vector[Stmt] comp_synth_body_bound(String acc_name, String bind_name, String method, SpannedExpr comp_expr, bool has_filt, SpannedExpr filt_e, Span span):
+    SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
+    Stmt decl = SVarDecl(SpannedType(TPrimitive("auto"), span), bind_name, comp_expr.clone(), 0, 0, -1)
+    Vector[CallArg] call_args = [pos_arg(SpannedExpr(EIdentifier(bind_name), span))]
+    Vector[SpannedType] no_targs = []
+    SpannedExpr mcall = SpannedExpr(EMethodCall(Box(acc_ref), method, call_args, no_targs), span)
+    Stmt consume_stmt = SExpr(mcall)
+    Vector[Stmt] body = []
+    if has_filt:
+        Vector[Stmt] then_body = []
+        then_body.push(decl)
+        then_body.push(consume_stmt)
+        Vector[ElseBranch] no_elifs = []
+        SpannedExpr filt_expr = filt_e.clone()
+        Stmt if_stmt = SIf(filt_expr, then_body, no_elifs)
+        body.push(if_stmt)
+    else:
+        body.push(decl)
+        body.push(consume_stmt)
+    return body
+
+# The dict twin: TWO bound channels, because a dict has two result element
+# types and a producer that threads only the KEY closes half the class.
+Vector[Stmt] comp_synth_dict_body_bound(String acc_name, String kbind, String vbind, SpannedExpr key_expr, SpannedExpr val_expr, bool has_filt, SpannedExpr filt_e, Span span):
+    SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
+    Stmt kdecl = SVarDecl(SpannedType(TPrimitive("auto"), span), kbind, key_expr.clone(), 0, 0, -1)
+    Stmt vdecl = SVarDecl(SpannedType(TPrimitive("auto"), span), vbind, val_expr.clone(), 0, 0, -1)
+    Vector[CallArg] put_args = [pos_arg(SpannedExpr(EIdentifier(kbind), span)), pos_arg(SpannedExpr(EIdentifier(vbind), span))]
+    Vector[SpannedType] no_targs = []
+    SpannedExpr put_call = SpannedExpr(EMethodCall(Box(acc_ref), "put", put_args, no_targs), span)
+    Stmt put_stmt = SExpr(put_call)
+    Vector[Stmt] body = []
+    if has_filt:
+        Vector[Stmt] then_body = []
+        then_body.push(kdecl)
+        then_body.push(vdecl)
+        then_body.push(put_stmt)
+        Vector[ElseBranch] no_elifs = []
+        SpannedExpr filt_expr = filt_e.clone()
+        Stmt if_stmt = SIf(filt_expr, then_body, no_elifs)
+        body.push(if_stmt)
+    else:
+        body.push(kdecl)
+        body.push(vdecl)
+        body.push(put_stmt)
+    return body
+
 # ── List comprehension lowering ──────────────────────────
 # `[comp_expr for var in iterable if filter]` → a loop that builds an
 # array accumulator. Mirrors Rust `lower_list_comprehension`
@@ -7404,7 +7657,7 @@ int lower_dict_fold(LowerCtx &ctx, int recv, String recv_type_name, SpannedExpr 
 # borrow alias; the synthesized `acc.push(ch)` clones it at the ownership
 # boundary via the normal method-call consume machinery (run-proven by
 # the `for c in s: stack.push(c)` idiom).
-int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_name, SpannedExpr iterable, Option[Box[SpannedExpr]] filt_opt, GirModule &gmod):
+int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_name, SpannedExpr iterable, bool has_filt, SpannedExpr filt_e, GirModule &gmod):
     Span span = comp_expr.span
     materialize_loop_carried_bare_params(&ctx, &gmod, comp_expr.span.start)
     # ── RANGE base: `[x for x in start..end]` / `[x for x in start..=end]`.
@@ -7456,13 +7709,14 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
                             # has produced a MATERIALIZED element — so it takes
                             # the RESULT element type. This range arm is a
                             # SURVIVING self-host residual, routed to Track K.
-                            int racc_tid = collection_accumulator_tid(&gmod, "array", "int64_t", "", "")
-                            int racc = comp_make_acc(&ctx, racc_tid, "int64_t", &gmod)
+                            CompSave rsv = comp_reserve(&ctx, &gmod, "array", false)
+                            int racc = ctx.comp_acc
                             String racc_name = "__listcomp_acc_" + int_to_str(racc)
                             nl_put(&ctx, racc_name, racc)
-                            Vector[Stmt] rbody = comp_synth_body(racc_name, comp_expr, filt_opt, span)
+                            String rbind = ctx.comp_w0.clone()
+                            Vector[Stmt] rbody = comp_synth_body_bound(racc_name, rbind, "push", comp_expr, has_filt, filt_e, span)
                             lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, rbody, Vector[Stmt](), &gmod, false)
-                            return racc
+                            return comp_close(&ctx, &gmod, rsv)
                         case None:
                             pass
                 case None:
@@ -7486,19 +7740,6 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
     coll_local = maybe_auto_propagate(&ctx, coll_local, &gmod)
     String coll_tn = local_type_name(coll_local, ctx, &gmod)
     SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
-    # ── STRING base: `[c for c in s]` — UTF-8 codepoint pass via
-    # `lower_for_string`. Accumulator typed `Vector__GorgetString` so the
-    # synthesized push clones the cap=0 codepoint view at the boundary.
-    if coll_tn == "GorgetString":
-        int sacc_tid = collection_accumulator_tid(&gmod, "array", "GorgetString", "", "")
-        int sacc = comp_make_acc(&ctx, sacc_tid, "GorgetString", &gmod)
-        String sacc_name = "__listcomp_acc_" + int_to_str(sacc)
-        nl_put(&ctx, sacc_name, sacc)
-        Vector[Stmt] sbody = comp_synth_body(sacc_name, comp_expr, filt_opt, span)
-        # String list-comprehension `[c for c in s]` is never enumerate (a bare
-        # PBinding loop var) — pass is_enumerate=false.
-        lower_for_string(&ctx, var_pat, coll_local, false, sbody, &gmod, false)
-        return sacc
     # ── VECTOR base: idx-walk via `lower_for_vector`. Accumulator element
     # type recovered from the SOURCE collection name — correct ONLY for the
     # element-PRESERVING case (`[x for x in v]`, `[x*2 for x in v]`).
@@ -7527,96 +7768,89 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
     # auto-bound result is self-describing for a downstream `v[i]` / `for x
     # in v`. The sized alloc (driven by `elem_name`) clones correctly at the
     # push boundary, unchanged.
-    String elem_name = collection_element_type(coll_tn)
-    int vacc_tid = collection_accumulator_tid(&gmod, "array", elem_name, "", "")
-    int vacc = comp_make_acc(&ctx, vacc_tid, elem_name, &gmod)
+    CompSave vsv = comp_reserve(&ctx, &gmod, "array", false)
+    int vacc = ctx.comp_acc
     String vacc_name = "__listcomp_acc_" + int_to_str(vacc)
     nl_put(&ctx, vacc_name, vacc)
-    Vector[Stmt] vbody = comp_synth_body(vacc_name, comp_expr, filt_opt, span)
-    lower_for_vector(&ctx, var_pat, coll_local, coll_tn, false, false, vbody, &gmod, false)
-    return vacc
+    String vbind = ctx.comp_w0.clone()
+    Vector[Stmt] vbody = comp_synth_body_bound(vacc_name, vbind, "push", comp_expr, has_filt, filt_e, span)
+    drive_loop_lowered(&ctx, var_pat, coll_local, coll_tn, false, false, vbody, Vector[Stmt](), &gmod, false)
+    return comp_close(&ctx, &gmod, vsv)
 
-# Allocate a comprehension accumulator array. When `elem_tyname` names a
-# concrete element type, emit the `__gorget_array_new_sized_<T>` magic (it
-# expands at C-emit to gorget_array_new(sizeof(T)) + the T
-# elem_drop/elem_clone/elem_materialize fn-ptr registration, exactly like
-# the typed EArrayLiteral path) so non-scalar elements (e.g. GorgetString
-# codepoint views) are sized, freed, and cloned correctly. An empty name
-# falls back to the scalar `gorget_array_new(8)`.
+# Allocate a Vector-HOF accumulator array from a CONCRETE element type name.
+# `__gorget_array_new_sized_<T>` expands at C-emit to
+# `gorget_array_new(sizeof(T))` plus the T elem_drop / elem_clone /
+# elem_materialize fn-ptr registration, exactly like the typed EArrayLiteral
+# path, so non-scalar elements (e.g. GorgetString codepoint views) are sized,
+# freed and cloned correctly.
+#
+# A NON-EMPTY `elem_tyname` IS THE CALLERS' CONTRACT, AND IT IS ENFORCED
+# BELOW rather than asserted in prose. Both call sites are in
+# `try_lower_vector_hof`, which early-returns `-1` on an empty element name
+# before either is reached, and the `map` arm's name comes from
+# `type_id_to_name`, which never returns `""`. The scalar
+# `gorget_array_new(8)` fallback this used to take is the same
+# withhold-the-element-type shape the round retired everywhere else: it
+# would produce an untyped accumulator whose downstream readers recover `""`
+# and stub the result. A third caller that cannot supply a name must fix its
+# own channel, not silently get an 8-byte slot — so it gets a loud abort
+# (Core #10 lower-or-reject).
 int comp_make_acc(LowerCtx &ctx, int acc_tid, String elem_tyname, GirModule &gmod):
+    if elem_tyname == "":
+        String hof_abort_msg = "cannot lower a Vector HOF: its accumulator element type is unknown, "
+        hof_abort_msg = hof_abort_msg + "and an untyped accumulator would silently withhold the element type "
+        hof_abort_msg = hof_abort_msg + "from every downstream reader"
+        lower_abort(hof_abort_msg)
     int acc_local = add_local(&ctx, acc_tid, None)
-    if elem_tyname != "":
-        Vector[Operand] an_args = []
-        emit(&ctx, GICallExtern(acc_local, "__gorget_array_new_sized_" + elem_tyname, an_args))
-    else:
-        Vector[Operand] an_args = [OpConstI64(8)]
-        emit(&ctx, GICallExtern(acc_local, "gorget_array_new", an_args))
+    Vector[Operand] an_args = []
+    emit(&ctx, GICallExtern(acc_local, "__gorget_array_new_sized_" + elem_tyname, an_args))
     register_local_for_drop(&ctx, acc_local, acc_tid, &gmod)
     return acc_local
 
-# Synthesize the loop body `[if filter:] acc.push(comp_expr)` referencing
-# the accumulator through `EIdentifier(acc_name)`. The push routes through
-# the normal method-call consume machinery (clone-at-boundary for live /
-# borrowed sources). For the filtered variant the push is guarded by an
-# `if filter:` — `lower_for_*` rejoins the body to the position-advance, so
-# a filtered-out element never skips the loop's increment.
-Vector[Stmt] comp_synth_body(String acc_name, SpannedExpr comp_expr, Option[Box[SpannedExpr]] filt_opt, Span span):
-    SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
-    Vector[CallArg] push_args = [pos_arg(comp_expr.clone())]
-    Vector[SpannedType] no_targs = []
-    Vector[String] no_arg_names = []
-    SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
-    Stmt push_stmt = SExpr(push_call)
-    Vector[Stmt] body = []
-    match filt_opt:
-        case Some(filt_box):
-            Vector[Stmt] then_body = [push_stmt]
-            Vector[ElseBranch] no_elifs = []
-            SpannedExpr filt_expr = (*filt_box).clone()
-            Stmt if_stmt = SIf(filt_expr, then_body, no_elifs)
-            body.push(if_stmt)
-        case None:
-            body.push(push_stmt)
-    return body
-
 # ── Set comprehension lowering ───────────────────────────
 # `{comp_expr for var in iterable [if filter]}` → a loop that builds a
-# `Set__int64_t`-typed accumulator. Same philosophy as
+# `Set__<T>`-typed accumulator. Same philosophy as
 # `lower_list_comprehension`: synthesize an `acc.add(comp_expr)` body
 # (wrapped in `if filter:` for the filtered variant) and route it through
-# the run-proven `lower_for_range` / `lower_for_vector` loop machinery.
+# the run-proven `lower_for_range` / `drive_loop_lowered` loop machinery.
 #
-# ⛔ `Set__int64_t` IS A KNOWN-WRONG HARDCODE, NOT A DESIGN CHOICE — this
-# paragraph used to present it as one ("The destination VarDecl lowers to a
-# `Set__int64_t` LOCAL, so the accumulator is typed with that same MANGLED
-# element-carrying name"). `comp_make_set_acc` takes NO element-type parameter,
-# so the accumulator is `Set__int64_t` for EVERY element type, including
-# `String` — which is compared as an 8-byte POINTER, giving
-# `s.contains(runtime_built_string) == false` at rc 0. Measured; and with
-# string LITERALS the same broken shape reads `true`, so a literal-backed probe
-# is a false negative here.
+# The accumulator is minted from the MATERIALIZED RESULT ELEMENT, never from
+# the source or from a scalar default: `comp_open` reserves the accumulator
+# local and an unterminated mint block, the synthesized body binds the
+# element to a producer-minted nonce, `comp_note_elem` records the element
+# type the moment the binder lowers, and `comp_close` emits the typed
+# constructor into the reserved block. Both channels come off that one
+# derived name — `comp_mint_tid` for the accumulator TYPE and
+# `comp_mint_ctor` (→ `set_ctor_name`, lower_types.gg) for the ctor NAME.
 #
-# What IS correct in the mangled-name choice: the mangled name (rather than the
-# raw `GorgetSet`) carries the element metadata `resource_meta_for` /
-# `coll_elem_type_map` need, routes to the `GorgetSet` runtime category in
-# `lir_lower.gg`, and makes the comprehension result type match the destination
-# at the CoW/assignment boundary. The element name in it is the part that is
-# wrong. The set LITERAL path already does this correctly — see the comment
-# above `__gorget_set_new_sized_` in `lower_expr.gg`, which records why the raw
-# runtime symbol withholds the element type from every downstream reader.
+# ⚠ EMISSION ORDER, not just emission: the mint must land BEFORE the
+# synthesized `acc.add(...)` lowers, because the emitted extern is
+# `<AccTypeName>__add` and the receiver's type NAME is what carries the
+# element story into `lir_lower`.
+#
+# The shape this replaced was `Set__int64_t` for EVERY element type — a
+# `String` element was then compared as an 8-byte POINTER, giving
+# `s.contains(runtime_built_string) == false` at rc 0. ⚠ With string
+# LITERALS that broken shape read `true`, so a literal-backed probe is a
+# false negative for this class: build the element at RUNTIME.
+#
+# Why a MANGLED name rather than the raw `GorgetSet`: it carries the element
+# metadata `resource_meta_for` / `coll_elem_type_map` need, routes to the
+# `GorgetSet` runtime category in `lir_lower.gg`, and makes the comprehension
+# result type match the destination at the CoW/assignment boundary. The set
+# LITERAL path mints the same way — see the comment above the
+# `set_ctor_name` call there.
 #
 # The Rust set-comp shape is `lower_set_comprehension` in
 # `src/ir/lowering/exprs/collections.rs` (cite by FUNCTION NAME — the old
 # `collections.rs:872` cite resolved to the ARRAY comp, and every line-number
-# cite in this band was measured stale). As of R44 Rust mints its accumulator
-# from the MATERIALIZED element, so there is no longer a raw-`GorgetSet`
-# divergence to preserve; the self-host residual is routed to Track K and
-# pinned by `known_gaps/sh_comprehension_set_acc_scalar_hardcode.gg`.
+# cite in this band was measured stale). Rust mints its accumulator from the
+# MATERIALIZED element too, so the two lanes now agree by construction.
 #
-# ⚠ NOT range-only any more. The non-range base used to fall back to a Unit
-# constant — a Core #10 silent drop — and R44 retired it: a non-range source is
-# now lowered through `lower_for_vector`, which is what makes the element-type
-# hardcode above REACHABLE for non-`int` elements.
+# ⚠ NOT range-only. The non-range base used to fall back to a Unit constant —
+# a Core #10 silent drop — and R44 retired it: a non-range source is lowered
+# through `drive_loop_lowered`, which is what made every element type
+# reachable on this path.
 int lower_set_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_name, SpannedExpr iterable, Option[Box[SpannedExpr]] filt_opt, GirModule &gmod):
     Span span = comp_expr.span
     materialize_loop_carried_bare_params(&ctx, &gmod, comp_expr.span.start)
@@ -7626,12 +7860,22 @@ int lower_set_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_nam
                 case Some(start_box):
                     match end_opt:
                         case Some(end_box):
-                            int sacc = comp_make_set_acc(&ctx, &gmod)
+                            CompSave srsv = comp_reserve(&ctx, &gmod, "set", false)
+                            int sacc = ctx.comp_acc
                             String sacc_name = "__setcomp_acc_" + int_to_str(sacc)
                             nl_put(&ctx, sacc_name, sacc)
-                            Vector[Stmt] sbody = comp_synth_set_body(sacc_name, comp_expr, filt_opt, span)
+                            String srbind = ctx.comp_w0.clone()
+                            bool sr_hf = false
+                            SpannedExpr sr_fe = comp_expr
+                            match filt_opt:
+                                case Some(sr_fb):
+                                    sr_hf = true
+                                    sr_fe = *sr_fb
+                                case None:
+                                    pass
+                            Vector[Stmt] sbody = comp_synth_body_bound(sacc_name, srbind, "add", comp_expr, sr_hf, sr_fe, span)
                             lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, sbody, Vector[Stmt](), &gmod, false)
-                            return sacc
+                            return comp_close(&ctx, &gmod, srsv)
                         case None:
                             pass
                 case None:
@@ -7648,125 +7892,52 @@ int lower_set_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_nam
     set_coll_local = maybe_auto_propagate(&ctx, set_coll_local, &gmod)
     String set_coll_tn = local_type_name(set_coll_local, ctx, &gmod)
     SpannedPattern set_var_pat = SpannedPattern(PBinding(var_name), span)
-    int vsacc = comp_make_set_acc(&ctx, &gmod)
+    CompSave svsv = comp_reserve(&ctx, &gmod, "set", false)
+    int vsacc = ctx.comp_acc
     String vsacc_name = "__setcomp_acc_" + int_to_str(vsacc)
     nl_put(&ctx, vsacc_name, vsacc)
-    Vector[Stmt] vsbody = comp_synth_set_body(vsacc_name, comp_expr, filt_opt, span)
-    lower_for_vector(&ctx, set_var_pat, set_coll_local, set_coll_tn, false, false, vsbody, &gmod, false)
-    return vsacc
-
-# Allocate a set comprehension accumulator.
-#
-# ⛔ FILED DEFECT, DESCRIBED AS-IS — do not read the next sentence as a design
-# rule. This producer takes NO element-type parameter, so it types the
-# accumulator `Set__int64_t` and emits the RAW `gorget_set_new` /
-# `gorget_ordered_set_new` runtime symbol with a literal `OpConstI64(8)` size,
-# for EVERY element type. That is the current, KNOWN-WRONG behaviour for a
-# non-`int` element (routed to Track K; repro
-# `known_gaps/sh_comprehension_set_acc_scalar_hardcode.gg`).
-#
-# ⚠ AN EARLIER VERSION OF THIS COMMENT ORDERED THE HARDCODE PRESERVED —
-# "Emit `gorget_set_new` directly with an `OpConstI64(8)` element-size arg
-# (mirror Rust collections.rs:884-888)" — and it was false twice: it is the
-# instruction to keep the defect, and the cite resolved to the ARRAY comp
-# (which passes a TYPED `SizeOf`, not a literal 8). Cite Rust by FUNCTION NAME:
-# `lower_set_comprehension` in `src/ir/lowering/exprs/collections.rs`.
-#
-# THE CORRECT SHAPE ALREADY EXISTS IN THIS FILE, one collection over: the set
-# LITERAL emits `__gorget_set_new_sized_<T>` / `__gorget_ordered_set_new_sized_<T>`
-# with an EMPTY operand vector, and its own comment records why — the raw symbol
-# "withheld the element type from every downstream reader … a String element
-# never reached `*_new_str`". `comp_make_acc` (the LIST producer, in this same
-# file) shows the signature shape: it takes a `String elem_tyname` and branches
-# on it. The fix is that channel plus the typed ctor, at BOTH call sites.
-#
-# What IS correct here: do NOT reuse `comp_make_acc` — it allocs a
-# `gorget_array_new` sized ARRAY (a 64-byte GorgetArray) which downstream code
-# would treat as a GorgetSet → heap corruption.
-int comp_make_set_acc(LowerCtx &ctx, GirModule &gmod):
-    # Centralized collection-accumulator typing.
-    # ⛔ `"int64_t"` is a HARDCODE, not a derivation. The old comment here said
-    # "Set comprehensions iterate `start..end`, so the element is scalar
-    # `int64_t`" — false since R44 retired the non-range Unit fallback, which
-    # made every element type reachable on this path.
-    int acc_tid = collection_accumulator_tid(&gmod, "set", "int64_t", "", "")
-    int acc_local = add_local(&ctx, acc_tid, None)
-    Vector[Operand] sn_args = [OpConstI64(8)]
-    # The accumulator type (`Set__int64_t`) is the ORDERED kind (a `Set[T]`
-    # comprehension preserves insertion order). Drive the ctor fn from the
-    # TYPED `collection_kind` of acc_tid so the runtime alloc matches the
-    # declared kind — emitting the unordered `gorget_set_new` for an ordered
-    # `Set__` accumulator was a latent type/runtime mismatch (the typedef said
-    # ordered, the alloc was unordered).
-    String acc_tn = type_id_to_name(acc_tid, &gmod)
-    bool acc_ordered = false
-    match resource_meta_for(&gmod, acc_tn):
-        case Some(acc_rmeta):
-            match acc_rmeta.collection_kind:
-                case CkOrderedSet():
-                    acc_ordered = true
-                else:
-                    pass
+    String svbind = ctx.comp_w0.clone()
+    bool sv_hf = false
+    SpannedExpr sv_fe = comp_expr
+    match filt_opt:
+        case Some(sv_fb):
+            sv_hf = true
+            sv_fe = *sv_fb
         case None:
             pass
-    if acc_ordered:
-        emit(&ctx, GICallExtern(acc_local, "gorget_ordered_set_new", sn_args))
-    else:
-        emit(&ctx, GICallExtern(acc_local, "gorget_set_new", sn_args))
-    register_local_for_drop(&ctx, acc_local, acc_tid, &gmod)
-    return acc_local
-
-# Synthesize the set-comp loop body `[if filter:] acc.add(comp_expr)`.
-# Identical shape to `comp_synth_body` but emits `.add` (the set inserter)
-# instead of `.push`. `comp_expr` is passed DIRECTLY (a `SpannedExpr`
-# param) — never threaded through a `Vector[SpannedExpr]` PARAM, which the
-# self-host miscompiles when the element type carries a `Box` (logged in
-# TODO). For the filtered variant the `.add` is guarded by `if filter:` so
-# a filtered-out element never skips the loop's position-advance.
-Vector[Stmt] comp_synth_set_body(String acc_name, SpannedExpr comp_expr, Option[Box[SpannedExpr]] filt_opt, Span span):
-    SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
-    Vector[CallArg] add_args = [pos_arg(comp_expr.clone())]
-    Vector[SpannedType] no_targs = []
-    Vector[String] no_arg_names = []
-    SpannedExpr add_call = SpannedExpr(EMethodCall(Box(acc_ref), "add", add_args, no_targs), span)
-    Stmt add_stmt = SExpr(add_call)
-    Vector[Stmt] body = []
-    match filt_opt:
-        case Some(filt_box):
-            Vector[Stmt] then_body = [add_stmt]
-            Vector[ElseBranch] no_elifs = []
-            SpannedExpr filt_expr = (*filt_box).clone()
-            Stmt if_stmt = SIf(filt_expr, then_body, no_elifs)
-            body.push(if_stmt)
-        case None:
-            body.push(add_stmt)
-    return body
+    Vector[Stmt] vsbody = comp_synth_body_bound(vsacc_name, svbind, "add", comp_expr, sv_hf, sv_fe, span)
+    drive_loop_lowered(&ctx, set_var_pat, set_coll_local, set_coll_tn, false, false, vsbody, Vector[Stmt](), &gmod, false)
+    return comp_close(&ctx, &gmod, svsv)
 
 # ── Dict comprehension lowering ──────────────────────────
 # `{key_expr: val_expr for var in iterable [if filter]}` → a loop that
-# builds a `Dict__int64_t__int64_t`-typed accumulator. Same philosophy as
-# the list and set comps; the optional filter (`EDictComp` 5th AST field)
-# threads through to the synth body, guarding the `.put` with `if filter:`.
+# builds a `Dict__<K>__<V>`-typed accumulator. Same philosophy as the list
+# and set comps; the optional filter (`EDictComp` 5th AST field) threads
+# through to the synth body, guarding the `.put` with `if filter:`.
 #
-# ⛔ `Dict__int64_t__int64_t` IS A KNOWN-WRONG HARDCODE, on BOTH channels.
-# `comp_make_dict_acc` takes no key or value element type, so a
-# `Dict[int, String]` comprehension stores its VALUE in an 8-byte slot and
-# prints a raw pointer at rc 0, and a `Dict[String, int]` mis-keys. Measured;
-# routed to Track K; repro `known_gaps/sh_comprehension_dict_value_channel.gg`.
+# BOTH channels are minted from the MATERIALIZED key and value: the deferred
+# mint reserves the accumulator and an unterminated block, `comp_note_elem`
+# records each channel as its producer-minted binder lowers, and
+# `comp_close` emits `comp_mint_tid` / `comp_mint_ctor` once both are known.
 # A fix that threads only the KEY (derivable from the source element) closes
-# half the class.
+# half the class — which is why the element channel carries two slots.
 #
-# What IS correct in the mangled-name choice: it matches the destination VarDecl
-# at the CoW boundary and routes to the `GorgetMap` runtime category. Rust's
-# dict-comp also mangles — `lower_dict_comprehension` in
-# `src/ir/lowering/exprs/collections.rs`, cited by FUNCTION NAME because the old
-# `collections.rs:812` cite resolved to the ARRAY comp's exit block. As of R44
-# Rust derives BOTH halves of the mangle from the MATERIALIZED key and value,
-# through a single `dict_mangled_name` chokepoint shared with the dict literal.
+# The shape this replaced was `Dict__int64_t__int64_t` on BOTH channels for
+# every key and value type: a `Dict[int, String]` comprehension stored its
+# VALUE in an 8-byte slot and printed a raw pointer at rc 0, and a
+# `Dict[String, int]` mis-keyed.
 #
-# ⚠ NOT range-only any more. The non-range base used to fall back to a Unit
-# constant — a Core #10 silent drop — and R44 retired it: a non-range source is
-# now lowered through `lower_for_vector`.
+# Why a MANGLED name: it matches the destination VarDecl at the CoW boundary
+# and routes to the `GorgetMap` runtime category. Rust's dict-comp mangles
+# the same way — `lower_dict_comprehension` in
+# `src/ir/lowering/exprs/collections.rs`, cited by FUNCTION NAME because the
+# old `collections.rs:812` cite resolved to the ARRAY comp's exit block —
+# deriving both halves from the MATERIALIZED key and value through a single
+# `dict_mangled_name` chokepoint shared with the dict literal.
+#
+# ⚠ NOT range-only. The non-range base used to fall back to a Unit constant —
+# a Core #10 silent drop — and R44 retired it: a non-range source is lowered
+# through `drive_loop_lowered`.
 int lower_dict_comprehension(LowerCtx &ctx, SpannedExpr key_expr, SpannedExpr val_expr, String var_name, SpannedExpr iterable, Option[Box[SpannedExpr]] filt_opt, GirModule &gmod):
     Span span = key_expr.span
     materialize_loop_carried_bare_params(&ctx, &gmod, key_expr.span.start)
@@ -7776,12 +7947,23 @@ int lower_dict_comprehension(LowerCtx &ctx, SpannedExpr key_expr, SpannedExpr va
                 case Some(start_box):
                     match end_opt:
                         case Some(end_box):
-                            int dacc = comp_make_dict_acc(&ctx, &gmod)
+                            CompSave drsv = comp_reserve(&ctx, &gmod, "map_ordered", true)
+                            int dacc = ctx.comp_acc
                             String dacc_name = "__dictcomp_acc_" + int_to_str(dacc)
                             nl_put(&ctx, dacc_name, dacc)
-                            Vector[Stmt] dbody = comp_synth_dict_body(dacc_name, key_expr, val_expr, filt_opt, span)
+                            String drk = ctx.comp_w0.clone()
+                            String drv = ctx.comp_w1.clone()
+                            bool dr_hf = false
+                            SpannedExpr dr_fe = key_expr
+                            match filt_opt:
+                                case Some(dr_fb):
+                                    dr_hf = true
+                                    dr_fe = *dr_fb
+                                case None:
+                                    pass
+                            Vector[Stmt] dbody = comp_synth_dict_body_bound(dacc_name, drk, drv, key_expr, val_expr, dr_hf, dr_fe, span)
                             lower_for_range(&ctx, var_name, *start_box, *end_box, rng_incl, dbody, Vector[Stmt](), &gmod, false)
-                            return dacc
+                            return comp_close(&ctx, &gmod, drsv)
                         case None:
                             pass
                 case None:
@@ -7798,74 +7980,23 @@ int lower_dict_comprehension(LowerCtx &ctx, SpannedExpr key_expr, SpannedExpr va
     dict_coll_local = maybe_auto_propagate(&ctx, dict_coll_local, &gmod)
     String dict_coll_tn = local_type_name(dict_coll_local, ctx, &gmod)
     SpannedPattern dict_var_pat = SpannedPattern(PBinding(var_name), span)
-    int vdacc = comp_make_dict_acc(&ctx, &gmod)
+    CompSave dvsv = comp_reserve(&ctx, &gmod, "map_ordered", true)
+    int vdacc = ctx.comp_acc
     String vdacc_name = "__dictcomp_acc_" + int_to_str(vdacc)
     nl_put(&ctx, vdacc_name, vdacc)
-    Vector[Stmt] vdbody = comp_synth_dict_body(vdacc_name, key_expr, val_expr, filt_opt, span)
-    lower_for_vector(&ctx, dict_var_pat, dict_coll_local, dict_coll_tn, false, false, vdbody, &gmod, false)
-    return vdacc
-
-# Allocate a dict comprehension accumulator.
-#
-# ⛔ FILED DEFECT, DESCRIBED AS-IS. This producer takes NO key or value element
-# type, so it types the accumulator `Dict__int64_t__int64_t` and emits the RAW
-# `gorget_dict_new` with `[OpConstI64(8), OpConstI64(8)]`, for EVERY key and
-# value type. Current, KNOWN-WRONG behaviour for a non-`int` channel; routed to
-# Track K.
-#
-# ⚠ THE OLD COMMENT HERE CITED THE WRONG PATH THREE WAYS: it said this "Mirrors
-# the `EDictLiteral` path (lower_expr.gg:2645-2662)". `EDictLiteral` is lowered
-# elsewhere in this file (`grep -n EDictLiteral`), `:2645-2662` is String
-# `==`/`!=` operator lowering, and the real `EDictLiteral` path emits
-# `__gorget_dict_new_sized_<K>__GGSEP__<V>` whenever K and V are known — falling
-# back to `gorget_dict_new(8, 8)` ONLY for an unknown name. So the comment
-# described the FALLBACK branch as if it were the path, and pointed at a
-# different construct entirely. Cite by grep-anchor, never by line number.
-#
-# What IS correct here: do NOT reuse `comp_make_acc` — it allocs a GorgetArray,
-# which downstream code would treat as a GorgetMap → heap corruption.
-int comp_make_dict_acc(LowerCtx &ctx, GirModule &gmod):
-    # Centralized collection-accumulator typing.
-    # ⛔ Both `"int64_t"`s are HARDCODES, not derivations. The old comment here
-    # said "dict comprehensions iterate `start..end`, so key + value are scalar
-    # `int64_t`" — false since R44 retired the non-range Unit fallback. The
-    # `map_ordered` kind IS deliberate (it matches the destination VarDecl).
-    int acc_tid = collection_accumulator_tid(&gmod, "map_ordered", "", "int64_t", "int64_t")
-    int acc_local = add_local(&ctx, acc_tid, None)
-    Vector[Operand] dn_args = [OpConstI64(8), OpConstI64(8)]
-    emit(&ctx, GICallExtern(acc_local, "gorget_dict_new", dn_args))
-    register_local_for_drop(&ctx, acc_local, acc_tid, &gmod)
-    return acc_local
-
-# Synthesize the dict-comp loop body `[if filter:] acc.put(key_expr, val_expr)`.
-# Both `key_expr` and `val_expr` are passed as DIRECT `SpannedExpr` params
-# (deref'd from the `EDictComp` boxes at the call site) — NEVER threaded
-# through a `Vector[SpannedExpr]` PARAM (which the self-host miscompiles
-# for Box-bearing elements). `comp_synth_body` only emits single-arg
-# push/add, so this 2-arg `.put` helper is distinct. The `.put` routes
-# through the normal method-call consume machinery (clone-at-boundary for
-# live/borrowed sources) → `gorget_map_put` (map_dict_method). For the
-# filtered variant the `.put` is guarded by `if filter:` (mirrors
-# `comp_synth_set_body`) so a filtered-out element never skips the loop's
-# position-advance.
-Vector[Stmt] comp_synth_dict_body(String acc_name, SpannedExpr key_expr, SpannedExpr val_expr, Option[Box[SpannedExpr]] filt_opt, Span span):
-    SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
-    Vector[CallArg] put_args = [pos_arg(key_expr.clone()), pos_arg(val_expr.clone())]
-    Vector[SpannedType] no_targs = []
-    Vector[String] no_arg_names = []
-    SpannedExpr put_call = SpannedExpr(EMethodCall(Box(acc_ref), "put", put_args, no_targs), span)
-    Stmt put_stmt = SExpr(put_call)
-    Vector[Stmt] body = []
+    String dvk = ctx.comp_w0.clone()
+    String dvv = ctx.comp_w1.clone()
+    bool dv_hf = false
+    SpannedExpr dv_fe = key_expr
     match filt_opt:
-        case Some(filt_box):
-            Vector[Stmt] then_body = [put_stmt]
-            Vector[ElseBranch] no_elifs = []
-            SpannedExpr filt_expr = (*filt_box).clone()
-            Stmt if_stmt = SIf(filt_expr, then_body, no_elifs)
-            body.push(if_stmt)
+        case Some(dv_fb):
+            dv_hf = true
+            dv_fe = *dv_fb
         case None:
-            body.push(put_stmt)
-    return body
+            pass
+    Vector[Stmt] vdbody = comp_synth_dict_body_bound(vdacc_name, dvk, dvv, key_expr, val_expr, dv_hf, dv_fe, span)
+    drive_loop_lowered(&ctx, dict_var_pat, dict_coll_local, dict_coll_tn, false, false, vdbody, Vector[Stmt](), &gmod, false)
+    return comp_close(&ctx, &gmod, dvsv)
 
 # ── Call lowering ────────────────────────────────────────
 

@@ -1,0 +1,55 @@
+# GRADUATED from `known_gaps/` (R44 Track K) — the DICT comprehension's
+# VALUE channel.
+#
+# AXIS CELL: comp-kind = dict `{k: v ...}` · source = `Vector[int]` · result
+# = `int` key -> `String` VALUE.
+#
+# ⚠ THE VALUE CHANNEL IS THE HALF A KEY-ONLY FIX MISSES. The key is
+# derivable from the source element, so a fix that threads only the key looks
+# complete and leaves this cell wrong. The dict mint therefore carries TWO
+# element slots and closes only when BOTH are known.
+#
+# RED-VERIFIED (self-host lane, pre-fix driver): `2` then a RAW POINTER
+# printed as an integer, at rc 0 — a `String` value stored in an 8-byte slot
+# and read back as a number.
+#
+# ⚠ THE RULE ITS `known_gaps` HEADER STATED WAS MEASURABLY TOO NARROW, and
+# correcting it is part of the graduation. That header said the self-host
+# set/dict arms are "WRONG iff any RESULT-CHANNEL element is not `int`". A
+# set comprehension over a STRING SOURCE with EVERY result channel `int`
+# (`{c.len() for c in s0}`) is ALSO wrong at HEAD — it prints an EMPTY
+# collection at rc 0 — because the element-type helper early-returned empty
+# for a String source and the comprehension then lowered NO LOOP AT ALL. No
+# grid in the round sampled a set or dict over a String source, so nothing
+# falsified the rule; the falsifiers now ship beside this file as
+# `set_strsrc_allint` and `dict_strsrc_allint`. The real rule is: the mint
+# was wrong whenever the accumulator's element type could not be recovered
+# from the DESTINATION, which the result element now supplies directly.
+#
+# FIXTURE PLACEMENT: subdirectory (see any NET A cell's header for the full
+# reasoning). LANE: self-host only — the Rust lane was already correct, so a
+# `run_gg`-wired body would be GREEN ON ARRIVAL and pin nothing. STAGE: 0.
+# RUNG: 1a (both real lanes agree post-fix; the longhand statement form of
+# each program is the held-fixed control and agrees on both lanes).
+
+from std.collections import Dict
+
+String mk(String a, String b):
+    return a + b
+
+int n0():
+    return 3
+
+int n1():
+    return 4
+
+String tag(int n):
+    if n == 3:
+        return mk("thr", "ee")
+    return mk("fo", "ur")
+
+void main():
+    Vector[int] nums = [n0(), n1()]
+    Dict[int, String] d = {n: tag(n) for n in nums}
+    print(d.len())
+    print(d[3])

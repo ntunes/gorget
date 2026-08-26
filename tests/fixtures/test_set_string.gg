@@ -91,8 +91,17 @@ void main():
     print(f"{i_dis.len()}")
 
     # --- filter ---
+    # The `.contains()` read-back below is LOAD-BEARING, not decoration. The
+    # Set-HOF filter arm used to mint its result set with a raw
+    # `gorget_ordered_set_new` and a HARDCODED 8-byte key, which PRESERVES THE
+    # LENGTH and destroys MEMBERSHIP: a `String` element landed in an 8-byte
+    # slot and was compared as a pointer. A `.len()`-only assertion is
+    # structurally blind to that, and this fixture was green through the whole
+    # life of the defect. Do not remove the read-back.
     Set[String] long_names = a.filter((String x): x.len() > 4)
     print(f"{long_names.len()}")
+    bool long_has_alpha = long_names.contains("alpha")
+    print(f"{long_has_alpha}")
 
     # --- fold ---
     int total_len = a.fold(0, (int acc, String x): acc + x.len())
@@ -167,5 +176,10 @@ void main():
     print(f"{hs_total}")
 
     # --- filter ---
+    # Read a member back — see the ordered `filter` above for why a
+    # `.len()`-only assertion cannot see this arm's defect. This is the
+    # UNORDERED emission site, a second and independently-reachable one.
     HashSet[String] h_short = ha.filter((String x): x.len() <= 3)
     print(f"{h_short.len()}")
+    bool short_has_one = h_short.contains("one")
+    print(f"{short_has_one}")

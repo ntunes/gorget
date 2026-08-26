@@ -1,0 +1,65 @@
+# NET D cell — Set-HOF `filter` RESULT-SET CTOR, key-channel axis.
+#
+# AXIS CELL: element type = `@derive(Hashable)` struct WITH a resource field  ·  destination ordered-ness = UNORDERED
+# `HashSet`  ·
+# KEY CHANNEL × KEY WIDTH = same, the unordered arm
+#
+# ⚠ THE MECHANISM IS KEY CHANNEL × KEY WIDTH, NOT "element type". Before the
+# fix `try_lower_set_hof`'s filter arm minted the result set with the RAW
+# `gorget_(ordered_)set_new` symbol and a HARDCODED `OpConstI64(8)`: a fixed
+# 8-byte key with no `hash_fn`/`eq_fn` bridge, i.e. FNV-1a + `memcmp` over 8
+# bytes. That width is ACCIDENTALLY RIGHT for `int64_t`, too WIDE for `bool`,
+# and too NARROW for a 16-byte struct whose discriminating field sits past
+# byte 8 — which is why `Set[int]` and a `Pt` whose members differ in the
+# FIRST 8 bytes are green at HEAD and prove nothing. Do NOT "simplify" this
+# cell back into either of those shapes; it would silence the axis.
+#
+# The fix mints through ONE producer — `set_ctor_name(elem, ordered)` in
+# `lower_types.gg`, beside `collection_accumulator_tid` — which emits the
+# sized, element-keyed magic name `__gorget_(ordered_)set_new_sized_<T>`;
+# `lir_codegen.gg::emit_typed_set_ctor` expands it into BOTH the key width
+# and the `hash_fn`/`eq_fn`/`key_drop`/`key_clone` table. Rust gg mints the
+# same result via `gorget_set_new_like`.
+#
+# ⚠ The tree's precedent test `set_literal_selects_key_channel_by_element_type`
+# says an OUTPUT assertion on the all-primitive member is vacuous for the
+# LITERAL path and pins it by emitted symbols instead. For the HOF path an
+# output assertion DOES work, because the defect there is the key WIDTH, not
+# only the missing bridge — hence `.contains()` read-backs below.
+#
+# RED-VERIFIED (self-host lane, pre-fix driver): `2`/`MISS-a`/`MISS-b` where `2`/`HAS-a`/`HAS-b` is correct
+#
+# FIXTURE PLACEMENT: subdirectory (see any NET A cell's header for the full
+# reasoning).  LANE: self-host only (Core #9 implementation-internal
+# exemption; the Rust column is what the `.expect` records).  STAGE: 0.
+# RUNG: 2 — no constructible held-fixed control for a Set-HOF receiver; the
+# expected value is the Rust lane's, hand-checked against the definition
+# (`filter` preserves the receiver's element type and ordered-ness, so the
+# result must contain exactly the members satisfying the predicate).
+
+from std.collections import HashSet
+
+@derive(Hashable, Equatable)
+struct Ps:
+    String name
+    int n
+
+void main():
+    HashSet[Ps] s = HashSet[Ps]()
+    int i = 0
+    while i < 3:
+        String nm = f"k{i}"
+        s.add(Ps(nm, i))
+        i += 1
+    HashSet[Ps] keep = s.filter((Ps x): x.n != 1)
+    print(f"{keep.len()}")
+    String q0 = f"k{0}"
+    if keep.contains(Ps(q0, 0)):
+        print("HAS-a")
+    else:
+        print("MISS-a")
+    String q2 = f"k{2}"
+    if keep.contains(Ps(q2, 2)):
+        print("HAS-b")
+    else:
+        print("MISS-b")
