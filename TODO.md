@@ -4,7 +4,9 @@
 
 **⚠ R44 CLOSED 2026-08-27. R45 IS OPEN — owner go GRANTED, autonomous.**
 
-**R45 TRACK ORDER — OWNER-SET, 2026-08-27.** Tracks A (Box ctor / trait pack), C (`for`-loop element
+**⚠⚠ R45 PRIORITY RESET — OWNER, 2026-08-27: FIX HEAD FIRST. `t0702` IS NOW TRACK G AND OUTRANKS EVERY OTHER R45 TRACK.** This SUPERSEDES the earlier "t0702 after Track F" sequencing. **Track G restores `self_host_runtime` to green and INTEGRATES; the remaining tracks then continue FROM the fixed HEAD** (each re-bases and re-runs its own measurements — every self-host reading taken before Track G integrates is unsound and must be regenerated, not carried forward). ⚠ **Track G may NOT re-seed** (`GG_REGEN_RUNTIME_SNAPSHOT=1` pins a miscompile as canonical) and may NOT weaken the gate (no `#[ignore]`, no allowlist, no ceiling raise). **BISECT RESULT SO FAR:** `e7a419e9` (2026-08-24, R44 Track K) is **GOOD** — measured `test result: ok. 2 passed; 0 failed`, 897s. `30bd94e1` is **BAD**. Window ~18 revisions and narrowing; automated run in a detached worktree at `/tmp/bisect_shr`, progress in `/tmp/bisect_trace.txt` and `/tmp/bisect_full.log`. **Do not touch that worktree.** ⚠ A bisect names a COMMIT, not a MECHANISM — the first-bad commit may have EXPOSED a latent bug rather than written one, and Track G owes that determination with evidence.
+
+**R45 TRACK ORDER — OWNER-SET, 2026-08-27, as amended above.** Tracks A (Box ctor / trait pack), C (`for`-loop element
 bindings + D49), D (extraction sites) are mid-gauntlet. **Track F = fix `t0699` + `t0703`** (the two
 CRITICAL live UAFs; owner-ordered fixed THIS round) is scouting. **`t0702` LAUNCHES AFTER TRACK F**
 (owner-sequenced) — do not open it in parallel.
