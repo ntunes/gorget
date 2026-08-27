@@ -1,0 +1,55 @@
+# KNOWN GAP — 🚨 WHICH NAME THE VIEW IS SPELLED THROUGH DECIDES MEMORY SAFETY,
+# and the CoW rescue ITSELF reads the freed buffer.
+#
+#     Vector[String] alias = v            # second name for the same collection
+#     String s = alias.get(0).unwrap()    # view spelled through `alias`  -> rc 139 SIGSEGV
+#     String s = v.get(0).unwrap()        # view spelled through `v`      -> rc 0, "hello"
+#
+# The two programs are otherwise IDENTICAL -- the `alias` bind is still
+# present in the control, merely unused. Only the spelling of the receiver
+# differs, and it decides whether the program segfaults.
+#
+#     C backend        : SIGSEGV, rc 139
+#     C + --sanitize   : AddressSanitizer: heap-use-after-free in
+#                        `gorget_string_copy_cow` <- main
+#     LLVM backend     : SIGSEGV, rc 139
+#
+# ⚠⚠ THIS IS NOT A DETECTION FAILURE -- IT IS AN EMISSION-ORDER DEFECT
+# (Core #15e Q5: "am I reasoning about emission, or emission ORDER?").
+# The compiler DOES notice the conflict: `--clones=sites` reports
+#     alias.gg:10:9  Vector[String]  CoW materialization
+# at the mutation line. The rescue is emitted -- and then runs against an
+# ALREADY-DANGLING pointer. So no amount of better analysis fixes this; the
+# materialization has to happen BEFORE the invalidating push, not after.
+#
+# ⚠ THE REALLOC IS LOAD-BEARING: `v` must be pushed enough to force the
+# backing store to reallocate (64x here) and the payload must be heap-FORCED
+# via `mk`, never a literal. Fewer pushes or a literal payload is rc 0 on both
+# spellings and proves nothing.
+#
+# SIBLING, same round, same "a name decides memory safety" shape but a
+# DIFFERENT mechanism -- state the discriminator before merging them:
+#   * `t0699` -- a user &self MUTATOR METHOD's NAME decides safety, because
+#     the name is looked up in a hardcoded 26-entry MUTATING_METHODS list, so
+#     the prescan never fires. That is a DETECTION failure.
+#   * THIS -- the RECEIVER NAME of the VIEW decides safety, and detection
+#     SUCCEEDS. The defect is WHEN the emitted rescue runs.
+#
+# INTENDED (asserted below): prints `hello` regardless of which name the view
+# is spelled through, on BOTH backends, ASan-clean.
+# Measured 2026-08-27 by the R45 DEEP-1 scout; orchestrator-verified with the
+# control run alongside and the clone report captured.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = []
+    v.push(mk("hel", "lo"))
+    Vector[String] alias = v
+    String s = alias.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("fill", "er"))
+        i = i + 1
+    print(s)
