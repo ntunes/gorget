@@ -7,10 +7,14 @@
 **⚠⚠ R45 DELIVERY SET — OWNER, 2026-08-27: DELIVER G, D, F, A. THEN DECIDE ON THE REST.**
 Tracks **B** (D46 equality), **C** (`for`-loop bindings + D49) and **E** (wrong-source mint class) are **HELD**:
 their scouts are COMPLETE and their findings are filed, but **do not brief or review them** until G/D/F/A are
-delivered and the owner decides. ⚠ **Their scout reports are `/tmp`-only exhaust and will EVAPORATE** —
-`/tmp/r45/scout-B-d46.md`, `/tmp/r45/scout-C-forin.md` (+ `/tmp/r45/scoutC/`), `/tmp/r45/scout-E-bytes.md`,
-`/tmp/r45/scout-DEEP1.md`, and `/tmp/r45/brief-C.md` which is already WRITTEN. Everything durable from them is
-already in `todo/`; if a held track is resumed in a later session, **re-scout rather than trust a stale `/tmp` file**.
+delivered and the owner decides. Their artifacts are in `/tmp` and **`/tmp` here is durable enough to rely on — it survives the session and
+probably reboots (owner, 2026-08-27)**, so they should still be there: `/tmp/r45/scout-B-d46.md`,
+`/tmp/r45/scout-C-forin.md` (+ `/tmp/r45/scoutC/`), `/tmp/r45/scout-E-bytes.md`, `/tmp/r45/scout-DEEP1.md`, and
+`/tmp/r45/brief-C.md` which is already WRITTEN. ⚠ **The risk is STALENESS, not deletion — and it is a real risk
+for these three specifically.** Every one of their measurements was taken against **today's RED HEAD**, and
+**Track G is about to move it**. So on resuming a held track: **re-read the report, but RE-MEASURE every load-bearing
+figure against the post-G HEAD before acting on it** (Core #5). The reports' reasoning survives; their numbers may
+not. Everything durable is already in `todo/` regardless.
 
 **DELIVERY ORDER AND STATE:** **G** (round-blocker, `t0702`) → **D** (`t0036`, closest: predicate-only, 9 passes,
 last two found only mechanical edits) → **F** (`t0699`+`t0703`, owner-ordered) → **A** (`t0697`, 15 passes, still
