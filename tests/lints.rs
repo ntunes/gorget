@@ -20821,11 +20821,17 @@ fn known_gaps_repros_are_wired_to_a_test() {
 /// list fixes a subject that does not cover the case (Core #15e Q4).
 #[test]
 fn cow_prescan_walkers_have_no_catch_all_arm() {
-    const WALKERS: [(&str, &str); 4] = [
+    const WALKERS: [(&str, &str); 6] = [
         ("src/ir/lowering/functions.rs", "fn cow_after_expr_moves"),
         ("src/ir/lowering/functions.rs", "fn cow_after_stmt"),
         ("src/ir/lowering/functions.rs", "fn extract_path_for_mut"),
         ("src/ir/lowering/liveness.rs", "fn walk_stmt"),
+        // Added 2026-08-27 after a review found the guard pinned 4 of the
+        // walkers on this path while `uses_expr` -- the EXPRESSION half of the
+        // one just made exhaustive -- still carried a catch-all over 10 of 47
+        // variants, one of which (`MetaOpInfix`) has real sub-expressions.
+        ("src/ir/lowering/liveness.rs", "fn uses_expr"),
+        ("src/ir/lowering/functions.rs", "fn count_uses_in_expr"),
     ];
     let mut offenders = Vec::new();
     for (file, sig) in WALKERS {
@@ -20849,6 +20855,31 @@ fn cow_prescan_walkers_have_no_catch_all_arm() {
             // A catch-all arm: `_ => ...` or `_ if <guard> => ...` at arm position.
             if t.starts_with("_ =>") || t.starts_with("_ if ") {
                 offenders.push(format!("{file}: {sig} line +{n}: `{t}`"));
+            }
+            // An `if let Enum::Variant(..) = x {}` over a multi-variant enum is
+            // a catch-all wearing a different hat: every other variant is
+            // dropped with no arm and no compile error. This shape hid a live
+            // defect INSIDE two of the functions this lint already pinned --
+            // `MatchItem::MetaFor` was walked blind, printing garbage at rc 0
+            // on both backends. A guard that cannot catch its own class in a
+            // second syntactic costume is worth little (Core #15e Q2).
+            // `if let MatchItem::Arm(..) = item {}` drops `MatchItem::MetaFor`
+            // with no arm and no compile error -- a catch-all in a second
+            // costume. It hid a live defect INSIDE two functions this lint
+            // already pinned: the MetaFor template body was walked blind and
+            // printed garbage at rc 0 on both backends.
+            //
+            // Scoped to `MatchItem` DELIBERATELY. A general "no if-let over an
+            // enum" check was built first and rejected: it fires on legitimate
+            // sites whose else-case is correctly a no-op (`Stmt::Assign`'s
+            // `if let Expr::Identifier` -- only a whole-variable assignment is
+            // a kill, a `v[i] =` partial write is not). A guard whose output
+            // must be allowlisted teaches the next reader to allowlist, so it
+            // is better to pin the class that was actually measured wrong.
+            if t.starts_with("if let ") && t.contains("MatchItem::") {
+                offenders.push(format!(
+                    "{file}: {sig} line +{n}: `{t}`  <- MatchItem::MetaFor dropped, no else"
+                ));
             }
         }
     }

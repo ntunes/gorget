@@ -51,8 +51,41 @@ fn walk_block<'a>(
     live: &mut FxHashSet<&'a str>,
     last_uses: &mut FxHashMap<usize, String>,
 ) {
+    // `on error:` handlers are live from their REGISTRATION to function exit,
+    // not at the registration point. The handler runs on the error path, which
+    // leaves from any statement AFTER the registration -- so a name the handler
+    // reads is live across all of them.
+    //
+    // A reverse walk visits those later statements BEFORE it reaches the
+    // registration, so injecting the handler's uses when the registration is
+    // reached is too late: everything after it was already walked blind. The
+    // uses must be seeded before the reverse walk of this block begins.
+    //
+    // This over-approximates -- the handler's names are treated as live for the
+    // whole block, including before the registration. That is the SAFE
+    // direction (an extra clone), and the precise window would need a forward
+    // pass this walker does not have.
+    //
+    // Measured: without the seed, a consume AFTER the registration printed
+    // garbage at rc 0 on both backends while the same program with the handler
+    // below the consume was correct. Unioning at the registration (the first
+    // attempt) fixed only the second shape.
+    seed_on_error_uses(stmts, live);
     for stmt in stmts.iter().rev() {
         walk_stmt(&stmt.node, live, last_uses);
+    }
+}
+
+/// Seed the uses of every `on error:` handler registered directly in `stmts`.
+/// Last-use decisions are DISCARDED: a handler use is never the last use of a
+/// name on the normal path, and recording it would mark a span the normal path
+/// also reads.
+fn seed_on_error_uses<'a>(stmts: &'a [Spanned<Stmt>], live: &mut FxHashSet<&'a str>) {
+    for s in stmts {
+        if let Stmt::OnError { body } = &s.node {
+            let mut discard: FxHashMap<usize, String> = FxHashMap::default();
+            walk_block(&body.stmts, live, &mut discard);
+        }
     }
 }
 
@@ -108,7 +141,14 @@ fn walk_stmt<'a>(
             live.extend(live_body);
             // Pass 2: walk with loop-propagated live set.  Only this pass
             // records last-use decisions.
-            walk_block(&body.stmts, live, lu);
+            //
+            // UNION, never overwrite: the body may run ZERO times, so a KILL
+            // inside it must not delete a name that is live before the loop.
+            // Measured -- overwriting printed garbage at rc 0 on both backends
+            // for a break-skips-kill shape and for a zero-iteration `for`.
+            let mut live_body2 = live.clone();
+            walk_block(&body.stmts, &mut live_body2, lu);
+            live.extend(live_body2);
             uses_expr(&condition.node, condition.span.start, live, lu);
         }
         Stmt::For { pattern, iterable, body, else_body, .. } => {
@@ -119,8 +159,12 @@ fn walk_stmt<'a>(
             walk_block(&body.stmts, &mut live_body, &mut lu_discard);
             kill_pattern(pattern, &mut live_body);
             live.extend(live_body);
-            // Pass 2: record last-use decisions.
-            walk_block(&body.stmts, live, lu);
+            // Pass 2: record last-use decisions. UNION, never overwrite -- see
+            // the `While` arm; a zero-iteration `for` must not let a kill in
+            // its body delete a name live before the loop.
+            let mut live_body2 = live.clone();
+            walk_block(&body.stmts, &mut live_body2, lu);
+            live.extend(live_body2);
             kill_pattern(pattern, live);
             uses_expr(&iterable.node, iterable.span.start, live, lu);
         }
@@ -128,7 +172,15 @@ fn walk_stmt<'a>(
             let saved = live.clone();
             let mut union: FxHashSet<&'a str> = FxHashSet::default();
             for item in arms {
-                if let MatchItem::Arm(arm) = item {
+                // `MatchItem::MetaFor` carries an `arm_template` whose body is real code that
+                // the meta expansion will emit. Liveness/prescan run on the UNEXPANDED AST, so
+                // dropping this item walks that body blind -- measured rc 0 GARBAGE on both
+                // backends against a control with the arms written out. Walk the template.
+                let arm = match item {
+                    MatchItem::Arm(a) => a,
+                    MatchItem::MetaFor { arm_template, .. } => arm_template,
+                };
+                {
                     let mut a = saved.clone();
                     uses_expr(&arm.body.node, arm.body.span.start, &mut a, lu);
                     if let Some(g) = &arm.guard { uses_expr(&g.node, g.span.start, &mut a, lu); }
@@ -170,7 +222,13 @@ fn walk_stmt<'a>(
             let mut lu_discard: FxHashMap<usize, String> = FxHashMap::default();
             walk_block(&body.stmts, &mut live_body, &mut lu_discard);
             live.extend(live_body);
-            walk_block(&body.stmts, live, lu);
+            // UNION, never overwrite -- a `break` can skip a kill in the body,
+            // so the kill must not delete a name live before the loop. This arm
+            // shipped with the overwrite bug and is fixed here with its
+            // siblings (Core #4).
+            let mut live_body2 = live.clone();
+            walk_block(&body.stmts, &mut live_body2, lu);
+            live.extend(live_body2);
         }
         // Straight-line scopes: the block runs in sequence with its neighbours.
         Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
@@ -183,11 +241,10 @@ fn walk_stmt<'a>(
         // assignment, or a shadowing VarDecl) delete a name that is still live
         // on the normal path -- an UNDER-approximation, the dangerous
         // direction. Union it the way `If` unions a branch.
-        Stmt::OnError { body } => {
-            let mut live_handler = live.clone();
-            walk_block(&body.stmts, &mut live_handler, lu);
-            live.extend(live_handler);
-        }
+        // Seeded at block entry by `seed_on_error_uses` -- see `walk_block`.
+        // Walking it again here would record last-use spans inside a handler
+        // that the normal path also reads.
+        Stmt::OnError { .. } => {}
         // Reverse walk: the body runs AFTER the binding exprs are evaluated.
         Stmt::With { bindings, body } => {
             walk_block(&body.stmts, live, lu);
@@ -454,7 +511,25 @@ fn uses_expr<'a>(
                 uses_expr(&a.node, a.span.start, live, lu);
             }
         }
-        _ => {} // Literals, type names, Path, MetaOp*, It, etc.
+        // `meta[op]` carries two real operand expressions.
+        Expr::MetaOpInfix { left, right, .. } => {
+            uses_expr(&right.node, right.span.start, live, lu);
+            uses_expr(&left.node, left.span.start, live, lu);
+        }
+
+        // Leaves. Listed EXPLICITLY, not swept by `_ => {}`: this walker is
+        // under-approximation-critical (a use it cannot see makes a variable
+        // look dead, so the value is moved instead of cloned), so a new `Expr`
+        // variant must be a COMPILE ERROR here rather than silently ignored.
+        Expr::IntLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::BoolLiteral(_)
+        | Expr::NoneLiteral
+        | Expr::SelfExpr
+        | Expr::ReturnValue
+        | Expr::Path { .. }
+        | Expr::It
+        | Expr::MetaOpToken(_) => {} // Literals, type names, Path, MetaOp*, It, etc.
     }
 }
 

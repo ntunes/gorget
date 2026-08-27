@@ -1,0 +1,44 @@
+# REGRESSION — an `on error:` handler's uses are live from its
+# REGISTRATION to function exit, so every statement AFTER the registration
+# must see them. A first fix unioned the handler at the registration
+# point, which repaired only the statements BEFORE it -- a reverse walk
+# visits the later statements first, so the uses must be SEEDED before the
+# block walk begins.
+#
+# The liveness walker is UNDER-APPROXIMATION-CRITICAL: a use it cannot see
+# makes a variable look dead at an earlier consuming position, so the value is
+# MOVED instead of cloned and the later read finds freed memory. Every cell
+# below was rc 0 printing GARBAGE on BOTH backends at the commit named, with
+# ggdef printing the right answer wherever it can adjudicate.
+#
+# Found by R45 Track D brief-review pass 15; RED-verified by the orchestrator
+# against the pre-fix compiler.
+#
+# ⚠ The `v.set(0, ...)` is load-bearing: it frees the value moved into the
+# vector. Without it the moved-from read still finds live memory and prints
+# correctly — a fixture that proves nothing.
+# PROBE A — a name USED IN THE HANDLER is consumed by a statement AFTER the
+# handler's registration point. `on error:` runs on error EXIT, which happens
+# at some point AFTER the registration, so `s` must be live from the `on
+# error:`
+# statement to the end of the function.
+#
+# The `v.set(0, ...)` is load-bearing: it frees the value moved into the
+# vector.
+String mk(String a, String b):
+    return a + b
+
+int f(int n) throws String:
+    String s = mk("abcdefghijklmnopqrstuvwxyz0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    on error:
+        print(s)
+    Vector[String] v = []
+    v.push(s)
+    v.set(0, mk("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyyyyyyyy"))
+    if n > 0:
+        throw "boom"
+    return 1
+
+void main():
+    int r = f(1)! catch (e): -1
+    print(r)

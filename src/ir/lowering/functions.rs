@@ -740,7 +740,15 @@ fn cow_after_stmt(
             cow_after_expr_moves(&scrutinee.node, future, fn_param_ownerships, interner);
             let saved = future.clone();
             for item in arms {
-                if let crate::parser::ast::MatchItem::Arm(arm) = item {
+                // A `MetaFor` item carries an `arm_template` whose body IS emitted by the
+                // meta expansion, and these walkers run on the UNEXPANDED AST. Dropping
+                // it walks that body blind (Core #4: the liveness sibling of this shape
+                // was measured rc 0 GARBAGE on both backends).
+                let arm = match item {
+                    crate::parser::ast::MatchItem::Arm(a) => a,
+                    crate::parser::ast::MatchItem::MetaFor { arm_template, .. } => arm_template,
+                };
+                {
                     let mut branch = saved.clone();
                     // A guard runs before the arm body (`case p if xs.pop() > 0:`).
                     if let Some(guard) = &arm.guard {
@@ -1176,9 +1184,13 @@ fn count_uses_in_block(stmts: &[Spanned<Stmt>], counts: &mut rustc_hash::FxHashM
             Stmt::Match { scrutinee, arms, else_arm, .. } => {
                 count_uses_in_expr(&scrutinee.node, counts);
                 for item in arms {
-                    if let crate::parser::ast::MatchItem::Arm(arm) = item {
-                        count_uses_in_expr(&arm.body.node, counts);
-                    }
+                    // MetaFor's template body is real code -- see the sibling in
+                    // `cow_after_stmt`. Counting it is conservative and correct.
+                    let arm = match item {
+                        crate::parser::ast::MatchItem::Arm(a) => a,
+                        crate::parser::ast::MatchItem::MetaFor { arm_template, .. } => arm_template,
+                    };
+                    count_uses_in_expr(&arm.body.node, counts);
                 }
                 if let Some(body) = else_arm {
                     count_uses_in_block(&body.stmts, counts);
@@ -1262,7 +1274,64 @@ fn count_uses_in_expr(expr: &Expr, counts: &mut rustc_hash::FxHashMap<String, u3
             for arm in arms { count_uses_in_expr(&arm.body.node, counts); }
             if let Some(body) = else_arm { count_uses_in_expr(&body.node, counts); }
         }
-        _ => {} // literals, self, etc.
+
+        // ── Sub-expression carriers previously swept by `_ => {}` ───────────
+        // UNDER-counting is the dangerous direction here: a name with two real
+        // uses counted as one reads as SINGLE-USE, gets auto-moved at a
+        // push/ctor site instead of cloned, and the second use then reads
+        // moved-from memory. Same failure class as the four prescan/liveness
+        // walkers made exhaustive this round.
+        Expr::MutableBorrow { expr: e }
+        | Expr::Deref { expr: e }
+        | Expr::As { expr: e, .. }
+        | Expr::Await { expr: e, .. }
+        | Expr::Spawn { expr: e, .. }
+        | Expr::SpawnBlocking { expr: e, .. }
+        | Expr::Is { expr: e, .. }
+        | Expr::OptionalChain { object: e, .. } => count_uses_in_expr(&e.node, counts),
+        Expr::DefaultOp { lhs, rhs } | Expr::MetaOpInfix { left: lhs, right: rhs, .. } => {
+            count_uses_in_expr(&lhs.node, counts);
+            count_uses_in_expr(&rhs.node, counts);
+        }
+        Expr::Range { start, end, .. } => {
+            if let Some(e) = start { count_uses_in_expr(&e.node, counts); }
+            if let Some(e) = end { count_uses_in_expr(&e.node, counts); }
+        }
+        Expr::Rethrow { expr, transform, .. } => {
+            count_uses_in_expr(&expr.node, counts);
+            count_uses_in_expr(&transform.node, counts);
+        }
+        Expr::Catch { expr, recovery, .. } => {
+            count_uses_in_expr(&expr.node, counts);
+            count_uses_in_expr(&recovery.node, counts);
+        }
+        Expr::Do { body, .. } => count_uses_in_block(&body.stmts, counts),
+        Expr::ListComprehension { expr, iterable, condition, .. }
+        | Expr::SetComprehension { expr, iterable, condition, .. } => {
+            count_uses_in_expr(&expr.node, counts);
+            count_uses_in_expr(&iterable.node, counts);
+            if let Some(c) = condition { count_uses_in_expr(&c.node, counts); }
+        }
+        Expr::DictComprehension { key, value, iterable, condition, .. } => {
+            count_uses_in_expr(&key.node, counts);
+            count_uses_in_expr(&value.node, counts);
+            count_uses_in_expr(&iterable.node, counts);
+            if let Some(c) = condition { count_uses_in_expr(&c.node, counts); }
+        }
+        Expr::DotShorthand { args, .. } => {
+            for a in args { count_uses_in_expr(&a.node.value.node, counts); }
+        }
+
+        // Leaves, listed explicitly so a new variant is a compile error here.
+        Expr::IntLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::BoolLiteral(_)
+        | Expr::NoneLiteral
+        | Expr::SelfExpr
+        | Expr::ReturnValue
+        | Expr::Path { .. }
+        | Expr::It
+        | Expr::MetaOpToken(_) => {}
     }
 }
 

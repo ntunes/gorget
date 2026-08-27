@@ -54551,6 +54551,31 @@ fn known_gap_vec_box_trait_pushed_escapes_helper() {
     run_gg("known_gaps/vec_box_trait_pushed_escapes_helper.gg", "R2");
 }
 
+/// REGRESSION (R45, Track D pass 15) — three more under-approximations in the
+/// liveness walker, each rc 0 printing GARBAGE on both backends:
+///
+///   * an `on error:` handler's uses are live from REGISTRATION to function
+///     exit, so they must be SEEDED before the reverse block walk — unioning
+///     at the registration repaired only the statements before it;
+///   * a loop body may run zero times or `break` past a kill, so pass 2 must
+///     UNION rather than overwrite (`while`, `for` AND `loop`);
+///   * `MatchItem::MetaFor`'s `arm_template` is real emitted code, dropped by
+///     an `if let MatchItem::Arm(..)` with no else.
+#[test]
+fn liveness_on_error_after_registration() {
+    run_gg("liveness_on_error_after_registration.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n-1");
+}
+
+#[test]
+fn liveness_loop_body_kill_leak() {
+    run_gg("liveness_loop_body_kill_leak.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n1");
+}
+
+#[test]
+fn liveness_metafor_match_arm() {
+    run_gg("liveness_metafor_match_arm.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n7");
+}
+
 /// REGRESSION (R45) — `on error:` is an ALTERNATIVE path, not a straight-line
 /// scope. Making `walk_stmt` exhaustive in `c5860a68` lumped `OnError` with
 /// `Unsafe`/`NamedScope`, so a KILL inside the handler deleted a name still
