@@ -108,9 +108,16 @@ fn seed_on_error_uses<'a>(stmts: &'a [Spanned<Stmt>], live: &mut FxHashSet<&'a s
 
 /// Every `on error:` body reachable from `stmt`, including nested ones.
 ///
-/// EXHAUSTIVE over `Stmt` on purpose: a missing arm here re-opens the
-/// function-wide seeding hole silently, which is the defect this function
-/// exists to close. A new statement kind is a compile error.
+/// EXHAUSTIVE over `Stmt`, and it must ALSO descend through EXPRESSIONS:
+/// `Expr::Do` and `Expr::Block` carry statement blocks, so an `on error:`
+/// inside a `do:` (as a statement, or as a `VarDecl` value) is reachable only
+/// through the expression side. A first version of this function was
+/// `Stmt`-exhaustive and expression-blind, and those two cells printed GARBAGE
+/// at rc 0 on both backends -- the seed was provably INERT on them (ablating
+/// it left their GIR byte-identical while a control's moved 85 lines).
+///
+/// Expression descent routes through `parser::visitor::visit_expr_children`,
+/// the one exhaustive child enumeration, rather than being hand-rolled again.
 fn on_error_bodies_in<'a>(stmt: &'a Stmt) -> Vec<&'a [Spanned<Stmt>]> {
     let mut out: Vec<&[Spanned<Stmt>]> = Vec::new();
     fn push_block<'b>(out: &mut Vec<&'b [Spanned<Stmt>]>, b: &'b Block) {
@@ -161,12 +168,27 @@ fn on_error_bodies_in<'a>(stmt: &'a Stmt) -> Vec<&'a [Spanned<Stmt>]> {
             for a in arms { push_block(&mut out, &a.body); }
             if let Some(b) = else_arm { push_block(&mut out, b); }
         }
-        // No nested statement blocks.
-        Stmt::VarDecl { .. } | Stmt::Assign { .. } | Stmt::CompoundAssign { .. }
-        | Stmt::Expr(..) | Stmt::Return(..) | Stmt::Assert { .. }
-        | Stmt::AssertReturn { .. } | Stmt::Throw(..) | Stmt::Snapshot { .. }
-        | Stmt::MetaConst { .. } | Stmt::MetaLog { .. }
-        | Stmt::Break | Stmt::Continue | Stmt::Pass | Stmt::Item(_) => {}
+        // These carry EXPRESSIONS, and an expression can carry a block
+        // (`do:` / a block expression), so they are not leaves for this walk.
+        Stmt::VarDecl { value, .. } | Stmt::Expr(value) | Stmt::Throw(value)
+        | Stmt::Snapshot { value, .. } | Stmt::MetaConst { value, .. } => {
+            out.extend(on_error_bodies_in_expr(&value.node));
+        }
+        Stmt::Return(Some(e)) => out.extend(on_error_bodies_in_expr(&e.node)),
+        Stmt::Assign { target, value, .. } | Stmt::CompoundAssign { target, value, .. } => {
+            out.extend(on_error_bodies_in_expr(&target.node));
+            out.extend(on_error_bodies_in_expr(&value.node));
+        }
+        Stmt::Assert { condition, message, .. }
+        | Stmt::AssertReturn { condition, message } => {
+            out.extend(on_error_bodies_in_expr(&condition.node));
+            if let Some(m) = message { out.extend(on_error_bodies_in_expr(&m.node)); }
+        }
+        Stmt::MetaLog { args, .. } => {
+            for a in args { out.extend(on_error_bodies_in_expr(&a.node)); }
+        }
+        // Genuinely nothing to walk.
+        Stmt::Return(None) | Stmt::Break | Stmt::Continue | Stmt::Pass | Stmt::Item(_) => {}
     }
     out
 }
@@ -635,4 +657,29 @@ fn kill_pattern<'a>(pat: &'a Spanned<Pattern>, live: &mut FxHashSet<&'a str>) {
         Pattern::Tuple(elems) => { for e in elems { kill_pattern(e, live); } }
         _ => {}
     }
+}
+
+/// Every `on error:` body reachable from an EXPRESSION.
+///
+/// Routed through `parser::visitor::visit_expr_children` -- the one exhaustive
+/// child enumeration -- so a new `Expr` variant that carries a block cannot
+/// silently escape this walk the way `Expr::Do` did.
+fn on_error_bodies_in_expr<'a>(e: &'a Expr) -> Vec<&'a [Spanned<Stmt>]> {
+    let mut children: Vec<&'a Spanned<Expr>> = Vec::new();
+    let mut blocks: Vec<&'a Block> = Vec::new();
+    crate::parser::visitor::visit_expr_children(
+        e,
+        &mut |child: &'a Spanned<Expr>| children.push(child),
+        &mut |b: &'a Block| blocks.push(b),
+    );
+    let mut out: Vec<&'a [Spanned<Stmt>]> = Vec::new();
+    for b in blocks {
+        for s in &b.stmts {
+            out.extend(on_error_bodies_in(&s.node));
+        }
+    }
+    for c in children {
+        out.extend(on_error_bodies_in_expr(&c.node));
+    }
+    out
 }

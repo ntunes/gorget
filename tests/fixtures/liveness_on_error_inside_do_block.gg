@@ -1,0 +1,39 @@
+# REGRESSION — an `on error:` handler inside a `do:` block must reach the
+# liveness seed.
+#
+# `on_error_bodies_in` was exhaustive over `Stmt` and BLIND TO `Expr`.
+# `Expr::Do` and `Expr::Block` carry statement blocks, so a handler
+# registered inside a `do:` -- as a statement, or as a VarDecl value --
+# was unreachable and the seed was provably INERT on it: ablating the
+# seed left this shape GIR byte-identical while a control moved 85
+# lines. rc 0 GARBAGE on C and LLVM at the commit before the fix.
+#
+# The expression half now routes through visitor::visit_expr_children,
+# the one exhaustive child enumeration, rather than being hand-rolled a
+# second time. The guard row that pinned this walker asserted the very
+# property this fixture disproves.
+#
+# The `v.set(0, ...)` is load-bearing: it frees the value moved into
+# the vector.
+# PROBE D1 -- pass 15/16's A_after_reg.gg with the `on error:` registration
+# wrapped in a `do:` block. ONE thing varied vs the in-tree GREEN fixture
+# tests/fixtures/liveness_on_error_after_registration.gg: the wrapper.
+# The v.set(0, ...) is load-bearing -- it frees the value moved into the vector.
+String mk(String a, String b):
+    return a + b
+
+int f(int n) throws String:
+    String s = mk("abcdefghijklmnopqrstuvwxyz0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    do:
+        on error:
+            print(s)
+    Vector[String] v = []
+    v.push(s)
+    v.set(0, mk("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyyyyyyyy"))
+    if n > 0:
+        throw "boom"
+    return 1
+
+void main():
+    int r = f(1)! catch (e): -1
+    print(r)

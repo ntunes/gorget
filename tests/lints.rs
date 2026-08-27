@@ -20076,10 +20076,17 @@ fn expr_stmt_walker_population_is_pinned() {
     "src/ir/lowering/generics/substitute.rs::substitute_stmt_types [HAND-ROLLED]",
     // Added 2026-08-27: collects every `on error:` body in a function so
         // the liveness seed can be FUNCTION-wide (handlers are registered
-        // function-scoped and never popped). HAND-ROLLED is correct — it
-        // walks `Stmt` blocks, not `Expr` children, so the visitor chokepoint
-        // does not apply — and its match is exhaustive, so a new statement
-        // kind is a compile error rather than a silently missed handler.
+        // function-scoped and never popped).
+        //
+        // ⚠ THIS ROW'S FIRST JUSTIFICATION WAS ITSELF THE DEFECT. It read
+        // "HAND-ROLLED is correct — it walks `Stmt` blocks, not `Expr`
+        // children, so the visitor chokepoint does not apply". False:
+        // `Expr::Do` and `Expr::Block` carry statement blocks, so an
+        // `on error:` inside a `do:` was unreachable and printed GARBAGE at
+        // rc 0 on both backends. The expression half now routes through
+        // `visitor::visit_expr_children`; the `Stmt` half stays hand-rolled
+        // and exhaustive. Core #14: a comment asserting an invariant is worth
+        // nothing until something enforces it.
         "src/ir/lowering/liveness.rs::on_error_bodies_in [HAND-ROLLED]",
         "src/ir/lowering/liveness.rs::uses_expr [HAND-ROLLED]",
     "src/ir/lowering/liveness.rs::walk_stmt [HAND-ROLLED]",

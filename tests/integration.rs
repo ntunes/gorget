@@ -54570,6 +54570,17 @@ fn known_gap_vec_box_trait_pushed_escapes_helper() {
     run_gg("known_gaps/vec_box_trait_pushed_escapes_helper.gg", "R2");
 }
 
+/// REGRESSION (R45, Track D pass 17) — `on_error_bodies_in` was exhaustive
+/// over `Stmt` and blind to `Expr`. `Expr::Do`/`Expr::Block` carry statement
+/// blocks, so a handler inside a `do:` was unreachable and the seed was
+/// provably inert on it (ablating the seed left the GIR byte-identical).
+/// rc 0 garbage on both lanes. The expression half now routes through
+/// `visitor::visit_expr_children`.
+#[test]
+fn liveness_on_error_inside_do_block() {
+    run_gg("liveness_on_error_inside_do_block.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n-1");
+}
+
 /// REGRESSION (R45, Track D pass 16) — four more liveness cells, each RED at
 /// the commit before its fix:
 ///
