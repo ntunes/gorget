@@ -1,0 +1,42 @@
+# REGRESSION — seeding an `on error:` handler must contribute its USES
+# only, never its KILLS. Walking the handler into the caller's live set
+# deletes a name the normal path still reads: ICE rc 101 on both lanes.
+#
+# The liveness walker is UNDER-APPROXIMATION-CRITICAL: a use it cannot
+# see makes a variable look dead at an earlier consuming position, so
+# the value is MOVED instead of cloned and the later read finds freed
+# memory. RED-verified against the pre-fix compiler.
+#
+# The `v.set(0, ...)` is load-bearing: it frees the value moved into
+# the vector. Without it the moved-from read still finds live memory.
+# PROBE K1 -- the SEED applies KILLS, not just uses. `seed_on_error_uses`
+# (liveness.rs:82-90) calls `walk_block` on the handler body with the CALLER's
+# live set, and `walk_block` applies kills as well as uses. At the top level
+# that set starts EMPTY, so the kill is harmless; inside a nested block it is
+# the enclosing block's live-out, so a kill inside a handler registered there
+# deletes a name live on the NORMAL path -- the exact leak `606a7c4e`
+# fixed for
+# the un-nested shape.
+#
+# `unsafe:` is the wrapper because its arm passes `live` straight through
+# (liveness.rs:236-238); `if` unions with `saved` and masks it.
+#
+# The `v.set(0, ...)` is load-bearing: it frees the value moved into the
+# vector.
+String mk(String a, String b):
+    return a + b
+
+int f() throws String:
+    String s = mk("abcdefghijklmnopqrstuvwxyz0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    Vector[String] v = []
+    v.push(s)
+    v.set(0, mk("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyyyyyyyy"))
+    unsafe:
+        on error:
+            s = mk("c", "d")
+    print(s)
+    return 1
+
+void main():
+    int r = f()! catch (e): -1
+    print(r)

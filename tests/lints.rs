@@ -20074,7 +20074,14 @@ fn expr_stmt_walker_population_is_pinned() {
     "src/ir/lowering/generics/mod.rs::walk_stmt_for_method_calls [HAND-ROLLED]",
     "src/ir/lowering/generics/substitute.rs::substitute_expr_types [HAND-ROLLED]",
     "src/ir/lowering/generics/substitute.rs::substitute_stmt_types [HAND-ROLLED]",
-    "src/ir/lowering/liveness.rs::uses_expr [HAND-ROLLED]",
+    // Added 2026-08-27: collects every `on error:` body in a function so
+        // the liveness seed can be FUNCTION-wide (handlers are registered
+        // function-scoped and never popped). HAND-ROLLED is correct — it
+        // walks `Stmt` blocks, not `Expr` children, so the visitor chokepoint
+        // does not apply — and its match is exhaustive, so a new statement
+        // kind is a compile error rather than a silently missed handler.
+        "src/ir/lowering/liveness.rs::on_error_bodies_in [HAND-ROLLED]",
+        "src/ir/lowering/liveness.rs::uses_expr [HAND-ROLLED]",
     "src/ir/lowering/liveness.rs::walk_stmt [HAND-ROLLED]",
     "src/ir/lowering/mod.rs::enum_variant_and_args [HAND-ROLLED]",
     "src/ir/lowering/mod.rs::eval_const_expr [HAND-ROLLED]",
@@ -20821,7 +20828,7 @@ fn known_gaps_repros_are_wired_to_a_test() {
 /// list fixes a subject that does not cover the case (Core #15e Q4).
 #[test]
 fn cow_prescan_walkers_have_no_catch_all_arm() {
-    const WALKERS: [(&str, &str); 6] = [
+    const WALKERS: [(&str, &str); 7] = [
         ("src/ir/lowering/functions.rs", "fn cow_after_expr_moves"),
         ("src/ir/lowering/functions.rs", "fn cow_after_stmt"),
         ("src/ir/lowering/functions.rs", "fn extract_path_for_mut"),
@@ -20832,6 +20839,12 @@ fn cow_prescan_walkers_have_no_catch_all_arm() {
         // variants, one of which (`MetaOpInfix`) has real sub-expressions.
         ("src/ir/lowering/liveness.rs", "fn uses_expr"),
         ("src/ir/lowering/functions.rs", "fn count_uses_in_expr"),
+        // Added 2026-08-27 after a review A/B-tested the guard: re-introducing
+        // the exact costume this round removed inside `count_uses_in_block`
+        // left `--test lints` GREEN, while the same costume in `walk_stmt`
+        // FAILED. It handled 8 of 29 `Stmt` forms behind a catch-all and was
+        // the function that actually received the third MetaFor fix.
+        ("src/ir/lowering/functions.rs", "fn count_uses_in_block"),
     ];
     let mut offenders = Vec::new();
     for (file, sig) in WALKERS {

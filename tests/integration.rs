@@ -54551,6 +54551,37 @@ fn known_gap_vec_box_trait_pushed_escapes_helper() {
     run_gg("known_gaps/vec_box_trait_pushed_escapes_helper.gg", "R2");
 }
 
+/// REGRESSION (R45, Track D pass 16) — four more liveness cells, each RED at
+/// the commit before its fix:
+///
+///   * seeding an `on error:` handler must contribute USES only, never KILLS
+///     (walking it into the caller's live set ICE'd rc 101 on both lanes);
+///   * `on_error_blocks` is FUNCTION-scoped and never popped, so a handler
+///     registered inside an `if`/`while` is live to function exit — seeding
+///     per-block left later statements walked blind (rc 0 garbage);
+///   * the `For` and `Loop` union arms, pinned SEPARATELY. Ablating either
+///     left every earlier liveness fixture green — the net was certifying
+///     arms it did not cover.
+#[test]
+fn liveness_on_error_seed_kill_leak() {
+    run_gg("liveness_on_error_seed_kill_leak.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n1");
+}
+
+#[test]
+fn liveness_on_error_nested_registration() {
+    run_gg("liveness_on_error_nested_registration.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n-1");
+}
+
+#[test]
+fn liveness_for_zero_iteration_kill() {
+    run_gg("liveness_for_zero_iteration_kill.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n1");
+}
+
+#[test]
+fn liveness_loop_break_skips_kill() {
+    run_gg("liveness_loop_break_skips_kill.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n1");
+}
+
 /// REGRESSION (R45, Track D pass 15) — three more under-approximations in the
 /// liveness walker, each rc 0 printing GARBAGE on both backends:
 ///

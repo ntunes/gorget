@@ -1197,7 +1197,73 @@ fn count_uses_in_block(stmts: &[Spanned<Stmt>], counts: &mut rustc_hash::FxHashM
                 }
             }
             Stmt::Expr(expr) => count_uses_in_expr(&expr.node, counts),
-            _ => {}
+
+            // ── Previously swept by `_ => {}` (8 of 29 forms handled) ───────
+            // UNDER-counting is the dangerous direction: a name with two real
+            // uses counted as one reads as SINGLE-USE, is auto-moved at a
+            // push/ctor site instead of cloned, and the second use then reads
+            // moved-from memory.
+            Stmt::CompoundAssign { target, value, .. } => {
+                count_uses_in_expr(&target.node, counts);
+                count_uses_in_expr(&value.node, counts);
+            }
+            Stmt::Loop { body }
+            | Stmt::Unsafe { body }
+            | Stmt::NamedScope { body, .. }
+            | Stmt::OnError { body }
+            | Stmt::MetaFor { body, .. }
+            | Stmt::MetaWhile { body, .. } => count_uses_in_block(&body.stmts, counts),
+            Stmt::With { bindings, body } => {
+                for b in bindings { count_uses_in_expr(&b.expr.node, counts); }
+                count_uses_in_block(&body.stmts, counts);
+            }
+            Stmt::Throw(e) | Stmt::Snapshot { value: e, .. } | Stmt::MetaConst { value: e, .. } => {
+                count_uses_in_expr(&e.node, counts)
+            }
+            Stmt::Assert { condition, message, .. }
+            | Stmt::AssertReturn { condition, message } => {
+                count_uses_in_expr(&condition.node, counts);
+                if let Some(m) = message { count_uses_in_expr(&m.node, counts); }
+            }
+            Stmt::MetaLog { args, .. } => {
+                for a in args { count_uses_in_expr(&a.node, counts); }
+            }
+            Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+                count_uses_in_expr(&condition.node, counts);
+                count_uses_in_block(&then_body.stmts, counts);
+                for (c, b) in elif_branches {
+                    count_uses_in_expr(&c.node, counts);
+                    count_uses_in_block(&b.stmts, counts);
+                }
+                if let Some(b) = else_body { count_uses_in_block(&b.stmts, counts); }
+            }
+            Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+                count_uses_in_expr(&scrutinee.node, counts);
+                for (_c, b) in arms { count_uses_in_block(&b.stmts, counts); }
+                if let Some(b) = else_arm { count_uses_in_block(&b.stmts, counts); }
+            }
+            Stmt::Select { arms, else_arm } => {
+                for a in arms {
+                    match &a.op {
+                        crate::parser::ast::SelectOp::Send { channel, value, .. } => {
+                            count_uses_in_expr(&channel.node, counts);
+                            count_uses_in_expr(&value.node, counts);
+                        }
+                        crate::parser::ast::SelectOp::Recv { channel, .. } => {
+                            count_uses_in_expr(&channel.node, counts);
+                        }
+                    }
+                    count_uses_in_block(&a.body.stmts, counts);
+                }
+                if let Some(b) = else_arm { count_uses_in_block(&b.stmts, counts); }
+            }
+
+            // Nothing to count. Explicit so a new variant is a compile error.
+            Stmt::Return(None)
+            | Stmt::Break
+            | Stmt::Continue
+            | Stmt::Pass
+            | Stmt::Item(_) => {}
         }
     }
 }

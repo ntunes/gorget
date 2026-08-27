@@ -1,0 +1,30 @@
+# REGRESSION — a `for` body may run ZERO times, so a KILL inside it must
+# not delete a name live before the loop. Pins the `For` arm specifically
+# -- ablating it left the earlier liveness fixtures all green.
+#
+# The liveness walker is UNDER-APPROXIMATION-CRITICAL: a use it cannot
+# see makes a variable look dead at an earlier consuming position, so
+# the value is MOVED instead of cloned and the later read finds freed
+# memory. RED-verified against the pre-fix compiler.
+#
+# The `v.set(0, ...)` is load-bearing: it frees the value moved into
+# the vector. Without it the moved-from read still finds live memory.
+# PROBE F — same mechanism as E2 in the `Stmt::For` arm: pass 2 walks the body
+# directly into `live` (liveness.rs:123), so a KILL inside a loop body
+# that may
+# execute ZERO times deletes a name still live before the loop.
+String mk(String a, String b):
+    return a + b
+
+int f(int n):
+    String s = mk("abcdefghijklmnopqrstuvwxyz0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    Vector[String] v = []
+    v.push(s)
+    v.set(0, mk("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyyyyyyyy"))
+    for i in 0..n:
+        s = mk("c", "d")
+    print(s)
+    return 1
+
+void main():
+    print(f(0))

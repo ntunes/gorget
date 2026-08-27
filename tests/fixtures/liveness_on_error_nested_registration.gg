@@ -1,0 +1,40 @@
+# REGRESSION — `on_error_blocks` is FUNCTION-scoped and never popped, so a
+# handler registered inside an `if`/`while` is live to function exit.
+# Seeding only the enclosing block left every later statement walked
+# blind: rc 0 GARBAGE on both lanes.
+#
+# The liveness walker is UNDER-APPROXIMATION-CRITICAL: a use it cannot
+# see makes a variable look dead at an earlier consuming position, so
+# the value is MOVED instead of cloned and the later read finds freed
+# memory. RED-verified against the pre-fix compiler.
+#
+# The `v.set(0, ...)` is load-bearing: it frees the value moved into
+# the vector. Without it the moved-from read still finds live memory.
+# PROBE N1 -- the `on error:` handler is registered inside an `if` BODY,
+# and the
+# name it reads is consumed by a statement in the ENCLOSING block, after the
+# `if`. `on_error_blocks` is function-scoped and never popped
+# (src/ir/lowering/context.rs:251, stmts/mod.rs:460), so the handler stays
+# armed
+# for every error exit lowered after it -- including the `throw` below.
+#
+# The `v.set(0, ...)` is load-bearing: it frees the value moved into the
+# vector.
+String mk(String a, String b):
+    return a + b
+
+int f(int n) throws String:
+    String s = mk("abcdefghijklmnopqrstuvwxyz0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    if n > 0:
+        on error:
+            print(s)
+    Vector[String] v = []
+    v.push(s)
+    v.set(0, mk("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyyyyyyyy"))
+    if n > 0:
+        throw "boom"
+    return 1
+
+void main():
+    int r = f(1)! catch (e): -1
+    print(r)

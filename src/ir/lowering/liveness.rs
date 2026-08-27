@@ -42,6 +42,8 @@ pub struct LivenessResult {
 pub fn compute_function_liveness(body: &[Spanned<Stmt>]) -> LivenessResult {
     let mut live: FxHashSet<&str> = FxHashSet::default();
     let mut last_use_spans = FxHashMap::default();
+    // Function-wide, before the reverse walk: see `seed_on_error_uses`.
+    seed_on_error_uses(body, &mut live);
     walk_block(body, &mut live, &mut last_use_spans);
     LivenessResult { last_use_spans }
 }
@@ -70,23 +72,103 @@ fn walk_block<'a>(
     // garbage at rc 0 on both backends while the same program with the handler
     // below the consume was correct. Unioning at the registration (the first
     // attempt) fixed only the second shape.
-    seed_on_error_uses(stmts, live);
     for stmt in stmts.iter().rev() {
         walk_stmt(&stmt.node, live, last_uses);
     }
 }
 
-/// Seed the uses of every `on error:` handler registered directly in `stmts`.
-/// Last-use decisions are DISCARDED: a handler use is never the last use of a
+/// Seed the uses of every `on error:` handler in the function.
+///
+/// TWO properties, each of which was a live defect when absent:
+///
+/// * **USES ONLY, NEVER KILLS.** The handler body is walked into a FRESH set
+///   and only the survivors are unioned in. Passing the caller's `live`
+///   straight to `walk_block` leaks the handler's KILLS into the normal path,
+///   deleting a name the normal path still reads -- measured as
+///   `local _N read after MoveZero` one block down.
+/// * **FUNCTION-WIDE, NOT PER-BLOCK.** `on_error_blocks` is function-scoped
+///   and never popped (`context.rs:251`, `stmts/mod.rs:460`), so a handler
+///   registered inside an `if`/`while` is live to function exit just like a
+///   top-level one. Seeding only the current block left every statement after
+///   the ENCLOSING block walked blind -- measured rc 0 GARBAGE on both lanes.
+///
+/// Last-use decisions are discarded: a handler use is never the last use of a
 /// name on the normal path, and recording it would mark a span the normal path
 /// also reads.
 fn seed_on_error_uses<'a>(stmts: &'a [Spanned<Stmt>], live: &mut FxHashSet<&'a str>) {
     for s in stmts {
-        if let Stmt::OnError { body } = &s.node {
+        for handler in on_error_bodies_in(&s.node) {
+            let mut handler_live: FxHashSet<&'a str> = FxHashSet::default();
             let mut discard: FxHashMap<usize, String> = FxHashMap::default();
-            walk_block(&body.stmts, live, &mut discard);
+            walk_block(handler, &mut handler_live, &mut discard);
+            live.extend(handler_live);
         }
     }
+}
+
+/// Every `on error:` body reachable from `stmt`, including nested ones.
+///
+/// EXHAUSTIVE over `Stmt` on purpose: a missing arm here re-opens the
+/// function-wide seeding hole silently, which is the defect this function
+/// exists to close. A new statement kind is a compile error.
+fn on_error_bodies_in<'a>(stmt: &'a Stmt) -> Vec<&'a [Spanned<Stmt>]> {
+    let mut out: Vec<&[Spanned<Stmt>]> = Vec::new();
+    fn push_block<'b>(out: &mut Vec<&'b [Spanned<Stmt>]>, b: &'b Block) {
+        for s in &b.stmts {
+            out.extend(on_error_bodies_in(&s.node));
+        }
+    }
+    match stmt {
+        Stmt::OnError { body } => {
+            out.push(&body.stmts);
+            push_block(&mut out, body);
+        }
+        Stmt::If { then_body, elif_branches, else_body, .. } => {
+            push_block(&mut out, then_body);
+            for (_c, b) in elif_branches { push_block(&mut out, b); }
+            if let Some(b) = else_body { push_block(&mut out, b); }
+        }
+        Stmt::While { body, else_body, .. } | Stmt::For { body, else_body, .. } => {
+            push_block(&mut out, body);
+            if let Some(b) = else_body { push_block(&mut out, b); }
+        }
+        Stmt::Loop { body }
+        | Stmt::Unsafe { body }
+        | Stmt::NamedScope { body, .. }
+        | Stmt::With { body, .. }
+        | Stmt::MetaFor { body, .. }
+        | Stmt::MetaWhile { body, .. } => push_block(&mut out, body),
+        Stmt::Match { arms, else_arm, .. } => {
+            for item in arms {
+                let arm = match item {
+                    MatchItem::Arm(a) => a,
+                    MatchItem::MetaFor { arm_template, .. } => arm_template,
+                };
+                if let Expr::Block(b) = &arm.body.node { push_block(&mut out, b); }
+            }
+            if let Some(b) = else_arm { push_block(&mut out, b); }
+        }
+        Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+            push_block(&mut out, then_body);
+            for (_c, b) in elif_branches { push_block(&mut out, b); }
+            if let Some(b) = else_body { push_block(&mut out, b); }
+        }
+        Stmt::MetaMatch { arms, else_arm, .. } => {
+            for (_c, b) in arms { push_block(&mut out, b); }
+            if let Some(b) = else_arm { push_block(&mut out, b); }
+        }
+        Stmt::Select { arms, else_arm } => {
+            for a in arms { push_block(&mut out, &a.body); }
+            if let Some(b) = else_arm { push_block(&mut out, b); }
+        }
+        // No nested statement blocks.
+        Stmt::VarDecl { .. } | Stmt::Assign { .. } | Stmt::CompoundAssign { .. }
+        | Stmt::Expr(..) | Stmt::Return(..) | Stmt::Assert { .. }
+        | Stmt::AssertReturn { .. } | Stmt::Throw(..) | Stmt::Snapshot { .. }
+        | Stmt::MetaConst { .. } | Stmt::MetaLog { .. }
+        | Stmt::Break | Stmt::Continue | Stmt::Pass | Stmt::Item(_) => {}
+    }
+    out
 }
 
 fn walk_stmt<'a>(
