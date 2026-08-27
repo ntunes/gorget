@@ -1276,6 +1276,30 @@ fn sec_92_static_set_runtime() {
 // trips `exitcode=99` here.
 // ════════════════════════════════════════════════════════════════════════════
 
+/// SECURITY KNOWN GAP — a `Box`ed trait object minted inside a CLOSURE and
+/// returned leaks its allocation: 32 bytes direct through
+/// `__gorget_box_alloc_Robot <- __Closure_0__call <- main`, at pristine HEAD.
+///
+/// The fixture is wired as a VALUE test only (`box_trait_closure_return` in
+/// tests/integration.rs), which is why this has been green while leaking —
+/// a stdout comparison structurally cannot see a leak (Core #13: pick an
+/// instrument that can see the failure class).
+///
+/// DISCRIMINATED from `t0526` by ALLOCATION SOURCE: that one leaks the trait
+/// pack from a discarded `Box.new`, this one leaks a box minted inside a
+/// closure body and returned through the closure's call thunk. Also distinct
+/// from the 3-byte thunk residual in the same report, which is a separate
+/// known residual.
+#[test]
+#[ignore = "SECURITY KNOWN GAP (R45, found by Track A brief-review pass 16, \
+orchestrator-verified): a Boxed trait object minted in a closure and returned \
+leaks 32 bytes direct via __gorget_box_alloc_Robot <- __Closure_0__call. The \
+fixture is value-tested only, so the leak was invisible. Un-ignore when the \
+closure-return path registers the mint for drop."]
+fn known_gap_box_trait_closure_return_leaks() {
+    security_safe_no_leak("box_trait_closure_return_leak", "R2");
+}
+
 #[test]
 #[ignore = "SECURITY KNOWN GAP (found + verified 2026-08-17 by the for-in idiom \
 scout, orchestrator-reproduced): `for s in &d: s = \"zz\"` over a Vector[String] \

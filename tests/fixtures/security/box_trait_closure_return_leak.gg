@@ -1,0 +1,34 @@
+# SECURITY KNOWN GAP — a `Box`ed trait object minted inside a CLOSURE and
+# returned leaks its allocation.
+#
+#   ASan (C, detect_leaks=1):
+#     Direct leak of 32 byte(s): __gorget_box_alloc_Robot
+#                                <- __Closure_0__call <- main
+#     (plus a separate 3-byte thunk residual, a DIFFERENT known defect)
+#
+# The value twin of this program, `tests/fixtures/box_trait_closure_return.gg`,
+# has been GREEN this whole time: it is wired as a stdout comparison only
+# (`box_trait_closure_return` in tests/integration.rs, asserting `R2`), and a
+# stdout comparison structurally cannot observe a leak. Core #13 — pick an
+# instrument that can SEE the failure class; the value lane never could.
+#
+# DISCRIMINATED from `t0526` by ALLOCATION SOURCE: that one leaks the trait
+# pack from a DISCARDED `Box.new`, where the value is never consumed. Here the
+# box IS consumed — returned through the closure's call thunk and spoken
+# through — and still leaks, so "discarded mint" is not the mechanism.
+#
+# INTENDED: prints `R2` and is ASan-clean under detect_leaks=1. The mint inside
+# the closure body must be registered for drop at its birth (Core #3).
+#
+# RED-verified 2026-08-27 at pristine HEAD.
+from std.collections import Box
+trait Speaker:
+    String speak(self)
+struct Robot:
+    String id
+equip Robot with Speaker:
+    String speak(self):
+        return self.id
+void main():
+    Callable[Box[Speaker]()] f = (): Box.new(Robot("R2"))
+    print(f().speak())
