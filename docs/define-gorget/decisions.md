@@ -2777,6 +2777,40 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   **⚠ SEQUENCING: this BLOCKS the A2 sweep.** The sweep is a one-way flattening of
   hand-built structure, so the marker must exist and the affected files must be marked
   BEFORE the sweep is regenerated.
+- 2026-08-27 — **🎯 D47 RATIFIED (owner): FIX THE BOUNDARY NOW (no new machinery); DEEP-1 LAZY-AT-BIND LATER; `*box` RETIREMENT SEQUENCED AFTER THE BIND FIX.**
+
+  **The question.** Why does a local bind of a view not behave like a parameter — read-only free, clone
+  only on mutation? Measured answer: **the model already says a bind MUST clone, and the clone is not
+  being emitted.** `docs/internals/cow-transient-view-model.md` Rule 3: *"every position where a value
+  could come to rest — a local bind, a field init, a closure capture, a collection `push`, a
+  `return`-as-owned — is already an ownership boundary that materializes… A view that reaches any
+  storage position hits the existing clone and becomes owned."* Orchestrator-verified in the emitted C
+  for `P inner = b.get()`: **`P__clone` is generated and never called**; the bind is a bare
+  `__v14 = Box__P__get(...)`, so the local aliases the payload and both drop it (`t0684`, rc 134).
+
+  **NOW — fix the boundary, no new machinery.** Rule 3's selling point is *"no new mechanism and no
+  borrow checker"*: safety comes from materializing at a handful of rest positions rather than tracking
+  when a view goes stale. The defect is a HOLE in that set, not a missing feature. ⚠ **Three faces, one
+  suspected root (Core #4):** `Box[T](struct.field)` at a constructor position that does not materialize
+  · `E_MoveWithoutOperator` unenforced at constructor positions and for field sources (`t0682`) · a
+  local bind that does not materialize (`t0684`). **Enumerate the boundary set and ask which positions
+  actually fire**, rather than patching three sites.
+
+  **LATER — DEEP-1 delivers the lazy model.** Read-only binds free, clone on mutation, is strictly more
+  powerful and is the documented endgame: return-view lazy materialization via `BorrowOrigin` /
+  `returns_view` provenance (`docs/language-design.md:730`). Making a bind lazy requires knowing when the
+  underlying value is mutated or dropped — **exactly the lifetime tracking Rule 3 was designed to
+  avoid** — which is why it is a separate, later, explicitly UAF-prone round. It is also the lever that
+  takes the self-host's stage-1 clone count down: `Parser.peek`'s 7,823,340 clones are the same
+  must-materialize-on-return tax.
+
+  **`*box` RETIREMENT — sequenced, not cancelled.** D36 rejected a `*boxed` operator and the
+  implementation shipped one anyway. D36's stated reason — a silent-clone-at-bind trap the model would
+  swallow — is **vindicated by measurement**, with one correction that changes the order of work: **the
+  trap fires on `.get()`, the API D36 PRESERVED.** So retiring the operator does not by itself avoid it.
+  Retirement lands AFTER the bind path is fixed; otherwise ~2,241 self-host deref sites migrate onto
+  `.get()` and meet the same double free through the front door.
+
 - 2026-08-27 — **🎯 D46 RATIFIED (owner): `==` WITHOUT AN `Equatable` IMPL IS A CHECK-TIME REJECTION; TUPLES GET INTRINSIC STRUCTURAL EQUALITY.**
 
   **What was measured before the ruling.** `==` on a type with no `Equatable` impl is accepted today and
