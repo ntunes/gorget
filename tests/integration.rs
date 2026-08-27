@@ -30003,7 +30003,20 @@ fn self_host_bootstrap() {
 // SH source = additional self-compile clones. Measured array_clone=12,939,495
 // (+0.35% vs prior ceiling). Ceiling = measured + ~1%. String stayed under
 // prior ceiling. PROVISIONAL — reclaim same rules apply.
-const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_070_000;
+//
+// Re-seeded DOWN 2026-08-27 (R44 clone-pressure reclaim): the method-targ
+// recorder installed at `type_check_stmt`'s entry paid a full
+// `infer_expr_type` on EVERY method call at every statement position. The
+// recorder's sole output, `expr_method_targs`, has one write site (infer.gg),
+// unreachable unless a shape resolver finds the method — and both resolvers
+// look up only `shape_method_names`, populated exactly for methods declaring
+// `[G]` params. Gating the recorder's inference on a registry-derived index of
+// those names (`registry_has_method_generic_name`) drops provably output-free
+// work: measured array_clone 13,455,238 → 12,998,363 (−456,875), emitted C
+// byte-identical over the 54K-line self-host corpus with the program held
+// fixed. Ceiling = measured + ~0.5%; the usual +1% would have RAISED this pin,
+// which the reclaim rule forbids.
+const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_060_000;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to

@@ -1,0 +1,94 @@
+# KNOWN GAP (self-host lane only) + the method-targ recorder's HOLE TEST.
+#
+# TWO things live in this one file, deliberately — they are the same program
+# read with two different instruments.
+#
+# ── 1. THE GAP: SH lane never DEFINES a user `equip` method-generic instance ──
+#
+# Rust gg runs this correctly and prints `tally=2`. The self-host lane emits C
+# that CALLS the correctly-mangled `Holder__tally__GorgetClosure` and never
+# DEFINES it:
+#
+#     undefined reference to `Holder__tally__GorgetClosure'
+#
+# So the PRODUCER half is healthy — the typechecker records the method targs and
+# the call site mangles them in — and the CONSUMER half (emitting the mono'd
+# body for a user-declared, inherent-`equip`, method-generic method) is missing.
+# It reproduces at EVERY call position and with an explicit turbofish
+# (`h.tally[int(int)](gt_two)`) too, which rules the recorder out: turbofish
+# carries its own targs and never consults the recorder.
+#
+# Note Rust gg has a second-line defence the self-host lacks — the call site
+# degrades to the un-mangled symbol when the mono'd one was never registered
+# (`src/ir/lowering/exprs/methods.rs`, the `ctx.fn_sigs.contains_key(&sym)`
+# test), which converts this whole class from a link error into a linkable
+# fallback.
+#
+# Graduate this out of known_gaps/ (and assert `tally=2` on the SH lane) when
+# the self-host lowerer emits mono'd bodies for user equip method-generic
+# methods.
+#
+# ── 2. THE HOLE TEST: does the recorder's gate catch its own class? ──────────
+#
+# `record_method_targs_for_stmt` gates its `infer_expr_type` call on a
+# registry-derived index of method names that some registered shape declares
+# with `[G]` params (`registry_has_method_generic_name`, traits.gg). An earlier
+# probe gated on a HARDCODED list of nine builtin iterator names instead
+# (fold/any/all/find/find_index/for_each/map/filter/filter_map). `tally` is
+# method-generic and outside that list, so the two gates disagree here — and
+# the disagreement is visible in the emitted C without needing the program to
+# link, which is what makes this file usable as an instrument TODAY, while
+# gap (1) is still open:
+#
+#     driver                          symbol emitted for `tally`
+#     ------------------------------  --------------------------------
+#     recorder live (HEAD)            Holder__tally__GorgetClosure   (targs kept)
+#     recorder ABLATED                Holder__tally                  (targs lost)
+#     gate = hardcoded nine names     Holder__tally                  (targs lost)
+#     gate = registry-derived index   Holder__tally__GorgetClosure   (targs kept)
+#
+# Rows 1 and 2 are the RED-verify: with the chokepoint removed the mangled
+# suffix disappears, so this program genuinely exercises the recorder rather
+# than passing for an unrelated reason. Row 3 is why the hardcoded shape was
+# refused — it silently reintroduces the CALLED-but-never-DEFINED class the
+# chokepoint was installed to close. Row 4 is the shipped shape.
+#
+# The same hole is NOT hypothetical in lib/std either: `each`, `take_while`,
+# `drop_while`, `inspect`, `zip` and `to_dict` are all declared method-generic
+# in lib/std/iter.gg and all absent from the nine.
+#
+# Operands are pushed at runtime, never literals, so const-folding cannot elide
+# the call.
+#
+# EXPECTED OUTPUT (what the language SHOULD do, on every lane): tally=2
+
+from std.collections import Vector
+
+struct Holder:
+    Vector[int] items
+
+equip Holder:
+    int tally[F](self, F f):
+        int acc = 0
+        for x in self.items:
+            if f(x):
+                acc = acc + 1
+        return acc
+
+bool gt_two(int x):
+    return x > 2
+
+int main():
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(3)
+    v.push(5)
+    Holder h = Holder(v)
+    # POSITION: if condition — reached by neither `walk_expr_closures` nor an
+    # `infer_expr_type` call in `type_check_stmt`'s SIf arm, so the recorder
+    # chokepoint is the only thing that can record this call's method targs.
+    if h.tally(gt_two) == 2:
+        print("tally=2")
+    else:
+        print("tally=other")
+    return 0
