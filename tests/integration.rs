@@ -45179,7 +45179,8 @@ beta",
 }
 
 /// Round XXIII γδ REGRESSION (new 2026-08-01) — `HashMap[int, Point].x`
-/// value-read (TODO.md:1064). Closed by the `HashMap__` arm added to
+/// value-read (filed; the old TODO.md:1064 line cite is dead). Closed by
+/// the `HashMap__` arm added to
 /// `infer_collection_element_type` — the same class fix that admits
 /// `Map` at the `try_resolve_index_element_ptr` kind-gate. Pre-fix
 /// `hm[0].x` printed `0` on BOTH backends because
@@ -45203,7 +45204,8 @@ fn hashmap_int_point_field_read() {
 ///
 /// D10(b) syntactic call-arg overlap covers HashMap uniformly (verified
 /// live 2026-08-01 — `f(&hm[k], &hm[k])` trips `E_BorrowConflict`); the
-/// deeper D10 structural chokepoint (TODO.md:121 High) covers Map under
+/// deeper D10 structural chokepoint (filed HIGH; grep `todo/` for D10)
+/// covers Map under
 /// the same regime as Vector realloc.
 #[test]
 fn hashmap_amp_element_writethrough() {
@@ -51707,7 +51709,7 @@ fn sh_mutex_struct_field_double_free() {
 /// SELF-HOST-ONLY — the Rust lane is a green control. Asserts SH parity to
 /// Rust; currently fails on the stdout assertion (`0` vs `42`).
 ///
-/// Likely a sibling of the Rust-lane α cluster filed in TODO.md near line 326
+/// Likely a sibling of the Rust-lane α cluster filed under Self-host parity
 /// (S-C: extend self-host static-init synthesis to enum-variant + non-literal-
 /// arg struct ctors). The Rust-only `static_struct_resource_field` test
 /// exercises the no-arg-nested-ctor variant (`Box2(Vector[int]())`) as a live
@@ -52961,7 +52963,7 @@ fn c1_d26_closure_body_no_auto_infer_intended() {
 // end-to-end (parse → lower → emit-C) so the SH mirror stays honest. The
 // MINIMUM SH mirror shipped in this round covers: lex + parse the 7 fallible
 // operators (Pratt binding at base-op precedence); reject the 7 compound
-// forms via `panic()` at the parser (SH gap TODO.md:784 — parser errors
+// forms via `panic()` at the parser (a filed SH gap — parser errors
 // are discarded, so `panic()` is the observable channel, mirroring D28 R1);
 // lowerer's `map_binop` routes `"+!"`/etc as their base op (Route-A trap-
 // on-fault minimum — matches Rust foundation-slice shape). Deeper items
@@ -53007,7 +53009,7 @@ fn self_host_driver_accepts_d26_smoke_propagate() {
 fn self_host_driver_rejects_d26_compound_assign() {
     // SH must REJECT `+!=` (v1-EXCLUDED per amendment `decisions.md:945`).
     // The SH reject is via panic() (parse_source discards parser.errors —
-    // TODO.md:784 systemic gap; same pattern D28 R1 used). Exits 101 with
+    // a filed systemic SH gap; same pattern D28 R1 used). Exits 101 with
     // a T_Panic message naming the D26 tag and the glyph.
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -53106,8 +53108,8 @@ irrefutable catch-all (`case other:` goes rc 0/3616 B -> rc 1 `E_UseAfterMove`),
 so the classifier must become VARIANT-AWARE — which needs the variant list \
 threaded into a predicate whose ARMS-ONLY signature \
 `self_host_match_fallthrough_predicates_pinned` deliberately pins. See the \
-TODO.md bullet beginning \"`match_has_catch_all` credits an unguarded \
-`PBinding`\". Un-ignore and graduate out of known_gaps/ when it lands."]
+item `todo/t0466.md` (\"`match_has_catch_all` credits an unguarded \
+`PBinding`\"). Un-ignore and graduate out of known_gaps/ when it lands."]
 fn sh_variant_binding_credited_as_catchall_intended() {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));

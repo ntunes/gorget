@@ -34,15 +34,15 @@
 //!   - structs / equip `&self` named-receiver mutators — R37-T1 self-host
 //!     named-receiver divergence
 //!   - `select:` blocks             — self-host `SSelect` lowering is
-//!     unimplemented, the whole block is silently dropped (TODO.md:127 item
-//!     (c), TODO.md:169)
+//!     unimplemented, the whole block is silently dropped (filed; grep
+//!     `todo/` for `SSelect` — the old TODO.md:127 line cite is dead)
 //!   - `shared(...)` facades        — self-host lowers the facade as a PLAIN
 //!     value: no sync-handle alloc, no guard slot; affects every strategy
-//!     (TODO.md:127 item (d))
+//!     (filed; grep `todo/` for the `shared(...)` facade gap)
 //!   - `spawn` / async / Channel    — spawn-opaque-param keystone + Channel
-//!     ctor/drop cluster (TODO.md:127 item (a), TODO.md:169)
+//!     ctor/drop cluster (`todo/t0617.md`)
 //!   - method-generics              — deep multi-root cluster, partitioned
-//!     but not fully landed (TODO.md:339 "method-generic cluster")
+//!     but not fully landed (filed; grep `todo/` for "method-generic")
 //!
 //! ## Tier 1 — the throws-position REJECTION tier (T3b)
 //!

@@ -4,16 +4,17 @@
 
 **⚠ R44 CLOSED 2026-08-27. R45 IS OPEN — owner go GRANTED, autonomous.**
 
-**CONVERGENCE BASELINE FOR R45: kg=22, todo=678** — regen the close line with
-`scripts/convergence.sh 22 678 <filed>`. ⚠ **The kg number is NOT a gap count.** It counts ORPHANED
+**CONVERGENCE BASELINE FOR R45: kg=22, todo=679** — regen the close line with
+`scripts/convergence.sh 22 679 <filed>`. ⚠ **The kg number is NOT a gap count.** It counts ORPHANED
 repros; a repro cited by its own item is that item's evidence and exempt (owner 2026-08-23).
 At R44 close: 185 inventory units, 124 cited. Do not read a fall in it as gaps closing.
-⚠ **`todo` moved 674 → 678 in the interstitial, and the four are FILINGS, not a counting artefact.**
+⚠ **`todo` moved 674 → 679 in the interstitial, and the five are FILINGS, not a counting artefact.**
 The directory split itself was counting-NEUTRAL and proved so (674 bullets → 674 files, prose
-byte-identical, `todo_items` 674 before and after); the +4 is the split's own unimplemented clauses
-filed as items — `t0675`/`t0676` (the two ratified lints), `t0677` (`mechanism`), `t0678` (hot-list
-pointers). `todo_items` is now a FILE COUNT (`find todo -maxdepth 1 -name '*.md' | wc -l`), so it no
-longer moves when the handover is rewritten.
+byte-identical, `todo_items` 674 before and after with the same args); the +5 sits on top — the
+split's own unimplemented clauses `t0675`/`t0676` (the two ratified lints), `t0677` (`mechanism`),
+`t0678` (hot-list pointers), plus `t0679` (four dead `TODO.md:<line>` cites left in `src/`, which the
+split was barred from editing). `todo_items` is now a FILE COUNT
+(`find todo -maxdepth 1 -name '*.md' | wc -l`), so it no longer moves when the handover is rewritten.
 
 **⚠ FULL BATTERY IS GREEN at R44 close** — C + LLVM sweeps, `--lib`, `--test lints`,
 `-p ggdef`, `--test spec_conformance`, `--test security`, `--test c_runtime`, the bootstrap fixed
@@ -84,7 +85,8 @@ in the R44→R45 interstitial. The operating rules below are LIVE; the residual 
 - **RESIDUAL CLAUSES — filed, not dropped:** the two ratified lints (`cites` must resolve `t0675`;
   no reference to a deleted doc `t0676`), the `mechanism` field + its census `t0677`, and the
   hot-list-becomes-pointers conversion `t0678` (deliberately NOT mechanised — mapping prose phrases
-  onto ids is judgement, and a guessed pointer reads as authoritative).
+  onto ids is judgement, and a guessed pointer reads as authoritative), plus `t0679` — the four dead
+  `TODO.md:<line>` cites still in `src/`, the exact rot this split retires.
 
 **⚖ ORCHESTRATOR CORRECTION 2026-08-23 — THE C1/C2 SPLIT IS DISSOLVED; TRACK C IS ONE TRACK, AFTER D.**
 I split Track C into a "self-contained" C1 and a deferred C2. Its first review measured that **two of
@@ -1442,6 +1444,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0676`](todo/t0676.md) **MED** — 🆕🧹 [MED — the SECOND of the two lints ratified 2026-08-23 with the todo/ split; filed 2026-08-27 by the split migration,…
 - [`t0677`](todo/t0677.md) **LOW** — 🆕📋 [LOW — the one ratified todo/ FIELD the split migration could not populate; filed 2026-08-27] mechanism is EMPTY on a…
 - [`t0678`](todo/t0678.md) **LOW** — 🆕📋 [LOW — the last unimplemented clause of the ratified todo/ split; filed 2026-08-27 by the migration that deliberately…
+- [`t0679`](todo/t0679.md) **LOW** — 🆕🧹 [LOW — four dead TODO.md:<line> coordinates in COMPILER SOURCE; enumerated 2026-08-27 by the todo/ split, which was f…
 ### Low
 
 - [`t0606`](todo/t0606.md) — 🧹 (G1 follow-up) lint-file-scope: widen g1_projected_materialize_sites_untrack files[] IF a projected-materialize cow_be…
