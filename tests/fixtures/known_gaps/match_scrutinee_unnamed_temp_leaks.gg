@@ -1,0 +1,55 @@
+# KNOWN GAP — an UNNAMED TEMP in MATCH SCRUTINEE POSITION leaks its payload.
+# Live at pristine HEAD, no fix applied, no closure anywhere.
+#
+#     match mkE(mk("hel","lo")):        # unnamed temp  -> 6 B / 1 allocation
+#         case E.A(x): print(x)
+#
+#     E e = mkE(mk("hel","lo"))         # named local   -> CLEAN
+#     match e:
+#         case E.A(x): print(x)
+#
+# THE DISCRIMINATOR IS THE UNNAMED TEMP IN SCRUTINEE POSITION -- nothing else.
+# The two programs are otherwise identical; binding the scrutinee to a named
+# local first is enough to make the leak disappear.
+#
+# Frames: `str_alloc_copy` <- ... <- `mkE` <- `main`.
+#
+# ⚠ NOT a closure defect -- distinct from `t0526`, which is closure-capture and
+# whose frames go through `__Closure_N__call`. There is no closure here.
+#
+# ⚠ EXPOSED, NOT INTRODUCED BY ANY IN-FLIGHT FIX. Measured at pristine HEAD.
+# The control that removes the extraction entirely (`.is_some()` instead of
+# the case binding) ALSO leaks at HEAD with identical frames, which is what
+# establishes that the extraction is not the cause.
+#
+# ⚠ NO GATE SEES THIS. It lands inside `test_option_resource_field`'s own
+# shapes, and that fixture uses only STATIC-LITERAL payloads -- `t0036`'s
+# named false negative -- so it cannot observe a heap leak. Any net for this
+# class must heap-FORCE the payload via a concat function.
+#
+# ⚠ PROBE HYGIENE, learned the hard way on this defect: under `--sanitize` a
+# LEAKING program's stdout is LOST -- LSan does not flush -- so a run that
+# leaks shows no output. Do not read "no output" as "the program printed
+# nothing"; check the sanitizer summary separately.
+#
+# INTENDED (asserted by the wired ASan test): rc 0, no leak, both backends,
+# regardless of whether the scrutinee is a named local or a temp.
+# Measured 2026-08-27 by R45 Track D brief-review pass 9; orchestrator-verified
+# with the named-local control run alongside.
+
+String mk(String a, String b):
+    return a + b
+
+enum E:
+    A(String)
+    B(int)
+
+E mkE(String s):
+    return E.A(s)
+
+void main():
+    match mkE(mk("hel", "lo")):
+        case E.A(x):
+            print(x)
+        else:
+            print("no")
