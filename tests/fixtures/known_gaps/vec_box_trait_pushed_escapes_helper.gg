@@ -1,0 +1,50 @@
+# KNOWN GAP — 🚨 a `Vector[Box[Trait]]` built with `Box.new` + `push` and
+# returned from a helper SEGFAULTS: rc 139 on both backends, ASan
+# `stack-buffer-overflow` in `__interceptor_memcpy`.
+#
+# ⚠ DISCRIMINATED FROM ITS SIBLING BY FORMATION SPELLING — do not merge them.
+# The same program written with the CTOR CALL and a CONTAINER LITERAL --
+# `Box(Robot(...))` + `Vector[Box[Speaker]] v = [b]` -- fails DIFFERENTLY at
+# HEAD: rc 0 printing the EMPTY STRING on both lanes, ASan
+# `heap-use-after-free` in `gorget_string_clone_to_owned`. That sibling is
+# REPAIRED by R45 Track A's fix B (measured: rc 0 with the correct string,
+# leaving a 98-byte leak that is filed as `t0700`).
+#
+# THIS spelling -- `Box.new(...)` + `v.push(b)` -- is rc 139 at HEAD **and
+# still rc 139 under fix A + fix B** (measured 2026-08-27 with the patch
+# applied). So it is not the same defect wearing a different costume: it
+# survives the repair that closes the sibling.
+#
+# The two differ in exactly two tokens, which is why this is worth pinning:
+#   sibling : Box(Robot(mk(..)))      + Vector[Box[Speaker]] v = [b]
+#   THIS    : Box.new(Robot(mk(..)))  + v.push(b)
+#
+# ⚠ The payload is heap-forced through `mk`. A literal would not reallocate
+# and would hide the defect.
+#
+# INTENDED: prints `R2` on both backends, ASan-clean.
+#
+# RED-verified 2026-08-27 at pristine HEAD (rc 139, C and LLVM) and again
+# under Track A's fix A+B patch (still rc 139), by the R45 orchestrator while
+# verifying Track A brief-review pass 18's P18-2.
+from std.collections import Box
+trait Speaker:
+    String speak(self)
+struct Robot:
+    String id
+equip Robot with Speaker:
+    String speak(self):
+        return self.id
+
+String mk(String a, String b):
+    return a + b
+
+Vector[Box[Speaker]] make():
+    Box[Robot] b = Box.new(Robot(mk("R", "2")))
+    Vector[Box[Speaker]] v = []
+    v.push(b)
+    return v
+
+void main():
+    Vector[Box[Speaker]] v = make()
+    print(v.get(0).unwrap().speak())

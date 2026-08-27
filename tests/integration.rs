@@ -54536,6 +54536,21 @@ fn cow_rescue_mutation_inside_assert() {
     run_gg("cow_rescue_mutation_inside_assert.gg", "hello");
 }
 
+/// KNOWN GAP — a `Vector[Box[Trait]]` built with `Box.new` + `push` and
+/// returned from a helper segfaults (rc 139 both backends, ASan
+/// stack-buffer-overflow). Its two-token sibling — ctor call plus container
+/// literal — fails DIFFERENTLY (rc 0, empty string, heap-use-after-free) and
+/// IS repaired by R45 Track A's fix B. This spelling survives that repair.
+#[test]
+#[ignore = "KNOWN GAP (R45, orchestrator-verified while checking Track A pass \
+18): Vector[Box[Trait]] via Box.new + push, returned from a helper, is rc 139 \
+at HEAD and still rc 139 under fix A+B. Distinct from the ctor+literal \
+sibling by formation spelling and failure mode."]
+fn known_gap_vec_box_trait_pushed_escapes_helper() {
+    // INTENDED: `R2`, both backends, ASan-clean.
+    run_gg("known_gaps/vec_box_trait_pushed_escapes_helper.gg", "R2");
+}
+
 /// REGRESSION (R45) — `on error:` is an ALTERNATIVE path, not a straight-line
 /// scope. Making `walk_stmt` exhaustive in `c5860a68` lumped `OnError` with
 /// `Unsafe`/`NamedScope`, so a KILL inside the handler deleted a name still
