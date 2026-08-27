@@ -2777,6 +2777,38 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   **⚠ SEQUENCING: this BLOCKS the A2 sweep.** The sweep is a one-way flattening of
   hand-built structure, so the marker must exist and the affected files must be marked
   BEFORE the sweep is regenerated.
+- 2026-08-27 — **🎯 D46 RATIFIED (owner): `==` WITHOUT AN `Equatable` IMPL IS A CHECK-TIME REJECTION; TUPLES GET INTRINSIC STRUCTURAL EQUALITY.**
+
+  **What was measured before the ruling.** `==` on a type with no `Equatable` impl is accepted today and
+  answers **address identity** — `a == a` is *true* — with ordering **nondeterministic across lanes** (C,
+  LLVM and ASan produced three different answers, one of which is not a possible total order). The
+  original filing said "silently answers `false`"; that was wrong. Measured with no `@derive` anywhere:
+  `int` **true** · `String` **true** · **tuple `(1,2)` FALSE** · struct **false** · enum **false**.
+
+  **The premise of the open question was itself false.** The question was posed as "a blanket reject
+  would break `(int,int) == (int,int)`". It would not: **that comparison already returns the wrong
+  answer.** Rejecting does not break tuple equality — it stops it lying.
+
+  **The ruling, two halves.**
+  1. **TUPLES get INTRINSIC structural equality** whenever their elements are comparable. A tuple is an
+     anonymous product type: there is nowhere to write `@derive(Equatable)`, so requiring one is
+     impossible and rejecting would make tuples second-class. Every language with tuples compares them
+     structurally when their elements do.
+  2. **STRUCTS and ENUMS keep requiring `@derive(Equatable)` — and `==` without it is REJECTED at check
+     time**, never silently answered. The language already implies this by having the derive at all, and
+     the current behaviour is the worst available option: a plausible-looking wrong answer, differing by
+     lane, in the most basic operation there is.
+
+  **Why rejection rather than auto-derive for structs/enums.** Auto-deriving would make `==` silently
+  structural for types whose author never opted in, which is the same class of surprise in the other
+  direction — and it forecloses types that should NOT be compared (identity-bearing handles, types with
+  interior mutability). Core #10 (lower-or-reject) settles it: an arm that cannot answer correctly
+  rejects, it does not guess.
+
+  **Owed:** the tuple path (intrinsic), the reject path with a teaching diagnostic naming `Equatable` and
+  suggesting `@derive`, cross-lane fixtures for all five rows of the table above, and a doc
+  write-through. Filed as `todo/t0013.md`.
+
 - 2026-08-16 — **🎯 THE SILENT ARM-KILLER = REJECT, on two rules (owner, live session).**
   A `case` naming something that does not exist must not silently become a catch-all.
   Ratified pair, both compile ERRORS:

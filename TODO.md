@@ -1049,6 +1049,7 @@ LANDING ORDER (most-bounded first; items 1/2/3a are in DONE.md):
 Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at ONLY the free-function ECall path (typecheck.rs:1569), NOT for method calls — Rust gg ACCEPTS `s.compute(a=1, 2)` (exit 0), and so does the self-host. So Rejection #1 (self-host ECall, not EMethodCall) faithfully mirrors Rust's CURRENT scope. But per invariant #8 this is a ≥2-bug defect BOTH compilers share: reject positional-after-named on METHOD calls in Rust gg (extend the check to the EMethodCall path) AND the self-host (add the same walk to the EMethodCall typecheck arm) + a negative fixture asserting both reject. Separate follow-up.
 
 - [`t0402`](todo/t0402.md) **HIGH** — [HIGH — PRODUCTION BUG, found by B1 output-review probing 2026-07-06] 🐛 Struct/enum-CTOR named args bind POSITIONALLY in…
+- [`t0683`](todo/t0683.md) **HIGH** — 🆕🚨 [HIGH — == ON TWO EQUAL TUPLES RETURNS false; measured 2026-08-27, orchestrator-verified] Tuple equality answers ADDR…
 ### Medium
 
 

@@ -1,0 +1,27 @@
+# KNOWN GAP — `==` on two EQUAL tuples returns `false`.
+#
+#     auto a = (1, 2)
+#     auto b = (1, 2)
+#     print(a == b)          # false   <- WRONG, `true` expected
+#
+# `int == int` and `String == String` are both correct, so it is not the
+# element types; it is the tuple aggregate itself. The comparison answers
+# ADDRESS IDENTITY rather than structure.
+#
+# ⚖ RATIFIED 2026-08-27 (D46): TUPLES GET INTRINSIC STRUCTURAL EQUALITY
+# whenever their elements are comparable. A tuple is an anonymous product type
+# -- there is nowhere to write `@derive(Equatable)` on one -- so requiring a
+# derive is impossible and rejecting would make tuples second-class.
+#
+# ⚠ This is DISTINCT from the missing-`Equatable`-impl defect on structs and
+# enums, which D46 rules must be a check-time REJECTION. Tuples must WORK;
+# structs and enums must be REFUSED until the author derives. Same ruling,
+# opposite outcomes, because a tuple has no place to put the derive.
+#
+# INTENDED (asserted below): prints true.
+# Measured 2026-08-27; orchestrator-verified.
+
+void main():
+    auto a = (1, 2)
+    auto b = (1, 2)
+    print(a == b)
