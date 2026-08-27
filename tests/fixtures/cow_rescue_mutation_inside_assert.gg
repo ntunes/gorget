@@ -1,0 +1,32 @@
+# REGRESSION — a mutation spelled inside an `assert` must reach the CoW prescan.
+#
+# `cow_after_stmt` (src/ir/lowering/functions.rs) handled 16 of 29 `Stmt` forms
+# and swept 13 into `_ => {}`, so a mutation inside one of them was never
+# recorded and a live view into the mutated collection was not rescued.
+# Measured at pristine HEAD: rc 139 on BOTH backends, against an rc-0 control
+# differing only in the statement form wrapping the same call.
+#
+# ⚠ THE LINT WAS GREEN THE WHOLE TIME. `cow_after_stmt_covers_block_bearing_variants`
+# takes BLOCK-bearing variants as its subject; `Assert` is EXPRESSION-bearing,
+# so no widening of its list could ever have caught this — the subject was the
+# wrong set (AGENTS.md Core #15e Q4). What retires the class is the match being
+# EXHAUSTIVE: a new `Stmt` variant is now a compile error in that function.
+#
+# ⚠ The realloc is load-bearing: 64 pushes with a heap-forced payload from
+# `mk`. Fewer pushes or a literal is rc 0 even with the bug present.
+String mk(String a, String b):
+    return a + b
+
+int grow(Vector[String] &vv):
+    vv.push(mk("fillfillfillfill", "ererererererer"))
+    return 1
+
+void main():
+    Vector[String] v = []
+    v.push(mk("hel", "lo"))
+    String s = v.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        assert grow(&v) == 1
+        i = i + 1
+    print(s)

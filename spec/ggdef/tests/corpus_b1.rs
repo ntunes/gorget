@@ -64,6 +64,7 @@ const EXCLUDE: &[&str] = &[
     "cow_rescue_mutation_in_control_flow_expr.gg",
     "cow_rescue_mutation_in_operand_position.gg",
     "cow_rescue_mutation_through_getchain_receiver.gg",
+    "cow_rescue_mutation_inside_assert.gg",
     "liveness_use_inside_loop.gg",
     "liveness_use_inside_unsafe_scope.gg",
     "liveness_use_inside_with_block.gg",

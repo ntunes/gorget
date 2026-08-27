@@ -887,7 +887,12 @@ fn d29_propagate_walker_arm_coverage() {
         // (it had swept 41 of 47 Expr variants into `_ => {}`), so it now sees
         // THROUGH the D29 wrapper instead of silently under-approximating it.
         // An INCREASE here is coverage arriving, not a regression.
-        ("src/ir/lowering/functions.rs", 2),
+        // 2026-08-27, second bump this round: 2 -> 3. `extract_path_for_mut`
+        // became exhaustive too (its `_ => None` was a live defect: a
+        // chain-spelled mutation receiver recorded NOTHING), so every non-path
+        // variant is now listed explicitly, `Expr::Propagate` among them.
+        // An INCREASE here is coverage arriving, not a regression.
+        ("src/ir/lowering/functions.rs", 3),
         ("src/ir/lowering/generics/mod.rs", 2),
         ("src/ir/lowering/generics/substitute.rs", 1),
         ("src/ir/lowering/liveness.rs", 1),
@@ -20781,5 +20786,79 @@ fn known_gaps_repros_are_wired_to_a_test() {
         "ALLOWED_UNWIRED is STALE — these rows are now wired (or gone). The pin is \
          SHRINK-ONLY, so delete them from the list:\n  {}",
         departed.join("\n  ")
+    );
+}
+
+/// The CoW/liveness prescan walkers must have NO catch-all arm.
+///
+/// Four of these functions shipped a `_ => {}` and each one was a live
+/// memory-safety defect, found one at a time across a single round:
+///
+///   * `cow_after_expr_moves`  — 6 of 47 `Expr` variants handled; nine
+///     expression positions were rc 139.
+///   * `extract_path_for_mut`  — no `MethodCall` arm, so a chain-spelled
+///     mutation receiver recorded NOTHING.
+///   * `walk_stmt` (liveness)  — 10 of 29 `Stmt` forms; `loop:` printed
+///     GARBAGE at rc 0 on both backends where `while true:` was correct.
+///   * `cow_after_stmt`        — 16 of 29; a mutation inside `assert` was
+///     invisible, rc 139 both backends.
+///
+/// These walkers are UNDER-APPROXIMATION-CRITICAL: a form they do not see is
+/// a mutation or use that does not exist as far as the CoW rescue is
+/// concerned, so the value is moved instead of cloned. Over-approximating
+/// costs a clone; under-approximating costs memory safety. A catch-all makes
+/// the dangerous direction the DEFAULT for every variant added later.
+///
+/// The real guard is the exhaustive `match`: with no `_` arm, a new AST
+/// variant is a compile error in each of these functions. This lint exists so
+/// that a future edit cannot quietly restore the catch-all to silence that
+/// compile error — which is exactly how three of the four got there.
+///
+/// ⚠ A LINT OVER THE VARIANT LIST CANNOT REPLACE THIS.
+/// `cow_after_stmt_covers_block_bearing_variants` was GREEN while
+/// `cow_after_stmt` was miscompiling, because its subject is BLOCK-bearing
+/// variants and the defective case was EXPRESSION-bearing. No widening of a
+/// list fixes a subject that does not cover the case (Core #15e Q4).
+#[test]
+fn cow_prescan_walkers_have_no_catch_all_arm() {
+    const WALKERS: [(&str, &str); 4] = [
+        ("src/ir/lowering/functions.rs", "fn cow_after_expr_moves"),
+        ("src/ir/lowering/functions.rs", "fn cow_after_stmt"),
+        ("src/ir/lowering/functions.rs", "fn extract_path_for_mut"),
+        ("src/ir/lowering/liveness.rs", "fn walk_stmt"),
+    ];
+    let mut offenders = Vec::new();
+    for (file, sig) in WALKERS {
+        let src = fs::read_to_string(file).unwrap_or_else(|e| panic!("read {file}: {e}"));
+        let start = match src.find(sig) {
+            Some(i) => i,
+            None => panic!(
+                "{sig} not found in {file} — did it move or get renamed? This lint pins the \
+                 walkers whose catch-alls were four separate memory-safety defects; update the \
+                 WALKERS table rather than deleting the row."
+            ),
+        };
+        // The function body ends at the first column-0 `}` after the signature.
+        let body_end = src[start..]
+            .find("\n}\n")
+            .map(|i| start + i)
+            .unwrap_or(src.len());
+        let body = &src[start..body_end];
+        for (n, line) in body.lines().enumerate() {
+            let t = line.trim();
+            // A catch-all arm: `_ => ...` or `_ if <guard> => ...` at arm position.
+            if t.starts_with("_ =>") || t.starts_with("_ if ") {
+                offenders.push(format!("{file}: {sig} line +{n}: `{t}`"));
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "catch-all arm restored in an under-approximation-critical prescan walker:\n  {}\n\n\
+         These matches must stay EXHAUSTIVE. A form the walker cannot see is a mutation or use \
+         that does not exist as far as the CoW rescue is concerned — the value is moved instead \
+         of cloned. Four separate live defects came from exactly this. If a new AST variant \
+         genuinely needs no handling, list it EXPLICITLY in the no-op arm with a reason.",
+        offenders.join("\n  ")
     );
 }

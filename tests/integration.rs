@@ -54526,6 +54526,16 @@ fn cow_rescue_mutation_through_getchain_receiver() {
 /// correctness.
 ///
 /// All four RED-verified against the pre-fix compiler.
+/// REGRESSION (R45) — `cow_after_stmt`'s catch-all: a mutation inside an
+/// `assert` never reached the CoW prescan, so a live view was not rescued.
+/// rc 139 both backends at HEAD; the guard that should have caught it was
+/// green because its subject was block-bearing variants and `Assert` is
+/// expression-bearing (Core #15e Q4).
+#[test]
+fn cow_rescue_mutation_inside_assert() {
+    run_gg("cow_rescue_mutation_inside_assert.gg", "hello");
+}
+
 #[test]
 fn liveness_use_inside_loop() {
     run_gg("liveness_use_inside_loop.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ");

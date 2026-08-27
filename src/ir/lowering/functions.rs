@@ -550,7 +550,55 @@ fn extract_path_for_mut(expr: &Expr) -> Option<String> {
         // `outer[0].push(x)` spellings were clean. Recording the root is the
         // write-site fix (Core #1); the read side needed no per-shape rule.
         Expr::MethodCall { receiver, .. } => extract_path_for_mut(&receiver.node),
-        _ => None,
+
+        // ── No path to record ───────────────────────────────────────────────
+        // Listed EXPLICITLY rather than swept into `_ => None`. The catch-all
+        // here was a live defect: a chain-spelled mutation receiver returned
+        // None, so `record_path_mutation` recorded NOTHING and a live view was
+        // never rescued (rc 139 both backends). A new `Expr` variant must now
+        // force a decision at this site rather than silently defaulting to
+        // "not a mutable path" — the dangerous direction.
+        Expr::ArrayLiteral(..)
+        | Expr::As { .. }
+        | Expr::Await { .. }
+        | Expr::BinaryOp { .. }
+        | Expr::Block(..)
+        | Expr::BoolLiteral(..)
+        | Expr::Call { .. }
+        | Expr::Catch { .. }
+        | Expr::Closure { .. }
+        | Expr::DefaultOp { .. }
+        | Expr::Deref { .. }
+        | Expr::DictComprehension { .. }
+        | Expr::DictLiteral(..)
+        | Expr::Do { .. }
+        | Expr::DotShorthand { .. }
+        | Expr::FloatLiteral(..)
+        | Expr::If { .. }
+        | Expr::ImplicitClosure { .. }
+        | Expr::IntLiteral(..)
+        | Expr::Is { .. }
+        | Expr::It
+        | Expr::ListComprehension { .. }
+        | Expr::Match { .. }
+        | Expr::MetaOpInfix { .. }
+        | Expr::MetaOpToken(..)
+        | Expr::Move { .. }
+        | Expr::MutableBorrow { .. }
+        | Expr::NoneLiteral
+        | Expr::OptionalChain { .. }
+        | Expr::Path { .. }
+        | Expr::Propagate { .. }
+        | Expr::Range { .. }
+        | Expr::Rethrow { .. }
+        | Expr::ReturnValue
+        | Expr::SetComprehension { .. }
+        | Expr::Spawn { .. }
+        | Expr::SpawnBlocking { .. }
+        | Expr::StringLiteral(..)
+        | Expr::StructLiteral { .. }
+        | Expr::TupleLiteral(..)
+        | Expr::UnaryOp { .. } => None,
     }
 }
 
@@ -769,7 +817,75 @@ fn cow_after_stmt(
                 future.extend(branch);
             }
         }
-        _ => {}
+
+        // ── Forms below were `_ => {}` until 2026-08-27 ──────────────────────
+        // The prescan under-approximated: a mutation spelled inside one of
+        // these statements was never recorded, so a live view into the mutated
+        // collection was not rescued. `assert grow(&v) == 1` in a realloc loop
+        // was rc 139 on BOTH backends against an rc-0 control differing only in
+        // statement form. Over-approximation here is merely a clone.
+        //
+        // ⚠ The lint `cow_after_stmt_covers_block_bearing_variants` was GREEN
+        // throughout, because its subject is BLOCK-bearing variants and
+        // `Assert` is EXPRESSION-bearing. No widening of its list could have
+        // caught this — the subject was the wrong set (Core #15e Q4). The
+        // exhaustive match below is what actually retires the class: a new
+        // `Stmt` variant is now a COMPILE ERROR here.
+        Stmt::Assert { condition, message, .. }
+        | Stmt::AssertReturn { condition, message } => {
+            cow_after_expr_moves(&condition.node, future, fn_param_ownerships, interner);
+            if let Some(m) = message {
+                cow_after_expr_moves(&m.node, future, fn_param_ownerships, interner);
+            }
+        }
+        Stmt::Snapshot { value, .. } | Stmt::MetaConst { value, .. } => {
+            cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
+        }
+        Stmt::MetaLog { args, .. } => {
+            for a in args {
+                cow_after_expr_moves(&a.node, future, fn_param_ownerships, interner);
+            }
+        }
+        Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+            cow_after_expr_moves(&condition.node, future, fn_param_ownerships, interner);
+            let saved = future.clone();
+            let mut branch = saved.clone();
+            cow_after_block(&then_body.stmts, &mut branch, result, fn_param_ownerships, interner);
+            future.extend(branch);
+            for (cond, body) in elif_branches {
+                cow_after_expr_moves(&cond.node, future, fn_param_ownerships, interner);
+                let mut b = saved.clone();
+                cow_after_block(&body.stmts, &mut b, result, fn_param_ownerships, interner);
+                future.extend(b);
+            }
+            if let Some(eb) = else_body {
+                let mut b = saved;
+                cow_after_block(&eb.stmts, &mut b, result, fn_param_ownerships, interner);
+                future.extend(b);
+            }
+        }
+        Stmt::MetaFor { range: e, body, .. } | Stmt::MetaWhile { condition: e, body, .. } => {
+            cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
+        }
+        Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+            cow_after_expr_moves(&scrutinee.node, future, fn_param_ownerships, interner);
+            let saved = future.clone();
+            for (_case, body) in arms {
+                let mut b = saved.clone();
+                cow_after_block(&body.stmts, &mut b, result, fn_param_ownerships, interner);
+                future.extend(b);
+            }
+            if let Some(eb) = else_arm {
+                let mut b = saved;
+                cow_after_block(&eb.stmts, &mut b, result, fn_param_ownerships, interner);
+                future.extend(b);
+            }
+        }
+
+        // Nothing to walk. Listed explicitly so a new variant cannot be swept
+        // up silently. `Item` is a nested definition with its own scope.
+        Stmt::Break | Stmt::Continue | Stmt::Pass | Stmt::Item(_) | Stmt::Return(None) => {}
     }
 }
 
