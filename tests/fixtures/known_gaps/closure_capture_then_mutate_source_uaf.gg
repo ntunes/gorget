@@ -1,0 +1,48 @@
+# KNOWN GAP — 🚨 CAPTURING A COLLECTION IN A CLOSURE AND THEN MUTATING THE
+# SOURCE is a use-after-free. rc 139 SIGSEGV on BOTH backends at pristine HEAD.
+#
+#     String() f = (): v.get(0).unwrap()   # closure captures `v`
+#     while i < 64: v.push(mk(...))        # source realloc'd through `v`
+#     print(f())                           # reads freed memory -> rc 139
+#
+# MECHANISM (Core #10 silent fall-through): `cow_after_expr_moves`
+# (`src/ir/lowering/functions.rs`) has **no `Expr::Closure` arm** and ends in a
+# bare `_ => {}` at `:838`. The closure body is never walked, so the capture
+# never registers as a use of `v`, and the pre-header prescan does not
+# materialize. ⚠ Do not be misled by the `Expr::Closure` arm at `:962` -- that
+# is a DIFFERENT function (the use-counting prescan).
+#
+# ⚠ THIS IS A THIRD MEMBER OF THE FAMILY AND **NEITHER ORDERED FIX CLOSES IT**
+# -- measured by the R45 Track F scout against both prototypes. State the
+# discriminator before merging it with either sibling:
+#   * `t0699` -- a user &self MUTATOR METHOD's NAME is absent from the
+#     `MUTATING_METHODS` list, so the prescan never fires. Wrong KEY -> right
+#     set. Fixed by the typed-mutator fix.
+#   * `t0703` -- the view is spelled through an ALIAS name, so `CollectionId`
+#     names the spelling instead of the storage owner. Right key -> wrong SET.
+#     Fixed by the alias-root fix.
+#   * THIS -- the use is inside a CLOSURE BODY that the walker never visits at
+#     all. Not a key problem and not a set problem: the query is never made.
+#
+# ⚠ THE REALLOC IS LOAD-BEARING (64 pushes, not one) and the payload must be
+# heap-FORCED via `mk`, never a literal. One push is rc 0 and proves nothing.
+#
+# ⇒ Bears on DEEP-1 (`t0543`): closure capture is a rest position the lazy-bind
+# model must materialize at, and obligation (ii) is already unsound here.
+#
+# INTENDED (asserted below): prints `hello`, both backends, ASan-clean.
+# Measured 2026-08-27 by the R45 Track F scout; orchestrator-verified on both
+# lanes.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = []
+    v.push(mk("hel", "lo"))
+    String() f = (): v.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("fill", "er"))
+        i = i + 1
+    print(f())
