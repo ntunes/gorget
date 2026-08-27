@@ -1,0 +1,33 @@
+# KNOWN GAP — `for x in &set` is ACCEPTED and SILENTLY INERT. Per **D49**
+# (ratified 2026-08-27) it must be a CHECK-TIME REJECTION.
+#
+#     for x in &s: x = "zz"     -> build rc 0, run rc 0, s.len() still 2
+#
+# The binding IS the hash key. Writing through it would place the entry in the
+# wrong bucket and silently corrupt the table, so there is no sound
+# write-through to implement. A private copy was CONSIDERED AND REJECTED by
+# D49: Gorget's `&` carries a write-through PROMISE (D33), and quietly
+# downgrading it to a copy breaks that promise where the user cannot see it.
+#
+# EVERY SURVEYED LANGUAGE AGREES on the boundary: Rust's `HashSet` has no
+# `iter_mut()` at all; C++ made `std::set::iterator` a const-iterator in
+# C++11; Java exposes `Map.Entry.setValue()` and no `setKey()`. The sanctioned
+# path for changing a key is universally REMOVE + REINSERT (C++17 formalised
+# it as `extract()`), and the diagnostic should say so.
+#
+# SIBLING, same D49 half: `for k in &dict` -- see
+# `for_amp_dict_key_binding_must_reject.gg`. NOT the same as
+# `for k, v in &dict`, whose VALUE binding D49 rules DOES write through
+# (`t0692`) -- do not conflate the two; they are opposite dispositions.
+#
+# INTENDED (asserted by the wired test, not by stdout): `gg check` REJECTS
+# with a diagnostic naming the key-binding rule and pointing at
+# remove-and-reinsert. This fixture currently COMPILES AND RUNS, which is the
+# defect.
+# Measured 2026-08-27 at HEAD; orchestrator-verified.
+
+void main():
+    Set[String] s = {"aa", "bb"}
+    for x in &s:
+        x = "zz"
+    print(s.len())

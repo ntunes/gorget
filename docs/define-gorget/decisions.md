@@ -3041,3 +3041,68 @@ baseline.
   **DOC WRITE-THROUGH (Core #9 spans docs).** `docs/language-design.md` §9.4 stated the struck rider;
   corrected in the same commit. `docs/language-reference.md` §7.4 and the grammar already describe the
   sanctioned behaviour and need no change — they were right, and the ledger was wrong.
+
+- 2026-08-27 — **🎯 D49 RATIFIED (owner): `for x in &set` AND `for k in &dict` ARE A HARD REJECT. `for k, v in &dict` WRITES THROUGH TO `v` AND NOT TO `k`.**
+
+  Settles the `&`-over-hash-container position that D33 and the 2026-08-18 bare-form ruling left open.
+  The two rulings above already fixed `&` over a **sequence** (write-through) and the **bare** binding
+  (mutable private copy); neither covered a container whose iteration binding **IS the hash key**.
+
+  **WHAT WAS MEASURED BEFORE THE RULING** (2026-08-27, HEAD, orchestrator-verified). Both key positions
+  are **ACCEPTED AND SILENTLY INERT** — the worst of the three available outcomes, and the one behaviour
+  no surveyed language produces:
+
+  | probe | build | run | effect |
+  |---|---|---|---|
+  | `for x in &s: x = "zz"` (`Set[String]`) | rc 0 | rc 0 | none — `s.len()` still 2 |
+  | `for k in &d: k = "zz"` (`Dict[String,int]`) | rc 0 | rc 0 | none — `d.len()` still 1 |
+  | `for k, v in &d: v = 99` | rc 0 | rc 0 | **none — the write is swallowed** (`t0692`) |
+  | `for k in d: d[k] = 99` | **rc 101** | — | compiler abort, `E_CONSUME_SITES` (`t0693`) |
+
+  **THE RULING, two halves.**
+  1. **`for x in &set` and `for k in &dict` are a CHECK-TIME REJECTION.** The binding *is* the hash key;
+     writing through it would place the entry in the wrong bucket and silently corrupt the table. A
+     private copy was considered and REJECTED: Gorget's `&` carries a write-through *promise* (D33), and
+     quietly downgrading it to a copy breaks that promise where the user cannot see it. Rejecting is
+     also what makes the diagnostic teachable — it can name the remove-and-reinsert path.
+  2. **`for k, v in &dict` WRITES THROUGH TO `v`; `k` stays a private copy.** The value is safe on three
+     independent grounds: the hash is computed from the **key alone**, so the value is not in the bucket
+     index; in-place value mutation neither resizes nor rehashes, so there is no realloc and hence **no
+     iterator invalidation**; and the only implementation obligation is **dropping the old value** when
+     the new one is installed.
+
+  **GROUNDING — every surveyed language draws this exact line, and none permits key write-through.**
+  The mechanisms differ; the boundary does not.
+  - **Rust** — `HashMap::iter_mut()` yields `(&K, &mut V)`; there is no way to obtain `&mut K`, and
+    `HashSet` has **no `iter_mut()` at all**. Const-in-the-type.
+  - **C++** — `std::map::value_type` is `std::pair<const Key, T>`, so the key's constness is in the
+    container's own typedef; `std::set::iterator` became a const-iterator in C++11 for the same reason.
+  - **Java** — `Map.Entry.setValue()` is documented as safe during iteration; there is no `setKey()`.
+    The API exposes exactly the safe half.
+  - **Python / Go / Swift / C#** — the loop variable is a copy and you index-assign; value mutation
+    during iteration is fine, structural change is not.
+  - The "I really want to change a key" path is universally **remove + reinsert** (C++17 formalised it
+    as `extract()`, whose node handle exposes a mutable `key()` *precisely because the node is out of
+    the table while you hold it*). The rejection diagnostic should point there.
+
+  **WHY THIS IS THE CONSISTENT READING, NOT A NEW MECHANISM.** Gorget already has both shapes ratified:
+  the bare binding is a private copy (Python/Go's answer, owner 2026-08-18) and `&` is write-through
+  (Rust's answer, D33). D49 applies them to hash containers on the axis Rust puts them on — value
+  mutable, key not — and adds no type surface. `for k, v in d` (bare) stays two private copies.
+
+  **LANE OBLIGATION (Core #9).** This changes accept/reject, so it lands on **ggdef, Rust gg (C + LLVM),
+  and the self-host in the same round**, pinned by a cross-lane fixture, with a POS row (`for k, v in &d`
+  writing through) and NEG rows (`&set`, `&dict`-key). ⚠ Note `t0693`: `for k in d: d[k] = 99` currently
+  **aborts at rc 101** rather than diagnosing — whatever the mutate-during-iteration ruling turns out to
+  be, a validator label reaching the user is a Core #10 violation and is fixed independently of D49.
+
+  **DOC WRITE-THROUGH IS MANDATORY AND PART OF THE FIX** (Core #9 spans docs; the 2026-08-18 ruling's
+  doc obligation went unlanded and that is exactly how the ambiguity persisted).
+  `docs/language-reference.md:1376` states `for x in &coll` = *"Mutable borrow (modify in-place)"* as a
+  blanket, and `:2448-2449` repeat it for the loop and comprehension forms — all three need the
+  hash-container carve-out. `docs/book/`'s collections chapter owes the `for k, v in &d` idiom.
+
+  **WHAT THIS DOES NOT DO.** It does not rule on mutating a dict during its own iteration (`t0693`'s
+  semantics half) — that is a separate, still-open question. It does not change the bare form. It does
+  not change `&` over sequences. And it does not sanction any path to mutating a live key: there is
+  none, by design.

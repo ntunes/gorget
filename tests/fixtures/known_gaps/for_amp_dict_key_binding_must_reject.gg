@@ -1,0 +1,31 @@
+# KNOWN GAP — `for k in &dict` is ACCEPTED and SILENTLY INERT. Per **D49**
+# (ratified 2026-08-27) it must be a CHECK-TIME REJECTION.
+#
+#     for k in &d: k = "zz"     -> build rc 0, run rc 0, d.len() still 1
+#
+# `for k in d` binds the KEY (measured: it prints keys, not values), so under
+# `&` the binding IS the hash key. Writing through it would misplace the entry
+# and silently corrupt the table. D49 rejects rather than downgrading to a
+# private copy, because `&` carries a write-through promise (D33) that a
+# silent copy would break invisibly.
+#
+# ⚠ DO NOT CONFLATE WITH THE VALUE POSITION. `for k, v in &d` binds key AND
+# value, and D49 rules that `v` DOES write through while `k` does not -- the
+# value is not in the bucket index, in-place value mutation neither resizes
+# nor rehashes, and the only obligation is dropping the old value. That half
+# is `t0692`, and its disposition is the OPPOSITE of this one.
+#
+# SIBLING, same D49 half: `for x in &set` -- see
+# `for_amp_set_key_binding_must_reject.gg`.
+#
+# INTENDED (asserted by the wired test, not by stdout): `gg check` REJECTS
+# with a diagnostic naming the key-binding rule and pointing at
+# remove-and-reinsert. This fixture currently COMPILES AND RUNS, which is the
+# defect.
+# Measured 2026-08-27 at HEAD; orchestrator-verified.
+
+void main():
+    Dict[String, int] d = {"a": 1}
+    for k in &d:
+        k = "zz"
+    print(d.len())
