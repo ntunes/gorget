@@ -4,6 +4,29 @@
 
 **⚠ R44 CLOSED 2026-08-27. R45 IS OPEN — owner go GRANTED, autonomous.**
 
+**R45 TRACK ORDER — OWNER-SET, 2026-08-27.** Tracks A (Box ctor / trait pack), C (`for`-loop element
+bindings + D49), D (extraction sites) are mid-gauntlet. **Track F = fix `t0699` + `t0703`** (the two
+CRITICAL live UAFs; owner-ordered fixed THIS round) is scouting. **`t0702` LAUNCHES AFTER TRACK F**
+(owner-sequenced) — do not open it in parallel.
+
+**⚠ `t0702` IS A CORE #7 ROUND BLOCKER AND IT IS NOT OPTIONAL FOR CLOSE.** `self_host_runtime` is RED at
+pristine HEAD (three independent confirmations; 1364 passing / 7 CC-FAIL, one class in two costumes: an
+assignment destination typed as the BASE iterator / `Option` receiving an ADAPTER / PAYLOAD value).
+**Every self-host reading in Tracks A, C and D is unsound until it is green or explicitly quarantined
+with a citation.** Do NOT re-seed with `GG_REGEN_RUNTIME_SNAPSHOT=1` — these are CC-FAIL rows (emitted C
+that does not compile), so re-seeding pins a miscompile as canonical.
+
+**LAST KNOWN-GOOD FOR `t0702` IS UNESTABLISHED — a bisect is in flight.** The record does not settle it:
+the last snapshot-dir commit is `e7a419e9` (R44 Track K) but it touched **1 file / 2 insertions and none
+of the 7 failing rows**, so "green by construction at a re-seed" does not apply; the failing rows'
+snapshots date from 2026-06-18 / 07-01 / 08-07; and R44's `DONE.md` entry records **no**
+`self_host_runtime` green. Window is **at minimum the 78 commits since `e7a419e9`**, possibly far larger.
+First probe running at `e7a419e9` in a detached worktree at `/tmp/bisect_shr`
+(log `/tmp/bisect_e7a419e9.log`). ⚠ **If it is RED there, the gate has been red across at least one
+round-close battery that reported green** — which is then its own finding about the battery, adjacent to
+`t0577` but distinct: `t0577` is a gate ABSENT from the battery, this would be a gate that EXISTS and
+did not run.
+
 **CONVERGENCE BASELINE FOR R45: kg=22, todo=679** — regen the close line with
 `scripts/convergence.sh 22 679 <filed>`. ⚠ **The kg number is NOT a gap count.** It counts ORPHANED
 repros; a repro cited by its own item is that item's evidence and exempt (owner 2026-08-23).
