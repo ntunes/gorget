@@ -1,0 +1,59 @@
+# KNOWN GAP — MEMORY SAFETY, BOTH BACKENDS, ACCEPTED BY THE CHECKER.
+#
+# `Box[N](p1.node)` reads an enum value out of a STILL-LIVE struct field. The
+# source is live, so CoW's rule is clone-not-move — but the clone is SHALLOW:
+# the copy and `p1` end up owning the SAME inner `Box[N]` children, and both
+# drop them at scope exit.
+#
+#     free(): double free detected in tcache 2
+#
+# Under ASan the report is a heap-use-after-free inside the drop chain, with the
+# free and the use both reached from `main`'s `W__drop`:
+#
+#     ERROR: AddressSanitizer: heap-use-after-free
+#       #0 N__drop            #1 Box__N__drop
+#       #2 N__drop            #3 W__drop            #4 main
+#     freed by thread T0 here:
+#       #1 __gorget_global_dealloc_fn   #2 __gorget_box_free_N   #3 Box__N__drop
+#
+# THE DISCRIMINATOR is that the field's value TRANSITIVELY OWNS `Box`es. The
+# same shape one level shallower is fine — `Box[N](l1.node)` where `l1.node` is
+# a `Leaf(String)` clones correctly, and a `Box` built from a field read twice
+# (`Box[N](p.node)` twice over a `Leaf`) also runs clean. It is specifically the
+# nested-`Box` payload whose clone does not recurse.
+#
+# NOT a use-after-move on the user's part and NOT dependent on aliasing between
+# the two sources: the crashing shape reproduces with every leaf distinct and no
+# value read twice (l1,l2 -> p1; l3,l4 -> p2; p1,p2 -> p3). It also reproduces
+# with a traversal instead of a plain drop.
+#
+# `gg check` ACCEPTS it, so this is a one-sided accept of a memory-unsafe
+# program — CLAUDE.md Core #8: "both backends agree" is not a pass when the
+# agreed-on behaviour is a double free.
+#
+# Found while probing why the self-host's AST walkers clone so heavily
+# (R44 clone-reclaim); it is not itself a clone-count issue.
+#
+# EXPECTED OUTPUT (what the language SHOULD do): built
+# EXPECTED EXIT: 0, and clean under ASan.
+
+enum N:
+    Leaf(String)
+    Pair(Box[N], Box[N])
+
+struct W:
+    N node
+
+int main():
+    W l1 = W(N.Leaf("aaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
+    W l2 = W(N.Leaf("bbbbbbbbbbbbbbbbbbbbbbbbbbbb"))
+    W l3 = W(N.Leaf("cccccccccccccccccccccccccccc"))
+    W l4 = W(N.Leaf("dddddddddddddddddddddddddddd"))
+    W p1 = W(N.Pair(Box[N](l1.node), Box[N](l2.node)))
+    W p2 = W(N.Pair(Box[N](l3.node), Box[N](l4.node)))
+    # `p1.node` / `p2.node` are enum values that THEMSELVES own `Box`es, and
+    # both structs are still live. The clone taken here does not recurse into
+    # those inner boxes, so they are owned twice and freed twice.
+    W p3 = W(N.Pair(Box[N](p1.node), Box[N](p2.node)))
+    print("built")
+    return 0
