@@ -6,17 +6,27 @@
 #                                           memory leaks (the direct 32 bytes
 #                                           from `__gorget_box_alloc_GorgetString`)
 #
-# CAUSE (Core #1 -- fix at the write site): `tag_ownership.rs:142-162` gives
-# `Instruction::Call` a `call_result_is_owned` fallback and gives
-# `Instruction::CallExtern` NONE, and `__gorget_box_alloc_*` appears in no
-# typed fresh set (`grep -c box_alloc src/lir/runtime.rs` -> 0). The two
-# spellings mint through different instruction kinds, so one gets an ownership
-# tag and the other does not. Correlation is 2-for-2 by mint kind.
+# ⚠⚠ CAUSE -- CORRECTED 2026-08-27 by brief-review pass 13, which BUILT the
+# previously-recorded fix and measured it INERT. The original header blamed
+# `tag_ownership.rs` for an ownership-tag asymmetry and pointed at
+# `heap_alloc_consumer_externs` as the scaffolded fix. BOTH WERE WRONG, and an
+# executor following the old header would have implemented a NO-OP.
 #
-# ⚠ THE FIX IS ALREADY SCAFFOLDED: `Module::heap_alloc_consumer_externs` is
-# populated at all three mint sites and is already read instruction-kind-
-# agnostically by `validate_drop_pre_rebind`. `tag_ownership.rs` simply does
-# not consult it.
+#   (a) INERT: with BOTH tagger arms consulting
+#       `Module::heap_alloc_consumer_externs`, this repro is BYTE-IDENTICAL
+#       (65 B / 2 allocs) and the GIR still has no `drop_if_alive`.
+#       `src/ir/tag_ownership.rs:56-57` says why in its own doc-comment:
+#       "Does not introduce drops or registrations -- drop tracking is
+#       independent of ownership inference."
+#       This is a DROP-TRACKING problem, not an ownership-inference one.
+#
+#   (b) INVERTED: `Box.new` -- the LEAKER -- travels `Instruction::Call`,
+#       which is the arm that HAS the fallback. Bare `Box(` travels
+#       `CallExtern` and is CLEAN, because of the explicit
+#       `ctx.drops.register_local(dst, ...)` at
+#       `src/ir/lowering/exprs/calls.rs:1209-1212`.
+#
+# Note the path too: the tagger is `src/ir/tag_ownership.rs`, not `src/lir/`.
 #
 # ⚠ THIS IS THE MIRROR OF `box_trait_bare_ctor_struct_field_uaf.gg`. One root,
 # both sides, and they MUST be fixed together:
