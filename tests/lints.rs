@@ -2756,8 +2756,8 @@ fn self_host_loop_dispatcher_bypass_pairs() {
 /// | 1 | `comp_mint_tid` (+ its twin `comp_mint_ctor`) | SET-1 | **CLEAN — the chokepoint.** Mints strictly from the MATERIALIZED result element(s); every list/set/dict comprehension routes through it. |
 /// | 2 | `try_lower_set_hof` | SET-1 | **FIXED THIS ROUND, and it LEFT SET-3.** Its `filter` arm minted the result set with the raw `gorget_(ordered_)set_new` symbol and a hardcoded 8-byte key, at TWO emission sites (ordered and unordered) — measured wrong at rc 0 for `bool`, `String`, `@derive(Hashable)` structs with a resource field, and primitives-only structs whose discriminating field sits past byte 8. Now mints through the single producer `set_ctor_name` (`lower_types.gg`). Pinned by the nine `sethof_filter_*` cells in `tests/fixtures/self_host_comprehension/`. |
 /// | 3 | `comp_make_acc` | (was SET-3) | **FIXED THIS ROUND, and it LEFT SET-3.** Its untyped `else` branch — a bare `gorget_array_new(8)` for an empty element name — is DELETED. A non-empty element name is now the callers' contract, and the contract is ENFORCED by a `lower_abort` rather than asserted in a comment. |
-/// | 4 | `lower_expr_inner` | SET-1 **and** SET-3 | ⛔ **NOT CLEAN — DEFER, filed.** Its array-literal path leaves the element-type name empty for `auto v = []`, so the accumulator is `gorget_array_new(8)` with no elem drop / clone / materialize hooks; a later `push(<String>)` then prints a RAW POINTER at rc 0 on BOTH real lanes while ggdef prints the right answer — Core #8's trap in its cleanest form. Out of this round's scope: the root is the destination-declaration channel, not the comprehension mint. Durable repro `known_gaps/auto_empty_literal_push_string_raw_pointer.gg`; grep `TODO.md` for `auto EMPTY-COLLECTION LITERAL`. |
-/// | 5 | `try_lower_vector_hof` | SET-1 | ⛔ **NOT CLEAN — DEFER, TWO filed defects.** (a) cross-type `flat_map` mints from the INPUT element type (`(T) -> Vector[U]` is legal, so the result element is `U`); (b) the inline-closure `map` shape mints cross-type from the input too. Both wrong at rc 0. Durable repros `known_gaps/flat_map_cross_type_input_mint.gg` and `known_gaps/map_inline_closure_cross_type_input_mint.gg`; grep `TODO.md` for `cross-type` and `flat_map`. This is Core #4 in the flesh: the comprehension producer was fixed and a SIBLING producer still mints from the wrong channel. |
+/// | 4 | `lower_expr_inner` | SET-1 **and** SET-3 | ⛔ **NOT CLEAN — DEFER, filed.** Its array-literal path leaves the element-type name empty for `auto v = []`, so the accumulator is `gorget_array_new(8)` with no elem drop / clone / materialize hooks; a later `push(<String>)` then prints a RAW POINTER at rc 0 on BOTH real lanes while ggdef prints the right answer — Core #8's trap in its cleanest form. Out of this round's scope: the root is the destination-declaration channel, not the comprehension mint. Durable repro `known_gaps/auto_empty_literal_push_string_raw_pointer.gg`; grep `todo/` for `auto EMPTY-COLLECTION LITERAL`. |
+/// | 5 | `try_lower_vector_hof` | SET-1 | ⛔ **NOT CLEAN — DEFER, TWO filed defects.** (a) cross-type `flat_map` mints from the INPUT element type (`(T) -> Vector[U]` is legal, so the result element is `U`); (b) the inline-closure `map` shape mints cross-type from the input too. Both wrong at rc 0. Durable repros `known_gaps/flat_map_cross_type_input_mint.gg` and `known_gaps/map_inline_closure_cross_type_input_mint.gg`; grep `todo/` for `cross-type` and `flat_map`. This is Core #4 in the flesh: the comprehension producer was fixed and a SIBLING producer still mints from the wrong channel. |
 ///
 /// ## Residual the SET-only helper does NOT cover (Core #12: name the omitted cells)
 ///
@@ -6945,6 +6945,40 @@ fn self_host_trap_code_parity() {
          A direct trap site regressed to gorget_panic (or was removed). \
          (T_Bounds is intentionally NOT required — that is T2b.)\n\
          Found: {found:?}",
+    );
+}
+
+/// **The `TODO.md` index is GENERATED and must be current.**
+///
+/// Work items live one-per-file in `todo/` (owner decision 2026-08-23); `TODO.md`
+/// keeps the handover block, the operating invariants, the heading skeleton and a
+/// generated pointer line per item. A hand-kept index of ~674 rows is exactly the
+/// "parallel lists in different files kept in sync by hand" smell AGENTS.md's
+/// layering section names, so the index is regenerated (`python3
+/// scripts/todo_index.py --write`) and this lint fails when it has drifted.
+///
+/// The checker also validates each item file: `<id>.md` naming, the `+++` fence,
+/// every front-matter field present and well-typed, `id` == filename, and the
+/// `areas`/`priority` fields agreeing with the headings the pointer sits under.
+/// That last one is the drift-closing bit — the front matter and the index cannot
+/// disagree about where an item is filed.
+///
+/// Shelling out rather than reimplementing keeps ONE source of truth for the
+/// format (the same precedent as `tracked_files()`' `git ls-files`). `python3` is
+/// already a round-close dependency (`scripts/robustness_map.py`).
+#[test]
+fn todo_index_is_current() {
+    let out = std::process::Command::new("python3")
+        .args(["scripts/todo_index.py"])
+        .output()
+        .expect("python3 scripts/todo_index.py failed to start");
+    assert!(
+        out.status.success(),
+        "TODO.md's generated index is stale or a todo/ item file is malformed.\n{}{}\n\
+         Fix the reported item(s), then regenerate with:\n    \
+         python3 scripts/todo_index.py --write",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
     );
 }
 
@@ -11313,10 +11347,11 @@ fn doc_source_citations_name_the_right_line() {
     // rows (a version of this comment once counted itself). Regenerate instead:
     // `GG_LINT_CITE_CONTENT_WIDE=1 cargo test --test lints doc_source_citations_name_the_right_line`.
     //
-    // Most rows are not stale cites. TODO.md dominates for a structural reason:
-    // its bullets are single enormous lines packing dozens of identifiers and
-    // many cites, so the candidate set is huge and never near any particular
-    // cite — the heuristic has no signal there. But the pile is not all noise:
+    // Most rows are not stale cites. The `todo/` item bodies dominate for a
+    // structural reason: each is a single enormous line packing dozens of
+    // identifiers and many cites, so the candidate set is huge and never near any
+    // particular cite — the heuristic has no signal there. But the pile is not all
+    // noise:
     // the scan's first run caught a `register_collection_alias` cite in this
     // very file pointing hundreds of lines off its target — a real stale cite,
     // outside `docs/`, that nothing guarded. It stays unfixed for the
@@ -11331,15 +11366,26 @@ fn doc_source_citations_name_the_right_line() {
     // candidate identifier set balloons, and a stale cite can PASS because some
     // unrelated candidate happens to sit near the cited line. The burn-down
     // must either tighten paragraph delimiting to comment-block boundaries for
-    // `.rs` targets or accept per-row manual reads there. (3) `TODO.md` LAST,
-    // and probably not with this heuristic at all — a per-bullet check would
-    // need the cite's own sentence, not the bullet. Fix or allowlist each row
+    // `.rs` targets or accept per-row manual reads there. (3) `TODO.md` + `todo/`
+    // LAST, and probably not with this heuristic at all — a per-item check would
+    // need the cite's own sentence, not the whole body. Fix or allowlist each row
     // WITH ITS REASON, then fold the target into the fatal set above. Do not
     // bulk-allowlist: an unread row asserts a verification nobody did.
     let wide = std::env::var("GG_LINT_CITE_CONTENT_WIDE").is_ok();
     let mut targets: Vec<PathBuf> = vec![PathBuf::from(SCOPE)];
     if wide {
         targets.push(PathBuf::from("TODO.md"));
+        // The item bodies moved out of TODO.md into todo/ (owner 2026-08-23);
+        // scanning only TODO.md would silently drop them from this walk.
+        if let Ok(entries) = fs::read_dir("todo") {
+            let mut items: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("md"))
+                .collect();
+            items.sort();
+            targets.extend(items);
+        }
         if let Ok(entries) = fs::read_dir("tests/fixtures/known_gaps") {
             for e in entries.flatten() {
                 let p = e.path();
@@ -11546,7 +11592,7 @@ fn doc_source_citations_name_the_right_line() {
          NEXT STEPS FOR THIS RATCHET, both measured and both real:\n\
          (1) widen SCOPE from the one chapter to the whole docs tree;\n\
          (2) burn down the WIDE scan — `GG_LINT_CITE_CONTENT_WIDE=1` already \
-         walks TODO.md, the known_gaps headers and the two test files, where \
+         walks TODO.md + todo/, the known_gaps headers and the two test files, where \
          nothing guards cites today and where at least one confirmed stale cite \
          lives. See the burn-down order in the comment above `targets`.",
         stale.len(),
@@ -20208,8 +20254,8 @@ fn expr_stmt_walker_population_is_pinned() {
 /// treated as covering every path. Repro
 /// `tests/fixtures/known_gaps/sh_variant_binding_credited_as_catchall.gg` +
 /// the `#[ignore]`d `sh_variant_binding_credited_as_catchall_intended`; see the
-/// `TODO.md` bullet beginning "`match_has_catch_all` credits an unguarded
-/// `PBinding`". The exhaustiveness half of the same split IS sampled, by
+/// item `todo/t0466.md` ("`match_has_catch_all` credits an unguarded
+/// `PBinding`"). The exhaustiveness half of the same split IS sampled, by
 /// `tests/fixtures/exhaustiveness/neg_bare_variant.gg` and
 /// `pos_binding_catchall.gg`. Fixing it is a DESIGN question, not a deletion:
 /// dropping the `case PBinding(_): return true` arm was measured to OVER-REJECT

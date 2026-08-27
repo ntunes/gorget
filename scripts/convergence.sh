@@ -27,11 +27,25 @@
 # That matters because `filed` and `net` are both countable while `closed`
 # invites hand-counting, which is how the ratio drifted.
 #
+# ── WHERE THE ITEMS LIVE (owner decision 2026-08-23, migrated between rounds) ─
+# Work items are FILES: one `todo/<id>.md` per item, TOML front-matter above a
+# `+++` fence and the item's prose verbatim below it. `TODO.md` keeps the
+# handover block, the operating invariants, the heading skeleton and a
+# GENERATED index of pointers (`scripts/todo_index.py`).
+#
+# So `todo_items` is now a FILE COUNT, not a regex over prose. That retires the
+# whole class this script's header is a monument to: every drift it records
+# (Round XIII's +7 from a handover rewrite, Round XXVIII's invisible in-prose
+# filing, the three arbiter defects of R44) came from counting BULLETS IN A
+# NARRATIVE. `ls todo | wc -l` cannot be fooled by a rewritten paragraph.
+# ⚠ The migration is COUNTING-NEUTRAL by construction: it moved 674 bullets to
+# 674 files with the prose byte-identical, so the R45 baseline `todo=674` means
+# exactly what it meant before.
+#
 # WHAT COUNTS (no other reading is available):
-#   FILED   = a NEW TODO work item (a `- **` bullet in a categorized
-#             section), or a NEW known_gaps/*.gg OPEN GAP that NO TODO bullet
-#             cites -- i.e. it has an #[ignore]d test asserting the intended
-#             behaviour, or no wired test at all.
+#   FILED   = a NEW `todo/<id>.md` item file, or a NEW known_gaps/*.gg OPEN GAP
+#             that NO item cites -- i.e. it has an #[ignore]d test asserting the
+#             intended behaviour, or no wired test at all.
 #
 #             ⚠ OWNER RULING 2026-08-23: A MANDATED REPRO COUNTS WITH ITS
 #             BULLET, NOT AS A SECOND FILING. The cardinal rule REQUIRES a
@@ -44,33 +58,38 @@
 #             A repro CITED by a TODO bullet is that bullet's evidence.
 #             An UNCITED gap fixture still counts on its own, so a gap filed
 #             as a fixture with no bullet stays visible to this gate.
-#   CLOSED  = a TODO work item REMOVED, or a known_gaps fixture GRADUATED
-#             (its #[ignore] removed) / deleted.
+#   CLOSED  = a `todo/<id>.md` file `git rm`'d, or a known_gaps fixture
+#             GRADUATED (its #[ignore] removed) / deleted.
+#             ⚠ CLOSURE IS REMOVAL, never `status = "closed"` in place: an
+#             in-place status field grows the directory forever and puts this
+#             arbiter back to interpreting field values, which is the class
+#             that produced three defects in it in one round. `git log
+#             --diff-filter=D -- todo/` preserves the item's whole life.
 #   NOT A GAP AT ALL = a known_gaps fixture referenced ONLY by LIVE tests.
 #             That is the regression net of a bug already FIXED, parked in
 #             that directory because `runtime_parity_corpus` never descends
 #             subdirectories. It is not filed work and never was.
-#   NEITHER = rewriting, narrowing, or re-scoping an existing entry;
-#             splitting one fused bullet into several (a counting
-#             correction, not new work); amending an entry in place;
-#             anything in a prose section (see the stray-filing guard
-#             below — filing there is banned precisely because it is
-#             invisible here).
+#   NEITHER = rewriting, narrowing, or re-scoping an existing item;
+#             splitting one fused item into several (a counting
+#             correction, not new work); amending an item in place;
+#             anything written into TODO.md's prose instead of a
+#             `todo/` file (see the stray-filing guard below — filing
+#             there is banned precisely because it is invisible here).
 # There is NO size, effort, or "big-ticket" exemption to any clause, and
 # none may be inferred. See AGENTS.md "Round lifecycle" step 5.
 #
-# ── PHASED WORK: ONE BULLET PER DECLARED PHASE ────────────────────────────
-# A single bullet describing N phases makes a landed phase INVISIBLE here: it
+# ── PHASED WORK: ONE ITEM FILE PER DECLARED PHASE ─────────────────────────
+# A single item describing N phases makes a landed phase INVISIBLE here: it
 # closes nothing, files nothing, reads `net +0`, and is indistinguishable from
 # a round that did nothing — even if the phase was a thousand lines of
 # measured, fixture-covered work. THAT, not size or difficulty, is the whole
 # reason architecture rounds looked like they needed an exemption. They do not:
-# encode each declared phase as its own bullet and every landing closes one
+# encode each declared phase as its own item file and every landing closes one
 # (`net −1`) and passes clause (c) on its merits.
 #
 # The accounting is NEUTRAL over the item's life: +(N−1) once when it is filed
-# as N bullets instead of 1, then −1 per phase landed = −1 total, identical to
-# the single-bullet encoding. Splitting manufactures no credit; it only changes
+# as N files instead of 1, then −1 per phase landed = −1 total, identical to
+# the single-file encoding. Splitting manufactures no credit; it only changes
 # WHEN the credit lands, so intermediate progress stops reading as zero.
 #
 # ⚠ CORRECTING AN EXISTING FUSED ENTRY: do it BETWEEN rounds. The split is a
@@ -95,41 +114,29 @@ TMP_LIVE=$(mktemp); TMP_NETS=$(mktemp)
 TMP_CITED=$(mktemp); TMP_EXEMPT=$(mktemp)
 trap 'rm -f "$TMP_ALL" "$TMP_STATUS" "$TMP_IGN" "$TMP_LIVE" "$TMP_NETS" "$TMP_CITED" "$TMP_EXEMPT"' EXIT
 
-# Prose sections: `## ` headings that hold narrative, not filed work. Bullets
-# here are commentary and queue pointers. `### UNOWNED, HIGH SEVERITY` nests
-# under the handover but DOES hold real items, so it is re-admitted.
-# Matched as substrings of the `## ` heading line (ASCII only — the real
-# headings carry emoji and an en-dash).
-readonly PROSE_SECTIONS=('CURRENT NEXT' 'NEXT 1' 'Operating invariants')
-readonly PROSE_RE='(CURRENT NEXT|NEXT 1|Operating invariants)'
+# Guard: the item directory must exist. Without it `find … | wc -l` reports a
+# serene 0 and every round looks like it closed everything — the loudest way
+# this metric could ever be wrong.
+if [ ! -d todo ]; then
+  echo "convergence.sh: todo/ is missing — that is where work items live" >&2
+  echo "  (owner decision 2026-08-23: one todo/<id>.md per item; TODO.md keeps the handover)." >&2
+  exit 1
+fi
 
-# Guard: if the prose headings are ever renamed the skip list silently stops
-# matching and the count jumps. Fail loudly instead of reporting a wrong gate.
-for section in "${PROSE_SECTIONS[@]}"; do
-  if ! grep -qE "^## .*${section}" TODO.md; then
-    echo "convergence.sh: prose section heading not found: '## …${section}…'" >&2
-    echo "  TODO.md headings changed — update PROSE_SECTIONS/PROSE_RE before trusting this number." >&2
-    exit 1
-  fi
-done
-
-# Guard: filed work items must live in a CATEGORIZED section, never in a prose
-# section. The count above deliberately skips prose, so an item filed there is
-# INVISIBLE to the gate — it inflates neither the filed side nor the closed
-# side. Round XXVIII filed 1 and closed 3 inside the handover block and the
-# counter read 533→533 flat while the DONE entry claimed a strict decrease.
-# `🆕` is the project's "filed this round" marker, so its presence in a prose
-# section is exactly the defect. Fail loudly rather than report a wrong gate.
-stray_filings=$(awk -v prose_re="$PROSE_RE" '
-  /^## /  { in_prose = ($0 ~ prose_re); sub_admit = 0; next }
-  /^### / { sub_admit = ($0 ~ /UNOWNED, HIGH SEVERITY/); next }
-  (in_prose && !sub_admit) && /^- \*\*/ && /🆕/ { printf "  TODO.md:%d  %.90s\n", NR, $0 }
-' TODO.md)
+# Guard: a work item must be a `todo/<id>.md` FILE, never a bullet written into
+# TODO.md. TODO.md is counted by nothing, so an item filed there is INVISIBLE
+# to this gate — it inflates neither the filed side nor the closed side. Round
+# XXVIII filed 1 and closed 3 inside the handover block and the counter read
+# 533→533 flat while the DONE entry claimed a strict decrease. `🆕` is the
+# project's "filed this round" marker, so a `- **`-bullet carrying it inside
+# TODO.md is exactly the defect. Fail loudly rather than report a wrong gate.
+# (The generated index lines start `- [` and never trip this.)
+stray_filings=$(awk '/^- \*\*/ && /🆕/ { printf "  TODO.md:%d  %.90s\n", NR, $0 }' TODO.md)
 if [ -n "$stray_filings" ]; then
-  echo "convergence.sh: filed work item(s) inside a PROSE section — invisible to this gate:" >&2
+  echo "convergence.sh: filed work item(s) written into TODO.md — invisible to this gate:" >&2
   echo "$stray_filings" >&2
-  echo "  Move them into a categorized section (## CoW … / ## Semantics … / etc.)." >&2
-  echo "  The handover block carries STATE and pointers, never filed work (AGENTS.md step 5)." >&2
+  echo "  Move each into its own todo/<id>.md file and regenerate the index" >&2
+  echo "  (scripts/todo_index.py). TODO.md carries STATE and pointers, never filed work." >&2
   exit 1
 fi
 
@@ -212,21 +219,21 @@ known_gaps=$(
   awk '$2=="IGNORED"{print $1}' "$TMP_STATUS" | sort -u > "$TMP_IGN"
   awk '$2=="LIVE"   {print $1}' "$TMP_STATUS" | sort -u > "$TMP_LIVE"
   comm -23 "$TMP_LIVE" "$TMP_IGN" > "$TMP_NETS"      # live-ONLY = closed-bug nets
-  # OWNER RULING 2026-08-23 (see WHAT COUNTS above): a repro CITED by a TODO
-  # bullet is that bullet's evidence, not a second filing. Subtract those too;
-  # an UNCITED gap fixture still counts on its own.
-  grep -oE 'known_gaps/[A-Za-z0-9_/]+\.gg' TODO.md 2>/dev/null \
+  # OWNER RULING 2026-08-23 (see WHAT COUNTS above): a repro CITED by an item is
+  # that item's evidence, not a second filing. Subtract those too; an UNCITED
+  # gap fixture still counts on its own.
+  # Both TODO.md and todo/ are scanned: the item bodies moved into todo/, but a
+  # `#### ` group heading and the handover still legitimately name a repro, and
+  # a citation is a citation wherever the record makes it.
+  grep -rhoE 'known_gaps/[A-Za-z0-9_/]+\.gg' TODO.md todo 2>/dev/null \
     | sed 's|^known_gaps/||; s|\.gg$||; s|/.*$||' | sort -u > "$TMP_CITED"
   cat "$TMP_NETS" "$TMP_CITED" | sort -u > "$TMP_EXEMPT"
   comm -23 "$TMP_ALL"  "$TMP_EXEMPT" | wc -l | tr -d ' '
 )
 
-todo_items=$(awk -v prose_re="$PROSE_RE" '
-  /^## /  { in_prose = ($0 ~ prose_re); sub_admit = 0; next }
-  /^### / { sub_admit = ($0 ~ /UNOWNED, HIGH SEVERITY/); next }
-  (!in_prose || sub_admit) && /^- \*\*/ { items++ }
-  END { print items + 0 }
-' TODO.md)
+# One item = one file. No regex over prose, no section bookkeeping, nothing a
+# handover rewrite can move.
+todo_items=$(find todo -maxdepth 1 -name '*.md' -type f | wc -l | tr -d ' ')
 
 if [ $# -ge 2 ]; then
   prev_kg=$1
