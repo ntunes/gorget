@@ -10,17 +10,28 @@
 #
 # So the discriminator is BINDING THE RESULT, not calling `.get()`.
 #
-# ⚠⚠ THIS IS THE EXACT TRAP D36 PREDICTED, ON THE SANCTIONED API.
+# ⚠⚠ THE TRAP D36 PREDICTED IS REAL -- BUT IT IS ON THE SANCTIONED API ONLY.
 # D36 (ratified 2026-07-27) rejected a `*boxed` operator partly because it would
 # "land users on a silent-clone-at-bind trap (CoW Rule 3 -- views are transient,
 # so a bind materializes)" that Rust's borrow checker would surface but Gorget's
-# model would swallow. The trap is real -- and it is NOT confined to `*boxed`:
-# it fires on `.get()`, which is the API the book teaches and D36 preserved.
+# model would swallow.
 #
-# That matters for the open decision on retiring `*box`: retiring the operator
-# does NOT by itself avoid the trap D36 named, because the sanctioned
-# replacement has it too. Whichever way that ruling goes, the bind path needs
-# fixing.
+# MEASURED 2026-08-27, and it INVERTS that expectation: the operator D36 rejected
+# DOES materialize; the API D36 preserved does NOT.
+#
+#     P inner = *b        -> rc 0, prints 7, allocs 4 / frees 4, live_bytes 0
+#                            `--clones=sites`: 1 implicit clone, "CoW materialization"
+#     P inner = b.get()   -> rc 134, double free
+#                            `--clones=sites`: 0 implicit clones
+#
+# The cause is a sibling-site gap, not a language-design one. The `Expr::Deref`
+# arm (`src/ir/lowering/exprs/mod.rs:727`) checks `is_resource_type` and emits a
+# deep clone via `clone_fn_for_ptr`. The `.get()` arm
+# (`src/ir/lowering/exprs/methods.rs:1753`) returns `FunctionBuilder::copy(dst)`
+# -- a shallow struct copy sharing the box's heap buffers, with no such check.
+#
+# So retiring `*box` does not avoid this trap; it MIGRATES ~2178 self-host deref
+# sites onto the one path that HAS it. The bind path is fixed first, either way.
 #
 # INTENDED (asserted below): prints 7.
 # Measured 2026-08-27; orchestrator-verified.

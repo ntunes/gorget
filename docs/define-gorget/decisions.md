@@ -2805,11 +2805,18 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   must-materialize-on-return tax.
 
   **`*box` RETIREMENT — sequenced, not cancelled.** D36 rejected a `*boxed` operator and the
-  implementation shipped one anyway. D36's stated reason — a silent-clone-at-bind trap the model would
-  swallow — is **vindicated by measurement**, with one correction that changes the order of work: **the
-  trap fires on `.get()`, the API D36 PRESERVED.** So retiring the operator does not by itself avoid it.
-  Retirement lands AFTER the bind path is fixed; otherwise ~2,241 self-host deref sites migrate onto
-  `.get()` and meet the same double free through the front door.
+  implementation shipped one anyway. D36's stated reason was a silent-clone-at-bind trap the model would
+  swallow. ⚠ **CORRECTED 2026-08-27 by measurement — the expectation is INVERTED.** `P inner = *b` runs
+  rc 0 with `1 implicit clone / "CoW materialization"` and `allocs 4 / frees 4 / live_bytes 0`;
+  `P inner = b.get()` runs **rc 134, double free**, with `0 implicit clones`. The operator D36 rejected
+  materializes at the bind; the API D36 preserved does not. Cause is a sibling-site gap (Core #4), not a
+  design one: `Expr::Deref` (`src/ir/lowering/exprs/mod.rs:727`) gates on `is_resource_type` and clones
+  via `clone_fn_for_ptr`; `.get()` (`src/ir/lowering/exprs/methods.rs:1753`) returns
+  `FunctionBuilder::copy(dst)` — a shallow struct copy over the box's heap buffers — with no such gate.
+  Retirement therefore lands AFTER the bind path is fixed; retiring first would migrate ~2178 self-host
+  deref sites (`grep -rhoE '(=|\(|,|return) *\*[a-zA-Z_][a-zA-Z0-9_]*' tests/fixtures/self_host_*/*.gg
+  | wc -l`) onto the ONE path that has the trap. Whether to retire at all is re-opened: the safety
+  argument that motivated D36 now points the other way.
 
 - 2026-08-27 — **🎯 D46 RATIFIED (owner): `==` WITHOUT AN `Equatable` IMPL IS A CHECK-TIME REJECTION; TUPLES GET INTRINSIC STRUCTURAL EQUALITY.**
 

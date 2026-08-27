@@ -1,0 +1,49 @@
+# KNOWN GAP — `Box[T].get()` for any NON-PRIMITIVE `T` fails to COMPILE on the
+# LLVM backend: `llc` hard-errors with a type mismatch.
+#
+#     Box[P] b = Box(P(7, mkstr(...)))
+#     print(b.get().x)
+#
+#     C     lane: build rc 0, run rc 0, prints 7          <- CORRECT
+#     LLVM  lane: build rc 1
+#       llc: error: '%v14' defined with type 'i64' but expected 'ptr'
+#
+# ELEMENT-TYPE AXIS (the discriminator is the payload type, measured 2026-08-27):
+#     Box[int]     .get()  -> C ok, LLVM ok
+#     Box[String]  .get()  -> C ok (chained), LLVM llc ERROR
+#     Box[P]       .get()  -> C ok (chained), LLVM llc ERROR
+#
+# DISTINCT FROM ITS FAMILY — state the discriminator before merging these:
+#   * `t0684` (box_get_bound_to_local_double_free.gg) is a **C-lane RUNTIME
+#     double-free** that fires ONLY when the result is BOUND to a local; the
+#     CHAINED form `b.get().x` is CORRECT on C.
+#   * THIS gap is an **LLVM-lane COMPILE-TIME hard error** that fires on the
+#     CHAINED form too — i.e. on the shape that C gets right.
+#   * `t0096` is a C-emit symbol collision on `Box__<inner>__drop`; `t0467` is
+#     duplicate drop-glue on comprehension trait-box elements. Neither is this.
+#
+# ⇒ Core #8: `Box[T].get()` on a non-primitive payload is broken on BOTH lanes,
+# in two DIFFERENT ways. That is >=2 bugs, not one lane's problem.
+#
+# ⇒ Core #9 consequence for any Box work: a regression net that reads the box
+# back with `.get()` CANNOT be ported to the LLVM lane at all. Nets for Box
+# fixes must use a drop-time or `*b` shape instead.
+#
+# NOTE the sibling operator is CORRECT on both lanes: `print((*b).x)` builds and
+# runs clean on C AND LLVM. Bears on the open `*box` retirement question --
+# retiring `*box` would migrate every deref site onto the path that does not
+# compile here.
+#
+# INTENDED (asserted below): prints 7, on BOTH backends.
+# Measured 2026-08-27 at HEAD; orchestrator-verified.
+
+struct P:
+    int x
+    String s
+
+String mkstr(String a, String b):
+    return a + b
+
+void main():
+    Box[P] b = Box(P(7, mkstr("aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb")))
+    print(b.get().x)
