@@ -173,8 +173,20 @@ fn walk_stmt<'a>(
             walk_block(&body.stmts, live, lu);
         }
         // Straight-line scopes: the block runs in sequence with its neighbours.
-        Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } | Stmt::OnError { body } => {
+        Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
             walk_block(&body.stmts, live, lu);
+        }
+        // P14 CANDIDATE FIX: `on error:` is an ALTERNATIVE path, not a
+        // straight-line scope -- it runs ONLY when the function exits via an
+        // error and never on normal return (language-reference S10.7). Walking
+        // it into `live` directly lets a KILL inside the handler (an
+        // assignment, or a shadowing VarDecl) delete a name that is still live
+        // on the normal path -- an UNDER-approximation, the dangerous
+        // direction. Union it the way `If` unions a branch.
+        Stmt::OnError { body } => {
+            let mut live_handler = live.clone();
+            walk_block(&body.stmts, &mut live_handler, lu);
+            live.extend(live_handler);
         }
         // Reverse walk: the body runs AFTER the binding exprs are evaluated.
         Stmt::With { bindings, body } => {

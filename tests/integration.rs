@@ -54536,6 +54536,23 @@ fn cow_rescue_mutation_inside_assert() {
     run_gg("cow_rescue_mutation_inside_assert.gg", "hello");
 }
 
+/// REGRESSION (R45) — `on error:` is an ALTERNATIVE path, not a straight-line
+/// scope. Making `walk_stmt` exhaustive in `c5860a68` lumped `OnError` with
+/// `Unsafe`/`NamedScope`, so a KILL inside the handler deleted a name still
+/// live on the normal path: ICE rc 101 for an assign-kill, and rc 0 with
+/// GARBAGE for a shadowing VarDecl, on both backends. The handler is now
+/// UNIONED the way an `if` branch is. Both RED-verified against the regressed
+/// form.
+#[test]
+fn liveness_on_error_assign_kill() {
+    run_gg("liveness_on_error_assign_kill.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n1");
+}
+
+#[test]
+fn liveness_on_error_vardecl_kill() {
+    run_gg("liveness_on_error_vardecl_kill.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n1");
+}
+
 #[test]
 fn liveness_use_inside_loop() {
     run_gg("liveness_use_inside_loop.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ");

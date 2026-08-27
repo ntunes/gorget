@@ -1,0 +1,42 @@
+# REGRESSION — `on error:` is an ALTERNATIVE path, not a straight-line scope.
+#
+# Handlers run ONLY when the function exits via an error and never on normal
+# return (docs/language-reference.md S10.7; the lowering pushes the body to
+# `on_error_blocks` rather than lowering it in sequence,
+# src/ir/lowering/stmts/mod.rs:457-461).
+#
+# The liveness walker's `walk_block` applies KILLS as well as uses, so walking
+# a handler straight into `live` lets a kill INSIDE the handler delete a name
+# that is still live on the NORMAL path — an under-approximation, the
+# dangerous direction. The handler must be UNIONED the way an `if` branch is.
+#
+# This shape regressed at `c5860a68` — the commit that made `walk_stmt`
+# exhaustive lumped `OnError` in with `Unsafe`/`NamedScope` under a comment
+# claiming "the block runs in sequence with its neighbours", which is false.
+# Measured at c5860a68: rc 0 with GARBAGE output on C and LLVM — silent.
+#
+# Found by R45 Track D brief-review pass 14, one pass after the commit that
+# introduced it — which is what the confirming pass is FOR.
+#
+# ⚠ The `v.set(0, ...)` is load-bearing: it frees the value moved into the
+# vector. Without it the moved-from read still finds live memory.
+# Variant: the kill inside the `on error:` handler is a VarDecl (shadow), not
+# an assignment - so the cow_reassigned prescan cannot mask it.
+String mk(String a, String b):
+    return a + b
+
+int f(int n) throws String:
+    String s = mk("abcdefghijklmnopqrstuvwxyz0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    Vector[String] v = []
+    v.push(s)
+    v.set(0, mk("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyyyyyyyy"))
+    on error:
+        String s = mk("c", "d")
+        print(s)
+    if n > 0:
+        print(s)
+    return 1
+
+void main():
+    int r = f(1)! catch (e): -1
+    print(r)
