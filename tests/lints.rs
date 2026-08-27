@@ -20714,7 +20714,7 @@ fn staging_move_burndown_shrink_only() {
 #[test]
 fn known_gaps_repros_are_wired_to_a_test() {
     /// Baseline regenerated 2026-08-27 by running this test. SHRINK-ONLY.
-    const ALLOWED_UNWIRED: [&str; 31] = [
+    const ALLOWED_UNWIRED: [&str; 32] = [
         "box_callable_call_through_box_undefined_function",
         "box_ctor_closure_ices_while_boxnew_works",
         "box_enum_payload_c_wont_compile_llvm_double_frees",
@@ -20742,6 +20742,12 @@ fn known_gaps_repros_are_wired_to_a_test() {
         "read_through_equip_self_destroys_receiver",
         "rust_box_move_param_deref_clone_double_free",
         "sh_targ_recorder_pregate_nested_positions",
+        // Surfaced 2026-08-27 by TIGHTENING this lint to require a quoted
+        // path: it was previously "wired" only by a doc comment
+        // (lints.rs:5646) and a mention inside an assertion MESSAGE
+        // (:5792). Neither states what the program should print, which is
+        // the whole obligation. Listed honestly rather than left passing.
+        "sh_user_equip_method_generic_body_not_emitted",
         "struct_ctor_arg_not_typechecked_against_field",
         "tuple_equality_returns_wrong_answer",
         "user_fn_name_collides_with_libc",
@@ -20763,10 +20769,32 @@ fn known_gaps_repros_are_wired_to_a_test() {
             continue;
         }
         let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-        // Match how the harness helpers spell the fixture: with or without `.gg`.
-        let with_ext = format!("known_gaps/{stem}.gg");
-        let bare = format!("known_gaps/{stem}\"");
-        if !sources.contains(&with_ext) && !sources.contains(&bare) {
+        // Match how the harness helpers spell the fixture: with or without
+        // `.gg` — but the path must sit inside a STRING LITERAL, i.e. carry
+        // its opening quote.
+        //
+        // ⚠ WITHOUT THE OPENING QUOTE THIS LINT IS SATISFIED BY PROSE.
+        // Measured 2026-08-27: take an unwired fixture (lint RED), add one
+        // `// known_gaps/<name>.gg` comment line to any test file, and it
+        // turns GREEN. A guard a comment defeats is not a guard — and this
+        // round's own mandated fixture headers name plenty of paths in doc
+        // comments, so the loud direction was reachable by accident.
+        //
+        // Requiring the quote is deliberately preferred over stripping
+        // comments: a hand-rolled comment stripper was written first and got
+        // it wrong (it flagged 150 fixtures including one wired by a real
+        // `run_gg` call), which is the same hand-rolled-walker mistake this
+        // round has already paid for four times.
+        // Both real spellings: the harness-relative `known_gaps/x` and the
+        // manifest-relative `tests/fixtures/known_gaps/x` used by tests that
+        // build the path themselves.
+        let spellings = [
+            format!("\"known_gaps/{stem}.gg"),
+            format!("\"known_gaps/{stem}\""),
+            format!("\"tests/fixtures/known_gaps/{stem}.gg"),
+            format!("\"tests/fixtures/known_gaps/{stem}\""),
+        ];
+        if !spellings.iter().any(|sp| sources.contains(sp)) {
             unwired.push(stem);
         }
     }
