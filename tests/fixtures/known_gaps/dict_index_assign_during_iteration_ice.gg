@@ -1,0 +1,37 @@
+# KNOWN GAP — updating a dict value through `d[k] = v` WHILE ITERATING the
+# dict directly aborts the compiler at **rc 101** with the internal validator
+# label `E_CONSUME_SITES` -- not a user-facing diagnostic.
+#
+#     for k in d:
+#         d[k] = 99          # <- build rc 101, E_CONSUME_SITES
+#
+# CONTROLS, both measured at HEAD and both CORRECT:
+#     d["a"] = 99                        -> rc 0, prints 99   (outside a loop)
+#     Vector[String] ks = d.keys()
+#     for k in ks: d[k] = 99             -> rc 0, prints 99   (snapshot first)
+#
+# So the operation itself is fine and the snapshot workaround works; it is
+# iterating the dict DIRECTLY while index-assigning into it that dies.
+#
+# ⚠ TWO DEFECTS, and the second is the one that matters:
+#   1. Whether mutating a dict during its own iteration should be REJECTED is
+#      a legitimate design position -- but if so it owes a real diagnostic
+#      naming the rule, not a validator label.
+#   2. **rc 101 is a compiler ABORT, not a rejection.** Core #10 requires
+#      lower-or-reject; a validator firing at the user is neither. Whatever
+#      the semantics ruling, this exit path is wrong.
+#
+# Sibling of `dict_value_write_through_silently_dropped.gg`: that one is the
+# `for k, v in &d: v = ...` spelling, which is ACCEPTED AND SILENTLY DROPPED.
+# Between them, a user has no working in-loop dict-value update: one spelling
+# swallows the write, the other aborts the compiler.
+#
+# INTENDED (asserted below): either prints 99, or is REJECTED with a real
+# diagnostic naming the mutate-during-iteration rule. NOT rc 101.
+# Measured 2026-08-27 at HEAD; orchestrator-verified with both controls.
+
+void main():
+    Dict[String, int] d = {"a": 1, "b": 2}
+    for k in d:
+        d[k] = 99
+    print(d["a"])

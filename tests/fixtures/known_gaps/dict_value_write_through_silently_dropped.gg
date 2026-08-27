@@ -1,0 +1,44 @@
+# KNOWN GAP — assigning to the VALUE binding of a dict loop is ACCEPTED and
+# SILENTLY DISCARDED. Core #10 silent drop, rc 0, no diagnostic.
+#
+#     for k, v in d:  v = 99      -> accepted, rc 0, d is UNCHANGED
+#     for k, v in &d: v = 99      -> accepted, rc 0, d is UNCHANGED
+#
+# ⚠ THE VALUE POSITION IS SAFE TO WRITE THROUGH -- this is not a hazard being
+# correctly refused, it is a write being swallowed. Three independent reasons
+# the write is sound:
+#   1. A dict's hash is computed from the KEY alone. The value is not part of
+#      the bucket index, so changing it cannot misplace the entry.
+#   2. In-place value mutation neither resizes nor rehashes, so there is no
+#      realloc and therefore no iterator invalidation.
+#   3. The only implementation obligation is DROPPING THE OLD VALUE when the
+#      new one is installed.
+#
+# CONTRAST -- the KEY positions genuinely are hazardous, and must NOT be
+# conflated with this one:
+#   * `for x in &set`  -- the element IS the hash key.
+#   * `for k in &dict` -- the binding IS the hash key.
+#   Writing through either corrupts the bucket index. Their correct answer is
+#   reject, or mutable-private-copy per the bare-form ruling
+#   (`docs/define-gorget/decisions.md:2554-2578`, owner 2026-08-18).
+#
+# RELATED, and measured alongside: the natural in-loop update spelling
+# `for k in d: d[k] = 99` dies at **build rc 101 with `E_CONSUME_SITES`** --
+# an internal validator label, not a user diagnostic (filed separately).
+# So today there is NO working in-loop dict-value update idiom; a user must
+# snapshot the keys first (`Vector[String] ks = d.keys()`), which DOES work.
+#
+# UNRATIFIED, and deliberately not guessed here: whether `v = ...` in
+# `for k, v in &d` is the sanctioned spelling, or whether users must write
+# `d[k] = v`. That is a surface-taste call for the owner. EITHER WAY the
+# current behaviour is a defect: accepting a write and discarding it is the
+# worst of the three available outcomes.
+#
+# INTENDED (asserted below): prints 99.
+# Measured 2026-08-27 at HEAD; orchestrator-verified, both spellings.
+
+void main():
+    Dict[String, int] d = {"a": 1, "b": 2}
+    for k, v in &d:
+        v = 99
+    print(d["a"])
