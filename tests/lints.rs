@@ -7141,7 +7141,15 @@ fn agents_md_size_ratchet() {
     // compaction round should move extended treatments into devbook/29–30 and
     // ratchet this back DOWN toward 58_000. Lowering needs no sign-off;
     // raising it again does.
-    const CEILING: u64 = 59_700;
+    //
+    // 2026-08-27: LOWERED 59_700 -> 59_600 (no sign-off needed; only raising
+    // does). Two rules landed — the gauntlet-verifies-not-defers ruling and
+    // the disjoint-means-a-different-CLASS discriminator — and the file still
+    // SHRANK ~250 bytes, because five war-stories moved to devbook/30 §17 and
+    // §1/§3/§5/§6 where the header's split rule already sent them. That is the
+    // compaction this comment has been asking for, done in miniature; the
+    // structural debt stands and the target is still ~58_000.
+    const CEILING: u64 = 59_600;
     assert!(
         bytes <= CEILING,
         "AGENTS.md is {bytes} bytes > {CEILING}. Move the new lesson's war-story/evidence \

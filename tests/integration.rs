@@ -54521,6 +54521,31 @@ fn known_gap_cow_rescue_missing_when_mutation_has_no_name() {
     );
 }
 
+/// REGRESSION (R45, 2026-08-27) — the CoW prescan's silent catch-all.
+///
+/// `cow_after_expr_moves` handled 6 of the 47 `Expr` variants and swept the
+/// other 41 into `_ => {}`, so a mutation spelled in any other expression
+/// position was invisible to the prescan and the rescue for a live view was
+/// never emitted. Nine positions were measured at rc 139 pre-fix.
+///
+/// Each cell takes a view, mutates through a different expression position,
+/// then reads the view. RED-verified: all three files rc 139 against the
+/// pre-fix compiler, rc 0 and ASan-clean on C and LLVM after.
+#[test]
+fn cow_rescue_mutation_in_container_literal() {
+    run_gg("cow_rescue_mutation_in_container_literal.gg", "ok1\nok2\nok3");
+}
+
+#[test]
+fn cow_rescue_mutation_in_control_flow_expr() {
+    run_gg("cow_rescue_mutation_in_control_flow_expr.gg", "ok1\nok2");
+}
+
+#[test]
+fn cow_rescue_mutation_in_operand_position() {
+    run_gg("cow_rescue_mutation_in_operand_position.gg", "ok1\nok2\nok3");
+}
+
 /// KNOWN GAP — `shared T x = <a local that is still live>` ICEs with `local
 /// _N read after MoveZero` (src/ir/lowering/mod.rs:1724). Crash on a valid
 /// program; the fresh-temp spelling `shared String s = mk("a","b")` is rc 0.

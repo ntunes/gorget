@@ -1,0 +1,53 @@
+# CoW rescue fires when the mutation is spelled inside a CONTAINER LITERAL.
+#
+# REGRESSION NET for the CoW prescan's silent `_ => {}`: until 2026-08-27
+# `cow_after_expr_moves` (src/ir/lowering/functions.rs) handled only 6 of the
+# 47 `Expr` variants and swept the rest into a catch-all, so a mutation
+# spelled in any other expression position was invisible to the prescan and
+# the CoW rescue for a live view was never emitted -> heap-use-after-free.
+#
+# Each cell below takes a view into its own vector, mutates that vector
+# through a DIFFERENT expression position, then reads the view. Every cell
+# was RED-verified at rc 139 against the pre-fix compiler and rc 0 after.
+#
+# The realloc is load-bearing: 64 pushes with a heap-FORCED payload built by
+# `mk`. Fewer pushes or a literal payload is rc 0 pre-fix and proves nothing.
+
+String mk(String a, String b):
+    return a + b
+
+int grow(Vector[String] &vv):
+    vv.push(mk("fillfillfillfill", "ererererererer"))
+    return 1
+
+void main():
+    # array literal
+    Vector[String] v1 = []
+    v1.push(mk("ok", "1"))
+    String s1 = v1.get(0).unwrap()
+    int i1 = 0
+    while i1 < 64:
+        Vector[int] junk = [grow(&v1)]
+        i1 = i1 + 1
+    print(s1)
+
+    # tuple literal
+    Vector[String] v2 = []
+    v2.push(mk("ok", "2"))
+    String s2 = v2.get(0).unwrap()
+    int i2 = 0
+    while i2 < 64:
+        (int, int) junk = (grow(&v2), 0)
+        i2 = i2 + 1
+    print(s2)
+
+    # dict literal
+    Vector[String] v3 = []
+    v3.push(mk("ok", "3"))
+    String s3 = v3.get(0).unwrap()
+    int i3 = 0
+    while i3 < 64:
+        Dict[int, int] junk = {grow(&v3): 1}
+        i3 = i3 + 1
+    print(s3)
+

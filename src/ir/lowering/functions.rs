@@ -764,6 +764,42 @@ fn cow_after_stmt(
     }
 }
 
+/// The shared CALL-ARGUMENT walk, used by every call-shaped node (`Call`,
+/// `MethodCall`, `DotShorthand`). One copy, so a new call-shaped variant cannot
+/// pick up three-quarters of the rules — the drift this file already suffered
+/// once (Core #4: fix the class, and centralize at the producer).
+///
+/// `callee_sig` is the callee's per-parameter ownership list where it is known
+/// (only an `Expr::Identifier` callee maps cleanly to a signature); pass `None`
+/// when it is not, which disables implicit-mut-borrow detection but nothing else.
+fn cow_after_call_args(
+    args: &[Spanned<crate::parser::ast::CallArg>],
+    callee_sig: Option<&Vec<Ownership>>,
+    future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
+    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
+) {
+    for (i, arg) in args.iter().enumerate() {
+        // `!arg` — the name is moved away.
+        if matches!(arg.node.ownership, Ownership::Move) {
+            if let Expr::Identifier(name) = &arg.node.value.node {
+                future.insert(intern_rc(name.as_str(), interner));
+            }
+        }
+        // Explicit `&arg` at the call site -> mutating.
+        if matches!(arg.node.ownership, Ownership::MutableBorrow) {
+            record_path_mutation(&arg.node.value.node, future, interner);
+        }
+        // Implicit mut-borrow: the callee's parameter is MutableBorrow per sig.
+        if let Some(ownerships) = callee_sig {
+            if let Some(Ownership::MutableBorrow) = ownerships.get(i) {
+                record_path_mutation(&arg.node.value.node, future, interner);
+            }
+        }
+        cow_after_expr_moves(&arg.node.value.node, future, fn_param_ownerships, interner);
+    }
+}
+
 /// Collect !-moved names, mutating-method receivers, field reassignments, and
 /// indirect-mutation (&arg / mut-borrow sig) arg targets from expressions.
 fn cow_after_expr_moves(
@@ -782,24 +818,7 @@ fn cow_after_expr_moves(
             } else {
                 None
             };
-            for (i, arg) in args.iter().enumerate() {
-                if matches!(arg.node.ownership, Ownership::Move) {
-                    if let Expr::Identifier(name) = &arg.node.value.node {
-                        future.insert(intern_rc(name, interner));
-                    }
-                }
-                // Explicit `&arg` at call site → mutating.
-                if matches!(arg.node.ownership, Ownership::MutableBorrow) {
-                    record_path_mutation(&arg.node.value.node, future, interner);
-                }
-                // Implicit mut-borrow: callee's param is MutableBorrow per sig.
-                if let Some(ownerships) = callee_sig {
-                    if let Some(Ownership::MutableBorrow) = ownerships.get(i) {
-                        record_path_mutation(&arg.node.value.node, future, interner);
-                    }
-                }
-                cow_after_expr_moves(&arg.node.value.node, future, fn_param_ownerships, interner);
-            }
+            cow_after_call_args(args, callee_sig, future, fn_param_ownerships, interner);
         }
         Expr::MethodCall { receiver, args, method, .. } => {
             cow_after_expr_moves(&receiver.node, future, fn_param_ownerships, interner);
@@ -808,17 +827,7 @@ fn cow_after_expr_moves(
             if is_mutating_method_name(method.node.as_str()) {
                 record_path_mutation(&receiver.node, future, interner);
             }
-            for arg in args {
-                if matches!(arg.node.ownership, Ownership::Move) {
-                    if let Expr::Identifier(name) = &arg.node.value.node {
-                        future.insert(intern_rc(name, interner));
-                    }
-                }
-                if matches!(arg.node.ownership, Ownership::MutableBorrow) {
-                    record_path_mutation(&arg.node.value.node, future, interner);
-                }
-                cow_after_expr_moves(&arg.node.value.node, future, fn_param_ownerships, interner);
-            }
+            cow_after_call_args(args, None, future, fn_param_ownerships, interner);
         }
         Expr::BinaryOp { left, right, .. } => {
             cow_after_expr_moves(&left.node, future, fn_param_ownerships, interner);
@@ -835,8 +844,169 @@ fn cow_after_expr_moves(
         | Expr::TupleFieldAccess { object, .. } => {
             cow_after_expr_moves(&object.node, future, fn_param_ownerships, interner);
         }
-        _ => {}
+
+        // ── Sub-expression carriers ─────────────────────────────────────────
+        // Every arm below existed only as `_ => {}` until 2026-08-27. This
+        // function's contract is stated three lines up — "under-approximation
+        // is the bug, over-approx is safe" — and the catch-all under-
+        // approximated 41 of the 47 `Expr` variants, so a mutation spelled
+        // anywhere but a call / binop / index / field was invisible to the CoW
+        // prescan and its rescue was never emitted.
+        Expr::UnaryOp { operand: e, .. } => {
+            cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+        }
+        Expr::Move { expr: e }
+        | Expr::Propagate { expr: e }
+        | Expr::MutableBorrow { expr: e }
+        | Expr::Deref { expr: e }
+        | Expr::As { expr: e, .. }
+        | Expr::Await { expr: e, .. }
+        | Expr::Spawn { expr: e, .. }
+        | Expr::SpawnBlocking { expr: e, .. }
+        | Expr::Is { expr: e, .. }
+        | Expr::OptionalChain { object: e, .. }
+        | Expr::ImplicitClosure { body: e } => {
+            cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+        }
+        Expr::DefaultOp { lhs, rhs } | Expr::MetaOpInfix { left: lhs, right: rhs, .. } => {
+            cow_after_expr_moves(&lhs.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&rhs.node, future, fn_param_ownerships, interner);
+        }
+        Expr::Range { start, end, .. } => {
+            if let Some(e) = start {
+                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+            }
+            if let Some(e) = end {
+                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+            }
+        }
+        Expr::Rethrow { expr, transform, .. } => {
+            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&transform.node, future, fn_param_ownerships, interner);
+        }
+        Expr::Catch { expr, recovery, .. } => {
+            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&recovery.node, future, fn_param_ownerships, interner);
+        }
+        Expr::If { condition, then_branch, elif_branches, else_branch } => {
+            cow_after_expr_moves(&condition.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&then_branch.node, future, fn_param_ownerships, interner);
+            for (c, b) in elif_branches {
+                cow_after_expr_moves(&c.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&b.node, future, fn_param_ownerships, interner);
+            }
+            if let Some(b) = else_branch {
+                cow_after_expr_moves(&b.node, future, fn_param_ownerships, interner);
+            }
+        }
+        Expr::Match { scrutinee, arms, else_arm } => {
+            cow_after_expr_moves(&scrutinee.node, future, fn_param_ownerships, interner);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    cow_after_expr_moves(&g.node, future, fn_param_ownerships, interner);
+                }
+                cow_after_expr_moves(&arm.body.node, future, fn_param_ownerships, interner);
+            }
+            if let Some(e) = else_arm {
+                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+            }
+        }
+        // A closure BODY mutating a captured collection is a mutation of that
+        // collection, wherever the closure later runs — the capture is what
+        // makes it reachable. `t0704` is this arm's absence.
+        Expr::Closure { body, .. } => {
+            cow_after_expr_moves(&body.node, future, fn_param_ownerships, interner);
+        }
+        Expr::Block(block) => {
+            cow_after_nested_block(&block.stmts, future, fn_param_ownerships, interner);
+        }
+        Expr::Do { body, .. } => {
+            cow_after_nested_block(&body.stmts, future, fn_param_ownerships, interner);
+        }
+        Expr::ListComprehension { expr, iterable, condition, .. } => {
+            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&iterable.node, future, fn_param_ownerships, interner);
+            if let Some(c) = condition {
+                cow_after_expr_moves(&c.node, future, fn_param_ownerships, interner);
+            }
+        }
+        Expr::DictComprehension { key, value, iterable, condition, .. } => {
+            cow_after_expr_moves(&key.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&iterable.node, future, fn_param_ownerships, interner);
+            if let Some(c) = condition {
+                cow_after_expr_moves(&c.node, future, fn_param_ownerships, interner);
+            }
+        }
+        Expr::SetComprehension { expr, iterable, condition, .. } => {
+            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&iterable.node, future, fn_param_ownerships, interner);
+            if let Some(c) = condition {
+                cow_after_expr_moves(&c.node, future, fn_param_ownerships, interner);
+            }
+        }
+        Expr::ArrayLiteral(items, _) | Expr::TupleLiteral(items) => {
+            for e in items {
+                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+            }
+        }
+        Expr::DictLiteral(pairs) => {
+            for (k, v) in pairs {
+                cow_after_expr_moves(&k.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&v.node, future, fn_param_ownerships, interner);
+            }
+        }
+        Expr::StructLiteral { args, .. } => {
+            for e in args {
+                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+            }
+        }
+        // Call-shaped args, so the same ownership handling as `Expr::Call`.
+        Expr::DotShorthand { args, .. } => {
+            cow_after_call_args(args, None, future, fn_param_ownerships, interner);
+        }
+        // An f-string's interpolations are real expressions: `f"{v.pop()}"`
+        // mutates `v`.
+        Expr::StringLiteral(_, interpolations) => {
+            for e in interpolations {
+                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+            }
+        }
+
+        // ── Leaves ──────────────────────────────────────────────────────────
+        // Listed EXPLICITLY rather than swept up by `_ => {}` so that adding an
+        // `Expr` variant is a COMPILE ERROR here instead of a silent
+        // under-approximation. This is the arm-count guard the Layering doc asks
+        // for, enforced by the type system rather than by a lint (Core #4/#10).
+        Expr::IntLiteral(_)
+        | Expr::FloatLiteral(_)
+        | Expr::BoolLiteral(_)
+        | Expr::NoneLiteral
+        | Expr::Identifier(_)
+        | Expr::SelfExpr
+        | Expr::ReturnValue
+        | Expr::Path { .. }
+        | Expr::It
+        | Expr::MetaOpToken(_) => {}
     }
+}
+
+/// Collect a nested block's mutation markers into `future`, discarding the
+/// per-position map.
+///
+/// The position map is keyed by STATEMENT INDEX within the enclosing function
+/// body; a block nested inside an EXPRESSION has no such index, so there is
+/// nothing meaningful to record. `cow_mutations_in_loop` uses the same
+/// throwaway-`result` shape for the same reason — one set of collectors, never a
+/// parallel AST walker to drift (devbook/24).
+fn cow_after_nested_block(
+    stmts: &[Spanned<Stmt>],
+    future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
+    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
+) {
+    let mut discarded = rustc_hash::FxHashMap::default();
+    cow_after_block(stmts, future, &mut discarded, fn_param_ownerships, interner);
 }
 
 /// Pre-scan: count how many times each declared name is USED (read) in the function body.

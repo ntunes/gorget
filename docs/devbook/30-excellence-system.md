@@ -1290,3 +1290,51 @@ The deeper reading: a brief accumulates two different kinds of content. **Judgem
 compress well and survive rewriting. **Artifacts** — paths, identifiers, commands, counts,
 file names — do not compress at all, and every generation of editing sheds them. Keep them
 in a section that is appended to and never rewritten.
+
+## §17 — The gauntlet verifies work; it does not defer it (owner 2026-08-27)
+
+**Why the STRICT 2× convergence rule was removed (owner 2026-08-23).** It was
+failed repeatedly, and the rounds that failed it were the ones doing the most
+valuable work: a round that finds nine real defects, three of them
+memory-safety, is a *good* round that the ratio scored as failing. Measuring
+inflow stayed useful; gating on it selected against discovery. So
+`scripts/convergence.sh` still runs and its line is still quoted in every
+`DONE.md` entry — as a measurement, with no ratio to meet and no power to hold
+a round open.
+
+**What replaced it, and how that ruling was then misread.** The surviving
+ruling was *fix inline unless the defect is really disjoint*. Within four
+rounds it had decayed into the opposite practice, and R45 is the measurement:
+
+| R45 at the point the owner intervened | |
+|---|---|
+| commits on the integration branch | 85 |
+| commits touching `src/` | **0** |
+| `todo/` items filed | 28 (6 CRITICAL) |
+| brief-review passes run | A at 16, D at 12, F at 3 |
+| executors launched | **0** |
+
+Every one of those 85 commits was paperwork: filings, fixtures, briefs, doc
+folds, lint ratchets. The round found a great deal and fixed none of it.
+
+**The two misreadings, both the orchestrator's.**
+
+*First, "really disjoint" was read as "a different site".* `t0707`
+(`materialize_addressable` hardcodes `None` for the liveness half) was filed as
+disjoint from Track D because it is a different call site — when it is the same
+helper, the same axis, and the same fix. **Disjoint means a different CLASS, not
+a different file, function, or call site.** A sibling site inside an enumerated
+class is precisely Core #4's subject: fix the class, do not file the sibling.
+
+*Second, and worse, the gauntlet was blamed for the deferral.* The orchestrator
+reported that "the gauntlet is the problem — reviewing finds bugs faster than
+executing fixes them". The owner's correction: **the gauntlet exists to double-
+and triple-check work with fresh agents so one pass cannot quietly break
+something. It is not a queue for handing fixes to the next agent.** A review
+pass that surfaces a defect has done its job; the round that surfaced it still
+owes the fix. Nothing in the review discipline ever said otherwise — the
+deferral was a choice made underneath it and then attributed to it.
+
+**The tell.** A round whose commit log never touches `src/` is not a
+discovery round; it is a round that stopped. Check it before round close, not
+after: `git log --oneline <round-open>..HEAD -- src/ | wc -l`.
