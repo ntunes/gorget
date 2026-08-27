@@ -1,0 +1,58 @@
+# KNOWN GAP — 🚨 AN IMPORT STATEMENT CHANGES WHETHER A PROGRAM TYPECHECKS.
+#
+# The ONLY difference between this file and an accepted one is line 44:
+# `from std.collections import Box` -- the exact line
+# `docs/book/16-smart-pointers.md:14` teaches every reader to write. With it,
+# an inline `Box[Concrete]` -> `Box[Trait]` coercion is `E_TypeMismatch`;
+# without it the same program is accepted.
+#
+# Measured across an 18-cell matrix (position x import x inline/named). The
+# import is load-bearing at three positions and inert at two:
+#
+#   position          no import   with import
+#   ---------------   ---------   -------------------
+#   call argument     rc 0        rc 1 E_TypeMismatch
+#   enum init         rc 0        rc 1 E_TypeMismatch
+#   closure return    rc 0        rc 1 E_TypeMismatch
+#   struct field      rc 0        rc 0
+#   vector literal    rc 0        rc 0
+#
+# ⚠ TWO SPELLING DISCRIMINATORS, both of which silently hide the defect:
+#   * The CTOR CALL `Box(...)` flips. `Box.new(...)` does NOT -- a repro
+#     written with `.new` is rc 0 both ways and proves nothing.
+#   * The INLINE form flips. The NAMED form (`Box[Robot] b = Box(...)` then
+#     `take(b)`) is rejected with or WITHOUT the import.
+#   Both mistakes were made while writing this fixture.
+#
+# MECHANISM (where to look): `unify` (`src/semantic/typecheck.rs:1076`) has no
+# `TraitObject` arm at all, and `:1292-1327` decides smart-pointer coercion by
+# NAME-MATCHING `"Mutex" | "Shared" | "RWLock"` -- Layering rule 2, semantics
+# taken from an identifier string instead of typed metadata. Which `Box` the
+# name resolves to therefore changes the answer.
+#
+# ⚠ IT ALSO BLOCKS FIXTURE AUTHORING. All 33 fixtures carrying this import
+# include EVERY `box_trait_*.gg`, and the three flipping positions are exactly
+# the ones a new Box[Trait] regression net must cover -- so that net cannot be
+# written in its own siblings' house style without changing what it tests.
+#
+# INTENDED: an import brings a name into scope; it must not change whether a
+# program typechecks. Both spellings must agree. WHICH way they agree is an
+# unratified semantics question -- this file asserts the ACCEPT direction,
+# matching the no-import behaviour and the book's own example.
+#
+# RED-verified 2026-08-27 at HEAD: `gg check` rc 1 here, rc 0 with line 44
+# deleted and nothing else changed.
+from std.collections import Box
+trait Speaker:
+    String speak(self)
+struct Robot:
+    String id
+equip Robot with Speaker:
+    String speak(self):
+        return self.id
+String mk(String a, String b):
+    return a + b
+void take(Box[Speaker] b):
+    print(b.speak())
+void main():
+    take(Box(Robot(mk("aaaa", "bbbb"))))

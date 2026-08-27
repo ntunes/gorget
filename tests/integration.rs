@@ -54536,6 +54536,25 @@ fn cow_rescue_mutation_inside_assert() {
     run_gg("cow_rescue_mutation_inside_assert.gg", "hello");
 }
 
+/// KNOWN GAP — an IMPORT changes whether a program typechecks. Adding
+/// `from std.collections import Box` (the line `docs/book/16-smart-pointers.md:14`
+/// teaches) flips an inline `Box[Concrete]` -> `Box[Trait]` coercion from
+/// ACCEPT to `E_TypeMismatch` at call-arg, enum-init and closure-return;
+/// struct-field and vector-literal are unaffected. `unify`
+/// (`typecheck.rs:1076`) has no `TraitObject` arm, and `:1292-1327` decides
+/// coercion by name-matching "Mutex"|"Shared"|"RWLock" (Layering rule 2).
+#[test]
+#[ignore = "KNOWN GAP (R45, found by Track A brief-review pass 20, \
+orchestrator-verified at HEAD): `from std.collections import Box` flips an \
+inline Box[Concrete]->Box[Trait] coercion from accept to E_TypeMismatch. The \
+ctor call `Box(..)` flips; `Box.new(..)` does not. Which way the two \
+spellings should agree is an unratified semantics question."]
+fn known_gap_box_trait_import_flips_accept_reject() {
+    // INTENDED: an import must not change accept/reject. Asserts the ACCEPT
+    // direction, matching the no-import behaviour and the book's example.
+    run_gg("known_gaps/box_trait_import_flips_accept_reject.gg", "R2");
+}
+
 /// KNOWN GAP — a `Vector[Box[Trait]]` built with `Box.new` + `push` and
 /// returned from a helper segfaults (rc 139 both backends, ASan
 /// stack-buffer-overflow). Its two-token sibling — ctor call plus container
