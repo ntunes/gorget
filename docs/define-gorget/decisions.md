@@ -3106,3 +3106,50 @@ baseline.
   semantics half) — that is a separate, still-open question. It does not change the bare form. It does
   not change `&` over sequences. And it does not sanction any path to mutating a live key: there is
   none, by design.
+
+- 2026-08-27 — **🎯 D50 RATIFIED (owner): SOUNDNESS FIRST, AT THE COST OF SAFE-BUT-WASTEFUL CLONING; DEEP-1 (#13) FOLLOWS. DEEP-1 MAY BE PULLED INTO R45.**
+
+  Confirms D47's NOW/LATER split as a **sequencing rule with a stated cost acceptance**, and re-scopes
+  DEEP-1 from "a later round" to "eligible for this round".
+
+  **THE RULING.** Where a materialization boundary is unsound today, it is fixed by **materializing
+  eagerly** — accepting clones that a lazy model would avoid — **before** any lazy optimization is
+  attempted on the same path. Wasteful-but-correct outranks fast-but-unsound, and the owner accepts the
+  clone cost explicitly rather than as a regrettable side effect.
+
+  **WHY THE ORDER IS FORCED, NOT PREFERRED.** DEEP-1's whole proposition is *free where provable, clone
+  where not*. Both halves are measured against a baseline — and **an unsound baseline cannot be
+  measured against**. Today's `unwrap`-from-a-collection bind produces a shallow copy **tagged owned**:
+  it aliases like a borrow and frees like an owner (R45 Track D, measured). Optimizing clone counts
+  against that is optimizing against a compiler that is already wrong, and layering laziness onto it
+  would bake the aliasing in rather than expose it.
+
+  **WHAT "SOUNDNESS FIRST" COVERS IN R45:** Track A (the `Box[T](…)` constructor position), Track C
+  (`for`-loop element bindings, per the 2026-08-18 ruling and D49), Track D (extraction sites minting a
+  shallow copy of a borrowed payload). Each lands eager materialization; none is wasted work that DEEP-1
+  undoes — each establishes the correct baseline the fast path is measured against.
+
+  ⚠ **BLOCKING PREREQUISITE, ALREADY FILED AS `t0544` AND STILL OPEN: DOES #13 COVER *BINDS*?** That
+  item (filed 2026-07-24, HIGH) records two internals docs in direct contradiction —
+  `docs/internals/unified-resource-model.md` §6 (`:690`, `:693`) counts `VarDeclFromBorrow` **INSIDE**
+  #13's target class and sequences the bind sub-slice **FIRST** (*"grab it first"*), while
+  `docs/internals/cow-transient-view-model.md` § "Articulation with #13" states flatly **"#13 does NOT
+  apply to binds"** (a bind is a resting position → materializes; no stored borrows). **~Half the
+  advertised yield rides on the answer, and the item's own instruction is to resolve it BEFORE #13 is
+  scoped or sold.** It is NOT resolved by this entry and must be ruled before a DEEP-1 executor track
+  opens.
+
+  **THE SAFETY TENSION THAT RULING CARRIES.** Making binds lazy weakens CoW **Rule 3** — *"every
+  position where a value could come to rest … is already an ownership boundary that materializes"* —
+  which is the mechanism that supplies safety **without** a borrow checker. If binds stop materializing,
+  Rule 3 no longer guarantees the bind, and the guarantee must be re-established by analysis. The
+  sound-and-implementable form is a **sufficient condition, not a decision procedure**: free the bind
+  only when, within its live range, (i) the binding is never mutated, (ii) the source is never mutated
+  or dropped, and (iii) no call could reach the source; **clone in every other case**. That is strictly
+  better than today and never worse, needs no lifetime variables, and reuses machinery that already
+  exists (liveness for move-eligibility, `LocalOwnership` from Phase D, the escape analysis noted under
+  D34).
+
+  **WHAT THIS DOES NOT DO.** It does not rule on `t0544`. It does not authorize landing DEEP-1 before
+  the soundness tracks land. And it does not change any materialization semantics — it is a sequencing
+  and cost-acceptance ruling only.
