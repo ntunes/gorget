@@ -1,0 +1,30 @@
+# KNOWN GAP — `Box[Optional[T]]` fails to BUILD on BOTH lanes.
+#
+#     Box[Optional[String]] b = Box(s.v)
+#
+#     C    lane: build rc 1, `error: parameter 1 ('val') has incomplete type`
+#     LLVM lane: build rc 1
+#
+# Core #8: both lanes agree the program is unbuildable, and both are wrong --
+# `Optional[T]` is an ordinary type and boxing it is ordinary code. Agreement
+# on a wrong answer is the trap, not a pass.
+#
+# Sibling of `box_enum_payload_c_wont_compile_llvm_double_frees.gg` on the
+# SAME axis (Box payload type), with a different signature: that one is a C/LLVM
+# DIVERGENCE (C won't compile, LLVM compiles and double-frees); this one fails
+# UNIFORMLY at build on both. Both were surfaced by enumerating the payload-type
+# axis rather than sampling one value of it (Core #12).
+#
+# INTENDED (asserted below): prints 1, on BOTH backends.
+# Measured 2026-08-27 at HEAD; orchestrator-verified on both lanes.
+
+struct S:
+    Optional[String] v
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    S s = S(Some(mk("aaaaaaaaaaaaaaaa", "bbbbbbbb")))
+    Box[Optional[String]] b = Box(s.v)
+    print(1)

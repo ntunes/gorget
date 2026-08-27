@@ -1,0 +1,36 @@
+# KNOWN GAP — `Box[enum]` with a resource-carrying variant: the C lane REFUSES
+# TO COMPILE and the LLVM lane compiles then DOUBLE-FREES. A Core #9 lane
+# divergence AND a Core #8 >=2-bug row.
+#
+#     Box[V] b = Box(s.v)          # s.v is a field, i.e. a Ptr-typed source
+#
+#     C    lane: build rc 1, `error: unknown type name 'Box__V'`
+#     LLVM lane: build rc 0, run rc 134, `free(): double free detected`
+#
+# Neither lane is correct, so "the backends disagree" understates it: this is
+# >=2 bugs (Core #8), not one lane's problem. The C side never emits the
+# `Box__V` struct at all; the LLVM side emits it and then drops the payload
+# twice.
+#
+# ⚠ The LLVM side is NOT "correct but divergent". An earlier reading recorded
+# LLVM as running correctly here; with a RESOURCE-carrying variant (the shape
+# below) it double-frees. A non-resource variant would be a false negative --
+# keep the String payload.
+#
+# INTENDED (asserted below): prints 1, on BOTH backends.
+# Measured 2026-08-27 at HEAD; orchestrator-verified on both lanes.
+
+enum V:
+    A(String)
+    B(int)
+
+struct S:
+    V v
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    S s = S(V.A(mk("aaaaaaaaaaaaaaaa", "bbbbbbbb")))
+    Box[V] b = Box(s.v)
+    print(1)

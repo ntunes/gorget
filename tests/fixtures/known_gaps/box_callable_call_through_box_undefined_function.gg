@@ -1,0 +1,41 @@
+# KNOWN GAP — CALLING a `Box[Callable[...]]` is a compiler ICE (rc 101,
+# `call to undefined function @b`). The CONSTRUCTOR is fine; the CALL is not.
+#
+#     Box[Callable[int(int)]] b = Box.new(c.f)
+#     print(b(5))            # <- rc 101, call to undefined function @b
+#     print(1)               # <- identical ctor, NO call: rc 0
+#
+# DISCRIMINATOR — measured by holding the ctor FIXED and varying only whether
+# the box is called. All four ctor spellings ICE *when followed by a call* and
+# build clean *without* one:
+#     Box.new(c.f) · Box.new(c) · Box[Callable[int(int)]](c) · Box.new(dbl)
+# A closure LITERAL source + a call works (rc 0).
+#
+# DISTINCT FROM `t0681`, its sibling in the same family — state the
+# discriminator before merging them:
+#   * `t0681` is a SPELLING-axis defect: `Box[T](closure)` ICEs at
+#     `src/ir/lowering/mod.rs:1724` while `Box.new(closure)` compiles and runs.
+#     Its discriminator is WHICH CTOR SPELLING; the box is never called.
+#   * THIS is a CALL-axis defect with a DIFFERENT panic (`call to undefined
+#     function @b`, no `mod.rs:1724` frame). Its discriminator is WHETHER THE
+#     BOX IS CALLED; every ctor spelling behaves the same.
+#
+# SCOPE NOTE: because the identical ctor builds clean without the call, the
+# mechanism is at the CALL site, not the constructor position. This is the same
+# reasoning that ejected `t0684` from R45 Track A -- it is NOT a Box-ctor
+# payload cell, and folding it in as one would widen that track on a false
+# premise.
+#
+# INTENDED (asserted below): prints 10.
+# Measured 2026-08-27 at HEAD; orchestrator-verified.
+
+struct C:
+    Callable[int(int)] f
+
+int dbl(int x):
+    return x * 2
+
+void main():
+    C c = C(dbl)
+    Box[Callable[int(int)]] b = Box.new(c.f)
+    print(b(5))
