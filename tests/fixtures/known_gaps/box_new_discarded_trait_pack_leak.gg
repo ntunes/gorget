@@ -36,7 +36,21 @@
 # registration would make the crash go away by converting it into THIS leak --
 # a green suite hiding the same defect.
 #
-# INTENDED (asserted by the wired ASan test): rc 0, no leak, on both backends.
+# INTENDED (asserted by the wired ASan test): rc 0, and NO NEW sanitizer
+# finding relative to a HEAD baseline captured on the SAME program, on both
+# backends.
+#
+# ⚠⚠ "no leak" AS AN ABSOLUTE IS RETRACTED (2026-08-27). Measured: under the
+# full fix a 3-byte residual remains on EVERY trait-dispatching row (the
+# vtable-thunk String return), and Mutex/Shared payloads leak 65 B before AND
+# after through a separate runtime-ABI gap (GorgetMutex has no payload-drop fn
+# pointer at all). Absolute ASan silence is a larger objective owed by t0700 +
+# the thunk leak + the Mutex/Shared ABI gap TOGETHER; this fixture pins the
+# DELTA.
+#
+# ⚠ `security_safe_no_leak` (tests/security.rs:261-280) rejects ANY sanitizer
+# output, so a net wired to it cannot express a delta and is unlandable as
+# written.
 # Measured 2026-08-27 at HEAD by R45 Track A brief-review pass 12;
 # orchestrator-verified with `--sanitize` against the bare-spelling control.
 

@@ -34,6 +34,21 @@
 # Measured 2026-08-27 at HEAD by R45 Track A brief-review pass 12;
 # orchestrator-verified on both lanes against the committed fixture.
 
+#
+# ⚠⚠ "ASan-CLEAN" IN THE INTENDED CLAUSE ABOVE IS RETRACTED (2026-08-27).
+# It is measurably unreachable: under the full fix a 3-byte residual remains on
+# EVERY trait-dispatching row (the vtable-thunk String return), and
+# Mutex/Shared payloads leak 65 B before AND after through a separate
+# runtime-ABI gap (GorgetMutex has no payload-drop fn pointer at all).
+#
+# CORRECTED INTENT: eliminate the double-free / mint leak this fixture names,
+# and leave NO NEW sanitizer finding -- measured as a DELTA against a HEAD
+# baseline captured on the SAME program, not as absolute silence. Absolute
+# ASan silence is a separate, larger objective owed by t0700 + the thunk leak
+# + the Mutex/Shared ABI gap together.
+#
+# ⚠ `security_safe_no_leak` (tests/security.rs:261-280) rejects ANY sanitizer
+# output, so a net wired to it cannot express a delta.
 trait Speaker:
     String speak(self)
 
