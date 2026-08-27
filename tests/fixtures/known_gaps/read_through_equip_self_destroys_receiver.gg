@@ -1,0 +1,44 @@
+# KNOWN GAP — READING a field through `self` in an `equip` method DESTROYS the
+# receiver, and the trap fires INSIDE the method on its own FIRST read.
+#
+#     equip Holder with Peek:
+#         void peek(self):
+#             print(self.o.unwrap())    # <- trap[T_UnwrapNone] HERE, rc 101
+#
+# So `self.o` is ALREADY `None` when the method body runs: the receiver
+# binding gutted the value before any user code read it. This is worse than
+# the `&`-parameter sibling, where the first read succeeds and only the
+# CALLER's later read traps.
+#
+# SIBLING CELL, same borrow-provenance axis:
+# `read_through_borrow_param_destroys_caller_value.gg`.
+#
+# ⚠ Neither cell involves a COLLECTION. `t0036` records this mechanism for a
+# value borrowed out of a collection (`d.get(0).unwrap()`); an enumeration
+# whose axis is "collection accessor x container" has NO ROW that covers
+# either of these (Core #15e Q4). The axis is BORROW PROVENANCE, and it has at
+# least eight values, not four.
+#
+# ggdef adjudicates AGAINST production here.
+#
+# INTENDED (asserted below): prints the string TWICE, rc 0, on both backends.
+# Measured 2026-08-27 at HEAD by R45 Track D brief-review pass 2;
+# orchestrator-verified.
+
+String mk(String a, String b):
+    return a + b
+
+trait Peek:
+    void peek(self)
+
+struct Holder:
+    Option[String] o
+
+equip Holder with Peek:
+    void peek(self):
+        print(self.o.unwrap())
+
+void main():
+    Holder h = Holder(Some(mk("aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb")))
+    h.peek()
+    print(h.o.unwrap())

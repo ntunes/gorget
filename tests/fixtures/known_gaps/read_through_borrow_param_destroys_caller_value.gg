@@ -1,0 +1,42 @@
+# KNOWN GAP — READING through an EXPLICIT `&` BORROW PARAMETER DESTROYS the
+# caller's value. `gg check` is clean; the read succeeds; the caller is gutted.
+#
+#     void peek(Option[String] &o):
+#         print(o.unwrap())          # prints correctly
+#     ...
+#     peek(&v)
+#     print(v.unwrap())              # trap[T_UnwrapNone], rc 101
+#
+# Observed: the string prints from inside `peek`, then the caller's `v` traps
+# as `None`. The user wrote the borrow sigil explicitly and a READ still
+# consumed the value.
+#
+# ⚠ THIS IS THE SHARPEST CELL OF THE BORROW-PROVENANCE AXIS. `t0036` records
+# the same mechanism for a value borrowed out of a COLLECTION
+# (`d.get(0).unwrap()`); this cell reaches it through a PARAMETER borrow, with
+# no collection accessor anywhere in the program. A rule whose subject is
+# "collection borrows" has no subject that covers this (Core #15e Q4 -- a
+# category error, which no widening of the collection rule fixes).
+#
+# SIBLING CELL, same axis, filed together and WORSE: `self` in an `equip`
+# method -- see `read_through_equip_self_destroys_receiver.gg`, where the trap
+# fires INSIDE the method on its own first read, i.e. the receiver binding
+# gutted the value before the body ran.
+#
+# ggdef adjudicates AGAINST production here: the definitional oracle prints the
+# value twice, which is the intended behaviour asserted below.
+#
+# INTENDED (asserted below): prints the string TWICE, rc 0, on both backends.
+# Measured 2026-08-27 at HEAD by R45 Track D brief-review pass 2;
+# orchestrator-verified.
+
+String mk(String a, String b):
+    return a + b
+
+void peek(Option[String] &o):
+    print(o.unwrap())
+
+void main():
+    Option[String] v = Some(mk("aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"))
+    peek(&v)
+    print(v.unwrap())
