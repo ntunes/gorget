@@ -1,0 +1,47 @@
+# KNOWN GAP — an INLINE STRUCT CONSTRUCTOR inside an f-string interpolation
+# lowers as a TUPLE. `gg check` is clean; C refuses to compile; LLVM compiles
+# and prints GARBAGE.
+#
+#     print(f"{A(7).x}")     # <- the defect
+#     print(A(7).x)          # <- the CONTROL: correct, prints 7
+#
+#     gg check : rc 0, clean
+#     C  build : rc 1, `error: '__gg_A' has no member named '_0'`
+#     LLVM     : build rc 0, run rc 0, prints 187650551193044  (GARBAGE)
+#
+# The `_0` in the C error is the tell: `_0` is TUPLE field naming, so the
+# inline `A(7)` was lowered as an anonymous product instead of the named
+# struct. No `==` and no equality machinery is involved.
+#
+# DISCRIMINATOR: the f-string wrapper ALONE. The identical expression outside
+# an f-string is correct on both lanes. Do not vary anything else when
+# reproducing.
+#
+# ⇒ Core #8: broken on BOTH lanes in two DIFFERENT ways -- a build refusal on
+# C and a silent wrong VALUE on LLVM. That is >=2 bugs and a lane divergence,
+# not one backend's problem. The LLVM half is the worse one: rc 0, no
+# diagnostic, plausible-looking garbage.
+#
+# DISTINCT FROM `t0162`, its sibling in the same family -- state the
+# discriminator before merging them:
+#   * `t0162` is a SELF-HOST lane gap about an ITERATOR TERMINAL called inline
+#     inside an f-string interpolation.
+#   * THIS is the RUST lane, and the inline expression is a STRUCT
+#     CONSTRUCTOR mis-lowered as a tuple. Different lane, different construct.
+#
+# ⚠ METHODOLOGICAL CONSEQUENCE, and the reason this was found: this tree's
+# standing probe-hygiene rule says NEVER test accept/reject inside an f-string,
+# because a rejected expression reads as ACCEPTED. This gap is the same hazard
+# in its POSITIVE form -- the f-string does not merely mask a diagnostic, it
+# CHANGES THE LOWERING. Any fixture that observes a value through an f-string
+# is measuring a different program than the one it appears to test.
+#
+# INTENDED (asserted below): prints 7, on BOTH backends.
+# Measured 2026-08-27 at HEAD by the R45 Track B scout; orchestrator-verified
+# on both lanes, with the non-f-string control run alongside.
+
+struct A:
+    int x
+
+void main():
+    print(f"{A(7).x}")
