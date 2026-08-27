@@ -4,10 +4,16 @@
 
 **⚠ R44 CLOSED 2026-08-27. R45 IS OPEN — owner go GRANTED, autonomous.**
 
-**CONVERGENCE BASELINE FOR R45: kg=22, todo=674** — regen the close line with
-`scripts/convergence.sh 22 674 <filed>`. ⚠ **The kg number is NOT a gap count.** It counts ORPHANED
-repros; a repro cited by its own TODO bullet is that bullet's evidence and exempt (owner 2026-08-23).
+**CONVERGENCE BASELINE FOR R45: kg=22, todo=678** — regen the close line with
+`scripts/convergence.sh 22 678 <filed>`. ⚠ **The kg number is NOT a gap count.** It counts ORPHANED
+repros; a repro cited by its own item is that item's evidence and exempt (owner 2026-08-23).
 At R44 close: 185 inventory units, 124 cited. Do not read a fall in it as gaps closing.
+⚠ **`todo` moved 674 → 678 in the interstitial, and the four are FILINGS, not a counting artefact.**
+The directory split itself was counting-NEUTRAL and proved so (674 bullets → 674 files, prose
+byte-identical, `todo_items` 674 before and after); the +4 is the split's own unimplemented clauses
+filed as items — `t0675`/`t0676` (the two ratified lints), `t0677` (`mechanism`), `t0678` (hot-list
+pointers). `todo_items` is now a FILE COUNT (`find todo -maxdepth 1 -name '*.md' | wc -l`), so it no
+longer moves when the handover is rewritten.
 
 **⚠ FULL BATTERY IS GREEN at R44 close** — C + LLVM sweeps, `--lib`, `--test lints`,
 `-p ggdef`, `--test spec_conformance`, `--test security`, `--test c_runtime`, the bootstrap fixed
@@ -51,35 +57,34 @@ unambiguous: 44 cells where Rust works and SH does not, 19 of them programs SH c
 
 
 
-**⚖ OWNER DECISION 2026-08-23 — `TODO.md` SPLITS: HANDOVER HERE, ITEMS IN A `todo/` DIRECTORY.**
-Agreed with the owner; **land BETWEEN rounds** (it is counting-neutral and moves the raw number with
-no work done, so it belongs in a baseline — same rule as this round's two re-baselines).
-- **`todo/` — one FILE PER ITEM**, filename = stable id. **TOML front-matter** above a `+++` fence for
-  the scalar fields (`id`, `mechanism`, `areas`, `lane`, `severity`, `cites`, `repro`, `filed`);
-  **raw markdown body below it, byte-identical to today's prose.** TOML for scalars because it has no
-  Norway problem and no implicit typing; the narrative never enters a string at all, so a 637-item
-  conversion cannot mangle it by escaping. Rationale: the bodies carry measurements and refuted
-  remedies, and that narrative demonstrably stopped an executor implementing a measured-wrong rule
-  this round.
-- **`TODO.md` keeps** the handover block (AGENTS.md already names it THE session-state doc), the
-  operating invariants, and a **GENERATED** index. ⚠ The index is generated + lint-enforced current
-  (regenerate → diff → fail if stale); a hand-kept index of 637 rows is the "parallel lists kept in
-  sync by hand" smell AGENTS.md names. The hot-list becomes **pointers (ids), not restated prose** —
-  restating is a drift source today.
-- **CLOSURE = `git rm` the file + the `DONE.md` entry.** Matches today's semantics (closure IS
-  removal), keeps `todo/` a genuinely pending set, keeps the arbiter trivial (count files), and git
-  history preserves the item's whole life (`git log --diff-filter=D`). ⛔ NOT `status = "closed"`
-  in place — that grows the directory forever and puts the arbiter back to interpreting field values,
-  which is the class that has produced THREE defects in it this round.
-- **Two lints fall out and both retire measured classes:** every `cites` entry must resolve (Track H
-  measured **106 of 263** items with decayed citations), and no entry may reference a deleted doc
-  (four entries this round cite a doc deleted whole, and read as live).
-- ⚠ **The arbiter gets rewritten to count files and must be RED-VERIFIED in both directions** before
-  it is trusted — it has been wrong three times this round, every time from regex-over-prose.
-- ⚠ **SEQUENCING: the directory move does NOT depend on Track I's census** (it is justified by
-  parallel-agent edits to one 4,000-line file and by prose-parsing defects). **Only the `mechanism`
-  FIELD depends on the census** proving that vocabulary can be controlled and small. Long tail ⇒ move
-  anyway, drop that field.
+**⚖ OWNER DECISION 2026-08-23 — `TODO.md` SPLIT: HANDOVER HERE, ITEMS IN `todo/`. LANDED 2026-08-27
+in the R44→R45 interstitial. The operating rules below are LIVE; the residual clauses are FILED.**
+- **`todo/` — one FILE PER ITEM**, filename = stable id (`t0001`…). TOML front matter above a `+++`
+  fence; **raw markdown body below it, VERBATIM** — the `- ` marker, the continuation indentation and
+  the embedded tables are the bullet's original bytes. Nothing reflows an item body, ever: the bodies
+  carry measurements and refuted remedies, and that narrative demonstrably stopped an executor
+  implementing a measured-wrong rule. Field spec + format rules: `scripts/todo_index.py`'s header.
+- ⚠ **A field the item's own text does not STATE stays EMPTY.** The migration populated `severity`,
+  `filed`, `repro`, `cites`, `lane` mechanically and left the rest blank rather than infer — 295 items
+  carry no severity tag and `mechanism` is empty on all of them. A guessed field is a premise that
+  will mislead someone, and a greppable one is worse.
+- **`TODO.md` keeps** the handover block (AGENTS.md names it THE session-state doc), the operating
+  invariants, the whole heading skeleton, every non-item paragraph, and a **GENERATED** index — one
+  pointer line where each bullet stood, so an item's section/priority/group survives positionally.
+  Regenerate with `python3 scripts/todo_index.py --write`; `--check` (no flag) is wired as
+  `tests/lints.rs::todo_index_is_current` and also validates every item file's front matter.
+- **CLOSURE = `git rm todo/<id>.md` + the `DONE.md` entry.** ⛔ NOT `status = "closed"` in place —
+  that grows the directory forever and puts the arbiter back to interpreting field values, the class
+  that produced THREE defects in it in R44. `git log --diff-filter=D -- todo/` keeps the whole life.
+- **The arbiter counts FILES.** `scripts/convergence.sh`'s `todo_items` is
+  `find todo -maxdepth 1 -name '*.md' | wc -l`, and its known_gaps citation scan reads TODO.md AND
+  `todo/`. RED-verified in both directions before it was trusted: missing `todo/` ⇒ rc 1 (not a
+  serene 0), a `🆕` bullet filed into TODO.md ⇒ rc 1 naming the line, ±1 file ⇒ ±1 count, a deleted
+  repro citation ⇒ kg 22→23. Re-run those probes before trusting a future edit to it.
+- **RESIDUAL CLAUSES — filed, not dropped:** the two ratified lints (`cites` must resolve `t0675`;
+  no reference to a deleted doc `t0676`), the `mechanism` field + its census `t0677`, and the
+  hot-list-becomes-pointers conversion `t0678` (deliberately NOT mechanised — mapping prose phrases
+  onto ids is judgement, and a guessed pointer reads as authoritative).
 
 **⚖ ORCHESTRATOR CORRECTION 2026-08-23 — THE C1/C2 SPLIT IS DISSOLVED; TRACK C IS ONE TRACK, AFTER D.**
 I split Track C into a "self-contained" C1 and a deferred C2. Its first review measured that **two of
@@ -1433,6 +1438,10 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0603`](todo/t0603.md) **MED** — 🔧 [MED — capped-drain landing follow-ups, filed by the Fable delta-review 2026-07-16 (Core #4 siblings of the LANDED 1a7…
 - [`t0604`](todo/t0604.md) **MED** — [MEDIUM] 🔔 DeadBareParamWrite lint FOLLOW-UPS (v1 LANDED 2026-07-05, see DONE.md — the follow-ups below are the remainin…
 - [`t0605`](todo/t0605.md) **MED** — [MEDIUM] 🎲 gorget-smith FOLLOW-UPS (tier-0 LANDED 2026-07-05, see DONE.md; round 1 found 2 HIGH bugs — entries above). R…
+- [`t0675`](todo/t0675.md) **MED** — 🆕🧹 [MED — ratified 2026-08-23 as one of the two lints the todo/ split was supposed to make possible; filed 2026-08-27 by…
+- [`t0676`](todo/t0676.md) **MED** — 🆕🧹 [MED — the SECOND of the two lints ratified 2026-08-23 with the todo/ split; filed 2026-08-27 by the split migration,…
+- [`t0677`](todo/t0677.md) **LOW** — 🆕📋 [LOW — the one ratified todo/ FIELD the split migration could not populate; filed 2026-08-27] mechanism is EMPTY on a…
+- [`t0678`](todo/t0678.md) **LOW** — 🆕📋 [LOW — the last unimplemented clause of the ratified todo/ split; filed 2026-08-27 by the migration that deliberately…
 ### Low
 
 - [`t0606`](todo/t0606.md) — 🧹 (G1 follow-up) lint-file-scope: widen g1_projected_materialize_sites_untrack files[] IF a projected-materialize cow_be…
