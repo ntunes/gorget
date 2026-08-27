@@ -1,0 +1,38 @@
+# KNOWN GAP — binding `Box.get()` to a local DOUBLE-FREES. `gg check` clean.
+#
+#     Box[P] b = Box(P(7, mkstr(...)))
+#     P inner = b.get()        # <- the bind
+#     print(inner.x)           # rc 134, free(): double free detected in tcache 2
+#
+# The chained form is CORRECT:
+#
+#     print(b.get().x)         # prints 7
+#
+# So the discriminator is BINDING THE RESULT, not calling `.get()`.
+#
+# ⚠⚠ THIS IS THE EXACT TRAP D36 PREDICTED, ON THE SANCTIONED API.
+# D36 (ratified 2026-07-27) rejected a `*boxed` operator partly because it would
+# "land users on a silent-clone-at-bind trap (CoW Rule 3 -- views are transient,
+# so a bind materializes)" that Rust's borrow checker would surface but Gorget's
+# model would swallow. The trap is real -- and it is NOT confined to `*boxed`:
+# it fires on `.get()`, which is the API the book teaches and D36 preserved.
+#
+# That matters for the open decision on retiring `*box`: retiring the operator
+# does NOT by itself avoid the trap D36 named, because the sanctioned
+# replacement has it too. Whichever way that ruling goes, the bind path needs
+# fixing.
+#
+# INTENDED (asserted below): prints 7.
+# Measured 2026-08-27; orchestrator-verified.
+
+struct P:
+    int x
+    String s
+
+String mkstr(String a, String b):
+    return a + b
+
+void main():
+    Box[P] b = Box(P(7, mkstr("aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb")))
+    P inner = b.get()
+    print(inner.x)
