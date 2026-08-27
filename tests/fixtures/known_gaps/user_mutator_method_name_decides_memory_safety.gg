@@ -1,0 +1,63 @@
+# KNOWN GAP — 🚨 A USER METHOD'S *NAME* DECIDES MEMORY SAFETY.
+#
+# Two byte-identical programs, differing only in what the mutator is called:
+#     void grow(&self):   ...  ->  SIGSEGV, rc 139, on C AND LLVM
+#     void resize(&self): ...  ->  rc 0, prints "helloworld", correct
+#
+# `resize` is on the hardcoded 26-entry `MUTATING_METHODS` list
+# (`src/ir/lowering/functions.rs:499-504`); `grow` is not. That list feeds
+# `is_mutating_method_name` (`:511-514`) as the fallback beside the typed
+# builtin predicate, and the prescan uses it to decide whether a receiver is
+# mutated. A user `&self` method whose NAME is absent is INVISIBLE to the
+# prescan, so the bind is never materialized and the later realloc frees the
+# buffer the bind still points at.
+#
+# ⚠ THIS IS THE `AGENTS.md` "No name matching" RULE VIOLATED WITH A
+# MEMORY-SAFETY CONSEQUENCE -- not a style nit. The const's own doc-comment
+# already concedes it ("this list survives only as the escape hatch").
+# The reference-grade fix is a typed `is_mutating` flag on the method decl,
+# set at the source and read via an accessor, exactly as the doc prescribes.
+#
+# ⚠ THE REALLOC IS LOAD-BEARING IN THIS REPRO. `grow` must push enough to
+# force the backing store to reallocate (64x here). A version that pushes once
+# is rc 0 on BOTH names and proves nothing -- the orchestrator's first probe
+# made exactly that mistake. Keep the loop, and keep the payload heap-FORCED
+# (built via `mk`, never a literal).
+#
+# DISTINCT FROM `t0125`, same root gap, different severity and shape -- state
+# the discriminator before merging them:
+#   * `t0125` is MED, LOOP-CARRIED, `Vector[int]` (NO heap payload), and
+#     asserts WRONG VALUES (3,3,4,4 vs 3,2,2,4). Framed as
+#     "under-materialize / per-iteration throwaway / clone-balloon risk".
+#   * THIS is STRAIGHT-LINE, a HEAP element, and a hard SIGSEGV /
+#     ASan heap-use-after-free on BOTH backends. Not a wrong value: a crash.
+#
+# ASan (C lane): `heap-use-after-free` in `gorget_string_clone_to_owned`
+# called from `Holder__probe`.
+#
+# INTENDED (asserted below): prints `helloworld` regardless of the method's
+# name, on BOTH backends.
+# Measured 2026-08-27 by the R45 DEEP-1 scout; orchestrator-verified with the
+# renamed control run alongside.
+
+String mk(String a, String b):
+    return a + b
+
+struct Holder:
+    Vector[String] items
+
+equip Holder:
+    void grow(&self):
+        int i = 0
+        while i < 64:
+            self.items.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+            i = i + 1
+
+    String probe(&self):
+        String s = self.items.get(0).unwrap()
+        self.grow()
+        return s
+
+void main():
+    Holder h = Holder([mk("hello", "world")])
+    print(h.probe())
