@@ -1,0 +1,43 @@
+# KNOWN GAP — STRUCT CONSTRUCTOR ARGUMENTS ARE NOT TYPE-CHECKED AGAINST THE
+# FIELD TYPE. `gg check` accepts, and the payload shape decides whether you get
+# a wrong value or a SIGSEGV.
+#
+#     struct Sink:
+#         String s
+#
+#     Sink(42)                  -> gg check rc 0, runs rc 0, prints EMPTY
+#     Sink(Some(mk(...)))       -> gg check rc 0, runs rc 139 SIGSEGV (both lanes)
+#
+# THE CONSTRUCTOR ARGUMENT POSITION IS THE DISCRIMINATOR. Every other position
+# rejects the same mismatch correctly:
+#
+#     void take(String s): ...
+#     take(42)                  -> gg check rc 1, REJECTED   (plain call)
+#     String v = 42             -> gg check rc 1, REJECTED   (named local)
+#
+# So this is not a missing rule in general -- it is a rule with no SUBJECT at
+# the ctor-argument position (Core #15e Q4, a category error). Widening the
+# call-argument rule does not reach it; the position needs its own check.
+#
+# ⇒ Core #8/#10: a wrong-ACCEPT that reaches codegen. `gg check` does not
+# reach lowering, so nothing downstream re-checks it.
+#
+# ⚠ USE A HEAP-FORCED PAYLOAD FOR THE CRASHING CELL (`mk(...)`, never a
+# literal). With a literal the second cell may not fault, and the fixture
+# becomes a false negative.
+#
+# INTENDED (asserted): BOTH spellings are REJECTED at check time with a type
+# mismatch naming the field and the argument type. Neither should reach
+# codegen.
+# Measured 2026-08-27 by R45 Track D brief-review pass 4; orchestrator-verified
+# with all four positions run side by side.
+
+String mk(String a, String b):
+    return a + b
+
+struct Sink:
+    String s
+
+void main():
+    Sink a = Sink(Some(mk("aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb")))
+    print(a.s)
