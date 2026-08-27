@@ -20863,7 +20863,7 @@ fn known_gaps_repros_are_wired_to_a_test() {
 /// list fixes a subject that does not cover the case (Core #15e Q4).
 #[test]
 fn cow_prescan_walkers_have_no_catch_all_arm() {
-    const WALKERS: [(&str, &str); 7] = [
+    const WALKERS: [(&str, &str); 10] = [
         ("src/ir/lowering/functions.rs", "fn cow_after_expr_moves"),
         ("src/ir/lowering/functions.rs", "fn cow_after_stmt"),
         ("src/ir/lowering/functions.rs", "fn extract_path_for_mut"),
@@ -20880,6 +20880,11 @@ fn cow_prescan_walkers_have_no_catch_all_arm() {
         // FAILED. It handled 8 of 29 `Stmt` forms behind a catch-all and was
         // the function that actually received the third MetaFor fix.
         ("src/ir/lowering/functions.rs", "fn count_uses_in_block"),
+        // Added 2026-08-27 after this lint was GREEN while a `case 1: do:`
+        // shape printed garbage: these three were absent from the table.
+        ("src/ir/lowering/liveness.rs", "fn on_error_bodies_in"),
+        ("src/ir/lowering/liveness.rs", "fn on_error_bodies_in_expr"),
+        ("src/ir/lowering/functions.rs", "fn collect_loop_reassigned"),
     ];
     let mut offenders = Vec::new();
     for (file, sig) in WALKERS {
@@ -20927,6 +20932,39 @@ fn cow_prescan_walkers_have_no_catch_all_arm() {
             if t.starts_with("if let ") && t.contains("MatchItem::") {
                 offenders.push(format!(
                     "{file}: {sig} line +{n}: `{t}`  <- MatchItem::MetaFor dropped, no else"
+                ));
+            }
+            // THE POSITION AXIS, which the variant axis does not cover.
+            //
+            // Narrowing a BODY position to one `Expr` variant drops every other
+            // code-carrying variant with no arm and no compile error. Measured:
+            // `if let Expr::Block(b) = &arm.body.node` left `case 1: do:`
+            // unreachable while `case 1:` worked — four characters apart, one of
+            // them printing GARBAGE at rc 0 on both lanes. Its mirror in
+            // `collect_loop_reassigned` narrowed to `Expr::Do` and dropped
+            // `Expr::Block`, rc 101 on both lanes.
+            //
+            // Scoped to lines mentioning a BODY deliberately. A blanket
+            // "no `if let Expr::`" rule fires on `Stmt::Assign`'s
+            // `if let Expr::Identifier` kill test, which is correct — only a
+            // whole-variable assignment kills, a `v[i] =` partial write does
+            // not — and a guard whose output must be allowlisted teaches the
+            // next reader to allowlist.
+            // ...but only when there is NO `else`. `cow_after_stmt` narrows an
+            // arm body to `Expr::Block` and routes everything else through the
+            // expression walker in its `else` — that is complete, not a hole.
+            let has_else = body
+                .lines()
+                .skip(n + 1)
+                .take(8)
+                .any(|l| l.trim_start().starts_with("} else"));
+            if t.starts_with("if let ")
+                && t.contains("Expr::")
+                && t.contains("body")
+                && !has_else
+            {
+                offenders.push(format!(
+                    "{file}: {sig} line +{n}: `{t}`  <- body position narrowed to one Expr variant"
                 ));
             }
         }

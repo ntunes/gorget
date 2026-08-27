@@ -54570,6 +54570,17 @@ fn known_gap_vec_box_trait_pushed_escapes_helper() {
     run_gg("known_gaps/vec_box_trait_pushed_escapes_helper.gg", "R2");
 }
 
+/// REGRESSION (R45, Track D pass 18) — a match-arm BODY is an expression
+/// POSITION. The on-error collector narrowed it with `if let Expr::Block`,
+/// so `case 1: do:` was unreachable while `case 1:` worked — four
+/// characters apart, one printing garbage at rc 0 on both lanes. The
+/// collector was exhaustive over `Stmt` and still wrong: this is the
+/// POSITION axis, which a variant-pinned guard cannot see.
+#[test]
+fn liveness_on_error_in_match_arm_do() {
+    run_gg("liveness_on_error_in_match_arm_do.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n-1");
+}
+
 /// REGRESSION (R45, Track D pass 17) — `on_error_bodies_in` was exhaustive
 /// over `Stmt` and blind to `Expr`. `Expr::Do`/`Expr::Block` carry statement
 /// blocks, so a handler inside a `do:` was unreachable and the seed was

@@ -219,10 +219,24 @@ fn collect_loop_reassigned(
             }
             Stmt::Match { arms, else_arm, .. } => {
                 for item in arms {
-                    if let Some(arm) = item.arm() {
-                        if let Expr::Do { body, .. } = &arm.body.node {
-                            collect_loop_reassigned(&body.stmts, in_loop, names);
-                        }
+                    // MIRROR of the `liveness.rs` hole, same class, fixed with it:
+                    // `item.arm()` drops `MatchItem::MetaFor` by construction, and
+                    // narrowing the body to `Expr::Do` drops `Expr::Block`. Measured
+                    // rc 101 `read after MoveZero` on both lanes when the accumulator
+                    // is an owning `!`-param (a local does not fire this path).
+                    let arm = match item {
+                        crate::parser::ast::MatchItem::Arm(a) => a,
+                        crate::parser::ast::MatchItem::MetaFor { arm_template, .. } => arm_template,
+                    };
+                    // Route through the one exhaustive child enumeration rather
+                    // than narrowing to a variant list: `visit_expr_children`
+                    // hands back every BLOCK an expression carries, at any depth,
+                    // so a new block-carrying `Expr` cannot slip past this walk
+                    // the way `Expr::Block` did when this narrowed to `Expr::Do`.
+                    let mut blocks: Vec<&crate::parser::ast::Block> = Vec::new();
+                    collect_blocks_in_expr(&arm.body.node, &mut blocks);
+                    for b in blocks {
+                        collect_loop_reassigned(&b.stmts, in_loop, names);
                     }
                 }
                 if let Some(eb) = else_arm {
@@ -237,7 +251,32 @@ fn collect_loop_reassigned(
                     collect_loop_reassigned(&eb.stmts, in_loop, names);
                 }
             }
-            _ => {}
+
+            // ── Previously swept by `_ => {}` (12 of 29 forms handled) ──────
+            // A reassignment this walker cannot see is one the loop-carried
+            // materializer will not hoist. Same failure class as the other
+            // walkers made exhaustive this round.
+            Stmt::MetaIf { then_body, elif_branches, else_body, .. } => {
+                collect_loop_reassigned(&then_body.stmts, in_loop, names);
+                for (_c, b) in elif_branches {
+                    collect_loop_reassigned(&b.stmts, in_loop, names);
+                }
+                if let Some(b) = else_body { collect_loop_reassigned(&b.stmts, in_loop, names); }
+            }
+            Stmt::MetaFor { body, .. } | Stmt::MetaWhile { body, .. } => {
+                collect_loop_reassigned(&body.stmts, in_loop, names);
+            }
+            Stmt::MetaMatch { arms, else_arm, .. } => {
+                for (_c, b) in arms { collect_loop_reassigned(&b.stmts, in_loop, names); }
+                if let Some(b) = else_arm { collect_loop_reassigned(&b.stmts, in_loop, names); }
+            }
+
+            // Carry no nested statement block, so nothing to collect. Listed
+            // explicitly so a new statement kind is a compile error here.
+            Stmt::VarDecl { .. } | Stmt::Expr(..) | Stmt::Return(..)
+            | Stmt::Assert { .. } | Stmt::AssertReturn { .. } | Stmt::Throw(..)
+            | Stmt::Snapshot { .. } | Stmt::MetaConst { .. } | Stmt::MetaLog { .. }
+            | Stmt::Break | Stmt::Continue | Stmt::Pass | Stmt::Item(_) => {}
         }
     }
 }
@@ -3106,5 +3145,21 @@ pub(super) fn build_type_name_subs(ctx: &mut LoweringContext, subs: &[(String, T
         if changed && name != substituted {
             ctx.generics.type_name_subs.insert(name, substituted);
         }
+    }
+}
+
+/// Every `Block` an expression carries, at any depth, via the one exhaustive
+/// child enumeration (`parser::visitor::visit_expr_children`).
+fn collect_blocks_in_expr<'a>(e: &'a Expr, out: &mut Vec<&'a crate::parser::ast::Block>) {
+    let mut children: Vec<&'a Spanned<Expr>> = Vec::new();
+    let mut blocks: Vec<&'a crate::parser::ast::Block> = Vec::new();
+    crate::parser::visitor::visit_expr_children(
+        e,
+        &mut |c: &'a Spanned<Expr>| children.push(c),
+        &mut |b: &'a crate::parser::ast::Block| blocks.push(b),
+    );
+    out.extend(blocks);
+    for c in children {
+        collect_blocks_in_expr(&c.node, out);
     }
 }

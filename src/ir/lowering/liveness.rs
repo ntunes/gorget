@@ -151,7 +151,12 @@ fn on_error_bodies_in<'a>(stmt: &'a Stmt) -> Vec<&'a [Spanned<Stmt>]> {
                     MatchItem::Arm(a) => a,
                     MatchItem::MetaFor { arm_template, .. } => arm_template,
                 };
-                if let Expr::Block(b) = &arm.body.node { push_block(&mut out, b); }
+                // A match-arm BODY is an expression POSITION, so it routes through
+                // the expression walker like every other one. Narrowing it to a
+                // single variant here (`if let Expr::Block`) left `case 1: do:`
+                // unreachable while `case 1:` worked -- four characters apart, one
+                // of them printing GARBAGE at rc 0 on both lanes.
+                out.extend(on_error_bodies_in_expr(&arm.body.node));
             }
             if let Some(b) = else_arm { push_block(&mut out, b); }
         }
@@ -338,14 +343,15 @@ fn walk_stmt<'a>(
         Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
             walk_block(&body.stmts, live, lu);
         }
-        // P14 CANDIDATE FIX: `on error:` is an ALTERNATIVE path, not a
-        // straight-line scope -- it runs ONLY when the function exits via an
-        // error and never on normal return (language-reference S10.7). Walking
-        // it into `live` directly lets a KILL inside the handler (an
-        // assignment, or a shadowing VarDecl) delete a name that is still live
-        // on the normal path -- an UNDER-approximation, the dangerous
-        // direction. Union it the way `If` unions a branch.
-        // Seeded at block entry by `seed_on_error_uses` -- see `walk_block`.
+        // `on error:` is an ALTERNATIVE path, not a straight-line scope: it
+        // runs ONLY when the function exits via an error, never on normal
+        // return (language-reference S10.7).
+        //
+        // Its uses are seeded FUNCTION-WIDE before the walk begins -- see
+        // `seed_on_error_uses` -- so there is nothing to do at the
+        // registration point itself. (An earlier comment here described
+        // "union it the way `If` unions a branch", which was both the wrong
+        // analogy and a description of code that no longer exists.)
         // Walking it again here would record last-use spans inside a handler
         // that the normal path also reads.
         Stmt::OnError { .. } => {}

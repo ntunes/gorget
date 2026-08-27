@@ -1,0 +1,39 @@
+# REGRESSION — a match-arm BODY is an expression POSITION.
+#
+# `case 1:` worked and `case 1: do:` printed GARBAGE at rc 0 on both
+# lanes -- four characters apart. The on-error seed collector narrowed
+# the arm body with `if let Expr::Block(..)`, so a `do:` body was
+# unreachable. Fixed by routing the body through the expression walker,
+# which itself routes through visitor::visit_expr_children -- the one
+# exhaustive child enumeration.
+#
+# This is the POSITION axis, not the variant axis: the collector was
+# exhaustive over `Stmt` (provable -- deleting a leaf arm is E0004) and
+# still wrong, because one of its six expression positions was
+# hand-narrowed. A guard pinned to variants cannot see it.
+#
+# The `v.set(0, ...)` is load-bearing: it frees the value moved into
+# the vector.
+# PROBE -- identical to E0 except the arm body is spelled `do:` (Expr::Do).
+# ONE thing varied.
+String mk(String a, String b):
+    return a + b
+
+int f(int n) throws String:
+    String s = mk("abcdefghijklmnopqrstuvwxyz0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    match n:
+        case 1: do:
+            on error:
+                print(s)
+        else:
+            pass
+    Vector[String] v = []
+    v.push(s)
+    v.set(0, mk("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyyyyyyyy"))
+    if n > 0:
+        throw "boom"
+    return 1
+
+void main():
+    int r = f(1)! catch (e): -1
+    print(r)
