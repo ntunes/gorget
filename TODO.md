@@ -2,15 +2,54 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**⚠ ROUND XLI (R41) CLOSED 2026-08-14 — UNDER THE OWNER'S PRE-GRANTED CONVERGENCE WAIVER** (clauses (a)+(c) failed: net +28, filed 37, closed 9 — regen `scripts/convergence.sh 122 561 37`; waiver granted in advance by the owner 2026-08-11, exercised and recorded in DONE.md as a WAIVER, not compliance; NOT precedent — R42 starts from STRICT 2×). Theme: **D27-CHAIN FMT-HARDENING (pre-A2) + ERROR-MODEL E0 GROUNDWORK.** Six W0.5 tracks (T-FMT-A silent-drop class · T-FMT-C suite-layout `Block.layout`/`author_spelled` · T-FMT-D width-120/fill-pack/gap-4 · T-FMT-B verbatim-first + typed spelling flags · T-RB0 SH resolver accept-both + the `resolver_comparison` 0-of-2079 floor catastrophe, floor seeded 1865 · T-PRUNE stale-scan, recommendations-only) + the 11-item record-fold whose output-review ran FOUR sequential passes (3→2→1→0 blocking; the class lesson — index a class-retiring guard by the class's DEFINING PROPERTY, not the member that failed — is in the DONE entry). Battery FULL green (C 2353/0/100 · LLVM 2353/0/100 · ggdef ALL targets · spec_conformance · security · lints 133 · lib 1163). Parity MATCH 1409→1415, ADJ 440→443, non-MATCH 148 (ceiling reseeded 149→148), BOTH-WRONG 2 (held). **Owner rulings (ledger):** fill = BLOCK INDENT · `elif` canonicalization (accept both, format to `elif`) · visibility on equip/test/bench = REJECT (teaching diagnostic) · PARENTHESIZED IMPORT FORM ratified (imports width-exempt, documented, until it lands). **Process (owner 2026-08-11):** the TWO-CLEAN-PASS review convergence gate (AGENTS.md + devbook/30 §12). See DONE.md 2026-08-14.
+**⚠ R44 CLOSED 2026-08-27. R45 IS OPEN — owner go GRANTED, autonomous.**
 
-**⚠ ROUND XLII (R42) CLOSED 2026-08-18 — UNDER AN OWNER-GRANTED CONVERGENCE WAIVER** (clauses (a)+(c) failed: net +37, filed 12, closed 25 — regen `scripts/convergence.sh 125 586 12`; recorded in DONE.md as a WAIVER, not compliance, and NOT precedent — the next round starts from the rule). Round-close battery FULL and GREEN on both lanes: C integration 2402/0 · LLVM integration 2402/0 · spec_conformance 3/0 · security (ASan) 151/0 · ggdef 180/0 · lints 150/0 · lib 1171/0.
+**CONVERGENCE BASELINE FOR R45: kg=22, todo=674** — regen the close line with
+`scripts/convergence.sh 22 674 <filed>`. ⚠ **The kg number is NOT a gap count.** It counts ORPHANED
+repros; a repro cited by its own TODO bullet is that bullet's evidence and exempt (owner 2026-08-23).
+At R44 close: 185 inventory units, 124 cited. Do not read a fall in it as gaps closing.
 
-**⚠ CONVERGENCE BASELINE FOR R43: kg=135, todo=614** (regen the close verdict with `scripts/convergence.sh 135 614 <filed>`). ⚠ **CORRECTED from the handover's 134 at R43 open:** `4ba2bbdb` (R42's close-out cardinal-rule fix) added the CRITICAL container-literal repro AFTER the baseline was written, so 134 would have counted R42's own inflow as R43's. Re-measure the baseline with `scripts/convergence.sh` at HEAD, never inherit it.
+**⚠ FULL BATTERY IS GREEN at R44 close** — C + LLVM sweeps, `--lib`, `--test lints`,
+`-p ggdef`, `--test spec_conformance`, `--test security`, `--test c_runtime`, the bootstrap fixed
+point, the 5-lane robustness map, and **all four clone ceilings** (re-seeded to the exact measured
+value; see below). Regenerate, never quote: the commands are in AGENTS.md's round-close gate.
 
-**⚠ AUTONOMY: R43 OPENED 2026-08-18 — owner go GRANTED.**
+**⚖ R45 PLAN — owner-agreed 2026-08-27, in this order:**
+1. **The MEMORY-SAFETY CLUSTER.** Three distinct `Box` double-frees (move-eligibility pair +
+   `Box[T](struct.field)` shallow clone), the `Shared[T]`-to-plain-function heap-UAF, the
+   `[b for b in s.bytes()]` uninitialised read, and `==` on a type with no `Equatable` impl silently
+   answering `false`. All filed with durable RED-verified repros.
+2. **ROBUSTNESS GAPS** — the map's own backlog: 92 sanitizer findings, 155 cross-lane divergences,
+   8 both-lanes-wrong-ggdef-right, and the documentation corpus at 83% (Book reference half 61%).
+3. **A2, the bulk `gg fmt` sweep — IF READY.** ⚠ Owner ruling 2026-08-14 stands: it NEVER commits
+   directly; it lands reviewable, passes a critical style review with the OWNER IN THE LOOP on the
+   style verdict, and only then becomes the one fmt-only commit. Owner 2026-08-27: land it only if
+   it is *"not too destructive on the original style"* — that is the owner's call on the diff.
+4. **DEEP-1 return-view lazy materialization — a LATER round, not R45.**
+   `docs/language-design.md:730` warns it is UAF-prone, so it lands only AFTER (1) closes.
 
-**⚠ ROUND XLIII (R43) CLOSED 2026-08-22 — UNDER AN OWNER-GRANTED CONVERGENCE WAIVER** (clauses (a)+(c) failed: net +35, filed 50, closed 15 — the verdict is quoted verbatim in the DONE entry; recorded there as a WAIVER, **not** as compliance, and **NOT precedent** — R44 starts from the rule). Headline MEMORY SAFETY: two silent-corruption CRITICALs closed at their WRITE sites (M1 container-literal element-type mint; C indirect-call argument ABI), plus Track G author line-grouping. Battery FULL and GREEN both lanes: C integration 2445/0 · LLVM 2445/0 · ggdef 173/0 all targets · spec_conformance 3/0 · security 151/0 · lints 155/0 · lib 1171/0. See DONE.md 2026-08-22.
+**⚠ WHY THE CLONE RATCHETS ARE WHERE THEY ARE.** All four sit at the exact measured value as a
+HIGH-WATER MARK WITH A DEBT, not a sanctioned cost. R44 attributed the growth to Track D (not Track K)
+and reclaimed 92% of its chokepoint with emitted C byte-identical. **The reclaim is OWED**, levers named
+and sized: `VarDeclFromBorrow`/`ReturnFromBorrow` (71% of attributed events; the design doc says NO new
+machinery) · `Parser.peek` (7,823,340 hits, ~33× the chokepoint) · then DEEP-1.
+⚠⚠ **STAGE-1 IS ~85× STAGE-0 BECAUSE GORGET CANNOT YET RETURN A BORROW.** Same input, different
+compiler: `peek` must return an owned `SpannedToken` where Rust returns a reference. The stage-1 ratchet
+is an EXPRESSIVENESS meter in a performance costume — it comes down with DEEP-1, not by tuning the
+self-host.
+
+**⚠ SUCCESSION — the measurement that would settle it, NOT YET RUN.** The self-host leads on the map
+(85.9% vs C 83.3%, LLVM 82.6% over 1009 cells), but **43 of its 71 wins are `REJECTED → WORKS`** — Rust
+refuses, SH runs. Each is either Rust over-strict (SH genuinely ahead) or **SH missing a check** (the
+lead is unsoundness scoring as capability). Until those 43 are adjudicated — ggdef rules the in-subset
+ones, the design docs the rest — **the +27 net is not a fact about correctness.** The other half is
+unambiguous: 44 cells where Rust works and SH does not, 19 of them programs SH cannot compile.
+
+
+
+
+
+
 
 **⚖ OWNER DECISION 2026-08-23 — `TODO.md` SPLITS: HANDOVER HERE, ITEMS IN A `todo/` DIRECTORY.**
 Agreed with the owner; **land BETWEEN rounds** (it is counting-neutral and moves the raw number with
@@ -77,7 +116,6 @@ fixing ⇒ INLINE (leaving it is the Core #4 instance-fix failure). Different su
 mechanism ⇒ FILE, properly, with its repro — which now costs one unit, not two. An ambiguous call is
 reported, not resolved by quietly doing the bigger thing.
 
-**⚠ CONVERGENCE BASELINE FOR R44: kg=17, todo=628** (⚠ **RE-BASELINED TWICE.** First from the recorded kg=103 → 96, fixing three classifier defects. Then 96 → **17** on the **OWNER RULING 2026-08-23: a mandated `known_gaps` repro counts WITH its TODO bullet, not as a second filing.** The cardinal rule REQUIRES the repro, so charging it separately made one discovery cost +2 and made clause (a) demand FOUR closures for it — while filing the same bug WITHOUT the required repro cost only two. The metric was rewarding a cardinal-rule violation; measured live when one review-required filing turned a track's net −1 into +0. An UNCITED gap fixture still counts on its own. Both re-baselines are COUNTING CORRECTIONS measured at the R44 opening commit `3c35d986`, so no round earns credit for them.) (⚠ **RE-BASELINED 2026-08-23** from the originally-recorded kg=103. The arbiter's gap classifier had THREE defects, all from the R43 rebuild: a multi-file repro directory counted as N gaps instead of one, nested repros could never be reference-matched, an `#[ignore` substring matched COMMENT PROSE, and only `integration.rs` was scanned. Found by the R44 Track-G census and independently re-derived to the same 96 before landing. Per the script's own fused-entry rule this is a COUNTING CORRECTION — it is measured at the R44 opening commit `3c35d986` so the −7 lands in the BASELINE and R44 earns no credit for it.) — ⚠ **THE COUNTER CHANGED at R43 close (owner-ruled).** `scripts/convergence.sh` no longer counts a FIXED bug's live regression net as a gap, so the known_gaps figure dropped 156 → 103 with no work done; R43-and-earlier numbers are NOT comparable to R44's. **Regenerate BOTH numbers at HEAD with `scripts/convergence.sh` and never inherit them** (read its exit code WITHOUT a pipeline — `| tail` masks it, measured this round).
 
 **✅ OWNER CALLS ANSWERED AND ALL THREE LANDED 2026-08-22 — nothing outstanding from the R43 close:**
 - ✅ **Convergence waiver** — granted; recorded as a waiver. Closures were NOT manufactured; a pruning track was offered and declined.
@@ -157,47 +195,39 @@ reported, not resolved by quietly doing the bigger thing.
   - **Method-targ recorder (f-string).** Diagnosis wrong TWICE. `EFString` is genuinely absent from both walkers, but the causal chain is BROKEN: the undefined symbol is the iterator's own type, and `.iter()` fails `infer.gg`'s terminal/closure gate, so no targ entry is produced either way. The real hazard is `expr_link_types`, which is NOT in the snapshot/restore set. Filed in full on its ledger entry.
   - **Typed-`ret` / declare-set work.** Diagnosis refuted twice; the externs ARE already registered. The real defect is the strip→`_ws` **rename** changing callee identity without re-registering, plus **13 bare `Inst::CallExtern` sites in `src/lir/lower/drops.rs` with zero `ensure_extern` calls**. ⚠ **MEASURED: LLVM does NOT catch a declare/call signature mismatch** — `llvm-as`, `opt -passes=verify` and `llc` all exit 0 on a deliberate mismatch, so that class is a silent miscompile with no gate. Any fix here needs an emitted-`.ll` declare-set diff as its acceptance gate.
 
-**⚠ ROUND XXXIX PROCESS LESSONS (fresh, worth the read):**
   1. **A `#[test]` that mutates shared working-tree state is a `#[test]` in shape only.** R39's A1 fix un-`#[ignore]`d `sh_bootstrap_stage2_double_free_after_fmt_sweep` as a live regression gate; the test mutates ~2,754 `.gg` files via `gg fmt --in-place` and did not restore. `#[serial(gg_build)]` only serializes against other gg_build-tagged tests; parallel readers (tensor_*, network) race the mutation window and fail non-deterministically. Post-run save/restore is necessary-not-sufficient. Right pattern: scratch-tree isolation. Filed MED for R40+.
   2. **`gg fmt` regressions on metaprogramming stdlib modules silently corrupt semantics.** `gg fmt` on `lib/xtd/tensor.gg` produces a source `gg build` can't compile (`MetaOpInfix not substituted before GIR lowering`). Likely affects `xtd.dataframe`, `xtd.ecs`, `xtd.compress` too. First fmt bug of this class — the fmt-output round-trip guarantee spans SEMANTICS, not just syntax. Filed MED.
   3. **Convergence STRICT 2× waiver is a genuine choice at close, not a formality.** R39 hit net +27 despite stale-scan + fold discipline; the deficit is 47 closures. Owner granted the waiver on merit (honest inflow from Core #11/12 durable-repro obligation + fmt-verdict fold), NOT precedent per rule. R40 opens back at STRICT 2×.
   4. **Multi-round fmt-verdict fold works when a single reviewer would fragment.** R39's fmt track landed 7+ distinct fixes across snags #2/#3/#15b/c/e + collit escape + block-header + fn-header + top-level blank + golden test + close-time #3-close-tail — each with its own commit, RED-verified fixture, and Core #4 chokepoint where applicable. Batching by verdict-report rather than by ad-hoc opportunity kept the fold coherent.
   5. **Sweep parallel-load flakes can look like ~37 failures.** R39 close's first LLVM sweep at autoscaled threads showed 37 failures (tensor + httpserver + p2p + network + self-host); every single one passed in isolation. Root cause was the sweep-test mutation race (lesson #1). Same shape as R35's `c_emit_comparison` false-red. **When failure count is impossibly large, isolate before root-causing.**
 
-**⚠ ROUND XXXVIII PROCESS LESSONS (still valid):**
   1. **Mid-round rescope on higher-severity discovery is legitimate.** R38 opened as A1 (SH stage-2 memory-safety), executor Stop Condition #4 surfaced Rust-gg build non-determinism as a foundational Core #8 defect that also EXPLAINED why A1 diagnosis was fragile. Owner-ratified rescope; A1 slips to R39 with reliable ground. The gauntlet work invested in A1 (scout + 3-pass brief-review) is R39's opener, not waste.
   2. **Phase-4 N=3 wrapper-run is the proof pattern for "does A subsume B?"** Post-fix, run the wrapper-B test N=3 times. All GREEN → A subsumes B. All RED with identical signature → B is separate (proof-strength with determinism enforced). MIXED → fix incomplete (stop condition). Track A used this pattern to prove A1 is not a downstream of SSA non-det.
   3. **Same-round discovery filing (Task Continuity discipline) — the LEFT-nested `??` SIGSEGV was surfaced by Track C's output-review + independently verified reproduces on pre-R38 base.** Filed durably as `known_gaps/default_op_left_nested_chain_segv.gg` + `#[ignore]`d wrapper. Discipline gap closure took ~5 min at orchestrator level; committed as separate follow-up to Track C for clean bookkeeping.
   4. **Convergence-first process fix (owner 2026-08-06) worked for the 5th round in a row.** Ran BEFORE the ~90-min sweeps; caught net +2 immediately post-integration; stale-scan surfaced 4 closures in ~45min; convergence flipped to −2 BEFORE burning sweep time.
 
-**⚠ ROUND XXXVII PROCESS LESSONS (still valid):**
   1. **Scout `--check` is not `--apply`.** R37's scout used `scripts/fmt_sweep_smoke.sh --check --skip-bootstrap` to preview the sweep, counting diffs but never reformatting-and-recompiling. Both the empty-body Core #10 defect AND the SH stage-2 double-free manifest ONLY under `--apply`. Standing rule: full-corpus fmt scouts MUST use `--apply` in a scratch tree, not `--check`.
   2. **Partial-scope landing with durable repro for the blocker IS a legitimate close.** R37 shipped everything it could + Core #10 chip + all guards + doc write-through, while the deferred Phase 2 sweep has a procedural durable repro (`#[ignore]`d wrapper that fails RED when un-ignored). Not "hidden defer"; fully filed.
   3. **Discovery-time misdiagnosis is why output-review verifies claims, not just diffs.** Executor's "Vector[T] move-and-return garbage" report was WRONG; actual defect was already-filed `print(<composite>)` raw-address entry OWING a durable repro since 2026-07-25. Output-review pass 2 independently rebuilt both shapes to confirm the misdiagnosis.
 
-**⚠ ROUND XXXVI PROCESS LESSONS (still valid):**
   1. **9-pass gauntlet is the accept/reject-surface norm.** CLAUDE.md predicts ~9 for this class; R36 hit exactly. Arm enumeration grew 5 → 13 → 20 across the 9 passes because each Pratt cross-check surfaced sibling-drift misses. This IS convergence for wide-surface class fixes — not gauntlet failure.
   2. **Discovery-time defects during execution are Core #8 same-round obligations.** Executor found 4 more bugs while wiring the fix (Pow chain-flattener, IIFE, at_line_start, Await bp). Fold inline; don't file as follow-ups.
   3. **Formatter fixes have net-positive parity impact.** MATCH +8, ADJ +6 vs pre-round (R36); R37 added another +3/+2. Deterministic emission means some fixtures whose Rust+SH lanes agreed by accident now agree by construction. Fmt fixes are a rare double-win.
   4. **`scripts/fmt_sweep_smoke.sh` is the safety net for future fmt rounds.** BUT use `--apply` for full-corpus scouts, not `--check` (R37 lesson).
 
-**⚠ ROUND XXXV PROCESS LESSONS (still valid):**
   1. **Convergence-first + owner-directed stale-scan combined to prevent a 5th waiver.** Convergence-first (R34 process fix, R35 first use) caught the 0:3 pre-audit state before ~90 min sweep waste. Stale-scan (60 min budget) surfaced 6 real closes from ~569 items across R18/R29/R30/R32 fixes never retired from the ledger. **Stale-scan is a systematic tool worth running at every round-close where convergence needs a boost** — every long-running project accretes un-retired filings that a scan can convert to real closes.
   2. **Sweep flakes CAN look like real regressions.** First C-sweep showed `c_emit_comparison FAILED (Matched 654 < floor 1283)` — looked like a huge regression. Isolated test showed `Matched 1486` (comfortably above floor). Root: parallel-load contention with `c_emit_comparison`'s internal `parallel_map_fixtures` worker pool. Re-run cleared. **When a sweep flake looks impossibly large (2x+ drop), isolate the test before spending time root-causing.**
   3. **Ratified plans can decay between ratification and execution.** Wave-plan C3 (composed D27+D22+D28 fmt sweep) was ratified when D22 was expected to land alongside D27. D22 didn't land (nobody scouted it); R33's D28 landing was CODE-not-fmt-sweep. Scout caught the compose premise was hollow before executor burn. **Ratified plans need Core #5 re-verification just like premises do.**
   4. **Executor rescope-on-red is honest and correct behavior.** When R35 executor hit bootstrap regression from formatter defect amplification, they RESCOPED to chip+docs (aborted the sweep) rather than shipping known-red. Chain of small fold-back iterations rather than one-shot success is a legit path when discovery happens mid-execution — 4 fold-backs total this round, each surfaced a new blocker the prior didn't see.
 
-**⚠ ROUND XXXIV PROCESS LESSONS (still valid):**
   1. **Convergence-first process fix.** Runs BEFORE sweeps to catch fail early.
   2. **Removal rounds are reliable convergence generators.** Deletes machinery + fixtures citing it.
   3. **Ratchet-tighten-backs are systematic closes worth searching at removal rounds.**
 
-**⚠ ROUND XXXIII PROCESS LESSONS (still valid):**
   1. **The Core #8 "shipped known defect" trap will fire — output-reviews must interrogate every FILED follow-up for "does this ship a live known defect?".** D26 F1 executor filed shift-fallible Route B as a MED follow-up "for a later round" while their code check-lane accepted `Result[int, ArithError] r = a <<! b` and their lowerer silently SIGSEGV'd it. Combined output-review caught it. Option B check-reject fix was ~15 LOC and satisfies Core #10 same-round.
   2. **Executor-authored claims about semantics are inherited premises subject to Core #15e Q7.** D28 executor's commit body had a factually-wrong parse-tree claim; output-review caught it; the R1 fold's new commit body explicitly corrected the prior one rather than amending.
   3. **Ratchet raise (parity ceiling) is a DOCUMENTED owner-ask** — R34 followed the same shape (137→142) for the same reason (SH lane-lag).
 
-**⚠ ROUND XXXII PROCESS LESSONS (still valid):**
   1. **Class-fix rounds SURFACE adjacent latent defects** — project the filing rate, not just the closes. The ledger converts hidden debt into counted debt.
   2. **Round-close FULL BATTERY caught 14 collateral failures that per-track targeted gates missed.** Run the full battery EARLY (though CONVERGENCE-FIRST per XXXIII lesson #1 — battery after).
   3. **Owner-decided reverts are LEGITIMATE round-close work, not failure.** Each documented + follow-up filed = Core-invariant discipline.
