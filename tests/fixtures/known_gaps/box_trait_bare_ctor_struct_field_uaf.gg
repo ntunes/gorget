@@ -1,0 +1,52 @@
+# KNOWN GAP — LIVE MEMORY-SAFETY DEFECT AT HEAD, reachable by changing ONE
+# TOKEN in a committed, passing fixture.
+#
+# `tests/fixtures/box_trait_struct_field.gg:23` reads:
+#     Holder h = Holder(Box.new(Robot("R2")))     -> rc 0, prints R2
+# Change the constructor spelling and nothing else:
+#     Holder h = Holder(Box(Robot("R2")))         -> rc 1 on BOTH lanes
+#         C    : gorget: panic: gorget_string_free invariant: cap=688948
+#         LLVM : gorget: panic: gorget_string_free invariant: cap=4
+#
+# ASan: heap-use-after-free -- freed by `__gorget_box_free_Robot` from `main`,
+# then re-read via `Holder__drop -> Box__Robot__drop -> Robot__drop`.
+# Two owners, one allocation.
+#
+# THE WRITER (Core #1 -- fix at the write site):
+# `pack_trait_object_for_smart_ptr_ctor` (`src/ir/lowering/exprs/calls.rs:989-1041`)
+# emits `_4 = copy _3` at `:1039` and NEVER CONSUMES THE SOURCE -- no
+# `move_zero`, no `drops.unregister`. ONE producer, 12 call sites.
+#
+# ⚠ FORMATION-SPECIFIC (do not widen the claim): the struct-field constructor
+# argument position crashes; a vector-literal formation is clean; two other
+# formations reject the bare spelling outright.
+#
+# ⚠ THIS IS THE MIRROR OF `box_new_discarded_trait_pack_leak.gg`. The two are
+# one root seen from both sides and MUST be fixed together:
+#     * bare `Box(...)`  REGISTERS the value and double-frees through the pack.
+#     * `Box.new(...)`   does NOT register and LEAKS.
+# The pair is its own positive control, and it settles the fix shape: register
+# at birth (the bare spelling is RIGHT to register) AND make the pack CONSUME
+# its source. Deleting the registration to make the suite green is the wrong
+# fix -- it converts this crash into the sibling's leak.
+#
+# INTENDED (asserted below): prints R2 on BOTH backends, ASan-clean.
+# Measured 2026-08-27 at HEAD by R45 Track A brief-review pass 12;
+# orchestrator-verified on both lanes against the committed fixture.
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String name
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.name
+
+struct Holder:
+    Box[Speaker] s
+
+void main():
+    Holder h = Holder(Box(Robot("R2")))
+    print(h.s.speak())

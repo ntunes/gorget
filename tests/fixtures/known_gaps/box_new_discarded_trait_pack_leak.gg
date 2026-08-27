@@ -1,0 +1,38 @@
+# KNOWN GAP — a DISCARDED `Box.new(...)` LEAKS; the bare `Box(...)` spelling of
+# the byte-identical program does not.
+#
+#     Box(mk("aaaa...","bbbb..."))       -> rc 0, ASan clean
+#     Box.new(mk("aaaa...","bbbb..."))   -> rc 1, LeakSanitizer: detected
+#                                           memory leaks (the direct 32 bytes
+#                                           from `__gorget_box_alloc_GorgetString`)
+#
+# CAUSE (Core #1 -- fix at the write site): `tag_ownership.rs:142-162` gives
+# `Instruction::Call` a `call_result_is_owned` fallback and gives
+# `Instruction::CallExtern` NONE, and `__gorget_box_alloc_*` appears in no
+# typed fresh set (`grep -c box_alloc src/lir/runtime.rs` -> 0). The two
+# spellings mint through different instruction kinds, so one gets an ownership
+# tag and the other does not. Correlation is 2-for-2 by mint kind.
+#
+# ⚠ THE FIX IS ALREADY SCAFFOLDED: `Module::heap_alloc_consumer_externs` is
+# populated at all three mint sites and is already read instruction-kind-
+# agnostically by `validate_drop_pre_rebind`. `tag_ownership.rs` simply does
+# not consult it.
+#
+# ⚠ THIS IS THE MIRROR OF `box_trait_bare_ctor_struct_field_uaf.gg`. One root,
+# both sides, and they MUST be fixed together:
+#     * bare `Box(...)`  REGISTERS and double-frees through the trait pack.
+#     * `Box.new(...)`   does NOT register and LEAKS (this fixture).
+# The pair is its own positive control. Deleting the bare spelling's
+# registration would make the crash go away by converting it into THIS leak --
+# a green suite hiding the same defect.
+#
+# INTENDED (asserted by the wired ASan test): rc 0, no leak, on both backends.
+# Measured 2026-08-27 at HEAD by R45 Track A brief-review pass 12;
+# orchestrator-verified with `--sanitize` against the bare-spelling control.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Box.new(mk("aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"))
+    print(1)
