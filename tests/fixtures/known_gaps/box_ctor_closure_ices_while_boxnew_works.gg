@@ -1,0 +1,36 @@
+# KNOWN GAP — the `Box[T](x)` CONSTRUCTOR ICEs on a closure while `Box.new(x)`
+# compiles and runs. Two spellings of one operation, one of which panics.
+#
+#     Box[Callable[int(int)]] f = Box[Callable[int(int)]]((int n): n * 2)
+#     print(f(21))
+#         -> rc 101, panicked at src/ir/lowering/mod.rs:1724
+#
+#     Box[Callable[int(int)]] f = Box.new((int n): n * 2)
+#     print(f(21))
+#         -> rc 0, prints 42          <- CORRECT
+#
+# ⚠ `Box.new` is the spelling docs/book/16-smart-pointers.md:40,44 teaches, and
+# it is the chapter's ONLY `Box.new` usage -- so the working path is the
+# documented one and the ICE is on the ctor sibling.
+#
+# ⚠ MECHANISM: `src/ir/lowering/exprs/methods.rs:230-236` carries a closure
+# carve-out that `calls.rs` lacks. That carve-out is itself a
+# `starts_with("__Closure_")` NAME-MATCH -- deciding semantics from an
+# identifier's spelling, which Layering rule 2 forbids. The reference-grade fix
+# puts the flag on the typed decl, not the name.
+#
+# ⚠ This blocks "just mirror the self-host's single normalised Box path": the
+# two Rust entry points are NOT equivalent today, and any unification must carry
+# the carve-out or it regresses this to an ICE.
+#
+# ⊕ SEPARATE, FOUND ALONGSIDE: `(*f)` on a `Box[Callable[...]]` is rejected with
+# `E_DerefNonBox: cannot dereference `*` a value of type `Box[Callable[int(int)]]`
+# — `*` requires a `Box[T]``. The value IS a `Box[T]`; the diagnostic contradicts
+# itself. Both spellings hit it, so it is independent of the ICE above.
+#
+# INTENDED (asserted below): prints 42, exactly as the `Box.new` spelling does.
+# Found 2026-08-27 by R45 Track A brief-review passes 1-2; orchestrator-verified.
+
+void main():
+    Box[Callable[int(int)]] f = Box[Callable[int(int)]]((int n): n * 2)
+    print(f(21))
