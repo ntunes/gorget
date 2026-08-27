@@ -1,0 +1,36 @@
+# KNOWN GAP — a RATIFIED safety rule is not enforced at two of its three
+# positions. `AGENTS.md` (Ownership at Consuming Positions) states that for the
+# single-owner carve-outs -- `Box[T]`, `Callable[T]`, `Owned[T]`, `Task`,
+# `TaskGroup`, `Guard` -- the safety pass emits `E_MoveWithoutOperator`
+#
+#     "at bare-assign sites AND at constructor / struct / enum-init sites,
+#      forcing the user to write `^source` or `source.clone()`"
+#
+# Measured 2026-08-27, `gg check` only:
+#
+#     Box[String] b = a                       LOCAL source   -> REJECTED  ✅
+#     Box[Box[String]] o = Box[...](a)         LOCAL source   -> ACCEPTED  ⛔
+#     Box[String] taken = h.b                  FIELD source   -> ACCEPTED  ⛔
+#     Box[Box[String]] o = Box[...](h.b)       FIELD source   -> ACCEPTED  ⛔
+#
+# So enforcement exists ONLY at bare-assign-from-a-local. The CONSTRUCTOR
+# position is unenforced entirely, and a FIELD source escapes at both positions.
+#
+# ⚠ WHY THIS MATTERS BEYOND STRICTNESS: the accepted programs are exactly the
+# ones that then double-free at runtime. The ratified rule, enforced, would
+# REJECT them at check time -- which is the reference-grade outcome (Core #10,
+# lower-or-reject) rather than lowering something the language says is illegal
+# and hoping the drop model copes.
+#
+# INTENDED (asserted below): `gg check` REJECTS with E_MoveWithoutOperator,
+# directing the user to `^h.b` or `h.b.clone()`.
+#
+# Found 2026-08-27 during R45 Track A brief-review pass 4; orchestrator-verified.
+
+struct H:
+    Box[String] b
+
+void main():
+    H h = H(Box[String]("x"))
+    Box[Box[String]] outer = Box[Box[String]](h.b)
+    print("built")
