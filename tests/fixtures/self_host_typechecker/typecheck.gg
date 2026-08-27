@@ -28,7 +28,7 @@ from scope import ScopeTable, DefKind, DefInfo, ScopeKind, SkEquipBlock, SkFunct
 from scope import DkFunction, DkStruct, DkEnum, DkVariant, DkTrait
 from scope import DkVariable, DkConst, DkStatic, DkGenericParam
 from scope import get_def_at, get_scope_at, Scope, enum_variants_of
-from types import TypeTable, ResolvedType, ast_type_to_resolved, get_stype_at
+from types import TypeTable, TraitRegistry, ResolvedType, ast_type_to_resolved, get_stype_at
 from types import RTFunction, RTVoid, RTPrimitive, RTDefined, RTGeneric
 from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, RTRef, get_rtype_at, get_int_at
 from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
@@ -4404,7 +4404,8 @@ void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTabl
             for __eR1 in r1:
                 record_method_targs_in_expr(__eR1, &scopes, &types, &ctx)
 
-# Statement-level half of the chokepoint. SHALLOW (see `stmt_has_method_call`).
+# Statement-level half of the chokepoint. SHALLOW (see
+# `stmt_has_method_generic_call`), and arm-for-arm identical to it.
 void record_method_targs_in_stmt(Stmt s, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
     match s:
         case SVarDecl(_, _, t2, _, _, _):
@@ -4506,10 +4507,22 @@ bool fstring_interp_is_tag_check(SpannedExpr fe):
             return false
     return false
 
-# CHOKEPOINT GATE — exhaustive over `enum Expr` in ast.gg. Cheap structural
-# pre-check so the expr_types snapshot/restore is only paid when a method
-# call is actually present. Guarded by the arm-exhaustiveness lint.
-bool expr_has_method_call(SpannedExpr sexpr):
+# CHOKEPOINT GATE — exhaustive over `enum Expr` in ast.gg, and ARM-FOR-ARM
+# IDENTICAL to `record_method_targs_in_expr` below (pinned by
+# `self_host_targ_recorder_pregate_mirrors_recorder` in tests/lints.rs).
+#
+# Answers "would the recorder call `infer_expr_type` even once?", so the
+# `expr_types` snapshot/restore AND the whole recording walk are paid only by
+# the statements that can actually record a targ — not by every statement that
+# merely contains a `.len()`. It is EXACT, not conservative: `false` here means
+# the recorder's every `EMethodCall` would take its skip branch, and the skip
+# branch has no side effects at all (see the arm below).
+#
+# ⚠ THE MIRROR IS THE CORRECTNESS PROPERTY. This walk must reach every
+# `EMethodCall` the recorder reaches; a sub-expression dropped HERE silently
+# stops a targ being recorded THERE, which lowers to a call to a mangled symbol
+# that is never defined. Add an arm to both walkers or to neither.
+bool expr_has_method_generic_call(SpannedExpr sexpr, TraitRegistry registry):
     match sexpr.expr:
         case EIntLiteral(_):
             return false
@@ -4530,186 +4543,200 @@ bool expr_has_method_call(SpannedExpr sexpr):
         case EIt():
             return false
         case EBinaryOp(h0, _, h2):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
-            if expr_has_method_call(*h2):
+            if expr_has_method_generic_call(*h2, registry):
                 return true
             return false
         case EUnaryOp(_, h1):
-            if expr_has_method_call(*h1):
+            if expr_has_method_generic_call(*h1, registry):
                 return true
             return false
         case ECall(h0, h1, _):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             for __aH1 in h1:
-                if expr_has_method_call(__aH1.value):
+                if expr_has_method_generic_call(__aH1.value, registry):
                     return true
             return false
-        case EMethodCall(_, _, _, _):
-            return true
+        case EMethodCall(h0, h1, h2, _):
+            # The REGISTRY predicate, hoisted from the recorder's own
+            # `EMethodCall` arm (`record_method_targs_in_expr`). A name the
+            # registry does not know as method-generic cannot reach
+            # `expr_method_targs.put`, so the recorder would take its SKIP
+            # branch here — and the skip branch is exactly the two recursions
+            # below. Mirroring them keeps this predicate EQUAL to "the recorder
+            # would call `infer_expr_type` at least once", never weaker.
+            if registry_has_method_generic_name(registry, h1):
+                return true
+            if expr_has_method_generic_call(*h0, registry):
+                return true
+            for __aH2 in h2:
+                if expr_has_method_generic_call(__aH2.value, registry):
+                    return true
+            return false
         case EFieldAccess(h0, _):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case EIndex(h0, h1):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
-            if expr_has_method_call(*h1):
+            if expr_has_method_generic_call(*h1, registry):
                 return true
             return false
         case ERange(h0, h1, _):
             if h0 is Some(__bH0):
-                if expr_has_method_call(*__bH0):
+                if expr_has_method_generic_call(*__bH0, registry):
                     return true
             if h1 is Some(__bH1):
-                if expr_has_method_call(*__bH1):
+                if expr_has_method_generic_call(*__bH1, registry):
                     return true
             return false
         case EIf(h0, _, h2):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             for __ebH2 in h2:
                 if __ebH2.condition is Some(__cH2):
-                    if expr_has_method_call(__cH2):
+                    if expr_has_method_generic_call(__cH2, registry):
                         return true
             return false
         case EMatch(h0, h1):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             for __armH1 in h1:
                 if __armH1.guard is Some(__gH1):
-                    if expr_has_method_call(__gH1):
+                    if expr_has_method_generic_call(__gH1, registry):
                         return true
             return false
         case EClosure(_, _):
             return false
         case EImplicitClosure(h0):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case EArrayLiteral(h0):
             for __eH0 in h0:
-                if expr_has_method_call(__eH0):
+                if expr_has_method_generic_call(__eH0, registry):
                     return true
             return false
         case ETupleLiteral(h0):
             for __eH0 in h0:
-                if expr_has_method_call(__eH0):
+                if expr_has_method_generic_call(__eH0, registry):
                     return true
             return false
         case EDictLiteral(h0, h1):
             for __eH0 in h0:
-                if expr_has_method_call(__eH0):
+                if expr_has_method_generic_call(__eH0, registry):
                     return true
             for __eH1 in h1:
-                if expr_has_method_call(__eH1):
+                if expr_has_method_generic_call(__eH1, registry):
                     return true
             return false
         case EStructLiteral(_, _, h2):
             for __eH2 in h2:
-                if expr_has_method_call(__eH2):
+                if expr_has_method_generic_call(__eH2, registry):
                     return true
             return false
         case EDotShorthand(_, h1):
             for __aH1 in h1:
-                if expr_has_method_call(__aH1.value):
+                if expr_has_method_generic_call(__aH1.value, registry):
                     return true
             return false
         case ETry(h0):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case EMove(h0):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case EPropagate(h0):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case EMutableBorrow(h0):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case EDeref(h0):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case EAs(h0, _):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case EBlock(_):
             return false
         case EListComp(h0, _, h2, h3):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
-            if expr_has_method_call(*h2):
+            if expr_has_method_generic_call(*h2, registry):
                 return true
             if h3 is Some(__bH3):
-                if expr_has_method_call(*__bH3):
+                if expr_has_method_generic_call(*__bH3, registry):
                     return true
             return false
         case ESetComp(h0, _, h2, h3):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
-            if expr_has_method_call(*h2):
+            if expr_has_method_generic_call(*h2, registry):
                 return true
             if h3 is Some(__bH3):
-                if expr_has_method_call(*__bH3):
+                if expr_has_method_generic_call(*__bH3, registry):
                     return true
             return false
         case EDictComp(h0, h1, _, h3, h4):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
-            if expr_has_method_call(*h1):
+            if expr_has_method_generic_call(*h1, registry):
                 return true
-            if expr_has_method_call(*h3):
+            if expr_has_method_generic_call(*h3, registry):
                 return true
             if h4 is Some(__bH4):
-                if expr_has_method_call(*__bH4):
+                if expr_has_method_generic_call(*__bH4, registry):
                     return true
             return false
         case EDefaultOp(h0, h1):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
-            if expr_has_method_call(*h1):
+            if expr_has_method_generic_call(*h1, registry):
                 return true
             return false
         case EIs(h0, _, _):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case EDo(_):
             return false
         case EAwait(h0):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case ESpawn(h0):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case ESpawnBlocking(h0):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
             return false
         case ERethrow(h0, _, _, h3):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
-            if expr_has_method_call(*h3):
+            if expr_has_method_generic_call(*h3, registry):
                 return true
             return false
         case ECatch(h0, _, h2):
-            if expr_has_method_call(*h0):
+            if expr_has_method_generic_call(*h0, registry):
                 return true
-            if expr_has_method_call(*h2):
+            if expr_has_method_generic_call(*h2, registry):
                 return true
             return false
         case EFString(_, h1, _):
             for __eH1 in h1:
-                if expr_has_method_call(__eH1):
+                if expr_has_method_generic_call(__eH1, registry):
                     return true
             return false
     return false
@@ -4717,36 +4744,37 @@ bool expr_has_method_call(SpannedExpr sexpr):
 # CHOKEPOINT GATE (statement level) — SHALLOW over `enum Stmt`: this
 # statement's OWN expressions only. Nested `Vector[Stmt]` bodies are reached
 # because `type_check_stmts` invokes `type_check_stmt` — and therefore this
-# chokepoint — for every nested statement in turn.
-bool stmt_has_method_call(Stmt s):
+# chokepoint — for every nested statement in turn. Arm-for-arm identical to
+# `record_method_targs_in_stmt` (same lint).
+bool stmt_has_method_generic_call(Stmt s, TraitRegistry registry):
     match s:
         case SVarDecl(_, _, q2, _, _, _):
-            if expr_has_method_call(q2):
+            if expr_has_method_generic_call(q2, registry):
                 return true
             return false
         case SAssign(q0, q1):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
-            if expr_has_method_call(q1):
+            if expr_has_method_generic_call(q1, registry):
                 return true
             return false
         case SCompoundAssign(q0, _, q2):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
-            if expr_has_method_call(q2):
+            if expr_has_method_generic_call(q2, registry):
                 return true
             return false
         case SExpr(q0):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
             return false
         case SReturn(q0):
             if q0 is Some(__xQ0):
-                if expr_has_method_call(__xQ0):
+                if expr_has_method_generic_call(__xQ0, registry):
                     return true
             return false
         case SThrow(q0):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
             return false
         case SBreak():
@@ -4758,76 +4786,76 @@ bool stmt_has_method_call(Stmt s):
         case SMeta():
             return false
         case SMetaFor(_, q1, _):
-            if expr_has_method_call(q1):
+            if expr_has_method_generic_call(q1, registry):
                 return true
             return false
         case SMetaIf(q0, _, q2):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
             for __ebQ2 in q2:
                 if __ebQ2.condition is Some(__cQ2):
-                    if expr_has_method_call(__cQ2):
+                    if expr_has_method_generic_call(__cQ2, registry):
                         return true
             return false
         case SMetaConst(_, q1):
-            if expr_has_method_call(q1):
+            if expr_has_method_generic_call(q1, registry):
                 return true
             return false
         case SMetaForMatch(_, q1, q2):
-            if expr_has_method_call(q1):
+            if expr_has_method_generic_call(q1, registry):
                 return true
             for __armQ2 in q2:
                 if __armQ2.guard is Some(__gQ2):
-                    if expr_has_method_call(__gQ2):
+                    if expr_has_method_generic_call(__gQ2, registry):
                         return true
             return false
         case SMetaMatch(q0, q1, _):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
             for __maQ1 in q1:
-                if expr_has_method_call(__maQ1.case_value):
+                if expr_has_method_generic_call(__maQ1.case_value, registry):
                     return true
             return false
         case SMetaWhile(q0, _):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
             return false
         case SFor(_, q1, _, _, _):
-            if expr_has_method_call(q1):
+            if expr_has_method_generic_call(q1, registry):
                 return true
             return false
         case SWhile(q0, _, _):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
             return false
         case SLoop(_):
             return false
         case SIf(q0, _, q2):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
             for __ebQ2 in q2:
                 if __ebQ2.condition is Some(__cQ2):
-                    if expr_has_method_call(__cQ2):
+                    if expr_has_method_generic_call(__cQ2, registry):
                         return true
             return false
         case SMatch(q0, q1):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
             for __armQ1 in q1:
                 if __armQ1.guard is Some(__gQ1):
-                    if expr_has_method_call(__gQ1):
+                    if expr_has_method_generic_call(__gQ1, registry):
                         return true
             return false
         case SWith(q0, _, _):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
             return false
         case SAssert(q0, _):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
             return false
         case SAssertReturn(q0, _):
-            if expr_has_method_call(q0):
+            if expr_has_method_generic_call(q0, registry):
                 return true
             return false
         case SNamedScope(_, _):
@@ -4836,12 +4864,12 @@ bool stmt_has_method_call(Stmt s):
             for __saQ0 in q0:
                 match __saQ0.op:
                     case SORecv(_, _, __seQ0):
-                        if expr_has_method_call(__seQ0):
+                        if expr_has_method_generic_call(__seQ0, registry):
                             return true
                     case SOSend(__scQ0, __svQ0):
-                        if expr_has_method_call(__scQ0):
+                        if expr_has_method_generic_call(__scQ0, registry):
                             return true
-                        if expr_has_method_call(__svQ0):
+                        if expr_has_method_generic_call(__svQ0, registry):
                             return true
             return false
         case SOnError(_):
@@ -4849,7 +4877,7 @@ bool stmt_has_method_call(Stmt s):
         case SItem(_):
             return false
         case SSnapshot(_, _, q2):
-            if expr_has_method_call(q2):
+            if expr_has_method_generic_call(q2, registry):
                 return true
             return false
     return false
@@ -4859,10 +4887,13 @@ bool stmt_has_method_call(Stmt s):
 # binding type. Snapshots `expr_types`, runs the recording walk (which writes
 # `expr_method_targs` — KEPT — and `expr_types` — DISCARDED), then restores the
 # snapshot so `walk_expr_closures` re-derives `expr_types` exactly as it would
-# have. Gated on a method call being present (`stmt_has_method_call`) so the
-# `Dict.clone()` snapshot is paid only by statements that can need it.
+# have. Gated on a REGISTRY-METHOD-GENERIC call being present
+# (`stmt_has_method_generic_call`) so neither the `Dict.clone()` snapshot nor
+# the recording walk is paid by a statement that provably cannot record a targ
+# — which is nearly every statement in a compiler source, where the calls are
+# `.len()` / `.get()` / `.push()` / `.unwrap()`.
 void record_method_targs_for_stmt(Stmt s, ScopeTable &scopes, TypeTable &types, ResolveContext &ctx):
-    if not stmt_has_method_call(s):
+    if not stmt_has_method_generic_call(s, types.trait_registry):
         return
     Dict[int, int] saved_expr_types = types.expr_types.clone()
     record_method_targs_in_stmt(s, &scopes, &types, &ctx)

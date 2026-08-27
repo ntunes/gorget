@@ -5615,6 +5615,219 @@ fn self_host_safety_walker_is_exhaustive() {
     );
 }
 
+
+/// **The method-targ recorder's PRE-GATE must MIRROR the recorder, arm for
+/// arm** (AGENTS.md Core #4 "one fix, all siblings", Core #6 "convert a
+/// recurring bug class into an executable guard").
+///
+/// `record_method_targs_for_stmt` (typecheck.gg) asks
+/// `stmt_has_method_generic_call` whether a statement can record a method-targ
+/// at all, and **skips the `expr_types` snapshot AND the entire recording walk
+/// when the answer is `false`.** That skip is only sound because the gate pair
+/// (`stmt_has_method_generic_call` / `expr_has_method_generic_call`) visits
+/// **exactly** the positions the recorder pair (`record_method_targs_in_stmt` /
+/// `record_method_targs_in_expr`) visits, and applies the **same**
+/// `registry_has_method_generic_name` discriminator at `EMethodCall`.
+///
+/// **What breaks if the mirror breaks:** a sub-expression reachable by the
+/// recorder but *not* by the gate makes the gate answer `false` for a statement
+/// that did have a method-generic call. The targ is then never recorded, the
+/// call lowers to the UN-mangled symbol, and the mono'd body is CALLED but
+/// never DEFINED — the exact class the recorder exists to close, and the class
+/// `tests/fixtures/known_gaps/sh_user_equip_method_generic_body_not_emitted.gg`
+/// was cut from. Nothing else observes it: the suite stays green and the C
+/// fails to link only for the shapes that hit the dropped position.
+///
+/// So this lint pins THREE properties, mechanically:
+///   1. **Exhaustive** — every `enum Expr` / `enum Stmt` variant in `ast.gg` has
+///      an arm in all FOUR walkers. (The old prose claim "Guarded by the
+///      arm-exhaustiveness lint" pointed at a guard that did not exist — Core
+///      #14. It does now.)
+///   2. **Same arm SET** — gate and recorder match on the same variants.
+///   3. **Same recursion COUNT per arm** — an arm that recurses into two
+///      children in the recorder recurses into two in the gate. This is what
+///      catches a *dropped child* inside an arm that still exists, which
+///      property 1 is blind to.
+///
+/// It does NOT prove the two recurse into the *same* children (same count,
+/// different field). That residual is named, not hidden; the behavioural gate
+/// is the `known_gaps` repro above plus `self_host_comprehension_net`.
+///
+/// **If this fails:** make the edit in BOTH walkers of the pair, or in neither.
+#[test]
+fn self_host_targ_recorder_pregate_mirrors_recorder() {
+    let ast = fs::read_to_string("tests/fixtures/self_host_typechecker/ast.gg")
+        .expect("self_host_targ_recorder_pregate_mirrors_recorder: ast.gg not found");
+    let tc = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("self_host_targ_recorder_pregate_mirrors_recorder: typecheck.gg not found");
+
+    // Variant names of a `.gg` enum: indented `Name(...)` / `Name` lines until
+    // the first column-0 declaration.
+    fn variants(src: &str, enum_header: &str, prefix: char) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut in_enum = false;
+        for line in src.lines() {
+            if line.trim_start() == enum_header {
+                in_enum = true;
+                continue;
+            }
+            if !in_enum {
+                continue;
+            }
+            if line.is_empty() || line.trim_start().starts_with('#') {
+                continue;
+            }
+            if !line.starts_with(' ') && !line.starts_with('\t') {
+                break;
+            }
+            let name: String = line
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if name.starts_with(prefix) {
+                out.push(name);
+            }
+        }
+        out
+    }
+
+    // Lines of a top-level `.gg` fn body: signature line exclusive, up to the
+    // next column-0 declaration or comment block.
+    fn body_of<'a>(src: &'a str, sig: &str) -> Vec<&'a str> {
+        let mut lines = src.lines();
+        let mut out = Vec::new();
+        let mut seen = false;
+        for line in lines.by_ref() {
+            if !seen {
+                if line.starts_with(sig) {
+                    seen = true;
+                }
+                continue;
+            }
+            if !line.is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
+                break;
+            }
+            out.push(line);
+        }
+        assert!(seen, "walker `{sig}` not found in self_host_typechecker/typecheck.gg");
+        out
+    }
+
+    // (variant, number of recursive walk calls in that arm), in source order.
+    // Both arm spellings count: `case V(payload):` and the nullary `case V:`.
+    fn arms(body: &[&str], callee: &str) -> Vec<(String, usize)> {
+        let mut out: Vec<(String, usize)> = Vec::new();
+        for line in body {
+            let t = line.trim_start();
+            if let Some(rest) = t.strip_prefix("case ") {
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !name.is_empty()
+                    && matches!(rest[name.len()..].chars().next(), Some('(') | Some(':'))
+                {
+                    out.push((name, 0));
+                    continue;
+                }
+            }
+            if let Some(last) = out.last_mut() {
+                last.1 += t.matches(callee).count();
+            }
+        }
+        out
+    }
+
+    let expr_variants = variants(&ast, "enum Expr:", 'E');
+    let stmt_variants = variants(&ast, "enum Stmt:", 'S');
+    assert!(
+        expr_variants.len() >= 40 && stmt_variants.len() >= 25,
+        "targ-recorder mirror lint failed to parse ast.gg variants (got {} Expr, {} Stmt) — \
+         the ast.gg enum shape changed; fix the parser.",
+        expr_variants.len(),
+        stmt_variants.len(),
+    );
+
+    let pairs: [(&str, &str, &str, &str, &[String]); 2] = [
+        (
+            "bool expr_has_method_generic_call(",
+            "expr_has_method_generic_call(",
+            "void record_method_targs_in_expr(",
+            "record_method_targs_in_expr(",
+            &expr_variants,
+        ),
+        (
+            "bool stmt_has_method_generic_call(",
+            "expr_has_method_generic_call(",
+            "void record_method_targs_in_stmt(",
+            "record_method_targs_in_expr(",
+            &stmt_variants,
+        ),
+    ];
+
+    for (gate_sig, gate_callee, rec_sig, rec_callee, required) in pairs {
+        let gate = arms(&body_of(&tc, gate_sig), gate_callee);
+        let rec = arms(&body_of(&tc, rec_sig), rec_callee);
+
+        // 2. same arm SET, same order.
+        let gate_names: Vec<&str> = gate.iter().map(|(n, _)| n.as_str()).collect();
+        let rec_names: Vec<&str> = rec.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(
+            gate_names, rec_names,
+            "`{gate_sig}` and `{rec_sig}` no longer match on the same variants.\n\
+             The pre-gate is what lets `record_method_targs_for_stmt` SKIP the recorder \
+             entirely, so a variant the recorder walks and the gate does not is a targ \
+             SILENTLY not recorded — the call lowers to the un-mangled symbol and the \
+             mono'd body is CALLED but never DEFINED (repro: \
+             tests/fixtures/known_gaps/sh_user_equip_method_generic_body_not_emitted.gg).\n\
+             Add the arm to BOTH walkers, or to neither.",
+        );
+
+        // 3. same number of recursive walks per arm.
+        for ((gname, gn), (_, rn)) in gate.iter().zip(rec.iter()) {
+            assert_eq!(
+                gn, rn,
+                "arm `case {gname}` recurses {gn} time(s) in `{gate_sig}` but {rn} time(s) in \
+                 `{rec_sig}`.\n\
+                 A child the recorder visits and the gate does not makes the gate answer \
+                 `false` for a statement that CAN record a targ — see this lint's doc \
+                 comment. Mirror the recursion in both, or in neither.",
+            );
+        }
+
+        // 1. exhaustive over the ast.gg enum, in both.
+        for (sig, walker) in [(gate_sig, &gate), (rec_sig, &rec)] {
+            let have: std::collections::HashSet<&str> =
+                walker.iter().map(|(n, _)| n.as_str()).collect();
+            let missing: Vec<&String> = required.iter().filter(|v| !have.contains(v.as_str())).collect();
+            assert!(
+                missing.is_empty(),
+                "`{sig}` in self_host_typechecker/typecheck.gg is NOT exhaustive — no arm for \
+                 {missing:?}.\n\
+                 A variant with no arm is a position the walk never reaches. In the RECORDER \
+                 that silently drops a method-targ; in the GATE it wrongly answers `false` and \
+                 skips the recorder. Add `case <Variant>(...):` (or `case <Variant>:` when \
+                 nullary) to BOTH walkers of this pair.",
+            );
+        }
+    }
+
+    // The shared discriminator: ONE registry predicate, asked once in each half
+    // of the pair. Two different discriminators would be a parallel list kept in
+    // sync by hand (devbook/24 rule 3, one source of truth per axis).
+    let n_pred = tc.matches("registry_has_method_generic_name(").count();
+    assert_eq!(
+        n_pred, 2,
+        "expected EXACTLY 2 `registry_has_method_generic_name(` call sites in \
+         self_host_typechecker/typecheck.gg (the gate's `EMethodCall` arm and the recorder's), \
+         found {n_pred}.\n\
+         Both halves must ask the SAME registry-derived question: the gate skips the recorder \
+         on `false`, so a gate that asks a NARROWER question than the recorder drops targs, and \
+         one that asks a WIDER question silently un-does the reclaim.",
+    );
+}
+
 /// One-source-of-truth ratchet (CLAUDE.md Core invariant #6 / devbook/24 rule 3)
 /// for the GorgetMap / GorgetSet runtime struct size in the self-host lowerer.
 ///

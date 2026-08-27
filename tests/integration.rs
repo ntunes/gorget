@@ -30016,7 +30016,20 @@ fn self_host_bootstrap() {
 // byte-identical over the 54K-line self-host corpus with the program held
 // fixed. Ceiling = measured + ~0.5%; the usual +1% would have RAISED this pin,
 // which the reclaim rule forbids.
-const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_060_000;
+//
+// Re-seeded DOWN AGAIN 2026-08-27 (same round, second reclaim): the recorder's
+// pre-gate `stmt_has_method_call` answered "does this statement contain ANY
+// method call", so every `.len()` / `.push()` statement still paid the
+// `expr_types` snapshot AND the full recording walk. Narrowing it to
+// `stmt_has_method_generic_call` — the SAME registry-derived predicate the
+// recorder's own `EMethodCall` arm already applies, hoisted one level up —
+// makes the skip exact. Emitted C byte-identical again (39,481,985 bytes,
+// `cmp`, program held byte-fixed); on that fixed program array_clone
+// 12,998,363 -> 12,989,075 (-9,288). Self-compile ratchet measured 12,991,164
+// (the fixed-program reclaim less the cost of the gate's own ~200 added source
+// tokens, which the self-compile also has to compile). Ceiling lowered by the
+// measured reclaim, keeping the same ~0.47% headroom.
+const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_052_000;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to

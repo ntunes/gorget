@@ -1,0 +1,98 @@
+# KNOWN GAP (self-host lane only, same gap as the sibling below) + the
+# method-targ PRE-GATE's nested-position instrument.
+#
+# ── THE GAP ──────────────────────────────────────────────────────────────────
+#
+# Identical to `sh_user_equip_method_generic_body_not_emitted.gg`: Rust gg runs
+# this and prints `both=2`; the self-host lane emits C that CALLS the correctly
+# mangled `Holder__taken__GorgetClosure` / `Holder__tally__GorgetClosure` and
+# never DEFINES either, so the SH lane fails to link. The PRODUCER half (the
+# typechecker recording method targs, mangling them into the call site) is
+# healthy; the CONSUMER half (emitting the mono'd body for a user-declared
+# inherent-`equip` method-generic method) is missing. Graduate both files
+# together when the self-host lowerer emits those bodies.
+#
+# ── WHY THIS FILE EXISTS ALONGSIDE ITS SIBLING ───────────────────────────────
+#
+# `record_method_targs_for_stmt` skips the `expr_types` snapshot AND the whole
+# recording walk when `stmt_has_method_generic_call` answers `false`. That
+# pre-gate has to reach every `EMethodCall` the recorder reaches — including the
+# ones it can only get to by RECURSING THROUGH an `EMethodCall` whose own name
+# is not method-generic. Two such positions exist, and the sibling fixture
+# covers NEITHER of them: its call is the outermost `EMethodCall` in its
+# statement, so the gate answers `true` on the very first node it looks at.
+#
+#   `taken` : method-generic call in a method-call RECEIVER
+#             `h.taken(gt_two).len()`      — outer `len` is not method-generic
+#   `tally` : method-generic call in a method-call ARGUMENT
+#             `sink.push(h.tally(gt_two))` — outer `push` is not method-generic
+#
+# Two DIFFERENT method names so the two positions are independently observable
+# in one emit. Both calls sit in statement positions nothing else types (a bare
+# expression statement and an if-condition), so the recorder chokepoint is the
+# only thing that can record them.
+#
+# ── RED-VERIFY (measured, `--emit-c` + `grep -oE 'Holder__(taken|tally)\w*'`) ──
+#
+#   pre-gate                          Holder__taken            Holder__tally
+#   --------------------------------  -----------------------  -----------------------
+#   shipped                           __GorgetClosure          __GorgetClosure
+#   RECEIVER recursion deleted        (bare — TARGS LOST)      __GorgetClosure
+#   ARGUMENT recursion deleted        __GorgetClosure          (bare — TARGS LOST)
+#   sibling fixture, either ablation  n/a                      __GorgetClosure  ← blind
+#
+# Rows 2 and 3 are the red: each break un-mangles exactly its own position and
+# leaves the other intact, so this file genuinely exercises both recursions
+# rather than passing for an unrelated reason. Row 4 is why it is a separate
+# file — the sibling stays green through BOTH breaks.
+#
+# The mechanical guard for the same property is
+# `tests/lints.rs::self_host_targ_recorder_pregate_mirrors_recorder`, which pins
+# the gate and the recorder to the same arms and the same per-arm recursion
+# count. This file is the program-level cell behind it.
+#
+# Operands are pushed at runtime, never literals, so const-folding cannot elide
+# either call.
+#
+# EXPECTED OUTPUT (what the language SHOULD do, on every lane): both=2
+
+from std.collections import Vector
+
+struct Holder:
+    Vector[int] items
+
+equip Holder:
+    Vector[int] taken[F](self, F f):
+        Vector[int] out = Vector[int]()
+        for x in self.items:
+            if f(x):
+                out.push(x)
+        return out
+
+    int tally[G](self, G g):
+        int acc = 0
+        for y in self.items:
+            if g(y):
+                acc = acc + 1
+        return acc
+
+bool gt_two(int x):
+    return x > 2
+
+int main():
+    Vector[int] v = Vector[int]()
+    v.push(1)
+    v.push(3)
+    v.push(5)
+    Holder h = Holder(v)
+    Vector[int] sink = Vector[int]()
+    # ARGUMENT position: the outer `push` is not method-generic, so the pre-gate
+    # reaches `tally` only through its `EMethodCall` ARGUMENT recursion.
+    sink.push(h.tally(gt_two))
+    # RECEIVER position: the outer `len` is not method-generic, so the pre-gate
+    # reaches `taken` only through its `EMethodCall` RECEIVER recursion.
+    if h.taken(gt_two).len() == 2:
+        print("both=2")
+    else:
+        print("both=other")
+    return 0
