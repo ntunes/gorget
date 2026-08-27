@@ -54513,6 +54513,45 @@ fn cow_rescue_mutation_through_getchain_receiver() {
     run_gg("cow_rescue_mutation_through_getchain_receiver.gg", "hello");
 }
 
+/// REGRESSION (R45, 2026-08-27) — the LIVENESS walker's silent catch-all.
+///
+/// `walk_stmt` (src/ir/lowering/liveness.rs) handled 10 of 29 `Stmt` forms and
+/// swept 19 into `_ => {}`. A use it cannot see makes the variable look DEAD at
+/// an earlier consuming position, so the value is MOVED instead of cloned.
+///
+/// Measured at pristine HEAD: `loop:` and `throw` printed GARBAGE at rc 0 on
+/// BOTH backends while ggdef printed the right answer; `unsafe:`, a named
+/// scope, `with` and `assert return` ICE'd with `read after MoveZero` on valid
+/// programs. `while true:` and `loop:` are one keyword apart and differed in
+/// correctness.
+///
+/// All four RED-verified against the pre-fix compiler.
+#[test]
+fn liveness_use_inside_loop() {
+    run_gg("liveness_use_inside_loop.gg", "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+}
+
+#[test]
+fn liveness_use_inside_unsafe_scope() {
+    run_gg(
+        "liveness_use_inside_unsafe_scope.gg",
+        "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n0123456789012345678901234567890123456789abcdefghij",
+    );
+}
+
+#[test]
+fn liveness_use_inside_with_block() {
+    run_gg(
+        "liveness_use_inside_with_block.gg",
+        "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\nend",
+    );
+}
+
+#[test]
+fn liveness_use_inside_assert_return() {
+    run_gg("liveness_use_inside_assert_return.gg", "ok");
+}
+
 /// REGRESSION (R45, 2026-08-27) — the CoW prescan's silent catch-all.
 ///
 /// `cow_after_expr_moves` handled 6 of the 47 `Expr` variants and swept the

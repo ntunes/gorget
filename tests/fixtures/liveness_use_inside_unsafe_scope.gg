@@ -1,0 +1,27 @@
+# REGRESSION — the liveness walker must see uses inside `unsafe:` and a NAMED SCOPE.
+#
+# `walk_stmt` (src/ir/lowering/liveness.rs) handled 10 of 29 `Stmt` forms and
+# swept 19 into `_ => {}`. A use the liveness walker cannot see makes the
+# variable look DEAD at an earlier consuming position, so the value is MOVED
+# instead of cloned and the later read returns garbage — or trips the GIR
+# validator. Under-approximation is the dangerous direction here.
+#
+# Measured at pristine HEAD, 2026-08-27:
+#   both -> ICE rc 101, `local _N read after MoveZero`, on a valid program.
+#
+# The payload is heap-forced via `mk` and long enough that a moved-from read
+# is visibly garbage rather than accidentally intact.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("abcdefghijklmnopqrstuvwxyz0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    Vector[String] v = []
+    v.push(s)
+    unsafe:
+        print(s)
+    String t = mk("0123456789012345678901234567890123456789", "abcdefghij")
+    Vector[String] w = []
+    w.push(t)
+    zone:
+        print(t)

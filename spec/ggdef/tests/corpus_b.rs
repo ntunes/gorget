@@ -35,6 +35,22 @@ use std::path::{Path, PathBuf};
 /// these are excluded BY NAME (the generic-equip ones are the only equip
 /// fixtures ggdef cannot elaborate — generic monomorph is phase 1).
 const EXCLUDE: &[&str] = &[
+    // R45 memory-safety regression net. These fixtures pin the CoW rescue
+    // against realloc-induced use-after-free — the class ggdef is
+    // STRUCTURALLY BLIND to (it adjudicates value semantics, not memory
+    // validity; AGENTS.md Core #13). Their adjudicating lanes are C, LLVM and
+    // ASan, all green. Two carry a DICT LITERAL with a call in key position
+    // (`{grow(&v): 1}`), which hits the catch-all "expression `unsupported` is
+    // outside the phase-0 subset"; excluded on that construct, not on the
+    // shape under test.
+    "cow_rescue_mutation_in_container_literal.gg",
+    "cow_rescue_mutation_in_control_flow_expr.gg",
+    "cow_rescue_mutation_in_operand_position.gg",
+    "cow_rescue_mutation_through_getchain_receiver.gg",
+    "liveness_use_inside_loop.gg",
+    "liveness_use_inside_unsafe_scope.gg",
+    "liveness_use_inside_with_block.gg",
+    "liveness_use_inside_assert_return.gg",
     "deadwrite_ok_atomic_add.gg",
     "cow_element_borrow_alias_mutate.gg",
     "cow_p3_alias_chain_mutate.gg",

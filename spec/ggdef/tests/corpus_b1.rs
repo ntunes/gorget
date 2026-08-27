@@ -55,6 +55,19 @@ use std::path::{Path, PathBuf};
 /// `cow_for_bare_resource_elem_materialize`) ARE in the subset — ggdef
 /// adjudicates them against their `run_gg` expectation (`1`).
 const EXCLUDE: &[&str] = &[
+    // R45 memory-safety regression net — see the identical block in
+    // corpus_b.rs. Both gates share the phase-0 subset, so an exclusion in one
+    // without the other is a red in the sibling (Core #4: fix the class).
+    // ggdef is structurally blind to memory-invalidation (Core #13); these
+    // fixtures are adjudicated by C, LLVM and ASan.
+    "cow_rescue_mutation_in_container_literal.gg",
+    "cow_rescue_mutation_in_control_flow_expr.gg",
+    "cow_rescue_mutation_in_operand_position.gg",
+    "cow_rescue_mutation_through_getchain_receiver.gg",
+    "liveness_use_inside_loop.gg",
+    "liveness_use_inside_unsafe_scope.gg",
+    "liveness_use_inside_with_block.gg",
+    "liveness_use_inside_assert_return.gg",
     "deadwrite_ok_atomic_add.gg",
     "cow_value_index_field_writethrough.gg",
     "cow_dict_index_field_writethrough.gg",

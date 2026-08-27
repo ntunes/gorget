@@ -1,0 +1,28 @@
+# REGRESSION — the liveness walker must see uses inside a `with` block.
+#
+# `walk_stmt` (src/ir/lowering/liveness.rs) handled 10 of 29 `Stmt` forms and
+# swept 19 into `_ => {}`. A use the walker cannot see makes the variable look
+# DEAD at an earlier consuming position, so the value is MOVED instead of
+# cloned; the later read then returns garbage or trips the GIR validator.
+# Under-approximation is the dangerous direction here.
+#
+# Measured at pristine HEAD, 2026-08-27: ICE rc 101, `local _N read after MoveZero`, on a valid program.
+#
+# ⚠ THE `v.set(0, ...)` IS LOAD-BEARING: it overwrites (and frees) the value
+# moved into the vector. Without it the moved-from read still finds live memory
+# and prints correctly — accidentally correct, and a fixture that proves
+# nothing. A first draft of this fixture omitted it and was green before AND
+# after the fix.
+from std.alloc import Arena
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("abcdefghijklmnopqrstuvwxyz0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    Vector[String] v = []
+    v.push(s)
+    v.set(0, mk("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyyyyyyyy"))
+    with Arena(4096) as pool:
+        print(s)
+    print("end")

@@ -148,7 +148,130 @@ fn walk_stmt<'a>(
             if let Some(m) = message { uses_expr(&m.node, m.span.start, live, lu); }
             uses_expr(&condition.node, condition.span.start, live, lu);
         }
-        _ => {}
+
+        // ── Forms below were `_ => {}` until 2026-08-27 ──────────────────────
+        // Under-approximating `live` is the DANGEROUS direction: a use this
+        // walker cannot see makes the variable look dead at an earlier
+        // consuming position, so the value is MOVED instead of cloned and the
+        // later read returns garbage. Measured at pristine HEAD: `loop:` and
+        // `throw` printed garbage at rc 0 on BOTH backends while ggdef printed
+        // the right answer, and `unsafe:` / a named scope / `with` /
+        // `assert return` ICE'd with `read after MoveZero`. `while true:` and
+        // `loop:` differ by one keyword and differed in correctness.
+        // Over-approximating is merely conservative (an extra clone), so every
+        // arm here walks everything it carries.
+
+        // An infinite loop is `While` without the condition: the body's uses
+        // must survive the back-edge, so the same two-pass treatment applies —
+        // pass 1 collects live-at-exit with last-use decisions DISCARDED
+        // (they cannot account for the back-edge), pass 2 records them.
+        Stmt::Loop { body } => {
+            let mut live_body = live.clone();
+            let mut lu_discard: FxHashMap<usize, String> = FxHashMap::default();
+            walk_block(&body.stmts, &mut live_body, &mut lu_discard);
+            live.extend(live_body);
+            walk_block(&body.stmts, live, lu);
+        }
+        // Straight-line scopes: the block runs in sequence with its neighbours.
+        Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } | Stmt::OnError { body } => {
+            walk_block(&body.stmts, live, lu);
+        }
+        // Reverse walk: the body runs AFTER the binding exprs are evaluated.
+        Stmt::With { bindings, body } => {
+            walk_block(&body.stmts, live, lu);
+            for b in bindings.iter().rev() {
+                uses_expr(&b.expr.node, b.expr.span.start, live, lu);
+            }
+        }
+        Stmt::Throw(e) | Stmt::Snapshot { value: e, .. } => {
+            uses_expr(&e.node, e.span.start, live, lu);
+        }
+        Stmt::AssertReturn { condition, message } => {
+            if let Some(m) = message { uses_expr(&m.node, m.span.start, live, lu); }
+            uses_expr(&condition.node, condition.span.start, live, lu);
+        }
+        // Arms are alternatives: union their live sets, as `Match` does.
+        Stmt::Select { arms, else_arm } => {
+            let saved = live.clone();
+            let mut union: FxHashSet<&'a str> = FxHashSet::default();
+            for arm in arms {
+                let mut a = saved.clone();
+                walk_block(&arm.body.stmts, &mut a, lu);
+                union.extend(a);
+            }
+            if let Some(b) = else_arm {
+                let mut a = saved;
+                walk_block(&b.stmts, &mut a, lu);
+                union.extend(a);
+            }
+            *live = union;
+            for arm in arms {
+                match &arm.op {
+                    crate::parser::ast::SelectOp::Send { channel, value, .. } => {
+                        uses_expr(&value.node, value.span.start, live, lu);
+                        uses_expr(&channel.node, channel.span.start, live, lu);
+                    }
+                    crate::parser::ast::SelectOp::Recv { channel, .. } => {
+                        uses_expr(&channel.node, channel.span.start, live, lu);
+                    }
+                }
+            }
+        }
+        // Compile-time forms. They are evaluated/eliminated before lowering, so
+        // they cannot themselves consume a runtime local — but they can MENTION
+        // one, and over-approximation is the safe direction, so walk them.
+        Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
+            let saved = live.clone();
+            if let Some(b) = else_body { walk_block(&b.stmts, live, lu); }
+            let mut lt = saved.clone();
+            walk_block(&then_body.stmts, &mut lt, lu);
+            live.extend(lt);
+            for (cond, body) in elif_branches.iter().rev() {
+                let mut le = saved.clone();
+                walk_block(&body.stmts, &mut le, lu);
+                uses_expr(&cond.node, cond.span.start, &mut le, lu);
+                live.extend(le);
+            }
+            uses_expr(&condition.node, condition.span.start, live, lu);
+        }
+        Stmt::MetaFor { range: e, body, .. } | Stmt::MetaWhile { condition: e, body, .. } => {
+            let mut live_body = live.clone();
+            let mut lu_discard: FxHashMap<usize, String> = FxHashMap::default();
+            walk_block(&body.stmts, &mut live_body, &mut lu_discard);
+            live.extend(live_body);
+            walk_block(&body.stmts, live, lu);
+            uses_expr(&e.node, e.span.start, live, lu);
+        }
+        Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
+            let saved = live.clone();
+            let mut union: FxHashSet<&'a str> = FxHashSet::default();
+            for (_case, body) in arms {
+                let mut a = saved.clone();
+                walk_block(&body.stmts, &mut a, lu);
+                union.extend(a);
+            }
+            if let Some(b) = else_arm {
+                let mut a = saved;
+                walk_block(&b.stmts, &mut a, lu);
+                union.extend(a);
+            }
+            *live = union;
+            uses_expr(&scrutinee.node, scrutinee.span.start, live, lu);
+        }
+        Stmt::MetaConst { value, .. } => uses_expr(&value.node, value.span.start, live, lu),
+        Stmt::MetaLog { args, .. } => {
+            for a in args.iter().rev() {
+                uses_expr(&a.node, a.span.start, live, lu);
+            }
+        }
+
+        // ── Genuinely nothing to walk ───────────────────────────────────────
+        // Listed EXPLICITLY rather than swept into `_ => {}` so that a new
+        // `Stmt` variant is a COMPILE ERROR here instead of a silent
+        // under-approximation — the same arm-count guard the `Expr` walker got.
+        // `Item` is a NESTED DEFINITION with its own scope and its own liveness
+        // run; it cannot reference an enclosing function's locals.
+        Stmt::Break | Stmt::Continue | Stmt::Pass | Stmt::Item(_) | Stmt::Return(None) => {}
     }
 }
 
