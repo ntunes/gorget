@@ -30029,7 +30029,32 @@ fn self_host_bootstrap() {
 // (the fixed-program reclaim less the cost of the gate's own ~200 added source
 // tokens, which the self-compile also has to compile). Ceiling lowered by the
 // measured reclaim, keeping the same ~0.47% headroom.
-const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_052_000;
+//
+// ⚠ RE-SEEDED TO THE EXACT MEASURED VALUE 2026-08-27 (owner ruling). This is a
+// HIGH-WATER MARK WITH A DEBT ATTACHED, not a sanctioned cost. No headroom is
+// left deliberately: any further growth trips immediately.
+//
+// WHY, measured rather than argued: R44 pushed all four ratchets over (pre-R44
+// `560ef849` was UNDER all four with 0.30-1.1% headroom). The cost was
+// attributed by bisect-plus-ablation to Track D's `record_method_targs_for_stmt`
+// -- NOT to Track K, which is 2.6% of stage-0 growth -- and it was NOT a
+// justified semantic cost: Rust `gg` folds the same recording into its single
+// inference traversal (`src/semantic/typecheck.rs:2873`), so the self-host was
+// carrying a second walk the reference does not have. 92% of the chokepoint's
+// cost was reclaimed with emitted C byte-identical; the residual splits across
+// Tracks D-non-chokepoint / F / A and is UNATTRIBUTED.
+//
+// A permanently-red ratchet stops being a ratchet -- it cannot catch the NEXT
+// regression when everything already fails. Bumping preserves the guard; this
+// comment preserves the debt.
+//
+// THE RECLAIM IS OWED, and the next levers are named and sized (TODO.md):
+//   1. `VarDeclFromBorrow`/`ReturnFromBorrow` -- 71% of attributed events;
+//      `docs/language-design.md:730` says this needs NO new machinery.
+//   2. `Parser.peek` -- 7,823,340 hits alone, ~33x the whole chokepoint.
+//   3. DEEP-1 return-view lazy materialization -- the actual fix, and the doc
+//      warns it is UAF-prone, so it lands AFTER the open UAF class is closed.
+const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 12_991_164;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to
@@ -30064,7 +30089,32 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_052_000;
 // (A.3), and the SH statement-level meta-for port (Track H). Each contributes
 // small per-call clone overhead — cumulative +0.03% on self-compile is
 // justified semantic cost. Ceiling = measured + ~1% headroom.
-const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_000_000;
+//
+// ⚠ RE-SEEDED TO THE EXACT MEASURED VALUE 2026-08-27 (owner ruling). This is a
+// HIGH-WATER MARK WITH A DEBT ATTACHED, not a sanctioned cost. No headroom is
+// left deliberately: any further growth trips immediately.
+//
+// WHY, measured rather than argued: R44 pushed all four ratchets over (pre-R44
+// `560ef849` was UNDER all four with 0.30-1.1% headroom). The cost was
+// attributed by bisect-plus-ablation to Track D's `record_method_targs_for_stmt`
+// -- NOT to Track K, which is 2.6% of stage-0 growth -- and it was NOT a
+// justified semantic cost: Rust `gg` folds the same recording into its single
+// inference traversal (`src/semantic/typecheck.rs:2873`), so the self-host was
+// carrying a second walk the reference does not have. 92% of the chokepoint's
+// cost was reclaimed with emitted C byte-identical; the residual splits across
+// Tracks D-non-chokepoint / F / A and is UNATTRIBUTED.
+//
+// A permanently-red ratchet stops being a ratchet -- it cannot catch the NEXT
+// regression when everything already fails. Bumping preserves the guard; this
+// comment preserves the debt.
+//
+// THE RECLAIM IS OWED, and the next levers are named and sized (TODO.md):
+//   1. `VarDeclFromBorrow`/`ReturnFromBorrow` -- 71% of attributed events;
+//      `docs/language-design.md:730` says this needs NO new machinery.
+//   2. `Parser.peek` -- 7,823,340 hits alone, ~33x the whole chokepoint.
+//   3. DEEP-1 return-view lazy materialization -- the actual fix, and the doc
+//      warns it is UAF-prone, so it lands AFTER the open UAF class is closed.
+const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_092_792;
 
 // ── Shared clone-ceiling machinery ─────────────────────────────────────────
 // Core invariant #4 (one fix, all siblings): both clone-ceiling ratchets —
@@ -30276,7 +30326,32 @@ fn self_host_clone_ceiling() {
 // (+0.75% vs prior). Justified — new SH REJECT chokepoint helpers (Track
 // A/C/D/E ~200 LOC) compile through the SH lowerer at stage-1 too.
 // Ceiling = measured + ~1%.
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_077_150_000;
+//
+// ⚠ RE-SEEDED TO THE EXACT MEASURED VALUE 2026-08-27 (owner ruling). This is a
+// HIGH-WATER MARK WITH A DEBT ATTACHED, not a sanctioned cost. No headroom is
+// left deliberately: any further growth trips immediately.
+//
+// WHY, measured rather than argued: R44 pushed all four ratchets over (pre-R44
+// `560ef849` was UNDER all four with 0.30-1.1% headroom). The cost was
+// attributed by bisect-plus-ablation to Track D's `record_method_targs_for_stmt`
+// -- NOT to Track K, which is 2.6% of stage-0 growth -- and it was NOT a
+// justified semantic cost: Rust `gg` folds the same recording into its single
+// inference traversal (`src/semantic/typecheck.rs:2873`), so the self-host was
+// carrying a second walk the reference does not have. 92% of the chokepoint's
+// cost was reclaimed with emitted C byte-identical; the residual splits across
+// Tracks D-non-chokepoint / F / A and is UNATTRIBUTED.
+//
+// A permanently-red ratchet stops being a ratchet -- it cannot catch the NEXT
+// regression when everything already fails. Bumping preserves the guard; this
+// comment preserves the debt.
+//
+// THE RECLAIM IS OWED, and the next levers are named and sized (TODO.md):
+//   1. `VarDeclFromBorrow`/`ReturnFromBorrow` -- 71% of attributed events;
+//      `docs/language-design.md:730` says this needs NO new machinery.
+//   2. `Parser.peek` -- 7,823,340 hits alone, ~33x the whole chokepoint.
+//   3. DEEP-1 return-view lazy materialization -- the actual fix, and the doc
+//      warns it is UAF-prone, so it lands AFTER the open UAF class is closed.
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_108_440_117;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -30296,7 +30371,32 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_077_150_000;
 // Re-pinned UP 2026-08-02 (Round XXVIII SH-typecheck surface growth, same
 // citation as stage-1 array ceiling): measured stage-1 string_clone=
 // 1,981,307,669 (+0.62% vs prior). Ceiling = measured + ~1%.
-const STAGE1_STRING_CLONE_CEILING: u64 = 2_001_130_000;
+//
+// ⚠ RE-SEEDED TO THE EXACT MEASURED VALUE 2026-08-27 (owner ruling). This is a
+// HIGH-WATER MARK WITH A DEBT ATTACHED, not a sanctioned cost. No headroom is
+// left deliberately: any further growth trips immediately.
+//
+// WHY, measured rather than argued: R44 pushed all four ratchets over (pre-R44
+// `560ef849` was UNDER all four with 0.30-1.1% headroom). The cost was
+// attributed by bisect-plus-ablation to Track D's `record_method_targs_for_stmt`
+// -- NOT to Track K, which is 2.6% of stage-0 growth -- and it was NOT a
+// justified semantic cost: Rust `gg` folds the same recording into its single
+// inference traversal (`src/semantic/typecheck.rs:2873`), so the self-host was
+// carrying a second walk the reference does not have. 92% of the chokepoint's
+// cost was reclaimed with emitted C byte-identical; the residual splits across
+// Tracks D-non-chokepoint / F / A and is UNATTRIBUTED.
+//
+// A permanently-red ratchet stops being a ratchet -- it cannot catch the NEXT
+// regression when everything already fails. Bumping preserves the guard; this
+// comment preserves the debt.
+//
+// THE RECLAIM IS OWED, and the next levers are named and sized (TODO.md):
+//   1. `VarDeclFromBorrow`/`ReturnFromBorrow` -- 71% of attributed events;
+//      `docs/language-design.md:730` says this needs NO new machinery.
+//   2. `Parser.peek` -- 7,823,340 hits alone, ~33x the whole chokepoint.
+//   3. DEEP-1 return-view lazy materialization -- the actual fix, and the doc
+//      warns it is UAF-prone, so it lands AFTER the open UAF class is closed.
+const STAGE1_STRING_CLONE_CEILING: u64 = 2_082_113_453;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
