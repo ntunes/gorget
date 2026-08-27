@@ -4,7 +4,7 @@
 #     void grow(&self):   ...  ->  SIGSEGV, rc 139, on C AND LLVM
 #     void resize(&self): ...  ->  rc 0, prints "helloworld", correct
 #
-# `resize` is on the hardcoded 26-entry `MUTATING_METHODS` list
+# `resize` is on the hardcoded 25-entry `MUTATING_METHODS` list
 # (`src/ir/lowering/functions.rs:499-504`); `grow` is not. That list feeds
 # `is_mutating_method_name` (`:511-514`) as the fallback beside the typed
 # builtin predicate, and the prescan uses it to decide whether a receiver is

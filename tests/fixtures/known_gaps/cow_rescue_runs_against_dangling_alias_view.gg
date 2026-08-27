@@ -14,13 +14,19 @@
 #                        `gorget_string_copy_cow` <- main
 #     LLVM backend     : SIGSEGV, rc 139
 #
-# ⚠⚠ THIS IS NOT A DETECTION FAILURE -- IT IS AN EMISSION-ORDER DEFECT
-# (Core #15e Q5: "am I reasoning about emission, or emission ORDER?").
-# The compiler DOES notice the conflict: `--clones=sites` reports
-#     alias.gg:10:9  Vector[String]  CoW materialization
-# at the mutation line. The rescue is emitted -- and then runs against an
-# ALREADY-DANGLING pointer. So no amount of better analysis fixes this; the
-# materialization has to happen BEFORE the invalidating push, not after.
+# ⚠⚠ THIS IS A DETECTION FAILURE -- CORRECTED 2026-08-27.
+# An earlier version of this header claimed the opposite ("NOT a detection
+# failure -- an EMISSION-ORDER defect"), citing a `--clones=sites` line as
+# proof that detection succeeds. That line is BYTE-IDENTICAL between the
+# crashing program and the rc-0 control: it is the `alias` array sever,
+# present in BOTH, not a rescue for `s`. The GIR shows the rescue for `s` is
+# NEVER EMITTED AT ALL (raw `*GorgetString`, no `__cow_mat`, no
+# `borrow_view`).
+#
+# The real mechanism: `source_mut_unsafe` (src/ir/lowering/stmts/mod.rs:907-917)
+# is queried with the WRONG KEY -- `CollectionId` names the SPELLING (`alias`)
+# instead of the STORAGE OWNER (`v`). Sibling `t0699` supplies the right key
+# to the wrong SET. Same predicate, opposite sides of one membership test.
 #
 # ⚠ THE REALLOC IS LOAD-BEARING: `v` must be pushed enough to force the
 # backing store to reallocate (64x here) and the payload must be heap-FORCED
@@ -30,7 +36,7 @@
 # SIBLING, same round, same "a name decides memory safety" shape but a
 # DIFFERENT mechanism -- state the discriminator before merging them:
 #   * `t0699` -- a user &self MUTATOR METHOD's NAME decides safety, because
-#     the name is looked up in a hardcoded 26-entry MUTATING_METHODS list, so
+#     the name is looked up in a hardcoded 25-entry MUTATING_METHODS list, so
 #     the prescan never fires. That is a DETECTION failure.
 #   * THIS -- the RECEIVER NAME of the VIEW decides safety, and detection
 #     SUCCEEDS. The defect is WHEN the emitted rescue runs.
