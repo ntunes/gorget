@@ -541,6 +541,15 @@ fn extract_path_for_mut(expr: &Expr) -> Option<String> {
         // in-body materialize sites (`lower_index_assign`, the projected mutating
         // receiver), so recording the prefix here keeps the prescan in step.
         Expr::Index { object, .. } => extract_path_for_mut(&object.node),
+        // Peel a method-call CHAIN to its root the same way `Index` is peeled.
+        // `outer.get(0).unwrap().push(x)` mutates storage reachable from
+        // `outer`, but the receiver is an unnamed temp, so without this the
+        // whole mutation was DROPPED (`_ => None` -> `record_path_mutation`
+        // records nothing) and a live view into it was never rescued: rc 139 on
+        // both backends while the equivalent `first.push(x)` and
+        // `outer[0].push(x)` spellings were clean. Recording the root is the
+        // write-site fix (Core #1); the read side needed no per-shape rule.
+        Expr::MethodCall { receiver, .. } => extract_path_for_mut(&receiver.node),
         _ => None,
     }
 }

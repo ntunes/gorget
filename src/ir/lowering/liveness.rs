@@ -18,21 +18,30 @@
 
 use crate::parser::ast::*;
 use crate::span::Spanned;
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Result of full-function liveness analysis.
 /// Contains the span start positions of identifier uses that are the last use
-/// of that variable on all reachable paths.
+/// of that variable on all reachable paths, each mapped to the NAME it is the
+/// last use OF.
+///
+/// The name is carried rather than discarded because the query
+/// (`LoweringContext::is_last_use_at`) is asked *"is this use of `name` its last
+/// use"*, and a position-only set can only answer *"is some variable's last use
+/// here"*. The walker has the name in hand at the point it records the position
+/// (`Expr::Identifier(name)`), so dropping it forced the read side to trust that
+/// every caller pairs a name with that name's own span — an invariant nothing
+/// enforced (Core #14). Keeping it makes the query answer the question asked.
 #[derive(Default)]
 pub struct LivenessResult {
-    /// Set of span.start values for Expr::Identifier uses that are last uses.
-    pub last_use_spans: FxHashSet<usize>,
+    /// `span.start` of each last-use `Expr::Identifier` → the name used there.
+    pub last_use_spans: FxHashMap<usize, String>,
 }
 
 /// Compute last-use information for an entire function body.
 pub fn compute_function_liveness(body: &[Spanned<Stmt>]) -> LivenessResult {
     let mut live: FxHashSet<&str> = FxHashSet::default();
-    let mut last_use_spans = FxHashSet::default();
+    let mut last_use_spans = FxHashMap::default();
     walk_block(body, &mut live, &mut last_use_spans);
     LivenessResult { last_use_spans }
 }
@@ -40,7 +49,7 @@ pub fn compute_function_liveness(body: &[Spanned<Stmt>]) -> LivenessResult {
 fn walk_block<'a>(
     stmts: &'a [Spanned<Stmt>],
     live: &mut FxHashSet<&'a str>,
-    last_uses: &mut FxHashSet<usize>,
+    last_uses: &mut FxHashMap<usize, String>,
 ) {
     for stmt in stmts.iter().rev() {
         walk_stmt(&stmt.node, live, last_uses);
@@ -50,7 +59,7 @@ fn walk_block<'a>(
 fn walk_stmt<'a>(
     stmt: &'a Stmt,
     live: &mut FxHashSet<&'a str>,
-    lu: &mut FxHashSet<usize>,
+    lu: &mut FxHashMap<usize, String>,
 ) {
     match stmt {
         Stmt::VarDecl { pattern, value, .. } => {
@@ -92,7 +101,7 @@ fn walk_stmt<'a>(
             // they don't account for the loop back-edge and produce false
             // positives (e.g., match scrutinee incorrectly marked last-use).
             let mut live_body = live.clone();
-            let mut lu_discard = FxHashSet::default();
+            let mut lu_discard: FxHashMap<usize, String> = FxHashMap::default();
             if let Some(eb) = else_body { walk_block(&eb.stmts, &mut live_body, &mut lu_discard); }
             walk_block(&body.stmts, &mut live_body, &mut lu_discard);
             uses_expr(&condition.node, condition.span.start, &mut live_body, &mut lu_discard);
@@ -105,7 +114,7 @@ fn walk_stmt<'a>(
         Stmt::For { pattern, iterable, body, else_body, .. } => {
             // Pass 1: collect live set (discard last-use decisions).
             let mut live_body = live.clone();
-            let mut lu_discard = FxHashSet::default();
+            let mut lu_discard: FxHashMap<usize, String> = FxHashMap::default();
             if let Some(eb) = else_body { walk_block(&eb.stmts, &mut live_body, &mut lu_discard); }
             walk_block(&body.stmts, &mut live_body, &mut lu_discard);
             kill_pattern(pattern, &mut live_body);
@@ -148,13 +157,13 @@ fn uses_expr<'a>(
     expr: &'a Expr,
     span_start: usize,
     live: &mut FxHashSet<&'a str>,
-    lu: &mut FxHashSet<usize>,
+    lu: &mut FxHashMap<usize, String>,
 ) {
     match expr {
         Expr::Identifier(name) => {
             if !live.contains(name.as_str()) {
-                // Not in live set → this is the last use → record span
-                lu.insert(span_start);
+                // Not in live set → this is the last use → record span AND name
+                lu.insert(span_start, name.clone());
             }
             live.insert(name.as_str());
         }
@@ -314,7 +323,7 @@ fn uses_expr<'a>(
     }
 }
 
-fn uses_target_sub<'a>(expr: &'a Expr, live: &mut FxHashSet<&'a str>, lu: &mut FxHashSet<usize>) {
+fn uses_target_sub<'a>(expr: &'a Expr, live: &mut FxHashSet<&'a str>, lu: &mut FxHashMap<usize, String>) {
     match expr {
         Expr::FieldAccess { object, .. } | Expr::TupleFieldAccess { object, .. } => {
             uses_expr(&object.node, object.span.start, live, lu);

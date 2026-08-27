@@ -1386,11 +1386,23 @@ impl<'a> LoweringContext<'a> {
     /// Phase 1f: check if a specific use of a variable (at the given span) is
     /// the last use on all reachable execution paths. If yes, the value can be
     /// moved instead of cloned. Uses full-function liveness analysis.
-    pub fn is_last_use_at(&self, _name: &str, span: crate::span::Span) -> bool {
+    pub fn is_last_use_at(&self, name: &str, span: crate::span::Span) -> bool {
         if self.func_state.liveness.last_use_spans.is_empty() {
             return false; // No liveness data → conservative (don't move)
         }
-        self.func_state.liveness.last_use_spans.contains(&span.start)
+        // The NAME is checked, not just the position. Until 2026-08-27 this
+        // ignored its name argument and asked only "is some variable's last use
+        // at this position", trusting all ~16 call sites to pair a name with
+        // that name's own span. A caller that passed an ENCLOSING span got a
+        // conservative `false` (harmless); a caller that paired a name with a
+        // DIFFERENT variable's last-use position would have got a wrong `true`
+        // — a move where a clone was required. Nothing enforced the pairing,
+        // so the guarantee is now taken rather than assumed.
+        self.func_state
+            .liveness
+            .last_use_spans
+            .get(&span.start)
+            .is_some_and(|recorded| recorded == name)
     }
 
     /// Phase D4: First-class liveness query for the lower_var_decl typed

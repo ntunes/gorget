@@ -54494,31 +54494,23 @@ fn known_gap_dict_values_option_payload() {
     );
 }
 
-/// KNOWN GAP — three semantics-equivalent spellings of one program; the one
-/// that mutates through an UNNAMED get-chain temp (`outer.get(0).unwrap()
-/// .push(x)`) heap-use-after-frees, while `first.push(x)` and
-/// `outer[0].push(x)` are clean on both backends.
+/// REGRESSION (R45, 2026-08-27) — three semantics-equivalent spellings of one
+/// program; the one that mutates through an unnamed get-chain receiver
+/// (`outer.get(0).unwrap().push(x)`) heap-use-after-freed, while
+/// `first.push(x)` and `outer[0].push(x)` were clean on both backends.
 ///
-/// DISCRIMINATOR vs its two siblings: `t0699` carries the RIGHT key to the
-/// WRONG SET, `t0703` carries the WRONG KEY to the right set — this shape has
-/// NO KEY AT ALL. The mutated receiver is an unnamed temporary, so
-/// `CollectionId` has no name to resolve and no spelling to union. Neither
-/// widening the name set nor unioning spellings can reach it: both operate on
-/// names, and this position never has one (Core #15e Q4 — a case with no
-/// subject).
+/// Write-site fix: `extract_path_for_mut` had no `MethodCall` arm and ended in
+/// `_ => None`, so the mutation was recorded NOWHERE and the rescue for the
+/// live view was never emitted. It now peels a method chain to its root the
+/// same way `Index` is peeled.
+///
+/// The first diagnosis of this bug was wrong — it claimed the shape had "no
+/// key at all" because `CollectionId` is name-keyed. `CollectionId::Local` is
+/// a `LocalId`, and this cell's query key is `Some("first")`. Instrumenting
+/// the membership test refuted the reasoning; see the fixture header.
 #[test]
-#[ignore = "KNOWN GAP (R45 Track F pass 2, orchestrator-verified): mutating a \
-collection through an unnamed get-chain temp skips the CoW rescue for a live \
-view into it — rc 139 on BOTH backends, ASan heap-use-after-free in \
-gorget_string_copy_cow, while the `first.push(x)` and `outer[0].push(x)` \
-spellings of the same program are rc 0. `source_mut_unsafe` \
-(src/ir/lowering/stmts/mod.rs:907-917) keys on a NAME; this receiver has none."]
-fn known_gap_cow_rescue_missing_when_mutation_has_no_name() {
-    // INTENDED: `hello`, regardless of which equivalent spelling mutates.
-    run_gg(
-        "known_gaps/cow_rescue_missing_when_mutation_has_no_name.gg",
-        "hello",
-    );
+fn cow_rescue_mutation_through_getchain_receiver() {
+    run_gg("cow_rescue_mutation_through_getchain_receiver.gg", "hello");
 }
 
 /// REGRESSION (R45, 2026-08-27) — the CoW prescan's silent catch-all.

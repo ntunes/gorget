@@ -1,0 +1,59 @@
+# REGRESSION — mutating a collection through an unnamed GET-CHAIN RECEIVER
+# must still rescue a live view into it.
+#
+#     Vector[String] first = outer.get(0).unwrap()
+#     String s = first.get(0).unwrap()      # view into the inner vector
+#     ...
+#     first.push(...)                       # rc 0, "hello"
+#     outer[0].push(...)                    # rc 0, "hello"
+#     outer.get(0).unwrap().push(...)       # rc 139 BEFORE the fix
+#
+# All three push to the SAME inner vector and are semantics-equivalent; only
+# the spelling of the mutated receiver differed, and it decided whether the
+# program segfaulted (SIGSEGV on C and LLVM, ASan heap-use-after-free in
+# `gorget_string_copy_cow`).
+#
+# MECHANISM (write site). `extract_path_for_mut`
+# (src/ir/lowering/functions.rs) peels a dotted path and an `Index` down to its
+# root, but had no `MethodCall` arm and ended in `_ => None`. So for a receiver
+# spelled as a method chain it returned None, `record_path_mutation` recorded
+# NOTHING, and the mutation was invisible to the CoW prescan — the rescue for
+# `s` was never emitted. The fix peels a method-call chain to its root exactly
+# as `Index` is peeled: one arm, at the write site, with no per-shape rule at
+# the read side (Core #1).
+#
+# ⚠ AN EARLIER HEADER HERE WAS WRONG, and the correction is worth keeping.
+# It claimed the shape had "NO KEY TO CARRY" — that `CollectionId` is
+# name-keyed and this position has no name, so no widening could reach it (a
+# Core #15e Q4 category error). Measured refutation by the R45 Track F
+# brief-review pass 3, which instrumented BOTH sides of the membership test:
+# `CollectionId::Local` is a `LocalId`, not a name (context.rs:19-24), and this
+# cell's query key is `Some("first")` — a perfectly ordinary name. The
+# un-nameable thing was the mutation RECEIVER inside the prescan, which never
+# becomes a `CollectionId` at all. The diagnosis was reasoned rather than
+# instrumented, and it was wrong in a way that would have sent the fix to the
+# wrong layer.
+#
+# ⚠ THE REALLOC IS LOAD-BEARING: the inner vector must be pushed enough to
+# force its backing store to reallocate (64x here) with a heap-FORCED payload
+# built by `mk`. Fewer pushes or a literal payload is rc 0 on every spelling
+# even with the bug present, and proves nothing.
+#
+# RED-verified 2026-08-27: rc 139 on both lanes before the fix, rc 0 and
+# ASan-clean on both after, with the two control spellings run alongside.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[Vector[String]] outer = []
+    Vector[String] inner = []
+    inner.push(mk("hel", "lo"))
+    outer.push(inner)
+    Vector[String] first = outer.get(0).unwrap()
+    String s = first.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        outer.get(0).unwrap().push(mk("fillfillfillfill", "ererererererer"))
+        i = i + 1
+    print(s)
