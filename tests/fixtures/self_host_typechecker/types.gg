@@ -125,6 +125,22 @@ struct TraitRegistry:
     # method resolution — only for duplicate-impl validation, which the
     # self-host typechecker doesn't perform).
     Dict[int, Vector[int]] trait_impls
+    # Index: method NAME → 1, for every method registered with method-level
+    # generic params (`[G]`). Derived ONCE by `index_method_generic_names`
+    # (traits.gg) as a PROJECTION of the `shape_method_names` tables after
+    # every collector has run — never written alongside them, so there is no
+    # parallel list to keep in sync and a collector added later cannot
+    # populate one and forget the other. Read via
+    # `registry_has_method_generic_name`.
+    #
+    # WHY IT IS EXACT, not a heuristic: `expr_method_targs.put` (infer.gg) has
+    # exactly ONE write site, reachable only when `sh.found`, and both shape
+    # resolvers (`resolve_method_shape` / `..._for_generic_receiver`) look up
+    # ONLY `shape_method_names` on an impl or a trait. So a name absent from
+    # this index provably cannot reach the `put` — the index is a NECESSARY
+    # condition on recording, derived from typed registry metadata rather than
+    # matched against a hardcoded name list.
+    Dict[String, int] method_generic_names
 
 struct MethodResolution:
     bool found
@@ -251,7 +267,7 @@ equip TypeTable:
         types.push(RTError())
         # 8: never
         types.push(RTNever())
-        TraitRegistry empty_reg = TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo](), Dict[int, Vector[int]](), Dict[int, Vector[int]]())
+        TraitRegistry empty_reg = TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo](), Dict[int, Vector[int]](), Dict[int, Vector[int]](), Dict[String, int]())
         Dict[int, int] empty_expr_types = Dict[int, int]()
         Dict[int, Vector[int]] empty_expr_method_targs = Dict[int, Vector[int]]()
         Dict[int, String] empty_expr_method_targs_name = Dict[int, String]()

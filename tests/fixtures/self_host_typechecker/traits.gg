@@ -41,7 +41,19 @@ ShapeResolution not_found_shape():
     return ShapeResolution(false, MethodSigShape(empty_names, empty_params, TPrimitive("")))
 
 TraitRegistry new_trait_registry():
-    return TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo](), Dict[int, Vector[int]](), Dict[int, Vector[int]]())
+    return TraitRegistry(Vector[TraitInfo](), Vector[EquipInfo](), Dict[int, Vector[int]](), Dict[int, Vector[int]](), Dict[String, int]())
+
+# Is there ANY registered method-generic method with this name? A `false`
+# answer PROVES that no resolution of a call with this name can reach
+# `expr_method_targs.put` (infer.gg), because that `put` is gated on
+# `sh.found` and both shape resolvers read only `shape_method_names` — of
+# which `method_generic_names` is a projection, taken by
+# `index_method_generic_names` once the collectors have finished. Used by
+# the method-targ recorder as a pure COST filter; the
+# semantic decision stays `bound_has_closure` / `is_terminal_method` inside
+# `infer_expr_type`, which this never bypasses or widens.
+bool registry_has_method_generic_name(TraitRegistry registry, String name):
+    return registry.method_generic_names.contains(name)
 
 # ── Helpers: parallel-Vector lookup ──────────────────────────
 
@@ -526,7 +538,26 @@ TraitRegistry build_trait_registry(Module module, ScopeTable &scopes, TypeTable 
     # Register built-in core traits last so user-defined traits (collected
     # above via collect_trait) win on the same DefId.
     register_builtin_traits(scopes, types, &registry)
+    index_method_generic_names(&registry)
     return registry
+
+# Derive `method_generic_names` as a PROJECTION of the authoritative
+# `shape_method_names` tables, once, after every collector has run. It is
+# deliberately NOT written alongside each `shape_names.push` — that would be a
+# second list to keep in sync by hand, and a collector added later could
+# populate one and forget the other, silently shrinking the index and dropping
+# a method's targs. Reading the finished tables means the index cannot disagree
+# with them: exactly the names the two shape resolvers can find, no more, no
+# fewer. One source of truth, resolved once, written through.
+void index_method_generic_names(TraitRegistry &registry):
+    Dict[String, int] idx = Dict[String, int]()
+    for tinfo in registry.traits:
+        for sn in tinfo.shape_method_names:
+            idx.set(sn, 1)
+    for impl in registry.impls:
+        for sn2 in impl.shape_method_names:
+            idx.set(sn2, 1)
+    registry.method_generic_names = idx
 
 # ── Supertrait default-method walk ───────────────────────────
 # Mirrors Rust `TraitRegistry::find_default_method` (traits.rs): DFS over
