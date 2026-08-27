@@ -883,7 +883,11 @@ fn d29_propagate_walker_arm_coverage() {
         ("src/ir/lowering/closures.rs", 1),
         ("src/ir/lowering/context.rs", 1),
         ("src/ir/lowering/exprs/mod.rs", 2),
-        ("src/ir/lowering/functions.rs", 1),
+        // 2026-08-27: 1 -> 2. `cow_after_expr_moves` became an exhaustive match
+        // (it had swept 41 of 47 Expr variants into `_ => {}`), so it now sees
+        // THROUGH the D29 wrapper instead of silently under-approximating it.
+        // An INCREASE here is coverage arriving, not a regression.
+        ("src/ir/lowering/functions.rs", 2),
         ("src/ir/lowering/generics/mod.rs", 2),
         ("src/ir/lowering/generics/substitute.rs", 1),
         ("src/ir/lowering/liveness.rs", 1),
