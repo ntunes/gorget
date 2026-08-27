@@ -1,0 +1,44 @@
+# KNOWN GAP (DOCS) — `docs/language-design.md` §10's OPENING concurrency example
+# does not typecheck. Two independent defects in five lines of doc.
+#
+#     async void bump(Shared[Mutex[int]] ^counter):
+#         auto guard = counter.lock().unwrap()
+#         *guard += 1
+#
+#     gg check -> rc 1, E_NoMethodFound:
+#       no method `lock` found on type `Shared[Mutex[int]]`
+#
+# DEFECT 1 — `counter.lock()`. The COMPILER IS RIGHT and the DOC IS WRONG.
+# D36 Q1 (ratified 2026-07-27) puts `Shared`/`Mutex`/`RWLock`/`Weak` in
+# NonDerefContainer and rejects auto-deref for EVERY face: "users write
+# `.lock()` / `.read()` / `.write()` / `.upgrade()` explicitly" -- i.e. on the
+# Mutex, not through the Shared. §9.3 of the same document states this
+# correctly eight sections earlier, so §10 contradicts §9.3.
+#
+# DEFECT 2 — `*guard += 1`. `*` accepts `Box[T]` ONLY; anything else is
+# `E_DerefNonBox` (hardened deliberately in `47ab5a8e`, 2026-06-17, and
+# re-affirmed by D48 2026-08-27). A `Guard` is not a `Box`. This line is
+# unreachable behind defect 1 today, so fixing only defect 1 exposes it.
+#
+# NOT the `*box` question: D48 sanctions `*` on `Box[T]`. Nothing in D48
+# widens the deref-able set, and this example is not an argument for widening
+# it -- the guard's write face is `guard.method()` per D36 Q1.
+#
+# This is the "code suggested by our own documentation" class: a reader
+# copying the doc's first concurrency example gets a check error, and the
+# shape they would reach for next is also rejected.
+#
+# INTENDED: the DOC is corrected to the D36-ratified spelling; this fixture
+# then pins the corrected shape. It is NOT a request to widen `*` or to make
+# `Shared` auto-deref -- both were ratified the other way.
+#
+# Measured 2026-08-27 at HEAD in the doc's EXACT spelling; orchestrator-verified.
+
+from std.sync import Mutex
+
+async void bump(Shared[Mutex[int]] ^counter):
+    auto guard = counter.lock().unwrap()
+    *guard += 1
+
+void main():
+    print(1)

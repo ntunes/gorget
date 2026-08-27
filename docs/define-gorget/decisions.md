@@ -1571,6 +1571,7 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
 
   **DOCS.** `language-reference.md`'s spelling note and §9.1 position table, `language-design.md`, and `AGENTS.md`'s quick-reference all state the named-vs-unnamed pair; the prose is folded to the ratified spelling immediately (this entry's own round), marked as specification until the parser lands.
 
+- ⚠ **PARTLY SUPERSEDED BY D48 (2026-08-27): the "no `*boxed` operator" rider below is STRUCK — `*box` is a sanctioned operator. Q1, Q2 and §9.4 receiver-only auto-deref below STAND UNCHANGED.**
 - 2026-07-27 — **D36 RATIFIED (owner): SMART-POINTER METHOD AUTO-DEREF IS RECEIVER-ONLY (no `*boxed` operator), PER-FACE ON THE WRAPPER, AND ITS RESOLUTION IS WRITTEN INTO `method_resolutions`'S EXTENDED VALUE — NOT A PARALLEL CHANNEL.** Ratifies the shape §9.4 and §9.3's `guard.push(42)` teach, without importing Rust's `Deref` trait or its `*` operator. Answers all three of Track E2's previously-open design questions in one entry, unblocking E2's executor plan.
 
   **THE THREE QUESTIONS THIS SETTLES.**
@@ -2962,3 +2963,81 @@ both readings; do not guess, and do not resolve it by deferring to whichever
 lane feels authoritative. The failure this prevents is silent — a wrong guess
 about which oracle is right does not announce itself, it just becomes the new
 baseline.
+
+- 2026-08-27 — **🎯 D48 RATIFIED (owner): `*box` IS A SANCTIONED OPERATOR. D36'S "THERE IS NO `*boxed` OPERATOR" RIDER IS STRUCK. D36 Q1, Q2 AND §9.4 RECEIVER-ONLY AUTO-DEREF STAND UNCHANGED.**
+
+  Narrow supersession of ONE clause of D36 (2026-07-27). It is **not** a re-ratification of D36: Q1 (the
+  Guard/ReadGuard/WriteGuard/Box three-way per-face accept split) and Q2 (extend `method_resolutions`'s
+  value rather than adding a parallel channel) rest on their own reasoning, were built
+  (`e38e024b`, `e4c53f6c`, `ad419e92`, `598b6614`), and are untouched by anything below. §9.4's
+  receiver-only auto-deref — `boxed.len()` resolving to `String.len()` — is likewise untouched and
+  remains the ratified shape.
+
+  **What is struck: the Q3 rider *"there is no `*boxed` operator."*** It is struck on TWO independent
+  grounds, either of which alone would be sufficient.
+
+  **GROUND 1 — THE DECISION PACKET FRAMED A REMOVAL AS AN ADDITION.** D36's reasoning reads *"**adding**
+  `*boxed` to Gorget imports the ergonomic shape but not the type-system machinery that keeps it
+  honest."* `*box` was not a proposal. At the moment D36 was ratified it was already:
+
+  | | evidence | verification command |
+  |---|---|---|
+  | in the **formal grammar** | `deref_expr` in the expression production | `grep -n "deref_expr" docs/language-reference.md` |
+  | in the **operator table** | `` `*` \| Dereference \| Pointer/smart ptr \| Inner type `` | `grep -n "Pointer/smart ptr" docs/language-reference.md` |
+  | **shipped** since at least 2026-03-07 | the `Expr::Deref` lowering arm | `git log --diff-filter=A -S "Expr::Deref" -- src/ir/lowering/exprs/mod.rs` |
+  | used at **~1143 self-host sites** | at commit `10d53d9e` | `git grep -hoE '(=\|\(\|,\|return) *\*[a-zA-Z_][a-zA-Z0-9_]*' 10d53d9e -- 'tests/fixtures/self_host_*/*.gg' \| wc -l` |
+  | **deliberately hardened six weeks earlier** | `47ab5a8e` (2026-06-17) — *"reject `*x` on a non-Box type in both compilers (was silent UB → segfault)"*, citing Core #8, adding `DerefNonBox`, mirroring the reject into the self-host twin, writing through to §7.4, and landing a RED-verified negative fixture (*"VERIFIED the guard bites"*) | `git log -1 --format=%B 47ab5a8e` · `ls tests/fixtures/deref_non_box_rejected.gg` |
+
+  The ratification commit `10d53d9e` touched **`decisions.md` only, +20 lines, no code**. Nothing was
+  ever retired; `*b` compiles and runs correctly at HEAD. So the ledger has carried, for a month, a
+  ratified clause contradicting the shipped grammar, the shipped reference, and a deliberate Core #8
+  safety hardening — the reference-vs-code conflict `AGENTS.md` makes an owner ask. **This is a Core #5
+  failure in the packet, not in the owner's ruling: the question answered was not the question at hand.**
+
+  **GROUND 2 — THE STATED RATIONALE IS FALSIFIED BY MEASUREMENT, AND INVERTED.** D36 held that `*boxed`
+  *"lands users on a silent-clone-at-bind trap (CoW Rule 3 — views are transient, so a bind
+  materializes) that Rust's borrow checker would surface but Gorget's model would swallow."* Measured
+  2026-08-27 at HEAD, one program held fixed but for the spelling:
+
+  | bind | `--clones=sites` | run |
+  |---|---|---|
+  | `P inner = *b` | **1 implicit clone** — `P  CoW materialization` | **rc 0**, `allocs 4 / frees 4 / live_bytes 0` |
+  | `P inner = b.get()` | **0 implicit clones** | **rc 134**, `free(): double free detected in tcache 2` |
+
+  The operator D36 rejected materializes at the bind. The API D36 preserved does not. The cause is a
+  sibling-site gap (Core #4), not a design one: the `Expr::Deref` arm
+  (`src/ir/lowering/exprs/mod.rs:727`) gates on `is_resource_type` and clones via `clone_fn_for_ptr`;
+  the `.get()` arm (`src/ir/lowering/exprs/methods.rs:1753`) returns `FunctionBuilder::copy(dst)` — a
+  shallow struct copy over the box's heap buffers — with no such gate.
+
+  `*b` is also **not** a stored borrow and needs no lifetime machinery: `P inner = *b; inner.x = 99`
+  leaves `(*b).x == 7` — an independent value. Its place face (`*b = v`) and its transient-borrow face
+  (`f(&*b)`) are bounded by **D41** (no stored borrows, no user-visible `Ref[T]`), exactly as `&x.field`
+  already is. `*box` introduces no capability D41 does not already bound.
+
+  **WHY OPTION A AND NOT THE ALTERNATIVES.** Three dispositions were on the table (Core #15b — the set,
+  not a selection):
+  - **A. Strike the rider; `*box` is sanctioned; `.get()` gets fixed.** ✅ **RATIFIED.**
+  - **B. Keep the rider; fix `.get()`, then retire `*box`.** ❌ Its one surviving argument is surface
+    minimalism, which does not outweigh reversing a deliberate safety hardening across ~2178 sites
+    (`grep -rhoE '(=|\(|,|return) *\*[a-zA-Z_][a-zA-Z0-9_]*' tests/fixtures/self_host_*/*.gg | wc -l`).
+    Decisively: it would migrate every one of those onto a path that double-frees at bind on C
+    (`t0684`) **and does not compile at all on LLVM** for non-primitive payloads (`t0685` —
+    `llc: error: '%v14' defined with type 'i64' but expected 'ptr'`). Replacing the only spelling that
+    works on both lanes with the only one that works on neither.
+  - **C. Strike the rider AND retire `.get()`.** ⏸ **LEFT OPEN, not rejected.** The self-host has **zero**
+    non-comment `.get()` call sites (`grep -rn '\.get()' tests/fixtures/self_host_*/*.gg | grep -vE
+    '^[^:]*:[0-9]+:\s*#' | wc -l` → 0), so its migration cost is near nil. But `*` on a `Box[Trait]`
+    has no meaning and that cell is **unmeasured**; C is not ratified from an unprobed cell. Revisit
+    once `Box[Trait]` is measured.
+
+  **WHAT THIS DECISION DOES NOT DO.** It does **not** bless `.get()`. `t0684` (C-lane double-free at
+  bind) and `t0685` (LLVM-lane `llc` hard error for every non-primitive payload) are owed regardless of
+  this ruling and are **not** discharged by it — the fix was unconditional under all three dispositions,
+  so nothing was ever blocked on this entry. It does **not** re-open D36 Q1/Q2/§9.4. And it does not
+  adopt Rust's `Deref` **trait**, which remains rejected: what is sanctioned is the existing Box-only
+  operator with Gorget's materialize-at-rest semantics, not user-implementable deref coercion.
+
+  **DOC WRITE-THROUGH (Core #9 spans docs).** `docs/language-design.md` §9.4 stated the struck rider;
+  corrected in the same commit. `docs/language-reference.md` §7.4 and the grammar already describe the
+  sanctioned behaviour and need no change — they were right, and the ledger was wrong.

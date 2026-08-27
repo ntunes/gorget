@@ -1877,13 +1877,29 @@ does not fire on those.
 ### 9.4 Deref Coercion
 
 Smart pointers automatically dereference to their inner type for method
-calls: the coercion is scoped to method-call receivers, and there is no
-`*boxed` operator.
+calls: the coercion is scoped to method-call receivers.
 
 ```gorget
 Box[String] boxed = Box.new(String("hello"))
 print(boxed.len())       # Box[String] auto-derefs to String, calls String.len()
 ```
+
+`Box[T]` additionally has an explicit dereference operator, `*box`, which
+yields the boxed value. `Box[T]` is the only type it accepts — `*` on
+anything else is a check-time rejection (`E_DerefNonBox`). Dereferencing is
+not a borrow: binding the result materializes an independent value, so
+mutating it leaves the box unchanged.
+
+```gorget
+Box[Point] b = Box.new(Point(7, 0))
+Point p = *b             # materializes -- p is independent of the box
+p.x = 99                 # b is untouched; (*b).x is still 7
+*b = Point(42, 0)        # the deref is also a place, so it can be assigned
+```
+
+This is deliberately *not* Rust's `Deref` trait: it is not user-implementable,
+and it does not surface a borrowed-return type. Safety comes from
+materializing at rest positions (CoW Rule 3), not from lifetime tracking.
 
 ---
 
