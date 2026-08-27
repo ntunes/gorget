@@ -1,0 +1,62 @@
+# KNOWN GAP — 🚨 THE SAME PROGRAM IN THREE SPELLINGS; THE ONE THAT MUTATES
+# THROUGH AN UNNAMED GET-CHAIN TEMP SEGFAULTS.
+#
+#     Vector[String] first = outer.get(0).unwrap()
+#     String s = first.get(0).unwrap()      # view into the inner vector
+#     ...
+#     first.push(...)                       # -> rc 0, "hello"
+#     outer[0].push(...)                    # -> rc 0, "hello"
+#     outer.get(0).unwrap().push(...)       # -> rc 139 SIGSEGV
+#
+# All three push to the SAME inner vector and are semantics-equivalent. Only
+# the spelling of the MUTATED RECEIVER differs, and it decides whether the
+# program segfaults.
+#
+#     C backend        : SIGSEGV, rc 139
+#     C + --sanitize   : AddressSanitizer: heap-use-after-free in
+#                        `gorget_string_copy_cow`
+#     LLVM backend     : SIGSEGV, rc 139
+#     control spellings: rc 0, `hello`, on BOTH backends
+#
+# ⚠ DISCRIMINATOR — this is NOT `t0699` and NOT `t0703`, and the difference
+# is what makes it a separate cell rather than a third costume:
+#   * `t0699` -- the query carries the RIGHT key to the WRONG SET (a user
+#     `&self` mutator's name is absent from the 25-entry `MUTATING_METHODS`
+#     list). Detection fails on the SET.
+#   * `t0703` -- the query carries the WRONG KEY (the spelling `alias`) to
+#     the right set. Detection fails on the KEY.
+#   * THIS -- there is NO KEY TO CARRY. The mutated receiver is an unnamed
+#     temporary produced by a get-chain, so `CollectionId` has no name to
+#     resolve and no spelling to union. The predicate has NO SUBJECT for this
+#     shape at all -- a category error, not a missing entry. No widening of
+#     the name set and no union of spellings can reach it, because both
+#     operate on names and this position never has one.
+#     (AGENTS.md Core #15e Q4: "is there a case with no subject at all?")
+#
+# ⚠ THE REALLOC IS LOAD-BEARING: the inner vector must be pushed enough to
+# force its backing store to reallocate (64x here) and the payload must be
+# heap-FORCED via `mk`, never a literal. Fewer pushes or a literal payload is
+# rc 0 on every spelling and proves nothing.
+#
+# INTENDED (asserted below): prints `hello` on both backends, ASan-clean,
+# regardless of which of the three equivalent spellings does the mutation.
+#
+# RED-verified 2026-08-27 by the R45 orchestrator: built and run on BOTH
+# lanes at HEAD (rc 139 each) with the two control spellings run alongside
+# (rc 0, `hello`, each) and the ASan report captured.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[Vector[String]] outer = []
+    Vector[String] inner = []
+    inner.push(mk("hel", "lo"))
+    outer.push(inner)
+    Vector[String] first = outer.get(0).unwrap()
+    String s = first.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        outer.get(0).unwrap().push(mk("fillfillfillfill", "ererererererer"))
+        i = i + 1
+    print(s)

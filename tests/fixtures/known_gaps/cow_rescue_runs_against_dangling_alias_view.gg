@@ -38,8 +38,13 @@
 #   * `t0699` -- a user &self MUTATOR METHOD's NAME decides safety, because
 #     the name is looked up in a hardcoded 25-entry MUTATING_METHODS list, so
 #     the prescan never fires. That is a DETECTION failure.
-#   * THIS -- the RECEIVER NAME of the VIEW decides safety, and detection
-#     SUCCEEDS. The defect is WHEN the emitted rescue runs.
+#   * THIS -- the RECEIVER NAME of the VIEW decides safety, because the query
+#     carries the WRONG KEY (the spelling `alias`, not the storage owner `v`),
+#     so the prescan never fires. ALSO a DETECTION failure. The discriminator
+#     is which HALF of the membership test is wrong: `t0699` supplies the
+#     RIGHT key to the WRONG SET; THIS supplies the WRONG key to the RIGHT
+#     set. Neither is an emission-ORDER defect -- see the CORRECTED block
+#     above, which this bullet contradicted until 2026-08-27.
 #
 # INTENDED (asserted below): prints `hello` regardless of which name the view
 # is spelled through, on BOTH backends, ASan-clean.

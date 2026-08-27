@@ -20648,3 +20648,126 @@ fn staging_move_burndown_shrink_only() {
         cleans.len()
     );
 }
+
+/// Every `known_gaps` repro must be WIRED to a test that asserts the INTENDED
+/// output — the cardinal rule in `AGENTS.md` §Task Continuity is "commit a
+/// minimal reproducer to `tests/fixtures/known_gaps/` **and wire an
+/// `#[ignore]`d test asserting the CORRECT/intended output**".
+///
+/// An UNWIRED `.gg` is half a repro. The file exists, so the filing *looks*
+/// discharged, but nothing asserts what the program should do and nothing can
+/// ever go green when the bug is fixed — so it cannot "graduate to a live
+/// regression fixture the same round the bug is fixed", which is the whole
+/// point of committing it. It is a fixture that can never be seen to pass,
+/// the mirror of the Core #12 fixture that is never seen to FAIL.
+///
+/// Measured 2026-08-27 (R45): 31 of 205 repros were unwired, and they were
+/// overwhelmingly the RECENT filings — the `.gg` gets written under time
+/// pressure and the wiring step is the one that gets dropped. Several are
+/// CRITICAL memory-safety repros (`box_*_double_free`,
+/// `closure_capture_then_mutate_source_uaf`,
+/// `read_through_borrow_param_destroys_caller_value`).
+///
+/// ## SHRINK-ONLY
+///
+/// A row that LEAVES is progress: wire it (or graduate it out of
+/// `known_gaps/`) and delete its line. A row that ARRIVES is a red — a new
+/// filing shipped a repro nothing asserts intent for. Do not add rows.
+///
+/// ## What this does NOT check (Core #12: name the omitted cells)
+///
+/// It checks that some test names the fixture PATH, not that the assertion is
+/// correct, not that the test is `#[ignore]`d, and not that the expected
+/// output is the INTENDED behaviour rather than today's buggy output. Those
+/// stay review's job; this only retires the "no test at all" class.
+#[test]
+fn known_gaps_repros_are_wired_to_a_test() {
+    /// Baseline regenerated 2026-08-27 by running this test. SHRINK-ONLY.
+    const ALLOWED_UNWIRED: [&str; 31] = [
+        "box_callable_call_through_box_undefined_function",
+        "box_ctor_closure_ices_while_boxnew_works",
+        "box_enum_payload_c_wont_compile_llvm_double_frees",
+        "box_from_field_owning_boxes_double_free",
+        "box_get_bound_to_local_double_free",
+        "box_get_non_primitive_llvm_llc_type_error",
+        "box_move_without_operator_missing_at_ctor_and_field",
+        "box_new_discarded_trait_pack_leak",
+        "box_optional_payload_incomplete_type_both_lanes",
+        "box_primitive_element_types_collapse",
+        "box_trait_bare_ctor_struct_field_uaf",
+        "closure_capture_then_mutate_source_uaf",
+        "cow_rescue_runs_against_dangling_alias_view",
+        "dict_index_assign_during_iteration_ice",
+        "dict_value_write_through_silently_dropped",
+        "doc_ld_concurrency_example_does_not_typecheck",
+        "eq_without_equatable_silently_false",
+        "for_amp_dict_key_binding_must_reject",
+        "for_amp_set_key_binding_must_reject",
+        "fstring_inline_struct_ctor_lowers_as_tuple",
+        "inline_case_arm_rejects_statement",
+        "match_expression_ignores_guards",
+        "match_scrutinee_unnamed_temp_leaks",
+        "read_through_borrow_param_destroys_caller_value",
+        "read_through_equip_self_destroys_receiver",
+        "rust_box_move_param_deref_clone_double_free",
+        "sh_targ_recorder_pregate_nested_positions",
+        "struct_ctor_arg_not_typechecked_against_field",
+        "tuple_equality_returns_wrong_answer",
+        "user_fn_name_collides_with_libc",
+        "user_mutator_method_name_decides_memory_safety",
+    ];
+
+    let mut sources = String::new();
+    for entry in fs::read_dir("tests").expect("read tests/") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+            sources.push_str(&fs::read_to_string(&path).unwrap_or_default());
+        }
+    }
+
+    let mut unwired: Vec<String> = Vec::new();
+    for entry in fs::read_dir("tests/fixtures/known_gaps").expect("read known_gaps/") {
+        let path = entry.expect("dir entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("gg") {
+            continue;
+        }
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        // Match how the harness helpers spell the fixture: with or without `.gg`.
+        let with_ext = format!("known_gaps/{stem}.gg");
+        let bare = format!("known_gaps/{stem}\"");
+        if !sources.contains(&with_ext) && !sources.contains(&bare) {
+            unwired.push(stem);
+        }
+    }
+    unwired.sort();
+
+    let arrivals: Vec<&String> = unwired
+        .iter()
+        .filter(|s| !ALLOWED_UNWIRED.contains(&s.as_str()))
+        .collect();
+    assert!(
+        arrivals.is_empty(),
+        "known_gaps repro(s) with NO test asserting their intended output:\n  {}\n\n\
+         A committed `.gg` with no wired test is half a filing: nothing states what the \
+         program SHOULD print, and nothing can go green when the bug is fixed, so it can \
+         never graduate. Add an `#[ignore]`d test (see `known_gap_*` in tests/integration.rs) \
+         asserting the INTENDED output — not today's buggy output.",
+        arrivals
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n  ")
+    );
+
+    let departed: Vec<&str> = ALLOWED_UNWIRED
+        .iter()
+        .copied()
+        .filter(|s| !unwired.iter().any(|u| u == s) )
+        .collect();
+    assert!(
+        departed.is_empty(),
+        "ALLOWED_UNWIRED is STALE — these rows are now wired (or gone). The pin is \
+         SHRINK-ONLY, so delete them from the list:\n  {}",
+        departed.join("\n  ")
+    );
+}
