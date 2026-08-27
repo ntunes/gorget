@@ -1,0 +1,58 @@
+# KNOWN GAP — 🚨 `shared T x = <a local that is still live>` ICEs the compiler.
+#
+#     String v = mk("hel", "lo")
+#     shared String s = v
+#     print(v)                 # v is live past the staging point
+#
+#   -> gg build rc 101, `local _1 read after MoveZero in bb0`
+#      (src/ir/lowering/mod.rs:1724)
+#
+# A crash on a valid program. Spelling the initializer as a fresh call
+# instead -- `shared String s = mk("hel", "lo")` -- is rc 0, `hello`.
+#
+# MECHANISM. `lower_shared_var_decl`'s three resource arms stage the
+# initializer through `ctx.materialize_addressable` (src/ir/lowering/stmts/
+# mod.rs:1713, :1772, :1825), which is a thin wrapper over
+# `assign_with_move_follow_through` that HARDCODES `None` for the liveness
+# argument (src/ir/lowering/context.rs:2338). That helper's own doc
+# (context.rs:2219-2221) says `None` means "no liveness information at this
+# call site" and keeps the plain move-follow-through -- so the source is
+# `move_zero`d whether or not it is live. Here the source is
+# `lower_expr(ctx, builder, value)` (stmts/mod.rs:1644), i.e. WHATEVER THE
+# USER WROTE: a bare identifier yields a live local.
+#
+# ⚠ CORE #14 — the wrapper's doc asserts an invariant it does not hold:
+# "with the same Move-follow-through guard as `assign_with_move_follow_through`".
+# It does NOT get the same guard; the liveness half is exactly what its
+# hardcoded `None` opts out of. Every OTHER `None` caller in the tree
+# (stmts/mod.rs:1696, :1731, :1790, :1847) justifies its `None` in a comment
+# at the site -- "a fresh temp minted by the emit_* helper one line up, dead
+# by construction". This one carries no justification, and it is the only
+# unjustified `None` at HEAD.
+#
+# SCOPE — measured, so the filing does not overclaim:
+#   * same-block read  : ICE rc 101 (this fixture)
+#   * cross-block read : rc 0, correct value, **ASan-CLEAN** -- the GIR
+#                        validator only catches the straight-line shape, and
+#                        the escaping shape is NOT memory-unsafe
+#   * no read at all   : rc 0, ASan-clean
+#   * fresh-temp init  : rc 0, ASan-clean
+# So this is CRASH-ON-VALID-PROGRAM, **not** a use-after-free. The ASan build
+# used here is known-live: it reported `heap-use-after-free` on an unrelated
+# probe the same day.
+#
+# INTENDED (asserted below): prints `hello`. The CoW rule is
+# clone-if-the-source-is-live, move-if-it-is-dead; `v` is live at the staging
+# point, so the staging clones and both names stay valid. Passing the source
+# span the helper's doc prescribes is what makes that answerable.
+#
+# RED-verified 2026-08-27 by the R45 orchestrator, with the fresh-temp control
+# built and run alongside (rc 0, `hello`).
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String v = mk("hel", "lo")
+    shared String s = v
+    print(v)

@@ -54521,6 +54521,31 @@ fn known_gap_cow_rescue_missing_when_mutation_has_no_name() {
     );
 }
 
+/// KNOWN GAP — `shared T x = <a local that is still live>` ICEs with `local
+/// _N read after MoveZero` (src/ir/lowering/mod.rs:1724). Crash on a valid
+/// program; the fresh-temp spelling `shared String s = mk("a","b")` is rc 0.
+///
+/// `lower_shared_var_decl`'s resource arms stage through
+/// `ctx.materialize_addressable`, a thin wrapper that HARDCODES `None` for
+/// the liveness argument of `assign_with_move_follow_through`
+/// (src/ir/lowering/context.rs:2338), whose doc says `None` means "no
+/// liveness information at this call site". Every other `None` caller
+/// justifies it at the site as a fresh temp dead by construction; this one
+/// does not, and its source is whatever the user wrote.
+///
+/// SCOPE, measured: only the same-block read ICEs. The cross-block read is
+/// rc 0 and ASan-CLEAN, so this is crash-on-valid-program, NOT a UAF.
+#[test]
+#[ignore = "KNOWN GAP (R45, orchestrator-verified from Track D pass 11): \
+`shared T x = <live local>` ICEs rc 101 with `local _N read after MoveZero`. \
+materialize_addressable (context.rs:2338) hardcodes None for the liveness \
+half, so the live source is move_zero'd unconditionally. Intended: clone \
+because live, print `hello`."]
+fn known_gap_shared_init_from_live_local_ices() {
+    // INTENDED: `hello` — the source is live, so the staging clones.
+    run_gg("known_gaps/shared_init_from_live_local_ices.gg", "hello");
+}
+
 /// KNOWN GAP — calling a `Callable[...]`-typed LOCAL VARIABLE with a
 /// consuming argument panics the lowerer (`Tier 2a consume-site violation`,
 /// src/ir/lowering/mod.rs:2114). `gg check` passes, so this is a
