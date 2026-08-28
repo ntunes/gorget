@@ -1,0 +1,30 @@
+# KNOWN GAP (found R45 Track G while auditing the chain-link postfix axis).
+#
+# A method whose return type is a `Callable[...]`, immediately CALLED, is
+# miscompiled on BOTH lanes — Core #8: two bugs, not one.
+#
+#   RUST gg   : `error: void value not ignored as it ought to be`
+#               at `__v5 = BoxF__getf(__v3);` — the method is emitted with a
+#               VOID C signature even though it returns a Callable.
+#   SELF-HOST : `error: incompatible types when assigning to type 'int64_t'
+#               from type 'Option__int64_t'` — a different wrong mint.
+#
+# This is NOT the chain-link contended-span class Track G fixed: the shape is
+# still RED with the complete spine discriminator in place, and the Rust lane
+# never consults a span table at all. The ECall link is the one cell of the
+# postfix axis that has no `chain_link_*` corpus row for exactly this reason —
+# it cannot be a parity-corpus fixture until both lanes compile it.
+#
+# CORRECT output is `true`: `getf()` returns a closure that answers `None()`,
+# so `.is_none()` on its result is true.
+struct BoxF:
+    int n
+
+equip BoxF:
+    Callable[Option[int](int)] getf(self):
+        Callable[Option[int](int)] f = (int x): None()
+        return f
+
+void main():
+    BoxF b = BoxF(1)
+    print(b.getf()(3).is_none())

@@ -1,0 +1,28 @@
+# CHAIN-LINK corpus · AXIS = the kind of postfix link sitting between the two
+# method calls of a chain. CELL SAMPLED HERE: the link is an EMethodCall (the
+# ADJACENT-receiver cell) over a USER-DEFINED (non-builtin) receiver type.
+#
+# `parse_expr_bp_with_lhs` (which binds `int bp_start = lhs.span.start`) and
+# `parse_dot_expr` (which binds `int start = lhs.span.start`) give every link of
+# a postfix spine the same `span.start`, so the span.start-keyed `expr_types`
+# table is a CONTENDED slot.
+# The outer link's own type is published only on `expr_link_types[span.end]`,
+# and only by `infer_expr_type`. When the typechecker's targ-recorder skips
+# that call for the outer link, the lowerer falls back to the contended slot
+# and mints the outer link's destination with its RECEIVER's type -- the
+# emitted C then does not compile.
+#
+# Sibling cells: chain_link_field / chain_link_field_nested (EFieldAccess),
+# chain_link_index / chain_link_index_nested (EIndex),
+# chain_link_propagate (EPropagate), chain_link_builtin_recv_control (builtin
+# receiver, the accidentally-green control).
+from std.heap import Heap
+
+void main():
+    Heap[int] empty = Heap[int].new()
+    print(empty.pop().is_none())
+    print(empty.pop().is_some())
+    Heap[int] full = Heap[int].new()
+    full.push(7)
+    print(full.pop().is_some())
+    print(full.pop().is_none())

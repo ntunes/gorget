@@ -16,34 +16,48 @@ for these three specifically.** Every one of their measurements was taken agains
 figure against the post-G HEAD before acting on it** (Core #5). The reports' reasoning survives; their numbers may
 not. Everything durable is already in `todo/` regardless.
 
-**DELIVERY ORDER AND STATE:** **G** (round-blocker, `t0702`) → **D** (`t0036`, closest: predicate-only, 9 passes,
+**DELIVERY ORDER AND STATE:** **G** (round-blocker, `t0702`) — **LANDED** → **D** (`t0036`, closest: predicate-only, 9 passes,
 last two found only mechanical edits) → **F** (`t0699`+`t0703`, owner-ordered) → **A** (`t0697`, 15 passes, still
 RESERVATIONS — **needs a scope cut like D got**, not more passes at the current scope).
 
-**⚠⚠ R45 PRIORITY RESET — OWNER, 2026-08-27: FIX HEAD FIRST. `t0702` IS NOW TRACK G AND OUTRANKS EVERY OTHER R45 TRACK.** This SUPERSEDES the earlier "t0702 after Track F" sequencing. **Track G restores `self_host_runtime` to green and INTEGRATES; the remaining tracks then continue FROM the fixed HEAD** (each re-bases and re-runs its own measurements — every self-host reading taken before Track G integrates is unsound and must be regenerated, not carried forward). ⚠ **Track G may NOT re-seed** (`GG_REGEN_RUNTIME_SNAPSHOT=1` pins a miscompile as canonical) and may NOT weaken the gate (no `#[ignore]`, no allowlist, no ceiling raise). **BISECT RESULT SO FAR:** `e7a419e9` (2026-08-24, R44 Track K) is **GOOD** — measured `test result: ok. 2 passed; 0 failed`, 897s. `30bd94e1` is **BAD**. Window ~18 revisions and narrowing; automated run in a detached worktree at `/tmp/bisect_shr`, progress in `/tmp/bisect_trace.txt` and `/tmp/bisect_full.log`. **Do not touch that worktree.** ⚠ A bisect names a COMMIT, not a MECHANISM — the first-bad commit may have EXPOSED a latent bug rather than written one, and Track G owes that determination with evidence.
+**⚠⚠ R45 PRIORITY RESET — OWNER, 2026-08-27: FIX HEAD FIRST.** Track G was that fix and it has LANDED:
+`self_host_runtime` is green (see below), so **the remaining tracks continue FROM the fixed HEAD** —
+each re-bases and re-runs its own measurements. Every self-host reading taken BEFORE Track G integrated
+is unsound and must be regenerated, not carried forward (Core #5). The owner's constraints on that track
+still describe the standing policy for this gate: no re-seed, no `#[ignore]`, no allowlist, no ceiling
+raise. The bisect that was in flight is moot — the mechanism was established by measurement, and the
+lesson it left is the general one: **a bisect names a COMMIT, not a MECHANISM.**
+
+**⚠ TRACK G's CEILING BUMPS ARE AN OPEN OWNER ASK.** All four `clone_ceiling` constants are re-seeded to
+this tree's measured values and every one of the four comment blocks says, in terms, that NO owner
+authorised them (an earlier revision claimed otherwise — that was false provenance and is corrected).
+The stage-1 string axis is +13.4%. The cause is censused, not argued: the CoW mutation-path peel newly
+marks 35 root identifiers, and the mark is ROOT-granular rather than PATH-granular, so each one
+suppresses the borrow-flip for every bind rooted at that name. `todo/t0715` carries the full 2×2 and the
+reclaim. The owner's call is: accept the four numbers with the debt named, or revert the constants
+(values inline in each block) and let the gate go red until the reclaim lands.
 
 **R45 TRACK ORDER — OWNER-SET, 2026-08-27, as amended above.** Tracks A (Box ctor / trait pack), C (`for`-loop element
 bindings + D49), D (extraction sites) are mid-gauntlet. **Track F = fix `t0699` + `t0703`** (the two
-CRITICAL live UAFs; owner-ordered fixed THIS round) is scouting. **`t0702` LAUNCHES AFTER TRACK F**
-(owner-sequenced) — do not open it in parallel.
+CRITICAL live UAFs; owner-ordered fixed THIS round) is scouting. (`t0702` was resequenced ahead of F by
+the owner's 2026-08-27 reset and has since LANDED.)
 
-**⚠ `t0702` IS A CORE #7 ROUND BLOCKER AND IT IS NOT OPTIONAL FOR CLOSE.** `self_host_runtime` is RED at
-pristine HEAD (three independent confirmations; 1364 passing / 7 CC-FAIL, one class in two costumes: an
-assignment destination typed as the BASE iterator / `Option` receiving an ADAPTER / PAYLOAD value).
-**Every self-host reading in Tracks A, C and D is unsound until it is green or explicitly quarantined
-with a citation.** Do NOT re-seed with `GG_REGEN_RUNTIME_SNAPSHOT=1` — these are CC-FAIL rows (emitted C
-that does not compile), so re-seeding pins a miscompile as canonical.
+**`t0702` IS CLOSED — `self_host_runtime` IS GREEN.** Track G's chain-link fix removed all 7 CC-FAIL
+rows; the rework re-measured it on the integrated tree: `passing set 1377 / regressed 0`. Regenerate with
+`GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 cargo test --test integration --release
+self_host_runtime -- --exact self_host_runtime --nocapture`. The standing rule survives the closure and
+still binds: never re-seed this gate with `GG_REGEN_RUNTIME_SNAPSHOT=1` on a CC-FAIL row — that pins a
+miscompile as canonical. The bisect that was in flight for it is moot; the mechanism was found by
+measurement, not by the bisect (a targ-recorder cost filter that modelled only ONE of
+`infer_expr_type`'s two output channels).
 
-**LAST KNOWN-GOOD FOR `t0702` IS UNESTABLISHED — a bisect is in flight.** The record does not settle it:
-the last snapshot-dir commit is `e7a419e9` (R44 Track K) but it touched **1 file / 2 insertions and none
-of the 7 failing rows**, so "green by construction at a re-seed" does not apply; the failing rows'
-snapshots date from 2026-06-18 / 07-01 / 08-07; and R44's `DONE.md` entry records **no**
-`self_host_runtime` green. Window is **at minimum the 78 commits since `e7a419e9`**, possibly far larger.
-First probe running at `e7a419e9` in a detached worktree at `/tmp/bisect_shr`
-(log `/tmp/bisect_e7a419e9.log`). ⚠ **If it is RED there, the gate has been red across at least one
-round-close battery that reported green** — which is then its own finding about the battery, adjacent to
-`t0577` but distinct: `t0577` is a gate ABSENT from the battery, this would be a gate that EXISTS and
-did not run.
+**⚠ `self_host_runtime_diff` IS STILL RED, AND NOT FOR TRACK G's REASON.** non-MATCH = 153 against
+`RUNTIME_DIFF_NONMATCH_CEILING = 151`. Track G is net **−9** on that backlog and adds ZERO rows (all its
+fixtures COMPILE and MATCH on the self-host lane). The residual +2 is **another track's own inflow**:
+`liveness_use_inside_unsafe_scope` and `liveness_on_error_seed_kill_leak`, added by `c5860a68` /
+`45c547e2`. Core #9 ⊕ forbids raising the ceiling for a round's own inflow — **the obligation is to PORT
+those two to the self-host lane**, which lands the gate green at 151 with headroom Track G already paid
+for. Do not hold anything else hostage to it, and do not raise the number.
 
 **CONVERGENCE BASELINE FOR R45: kg=22, todo=679** — regen the close line with
 `scripts/convergence.sh 22 679 <filed>`. ⚠ **The kg number is NOT a gap count.** It counts ORPHANED
@@ -477,7 +491,6 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t0707`](todo/t0707.md) **HIGH** — 🆕🐛💥 [HIGH — CRASH ON A VALID PROGRAM: shared T x = <a local that is still live> ICEs gg build rc 101 with local _1 read…
 - [`t0708`](todo/t0708.md) **HIGH** — 🆕🐛 [HIGH — LEAK, pristine HEAD, BOTH lanes; found 2026-08-27 by the R45 Track A brief-review pass 16, orchestrator-verif…
 - [`t0709`](todo/t0709.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — a Vector[Box[Trait]] built with Box.new + push and RETURNED FROM A HELPER segfaults: rc 139 on BOTH back…
-- [`t0716`](todo/t0716.md) **HIGH** — 🆕 [HIGH — live wrong answer on the self-host lane; the SIBLING of the fix R45 Track G shipped, i.e. an instance fix wher…
 - [`t0715`](todo/t0715.md) **HIGH** — 🆕📉 [HIGH — a MEASURED +13.08% stage-1 string-clone regression, correctness-required but reclaimable; ceilings re-seeded…
 ### Medium
 
@@ -579,7 +592,6 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 
 - [`t0170`](todo/t0170.md) **HIGH** — 🆕🐛 [HIGH — parity WRONG newcomers, from the 2026-07-16 battery regen; PRE-EXISTING lane gaps that entered the corpus via…
 
-- [`t0702`](todo/t0702.md) **HIGH** — 🆕🚨 [HIGH — self_host_runtime IS RED AT PRISTINE HEAD; a Core #7 gate failing means every self-host reading this round is…
 ### Medium
 
 - [`t0171`](todo/t0171.md) **MED** — 🆕 [MED — self-host lane gap, Core #9; R40 Track B] The 3 driver-embedded lexer copies lack the \xHH arm + unknown-escape…
@@ -837,6 +849,7 @@ Remaining from this triage (GO #1 / GO #2 v2 / named-arg-reorder candidate #3 ar
 - lazy-iter adapter-chain infinite-loop (DEEP, KILLED): FilterIter.next()'s `self.inner` EFieldAccess copies the inner iterator (lower_place_base lower_stmt.gg:1215 has no EFieldAccess case → value copy not field-borrow); Ref[Dict]/Ref[Set] source isn't is_resource_field_type (lower_types.gg:2521). Real fix = place-projection receiver (&self.inner), architectural (self-host has no Place/Projection::Field IR). DEEP.
 - collection type-alias (type IntList = Vector[int]) — meta_aliases drops the [int] targ; needs targ-preserving alias storage. Separate from GO #1.
 
+- [`t0712`](todo/t0712.md) **MED** — 🆕🐛 [MEDIUM — lane divergence with a CLEAR correct direction (reject); a Core #10 lower-or-reject violation on the self-h…
 ### Low
 
 - [`t0269`](todo/t0269.md) — 🐛 SELF-HOST (SH-lane miscompile, filed R40 Track-J review 2026-08-10) — for (i, b) in s.bytes().enumerate() over-reads t…
@@ -1111,6 +1124,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t0694`](todo/t0694.md) **HIGH** — 🆕⚖️ [HIGH — IMPLEMENT D49 (ratified owner 2026-08-27): for x in &set and for k in &dict must be a CHECK-TIME REJECTION;…
 - [`t0701`](todo/t0701.md) **HIGH** — 🆕🚨💥 [HIGH — STRUCT CONSTRUCTOR ARGUMENTS ARE NOT TYPE-CHECKED AGAINST THE FIELD TYPE; gg check ACCEPTS and the payload s…
 - [`t0710`](todo/t0710.md) **HIGH** — 🆕🚨 [HIGH — AN IMPORT STATEMENT CHANGES WHETHER A PROGRAM TYPECHECKS; found 2026-08-27 by R45 Track A brief-review pass 2…
+- [`t0717`](todo/t0717.md) **HIGH** — 🆕🐛 [HIGH — a WRONG ANSWER with rc 0, the worst outcome; the REFERENCE LAGS THE SELF-HOST, i.e. a succession milestone (s…
 ### Medium
 
 
@@ -1246,6 +1260,8 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t0687`](todo/t0687.md) **HIGH** — 🆕🚨 [HIGH — CALLING a Box[Callable[...]] is a compiler ICE; found 2026-08-27 by R45 Track A brief-review pass 7, orchestr…
 - [`t0688`](todo/t0688.md) **HIGH** — 🆕🚨 [HIGH — Box[enum] with a resource-carrying variant: C REFUSES TO COMPILE, LLVM compiles then DOUBLE-FREES; found 2026…
 - [`t0700`](todo/t0700.md) **HIGH** — 🆕🐛💥 [HIGH — Vector[Box[Trait]] NEVER DROPS ITS ELEMENTS: a LIVE LEAK at HEAD in a COMMITTED, PASSING fixture; found 2026…
+- [`t0711`](todo/t0711.md) **HIGH** — 🆕🐛 [HIGH — CC-FAIL on BOTH lanes, so ≥2 bugs (Core #8); found R45 Track G while enumerating the postfix-link axis] A met…
+- [`t0714`](todo/t0714.md) **HIGH** — 🆕🐛💥 [HIGH — ICE on Rust gg (exit 101), resolve-reject on the self-host, so ≥2 bugs (Core #8); found R45 Track G while en…
 ### Medium
 - [`t0474`](todo/t0474.md) **MED** — 🆕🔧 [MED — prerequisite for retiring the last indirect-call shape heuristic; filed 2026-08-19 by R43 Track C] Tag LARGE n…
 - [`t0475`](todo/t0475.md) **LOW** — 🧹 [LOW — Layering rule 3, one source of truth per axis; found 2026-08-19 by R43 Track C] src/backend/c_lir/helpers.rs ca…

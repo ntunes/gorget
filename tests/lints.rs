@@ -5837,6 +5837,897 @@ fn self_host_targ_recorder_pregate_mirrors_recorder() {
     );
 }
 
+/// CHAIN-LINK GATE ratchet (Core #6 — turn a recurring bug class into an
+/// executable guard; Core #4 — pin the CLASS, not the instance).
+///
+/// **Why this exists, and why the sibling lint above could not do it.**
+/// `self_host_targ_recorder_pregate_mirrors_recorder` pins the walkers' arm SET
+/// and per-arm recursion COUNT. It is structurally blind to the GATE CONDITION —
+/// which is why it stayed green through BOTH removals that broke
+/// `self_host_runtime`: the walk still reached every node, it just stopped
+/// CALLING `infer_expr_type` at the node it was standing on.
+///
+/// **The invariant.** `infer_expr_type` has TWO output channels, not one. Besides
+/// `expr_method_targs` it publishes each method call's resolved type on
+/// `expr_link_types[span.end]`, which `lower_types.gg:lookup_expr_gir_type` reads
+/// FIRST for every EMethodCall. `span.start`, by contrast, is a **contended key**:
+/// `parse_expr_bp_with_lhs` (binding `int bp_start = lhs.span.start`) and
+/// `parse_dot_expr` (binding `int start = lhs.span.start`) build a node around
+/// `lhs` and give it that same start — there is no `parse_postfix` in the
+/// self-host parser; that is the RUST parser's function (`src/parser/expr.rs`).
+/// So every link of a spine shares one
+/// `expr_types` slot. Skip the inference for a spine link and the lowerer falls
+/// back to that shared slot and mints the link's destination with its RECEIVER's
+/// type — the emitted C does not compile.
+///
+/// **What is pinned, mechanically:**
+///   1. `expr_spine_has_method_call`'s arm set is EXACTLY the set of constructors
+///      that inherit `lhs`'s `span.start`, **re-derived from `parser.gg` here**
+///      rather than taken from a hand list, minus an explicitly-reasoned
+///      NON-WALKABLE list that must itself still be present in the census. Add a
+///      span-inheriting postfix/infix form to the parser and this goes red until
+///      the discriminator learns about it. This is the property that makes the
+///      guard able to catch its OWN class (Core #15e Q2): the previous shape of
+///      this fix — "receiver is adjacent-ly an EMethodCall" — is a heuristic that
+///      passes one costume and CC-FAILs five.
+///   2. The recorder's `EMethodCall` gate still carries the chain-link disjunct
+///      beside the registry cost filter. A narrowing back to the registry test
+///      alone reds here.
+///   3. The statement pre-gate carries it too. It is an independent copy of the
+///      same decision (`7e01d655` removed that one separately), so it needs its
+///      own pin.
+///
+/// **The census is STRUCTURAL, and that is the point (Core #15e Q2).** An earlier
+/// shape of this lint mechanised the author's own textual rule: it required the
+/// literal substring `Box(lhs)` on the construction line and compared the span
+/// start with `==`. It therefore reproduced the author's blind spots exactly —
+/// it could not see `Box[SpannedExpr](val)`, a receiver named anything but
+/// `lhs`, a whole-span copy (`…, val.span)` with no `Span(` literal at all), a
+/// construction wrapped across two lines, or an alias line with a trailing
+/// comment. Two of those are not hypothetical: `parser.gg`'s `EImplicitClosure`
+/// site uses the turbofish AND the whole-span copy at once, so the file already
+/// contained a construction the census could not see; and a plain `gg fmt` sweep
+/// re-wrapping the over-120-column `EMethodCall` lines would have made the lint
+/// RED with a message telling the reader to DELETE the `EMethodCall` arm — a
+/// guard whose failure mode is "delete the fix". The census below therefore
+/// joins continuation lines by paren depth, splits the constructor call's
+/// arguments structurally, and classifies EVERY `SpannedExpr(E…)` site's span
+/// origin — with an UNCLASSIFIABLE shape a hard FAILURE, never a silent skip.
+///
+/// **If this fails:** do not delete an arm or a disjunct to make it pass. Read
+/// `parser.gg` for the constructor named in the message first — an EXTRA arm may
+/// equally mean the census stopped seeing a site. The behavioural counterpart is
+/// the `chain_link_*` fixture family (`tests/fixtures/chain_link_*.gg` + their
+/// `runtime_snapshots/*.out`), which CC-FAILs on the self-host lane the moment
+/// either gate stops supplying `expr_link_types` for a spine link.
+///
+/// Constructors that inherit a span start but that NO arm can serve, each with
+/// the reason it cannot. Every entry must still appear in the parser census —
+/// a stale exemption is itself a failure.
+const CHAIN_LINK_NON_WALKABLE: &[(&str, &str)] = &[(
+    "EDo",
+    "the synthesized `catch (e):` block takes the owning catch expression's \
+     span.start (deliberately, and identically in Rust's `parse_body_or_expr`) \
+     WITHOUT wrapping `lhs`: its payload is a `Vector[Stmt]` and `lhs` is a \
+     sibling, so there is no sub-expression for a discriminator arm to walk. A \
+     case with no subject (Core #15e Q4) — the fix, if a reachable miscompile is \
+     ever built from it, is at the parser WRITE site, not here.",
+)];
+
+/// Split `s` into LOGICAL lines: a source line whose brackets are still open is
+/// joined with the ones that follow. Comments (`#` outside a string) are stripped
+/// first, so a trailing comment can never change how a construction parses.
+fn gg_logical_lines(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut acc = String::new();
+    let mut depth: i32 = 0;
+    for raw in s.lines() {
+        // strip a `#` comment that is outside a string literal
+        let mut code = String::new();
+        let mut in_str = false;
+        let mut quote = '"';
+        let mut prev_backslash = false;
+        for c in raw.chars() {
+            if in_str {
+                code.push(c);
+                if prev_backslash {
+                    prev_backslash = false;
+                } else if c == '\\' {
+                    prev_backslash = true;
+                } else if c == quote {
+                    in_str = false;
+                }
+                continue;
+            }
+            if c == '#' {
+                break;
+            }
+            if c == '"' || c == '\'' {
+                in_str = true;
+                quote = c;
+            }
+            code.push(c);
+        }
+        if depth > 0 {
+            acc.push(' ');
+            acc.push_str(code.trim());
+        } else {
+            acc = code.clone();
+        }
+        // recount depth over the code we just absorbed
+        let mut in_str = false;
+        let mut quote = '"';
+        let mut prev_backslash = false;
+        for c in code.chars() {
+            if in_str {
+                if prev_backslash {
+                    prev_backslash = false;
+                } else if c == '\\' {
+                    prev_backslash = true;
+                } else if c == quote {
+                    in_str = false;
+                }
+                continue;
+            }
+            match c {
+                '"' | '\'' => {
+                    in_str = true;
+                    quote = c;
+                }
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth -= 1,
+                _ => {}
+            }
+        }
+        if depth <= 0 {
+            depth = 0;
+            out.push(std::mem::take(&mut acc));
+        }
+    }
+    if !acc.is_empty() {
+        out.push(acc);
+    }
+    out
+}
+
+/// Split the argument list starting just after an opening `(` at `open` in `s`.
+/// Returns the top-level arguments and the index just past the matching `)`.
+fn gg_split_args(s: &str, open: usize) -> Option<(Vec<String>, usize)> {
+    let b = s.as_bytes();
+    let mut depth = 0i32;
+    let mut args: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut i = open;
+    let mut in_str = false;
+    let mut quote = b'"';
+    let mut prev_backslash = false;
+    while i < b.len() {
+        let c = b[i] as char;
+        if in_str {
+            cur.push(c);
+            if prev_backslash {
+                prev_backslash = false;
+            } else if c == '\\' {
+                prev_backslash = true;
+            } else if c as u8 == quote {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            '"' | '\'' => {
+                in_str = true;
+                quote = c as u8;
+                cur.push(c);
+            }
+            '(' | '[' => {
+                depth += 1;
+                if depth > 1 {
+                    cur.push(c);
+                }
+            }
+            ')' | ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    args.push(cur.trim().to_string());
+                    return Some((args, i + 1));
+                }
+                cur.push(c);
+            }
+            ',' if depth == 1 => {
+                args.push(cur.trim().to_string());
+                cur.clear();
+            }
+            _ => cur.push(c),
+        }
+        i += 1;
+    }
+    None
+}
+
+#[test]
+fn self_host_targ_recorder_chain_link_spine_set() {
+    let parser = fs::read_to_string("tests/fixtures/self_host_typechecker/parser.gg")
+        .expect("chain_link_spine_set: parser.gg not found");
+    let tc = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("chain_link_spine_set: typecheck.gg not found");
+
+    // ── (A) THE WITNESS: derive the span-inheriting set from parser.gg ──
+    //
+    // A constructor INHERITS a span start iff its `SpannedExpr(…)` site carries a
+    // span whose START is `lhs.span.start` — directly, through a local bound to
+    // it (`int bp_start = lhs.span.start`), or by copying a wrapped
+    // sub-expression's span ENTIRE (`…, val.span)`). Read off the construction
+    // itself; nothing here is a hand-maintained list.
+    //
+    // ⚠ HOW INDEPENDENT IS IT, HONESTLY? It is independent of the DISCRIMINATOR
+    // (it reads parser.gg, the discriminator reads nothing) but it is NOT
+    // independent of the RULE — the same author wrote both, so a blind spot in
+    // the rule is a blind spot in the census. That is why an unclassifiable span
+    // origin PANICS instead of being skipped: the census cannot claim to have
+    // witnessed a set it silently dropped rows from. The genuinely independent
+    // cross-check is the RUST parser, which uses a different idiom entirely
+    // (`lhs_span.merge(end)`, src/span.rs) and agrees on both of the two rows
+    // this shape found that the textual predecessor missed
+    // (`ImplicitClosure`, src/parser/expr.rs; the synthesized `Do`,
+    // src/parser/mod.rs).
+    let logical = gg_logical_lines(&parser);
+
+    // Aliases are FUNCTION-SCOPED and honour rebinding. `int start =
+    // lhs.span.start` in `parse_dot_expr` makes `start` an alias THERE; the
+    // fifteen other `int start = self.peek().lex_start` bindings must not make
+    // every constructor in the file look like a spine link. (A file-global alias
+    // set produced 31 "inheriting" constructors — every literal in the parser.)
+    let mut witness: std::collections::BTreeSet<String> = Default::default();
+    let mut own_span: std::collections::BTreeSet<String> = Default::default();
+    let mut sites = 0usize;
+    let mut aliases: std::collections::HashSet<String> =
+        ["lhs.span.start".to_string()].into_iter().collect();
+    for line in &logical {
+        // A function/method declaration ends the previous function's scope.
+        let indent = line.len() - line.trim_start().len();
+        let t = line.trim();
+        if (indent == 0 || indent == 4)
+            && t.ends_with(':')
+            && t.contains('(')
+            && !t.starts_with("if ")
+            && !t.starts_with("while ")
+            && !t.starts_with("for ")
+            && !t.starts_with("match ")
+            && !t.starts_with("case ")
+            && !t.starts_with("elif ")
+            && !t.starts_with("with ")
+            && !t.starts_with("struct ")
+            && !t.starts_with("equip ")
+            && !t.starts_with("enum ")
+        {
+            aliases.clear();
+            aliases.insert("lhs.span.start".to_string());
+        }
+        if let Some(rest) = line.trim_start().strip_prefix("int ") {
+            if let Some((name, init)) = rest.split_once('=') {
+                let name = name.trim().to_string();
+                if !name.contains(' ') && !name.contains('(') {
+                    if init.trim() == "lhs.span.start" {
+                        aliases.insert(name);
+                    } else {
+                        aliases.remove(&name);
+                    }
+                }
+            }
+        }
+        let mut from = 0usize;
+        while let Some(rel) = line[from..].find("SpannedExpr(") {
+            let at = from + rel;
+            let open = at + "SpannedExpr".len();
+            let Some((args, past)) = gg_split_args(line, open) else {
+                panic!(
+                    "chain_link_spine_set: unbalanced `SpannedExpr(` in parser.gg — the \
+                     continuation-line joiner did not close this construction. Logical line:\n  \
+                     {line}\n\
+                     An unparseable site is a FAILURE, not a skip: it is exactly how the previous \
+                     census went blind to `EImplicitClosure`."
+                );
+            };
+            from = past;
+            // Only the *constructor* form `SpannedExpr(EFoo(…), span)` is a
+            // construction site; `SpannedExpr expr = …` declarations and casts are not.
+            if args.len() != 2 || !args[0].starts_with('E') {
+                continue;
+            }
+            let ctor: String = args[0]
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            sites += 1;
+            let span_arg = args[1].trim();
+            if span_arg.starts_with("Span(") {
+                let Some((span_args, _)) = gg_split_args(span_arg, "Span".len()) else {
+                    panic!("chain_link_spine_set: unparseable `Span(…)` at `{span_arg}`");
+                };
+                if span_args.len() != 2 {
+                    panic!(
+                        "chain_link_spine_set: `Span(…)` with {} args at `{span_arg}` — expected 2. \
+                         Classify it or fix the census; an unclassifiable shape is a failure.",
+                        span_args.len()
+                    );
+                }
+                if aliases.contains(span_args[0].trim()) {
+                    witness.insert(ctor);
+                } else {
+                    own_span.insert(ctor);
+                }
+            } else if span_arg.ends_with(".span")
+                && span_arg[..span_arg.len() - ".span".len()]
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '_')
+            {
+                // WHOLE-SPAN COPY: inherits start *and* end from the named
+                // expression. Only counts as inheritance when that expression is
+                // the one being WRAPPED — otherwise it is an unrelated span and
+                // the census must say so rather than guess.
+                let src = &span_arg[..span_arg.len() - ".span".len()];
+                assert!(
+                    args[0].contains(src),
+                    "chain_link_spine_set: `SpannedExpr({}, {span_arg})` copies the span of \
+                     `{src}`, which does not appear in the payload. That is a span origin this \
+                     census cannot classify — resolve it here rather than letting the site fall \
+                     through unseen.",
+                    args[0],
+                );
+                witness.insert(ctor);
+            } else {
+                panic!(
+                    "chain_link_spine_set: UNCLASSIFIABLE span origin for `{ctor}`: `{span_arg}`.\n\
+                     Every `SpannedExpr(E…, …)` site must be classifiable as (a) `Span(start, end)` \
+                     with a start that is or is not an alias of `lhs.span.start`, or (b) a \
+                     whole-span copy of the wrapped sub-expression. A new spelling is a FAILURE \
+                     here BY DESIGN — a silent `continue` is how a census stops witnessing \
+                     anything (Core #15e Q2)."
+                );
+            }
+        }
+    }
+    assert!(
+        sites >= 80 && witness.len() >= 12 && own_span.len() >= 10,
+        "chain_link_spine_set: the parser census saw {sites} construction sites, {} \
+         span-inheriting constructors ({witness:?}) and {} own-span ones. Those floors exist \
+         because EVERY failure mode of a census is 'it saw less than it thinks': too few sites \
+         means the joiner or the scan broke; too few inheriting means the alias tracking broke; \
+         too few OWN-span means the alias set went too WIDE and swallowed the literals (a \
+         file-global alias set made all 31 constructors look inheriting). Fix the census before \
+         trusting a green here.",
+        witness.len(),
+        own_span.len(),
+    );
+
+    // Every declared non-walkable exemption must still be a real census row.
+    for (name, reason) in CHAIN_LINK_NON_WALKABLE {
+        assert!(
+            witness.contains(*name),
+            "chain_link_spine_set: `{name}` is declared NON-WALKABLE (\"{reason}\") but the parser \
+             census no longer produces it. Either the parser stopped inheriting a span there — in \
+             which case DELETE the exemption — or the census broke. A stale exemption silently \
+             widens what this lint tolerates."
+        );
+    }
+    let non_walkable: std::collections::BTreeSet<String> = CHAIN_LINK_NON_WALKABLE
+        .iter()
+        .map(|(n, _)| n.to_string())
+        .collect();
+    let witness: std::collections::BTreeSet<String> =
+        witness.difference(&non_walkable).cloned().collect();
+
+    // ── (B) the discriminator's OWN arm set ──
+    let sig = "bool expr_spine_has_method_call(SpannedExpr sexpr):";
+    let body_start = tc.find(sig).unwrap_or_else(|| {
+        panic!(
+            "chain_link_spine_set: `{sig}` not found in self_host_typechecker/typecheck.gg.\n\
+             This is the CHAIN-LINK discriminator: the recorder must run `infer_expr_type` on \
+             any method call whose postfix SPINE contains another method call, so the link's \
+             own type reaches `expr_link_types[span.end]`. Deleting it re-opens the class that \
+             broke `self_host_runtime` (CC-FAIL on the self-host lane)."
+        )
+    }) + sig.len();
+    let mut arms: std::collections::BTreeSet<String> = Default::default();
+    for line in tc[body_start..].lines() {
+        if !line.starts_with(' ') && !line.trim().is_empty() {
+            break; // next column-0 declaration ends the function
+        }
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix("case ") {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if name.starts_with('E') {
+                arms.insert(name);
+            }
+        }
+    }
+
+    let missing: Vec<&String> = witness.difference(&arms).collect();
+    let extra: Vec<&String> = arms.difference(&witness).collect();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "`expr_spine_has_method_call` no longer matches the parser's span-inheriting set.\n\
+         parser.gg census ({}): {witness:?}\n\
+         discriminator arms ({}): {arms:?}\n\
+         MISSING from the discriminator: {missing:?}\n\
+         EXTRA in the discriminator:     {extra:?}\n\n\
+         Every constructor that inherits `lhs`'s `span.start` — as `Span(lhs.span.start, …)`, \
+         through an alias, or by copying the wrapped expression's whole span — lands on the \
+         CONTENDED span.start key, so a method call reached through one of them needs its own \
+         `expr_link_types[span.end]` entry. A MISSING arm means the recorder skips \
+         `infer_expr_type` for that shape and the lowerer types the link with its RECEIVER's \
+         type — CC-FAIL, exactly the class `chain_link_field` / `chain_link_index` / \
+         `chain_link_propagate` were cut from.\n\n\
+         ⚠ READ parser.gg FOR THE NAMED CONSTRUCTOR BEFORE TOUCHING EITHER SIDE. An EXTRA arm \
+         has TWO possible causes and they want opposite fixes: the parser genuinely stopped \
+         inheriting a span there (then the arm is dead and can go), or THE CENSUS STOPPED SEEING \
+         THE SITE — a re-layout, a renamed local, a new construction spelling. Deleting the arm \
+         in the second case re-opens the exact class this guard exists to retire, and \
+         `EMethodCall` is the arm a formatting sweep is most likely to hide. Never edit this \
+         lint's expectation to make it pass; fix the census or the parser.",
+        witness.len(),
+        arms.len(),
+    );
+
+    // ── (C) both gate sites still ASK the question ──
+    //
+    // The arm set being right is worthless if nobody calls the discriminator.
+    // These are the two independent copies of the decision: the per-call gate in
+    // `record_method_targs_in_expr` and the statement pre-gate in
+    // `expr_has_method_generic_call`. They were removed in two SEPARATE commits,
+    // so each needs its own pin.
+    let recorder_gate: Vec<&str> = tc
+        .lines()
+        .filter(|l| l.contains("registry_has_method_generic_name(types.trait_registry, mname)"))
+        .collect();
+    assert_eq!(
+        recorder_gate.len(),
+        1,
+        "expected exactly 1 recorder-side registry gate line, found {}: {recorder_gate:?}",
+        recorder_gate.len(),
+    );
+    assert!(
+        recorder_gate[0].contains("expr_spine_has_method_call"),
+        "the recorder's `EMethodCall` gate lost the CHAIN-LINK disjunct.\n\
+         Line at HEAD: {}\n\n\
+         The registry predicate alone answers 'can this call record a TARG?'. It says nothing \
+         about `infer_expr_type`'s OTHER output channel — `expr_link_types[span.end]`, which the \
+         lowerer reads FIRST for every EMethodCall. Gating inference on the targs question alone \
+         is exactly what broke `self_host_runtime`. Restore \
+         `… or expr_spine_has_method_call(*mrecv)`.",
+        recorder_gate[0].trim(),
+    );
+
+    let pregate_sig = "bool expr_has_method_generic_call(SpannedExpr sexpr, TraitRegistry registry):";
+    let pg_start = tc
+        .find(pregate_sig)
+        .unwrap_or_else(|| panic!("chain_link_spine_set: `{pregate_sig}` not found"))
+        + pregate_sig.len();
+    let pg_end = tc[pg_start..]
+        .find("\nbool ")
+        .or_else(|| tc[pg_start..].find("\nvoid "))
+        .map(|o| pg_start + o)
+        .unwrap_or(tc.len());
+    assert!(
+        tc[pg_start..pg_end].contains("expr_spine_has_method_call("),
+        "the statement PRE-GATE (`expr_has_method_generic_call`) lost the CHAIN-LINK disjunct.\n\
+         This is a SECOND, independent copy of the decision — it answers 'would the recorder \
+         call `infer_expr_type` even once?', and a `false` here skips the whole recording walk. \
+         It must be a SUPERSET of the recorder's own gate, so whatever the recorder infers for, \
+         this must answer `true` for.",
+    );
+}
+
+/// `gg_fn_body` (defined below) with a hard failure when the signature is not
+/// found — a silently-empty body would make every assertion over it vacuous.
+fn gg_fn_body_required(src: &str, sig: &str, what: &str) -> String {
+    assert!(
+        src.contains(sig),
+        "{what}: `{sig}` not found. An assertion over a body that does not exist passes \
+         vacuously, so this is a hard failure: find where the function went."
+    );
+    let body = gg_fn_body(src, sig);
+    assert!(
+        !body.trim().is_empty(),
+        "{what}: `{sig}` matched but yielded an empty body."
+    );
+    body
+}
+
+/// CoW WRITE-WALKER ratchet (Core #4 — centralize at the producer, then add the
+/// arm-count lint that forces the next sibling through the shared path).
+///
+/// **The class.** The self-host used to carry THREE hand-maintained copies of
+/// one walk — "peel a mutation path down to the root identifier it reaches" —
+/// where Rust has exactly one (`extract_path_for_mut`,
+/// `src/ir/lowering/functions.rs`). They drifted, and the drift was the bug,
+/// twice: `cow_mark_if_ident` was missing the `EMethodCall` arm, so
+/// `outer.get(0).unwrap().push(x)` marked nothing and the borrow-flip aliased a
+/// live view into a vector that then realloc'd (SIGSEGV); adding the arm THERE
+/// left `cow_mark_assign_target` still missing it, so
+/// `outer.get(0).unwrap()[0] = v` was a silent WRONG ANSWER (rc 0, ASan clean —
+/// only the differential against Rust gg could see it).
+///
+/// **What is pinned.** (1) `cow_mut_root_name` is the ONLY write-side function
+/// in `lower_cow.gg` with `case E…` arms — every recorder routes through it, so
+/// a fourth copy cannot sprout its own partial arm set. (2) Its arm set, and the
+/// READ side's, are pinned as explicit lists: the two are DELIBERATELY different
+/// (a read chain may thread a fallible link a mutation path cannot), and that
+/// asymmetry is exactly the kind of thing a comment asserts and nothing enforces
+/// (Core #14).
+#[test]
+fn self_host_cow_write_walkers_share_one_root_peel() {
+    let src = fs::read_to_string("tests/fixtures/self_host_lowerer/lower_cow.gg")
+        .expect("cow_write_walkers: lower_cow.gg not found");
+
+    let arms_of = |sig: &str| -> Vec<String> {
+        gg_fn_body_required(&src, sig, "cow_write_walkers")
+            .lines()
+            .filter_map(|l| l.trim_start().strip_prefix("case "))
+            .map(|r| {
+                r.chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect::<String>()
+            })
+            .filter(|n| n.starts_with('E'))
+            .collect()
+    };
+
+    // (1) the three recorders carry NO arms of their own — they call the shared walk.
+    for sig in [
+        "void cow_mark_moved_root(LowerCtx &ctx, SpannedExpr e):",
+        "void cow_mark_if_ident(LowerCtx &ctx, SpannedExpr e, int pos, bool in_closure):",
+        "void cow_mark_assign_target(LowerCtx &ctx, SpannedExpr lhs, int pos, bool in_closure):",
+    ] {
+        let body = gg_fn_body_required(&src, sig, "cow_write_walkers");
+        let own_arms = arms_of(sig);
+        assert!(
+            own_arms.is_empty(),
+            "`{sig}` grew its OWN expression arms {own_arms:?} instead of calling the shared \
+             `cow_mut_root_name`. That is how this class re-opens: a spelling learned at one \
+             recorder and missing at another. Add the arm to `cow_mut_root_name` — the ONE \
+             mutation-path peel — and let every recorder inherit it."
+        );
+        assert!(
+            body.contains("cow_mut_root_name("),
+            "`{sig}` no longer calls `cow_mut_root_name`. Every write-side mutation recorder \
+             must route through the one shared peel; see the class history in that function's \
+             docstring."
+        );
+    }
+
+    // (2) both peels' arm sets, pinned explicitly because they differ ON PURPOSE.
+    let mut write_arms = arms_of("String cow_mut_root_name(SpannedExpr e):");
+    write_arms.sort();
+    assert_eq!(
+        write_arms,
+        vec!["EDeref", "EFieldAccess", "EIdentifier", "EIndex", "EMethodCall"],
+        "`cow_mut_root_name`'s arm set changed. The four non-Deref arms are Rust's own \
+         mutable-path set (`extract_path_for_mut`); `EDeref` is the self-host's (`*p = v` \
+         reaches p's storage). REMOVING one under-marks — a mutation stops being recorded, the \
+         borrow-flip keeps a live alias, and you get the SIGSEGV or the silent wrong answer \
+         back. ADDING one over-marks (safe, but it costs clones: this walk feeds the whole \
+         `clone_ceiling` budget). Either way, say which in the docstring first."
+    );
+
+    // (3) CORE #10 IN GUARD FORM — the arm set is TOTAL over `enum Expr`.
+    //
+    // `cow_mut_root_name` ends in `else: return ""`, and a catch-all over a
+    // 44-variant enum is exactly what made this class possible: a shape nobody
+    // decided about silently became "not a mutable path", the dangerous
+    // default. Rust retired its own `_ => None` here for that reason and lists
+    // every non-path variant explicitly (`extract_path_for_mut`,
+    // src/ir/lowering/functions.rs). The self-host cannot spell an exhaustive
+    // match without an `else`, so the enumeration lives HERE instead: every
+    // `enum Expr` variant must be either a peeled arm or an explicitly declared
+    // no-mutable-path row. Add a variant to ast.gg and this goes red until
+    // someone decides which it is — the forcing function Core #10 asks for.
+    const NO_MUTABLE_PATH: &[&str] = &[
+        // literals and atoms — no storage reachable through them
+        "EIntLiteral", "EFloatLiteral", "EBoolLiteral", "EStringLiteral", "ECharLiteral",
+        "ENoneLiteral", "EIt", "EFString",
+        // `self` — the SH prescan keys on named locals only; a `self.f.push(x)`
+        // mutation is recorded against the field path's root, and `self` is not
+        // one. A real gap (Rust DOES have `Expr::SelfExpr => Some("self")`), but
+        // an UNDER-marking one that costs clones rather than safety, and closing
+        // it changes the mark set globally — a measured change, not a drive-by.
+        "ESelfExpr",
+        // fresh values: the result is a new temp, so no caller-visible storage
+        // is reached THROUGH the expression (a mutation INSIDE it is recorded by
+        // the scan's own recursion, not by this walk)
+        "EBinaryOp", "EUnaryOp", "ECall", "EArrayLiteral", "ETupleLiteral", "EDictLiteral",
+        "EStructLiteral", "EDotShorthand", "EListComp", "ESetComp", "EDictComp", "EDefaultOp",
+        "EIs", "EAs", "ERange",
+        // control-flow / block forms: value-producing, but the value is a temp
+        "EIf", "EMatch", "EBlock", "EDo", "ECatch", "ERethrow",
+        // closures and async: the mutation happens elsewhere in time, and the
+        // scan routes those through `cow_closure_mutated` (never-pristine)
+        "EClosure", "EImplicitClosure", "EAwait", "ESpawn", "ESpawnBlocking",
+        // fallible/ownership marks: Rust routes these to `=> None` too. Peeling
+        // them WRITE-side would mark a root through a link that may not have
+        // produced storage at all; the READ side peels them deliberately (see
+        // `cow_source_root_name`), and the asymmetry is the point.
+        "ETry", "EPropagate", "EMove", "EMutableBorrow",
+    ];
+    let variants: Vec<String> = {
+        let ast = fs::read_to_string("tests/fixtures/self_host_lowerer/ast.gg")
+            .expect("cow_write_walkers: ast.gg not found");
+        let body = gg_fn_body_required(&ast, "enum Expr:", "cow_write_walkers");
+        body.lines()
+            .map(|l| l.trim())
+            .filter(|l| l.starts_with('E'))
+            .map(|l| {
+                l.chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect::<String>()
+            })
+            .collect()
+    };
+    assert!(
+        variants.len() >= 40,
+        "cow_write_walkers: only {} `enum Expr` variants parsed from ast.gg — the parse broke, \
+         and a short list makes the totality check below vacuous.",
+        variants.len()
+    );
+    let decided: std::collections::HashSet<&str> = NO_MUTABLE_PATH
+        .iter()
+        .copied()
+        .chain(write_arms.iter().map(|s| s.as_str()))
+        .collect();
+    let undecided: Vec<&String> = variants.iter().filter(|v| !decided.contains(v.as_str())).collect();
+    assert!(
+        undecided.is_empty(),
+        "`enum Expr` variants with NO decision in the CoW mutation-path walk: {undecided:?}.\n\n\
+         `cow_mut_root_name` ends in `else: return \"\"`, so a new variant silently defaults to \
+         'no mutable path' — the DANGEROUS direction, and the exact shape of the defect this \
+         walker exists to prevent (a mutation that marks nothing leaves a live alias into \
+         storage that is then overwritten or realloc'd). Decide: add a peel arm to \
+         `cow_mut_root_name`, or add the variant to `NO_MUTABLE_PATH` here with the reason. \
+         Rust makes the same decision explicit in its own source (`extract_path_for_mut` lists \
+         every non-path variant rather than using `_ => None`, and the comment there says the \
+         catch-all WAS the live defect)."
+    );
+
+    let mut read_arms = arms_of("String cow_source_root_name(SpannedExpr e):");
+    read_arms.sort();
+    assert_eq!(
+        read_arms,
+        vec![
+            "EDeref",
+            "EFieldAccess",
+            "EIdentifier",
+            "EIndex",
+            "EMethodCall",
+            "EPropagate",
+            "ETry"
+        ],
+        "`cow_source_root_name`'s arm set changed. It is the READ side and it deliberately peels \
+         two shapes the mutation side does not (`ETry`, `EPropagate`): peeling too far here only \
+         names a root that is then pristineness-checked, while STOPPING short returns \"\" and \
+         loses the alias entirely. The asymmetry with `cow_mut_root_name` is intended — this \
+         assert is what keeps it from being read as a bug and \"fixed\"."
+    );
+}
+
+/// CHAIN-LINK PUBLISH ratchet — the BOOL-ARM PAIR (Core #4: fix the class, and
+/// know where the class ENDS).
+///
+/// `infer_expr_type`'s EMethodCall case ends in a ~26-return ladder of
+/// `if method_name == …` arms. Only TWO things in the whole case published the
+/// link's type on the unique `expr_link_types[span.end]` key that
+/// `lower_types.gg:lookup_expr_gir_type` reads FIRST: the registry path (at its
+/// own resolution gate) and the `is_some`/`is_none`/`is_ok`/`is_error`
+/// tag-check arm. So `m.get(k).is_none()` compiled and its sibling
+/// `h.make().is_empty()` — three lines away in the same ladder — CC-failed with
+/// `incompatible types when assigning to type 'Str' from type '_Bool'`, because
+/// the lowerer fell back to the CONTENDED `expr_types[span.start]` slot every
+/// link of a postfix spine shares and typed the link with its RECEIVER.
+///
+/// **THE CLASS IS "BOOL REGARDLESS OF RECEIVER", AND IT HAS EXACTLY TWO
+/// MEMBERS.** Both must publish; that pair is what this pins.
+///
+/// ⚠ AND IT PINS THE BOUNDARY, WHICH IS THE HARDER HALF. The obvious "class fix"
+/// — publish once at a single exit for the whole EMethodCall case — was BUILT
+/// and MEASURED, and it regressed TEN `self_host_runtime` rows
+/// (`iterator_lazy_chain` double-free, `unicode_strings` printing `80` for `é`,
+/// `string_higher_order` + `test_vector_str_higher_order` tripping the
+/// `gorget_string_free` invariant, `test_method_chaining` / `test_option_chaining`
+/// / `leak_cow_boundaries` CC-FAIL, `shared_stress{,_yield}`,
+/// `string_conversions`). A first-write-wins variant regressed the same ten, so
+/// it is not re-inference clobbering a good value. The cause is that the
+/// ladder's OTHER arms answer from the METHOD NAME ALONE without checking the
+/// receiver — a live filed defect (`todo/t0712`) — and the lowerer reads
+/// `expr_link_types` FIRST, so publishing a guess OVERRIDES a fallback that was
+/// getting it right. Publishable set = RESOLVED, never GUESSED.
+///
+/// So a future widening is not a refactor, it is gated on `t0712`: gate the
+/// ladder on the receiver type, THEN the single-exit publish becomes safe. This
+/// lint deliberately does NOT demand the wrapper shape — demanding it would
+/// demand the regression.
+#[test]
+fn self_host_infer_bool_arms_publish_chain_link() {
+    let src = fs::read_to_string("tests/fixtures/self_host_typechecker/infer.gg")
+        .expect("infer_bool_arms_publish: infer.gg not found");
+
+    // The two arms of the class, each identified by its own name-set test line.
+    let arms: [(&str, &str); 2] = [
+        (
+            "predicate arm (is_empty/contains/starts_with/…)",
+            "if method_name == \"is_empty\" or method_name == \"contains\"",
+        ),
+        (
+            "tag-check arm (is_some/is_none/is_ok/is_error)",
+            "if method_name == \"is_some\" or method_name == \"is_none\"",
+        ),
+    ];
+    for (what, needle) in arms {
+        let at = src.find(needle).unwrap_or_else(|| {
+            panic!(
+                "infer_bool_arms_publish: the {what} is gone from infer.gg (looked for \
+                 `{needle}`). Both bool-returning builtin arms must exist AND publish the link \
+                 type; if the arm moved, update this lint to follow it — do not delete the pin."
+            )
+        });
+        // The publish must sit between the test and its `return types.bool_id`.
+        let tail = &src[at..];
+        let ret = tail.find("return types.bool_id").unwrap_or_else(|| {
+            panic!("infer_bool_arms_publish: no `return types.bool_id` after the {what}")
+        });
+        let body = &tail[..ret];
+        assert!(
+            body.contains("types.expr_link_types.put(sexpr.span.end, types.bool_id)"),
+            "the {what} in infer.gg no longer publishes `expr_link_types[span.end]`.\n\n\
+             Its answer is `bool` REGARDLESS of the receiver, so it is one of the only two \
+             ladder arms that can safely publish — and it must, or a chain whose OUTER link is \
+             that method reads the CONTENDED `expr_types[span.start]` slot and is typed with its \
+             RECEIVER. That is a CC-FAIL, not a slow path.\n\
+             Behavioural counterparts: tests/fixtures/chain_link_bool_builtin.gg (String half) \
+             and chain_link_set_predicate.gg (Set half). Restore the `put`, never the fixture's \
+             expectation."
+        );
+    }
+
+    // The boundary: publishing from the NAME-GUESSING arms regressed ten rows,
+    // so `to_string`/`len`/`slice`/`get` must NOT have grown a publish. Guard
+    // the two most tempting ones by name.
+    for guess in [
+        "if method_name == \"len\" or method_name == \"count\":",
+        "if method_name == \"to_string\" or method_name == \"to_str\"",
+    ] {
+        if let Some(at) = src.find(guess) {
+            let tail = &src[at..];
+            let stop = tail[1..].find("\n            if method_name").map(|o| o + 1).unwrap_or(tail.len());
+            assert!(
+                !tail[..stop].contains("expr_link_types.put"),
+                "a NAME-GUESSING ladder arm (`{guess}`) grew an `expr_link_types` publish.\n\n\
+                 That arm answers from the method NAME without checking the receiver \
+                 (todo/t0712), and the lowerer reads `expr_link_types` FIRST — so the guess \
+                 OVERRIDES a fallback that was getting it right. Measured: publishing from these \
+                 arms regressed ten `self_host_runtime` rows (double-free, `é` printing as `80`, \
+                 three CC-FAILs, …). Fix t0712 first; then this boundary can move and the \
+                 single-exit publish becomes the right shape."
+            );
+        }
+    }
+}
+
+/// CITED-GUARD-NAME ratchet (Core #14 — an invariant-asserting comment needs an
+/// ENFORCING guard, or it gets deleted; Core #6 — turn the recurring failure into
+/// an executable check).
+///
+/// The repo's comments carry a lot of "pinned by `some_lint_name`
+/// (tests/lints.rs)". That sentence is the load-bearing half of Core #14: it is
+/// how a reader learns the invariant IS enforced and not merely asserted. A
+/// citation naming a test that does not exist is therefore worse than no
+/// citation — it reads as enforcement while enforcing nothing, and nothing else
+/// in the build notices, because a comment compiles no matter what it says.
+///
+/// Measured: two such citations were written and shipped in a single sitting
+/// (`self_host_cow_root_peel_arm_sets` and `self_host_infer_publishes_chain_link`,
+/// both near-misses of a real name), both caught by hand. Hand-catching is the
+/// part that does not scale.
+///
+/// Every "`name` (tests/lints.rs)" citation in the scanned files must name a
+/// real `#[test] fn` in this file. Prose wraps, and these comments live inside
+/// `//` and `#` comment blocks, so the text is normalised (comment markers
+/// stripped, whitespace collapsed) before matching.
+#[test]
+fn cited_lint_names_resolve_to_real_tests() {
+    let lints = fs::read_to_string("tests/lints.rs").expect("cited_lint_names: tests/lints.rs");
+    let known: std::collections::HashSet<String> = lints
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("fn "))
+        .map(|r| {
+            r.chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect::<String>()
+        })
+        .collect();
+    assert!(
+        known.len() > 100,
+        "cited_lint_names: only {} `fn` names parsed from tests/lints.rs — the parse broke, and \
+         a short list would make every citation below look valid.",
+        known.len()
+    );
+
+    let files = [
+        "tests/integration.rs",
+        "tests/fixtures/self_host_lowerer/lower_cow.gg",
+        "tests/fixtures/self_host_lowerer/lower.gg",
+        "tests/fixtures/self_host_lowerer/lower_types.gg",
+        "tests/fixtures/self_host_typechecker/infer.gg",
+        "tests/fixtures/self_host_typechecker/typecheck.gg",
+        "tests/fixtures/self_host_typechecker/parser.gg",
+    ];
+    let mut bad: Vec<String> = Vec::new();
+    let mut checked = 0usize;
+    for f in files {
+        let Ok(src) = fs::read_to_string(f) else { continue };
+        // Normalise: drop leading comment markers, collapse whitespace, so a
+        // citation that wrapped across lines still reads as one string.
+        let joined: String = src
+            .lines()
+            .map(|l| {
+                let t = l.trim_start();
+                t.strip_prefix("///")
+                    .or_else(|| t.strip_prefix("//"))
+                    .or_else(|| t.strip_prefix('#'))
+                    .unwrap_or(t)
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let flat = joined.split_whitespace().collect::<Vec<_>>().join(" ");
+        // "`name` (tests/lints.rs …)" — the citation idiom.
+        let mut rest = flat.as_str();
+        while let Some(at) = rest.find("(tests/lints.rs") {
+            let before = &rest[..at];
+            rest = &rest[at + 1..];
+            // last backticked token before the parenthetical
+            let Some(close) = before.rfind('`') else { continue };
+            let Some(open) = before[..close].rfind('`') else { continue };
+            let name = &before[open + 1..close];
+            // Only snake_case identifiers are lint-name-shaped; skip paths,
+            // prose and code fragments.
+            if name.is_empty()
+                || !name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                || !name.contains('_')
+            {
+                continue;
+            }
+            // The gap between the name and the citation must be short — a whole
+            // sentence in between means the parenthetical is not about this name.
+            if before.len() - close > 40 {
+                continue;
+            }
+            checked += 1;
+            if !known.contains(name) {
+                bad.push(format!("{f}: `{name}`"));
+            }
+        }
+    }
+    assert!(
+        checked >= 5,
+        "cited_lint_names: matched only {checked} citations — the normaliser or the idiom match \
+         drifted, so a green here would prove nothing."
+    );
+    assert!(
+        bad.is_empty(),
+        "comments cite lints that do not exist:\n  {}\n\n\
+         Each of these tells a reader 'this invariant is enforced' and names a `#[test] fn` that \
+         is not in tests/lints.rs. Either the name is a typo (fix the comment), the lint was \
+         renamed (fix the comment), or the lint was DELETED — in which case the invariant is now \
+         unguarded prose and Core #14 says it gets an enforcing guard or it gets deleted.",
+        bad.join("\n  ")
+    );
+}
+
 /// One-source-of-truth ratchet (CLAUDE.md Core invariant #6 / devbook/24 rule 3)
 /// for the GorgetMap / GorgetSet runtime struct size in the self-host lowerer.
 ///

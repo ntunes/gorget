@@ -1,0 +1,26 @@
+# CHAIN-LINK corpus · CONTROL ROW, and it is honest about being one.
+#
+# CELL SAMPLED HERE: the same `<method>().is_none()` shape over a BUILTIN
+# receiver (`Vector.pop()`) rather than a user-defined one. This cell was
+# GREEN before the chain-link fix and is GREEN after it, so -- unlike its six
+# siblings -- it CANNOT be RED-verified against the pre-fix compiler
+# (Core #12). Recording that explicitly instead of letting the name imply
+# coverage it does not have.
+#
+# WHAT IT PINS INSTEAD, and why it is worth a row (Core #15e Q6 -- "is this
+# passing case ACCIDENTALLY correct?"): it is. Nothing records
+# `expr_types[span.start]` for a builtin-receiver chain either, so the outer
+# link falls through to `infer_method_return_type` and happens to land on
+# `bool`. The green is a property of a DIFFERENT code path, not evidence that
+# the chain-link path works. This row pins that path against a future fix in
+# this area that "corrects" the builtin route into the contended-slot route --
+# i.e. it is the guard against the class being pushed sideways rather than
+# retired.
+void main():
+    Vector[int] empty = Vector[int]()
+    print(empty.pop().is_none())
+    print(empty.pop().is_some())
+    Vector[int] full = Vector[int]()
+    full.push(2)
+    print(full.pop().is_some())
+    print(full.pop().is_none())

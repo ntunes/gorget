@@ -1,0 +1,55 @@
+# CHAIN-LINK corpus · AXIS = which RETURN-TYPE ladder arm publishes the outer
+# link's type. CELL SAMPLED HERE: the bool-returning STRING predicates
+# (`is_empty` / `contains` / `starts_with` / `ends_with`) as the OUTER link of
+# a chain whose receiver is itself a method call.
+#
+# WHY THIS CELL EXISTS AS ITS OWN ROW. The sibling rows sample the SHAPE of the
+# link between two method calls (EFieldAccess, EIndex, EPropagate, …). This one
+# holds the shape fixed at the simplest possible spine -- `h.make().is_empty()`,
+# two adjacent method calls -- and varies the OUTER METHOD instead. That axis
+# was invisible until it was measured: `h.make().len()` compiled and
+# `h.make().is_empty()` did not, one arm apart in the same ladder.
+#
+# The mechanism. `infer_expr_type` publishes a method call's resolved type on
+# the UNIQUE `expr_link_types[span.end]` key, which the lowerer's
+# `lookup_expr_gir_type` reads FIRST for every EMethodCall; without it the
+# lowerer falls back to the CONTENDED `expr_types[span.start]` slot that every
+# link of a spine shares, and mints the outer link's destination with its
+# RECEIVER's type. That publish used to be written per-arm inside
+# `infer_expr_type`'s EMethodCall case, and only 2 of its ~26 return sites did
+# it -- so the tag-check arm (`is_some`/`is_none`/`is_ok`/`is_error`, sampled by
+# chain_link_method) worked and this arm, three lines below it in the same
+# ladder, CC-failed with
+#   error: incompatible types when assigning to type 'Str' from type '_Bool'
+# The two bool-returning arms are ONE class -- `bool` regardless of the receiver
+# -- and both publish now.
+#
+# THE CLASS ENDS THERE, and that boundary was MEASURED, not guessed. Publishing
+# at a single exit for the whole EMethodCall case was built and it regressed ten
+# `self_host_runtime` rows: the ladder's other arms answer from the method NAME
+# without checking the receiver (todo/t0712), and the lowerer reads
+# `expr_link_types` FIRST -- so a published guess OVERRIDES a fallback that was
+# getting it right. Publishable set = RESOLVED, never GUESSED. Both halves are
+# pinned by `self_host_infer_bool_arms_publish_chain_link` (tests/lints.rs).
+#
+# Sibling cells: chain_link_set_predicate (the Set half of the SAME ladder arm),
+# chain_link_binop (the same outer method reached through an infix left
+# operand), chain_link_method (the tag-check arm that already published).
+struct Holder:
+    String s
+
+equip Holder:
+    String make(self):
+        return self.s
+
+void main():
+    Holder h = Holder("abcd")
+    Holder blank = Holder("")
+    print(h.make().is_empty())
+    print(blank.make().is_empty())
+    print(h.make().contains("bc"))
+    print(h.make().starts_with("ab"))
+    print(h.make().ends_with("cd"))
+    # A non-bool arm of the same ladder, to pin that the fix did not narrow it.
+    print(h.make().len())
+    print(h.make().to_upper())

@@ -363,5 +363,11 @@ fn corpus_b1_all_match() {
     // round (the other four are EXCLUDEd above with per-row citations).
     // +1 (same round): `cow_amp_ref_field_forward`, in-subset, MATCH (3/4/3) —
     // the already-a-pointer FIELD cell where the producer must decline.
-    assert_eq!(fixtures.len(), 128, "B1 gate set drifted from 128 fixtures");
+    // +2 (2026-08-28, R45 Track G rework): `cow_assign_target_chain` +
+    // `cow_assign_target_named_control` — the assignment-target sibling of the
+    // mutation-path root peel, top-level, in-subset, both MATCH with no ggdef
+    // change. The repro half was a live WRONG ANSWER on the self-host lane
+    // before the fix, which is the class ggdef CAN adjudicate (value semantics),
+    // unlike its realloc-UAF sibling.
+    assert_eq!(fixtures.len(), 130, "B1 gate set drifted from 130 fixtures");
 }

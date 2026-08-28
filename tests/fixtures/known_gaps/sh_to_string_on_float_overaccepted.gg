@@ -1,0 +1,27 @@
+# KNOWN GAP (found R45 Track G while auditing the chain-link postfix axis).
+#
+# LANE DIVERGENCE with a clear correct direction: `to_string()` on a `float`.
+#
+#   RUST gg   : REJECTS — `error[E_NoMethodFound]: no method `to_string` found
+#               on type `float``. This is the correct behaviour.
+#   SELF-HOST : ACCEPTS, then emits C that does not compile —
+#               `error: incompatible types when assigning to type 'Str' from
+#               type 'int'`. The destination is minted `Str` from the method
+#               name while the value is the raw float/int payload.
+#
+# So the self-host has BOTH an over-acceptance (a Core #10 lower-or-reject
+# violation: it accepts a call it cannot lower) and, downstream of it, a wrong
+# mint. The fix is the REJECT — the self-host's `to_string`/`to_str`/... name
+# list (`self_host_typechecker/infer.gg`) admits the method without checking
+# the receiver's type.
+#
+# There is no chain here at all: this reproduces on a plain local, which is what
+# established it is NOT the chain-link class. The reason it surfaced there is
+# that `(x.m() as float).to_string()` was the only expressible probe for the
+# EAs cell of the postfix axis — no method exists on any numeric or bool, so
+# that axis cell stays unreachable until this is fixed.
+#
+# CORRECT behaviour: `gg check` REJECTS this program on both lanes.
+void main():
+    float f = 3.0
+    print(f.to_string())

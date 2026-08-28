@@ -1,0 +1,31 @@
+# CHAIN-LINK corpus · AXIS = the kind of postfix link sitting between the two
+# method calls of a chain. CELL SAMPLED HERE: the link is an INFIX EBinaryOp,
+# and the method call sits in its LEFT operand.
+#
+# `parse_expr_bp_with_lhs` (parser.gg) builds each infix node as
+# `Span(lhs.span.start, rhs.span.end)`, so the LEFT operand's spine lands on the
+# CONTENDED `span.start` key exactly as a postfix receiver does -- which is why
+# `expr_spine_has_method_call` recurses into it. The RIGHT operand contributes
+# `span.end`, not `span.start`, so it is on its own key and cannot contend; the
+# right-operand row below is therefore the CONTROL for this cell, and it was
+# green before and after.
+#
+# Both spellings are exercised for both a bool-returning and a non-bool outer
+# method, because the two are published by different arms of the same ladder
+# (see chain_link_bool_builtin).
+struct Holder:
+    String s
+
+equip Holder:
+    String make(self):
+        return self.s
+
+void main():
+    Holder h = Holder("ab")
+    # method call in the LEFT operand -- the cell this row is named for
+    print((h.make() + "cd").len())
+    print((h.make() + "cd").is_empty())
+    print((h.make() + "cd").contains("bc"))
+    # method call in the RIGHT operand -- the control that cannot contend
+    print(("cd" + h.make()).len())
+    print(("cd" + h.make()).is_empty())
