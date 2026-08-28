@@ -3042,6 +3042,52 @@ baseline.
   corrected in the same commit. `docs/language-reference.md` §7.4 and the grammar already describe the
   sanctioned behaviour and need no change — they were right, and the ledger was wrong.
 
+- 2026-08-28 — **🎯 D51 RATIFIED (owner): `Box[Concrete]` COERCES IMPLICITLY TO `Box[Trait]`. AN IMPORT MUST NEVER CHANGE WHETHER A PROGRAM TYPECHECKS.**
+
+  **What forced the question (`todo/t0710`).** Adding `from std.collections import Box` — the exact line
+  `docs/book/16-smart-pointers.md:14` teaches every reader to write — flipped an inline
+  `Box[Concrete]` → `Box[Trait]` coercion from **ACCEPT to `E_TypeMismatch`**, with the two files
+  differing by that one line and nothing else. Measured over an 18-cell matrix (position × import ×
+  inline/named): load-bearing at **call argument**, **enum init** and **closure return** (rc 0 → rc 1);
+  inert at struct field and vector literal. That the two spellings must AGREE was never in doubt;
+  **which way** they agree was unratified, so it was an owner ask rather than a filer's or
+  orchestrator's guess.
+
+  **The ruling: ACCEPT.** `Box[Concrete]` upcasts implicitly to `Box[Trait]`, with or without the
+  import. This is what the no-import path already did, what the book already teaches, and what Rust
+  does for `Box<T>` → `Box<dyn Trait>`. The rejecting path was the bug, not the accepting one.
+
+  **MECHANISM — the fix is a Layering rule 2 retirement, not a special case.** `unify`
+  (`src/semantic/typecheck.rs:1076`) has **no `TraitObject` arm at all**, and `:1292-1327` decides
+  smart-pointer coercion by **name-matching `"Mutex" | "Shared" | "RWLock"`** — semantics taken from an
+  identifier string rather than typed metadata. That is precisely why *which* `Box` the name resolves to
+  changes the answer: with the import it resolves to a different entity and falls off the name list.
+  The fix is to give `unify` a real `TraitObject` arm and drive smart-pointer coercion from a typed flag
+  on the declaration, set once at the source. Adding `"Box"` to the name list would make the symptom go
+  away while preserving the defect, and is not an acceptable fix.
+
+  ⚠ **TWO SPELLING DISCRIMINATORS — both hide the defect from a careless probe, and both were tripped
+  over while writing the repro.** (1) The ctor call `Box(...)` flips; **`Box.new(...)` does NOT** — a
+  repro written with `.new` is rc 0 either way and proves nothing. (2) The **inline** form flips; the
+  **named** form (`Box[Robot] b = Box(...)` then `take(b)`) is rejected with *or* without the import.
+  Any errata table naming the flipping positions is ill-defined unless it also states the import.
+
+  **LANE OBLIGATION (Core #9).** This changes accept/reject, so it lands on **ggdef, Rust gg (C + LLVM),
+  and the self-host in the same round**, pinned by a cross-lane fixture — noting `t0696`: `Box[T]` is not
+  in the definitional oracle's type language at all, so the ggdef lane may owe a subset expansion or an
+  explicit, filed subset gap rather than a row.
+
+  **IT WAS BLOCKING WORK, WHICH IS HOW IT WAS FOUND.** All **33** fixtures carrying that import include
+  **every** `box_trait_*.gg`, and the three flipping positions are exactly the ones a new `Box[Trait]`
+  regression net must cover — so that net could not be written in its own siblings' house style without
+  changing what it tested. The durable repro is wired `#[ignore]`d as
+  `known_gap_box_trait_import_flips_accept_reject` and **graduates to a live fixture the round this lands**.
+
+  **DOC WRITE-THROUGH IS PART OF THE FIX.** `docs/book/16-smart-pointers.md`'s example is correct and
+  becomes true rather than accidentally-true; the reference owes an explicit statement that
+  `Box[Concrete]` → `Box[Trait]` is an implicit upcast, since silence there is what let the ambiguity
+  stand.
+
 - 2026-08-28 — **🎯 D50 RATIFIED (owner): `unsafe` IS REMOVED FROM THE LANGUAGE — THE RESERVED KEYWORD AND ALL SUPPORT.**
 
   **The ruling, verbatim:** *"'unsafe' was a placeholder for a feature never implemented in gorget. I think we should remove the reserved keyword from the lexer and remove all support for the feature. We never finished it, and shouldn't do it now."*
