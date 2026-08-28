@@ -7122,6 +7122,13 @@ fn sanitize_allowlists_shrink_only() {
     }
 }
 
+/// The byte ceiling on `AGENTS.md`. Module-level so `agents_md_insertion_sweep`
+/// asks the SAME question `agents_md_size_ratchet` asks, rather than carrying a
+/// second copy of the number that can drift from it. Lowering is free; raising
+/// needs owner sign-off — the rationale, the history, and what the current
+/// headroom is FOR live in the comment inside the ratchet below.
+const AGENTS_MD_SIZE_CEILING: u64 = 59_300;
+
 #[test]
 fn agents_md_size_ratchet() {
     // The evidence home the header and this message promise must actually exist.
@@ -7151,14 +7158,75 @@ fn agents_md_size_ratchet() {
     // ratchet this back DOWN toward 58_000. Lowering needs no sign-off;
     // raising it again does.
     //
-    // 2026-08-27: LOWERED 59_700 -> 59_600 (no sign-off needed; only raising
-    // does). Two rules landed — the gauntlet-verifies-not-defers ruling and
-    // the disjoint-means-a-different-CLASS discriminator — and the file still
-    // SHRANK ~250 bytes, because five war-stories moved to devbook/30 §17 and
-    // §1/§3/§5/§6 where the header's split rule already sent them. That is the
-    // compaction this comment has been asking for, done in miniature; the
-    // structural debt stands and the target is still ~58_000.
-    const CEILING: u64 = 59_600;
+    // 2026-08-28: LOWERED from 59_600 — the dedicated compaction round the
+    // note above kept asking for. The landed value IS the constant above; this
+    // comment does not carry a second copy of it, because the copy is what goes
+    // stale — this line named a destination the constant had already moved past
+    // during review, and it survived a whole pass saying so. Regenerate the
+    // free bytes with the `headroom` command below, never from a line of prose.
+    // Evidence moved to devbook/29 (memory measurement; the harness's
+    // `--test-threads=1` history) and devbook/30 §4/§8/§15/§18 (the guard-slack
+    // and two-anchor measurement traps; the cited-repro metric distortion; the
+    // shortest-distinctive-token grep; the criticise-only ruling); four
+    // multi-rule mega-paragraphs became labelled rules, and the longest line
+    // came down by roughly half (measure it, never quote it:
+    // `awk '{print length}' AGENTS.md | sort -rn | head -1`).
+    //
+    // ⚠ THE CEILING DELIBERATELY LEAVES HEADROOM — for the pending rules that
+    // name this ratchet as their blocker, not as slack. Both figures are
+    // COMMANDS, because both have already gone stale here:
+    //   headroom  `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' \
+    //             tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`
+    //   blocked   `grep -l agents_md_size_ratchet todo/*.md`
+    // Spending the whole recovered budget on the ceiling would leave those
+    // items exactly as blocked as before, which optimises the wrong number:
+    // the compaction exists to buy capacity for rules, not to make this
+    // constant small. What the headroom funds is battery lines and rule
+    // sharpenings, a couple at a time. When it will not stretch to all of
+    // them, land what FITS and leave the rest filed and blocked — never cram,
+    // and never raise the ceiling to absorb your own inflow, which is how a
+    // ratchet becomes fiction.
+    //
+    // The compaction's first landing set it lower than the constant above now
+    // reads; it rose twice during review, when pass 2 required a FOURTH lint
+    // and pass 4 required documenting the INSERTION hole. The file's own
+    // § Core invariants header has to describe what each guard does and does
+    // not do, and that documentation is a rule like any other. The numeric
+    // trail lives in `git log -p -- tests/lints.rs` rather than here, because
+    // a partial trail reads as a current value.
+    //
+    // Honest accounting for this round. Real compaction happened AND a
+    // substantial block of new load-bearing text landed that did not exist at
+    // HEAD (the landing rule, rule 0's fourth duty, the GAP precedence clause,
+    // and five review passes' worth of limit-documentation), so the net drop is
+    // much smaller than the gross. Measure it, never quote it:
+    //   `git show HEAD:AGENTS.md | wc -c` vs `wc -c AGENTS.md`.
+    // Every figure once written into this comment has gone stale: the clause
+    // count, the longest line, the insertion measurement, this accounting, the
+    // headroom, and the ceiling's own numeric trail. That is the whole list,
+    // and it is why each one is a command now. Do not add another.
+    //
+    // The structural wins are the real yield: the longest line roughly halved,
+    // four mega-paragraphs split into labelled rules, and guards where there
+    // were none. The next big DROP comes from todo/t0714's burn-down, not from
+    // scavenging prose here — this comment has warned since 2026-08-04 that
+    // byte-scavenging trades rule precision for headroom, and paying for
+    // corrections out of neighbouring rules is close to exhausted: the last
+    // set of accuracy fixes fitted only because each was ALSO a compaction of
+    // the sentence it corrected. The next one that is not will not fit.
+    //
+    // ⚠ THE STRUCTURAL FINDING: ~58_000 is the FLOOR for the current rule set,
+    // not a way-station. The inventory below pins several hundred normative
+    // clauses (the exact count is `AGENTS_MD_RULE_FLOOR`, and a figure written
+    // here goes stale) and the classification table accounts for the rest;
+    // almost all remaining bytes ARE those clauses. Cutting materially below
+    // this means dropping rules — which the guards below make HARDER to do
+    // silently, NOT impossible: see `agents_md_unpinned_prose_ratchet`'s
+    // doc comment for what they do and do not catch, and todo/t0714 for the
+    // measured residual. A future lesson lands as ONE compact imperative here
+    // + its evidence in devbook/29-30; when the headroom is spent, compact a
+    // NEIGHBOURING rule rather than raising this.
+    const CEILING: u64 = AGENTS_MD_SIZE_CEILING;
     assert!(
         bytes <= CEILING,
         "AGENTS.md is {bytes} bytes > {CEILING}. Move the new lesson's war-story/evidence \
@@ -7167,6 +7235,1542 @@ fn agents_md_size_ratchet() {
          ceiling after a further compaction is fine; raising it requires owner sign-off."
     );
 }
+
+/// The RULE INVENTORY of `AGENTS.md` — one row per normative CLAUSE.
+///
+/// **Why this exists.** `agents_md_size_ratchet` (above) pushes the file to get
+/// SMALLER; nothing stopped a compaction from hitting that target by deleting a
+/// rule — gutting one only makes the byte check happier. Every rule in that
+/// file was bought with an expensive failure, so a silently dropped one is far
+/// worse than the bloat the ratchet fights. The ratchet caps the bytes; this
+/// pins the rules; `agents_md_every_clause_is_classified` (below) stops a
+/// wholly new or replaced SENTENCE going unlisted. None of them makes this
+/// table total: text inside an already-probed sentence is unguarded in both
+/// directions (todo/t0714).
+///
+/// **What a row is.** `(id, probe)`. The probe is the shortest phrase
+/// distinctive to one normative clause — never to its justification, and never
+/// to a mere LABEL. A label probe (`"**Cardinal rule:**"`) survives the
+/// deletion of the rule it labels, which review pass 1 demonstrated on six
+/// rows; the probe must sit in the text that states the obligation.
+/// Matching is whitespace-normalised, so re-wrapping and re-flowing are free.
+///
+/// **Probes must match EXACTLY ONCE.** A probe that also appears in a
+/// cross-reference elsewhere cannot catch its own rule being deleted — the
+/// cross-reference keeps it alive (Core #15e Q2).
+///
+/// **Editing this table.**
+/// - REWORDING a clause: update its probe in the same commit. The lint firing
+///   is the point — it forces the rewording to be a deliberate, reviewed act.
+/// - ADDING a rule: add a row, and raise `AGENTS_MD_RULE_FLOOR`.
+/// - REMOVING a rule: needs the same owner sign-off as raising the byte
+///   ceiling. Deleting a row and lowering the floor in one quiet commit is
+///   exactly the move this guard exists to make visible in review.
+const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
+    ("META-landing", "How a rule lands here"),
+    ("META-edit-in-place", "Sharpening an existing rule EDITS that rule in place"),
+    ("META-evidence-split", "provenance, measurement and war-story go to"),
+    ("META-unratified", "unratified owner open-thinking goes to devbook/30"),
+    ("META-ratchet", "ratchets DOWN after each compaction"),
+    ("META-inventory", "requires every inventoried rule to still be stated, exactly once"),
+    ("META-onlydelete", "fires when an inventoried rule is DELETED"),
+    ("META-probedonly", "The census's *contains-a-probe* test is the weak one"),
+    ("META-ceiling", "a deletion that shifts no band is silent"),
+    ("META-reviewer", "So the diff is the guard: after editing a rule, re-read the whole rule"),
+    // Reworded 2026-08-28: the old probe said the lint measures "the longest
+    // stretch", which is half of it — there are TWO ceilings, and the count of
+    // stretches over 100 chars is the one an inserted clause usually trips.
+    ("META-ratchet2", "caps the GROWTH of what NO probe accounts for"),
+    ("META-limits", "Know what they do NOT give you"),
+    ("META-backlog", "moves a run across a BAND EDGE"),
+    ("META-harness", "never only in one harness's private memory"),
+    ("CORE-1", "Fix at the write site, not the read site"),
+    ("CORE-2", "Typed metadata, never name-matching"),
+    ("CORE-3", "Register ownership at the value's birth"),
+    ("CORE-4", "One fix, all siblings"),
+    ("CORE-4b", "centralize at the producer; add an arm-count lint"),
+    ("CORE-5", "Re-verify every premise; regenerate every number"),
+    ("CORE-6", "Convert a recurring bug class into an executable guard"),
+    ("CORE-6b", "validator or `tests/lints.rs` ratchet"),
+    ("CORE-6c", "the round's output owes the class-retiring guard"),
+    ("CORE-7", "Gate on the bootstrap and the sanitizer"),
+    ("CORE-8", "Reference-grade is the bar, not parity with a possibly-wrong reference"),
+    ("CORE-8b", "≥2 bugs to fix in BOTH compilers"),
+    ("CORE-8c", "red flag, never a pass"),
+    ("CORE-8d", "must refuse to ship a known defect"),
+    ("CORE-9", "A SEMANTIC change lands on every lane in the same round"),
+    ("CORE-9b", "a lagging lane is a red lane or an explicit `#[ignore]`+citation"),
+    ("CORE-9c", "out-of-subset shapes get a note + a filed subset gap"),
+    ("CORE-9d", "Implementation-internal fixes (one backend's codegen) are exempt"),
+    ("CORE-9e", "carries the FULL ggdef suite"),
+    ("CORE-9f", "must COMPILE + MATCH on the self-host lane the SAME ROUND"),
+    ("CORE-9g", "raising it for your OWN inflow is forbidden"),
+    ("CORE-10", "Lower-or-reject — never silently drop user syntax"),
+    ("CORE-10b", "silent-fallthrough allowlist ratchet"),
+    ("CORE-11", "Every fix ships wide, genuinely-exercising regression fixtures, same round"),
+    ("CORE-11b", "non-constant operands"),
+    ("CORE-11c", "one per sibling for a class"),
+    ("CORE-11d", "The fixture lands WITH the fix, never \"later\""),
+    ("CORE-12", "A regression fixture is not coverage until it has been seen to FAIL"),
+    ("CORE-12a", "Run every new fixture against the PRE-fix compiler"),
+    ("CORE-12b", "GREEN ON ARRIVAL IS NOT COVERAGE"),
+    ("CORE-12b2", "break the mechanism it claims to guard, confirm RED, restore"),
+    ("CORE-12c", "A fixture's NAME is a claim about SCOPE"),
+    ("CORE-12d", "must cover every value of that axis"),
+    ("CORE-12e", "ENUMERATE its axes first"),
+    ("CORE-12f", "Go TYPE-first"),
+    ("CORE-13", "Verify the verifier"),
+    ("CORE-13a", "show at least one gate going RED on a deliberately broken variant"),
+    ("CORE-13b", "Ask ggdef FIRST"),
+    ("CORE-13c", "STRUCTURALLY BLIND to memory-invalidation"),
+    ("CORE-13d", "ASan on the real backends adjudicates memory validity"),
+    ("CORE-13e", "it IMPLEMENTS the definition, it is not the definition"),
+    ("CORE-13f", "BOTH-WRONG row is an OWNER ASK"),
+    ("CORE-14", "An invariant-asserting comment needs an enforcing guard, or it gets DELETED"),
+    ("CORE-14b", "verify it or delete it — never inherit it"),
+    ("CORE-15", "Make rigor MECHANICAL, not clever"),
+    ("CORE-15a", "carries its VERIFICATION COMMAND"),
+    ("CORE-15b", "Scope over a SET → present the SET"),
+    ("CORE-15cb", "FOLD AT THE GRANULARITY OF THE DEFECT"),
+    ("CORE-15cb2", "re-read the WHOLE enclosing section"),
+    ("CORE-15cb3", "what did the old text stop saying"),
+    ("CORE-15c", "Fold a correction → GREP for the thing it corrects"),
+    ("CORE-15c2", "SHORTEST DISTINCTIVE TOKEN, never the sentence"),
+    ("CORE-15d", "Fixed procedures for the recurring claim types"),
+    ("CORE-15d2", "MIND THE PROBE"),
+    ("CORE-15d3", "never test accept/reject inside an f-string"),
+    ("CORE-15d4", "never read a crash off a PIPELINE"),
+    ("CORE-15e", "The SIX QUESTIONS no runbook generates"),
+    ("CORE-15e1", "Is this asymmetry a DEFECT, or two positions with different RATIFIED semantics?"),
+    ("CORE-15e2", "Can this guard catch its OWN class?"),
+    ("CORE-15e3", "Is this enumeration TOTAL, or a selection?"),
+    ("CORE-15e4", "Does this rule's SUBJECT actually cover the case"),
+    ("CORE-15e5", "Am I reasoning about emission, or emission ORDER?"),
+    ("CORE-15e6", "Is this passing case ACCIDENTALLY correct?"),
+    ("CORE-15e7", "is this premise still TRUE, or a filed fact that decayed?"),
+    ("CORE-15e8", "the process has thinned"),
+    ("CORE-pipeline", "scout → brief → ≥3 fresh brief-reviews → launch (worktree) → fresh output-review → integrate"),
+    ("BT-tee", "Always pipe integration tests through `tee`"),
+    ("BT-llvm", "Set `GG_BACKEND=llvm` to append `--backend=llvm`"),
+    ("BT-autoscale", "Full sweeps autoscale via `scripts/run_integration.sh`"),
+    ("BT-parity", "Backends should be at parity"),
+    ("BT-timeouts", "override on loaded hosts"),
+    ("DOC-book", "read like a published book"),
+    ("DOC-nodates", "No dates, commit hashes"),
+    ("DOC-writethrough", "owes a doc-write-through"),
+    ("DOC-bookify", "book-ifying a chapter that has rotted into changelog style"),
+    ("SYN-sigils", "sigils go in the name's slot"),
+    ("SYN-typefirst", "Always use type-first Gorget syntax"),
+    ("SYN-String", "`str` is not a keyword"),
+    ("COW-borrow", "CoW's default everywhere is **borrow**"),
+    ("COW-boundary", "only at ownership boundaries, where the destination must own"),
+    ("COW-uniform", "there is no push-vs-constructor split"),
+    ("COW-carveouts", "The carve-outs to CoW-default-borrow are"),
+    ("COW-operator", "the user to write `^source` or `source.clone()`"),
+    ("COW-table", "Owns AND dead at this call"),
+    ("COW-eligible", "The three move-eligible shapes are"),
+    ("COW-movezero", "the source slot becomes logically dead"),
+    ("COW-clone-req", "is required, not a fallback"),
+    ("COW-mechanical", "The decision is mechanical, not heuristic"),
+    ("COW-contract", "This is the compiler contract — not a suggestion"),
+    ("SQ-robust", "Prefer robust, architecturally sound solutions over quick fixes"),
+    ("SQ-generic", "Aim for generic solutions that solve classes of problems"),
+    ("SQ-smells", "Flag code smells and structural issues"),
+    ("SQ-opinion", "You are allowed an opinion"),
+    ("SQ-swear", "You are allowed to swear if opportune"),
+    ("SQ-memory", "Performance work measures MEMORY, not just time"),
+    ("SQ-reverify", "Re-verify a premise against CURRENT source/tests before acting on it"),
+    ("SQ-nonumbers", "No un-regenerated numbers"),
+    ("SQ-history", "Consult history before proposing a design"),
+    ("LAY-1", "Lossless on invariants, lossy on syntax"),
+    ("LAY-2", "Typed metadata, not name-matched"),
+    ("LAY-3", "One source of truth per axis"),
+    ("LAY-4", "Resolve once, write through"),
+    ("LAY-litmus", "if a downstream pass reconstructs information from names"),
+    ("LAY-cite", "Cite the doc in PRs that touch IR layer boundaries"),
+    ("NNM-rule", "Do not pattern-match on function names, type names, runtime-symbol prefixes"),
+    ("NNM-symptoms", "parallel lists in different files kept in sync by hand"),
+    ("NNM-fix", "put the semantic flag on the typed declaration"),
+    ("NNM-exception", "at the C-emit boundary you have to spell the runtime symbol"),
+    ("DBG-stop", "the fix you're sketching is *intrinsically complex*"),
+    ("DBG-steps", "Trace the data the buggy site is reading"),
+    ("DBG-suspicious", "should make you *more* suspicious of your diagnosis"),
+    ("SIB-class", "fix the **class**, not the instance"),
+    ("SIB-grep", "Grep for the siblings before you commit"),
+    ("SIB-producer", "Prefer centralizing at the producer"),
+    ("SIB-armcount", "Add an arm-count lint"),
+    ("SIB-litmus", "how many sites are there, and what stops site N+1"),
+    ("GAP-two", "the response must be one of"),
+    ("GAP-fix", "Fix the gap."),
+    ("GAP-fixture", "Write a fixture that exposes the gap + a sharp TODO entry citing it"),
+    ("GAP-intended", "must reflect what the language *should* do"),
+    ("GAP-forbidden", "Forbidden: reshaping the surrounding code"),
+    ("GAP-litmus", "likely a dodged gap"),
+    ("SH-idiomatic", "It must be written in **idiomatic Gorget**"),
+    ("SH-threeroles", "The third role is non-negotiable"),
+    ("SH-succession", "The self-host REPLACES Rust gg as the primary reference"),
+    ("SH-oracle", "oracle hygiene"),
+    ("SH-nodumbdown", "never dumb the self-host down to match"),
+    ("SH-truthaxis", "ggdef adjudication is the truth axis"),
+    ("SH-debt", "technical debt with a stale justification"),
+    ("SH-r1", "No defensive code without a live, cited bug"),
+    ("SH-r2", "Self-host code reads like the user manual"),
+    ("SH-r3", "also retire the workarounds"),
+    ("SH-r4", "Periodically audit"),
+    ("MA-0", "THE ORCHESTRATOR DOES NOT TOUCH THE CODE"),
+    ("MA-0-streak", "Verify the streak"),
+    ("MA-0-brief", "INCORPORATE into the track's scope BY DEFAULT"),
+    ("MA-0-file", "FILE only when genuinely disjoint"),
+    ("MA-0-coord", "Coordinate parallel tracks"),
+    ("MA-0-criticise", "CRITICISE the final form"),
+    ("MA-0-return", "FINDING RETURNED TO THE AGENT, never an edit the orchestrator makes"),
+    ("MA-0-roles", "Proposing the fix is the REVIEW AGENT's job"),
+    ("MA-0-round", "binds the **ROUND**, not the orchestrator's hands"),
+    ("MA-0-parent", "The parent still drives the integration battery"),
+    ("MA-0b", "Orchestrator is branch-agnostic"),
+    ("MA-1", "Always pass `isolation: \"worktree\"`"),
+    ("MA-2", "Brief the agent to verify its worktree on entry"),
+    ("MA-3", "Stage explicitly by file name"),
+    ("MA-4", "Parent drives the integration sweep, not agents"),
+    ("MA-5", "Brief file zones when running agents in parallel"),
+    ("MA-5b", "Scout the overlap first"),
+    ("MA-6", "Clean up scratch and worktrees once integrated or abandoned"),
+    ("MA-6b", "needs an explicit keep-list"),
+    ("MA-6c", "Also sweep `/tmp`"),
+    ("MA-7", "Worktree-RELATIVE paths only"),
+    ("MA-7b", "re-Read and retry the Edit tool"),
+    ("MA-8", "NEVER `git stash` in agents"),
+    ("MA-8-patch", "a plain `git diff` LOSES untracked files"),
+    ("MA-9", "Checkpoint scout prototypes to /tmp EARLY; run final gates FOREGROUND"),
+    ("REV-fresh", "A **fresh** agent must review any non-trivial artifact"),
+    ("REV-nodefer", "THE GAUNTLET VERIFIES WORK; IT DOES NOT DEFER IT"),
+    ("REV-newagent", "Use a *new* agent each pass"),
+    ("REV-fileline", "verify each load-bearing claim against source with `file:line`"),
+    ("REV-crosscheck", "cross-check them yourself — a reviewer can be wrong too"),
+    ("REV-design", "The reviewer's checklist is DESIGN-SOUNDNESS"),
+    ("REV-notsignoff", "\"Correct and premise-accurate\" is NOT a SIGN OFF"),
+    ("REV-scout", "Scout before you brief"),
+    ("REV-scout-e2e", "MUST be end-to-end-verified"),
+    ("REV-docs", "Ground the scout's design in the docs, not just the code"),
+    ("REV-langref", "a reference-vs-code conflict is an OPEN QUESTION"),
+    ("REV-seq", "The passes are SEQUENTIAL, not parallel"),
+    ("REV-floor", "≥3 passes is the FLOOR; there is NO upper bound"),
+    ("REV-checklist", "Convergence gate — the READINESS CHECKLIST"),
+    ("REV-ck1", "every measurement carries a FIRE COUNT"),
+    ("REV-ck2", "every enumeration cites an INDEPENDENT witness"),
+    ("REV-ck3", "`|pinned cells| == |changed cells|`"),
+    ("REV-ck4", "the GUARD FAILS when the fix is reverted"),
+    ("REV-ck5", "every load-bearing figure REGENERATED at current HEAD"),
+    ("REV-ck6", "EARNS A SIXTH ROW"),
+    ("REV-scope", "SCOPE MAKES IT TERMINATE"),
+    ("REV-hunt", "Reviewers still hunt freely"),
+    ("REV-nostreak", "an off-checklist find does not reset the streak"),
+    ("REV-disposition", "disposition belongs to Multi-agent rule 0"),
+    ("REV-errata", "Terminal-pass minors fold as MARKED ERRATA"),
+    ("REV-verbatim", "FOLD VERBATIM, NEVER SUMMARISED"),
+    ("REV-precedence", "explicit precedence line (later > earlier > body)"),
+    ("REV-orch-directives", "an addendum may DECIDE (scope, choice, retraction), never RESTATE"),
+    ("REV-unchanged", "operative text: pass-N §X, unchanged"),
+    ("REV-restated", "errata are RESTATED, never pointed at"),
+    ("REV-regrep", "re-read the enclosing SECTION and grep the correction"),
+    ("REV-nopack", "NO pack reviews"),
+    ("REV-perTrack", "one executor per track (worktree)"),
+    ("REV-parallel", "Parallelism is *across tracks*, not *across roles for the same track*"),
+    ("REV-model", "runs the STRONGEST available model"),
+    ("REV-model-last", "A rationing harness keeps it LAST at"),
+    ("REV-mandate", "Mandate quality still dominates model strength"),
+    ("REV-art1", "review before you start implementing"),
+    ("REV-art2", "a brief is a spec; review it *before launching*"),
+    ("REV-art3", "a fresh agent reviews its diff/commits *before you integrate"),
+    ("REV-breadcrumb", "no completed-status entries (`LANDED`/`FIXED`/`RESOLVED`/`DONE`/`SHIPPED`/`✅`) added to `todo/`"),
+    ("REV-fixgate", "fixture-coverage gate** (Core #11/#12)"),
+    ("REV-refgate", "the **reference-grade gate** (Core #8)"),
+    ("REV-orch-refuses", "The orchestrator must not accept it either"),
+    ("REV-art4", "Session-handover / state snapshots"),
+    ("REV-loops", "N independent per-track loops"),
+    ("REV-tmponly", "are `/tmp`-only — never `git add` them"),
+    ("REV-selfcontained", "written **self-contained**"),
+    ("REV-roundclose-rm", "Round close `git rm`s any scout/brief that slipped into the repo"),
+    ("REV-mustreplace", "Fold/patch scripts MUST assert their replace targets matched"),
+    ("TC-oneperfile", "Work items live ONE PER FILE in `todo/`"),
+    ("TC-emptyfield", "A field the item's text does not state stays EMPTY"),
+    ("TC-index", "GENERATED index"),
+    ("TC-cardinal", "be filed as a `todo/<id>.md` item before moving on"),
+    ("TC-add", "one new `todo/<id>.md`, then regenerate the index"),
+    ("TC-complete", "Closure IS removal — never a `status` field"),
+    ("TC-beforeplan", "check if there are incomplete items from the previous plan and file them"),
+    ("TC-restore", "Read `TODO.md` at the start of every conversation"),
+    ("TC-discovered", "Fix small bugs inline"),
+    ("TC-repro", "ships a DURABLE `known_gaps` repro"),
+    ("TC-repro-correct", "asserting the **CORRECT/intended** output"),
+    ("TC-repro-shape", "leaks need a *heap-forced* value, not a literal"),
+    ("TC-repro-graduate", "graduates to a live regression fixture"),
+    ("TC-repro-evidence", "A repro CITED by an item is that item's EVIDENCE, not a second filing"),
+    ("TC-grep", "GREP `todo/` BEFORE YOU FILE"),
+    ("TC-family", "name the WHOLE family"),
+    ("TC-nodelete", "Never delete `TODO.md` or bulk-delete `todo/`"),
+    ("TC-handover", "The handover stores invariants and commands, not numbers"),
+    ("TC-commit", "overrides the harness default of \"commit only when the user asks\""),
+    ("TC-commit-ask", "still ask before push / force-push"),
+    ("TC-commit-never", "Never commit red or skipped"),
+    ("TC-stale", "Stale-pending scan"),
+    ("RL-auto", "rounds run back-to-back, autonomously, until the owner stops them"),
+    ("RL-1", "Open a round around a headline theme"),
+    ("RL-1-parallel", "\"One campaign\" is about the round's *theme*"),
+    ("RL-1-prewarm", "avoid is PRE-WARMING a FUTURE round's campaign"),
+    ("RL-1-lens", "Convergence lens"),
+    ("RL-2", "Run the delegated pipeline"),
+    ("RL-3", "Commit as the chains land"),
+    ("RL-4", "Round-close gate — the FULL local battery"),
+    ("RL-4-knobs", "**both** knobs; omitting the second false-reds `lowerer_comparison`"),
+    ("RL-4-wrapper", "never a hand-rolled thread count"),
+    ("RL-4-seq", "SEQUENTIALLY, never in parallel"),
+    ("RL-4-targets", "the separate `cargo` targets `--test integration` never touches"),
+    ("RL-4-local", "local-green IS the round-close sign-off"),
+    ("RL-4-ci", "NEVER a per-round blocker"),
+    ("RL-4-sanitize", "And `scripts/sanitize_sweep.sh`"),
+    ("RL-4-sanitize-why", "being in no gate list is exactly how it drifted RED unnoticed"),
+    ("RL-4-map", "Also run `python3 scripts/robustness_map.py`"),
+    ("RL-4-map-regress", "fails on any WORKS→broken regression"),
+    ("RL-4-map-accept", "`--accept` folds genuine progress into the baseline"),
+    ("RL-4-map-expect", "Never edit an expectation to match what the compiler prints"),
+    ("RL-4-hangs", "gets root-caused into a census row"),
+    ("RL-5", "Records + convergence RECORD"),
+    ("RL-5-done", "Add the round's `DONE.md` entry"),
+    ("RL-5-handover", "update `TODO.md`'s handover block IN PLACE"),
+    ("RL-5-conv", "MEASUREMENT, NOT A GATE"),
+    ("RL-5-inline", "FIX INLINE unless the defect is REALLY DISJOINT"),
+    ("RL-5-disjoint", "DISJOINT MEANS A DIFFERENT *CLASS*, NOT A DIFFERENT SITE"),
+    ("RL-5-src", "A round whose commit log never touches `src/` has stopped, not discovered"),
+    ("RL-5-followups", "File follow-ups as `todo/` items, never into the handover"),
+    ("RL-5-phases", "ONE ITEM PER DECLARED PHASE"),
+    ("RL-5-red", "A red battery is still NEVER waivable"),
+    ("RL-6", "Doc-write-through for behavior changes"),
+    ("RL-7", "Open the next round autonomously"),
+    ("RL-7-two", "STOP and ask the owner for exactly TWO things"),
+    ("RL-7-never", "Never stop for the discipline"),
+    ("RL-7-suspend", "The owner may suspend autonomy for a stretch"),
+    ("CORE-11e", "A single existing NEG with a thin harness pin is a floor, not the bar"),
+    ("CORE-12a2", "A fixture green before *and* after the fix tests nothing"),
+    ("CORE-12b3", "say so in the header and state what it pins instead"),
+    ("CORE-13a2", "A gate that has never been seen to fail is not evidence"),
+    ("CORE-15c3", "only a grep catches a SURVIVING CONTRADICTION"),
+    ("CORE-15d-p1", "break M, run F, confirm RED"),
+    ("CORE-15d-p2", "→ grep the record"),
+    ("CORE-15d-p3", "run the census command and compare"),
+    ("CORE-15d-p4", "build and run on C AND LLVM, plus ggdef when in-subset"),
+    ("CORE-15d-p5", "make one go RED, once"),
+    ("CORE-15d-p6", "read L at HEAD"),
+    ("META-caveat", "Nor does any lint check that the evidence reached devbook/29-30"),
+    ("META-census", "a new SENTENCE must be pinned or marked non-normative"),
+    ("BT-timeouts2", "bump to 600 on multi-agent boxes for DEBUG self-host builds"),
+    ("BT-timeouts3", "bump for `stress_*`"),
+    ("SYN-sigils2", "Never before the type"),
+    ("SYN-sigils3", "`void consume(Message ^msg)` ✓"),
+    ("SYN-enum", "Enum variants are qualified"),
+    ("COW-prefermove", "the compiler prefers move when liveness allows it"),
+    ("COW-nocall", "At a plain function / method call these types are simply borrowed"),
+    ("COW-consuming", "the collection must own"),
+    ("COW-perarg", "picks per-arg from typed ownership state"),
+    ("COW-row2", "Borrow, OR owned but live past this call"),
+    ("COW-row3", "Static literal"),
+    ("COW-notview", "not from `.get()`, a view-returning method,"),
+    ("SQ-robust2", "discuss both approaches and ask before proceeding"),
+    ("SQ-generic2", "Exhaust every avenue before concluding something can't be done"),
+    ("SQ-smells2", "Log non-trivial findings to `todo/`"),
+    ("SQ-history2", "Don't wait to be asked"),
+    ("LAY-1b", "may not drop semantic invariants"),
+    ("LAY-3b", "No parallel sidecar maps"),
+    ("LAY-4b", "Downstream doesn't redo the work and doesn't get to disagree"),
+    ("LAY-litmus2", "The fix is always upstream"),
+    ("NNM-stop", "to decide what something *means* — stop"),
+    ("NNM-fix2", "**add it** rather than fishing for the answer in a name"),
+    ("NNM-exception2", "drive the spelling from a typed registry"),
+    ("DBG-symptom", "you're patching a *symptom*"),
+    ("DBG-step2", "Did it respect all the typed metadata available?"),
+    ("DBG-step3", "Writer was lossy → fix at the source"),
+    ("DBG-step4", "Writer was faithful → trace one more layer up"),
+    ("GAP-forbidden2", "is the load-bearing artifact, not the comment"),
+    ("GAP-precedence", "This rule outranks Task Continuity's"),
+    ("GAP-litmus2", "Verify the bug still exists before treating the workaround as canonical"),
+    ("SH-roles", "a stress test for the compiler, a regression net"),
+    ("SH-r1b", "delete the workaround and use the idiomatic shape"),
+    ("SH-r3b", "Search for the workaround pattern across all self-host directories"),
+    ("SH-r4b", "Treat the self-host as a living document and prune"),
+    ("MA-0b2", "Never hardcode a branch name"),
+    ("MA-0b3", "Subagents always get their own worktree"),
+    ("MA-1b", "No exceptions; applies to NESTED forks too"),
+    ("MA-2-pwd", "Run `pwd` and `git rev-parse --show-toplevel` FIRST"),
+    ("MA-2-main", "NEVER touch the main checkout or the orchestrator worktree"),
+    ("MA-2-cd", "Do NOT `cd` into either"),
+    ("MA-2-abs", "Do NOT use absolute paths into main or the orchestrator worktree"),
+    ("MA-2-stop", "STOP and report it"),
+    ("MA-3b", "NEVER `git add -a`, `git add .`, or `git commit -a`"),
+    ("MA-5c", "Do NOT defer or reshape a worthwhile parallel track to avoid overlap"),
+    ("MA-5d", "brief EACH on the other's exact edit regions"),
+    ("MA-6d", "Read the dry-run first"),
+    ("MA-7c", "run `git -C <main-checkout> status` and STOP if it shows changes"),
+    // Reworded 2026-08-28: the old instruction said `git diff`, which silently
+    // omits untracked files — so a checkpoint dropped the `todo/` item a killed
+    // agent had just filed, and the tree came back RED with a dangling index
+    // pointer. The recovery command has to stage new files first.
+    ("MA-8b", "save/restore state with `git add <new files>`"),
+    ("MA-9b", "checkpoint to `/tmp/recover_*.patch` after every meaningful step"),
+    ("REV-nodefer2", "the round that surfaced it still owes the fix"),
+    ("REV-docs2", "The code shows what IS; the docs show what's INTENDED"),
+    ("REV-nopack2", "a single \"pack\" reviewer reading N track briefs"),
+    ("REV-parallel2", "within* a track passes stay sequential"),
+    ("REV-model-abc", "the FIRST review pass on a fresh artifact"),
+    ("REV-art2b", "A wrong brief wastes the whole execute + validate cycle"),
+    ("REV-art4b", "commit hashes resolve, scores re-confirmed from the `*_comparison` tests"),
+    ("REV-orchhonest", "brief each reviewer/executor with only the artifact they own"),
+    ("REV-sessiondoc", "The single session-state doc is `TODO.md`'s handover block"),
+    ("REV-mustreplace2", "`str.replace` silently no-ops"),
+    ("TC-nothingfalls", "Nothing falls through the cracks"),
+    ("TC-add2", "Never replace existing items"),
+    ("TC-add3", "Categorize by priority (High / Medium / Low)"),
+    ("TC-complete2", "add it to the top of `DONE.md` with a date stamp"),
+    ("TC-discovered2", "For anything too large to fix immediately, file it and move on"),
+    ("TC-neverworkaround", "Never silently work around a bug — either fix it or record it"),
+    ("TC-repro-exception", "the triage *paperwork* is `/tmp`, the *repro* is committed"),
+    ("TC-handover2", "Record *what to run to get the current number*"),
+    ("TC-stale2", "Keep items short and scannable"),
+    ("RL-1-parallel2", "Multiple items/tracks may run IN PARALLEL within the round"),
+    ("RL-1-lens2", "It informs SELECTION; it no longer gates CLOSING"),
+    ("RL-2b", "each with its exercising fixture"),
+    ("RL-4-lanes", "C · LLVM · self-host · ASan · ggdef"),
+    ("RL-4-map-measures", "It measures what the main suite structurally cannot"),
+    ("RL-4-hangs2", "Prefer a no-new-hangs executable guard"),
+    ("RL-4-necessary", "Targeted and self-host gates are necessary, not sufficient"),
+    ("RL-5-classfix", "Only a genuinely different class is FILED"),
+    ("RL-7-i", "a genuine DESIGN decision"),
+    ("RL-7-both", "Both are owner CALLS, not process questions"),
+    ("SQ-resourceful", "Be resourceful — read code, search the web"),
+    ("SQ-opinion2", "If the user is proposing something dumb, call him out"),
+    ("SQ-swear2", "if something deserves a 'holy shit', use it"),
+    ("SQ-history3", "Skip only for mechanical/greenfield changes"),
+    ("CORE-15c4", "Instruction form, because explanatory prose legitimately mentions"),
+    ("MA-nonneg", "the following rules are **non-negotiable**"),
+    ("MA-0-foldverbatim", "Fold verbatim; keep the precedence stack straight"),
+    ("MA-6e", "**`scripts/round_cleanup.sh`**"),
+    ("SH-refgrade", "the language's reference-grade demonstration"),
+    ("TC-format", "TOML front matter, `+++`, prose verbatim"),
+    ("TC-repro-exempt", "non-reproducible items (design notes, refactors, perf without a repro) are naturally exempt"),
+    ("REV-design2", "raise any violation as a cited reservation"),
+    ("REV-design-a", "an instance-fix where a *class* exists"),
+    ("REV-design-b", "semantics from name-matching or shape heuristics instead of typed metadata"),
+    ("REV-design-c", "information rebuilt at a *read* site a *writer* should carry"),
+    ("REV-design-d", "a silently-dropping arm"),
+    ("REV-design-e", "a known defect shipped"),
+    ("REV-design-f", "the reviewer names the invariant and the reference-grade shape instead"),
+    ("REV-scout-probe", "a read-only probe/audit"),
+    ("REV-scout-premise", "verifies every load-bearing premise against CURRENT source with `file:line`"),
+    ("REV-scout-repro", "confirms the bug still reproduces"),
+    ("REV-scout-measure", "prototypes it end-to-end and MEASURES the real result"),
+    ("REV-scout-kill", "Killing an unsound plan after a one-agent scout is a win"),
+    ("REV-scout-compile", "compile AND run AND diff whole output, never source-read"),
+    ("REV-art3b", "a fresh agent reviews its diff/commits"),
+    ("REV-breadcrumb2", "those are completed work to MOVE to `DONE.md`"),
+    ("REV-breadcrumb3", "`todo/` holds pending work only"),
+    ("REV-fixgate2", "SIGN OFF requires wide, genuinely-exercising, RED-verified regression nets"),
+    ("REV-fixgate3", "not a single thin pin if siblings exist"),
+    ("REV-refgate2", "the acceptance bar is *correct/principled*"),
+    ("REV-refgate3", "a KNOWN DEFECT left in place is a reservation"),
+    ("REV-refgate4", "the exact phrasing that must trip the gate"),
+    ("REV-refgate5", "pushing the defect to a 'benign, filed' follow-up is the same failure"),
+    ("REV-art4c", "a stale one misleads it exactly as a wrong brief misleads an executor"),
+    ("COW-single", "single-owner-by-design (no clone path in the lowering)"),
+    ("COW-sites", "at bare-assign sites AND at constructor / struct / enum-init sites"),
+    ("COW-movezero2", "the backend zeros the source only when drop-tracking would otherwise re-drop it"),
+    ("SQ-memory2", "tracks peak RSS + alloc/clone counts"),
+    ("SQ-memory3", "a memory balloon is as blocking as a time regression"),
+    ("CORE-10c", "Every lowering arm either lowers the construct or emits a check-time rejection"),
+    ("CORE-10d", "is a miscompile-class defect"),
+    ("CORE-9h", "ships with the conformance fixture"),
+    ("REV-model-a", "first contact catches the structural defects while folding is cheapest"),
+    ("REV-model-b", "the FINAL pre-integration output-review"),
+    ("REV-model-c", "ad-hoc arbitration when two agents disagree"),
+    ("REV-nopack3", "N tracks ⇒ N×≥3 agents"),
+    ("REV-nopack4", "one fresh output-review per track's diff before it integrates"),
+    ("REV-mustreplace3", "every fold asserts the old text was found and the new text landed"),
+    ("REV-mustreplace4", "use the Edit tool, which errors on no-match"),
+    ("REV-tmponly2", "Durable content goes to its official home"),
+    ("REV-tmponly3", "moving durable content out and deleting a completed plan is itself a reviewed change"),
+    ("SQ-nonumbers2", "enters no plan, brief, commit, handover, or statement to the owner"),
+    ("SQ-nonumbers3", "quote the *command*, not the stale value"),
+    ("SQ-nonumbers4", "only freshly-printed counts mean anything"),
+    ("SQ-reverify2", "re-run the test, re-read the cited source, check the actual current code shape"),
+    ("RL-2c", "scout (verify premises + measure end-to-end)"),
+    ("REV-loops2", "parallel across tracks, never one pack loop"),
+    ("RL-7-ii", "an UNRATIFIED semantics question"),
+    ("RL-7-lane", "any lane divergence whose correct direction is not already settled"),
+    ("RL-7-auto", "battery and parity regen all run AUTONOMOUSLY"),
+    ("CORE-15e7b", "A considered decision in a scratch file outranks a stale one in the ledger"),
+    ("CORE-15e7c", "the fix is to **file it properly**, not to discount it"),
+    ("DOC-nodates2", "those belong in `DONE.md` and the playbook chapters"),
+    ("CORE-13b2", "Run the shape through the oracle during triage and treat disagreement as the finding"),
+    ("SQ-history4", "grep `DONE.md`, `todo/`, `git log`, AND the Rust impl in `src/`"),
+    ("CMD-integration", "```bash scripts/run_integration.sh 2>&1 | tee"),
+    ("CMD-llvm", "GG_BACKEND=llvm GG_BUILD_TIMEOUT_SECS=600 scripts/run_integration.sh --release"),
+    ("CMD-llvm-one", "GG_BACKEND=llvm cargo test --test integration --release"),
+    ("CMD-battery", "GG_BUILD_TIMEOUT_SECS=600 GG_TEST_TIMEOUT_SECS=600 scripts/run_integration.sh"),
+    ("REV-design3", "Brief every reviewer to test the artifact's DESIGN against the Core invariants"),
+    ("REV-nopack5", "in one conversation and signing them off together"),
+    ("REV-nopack6", "each seeing *only that track's brief*"),
+    ("MA-7d", "all file ops use paths RELATIVE to its worktree"),
+    ("MA-7e", "never fall back to a shell heredoc with an absolute path"),
+    ("CORE-8e", "is *necessary, not sufficient*"),
+    ("CORE-8f", "most often by making the language *reject* it"),
+    ("REV-docs3", "MUST tell the agent to consult the relevant documentation FIRST"),
+    ("REV-docs4", "citing the sections it rests on"),
+    ("CORE-3b", "registered for drop (or provably moved) at the producer"),
+    ("RL-1-lens3", "bias class-fix (Core #4) and bulk-graduation over instance-fixes-with-follow-ups"),
+    ("REV-scope2", "A TREE defect found while reviewing, and an ORCHESTRATOR fold/guard defect, are not the track's"),
+    ("SIB-set", "consume positions (`push`/`put`/`set`/`insert`/`send`/ctor/return/capture)"),
+    ("REV-nodefer3", "NOT as a queue for handing fixes to the next agent or the next round"),
+    ("REV-checklist2", "each binary and checkable without judgement"),
+    ("CORE-15cb4", "heading, both neighbouring paragraphs, and the comments inside its examples"),
+    ("META-authorhalf", "Those halves stay on the author."),
+    ("META-inplace", "its exemption side weaker still"),
+    ("META-insertion", "reach depends on WHERE and on LENGTH"),
+    // Was "the edit the landing rule above prescribes" — a CROSS-REFERENCE,
+    // which this table's own rule forbids as a probe (a probe pins the
+    // obligation, never its justification). Repointed to the limit clause it
+    // was standing next to; the row count is unchanged, so no row was removed.
+    ("META-weakest", "a short mid-sentence one in a run already between them is invisible"),
+    // Was "the census never separates a sentence starting lowercase (its
+    // capitalised twin IS caught)", then "only when the run it lands in was
+    // already near the cap". Both are refuted. Measured over all 8827
+    // insertion points (`agents_md_insertion_sweep`, run it — the figures live
+    // in its output and in todo/t0714): capitalisation moves the unpinned-prose
+    // rate a few points via the sentence census and leaves the ratchet's own
+    // catch count IDENTICAL; and "near the cap" is the wrong shape. The ratchet
+    // asserts two CEILINGS, so it sees an insertion only where the insertion
+    // pushes a counter PAST one — crossing the 100-char floor (the >=100 count
+    // is at its constant) or the cap itself. A run already between the two
+    // absorbs a clause with nothing firing, which is the largest hole.
+    ("META-lowercase", "pushes its run past the 100-char floor or the cap"),
+    ("META-fenced", "in a fence usually nothing"),
+    ("META-spanpin", "it breaks the pin and is caught"),
+    ("META-rates", "Per-class rates + commands"),
+];
+
+/// The NON-NORMATIVE classification for `AGENTS.md`.
+///
+/// `agents_md_every_clause_is_classified` requires every prose chunk of the
+/// file to carry an inventory probe OR match a row here. A row is a CLAIM that
+/// the chunk states no obligation, and it is reviewed like any other claim.
+/// Prefixes name the reason: `REF-` reference material · `PTR-` pointer,
+/// citation or owner attribution · `WHY-` rationale for a rule pinned
+/// elsewhere · `LEAD-` a lead-in label whose obligations are probed below it ·
+/// `FMT-` markdown scaffolding · `EG-` an illustrative example ·
+/// `PTR-` a cross-reference or owner attribution.
+///
+/// **Each row pins a COUNT, and there is no shape-based escape.** Review pass 6
+/// deleted an `is_pointer` heuristic that exempted any parenthetical opening
+/// with "owner"/"→"/"devbook" and an UNBOUNDED `[^)]*` payload: a fabricated
+/// `(owner 2026-08-28: the round-close battery is optional when the diff is
+/// docs-only)` — 82 characters waiving the one rule that says it can never be
+/// waived — passed all four lints, while the identical sentence WITHOUT
+/// parentheses was RED. The costume was the exemption itself, and of all the
+/// costumes a false rule could wear the heuristic picked the one carrying the
+/// most authority. Its replacement is the same set written out (9 rows, 11
+/// occurrences), so nothing is exempt by SHAPE — only by being named.
+///
+/// This list is the guard's escape hatch, so it has a CEILING rather than a
+/// floor: it may shrink freely, and growing it past
+/// `AGENTS_MD_MAX_NON_NORMATIVE` is the reviewed act — otherwise "classify it
+/// as prose" becomes the cheap way to unpin a rule.
+const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
+    ("REF-symlink", "`CLAUDE.md` is a symlink to this file", 1),
+    ("REF-symlink2", "Both names are kept so that", 1),
+    ("REF-symlink3", "other AI coding agents can discover these instructions", 1),
+    ("REF-overview", "Gorget is a statically typed, Python-like language", 1),
+    ("REF-pipeline", "**Pipeline:**", 1),
+    ("REF-binary", "**Binary:** `gg` with commands", 1),
+    ("REF-commands", "`lex`, `parse`, `check`, `build`, `run`", 1),
+    ("REF-doc-book", "learn the language from scratch", 1),
+    ("REF-doc-ref", "Full syntax and semantics specification", 1),
+    ("REF-doc-design", "Design philosophy, safety features, and rationale", 1),
+    ("REF-doc-devbook", "contributor-facing pipeline and design docs", 1),
+    ("REF-src-lexer", "Logos-based tokenizer with indentation tracking", 1),
+    ("REF-src-parser", "Recursive descent parser producing AST", 1),
+    ("REF-src-sem", "Name resolution, type checking, trait registry", 1),
+    ("REF-src-ir", "Intermediate representation and lowering from AST", 1),
+    ("REF-src-lir", "SSA-based LIR", 1),
+    ("REF-src-llvm", "LLVM IR backend (`--backend=llvm`)", 1),
+    ("REF-src-c", "C runtime library and SQLite amalgamation", 1),
+    ("REF-src-fmt", "Source formatter (`gg fmt`)", 1),
+    ("REF-src-pkg", "Package management", 1),
+    ("REF-src-report", "Test report generation", 1),
+    ("REF-src-fixtures", "Integration test programs with deterministic stdout", 1),
+    ("REF-src-harness", "Integration test harness: builds fixtures", 1),
+    ("REF-syn-blocks", "Indentation-based blocks (Python-style)", 1),
+    ("REF-syn-decl", "`int x = 5`, `String name = \"hello\"`", 1),
+    ("REF-syn-fn", "Functions:", 1),
+    ("REF-syn-fn2", "`int add(int a, int b): return a + b`", 1),
+    ("REF-syn-fn3", "`int double(int x): x * 2`", 1),
+    ("REF-syn-clo", "Closures:", 1),
+    ("REF-syn-clo2", "`(int x): x * 2` / function types", 1),
+    ("REF-syn-clo3", "`int(int, int)` (return type first)", 1),
+    ("REF-syn-match", "Match uses `case`:", 1),
+    ("REF-syn-match2", "`match x: case 1: ... else: ...`", 1),
+    ("REF-syn-enum2", "`Color.Red()` not `Red()`", 1),
+    ("REF-syn-meta", "`meta` keyword for compile-time evaluation", 1),
+    ("REF-syn-greet", "`String greet(String name)`", 1),
+    ("FMT-cow-head", "| Source", 1),
+    ("FMT-cow-sep", "|---------------------------------------------------|", 1),
+    ("PTR-cow-spec", "#materialization-points--the-enforced-boundary-set", 1),
+    ("PTR-reverify", "Burned-cycle incidents in", 1),
+    ("PTR-lay-doc", "Full rules in [`docs/devbook/24-layering-discipline.md`]", 1),
+    ("PTR-nnm-see", "(See \"No name matching\" below.)", 1),
+    ("PTR-dbg-eg", "Worked examples (Snag #17, Snag #13)", 1),
+    ("PTR-dbg-link", "#the-debugging-heuristic-fix-complexity-is-a-signal-of-the-wrong-layer", 1),
+    ("PTR-sib-sagas", "Sagas:", 1),
+    ("PTR-sib-link", "#sibling-site-drift-fix-the-class-not-the-instance", 1),
+    ("PTR-gap-eg", "Worked examples:", 1),
+    ("PTR-gap-link", "#dont-redesign-around-compiler-gaps", 1),
+    ("PTR-sh-fossils", "Fossils already burned in", 1),
+    ("PTR-sh-link", "#self-host-as-the-elegance-showcase--and-retiring-fossils", 1),
+    ("PTR-rev-d45", "Rationale + D45: devbook/30 §12", 1),
+    ("PTR-rev-link", "#scout-before-you-brief-review-in-sequential-fresh-passes", 1),
+    ("PTR-tc-trap", "Same trap as \"re-verify a premise\"", 1),
+    ("PTR-core14", "Core #6 applied to prose", 1),
+    ("PTR-sh-pairs", "This rule pairs with \"Don't redesign around compiler gaps\"", 1),
+    ("PTR-done-fmt", "`- [2026-02-10] Task description`", 1),
+    ("WHY-core6", "Prose rots; guards don't", 1),
+    ("WHY-core15a", "A claim with no command is not a claim, it is a hope", 1),
+    ("WHY-lay1", "Invariants accumulate; abstractions evaporate", 1),
+    ("WHY-nnm", "The metadata you need is missing one layer up", 1),
+    ("WHY-dbg-q", "*Where was it last written?*", 1),
+    ("WHY-dbg-look", "Look at the writer.", 1),
+    ("WHY-dbg-rep", "Repeat.", 1),
+    ("WHY-sh-tests", "tests will catch regressions", 1),
+    ("WHY-ma3", "A sweeping stage clobbers other agents' uncommitted work", 1),
+    ("WHY-ma6", "Not \"later\" — \"later\" is when the disk is already full", 1),
+    ("WHY-ma7", "so an unqualified absolute path", 1),
+    ("WHY-ma7b", "necessary but NOT sufficient when the worktrees are children", 1),
+    ("WHY-rl1", "Focus means not fragmenting attention across rounds", 1),
+    ("WHY-rl-atom", "is the atom; a **round** is the unit the orchestrator works in", 1),
+    ("WHY-tc-family", "when there are five is a selection, not an enumeration", 1),
+    ("WHY-lay-intro", "How information crosses IR layer boundaries", 1),
+    ("WHY-header", "The sections below are the spec", 1),
+    ("LEAD-15e7", "⚠ Plus one about the record itself:", 1),
+    ("LEAD-sh-rules", "Rules:", 1),
+    ("LEAD-four", "This applies to four kinds of artifact:", 1),
+    ("LEAD-ma0-brief", "**Update the brief.** Per finding:", 1),
+    ("LEAD-ma6", "Closing step of every round:", 1),
+    ("LEAD-rl5", "**What SURVIVES, as an owner ruling in its own right:", 1),
+    ("LEAD-ma2-paths", "(Concrete paths live in the session handover.)", 1),
+    ("LEAD-ma7-paths", "(The concrete main-checkout path for the current environment", 1),
+    ("EG-sib-producer", "`maybe_auto_propagate` hoisted to the `lower_expr` exit", 1),
+    ("EG-core11", "(#6 retires a class; this is the per-fix net.)", 1),
+    ("LEAD-fourlints", "**Four lints hold the line**", 1),
+    ("PTR-t0714", "`todo/t0714`.", 1),
+    ("PTR-owner-hdr", "(Owner 2026-07-18/25.)", 1),
+    ("PTR-xref-lay", "(→ Layering discipline)", 3),
+    ("PTR-xref-own", "(→ Ownership at Consuming Positions)", 1),
+    ("PTR-xref-sq", "(→ Solution Quality)", 1),
+    ("PTR-xref-guards", "(→ `docs/devbook/25-structural-guards.md`)", 1),
+    ("PTR-xref-bt", "(→ Build & Test)", 1),
+    ("PTR-xref-rev", "(→ Review … fresh agent)", 1),
+    ("PTR-owner-c10", "(Owner 2026-07-18.)", 1),
+    ("PTR-owner-c13", "(Owner 2026-08-22; devbook/30 §4.)", 1),
+];
+
+/// Shrink-only floor on the inventory, so a compaction cannot delete rows and
+/// the rules they pin in one move. RAISING is free (new rules landed);
+/// LOWERING requires owner sign-off, like the byte ceiling.
+const AGENTS_MD_RULE_FLOOR: usize = 464;
+
+/// Grow-only ceiling on the escape hatch (see above).
+const AGENTS_MD_MAX_NON_NORMATIVE: usize = 94;
+
+/// Collapse every run of whitespace to a single space, so a probe survives the
+/// file being re-wrapped or re-flowed (Core #15(c): prose WRAPS).
+fn squash_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn agents_md_starts_sentence(c: char) -> bool {
+    c.is_ascii_uppercase()
+        || c.is_ascii_digit()
+        || matches!(c, '*' | '`' | '"' | '\'' | '(' | '[' | '⚠' | '⊕' | '→' | '≠')
+}
+
+/// Sentence split that never cuts inside a `code span` — `isolation:
+/// "worktree"` and `match x: case 1:` are one statement, not two.
+fn agents_md_split_sentences(body: &str) -> Vec<String> {
+    let chars: Vec<char> = body.chars().collect();
+    let mut out = Vec::new();
+    let (mut start, mut ticks, mut i) = (0usize, 0usize, 0usize);
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '`' {
+            ticks += 1;
+        }
+        if matches!(c, '.' | '!' | '?' | ':') && ticks % 2 == 0 {
+            let mut j = i + 1;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j > i + 1 && j < chars.len() && agents_md_starts_sentence(chars[j]) {
+                out.push(chars[start..=i].iter().collect::<String>());
+                start = j;
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    if start < chars.len() {
+        out.push(chars[start..].iter().collect::<String>());
+    }
+    out.into_iter().filter(|s| !s.trim().is_empty()).collect()
+}
+
+/// The file's own prose chunks: (line number, chunk). Hard-wrapped
+/// continuation lines are joined first, fenced code and headings are dropped,
+/// and list markers are stripped so a chunk starts at its content.
+///
+/// The chunk set is derived FROM THE FILE, not from anyone's list of rules,
+/// so a wholly new or wholly replaced clause cannot pass unnoticed just
+/// because no one thought to list it (Core #15e Q3). It does NOT make the
+/// inventory total: a chunk counts as classified once it CONTAINS one probe,
+/// so unprobed text sitting beside probed text is invisible here. See
+/// `agents_md_unpinned_prose_ratchet` for the measure of how much that is.
+fn agents_md_prose_chunks(text: &str) -> Vec<(usize, String)> {
+    let list_mark = regex::Regex::new(r"^[\s>]*(?:[-*]|\d+[a-z]?[.)])\s+").unwrap();
+    let block_start = regex::Regex::new(r"^(?:\s*(?:[-*]\s|\d+[a-z]?[.)]\s|>|\||#|```))").unwrap();
+    let middot = regex::Regex::new(r"\s+·\s+").unwrap();
+
+    // Pass 1: join hard-wrapped continuation lines into logical blocks.
+    let mut blocks: Vec<(usize, String)> = Vec::new();
+    let mut buf: Vec<&str> = Vec::new();
+    let mut buf_ln = 0usize;
+    let mut in_code = false;
+    for (idx, line) in text.lines().enumerate() {
+        let lineno = idx + 1;
+        let stripped = line.trim();
+        let flush = |buf: &mut Vec<&str>, blocks: &mut Vec<(usize, String)>, ln: usize| {
+            if !buf.is_empty() {
+                blocks.push((ln, buf.join(" ")));
+                buf.clear();
+            }
+        };
+        if stripped.starts_with("```") {
+            flush(&mut buf, &mut blocks, buf_ln);
+            in_code = !in_code;
+            continue;
+        }
+        if in_code || stripped.is_empty() || stripped.starts_with('#') {
+            flush(&mut buf, &mut blocks, buf_ln);
+            continue;
+        }
+        if !buf.is_empty() && block_start.is_match(line) {
+            flush(&mut buf, &mut blocks, buf_ln);
+        }
+        if buf.is_empty() {
+            buf_ln = lineno;
+        }
+        buf.push(stripped);
+    }
+    if !buf.is_empty() {
+        blocks.push((buf_ln, buf.join(" ")));
+    }
+
+    // Pass 2: split each block into clause-level chunks.
+    let mut out = Vec::new();
+    for (ln, body) in blocks {
+        let body = list_mark.replace(&body, "").trim().to_string();
+        if body.is_empty() {
+            continue;
+        }
+        for part in agents_md_split_sentences(&body) {
+            // " · " separates independent procedures in some rules and mere
+            // enumeration cells in others; only split when both sides are long
+            // enough to be statements rather than cells.
+            let pieces: Vec<&str> = middot.split(&part).map(|p| p.trim()).collect();
+            if pieces.len() > 1 && pieces.iter().all(|p| p.chars().count() >= 25) {
+                for p in pieces {
+                    if !p.is_empty() {
+                        out.push((ln, p.to_string()));
+                    }
+                }
+            } else {
+                let p = part.trim();
+                if !p.is_empty() {
+                    out.push((ln, p.to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn agents_md_rule_inventory_is_pinned() {
+    let text = squash_ws(&fs::read_to_string("AGENTS.md").expect("AGENTS.md"));
+
+    assert!(
+        AGENTS_MD_RULE_INVENTORY.len() >= AGENTS_MD_RULE_FLOOR,
+        "AGENTS_MD_RULE_INVENTORY has {} rows, floor is {AGENTS_MD_RULE_FLOOR}. Rows \
+         are only ever ADDED. Removing a rule from AGENTS.md needs owner sign-off, \
+         exactly like raising the size ceiling — see this table's doc comment.",
+        AGENTS_MD_RULE_INVENTORY.len()
+    );
+    assert!(
+        AGENTS_MD_NON_NORMATIVE.len() <= AGENTS_MD_MAX_NON_NORMATIVE,
+        "AGENTS_MD_NON_NORMATIVE has {} rows, ceiling is {AGENTS_MD_MAX_NON_NORMATIVE}. \
+         Classifying a clause as non-normative is the guard's escape hatch; widening \
+         it is the reviewed act. Pin the clause with a probe instead.",
+        AGENTS_MD_NON_NORMATIVE.len()
+    );
+
+    let mut ids: Vec<&str> = AGENTS_MD_RULE_INVENTORY
+        .iter()
+        .map(|(id, _)| *id)
+        .chain(AGENTS_MD_NON_NORMATIVE.iter().map(|(id, _, _)| *id))
+        .collect();
+    ids.sort_unstable();
+    let before = ids.len();
+    ids.dedup();
+    assert_eq!(before, ids.len(), "duplicate id across the two AGENTS.md tables.");
+
+    let mut missing: Vec<&str> = Vec::new();
+    let mut ambiguous: Vec<(&str, usize)> = Vec::new();
+    let mut miscounted: Vec<(&str, usize, usize)> = Vec::new();
+    // Both tables get the exactly-once treatment. An exemption row that
+    // matches twice can be broadened for free and never trips the row-count
+    // ceiling, which would make "classify it as prose" the cheap way to unpin
+    // a rule (review pass 2).
+    for (id, probe) in AGENTS_MD_RULE_INVENTORY {
+        match text.matches(squash_ws(probe).as_str()).count() {
+            0 => missing.push(id),
+            1 => {}
+            n => ambiguous.push((id, n)),
+        }
+    }
+    // Exemptions pin their MULTIPLICITY, not just their presence: three
+    // chunks are the identical cross-reference `(→ Layering discipline)`, and
+    // a fourth appearing is a change that must be looked at.
+    for (id, probe, want) in AGENTS_MD_NON_NORMATIVE {
+        let n = text.matches(squash_ws(probe).as_str()).count();
+        if n == 0 {
+            missing.push(id);
+        } else if n != *want {
+            miscounted.push((id, n, *want));
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "AGENTS.md no longer states {} inventoried clause(s): {:?}.\n\
+         Either the rule was DROPPED — restore it; a compaction moves EVIDENCE to \
+         docs/devbook/29-30, never the imperative — or it was deliberately REWORDED, \
+         in which case update that row's probe in AGENTS_MD_RULE_INVENTORY in this \
+         same commit.",
+        missing.len(),
+        missing
+    );
+    assert!(
+        miscounted.is_empty(),
+        "{} non-normative row(s) occur a different number of times than pinned          (id, found, expected): {:?}.
+         FEWER than expected means an occurrence was DELETED — restore it. MORE          means one was ADDED — read the new occurrence and decide whether it is          really non-normative before touching this table. Editing the expected          count to match what the file now says is how a deletion gets ratified;          change it only when you have read the text and can say why.",
+        miscounted.len(),
+        miscounted
+    );
+
+    assert!(
+        ambiguous.is_empty(),
+        "{} inventory probe(s) match AGENTS.md more than once: {:?}.\n\
+         An ambiguous probe cannot catch its own rule being deleted — a \
+         cross-reference elsewhere keeps it alive. Narrow the probe to a phrase \
+         that appears only at the rule's own site (or, if the file now genuinely \
+         states one rule twice, delete the duplicate statement).",
+        ambiguous.len(),
+        ambiguous
+    );
+}
+
+/// The COARSE half: the file enumerates, not the author.
+///
+/// Review pass 1 gutted eight rules — the whole mandated worktree blockquote,
+/// the `git add -a` prohibition, the CoW boundary rule, three of the four
+/// debugging-heuristic steps, the Cardinal rule — with the byte ratchet and a
+/// 273-row headline inventory both GREEN, because the deleted text carried no
+/// probe and deleting it only made the file smaller. A hand-written list
+/// cannot notice what it never listed. This lint narrows that by requiring
+/// every clause the FILE contains to be accounted for — but only at SENTENCE
+/// granularity, which review pass 2 then walked through. It is one layer, not
+/// the answer.
+#[test]
+fn agents_md_every_clause_is_classified() {
+    let raw = fs::read_to_string("AGENTS.md").expect("AGENTS.md");
+    let probes: Vec<String> = AGENTS_MD_RULE_INVENTORY
+        .iter()
+        .map(|(_, p)| squash_ws(p))
+        .collect();
+    let exempt: Vec<String> = AGENTS_MD_NON_NORMATIVE
+        .iter()
+        .map(|(_, p, _)| squash_ws(p))
+        .collect();
+
+    let mut unclassified: Vec<(usize, String)> = Vec::new();
+    for (ln, chunk) in agents_md_prose_chunks(&raw) {
+        let n = squash_ws(&chunk);
+        if probes.iter().any(|p| n.contains(p.as_str())) {
+            continue;
+        }
+        if exempt.iter().any(|e| n.contains(e.as_str())) {
+            continue;
+        }
+        unclassified.push((ln, chunk));
+    }
+
+    assert!(
+        unclassified.is_empty(),
+        "{} clause(s) of AGENTS.md are neither pinned by a rule probe nor \
+         classified as non-normative:\n{}\n\
+         Every clause must be one or the other. If it states an obligation, add a \
+         row to AGENTS_MD_RULE_INVENTORY; if it does not, add one to \
+         AGENTS_MD_NON_NORMATIVE with a prefix naming the reason. Do not silence \
+         it by deleting the clause.",
+        unclassified.len(),
+        unclassified
+            .iter()
+            .map(|(ln, c)| format!(
+                "  AGENTS.md:{ln}  {}",
+                c.chars().take(120).collect::<String>()
+            ))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+/// ---------------------------------------------------------------------------
+/// The GRANULAR half: how much of AGENTS.md is accounted for by nothing.
+///
+/// Review pass 2's finding: `agents_md_every_clause_is_classified` (above)
+/// marks a chunk classified as soon as it CONTAINS one probe, so deleting
+/// unprobed text from INSIDE an already-probed chunk was invisible. Measured
+/// then: 276 characters of Core #8's review gate could be deleted with all
+/// three lints green, and 117 chunks carried an uncovered run of >= 100 chars,
+/// the largest 638 — an entire rule sitting under a 44-char headline probe.
+///
+/// So the sentence census is necessary and not sufficient. This lint adds a
+/// DIFFERENT layer, not the missing one: it measures the longest stretch of
+/// file text that no probe and no non-normative row accounts for, and caps it.
+/// It does not depend on sentence splitting at all, which is where the
+/// chunker's design bugs lived.
+///
+/// ⚠ WHAT THIS CANNOT DO (review pass 3). Both asserts below are `<=`
+/// CEILINGS, but the third assert requires the constants to EQUAL the
+/// measurement, so a deletion that moves a run across a BAND EDGE DOES fire
+/// this lint (measured: 9/15 removing from a run >= 100, 10/20 removing a
+/// whole rule line). A deletion that shifts no band is silent. It also
+/// catches ADDITION of unpinned prose and replacement-with-longer. Nothing here catches the
+/// deletion of text no probe covers: pass 3 removed every uncovered run >= 60
+/// chars — 23,962 characters, 41% of the file, 215 obligation fragments — with
+/// the whole suite green. `agents_md_rule_inventory_is_pinned` is the only
+/// deletion guard, and it reaches exactly as far as the probes do. The
+/// remaining exposure is measured and filed as `todo/t0714`, which carries the
+/// current figures and the command to regenerate them; the pass-3 numbers above
+/// are history, not a live measurement.
+///
+/// Code fences are INCLUDED: pass 2 gutted the LLVM sweep command inside one,
+/// and the round-close battery's exact flags are load-bearing.
+///
+/// Both constants ratchet DOWN only, and the lint's third assert requires them
+/// to EQUAL the measurement, so shrinking unpinned prose without following the
+/// constant down is itself a red. That is not pedantry: these are ceilings, so
+/// the distance between constant and measurement IS the reach lost — one unit
+/// of slack in the >= 100 count switched a whole insertion band from caught to
+/// invisible, with every other lint green (see the assert's own comment).
+/// Raising either needs the same owner sign-off as raising the byte ceiling —
+/// unpinned prose ACCUMULATING is what this exists to notice.
+const AGENTS_MD_MAX_UNPINNED_RUN: usize = 198;
+const AGENTS_MD_MAX_RUNS_OVER_100: usize = 112;
+
+/// Logical blocks for coverage: hard-wrapped continuation lines joined, code
+/// fences kept (each command line stands alone), headings dropped.
+fn agents_md_coverage_blocks(text: &str) -> Vec<(usize, String)> {
+    let block_start =
+        regex::Regex::new(r"^(?:\s*(?:[-*]\s|\d+[a-z]?[.)]\s|>|\||#|```))").unwrap();
+    let mut out: Vec<(usize, String)> = Vec::new();
+    let mut buf: Vec<&str> = Vec::new();
+    let mut buf_ln = 0usize;
+    let mut in_code = false;
+    for (idx, line) in text.lines().enumerate() {
+        let lineno = idx + 1;
+        let s = line.trim();
+        if s.starts_with("```") {
+            if !buf.is_empty() {
+                out.push((buf_ln, buf.join(" ")));
+                buf.clear();
+            }
+            in_code = !in_code;
+            continue;
+        }
+        if s.is_empty() || (!in_code && s.starts_with('#')) {
+            if !buf.is_empty() {
+                out.push((buf_ln, buf.join(" ")));
+                buf.clear();
+            }
+            continue;
+        }
+        if in_code {
+            out.push((lineno, s.to_string()));
+            continue;
+        }
+        if !buf.is_empty() && block_start.is_match(line) {
+            out.push((buf_ln, buf.join(" ")));
+            buf.clear();
+        }
+        if buf.is_empty() {
+            buf_ln = lineno;
+        }
+        buf.push(s);
+    }
+    if !buf.is_empty() {
+        out.push((buf_ln, buf.join(" ")));
+    }
+    out
+}
+
+/// Maximal stretches of `block` that no key covers, as (char length, text).
+fn agents_md_uncovered_runs(block: &str, keys: &[String]) -> Vec<(usize, String)> {
+    let n = block.len();
+    let mut covered = vec![false; n];
+    for k in keys {
+        if k.is_empty() {
+            continue;
+        }
+        for (i, _) in block.match_indices(k.as_str()) {
+            for c in covered.iter_mut().skip(i).take(k.len()) {
+                *c = true;
+            }
+        }
+    }
+    // Coverage spans are whole pattern matches, so every covered/uncovered
+    // transition falls on a char boundary and the slices below are safe.
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < n {
+        if covered[i] {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < n && !covered[j] {
+            j += 1;
+        }
+        let t = block[i..j].trim();
+        if !t.is_empty() {
+            out.push((t.chars().count(), t.to_string()));
+        }
+        i = j;
+    }
+    out
+}
+
+/// Env-gated measurement dump, so every figure `AGENTS.md` and `todo/t0714`
+/// cite is regenerable IN-TREE rather than from a `/tmp` helper that
+/// evaporates with the session (Core #5 / the durable-repro rule applied to
+/// measurements):
+///
+/// ```text
+/// AGENTS_MD_DUMP=1 cargo test --test lints agents_md_measurements -- --nocapture
+/// ```
+#[test]
+fn agents_md_measurements() {
+    if std::env::var("AGENTS_MD_DUMP").is_err() {
+        return;
+    }
+    let raw = fs::read_to_string("AGENTS.md").expect("AGENTS.md");
+    let keys: Vec<String> = AGENTS_MD_RULE_INVENTORY
+        .iter()
+        .map(|(_, p)| squash_ws(p))
+        .chain(AGENTS_MD_NON_NORMATIVE.iter().map(|(_, p, _)| squash_ws(p)))
+        .collect();
+
+    let mut all: Vec<usize> = Vec::new();
+    // `AGENTS_MD_DUMP_RUNS=1` additionally lists EVERY uncovered run, so an
+    // out-of-process cross-check can pick insertion sites of a KNOWN run length
+    // from the guard's own arithmetic instead of re-deriving it. The ratchet's
+    // own failure message only ever shows the runs >= 100.
+    let list_runs = std::env::var("AGENTS_MD_DUMP_RUNS").is_ok();
+    for (ln, block) in agents_md_coverage_blocks(&raw) {
+        let b = squash_ws(&block);
+        for (len, run) in agents_md_uncovered_runs(&b, &keys) {
+            all.push(len);
+            if list_runs {
+                println!("RUN\t{len}\t{ln}\t{run}");
+            }
+        }
+    }
+    all.sort_unstable_by(|a, b| b.cmp(a));
+    let ge = |n: usize| all.iter().filter(|l| **l >= n).count();
+
+    println!("=== AGENTS.md measurements ===");
+    println!("bytes                     {}", raw.len());
+    println!("longest line (bytes)      {}", raw.lines().map(|l| l.len()).max().unwrap_or(0));
+    println!("inventory rows            {}", AGENTS_MD_RULE_INVENTORY.len());
+    println!("non-normative rows        {}", AGENTS_MD_NON_NORMATIVE.len());
+    println!("prose chunks              {}", agents_md_prose_chunks(&raw).len());
+    println!("uncovered runs (all)      {}", all.len());
+    println!("uncovered runs >= 44      {}", ge(44));
+    println!("uncovered runs >= 60      {}", ge(60));
+    println!("uncovered runs >= 100     {}", ge(100));
+    println!("60-99 band                {}", ge(60) - ge(100));
+    println!("longest uncovered run     {}", all.first().copied().unwrap_or(0));
+    println!("ratchet: MAX_UNPINNED_RUN {AGENTS_MD_MAX_UNPINNED_RUN}, MAX_RUNS_OVER_100 {AGENTS_MD_MAX_RUNS_OVER_100}");
+}
+
+#[test]
+fn agents_md_unpinned_prose_ratchet() {
+    let raw = fs::read_to_string("AGENTS.md").expect("AGENTS.md");
+    let keys: Vec<String> = AGENTS_MD_RULE_INVENTORY
+        .iter()
+        .map(|(_, p)| squash_ws(p))
+        .chain(AGENTS_MD_NON_NORMATIVE.iter().map(|(_, p, _)| squash_ws(p)))
+        .collect();
+
+    let mut worst: Vec<(usize, usize, String)> = Vec::new();
+    for (ln, block) in agents_md_coverage_blocks(&raw) {
+        let b = squash_ws(&block);
+        for (len, run) in agents_md_uncovered_runs(&b, &keys) {
+            if len >= 100 {
+                worst.push((len, ln, run));
+            }
+        }
+    }
+    worst.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let longest = worst.first().map(|w| w.0).unwrap_or(0);
+    let over_100 = worst.len();
+
+    let show = |rows: &[(usize, usize, String)]| {
+        rows.iter()
+            .take(8)
+            .map(|(len, ln, run)| {
+                format!(
+                    "  {len:4} chars  AGENTS.md:{ln}  {}",
+                    run.chars().take(110).collect::<String>()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    assert!(
+        longest <= AGENTS_MD_MAX_UNPINNED_RUN,
+        "AGENTS.md has a {longest}-char stretch that no rule probe and no \
+         non-normative row accounts for; the ratchet is \
+         {AGENTS_MD_MAX_UNPINNED_RUN}.\n{}\n\
+         Deleting unpinned text is caught only when it moves a run across a \
+         BAND EDGE (see this test's doc comment, and todo/t0714). Growing it \
+         is what this assert stops. Add a probe for the obligation, or a non-normative row \
+         if it states none. Lowering this constant after a burn-down is free; \
+         raising it needs owner sign-off.",
+        show(&worst)
+    );
+    assert!(
+        over_100 <= AGENTS_MD_MAX_RUNS_OVER_100,
+        "AGENTS.md has {over_100} unpinned stretches of >= 100 chars; the \
+         ratchet is {AGENTS_MD_MAX_RUNS_OVER_100}.\n{}\n\
+         Burn these down rather than raising the constant (todo/t0714) — the \
+         target is 0, at which point this lint subsumes the sentence census. \
+         Note the floor is 100 chars, so this count names a MINORITY of the \
+         file's uncovered runs; the 60-99 band is real obligations too.",
+        show(&worst)
+    );
+
+    // NO SLACK. Both asserts above are ceilings, so this lint's reach IS the
+    // distance between the constant and the measurement: at zero it catches
+    // every insertion that crosses a threshold, and one unit of slack silently
+    // switches a whole band off. Measured 2026-08-28 — adding one probe took
+    // the >= 100 count from 113 to 112 against a constant still reading 113,
+    // and the out-of-process cross-check went from 10/10 to 0/10 on exactly
+    // the band that had been catching, with every other lint green. Prose
+    // saying "re-ratchet after a compaction" had been in this file for one
+    // pass and did not stop it (Core #6: make it a guard).
+    assert!(
+        longest == AGENTS_MD_MAX_UNPINNED_RUN && over_100 == AGENTS_MD_MAX_RUNS_OVER_100,
+        "the unpinned-prose ratchet has SLACK: measured longest {longest} vs \
+         constant {AGENTS_MD_MAX_UNPINNED_RUN}, measured >=100 count {over_100} \
+         vs constant {AGENTS_MD_MAX_RUNS_OVER_100}. Unpinned prose SHRANK \
+         (good) without the ratchet following it DOWN (not good) — while the \
+         gap stands, an inserted clause that crosses the threshold is no longer \
+         caught. Set the two constants to {longest} and {over_100}. Lowering \
+         needs no sign-off; that is the whole point of a ratchet."
+    );
+}
+
+/// ---------------------------------------------------------------------------
+/// INSERTION visibility, measured PER SITE CLASS.
+///
+/// The two ratchets above are CEILINGS: they answer "did unpinned prose GROW".
+/// Neither answers "was a clause inserted INTO a rule" — the mutation the file's
+/// own landing rule invites ("Sharpening an existing rule EDITS that rule in
+/// place"). This sweep measures that: for every word boundary in `AGENTS.md` it
+/// inserts a clause and asks whether ANY of the four guards fires, reporting the
+/// INVISIBLE share PER SITE CLASS. Per class, because the rate is nowhere near
+/// uniform — a two-anchor probe cannot tell the classes apart, and one that
+/// mixed them produced a false "capitalisation is the discriminator" reading.
+///
+/// The classes PARTITION every insertion point:
+///   PROBE_IN  — strictly inside an inventory probe's span
+///   EXEMPT_IN — strictly inside a non-normative row's span
+///   UNPINNED  — prose, covered by no key at that point
+///   CODE      — inside a fenced block
+///   HEADING   — on a `#` line
+/// PROBE_END is a reported SUBSET of the others, not a sixth class: the point
+/// just past a probe's last character, the population an earlier probe-anchored
+/// measurement used.
+///
+/// ⚠ INVISIBLE HERE MEANS "no CONTENT guard fires" — the byte ceiling is
+/// reported separately and deliberately excluded from the verdict. It is not a
+/// content guard: whether it fires depends only on the file's CURRENT headroom,
+/// so folding it in would make the rates swing wildly with a number that has
+/// nothing to do with coverage. Measured both ways: with a couple of hundred
+/// bytes free it never fired; with a few dozen free it caught EVERY
+/// clause-length insertion in the file, headings included — which reads as
+/// total coverage and is worth nothing, since it evaporates the moment the file
+/// shrinks or the ceiling moves. Read the `headroom` line below before quoting
+/// any rate.
+///
+/// ⚠ THE SAME CAVEAT BINDS THE RATCHET, which is why the header prints its
+/// SLACK. `agents_md_unpinned_prose_ratchet` is two `<=` ceilings, so it sees an
+/// insertion only where the insertion pushes a counter PAST its constant. Give
+/// either constant slack and the bands below go quiet without one line of the
+/// file becoming better guarded — measured, not supposed. That is why the
+/// ratchet's third assert pins both constants TO the measurement; the header's
+/// slack line should therefore always read saturated, and a reading that does
+/// not is the story.
+///
+/// So within UNPINNED the discriminator is the length of the uncovered RUN the
+/// clause lands in, and the sweep reports the rate per BAND (edges computed
+/// from the guard's own constants and the filler length, so the measurement can
+/// refute them): under the 100-char floor -> the ratchet is blind; crossing the
+/// floor -> the >=100 COUNT moves past its constant, caught; over 100 but under
+/// the cap -> blind again, the largest hole; past the cap -> caught. It is not
+/// "the run was near the cap", and it is not capitalisation — both were probed
+/// on two anchors that differed in several factors at once. The out-of-process
+/// cross-check that confirms every band against the REAL `#[test]`s is
+/// `scripts/agents_md_crossval.py`; its hit rate is in `todo/t0714`.
+///
+/// In-tree on purpose: the figures this replaces were regenerated by `/tmp`
+/// helpers that evaporate with the session, the exact failure the durable-repro
+/// rule names. Figures live in this test's OUTPUT and in `todo/t0714`, never in
+/// this comment — a figure written into a comment here has gone stale five times.
+///
+/// ```text
+/// AGENTS_MD_SWEEP=1 cargo test --test lints --release agents_md_insertion_sweep -- --nocapture
+/// ```
+/// `AGENTS_MD_SWEEP_STRIDE=N` samples every Nth point (default 1 = full census).
+#[test]
+fn agents_md_insertion_sweep() {
+    if std::env::var("AGENTS_MD_SWEEP").is_err() {
+        return;
+    }
+    let stride: usize = std::env::var("AGENTS_MD_SWEEP_STRIDE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let raw = fs::read_to_string("AGENTS.md").expect("AGENTS.md");
+
+    let probes: Vec<String> = AGENTS_MD_RULE_INVENTORY
+        .iter()
+        .map(|(_, p)| squash_ws(p))
+        .collect();
+    let exempt: Vec<(String, usize)> = AGENTS_MD_NON_NORMATIVE
+        .iter()
+        .map(|(_, p, w)| (squash_ws(p), *w))
+        .collect();
+    let keys: Vec<String> = probes
+        .iter()
+        .cloned()
+        .chain(exempt.iter().map(|(e, _)| e.clone()))
+        .collect();
+
+    // Exactly the four #[test] predicates, over the same helpers and the same
+    // constants. Anything less is a re-implementation free to drift from the
+    // guards it claims to measure (Core #13: verify the verifier).
+    // Returns the four guard verdicts AND, when `marker` is given, the char
+    // length of the uncovered RUN that ends up hosting the marker — the number
+    // the ratchet's arithmetic actually keys on. Read off the same run walk the
+    // ratchet uses, so the reported length cannot drift from the guard's.
+    let fires = |text: &str, marker: Option<&str>| -> ([bool; 4], Option<usize>) {
+        let size = text.len() as u64 > AGENTS_MD_SIZE_CEILING;
+        let sq = squash_ws(text);
+        let inventory = probes.iter().any(|p| sq.matches(p.as_str()).count() != 1)
+            || exempt
+                .iter()
+                .any(|(e, w)| sq.matches(e.as_str()).count() != *w);
+        let census = agents_md_prose_chunks(text).into_iter().any(|(_ln, c)| {
+            let nc = squash_ws(&c);
+            !keys.iter().any(|k| nc.contains(k.as_str()))
+        });
+        let (mut longest, mut over) = (0usize, 0usize);
+        let mut host = None;
+        for (_ln, block) in agents_md_coverage_blocks(text) {
+            let b = squash_ws(&block);
+            for (len, run) in agents_md_uncovered_runs(&b, &keys) {
+                if len >= 100 {
+                    over += 1;
+                    longest = longest.max(len);
+                }
+                if let Some(m) = marker {
+                    if host.is_none() && run.contains(m) {
+                        host = Some(len);
+                    }
+                }
+            }
+        }
+        let ratchet =
+            longest > AGENTS_MD_MAX_UNPINNED_RUN || over > AGENTS_MD_MAX_RUNS_OVER_100;
+        ([size, inventory, census, ratchet], host)
+    };
+
+    // Positive control: the instrument must be seen to say GREEN on the file as
+    // it stands, or every "invisible" below is measuring its own bug.
+    assert_eq!(
+        fires(&raw, None).0,
+        [false; 4],
+        "AGENTS.md does not pass the four guards unmutated; the sweep's baseline is void."
+    );
+
+    // Where does each key sit in the RAW file? Squashing collapses hard wraps,
+    // so a key spanning a line break needs flexible whitespace to be found.
+    let spans = |pats: &[String]| -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        for p in pats {
+            let rx = regex::Regex::new(&regex::escape(p).replace(' ', r"\s+")).unwrap();
+            out.extend(rx.find_iter(&raw).map(|m| (m.start(), m.end())));
+        }
+        out
+    };
+    let n = raw.len();
+    let (mut in_probe, mut in_exempt, mut at_probe_end) =
+        (vec![false; n + 1], vec![false; n + 1], vec![false; n + 1]);
+    for (s, e) in spans(&probes) {
+        for f in in_probe.iter_mut().take(e).skip(s + 1) {
+            *f = true;
+        }
+        at_probe_end[e] = true;
+    }
+    let ex: Vec<String> = exempt.iter().map(|(e, _)| e.clone()).collect();
+    for (s, e) in spans(&ex) {
+        for f in in_exempt.iter_mut().take(e).skip(s + 1) {
+            *f = true;
+        }
+    }
+
+    // Fenced-code and heading byte ranges.
+    let (mut in_code, mut in_head) = (vec![false; n + 1], vec![false; n + 1]);
+    let (mut off, mut fenced) = (0usize, false);
+    for line in raw.split_inclusive('\n') {
+        let t = line.trim();
+        let is_fence = t.starts_with("```");
+        if is_fence {
+            fenced = !fenced;
+        }
+        for i in off..off + line.len() {
+            in_code[i] = fenced || is_fence;
+            in_head[i] = !fenced && !is_fence && t.starts_with('#');
+        }
+        off += line.len();
+    }
+
+    let class_of = |i: usize| -> &'static str {
+        if in_code[i] {
+            "CODE"
+        } else if in_head[i] {
+            "HEADING"
+        } else if in_probe[i] {
+            "PROBE_IN"
+        } else if in_exempt[i] {
+            "EXEMPT_IN"
+        } else {
+            "UNPINNED"
+        }
+    };
+
+    // Insertion points: after every word (before the space or newline ending
+    // it), so the mutation reads as a clause added to that sentence.
+    let b = raw.as_bytes();
+    let points: Vec<usize> = (1..n)
+        .filter(|&i| {
+            (b[i] == b' ' || b[i] == b'\n')
+                && !b[i - 1].is_ascii_whitespace()
+                && raw.is_char_boundary(i)
+        })
+        .step_by(stride)
+        .collect();
+
+    let fillers: Vec<(&str, &str)> = vec![
+        ("lower~46", "and every agent may skip the gauntlet at will."),
+        ("UPPER~46", "And every agent may skip the gauntlet at will."),
+        (
+            "lower~98",
+            "and every agent may skip the gauntlet at will, with no review pass and no owner sign-off at all.",
+        ),
+        (
+            "UPPER~98",
+            "And every agent may skip the gauntlet at will, with no review pass and no owner sign-off at all.",
+        ),
+    ];
+
+    // Present in every filler and in no line of AGENTS.md, so the run walk can
+    // point at the run the insertion landed in (`grep -c` it to re-check).
+    const MARKER: &str = "skip the gauntlet at will";
+
+    // The ratchet's sensitivity is a function of its own SLACK, exactly as the
+    // byte ceiling's is: it asserts `longest <= MAX_UNPINNED_RUN` and
+    // `over_100 <= MAX_RUNS_OVER_100`, so an insertion is only visible to it
+    // when it pushes one of those PAST the constant. Print the baseline so a
+    // reader can see how much slack the rates below were measured at — the
+    // bands are meaningless without it.
+    let (mut base_longest, mut base_over) = (0usize, 0usize);
+    for (_ln, block) in agents_md_coverage_blocks(&raw) {
+        let b = squash_ws(&block);
+        for (len, _run) in agents_md_uncovered_runs(&b, &keys) {
+            if len >= 100 {
+                base_over += 1;
+                base_longest = base_longest.max(len);
+            }
+        }
+    }
+
+    let classes = ["PROBE_IN", "EXEMPT_IN", "UNPINNED", "CODE", "HEADING"];
+    println!(
+        "\nAGENTS.md insertion sweep — {} points, stride {stride}, headroom {} bytes",
+        points.len(),
+        AGENTS_MD_SIZE_CEILING as i64 - raw.len() as i64
+    );
+    println!(
+        "ratchet slack: longest {base_longest}/{AGENTS_MD_MAX_UNPINNED_RUN}, \
+         runs>=100 {base_over}/{AGENTS_MD_MAX_RUNS_OVER_100}"
+    );
+    println!(
+        "(invisible = no CONTENT guard fires; the byte ceiling is reported \
+         separately and is headroom-dependent, not coverage)\n"
+    );
+    for (label, filler) in &fillers {
+        let ins = format!(" {filler}");
+        let ins_chars = ins.chars().count();
+        let mut tot = std::collections::BTreeMap::<&str, (usize, usize)>::new();
+        let mut ends = (0usize, 0usize);
+        let mut by_guard = [0usize; 4];
+        // UNPINNED points bucketed by the length of the uncovered run HOSTING
+        // the insertion — the quantity the ratchet's arithmetic keys on, and
+        // the one an author can read off the file BEFORE editing. The band
+        // edges are computed from the guard's own constants, so this is a
+        // prediction the measurement can refute, not a restatement of it.
+        let lo = 100usize.saturating_sub(ins_chars);
+        let hi = AGENTS_MD_MAX_UNPINNED_RUN.saturating_sub(ins_chars);
+        // (invisible, ratchet-fired, total) for bands A..D plus "no host run".
+        let mut bands = [(0usize, 0usize, 0usize); 5];
+        for &i in &points {
+            let mut m = String::with_capacity(n + ins.len());
+            m.push_str(&raw[..i]);
+            m.push_str(&ins);
+            m.push_str(&raw[i..]);
+            let (f, host) = fires(&m, Some(MARKER));
+            for (g, on) in f.iter().enumerate() {
+                if *on {
+                    by_guard[g] += 1;
+                }
+            }
+            // f[0] is the byte ceiling — excluded on purpose, see the doc above.
+            let caught = f[1] || f[2] || f[3];
+            let e = tot.entry(class_of(i)).or_default();
+            e.1 += 1;
+            if !caught {
+                e.0 += 1;
+            }
+            if at_probe_end[i] {
+                ends.1 += 1;
+                if !caught {
+                    ends.0 += 1;
+                }
+            }
+            if class_of(i) == "UNPINNED" {
+                let idx = match host {
+                    None => 4,
+                    Some(h) => {
+                        let h = h.saturating_sub(ins_chars);
+                        if h < lo {
+                            0
+                        } else if h < 100 {
+                            1
+                        } else if h <= hi {
+                            2
+                        } else {
+                            3
+                        }
+                    }
+                };
+                bands[idx].2 += 1;
+                if !caught {
+                    bands[idx].0 += 1;
+                }
+                if f[3] {
+                    bands[idx].1 += 1;
+                }
+            }
+        }
+        println!("  filler {label} ({} chars)", filler.chars().count());
+        let (mut ai, mut at) = (0usize, 0usize);
+        for c in classes {
+            let (inv, t) = tot.get(c).copied().unwrap_or((0, 0));
+            ai += inv;
+            at += t;
+            if t > 0 {
+                println!(
+                    "    {c:<10} invisible {inv:5} / {t:5}  ({:3.0}%)",
+                    100.0 * inv as f64 / t as f64
+                );
+            }
+        }
+        println!(
+            "    {:<10} invisible {ai:5} / {at:5}  ({:3.0}%)",
+            "ALL",
+            100.0 * ai as f64 / at as f64
+        );
+        println!(
+            "    {:<10} invisible {} / {}  ({:3.0}%)   [subset, not a class]",
+            "PROBE_END",
+            ends.0,
+            ends.1,
+            100.0 * ends.0 as f64 / ends.1.max(1) as f64
+        );
+        println!(
+            "    caught by: size {} · inventory {} · census {} · ratchet {}",
+            by_guard[0], by_guard[1], by_guard[2], by_guard[3]
+        );
+        let band_labels = [
+            format!("A host <{lo}      (stays under 100)"),
+            format!("B host {lo}-99     (crosses the 100 floor)"),
+            format!("C host 100-{hi}   (over 100, under the cap)"),
+            format!("D host >{hi}     (pushes past the cap)"),
+            "  no host run     (insertion fell inside a key)".to_string(),
+        ];
+        println!("    UNPINNED by HOST RUN LENGTH (the ratchet's own axis):");
+        for (k, lab) in band_labels.iter().enumerate() {
+            let (inv, rat, t) = bands[k];
+            if t > 0 {
+                println!(
+                    "      {lab:<44} invisible {inv:5} / {t:5} ({:3.0}%)  ratchet fired {rat:5}",
+                    100.0 * inv as f64 / t as f64
+                );
+            }
+        }
+        println!();
+    }
+}
+
 
 // ===========================================================================
 // Guards-slice ratchets (Core #6 + #10, owner 2026-07-18): A = silent-fallthrough
