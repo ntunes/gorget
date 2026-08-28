@@ -3066,6 +3066,32 @@ baseline.
   on the declaration, set once at the source. Adding `"Box"` to the name list would make the symptom go
   away while preserving the defect, and is not an acceptable fix.
 
+  ⊕ **THE TYPED MECHANISM ALREADY EXISTS — DO NOT BUILD A NEW ONE (owner asked 2026-08-28; verified at
+  `ddc21aaa`).** `DefInfo.deref_wrapper_kind: Option<DerefWrapperKind>` (`src/semantic/scope.rs`) is a
+  typed flag seeded ONCE at registration via `DerefWrapperKind::for_builtin_name`, whose doc comment
+  calls it *"The ONE allowed registration-time name-match"* — the sanctioned exception, where the name
+  IS the contract. It already classifies `Box` → `DerefTarget`, `Shared`/`Weak`/`Mutex`/`RWLock` →
+  `NonDerefContainer`, `Guard`/`ReadGuard`/`WriteGuard` → `GuardAccept`. **So `unify`'s name match is an
+  UNMIGRATED SIBLING SITE (Core #4), not a missing mechanism**: the RV-A fix retired this class for
+  field access and left the coercion path on strings.
+
+  **That prior fix's own comment states this bug.** It records that *"a USER struct that shadows the
+  name gets a distinct DefId with `None`, so it no longer escapes `E_NoFieldFound`"* — resolution-
+  dependent behaviour, fixed there and still live here. A `DefId`-keyed flag is immune to an import
+  changing what a name resolves to; a string compare never can be. That is the whole of `t0710`.
+
+  ⚠ **BUT DO NOT SIMPLY REUSE `DerefWrapperKind` FOR COERCION.** It answers *field-access disposition*;
+  coercion is a different axis, and overloading one flag across two axes trades a Layering rule 2
+  violation for a rule 3 one (one source of truth PER AXIS). The reference-grade shape is one
+  registration producing a builtin-wrapper **identity**, with separate per-axis accessors reading from
+  it — `unify` asking "transparent for coercion?" and the field path asking its own question, both off
+  the same seeded fact.
+
+  **THE CLASS IS WIDER THAN THIS RULING.** `src/semantic/typecheck.rs` also decides on literal names for
+  `Result`, `String`, `Task`, `Future`, and `AtomicInt`/`AtomicBool` (a second name match immediately
+  below the one D51 names). D51 forces the wrapper half; the full retirement, plus an executable guard
+  so site N+1 cannot reappear, is filed as `todo/t0718`.
+
   ⚠ **TWO SPELLING DISCRIMINATORS — both hide the defect from a careless probe, and both were tripped
   over while writing the repro.** (1) The ctor call `Box(...)` flips; **`Box.new(...)` does NOT** — a
   repro written with `.new` is rc 0 either way and proves nothing. (2) The **inline** form flips; the
