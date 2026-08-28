@@ -1338,3 +1338,79 @@ deferral was a choice made underneath it and then attributed to it.
 **The tell.** A round whose commit log never touches `src/` is not a
 discovery round; it is a round that stopped. Check it before round close, not
 after: `git log --oneline <round-open>..HEAD -- src/ | wc -l`.
+
+## §18 — The orchestrator does not touch the code (owner 2026-08-28)
+
+**The ruling.** *"Why is the orchestrator proposing fixes at all? That is the
+brief review agent's job. On each pass. The orchestrator should only verify the
+streak count, update the brief (by deciding when to incorporate findings to the
+brief scope or file them for later if disjoint) and possibly coordinate parallel
+tracks so they do not step on each other."* And: *"This was obvious for
+Opus < 5, the orchestrator does not normally touch the code. It launches tracks
+that do."*
+
+**How the rule got broken.** R45's owner instruction *"recursively fix the bugs
+we find on each track, unless really disjoint"* names an obligation of the
+ROUND, not of the orchestrator's hands. It was read as the latter. The
+orchestrator then hand-edited `src/` between review passes — nine commits'
+worth.
+
+**Why that destroys the convergence gate.** Each pass is supposed to review the
+BRIEF. Once the orchestrator edits the tree between passes, each pass instead
+reviews *the orchestrator's newest code*. Track D's record is unambiguous:
+
+| pass | finding | subject |
+|---|---|---|
+| 13 | `walk_stmt` catch-all | the codebase |
+| 14 | `on error:` regression | the fix from pass 13 |
+| 15 | half-fix, loop kill-leak, MetaFor | the fix from pass 14 |
+| 16 | seed leaks kills; net certifies uncovered arms | the fix from pass 15 |
+| 17 | `Stmt`-exhaustive, `Expr`-blind | the fix from pass 16 |
+| 18 | five of six expression positions | the fix from pass 17 |
+
+Six resets; every pass reported the brief itself sound (*"brief technically
+sound, paperwork stale"*, *"§2 cites re-derive"*). **Track D was ready at pass
+12.** The gate was scoring the orchestrator's inline fixes as the track's
+readiness, and three of those fixes were regressions in a walker touched four
+times.
+
+**The reviewers were already doing their job.** Every fix existed as a reviewer
+patch first — `PROTOTYPE_on_error_seed.patch` (D15),
+`recover_revD18_matcharm_route.patch` (D18),
+`recover_revA21_RECOMMENDED_tightened_plus_two_rows.patch` (A21),
+`recover_revG_spine.patch` (G's output-review). The correct handling was to fold
+each into brief scope and let ONE executor implement the accumulated set under
+ONE output-review. Applying them by hand, one per pass, manufactured fresh
+unreviewed code for the next pass to find.
+
+## §19 — Readiness is a property of the artifact, not of reviewer yield
+
+**Why the design-stability gate stopped terminating.** "Two successive passes
+with no DESIGN finding" is defined over *what reviewers happen to find*, so a
+stronger reviewer makes it strictly harder to pass. The artifact did not get
+worse when the harness moved to Opus 5; the detector got better. A gate that
+punishes a better detector is measuring the wrong thing. Measured: ~40 passes
+across Tracks A and D without firing once.
+
+**The replacement is a finite checklist**, binary and verifiable without
+judgement. Every row was earned by a defect that actually shipped past the old
+gate this round:
+
+| # | check | the failure that earned it |
+|---|---|---|
+| 1 | every measurement carries a FIRE COUNT proving the mechanism executed | three inert probes — `DEC-A16-3`, `DEC-A16-4`, and a D16 probe using a local where an owning `!`-param was required |
+| 2 | every enumeration cites an INDEPENDENT witness | A18 corrected A16's selection and presented its own; the repo's own lint table (12 formation sites) settled it |
+| 3 | `\|pinned cells\| == \|changed cells\|` | A21: the net pinned 2 of 5 changed cells; partially reverting the fix left every row green |
+| 4 | the GUARD FAILS when the fix is reverted | A21's M2 — fix A's `register_local` in a dead branch, and `lints`/`security`/`box` all green |
+| 5 | every load-bearing figure REGENERATED at current HEAD | polarity numbers taken off a failed run; clone figures that moved three times in one day |
+
+**Scoping is what makes it terminate.** A finding resets the streak only when it
+changes the brief's fix shape, site set, scope boundary, or guard mechanism.
+A defect found in the TREE while reviewing is filed or scheduled as its own
+work — it says nothing about whether this brief is executable. A defect in the
+orchestrator's fold or guard is an orchestrator defect, not the track's.
+
+**The residual, stated honestly:** a checklist can miss a novel defect class a
+sharp reviewer would catch. Mitigation is that ≥3 passes stays the floor and any
+new class that slips through is added as a further row — the list earns its rows
+from failures, exactly as these five did.
