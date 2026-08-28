@@ -7273,16 +7273,16 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("META-unratified", "unratified owner open-thinking goes to devbook/30"),
     ("META-ratchet", "ratchets DOWN after each compaction"),
     ("META-inventory", "requires every inventoried rule to still be stated, exactly once"),
-    ("META-onlydelete", "is the only one that fires when a rule is DELETED"),
+    ("META-onlydelete", "fires when an inventoried rule is DELETED"),
     ("META-probedonly", "The census's *contains-a-probe* test is the weak one"),
-    ("META-ceiling", "the ratchet is a ceiling, so removing text only lowers it"),
+    ("META-ceiling", "a deletion that shifts no band is silent"),
     ("META-reviewer", "So the diff is the guard: after editing a rule, re-read the whole rule"),
     // Reworded 2026-08-28: the old probe said the lint measures "the longest
     // stretch", which is half of it — there are TWO ceilings, and the count of
     // stretches over 100 chars is the one an inserted clause usually trips.
     ("META-ratchet2", "caps the GROWTH of what NO probe accounts for"),
     ("META-limits", "Know what they do NOT give you"),
-    ("META-backlog", "any clause no probe covers can be deleted silently"),
+    ("META-backlog", "moves a run across a BAND EDGE"),
     ("META-harness", "never only in one harness's private memory"),
     ("CORE-1", "Fix at the write site, not the read site"),
     ("CORE-2", "Typed metadata, never name-matching"),
@@ -8165,9 +8165,11 @@ fn agents_md_every_clause_is_classified() {
 /// chunker's design bugs lived.
 ///
 /// ⚠ WHAT THIS CANNOT DO (review pass 3). Both asserts below are `<=`
-/// CEILINGS, and deleting text can only REDUCE both measured values, so this
-/// lint is structurally incapable of firing on a deletion. It catches ADDITION
-/// of unpinned prose and replacement-with-longer. Nothing here catches the
+/// CEILINGS, but the third assert requires the constants to EQUAL the
+/// measurement, so a deletion that moves a run across a BAND EDGE DOES fire
+/// this lint (measured: 9/15 removing from a run >= 100, 10/20 removing a
+/// whole rule line). A deletion that shifts no band is silent. It also
+/// catches ADDITION of unpinned prose and replacement-with-longer. Nothing here catches the
 /// deletion of text no probe covers: pass 3 removed every uncovered run >= 60
 /// chars — 23,962 characters, 41% of the file, 215 obligation fragments — with
 /// the whole suite green. `agents_md_rule_inventory_is_pinned` is the only
@@ -8366,9 +8368,9 @@ fn agents_md_unpinned_prose_ratchet() {
         "AGENTS.md has a {longest}-char stretch that no rule probe and no \
          non-normative row accounts for; the ratchet is \
          {AGENTS_MD_MAX_UNPINNED_RUN}.\n{}\n\
-         Unpinned text can be deleted silently and NO lint will notice (see \
-         this test's doc comment, and todo/t0714). Growing it is what this \
-         assert stops. Add a probe for the obligation, or a non-normative row \
+         Deleting unpinned text is caught only when it moves a run across a \
+         BAND EDGE (see this test's doc comment, and todo/t0714). Growing it \
+         is what this assert stops. Add a probe for the obligation, or a non-normative row \
          if it states none. Lowering this constant after a burn-down is free; \
          raising it needs owner sign-off.",
         show(&worst)
