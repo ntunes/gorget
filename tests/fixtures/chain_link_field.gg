@@ -1,0 +1,32 @@
+# CHAIN-LINK corpus · AXIS = the kind of postfix link sitting between the two
+# method calls of a chain. CELL SAMPLED HERE: ONE EFieldAccess link
+# (`recv.method().field.method()`).
+#
+# This is the cell an ADJACENT-receiver-only test misses: the receiver of
+# `.is_none()` is an EFieldAccess, not an EMethodCall, yet it still inherits the
+# chain's contended `span.start` (parse_dot_expr takes `lhs.span.start`). The
+# destination slot is minted from `make()`'s return type (`__gg_Inner`) instead
+# of `Option[int]`, and the emitted C does not compile.
+#
+# Two outer-method costumes (`is_none` / `is_some` / `unwrap`) and both a None
+# and a Some payload, so a partial regression that always answers one way trips
+# this fixture rather than passing it.
+struct Inner:
+    Option[int] o
+
+struct Holder:
+    int n
+
+equip Holder:
+    Inner make(self):
+        if self.n > 0:
+            return Inner(Some(self.n))
+        return Inner(None())
+
+void main():
+    Holder empty = Holder(0)
+    Holder full = Holder(5)
+    print(empty.make().o.is_none())
+    print(empty.make().o.is_some())
+    print(full.make().o.is_some())
+    print(full.make().o.unwrap())

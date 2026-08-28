@@ -106,6 +106,21 @@ void cow_mark_if_ident(LowerCtx &ctx, SpannedExpr e, int pos, bool in_closure):
             cow_mark_if_ident(&ctx, *base_box, pos, in_closure)
         case EIndex(base_box, _):
             cow_mark_if_ident(&ctx, *base_box, pos, in_closure)
+        case EMethodCall(recv_box, _, _, _):
+            # Peel a method-call CHAIN to its root, exactly as EIndex is
+            # peeled and exactly as the READ side already does in
+            # `cow_source_root_name` (below). `outer.get(0).unwrap().push(x)`
+            # mutates storage reachable from `outer`, but the receiver is an
+            # unnamed temp: without this arm the whole mutation fell into
+            # `else: pass`, `outer` stayed PRISTINE, and the borrow-flip
+            # aliased a live view into a vector that then realloc'd — SIGSEGV
+            # on the self-host lane while the semantics-equivalent
+            # `first.push(x)` and `outer[0].push(x)` spellings ran clean. The
+            # mutation side must peel every chain the read side peels, or the
+            # two disagree about which name a position touches. Mirrors Rust's
+            # `extract_path_for_mut` `Expr::MethodCall` arm
+            # (src/ir/lowering/functions.rs).
+            cow_mark_if_ident(&ctx, *recv_box, pos, in_closure)
         else:
             pass
 

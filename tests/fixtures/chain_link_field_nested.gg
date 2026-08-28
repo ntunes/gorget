@@ -1,0 +1,30 @@
+# CHAIN-LINK corpus · AXIS = the kind of postfix link sitting between the two
+# method calls of a chain. CELL SAMPLED HERE: TWO consecutive EFieldAccess
+# links (`recv.method().a.b.method()`).
+#
+# Depth matters because the discriminator must RECURSE through the spine, not
+# just inspect the receiver's immediate node: one field hop is caught by a
+# one-level test, two is not. The destination slot is minted from `grab()`'s
+# return type (`__gg_Mid`) instead of `Option[int]`.
+struct Leaf:
+    Option[int] o
+
+struct Mid:
+    Leaf leaf
+
+struct Root:
+    int n
+
+equip Root:
+    Mid grab(self):
+        if self.n > 0:
+            return Mid(Leaf(Some(self.n)))
+        return Mid(Leaf(None()))
+
+void main():
+    Root empty = Root(0)
+    Root full = Root(9)
+    print(empty.grab().leaf.o.is_none())
+    print(empty.grab().leaf.o.is_some())
+    print(full.grab().leaf.o.is_some())
+    print(full.grab().leaf.o.unwrap())

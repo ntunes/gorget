@@ -1,0 +1,30 @@
+# KNOWN GAP (found R45 Track G while auditing the chain-link postfix axis).
+#
+# ETry — the postfix `?` — over an `Option[String]`, with a method called on the
+# unwrapped result. `infer.gg`'s ETry arm documents the intended semantics:
+# "try expr — unwraps Result[T,E] -> T, Option[T] -> T". Both lanes are broken,
+# in different ways (Core #8: two bugs).
+#
+#   RUST gg   : ICE, exit 101 —
+#                 [resource-moves] 1 violation(s):
+#                   @main::bb0::i4 - shallow copy of resource _5 : Option__GorgetString
+#                 panicked at src/ir/lowering/mod.rs: GIR module failed
+#                 resource-move validation
+#               Same VALIDATOR as the compound-assign ICE family, reached by a
+#               different lowering path: the ETry lowering shallow-copies the
+#               Option resource instead of borrowing or moving it.
+#   SELF-HOST : rejects at resolve — `error[E_UndefinedName]: undefined name
+#               `to_upper`` — i.e. it does not resolve a method on the ETry
+#               result at all.
+#
+# CORRECT output is `HI`.
+struct Src5:
+    int n
+
+equip Src5:
+    Option[String] fetch(self):
+        return Some("hi")
+
+void main():
+    Src5 s = Src5(1)
+    print(s.fetch()?.to_upper())

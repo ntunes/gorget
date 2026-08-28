@@ -5837,6 +5837,202 @@ fn self_host_targ_recorder_pregate_mirrors_recorder() {
     );
 }
 
+/// CHAIN-LINK GATE ratchet (Core #6 — turn a recurring bug class into an
+/// executable guard; Core #4 — pin the CLASS, not the instance).
+///
+/// **Why this exists, and why the sibling lint above could not do it.**
+/// `self_host_targ_recorder_pregate_mirrors_recorder` pins the walkers' arm SET
+/// and per-arm recursion COUNT. It is structurally blind to the GATE CONDITION —
+/// which is why it stayed green through BOTH removals that broke
+/// `self_host_runtime`: the walk still reached every node, it just stopped
+/// CALLING `infer_expr_type` at the node it was standing on.
+///
+/// **The invariant.** `infer_expr_type` has TWO output channels, not one. Besides
+/// `expr_method_targs` it publishes each method call's resolved type on
+/// `expr_link_types[span.end]`, which `lower_types.gg:lookup_expr_gir_type` reads
+/// FIRST for every EMethodCall. `span.start`, by contrast, is a **contended key**:
+/// `parse_postfix` / `parse_expr_bp` / `parse_dot_expr` build a node around `lhs`
+/// and give it `Span(lhs.span.start, …)`, so every link of a spine shares one
+/// `expr_types` slot. Skip the inference for a spine link and the lowerer falls
+/// back to that shared slot and mints the link's destination with its RECEIVER's
+/// type — the emitted C does not compile.
+///
+/// **What is pinned, mechanically:**
+///   1. `expr_spine_has_method_call`'s arm set is EXACTLY the set of constructors
+///      that wrap `lhs` and inherit its `span.start`, **re-derived from
+///      `parser.gg` here** rather than taken from a hand list. Add a
+///      span-inheriting postfix/infix form to the parser and this goes red until
+///      the discriminator learns about it. This is the property that makes the
+///      guard able to catch its OWN class (Core #15e Q2): the previous shape of
+///      this fix — "receiver is adjacent-ly an EMethodCall" — is a heuristic that
+///      passes one costume and CC-FAILs five.
+///   2. The recorder's `EMethodCall` gate still carries the chain-link disjunct
+///      beside the registry cost filter. A narrowing back to the registry test
+///      alone reds here.
+///   3. The statement pre-gate carries it too. It is an independent copy of the
+///      same decision (`7e01d655` removed that one separately), so it needs its
+///      own pin.
+///
+/// **If this fails:** do not delete the arm or the disjunct to make it pass. The
+/// behavioural counterpart is the `chain_link_*` fixture family
+/// (`tests/fixtures/chain_link_*.gg` + their `runtime_snapshots/*.out`), which
+/// CC-FAILs on the self-host lane the moment either gate stops supplying
+/// `expr_link_types` for a spine link.
+#[test]
+fn self_host_targ_recorder_chain_link_spine_set() {
+    let parser = fs::read_to_string("tests/fixtures/self_host_typechecker/parser.gg")
+        .expect("chain_link_spine_set: parser.gg not found");
+    let tc = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("chain_link_spine_set: typecheck.gg not found");
+
+    // ── (A) INDEPENDENT WITNESS: derive the span-inheriting set from parser.gg ──
+    //
+    // A node is a SPINE LINK iff it (i) wraps `lhs` and (ii) carries a span whose
+    // START is `lhs.span.start` — directly, or through a local bound to it
+    // (`int bp_start = lhs.span.start`, `int start = lhs.span.start`). Both
+    // conditions are read off the construction line itself; nothing here is a
+    // hand-maintained list.
+    let mut aliases: std::collections::HashSet<String> =
+        ["lhs.span.start".to_string()].into_iter().collect();
+    for line in parser.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix("int ") {
+            if let Some((name, init)) = rest.split_once('=') {
+                if init.trim() == "lhs.span.start" {
+                    aliases.insert(name.trim().to_string());
+                }
+            }
+        }
+    }
+
+    let mut witness: std::collections::BTreeSet<String> = Default::default();
+    for line in parser.lines() {
+        let Some(at) = line.find("SpannedExpr(") else { continue };
+        if !line.contains("Box(lhs)") {
+            continue;
+        }
+        let ctor: String = line[at + "SpannedExpr(".len()..]
+            .chars()
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .collect();
+        if !ctor.starts_with('E') {
+            continue;
+        }
+        let Some(sp) = line.rfind("Span(") else { continue };
+        let start_arg: String = line[sp + "Span(".len()..]
+            .chars()
+            .take_while(|c| *c != ',')
+            .collect();
+        if aliases.contains(start_arg.trim()) {
+            witness.insert(ctor);
+        }
+    }
+    assert!(
+        witness.len() >= 10,
+        "chain_link_spine_set: the parser census found only {} span-inheriting constructors \
+         ({witness:?}). That is too few to be real — the census regex has drifted away from \
+         parser.gg's construction shape, so this lint would pass vacuously. Fix the census \
+         before trusting a green here.",
+        witness.len(),
+    );
+
+    // ── (B) the discriminator's OWN arm set ──
+    let sig = "bool expr_spine_has_method_call(SpannedExpr sexpr):";
+    let body_start = tc.find(sig).unwrap_or_else(|| {
+        panic!(
+            "chain_link_spine_set: `{sig}` not found in self_host_typechecker/typecheck.gg.\n\
+             This is the CHAIN-LINK discriminator: the recorder must run `infer_expr_type` on \
+             any method call whose postfix SPINE contains another method call, so the link's \
+             own type reaches `expr_link_types[span.end]`. Deleting it re-opens the class that \
+             broke `self_host_runtime` (CC-FAIL on the self-host lane)."
+        )
+    }) + sig.len();
+    let mut arms: std::collections::BTreeSet<String> = Default::default();
+    for line in tc[body_start..].lines() {
+        if !line.starts_with(' ') && !line.trim().is_empty() {
+            break; // next column-0 declaration ends the function
+        }
+        let t = line.trim_start();
+        if let Some(rest) = t.strip_prefix("case ") {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if name.starts_with('E') {
+                arms.insert(name);
+            }
+        }
+    }
+
+    let missing: Vec<&String> = witness.difference(&arms).collect();
+    let extra: Vec<&String> = arms.difference(&witness).collect();
+    assert!(
+        missing.is_empty() && extra.is_empty(),
+        "`expr_spine_has_method_call` no longer matches the parser's span-inheriting set.\n\
+         parser.gg census ({}): {witness:?}\n\
+         discriminator arms ({}): {arms:?}\n\
+         MISSING from the discriminator: {missing:?}\n\
+         EXTRA in the discriminator:     {extra:?}\n\n\
+         Every constructor that wraps `lhs` and takes `Span(lhs.span.start, …)` lands on the \
+         CONTENDED span.start key, so a method call reached through one of them needs its own \
+         `expr_link_types[span.end]` entry. A MISSING arm means the recorder skips \
+         `infer_expr_type` for that shape and the lowerer types the link with its RECEIVER's \
+         type — CC-FAIL, exactly the class `chain_link_field` / `chain_link_index` / \
+         `chain_link_propagate` were cut from. An EXTRA arm means the discriminator pays \
+         inference for a shape that cannot contend.\n\
+         Fix by adding/removing the arm — never by editing this lint's expectation.",
+        witness.len(),
+        arms.len(),
+    );
+
+    // ── (C) both gate sites still ASK the question ──
+    //
+    // The arm set being right is worthless if nobody calls the discriminator.
+    // These are the two independent copies of the decision: the per-call gate in
+    // `record_method_targs_in_expr` and the statement pre-gate in
+    // `expr_has_method_generic_call`. They were removed in two SEPARATE commits,
+    // so each needs its own pin.
+    let recorder_gate: Vec<&str> = tc
+        .lines()
+        .filter(|l| l.contains("registry_has_method_generic_name(types.trait_registry, mname)"))
+        .collect();
+    assert_eq!(
+        recorder_gate.len(),
+        1,
+        "expected exactly 1 recorder-side registry gate line, found {}: {recorder_gate:?}",
+        recorder_gate.len(),
+    );
+    assert!(
+        recorder_gate[0].contains("expr_spine_has_method_call"),
+        "the recorder's `EMethodCall` gate lost the CHAIN-LINK disjunct.\n\
+         Line at HEAD: {}\n\n\
+         The registry predicate alone answers 'can this call record a TARG?'. It says nothing \
+         about `infer_expr_type`'s OTHER output channel — `expr_link_types[span.end]`, which the \
+         lowerer reads FIRST for every EMethodCall. Gating inference on the targs question alone \
+         is exactly what broke `self_host_runtime`. Restore \
+         `… or expr_spine_has_method_call(*mrecv)`.",
+        recorder_gate[0].trim(),
+    );
+
+    let pregate_sig = "bool expr_has_method_generic_call(SpannedExpr sexpr, TraitRegistry registry):";
+    let pg_start = tc
+        .find(pregate_sig)
+        .unwrap_or_else(|| panic!("chain_link_spine_set: `{pregate_sig}` not found"))
+        + pregate_sig.len();
+    let pg_end = tc[pg_start..]
+        .find("\nbool ")
+        .or_else(|| tc[pg_start..].find("\nvoid "))
+        .map(|o| pg_start + o)
+        .unwrap_or(tc.len());
+    assert!(
+        tc[pg_start..pg_end].contains("expr_spine_has_method_call("),
+        "the statement PRE-GATE (`expr_has_method_generic_call`) lost the CHAIN-LINK disjunct.\n\
+         This is a SECOND, independent copy of the decision — it answers 'would the recorder \
+         call `infer_expr_type` even once?', and a `false` here skips the whole recording walk. \
+         It must be a SUPERSET of the recorder's own gate, so whatever the recorder infers for, \
+         this must answer `true` for.",
+    );
+}
+
 /// One-source-of-truth ratchet (CLAUDE.md Core invariant #6 / devbook/24 rule 3)
 /// for the GorgetMap / GorgetSet runtime struct size in the self-host lowerer.
 ///
