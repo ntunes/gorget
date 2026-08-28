@@ -314,6 +314,54 @@ Step 4 is a third owner-ask category alongside the two in the round lifecycle
 exists because the failure it prevents is silent: a wrong guess about which
 oracle is right does not announce itself, it just becomes the new baseline.
 
+### A guard's SLACK is its sensitivity, and a two-anchor probe cannot tell factors apart
+
+Measuring how much of `AGENTS.md` its own four lints actually guard produced two
+confident wrong answers before it produced the right one, and both failures
+generalise to any guard-coverage measurement.
+
+**Wrong answer one: the byte ceiling manufactured coverage.** The first census
+asked "does ANY of the four guards fire", and reported that a clause inserted on
+a heading was caught. It was — by `agents_md_size_ratchet`, because the file at
+that moment had a few dozen free bytes and a clause-length insertion overshot
+the ceiling wherever it landed. Fold a `<=` ceiling into a coverage rate and the
+file reads as 100% guarded at low headroom and ~28% guarded at high headroom,
+with no change in coverage whatsoever. **A guard whose firing depends on current
+slack rather than on the mutation belongs in its own column, never in the
+verdict.** The same caveat binds the unpinned-prose ratchet, which is two
+ceilings: it sees an insertion only where the insertion pushes a counter PAST
+its constant, so its reach is a function of how recently it was ratcheted down.
+
+That is not a theoretical worry, and prose did not prevent it. Minutes after the
+"re-ratchet after every compaction" sentence was written, adding a single probe
+split one long uncovered run and took the `>= 100` count one below its constant.
+The out-of-process cross-check, run for an unrelated reason, went from **10/10
+to 0/10** on the band that had been catching — one unit of slack switched a
+whole class of insertion from caught to invisible — while every lint in the
+suite stayed green. The fix was Core #6, not a reminder: the ratchet now asserts
+its constants EQUAL the measurement, so shrinking unpinned prose without
+following the constants down is itself a red, with the two values to set printed
+in the failure message. **A ceiling whose distance from the measurement is its
+blind spot should be pinned to the measurement, not merely documented.**
+
+**Wrong answer two: two anchors, two factors, one conclusion.** A five-row probe
+inserted the same clause at two positions and reported that CAPITALISATION
+decided whether the guards fired. A second reading of the same rows said the
+discriminator was PINNED-vs-UNPINNED. Both were wrong, and both were unfalsifiable
+from that data: the two anchors differed in *both* candidate factors at once, and
+in a third nobody had named — the length of the uncovered RUN each landed in.
+Over the full population the run length partitions the outcome exactly, while
+capitalisation moves the rate a few points (via the sentence census) and leaves
+the ratchet's own catch count identical. **Two samples cannot separate two
+factors.** Measure per site class over every insertion point, or report no rate.
+
+**What made the third answer trustworthy** was Core #13 applied twice: the
+instrument calls the guards' OWN helpers rather than a re-implementation free to
+drift, it asserts a positive control (the unmutated file must be GREEN) before
+reporting anything, and an out-of-process cross-check builds mutations whose
+class is obvious by construction and runs the REAL `#[test]`s on them. The
+cross-check is what would catch the instrument agreeing with itself.
+
 ## 5. Invariant comments and false records
 
 Core #14 ("an invariant-asserting comment needs an enforcing guard, or it gets
@@ -499,6 +547,15 @@ negative), reproduces consistently for whoever picks the item up, and
 graduates to a live regression fixture the round the bug is fixed. Triage
 paperwork stays in `/tmp`; the repro is the one triage artifact that gets
 committed.
+
+**A cited repro is EVIDENCE, not a second filing (owner 2026-08-23).** The
+convergence arithmetic counted the mandated `known_gaps` fixture as an
+inflow item in its own right, so one discovery was charged **+2**: once for the
+`todo/` item and once for the repro the cardinal rule obliges it to ship. That
+made the compliant filing cost more than the non-compliant one — a metric that
+rewards skipping the repro. A repro cited from an item's `repro` field is now
+that item's evidence and is not counted; an **uncited** gap fixture still counts
+on its own, because nothing else is tracking it.
 
 ## 9. The implementation portfolio: succession and after
 
@@ -1146,6 +1203,17 @@ retire, while the scout's original exits non-zero on that pair. Pasting the sent
 have cost nothing; rewriting it produced a guard that could not catch its own class — the
 Core #15e Q2 failure, introduced by the fold rather than by the design.
 
+### Grep the shortest distinctive token, never the sentence
+
+Core #15(c) says a fold is not finished until you have grepped for the thing it
+corrects, in its *instruction* form. The refinement is about the **key**: prose
+in this tree wraps and gets re-flowed, so a multi-word key can straddle a line
+break and match nothing while the contradiction sits there in plain sight.
+Measured on one fold: grepping `'detection SUCCEEDS'` returned **no hits** and
+the fold was declared clean; grepping the single token `'SUCCEEDS'` found the
+surviving sentence immediately. Pick the shortest token that is distinctive to
+the correction — one word is usually enough, and a word cannot wrap.
+
 ### The rules were not enough, so the fold became its own role
 
 Five mechanical rules did not stop the bleeding. The seventh review pass on one track
@@ -1349,6 +1417,15 @@ tracks so they do not step on each other."* And: *"This was obvious for
 Opus < 5, the orchestrator does not normally touch the code. It launches tracks
 that do."*
 
+**The boundary, sharpened the same day.** Asked whether the orchestrator may
+apply a fix itself once it has cross-checked a reviewer's claim, the owner was
+explicit: *"Exactly, you launch a fresh agent to do it. At most, you take part
+in criticizing the final form."* So the orchestrator's participation in a
+track's OUTPUT is **criticism only**. The standing duty to cross-check a
+reviewer (a reviewer can be wrong) is untouched — what changes is what happens
+next: the cross-check produces a FINDING returned to the agent, never an edit
+the orchestrator makes. That is rule 0's fourth duty in `AGENTS.md`.
+
 **How the rule got broken.** R45's owner instruction *"recursively fix the bugs
 we find on each track, unless really disjoint"* names an obligation of the
 ROUND, not of the orchestrator's hands. It was read as the latter. The
@@ -1419,9 +1496,12 @@ gate this round:
 
 **Scoping is what makes it terminate.** A finding resets the streak only when it
 changes the brief's fix shape, site set, scope boundary, or guard mechanism.
-A defect found in the TREE while reviewing is filed or scheduled as its own
-work — it says nothing about whether this brief is executable. A defect in the
-orchestrator's fold or guard is an orchestrator defect, not the track's.
+A defect found in the TREE while reviewing does not reset the streak — it says
+nothing about whether this brief is executable. A defect in the orchestrator's
+fold or guard is an orchestrator defect, not the track's. **Neither clause
+prescribes a DISPOSITION:** what then happens to the find belongs to
+`AGENTS.md` § Multi-agent orchestration rule 0, which incorporates into the
+track's scope by default and files only the genuinely disjoint.
 
 **The residual, stated honestly:** a checklist can miss a novel defect class a
 sharp reviewer would catch. Mitigation is that ≥3 passes stays the floor and any

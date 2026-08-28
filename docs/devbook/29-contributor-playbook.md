@@ -285,6 +285,19 @@ are not facts you can quote.** The next section is why.
 
 ---
 
+## Measure memory, not just time
+
+A perf investigation that reports only wall-clock can call a change clean while
+it is quietly allocating gigabytes. One self-host run held **~4 GB of peak RSS**
+behind a clone-bomb that the millisecond timings never showed — the numbers all
+looked fine, and the box was the thing falling over. A memory balloon is as
+blocking as a time regression, so every perf investigation or fix tracks peak
+RSS and alloc/clone counts alongside the clock: the `--clones=stats` build flag
+prints `[clone-stats] array_clone=N`, `/usr/bin/time -v` gives peak RSS, and
+`scripts/self_host_mem_baseline.sh` wraps the self-host case.
+
+---
+
 ## The gates: comparison tests and the fixed-point loop
 
 Two families of test guard correctness as you work; both are easy to misread.
@@ -325,6 +338,17 @@ milestone — but it is **not** parity with Rust. The north star is the
 *the same way* Rust does), not a green fixed-point or a green suite
 (`MEMORY.md` → "NORTH STAR"; [Chapter 27](27-comparison-bootstrap.md)). Do not
 treat a green gate as the stopping condition.
+
+### The integration harness no longer needs `--test-threads=1`
+
+Full sweeps used to be pinned to one thread. The requirement was never about the
+fixtures: the harness ran `cargo run -- build` per fixture, and the parallel
+invocations raced on cargo's build lock. It died when the harness switched to
+invoking the pre-built `gg` binary directly through `CARGO_BIN_EXE_gg`
+(`tests/integration.rs:84`), which removed the contention entirely. Sweeps now
+autoscale through `scripts/run_integration.sh`, which sizes the thread count on
+free cores *and* free RAM — RAM binds first, which is why a hand-rolled
+`--test-threads=N` is worse than the wrapper rather than equivalent to it.
 
 ### The layering ratchet
 
@@ -649,8 +673,18 @@ nothing (its entry had been consumed; the work survived only as a dangling
 commit found via reflog). Both scouts noticed, captured the foreign diff to
 `/tmp`, re-stored what they'd taken, and re-verified their own work from the
 dangling commit — full recovery, but only because both agents were paranoid.
-Rule 8: agents never stash; `git diff > /tmp/<name>.patch` + `git apply` has
-identical save/restore semantics with per-agent namespacing for free.
+Rule 8: agents never stash; a patch file in `/tmp` plus `git apply` has the
+same save/restore semantics with per-agent namespacing for free.
+
+**The patch recipe needed one correction, and it cost a round.** `git diff`
+reports only tracked files, so a checkpoint written that way silently omits
+every NEW file — which is precisely where a just-filed `todo/<id>.md` lives,
+the cardinal rule having required it. A killed agent's replacement applied its
+predecessor's patch, found the tree RED on `todo_index_is_current` with a
+pointer to a file that no longer existed, and had to reconstruct the item from
+the report. The recipe is `git add <new files>` first, then
+`git diff HEAD > /tmp/<name>.patch`. `git add -N .` would also work, but a
+sweeping stage is what rule 3 exists to prevent, so name the files.
 
 Second, the **killed-agent drill**: a session limit killed five in-flight
 agents mid-round. The one executor that had already committed lost nothing;
