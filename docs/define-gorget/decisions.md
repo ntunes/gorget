@@ -3042,6 +3042,20 @@ baseline.
   corrected in the same commit. `docs/language-reference.md` §7.4 and the grammar already describe the
   sanctioned behaviour and need no change — they were right, and the ledger was wrong.
 
+- 2026-08-28 — **🎯 D50 RATIFIED (owner): `unsafe` IS REMOVED FROM THE LANGUAGE — THE RESERVED KEYWORD AND ALL SUPPORT.**
+
+  **The ruling, verbatim:** *"'unsafe' was a placeholder for a feature never implemented in gorget. I think we should remove the reserved keyword from the lexer and remove all support for the feature. We never finished it, and shouldn't do it now."*
+
+  **What forced the question.** `docs/language-reference.md:1467` states that an `unsafe:` block *"compiles identically to a normal block"*. Measured on `--emit-gir`, it does not: the Rust lowering arm uses `lower_block_scoped`, which opens **no drop scope**, so a local declared inside an `unsafe:` block is dropped at **function** exit rather than block exit. That is a reference-vs-code conflict, which is an OPEN QUESTION and an owner ask by standing rule (owner 2026-08-18) — never a scout's or orchestrator's guess. Raised with three dispositions (fix the doc / fix the code / file it); the owner chose a fourth: remove the feature.
+
+  **Why it is the right call rather than the cheap one.** The construct was parsed and then semantically ignored — the reference itself says *"currently parsed but not semantically enforced"*. A keyword that reserves syntax, alters drop timing as an accident of its lowering arm, and enforces nothing is a liability on every axis: it costs a lexer token, an AST variant, an arm in every walker that must not silently drop it, and a documented promise the implementation does not keep.
+
+  ⚠ **AND IT WAS ACTIVELY HARMFUL IN THE SELF-HOST.** Found the same day while porting R45 fixtures: the self-host parser had **no `unsafe:` arm at all**, and because `unsafe` is a lexer keyword it never reached the identifier/named-scope path — so it fell through to `parse_expr()` and **swallowed the keyword, its colon, the block body, AND every statement that followed it in the enclosing block**. `print a / unsafe: print b / print c / print d` printed `a b`. A Core #10 silent-drop miscompile, in a construct that does nothing.
+
+  **SCOPE (Core #9 — every lane, same round).** Rust lane: lexer token, AST variant, parser arm, and every walker arm across **22 files / 62 references**. Self-host: the `SUnsafe` support added hours earlier during the fixture port is **reverted rather than completed** — the feature is going away, so adding support for it is work in the wrong direction. Docs: the `unsafe` section of `language-reference.md` is removed, not corrected. Fixtures: **4** use `unsafe:` — two are R45 liveness regression fixtures whose coverage must be **preserved by rewriting them onto a surviving scope construct (a named scope), not deleted with the keyword**; `known_gaps/cow_scope_bare_param_unsafe.gg` and a formatter-layout fixture need the same treatment or their items revisiting.
+
+  **Corollary worth stating:** removing it is expected to *reduce* self-host parity debt rather than add to it, since two of the three non-MATCH rows this port chased exist only because the construct was unparseable on that lane.
+
 - 2026-08-27 — **🎯 D49 RATIFIED (owner): `for x in &set` AND `for k in &dict` ARE A HARD REJECT. `for k, v in &dict` WRITES THROUGH TO `v` AND NOT TO `k`.**
 
   Settles the `&`-over-hash-container position that D33 and the 2026-08-18 bare-form ruling left open.
