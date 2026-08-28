@@ -1374,6 +1374,19 @@ sound, paperwork stale"*, *"§2 cites re-derive"*). **Track D was ready at pass
 readiness, and three of those fixes were regressions in a walker touched four
 times.
 
+**What "fix inline" actually means (owner clarification, same day).** *"The
+'fix inline' means the track should fix the findings it discovers on each pass,
+not file infinite new todo items. Let the scope grow a bit."*
+
+So the default disposition for a finding is **incorporate into the track's own
+scope**, not file. Filing is for the genuinely disjoint. R45 got this wrong in
+both directions at once: the orchestrator hand-fixed some findings (wrong actor)
+and filed 28 `todo/` items (wrong disposition), while the tracks' own scopes
+stayed frozen and their executors never ran. A track whose scope grows by a few
+findings per pass and then ships once is cheaper than a track that ships nothing
+and leaves a filing trail behind it — and the filings are worse than neutral,
+because each one reads as discovered-and-handled when the defect is still live.
+
 **The reviewers were already doing their job.** Every fix existed as a reviewer
 patch first — `PROTOTYPE_on_error_seed.patch` (D15),
 `recover_revD18_matcharm_route.patch` (D18),
