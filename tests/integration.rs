@@ -55919,7 +55919,7 @@ fn fmt_output_reparses_corpus_wide() {
 //                       todo/t0711 with known_gaps/method_returning_callable_called_in_chain.gg.
 //   ETry              → OMITTED: `s.fetch()?.to_upper()` ICEs the Rust lane
 //                       (resource-move validation panic) and the self-host rejects
-//                       it — both lanes broken. Filed as todo/t0712 with
+//                       it — both lanes broken. Filed as todo/t0714 with
 //                       known_gaps/postfix_try_on_option_ices_resource_move.gg.
 //   EAs               → OMITTED as UNREACHABLE: `(x.m() as T).n()` needs a method on
 //                       the cast target, and no method exists on any numeric/bool.
@@ -55961,20 +55961,81 @@ fn fmt_output_reparses_corpus_wide() {
 //    not, so a link-shape row could be green while the identical shape spelled
 //    with a different outer method CC-failed.
 //
+//    ⚠ THAT AXIS IS NOT CLOSED, AND AN EARLIER REVISION OF THIS BLOCK SAID IT
+//    WAS. The paragraph immediately above PREDICTS the surviving defect, and
+//    nine lines later the block used to declare the axis fixed — "BOTH
+//    bool-returning arms now publish, so the arm an outer method lands on no
+//    longer decides whether the link is typed". That sentence was FALSE. THREE
+//    of the ladder's ~26 exits publish (infer.gg:677 registry, :749 bool
+//    predicates, :771 tag check); the other ~23 still fall back to the
+//    contended key, and the arm an outer method lands on still decides. Five
+//    measured cells are RED because of it. What follows is therefore the TOTAL
+//    enumeration with a disposition per row (Core #15(b); Core #15e Q3 — a
+//    selection cannot show you what it omits), the same shape the first-axis
+//    section above already uses.
+//
+//   LANDED — these arms publish, and each has a live behavioural row:
 //   bool String predicates  → chain_link_bool_builtin  (is_empty/contains/
 //                             starts_with/ends_with, + len/to_upper as the
-//                             non-bool rows that pin the fix did not narrow)
+//                             non-bool rows that pin the fix did not narrow.
+//                             ⚠ SCOPE: those two rows sample the STRING-receiver
+//                             cell only — the VECTOR-receiver cell of the same
+//                             `len` arm is RED, see below)
 //   bool Set predicates     → chain_link_set_predicate (is_subset/is_empty/
 //                             contains — same ladder arm, different receiver
 //                             resolution path, measured not assumed)
 //   Option/Result tag check → every chain_link_* row above
-//   BOTH bool-returning arms now publish, so the arm an outer method lands on no
-//   longer decides whether the link is typed — pinned by
-//   `self_host_infer_bool_arms_publish_chain_link` (tests/lints.rs), which also
-//   pins the BOUNDARY: the ladder's other arms answer from the method NAME
-//   without checking the receiver (todo/t0712), and publishing THOSE guesses
-//   regressed ten self_host_runtime rows when it was tried. Publishable set =
-//   RESOLVED, never GUESSED.
+//   registry (user method)  → the RECEIVER half of every row above; it publishes
+//                             at its own resolution gate, from a RESOLVED type
+//                             rather than from a name.
+//
+//   RED — the ~23 non-publishing arms. Measured on BOTH the shipped driver and
+//   a pristine `2d619258` driver, so every one is PRE-EXISTING: this round
+//   neither introduced nor worsened them. Each has a durable `known_gaps/`
+//   repro wired `#[ignore]`d to the CORRECT answer and cited from todo/t0712.
+//   The self-host symptom is on the left, Rust gg's correct answer on the right:
+//     h.make().split(",").len()   CC-FAIL `'Str' from type 'GorgetArray'`      → 3
+//                                 known_gaps/chain_link_split_on_user_method_result.gg
+//     h.make().bytes().len()      CC-FAIL `'Str' from type 'GorgetArray'`      → 4
+//                                 known_gaps/chain_link_bytes_on_user_method_result.gg
+//     h.make().len()  Vector recv CC-FAIL `'GorgetArray' from type 'size_t'`   → 2
+//                                 known_gaps/chain_link_len_on_vector_method_result.gg
+//     h.make().keys().len()  Dict CC-FAIL `'GorgetMap' from type 'GorgetArray'`→ 1
+//                                 known_gaps/chain_link_keys_on_dict_method_result.gg
+//     h.make().get(0).unwrap()    SIGBUS rc 135, NO OUTPUT — same discriminator,
+//                                 DIFFERENT symptom, so its downstream mechanism
+//                                 is triaged on its own (Core #15e Q6)         → a
+//                                 known_gaps/chain_link_get_on_vector_method_result.gg
+//   Each was isolated against a CONTROL: bind the receiver to a named local
+//   first and the identical program compiles and runs correctly on both
+//   drivers. It is the CHAIN spelling that breaks, which is what makes these
+//   the same class and not a resemblance.
+//
+//   THE BOUNDARY, and why the RED rows are not simply "publish from more arms".
+//   Those arms answer from the method NAME without checking the receiver
+//   (todo/t0712), and the lowerer reads `expr_link_types` FIRST — so publishing
+//   THOSE guesses OVERRIDES a fallback that was getting it right. It was built
+//   and it regressed ten self_host_runtime rows. Publishable set = RESOLVED,
+//   never GUESSED. Both halves — the pair that must publish, and the total
+//   COUNT that must not grow — are pinned by
+//   `self_host_infer_bool_arms_publish_chain_link` (tests/lints.rs). The class
+//   fix that closes all five RED rows at once is t0712's receiver gate, after
+//   which the single-exit publish becomes safe; that is the round's found fix,
+//   named here so the fallback is a decision and not a default.
+//
+// ── A THIRD AXIS, and it is what made the corpus BLIND to those five rows:
+//    RECEIVER KIND — is the chain's receiver a BUILTIN method call or a
+//    USER-DEFINED (`equip`) one? Nothing named this axis before. The two are
+//    different paths: a builtin receiver records no `expr_types[span.start]`
+//    either, so the outer link falls through to `infer_method_return_type` and
+//    is ACCIDENTALLY correct (Core #15e Q6), which is exactly what
+//    chain_link_builtin_recv_control.gg was added to say.
+//    `tests/fixtures/string_chained_methods.gg:7` — `raw.trim().to_lower()
+//    .split(", ")` — samples ONLY the builtin cell, and it MATCHES on the
+//    self-host lane. That is why the runtime lock-in net saw nothing: the
+//    corpus had the `split` arm covered on the cell where it works. The
+//    USER-receiver cell of those same arms is the RED set above. Every future
+//    chain-link row states which cell of THIS axis it samples.
 
 /// CHAIN-LINK axis cell: EMethodCall link (the ADJACENT-receiver cell) over a
 /// user-defined receiver. RED-verified: CC-FAIL on the pre-fix self-host driver
@@ -56111,7 +56172,13 @@ false",
 /// `incompatible types when assigning to type 'Str' from type '_Bool'` at
 /// `__v12 = gorget_str_is_empty(__v11);`. The `len()`/`to_upper()` rows pin that
 /// the fix did not narrow the non-bool arms (`.len()` / `.to_upper()` still
-/// resolve through the untouched name-list ladder).
+/// resolve through the untouched name-list ladder) — ⚠ but ONLY on the
+/// STRING-RECEIVER cell, which is the whole scope they may claim (Core #12: a
+/// fixture's NAME is a claim about SCOPE — make it true or narrow it). The
+/// VECTOR-receiver cell of that SAME `len` arm is RED: `h.make().len()` over a
+/// `Vector[String]`-returning method CC-FAILs with `'GorgetArray' from type
+/// 'size_t'` (known_gaps/chain_link_len_on_vector_method_result.gg, todo/t0712,
+/// wired as `known_gap_chain_link_len_on_vector_method_result`).
 #[test]
 fn chain_link_bool_builtin() {
     run_gg(
@@ -56258,6 +56325,131 @@ resource) and the self-host fails to resolve a method on the result. This is \
 why the ETry cell has no chain_link_* corpus row."]
 fn known_gap_postfix_try_on_option_ices_resource_move() {
     run_gg("known_gaps/postfix_try_on_option_ices_resource_move.gg", "HI");
+}
+
+// ── THE CHAIN-LINK RED CELLS: the ~23 ladder arms that do NOT publish
+//    `expr_link_types[span.end]`, over a USER-DEFINED receiver. All five are
+//    PRE-EXISTING (identical on a pristine `2d619258` driver) and all five are
+//    cited from `todo/t0712`, whose receiver gate is the class fix that closes
+//    them at once. Un-ignore and promote out of `known_gaps/` that round.
+//
+//    ⚠ THESE RUN ON THE SELF-HOST LANE, NOT THROUGH `run_gg`. Rust gg is
+//    CORRECT on every one of them, so a `run_gg` pin would be GREEN today and
+//    would pin nothing (Core #12 — green on arrival is not coverage). The
+//    lagging lane is the self-host, so that is the lane the assert must read.
+
+/// Compile a `known_gaps/` fixture with the SELF-HOST driver, cc it, run it, and
+/// assert the INTENDED stdout — the answer Rust gg already gives. Shared by the
+/// five chain-link RED cells so the harness is written once; each caller spells
+/// its fixture path as a LITERAL, which is also what
+/// `known_gaps_repros_are_wired_to_a_test` requires.
+fn known_gap_self_host_stdout(rel_fixture: &str, expected: &str) {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures").join(rel_fixture);
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_known_gap_chain_link_{}_{}",
+        std::process::id(),
+        fixture.file_stem().unwrap().to_string_lossy(),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let outcome =
+        self_host_emit_cc_run(&driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "kgap");
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    match outcome {
+        Ok(stdout) => assert_eq!(
+            stdout.trim_end(),
+            expected,
+            "{rel_fixture}: the self-host built it but it printed the wrong answer. \
+             Rust gg prints `{expected}`.",
+        ),
+        Err(other) => panic!(
+            "{rel_fixture}: the self-host did not produce a running program ({other:?}). \
+             Rust gg compiles the same source and prints `{expected}`; this fixture asserts \
+             the CORRECT behaviour, not today's. Class fix: todo/t0712.",
+        ),
+    }
+}
+
+/// KNOWN GAP — chain-link RED cell: `.split(",")` as the outer link over a
+/// USER-DEFINED method receiver. The `split` arm is one of the ~23 exits of
+/// `infer_expr_type`'s builtin ladder that never publishes
+/// `expr_link_types[span.end]`, so the lowerer falls back to the CONTENDED
+/// `expr_types[span.start]` slot and mints the link with its RECEIVER's type.
+/// Self-host: CC-FAIL `incompatible types when assigning to type 'Str' from
+/// type 'GorgetArray'`. Rust gg: `3`.
+///
+/// The corpus was blind to this because `string_chained_methods.gg:7` samples
+/// the same `split` arm on the BUILTIN-receiver cell, where it works.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0712): a non-publishing ladder arm over a \
+user-defined receiver types the outer link with its RECEIVER; the self-host \
+CC-FAILs where Rust gg answers 3."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_chain_link_split_on_user_method_result() {
+    known_gap_self_host_stdout("known_gaps/chain_link_split_on_user_method_result.gg", "3");
+}
+
+/// KNOWN GAP — chain-link RED cell: `.bytes()` as the outer link over a
+/// USER-DEFINED method receiver. A SECOND arm of the same ladder, so the cell is
+/// not a single-name anecdote. Self-host: CC-FAIL `'Str' from type
+/// 'GorgetArray'`. Rust gg: `4`.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0712): sibling arm of \
+known_gap_chain_link_split_on_user_method_result; self-host CC-FAILs where \
+Rust gg answers 4."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_chain_link_bytes_on_user_method_result() {
+    known_gap_self_host_stdout("known_gaps/chain_link_bytes_on_user_method_result.gg", "4");
+}
+
+/// KNOWN GAP — chain-link RED cell, and the one that FALSIFIES A SCOPE CLAIM:
+/// the VECTOR-receiver cell of the `len` arm. `chain_link_bool_builtin.gg`
+/// carries `h.make().len()` as a live green row, but over a STRING receiver;
+/// swap the receiver for a `Vector[String]` and the same arm is RED with the
+/// mint running the other way — `incompatible types when assigning to type
+/// 'GorgetArray' from type 'size_t'`. Rust gg: `2`. (Core #12 — a fixture's
+/// NAME is a claim about SCOPE.)
+#[test]
+#[ignore = "KNOWN GAP (todo/t0712): the VECTOR-receiver cell of the `len` arm \
+that chain_link_bool_builtin pins only on its STRING receiver; self-host \
+CC-FAILs where Rust gg answers 2."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_chain_link_len_on_vector_method_result() {
+    known_gap_self_host_stdout("known_gaps/chain_link_len_on_vector_method_result.gg", "2");
+}
+
+/// KNOWN GAP — chain-link RED cell: `.keys()` over a `Dict`-returning USER
+/// method, the third receiver TYPE on the same axis (String / Vector / Dict), so
+/// the axis is sampled rather than extrapolated from the String rows.
+/// Self-host: CC-FAIL `'GorgetMap' from type 'GorgetArray'`. Rust gg: `1`.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0712): the DICT-receiver cell; self-host CC-FAILs \
+where Rust gg answers 1."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_chain_link_keys_on_dict_method_result() {
+    known_gap_self_host_stdout("known_gaps/chain_link_keys_on_dict_method_result.gg", "1");
+}
+
+/// KNOWN GAP — chain-link RED cell, and the SHARPEST of the five: it does not
+/// fail to compile, it CRASHES. `h.make().get(0).unwrap()` over a
+/// `Vector[String]`-returning USER method builds and then dies with SIGBUS
+/// (rc 135, no output). Rust gg runs the identical program and prints `a`.
+///
+/// ⚠ SAME DISCRIMINATOR, DIFFERENT SYMPTOM. Binding the receiver to a named
+/// local first is correct on both lanes, exactly as for the four CC-FAIL rows,
+/// so it is at minimum reached by the same contended-key path — but the
+/// downstream mechanism is a memory failure, not a mint mismatch, and is
+/// triaged on its own rather than assumed identical (Core #15e Q6). If it
+/// survives t0712's receiver gate, it earns its own filing.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0712): ordinary beginner code that Rust gg runs \
+correctly and the self-host SIGBUSes on (rc 135, no output)."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_chain_link_get_on_vector_method_result() {
+    known_gap_self_host_stdout("known_gaps/chain_link_get_on_vector_method_result.gg", "a");
 }
 
 /// CHAIN-LINK CONTROL ROW — the same shape over a BUILTIN receiver

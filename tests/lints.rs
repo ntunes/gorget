@@ -6549,6 +6549,18 @@ fn self_host_cow_write_walkers_share_one_root_peel() {
 /// ladder on the receiver type, THEN the single-exit publish becomes safe. This
 /// lint deliberately does NOT demand the wrapper shape — demanding it would
 /// demand the regression.
+///
+/// ⚠ THE BOUNDARY IS PINNED AS A **COUNT**, NOT AS A LIST OF TEMPTING NAMES.
+/// The first revision of this lint named the two arms it thought most likely to
+/// grow a publish (`len`/`count`, `to_string`/`to_str`) and checked only those.
+/// A publish planted in the `slice`/`substr` arm — an arm `todo/t0712` names in
+/// the same breath — sailed past it GREEN. A guard that green-lights the very
+/// class it exists to retire is worse than none (Core #15e Q2), because it
+/// reads as enforcement on the dashboard. The pin is now the TOTAL number of
+/// `expr_link_types` publishes in `infer.gg`: exactly three, so a FOURTH
+/// anywhere in the ladder, spelled any way, in any arm, goes red and is forced
+/// through review. The two named checks survive underneath it only for their
+/// sharper message; they are no longer the boundary.
 #[test]
 fn self_host_infer_bool_arms_publish_chain_link() {
     let src = fs::read_to_string("tests/fixtures/self_host_typechecker/infer.gg")
@@ -6592,9 +6604,43 @@ fn self_host_infer_bool_arms_publish_chain_link() {
         );
     }
 
-    // The boundary: publishing from the NAME-GUESSING arms regressed ten rows,
-    // so `to_string`/`len`/`slice`/`get` must NOT have grown a publish. Guard
-    // the two most tempting ones by name.
+    // ── THE BOUNDARY, TOTAL ────────────────────────────────────────────────
+    // The blessed publish set is small and exact, so pin its SIZE rather than a
+    // hand-list of the arms someone might add one to (which was tried, and a
+    // planted publish in the `slice`/`substr` arm stayed GREEN — see the
+    // docstring). Any FOURTH publish, in any arm, spelled any way, goes red.
+    //
+    //   infer.gg:677  the registry path — a RESOLVED type, not a name guess
+    //   infer.gg:749  the bool-predicate arm (is_empty/contains/starts_with/…)
+    //   infer.gg:771  the tag-check arm      (is_some/is_none/is_ok/is_error)
+    //
+    // Line numbers drift and are here only as a reading aid; the COUNT is what
+    // is pinned, and the two per-arm asserts above pin WHICH two of the three
+    // are the bool pair.
+    const BLESSED_PUBLISH_SITES: usize = 3;
+    let publishes = src.matches("types.expr_link_types.put(").count();
+    assert_eq!(
+        publishes, BLESSED_PUBLISH_SITES,
+        "infer.gg has {publishes} `expr_link_types` publish site(s); the blessed set is \
+         exactly {BLESSED_PUBLISH_SITES} — the registry path plus the two bool-returning \
+         arms.\n\n\
+         MORE than that: a ladder arm grew a publish. Every OTHER arm in that ~26-return \
+         ladder answers from the METHOD NAME without checking the receiver (todo/t0712), \
+         and `lower_types.gg:lookup_expr_gir_type` reads `expr_link_types` FIRST — so a \
+         published guess OVERRIDES a fallback that was getting it right. Measured: \
+         publishing from those arms regressed TEN `self_host_runtime` rows \
+         (`iterator_lazy_chain` double-free, `unicode_strings` printing `80` for `é`, two \
+         `gorget_string_free` invariant trips, three CC-FAILs, …). Fix t0712's receiver \
+         gate FIRST; then this boundary can move and the single-exit publish becomes the \
+         right shape.\n\n\
+         FEWER than that: a publish was deleted. A chain whose outer link loses its \
+         publish reads the CONTENDED `expr_types[span.start]` slot and is typed with its \
+         RECEIVER — a CC-FAIL, not a slow path. Restore it; never the fixture's \
+         expectation."
+    );
+
+    // Named-arm checks, kept UNDERNEATH the total count for their sharper
+    // message on the two most tempting arms. Illustrative, not the boundary.
     for guess in [
         "if method_name == \"len\" or method_name == \"count\":",
         "if method_name == \"to_string\" or method_name == \"to_str\"",

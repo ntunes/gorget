@@ -1,0 +1,41 @@
+# KNOWN GAP -- CHAIN-LINK class, RETURN-TYPE-ARM axis x RECEIVER-KIND axis.
+#
+# CELL: the outer link is `.split(",")`, a NAME-LIST arm of `infer_expr_type`'s
+# builtin ladder that does NOT publish `expr_link_types[span.end]`, and the
+# receiver is a USER-DEFINED (equip) method call rather than a builtin one.
+#
+# INTENDED OUTPUT: `3`. Rust gg answers `3` (regenerated 2026-08-29:
+# `./target/debug/gg run tests/fixtures/known_gaps/chain_link_split_on_user_method_result.gg`).
+#
+# TODAY the SELF-HOST emits C that will not compile:
+#   error: incompatible types when assigning to type 'Str' from type 'GorgetArray'
+# The lowerer reads the unique `expr_link_types[span.end]` key FIRST; only 3 of
+# the ladder's ~26 exits publish there (infer.gg:677 registry, :749 bool
+# predicates, :771 tag check), so this arm falls back to the CONTENDED
+# `expr_types[span.start]` slot every link of a postfix spine shares and mints
+# the outer link's destination with its RECEIVER's type (`Str`).
+#
+# PRE-EXISTING, not a regression: identical on a pristine `2d619258` driver.
+#
+# CONTROL that establishes this is the CHAIN spelling and not `split` itself --
+# both compile and run correctly on both lanes today, so they are recorded here
+# rather than wired as live lines that would change the asserted output:
+#   String loc = h.make()          then  print(loc.split(",").len())   -> 3
+#   String s = "a,b,c"             then  print(s.split(",").len())     -> 3
+#
+# HEAP-FORCED: the receiver is a String field read back out of a struct, never a
+# literal -- a literal receiver constant-folds and is a false negative.
+#
+# THE CLASS FIX is todo/t0712: gate the ladder's name-list arms on the RECEIVER
+# type. After that the single-exit publish becomes safe and this cell, plus its
+# four siblings, close at once. Graduate out of known_gaps/ that round.
+struct Holder:
+    String s
+
+equip Holder:
+    String make(self):
+        return self.s
+
+void main():
+    Holder h = Holder("a,b,c")
+    print(h.make().split(",").len())

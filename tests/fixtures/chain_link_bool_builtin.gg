@@ -1,14 +1,19 @@
 # CHAIN-LINK corpus · AXIS = which RETURN-TYPE ladder arm publishes the outer
 # link's type. CELL SAMPLED HERE: the bool-returning STRING predicates
 # (`is_empty` / `contains` / `starts_with` / `ends_with`) as the OUTER link of
-# a chain whose receiver is itself a method call.
+# a chain whose receiver is itself a USER-DEFINED (`equip`) method call. That
+# last clause is a CELL of the RECEIVER-KIND axis, not decoration: the
+# BUILTIN-receiver cell of these same arms is accidentally correct and is
+# covered by chain_link_builtin_recv_control.gg.
 #
 # WHY THIS CELL EXISTS AS ITS OWN ROW. The sibling rows sample the SHAPE of the
 # link between two method calls (EFieldAccess, EIndex, EPropagate, …). This one
 # holds the shape fixed at the simplest possible spine -- `h.make().is_empty()`,
 # two adjacent method calls -- and varies the OUTER METHOD instead. That axis
-# was invisible until it was measured: `h.make().len()` compiled and
-# `h.make().is_empty()` did not, one arm apart in the same ladder.
+# was invisible until it was measured: `h.make().len()` compiled (over a
+# STRING receiver -- over a Vector receiver it does not, see the scope note at
+# the `len` line below) and `h.make().is_empty()` did not, one arm apart in the
+# same ladder.
 #
 # The mechanism. `infer_expr_type` publishes a method call's resolved type on
 # the UNIQUE `expr_link_types[span.end]` key, which the lowerer's
@@ -24,7 +29,11 @@
 # The two bool-returning arms are ONE class -- `bool` regardless of the receiver
 # -- and both publish now.
 #
-# THE CLASS ENDS THERE, and that boundary was MEASURED, not guessed. Publishing
+# THE PUBLISHABLE CLASS ENDS THERE -- which is NOT the same as the axis being
+# closed. The other ~23 ladder arms still fall back to the contended key and
+# five measured cells are RED because of it (enumerated in the AXIS COVERAGE
+# block in tests/integration.rs, repros under known_gaps/chain_link_*). That
+# boundary was MEASURED, not guessed. Publishing
 # at a single exit for the whole EMethodCall case was built and it regressed ten
 # `self_host_runtime` rows: the ladder's other arms answer from the method NAME
 # without checking the receiver (todo/t0712), and the lowerer reads
@@ -51,5 +60,10 @@ void main():
     print(h.make().starts_with("ab"))
     print(h.make().ends_with("cd"))
     # A non-bool arm of the same ladder, to pin that the fix did not narrow it.
+    # ⚠ SCOPE: the STRING-RECEIVER cell of that arm, and nothing wider. The
+    # VECTOR-receiver cell of this same `len` arm is RED -- `h.make().len()`
+    # over a `Vector[String]`-returning method CC-FAILs with `'GorgetArray'
+    # from type 'size_t'` (known_gaps/chain_link_len_on_vector_method_result.gg,
+    # todo/t0712). The receiver KIND and the receiver TYPE are both axes here.
     print(h.make().len())
     print(h.make().to_upper())

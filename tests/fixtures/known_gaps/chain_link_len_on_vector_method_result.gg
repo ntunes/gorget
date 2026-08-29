@@ -1,0 +1,32 @@
+# KNOWN GAP -- CHAIN-LINK class, the VECTOR-RECEIVER cell of the `len` arm.
+#
+# ⚠ THIS IS THE CELL THAT FALSIFIES A SCOPE CLAIM. `chain_link_bool_builtin.gg`
+# carries `h.make().len()` as a live green row "pinning that the fix did not
+# narrow the non-bool arms" -- but its receiver is a STRING. Swap the receiver
+# for a `Vector[String]` and the SAME `len` arm is RED. A fixture's NAME is a
+# claim about SCOPE (Core #12): that row pins the String-receiver cell only, and
+# this file is the uncovered cell of the same axis.
+#
+# INTENDED OUTPUT: `2`. Rust gg answers `2` (regenerated 2026-08-29:
+# `./target/debug/gg run tests/fixtures/known_gaps/chain_link_len_on_vector_method_result.gg`).
+#
+# TODAY the SELF-HOST emits C that will not compile:
+#   error: incompatible types when assigning to type 'GorgetArray' from type 'size_t'
+# Note the direction: here the CONTENDED key holds the receiver's `GorgetArray`
+# and the value is the `size_t` length, the mirror of the String-receiver rows.
+#
+# PRE-EXISTING, not a regression: identical on a pristine `2d619258` driver.
+#
+# HEAP-FORCED: the receiver is a Vector field read back out of a struct.
+#
+# THE CLASS FIX is todo/t0712 (gate the name-list arms on the receiver type).
+struct HV:
+    Vector[String] v
+
+equip HV:
+    Vector[String] make(self):
+        return self.v
+
+void main():
+    HV h = HV(["a", "b"])
+    print(h.make().len())

@@ -1,0 +1,31 @@
+# KNOWN GAP -- CHAIN-LINK class, RETURN-TYPE-ARM axis x RECEIVER-KIND axis.
+#
+# CELL: the outer link is `.bytes()`, a second NAME-LIST arm of the same ladder
+# (sibling of `split`, different name, same non-publishing exit), over a
+# USER-DEFINED (equip) method receiver.
+#
+# INTENDED OUTPUT: `4`. Rust gg answers `4` (regenerated 2026-08-29:
+# `./target/debug/gg run tests/fixtures/known_gaps/chain_link_bytes_on_user_method_result.gg`).
+#
+# TODAY the SELF-HOST emits C that will not compile:
+#   error: incompatible types when assigning to type 'Str' from type 'GorgetArray'
+# Same mechanism as chain_link_split_on_user_method_result.gg -- the outer link
+# is minted with the RECEIVER's type off the contended `expr_types[span.start]`
+# key. This row exists so the cell is not a single-name anecdote: two distinct
+# arms of the ladder, one class.
+#
+# PRE-EXISTING, not a regression: identical on a pristine `2d619258` driver.
+#
+# HEAP-FORCED: the receiver is a String field read back out of a struct.
+#
+# THE CLASS FIX is todo/t0712 (gate the name-list arms on the receiver type).
+struct Holder:
+    String s
+
+equip Holder:
+    String make(self):
+        return self.s
+
+void main():
+    Holder h = Holder("abcd")
+    print(h.make().bytes().len())
