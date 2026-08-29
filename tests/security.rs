@@ -2061,6 +2061,27 @@ fn sound_ctor_mover_first_rejected() {
     security_rejected("sound_ctor_mover_first_reject", "E_UseAfterMove");
 }
 
+/// LIVE — MEMORY-VALIDITY pin for the class `t0699` closed: renaming a user
+/// `&self` mutator must not change whether the program is memory-safe.
+///
+/// This cell belongs HERE and not only in the runtime corpus because neither
+/// of the other adjudicators can see it: ggdef adjudicates VALUE semantics and
+/// accepts live heap-UAFs, and stdout cannot distinguish "correct" from
+/// "crashed before flush". ASan on the real backend can.
+///
+/// RED-verified at `f3feea79` (2026-08-29, `ASAN_OPTIONS=halt_on_error=1:\
+/// detect_leaks=0:allocator_may_return_null=1`, single-threaded so
+/// `use_stacks` is not in play): `heap-use-after-free` READ of size 8 in
+/// `gorget_string_clone_to_owned` <- `Unlisted__probe`, and NOTHING for the
+/// byte-identical `Listed` half whose mutator happened to be named `resize`.
+#[test]
+fn sound_user_mutator_name_invariant_uaf() {
+    security_safe(
+        "sound_user_mutator_name_invariant_uaf",
+        "helloworld\nhelloworld",
+    );
+}
+
 /// LIVE — the intra-function sever. Green today; goes RED if a chokepoint
 /// rejects on "a view of `v` exists in scope" instead of "a view of `v` is live
 /// at this call".
