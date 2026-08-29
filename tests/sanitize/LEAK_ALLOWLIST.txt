@@ -35,9 +35,6 @@ async_task_group_fire
 atomic_int_amp_param
 borrow_field_lazy_dict_iter
 borrow_field_method_dispatch
-box_trait_closure_return
-box_trait_option_variant
-box_trait_struct_field
 box_trait_vector_lit
 builtin_oracle_sync_deque
 builtin_oracle_sync_dict
@@ -143,13 +140,11 @@ httpserver_body_parsers
 httpserver_concurrent
 httpserver_e2e
 httpserver_json
-httpserver_methods
 httpserver_middleware
 httpserver_protocol
 httpserver_query_string
 httpserver_router
 httpserver_router_extended
-httpserver_routing
 httpserver_static
 httpserver_static_enhanced
 io_input
@@ -185,7 +180,6 @@ p2p_stream_robust
 path_funcs
 path_normalize
 pool_composable
-print_trait_object
 process_pipe
 process_spawn
 query_basic
@@ -241,10 +235,8 @@ shared_with_refresh
 shared_with_spawned_refresh
 snag11_from_mediated_propagation
 snag49a_throws_for_iter
-snag51_closure_block_tail_value
 snag54_result_out_fallthrough
 snag55_dict_get_or_in_callee
-sound_move_operand_closure_tail_allowed
 spawn_blocking_multi
 spawn_closure_copy
 sqlite_basic

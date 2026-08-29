@@ -1,0 +1,38 @@
+# R47 Track B — PER-ARM POSITIVE CONTROL for the COMPENSATION that makes the
+# adapter arms safe to convert.
+#
+# CELL: arm = combinator adapter, `Callable[T]`-PARAMETER branch
+# (`methods.rs`, `__callable_N` inside `call_closure_in_adapter`) ·
+# combinator = `Option.unwrap_or_else` on the None path · payload = String.
+#
+# ⚠ THIS IS THE ARM A PRIOR REVIEW READ AS "ACCIDENTALLY CLEAN". Its probe was
+# reported CLEAN by a harness that greps only for LeakSanitizer's summary
+# line; the same probe was in fact aborting with an ASan STACK-BUFFER-OVERFLOW
+# that the harness never looked for. The overflow is a separate, still-open
+# defect (the adapter infers `Option[i64]` for the result when the closure is
+# a type-erased `Callable` parameter, then the caller reads the slot as
+# `Option[String]`) — `unwrap_or_else` is used here precisely because it takes
+# its result type from the receiver rather than from that inference, so this
+# fixture exercises the arm without tripping the unrelated bug.
+#
+# RED-VERIFIED: with the register-at-birth conversion applied but the
+# tracker-side transfer in `assign_result_local_move` REMOVED, this program
+# aborts under ASan with `attempting double-free`, 3/3 runs. CLEAN 3/3 at
+# pristine `f3feea79` and CLEAN 3/3 with the full change.
+#
+# The argument is a NAMED FUNCTION so the fixture is not contaminated by the
+# separate `__gorget_closure_env_alloc` leak.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only.
+String mk(String a, String b):
+    return a + b
+
+String maker():
+    return mk("hel", "lo")
+
+String pick(Callable[String()] f):
+    Option[String] o = None()
+    return o.unwrap_or_else(f)
+
+void main():
+    print(pick(maker))

@@ -23549,3 +23549,132 @@ fn cow_prescan_walkers_have_no_catch_all_arm() {
         offenders.join("\n  ")
     );
 }
+
+// ── R47 Track B: the retiring guard for the "call result never registered for
+//    drop at its birth" class (Core #3 / Core #6). ───────────────────────────
+//
+// THE CLASS. A lowering arm that mints a call destination with a raw
+// `builder.call(...)` produces a freshly-owned, droppable value that NOTHING
+// registers for drop. It leaks — once per call, unbounded inside a loop. Nine
+// arms had it: the closure/`Callable`/escaped-closure/IIFE/expression-callee
+// call sites, the `Box[Trait]` vtable dispatch, and the three branches of the
+// combinator adapter's `call_closure_in_adapter`. All nine now route through
+// `LoweringContext::call_indirect_tracked`.
+//
+// WHY THE GUARD IS KEYED ON THE PRODUCER EXPRESSION and not on the callee-name
+// manufacture route (`format!("__callable_{}")` and friends): one of the nine
+// arms manufactures NO name — its callee is a `Constant::FuncRef`, i.e. a
+// STATICALLY NAMED symbol — so a manufacture-route guard is structurally blind
+// to exactly the arm whose membership was hardest to establish. Keying on
+// `builder.call(` sees every arm regardless of how its callee is spelled, and
+// that is what makes this guard able to catch its OWN class: a TENTH arm
+// written the old way changes a count here and the lint goes red, even though
+// it is nowhere near the chokepoint.
+//
+// WHY A CENSUS AND NOT A BAN. A raw `builder.call` is legitimate when the
+// result is not droppable, or when the arm hand-registers it (the `Mutex` /
+// `RWLock` `.lock()` guard arms do exactly that, correctly), or when the
+// transform emits its own paired teardown (`shared_async.rs`). Banning the
+// producer would false-red on correct code; pinning its census forces the next
+// author to look at this comment and classify their new site.
+//
+// HOW TO UPDATE: add or remove a site, run this test, and move the count. If
+// the new site dispatches through a runtime value, or otherwise mints an owned
+// droppable result, route it through `ctx.call_indirect_tracked` instead and
+// the raw count will not change at all.
+const RAW_BUILDER_CALL_CENSUS: &[(&str, usize)] = &[
+    ("src/ir/lowering/context.rs", 2),
+    ("src/ir/lowering/exprs/calls.rs", 8),
+    ("src/ir/lowering/exprs/methods.rs", 25),
+    ("src/ir/lowering/exprs/mod.rs", 9),
+    ("src/ir/lowering/exprs/shared.rs", 22),
+    ("src/ir/lowering/exprs/spawn.rs", 17),
+    ("src/ir/lowering/stmts/assigns.rs", 3),
+    ("src/ir/lowering/stmts/mod.rs", 9),
+    ("src/ir/lowering/traits.rs", 1),
+];
+
+/// The nine arms routed through the chokepoint, by file and count.
+const INDIRECT_TRACKED_ARMS: &[(&str, usize)] = &[
+    ("src/ir/lowering/exprs/calls.rs", 5),
+    ("src/ir/lowering/exprs/methods.rs", 4),
+];
+
+fn count_occurrences(needle: &str) -> Vec<(String, usize)> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    visit(root.join("src/ir/lowering"), &mut |path| {
+        if path.extension().map_or(true, |e| e != "rs") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let mut n = 0;
+        for line in content.lines() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            n += line.matches(needle).count();
+        }
+        if n > 0 {
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            counts.push((rel, n));
+        }
+    });
+    counts.sort();
+    counts
+}
+
+#[test]
+fn indirect_dispatch_results_registered_at_birth() {
+    // Arm a — the producer census. A NEW raw `builder.call(` anywhere under
+    // `src/ir/lowering/` fails here, which is the property that lets this
+    // guard catch its own class rather than only today's instances.
+    let found = count_occurrences("builder.call(");
+    let expected: Vec<(String, usize)> = RAW_BUILDER_CALL_CENSUS
+        .iter()
+        .map(|(f, n)| (f.to_string(), *n))
+        .collect();
+    assert_eq!(
+        found, expected,
+        "Raw `builder.call(` producer census drifted under src/ir/lowering/.\n\
+         found:    {found:?}\n\
+         expected: {expected:?}\n\n\
+         A raw `builder.call` mints a call destination that NOTHING registers for \
+         drop. If your new site's result is a freshly-owned droppable value whose \
+         callee is resolved through a runtime value (a closure env, a `Callable` \
+         slot, a trait-object vtable) — or is any owned result minted by the \
+         closure/adapter dispatch lowering — route it through \
+         `LoweringContext::call_indirect_tracked` and this count stays put. If it \
+         is genuinely out of class (non-droppable result, hand-registered like the \
+         `Mutex`/`RWLock` guard arms, or paired with its own emitted teardown like \
+         `shared_async.rs`), say which in your commit and move the count.\n\
+         See the comment above RAW_BUILDER_CALL_CENSUS in this file."
+    );
+
+    // Arm b — the routing pin. Deleting a routing (turning an arm back into a
+    // raw producer) trips arm a; deleting it by rewriting the arm away trips
+    // this one.
+    let routed = count_occurrences("call_indirect_tracked(builder");
+    let expected_routed: Vec<(String, usize)> = INDIRECT_TRACKED_ARMS
+        .iter()
+        .map(|(f, n)| (f.to_string(), *n))
+        .collect();
+    assert_eq!(
+        routed, expected_routed,
+        "Indirect-dispatch chokepoint routing drifted.\n\
+         found:    {routed:?}\n\
+         expected: {expected_routed:?}\n\n\
+         The nine arms that dispatch through a runtime-resolved callee must each \
+         register their result at its birth (Core #3). Regression fixtures: \
+         tests/fixtures/security/indirect_*_call_result_leak.gg (leak direction) \
+         and tests/fixtures/security/*_transferred_no_double_free.gg (the \
+         over-registration direction)."
+    );
+}

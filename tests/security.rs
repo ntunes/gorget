@@ -1290,13 +1290,13 @@ fn sec_92_static_set_runtime() {
 /// closure body and returned through the closure's call thunk. Also distinct
 /// from the 3-byte thunk residual in the same report, which is a separate
 /// known residual.
+/// GRADUATED (R47 Track B) from an `#[ignore]`d known gap to a live guard.
+/// Measured 35 B / 2 allocations at pristine `f3feea79`, 3/3 runs; CLEAN 3/3
+/// once the closure call thunk's result is registered at its birth. Both
+/// allocations in the report — the boxed trait object and the vtable thunk's
+/// String return — were the same defect at two arms.
 #[test]
-#[ignore = "SECURITY KNOWN GAP (R45, found by Track A brief-review pass 16, \
-orchestrator-verified): a Boxed trait object minted in a closure and returned \
-leaks 32 bytes direct via __gorget_box_alloc_Robot <- __Closure_0__call. The \
-fixture is value-tested only, so the leak was invisible. Un-ignore when the \
-closure-return path registers the mint for drop."]
-fn known_gap_box_trait_closure_return_leaks() {
+fn box_trait_closure_return_no_leak() {
     security_safe_no_leak("box_trait_closure_return_leak", "R2");
 }
 
@@ -2195,4 +2195,208 @@ fn guard_get_into_index_set_temp_fixed() {
 #[test]
 fn guard_get_named_local_into_dict_put_pin() {
     security_safe("guard_get_named_local_into_dict_put", "1");
+}
+
+// ── R47 Track B: indirect-dispatch call results are registered at their birth.
+//
+// Nine lowering arms minted a freshly-owned, droppable call result with a raw
+// `builder.call` and registered it nowhere, so every such call leaked its
+// result — once per call, i.e. UNBOUNDED inside a loop. All nine now route
+// through `LoweringContext::call_indirect_tracked`.
+//
+// THE NET HAS TWO DIRECTIONS, because the fix could fail either way.
+//
+//   * `*_call_result_leak` — the UNDER-registration direction. Each is
+//     RED-verified at pristine `f3feea79`, byte counts in the fixture headers.
+//   * `*_transferred_no_double_free` — the OVER-registration direction: the
+//     result is copied ONWARD into a second live slot, because both runtime
+//     release paths self-null BY DESIGN (`gorget_string_free` zeroes the `Str`
+//     after the dealloc, explicitly "so double-free is safe") and a second
+//     release through the SAME slot is therefore a silent no-op. The three
+//     `combinator_*` controls are RED-verified against the conversion WITHOUT
+//     its compensating ownership transfer (ASan `attempting double-free`,
+//     3/3 runs each); see each header for what the other six pin.
+//
+// Every one of these is C-lane only: `--sanitize` adds no instrumentation on
+// the LLVM backend, so an "ASan-clean on both lanes" claim would be vacuous.
+
+/// S1 — closure-STRUCT local (`__Closure_N__call`). RED at HEAD: 6 B / 1.
+#[test]
+fn indirect_closure_struct_call_result_no_leak() {
+    security_safe_no_leak("indirect_closure_struct_call_result_leak", "hello");
+}
+
+/// S2 — `Callable[T]` PARAMETER (`__callable_N`). RED at HEAD: 6 B / 1.
+#[test]
+fn indirect_callable_param_call_result_no_leak() {
+    security_safe_no_leak("indirect_callable_param_call_result_leak", "hello");
+}
+
+/// S3 — ESCAPED closure in an `FnPtr` local (`__gorget_closure_call_N`).
+/// RED at HEAD: 6 B / 1.
+#[test]
+fn indirect_escaped_closure_call_result_no_leak() {
+    security_safe_no_leak("indirect_escaped_closure_call_result_leak", "hello");
+}
+
+/// S4 — IIFE. RED at HEAD: 6 B / 1.
+#[test]
+fn indirect_iife_call_result_no_leak() {
+    security_safe_no_leak("indirect_iife_call_result_leak", "hello");
+}
+
+/// S5 — `Box[Trait]` vtable dispatch. RED at HEAD: 4 B / 1.
+#[test]
+fn indirect_boxtrait_vtable_call_result_no_leak() {
+    security_safe_no_leak("indirect_boxtrait_vtable_call_result_leak", "R2!");
+}
+
+/// S9 — EXPRESSION callee (`make()()`), the ninth arm, missing from the filed
+/// set until this round. RED at HEAD: 6 B / 1.
+#[test]
+fn indirect_expr_callee_call_result_no_leak() {
+    security_safe_no_leak("indirect_expr_callee_call_result_leak", "hello");
+}
+
+/// REPETITION axis — vtable dispatch in a loop. RED at HEAD: 20 B / **5**
+/// allocations for 5 iterations. The unboundedness is the point.
+#[test]
+fn indirect_boxtrait_vtable_loop_unbounded_no_leak() {
+    security_safe_no_leak("indirect_boxtrait_vtable_loop_unbounded_leak", "15");
+}
+
+/// REPETITION axis — escaped closure in a loop. RED at HEAD: 30 B / 5.
+#[test]
+fn indirect_escaped_closure_loop_unbounded_no_leak() {
+    security_safe_no_leak("indirect_escaped_closure_loop_unbounded_leak", "25");
+}
+
+/// PAYLOAD-TYPE axis — the result is a `Vector[int]`, not a String. A fix that
+/// registered only owned Strings would leave this red and every other cell
+/// green. RED at HEAD: 64 B / 1.
+#[test]
+fn indirect_closure_vector_payload_no_leak() {
+    security_safe_no_leak("indirect_closure_vector_payload_leak", "2");
+}
+
+/// RECEIVER-ROOT axis — the trait object lives in a struct field, not a bare
+/// local. RED at HEAD: 4 B / 1.
+#[test]
+fn indirect_boxtrait_struct_field_root_no_leak() {
+    security_safe_no_leak("indirect_boxtrait_struct_field_root_leak", "R2!");
+}
+
+/// NEGATIVE CONTROL — three statically-dispatched shapes, including the SAME
+/// trait method on a CONCRETE receiver. Proves the discriminator is
+/// indirection, not traits, and pins the conversion's blast radius.
+#[test]
+fn direct_dispatch_call_result_stays_clean() {
+    security_safe_no_leak("direct_dispatch_call_result_no_leak", "hello\nt?\nR2!");
+}
+
+/// KNOWN GAP `t0772` — the MIRROR of the class this block fixes: the
+/// combinator adapter CLONES its receiver and then unregisters the ORIGINAL,
+/// so `o.map(...)` leaks `o`'s payload. 6 B / 1, 3/3 runs at `f3feea79` and
+/// unchanged by this track (over-unregistration at a consumer, not
+/// under-registration at a producer). Un-ignore when the adapter's
+/// move-if-dead prologue stops unregistering a receiver it only cloned.
+#[test]
+#[ignore = "KNOWN GAP t0772: the combinator adapter unregisters a receiver it \
+CLONED, leaking the original's payload (6 B / 1)"]
+fn known_gap_option_map_clones_receiver_then_unregisters_it() {
+    security_safe_no_leak(
+        "option_map_clones_receiver_then_unregisters_it_leak",
+        "hello!",
+    );
+}
+
+/// The ASan-armed twin of `tests/fixtures/print_trait_object.gg`, which had no
+/// gap test to graduate: it was wired as a stdout comparison only, so it stayed
+/// green for rounds while leaking. RED at HEAD: 5 B / 1 — the figure filed
+/// against it (61 B / 2) had decayed and is refuted.
+#[test]
+fn print_trait_object_stays_leak_free() {
+    security_safe_no_leak(
+        "print_trait_object_no_leak",
+        "gear\n7\n3.140000\ntrue",
+    );
+}
+
+/// POSITIVE CONTROL, adapter closure-struct branch. RED (ASan double-free,
+/// 3/3) against the conversion with its ownership transfer removed.
+#[test]
+fn combinator_closure_result_transferred_stays_clean() {
+    security_safe_no_leak("combinator_closure_result_transferred_no_double_free", "hello");
+}
+
+/// POSITIVE CONTROL, adapter `Callable`-parameter branch. RED (ASan
+/// double-free, 3/3) against the conversion with its transfer removed.
+#[test]
+fn combinator_callable_param_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "combinator_callable_param_result_transferred_no_double_free",
+        "hello",
+    );
+}
+
+/// POSITIVE CONTROL, adapter `FuncRef` branch — a STATICALLY NAMED callee that
+/// is nonetheless in the class. RED (ASan double-free, 3/3) against the
+/// conversion with its transfer removed.
+#[test]
+fn combinator_funcref_result_transferred_stays_clean() {
+    security_safe_no_leak("combinator_funcref_result_transferred_no_double_free", "hello");
+}
+
+/// POSITIVE CONTROL, S1 — result transferred into a container that outlives it.
+#[test]
+fn indirect_closure_struct_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_closure_struct_result_transferred_no_double_free",
+        "2\nhello\nhello",
+    );
+}
+
+/// POSITIVE CONTROL, S2 — result transferred into a container that outlives it.
+#[test]
+fn indirect_callable_param_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_callable_param_result_transferred_no_double_free",
+        "2\nhello\nhello",
+    );
+}
+
+/// POSITIVE CONTROL, S3 — result transferred into a container that outlives it.
+#[test]
+fn indirect_escaped_closure_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_escaped_closure_result_transferred_no_double_free",
+        "2\nhello\nhello",
+    );
+}
+
+/// POSITIVE CONTROL, S4 — result transferred into a container that outlives it.
+#[test]
+fn indirect_iife_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_iife_result_transferred_no_double_free",
+        "2\nhello\nworld",
+    );
+}
+
+/// POSITIVE CONTROL, S5 — result transferred into a container that outlives it.
+#[test]
+fn indirect_boxtrait_vtable_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_boxtrait_vtable_result_transferred_no_double_free",
+        "2\nR2!\nR2!",
+    );
+}
+
+/// POSITIVE CONTROL, S9 — result transferred into a container that outlives it.
+#[test]
+fn indirect_expr_callee_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_expr_callee_result_transferred_no_double_free",
+        "2\nhello\nhello",
+    );
 }

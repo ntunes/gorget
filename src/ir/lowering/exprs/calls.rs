@@ -1886,7 +1886,7 @@ pub(super) fn lower_call(
                         builder.call_void(call_fn, call_args);
                         return Operand::Constant(Constant::Unit);
                     } else {
-                        let dst = builder.call(call_fn, call_args, ret_type);
+                        let dst = ctx.call_indirect_tracked(builder, call_fn, call_args, ret_type);
                         return FunctionBuilder::copy(dst);
                     }
                 }
@@ -1984,7 +1984,7 @@ pub(super) fn lower_call(
                     builder.call_void(callable_name, call_args);
                     return Operand::Constant(Constant::Unit);
                 }
-                let dst = builder.call(callable_name, call_args, ret_type);
+                let dst = ctx.call_indirect_tracked(builder, callable_name, call_args, ret_type);
                 return FunctionBuilder::copy(dst);
             }
             // FnPtr-typed local: escaped closure returned from a function, stored as GorgetClosure.
@@ -2028,7 +2028,7 @@ pub(super) fn lower_call(
                     builder.call_void(callable_name, call_args);
                     return Operand::Constant(Constant::Unit);
                 } else {
-                    let dst = builder.call(callable_name, call_args, fn_ret);
+                    let dst = ctx.call_indirect_tracked(builder, callable_name, call_args, fn_ret);
                     return FunctionBuilder::copy(dst);
                 }
             }
@@ -2287,7 +2287,7 @@ pub(super) fn lower_call(
                             builder.call_void(&call_fn, call_args);
                             return Operand::Constant(Constant::Unit);
                         } else {
-                            let dst = builder.call(&call_fn, call_args, ret_type);
+                            let dst = ctx.call_indirect_tracked(builder, &call_fn, call_args, ret_type);
                             return FunctionBuilder::copy(dst);
                         }
                     }
@@ -2359,7 +2359,7 @@ pub(super) fn lower_call(
             builder.call_void(callable_name, call_args);
             Operand::Constant(Constant::Unit)
         } else {
-            let dst = builder.call(callable_name, call_args, ret_type);
+            let dst = ctx.call_indirect_tracked(builder, callable_name, call_args, ret_type);
             FunctionBuilder::copy(dst)
         }
     }

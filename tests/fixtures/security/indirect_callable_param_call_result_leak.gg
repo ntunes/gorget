@@ -1,0 +1,31 @@
+# R47 Track B — INDIRECT-DISPATCH CALL RESULT NEVER REGISTERED FOR DROP.
+#
+# CELL: arm = `Callable[T]` PARAMETER (its GIR local type is erased to unit,
+# so the call lowers to the synthetic `__callable_N` indirect callee) ·
+# position = discarded temp · payload = String · single call.
+# Write site: `src/ir/lowering/exprs/calls.rs`, the `UNIT_TYPE`-local arm.
+#
+# ⚠ WHY THE ARGUMENT IS A NAMED FUNCTION AND NOT A CLOSURE LITERAL. Passing
+# `(): mk("hel","lo")` exercises the same arm, but it additionally allocates a
+# closure environment through `__gorget_closure_env_alloc` — a DIFFERENT
+# producer with its own 8-byte leak, known debt across ~77 corpus fixtures and
+# explicitly out of this fixture's scope. `security_safe_no_leak` rejects ANY
+# sanitizer output, so a closure-literal argument would leave this cell
+# permanently un-wireable. A `FuncRef` argument isolates the call-result
+# producer exactly.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only (ASan is a no-op under
+# `--backend=llvm`).
+#
+# RED-VERIFIED at pristine `f3feea79`: LEAK 6 byte(s) / 1 allocation, 3/3 runs.
+String mk(String a, String b):
+    return a + b
+
+String maker():
+    return mk("hel", "lo")
+
+void call_it(Callable[String()] f):
+    print(f())
+
+void main():
+    call_it(maker)

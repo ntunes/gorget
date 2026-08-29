@@ -1,0 +1,30 @@
+# R47 Track B — INDIRECT-DISPATCH CALL RESULT NEVER REGISTERED FOR DROP.
+#
+# CELL: arm = closure-STRUCT local (`auto f = (): ...` keeps the
+# `__Closure_N` struct type, so the call lowers to `__Closure_N__call`) ·
+# position = discarded temp (printed) · payload = String · single call.
+# Write site: `src/ir/lowering/exprs/calls.rs`, the identifier-callee
+# closure-info arm.
+#
+# THE DEFECT: the arm minted the call result with a raw `builder.call`, so
+# nothing registered the freshly-owned String for drop (Core #3). Every such
+# call leaked its result — once per call, i.e. UNBOUNDED in a loop.
+#
+# INSTRUMENT: the leak is stdout-invisible; only a LeakSanitizer-armed run
+# sees it. `security_safe_no_leak`, C lane. ASan is a NO-OP on the LLVM lane
+# (`--sanitize` adds no instrumentation there), so this fixture pins the C
+# lane only — that cell is structurally unavailable, not omitted by choice.
+#
+# THE PAYLOAD IS HEAP-FORCED. `(): "hello"` returns a static literal view and
+# is CLEAN even unfixed; `mk()` concatenates, so the result is a real heap
+# allocation. A literal here would make the fixture green on arrival.
+#
+# RED-VERIFIED at pristine `f3feea79`: LEAK 6 byte(s) / 1 allocation, 3/3
+# runs, frame `__gorget_global_alloc_fn <- gorget_str_cat <- mk <-
+# __Closure_0__call <- main`.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    auto f = (): mk("hel", "lo")
+    print(f())

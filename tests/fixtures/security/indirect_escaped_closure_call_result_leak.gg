@@ -1,0 +1,21 @@
+# R47 Track B — INDIRECT-DISPATCH CALL RESULT NEVER REGISTERED FOR DROP.
+#
+# CELL: arm = ESCAPED closure held in an `FnPtr`-typed local (a closure
+# returned out of a function keeps its `GorgetClosure` representation, so the
+# call lowers to `__gorget_closure_call_N`) · position = discarded temp ·
+# payload = String · single call.
+# Write site: `src/ir/lowering/exprs/calls.rs`, the `GirType::FnPtr`-local arm.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only (ASan is a no-op under
+# `--backend=llvm`).
+#
+# RED-VERIFIED at pristine `f3feea79`: LEAK 6 byte(s) / 1 allocation, 3/3 runs.
+String mk(String a, String b):
+    return a + b
+
+Callable[String()] make():
+    return (): mk("hel", "lo")
+
+void main():
+    Callable[String()] g = make()
+    print(g())

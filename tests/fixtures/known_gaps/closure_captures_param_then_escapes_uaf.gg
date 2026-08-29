@@ -1,0 +1,42 @@
+# KNOWN GAP — a closure that CAPTURES A PARAMETER and then ESCAPES its
+# defining function reads freed memory. `AddressSanitizer: heap-use-after-free`
+# under `--sanitize`; on a plain build rc 0 with SILENTLY WRONG OUTPUT, which
+# is the worse outcome. Deterministic, 3/3 runs, at `f3feea79` and unchanged by
+# R47 Track B.
+#
+# MECHANISM. `make_adder` takes `String p`, builds a closure capturing `p`, and
+# returns it. `p` is a parameter — a BORROW — and the capture stores the
+# borrowed handle rather than an owned copy, so `make_adder`'s scope exit frees
+# `p` while the escaping closure environment still points at it:
+#
+#     freed by:   gorget_string_free  <- make_adder  <- main
+#     read by:    gorget_str_cat      <- mk          <- __Closure_0__call
+#
+# A closure capture IS an ownership boundary — "Clones happen only at ownership
+# boundaries, where the destination must own (… returns, closure captures)" —
+# so the capture must clone-if-the-source-is-live / move-if-it-is-dead. Here it
+# does neither.
+#
+# ⚠ FAMILY, AND WHAT DISCRIMINATES THIS MEMBER. `t0704` is the same boundary
+# (closure capture) but its trigger is MUTATION of the captured collection
+# (64 pushes force a realloc under a captured element view) and the value is a
+# local. `t0108`(c) is the same boundary for a refcount `Shared` handle. THIS
+# one needs no mutation and no collection: the captured thing is a PARAMETER,
+# and the deallocation is the DEFINING FUNCTION'S OWN scope exit, reached
+# purely by the closure outliving its frame via `return`. So a fix aimed at the
+# mutation prescan or at refcount incref closes neither of the others nor this.
+#
+# ⚠ THE CAPTURE MUST BE A PARAMETER. `Callable[String()] make(): return (): mk("hel","lo")`
+# — same escape, no capture — is CLEAN at HEAD, so the escape alone is not the
+# defect.
+#
+# INTENDED: prints `hello`, rc 0, on C and LLVM, ASan-clean.
+String mk(String a, String b):
+    return a + b
+
+Callable[String()] make_adder(String p):
+    return (): mk(p, "lo")
+
+void main():
+    Callable[String()] g = make_adder("hel")
+    print(g())

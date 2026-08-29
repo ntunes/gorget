@@ -1,0 +1,43 @@
+# R47 Track B — INDIRECT-DISPATCH CALL RESULT NEVER REGISTERED FOR DROP,
+# MEASURED ON THE REPETITION AXIS.
+#
+# CELL: arm = `Box[Trait]` vtable dispatch · position = DISCARDED TEMP inside
+# a LOOP · payload = String · 5 iterations.
+#
+# ⚠ THE RESULT MUST NOT BE BOUND TO A NAMED LOCAL. Writing
+# `String s = b.speak()` inside the loop makes this fixture GREEN at pristine
+# HEAD: the named-local binding takes ownership downstream and rescues the
+# unregistered temp. That rescue is exactly why three earlier censuses read
+# this class as "unnamed temps leak" and missed the real discriminator. The
+# loop body therefore consumes the result as a temp.
+#
+# ⚠ WHY THIS CELL EXISTS SEPARATELY. The single-call cells make the defect
+# look like fixed-size resource debt. It is not: the result is minted fresh on
+# EVERY call, so the leak scales with iteration count — any loop calling a
+# trait-object method leaks O(iterations). This fixture pins the unbounded
+# character, and a partial regression that re-leaks only the loop shape trips
+# here and nowhere else.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only (ASan is a no-op under
+# `--backend=llvm`).
+#
+# RED-VERIFIED at pristine `f3feea79`: LEAK 20 byte(s) / 5 allocations, 3/3
+# runs — five allocations for five iterations, which is the point.
+from std.collections import Box
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+void main():
+    Box[Speaker] b = Box.new(Robot("R2"))
+    int n = 0
+    for i in 0..5:
+        n = n + b.speak().len()
+    print(n)
