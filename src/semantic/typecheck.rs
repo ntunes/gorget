@@ -3579,7 +3579,7 @@ impl<'a> TypeChecker<'a> {
                                 // without appearing in `builtin_method_type`.
                                 // Exempt them here exactly as the
                                 // `base_name.is_some()` path does above
-                                // (`:2256-2263`). LAYERING NOTE (Core #1/#3):
+                                // (`:3145-3148`). LAYERING NOTE (Core #1/#3):
                                 // `builtin_method_type` (this file) and the IR
                                 // `GORGET_STRING_VIEW` protocol
                                 // (ir/lowering/builtins.rs) are two parallel
