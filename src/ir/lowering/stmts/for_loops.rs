@@ -1517,15 +1517,16 @@ fn lower_for_iterable_with(
 
     // 5. Bind the iterator. The two paths have OPPOSITE ownership, so both
     // ownership axes — drop registration and the ownership tag — are decided
-    // HERE, per branch, at the producer. Same shape as the codepoint arm's
-    // three-way decision at `:520-540`: the borrow branches tag a reference
-    // and register nothing, the owning branch registers the drop.
+    // HERE, per branch, at the producer. Same shape as `lower_for_string_with`'s
+    // three-way `iter_local` decision (`source_is_owning_named` /
+    // `source_is_ptr_typed` / owned): the borrow branches tag a reference and
+    // register nothing, the owning branch registers the drop.
     let iterator_place = if let Some(ref iter_fn) = iter_fn_name {
         // ── OWNED branch ──────────────────────────────────────────────
         // `iter(&collection)` mints a FRESH iterator object, returned by
         // value. `collection_local` is a non-owning view into the caller's
-        // data — same shape as the deref-Ptr case at line 54 — so only the
-        // iterator itself is owned here.
+        // data — `init_borrow_iter_local`'s resource-type `AssignMode::Borrow`
+        // — so only the iterator itself is owned here.
         let (collection_local, iter_type_full) = init_borrow_iter_local(ctx, builder, iter_op);
         let self_ptr_type = ctx.register_ptr_type(iter_type_full);
         let self_ref = builder.borrow(Place::local(collection_local), self_ptr_type);
