@@ -16,40 +16,44 @@ for these three specifically.** Every one of their measurements was taken agains
 figure against the post-G HEAD before acting on it** (Core #5). The reports' reasoning survives; their numbers may
 not. Everything durable is already in `todo/` regardless.
 
-**DELIVERY ORDER AND STATE:** **D** (`t0036`, closest: predicate-only, 9 passes,
-last two found only mechanical edits) → **F** (`t0699`+`t0703`, owner-ordered) → **A** (`t0697`, 15 passes, still
-RESERVATIONS — **needs a scope cut like D got**, not more passes at the current scope).
+**R45 IS CLOSED (2026-08-29).** Full record in `DONE.md`; the round-close battery was green on every gate
+and the convergence line is quoted there. Do not re-derive R45 state from this block — read `DONE.md`.
 
-**⚠⚠ R45 PRIORITY RESET — OWNER, 2026-08-27: FIX HEAD FIRST.** Track G was that fix and it has LANDED:
-`self_host_runtime` is green (see below), so **the remaining tracks continue FROM the fixed HEAD** —
-each re-bases and re-runs its own measurements. Every self-host reading taken BEFORE Track G integrated
-is unsound and must be regenerated, not carried forward (Core #5). The owner's constraints on that track
-still describe the standing policy for this gate: no re-seed, no `#[ignore]`, no allowlist, no ceiling
-raise. The bisect that was in flight is moot — the mechanism was established by measurement, and the
-lesson it left is the general one: **a bisect names a COMMIT, not a MECHANISM.**
+**R46 THEME — THE MEMORY-SAFETY CLUSTER.** The owner-agreed order is: the memory-safety cluster first, then
+robustness gaps, then A2 only if its style review passes with the owner in the loop. **DEEP-1 is explicitly a
+LATER round.** Scout material is preserved at `/tmp/r45/scout-memsafety.md` with two review passes at
+`/tmp/r45/brief-review-H-pass{1,2}.md`; the brief itself (`/tmp/r45/brief-memsafety.md`) reached 0-of-5 on the
+readiness checklist and **must be rewritten as TWO briefs before any executor runs**: Class B (trait-box
+coercion + element drop, `t0709`+`t0700`) and the call-result registration class (`t0708`+`t0518`), the latter
+needing its own scout because its site set is unknown.
 
-**⚠ TRACK G's CEILING BUMPS ARE AN OPEN OWNER ASK.** All four `clone_ceiling` constants are re-seeded to
-this tree's measured values and every one of the four comment blocks says, in terms, that NO owner
-authorised them (an earlier revision claimed otherwise — that was false provenance and is corrected).
-The stage-1 string axis is +13.31% (quote the tree: `tests/integration.rs`, not any report). The cause is censused, not argued: the CoW mutation-path peel newly
-marks 35 root identifiers, and the mark is ROOT-granular rather than PATH-granular, so each one
-suppresses the borrow-flip for every bind rooted at that name. `todo/t0715` carries the full 2×2 and the
-reclaim. The owner's call is: accept the four numbers with the debt named, or revert the constants
-(values inline in each block) and let the gate go red until the reclaim lands.
+**⚠ STANDING CORRECTION FOR R46, EARNED THE HARD WAY IN R45.** A brief states the QUESTION and the ACCEPTANCE
+BAR. It does **not** carry a pre-computed census: the orchestrator wrote one into a brief three times and was
+wrong all three times (a wrong function name, then a local-variable-name grep that missed two arms, then a
+mechanism that was not even the right one), and each error cost a full review cycle to discover. The executor
+derives the enumeration exhaustively and the reviewer checks it against an independent witness.
 
-**R45 TRACK ORDER — OWNER-SET, 2026-08-27, as amended above.** Tracks A (Box ctor / trait pack), C (`for`-loop element
-bindings + D49), D (extraction sites) are mid-gauntlet. **Track F = fix `t0699` + `t0703`** (the two
-CRITICAL live UAFs; owner-ordered fixed THIS round) is scouting. (`t0702` was resequenced ahead of F by
-the owner's 2026-08-27 reset and has since LANDED.)
+**⚠ INHERITED DEBT, AND TWO ROWS OF IT ARE THIS SESSION'S OWN.** `self_host_runtime_diff` is RED at non-MATCH
+153 against ceiling 151. Track G adds ZERO rows and is −9 on the backlog; the +2 are
+`liveness_use_inside_unsafe_scope` and `liveness_on_error_seed_kill_leak`, from regressions shipped earlier in
+R45. **Do not raise that ceiling** — port the two fixtures. Regenerate with
+`cargo test --test integration --release self_host_runtime_diff -- --nocapture` (release only: in debug the
+MATCH floor is release-gated and the non-MATCH ceiling is skipped, so it walks the whole corpus and enforces
+NEITHER gate — `todo/t0713`).
 
-**`t0702` IS CLOSED — `self_host_runtime` IS GREEN.** Track G's chain-link fix removed all 7 CC-FAIL
-rows; the rework re-measured it on the integrated tree: `passing set 1377 / regressed 0`. Regenerate with
-`GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 cargo test --test integration --release
-self_host_runtime -- --exact self_host_runtime --nocapture`. The standing rule survives the closure and
-still binds: never re-seed this gate with `GG_REGEN_RUNTIME_SNAPSHOT=1` on a CC-FAIL row — that pins a
-miscompile as canonical. The bisect that was in flight for it is moot; the mechanism was found by
-measurement, not by the bisect (a targ-recorder cost filter that modelled only ONE of
-`infer_expr_type`'s two output channels).
+**HELD TRACKS, none of them started.** Track A (`t0697`, Box ctor / trait pack) is 15 passes in and needs a
+SCOPE CUT, not more passes. Track D (`t0036`) is 9 passes in, predicate-only. Track F (`t0699`+`t0703`, two
+CRITICAL live UAFs, owner-ordered) is scouting. The D50 rework is unmerged on branch
+`worktree-agent-adbbb7a3c30abbc07` — its review found the new `language-design.md` §11 example fails with 10
+parse errors and the same broken form was copied into `docs/book/21-interop.md`. `t0717`/`t0718` carry the
+name-match class retirement (D51 records that the typed mechanism already exists; adding `"Box"` to the name
+list is explicitly NOT an acceptable fix). `t0712` is under-graded at MED — it owns a deterministic SIGBUS on
+beginner code and blocks a class fix that would close five measured cells at once.
+
+**ON RESUMING ANY HELD TRACK: re-read its report, then RE-MEASURE every load-bearing number.** Every
+self-host reading taken before Track G integrated is unsound (Core #5). The standing gate policy survives the
+closure: no re-seeding snapshots (`GG_REGEN_RUNTIME_SNAPSHOT=1` pins a miscompile as canonical), no
+`#[ignore]`, no allowlist, no ceiling raise.
 
 **⚠ `self_host_runtime_diff` IS STILL RED, AND NOT FOR TRACK G's REASON.** non-MATCH = 153 against
 `RUNTIME_DIFF_NONMATCH_CEILING = 151`. Track G is net **−9** on that backlog and adds ZERO rows (all its
