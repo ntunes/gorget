@@ -30608,7 +30608,60 @@ fn self_host_clone_ceiling() {
 // it is overwhelmingly the CoW peel. Different levers, so do not reclaim them
 // as one — and note the two are ADDITIVE on both axes (the 2x2's whole point),
 // so a reclaim on one does not move the other.
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_124_255_029;
+//
+// ⚠ RE-PINNED 2026-08-29 (R47 Track A2) — the typed per-receiver CoW mutation
+// classifier (`todo/t0699`: a user method's NAME decided memory safety).
+// Regenerated on this tree this session; every figure below is from the run
+// that set these constants.
+//
+//   axis            measured        prior ceiling    delta
+//   stage-1 array   1,125,145,511   1,124,255,029    +890,482    (+0.079%)
+//   stage-1 string  2,361,764,496   2,359,224,224    +2,540,272  (+0.108%)
+//   stage-0 array      13,093,687      13,096,576    -2,889      UNDER, green
+//   stage-0 string     31,378,149      31,379,632    -1,483      UNDER, green
+//
+// WHY THIS IS A JUSTIFIED SEMANTIC COST, and not a bomb.
+// The self-host's scope-set channel now marks the typed user `&self`-mutator
+// receivers the retired `RUST_PRESCAN_MUTATOR_FALLBACK` name list used to
+// suppress — which is precisely what Core #9 REQUIRES now that Rust's prescan
+// marks them (it reads `semantic::safety::ReceiverMutations`, the same typed
+// per-receiver answer). Suppressing them here while Rust marks them there is
+// the lane asymmetry the whole track exists to remove. The cost buys a closed
+// use-after-free class, not a feature.
+//
+// ATTRIBUTION, measured rather than asserted:
+//   * net +16 NON-COMMENT lines of self-host source (+24 comment lines) over
+//     ~132k lines the stage-1 binary must itself compile = +0.012% of input.
+//     Regenerate: `git diff <base>..HEAD -- tests/fixtures/self_host_lowerer/
+//     compiler/data/resources.gg | grep '^+' | grep -vE '^\+\+\+|^\+\s*#' | wc -l`
+//   * so ~6x the source-growth fraction is the lowering-BEHAVIOUR change, i.e.
+//     the widening above. That is the honest split; it is not all bookkeeping.
+//
+// SCALE, so the comparison to the recorded bomb is explicit. The 2026-07-19
+// blowout was 7x (35.2M vs 4.96M probe clones) and a 1332s-vs-600s stage
+// deadline MISS. This is +0.08%, three orders of magnitude smaller, and the
+// STAGE-0 meters moved DOWN on both axes. The prior raise of these same two
+// constants was +1.427% and was owner-ratified; this is 18x smaller.
+//
+// ⚠ A FIRST CUT OF THIS FIX MEASURED WORSE AND WAS NOT SHIPPED. It asked the
+// self-host's `method_mutates_receiver` and a separate Rust-mirror predicate
+// in sequence on every method call in the CoW scan, each rebuilding the
+// `Type__mname` key from scratch: stage-0 string went OVER (+3,065) and
+// stage-1 string was +2,421,419. `cow_recv_mutation_class` answers both halves
+// from ONE resolution, which is what put stage-0 back UNDER on both axes. The
+// ratchet did that work — it is recorded here because a re-pin with no such
+// story is how a ratchet stops being one.
+//
+// STAGE-0 IS DELIBERATELY NOT TIGHTENED to its lower measured values, even
+// though the tighten-only discipline says lowering needs no sign-off: five
+// tracks land in this round and pinning a no-headroom floor from ONE track's
+// branch false-reds the integration. Tighten at round close, on the integrated
+// tree, where the number means something.
+//
+// TO REVERT: 1,124,255,029 / 2,359,224,224, and re-run
+//   GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 \
+//     cargo test --test integration --release clone_ceiling -- --nocapture
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_125_145_511;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -30753,7 +30806,13 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_124_255_029;
 // reverting them and leaving the gate red. This comment preserves the debt: the
 // bump is a SETTLED but UNPAID cost, not an absolution. `todo/t0715` carries the
 // reclaim, and lowering these constants needs no sign-off.
-const STAGE1_STRING_CLONE_CEILING: u64 = 2_359_224_224;
+//
+// ⚠ RE-PINNED 2026-08-29 (R47 Track A2) to 2,361,764,496 (+2,540,272,
+// +0.108%) — the typed per-receiver CoW mutation classifier. Full citation,
+// attribution and scale comparison on `STAGE1_ARRAY_CLONE_CEILING` above; the
+// two were re-pinned together from ONE measurement run and must be read
+// together.
+const STAGE1_STRING_CLONE_CEILING: u64 = 2_361_764_496;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
