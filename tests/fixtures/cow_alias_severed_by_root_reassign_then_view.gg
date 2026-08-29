@@ -13,35 +13,47 @@
 #     ... grow the NEW v ...
 #     print(s)                      # must still be the OLD element
 #
-# WHAT IT PINS, AND WHAT IT CANNOT: the END-TO-END temporal behaviour only.
-# The sever gives `alias` its own copy of the pre-reassignment value, the
-# view taken afterwards reads that copy, and the new `v` goes its own way.
-# That is worth pinning, and it is all this program pins.
+# ⚠ "SEVERED" IN THE NAME DESCRIBES THE PROGRAM'S SHAPE AND THE USER-VISIBLE
+# VALUE SEMANTICS -- NOT A COMPILER MECHANISM. No sever runs here. Measured:
+# `cow_register_alias` (the sole producer of `BorrowOrigin::Alias`) is called
+# ZERO times for this program, `cow_has_aliases` is false at the `v = []`
+# reassignment, and `cow_sever_all_aliases_from` is never entered. Deleting
+# the `v = []` line makes `cow_register_alias` fire, which is the positive
+# control proving the instrument is live.
 #
-# ⚠ NO BREAK-THE-MECHANISM RED WAS FOUND FOR IT, and the reason is a property
-# of the program rather than a gap in the search. After the sever, `s`
-# borrows into the buffer `alias` now owns outright, and NOTHING MUTATES
-# `alias` for the rest of the program -- only `v` grows. A borrow whose
-# buffer is never touched cannot dangle, so no provenance decision is
-# load-bearing here and no amount of breaking the provenance machinery can
-# change this program's output.
+# WHAT ACTUALLY HAPPENS: a bare-identifier bind takes the CoW ALIAS branch
+# (`src/ir/lowering/stmts/mod.rs:1498-1509`) only when neither side is
+# reassigned on a forward path (`is_cow_unsafe_at`). `v` IS reassigned below,
+# so `alias` never becomes one -- it is eagerly cloned at the bind and owns
+# its buffer from the start. The reassignment's PRESENCE PREVENTS the alias
+# from forming; it does not sever one.
 #
-# Measured, so the next reader does not repeat it -- three separate breaks,
-# each rebuilt and run, all three leaving this fixture rc 0 `hello|1|65`:
+# WHAT IT PINS, AND WHAT IT CANNOT: the END-TO-END behaviour only -- the copy
+# keeps the pre-reassignment value, the view reads it, and the new `v` goes
+# its own way. That is worth pinning and it is all this program pins.
+#
+# ⚠ NO BREAK-THE-MECHANISM RED EXISTS FOR IT, and the reason is STRUCTURAL,
+# not semantic: the provenance code a break would target IS NEVER REACHED for
+# this program. Three separate breaks were built and run, all leaving this
+# fixture rc 0 `hello|1|65`:
 #   1. deleting `unset_ownership(builder, alias)` before the materialize in
 #      `cow_sever_all_aliases_from`;
-#   2. suppressing the `register_local` name rebind onto the fresh owned
-#      local in `cow_materialize_alias`;
+#   2. suppressing the `register_local` name rebind in `cow_materialize_alias`;
 #   3. both at once.
-# An earlier version of this header asserted (1) as the mechanism AND as the
-# procedure for seeing this go red. Both were false. That is worse than
-# saying nothing: it hands the next engineer a command that silently does
-# nothing, which reads as confirmation.
+# ⚠ Their inertness carries NO information about provenance soundness in
+# either direction -- it is dead code for this input. Do not read it as
+# evidence that the machinery is robust.
 #
-# ⊕ For the temporal cell WITH a live mechanism and a fire count, see
-# `cow_alias_severed_then_alias_grows.gg` -- same shape, but the alias's own
-# buffer reallocs after the view is taken, so the rescue must fire and the
-# emitted GIR is asserted to contain it.
+# Two earlier versions of this header got this wrong in turn: the first
+# asserted (1) as both the mechanism and the way to see this go red; the
+# second correctly retracted that but attributed the inertness to the buffer
+# never being mutated again. Both were false, and a header that hands the
+# next engineer a command which silently does nothing is worse than one that
+# says nothing -- it reads as confirmation.
+#
+# ⊕ For a cell with a LIVE mechanism and a fire count, see
+# `cow_view_into_owned_collection_survives_growth.gg` -- the owned copy itself
+# reallocs after the view is taken, so the lazy rescue must be emitted.
 #
 # The two lengths are printed as well as the string: they pin that the sever
 # gave `alias` its own 1-element copy while `v` went on to 65, i.e. that CoW

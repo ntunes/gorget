@@ -43732,14 +43732,21 @@ hello",
     );
 }
 
-/// NON-REGRESSION PIN, green before and after the resolution fix — labelled
-/// as such in the fixture header too, which also records what it does NOT
-/// pin. After the sever nothing mutates the alias, so the view borrows into a
-/// buffer that is never touched again and no provenance decision is
-/// load-bearing: three separate breaks of the sever/materialize machinery
-/// leave this program's output identical. It pins the end-to-end temporal
-/// behaviour and the sever's value semantics, and nothing finer.
-/// `cow_alias_severed_then_alias_grows` is the same ordering with a live
+/// NON-REGRESSION PIN, green before and after the resolution fix.
+///
+/// ⚠ No sever runs here, despite the name. Measured: `cow_register_alias` is
+/// called ZERO times for this program and `cow_has_aliases` is false at the
+/// reassignment, so `cow_sever_all_aliases_from` is never entered. `v` is
+/// reassigned on a forward path, which makes the bind take the eager-clone
+/// path instead of the CoW alias branch — the reassignment's PRESENCE
+/// prevents the alias from forming rather than severing one.
+///
+/// Three separate breaks of the sever/materialize machinery leave this
+/// program's output identical, and the reason is structural: that code is
+/// never reached for this input, so their inertness says nothing about
+/// provenance soundness. The fixture header carries the full measurement.
+/// It pins the end-to-end value semantics and nothing finer;
+/// `cow_view_into_owned_collection_survives_growth` is the cell with a live
 /// mechanism and a fire count.
 #[test]
 fn cow_alias_severed_by_root_reassign_then_view() {
@@ -43810,19 +43817,22 @@ fn cow_alias_spelled_view_emits_the_lazy_rescue() {
     assert_gir_lazy_rescue_count("cow_alias_spelled_view_survives_root_growth.gg", 1);
 }
 
-/// The temporal cell WITH a live mechanism.
+/// A String view into a collection the binding OWNS, held across that
+/// collection reallocating.
 ///
-/// Its sibling `cow_alias_severed_by_root_reassign_then_view` pins the same
-/// ordering but exercises nothing — after the sever nothing mutates the
-/// alias, so no borrow can dangle and no break of the provenance machinery
-/// changes its output (three were tried; the fixture header records them).
-/// Here the alias's own buffer reallocs after the view is taken, so the
-/// rescue must be emitted, and the count is what says so — both programs
-/// print `hello` either way.
+/// The source is owned rather than aliased because `v` is reassigned on a
+/// forward path, which sends the bind down the eager-clone path — no
+/// `BorrowOrigin::Alias` is ever created (measured: zero `cow_register_alias`
+/// calls). That makes this the one cell in the net where the lazy rescue must
+/// fire on an OWNED source, which the count below asserts; both this program
+/// and its sibling print `hello` whether or not the rescue is emitted.
+///
+/// ⚠ It does NOT exercise this track's identity resolution — its fire count
+/// is 1 on the pre-fix compiler too. It pins the pre-existing rescue path.
 #[test]
-fn cow_alias_severed_then_alias_grows() {
+fn cow_view_into_owned_collection_survives_growth() {
     run_gg(
-        "cow_alias_severed_then_alias_grows.gg",
+        "cow_view_into_owned_collection_survives_growth.gg",
         "\
 hello
 65
@@ -43831,8 +43841,8 @@ hello
 }
 
 #[test]
-fn cow_alias_severed_then_alias_grows_emits_the_lazy_rescue() {
-    assert_gir_lazy_rescue_count("cow_alias_severed_then_alias_grows.gg", 1);
+fn cow_view_into_owned_collection_emits_the_lazy_rescue() {
+    assert_gir_lazy_rescue_count("cow_view_into_owned_collection_survives_growth.gg", 1);
 }
 
 #[test]
