@@ -1,0 +1,44 @@
+# Cell 2, third value of the element-type axis: a RESOURCE STRUCT element,
+# not a bare `String`.
+#
+# `next()` returns `Option[Parcel]` by value; the payload owns a heap-forced
+# `String` field, so the drop that must run is the struct's generated
+# destructor rather than a plain string free. Registering the binding with
+# the wrong type, or registering it for a Copy-typed element only, leaks here
+# while the `String` cell stays green.
+#
+# The iterator itself holds only scalars, so cell 1 is inert and this fixture
+# isolates the element binding.
+#
+# Axis cell: producer = cell 2 · element = resource struct · source =
+#            Iterable-with-iter() · body = read-only. Sanitized run.
+
+struct Parcel:
+    String label
+
+struct ParcelIter:
+    int idx
+    int limit
+
+equip ParcelIter with Iterator[Parcel]:
+    Option[Parcel] next(&self):
+        if self.idx >= self.limit:
+            return None
+        int cur = self.idx
+        self.idx = self.idx + 1
+        return Some(Parcel("parcel-" + "label-" + f"{cur}"))
+
+struct Depot:
+    int limit
+
+equip Depot with Iterable[Parcel]:
+    ParcelIter iter(&self):
+        return ParcelIter(0, self.limit)
+
+int main():
+    Depot d = Depot(3)
+    int n = 0
+    for p in d:
+        n = n + p.label.len()
+    print(n)
+    return 0

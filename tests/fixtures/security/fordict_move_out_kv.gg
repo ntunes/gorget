@@ -1,0 +1,37 @@
+# The Dict arm's sibling half — both of its binding shapes.
+#
+# `gorget_map_iter_key` / `gorget_map_iter_value` each run the map's clone
+# hook on the way out, so a resource key and a resource value both arrive as
+# independent owned copies. The arm registered them for drop without deciding
+# ownership, so moving either one out ABORTED THE COMPILER with the Tier 2a
+# "untracked source consumed" violation.
+#
+# Both patterns are exercised: the two-name `for k, v in d` destructure and
+# the single-name `for k in d` key-only form, since they are separate match
+# arms with separate bindings.
+#
+# Axis cell: producer = Dict out-param arms (key, value, key-only) ·
+#            element = String · source = Dict · body = move-out.
+
+from std.collections import Dict, Set
+
+String heaped(String tag):
+    return "word-" + "chunk-" + tag
+
+int main():
+    Dict[String, String] d = Dict[String, String]()
+    d.set(heaped("a"), heaped("alpha"))
+    d.set(heaped("b"), heaped("beta"))
+
+    Set[String] vals = Set[String]()
+    for k, v in d:
+        vals.add(v)
+    print(vals.len())
+
+    Set[String] keys = Set[String]()
+    for k in d:
+        keys.add(k)
+    print(keys.len())
+
+    print(d.len())
+    return 0

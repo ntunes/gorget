@@ -2439,3 +2439,120 @@ fn indirect_expr_callee_result_transferred_stays_clean() {
         "2\nhello\nhello",
     );
 }
+
+
+// ── R47 Track E2 — for-loop producers owe BOTH ownership axes ──────────────
+//
+// `src/ir/lowering/stmts/for_loops.rs` mints values in a dozen arms, and each
+// owes an ownership TAG and a drop REGISTRATION. Three arms had one axis or
+// neither, and each miss has its own signature:
+//
+//   * neither decided → the value leaks, and a leak has NO stdout signature,
+//     so `iterable.gg` / `vector_iter_userdef.gg` / `iterator_direct.gg` were
+//     green the whole time the arm leaked both its iterator and its element.
+//     Only a `detect_leaks=1` run can see this class, which is why every cell
+//     below is judged on the sanitized run.
+//   * drop registered, ownership NOT tagged → the local stays `Untracked`,
+//     the Tier 2a consume-site validator refuses to pick move-vs-clone, and
+//     `for s in some_set: dst.add(s)` ABORTED the compiler.
+//   * the direct-Iterator branch iterated a shallow COPY of the source, so
+//     `next()`'s mutations were lost and the original's drop ran against
+//     pre-iteration state — a double-free the moment the body moved an
+//     element out.
+//
+// Axes covered: producer cell {iterator object (owned branch) · iterator
+// source (borrow branch) · element binding · Set/Dict out-param arms} ×
+// element ownership {Copy(int) · String · resource struct} × iterator source
+// {Iterable-with-iter() · direct-Iterator · Set · Dict} × body disposition
+// {read-only · move-out · early break}.
+//
+// OMITTED CELLS, named: (a) Copy element × move-out — degenerate, an `int`
+// has no drop to get wrong; (b) direct-Iterator × resource-struct element —
+// the element binding is ONE site (`enum_field_load_move`) shared by every
+// iterator source, so the element-type axis is exercised where it varies, on
+// the Iterable source; (c) LLVM lane — ASan evidence is C-lane only by
+// construction, and the stdout halves of these fixtures are backend-agnostic
+// GIR-level behaviour.
+//
+// Every fixture below was RED-verified against the pre-fix compiler.
+
+/// Cell 1, ISOLATED: the iterator object `iter(&collection)` mints. `int`
+/// elements hold the element cell inert, so the only leak this can report is
+/// the iterator itself. Pre-fix: 146 bytes in 3 allocations, 3/3 runs.
+#[test]
+fn foriter_iterobj_int_elem_no_leak() {
+    security_safe_no_leak("foriter_iterobj_int_elem_leak", "3");
+}
+
+/// Cell 1 with an early `break` — pins the iterator's drop SCOPE. The
+/// iterator is minted before the loop and read by `next()` every iteration,
+/// so it belongs to the ENCLOSING scope; registering it into the loop-body
+/// scope frees it after iteration 1 and every later `next()` is a UAF, which
+/// one iteration cannot show. Pre-fix: 146 bytes in 3 allocations, 3/3 runs.
+#[test]
+fn foriter_iterobj_break_no_leak() {
+    security_safe_no_leak("foriter_iterobj_break_leak", "3");
+}
+
+/// Cell 2, ISOLATED: the loop binding moved out of the `Option` `next()`
+/// returns, with a scalar-only iterator so cell 1 is inert. Pre-fix: 39 bytes
+/// in 3 allocations (one per iteration), 3/3 runs.
+#[test]
+fn foriter_elem_string_no_leak() {
+    security_safe_no_leak("foriter_elem_string_leak", "36");
+}
+
+/// Cell 2 on the third value of the element-type axis — a resource STRUCT
+/// element, so the drop that must run is the generated destructor rather than
+/// a plain string free. Pre-fix: 45 bytes in 3 allocations, 3/3 runs.
+#[test]
+fn foriter_elem_struct_no_leak() {
+    security_safe_no_leak("foriter_elem_struct_leak", "42");
+}
+
+/// Both cells at once with a MOVE-OUT body — the bidirectional cell.
+/// Registering the element is what flips the consume site from clone to move,
+/// so this is red pre-fix (196 bytes in 7 allocations, 3/3 runs) AND red
+/// against an over-eager fix that frees the element the set now owns.
+#[test]
+fn foriter_move_out_to_set_no_leak() {
+    security_safe_no_leak("foriter_move_out_to_set", "3");
+}
+
+/// Cell 1's BORROW branch — direct-Iterator, move-out body, early break.
+/// Pre-fix this was LSan-clean and silently WRONG: the loop popped from a
+/// shallow copy, so the source still reported all 4 elements (`2\n4`) while
+/// the set held elements the source also believed it owned. That is the
+/// double-free `stdlib_iter_drain` hit the moment the element cell was
+/// registered — see the C-lane control in the integration suite.
+#[test]
+fn foriter_direct_drain_move_out_no_leak() {
+    security_safe_no_leak("foriter_direct_drain_move_out", "2\n2");
+}
+
+/// The same borrow-branch defect through its observable side: after two
+/// elements and a `break`, the iterator's own `idx` must read 2. Pre-fix it
+/// read 0 — the loop had advanced a copy. `lib/std/iter.gg`'s `VectorDrain`
+/// `Drop` ("reverses the remaining buffer back if the caller breaks early")
+/// is only meaningful if the advanced object is the dropped one.
+#[test]
+fn foriter_direct_advances_source() {
+    security_safe_no_leak("foriter_direct_advances_source", "0\n1\n2");
+}
+
+/// Set arm sibling: `for s in src: dst.add(s)`. The out-param accessor hands
+/// back an independent owned clone, and the arm registered its drop without
+/// deciding ownership — so pre-fix this ABORTED the compiler with the Tier 2a
+/// "untracked source consumed (ownership not decided)" violation.
+#[test]
+fn forset_move_out_elem_no_leak() {
+    security_safe_no_leak("forset_move_out_elem", "3\n3");
+}
+
+/// Dict arm siblings — the `for k, v in d` destructure and the key-only
+/// `for k in d` form are separate arms with separate bindings, and both had
+/// the same missing ownership decision. Pre-fix: compiler abort, 2 violations.
+#[test]
+fn fordict_move_out_kv_no_leak() {
+    security_safe_no_leak("fordict_move_out_kv", "2\n2\n2");
+}

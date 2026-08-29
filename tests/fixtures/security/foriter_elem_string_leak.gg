@@ -1,0 +1,41 @@
+# Cell 2 ISOLATED — the LOOP BINDING `for s in <user Iterable>` moves out of
+# the `Option` that `next()` returns.
+#
+# `next()` returns `Option[String]` BY VALUE, so its `Some` payload is owned;
+# the lowering moves it out and zeroes the source field. Nobody registered it
+# for drop, so every element a `next()` allocates leaked, once per iteration.
+#
+# The iterator here holds only scalars, so cell 1 (the iterator object) is
+# non-droppable and inert: the ONLY thing this fixture can leak is the element
+# binding. Its `next()` returns a freshly built String rather than a view, so
+# the payload really is heap and really is owned.
+#
+# Axis cell: producer = cell 2 · element = String · source =
+#            Iterable-with-iter() · body = read-only. Sanitized run.
+
+struct WordIter:
+    int idx
+    int limit
+
+equip WordIter with Iterator[String]:
+    Option[String] next(&self):
+        if self.idx >= self.limit:
+            return None
+        int cur = self.idx
+        self.idx = self.idx + 1
+        return Some("word-" + "chunk-" + f"{cur}")
+
+struct WordColl:
+    int limit
+
+equip WordColl with Iterable[String]:
+    WordIter iter(&self):
+        return WordIter(0, self.limit)
+
+int main():
+    WordColl c = WordColl(3)
+    int n = 0
+    for s in c:
+        n = n + s.len()
+    print(n)
+    return 0

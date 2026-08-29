@@ -371,6 +371,25 @@ void main():
 `iter(&self)` returning an `Iterator[T]` — collections implement `Iterable`, iterators
 implement `Iterator`.
 
+The two differ in what the loop consumes. Over an `Iterable`, `for` calls `iter()`
+once and consumes the fresh iterator that call returns, leaving the collection
+untouched. Over a value that is *itself* an `Iterator`, `for` advances **that
+value** — `next(&self)` takes a mutable borrow, so a loop that stops early leaves
+the iterator where it stopped and a later loop resumes from there:
+
+```gorget
+Counter c = Counter(0, 5)
+for i in c:
+    if i >= 1:
+        break
+print(f"{c.current}")    # 2 — the loop consumed 0 and 1
+```
+
+That is what lets an iterator hold resources and clean up precisely: `Vector`'s
+`drain()` iterator reverses whatever the caller did *not* consume back into place
+when it drops, which it can only do because the object the loop advanced is the
+object that is dropped.
+
 ### Parseable
 
 Fallible string parsing:

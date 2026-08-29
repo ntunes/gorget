@@ -24231,3 +24231,129 @@ fn indirect_dispatch_results_registered_at_birth() {
          over-registration direction)."
     );
 }
+
+
+/// R47 Track E2 class-retirement guard (Core #6): every value-MINTING
+/// producer in the for-loop lowering carries an explicit drop disposition.
+///
+/// ## The class this retires
+///
+/// `src/ir/lowering/stmts/for_loops.rs` mints values in a dozen arms, and
+/// each one owes TWO decisions — an ownership tag and a drop registration.
+/// Getting either wrong has its own signature:
+///
+/// * neither decided → the value leaks, and **a leak has no stdout
+///   signature**, so every fixture over that arm stays green while leaking
+///   (`for x in <user Iterable>` leaked both its iterator object and its
+///   element binding for the whole life of the arm);
+/// * drop registered but ownership NOT tagged → the local stays `Untracked`,
+///   the Tier 2a consume-site validator refuses to decide move-vs-clone, and
+///   ordinary code such as `for s in some_set: dst.add(s)` **aborts the
+///   compiler** instead of lowering.
+///
+/// ## Why it keys on the PRODUCER, not on a registration helper
+///
+/// The obvious guard — "every `ctx.register_local(` is paired with a
+/// `ctx.drops.register_local(`" — is **structurally blind to half the
+/// class**. `LoweringContext::register_local` is a name→local map insert
+/// (`src/ir/lowering/context.rs`); a compiler temp never calls it. The
+/// iterator object minted by `iter(&collection)` has no name binding at all,
+/// so it adds ZERO rows to any census over binding arms — which is exactly
+/// how it stayed invisible to both a source census and a review.
+///
+/// Keying on `Local.ownership ∈ {Owned, FreshOwned}` is blind to the same
+/// value in a different way: `tag_ownership` deliberately declines to tag
+/// `CallExtern` results that are not runtime symbols ("Non-fresh extern
+/// calls: do not tag"), so a user `iter()` result is `Untracked` and an
+/// ownership-keyed guard is GREEN on it.
+///
+/// The subject is therefore the **producer instruction shape**: every
+/// `builder.call_extern` / `call_extern_void` / `enum_field_load_move` /
+/// `index_load_borrow` in the file. Each must carry, within a few lines,
+/// either the shared two-axis decision `bind_owned_for_drop(ctx, …)` or a
+/// `drop-disposition:` comment naming why nothing is owned there. A new arm
+/// that mints a droppable value and forgets both axes carries neither, and
+/// goes RED.
+///
+/// Baseline 2026-08-29: 17 producer sites, 17 dispositions.
+#[test]
+fn for_loop_producers_carry_a_drop_disposition() {
+    /// Producer instruction shapes: every builder call in the for-loop
+    /// lowering that MINTS a value a binding can end up owning.
+    const PRODUCERS: &[&str] = &[
+        "builder.call_extern(",
+        "builder.call_extern_void(",
+        "builder.enum_field_load_move(",
+        "builder.index_load_borrow(",
+    ];
+    /// A disposition is either the shared two-axis decision or an explicit
+    /// reasoned marker.
+    const DISPOSITIONS: &[&str] = &["drop-disposition:", "bind_owned_for_drop(ctx"];
+    /// Baseline 2026-08-29. Bump ONLY together with a new disposition.
+    const EXPECTED_PRODUCERS: usize = 17;
+    /// How far a disposition may sit from its producer. Backward covers a
+    /// leading comment; forward covers the argument list plus the binding.
+    const BACK: usize = 8;
+    const FWD: usize = 20;
+
+    let path = "src/ir/lowering/stmts/for_loops.rs";
+    let src = fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let lines: Vec<&str> = src.lines().collect();
+
+    let is = |i: usize, pats: &[&str]| pats.iter().any(|p| lines[i].contains(p));
+    let producers: Vec<usize> = (0..lines.len()).filter(|&i| is(i, PRODUCERS)).collect();
+    let dispositions: Vec<usize> = (0..lines.len()).filter(|&i| is(i, DISPOSITIONS)).collect();
+
+    // Pair each producer with its OWN disposition — one marker may not cover
+    // two producers, or a new arm could ride on its neighbour's reasoning.
+    let mut claimed = vec![false; dispositions.len()];
+    let mut unpaired = Vec::new();
+    for &p in &producers {
+        let lo = p.saturating_sub(BACK);
+        let best = dispositions
+            .iter()
+            .enumerate()
+            .filter(|&(k, &d)| !claimed[k] && d >= lo && d <= p + FWD)
+            .min_by_key(|&(_, &d)| d.abs_diff(p))
+            .map(|(k, _)| k);
+        match best {
+            Some(k) => claimed[k] = true,
+            None => unpaired.push(format!("  {}:{} — {}", path, p + 1, lines[p].trim())),
+        }
+    }
+
+    assert!(
+        unpaired.is_empty(),
+        "for-loop producer site with no drop disposition:\n{}\n\n\
+         Every value this file mints owes BOTH ownership axes at the producer. \
+         Route it through `bind_owned_for_drop(ctx, builder, local, ty, LoopOwned::…)` \
+         when the loop owns the value, or add a `drop-disposition:` comment saying why \
+         it owns nothing (non-droppable return, a borrow into the collection, a payload \
+         moved out elsewhere). Deciding only the drop registration is what makes \
+         `for s in some_set: dst.add(s)` abort the compiler; deciding neither is a leak \
+         that no stdout assertion can see.",
+        unpaired.join("\n")
+    );
+
+    let unclaimed: Vec<String> = dispositions
+        .iter()
+        .enumerate()
+        .filter(|&(k, _)| !claimed[k])
+        .map(|(_, &d)| format!("  {}:{} — {}", path, d + 1, lines[d].trim()))
+        .collect();
+    assert!(
+        unclaimed.is_empty(),
+        "drop disposition with no producer site in range — a stale marker, or the \
+         producer moved out from under it:\n{}",
+        unclaimed.join("\n")
+    );
+
+    assert_eq!(
+        producers.len(),
+        EXPECTED_PRODUCERS,
+        "for-loop producer-site count changed: {} vs expected {EXPECTED_PRODUCERS}.\n\n\
+         A NEW site must carry its own disposition (see above) before this baseline is \
+         raised; a REMOVED site lowers it. Never raise it to make the pairing assert pass.",
+        producers.len()
+    );
+}

@@ -1,0 +1,46 @@
+# KNOWN GAP — `for x in it` over a direct-Iterator reached through a `&`-param
+# advances a COPY of the iterator, so the caller's object is left untouched.
+#
+# `consume2(&p)` consumes two elements and breaks, so `p.idx` must read 2.
+# It reads 0: a local that BORROWS a param holds the caller's pointer in its
+# slot while its GIR type stays the pointee's value type, so the for-lowering
+# can address neither the object (`&local` takes the address of a materialized
+# copy) nor the pointee (`*local` dereferences a value). The loop falls back to
+# walking the copy.
+#
+# The bare-local and struct-FIELD forms of the same loop DO advance the source
+# (`tests/fixtures/security/foriter_direct_advances_source.gg` pins the bare
+# local); only the param-borrow shape is left, and the fix belongs at the
+# bare-param ABI, not in the for-loop lowering.
+#
+# ⚠ SAFE, NOT SILENT-UNSAFE. The for-lowering recognises this shape
+# (`IteratorRef::ShallowAlias`) and binds the loop's elements as BORROWS, so a
+# move-out body (`dst.add(s)`) clones instead of moving and nothing is freed
+# twice. Removing that carve-out without fixing the addressing turns this
+# wrong-answer into a double-free — measured, so do not "simplify" it away.
+#
+# Un-ignore + promote out of `known_gaps/` when the loop advances the caller's
+# iterator through a `&`-param.
+
+struct Counter:
+    int idx
+    int limit
+
+equip Counter with Iterator[int]:
+    Option[int] next(&self):
+        if self.idx >= self.limit:
+            return None
+        int r = self.idx
+        self.idx = self.idx + 1
+        return Some(r)
+
+void consume2(Counter &c):
+    for x in c:
+        if x >= 1:
+            break
+
+int main():
+    Counter p = Counter(0, 5)
+    consume2(&p)
+    print(p.idx)
+    return 0
