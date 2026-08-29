@@ -8301,6 +8301,8 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("MA-0-criticise", "CRITICISE the final form"),
     ("MA-0-return", "FINDING RETURNED TO THE AGENT, never an edit the orchestrator makes"),
     ("MA-0-mech", "fix a typo, a stale figure or a one-line correction in place"),
+    ("MA-0-notrack", "never on a TRACK's behalf"),
+    ("MA-0-trackfixes", "inside a track's lifecycle the TRACK fixes what its passes find"),
     ("MA-0-roles", "Proposing the fix is the REVIEW AGENT's job"),
     ("MA-0-round", "binds the **ROUND**, not the orchestrator's hands"),
     ("MA-0-parent", "The parent still drives the integration battery"),
@@ -8332,6 +8334,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("REV-langref", "a reference-vs-code conflict is an OPEN QUESTION"),
     ("REV-seq", "The passes are SEQUENTIAL, not parallel"),
     ("REV-floor", "≥3 passes is the FLOOR; there is NO upper bound"),
+    ("REV-launch", "Launch the executor as soon as a fresh pass signs off the DESIGN"),
     ("REV-checklist", "Convergence gate — the READINESS CHECKLIST"),
     ("REV-ck1", "every measurement carries a FIRE COUNT"),
     ("REV-ck2", "every enumeration cites an INDEPENDENT witness"),
@@ -8340,8 +8343,14 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("REV-ck5", "every load-bearing figure REGENERATED at current HEAD"),
     ("REV-ck6", "EARNS A SIXTH ROW"),
     ("REV-scope", "SCOPE MAKES IT TERMINATE"),
+    ("REV-object", "THE GAUNTLET SIGNS OFF THE DESIGN; ITS OBJECT IS TO REACH THE EXECUTOR"),
+    ("REV-designq", "whether the design makes sense and serves the project's objectives"),
+    ("REV-execowns", "the executor still owns the solution"),
+    ("REV-resetdesign", "a finding resets the streak ONLY when it invalidates the DESIGN"),
+    ("REV-invalid", "wrong root cause, wrong layer, a Core invariant fought"),
+    ("REV-growscope", "GROWS THE TRACK'S SCOPE, ships to the executor in the brief"),
+    ("REV-nofile", "Never file such a finding as a `todo/` item for a later round"),
     ("REV-hunt", "Reviewers still hunt freely"),
-    ("REV-nostreak", "an off-checklist find does not reset the streak"),
     ("REV-disposition", "disposition belongs to Multi-agent rule 0"),
     ("REV-errata", "Terminal-pass minors fold as MARKED ERRATA"),
     ("REV-verbatim", "FOLD VERBATIM, NEVER SUMMARISED"),
@@ -8548,7 +8557,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("REV-refgate3", "a KNOWN DEFECT left in place is a reservation"),
     ("REV-refgate4", "the exact phrasing that must trip the gate"),
     ("REV-refgate5", "pushing the defect to a 'benign, filed' follow-up is the same failure"),
-    ("REV-art4c", "a stale one misleads it exactly as a wrong brief misleads an executor"),
+    ("REV-art4c", "a stale one misleads the next session exactly as a wrong brief misleads an executor"),
     ("COW-single", "single-owner-by-design (no clone path in the lowering)"),
     ("COW-sites", "at bare-assign sites AND at constructor / struct / enum-init sites"),
     ("COW-movezero2", "the backend zeros the source only when drop-tracking would otherwise re-drop it"),
@@ -8719,7 +8728,7 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
 /// Shrink-only floor on the inventory, so a compaction cannot delete rows and
 /// the rules they pin in one move. RAISING is free (new rules landed);
 /// LOWERING requires owner sign-off, like the byte ceiling.
-const AGENTS_MD_RULE_FLOOR: usize = 442;
+const AGENTS_MD_RULE_FLOOR: usize = 451;
 
 /// Grow-only ceiling on the escape hatch (see above).
 const AGENTS_MD_MAX_NON_NORMATIVE: usize = 85;
@@ -9027,7 +9036,7 @@ fn agents_md_every_clause_is_classified() {
 /// invisible, with every other lint green (see the assert's own comment).
 /// Raising either needs the same owner sign-off as raising the byte ceiling —
 /// unpinned prose ACCUMULATING is what this exists to notice.
-const AGENTS_MD_MAX_UNPINNED_RUN: usize = 177;
+const AGENTS_MD_MAX_UNPINNED_RUN: usize = 168;
 const AGENTS_MD_MAX_RUNS_OVER_100: usize = 52;
 
 /// Logical blocks for coverage: hard-wrapped continuation lines joined, code

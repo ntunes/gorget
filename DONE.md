@@ -1,4 +1,4 @@
-- [2026-08-29] **`AGENTS.md` compaction (owner-directed): 59,271 → 46,956 bytes with the rule set intact.**
+- [2026-08-29] **`AGENTS.md` compaction + the gauntlet's terminating condition (owner-directed): 59,271 → 47,381 bytes.**
 
   **Why.** The owner reported the failure this fixes: *"each round spins on each track never reaching the
   executor step. We waste entire weekly token quotas without any code written."* Measured cause — the file
@@ -6,22 +6,37 @@
   invariants +12,015 B, a new Round lifecycle section +6,756 B, Review +5,750 B, Multi-agent +3,345 B, while
   the technical sections (Layering · CoW · Build&Test · Structure) NET SHRANK by 121 B.
 
-  **What changed.** 464 → 442 pinned clauses, 94 → 85 non-normative rows. Retired: the 18 `META-*` rows that
+  **The livelock was one clause.** The convergence gate reset the streak when a finding changed the brief's
+  *scope boundary* — and absorbing a discovered bug into the track's scope IS a scope-boundary change. So every
+  found bug either got filed for a later round (the anti-pattern the owner named) or grew the scope and reset
+  the streak. Neither path reached the executor. **The criterion is now the DESIGN:** `REV-resetdesign` +
+  `REV-invalid` reset the streak ONLY when the finding invalidates the design (wrong root cause, wrong layer, a
+  Core invariant fought); `REV-growscope` + `REV-nofile` send everything else into the brief as executor work,
+  never into a `todo/` item for a later round and never into another pass. `REV-launch` states the terminating
+  condition positively — launch as soon as a fresh pass signs off the DESIGN — `REV-object` names what the
+  gauntlet is FOR, and `REV-execowns` keeps the solution the executor's to design.
+
+  **Orchestrator boundary corrected.** `MA-0-mech` governs the orchestrator's OWN hands — proactive work, or
+  work the owner asked for — and `MA-0-notrack` forbids it acting on a TRACK's behalf: inside a track's
+  lifecycle the TRACK fixes what its passes find, through its executor.
+
+  **Compaction.** 464 → 451 pinned clauses, 94 → 85 non-normative rows. Retired: the 18 `META-*` rows that
   restated `AGENTS.md`'s own lint internals (a third copy — the mechanics are in `tests/lints.rs`, the rates in
-  `t0714`); 5 `REV-design-*` rows restating Core #1/#2/#4/#8/#10 verbatim; 9 owner-attribution and rationale
-  exemptions. Added ONE rule — `MA-0-mech`, the orchestrator may fix a typo, a stale figure or a one-line
-  correction in place, since a full agent round-trip per trivium is what starves the executor. All remaining
-  justification prose moved to devbook/29-30 or was deleted in favour of the imperative; `FOLD VERBATIM` was
-  explicitly reaffirmed by the owner and left intact.
+  `t0714`); 5 `REV-design-*` rows restating Core #1/#2/#4/#8/#10 verbatim; `REV-nostreak` as subsumed by
+  `REV-resetdesign`; 9 owner-attribution and rationale exemptions. Added 10 rules (the gauntlet-termination
+  set above). All remaining justification prose moved to devbook/29-30 or was deleted in favour of the
+  imperative; **`FOLD VERBATIM` was explicitly reaffirmed by the owner and left intact** — it exists because
+  summarising a fold introduced errors (devbook/30 §13).
 
-  **Ratchets re-seeded, all downward:** size ceiling 59_300 → 47_400, `RULE_FLOOR` 464 → 442,
-  `MAX_NON_NORMATIVE` 94 → 85, `MAX_UNPINNED_RUN` 198 → 177, `MAX_RUNS_OVER_100` 112 → 52. The prior
-  "~58_000 is the FLOOR for the current rule set" claim in the ratchet comment is **refuted and retired**, not
-  restated — it measured the prose the rules were wrapped in, not the rules.
+  **Ratchets re-seeded, all downward:** size ceiling 59_300 → 47_400, `MAX_NON_NORMATIVE` 94 → 85,
+  `MAX_UNPINNED_RUN` 198 → 168, `MAX_RUNS_OVER_100` 112 → 52; `RULE_FLOOR` 464 → 451 (a net removal, owner
+  signed off). The new rules were paid for by compacting neighbouring prose, not by raising the ceiling. The
+  prior "~58_000 is the FLOOR for the current rule set" claim in the ratchet comment is **refuted and
+  retired**, not restated — it measured the prose the rules were wrapped in, not the rules.
 
-  **Verified, not asserted.** All four guards RED-demonstrated on the landed file: deleting `RL-5-red` fires
-  `agents_md_rule_inventory_is_pinned` by name; inserting an unpinned clause fires
-  `agents_md_every_clause_is_classified`; both restore green. `cargo test --test lints` 175 passed,
+  **Verified, not asserted.** Guards RED-demonstrated on the landed file: deleting `RL-5-red`, `REV-growscope`
+  or `REV-launch` each fires `agents_md_rule_inventory_is_pinned` BY NAME; inserting an unpinned clause fires
+  `agents_md_every_clause_is_classified`; all restore green. `cargo test --test lints` 175 passed,
   `cargo test --lib` 1179 passed. Evidence: devbook/30 §20.
 
 - [2026-08-29] **R45 CLOSED — the round-blocker, a class fix that was wrong, and a compaction that became a research project.**

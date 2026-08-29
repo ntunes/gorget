@@ -1606,3 +1606,59 @@ against. The excellence system's own inflow needs the discipline it imposes on
 the compiler: a new process rule should retire an old one, or state why the pair
 is not a class (Core #4 turned on the ledger itself). Watch for the same shape —
 `AGENTS_MD_RULE_FLOOR` only ever ratcheted UP before this round.
+
+### The correction that actually terminates it (owner 2026-08-29, same day)
+
+The first landing of this compaction misread the owner's ruling and wrote rule
+0's carve-out as *"the orchestrator may fix a finding in place"* — a
+track-lifecycle shortcut. That is wrong twice over, and the owner corrected it:
+
+> Each track is responsible for fixing whatever bugs, typos it finds, not the
+> orchestrator. The orchestrator can fix small typos, simple stuff but normally
+> not on behalf of a track lifecycle. The orchestrator can fix things
+> proactively or in demand by the owner, though.
+
+So `MA-0-mech` is about the orchestrator's OWN hands — proactive work, or work
+the owner asked for — and `MA-0-notrack` states the boundary it must not cross.
+Inside a track, the TRACK fixes what its passes find, through its executor.
+
+**The real fix was to the reset criterion, not to who holds the pen.** The
+owner's statement of purpose:
+
+> What we are trying to achieve with the gauntlet is a sign off of the general
+> design. To ensure it makes sense and is aligned with the project's objectives.
+> The executor is still responsible for coming up with the solution which is then
+> itself reviewed again by the post-execution review pass. What I don't want
+> (which has been happening in the past few rounds) is that each brief review
+> pass finds more bugs and files them, never reaching the execution step.
+> Instead, the track scope should grow to fix those found bugs … include them in
+> the brief for the executor to fix. But please let it reach the executor phase!
+
+The livelock was one clause. §19 said a finding resets the streak when it
+changes *"the brief's fix shape · site set · **scope boundary** · guard
+mechanism"* — and absorbing a discovered bug into the track's scope IS a
+scope-boundary change. So the rule written to make the gauntlet terminate was
+the rule that kept it spinning: every found bug either got filed for a later
+round (the anti-pattern) or grew the scope and reset the streak (the livelock).
+Neither path reached the executor.
+
+The criterion is now about the DESIGN, and the two outcomes are disjoint:
+
+- **Resets the streak:** the finding invalidates the design — wrong root cause,
+  wrong layer, a Core invariant fought (`REV-resetdesign`, `REV-invalid`).
+- **Does NOT reset the streak:** the finding is more WORK inside a sound design —
+  another sibling site, a nearby bug, a typo. It GROWS THE TRACK'S SCOPE and
+  ships to the executor in the brief (`REV-growscope`), and it is never filed as
+  a `todo/` item for a later round (`REV-nofile`).
+
+`REV-launch` states the terminating condition positively — launch as soon as a
+fresh pass signs off the DESIGN — and `REV-object` names what the gauntlet is
+FOR, so a reviewer hunting bugs knows the bugs go in the brief rather than into
+another pass. `REV-nostreak` ("an off-checklist find does not reset the streak")
+was retired as subsumed: `REV-resetdesign`'s ONLY says it, and more precisely.
+
+The general lesson is Core #4 turned on the process ledger. A termination rule
+whose predicate mentions SCOPE cannot terminate a loop whose findings grow
+scope. The predicate has to name the thing that genuinely invalidates the
+artifact — here, the design — and everything else has to have somewhere to go
+that is neither another pass nor a later round. That somewhere is the executor.
