@@ -150,6 +150,15 @@ const EXCLUDE: &[&str] = &[
     // NOTE: the 2T get-chain fixtures (`cow_taint_getchain_*`) all carry `equip R
     // with Drop`, so `gate_fixtures`'s `equip ` filter already routes them to B2
     // (corpus_b) — they are NOT in the B1 gate set and need no B1 exclusion.
+    // R47 Track A1: the `.first()` producer-arm cell of the collection-identity
+    // fix (`todo/t0703`). The builtin arm-picker has a `get` arm but none for
+    // `first`/`last`, so this reaches the catch-all "method `.first()` is
+    // outside the phase-0 subset". Excluded on that construct, not on the shape
+    // under test — the spelling IS the thing under test, so reshaping it to
+    // `.get(0)` would delete the cell. Same row and full rationale in
+    // `corpus_b.rs`; both gates share the phase-0 subset. Subset gap filed as
+    // `todo/t0753` — do NOT re-file it.
+    "cow_alias_spelled_view_via_first_getter.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -369,5 +378,11 @@ fn corpus_b1_all_match() {
     // change. The repro half was a live WRONG ANSWER on the self-host lane
     // before the fix, which is the class ggdef CAN adjudicate (value semantics),
     // unlike its realloc-UAF sibling.
-    assert_eq!(fixtures.len(), 130, "B1 gate set drifted from 130 fixtures");
+    // +8 −1 (2026-08-29, R47 Track A1): the collection-identity fix
+    // (`todo/t0703`) landed 8 top-level `cow_alias_*` / `cow_indexed_*` /
+    // `cow_view_into_*` fixtures; 7 are in-subset and adjudicated here, the
+    // 8th is EXCLUDEd above on `.first()` (`todo/t0753`) → 137.
+    // ⚠ The 130 was never reached while this gate was RED on that elaboration
+    // error, so it had not absorbed the 8; the arithmetic starts from 130.
+    assert_eq!(fixtures.len(), 137, "B1 gate set drifted from 137 fixtures");
 }

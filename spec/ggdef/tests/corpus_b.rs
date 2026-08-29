@@ -298,6 +298,24 @@ const EXCLUDE: &[&str] = &[
     // and it is not exotic: `lib/xtd/dataframe.gg`'s `Column` methods are all
     // written in this shape.
     "cow_user_mutator_meta_generated_arm.gg",
+    // R47 Track A1, 2026-08-29: the `.first()` PRODUCER-ARM cell of the
+    // collection-identity resolution fix (`todo/t0703`). ggdef rejects the
+    // SHAPE, not the program: the builtin arm-picker
+    // (`spec/ggdef/src/elaborate/mod.rs:2713-2747`) has a `get` arm but none
+    // for `first`/`last`, so any receiver reaches the catch-all "method
+    // `.first()` is outside the phase-0 subset (may need Increment B2)".
+    // Excluded on that construct, not on the shape under test — and the
+    // spelling IS the thing under test here, so reshaping the fixture to use
+    // `.get(0)` would dodge the subset gap and delete the cell (its sibling
+    // `cow_alias_spelled_view_survives_root_growth.gg` already covers `.get`).
+    // The defect it pins (a view spelled through a second name for the
+    // collection read freed memory; rc 139 on both backends pre-fix) is a
+    // MEMORY-VALIDITY class ggdef is structurally blind to anyway
+    // (AGENTS.md Core #13 — it adjudicates value semantics); the adjudicating
+    // lanes are C, LLVM and ASan, all green, plus
+    // `tests/fixtures/security/cow_element_borrow_uaf.gg`.
+    // Subset gap filed as `todo/t0753`.
+    "cow_alias_spelled_view_via_first_getter.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -598,5 +616,13 @@ fn corpus_b_all_match() {
     // The fourth, `cow_user_mutator_meta_generated_arm.gg`, is EXCLUDEd above
     // with citation (out of subset; `todo/t0762`). Count +4 additions
     // − 1 EXCLUDE = +3 net → 181.
-    assert_eq!(fixtures.len(), 181, "B2 gate set drifted from 181 fixtures");
+    // R47 Track A1: 8 `cow_alias_*` / `cow_indexed_*` / `cow_view_into_*`
+    // fixtures landed with the collection-identity fix (`todo/t0703`). 7
+    // elaborate and are adjudicated here; the 8th is EXCLUDEd above on
+    // `.first()` (`todo/t0753`). Count +8 additions − 1 EXCLUDE = +7 net → 188.
+    // ⚠ The 181 above was never reached while this gate was RED on the
+    // `.first()` elaboration error, so it had not absorbed those 8 — the
+    // arithmetic here starts from 181, not from a figure this assert had
+    // confirmed.
+    assert_eq!(fixtures.len(), 188, "B2 gate set drifted from 188 fixtures");
 }
