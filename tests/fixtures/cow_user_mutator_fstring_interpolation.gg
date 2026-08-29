@@ -11,9 +11,11 @@
 # `safety/check_expr.rs`'s `Expr::StringLiteral` arm (the `interpolations`
 # field the parser populates for exactly this reason).
 #
-# RED-verified: rc 139 on the compiler that had the typed classifier but no
-# interpolation coverage. The realloc (64x) is load-bearing, as in
-# `cow_user_mutator_rename_invariance.gg`.
+# RED-verified: rc 139 on C and LLVM at the pre-fix compiler, and again on the
+# compiler that had the typed classifier but NO interpolation coverage — the
+# fix's own intermediate state. The realloc (64x) is load-bearing, as in
+# `cow_user_mutator_rename_invariance.gg`. ggdef adjudicates `65 / helloworld`;
+# self-host lowerer lane MATCHES.
 String mk(String a, String b):
     return a + b
 

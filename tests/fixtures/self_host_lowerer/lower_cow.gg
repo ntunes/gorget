@@ -16,7 +16,7 @@ from std.collections import Vector, Dict
 from std.conv import int_to_str
 from ast import Module, Item, FunctionDef, Param, Stmt, Expr, SpannedExpr, SpannedType, ElseBranch, EquipBlock, StructDef, EnumDef, EnumVariant, Type, MatchArm
 from gir import GirModule, GirFunction, GirLocal
-from lower import LowerCtx, method_mutates_receiver, call_arg_lets_callee_mutate, method_arg_lets_callee_mutate, rust_prescan_marks_method
+from lower import LowerCtx, method_mutates_receiver, call_arg_lets_callee_mutate, method_arg_lets_callee_mutate, cow_recv_mutation_class
 
 # ── CoW resource-bind forward-scan (substrate ii) ───────────────────
 #
@@ -166,17 +166,19 @@ void cow_scan_expr(LowerCtx &ctx, GirModule &gmod, SpannedExpr e, bool in_closur
     match e.expr:
         case EMethodCall(recv_box, mname, margs, _):
             # TYPED: builtin `is_mutating` table OR user `&self`/`!self`
-            # self-convention (method_mutates_receiver). A read-only call
-            # does NOT mark its receiver; a mutating one marks the root.
-            if method_mutates_receiver(*recv_box, mname, &gmod):
-                # Scope-set lane symmetry: a receiver mark Rust's prescan
-                # would NOT make -- since t0699 that is exactly the
-                # CONSERVATIVE-UNKNOWN class, an unresolvable receiver or
-                # method (plus `!self`) -- is suppressed from the scope sets;
-                # the whole-fn maps still record it. Both lanes now read the
-                # SAME typed per-receiver answer for every call either can
-                # resolve. See rust_prescan_marks_method.
-                if not rust_prescan_marks_method(*recv_box, mname, &gmod):
+            # self-convention. A read-only call does NOT mark its receiver;
+            # a mutating one marks the root.
+            #
+            # Scope-set lane symmetry: a receiver mark Rust's prescan would
+            # NOT make -- since t0699 that is exactly the CONSERVATIVE-UNKNOWN
+            # class, an unresolvable receiver or method (plus `!self`) -- is
+            # suppressed from the scope sets; the whole-fn maps still record
+            # it. Both lanes now read the SAME typed per-receiver answer for
+            # every call either can resolve. One resolution answers both
+            # questions -- see cow_recv_mutation_class.
+            int cow_rmc = cow_recv_mutation_class(*recv_box, mname, &gmod)
+            if cow_rmc > 0:
+                if cow_rmc == 2:
                     ctx.cow_scope_mark_suppress = true
                 cow_mark_if_ident(&ctx, *recv_box, e.span.start, in_closure)
                 ctx.cow_scope_mark_suppress = false

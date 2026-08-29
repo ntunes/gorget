@@ -1,19 +1,29 @@
-# CoW 2G user `&self`-mutator receiver in a loop (step-4 gap — filed). The
-# in-body materialize for a user `&self`-mutating method fires via the TYPED
-# fn_sigs first-param-MutPtr lookup, but the shared prescan is an UNTYPED AST
-# walk: it cannot resolve that a user method NAME (`compact`) mutates its
-# receiver, so the pre-header materialize does not fire and the private copy is
-# thrown away every iteration. A conservative name-based over-approximation
-# (any known `&self`-mutator method name marks its receiver mutated) is possible
-# but risks a clone balloon program-wide and misses generic-instance sigs
-# registered during lowering (the already-filed R38 generic-equip residual), so
-# it is deferred; the MUTATING_METHODS fallback still catches user methods named
-# like a builtin mutator (push/pop/append/…), but arbitrarily-named ones
-# (compact/bump) stay uncovered.
+# LIVE REGRESSION FIXTURE (graduated 2026-08-29) — CoW 2G, a user
+# `&self`-mutator receiver in a loop.
+#
+# WHAT IT WAS. The in-body materialize for a user `&self`-mutating method fired
+# via the TYPED fn_sigs first-param-MutPtr lookup, but the shared prescan was an
+# UNTYPED AST walk: it could not resolve that a user method NAME (`compact`)
+# mutates its receiver, so the pre-header materialize did not fire and the
+# private copy was thrown away every iteration. The `MUTATING_METHODS` fallback
+# caught user methods NAMED like a builtin mutator (push/pop/append/…) while
+# arbitrarily-named ones (compact/bump) stayed uncovered — which is the same
+# defect that made a rename decide memory safety in
+# `user_mutator_method_name_decides_memory_safety.gg`.
+#
+# WHAT IT IS NOW. The prescan reads the semantic pass's typed per-receiver
+# classification (`semantic::safety::ReceiverMutations`), so `Buf.compact(&self)`
+# marks its bare-param receiver whatever it is called, and the loop-carried
+# pre-header materialize fires ONCE.
 #
 # Asserts the CORRECT loop-carried output: private copy [1,2,3,4] compacted
-# twice → 3, 2, final 2, caller 4. The compiler currently prints 3,3,4,4 (the
-# per-iteration throwaway — the in-body materialize is reverted each iteration).
+# twice → 3, 2, final 2, caller 4. ggdef adjudicates the same 3,2,2,4, and so
+# does the self-host lowerer lane (which was already correct here — a "reference
+# lags the self-host" data point, now closed).
+#
+# The RECEIVER IS A BARE LOCAL PARAM, which is what makes this cell load-bearing:
+# a self-rooted-only classifier never marks it, so this fixture separates the
+# shipped per-receiver answer from that narrower shape.
 struct Buf:
     Vector[int] data
 

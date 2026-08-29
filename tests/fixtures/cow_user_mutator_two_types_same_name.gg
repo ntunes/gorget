@@ -18,6 +18,10 @@
 # `cow_user_mutator_two_types_same_name_clone_count` in tests/integration.rs
 # (`--clones=stats` -> `array_clone=1`; a name-keyed union measures 2).
 #
+# ggdef ADJUDICATES `4 4 4 / 3 2 4` — the definitional answer is the one this
+# fixture asserts, not the `3 3` the pre-fix compilers agreed on. Regenerate:
+#   cargo run -q -p ggdef --release -- run tests/fixtures/cow_user_mutator_two_types_same_name.gg
+#
 # RED-verified at the pre-fix compiler: printed `4 4 4 / 3 3 4` with
 # array_clone=2 — the mutating half's private copy was thrown away every
 # iteration (3,3 where CoW requires 3,2). Renaming both methods to `dedup`

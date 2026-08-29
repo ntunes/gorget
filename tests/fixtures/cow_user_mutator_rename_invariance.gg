@@ -24,7 +24,11 @@
 # `gorget_string_clone_to_owned` rather than a bare SIGSEGV.
 #
 # RED-verified at the pre-fix compiler: rc 139 on C and on LLVM (the Unlisted
-# half). Post-fix: `helloworld` twice on C, LLVM and the self-host lane.
+# half). Post-fix: `helloworld` twice on C, LLVM, the self-host lowerer lane and
+# ggdef. ⚠ ggdef adjudicates VALUE semantics and is structurally blind to
+# memory invalidation — it printed `helloworld` twice even pre-fix. The
+# memory-validity adjudicator for this class is ASan, and it has its own cell:
+# `tests/fixtures/security/sound_user_mutator_name_invariant_uaf.gg`.
 String mk(String a, String b):
     return a + b
 

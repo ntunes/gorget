@@ -19,8 +19,17 @@
 # (`GG_REPORT_RECV_MUT=1`, which prints one `[recv-mut-miss] <name>` per
 # unclassified query) rather than by any test.
 #
-# RED-verified twice: rc 139 pre-fix under the unlisted name, and rc 139 again
-# under an unclassified-⇒-read-only fallback under BOTH names.
+# RED-verified twice: rc 139 pre-fix (C AND LLVM) under the unlisted name, and
+# rc 139 again under an unclassified-⇒-read-only fallback under BOTH names.
+#
+# ⚠ NO ggdef ADJUDICATION — OUT OF SUBSET (Core #9 note). The oracle rejects
+# this shape: ``meta for` match arms are phase 2`
+# (`spec/ggdef/src/elaborate/mod.rs`). Verify:
+#   cargo run -q -p ggdef --release -- run tests/fixtures/cow_user_mutator_meta_generated_arm.gg
+# So the evidence here is C + LLVM + the self-host lowerer lane agreeing, which
+# Core #8 rates necessary-not-sufficient. The subset gap is filed as
+# `todo/t0762`; `lib/xtd/dataframe.gg` writes real stdlib code in this shape,
+# so the unadjudicated surface is not exotic.
 String mk(String a, String b):
     return a + b
 

@@ -485,11 +485,12 @@ struct LowerCtx:
     Vector[int] cow_scope_anchor_stack
     Dict[String, bool] cow_scope_muts
     # Scan-scoped flag: true while recording a mutation mark that RUST's
-    # prescan would NOT record (a user &self-mutator / unknown-method
-    # receiver). Such marks stay in the whole-fn maps (bind-flip safety,
-    # loop hoist) but are kept OUT of the scope sets, so the branch hoist
-    # fires on exactly the shapes Rust's collector marks (lane symmetry;
-    # see rust_prescan_marks_method).
+    # prescan would NOT record -- since t0699 that is the UNRESOLVABLE
+    # receiver/method (and `!self`), not the user-&self-mutator class, which
+    # both lanes now resolve typed. Such marks stay in the whole-fn maps
+    # (bind-flip safety, loop hoist) but are kept OUT of the scope sets, so
+    # the branch hoist fires on exactly the shapes Rust's collector marks
+    # (lane symmetry; see cow_recv_mutation_class, class 2).
     bool cow_scope_mark_suppress
     # ── R44 Track K: the comprehension DEFERRED-MINT channel ──────────
     # A comprehension must mint its accumulator from the type it PRODUCES,
@@ -1229,40 +1230,54 @@ bool mkey_takes_move_self(GirModule &gmod, String mkey):
         return false
     return mflags.get(0).unwrap()
 
-# The LANE-SYMMETRY predicate for the scope-hoist channel: does RUST'S CoW
-# prescan mark a receiver mutated by this call? Since t0699 Rust reads the
-# SAME typed per-receiver answer this lane does -- the receiver's resolved
-# type plus the method's declared `&self` (semantic/safety/check_expr.rs,
-# `receiver_is_mutating`, crossing into the lowering through
-# `ReceiverMutations`) -- so the two lanes now agree by construction on every
-# call either of them can resolve, with no name list to keep in sync.
+# The CoW scan's classification, and the LANE-SYMMETRY answer for the
+# scope-hoist channel, from ONE receiver resolution.
 #
-# The one axis on which Rust is NARROWER, and why this is not
-# `method_mutates_receiver`:
+#   0 = the call does NOT mutate its receiver
+#   1 = it mutates, and RUST'S CoW prescan marks it too (lane-symmetric)
+#   2 = it mutates, but Rust's prescan would NOT mark it -- the mark stays in
+#       this lane's whole-fn maps and is kept OUT of the scope sets
+#       (`cow_scope_mark_suppress`), so both lanes' branch hoists fire on
+#       identical shapes (Core #9)
+#
+# Since t0699 Rust reads the SAME typed per-receiver answer this lane does --
+# the receiver's resolved type plus the method's declared `&self`
+# (`semantic/safety/check_expr.rs`'s `classify_receiver_mutation`, crossing
+# into the lowering as `ReceiverMutations`) -- so the lanes agree by
+# construction on every call either can resolve, with no name list to sync.
+# Class 2 is exactly the two axes on which Rust is NARROWER:
 #   * an UNRESOLVABLE receiver/method. Rust's prescan records nothing it
-#     cannot resolve; this lane's conservative default (3) assumes MUTATING.
-#     Keeping that class out of the scope-set channel is what stops the
-#     branch hoist from deep-cloning on every unclassifiable call -- the
-#     2026-07-19 stage-1 bootstrap clone bomb (DONE.md).
+#     cannot resolve; this lane's conservative default assumes MUTATING.
+#     Keeping that class out of the scope-set channel is what stops the branch
+#     hoist from deep-cloning on every unclassifiable call -- the 2026-07-19
+#     stage-1 bootstrap clone bomb (DONE.md).
 #   * `!self`. Rust's classifier reads `param_ownerships[0] == MutableBorrow`
 #     only, so a consuming method is not a prescan mark there; a `!self` call
 #     on a bare (borrowed) receiver is rejected before lowering anyway.
-# The SH's richer whole-fn maps keep the conservative default (bind-flip
-# safety, loop hoist); ONLY the scope-set channel filters through here, so
-# both lanes' branch hoists fire on identical shapes (Core #9).
-bool rust_prescan_marks_method(SpannedExpr recv, String mname, GirModule &gmod):
-    # (1) USER method, typed on the RESOLVED receiver type -- `&self` only.
-    String rpm_key = recv_method_key(recv, mname, &gmod)
-    if rpm_key.len() > 0:
-        return mkey_takes_borrow_self(&gmod, rpm_key)
-    # (2) BUILTIN method: typed is_mutating column.
+#
+# ⚠ ONE resolution, deliberately. Asking `method_mutates_receiver` and then a
+# separate Rust-mirror predicate resolved the receiver type and rebuilt the
+# `Type__mname` key TWICE on every method call in the scan -- measured on the
+# stage-1 clone ceiling. `method_mutates_receiver` survives for its other
+# callers (`lower_expr.gg`, `lower_match.gg`); this is the single-resolution
+# form of it plus the lane filter.
+int cow_recv_mutation_class(SpannedExpr recv, String mname, GirModule &gmod):
+    String crm_key = recv_method_key(recv, mname, &gmod)
+    if crm_key.len() > 0:
+        if mkey_takes_borrow_self(&gmod, crm_key):
+            return 1
+        if mkey_takes_move_self(&gmod, crm_key):
+            return 2
+        return 0
     match builtin_method_mutates(mname):
-        case Some(rpm_decl):
-            return rpm_decl.is_mutating
+        case Some(crm_decl):
+            if crm_decl.is_mutating:
+                return 1
+            return 0
         case None:
             pass
-    # (3) UNRESOLVABLE: Rust marks nothing it cannot resolve.
-    return false
+    # CONSERVATIVE DEFAULT: unknown ⇒ mutating here, unmarked on Rust's side.
+    return 2
 
 bool method_mutates_receiver(SpannedExpr recv, String mname, GirModule &gmod):
     # (1) USER method: resolve receiver type -> equip-method key.
