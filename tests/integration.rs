@@ -52738,52 +52738,64 @@ fn unknown_backend_flag_is_rejected() {
 ///   it were C: ~290 lines of syntax errors about `target datalayout` and
 ///   `%GorgetArray`, blaming the user's program for the driver's mistake.
 ///
-/// The third member of this class, `--clones=stats --backend=llvm`, was
-/// already rejected and is pinned here so the set is covered rather than
-/// sampled. The fourth, `--sanitize --backend=llvm`, is the one that was
-/// WIRED instead of rejected (it was cheap); its guard is
-/// `sanitizer_gate_is_real_on_both_backends` in `tests/security.rs`.
+/// `--clones=stats --backend=llvm` was already rejected before this test and is
+/// pinned here so the set is COVERED rather than SAMPLED. `--sanitize
+/// --backend=llvm` is the one member that was WIRED instead of rejected (it
+/// was cheap); its guard is `sanitizer_gate_is_real_on_both_backends` in
+/// `tests/security.rs`.
+///
+/// ⚠ THE SET IS NOT LLVM-ONLY, which is why this is not named for the backend.
+/// `--sanitize --target=freestanding` has the same shape with no backend
+/// involved: the freestanding branch builds its own `cc` command and returns
+/// before reaching `add_sanitize_flags`, so the flag was accepted and dropped
+/// on BOTH backends. `todo/t0641` records the identical hole for `--release`
+/// on the same early-returning sub-paths — that is the family, and a new build
+/// flag owes a check against every sub-path rather than just the normal one.
 ///
 /// Flag VALIDATION only — no `llc` required, nothing is codegen'd.
 #[test]
-fn llvm_incompatible_build_flags_are_rejected() {
-    let dir = std::env::temp_dir().join(format!("gg_llvm_flag_combo_{}", std::process::id()));
+fn unhonourable_build_flag_combinations_are_rejected() {
+    let dir = std::env::temp_dir().join(format!("gg_flag_combo_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let src = dir.join("probe.gg");
     std::fs::write(&src, "void main():\n    print(\"hi\")\n").expect("write probe");
 
-    // (flag args, a distinctive phrase the diagnostic owes the user)
-    let cases: [(&[&str], &str); 4] = [
-        (&["--target=freestanding"], "--target=freestanding"),
-        (&["--target", "freestanding-x86_64"], "--target=freestanding-x86_64"),
-        (&["--shared"], "--shared"),
-        (&["--clones=stats"], "--clones=stats"),
+    // (the full flag set, and the TWO halves the diagnostic owes the user —
+    // naming only one leaves them guessing which to drop)
+    let cases: [(&[&str], &str, &str); 5] = [
+        (&["--target=freestanding", "--backend=llvm"], "--target=freestanding", "llvm"),
+        (&["--target", "freestanding-x86_64", "--backend=llvm"], "--target=freestanding-x86_64", "llvm"),
+        (&["--shared", "--backend=llvm"], "--shared", "llvm"),
+        (&["--clones=stats", "--backend=llvm"], "--clones=stats", "llvm"),
+        // Not an LLVM combination at all — the default backend, and still
+        // unhonourable: ASan/UBSan need a hosted environment and a libc to
+        // intercept, and a UEFI image is built `-ffreestanding -nostdlib`.
+        (&["--sanitize", "--target=freestanding"], "--sanitize", "--target=freestanding"),
     ];
 
-    for (flags, phrase) in cases {
+    for (flags, half_a, half_b) in cases {
         let out = Command::new(gg_binary())
             .arg("build")
             .args(flags)
-            .arg("--backend=llvm")
             .arg(&src)
             .output()
             .expect("run gg build");
         assert!(
             !out.status.success(),
-            "`gg build {flags:?} --backend=llvm` SUCCEEDED. Either it silently built \
-             something other than what was asked for, or the rejection was lost."
+            "`gg build {flags:?}` SUCCEEDED. Either it silently built something \
+             other than what was asked for, or the rejection was lost."
         );
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(
-            err.contains(phrase) && err.contains("llvm"),
-            "`gg build {flags:?} --backend=llvm` must name BOTH halves of the \
-             unsupported combination, so the reader knows which one to drop.\nstderr: {err}"
+            err.contains(half_a) && err.contains(half_b),
+            "`gg build {flags:?}` must name BOTH halves of the unsupported \
+             combination, so the reader knows which one to drop.\nstderr: {err}"
         );
         // A rejection that still wrote the artifact would be worse than the
         // silent success it replaced.
         assert!(
             !dir.join("probe").exists() && !dir.join("probe.efi").exists(),
-            "`gg build {flags:?} --backend=llvm` was rejected but still left an artifact behind."
+            "`gg build {flags:?}` was rejected but still left an artifact behind."
         );
     }
 
@@ -52913,21 +52925,56 @@ fn llvm_extern_allocator_respects_declared_return_type() {
 /// t0729 — a nested `match` over a nested `Option` emits an aggregate copy as a
 /// `memcpy` between OVERLAPPING stack slots on the LLVM lane (UB).
 ///
-/// Wired through the sanitize helper because the defect is invisible to a
-/// stdout check — it currently produces the right answer.
+/// Invisible to a stdout check: the program currently produces the right
+/// answer, which is exactly why the defect survived. The assertion is
+/// ASan-cleanliness.
 ///
-/// ⚠ Reddens only under `GG_BACKEND=llvm`, and that is correct rather than a
-/// weakness: the assertion is "ASan-clean", which the C lane genuinely
-/// satisfies. It is the sibling of the 13 other `assert_gg_sanitize_clean`
-/// sites and rides the same LLVM sweep.
+/// Pins `--backend=llvm` EXPLICITLY rather than routing through
+/// `assert_gg_sanitize_clean`, which selects the backend only when
+/// `GG_BACKEND` is set. The C lane genuinely IS clean here, so a
+/// `GG_BACKEND`-driven version reports GREEN on a plain
+/// `cargo test -- --ignored` run — and a green `known_gaps` test reads as a
+/// fixed gap to anyone auditing whether these still fail. Its sibling
+/// `llvm_extern_allocator_respects_declared_return_type` makes the same choice
+/// for the same reason; all four gap tests in this group redden regardless of
+/// the environment.
 #[test]
 #[ignore = "KNOWN GAP t0729: LLVM aggregate copy uses memcpy on overlapping \
 stack slots (ASan: memcpy-param-overlap); reddens attack_64 and attack_70."]
 fn llvm_nested_option_match_no_memcpy_overlap() {
-    assert_gg_sanitize_clean(
-        "known_gaps/llvm_nested_option_match_memcpy_param_overlap",
-        "inner-none",
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest_dir
+        .join("tests/fixtures/known_gaps/llvm_nested_option_match_memcpy_param_overlap.gg");
+    let dir = std::env::temp_dir().join(format!("gg_t0729_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let staged = dir.join("probe.gg");
+    std::fs::copy(&src, &staged).expect("stage fixture");
+
+    let build = Command::new(gg_binary())
+        .arg("build")
+        .arg("--sanitize")
+        .arg("--backend=llvm")
+        .arg(&staged)
+        .output()
+        .expect("run gg build");
+    assert!(
+        build.status.success(),
+        "t0729 probe failed to build.\nstderr: {}",
+        String::from_utf8_lossy(&build.stderr)
     );
+
+    let run = Command::new(dir.join("probe"))
+        .env("ASAN_OPTIONS", "detect_leaks=1:halt_on_error=1:exitcode=99")
+        .output()
+        .expect("run built binary");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        !stderr.contains("AddressSanitizer") && !stderr.contains("SUMMARY:"),
+        "t0729: `--backend=llvm` emitted an aggregate copy as a memcpy between \
+         overlapping stack slots.\nstderr: {stderr}"
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "inner-none");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// t0732 — a `shared(atomic) int` is never freed. Leaks 8 bytes on BOTH lanes.

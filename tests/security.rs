@@ -6,6 +6,10 @@
 //!
 //! - [`security_safe`]       — a well-typed program that must build under
 //!                             `--sanitize` and run exit-0 with expected stdout.
+//! - [`security_safe_no_leak`] — as above, but run under `detect_leaks=1` so a
+//!                             LEAK is a hard failure. For bug classes that are
+//!                             stdout-invisible, which a `security_safe` run
+//!                             (`detect_leaks=0`) cannot see.
 //! - [`security_traps`]      — a program that intentionally performs a
 //!                             runtime-defined trap (e.g. division by zero)
 //!                             and must panic with the Gorget-level message,
@@ -16,6 +20,12 @@
 //!                             The test asserts the bug is *still* present
 //!                             (so regressions can't make it worse silently
 //!                             and so fixes force a reclassification).
+//! - [`security_safe_except_on`] — `security_safe` everywhere except ONE named
+//!                             backend, where a filed, cited compiler defect
+//!                             makes it trip. NOT a skip: on that backend it
+//!                             asserts the trip STILL happens, so fixing the
+//!                             cited item turns it red and forces the
+//!                             annotation out.
 //!
 //! When a known-unsafe bug is fixed, the test will start failing — that's
 //! the signal to reclassify as `security_safe` / `security_rejected` /
@@ -24,8 +34,19 @@
 //! To run just the security suite:
 //!     cargo test --test security
 //!
+//! ⚠ THE SUITE RUNS ON WHICHEVER BACKEND `GG_BACKEND` SELECTS. Unset means the
+//! compiler's default; `GG_BACKEND=llvm` makes this a genuinely second lane
+//! rather than a re-run of the first, which is what it was for as long as this
+//! file ignored the variable. See [`gg_command`] for which subcommands carry
+//! the flag and why, and [`backend_flag_selection_is_wired`] for the guard that
+//! keeps the wiring honest. ASan serialises on global state, so the LLVM lane
+//! wants `-- --test-threads=1`:
+//!     GG_BACKEND=llvm cargo test --test security -- --test-threads=1
+//!
 //! The full build includes `-fsanitize=address,undefined` via the
-//! compiler's own `--sanitize` flag.
+//! compiler's own `--sanitize` flag. ⚠ On `--backend=llvm` that instruments the
+//! runtime only, not generated user code (`todo/t0727`): leaks and
+//! runtime-side faults are caught there, user-code faults are not.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -98,16 +119,17 @@ fn gg_command(subcommand: &str) -> Command {
     cmd
 }
 
-/// The backend-flag decision, factored out of [`gg_command`] so it can be
-/// tested without touching process-wide environment state.
+/// The backend-flag DECISION, split out of [`gg_command`] so its branches can
+/// be enumerated without an environment.
 ///
-/// Split out on purpose. The bug this whole mechanism replaces was not a wrong
-/// decision, it was a decision nothing ever checked: the LLVM CI job read as
-/// coverage for an unknown period while `GG_BACKEND` went unread here. Inlined in
-/// `gg_command`, the logic is reachable only through a subprocess and an env
-/// var, i.e. effectively untestable, and the next refactor that drops it would
-/// be just as silent. As a pure function it has
-/// [`backend_flag_selection_is_wired`] standing over it.
+/// WARNING: testing this function alone is NOT a guard on the mechanism, and
+/// mistaking it for one is how the original defect comes back. The bug this
+/// replaces was not a wrong decision — it was a decision nothing ever
+/// CONSULTED: the LLVM CI job read as coverage for an unknown period while
+/// `GG_BACKEND` went unread here. A guard that only checks this function stays
+/// green while `gg_command` stops calling it. See
+/// [`backend_flag_selection_is_wired`], which asserts on the command
+/// `gg_command` actually builds.
 fn backend_flag_for(subcommand: &str, backend: Option<&str>) -> Option<String> {
     match backend {
         // `build` is the only subcommand this file uses that GENERATES code,
@@ -117,33 +139,117 @@ fn backend_flag_for(subcommand: &str, backend: Option<&str>) -> Option<String> {
     }
 }
 
+/// Collect a `Command`'s arguments as plain strings, so a guard can assert on
+/// what was actually constructed rather than on what a helper would return.
+fn args_of(cmd: &Command) -> Vec<String> {
+    cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+}
+
+/// The inner half of [`backend_flag_selection_is_wired`], re-executed as a
+/// CHILD process with `GG_BACKEND` set.
+///
+/// `#[ignore]`d because it asserts a positive that holds only when the variable
+/// is set; it is meant to be reached by its parent, not by a sweep. It is
+/// nonetheless a real assertion on the real `gg_command`.
+///
+/// Why a child process rather than `std::env::set_var`: this suite runs its
+/// tests in parallel and each one SPAWNS `cargo run`, which inherits the
+/// process environment. Mutating `GG_BACKEND` in-process — even briefly, even
+/// under `#[serial]`, which does not exclude non-serial tests — could hand a
+/// concurrently-spawning fixture the wrong backend and produce a wrong-lane
+/// result. Setting the variable on a child is race-free by construction.
+#[test]
+#[ignore = "inner probe: re-executed by backend_flag_selection_is_wired with GG_BACKEND set"]
+fn backend_flag_wiring_inner_probe() {
+    let backend = gg_backend().expect(
+        "inner probe requires GG_BACKEND to be set; it is re-executed by \
+         backend_flag_selection_is_wired, not run directly",
+    );
+    let build = args_of(&gg_command("build"));
+    assert!(
+        build.contains(&format!("--backend={backend}")),
+        "`gg_command(build)` did not carry `--backend={backend}` with GG_BACKEND={backend} \
+         set. THE SELECTOR IS NOT WIRED: the LLVM security job is running the C suite under \
+         a different name, and ~180 fixtures of a whole lane's memory-safety evidence are a \
+         copy of the other lane's.\nargs: {build:?}"
+    );
+    let check = args_of(&gg_command("check"));
+    assert!(
+        !check.iter().any(|a| a.starts_with("--backend")),
+        "`gg_command(check)` carried a backend flag. `check` does no codegen, so this \
+         advertises a lane distinction that does not exist.\nargs: {check:?}"
+    );
+}
+
 /// Guard for the selector itself: `--test security` must actually run on the
 /// backend it was asked for.
 ///
-/// Not a tautology, and not a test of a two-line `match`. It pins the wiring
-/// that `.github/workflows/ci.yml`'s "Security tests (LLVM + ASan + UBSan)" job
-/// silently depends on. That job sets `GG_BACKEND: llvm` and, for as long as
-/// this file ignored it, ran the C suite a second time under an LLVM name —
-/// ~180 fixtures' worth of a whole lane's memory-safety evidence that was a
-/// copy of the other lane's. Nothing was red; there was simply nothing there.
+/// It pins the WIRING that `.github/workflows/ci.yml`'s "Security tests (LLVM +
+/// ASan + UBSan)" job silently depends on. That job sets `GG_BACKEND: llvm`
+/// and, for as long as this file ignored it, ran the C suite a second time
+/// under an LLVM name — ~180 fixtures' worth of a whole lane's memory-safety
+/// evidence that was a copy of the other lane's. Nothing was red; there was
+/// simply nothing there.
+///
+/// WARNING: it asserts on the command `gg_command` ACTUALLY BUILDS, not on
+/// [`backend_flag_for`]'s return value. That distinction is the entire point.
+/// An earlier version of this guard checked only the pure decision function and
+/// stayed GREEN when `gg_command` was edited to stop consulting the environment
+/// — i.e. when the exact original defect was reintroduced. A guard that cannot
+/// catch its own class is worse than none, because it reads as coverage.
+///
+/// The environment is supplied to a CHILD process
+/// ([`backend_flag_wiring_inner_probe`]) rather than mutated in this one; see
+/// that function for why.
 #[test]
 fn backend_flag_selection_is_wired() {
-    // The selector is read, and it is read for `build`.
-    assert_eq!(
-        backend_flag_for("build", Some("llvm")).as_deref(),
-        Some("--backend=llvm"),
-        "GG_BACKEND is not reaching `gg build` — the LLVM security job is a \
-         re-run of the C suite under a different name."
+    let exe = std::env::current_exe().expect("test binary path");
+    let probe = |set: bool| -> std::process::Output {
+        let mut c = Command::new(&exe);
+        c.args(["--exact", "backend_flag_wiring_inner_probe", "--ignored", "--nocapture"]);
+        if set { c.env("GG_BACKEND", "llvm"); } else { c.env_remove("GG_BACKEND"); }
+        c.output().expect("re-exec the test binary")
+    };
+
+    // 1. THE WIRING, under an environment we control.
+    let out = probe(true);
+    assert!(
+        out.status.success(),
+        "the wiring probe FAILED under GG_BACKEND=llvm — `gg_command` is not consulting \
+         the environment.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
+
+    // 2. ...and the negative, so an unconditionally-appended flag is caught too.
+    let out = probe(false);
+    assert!(
+        !out.status.success(),
+        "the wiring probe PASSED with GG_BACKEND unset. It requires the variable, so either \
+         `gg_backend()` is inventing a value or `gg_command` appends a backend \
+         unconditionally — the default lane would then not be the default lane."
+    );
+
+    // 3. The decision's branches: through the real command for the ambient
+    //    environment, through the pure function for values it cannot be.
+    let ambient = gg_backend();
+    let build = args_of(&gg_command("build"));
+    match ambient.as_deref() {
+        Some(b) => assert!(
+            build.contains(&format!("--backend={b}")),
+            "ambient GG_BACKEND={b} is not reaching `gg build`.\nargs: {build:?}"
+        ),
+        None => assert!(
+            !build.iter().any(|a| a.starts_with("--backend")),
+            "no GG_BACKEND is set, yet `gg build` carried a backend flag.\nargs: {build:?}"
+        ),
+    }
     assert_eq!(
         backend_flag_for("build", Some("c-lir")).as_deref(),
         Some("--backend=c-lir"),
         "the selector must pass through whatever it is given, not just `llvm`."
     );
-
-    // Unset means the compiler's default; never an invented flag.
     assert_eq!(backend_flag_for("build", None), None);
-
     // `check` does no codegen, so a backend there would be noise advertising a
     // lane distinction that does not exist (`security_rejected`'s 32 fixtures).
     assert_eq!(backend_flag_for("check", Some("llvm")), None);
@@ -345,7 +451,20 @@ fn security_safe(name: &str, expected_stdout: &str) {
 /// filed with a durable `known_gaps` repro asserting the INTENDED behaviour,
 /// so what the language should do is pinned by an artifact rather than by this
 /// comment.
-fn security_safe_except_on(name: &str, expected_stdout: &str, backend: &str, item: &str, reason: &str) {
+///
+/// `trip_marker` names the SPECIFIC sanitizer class expected — e.g.
+/// `"memcpy-param-overlap"`. Asserting merely "nonzero exit" or "some sanitizer
+/// output" would also be satisfied by an unrelated segfault, so the exemption
+/// would silently widen to cover a defect nobody adjudicated. Name the class
+/// the filed item describes, and nothing else.
+fn security_safe_except_on(
+    name: &str,
+    expected_stdout: &str,
+    backend: &str,
+    item: &str,
+    trip_marker: &str,
+    reason: &str,
+) {
     if gg_backend().as_deref() != Some(backend) {
         security_safe(name, expected_stdout);
         return;
@@ -358,13 +477,24 @@ fn security_safe_except_on(name: &str, expected_stdout: &str, backend: &str, ite
         out.build_stderr
     );
     assert!(out.ran, "security_safe_except_on({name}) [{backend}]: binary did not run");
-    let tripped = out.exit_code != Some(0)
-        || out.stderr.contains("Sanitizer")
-        || out.stderr.contains("runtime error");
+    // Whatever ran before the trip must still be CORRECT. Under
+    // `halt_on_error=1` the process aborts partway, so the full expected stdout
+    // cannot be asserted — but what was printed must be a prefix of it. Without
+    // this the exempted lane checks no output at all and a value regression
+    // there would be invisible.
+    assert!(
+        expected_stdout.trim().starts_with(out.stdout.trim()),
+        "security_safe_except_on({name}) [{backend}]: the output produced before the \
+         sanitizer trip is not a prefix of the expected output, so this fixture has a \
+         VALUE regression on top of {item}.\nexpected (full): {expected_stdout:?}\ngot: {}",
+        out.stdout
+    );
+    let tripped = out.stderr.contains(trip_marker);
     assert!(
         tripped,
         "security_safe_except_on({name}) [{backend}]: this fixture is recorded as tripping \
-         the sanitizer on this backend because `{reason}` ({item}), and it NO LONGER DOES. \
+         the sanitizer on this backend with `{trip_marker}` because `{reason}` ({item}), \
+         and it NO LONGER DOES. \
          If {item} was fixed, that is good news: delete this annotation, restore the plain \
          `security_safe` call, and graduate the `known_gaps` repro {item} cites into a live \
          fixture. Do NOT leave the annotation in place — an exemption whose cause is gone is \
@@ -1268,9 +1398,10 @@ fn sec_64_deep_option_unwrap() {
         "42\ninner-none",
         "llvm",
         "todo/t0729",
+        "memcpy-param-overlap",
         "the LLVM backend emits an aggregate copy for a nested Option match as a \
-         raw memcpy between two OVERLAPPING stack slots (ASan: memcpy-param-overlap), \
-         which is UB; the C lane is clean and is the oracle",
+         raw memcpy between two OVERLAPPING stack slots, which is UB; the C lane is \
+         clean and is the oracle",
     );
 }
 
@@ -1310,6 +1441,7 @@ fn sec_70_inline_none_nested() {
         "-1\n42\n-2\n-1\n7",
         "llvm",
         "todo/t0729",
+        "memcpy-param-overlap",
         "same overlapping-memcpy aggregate-copy defect as attack_64 — this is the \
          second of the two suite fixtures it reddens, not an independent bug",
     );

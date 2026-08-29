@@ -1,6 +1,7 @@
 # KNOWN GAP (todo/t0732): a `shared(atomic) int` is allocated by
 # `gorget_atomic_int_new` and NEVER FREED. It leaks 8 bytes, on BOTH backends,
-# deterministically — 10/10 runs, exit 99, on each lane:
+# deterministically — 20/20 runs, exit 99, on EACH lane (this shape is stable;
+# see the axis note below for the shapes that are not):
 #
 #   Direct leak of 8 byte(s) in 1 object(s) allocated from:
 #     #0 __interceptor_malloc
@@ -30,22 +31,46 @@
 #   * The robustness map's `asan` lane covers its own cell corpus, not this one.
 #
 # So the leak sits in a fixture named for a memory-safety attack, inside a suite
-# named for security, and is invisible to all of it. Hence this file: a
-# top-level `known_gaps` repro under `detect_leaks=1` is the shape that can
-# actually be seen.
+# named for security, and is invisible to all of it.
+#
+# ⚠ THE SWEEP DOES NOT SEE THIS FILE EITHER. `-maxdepth 1` excludes
+# `tests/fixtures/known_gaps/` exactly as it excludes `tests/fixtures/security/`,
+# so putting the repro here does not itself make it observable. What observes it
+# is the `#[ignore]`d `shared_atomic_int_is_dropped` in `tests/integration.rs`,
+# which asserts the INTENDED clean result and is the thing that flips when this
+# is fixed. The directory-scope limitation is a second reason for t0731's
+# widen-the-sweep half, not a problem this file's location solves.
 #
 # ── ⚠ FOR WHOEVER FIXES IT: THE "LANE DIVERGENCE" IS A MIRAGE ──
 #
-# Measured with 4 spawned tasks (attack_87's own shape), the C binary reports
-# the leak 10/10 and the LLVM binary reports it 0/10, which reads like an
-# LLVM-lane divergence. It is not. Reduced to the two-task shape below, BOTH
-# lanes report it 10/10, and an extern `malloc` leak injected into the 4-task
-# LLVM binary IS reported — so LeakSanitizer is present and looking on that
-# lane. The 4-task silence is a stop-the-world REACHABILITY artifact under
-# contention (a live worker's stack or a pool structure still referencing the
-# block), not different codegen. Do not go looking for an LLVM bug; there isn't
-# one here. Keep the task count LOW in any repro, or the instrument stops
-# reporting the very thing you are measuring.
+# On `attack_87`'s own 4-task shape the C binary reports the leak on every run
+# while the LLVM binary usually reports nothing, which reads like an LLVM-lane
+# divergence. It is not, and the reporting rate is NOT a fixed number: it is
+# load- and machine-sensitive. Measured 0/20 here; an independent reviewer
+# measured 3/10 on the same box under different load. Do not expect any
+# particular figure to reproduce — re-measure with
+#   for i in $(seq 20); do ASAN_OPTIONS=detect_leaks=1:exitcode=99 ./bin; echo $?; done
+#
+# It is a stop-the-world REACHABILITY artifact — a worker still live at exit,
+# its stack or a pool structure still referencing the block, so LSan classifies
+# it reachable rather than leaked — not different codegen. Two independent
+# checks: an extern `malloc` leak injected into the 4-task LLVM binary IS
+# reported, so LeakSanitizer is present and looking on that lane; and the
+# emitted IR is identical across lanes for the allocation itself. Do not go
+# looking for an LLVM bug; there isn't one here.
+#
+# ⚠ THE AXIS IS PER-TASK WORK, NOT TASK COUNT — measured, 20 runs per cell on
+# the LLVM lane, because the obvious rule is the wrong one:
+#
+#     2 tasks x 1 increment      (this fixture)   20/20 reported
+#     4 tasks x 1 increment                       20/20 reported
+#     2 tasks x 10000 increments                   4/20 reported
+#     4 tasks x 10000 increments (attack_87)       0/20 reported
+#
+# Four tasks with no loop is perfectly stable; two tasks with the loop already
+# flakes. So "use fewer tasks" would let you write a flaky repro and think you
+# had followed the rule. THE RULE IS: keep the concurrent work SHORT, so no
+# worker is still live when the process exits.
 #
 # INTENDED on both backends: stdout `1`, exit 0, and ZERO LeakSanitizer output
 # under `detect_leaks=1`. GRADUATES to a live `security_safe_no_leak` fixture

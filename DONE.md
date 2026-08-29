@@ -1,3 +1,48 @@
+- [2026-08-29] **`--sanitize` was a SILENT NO-OP on the LLVM backend, and `tests/security.rs` never read `GG_BACKEND` — the LLVM sanitizer lane was vacuous twice over (t0723). Both closed; the newly-real lane immediately caught undefined behaviour.**
+
+  **The defect.** `gg build --sanitize --backend=llvm` printed `Built:` over a binary with **zero** ASan
+  symbols that did not link `libasan` — measured at HEAD, with the C twin of the same source linking
+  `libasan.so.8` + `libubsan.so.1`, carrying 19 symbols, and exiting 99 with a LeakSanitizer report.
+  Separately, `.github/workflows/ci.yml`'s "Security tests (LLVM + ASan + UBSan)" job set `GG_BACKEND: llvm`
+  while `tests/security.rs` read that variable nowhere, so the job was a verbatim re-run of the C suite.
+  Every "ASan-clean on LLVM" claim in the project's history was therefore free.
+
+  **The fix, as a class rather than an instance.** `--sanitize` now threads through `compile_llvm_pipeline`
+  (runtime `cc -c` + link). Because the flag set had been hand-copied at four C sites and was absent at the
+  LLVM ones, it landed as ONE `add_sanitize_flags` helper with six call sites and a single `-fsanitize`
+  spelling. The sibling silent-drops at the same dispatch were closed with it: `--target=freestanding
+  --backend=llvm` had been shipping a hosted ELF where a UEFI image was asked for (rc 0), `--shared
+  --backend=llvm` had been handing LLVM IR to `cc` and blaming the user's program in ~290 lines of C syntax
+  errors, and `--sanitize --target=freestanding` was accepted and dropped on **both** backends — that last
+  one is `todo/t0641`'s already-filed early-return family, which the scout, the brief and three review
+  passes all missed and the output review caught.
+
+  **The guard is the deliverable.** `sanitizer_gate_is_real_on_both_backends` loops both backends and
+  asserts TWO cells, because they fail independently: LeakSanitizer is interceptor-based and reports fine on
+  a wholly uninstrumented binary. Measured rather than argued — with the sanitize flags on the link command
+  and off the runtime compile, the leak cell stays green and `ldd` still lists `libasan.so.8` while
+  `__asan_report_*` references go 10 → 0. Cell 2 scans the artifact for that marker. `backend_flag_selection_is_wired`
+  guards the selector by re-executing the test binary as a child with `GG_BACKEND` set and asserting on the
+  command `gg_command` actually builds — its first version checked only a pure decision function and stayed
+  GREEN when the original defect was reintroduced, which the output review demonstrated.
+
+  **What the real lane found, within ~8 minutes of first existing:** `AddressSanitizer: memcpy-param-overlap`
+  in two shipped fixtures — the LLVM backend emits aggregate copies as `memcpy` between OVERLAPPING stack
+  slots. Pre-existing and not caused by this work: the emitted `.ll` is byte-identical with and without
+  `--sanitize`, and across the commit boundary. Filed HIGH as `t0729`.
+
+  **Residual, stated rather than implied.** `llc` runs no instrumentation pass, so on that lane only the
+  runtime is instrumented: leaks and runtime-side faults are caught, user-code faults are not. Said in the
+  code, in five doc files, and pinned by a committed `known_gaps` repro. The prose that went false was
+  retired NARROWLY — the `asan` lane is still C-only, but now because it passes no `--backend`, not because
+  the flag is dropped.
+
+  Filed: `t0727` (user code uninstrumented), `t0728` (a name match on `malloc`/`calloc`/`realloc` outranks an
+  extern's declared return type — this round's own headline class), `t0729`, `t0730` (`gg run` drops
+  `--backend`/`--target`; an owner call), `t0731` (sweep lane + directory scope), `t0732` (`shared(atomic) int`
+  leaks on BOTH lanes, seen by no gate in the tree). Each ships a durable `known_gaps` repro with an
+  `#[ignore]`d test asserting the intended state, every one observed failing.
+
 - [2026-08-29] **`AGENTS.md` compaction + the gauntlet's terminating condition (owner-directed): 59,271 → 47,381 bytes.**
 
   **Why.** The owner reported the failure this fixes: *"each round spins on each track never reaching the

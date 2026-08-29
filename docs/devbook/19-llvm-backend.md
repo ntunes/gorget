@@ -282,7 +282,7 @@ matching `declare`s for them (`emit_extern_declarations`,
    (`src/main.rs:1259-1275`).
 4. **Compile runtime C → `.o`** with `cc -c -O2 -std=c11
    -Werror=implicit-function-declaration` (+ `-pthread` off macOS, and the
-   sanitizer flags under `--sanitize` — see below) (`src/main.rs:1283-1296`).
+   sanitizer flags under `--sanitize` — see below) (`src/main.rs:1601-1633`).
    Deliberately no blanket `-w`: silencing everything here hides
    implicit-declaration bugs, so that one class is a hard error and the rest of
    the warning flood stays off.

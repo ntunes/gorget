@@ -1616,8 +1616,10 @@ fn compile_llvm_pipeline(
     // wrappers — so instrumenting it here is what buys shadow-memory checking
     // on this lane. It is ALSO the half that distinguishes a genuinely
     // instrumented build from one that merely links libasan, which is why the
-    // guard for it (`llvm_sanitize_instruments_runtime_object`, tests/security.rs)
-    // inspects THIS object file for `__asan_report_*` references.
+    // guard for it (`sanitizer_gate_is_real_on_both_backends`, tests/security.rs)
+    // scans the FINAL LINKED ARTIFACT for `__asan_report_*` references: those
+    // symbols are emitted by instrumented code, and with this call reverted the
+    // executable's count drops to zero while `ldd` still shows libasan.
     //
     // ⚠ RESIDUAL GAP — this does NOT instrument generated user code. That code
     // reaches the binary as LLVM IR through `llc` (step 2 below), and `llc`
@@ -2795,19 +2797,28 @@ fn real_main() {
         .map(|s| s.as_str())
         .or_else(|| args.iter().find_map(|a| a.strip_prefix("--target=")))
         .unwrap_or("native");
-    // ── Build flags the LLVM backend cannot honour: reject, never drop ──
+    // ── Build-flag combinations that cannot be honoured: reject, never drop ──
     //
-    // These two sit with `--clones=stats` above and with the unknown-backend
-    // check, as one lower-or-reject policy: every build flag the selected
-    // backend cannot implement is refused by name, so `gg` never hands back an
+    // These sit with `--clones=stats` above and with the unknown-backend check,
+    // as one lower-or-reject policy: every build flag the selected backend or
+    // target cannot implement is refused by name, so `gg` never hands back an
     // artifact that is not what was asked for. They are deliberately placed
     // AFTER `--target` parsing (which is itself after the `--clones=stats`
     // check) because they read `target`.
     //
-    // The sibling that is WIRED rather than rejected is `--sanitize`
-    // (`add_sanitize_flags`): it was the fourth member of this same class and
-    // was cheap enough to implement. The discriminator across the class is
+    // The sibling that is WIRED rather than rejected is `--sanitize` on the
+    // LLVM backend (`add_sanitize_flags`): it was a member of this same class
+    // and was cheap enough to implement. The discriminator across the class is
     // implementation cost, not principle.
+    //
+    // ⚠ THE SHAPE THAT KEEPS PRODUCING THESE. Three of the four sub-paths of
+    // `try_build_ir` build their OWN `cc` command and `return` from it before
+    // reaching the flag-application code further down — `--shared`, the
+    // hot-reload split, and freestanding/UEFI. A flag applied only at the
+    // bottom of the normal path is therefore silently absent on all three
+    // unless it is threaded deliberately. `todo/t0641` records the same hole
+    // for `--release`, which is still open on two of them. When adding a build
+    // flag, check every early-returning sub-path, not just the one you tested.
     if target.starts_with("freestanding") && backend_name == "llvm" {
         // Silently built a hosted ELF and printed `Built:`. The freestanding
         // path is C-backend-only: `try_build_ir` returns into
@@ -2821,6 +2832,28 @@ fn real_main() {
              (it needs clang's `-target <arch>-unknown-windows -ffreestanding -nostdlib` \
              and lld, which the LLVM pipeline's llc+cc path does not drive)\n  \
              use the default C backend for freestanding targets, or drop --target"
+        );
+        process::exit(1);
+    }
+    if sanitize && target.starts_with("freestanding") {
+        // Accepted and silently discarded on BOTH backends, with rc 0 and no
+        // diagnostic — the same shape as `--sanitize --backend=llvm` before it
+        // was wired, one axis over. The freestanding branch builds its own
+        // `cc_cmd` and returns from it before reaching `add_sanitize_flags`,
+        // so the flag never landed. Verified with `CC=/bin/echo`: the argv
+        // carried no `-fsanitize` here while the ordinary C path did.
+        //
+        // REJECTED rather than wired, unlike the LLVM case: a UEFI PE image is
+        // built `-ffreestanding -nostdlib`, and ASan/UBSan need a runtime
+        // library and a libc to intercept. There is nothing to instrument
+        // against, so this combination cannot be honoured at all.
+        eprintln!(
+            "error: unsupported --sanitize with --target={target}\n  \
+             the sanitizers need a hosted environment (they link a runtime \
+             library and intercept libc), and the freestanding/UEFI target is \
+             built -ffreestanding -nostdlib with no libc to intercept\n  \
+             drop --sanitize for freestanding builds, or build for the native \
+             target to sanitize"
         );
         process::exit(1);
     }
