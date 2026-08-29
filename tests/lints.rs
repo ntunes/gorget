@@ -23303,7 +23303,7 @@ fn staging_move_burndown_shrink_only() {
 #[test]
 fn known_gaps_repros_are_wired_to_a_test() {
     /// Baseline regenerated 2026-08-27 by running this test. SHRINK-ONLY.
-    const ALLOWED_UNWIRED: [&str; 31] = [
+    const ALLOWED_UNWIRED: [&str; 30] = [
         "box_callable_call_through_box_undefined_function",
         "box_ctor_closure_ices_while_boxnew_works",
         "box_enum_payload_c_wont_compile_llvm_double_frees",
