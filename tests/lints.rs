@@ -7990,9 +7990,13 @@ fn docs_plans_removed_and_define_gorget_is_ledger_only() {
 /// The sanitize sweep's allowlists are SHRINK-ONLY, and every corruption row
 /// carries a justification.
 ///
-/// The sweep itself (`scripts/sanitize_sweep.sh`, ~25 min) is a separate CI job.
-/// This is the cheap half: a pure file read that runs in the normal lint gate,
-/// so the *invariant* is enforced on every commit even though the sweep is not.
+/// The sweep itself (`scripts/sanitize_sweep.sh`) is a separate CI job: ONE
+/// pass over the corpus is ~25 min at parallelism 8, dominated by ~2150 fixture
+/// BUILDS — an extra REPETITION re-runs the already-built binaries and costs
+/// only a few minutes, so the repeat-run verdict the gate now takes is NOT a
+/// multiple of that figure. This is the cheap half: a pure file read that runs
+/// in the normal lint gate, so the *invariant* is enforced on every commit even
+/// though the sweep is not.
 ///
 /// Why two lists rather than one: memory corruption is a soundness hole and
 /// leaks are resource debt. A single merged list would let a use-after-free hide
@@ -8012,7 +8016,16 @@ fn sanitize_allowlists_shrink_only() {
     // retires WITH that fix"). The surviving row is INTENTIONAL, so the
     // register now holds ZERO filed corruption defects.
     const CORRUPTION_CEILING: usize = 1;
-    const LEAK_CEILING: usize = 316;
+    // 316 -> 313 (R47-E1): `async_blocking_io`, `async_channel_poll` and
+    // `spawn_closure_copy` were measured CLEAN on every run of a repeat-run
+    // corpus sweep and their rows deleted. The ceiling was EXACTLY tight at
+    // 316, and the assertion below is `<=`, so deleting rows without lowering
+    // it would have left silent headroom for three future leaks — the gate
+    // would have accepted them without a word. The unit is unchanged: rows are
+    // still counted ONE PER FIXTURE (the class signatures the same round added
+    // live in TAB column 2, not in extra rows), so this number stays
+    // comparable to every value it has held.
+    const LEAK_CEILING: usize = 305;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -8028,21 +8041,29 @@ fn sanitize_allowlists_shrink_only() {
     let corrupt = read("CORRUPTION_ALLOWLIST.txt");
     let leaks = read("LEAK_ALLOWLIST.txt");
 
-    assert!(
-        corrupt.len() <= CORRUPTION_CEILING,
-        "MEMORY-CORRUPTION allowlist grew to {} (ceiling {CORRUPTION_CEILING}). \
-         Adding a row here ships a known use-after-free / double-free / overflow \
-         — memory safety is this language's entire claim. Fix the defect, or get \
-         an owner decision and file it. When you FIX one, lower the ceiling in \
-         the same commit.",
+    // EXACT, not `<=`. Under `<=` a burn-down that forgets to lower the ceiling
+    // is silently accepted, and the leftover headroom quietly admits the next
+    // leaks — the gate accepting a wrong number without a word is this file's
+    // own subject, one level up. `known_gaps_passing_allowlist_shrink_only`
+    // makes the same argument for the same reason: a ceiling counts rows, it
+    // does not identify them, so at least make it count them exactly.
+    assert_eq!(
+        corrupt.len(),
+        CORRUPTION_CEILING,
+        "MEMORY-CORRUPTION allowlist has {} row(s), the pinned count is \
+         {CORRUPTION_CEILING}. ADDING a row here ships a known use-after-free / \
+         double-free / overflow — memory safety is this language's entire claim; \
+         fix the defect, or get an owner decision and file it. REMOVING one is \
+         the good case: lower the constant in the same commit.",
         corrupt.len()
     );
-    assert!(
-        leaks.len() <= LEAK_CEILING,
-        "LEAK allowlist grew to {} (ceiling {LEAK_CEILING}). A new leak shipped. \
-         Fix it, or justify the row and raise this deliberately. When you burn \
-         some down, lower the ceiling in the same commit — that is the only way \
-         this backlog actually shrinks.",
+    assert_eq!(
+        leaks.len(),
+        LEAK_CEILING,
+        "LEAK allowlist has {} row(s), the pinned count is {LEAK_CEILING}. If it \
+         GREW, a new leak shipped — fix it, or justify the row and raise this \
+         deliberately. If it SHRANK, you burned some down: lower the constant in \
+         the same commit, which is the only way this backlog actually shrinks.",
         leaks.len()
     );
 
@@ -8055,6 +8076,184 @@ fn sanitize_allowlists_shrink_only() {
             cols.len() >= 3 && cols[2].trim().len() > 40,
             "corruption allowlist row lacks a justification: {row:?}\n\
              Format: <fixture> TAB <kind> TAB <why it is here, and what retires it>"
+        );
+    }
+
+    // Every LEAK row must name the MECHANISMS it tolerates, with a count.
+    //
+    // A bare fixture stem tolerated *any* leak in that fixture, forever: a
+    // second, unrelated mechanism appearing inside an already-allowlisted
+    // fixture was invisible, because the gate could only ask "is this stem on
+    // the list". Rows now carry `<top-frame>*<records>` per class, so an extra
+    // class — or one more record of a class the row already tolerates — fails
+    // the sweep. COUNTS, not a set: a set cannot see a SECOND leak of a class
+    // the fixture already exhibits, which is exactly the case that hides.
+    //
+    // ONE ROW PER FIXTURE, signatures in TAB column 2 (the shape
+    // CORRUPTION_ALLOWLIST.txt already uses). That keeps LEAK_CEILING a
+    // FIXTURE count across the schema change, so the shrink-only ratchet's
+    // history stays comparable — a row-per-(fixture, class) schema would have
+    // changed the unit under an assertion that only checks `<=`, and getting
+    // that wrong is silently accepted.
+    // ⚠ THE ROW COUNT IS NOT THE TOLERANCE. Pinning only `leaks.len()` leaves the
+    // AMOUNT each row tolerates completely unratcheted, and that is this file's
+    // own defect one level up: `str_alloc_copy*2` -> `str_alloc_copy*99` is one
+    // character, it keeps the row count at 313, and it re-opens exactly the case
+    // the class column exists to catch — a SECOND leak of a class the fixture
+    // already exhibits. Measured, not imagined: with that single edit the sweep
+    // returned EXIT=0 on the injected fixture that it otherwise reds, degrading
+    // the finding to a "leaking LESS than its row admits" advisory, and this
+    // test stayed green. Same for silently promoting a strict row to `*N+`,
+    // which switches its count check off entirely.
+    //
+    // So the TOLERANCE is pinned too, exactly, on three independent totals that
+    // the parse loop below is already computing:
+    //   * (fixture, class) PAIRS   — catches a class appended to a row
+    //   * tolerated RECORDS        — catches a count being widened
+    //   * `+`-marked SIGNATURES    — catches a count check being switched off
+    // Widening a row now fails HERE, in the cheap lint that runs on every
+    // commit, and the failure names the number to move.
+    //
+    // What this still cannot see, stated rather than papered over: a
+    // COMPENSATING edit (+1 on one row, -1 on another) preserves a total. Three
+    // totals make that harder than one, and the sweep's own per-row adjudication
+    // is what identifies rows — `known_gaps_passing_allowlist_shrink_only` makes
+    // the same admission for the same reason ("a ceiling counts rows; it does
+    // not identify them"). The point is that no SINGLE-character widening is
+    // silently accepted any more.
+    const LEAK_CLASS_PAIRS: usize = 512;
+    const LEAK_RECORDS: usize = 2259;
+    const LEAK_LOOSE_SIGNATURES: usize = 6;
+
+    let mut leak_stems: Vec<&str> = Vec::new();
+    let (mut pairs, mut records, mut loose) = (0usize, 0usize, 0usize);
+    for row in &leaks {
+        let cols: Vec<&str> = row.split('\t').collect();
+        assert!(
+            cols.len() >= 2 && !cols[1].trim().is_empty() && cols[1].trim() != "-",
+            "leak allowlist row has no class column: {row:?}\n\
+             Format: <fixture> TAB <top-frame>*<records>[,<top-frame>*<records>...]\n\
+             Take the signature from column 4 of the sweep's own verdicts.tsv."
+        );
+        for sig in cols[1].trim().split(',') {
+            let (sym, n) = sig.rsplit_once('*').unwrap_or_else(|| {
+                panic!(
+                    "leak allowlist signature is not <top-frame>*<records>: {sig:?} in {row:?}"
+                )
+            });
+            // A trailing `+` means "at least N, count not pinned" — reserved for
+            // the concurrency rows whose leak COUNT is genuinely racy, where an
+            // exact count would make the sweep itself flap. It switches a count
+            // check OFF, so the number of them is pinned like everything else.
+            let (n, is_loose) = match n.strip_suffix('+') {
+                Some(stripped) => (stripped, true),
+                None => (n, false),
+            };
+            let parsed = n.parse::<u32>();
+            assert!(
+                !sym.trim().is_empty() && parsed.as_ref().is_ok_and(|v| *v > 0),
+                "leak allowlist signature is not <top-frame>*<records>[+]: {sig:?} in {row:?}"
+            );
+            pairs += 1;
+            records += parsed.unwrap() as usize;
+            loose += usize::from(is_loose);
+        }
+        let stem = cols[0].trim();
+        assert!(
+            !leak_stems.contains(&stem),
+            "leak allowlist has two rows for {stem:?}. One row per fixture — the \
+             classes go in column 2, so that the ceiling keeps counting fixtures."
+        );
+        leak_stems.push(stem);
+    }
+
+    assert_eq!(
+        pairs, LEAK_CLASS_PAIRS,
+        "the LEAK allowlist now names {pairs} (fixture, class) pairs, the pinned \
+         count is {LEAK_CLASS_PAIRS}. A class was added to a row or removed from \
+         one. If a fix retired a mechanism, lower this in the same commit; if a \
+         NEW mechanism appeared inside an already-listed fixture, that is a new \
+         leak and the answer is not to widen the row."
+    );
+    assert_eq!(
+        records, LEAK_RECORDS,
+        "the LEAK allowlist now tolerates {records} leak records, the pinned \
+         count is {LEAK_RECORDS}. Widening a row's count re-opens the exact case \
+         the class column exists to catch — one more record of a class the \
+         fixture already exhibits. If a fix genuinely reduced the count, lower \
+         this in the same commit; the sweep prints a 'TIGHTEN these rows' \
+         advisory naming the row and the new number."
+    );
+    assert_eq!(
+        loose, LEAK_LOOSE_SIGNATURES,
+        "the LEAK allowlist now has {loose} `*N+` signatures, the pinned count is \
+         {LEAK_LOOSE_SIGNATURES}. `+` switches a row's count check OFF, so it is \
+         an admission, not an annotation: add one only for a row the sweep's own \
+         `count-drift` census has named, and move this number in the same commit."
+    );
+}
+
+/// The sanitize sweep's own positive controls exist, and the sweep runs them.
+///
+/// **Why this exists (R47-E1).** `scripts/sanitize_sweep.sh` is the gate for a
+/// defect class the main suite structurally cannot see — an stdout compare
+/// cannot observe a use-after-free — and its detectors had never been observed
+/// to fire. `docs/devbook/25-structural-guards.md`: *"a gate that has never
+/// been seen to fail is not evidence."* The sweep therefore runs four control
+/// fixtures before it reports anything and asserts that its leak detector
+/// fires, its flake detector fires, its class check fires on a SECOND record of
+/// an ALREADY-TOLERATED class, and its clean control stays quiet.
+///
+/// This lint is the wiring's own guard, in the shape
+/// `known_gaps_census_is_wired_in_ci` uses next door: a positive control that
+/// nothing runs is the unfalsifiable guard the whole exercise is retiring. It
+/// also pins the two structural facts the controls depend on — that they live
+/// in a SUBDIRECTORY, and that the corpus walk is `-maxdepth 1` so it cannot
+/// see them. A control committed beside the corpus would become a permanently
+/// unlisted leak row *and* a permanently flaky row, forcing the very ceilings
+/// it exists to prove.
+#[test]
+fn sanitize_sweep_selftest_is_wired() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    const CONTROLS: &[(&str, &str)] = &[
+        ("selftest_clean.gg", "the clean path stays quiet"),
+        ("selftest_leak.gg", "the leak detector fires, one class at one record"),
+        ("selftest_leak_twice.gg", "the same class at two records — the class check's own class"),
+        ("selftest_alternating_leak.gg", "the flake detector fires on a non-unanimous row"),
+    ];
+    for (name, why) in CONTROLS {
+        let p = root.join("tests/fixtures/sanitize_selftest").join(name);
+        assert!(
+            p.exists(),
+            "missing sanitize-sweep control {}: it proves {why}.\n\
+             Deleting a positive control silently makes the gate unfalsifiable; \
+             if the mechanism it leaks through was FIXED, re-point it at a live \
+             leak class in the same commit.",
+            p.display()
+        );
+        // The corpus walk is `-maxdepth 1`; a control that also exists up there
+        // becomes an unlisted leak row and a flaky row at once.
+        assert!(
+            !root.join("tests/fixtures").join(name).exists(),
+            "sanitize-sweep control {name} must live ONLY in \
+             tests/fixtures/sanitize_selftest/ — a copy at tests/fixtures/ is \
+             inside the corpus walk and would red the gate against itself."
+        );
+    }
+
+    let sweep = std::fs::read_to_string(root.join("scripts/sanitize_sweep.sh"))
+        .expect("cannot read scripts/sanitize_sweep.sh");
+    for needle in [
+        "SELFTEST_DIR=tests/fixtures/sanitize_selftest",
+        "run_selftest || exit 2",
+        "find tests/fixtures -maxdepth 1 -name '*.gg'",
+    ] {
+        assert!(
+            sweep.contains(needle),
+            "scripts/sanitize_sweep.sh no longer contains {needle:?}.\n\
+             The self-test must run on every sweep (a guard nothing runs is not \
+             a guard) and the corpus walk must stay at -maxdepth 1 so the \
+             controls stay outside it."
         );
     }
 }

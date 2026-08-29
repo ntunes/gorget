@@ -1,0 +1,18 @@
+# POSITIVE control for the CLASS check in scripts/sanitize_sweep.sh, and the
+# one that makes the check falsifiable on its own class.
+#
+# Two higher-order calls at two distinct sites leak TWO records of the SAME
+# class as selftest_leak.gg's one. The self-test allowlists this fixture for
+# ONE record of exactly that class and requires the gate to fail on the second.
+# A signature-SET scheme cannot fire on that — the class is already tolerated —
+# which is why the rows carry per-class COUNTS.
+from std.collections import Vector
+
+int main():
+    Vector[int] vs = Vector[int]()
+    vs.push(1)
+    vs.push(2)
+    Vector[int] doubled = vs.map((int x): x * 2)
+    Vector[int] tripled = vs.map((int x): x * 3)
+    print(doubled.len() + tripled.len())
+    return 0

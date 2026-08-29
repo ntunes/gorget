@@ -1,0 +1,11 @@
+# NEGATIVE control for scripts/sanitize_sweep.sh: the gate must stay QUIET here.
+# Deterministic, allocation-free, and it must report CLEAN on every repetition.
+# If this one ever reports a finding, the instrument is wrong, not the tree.
+int main():
+    int total = 0
+    int i = 0
+    while i < 4:
+        total = total + i
+        i = i + 1
+    print(total)
+    return 0

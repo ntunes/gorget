@@ -7,8 +7,17 @@ async void main():
     int r1 = t1.await()
     print(r1)
 
-    # Task goes out of scope without await — join-on-drop cleans up
+    # Task goes out of scope without await.
     Task[int] t2 = spawn work(7)
-    # t2 is dropped here: RAII calls Task__int64_t__drop → joins thread, frees ctx
+    # ⚠ WHAT ACTUALLY HAPPENS AT HEAD, measured 2026-08-29 (R47-E1): NOTHING
+    # drops t2. `Task__int64_t__drop` IS emitted and then bound to
+    # `static void (*__unused_Task__int64_t__drop)(...) __attribute__((unused))`
+    # (src/backend/c_lir/emit_types.rs), and the generated C contains no call to
+    # it, so the spawn context is leaked on every run. This fixture cannot
+    # observe that: the executor's global queue still reaches the context, so
+    # LeakSanitizer reports it CLEAN (it surfaces only with use_globals=0).
+    # The fixture pins the STDOUT of the drop path; it does NOT pin the drop.
+    # Owned by todo/t0616 (RAII join-on-drop in both compilers); the fixture
+    # this comment used to claim is the one that graduates with that fix.
 
     print("done")

@@ -13,6 +13,49 @@
 # Removing a name is the normal outcome of a fix. ADDING one means a new leak
 # shipped — fix it instead.
 #
+# FORMAT:  <fixture-stem> TAB <top-frame>*<records>[,<top-frame>*<records>...]
+#
+# A trailing `+` on a count — `__gorget_spawn_worker*2+` — means "at least this
+# many; the COUNT is not pinned". It is for the handful of concurrency fixtures
+# whose leak count is genuinely racy (how many workers had leaked by exit).
+# Pinning an exact count there would make this gate FLAP, which is the defect it
+# exists to remove; the mechanism stays pinned, only the multiplicity does not.
+# The sweep's `count-drift` census names the rows that earn the marker — do not
+# add one without that evidence.
+#
+# ⚠ THE TOLERANCE IS PINNED, NOT JUST THE ROW COUNT. `sanitize_allowlists_shrink_only`
+# asserts the exact number of rows, of (fixture, class) pairs, of tolerated leak
+# RECORDS, and of `*N+` signatures. Widening `*2` to `*99` is one character, it
+# leaves the row count untouched, and it re-opens the very case this column
+# exists to catch — so it fails the lint, which names the number to move. A
+# widening is an admission; make it deliberately or not at all.
+#
+# The second column is what the fixture is tolerated FOR, and it is checked.
+# A bare stem — which is all this file used to carry — tolerated ANY leak in
+# that fixture forever: a second, entirely unrelated mechanism appearing inside
+# an already-listed fixture was invisible to the gate. 124 of these 313 rows
+# exhibit two or more distinct mechanisms, all of which used to hide behind one
+# name. The gate now fails on a mechanism the row does not name, AND on one
+# more record of a mechanism it does — COUNTS, not a set, because a set cannot
+# see a SECOND leak of a class the fixture already exhibits. That case is the
+# gate's own positive control (tests/fixtures/sanitize_selftest/).
+#
+# The key is the leak record's ALLOCATION SITE: the first stack frame that is
+# not an allocator interceptor or the runtime's global alloc shim — the same
+# "top frame" the big-groups table below has always been written in. The count
+# is RECORDS (distinct allocation stacks), never bytes and never objects: those
+# move with trip counts and data sizes, and are a lower bound under a
+# conservative root set anyway.
+#
+# ONE ROW PER FIXTURE. The classes are columns, not extra rows, so the ceiling
+# in tests/lints.rs keeps counting FIXTURES and stays comparable to every value
+# it has ever held. `scripts/sanitize_sweep.sh` reads column 1 only.
+#
+# To regenerate a row after a deliberate change, take column 4 of the sweep's
+# own verdicts.tsv. Widening a row is an admission, not a fix, and the sweep
+# prints a "TIGHTEN these rows" advisory whenever a fixture leaks LESS than its
+# row admits.
+#
 # The big groups (top frame -> fixtures), so a fix can retire many rows at once:
 #   __gorget_closure_env_alloc   77   every builtin HOF call (map/filter/fold)
 #                                     leaks an 8-byte env, UNBOUNDED per call
@@ -25,311 +68,308 @@
 #   gorget_channel_new           16
 #   CRYPTO_* / OPENSSL_*         15   keygen results the caller never frees
 #
-async_blocking_io
-async_channel
-async_channel_poll
-async_channel_unbuffered
-async_channel_waker
-async_select
-async_task_group_fire
-atomic_int_amp_param
-borrow_field_lazy_dict_iter
-borrow_field_method_dispatch
-box_trait_vector_lit
-builtin_oracle_sync_deque
-builtin_oracle_sync_dict
-builtin_oracle_sync_hashmap
-builtin_oracle_sync_hashset
-builtin_oracle_sync_vector
-char_methods
-cli_basic
-clone_breaks_borrow_chain
-closure_as_callback
-closure_capture_patterns
-closure_compose
-closure_float_ret
-closure_fstring_capture
-closure_higher_order_chain
-closure_mixed_implicit_explicit_wiring
-closure_multiline_return
-closure_mutable_capture
-closure_tuple_destructure
-combinator_and_then_money_local
-combinator_flat_map_money_local
-combinator_map_err_money_local
-combinator_map_money_param_and_field
-combinator_result_and_then_money_passthrough
-combinator_result_map_err_money_passthrough
-combinator_result_map_money_passthrough
-combinator_result_ok_money_map
-combinator_result_or_else_money_passthrough
-combinator_unwrap_or_else_money_local
-concurrency_params
-const_match_pattern
-const_match_shadow
-consume_callable_once
-conv_stdlib
-coroutine_chained_methods
-coroutine_collections
-coroutine_collections_advanced
-coroutine_dict_higher_order
-coroutine_dict_set
-coroutine_result_combinators
-coroutine_vector_ops
-cow_amp_ref_field_forward
-cow_closure_deferred_mutate
-cow_enum_bare_assign
-cow_lazy_mut_borrow_write
-crypto_hash
-crypto_x25519
-csv_delimiters
-d29_hardening_stdlib_shape
-dataframe_agg
-dataframe_cast
-dataframe_clip
-dataframe_csv
-dataframe_extra
-dataframe_filter
-dataframe_filter_sort
-dataframe_groupby
-dataframe_nulls
-dataframe_ops
-dataframe_tier2_groupby
-dataframe_tier2_joins
-dataframe_tier2_sort_arith
-dataframe_transform
-datetime_format
-deadwrite_ok_atomic_add
-deque_each_untyped_closure_str
-deque_hof_each
-derive_debuggable
-deserializable
-dict_drain_basic
-dict_drain_resource
-dict_higher_order
-dict_iter_enumerate
-dict_keys_lazy
-dict_keys_lazy_resource
-dict_keys_values
-dict_update
-dict_user_key_auto
-dict_user_key_hashable
-dict_values_lazy
-dict_values_lazy_resource
-dop_throw_rhs
-drop_dict_loop
-drop_enum_consume
-ecs_advanced
-ecs_basics
-error_catch_in_loop
-error_rethrow_transform
-fallback_basic
-fallback_composable
-fba_composable
-fmt_catch_rethrow_single_stmt_terminal_axis
-fn_mut_once
-fn_trait
-fstring_method_chain
-generic_callable
-guard_boxed_trait_dispatch
-guard_get_user_struct_no_leak
-hashmap_unordered
-hot_reload_basic
-httpserver_before
-httpserver_body_parsers
-httpserver_concurrent
-httpserver_e2e
-httpserver_json
-httpserver_middleware
-httpserver_protocol
-httpserver_query_string
-httpserver_router
-httpserver_router_extended
-httpserver_static
-httpserver_static_enhanced
-io_input
-iter_enumerate_zip
-iter_map_after_filter
-iter_map_inference
-iterator_adapters
-iterator_lazy_chain
-json_edge_cases
-json_parse
-json_pretty
-leak_cow_boundaries
-linked_list
-lint_suggest_throws_negative_nonresult
-mutex_async_contention
-nested_match_return_from_inner_arm
-none_assign_to_option_slot
-opaque_handle_struct_field
-os_stdlib
-p2p_basic
-p2p_dht
-p2p_discovery
-p2p_encrypted
-p2p_encrypted_large
-p2p_gossip
-p2p_multiplex
-p2p_nat
-p2p_protocol_rpc
-p2p_reliable_basic
-p2p_reliable_bidir
-p2p_reliable_large
-p2p_stream_robust
-path_funcs
-path_normalize
-pool_composable
-process_pipe
-process_spawn
-query_basic
-readdir
-regex_basic
-regex_corpus
-regex_extended
-semaphore_amp_param
-semaphore_basic
-serialize_collections
-set_drain_basic
-set_drain_resource
-set_filter_count
-set_higher_order
-set_iter_enumerate_lir_panic
-set_ordering
-set_take_values
-set_user_key_hashable
-shared_arc_only
-shared_atomic
-shared_atomic_bool
-shared_await_release
-shared_callable
-shared_early_return
-shared_float
-shared_int_spawn_control
-shared_iterator_invalidation
-shared_keyword_local
-shared_multi_spawn
-shared_multi_token
-shared_nested_spawn
-shared_sleep_loop
-shared_spawn_mutex
-shared_spawn_readonly
-shared_stale_blocking
-shared_stale_call
-shared_stale_match
-shared_stale_refreshed
-shared_stale_transitive
-shared_stale_tuple
-shared_stale_warning
-shared_stale_while
-shared_stale_writeback
-shared_stress
-shared_stress_yield
-shared_string
-shared_struct_field_clone
-shared_transparent
-shared_vector_elem
-shared_with_blocking_refresh
-shared_with_check_then_act
-shared_with_refresh
-shared_with_spawned_refresh
-snag11_from_mediated_propagation
-snag49a_throws_for_iter
-snag54_result_out_fallthrough
-snag55_dict_get_or_in_callee
-spawn_blocking_multi
-spawn_closure_copy
-sqlite_basic
-stdlib_io_file_writer
-stdlib_io_stdout_typed
-stdlib_io_writer
-stdlib_iter_bounds_coverage
-stdlib_iter_dict
-stdlib_iter_drain
-stdlib_iter_join
-stdlib_iter_more_terminals
-stdlib_iter_set
-stdlib_udp_typed
-stress_alloc_closures
-stress_alloc_vectors
-stress_atomic_hammer
-stress_channel_mpsc
-stress_channel_select
-stress_mutex_hammer
-stress_nested_spawn
-stress_pipeline
-stress_shared_channel_notify
-stress_shared_channel_pipeline
-stress_shared_channel_scatter
-stress_shared_channel_select
-stress_shared_channel_semaphore
-stress_shared_channel_workqueue
-stress_shared_comprehensive
-stress_shared_multi_token
-stress_spawn_fan_out
-stress_taskgroup_fan
-string_closures_transform
-string_conversions
-string_higher_order
-string_parsing_patterns
-string_word_frequency
-sync_atomics
-sync_barrier
-tensor_arithmetic
-tensor_basic
-tensor_broadcast
-tensor_extra
-tensor_float_frac
-tensor_linalg
-tensor_reduce
-tensor_reshape
-test_cleanup
-test_closures_advanced
-test_closures_edge_cases
-test_collections_nested
-test_collections_nested_advanced
-test_dict_all
-test_dict_edge_cases
-test_dict_int_keys
-test_failure
-test_hashmap_all
-test_hashset_all
-test_higher_order_named_fn
-test_linked_list
-test_method_chaining
-test_multiline_closures
-test_process_timeout
-test_result_advanced
-test_result_chaining
-test_set_all
-test_set_string
-test_should_panic
-test_vector_advanced
-test_vector_all
-test_vector_bool
-test_vector_edge_cases
-test_vector_float_higher_order
-test_vector_of_structs
-test_vector_str_higher_order
-test_with_clause
-time_format
-tlsf_composable
-toml_edge
-toml_parse
-toml_stringify
-tracking_composable
-trait_method_throws
-vector_any_all_bool
-vector_callable_two_locals
-vector_higher_order
-vector_methods2
-vector_sort_by
-vector_sort_by_key
-vector_sort_stable
-vector_task_get
-vector_task_mixed_await
-vector_userspace_hofs
-waitgroup_amp_param
-waitgroup_basic
-xml_parse
-yaml_parse
+async_channel	gorget_channel_new*2
+async_channel_unbuffered	gorget_channel_new*2
+async_channel_waker	gorget_channel_new*2
+async_select	gorget_channel_new*4
+async_task_group_fire	gorget_channel_new*2
+atomic_int_amp_param	gorget_atomic_int_new*1
+borrow_field_lazy_dict_iter	gorget_dict_new*3,gorget_map_clone*24
+borrow_field_method_dispatch	gorget_array_push*1,gorget_dict_new*3,str_alloc_copy*2
+box_trait_vector_lit	__gorget_box_alloc_Robot*1,str_alloc_copy*1
+builtin_oracle_sync_deque	__gorget_closure_env_alloc*2
+builtin_oracle_sync_dict	__gorget_closure_env_alloc*6
+builtin_oracle_sync_hashmap	__gorget_closure_env_alloc*2
+builtin_oracle_sync_hashset	__gorget_closure_env_alloc*2
+builtin_oracle_sync_vector	__gorget_closure_env_alloc*5,gorget_array_push*1,gorget_string_format*1
+char_methods	str_alloc_copy*2
+cli_basic	str_alloc_copy*1
+clone_breaks_borrow_chain	__gorget_closure_env_alloc*2
+closure_as_callback	__gorget_closure_env_alloc*1
+closure_capture_patterns	__gorget_closure_env_alloc*1
+closure_compose	__gorget_closure_env_alloc*3
+closure_float_ret	__gorget_closure_env_alloc*1
+closure_fstring_capture	__gorget_closure_env_alloc*1,gorget_string_format*5
+closure_higher_order_chain	__gorget_closure_env_alloc*3
+closure_mixed_implicit_explicit_wiring	__gorget_closure_env_alloc*1
+closure_multiline_return	__gorget_closure_env_alloc*2,gorget_string_format*2
+closure_mutable_capture	__gorget_closure_env_alloc*3
+closure_tuple_destructure	__gorget_closure_env_alloc*5,gorget_map_clone*12,gorget_string_format*1,str_alloc_copy*1
+combinator_and_then_money_local	gorget_array_push*2
+combinator_flat_map_money_local	gorget_array_push*1
+combinator_map_err_money_local	gorget_array_push*1
+combinator_map_money_param_and_field	gorget_array_push*1
+combinator_result_and_then_money_passthrough	gorget_array_push*1
+combinator_result_map_err_money_passthrough	gorget_array_push*1
+combinator_result_map_money_passthrough	gorget_array_push*1
+combinator_result_ok_money_map	gorget_array_push*1
+combinator_result_or_else_money_passthrough	gorget_array_push*1
+combinator_unwrap_or_else_money_local	gorget_array_push*1
+concurrency_params	gorget_channel_new*2
+const_match_pattern	gorget_string_format*1
+const_match_shadow	gorget_string_format*3
+consume_callable_once	__gorget_closure_env_alloc*1
+conv_stdlib	gorget_parse_float*1,gorget_parse_int*1,str_alloc_copy*3
+coroutine_chained_methods	__gorget_closure_env_alloc*3
+coroutine_collections	__gorget_closure_env_alloc*5
+coroutine_collections_advanced	__gorget_closure_env_alloc*1,str_alloc_copy*1
+coroutine_dict_higher_order	__gorget_closure_env_alloc*5
+coroutine_dict_set	__gorget_closure_env_alloc*4
+coroutine_result_combinators	str_alloc_copy*3
+coroutine_vector_ops	gorget_array_push*1
+cow_amp_ref_field_forward	gorget_array_push*2
+cow_closure_deferred_mutate	str_alloc_copy*3
+cow_enum_bare_assign	str_alloc_copy*1
+cow_lazy_mut_borrow_write	str_alloc_copy*1
+crypto_hash	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*11,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+crypto_x25519	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*17,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+csv_delimiters	gorget_array_push*1,gorget_array_reserve*2,str_alloc_copy*2
+d29_hardening_stdlib_shape	gorget_string_format*3
+dataframe_agg	str_alloc_copy*1
+dataframe_cast	gorget_array_reserve*14,gorget_parse_int*1,str_alloc_copy*3
+dataframe_clip	gorget_array_reserve*8,str_alloc_copy*6
+dataframe_csv	str_alloc_copy*4
+dataframe_extra	str_alloc_copy*1
+dataframe_filter	str_alloc_copy*3
+dataframe_filter_sort	gorget_parse_float*2,str_alloc_copy*4
+dataframe_groupby	gorget_array_push*5,gorget_array_reserve*20,gorget_dict_new*15,str_alloc_copy*20
+dataframe_nulls	__gorget_closure_env_alloc*2
+dataframe_ops	str_alloc_copy*1
+dataframe_tier2_groupby	gorget_array_push*2,gorget_array_reserve*8,gorget_dict_new*6,str_alloc_copy*8
+dataframe_tier2_joins	str_alloc_copy*2
+dataframe_tier2_sort_arith	gorget_parse_float*2
+dataframe_transform	__gorget_closure_env_alloc*1
+datetime_format	gorget_format_time*4
+deadwrite_ok_atomic_add	gorget_atomic_int_new*1
+deque_each_untyped_closure_str	__gorget_closure_env_alloc*1
+deque_hof_each	__gorget_closure_env_alloc*1
+derive_debuggable	str_alloc_copy*4
+deserializable	str_alloc_copy*3
+dict_drain_basic	gorget_dict_new*6,gorget_map_clone*18
+dict_drain_resource	gorget_dict_new*6,gorget_map_clone*18,str_alloc_copy*21
+dict_higher_order	__gorget_closure_env_alloc*3
+dict_iter_enumerate	gorget_map_clone*12,str_alloc_copy*5
+dict_keys_lazy	__gorget_closure_env_alloc*1,gorget_map_clone*18
+dict_keys_lazy_resource	gorget_map_clone*9,str_alloc_copy*4
+dict_keys_values	__gorget_closure_env_alloc*1
+dict_update	str_alloc_copy*1
+dict_user_key_auto	str_alloc_copy*1
+dict_user_key_hashable	str_alloc_copy*1
+dict_values_lazy	__gorget_closure_env_alloc*1,gorget_map_clone*18
+dict_values_lazy_resource	gorget_map_clone*9,str_alloc_copy*4
+dop_throw_rhs	str_alloc_copy*1
+drop_dict_loop	str_alloc_copy*1
+drop_enum_consume	gorget_str_cat*1
+ecs_advanced	__gorget_closure_env_alloc*1
+ecs_basics	__gorget_closure_env_alloc*1,gorget_array_reserve*1
+error_catch_in_loop	gorget_string_format*1
+error_rethrow_transform	gorget_string_format*1
+fallback_basic	gorget_arena_new*2,gorget_fba_new*1
+fallback_composable	gorget_arena_new*2,gorget_fallback_new*1,gorget_fba_new*1
+fba_composable	gorget_fba_new*1
+fmt_catch_rethrow_single_stmt_terminal_axis	gorget_str_cat*1
+fn_mut_once	__gorget_closure_env_alloc*5
+fn_trait	__gorget_closure_env_alloc*2
+fstring_method_chain	__gorget_closure_env_alloc*2
+generic_callable	__gorget_closure_env_alloc*2
+guard_boxed_trait_dispatch	__gorget_box_alloc_Robot*1,gorget_mutex_new*2,gorget_str_cat*1
+guard_get_user_struct_no_leak	gorget_str_cat*1
+hashmap_unordered	__gorget_closure_env_alloc*1
+hot_reload_basic	gorget_hot_watch_init*1
+httpserver_before	gorget_dict_new*3,gorget_map_clone*3,str_alloc_copy*3
+httpserver_body_parsers	str_alloc_copy*4
+httpserver_concurrent	gorget_channel_new*2
+httpserver_e2e	str_alloc_copy*2
+httpserver_json	gorget_dict_new*3,str_alloc_copy*4
+httpserver_middleware	__gorget_closure_env_alloc*1,gorget_dict_new*9,gorget_map_clone*15,gorget_str_cat*2,str_alloc_copy*18
+httpserver_protocol	str_alloc_copy*4
+httpserver_query_string	str_alloc_copy*10
+httpserver_router	gorget_dict_new*21,gorget_map_clone*36,str_alloc_copy*45
+httpserver_router_extended	__gorget_closure_env_alloc*1,gorget_dict_new*6,gorget_map_clone*9,gorget_str_cat*2,str_alloc_copy*6
+httpserver_static	gorget_path_extension*8,gorget_path_join*4
+httpserver_static_enhanced	gorget_path_extension*5,gorget_path_join*5
+io_input	gorget_readline*2
+iter_enumerate_zip	gorget_array_push*1,gorget_array_reserve*2
+iter_map_after_filter	str_alloc_copy*2
+iter_map_inference	gorget_str_cat*1,str_alloc_copy*1
+iterator_adapters	__gorget_closure_env_alloc*4
+iterator_lazy_chain	__gorget_closure_env_alloc*6
+json_edge_cases	str_alloc_copy*9
+json_parse	str_alloc_copy*1
+json_pretty	str_alloc_copy*1
+leak_cow_boundaries	str_alloc_copy*1
+linked_list	__gorget_closure_env_alloc*1,gorget_array_push*1
+lint_suggest_throws_negative_nonresult	str_alloc_copy*1
+mutex_async_contention	gorget_mutex_new*2,gorget_shared_new*2
+nested_match_return_from_inner_arm	str_alloc_copy*1
+none_assign_to_option_slot	str_alloc_copy*1
+opaque_handle_struct_field	gorget_atomic_int_new*1
+os_stdlib	gorget_getcwd*1
+p2p_basic	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*17,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_dht	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*22,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_discovery	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*17,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_encrypted	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*27,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_encrypted_large	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*27,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_gossip	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*22,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_multiplex	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*17,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_nat	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*22,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_protocol_rpc	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*17,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_reliable_basic	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*17,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_reliable_bidir	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*17,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_reliable_large	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*17,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+p2p_stream_robust	CRYPTO_strdup*2,CRYPTO_strndup*1,CRYPTO_zalloc*17,OPENSSL_sk_deep_copy*1,UNSYMBOLIZED*1
+path_funcs	gorget_path_basename*5,gorget_path_extension*4,gorget_path_join*3,gorget_path_parent*4,gorget_path_stem*2
+path_normalize	gorget_path_normalize*6
+pool_composable	gorget_pool_new*2
+process_pipe	gorget_process_spawn*1
+process_spawn	gorget_process_spawn*2
+query_basic	gorget_map_clone*3,str_alloc_copy*13
+readdir	gorget_readdir*1
+regex_basic	gorget_array_reserve*2,str_alloc_copy*3
+regex_corpus	gorget_array_reserve*102,str_alloc_copy*63
+regex_extended	gorget_array_reserve*4,str_alloc_copy*2
+semaphore_amp_param	gorget_semaphore_new*1
+semaphore_basic	__gorget_spawn_limited_work*3+
+serialize_collections	str_alloc_copy*7
+set_drain_basic	gorget_dict_new*2,gorget_set_clone*6
+set_drain_resource	gorget_dict_new*2,gorget_set_clone*6,str_alloc_copy*7
+set_filter_count	__gorget_closure_env_alloc*1,gorget_set_clone*6
+set_higher_order	__gorget_closure_env_alloc*3
+set_iter_enumerate_lir_panic	gorget_set_clone*6
+set_ordering	__gorget_closure_env_alloc*2
+set_take_values	gorget_set_clone*6
+set_user_key_hashable	str_alloc_copy*1
+shared_arc_only	gorget_shared_new*2
+shared_atomic	gorget_atomic_int_new*1
+shared_atomic_bool	gorget_atomic_bool_new*1
+shared_await_release	gorget_mutex_new*2,gorget_shared_new*2
+shared_callable	__gorget_closure_env_alloc*1
+shared_early_return	gorget_mutex_new*2,gorget_shared_new*2
+shared_float	gorget_mutex_new*2,gorget_shared_new*2
+shared_int_spawn_control	gorget_mutex_new*2,gorget_shared_new*2
+shared_iterator_invalidation	gorget_array_push*1,gorget_mutex_new*2,gorget_shared_new*2
+shared_keyword_local	gorget_mutex_new*2
+shared_multi_spawn	gorget_mutex_new*6,gorget_shared_new*6
+shared_multi_token	gorget_mutex_new*4,gorget_shared_new*4
+shared_nested_spawn	gorget_mutex_new*2,gorget_shared_new*2
+shared_sleep_loop	gorget_mutex_new*2,gorget_shared_new*2
+shared_spawn_mutex	gorget_mutex_new*2,gorget_shared_new*2
+shared_spawn_readonly	gorget_shared_new*2
+shared_stale_blocking	gorget_mutex_new*2,gorget_shared_new*2
+shared_stale_call	gorget_mutex_new*2,gorget_shared_new*2
+shared_stale_match	gorget_mutex_new*2,gorget_shared_new*2
+shared_stale_refreshed	gorget_mutex_new*2,gorget_shared_new*2
+shared_stale_transitive	gorget_mutex_new*2,gorget_shared_new*2
+shared_stale_tuple	gorget_mutex_new*2,gorget_shared_new*2
+shared_stale_warning	gorget_mutex_new*2,gorget_shared_new*2
+shared_stale_while	gorget_mutex_new*2,gorget_shared_new*2
+shared_stale_writeback	gorget_mutex_new*2,gorget_shared_new*2
+shared_stress	gorget_mutex_new*2,gorget_shared_new*2
+shared_stress_yield	gorget_mutex_new*2,gorget_shared_new*2
+shared_string	gorget_shared_new*2
+shared_struct_field_clone	gorget_array_push*1
+shared_transparent	gorget_mutex_new*2,gorget_shared_new*2
+shared_vector_elem	gorget_array_push*1
+shared_with_blocking_refresh	gorget_mutex_new*2,gorget_shared_new*2
+shared_with_check_then_act	gorget_mutex_new*2,gorget_shared_new*2
+shared_with_refresh	gorget_mutex_new*2,gorget_shared_new*2
+shared_with_spawned_refresh	gorget_mutex_new*2,gorget_shared_new*2
+snag11_from_mediated_propagation	str_alloc_copy*1
+snag49a_throws_for_iter	gorget_array_push*1
+snag54_result_out_fallthrough	str_alloc_copy*1
+snag55_dict_get_or_in_callee	str_alloc_copy*1
+spawn_blocking_multi	str_alloc_copy*3+
+sqlite_basic	str_alloc_copy*2
+stdlib_io_file_writer	str_alloc_copy*1
+stdlib_io_stdout_typed	str_alloc_copy*2
+stdlib_io_writer	gorget_array_reserve*3,str_alloc_copy*1
+stdlib_iter_bounds_coverage	gorget_string_push_char*4,str_alloc_copy*8
+stdlib_iter_dict	gorget_map_clone*36
+stdlib_iter_drain	gorget_array_push*3,str_alloc_copy*5
+stdlib_iter_join	gorget_string_push_char*3,str_alloc_copy*3
+stdlib_iter_more_terminals	gorget_string_push_char*1,str_alloc_copy*1
+stdlib_iter_set	gorget_set_clone*24
+stdlib_udp_typed	str_alloc_copy*1
+stress_alloc_closures	__gorget_closure_env_alloc*7
+stress_alloc_vectors	__gorget_closure_env_alloc*2
+stress_atomic_hammer	gorget_atomic_int_new*1
+stress_channel_mpsc	gorget_channel_new*2
+stress_channel_select	gorget_channel_new*8
+stress_mutex_hammer	gorget_mutex_new*2,gorget_shared_new*2
+stress_nested_spawn	gorget_atomic_int_new*1
+stress_pipeline	gorget_channel_new*4
+stress_shared_channel_notify	__gorget_spawn___shared_token_producer*9+,gorget_channel_new*18+
+stress_shared_channel_pipeline	gorget_channel_new*4,gorget_mutex_new*2,gorget_shared_new*2
+stress_shared_channel_scatter	gorget_channel_new*12,gorget_mutex_new*2,gorget_shared_new*2
+stress_shared_channel_select	gorget_channel_new*6,gorget_mutex_new*8,gorget_shared_new*8
+stress_shared_channel_semaphore	gorget_channel_new*4,gorget_mutex_new*2,gorget_shared_new*2
+stress_shared_channel_workqueue	gorget_channel_new*2,gorget_mutex_new*2,gorget_shared_new*2
+stress_shared_comprehensive	gorget_mutex_new*4,gorget_shared_new*4
+stress_shared_multi_token	gorget_mutex_new*6,gorget_shared_new*6
+stress_spawn_fan_out	gorget_atomic_int_new*1
+stress_taskgroup_fan	gorget_atomic_int_new*1
+string_closures_transform	__gorget_closure_env_alloc*5,gorget_str_cat*2,gorget_string_format*4,str_alloc_copy*4
+string_conversions	gorget_parse_float*1,gorget_parse_int*1,str_alloc_copy*6
+string_higher_order	__gorget_closure_env_alloc*15,gorget_str_cat*1,gorget_string_format*1,str_alloc_copy*4
+string_parsing_patterns	str_alloc_copy*2
+string_word_frequency	str_alloc_copy*4
+sync_atomics	gorget_atomic_bool_new*1,gorget_atomic_int_new*1
+sync_barrier	gorget_barrier_new*1
+tensor_arithmetic	gorget_array_push*14
+tensor_basic	gorget_array_push*4
+tensor_broadcast	gorget_array_push*11
+tensor_extra	gorget_array_push*53
+tensor_float_frac	gorget_array_push*2
+tensor_linalg	gorget_array_push*12
+tensor_reduce	gorget_array_push*7
+tensor_reshape	gorget_array_push*2
+test_cleanup	gorget_format*1,str_alloc_copy*2
+test_closures_advanced	__gorget_closure_env_alloc*7
+test_closures_edge_cases	__gorget_closure_env_alloc*6
+test_collections_nested	__gorget_closure_env_alloc*2
+test_collections_nested_advanced	__gorget_closure_env_alloc*3
+test_dict_all	__gorget_closure_env_alloc*5,str_alloc_copy*1
+test_dict_edge_cases	__gorget_closure_env_alloc*2,str_alloc_copy*1
+test_dict_int_keys	__gorget_closure_env_alloc*2
+test_failure	gorget_format*1,str_alloc_copy*2
+test_hashmap_all	__gorget_closure_env_alloc*4,str_alloc_copy*3
+test_hashset_all	__gorget_closure_env_alloc*4
+test_higher_order_named_fn	gorget_array_push*1
+test_linked_list	gorget_array_push*3
+test_method_chaining	__gorget_closure_env_alloc*12
+test_multiline_closures	__gorget_closure_env_alloc*1
+test_process_timeout	gorget_process_spawn*8
+test_result_advanced	str_alloc_copy*7
+test_result_chaining	gorget_str_cat*3,str_alloc_copy*3
+test_set_all	__gorget_closure_env_alloc*11
+test_set_string	__gorget_closure_env_alloc*4,str_alloc_copy*3
+test_should_panic	gorget_format*2,str_alloc_copy*4
+test_vector_advanced	__gorget_closure_env_alloc*15,gorget_array_push*1
+test_vector_all	__gorget_closure_env_alloc*14,gorget_array_push*1,gorget_array_reserve*1
+test_vector_bool	__gorget_closure_env_alloc*9
+test_vector_edge_cases	__gorget_closure_env_alloc*14,str_alloc_copy*1
+test_vector_float_higher_order	__gorget_closure_env_alloc*9
+test_vector_of_structs	__gorget_closure_env_alloc*2
+test_vector_str_higher_order	__gorget_closure_env_alloc*9,gorget_str_cat*2,str_alloc_copy*1
+test_with_clause	gorget_format*1,str_alloc_copy*2
+time_format	gorget_format_time*4
+tlsf_composable	gorget_tlsf_new*2
+toml_edge	str_alloc_copy*3
+toml_parse	str_alloc_copy*13
+toml_stringify	gorget_array_push*1,gorget_dict_new*9,gorget_map_clone*9,str_alloc_copy*21
+tracking_composable	gorget_tracking_new*1
+trait_method_throws	gorget_string_format*1
+vector_any_all_bool	__gorget_closure_env_alloc*6
+vector_callable_two_locals	__gorget_closure_env_alloc*2
+vector_higher_order	__gorget_closure_env_alloc*4
+vector_methods2	__gorget_closure_env_alloc*4,gorget_array_push*1
+vector_sort_by	__gorget_closure_env_alloc*3
+vector_sort_by_key	__gorget_closure_env_alloc*3,str_alloc_copy*2
+vector_sort_stable	__gorget_closure_env_alloc*3
+vector_task_get	gorget_atomic_int_new*1
+vector_task_mixed_await	gorget_atomic_int_new*1
+vector_userspace_hofs	gorget_str_cat*1,str_alloc_copy*1
+waitgroup_amp_param	__gorget_spawn_worker*2+
+waitgroup_basic	__gorget_spawn_worker*2+
+xml_parse	str_alloc_copy*2
+yaml_parse	str_alloc_copy*3

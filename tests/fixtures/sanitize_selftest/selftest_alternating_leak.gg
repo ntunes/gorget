@@ -1,0 +1,28 @@
+# POSITIVE control for scripts/sanitize_sweep.sh's FLAKE detector.
+#
+# Leaks on every OTHER run: a marker file in the working directory flips the
+# branch, so run 1 is clean, run 2 leaks, run 3 is clean. Deterministically
+# non-unanimous — a clock- or random-driven coin flip would let the self-test
+# pass by luck whenever all REPS runs landed on the same face.
+#
+# The fixture must NOT be moved up into tests/fixtures/: the corpus walk is
+# `-maxdepth 1`, so it would become both an unlisted leak row and a permanently
+# flaky row, forcing the two ceilings it exists to prove.
+from std.collections import Vector
+from std.fs import file_exists, write_file, delete_file
+
+int main():
+    bool leak_this_run = false
+    if file_exists("_sanitize_selftest_flip"):
+        delete_file("_sanitize_selftest_flip")
+        leak_this_run = true
+    else:
+        write_file("_sanitize_selftest_flip", "1")
+    if leak_this_run:
+        Vector[int] vs = Vector[int]()
+        vs.push(1)
+        Vector[int] doubled = vs.map((int x): x * 2)
+        print(doubled.len())
+    else:
+        print(0)
+    return 0
