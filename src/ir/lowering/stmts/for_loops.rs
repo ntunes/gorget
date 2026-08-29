@@ -694,7 +694,7 @@ fn bind_for_vector_element(
     // identities only — an unnamed iterable temp carries no identity that
     // downstream mutation tracking could route back to.
     if let Some(src) = iter_source_coll {
-        ctx.set_cow_borrow_source(elem, src);
+        ctx.set_cow_borrow_source(builder, elem, src);
     }
     // Borrow alias — collection owns the data; do NOT register for drop.
     Some(elem)

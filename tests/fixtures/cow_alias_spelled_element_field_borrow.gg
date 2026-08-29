@@ -1,0 +1,41 @@
+# REGRESSION — an element-FIELD borrow taken through an aliased collection
+# survives the root's growth.
+#
+#     Vector[Item] alias = v
+#     Item e = alias.get(0).unwrap()     # element borrow, provenance = alias
+#     String s = e.name                  # field borrow, provenance INHERITED
+#
+# CELL: producer = the element-field borrow chain (`set_field_or_elem_borrow`
+# propagating the element's collection provenance onto the field load),
+# rather than the direct `.get()` provenance of
+# `cow_alias_spelled_view_survives_root_growth.gg`.
+#
+# ⊕ This cell repairs through a DIFFERENT CONSUMER than that one. There the
+# fix restores the lazy rescue (`borrow_view` + `__cow_mat` appear in the
+# GIR). Here the emitted GIR gains no rescue at all: it gains an
+# `Item__clone` + `gorget_string_clone_to_owned`, because the repair happens
+# in the SEVER WALK -- `cow_collection_refs_for_id` compares a stored
+# `CollectionElement(c)` against the mutated collection by equality, and with
+# `c` naming the alias and the mutation naming the root the walk skipped the
+# borrow entirely. One producer-side resolution repairs both consumers, which
+# is the whole argument for fixing at the write site.
+#
+# Measured on the pre-fix compiler: rc 139 SIGSEGV on both backends.
+
+struct Item:
+    String name
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[Item] v = []
+    v.push(Item(mk("hel", "lo")))
+    Vector[Item] alias = v
+    Item e = alias.get(0).unwrap()
+    String s = e.name
+    int i = 0
+    while i < 64:
+        v.push(Item(mk("fill", "er")))
+        i = i + 1
+    print(s)

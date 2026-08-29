@@ -1492,6 +1492,24 @@ fn cow_bareassign_alias_chain_no_leak() {
 }
 
 #[test]
+fn cow_element_borrow_no_uaf() {
+    // Element borrows held across a reallocating growth of the collection —
+    // spelled through an alias, through the collection's own name, and via
+    // `v[i]` with no alias in the program at all. Baseline: rc 139 on both
+    // backends, and under `--sanitize` a heap-use-after-free in
+    // `gorget_string_clone_to_owned` / `gorget_string_copy_cow`.
+    //
+    // stdout is a weak instrument here: freed memory routinely still holds
+    // the right bytes, so a stdout-only net can go green over a live UAF.
+    // ASan is what adjudicates memory validity (Core #13), and it is C-lane
+    // only — the LLVM `--sanitize` path emits a binary with no ASan in it.
+    security_safe_no_leak(
+        "cow_element_borrow_uaf",
+        "hello\nhello\nhello\nhello",
+    );
+}
+
+#[test]
 fn box_resource_struct_no_leak() {
     // `Box[Money]` local, Money owning a heap `String` (Recursive drop). The
     // box local's scope-exit drop must run `Money__drop` before the box free.

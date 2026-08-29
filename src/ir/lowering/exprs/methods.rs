@@ -1096,7 +1096,7 @@ pub(super) fn lower_method_call(
                     if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(_))) {
                         ctx.set_cow_borrow(builder, dst);
                         if let Some(collection) = ctx.cow_borrow_source(place.local).cloned() {
-                            ctx.set_cow_borrow_source(dst, collection);
+                            ctx.set_cow_borrow_source(builder, dst, collection);
                         }
                     }
                     return FunctionBuilder::copy(dst);
@@ -1124,7 +1124,7 @@ pub(super) fn lower_method_call(
                     if matches!(ctx.type_registry.get(inner_type), Some(GirType::Ptr(_))) {
                         ctx.set_cow_borrow(builder, dst);
                         if let Some(collection) = ctx.cow_borrow_source(place.local).cloned() {
-                            ctx.set_cow_borrow_source(dst, collection);
+                            ctx.set_cow_borrow_source(builder, dst, collection);
                         }
                     }
                     return FunctionBuilder::copy(dst);
@@ -3299,15 +3299,15 @@ pub(super) fn lower_method_call(
                 if ret_name.starts_with("Option__Ref__") {
                     if let Some(recv_local) = recv_local_for_move_zero {
                         if ctx.is_named_local(recv_local) {
-                            ctx.set_cow_borrow_source(result_id, CollectionId::Local(recv_local));
+                            ctx.set_cow_borrow_source(builder, result_id, CollectionId::Local(recv_local));
                         } else if let Some(ref field_path) = field_path_for_cow {
                             if !ctx.is_source_mut_unsafe_at(field_path, receiver.span.start) {
-                                ctx.set_cow_borrow_source(result_id, CollectionId::FieldPath(field_path.clone()));
+                                ctx.set_cow_borrow_source(builder, result_id, CollectionId::FieldPath(field_path.clone()));
                             }
                         }
                     } else if let Some(ref field_path) = field_path_for_cow {
                         if !ctx.is_source_mut_unsafe_at(field_path, receiver.span.start) {
-                            ctx.set_cow_borrow_source(result_id, CollectionId::FieldPath(field_path.clone()));
+                            ctx.set_cow_borrow_source(builder, result_id, CollectionId::FieldPath(field_path.clone()));
                         }
                     }
                 }
@@ -3339,15 +3339,15 @@ pub(super) fn lower_method_call(
                 ctx.set_cow_borrow(builder, dst);
                 if let Some(recv_local) = recv_local_for_move_zero {
                     if ctx.is_named_local(recv_local) {
-                        ctx.set_cow_borrow_source(dst, CollectionId::Local(recv_local));
+                        ctx.set_cow_borrow_source(builder, dst, CollectionId::Local(recv_local));
                     } else if let Some(ref field_path) = field_path_for_cow {
                         if !ctx.is_source_mut_unsafe_at(field_path, receiver.span.start) {
-                            ctx.set_cow_borrow_source(dst, CollectionId::FieldPath(field_path.clone()));
+                            ctx.set_cow_borrow_source(builder, dst, CollectionId::FieldPath(field_path.clone()));
                         }
                     }
                 } else if let Some(ref field_path) = field_path_for_cow {
                     if !ctx.is_source_mut_unsafe_at(field_path, receiver.span.start) {
-                        ctx.set_cow_borrow_source(dst, CollectionId::FieldPath(field_path.clone()));
+                        ctx.set_cow_borrow_source(builder, dst, CollectionId::FieldPath(field_path.clone()));
                     }
                 }
             }
@@ -3356,15 +3356,15 @@ pub(super) fn lower_method_call(
                 if ret_name.starts_with("Option__Ref__") {
                     if let Some(recv_local) = recv_local_for_move_zero {
                         if ctx.is_named_local(recv_local) {
-                            ctx.set_cow_borrow_source(dst, CollectionId::Local(recv_local));
+                            ctx.set_cow_borrow_source(builder, dst, CollectionId::Local(recv_local));
                         } else if let Some(ref field_path) = field_path_for_cow {
                             if !ctx.is_source_mut_unsafe_at(field_path, receiver.span.start) {
-                                ctx.set_cow_borrow_source(dst, CollectionId::FieldPath(field_path.clone()));
+                                ctx.set_cow_borrow_source(builder, dst, CollectionId::FieldPath(field_path.clone()));
                             }
                         }
                     } else if let Some(ref field_path) = field_path_for_cow {
                         if !ctx.is_source_mut_unsafe_at(field_path, receiver.span.start) {
-                            ctx.set_cow_borrow_source(dst, CollectionId::FieldPath(field_path.clone()));
+                            ctx.set_cow_borrow_source(builder, dst, CollectionId::FieldPath(field_path.clone()));
                         }
                     }
                 }

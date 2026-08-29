@@ -4722,6 +4722,30 @@ fn known_gap_auto_empty_literal_push_string_raw_pointer() {
     );
 }
 
+/// KNOWN GAP (Rust gg only — the self-host lane is CORRECT): the CoW value
+/// semantics of a local collection alias are lost inside a `while` loop, in
+/// both directions. Mutating through the alias LOSES every write; mutating
+/// through the root never SEVERS the alias, so value semantics silently
+/// degrades to reference semantics. Straight-line, both directions are
+/// correct and pinned by `cow_transitive_alias`.
+///
+/// The expected string below is what the self-host lane prints today, i.e.
+/// the oracle's answer, and it is what the language means. Rust gg prints
+/// `alias-loop 1 1` / `root-loop 4 4`, so this test is RED at HEAD by
+/// construction.
+///
+/// NOT the `cow_loop_bare_param_*` family: both pre-header hooks filter their
+/// candidates with `ctx.is_bare_param` (`src/ir/lowering/stmts/mod.rs:2632`,
+/// `:2699`), so a local alias is outside that machinery entirely.
+#[test]
+#[ignore = "known gap (R47): a local CoW collection alias loses its value semantics inside a `while` loop — mutation through the alias loses every write, mutation through the root never severs. Rust gg only; the self-host lane prints the correct answer. Un-ignore when the sever/materialize survives the loop boundary for locals, not just bare params"]
+fn known_gap_cow_local_alias_loop_mutation_lost() {
+    run_gg(
+        "known_gaps/cow_local_alias_loop_mutation_lost.gg",
+        "alias-loop 1 4\nroot-loop 4 1",
+    );
+}
+
 /// KNOWN GAP (both lanes): `.map()` with an INLINE CLOSURE that changes the
 /// element type mints its accumulator from the INPUT element type, so a String
 /// result is printed as a raw pointer at rc 0.
@@ -43644,6 +43668,186 @@ hello!
 1
 done",
     );
+}
+
+// ── A CoW collection identity names the STORAGE OWNER, not the spelling ──
+//
+// `Vector[String] alias = v` binds a second NAME to one collection. A borrow
+// taken through `alias` borrows out of `v`'s buffer, so the provenance the
+// mutation passes see must say `v`. Recording the spelling instead made every
+// downstream identity comparison miss — the `source_mut_unsafe` name query and
+// `cow_collection_refs_for_id`'s equality alike — so WHICH NAME the view was
+// spelled through decided whether the program read freed memory (rc 139 on
+// both backends, ASan heap-use-after-free in `gorget_string_copy_cow`).
+//
+// The resolution happens once, at the two provenance producers. These fixtures
+// sample the producer arms and the two consumer paths it repairs; the axes they
+// do NOT cover are named in the fixture headers.
+
+#[test]
+fn cow_alias_spelled_view_survives_root_growth() {
+    run_gg("cow_alias_spelled_view_survives_root_growth.gg", "hello");
+}
+
+#[test]
+fn cow_alias_spelled_view_literal_payload() {
+    run_gg("cow_alias_spelled_view_literal_payload.gg", "hello");
+}
+
+#[test]
+fn cow_alias_spelled_view_via_first_getter() {
+    run_gg("cow_alias_spelled_view_via_first_getter.gg", "hello");
+}
+
+#[test]
+fn cow_alias_spelled_element_field_borrow() {
+    run_gg("cow_alias_spelled_element_field_borrow.gg", "hello");
+}
+
+#[test]
+fn cow_alias_view_spelling_invariance() {
+    run_gg(
+        "cow_alias_view_spelling_invariance.gg",
+        "\
+hello
+hello",
+    );
+}
+
+/// The severance walk must not "rescue" an ANONYMOUS element temp.
+///
+/// `String s = v[0]` eagerly clones the index-load result into `s`, leaving
+/// the index temp dead — but it is still tagged as a borrow into `v`, so the
+/// walk cloned it again at every mutation, from a pointer the previous
+/// iteration's realloc had freed. rc 139 with no alias anywhere in the
+/// program. Its sibling case (field borrows) already filtered anonymous
+/// temps for exactly this reason; the collection-ref case did not.
+#[test]
+fn cow_indexed_element_survives_root_growth() {
+    run_gg(
+        "cow_indexed_element_survives_root_growth.gg",
+        "\
+hello
+hello",
+    );
+}
+
+/// NON-REGRESSION PIN, green before and after the resolution fix.
+///
+/// ⚠ No sever runs here, despite the name. Measured: `cow_register_alias` is
+/// called ZERO times for this program and `cow_has_aliases` is false at the
+/// reassignment, so `cow_sever_all_aliases_from` is never entered. `v` is
+/// reassigned on a forward path, which makes the bind take the eager-clone
+/// path instead of the CoW alias branch — the reassignment's PRESENCE
+/// prevents the alias from forming rather than severing one.
+///
+/// Three separate breaks of the sever/materialize machinery leave this
+/// program's output identical, and the reason is structural: that code is
+/// never reached for this input, so their inertness says nothing about
+/// provenance soundness. The fixture header carries the full measurement.
+/// It pins the end-to-end value semantics and nothing finer;
+/// `cow_view_into_owned_collection_survives_growth` is the cell with a live
+/// mechanism and a fire count.
+#[test]
+fn cow_alias_severed_by_root_reassign_then_view() {
+    run_gg(
+        "cow_alias_severed_by_root_reassign_then_view.gg",
+        "\
+hello
+1
+65",
+    );
+}
+
+/// MECHANISM PIN — Core #12 / the six questions' Q6.
+///
+/// stdout cannot tell "the lazy rescue ran" from "nothing needed rescuing":
+/// a program that never emits a rescue and a program whose rescue works both
+/// print `hello`. This asserts the emitted GIR actually carries the rescue,
+/// with a COUNT, so a partial regression (one spelling rescued, the other not)
+/// trips it.
+///
+/// Measured against the pre-fix compiler: the single-view fixture emitted
+/// `__cow_mat` 0 times (the rescue was never emitted at all) and the
+/// two-view fixture emitted it once (only the directly-spelled view was
+/// rescued). Both counts below are therefore RED pre-fix.
+///
+/// BREAK-THE-MECHANISM CHECK, run and confirmed rather than asserted: force
+/// `source_mut_unsafe` to `false` at its computation in
+/// `src/ir/lowering/stmts/mod.rs` and rebuild. Every caller of this helper
+/// goes RED with `found 0`. That is what makes these assertions live rather
+/// than decorative — the fixtures they guard still print `hello` with the
+/// rescue gone, which is the whole reason the count is asserted here.
+fn assert_gir_lazy_rescue_count(fixture: &str, expected_cow_mat: usize) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures").join(fixture);
+    let out_dir = std::env::temp_dir().join(format!(
+        "gg_cow_alias_gir_{}_{}",
+        std::process::id(),
+        fixture.replace('.', "_"),
+    ));
+    let _ = std::fs::create_dir_all(&out_dir);
+    let out_bin = out_dir.join("out.bin");
+    let output = build_with_timeout(
+        gg_command("build").arg(&path).arg("--emit-gir").arg("-o").arg(&out_bin),
+        fixture,
+    );
+    let gir = String::from_utf8_lossy(&output.stdout).to_string();
+    let _ = std::fs::remove_dir_all(&out_dir);
+    assert!(
+        output.status.success(),
+        "{fixture}: --emit-gir build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let cow_mat = gir.matches("__cow_mat").count();
+    let borrow_view = gir.matches("borrow_view").count();
+    assert_eq!(
+        cow_mat, expected_cow_mat,
+        "{fixture}: expected {expected_cow_mat} lazy-materialize flag(s) in the emitted GIR, \
+         found {cow_mat} (borrow_view mentions: {borrow_view}).\n\n\
+         Fewer than expected means a view's collection provenance is naming the SPELLING \
+         again instead of the storage owner, so `source_mut_unsafe` is queried with the \
+         wrong key and the rescue is never emitted. The fixture's stdout can still be \
+         `hello` while this is broken — that is why the count is asserted here.",
+    );
+}
+
+#[test]
+fn cow_alias_spelled_view_emits_the_lazy_rescue() {
+    assert_gir_lazy_rescue_count("cow_alias_spelled_view_survives_root_growth.gg", 1);
+}
+
+/// A String view into a collection the binding OWNS, held across that
+/// collection reallocating.
+///
+/// The source is owned rather than aliased because `v` is reassigned on a
+/// forward path, which sends the bind down the eager-clone path — no
+/// `BorrowOrigin::Alias` is ever created (measured: zero `cow_register_alias`
+/// calls). That makes this the one cell in the net where the lazy rescue must
+/// fire on an OWNED source, which the count below asserts; both this program
+/// and its sibling print `hello` whether or not the rescue is emitted.
+///
+/// ⚠ It does NOT exercise this track's identity resolution — its fire count
+/// is 1 on the pre-fix compiler too. It pins the pre-existing rescue path.
+#[test]
+fn cow_view_into_owned_collection_survives_growth() {
+    run_gg(
+        "cow_view_into_owned_collection_survives_growth.gg",
+        "\
+hello
+65
+1",
+    );
+}
+
+#[test]
+fn cow_view_into_owned_collection_emits_the_lazy_rescue() {
+    assert_gir_lazy_rescue_count("cow_view_into_owned_collection_survives_growth.gg", 1);
+}
+
+#[test]
+fn cow_alias_view_spelling_invariance_rescues_both_spellings() {
+    assert_gir_lazy_rescue_count("cow_alias_view_spelling_invariance.gg", 2);
 }
 
 #[test]

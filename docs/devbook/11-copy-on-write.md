@@ -102,27 +102,56 @@ type short-circuit before this point and never require `!`.
 ## Local ownership state (the tag on every local)
 
 Each GIR local carries a `LocalOwnership` (a typed field on `Local`, read back
-through `source_ownership`, `src/ir/lowering/context.rs:1077`). This is the
+through `source_ownership`, `src/ir/lowering/context.rs:1450`). This is the
 single source of truth for "does this local own its data?" — the legacy
 `func_state.local_ownership` sidecar map was retired (Phase D4.5; see the note
-at `context.rs:2502`). The variants that matter for CoW are `Owned`,
+at `context.rs:3130`). The variants that matter for CoW are `Owned`,
 `Borrowed { origin, mutability }`, `View { source }`, and `SharedHeap { source }`.
 
 The `origin` inside `Borrowed`/`View` is `crate::ir::BorrowOrigin` (distinct
 from the safety one). The relevant variants, used through the helper queries:
 
 - `Alias(LocalId)` — a CoW alias (`String b = a`); resolved transitively to the
-  root via `cow_resolve_root` (`context.rs:2562`).
+  root via `cow_resolve_root` (`context.rs:4003`).
 - `CollectionElement(LocalId)` / `FieldPath(String)` — an element borrowed out
   of a collection (`v.get(i)`) or a field-path collection (`self.data.get(i)`),
   identified by `CollectionId` (`context.rs:19`). Recognised by `is_cow_borrow`
-  (`context.rs:2384`).
+  (`context.rs:3563`).
 - `Field { base, .. }` — a borrow of a struct field (`String x = imp.field`).
 - `RuntimeView(LocalId)` — a `cap==0` string view returned by a view method,
-  set by `set_view_of` (`context.rs:2399`).
+  set by `set_view_of` (`context.rs:3578`).
 - `CowBorrowPending` — a placeholder before the source collection is resolved.
 
-`flush_ownership_to_locals` (`context.rs:2512`) derives each local's `slot_kind`
+### A collection identity names the STORAGE OWNER, never the spelling
+
+`CollectionId::Local` is the identity every later pass compares against when it
+asks "is this borrow pointing into the collection I am about to mutate?" — the
+`source_mut_unsafe` query at the var-decl, and the `CollectionElement(c) == t`
+equality that drives the severance walk. That identity is a **storage owner**,
+not a name the user happened to reach the storage through.
+
+The distinction is load-bearing because a collection answers to more than one
+name. `Vector[String] alias = v` binds a second name to one collection, tagging
+`alias` as `Borrowed { Alias(v) }`; a borrow taken through `alias` still borrows
+out of **`v`'s** buffer. If the recorded identity said `alias`, every comparison
+above would miss — the rescue would never be emitted, the severance walk would
+skip the borrow, and *which name the view was spelled through* would decide
+whether the program reads freed memory.
+
+So the identity is normalised **once, at the producers**, by
+`resolve_collection_identity` (`context.rs:3670`), which runs `cow_resolve_root`
+over the `Alias` chain. There are exactly two producers —
+`set_cow_borrow_source` (`context.rs:3643`, the `cow_borrow_sources` sidecar)
+and `set_collection_ref` (`:3707`, the `CollectionElement` ownership) — and both
+resolve before storing. Callers pass whichever local they have in hand and do
+not have to know whether it is a spelling or a root; consumers read one
+normalised identity and never re-derive it. This is Layering rule 4 ("resolve
+once, write through") at the CoW provenance boundary, and it is what
+`cow_collection_identity_writes_go_through_the_resolving_producers`
+(`tests/lints.rs`) holds in place: the sidecar field is private, and each
+producer must still call the resolver.
+
+`flush_ownership_to_locals` (`context.rs:3953`) derives each local's `slot_kind`
 (`BorrowedPtr` / `OwnedPtr` / `Value`) from `(type, ownership)` at the GIR→LIR
 boundary so the backend never re-derives ownership from names or shapes.
 
@@ -510,7 +539,7 @@ let elem_is_binding = matches!(pattern.node, Pattern::Binding(_));
 (`context.rs:3450`), with **no** `drops.register_local` — the collection owns the
 buffer, so a per-element drop would double-free it. The element's
 `BorrowOrigin` is `CollectionElement` / `CowBorrowPending`, recognised
-downstream by `is_cow_borrow` (`context.rs:3473`). Tuple-destructuring patterns
+downstream by `is_cow_borrow` (`context.rs:3563`). Tuple-destructuring patterns
 and direct-collection elements keep the old clone path.
 
 **Why this is sound.** The loop body can only do three things with `x`, and each
@@ -647,11 +676,11 @@ The current enforcement is only partial — see
 A borrow is only as cheap as the absence of a write. When the lowering is about
 to mutate a local — a mutating method call (`exprs/methods.rs:1590,1623`), a
 reassignment, an index/field assign (`assigns.rs:71,489,730`) — it first calls
-`cow_before_mutation(local, span)` (`context.rs:2658`) to clone out everything
+`cow_before_mutation(local, span)` (`context.rs:4099`) to clone out everything
 that aliases the value being mutated, so each alias keeps the value it observed.
 The cases it severs:
 
-- **bare Ptr param** → clone to owned in place (Case at `context.rs:2665`);
+- **bare Ptr param** → clone to owned in place (Case at `context.rs:4105`);
 - **local is an alias** → clone the source into the local (`Case 1`);
 - **local is itself an element/field borrow being mutated in place** →
   materialize it into an independent owned copy first, so the mutation lands in
@@ -664,23 +693,38 @@ The cases it severs:
 - **local is a collection with element refs** → materialize each ref
   (`Case 3`, via `cow_materialize_collection_ref`);
 - **local is a string with live views** → materialize each view (`Case 4`,
-  recursing through transitive views, `context.rs:2710`);
+  recursing through transitive views, `context.rs:4232`);
 - **SharedHeap value-aliases** → drop the tag only (heap was already deep-owned
   at the `gorget_string_copy_cow` boundary, `Case 5`);
 - **struct with live named field-borrows** → materialize each (`Case 6`).
 
-The three materialize routines (`cow_materialize_alias` `:2872`,
-`cow_materialize_view` `:2833`, `cow_materialize_collection_ref` `:2910`) all
+**The two walks that DISCOVER refs both skip ephemeral temps, and must.** Cases
+3 and 6 do not sever a set the caller handed them; they scan for locals tagged
+as borrows into the value being mutated. That scan finds expression temps as
+well as user variables — the anonymous `Ptr` behind `v[i]`, the field-load temp
+behind `obj.field` inside a call — and those temps are dead the moment the
+statement that produced them finishes, their value already copied into whatever
+the user actually named. Materializing one is worse than wasted: the routines
+rebind by *name hint*, so there is no name for the clone to land on, and the
+clone reads FROM the element pointer — which, after a reallocating mutation, is
+freed memory. The rescue would be the use-after-free. Case 3 therefore skips
+anonymous `Ptr`-typed refs and Case 6 skips anonymous field borrows. The filter
+is on the `Ptr` shape rather than on anonymity alone, because a slice (`v[a:b]`)
+is tagged through the same producer yet is a collection **value**: anonymous,
+genuinely read by the assign that consumes it, and needing its clone.
+
+The three materialize routines (`cow_materialize_alias` `:4508`,
+`cow_materialize_view` `:4467`, `cow_materialize_collection_ref` `:4585`) all
 share the shape: call `clone_fn_for_ptr`, then bind the cloned value into a
 fresh owned local with `AssignMode::Move` (not Copy — Copy would alias the clone
-and leak the original; see the comment at `context.rs:2853`), register it for
+and leak the original; see the comment at `context.rs:4529`), register it for
 drop, and rebind the name. The Move-mode detail was a real bug fix: the earlier
 shallow-copy variant produced a Phase-C validator violation that a now-removed
 named-local guard was masking.
 
-`cow_before_field_mutation` (`context.rs:2765`) is the field-path sibling
+`cow_before_field_mutation` (`context.rs:4387`) is the field-path sibling
 (`self.data.push(x)` materializes `CollectionRef`s borrowing `"self.data"`), and
-`cow_sever_all_aliases_from` (`context.rs:2782`) handles the reassign case
+`cow_sever_all_aliases_from` (`context.rs:4404`) handles the reassign case
 (aliases keep the *old* value).
 
 ### Implementation status — converging to the uniform rule

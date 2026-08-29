@@ -1,0 +1,55 @@
+# REGRESSION — a String view into a collection the binding OWNS survives that
+# collection growing past a reallocation.
+#
+# CELL: source shape = an OWNED collection (not a borrow, not an alias) ·
+# the source reallocs on a forward path from the bind · element type String.
+#
+#     Vector[String] owned_copy = v       # eager clone at the bind, see below
+#     String s = owned_copy.get(0).unwrap()
+#     ... grow owned_copy 64x -> realloc ...
+#     print(s)                            # must survive
+#
+# WHY THE BIND IS A COPY, MEASURED — this is NOT a sever, and no alias is
+# ever created. A bare-identifier bind takes the CoW ALIAS branch
+# (`src/ir/lowering/stmts/mod.rs:1498-1509`) only when neither the destination
+# nor the SOURCE is reassigned on a forward path (`is_cow_unsafe_at`). Here `v`
+# IS reassigned below, so the branch is skipped, the bind falls through to the
+# eager-clone path, and `owned_copy` is an owned `Vector__GorgetString` from
+# the start. Instrumenting the sole producer of `BorrowOrigin::Alias`
+# (`cow_register_alias`) shows ZERO calls for this program; deleting the
+# `v = []` line makes it fire. So the reassignment's PRESENCE PREVENTS the
+# alias from forming -- it does not sever one.
+#
+# MECHANISM PIN + FIRE COUNT: the sibling harness assertion checks the emitted
+# GIR carries the lazy rescue (`__cow_mat == 1`). stdout cannot distinguish
+# "the rescue ran" from "nothing needed rescuing" -- this program prints
+# `hello` either way. The count is RED (`found 0`) when the rescue is broken:
+# force `source_mut_unsafe` to `false` at its computation in
+# `src/ir/lowering/stmts/mod.rs` and rebuild. That break has been run.
+#
+# WHAT IT DOES NOT PIN: this cell does NOT exercise the collection-identity
+# resolution it arrived with. Its fire count is `__cow_mat=1` on the pre-fix
+# compiler too -- the provenance recorded is the same either way, because
+# there is no alias chain to resolve. It pins the pre-existing lazy rescue on
+# an OWNED source, a cell nothing else in the corpus covered.
+#
+# The lengths pin that `owned_copy` and `v` are independent values: the copy
+# grew to 65 while `v` kept the single element it was given afterwards.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = []
+    v.push(mk("hel", "lo"))
+    Vector[String] owned_copy = v
+    v = []
+    v.push(mk("new", "one"))
+    String s = owned_copy.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        owned_copy.push(mk("fill", "er"))
+        i = i + 1
+    print(s)
+    print(owned_copy.len())
+    print(v.len())
