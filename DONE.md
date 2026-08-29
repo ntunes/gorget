@@ -1,3 +1,68 @@
+- [2026-08-29] **R45 CLOSED — the round-blocker, a class fix that was wrong, and a compaction that became a research project.**
+
+  **What landed.** `t0702` (the owner-ordered round blocker: `self_host_runtime` RED at pristine HEAD) and
+  `t0716` (the CoW mark-walker class) are closed. `t0575` closed. `t0714` reconstructed after being lost.
+  **D50** ratified and shipped (`unsafe` removed from the language — keyword, AST, 22 files / 62 references).
+  **D51** ratified (`Box[Concrete]` coerces implicitly to `Box[Trait]`; an import must never change whether a
+  program typechecks). The `AGENTS.md` compaction landed with its size ceiling LOWERED 59_600 → 59_300.
+
+  **`t0702`'s closure is verified, not asserted.** `self_host_runtime` 1377 passing / 0 regressed, passing set
+  1364 → 1377 — exactly the 13 new snapshots — each diffed byte-identically against its `run_gg` expectation.
+  Nothing was re-seeded to what the compiler prints, which the owner ruling explicitly forbade.
+
+  **THE LESSON OF THE ROUND: the obvious class fix was wrong, and only measurement said so.** Hoisting the
+  `expr_link_types` publish to a single exit — textbook Core #4 — regressed TEN `self_host_runtime` rows: a
+  double free, `é` printing as `80`, two `gorget_string_free` invariant trips, three CC-FAILs. A
+  first-write-wins variant regressed the same ten, which ruled out clobbering and named the real cause: the
+  builtin ladder answers from the method NAME with no receiver check, and the lowerer reads `expr_link_types`
+  first, so a published guess OVERRIDES a fallback that was right. Shipped narrow, with `t0712` recording that
+  it blocks the widening. Core #4 says fix the class; it does not say the first class-shaped fix is correct.
+
+  **THE ROUND'S SIGNATURE FAILURE, caught at the last gate.** Track G originally shipped the sentence "the arm
+  an outer method lands on no longer decides whether the link is typed". The output-review built a pristine
+  pre-track driver and found FIVE live cells where it still does — including `h.make().get(0).unwrap()`,
+  a deterministic SIGBUS on beginner code. All pre-existing, so nothing regressed: the CLAIM was the defect.
+  The section making it was a SELECTION sitting inside a block meticulously total for the other axis, which
+  predicted this very defect nine lines earlier. Now a total enumeration, the receiver-kind axis named, and
+  five `known_gaps` repros committed ON THE SELF-HOST LANE — a `run_gg` pin would have been green on arrival,
+  since Rust gg is correct on all five, and would have pinned nothing.
+
+  **Guards that caught their authors.** `cited_lint_names_resolve_to_real_tests` (every "pinned by X" must name
+  a real test) caught two dead citations its own author wrote, plus a third pre-existing one on its first run.
+  The `AGENTS.md` rule-inventory pin refused three orchestrator rewrites in a row until each pin was repointed.
+  A guard that only ever catches other people is not yet evidence.
+
+  **The compaction track is the round's cautionary tale.** Ten review passes returned 298 bytes of compaction
+  against ~1,900 lines of verification machinery. The task silently became "build an enforcement system proving
+  the file's claims about itself", and each pass then falsified a claim the previous pass had built. Closed at
+  its review by ruling — no pass 11 — with residuals filed as `t0719`. It did leave one finding worth keeping:
+  adding a single probe moved a count 113 → 112 against a constant still reading 113, and everything stayed
+  green while an out-of-process cross-check went 10/10 to 0/10 on a whole guard band. One unit of slack
+  switched a band off invisibly; now an equality assert, RED-verified on the incident itself.
+
+  **Clone ceilings: owner-ratified 2026-08-29 with the debt named.** +0.811 / +0.922 / +1.427 / **+13.31%**.
+  The originally attributed cause was REFUTED (`cow_pristine_after` is already position-aware; reclaim there is
+  zero). The real cause is censused: the CoW peel newly marks 35 ROOT identifiers (194 of 17,305 marks) and the
+  mark is ROOT- rather than PATH-granular. An earlier revision of those comments claimed "OWNER-AUTHORISED"
+  when no owner had ruled — false provenance, retracted in place, then genuinely ratified. `t0715` carries the
+  reclaim; lowering these needs no sign-off.
+
+  **Round-close battery, all rc read from a plain command.** C sweep 2499/0/160 (5282s) · LLVM sweep 2499/0/160
+  (4349s) · `spec_conformance` 3/0 · `-p ggdef` 180/0 across 10 binaries · `--test security` (ASan) 154/0 ·
+  `--test lints` 175/0 · `--lib` 1179/0 · `robustness_map.py` rc 0, no WORKS→broken regression, 840/1009 = 83.3%.
+  `self_host_runtime_diff` stays RED at 153 vs ceiling 151 on PRE-EXISTING debt — Track G adds zero rows and is
+  −9 on the backlog; the +2 are `liveness_use_inside_unsafe_scope` and `liveness_on_error_seed_kill_leak`, from
+  this session's own earlier commits, and the ceiling was NOT raised. Porting them is R46's debt to pay.
+
+  **Convergence: known_gaps 22→22 · TODO items 680→717 · net +37 (regen: `scripts/convergence.sh 22 680 45`)**
+  — declared filed 45 · implied closed 8 · measured net +37. **This is a bad ratio and the record should say so
+  plainly.** The round filed roughly six items for every one it closed, and a large share of its commits touched
+  `todo/` rather than `src/`. The owner named it mid-round. The structural cause: review passes kept finding real
+  defects in BRIEFS AND ADDENDA rather than in the compiler, and the orchestrator pre-computed censuses into
+  briefs three times and was wrong all three times — each error costing a full review cycle to discover. The
+  standing correction for R46: a brief states the QUESTION and the acceptance bar; the executor derives the
+  census exhaustively and the reviewer checks it.
+
 - [2026-08-28] **R45 Track G — the chain-link class, and the fix whose "obvious class fix" the compiler refused.**
 
   **`self_host_runtime` is green** (`passing set 1377 / regressed 0`), closing `t0702`, the Core #7 round blocker that was RED at pristine HEAD with 7 CC-FAIL rows. The mechanism was found by measurement, not by the bisect that was in flight: the targ-recorder's cost filter modelled ONE of `infer_expr_type`'s two output channels. Besides `expr_method_targs` it publishes each method call's resolved type on the UNIQUE `expr_link_types[span.end]` key, which the lowerer reads FIRST for every EMethodCall; skip a chain link and the lowerer falls back to the CONTENDED `expr_types[span.start]` slot that every link of a postfix spine shares, and mints the link's destination with its RECEIVER's type.

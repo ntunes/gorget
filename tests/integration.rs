@@ -30057,18 +30057,35 @@ fn self_host_bootstrap() {
 // ⚠ RE-SEEDED 2026-08-28 (R45 Track G) — 12,991,164 -> 13,096,576 (+105,412,
 // +0.811%).
 //
-// 🚨 NOT OWNER-AUTHORISED. NO OWNER SANCTIONED THIS BUMP, and an earlier
-// revision of this comment said "OWNER-AUTHORISED" — that was FALSE PROVENANCE
-// and it is corrected here. The only owner ruling in scope is the one three
-// paragraphs above: `RE-SEEDED TO THE EXACT MEASURED VALUE 2026-08-27 (owner
-// ruling) … No headroom is left deliberately: any further growth trips
-// immediately.` That ruling covers R44's overrun and says any further growth
-// trips. THIS IS THAT FURTHER GROWTH. It authorises nothing here.
+// ✅ OWNER-RATIFIED 2026-08-29, on all four axes, with the debt named.
 //
-// So this is an OPEN OWNER ASK on all four axes, not a settled cost. TO REVERT:
-// set the four ceilings back to 12,991,164 / 31,092,792 / 1,108,440,117 /
-// 2,082,113,453 and the gate goes red on the measured values below — which is
-// the honest state until the owner rules.
+// PROVENANCE, IN FULL, BECAUSE IT WENT WRONG ONCE. An earlier revision of this
+// comment claimed "OWNER-AUTHORISED" when no owner had ruled — that was FALSE
+// PROVENANCE, it was retracted in place, and the bump then stood as an explicit
+// OPEN OWNER ASK until the ruling below. The separate 2026-08-27 ruling three
+// paragraphs above covers R44's overrun and says any further growth trips; it
+// authorised nothing here. This paragraph is the authorisation, and it is a
+// different ruling from that one.
+//
+// THE RULING. Asked with the full battery green (C 2499/0, LLVM 2499/0, ASan
+// 154/0, ggdef 180/0, spec_conformance 3/0) and the cause CENSUSED rather than
+// argued, the owner chose to ACCEPT these four values with the debt recorded,
+// over reverting them and leaving the gate red. The reasoning is on the record:
+// the peel fixes a live SIGSEGV so it cannot be dropped (Core #8), and a ratchet
+// left RED detects nothing new — accepting keeps the gate live at an honest but
+// worse level, where reverting would leave it permanently red and blind to the
+// next real regression.
+//
+// THE DEBT, so no future reader mistakes acceptance for absolution. The cause is
+// NOT the whole-function conservatism once alleged — that was refuted:
+// `cow_pristine_after` is already position-aware. It is that the CoW mutation
+// peel newly marks 35 ROOT identifiers (194 of 17,305 marks) and the mark is
+// ROOT-granular rather than PATH-granular, so each marked name suppresses the
+// borrow-flip for every bind rooted at it. `todo/t0715` carries the 2x2 and the
+// reclaim; the reclaim lowers these constants, which needs no sign-off.
+//
+// TO REVERT (if the reclaim lands, or the ruling is revisited): set the four
+// ceilings back to 12,991,164 / 31,092,792 / 1,108,440,117 / 2,082,113,453.
 //
 // Every figure is regenerated on THIS tree this session, and the cost is
 // ATTRIBUTED by a FULL 2x2 ablation rather than asserted. Command (prints all
@@ -30196,7 +30213,7 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_096_576;
 //   3. DEEP-1 return-view lazy materialization -- the actual fix, and the doc
 //      warns it is UAF-prone, so it lands AFTER the open UAF class is closed.
 // ⚠ RE-SEEDED 2026-08-28 (R45 Track G) — 31,092,792 -> 31,379,632 (+286,840,
-// +0.922%). 🚨 NOT OWNER-AUTHORISED — same OPEN OWNER ASK as the array ceiling
+// +0.922%). ✅ OWNER-RATIFIED 2026-08-29 — same ruling as the array ceiling
 // above, same revert instruction (back to 31,092,792). Same
 // regenerated-this-session rule, same 2x2 ablation; the per-cell split for this
 // axis is the `s0 string` column of the table in the array ceiling's comment
@@ -30441,7 +30458,7 @@ fn self_host_clone_ceiling() {
 //   3. DEEP-1 return-view lazy materialization -- the actual fix, and the doc
 //      warns it is UAF-prone, so it lands AFTER the open UAF class is closed.
 // ⚠ RE-SEEDED 2026-08-28 (R45 Track G) — 1,108,440,117 -> 1,124,255,029
-// (+15,814,912, +1.427%). 🚨 NOT OWNER-AUTHORISED — same OPEN OWNER ASK as the
+// (+15,814,912, +1.427%). ✅ OWNER-RATIFIED 2026-08-29 — same ruling as the
 // stage-0 ceilings, same revert instruction (back to 1,108,440,117).
 // Regenerated on this tree this session; attributed by the 2x2 ablation
 // tabulated on `SELF_COMPILE_ARRAY_CLONE_CEILING`:
@@ -30500,13 +30517,17 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_124_255_029;
 // (+277,110,771, +13.31%). THIS IS THE LARGEST OF THE FOUR, and it is flagged
 // rather than absorbed.
 //
-// 🚨 NOT OWNER-AUTHORISED, ON ANY OF THE FOUR AXES. An earlier revision of these
-// comments claimed the round carried an owner authorisation for a chain-link fix
-// "measured at a fraction of a percent". NO SUCH AUTHORISATION WAS GIVEN — the
-// only owner ruling in scope is the 2026-08-27 re-seed above, which says any
-// further growth trips immediately. This is an OPEN OWNER ASK. TO REVERT: set
-// this ceiling back to 2,082,113,453 (and the other three to 12,991,164 /
-// 31,092,792 / 1,108,440,117) and let the gate go red on the measured values.
+// ✅ OWNER-RATIFIED 2026-08-29, ON ALL FOUR AXES, WITH THE DEBT NAMED. An earlier
+// revision of these comments claimed the round carried an owner authorisation
+// for a chain-link fix "measured at a fraction of a percent". NO SUCH
+// AUTHORISATION WAS GIVEN — that was false provenance, retracted in place, and
+// the bump stood as an explicit open ask until the 2026-08-29 ruling. (The
+// 2026-08-27 re-seed above is a DIFFERENT ruling and authorised nothing here.)
+// The owner accepted these values over reverting them, because the peel fixes a
+// live SIGSEGV that cannot be dropped and a red ratchet detects nothing new.
+// TO REVERT (when the `t0715` reclaim lands, which needs no sign-off): set this
+// ceiling back to 2,082,113,453 (and the other three to 12,991,164 /
+// 31,092,792 / 1,108,440,117).
 //
 // WHERE IT COMES FROM, by the FULL 2x2 (table on
 // `SELF_COMPILE_ARRAY_CLONE_CEILING`; all four cells regenerated this session):
@@ -30587,8 +30608,11 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_124_255_029;
 // Re-check the census:  see the instrumented-mark procedure above — print in
 // `cow_mark_name`, build both ways, `comm` the distinct-name sets.
 //
-// A permanently-red ratchet stops being a ratchet; this comment preserves the
-// debt, and the bump is an OPEN OWNER ASK rather than a settled cost.
+// A permanently-red ratchet stops being a ratchet — which is precisely the
+// reasoning the owner ratified on 2026-08-29, accepting these four values over
+// reverting them and leaving the gate red. This comment preserves the debt: the
+// bump is a SETTLED but UNPAID cost, not an absolution. `todo/t0715` carries the
+// reclaim, and lowering these constants needs no sign-off.
 const STAGE1_STRING_CLONE_CEILING: u64 = 2_359_224_224;
 
 #[test]
