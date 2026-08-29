@@ -8310,6 +8310,10 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("CORE-15e7", "is this premise still TRUE, or a filed fact that decayed?"),
     ("CORE-15e8", "the process has thinned"),
     ("CORE-pipeline", "scout → brief → ≥3 fresh brief-reviews → launch (worktree) → fresh output-review → integrate"),
+    ("CORE-tracks", "A round runs SEVERAL TRACKS IN PARALLEL, and every track runs its own gauntlet"),
+    ("CORE-exec-only", "Only that track's EXECUTOR changes code"),
+    ("CORE-roles", "scouts prototype and throw away, reviewers propose without implementing"),
+    ("REV-scout-throwaway", "in a throwaway worktree, shipping no diff"),
     ("BT-tee", "Always pipe integration tests through `tee`"),
     ("BT-llvm", "Set `GG_BACKEND=llvm` to append `--backend=llvm`"),
     ("BT-autoscale", "Full sweeps autoscale via `scripts/run_integration.sh`"),
@@ -8488,6 +8492,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("TC-stale", "Stale-pending scan"),
     ("RL-auto", "rounds run back-to-back, autonomously, until the owner stops them"),
     ("RL-1", "Open a round around a headline theme"),
+    ("RL-1-multi", "a round normally carries more than one"),
     ("RL-1-parallel", "\"One campaign\" is about the round's *theme*"),
     ("RL-1-prewarm", "avoid is PRE-WARMING a FUTURE round's campaign"),
     ("RL-1-lens", "Convergence lens"),
@@ -8821,7 +8826,7 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
 /// Shrink-only floor on the inventory, so a compaction cannot delete rows and
 /// the rules they pin in one move. RAISING is free (new rules landed);
 /// LOWERING requires owner sign-off, like the byte ceiling.
-const AGENTS_MD_RULE_FLOOR: usize = 456;
+const AGENTS_MD_RULE_FLOOR: usize = 461;
 
 /// Grow-only ceiling on the escape hatch (see above).
 const AGENTS_MD_MAX_NON_NORMATIVE: usize = 92;

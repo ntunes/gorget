@@ -1757,3 +1757,38 @@ EVERY) that a skimming reader must not miss. Churning ~100 probes to restyle
 emphasis is a large reviewed diff for a small aesthetic gain, and the guard
 correctly makes that expensive. Recorded here as a considered no, so the next
 reader does not re-derive it.
+
+### The round's shape was never stated in one place (owner 2026-08-29)
+
+Asked whether the file made three things clear — a round has multiple parallel
+tracks, each track runs the gauntlet, code changes come from the executor — the
+audit found **one of three**.
+
+*Each track runs the gauntlet* was clear and stated twice ("per track, ≥3
+sequential fresh brief-review agents each seeing only that track's brief (N
+tracks ⇒ N×≥3 agents)"; "N independent per-track loops").
+
+*Multiple parallel tracks* existed only as PERMISSION — "parallel tracks
+welcome", "Multiple items/tracks MAY run IN PARALLEL". A reader looking for the
+normal shape of a round found an allowance, not a default.
+
+*Only the executor changes code* was **nowhere stated positively.** It had to be
+assembled from three negatives scattered across two sections: the orchestrator
+does not touch the code (rule 0), the reviewer proposes but does not implement,
+the scout is read-only. An assembled rule is a rule a reader can fail to
+assemble — and this one is load-bearing, because the failure mode it prevents is
+exactly the executor starvation §20 is about.
+
+Worse, the third fact carried a **flat contradiction**: the scout was described
+as *"a read-only probe/audit"* that *"prototypes it end-to-end and MEASURES the
+real result"*. Both clauses are correct and they read as opposites. The
+resolution was always intended — Multi-agent rule 9 says "checkpoint scout
+prototypes to /tmp" — but intent that lives in another section is not a
+reconciliation. It now says the scout works *in a throwaway worktree, shipping no
+diff*: read-only in what it SHIPS, not in what it may run.
+
+The general lesson: a fact derivable from three separate clauses is not stated.
+Core #15e Q4 asks whether a rule's SUBJECT covers the case; the dual is worth
+asking too — **is there a load-bearing fact with no rule at all, that every
+reader is expected to infer?** Those are invisible to the pin lint by
+construction, because a probe can only pin text that exists.

@@ -61,6 +61,20 @@
   Size ceiling RAISED 47_400 → 49_200 (the only raise in this file's history that bought something other than
   rules); rows 451 → 456, exemptions 85 → 92. Final: 48,743 bytes.
 
+  **The round's SHAPE is now stated once, where every agent reads it.** Owner asked whether three facts were
+  clear; audit said one of three. (a) *multiple parallel tracks* — stated only as permission ("parallel tracks
+  welcome", "MAY run IN PARALLEL"), never as the normal shape; (b) *each track runs the gauntlet* — clear
+  ("per track, ≥3 sequential fresh brief-review agents … N tracks ⇒ N×≥3 agents"); (c) *only the executor
+  changes code* — nowhere stated positively, only derivable from three separate negatives (the orchestrator
+  doesn't, the reviewer proposes, the scout is read-only). Worse, (c) had a **flat contradiction**: the scout
+  was "a read-only probe/audit" that "prototypes it end-to-end". Fixed: Core invariants now closes with
+  `CORE-tracks` + `CORE-exec-only` + `CORE-roles` — a round runs SEVERAL TRACKS IN PARALLEL, every track runs
+  its own gauntlet, and only that track's EXECUTOR changes code (scouts prototype and throw away, reviewers
+  propose without implementing, the orchestrator coordinates). `REV-scout-throwaway` reconciles read-only with
+  prototyping — the scout works "in a throwaway worktree, shipping no diff", i.e. read-only in what it SHIPS.
+  `RL-1-multi` makes multi-track the stated default. Rows 456 → 461; ratchets unchanged (each new run was
+  burned down by pinning it, never by raising a constant). Final: 49,073 bytes.
+
   **Verified, not asserted.** Guards RED-demonstrated on the landed file: deleting `RL-5-red`, `REV-growscope`
   or `REV-launch` each fires `agents_md_rule_inventory_is_pinned` BY NAME; inserting an unpinned clause fires
   `agents_md_every_clause_is_classified`; all restore green. `cargo test --test lints` 175 passed,
