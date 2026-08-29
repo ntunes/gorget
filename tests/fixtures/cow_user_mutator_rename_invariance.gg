@@ -1,0 +1,65 @@
+# RENAMING A USER METHOD MUST NOT CHANGE WHETHER THE PROGRAM SEGFAULTS.
+#
+# Two structurally identical halves, differing ONLY in what the `&self`
+# mutator is called:
+#
+#     Listed.resize(&self)     -- `resize` WAS on the 25-entry
+#                                 MUTATING_METHODS hand list
+#     Unlisted.grow(&self)     -- `grow` was not
+#
+# The CoW prescan used to decide "does this call mutate its receiver" by
+# testing the method's identifier text against that list, so the second half
+# alone was rc 139 / ASan heap-use-after-free on BOTH backends while the
+# first was correct (`todo/t0699`). The decision now comes from the semantic
+# pass's typed per-receiver classifier
+# (`semantic::safety::ReceiverMutations`), which cannot see a name.
+#
+# THE REALLOC IS LOAD-BEARING: each mutator must push enough to force the
+# backing store to reallocate (64x here), or the stale bind still points at a
+# live buffer and the program is rc 0 under BOTH names, proving nothing.
+#
+# THE HEAP PAYLOAD IS NOT what makes the repro valid -- measured, a literal
+# payload reproduces rc 139 just as well -- but `mk` is kept so the freed
+# element is a heap String and ASan reports a clean heap-use-after-free in
+# `gorget_string_clone_to_owned` rather than a bare SIGSEGV.
+#
+# RED-verified at the pre-fix compiler: rc 139 on C and on LLVM (the Unlisted
+# half). Post-fix: `helloworld` twice on C, LLVM and the self-host lane.
+String mk(String a, String b):
+    return a + b
+
+struct Listed:
+    Vector[String] items
+
+equip Listed:
+    void resize(&self):
+        int i = 0
+        while i < 64:
+            self.items.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+            i = i + 1
+
+    String probe(&self):
+        String s = self.items.get(0).unwrap()
+        self.resize()
+        return s
+
+struct Unlisted:
+    Vector[String] items
+
+equip Unlisted:
+    void grow(&self):
+        int i = 0
+        while i < 64:
+            self.items.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+            i = i + 1
+
+    String probe(&self):
+        String s = self.items.get(0).unwrap()
+        self.grow()
+        return s
+
+void main():
+    Listed a = Listed([mk("hello", "world")])
+    print(a.probe())
+    Unlisted b = Unlisted([mk("hello", "world")])
+    print(b.probe())

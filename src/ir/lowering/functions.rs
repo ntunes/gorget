@@ -404,12 +404,12 @@ fn prescan_expr_moves(
 /// At loops, the loop body's mutations are included (conservative but correct).
 fn compute_cow_reassigned_after(
     body: &[Spanned<Stmt>],
-    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    info: &CowPrescan<'_>,
 ) -> rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<std::rc::Rc<str>>> {
     let mut result = rustc_hash::FxHashMap::default();
     let mut future: rustc_hash::FxHashSet<std::rc::Rc<str>> = rustc_hash::FxHashSet::default();
     let mut interner: rustc_hash::FxHashMap<String, std::rc::Rc<str>> = rustc_hash::FxHashMap::default();
-    cow_after_block(body, &mut future, &mut result, fn_param_ownerships, &mut interner);
+    cow_after_block(body, &mut future, &mut result, info, &mut interner);
     result
 }
 
@@ -431,14 +431,14 @@ pub(crate) fn cow_mutations_in_loop(
     body: &[Spanned<Stmt>],
     condition: Option<&Expr>,
     else_body: Option<&[Spanned<Stmt>]>,
-    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    info: &CowPrescan<'_>,
 ) -> rustc_hash::FxHashSet<std::rc::Rc<str>> {
     let mut result = rustc_hash::FxHashMap::default();
     let mut future: rustc_hash::FxHashSet<std::rc::Rc<str>> = rustc_hash::FxHashSet::default();
     let mut interner: rustc_hash::FxHashMap<String, std::rc::Rc<str>> = rustc_hash::FxHashMap::default();
-    cow_after_block(body, &mut future, &mut result, fn_param_ownerships, &mut interner);
+    cow_after_block(body, &mut future, &mut result, info, &mut interner);
     if let Some(cond) = condition {
-        cow_after_expr_moves(cond, &mut future, fn_param_ownerships, &mut interner);
+        cow_after_expr_moves(cond, &mut future, info, &mut interner);
     }
     // Planner consumer #1 (loop-else): a bare-param mutation in a `for … else:` /
     // `while … else:` body has the IDENTICAL save/restore hole — the else body
@@ -447,7 +447,7 @@ pub(crate) fn cow_mutations_in_loop(
     // dominates the else exit, so folding the else body into the loop's pre-header
     // scan lets that single hoist cover it too (keeping `LoopPreHeaderMaterialize`).
     if let Some(eb) = else_body {
-        cow_after_block(eb, &mut future, &mut result, fn_param_ownerships, &mut interner);
+        cow_after_block(eb, &mut future, &mut result, info, &mut interner);
     }
     future
 }
@@ -477,12 +477,12 @@ pub(crate) fn cow_mutations_in_loop(
 /// revives the thrown-away private copy.
 pub(crate) fn cow_mutations_in_stmt(
     stmt: &Stmt,
-    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    info: &CowPrescan<'_>,
 ) -> rustc_hash::FxHashSet<std::rc::Rc<str>> {
     let mut result = rustc_hash::FxHashMap::default();
     let mut future: rustc_hash::FxHashSet<std::rc::Rc<str>> = rustc_hash::FxHashSet::default();
     let mut interner: rustc_hash::FxHashMap<String, std::rc::Rc<str>> = rustc_hash::FxHashMap::default();
-    cow_after_stmt(stmt, &mut future, &mut result, fn_param_ownerships, &mut interner);
+    cow_after_stmt(stmt, &mut future, &mut result, info, &mut interner);
     future
 }
 
@@ -519,37 +519,87 @@ fn intern_rc(s: &str, interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<s
     rc
 }
 
-/// Method names that mutate a collection receiver in place. Any `receiver.method(...)`
-/// with method in this list contributes `@mut:{receiver_path}` to the prescan set.
-///
-/// This hand-list is now a *conservative fallback* layered UNDER the typed
-/// builtin predicate (`is_mutating_method_name`): the authoritative source is
-/// `builtins::is_mutating_builtin_method`, which reads the `is_mutating` flag
-/// off each builtin type protocol (no drift). The list is retained ONLY as an
-/// over-approximation for USER methods whose typed `&self`-mutator signature is
-/// not resolvable in this untyped AST prescan — a user method named like one of
-/// these entries stays conservatively marked "mutating" (an extra private copy,
-/// never a missed one). Deleting the phantom names is coupled to landing the
-/// step-4 typed user-`&self`-mutator over-approximation; until that ships, the
-/// user-method receiver gap is filed in TODO.md ("CoW 2G user-&self-mutator
-/// loop-carried receiver"). See CLAUDE.md "No name matching" — the typed
-/// predicate is the source of truth; this list survives only as the escape
-/// hatch for what typed metadata the prescan cannot yet reach.
-const MUTATING_METHODS: &[&str] = &[
-    "push", "pop", "set", "insert", "remove", "clear", "sort", "sorted",
-    "reverse", "swap", "swap_remove", "extend", "append", "truncate",
-    "retain", "dedup", "resize", "reserve", "replace", "drain", "fill",
-    "put", "remove_key", "sort_by", "sort_by_key",
-];
+/// The typed side tables the CoW mutation prescan reads. Bundled so the
+/// collectors below take ONE parameter instead of a growing tuple — and, more
+/// to the point, so that "does this call mutate its receiver" has exactly one
+/// entry point (`Self::call_mutates_receiver`) rather than an open-coded test
+/// at each of the collector's arms.
+pub(crate) struct CowPrescan<'a> {
+    /// Free-function name -> declared per-param ownership. Drives implicit
+    /// mut-borrow ARGUMENT detection (`f(x)` where `f` declares `T &x`).
+    pub(crate) fn_param_ownerships: &'a rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    /// Method-call span -> does this call write through its RECEIVER, resolved
+    /// once by the semantic pass. See
+    /// [`crate::semantic::safety::ReceiverMutations`].
+    pub(crate) receiver_mutations: &'a crate::semantic::safety::ReceiverMutations,
+}
 
-/// Is `method` a mutating-receiver method for prescan purposes? Typed-builtin
-/// predicate (the source of truth — picks up `add`, `close`, `get_or_put`,
-/// `push_char`, `push_line`, `send`, `set_at`, `store`, `update` and any future
-/// `is_mutating` builtin for free) UNION the conservative `MUTATING_METHODS`
-/// fallback (see that const's doc — the user-`&self`-mutator escape hatch).
-fn is_mutating_method_name(method: &str) -> bool {
-    crate::ir::lowering::builtins::is_mutating_builtin_method(method)
-        || MUTATING_METHODS.contains(&method)
+impl CowPrescan<'_> {
+    /// Does `receiver.method(...)` mutate its receiver — and therefore
+    /// contribute `@mut:{receiver_path}` to the prescan set?
+    ///
+    /// The answer is READ, not re-derived: the semantic pass already resolved
+    /// this call site's receiver to a type and its method to a `DefId`, and
+    /// classified it from the receiver's typed builtin protocol plus the
+    /// method's declared `&self` (`safety/check_expr.rs`, the
+    /// `receiver_is_mutating` binding). Layering rule 4.
+    ///
+    /// This function must never consult `method.node`'s TEXT to decide whether
+    /// a USER method mutates. That is what it used to do — a 25-entry
+    /// `MUTATING_METHODS` hand list — and it made a user `&self` mutator's
+    /// NAME decide memory safety: `void grow(&self)` segfaulted where a
+    /// byte-identical `void resize(&self)` was correct, because `resize` was on
+    /// the list and `grow` was not (`todo/t0699`, both backends). The
+    /// regression net is `user_mutator_method_name_decides_memory_safety.gg`
+    /// and `cow_user_mutator_two_types_same_name.gg`.
+    ///
+    /// ── The UNCLASSIFIED case ───────────────────────────────────────────
+    ///
+    /// `None` means the semantic pass never reached this call. Two classes do
+    /// that, both structural, both measurable with `GG_REPORT_RECV_MUT=1`
+    /// (which prints one `[recv-mut-miss] <name>` per unclassified query):
+    ///
+    ///   1. **Nodes the lowering itself synthesized** — iterator-pipeline
+    ///      spines, f-string `display`/`debug` calls, derive bodies. They did
+    ///      not exist when the semantic pass ran.
+    ///   2. **`meta`-expanded bodies** — most sharply a `meta for` generating
+    ///      MATCH ARMS, whose pattern binding has no resolved type until
+    ///      expansion, which happens here in the lowering.
+    ///
+    /// The answer for those is the SELF-HOST's, and the self-host is explicit
+    /// that the other direction is the unsound one (`lower.gg`,
+    /// `method_mutates_receiver` step 3: *"a name that is NEITHER a registered
+    /// user method on the resolved receiver type NOR in the builtin table is
+    /// treated as MUTATING. Over-clones, never UAFs. (The `fill` bug direction
+    /// — absent ⇒ read-only — is the unsound one and is NOT used.)"*).
+    ///
+    /// This is not theory. Measured on the pre-fix compiler, a user `&self`
+    /// mutator called from a `meta for`-generated match arm was rescued only
+    /// by its NAME being on the retired hand list: `resize` returned 0 and
+    /// `grow` SIGSEGV'd, the same rename-decides-memory-safety defect
+    /// (`todo/t0699`) one layer in. Answering `false` here would have kept
+    /// that hole open for both names. Fixture:
+    /// `cow_user_mutator_meta_generated_arm.gg`.
+    ///
+    /// Over-approximating costs an extra private copy of a bare-param
+    /// receiver; under-approximating frees a buffer a live bind points at.
+    /// This collector's own contract three screens up says the same thing in
+    /// its own words — *"under-approximation is the bug — over-approx is
+    /// safe"*.
+    fn call_mutates_receiver(&self, method: &Spanned<String>) -> bool {
+        match self
+            .receiver_mutations
+            .call_mutates_receiver(method.span.start)
+        {
+            Some(mutates) => mutates,
+            None => {
+                if std::env::var_os("GG_REPORT_RECV_MUT").is_some() {
+                    eprintln!("[recv-mut-miss] {}", method.node);
+                }
+                true
+            }
+        }
+    }
 }
 
 /// Extract the dotted path from a place expression (field/tuple-field/index
@@ -682,7 +732,7 @@ fn cow_after_block(
     stmts: &[Spanned<Stmt>],
     future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
     result: &mut rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<std::rc::Rc<str>>>,
-    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    info: &CowPrescan<'_>,
     interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
 ) {
     for stmt in stmts.iter().rev() {
@@ -692,7 +742,7 @@ fn cow_after_block(
         // every entry. This is the dominant per-statement cost.
         result.insert(stmt.span.start, future.clone());
         // Collect reassignments from this statement
-        cow_after_stmt(&stmt.node, future, result, fn_param_ownerships, interner);
+        cow_after_stmt(&stmt.node, future, result, info, interner);
     }
 }
 
@@ -700,12 +750,12 @@ fn cow_after_stmt(
     stmt: &Stmt,
     future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
     result: &mut rustc_hash::FxHashMap<usize, rustc_hash::FxHashSet<std::rc::Rc<str>>>,
-    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    info: &CowPrescan<'_>,
     interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
 ) {
     match stmt {
         Stmt::VarDecl { value, .. } => {
-            cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&value.node, future, info, interner);
         }
         Stmt::Assign { target, value, .. } => {
             // Target place reassignment: `x = rhs` marks `x`; `self.data = rhs`
@@ -714,69 +764,69 @@ fn cow_after_stmt(
             record_place_target(&target.node, future, interner);
             // A mutating call can also hide in the TARGET's index/receiver
             // sub-expr (`ys[xs.pop()] = 0` mutates `xs` inside the target).
-            cow_after_expr_moves(&target.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&target.node, future, info, interner);
+            cow_after_expr_moves(&value.node, future, info, interner);
         }
         Stmt::CompoundAssign { target, value, .. } => {
             record_place_target(&target.node, future, interner);
-            cow_after_expr_moves(&target.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&target.node, future, info, interner);
+            cow_after_expr_moves(&value.node, future, info, interner);
         }
         Stmt::Expr(expr) => {
-            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&expr.node, future, info, interner);
         }
         Stmt::Return(Some(expr)) => {
-            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&expr.node, future, info, interner);
         }
         // `throw expr` can carry a mutating call (`throw make(xs.pop())`).
         Stmt::Throw(expr) => {
-            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&expr.node, future, info, interner);
         }
         Stmt::While { condition, body, else_body } => {
             // The condition re-executes every iteration — a mutation there
             // (`while shrink(&xs):`) is loop-carried with the body.
-            cow_after_expr_moves(&condition.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&condition.node, future, info, interner);
             // Loop body reassignments are visible to statements before the loop
-            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
+            cow_after_block(&body.stmts, future, result, info, interner);
             if let Some(eb) = else_body {
-                cow_after_block(&eb.stmts, future, result, fn_param_ownerships, interner);
+                cow_after_block(&eb.stmts, future, result, info, interner);
             }
         }
         Stmt::For { iterable, body, else_body, .. } => {
             // The iterable expr is evaluated once, but a mutating call inside it
             // (`for x in drain(&xs):`) is still a forward mutation w.r.t. earlier
             // statements. The `else_body` was previously dropped (unlike While).
-            cow_after_expr_moves(&iterable.node, future, fn_param_ownerships, interner);
-            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
+            cow_after_expr_moves(&iterable.node, future, info, interner);
+            cow_after_block(&body.stmts, future, result, info, interner);
             if let Some(eb) = else_body {
-                cow_after_block(&eb.stmts, future, result, fn_param_ownerships, interner);
+                cow_after_block(&eb.stmts, future, result, info, interner);
             }
         }
         Stmt::If { condition, then_body, elif_branches, else_body, .. } => {
             // The if/elif conditions execute unconditionally on entry — scan them
             // for mutating calls (previously only the branch BODIES were scanned).
-            cow_after_expr_moves(&condition.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&condition.node, future, info, interner);
             for (elif_cond, _) in elif_branches {
-                cow_after_expr_moves(&elif_cond.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&elif_cond.node, future, info, interner);
             }
             // Union all branches: if a name is reassigned in any branch, it's unsafe
             let saved = future.clone();
-            cow_after_block(&then_body.stmts, future, result, fn_param_ownerships, interner);
+            cow_after_block(&then_body.stmts, future, result, info, interner);
             let then_set = future.clone();
             *future = saved.clone();
             for (_, branch_body) in elif_branches {
-                cow_after_block(&branch_body.stmts, future, result, fn_param_ownerships, interner);
+                cow_after_block(&branch_body.stmts, future, result, info, interner);
                 // Accumulate into future (union)
             }
             if let Some(eb) = else_body {
-                cow_after_block(&eb.stmts, future, result, fn_param_ownerships, interner);
+                cow_after_block(&eb.stmts, future, result, info, interner);
             }
             // Union: include then-branch reassignments too
             future.extend(then_set);
         }
         Stmt::Match { scrutinee, arms, else_arm } => {
             // The scrutinee evaluates on entry (`match xs.pop():`).
-            cow_after_expr_moves(&scrutinee.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&scrutinee.node, future, info, interner);
             let saved = future.clone();
             for item in arms {
                 // A `MetaFor` item carries an `arm_template` whose body IS emitted by the
@@ -791,26 +841,26 @@ fn cow_after_stmt(
                     let mut branch = saved.clone();
                     // A guard runs before the arm body (`case p if xs.pop() > 0:`).
                     if let Some(guard) = &arm.guard {
-                        cow_after_expr_moves(&guard.node, &mut branch, fn_param_ownerships, interner);
+                        cow_after_expr_moves(&guard.node, &mut branch, info, interner);
                     }
                     // Arm bodies may be a Block OR a bare expression — the latter
                     // was previously skipped (`case p: xs.pop()`).
                     if let Expr::Block(block) = &arm.body.node {
-                        cow_after_block(&block.stmts, &mut branch, result, fn_param_ownerships, interner);
+                        cow_after_block(&block.stmts, &mut branch, result, info, interner);
                     } else {
-                        cow_after_expr_moves(&arm.body.node, &mut branch, fn_param_ownerships, interner);
+                        cow_after_expr_moves(&arm.body.node, &mut branch, info, interner);
                     }
                     future.extend(branch);
                 }
             }
             if let Some(b) = else_arm {
                 let mut branch = saved;
-                cow_after_block(&b.stmts, &mut branch, result, fn_param_ownerships, interner);
+                cow_after_block(&b.stmts, &mut branch, result, info, interner);
                 future.extend(branch);
             }
         }
         Stmt::Loop { body } => {
-            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
+            cow_after_block(&body.stmts, future, result, info, interner);
         }
         // Block-bearing scope forms: a mutating method / reassignment inside a
         // `with` / `unsafe` / named-scope / bare block body is still a forward
@@ -822,13 +872,13 @@ fn cow_after_stmt(
         // correct severance — and it only fires when `is_source_mut_unsafe_at`
         // sees the `@mut:` marker recorded here).
         Stmt::With { bindings, body } => {
-            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
+            cow_after_block(&body.stmts, future, result, info, interner);
             for b in bindings {
-                cow_after_expr_moves(&b.expr.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&b.expr.node, future, info, interner);
             }
         }
         Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } | Stmt::OnError { body } => {
-            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
+            cow_after_block(&body.stmts, future, result, info, interner);
         }
         // `select` multiplexes over channel ops; each arm body (and the optional
         // `else` arm) can mutate a source collection just like a `match` arm.
@@ -844,23 +894,23 @@ fn cow_after_stmt(
                 match &arm.op {
                     SelectOp::Send { channel, value } => {
                         record_path_mutation(&channel.node, future, interner);
-                        cow_after_expr_moves(&channel.node, future, fn_param_ownerships, interner);
-                        cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
+                        cow_after_expr_moves(&channel.node, future, info, interner);
+                        cow_after_expr_moves(&value.node, future, info, interner);
                     }
                     SelectOp::Recv { channel, .. } => {
-                        cow_after_expr_moves(&channel.node, future, fn_param_ownerships, interner);
+                        cow_after_expr_moves(&channel.node, future, info, interner);
                     }
                 }
             }
             let saved = future.clone();
             for arm in arms {
                 let mut branch = saved.clone();
-                cow_after_block(&arm.body.stmts, &mut branch, result, fn_param_ownerships, interner);
+                cow_after_block(&arm.body.stmts, &mut branch, result, info, interner);
                 future.extend(branch);
             }
             if let Some(eb) = else_arm {
                 let mut branch = saved;
-                cow_after_block(&eb.stmts, &mut branch, result, fn_param_ownerships, interner);
+                cow_after_block(&eb.stmts, &mut branch, result, info, interner);
                 future.extend(branch);
             }
         }
@@ -880,52 +930,52 @@ fn cow_after_stmt(
         // `Stmt` variant is now a COMPILE ERROR here.
         Stmt::Assert { condition, message, .. }
         | Stmt::AssertReturn { condition, message } => {
-            cow_after_expr_moves(&condition.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&condition.node, future, info, interner);
             if let Some(m) = message {
-                cow_after_expr_moves(&m.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&m.node, future, info, interner);
             }
         }
         Stmt::Snapshot { value, .. } | Stmt::MetaConst { value, .. } => {
-            cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&value.node, future, info, interner);
         }
         Stmt::MetaLog { args, .. } => {
             for a in args {
-                cow_after_expr_moves(&a.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&a.node, future, info, interner);
             }
         }
         Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
-            cow_after_expr_moves(&condition.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&condition.node, future, info, interner);
             let saved = future.clone();
             let mut branch = saved.clone();
-            cow_after_block(&then_body.stmts, &mut branch, result, fn_param_ownerships, interner);
+            cow_after_block(&then_body.stmts, &mut branch, result, info, interner);
             future.extend(branch);
             for (cond, body) in elif_branches {
-                cow_after_expr_moves(&cond.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&cond.node, future, info, interner);
                 let mut b = saved.clone();
-                cow_after_block(&body.stmts, &mut b, result, fn_param_ownerships, interner);
+                cow_after_block(&body.stmts, &mut b, result, info, interner);
                 future.extend(b);
             }
             if let Some(eb) = else_body {
                 let mut b = saved;
-                cow_after_block(&eb.stmts, &mut b, result, fn_param_ownerships, interner);
+                cow_after_block(&eb.stmts, &mut b, result, info, interner);
                 future.extend(b);
             }
         }
         Stmt::MetaFor { range: e, body, .. } | Stmt::MetaWhile { condition: e, body, .. } => {
-            cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
-            cow_after_block(&body.stmts, future, result, fn_param_ownerships, interner);
+            cow_after_expr_moves(&e.node, future, info, interner);
+            cow_after_block(&body.stmts, future, result, info, interner);
         }
         Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
-            cow_after_expr_moves(&scrutinee.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&scrutinee.node, future, info, interner);
             let saved = future.clone();
             for (_case, body) in arms {
                 let mut b = saved.clone();
-                cow_after_block(&body.stmts, &mut b, result, fn_param_ownerships, interner);
+                cow_after_block(&body.stmts, &mut b, result, info, interner);
                 future.extend(b);
             }
             if let Some(eb) = else_arm {
                 let mut b = saved;
-                cow_after_block(&eb.stmts, &mut b, result, fn_param_ownerships, interner);
+                cow_after_block(&eb.stmts, &mut b, result, info, interner);
                 future.extend(b);
             }
         }
@@ -948,7 +998,7 @@ fn cow_after_call_args(
     args: &[Spanned<crate::parser::ast::CallArg>],
     callee_sig: Option<&Vec<Ownership>>,
     future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
-    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    info: &CowPrescan<'_>,
     interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
 ) {
     for (i, arg) in args.iter().enumerate() {
@@ -968,7 +1018,7 @@ fn cow_after_call_args(
                 record_path_mutation(&arg.node.value.node, future, interner);
             }
         }
-        cow_after_expr_moves(&arg.node.value.node, future, fn_param_ownerships, interner);
+        cow_after_expr_moves(&arg.node.value.node, future, info, interner);
     }
 }
 
@@ -977,44 +1027,45 @@ fn cow_after_call_args(
 fn cow_after_expr_moves(
     expr: &Expr,
     future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
-    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    info: &CowPrescan<'_>,
     interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
 ) {
     match expr {
         Expr::Call { args, callee, .. } => {
-            cow_after_expr_moves(&callee.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&callee.node, future, info, interner);
             // Look up the callee's per-param ownership for implicit-mut-borrow
             // detection. Only Expr::Identifier callees map cleanly to signatures.
             let callee_sig = if let Expr::Identifier(name) = &callee.node {
-                fn_param_ownerships.get(name)
+                info.fn_param_ownerships.get(name)
             } else {
                 None
             };
-            cow_after_call_args(args, callee_sig, future, fn_param_ownerships, interner);
+            cow_after_call_args(args, callee_sig, future, info, interner);
         }
         Expr::MethodCall { receiver, args, method, .. } => {
-            cow_after_expr_moves(&receiver.node, future, fn_param_ownerships, interner);
-            // Mutating method on a collection receiver → the receiver path is
-            // mutated. Typed-builtin predicate + conservative fallback.
-            if is_mutating_method_name(method.node.as_str()) {
+            cow_after_expr_moves(&receiver.node, future, info, interner);
+            // Mutating method on a receiver -> the receiver path is mutated.
+            // TYPED, per receiver, resolved once by the semantic pass — the
+            // method's NAME is not consulted (`todo/t0699`).
+            if info.call_mutates_receiver(method) {
                 record_path_mutation(&receiver.node, future, interner);
             }
-            cow_after_call_args(args, None, future, fn_param_ownerships, interner);
+            cow_after_call_args(args, None, future, info, interner);
         }
         Expr::BinaryOp { left, right, .. } => {
-            cow_after_expr_moves(&left.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&right.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&left.node, future, info, interner);
+            cow_after_expr_moves(&right.node, future, info, interner);
         }
         // Recurse into place-projection sub-exprs so a mutating call nested in an
         // index / field object (`total + arr[xs.pop()]`, `pair.0.f(xs.pop())`) is
         // not missed (under-approximation is the bug — over-approx is safe).
         Expr::Index { object, index } => {
-            cow_after_expr_moves(&object.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&index.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&object.node, future, info, interner);
+            cow_after_expr_moves(&index.node, future, info, interner);
         }
         Expr::FieldAccess { object, .. }
         | Expr::TupleFieldAccess { object, .. } => {
-            cow_after_expr_moves(&object.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&object.node, future, info, interner);
         }
 
         // ── Sub-expression carriers ─────────────────────────────────────────
@@ -1025,7 +1076,7 @@ fn cow_after_expr_moves(
         // anywhere but a call / binop / index / field was invisible to the CoW
         // prescan and its rescue was never emitted.
         Expr::UnaryOp { operand: e, .. } => {
-            cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&e.node, future, info, interner);
         }
         Expr::Move { expr: e }
         | Expr::Propagate { expr: e }
@@ -1038,110 +1089,110 @@ fn cow_after_expr_moves(
         | Expr::Is { expr: e, .. }
         | Expr::OptionalChain { object: e, .. }
         | Expr::ImplicitClosure { body: e } => {
-            cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&e.node, future, info, interner);
         }
         Expr::DefaultOp { lhs, rhs } | Expr::MetaOpInfix { left: lhs, right: rhs, .. } => {
-            cow_after_expr_moves(&lhs.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&rhs.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&lhs.node, future, info, interner);
+            cow_after_expr_moves(&rhs.node, future, info, interner);
         }
         Expr::Range { start, end, .. } => {
             if let Some(e) = start {
-                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&e.node, future, info, interner);
             }
             if let Some(e) = end {
-                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&e.node, future, info, interner);
             }
         }
         Expr::Rethrow { expr, transform, .. } => {
-            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&transform.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&expr.node, future, info, interner);
+            cow_after_expr_moves(&transform.node, future, info, interner);
         }
         Expr::Catch { expr, recovery, .. } => {
-            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&recovery.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&expr.node, future, info, interner);
+            cow_after_expr_moves(&recovery.node, future, info, interner);
         }
         Expr::If { condition, then_branch, elif_branches, else_branch } => {
-            cow_after_expr_moves(&condition.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&then_branch.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&condition.node, future, info, interner);
+            cow_after_expr_moves(&then_branch.node, future, info, interner);
             for (c, b) in elif_branches {
-                cow_after_expr_moves(&c.node, future, fn_param_ownerships, interner);
-                cow_after_expr_moves(&b.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&c.node, future, info, interner);
+                cow_after_expr_moves(&b.node, future, info, interner);
             }
             if let Some(b) = else_branch {
-                cow_after_expr_moves(&b.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&b.node, future, info, interner);
             }
         }
         Expr::Match { scrutinee, arms, else_arm } => {
-            cow_after_expr_moves(&scrutinee.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&scrutinee.node, future, info, interner);
             for arm in arms {
                 if let Some(g) = &arm.guard {
-                    cow_after_expr_moves(&g.node, future, fn_param_ownerships, interner);
+                    cow_after_expr_moves(&g.node, future, info, interner);
                 }
-                cow_after_expr_moves(&arm.body.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&arm.body.node, future, info, interner);
             }
             if let Some(e) = else_arm {
-                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&e.node, future, info, interner);
             }
         }
         // A closure BODY mutating a captured collection is a mutation of that
         // collection, wherever the closure later runs — the capture is what
         // makes it reachable. `t0704` is this arm's absence.
         Expr::Closure { body, .. } => {
-            cow_after_expr_moves(&body.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&body.node, future, info, interner);
         }
         Expr::Block(block) => {
-            cow_after_nested_block(&block.stmts, future, fn_param_ownerships, interner);
+            cow_after_nested_block(&block.stmts, future, info, interner);
         }
         Expr::Do { body, .. } => {
-            cow_after_nested_block(&body.stmts, future, fn_param_ownerships, interner);
+            cow_after_nested_block(&body.stmts, future, info, interner);
         }
         Expr::ListComprehension { expr, iterable, condition, .. } => {
-            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&iterable.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&expr.node, future, info, interner);
+            cow_after_expr_moves(&iterable.node, future, info, interner);
             if let Some(c) = condition {
-                cow_after_expr_moves(&c.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&c.node, future, info, interner);
             }
         }
         Expr::DictComprehension { key, value, iterable, condition, .. } => {
-            cow_after_expr_moves(&key.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&value.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&iterable.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&key.node, future, info, interner);
+            cow_after_expr_moves(&value.node, future, info, interner);
+            cow_after_expr_moves(&iterable.node, future, info, interner);
             if let Some(c) = condition {
-                cow_after_expr_moves(&c.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&c.node, future, info, interner);
             }
         }
         Expr::SetComprehension { expr, iterable, condition, .. } => {
-            cow_after_expr_moves(&expr.node, future, fn_param_ownerships, interner);
-            cow_after_expr_moves(&iterable.node, future, fn_param_ownerships, interner);
+            cow_after_expr_moves(&expr.node, future, info, interner);
+            cow_after_expr_moves(&iterable.node, future, info, interner);
             if let Some(c) = condition {
-                cow_after_expr_moves(&c.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&c.node, future, info, interner);
             }
         }
         Expr::ArrayLiteral(items, _) | Expr::TupleLiteral(items) => {
             for e in items {
-                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&e.node, future, info, interner);
             }
         }
         Expr::DictLiteral(pairs) => {
             for (k, v) in pairs {
-                cow_after_expr_moves(&k.node, future, fn_param_ownerships, interner);
-                cow_after_expr_moves(&v.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&k.node, future, info, interner);
+                cow_after_expr_moves(&v.node, future, info, interner);
             }
         }
         Expr::StructLiteral { args, .. } => {
             for e in args {
-                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&e.node, future, info, interner);
             }
         }
         // Call-shaped args, so the same ownership handling as `Expr::Call`.
         Expr::DotShorthand { args, .. } => {
-            cow_after_call_args(args, None, future, fn_param_ownerships, interner);
+            cow_after_call_args(args, None, future, info, interner);
         }
         // An f-string's interpolations are real expressions: `f"{v.pop()}"`
         // mutates `v`.
         Expr::StringLiteral(_, interpolations) => {
             for e in interpolations {
-                cow_after_expr_moves(&e.node, future, fn_param_ownerships, interner);
+                cow_after_expr_moves(&e.node, future, info, interner);
             }
         }
 
@@ -1174,11 +1225,11 @@ fn cow_after_expr_moves(
 fn cow_after_nested_block(
     stmts: &[Spanned<Stmt>],
     future: &mut rustc_hash::FxHashSet<std::rc::Rc<str>>,
-    fn_param_ownerships: &rustc_hash::FxHashMap<String, Vec<Ownership>>,
+    info: &CowPrescan<'_>,
     interner: &mut rustc_hash::FxHashMap<String, std::rc::Rc<str>>,
 ) {
     let mut discarded = rustc_hash::FxHashMap::default();
-    cow_after_block(stmts, future, &mut discarded, fn_param_ownerships, interner);
+    cow_after_block(stmts, future, &mut discarded, info, interner);
 }
 
 /// Pre-scan: count how many times each declared name is USED (read) in the function body.
@@ -1594,7 +1645,13 @@ pub fn lower_function(
         ctx.func_state.loop_reassigned_names = prescan_loop_reassigned_names(&block.stmts);
         *ctx.lower_fn_sub_times.entry("lower_function::prescan::cow_unsafe").or_default() += __t.elapsed();
         let __t = std::time::Instant::now();
-        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(&block.stmts, &ctx.fn_param_ownerships);
+        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(
+            &block.stmts,
+            &CowPrescan {
+                fn_param_ownerships: &ctx.fn_param_ownerships,
+                receiver_mutations: &ctx.analysis.receiver_mutations,
+            },
+        );
         *ctx.lower_fn_sub_times.entry("lower_function::prescan::cow_after").or_default() += __t.elapsed();
         let __t = std::time::Instant::now();
         ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
@@ -1953,7 +2010,13 @@ pub fn lower_equip_method(
     if let FunctionBody::Block(block) = &method.body {
         ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
         ctx.func_state.loop_reassigned_names = prescan_loop_reassigned_names(&block.stmts);
-        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(&block.stmts, &ctx.fn_param_ownerships);
+        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(
+            &block.stmts,
+            &CowPrescan {
+                fn_param_ownerships: &ctx.fn_param_ownerships,
+                receiver_mutations: &ctx.analysis.receiver_mutations,
+            },
+        );
         ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
         ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
     }

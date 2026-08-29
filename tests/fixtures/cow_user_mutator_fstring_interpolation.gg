@@ -1,0 +1,38 @@
+# POSITION AXIS: the mutating call is inside an f-STRING INTERPOLATION.
+#
+# The prescan walks the parser-stored interpolation expressions; the semantic
+# pass's borrow-safety walk RE-PARSES each interpolation from its raw text and
+# therefore classifies nodes with SYNTHETIC spans. So the typed per-receiver
+# answer never reached the interpolation's real nodes and the receiver went
+# unmarked -- `todo/t0699`'s use-after-free in a different costume, and a hole
+# exactly the width of an f-string.
+#
+# Fixed by classifying the parser-stored interpolation expressions in
+# `safety/check_expr.rs`'s `Expr::StringLiteral` arm (the `interpolations`
+# field the parser populates for exactly this reason).
+#
+# RED-verified: rc 139 on the compiler that had the typed classifier but no
+# interpolation coverage. The realloc (64x) is load-bearing, as in
+# `cow_user_mutator_rename_invariance.gg`.
+String mk(String a, String b):
+    return a + b
+
+struct Holder:
+    Vector[String] items
+
+equip Holder:
+    int grow(&self):
+        int i = 0
+        while i < 64:
+            self.items.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+            i = i + 1
+        return self.items.len()
+
+    String probe(&self):
+        String s = self.items.get(0).unwrap()
+        print(f"{self.grow()}")
+        return s
+
+void main():
+    Holder h = Holder([mk("hello", "world")])
+    print(h.probe())

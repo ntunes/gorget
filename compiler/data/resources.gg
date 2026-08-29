@@ -2935,27 +2935,6 @@ public static Vector[BuiltinMethodEntry] COLLECTION_BUILTIN_METHODS = [
 # is_mutating values (`add`/`swap` = ByValue:false + MutBorrow:true,
 # `get` = always false), the conservative choice for a name-keyed lookup
 # is the MUTATING one (the borrow-flip suppressed = safe over-clone).
-# -- RUST_PRESCAN_MUTATOR_FALLBACK (bootstrap-hotfix 2026-07-18) ---------
-# Mirror of Rust's MUTATING_METHODS hand-list (src/ir/lowering/functions.rs)
-# -- the conservative name fallback its untyped prescan layers UNDER the
-# typed builtin table for USER methods it cannot resolve. This is the
-# LANE-SYMMETRY predicate for the scope-hoist channel
-# (rust_prescan_marks_method): the branch/scope pre-header hoist must fire
-# on exactly the shapes RUST's collector marks, or the SH hoists where Rust
-# does not (measured: the typechecker's bare ScopeTable params, mutated via
-# user &self methods the SH's TYPED scan sees but Rust's prescan is blind
-# to, drew a deep clone per recursive stmt visit -- 7x runtime clones, the
-# stage-1 bootstrap blowout). The user-&self-mutator-in-scope throwaway
-# stays the SHARED filed gap on BOTH lanes
-# (known_gaps/cow_loop_bare_param_user_mutator); when the Rust prescan
-# learns typed user receivers, delete this list on both sides together.
-public static Vector[String] RUST_PRESCAN_MUTATOR_FALLBACK = [
-    "push", "pop", "set", "insert", "remove", "clear", "sort", "sorted",
-    "reverse", "swap", "swap_remove", "extend", "append", "truncate",
-    "retain", "dedup", "resize", "reserve", "replace", "drain", "fill",
-    "put", "remove_key", "sort_by", "sort_by_key",
-]
-
 public static Vector[BuiltinMethodDecl] BUILTIN_METHOD_MUTATES = [
     # ── Mutating (is_mutating = true) — mirror Rust's `true` rows ──────
     BuiltinMethodDecl("push", false, [], BrkInfer(), true),
@@ -3072,13 +3051,16 @@ public static Vector[BuiltinMethodDecl] BUILTIN_METHOD_MUTATES = [
     # (245 uses across the self-host lowerer's classifier helpers) marked
     # every bare String param mutated → an entry clone per call in the
     # stage-1 hot path (the bootstrap 600s blowout). Mirrors Rust's
-    # effective prescan truth (absent from BOTH its typed `is_mutating`
-    # table and its MUTATING_METHODS fallback ⇒ non-mutating): every row
-    # here returns a scalar or a FRESH value; none writes the receiver.
-    # ⚠ Deliberately NOT added: `replace` — it sits in Rust's
-    # MUTATING_METHODS fallback (an unresolvable USER method named
-    # `replace` is plausibly mutating), so it keeps the conservative
-    # default here, exactly like Rust's prescan.
+    # typed `is_mutating` protocol column: every row here returns a scalar
+    # or a FRESH value; none writes the receiver.
+    # ⚠ Deliberately NOT added: `replace`. It is absent from Rust's typed
+    # builtin table too, so on BOTH lanes an unresolvable receiver calling
+    # `replace` takes the CONSERVATIVE default (⇒ mutating) rather than
+    # being classified read-only. That is the lane-symmetric answer, and
+    # the safe direction: a USER method named `replace` is plausibly a
+    # mutator, and absent ⇒ read-only is the unsound direction (the `fill`
+    # bug). Adding a read-only `replace` row here would silently classify
+    # every such user method non-mutating on this lane alone.
     BuiltinMethodDecl("starts_with", false, [], BrkInfer(), false),
     BuiltinMethodDecl("ends_with", false, [], BrkInfer(), false),
     BuiltinMethodDecl("byte_at", false, [], BrkInfer(), false),
