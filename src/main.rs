@@ -349,6 +349,35 @@ fn add_metal_flags(cmd: &mut Command, needs_metal: bool) {
     let _ = cmd; // Metal is macOS-only; suppress unused warning
 }
 
+/// Add the `--sanitize` flag set to a cc/link command.
+///
+/// THE SINGLE SOURCE OF TRUTH for what `--sanitize` spells. Every command that
+/// compiles or links a translation unit destined for a user binary routes here
+/// — the C backend's exe/shared/hot-reload-guest/hot-reload-host commands and
+/// the LLVM backend's runtime `cc -c` and link commands. Before this helper
+/// existed the flag set was hand-copied at four C sites and the LLVM pipeline
+/// simply had no copy, so `--sanitize --backend=llvm` returned an
+/// UNINSTRUMENTED binary while reporting success (t0723). Add a new command
+/// that can carry user code and it goes through here, or it is the next hole.
+///
+/// ⚠ COVERAGE IS NOT UNIFORM ACROSS BACKENDS, and the flag set is not what
+/// makes the difference — the compiler each lane hands its user code to is.
+/// On the C backend the generated user code IS a C translation unit, so `cc`
+/// instruments every user load/store. On the LLVM backend the user code is
+/// LLVM IR that `llc` turns into an object file, and `llc` does not run ASan's
+/// instrumentation passes — so on that lane only the runtime C blob is
+/// shadow-instrumented. What still works there: LeakSanitizer (interceptor-
+/// based, so complete), and any heap error whose faulting access is inside the
+/// runtime. What does NOT: a use-after-free, overflow or stack error whose
+/// faulting access sits in generated user code. See `todo/t0727` and
+/// `docs/devbook/19-llvm-backend.md`.
+fn add_sanitize_flags(cmd: &mut Command, sanitize: bool) {
+    if !sanitize { return; }
+    cmd.arg("-fsanitize=address,undefined");
+    cmd.arg("-fno-omit-frame-pointer");
+    cmd.arg("-g");
+}
+
 /// Print inferred borrow analysis for all functions (--show-borrows diagnostic).
 fn print_borrow_summary(result: &gorget::semantic::AnalysisResult) {
     // Collect and sort by function name for stable output
@@ -1072,11 +1101,7 @@ fn try_build_ir(
                 .arg(shared_path)
                 .arg(&shared_c_path)
                 .arg("-lm");
-            if options.sanitize {
-                cc_cmd.arg("-fsanitize=address,undefined");
-                cc_cmd.arg("-fno-omit-frame-pointer");
-                cc_cmd.arg("-g");
-            }
+            add_sanitize_flags(&mut cc_cmd, options.sanitize);
             add_sdl_flags(&mut cc_cmd, concat_source.contains("xtd.sdl") || concat_source.contains("xtd.gfx"), &shared_c_code);
             add_tls_flags(&mut cc_cmd, concat_source.contains("std.net.tls") || concat_source.contains("xtd.http"));
             add_crypto_flags(&mut cc_cmd, concat_source.contains("xtd.crypto") || concat_source.contains("xtd.p2p"));
@@ -1156,11 +1181,7 @@ fn try_build_ir(
                 .arg("-Wno-unused-but-set-variable")
                 .arg("-o").arg(&guest_lib_path)
                 .arg(&guest_c_path).arg("-lm");
-            if options.sanitize {
-                guest_cmd.arg("-fsanitize=address,undefined");
-                guest_cmd.arg("-fno-omit-frame-pointer");
-                guest_cmd.arg("-g");
-            }
+            add_sanitize_flags(&mut guest_cmd, options.sanitize);
             let guest_status = guest_cmd.status();
             match guest_status {
                 Ok(s) if !s.success() => return Err(format!("Guest compilation failed: {s}\nGenerated: {}", guest_c_path.display())),
@@ -1177,11 +1198,7 @@ fn try_build_ir(
                 .arg("-Wno-unused-but-set-variable")
                 .arg("-o").arg(&exe_path)
                 .arg(&host_c_path).arg("-lm").arg("-ldl");
-            if options.sanitize {
-                host_cmd.arg("-fsanitize=address,undefined");
-                host_cmd.arg("-fno-omit-frame-pointer");
-                host_cmd.arg("-g");
-            }
+            add_sanitize_flags(&mut host_cmd, options.sanitize);
             let host_status = host_cmd.status();
             return match host_status {
                 Ok(s) if s.success() => Ok(exe_path),
@@ -1197,7 +1214,7 @@ fn try_build_ir(
 
         // ── LLVM backend: .ll → clang -c → link with runtime .o → binary ──
         if backend_name == "llvm" {
-            return compile_llvm_pipeline(&src_path, &exe_path, &generated_code, &concat_source, &lir_module, options.release);
+            return compile_llvm_pipeline(&src_path, &exe_path, &generated_code, &concat_source, &lir_module, options.release, options.sanitize);
         }
 
         // ── C backend: .c → cc → binary ──
@@ -1327,11 +1344,7 @@ fn try_build_ir(
         #[cfg(target_os = "macos")]
         cc_cmd.arg("-Wl,-dead_strip");
 
-        if options.sanitize {
-            cc_cmd.arg("-fsanitize=address,undefined");
-            cc_cmd.arg("-fno-omit-frame-pointer");
-            cc_cmd.arg("-g");
-        }
+        add_sanitize_flags(&mut cc_cmd, options.sanitize);
 
         // Library detection — use generated C for precise SDL sub-library detection
         add_sdl_flags(&mut cc_cmd, concat_source.contains("xtd.sdl") || concat_source.contains("xtd.gfx") || concat_source.contains("xtd.gl") || needs_metal, &generated_code);
@@ -1397,6 +1410,7 @@ fn compile_llvm_pipeline(
     concat_source: &str,
     lir_module: &gorget::lir::LirModule,
     release: bool,
+    sanitize: bool,
 ) -> Result<PathBuf, String> {
     let tmp_dir = ll_path.parent().unwrap_or(Path::new("."));
 
@@ -1595,6 +1609,26 @@ fn compile_llvm_pipeline(
         .arg("-o").arg(&runtime_o_path)
         .arg(&runtime_c_path)
         .arg("-lm");
+    // `--sanitize`, half 1 of 2: instrument the runtime translation unit.
+    //
+    // The runtime C blob carries essentially all of a Gorget program's heap
+    // traffic — str_cat, array/map/set alloc, the generated drop/clone
+    // wrappers — so instrumenting it here is what buys shadow-memory checking
+    // on this lane. It is ALSO the half that distinguishes a genuinely
+    // instrumented build from one that merely links libasan, which is why the
+    // guard for it (`llvm_sanitize_instruments_runtime_object`, tests/security.rs)
+    // inspects THIS object file for `__asan_report_*` references.
+    //
+    // ⚠ RESIDUAL GAP — this does NOT instrument generated user code. That code
+    // reaches the binary as LLVM IR through `llc` (step 2 below), and `llc`
+    // does not run ASan's instrumentation passes. So on this lane a UAF /
+    // overflow / stack error whose FAULTING ACCESS is in user code is not
+    // caught, while leaks (LeakSanitizer is interceptor-based) and faults
+    // inside the runtime are. Closing it needs `sanitize_address` attribute
+    // emission in `src/backend/llvm/` plus two measured IR/ASan
+    // incompatibilities — filed as `todo/t0727` with a committed repro at
+    // `tests/fixtures/known_gaps/llvm_sanitize_user_code_not_instrumented.gg`.
+    add_sanitize_flags(&mut rt_cmd, sanitize);
     // Thread support
     #[cfg(not(target_os = "macos"))]
     rt_cmd.arg("-pthread");
@@ -1646,6 +1680,13 @@ fn compile_llvm_pipeline(
         .arg(&ll_o_path)
         .arg(&runtime_o_path)
         .arg("-lm");
+    // `--sanitize`, half 2 of 2: link the sanitizer runtimes. LeakSanitizer is
+    // interceptor-based, so this half alone gives COMPLETE leak coverage
+    // regardless of what is instrumented; half 1 above adds the shadow checks.
+    // Both halves are needed — half 1 without half 2 is undefined `__asan_*`
+    // at link time, half 2 without half 1 is leak-only coverage that a
+    // leak-based control cannot tell apart from the real thing.
+    add_sanitize_flags(&mut link_cmd, sanitize);
 
     #[cfg(not(target_os = "macos"))]
     link_cmd.arg("-pthread");
@@ -2754,6 +2795,50 @@ fn real_main() {
         .map(|s| s.as_str())
         .or_else(|| args.iter().find_map(|a| a.strip_prefix("--target=")))
         .unwrap_or("native");
+    // ── Build flags the LLVM backend cannot honour: reject, never drop ──
+    //
+    // These two sit with `--clones=stats` above and with the unknown-backend
+    // check, as one lower-or-reject policy: every build flag the selected
+    // backend cannot implement is refused by name, so `gg` never hands back an
+    // artifact that is not what was asked for. They are deliberately placed
+    // AFTER `--target` parsing (which is itself after the `--clones=stats`
+    // check) because they read `target`.
+    //
+    // The sibling that is WIRED rather than rejected is `--sanitize`
+    // (`add_sanitize_flags`): it was the fourth member of this same class and
+    // was cheap enough to implement. The discriminator across the class is
+    // implementation cost, not principle.
+    if target.starts_with("freestanding") && backend_name == "llvm" {
+        // Silently built a hosted ELF and printed `Built:`. The freestanding
+        // path is C-backend-only: `try_build_ir` returns into
+        // `compile_llvm_pipeline` BEFORE it ever reads `target`, so the whole
+        // UEFI branch (clang `-target …-windows`, `-ffreestanding -nostdlib`,
+        // the `.efi` + ESP layout) was unreachable and the user got a Linux
+        // binary named as if it were their bootloader.
+        eprintln!(
+            "error: unsupported --target={target} with --backend=llvm\n  \
+             the freestanding/UEFI target is implemented on the C backend only \
+             (it needs clang's `-target <arch>-unknown-windows -ffreestanding -nostdlib` \
+             and lld, which the LLVM pipeline's llc+cc path does not drive)\n  \
+             use the default C backend for freestanding targets, or drop --target"
+        );
+        process::exit(1);
+    }
+    if shared_mode && backend_name == "llvm" {
+        // Failed already, but incoherently: the `--shared` branch runs BEFORE
+        // the backend dispatch, so it wrote LLVM IR into `<stem>_guest.c` and
+        // handed it to `cc`, which reported ~290 lines of C syntax errors
+        // about `target datalayout` and `%GorgetArray`. Loud, but it accused
+        // the user's program of being broken C. Say what is actually wrong.
+        eprintln!(
+            "error: unsupported --shared with --backend=llvm\n  \
+             shared-library output is implemented on the C backend only \
+             (the split emits a C translation unit; the LLVM pipeline has no \
+             shared-object path)\n  \
+             use the default C backend for --shared builds"
+        );
+        process::exit(1);
+    }
     let features = parse_features(&args);
     // Parse -o <path> for shared output
     let shared_output_path: Option<PathBuf> = {

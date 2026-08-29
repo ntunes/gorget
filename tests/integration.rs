@@ -143,14 +143,21 @@ fn gg_binary() -> &'static Path {
 ///
 /// When `GG_BACKEND=llvm` is set in the environment, append `--backend=llvm`
 /// to `gg build`, `gg test` AND `gg run` (see the `matches!` below). `check`,
-/// `fmt` and friends do not get it, because the CLI rejects it there.
+/// `fmt` and friends do not get it — not because the CLI rejects it there (it
+/// does not: `gg check --backend=llvm` exits 0 and ignores the flag), but
+/// because those commands generate no code, so a backend is meaningless to
+/// them. `tests/security.rs`'s namesake helper makes the same distinction for
+/// the same reason.
 ///
 /// ⚠ `gg run` ACCEPTS the flag and IGNORES it: `src/main.rs`'s `"run" =>` arm
 /// hardcodes `try_build_ir(..., "c-lir", "native")` and `--backend` is merely
 /// swallowed by the `flags_with_values` skip-list. So the `gg_command("run")`
-/// tests execute the C backend even under `GG_BACKEND=llvm` — filed in
-/// TODO.md; do NOT "fix" this by adding flag forwarding without deciding what
-/// `gg run --backend=llvm` should mean.
+/// tests execute the C backend even under `GG_BACKEND=llvm` — filed as
+/// `todo/t0730`. Do NOT "fix" this by adding flag forwarding: what
+/// `gg run --backend=llvm` should MEAN is an unratified semantics question and
+/// an owner call, and t0730 records the measured radius (6 `gg_command("run")`
+/// sites, two of them Rust parity ORACLES that must stay on the reference lane
+/// whichever way the decision goes).
 fn gg_command(subcommand: &str) -> Command {
     let mut cmd = Command::new(gg_binary());
     cmd.arg(subcommand);
@@ -52711,6 +52718,229 @@ fn unknown_backend_flag_is_rejected() {
     }
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Build flags the LLVM backend cannot honour must be REJECTED BY NAME — the
+/// same lower-or-reject rule as `unknown_backend_flag_is_rejected` above, one
+/// level in: the backend is valid, the *combination* is not.
+///
+/// The dispatch reaches `compile_llvm_pipeline` and returns from it before the
+/// `--target` branch is ever consulted, and the `--shared` branch runs before
+/// the backend is dispatched at all. So both combinations used to end
+/// somewhere other than where the user was looking:
+///
+/// - `--target=freestanding --backend=llvm` exited **0** and printed `Built:`
+///   over a perfectly ordinary hosted ELF. Someone asking for a UEFI
+///   bootloader got a Linux executable and a success message — the worst
+///   possible answer, and the reason this is a rejection rather than a
+///   warning.
+/// - `--shared --backend=llvm` did fail, but by handing LLVM IR to `cc` as if
+///   it were C: ~290 lines of syntax errors about `target datalayout` and
+///   `%GorgetArray`, blaming the user's program for the driver's mistake.
+///
+/// The third member of this class, `--clones=stats --backend=llvm`, was
+/// already rejected and is pinned here so the set is covered rather than
+/// sampled. The fourth, `--sanitize --backend=llvm`, is the one that was
+/// WIRED instead of rejected (it was cheap); its guard is
+/// `sanitizer_gate_is_real_on_both_backends` in `tests/security.rs`.
+///
+/// Flag VALIDATION only — no `llc` required, nothing is codegen'd.
+#[test]
+fn llvm_incompatible_build_flags_are_rejected() {
+    let dir = std::env::temp_dir().join(format!("gg_llvm_flag_combo_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let src = dir.join("probe.gg");
+    std::fs::write(&src, "void main():\n    print(\"hi\")\n").expect("write probe");
+
+    // (flag args, a distinctive phrase the diagnostic owes the user)
+    let cases: [(&[&str], &str); 4] = [
+        (&["--target=freestanding"], "--target=freestanding"),
+        (&["--target", "freestanding-x86_64"], "--target=freestanding-x86_64"),
+        (&["--shared"], "--shared"),
+        (&["--clones=stats"], "--clones=stats"),
+    ];
+
+    for (flags, phrase) in cases {
+        let out = Command::new(gg_binary())
+            .arg("build")
+            .args(flags)
+            .arg("--backend=llvm")
+            .arg(&src)
+            .output()
+            .expect("run gg build");
+        assert!(
+            !out.status.success(),
+            "`gg build {flags:?} --backend=llvm` SUCCEEDED. Either it silently built \
+             something other than what was asked for, or the rejection was lost."
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains(phrase) && err.contains("llvm"),
+            "`gg build {flags:?} --backend=llvm` must name BOTH halves of the \
+             unsupported combination, so the reader knows which one to drop.\nstderr: {err}"
+        );
+        // A rejection that still wrote the artifact would be worse than the
+        // silent success it replaced.
+        assert!(
+            !dir.join("probe").exists() && !dir.join("probe.efi").exists(),
+            "`gg build {flags:?} --backend=llvm` was rejected but still left an artifact behind."
+        );
+    }
+
+    // The same flags on the C backend are untouched — this is a combination
+    // check, not a retreat from supporting them.
+    for flags in [vec!["--target=freestanding"], vec!["--shared"]] {
+        let out = Command::new(gg_binary())
+            .arg("build")
+            .args(&flags)
+            .arg(&src)
+            .output()
+            .expect("run gg build");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !err.contains("unsupported"),
+            "`gg build {flags:?}` on the default C backend must not hit the \
+             LLVM-combination rejection.\nstderr: {err}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ── Durable repros for the four gaps the LLVM sanitizer work exposed ────────
+//
+// Each asserts the INTENDED behaviour, so it fails today and graduates out of
+// `known_gaps/` the round its item is fixed. The fixture headers carry the
+// measurements; these are the wiring.
+
+/// t0727 — `--sanitize --backend=llvm` does not instrument generated user code.
+///
+/// The user object `__gorget_user_<stem>.o` carries ZERO `__asan_report_*`
+/// references while the runtime object beside it carries ten, because the user
+/// code reaches the binary through `llc`, which runs no instrumentation pass.
+/// Asserted structurally rather than behaviourally on purpose: a behavioural
+/// repro would have to lean on some other compiler bug to commit the UAF, and
+/// would then go green when THAT bug was fixed while still reading as coverage
+/// for this one.
+#[test]
+#[ignore = "KNOWN GAP t0727: LLVM --sanitize instruments only the runtime, not \
+generated user code — the user .o has no __asan_report_* references."]
+fn llvm_sanitize_instruments_user_code() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest_dir
+        .join("tests/fixtures/known_gaps/llvm_sanitize_user_code_not_instrumented.gg");
+    let dir = std::env::temp_dir().join(format!("gg_t0727_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let staged = dir.join("probe.gg");
+    std::fs::copy(&src, &staged).expect("stage fixture");
+
+    let out = Command::new(gg_binary())
+        .arg("build")
+        .arg("--sanitize")
+        .arg("--backend=llvm")
+        .arg(&staged)
+        // Keeps `__gorget_user_probe.o` / `__gorget_runtime_probe.o` beside the
+        // source instead of deleting them after a successful link.
+        .env("GORGET_KEEP_RUNTIME", "1")
+        .output()
+        .expect("run gg build");
+    assert!(out.status.success(), "build failed: {}", String::from_utf8_lossy(&out.stderr));
+
+    let refs = |p: &std::path::Path| -> usize {
+        let b = std::fs::read(p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
+        b.windows(b"__asan_report".len())
+            .filter(|w| *w == b"__asan_report")
+            .count()
+    };
+    let user_o = dir.join("__gorget_user_probe.o");
+    let runtime_o = dir.join("__gorget_runtime_probe.o");
+    // The runtime half is the control: if IT is uninstrumented the build is
+    // simply broken and this test is measuring the wrong thing.
+    assert!(
+        refs(&runtime_o) > 0,
+        "the RUNTIME object is uninstrumented too — `--sanitize` is not reaching \
+         the runtime `cc -c` at all, which is a different (and worse) defect than t0727."
+    );
+    assert!(
+        refs(&user_o) > 0,
+        "t0727: the user object `{}` references no `__asan_report_*`, so generated \
+         user code carries no shadow checks on this lane.",
+        user_o.display()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// t0728 — an `extern` bound to `malloc`/`calloc`/`realloc` has its DECLARED
+/// return type overridden to a pointer, producing invalid IR.
+///
+/// `llc` rejects the module (`'%v4' defined with type 'i64' but expected 'ptr'`),
+/// so this is a hard build failure, not a miscompile. The C lane builds the
+/// same source and prints `nonzero`.
+#[test]
+#[ignore = "KNOWN GAP t0728: a name-match on the extern's C symbol outranks its \
+declared return type on the LLVM lane; llc rejects the emitted IR."]
+fn llvm_extern_allocator_respects_declared_return_type() {
+    // Pins `--backend=llvm` EXPLICITLY rather than going through `run_gg`,
+    // which only selects the backend when `GG_BACKEND` is set. The gap is
+    // unconditional on this lane, so the test must be too — otherwise it
+    // passes on a default-backend run and reads as a fixed gap.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest_dir
+        .join("tests/fixtures/known_gaps/llvm_extern_allocator_name_overrides_declared_return_type.gg");
+    let dir = std::env::temp_dir().join(format!("gg_t0728_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let staged = dir.join("probe.gg");
+    std::fs::copy(&src, &staged).expect("stage fixture");
+
+    let build = Command::new(gg_binary())
+        .arg("build")
+        .arg("--backend=llvm")
+        .arg(&staged)
+        .output()
+        .expect("run gg build");
+    assert!(
+        build.status.success(),
+        "t0728: `gg build --backend=llvm` rejected a valid program because the \
+         extern's declared `int` return type was overridden to a pointer on the \
+         strength of its C symbol name.\nstderr: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(dir.join("probe")).output().expect("run built binary");
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "nonzero");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// t0729 — a nested `match` over a nested `Option` emits an aggregate copy as a
+/// `memcpy` between OVERLAPPING stack slots on the LLVM lane (UB).
+///
+/// Wired through the sanitize helper because the defect is invisible to a
+/// stdout check — it currently produces the right answer.
+///
+/// ⚠ Reddens only under `GG_BACKEND=llvm`, and that is correct rather than a
+/// weakness: the assertion is "ASan-clean", which the C lane genuinely
+/// satisfies. It is the sibling of the 13 other `assert_gg_sanitize_clean`
+/// sites and rides the same LLVM sweep.
+#[test]
+#[ignore = "KNOWN GAP t0729: LLVM aggregate copy uses memcpy on overlapping \
+stack slots (ASan: memcpy-param-overlap); reddens attack_64 and attack_70."]
+fn llvm_nested_option_match_no_memcpy_overlap() {
+    assert_gg_sanitize_clean(
+        "known_gaps/llvm_nested_option_match_memcpy_param_overlap",
+        "inner-none",
+    );
+}
+
+/// t0732 — a `shared(atomic) int` is never freed. Leaks 8 bytes on BOTH lanes.
+///
+/// Not an LLVM issue and not new; it was simply unobservable. The shipped
+/// `attack_87_atomic_counter_race` fixture leaks identically, but it is wired
+/// as `security_safe` (which runs `detect_leaks=0`) and the sanitize sweep's
+/// `-maxdepth 1` never descends into `tests/fixtures/security/`.
+#[test]
+#[ignore = "KNOWN GAP t0732: shared(atomic) int is never dropped — 8-byte leak \
+on both backends, seen by no gate in the tree."]
+fn shared_atomic_int_is_dropped() {
+    assert_gg_sanitize_clean("known_gaps/shared_atomic_int_never_dropped_leak", "1");
 }
 
 // ============================================================================

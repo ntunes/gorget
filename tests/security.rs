@@ -66,10 +66,88 @@ fn test_binary_timeout() -> Duration {
     )
 }
 
+/// The backend selector, mirroring `tests/integration.rs`'s helper of the same
+/// name. `None` (or an empty value) means the compiler's default, `c-lir`.
+fn gg_backend() -> Option<String> {
+    std::env::var("GG_BACKEND").ok().filter(|s| !s.is_empty())
+}
+
+/// Invoke the compiler under test.
+///
+/// When `GG_BACKEND` is set, append `--backend=<b>` to `gg build` — and ONLY
+/// to `build`. Until this existed, `.github/workflows/ci.yml`'s
+/// "Security tests (LLVM + ASan + UBSan)" job set `GG_BACKEND: llvm` and this
+/// file read it nowhere, so that job was a verbatim re-run of the C suite: a
+/// whole lane of this project's sanitizer evidence was a copy of the other
+/// lane's. (`--sanitize` being a silent no-op on that backend, t0723, is the
+/// same vacuity one layer down — a suite that DID select the backend would
+/// still have asserted nothing.)
+///
+/// ⚠ `build` only, and the reason is NOT that the CLI rejects the flag
+/// elsewhere — it does not; `gg check --backend=llvm` exits 0 and ignores it.
+/// The reason is that a backend is only meaningful where code is GENERATED.
+/// `security_rejected` uses `gg check`, which stops at semantic analysis, so
+/// its 32 fixtures are backend-independent by construction; appending the flag
+/// there would advertise a lane distinction that does not exist.
 fn gg_command(subcommand: &str) -> Command {
     let mut cmd = Command::new(env!("CARGO"));
     cmd.args(["run", "--quiet", "--", subcommand]);
+    if let Some(flag) = backend_flag_for(subcommand, gg_backend().as_deref()) {
+        cmd.arg(flag);
+    }
     cmd
+}
+
+/// The backend-flag decision, factored out of [`gg_command`] so it can be
+/// tested without touching process-wide environment state.
+///
+/// Split out on purpose. The bug this whole mechanism replaces was not a wrong
+/// decision, it was a decision nothing ever checked: the LLVM CI job read as
+/// coverage for an unknown period while `GG_BACKEND` went unread here. Inlined in
+/// `gg_command`, the logic is reachable only through a subprocess and an env
+/// var, i.e. effectively untestable, and the next refactor that drops it would
+/// be just as silent. As a pure function it has
+/// [`backend_flag_selection_is_wired`] standing over it.
+fn backend_flag_for(subcommand: &str, backend: Option<&str>) -> Option<String> {
+    match backend {
+        // `build` is the only subcommand this file uses that GENERATES code,
+        // and a backend is meaningless anywhere else. See `gg_command`.
+        Some(b) if subcommand == "build" => Some(format!("--backend={b}")),
+        _ => None,
+    }
+}
+
+/// Guard for the selector itself: `--test security` must actually run on the
+/// backend it was asked for.
+///
+/// Not a tautology, and not a test of a two-line `match`. It pins the wiring
+/// that `.github/workflows/ci.yml`'s "Security tests (LLVM + ASan + UBSan)" job
+/// silently depends on. That job sets `GG_BACKEND: llvm` and, for as long as
+/// this file ignored it, ran the C suite a second time under an LLVM name —
+/// ~180 fixtures' worth of a whole lane's memory-safety evidence that was a
+/// copy of the other lane's. Nothing was red; there was simply nothing there.
+#[test]
+fn backend_flag_selection_is_wired() {
+    // The selector is read, and it is read for `build`.
+    assert_eq!(
+        backend_flag_for("build", Some("llvm")).as_deref(),
+        Some("--backend=llvm"),
+        "GG_BACKEND is not reaching `gg build` — the LLVM security job is a \
+         re-run of the C suite under a different name."
+    );
+    assert_eq!(
+        backend_flag_for("build", Some("c-lir")).as_deref(),
+        Some("--backend=c-lir"),
+        "the selector must pass through whatever it is given, not just `llvm`."
+    );
+
+    // Unset means the compiler's default; never an invented flag.
+    assert_eq!(backend_flag_for("build", None), None);
+
+    // `check` does no codegen, so a backend there would be noise advertising a
+    // lane distinction that does not exist (`security_rejected`'s 32 fixtures).
+    assert_eq!(backend_flag_for("check", Some("llvm")), None);
+    assert_eq!(backend_flag_for("check", None), None);
 }
 
 fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std::process::Output {
@@ -250,6 +328,54 @@ fn security_safe(name: &str, expected_stdout: &str) {
     cleanup(&fp);
 }
 
+/// A [`security_safe`] fixture that a filed, cited **backend-specific compiler
+/// defect** currently makes trip on ONE lane.
+///
+/// ⚠ THIS IS NOT A SKIP, AND IT MUST NEVER BECOME ONE. On every other backend
+/// the fixture is held to the full `security_safe` contract. On the named
+/// backend it is held to the INVERSE: the sanitizer trip must **still happen**.
+/// So the moment the cited defect is fixed, this test goes RED and forces the
+/// annotation to be removed — the same self-retiring contract
+/// [`security_known_unsafe`] uses, and the reason a lane exemption here cannot
+/// quietly outlive its cause. A plain skip would rot into a permanent waiver
+/// and re-create, one lane down, exactly the vacuum this file's positive
+/// control exists to prevent.
+///
+/// `item` is the `todo/` id, and it is not decoration: the defect must be
+/// filed with a durable `known_gaps` repro asserting the INTENDED behaviour,
+/// so what the language should do is pinned by an artifact rather than by this
+/// comment.
+fn security_safe_except_on(name: &str, expected_stdout: &str, backend: &str, item: &str, reason: &str) {
+    if gg_backend().as_deref() != Some(backend) {
+        security_safe(name, expected_stdout);
+        return;
+    }
+    let (out, fp) = sanitize_build_and_run(name);
+    assert!(
+        out.build_ok,
+        "security_safe_except_on({name}) [{backend}]: the fixture must still BUILD — \
+         {item} is a codegen defect, not a build failure.\nstderr: {}",
+        out.build_stderr
+    );
+    assert!(out.ran, "security_safe_except_on({name}) [{backend}]: binary did not run");
+    let tripped = out.exit_code != Some(0)
+        || out.stderr.contains("Sanitizer")
+        || out.stderr.contains("runtime error");
+    assert!(
+        tripped,
+        "security_safe_except_on({name}) [{backend}]: this fixture is recorded as tripping \
+         the sanitizer on this backend because `{reason}` ({item}), and it NO LONGER DOES. \
+         If {item} was fixed, that is good news: delete this annotation, restore the plain \
+         `security_safe` call, and graduate the `known_gaps` repro {item} cites into a live \
+         fixture. Do NOT leave the annotation in place — an exemption whose cause is gone is \
+         a lane of coverage silently switched off.\nexit: {:?}\nstdout: {}\nstderr: {}",
+        out.exit_code,
+        out.stdout,
+        out.stderr
+    );
+    cleanup(&fp);
+}
+
 /// Like [`security_safe`], but runs under `detect_leaks=1` so a memory LEAK is
 /// a hard failure — not just a UAF/overflow/trap. Use for fixtures whose bug
 /// class is stdout-INVISIBLE (a leaked heap buffer produces the correct output
@@ -420,6 +546,138 @@ fn security_known_unsafe(name: &str, bug: KnownBug, reason: &str) {
                  reclassify this fixture. Reason: `{reason}`"
             );
         }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// POSITIVE CONTROL FOR THE SANITIZER ITSELF
+// ════════════════════════════════════════════════════════════════════════════
+
+/// Does `gg build --sanitize` actually produce an instrumented binary — on
+/// EVERY backend?
+///
+/// Everything else in this file assumes the answer is yes and then asserts
+/// something about the compiler. This test asserts nothing about the compiler;
+/// it checks the INSTRUMENT, so that the ~200 assertions below mean what they
+/// say. A sanitizer gate that has never been seen to go red on the lane it
+/// claims to cover is not evidence, and this one had not: `--sanitize` was a
+/// silent no-op under `--backend=llvm` for an unknown period (t0723), so every
+/// "ASan-clean on LLVM" claim in this project's history was free.
+///
+/// ── WHY TWO CELLS ──
+///
+/// The two halves of a sanitized build fail independently, and the obvious
+/// control only sees one of them:
+///
+/// | cell | what it proves | probe |
+/// |---|---|---|
+/// | 1. LINKING | the ASan runtime is in the process | a leak is reported |
+/// | 2. INSTRUMENTATION | the compiler emitted shadow checks | `__asan_report_*` is referenced by the artifact |
+///
+/// Cell 1 alone is not enough, and this is measured, not assumed:
+/// LeakSanitizer is INTERCEPTOR-based, so it works on any binary that merely
+/// LINKS libasan, whether or not a single line was instrumented. Building with
+/// the sanitize flags on the link command and NOT on the runtime compile
+/// (i.e. reverting half the t0723 fix) leaves cell 1 fully green — verified:
+/// the leak was still reported, `ldd` still listed `libasan.so.8` — while
+/// every shadow-memory check silently disappeared. Cell 2 catches exactly that
+/// revert: `__asan_report_*` references went 10 -> 0.
+///
+/// So cell 2's probe is deliberately NOT `ldd`, and NOT the presence of
+/// `__asan_*` symbols generally — both of those are satisfied by linking.
+/// `__asan_report_load8` and friends are the failure calls that INSTRUMENTED
+/// code emits inline; nothing but instrumentation puts them in the artifact.
+/// The probe is a raw byte scan for the name rather than an `nm` subprocess,
+/// which keeps it toolchain-free and identical on ELF and Mach-O.
+///
+/// ── WHY IT LOOPS THE BACKENDS INSTEAD OF READING `GG_BACKEND` ──
+///
+/// A control that only covers the lane it happens to be run on cannot tell you
+/// the other lane went vacuous. Both backends are built here on every run, so
+/// this test fails on a `cargo test --test security` with no environment set
+/// at all. That is the point: the LLVM lane's vacuity survived for as long as
+/// it did precisely because observing it required opting in.
+///
+/// The fixture leaks by construction and can never be fixed into silence —
+/// see the header of `sanitizer_positive_control_leak.gg`.
+#[test]
+fn sanitizer_gate_is_real_on_both_backends() {
+    let fp = fixture_path("sanitizer_positive_control_leak");
+    let src = std::fs::read_to_string(&fp).expect("control fixture unreadable");
+
+    for backend in ["c-lir", "llvm"] {
+        // Private per-backend directory: the two builds share a stem, and the
+        // suite is not always run single-threaded.
+        let dir = std::env::temp_dir().join(format!(
+            "gg_sanitizer_control_{backend}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let gg_path = dir.join("sanitizer_positive_control_leak.gg");
+        std::fs::write(&gg_path, &src).expect("failed to stage control fixture");
+        let exe_path = dir.join("sanitizer_positive_control_leak");
+
+        let build = run_with_deadline(
+            Command::new(env!("CARGO"))
+                .args(["run", "--quiet", "--", "build", "--sanitize"])
+                .arg(format!("--backend={backend}"))
+                .arg(&gg_path),
+            "sanitizer_positive_control_leak",
+            build_timeout(),
+        );
+        assert!(
+            build.status.success() && exe_path.exists(),
+            "positive control [{backend}]: `gg build --sanitize --backend={backend}` failed.\n\
+             stderr:\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        // ── CELL 2: INSTRUMENTATION ──
+        // Read first: if this fails the binary is not worth running, and the
+        // diagnosis ("linked but not instrumented") is the one a reader is
+        // least likely to reach on their own.
+        let bytes = std::fs::read(&exe_path).expect("control binary unreadable");
+        let instrumented = bytes
+            .windows(b"__asan_report".len())
+            .any(|w| w == b"__asan_report");
+        assert!(
+            instrumented,
+            "positive control [{backend}]: the binary references no `__asan_report_*`, \
+             so NO CODE IN IT IS INSTRUMENTED — the sanitizer flags reached the link \
+             step but not the compile step, or not at all. Note the leak check below \
+             would still PASS in this state (LeakSanitizer is interceptor-based), \
+             which is why this cell exists. Look at `add_sanitize_flags` in \
+             `src/main.rs` and at every command it is called from."
+        );
+
+        // ── CELL 1: LINKING ──
+        let mut run_cmd = Command::new(&exe_path);
+        run_cmd.env("ASAN_OPTIONS", ASAN_OPTS_LEAK_CHECK);
+        run_cmd.env("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1");
+        let run = run_with_deadline(
+            &mut run_cmd,
+            "sanitizer_positive_control_leak",
+            test_binary_timeout(),
+        );
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            stderr.contains("LeakSanitizer: detected memory leaks"),
+            "positive control [{backend}]: a 64-byte `malloc` that is never freed was NOT \
+             reported by LeakSanitizer. `--sanitize` is not reaching the link step on this \
+             backend — the binary looks sanitized and is not, so every sanitizer assertion \
+             in this file is vacuous on this lane.\nexit: {:?}\nstdout: {}\nstderr: {stderr}",
+            run.status.code(),
+            String::from_utf8_lossy(&run.stdout)
+        );
+        assert_ne!(
+            run.status.code(),
+            Some(0),
+            "positive control [{backend}]: LeakSanitizer reported a leak but the process still \
+             exited 0, so a sanitizer trip would not fail a test that checks the exit code. \
+             Is `exitcode=99` still in ASAN_OPTS_LEAK_CHECK?\nstderr: {stderr}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -1005,7 +1263,15 @@ fn sec_63_huge_vector_capacity_traps() {
 
 #[test]
 fn sec_64_deep_option_unwrap() {
-    security_safe("attack_64_deep_option_unwrap", "42\ninner-none");
+    security_safe_except_on(
+        "attack_64_deep_option_unwrap",
+        "42\ninner-none",
+        "llvm",
+        "todo/t0729",
+        "the LLVM backend emits an aggregate copy for a nested Option match as a \
+         raw memcpy between two OVERLAPPING stack slots (ASan: memcpy-param-overlap), \
+         which is UB; the C lane is clean and is the oracle",
+    );
 }
 
 #[test]
@@ -1039,7 +1305,14 @@ fn sec_70_inline_none_nested() {
     // regress only at the top level. `level_1(None())`, `level_2(None())`,
     // `level_2(Some(None()))` all used to emit NULL-ptr-deref; now each
     // constructs the correct Option[T]::None struct from expected_type.
-    security_safe("attack_70_inline_none_nested", "-1\n42\n-2\n-1\n7");
+    security_safe_except_on(
+        "attack_70_inline_none_nested",
+        "-1\n42\n-2\n-1\n7",
+        "llvm",
+        "todo/t0729",
+        "same overlapping-memcpy aggregate-copy defect as attack_64 — this is the \
+         second of the two suite fixtures it reddens, not an independent bug",
+    );
 }
 
 // ── Round 6 attacks: float casts, async panics, struct ABI, enum dispatch ─
