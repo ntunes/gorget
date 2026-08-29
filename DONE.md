@@ -37,11 +37,18 @@
   retired NARROWLY — the `asan` lane is still C-only, but now because it passes no `--backend`, not because
   the flag is dropped.
 
-  Filed: `t0727` (user code uninstrumented), `t0728` (a name match on `malloc`/`calloc`/`realloc` outranks an
-  extern's declared return type — this round's own headline class), `t0729`, `t0730` (`gg run` drops
-  `--backend`/`--target`; an owner call), `t0731` (sweep lane + directory scope), `t0732` (`shared(atomic) int`
-  leaks on BOTH lanes, seen by no gate in the tree). Each ships a durable `known_gaps` repro with an
-  `#[ignore]`d test asserting the intended state, every one observed failing.
+  Filed, SEVEN items: `t0727` (user code uninstrumented), `t0728` (a name match on
+  `malloc`/`calloc`/`realloc` outranks an extern's declared return type — this round's own headline
+  class), `t0729`, `t0730` (`gg run` drops `--backend`/`--target`; an owner call), `t0731` (sweep lane +
+  directory scope), `t0732` (`shared(atomic) int` leaks on BOTH lanes, seen by no gate in the tree),
+  `t0733` (`RawPtr[T]` is documented but does not exist; implement-or-mark-planned, an owner call).
+
+  **Four of the seven ship a durable `known_gaps` repro** — `t0727`, `t0728`, `t0729`, `t0732` — each with
+  an `#[ignore]`d test asserting the intended state, and every one observed failing. The other three
+  carry none on purpose and none is owed: `t0730` and `t0733` are owner calls on unratified semantics
+  (a `known_gaps` fixture must assert the INTENDED behaviour, and what that is *is* the open question),
+  and `t0731` is a script-scope change with no program that reproduces it. `t0641`, modified rather than
+  filed, gained a guard instead: `build_flags_reach_every_sub_path`.
 
 - [2026-08-29] **`AGENTS.md` compaction + the gauntlet's terminating condition (owner-directed): 59,271 → 47,381 bytes.**
 

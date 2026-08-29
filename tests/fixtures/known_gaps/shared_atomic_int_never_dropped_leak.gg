@@ -54,23 +54,34 @@
 # It is a stop-the-world REACHABILITY artifact — a worker still live at exit,
 # its stack or a pool structure still referencing the block, so LSan classifies
 # it reachable rather than leaked — not different codegen. Two independent
-# checks: an extern `malloc` leak injected into the 4-task LLVM binary IS
-# reported, so LeakSanitizer is present and looking on that lane; and the
-# emitted IR is identical across lanes for the allocation itself. Do not go
-# looking for an LLVM bug; there isn't one here.
+# checks: an extern `malloc` leak injected into the 4-spawn LLVM binary IS
+# reported, so LeakSanitizer is present and looking on that lane; and both
+# lanes report the leak on the short shape, so it is not lane-specific.
+#   gg build --emit-lir [--backend=llvm] <this>   # also byte-identical, though
+#   # that one is true by construction — LIR precedes backend selection, so it
+#   # is not independent evidence about codegen.
+# Do not go looking for an LLVM bug; there isn't one here.
 #
-# ⚠ THE AXIS IS PER-TASK WORK, NOT TASK COUNT — measured, 20 runs per cell on
-# the LLVM lane, because the obvious rule is the wrong one:
+# ⚠ THE AXIS IS THE WORKER BODY'S SHAPE, NOT THE SPAWN COUNT and not the
+# duration. Measured, 20 runs per cell on the LLVM lane, counting SPAWNED
+# workers (`main` excluded) throughout:
 #
-#     2 tasks x 1 increment      (this fixture)   20/20 reported
-#     4 tasks x 1 increment                       20/20 reported
-#     2 tasks x 10000 increments                   4/20 reported
-#     4 tasks x 10000 increments (attack_87)       0/20 reported
+#     1 spawn  x bare c.add(1)   (this fixture)   20/20 reported
+#     2 spawns x bare c.add(1)                    20/20 reported
+#     4 spawns x bare c.add(1)                    20/20 reported
+#     2 spawns x `while i < 1`   (ONE iteration)  11/20 reported
+#     2 spawns x `while i < 10000`                 4/20 reported
+#     4 spawns x `while i < 10000` (attack_87)     0/20 reported
 #
-# Four tasks with no loop is perfectly stable; two tasks with the loop already
-# flakes. So "use fewer tasks" would let you write a flaky repro and think you
-# had followed the rule. THE RULE IS: keep the concurrent work SHORT, so no
-# worker is still live when the process exits.
+# Rows 2 and 4 are the isolating control: SAME spawn count, SAME single
+# increment of real work, 20/20 versus 11/20 — the only difference is that one
+# has a loop. So "use fewer tasks" is wrong (4 spawns bare is perfectly stable)
+# and even "keep the work SHORT" is not enough, because `while i < 1:` is as
+# short as work gets and still flakes.
+#
+# THE RULE IS: no loop and no suspension point in the worker body. A bare
+# statement finishes before the process exits; anything the scheduler can park
+# leaves a worker live at exit, and the instrument stops seeing the leak.
 #
 # INTENDED on both backends: stdout `1`, exit 0, and ZERO LeakSanitizer output
 # under `detect_leaks=1`. GRADUATES to a live `security_safe_no_leak` fixture

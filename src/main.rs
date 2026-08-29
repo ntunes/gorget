@@ -2811,14 +2811,26 @@ fn real_main() {
     // and was cheap enough to implement. The discriminator across the class is
     // implementation cost, not principle.
     //
-    // ⚠ THE SHAPE THAT KEEPS PRODUCING THESE. Three of the four sub-paths of
-    // `try_build_ir` build their OWN `cc` command and `return` from it before
-    // reaching the flag-application code further down — `--shared`, the
-    // hot-reload split, and freestanding/UEFI. A flag applied only at the
-    // bottom of the normal path is therefore silently absent on all three
-    // unless it is threaded deliberately. `todo/t0641` records the same hole
-    // for `--release`, which is still open on two of them. When adding a build
-    // flag, check every early-returning sub-path, not just the one you tested.
+    // ⚠ THE SHAPE THAT KEEPS PRODUCING THESE. `try_build_ir` has FIVE build
+    // sub-paths, and FOUR of them construct their OWN compiler invocation and
+    // `return` from it before reaching the flag-application code at the bottom
+    // of the fifth: `--shared`, the hot-reload split (guest + host), the LLVM
+    // pipeline (`compile_llvm_pipeline`'s runtime `cc -c` + link), and
+    // freestanding/UEFI. A flag applied only on the normal path is therefore
+    // silently absent on all four unless it is threaded deliberately — which
+    // is precisely how `--sanitize` came to be a no-op under `--backend=llvm`.
+    //
+    // `todo/t0641` is the family record. `--release` is still dropped on THREE
+    // of those four (`--shared`, hot-reload, freestanding) plus the
+    // `gg script.gg` shorthand, which builds its own `LoweringOptions`; it is
+    // correctly threaded through the LLVM pipeline. Measured, not read — the
+    // driver honours `CC`/`LLC`, so `CC=/bin/echo gg build <flags> f.gg` prints
+    // the constructed argv and a run without the sub-path flag is the control.
+    // `build_flags_reach_every_sub_path` (tests/integration.rs) runs exactly
+    // that census, so this enumeration is executable rather than prose.
+    //
+    // When adding a build flag, check every early-returning sub-path, not just
+    // the one you tested.
     if target.starts_with("freestanding") && backend_name == "llvm" {
         // Silently built a hosted ELF and printed `Built:`. The freestanding
         // path is C-backend-only: `try_build_ir` returns into

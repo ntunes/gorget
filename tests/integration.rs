@@ -52819,6 +52819,113 @@ fn unhonourable_build_flag_combinations_are_rejected() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+
+/// t0641 — DOES EVERY BUILD FLAG REACH EVERY BUILD SUB-PATH?
+///
+/// `try_build_ir` has five build sub-paths and four of them construct their own
+/// compiler invocation and `return` before reaching the flag-application code
+/// at the bottom of the fifth. So a flag wired only on the normal path is
+/// silently absent on the other four, and nothing notices — that is exactly how
+/// `--sanitize` came to be a no-op under `--backend=llvm` (t0723), and
+/// `--release` is still dropped on four paths today.
+///
+/// This is the census, run as a guard rather than written down as prose,
+/// because the prose has now under-counted this family twice. It measures the
+/// ACTUAL constructed argv: the driver honours `CC` and `LLC`, so pointing both
+/// at `/bin/echo` prints the command line instead of running it.
+///
+/// Each cell is self-controlling — the same build WITHOUT the flag is the
+/// baseline, so a marker a sub-path emits unconditionally (the LLVM runtime's
+/// own `-O2`) cannot be mistaken for the flag arriving.
+///
+/// A cell passes if the flag is THREADED (marker count rises) **or** REJECTED
+/// by name. Both satisfy lower-or-reject; only silent absence is the defect.
+///
+/// `#[ignore]`d because it asserts the INTENDED state and `--release` does not
+/// meet it yet. Un-ignore when t0641 is closed.
+#[test]
+#[ignore = "KNOWN GAP t0641: --release is silently dropped on --shared, the \
+hot-reload split, freestanding/UEFI and the `gg script.gg` shorthand — it is \
+threaded only on the normal C path and the LLVM pipeline."]
+fn build_flags_reach_every_sub_path() {
+    let dir = std::env::temp_dir().join(format!("gg_flag_census_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let plain = dir.join("plain.gg");
+    std::fs::write(&plain, "void main():\n    print(\"hi\")\n").expect("write plain");
+    let hr = dir.join("hr.gg");
+    std::fs::write(
+        &hr,
+        "directive hot-reload\n\nstruct State:\n    int n\n\nvoid main():\n    print(\"hi\")\n",
+    )
+    .expect("write hot-reload source");
+
+    // (sub-path, selecting args, source, uses the `build` subcommand)
+    let sub_paths: [(&str, &[&str], &std::path::Path, bool); 6] = [
+        ("normal C path", &[], plain.as_path(), true),
+        ("--shared", &["--shared"], plain.as_path(), true),
+        ("hot-reload split", &[], hr.as_path(), true),
+        ("LLVM pipeline", &["--backend=llvm"], plain.as_path(), true),
+        ("freestanding/UEFI", &["--target=freestanding"], plain.as_path(), true),
+        ("`gg script.gg` shorthand", &[], plain.as_path(), false),
+    ];
+    // (flag, the marker it must put on some command line)
+    let flags: [(&str, &str); 2] = [("--sanitize", "-fsanitize"), ("--release", "-O2")];
+
+    // ⚠ ARGUMENT ORDER IS PART OF THE INVOCATION, not a detail. `gg build` takes
+    // its flags before the file; the `gg script.gg` shorthand takes them AFTER
+    // (flag-first there is a loud `Unknown command: --sanitize`, rc 1 — a
+    // rejection, not a silent drop, so it is not this census's subject). Getting
+    // this wrong makes the probe report a defect that is not there.
+    let run = |args: &[&str], src: &std::path::Path, is_build: bool| -> String {
+        let mut c = Command::new(gg_binary());
+        if is_build {
+            c.arg("build").args(args).arg(src);
+        } else {
+            c.arg(src).args(args);
+        }
+        c.env("CC", "/bin/echo").env("LLC", "/bin/echo");
+        let o = c.output().expect("run gg");
+        let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&o.stderr));
+        text
+    };
+
+    let mut dropped: Vec<String> = Vec::new();
+    for (flag, marker) in flags {
+        for (name, sel, src, is_build) in sub_paths {
+            let mut with_args: Vec<&str> = sel.to_vec();
+            with_args.push(flag);
+            let with = run(&with_args, src, is_build);
+            let without = run(sel, src, is_build);
+
+            // Rejected by name is a PASS: lower-or-reject is satisfied, the
+            // user is told, and no wrong artifact ships.
+            if with.contains("unsupported") && with.contains(flag) {
+                continue;
+            }
+            let n_with = with.matches(marker).count();
+            let n_without = without.matches(marker).count();
+            if n_with <= n_without {
+                dropped.push(format!(
+                    "  {flag} is SILENTLY DROPPED on {name} \
+                     ({marker} occurrences: {n_with} with the flag, {n_without} without)"
+                ));
+            }
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        dropped.is_empty(),
+        "build flags must reach EVERY sub-path, or be rejected by name — never \
+         accepted and discarded (Core #10). {} cell(s) silently drop their flag:\n{}\n\n\
+         The measurement is `CC=/bin/echo LLC=/bin/echo gg build <flags> f.gg`, with the \
+         same build minus the flag as the control. Family record: `todo/t0641`.",
+        dropped.len(),
+        dropped.join("\n")
+    );
+}
+
 // ── Durable repros for the four gaps the LLVM sanitizer work exposed ────────
 //
 // Each asserts the INTENDED behaviour, so it fails today and graduates out of

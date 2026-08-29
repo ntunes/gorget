@@ -43,6 +43,12 @@
 //! wants `-- --test-threads=1`:
 //!     GG_BACKEND=llvm cargo test --test security -- --test-threads=1
 //!
+//! ⚠ `cargo test --test security -- --ignored` reports ONE failure by design:
+//! [`backend_flag_wiring_inner_probe`] is a child-process probe that requires
+//! `GG_BACKEND` to be set, and its parent asserts it FAILS when the variable is
+//! unset. Do not file it; run it through
+//! [`backend_flag_selection_is_wired`] instead.
+//!
 //! The full build includes `-fsanitize=address,undefined` via the
 //! compiler's own `--sanitize` flag. ⚠ On `--backend=llvm` that instruments the
 //! runtime only, not generated user code (`todo/t0727`): leaks and
@@ -227,7 +233,8 @@ fn backend_flag_selection_is_wired() {
         !out.status.success(),
         "the wiring probe PASSED with GG_BACKEND unset. It requires the variable, so either \
          `gg_backend()` is inventing a value or `gg_command` appends a backend \
-         unconditionally — the default lane would then not be the default lane."
+         unconditionally FOR EVERY SUBCOMMAND. (A build-only unconditional append is \
+         caught by the ambient-environment branch below, not here.)"
     );
 
     // 3. The decision's branches: through the real command for the ambient
