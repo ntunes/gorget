@@ -1,0 +1,48 @@
+# Cell 1's OTHER branch — the direct-Iterator path, where the collection IS
+# the iterator and `next(&self)` MUTATES it.
+#
+# This branch owns nothing: the source still owns the data, so nothing may be
+# registered here. What it must NOT do is iterate a shallow COPY of the
+# source. A copy takes the iteration state with it and leaves the original
+# stale, so the original's drop runs against a pre-iteration view of the
+# buffer — it frees elements the loop already handed out. With a move-out
+# body that is a double-free of every element transferred to the destination,
+# which is exactly how `stdlib_iter_drain` used to abort.
+#
+# The `break` is load-bearing: it leaves elements UNCONSUMED, so the source's
+# own drop still has real work to do, and the printed remainder pins that the
+# loop advanced the source itself rather than a duplicate of it.
+#
+# Axis cell: producer = cell 1 (borrow branch) · element = String · source =
+#            direct-Iterator (drain-shaped, pops from its own buffer) ·
+#            body = move-out + early break.
+
+from std.collections import Vector, Set
+
+struct Bag:
+    Vector[String] items
+
+equip Bag with Iterator[String]:
+    Option[String] next(&self):
+        if self.items.len() == 0:
+            return None
+        return self.items.pop()
+
+String heaped(String tag):
+    return "word-" + "chunk-" + tag
+
+int main():
+    Vector[String] v = Vector[String]()
+    v.push(heaped("alpha"))
+    v.push(heaped("beta"))
+    v.push(heaped("gamma"))
+    v.push(heaped("delta"))
+    Bag b = Bag(v)
+    Set[String] dst = Set[String]()
+    for s in b:
+        dst.add(s)
+        if dst.len() >= 2:
+            break
+    print(dst.len())
+    print(b.items.len())
+    return 0

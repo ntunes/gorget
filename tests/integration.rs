@@ -56495,3 +56495,64 @@ true
 true",
     );
 }
+
+/// KNOWN GAP (R47 Track E2, filed 2026-08-29): a droppable TEMP minted inside
+/// a LOOP CONDITION is dropped once at function exit instead of once per
+/// evaluation, so every iteration but the last leaks its temp.
+///
+/// `while vs.iter().all(is_long) and guard < 1:` — the condition block is
+/// re-evaluated each iteration and `Vector__GorgetString__iter` deep-clones
+/// the backing array every time. LeakSanitizer reports 75 bytes in 3
+/// allocations (the cloned array plus its cloned String elements), 3/3 runs
+/// under `LSAN_OPTIONS=use_stacks=0`, while stdout is correct and a
+/// `detect_leaks=0` run exits 0.
+///
+/// ⚠ DISTINCT CLASS from the for-loop producer sites Track E2 fixed: this is
+/// the LIR drop elaborator's loop-reinit handling (`src/lir/drop_elab.rs` —
+/// "the loop-reinit pattern (iter N moves slot, iter N+1 re-stores) is handled
+/// by step 3's SlotStore arm"), it applies to a temp of ANY droppable type in
+/// any re-evaluated header block, and it has nothing to do with iterator
+/// protocol lowering. `drop_loop_reinit.gg` samples the loop BODY cell; the
+/// CONDITION cell had no fixture in the tree before this one.
+///
+/// Un-ignore + promote out of `known_gaps/` when the condition-block temp is
+/// dropped at the end of each evaluation.
+#[test]
+#[ignore = "KNOWN GAP (R47 Track E2): a droppable temp minted in a LOOP \
+CONDITION leaks once per iteration -- LeakSanitizer reports 75 byte(s) in 3 \
+allocations from Vector__GorgetString__iter, rc 99, while stdout is correct \
+and detect_leaks=0 exits 0. Lives in the LIR drop elaborator's loop-reinit \
+handling (src/lir/drop_elab.rs), not in for-loop lowering. Fixture: \
+tests/fixtures/known_gaps/while_condition_temp_leaks.gg. TODO.md."]
+fn while_condition_temp_leaks() {
+    assert_gg_sanitize_clean("known_gaps/while_condition_temp_leaks", "1");
+}
+
+/// KNOWN GAP (R47 Track E2, filed 2026-08-29): `for x in it` over a
+/// direct-Iterator reached through a `&`-param advances a COPY of the
+/// iterator, leaving the caller's object untouched.
+///
+/// `consume2(&p)` consumes two elements and breaks, so `p.idx` must read 2; it
+/// reads 0. A local that BORROWS a param holds the caller's pointer in its slot
+/// while its GIR type stays the pointee's value type, so the for-lowering can
+/// address neither the object (`&local` addresses a materialized copy) nor the
+/// pointee (`*local` dereferences a value, and SEGVs — measured). The fix
+/// belongs at the bare-param ABI, not in `for_loops.rs`.
+///
+/// The bare-local and struct-FIELD forms of the same loop DO advance the
+/// source — `security/foriter_direct_advances_source.gg` pins the bare local.
+///
+/// ⚠ SAFE, not silent-unsafe: the for-lowering recognises this shape
+/// (`IteratorRef::ShallowAlias`) and binds the loop's elements as BORROWS, so a
+/// move-out body clones instead of moving. Removing that carve-out without
+/// fixing the addressing turns this wrong answer into a double-free (measured).
+#[test]
+#[ignore = "KNOWN GAP (R47 Track E2): `for x in it` over a direct-Iterator \
+reached through a `&`-param advances a COPY -- `p.idx` reads 0 where 2 is \
+correct. The bare-local and struct-field forms are correct; only the \
+param-borrow shape is left, and the fix belongs at the bare-param ABI. \
+Fixture: tests/fixtures/known_gaps/for_direct_iterator_param_not_advanced.gg. \
+TODO.md."]
+fn for_direct_iterator_param_not_advanced() {
+    run_gg("known_gaps/for_direct_iterator_param_not_advanced.gg", "2");
+}

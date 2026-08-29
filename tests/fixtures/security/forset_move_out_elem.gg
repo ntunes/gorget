@@ -1,0 +1,31 @@
+# The Set arm's sibling half of the same class: `gorget_map_iter_key` writes
+# an INDEPENDENT owned clone of the element through its out-param, and the
+# arm used to register that clone for drop WITHOUT deciding its ownership.
+#
+# One axis decided and not the other has its own signature: the local stays
+# `Untracked`, the Tier 2a consume-site validator refuses to pick move or
+# clone, and this program — ordinary syntax, straight out of the book —
+# ABORTED THE COMPILER with "untracked source consumed (ownership not
+# decided)" rather than lowering.
+#
+# Axis cell: producer = Set out-param arm · element = String · source = Set ·
+#            body = move-out. Judged on stdout AND under the sanitizer: the
+#            element is an owned clone, so moving it into the destination
+#            must neither leak the clone nor free it twice.
+
+from std.collections import Set
+
+String heaped(String tag):
+    return "word-" + "chunk-" + tag
+
+int main():
+    Set[String] src = Set[String]()
+    src.add(heaped("alpha"))
+    src.add(heaped("beta"))
+    src.add(heaped("gamma"))
+    Set[String] dst = Set[String]()
+    for s in src:
+        dst.add(s)
+    print(src.len())
+    print(dst.len())
+    return 0

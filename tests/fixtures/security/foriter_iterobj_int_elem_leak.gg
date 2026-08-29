@@ -1,0 +1,52 @@
+# Cell 1 ISOLATED — the ITERATOR OBJECT `for x in <user Iterable>` mints.
+#
+# `iter(&collection)` returns a fresh, owned iterator by value. The loop owns
+# it and must drop it at the enclosing scope's exit. It has NO name binding,
+# so no census over binding arms can see it — which is how it leaked for the
+# whole life of the arm.
+#
+# The element type is `int` on purpose: element drop-registration is a no-op
+# for a Copy type, so the ONLY thing this fixture can leak is the iterator
+# object itself. The iterator carries a heap-forced `Vector[String]` so the
+# leak has mass; a struct of scalars would be stack-only and prove nothing.
+#
+# Axis cell: producer = cell 1 (owned branch) · element = Copy(int) ·
+#            source = Iterable-with-iter() · body = read-only.
+# A leak has no stdout signature, so this is judged on the sanitized run.
+
+from std.collections import Vector
+
+struct PayloadIter:
+    Vector[String] baggage
+    int idx
+    int limit
+
+equip PayloadIter with Iterator[int]:
+    Option[int] next(&self):
+        if self.idx >= self.limit:
+            return None
+        int cur = self.idx
+        self.idx = self.idx + 1
+        return Some(cur)
+
+struct PayloadColl:
+    Vector[String] baggage
+    int limit
+
+equip PayloadColl with Iterable[int]:
+    PayloadIter iter(&self):
+        return PayloadIter(self.baggage, 0, self.limit)
+
+String heaped():
+    return "heavy" + "weight" + "-payload-forced-onto-the-heap"
+
+int main():
+    Vector[String] v = Vector[String]()
+    v.push(heaped())
+    v.push(heaped())
+    PayloadColl c = PayloadColl(v, 3)
+    int total = 0
+    for n in c:
+        total = total + n
+    print(total)
+    return 0

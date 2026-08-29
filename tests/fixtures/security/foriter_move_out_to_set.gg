@@ -1,0 +1,59 @@
+# BOTH cells at once, with a MOVE-OUT body — the bidirectional control.
+#
+# The iterator owns a heap `Vector[String]` (cell 1) and each `next()` hands
+# back an owned `String` (cell 2), and the body MOVES that element into a
+# `Set`. That combination is what makes this the sharp cell: registering the
+# element for drop is what flips the consume site from clone to move, so a
+# fix that gets the ownership right but the lifetime wrong frees the element
+# in the loop AND again out of the set.
+#
+# It therefore fails in BOTH directions — RED before the fix because both
+# cells leak, and RED against an over-eager fix because the set's copy would
+# be freed twice.
+#
+# Axis cell: producer = cells 1 + 2 · element = String · source =
+#            Iterable-with-iter() · body = move-out. Sanitized run, and the
+#            printed count also pins that the elements survived the move.
+#
+# OMITTED CELL, deliberately: every element is DISTINCT. A duplicate would
+# also exercise the set's duplicate-rejection path, which leaks the key it
+# declines to store — a different mechanism in the insert path, filed as
+# `todo/t0121` with its own repro (`known_gaps/set_string_dup_elem_leak.gg`).
+# Including a duplicate here would leave this fixture permanently red for a
+# defect it does not name.
+
+from std.collections import Vector, Set
+
+struct WordIter:
+    Vector[String] items
+    int idx
+
+equip WordIter with Iterator[String]:
+    Option[String] next(&self):
+        if self.idx >= self.items.len():
+            return None
+        int cur = self.idx
+        self.idx = self.idx + 1
+        return self.items.get(cur)
+
+struct WordColl:
+    Vector[String] items
+
+equip WordColl with Iterable[String]:
+    WordIter iter(&self):
+        return WordIter(self.items, 0)
+
+String heaped(String tag):
+    return "word-" + "chunk-" + tag
+
+int main():
+    Vector[String] v = Vector[String]()
+    v.push(heaped("alpha"))
+    v.push(heaped("beta"))
+    v.push(heaped("gamma"))
+    WordColl c = WordColl(v)
+    Set[String] dst = Set[String]()
+    for s in c:
+        dst.add(s)
+    print(dst.len())
+    return 0

@@ -1,0 +1,37 @@
+# The direct-Iterator branch, on the one axis that DOES have a stdout
+# signature: does `for x in it` advance `it`, or a throwaway copy of it?
+#
+# `lib/std/iter.gg` settles the intent — `VectorDrain`'s `Drop` "reverses the
+# remaining buffer back if the caller breaks early, so unconsumed elements
+# drop in insertion order". That contract is only meaningful if the object
+# the loop advanced is the object that is later dropped. Iterating a shallow
+# copy silently defeats it, and turns any move-out body into a double-free
+# because the stale original still believes it owns what the loop gave away.
+#
+# Two elements are consumed before the `break`, so `idx` must read 2 after
+# the loop. This is the same defect as `foriter_direct_drain_move_out`, seen
+# through its observable side rather than through the sanitizer.
+#
+# Axis cell: producer = cell 1 (borrow branch) · element = Copy(int) ·
+#            source = direct-Iterator · body = early break.
+
+struct Counter:
+    int idx
+    int limit
+
+equip Counter with Iterator[int]:
+    Option[int] next(&self):
+        if self.idx >= self.limit:
+            return None
+        int r = self.idx
+        self.idx = self.idx + 1
+        return Some(r)
+
+int main():
+    Counter c = Counter(0, 5)
+    for x in c:
+        print(x)
+        if x >= 1:
+            break
+    print(c.idx)
+    return 0

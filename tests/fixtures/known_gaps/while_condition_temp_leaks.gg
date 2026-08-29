@@ -1,0 +1,38 @@
+# KNOWN GAP — a droppable TEMP minted inside a LOOP CONDITION leaks.
+#
+# `vs.iter()` in the `while` condition materializes a fresh, owned iterator
+# (`Vector__GorgetString__iter` deep-clones the backing array). The condition
+# block is RE-EVALUATED on every iteration, so the temp's slot is re-stored
+# each time round, but drop elaboration emits a single drop at function exit —
+# so every iteration but the last drops its iterator on the floor.
+#
+# Distinct class from the for-loop producer sites: it lives in the LIR drop
+# elaborator's loop-reinit handling (`src/lir/drop_elab.rs`), applies to a temp
+# of ANY droppable type in any re-evaluated header block, and has nothing to do
+# with iterator protocol lowering. `drop_loop_reinit.gg` samples the loop BODY
+# cell; the CONDITION cell had no fixture at all before this one.
+#
+# The `guard` counter bounds the loop so the program terminates; the `and`
+# keeps the iterator call in the condition rather than hoisting it.
+#
+# HEAP-FORCED is load-bearing: the leaked bytes are the cloned array plus its
+# cloned String elements. A `Vector[int]` condition temp would leak the array
+# only, and string LITERALS alone would leak nothing observable.
+#
+# Un-ignore + promote out of `known_gaps/` when the condition-block temp is
+# dropped at the end of each evaluation.
+
+from std.collections import Vector
+
+bool is_long(String s):
+    return s.len() > 3
+
+int main():
+    Vector[String] vs = Vector[String]()
+    vs.push("alpha")
+    vs.push("beta")
+    int guard = 0
+    while vs.iter().all(is_long) and guard < 1:
+        guard = guard + 1
+    print(guard)
+    return 0
