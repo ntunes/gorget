@@ -280,8 +280,12 @@ matching `declare`s for them (`emit_extern_declarations`,
    `__thread` statics (`src/main.rs:1241-1247`). SQLite is appended *after* this
    transform because its amalgamation relies on file-local linkage
    (`src/main.rs:1259-1275`).
-4. **Compile runtime C → `.o`** with `cc -c -O2 -std=c11 -w` (+ `-pthread` off
-   macOS) (`src/main.rs:1283-1296`).
+4. **Compile runtime C → `.o`** with `cc -c -O2 -std=c11
+   -Werror=implicit-function-declaration` (+ `-pthread` off macOS, and the
+   sanitizer flags under `--sanitize` — see below) (`src/main.rs:1601-1636`).
+   Deliberately no blanket `-w`: silencing everything here hides
+   implicit-declaration bugs, so that one class is a hard error and the rest of
+   the warning flood stays off.
 5. **Compile the `.ll` → `.o`** with `llc -filetype=obj -O0
    -relocation-model=pic` (`src/main.rs:1306-1313`).
 6. **Link** the two objects with `cc -o exe user.o runtime.o -lm` (+ `-pthread`,
@@ -292,6 +296,39 @@ Intermediate files are per-fixture-named (`__gorget_runtime_{stem}.c/.o`,
 `__gorget_user_{stem}.o`) so parallel `gg build` invocations don't clobber each
 other's runtime mid-compile (`src/main.rs:1100-1105`), and cleaned up unless
 `GORGET_KEEP_RUNTIME=1` (`src/main.rs:1362-1368`).
+
+### `--sanitize` on this backend, and what it does not cover
+
+The split-compilation shape above is what makes the runtime reuse cheap, and it
+is also what bounds sanitizer coverage on this lane. `--sanitize` adds
+`-fsanitize=address,undefined -fno-omit-frame-pointer -g` — via the single
+`add_sanitize_flags` helper the C backend also uses — to **two** of the steps:
+the runtime `cc -c` (step 4) and the final link (step 6). It cannot be added to
+step 5, because step 5 is `llc`, and `llc` consumes finished IR: ASan's
+instrumentation is an IR-level pass that has already not run by the time `llc`
+sees the module. Emitting instrumented IR would mean the backend attaching the
+`sanitize_address` attribute itself and the resulting IR surviving the
+instrumentation passes — neither of which it does today.
+
+The consequence is a real and stated asymmetry with the C backend, where user
+code *is* C and `cc` instruments all of it:
+
+| defect class | C backend | LLVM backend |
+|---|---|---|
+| memory leak | caught | **caught** — LeakSanitizer intercepts the allocator, so instrumentation is irrelevant |
+| UAF / double-free / overflow faulting **inside the runtime** | caught | **caught** — the runtime `.o` is instrumented |
+| UAF / overflow / stack error faulting **in generated user code** | caught | **not caught** |
+
+Two consequences worth internalising. First, a program that is clean under
+`--sanitize --backend=llvm` is *not* thereby known clean: the C backend is the
+lane the safety gates are meant to run on. Second — and this is the trap —
+a **leak-based** check cannot detect that this coverage was lost, because leak
+detection survives with zero instrumentation. Distinguishing "linked the ASan
+runtime" from "linked it *and* instrumented something" needs a probe that looks
+for `__asan_report_*` references in the artifact, which only instrumented code
+emits. `sanitizer_gate_is_real_on_both_backends` (`tests/security.rs`) is that
+probe, and it exists because the flag was silently dropped on this lane for an
+unknown period, making every LLVM sanitizer result free.
 
 ### LLVM version compatibility
 

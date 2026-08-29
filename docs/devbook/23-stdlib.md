@@ -177,30 +177,41 @@ Numeric primitives, `bool`, `char`, and `String` satisfy
 ## 23.5 Core-type method typing
 
 The hot collection methods (`Vector.push`, `Dict.get`, `Set.contains`, …)
-are typed in Rust by `builtin_method_type` (`src/semantic/typecheck.rs:4771`),
-not by a `.gg` declaration — they are too central and too tied to runtime
-calls to round-trip through library typing. The function dispatches on the
+are typed in Rust by `builtin_method_type`
+(`src/semantic/typecheck.rs::builtin_method_type`), not by a `.gg`
+declaration — they are too central and too tied to runtime calls to
+round-trip through library typing. The function dispatches on the
 receiver's base-type name and the method name, returning the result `TypeId`.
+Its arms are cited by receiver and method below rather than by line, because
+the function is long and its interior line numbers rot faster than the arms do.
 
 The ownership-aware return shapes encode the CoW borrow/own discipline at
 the type level:
 
-- Borrowing accessors return `Option[T &]`: `Vector.get`/`first`/`last`
-  build `Option[Ref(elem)]` (`src/semantic/typecheck.rs:4812-4819`),
-  `Dict.get` builds `Option[Ref(val)]` (`:4855-4862`).
-- Consuming accessors return `Option[T !]`: `Vector.pop`/`remove` build
-  `Option[Owned(elem)]` (`:4821-4828`), `Dict.remove` returns
-  `Option[Owned(val)]` (`:4866-4874`) — note `remove` returns the removed
-  value, not a bool.
-- `Dict.keys`/`values` return materialised `Vector[K]`/`Vector[V]`
-  (`:4877-4890`); `Vector.windows`/`chunks` return eager `Vector[Vector[T]]`
-  (`:4841-4849`).
+- Borrowing accessors return `Option[T &]`: the `"Vector" | "Deque"` arm's
+  `"get" | "first" | "last"` builds `Option[Ref(elem)]`, and the
+  `"Dict" | "HashMap"` arm's `"get"` builds `Option[Ref(val)]`.
+- Consuming accessors return `Option[T !]`: `"pop" | "remove"` builds
+  `Option[Owned(elem)]`, and `Dict.remove` returns `Option[Owned(val)]` —
+  note `remove` returns the removed value, not a bool.
+- `Dict.keys`/`values` return materialised `Vector[K]`/`Vector[V]`;
+  `Vector.windows`/`chunks` return eager `Vector[Vector[T]]`.
 
 Method names that were consolidated away still resolve as compat aliases
-here — e.g. `Dict.put`/`set`/`update` all map to `void`
-(`src/semantic/typecheck.rs:4854`) and `contains`/`has`/`has_key`/`contains_key`
-all map to `bool` (`:4864`) — but only the consolidated name is the
-recommended surface.
+here — e.g. `"put" | "set" | "update"` all map to `void` and
+`contains`/`has`/`has_key`/`contains_key` all map to `bool` — but only the
+consolidated name is the recommended surface.
+
+A receiver the function has no arm for answers `None`, and that answer is
+load-bearing rather than a shrug: when the receiver is a concrete PRIMITIVE
+and no other avenue resolved the method either, the method-call elaboration
+site REJECTS with `E_NoMethodFound` instead of yielding `error_id`. Without
+that reject the LIR's `gorget_str_{method}` name-concat fallback invents a
+runtime symbol nothing defines, which surfaces as an ugly C error or a silent
+miscompile. The primitive arms are therefore the whole method table for those
+receivers: `hash`/`debug`/`display`/`mod` for numerics and `bool` (plus the
+auto-derivable `clone`), the character-class predicates for `uint8`, and the
+`"str" | "String"` arm for text.
 
 ## 23.6 Iterator: the M+N payoff
 

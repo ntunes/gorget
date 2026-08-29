@@ -61,7 +61,7 @@ from lower_generics import GenericInstance, ProtoMethInst, proto_method_targ_tid
 # lowerer used to recognise via raw name-match lists (CLAUDE.md "No name
 # matching"). Read via `string_builtin_method` / `collection_builtin_method`
 # (mirror lir_lower.gg's `build_resource_metadata` reading RESOURCES).
-from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES, RUST_PRESCAN_MUTATOR_FALLBACK
+from compiler.data.resources import STRING_BUILTIN_METHODS, COLLECTION_BUILTIN_METHODS, BUILTIN_METHOD_MUTATES
 from compiler.data.schema import BuiltinMethodDecl, BuiltinMethodEntry
 from compiler.data.schema import BuiltinRetKind, BrkString, BrkInfer
 
@@ -485,11 +485,12 @@ struct LowerCtx:
     Vector[int] cow_scope_anchor_stack
     Dict[String, bool] cow_scope_muts
     # Scan-scoped flag: true while recording a mutation mark that RUST's
-    # prescan would NOT record (a user &self-mutator / unknown-method
-    # receiver). Such marks stay in the whole-fn maps (bind-flip safety,
-    # loop hoist) but are kept OUT of the scope sets, so the branch hoist
-    # fires on exactly the shapes Rust's collector marks (lane symmetry;
-    # see rust_prescan_marks_method).
+    # prescan would NOT record -- since t0699 that is the UNRESOLVABLE
+    # receiver/method (and `!self`), not the user-&self-mutator class, which
+    # both lanes now resolve typed. Such marks stay in the whole-fn maps
+    # (bind-flip safety, loop hoist) but are kept OUT of the scope sets, so
+    # the branch hoist fires on exactly the shapes Rust's collector marks
+    # (lane symmetry; see cow_recv_mutation_class, class 2).
     bool cow_scope_mark_suppress
     # ── R44 Track K: the comprehension DEFERRED-MINT channel ──────────
     # A comprehension must mint its accumulator from the type it PRODUCES,
@@ -1194,44 +1195,97 @@ Option[BuiltinMethodDecl] builtin_method_mutates(String mname):
 # The user path is tried FIRST: a user type may legitimately name a
 # method `get`/`map`/… that takes `&self` and mutates; its typed
 # self-convention is authoritative over the builtin name table.
-# The LANE-SYMMETRY predicate for the scope-hoist channel: would RUST'S
-# untyped prescan mark a receiver mutated by a call of `mname`? Rust =
-# typed builtin `is_mutating` table UNION the MUTATING_METHODS name
-# fallback; unknown names are NOT marked (Rust is blind to user `&self`
-# mutators -- the shared filed gap). The SH's richer typed user-method
-# detection stays authoritative for the whole-fn maps (bind-flip safety,
-# loop hoist); ONLY the scope-set channel filters through this predicate,
-# so both lanes' branch hoists fire on identical shapes (Core #9).
-bool rust_prescan_marks_method(String mname):
+# Resolve `recv.mname(...)` to its equip-method key `Type__mname`, or "" when
+# the receiver's type does not resolve here or no user method of that name is
+# registered on it. ONE resolution site, shared by both dispositions of the
+# answer below -- the two predicates differ only in what they do when the
+# receiver is UNRESOLVABLE, never in how they resolve it.
+String recv_method_key(SpannedExpr recv, String mname, GirModule &gmod):
+    int recv_tid = lookup_expr_gir_type(recv, &gmod)
+    if recv_tid < 0:
+        return ""
+    String recv_tname = type_id_to_name(recv_tid, &gmod)
+    if recv_tname.len() == 0:
+        return ""
+    String mkey = recv_tname + "__" + mname
+    if not gmod.fn_borrow_params.contains(mkey):
+        return ""
+    return mkey
+
+# Does the equip method keyed `mkey` declare `&self` at param 0?
+bool mkey_takes_borrow_self(GirModule &gmod, String mkey):
+    if not gmod.fn_borrow_params.contains(mkey):
+        return false
+    Vector[bool] bflags = gmod.fn_borrow_params.get(mkey).unwrap()
+    if bflags.len() == 0:
+        return false
+    return bflags.get(0).unwrap()
+
+# Does the equip method keyed `mkey` declare `!self` (consuming) at param 0?
+bool mkey_takes_move_self(GirModule &gmod, String mkey):
+    if not gmod.fn_move_params.contains(mkey):
+        return false
+    Vector[bool] mflags = gmod.fn_move_params.get(mkey).unwrap()
+    if mflags.len() == 0:
+        return false
+    return mflags.get(0).unwrap()
+
+# The CoW scan's classification, and the LANE-SYMMETRY answer for the
+# scope-hoist channel, from ONE receiver resolution.
+#
+#   0 = the call does NOT mutate its receiver
+#   1 = it mutates, and RUST'S CoW prescan marks it too (lane-symmetric)
+#   2 = it mutates, but Rust's prescan would NOT mark it -- the mark stays in
+#       this lane's whole-fn maps and is kept OUT of the scope sets
+#       (`cow_scope_mark_suppress`), so both lanes' branch hoists fire on
+#       identical shapes (Core #9)
+#
+# Since t0699 Rust reads the SAME typed per-receiver answer this lane does --
+# the receiver's resolved type plus the method's declared `&self`
+# (`semantic/safety/check_expr.rs`'s `classify_receiver_mutation`, crossing
+# into the lowering as `ReceiverMutations`) -- so the lanes agree by
+# construction on every call either can resolve, with no name list to sync.
+# Class 2 is exactly the two axes on which Rust is NARROWER:
+#   * an UNRESOLVABLE receiver/method. Rust's prescan records nothing it
+#     cannot resolve; this lane's conservative default assumes MUTATING.
+#     Keeping that class out of the scope-set channel is what stops the branch
+#     hoist from deep-cloning on every unclassifiable call -- the 2026-07-19
+#     stage-1 bootstrap clone bomb (DONE.md).
+#   * `!self`. Rust's classifier reads `param_ownerships[0] == MutableBorrow`
+#     only, so a consuming method is not a prescan mark there; a `!self` call
+#     on a bare (borrowed) receiver is rejected before lowering anyway.
+#
+# ⚠ ONE resolution, deliberately. Asking `method_mutates_receiver` and then a
+# separate Rust-mirror predicate resolved the receiver type and rebuilt the
+# `Type__mname` key TWICE on every method call in the scan -- measured on the
+# stage-1 clone ceiling. `method_mutates_receiver` survives for its other
+# callers (`lower_expr.gg`, `lower_match.gg`); this is the single-resolution
+# form of it plus the lane filter.
+int cow_recv_mutation_class(SpannedExpr recv, String mname, GirModule &gmod):
+    String crm_key = recv_method_key(recv, mname, &gmod)
+    if crm_key.len() > 0:
+        if mkey_takes_borrow_self(&gmod, crm_key):
+            return 1
+        if mkey_takes_move_self(&gmod, crm_key):
+            return 2
+        return 0
     match builtin_method_mutates(mname):
-        case Some(rpm_decl):
-            if rpm_decl.is_mutating:
-                return true
+        case Some(crm_decl):
+            if crm_decl.is_mutating:
+                return 1
+            return 0
         case None:
             pass
-    for rpm_fb in RUST_PRESCAN_MUTATOR_FALLBACK:
-        if rpm_fb == mname:
-            return true
-    return false
+    # CONSERVATIVE DEFAULT: unknown ⇒ mutating here, unmarked on Rust's side.
+    return 2
 
 bool method_mutates_receiver(SpannedExpr recv, String mname, GirModule &gmod):
-    # (1) USER method: resolve receiver type → equip-method key.
-    int recv_tid = lookup_expr_gir_type(recv, &gmod)
-    if recv_tid >= 0:
-        String recv_tname = type_id_to_name(recv_tid, &gmod)
-        if recv_tname.len() > 0:
-            String mkey = recv_tname + "__" + mname
-            if gmod.fn_borrow_params.contains(mkey):
-                Vector[bool] bflags = gmod.fn_borrow_params.get(mkey).unwrap()
-                Vector[bool] mflags_u = []
-                if gmod.fn_move_params.contains(mkey):
-                    mflags_u = gmod.fn_move_params.get(mkey).unwrap()
-                bool self_mut = false
-                if bflags.len() > 0 and bflags.get(0).unwrap():
-                    self_mut = true
-                if mflags_u.len() > 0 and mflags_u.get(0).unwrap():
-                    self_mut = true
-                return self_mut
+    # (1) USER method: resolve receiver type -> equip-method key.
+    String mmr_key = recv_method_key(recv, mname, &gmod)
+    if mmr_key.len() > 0:
+        if mkey_takes_borrow_self(&gmod, mmr_key):
+            return true
+        return mkey_takes_move_self(&gmod, mmr_key)
     # (2) BUILTIN method: typed is_mutating column.
     match builtin_method_mutates(mname):
         case Some(bdecl):

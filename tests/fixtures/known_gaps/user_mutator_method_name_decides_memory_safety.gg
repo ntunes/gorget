@@ -1,28 +1,52 @@
-# KNOWN GAP — 🚨 A USER METHOD'S *NAME* DECIDES MEMORY SAFETY.
+# LIVE REGRESSION FIXTURE (graduated 2026-08-29) — a user method's NAME used to
+# decide memory safety.
 #
-# Two byte-identical programs, differing only in what the mutator is called:
+# WHAT IT WAS. Two byte-identical programs, differing only in what the mutator
+# is called:
 #     void grow(&self):   ...  ->  SIGSEGV, rc 139, on C AND LLVM
 #     void resize(&self): ...  ->  rc 0, prints "helloworld", correct
 #
-# `resize` is on the hardcoded 25-entry `MUTATING_METHODS` list
-# (`src/ir/lowering/functions.rs:499-504`); `grow` is not. That list feeds
-# `is_mutating_method_name` (`:511-514`) as the fallback beside the typed
-# builtin predicate, and the prescan uses it to decide whether a receiver is
-# mutated. A user `&self` method whose NAME is absent is INVISIBLE to the
-# prescan, so the bind is never materialized and the later realloc frees the
-# buffer the bind still points at.
+# `resize` was on a hardcoded 25-entry `MUTATING_METHODS` list in
+# `src/ir/lowering/functions.rs`; `grow` was not. That list fed
+# `is_mutating_method_name` as the fallback beside the typed builtin predicate,
+# and the CoW prescan used it to decide whether a receiver is mutated. A user
+# `&self` method whose NAME was absent was INVISIBLE to the prescan, so the
+# bind was never materialized and the later realloc freed the buffer the bind
+# still pointed at. CLAUDE.md's "No name matching" rule violated with a
+# memory-safety consequence -- not a style nit; the const's own doc-comment
+# already conceded it ("this list survives only as the escape hatch").
 #
-# ⚠ THIS IS THE `AGENTS.md` "No name matching" RULE VIOLATED WITH A
-# MEMORY-SAFETY CONSEQUENCE -- not a style nit. The const's own doc-comment
-# already concedes it ("this list survives only as the escape hatch").
-# The reference-grade fix is a typed `is_mutating` flag on the method decl,
-# set at the source and read via an accessor, exactly as the doc prescribes.
+# WHAT IT IS NOW. The prescan reads the semantic pass's typed per-receiver
+# classification (`semantic::safety::ReceiverMutations`, resolved from the
+# receiver's type and the method's declared `&self`), and both the list and its
+# self-host mirror are deleted. This file asserts `helloworld` and is wired
+# LIVE; the corpus-scanned sibling that carries BOTH names in one program is
+# `tests/fixtures/cow_user_mutator_rename_invariance.gg`, and the ASan cell is
+# `tests/fixtures/security/sound_user_mutator_name_invariant_uaf.gg`.
+#
+# It stays in `known_gaps/` (out of `runtime_parity_corpus`) for placement
+# reasons only -- moving it would register a corpus row for a shape the corpus
+# already covers.
 #
 # ⚠ THE REALLOC IS LOAD-BEARING IN THIS REPRO. `grow` must push enough to
 # force the backing store to reallocate (64x here). A version that pushes once
 # is rc 0 on BOTH names and proves nothing -- the orchestrator's first probe
-# made exactly that mistake. Keep the loop, and keep the payload heap-FORCED
-# (built via `mk`, never a literal).
+# made exactly that mistake. Keep the loop.
+#
+# ⊕ CORRECTED 2026-08-29: THE HEAP-FORCED PAYLOAD IS *NOT* LOAD-BEARING. This
+# header used to say "keep the payload heap-FORCED (built via `mk`, never a
+# literal)" beside the realloc requirement, as though both were necessary.
+# Measured on the pre-fix compiler, on this exact shape:
+#     literal payload + the 64-push loop  -> rc 139  (still reproduces)
+#     `mk` payload    + a single push     -> rc 0    (does not reproduce)
+# So the realloc is the load-bearing half and the heap payload is not. `mk` is
+# kept anyway because it makes the freed element a heap String, which is what
+# turns a bare SIGSEGV into a legible ASan `heap-use-after-free` in
+# `gorget_string_clone_to_owned` -- useful, not required.
+# ⚠ MEASURED ON THIS SHAPE ONLY. The same warning appears verbatim on
+# `todo/t0703`/`t0704` and their fixtures, which are DIFFERENT defects (an
+# alias-spelled view; a closure capture); nobody has run the literal-payload
+# variant there, so do not propagate this correction to them unmeasured.
 #
 # DISTINCT FROM `t0125`, same root gap, different severity and shape -- state
 # the discriminator before merging them:

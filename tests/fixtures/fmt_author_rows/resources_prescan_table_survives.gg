@@ -3,12 +3,22 @@
 # MUST EXCLUDE from any bulk `gg fmt` sweep: this fixture's SUBJECT is fmt
 # output, and it is written in the form the formatter must KEEP.
 #
-# This is the shape the ruling was made for, copied from the one place in the
-# tree that already carries it: `RUST_PRESCAN_MUTATOR_FALLBACK` in
+# This is the shape the ruling was made for, copied from the place in the tree
+# that carried it when the ruling was made: `RUST_PRESCAN_MUTATOR_FALLBACK` in
 # `compiler/data/resources.gg`, a hand-grouped 4-row / 25-element name table
 # with an author trailing comma. `gg fmt` used to return it as 25 lines, and
 # that is the whole argument for the feature — nobody wrote a fixture to find
 # this, the corpus was already carrying it.
+#
+# ⚠ THE ORIGINAL IS GONE (2026-08-29): that table mirrored Rust's
+# `MUTATING_METHODS` hand list, and both were retired when the CoW
+# mutates-receiver decision became a typed per-receiver classification instead
+# of a name lookup (`todo/t0699` — a user method's NAME decided memory
+# safety). This copy is now the ONLY carrier of the cell, which is precisely
+# the job the "why a copy" note below describes; `MIN_SUBJECT_SITES` was
+# lowered 25 → 24 with that reason recorded, the same "moved to a stronger
+# pin" disposition as its 26 → 24 precedent. The shape below is verbatim what
+# the corpus carried, so the cell is unchanged.
 #
 # UNIFORM-ROWS cell of the grouping-shape axis (its ragged sibling is
 # `ragged_rows.gg`), and the STRING element-type cell: every element here is a

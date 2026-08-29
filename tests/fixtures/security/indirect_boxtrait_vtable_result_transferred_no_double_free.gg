@@ -1,0 +1,54 @@
+# R47 Track B — PER-ARM POSITIVE CONTROL for the register-at-birth conversion.
+#
+# CELL: arm = `Box[Trait]` VTABLE dispatch (`methods.rs`,
+# `Box__Speaker__speak`) · disposition = the call result is TRANSFERRED ONWARD
+# into a container that outlives it, and read back afterwards.
+#
+# ⚠ THE SECOND-LIVE-SLOT REQUIREMENT. Both runtime release paths self-null by
+# design, so a second release through the SAME slot is a silent no-op — a
+# fixture that lets the result die where it was made cannot see an
+# over-registration at all. Pushing into a live Vector was the attempt to give
+# an extra drop a different slot to corrupt; the paragraph below records what
+# actually happened when that was tested.
+#
+# ⚠ GREEN AT HEAD AND AFTER, AND I COULD NOT MAKE IT RED — WHICH IS THE
+# FINDING, NOT AN EXCUSE. Two deliberate breaks were built and run against
+# this shape: (1) `call_indirect_tracked` made to register the result TWICE,
+# and (2) the enum/struct ownership transfer (`emit_enum_init_owned`'s
+# post-init unregister) disabled. Both left this program CLEAN 3/3. The reason
+# is the mechanism this whole net is built around: at THIS consuming position
+# the transfer either zeroes the source slot (`move_zero`, the collection and
+# bare-assign paths) or removes its registration, and a second `drop_if_alive`
+# through the SAME slot is a no-op because `gorget_string_free` self-nulls by
+# design. So an over-registration is not merely unobserved here, it is
+# structurally absorbed — and this fixture pins that the conversion did not
+# disturb the consuming position's value behaviour or introduce corruption.
+# The direction that CAN be observed is pinned by the three
+# `combinator_*_transferred_no_double_free.gg` controls, where the adapter's
+# Move-assign leaves the pointer in a SECOND LIVE SLOT: those go RED (ASan
+# `attempting double-free`, 3/3) against the conversion without its
+# compensating transfer.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only. Fire count: 2 calls at the
+# vtable arm, callee `Box__Speaker__speak`.
+from std.collections import Box
+from std.collections import Vector
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+void main():
+    Box[Speaker] b = Box.new(Robot("R2"))
+    Vector[String] v = Vector[String]()
+    v.push(b.speak())
+    v.push(b.speak())
+    print(v.len())
+    print(v[0])
+    print(v[1])

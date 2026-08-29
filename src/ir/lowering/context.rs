@@ -265,7 +265,7 @@ pub struct FunctionState {
     /// CoW borrow provenance: maps a CowBorrow local to the collection it
     /// borrows from. Propagated through .get() → Option → .unwrap() chain.
     /// Used by VarDecl to set CollectionRef with the correct source.
-    pub cow_borrow_sources: FxHashMap<LocalId, CollectionId>,
+    cow_borrow_sources: FxHashMap<LocalId, CollectionId>,
     /// CoW: variable names that are reassigned in the current function body.
     /// Pre-scanned before lowering. Locals in this set skip CoW aliasing.
     pub cow_reassigned_names: rustc_hash::FxHashSet<String>,
@@ -1557,6 +1557,48 @@ impl<'a> LoweringContext<'a> {
     /// Uses `needs_drop` which covers Trivial, Custom, Recursive, and collection types.
     /// Safe because Move semantics zero the source when temps are consumed by assignment.
     pub fn call_tracked(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        func: impl Into<String>,
+        args: Vec<Operand>,
+        return_type: crate::ir::types::TypeId,
+    ) -> crate::ir::types::LocalId {
+        self.call_tracked_impl(builder, func, args, return_type, None)
+    }
+
+    /// Emit an **indirect-dispatch** call and register its result for drop at
+    /// the value's birth (Core #3), exactly as [`Self::call_tracked`] does for
+    /// a statically-resolved one.
+    ///
+    /// **THE CLASS this chokepoint owns** — every call the lowering emits
+    /// whose *callee is selected at run time*, plus the sibling arms of the
+    /// helpers that emit them:
+    ///
+    /// * a closure environment's call thunk — `__Closure_N__call`,
+    ///   `__gorget_closure_call_N`;
+    /// * a `Callable[T]` parameter slot — `__callable_N`;
+    /// * a trait-object vtable slot — `Box__Trait__method`;
+    /// * the `FuncRef` arm of [`call_closure_in_adapter`], which shares the
+    ///   two above inside one helper (helper-scoped, not dispatch-scoped: the
+    ///   defect is *"a write site mints a droppable owned result and never
+    ///   registers it"*, and a statically-named callee exhibits it too —
+    ///   `5372d443` fixed exactly such a member of this class by
+    ///   register-at-birth).
+    ///
+    /// The result of such a call is a freshly materialized owned value, no
+    /// different from a direct call's. The direct-call paths have always
+    /// routed through `call_tracked`; these arms spelled `builder.call`
+    /// instead, so nothing ever registered the result and it leaked — once per
+    /// call, i.e. **unbounded inside a loop**.
+    ///
+    /// ENFORCING GUARD (Core #6/#14 — this comment is not on its own):
+    /// `indirect_dispatch_results_registered_at_birth` in `tests/lints.rs`
+    /// pins the per-file census of ALL FOUR raw dst-producing spellings
+    /// (`builder.call` / `call_clone` / `call_extern` / `call_extern_into`)
+    /// under `src/ir/lowering/`, so a NEW arm written the old way fails the
+    /// lint even though it is nowhere near this function — whichever of the
+    /// four it happens to spell.
+    pub fn call_indirect_tracked(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,
         func: impl Into<String>,
@@ -3448,7 +3490,7 @@ impl<'a> LoweringContext<'a> {
                 .or_else(|| self.collection_ref_source(builder, base));
             self.set_cow_borrow(builder, local);
             if let Some(coll) = source {
-                self.set_cow_borrow_source(local, coll);
+                self.set_cow_borrow_source(builder, local, coll);
             }
         } else {
             self.set_field_borrow(builder, local, base, field);
@@ -3635,8 +3677,47 @@ impl<'a> LoweringContext<'a> {
     /// invariant where cow_borrow locals weren't picked up by field
     /// mutation passes. The cow_borrow_sources sidecar still carries
     /// the source for cow_borrow_source() lookups.
-    pub fn set_cow_borrow_source(&mut self, local: LocalId, collection: CollectionId) {
+    ///
+    /// The stored `CollectionId::Local` names the STORAGE OWNER, never the
+    /// spelling the caller happened to reach the collection through — see
+    /// `resolve_collection_identity`. Callers pass whichever local they have
+    /// in hand; the normalization is this producer's job.
+    pub fn set_cow_borrow_source(&mut self, builder: &crate::ir::builder::FunctionBuilder, local: LocalId, collection: CollectionId) {
+        let collection = self.resolve_collection_identity(builder, collection);
         self.func_state.cow_borrow_sources.insert(local, collection);
+    }
+
+    /// Normalize a collection identity to the STORAGE OWNER before it is
+    /// stored as provenance.
+    ///
+    /// `Vector[String] alias = v` binds a second NAME to one collection;
+    /// `alias` is tagged `Borrowed { Alias(v) }`. A borrow taken through
+    /// `alias` (`alias.get(0).unwrap()`) borrows out of **`v`'s** buffer, so
+    /// the provenance that survives into the mutation passes must say `v`.
+    /// Storing the spelling instead makes every downstream identity
+    /// comparison miss: the `source_mut_unsafe` name query
+    /// (`stmts/mod.rs`, keyed on `builder.local_name`) never sees the
+    /// prescan's `v` mutations, so the lazy rescue is never emitted, and
+    /// `cow_collection_refs_for_id`'s `CollectionElement(c) == t` equality
+    /// never matches the mutated root, so the sever walk skips the view.
+    /// The result is that WHICH NAME the view is spelled through decides
+    /// whether the program reads freed memory.
+    ///
+    /// This is the single resolution point for that identity (Layering
+    /// rule 4, "resolve once, write through"): both producers normalize
+    /// here, so no consumer has to re-derive it or is allowed to disagree.
+    /// `FieldPath` identities are structural paths, not locals, and pass
+    /// through untouched. `cow_resolve_root` is idempotent, so re-storing an
+    /// already-resolved identity is a no-op.
+    fn resolve_collection_identity(
+        &self,
+        builder: &crate::ir::builder::FunctionBuilder,
+        collection: CollectionId,
+    ) -> CollectionId {
+        match collection {
+            CollectionId::Local(l) => CollectionId::Local(self.cow_resolve_root(builder, l)),
+            CollectionId::FieldPath(_) => collection,
+        }
     }
 
     /// Look up the source collection for a CowBorrow local.
@@ -3662,7 +3743,11 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Mark a local as a collection element reference.
+    ///
+    /// Like `set_cow_borrow_source`, the recorded `CollectionElement` names
+    /// the STORAGE OWNER, not the spelling — `resolve_collection_identity`.
     pub fn set_collection_ref(&mut self, builder: &mut crate::ir::builder::FunctionBuilder, local: LocalId, collection: CollectionId) {
+        let collection = self.resolve_collection_identity(builder, collection);
         let idx = local.0 as usize;
         if idx < builder.locals.len() {
             builder.locals[idx].ownership = match collection {
@@ -4146,6 +4231,39 @@ impl<'a> LoweringContext<'a> {
                     self.cow_materialize_view_lazy_in_place(builder, ref_local, flag, span);
                     continue;
                 }
+                // Skip ANONYMOUS ELEMENT BORROWS — the sibling of Case 6's
+                // named-locals filter, and required for the same reason it
+                // states there ("duplicate clones of stale Ptr values").
+                //
+                // The predicate is the ABSENCE OF A NAME HINT rather than
+                // `is_named_local`, because the name hint is exactly what
+                // `cow_materialize_collection_ref` rebinds through: no hint,
+                // no landing site for the clone. (It is also the typed field
+                // on `Local`, not a `func_state` proxy.)
+                //
+                // `cow_materialize_collection_ref` rebinds the element by its
+                // NAME HINT. An anonymous Ptr temp — the `v[0]` index-load
+                // result, whose value the var-decl has ALREADY eagerly cloned
+                // into the user's variable — has no name to rebind, so the
+                // emitted clone lands in a throwaway local that is dropped
+                // unread. It is not merely wasted work: it clones FROM the
+                // element pointer, and on the second iteration of a
+                // reallocating loop that pointer has already been freed, so
+                // the "rescue" is itself the use-after-free.
+                //
+                // The filter is on Ptr-typed refs specifically, NOT on every
+                // anonymous ref. A SLICE (`v[a:b]`) is tagged through the same
+                // producer but is a collection VALUE, not an element borrow —
+                // it is anonymous, it IS read (the var-decl assign consumes
+                // it), and it needs the clone to reach its owned slot. Only
+                // the Ptr shape is a borrow with nothing to rebind.
+                let ref_slot = &builder.locals[ref_local.0 as usize];
+                let ref_is_ptr_temp = ref_slot.name_hint.is_none()
+                    && matches!(
+                        self.type_registry.get(ref_slot.type_id),
+                        Some(crate::ir::types::GirType::Ptr(_) | crate::ir::types::GirType::MutPtr(_))
+                    );
+                if ref_is_ptr_temp { continue; }
                 // Only sever if the ref is still live (not already moved/reassigned)
                 if self.is_ref_local(builder, ref_local) {
                     self.cow_materialize_collection_ref(builder, ref_local, span);

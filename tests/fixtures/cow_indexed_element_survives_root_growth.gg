@@ -1,0 +1,39 @@
+# REGRESSION — an element read out with `v[i]` survives the collection
+# growing past a reallocation, and does so the same way whether the
+# collection is named directly or through an alias.
+#
+#     String s = v[0]          # rc 139 SIGSEGV before this was fixed
+#     String s = alias[0]      # rc 0 -- for a reason unrelated to safety
+#
+# CELL: producer = the INDEX-LOAD element borrow (`v[i]`), rather than the
+# `.get(i).unwrap()` chain the sibling `cow_alias_spelled_*` fixtures use.
+#
+# The var-decl eagerly clones the index-load result, so `s` already owns its
+# bytes and needs no rescue. The defect was on the OTHER side: the anonymous
+# index-load temp is tagged as a borrow into the collection, and the
+# severance walk then "materialized" it on every iteration -- cloning FROM a
+# pointer the previous iteration's realloc had already freed. The clone
+# landed in a throwaway local nobody reads, so the work was pure loss AND a
+# use-after-free. Severance now skips anonymous temps, which is the rule its
+# sibling case (field borrows) already applied for the identical reason.
+#
+# Both spellings are asserted below because they were asymmetric before:
+# the direct spelling crashed, and the alias spelling survived only because
+# a mismatched collection identity meant the severance walk never found the
+# temp at all -- an accidental green over the same defect.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = []
+    v.push(mk("hel", "lo"))
+    Vector[String] alias = v
+    String direct = v[0]
+    String spelled = alias[0]
+    int i = 0
+    while i < 64:
+        v.push(mk("fill", "er"))
+        i = i + 1
+    print(direct)
+    print(spelled)

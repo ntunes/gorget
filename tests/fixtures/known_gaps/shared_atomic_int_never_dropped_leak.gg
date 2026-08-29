@@ -1,0 +1,97 @@
+# KNOWN GAP (todo/t0732): a `shared(atomic) int` is allocated by
+# `gorget_atomic_int_new` and NEVER FREED. It leaks 8 bytes, on BOTH backends,
+# deterministically — 20/20 runs, exit 99, on EACH lane (this shape is stable;
+# see the axis note below for the shapes that are not):
+#
+#   Direct leak of 8 byte(s) in 1 object(s) allocated from:
+#     #0 __interceptor_malloc
+#     #1 gorget_atomic_int_new
+#     #2 main
+#   SUMMARY: AddressSanitizer: 8 byte(s) leaked in 1 allocation(s).
+#
+# Repro (either lane):
+#   gg build --sanitize [--backend=llvm] <this file>
+#   ASAN_OPTIONS=detect_leaks=1:exitcode=99 ./shared_atomic_int_never_dropped_leak
+#
+# ── WHY NO GATE IN THIS TREE HAS EVER SEEN IT ──
+#
+# This is the interesting half, and it is a lesson about instruments rather
+# than about atomics. The shape is already covered by a shipped fixture —
+# `tests/fixtures/security/attack_87_atomic_counter_race.gg` — and it leaks
+# there too. Nothing reports it, because every gate that could is looking
+# slightly elsewhere:
+#
+#   * `--test security` wires that fixture as `security_safe`, which runs under
+#     `ASAN_OPTS_NO_LEAK` = `detect_leaks=0`. Leak detection is OFF by design
+#     for that helper; only `security_safe_no_leak` turns it on.
+#   * `scripts/sanitize_sweep.sh` DOES run `detect_leaks=1`, but enumerates
+#     `find tests/fixtures -maxdepth 1`, so it never descends into
+#     `tests/fixtures/security/`. The two ceilings in `tests/lints.rs` are
+#     therefore top-level-fixture counts and cannot move for this.
+#   * The robustness map's `asan` lane covers its own cell corpus, not this one.
+#
+# So the leak sits in a fixture named for a memory-safety attack, inside a suite
+# named for security, and is invisible to all of it.
+#
+# ⚠ THE SWEEP DOES NOT SEE THIS FILE EITHER. `-maxdepth 1` excludes
+# `tests/fixtures/known_gaps/` exactly as it excludes `tests/fixtures/security/`,
+# so putting the repro here does not itself make it observable. What observes it
+# is the `#[ignore]`d `shared_atomic_int_is_dropped` in `tests/integration.rs`,
+# which asserts the INTENDED clean result and is the thing that flips when this
+# is fixed. The directory-scope limitation is a second reason for t0731's
+# widen-the-sweep half, not a problem this file's location solves.
+#
+# ── ⚠ FOR WHOEVER FIXES IT: THE "LANE DIVERGENCE" IS A MIRAGE ──
+#
+# On `attack_87`'s own 4-task shape the C binary reports the leak on every run
+# while the LLVM binary usually reports nothing, which reads like an LLVM-lane
+# divergence. It is not, and the reporting rate is NOT a fixed number: it is
+# load- and machine-sensitive. Measured 0/20 here; an independent reviewer
+# measured 3/10 on the same box under different load. Do not expect any
+# particular figure to reproduce — re-measure with
+#   for i in $(seq 20); do ASAN_OPTIONS=detect_leaks=1:exitcode=99 ./bin; echo $?; done
+#
+# It is a stop-the-world REACHABILITY artifact — a worker still live at exit,
+# its stack or a pool structure still referencing the block, so LSan classifies
+# it reachable rather than leaked — not different codegen. Two independent
+# checks: an extern `malloc` leak injected into the 4-spawn LLVM binary IS
+# reported, so LeakSanitizer is present and looking on that lane; and both
+# lanes report the leak on the short shape, so it is not lane-specific.
+#   gg build --emit-lir [--backend=llvm] <this>   # also byte-identical, though
+#   # that one is true by construction — LIR precedes backend selection, so it
+#   # is not independent evidence about codegen.
+# Do not go looking for an LLVM bug; there isn't one here.
+#
+# ⚠ THE AXIS IS THE WORKER BODY'S SHAPE, NOT THE SPAWN COUNT and not the
+# duration. Measured, 20 runs per cell on the LLVM lane, counting SPAWNED
+# workers (`main` excluded) throughout:
+#
+#     1 spawn  x bare c.add(1)   (this fixture)   20/20 reported
+#     2 spawns x bare c.add(1)                    20/20 reported
+#     4 spawns x bare c.add(1)                    20/20 reported
+#     2 spawns x `while i < 1`   (ONE iteration)  11/20 reported
+#     2 spawns x `while i < 10000`                 4/20 reported
+#     4 spawns x `while i < 10000` (attack_87)     0/20 reported
+#
+# Rows 2 and 4 are the isolating control: SAME spawn count, SAME single
+# increment of real work, 20/20 versus 11/20 — the only difference is that one
+# has a loop. So "use fewer tasks" is wrong (4 spawns bare is perfectly stable)
+# and even "keep the work SHORT" is not enough, because `while i < 1:` is as
+# short as work gets and still flakes.
+#
+# THE RULE IS: no loop and no suspension point in the worker body. A bare
+# statement finishes before the process exits; anything the scheduler can park
+# leaves a worker live at exit, and the instrument stops seeing the leak.
+#
+# INTENDED on both backends: stdout `1`, exit 0, and ZERO LeakSanitizer output
+# under `detect_leaks=1`. GRADUATES to a live `security_safe_no_leak` fixture
+# the round t0732 is fixed.
+
+async void bump(AtomicInt c):
+    c.add(1)
+
+async void main():
+    shared(atomic) int c = 0
+    Task[void] t = spawn bump(c)
+    t.await()
+    print(c)

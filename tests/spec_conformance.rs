@@ -45,8 +45,11 @@
 //!
 //! The three PRODUCTION floors (C/LLVM/self-host) are the count of committed
 //! fixtures each production impl reproduces today. `MIN_FIXTURES` is the TOTAL
-//! committed corpus count (the glob-emptiness guard). ALL THREE production lanes
-//! (C, LLVM, and self-host) now reach the whole corpus (floor == `MIN_FIXTURES`).
+//! committed corpus count (the glob-emptiness guard). The C and LLVM floors
+//! equal it; the SELF-HOST floor sits ONE BELOW, on `d22_slice_clamp.gg` — see
+//! `SELFHOST_MATCH_FLOOR`, which names the gap and its cause. (An earlier
+//! revision of this paragraph claimed all three lanes reached the whole corpus,
+//! contradicting the constant ten lines below it.)
 //! The former self-host staging — the floor once held FIVE below the corpus on
 //! two KNOWN, FILED gaps: the four single-owner-Callable init rejects
 //! (E_MoveWithoutOperator) the self-host typechecker did not yet enforce (it
@@ -153,9 +156,16 @@ use ggdef::{parse_frontmatter, Expect};
 // rose by all SIX (214 → 220). (The D29 chain also migrated 8 pre-existing
 // `throws` spectests the earlier corpus migration had missed — behavior-
 // preserving marks, so the count is unchanged, only their build-verdict restored.)
-const C_MATCH_FLOOR: usize = 221;
-const LLVM_MATCH_FLOOR: usize = 221;
-const SELFHOST_MATCH_FLOOR: usize = 220;
+// R47 Track D1 (+2): `reject_no_method_on_float.gg` and
+// `reject_no_method_on_string.gg` — the primitive-receiver E_NoMethodFound
+// class. ⚠ RATCHETING THESE IS PART OF ADDING A FIXTURE, not bookkeeping: the
+// floors are `matched >= FLOOR` and the glob guard is `len() >= MIN_FIXTURES`,
+// so a new fixture that is never counted in leaves every assert passing —
+// including after the fix it pins is reverted. Verified for these two: with the
+// self-host reject reverted, the SH lane MISMATCHes both and drops to 221 < 222.
+const C_MATCH_FLOOR: usize = 223;
+const LLVM_MATCH_FLOOR: usize = 223;
+const SELFHOST_MATCH_FLOOR: usize = 222;
 // SH lane doesn't yet reproduce d22_slice_clamp.gg — SH lowerer needs the
 // Range-in-index lowering wired (parser mirror lands the syntax, but the
 // lowerer's SIndex arm at self_host_lowerer/lower_expr.gg doesn't yet
@@ -164,10 +174,12 @@ const SELFHOST_MATCH_FLOOR: usize = 220;
 
 /// The glob-emptiness guard: `spectests/run` must contain at least this many
 /// `.gg` seeds or a shrunken corpus would make a lane vacuously green. This is
-/// the TOTAL seed COUNT (214 pre-D29 + the 6 D29 gate-8 seeds = 220). It EQUALS
-/// all three production MATCH floors (C, LLVM, and self-host all reject/run the
-/// whole corpus).
-const MIN_FIXTURES: usize = 221;
+/// the TOTAL seed COUNT — regenerate with `ls spectests/run/*.gg | wc -l`.
+///
+/// It equals the C and LLVM MATCH floors. The SELF-HOST floor sits ONE BELOW,
+/// on `d22_slice_clamp.gg` (see `SELFHOST_MATCH_FLOOR`); adding a fixture
+/// raises all four constants together.
+const MIN_FIXTURES: usize = 223;
 
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs

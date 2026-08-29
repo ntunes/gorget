@@ -132,6 +132,12 @@ gg build app.gg --shared            # build as shared library
 gg build app.gg --hot-reload        # build for hot code reloading
 ```
 
+`--sanitize` instruments the whole program here, because on this backend your
+code *is* C. That is not true of `--backend=llvm`, where only the runtime is
+instrumented and user-code faults go unreported — see
+[Appendix: CLI](appendix-cli.md#gg-build-filegg). The C backend is the lane to
+reach for when you are chasing a memory bug.
+
 ---
 
 ## Raw Pointers
@@ -176,5 +182,5 @@ UI iteration, and live-coding workflows.
 | Unsafe block | `unsafe: operations` | Bypass compiler safety checks |
 | Raw pointer | `RawPtr[T]` | Unmanaged pointer (FFI) |
 | C backend | `gg build` pipeline | Transpile to C, compile to native |
-| Sanitizers | `--sanitize` | Runtime bug detection |
+| Sanitizers | `--sanitize` | Runtime bug detection (fully on the C backend; leak- and runtime-side only on `--backend=llvm`) |
 | Hot reload | `directive hot-reload` | Reload code at runtime |

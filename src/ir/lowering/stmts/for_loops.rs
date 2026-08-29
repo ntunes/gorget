@@ -15,6 +15,51 @@ use super::{lower_block, lower_block_scoped, emit_pattern_bindings};
 // Shared scaffolding helpers (Layer 1 + 2 dedup from per-collection lowerings).
 // ============================================================================
 
+/// How strong an ownership claim the *producer* of a loop-minted value can
+/// honestly make. Both variants own their payload; `Fresh` is the strictly
+/// stronger "nothing else aliases this buffer".
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoopOwned {
+    /// Owned by value, but the producer cannot rule out that some other
+    /// live value aliases the same buffer — a by-value function return, or
+    /// a payload moved out of an enum.
+    ByValue,
+    /// The producer allocated it: the out-param map/set accessors deep-clone
+    /// resource keys and values, and `gorget_str_codepoint_at` materializes.
+    Fresh,
+}
+
+/// The single producer-side ownership decision for a value this file mints —
+/// **both axes at once**: the ownership tag *and* the drop registration.
+///
+/// Keeping the two together is the whole point. Deciding only one leaves the
+/// file in a split-brain state, and each half has its own failure mode:
+///
+/// * registration without a tag → the local stays `Untracked`, so the Tier 2a
+///   consume-site validator refuses to decide move-vs-clone and
+///   `for k in some_set: dst.add(k)` aborts the compiler instead of lowering;
+/// * a tag without a registration → the value is never freed, and because a
+///   leak has no stdout signature the fixture stays green while leaking.
+///
+/// `needs_drop` gates both, so Copy-typed bindings (`int`, `bool`, …) cost
+/// nothing and carry no misleading ownership tag.
+fn bind_owned_for_drop(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    local: LocalId,
+    type_id: TypeId,
+    kind: LoopOwned,
+) {
+    if !ctx.type_registry.needs_drop(type_id) {
+        return;
+    }
+    match kind {
+        LoopOwned::ByValue => ctx.set_owned(builder, local),
+        LoopOwned::Fresh => ctx.set_owned_fresh(builder, local),
+    }
+    ctx.drops.register_local(local, type_id, &ctx.type_registry);
+}
+
 /// Block IDs for a for-loop. `incr_bb` is `None` when the lowering advances
 /// the iterator inside the header (iterator protocol). `break_exit_bb` and
 /// `else_exit_bb` collapse to `exit_bb` when there is no `else` arm.
@@ -41,6 +86,95 @@ fn alloc_for_blocks(builder: &mut FunctionBuilder, has_incr: bool, has_else: boo
         (exit_bb, exit_bb)
     };
     ForBlocks { header_bb, body_bb, incr_bb, exit_bb, break_exit_bb, else_exit_bb }
+}
+
+/// How the loop reaches its iterator — the real object where that is possible,
+/// and an honest `ShallowAlias` where it is not.
+///
+/// Only the direct-Iterator arm needs this, and it needs it badly: `next(&self)`
+/// MUTATES the iterator, so the loop has to borrow the object the program will
+/// later drop — never a shallow copy of it. A copy takes the iteration state
+/// with it and leaves the original stale, so the original's drop runs against a
+/// pre-iteration view of the buffer and frees elements the loop already handed
+/// out. Every other arm walks an index and never writes through the handle, so
+/// a copy is harmless there — which is why the shallow copy went unnoticed.
+///
+/// Derived from the operand as it stood BEFORE `deref_ptr_collection_iterable`,
+/// because that helper materializes exactly the bit-copy this must see past: a
+/// resource FIELD read lowers to a `Ptr`, and the helper stores the pointee
+/// into a fresh value-typed local. The Ptr test is that helper's OWN gate, run
+/// through the same `pointee_type` accessor, so the two can never disagree
+/// about which sources are pointer-shaped — a private re-derivation here would
+/// drift the moment either side moved.
+///
+/// `None` means "not addressable" — a literal, or a shape neither operand
+/// exposes as a place — and the caller materializes a local as before.
+fn iterator_source_place(
+    ctx: &mut LoweringContext,
+    builder: &FunctionBuilder,
+    pre_deref: &Operand,
+    pre_deref_type: TypeId,
+    post_deref: &Operand,
+) -> Option<IteratorRef> {
+    // A local that BORROWS a param holds the caller's POINTER in its slot while
+    // its GIR type stays the pointee's value type, so neither `&local` nor
+    // `*local` addresses the caller's object: the first takes the address of a
+    // materialized copy, the second dereferences a value. The loop cannot reach
+    // the real iterator through this shape, and says so rather than pretending.
+    if let Operand::Copy(p) | Operand::Move(p) = pre_deref {
+        if p.projections.is_empty() {
+            let borrows_a_param = builder.locals.get(p.local.0 as usize).map_or(false, |l| {
+                matches!(
+                    &l.ownership,
+                    crate::ir::LocalOwnership::Borrowed {
+                        origin: crate::ir::BorrowOrigin::Param(_),
+                        ..
+                    }
+                )
+            });
+            if borrows_a_param {
+                return match post_deref {
+                    Operand::Copy(q) | Operand::Move(q) => {
+                        Some(IteratorRef::ShallowAlias(q.clone()))
+                    }
+                    _ => None,
+                };
+            }
+        }
+    }
+    let pointee = ctx.pointee_type(pre_deref_type);
+    let pointee_is_string = pointee.map_or(false, |p| ctx.type_mapper.is_string_type(p));
+    if pointee.is_some() && !pointee_is_string {
+        if let Operand::Copy(p) | Operand::Move(p) = pre_deref {
+            if p.projections.is_empty() {
+                return Some(IteratorRef::Borrow(Place {
+                    local: p.local,
+                    projections: vec![Projection::Deref],
+                }));
+            }
+        }
+    }
+    match post_deref {
+        Operand::Copy(p) | Operand::Move(p) => Some(IteratorRef::Borrow(p.clone())),
+        _ => None,
+    }
+}
+
+/// How the direct-Iterator arm reaches its iterator for the per-iteration
+/// `next(&self)` call — and, with it, whether the elements `next()` yields are
+/// the loop's to drop.
+#[derive(Clone)]
+enum IteratorRef {
+    /// A place holding the real iterator. `next()` advances the object the
+    /// program will later drop, so the elements it hands out are genuinely
+    /// transferred to the loop and the loop owes each one a drop.
+    Borrow(Place),
+    /// A shallow bit-copy of an iterator the loop cannot address — see
+    /// `iterator_source_place`. `next()` advances the COPY, so the caller's
+    /// object still believes it owns everything the loop was handed: those
+    /// elements are BORROWS, and registering them (or letting the body move
+    /// one out) would free the caller's data twice.
+    ShallowAlias(Place),
 }
 
 /// Bind `iter_op` to a fresh local. Resource-typed iters use `Borrow` (the
@@ -89,6 +223,7 @@ fn emit_state_filter(
     idx_local: LocalId,
     incr_bb: BlockId,
 ) -> BlockId {
+    // drop-disposition: NONE — `I64_TYPE` slot state, nothing to own or drop.
     let state = builder.call_extern(
         "gorget_map_iter_state",
         vec![FunctionBuilder::copy(ptr_local), FunctionBuilder::copy(idx_local)],
@@ -361,8 +496,11 @@ pub(super) fn lower_for(
     // slot_kind=BorrowedPtr without going through a value-typed shallow
     // alias. For collections, auto-deref the Ptr (shared with the list
     // comprehension via `deref_ptr_collection_iterable`).
+    let pre_deref_op = iter_op.clone();
+    let pre_deref_type = iter_type;
     let (iter_op, iter_type) =
         super::super::exprs::deref_ptr_collection_iterable(ctx, builder, iter_op, iter_type);
+    let iter_place = iterator_source_place(ctx, builder, &pre_deref_op, pre_deref_type, &iter_op);
 
     // Extract the binding name (or use a temp for pattern destructuring)
     let var_name = if let Pattern::Binding(name) = &pattern.node {
@@ -373,7 +511,7 @@ pub(super) fn lower_for(
 
     dispatch_for_source_with(
         ctx, builder, &var_name, iter_op, iter_type, iterable, pattern,
-        iter_source_coll, write_through, else_arm,
+        iter_source_coll, write_through, else_arm, iter_place,
         &mut |ctx, builder| lower_block(ctx, builder, body),
     );
 }
@@ -400,6 +538,9 @@ fn dispatch_for_source_with(
     iter_source_coll: Option<crate::ir::lowering::context::CollectionId>,
     write_through: bool,
     else_arm: Option<&Block>,
+    // How the iterator is reached, per `iterator_source_place` — used only by
+    // the direct-Iterator arm, which mutates through it.
+    iter_place: Option<IteratorRef>,
     body_fn: &mut dyn FnMut(&mut LoweringContext, &mut FunctionBuilder),
 ) -> bool {
     if ctx.type_mapper.is_string_type(iter_type) {
@@ -439,7 +580,7 @@ fn dispatch_for_source_with(
                 // loop had been emitted when `body_fn` had never run — which
                 // is how the comprehension arms ended up asserting
                 // "body_fn always runs" over a value that was `None`.
-                lower_for_iterable_with(ctx, builder, var_name, iter_op, &type_name, body_fn, else_arm, pattern)
+                lower_for_iterable_with(ctx, builder, var_name, iter_op, &type_name, body_fn, else_arm, pattern, iter_place)
             } else {
                 false
             }
@@ -570,6 +711,7 @@ fn lower_for_string_with(
 
     // cplen = gorget_utf8_codepoint_len((unsigned char)data[byte_pos])
     // We'll call this as an extern that takes a Str and byte offset → returns int
+    // drop-disposition: NONE — `I64_TYPE` return, nothing to own or drop.
     let cplen = builder.call_extern(
         "gorget_utf8_codepoint_len_at",
         vec![FunctionBuilder::copy(iter_local), FunctionBuilder::copy(byte_pos)],
@@ -589,16 +731,15 @@ fn lower_for_string_with(
         owned_string_type,
     );
     ctx.register_local(var_name, ch_local, owned_string_type);
-    ctx.drops.register_local(ch_local, owned_string_type, &ctx.type_registry);
-    // Tag FreshOwned so the consume-site validator sees a concrete state at
-    // downstream sinks (e.g., `stack.push(ch)` in
-    // `string_algorithms::is_balanced`). Without this the local stays at
-    // default Untracked, surfaced by the Tier 2a `consume_externs`
-    // promotion 2026-05-12. NOTE the value is actually a cap=0 VIEW (see
-    // above) — the tag is run-proven sound because every owning consume
-    // site routes through the collection-put materialize hooks / boundary
-    // clones, which upgrade cap=0 views on entry.
-    ctx.set_owned_fresh(builder, ch_local);
+    // The FreshOwned tag lets the consume-site validator see a concrete
+    // state at downstream sinks (e.g. `stack.push(ch)` in
+    // `string_algorithms::is_balanced`); without it the local stays
+    // `Untracked`, which the Tier 2a `consume_externs` promotion rejects.
+    // NOTE the value is actually a cap=0 VIEW (see above) — the tag is
+    // run-proven sound because every owning consume site routes through the
+    // collection-put materialize hooks / boundary clones, which upgrade
+    // cap=0 views on entry.
+    bind_owned_for_drop(ctx, builder, ch_local, owned_string_type, LoopOwned::Fresh);
 
     // Lower the body
     body_fn(ctx, builder);
@@ -665,6 +806,9 @@ fn bind_for_vector_element(
         return None;
     }
     let ptr_type = ctx.register_ptr_type(elem_type);
+    // drop-disposition: BORROW — a `Ptr` handle into the collection's own
+    // storage. The collection owns the element; registering here would free
+    // it out from under the collection.
     let elem = builder.index_load_borrow(
         Place::local(iter_local),
         FunctionBuilder::copy(idx),
@@ -694,7 +838,7 @@ fn bind_for_vector_element(
     // identities only — an unnamed iterable temp carries no identity that
     // downstream mutation tracking could route back to.
     if let Some(src) = iter_source_coll {
-        ctx.set_cow_borrow_source(elem, src);
+        ctx.set_cow_borrow_source(builder, elem, src);
     }
     // Borrow alias — collection owns the data; do NOT register for drop.
     Some(elem)
@@ -790,6 +934,9 @@ fn lower_for_array_with(
         return;
     }
 
+    // drop-disposition: CONDITIONAL, on the element type — see below. This
+    // arm binds a BORROW, not an owned value, so it deliberately does not
+    // route through `bind_owned_for_drop`.
     let elem = builder.index_load_borrow(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
     ctx.register_local(var_name, elem, elem_type);
     // String borrows are pointer copies — do NOT register for drops.
@@ -1013,6 +1160,9 @@ fn lower_for_enumerate(
         return;
     }
 
+    // drop-disposition: CONDITIONAL, on the element type — the `.enumerate()`
+    // sibling of the plain-array arm above, with the same ratified
+    // String-borrow carve-out. Binds a BORROW, so not `bind_owned_for_drop`.
     let elem = builder.index_load_borrow(Place::local(iter_local), FunctionBuilder::copy(idx), elem_type);
     if let Pattern::Binding(elem_name) = &parts[1].node {
         ctx.register_local(elem_name, elem, elem_type);
@@ -1073,6 +1223,7 @@ fn lower_for_dict_with(
     builder.assign(Place::local(oi), Operand::Constant(Constant::I64(0)));
 
     // limit = cap (iterate over all slots, check states for USED)
+    // drop-disposition: NONE — `I64_TYPE` slot count, nothing to own or drop.
     let limit = builder.call_extern(
         "gorget_map_iter_cap",
         vec![FunctionBuilder::copy(dict_ptr)],
@@ -1113,37 +1264,39 @@ fn lower_for_dict_with(
             let k_local = builder.add_local(key_type, Some(&k_name));
             let k_ptr_type = ctx.register_ptr_type(key_type);
             let k_ptr = builder.borrow_mut(Place::local(k_local), k_ptr_type);
+            // `gorget_map_iter_key` writes through its out-param and then runs
+            // the map's `key_clone` hook, so resource keys arrive as an
+            // INDEPENDENT owned copy of the map's storage
+            // (`runtime_map.c:1211-1226`). Both axes below.
             builder.call_extern_void(
                 "gorget_map_iter_key",
                 vec![FunctionBuilder::copy(dict_ptr), FunctionBuilder::copy(idx), FunctionBuilder::copy(k_ptr)],
             );
             ctx.register_local(&k_name, k_local, key_type);
-            // The accessor wrote an OWNED (resource-cloned) key into `k_local`
-            // via its out-param — register it for drop-at-scope-exit, else the
-            // clone leaks once per iteration (#11). `register_local` no-ops for
-            // Copy-typed keys (int, bool), so only resource keys cost a drop.
-            ctx.drops.register_local(k_local, key_type, &ctx.type_registry);
+            bind_owned_for_drop(ctx, builder, k_local, key_type, LoopOwned::Fresh);
 
             let v_local = builder.add_local(val_type, Some(&v_name));
             let v_ptr_type = ctx.register_ptr_type(val_type);
             let v_ptr = builder.borrow_mut(Place::local(v_local), v_ptr_type);
+            // Same contract as the key accessor — `val_clone` on the way out.
             builder.call_extern_void(
                 "gorget_map_iter_value",
                 vec![FunctionBuilder::copy(dict_ptr), FunctionBuilder::copy(idx), FunctionBuilder::copy(v_ptr)],
             );
             ctx.register_local(&v_name, v_local, val_type);
-            ctx.drops.register_local(v_local, val_type, &ctx.type_registry);
+            bind_owned_for_drop(ctx, builder, v_local, val_type, LoopOwned::Fresh);
         }
         Pattern::Binding(name) => {
             let k_local = builder.add_local(key_type, Some(name));
             let k_ptr_type = ctx.register_ptr_type(key_type);
             let k_ptr = builder.borrow_mut(Place::local(k_local), k_ptr_type);
+            // Owned clone via the out-param — see the tuple arm above.
             builder.call_extern_void(
                 "gorget_map_iter_key",
                 vec![FunctionBuilder::copy(dict_ptr), FunctionBuilder::copy(idx), FunctionBuilder::copy(k_ptr)],
             );
             ctx.register_local(name, k_local, key_type);
-            ctx.drops.register_local(k_local, key_type, &ctx.type_registry);
+            bind_owned_for_drop(ctx, builder, k_local, key_type, LoopOwned::Fresh);
         }
         _ => {}
     }
@@ -1199,6 +1352,7 @@ fn lower_for_set_with(
     builder.assign(Place::local(i_local), Operand::Constant(Constant::I64(0)));
 
     // limit: ordered uses order_len, unordered uses cap
+    // drop-disposition: NONE (both arms) — `I64_TYPE` bounds.
     let limit = if is_ordered {
         builder.call_extern(
             "gorget_map_iter_order_len",
@@ -1206,6 +1360,7 @@ fn lower_for_set_with(
             I64_TYPE,
         )
     } else {
+        // drop-disposition: NONE — `I64_TYPE` bound.
         builder.call_extern(
             "gorget_map_iter_cap",
             vec![FunctionBuilder::copy(set_ptr)],
@@ -1232,6 +1387,7 @@ fn lower_for_set_with(
     // Ordered sets index through `order[]`; unordered sets walk `states[]` directly.
     // Both paths still need a state-USED filter (ordered: stale tombstones in order).
     let key_idx = if is_ordered {
+        // drop-disposition: NONE — `I64_TYPE` slot index.
         let real_i = builder.call_extern(
             "gorget_map_iter_order",
             vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(i_local)],
@@ -1243,7 +1399,9 @@ fn lower_for_set_with(
     };
     emit_state_filter(builder, set_ptr, key_idx, incr_bb);
 
-    // Bind element via output-parameter call.
+    // Bind element via output-parameter call. `gorget_map_iter_key` runs the
+    // set's `key_clone` hook on the way out (`runtime_map.c:1211-1226`), so a
+    // resource element arrives as an independent owned copy — both axes below.
     let elem_local = builder.add_local(elem_type, Some(var_name));
     let elem_ptr_type = ctx.register_ptr_type(elem_type);
     let elem_ptr = builder.borrow_mut(Place::local(elem_local), elem_ptr_type);
@@ -1252,10 +1410,7 @@ fn lower_for_set_with(
         vec![FunctionBuilder::copy(set_ptr), FunctionBuilder::copy(key_idx), FunctionBuilder::copy(elem_ptr)],
     );
     ctx.register_local(var_name, elem_local, elem_type);
-    // Owned (resource-cloned) element from the out-param accessor — register
-    // for drop-at-scope-exit so resource elements don't leak per iteration
-    // (#11). No-ops for Copy-typed elements.
-    ctx.drops.register_local(elem_local, elem_type, &ctx.type_registry);
+    bind_owned_for_drop(ctx, builder, elem_local, elem_type, LoopOwned::Fresh);
 
     body_fn(ctx, builder);
 
@@ -1286,6 +1441,10 @@ fn lower_for_iterable_with(
     body_fn: &mut dyn FnMut(&mut LoweringContext, &mut FunctionBuilder),
     else_arm: Option<&Block>,
     pattern: &Spanned<Pattern>,
+    // How the iterator is reached (`iterator_source_place`). The
+    // direct-Iterator branch mutates through it, so it must reach the real
+    // object and not a copy.
+    iter_place: Option<IteratorRef>,
 ) -> bool {
     // 1. Find the iter() method for this type, or — if the type implements
     // Iterator directly (has `next()` but no `iter()`) — treat `self` as the
@@ -1356,23 +1515,66 @@ fn lower_for_iterable_with(
         .unwrap_or("int64_t");
     let elem_type = ctx.type_mapper.lookup_named(elem_c_type).unwrap_or(I64_TYPE);
 
-    // 5. Store the iterable and (optionally) call iter(). The collection_local
-    // is a non-owning view into the caller's data — same shape as the deref-Ptr
-    // case at line 54.
-    let (collection_local, iter_type_full) = init_borrow_iter_local(ctx, builder, iter_op);
-
-    let iterator_local = if let Some(ref iter_fn) = iter_fn_name {
-        // Iterable path: Call iter(&collection) → iterator
+    // 5. Bind the iterator. The two paths have OPPOSITE ownership, so both
+    // ownership axes — drop registration and the ownership tag — are decided
+    // HERE, per branch, at the producer. Same shape as `lower_for_string_with`'s
+    // three-way `iter_local` decision (`source_is_owning_named` /
+    // `source_is_ptr_typed` / owned): the borrow branches tag a reference and
+    // register nothing, the owning branch registers the drop.
+    let iterator_place = if let Some(ref iter_fn) = iter_fn_name {
+        // ── OWNED branch ──────────────────────────────────────────────
+        // `iter(&collection)` mints a FRESH iterator object, returned by
+        // value. `collection_local` is a non-owning view into the caller's
+        // data — `init_borrow_iter_local`'s resource-type `AssignMode::Borrow`
+        // — so only the iterator itself is owned here.
+        let (collection_local, iter_type_full) = init_borrow_iter_local(ctx, builder, iter_op);
         let self_ptr_type = ctx.register_ptr_type(iter_type_full);
         let self_ref = builder.borrow(Place::local(collection_local), self_ptr_type);
-        builder.call_extern(
+        let iterator_local = builder.call_extern(
             iter_fn,
             vec![FunctionBuilder::copy(self_ref)],
             iter_ret_type,
-        )
+        );
+        // The callee is a user Gorget function with an `AbiKind::ByValue`
+        // return, which the post-lowering `tag_ownership` pass cannot see
+        // through `CallExtern` (it only recognises runtime symbols, and
+        // deliberately declines every other extern call). The producer
+        // knows, so the producer writes it — and registers the drop, which
+        // no post-lowering pass can do because registration needs the scope
+        // stack. Registration lands in the ENCLOSING scope: the iterator is
+        // read by `next()` on every iteration and must outlive the loop-body
+        // scope pushed further down.
+        bind_owned_for_drop(ctx, builder, iterator_local, iter_ret_type, LoopOwned::ByValue);
+        IteratorRef::Borrow(Place::local(iterator_local))
     } else {
-        // Direct-Iterator path: the collection IS the iterator.
-        collection_local
+        // ── BORROW branch ─────────────────────────────────────────────
+        // Direct-Iterator path: the collection IS the iterator, and
+        // `next(&self)` MUTATES it. Bind the SOURCE PLACE itself — never a
+        // shallow copy. A copy takes the iteration state with it and leaves
+        // the original stale, so the original's drop runs against a
+        // pre-iteration view of the buffer: that is a double-free whenever
+        // the body moves an element out (the source frees it again), and it
+        // silently defeats `VectorDrain`'s documented `Drop`, which reverses
+        // exactly the elements the caller did NOT consume.
+        // The source still owns the data, so nothing is registered and
+        // nothing is tagged on this branch — the opposite decision from the
+        // owned branch above, which is why the two cannot share a tail.
+        //
+        // `iterator_source_place` sees past the bit-copy
+        // `deref_ptr_collection_iterable` makes for a Ptr source, so a
+        // `&`-param and a resource FIELD reach their real storage too, not
+        // just a bare named local.
+        match (iter_place, iter_op) {
+            (Some(r), _) => r,
+            (None, Operand::Copy(p) | Operand::Move(p)) => IteratorRef::Borrow(p),
+            // Not a place (a constant or synthesized value): materialize one
+            // so there is something to borrow. Nothing else can observe that
+            // local, so no stale-copy hazard arises.
+            (None, other) => {
+                let (collection_local, _) = init_borrow_iter_local(ctx, builder, other);
+                IteratorRef::Borrow(Place::local(collection_local))
+            }
+        }
     };
 
     // 6. Build the loop structure. No incr_bb — `next()` advances the iterator
@@ -1385,10 +1587,19 @@ fn lower_for_iterable_with(
     // Header: call next(&iterator) → Option
     builder.switch_to(header_bb);
     let iter_ptr_type = ctx.register_mut_ptr_type(iter_ret_type);
-    let iter_ref = builder.borrow_mut(Place::local(iterator_local), iter_ptr_type);
+    let iter_ref_op = match &iterator_place {
+        IteratorRef::Borrow(place) | IteratorRef::ShallowAlias(place) => {
+            FunctionBuilder::copy(builder.borrow_mut(place.clone(), iter_ptr_type))
+        }
+    };
+    // drop-disposition: MOVED OUT — the `Some` payload is moved into
+    // `elem_local` below (`enum_field_load_move` zeroes the source field) and
+    // `elem_local` carries the drop; on the `None` exit the husk holds no
+    // payload. Registering this local as well would double-free the payload,
+    // and it is re-minted into the same slot on every iteration.
     let opt_result = builder.call_extern(
         &next_fn_name,
-        vec![FunctionBuilder::copy(iter_ref)],
+        vec![iter_ref_op],
         option_ret_type,
     );
 
@@ -1410,6 +1621,25 @@ fn lower_for_iterable_with(
     ctx.drops.push_scope(DropScopeKind::Loop);
 
     // Extract: elem = opt_result.data.Some._0
+    //
+    // `next()` returns the Option **by value**, so its `Some` payload is
+    // owned; `enum_field_load_move` moves it out and zeroes the source
+    // field. Both ownership axes are decided here, at the producer:
+    //   * ownership tag — the binding owns its payload;
+    //   * drop registration — into the Loop scope pushed just above, so
+    //     the element is dropped at the end of every iteration.
+    // Without the registration every element `next()` allocates leaks
+    // (visible as `…__next → gorget_string_clone_to_owned` frames under
+    // `gg build --sanitize`). `tag_ownership` infers the same Owned tag
+    // from the EnumFieldLoad+zero shape, but a post-lowering pass cannot
+    // register drops — it has no scope stack — so the two halves of one
+    // decision must both be made here.
+    //
+    // The exception is a `ShallowAlias` iterator: there `next()` advanced a
+    // bit-copy, so the caller's object still owns everything the loop was
+    // handed and the binding is a BORROW. Owning it would free the caller's
+    // data twice. The ownership of the ELEMENT follows the ownership of the
+    // ITERATOR — one decision, taken once, at the top of this function.
     let elem_local = builder.enum_field_load_move(
         Place::local(opt_result),
         "Some",
@@ -1417,6 +1647,9 @@ fn lower_for_iterable_with(
         elem_type,
     );
     ctx.register_local(var_name, elem_local, elem_type);
+    if !matches!(iterator_place, IteratorRef::ShallowAlias(_)) {
+        bind_owned_for_drop(ctx, builder, elem_local, elem_type, LoopOwned::ByValue);
+    }
 
     // If pattern is a destructuring tuple, emit bindings
     if !matches!(pattern.node, Pattern::Binding(_)) {
@@ -1640,8 +1873,11 @@ pub(in crate::ir::lowering) fn drive_comprehension_loop(
     // dispatch the statement-`for` uses. Auto-deref first — the
     // statement-`for` does the same at its own
     // `deref_ptr_collection_iterable` call.
+    let pre_deref_op = iter_op.clone();
+    let pre_deref_type = iter_type;
     let (iter_op, iter_type) =
         crate::ir::lowering::exprs::deref_ptr_collection_iterable(ctx, builder, iter_op, iter_type);
+    let iter_place = iterator_source_place(ctx, builder, &pre_deref_op, pre_deref_type, &iter_op);
     let pattern = Spanned::new(Pattern::Binding(var_name.to_string()), iterable.span);
     let mut wrapped = |ctx: &mut LoweringContext, builder: &mut FunctionBuilder| {
         // Branch around the push, rejoining INSIDE the callee's loop scope so
@@ -1668,6 +1904,6 @@ pub(in crate::ir::lowering) fn drive_comprehension_loop(
     // `comprehension_source_not_iterable` in `exprs/collections.rs`.
     dispatch_for_source_with(
         ctx, builder, var_name, iter_op, iter_type, iterable, &pattern,
-        None, false, None, &mut wrapped,
+        None, false, None, iter_place, &mut wrapped,
     )
 }

@@ -37,9 +37,14 @@ failure classes:
     `gg build --sanitize` (`-fsanitize=address,undefined`), runs it under
     `detect_leaks=1`, and buckets any ASan/LSan/UBSan report as SANITIZE-FAIL,
     which is a DIFFERENT outcome from a wrong value and gets its own column.
-    NB `--sanitize` is silently DROPPED under `--backend=llvm` (src/main.rs
-    parses it only on the C path), so this lane is C-ONLY and claims no LLVM
-    sanitizer coverage whatsoever.
+    NB THIS LANE IS C-ONLY AND CLAIMS NO LLVM SANITIZER COVERAGE WHATSOEVER --
+    it builds with `--sanitize` and NO `--backend`, so it gets the default
+    backend by construction. (`--sanitize` used to be silently dropped under
+    `--backend=llvm` as well, which is fixed; the flag now works there. That
+    changes nothing here, because this lane never passes it. And LLVM sanitizer
+    coverage is partial even now -- generated user code is not instrumented on
+    that backend, only the runtime -- so pointing this lane at it would not buy
+    equivalent coverage anyway.)
 
   * THE ggdef LANE SEES CORRECTNESS, WHICH LANE AGREEMENT CANNOT.  ggdef is the
     definitional interpreter -- the executable language definition. Where three
@@ -55,9 +60,9 @@ failure classes:
 
 Lanes:
     c         `gg build`                       (default; the CI lane)
-    llvm      `gg build --backend=llvm`        NB: --sanitize is silently dropped
-                                               under --backend=llvm, so this lane
-                                               is NOT sanitizer coverage
+    llvm      `gg build --backend=llvm`        NB: this lane does not pass
+                                               --sanitize, so it is NOT
+                                               sanitizer coverage
     selfhost  self-host driver --emit-c | cc   needs the driver built once:
                                                `gg build tests/fixtures/self_host_lowerer/driver.gg`
     asan      `gg build --sanitize`            C backend only; memory-validity,
@@ -546,8 +551,8 @@ def main():
                for row in rows
                if row[COL_CELL] in measured and row[COL_C] != "CONTROL"
                and measured[row[COL_CELL]]["asan"][0] == "SANITIZE-FAIL"]
-        print(f"\n=== sanitizer findings (C lane only; --sanitize is dropped "
-              f"under --backend=llvm): {len(san)} ===")
+        print(f"\n=== sanitizer findings (C lane only; the asan lane passes no "
+              f"--backend): {len(san)} ===")
         for cell, detail in sorted(san):
             # A cell that is WORKS on the C lane but SANITIZE-FAIL here is the
             # headline: correct output, invalid memory. Flagged so it cannot be

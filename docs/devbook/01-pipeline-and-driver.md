@@ -185,6 +185,17 @@ include `--strip-asserts`/`--no-strip-asserts`,
 `--clones[=…]` diagnostics. The `freestanding` target cross-compiles a UEFI PE
 application with clang+lld and stages an ESP directory (`src/main.rs:914`).
 
+Not every build-shaping flag is meaningful on every backend, and the driver
+resolves that by **rejecting the combination, never by quietly building
+something else**. `--shared`, `--target=freestanding…` and `--clones=stats` are
+C-backend-only and error out under `--backend=llvm`, each naming both halves of
+the combination; `--sanitize` instead threads through to the LLVM pipeline,
+because doing so was cheap. Implementation cost is the whole discriminator —
+the principle is uniform, and it is the same lower-or-reject rule the
+`--backend=<unknown>` check applies one level up. `add_sanitize_flags` is the
+single place the sanitizer flag set is spelled, so a newly-added compile or
+link command either routes through it or is the next silent hole.
+
 ### `run`
 Build to a tempdir, exec the binary, propagate its exit code (`src/main.rs:2897`).
 Positional args after the filename are forwarded to the program

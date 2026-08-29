@@ -6,6 +6,10 @@
 //!
 //! - [`security_safe`]       — a well-typed program that must build under
 //!                             `--sanitize` and run exit-0 with expected stdout.
+//! - [`security_safe_no_leak`] — as above, but run under `detect_leaks=1` so a
+//!                             LEAK is a hard failure. For bug classes that are
+//!                             stdout-invisible, which a `security_safe` run
+//!                             (`detect_leaks=0`) cannot see.
 //! - [`security_traps`]      — a program that intentionally performs a
 //!                             runtime-defined trap (e.g. division by zero)
 //!                             and must panic with the Gorget-level message,
@@ -16,6 +20,12 @@
 //!                             The test asserts the bug is *still* present
 //!                             (so regressions can't make it worse silently
 //!                             and so fixes force a reclassification).
+//! - [`security_safe_except_on`] — `security_safe` everywhere except ONE named
+//!                             backend, where a filed, cited compiler defect
+//!                             makes it trip. NOT a skip: on that backend it
+//!                             asserts the trip STILL happens, so fixing the
+//!                             cited item turns it red and forces the
+//!                             annotation out.
 //!
 //! When a known-unsafe bug is fixed, the test will start failing — that's
 //! the signal to reclassify as `security_safe` / `security_rejected` /
@@ -24,8 +34,27 @@
 //! To run just the security suite:
 //!     cargo test --test security
 //!
+//! ⚠ THE SUITE RUNS ON WHICHEVER BACKEND `GG_BACKEND` SELECTS. Unset means the
+//! compiler's default; `GG_BACKEND=llvm` makes this a genuinely second lane
+//! rather than a re-run of the first, which is what it was for as long as this
+//! file ignored the variable. See [`gg_command`] for which subcommands carry
+//! the flag and why, and [`backend_flag_selection_is_wired`] for the guard that
+//! keeps the wiring honest. ASan serialises on global state, so the LLVM lane
+//! wants `-- --test-threads=1`:
+//!     GG_BACKEND=llvm cargo test --test security -- --test-threads=1
+//!
+//! ⚠ `cargo test --test security -- --ignored` fails EVERYTHING it runs, by
+//! design — 25 of 25 at the time of writing. Those tests assert INTENDED states
+//! that do not hold yet, so failing is what they are for; a bare `--ignored`
+//! sweep is not a health check. One of the 25 is [`backend_flag_wiring_inner_probe`],
+//! a child-process probe that requires `GG_BACKEND` to be set and whose parent
+//! asserts it FAILS when the variable is unset — do not file it; it is exercised
+//! through [`backend_flag_selection_is_wired`].
+//!
 //! The full build includes `-fsanitize=address,undefined` via the
-//! compiler's own `--sanitize` flag.
+//! compiler's own `--sanitize` flag. ⚠ On `--backend=llvm` that instruments the
+//! runtime only, not generated user code (`todo/t0727`): leaks and
+//! runtime-side faults are caught there, user-code faults are not.
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -66,10 +95,174 @@ fn test_binary_timeout() -> Duration {
     )
 }
 
+/// The backend selector, mirroring `tests/integration.rs`'s helper of the same
+/// name. `None` (or an empty value) means the compiler's default, `c-lir`.
+fn gg_backend() -> Option<String> {
+    std::env::var("GG_BACKEND").ok().filter(|s| !s.is_empty())
+}
+
+/// Invoke the compiler under test.
+///
+/// When `GG_BACKEND` is set, append `--backend=<b>` to `gg build` — and ONLY
+/// to `build`. Until this existed, `.github/workflows/ci.yml`'s
+/// "Security tests (LLVM + ASan + UBSan)" job set `GG_BACKEND: llvm` and this
+/// file read it nowhere, so that job was a verbatim re-run of the C suite: a
+/// whole lane of this project's sanitizer evidence was a copy of the other
+/// lane's. (`--sanitize` being a silent no-op on that backend, t0723, is the
+/// same vacuity one layer down — a suite that DID select the backend would
+/// still have asserted nothing.)
+///
+/// ⚠ `build` only, and the reason is NOT that the CLI rejects the flag
+/// elsewhere — it does not; `gg check --backend=llvm` exits 0 and ignores it.
+/// The reason is that a backend is only meaningful where code is GENERATED.
+/// `security_rejected` uses `gg check`, which stops at semantic analysis, so
+/// its 32 fixtures are backend-independent by construction; appending the flag
+/// there would advertise a lane distinction that does not exist.
 fn gg_command(subcommand: &str) -> Command {
     let mut cmd = Command::new(env!("CARGO"));
     cmd.args(["run", "--quiet", "--", subcommand]);
+    if let Some(flag) = backend_flag_for(subcommand, gg_backend().as_deref()) {
+        cmd.arg(flag);
+    }
     cmd
+}
+
+/// The backend-flag DECISION, split out of [`gg_command`] so its branches can
+/// be enumerated without an environment.
+///
+/// WARNING: testing this function alone is NOT a guard on the mechanism, and
+/// mistaking it for one is how the original defect comes back. The bug this
+/// replaces was not a wrong decision — it was a decision nothing ever
+/// CONSULTED: the LLVM CI job read as coverage for an unknown period while
+/// `GG_BACKEND` went unread here. A guard that only checks this function stays
+/// green while `gg_command` stops calling it. See
+/// [`backend_flag_selection_is_wired`], which asserts on the command
+/// `gg_command` actually builds.
+fn backend_flag_for(subcommand: &str, backend: Option<&str>) -> Option<String> {
+    match backend {
+        // `build` is the only subcommand this file uses that GENERATES code,
+        // and a backend is meaningless anywhere else. See `gg_command`.
+        Some(b) if subcommand == "build" => Some(format!("--backend={b}")),
+        _ => None,
+    }
+}
+
+/// Collect a `Command`'s arguments as plain strings, so a guard can assert on
+/// what was actually constructed rather than on what a helper would return.
+fn args_of(cmd: &Command) -> Vec<String> {
+    cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+}
+
+/// The inner half of [`backend_flag_selection_is_wired`], re-executed as a
+/// CHILD process with `GG_BACKEND` set.
+///
+/// `#[ignore]`d because it asserts a positive that holds only when the variable
+/// is set; it is meant to be reached by its parent, not by a sweep. It is
+/// nonetheless a real assertion on the real `gg_command`.
+///
+/// Why a child process rather than `std::env::set_var`: this suite runs its
+/// tests in parallel and each one SPAWNS `cargo run`, which inherits the
+/// process environment. Mutating `GG_BACKEND` in-process — even briefly, even
+/// under `#[serial]`, which does not exclude non-serial tests — could hand a
+/// concurrently-spawning fixture the wrong backend and produce a wrong-lane
+/// result. Setting the variable on a child is race-free by construction.
+#[test]
+#[ignore = "inner probe: re-executed by backend_flag_selection_is_wired with GG_BACKEND set"]
+fn backend_flag_wiring_inner_probe() {
+    let backend = gg_backend().expect(
+        "inner probe requires GG_BACKEND to be set; it is re-executed by \
+         backend_flag_selection_is_wired, not run directly",
+    );
+    let build = args_of(&gg_command("build"));
+    assert!(
+        build.contains(&format!("--backend={backend}")),
+        "`gg_command(build)` did not carry `--backend={backend}` with GG_BACKEND={backend} \
+         set. THE SELECTOR IS NOT WIRED: the LLVM security job is running the C suite under \
+         a different name, and ~180 fixtures of a whole lane's memory-safety evidence are a \
+         copy of the other lane's.\nargs: {build:?}"
+    );
+    let check = args_of(&gg_command("check"));
+    assert!(
+        !check.iter().any(|a| a.starts_with("--backend")),
+        "`gg_command(check)` carried a backend flag. `check` does no codegen, so this \
+         advertises a lane distinction that does not exist.\nargs: {check:?}"
+    );
+}
+
+/// Guard for the selector itself: `--test security` must actually run on the
+/// backend it was asked for.
+///
+/// It pins the WIRING that `.github/workflows/ci.yml`'s "Security tests (LLVM +
+/// ASan + UBSan)" job silently depends on. That job sets `GG_BACKEND: llvm`
+/// and, for as long as this file ignored it, ran the C suite a second time
+/// under an LLVM name — ~180 fixtures' worth of a whole lane's memory-safety
+/// evidence that was a copy of the other lane's. Nothing was red; there was
+/// simply nothing there.
+///
+/// WARNING: it asserts on the command `gg_command` ACTUALLY BUILDS, not on
+/// [`backend_flag_for`]'s return value. That distinction is the entire point.
+/// An earlier version of this guard checked only the pure decision function and
+/// stayed GREEN when `gg_command` was edited to stop consulting the environment
+/// — i.e. when the exact original defect was reintroduced. A guard that cannot
+/// catch its own class is worse than none, because it reads as coverage.
+///
+/// The environment is supplied to a CHILD process
+/// ([`backend_flag_wiring_inner_probe`]) rather than mutated in this one; see
+/// that function for why.
+#[test]
+fn backend_flag_selection_is_wired() {
+    let exe = std::env::current_exe().expect("test binary path");
+    let probe = |set: bool| -> std::process::Output {
+        let mut c = Command::new(&exe);
+        c.args(["--exact", "backend_flag_wiring_inner_probe", "--ignored", "--nocapture"]);
+        if set { c.env("GG_BACKEND", "llvm"); } else { c.env_remove("GG_BACKEND"); }
+        c.output().expect("re-exec the test binary")
+    };
+
+    // 1. THE WIRING, under an environment we control.
+    let out = probe(true);
+    assert!(
+        out.status.success(),
+        "the wiring probe FAILED under GG_BACKEND=llvm — `gg_command` is not consulting \
+         the environment.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // 2. ...and the negative, so an unconditionally-appended flag is caught too.
+    let out = probe(false);
+    assert!(
+        !out.status.success(),
+        "the wiring probe PASSED with GG_BACKEND unset. It requires the variable, so either \
+         `gg_backend()` is inventing a value or `gg_command` appends a backend \
+         unconditionally FOR EVERY SUBCOMMAND. (A build-only unconditional append is \
+         caught by the ambient-environment branch below, not here.)"
+    );
+
+    // 3. The decision's branches: through the real command for the ambient
+    //    environment, through the pure function for values it cannot be.
+    let ambient = gg_backend();
+    let build = args_of(&gg_command("build"));
+    match ambient.as_deref() {
+        Some(b) => assert!(
+            build.contains(&format!("--backend={b}")),
+            "ambient GG_BACKEND={b} is not reaching `gg build`.\nargs: {build:?}"
+        ),
+        None => assert!(
+            !build.iter().any(|a| a.starts_with("--backend")),
+            "no GG_BACKEND is set, yet `gg build` carried a backend flag.\nargs: {build:?}"
+        ),
+    }
+    assert_eq!(
+        backend_flag_for("build", Some("c-lir")).as_deref(),
+        Some("--backend=c-lir"),
+        "the selector must pass through whatever it is given, not just `llvm`."
+    );
+    assert_eq!(backend_flag_for("build", None), None);
+    // `check` does no codegen, so a backend there would be noise advertising a
+    // lane distinction that does not exist (`security_rejected`'s 32 fixtures).
+    assert_eq!(backend_flag_for("check", Some("llvm")), None);
+    assert_eq!(backend_flag_for("check", None), None);
 }
 
 fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std::process::Output {
@@ -250,6 +443,78 @@ fn security_safe(name: &str, expected_stdout: &str) {
     cleanup(&fp);
 }
 
+/// A [`security_safe`] fixture that a filed, cited **backend-specific compiler
+/// defect** currently makes trip on ONE lane.
+///
+/// ⚠ THIS IS NOT A SKIP, AND IT MUST NEVER BECOME ONE. On every other backend
+/// the fixture is held to the full `security_safe` contract. On the named
+/// backend it is held to the INVERSE: the sanitizer trip must **still happen**.
+/// So the moment the cited defect is fixed, this test goes RED and forces the
+/// annotation to be removed — the same self-retiring contract
+/// [`security_known_unsafe`] uses, and the reason a lane exemption here cannot
+/// quietly outlive its cause. A plain skip would rot into a permanent waiver
+/// and re-create, one lane down, exactly the vacuum this file's positive
+/// control exists to prevent.
+///
+/// `item` is the `todo/` id, and it is not decoration: the defect must be
+/// filed with a durable `known_gaps` repro asserting the INTENDED behaviour,
+/// so what the language should do is pinned by an artifact rather than by this
+/// comment.
+///
+/// `trip_marker` names the SPECIFIC sanitizer class expected — e.g.
+/// `"memcpy-param-overlap"`. Asserting merely "nonzero exit" or "some sanitizer
+/// output" would also be satisfied by an unrelated segfault, so the exemption
+/// would silently widen to cover a defect nobody adjudicated. Name the class
+/// the filed item describes, and nothing else.
+fn security_safe_except_on(
+    name: &str,
+    expected_stdout: &str,
+    backend: &str,
+    item: &str,
+    trip_marker: &str,
+    reason: &str,
+) {
+    if gg_backend().as_deref() != Some(backend) {
+        security_safe(name, expected_stdout);
+        return;
+    }
+    let (out, fp) = sanitize_build_and_run(name);
+    assert!(
+        out.build_ok,
+        "security_safe_except_on({name}) [{backend}]: the fixture must still BUILD — \
+         {item} is a codegen defect, not a build failure.\nstderr: {}",
+        out.build_stderr
+    );
+    assert!(out.ran, "security_safe_except_on({name}) [{backend}]: binary did not run");
+    // Whatever ran before the trip must still be CORRECT. Under
+    // `halt_on_error=1` the process aborts partway, so the full expected stdout
+    // cannot be asserted — but what was printed must be a prefix of it. Without
+    // this the exempted lane checks no output at all and a value regression
+    // there would be invisible.
+    assert!(
+        expected_stdout.trim().starts_with(out.stdout.trim()),
+        "security_safe_except_on({name}) [{backend}]: the output produced before the \
+         sanitizer trip is not a prefix of the expected output, so this fixture has a \
+         VALUE regression on top of {item}.\nexpected (full): {expected_stdout:?}\ngot: {}",
+        out.stdout
+    );
+    let tripped = out.stderr.contains(trip_marker);
+    assert!(
+        tripped,
+        "security_safe_except_on({name}) [{backend}]: this fixture is recorded as tripping \
+         the sanitizer on this backend with `{trip_marker}` because `{reason}` ({item}), \
+         and it NO LONGER DOES. \
+         If {item} was fixed, that is good news: delete this annotation, restore the plain \
+         `security_safe` call, and graduate the `known_gaps` repro {item} cites into a live \
+         fixture. Do NOT leave the annotation in place — an exemption whose cause is gone is \
+         a lane of coverage silently switched off.\nexit: {:?}\nstdout: {}\nstderr: {}",
+        out.exit_code,
+        out.stdout,
+        out.stderr
+    );
+    cleanup(&fp);
+}
+
 /// Like [`security_safe`], but runs under `detect_leaks=1` so a memory LEAK is
 /// a hard failure — not just a UAF/overflow/trap. Use for fixtures whose bug
 /// class is stdout-INVISIBLE (a leaked heap buffer produces the correct output
@@ -420,6 +685,138 @@ fn security_known_unsafe(name: &str, bug: KnownBug, reason: &str) {
                  reclassify this fixture. Reason: `{reason}`"
             );
         }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// POSITIVE CONTROL FOR THE SANITIZER ITSELF
+// ════════════════════════════════════════════════════════════════════════════
+
+/// Does `gg build --sanitize` actually produce an instrumented binary — on
+/// EVERY backend?
+///
+/// Everything else in this file assumes the answer is yes and then asserts
+/// something about the compiler. This test asserts nothing about the compiler;
+/// it checks the INSTRUMENT, so that the ~200 assertions below mean what they
+/// say. A sanitizer gate that has never been seen to go red on the lane it
+/// claims to cover is not evidence, and this one had not: `--sanitize` was a
+/// silent no-op under `--backend=llvm` for an unknown period (t0723), so every
+/// "ASan-clean on LLVM" claim in this project's history was free.
+///
+/// ── WHY TWO CELLS ──
+///
+/// The two halves of a sanitized build fail independently, and the obvious
+/// control only sees one of them:
+///
+/// | cell | what it proves | probe |
+/// |---|---|---|
+/// | 1. LINKING | the ASan runtime is in the process | a leak is reported |
+/// | 2. INSTRUMENTATION | the compiler emitted shadow checks | `__asan_report_*` is referenced by the artifact |
+///
+/// Cell 1 alone is not enough, and this is measured, not assumed:
+/// LeakSanitizer is INTERCEPTOR-based, so it works on any binary that merely
+/// LINKS libasan, whether or not a single line was instrumented. Building with
+/// the sanitize flags on the link command and NOT on the runtime compile
+/// (i.e. reverting half the t0723 fix) leaves cell 1 fully green — verified:
+/// the leak was still reported, `ldd` still listed `libasan.so.8` — while
+/// every shadow-memory check silently disappeared. Cell 2 catches exactly that
+/// revert: `__asan_report_*` references went 10 -> 0.
+///
+/// So cell 2's probe is deliberately NOT `ldd`, and NOT the presence of
+/// `__asan_*` symbols generally — both of those are satisfied by linking.
+/// `__asan_report_load8` and friends are the failure calls that INSTRUMENTED
+/// code emits inline; nothing but instrumentation puts them in the artifact.
+/// The probe is a raw byte scan for the name rather than an `nm` subprocess,
+/// which keeps it toolchain-free and identical on ELF and Mach-O.
+///
+/// ── WHY IT LOOPS THE BACKENDS INSTEAD OF READING `GG_BACKEND` ──
+///
+/// A control that only covers the lane it happens to be run on cannot tell you
+/// the other lane went vacuous. Both backends are built here on every run, so
+/// this test fails on a `cargo test --test security` with no environment set
+/// at all. That is the point: the LLVM lane's vacuity survived for as long as
+/// it did precisely because observing it required opting in.
+///
+/// The fixture leaks by construction and can never be fixed into silence —
+/// see the header of `sanitizer_positive_control_leak.gg`.
+#[test]
+fn sanitizer_gate_is_real_on_both_backends() {
+    let fp = fixture_path("sanitizer_positive_control_leak");
+    let src = std::fs::read_to_string(&fp).expect("control fixture unreadable");
+
+    for backend in ["c-lir", "llvm"] {
+        // Private per-backend directory: the two builds share a stem, and the
+        // suite is not always run single-threaded.
+        let dir = std::env::temp_dir().join(format!(
+            "gg_sanitizer_control_{backend}_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::create_dir_all(&dir);
+        let gg_path = dir.join("sanitizer_positive_control_leak.gg");
+        std::fs::write(&gg_path, &src).expect("failed to stage control fixture");
+        let exe_path = dir.join("sanitizer_positive_control_leak");
+
+        let build = run_with_deadline(
+            Command::new(env!("CARGO"))
+                .args(["run", "--quiet", "--", "build", "--sanitize"])
+                .arg(format!("--backend={backend}"))
+                .arg(&gg_path),
+            "sanitizer_positive_control_leak",
+            build_timeout(),
+        );
+        assert!(
+            build.status.success() && exe_path.exists(),
+            "positive control [{backend}]: `gg build --sanitize --backend={backend}` failed.\n\
+             stderr:\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+
+        // ── CELL 2: INSTRUMENTATION ──
+        // Read first: if this fails the binary is not worth running, and the
+        // diagnosis ("linked but not instrumented") is the one a reader is
+        // least likely to reach on their own.
+        let bytes = std::fs::read(&exe_path).expect("control binary unreadable");
+        let instrumented = bytes
+            .windows(b"__asan_report".len())
+            .any(|w| w == b"__asan_report");
+        assert!(
+            instrumented,
+            "positive control [{backend}]: the binary references no `__asan_report_*`, \
+             so NO CODE IN IT IS INSTRUMENTED — the sanitizer flags reached the link \
+             step but not the compile step, or not at all. Note the leak check below \
+             would still PASS in this state (LeakSanitizer is interceptor-based), \
+             which is why this cell exists. Look at `add_sanitize_flags` in \
+             `src/main.rs` and at every command it is called from."
+        );
+
+        // ── CELL 1: LINKING ──
+        let mut run_cmd = Command::new(&exe_path);
+        run_cmd.env("ASAN_OPTIONS", ASAN_OPTS_LEAK_CHECK);
+        run_cmd.env("UBSAN_OPTIONS", "halt_on_error=1:print_stacktrace=1");
+        let run = run_with_deadline(
+            &mut run_cmd,
+            "sanitizer_positive_control_leak",
+            test_binary_timeout(),
+        );
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            stderr.contains("LeakSanitizer: detected memory leaks"),
+            "positive control [{backend}]: a 64-byte `malloc` that is never freed was NOT \
+             reported by LeakSanitizer. `--sanitize` is not reaching the link step on this \
+             backend — the binary looks sanitized and is not, so every sanitizer assertion \
+             in this file is vacuous on this lane.\nexit: {:?}\nstdout: {}\nstderr: {stderr}",
+            run.status.code(),
+            String::from_utf8_lossy(&run.stdout)
+        );
+        assert_ne!(
+            run.status.code(),
+            Some(0),
+            "positive control [{backend}]: LeakSanitizer reported a leak but the process still \
+             exited 0, so a sanitizer trip would not fail a test that checks the exit code. \
+             Is `exitcode=99` still in ASAN_OPTS_LEAK_CHECK?\nstderr: {stderr}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -1005,7 +1402,16 @@ fn sec_63_huge_vector_capacity_traps() {
 
 #[test]
 fn sec_64_deep_option_unwrap() {
-    security_safe("attack_64_deep_option_unwrap", "42\ninner-none");
+    security_safe_except_on(
+        "attack_64_deep_option_unwrap",
+        "42\ninner-none",
+        "llvm",
+        "todo/t0729",
+        "memcpy-param-overlap",
+        "the LLVM backend emits an aggregate copy for a nested Option match as a \
+         raw memcpy between two OVERLAPPING stack slots, which is UB; the C lane is \
+         clean and is the oracle",
+    );
 }
 
 #[test]
@@ -1039,7 +1445,15 @@ fn sec_70_inline_none_nested() {
     // regress only at the top level. `level_1(None())`, `level_2(None())`,
     // `level_2(Some(None()))` all used to emit NULL-ptr-deref; now each
     // constructs the correct Option[T]::None struct from expected_type.
-    security_safe("attack_70_inline_none_nested", "-1\n42\n-2\n-1\n7");
+    security_safe_except_on(
+        "attack_70_inline_none_nested",
+        "-1\n42\n-2\n-1\n7",
+        "llvm",
+        "todo/t0729",
+        "memcpy-param-overlap",
+        "same overlapping-memcpy aggregate-copy defect as attack_64 — this is the \
+         second of the two suite fixtures it reddens, not an independent bug",
+    );
 }
 
 // ── Round 6 attacks: float casts, async panics, struct ABI, enum dispatch ─
@@ -1290,13 +1704,13 @@ fn sec_92_static_set_runtime() {
 /// closure body and returned through the closure's call thunk. Also distinct
 /// from the 3-byte thunk residual in the same report, which is a separate
 /// known residual.
+/// GRADUATED (R47 Track B) from an `#[ignore]`d known gap to a live guard.
+/// Measured 35 B / 2 allocations at pristine `f3feea79`, 3/3 runs; CLEAN 3/3
+/// once the closure call thunk's result is registered at its birth. Both
+/// allocations in the report — the boxed trait object and the vtable thunk's
+/// String return — were the same defect at two arms.
 #[test]
-#[ignore = "SECURITY KNOWN GAP (R45, found by Track A brief-review pass 16, \
-orchestrator-verified): a Boxed trait object minted in a closure and returned \
-leaks 32 bytes direct via __gorget_box_alloc_Robot <- __Closure_0__call. The \
-fixture is value-tested only, so the leak was invisible. Un-ignore when the \
-closure-return path registers the mint for drop."]
-fn known_gap_box_trait_closure_return_leaks() {
+fn box_trait_closure_return_no_leak() {
     security_safe_no_leak("box_trait_closure_return_leak", "R2");
 }
 
@@ -1488,6 +1902,24 @@ fn cow_bareassign_alias_chain_no_leak() {
     security_safe_no_leak(
         "cow_bareassign_alias_chain_leak",
         "chain-owned-tail\nchain-owned-tail\nchain-owned-tail\nchain-owned-tail",
+    );
+}
+
+#[test]
+fn cow_element_borrow_no_uaf() {
+    // Element borrows held across a reallocating growth of the collection —
+    // spelled through an alias, through the collection's own name, and via
+    // `v[i]` with no alias in the program at all. Baseline: rc 139 on both
+    // backends, and under `--sanitize` a heap-use-after-free in
+    // `gorget_string_clone_to_owned` / `gorget_string_copy_cow`.
+    //
+    // stdout is a weak instrument here: freed memory routinely still holds
+    // the right bytes, so a stdout-only net can go green over a live UAF.
+    // ASan is what adjudicates memory validity (Core #13), and it is C-lane
+    // only — the LLVM `--sanitize` path emits a binary with no ASan in it.
+    security_safe_no_leak(
+        "cow_element_borrow_uaf",
+        "hello\nhello\nhello\nhello",
     );
 }
 
@@ -2061,6 +2493,27 @@ fn sound_ctor_mover_first_rejected() {
     security_rejected("sound_ctor_mover_first_reject", "E_UseAfterMove");
 }
 
+/// LIVE — MEMORY-VALIDITY pin for the class `t0699` closed: renaming a user
+/// `&self` mutator must not change whether the program is memory-safe.
+///
+/// This cell belongs HERE and not only in the runtime corpus because neither
+/// of the other adjudicators can see it: ggdef adjudicates VALUE semantics and
+/// accepts live heap-UAFs, and stdout cannot distinguish "correct" from
+/// "crashed before flush". ASan on the real backend can.
+///
+/// RED-verified at `f3feea79` (2026-08-29, `ASAN_OPTIONS=halt_on_error=1:\
+/// detect_leaks=0:allocator_may_return_null=1`, single-threaded so
+/// `use_stacks` is not in play): `heap-use-after-free` READ of size 8 in
+/// `gorget_string_clone_to_owned` <- `Unlisted__probe`, and NOTHING for the
+/// byte-identical `Listed` half whose mutator happened to be named `resize`.
+#[test]
+fn sound_user_mutator_name_invariant_uaf() {
+    security_safe(
+        "sound_user_mutator_name_invariant_uaf",
+        "helloworld\nhelloworld",
+    );
+}
+
 /// LIVE — the intra-function sever. Green today; goes RED if a chokepoint
 /// rejects on "a view of `v` exists in scope" instead of "a view of `v` is live
 /// at this call".
@@ -2195,4 +2648,325 @@ fn guard_get_into_index_set_temp_fixed() {
 #[test]
 fn guard_get_named_local_into_dict_put_pin() {
     security_safe("guard_get_named_local_into_dict_put", "1");
+}
+
+// ── R47 Track B: indirect-dispatch call results are registered at their birth.
+//
+// Nine lowering arms minted a freshly-owned, droppable call result with a raw
+// `builder.call` and registered it nowhere, so every such call leaked its
+// result — once per call, i.e. UNBOUNDED inside a loop. All nine now route
+// through `LoweringContext::call_indirect_tracked`.
+//
+// THE NET HAS TWO DIRECTIONS, because the fix could fail either way.
+//
+//   * `*_call_result_leak` — the UNDER-registration direction. Each is
+//     RED-verified at pristine `f3feea79`, byte counts in the fixture headers.
+//   * `*_transferred_no_double_free` — the OVER-registration direction: the
+//     result is copied ONWARD into a second live slot, because both runtime
+//     release paths self-null BY DESIGN (`gorget_string_free` zeroes the `Str`
+//     after the dealloc, explicitly "so double-free is safe") and a second
+//     release through the SAME slot is therefore a silent no-op. The three
+//     `combinator_*` controls are RED-verified against the conversion WITHOUT
+//     its compensating ownership transfer (ASan `attempting double-free`,
+//     3/3 runs each); see each header for what the other six pin.
+//
+// Every one of these is C-lane only: `--sanitize` adds no instrumentation on
+// the LLVM backend, so an "ASan-clean on both lanes" claim would be vacuous.
+
+/// S1 — closure-STRUCT local (`__Closure_N__call`). RED at HEAD: 6 B / 1.
+#[test]
+fn indirect_closure_struct_call_result_no_leak() {
+    security_safe_no_leak("indirect_closure_struct_call_result_leak", "hello");
+}
+
+/// S2 — `Callable[T]` PARAMETER (`__callable_N`). RED at HEAD: 6 B / 1.
+#[test]
+fn indirect_callable_param_call_result_no_leak() {
+    security_safe_no_leak("indirect_callable_param_call_result_leak", "hello");
+}
+
+/// S3 — ESCAPED closure in an `FnPtr` local (`__gorget_closure_call_N`).
+/// RED at HEAD: 6 B / 1.
+#[test]
+fn indirect_escaped_closure_call_result_no_leak() {
+    security_safe_no_leak("indirect_escaped_closure_call_result_leak", "hello");
+}
+
+/// S4 — IIFE. RED at HEAD: 6 B / 1.
+#[test]
+fn indirect_iife_call_result_no_leak() {
+    security_safe_no_leak("indirect_iife_call_result_leak", "hello");
+}
+
+/// S5 — `Box[Trait]` vtable dispatch. RED at HEAD: 4 B / 1.
+#[test]
+fn indirect_boxtrait_vtable_call_result_no_leak() {
+    security_safe_no_leak("indirect_boxtrait_vtable_call_result_leak", "R2!");
+}
+
+/// S9 — EXPRESSION callee (`make()()`), the ninth arm, missing from the filed
+/// set until this round. RED at HEAD: 6 B / 1.
+#[test]
+fn indirect_expr_callee_call_result_no_leak() {
+    security_safe_no_leak("indirect_expr_callee_call_result_leak", "hello");
+}
+
+/// REPETITION axis — vtable dispatch in a loop. RED at HEAD: 20 B / **5**
+/// allocations for 5 iterations. The unboundedness is the point.
+#[test]
+fn indirect_boxtrait_vtable_loop_unbounded_no_leak() {
+    security_safe_no_leak("indirect_boxtrait_vtable_loop_unbounded_leak", "15");
+}
+
+/// REPETITION axis — escaped closure in a loop. RED at HEAD: 30 B / 5.
+#[test]
+fn indirect_escaped_closure_loop_unbounded_no_leak() {
+    security_safe_no_leak("indirect_escaped_closure_loop_unbounded_leak", "25");
+}
+
+/// PAYLOAD-TYPE axis — the result is a `Vector[int]`, not a String. A fix that
+/// registered only owned Strings would leave this red and every other cell
+/// green. RED at HEAD: 64 B / 1.
+#[test]
+fn indirect_closure_vector_payload_no_leak() {
+    security_safe_no_leak("indirect_closure_vector_payload_leak", "2");
+}
+
+/// RECEIVER-ROOT axis — the trait object lives in a struct field, not a bare
+/// local. RED at HEAD: 4 B / 1.
+#[test]
+fn indirect_boxtrait_struct_field_root_no_leak() {
+    security_safe_no_leak("indirect_boxtrait_struct_field_root_leak", "R2!");
+}
+
+/// NEGATIVE CONTROL — three statically-dispatched shapes, including the SAME
+/// trait method on a CONCRETE receiver. Proves the discriminator is
+/// indirection, not traits, and pins the conversion's blast radius.
+#[test]
+fn direct_dispatch_call_result_stays_clean() {
+    security_safe_no_leak("direct_dispatch_call_result_no_leak", "hello\nt?\nR2!");
+}
+
+/// KNOWN GAP `t0772` — the MIRROR of the class this block fixes: the
+/// combinator adapter CLONES its receiver and then unregisters the ORIGINAL,
+/// so `o.map(...)` leaks `o`'s payload. 6 B / 1, 3/3 runs at `f3feea79` and
+/// unchanged by this track (over-unregistration at a consumer, not
+/// under-registration at a producer). Un-ignore when the adapter's
+/// move-if-dead prologue stops unregistering a receiver it only cloned.
+#[test]
+#[ignore = "KNOWN GAP t0772: the combinator adapter unregisters a receiver it \
+CLONED, leaking the original's payload (6 B / 1)"]
+fn known_gap_option_map_clones_receiver_then_unregisters_it() {
+    security_safe_no_leak(
+        "option_map_clones_receiver_then_unregisters_it_leak",
+        "hello!",
+    );
+}
+
+/// The ASan-armed twin of `tests/fixtures/print_trait_object.gg`, which had no
+/// gap test to graduate: it was wired as a stdout comparison only, so it stayed
+/// green for rounds while leaking. RED at HEAD: 5 B / 1 — the figure filed
+/// against it (61 B / 2) had decayed and is refuted.
+#[test]
+fn print_trait_object_stays_leak_free() {
+    security_safe_no_leak(
+        "print_trait_object_no_leak",
+        "gear\n7\n3.140000\ntrue",
+    );
+}
+
+/// POSITIVE CONTROL, adapter closure-struct branch. RED (ASan double-free,
+/// 3/3) against the conversion with its ownership transfer removed.
+#[test]
+fn combinator_closure_result_transferred_stays_clean() {
+    security_safe_no_leak("combinator_closure_result_transferred_no_double_free", "hello");
+}
+
+/// POSITIVE CONTROL, adapter `Callable`-parameter branch. RED (ASan
+/// double-free, 3/3) against the conversion with its transfer removed.
+#[test]
+fn combinator_callable_param_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "combinator_callable_param_result_transferred_no_double_free",
+        "hello",
+    );
+}
+
+/// POSITIVE CONTROL, adapter `FuncRef` branch — a STATICALLY NAMED callee that
+/// is nonetheless in the class. RED (ASan double-free, 3/3) against the
+/// conversion with its transfer removed.
+#[test]
+fn combinator_funcref_result_transferred_stays_clean() {
+    security_safe_no_leak("combinator_funcref_result_transferred_no_double_free", "hello");
+}
+
+/// POSITIVE CONTROL, S1 — result transferred into a container that outlives it.
+#[test]
+fn indirect_closure_struct_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_closure_struct_result_transferred_no_double_free",
+        "2\nhello\nhello",
+    );
+}
+
+/// POSITIVE CONTROL, S2 — result transferred into a container that outlives it.
+#[test]
+fn indirect_callable_param_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_callable_param_result_transferred_no_double_free",
+        "2\nhello\nhello",
+    );
+}
+
+/// POSITIVE CONTROL, S3 — result transferred into a container that outlives it.
+#[test]
+fn indirect_escaped_closure_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_escaped_closure_result_transferred_no_double_free",
+        "2\nhello\nhello",
+    );
+}
+
+/// POSITIVE CONTROL, S4 — result transferred into a container that outlives it.
+#[test]
+fn indirect_iife_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_iife_result_transferred_no_double_free",
+        "2\nhello\nworld",
+    );
+}
+
+/// POSITIVE CONTROL, S5 — result transferred into a container that outlives it.
+#[test]
+fn indirect_boxtrait_vtable_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_boxtrait_vtable_result_transferred_no_double_free",
+        "2\nR2!\nR2!",
+    );
+}
+
+/// POSITIVE CONTROL, S9 — result transferred into a container that outlives it.
+#[test]
+fn indirect_expr_callee_result_transferred_stays_clean() {
+    security_safe_no_leak(
+        "indirect_expr_callee_result_transferred_no_double_free",
+        "2\nhello\nhello",
+    );
+}
+
+
+// ── R47 Track E2 — for-loop producers owe BOTH ownership axes ──────────────
+//
+// `src/ir/lowering/stmts/for_loops.rs` mints values in a dozen arms, and each
+// owes an ownership TAG and a drop REGISTRATION. Three arms had one axis or
+// neither, and each miss has its own signature:
+//
+//   * neither decided → the value leaks, and a leak has NO stdout signature,
+//     so `iterable.gg` / `vector_iter_userdef.gg` / `iterator_direct.gg` were
+//     green the whole time the arm leaked both its iterator and its element.
+//     Only a `detect_leaks=1` run can see this class, which is why every cell
+//     below is judged on the sanitized run.
+//   * drop registered, ownership NOT tagged → the local stays `Untracked`,
+//     the Tier 2a consume-site validator refuses to pick move-vs-clone, and
+//     `for s in some_set: dst.add(s)` ABORTED the compiler.
+//   * the direct-Iterator branch iterated a shallow COPY of the source, so
+//     `next()`'s mutations were lost and the original's drop ran against
+//     pre-iteration state — a double-free the moment the body moved an
+//     element out.
+//
+// Axes covered: producer cell {iterator object (owned branch) · iterator
+// source (borrow branch) · element binding · Set/Dict out-param arms} ×
+// element ownership {Copy(int) · String · resource struct} × iterator source
+// {Iterable-with-iter() · direct-Iterator · Set · Dict} × body disposition
+// {read-only · move-out · early break}.
+//
+// OMITTED CELLS, named: (a) Copy element × move-out — degenerate, an `int`
+// has no drop to get wrong; (b) direct-Iterator × resource-struct element —
+// the element binding is ONE site (`enum_field_load_move`) shared by every
+// iterator source, so the element-type axis is exercised where it varies, on
+// the Iterable source; (c) LLVM lane — ASan evidence is C-lane only by
+// construction, and the stdout halves of these fixtures are backend-agnostic
+// GIR-level behaviour.
+//
+// Every fixture below was RED-verified against the pre-fix compiler.
+
+/// Cell 1, ISOLATED: the iterator object `iter(&collection)` mints. `int`
+/// elements hold the element cell inert, so the only leak this can report is
+/// the iterator itself. Pre-fix: 146 bytes in 3 allocations, 3/3 runs.
+#[test]
+fn foriter_iterobj_int_elem_no_leak() {
+    security_safe_no_leak("foriter_iterobj_int_elem_leak", "3");
+}
+
+/// Cell 1 with an early `break` — pins the iterator's drop SCOPE. The
+/// iterator is minted before the loop and read by `next()` every iteration,
+/// so it belongs to the ENCLOSING scope; registering it into the loop-body
+/// scope frees it after iteration 1 and every later `next()` is a UAF, which
+/// one iteration cannot show. Pre-fix: 146 bytes in 3 allocations, 3/3 runs.
+#[test]
+fn foriter_iterobj_break_no_leak() {
+    security_safe_no_leak("foriter_iterobj_break_leak", "3");
+}
+
+/// Cell 2, ISOLATED: the loop binding moved out of the `Option` `next()`
+/// returns, with a scalar-only iterator so cell 1 is inert. Pre-fix: 39 bytes
+/// in 3 allocations (one per iteration), 3/3 runs.
+#[test]
+fn foriter_elem_string_no_leak() {
+    security_safe_no_leak("foriter_elem_string_leak", "36");
+}
+
+/// Cell 2 on the third value of the element-type axis — a resource STRUCT
+/// element, so the drop that must run is the generated destructor rather than
+/// a plain string free. Pre-fix: 45 bytes in 3 allocations, 3/3 runs.
+#[test]
+fn foriter_elem_struct_no_leak() {
+    security_safe_no_leak("foriter_elem_struct_leak", "42");
+}
+
+/// Both cells at once with a MOVE-OUT body — the bidirectional cell.
+/// Registering the element is what flips the consume site from clone to move,
+/// so this is red pre-fix (196 bytes in 7 allocations, 3/3 runs) AND red
+/// against an over-eager fix that frees the element the set now owns.
+#[test]
+fn foriter_move_out_to_set_no_leak() {
+    security_safe_no_leak("foriter_move_out_to_set", "3");
+}
+
+/// Cell 1's BORROW branch — direct-Iterator, move-out body, early break.
+/// Pre-fix this was LSan-clean and silently WRONG: the loop popped from a
+/// shallow copy, so the source still reported all 4 elements (`2\n4`) while
+/// the set held elements the source also believed it owned. That is the
+/// double-free `stdlib_iter_drain` hit the moment the element cell was
+/// registered — see the C-lane control in the integration suite.
+#[test]
+fn foriter_direct_drain_move_out_no_leak() {
+    security_safe_no_leak("foriter_direct_drain_move_out", "2\n2");
+}
+
+/// The same borrow-branch defect through its observable side: after two
+/// elements and a `break`, the iterator's own `idx` must read 2. Pre-fix it
+/// read 0 — the loop had advanced a copy. `lib/std/iter.gg`'s `VectorDrain`
+/// `Drop` ("reverses the remaining buffer back if the caller breaks early")
+/// is only meaningful if the advanced object is the dropped one.
+#[test]
+fn foriter_direct_advances_source() {
+    security_safe_no_leak("foriter_direct_advances_source", "0\n1\n2");
+}
+
+/// Set arm sibling: `for s in src: dst.add(s)`. The out-param accessor hands
+/// back an independent owned clone, and the arm registered its drop without
+/// deciding ownership — so pre-fix this ABORTED the compiler with the Tier 2a
+/// "untracked source consumed (ownership not decided)" violation.
+#[test]
+fn forset_move_out_elem_no_leak() {
+    security_safe_no_leak("forset_move_out_elem", "3\n3");
+}
+
+/// Dict arm siblings — the `for k, v in d` destructure and the key-only
+/// `for k in d` form are separate arms with separate bindings, and both had
+/// the same missing ownership decision. Pre-fix: compiler abort, 2 violations.
+#[test]
+fn fordict_move_out_kv_no_leak() {
+    security_safe_no_leak("fordict_move_out_kv", "2\n2\n2");
 }

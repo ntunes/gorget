@@ -1,0 +1,56 @@
+# KNOWN GAP (todo/t0727): under `--sanitize --backend=llvm`, GENERATED USER CODE
+# CARRIES NO SANITIZER INSTRUMENTATION. Only the C runtime blob does.
+#
+# `--sanitize` on that backend reaches two of the three compile/link steps: the
+# runtime `cc -c`, and the final link. It cannot reach the step in between,
+# which is `llc` — and `llc` consumes finished IR, so ASan's instrumentation
+# pass has already not run by the time it is invoked. Emitting instrumented IR
+# means the LLVM backend attaching `sanitize_address` itself and the result
+# surviving the instrumentation passes; neither happens today.
+#
+# ── WHAT THAT COSTS, from the measured coverage split ──
+#   CAUGHT on this lane: every memory leak (LeakSanitizer intercepts the
+#     allocator, so instrumentation is irrelevant to it); UAF, double-free and
+#     overflow whose free OR faulting access goes through the runtime — which
+#     is most of Gorget's heap traffic; interceptor classes (memcpy, strlen, …);
+#     UB inside the C runtime.
+#   MISSED on this lane: a stack-buffer-overflow in generated user code; a
+#     direct load or store from a user frame into freed heap that touches no
+#     runtime function; UBSan on generated user code.
+#
+# ── WHY THIS FIXTURE PINS IT STRUCTURALLY RATHER THAN BEHAVIOURALLY ──
+#
+# A behavioural repro would need a program that actually commits one of the
+# missed defects, which in safe Gorget means leaning on some OTHER compiler bug
+# to produce the UAF — and that repro would then go green the day THAT bug is
+# fixed, silently ceasing to pin this gap while still reading as coverage. The
+# structural pin has no such dependency: it asserts the mechanism itself, holds
+# for any program at all, and can only change when this gap is actually closed.
+#
+# The program below therefore only has to contain ordinary user-code loads and
+# stores — a struct field write and read, an arithmetic local, a call. On the C
+# backend all of it is instrumented, necessarily and without measurement, since
+# user code and runtime are ONE translation unit handed to `cc -fsanitize=…`.
+# On the LLVM backend they are two objects and only one is instrumented.
+#
+# INTENDED (what the `#[ignore]`d test asserts, and what fails today):
+#   GORGET_KEEP_RUNTIME=1 gg build --sanitize --backend=llvm <this>
+#   => __gorget_user_<stem>.o references __asan_report_*
+# MEASURED TODAY: the runtime object carries 10 such references, the user
+# object carries 0.
+#
+# Correct stdout on every backend, sanitized or not: `9`.
+# GRADUATES to a live regression fixture the round t0727 is fixed.
+
+struct Point:
+    int x
+    int y
+
+int shift_sum(Point p, int d):
+    int a = p.x + d
+    int b = p.y + d
+    return a + b
+
+void main():
+    Point p = Point(1, 2)
+    print(shift_sum(p, 3))

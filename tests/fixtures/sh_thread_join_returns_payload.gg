@@ -1,0 +1,35 @@
+# R47 Track D1 — SHAPE PIN for the typed `Thread[T].join() -> T` arm.
+#
+# ⚠ NOT RED-VERIFIABLE, AND I TRIED. Core #12 says a fixture that cannot be seen
+# to fail must say so in its header and state what it pins instead, so:
+#
+# The self-host's builtin ladder had NO Thread arm, so `join` fell through to
+# the String-returning name list and `thread_spawn(...).join()` was typed
+# `String` for every receiver. Track D1 added the receiver-typed arm mirroring
+# Rust gg (`Thread[T].join()` is `T`). I then looked for a shape where the wrong
+# type was OBSERVABLE and did not find one. Measured against both the pre-fix
+# and post-fix drivers:
+#
+#   int r    = thread_spawn(worker, …).join()   → prints 7, BOTH drivers
+#   Vector[int] r = …                           → prints 2, BOTH drivers
+#   result discarded (what driver.gg does)      → runs, BOTH drivers
+#
+# So the lowerer reconstructs this link's type without consulting the
+# typechecker's answer, and the old `String` answer was latent rather than
+# harmful. The arm is still right — it removes a name-list answer for a receiver
+# the list has no business answering for, and it makes the self-host agree with
+# the oracle instead of coincidentally surviving disagreement.
+#
+# WHAT THIS PINS, then: that `Thread[T].join()` keeps its payload type end to
+# end on the self-host lane, so a future change to the ladder or to the lowerer
+# that DOES make the typechecker's answer load-bearing cannot silently
+# reintroduce the String. It is a tripwire on a currently-latent axis, not
+# evidence of a fixed bug.
+from std.thread import thread_spawn, Thread
+
+int worker():
+    return 7
+
+void main():
+    int r = thread_spawn(worker, 8 * 1024 * 1024).join()
+    print(r)

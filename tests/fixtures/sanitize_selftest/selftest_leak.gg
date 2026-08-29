@@ -1,0 +1,14 @@
+# POSITIVE control for scripts/sanitize_sweep.sh's LEAK detector: exactly ONE
+# leak record, of exactly ONE class. The builtin higher-order call leaks its
+# 8-byte closure environment (`__gorget_closure_env_alloc`, the largest group on
+# tests/sanitize/LEAK_ALLOWLIST.txt). Paired with selftest_leak_twice.gg, which
+# is the same class at two records — see this directory's README.
+from std.collections import Vector
+
+int main():
+    Vector[int] vs = Vector[int]()
+    vs.push(1)
+    vs.push(2)
+    Vector[int] doubled = vs.map((int x): x * 2)
+    print(doubled.len())
+    return 0

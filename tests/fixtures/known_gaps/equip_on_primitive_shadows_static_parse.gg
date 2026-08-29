@@ -1,0 +1,28 @@
+# KNOWN GAP (found R47 Track D1 while building the ACCEPT control for the
+# primitive-receiver reject).
+#
+# An `equip int:` block in the program breaks the STATIC call `int.parse(...)`.
+# The type NAME in receiver position is lowered as if `parse` were a user equip
+# method on `int`, so both compilers emit a call to a mangling nothing defines:
+#
+#   RUST gg   : link error — `undefined reference to `int64_t__parse``
+#   SELF-HOST : same
+#
+# BOTH LANES AGREE ON THE WRONG ANSWER (Core #8 red flag). Neither the `equip`
+# block nor the static call is at fault on its own — remove either and the
+# program builds and prints `99`. The two are independent language features and
+# their combination has no ratified special case, so this is a defect, not a
+# design.
+#
+# It is INDEPENDENT of R47 Track D1's reject: it reproduces identically on the
+# pre-fix driver, and `reject_no_method_on_primitive` never sees a static call
+# (the receiver is a type name, which resolves to no type at all).
+#
+# CORRECT behaviour: prints `99`.
+equip int:
+    int doubled(self):
+        return self * 2
+
+void main():
+    if int.parse("99") is Some(n):
+        print(n)

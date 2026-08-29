@@ -10,6 +10,63 @@ use super::resolve::{FunctionInfo, ResolutionMap};
 use super::scope::ScopeTable;
 use super::types::{self, ResolvedType, TypeTable};
 
+/// Per-call-site answer to *"does this method call write through its
+/// receiver?"* — resolved ONCE, from typed metadata, by the safety pass.
+///
+/// The classification itself lives in `check_expr`'s `Expr::MethodCall` arm
+/// (`receiver_is_mutating`): the receiver's own `TypeId` for the builtin half,
+/// and receiver → `MethodResolution` → `DefId` → the declared
+/// `param_ownerships[0] == &self` for the user half. Neither half asks what
+/// the method is *called*.
+///
+/// This table is how that answer crosses into the IR layer (Layering rule 4,
+/// "resolve once, write through"). Before it existed, the CoW prescan in
+/// `ir::lowering::functions` re-derived the same fact from the method's
+/// IDENTIFIER TEXT against a 25-name hand list, so a user `&self` mutator
+/// whose name happened to be absent was invisible to the prescan, its
+/// receiver was never materialized, and a later realloc freed the buffer a
+/// live bind still pointed at. Renaming the method fixed or broke the
+/// program (`todo/t0699`, SIGSEGV on both backends). There is exactly ONE
+/// classifier for this axis (Layering rule 3) and it is the semantic pass's.
+#[derive(Debug, Default, Clone)]
+pub struct ReceiverMutations {
+    /// Method-NAME span start (the same key space as
+    /// `AnalysisResult::method_resolutions`) → the call writes through its
+    /// receiver.
+    by_method_span: FxHashMap<usize, bool>,
+}
+
+impl ReceiverMutations {
+    /// Record the classification for one method call. A span visited more
+    /// than once (a body reached through two walks) folds by OR: the
+    /// over-approximating answer wins, because under-approximating here is
+    /// the use-after-free class above.
+    pub(super) fn record(&mut self, method_span_start: usize, mutates: bool) {
+        let slot = self.by_method_span.entry(method_span_start).or_insert(false);
+        *slot |= mutates;
+    }
+
+    /// The typed answer for the call whose method name starts at
+    /// `method_span_start`, or `None` when the safety pass never classified
+    /// that call site (a body it does not walk, or a receiver whose method
+    /// did not resolve). `None` is not "read-only" — each consumer picks the
+    /// conservative disposition for its own channel.
+    pub fn call_mutates_receiver(&self, method_span_start: usize) -> Option<bool> {
+        self.by_method_span.get(&method_span_start).copied()
+    }
+
+    /// How many call sites were classified. Read by the
+    /// `GG_REPORT_RECV_MUT` fire-count oracle and by tests.
+    pub fn len(&self) -> usize {
+        self.by_method_span.len()
+    }
+
+    /// Is the table empty? (Clippy's `len_without_is_empty`.)
+    pub fn is_empty(&self) -> bool {
+        self.by_method_span.is_empty()
+    }
+}
+
 // ─── Fallible State (Option/Result tracking) ──────────────
 
 /// Whether an Option/Result variable has been guard-checked.
@@ -433,6 +490,11 @@ pub(super) struct BorrowChecker<'a> {
 
     /// Tracks which `&` (MutableBorrow) parameters have been actually mutated.
     pub(super) mut_param_mutated: FxHashSet<DefId>,
+
+    /// Write-through target for the receiver-mutation classifier (see
+    /// [`ReceiverMutations`]). Accumulated across the WHOLE module — never
+    /// cleared per function, unlike `mut_param_mutated` above.
+    pub(super) receiver_mutations: ReceiverMutations,
     /// `&` parameters in the current function: (DefId, name, span).
     pub(super) current_mut_params: Vec<(DefId, String, Span)>,
     /// BARE (Borrow) parameters of the current function: (DefId, name).
@@ -614,6 +676,7 @@ impl<'a> BorrowChecker<'a> {
             fallible_states: FxHashMap::default(),
             var_reassigned: FxHashSet::default(),
             mut_param_mutated: FxHashSet::default(),
+            receiver_mutations: ReceiverMutations::default(),
             current_mut_params: Vec::new(),
             current_bare_params: Vec::new(),
             bare_param_mutated: FxHashSet::default(),
@@ -668,6 +731,10 @@ pub fn check_module(
     expr_types: &FxHashMap<Span, TypeId>,
     method_resolutions: &FxHashMap<usize, super::MethodResolution>,
     errors: &mut Vec<SemanticError>,
+    // OUT: the per-call-site receiver-mutation classification the IR
+    // lowering's CoW prescan reads (Layering rule 4 — resolve once here,
+    // write through; the prescan does not re-derive it).
+    receiver_mutations: &mut ReceiverMutations,
     warn_const: bool,
 ) -> (FxHashMap<DefId, super::SharedStrategy>, Vec<super::errors::SemanticWarning>, super::purity::PurityByName, FxHashMap<DefId, Vec<DefId>>, FxHashMap<&'static str, Duration>) {
     let mut pt: FxHashMap<&'static str, Duration> = FxHashMap::default();
@@ -756,6 +823,20 @@ pub fn check_module(
 
     warnings.extend(checker.stale_warnings);
     errors.extend(checker.errors);
+    *receiver_mutations = checker.receiver_mutations;
+    // Fire-count oracle for the receiver-mutation write-through: how many
+    // call sites the classifier actually decided, and how many it marked
+    // MUTATING. A memory measurement of a mechanism that never fired is a
+    // reassuring meaningless number, so the counter is readable directly.
+    if std::env::var("GG_REPORT_RECV_MUT").is_ok() {
+        let total = receiver_mutations.len();
+        let marked = receiver_mutations
+            .by_method_span
+            .values()
+            .filter(|v| **v)
+            .count();
+        eprintln!("[recv-mut] classified={total} marked_mutating={marked}");
+    }
     let shared_out = checker.shared_out;
     let borrow_deps = checker.borrow_deps;
 

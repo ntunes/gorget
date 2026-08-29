@@ -1,0 +1,47 @@
+# KNOWN GAP (R47 Track D1, found by the output-review) — the RECEIVER/ROOT-SHAPE
+# axis of the primitive-receiver reject. The reject fires only when the receiver
+# is a bare IDENTIFIER; every other spelling of the same `float` receiver still
+# slips through.
+#
+# THIS IS THE SHARPEST CELL, which is why it is the committed repro: a CHAINED
+# receiver does not merely mis-mint a slot, it invents the runtime symbol the
+# reject exists to prevent —
+#
+#   RUST gg   : REJECTS — error[E_NoMethodFound]: no method `to_string` found on
+#               type `float`
+#   SELF-HOST : ACCEPTS, then link-fails on
+#               `undefined reference to 'int64_t__to_string'`
+#
+# That is verbatim the failure mode Rust's own reject site was written to stop
+# ("the LIR `gorget_str_{method}` name-concat fallback invent[s] a bogus runtime
+# symbol → ugly C error or silent miscompile"), reaching the link stage on the
+# self-host lane.
+#
+# THE AXIS, ENUMERATED — all four non-identifier cells measured 2026-08-29
+# against the post-D1 driver, Rust rejecting every one:
+#
+#   | receiver shape        | probe                     | self-host              |
+#   |-----------------------|---------------------------|------------------------|
+#   | identifier (CONTROL)  | `f.to_string()`           | REJECT  ← the only one |
+#   | method-call result    | `mk().to_string()`        | CC-FAIL 'Str' from int |
+#   | field access          | `h.v.to_string()`         | CC-FAIL 'Str' from int |
+#   | chained call          | `f.mod(2.0).to_string()`  | LINK-FAIL (this file)  |
+#   | index                 | `v[0].to_string()`        | CC-FAIL 'Str' from int |
+#
+# WHY THE REJECT IS BOUNDED THIS WAY, and why widening it is not a one-liner.
+# `reject_no_method_on_primitive` refuses only when a SECOND, INDEPENDENT avenue
+# corroborates the receiver's type — lexical scope lookup of the receiver's
+# NAME. That filter exists because the self-host's span-keyed resolution answers
+# a CONFIDENTLY WRONG type in measured cases, and without it the reject refused
+# twelve valid corpus programs. A computed receiver has no name to look up, so
+# there is no second avenue and the reject abstains rather than guess.
+#
+# ⇒ Closing this needs a corroboration story for computed receivers, OR the
+# underlying resolution defect fixed so that one avenue is trustworthy on its
+# own. Do NOT close it by dropping the corroboration filter — that is measured
+# to refuse valid programs.
+#
+# CORRECT behaviour: `gg check` REJECTS this program on every lane.
+void main():
+    float f = 7.5
+    print(f.mod(2.0).to_string())

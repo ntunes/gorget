@@ -2611,7 +2611,10 @@ pub(in crate::ir::lowering) fn materialize_loop_carried_bare_params(
         &body.stmts,
         condition,
         else_body.map(|b| b.stmts.as_slice()),
-        &ctx.fn_param_ownerships,
+        &crate::ir::lowering::functions::CowPrescan {
+            fn_param_ownerships: &ctx.fn_param_ownerships,
+            receiver_mutations: &ctx.analysis.receiver_mutations,
+        },
     );
     if mut_set.is_empty() {
         return;
@@ -2680,7 +2683,10 @@ fn materialize_scope_carried_bare_params(
 ) {
     let mut_set = crate::ir::lowering::functions::cow_mutations_in_stmt(
         stmt,
-        &ctx.fn_param_ownerships,
+        &crate::ir::lowering::functions::CowPrescan {
+            fn_param_ownerships: &ctx.fn_param_ownerships,
+            receiver_mutations: &ctx.analysis.receiver_mutations,
+        },
     );
     if mut_set.is_empty() {
         return;

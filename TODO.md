@@ -2,19 +2,401 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**⚠ R44 CLOSED 2026-08-27. R45 IS OPEN — owner go GRANTED, autonomous.**
+**⚠ R45 CLOSED 2026-08-29. R46 STOPPED BEFORE EXECUTION 2026-08-29. ▶ R47 IS OPEN — autonomous.**
 
-**⚠⚠ R45 DELIVERY SET — OWNER, 2026-08-27: DELIVER G, D, F, A. THEN DECIDE ON THE REST.**
-Tracks **B** (D46 equality), **C** (`for`-loop bindings + D49) and **E** (wrong-source mint class) are **HELD**:
-their scouts are COMPLETE and their findings are filed, but **do not brief or review them** until G/D/F/A are
-delivered and the owner decides. Their artifacts are in `/tmp` and **`/tmp` here is durable enough to rely on — it survives the session and
-probably reboots (owner, 2026-08-27)**, so they should still be there: `/tmp/r45/scout-B-d46.md`,
-`/tmp/r45/scout-C-forin.md` (+ `/tmp/r45/scoutC/`), `/tmp/r45/scout-E-bytes.md`, `/tmp/r45/scout-DEEP1.md`, and
-`/tmp/r45/brief-C.md` which is already WRITTEN. ⚠ **The risk is STALENESS, not deletion — and it is a real risk
-for these three specifically.** Every one of their measurements was taken against **today's RED HEAD**, and
-**Track G is about to move it**. So on resuming a held track: **re-read the report, but RE-MEASURE every load-bearing
-figure against the post-G HEAD before acting on it** (Core #5). The reports' reasoning survives; their numbers may
-not. Everything durable is already in `todo/` regardless.
+**▶ ROUND XLVII (R47) OPENED 2026-08-29 — HEADLINE: MEMORY SAFETY — RETIRE THE NAME-MATCHING CLASS,
+AND MAKE THE SANITIZER GATE REAL.** Four parallel tracks, each on its own worktree, each running its own
+gauntlet. Selected because all four are ALREADY SCOUTED in a prior round and their evidence is preserved
+self-contained in `todo/`, so the gauntlet starts from measurement rather than re-derivation — the direct
+answer to the R46 failure (*"each round spins on each track never reaching the executor step"*).
+
+- **A (headline, CRITICAL ×2) — `t0699` + `t0703`: a NAME decides memory safety.** Two live UAFs, SIGSEGV on
+  both backends, both filed as Core #2 violations, both sitting on DEEP-1's obligation (ii). Filed as ONE
+  class (same predicate, opposite sides of one set-membership test) — the scout adjudicates whether that
+  holds. Zone: `src/ir/lowering/functions.rs`, `src/ir/lowering/stmts/mod.rs`, `src/ir/lowering/context.rs`.
+- **B (HIGH) — `t0725`: indirect-dispatch call-result drop registration.** Closes `t0708` + `t0518`; the class
+  is filed nine times and was fixed once in ONE arm without sweeping siblings. Zone:
+  `src/ir/lowering/exprs/methods.rs`, `src/ir/tag_ownership.rs`, `src/ir/builder.rs`.
+- **C (HIGH, fully disjoint) — `t0723`: make `--sanitize` real on the LLVM lane.** Load-bearing FOR A AND B:
+  their acceptance bars want cross-lane sanitizer evidence, and if the LLVM half is vacuous that evidence is
+  half-fictional. Zone: `src/main.rs`, `tests/security.rs`.
+- **D (self-host lane) — `t0712` receiver gate + THE RED GATE PORT.** One class fix reportedly closes six
+  cells and unblocks the single-exit publish; plus porting the excess rows so `self_host_runtime_diff` lands
+  green WITHOUT raising `RUNTIME_DIFF_NONMATCH_CEILING`. Zone: `tests/fixtures/self_host_*`,
+  `tests/integration.rs`.
+
+**⊕ TRACK E ADDED MID-ROUND (owner go, 2026-08-29) — THE SANITIZER SWEEP GATE, BOTH HALVES.**
+`scripts/sanitize_sweep.sh` is a CI job (`.github/workflows/ci.yml:321`) and it is **RED at HEAD** — three
+unallowlisted leaks, independently confirmed on a clean tree by Track B's brief-review. **A red battery is
+never waivable**, and no other R47 track owns it. ⚠ **The gate is ALSO nondeterministic at its own boundary**
+— one fixture measured leaking on 6-8 of 8 runs of a SINGLE UNCHANGED BINARY. For a shrink-only ratchet that
+is worse than a slow gate: it manufactures phantom regressions and trains readers to re-run until green.
+⇒ E owns **both** halves: root-cause the leaks, AND make the verdict reproducible. ⚠ Its scout must answer one
+question before anything else — **is the nondeterminism a harness artefact, or a genuine race that really does
+leak on some interleavings?** Those have opposite remedies, and quarantining a real bug as flakiness is the
+failure mode to avoid. Zone: `scripts/sanitize_sweep.sh`, `tests/sanitize/*.txt`, `tests/lints.rs`.
+⊕ The sweep is **C-lane only** (it never passes `--backend`); making LLVM real is Track C's zone, NOT E's —
+E only reports what lane-labelling the ceilings would need.
+
+**HELD OUT OF R47 DELIBERATELY: `t0724` (Box[Trait] coercion + element drop).** Not deferred for lack of
+value — it overlaps Track B's zone in `src/ir/lowering/exprs/methods.rs`, and its own filed evidence records
+that a dispatching leak fixture cannot wire to `security_safe_no_leak` until the call-result class (B) lands.
+It is R48's headline candidate, with B's landing as its precondition.
+
+**⚑⚑⚑ THE ROUND'S DEEPEST FINDING, from Track E2's output review — A TOTAL ENUMERATION CAN STILL BE WRONG.**
+Its words: *"three fresh passes signed off a design whose literal implementation corrupts memory, because every
+pass reasoned about `for_loops.rs` while the defect was minted one layer up. **The census was total over the
+wrong universe.**"* The brief's cell-2 deliverable, applied verbatim as three lines, took `stdlib_iter_drain`
+from rc 0 to **rc 134, ASan double-free** — confirmed by a reviewer that built four compilers of its own.
+⇒ **Core #15e Q3 asks "is this enumeration TOTAL, or a selection?" — and that is NOT SUFFICIENT.** A census can
+be exhaustive over its file and blind to the layer that produced the value. **The missing question is: "TOTAL
+over WHICH UNIVERSE, and how do I know the universe is the right one?"** The tell here was that the fix's
+soundness depended on a property (who owns the elements) established one layer above where every reviewer was
+looking. ⊕ This is Layering discipline's debugging heuristic pointed at REVIEW rather than at code: *trace the
+data the buggy site READS; if the writer is not in your census, your census is the wrong shape.*
+**Add the universe question to the six.** ⚠ Per the READINESS CAP rule, a new class RETIRES a row or becomes a
+guard — it does not simply become a seventh; decide which at close.
+
+**⚑⚑ THE ACTIONABLE FORM OF THE SIX-INSTANCE PATTERN, from Track A1's executor after it was the sixth:**
+*"Instrument and run a positive control BEFORE writing a mechanism sentence, and LOCATE THE GATE IN SOURCE
+rather than inferring it from behaviour. Both handed-to-me summaries came back different when I re-ran them —
+which is the argument for the rule, not against the people who wrote them."*
+⇒ **A mechanism sentence is a claim, and the round's evidence is that mechanism claims are wrong roughly as
+often as they are checked.** Behaviour-derived inference is the specific trap: three agents independently
+concluded a correct OUTCOME from a WRONG mechanism, because the code they blamed was **dead for that input**
+rather than semantically neutral — and a reader told the latter concludes the machinery is robust when it is
+merely untested there. **The positive control is what distinguishes them, and it is cheap.**
+
+**⚑ TWO LEADS REFINED RATHER THAN INHERITED — the right way to receive a hand-off.**
+1. **The doc-coordinate guard is NOT missing.** `doc_source_citations_name_the_right_line` already does exactly
+   that check; its scope is hardcoded to one chapter and **its own comment names the widening as the next
+   step**. Repointing it goes RED immediately — but on a `checked > 20` floor the target chapter cannot meet
+   (12 citations) plus five allowlist rows, **so the widening needs a per-chapter floor and a chapter-keyed
+   allowlist**. Filed with coordinates regenerated; `lints.rs` restored rather than doing another track's work.
+2. **The unreached alias loop is NOT dead code.** Sharper measurement over 198 buildable fixtures:
+   `cow_register_alias` fires **36** times (so aliases DO form and the instrument is live), `cow_has_aliases`
+   is true **0** times, sever called **0** times — and of `cow_materialize_alias`'s six call sites **five are
+   live**. ⇒ Only the SEVER is unreached, and the hypothesis is that its two conditions are **mutually
+   exclusive by construction**. Filed as a hypothesis WITH its verification command, not as a conclusion.
+⚠ **My hand-off called these "a missing guard" and "possibly dead code". Both were wrong in the direction of
+alarm.** A lead is a lead; the executor that measures it owns the finding.
+
+**⚑ NAME A GUARD FOR ITS PROPERTY, NEVER FOR ITS ENUMERATION — Track C's executor, after the same family was
+under-counted THREE times.** It renamed `build_flags_reach_every_sub_path` → `build_flags_are_never_silently_
+dropped`, because *"the old name was a claim about the enumeration, which is exactly what went stale twice."*
+⇒ A guard named for **what it enumerates** asserts the enumeration is complete, and that assertion rots the
+moment a new member appears. A guard named for **the property it defends** stays true while its coverage grows.
+⊕ The same executor then declined a **one-word fix** that would have closed one of five holes: *"wiring one of
+five holes turns a census cell green while the class stays open — instance-fixing where the rule is
+class-fixing."* **That is Core #4 chosen against the executor's own convenience, and it is the right call.**
+
+**⚑ A THIRD "GATE THAT CANNOT SEE" FOUND WHILE FIXING THE FIRST TWO.** The `test` subcommand hardcodes the C
+backend, so **`gg test --backend=llvm` is silently dropped** — and because the harness appends that flag to
+`test`, **all 11 `gg_command("test")` sites are VACUOUS as LLVM coverage.** Reconciled into the existing item
+rather than re-filed. ⇒ R47 has now found **three independent vacuous-gate classes** (LLVM sanitize, the
+security suite's backend selector, and this), each hiding real defects behind a green that could not fail.
+**Assume more exist; the shared classifier guard above is the systemic answer.**
+
+⊕ **AND A SIXTH INSTRUMENT FAILURE, self-caught:** on a trivial program `--emit-c-lir` output is identical with
+and without `--scheduler` on every path, so a control built from one **passes for the wrong reason** — only an
+async program is a real control. The executor's first probe had exactly that false control and it said so.
+
+**⚑⚑ SIX INSTANCES, ONE CLASS: THE CORRECTION IS WHERE THE NEXT DEFECT ENTERS — AND IT IS RECURSIVE.**
+Tally, all measured by independent reviewers this round: a doc write-through shipped six coordinates each
+exactly +7 off (regenerated before the final insertion); a corrected figure was replaced with a second figure
+that also did not reproduce (0/10 → 3/10 → measured 0/20); a "family record" comment ending *"check every
+early-returning sub-path"* under-counted them — **twice, and then a THIRD time inside the guard built to stop
+the under-counting**; new text added in response to a punch item claimed "ONE failure by design" where the
+measured value is 25; three of my own folds compressed a reviewer's finding and dropped the qualifier that made
+it work.
+⚠ **And the recursive one: Track A1's fix for "a fixture header claims a mechanism that is not load-bearing"
+shipped a replacement explanation that is ALSO not the mechanism** — the reviewer measured the named functions
+firing ZERO times — in a commit whose own message closes *"run every verification command you write down before
+you write it down."*
+⇒ **The rule that follows is mechanical, not exhortative: REGENERATE AFTER THE LAST EDIT, NOT BEFORE IT, AND
+RUN EVERY VERIFICATION COMMAND BEFORE COMMITTING THE SENTENCE THAT QUOTES IT.** ⊕ **Brief every output-reviewer
+to treat the text a correction ADDS with the same suspicion as inherited text** — that instruction is what
+caught five of these six.
+
+**⚑ TWO LEADS FROM A1's CONFIRMING REVIEW — FILE THEM, DO NOT LOSE THEM TO `/tmp`.**
+1. **A DOC-COORDINATE DRIFT COHORT OF EIGHT**, six of them shifted by an identical −90, in the CoW chapter.
+   ⚠ **The class is UNGUARDED**: `code_doc_citations_resolve` checks `.md` **filenames**, not `path:line`, so
+   nothing in the tree catches a citation that resolves to the wrong symbol. **Core #6 candidate** — a guard
+   here would have caught the +7 cohort, the −90 cohort and the stale pointer, all three.
+2. **⚠ A CODE PATH WITH ZERO COVERAGE ACROSS ITS OWN CORPUS:** across 200+ `cow_*`/`*alias*`/`*reassign*`
+   fixtures, `cow_has_aliases` is true **zero** times — the alias loop at `context.rs:4410-4414` is unreached by
+   the entire relevant corpus. Either dead code in the middle of the subsystem R47 just fixed, or a coverage
+   hole large enough to hide a class. **Core #14 territory; measure before assuming which.**
+
+**⚑ "DISCLOSURE IS NOT COVERAGE" — Track B's executor, naming a failure mode nothing in the rules catches.**
+Its own report had documented the hole **accurately**: a section stated the guard was keyed on one producer
+spelling, and a blind-spot table listed *"a producer spelled some other way"* as a known gap. **And then a
+fixture header claimed the lint pinned "the whole producer census" — overclaiming straight past its own
+disclosure.** An output review caught the contradiction; the executor's verdict on itself: *"I documented the
+hole accurately and then let a fixture header overclaim straight past it. Disclosure is not coverage."*
+⇒ **A limitation recorded in a report does NOT discharge a claim asserted in an artifact.** Reports are read
+once; fixture headers, lint messages and doc sentences are read by everyone afterwards and are what the next
+agent trusts. **When you disclose a gap, GREP the artifacts for claims that assume it closed.**
+⊕ Closed the right way: it WIDENED the census (four producer spellings, 26 rows, 194 sites — the sibling
+spelling alone had **69**, not the ~50 reported) rather than narrowing the header, RED-demonstrated on the gap
+itself rather than on a revert, and swept every referencing claim in instruction form — finding a doc that had
+drifted the OTHER way after its own earlier narrowing.
+
+**⚑⚑ A GUARD THE ROUND OWES ITSELF (Core #6): A SHARED SANITIZER-VERDICT CLASSIFIER.**
+Track B's output review confirmed that a probe used INSIDE THE GAUNTLET published a false GREEN over a
+**deterministic SIGSEGV**: it grepped only LeakSanitizer's summary line and **never checked the exit code**, so
+an ASan stack-buffer-overflow in its own captured output read as CLEAN — and the next review pass reasoned on
+that green. The hidden defect is rc 139 on a plain build, now filed CRITICAL.
+⚠ **This is the same shape as three other instances this round**: a scout invalidated a sweep by rebuilding the
+compiler underneath it; a verification script measured a patched worktree and read HEAD clean; Track E1's own
+self-test could not catch its own class because it called the runner in-process while the corpus uses a
+different pipeline. **Four ad-hoc probes, four wrong answers, all in the direction of false confidence.**
+⇒ **The fix is not more care — it is one committed classifier** emitting CLEAN / LEAK / CORRUPT / CRASH /
+TIMEOUT / RUNNER_FAIL from (exit code + full sanitizer output), used by every probe, scout and reviewer.
+E1 already built most of it inside `scripts/sanitize_sweep.sh` this round; the work is to lift it out and make
+it the one way anyone asks "did this program misbehave". **Prose cannot fix this class — a shared instrument
+can.** File it as an R48 track if not landed at close.
+
+**⚑ R47 PROCESS FINDING, VALIDATED BY FOUR EXECUTORS INDEPENDENTLY — KEEP THE CLAUSE THAT CAUSED IT.**
+Every executor this round overruled something it was formally entitled to accept, and each time it was right:
+a review's cited line numbers · a reviewer's *"this cannot be RED-verified"* · a directory list that was
+correct on the day it was written · an orchestrator instruction to file an item that already existed · an
+orchestrator instruction to file a defect the same round it was closed · a review-certified *"verified-complete,
+not an assumption"* that was false at the one site where it changed observable semantics.
+⇒ **The clause that produced this is `the mechanism and the solution are YOURS, and where the brief, the scout
+or a review disagrees with the code, THE CODE WINS and it is a FINDING you report`.** D2's executor names it
+explicitly as the difference between shipping the construct and shipping a green gate over a broken one.
+**Put it in every executor brief.** ⊕ Its converse is the R46 stop's rule and both are load-bearing: the
+orchestrator authors NO MECHANISM CLAIMS, and the executor is told the code outranks everyone.
+⚠ The corollary nobody had stated: **CORRECTION COMMITS ARE WHERE FRESH UNVERIFIED CLAIMS ENTER**, because
+attention is on the thing being corrected. Two of Track C's review findings landed on text its own executor
+wrote while correcting other people's versions of the same mistake. Brief output-reviewers to treat the text a
+fold ADDS with the same suspicion as inherited text.
+
+⚠ **TWO MEASUREMENT HAZARDS, both learned the expensive way this round — carry them into every future sweep.**
+1. **PIN THE BINARY BEFORE A LONG SWEEP.** Track E's scout invalidated its FIRST full-corpus sweep by
+   rebuilding `target/debug/gg` underneath it while it ran; every number after that used pinned binary copies.
+   A multi-hour sweep against a moving compiler measures nothing and looks authoritative. ⊕ Same family as the
+   `t0725` trap (a verification script hardcoding a worktree path that still had the prototype applied, so it
+   measured the FIX and reported HEAD clean). **A probe must be able to prove WHICH compiler it measured** —
+   print the HEAD sha, the dirty count and the binary md5 on every run, as Track B's scout did.
+2. **`/tmp/r47` IS SHARED across live executors, reviewers and scouts**, and holds pinned binaries plus verdict
+   files that cost ~45 min to regenerate. ⚠ Round-close hygiene says sweep `/tmp` — **do NOT sweep it until
+   every track has integrated and every report has been read.** The reports are the round's evidence.
+
+⚠⚠ **WORKTREE KEEP-LIST FOR ROUND CLOSE — `scripts/round_cleanup.sh` PRUNES EVERY `agent-*` WORKTREE.** The
+unintegrated deliverables live in them. Do NOT run the sweep until every track is integrated, and read the
+dry-run first. Deliverable worktrees at time of writing: C `worktree-agent-aef1063f9218f0f0a` (3 commits,
+ends `8176b1f0`) · D2 `worktree-agent-a1497d3c9b15adcb5` (`73f3237b`) · D1 `agent-ae3c2f1b115327843`
+(`f830d4c8`) · A1 `worktree-agent-ac767bc711edfff07` (`e7967d57`) · plus A2, B, E1, E2 when they land.
+
+**⚖⚖ OWNER RULING 2026-08-29 — PROCEED WITH D50; THE REMOVAL LANDS IN R47. TRACK D2's `unsafe`
+IMPLEMENTATION DOES NOT INTEGRATE.**
+The owner asked whether D2's work changed the calculus — *"if the work is done, we can re-evaluate"* — and the
+measured answer was no: **D2 achieved BUG-COMPATIBLE PARITY, not the feature.** Every `Stmt::Unsafe` site in
+`src/` is a pass-through; the ONE semantically meaningful site produces the drop-timing anomaly; **nothing
+anywhere is rejected outside an `unsafe` block.** D2's own fixture header states it (*"`unsafe:` is a PLAIN
+BLOCK"*) and pins the anomaly as canonical, citing a reference sentence its own output-review measured FALSE.
+⇒ Reverting D50 would have bought a keyword that gates nothing, inert on two lanes instead of one.
+⊕ **Recorded because the recollection differed from the record:** D50's ratified basis was *"a keyword that
+reserves syntax, alters drop timing as an accident of its lowering arm, and enforces nothing is a liability on
+every axis"* — the self-host harm was an AGGRAVATING fact introduced with *"AND IT WAS ACTIVELY HARMFUL IN THE
+SELF-HOST"*, not the basis. That distinction is what decided the question.
+⊕ **On whether Gorget will eventually need `unsafe` (owner asked):** probably yes — 41 fixture files use
+`extern "C"` and FFI is exactly what Rust gates. **But the value is in the REJECTION, not the keyword**, and
+today's construct has zero rejection plus wrong drop semantics that a real implementation would have to UNDO.
+Re-introduce it WITH the checking, as its own design round starting from *"what operations must be gated"*.
+
+**⚑⚑ THE PROCESS FAILURE THAT CAUSED THIS, AND ITS PERMANENT FIX.** No agent in the D-track chain — scout,
+two brief reviews, executor, first output review — ever consulted `docs/define-gorget/decisions.md`, where
+RATIFIED OWNER DECISIONS live. My scout briefs named `docs/language-design.md`, `docs/book/`, `docs/devbook/`
+and **not the ledger**. A whole track implemented a feature the owner had ruled deleted the day before the
+round opened, and the handover I read at round open even named the removal branch.
+⇒ **EVERY scout brief and EVERY brief-review prompt MUST require reading `docs/define-gorget/decisions.md`
+FIRST, and citing the decisions its design rests on or is constrained by.** Add it to the standing
+scout-grounding rule in `AGENTS.md` at round close — it currently says "consult the relevant documentation"
+and lists everything except the ledger.
+
+**⚠⚠ THE ROUND-CLOSE BATTERY WILL BE RED, AND THE REASON IS THAT R47 MADE TWO BLIND GATES SEE. DECIDE IT
+DELIBERATELY, DO NOT DRIFT INTO IT.**
+Two gates that structurally could not fail were made real this round, and **both immediately found genuine
+PRE-EXISTING defects**: the LLVM sanitizer lane (found a backend `memcpy` over overlapping stack slots) and
+the sanitizer sweep (found an empty-collection sort passing NULL to a `nonnull` parameter — 15 emitted sites,
+one fix shape). ⇒ **The red is INHERITED DEBT NEWLY VISIBLE, not this round's inflow.** That distinction is
+the whole question, and it is not the same as the ceiling-raise prohibition, which bars hiding *your own*
+inflow.
+**Known red at close, as measured on PRE-INTEGRATION bases:** three sweep leaks (`iter_terminal_stmt_positions`,
+`onceflag_basic`, `opaque_handle_struct_field_waitgroup`) + the new UBSan row.
+⇒ **RE-MEASURE ON THE INTEGRATED BRANCH BEFORE DECIDING ANYTHING.** E1 measured on `f3feea79`; **E2 landed an
+iterator-binding drop-registration fix that may clear one of those three**, and E1's own numbers cannot see it.
+A red counted on the wrong base is exactly the class of error this round kept catching.
+⇒ **THEN choose, with the number in hand:** (a) open a small track for the UBSan defect (one fix shape, 15
+sites — tractable); (b) take the residue to the owner as a batched call, framed as *inherited debt made
+visible*, never as a waiver request; (c) both. ⚠ **"A red battery is never waivable" still binds** — the
+legitimate move is to FIX or to get an explicit owner ruling on inherited debt, never to quietly close red.
+⊕ **A NEW CROSS-TRACK COUPLING E1 CREATED, enforce it at integration:** `LEAK_CEILING` is now pinned with an
+exact equality rather than an inequality, so **any track that adds or removes a leak-allowlist row must move
+the constant in the same commit** or the lint reds.
+
+**⚑ R47 INTEGRATION PLAN — CONSOLIDATED. Read this before merging anything.**
+**MERGE ORDER (measured, not guessed):** every branch merges CLEAN against base individually, and the ONLY
+conflicts across every pair are `todo/t07xx.md` add/add plus `TODO.md` (which is REGENERATED, never merged).
+**Zero source conflicts anywhere.** Merge probe: `git merge-tree --write-tree --messages A B`.
+**Branches, with commit counts against `f3feea79`:** C `87993a90` (4) · A1 `fdacd021` (2) · B `4b0eb672` (1) ·
+E1 `5ad4303e` (2) · A2 (7) · E2 (3, tip `8d0e28a7`) · D1 `f830d4c8` (+blockers in flight).
+⛔ **D2 (`73f3237b`) DOES NOT INTEGRATE** — it implements the construct D50 removes. **Salvage only** (see the
+D50 ruling block above); its branch is kept until the salvage lands.
+
+**FIVE CONSTRAINTS THAT WILL BITE IF MISSED:**
+1. **ID RENUMBER.** C keeps `t0727`-`t0733`; **D2's and D1's renumber** (D2 → `t0734`-`t0736`, D1 →
+   `t0737`-`t0743`). ⚠ **NOT a file rename** — citations reach into `tests/integration.rs` `#[ignore]` strings,
+   `tests/security.rs`, three `.gg` fixture headers, `cites` front matter, `DONE.md`, and `src/` comments.
+   ⊕ C also MODIFIES `t0641` and `t0038` and DELETES `t0723`; B deletes `t0518`/`t0708`/`t0725`.
+   Later tracks used reserved blocks and do NOT collide: A1 `t0750` · A2 `t076x` · B `t0770`-`t0774` ·
+   E1 `t0780` · E2 `t0790`-`t0792` · D3a `t080x` · D3b `t081x`.
+2. **⚠ FOUR EXACT TOTALS, NOT ONE.** E1 pinned `LEAK_CEILING` **plus** (fixture,class) pairs, tolerated records
+   and `*N+` signatures — all with `assert_eq!`, all in ONE contiguous `tests/lints.rs` window. **Any track
+   adding or removing a leak-allowlist row must move ALL FOUR in the same commit.** Each failure prints the
+   value it wants.
+3. **A SHRINK IS ALREADY OWED:** E2's review found `LEAK_ALLOWLIST.txt:306` (`test_linked_list`) is now stale —
+   192 B/3 at HEAD, clean after. It does not red the gate (the sweep prints `✅ no longer leaking — DELETE`),
+   but shrink-only means the deletion is owed, **and it moves all four constants**. Run the sweep on the
+   INTEGRATED branch and take its whole DELETE list at once.
+4. **`tests/lints.rs` — four tracks, all non-overlapping, verified by their reports:** A1 removes one
+   `ALLOWED_UNWIRED` entry (32→31); A2 removes one more (**so the merged length is 30, not 31**); B appends one
+   contiguous block at EOF (+129, zero deletions, helper `count_occurrences`, no collision at base); E1 edits 4
+   hunks + 1 new test inside one window around `sanitize_allowlists_shrink_only`; E2 appends one `#[test]`
+   (+125, EOF). **Check `count_occurrences` against E2's and D3a's additions at merge.**
+5. **NO FULL C SWEEP HAS ACTUALLY COMPLETED.** E2's review found its report forward-references a section that
+   does not exist and that **both** of its sweep logs stop without a summary line. **Nothing in any track's
+   report may be read as a completed green full sweep — that run is the parent's, on the integrated branch.**
+⊕ **`33ba1c2a` (E1) is missing the mandated commit trailers** — amend at integration.
+⊕ **`f830d4c8` (D1) carries a stale figure in its COMMIT MESSAGE ("2,188"; the true count is 2,368). DECIDED:
+DO NOT AMEND.** Two output-review reports reference that hash, and rewriting a reviewed commit to fix a message
+trades a durable citation for a cosmetic gain. **The correction is on the record in the very next commit's
+message, and the `DONE.md` entry MUST carry the correct figure** — that is the artifact readers actually use.
+⚠ The instrument was worse than the figure: the executor's diff keyed on **basename**, and **182 basenames
+collide** across the two directories, so it compared 2,186 keys rather than 2,368 rows. Re-run positionally the
+conclusion was unchanged (8 new rejects / 0 lost / 0 re-typed) — **the conclusion held, the instrument did
+not.** Carry that warning, not just the number. `5ad4303e` has them.
+
+**⚑ R47 ROUND-CLOSE OBLIGATIONS ACCUMULATING (orchestrator's, not a track's):**
+0. **⚠⚠ todo-ID COLLISION — MUST BE RESOLVED AT INTEGRATION, BEFORE EITHER BRANCH MERGES.** Tracks C and D2
+   BOTH created `todo/t0727.md` and `todo/t0728.md`, with DIFFERENT content, from the same base (`main` tops
+   out at `t0726`). Neither executor could see the other's ids, so this is a COORDINATION defect and it is the
+   orchestrator's, not a track's. C claims `t0727`-`t0732` (6 items); D2 claims `t0727`-`t0728` (2).
+   ⚠⚠ **UPDATED: THREE tracks collided, not two — D1 also filed `t0727`-`t0733`.** Full picture:
+   C `t0727`-`t0733` (committed `c53d6d83`) · D2 `t0727`-`t0728` (committed `aa30c442`) · D1 `t0727`-`t0733`
+   (committed `f830d4c8`, and it ALSO rewrote `t0712`). **Each output-review is asked to LIST its branch's ids
+   and titles so the renumber is deterministic rather than guessed.**
+   ⇒ **RESERVED BLOCKS ISSUED MID-ROUND to every still-live executor** so no fourth collision lands:
+   A1 `t0750`-`t0759` · A2 `t0760`-`t0769` · B `t0770`-`t0779` · E1 `t0780`-`t0789` · E2 `t0790`-`t0799`.
+   ⇒ **MEASURED 2026-08-29 with `git merge-tree --write-tree` (read-only, nothing checked out). RESULT: THE
+   ONLY CONFLICTS IN THE WHOLE ROUND ARE THE ID COLLISION AND THE GENERATED INDEX. Zero source conflicts.**
+   Every branch merges CLEAN against base individually; **D1 vs A1 is CLEAN** (the two `src/` tracks do not
+   collide at all); every remaining conflict is `todo/t07xx.md` add/add plus `TODO.md`, which is REGENERATED
+   (`python3 scripts/todo_index.py --write`) rather than merged.
+   **Exact id sets:** C `t0727`-`t0733` (7) · D2 `t0727`,`t0728`,`t0729` (3) · D1 `t0727`-`t0733` (7) ·
+   A1 `t0750` (in its reserved block, no conflict).
+   ⇒ **RENUMBER PLAN — C keeps `t0727`-`t0733`; D2 → `t0734`-`t0736`; D1 → `t0737`-`t0743`.** (`t0734` is free:
+   C was offered it for P10 and correctly did not use it, having found the defect already filed as `t0038`.)
+   ⚠ **Renumbering is NOT a file rename** — chase every citation: item bodies, `known_gaps` fixture headers,
+   `tests/integration.rs` / `tests/security.rs` wirings, `cites` front matter, `DONE.md`, and any `src/` comment.
+   Then regenerate the index and run `cargo test --test lints`.
+   ⚠ **A2 and B have not landed yet** — both will edit `ALLOWED_UNWIRED`, which A1 already took 32 → 31, so the
+   next one is 31 → 30. Each executor was told to report its exact removal and resulting length; use those
+   reports, do not guess. (C's ids are cited from more source sites, so renumbering C
+   is the costlier and more error-prone side). ⚠ **Renumbering is not a file rename** — grep every citation:
+   the item bodies, `known_gaps` fixture headers, `tests/integration.rs` wirings, any `cites` front matter, and
+   `DONE.md`. Then regenerate the index (`python3 scripts/todo_index.py --write`) and run
+   `cargo test --test lints` — `todo_index_is_current` and the citation lints are the check.
+   ⊕ **STRUCTURAL FIX OWED, not just this instance (Core #6):** parallel tracks allocating ids from a shared
+   monotonic base will collide again every round. Either hand each track a reserved id block in its brief, or
+   make the id allocation collision-proof. File it if not fixed this round.
+
+1. **RAISE THE SELF-HOST MATCH FLOOR at round close, once every track has integrated.** D2's executor measured
+   the floor slack (measured MATCH well above it) and **deliberately did not raise it from a pre-integration
+   worktree** — correct call: it is a round-level ratchet and raising it mid-round with tracks in flight risks
+   a false red in someone else's track. Recommendation on D2's numbers was `measured − 5`. ⚠ **REGENERATE the
+   measurement after integration; do NOT reuse D2's figure** (Core #5 — the number moves as tracks land).
+2. **DO NOT file a `todo/` item for a defect a track CLOSED in the same round.** D2's brief ordered "file it,
+   then fix it" as a hedge; the fix landed complete, so filing would put completed work in a directory that
+   holds pending work only and would trip the output-review's own breadcrumb gate. The executor flagged rather
+   than complying silently — right call. **The record for a same-round close is the `DONE.md` entry.**
+4. **ADD THE LLVM SECURITY LANE TO THE ROUND-CLOSE BATTERY in `AGENTS.md` § Round lifecycle step 4.**
+   Track C made `tests/security.rs` backend-aware, so `GG_BACKEND=llvm cargo test --test security --release`
+   is now a REAL lane — and on its first genuine run it found `t0729` (a backend `memcpy` over overlapping
+   stack slots). The battery does not name it, so nothing schedules it. ⚠ **Editing `AGENTS.md` trips its own
+   ratchets** (size ceiling, rule count, non-normative rows): add ONE compact imperative in the present tense,
+   pay for it by compacting a neighbour rather than raising a ceiling, put the provenance in devbook/29-30,
+   and run `cargo test --test lints` after.
+5b. **⚠⚠ THE FOUR GREP-BEFORE-YOU-FILE MISSES THIS ROUND HAVE ONE STRUCTURAL CAUSE — FIX THE CAUSE, NOT THE
+   INSTANCES.** Track C's executor diagnosed it: `todo/t0038` (HIGH, name-resolution soundness, with a
+   committed live repro) was indexed under `areas = ["cow"]` with an EMPTY `mechanism` field. A symptom grep
+   returned 7 unrelated files; a mechanism grep could not reach it at all. **Two agents searched independently
+   and both failed to find a live HIGH item.** The other three misses this round are the same shape
+   (`t0641`, `t0572`, and a scout's "already filed in `t0725`" claim that was simply false).
+   ⇒ **The rule cannot stick while items are reachable only through a category an earlier migration guessed
+   at.** `t0677` already carries the `mechanism`-field census; `t0678` carries the hot-list pointers. This is
+   the evidence that they are load-bearing, not hygiene. ⚠ Note the migration's own rule — *a field the item's
+   text does not STATE stays EMPTY* — is correct and must not be reversed; the fix is to POPULATE from the
+   text, never to guess. Consider an `areas` audit as an R48 track.
+
+5. **RECONCILE THE FILINGS AGAINST `t0641` BEFORE CLOSE.** Track C's output-review found a fifth silent-drop
+   sibling **already filed as `t0641(b)`** that appears in NO scout, brief, or review pass on that track. That
+   is a grep-before-you-file miss that survived a scout and three review passes — check the round's other
+   filings for the same failure before adding them.
+3. **⚖ OWNER CALLS ACCUMULATING FOR ROUND CLOSE — batch them, do NOT interrupt the round for each.**
+   ⚠ **Cite these by TITLE, not by id, until the three-way collision is resolved** (see item 0): C's
+   `t0727`-`t0733` survive, D2's and D1's renumber, so an id quoted today may name a different item tomorrow.
+   - **`unsafe equip` (D2's filing).** Documented as live in `docs/language-design.md`, ABSENT from the
+     authoritative reference's grammar, **Rust gg REJECTS it, the self-host ACCEPTS and RUNS it.** The output
+     review confirmed the record holds a genuine CONFLICT, not a direction. Unratified semantics + lane
+     divergence ⇒ Round-lifecycle 7(ii). ⚠ D2's pin must stay neutral until ruled.
+   - **What should `gg run --backend=llvm` MEAN? (C's `t0730`.)** The backend selector is currently accepted
+     and ignored on that subcommand. Honour it, reject it loudly, or define it away — a semantics choice.
+   - **⚑ SHOULD THE SANITIZER SWEEP'S LEAK ALLOWLIST BE KEYED BY *MECHANISM* INSTEAD OF BY *FIXTURE*?
+     (Track E1, row 4b — HELD pending this ruling.)** ⚠ **The in-tree records already reserve this to the
+     owner** — both `todo/t0572` and `tests/sanitize/LEAK_ALLOWLIST.txt`'s own header say adding a tolerated
+     row needs an owner decision, and class-keying is bulk-adding rows.
+     **FOR:** the gate currently reds on **corpus growth alone** — 22 fixtures leak through ONE mechanism,
+     21 are allowlisted, and the 22nd reds it purely for landing 5 days after the baseline. That is a false
+     signal generator that will cost every future round.
+     **AGAINST:** a genuinely NEW instance of a tolerated mechanism would then ship silently. That is a real
+     reduction in the strength of the gate that covers the language's central claim.
+     ⚠ **And it is not merely cosmetic: E1's pass 2 measured that a correctly-built class-keyed gate could
+     clear ALL THREE currently-red rows without touching `src/`** — so this ruling decides whether the sweep
+     goes green this round by tolerating more, or stays red until the underlying defects are actually fixed.
+     ⚠ **STATE THE REFERENCE-GRADE DEFAULT INSIDE THE ASK, not as a neutral fork (E1 pass 3).** The allowlist
+     header's own answer is **"fix the leak instead"**; tolerating a class is the departure and carries the
+     burden of proof. Framing it as a balanced choice would misrepresent the record.
+     ⊕ **AND THE TWO EFFECTS ARE SEPARABLE — E1 pass 3 measured this and it changes the question.** Class-keying
+     makes the gate strictly **TIGHTER** in one direction (a second, untolerated class inside an
+     already-allowlisted fixture starts redding — today it hides behind the bare-stem row) and **LOOSER** only
+     for the three currently-red rows. **Only the looser half needs a ruling.** E1 lands the tighter half now
+     with zero membership change.
+     ⇒ **E1 will DESIGN and MEASURE it (row 4a) and report the two effects as a table. Do not accept the ruling
+     without that measurement in hand.**
+   - **`RawPtr[T]`: implement or mark planned? (C's `t0733`.)** Documented in TWO book files; **does not exist
+     in the tree.** Doc-vs-reality, so the fix direction is a design call, not hygiene.
+   ⊕ **A2 may add one:** if it measures the ruled shape INFEASIBLE (not merely expensive) it stops and reports,
+   and that becomes an owner call on scope. Not expected — pass 3 refuted the order-of-magnitude estimate.
+
+4. **`t0727` (D2's) IS AN OWNER CALL, held for round close** — `unsafe equip` is documented as live, Rust gg REJECTS
+   it, the self-host ACCEPTS and runs it. A doc-vs-code conflict in a doc that states INTENT, i.e. an
+   unratified semantics question with a lane divergence. D2's executor deliberately did not pick a direction.
+   ⚠ Do not resolve this by ruling for whichever lane is convenient.
+
+**⚖ THE STANDING RULE THIS ROUND IS RUN UNDER (from the R46 stop):** the orchestrator authors NO MECHANISM
+CLAIMS. A brief carries scope, order, obligations and the acceptance bar. Mechanism comes from the executor,
+checked by the reviewer, against evidence neither inherited from the orchestrator. Every `todo/` item handed to
+a track is labelled filed EVIDENCE to re-verify at HEAD, never established truth.
+
+
+**⚠ RETIRED 2026-08-29 — the R45 delivery set and its HOLD on tracks B/C/E are spent; R45 is CLOSED.** Their
+`/tmp` scout reports are exhaust and may be gone; everything durable from them is in `todo/`. If one of those
+subjects is picked up again, start from the `todo/` item and RE-MEASURE at HEAD (Core #5) — every figure those
+reports carried was taken against a HEAD that has since moved.
 
 **R45 IS CLOSED (2026-08-29).** Full record in `DONE.md`; the round-close battery was green on every gate
 and the convergence line is quoted there. Do not re-derive R45 state from this block — read `DONE.md`.
@@ -405,7 +787,6 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t0035`](todo/t0035.md) **HIGH** — 🆕🐛 [HIGH — TWO FACES, ONE ROOT, both gg check-clean; found 2026-08-17 by the Track-E brief-review pass 2, orchestrator-r…
 - [`t0036`](todo/t0036.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — MEMORY SAFETY, BOTH BACKENDS, from a plain READ of safe syntax; found 2026-08-17 by the Track-E brief-re…
 - [`t0037`](todo/t0037.md) **HIGH** — 🆕🐛💥 [HIGH — Core #10 SILENT DATA LOSS BY THE FORMATTER; found 2026-08-17 by the Phase-4c brief-review pass 2, orchestrat…
-- [`t0038`](todo/t0038.md) **HIGH** — 🆕🚨 [HIGH — Core #8 SOUNDNESS: an UNDEFINED TYPE NAME is silently accepted in 9 of 10 type positions; found 2026-08-17 by…
 - [`t0039`](todo/t0039.md) **MED** — 🆕🧹 [MED — NAME-MATCHING CLASS, CLAUDE.md "No name matching"; scoped 2026-08-17] The C runtime-chunk selector routes 759…
 - [`t0040`](todo/t0040.md) **MED** — 🧹 [MED — examples/ IS GATED ON BUILD ONLY; the RUN half is deferred, owner 2026-08-17] Nothing asserts that an example s…
 - [`t0041`](todo/t0041.md) **HIGH** — 🆕📐 [HIGH — CAMPAIGN, owner-ratified 2026-08-17 (ledger); "fix first, promote second"] Make for x in xs the ACTUAL defaul…
@@ -508,14 +889,15 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t0684`](todo/t0684.md) **HIGH** — 🆕🚨 [HIGH — binding Box.get() to a local DOUBLE-FREES; gg check clean; measured 2026-08-27, orchestrator-verified] The tr…
 - [`t0697`](todo/t0697.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — LIVE MEMORY-SAFETY DEFECT AT HEAD, BOTH LANES, reachable by changing ONE TOKEN in a committed PASSING fi…
 - [`t0698`](todo/t0698.md) **HIGH** — 🆕🚨 [HIGH — READING through an EXPLICIT & BORROW PARAMETER DESTROYS the caller's value; gg check clean; found 2026-08-27…
-- [`t0699`](todo/t0699.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — A USER METHOD'S *NAME* DECIDES MEMORY SAFETY; SIGSEGV on BOTH backends; found 2026-08-27 by the R45 DEEP…
 - [`t0703`](todo/t0703.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — WHICH NAME THE VIEW IS SPELLED THROUGH DECIDES MEMORY SAFETY, and the CoW rescue ITSELF reads the freed…
 - [`t0704`](todo/t0704.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — capturing a collection in a CLOSURE and then mutating the source is a USE-AFTER-FREE; rc 139 SIGSEGV on…
 - [`t0707`](todo/t0707.md) **HIGH** — 🆕🐛💥 [HIGH — CRASH ON A VALID PROGRAM: shared T x = <a local that is still live> ICEs gg build rc 101 with local _1 read…
-- [`t0708`](todo/t0708.md) **HIGH** — 🆕🐛 [HIGH — LEAK, pristine HEAD, BOTH lanes; found 2026-08-27 by the R45 Track A brief-review pass 16, orchestrator-verif…
 - [`t0709`](todo/t0709.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — a Vector[Box[Trait]] built with Box.new + push and RETURNED FROM A HELPER segfaults: rc 139 on BOTH back…
 - [`t0715`](todo/t0715.md) **HIGH** — 🆕📉 [HIGH — a MEASURED +13.08% stage-1 string-clone regression, correctness-required but reclaimable; ceilings re-seeded…
-- [`t0717`](todo/t0717.md) **HIGH** — 🆕🚨 [HIGH — a NAME MATCH decides MEMORY SAFETY in Rust gg; Layering rule 2 head-on, and the reference-grade blueprint alr…
+- [`t0750`](todo/t0750.md) **HIGH** — 🆕🚨 [HIGH — A CoW COLLECTION ALIAS LOSES ITS VALUE SEMANTICS INSIDE A while LOOP, IN BOTH DIRECTIONS. Silent wrong values…
+- [`t0763`](todo/t0763.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — a &self MUTATOR ON A GENERIC EQUIP IS A USE-AFTER-FREE; rc 139 SIGSEGV on BOTH backends; found 2026-08-2…
+- [`t0771`](todo/t0771.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — AddressSanitizer: heap-use-after-free under --sanitize, and on a plain build rc 0 with SILENTLY WRONG OU…
+- [`t0772`](todo/t0772.md) **HIGH** — 🆕🐛 [HIGH — a stdout-invisible leak on EVERY combinator call over a named receiver with a heap payload; 6 B / 1 allocatio…
 ### Medium
 
 - [`t0115`](todo/t0115.md) **MED** — 🆕🐛 [MED — COMMENT MISATTRIBUTION, PRE-EXISTING on both lanes; found 2026-08-19 by the R43 Track G output review, executo…
@@ -534,7 +916,6 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t0122`](todo/t0122.md) **MED** — [MED — self-host lane lag, Core #9] The SH CoW scan never marks self — cow_loop_bare_param_self_field stays in known_gap…
 - [`t0123`](todo/t0123.md) **LOW** — [LOW — SH over-materialization; scout residual] method_mutates_receiver's step-3 conservative default over-marks READ-ON…
 - [`t0124`](todo/t0124.md) **MED** — [MED — WRONG-CODE; comprehension-loop sibling of 2G, LANE-ASYMMETRIC] The 4 comprehension emitters emit header/body/incr…
-- [`t0125`](todo/t0125.md) **MED** — [MED — under-materialize; CoW 2G step-4 gap, deferred by design] A user &self-mutator receiver in a loop is not caught b…
 - [`t0126`](todo/t0126.md) **LOW** — [LOW — ggdef subset gap, Core #9] String.push_char (+ the other 8 typed is_mutating builtins the old MUTATING_METHODS li…
 - [`t0127`](todo/t0127.md) **LOW** — [LOW — shared under-approx, PRE-EXISTING in BOTH the pre-2G walker and the prescan] cow_after_expr_moves does not recurs…
 - [`t0128`](todo/t0128.md) — [move-despite-later-read on a Shared-containing struct — RUST LANE FIXED c0c5d59c (2026-07-20); residuals only.] The Rus…
@@ -558,6 +939,9 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 
 - [`t0141`](todo/t0141.md) — ensure_owned_at_boundary migration — remaining specialized sites. 5 remaining each have logic beyond pure boundary-clone…
 
+- [`t0752`](todo/t0752.md) **MED** — 🆕🧹🔍 [MED — cow_sever_all_aliases_from IS NEVER ENTERED BY THE ENTIRE ALIAS CORPUS, and its two conditions may be MUTUALL…
+- [`t0790`](todo/t0790.md) **MED** — 🆕🐛 [MED — LEAK, gg check clean and stdout CORRECT; found 2026-08-29 by R47 Track E2's brief-review pass 1, re-measured b…
+- [`t0792`](todo/t0792.md) **MED** — 🆕🐛 [MED — WRONG ANSWER, gg check clean, both backends, ASan-clean; found 2026-08-29 by R47 Track E2's executor while clo…
 ### Low
 
 - [`t0142`](todo/t0142.md) **LOW** — 🆕📋 [LOW — GUARD SHAPE, measured four times in one track; filed 2026-08-19 by R43 Track G] doc_source_citations_name_the_…
@@ -585,6 +969,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 
 - [`t0154`](todo/t0154.md) **LOW** — 🧹 [LOW — Track I measurement scout sibling, filed 2026-07-28; latent perf shape, not a bug today] lower_call_arg G2 proj…
 
+- [`t0761`](todo/t0761.md) **LOW** — [LOW — PRECISION residual, not a correctness one; measured while closing t0699] Call sites inside meta-expanded bodies g…
 ## Self-host parity
 
 - [`t0155`](todo/t0155.md) **HIGH** — 🆕🐛 [HIGH — SELF-HOST LANE MEMORY-SAFETY, measured 2026-08-26 in the R44 Track K fix-up; this is the ROOT of Track K's "s…
@@ -616,6 +1001,8 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 
 - [`t0170`](todo/t0170.md) **HIGH** — 🆕🐛 [HIGH — parity WRONG newcomers, from the 2026-07-16 battery regen; PRE-EXISTING lane gaps that entered the corpus via…
 
+- [`t0741`](todo/t0741.md) **HIGH** — 🆕🐛 [HIGH — latent today, but it is the reason a shipped safety check has to be weaker than its Rust counterpart; found R…
+- [`t0712`](todo/t0712.md) **HIGH** — 🐛 [HIGH — five live self-host miscompiles, one of them a deterministic SIGBUS on ordinary beginner code; Rust gg is corr…
 ### Medium
 
 - [`t0171`](todo/t0171.md) **MED** — 🆕 [MED — self-host lane gap, Core #9; R40 Track B] The 3 driver-embedded lexer copies lack the \xHH arm + unknown-escape…
@@ -873,7 +1260,12 @@ Remaining from this triage (GO #1 / GO #2 v2 / named-arg-reorder candidate #3 ar
 - lazy-iter adapter-chain infinite-loop (DEEP, KILLED): FilterIter.next()'s `self.inner` EFieldAccess copies the inner iterator (lower_place_base lower_stmt.gg:1215 has no EFieldAccess case → value copy not field-borrow); Ref[Dict]/Ref[Set] source isn't is_resource_field_type (lower_types.gg:2521). Real fix = place-projection receiver (&self.inner), architectural (self-host has no Place/Projection::Field IR). DEEP.
 - collection type-alias (type IntList = Vector[int]) — meta_aliases drops the [int] targ; needs targ-preserving alias storage. Separate from GO #1.
 
-- [`t0712`](todo/t0712.md) **MED** — 🆕🐛 [MEDIUM — lane divergence with a CLEAR correct direction (reject); a Core #10 lower-or-reject violation on the self-h…
+- [`t0773`](todo/t0773.md) **HIGH** — 🆕🐛 [HIGH — Core #9 LANE LAG, filed by R47 Track B the round the Rust lane landed, per this tree's recorded practice: lan…
+- [`t0740`](todo/t0740.md) **MED** — 🆕🐛 [MED — the RECEIVER/ROOT-SHAPE axis of R47 Track D1's primitive-receiver reject: four of its five cells are unsampled…
+- [`t0744`](todo/t0744.md) **MED** — 🆕🐛 [MED — TWO of the THREE named residuals of R47 Track D1's primitive-receiver reject; all are lane divergences with a…
+- [`t0746`](todo/t0746.md) **MED** — 🆕🐛 [MED — the NOMINAL-receiver cell of the "name list answers without checking the receiver" family; a lane divergence w…
+- [`t0747`](todo/t0747.md) **MED** — 🆕🐛 [MED — a VIEW-VS-OWNED axis divergence, i.e. Layering rule 1's explicitly named invariant, on a path the bootstrap us…
+- [`t0791`](todo/t0791.md) **MED** — 🆕🐛 [MED — Core #9 LANE LAG, opened 2026-08-29 by R47 Track E2's own fix; source-verified, not yet run-measured on the se…
 ### Low
 
 - [`t0269`](todo/t0269.md) — 🐛 SELF-HOST (SH-lane miscompile, filed R40 Track-J review 2026-08-10) — for (i, b) in s.bytes().enumerate() over-reads t…
@@ -1074,6 +1466,8 @@ The Increment-3 `closure_value_ret_type` channel is populated only at the closur
 #### Trap-normalization (D11) T2b follow-ups (filed 2026-07-10 by the T2b executor)
 - [`t0364`](todo/t0364.md) **LOW** — [LOW — reference-grade span plumbing; not conformance-compared] The RARER bounds-class sites still trap trap[T_Bounds] a…
 
+- [`t0762`](todo/t0762.md) **LOW** — [LOW — ggdef SUBSET GAP, Core #9 note] meta for as a MATCH-ARM generator is outside the ggdef subset, so that shape has…
+- [`t0745`](todo/t0745.md) **LOW** — 🆕 [LOW — ggdef subset gap, Core #9's "out-of-subset shapes get a note + a filed subset gap"; filed by R47 Track D1 as th…
 ## Semantics / reference-grade rejection
 
 - [`t0556`](todo/t0556.md) **HIGH** — [HIGH — SH lane, Core #10 lower-or-reject. A SILENT-TRUNCATION MISCOMPILE, not a missing feature.] The self-host silentl…
@@ -1117,6 +1511,7 @@ The Increment-3 `closure_value_ret_type` channel is populated only at the closur
 - [`t0395`](todo/t0395.md) — 🐛 [PRODUCTION MISCOMPILE — surfaced by P1-A §10.3 fold 2026-07-06, ggdef differential; PENDING pass-2 review confirmatio…
 
 - [`t0396`](todo/t0396.md) **MED** — 🆕🐛 [MED — D36 read-face .method() auto-deref on Mutex[Box[Trait]] / Guard[Box[Trait]] (post-Tracks-P/R/N2 residual)] Gua…
+- [`t0038`](todo/t0038.md) **HIGH** — 🆕🚨 [HIGH — Core #8 SOUNDNESS: an UNDEFINED TYPE NAME is silently accepted in 9 of 10 type positions; found 2026-08-17 by…
 
 #### 🆕 GUARDS-SLICE G1 DISCOVERIES (filed 2026-07-18 by the silent-fallthrough enumeration — each a Core-#10 silent drop, empirically verified with wrong-output probes; the ratchet pins the SITES, the fixes are separate Core-#9 all-lanes tracks)
 - [`t0397`](todo/t0397.md) **HIGH** — [HIGH — WRONG-CODE, Rust lane] for (a,b,c) in Dict[int,int] silently binds ZEROS. lower_for_dict's _ => (src/ir/lowering…
@@ -1152,7 +1547,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t0710`](todo/t0710.md) **HIGH** — 🆕🚨 [HIGH — AN IMPORT STATEMENT CHANGES WHETHER A PROGRAM TYPECHECKS; found 2026-08-27 by R45 Track A brief-review pass 2…
 - [`t0718`](todo/t0718.md) **HIGH** — 🆕🚨 [HIGH — Layering rule 2 class retirement: NAME MATCHING DECIDES TYPE SEMANTICS, and the typed replacement already exi…
 - [`t0721`](todo/t0721.md) **HIGH** — 🆕🐛 [HIGH — a WRONG ANSWER with rc 0, the worst outcome; the REFERENCE LAGS THE SELF-HOST, i.e. a succession milestone (s…
-- [`t0725`](todo/t0725.md) **HIGH** — 🆕🚨 [HIGH — R46 Track C, STOPPED BEFORE EXECUTION by owner decision 2026-08-29. Preserves the round's measured findings.…
+- [`t0770`](todo/t0770.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — rc 139 SIGSEGV on a plain build, AddressSanitizer: stack-buffer-overflow under --sanitize, deterministic…
 ### Medium
 
 
@@ -1243,6 +1638,7 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 
 - [`t0451`](todo/t0451.md) **MED** — 🆕🐛 [MED — fix-it-validity CLASS, filed Round XXIX Track C 2026-08-03; the class-retirement mechanism landed with 1 row (…
 
+- [`t0760`](todo/t0760.md) **MED** — [MED — Layering rule 4, two sites; found while closing t0699] TWO consumers re-derive f-string interpolations from RAW T…
 ### Low
 
 - [`t0452`](todo/t0452.md) **LOW** — 🆕 [LOW — diagnostic ergonomics follow-up from Round XXIX Track A close 2026-08-03] E_NotIndexable message text should na…
@@ -1290,6 +1686,8 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t0700`](todo/t0700.md) **HIGH** — 🆕🐛💥 [HIGH — Vector[Box[Trait]] NEVER DROPS ITS ELEMENTS: a LIVE LEAK at HEAD in a COMMITTED, PASSING fixture; found 2026…
 - [`t0711`](todo/t0711.md) **HIGH** — 🆕🐛 [HIGH — CC-FAIL on BOTH lanes, so ≥2 bugs (Core #8); found R45 Track G while enumerating the postfix-link axis] A met…
 - [`t0720`](todo/t0720.md) **HIGH** — 🆕🐛💥 [HIGH — ICE on Rust gg (exit 101), resolve-reject on the self-host, so ≥2 bugs (Core #8); found R45 Track G while en…
+- [`t0780`](todo/t0780.md) **HIGH** — 🆕🐛 [HIGH — UNDEFINED BEHAVIOUR in emitted C, measured 2026-08-29 at f3feea79 on a corpus fixture; C lane] sort() / sorte…
+- [`t0729`](todo/t0729.md) **HIGH** — [HIGH — UNDEFINED BEHAVIOUR IN EMITTED CODE: the LLVM backend copies overlapping stack slots with memcpy. Found 2026-08-…
 ### Medium
 - [`t0474`](todo/t0474.md) **MED** — 🆕🔧 [MED — prerequisite for retiring the last indirect-call shape heuristic; filed 2026-08-19 by R43 Track C] Tag LARGE n…
 - [`t0475`](todo/t0475.md) **LOW** — 🧹 [LOW — Layering rule 3, one source of truth per axis; found 2026-08-19 by R43 Track C] src/backend/c_lir/helpers.rs ca…
@@ -1374,7 +1772,6 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 
 - [`t0517`](todo/t0517.md) — 🐛 ASan: residual Rust-gg leak cohort AFTER the print-temp leak-class fix (re-measure via gg build --sanitize + ASAN_OPTI…
 
-- [`t0518`](todo/t0518.md) — 🐛 ASan: print_trait_object 61B/2 — trait-dispatch display result never drop-registered. The print-temp fix registers the…
 
 - [`t0519`](todo/t0519.md) — 🐛 Print-temp site-C ungated sub-shape: a Clone-of-NON-string-AGGREGATE f-string interp temp stays UNREGISTERED (delibera…
 
@@ -1397,6 +1794,11 @@ Multiple sites reconstruct "is this field a borrow pointer" from the field-type-
 - [`t0527`](todo/t0527.md) **MED** — 🆕 [MEDIUM — typed-metadata smell, from the R-C scout 2026-07-10] The LIR extern decl hardcodes an i64 return for the mon…
 - [`t0689`](todo/t0689.md) **MED** — 🆕🐛 [MED — Box[Optional[T]] fails to BUILD on BOTH lanes; found 2026-08-27 by R45 Track A brief-review pass 7, orchestrat…
 - [`t0690`](todo/t0690.md) **MED** — 🆕🧹 [MED — Layering rule 2 census owed: 8 starts_with("Box__") sites at/below the LIR boundary, some of which read as ROU…
+- [`t0774`](todo/t0774.md) **MED** — 🆕🧹 [MEDIUM — a live Layering-rule-2 smell and the natural migration point for the indirect-dispatch chokepoint; raised b…
+- [`t0727`](todo/t0727.md) **MED** — [MED — --sanitize --backend=llvm instruments the RUNTIME ONLY; generated user code carries no shadow checks. Found 2026-…
+- [`t0728`](todo/t0728.md) **MED** — [MED — A NAME MATCH OUTRANKS THE USER'S TYPED DECLARATION: an extern bound to malloc/calloc/realloc has its declared ret…
+- [`t0742`](todo/t0742.md) **MED** — 🆕🐛 [MED — BOTH LANES AGREE ON THE WRONG ANSWER, which is a red flag and not a pass (Core #8); found R47 Track D1 while m…
+- [`t0743`](todo/t0743.md) **MED** — 🆕🐛 [MED — BOTH LANES AGREE ON THE WRONG ANSWER (Core #8 red flag); found R47 Track D1 while building the ACCEPT control…
 ### Low
 
 - [`t0528`](todo/t0528.md) — 🔭 (low-pri, const-bytes #10) — scalar-FLOAT static const-init uses %g (float_to_str), not bit-exact. scalar_static_c_lit…
@@ -1457,7 +1859,7 @@ when it passes cleanly (per Task Continuity).
 - [`t0553`](todo/t0553.md) — Dynamic dead-clone detection: count clones where NEITHER source nor copy is written afterward — the clone was provably u…
 
 #### 🆕 PLANNER CONSUMER-#1 ROUND FILINGS (2026-07-19; the branch/scope class + hotfix are LANDED both lanes — these are the residuals the round exposed)
-- [`t0554`](todo/t0554.md) **MED** — [MED — Core #6 guard, output-review finding] TWO table-equivalence lints for the lane-symmetry mutability mirrors. The m…
+- [`t0554`](todo/t0554.md) **MED** — [MED — Core #6 guard, output-review finding] ONE table-equivalence lint for the lane-symmetry mutability mirror. The mut…
 - [`t0555`](todo/t0555.md) **MED** — [MED — both lanes, scan-invisibility sibling] The SMeta* family (SMetaFor/SMetaIf/SMetaMatch/SMetaWhile, runtime stmt bo…
 - [`t0557`](todo/t0557.md) **LOW** — [LOW — Core #10 sibling, Rust] lower_stmt's Select dispatch DISCARDS else_arm (Stmt::Select { arms, else_arm: _ }, stmts…
 - [`t0558`](todo/t0558.md) **LOW** — [LOW — perf, benchmark-round input] builtin_method_mutates returns Some(d.clone()) (deep clone incl. a Vector) per class…
@@ -1488,7 +1890,7 @@ when it passes cleanly (per Task Continuity).
 
 - [`t0571`](todo/t0571.md) **MED** — 🆕🧹 [MED — A PROCESS TRAP THAT SHIPPED A DEFECT THIS ROUND; found 2026-08-24 by R44 Track A, on itself] git mv + "stage e…
 
-- [`t0572`](todo/t0572.md) **HIGH** — 🆕🐛 [HIGH — scripts/sanitize_sweep.sh IS RED AT HEAD, and it is in NO gate list, which is exactly why nobody knew; measur…
+- [`t0572`](todo/t0572.md) **HIGH** — 🐛 [HIGH — scripts/sanitize_sweep.sh IS RED AT HEAD; re-measure, never quote: scripts/sanitize_sweep.sh (~25 min for the…
 
 - [`t0573`](todo/t0573.md) **MED** — 🆕🐛 [MED — Layering rule 2 / "No name matching" INSIDE A LINT, and it cost a mid-gate panic; found 2026-08-24 by R44 Trac…
 
@@ -1566,6 +1968,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 ### Low
 
 - [`t0606`](todo/t0606.md) — 🧹 (G1 follow-up) lint-file-scope: widen g1_projected_materialize_sites_untrack files[] IF a projected-materialize cow_be…
+- [`t0731`](todo/t0731.md) **LOW** — [LOW — the sanitize sweep covers ONE lane and ONE directory level; extending it to the LLVM lane is now possible for the…
 ## Concurrency
 
 ### High
@@ -1611,6 +2014,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0627`](todo/t0627.md) — 🧹 CONCURRENCY FOLLOW-UPS — ORTHOGONAL items surfaced by the shared_with_check_then_act investigation (the CI-failure fix…
 - [`t0628`](todo/t0628.md) — 🔭 FIDELITY (atomics/sync) — retire the Rust map_stdlib_name sync INSTANCE-method entries (DEFERRED, PROVEN UNSAFE; the s…
 
+- [`t0732`](todo/t0732.md) **MED** — [MED — shared(atomic) int LEAKS 8 BYTES ON BOTH BACKENDS, and no gate in this tree can see it. Adjudicated 2026-08-29 by…
 ### Low
 
 - [`t0629`](todo/t0629.md) — Spawn captures don't check stale shared-derived: spawned closures can capture stale pre-await data.
@@ -1630,7 +2034,6 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0634`](todo/t0634.md) **MED** — 🆕🐛 [MED — reserved-name leak, the FOURTH postcondition-family sibling; found by the R42 Track-D brief-review pass 11, or…
 - [`t0635`](todo/t0635.md) **MED** — 🆕🧹 [MED — Layering rule 3, one source of truth; census taken by R41 T-FMT-A 2026-08-11] Rewire the 44 remaining name.nod…
 
-- [`t0723`](todo/t0723.md) **HIGH** — 🆕🚨 [HIGH — A GATE THAT CAN NEVER GO RED: --sanitize is a SILENT NO-OP on the LLVM backend, which makes every "ASan-clean…
 ### High
 
 
@@ -1638,12 +2041,13 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0637`](todo/t0637.md) — 📋 [gorget-sheets snag #57 — tooling/UX, 2026-07-07] Import path model: file-relative, no package src/ root. Same-dir imp…
 - [`t0638`](todo/t0638.md) **MED** — 🆕🐛 [MED — fmt interior-comment escape: the residual OUTSIDE the fill-emitter chokepoint] every FILL-emitted delimited li…
 
+- [`t0900`](todo/t0900.md) **HIGH** — 🆕🚨 [HIGH — AN ORPHANED TEST BINARY BURNED A FULL CORE FOR 40 HOURS AND SKEWED THE ROUND'S MEASUREMENTS. Found 2026-08-29…
 ### Medium
 
 - [`t0639`](todo/t0639.md) — 🆕 CI/TOOLING FOLLOW-UPS (filed 2026-06-30, from the test_result_advanced CI-red fix — see DONE):
 
 - [`t0640`](todo/t0640.md) — 🏁 GG_IMPL ENDGAME TRACK (owner-chosen 2026-06-19, ACTIVE) — build-time compiler selector: GG_IMPL=selfhost|rust produces…
-- [`t0641`](todo/t0641.md) — 🔧 --release (-O2) silently IGNORED on 3 build sub-paths (the main build/run paths WORK — see DONE.md). release isn't con…
+- [`t0641`](todo/t0641.md) **MED** — 🔧 EARLY-RETURNING BUILD SUB-PATHS SILENTLY DROP FLAGS — a CLASS, not one flag. try_build_ir has FIVE build sub-paths, an…
 
 - [`t0642`](todo/t0642.md) — 🐛 GG_IMPL self-host exec is shell-based (system() → sh -c) — word-splits on spaces/shell-metacharacters in paths (filed…
 - [`t0643`](todo/t0643.md) — LSP server. language-design.md lists it but nothing ships. The gorget-js agent flagged it as the single biggest DX gap (…
@@ -1661,6 +2065,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 
 - [`t0649`](todo/t0649.md) **MED** — 🆕🐛 [MED — R40, gg fmt CLI arg handling] Two pre-existing gg fmt CLI arg-parsing bugs (surfaced by Track G doc verificati…
 
+- [`t0730`](todo/t0730.md) **MED** — [MED — ⚠ OWNER CALL, NOT A MECHANICAL FIX: gg run --backend=llvm and gg run --target=freestanding are ACCEPTED AND SILEN…
 ## Docs / devbook + misc language features
 
 - [`t0650`](todo/t0650.md) **MED** — 🆕📖 [MED — doc hygiene around match/exhaustiveness, three items; found 2026-08-22 by the R44 Track-F scout] (a) REFERENCE…
@@ -1701,6 +2106,8 @@ Only NEW items are listed — recommendations already tracked elsewhere are cros
 - [`t0670`](todo/t0670.md) **MED** — [MED — doc-track; EXTRACTED 2026-07-21 from the drained NEXT-ROUND-QUEUE line (was TODO:30); SPLIT 2026-08-05 out of the…
 
 - [`t0686`](todo/t0686.md) **MED** — 🆕📄 [MED — docs/language-design.md §10's OPENING concurrency example does not typecheck; measured 2026-08-27 at HEAD in t…
+- [`t0751`](todo/t0751.md) **MED** — 🆕🧹 [MED — A DRIFT COHORT OF EIGHT STALE path:line CITATIONS IN docs/devbook/11-copy-on-write.md, and the guard that woul…
+- [`t0733`](todo/t0733.md) **MED** — [MED — AN UNIMPLEMENTED FEATURE IS DOCUMENTED AS IF IT EXISTS: RawPtr[T] has a numbered design section and a worked book…
 - [`t0800`](todo/t0800.md) — [MED — DOC WRITE-THROUGH BACKLOG. The burn-down tests/lints.rs's BUDGET re-seed points at.]
 ### Low
 

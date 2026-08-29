@@ -143,14 +143,21 @@ fn gg_binary() -> &'static Path {
 ///
 /// When `GG_BACKEND=llvm` is set in the environment, append `--backend=llvm`
 /// to `gg build`, `gg test` AND `gg run` (see the `matches!` below). `check`,
-/// `fmt` and friends do not get it, because the CLI rejects it there.
+/// `fmt` and friends do not get it — not because the CLI rejects it there (it
+/// does not: `gg check --backend=llvm` exits 0 and ignores the flag), but
+/// because those commands generate no code, so a backend is meaningless to
+/// them. `tests/security.rs`'s namesake helper makes the same distinction for
+/// the same reason.
 ///
 /// ⚠ `gg run` ACCEPTS the flag and IGNORES it: `src/main.rs`'s `"run" =>` arm
 /// hardcodes `try_build_ir(..., "c-lir", "native")` and `--backend` is merely
 /// swallowed by the `flags_with_values` skip-list. So the `gg_command("run")`
-/// tests execute the C backend even under `GG_BACKEND=llvm` — filed in
-/// TODO.md; do NOT "fix" this by adding flag forwarding without deciding what
-/// `gg run --backend=llvm` should mean.
+/// tests execute the C backend even under `GG_BACKEND=llvm` — filed as
+/// `todo/t0730`. Do NOT "fix" this by adding flag forwarding: what
+/// `gg run --backend=llvm` should MEAN is an unratified semantics question and
+/// an owner call, and t0730 records the measured radius (6 `gg_command("run")`
+/// sites, two of them Rust parity ORACLES that must stay on the reference lane
+/// whichever way the decision goes).
 fn gg_command(subcommand: &str) -> Command {
     let mut cmd = Command::new(gg_binary());
     cmd.arg(subcommand);
@@ -4719,6 +4726,30 @@ fn known_gap_auto_empty_literal_push_string_raw_pointer() {
     run_gg(
         "known_gaps/auto_empty_literal_push_string_raw_pointer.gg",
         "2\nalpha",
+    );
+}
+
+/// KNOWN GAP (Rust gg only — the self-host lane is CORRECT): the CoW value
+/// semantics of a local collection alias are lost inside a `while` loop, in
+/// both directions. Mutating through the alias LOSES every write; mutating
+/// through the root never SEVERS the alias, so value semantics silently
+/// degrades to reference semantics. Straight-line, both directions are
+/// correct and pinned by `cow_transitive_alias`.
+///
+/// The expected string below is what the self-host lane prints today, i.e.
+/// the oracle's answer, and it is what the language means. Rust gg prints
+/// `alias-loop 1 1` / `root-loop 4 4`, so this test is RED at HEAD by
+/// construction.
+///
+/// NOT the `cow_loop_bare_param_*` family: both pre-header hooks filter their
+/// candidates with `ctx.is_bare_param` (`src/ir/lowering/stmts/mod.rs:2632`,
+/// `:2699`), so a local alias is outside that machinery entirely.
+#[test]
+#[ignore = "known gap (R47): a local CoW collection alias loses its value semantics inside a `while` loop — mutation through the alias loses every write, mutation through the root never severs. Rust gg only; the self-host lane prints the correct answer. Un-ignore when the sever/materialize survives the loop boundary for locals, not just bare params"]
+fn known_gap_cow_local_alias_loop_mutation_lost() {
+    run_gg(
+        "known_gaps/cow_local_alias_loop_mutation_lost.gg",
+        "alias-loop 1 4\nroot-loop 4 1",
     );
 }
 
@@ -16106,16 +16137,182 @@ fn cow_loop_bare_param_tuple_assign() {
     run_gg("known_gaps/cow_loop_bare_param_tuple_assign.gg", "13\n10");
 }
 
+/// LIVE REGRESSION FIXTURE (graduated 2026-08-29, R47 Track A2). The CoW 2G
+/// user-`&self`-mutator loop-carried gap is FIXED: the prescan no longer asks
+/// what the method is CALLED, it reads the semantic pass's typed per-receiver
+/// answer (`semantic::safety::ReceiverMutations`), so `Buf.compact(&self)`
+/// marks its bare-param receiver and the loop-carried pre-header materialize
+/// fires once instead of being thrown away each iteration.
+///
+/// This test was `#[ignore]`d and RED at HEAD, asserting the intended
+/// 3,2,2,4 against a compiler that printed 3,3,4,4. It is the cell that
+/// distinguishes the shipped fix from a narrowed self-rooted-only one: the
+/// receiver here is a bare LOCAL parameter, which a self-rooted-only
+/// classifier never marks.
+///
+/// ⚠ It stays in `known_gaps/` deliberately: moving the file registers a
+/// non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING` unless the self-host
+/// lane is re-verified. (It was: the SH lane emits 3,2,2,4 too — measured
+/// 2026-08-29 through the lowerer driver. The file stays put anyway because
+/// the round's own new corpus fixtures already carry that coverage.)
 #[test]
-#[ignore = "CoW 2G user `&self`-mutator receiver in a loop (step-4 gap): the \
-untyped prescan cannot resolve that a user method name (`compact`) mutates its \
-receiver, so the loop-carried pre-header materialize does not fire and the \
-private copy is thrown away each iteration. A name-based over-approximation is \
-deferred (clone-balloon + generic-instance-tail risk; the R38 residual). \
-Asserts 3,2,2,4; compiler currently prints 3,3,4,4. See TODO 'CoW 2G \
-user-&self-mutator loop-carried receiver'."]
 fn cow_loop_bare_param_user_mutator() {
     run_gg("known_gaps/cow_loop_bare_param_user_mutator.gg", "3\n2\n2\n4");
+}
+
+/// LIVE REGRESSION FIXTURE (graduated 2026-08-29, R47 Track A2) — the
+/// CRITICAL one: a user method's NAME decided memory safety.
+///
+/// `void grow(&self)` was rc 139 / ASan heap-use-after-free on BOTH backends
+/// where a byte-identical `void resize(&self)` was correct, because `resize`
+/// sat on the 25-entry `MUTATING_METHODS` hand list the CoW prescan tested
+/// the method's identifier text against, and `grow` did not. The decision is
+/// now the semantic pass's typed per-receiver classification, which cannot
+/// see a name.
+///
+/// Stays in `known_gaps/` (out of `runtime_parity_corpus`) with a LIVE test;
+/// the corpus-scanned coverage for this class is
+/// `cow_user_mutator_rename_invariance.gg`, which carries BOTH names in one
+/// program and is verified on C, LLVM and the self-host lane.
+#[test]
+fn user_mutator_method_name_decides_memory_safety() {
+    run_gg(
+        "known_gaps/user_mutator_method_name_decides_memory_safety.gg",
+        "helloworld",
+    );
+}
+
+// ── R47 Track A2 — the typed per-receiver CoW mutation classifier ──────────
+//
+// The prescan's "does this call mutate its receiver" is resolved ONCE by the
+// semantic pass (`semantic::safety::ReceiverMutations`, written through into
+// `AnalysisResult`) and READ here; it is never re-derived from the method's
+// identifier text. The four fixtures below cover the axes that decision has:
+//
+//   receiver root      bare param (all four) · self-field · enum payload binding
+//   self-convention    `&self` mutating · bare `self` read-only, SAME NAME
+//   method name        on the retired hand list · not on it (rename invariance)
+//   call POSITION      statement · value · f-string interpolation ·
+//                      `meta for`-generated match arm
+//   failure mode       rc 139 heap-use-after-free · wrong loop-carried value
+//   lanes              C + LLVM here; all four verified MATCH on the
+//                      self-host lowerer lane 2026-08-29
+//
+// Omitted cells, named: `!self` consuming receivers (a `!self` call on a
+// bare/borrowed receiver is rejected before lowering, so there is no
+// materialize decision to pin) and GENERIC-equip instances (their method
+// resolution is registered during lowering, not by the semantic pass — the
+// already-filed R38 generic-equip residual; they take the conservative
+// unclassified branch).
+//
+// All four RED-verified at `f3feea79` on C AND LLVM: three rc 139, one wrong
+// value.
+
+#[test]
+fn cow_user_mutator_rename_invariance() {
+    run_gg("cow_user_mutator_rename_invariance.gg", "helloworld\nhelloworld");
+}
+
+#[test]
+fn cow_user_mutator_fstring_interpolation() {
+    run_gg("cow_user_mutator_fstring_interpolation.gg", "65\nhelloworld");
+}
+
+#[test]
+fn cow_user_mutator_meta_generated_arm() {
+    run_gg("cow_user_mutator_meta_generated_arm.gg", "helloworld");
+}
+
+#[test]
+fn cow_user_mutator_two_types_same_name() {
+    run_gg("cow_user_mutator_two_types_same_name.gg", "4\n4\n4\n3\n2\n4");
+}
+
+/// KNOWN GAP — `todo/t0763`. A `&self` mutator on a GENERIC equip is a
+/// use-after-free: `Cell[T]`'s `probe(&self)` binds a view of element 0, then
+/// `self.resize(v)` reallocates and the view dangles. rc 139 on BOTH backends.
+///
+/// ⚠ NOT the `t0699` class, and the discriminator is measured rather than
+/// argued: this one is NAME-INDEPENDENT. It is rc 139 under `resize` — a name
+/// that WAS on the retired `MUTATING_METHODS` list, so the prescan DID mark the
+/// receiver — and rc 139 under `grow`, before and after the typed per-receiver
+/// classifier landed. The mark is made and the materialize still does not
+/// happen, so the break is DOWNSTREAM of the classification.
+///
+/// The control is the point: hand-monomorphise the fixture (`Cell[T]` ->
+/// `Cell`, `T` -> `String`, nothing else) and it is rc 0 printing `helloworld`,
+/// at stock HEAD and after the fix. One type parameter is the whole difference.
+///
+/// Asserts the INTENDED output, which is exactly what that control prints.
+#[test]
+#[ignore = "todo/t0763 — a `&self` mutator on a GENERIC equip does not \
+materialize a view bound from the receiver, even though the prescan marks it: \
+rc 139 on both backends. NAME-INDEPENDENT, so NOT the t0699 class — the break \
+is downstream of the classification, in the generic-equip/monomorphisation \
+path. The hand-monomorphised control is rc 0. Asserts `helloworld`."]
+fn generic_equip_mutator_view_uaf() {
+    run_gg("known_gaps/generic_equip_mutator_view_uaf.gg", "helloworld");
+}
+
+/// THE (per-receiver) vs (name-keyed) DISCRIMINATOR, and the only cell in the
+/// suite that can tell them apart.
+///
+/// `cow_user_mutator_two_types_same_name.gg` equips the SAME method name on
+/// two types with opposite self-conventions — `Counter.bump(&self)` mutates,
+/// `Buf.bump(self)` is read-only — and loops over a bare param of each.
+/// STDOUT IS IDENTICAL under both spellings, so the assertion above cannot
+/// see the difference. The clone count can:
+///
+///   per-receiver typed answer   -> array_clone = 1  (only Counter's loop
+///                                  hoists a private copy)
+///   any NAME-keyed answer       -> array_clone = 2  (`bump` is mutating
+///                                  *somewhere*, so Buf's read-only loop
+///                                  hoists one too)
+///
+/// Both measured, not predicted (2026-08-29). The pre-fix compiler, whose
+/// `MUTATING_METHODS` list IS a name-keyed union, printed the WRONG 3,3 here
+/// with array_clone=2; renaming both methods to `dedup` (a name on that list)
+/// made it print the right answer at array_clone=2 — the name-keyed cost,
+/// with the same program. The shipped classifier gives array_clone=1 under
+/// either name.
+///
+/// ⚠ `--clones=stats` is a RUNTIME meter: `gg build --clones=stats` prints
+/// nothing, the `[clone-stats]` line appears when the BUILT BINARY runs.
+#[test]
+fn cow_user_mutator_two_types_same_name_clone_count() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/cow_user_mutator_two_types_same_name.gg");
+    let exe = std::env::temp_dir()
+        .join(format!("gg_two_types_same_name_{}", std::process::id()));
+    let build = run_with_deadline(
+        Command::new(env!("CARGO_BIN_EXE_gg"))
+            .arg("build")
+            .arg("--clones=stats")
+            .arg(&fixture)
+            .arg("-o")
+            .arg(&exe),
+        "cow_user_mutator_two_types_same_name_clone_count build",
+        build_timeout(),
+    );
+    assert!(
+        build.status.success(),
+        "instrumented build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = run_with_timeout(&mut Command::new(&exe), "two_types_same_name");
+    assert!(run.status.success(), "instrumented run failed");
+    let (array_clone, _string_clone) =
+        parse_clone_stats(&String::from_utf8_lossy(&run.stderr));
+    let _ = std::fs::remove_file(&exe);
+    assert_eq!(
+        array_clone, 1,
+        "the read-only `Buf.bump(self)` loop must contribute NO clone. \
+         array_clone=2 means the mutates-receiver decision was keyed on the \
+         method NAME (`bump` mutates on Counter, so the union marks it on Buf \
+         too) rather than resolved per receiver — see \
+         `semantic::safety::ReceiverMutations`."
+    );
 }
 
 #[test]
@@ -30158,8 +30355,10 @@ fn self_host_bootstrap() {
 // is green again, with the chain-link class retired by a parser-derived
 // discriminator rather than a costume-matching heuristic, and with the
 // `expr_link_types` publish extended to the SECOND bool-returning ladder arm —
-// its pair, and the only widening the ladder can safely carry until `t0712`
-// (name-list arms that never check the receiver) is fixed; and
+// its pair, and the only widening the ladder can safely carry until the
+// typechecker-type-vs-lowering-type conflict behind the ten-row regression is
+// resolved (a receiver gate does NOT unblock it — R47 Track D1 built one and
+// re-measured); and
 // the self-host's CoW prescan stopped missing mutations spelled through a
 // method-chain receiver — a live SIGSEGV
 // (`self_host_cow_rescue_mutation_through_getchain_receiver`) and, at the
@@ -30481,7 +30680,60 @@ fn self_host_clone_ceiling() {
 // it is overwhelmingly the CoW peel. Different levers, so do not reclaim them
 // as one — and note the two are ADDITIVE on both axes (the 2x2's whole point),
 // so a reclaim on one does not move the other.
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_124_255_029;
+//
+// ⚠ RE-PINNED 2026-08-29 (R47 Track A2) — the typed per-receiver CoW mutation
+// classifier (`todo/t0699`: a user method's NAME decided memory safety).
+// Regenerated on this tree this session; every figure below is from the run
+// that set these constants.
+//
+//   axis            measured        prior ceiling    delta
+//   stage-1 array   1,125,145,511   1,124,255,029    +890,482    (+0.079%)
+//   stage-1 string  2,361,764,496   2,359,224,224    +2,540,272  (+0.108%)
+//   stage-0 array      13,093,687      13,096,576    -2,889      UNDER, green
+//   stage-0 string     31,378,149      31,379,632    -1,483      UNDER, green
+//
+// WHY THIS IS A JUSTIFIED SEMANTIC COST, and not a bomb.
+// The self-host's scope-set channel now marks the typed user `&self`-mutator
+// receivers the retired `RUST_PRESCAN_MUTATOR_FALLBACK` name list used to
+// suppress — which is precisely what Core #9 REQUIRES now that Rust's prescan
+// marks them (it reads `semantic::safety::ReceiverMutations`, the same typed
+// per-receiver answer). Suppressing them here while Rust marks them there is
+// the lane asymmetry the whole track exists to remove. The cost buys a closed
+// use-after-free class, not a feature.
+//
+// ATTRIBUTION, measured rather than asserted:
+//   * net +16 NON-COMMENT lines of self-host source (+24 comment lines) over
+//     ~132k lines the stage-1 binary must itself compile = +0.012% of input.
+//     Regenerate: `git diff <base>..HEAD -- tests/fixtures/self_host_lowerer/
+//     compiler/data/resources.gg | grep '^+' | grep -vE '^\+\+\+|^\+\s*#' | wc -l`
+//   * so ~6x the source-growth fraction is the lowering-BEHAVIOUR change, i.e.
+//     the widening above. That is the honest split; it is not all bookkeeping.
+//
+// SCALE, so the comparison to the recorded bomb is explicit. The 2026-07-19
+// blowout was 7x (35.2M vs 4.96M probe clones) and a 1332s-vs-600s stage
+// deadline MISS. This is +0.08%, three orders of magnitude smaller, and the
+// STAGE-0 meters moved DOWN on both axes. The prior raise of these same two
+// constants was +1.427% and was owner-ratified; this is 18x smaller.
+//
+// ⚠ A FIRST CUT OF THIS FIX MEASURED WORSE AND WAS NOT SHIPPED. It asked the
+// self-host's `method_mutates_receiver` and a separate Rust-mirror predicate
+// in sequence on every method call in the CoW scan, each rebuilding the
+// `Type__mname` key from scratch: stage-0 string went OVER (+3,065) and
+// stage-1 string was +2,421,419. `cow_recv_mutation_class` answers both halves
+// from ONE resolution, which is what put stage-0 back UNDER on both axes. The
+// ratchet did that work — it is recorded here because a re-pin with no such
+// story is how a ratchet stops being one.
+//
+// STAGE-0 IS DELIBERATELY NOT TIGHTENED to its lower measured values, even
+// though the tighten-only discipline says lowering needs no sign-off: five
+// tracks land in this round and pinning a no-headroom floor from ONE track's
+// branch false-reds the integration. Tighten at round close, on the integrated
+// tree, where the number means something.
+//
+// TO REVERT: 1,124,255,029 / 2,359,224,224, and re-run
+//   GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 \
+//     cargo test --test integration --release clone_ceiling -- --nocapture
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_125_145_511;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -30626,7 +30878,13 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_124_255_029;
 // reverting them and leaving the gate red. This comment preserves the debt: the
 // bump is a SETTLED but UNPAID cost, not an absolution. `todo/t0715` carries the
 // reclaim, and lowering these constants needs no sign-off.
-const STAGE1_STRING_CLONE_CEILING: u64 = 2_359_224_224;
+//
+// ⚠ RE-PINNED 2026-08-29 (R47 Track A2) to 2,361,764,496 (+2,540,272,
+// +0.108%) — the typed per-receiver CoW mutation classifier. Full citation,
+// attribution and scale comparison on `STAGE1_ARRAY_CLONE_CEILING` above; the
+// two were re-pinned together from ONE measurement run and must be read
+// together.
+const STAGE1_STRING_CLONE_CEILING: u64 = 2_361_764_496;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
@@ -43682,6 +43940,186 @@ done",
     );
 }
 
+// ── A CoW collection identity names the STORAGE OWNER, not the spelling ──
+//
+// `Vector[String] alias = v` binds a second NAME to one collection. A borrow
+// taken through `alias` borrows out of `v`'s buffer, so the provenance the
+// mutation passes see must say `v`. Recording the spelling instead made every
+// downstream identity comparison miss — the `source_mut_unsafe` name query and
+// `cow_collection_refs_for_id`'s equality alike — so WHICH NAME the view was
+// spelled through decided whether the program read freed memory (rc 139 on
+// both backends, ASan heap-use-after-free in `gorget_string_copy_cow`).
+//
+// The resolution happens once, at the two provenance producers. These fixtures
+// sample the producer arms and the two consumer paths it repairs; the axes they
+// do NOT cover are named in the fixture headers.
+
+#[test]
+fn cow_alias_spelled_view_survives_root_growth() {
+    run_gg("cow_alias_spelled_view_survives_root_growth.gg", "hello");
+}
+
+#[test]
+fn cow_alias_spelled_view_literal_payload() {
+    run_gg("cow_alias_spelled_view_literal_payload.gg", "hello");
+}
+
+#[test]
+fn cow_alias_spelled_view_via_first_getter() {
+    run_gg("cow_alias_spelled_view_via_first_getter.gg", "hello");
+}
+
+#[test]
+fn cow_alias_spelled_element_field_borrow() {
+    run_gg("cow_alias_spelled_element_field_borrow.gg", "hello");
+}
+
+#[test]
+fn cow_alias_view_spelling_invariance() {
+    run_gg(
+        "cow_alias_view_spelling_invariance.gg",
+        "\
+hello
+hello",
+    );
+}
+
+/// The severance walk must not "rescue" an ANONYMOUS element temp.
+///
+/// `String s = v[0]` eagerly clones the index-load result into `s`, leaving
+/// the index temp dead — but it is still tagged as a borrow into `v`, so the
+/// walk cloned it again at every mutation, from a pointer the previous
+/// iteration's realloc had freed. rc 139 with no alias anywhere in the
+/// program. Its sibling case (field borrows) already filtered anonymous
+/// temps for exactly this reason; the collection-ref case did not.
+#[test]
+fn cow_indexed_element_survives_root_growth() {
+    run_gg(
+        "cow_indexed_element_survives_root_growth.gg",
+        "\
+hello
+hello",
+    );
+}
+
+/// NON-REGRESSION PIN, green before and after the resolution fix.
+///
+/// ⚠ No sever runs here, despite the name. Measured: `cow_register_alias` is
+/// called ZERO times for this program and `cow_has_aliases` is false at the
+/// reassignment, so `cow_sever_all_aliases_from` is never entered. `v` is
+/// reassigned on a forward path, which makes the bind take the eager-clone
+/// path instead of the CoW alias branch — the reassignment's PRESENCE
+/// prevents the alias from forming rather than severing one.
+///
+/// Three separate breaks of the sever/materialize machinery leave this
+/// program's output identical, and the reason is structural: that code is
+/// never reached for this input, so their inertness says nothing about
+/// provenance soundness. The fixture header carries the full measurement.
+/// It pins the end-to-end value semantics and nothing finer;
+/// `cow_view_into_owned_collection_survives_growth` is the cell with a live
+/// mechanism and a fire count.
+#[test]
+fn cow_alias_severed_by_root_reassign_then_view() {
+    run_gg(
+        "cow_alias_severed_by_root_reassign_then_view.gg",
+        "\
+hello
+1
+65",
+    );
+}
+
+/// MECHANISM PIN — Core #12 / the six questions' Q6.
+///
+/// stdout cannot tell "the lazy rescue ran" from "nothing needed rescuing":
+/// a program that never emits a rescue and a program whose rescue works both
+/// print `hello`. This asserts the emitted GIR actually carries the rescue,
+/// with a COUNT, so a partial regression (one spelling rescued, the other not)
+/// trips it.
+///
+/// Measured against the pre-fix compiler: the single-view fixture emitted
+/// `__cow_mat` 0 times (the rescue was never emitted at all) and the
+/// two-view fixture emitted it once (only the directly-spelled view was
+/// rescued). Both counts below are therefore RED pre-fix.
+///
+/// BREAK-THE-MECHANISM CHECK, run and confirmed rather than asserted: force
+/// `source_mut_unsafe` to `false` at its computation in
+/// `src/ir/lowering/stmts/mod.rs` and rebuild. Every caller of this helper
+/// goes RED with `found 0`. That is what makes these assertions live rather
+/// than decorative — the fixtures they guard still print `hello` with the
+/// rescue gone, which is the whole reason the count is asserted here.
+fn assert_gir_lazy_rescue_count(fixture: &str, expected_cow_mat: usize) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path = manifest_dir.join("tests/fixtures").join(fixture);
+    let out_dir = std::env::temp_dir().join(format!(
+        "gg_cow_alias_gir_{}_{}",
+        std::process::id(),
+        fixture.replace('.', "_"),
+    ));
+    let _ = std::fs::create_dir_all(&out_dir);
+    let out_bin = out_dir.join("out.bin");
+    let output = build_with_timeout(
+        gg_command("build").arg(&path).arg("--emit-gir").arg("-o").arg(&out_bin),
+        fixture,
+    );
+    let gir = String::from_utf8_lossy(&output.stdout).to_string();
+    let _ = std::fs::remove_dir_all(&out_dir);
+    assert!(
+        output.status.success(),
+        "{fixture}: --emit-gir build failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let cow_mat = gir.matches("__cow_mat").count();
+    let borrow_view = gir.matches("borrow_view").count();
+    assert_eq!(
+        cow_mat, expected_cow_mat,
+        "{fixture}: expected {expected_cow_mat} lazy-materialize flag(s) in the emitted GIR, \
+         found {cow_mat} (borrow_view mentions: {borrow_view}).\n\n\
+         Fewer than expected means a view's collection provenance is naming the SPELLING \
+         again instead of the storage owner, so `source_mut_unsafe` is queried with the \
+         wrong key and the rescue is never emitted. The fixture's stdout can still be \
+         `hello` while this is broken — that is why the count is asserted here.",
+    );
+}
+
+#[test]
+fn cow_alias_spelled_view_emits_the_lazy_rescue() {
+    assert_gir_lazy_rescue_count("cow_alias_spelled_view_survives_root_growth.gg", 1);
+}
+
+/// A String view into a collection the binding OWNS, held across that
+/// collection reallocating.
+///
+/// The source is owned rather than aliased because `v` is reassigned on a
+/// forward path, which sends the bind down the eager-clone path — no
+/// `BorrowOrigin::Alias` is ever created (measured: zero `cow_register_alias`
+/// calls). That makes this the one cell in the net where the lazy rescue must
+/// fire on an OWNED source, which the count below asserts; both this program
+/// and its sibling print `hello` whether or not the rescue is emitted.
+///
+/// ⚠ It does NOT exercise this track's identity resolution — its fire count
+/// is 1 on the pre-fix compiler too. It pins the pre-existing rescue path.
+#[test]
+fn cow_view_into_owned_collection_survives_growth() {
+    run_gg(
+        "cow_view_into_owned_collection_survives_growth.gg",
+        "\
+hello
+65
+1",
+    );
+}
+
+#[test]
+fn cow_view_into_owned_collection_emits_the_lazy_rescue() {
+    assert_gir_lazy_rescue_count("cow_view_into_owned_collection_survives_growth.gg", 1);
+}
+
+#[test]
+fn cow_alias_view_spelling_invariance_rescues_both_spellings() {
+    assert_gir_lazy_rescue_count("cow_alias_view_spelling_invariance.gg", 2);
+}
+
 #[test]
 fn cow_nested_field_mutation() {
     run_gg(
@@ -52758,6 +53196,425 @@ fn unknown_backend_flag_is_rejected() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Build flags the LLVM backend cannot honour must be REJECTED BY NAME — the
+/// same lower-or-reject rule as `unknown_backend_flag_is_rejected` above, one
+/// level in: the backend is valid, the *combination* is not.
+///
+/// The dispatch reaches `compile_llvm_pipeline` and returns from it before the
+/// `--target` branch is ever consulted, and the `--shared` branch runs before
+/// the backend is dispatched at all. So both combinations used to end
+/// somewhere other than where the user was looking:
+///
+/// - `--target=freestanding --backend=llvm` exited **0** and printed `Built:`
+///   over a perfectly ordinary hosted ELF. Someone asking for a UEFI
+///   bootloader got a Linux executable and a success message — the worst
+///   possible answer, and the reason this is a rejection rather than a
+///   warning.
+/// - `--shared --backend=llvm` did fail, but by handing LLVM IR to `cc` as if
+///   it were C: ~290 lines of syntax errors about `target datalayout` and
+///   `%GorgetArray`, blaming the user's program for the driver's mistake.
+///
+/// `--clones=stats --backend=llvm` was already rejected before this test and is
+/// pinned here so the set is COVERED rather than SAMPLED. `--sanitize
+/// --backend=llvm` is the one member that was WIRED instead of rejected (it
+/// was cheap); its guard is `sanitizer_gate_is_real_on_both_backends` in
+/// `tests/security.rs`.
+///
+/// ⚠ THE SET IS NOT LLVM-ONLY, which is why this is not named for the backend.
+/// `--sanitize --target=freestanding` has the same shape with no backend
+/// involved: the freestanding branch builds its own `cc` command and returns
+/// before reaching `add_sanitize_flags`, so the flag was accepted and dropped
+/// on BOTH backends. `todo/t0641` records the identical hole for `--release`
+/// on the same early-returning sub-paths — that is the family, and a new build
+/// flag owes a check against every sub-path rather than just the normal one.
+///
+/// Flag VALIDATION only — no `llc` required, nothing is codegen'd.
+#[test]
+fn unhonourable_build_flag_combinations_are_rejected() {
+    let dir = std::env::temp_dir().join(format!("gg_flag_combo_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let src = dir.join("probe.gg");
+    std::fs::write(&src, "void main():\n    print(\"hi\")\n").expect("write probe");
+
+    // (the full flag set, and the TWO halves the diagnostic owes the user —
+    // naming only one leaves them guessing which to drop)
+    let cases: [(&[&str], &str, &str); 5] = [
+        (&["--target=freestanding", "--backend=llvm"], "--target=freestanding", "llvm"),
+        (&["--target", "freestanding-x86_64", "--backend=llvm"], "--target=freestanding-x86_64", "llvm"),
+        (&["--shared", "--backend=llvm"], "--shared", "llvm"),
+        (&["--clones=stats", "--backend=llvm"], "--clones=stats", "llvm"),
+        // Not an LLVM combination at all — the default backend, and still
+        // unhonourable: ASan/UBSan need a hosted environment and a libc to
+        // intercept, and a UEFI image is built `-ffreestanding -nostdlib`.
+        (&["--sanitize", "--target=freestanding"], "--sanitize", "--target=freestanding"),
+    ];
+
+    for (flags, half_a, half_b) in cases {
+        let out = Command::new(gg_binary())
+            .arg("build")
+            .args(flags)
+            .arg(&src)
+            .output()
+            .expect("run gg build");
+        assert!(
+            !out.status.success(),
+            "`gg build {flags:?}` SUCCEEDED. Either it silently built something \
+             other than what was asked for, or the rejection was lost."
+        );
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            err.contains(half_a) && err.contains(half_b),
+            "`gg build {flags:?}` must name BOTH halves of the unsupported \
+             combination, so the reader knows which one to drop.\nstderr: {err}"
+        );
+        // A rejection that still wrote the artifact would be worse than the
+        // silent success it replaced.
+        assert!(
+            !dir.join("probe").exists() && !dir.join("probe.efi").exists(),
+            "`gg build {flags:?}` was rejected but still left an artifact behind."
+        );
+    }
+
+    // The same flags on the C backend are untouched — this is a combination
+    // check, not a retreat from supporting them.
+    for flags in [vec!["--target=freestanding"], vec!["--shared"]] {
+        let out = Command::new(gg_binary())
+            .arg("build")
+            .args(&flags)
+            .arg(&src)
+            .output()
+            .expect("run gg build");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !err.contains("unsupported"),
+            "`gg build {flags:?}` on the default C backend must not hit the \
+             LLVM-combination rejection.\nstderr: {err}"
+        );
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+
+/// t0641 — IS AN ARGV-VISIBLE BUILD FLAG EVER SILENTLY DROPPED?
+///
+/// Two axes, and enumerating either one alone has already under-counted this
+/// family twice. WITHIN `try_build_ir`, five build sub-paths, four of which
+/// construct their own compiler invocation and `return` before reaching the
+/// flag-application code at the bottom of the fifth. ACROSS dispatchers, four
+/// ENTRY POINTS — `gg build`, `gg run`, `gg test`, and the `gg script.gg`
+/// shorthand — each building their own `LoweringOptions`, so a field one of
+/// them forgets is dropped for every sub-path underneath it.
+///
+/// A flag wired only on the normal `gg build` path is therefore silently absent
+/// almost everywhere, and nothing notices — that is exactly how `--sanitize`
+/// came to be a no-op under `--backend=llvm` (t0723), and `--release` is still
+/// dropped on five shapes today, one of which (`gg test`) was found by adding
+/// the entry-point axis to this very census.
+///
+/// ⚠ SCOPE — WHAT THIS INSTRUMENT CANNOT SEE. It reads the constructed compiler
+/// ARGV, so it covers only flags that reach a compiler command line. A flag
+/// carried inside `LoweringOptions` and consumed during lowering never appears
+/// in an argv and is structurally invisible here: `--scheduler`,
+/// `--strip-asserts`, `--trace`, `--feature`, `--hot-reload`. That is not
+/// hypothetical — `gg build --scheduler=` is silently dropped on the main path
+/// today (filed as a side-bullet of `todo/t0627`), and this census cannot see
+/// it. Catching that class needs a different probe: diff `--emit-c-lir` output
+/// with and without the flag.
+///
+/// This is the census, run as a guard rather than written down as prose,
+/// because the prose has now under-counted this family twice. It measures the
+/// ACTUAL constructed argv: the driver honours `CC` and `LLC`, so pointing both
+/// at `/bin/echo` prints the command line instead of running it.
+///
+/// Each cell is self-controlling — the same build WITHOUT the flag is the
+/// baseline, so a marker a sub-path emits unconditionally (the LLVM runtime's
+/// own `-O2`) cannot be mistaken for the flag arriving.
+///
+/// A cell passes if the flag is THREADED (marker count rises) **or** REJECTED
+/// by name. Both satisfy lower-or-reject; only silent absence is the defect.
+///
+/// `#[ignore]`d because it asserts the INTENDED state and `--release` does not
+/// meet it yet. Un-ignore when t0641 is closed.
+///
+/// ⚠ NOT ON THE `known_gaps` ROSTER. `scripts/known_gaps_census.sh` enrols
+/// `#[ignore]`d tests that name a `known_gaps/<fixture>` path, and this one has
+/// no fixture — its subject is the compiler's own argv, not a program. So
+/// nothing external will notice if it rots or if `t0641` is closed without
+/// un-ignoring it; `todo/t0641` carries that instruction instead.
+#[test]
+#[ignore = "KNOWN GAP t0641: --release is silently dropped on FIVE shapes — \
+gg build --shared, the hot-reload split, freestanding/UEFI, `gg script.gg`, and \
+`gg test` (whose LoweringOptions omits the field, so gg test --bench benchmarks \
+a -O0 build). It IS threaded on gg build's and gg run's normal C path and on \
+the LLVM pipeline."]
+fn build_flags_are_never_silently_dropped() {
+    let dir = std::env::temp_dir().join(format!("gg_flag_census_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let plain = dir.join("plain.gg");
+    std::fs::write(&plain, "void main():\n    print(\"hi\")\n").expect("write plain");
+    let hr = dir.join("hr.gg");
+    std::fs::write(
+        &hr,
+        "directive hot-reload\n\nstruct State:\n    int n\n\nvoid main():\n    print(\"hi\")\n",
+    )
+    .expect("write hot-reload source");
+
+    let t_gg = dir.join("t.gg");
+    std::fs::write(
+        &t_gg,
+        "void main():\n    print(\"hi\")\n\ntest \"t\":\n    assert 1 == 1\n",
+    )
+    .expect("write test-block source");
+
+    // ⚠ TWO AXES, and missing either one is how this family keeps being
+    // under-counted. WITHIN a dispatcher, the sub-paths of `try_build_ir`; and
+    // ACROSS dispatchers, the ENTRY POINTS — `gg build`, `gg run`, `gg test` and
+    // the `gg script.gg` shorthand each construct their OWN `LoweringOptions`,
+    // so a field one of them forgets is dropped for every sub-path underneath
+    // it. Enumerating sub-paths alone missed `gg test --release` entirely.
+    //
+    // (shape, selecting args, source, subcommand — "" means the shorthand)
+    let shapes: [(&str, &[&str], &std::path::Path, &str); 8] = [
+        ("gg build, normal C path", &[], plain.as_path(), "build"),
+        ("gg build --shared", &["--shared"], plain.as_path(), "build"),
+        ("gg build, hot-reload split", &[], hr.as_path(), "build"),
+        ("gg build --backend=llvm", &["--backend=llvm"], plain.as_path(), "build"),
+        ("gg build --target=freestanding", &["--target=freestanding"], plain.as_path(), "build"),
+        ("gg run", &[], plain.as_path(), "run"),
+        ("gg test", &[], t_gg.as_path(), "test"),
+        ("`gg script.gg` shorthand", &[], plain.as_path(), ""),
+    ];
+    // (flag, the marker it must put on some command line)
+    let flags: [(&str, &str); 2] = [("--sanitize", "-fsanitize"), ("--release", "-O2")];
+
+    // ⚠ ARGUMENT ORDER IS PART OF THE INVOCATION, not a detail. A subcommand
+    // takes its flags before the file; the `gg script.gg` shorthand takes them
+    // AFTER (flag-first there is a loud `Unknown command: --sanitize`, rc 1 — a
+    // rejection, not a silent drop, so it is not this census's subject). Getting
+    // this wrong makes the probe report a defect that is not there.
+    let run = |args: &[&str], src: &std::path::Path, sub: &str| -> String {
+        let mut c = Command::new(gg_binary());
+        if sub.is_empty() {
+            c.arg(src).args(args);
+        } else {
+            c.arg(sub).args(args).arg(src);
+        }
+        c.env("CC", "/bin/echo").env("LLC", "/bin/echo");
+        let o = c.output().expect("run gg");
+        let mut text = String::from_utf8_lossy(&o.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&o.stderr));
+        text
+    };
+
+    let mut dropped: Vec<String> = Vec::new();
+    for (flag, marker) in flags {
+        for (name, sel, src, sub) in shapes {
+            let mut with_args: Vec<&str> = sel.to_vec();
+            with_args.push(flag);
+            let with = run(&with_args, src, sub);
+            let without = run(sel, src, sub);
+
+            // Rejected by name is a PASS: lower-or-reject is satisfied, the
+            // user is told, and no wrong artifact ships.
+            if with.contains("unsupported") && with.contains(flag) {
+                continue;
+            }
+            let n_with = with.matches(marker).count();
+            let n_without = without.matches(marker).count();
+            if n_with <= n_without {
+                dropped.push(format!(
+                    "  {flag} is SILENTLY DROPPED on {name} \
+                     ({marker} occurrences: {n_with} with the flag, {n_without} without)"
+                ));
+            }
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        dropped.is_empty(),
+        "an argv-visible build flag must reach EVERY invocation shape — every sub-path AND \
+         every entry point — or be rejected by name; never accepted and discarded \
+         (Core #10). {} cell(s) silently drop their flag:\n{}\n\n\
+         The measurement is `CC=/bin/echo LLC=/bin/echo gg <sub> <flags> f.gg`, with the \
+         same invocation minus the flag as the control. Family record: `todo/t0641`.",
+        dropped.len(),
+        dropped.join("\n")
+    );
+}
+
+// ── Durable repros for the four gaps the LLVM sanitizer work exposed ────────
+//
+// Each asserts the INTENDED behaviour, so it fails today and graduates out of
+// `known_gaps/` the round its item is fixed. The fixture headers carry the
+// measurements; these are the wiring.
+
+/// t0727 — `--sanitize --backend=llvm` does not instrument generated user code.
+///
+/// The user object `__gorget_user_<stem>.o` carries ZERO `__asan_report_*`
+/// references while the runtime object beside it carries ten, because the user
+/// code reaches the binary through `llc`, which runs no instrumentation pass.
+/// Asserted structurally rather than behaviourally on purpose: a behavioural
+/// repro would have to lean on some other compiler bug to commit the UAF, and
+/// would then go green when THAT bug was fixed while still reading as coverage
+/// for this one.
+#[test]
+#[ignore = "KNOWN GAP t0727: LLVM --sanitize instruments only the runtime, not \
+generated user code — the user .o has no __asan_report_* references."]
+fn llvm_sanitize_instruments_user_code() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest_dir
+        .join("tests/fixtures/known_gaps/llvm_sanitize_user_code_not_instrumented.gg");
+    let dir = std::env::temp_dir().join(format!("gg_t0727_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let staged = dir.join("probe.gg");
+    std::fs::copy(&src, &staged).expect("stage fixture");
+
+    let out = Command::new(gg_binary())
+        .arg("build")
+        .arg("--sanitize")
+        .arg("--backend=llvm")
+        .arg(&staged)
+        // Keeps `__gorget_user_probe.o` / `__gorget_runtime_probe.o` beside the
+        // source instead of deleting them after a successful link.
+        .env("GORGET_KEEP_RUNTIME", "1")
+        .output()
+        .expect("run gg build");
+    assert!(out.status.success(), "build failed: {}", String::from_utf8_lossy(&out.stderr));
+
+    let refs = |p: &std::path::Path| -> usize {
+        let b = std::fs::read(p).unwrap_or_else(|e| panic!("read {}: {e}", p.display()));
+        b.windows(b"__asan_report".len())
+            .filter(|w| *w == b"__asan_report")
+            .count()
+    };
+    let user_o = dir.join("__gorget_user_probe.o");
+    let runtime_o = dir.join("__gorget_runtime_probe.o");
+    // The runtime half is the control: if IT is uninstrumented the build is
+    // simply broken and this test is measuring the wrong thing.
+    assert!(
+        refs(&runtime_o) > 0,
+        "the RUNTIME object is uninstrumented too — `--sanitize` is not reaching \
+         the runtime `cc -c` at all, which is a different (and worse) defect than t0727."
+    );
+    assert!(
+        refs(&user_o) > 0,
+        "t0727: the user object `{}` references no `__asan_report_*`, so generated \
+         user code carries no shadow checks on this lane.",
+        user_o.display()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// t0728 — an `extern` bound to `malloc`/`calloc`/`realloc` has its DECLARED
+/// return type overridden to a pointer, producing invalid IR.
+///
+/// `llc` rejects the module (`'%v4' defined with type 'i64' but expected 'ptr'`),
+/// so this is a hard build failure, not a miscompile. The C lane builds the
+/// same source and prints `nonzero`.
+#[test]
+#[ignore = "KNOWN GAP t0728: a name-match on the extern's C symbol outranks its \
+declared return type on the LLVM lane; llc rejects the emitted IR."]
+fn llvm_extern_allocator_respects_declared_return_type() {
+    // Pins `--backend=llvm` EXPLICITLY rather than going through `run_gg`,
+    // which only selects the backend when `GG_BACKEND` is set. The gap is
+    // unconditional on this lane, so the test must be too — otherwise it
+    // passes on a default-backend run and reads as a fixed gap.
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest_dir
+        .join("tests/fixtures/known_gaps/llvm_extern_allocator_name_overrides_declared_return_type.gg");
+    let dir = std::env::temp_dir().join(format!("gg_t0728_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let staged = dir.join("probe.gg");
+    std::fs::copy(&src, &staged).expect("stage fixture");
+
+    let build = Command::new(gg_binary())
+        .arg("build")
+        .arg("--backend=llvm")
+        .arg(&staged)
+        .output()
+        .expect("run gg build");
+    assert!(
+        build.status.success(),
+        "t0728: `gg build --backend=llvm` rejected a valid program because the \
+         extern's declared `int` return type was overridden to a pointer on the \
+         strength of its C symbol name.\nstderr: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = Command::new(dir.join("probe")).output().expect("run built binary");
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "nonzero");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// t0729 — a nested `match` over a nested `Option` emits an aggregate copy as a
+/// `memcpy` between OVERLAPPING stack slots on the LLVM lane (UB).
+///
+/// Invisible to a stdout check: the program currently produces the right
+/// answer, which is exactly why the defect survived. The assertion is
+/// ASan-cleanliness.
+///
+/// Pins `--backend=llvm` EXPLICITLY rather than routing through
+/// `assert_gg_sanitize_clean`, which selects the backend only when
+/// `GG_BACKEND` is set. The C lane genuinely IS clean here, so a
+/// `GG_BACKEND`-driven version reports GREEN on a plain
+/// `cargo test -- --ignored` run — and a green `known_gaps` test reads as a
+/// fixed gap to anyone auditing whether these still fail. Its sibling
+/// `llvm_extern_allocator_respects_declared_return_type` makes the same choice
+/// for the same reason; all four gap tests in this group redden regardless of
+/// the environment.
+#[test]
+#[ignore = "KNOWN GAP t0729: LLVM aggregate copy uses memcpy on overlapping \
+stack slots (ASan: memcpy-param-overlap); reddens attack_64 and attack_70."]
+fn llvm_nested_option_match_no_memcpy_overlap() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest_dir
+        .join("tests/fixtures/known_gaps/llvm_nested_option_match_memcpy_param_overlap.gg");
+    let dir = std::env::temp_dir().join(format!("gg_t0729_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let staged = dir.join("probe.gg");
+    std::fs::copy(&src, &staged).expect("stage fixture");
+
+    let build = Command::new(gg_binary())
+        .arg("build")
+        .arg("--sanitize")
+        .arg("--backend=llvm")
+        .arg(&staged)
+        .output()
+        .expect("run gg build");
+    assert!(
+        build.status.success(),
+        "t0729 probe failed to build.\nstderr: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let run = Command::new(dir.join("probe"))
+        .env("ASAN_OPTIONS", "detect_leaks=1:halt_on_error=1:exitcode=99")
+        .output()
+        .expect("run built binary");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        !stderr.contains("AddressSanitizer") && !stderr.contains("SUMMARY:"),
+        "t0729: `--backend=llvm` emitted an aggregate copy as a memcpy between \
+         overlapping stack slots.\nstderr: {stderr}"
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "inner-none");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// t0732 — a `shared(atomic) int` is never freed. Leaks 8 bytes on BOTH lanes.
+///
+/// Not an LLVM issue and not new; it was simply unobservable. The shipped
+/// `attack_87_atomic_counter_race` fixture leaks identically, but it is wired
+/// as `security_safe` (which runs `detect_leaks=0`) and the sanitize sweep's
+/// `-maxdepth 1` never descends into `tests/fixtures/security/`.
+#[test]
+#[ignore = "KNOWN GAP t0732: shared(atomic) int is never dropped — 8-byte leak \
+on both backends, seen by no gate in the tree."]
+fn shared_atomic_int_is_dropped() {
+    assert_gg_sanitize_clean("known_gaps/shared_atomic_int_never_dropped_leak", "1");
+}
+
 // ============================================================================
 // Round XXXIII Batch C1 Track D28 — `**` power operator + XOR fix-it lint.
 // Amendment `docs/define-gorget/decisions.md:1197` binding riders:
@@ -56087,10 +56944,22 @@ fn fmt_output_reparses_corpus_wide() {
 //   and it regressed ten self_host_runtime rows. Publishable set = RESOLVED,
 //   never GUESSED. Both halves — the pair that must publish, and the total
 //   COUNT that must not grow — are pinned by
-//   `self_host_infer_bool_arms_publish_chain_link` (tests/lints.rs). The class
-//   fix that closes all five RED rows at once is t0712's receiver gate, after
-//   which the single-exit publish becomes safe; that is the round's found fix,
-//   named here so the fallback is a decision and not a default.
+//   `self_host_infer_bool_arms_publish_chain_link` (tests/lints.rs).
+//
+//   ⚠ A RECEIVER GATE ON THE NAME LIST IS **NOT** THE CLASS FIX. An earlier
+//   version of this note said it closed all five RED rows at once. R47 Track D1
+//   BUILT the gate and MEASURED it: it closes ZERO of them — all five fail
+//   identically, byte-for-byte, with and without it. It is false by
+//   construction too: none of the five methods is on the gated list. `split`
+//   and `len`/`count` have their own arms, `keys` and `get` are already
+//   receiver-gated (and already answer correctly), and `bytes` has NO arm at
+//   all. What breaks them is that those arms never PUBLISH, so the lowerer
+//   falls back to the contended `expr_types[span.start]` key — a publishing
+//   problem, not an admission problem. The real class fix has to reconcile the
+//   TYPECHECKER type with the LOWERING type (`infer.gg`'s
+//   `clone|copy|sorted|reversed|filter` arm answers `Vector[int]` where the
+//   lowerer needs `FilterIter`), which is a different axis; it is filed and
+//   starts at a scout, not at a brief.
 //
 // ── A THIRD AXIS, and it is what made the corpus BLIND to those five rows:
 //    RECEIVER KIND — is the chain's receiver a BUILTIN method call or a
@@ -56335,40 +57204,259 @@ fn known_gap_method_returning_callable_called_in_chain() {
     run_gg("known_gaps/method_returning_callable_called_in_chain.gg", "true");
 }
 
-/// KNOWN GAP — the SELF-HOST over-accepts `to_string()` on a `float` and then
-/// emits C that will not compile (`incompatible types when assigning to type
-/// 'Str' from type 'int'`). Rust gg is CORRECT here — it rejects with
-/// `E_NoMethodFound` — so this pin runs on the SELF-HOST lane; a Rust-lane
-/// `check_gg_fails` would pass vacuously and pin nothing.
+/// Assert the SELF-HOST driver REFUSES a fixture at check time — non-zero exit
+/// AND no emitted C. Shared by the primitive-receiver `E_NoMethodFound` net so
+/// the harness is written once; each caller spells its fixture path as a
+/// LITERAL.
 ///
-/// Asserts the correct behaviour: the self-host driver REFUSES the program
-/// (non-zero exit, no emitted C). This gap is also what makes the EAs cell of
-/// the postfix axis unreachable — a cast target with a real callable method is
-/// the only way to build that probe, and no numeric has one.
-#[test]
-#[ignore = "KNOWN GAP: the self-host accepts `to_string()` on non-String \
-receivers and CC-FAILs; Rust gg correctly rejects. Asserts the SH reject."]
-#[serial(self_host_lowerer_driver)]
-fn known_gap_sh_to_string_on_float_overaccepted() {
+/// ⚠ These pins run on the SELF-HOST lane on purpose. Rust gg has always
+/// rejected every one of them, so a `check_gg_fails` pin would be green today
+/// and would pin nothing (Core #12). The lagging lane is the one the assert must
+/// read. The three-lane VERDICT pins (C / LLVM / self-host) live in
+/// `spectests/run/reject_no_method_on_{float,string}.gg`; these add the stronger
+/// "emitted no C at all" property and widen the receiver-kind axis.
+fn assert_self_host_rejects(rel_fixture: &str, what: &str) {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let fixture = manifest_dir
-        .join("tests/fixtures/known_gaps/sh_to_string_on_float_overaccepted.gg");
+    let fixture = manifest_dir.join("tests/fixtures").join(rel_fixture);
     let out = run_with_timeout(
         Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
-        "known_gap_sh_to_string_on_float_overaccepted",
+        rel_fixture,
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         !out.status.success() && !stdout.contains("int main("),
-        "the self-host ACCEPTED `to_string()` on a `float` and emitted C for it. \
-         Rust gg rejects the same program with `E_NoMethodFound: no method \
-         `to_string` found on type `float``; the self-host admits the name from a \
-         NAME LIST in infer.gg with no receiver-type check, so it accepts a call \
-         it cannot lower (Core #10). exit={:?}",
+        "{rel_fixture}: the self-host ACCEPTED {what} and emitted C for it. Rust gg rejects \
+         the same program with `error[E_NoMethodFound]`. A method absent from the receiver's \
+         builtin table AND from the trait registry must be REFUSED at check time, not lowered \
+         into a runtime symbol nothing defines (Core #10 lower-or-reject). Chokepoint: \
+         `self_host_typechecker/typecheck.gg::reject_no_method_on_primitive`. exit={:?}",
         out.status.code(),
     );
+}
+
+/// R47 Track D1 — the primitive-receiver `E_NoMethodFound` net, on the SELF-HOST
+/// lane. GRADUATED from `known_gaps/sh_to_string_on_float_overaccepted.gg`,
+/// which was `#[ignore]`d asserting exactly this reject.
+///
+/// RED-verified against the pre-fix driver: it ACCEPTED the program and emitted
+/// C that CC-failed with `incompatible types when assigning to type 'Str' from
+/// type 'int'` — a `Str` destination minted from the method NAME while the value
+/// is the raw numeric payload.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_to_string_on_float() {
+    assert_self_host_rejects(
+        "sh_reject_to_string_on_float.gg",
+        "`to_string()` on a `float`",
+    );
+}
+
+/// Sibling cell on the RECEIVER-KIND axis: `bool`. The float row alone could
+/// pass for a numeric-only story; this one only passes if the decision is the
+/// receiver's method TABLE rather than the method's NAME. Same RED-verify
+/// (pre-fix: accepted, then the identical `'Str' from type 'int'` CC-FAIL).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_to_string_on_bool() {
+    assert_self_host_rejects(
+        "sh_reject_to_string_on_bool.gg",
+        "`to_string()` on a `bool`",
+    );
+}
+
+/// The STRING-receiver cell, sampled in an F-STRING interpolation — the context
+/// the self-host types least reliably, so it is the cell most likely to regress
+/// in either direction. `primitive_bogus_method_fstring_error.gg` is an existing
+/// Rust-lane reject fixture (`primitive_method_str_removed_fstring_errors`'s
+/// sibling); pre-fix the self-host ACCEPTED it, so this pin is RED-verified.
+///
+/// The `String` + `to_string` cell proper is pinned across all three lanes by
+/// `spectests/run/reject_no_method_on_string.gg`.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_bogus_method_on_string_in_fstring() {
+    assert_self_host_rejects(
+        "primitive_bogus_method_fstring_error.gg",
+        "a bogus method on a `String` inside an f-string",
+    );
+}
+
+/// The INT-receiver cell, and the one that shows the class is not about
+/// `to_string` in particular: any name that is nobody's method is refused.
+/// `primitive_bogus_method_int_error.gg` is an existing Rust-lane reject fixture
+/// (`primitive_bogus_method_int_errors`); pre-fix the self-host ACCEPTED it, so
+/// this pin is RED-verified and the fixture's own claim ("an unknown method on
+/// ANY primitive must be a CLEAN type error") becomes true on both lanes.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_bogus_method_on_int() {
+    assert_self_host_rejects(
+        "primitive_bogus_method_int_error.gg",
+        "`.bogus()` on an `int`",
+    );
+}
+
+/// The REMOVED-METHOD cell: `.str()` was retired as a redundant deep-copy
+/// self-view accessor, and the reject is what keeps it retired. Pre-fix the
+/// self-host still accepted it, so the removal held on one lane only.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_removed_str_method_on_string() {
+    assert_self_host_rejects(
+        "primitive_method_str_removed_error.gg",
+        "the removed `.str()` on a `String`",
+    );
+}
+
+/// The ACCEPT side of the same gate — the negative control Core #13 asks for
+/// (a gate that fires on everything is no more evidence than one that never
+/// fires). Runs on the self-host lane and asserts the admitted set still works:
+/// auto-derivables, `mod`, the String table, and a method equipped onto a
+/// PRIMITIVE receiver.
+///
+/// ⚠ NOT RED-VERIFIABLE and does not claim to be — green before AND after
+/// (Core #12). It goes red only if the reject is later tightened in the
+/// OVER-rejecting direction, which is the failure mode the reject fixtures
+/// above cannot see.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_primitive_admitted_methods_still_run() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/sh_primitive_admitted_methods_ok.gg");
+    let tmp_root = std::env::temp_dir()
+        .join(format!("gg_sh_prim_admitted_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let outcome =
+        self_host_emit_cc_run(&driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "prim");
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    match outcome {
+        Ok(stdout) => assert_eq!(
+            stdout.trim_end(),
+            "21\n21\n7.5\n1\n42\nhi\nHI\n6\na,b",
+            "the admitted-method control changed answer on the self-host lane",
+        ),
+        Err(other) => panic!(
+            "the primitive-receiver reject refused (or broke) a program of ADMITTED methods \
+             ({other:?}). Rust gg runs it. Every line of that fixture is a cell of Rust's own \
+             primitive method table — an over-tightened `any_prim_method_admitted` or a lost \
+             `equip`/registry escape in `reject_no_method_on_primitive` is the first thing to \
+             check.",
+        ),
+    }
+}
+
+/// KNOWN GAP (R47 Track D1) — the cell the primitive-receiver reject
+/// deliberately does NOT close. The self-host accepts `3.0.len()`, compiles it,
+/// runs it, and prints a GARBAGE INTEGER; Rust gg rejects with
+/// `E_NoMethodFound`. The reject abstains because `len` is on the String table
+/// and the self-host's receiver typing is not trustworthy enough to dispatch per
+/// receiver kind — see the fixture header and
+/// `tests/fixtures/sh_match_arm_binding_shadow_shape.gg`.
+#[test]
+#[ignore = "KNOWN GAP: the self-host accepts `len()` on a `float` and prints a \
+garbage integer; Rust gg rejects. Blocked on the identifier-resolution defect \
+that forces the reject's admission test to be unioned. Asserts the SH reject."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_sh_len_on_float_silently_miscompiles() {
+    assert_self_host_rejects(
+        "known_gaps/sh_len_on_float_silently_miscompiles.gg",
+        "`len()` on a `float`",
+    );
+}
+
+/// KNOWN GAP (R47 Track D1, found by the output-review) — the RECEIVER/ROOT-SHAPE
+/// axis. `reject_no_method_on_primitive` fires only for a bare IDENTIFIER
+/// receiver, because its soundness filter corroborates the receiver's type by
+/// looking the NAME up lexically and a computed receiver has no name. All four
+/// non-identifier spellings of the same `float` receiver still slip through;
+/// this pins the sharpest, which does not merely mis-mint a slot but LINK-FAILS
+/// on `undefined reference to 'int64_t__to_string'` — the symbol invention the
+/// reject exists to stop. The other three cells are enumerated in the fixture
+/// header and in `todo/t0740`.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0740): the primitive-receiver reject only fires for \
+an IDENTIFIER receiver; a computed receiver still reaches the backend and \
+invents a runtime symbol. Asserts the SH reject."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_sh_reject_misses_computed_receiver() {
+    assert_self_host_rejects(
+        "known_gaps/sh_reject_misses_computed_receiver.gg",
+        "`to_string()` on a COMPUTED `float` receiver",
+    );
+}
+
+/// KNOWN GAP (R47 Track D1) — the NOMINAL-receiver cell of the same family the
+/// primitive reject closes: the self-host accepts `to_lower()` on a
+/// `Vector[String]` and CC-FAILs with the same `'Str' from type 'int'` mint.
+/// Rust gg rejects. Not folded into the primitive reject because Rust rejects
+/// the two receiver kinds from two different branches with different machinery
+/// — see the fixture header and `todo/t0746`.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0746): the self-host accepts a String method on a \
+`Vector[String]` and CC-FAILs; Rust gg rejects. Asserts the SH reject."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_sh_string_method_on_vector_overaccepted() {
+    assert_self_host_rejects(
+        "known_gaps/sh_string_method_on_vector_overaccepted.gg",
+        "`to_lower()` on a `Vector[String]`",
+    );
+}
+
+/// KNOWN GAP (R47 Track D1) — `hash` is auto-derivable and the oracle accepts it
+/// on a primitive, but NEITHER backend can lower it: both emit
+/// `undefined reference to int64_t__hash`. Both lanes agreeing on the wrong
+/// answer is a red flag, not a pass (Core #8). Asserts the intended behaviour:
+/// it compiles and is deterministic within a run.
+#[test]
+#[ignore = "KNOWN GAP: `hash()` on a primitive link-errors on BOTH lanes \
+(`undefined reference to int64_t__hash`) although the oracle accepts it. \
+Asserts that it compiles and runs."]
+fn known_gap_hash_on_primitive_undefined_symbol() {
+    run_gg("known_gaps/hash_on_primitive_undefined_symbol.gg", "true");
+}
+
+/// KNOWN GAP (R47 Track D1) — an `equip int:` block in the program breaks the
+/// STATIC call `int.parse(...)`: it is lowered as a user equip method on `int`,
+/// so both lanes link-error on `int64_t__parse`. Remove either feature and the
+/// program prints `99`.
+#[test]
+#[ignore = "KNOWN GAP: `equip int:` + `int.parse(...)` link-errors on BOTH lanes \
+(`undefined reference to int64_t__parse`). Asserts the intended `99`."]
+fn known_gap_equip_on_primitive_shadows_static_parse() {
+    run_gg("known_gaps/equip_on_primitive_shadows_static_parse.gg", "99");
+}
+
+/// SHAPE PIN for the typed `Thread[T].join() -> T` arm R47 Track D1 added.
+///
+/// ⚠ NOT RED-VERIFIABLE and does not claim to be (Core #12). The arm corrects
+/// the typechecker's answer — `join` previously fell through to the
+/// String-returning name list — but no shape was found where the wrong answer
+/// was observable: an `int` payload, a `Vector[int]` payload and a discarded
+/// result all behave identically on the pre-fix and post-fix drivers, because
+/// the lowerer reconstructs this link's type without consulting the
+/// typechecker. It is a tripwire on a currently-latent axis: a later change
+/// that makes the typechecker's answer load-bearing cannot silently
+/// reintroduce the String. See the fixture header for the measurements.
+#[test]
+fn sh_thread_join_returns_payload() {
+    run_gg("sh_thread_join_returns_payload.gg", "7");
+}
+
+/// SHAPE PIN for the self-host identifier-resolution defect R47 Track D1 filed:
+/// a `match` arm binding leaks past its arm and a LATER same-named local
+/// resolves to it. Green on every lane before and after — it is NOT a
+/// red-verified gap fixture and does not claim to be (Core #12). It is
+/// committed because it is the minimal shape of the defect that bounds
+/// `reject_no_method_on_primitive`'s admission test, and because fixing that
+/// defect must not change what this prints.
+#[test]
+fn sh_match_arm_binding_shadow_shape() {
+    run_gg("sh_match_arm_binding_shadow_shape.gg", "7\n1");
 }
 
 /// KNOWN GAP — the REFERENCE lags the self-host. Rust gg accepts `.is_none()`
@@ -56398,9 +57486,18 @@ fn known_gap_postfix_try_on_option_ices_resource_move() {
 
 // ── THE CHAIN-LINK RED CELLS: the ~23 ladder arms that do NOT publish
 //    `expr_link_types[span.end]`, over a USER-DEFINED receiver. All five are
-//    PRE-EXISTING (identical on a pristine `2d619258` driver) and all five are
-//    cited from `todo/t0712`, whose receiver gate is the class fix that closes
-//    them at once. Un-ignore and promote out of `known_gaps/` that round.
+//    PRE-EXISTING (identical on a pristine `2d619258` driver).
+//
+//    ⚠ THE CLASS FIX IS NOT A RECEIVER GATE ON THE NAME LIST. These five were
+//    filed under `todo/t0712` on the claim that gating it closed all five at
+//    once; R47 Track D1 built the gate and measured that it closes ZERO — every
+//    one fails identically with and without it. None of the five methods is on
+//    the gated list to begin with (`split` and `len` have their own arms,
+//    `keys`/`get` are already receiver-gated and already correct, `bytes` has no
+//    arm). What breaks them is that their arms never PUBLISH
+//    `expr_link_types[span.end]`, so the lowerer falls back to the contended
+//    `expr_types[span.start]` key. Their real fix is filed separately and starts
+//    at a scout; un-ignore and promote out of `known_gaps/` in THAT round.
 //
 //    ⚠ THESE RUN ON THE SELF-HOST LANE, NOT THROUGH `run_gg`. Rust gg is
 //    CORRECT on every one of them, so a `run_gg` pin would be GREEN today and
@@ -56511,8 +57608,9 @@ fn known_gap_chain_link_keys_on_dict_method_result() {
 /// local first is correct on both lanes, exactly as for the four CC-FAIL rows,
 /// so it is at minimum reached by the same contended-key path — but the
 /// downstream mechanism is a memory failure, not a mint mismatch, and is
-/// triaged on its own rather than assumed identical (Core #15e Q6). If it
-/// survives t0712's receiver gate, it earns its own filing.
+/// triaged on its own rather than assumed identical (Core #15e Q6). It DID
+/// survive R47 Track D1's receiver gate — SIGBUS, rc 135, unchanged — so it has
+/// earned its own filing and has one.
 #[test]
 #[ignore = "KNOWN GAP (todo/t0712): ordinary beginner code that Rust gg runs \
 correctly and the self-host SIGBUSes on (rc 135, no output)."]
@@ -56539,4 +57637,107 @@ false
 true
 true",
     );
+}
+
+/// KNOWN GAP `t0770` — `Option[String].map(f)` with `f` a type-erased
+/// `Callable` PARAMETER allocates `result_local` as `Option[i64]` (16 bytes)
+/// and the caller reads it as `Option[String]` (40 bytes). rc 139 on a plain
+/// build, ASan `stack-buffer-overflow` under `--sanitize`, deterministic 3/3
+/// at `f3feea79`. Un-ignore when `infer_closure_return_type` reads
+/// `ctx.callable_return_type` instead of defaulting to `I64_TYPE`.
+#[test]
+#[ignore = "KNOWN GAP t0770: combinator adapter mis-sizes result_local for a \
+type-erased Callable parameter — rc 139 / ASan stack-buffer-overflow"]
+fn known_gap_combinator_callable_param_result_type_erased_sbo() {
+    run_gg(
+        "known_gaps/combinator_callable_param_result_type_erased_sbo.gg",
+        "hello!",
+    );
+}
+
+/// KNOWN GAP `t0771` — a closure capturing a PARAMETER and escaping via
+/// `return` keeps the borrowed handle, so the defining function's scope exit
+/// frees it under the live environment. rc 0 with SILENTLY WRONG OUTPUT on a
+/// plain build, ASan `heap-use-after-free` under `--sanitize`. Un-ignore when
+/// the capture boundary clones-if-live / moves-if-dead.
+#[test]
+#[ignore = "KNOWN GAP t0771: closure capturing a parameter and escaping reads \
+freed memory — silent wrong output, ASan heap-use-after-free"]
+fn known_gap_closure_captures_param_then_escapes_uaf() {
+    run_gg("known_gaps/closure_captures_param_then_escapes_uaf.gg", "hello");
+}
+
+/// KNOWN GAP `t0709`, second repro — the STRICTLY SIMPLER form: no helper
+/// escape, no `mk()` payload, `v[0]` rather than `.get(0).unwrap()`, and the
+/// identical `stack-buffer-overflow` at the push inside `main`. Shows that
+/// item's "RETURNED FROM A HELPER" discriminator is over-specified. The pushed
+/// value must be a TEMP: binding it to a named local first leaks (35 B / 2)
+/// instead of crashing.
+#[test]
+#[ignore = "KNOWN GAP t0709: Vector[Box[Trait]] push of a TEMP overflows at \
+the push — no helper escape required"]
+fn known_gap_vec_box_trait_pushed_no_helper() {
+    run_gg("known_gaps/vec_box_trait_pushed_no_helper.gg", "R2!");
+}
+
+
+/// KNOWN GAP (R47 Track E2, filed 2026-08-29): a droppable TEMP minted inside
+/// a LOOP CONDITION is dropped once at function exit instead of once per
+/// evaluation, so every iteration but the last leaks its temp.
+///
+/// `while vs.iter().all(is_long) and guard < 1:` — the condition block is
+/// re-evaluated each iteration and `Vector__GorgetString__iter` deep-clones
+/// the backing array every time. LeakSanitizer reports 75 bytes in 3
+/// allocations (the cloned array plus its cloned String elements), 3/3 runs
+/// under `LSAN_OPTIONS=use_stacks=0`, while stdout is correct and a
+/// `detect_leaks=0` run exits 0.
+///
+/// ⚠ DISTINCT CLASS from the for-loop producer sites Track E2 fixed: this is
+/// the LIR drop elaborator's loop-reinit handling (`src/lir/drop_elab.rs` —
+/// "the loop-reinit pattern (iter N moves slot, iter N+1 re-stores) is handled
+/// by step 3's SlotStore arm"), it applies to a temp of ANY droppable type in
+/// any re-evaluated header block, and it has nothing to do with iterator
+/// protocol lowering. `drop_loop_reinit.gg` samples the loop BODY cell; the
+/// CONDITION cell had no fixture in the tree before this one.
+///
+/// Un-ignore + promote out of `known_gaps/` when the condition-block temp is
+/// dropped at the end of each evaluation.
+#[test]
+#[ignore = "KNOWN GAP (R47 Track E2): a droppable temp minted in a LOOP \
+CONDITION leaks once per iteration -- LeakSanitizer reports 75 byte(s) in 3 \
+allocations from Vector__GorgetString__iter, rc 99, while stdout is correct \
+and detect_leaks=0 exits 0. Lives in the LIR drop elaborator's loop-reinit \
+handling (src/lir/drop_elab.rs), not in for-loop lowering. Fixture: \
+tests/fixtures/known_gaps/while_condition_temp_leaks.gg. TODO.md."]
+fn while_condition_temp_leaks() {
+    assert_gg_sanitize_clean("known_gaps/while_condition_temp_leaks", "1");
+}
+
+/// KNOWN GAP (R47 Track E2, filed 2026-08-29): `for x in it` over a
+/// direct-Iterator reached through a `&`-param advances a COPY of the
+/// iterator, leaving the caller's object untouched.
+///
+/// `consume2(&p)` consumes two elements and breaks, so `p.idx` must read 2; it
+/// reads 0. A local that BORROWS a param holds the caller's pointer in its slot
+/// while its GIR type stays the pointee's value type, so the for-lowering can
+/// address neither the object (`&local` addresses a materialized copy) nor the
+/// pointee (`*local` dereferences a value, and SEGVs — measured). The fix
+/// belongs at the bare-param ABI, not in `for_loops.rs`.
+///
+/// The bare-local and struct-FIELD forms of the same loop DO advance the
+/// source — `security/foriter_direct_advances_source.gg` pins the bare local.
+///
+/// ⚠ SAFE, not silent-unsafe: the for-lowering recognises this shape
+/// (`IteratorRef::ShallowAlias`) and binds the loop's elements as BORROWS, so a
+/// move-out body clones instead of moving. Removing that carve-out without
+/// fixing the addressing turns this wrong answer into a double-free (measured).
+#[test]
+#[ignore = "KNOWN GAP (R47 Track E2): `for x in it` over a direct-Iterator \
+reached through a `&`-param advances a COPY -- `p.idx` reads 0 where 2 is \
+correct. The bare-local and struct-field forms are correct; only the \
+param-borrow shape is left, and the fix belongs at the bare-param ABI. \
+Fixture: tests/fixtures/known_gaps/for_direct_iterator_param_not_advanced.gg. \
+TODO.md."]
+fn for_direct_iterator_param_not_advanced() {
+    run_gg("known_gaps/for_direct_iterator_param_not_advanced.gg", "2");
 }

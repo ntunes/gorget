@@ -2494,11 +2494,22 @@ So `Pair(v[0], mutate(&v))` and its tuple twin are **ACCEPTED at HEAD and heap-u
   ⚠ **CENSUS CORRECTED:** the earlier "49 sites in 4 files" was narrow. Re-measured:
   **109 tabular sites across 13 files**; `resources.gg` alone holds 46, not 1, and nine
   files were missed entirely, three of them `self_host_*`. Regenerate rather than quoting.
-  ⚠ **THE DAMAGE IS LIVE AT HEAD, NOT HYPOTHETICAL.** `compiler/data/resources.gg` already
-  carries an author magic comma on a hand-grouped 4-line/25-word table
-  (`RUST_PRESCAN_MUTATOR_FALLBACK`), and `gg fmt` shreds it to 25 lines, one word per
-  line, today. Verify: `gg fmt compiler/data/resources.gg | grep -A 27 RUST_PRESCAN_MUTATOR_FALLBACK`.
-  That single site RED-verifies the mechanism on the live corpus with no fixture authoring.
+  ⚠ **THE DAMAGE WAS LIVE AT HEAD WHEN THIS WAS RULED, NOT HYPOTHETICAL.**
+  `compiler/data/resources.gg` carried an author magic comma on a hand-grouped
+  4-line/25-word table (`RUST_PRESCAN_MUTATOR_FALLBACK`), and `gg fmt` shredded it to 25
+  lines, one word per line. That single site RED-verified the mechanism on the live corpus
+  with no fixture authoring, which is why it is quoted here.
+  ⊕ **The verify command is re-pointed (2026-08-29), the ruling unchanged.** That corpus
+  table was retired with the name list it mirrored (`todo/t0699` — the CoW mutates-receiver
+  decision is now typed per receiver, not a name lookup), so the command that named it no
+  longer resolves. Its exact text survives as the by-name pin
+  `tests/fixtures/fmt_author_rows/resources_prescan_table_survives.gg`, which is what the
+  copy exists for. Verify:
+  `gg fmt tests/fixtures/fmt_author_rows/resources_prescan_table_survives.gg | grep -A 27 PRESCAN_MUTATOR_FALLBACK`.
+  The live-corpus class itself is undiminished — the 109 tabular sites stand, `resources.gg`
+  still holds the bulk, and `fmt_author_row_grouping_survives_formatting` watches them
+  (its `MIN_SUBJECT_SITES` floor moved 25 → 24 for this one departure, with the reason
+  recorded in the constant).
   ⚠ **AN ENGAGEMENT GUARD IS LOAD-BEARING, NOT A REFINEMENT:** preservation engages only
   where the author expressed a between-element break. The naive form of this ruling breaks
   three pinned fixtures (demonstrated: removing the guard REDs

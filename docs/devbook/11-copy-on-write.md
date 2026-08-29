@@ -102,27 +102,56 @@ type short-circuit before this point and never require `!`.
 ## Local ownership state (the tag on every local)
 
 Each GIR local carries a `LocalOwnership` (a typed field on `Local`, read back
-through `source_ownership`, `src/ir/lowering/context.rs:1077`). This is the
+through `source_ownership`, `src/ir/lowering/context.rs:1450`). This is the
 single source of truth for "does this local own its data?" — the legacy
 `func_state.local_ownership` sidecar map was retired (Phase D4.5; see the note
-at `context.rs:2502`). The variants that matter for CoW are `Owned`,
+at `context.rs:3130`). The variants that matter for CoW are `Owned`,
 `Borrowed { origin, mutability }`, `View { source }`, and `SharedHeap { source }`.
 
 The `origin` inside `Borrowed`/`View` is `crate::ir::BorrowOrigin` (distinct
 from the safety one). The relevant variants, used through the helper queries:
 
 - `Alias(LocalId)` — a CoW alias (`String b = a`); resolved transitively to the
-  root via `cow_resolve_root` (`context.rs:2562`).
+  root via `cow_resolve_root` (`context.rs:4003`).
 - `CollectionElement(LocalId)` / `FieldPath(String)` — an element borrowed out
   of a collection (`v.get(i)`) or a field-path collection (`self.data.get(i)`),
   identified by `CollectionId` (`context.rs:19`). Recognised by `is_cow_borrow`
-  (`context.rs:2384`).
+  (`context.rs:3563`).
 - `Field { base, .. }` — a borrow of a struct field (`String x = imp.field`).
 - `RuntimeView(LocalId)` — a `cap==0` string view returned by a view method,
-  set by `set_view_of` (`context.rs:2399`).
+  set by `set_view_of` (`context.rs:3578`).
 - `CowBorrowPending` — a placeholder before the source collection is resolved.
 
-`flush_ownership_to_locals` (`context.rs:2512`) derives each local's `slot_kind`
+### A collection identity names the STORAGE OWNER, never the spelling
+
+`CollectionId::Local` is the identity every later pass compares against when it
+asks "is this borrow pointing into the collection I am about to mutate?" — the
+`source_mut_unsafe` query at the var-decl, and the `CollectionElement(c) == t`
+equality that drives the severance walk. That identity is a **storage owner**,
+not a name the user happened to reach the storage through.
+
+The distinction is load-bearing because a collection answers to more than one
+name. `Vector[String] alias = v` binds a second name to one collection, tagging
+`alias` as `Borrowed { Alias(v) }`; a borrow taken through `alias` still borrows
+out of **`v`'s** buffer. If the recorded identity said `alias`, every comparison
+above would miss — the rescue would never be emitted, the severance walk would
+skip the borrow, and *which name the view was spelled through* would decide
+whether the program reads freed memory.
+
+So the identity is normalised **once, at the producers**, by
+`resolve_collection_identity` (`context.rs:3670`), which runs `cow_resolve_root`
+over the `Alias` chain. There are exactly two producers —
+`set_cow_borrow_source` (`context.rs:3643`, the `cow_borrow_sources` sidecar)
+and `set_collection_ref` (`:3707`, the `CollectionElement` ownership) — and both
+resolve before storing. Callers pass whichever local they have in hand and do
+not have to know whether it is a spelling or a root; consumers read one
+normalised identity and never re-derive it. This is Layering rule 4 ("resolve
+once, write through") at the CoW provenance boundary, and it is what
+`cow_collection_identity_writes_go_through_the_resolving_producers`
+(`tests/lints.rs`) holds in place: the sidecar field is private, and each
+producer must still call the resolver.
+
+`flush_ownership_to_locals` (`context.rs:3953`) derives each local's `slot_kind`
 (`BorrowedPtr` / `OwnedPtr` / `Value`) from `(type, ownership)` at the GIR→LIR
 boundary so the backend never re-derives ownership from names or shapes.
 
@@ -510,7 +539,7 @@ let elem_is_binding = matches!(pattern.node, Pattern::Binding(_));
 (`context.rs:3450`), with **no** `drops.register_local` — the collection owns the
 buffer, so a per-element drop would double-free it. The element's
 `BorrowOrigin` is `CollectionElement` / `CowBorrowPending`, recognised
-downstream by `is_cow_borrow` (`context.rs:3473`). Tuple-destructuring patterns
+downstream by `is_cow_borrow` (`context.rs:3563`). Tuple-destructuring patterns
 and direct-collection elements keep the old clone path.
 
 **Why this is sound.** The loop body can only do three things with `x`, and each
@@ -647,11 +676,11 @@ The current enforcement is only partial — see
 A borrow is only as cheap as the absence of a write. When the lowering is about
 to mutate a local — a mutating method call (`exprs/methods.rs:1590,1623`), a
 reassignment, an index/field assign (`assigns.rs:71,489,730`) — it first calls
-`cow_before_mutation(local, span)` (`context.rs:2658`) to clone out everything
+`cow_before_mutation(local, span)` (`context.rs:4099`) to clone out everything
 that aliases the value being mutated, so each alias keeps the value it observed.
 The cases it severs:
 
-- **bare Ptr param** → clone to owned in place (Case at `context.rs:2665`);
+- **bare Ptr param** → clone to owned in place (Case at `context.rs:4105`);
 - **local is an alias** → clone the source into the local (`Case 1`);
 - **local is itself an element/field borrow being mutated in place** →
   materialize it into an independent owned copy first, so the mutation lands in
@@ -664,23 +693,38 @@ The cases it severs:
 - **local is a collection with element refs** → materialize each ref
   (`Case 3`, via `cow_materialize_collection_ref`);
 - **local is a string with live views** → materialize each view (`Case 4`,
-  recursing through transitive views, `context.rs:2710`);
+  recursing through transitive views, `context.rs:4232`);
 - **SharedHeap value-aliases** → drop the tag only (heap was already deep-owned
   at the `gorget_string_copy_cow` boundary, `Case 5`);
 - **struct with live named field-borrows** → materialize each (`Case 6`).
 
-The three materialize routines (`cow_materialize_alias` `:2872`,
-`cow_materialize_view` `:2833`, `cow_materialize_collection_ref` `:2910`) all
+**The two walks that DISCOVER refs both skip ephemeral temps, and must.** Cases
+3 and 6 do not sever a set the caller handed them; they scan for locals tagged
+as borrows into the value being mutated. That scan finds expression temps as
+well as user variables — the anonymous `Ptr` behind `v[i]`, the field-load temp
+behind `obj.field` inside a call — and those temps are dead the moment the
+statement that produced them finishes, their value already copied into whatever
+the user actually named. Materializing one is worse than wasted: the routines
+rebind by *name hint*, so there is no name for the clone to land on, and the
+clone reads FROM the element pointer — which, after a reallocating mutation, is
+freed memory. The rescue would be the use-after-free. Case 3 therefore skips
+anonymous `Ptr`-typed refs and Case 6 skips anonymous field borrows. The filter
+is on the `Ptr` shape rather than on anonymity alone, because a slice (`v[a:b]`)
+is tagged through the same producer yet is a collection **value**: anonymous,
+genuinely read by the assign that consumes it, and needing its clone.
+
+The three materialize routines (`cow_materialize_alias` `:4508`,
+`cow_materialize_view` `:4467`, `cow_materialize_collection_ref` `:4585`) all
 share the shape: call `clone_fn_for_ptr`, then bind the cloned value into a
 fresh owned local with `AssignMode::Move` (not Copy — Copy would alias the clone
-and leak the original; see the comment at `context.rs:2853`), register it for
+and leak the original; see the comment at `context.rs:4529`), register it for
 drop, and rebind the name. The Move-mode detail was a real bug fix: the earlier
 shallow-copy variant produced a Phase-C validator violation that a now-removed
 named-local guard was masking.
 
-`cow_before_field_mutation` (`context.rs:2765`) is the field-path sibling
+`cow_before_field_mutation` (`context.rs:4387`) is the field-path sibling
 (`self.data.push(x)` materializes `CollectionRef`s borrowing `"self.data"`), and
-`cow_sever_all_aliases_from` (`context.rs:2782`) handles the reassign case
+`cow_sever_all_aliases_from` (`context.rs:4404`) handles the reassign case
 (aliases keep the *old* value).
 
 ### Implementation status — converging to the uniform rule
@@ -854,7 +898,7 @@ ggdef lanes, so it is a definition-lane event, not just a runtime one):
 | **2T** ✅ LANDED | drop-tainted value at **any** materialize-on-write site | both + ggdef | **Ruled REJECT** (owner 2026-07-17); **landed all lanes 2026-07-17**. Materialize is an implicit copy, so a custom-`Drop` value must not be silently duplicated here any more than at the six consuming positions — the user writes `&self`/`&param` (write-through) or an explicit `.clone()`/move. Emits the `E_MoveWithoutOperator` family (the `write_through_available` discriminator leads with the `&self`/`&<param>` write-through remedy) at every materialize position — **assign, compound-assign, mutating-builtin receiver, AND the `&`-of-value FORMATION arg** (`f(&s.field)`, whole `&p` / `&self`; the last was the wave-2 Core-#8 double-close fix). Negative fixtures `cow_taint_*`; decoupled from the dead-write LINT's tracking (guard `tests/lints.rs::tainted_reject_never_reads_lint_state`). |
 | **2E** ✅ LANDED | plain `self` (not `&self`) | both | **Landed all lanes 2026-07-17.** Bare `self` ≡ bare-param materialize (value struct → pointee deref-copy; resource → clone; the self-host tags plain non-scalar self `LoParam` so `cow_materialize_projected_root` privatises it); `&self` write-throughs. Shipped **in the same landing** as the ratified D2-rider **dead-bare-param-write** diagnostic (uniform over all bare params — `self` is just the first — flagging exactly the write-to-a-never-read private copy: *"this writes to a private copy that is never read — the caller's value is unchanged; did you mean `&self`?"*, an on-by-default `W_` promoted to `E_` after corpus burn-down; the read hooks cover the Identifier, f-string interpolation, AND SelfExpr read paths). Gated behind 2T for drop-tainted receivers. |
 | **2G** ✅ LANDED (both lanes, 2026-07-18 — Rust + the self-host mirror in the same round) | loop-carried bare-param materialize | both | The root-caused **deadwrite while-loop wrong-code** class: a bare-param CoW write inside a loop threw away its private copy every iteration — the materialize-on-first-write rebind happens inside `lower_block(body)`, but the loop's `restore_locals` reverts it each iteration AND the condition/exit blocks resolve the pre-loop param-borrow slot — so `while i < 2: xs.pop()` printed 4 instead of 2 and `while xs.len() > 2: xs.pop()` **infinite-looped** (the condition re-read the stale borrow). Fixed at the **write** site: a shared pre-header helper (`materialize_loop_carried_bare_params`) runs at every loop-lowering entry (`lower_while` *before* the condition is lowered and before `save_locals`; `lower_loop`; `lower_for` before the iterable) and calls the **existing** `cow_before_mutation` for each in-scope bare param the loop mutates. The fresh owned local is now a pre-loop slot that LIR-SSA phis at the header (the same loop-carried substrate `emit_lazy_loopcarried_borrow` relies on), and the rebind is captured by `save_locals`. **Eager here is observationally lazy**: a bare param's private copy starts equal to the caller's bytes, so a pre-header clone is indistinguishable from clone-at-first-write, and it only fires when the body *statically* mutates the param — over-approximation costs one extra clone, under-approximation reviving the per-iteration throwaway. This is a **write**-site fix, never phi-repair at the loop head. Detection is routed through the **shared CoW prescan** collectors (`cow_after_block`/`cow_after_stmt`/`cow_after_expr_moves`, run fresh over the loop's own statements + the `while` condition) — one source of truth (devbook/24), no parallel AST walker — and the same routing hardened the prescan program-wide: the mutating-method check reads the typed `is_mutating_builtin_method` predicate (not a drift-prone hand-list), and the collectors now see index/tuple-field roots (with the dotless-root insert), the loop/if/match condition + scrutinee, non-block match-arm bodies, the nested-For `else` body, `select` channel ops, and place-projection sub-expressions. The self-host lane carries the equivalent pre-header materialize in its own loop lowering (a mirror of this design over its whole-function CoW scan, not a mechanical port). The **branch-body** sibling (the same save/restore shape *outside* loops) is closed by **consumer #1** (row below). Still open: the **comprehension emitters** (a *different* root — the synthesized list/string/dict/set loops have NO save/restore, so the in-body clone lands in the re-executing body; it needs a synthesized-loop pre-header hook, not the scope-dispatch hoist) and the user `&self`-mutator receiver that hides from the untyped prescan — each filed with a `known_gaps/` fixture asserting the intended output. |
-| **Consumer #1** ✅ LANDED (both lanes, 2026-07-18 — Rust + the self-host mirror in the same round) | branch/scope-carried bare-param materialize (the **planner campaign's first consumer**) | both | The **branch sibling of 2G**, generalized to the FULL non-loop save/restore scope class (Core #4: fix the class, not the instance). A bare-param mutation inside ANY of `if`/elif/else · `unsafe` · `with` · named-scope · `match` arms (bodies + guards) · `select` recv arms — plus a `for … else:` / `while … else:` **else** body — was thrown away exactly as the pre-fix loop body was: the scope's per-branch/per-arm `restore_locals` (or `lower_block_scoped`'s save/restore) reverts the in-body CoW rebind, and the post-scope read resolves the stale pre-scope param-borrow (`cow_loop_bare_param_if_branch` printed 4,4; ggdef-adjudicated 3,4 — a **Core-#8 both-production-backends-wrong** miscompile). Fixed at the **write** site, hoisting BEFORE the scope: the six non-loop scope forms materialize at their `lower_stmt` **dispatch arm** through ONE shared entry (`materialize_scope_carried_bare_params`, stamping `BranchPreHeaderMaterialize`); the two loop-**else** rows ride the EXISTING `materialize_loop_carried_bare_params` hoist (extended to also scan the else body, keeping `LoopPreHeaderMaterialize` so per-position costing stays honest). Conditional scopes hoist to the dominating pre-scope point (fresh owned local dominates the merge → no phi); the straight-line scopes (with/unsafe/named-scope, single predecessor) materialize at entry — **never phi-repair at a merge** (devbook/24). Detection is the SAME shared collector as 2G: `cow_mutations_in_stmt` **is** `cow_after_stmt` run over the whole scope statement (NOT a hand-mirror of its per-form arms — the proto's `cow_mutations_in_branches` had already drifted by missing the elif conditions; that partial parallel walker is deleted), so elif/if conditions, match guards, `with` bindings, arm-Expr-vs-Block bodies, else bodies and nested scopes are all covered as *properties of the collector*, one source of truth (devbook/24). The elif-CONDITION sub-shape mattered twice over: the SH's `cow_scan_stmts`/`cow_scan_expr` If arms had the SAME drift (branch bodies walked, elif conditions skipped — match guards were already scanned), fixed in the same round; and on the Rust side the old at-site materialize for an elif-cond `&arg` rebound in the conditionally-reached else-chain block — a NON-dominating rebind that made the then-taken path read an undef local (base printed 0,0,4 on both backends). `cow_scope_bare_param_elif_cond_then` pins the fix at 0,4,4 and `cow_scope_bare_param_elif_cond` pins the elif-taken 1,3,4 — both all-lane-agreed, ggdef-adjudicated. The `is_bare_param` gate keeps `&`/`!` write-through intact (regression fixture `cow_scope_bare_param_amp_guard` → 3,3) and makes nested composition safe (a loop pre-header hoist already materialized the param → the inner branch hoist sees an owned local and no-ops — `cow_scope_bare_param_nested_if_loop` → 2,4, no double clone). The self-host mirror is SUBTREE-scoped like the Rust side, via **one-pass scope sets** (bootstrap-hotfix 2026-07-18, a two-layer regression fix measured on the stage-1 bootstrap: (1) read-only String builtins missing from `BUILTIN_METHOD_MUTATES` (`starts_with` et al.) were conservatively classified mutating and the first mirror's whole-fn suffix scan turned that into an entry clone per call in hot classifier helpers — stage1→stage2 blew the 600s deadline at 1332s; (2) stack-sampling then exposed the dominant residual: the SH typechecker's bare `ScopeTable` params are mutated via USER `&self` methods that the SH's TYPED scan marks but Rust's untyped prescan is blind to — the R38/user-mutator shared gap — so the SH branch hoist drew a deep `ScopeTable__clone` per recursive `check_safety_stmt` visit, 7× runtime clones, while Rust-lowered stage-0 never fired). Design: the whole-fn scan captures per-scope-statement subtree mutation sets DURING its single forward walk (`cow_scope_anchor_stack` + flat `"anchor@name"` keys in `cow_scope_muts` — never a per-scope re-walk, which multiplies scan cost by nesting depth, and never a nested Dict); the `SIf`/`SMatch`/`SNamedScope` dispatch hoists are pure lookups through the ONE shared funnel (`materialize_carried_bare_params_core`, single `cow_materialize_root_by_name` site — SH ratchet stays 8; anchors: cond start / scrutinee start / `stmts_first_pos(body)`, one shared helper on both keying sites). **Lane-symmetry filter:** scope-set marks pass `rust_prescan_marks_method` (typed builtin `is_mutating` UNION the mirrored `RUST_PRESCAN_MUTATOR_FALLBACK` list), so both lanes' branch hoists fire on IDENTICAL shapes; user-`&self`-mutator / unknown-method receiver marks stay in the whole-fn maps only (bind-flip safety + loop hoist keep the SH's richer typed detection), and the user-mutator-in-scope throwaway remains the SHARED filed gap on both lanes (the `cow_loop_bare_param_user_mutator` class) — when the Rust prescan learns typed user receivers, both lanes lift together and the mirrored fallback list is deleted on both sides. The read-only String surface (`starts_with`/`ends_with`/`byte_at`/`split`/…) is now typed into `BUILTIN_METHOD_MUTATES` (`replace` deliberately kept conservative — it sits in Rust's fallback for unresolvable user methods). The LOOP hoist keeps the whole-fn suffix scan (a loop re-executes; at/after-the-anchor is the right question there — and the 2G-era suffix-scan asymmetry note now applies to loops only). SH `with` has no name-map snapshot (no hole), and the SH lowerer has no `unsafe`/`select` arm (out of the self-host subset). Measured close: base 1487ms/4.96M array clones vs fixed 1546ms/6.38M on the dataframe A/B; both bootstrap tests green solo (fixed_point 867s, bootstrap 597s, each stage within its 600s deadline). Ratchet is **FLAT** (Rust 20, SH 8 — additive coverage routed through the existing funnels, no new `cow_before_mutation` site); the convergence-meter *decrease* is a Phase-3 at-site-conversion property. Fixtures: in-subset ggdef-adjudicated shapes top-level (`cow_loop_bare_param_if_branch` + `cow_scope_bare_param_{if_else,if_both,if_elif,nested_if_loop,amp_guard,match_arm}`); out-of-ggdef-subset shapes in `known_gaps/` validated on C+LLVM (`cow_scope_bare_param_{unsafe,named,while_else,for_else,match_guard,with,select}`). The explicit per-function `MaterializePlan` **table** (keyed by applied span, typed `MaterializePosition`) **LANDED planner round 3** with its first at-site querying client, the Class-A assign-target-root conversion (design-unified-slotprovenance: substrate built with a real consumer). Consumer #1's two pre-header hoists now route through it as `LoopPreHeader` / `BranchPreHeader` directives (see the Class-A row below). |
+| **Consumer #1** ✅ LANDED (both lanes, 2026-07-18 — Rust + the self-host mirror in the same round) | branch/scope-carried bare-param materialize (the **planner campaign's first consumer**) | both | The **branch sibling of 2G**, generalized to the FULL non-loop save/restore scope class (Core #4: fix the class, not the instance). A bare-param mutation inside ANY of `if`/elif/else · `unsafe` · `with` · named-scope · `match` arms (bodies + guards) · `select` recv arms — plus a `for … else:` / `while … else:` **else** body — was thrown away exactly as the pre-fix loop body was: the scope's per-branch/per-arm `restore_locals` (or `lower_block_scoped`'s save/restore) reverts the in-body CoW rebind, and the post-scope read resolves the stale pre-scope param-borrow (`cow_loop_bare_param_if_branch` printed 4,4; ggdef-adjudicated 3,4 — a **Core-#8 both-production-backends-wrong** miscompile). Fixed at the **write** site, hoisting BEFORE the scope: the six non-loop scope forms materialize at their `lower_stmt` **dispatch arm** through ONE shared entry (`materialize_scope_carried_bare_params`, stamping `BranchPreHeaderMaterialize`); the two loop-**else** rows ride the EXISTING `materialize_loop_carried_bare_params` hoist (extended to also scan the else body, keeping `LoopPreHeaderMaterialize` so per-position costing stays honest). Conditional scopes hoist to the dominating pre-scope point (fresh owned local dominates the merge → no phi); the straight-line scopes (with/unsafe/named-scope, single predecessor) materialize at entry — **never phi-repair at a merge** (devbook/24). Detection is the SAME shared collector as 2G: `cow_mutations_in_stmt` **is** `cow_after_stmt` run over the whole scope statement (NOT a hand-mirror of its per-form arms — the proto's `cow_mutations_in_branches` had already drifted by missing the elif conditions; that partial parallel walker is deleted), so elif/if conditions, match guards, `with` bindings, arm-Expr-vs-Block bodies, else bodies and nested scopes are all covered as *properties of the collector*, one source of truth (devbook/24). The elif-CONDITION sub-shape mattered twice over: the SH's `cow_scan_stmts`/`cow_scan_expr` If arms had the SAME drift (branch bodies walked, elif conditions skipped — match guards were already scanned), fixed in the same round; and on the Rust side the old at-site materialize for an elif-cond `&arg` rebound in the conditionally-reached else-chain block — a NON-dominating rebind that made the then-taken path read an undef local (base printed 0,0,4 on both backends). `cow_scope_bare_param_elif_cond_then` pins the fix at 0,4,4 and `cow_scope_bare_param_elif_cond` pins the elif-taken 1,3,4 — both all-lane-agreed, ggdef-adjudicated. The `is_bare_param` gate keeps `&`/`!` write-through intact (regression fixture `cow_scope_bare_param_amp_guard` → 3,3) and makes nested composition safe (a loop pre-header hoist already materialized the param → the inner branch hoist sees an owned local and no-ops — `cow_scope_bare_param_nested_if_loop` → 2,4, no double clone). The self-host mirror is SUBTREE-scoped like the Rust side, via **one-pass scope sets** (bootstrap-hotfix 2026-07-18, a two-layer regression fix measured on the stage-1 bootstrap: (1) read-only String builtins missing from `BUILTIN_METHOD_MUTATES` (`starts_with` et al.) were conservatively classified mutating and the first mirror's whole-fn suffix scan turned that into an entry clone per call in hot classifier helpers — stage1→stage2 blew the 600s deadline at 1332s; (2) stack-sampling then exposed the dominant residual: the SH typechecker's bare `ScopeTable` params are mutated via USER `&self` methods that the SH's TYPED scan marks but Rust's untyped prescan is blind to — the R38/user-mutator shared gap — so the SH branch hoist drew a deep `ScopeTable__clone` per recursive `check_safety_stmt` visit, 7× runtime clones, while Rust-lowered stage-0 never fired). Design: the whole-fn scan captures per-scope-statement subtree mutation sets DURING its single forward walk (`cow_scope_anchor_stack` + flat `"anchor@name"` keys in `cow_scope_muts` — never a per-scope re-walk, which multiplies scan cost by nesting depth, and never a nested Dict); the `SIf`/`SMatch`/`SNamedScope` dispatch hoists are pure lookups through the ONE shared funnel (`materialize_carried_bare_params_core`, single `cow_materialize_root_by_name` site — SH ratchet stays 8; anchors: cond start / scrutinee start / `stmts_first_pos(body)`, one shared helper on both keying sites). **Lane-symmetry filter:** scope-set marks are classified by `cow_recv_mutation_class`, so both lanes' branch hoists fire on IDENTICAL shapes. That classification is TYPED PER RECEIVER on both lanes — Rust's prescan reads the semantic pass's `ReceiverMutations` and this lane resolves the receiver's type to a `Type__mname` key through `recv_method_key` — so the two agree by construction on every call either can resolve, and the mirrored name list (`RUST_PRESCAN_MUTATOR_FALLBACK`, and Rust's `MUTATING_METHODS` it mirrored) is deleted on both sides. The only surviving asymmetry is the UNRESOLVABLE receiver: this lane's whole-fn maps keep the conservative-unknown default (bind-flip safety + loop hoist), and that class alone stays out of the scope-set channel. The user-mutator-in-scope throwaway that was the shared filed gap here (the `cow_loop_bare_param_user_mutator` class) is closed on both lanes. The read-only String surface (`starts_with`/`ends_with`/`byte_at`/`split`/…) is now typed into `BUILTIN_METHOD_MUTATES` (`replace` deliberately kept conservative — it is absent from Rust's typed builtin table too, so an unresolvable `replace` receiver takes the conservative default on BOTH lanes). The LOOP hoist keeps the whole-fn suffix scan (a loop re-executes; at/after-the-anchor is the right question there — and the 2G-era suffix-scan asymmetry note now applies to loops only). SH `with` has no name-map snapshot (no hole), and the SH lowerer has no `unsafe`/`select` arm (out of the self-host subset). Measured close: base 1487ms/4.96M array clones vs fixed 1546ms/6.38M on the dataframe A/B; both bootstrap tests green solo (fixed_point 867s, bootstrap 597s, each stage within its 600s deadline). Ratchet is **FLAT** (Rust 20, SH 8 — additive coverage routed through the existing funnels, no new `cow_before_mutation` site); the convergence-meter *decrease* is a Phase-3 at-site-conversion property. Fixtures: in-subset ggdef-adjudicated shapes top-level (`cow_loop_bare_param_if_branch` + `cow_scope_bare_param_{if_else,if_both,if_elif,nested_if_loop,amp_guard,match_arm}`); out-of-ggdef-subset shapes in `known_gaps/` validated on C+LLVM (`cow_scope_bare_param_{unsafe,named,while_else,for_else,match_guard,with,select}`). The explicit per-function `MaterializePlan` **table** (keyed by applied span, typed `MaterializePosition`) **LANDED planner round 3** with its first at-site querying client, the Class-A assign-target-root conversion (design-unified-slotprovenance: substrate built with a real consumer). Consumer #1's two pre-header hoists now route through it as `LoopPreHeader` / `BranchPreHeader` directives (see the Class-A row below). |
 | **Class A** ✅ LANDED (Rust, planner round 3) | assign-target-root at-site materialize → the `MaterializePlan` | Rust (SH already consolidated) | The **first at-site client** of the table: `lower_field_assign` / `lower_index_assign` / the compound path funnelled their six open-coded `cow_before_mutation` calls through the shared `materialize_assign_target_root` → `plan_materialize_at_site` (Core #4 sibling-drift consolidation). **Ratchet 20 → 14** — the convergence meter's first decrease. Behavior-NEUTRAL (zero attribution delta, byte-identical clone sites/counts/reasons), so NOT a definition-lane event (Core #9 exempt: lanes share semantics, not implementation). The SH lane is ALREADY planner-shaped (`cow_scope_muts` table + the consolidated `cow_materialize_projected_root`, census 8 = ceiling), so no SH change is required for the substrate; the SH ratchet stays 8. |
 | **2D** ✅ CLOSED (planner round 3) | untracked alias chains — REJECT-not-resolve | both | A mutation whose root is a view-returning method (`&x.slice()[i]`) that `resolve_projection_root_local` cannot name. The filed "still writes through to a live source" premise was **REFUTED** by an end-to-end C+LLVM sweep (see "Implementation status — converging" above): every reachable shape is a hard REJECT (String index-assign — `string_slice_index_assign_error.gg`, both lanes), a DEAD-TEMP write (owned/view method result — `known_gaps/cow_2d_method_result_dead_write.gg`, warning-track via a filed D2-rider), or a separately-filed ICE (`known_gaps/{string_view_push_char_ice,vector_windows_nested_index_assign_ice}.gg`). No resolver invented (there is no live aliasing source to materialize); the RESOLVE path is deferred until a view-returning method on a *mutable* container exists. The "converging to the uniform rule" marker is **removed**. |
 | **2F** | nested `&` field place (snag #53) | both | `void set(Outer &o): o.inner.raw[k] = v` is a silent no-op — the nested MutPtr place chain isn't built. Un-ignore `known_gaps/snag53_*` when green. |
@@ -1636,20 +1680,30 @@ driver loop would deep-clone the whole root, and the self-host — unlike the
 Rust reference — must compile **itself**, a program whose hot loops call such
 getters densely. Measured, the naive over-approximation is a ~12–14 GB clone
 bomb that OOM-kills the self-compile / `bootstrap_fixed_point` (only peak RSS,
-not a green sweep or ASan, catches it). Rust's CoW gate uses the analogous
-name/signature over-approximation (`method_mutates_receiver`) but is never
-compiled through these hot loops, so it never balloons — this classifier is a
-**self-host-only** need, standing in for the Pass-5 purity inference the
-self-host driver otherwise lacks.
+not a green sweep or ASan, catches it).
 
-`compute_method_mutates_self` (`lower.gg:1401`, run from the pre-pass) computes
+**Both lanes need this classifier, and the asymmetry runs the other way for
+USER methods.** A *closed* name list over-approximates — the failure is cost.
+An *open* set of user-chosen identifiers UNDER-approximates: the method the
+list has never heard of is simply invisible, so the private copy is never
+made and the alias survives the mutation. That is not a clone bomb, it is a
+use-after-free, and it was live in the Rust reference until a user method's
+NAME was found to decide whether a program segfaulted (`void grow(&self)`
+rc 139 on both backends where a byte-identical `void resize(&self)` was
+correct). Rust's prescan now reads the same typed per-receiver answer: the
+semantic pass classifies each call site from the receiver's resolved type and
+the method's declared `&self`, and writes it through as
+`safety::ReceiverMutations` for the lowering to read. The measurement above
+stands; the "self-host-only need" conclusion it used to carry does not.
+
+`compute_method_mutates_self` (`lower.gg:1650`, run from the pre-pass) computes
 the answer precisely: a monotone fixpoint over self-callee edges. It seeds each
 `&self`/`^self` equip method (non-generic equips only) with a direct-mutation
 flag from `mutinf_scan_stmts` / `mutinf_scan_expr` (which recognise
 `self`-rooted writes via `mutinf_expr_is_self_rooted`), records the set of
 `self`-method calls each makes as edges, then propagates mutation along those
 edges until fixed. The result is keyed `Type__mname` on the typed
-`GirModule.method_mutates_self` map (`gir.gg:621`) — one source of truth for
+`GirModule.method_mutates_self` map (`gir.gg:636`) — one source of truth for
 this axis, alongside the existing `fn_borrow_params` / `fn_move_params`
 name-keyed caches. The self-convention (whether idx-0 is `&self`/`^self`) is
 read from `fn_borrow_params`/`fn_move_params`, **not** from `mi_meth.params` —
@@ -1657,8 +1711,10 @@ read from `fn_borrow_params`/`fn_move_params`, **not** from `mi_meth.params` —
 ownership to bare (a filed footgun).
 
 The materialize gate (`lower_expr.gg`, the method-call arm's `_r37_mut` block)
-and the scan both run **USER→BUILTIN→leaf** order, mirroring Rust's
-`method_mutates_receiver`: the user-method classification (via the
+and the scan both run **USER→BUILTIN→leaf** order — the same order as this
+lane's own `method_mutates_receiver` (`lower.gg`; the symbol is self-host-only,
+Rust's counterpart being `BorrowChecker::classify_receiver_mutation`): the
+user-method classification (via the
 `method_mutates_self` map) is consulted *before* the name-based
 `builtin_method_mutates` table, so a user `&self`-mutator whose name collides
 with a read-only builtin (`get`/`map`/`peek`/`values`/…) still materializes.

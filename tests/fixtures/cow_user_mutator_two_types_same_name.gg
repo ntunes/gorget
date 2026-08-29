@@ -1,0 +1,65 @@
+# The CoW materialize gate is TYPED PER RECEIVER, not keyed on the method's
+# name. Two types equip a method with the SAME name and OPPOSITE
+# self-conventions:
+#
+#     Counter.bump(&self)  -> mutates; a bare-param receiver must be
+#                             materialized ONCE, hoisted out of the loop
+#     Buf.bump(self)       -> read-only; contributes NO clone at all
+#
+# The NAME cannot separate them, so this fixture is the discriminator between
+# a per-receiver typed answer and any name-keyed one:
+#
+#   * a name-keyed UNION over the program's mutating methods marks BOTH
+#     (`bump` is in the union), so the read-only loop clones too;
+#   * a per-receiver answer marks only `Counter.bump`.
+#
+# Both spellings print the same thing — stdout CANNOT tell them apart. The
+# discriminator is the CLONE COUNT, asserted by
+# `cow_user_mutator_two_types_same_name_clone_count` in tests/integration.rs
+# (`--clones=stats` -> `array_clone=1`; a name-keyed union measures 2).
+#
+# ggdef ADJUDICATES `4 4 4 / 3 2 4` — the definitional answer is the one this
+# fixture asserts, not the `3 3` the pre-fix compilers agreed on. Regenerate:
+#   cargo run -q -p ggdef --release -- run tests/fixtures/cow_user_mutator_two_types_same_name.gg
+#
+# RED-verified at the pre-fix compiler: printed `4 4 4 / 3 3 4` with
+# array_clone=2 — the mutating half's private copy was thrown away every
+# iteration (3,3 where CoW requires 3,2). Renaming both methods to `dedup`
+# (a name on the retired MUTATING_METHODS hand list) made the pre-fix
+# compiler print the CORRECT 3,2 with array_clone=2 — accidentally correct,
+# for the wrong reason, and at twice the cost. That pair is why this fixture
+# asserts a clone count and not only stdout.
+struct Counter:
+    Vector[int] hits
+
+equip Counter:
+    void bump(&self):
+        self.hits.pop()
+
+struct Buf:
+    Vector[int] data
+
+equip Buf:
+    int bump(self):
+        return self.data.len()
+
+void ro(Buf b):
+    int i = 0
+    while i < 2:
+        print(b.bump())
+        i = i + 1
+
+void mut_it(Counter c):
+    int i = 0
+    while i < 2:
+        c.bump()
+        print(c.hits.len())
+        i = i + 1
+
+void main():
+    Buf x = Buf([1, 2, 3, 4])
+    ro(x)
+    print(x.data.len())
+    Counter y = Counter([1, 2, 3, 4])
+    mut_it(y)
+    print(y.hits.len())

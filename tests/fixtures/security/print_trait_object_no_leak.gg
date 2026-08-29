@@ -1,0 +1,55 @@
+# R47 Track B — the ASan-armed twin of `tests/fixtures/print_trait_object.gg`.
+#
+# ⚠ WHY A TWIN EXISTS AT ALL. `print_trait_object` has been in the corpus the
+# whole time, wired as an STDOUT comparison in `tests/integration.rs`. It
+# printed the right four values and leaked the trait-object method's String
+# return on every run — and a stdout comparison structurally cannot observe a
+# leak (Core #13). The bug it carried was filed separately and stayed open
+# through several rounds while its own fixture sat green. This file is the
+# same program under an instrument that can SEE the failure class.
+#
+# ⚠ IT IS A TWIN, NOT A MOVE. The original stays where it is: it pins the
+# VALUE behaviour (and is the only cell on the LLVM lane, where `--sanitize`
+# adds no instrumentation at all). This one pins memory validity on the C lane.
+# Deleting either loses a real axis.
+#
+# CELL: arm = `Box[Trait]` vtable dispatch · four methods, one of which returns
+# an owned String · position = discarded temp inside `print(...)`.
+#
+# RED-VERIFIED at pristine `f3feea79`: LEAK 5 byte(s) / 1 allocation, 3/3 runs,
+# frame `gorget_string_clone_to_owned <- Describer_for_Widget__describe <-
+# __gg_synth_trait_Describer_describe`. ⚠ The figure filed against this
+# program was 61 B / 2; that number had decayed and is refuted here.
+from std.collections import Box
+
+trait Describer:
+    String describe(self)
+    int count(self)
+    float ratio(self)
+    bool active(self)
+
+struct Widget:
+    String name
+    int n
+    float r
+    bool on
+
+equip Widget with Describer:
+    String describe(self):
+        return self.name
+
+    int count(self):
+        return self.n
+
+    float ratio(self):
+        return self.r
+
+    bool active(self):
+        return self.on
+
+void main():
+    Box[Describer] obj = Box.new(Widget("gear", 7, 3.14, true))
+    print(obj.describe())
+    print(obj.count())
+    print(obj.ratio())
+    print(obj.active())

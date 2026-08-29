@@ -1,0 +1,31 @@
+# REGRESSION — the SPELLING-INVARIANCE property, pinned inside one program.
+#
+# Two views of the same element are taken in the same function, one through
+# each name the collection answers to. They must agree, and both must survive
+# the root's growth. Which name a view is spelled through is not allowed to
+# decide anything -- least of all whether the program reads freed memory.
+#
+# CELL: both spellings live simultaneously. The four `cow_alias_spelled_*`
+# fixtures each sample one spelling; this one pins the INVARIANCE, so a future
+# regression that repairs the alias spelling by breaking the direct spelling
+# (or vice versa) cannot pass by trading one for the other.
+#
+# Measured on the pre-fix compiler: rc 139 SIGSEGV on both backends, because
+# `s1`'s provenance recorded the spelling `alias` while the prescan recorded
+# the mutations under `v`.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = []
+    v.push(mk("hel", "lo"))
+    Vector[String] alias = v
+    String s1 = alias.get(0).unwrap()
+    String s2 = v.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("fill", "er"))
+        i = i + 1
+    print(s1)
+    print(s2)

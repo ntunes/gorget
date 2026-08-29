@@ -1,0 +1,54 @@
+# Cell 1 with an EARLY BREAK — pins the iterator's drop SCOPE, not just the
+# fact that it is dropped.
+#
+# The iterator is minted BEFORE the loop and read by `next()` on every
+# iteration, so it belongs to the ENCLOSING scope. Registering it into the
+# loop-body scope instead frees it at the end of iteration 1 and every later
+# `next(&iterator)` reads freed memory — an emission-ORDER defect that is
+# invisible at one iteration. Hence ≥3 available elements, consumed across
+# several iterations, plus a `break` so the exit path is the non-exhausted
+# one (the iterator still holds its payload when the loop leaves).
+#
+# Axis cell: producer = cell 1 (owned branch) · element = Copy(int) ·
+#            source = Iterable-with-iter() · body = early break.
+# Judged on the sanitized run: a leak has no stdout signature, and a
+# use-after-free here reads plausible bytes.
+
+from std.collections import Vector
+
+struct PayloadIter:
+    Vector[String] baggage
+    int idx
+    int limit
+
+equip PayloadIter with Iterator[int]:
+    Option[int] next(&self):
+        if self.idx >= self.limit:
+            return None
+        int cur = self.idx
+        self.idx = self.idx + 1
+        return Some(cur)
+
+struct PayloadColl:
+    Vector[String] baggage
+    int limit
+
+equip PayloadColl with Iterable[int]:
+    PayloadIter iter(&self):
+        return PayloadIter(self.baggage, 0, self.limit)
+
+String heaped():
+    return "heavy" + "weight" + "-payload-forced-onto-the-heap"
+
+int main():
+    Vector[String] v = Vector[String]()
+    v.push(heaped())
+    v.push(heaped())
+    PayloadColl c = PayloadColl(v, 6)
+    int total = 0
+    for n in c:
+        total = total + n
+        if n >= 2:
+            break
+    print(total)
+    return 0

@@ -1,0 +1,29 @@
+# R47 Track B — PER-ARM POSITIVE CONTROL for the COMPENSATION that makes the
+# adapter arms safe to convert.
+#
+# CELL: arm = combinator adapter, CLOSURE-STRUCT branch (`methods.rs`,
+# `__Closure_N__call` inside `call_closure_in_adapter`) · combinator =
+# `Option.unwrap_or_else` on the None path · payload = String.
+#
+# ⚠ THIS FIXTURE IS THE INSTRUMENT FOR THE RISKIEST HALF OF THE CHANGE. The
+# adapter's `assign_result_local_move` performs a Move-mode assign WITHOUT
+# zeroing the source, so `result_local` and the closure-call result end up
+# holding the SAME pointer in TWO LIVE SLOTS — precisely the shape a
+# self-nulling `free` cannot hide. Register the call result at birth and do
+# nothing else, and both slots get released: double free.
+#
+# RED-VERIFIED, and not by a revert: with the register-at-birth conversion
+# applied but the tracker-side transfer (`drops.unregister` of the moved-from
+# source in `assign_result_local_move`) REMOVED, this program aborts under
+# ASan with `attempting double-free`, 3/3 runs. It is CLEAN 3/3 at pristine
+# `f3feea79` and CLEAN 3/3 with the full change — so it is neither a leak
+# repro nor decoration: it pins the compensation exactly.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only (ASan is a no-op under
+# `--backend=llvm`). Fire count: 1 call at the adapter closure-struct arm.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Option[String] o = None()
+    print(o.unwrap_or_else((): mk("hel", "lo")))

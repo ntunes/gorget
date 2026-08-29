@@ -1,0 +1,25 @@
+# KNOWN GAP (found R47 Track D1 while mirroring Rust gg's primitive method
+# table into the self-host).
+#
+# BOTH LANES AGREE ON THE WRONG ANSWER, which is a red flag and not a pass
+# (Core #8). `hash` is one of the four AUTO-DERIVABLE methods — every type has
+# it — and `src/semantic/typecheck.rs::builtin_method_type`'s numeric/bool arm
+# accepts it and types it `int`. The LOWERING has no `hash` for a primitive
+# receiver, so both compilers emit a call to a user-method mangling that nothing
+# defines:
+#
+#   RUST gg   : link error — `undefined reference to `int64_t__hash``
+#   SELF-HOST : link error — `undefined reference to `int64_t__hash``
+#
+# So this is a Core #10 lower-or-reject violation on the ACCEPT side, twice: the
+# oracle promises a method the backend cannot produce. It is a LOWERING gap, not
+# an admission gap — R47 Track D1's `reject_no_method_on_primitive` deliberately
+# ADMITS `hash` (rejecting it would diverge from the oracle in the other
+# direction) and this fixture is what says the remaining half is unfinished.
+#
+# CORRECT behaviour: `hash()` on a primitive compiles and is deterministic
+# within a run, so this prints `true`. (Asserting the equality rather than a
+# literal digest keeps the pin independent of the hash function chosen.)
+void main():
+    int x = 7
+    print(x.hash() == x.hash())

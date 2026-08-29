@@ -1,0 +1,43 @@
+# REGRESSION — a CoW element view keeps working no matter WHICH NAME the
+# collection was spelled through when the view was taken.
+#
+#     Vector[String] alias = v            # second name for the same collection
+#     String s = alias.get(0).unwrap()    # view spelled through `alias`
+#     String s = v.get(0).unwrap()        # view spelled through `v`
+#
+# Both spellings name the same storage, so both must survive `v` growing
+# past a reallocation. Before the collection identity was resolved to the
+# STORAGE OWNER at the two provenance producers, the `alias` spelling was
+# recorded verbatim: the `source_mut_unsafe` query (keyed on the local's
+# NAME) asked about "alias" while the prescan had recorded the mutations
+# under "v", so the lazy rescue for `s` was never emitted and `s` read the
+# freed buffer -- rc 139 on both backends, ASan heap-use-after-free in
+# `gorget_string_copy_cow`.
+#
+# CELL: receiver spelling = 1-hop alias · view via alias, mutation via root ·
+#       root shape = bare local · payload = heap-forced (`mk`) · element type
+#       = String (the only type with a `borrow_view_fn` protocol).
+#
+# ⚠ THE REALLOC IS LOAD-BEARING: `v` must be pushed enough to force the
+# backing store to reallocate (64x here). One push is rc 0 on both spellings
+# and proves nothing. The payload's heap-ness is NOT load-bearing --
+# `cow_alias_spelled_view_literal_payload.gg` is the same cell with a literal
+# payload and reproduced the identical crash.
+#
+# MECHANISM PIN: the sibling harness assertion checks the emitted GIR carries
+# `borrow_view` + `__cow_mat` for this program -- stdout alone cannot tell
+# "the rescue ran" from "nothing needed rescuing".
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = []
+    v.push(mk("hel", "lo"))
+    Vector[String] alias = v
+    String s = alias.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("fill", "er"))
+        i = i + 1
+    print(s)

@@ -6539,65 +6539,117 @@ fn self_host_cow_write_walkers_share_one_root_peel() {
 /// `gorget_string_free` invariant, `test_method_chaining` / `test_option_chaining`
 /// / `leak_cow_boundaries` CC-FAIL, `shared_stress{,_yield}`,
 /// `string_conversions`). A first-write-wins variant regressed the same ten, so
-/// it is not re-inference clobbering a good value. The cause is that the
-/// ladder's OTHER arms answer from the METHOD NAME ALONE without checking the
-/// receiver — a live filed defect (`todo/t0712`) — and the lowerer reads
-/// `expr_link_types` FIRST, so publishing a guess OVERRIDES a fallback that was
+/// it is not re-inference clobbering a good value. The lowerer reads
+/// `expr_link_types` FIRST, so a published GUESS OVERRIDES a fallback that was
 /// getting it right. Publishable set = RESOLVED, never GUESSED.
 ///
-/// So a future widening is not a refactor, it is gated on `t0712`: gate the
-/// ladder on the receiver type, THEN the single-exit publish becomes safe. This
-/// lint deliberately does NOT demand the wrapper shape — demanding it would
-/// demand the regression.
+/// ⚠ **A RECEIVER GATE ON THE LADDER DOES NOT MAKE THE SINGLE-EXIT PUBLISH
+/// SAFE.** Earlier revisions of this docstring prescribed exactly that, and the
+/// prescription is WRONG BY CONSTRUCTION: the arms that break the publish are
+/// NOT the ones a gate on the String-returning name list can reach. The
+/// `clone`/`copy`/`sorted`/`reversed`/`filter` arm answers with the RECEIVER's
+/// type (the correct *typechecker* answer, `Vector[int]`) where the lowerer
+/// needs the *lowering* type (`FilterIter`); `len`/`count`, `split` and the
+/// `slice`/`substr` arm each answer from their own arm. None of them is on the
+/// gated list, so gating it cannot change what any of them publishes — and
+/// `iterator_lazy_chain`, the `filter`/lazy row, must still regress. The
+/// typechecker-type-vs-lowering-type conflict is the mechanism, and it is a
+/// different axis from receiver typing. Re-verify before believing otherwise:
+/// revert `infer.gg` to a wrapper that publishes for every EMethodCall and run
+/// `cargo test --test integration --release self_host_runtime`.
 ///
-/// ⚠ THE BOUNDARY IS PINNED AS A **COUNT**, NOT AS A LIST OF TEMPTING NAMES.
-/// The first revision of this lint named the two arms it thought most likely to
-/// grow a publish (`len`/`count`, `to_string`/`to_str`) and checked only those.
-/// A publish planted in the `slice`/`substr` arm — an arm `todo/t0712` names in
-/// the same breath — sailed past it GREEN. A guard that green-lights the very
-/// class it exists to retire is worse than none (Core #15e Q2), because it
-/// reads as enforcement on the dashboard. The pin is now the TOTAL number of
-/// `expr_link_types` publishes in `infer.gg`: exactly three, so a FOURTH
-/// anywhere in the ladder, spelled any way, in any arm, goes red and is forced
-/// through review. The two named checks survive underneath it only for their
-/// sharper message; they are no longer the boundary.
+/// This lint deliberately does NOT demand the wrapper shape — demanding it
+/// would demand the regression.
+///
+/// ⚠ THE BOUNDARY IS PINNED AS A **COUNT AND BY ARM IDENTITY**, NOT AS A LIST
+/// OF TEMPTING NAMES. The first revision named the two arms it thought most
+/// likely to grow a publish (`len`/`count`, `to_string`/`to_str`) and checked
+/// only those; a publish planted in the `slice`/`substr` arm sailed past it
+/// GREEN. A guard that green-lights the very class it exists to retire is worse
+/// than none (Core #15e Q2), because it reads as enforcement on the dashboard.
+///
+/// The second revision pinned the TOTAL — exactly three `expr_link_types`
+/// publishes — so a FOURTH anywhere goes red. That still left a hole, and R47
+/// Track D1 demonstrated it: a SWAP keeps the count at three. Move the registry
+/// publish into a name-guessing arm and the count never moves; and because the
+/// named-arm checks underneath used `if let Some(at) = src.find(guess)`, a
+/// needle that DRIFTED (as this round's receiver gate made it drift) made the
+/// assert SILENTLY SKIP. Measured: swap + intact needle → RED; swap + drifted
+/// needle → GREEN, with the planted publish shipped.
+///
+/// So all THREE blessed publishes are now anchored BY ARM IDENTITY with
+/// `unwrap_or_else(panic!)` — a drifted anchor is RED, never a skip — the
+/// name-guessing arms are checked with anchors that panic the same way, and the
+/// count survives underneath as a redundant backstop that catches a FOURTH
+/// publish spelled in an arm nobody anchored. Neither half is the whole guard.
 #[test]
 fn self_host_infer_bool_arms_publish_chain_link() {
     let src = fs::read_to_string("tests/fixtures/self_host_typechecker/infer.gg")
         .expect("infer_bool_arms_publish: infer.gg not found");
 
-    // The two arms of the class, each identified by its own name-set test line.
-    let arms: [(&str, &str); 2] = [
+    // ── ALL THREE BLESSED PUBLISHES, ANCHORED BY ARM IDENTITY ──────────────
+    // Each row is (what, anchor spelling, the arm's own `return`, the publish
+    // it must carry). Anchoring all three — not just the bool pair — is what
+    // makes the SWAP go red: moving the registry publish into a name-guessing
+    // arm keeps the total at three, so the count alone cannot see it.
+    //
+    // ⚠ EVERY LOOKUP BELOW PANICS ON A MISS. A drifted anchor must be RED, not
+    // skipped. The earlier `if let Some(at) = src.find(...)` shape skipped
+    // silently, and R47 Track D1 measured a planted publish shipping GREEN
+    // behind exactly that skip.
+    //
+    // The window is bounded by the arm's OWN `return`, not by "the next line
+    // that looks like an arm head" — that terminator was a source-shape guess,
+    // and when an arm head changed shape the window silently swallowed the
+    // NEXT arm and fired on the wrong needle.
+    let blessed: [(&str, &str, &str, &str); 3] = [
+        (
+            "registry path (a RESOLVED type, not a name guess)",
+            "types.expr_types.put(span_start, reg_ret)",
+            "return reg_ret",
+            "types.expr_link_types.put(sexpr.span.end, reg_ret)",
+        ),
         (
             "predicate arm (is_empty/contains/starts_with/…)",
             "if method_name == \"is_empty\" or method_name == \"contains\"",
+            "return types.bool_id",
+            "types.expr_link_types.put(sexpr.span.end, types.bool_id)",
         ),
         (
             "tag-check arm (is_some/is_none/is_ok/is_error)",
             "if method_name == \"is_some\" or method_name == \"is_none\"",
+            "return types.bool_id",
+            "types.expr_link_types.put(sexpr.span.end, types.bool_id)",
         ),
     ];
-    for (what, needle) in arms {
-        let at = src.find(needle).unwrap_or_else(|| {
+    for (what, anchor, ret_spelling, publish) in blessed {
+        let at = src.find(anchor).unwrap_or_else(|| {
             panic!(
                 "infer_bool_arms_publish: the {what} is gone from infer.gg (looked for \
-                 `{needle}`). Both bool-returning builtin arms must exist AND publish the link \
-                 type; if the arm moved, update this lint to follow it — do not delete the pin."
+                 `{anchor}`). All three blessed publish sites must exist AND publish the link \
+                 type; if the site moved, update this lint to follow it — do not delete the pin. \
+                 An anchor that drifts must go RED here: this lint used to skip a missing needle \
+                 silently, and a planted publish shipped green behind that skip."
             )
         });
-        // The publish must sit between the test and its `return types.bool_id`.
+        // The publish must sit between the anchor and the site's own `return`.
         let tail = &src[at..];
-        let ret = tail.find("return types.bool_id").unwrap_or_else(|| {
-            panic!("infer_bool_arms_publish: no `return types.bool_id` after the {what}")
+        let ret = tail.find(ret_spelling).unwrap_or_else(|| {
+            panic!(
+                "infer_bool_arms_publish: no `{ret_spelling}` after the {what}. The window this \
+                 lint reads is bounded by that return; if the site was restructured, re-anchor \
+                 the lint rather than widening the window."
+            )
         });
         let body = &tail[..ret];
         assert!(
-            body.contains("types.expr_link_types.put(sexpr.span.end, types.bool_id)"),
+            body.contains(publish),
             "the {what} in infer.gg no longer publishes `expr_link_types[span.end]`.\n\n\
-             Its answer is `bool` REGARDLESS of the receiver, so it is one of the only two \
-             ladder arms that can safely publish — and it must, or a chain whose OUTER link is \
-             that method reads the CONTENDED `expr_types[span.start]` slot and is typed with its \
-             RECEIVER. That is a CC-FAIL, not a slow path.\n\
+             The blessed set is RESOLVED-not-GUESSED: the registry path (whose answer came from \
+             method resolution) and the two arms whose answer is `bool` REGARDLESS of the \
+             receiver. Each must publish, or a chain whose OUTER link is that method reads the \
+             CONTENDED `expr_types[span.start]` slot and is typed with its RECEIVER. That is a \
+             CC-FAIL, not a slow path.\n\
              Behavioural counterparts: tests/fixtures/chain_link_bool_builtin.gg (String half) \
              and chain_link_set_predicate.gg (Set half). Restore the `put`, never the fixture's \
              expectation."
@@ -6605,18 +6657,15 @@ fn self_host_infer_bool_arms_publish_chain_link() {
     }
 
     // ── THE BOUNDARY, TOTAL ────────────────────────────────────────────────
-    // The blessed publish set is small and exact, so pin its SIZE rather than a
-    // hand-list of the arms someone might add one to (which was tried, and a
-    // planted publish in the `slice`/`substr` arm stayed GREEN — see the
-    // docstring). Any FOURTH publish, in any arm, spelled any way, goes red.
+    // A redundant backstop UNDERNEATH the three arm-identity anchors above: it
+    // catches a FOURTH publish planted in an arm nobody anchored (which is how
+    // a publish in the `slice`/`substr` arm once sailed past a name-list-only
+    // guard). It cannot see a SWAP — that is what the anchors are for. Keep
+    // both: neither half catches the other's class.
     //
-    //   infer.gg:677  the registry path — a RESOLVED type, not a name guess
-    //   infer.gg:749  the bool-predicate arm (is_empty/contains/starts_with/…)
-    //   infer.gg:771  the tag-check arm      (is_some/is_none/is_ok/is_error)
-    //
-    // Line numbers drift and are here only as a reading aid; the COUNT is what
-    // is pinned, and the two per-arm asserts above pin WHICH two of the three
-    // are the bool pair.
+    //   the registry path       — a RESOLVED type, not a name guess
+    //   the bool-predicate arm  (is_empty/contains/starts_with/…)
+    //   the tag-check arm       (is_some/is_none/is_ok/is_error)
     const BLESSED_PUBLISH_SITES: usize = 3;
     let publishes = src.matches("types.expr_link_types.put(").count();
     assert_eq!(
@@ -6624,41 +6673,212 @@ fn self_host_infer_bool_arms_publish_chain_link() {
         "infer.gg has {publishes} `expr_link_types` publish site(s); the blessed set is \
          exactly {BLESSED_PUBLISH_SITES} — the registry path plus the two bool-returning \
          arms.\n\n\
-         MORE than that: a ladder arm grew a publish. Every OTHER arm in that ~26-return \
-         ladder answers from the METHOD NAME without checking the receiver (todo/t0712), \
-         and `lower_types.gg:lookup_expr_gir_type` reads `expr_link_types` FIRST — so a \
-         published guess OVERRIDES a fallback that was getting it right. Measured: \
-         publishing from those arms regressed TEN `self_host_runtime` rows \
-         (`iterator_lazy_chain` double-free, `unicode_strings` printing `80` for `é`, two \
-         `gorget_string_free` invariant trips, three CC-FAILs, …). Fix t0712's receiver \
-         gate FIRST; then this boundary can move and the single-exit publish becomes the \
-         right shape.\n\n\
+         MORE than that: a ladder arm grew a publish. The arms below the primitive-receiver \
+         gate still answer from the METHOD NAME, and `lower_types.gg:lookup_expr_gir_type` \
+         reads `expr_link_types` FIRST — so a published guess OVERRIDES a fallback that was \
+         getting it right. Measured: publishing from those arms regressed TEN \
+         `self_host_runtime` rows (`iterator_lazy_chain` double-free, `unicode_strings` \
+         printing `80` for `é`, two `gorget_string_free` invariant trips, three CC-FAILs, …). \
+         ⚠ A RECEIVER GATE DOES NOT UNBLOCK THIS: the arms that break the publish — \
+         `clone`/`copy`/`sorted`/`reversed`/`filter` (which answers the RECEIVER's type where \
+         the lowerer needs the LOWERING type), `len`/`count`, `split`, `slice`/`substr` — are \
+         not on any gated name list, so gating one cannot change what they publish. \
+         Re-verify before widening: revert infer.gg to a wrapper that publishes for every \
+         EMethodCall and run `cargo test --test integration --release self_host_runtime`.\n\n\
          FEWER than that: a publish was deleted. A chain whose outer link loses its \
          publish reads the CONTENDED `expr_types[span.start]` slot and is typed with its \
          RECEIVER — a CC-FAIL, not a slow path. Restore it; never the fixture's \
          expectation."
     );
 
-    // Named-arm checks, kept UNDERNEATH the total count for their sharper
-    // message on the two most tempting arms. Illustrative, not the boundary.
+    // Named-arm NEGATIVE checks, for their sharper message on the two most
+    // tempting arms. ⚠ These ANCHOR-OR-PANIC like the three above: the earlier
+    // `if let Some(at) = src.find(...)` shape skipped silently when a needle
+    // drifted, and this round's receiver gate is exactly the kind of edit that
+    // makes one drift.
     for guess in [
         "if method_name == \"len\" or method_name == \"count\":",
-        "if method_name == \"to_string\" or method_name == \"to_str\"",
+        "if method_name == \"to_lower\" or method_name == \"to_upper\"",
     ] {
-        if let Some(at) = src.find(guess) {
-            let tail = &src[at..];
-            let stop = tail[1..].find("\n            if method_name").map(|o| o + 1).unwrap_or(tail.len());
-            assert!(
-                !tail[..stop].contains("expr_link_types.put"),
-                "a NAME-GUESSING ladder arm (`{guess}`) grew an `expr_link_types` publish.\n\n\
-                 That arm answers from the method NAME without checking the receiver \
-                 (todo/t0712), and the lowerer reads `expr_link_types` FIRST — so the guess \
-                 OVERRIDES a fallback that was getting it right. Measured: publishing from these \
-                 arms regressed ten `self_host_runtime` rows (double-free, `é` printing as `80`, \
-                 three CC-FAILs, …). Fix t0712 first; then this boundary can move and the \
-                 single-exit publish becomes the right shape."
-            );
+        let at = src.find(guess).unwrap_or_else(|| {
+            panic!(
+                "infer_bool_arms_publish: the name-guessing arm `{guess}` is gone from \
+                 infer.gg. If the arm was renamed or its name set changed, re-point this \
+                 needle at the new spelling — do not delete the check. A needle that drifts \
+                 must go RED here; skipping it silently is how a planted publish ships green."
+            )
+        });
+        let tail = &src[at..];
+        // Bound the window by the arm's OWN `return`, never by guessing at the
+        // shape of the next arm head.
+        let stop = tail.find("\n                return ").map(|o| o + 1).unwrap_or_else(|| {
+            panic!(
+                "infer_bool_arms_publish: no `return` found in the body of `{guess}`. \
+                 Re-anchor this check rather than letting its window run past the arm."
+            )
+        });
+        assert!(
+            !tail[..stop].contains("expr_link_types.put"),
+            "a NAME-GUESSING ladder arm (`{guess}`) grew an `expr_link_types` publish.\n\n\
+             That arm answers from the method NAME, and the lowerer reads `expr_link_types` \
+             FIRST — so the guess OVERRIDES a fallback that was getting it right. Measured: \
+             publishing from these arms regressed ten `self_host_runtime` rows (double-free, \
+             `é` printing as `80`, three CC-FAILs, …), with and without a receiver gate on the \
+             String-returning list. The publishable set is RESOLVED, never GUESSED."
+        );
+    }
+}
+
+/// CITED-FIXTURE-PATH ratchet for the SELF-HOST sources (Core #6 — turn the
+/// recurring failure into an executable check; Core #14 — a citation naming a
+/// file that does not exist reads as evidence while pointing at nothing).
+///
+/// The self-host `.gg` sources cite fixture paths in their comments — "minimal
+/// repro: `known_gaps/foo.gg`", "behavioural counterpart:
+/// `tests/fixtures/bar.gg`". `cited_lint_names_resolve_to_real_tests` already
+/// pins the sibling class for `tests/lints.rs` names and
+/// `doc_source_citations_resolve` pins it for `docs/`. `.gg` COMMENTS had no
+/// such guard, and nothing else in the build reads them.
+///
+/// Measured (R47 Track D1): a repro was written under `known_gaps/`, then
+/// RELOCATED and renamed before the commit — and the citation naming it was not
+/// followed. It shipped pointing at a path that never existed in the tree, 64
+/// lines above a second citation that spelled the SAME fixture correctly. Every
+/// gate was green; a reviewer caught it by hand, which is the part that does
+/// not scale.
+///
+/// Paths are accepted whether written relative to the repo root
+/// (`tests/fixtures/x.gg`) or to the fixtures dir (`known_gaps/x.gg`).
+#[test]
+fn self_host_cited_fixture_paths_resolve() {
+    fn cited_paths(s: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for prefix in ["tests/fixtures/", "known_gaps/"] {
+            let mut rest = s;
+            while let Some(at) = rest.find(prefix) {
+                let tail = &rest[at..];
+                if let Some(e) = tail.find(".gg") {
+                    let cand = &tail[..e + 3];
+                    // A GLOB is prose about a family ("the
+                    // `liveness/match_exhaustive_no_catchall_*.gg` fixtures"),
+                    // not a citation of one file — skip it rather than resolve
+                    // it, so the guard stays about the class it retires.
+                    if !cand.contains(char::is_whitespace) && !cand.contains('*') {
+                        out.push(cand.to_string());
+                    }
+                }
+                rest = &tail[prefix.len()..];
+            }
         }
+        out
+    }
+
+    let root = std::path::Path::new(".");
+    let mut checked = 0usize;
+    let mut broken: Vec<String> = Vec::new();
+    for d in fs::read_dir("tests/fixtures").expect("fixtures dir").filter_map(|e| e.ok()) {
+        let dp = d.path();
+        if !dp.is_dir() {
+            continue;
+        }
+        if !dp.file_name().unwrap().to_string_lossy().starts_with("self_host_") {
+            continue;
+        }
+        for f in fs::read_dir(&dp).expect("self-host dir").filter_map(|e| e.ok()) {
+            let fp = f.path();
+            if fp.extension().map_or(true, |e| e != "gg") {
+                continue;
+            }
+            let src = fs::read_to_string(&fp).expect("read .gg");
+            for cited in cited_paths(&src) {
+                checked += 1;
+                if !root.join(&cited).is_file()
+                    && !root.join("tests/fixtures").join(&cited).is_file()
+                {
+                    broken.push(format!("{} cites `{cited}`", fp.display()));
+                }
+            }
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "self_host_cited_fixture_paths_resolve scanned ZERO citations — the scan broke, not the \
+         tree. A guard that cannot fire is not evidence (Core #13)."
+    );
+    assert!(
+        broken.is_empty(),
+        "{} self-host comment(s) cite a fixture path that does not exist:\n  {}\n\n\
+         Either the fixture was renamed/relocated and the citation was not followed, or the \
+         repro was never committed. Fix the CITATION or commit the FIXTURE — do not delete the \
+         sentence, which is how a reader learns the claim has evidence behind it.",
+        broken.len(),
+        broken.join("\n  "),
+    );
+}
+
+/// PRIMITIVE-METHOD-TABLE drift guard (Core #6; the layering doc's own escape
+/// hatch — where two parallel lists must exist, make the build check they
+/// agree).
+///
+/// `self_host_typechecker/typecheck.gg`'s `string_prim_method_admitted` and
+/// `uint8_prim_method_admitted` are transcriptions of Rust gg's
+/// `builtin_method_type` arms (`src/semantic/typecheck.rs`: the
+/// `"str" | "String"` arm and the `"uint8"` arm). They decide what
+/// `reject_no_method_on_primitive` REFUSES, so a name that leaves the Rust arm
+/// without leaving the self-host copy is a stale accept, and a name ADDED to
+/// Rust without being mirrored is a FALSE REJECT of a valid program.
+///
+/// The transcription is unavoidable — the self-host is a separate
+/// implementation and cannot read Rust's tables — so the drift is pinned
+/// instead. The direction that matters most is the `uint8` arm: the self-host
+/// lexer calls these on a `byte` on the BOOTSTRAP path, so a missed name is a
+/// false reject of the compiler's own source.
+#[test]
+fn sh_primitive_method_tables_mirror_rust() {
+    let rust = fs::read_to_string("src/semantic/typecheck.rs").expect("typecheck.rs");
+    let sh = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("self-host typecheck.gg");
+
+    let uint8_at = rust
+        .find("\"uint8\" => match method {")
+        .expect("the `\"uint8\"` arm of builtin_method_type moved — re-anchor this lint");
+    let uint8_arm = &rust[uint8_at..(uint8_at + 600).min(rust.len())];
+    for n in [
+        "is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
+        "is_upper", "is_lower", "is_hex_digit", "is_ascii",
+        "to_upper", "to_lower",
+    ] {
+        assert!(
+            uint8_arm.contains(&format!("\"{n}\"")),
+            "`{n}` is in the self-host's uint8 table but NOT in Rust's `\"uint8\"` arm. One of \
+             the two moved; reconcile them rather than letting the reject drift."
+        );
+        assert!(
+            sh.contains(&format!("method_name == \"{n}\"")),
+            "Rust's `\"uint8\"` arm admits `{n}` but the self-host's \
+             `uint8_prim_method_admitted` does not. A `byte` receiver calling `{n}` would be \
+             REFUSED by `reject_no_method_on_primitive` although Rust ACCEPTS it — a false \
+             reject, and the self-host LEXER calls these on the bootstrap path."
+        );
+    }
+
+    // The five names R47 Track D1 dropped BECAUSE they are in neither Rust's
+    // oracle nor the IR GORGET_STRING_VIEW protocol. If one reappears in Rust's
+    // String arm, the self-host must mirror it and the reject fixtures flip.
+    let str_at = rust
+        .find("\"str\" | \"String\" => match method {")
+        .expect("the `\"str\" | \"String\"` arm moved — re-anchor this lint");
+    let str_arm = &rust[str_at..(str_at + 3000).min(rust.len())];
+    for n in ["to_string", "to_str", "concat", "trim_start", "trim_end"] {
+        assert!(
+            !str_arm.contains(&format!("\"{n}\"")),
+            "`{n}` reappeared in Rust's `\"str\" | \"String\"` arm. Track D1 dropped it from the \
+             self-host ladder BECAUSE it was absent from both that arm and the IR \
+             GORGET_STRING_VIEW protocol, and pinned the REJECT on it \
+             (spectests/run/reject_no_method_on_float.gg and _on_string.gg). Mirror it into \
+             `string_prim_method_admitted` and retire those pins in the same commit."
+        );
     }
 }
 
@@ -7990,9 +8210,13 @@ fn docs_plans_removed_and_define_gorget_is_ledger_only() {
 /// The sanitize sweep's allowlists are SHRINK-ONLY, and every corruption row
 /// carries a justification.
 ///
-/// The sweep itself (`scripts/sanitize_sweep.sh`, ~25 min) is a separate CI job.
-/// This is the cheap half: a pure file read that runs in the normal lint gate,
-/// so the *invariant* is enforced on every commit even though the sweep is not.
+/// The sweep itself (`scripts/sanitize_sweep.sh`) is a separate CI job: ONE
+/// pass over the corpus is ~25 min at parallelism 8, dominated by ~2150 fixture
+/// BUILDS — an extra REPETITION re-runs the already-built binaries and costs
+/// only a few minutes, so the repeat-run verdict the gate now takes is NOT a
+/// multiple of that figure. This is the cheap half: a pure file read that runs
+/// in the normal lint gate, so the *invariant* is enforced on every commit even
+/// though the sweep is not.
 ///
 /// Why two lists rather than one: memory corruption is a soundness hole and
 /// leaks are resource debt. A single merged list would let a use-after-free hide
@@ -8011,8 +8235,36 @@ fn sanitize_allowlists_shrink_only() {
     // simply gone quiet. The row retired on its own stated terms ("This row
     // retires WITH that fix"). The surviving row is INTENTIONAL, so the
     // register now holds ZERO filed corruption defects.
+    // ⚠ WHAT THESE TWO NUMBERS ARE COUNTS OF — both bounds are narrower than
+    // "the sanitizer findings", and a reader who assumes otherwise will read
+    // coverage that is not there:
+    //
+    //   1. C LANE ONLY. `scripts/sanitize_sweep.sh` builds with
+    //      `"$GG" build --sanitize "$d/$stem.gg"` and passes no `--backend`,
+    //      so it gets the default. `--sanitize` does now work under
+    //      `--backend=llvm` (it used to be silently dropped, which made every
+    //      LLVM sanitizer result free), but that backend instruments only the
+    //      runtime, not generated user code — so an LLVM run would not be an
+    //      equivalent measurement and these ceilings would not transfer to it.
+    //      Extending the sweep to a second lane is filed as `todo/t0731`.
+    //   2. TOP-LEVEL FIXTURES ONLY. The sweep enumerates
+    //      `find tests/fixtures -maxdepth 1 -name '*.gg'`, so nothing in
+    //      `tests/fixtures/security/`, `known_gaps/`, or any other
+    //      subdirectory is counted here. `--test security` covers the first of
+    //      those and has its own configuration (notably `detect_leaks=0` for
+    //      `security_safe`), which is why a leak can exist in that corpus
+    //      without moving these numbers.
     const CORRUPTION_CEILING: usize = 1;
-    const LEAK_CEILING: usize = 316;
+    // 316 -> 313 (R47-E1): `async_blocking_io`, `async_channel_poll` and
+    // `spawn_closure_copy` were measured CLEAN on every run of a repeat-run
+    // corpus sweep and their rows deleted. The ceiling was EXACTLY tight at
+    // 316, and the assertion below is `<=`, so deleting rows without lowering
+    // it would have left silent headroom for three future leaks — the gate
+    // would have accepted them without a word. The unit is unchanged: rows are
+    // still counted ONE PER FIXTURE (the class signatures the same round added
+    // live in TAB column 2, not in extra rows), so this number stays
+    // comparable to every value it has held.
+    const LEAK_CEILING: usize = 305;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -8028,21 +8280,29 @@ fn sanitize_allowlists_shrink_only() {
     let corrupt = read("CORRUPTION_ALLOWLIST.txt");
     let leaks = read("LEAK_ALLOWLIST.txt");
 
-    assert!(
-        corrupt.len() <= CORRUPTION_CEILING,
-        "MEMORY-CORRUPTION allowlist grew to {} (ceiling {CORRUPTION_CEILING}). \
-         Adding a row here ships a known use-after-free / double-free / overflow \
-         — memory safety is this language's entire claim. Fix the defect, or get \
-         an owner decision and file it. When you FIX one, lower the ceiling in \
-         the same commit.",
+    // EXACT, not `<=`. Under `<=` a burn-down that forgets to lower the ceiling
+    // is silently accepted, and the leftover headroom quietly admits the next
+    // leaks — the gate accepting a wrong number without a word is this file's
+    // own subject, one level up. `known_gaps_passing_allowlist_shrink_only`
+    // makes the same argument for the same reason: a ceiling counts rows, it
+    // does not identify them, so at least make it count them exactly.
+    assert_eq!(
+        corrupt.len(),
+        CORRUPTION_CEILING,
+        "MEMORY-CORRUPTION allowlist has {} row(s), the pinned count is \
+         {CORRUPTION_CEILING}. ADDING a row here ships a known use-after-free / \
+         double-free / overflow — memory safety is this language's entire claim; \
+         fix the defect, or get an owner decision and file it. REMOVING one is \
+         the good case: lower the constant in the same commit.",
         corrupt.len()
     );
-    assert!(
-        leaks.len() <= LEAK_CEILING,
-        "LEAK allowlist grew to {} (ceiling {LEAK_CEILING}). A new leak shipped. \
-         Fix it, or justify the row and raise this deliberately. When you burn \
-         some down, lower the ceiling in the same commit — that is the only way \
-         this backlog actually shrinks.",
+    assert_eq!(
+        leaks.len(),
+        LEAK_CEILING,
+        "LEAK allowlist has {} row(s), the pinned count is {LEAK_CEILING}. If it \
+         GREW, a new leak shipped — fix it, or justify the row and raise this \
+         deliberately. If it SHRANK, you burned some down: lower the constant in \
+         the same commit, which is the only way this backlog actually shrinks.",
         leaks.len()
     );
 
@@ -8055,6 +8315,184 @@ fn sanitize_allowlists_shrink_only() {
             cols.len() >= 3 && cols[2].trim().len() > 40,
             "corruption allowlist row lacks a justification: {row:?}\n\
              Format: <fixture> TAB <kind> TAB <why it is here, and what retires it>"
+        );
+    }
+
+    // Every LEAK row must name the MECHANISMS it tolerates, with a count.
+    //
+    // A bare fixture stem tolerated *any* leak in that fixture, forever: a
+    // second, unrelated mechanism appearing inside an already-allowlisted
+    // fixture was invisible, because the gate could only ask "is this stem on
+    // the list". Rows now carry `<top-frame>*<records>` per class, so an extra
+    // class — or one more record of a class the row already tolerates — fails
+    // the sweep. COUNTS, not a set: a set cannot see a SECOND leak of a class
+    // the fixture already exhibits, which is exactly the case that hides.
+    //
+    // ONE ROW PER FIXTURE, signatures in TAB column 2 (the shape
+    // CORRUPTION_ALLOWLIST.txt already uses). That keeps LEAK_CEILING a
+    // FIXTURE count across the schema change, so the shrink-only ratchet's
+    // history stays comparable — a row-per-(fixture, class) schema would have
+    // changed the unit under an assertion that only checks `<=`, and getting
+    // that wrong is silently accepted.
+    // ⚠ THE ROW COUNT IS NOT THE TOLERANCE. Pinning only `leaks.len()` leaves the
+    // AMOUNT each row tolerates completely unratcheted, and that is this file's
+    // own defect one level up: `str_alloc_copy*2` -> `str_alloc_copy*99` is one
+    // character, it keeps the row count at 313, and it re-opens exactly the case
+    // the class column exists to catch — a SECOND leak of a class the fixture
+    // already exhibits. Measured, not imagined: with that single edit the sweep
+    // returned EXIT=0 on the injected fixture that it otherwise reds, degrading
+    // the finding to a "leaking LESS than its row admits" advisory, and this
+    // test stayed green. Same for silently promoting a strict row to `*N+`,
+    // which switches its count check off entirely.
+    //
+    // So the TOLERANCE is pinned too, exactly, on three independent totals that
+    // the parse loop below is already computing:
+    //   * (fixture, class) PAIRS   — catches a class appended to a row
+    //   * tolerated RECORDS        — catches a count being widened
+    //   * `+`-marked SIGNATURES    — catches a count check being switched off
+    // Widening a row now fails HERE, in the cheap lint that runs on every
+    // commit, and the failure names the number to move.
+    //
+    // What this still cannot see, stated rather than papered over: a
+    // COMPENSATING edit (+1 on one row, -1 on another) preserves a total. Three
+    // totals make that harder than one, and the sweep's own per-row adjudication
+    // is what identifies rows — `known_gaps_passing_allowlist_shrink_only` makes
+    // the same admission for the same reason ("a ceiling counts rows; it does
+    // not identify them"). The point is that no SINGLE-character widening is
+    // silently accepted any more.
+    const LEAK_CLASS_PAIRS: usize = 512;
+    const LEAK_RECORDS: usize = 2259;
+    const LEAK_LOOSE_SIGNATURES: usize = 6;
+
+    let mut leak_stems: Vec<&str> = Vec::new();
+    let (mut pairs, mut records, mut loose) = (0usize, 0usize, 0usize);
+    for row in &leaks {
+        let cols: Vec<&str> = row.split('\t').collect();
+        assert!(
+            cols.len() >= 2 && !cols[1].trim().is_empty() && cols[1].trim() != "-",
+            "leak allowlist row has no class column: {row:?}\n\
+             Format: <fixture> TAB <top-frame>*<records>[,<top-frame>*<records>...]\n\
+             Take the signature from column 4 of the sweep's own verdicts.tsv."
+        );
+        for sig in cols[1].trim().split(',') {
+            let (sym, n) = sig.rsplit_once('*').unwrap_or_else(|| {
+                panic!(
+                    "leak allowlist signature is not <top-frame>*<records>: {sig:?} in {row:?}"
+                )
+            });
+            // A trailing `+` means "at least N, count not pinned" — reserved for
+            // the concurrency rows whose leak COUNT is genuinely racy, where an
+            // exact count would make the sweep itself flap. It switches a count
+            // check OFF, so the number of them is pinned like everything else.
+            let (n, is_loose) = match n.strip_suffix('+') {
+                Some(stripped) => (stripped, true),
+                None => (n, false),
+            };
+            let parsed = n.parse::<u32>();
+            assert!(
+                !sym.trim().is_empty() && parsed.as_ref().is_ok_and(|v| *v > 0),
+                "leak allowlist signature is not <top-frame>*<records>[+]: {sig:?} in {row:?}"
+            );
+            pairs += 1;
+            records += parsed.unwrap() as usize;
+            loose += usize::from(is_loose);
+        }
+        let stem = cols[0].trim();
+        assert!(
+            !leak_stems.contains(&stem),
+            "leak allowlist has two rows for {stem:?}. One row per fixture — the \
+             classes go in column 2, so that the ceiling keeps counting fixtures."
+        );
+        leak_stems.push(stem);
+    }
+
+    assert_eq!(
+        pairs, LEAK_CLASS_PAIRS,
+        "the LEAK allowlist now names {pairs} (fixture, class) pairs, the pinned \
+         count is {LEAK_CLASS_PAIRS}. A class was added to a row or removed from \
+         one. If a fix retired a mechanism, lower this in the same commit; if a \
+         NEW mechanism appeared inside an already-listed fixture, that is a new \
+         leak and the answer is not to widen the row."
+    );
+    assert_eq!(
+        records, LEAK_RECORDS,
+        "the LEAK allowlist now tolerates {records} leak records, the pinned \
+         count is {LEAK_RECORDS}. Widening a row's count re-opens the exact case \
+         the class column exists to catch — one more record of a class the \
+         fixture already exhibits. If a fix genuinely reduced the count, lower \
+         this in the same commit; the sweep prints a 'TIGHTEN these rows' \
+         advisory naming the row and the new number."
+    );
+    assert_eq!(
+        loose, LEAK_LOOSE_SIGNATURES,
+        "the LEAK allowlist now has {loose} `*N+` signatures, the pinned count is \
+         {LEAK_LOOSE_SIGNATURES}. `+` switches a row's count check OFF, so it is \
+         an admission, not an annotation: add one only for a row the sweep's own \
+         `count-drift` census has named, and move this number in the same commit."
+    );
+}
+
+/// The sanitize sweep's own positive controls exist, and the sweep runs them.
+///
+/// **Why this exists (R47-E1).** `scripts/sanitize_sweep.sh` is the gate for a
+/// defect class the main suite structurally cannot see — an stdout compare
+/// cannot observe a use-after-free — and its detectors had never been observed
+/// to fire. `docs/devbook/25-structural-guards.md`: *"a gate that has never
+/// been seen to fail is not evidence."* The sweep therefore runs four control
+/// fixtures before it reports anything and asserts that its leak detector
+/// fires, its flake detector fires, its class check fires on a SECOND record of
+/// an ALREADY-TOLERATED class, and its clean control stays quiet.
+///
+/// This lint is the wiring's own guard, in the shape
+/// `known_gaps_census_is_wired_in_ci` uses next door: a positive control that
+/// nothing runs is the unfalsifiable guard the whole exercise is retiring. It
+/// also pins the two structural facts the controls depend on — that they live
+/// in a SUBDIRECTORY, and that the corpus walk is `-maxdepth 1` so it cannot
+/// see them. A control committed beside the corpus would become a permanently
+/// unlisted leak row *and* a permanently flaky row, forcing the very ceilings
+/// it exists to prove.
+#[test]
+fn sanitize_sweep_selftest_is_wired() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    const CONTROLS: &[(&str, &str)] = &[
+        ("selftest_clean.gg", "the clean path stays quiet"),
+        ("selftest_leak.gg", "the leak detector fires, one class at one record"),
+        ("selftest_leak_twice.gg", "the same class at two records — the class check's own class"),
+        ("selftest_alternating_leak.gg", "the flake detector fires on a non-unanimous row"),
+    ];
+    for (name, why) in CONTROLS {
+        let p = root.join("tests/fixtures/sanitize_selftest").join(name);
+        assert!(
+            p.exists(),
+            "missing sanitize-sweep control {}: it proves {why}.\n\
+             Deleting a positive control silently makes the gate unfalsifiable; \
+             if the mechanism it leaks through was FIXED, re-point it at a live \
+             leak class in the same commit.",
+            p.display()
+        );
+        // The corpus walk is `-maxdepth 1`; a control that also exists up there
+        // becomes an unlisted leak row and a flaky row at once.
+        assert!(
+            !root.join("tests/fixtures").join(name).exists(),
+            "sanitize-sweep control {name} must live ONLY in \
+             tests/fixtures/sanitize_selftest/ — a copy at tests/fixtures/ is \
+             inside the corpus walk and would red the gate against itself."
+        );
+    }
+
+    let sweep = std::fs::read_to_string(root.join("scripts/sanitize_sweep.sh"))
+        .expect("cannot read scripts/sanitize_sweep.sh");
+    for needle in [
+        "SELFTEST_DIR=tests/fixtures/sanitize_selftest",
+        "run_selftest || exit 2",
+        "find tests/fixtures -maxdepth 1 -name '*.gg'",
+    ] {
+        assert!(
+            sweep.contains(needle),
+            "scripts/sanitize_sweep.sh no longer contains {needle:?}.\n\
+             The self-test must run on every sweep (a guard nothing runs is not \
+             a guard) and the corpus walk must stay at -maxdepth 1 so the \
+             controls stay outside it."
         );
     }
 }
@@ -22113,7 +22551,26 @@ fn fmt_author_row_grouping_survives_formatting() {
     /// disjunct no fixture in the family previously exercised). A RAISE needs no
     /// defence the way a lowering does; it is recorded only so the 26 → 24 note
     /// above is not read as describing the current value.
-    const MIN_SUBJECT_SITES: usize = 25;
+    ///
+    /// ⚠ LOWERED 25 → 24 (2026-08-29, R47 Track A2), and this note is the
+    /// defence the assert demands. The site that left is
+    /// `compiler/data/resources.gg`'s `RUST_PRESCAN_MUTATOR_FALLBACK` — a
+    /// hand-grouped 4-row/25-element name table, and the shape the author-row
+    /// ruling was originally made for. It left because the TABLE ITSELF was
+    /// retired: it mirrored Rust's `MUTATING_METHODS` hand list so both lanes'
+    /// scope hoists fired on identical shapes, and both lists are gone now that
+    /// the mutates-receiver decision is a typed per-receiver classification
+    /// rather than a name lookup (`todo/t0699` — a user method's NAME decided
+    /// memory safety).
+    ///
+    /// Exactly the 26 → 24 precedent above: the site did not leave the tree, it
+    /// moved to a STRONGER pin. `fmt_author_rows/resources_prescan_table_survives.gg`
+    /// is an exact-text copy pinned BY NAME
+    /// (`fmt_author_rows_corpus_table_survives`), so the grouping cell this
+    /// site contributed is still adjudicated — and now by a fixture no future
+    /// edit to a live corpus file can make vacuous. This is still not licence
+    /// to lower again for a shrink nobody chose.
+    const MIN_SUBJECT_SITES: usize = 24;
     /// The SCANNER's own non-vacuity floor, on a population three orders of
     /// magnitude larger than the subject set: if the walk stops finding
     /// multi-line comma-bearing regions at all, the roots moved or the
@@ -23399,7 +23856,7 @@ fn staging_move_burndown_shrink_only() {
 #[test]
 fn known_gaps_repros_are_wired_to_a_test() {
     /// Baseline regenerated 2026-08-27 by running this test. SHRINK-ONLY.
-    const ALLOWED_UNWIRED: [&str; 32] = [
+    const ALLOWED_UNWIRED: [&str; 30] = [
         "box_callable_call_through_box_undefined_function",
         "box_ctor_closure_ices_while_boxnew_works",
         "box_enum_payload_c_wont_compile_llvm_double_frees",
@@ -23412,7 +23869,6 @@ fn known_gaps_repros_are_wired_to_a_test() {
         "box_primitive_element_types_collapse",
         "box_trait_bare_ctor_struct_field_uaf",
         "closure_capture_then_mutate_source_uaf",
-        "cow_rescue_runs_against_dangling_alias_view",
         "dict_index_assign_during_iteration_ice",
         "dict_value_write_through_silently_dropped",
         "doc_ld_concurrency_example_does_not_typecheck",
@@ -23436,7 +23892,6 @@ fn known_gaps_repros_are_wired_to_a_test() {
         "struct_ctor_arg_not_typechecked_against_field",
         "tuple_equality_returns_wrong_answer",
         "user_fn_name_collides_with_libc",
-        "user_mutator_method_name_decides_memory_safety",
     ];
 
     let mut sources = String::new();
@@ -23514,6 +23969,203 @@ fn known_gaps_repros_are_wired_to_a_test() {
          SHRINK-ONLY, so delete them from the list:\n  {}",
         departed.join("\n  ")
     );
+}
+
+/// A stored CoW collection identity must name the STORAGE OWNER, and the
+/// only way to store one is through a producer that resolves it.
+///
+/// `Vector[String] alias = v` binds a second NAME to one collection. A borrow
+/// taken through `alias` borrows out of `v`'s buffer, so the provenance that
+/// reaches the mutation passes has to say `v`. Recording the spelling made
+/// every downstream identity comparison miss — the `source_mut_unsafe` name
+/// query and `cow_collection_refs_for_id`'s equality alike — and WHICH NAME
+/// the view was spelled through decided whether the program read freed
+/// memory: rc 139 on both backends, ASan heap-use-after-free.
+///
+/// The repair is one resolution point per producer. That only retires the
+/// CLASS if a nineteenth call site cannot store an unresolved identity, so
+/// this guard pins the chokepoint rather than the instance — the graduated
+/// `cow_alias_spelled_*` fixtures cover "the bug is back"; this covers "a new
+/// site joined the class". The two are complements: reverting the resolution
+/// reds row (d) here AND the fixtures; adding a bypassing write site reds
+/// rows (b)/(c) here and NO fixture.
+///
+/// Field privacy does the compile-time half: `cow_borrow_sources` is a
+/// private field, so no other module can write the sidecar at all. Rust has
+/// no way to make an enum VARIANT private within its own crate, so the
+/// `BorrowOrigin::CollectionElement` half is held here instead.
+#[test]
+fn cow_collection_identity_writes_go_through_the_resolving_producers() {
+    const CONTEXT: &str = "src/ir/lowering/context.rs";
+    const ORIGIN_DECL: &str = "src/ir/mod.rs";
+
+    let mut sidecar_files: Vec<String> = Vec::new();
+    let mut sidecar_inserts = 0usize;
+    let mut origin_files: Vec<String> = Vec::new();
+    // The ENCLOSING FUNCTION of every place that WRITES a CollectionElement
+    // ownership — i.e. mentions the variant with an `ownership = ` assignment
+    // within the preceding few lines. Pattern positions match on
+    // `&builder.locals[idx].ownership,` and carry no `=`, so they do not
+    // register here. Naming the function rather than a line number keeps this
+    // pin stable under unrelated edits to the file.
+    let mut origin_writers: Vec<String> = Vec::new();
+
+    visit("src", &mut |path| {
+        if path.extension().map_or(true, |e| e != "rs") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let rel = path.to_string_lossy().to_string();
+        // Prose mentions are not writes. `src/ir/mod.rs` legitimately names
+        // "the sidecar maps (cow_borrow_sources, etc.)" in a doc comment, and
+        // a guard a comment can trip is a guard people learn to route around.
+        let is_code = |l: &&str| !l.trim_start().starts_with("//");
+        let lines: Vec<&str> = content.lines().collect();
+        let code: Vec<&str> = lines.iter().copied().filter(is_code).collect();
+        if code.iter().any(|l| l.contains("cow_borrow_sources")) {
+            sidecar_files.push(rel.clone());
+            sidecar_inserts += code
+                .iter()
+                .map(|l| l.matches("cow_borrow_sources.insert(").count())
+                .sum::<usize>();
+        }
+        if code.iter().any(|l| l.contains("BorrowOrigin::CollectionElement(")) {
+            origin_files.push(rel.clone());
+            for (i, line) in lines.iter().enumerate() {
+                if !line.contains("BorrowOrigin::CollectionElement(") || !is_code(line) {
+                    continue;
+                }
+                let window_start = i.saturating_sub(4);
+                let is_write = lines[window_start..=i]
+                    .iter()
+                    .any(|l| l.contains("ownership = "));
+                if is_write {
+                    let enclosing = lines[..=i]
+                        .iter()
+                        .rev()
+                        .find_map(|l| {
+                            let t = l.trim_start();
+                            let sig = t
+                                .strip_prefix("pub fn ")
+                                .or_else(|| t.strip_prefix("fn "))?;
+                            Some(sig.split('(').next().unwrap_or(sig).to_string())
+                        })
+                        .unwrap_or_else(|| "<file scope>".to_string());
+                    origin_writers.push(format!("{rel}::{enclosing}"));
+                }
+            }
+        }
+    });
+    sidecar_files.sort();
+    sidecar_files.dedup();
+    origin_files.sort();
+    origin_files.dedup();
+
+    let bypass_hint = "\n\nStore the identity through `set_cow_borrow_source` / \
+         `set_collection_ref`, which resolve it to the storage owner first \
+         (`resolve_collection_identity`). A site that writes the identity \
+         itself records whatever SPELLING it happened to have in hand, which \
+         is the defect this chokepoint exists to retire.";
+
+    // (a) the sidecar is confined to its own module by privacy + this pin.
+    assert_eq!(
+        sidecar_files,
+        vec![CONTEXT.to_string()],
+        "`cow_borrow_sources` is mentioned outside {CONTEXT}: {sidecar_files:?}.{bypass_hint}"
+    );
+
+    // (b) exactly one writer of the sidecar.
+    assert_eq!(
+        sidecar_inserts, 1,
+        "expected exactly ONE `cow_borrow_sources.insert(` in src/, found \
+         {sidecar_inserts}. The sidecar has one producer on purpose.{bypass_hint}"
+    );
+
+    // (c) exactly one writer of the CollectionElement ownership, and it is the
+    //     resolving producer.
+    assert_eq!(
+        origin_writers,
+        vec![format!("{CONTEXT}::set_collection_ref")],
+        "the set of functions WRITING a `BorrowOrigin::CollectionElement` ownership \
+         changed. Exactly one is expected, and it is the resolving producer \
+         `set_collection_ref`.{bypass_hint}"
+    );
+    // The variant is DECLARED unqualified in `{ORIGIN_DECL}`, so that file
+    // does not spell `BorrowOrigin::CollectionElement(` and does not appear
+    // here; every qualified USE lives in the one module.
+    assert_eq!(
+        origin_files,
+        vec![CONTEXT.to_string()],
+        "`BorrowOrigin::CollectionElement` is used outside {CONTEXT} (declared in \
+         {ORIGIN_DECL}): {origin_files:?}. Reads are fine in principle, but every one \
+         of them is an identity comparison that this resolution is what makes correct \
+         — a new module doing its own is a Layering rule-3 second source of \
+         truth.{bypass_hint}"
+    );
+
+    // (e) BOTH ref-discovery walks in `cow_before_mutation` filter ephemeral
+    //     temps. This is a two-mirror pin, and it exists because the mirrors
+    //     drifted: the field-borrow walk filtered anonymous temps ("duplicate
+    //     clones of stale Ptr values") while the collection-ref walk did not,
+    //     and the missing half was a use-after-free — the walk "rescued" a
+    //     dead index-load temp by cloning FROM a freed element pointer. A
+    //     walk that materializes what it discovers must say which of it is
+    //     ephemeral, or it will clone stale pointers.
+    let ctx = fs::read_to_string(CONTEXT).expect("read context.rs");
+    for (walk, discovery, filter) in [
+        (
+            "collection-ref",
+            "let refs = self.cow_collection_refs_for(builder, local);",
+            "name_hint.is_none()",
+        ),
+        (
+            "field-borrow",
+            "let field_borrows = self.field_borrows_of(builder, local);",
+            "is_named_local",
+        ),
+    ] {
+        let at = ctx.find(discovery).unwrap_or_else(|| {
+            panic!("the {walk} ref-discovery walk moved; expected to find `{discovery}` in {CONTEXT}")
+        });
+        // The walk's block ends at the first closing brace back at method-body
+        // depth. Bounding on that rather than a line count keeps the scan
+        // exact for both walks, which differ in length by ~40 lines.
+        let body: String = ctx[at..]
+            .lines()
+            .take_while(|l| *l != "        }")
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            body.contains(filter),
+            "the {walk} walk in `cow_before_mutation` no longer filters ephemeral \
+             temps. Materializing an anonymous expression temp clones FROM the \
+             element pointer into a local nobody reads — and after a reallocating \
+             mutation that pointer is freed, so the rescue IS the use-after-free. \
+             Its mirror walk carries the same filter; they drift apart at the cost \
+             of a live UAF. See `cow_indexed_element_survives_root_growth.gg`."
+        );
+    }
+
+    // (d) both producers actually resolve. Reverting the resolution reds this
+    //     row across the whole tree, not just on one fixture.
+    for producer in ["set_cow_borrow_source", "set_collection_ref"] {
+        let body_start = ctx
+            .find(&format!("pub fn {producer}("))
+            .unwrap_or_else(|| panic!("producer `{producer}` not found in {CONTEXT}"));
+        let body = &ctx[body_start..];
+        let head: String = body.lines().take(12).collect::<Vec<_>>().join("\n");
+        assert!(
+            head.contains("resolve_collection_identity"),
+            "`{producer}` no longer resolves the collection identity to its storage \
+             owner. Without it the stored identity is whatever SPELLING the caller had \
+             in hand, and every downstream identity comparison silently misses — which \
+             is a live use-after-free, not a style point. See the \
+             `cow_alias_spelled_*` fixtures."
+        );
+    }
 }
 
 /// The CoW/liveness prescan walkers must have NO catch-all arm.
@@ -23662,5 +24314,400 @@ fn cow_prescan_walkers_have_no_catch_all_arm() {
          of cloned. Four separate live defects came from exactly this. If a new AST variant \
          genuinely needs no handling, list it EXPLICITLY in the no-op arm with a reason.",
         offenders.join("\n  ")
+    );
+}
+
+/// Tier 3a ratchet — **a semantic decision keyed on an identifier string, in
+/// its second-commonest costume**: membership of a name in a hand-written
+/// `&[&str]` constant.
+///
+/// `no_growth_in_name_prefix_routing` above ratchets the `starts_with("X__")`
+/// spelling and is structurally blind to this one — it stayed GREEN through
+/// two SIGSEGVs caused by exactly this class (`todo/t0699`: a user `&self`
+/// mutator whose NAME was absent from `MUTATING_METHODS` was invisible to the
+/// CoW prescan, so `void grow(&self)` segfaulted where a byte-identical
+/// `void resize(&self)` was correct). A guard that cannot catch its own class
+/// is worse than none, so this is the sibling ratchet for the sibling
+/// spelling.
+///
+/// **Baseline 2026-08-29: 13**, seeded at the floor the moment
+/// `MUTATING_METHODS.contains(&method)` (`src/ir/lowering/functions.rs`) was
+/// retired in favour of the semantic pass's typed per-receiver classifier
+/// (`semantic::safety::ReceiverMutations`). Regenerate with:
+///
+/// ```text
+/// grep -rnoE '[A-Z_]{3,}\.contains\(&[a-z_]+\)' src/ | wc -l
+/// ```
+///
+/// **As you migrate**: lower `BUDGET` in the same commit that retires the
+/// site. As you ADD one: don't — put the flag on the typed declaration and
+/// read it through an accessor (CLAUDE.md "No name matching", Layering rule 2).
+///
+/// ⚠ **What this ratchet CANNOT see** — same class, different costume, and
+/// each is a place a future regression can hide. Stated rather than implied,
+/// because an unstated blind spot reads as coverage:
+///   * `matches!(name, "a" | "b")`
+///   * `name == "literal"` and `if let "a" | "b" = name`
+///   * an inline `["a", "b"].contains(&name)` (no screaming-snake const)
+///   * `HashSet`/`phf` membership, and `.iter().any(|m| *m == name)`
+///   * a COMPUTED name set (`ctx.mutating_names.contains(name)`) — not a
+///     const, so the regex misses it. That one matters: it is what "port the
+///     precise classifier as a name-keyed union" would have looked like, and
+///     this ratchet would have read 13 and passed it. The discriminator for
+///     THAT is the fixture `cow_user_mutator_two_types_same_name.gg`, whose
+///     clone count separates a per-receiver answer from a name-keyed union.
+/// Widening the regex is welcome; leaving the blind spots unlisted is not.
+#[test]
+fn no_growth_in_name_list_membership_routing() {
+    /// Maximum allowed `SCREAMING_CONST.contains(&ident)` routing sites in
+    /// `src/`. Seeded at the floor 2026-08-29 (was 14 with
+    /// `MUTATING_METHODS.contains(&method)`; that site is now typed).
+    const BUDGET: usize = 13;
+
+    let pattern = regex::Regex::new(r#"[A-Z_]{3,}\.contains\(&[a-z_]+\)"#).unwrap();
+    let mut sites: Vec<String> = Vec::new();
+    visit("src", &mut |path| {
+        if path.extension().map_or(true, |e| e != "rs") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for (i, line) in content.lines().enumerate() {
+            for m in pattern.find_iter(line) {
+                sites.push(format!("{}:{}: {}", path.display(), i + 1, m.as_str()));
+            }
+        }
+    });
+    sites.sort();
+
+    // Site-NAMED, not just counted (a sibling track editing an unrelated
+    // `src/` file must not be able to move this number in either direction):
+    // the site this ratchet was seeded by must be GONE, permanently.
+    let retired = sites
+        .iter()
+        .find(|s| s.contains("MUTATING_METHODS"))
+        .cloned();
+    assert!(
+        retired.is_none(),
+        "`MUTATING_METHODS.contains(&method)` is back at {}.\n\n\
+         That name list decided whether the CoW prescan treated a receiver as \
+         mutated, which made a user method's NAME decide memory safety \
+         (todo/t0699 — SIGSEGV on both backends, fixed by routing the decision \
+         through `semantic::safety::ReceiverMutations`, the typed per-receiver \
+         answer the semantic pass already computes). Do not reintroduce it: \
+         put the flag on the typed declaration and read it through an accessor.",
+        retired.unwrap_or_default()
+    );
+
+    assert!(
+        sites.len() <= BUDGET,
+        "Name-list membership routing grew beyond budget: {} > {BUDGET}.\n\n\
+         A `SCREAMING_CONST.contains(&name)` that decides what something MEANS \
+         is CLAUDE.md's \"No name matching\" rule in its list costume — the one \
+         `no_growth_in_name_prefix_routing` cannot see, and the one that cost \
+         two SIGSEGVs (todo/t0699). Put the semantic flag on the typed \
+         declaration, set it once at the source, and read it via an accessor.\n\n\
+         If the new site is a genuine C-emit/registrar boundary spelling, raise \
+         BUDGET here WITH the reason. If the count went DOWN, lower BUDGET to \
+         lock the floor.\n\n\
+         Sites:\n  {}",
+        sites.len(),
+        sites.join("\n  ")
+    );
+}
+
+
+// ── R47 Track B: the retiring guard for the "call result never registered for
+//    drop at its birth" class (Core #3 / Core #6). ───────────────────────────
+//
+// THE CLASS. A lowering arm that mints a call destination with a raw
+// `builder.call(...)` produces a freshly-owned, droppable value that NOTHING
+// registers for drop. It leaks — once per call, unbounded inside a loop. Nine
+// arms had it: the closure/`Callable`/escaped-closure/IIFE/expression-callee
+// call sites, the `Box[Trait]` vtable dispatch, and the three branches of the
+// combinator adapter's `call_closure_in_adapter`. All nine now route through
+// `LoweringContext::call_indirect_tracked`.
+//
+// WHY THE GUARD IS KEYED ON THE PRODUCER EXPRESSION and not on the callee-name
+// manufacture route (`format!("__callable_{}")` and friends): one of the nine
+// arms manufactures NO name — its callee is a `Constant::FuncRef`, i.e. a
+// STATICALLY NAMED symbol — so a manufacture-route guard is structurally blind
+// to exactly the arm whose membership was hardest to establish. Keying on
+// the producers themselves sees every arm regardless of how its callee is
+// spelled, and that is what makes this guard able to catch its OWN class: a
+// TENTH arm written the old way changes a count here and the lint goes red,
+// even though it is nowhere near the chokepoint.
+//
+// WHY A CENSUS AND NOT A BAN. A raw producer is legitimate when the result is
+// not droppable, or when the arm hand-registers it (the `Mutex` / `RWLock`
+// `.lock()` guard arms do exactly that, correctly), or when the transform
+// emits its own paired teardown (`shared_async.rs`). Banning the producers
+// would false-red on correct code; pinning their census forces the next author
+// to look at this comment and classify their new site.
+//
+// ⚠ ALL FOUR dst-PRODUCING SPELLINGS ARE COVERED, not just `builder.call`.
+// `call_extern` alone has more raw sites under `src/ir/lowering/` than `call`
+// does, and an arm #10 written as `builder.call_extern(...)` would mint an
+// unregistered droppable result exactly the same way — a census over one
+// spelling would green-light it, which is the "worse than none" case this
+// guard exists to avoid. The registering siblings are `call_tracked`,
+// `call_tracked_clone` and `call_extern_tracked`; `call_indirect_tracked` is
+// the arm this track added. (`builder.call_indirect` has zero callers and is
+// filed as `t0774`; add it here the moment it acquires one.)
+//
+// HOW TO UPDATE: add or remove a site, run this test, and move the count. If
+// the new site dispatches through a runtime value, or otherwise mints an owned
+// droppable result, route it through `ctx.call_indirect_tracked` (or the
+// matching `*_tracked` sibling) instead and the raw census will not change at
+// all.
+const RAW_PRODUCER_CENSUS: &[(&str, &str, usize)] = &[
+    ("builder.call(", "src/ir/lowering/context.rs", 2),
+    ("builder.call(", "src/ir/lowering/exprs/calls.rs", 8),
+    ("builder.call(", "src/ir/lowering/exprs/methods.rs", 25),
+    ("builder.call(", "src/ir/lowering/exprs/mod.rs", 9),
+    ("builder.call(", "src/ir/lowering/exprs/shared.rs", 22),
+    ("builder.call(", "src/ir/lowering/exprs/spawn.rs", 17),
+    ("builder.call(", "src/ir/lowering/stmts/assigns.rs", 3),
+    ("builder.call(", "src/ir/lowering/stmts/mod.rs", 9),
+    ("builder.call(", "src/ir/lowering/traits.rs", 1),
+    ("builder.call_clone(", "src/ir/lowering/context.rs", 15),
+    ("builder.call_clone(", "src/ir/lowering/exprs/calls.rs", 1),
+    ("builder.call_clone(", "src/ir/lowering/exprs/methods.rs", 4),
+    ("builder.call_clone(", "src/ir/lowering/exprs/mod.rs", 2),
+    ("builder.call_clone(", "src/ir/lowering/stmts/assigns.rs", 2),
+    ("builder.call_clone(", "src/ir/lowering/stmts/mod.rs", 3),
+    ("builder.call_clone(", "src/ir/lowering/stmts/patterns.rs", 1),
+    ("builder.call_extern(", "src/ir/lowering/context.rs", 1),
+    ("builder.call_extern(", "src/ir/lowering/exprs/calls.rs", 16),
+    ("builder.call_extern(", "src/ir/lowering/exprs/collections.rs", 11),
+    ("builder.call_extern(", "src/ir/lowering/exprs/methods.rs", 9),
+    ("builder.call_extern(", "src/ir/lowering/exprs/mod.rs", 9),
+    ("builder.call_extern(", "src/ir/lowering/exprs/operators.rs", 4),
+    ("builder.call_extern(", "src/ir/lowering/stmts/assigns.rs", 1),
+    ("builder.call_extern(", "src/ir/lowering/stmts/for_loops.rs", 9),
+    ("builder.call_extern(", "src/ir/lowering/stmts/mod.rs", 9),
+    ("builder.call_extern_into(", "src/ir/lowering/exprs/collections.rs", 1),
+];
+
+
+/// The nine arms routed through the chokepoint, by file and count.
+const INDIRECT_TRACKED_ARMS: &[(&str, usize)] = &[
+    ("src/ir/lowering/exprs/calls.rs", 5),
+    ("src/ir/lowering/exprs/methods.rs", 4),
+];
+
+fn count_occurrences(needle: &str) -> Vec<(String, usize)> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut counts: Vec<(String, usize)> = Vec::new();
+    visit(root.join("src/ir/lowering"), &mut |path| {
+        if path.extension().map_or(true, |e| e != "rs") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let mut n = 0;
+        for line in content.lines() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            n += line.matches(needle).count();
+        }
+        if n > 0 {
+            let rel = path
+                .strip_prefix(&root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            counts.push((rel, n));
+        }
+    });
+    counts.sort();
+    counts
+}
+
+#[test]
+fn indirect_dispatch_results_registered_at_birth() {
+    // Arm a — the producer census, over EVERY dst-producing spelling. A NEW
+    // raw producer of any of the four anywhere under `src/ir/lowering/` fails
+    // here, which is the property that lets this guard catch its own class
+    // rather than only today's instances.
+    let mut found: Vec<(String, String, usize)> = Vec::new();
+    for needle in ["builder.call(", "builder.call_clone(", "builder.call_extern(",
+                   "builder.call_extern_into("] {
+        for (file, n) in count_occurrences(needle) {
+            found.push((needle.to_string(), file, n));
+        }
+    }
+    found.sort();
+    let expected: Vec<(String, String, usize)> = RAW_PRODUCER_CENSUS
+        .iter()
+        .map(|(needle, f, n)| (needle.to_string(), f.to_string(), *n))
+        .collect();
+    assert_eq!(
+        found, expected,
+        "Raw call-producer census drifted under src/ir/lowering/.\n\
+         found:    {found:?}\n\
+         expected: {expected:?}\n\n\
+         A raw `builder.call` / `call_clone` / `call_extern` / `call_extern_into` \
+         mints a call destination that NOTHING registers for drop. If your new \
+         site's result is a freshly-owned droppable value whose \
+         callee is resolved through a runtime value (a closure env, a `Callable` \
+         slot, a trait-object vtable) — or is any owned result minted by the \
+         closure/adapter dispatch lowering — route it through \
+         `LoweringContext::call_indirect_tracked` and this count stays put. If it \
+         is genuinely out of class (non-droppable result, hand-registered like the \
+         `Mutex`/`RWLock` guard arms, or paired with its own emitted teardown like \
+         `shared_async.rs`), say which in your commit and move the count.\n\
+         See the comment above RAW_PRODUCER_CENSUS in this file."
+    );
+
+    // Arm b — the routing pin. Deleting a routing (turning an arm back into a
+    // raw producer) trips arm a; deleting it by rewriting the arm away trips
+    // this one.
+    let routed = count_occurrences("call_indirect_tracked(builder");
+    let expected_routed: Vec<(String, usize)> = INDIRECT_TRACKED_ARMS
+        .iter()
+        .map(|(f, n)| (f.to_string(), *n))
+        .collect();
+    assert_eq!(
+        routed, expected_routed,
+        "Indirect-dispatch chokepoint routing drifted.\n\
+         found:    {routed:?}\n\
+         expected: {expected_routed:?}\n\n\
+         The nine arms that dispatch through a runtime-resolved callee must each \
+         register their result at its birth (Core #3). Regression fixtures: \
+         tests/fixtures/security/indirect_*_call_result_leak.gg (leak direction) \
+         and tests/fixtures/security/*_transferred_no_double_free.gg (the \
+         over-registration direction)."
+    );
+}
+
+
+/// R47 Track E2 class-retirement guard (Core #6): every value-MINTING
+/// producer in the for-loop lowering carries an explicit drop disposition.
+///
+/// ## The class this retires
+///
+/// `src/ir/lowering/stmts/for_loops.rs` mints values in a dozen arms, and
+/// each one owes TWO decisions — an ownership tag and a drop registration.
+/// Getting either wrong has its own signature:
+///
+/// * neither decided → the value leaks, and **a leak has no stdout
+///   signature**, so every fixture over that arm stays green while leaking
+///   (`for x in <user Iterable>` leaked both its iterator object and its
+///   element binding for the whole life of the arm);
+/// * drop registered but ownership NOT tagged → the local stays `Untracked`,
+///   the Tier 2a consume-site validator refuses to decide move-vs-clone, and
+///   ordinary code such as `for s in some_set: dst.add(s)` **aborts the
+///   compiler** instead of lowering.
+///
+/// ## Why it keys on the PRODUCER, not on a registration helper
+///
+/// The obvious guard — "every `ctx.register_local(` is paired with a
+/// `ctx.drops.register_local(`" — is **structurally blind to half the
+/// class**. `LoweringContext::register_local` is a name→local map insert
+/// (`src/ir/lowering/context.rs`); a compiler temp never calls it. The
+/// iterator object minted by `iter(&collection)` has no name binding at all,
+/// so it adds ZERO rows to any census over binding arms — which is exactly
+/// how it stayed invisible to both a source census and a review.
+///
+/// Keying on `Local.ownership ∈ {Owned, FreshOwned}` is blind to the same
+/// value in a different way: `tag_ownership` deliberately declines to tag
+/// `CallExtern` results that are not runtime symbols ("Non-fresh extern
+/// calls: do not tag"), so a user `iter()` result is `Untracked` and an
+/// ownership-keyed guard is GREEN on it.
+///
+/// The subject is therefore the **producer instruction shape**: every
+/// `builder.call_extern` / `call_extern_void` / `enum_field_load_move` /
+/// `index_load_borrow` in the file. Each must carry, within a few lines,
+/// either the shared two-axis decision `bind_owned_for_drop(ctx, …)` or a
+/// `drop-disposition:` comment naming why nothing is owned there. A new arm
+/// that mints a droppable value and forgets both axes carries neither, and
+/// goes RED.
+///
+/// Baseline 2026-08-29: 17 producer sites, 17 dispositions.
+#[test]
+fn for_loop_producers_carry_a_drop_disposition() {
+    /// Producer instruction shapes: every builder call in the for-loop
+    /// lowering that MINTS a value a binding can end up owning.
+    const PRODUCERS: &[&str] = &[
+        "builder.call_extern(",
+        "builder.call_extern_void(",
+        "builder.enum_field_load_move(",
+        "builder.index_load_borrow(",
+    ];
+    /// A disposition is either the shared two-axis decision or an explicit
+    /// reasoned marker.
+    const DISPOSITIONS: &[&str] = &["drop-disposition:", "bind_owned_for_drop(ctx"];
+    /// Baseline 2026-08-29. Bump ONLY together with a new disposition.
+    const EXPECTED_PRODUCERS: usize = 17;
+    /// How far a disposition may sit from its producer. Backward covers a
+    /// leading comment; forward covers the argument list plus the binding.
+    const BACK: usize = 8;
+    const FWD: usize = 20;
+
+    let path = "src/ir/lowering/stmts/for_loops.rs";
+    let src = fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    let lines: Vec<&str> = src.lines().collect();
+
+    let is = |i: usize, pats: &[&str]| pats.iter().any(|p| lines[i].contains(p));
+    let producers: Vec<usize> = (0..lines.len()).filter(|&i| is(i, PRODUCERS)).collect();
+    let dispositions: Vec<usize> = (0..lines.len()).filter(|&i| is(i, DISPOSITIONS)).collect();
+
+    // Pair each producer with its OWN disposition — one marker may not cover
+    // two producers, or a new arm could ride on its neighbour's reasoning.
+    let mut claimed = vec![false; dispositions.len()];
+    let mut unpaired = Vec::new();
+    for &p in &producers {
+        let lo = p.saturating_sub(BACK);
+        let best = dispositions
+            .iter()
+            .enumerate()
+            .filter(|&(k, &d)| !claimed[k] && d >= lo && d <= p + FWD)
+            .min_by_key(|&(_, &d)| d.abs_diff(p))
+            .map(|(k, _)| k);
+        match best {
+            Some(k) => claimed[k] = true,
+            None => unpaired.push(format!("  {}:{} — {}", path, p + 1, lines[p].trim())),
+        }
+    }
+
+    assert!(
+        unpaired.is_empty(),
+        "for-loop producer site with no drop disposition:\n{}\n\n\
+         Every value this file mints owes BOTH ownership axes at the producer. \
+         Route it through `bind_owned_for_drop(ctx, builder, local, ty, LoopOwned::…)` \
+         when the loop owns the value, or add a `drop-disposition:` comment saying why \
+         it owns nothing (non-droppable return, a borrow into the collection, a payload \
+         moved out elsewhere). Deciding only the drop registration is what makes \
+         `for s in some_set: dst.add(s)` abort the compiler; deciding neither is a leak \
+         that no stdout assertion can see.",
+        unpaired.join("\n")
+    );
+
+    let unclaimed: Vec<String> = dispositions
+        .iter()
+        .enumerate()
+        .filter(|&(k, _)| !claimed[k])
+        .map(|(_, &d)| format!("  {}:{} — {}", path, d + 1, lines[d].trim()))
+        .collect();
+    assert!(
+        unclaimed.is_empty(),
+        "drop disposition with no producer site in range — a stale marker, or the \
+         producer moved out from under it:\n{}",
+        unclaimed.join("\n")
+    );
+
+    assert_eq!(
+        producers.len(),
+        EXPECTED_PRODUCERS,
+        "for-loop producer-site count changed: {} vs expected {EXPECTED_PRODUCERS}.\n\n\
+         A NEW site must carry its own disposition (see above) before this baseline is \
+         raised; a REMOVED site lowers it. Never raise it to make the pairing assert pass.",
+        producers.len()
     );
 }

@@ -294,9 +294,24 @@ impl DropElaborator {
         }
     }
 
-    /// Completely remove a local from drop tracking. Used when a GorgetString temp
-    /// is consumed by a str view assignment — the view may escape the scope, so the
-    /// GorgetString must NOT be freed (it will leak, same as pre-drop-registration).
+    /// Completely remove a local from drop tracking.
+    ///
+    /// Two distinct callers, and the difference matters when reading a use:
+    ///
+    /// 1. **Ownership TRANSFER** (the common case) — the local's heap data has
+    ///    been handed to a longer-lived owner at lowering time, so the source
+    ///    must not also free it. `emit_enum_init_owned`'s post-init loop and
+    ///    the Option/Result adapter's `assign_result_local_move` both do this.
+    ///    Nothing leaks: the destination drops the data exactly once.
+    /// 2. **Deliberate LEAK** — a `GorgetString` temp consumed by a str-view
+    ///    assignment, where the view may escape the scope so the string must
+    ///    NOT be freed (it leaks, same as pre-drop-registration).
+    ///
+    /// ⚠ NOT CFG-AWARE: the entry is removed from the scope outright, so every
+    /// path loses the drop. Only unregister a local whose data is transferred
+    /// on *every* path that writes it; for a local consumed on one branch and
+    /// still owned on another (the adapter's `payload` under `filter`), pair a
+    /// runtime `move_zero` at the consuming site instead and keep the entry.
     pub fn unregister(&mut self, local: LocalId) {
         for scope in self.scopes.iter_mut().rev() {
             if let Some(pos) = scope.entries.iter().position(|e| e.local == local) {

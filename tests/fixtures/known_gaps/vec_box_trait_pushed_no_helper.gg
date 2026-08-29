@@ -1,0 +1,43 @@
+# KNOWN GAP — the STRICTLY SIMPLER repro for `t0709`. Same
+# `AddressSanitizer: stack-buffer-overflow` in `__interceptor_memcpy` <-
+# `gorget_array_push`, with the HELPER ESCAPE, the `mk()` payload and the
+# `.get(0).unwrap()` read ALL REMOVED. It crashes at the PUSH, in `main`.
+#
+# ⚠ WHY THIS FILE EXISTS: `t0709`'s discriminator is OVER-SPECIFIED. It is
+# filed as "`Vector[Box[Trait]]` built with `Box.new` + `push` and RETURNED
+# FROM A HELPER", which reads as if the helper escape were part of the
+# mechanism. It is not. A fix scoped to the helper-escape shape would miss
+# this program.
+#
+# ⚠ THE PUSHED VALUE MUST BE A TEMP — a sharper discriminator than `t0709`
+# carries, measured while writing this file. Binding the box to a named local
+# first (`Box[Speaker] b = Box.new(Robot("R2"))` then `v.push(b)`) does NOT
+# crash: it is rc 1 with a 35 B / 2 LEAK at pristine `f3feea79`. Only the
+# TEMP form overflows. So the named-local rescue that governs so much of this
+# tree's ownership behaviour ALSO separates these two failure modes, and the
+# eventual fix must be checked against both spellings.
+#
+# This is `t0709`'s EVIDENCE, not a second filing.
+#
+# RED-VERIFIED at pristine `f3feea79`: ASan stack-buffer-overflow, 3/3 runs;
+# unchanged by R47 Track B (a different class — drop registration, not the
+# array push's element copy), 3/3 runs.
+#
+# INTENDED: prints `R2!`, rc 0, on C and LLVM, ASan-clean.
+from std.collections import Box
+from std.collections import Vector
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+void main():
+    Vector[Box[Speaker]] v = Vector[Box[Speaker]]()
+    v.push(Box.new(Robot("R2")))
+    print(v[0].speak())
