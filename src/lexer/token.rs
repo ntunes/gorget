@@ -355,8 +355,7 @@ pub enum Keyword {
     Select,
     Shared,
 
-    // Safety
-    Unsafe,
+    // FFI
     Extern,
     /// `noreturn` — extern function never returns control to caller (calls like
     /// `_Noreturn` C functions: `exit`, `abort`). Lets the typechecker treat
@@ -486,7 +485,6 @@ impl Keyword {
             Keyword::Unchecked => "unchecked",
             Keyword::Select => "select",
             Keyword::Shared => "shared",
-            Keyword::Unsafe => "unsafe",
             Keyword::Extern => "extern",
             Keyword::Noreturn => "noreturn",
             Keyword::SelfLower => "self",
@@ -575,7 +573,6 @@ impl Keyword {
             "unchecked" => Some(Keyword::Unchecked),
             "select" => Some(Keyword::Select),
             "shared" => Some(Keyword::Shared),
-            "unsafe" => Some(Keyword::Unsafe),
             "extern" => Some(Keyword::Extern),
             "noreturn" => Some(Keyword::Noreturn),
             "self" => Some(Keyword::SelfLower),

@@ -140,7 +140,6 @@ fn on_error_bodies_in<'a>(stmt: &'a Stmt) -> Vec<&'a [Spanned<Stmt>]> {
             if let Some(b) = else_body { push_block(&mut out, b); }
         }
         Stmt::Loop { body }
-        | Stmt::Unsafe { body }
         | Stmt::NamedScope { body, .. }
         | Stmt::With { body, .. }
         | Stmt::MetaFor { body, .. }
@@ -340,7 +339,7 @@ fn walk_stmt<'a>(
             live.extend(live_body2);
         }
         // Straight-line scopes: the block runs in sequence with its neighbours.
-        Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+        Stmt::NamedScope { body, .. } => {
             walk_block(&body.stmts, live, lu);
         }
         // `on error:` is an ALTERNATIVE path, not a straight-line scope: it

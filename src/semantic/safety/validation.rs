@@ -598,7 +598,7 @@ fn purity_walk_stmt(
             acc.accesses_shared(); // `with` blocks access shared state
             purity_walk_block(body, scopes, resolution_map, acc, callees);
         }
-        Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } | Stmt::OnError { body } => {
+        Stmt::Loop { body } | Stmt::NamedScope { body, .. } | Stmt::OnError { body } => {
             purity_walk_block(body, scopes, resolution_map, acc, callees);
         }
         Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {

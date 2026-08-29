@@ -5,7 +5,7 @@
 # a net the moment a kind grows its own emitter. One cell per kind, derived
 # from the dedent census's ROUTED rows.
 #
-# CELLS: loop · unsafe · named scope · `do:` · indented `on error` ·
+# CELLS: loop · named scope · `do:` · indented `on error` ·
 #        `with … as …:` · `catch (…)` · `rethrow (…)` · statement `meta for` ·
 #        `meta while` · `meta type f()`
 #
@@ -32,9 +32,6 @@ void routed_kinds():
     loop:
         break
         # tail in loop body
-    unsafe:
-        print(1)
-        # tail in unsafe body
     cleanup:
         print(2)
         # tail in named scope body

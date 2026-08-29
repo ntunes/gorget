@@ -554,7 +554,7 @@ impl GenericCollector {
                 }
                 self.scan_block(body);
             }
-            Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+            Stmt::Loop { body } | Stmt::NamedScope { body, .. } => {
                 self.scan_block(body);
             }
             Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
@@ -1106,7 +1106,7 @@ impl GenericCollector {
                 }
                 self.walk_block_for_method_calls(body, env);
             }
-            Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+            Stmt::Loop { body } | Stmt::NamedScope { body, .. } => {
                 self.walk_block_for_method_calls(body, env);
             }
             _ => {}

@@ -324,7 +324,6 @@ fn stmt_mentions_iter(stmt: &Spanned<crate::parser::ast::Stmt>) -> bool {
             else_arm.as_ref().map_or(false, |b| block_mentions_iter(b))
         }
         Stmt::Loop { body }
-        | Stmt::Unsafe { body }
         | Stmt::NamedScope { body, .. } => block_mentions_iter(body),
         Stmt::With { bindings, body } => {
             bindings.iter().any(|b| expr_mentions_iter(&b.expr))
@@ -1065,7 +1064,6 @@ fn qualify_stmt(stmt: &mut Stmt, vm: &HashMap<String, String>) {
         Stmt::Snapshot { value, .. } => {
             qualify_expr(value, vm);
         }
-        Stmt::Unsafe { body } => qualify_block(body, vm),
         Stmt::NamedScope { body, .. } => qualify_block(body, vm),
         Stmt::Item(_) | Stmt::Select { .. } => {}
         Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {

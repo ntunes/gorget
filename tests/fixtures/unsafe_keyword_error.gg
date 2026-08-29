@@ -1,0 +1,19 @@
+# D50 (2026-08-28): `unsafe` is REMOVED from the language — the reserved
+# keyword and all support. The function QUALIFIER spelling `unsafe <ret> f(...)`
+# is gone; it is the removal's only accept -> reject flip.
+#
+# RED-verified: at f3feea79 this program compiled clean (`gg check` -> rc 0,
+# "OK: no semantic errors"), because the qualifier parsed and was merely
+# recorded on `FunctionQualifiers.is_unsafe`. So `check_gg_fails` FAILED
+# pre-removal and passes after it.
+#
+# ⚠ NOT a claim that `unsafe` is rejected everywhere: `unsafe:` as a STATEMENT
+# stays legal and now parses as an ordinary NAMED SCOPE — pinned by
+# `unsafe_is_now_a_named_scope.gg`. Only the qualifier form is a parse error.
+#
+# Expected: parse error.
+unsafe void danger(int x):
+    print(x)
+
+void main():
+    danger(1)

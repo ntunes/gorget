@@ -4613,7 +4613,7 @@ fn no_growth_in_runtime_c_direct_view_manufacture() {
 /// dropped to the `_ => {}` arm.
 const COW_PRESCAN_BLOCK_BEARING_STMTS: &[&str] = &[
     "OnError", "For", "While", "Loop", "If", "Match", "Select", "With",
-    "Unsafe", "NamedScope",
+    "NamedScope",
 ];
 
 /// Extract the source of `fn cow_after_stmt` from functions.rs (brace-depth
@@ -4659,7 +4659,7 @@ fn cow_after_stmt_source() -> String {
 /// to `_ => {}` is invisible to the CoW reassignment prescan — a source
 /// collection mutated inside its body would dangle a live element borrow taken
 /// before it (CLAUDE.md #4 "one fix, all siblings"; the latent hole that left
-/// `Loop`/`With`/`Unsafe`/`NamedScope`/`Select`/`OnError` unhandled).
+/// `Loop`/`With`/`NamedScope`/`Select`/`OnError` unhandled).
 ///
 /// **If this fails:** you added a block-bearing `Stmt` variant. Add an arm to
 /// `cow_after_stmt` that recurses into its body/bodies via `cow_after_block`
@@ -10102,8 +10102,8 @@ fn ratchet_c_handrolled_materialize_bypass_count() {
 /// entry (`materialize_scope_carried_bare_params`), never open-coded per form —
 /// so a new scope form cannot silently skip it (the `cow_loop_bare_param_if_branch`
 /// class: a bare-param mutation inside a save/restore scope thrown away by the
-/// scope's restore_locals). The non-loop scope forms are exactly six:
-///   If · With · Unsafe · NamedScope · Match · Select.
+/// scope's restore_locals). The non-loop scope forms are exactly five:
+///   If · With · NamedScope · Match · Select.
 /// The LOOP forms (While · For · Loop) are hoisted through the SEPARATE
 /// `materialize_loop_carried_bare_params` funnel (which keeps
 /// `LoopPreHeaderMaterialize` so per-position costing stays honest — a
@@ -10119,17 +10119,25 @@ fn ratchet_c_handrolled_materialize_bypass_count() {
 ///     its dispatch arm (do NOT open-code the scan); bump SCOPE_ARMS with a
 ///     justification. `lower_block_scoped` itself must stay materialize-free (an
 ///     unconditional entry hoist there would break the conditional callers).
-///   - The count went DOWN → a scope form lost its hoist, re-opening the
-///     throw-away hole; restore the call, do NOT lower the constant.
+///   - The count went DOWN and `enum Stmt` still has the same scope forms →
+///     a scope form lost its hoist, re-opening the throw-away hole; restore
+///     the call, do NOT lower the constant.
+///   - A scope form was REMOVED from `enum Stmt` → lower the constant AND
+///     this doc's form list AND the assert message in the same commit,
+///     citing the ratified removal. (D50, 2026-08-28, removed `Unsafe`:
+///     6 → 5.) This is the ONLY case in which lowering is correct, and it
+///     is checkable — the form must be gone from `enum Stmt`, not merely
+///     missing its call.
 #[test]
 fn planner_scope_preheader_arm_count() {
     let src = fs::read_to_string("src/ir/lowering/stmts/mod.rs")
         .expect("read src/ir/lowering/stmts/mod.rs");
 
     // Non-loop scope dispatch-arm hoists: `materialize_scope_carried_bare_params(
-    // ctx, builder, &stmt.node, …)` — one per scope form (If/With/Unsafe/
-    // NamedScope/Match/Select).
-    const SCOPE_ARMS: usize = 6;
+    // ctx, builder, &stmt.node, …)` — one per scope form (If/With/
+    // NamedScope/Match/Select). Was 6; D50 (2026-08-28) removed the `Unsafe`
+    // scope form from the language, taking its dispatch arm with it.
+    const SCOPE_ARMS: usize = 5;
     let scope_calls = src
         .lines()
         .filter(|l| {
@@ -10141,7 +10149,7 @@ fn planner_scope_preheader_arm_count() {
     assert_eq!(
         scope_calls, SCOPE_ARMS,
         "planner scope pre-header dispatch-arm hoist count changed: {scope_calls} vs \
-         expected {SCOPE_ARMS} (If/With/Unsafe/NamedScope/Match/Select). A new scope \
+         expected {SCOPE_ARMS} (If/With/NamedScope/Match/Select). A new scope \
          form must route through `materialize_scope_carried_bare_params` at its \
          `lower_stmt` dispatch arm — see the fn doc + the arm-count lint comment.",
     );
@@ -10472,21 +10480,103 @@ fn ratified_decisions_are_cited_in_the_spec() {
     let ledger = fs::read_to_string("docs/define-gorget/decisions.md")
         .expect("decisions.md readable");
 
-    let dnum = regex::Regex::new(r"\bD(\d{1,2})\b").unwrap();
+    // `\d+`, never `\d{1,2}` — a two-digit cap silently drops D100 onward on
+    // BOTH sides (population and citations), which is the same blindness class
+    // as the header costumes below, just latent.
+    let dnum = regex::Regex::new(r"\bD(\d+)\b").unwrap();
 
-    // Ratified decisions: the LOG's `— **D<N> ...` entry headers.
-    let header = regex::Regex::new(r"—\s*\*\*D(\d{1,2})\b").unwrap();
-    let mut ratified: Vec<u32> = header
+    // ---- THE RATIFIED POPULATION: two DECLARATION surfaces ----------------
+    //
+    // (a) dated LOG entry headers — `- <date> — **<decoration>D<N> ...`. The
+    //     decoration is stripped rather than enumerated, so the emoji form
+    //     (`— **🎯 D50 RATIFIED`) and any future ornament are covered by the
+    //     same rule instead of by a pattern per ornament.
+    // (b) the BATCH form, where one header closes several decisions at once:
+    //     `— **DECISION BATCH 5 CLOSES: D24 + D25 + D26 RATIFIED by owner ...`.
+    // (c) front-matter section headings — `### D<N>. <title>` (D1-D9). These
+    //     are declarations too, and no `—`-anchored pattern has ever matched
+    //     them.
+    let entry = regex::Regex::new(r"(?m)^- .*?—\s*\*\*(.*)$").unwrap();
+    let deco = regex::Regex::new(r"^[^A-Za-z0-9]*").unwrap();
+    let leading_d = regex::Regex::new(r"^D(\d+)\b").unwrap();
+    let batch =
+        regex::Regex::new(r"(?i)DECISION BATCH\s+\d+\s+CLOSES:(.*?)RATIFIED").unwrap();
+    let section = regex::Regex::new(r"(?m)^#+\s*D(\d+)[.:) ]").unwrap();
+
+    let mut ratified: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    for c in entry.captures_iter(&ledger) {
+        let head = &c[1];
+        let undecorated = deco.replace(head, "");
+        if let Some(m) = leading_d.captures(&undecorated) {
+            ratified.extend(m[1].parse::<u32>().ok());
+            continue;
+        }
+        if let Some(b) = batch.captures(head) {
+            for d in dnum.captures_iter(&b[1]) {
+                ratified.extend(d[1].parse::<u32>().ok());
+            }
+        }
+        // Anything else is a ruling with no D-number identifier (`2T RATIFIED`,
+        // `FMT CANON PAIR RATIFIED`, ...). Those are outside this lint's
+        // subject, which is D-numbered decisions — and the reconciliation
+        // below is what stops that from becoming a hiding place.
+    }
+    for c in section.captures_iter(&ledger) {
+        ratified.extend(c[1].parse::<u32>().ok());
+    }
+
+    // ---- THE RECONCILIATION — this is what retires the class ---------------
+    //
+    // The failure mode this guard is FOR is not "a decision went uncited"; it
+    // is "the ledger's header format drifted and the population silently
+    // SHRANK". A pattern list cannot catch that: it green-lights exactly the
+    // shapes it knows and says nothing about the ones it does not. Measured:
+    // between 2026-08-10 and 2026-08-28 the emoji form and the batch form hid
+    // TEN ratified decisions from the old `—\s*\*\*D(\d{1,2})` pattern, the
+    // section form hid SIX more, and the lint stayed GREEN throughout, because
+    // the only structural check it had was `!ratified.is_empty()` — and 33
+    // old-form entries kept it non-empty. That is a guard green-lighting its
+    // own class.
+    //
+    // So the population is cross-checked against an INDEPENDENT derivation:
+    // every `D<N>` token that appears ANYWHERE in the ledger. A decision's
+    // number always appears in its own entry body, so a header shape this
+    // parser does not recognise leaves its number MENTIONED but UNDECLARED,
+    // and this assert fires naming it. Verified by construction: feed the
+    // ledger a header whose D-number is not at the head and matches no shape
+    // above — e.g. `- <date> — **RATIFIED (owner): decision D99 ...**` — and
+    // this fires; that is the demonstrated red (Core #13).
+    let mentioned: std::collections::BTreeSet<u32> = dnum
         .captures_iter(&ledger)
         .filter_map(|c| c[1].parse().ok())
         .collect();
-    ratified.sort_unstable();
-    ratified.dedup();
+    let undeclared: Vec<String> = mentioned
+        .difference(&ratified)
+        .map(|d| format!("D{d}"))
+        .collect();
     assert!(
-        !ratified.is_empty(),
-        "no ratified decisions parsed from decisions.md — the LOG entry format \
-         (`- <date> — **D<N> ...`) changed and this lint reads nothing."
+        undeclared.is_empty(),
+        "decision number(s) mentioned in decisions.md with NO declaration this \
+         lint can see: {undeclared:?}\n\n\
+         Either the ledger grew a new entry-header shape — in which case TEACH \
+         THIS PARSER the shape, never widen the mention scan to swallow it — or \
+         a D-number is referenced that was never declared. A decision this \
+         parser cannot see is a decision exempt from the citation requirement \
+         below, silently, which is the exact defect that let D45-D51 sit \
+         uncounted.\n\n\
+         Recognised declaration shapes: `- <date> — **<decoration>D<N> ...`, \
+         the `DECISION BATCH <k> CLOSES: D<a> + D<b> ... RATIFIED` header, and \
+         the `### D<N>. <title>` section heading."
     );
+    assert!(
+        ratified.len() >= mentioned.len(),
+        "the ratified population ({}) is smaller than the set of D-numbers \
+         mentioned ({}) even after the reconciliation above passed — the two \
+         derivations disagree in a way this lint does not model.",
+        ratified.len(),
+        mentioned.len()
+    );
+    let ratified: Vec<u32> = ratified.into_iter().collect();
 
     // Everything the SPEC cites, across the reference, the design doc, and the book.
     let mut spec = String::new();
@@ -10511,7 +10601,29 @@ fn ratified_decisions_are_cited_in_the_spec() {
         .map(|d| format!("D{d}"))
         .collect();
 
-    const BUDGET: usize = 14;
+    // ⚠ RE-SEEDED 2026-08-29, and the reason is that THE GUARD WAS BLIND —
+    // not that the debt is new. Every decision below pre-dates R47; this
+    // track ratifies nothing and cannot alter either side of the count.
+    // Before the class-complete repair above, the header pattern saw 33 of
+    // the 51 declared decisions and reported 12 uncited. It now sees all 51
+    // and reports 26 — the first honest measurement of a debt that was
+    // always there. Regenerate with:
+    //   cargo test --test lints ratified_decisions_are_cited_in_the_spec
+    //
+    // The 26, in three cohorts:
+    //   already visible, already uncited (12) — D2 D12 D13 D14 D17 D18 D19
+    //     D20 D21 D27 D28 D30
+    //   hidden by the emoji / batch header costumes (8) — D24 D25 D46 D47
+    //     D48 D49 D50 D51
+    //   hidden by the `### D<N>.` section costume (6) — D1 D3 D5 D7 D8 D9
+    //
+    // BURN THIS DOWN: `todo/t0800.md` owns the backlog and names every one.
+    // The doc track landing behind D3a writes D50 through and lowers this
+    // by one in the same commit. Lower it as each decision is cited; the
+    // assert is `<=`, so it is a debt high-water, and it only goes down.
+    // (This constant was itself seeded exactly this way — see the 2026-07-26
+    // baseline in the doc comment above.)
+    const BUDGET: usize = 26;
     assert!(
         uncited.len() <= BUDGET,
         "ratified decisions with no citation in any spec document: {} (budget {}).\n\n\
@@ -16411,7 +16523,6 @@ fn parser_header_start_wiring_census() {
         ("src/parser/stmt.rs", "parse_named_scope", 1),
         ("src/parser/stmt.rs", "parse_on_error_stmt", 1),
         ("src/parser/stmt.rs", "parse_select_stmt", 2),
-        ("src/parser/stmt.rs", "parse_unsafe_stmt", 1),
         ("src/parser/stmt.rs", "parse_while_stmt", 2),
         ("src/parser/stmt.rs", "parse_with_stmt", 1),
     ];
@@ -16522,10 +16633,13 @@ fn parser_header_start_wiring_census() {
     // rows (not matching them 1:1 — several wiring sites are clause siblings of
     // one construct) keeps this a TRIGGER: a new wiring row forces a decision
     // above, and a deleted probe row trips here.
-    // 30 = 26 + the four `else:` clauses (statement-`if`, for, select, meta-if)
+    // 29 = 25 + the four `else:` clauses (statement-`if`, for, select, meta-if)
     // that were carried inside neighbouring probes and dropped when those were
     // split; all SEVEN else-body wiring calls now have their own row.
-    const EXPECTED_BLOCK_PROBES_ROWS: usize = 30;
+    // Was 30: D50 (2026-08-28) removed the `unsafe` scope form from the
+    // language, so its probe row went with the construct — not a probe lost
+    // by a construct that still exists, which is the drop this guards.
+    const EXPECTED_BLOCK_PROBES_ROWS: usize = 29;
     let probes = fs::read_to_string("src/parser/tests.rs")
         .expect("cannot read src/parser/tests.rs");
     let table = probes
@@ -16612,7 +16726,7 @@ fn formatter_dedent_close_census() {
     /// Expected row count per class. Regenerate with
     ///   cargo test --test lints formatter_dedent_close_census -- --nocapture
     const EXPECTED: &[(Class, usize)] = &[
-        (Routed, 30),
+        (Routed, 29),
         (Container, 5),
         (NestedItems, 3),
         (ArmContainer, 4),
@@ -16621,7 +16735,9 @@ fn formatter_dedent_close_census() {
         (Bracketed, 1),
     ];
     /// Every `dedent()` in the file is one of the classes above.
-    const EXPECTED_TOTAL: usize = 46;
+    /// Was 46/Routed 30; D50 (2026-08-28) deleted the `Stmt::Unsafe`
+    /// formatter arm, taking one Routed close with it.
+    const EXPECTED_TOTAL: usize = 45;
 
     let content =
         fs::read_to_string("src/formatter/mod.rs").expect("cannot read src/formatter/mod.rs");
@@ -19018,7 +19134,7 @@ fn formatter_suite_layout_hook_census() {
     //     always indented. (`format_trait` has no row of its own: its default
     //     method bodies route through `format_function`.)
     //   * NEWLINE-REQUIRING statement producers — `Stmt::Loop` / `With` /
-    //     `Unsafe` / `NamedScope` / `MetaFor` / `MetaWhile` / `MetaIf`, the
+    //     `NamedScope` / `MetaFor` / `MetaWhile` / `MetaIf`, the
     //     `for` and `while` BODIES, and the `select` / `match` CASE arm
     //     bodies. Each parses through `parse_block`, which accepts the
     //     indented form only. `on error` is the counter-example that proves
@@ -19078,7 +19194,6 @@ fn formatter_suite_layout_hook_census() {
         ("format_stmt", "self.format_block_stmts(body);", Layout),
         // for body · while body · loop · with · unsafe · meta for ·
         // meta while · named scope.
-        ("format_stmt", "self.format_block_stmts(body);", Plain),
         ("format_stmt", "self.format_block_stmts(body);", Plain),
         ("format_stmt", "self.format_block_stmts(body);", Plain),
         ("format_stmt", "self.format_block_stmts(body);", Plain),
@@ -20676,7 +20791,7 @@ fn formatter_header_suffix_census() {
         ("format_match_arm", 2),
         ("format_param", 2),
         ("format_static_decl", 2),
-        ("format_stmt", 29),
+        ("format_stmt", 28),
         ("format_string_lit", 1),
         ("format_struct", 1),
         ("format_suite_setup", 1),

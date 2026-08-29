@@ -1,0 +1,39 @@
+# KNOWN GAP (t0556) — the SELF-HOST silently SWALLOWS a keyword that has no
+# parse rule, together with its block AND every statement after it.
+#
+# THE MECHANISM, which is a CLASS and not one keyword. `self_host_typechecker/
+# parser.gg` gates the named-scope path on `if self.check_tok(TOK_IDENT)`. A
+# word that lexes as a KEYWORD is never TOK_IDENT, so if no parse rule consumes
+# it, control falls past the named-scope path into `parse_expr()`, which eats
+# the word, its colon, its indented body, and the rest of the enclosing block.
+# Core #10 lower-or-reject: the SH must `lower_fail` LOUDLY on a construct it
+# does not implement, never emit silently-truncated code.
+#
+# `where` is the surviving costume: it is a keyword on BOTH lanes
+# (`src/lexer/token.rs`; `self_host_typechecker/lexer.gg`) and `Keyword::Where`
+# has ZERO consumers outside the lexer, so no parse rule claims it.
+#
+# ⚠ THIS IS THE CLASS, NOT THE INSTANCE D50 CLOSED. The `unsafe:` costume of the
+# identical mechanism was retired by REMOVING the keyword (D50, 2026-08-28) —
+# which fixed that instance and left the mechanism untouched. Any keyword added
+# to the lexer without a parse rule reopens it.
+#
+# ⚠ THE PIN MUST RUN ON THE SELF-HOST DRIVER (`sh_known_gap_expect`), NOT on
+# `check_gg_fails`: the RUST lane already rejects `where:` with a parse error,
+# so a `gg check` pin is green on arrival and asserts NOTHING about this gap.
+#
+# MEASURED on the self-host lowerer driver (`sh_known_gap_expect`) at the D50
+# removal commit: stdout `"a\nb"`, exit 0. So the block BODY does run, and it
+# is the statements AFTER the construct — `print("c")` and `print("d")` — that
+# are silently swallowed. Rust gg rejects the same program with 10 parse
+# errors, so the two lanes disagree about whether this program exists at all.
+#
+# INTENDED (what a correct self-host does): reject loudly, the way Rust gg
+# does. The expected output below is the CORRECT/intended output for the
+# construct's shape — the whole point is that the SH silently produces less.
+void main():
+    print("a")
+    where:
+        print("b")
+    print("c")
+    print("d")

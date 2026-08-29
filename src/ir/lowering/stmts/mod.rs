@@ -416,13 +416,6 @@ pub fn lower_stmt(
             lower_with(ctx, builder, bindings, body);
         }
 
-        Stmt::Unsafe { body } => {
-            __kind_key = "lower_function::body::lower_block::stmt::unsafe";
-            // Planner consumer #1: pre-scope materialize (straight-line scope).
-            materialize_scope_carried_bare_params(ctx, builder, &stmt.node, stmt.span);
-            lower_block_scoped(ctx, builder, body);
-        }
-
         Stmt::NamedScope { body, .. } => {
             __kind_key = "lower_function::body::lower_block::stmt::named_scope";
             // Planner consumer #1: pre-scope materialize (straight-line scope).

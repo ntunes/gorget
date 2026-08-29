@@ -18,8 +18,29 @@
 # fixed for
 # the un-nested shape.
 #
-# `unsafe:` is the wrapper because its arm passes `live` straight through
-# (liveness.rs:236-238); `if` unions with `saved` and masks it.
+# A NAMED SCOPE is the wrapper because its arm passes `live` straight
+# through (the straight-line-scope arm in `walk_stmt`, `liveness.rs:342`);
+# `if` unions with `saved` and masks it. The nested handler is DISCOVERED
+# through the named-scope alternative in `on_error_bodies_in`
+# (`liveness.rs:143`) — the same arm, so the D50 rename of `unsafe:` to a
+# named scope changed no liveness path here.
+#
+# ⚠ RED-VERIFY STATUS, MEASURED 2026-08-29 AND NOT REPRODUCIBLE LOCALLY.
+# Two targeted breaks of the mechanism this header names both leave this
+# fixture GREEN: (1) making `walk_stmt`'s straight-line-scope arm a no-op
+# (`Stmt::NamedScope { .. } => {}`), and (2) regressing `seed_on_error_uses`
+# to pass the caller's `live` straight to `walk_block`, i.e. re-applying the
+# handler's KILLS — the exact defect the fixture is named for. Neither reds.
+# The reason is visible in the program: the handler ASSIGNS to `s` and reads
+# nothing, so the seed contributes no uses, and the seeded kill is undone by
+# the reverse walk reaching `print(s)` first. Its sibling
+# `liveness_use_inside_named_scope.gg` DOES red under break (1) (ICE rc 101,
+# `local _N read after MoveZero`), so the arm itself is guarded there.
+# WHAT THIS FIXTURE ACTUALLY PINS TODAY: the end-to-end shape — a handler
+# registered inside a nested scope must not corrupt the normal path — against
+# the original `606a7c4e`-era defect. Treat it as a shape pin, not as a
+# discriminating guard for the two mechanisms above, until someone builds a
+# variant whose handler READS a name the normal path also reads.
 #
 # The `v.set(0, ...)` is load-bearing: it frees the value moved into the
 # vector.
@@ -31,7 +52,7 @@ int f() throws String:
     Vector[String] v = []
     v.push(s)
     v.set(0, mk("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyyyyyyyyyyyy"))
-    unsafe:
+    guarded:
         on error:
             s = mk("c", "d")
     print(s)

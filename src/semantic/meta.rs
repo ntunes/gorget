@@ -1427,12 +1427,6 @@ fn lookup_meta_function(
                         span,
                     ));
                 }
-                if f.qualifiers.is_unsafe {
-                    return Err(meta_err(
-                        &format!("unsafe function `{name}` cannot be evaluated at compile time"),
-                        span,
-                    ));
-                }
                 for param in &f.params {
                     if !is_meta_compatible_type(&param.node.type_.node) {
                         return Err(meta_err(
@@ -1817,7 +1811,6 @@ fn eval_meta_stmt(
         | Stmt::Match { .. }
         | Stmt::Select { .. }
         | Stmt::With { .. }
-        | Stmt::Unsafe { .. }
         | Stmt::NamedScope { .. }
         | Stmt::OnError { .. }
         | Stmt::Snapshot { .. }
@@ -2279,7 +2272,6 @@ fn substitute_stmt(stmt: &mut Stmt, env: &FxHashMap<String, MetaValue>, type_env
             }
             substitute_block(body, env, type_env);
         }
-        Stmt::Unsafe { body } => substitute_block(body, env, type_env),
         Stmt::NamedScope { body, .. } => substitute_block(body, env, type_env),
         Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
             substitute_expr(condition, env, type_env);
@@ -3268,7 +3260,7 @@ fn eval_delayed_expr(
 
 /// Evaluate and splice out all `Stmt::MetaIf`/`Stmt::MetaFor` nodes in a block.
 /// Cheap recursive scan: does `block` (or any nested block reachable via
-/// `Stmt::If`/`While`/`For`/`Loop`/`Match`/`Select`/`With`/`Unsafe`/`NamedScope`/
+/// `Stmt::If`/`While`/`For`/`Loop`/`Match`/`Select`/`With`/`NamedScope`/
 /// `MetaIf`/`MetaFor`/`MetaMatch`/`MetaWhile`) contain any "delayed meta"
 /// statement (`Stmt::Meta*`) or `MatchItem::MetaFor`? Used at the three
 /// `evaluate_delayed_meta_block` call sites (non-generic fn body, inherent
@@ -3300,7 +3292,7 @@ fn stmt_has_delayed_meta(stmt: &Stmt) -> bool {
             block_has_delayed_meta(body)
                 || else_body.as_ref().map_or(false, block_has_delayed_meta)
         }
-        Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+        Stmt::Loop { body } | Stmt::NamedScope { body, .. } => {
             block_has_delayed_meta(body)
         }
         Stmt::With { body, .. } => block_has_delayed_meta(body),
@@ -3706,7 +3698,7 @@ fn recurse_delayed_meta_in_stmt(
                 evaluate_delayed_meta_block(eb, ctx, errors);
             }
         }
-        Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+        Stmt::Loop { body } | Stmt::NamedScope { body, .. } => {
             evaluate_delayed_meta_block(body, ctx, errors);
         }
         Stmt::Match { arms, else_arm, .. } => {

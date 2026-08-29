@@ -1,0 +1,31 @@
+# D50 (2026-08-28): `unsafe` is REMOVED from the language. With the reserved
+# keyword gone, `unsafe:` lexes as an identifier and lands on the NAMED SCOPE
+# path — the reinterpretation the ruling accepts rather than diagnoses (adding
+# a migration diagnostic would re-reserve the word the owner ruled must go).
+#
+# THIS FIXTURE IS THE DISCRIMINATOR, and its stdout ORDER is the whole point.
+# The old `Stmt::Unsafe` arm called `lower_block_scoped`, which opens NO drop
+# scope, so a local declared inside the block was dropped at FUNCTION exit.
+# A named scope calls `lower_named_scope`, which pushes a drop scope and emits
+# the drops at BLOCK exit. So this program's output changes:
+#
+#   pre-D50  : in block / after block / drop inner   <- drop LAST (function exit)
+#   post-D50 : in block / drop inner / after block   <- drop at BLOCK exit
+#
+# RED-verified against the pre-removal compiler built from f3feea79, which
+# printed the first ordering. This is also what makes
+# `docs/language-reference.md`'s claim that the block "compiles identically to
+# a normal block" TRUE — by removal, the promise the implementation never kept.
+struct Resource:
+    String name
+
+equip Resource with Drop:
+    void drop(!self):
+        String n = self.name
+        print(f"drop {n}")
+
+void main():
+    unsafe:
+        Resource r = Resource("inner")
+        print(f"in block {r.name}")
+    print("after block")

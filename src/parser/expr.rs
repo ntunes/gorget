@@ -236,7 +236,7 @@ fn stmt_contains_it(stmt: &Stmt) -> bool {
                 || block_contains_it(body)
                 || else_body.as_ref().is_some_and(block_contains_it)
         }
-        Stmt::Loop { body } | Stmt::Unsafe { body } => block_contains_it(body),
+        Stmt::Loop { body } => block_contains_it(body),
         Stmt::If { condition, then_body, elif_branches, else_body } => {
             contains_it(condition)
                 || block_contains_it(then_body)

@@ -60,7 +60,7 @@ const EXCLUDE: &[&str] = &[
     "liveness_metafor_match_arm.gg",
     "liveness_on_error_assign_kill.gg",
     "liveness_on_error_vardecl_kill.gg",
-    "liveness_use_inside_unsafe_scope.gg",
+    "liveness_use_inside_named_scope.gg",
     "liveness_use_inside_with_block.gg",
     "liveness_use_inside_assert_return.gg",
     "deadwrite_ok_atomic_add.gg",

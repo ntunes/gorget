@@ -227,7 +227,7 @@ fn substitute_stmt_types(stmt: &mut Spanned<Stmt>, subs: &[(String, Type)]) {
                 substitute_block_types(eb, subs);
             }
         }
-        Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+        Stmt::Loop { body } | Stmt::NamedScope { body, .. } => {
             substitute_block_types(body, subs);
         }
         Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
