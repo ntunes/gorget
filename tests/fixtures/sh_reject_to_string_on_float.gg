@@ -1,0 +1,32 @@
+# GRADUATED from `known_gaps/` (R47 Track D1) — this was
+# `known_gaps/sh_to_string_on_float_overaccepted.gg`, wired `#[ignore]`d
+# asserting the reject. The self-host now rejects it, so the pin is LIVE.
+#
+# `to_string()` on a `float` is a Core #10 lower-or-reject cell: the method does
+# not exist on any numeric receiver. It is absent from Rust gg's builtin-method
+# oracle (`builtin_method_type`'s numeric/bool arm is exactly
+# `hash`/`debug`/`display`/`mod`) and from the IR `GORGET_STRING_VIEW` protocol.
+#
+# WHAT THIS PINS, on the SELF-HOST lane specifically: the self-host used to
+# ACCEPT this program off a NAME LIST with no receiver check, then emit C that
+# would not compile — `incompatible types when assigning to type 'Str' from type
+# 'int'`, a `Str` destination minted from the method NAME while the value is the
+# raw numeric payload. Rust gg has always rejected it, so a Rust-lane pin would
+# be green today and would pin nothing (Core #12).
+#
+# The 3-lane verdict pin (C / LLVM / self-host) is
+# `spectests/run/reject_no_method_on_float.gg`; this fixture additionally
+# asserts that the self-host driver emits NO C at all rather than rejecting late.
+#
+# ⚠ WHAT THIS FIXTURE DOES *NOT* COVER — the RECEIVER/ROOT-SHAPE axis. The
+# receiver here is a bare IDENTIFIER, and that is the only cell of that axis the
+# reject reaches. `mk().to_string()`, `h.v.to_string()`, `v[0].to_string()` and
+# `f.mod(2.0).to_string()` on the same `float` are all still ACCEPTED (the last
+# one link-fails on an invented `int64_t__to_string`). Named rather than left
+# implicit, per Core #12; repro and enumeration in
+# known_gaps/sh_reject_misses_computed_receiver.gg, filed as todo/t0740.
+#
+# CORRECT behaviour: `gg check` REJECTS this program on every lane.
+void main():
+    float f = 3.0
+    print(f.to_string())

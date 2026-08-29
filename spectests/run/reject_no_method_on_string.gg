@@ -1,0 +1,33 @@
+#!spectest
+# mode: run
+# adjudicator: production-v1
+# since: spec-v0.1
+# features: []
+# doc: |
+#   The NON-FLOAT cell of the same class as reject_no_method_on_float.gg, and
+#   the one that shows the axis is RECEIVER KIND rather than "numbers are
+#   special": `to_string` is not a method of `String` either. The String method
+#   table (`src/semantic/typecheck.rs::builtin_method_type`'s `"str" | "String"`
+#   arm) carries `debug`/`display` for rendering and `to_upper`/`trim`/`join`/…
+#   for text; `to_string` is in neither it nor the IR `GORGET_STRING_VIEW`
+#   protocol. A user type gets `.to_string()` by writing an `equip` block, which
+#   resolves through the trait registry and is unaffected by this reject.
+#
+#   Pinned as its own cell because a fixture set that samples one value of a
+#   typed axis is an anecdote: the float row could pass for a numeric-only
+#   reason (a numeric payload in a `Str` slot), while this row can only pass if
+#   the admission decision is the receiver's METHOD TABLE. The self-host
+#   ACCEPTED this program and CC-failed on it with the same `'Str' from type
+#   'int'` mint as the float row.
+#
+#   adjudicator: production-v1 — same reason as the float row: `to_string` is
+#   outside ggdef's phase-0 elaborate subset, so that lane records GGDEF-SKIP.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_NoMethodFound
+#!end
+
+void main():
+    String s = "abc"
+    print(s.to_string())

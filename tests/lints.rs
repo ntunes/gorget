@@ -6539,65 +6539,117 @@ fn self_host_cow_write_walkers_share_one_root_peel() {
 /// `gorget_string_free` invariant, `test_method_chaining` / `test_option_chaining`
 /// / `leak_cow_boundaries` CC-FAIL, `shared_stress{,_yield}`,
 /// `string_conversions`). A first-write-wins variant regressed the same ten, so
-/// it is not re-inference clobbering a good value. The cause is that the
-/// ladder's OTHER arms answer from the METHOD NAME ALONE without checking the
-/// receiver — a live filed defect (`todo/t0712`) — and the lowerer reads
-/// `expr_link_types` FIRST, so publishing a guess OVERRIDES a fallback that was
+/// it is not re-inference clobbering a good value. The lowerer reads
+/// `expr_link_types` FIRST, so a published GUESS OVERRIDES a fallback that was
 /// getting it right. Publishable set = RESOLVED, never GUESSED.
 ///
-/// So a future widening is not a refactor, it is gated on `t0712`: gate the
-/// ladder on the receiver type, THEN the single-exit publish becomes safe. This
-/// lint deliberately does NOT demand the wrapper shape — demanding it would
-/// demand the regression.
+/// ⚠ **A RECEIVER GATE ON THE LADDER DOES NOT MAKE THE SINGLE-EXIT PUBLISH
+/// SAFE.** Earlier revisions of this docstring prescribed exactly that, and the
+/// prescription is WRONG BY CONSTRUCTION: the arms that break the publish are
+/// NOT the ones a gate on the String-returning name list can reach. The
+/// `clone`/`copy`/`sorted`/`reversed`/`filter` arm answers with the RECEIVER's
+/// type (the correct *typechecker* answer, `Vector[int]`) where the lowerer
+/// needs the *lowering* type (`FilterIter`); `len`/`count`, `split` and the
+/// `slice`/`substr` arm each answer from their own arm. None of them is on the
+/// gated list, so gating it cannot change what any of them publishes — and
+/// `iterator_lazy_chain`, the `filter`/lazy row, must still regress. The
+/// typechecker-type-vs-lowering-type conflict is the mechanism, and it is a
+/// different axis from receiver typing. Re-verify before believing otherwise:
+/// revert `infer.gg` to a wrapper that publishes for every EMethodCall and run
+/// `cargo test --test integration --release self_host_runtime`.
 ///
-/// ⚠ THE BOUNDARY IS PINNED AS A **COUNT**, NOT AS A LIST OF TEMPTING NAMES.
-/// The first revision of this lint named the two arms it thought most likely to
-/// grow a publish (`len`/`count`, `to_string`/`to_str`) and checked only those.
-/// A publish planted in the `slice`/`substr` arm — an arm `todo/t0712` names in
-/// the same breath — sailed past it GREEN. A guard that green-lights the very
-/// class it exists to retire is worse than none (Core #15e Q2), because it
-/// reads as enforcement on the dashboard. The pin is now the TOTAL number of
-/// `expr_link_types` publishes in `infer.gg`: exactly three, so a FOURTH
-/// anywhere in the ladder, spelled any way, in any arm, goes red and is forced
-/// through review. The two named checks survive underneath it only for their
-/// sharper message; they are no longer the boundary.
+/// This lint deliberately does NOT demand the wrapper shape — demanding it
+/// would demand the regression.
+///
+/// ⚠ THE BOUNDARY IS PINNED AS A **COUNT AND BY ARM IDENTITY**, NOT AS A LIST
+/// OF TEMPTING NAMES. The first revision named the two arms it thought most
+/// likely to grow a publish (`len`/`count`, `to_string`/`to_str`) and checked
+/// only those; a publish planted in the `slice`/`substr` arm sailed past it
+/// GREEN. A guard that green-lights the very class it exists to retire is worse
+/// than none (Core #15e Q2), because it reads as enforcement on the dashboard.
+///
+/// The second revision pinned the TOTAL — exactly three `expr_link_types`
+/// publishes — so a FOURTH anywhere goes red. That still left a hole, and R47
+/// Track D1 demonstrated it: a SWAP keeps the count at three. Move the registry
+/// publish into a name-guessing arm and the count never moves; and because the
+/// named-arm checks underneath used `if let Some(at) = src.find(guess)`, a
+/// needle that DRIFTED (as this round's receiver gate made it drift) made the
+/// assert SILENTLY SKIP. Measured: swap + intact needle → RED; swap + drifted
+/// needle → GREEN, with the planted publish shipped.
+///
+/// So all THREE blessed publishes are now anchored BY ARM IDENTITY with
+/// `unwrap_or_else(panic!)` — a drifted anchor is RED, never a skip — the
+/// name-guessing arms are checked with anchors that panic the same way, and the
+/// count survives underneath as a redundant backstop that catches a FOURTH
+/// publish spelled in an arm nobody anchored. Neither half is the whole guard.
 #[test]
 fn self_host_infer_bool_arms_publish_chain_link() {
     let src = fs::read_to_string("tests/fixtures/self_host_typechecker/infer.gg")
         .expect("infer_bool_arms_publish: infer.gg not found");
 
-    // The two arms of the class, each identified by its own name-set test line.
-    let arms: [(&str, &str); 2] = [
+    // ── ALL THREE BLESSED PUBLISHES, ANCHORED BY ARM IDENTITY ──────────────
+    // Each row is (what, anchor spelling, the arm's own `return`, the publish
+    // it must carry). Anchoring all three — not just the bool pair — is what
+    // makes the SWAP go red: moving the registry publish into a name-guessing
+    // arm keeps the total at three, so the count alone cannot see it.
+    //
+    // ⚠ EVERY LOOKUP BELOW PANICS ON A MISS. A drifted anchor must be RED, not
+    // skipped. The earlier `if let Some(at) = src.find(...)` shape skipped
+    // silently, and R47 Track D1 measured a planted publish shipping GREEN
+    // behind exactly that skip.
+    //
+    // The window is bounded by the arm's OWN `return`, not by "the next line
+    // that looks like an arm head" — that terminator was a source-shape guess,
+    // and when an arm head changed shape the window silently swallowed the
+    // NEXT arm and fired on the wrong needle.
+    let blessed: [(&str, &str, &str, &str); 3] = [
+        (
+            "registry path (a RESOLVED type, not a name guess)",
+            "types.expr_types.put(span_start, reg_ret)",
+            "return reg_ret",
+            "types.expr_link_types.put(sexpr.span.end, reg_ret)",
+        ),
         (
             "predicate arm (is_empty/contains/starts_with/…)",
             "if method_name == \"is_empty\" or method_name == \"contains\"",
+            "return types.bool_id",
+            "types.expr_link_types.put(sexpr.span.end, types.bool_id)",
         ),
         (
             "tag-check arm (is_some/is_none/is_ok/is_error)",
             "if method_name == \"is_some\" or method_name == \"is_none\"",
+            "return types.bool_id",
+            "types.expr_link_types.put(sexpr.span.end, types.bool_id)",
         ),
     ];
-    for (what, needle) in arms {
-        let at = src.find(needle).unwrap_or_else(|| {
+    for (what, anchor, ret_spelling, publish) in blessed {
+        let at = src.find(anchor).unwrap_or_else(|| {
             panic!(
                 "infer_bool_arms_publish: the {what} is gone from infer.gg (looked for \
-                 `{needle}`). Both bool-returning builtin arms must exist AND publish the link \
-                 type; if the arm moved, update this lint to follow it — do not delete the pin."
+                 `{anchor}`). All three blessed publish sites must exist AND publish the link \
+                 type; if the site moved, update this lint to follow it — do not delete the pin. \
+                 An anchor that drifts must go RED here: this lint used to skip a missing needle \
+                 silently, and a planted publish shipped green behind that skip."
             )
         });
-        // The publish must sit between the test and its `return types.bool_id`.
+        // The publish must sit between the anchor and the site's own `return`.
         let tail = &src[at..];
-        let ret = tail.find("return types.bool_id").unwrap_or_else(|| {
-            panic!("infer_bool_arms_publish: no `return types.bool_id` after the {what}")
+        let ret = tail.find(ret_spelling).unwrap_or_else(|| {
+            panic!(
+                "infer_bool_arms_publish: no `{ret_spelling}` after the {what}. The window this \
+                 lint reads is bounded by that return; if the site was restructured, re-anchor \
+                 the lint rather than widening the window."
+            )
         });
         let body = &tail[..ret];
         assert!(
-            body.contains("types.expr_link_types.put(sexpr.span.end, types.bool_id)"),
+            body.contains(publish),
             "the {what} in infer.gg no longer publishes `expr_link_types[span.end]`.\n\n\
-             Its answer is `bool` REGARDLESS of the receiver, so it is one of the only two \
-             ladder arms that can safely publish — and it must, or a chain whose OUTER link is \
-             that method reads the CONTENDED `expr_types[span.start]` slot and is typed with its \
-             RECEIVER. That is a CC-FAIL, not a slow path.\n\
+             The blessed set is RESOLVED-not-GUESSED: the registry path (whose answer came from \
+             method resolution) and the two arms whose answer is `bool` REGARDLESS of the \
+             receiver. Each must publish, or a chain whose OUTER link is that method reads the \
+             CONTENDED `expr_types[span.start]` slot and is typed with its RECEIVER. That is a \
+             CC-FAIL, not a slow path.\n\
              Behavioural counterparts: tests/fixtures/chain_link_bool_builtin.gg (String half) \
              and chain_link_set_predicate.gg (Set half). Restore the `put`, never the fixture's \
              expectation."
@@ -6605,18 +6657,15 @@ fn self_host_infer_bool_arms_publish_chain_link() {
     }
 
     // ── THE BOUNDARY, TOTAL ────────────────────────────────────────────────
-    // The blessed publish set is small and exact, so pin its SIZE rather than a
-    // hand-list of the arms someone might add one to (which was tried, and a
-    // planted publish in the `slice`/`substr` arm stayed GREEN — see the
-    // docstring). Any FOURTH publish, in any arm, spelled any way, goes red.
+    // A redundant backstop UNDERNEATH the three arm-identity anchors above: it
+    // catches a FOURTH publish planted in an arm nobody anchored (which is how
+    // a publish in the `slice`/`substr` arm once sailed past a name-list-only
+    // guard). It cannot see a SWAP — that is what the anchors are for. Keep
+    // both: neither half catches the other's class.
     //
-    //   infer.gg:677  the registry path — a RESOLVED type, not a name guess
-    //   infer.gg:749  the bool-predicate arm (is_empty/contains/starts_with/…)
-    //   infer.gg:771  the tag-check arm      (is_some/is_none/is_ok/is_error)
-    //
-    // Line numbers drift and are here only as a reading aid; the COUNT is what
-    // is pinned, and the two per-arm asserts above pin WHICH two of the three
-    // are the bool pair.
+    //   the registry path       — a RESOLVED type, not a name guess
+    //   the bool-predicate arm  (is_empty/contains/starts_with/…)
+    //   the tag-check arm       (is_some/is_none/is_ok/is_error)
     const BLESSED_PUBLISH_SITES: usize = 3;
     let publishes = src.matches("types.expr_link_types.put(").count();
     assert_eq!(
@@ -6624,41 +6673,212 @@ fn self_host_infer_bool_arms_publish_chain_link() {
         "infer.gg has {publishes} `expr_link_types` publish site(s); the blessed set is \
          exactly {BLESSED_PUBLISH_SITES} — the registry path plus the two bool-returning \
          arms.\n\n\
-         MORE than that: a ladder arm grew a publish. Every OTHER arm in that ~26-return \
-         ladder answers from the METHOD NAME without checking the receiver (todo/t0712), \
-         and `lower_types.gg:lookup_expr_gir_type` reads `expr_link_types` FIRST — so a \
-         published guess OVERRIDES a fallback that was getting it right. Measured: \
-         publishing from those arms regressed TEN `self_host_runtime` rows \
-         (`iterator_lazy_chain` double-free, `unicode_strings` printing `80` for `é`, two \
-         `gorget_string_free` invariant trips, three CC-FAILs, …). Fix t0712's receiver \
-         gate FIRST; then this boundary can move and the single-exit publish becomes the \
-         right shape.\n\n\
+         MORE than that: a ladder arm grew a publish. The arms below the primitive-receiver \
+         gate still answer from the METHOD NAME, and `lower_types.gg:lookup_expr_gir_type` \
+         reads `expr_link_types` FIRST — so a published guess OVERRIDES a fallback that was \
+         getting it right. Measured: publishing from those arms regressed TEN \
+         `self_host_runtime` rows (`iterator_lazy_chain` double-free, `unicode_strings` \
+         printing `80` for `é`, two `gorget_string_free` invariant trips, three CC-FAILs, …). \
+         ⚠ A RECEIVER GATE DOES NOT UNBLOCK THIS: the arms that break the publish — \
+         `clone`/`copy`/`sorted`/`reversed`/`filter` (which answers the RECEIVER's type where \
+         the lowerer needs the LOWERING type), `len`/`count`, `split`, `slice`/`substr` — are \
+         not on any gated name list, so gating one cannot change what they publish. \
+         Re-verify before widening: revert infer.gg to a wrapper that publishes for every \
+         EMethodCall and run `cargo test --test integration --release self_host_runtime`.\n\n\
          FEWER than that: a publish was deleted. A chain whose outer link loses its \
          publish reads the CONTENDED `expr_types[span.start]` slot and is typed with its \
          RECEIVER — a CC-FAIL, not a slow path. Restore it; never the fixture's \
          expectation."
     );
 
-    // Named-arm checks, kept UNDERNEATH the total count for their sharper
-    // message on the two most tempting arms. Illustrative, not the boundary.
+    // Named-arm NEGATIVE checks, for their sharper message on the two most
+    // tempting arms. ⚠ These ANCHOR-OR-PANIC like the three above: the earlier
+    // `if let Some(at) = src.find(...)` shape skipped silently when a needle
+    // drifted, and this round's receiver gate is exactly the kind of edit that
+    // makes one drift.
     for guess in [
         "if method_name == \"len\" or method_name == \"count\":",
-        "if method_name == \"to_string\" or method_name == \"to_str\"",
+        "if method_name == \"to_lower\" or method_name == \"to_upper\"",
     ] {
-        if let Some(at) = src.find(guess) {
-            let tail = &src[at..];
-            let stop = tail[1..].find("\n            if method_name").map(|o| o + 1).unwrap_or(tail.len());
-            assert!(
-                !tail[..stop].contains("expr_link_types.put"),
-                "a NAME-GUESSING ladder arm (`{guess}`) grew an `expr_link_types` publish.\n\n\
-                 That arm answers from the method NAME without checking the receiver \
-                 (todo/t0712), and the lowerer reads `expr_link_types` FIRST — so the guess \
-                 OVERRIDES a fallback that was getting it right. Measured: publishing from these \
-                 arms regressed ten `self_host_runtime` rows (double-free, `é` printing as `80`, \
-                 three CC-FAILs, …). Fix t0712 first; then this boundary can move and the \
-                 single-exit publish becomes the right shape."
-            );
+        let at = src.find(guess).unwrap_or_else(|| {
+            panic!(
+                "infer_bool_arms_publish: the name-guessing arm `{guess}` is gone from \
+                 infer.gg. If the arm was renamed or its name set changed, re-point this \
+                 needle at the new spelling — do not delete the check. A needle that drifts \
+                 must go RED here; skipping it silently is how a planted publish ships green."
+            )
+        });
+        let tail = &src[at..];
+        // Bound the window by the arm's OWN `return`, never by guessing at the
+        // shape of the next arm head.
+        let stop = tail.find("\n                return ").map(|o| o + 1).unwrap_or_else(|| {
+            panic!(
+                "infer_bool_arms_publish: no `return` found in the body of `{guess}`. \
+                 Re-anchor this check rather than letting its window run past the arm."
+            )
+        });
+        assert!(
+            !tail[..stop].contains("expr_link_types.put"),
+            "a NAME-GUESSING ladder arm (`{guess}`) grew an `expr_link_types` publish.\n\n\
+             That arm answers from the method NAME, and the lowerer reads `expr_link_types` \
+             FIRST — so the guess OVERRIDES a fallback that was getting it right. Measured: \
+             publishing from these arms regressed ten `self_host_runtime` rows (double-free, \
+             `é` printing as `80`, three CC-FAILs, …), with and without a receiver gate on the \
+             String-returning list. The publishable set is RESOLVED, never GUESSED."
+        );
+    }
+}
+
+/// CITED-FIXTURE-PATH ratchet for the SELF-HOST sources (Core #6 — turn the
+/// recurring failure into an executable check; Core #14 — a citation naming a
+/// file that does not exist reads as evidence while pointing at nothing).
+///
+/// The self-host `.gg` sources cite fixture paths in their comments — "minimal
+/// repro: `known_gaps/foo.gg`", "behavioural counterpart:
+/// `tests/fixtures/bar.gg`". `cited_lint_names_resolve_to_real_tests` already
+/// pins the sibling class for `tests/lints.rs` names and
+/// `doc_source_citations_resolve` pins it for `docs/`. `.gg` COMMENTS had no
+/// such guard, and nothing else in the build reads them.
+///
+/// Measured (R47 Track D1): a repro was written under `known_gaps/`, then
+/// RELOCATED and renamed before the commit — and the citation naming it was not
+/// followed. It shipped pointing at a path that never existed in the tree, 64
+/// lines above a second citation that spelled the SAME fixture correctly. Every
+/// gate was green; a reviewer caught it by hand, which is the part that does
+/// not scale.
+///
+/// Paths are accepted whether written relative to the repo root
+/// (`tests/fixtures/x.gg`) or to the fixtures dir (`known_gaps/x.gg`).
+#[test]
+fn self_host_cited_fixture_paths_resolve() {
+    fn cited_paths(s: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for prefix in ["tests/fixtures/", "known_gaps/"] {
+            let mut rest = s;
+            while let Some(at) = rest.find(prefix) {
+                let tail = &rest[at..];
+                if let Some(e) = tail.find(".gg") {
+                    let cand = &tail[..e + 3];
+                    // A GLOB is prose about a family ("the
+                    // `liveness/match_exhaustive_no_catchall_*.gg` fixtures"),
+                    // not a citation of one file — skip it rather than resolve
+                    // it, so the guard stays about the class it retires.
+                    if !cand.contains(char::is_whitespace) && !cand.contains('*') {
+                        out.push(cand.to_string());
+                    }
+                }
+                rest = &tail[prefix.len()..];
+            }
         }
+        out
+    }
+
+    let root = std::path::Path::new(".");
+    let mut checked = 0usize;
+    let mut broken: Vec<String> = Vec::new();
+    for d in fs::read_dir("tests/fixtures").expect("fixtures dir").filter_map(|e| e.ok()) {
+        let dp = d.path();
+        if !dp.is_dir() {
+            continue;
+        }
+        if !dp.file_name().unwrap().to_string_lossy().starts_with("self_host_") {
+            continue;
+        }
+        for f in fs::read_dir(&dp).expect("self-host dir").filter_map(|e| e.ok()) {
+            let fp = f.path();
+            if fp.extension().map_or(true, |e| e != "gg") {
+                continue;
+            }
+            let src = fs::read_to_string(&fp).expect("read .gg");
+            for cited in cited_paths(&src) {
+                checked += 1;
+                if !root.join(&cited).is_file()
+                    && !root.join("tests/fixtures").join(&cited).is_file()
+                {
+                    broken.push(format!("{} cites `{cited}`", fp.display()));
+                }
+            }
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "self_host_cited_fixture_paths_resolve scanned ZERO citations — the scan broke, not the \
+         tree. A guard that cannot fire is not evidence (Core #13)."
+    );
+    assert!(
+        broken.is_empty(),
+        "{} self-host comment(s) cite a fixture path that does not exist:\n  {}\n\n\
+         Either the fixture was renamed/relocated and the citation was not followed, or the \
+         repro was never committed. Fix the CITATION or commit the FIXTURE — do not delete the \
+         sentence, which is how a reader learns the claim has evidence behind it.",
+        broken.len(),
+        broken.join("\n  "),
+    );
+}
+
+/// PRIMITIVE-METHOD-TABLE drift guard (Core #6; the layering doc's own escape
+/// hatch — where two parallel lists must exist, make the build check they
+/// agree).
+///
+/// `self_host_typechecker/typecheck.gg`'s `string_prim_method_admitted` and
+/// `uint8_prim_method_admitted` are transcriptions of Rust gg's
+/// `builtin_method_type` arms (`src/semantic/typecheck.rs`: the
+/// `"str" | "String"` arm and the `"uint8"` arm). They decide what
+/// `reject_no_method_on_primitive` REFUSES, so a name that leaves the Rust arm
+/// without leaving the self-host copy is a stale accept, and a name ADDED to
+/// Rust without being mirrored is a FALSE REJECT of a valid program.
+///
+/// The transcription is unavoidable — the self-host is a separate
+/// implementation and cannot read Rust's tables — so the drift is pinned
+/// instead. The direction that matters most is the `uint8` arm: the self-host
+/// lexer calls these on a `byte` on the BOOTSTRAP path, so a missed name is a
+/// false reject of the compiler's own source.
+#[test]
+fn sh_primitive_method_tables_mirror_rust() {
+    let rust = fs::read_to_string("src/semantic/typecheck.rs").expect("typecheck.rs");
+    let sh = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("self-host typecheck.gg");
+
+    let uint8_at = rust
+        .find("\"uint8\" => match method {")
+        .expect("the `\"uint8\"` arm of builtin_method_type moved — re-anchor this lint");
+    let uint8_arm = &rust[uint8_at..(uint8_at + 600).min(rust.len())];
+    for n in [
+        "is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
+        "is_upper", "is_lower", "is_hex_digit", "is_ascii",
+        "to_upper", "to_lower",
+    ] {
+        assert!(
+            uint8_arm.contains(&format!("\"{n}\"")),
+            "`{n}` is in the self-host's uint8 table but NOT in Rust's `\"uint8\"` arm. One of \
+             the two moved; reconcile them rather than letting the reject drift."
+        );
+        assert!(
+            sh.contains(&format!("method_name == \"{n}\"")),
+            "Rust's `\"uint8\"` arm admits `{n}` but the self-host's \
+             `uint8_prim_method_admitted` does not. A `byte` receiver calling `{n}` would be \
+             REFUSED by `reject_no_method_on_primitive` although Rust ACCEPTS it — a false \
+             reject, and the self-host LEXER calls these on the bootstrap path."
+        );
+    }
+
+    // The five names R47 Track D1 dropped BECAUSE they are in neither Rust's
+    // oracle nor the IR GORGET_STRING_VIEW protocol. If one reappears in Rust's
+    // String arm, the self-host must mirror it and the reject fixtures flip.
+    let str_at = rust
+        .find("\"str\" | \"String\" => match method {")
+        .expect("the `\"str\" | \"String\"` arm moved — re-anchor this lint");
+    let str_arm = &rust[str_at..(str_at + 3000).min(rust.len())];
+    for n in ["to_string", "to_str", "concat", "trim_start", "trim_end"] {
+        assert!(
+            !str_arm.contains(&format!("\"{n}\"")),
+            "`{n}` reappeared in Rust's `\"str\" | \"String\"` arm. Track D1 dropped it from the \
+             self-host ladder BECAUSE it was absent from both that arm and the IR \
+             GORGET_STRING_VIEW protocol, and pinned the REJECT on it \
+             (spectests/run/reject_no_method_on_float.gg and _on_string.gg). Mirror it into \
+             `string_prim_method_admitted` and retire those pins in the same commit."
+        );
     }
 }
 

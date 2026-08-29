@@ -1,0 +1,36 @@
+#!spectest
+# mode: run
+# adjudicator: production-v1
+# since: spec-v0.1
+# features: []
+# doc: |
+#   A method that does not exist on a PRIMITIVE receiver is a check-time
+#   rejection, not something to lower — Core #10 lower-or-reject. `to_string` is
+#   not a method of `float`: it is absent from the builtin-method oracle
+#   (`src/semantic/typecheck.rs::builtin_method_type`, whose numeric/bool arm is
+#   exactly `hash`/`debug`/`display`/`mod`) and absent from the IR
+#   `GORGET_STRING_VIEW` protocol (`src/ir/lowering/builtins.rs`).
+#
+#   Accepting it is not benign. Before this pin the self-host ACCEPTED the
+#   program and emitted C that would not compile — `incompatible types when
+#   assigning to type 'Str' from type 'int'`, a `Str` destination minted from
+#   the method NAME while the value is the raw numeric payload. That is the
+#   silent-miscompile class the reject exists to close, and it is why the
+#   verdict is pinned on all three production lanes rather than on the one that
+#   already had it right.
+#
+#   adjudicator: production-v1 — `to_string` appears nowhere in ggdef's
+#   `elaborate`, so its builtin arm-picker falls to the "outside the phase-0
+#   subset" catch-all and the ggdef run-surface lane records GGDEF-SKIP rather
+#   than MATCH. `ggdef gen` therefore cannot own this expect. The subset gap is
+#   filed. The C, LLVM and self-host production lanes all affirm the reject at
+#   check time.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_NoMethodFound
+#!end
+
+void main():
+    float f = 3.0
+    print(f.to_string())

@@ -1,0 +1,51 @@
+# R47 Track D1 — the ACCEPT side of the primitive-receiver reject, on the
+# SELF-HOST lane. The other half of Core #13's "a gate that fires on everything
+# is no more evidence than one that never fires".
+#
+# ⚠ NOT RED-VERIFIABLE, and it does not claim to be: every line here was green
+# before the reject landed and is green after. What it pins is the reject's
+# NEGATIVE space — the exact set a primitive receiver still admits — so that a
+# later tightening of `reject_no_method_on_primitive` cannot quietly refuse
+# valid programs. Break the fix in the over-rejecting direction (drop an arm
+# from `any_prim_method_admitted`, or delete the `equip`/registry escape) and
+# THIS goes red while the reject fixtures stay green.
+#
+# The cells, each a value of Rust gg's primitive method table:
+#   auto-derivable  — clone / debug / display  (exempted before admission)
+#   numeric arm     — mod
+#   String table    — trim / to_upper / join / len
+#   user `equip`    — a method equipped onto a PRIMITIVE receiver, which
+#                     resolves through the trait registry and must survive
+#
+# ⚠ ONE CELL IS MISSING AND IT IS A FILED GAP, NOT AN OMISSION: the static call
+# `int.parse("99")`, a type NAME in receiver position, cannot be sampled HERE
+# because an `equip int:` block in the same program makes `int.parse` link
+# against a user-method mangling that does not exist (`undefined reference to
+# int64_t__parse`) — on BOTH lanes, and with or without this round's reject.
+# Repro: `known_gaps/equip_on_primitive_shadows_static_parse.gg`. The static-call
+# cell is sampled without the `equip` block by
+# `spectests/run/` + the existing `parse_*` corpus, and this round verified the
+# reject does not touch it (`int.parse("99")` → `99`, self-host lane).
+
+equip int:
+    int doubled(self):
+        return self * 2
+
+void main():
+    int x = 21
+    float f = 7.5
+    String s = "  hi  "
+
+    print(x.clone())
+    print(x.debug())
+    print(f.display())
+    print(x.mod(4))
+    print(x.doubled())
+    print(s.trim())
+    print(s.trim().to_upper())
+    print(s.len())
+
+    Vector[String] parts = Vector[String]()
+    parts.push("a")
+    parts.push("b")
+    print(",".join(parts))

@@ -1,0 +1,33 @@
+# KNOWN GAP (R47 Track D1) — the cell the primitive-receiver reject deliberately
+# does NOT close, and the reason is worth reading before "fixing" it.
+#
+#   RUST gg   : REJECTS — `error[E_NoMethodFound]: no method `len` found on type
+#               `float``. This is the correct behaviour.
+#   SELF-HOST : ACCEPTS, compiles, runs, and prints a GARBAGE INTEGER
+#               (`281474220167352` on one run). Not a CC-FAIL — a silent
+#               wrong-answer miscompile, which is the worse half of the
+#               lower-or-reject class.
+#
+# WHY IT IS STILL OPEN. `reject_no_method_on_primitive`
+# (`self_host_typechecker/typecheck.gg`) refuses only a method that is NOBODY's
+# — absent from every primitive method table AND from the trait registry for
+# every type. `len` is on the String table, so the reject abstains.
+#
+# That abstention is a MEASURED soundness bound, not laziness. A per-receiver-
+# kind table would reject this AND would reject `generic_typearg_well_typed.gg`'s
+# `v.len()`, which Rust ACCEPTS: the self-host resolves that `v` to an unrelated
+# `int` match-arm binding that leaked past its arm, and BOTH avenues the reject
+# consults (the span-keyed resolution map and lexical scope lookup) read that
+# same broken resolution, so no amount of corroboration sees it. Refusing a
+# valid program is strictly worse than the over-acceptance already present, so
+# the reject abstains and this cell stays filed.
+#
+# ⇒ THE BLOCKER IS THE RESOLUTION DEFECT, NOT THE REJECT. Fix the identifier
+# resolution and the reject can dispatch per receiver kind, at which point this
+# graduates. Do NOT close it by narrowing `any_prim_method_admitted` alone —
+# that re-introduces the false rejects measured in this round's census.
+#
+# CORRECT behaviour: `gg check` REJECTS this program on every lane.
+void main():
+    float f = 3.0
+    print(f.len())

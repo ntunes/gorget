@@ -30342,8 +30342,10 @@ fn self_host_bootstrap() {
 // is green again, with the chain-link class retired by a parser-derived
 // discriminator rather than a costume-matching heuristic, and with the
 // `expr_link_types` publish extended to the SECOND bool-returning ladder arm —
-// its pair, and the only widening the ladder can safely carry until `t0712`
-// (name-list arms that never check the receiver) is fixed; and
+// its pair, and the only widening the ladder can safely carry until the
+// typechecker-type-vs-lowering-type conflict behind the ten-row regression is
+// resolved (a receiver gate does NOT unblock it — R47 Track D1 built one and
+// re-measured); and
 // the self-host's CoW prescan stopped missing mutations spelled through a
 // method-chain receiver — a live SIGSEGV
 // (`self_host_cow_rescue_mutation_through_getchain_receiver`) and, at the
@@ -56897,10 +56899,22 @@ fn fmt_output_reparses_corpus_wide() {
 //   and it regressed ten self_host_runtime rows. Publishable set = RESOLVED,
 //   never GUESSED. Both halves — the pair that must publish, and the total
 //   COUNT that must not grow — are pinned by
-//   `self_host_infer_bool_arms_publish_chain_link` (tests/lints.rs). The class
-//   fix that closes all five RED rows at once is t0712's receiver gate, after
-//   which the single-exit publish becomes safe; that is the round's found fix,
-//   named here so the fallback is a decision and not a default.
+//   `self_host_infer_bool_arms_publish_chain_link` (tests/lints.rs).
+//
+//   ⚠ A RECEIVER GATE ON THE NAME LIST IS **NOT** THE CLASS FIX. An earlier
+//   version of this note said it closed all five RED rows at once. R47 Track D1
+//   BUILT the gate and MEASURED it: it closes ZERO of them — all five fail
+//   identically, byte-for-byte, with and without it. It is false by
+//   construction too: none of the five methods is on the gated list. `split`
+//   and `len`/`count` have their own arms, `keys` and `get` are already
+//   receiver-gated (and already answer correctly), and `bytes` has NO arm at
+//   all. What breaks them is that those arms never PUBLISH, so the lowerer
+//   falls back to the contended `expr_types[span.start]` key — a publishing
+//   problem, not an admission problem. The real class fix has to reconcile the
+//   TYPECHECKER type with the LOWERING type (`infer.gg`'s
+//   `clone|copy|sorted|reversed|filter` arm answers `Vector[int]` where the
+//   lowerer needs `FilterIter`), which is a different axis; it is filed and
+//   starts at a scout, not at a brief.
 //
 // ── A THIRD AXIS, and it is what made the corpus BLIND to those five rows:
 //    RECEIVER KIND — is the chain's receiver a BUILTIN method call or a
@@ -57145,40 +57159,259 @@ fn known_gap_method_returning_callable_called_in_chain() {
     run_gg("known_gaps/method_returning_callable_called_in_chain.gg", "true");
 }
 
-/// KNOWN GAP — the SELF-HOST over-accepts `to_string()` on a `float` and then
-/// emits C that will not compile (`incompatible types when assigning to type
-/// 'Str' from type 'int'`). Rust gg is CORRECT here — it rejects with
-/// `E_NoMethodFound` — so this pin runs on the SELF-HOST lane; a Rust-lane
-/// `check_gg_fails` would pass vacuously and pin nothing.
+/// Assert the SELF-HOST driver REFUSES a fixture at check time — non-zero exit
+/// AND no emitted C. Shared by the primitive-receiver `E_NoMethodFound` net so
+/// the harness is written once; each caller spells its fixture path as a
+/// LITERAL.
 ///
-/// Asserts the correct behaviour: the self-host driver REFUSES the program
-/// (non-zero exit, no emitted C). This gap is also what makes the EAs cell of
-/// the postfix axis unreachable — a cast target with a real callable method is
-/// the only way to build that probe, and no numeric has one.
-#[test]
-#[ignore = "KNOWN GAP: the self-host accepts `to_string()` on non-String \
-receivers and CC-FAILs; Rust gg correctly rejects. Asserts the SH reject."]
-#[serial(self_host_lowerer_driver)]
-fn known_gap_sh_to_string_on_float_overaccepted() {
+/// ⚠ These pins run on the SELF-HOST lane on purpose. Rust gg has always
+/// rejected every one of them, so a `check_gg_fails` pin would be green today
+/// and would pin nothing (Core #12). The lagging lane is the one the assert must
+/// read. The three-lane VERDICT pins (C / LLVM / self-host) live in
+/// `spectests/run/reject_no_method_on_{float,string}.gg`; these add the stronger
+/// "emitted no C at all" property and widen the receiver-kind axis.
+fn assert_self_host_rejects(rel_fixture: &str, what: &str) {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
-    let fixture = manifest_dir
-        .join("tests/fixtures/known_gaps/sh_to_string_on_float_overaccepted.gg");
+    let fixture = manifest_dir.join("tests/fixtures").join(rel_fixture);
     let out = run_with_timeout(
         Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
-        "known_gap_sh_to_string_on_float_overaccepted",
+        rel_fixture,
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
         !out.status.success() && !stdout.contains("int main("),
-        "the self-host ACCEPTED `to_string()` on a `float` and emitted C for it. \
-         Rust gg rejects the same program with `E_NoMethodFound: no method \
-         `to_string` found on type `float``; the self-host admits the name from a \
-         NAME LIST in infer.gg with no receiver-type check, so it accepts a call \
-         it cannot lower (Core #10). exit={:?}",
+        "{rel_fixture}: the self-host ACCEPTED {what} and emitted C for it. Rust gg rejects \
+         the same program with `error[E_NoMethodFound]`. A method absent from the receiver's \
+         builtin table AND from the trait registry must be REFUSED at check time, not lowered \
+         into a runtime symbol nothing defines (Core #10 lower-or-reject). Chokepoint: \
+         `self_host_typechecker/typecheck.gg::reject_no_method_on_primitive`. exit={:?}",
         out.status.code(),
     );
+}
+
+/// R47 Track D1 — the primitive-receiver `E_NoMethodFound` net, on the SELF-HOST
+/// lane. GRADUATED from `known_gaps/sh_to_string_on_float_overaccepted.gg`,
+/// which was `#[ignore]`d asserting exactly this reject.
+///
+/// RED-verified against the pre-fix driver: it ACCEPTED the program and emitted
+/// C that CC-failed with `incompatible types when assigning to type 'Str' from
+/// type 'int'` — a `Str` destination minted from the method NAME while the value
+/// is the raw numeric payload.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_to_string_on_float() {
+    assert_self_host_rejects(
+        "sh_reject_to_string_on_float.gg",
+        "`to_string()` on a `float`",
+    );
+}
+
+/// Sibling cell on the RECEIVER-KIND axis: `bool`. The float row alone could
+/// pass for a numeric-only story; this one only passes if the decision is the
+/// receiver's method TABLE rather than the method's NAME. Same RED-verify
+/// (pre-fix: accepted, then the identical `'Str' from type 'int'` CC-FAIL).
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_to_string_on_bool() {
+    assert_self_host_rejects(
+        "sh_reject_to_string_on_bool.gg",
+        "`to_string()` on a `bool`",
+    );
+}
+
+/// The STRING-receiver cell, sampled in an F-STRING interpolation — the context
+/// the self-host types least reliably, so it is the cell most likely to regress
+/// in either direction. `primitive_bogus_method_fstring_error.gg` is an existing
+/// Rust-lane reject fixture (`primitive_method_str_removed_fstring_errors`'s
+/// sibling); pre-fix the self-host ACCEPTED it, so this pin is RED-verified.
+///
+/// The `String` + `to_string` cell proper is pinned across all three lanes by
+/// `spectests/run/reject_no_method_on_string.gg`.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_bogus_method_on_string_in_fstring() {
+    assert_self_host_rejects(
+        "primitive_bogus_method_fstring_error.gg",
+        "a bogus method on a `String` inside an f-string",
+    );
+}
+
+/// The INT-receiver cell, and the one that shows the class is not about
+/// `to_string` in particular: any name that is nobody's method is refused.
+/// `primitive_bogus_method_int_error.gg` is an existing Rust-lane reject fixture
+/// (`primitive_bogus_method_int_errors`); pre-fix the self-host ACCEPTED it, so
+/// this pin is RED-verified and the fixture's own claim ("an unknown method on
+/// ANY primitive must be a CLEAN type error") becomes true on both lanes.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_bogus_method_on_int() {
+    assert_self_host_rejects(
+        "primitive_bogus_method_int_error.gg",
+        "`.bogus()` on an `int`",
+    );
+}
+
+/// The REMOVED-METHOD cell: `.str()` was retired as a redundant deep-copy
+/// self-view accessor, and the reject is what keeps it retired. Pre-fix the
+/// self-host still accepted it, so the removal held on one lane only.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_removed_str_method_on_string() {
+    assert_self_host_rejects(
+        "primitive_method_str_removed_error.gg",
+        "the removed `.str()` on a `String`",
+    );
+}
+
+/// The ACCEPT side of the same gate — the negative control Core #13 asks for
+/// (a gate that fires on everything is no more evidence than one that never
+/// fires). Runs on the self-host lane and asserts the admitted set still works:
+/// auto-derivables, `mod`, the String table, and a method equipped onto a
+/// PRIMITIVE receiver.
+///
+/// ⚠ NOT RED-VERIFIABLE and does not claim to be — green before AND after
+/// (Core #12). It goes red only if the reject is later tightened in the
+/// OVER-rejecting direction, which is the failure mode the reject fixtures
+/// above cannot see.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_primitive_admitted_methods_still_run() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures/sh_primitive_admitted_methods_ok.gg");
+    let tmp_root = std::env::temp_dir()
+        .join(format!("gg_sh_prim_admitted_{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let outcome =
+        self_host_emit_cc_run(&driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "prim");
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    match outcome {
+        Ok(stdout) => assert_eq!(
+            stdout.trim_end(),
+            "21\n21\n7.5\n1\n42\nhi\nHI\n6\na,b",
+            "the admitted-method control changed answer on the self-host lane",
+        ),
+        Err(other) => panic!(
+            "the primitive-receiver reject refused (or broke) a program of ADMITTED methods \
+             ({other:?}). Rust gg runs it. Every line of that fixture is a cell of Rust's own \
+             primitive method table — an over-tightened `any_prim_method_admitted` or a lost \
+             `equip`/registry escape in `reject_no_method_on_primitive` is the first thing to \
+             check.",
+        ),
+    }
+}
+
+/// KNOWN GAP (R47 Track D1) — the cell the primitive-receiver reject
+/// deliberately does NOT close. The self-host accepts `3.0.len()`, compiles it,
+/// runs it, and prints a GARBAGE INTEGER; Rust gg rejects with
+/// `E_NoMethodFound`. The reject abstains because `len` is on the String table
+/// and the self-host's receiver typing is not trustworthy enough to dispatch per
+/// receiver kind — see the fixture header and
+/// `tests/fixtures/sh_match_arm_binding_shadow_shape.gg`.
+#[test]
+#[ignore = "KNOWN GAP: the self-host accepts `len()` on a `float` and prints a \
+garbage integer; Rust gg rejects. Blocked on the identifier-resolution defect \
+that forces the reject's admission test to be unioned. Asserts the SH reject."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_sh_len_on_float_silently_miscompiles() {
+    assert_self_host_rejects(
+        "known_gaps/sh_len_on_float_silently_miscompiles.gg",
+        "`len()` on a `float`",
+    );
+}
+
+/// KNOWN GAP (R47 Track D1, found by the output-review) — the RECEIVER/ROOT-SHAPE
+/// axis. `reject_no_method_on_primitive` fires only for a bare IDENTIFIER
+/// receiver, because its soundness filter corroborates the receiver's type by
+/// looking the NAME up lexically and a computed receiver has no name. All four
+/// non-identifier spellings of the same `float` receiver still slip through;
+/// this pins the sharpest, which does not merely mis-mint a slot but LINK-FAILS
+/// on `undefined reference to 'int64_t__to_string'` — the symbol invention the
+/// reject exists to stop. The other three cells are enumerated in the fixture
+/// header and in `todo/t0740`.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0740): the primitive-receiver reject only fires for \
+an IDENTIFIER receiver; a computed receiver still reaches the backend and \
+invents a runtime symbol. Asserts the SH reject."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_sh_reject_misses_computed_receiver() {
+    assert_self_host_rejects(
+        "known_gaps/sh_reject_misses_computed_receiver.gg",
+        "`to_string()` on a COMPUTED `float` receiver",
+    );
+}
+
+/// KNOWN GAP (R47 Track D1) — the NOMINAL-receiver cell of the same family the
+/// primitive reject closes: the self-host accepts `to_lower()` on a
+/// `Vector[String]` and CC-FAILs with the same `'Str' from type 'int'` mint.
+/// Rust gg rejects. Not folded into the primitive reject because Rust rejects
+/// the two receiver kinds from two different branches with different machinery
+/// — see the fixture header and `todo/t0746`.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0746): the self-host accepts a String method on a \
+`Vector[String]` and CC-FAILs; Rust gg rejects. Asserts the SH reject."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_sh_string_method_on_vector_overaccepted() {
+    assert_self_host_rejects(
+        "known_gaps/sh_string_method_on_vector_overaccepted.gg",
+        "`to_lower()` on a `Vector[String]`",
+    );
+}
+
+/// KNOWN GAP (R47 Track D1) — `hash` is auto-derivable and the oracle accepts it
+/// on a primitive, but NEITHER backend can lower it: both emit
+/// `undefined reference to int64_t__hash`. Both lanes agreeing on the wrong
+/// answer is a red flag, not a pass (Core #8). Asserts the intended behaviour:
+/// it compiles and is deterministic within a run.
+#[test]
+#[ignore = "KNOWN GAP: `hash()` on a primitive link-errors on BOTH lanes \
+(`undefined reference to int64_t__hash`) although the oracle accepts it. \
+Asserts that it compiles and runs."]
+fn known_gap_hash_on_primitive_undefined_symbol() {
+    run_gg("known_gaps/hash_on_primitive_undefined_symbol.gg", "true");
+}
+
+/// KNOWN GAP (R47 Track D1) — an `equip int:` block in the program breaks the
+/// STATIC call `int.parse(...)`: it is lowered as a user equip method on `int`,
+/// so both lanes link-error on `int64_t__parse`. Remove either feature and the
+/// program prints `99`.
+#[test]
+#[ignore = "KNOWN GAP: `equip int:` + `int.parse(...)` link-errors on BOTH lanes \
+(`undefined reference to int64_t__parse`). Asserts the intended `99`."]
+fn known_gap_equip_on_primitive_shadows_static_parse() {
+    run_gg("known_gaps/equip_on_primitive_shadows_static_parse.gg", "99");
+}
+
+/// SHAPE PIN for the typed `Thread[T].join() -> T` arm R47 Track D1 added.
+///
+/// ⚠ NOT RED-VERIFIABLE and does not claim to be (Core #12). The arm corrects
+/// the typechecker's answer — `join` previously fell through to the
+/// String-returning name list — but no shape was found where the wrong answer
+/// was observable: an `int` payload, a `Vector[int]` payload and a discarded
+/// result all behave identically on the pre-fix and post-fix drivers, because
+/// the lowerer reconstructs this link's type without consulting the
+/// typechecker. It is a tripwire on a currently-latent axis: a later change
+/// that makes the typechecker's answer load-bearing cannot silently
+/// reintroduce the String. See the fixture header for the measurements.
+#[test]
+fn sh_thread_join_returns_payload() {
+    run_gg("sh_thread_join_returns_payload.gg", "7");
+}
+
+/// SHAPE PIN for the self-host identifier-resolution defect R47 Track D1 filed:
+/// a `match` arm binding leaks past its arm and a LATER same-named local
+/// resolves to it. Green on every lane before and after — it is NOT a
+/// red-verified gap fixture and does not claim to be (Core #12). It is
+/// committed because it is the minimal shape of the defect that bounds
+/// `reject_no_method_on_primitive`'s admission test, and because fixing that
+/// defect must not change what this prints.
+#[test]
+fn sh_match_arm_binding_shadow_shape() {
+    run_gg("sh_match_arm_binding_shadow_shape.gg", "7\n1");
 }
 
 /// KNOWN GAP — the REFERENCE lags the self-host. Rust gg accepts `.is_none()`
@@ -57208,9 +57441,18 @@ fn known_gap_postfix_try_on_option_ices_resource_move() {
 
 // ── THE CHAIN-LINK RED CELLS: the ~23 ladder arms that do NOT publish
 //    `expr_link_types[span.end]`, over a USER-DEFINED receiver. All five are
-//    PRE-EXISTING (identical on a pristine `2d619258` driver) and all five are
-//    cited from `todo/t0712`, whose receiver gate is the class fix that closes
-//    them at once. Un-ignore and promote out of `known_gaps/` that round.
+//    PRE-EXISTING (identical on a pristine `2d619258` driver).
+//
+//    ⚠ THE CLASS FIX IS NOT A RECEIVER GATE ON THE NAME LIST. These five were
+//    filed under `todo/t0712` on the claim that gating it closed all five at
+//    once; R47 Track D1 built the gate and measured that it closes ZERO — every
+//    one fails identically with and without it. None of the five methods is on
+//    the gated list to begin with (`split` and `len` have their own arms,
+//    `keys`/`get` are already receiver-gated and already correct, `bytes` has no
+//    arm). What breaks them is that their arms never PUBLISH
+//    `expr_link_types[span.end]`, so the lowerer falls back to the contended
+//    `expr_types[span.start]` key. Their real fix is filed separately and starts
+//    at a scout; un-ignore and promote out of `known_gaps/` in THAT round.
 //
 //    ⚠ THESE RUN ON THE SELF-HOST LANE, NOT THROUGH `run_gg`. Rust gg is
 //    CORRECT on every one of them, so a `run_gg` pin would be GREEN today and
@@ -57321,8 +57563,9 @@ fn known_gap_chain_link_keys_on_dict_method_result() {
 /// local first is correct on both lanes, exactly as for the four CC-FAIL rows,
 /// so it is at minimum reached by the same contended-key path — but the
 /// downstream mechanism is a memory failure, not a mint mismatch, and is
-/// triaged on its own rather than assumed identical (Core #15e Q6). If it
-/// survives t0712's receiver gate, it earns its own filing.
+/// triaged on its own rather than assumed identical (Core #15e Q6). It DID
+/// survive R47 Track D1's receiver gate — SIGBUS, rc 135, unchanged — so it has
+/// earned its own filing and has one.
 #[test]
 #[ignore = "KNOWN GAP (todo/t0712): ordinary beginner code that Rust gg runs \
 correctly and the self-host SIGBUSes on (rc 135, no output)."]

@@ -34,7 +34,9 @@ from types import RTTuple, RTArray, RTSlice, RTError, RTVar, RTNever, RTRef, get
 from types import RTCallableTrait, RTMutCallableTrait, RTConsumeCallableTrait, RTBoxedCallable
 from resolve import ResolveContext
 from infer import infer_expr_type, infer_closure_return_type, default_op_carrier_inner_type, default_op_carrier_shape_equals
+from infer import prim_recv_name, is_string_prim_name
 from traits import build_trait_registry, resolve_method_full, resolve_method_by_name, MethodResolution, is_scalar_primitive_name, primitive_satisfies_trait
+from traits import intrinsic_resolve, find_method_index
 from traits import registry_has_method_generic_name
 from std.conv import int_to_str
 from diagnostic import Diagnostic, DkNonExhaustiveMatch, DkDerefNonBox, DkDefaultOpNonOptional, DkDefaultOpRhsTypeMismatch, DkMainThrowsNonInt, DkValueOutOfRange, DkStringIndexAssign, DkUnsupportedOperator, DkInvalidAssignTarget, DkBreakOutsideLoop, DkContinueOutsideLoop, DkReturnOutsideFunction, DkThrowInNonThrowingFunction, DkMissingFallibleMark, DkUnhandledThrows, DkInferredThrowsUnsupported, DkPositionalAfterNamed, DkRequiredAfterDefault, DkDoubleAwait, DkDuplicateDefinition, DkLocalBorrowBind, DkMoveWithoutOperator, DkBorrowConflict, DkTypeMismatch, DkNoMethodFound, DkAmpInOperandPosition, DkMoveInOperandPosition
@@ -3693,6 +3695,232 @@ void reject_wrong_receiver_combinator(int receiver_type, String method_name, Spa
     String msg = "`." + method_name + "()` on " + base_name + " is outside the phase-0 subset (" + hint + ")"
     ctx.diagnostics.push(Diagnostic.error(span, DkNoMethodFound(), msg))
 
+# ── Core #10 lower-or-reject: a method that does not exist on a PRIMITIVE
+# receiver. SH mirror of Rust gg's chokepoint in the EMethodCall arm of
+# `src/semantic/typecheck.rs` — the branch where the receiver is a concrete
+# primitive and no avenue resolved the method, whose own comment gives the
+# motivation: "reject cleanly instead of silently yielding error_id (which let
+# the LIR `gorget_str_{method}` name-concat fallback invent a bogus runtime
+# symbol → ugly C error or silent miscompile)".
+#
+# Both symptoms were live here. `3.0.to_string()` CC-failed with "incompatible
+# types when assigning to type 'Str' from type 'int'" — a String slot minted for
+# a numeric payload — and `3.0.len()` compiled, ran, and printed a garbage
+# integer. Rust gg rejects both with `E_NoMethodFound`. ⚠ THIS FUNCTION CLOSES
+# THE FIRST AND NOT THE SECOND; `any_prim_method_admitted` below says why, and
+# `known_gaps/sh_len_on_float_silently_miscompiles.gg` keeps the second open.
+#
+# The SH could not reject either from anywhere: its only other
+# `DkNoMethodFound` push lives in `reject_wrong_receiver_combinator`, which
+# `return`s for any receiver that is not RTDefined/RTGeneric, so a primitive
+# receiver was structurally unreachable from a rejection.
+#
+# ⚠ THIS IS A DIFFERENT CLASS from that function's ratified 9 one-sided
+# combinator/tag-check arms — an ABSENT method, not a method on the wrong side
+# of a two-sided pair — so it is its own function rather than a tenth arm.
+# `tests/lints.rs::sh_reject_wrong_receiver_combinator_arms_count` pins that set
+# at 9 and stays at 9.
+#
+# THE RECEIVER'S TYPE IS WHAT PUTS A CALL IN SCOPE (Layering rule 2): the
+# decision starts from the typed `RTPrimitive` read via `prim_recv_name`, never
+# from the method name in the abstract, and a non-primitive receiver is never
+# this function's business. The ADMISSION test within that scope is the UNION of
+# Rust gg's three primitive arms rather than the receiver's own — a measured
+# soundness bound spelled out at `any_prim_method_admitted`.
+
+# The `uint8` method table, mirroring Rust gg `builtin_method_type`'s `"uint8"`
+# arm name-for-name.
+bool uint8_prim_method_admitted(String method_name):
+    if method_name == "is_alpha" or method_name == "is_digit" or method_name == "is_alphanumeric" or method_name == "is_whitespace":
+        return true
+    if method_name == "is_upper" or method_name == "is_lower" or method_name == "is_hex_digit" or method_name == "is_ascii":
+        return true
+    if method_name == "to_upper" or method_name == "to_lower":
+        return true
+    return false
+
+# The `str` / `String` method table, mirroring Rust gg `builtin_method_type`'s
+# `"str" | "String"` arm name-for-name, grouped in that arm's own order so a
+# drift between the two is a one-line diff.
+#
+# ⚠ LAYERING NOTE, inherited from the Rust reject site: this oracle and the IR
+# `GORGET_STRING_VIEW` protocol (`src/ir/lowering/builtins.rs`) are two parallel
+# method lists that can drift, and a String method present in the protocol but
+# absent here is REJECTED by this function. A new String builtin lands in BOTH.
+bool string_prim_method_admitted(String method_name):
+    if method_name == "find" or method_name == "index_of":
+        return true
+    if method_name == "len" or method_name == "hash" or method_name == "count" or method_name == "byte_len" or method_name == "ord":
+        return true
+    if method_name == "contains" or method_name == "starts_with" or method_name == "ends_with" or method_name == "is_empty":
+        return true
+    # View returns — no allocation, answer `str`.
+    if method_name == "trim" or method_name == "strip" or method_name == "lstrip" or method_name == "rstrip" or method_name == "trim_left" or method_name == "trim_right":
+        return true
+    if method_name == "removeprefix" or method_name == "removesuffix" or method_name == "byte_slice" or method_name == "substring" or method_name == "slice":
+        return true
+    # Allocating returns — answer `String`.
+    if method_name == "to_upper" or method_name == "to_lower" or method_name == "upper" or method_name == "lower" or method_name == "clone":
+        return true
+    if method_name == "replace" or method_name == "repeat" or method_name == "join" or method_name == "pad_left" or method_name == "pad_right":
+        return true
+    if method_name == "debug" or method_name == "display" or method_name == "enumerate":
+        return true
+    if method_name == "byte_at" or method_name == "char_at" or method_name == "capacity":
+        return true
+    # Character-class predicates — the same set the `uint8` arm carries.
+    if uint8_prim_method_admitted(method_name):
+        return true
+    # String-builder mutators.
+    if method_name == "push" or method_name == "push_char" or method_name == "push_line" or method_name == "clear":
+        return true
+    if method_name == "split" or method_name == "lines" or method_name == "bytes" or method_name == "codepoints" or method_name == "chars":
+        return true
+    return false
+
+# The union of Rust gg's three primitive arms: the `str`/`String` table (which
+# subsumes `uint8`'s) plus the numeric/`bool` arm, whose whole content is
+# `hash`, `debug`, `display` (auto-derivable, exempted before this is consulted)
+# and `mod`.
+#
+# ⚠ UNIONED, NOT DISPATCHED ON THE RECEIVER'S OWN KIND — and that is a
+# deliberate SOUNDNESS BOUND, not the semantics. A per-kind table would reject
+# `3.0.len()`, which Rust does reject; it would ALSO reject
+# `generic_typearg_well_typed.gg`'s `v.len()`, which Rust ACCEPTS, because the
+# self-host resolves that `v` to an unrelated `int` match-arm binding that
+# leaked out of its arm (minimal shape: tests/fixtures/
+# sh_match_arm_binding_shadow_shape.gg — the binding wins over a LATER
+# same-named local). BOTH of this
+# function's avenues read that same broken resolution, so corroboration cannot
+# see it, and refusing a valid program is strictly worse than the
+# over-acceptance already present.
+#
+# So the rule is: reject only a name that is NOBODY's method. A wrongly-typed
+# receiver still calls a method from its REAL vocabulary, and if that vocabulary
+# overlaps any primitive's, this abstains. The cost is named and bounded —
+# `3.0.len()` stays accepted — and the bound tightens on its own once the
+# resolution defect is fixed.
+bool any_prim_method_admitted(String method_name):
+    if string_prim_method_admitted(method_name):
+        return true
+    return method_name == "mod"
+
+# Does ANY `equip` block or trait in the program declare a method by this name,
+# for ANY receiver type?
+#
+# The same soundness bound as `any_prim_method_admitted`, applied to user code
+# rather than to the builtin tables. `fmt_delimited_list_interior_comment.gg`
+# calls `b.addup(1, 2)` on a `Box2`, and the self-host answers `int` for `b`; a
+# receiver-scoped registry lookup misses (nothing named `addup` is registered
+# for `int`) and the call would be refused although the program is valid. A
+# method the program DEFINES SOMEWHERE is never "nobody's method", whatever the
+# receiver came back as.
+bool registry_declares_method_anywhere(TraitRegistry registry, String method_name):
+    for impl in registry.impls:
+        if find_method_index(impl.method_names, method_name) is Some(_ii):
+            return true
+    for tinfo in registry.traits:
+        if find_method_index(tinfo.method_names, method_name) is Some(_ti):
+            return true
+    return false
+
+# ⚠ THE RECEIVER TYPE MUST BE CORROBORATED BEFORE IT CAN DRIVE A REJECT.
+#
+# `infer_expr_type` answers an identifier out of `ctx.resolution_map`, which is
+# keyed on `span.start` — and some spans are SYNTHETIC. An f-string
+# interpolation's sub-expressions are parsed into a synthetic window, and the
+# EFString arm of `walk_expr_closures_inner` already documents that inference
+# there is unreliable (which is why it scopes its own inference to four
+# tag-check intrinsics rather than inferring every interpolation).
+#
+# MEASURED, not assumed: with a bare `RTPrimitive` test this reject refused 12
+# VALID programs across the fixture corpus — `char_methods.gg`'s `String c1`
+# read back as `int` inside `f"{c1.is_alphanumeric()}"`, and so did
+# `dataframe_basic.gg`'s Column, `tensor_basic.gg`'s Tensor and
+# `string_conversions.gg`'s `Option[int]`. The answer is not merely UNKNOWN
+# there, it is CONFIDENTLY WRONG, so "skip when the receiver is unresolved" does
+# not reach it.
+#
+# So the reject fires only where a SECOND, INDEPENDENT avenue agrees: lexical
+# scope lookup of the receiver's NAME. Two avenues that disagree mean the
+# span-keyed one landed on something else, and a reject built on it would refuse
+# a valid program.
+#
+# ⚠ THIS BOUNDS THE REJECT TO IDENTIFIER RECEIVERS, AND THAT IS AN AXIS, NOT A
+# DETAIL. RECEIVER/ROOT SHAPE is one of the axes Core #12 names, and the reject
+# samples exactly one of its cells. Measured on the four others, all of which
+# Rust REJECTS: `mk().to_string()` (method-call result), `h.v.to_string()`
+# (field access), `v[0].to_string()` (index) — each accepted and CC-failing with
+# the `'Str' from type 'int'` mint — and `f.mod(2.0).to_string()` (chained),
+# which LINK-fails on `undefined reference to 'int64_t__to_string'`, i.e. it
+# reaches the exact symbol invention this reject exists to stop.
+#
+# A computed receiver has no NAME to look up, so there is no second avenue and
+# the reject abstains rather than guess. Closing the other four cells needs a
+# corroboration story for computed receivers, or the underlying resolution
+# defect fixed so one avenue is trustworthy alone. Repro + the enumeration:
+# tests/fixtures/known_gaps/sh_reject_misses_computed_receiver.gg.
+#
+# ⚠ CORROBORATION IS NOT PROOF, and the second half of the bound lives in
+# `any_prim_method_admitted`. Both avenues read the SAME resolution, so when the
+# resolution itself is wrong they agree on the wrong answer — a `match` arm
+# binding leaking past its arm does exactly that
+# (`sh_match_arm_binding_shadow_shape.gg`). This filter kills the f-string half
+# of the class; the unioned admission table covers the rest.
+bool prim_recv_corroborated(SpannedExpr obj, int receiver_type, int scope_id, ScopeTable scopes, TypeTable types):
+    String inferred = prim_recv_name(receiver_type, types)
+    if inferred.len() == 0:
+        return false
+    match obj.expr:
+        case EIdentifier(recv_ident):
+            if scopes.lookup_from_scope(scope_id, recv_ident) is Some(recv_def):
+                DefInfo recv_d = scopes.get_def(recv_def)
+                String declared = prim_recv_name(recv_d.type_id, types)
+                if declared.len() == 0:
+                    return false
+                # Compare the primitive CATEGORY, not the raw TypeId: a
+                # `String` local is `owned_string_id` while inference commonly
+                # answers the `str` view, and both mean "the String method
+                # table" (mirroring Rust's `StringType | CStr => "String"`).
+                if is_string_prim_name(declared) and is_string_prim_name(inferred):
+                    return true
+                return declared == inferred
+            return false
+        else:
+            return false
+
+void reject_no_method_on_primitive(SpannedExpr obj, int receiver_type, String method_name, Span span, int scope_id, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
+    String prim_name = prim_recv_name(receiver_type, types)
+    if prim_name.len() == 0:
+        return
+    if not prim_recv_corroborated(obj, receiver_type, scope_id, scopes, types):
+        return
+    # Auto-derivable methods are intrinsic — every type has them and they may be
+    # synthesized at lowering time without appearing in any oracle. Exempted
+    # exactly as the Rust reject site exempts them.
+    if method_name == "clone" or method_name == "debug" or method_name == "display" or method_name == "hash":
+        return
+    if any_prim_method_admitted(method_name):
+        return
+    # Reject only once EVERY RESOLUTION AVENUE has missed. A user
+    # `equip int:` / `equip String with Writer:` block owns the name, and a
+    # built-in trait the primitive intrinsically satisfies (`int.add`,
+    # `str.display`) resolves through the registry — the same three avenues
+    # `infer_expr_type`'s registry path tries, in the same order. Mirrors Rust
+    # rejecting only in the branch where the builtin protocol, the trait
+    # registry and the closure-Option/Result path have all missed.
+    MethodResolution prim_res = resolve_method_full(receiver_type, method_name, scopes, &types)
+    if not prim_res.found:
+        prim_res = resolve_method_by_name(types.trait_registry, prim_name, method_name)
+    if not prim_res.found:
+        prim_res = intrinsic_resolve(types.trait_registry, prim_name, receiver_type, types.error_id, method_name)
+    if prim_res.found:
+        return
+    if registry_declares_method_anywhere(types.trait_registry, method_name):
+        return
+    String prim_msg = "no method `" + method_name + "` found on type `" + describe_type(receiver_type, scopes, types) + "`"
+    ctx.diagnostics.push(Diagnostic.error(span, DkNoMethodFound(), prim_msg))
+
 # ── Round XXVIII Track E: SH mirror of production's
 # `src/semantic/typecheck.rs::TypeChecker::unify_closure_ret_axis` and
 # ggdef's `spec/ggdef/src/elaborate/mod.rs:2373`. Enforces closure-return
@@ -3875,6 +4103,11 @@ void walk_expr_closures_inner(SpannedExpr sexpr, int scope_id, ScopeTable &scope
             # `reject_wrong_receiver_combinator` above for the ratified 5
             # cells and the ggdef/Rust cross-lane pins.
             reject_wrong_receiver_combinator(obj_type, method_name, sexpr.span, scopes, types, &ctx)
+            # R47 Track D1 — the sibling chokepoint for a PRIMITIVE receiver.
+            # Different class (an ABSENT method, not a wrong-receiver
+            # combinator), same position: reject before inference/lowering can
+            # mint a slot for a method that does not exist.
+            reject_no_method_on_primitive(SpannedExpr((*obj).expr, (*obj).span), obj_type, method_name, sexpr.span, scope_id, scopes, &types, &ctx)
             # Round XXVIII Track E — closure-returning combinator axis-unify.
             # SH mirror of `src/semantic/typecheck.rs::unify_closure_ret_axis`
             # + ggdef `spec/ggdef/src/elaborate/mod.rs:2373`. Collapsed into
