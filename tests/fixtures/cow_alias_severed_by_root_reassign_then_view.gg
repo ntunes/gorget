@@ -1,0 +1,49 @@
+# NON-REGRESSION PIN — ⚠ GREEN BEFORE AND AFTER THE ALIAS-RESOLUTION FIX.
+# This fixture is NOT red-verifiable against the pre-fix compiler, and it is
+# labelled as such deliberately. What it pins is stated below; do not read it
+# as coverage for the alias-spelling defect (the four
+# `cow_alias_spelled_*` fixtures carry that).
+#
+# CELL: TEMPORAL ORDER — the alias is bound BEFORE the root is reassigned,
+# and the view is taken AFTER.
+#
+#     Vector[String] alias = v      # alias aliases v's storage
+#     v = []                        # reassign: severs, alias takes its own copy
+#     String s = alias.get(0).unwrap()   # view taken AFTER the sever
+#     ... grow the NEW v ...
+#     print(s)                      # must still be the OLD element
+#
+# WHAT IT PINS: resolving a collection identity to its storage owner is only
+# sound because the sever runs `unset_ownership` on the alias BEFORE
+# materializing it. Once `alias` is no longer tagged `Alias(v)`, root
+# resolution terminates at `alias` itself, so the view taken after the sever
+# is correctly attributed to `alias`'s own buffer and NOT to the new `v`.
+# Remove that `unset_ownership` and this program mis-attributes the view.
+# That invariant was load-bearing but unpinned before this fixture; the fix
+# now depends on it.
+#
+# BREAK-THE-MECHANISM CHECK: deleting the `unset_ownership(builder, alias)`
+# call that precedes the materialize in `cow_sever_all_aliases_from` is the
+# way to see this go red.
+#
+# The two lengths are printed as well as the string: they pin that the sever
+# gave `alias` its own 1-element copy while `v` went on to 65, i.e. that CoW
+# value semantics held across the reassignment.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = []
+    v.push(mk("hel", "lo"))
+    Vector[String] alias = v
+    v = []
+    v.push(mk("new", "one"))
+    String s = alias.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("fill", "er"))
+        i = i + 1
+    print(s)
+    print(alias.len())
+    print(v.len())

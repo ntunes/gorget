@@ -23284,7 +23284,7 @@ fn staging_move_burndown_shrink_only() {
 #[test]
 fn known_gaps_repros_are_wired_to_a_test() {
     /// Baseline regenerated 2026-08-27 by running this test. SHRINK-ONLY.
-    const ALLOWED_UNWIRED: [&str; 32] = [
+    const ALLOWED_UNWIRED: [&str; 31] = [
         "box_callable_call_through_box_undefined_function",
         "box_ctor_closure_ices_while_boxnew_works",
         "box_enum_payload_c_wont_compile_llvm_double_frees",
@@ -23297,7 +23297,6 @@ fn known_gaps_repros_are_wired_to_a_test() {
         "box_primitive_element_types_collapse",
         "box_trait_bare_ctor_struct_field_uaf",
         "closure_capture_then_mutate_source_uaf",
-        "cow_rescue_runs_against_dangling_alias_view",
         "dict_index_assign_during_iteration_ice",
         "dict_value_write_through_silently_dropped",
         "doc_ld_concurrency_example_does_not_typecheck",
@@ -23399,6 +23398,203 @@ fn known_gaps_repros_are_wired_to_a_test() {
          SHRINK-ONLY, so delete them from the list:\n  {}",
         departed.join("\n  ")
     );
+}
+
+/// A stored CoW collection identity must name the STORAGE OWNER, and the
+/// only way to store one is through a producer that resolves it.
+///
+/// `Vector[String] alias = v` binds a second NAME to one collection. A borrow
+/// taken through `alias` borrows out of `v`'s buffer, so the provenance that
+/// reaches the mutation passes has to say `v`. Recording the spelling made
+/// every downstream identity comparison miss — the `source_mut_unsafe` name
+/// query and `cow_collection_refs_for_id`'s equality alike — and WHICH NAME
+/// the view was spelled through decided whether the program read freed
+/// memory: rc 139 on both backends, ASan heap-use-after-free.
+///
+/// The repair is one resolution point per producer. That only retires the
+/// CLASS if a nineteenth call site cannot store an unresolved identity, so
+/// this guard pins the chokepoint rather than the instance — the graduated
+/// `cow_alias_spelled_*` fixtures cover "the bug is back"; this covers "a new
+/// site joined the class". The two are complements: reverting the resolution
+/// reds row (d) here AND the fixtures; adding a bypassing write site reds
+/// rows (b)/(c) here and NO fixture.
+///
+/// Field privacy does the compile-time half: `cow_borrow_sources` is a
+/// private field, so no other module can write the sidecar at all. Rust has
+/// no way to make an enum VARIANT private within its own crate, so the
+/// `BorrowOrigin::CollectionElement` half is held here instead.
+#[test]
+fn cow_collection_identity_writes_go_through_the_resolving_producers() {
+    const CONTEXT: &str = "src/ir/lowering/context.rs";
+    const ORIGIN_DECL: &str = "src/ir/mod.rs";
+
+    let mut sidecar_files: Vec<String> = Vec::new();
+    let mut sidecar_inserts = 0usize;
+    let mut origin_files: Vec<String> = Vec::new();
+    // The ENCLOSING FUNCTION of every place that WRITES a CollectionElement
+    // ownership — i.e. mentions the variant with an `ownership = ` assignment
+    // within the preceding few lines. Pattern positions match on
+    // `&builder.locals[idx].ownership,` and carry no `=`, so they do not
+    // register here. Naming the function rather than a line number keeps this
+    // pin stable under unrelated edits to the file.
+    let mut origin_writers: Vec<String> = Vec::new();
+
+    visit("src", &mut |path| {
+        if path.extension().map_or(true, |e| e != "rs") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let rel = path.to_string_lossy().to_string();
+        // Prose mentions are not writes. `src/ir/mod.rs` legitimately names
+        // "the sidecar maps (cow_borrow_sources, etc.)" in a doc comment, and
+        // a guard a comment can trip is a guard people learn to route around.
+        let is_code = |l: &&str| !l.trim_start().starts_with("//");
+        let lines: Vec<&str> = content.lines().collect();
+        let code: Vec<&str> = lines.iter().copied().filter(is_code).collect();
+        if code.iter().any(|l| l.contains("cow_borrow_sources")) {
+            sidecar_files.push(rel.clone());
+            sidecar_inserts += code
+                .iter()
+                .map(|l| l.matches("cow_borrow_sources.insert(").count())
+                .sum::<usize>();
+        }
+        if code.iter().any(|l| l.contains("BorrowOrigin::CollectionElement(")) {
+            origin_files.push(rel.clone());
+            for (i, line) in lines.iter().enumerate() {
+                if !line.contains("BorrowOrigin::CollectionElement(") || !is_code(line) {
+                    continue;
+                }
+                let window_start = i.saturating_sub(4);
+                let is_write = lines[window_start..=i]
+                    .iter()
+                    .any(|l| l.contains("ownership = "));
+                if is_write {
+                    let enclosing = lines[..=i]
+                        .iter()
+                        .rev()
+                        .find_map(|l| {
+                            let t = l.trim_start();
+                            let sig = t
+                                .strip_prefix("pub fn ")
+                                .or_else(|| t.strip_prefix("fn "))?;
+                            Some(sig.split('(').next().unwrap_or(sig).to_string())
+                        })
+                        .unwrap_or_else(|| "<file scope>".to_string());
+                    origin_writers.push(format!("{rel}::{enclosing}"));
+                }
+            }
+        }
+    });
+    sidecar_files.sort();
+    sidecar_files.dedup();
+    origin_files.sort();
+    origin_files.dedup();
+
+    let bypass_hint = "\n\nStore the identity through `set_cow_borrow_source` / \
+         `set_collection_ref`, which resolve it to the storage owner first \
+         (`resolve_collection_identity`). A site that writes the identity \
+         itself records whatever SPELLING it happened to have in hand, which \
+         is the defect this chokepoint exists to retire.";
+
+    // (a) the sidecar is confined to its own module by privacy + this pin.
+    assert_eq!(
+        sidecar_files,
+        vec![CONTEXT.to_string()],
+        "`cow_borrow_sources` is mentioned outside {CONTEXT}: {sidecar_files:?}.{bypass_hint}"
+    );
+
+    // (b) exactly one writer of the sidecar.
+    assert_eq!(
+        sidecar_inserts, 1,
+        "expected exactly ONE `cow_borrow_sources.insert(` in src/, found \
+         {sidecar_inserts}. The sidecar has one producer on purpose.{bypass_hint}"
+    );
+
+    // (c) exactly one writer of the CollectionElement ownership, and it is the
+    //     resolving producer.
+    assert_eq!(
+        origin_writers,
+        vec![format!("{CONTEXT}::set_collection_ref")],
+        "the set of functions WRITING a `BorrowOrigin::CollectionElement` ownership \
+         changed. Exactly one is expected, and it is the resolving producer \
+         `set_collection_ref`.{bypass_hint}"
+    );
+    // The variant is DECLARED unqualified in `{ORIGIN_DECL}`, so that file
+    // does not spell `BorrowOrigin::CollectionElement(` and does not appear
+    // here; every qualified USE lives in the one module.
+    assert_eq!(
+        origin_files,
+        vec![CONTEXT.to_string()],
+        "`BorrowOrigin::CollectionElement` is used outside {CONTEXT} (declared in \
+         {ORIGIN_DECL}): {origin_files:?}. Reads are fine in principle, but every one \
+         of them is an identity comparison that this resolution is what makes correct \
+         — a new module doing its own is a Layering rule-3 second source of \
+         truth.{bypass_hint}"
+    );
+
+    // (e) BOTH ref-discovery walks in `cow_before_mutation` filter ephemeral
+    //     temps. This is a two-mirror pin, and it exists because the mirrors
+    //     drifted: the field-borrow walk filtered anonymous temps ("duplicate
+    //     clones of stale Ptr values") while the collection-ref walk did not,
+    //     and the missing half was a use-after-free — the walk "rescued" a
+    //     dead index-load temp by cloning FROM a freed element pointer. A
+    //     walk that materializes what it discovers must say which of it is
+    //     ephemeral, or it will clone stale pointers.
+    let ctx = fs::read_to_string(CONTEXT).expect("read context.rs");
+    for (walk, discovery, filter) in [
+        (
+            "collection-ref",
+            "let refs = self.cow_collection_refs_for(builder, local);",
+            "name_hint.is_none()",
+        ),
+        (
+            "field-borrow",
+            "let field_borrows = self.field_borrows_of(builder, local);",
+            "is_named_local",
+        ),
+    ] {
+        let at = ctx.find(discovery).unwrap_or_else(|| {
+            panic!("the {walk} ref-discovery walk moved; expected to find `{discovery}` in {CONTEXT}")
+        });
+        // The walk's block ends at the first closing brace back at method-body
+        // depth. Bounding on that rather than a line count keeps the scan
+        // exact for both walks, which differ in length by ~40 lines.
+        let body: String = ctx[at..]
+            .lines()
+            .take_while(|l| *l != "        }")
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            body.contains(filter),
+            "the {walk} walk in `cow_before_mutation` no longer filters ephemeral \
+             temps. Materializing an anonymous expression temp clones FROM the \
+             element pointer into a local nobody reads — and after a reallocating \
+             mutation that pointer is freed, so the rescue IS the use-after-free. \
+             Its mirror walk carries the same filter; they drift apart at the cost \
+             of a live UAF. See `cow_indexed_element_survives_root_growth.gg`."
+        );
+    }
+
+    // (d) both producers actually resolve. Reverting the resolution reds this
+    //     row across the whole tree, not just on one fixture.
+    for producer in ["set_cow_borrow_source", "set_collection_ref"] {
+        let body_start = ctx
+            .find(&format!("pub fn {producer}("))
+            .unwrap_or_else(|| panic!("producer `{producer}` not found in {CONTEXT}"));
+        let body = &ctx[body_start..];
+        let head: String = body.lines().take(12).collect::<Vec<_>>().join("\n");
+        assert!(
+            head.contains("resolve_collection_identity"),
+            "`{producer}` no longer resolves the collection identity to its storage \
+             owner. Without it the stored identity is whatever SPELLING the caller had \
+             in hand, and every downstream identity comparison silently misses — which \
+             is a live use-after-free, not a style point. See the \
+             `cow_alias_spelled_*` fixtures."
+        );
+    }
 }
 
 /// The CoW/liveness prescan walkers must have NO catch-all arm.

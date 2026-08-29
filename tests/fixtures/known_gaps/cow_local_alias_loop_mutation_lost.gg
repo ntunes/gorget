@@ -1,0 +1,62 @@
+# KNOWN GAP — 🚨 A CoW COLLECTION ALIAS LOSES ITS SEMANTICS INSIDE A LOOP,
+# in BOTH directions. Silent wrong values at rc 0; ASan-clean.
+#
+# Straight-line, the CoW value semantics of a second name for a collection
+# are CORRECT and are pinned by `cow_transitive_alias.gg`:
+#
+#     Vector[String] alias = v ; alias.push("b")   ->  v=1  alias=2   ✓
+#     Vector[String] alias = v ; v.push("b")       ->  v=2  alias=1   ✓
+#
+# Put the SAME mutation inside a `while` loop and both directions break:
+#
+#   A. MUTATION THROUGH THE ALIAS — every push is LOST.
+#      3x `alias.push` in a loop leaves `alias.len() == 1`.
+#   B. MUTATION THROUGH THE ROOT — the alias is never SEVERED, so value
+#      semantics silently degrades to REFERENCE semantics: both names report
+#      the grown length.
+#
+# INTENDED (asserted by the #[ignore]d test citing this file):
+#     alias-loop 1 4
+#     root-loop 4 1
+# MEASURED at HEAD, Rust gg, C and LLVM alike:
+#     alias-loop 1 1        <- A: three pushes vanished
+#     root-loop 4 4         <- B: the alias was never severed
+#
+# ⊕ THE SELF-HOST LANE IS CORRECT ON BOTH. Run through
+# `self_host_lowerer/driver.gg --emit-c` it prints the INTENDED output above,
+# so the oracle adjudicates this and Rust gg is the lagging lane.
+#
+# NOT the `known_gaps/cow_loop_bare_param_*` family: every member of that
+# family is about a bare (borrow) PARAM or `self`, and that is enforced
+# mechanically — both the loop and scope pre-header hooks filter their
+# candidate set with `ctx.is_bare_param` (`src/ir/lowering/stmts/mod.rs:2632`
+# and `:2699`). A LOCAL collection alias is not a bare param, so it is
+# outside the candidate set of the whole 2G machinery and no fix there
+# reaches it. Their symptom also differs: that family throws away a private
+# copy per iteration (wrong counts, extra clones); this one loses appends
+# outright and turns value semantics into reference semantics.
+#
+# NOT the alias-SPELLING UAF class either (`cow_alias_spelled_*`): that one
+# is a dangling STRING VIEW into the collection — rc 139, ASan
+# heap-use-after-free, realloc load-bearing. This is rc 0, ASan-clean,
+# realloc-independent (3 iterations), and the wrong thing is the collection
+# alias's own length.
+
+void main():
+    Vector[String] a = []
+    a.push("a")
+    Vector[String] a_alias = a
+    int i = 0
+    while i < 3:
+        a_alias.push("b")
+        i = i + 1
+    print(f"alias-loop {a.len()} {a_alias.len()}")
+
+    Vector[String] b = []
+    b.push("a")
+    Vector[String] b_alias = b
+    int j = 0
+    while j < 3:
+        b.push("b")
+        j = j + 1
+    print(f"root-loop {b.len()} {b_alias.len()}")

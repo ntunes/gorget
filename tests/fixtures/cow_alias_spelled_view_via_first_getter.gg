@@ -1,0 +1,26 @@
+# REGRESSION — the alias-spelled view defect is not specific to `.get(i)`.
+#
+# CELL: producer arm = the trivial-getter / `Option__Ref__` provenance block
+# reached by `.first()`, rather than the `.get(i)` arm. Same coordinates
+# otherwise: 1-hop alias · view via alias, mutation via root · bare-local
+# root · heap-forced payload · element type String.
+#
+# `.get()` and `.first()` record their collection provenance through
+# different arms of the same producer, so a fix applied to one arm and not
+# the other would leave this cell red. Measured on the pre-fix compiler:
+# rc 139 SIGSEGV on both backends. Its sibling with the view spelled
+# `v.first()` is rc 0 -- the same spelling discrimination.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = []
+    v.push(mk("hel", "lo"))
+    Vector[String] alias = v
+    String s = alias.first().unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("fill", "er"))
+        i = i + 1
+    print(s)

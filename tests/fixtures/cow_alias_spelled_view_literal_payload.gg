@@ -1,0 +1,31 @@
+# REGRESSION — the alias-spelled view defect reproduces with a LITERAL
+# payload, not only a heap-forced one.
+#
+# CELL: payload heap-ness = string LITERAL (`v.push("hello")`). Every other
+# coordinate matches `cow_alias_spelled_view_survives_root_growth.gg`:
+# 1-hop alias · view via alias, mutation via root · bare-local root ·
+# element type String.
+#
+# This fixture exists because the filed repro's header asserted, in bold,
+# that "fewer pushes OR a literal payload is rc 0 on both spellings and
+# proves nothing". Only the first half is true. Measured on the pre-fix
+# compiler: this program is rc 139 SIGSEGV on BOTH backends and its control
+# (the view spelled `v.get(0)`) is rc 0 -- so a literal payload reproduces
+# the defect AND preserves the spelling discrimination. The realloc count is
+# the load-bearing condition; the payload's heap-ness is not.
+#
+# The distinction matters because the two payloads take different runtime
+# paths: a literal element is a static `*_materialize`, a `mk()` result is a
+# heap-owned value. Both borrow out of the SAME reallocating array buffer,
+# which is what the defect turns on.
+
+void main():
+    Vector[String] v = []
+    v.push("hello")
+    Vector[String] alias = v
+    String s = alias.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push("filler")
+        i = i + 1
+    print(s)
