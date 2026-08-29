@@ -75,6 +75,17 @@
   `RL-1-multi` makes multi-track the stated default. Rows 456 → 461; ratchets unchanged (each new run was
   burned down by pinning it, never by raising a constant). Final: 49,073 bytes.
 
+  **The TRACK is the unit of worktree isolation — now stated, not inferred (owner 2026-08-29).** The file granted
+  worktrees per AGENT ("subagents always get their own worktree"; `agent-*` paths; `isolation: "worktree"`) and
+  never named the TRACK as the unit, so "every track runs on its own worktree" was true of the system and absent
+  from the spec. `CORE-tracks` now reads "a round runs SEVERAL TRACKS IN PARALLEL, each on ITS OWN WORKTREE";
+  `MA-1-track` + `MA-1-throwaway` reconcile per-agent isolation with per-track ownership in the rule that grants
+  it — the track's worktree is its EXECUTOR's, the branch the output-review reads and the parent integrates,
+  while other agents on the track get throwaway worktrees and ship no diff. Paid for by deleting a duplicated
+  pipeline (Round lifecycle step 2 restated the arrow chain Core invariants now carries) and a doubled
+  Edit-desync mention in Multi-agent rule 7. Rows 461 → 464; ratchets LOWERED again (168 → 160, 52 → 51).
+  Final: 49,130 bytes.
+
   **Verified, not asserted.** Guards RED-demonstrated on the landed file: deleting `RL-5-red`, `REV-growscope`
   or `REV-launch` each fires `agents_md_rule_inventory_is_pinned` BY NAME; inserting an unpinned clause fires
   `agents_md_every_clause_is_classified`; all restore green. `cargo test --test lints` 175 passed,

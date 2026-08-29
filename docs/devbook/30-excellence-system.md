@@ -1792,3 +1792,36 @@ Core #15e Q4 asks whether a rule's SUBJECT covers the case; the dual is worth
 asking too — **is there a load-bearing fact with no rule at all, that every
 reader is expected to infer?** Those are invisible to the pin lint by
 construction, because a probe can only pin text that exists.
+
+### A fact true of the system and absent from the spec (owner 2026-08-29)
+
+Immediately after the round-shape fix above, the owner stated: *"Every track runs
+on its own worktree."* The file did not say it, and the reason is instructive.
+
+It granted worktrees per **AGENT** and never named the **TRACK** as the unit of
+isolation — `isolation: "worktree"` on every launch, "subagents always get their
+own worktree", worktrees living at `.claude/worktrees/agent-*`, `round_cleanup.sh`
+pruning "every `agent-*` worktree". Every one of those is true, and none of them
+says what the owner said. The nearest the file came was a parenthesis in a list:
+"one executor per track (worktree)".
+
+The distinction is load-bearing. Per-agent isolation is a SAFETY property (nobody
+writes into main). Per-track isolation is a STRUCTURAL one: it is what makes
+parallel tracks composable, what "the parent integrates back" integrates, and what
+the output-review is reviewing. The rules covered the safety property and left the
+structural one to be inferred.
+
+Reconciled in the rule that grants worktrees, so the two readings meet in one
+place rather than in the reader's head: the track's worktree is its EXECUTOR's —
+the branch the output-review reads and the parent integrates — while other agents
+on the track get throwaway worktrees and ship no diff. That last clause also
+finishes the scout reconciliation from the previous subsection: read-only in what
+it SHIPS.
+
+**Two findings in a row of the same shape**, and it is worth naming as a class:
+*a fact everyone knows, that no rule states.* Both were invisible to every guard,
+because a probe can only pin text that exists and the sentence census can only
+classify sentences that are written. The pin lints protect against DELETION; they
+are structurally blind to ABSENCE. The only instrument that has found these is a
+reader who knows the system asking "is X clear?" — which argues for asking that
+question deliberately at round close, not waiting for it to be noticed.

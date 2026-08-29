@@ -8310,7 +8310,8 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("CORE-15e7", "is this premise still TRUE, or a filed fact that decayed?"),
     ("CORE-15e8", "the process has thinned"),
     ("CORE-pipeline", "scout → brief → ≥3 fresh brief-reviews → launch (worktree) → fresh output-review → integrate"),
-    ("CORE-tracks", "A round runs SEVERAL TRACKS IN PARALLEL, and every track runs its own gauntlet"),
+    ("CORE-tracks", "A round runs SEVERAL TRACKS IN PARALLEL, each on ITS OWN WORKTREE"),
+    ("CORE-tracks2", "every track runs its own gauntlet"),
     ("CORE-exec-only", "Only that track's EXECUTOR changes code"),
     ("CORE-roles", "scouts prototype and throw away, reviewers propose without implementing"),
     ("REV-scout-throwaway", "in a throwaway worktree, shipping no diff"),
@@ -8575,6 +8576,8 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("MA-0b2", "Never hardcode a branch name"),
     ("MA-0b3", "Subagents always get their own worktree"),
     ("MA-1b", "No exceptions; applies to NESTED forks too"),
+    ("MA-1-track", "Every track runs on its own worktree"),
+    ("MA-1-throwaway", "Other agents on the track get throwaway worktrees and ship no diff"),
     ("MA-2-pwd", "Run `pwd` and `git rev-parse --show-toplevel` FIRST"),
     ("MA-2-main", "NEVER touch the main checkout or the orchestrator worktree"),
     ("MA-2-cd", "Do NOT `cd` into either"),
@@ -8826,7 +8829,7 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
 /// Shrink-only floor on the inventory, so a compaction cannot delete rows and
 /// the rules they pin in one move. RAISING is free (new rules landed);
 /// LOWERING requires owner sign-off, like the byte ceiling.
-const AGENTS_MD_RULE_FLOOR: usize = 461;
+const AGENTS_MD_RULE_FLOOR: usize = 464;
 
 /// Grow-only ceiling on the escape hatch (see above).
 const AGENTS_MD_MAX_NON_NORMATIVE: usize = 92;
@@ -9134,8 +9137,8 @@ fn agents_md_every_clause_is_classified() {
 /// invisible, with every other lint green (see the assert's own comment).
 /// Raising either needs the same owner sign-off as raising the byte ceiling —
 /// unpinned prose ACCUMULATING is what this exists to notice.
-const AGENTS_MD_MAX_UNPINNED_RUN: usize = 168;
-const AGENTS_MD_MAX_RUNS_OVER_100: usize = 52;
+const AGENTS_MD_MAX_UNPINNED_RUN: usize = 160;
+const AGENTS_MD_MAX_RUNS_OVER_100: usize = 51;
 
 /// Logical blocks for coverage: hard-wrapped continuation lines joined, code
 /// fences kept (each command line stands alone), headings dropped.
