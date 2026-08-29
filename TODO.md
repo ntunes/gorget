@@ -19,19 +19,36 @@ not. Everything durable is already in `todo/` regardless.
 **R45 IS CLOSED (2026-08-29).** Full record in `DONE.md`; the round-close battery was green on every gate
 and the convergence line is quoted there. Do not re-derive R45 state from this block — read `DONE.md`.
 
-**R46 THEME — THE MEMORY-SAFETY CLUSTER.** The owner-agreed order is: the memory-safety cluster first, then
-robustness gaps, then A2 only if its style review passes with the owner in the loop. **DEEP-1 is explicitly a
-LATER round.** Scout material is preserved at `/tmp/r45/scout-memsafety.md` with two review passes at
-`/tmp/r45/brief-review-H-pass{1,2}.md`; the brief itself (`/tmp/r45/brief-memsafety.md`) reached 0-of-5 on the
-readiness checklist and **must be rewritten as TWO briefs before any executor runs**: Class B (trait-box
-coercion + element drop, `t0709`+`t0700`) and the call-result registration class (`t0708`+`t0518`), the latter
-needing its own scout because its site set is unknown.
+**⚠ R46 WAS STOPPED BEFORE EXECUTION — OWNER, 2026-08-29.** No R46 track reached an executor; zero
+compiler code changed. Track B burned three review passes plus a readiness pass across three brief
+versions, all scoring 0-of-5; Track C had one review pass back. **The tracks' measured findings are
+preserved in `todo/t0724` (Box[Trait] coercion + element drop) and `todo/t0725` (the call-result
+registration class), written self-contained** — the `/tmp` briefs are exhaust and may be gone. Start
+from those items, not from `/tmp`.
 
-**⚠ STANDING CORRECTION FOR R46, EARNED THE HARD WAY IN R45.** A brief states the QUESTION and the ACCEPTANCE
-BAR. It does **not** carry a pre-computed census: the orchestrator wrote one into a brief three times and was
-wrong all three times (a wrong function name, then a local-variable-name grep that missed two arms, then a
-mechanism that was not even the right one), and each error cost a full review cycle to discover. The executor
-derives the enumeration exhaustively and the reviewer checks it against an independent witness.
+**WHAT THE STOPPED ROUND FOUND ANYWAY, and both are worth more than the briefs were:**
+- **`todo/t0723` — `--sanitize` is a SILENT NO-OP on the LLVM backend.** `compile_llvm_pipeline` takes no
+  sanitize parameter and emits no `-fsanitize`; the binary has zero ASan symbols and does not link
+  libasan. It does not warn. **Every "ASan-clean on LLVM" claim is vacuous**, and `tests/security.rs`
+  never passes `--backend`, so that gate is C-only today. Treat any historical LLVM sanitizer result as
+  no evidence.
+- **`todo/t0722`** — the match-scrutinee `Borrow` comment asserts a safety property the runtime does not
+  provide (`gorget_string_copy_cow` deep-copies). It blocks `t0705`.
+
+**⚠ THE PROCESS FINDING, recorded because it caused the stop.** The orchestrator made FIVE wrong
+mechanism claims across four brief versions, each caught a pass later, each costing a full review cycle.
+The fifth would have caused active harm — it ordered an executor to "correct" a fixture header that is
+TRUE at HEAD and encodes the correct fix shape, contradicting a D51 errata the orchestrator itself had
+ratified an hour earlier. **The standing rule from R45 was insufficient: it is not enough that a brief
+carries no pre-computed census; the orchestrator must author no MECHANISM CLAIMS AT ALL.** A brief
+carries scope, order, obligations and the acceptance bar. Mechanism comes from the executor, checked by
+the reviewer, against evidence neither of them inherited from the orchestrator.
+
+**TWO TECHNIQUES WORTH REUSING, both proven this round.** (1) Renaming a producer so **rustc** enumerates
+every call site as a compile error is a genuine independent witness — 105 × E0599 across 9 files, no
+macro or trait-impl evasion — where three successive grep censuses were wrong. (2) `git add -N` before
+`git diff` when checkpointing: plain `git diff` omits untracked files and silently lost a filed item.
+
 
 **⚠ INHERITED DEBT, AND TWO ROWS OF IT ARE THIS SESSION'S OWN.** `self_host_runtime_diff` is RED at non-MATCH
 153 against ceiling 151. Track G adds ZERO rows and is −9 on the backlog; the +2 are
