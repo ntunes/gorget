@@ -193,8 +193,10 @@ jobs:
       #            under detect_leaks=1. A cell that prints the RIGHT answer
       #            while double-freeing, leaking, or reading uninitialised
       #            memory is WORKS on every value lane; this lane is the only
-      #            thing in the map that can see it. NB `--sanitize` is silently
-      #            dropped under `--backend=llvm`, so it is C-only.
+      #            thing in the map that can see it. NB this lane passes no
+      #            `--backend`, so it is C-only. (`--sanitize` does work under
+      #            `--backend=llvm` now, but only the runtime is instrumented
+      #            there, so it would not be equivalent coverage anyway.)
       #   ggdef -- the definitional interpreter. Three production lanes agreeing
       #            only proves they share an implementation; ggdef adjudicates
       #            against the DEFINITION, so it catches the case all three real

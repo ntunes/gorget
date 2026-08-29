@@ -1,0 +1,34 @@
+# POSITIVE CONTROL FOR THE SANITIZER ITSELF — not for any compiler behaviour.
+#
+# Wired by `sanitizer_gate_is_real_on_both_backends` in `tests/security.rs`.
+# Read that test's doc comment for what the two cells discriminate; this file
+# only has to supply a leak that nothing can ever take away.
+#
+# ── WHY NO FUTURE COMPILER FIX CAN MAKE THIS STOP TRIPPING ──
+#
+# The 64 bytes come from C `malloc` reached through an `extern` declaration,
+# and the result is held as a plain `int`. There is no Gorget-owned value here
+# at all: no droppable type, no ownership tag, no destructor, nothing for drop
+# insertion to attach to and nothing for the borrow checker to reason about.
+# `malloc` is not a Gorget allocator, so no allocator-side accounting sees it
+# either. A compiler that reclaimed this would have to free an arbitrary
+# integer, which is precisely the bug class the sanitizer exists to catch.
+#
+# That distinction is the whole point. A control built on a KNOWN COMPILER GAP
+# — a leak the compiler ought to have prevented — goes green the day the gap is
+# closed, and from then on silently stops testing the instrument while still
+# reading as coverage. This one cannot: it is a leak BY CONSTRUCTION, and the
+# only thing that can change its verdict is the sanitizer being switched off.
+#
+# ⚠ DO NOT "FIX" THE LEAK, and do not free `p`. The leak is the apparatus.
+#
+# INTENDED under `--sanitize`, ON EVERY BACKEND, with `detect_leaks=1`:
+#   stderr contains `LeakSanitizer: detected memory leaks`, exit non-zero.
+# Pre-fix on `--backend=llvm` it exited 0 and printed `alloc` — the vacuous
+# green this control exists to make impossible (t0723).
+
+extern int c_malloc(int n) = "malloc"
+
+void main():
+    int p = c_malloc(64)
+    print("alloc")

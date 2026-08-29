@@ -1,0 +1,40 @@
+# KNOWN GAP (todo/t0728): on `--backend=llvm`, the LLVM lane overrides the
+# DECLARED return type of an `extern` binding when the C symbol it names happens
+# to be one of `malloc` / `calloc` / `realloc`, and the resulting IR is invalid.
+#
+#     llc: error: '%v4' defined with type 'i64' but expected 'ptr'
+#       %v5 = icmp ne ptr %v1, %v4
+#
+# The `extern` below declares `int`. `src/lir/types.rs` name-matches the SYMBOL
+# STRING and returns `LirType::Ptr` regardless, so the call's result is typed
+# `ptr` while the integer literal it is compared against stays `i64`. The user's
+# typed declaration loses to a string comparison — the mechanism is the name
+# match, not the comparison: `abs` bound identically compiles and runs fine, and
+# all three of `malloc`/`calloc`/`realloc` fail identically.
+#
+# It is a compile-time hard failure, not a miscompile: `llc` rejects the module,
+# so no wrong binary ships. But it is unreachable-by-workaround for the user —
+# nothing they can write about their own declaration changes the outcome.
+#
+# ⚠ THE SHAPE IS LOAD-BEARING. The comparison against `0` is what forces the two
+# types to meet in one instruction; a version that never compares the result
+# compiles clean and pins nothing. Do not "simplify" it away.
+#
+# THE C LANE IS CORRECT AND IS THE ORACLE: `gg build` (default backend) builds
+# this and prints `nonzero`. That is the intended output on BOTH backends, and
+# it is what the ignored test asserts.
+#
+# GRADUATES to a live regression fixture the round t0728 is fixed. The fix is at
+# the WRITE site, not here: the reason the name match exists is that BIR
+# synthesis emits a raw `CallExtern { name: "malloc" }` without registering a
+# matching `LirExtern`, so the reader is reconstructing a type from a name that
+# the writer should have carried as typed metadata (Layering discipline rule 2).
+
+extern int c_malloc(int n) = "malloc"
+
+void main():
+    int p = c_malloc(64)
+    if p != 0:
+        print("nonzero")
+    else:
+        print("zero")

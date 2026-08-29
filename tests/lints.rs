@@ -8015,6 +8015,25 @@ fn sanitize_allowlists_shrink_only() {
     // simply gone quiet. The row retired on its own stated terms ("This row
     // retires WITH that fix"). The surviving row is INTENTIONAL, so the
     // register now holds ZERO filed corruption defects.
+    // ⚠ WHAT THESE TWO NUMBERS ARE COUNTS OF — both bounds are narrower than
+    // "the sanitizer findings", and a reader who assumes otherwise will read
+    // coverage that is not there:
+    //
+    //   1. C LANE ONLY. `scripts/sanitize_sweep.sh` builds with
+    //      `"$GG" build --sanitize "$d/$stem.gg"` and passes no `--backend`,
+    //      so it gets the default. `--sanitize` does now work under
+    //      `--backend=llvm` (it used to be silently dropped, which made every
+    //      LLVM sanitizer result free), but that backend instruments only the
+    //      runtime, not generated user code — so an LLVM run would not be an
+    //      equivalent measurement and these ceilings would not transfer to it.
+    //      Extending the sweep to a second lane is filed as `todo/t0731`.
+    //   2. TOP-LEVEL FIXTURES ONLY. The sweep enumerates
+    //      `find tests/fixtures -maxdepth 1 -name '*.gg'`, so nothing in
+    //      `tests/fixtures/security/`, `known_gaps/`, or any other
+    //      subdirectory is counted here. `--test security` covers the first of
+    //      those and has its own configuration (notably `detect_leaks=0` for
+    //      `security_safe`), which is why a leak can exist in that corpus
+    //      without moving these numbers.
     const CORRUPTION_CEILING: usize = 1;
     // 316 -> 313 (R47-E1): `async_blocking_io`, `async_channel_poll` and
     // `spawn_closure_copy` were measured CLEAN on every run of a repeat-run

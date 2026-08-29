@@ -45,11 +45,29 @@ gg build app.gg --hot-reload       # host binary + guest dylib
 | `--hot-reload` | Build for hot code reloading |
 | `--shared` | Build as shared library |
 | `-o <path>` | Output path for binary or library |
-| `--sanitize` | Enable AddressSanitizer + UBSan |
+| `--sanitize` | Enable AddressSanitizer + UBSan (see the note below on `--backend=llvm`) |
 | `--feature=<name>` | Enable compile-time feature flag (repeatable) |
 | `--scheduler=<mode>` | Async scheduler: `pool`, `thread`, `inline`, `single` |
 | `--backend=<c\|llvm>` | Code generation backend (default `c`) |
 | `--target=<native\|freestanding[-x86_64\|-aarch64]>` | Compilation target (default `native`) |
+
+**Flag combinations `--backend=llvm` does not support.** `--shared`,
+`--target=freestanding…` and `--clones=stats` are implemented on the C backend
+only, and combining them with `--backend=llvm` is an error rather than a
+silently different build. Use the default backend for those.
+
+**`--sanitize` coverage differs by backend.** On the C backend everything is
+instrumented. On `--backend=llvm` the generated user code goes through `llc`,
+which does not run the sanitizer's instrumentation passes, so what you get is:
+
+| caught on `--backend=llvm` | not caught on `--backend=llvm` |
+|---|---|
+| all memory leaks (leak detection is interception-based, so it is complete) | a use-after-free, buffer overflow or stack error whose faulting access is in your own code |
+| use-after-free, double-free and overflow whose faulting access is inside the runtime (string, array, dict and set operations) | |
+
+Undefined-behaviour checking (UBSan) has the same split. If you are hunting a
+memory bug rather than a leak, use the default C backend — that is the lane the
+project's own safety gates run on.
 
 ### `gg run <file.gg>`
 
