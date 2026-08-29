@@ -1662,3 +1662,35 @@ whose predicate mentions SCOPE cannot terminate a loop whose findings grow
 scope. The predicate has to name the thing that genuinely invalidates the
 artifact — here, the design — and everything else has to have somewhere to go
 that is neither another pass nor a later round. That somewhere is the executor.
+
+### The gate is now capped, not ratcheted (owner 2026-08-29)
+
+§19's residual paragraph offered its own growth term as the mitigation: *"any
+new class that slips through is added as a further row — the list earns its rows
+from failures, exactly as these five did."* That is the right instinct about
+provenance and the wrong instinct about cost.
+
+Rows are a **pre-launch bar**, and each is per-track work forever. Row 4 means
+actually reverting the fix and running the guard; row 1 means instrumenting for
+fire counts. So a row bought by one incident becomes a permanent tax on every
+future track — the same shape as the byte bloat `agents_md_size_ratchet` fights,
+one level up, and the same shape as `AGENTS_MD_RULE_FLOOR`, which had only ever
+ratcheted UP before §20.
+
+The clause is now a CAP: **a new class RETIRES a row or becomes an executable
+guard**, never a sixth row. `readiness_checklist_rows_are_capped` enforces it,
+because the clause saying so is itself prose (Core #6 applied to the gate that
+enforces Core #6). It asserts two things — at most five rows, and that the
+markers are a contiguous `1..N` run, so a retired row is renumbered rather than
+left as a hole a reader would hunt for. Both were RED-demonstrated on the landed
+file.
+
+Note what the cap does NOT claim: nothing here says five is the correct number.
+It says a sixth is a decision with a named cost, rather than a drift. Retiring a
+row stays free, and a silent deletion is still caught, because the rows are
+individually pinned as `REV-ck1`..`REV-ck5`.
+
+The standing alternative — mechanise the rows so they LEAVE the checklist, which
+reduces the per-track cost instead of merely freezing it — is filed as
+`todo/t0726` with the three decidable rows (3, 4, 5) named and rows 1 and 2
+argued as the ones that probably stay human.

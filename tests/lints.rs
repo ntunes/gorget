@@ -8059,6 +8059,73 @@ fn sanitize_allowlists_shrink_only() {
     }
 }
 
+/// The READINESS CHECKLIST's row count, capped rather than ratcheted UP.
+///
+/// **Why this exists (owner 2026-08-29).** The checklist replaced two gates that
+/// could not fire — the two-clean-pass gate (devbook/30 §12: 52 passes over six
+/// tracks, never fired) and the design-stability gate (§16: ~40 passes, never
+/// fired) — because both were defined over REVIEWER YIELD, so a stronger
+/// reviewer made them strictly harder to pass. §19 fixed that by defining
+/// readiness over ARTIFACT PROPERTIES instead. But it carried a growth term,
+/// "a new class that slips through EARNS A SIXTH ROW", with no counterweight:
+/// rows are a PRE-LAUNCH bar and each one is per-track work forever, so one
+/// incident bought a permanent tax on every future track. That is the same
+/// shape as the byte bloat `agents_md_size_ratchet` fights, one level up.
+///
+/// The rule is now a CAP: a new class RETIRES a row or becomes an executable
+/// guard (Core #6 — prose rots, guards don't). This lint is what makes that
+/// binding, because the clause saying it is itself prose.
+///
+/// Retiring a row is free (the rows are individually pinned as `REV-ck1`..
+/// `REV-ck5`, so a silent deletion still fires `agents_md_rule_inventory_is_pinned`).
+/// RAISING this needs the same owner sign-off as raising the byte ceiling.
+/// The standing alternative — mechanise the rows so they leave the checklist —
+/// is filed as `todo/t0726`.
+const READINESS_CHECKLIST_MAX_ROWS: usize = 5;
+
+#[test]
+fn readiness_checklist_rows_are_capped() {
+    let raw = fs::read_to_string("AGENTS.md").expect("AGENTS.md");
+    let para = raw
+        .lines()
+        .find(|l| l.contains("READINESS CHECKLIST"))
+        .expect(
+            "AGENTS.md no longer states the READINESS CHECKLIST convergence gate. \
+             If it was deliberately replaced, replace this guard in the same commit; \
+             if it was dropped, restore it.",
+        );
+    // The rows are the `(1)`..`(N)` markers. `(Core #6)` and `|pinned cells|`
+    // carry no bare digit in parens, so this counts rows and nothing else.
+    let rows = regex::Regex::new(r"\((\d)\)").unwrap();
+    let mut seen: Vec<usize> = rows
+        .captures_iter(para)
+        .filter_map(|c| c[1].parse::<usize>().ok())
+        .collect();
+    seen.sort_unstable();
+    seen.dedup();
+
+    assert!(
+        seen.len() <= READINESS_CHECKLIST_MAX_ROWS,
+        "the READINESS CHECKLIST has {} rows; the cap is {READINESS_CHECKLIST_MAX_ROWS} \
+         (found markers {:?}).\n\
+         A new defect class does NOT earn a further row — it RETIRES an existing row, or \
+         becomes an executable guard (Core #6). Rows are a PRE-LAUNCH bar and each one is \
+         per-track work forever, so growing the list taxes every future track to prevent a \
+         class seen once; that is how the two gates before this one stopped being reachable \
+         (devbook/30 §12, §16, §19). Mechanising a row so it leaves the checklist is \
+         todo/t0726. Raising this cap needs owner sign-off, exactly like the byte ceiling.",
+        seen.len(),
+        seen
+    );
+    assert_eq!(
+        seen,
+        (1..=seen.len()).collect::<Vec<_>>(),
+        "the READINESS CHECKLIST's row markers are not a contiguous 1..N run: {seen:?}. \
+         A retired row must be renumbered, not left as a hole — a gap reads as a row the \
+         reader is expected to find somewhere else."
+    );
+}
+
 /// The byte ceiling on `AGENTS.md`. Module-level so `agents_md_insertion_sweep`
 /// asks the SAME question `agents_md_size_ratchet` asks, rather than carrying a
 /// second copy of the number that can drift from it. Lowering is free; raising
@@ -8341,7 +8408,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("REV-ck3", "`|pinned cells| == |changed cells|`"),
     ("REV-ck4", "the GUARD FAILS when the fix is reverted"),
     ("REV-ck5", "every load-bearing figure REGENERATED at current HEAD"),
-    ("REV-ck6", "EARNS A SIXTH ROW"),
+    ("REV-ck6", "RETIRES a row or becomes a guard (Core #6)"),
     ("REV-scope", "SCOPE MAKES IT TERMINATE"),
     ("REV-object", "THE GAUNTLET SIGNS OFF THE DESIGN; ITS OBJECT IS TO REACH THE EXECUTOR"),
     ("REV-designq", "whether the design makes sense and serves the project's objectives"),

@@ -34,6 +34,14 @@
   prior "~58_000 is the FLOOR for the current rule set" claim in the ratchet comment is **refuted and
   retired**, not restated — it measured the prose the rules were wrapped in, not the rules.
 
+  **The convergence gate is CAPPED, not ratcheted.** `REV-ck6` said *"a new class that slips through EARNS
+  A SIXTH ROW"* — a growth term with no counterweight, on a PRE-LAUNCH bar whose rows are per-track work
+  forever. It now reads: a new class RETIRES a row or becomes an executable guard (Core #6), never a sixth.
+  New lint `readiness_checklist_rows_are_capped` enforces the cap and the contiguity of the row markers, so a
+  retired row is renumbered rather than left as a hole; both asserts RED-demonstrated. Paid for by compacting
+  neighbours again, not by raising the ceiling. Mechanising the rows so they LEAVE the checklist is filed as
+  `todo/t0726`.
+
   **Verified, not asserted.** Guards RED-demonstrated on the landed file: deleting `RL-5-red`, `REV-growscope`
   or `REV-launch` each fires `agents_md_rule_inventory_is_pinned` BY NAME; inserting an unpinned clause fires
   `agents_md_every_clause_is_classified`; all restore green. `cargo test --test lints` 175 passed,
