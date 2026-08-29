@@ -1,0 +1,51 @@
+# REGRESSION — the TEMPORAL cell with a LIVE MECHANISM.
+#
+# Sibling of `cow_alias_severed_by_root_reassign_then_view.gg`, which pins the
+# same ordering but cannot exercise anything: there the alias's buffer is
+# never touched after the view, so no provenance decision is load-bearing.
+# Here it IS. After the sever the view is taken, and then the ALIAS's own
+# buffer is grown past a reallocation:
+#
+#     Vector[String] alias = v            # alias aliases v's storage
+#     v = []                              # reassign: severs; alias takes its copy
+#     String s = alias.get(0).unwrap()    # view into the buffer ALIAS now owns
+#     ... grow ALIAS 64x -> realloc ...
+#     print(s)                            # must survive
+#
+# WHAT IT PINS: that a view taken AFTER a sever is attributed to the collection
+# the name refers to AFTER the sever. Root resolution walks the `Alias` chain,
+# so the question is live: `alias` was `Alias(v)` before the reassignment, and
+# resolving to that stale root would key the rescue on `v` -- which nothing
+# mutates on a forward path from the bind -- leaving `s` dangling when `alias`
+# reallocs. The correct attribution is `alias` itself.
+#
+# MECHANISM PIN: the sibling harness assertion checks the emitted GIR carries
+# the lazy rescue (`__cow_mat`) for this program. stdout alone cannot
+# distinguish "the rescue ran" from "nothing needed rescuing", and this is the
+# one temporal cell where the rescue genuinely has to run -- its sibling emits
+# no rescue at all.
+#
+# ⚠ Green on the pre-fix compiler too, like its sibling: the pre-fix
+# provenance recorded the SPELLING `alias`, which post-sever happens to be the
+# right answer. It is the fire count, not the rc, that makes this a pin.
+#
+# The lengths pin the sever direction: `alias` grew to 65 while `v` kept the
+# single element it was given after the reassignment.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = []
+    v.push(mk("hel", "lo"))
+    Vector[String] alias = v
+    v = []
+    v.push(mk("new", "one"))
+    String s = alias.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        alias.push(mk("fill", "er"))
+        i = i + 1
+    print(s)
+    print(alias.len())
+    print(v.len())

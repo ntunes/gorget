@@ -43733,9 +43733,14 @@ hello",
 }
 
 /// NON-REGRESSION PIN, green before and after the resolution fix — labelled
-/// as such in the fixture header too. Root resolution is only sound because
-/// the sever unsets the alias's ownership BEFORE materializing it, so a view
-/// taken after the sever resolves to the alias itself and not to the new `v`.
+/// as such in the fixture header too, which also records what it does NOT
+/// pin. After the sever nothing mutates the alias, so the view borrows into a
+/// buffer that is never touched again and no provenance decision is
+/// load-bearing: three separate breaks of the sever/materialize machinery
+/// leave this program's output identical. It pins the end-to-end temporal
+/// behaviour and the sever's value semantics, and nothing finer.
+/// `cow_alias_severed_then_alias_grows` is the same ordering with a live
+/// mechanism and a fire count.
 #[test]
 fn cow_alias_severed_by_root_reassign_then_view() {
     run_gg(
@@ -43759,6 +43764,13 @@ hello
 /// `__cow_mat` 0 times (the rescue was never emitted at all) and the
 /// two-view fixture emitted it once (only the directly-spelled view was
 /// rescued). Both counts below are therefore RED pre-fix.
+///
+/// BREAK-THE-MECHANISM CHECK, run and confirmed rather than asserted: force
+/// `source_mut_unsafe` to `false` at its computation in
+/// `src/ir/lowering/stmts/mod.rs` and rebuild. Every caller of this helper
+/// goes RED with `found 0`. That is what makes these assertions live rather
+/// than decorative — the fixtures they guard still print `hello` with the
+/// rescue gone, which is the whole reason the count is asserted here.
 fn assert_gir_lazy_rescue_count(fixture: &str, expected_cow_mat: usize) {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let path = manifest_dir.join("tests/fixtures").join(fixture);
@@ -43796,6 +43808,31 @@ fn assert_gir_lazy_rescue_count(fixture: &str, expected_cow_mat: usize) {
 #[test]
 fn cow_alias_spelled_view_emits_the_lazy_rescue() {
     assert_gir_lazy_rescue_count("cow_alias_spelled_view_survives_root_growth.gg", 1);
+}
+
+/// The temporal cell WITH a live mechanism.
+///
+/// Its sibling `cow_alias_severed_by_root_reassign_then_view` pins the same
+/// ordering but exercises nothing — after the sever nothing mutates the
+/// alias, so no borrow can dangle and no break of the provenance machinery
+/// changes its output (three were tried; the fixture header records them).
+/// Here the alias's own buffer reallocs after the view is taken, so the
+/// rescue must be emitted, and the count is what says so — both programs
+/// print `hello` either way.
+#[test]
+fn cow_alias_severed_then_alias_grows() {
+    run_gg(
+        "cow_alias_severed_then_alias_grows.gg",
+        "\
+hello
+65
+1",
+    );
+}
+
+#[test]
+fn cow_alias_severed_then_alias_grows_emits_the_lazy_rescue() {
+    assert_gir_lazy_rescue_count("cow_alias_severed_then_alias_grows.gg", 1);
 }
 
 #[test]

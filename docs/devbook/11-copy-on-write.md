@@ -539,7 +539,7 @@ let elem_is_binding = matches!(pattern.node, Pattern::Binding(_));
 (`context.rs:3450`), with **no** `drops.register_local` — the collection owns the
 buffer, so a per-element drop would double-free it. The element's
 `BorrowOrigin` is `CollectionElement` / `CowBorrowPending`, recognised
-downstream by `is_cow_borrow` (`context.rs:3473`). Tuple-destructuring patterns
+downstream by `is_cow_borrow` (`context.rs:3563`). Tuple-destructuring patterns
 and direct-collection elements keep the old clone path.
 
 **Why this is sound.** The loop body can only do three things with `x`, and each
@@ -693,7 +693,7 @@ The cases it severs:
 - **local is a collection with element refs** → materialize each ref
   (`Case 3`, via `cow_materialize_collection_ref`);
 - **local is a string with live views** → materialize each view (`Case 4`,
-  recursing through transitive views, `context.rs:4225`);
+  recursing through transitive views, `context.rs:4232`);
 - **SharedHeap value-aliases** → drop the tag only (heap was already deep-owned
   at the `gorget_string_copy_cow` boundary, `Case 5`);
 - **struct with live named field-borrows** → materialize each (`Case 6`).
@@ -713,18 +713,18 @@ is on the `Ptr` shape rather than on anonymity alone, because a slice (`v[a:b]`)
 is tagged through the same producer yet is a collection **value**: anonymous,
 genuinely read by the assign that consumes it, and needing its clone.
 
-The three materialize routines (`cow_materialize_alias` `:4501`,
-`cow_materialize_view` `:4460`, `cow_materialize_collection_ref` `:4578`) all
+The three materialize routines (`cow_materialize_alias` `:4508`,
+`cow_materialize_view` `:4467`, `cow_materialize_collection_ref` `:4585`) all
 share the shape: call `clone_fn_for_ptr`, then bind the cloned value into a
 fresh owned local with `AssignMode::Move` (not Copy — Copy would alias the clone
-and leak the original; see the comment at `context.rs:2853`), register it for
+and leak the original; see the comment at `context.rs:4529`), register it for
 drop, and rebind the name. The Move-mode detail was a real bug fix: the earlier
 shallow-copy variant produced a Phase-C validator violation that a now-removed
 named-local guard was masking.
 
-`cow_before_field_mutation` (`context.rs:4380`) is the field-path sibling
+`cow_before_field_mutation` (`context.rs:4387`) is the field-path sibling
 (`self.data.push(x)` materializes `CollectionRef`s borrowing `"self.data"`), and
-`cow_sever_all_aliases_from` (`context.rs:4397`) handles the reassign case
+`cow_sever_all_aliases_from` (`context.rs:4404`) handles the reassign case
 (aliases keep the *old* value).
 
 ### Implementation status — converging to the uniform rule
