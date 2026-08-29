@@ -1825,3 +1825,47 @@ classify sentences that are written. The pin lints protect against DELETION; the
 are structurally blind to ABSENCE. The only instrument that has found these is a
 reader who knows the system asking "is X clear?" — which argues for asking that
 question deliberately at round close, not waiting for it to be noticed.
+
+### The exit "NO upper bound" never had (owner 2026-08-29)
+
+The termination fix earlier in §20 stopped ordinary findings from resetting the
+streak: they grow the track's scope and ship to the executor. It left the other
+half open. A track whose DESIGN genuinely keeps failing review still looped
+forever, *correctly*, by the letter of "≥3 passes is the FLOOR; there is NO upper
+bound on passes that keep finding DESIGN defects".
+
+§16 already recorded what actually happens in that case, and it is not more
+review:
+
+    Track A  7 → 8 → 6 → 10 → 3 → 4 → 6 → 5     never converged; rebuilt
+    Track C  9 → 10 → 6 → 4 → 5 → 6             never converged; split
+
+Two tracks reached the right outcome, twice, and no rule in `AGENTS.md` said so —
+the same *fact-with-no-rule* class as the previous two subsections. Now stated:
+**a track that cannot get its design signed off is REBUILT or SPLIT, never
+reviewed harder**, because repeated DESIGN rejection is evidence about the BRIEF
+— its root cause, its scope, its size — not a reason for another pass.
+
+**Splitting has a second trigger, and one guard.** The owner added it while this
+was landing: *"A track can be split if its scope genuinely grows too much."* That
+closes the loop opened by `REV-growscope`, which deliberately lets scope grow so
+findings reach the executor instead of a `todo/` file — growth needs a relief
+valve, or the rule that prevents deferral produces unwieldy tracks instead.
+
+The guard matters as much as the trigger: **a split is division, never deferral.**
+Each half becomes its own track, with its own brief, gauntlet and worktree, in the
+SAME round. Without that clause "split the track" degrades into "file half of it
+for later", which is the exact anti-pattern `REV-nofile` exists to stop, wearing a
+new costume (Core #6's warning about classes in new syntactic costumes, applied to
+process).
+
+### And who writes the brief
+
+Rule 0 spends four bullets and a carve-out on what the orchestrator must NOT
+touch, and never said what it PRODUCES. The brief is the orchestrator's
+deliverable — that is now `MA-0-brief-author`. Found by the same audit, and it is
+the third instance of the class in one session, which is itself the finding:
+**the pin lints protect against deletion and are structurally blind to absence**,
+so absence has to be hunted deliberately. The cheapest instrument is a reader who
+knows the system being asked, at round close, "is X stated?" — for each X the
+round relied on.

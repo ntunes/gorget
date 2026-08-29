@@ -86,6 +86,20 @@
   Edit-desync mention in Multi-agent rule 7. Rows 461 → 464; ratchets LOWERED again (168 → 160, 52 → 51).
   Final: 49,130 bytes.
 
+  **The exit the termination fix lacked (owner 2026-08-29).** Ordinary findings now grow scope and reach the
+  executor — but a track whose DESIGN keeps failing still looped forever, correctly, by the letter of "NO upper
+  bound". devbook/30 §16 already recorded the real outcome (Track A rebuilt after 8 passes, Track C split after
+  6) and no rule stated it. `REV-stuck` + `REV-stuck2`: a track that cannot get its design signed off is REBUILT
+  or SPLIT, never reviewed harder — repeated DESIGN rejection is evidence about the BRIEF, not a reason for
+  another pass. `REV-split` adds the owner's second trigger — split when scope genuinely grows too much, which
+  is the relief valve `REV-growscope` needs — and `REV-split2` guards it: **a split is division, never
+  deferral**; each half becomes its own track with its own brief, gauntlet and worktree in the SAME round,
+  so "split" cannot degrade into "file half for later". `MA-0-brief-author` names the brief as the
+  orchestrator's deliverable — rule 0 said at length what it must not touch and never what it produces.
+  Third fact-with-no-rule found in one session; the class is now recorded in devbook/30 §20.
+  Ceiling 49_200 → 49_400, documented: it bought two owner-asked rules and was part-paid by deleting five
+  duplications. Rows 464 → 469, exemptions 92 → 90. Final: 49,386 bytes.
+
   **Verified, not asserted.** Guards RED-demonstrated on the landed file: deleting `RL-5-red`, `REV-growscope`
   or `REV-launch` each fires `agents_md_rule_inventory_is_pinned` BY NAME; inserting an unpinned clause fires
   `agents_md_every_clause_is_classified`; all restore green. `cargo test --test lints` 175 passed,

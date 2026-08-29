@@ -8131,7 +8131,7 @@ fn readiness_checklist_rows_are_capped() {
 /// second copy of the number that can drift from it. Lowering is free; raising
 /// needs owner sign-off — the rationale, the history, and what the current
 /// headroom is FOR live in the comment inside the ratchet below.
-const AGENTS_MD_SIZE_CEILING: u64 = 49_200;
+const AGENTS_MD_SIZE_CEILING: u64 = 49_400;
 
 #[test]
 fn agents_md_size_ratchet() {
@@ -8161,6 +8161,21 @@ fn agents_md_size_ratchet() {
     // mechanical carve-out (`MA-0-mech`), letting the orchestrator fix a typo
     // or stale figure in place instead of spending an agent round-trip on it.
     // Evidence: devbook/30 §20.
+    //
+    // 2026-08-29, THIRD MOVE — 49_200 -> 49_400, for two rules the owner's own
+    // review asked for, not for prose. (1) REV-stuck: a track that cannot get its
+    // design signed off is REBUILT or SPLIT, never reviewed harder. That is the
+    // EXIT the "NO upper bound" clause never had: devbook/30 §16 records Track A
+    // rebuilt after 8 passes and Track C split after 6, and no rule said so.
+    // (2) MA-0-brief-author: the brief is the ORCHESTRATOR'S deliverable — rule 0
+    // says at length what the orchestrator must not touch and never said what it
+    // produces. Paid for by deleting five duplications (the pipeline restated in
+    // Round lifecycle step 2, the scope rule restated in step 5, a doubled
+    // Edit-desync mention in rule 7, dead "What SURVIVES" framing left over from
+    // the removed 2x rule, and a dead "no ratio to meet" clause). The residual
+    // headroom is DELIBERATE per the note below: at 19 bytes free the ratchet is
+    // a tripwire, not a ratchet, and the next session pays for that in scavenged
+    // rule precision.
     //
     // 2026-08-29, LATER THE SAME DAY — the ceiling ROSE, 47_400 -> 49_200, on an
     // explicit owner instruction ("Make it excellent... You may bring back the
@@ -8384,6 +8399,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("SH-r4", "Periodically audit"),
     ("MA-0", "THE ORCHESTRATOR DOES NOT TOUCH THE CODE"),
     ("MA-0-streak", "Verify the streak"),
+    ("MA-0-brief-author", "it is the orchestrator's deliverable"),
     ("MA-0-brief", "INCORPORATE into the track's scope BY DEFAULT"),
     ("MA-0-file", "FILE only when genuinely disjoint"),
     ("MA-0-coord", "Coordinate parallel tracks"),
@@ -8425,6 +8441,10 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("REV-floor", "≥3 passes is the FLOOR; there is NO upper bound"),
     ("REV-converging", "consecutive blocking passes are the gauntlet CONVERGING, not failing"),
     ("REV-launch", "Launch the executor as soon as a fresh pass signs off the DESIGN"),
+    ("REV-stuck", "A track that cannot get its design signed off is REBUILT or SPLIT, never reviewed harder"),
+    ("REV-stuck2", "repeated DESIGN rejection is evidence about the BRIEF"),
+    ("REV-split", "SPLIT also when the scope genuinely grows too much"),
+    ("REV-split2", "a split is division, never deferral"),
     ("REV-checklist", "Convergence gate — the READINESS CHECKLIST"),
     ("REV-ck1", "every measurement carries a FIRE COUNT"),
     ("REV-ck2", "every enumeration cites an INDEPENDENT witness"),
@@ -8810,9 +8830,7 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
     ("LEAD-15e7", "⚠ Plus one about the record itself:", 1),
     ("LEAD-sh-rules", "Rules:", 1),
     ("LEAD-four", "This applies to four kinds of artifact:", 1),
-    ("LEAD-ma0-brief", "**Update the brief.** Per finding:", 1),
     ("LEAD-ma6", "Closing step of every round:", 1),
-    ("LEAD-rl5", "**What SURVIVES, as an owner ruling in its own right:", 1),
     ("LEAD-ma2-paths", "(Concrete paths live in the session handover.)", 1),
     ("LEAD-ma7-paths", "(The concrete main-checkout path for the current environment", 1),
     ("EG-sib-producer", "`maybe_auto_propagate` hoisted to the `lower_expr` exit", 1),
@@ -8829,10 +8847,10 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
 /// Shrink-only floor on the inventory, so a compaction cannot delete rows and
 /// the rules they pin in one move. RAISING is free (new rules landed);
 /// LOWERING requires owner sign-off, like the byte ceiling.
-const AGENTS_MD_RULE_FLOOR: usize = 464;
+const AGENTS_MD_RULE_FLOOR: usize = 469;
 
 /// Grow-only ceiling on the escape hatch (see above).
-const AGENTS_MD_MAX_NON_NORMATIVE: usize = 92;
+const AGENTS_MD_MAX_NON_NORMATIVE: usize = 90;
 
 /// Collapse every run of whitespace to a single space, so a probe survives the
 /// file being re-wrapped or re-flowed (Core #15(c): prose WRAPS).
