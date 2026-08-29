@@ -1,0 +1,31 @@
+# R47 Track B — INDIRECT-DISPATCH CALL RESULT NEVER REGISTERED FOR DROP.
+#
+# CELL: arm = `Box[Trait]` VTABLE dispatch (`Box__Speaker__speak`) · position
+# = discarded temp · payload = String · receiver root = local · single call.
+# Write site: `src/ir/lowering/exprs/methods.rs`, the trait-object method arm.
+#
+# ⚠ THE DISCRIMINATOR IS INDIRECTION, NOT TRAITS. Its negative twin
+# `direct_dispatch_call_result_no_leak.gg` calls the SAME trait method on a
+# CONCRETE receiver — static dispatch — and is clean at HEAD and after. A
+# fixture set that only had this one would wrongly read the class as
+# "trait dispatch leaks".
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only (ASan is a no-op under
+# `--backend=llvm`).
+#
+# RED-VERIFIED at pristine `f3feea79`: LEAK 4 byte(s) / 1 allocation, 3/3 runs.
+from std.collections import Box
+
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+void main():
+    Box[Speaker] b = Box.new(Robot("R2"))
+    print(b.speak())

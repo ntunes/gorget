@@ -1,0 +1,31 @@
+# R47 Track B — INDIRECT-DISPATCH CALL RESULT NEVER REGISTERED FOR DROP,
+# MEASURED ON THE REPETITION AXIS.
+#
+# CELL: arm = escaped closure (`__gorget_closure_call_N`) · position =
+# DISCARDED TEMP inside a LOOP · payload = String · 5 iterations.
+#
+# ⚠ THE RESULT MUST NOT BE BOUND TO A NAMED LOCAL — `String s = g()` inside
+# the loop makes this fixture GREEN at pristine HEAD, because the named-local
+# binding takes ownership downstream and rescues the unregistered temp.
+#
+# Twin of `indirect_boxtrait_vtable_loop_unbounded_leak.gg` on the closure
+# side of the dispatch axis — the two together show the unboundedness is a
+# property of the CLASS, not of one arm.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only (ASan is a no-op under
+# `--backend=llvm`).
+#
+# RED-VERIFIED at pristine `f3feea79`: LEAK 30 byte(s) / 5 allocations, 3/3
+# runs — five allocations for five iterations, which is the point.
+String mk(String a, String b):
+    return a + b
+
+Callable[String()] make():
+    return (): mk("hel", "lo")
+
+void main():
+    Callable[String()] g = make()
+    int n = 0
+    for i in 0..5:
+        n = n + g().len()
+    print(n)

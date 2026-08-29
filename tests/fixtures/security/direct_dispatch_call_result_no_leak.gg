@@ -1,0 +1,56 @@
+# R47 Track B — NEGATIVE CONTROL for the indirect-dispatch call-result class.
+#
+# ⚠ THIS FIXTURE EXISTS TO PROVE THE DISCRIMINATOR, and it is the reason the
+# class is not "trait dispatch leaks". Three shapes that DO resolve their
+# callee statically, in one program:
+#
+#   1. a plain free-function call;
+#   2. an inherent method on a user struct;
+#   3. THE SAME trait method as
+#      `indirect_boxtrait_vtable_call_result_leak.gg`, but on a CONCRETE
+#      receiver — static dispatch, no vtable.
+#
+# All three are clean at pristine `f3feea79` and stay clean after the fix.
+# Shape 3 is the load-bearing one: it isolates INDIRECTION as the
+# discriminator. `t0725` filed this class three times as "unnamed temp" and
+# once as "trait dispatch"; both readings are refuted by this file.
+#
+# ⚠ GREEN-ON-ARRIVAL, DELIBERATELY, AND NO RED WAS AVAILABLE. Being green
+# before AND after is precisely what this fixture asserts, so it cannot be
+# RED-verified against the pre-fix compiler. Two deliberate breaks were tried
+# anyway — registering every chokepoint result twice, and disabling the
+# enum/struct ownership transfer — and both left it CLEAN 3/3, for the same
+# structural reason the sibling transfer controls record: at these positions a
+# second release goes through a slot the runtime has already self-nulled.
+# What it pins is the fix's BLAST RADIUS — that the conversion did not sweep
+# in statically-dispatched producers and change their value behaviour — and it
+# is the fixture that makes the class's discriminator (indirection, not
+# traits) checkable rather than asserted.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only.
+trait Speaker:
+    String speak(self)
+
+struct Robot:
+    String id
+
+equip Robot with Speaker:
+    String speak(self):
+        return self.id + "!"
+
+struct Plain:
+    String tag
+
+equip Plain:
+    String shout(self):
+        return self.tag + "?"
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    print(mk("hel", "lo"))
+    Plain p = Plain("t")
+    print(p.shout())
+    Robot r = Robot("R2")
+    print(r.speak())

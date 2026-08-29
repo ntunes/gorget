@@ -1,0 +1,30 @@
+# R47 Track B — PER-ARM POSITIVE CONTROL for the COMPENSATION that makes the
+# adapter arms safe to convert.
+#
+# CELL: arm = combinator adapter, `FuncRef` branch (`methods.rs`, the
+# statically-named callee inside `call_closure_in_adapter`) · combinator =
+# `Option.unwrap_or_else` on the None path · payload = String.
+#
+# ⚠ THIS ARM IS STATICALLY NAMED AND IS STILL IN THE CLASS. The defect this
+# track fixes is *"a lowering write site mints a droppable owned result and
+# never registers it"* — not a dispatch taxonomy. The tree has already fixed a
+# statically-named member of this same class by register-at-birth (the
+# `Mutex`/`RWLock` guard arms). Excluding this arm because its callee happens
+# to be a symbol would have been a sibling-SITE deferral wearing a predicate,
+# and would have put the arm outside the guard's reach as well.
+#
+# RED-VERIFIED: with the register-at-birth conversion applied but the
+# tracker-side transfer in `assign_result_local_move` REMOVED, this program
+# aborts under ASan with `attempting double-free`, 3/3 runs. CLEAN 3/3 at
+# pristine `f3feea79` and CLEAN 3/3 with the full change.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only.
+String mk(String a, String b):
+    return a + b
+
+String maker():
+    return mk("hel", "lo")
+
+void main():
+    Option[String] o = None()
+    print(o.unwrap_or_else(maker))

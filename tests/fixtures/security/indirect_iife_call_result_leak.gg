@@ -1,0 +1,15 @@
+# R47 Track B — INDIRECT-DISPATCH CALL RESULT NEVER REGISTERED FOR DROP.
+#
+# CELL: arm = IIFE — a closure literal invoked in place, never bound to a name
+# · position = discarded temp · payload = String · single call.
+# Write site: `src/ir/lowering/exprs/calls.rs`, the closure-literal-callee arm.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only (ASan is a no-op under
+# `--backend=llvm`).
+#
+# RED-VERIFIED at pristine `f3feea79`: LEAK 6 byte(s) / 1 allocation, 3/3 runs.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    print(((): mk("hel", "lo"))())

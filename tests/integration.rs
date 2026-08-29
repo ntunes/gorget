@@ -56924,3 +56924,44 @@ true
 true",
     );
 }
+
+/// KNOWN GAP `t0770` — `Option[String].map(f)` with `f` a type-erased
+/// `Callable` PARAMETER allocates `result_local` as `Option[i64]` (16 bytes)
+/// and the caller reads it as `Option[String]` (40 bytes). rc 139 on a plain
+/// build, ASan `stack-buffer-overflow` under `--sanitize`, deterministic 3/3
+/// at `f3feea79`. Un-ignore when `infer_closure_return_type` reads
+/// `ctx.callable_return_type` instead of defaulting to `I64_TYPE`.
+#[test]
+#[ignore = "KNOWN GAP t0770: combinator adapter mis-sizes result_local for a \
+type-erased Callable parameter — rc 139 / ASan stack-buffer-overflow"]
+fn known_gap_combinator_callable_param_result_type_erased_sbo() {
+    run_gg(
+        "known_gaps/combinator_callable_param_result_type_erased_sbo.gg",
+        "hello!",
+    );
+}
+
+/// KNOWN GAP `t0771` — a closure capturing a PARAMETER and escaping via
+/// `return` keeps the borrowed handle, so the defining function's scope exit
+/// frees it under the live environment. rc 0 with SILENTLY WRONG OUTPUT on a
+/// plain build, ASan `heap-use-after-free` under `--sanitize`. Un-ignore when
+/// the capture boundary clones-if-live / moves-if-dead.
+#[test]
+#[ignore = "KNOWN GAP t0771: closure capturing a parameter and escaping reads \
+freed memory — silent wrong output, ASan heap-use-after-free"]
+fn known_gap_closure_captures_param_then_escapes_uaf() {
+    run_gg("known_gaps/closure_captures_param_then_escapes_uaf.gg", "hello");
+}
+
+/// KNOWN GAP `t0709`, second repro — the STRICTLY SIMPLER form: no helper
+/// escape, no `mk()` payload, `v[0]` rather than `.get(0).unwrap()`, and the
+/// identical `stack-buffer-overflow` at the push inside `main`. Shows that
+/// item's "RETURNED FROM A HELPER" discriminator is over-specified. The pushed
+/// value must be a TEMP: binding it to a named local first leaks (35 B / 2)
+/// instead of crashing.
+#[test]
+#[ignore = "KNOWN GAP t0709: Vector[Box[Trait]] push of a TEMP overflows at \
+the push — no helper escape required"]
+fn known_gap_vec_box_trait_pushed_no_helper() {
+    run_gg("known_gaps/vec_box_trait_pushed_no_helper.gg", "R2!");
+}

@@ -1,0 +1,43 @@
+# KNOWN GAP (R47 Track B, filed not fixed) — the Option/Result combinator
+# adapter CLONES its receiver and then unregisters the ORIGINAL from drop
+# tracking, so the original's payload leaks. 6 B / 1 allocation, 3/3 runs, at
+# `f3feea79`; unchanged by Track B's register-at-birth conversion.
+#
+# MECHANISM, from the GIR — this is not inferred:
+#
+#     _6  = call @mk(...)                       ; the payload, heap-forced
+#     _7  = enum_init Option::Some { copy _6 }
+#     [Mv] _1 = copy _7                         ; `o`, the receiver
+#     _10 = borrow _1
+#     _11 = call @Option__GorgetString__clone(copy _10)   ; RECEIVER IS CLONED
+#     [Mv] _9 = copy _11                        ; the adapter works on the clone
+#     ...
+#     (no drop_if_alive _1 anywhere)
+#
+# The adapter's "move-if-dead" prologue unregisters BOTH the scrutinee and the
+# receiver's own local unconditionally, before the branch. That is correct when
+# the receiver was genuinely moved in; here it was CLONED one line earlier, so
+# the original still owns a payload nobody frees.
+#
+# ⚠ DIRECTION MATTERS — this is the MIRROR of the class Track B fixed. Track B
+# was under-registration at a producer (a call result nobody registered);
+# this is OVER-unregistration at a consumer (an owner whose registration was
+# removed although nothing consumed it). Same helper, opposite direction,
+# different fix shape — which is why it is filed rather than folded.
+#
+# ⚠ THIS IS WHY THE `map` CELLS IN THE TRACK-B NET DO NOT USE `.map()` ON A
+# NAMED RECEIVER: they would carry this residual and read as an incomplete fix.
+#
+# Every Option/Result `.map` / `.and_then` / `.filter` / `.or_else` /
+# `.unwrap_or_else` / `.map_err` on a named receiver holding a heap payload is
+# in scope, so the blast radius is every combinator chain over a String or
+# collection payload.
+#
+# INTENDED: prints `hello!`, rc 0, ASan-clean under detect_leaks=1.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Option[String] o = Some(mk("hel", "lo"))
+    Option[String] r = o.map((String s): s + "!")
+    print(r.unwrap())

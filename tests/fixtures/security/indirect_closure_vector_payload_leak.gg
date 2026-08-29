@@ -1,0 +1,30 @@
+# R47 Track B — INDIRECT-DISPATCH CALL RESULT NEVER REGISTERED FOR DROP,
+# MEASURED ON THE PAYLOAD-TYPE AXIS.
+#
+# CELL: arm = escaped closure (`__gorget_closure_call_N`) · position =
+# discarded temp · payload = `Vector[int]`, NOT String.
+#
+# ⚠ WHY THIS CELL EXISTS. Every other cell in this net returns a String, and
+# `needs_drop` / the fresh-owned tagging both have String-specific branches.
+# A fix that registered only owned Strings would leave the collection payload
+# leaking and every String cell green. This fixture is the one that would go
+# red for that partial regression.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only (ASan is a no-op under
+# `--backend=llvm`).
+#
+# RED-VERIFIED at pristine `f3feea79`: LEAK 64 byte(s) / 1 allocation, 3/3 runs.
+from std.collections import Vector
+
+Vector[int] mkvec(int n):
+    Vector[int] v = Vector[int]()
+    v.push(n)
+    v.push(n + 1)
+    return v
+
+Callable[Vector[int]()] make():
+    return (): mkvec(7)
+
+void main():
+    Callable[Vector[int]()] g = make()
+    print(g().len())

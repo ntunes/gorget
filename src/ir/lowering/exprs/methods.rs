@@ -1826,7 +1826,7 @@ pub(super) fn lower_method_call(
                                     builder.call_void(mangled, call_args);
                                     return Operand::Constant(Constant::Unit);
                                 } else {
-                                    let dst = builder.call(mangled, call_args, ret_type);
+                                    let dst = ctx.call_indirect_tracked(builder, mangled, call_args, ret_type);
                                     return FunctionBuilder::copy(dst);
                                 }
                             }
@@ -3563,7 +3563,7 @@ fn call_closure_in_adapter(
                     builder.call_void(&call_fn, final_args);
                     return Operand::Constant(Constant::Unit);
                 }
-                let dst = builder.call(&call_fn, final_args, ret_type);
+                let dst = ctx.call_indirect_tracked(builder, &call_fn, final_args, ret_type);
                 return FunctionBuilder::copy(dst);
             }
         }
@@ -3571,14 +3571,14 @@ fn call_closure_in_adapter(
         let callable_name = format!("__callable_{}", place.local.0);
         let mut final_args = vec![closure_op.clone()];
         final_args.extend(call_args);
-        let dst = builder.call(callable_name, final_args, fallback_ret_type);
+        let dst = ctx.call_indirect_tracked(builder, callable_name, final_args, fallback_ret_type);
         return FunctionBuilder::copy(dst);
     }
     if let Operand::Constant(Constant::FuncRef(name)) = closure_op {
         let ret_type = ctx.fn_sigs.get(name.as_str())
             .map(|(_, ret)| *ret)
             .unwrap_or(fallback_ret_type);
-        let dst = builder.call(name.clone(), call_args, ret_type);
+        let dst = ctx.call_indirect_tracked(builder, name.clone(), call_args, ret_type);
         return FunctionBuilder::copy(dst);
     }
     Operand::Constant(Constant::Unit)
@@ -3979,23 +3979,53 @@ fn try_lower_option_result_combinator(
     let result_local = builder.add_local(result_type, None);
     let result_type_name = ctx.type_name_for_id(result_type).unwrap_or(type_name).to_string();
 
-    // Helper: Move-mode assign + MoveZero on the source local.
+    // Helper: the adapter's ownership TRANSFER of `src` into `result_local`.
     // Every site in the per-branch switch below assigns a freshly-built
     // Owned local (`wrapped`, `some_val`, `none_val`, or a closure call
     // `result`) into `result_local`. The Copy default would create a
     // shallow alias — both source and result_local would drop the
     // same heap data once Option/Result became Resource via Tier 1c.
     //
-    // We use Move mode WITHOUT an explicit MoveZero: the LIR's Move
-    // semantic at consume sites already zeros the source slot
-    // (consume-site contract). An additional GIR-level `move_zero`
-    // after the Move-mode assign would zero the source TWICE, which
-    // for `enum_init`-built locals containing String/Vector payloads
-    // corrupts the payload data (visible as `"BAD"` → `"B"` in
-    // coroutine_result_combinators where the closure returns a 3-byte
-    // String through a map_err's Error wrap).
-    fn assign_result_local_move(builder: &mut FunctionBuilder, result_local: LocalId, src: Operand) {
+    // Move mode is emitted WITHOUT an explicit GIR `move_zero`. The LIR
+    // lowers `AssignMode::Move` to `SlotStore { is_move: true }`
+    // (`src/lir/lower/insts.rs`), which changes how the DESTINATION is
+    // written (memcpy rather than clone) and does NOT zero the source slot
+    // — so a `move_zero` here would be the only zeroing, and for
+    // `enum_init`-built locals holding String/Vector payloads it zeroes
+    // bytes the destination now aliases, corrupting the payload (observed
+    // as `"BAD"` → `"B"` in coroutine_result_combinators, where the closure
+    // returns a 3-byte String through a map_err's Error wrap). The four
+    // sites that DO need runtime zeroing — the `or_else`, `filter`,
+    // `unwrap_or_else` and `map_err` arms consuming `payload`, which stays
+    // registered because a SIBLING CFG path may still have to drop it — pair
+    // their own explicit `move_zero(payload)` at the call site.
+    //
+    // R47 Track B — THE TRACKER SIDE OF THE SAME TRANSFER. Once the
+    // adapter's closure-call arms register their result at birth
+    // (`ctx.call_indirect_tracked`, Core #3), a `src` that is a registered
+    // owned temp would ALSO be freed by its own scope-exit `drop_if_alive`
+    // while `result_local` owns the same bytes — a double free. Ownership
+    // moved, so the tracker entry moves with it: drop the source's
+    // registration. This is the same compile-time transfer
+    // `emit_enum_init_owned` performs for consumed enum-init args
+    // (`context.rs`, post-init unregister loop), and it is deliberately
+    // restricted to `Operand::Copy` of a bare local: the `mov(payload)`
+    // sites above keep their `move_zero` pairing untouched, because
+    // `payload` is registered in the SHARED some/ok prologue and a
+    // CFG-blind `unregister` would strip the drop the *other* branch still
+    // needs (see the `filter` arm's note).
+    fn assign_result_local_move(
+        drops: &mut crate::ir::lowering::drops::DropElaborator,
+        builder: &mut FunctionBuilder,
+        result_local: LocalId,
+        src: Operand,
+    ) {
         use crate::ir::instructions::AssignMode;
+        if let Operand::Copy(ref p) = src {
+            if p.projections.is_empty() {
+                drops.unregister(p.local);
+            }
+        }
         builder.assign_mode(AssignMode::Move, Place::local(result_local), src);
     }
 
@@ -4020,14 +4050,20 @@ fn try_lower_option_result_combinator(
             // map(fn) → Some/Ok(fn(payload))
             let mapped = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(payload)], some_ok_type);
-            let wrapped = builder.enum_init(&result_type_name, if is_option { "Some" } else { "Ok" }, result_type, vec![mapped]);
-            assign_result_local_move(builder, result_local, FunctionBuilder::copy(wrapped));
+            // R47 Track B (Core #4 sibling drift): route the wrap through the
+            // ownership-aware enum-init producer, exactly as the `map_err`
+            // Error arm below already does. `mapped` is now registered at its
+            // birth, and `emit_enum_init_owned`'s post-init transfer loop
+            // unregisters the arg it consumed — a raw `builder.enum_init` here
+            // would leave `mapped` registered while the wrap owns its bytes.
+            let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, if is_option { "Some" } else { "Ok" }, result_type, vec![mapped], None);
+            assign_result_local_move(&mut ctx.drops, builder, result_local, FunctionBuilder::copy(wrapped));
         }
         "and_then" | "flat_map" => {
             // and_then(fn) → fn(payload) (fn returns Option/Result)
             let result = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(payload)], result_type);
-            assign_result_local_move(builder, result_local, result);
+            assign_result_local_move(&mut ctx.drops, builder, result_local, result);
         }
         "or_else" => {
             // or_else: Some/Ok path → keep original.
@@ -4041,7 +4077,7 @@ fn try_lower_option_result_combinator(
             // `move_zero(payload)` is load-bearing.
             let wrapped = builder.enum_init(&result_type_name, if is_option { "Some" } else { "Ok" }, result_type, vec![FunctionBuilder::mov(payload)]);
             builder.move_zero(Place::local(payload));
-            assign_result_local_move(builder, result_local, FunctionBuilder::copy(wrapped));
+            assign_result_local_move(&mut ctx.drops, builder, result_local, FunctionBuilder::copy(wrapped));
         }
         "filter" if is_option => {
             // filter(fn) → if fn(payload): Some(payload) else: None
@@ -4062,11 +4098,11 @@ fn try_lower_option_result_combinator(
             // the else path's untouched-payload slot drops normally.
             let some_val = builder.enum_init(&result_type_name, "Some", result_type, vec![FunctionBuilder::mov(payload)]);
             builder.move_zero(Place::local(payload));
-            assign_result_local_move(builder, result_local, FunctionBuilder::copy(some_val));
+            assign_result_local_move(&mut ctx.drops, builder, result_local, FunctionBuilder::copy(some_val));
             builder.jump(merge_bb);
             builder.switch_to(filter_else);
             let none_val = builder.enum_init(&result_type_name, "None", result_type, vec![]);
-            assign_result_local_move(builder, result_local, FunctionBuilder::copy(none_val));
+            assign_result_local_move(&mut ctx.drops, builder, result_local, FunctionBuilder::copy(none_val));
             // Don't jump to merge — fall through to the common jump below.
             // Actually, we need to jump to merge since the None branch below is separate.
             builder.jump(merge_bb);
@@ -4080,7 +4116,7 @@ fn try_lower_option_result_combinator(
             // Round XXII β pairing (b1-form, adapted to the no-enum_init
             // shape): direct assign uses `mov(payload)` + `move_zero(payload)`
             // — same rationale as :3817 or_else, without the enum_init wrap.
-            assign_result_local_move(builder, result_local, FunctionBuilder::mov(payload));
+            assign_result_local_move(&mut ctx.drops, builder, result_local, FunctionBuilder::mov(payload));
             builder.move_zero(Place::local(payload));
         }
         "map_err" if is_result => {
@@ -4088,7 +4124,7 @@ fn try_lower_option_result_combinator(
             // Round XXII β pairing (b1): same shape as :3817 or_else.
             let wrapped = builder.enum_init(&result_type_name, "Ok", result_type, vec![FunctionBuilder::mov(payload)]);
             builder.move_zero(Place::local(payload));
-            assign_result_local_move(builder, result_local, FunctionBuilder::copy(wrapped));
+            assign_result_local_move(&mut ctx.drops, builder, result_local, FunctionBuilder::copy(wrapped));
         }
         _ => return None,
     }
@@ -4101,12 +4137,12 @@ fn try_lower_option_result_combinator(
         "map" | "filter" | "and_then" | "flat_map" if is_option => {
             // None → None
             let none_val = builder.enum_init(&result_type_name, "None", result_type, vec![]);
-            assign_result_local_move(builder, result_local, FunctionBuilder::copy(none_val));
+            assign_result_local_move(&mut ctx.drops, builder, result_local, FunctionBuilder::copy(none_val));
         }
         "or_else" if is_option => {
             // or_else: None → fn()
             let result = call_closure_in_adapter(ctx, builder, &closure_op, vec![], result_type);
-            assign_result_local_move(builder, result_local, result);
+            assign_result_local_move(&mut ctx.drops, builder, result_local, result);
         }
         "unwrap_or_else" if is_option => {
             // unwrap_or_else: None → fn()
@@ -4120,7 +4156,7 @@ fn try_lower_option_result_combinator(
                     ctx.set_owned(builder, p.local);
                 }
             }
-            assign_result_local_move(builder, result_local, result);
+            assign_result_local_move(&mut ctx.drops, builder, result_local, result);
         }
         "map" | "and_then" | "flat_map" if is_result => {
             // Error → Error(err). err_val extraction routes through the
@@ -4133,7 +4169,7 @@ fn try_lower_option_result_combinator(
             // extra pairing at this err_val site.
             let err_val = extract_enum_payload_owned(ctx, builder, scrut_local, "Error", none_err_type);
             let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, "Error", result_type, vec![FunctionBuilder::copy(err_val)], None);
-            assign_result_local_move(builder, result_local, FunctionBuilder::copy(wrapped));
+            assign_result_local_move(&mut ctx.drops, builder, result_local, FunctionBuilder::copy(wrapped));
         }
         "or_else" if is_result => {
             // or_else: Error → fn(err). err_val is only BORROWED into the
@@ -4143,7 +4179,7 @@ fn try_lower_option_result_combinator(
             let err_val = extract_enum_payload_owned(ctx, builder, scrut_local, "Error", none_err_type);
             let result = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], result_type);
-            assign_result_local_move(builder, result_local, result);
+            assign_result_local_move(&mut ctx.drops, builder, result_local, result);
         }
         "unwrap_or_else" if is_result => {
             // unwrap_or_else: Error → fn(err). Same err_val borrow-into-
@@ -4151,7 +4187,7 @@ fn try_lower_option_result_combinator(
             let err_val = extract_enum_payload_owned(ctx, builder, scrut_local, "Error", none_err_type);
             let result = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], some_ok_type);
-            assign_result_local_move(builder, result_local, result);
+            assign_result_local_move(&mut ctx.drops, builder, result_local, result);
         }
         "map_err" if is_result => {
             // map_err: Error → Error(fn(err)). err_val is borrowed into the
@@ -4162,7 +4198,7 @@ fn try_lower_option_result_combinator(
             let mapped = call_closure_in_adapter(ctx, builder, &closure_op,
                 vec![FunctionBuilder::copy(err_val)], none_err_type);
             let wrapped = ctx.emit_enum_init_owned(builder, &result_type_name, "Error", result_type, vec![mapped], None);
-            assign_result_local_move(builder, result_local, FunctionBuilder::copy(wrapped));
+            assign_result_local_move(&mut ctx.drops, builder, result_local, FunctionBuilder::copy(wrapped));
         }
         _ => return None,
     }

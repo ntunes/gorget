@@ -1,0 +1,50 @@
+# KNOWN GAP — `Option[T].map(f)` where `f` is a `Callable` PARAMETER builds a
+# WRONG-SIZED result slot and the caller reads past it. rc 139 SIGSEGV on a
+# plain build; `AddressSanitizer: stack-buffer-overflow` under `--sanitize`.
+# Deterministic, 3/3 runs, at `f3feea79` and unchanged by R47 Track B.
+#
+# MECHANISM (read, not guessed). The combinator adapter picks `result_type`
+# from `infer_closure_return_type`, which resolves a closure-STRUCT local
+# through `lookup_closure_info` and a `FuncRef` through `fn_sigs` — and for a
+# `Callable[T]` PARAMETER, whose GIR local type is ERASED to unit, matches
+# neither and falls through to a hardcoded `I64_TYPE`. So `.map()` on an
+# `Option[String]` allocates `result_local` as `Option__int64_t` (16 bytes)
+# while the surrounding code reads it as `Option__GorgetString` (40 bytes):
+#
+#     memcpy(&__s15, __v33, sizeof(__gg_Option__int64_t));    <-- 16 written
+#     memcpy(&__s9,  __v34, sizeof(__gg_Option__GorgetString)); <-- 40 read
+#
+# This is the SAME defect Round XXIII Track alpha fixed for the cross-type
+# `or_else` shape — "the pre-alpha `_ => recv_type` fall-through mis-sized
+# `result_local` at birth and downstream memcpys read/wrote the wrong number of
+# bytes" (comment at the `and_then`/`or_else` arm). The `I64_TYPE` fallback is
+# the same wrong-default one arm over, for the one closure shape whose type is
+# erased. Core #1: the wrong type is chosen where the slot is ALLOCATED.
+#
+# THE TYPED METADATA ALREADY EXISTS: `ctx.callable_return_type(local_id)` is
+# what the direct `Callable`-param CALL arm reads (`calls.rs`, the `UNIT_TYPE`
+# local arm). `infer_closure_return_type` does not consult it. Reading it
+# there, instead of defaulting to `I64_TYPE`, is the shape the fix should take
+# (devbook/24 rule 4 — resolve once, write through).
+#
+# ⚠ THE PATTERN-MATCH CONSUMER IS LOAD-BEARING for the crash, not for the bug.
+# With `.unwrap()` instead of `if r is Some(v)` the same program returns rc 0
+# and prints `hello!` — the over-read lands on live stack and is silent. Keep
+# the `is Some(v)` form so the repro is visible without a sanitizer.
+#
+# ⚠ NOT the same class as R47 Track B's register-at-birth conversion, which
+# touched this same helper: that one is about DROP REGISTRATION, this one is
+# about RESULT TYPE. Track B's fix leaves this byte-identical.
+#
+# INTENDED: prints `hello!`, rc 0, on C and LLVM, ASan-clean.
+String mk(String a, String b):
+    return a + b
+
+void go(Callable[String(String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    Option[String] r = o.map(f)
+    if r is Some(v):
+        print(v)
+
+void main():
+    go((String s): mk(s, "!"))

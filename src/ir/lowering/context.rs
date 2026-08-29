@@ -1566,6 +1566,48 @@ impl<'a> LoweringContext<'a> {
         self.call_tracked_impl(builder, func, args, return_type, None)
     }
 
+    /// Emit an **indirect-dispatch** call and register its result for drop at
+    /// the value's birth (Core #3), exactly as [`Self::call_tracked`] does for
+    /// a statically-resolved one.
+    ///
+    /// **THE CLASS this chokepoint owns** — every call the lowering emits
+    /// whose *callee is selected at run time*, plus the sibling arms of the
+    /// helpers that emit them:
+    ///
+    /// * a closure environment's call thunk — `__Closure_N__call`,
+    ///   `__gorget_closure_call_N`;
+    /// * a `Callable[T]` parameter slot — `__callable_N`;
+    /// * a trait-object vtable slot — `Box__Trait__method`;
+    /// * the `FuncRef` arm of [`call_closure_in_adapter`], which shares the
+    ///   two above inside one helper (helper-scoped, not dispatch-scoped: the
+    ///   defect is *"a write site mints a droppable owned result and never
+    ///   registers it"*, and a statically-named callee exhibits it too —
+    ///   `5372d443` fixed exactly such a member of this class by
+    ///   register-at-birth).
+    ///
+    /// The result of such a call is a freshly materialized owned value, no
+    /// different from a direct call's. The direct-call paths have always
+    /// routed through `call_tracked`; these arms spelled `builder.call`
+    /// instead, so nothing ever registered the result and it leaked — once per
+    /// call, i.e. **unbounded inside a loop**.
+    ///
+    /// ENFORCING GUARD (Core #6/#14 — this comment is not on its own):
+    /// `indirect_dispatch_results_registered_at_birth` in `tests/lints.rs`
+    /// pins the per-file census of ALL FOUR raw dst-producing spellings
+    /// (`builder.call` / `call_clone` / `call_extern` / `call_extern_into`)
+    /// under `src/ir/lowering/`, so a NEW arm written the old way fails the
+    /// lint even though it is nowhere near this function — whichever of the
+    /// four it happens to spell.
+    pub fn call_indirect_tracked(
+        &mut self,
+        builder: &mut crate::ir::builder::FunctionBuilder,
+        func: impl Into<String>,
+        args: Vec<Operand>,
+        return_type: crate::ir::types::TypeId,
+    ) -> crate::ir::types::LocalId {
+        self.call_tracked_impl(builder, func, args, return_type, None)
+    }
+
     /// G3: `call_tracked` for a CLONE call — identical drop-registration +
     /// ownership bookkeeping, but the emitted `Instruction::Call` carries the
     /// typed `reason` so the clone-reason validator sees it (the clone

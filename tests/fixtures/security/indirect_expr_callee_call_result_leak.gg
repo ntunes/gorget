@@ -1,0 +1,29 @@
+# R47 Track B — INDIRECT-DISPATCH CALL RESULT NEVER REGISTERED FOR DROP.
+#
+# CELL: arm = EXPRESSION callee — the callee is not an identifier at all
+# (`make()()`, `arr[0](x)`, `shared.get()()`), so the lowering materialises it
+# into a local and dispatches through `__gorget_closure_call_N` · position =
+# discarded temp · payload = String · single call.
+# Write site: `src/ir/lowering/exprs/calls.rs`, the non-identifier-callee arm.
+#
+# ⚠ THIS ARM WAS MISSING FROM THE FILED SET. `t0725` and its scout enumerated
+# eight arms; this is a ninth, found by keying the census on the PRODUCER
+# EXPRESSION (`let dst = builder.call(`) rather than on the arms already
+# known. It satisfies the class predicate on both readings — its callee is
+# resolved through a runtime value AND it mints an unregistered droppable
+# result. The `indirect_dispatch_results_registered_at_birth` lint now pins
+# the whole producer census so a tenth cannot hide the same way.
+#
+# INSTRUMENT: `security_safe_no_leak`, C lane only (ASan is a no-op under
+# `--backend=llvm`).
+#
+# RED-VERIFIED at pristine `f3feea79`: LEAK 6 byte(s) / 1 allocation, 3/3 runs,
+# frame `... <- mk <- __Closure_0__call <- main`.
+String mk(String a, String b):
+    return a + b
+
+Callable[String()] make():
+    return (): mk("hel", "lo")
+
+void main():
+    print(make()())
