@@ -10971,7 +10971,8 @@ fn ratified_decisions_are_cited_in_the_spec() {
     // shapes it knows and says nothing about the ones it does not. Measured:
     // between 2026-08-10 and 2026-08-28 the emoji form and the batch form hid
     // TEN ratified decisions from the old `—\s*\*\*D(\d{1,2})` pattern, the
-    // section form hid SIX more, and the lint stayed GREEN throughout, because
+    // section form hid EIGHT more (33 -> 43 -> 51 declared), and the lint
+    // stayed GREEN throughout, because
     // the only structural check it had was `!ratified.is_empty()` — and 33
     // old-form entries kept it non-empty. That is a guard green-lighting its
     // own class.
