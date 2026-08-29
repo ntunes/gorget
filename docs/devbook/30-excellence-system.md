@@ -1694,3 +1694,66 @@ The standing alternative — mechanise the rows so they LEAVE the checklist, whi
 reduces the per-track cost instead of merely freezing it — is filed as
 `todo/t0726` with the three decidable rows (3, 4, 5) named and rows 1 and 2
 argued as the ones that probably stay human.
+
+### Excellence pass: what the first compaction got wrong (owner 2026-08-29)
+
+Asked whether the compacted file was good, the honest answer was "partly", and
+the owner's reply was *"Make it good. Make it excellent, in fact. You may bring
+back the intent justification if you think it is the right thing to do."* What
+that licensed, and what it did not, is worth recording.
+
+**The compaction cut the WHY along with the war-story, and those are different
+things.** A war-story ("Snag #17 corrupted a later `parse_float`") belongs here.
+A one-clause reason ("Prose rots; guards don't") belongs *with the rule*, because
+it is what makes the rule survive contact with a clever agent. A rule stripped to
+its bare imperative gets followed literally by a weaker reader and rationalised
+around by a stronger one. Seven clauses came back, each attached to the rule it
+explains, each now PINNED so the next compaction cannot strip them silently:
+
+| row | the rule it keeps alive |
+|---|---|
+| `WHY-verbatim` | a summarised fold introduces errors of its own — the rule a capable agent is most tempted to optimise away |
+| `WHY-core6` | prose rots; guards don't |
+| `WHY-core12` | a fixture green before and after is worse than none — it reads as coverage |
+| `WHY-core14` | an unenforced assertion misleads the reader who trusts it |
+| `WHY-ma1` | an agent loose in the main worktree sweeps the parent's uncommitted work into limbo |
+| `WHY-nopack` | a reused context anchors on its own prior conclusions |
+| `WHY-scout` | this tree's most expensive mistakes were briefs built on stale premises |
+
+This is the one ceiling RAISE in the file's history that bought something other
+than rules (47,400 → 49,200).
+
+**Three structural defects the compaction exposed rather than caused.**
+
+1. **Core #15's sub-list ran (a) (b) (c-bis) (c) (d).** `c-bis` had been inserted
+   above the clause it extends, and no guard sees ordering. Renumbered to
+   (a)–(e) in dependency order: fold at the right granularity, *then* grep for
+   surviving contradictions.
+2. **The gauntlet's purpose was the seventh paragraph of its own section.** A
+   reader met *"until a fresh pass raises no reservations"* six paragraphs before
+   meeting the frame that bounds it. Ordering is not cosmetic when the buried
+   clause is the terminating condition — moved to second.
+3. **The section heading was a sentence** duplicating the four-artifact list in
+   its own body. Now `## Review with a fresh agent — the gauntlet`; the
+   `(→ Review … fresh agent)` cross-references still read correctly.
+
+**On audience, the split was considered and REJECTED.** Roughly half the file
+binds only the orchestrator, and subagents pay for it in tokens — a real cost the
+owner named. The obvious fix is a second rules file. It is wrong, because the
+auto-loaded file is loaded by the MAIN session, and the main session is the
+orchestrator. Splitting would put the rules their primary reader needs into the
+file they do not automatically get, trading a token cost for a correctness risk:
+process discipline that silently vanishes when someone forgets to read file two.
+Subagents receive briefs, and the brief is their real contract. What landed
+instead is cheap and safe: a **reader's map** naming who each part binds
+(`MAP-all`, `MAP-orch`, `MAP-core`), and a reordering so § Task Continuity closes
+the everyone-material and the three orchestrator sections form one contiguous
+block at the end.
+
+**What was deliberately NOT done.** A mechanical down-casing of the file's
+capitals. 386 caps tokens is 5.3% of the words, which reads as shouting — but 232
+of them sit inside pinned probes, and most mark genuine polarity (NEVER, ONLY,
+EVERY) that a skimming reader must not miss. Churning ~100 probes to restyle
+emphasis is a large reviewed diff for a small aesthetic gain, and the guard
+correctly makes that expensive. Recorded here as a considered no, so the next
+reader does not re-derive it.

@@ -42,6 +42,25 @@
   neighbours again, not by raising the ceiling. Mechanising the rows so they LEAVE the checklist is filed as
   `todo/t0726`.
 
+  **Excellence pass (owner: "make it excellent; you may bring back the intent justification").** The first
+  compaction cut the WHY along with the war-story, and they are different things: a war-story belongs in
+  devbook, a one-clause reason belongs WITH the rule, because a bare imperative gets followed literally by a
+  weaker reader and rationalised around by a stronger one. Seven justification clauses restored, each attached
+  to its rule and each now PINNED so the next compaction cannot strip them silently — `WHY-verbatim` (a
+  summarised fold introduces errors of its own) above all, since FOLD VERBATIM is the rule a capable agent is
+  most tempted to optimise away. Three structural defects fixed: Core #15's sub-list ran **(a) (b) (c-bis) (c)
+  (d)** — `c-bis` inserted above the clause it extends, no guard sees ordering — renumbered (a)–(e) in
+  dependency order; the gauntlet's PURPOSE was the seventh paragraph of its own section, six paragraphs after
+  the unbounded-sounding rule it bounds, now second; the section heading was a sentence duplicating its own
+  body, now `## Review with a fresh agent — the gauntlet`. Added a reader's map (`MAP-all`/`MAP-orch`/
+  `MAP-core`) and moved § Task Continuity up so the three orchestrator-only sections form one contiguous block.
+  Core #15's SIX QUESTIONS moved to the orchestrator's section, where their own text says they are used.
+  **The audience split into two files was considered and REJECTED:** the auto-loaded file is loaded by the MAIN
+  session, which IS the orchestrator, so splitting would put the rules their primary reader needs into the file
+  they do not automatically get — trading a token cost for process discipline that silently vanishes.
+  Size ceiling RAISED 47_400 → 49_200 (the only raise in this file's history that bought something other than
+  rules); rows 451 → 456, exemptions 85 → 92. Final: 48,743 bytes.
+
   **Verified, not asserted.** Guards RED-demonstrated on the landed file: deleting `RL-5-red`, `REV-growscope`
   or `REV-launch` each fires `agents_md_rule_inventory_is_pinned` BY NAME; inserting an unpinned clause fires
   `agents_md_every_clause_is_classified`; all restore green. `cargo test --test lints` 175 passed,

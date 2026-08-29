@@ -8131,7 +8131,7 @@ fn readiness_checklist_rows_are_capped() {
 /// second copy of the number that can drift from it. Lowering is free; raising
 /// needs owner sign-off — the rationale, the history, and what the current
 /// headroom is FOR live in the comment inside the ratchet below.
-const AGENTS_MD_SIZE_CEILING: u64 = 47_400;
+const AGENTS_MD_SIZE_CEILING: u64 = 49_200;
 
 #[test]
 fn agents_md_size_ratchet() {
@@ -8161,6 +8161,20 @@ fn agents_md_size_ratchet() {
     // mechanical carve-out (`MA-0-mech`), letting the orchestrator fix a typo
     // or stale figure in place instead of spending an agent round-trip on it.
     // Evidence: devbook/30 §20.
+    //
+    // 2026-08-29, LATER THE SAME DAY — the ceiling ROSE, 47_400 -> 49_200, on an
+    // explicit owner instruction ("Make it excellent... You may bring back the
+    // intent justification if you think it is the right thing to do"). This is
+    // the one raise in this file's history that bought something other than
+    // rules: the first compaction pass cut the WHY along with the war-story,
+    // and a rule stripped to its imperative is followed literally by a weaker
+    // reader and rationalised around by a stronger one. Seven justification
+    // clauses came back, each ONE clause, each attached to the rule it explains
+    // — the FOLD VERBATIM rule's reason above all, because that is the rule a
+    // clever agent is most tempted to optimise away. The war-stories stayed in
+    // devbook/29-30. If a future compaction is tempted to cut these again:
+    // they are the seven `WHY-*` rows added on this date, and they were removed
+    // once already.
     //
     // ⚠ THE PRIOR "~58_000 IS THE FLOOR" FINDING WAS WRONG, and is retired
     // rather than restated: it measured the prose the rules were wrapped in,
@@ -8227,6 +8241,9 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("META-unratified", "unratified owner open-thinking goes to devbook/30"),
     ("META-reviewer", "So the diff is the guard: after editing a rule, re-read the whole rule"),
     ("META-harness", "never only in one harness's private memory"),
+    ("MAP-all", "binds **every agent**"),
+    ("MAP-orch", "bind the **orchestrator**"),
+    ("MAP-core", "obey the Core invariants regardless"),
     ("CORE-1", "Fix at the write site, not the read site"),
     ("CORE-2", "Typed metadata, never name-matching"),
     ("CORE-3", "Register ownership at the value's birth"),
@@ -8401,6 +8418,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("REV-langref", "a reference-vs-code conflict is an OPEN QUESTION"),
     ("REV-seq", "The passes are SEQUENTIAL, not parallel"),
     ("REV-floor", "≥3 passes is the FLOOR; there is NO upper bound"),
+    ("REV-converging", "consecutive blocking passes are the gauntlet CONVERGING, not failing"),
     ("REV-launch", "Launch the executor as soon as a fresh pass signs off the DESIGN"),
     ("REV-checklist", "Convergence gate — the READINESS CHECKLIST"),
     ("REV-ck1", "every measurement carries a FIRE COUNT"),
@@ -8421,6 +8439,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("REV-disposition", "disposition belongs to Multi-agent rule 0"),
     ("REV-errata", "Terminal-pass minors fold as MARKED ERRATA"),
     ("REV-verbatim", "FOLD VERBATIM, NEVER SUMMARISED"),
+    ("REV-verbatim2", "no reviewer's summary of a finding replaces the finding"),
     ("REV-precedence", "explicit precedence line (later > earlier > body)"),
     ("REV-orch-directives", "an addendum may DECIDE (scope, choice, retraction), never RESTATE"),
     ("REV-unchanged", "operative text: pass-N §X, unchanged"),
@@ -8760,6 +8779,13 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
     ("PTR-sh-pairs", "This rule pairs with \"Don't redesign around compiler gaps\"", 1),
     ("PTR-done-fmt", "`- [2026-02-10] Task description`", 1),
     ("WHY-core15a", "A claim with no command is not a claim, it is a hope", 1),
+    ("WHY-verbatim", "A summarised fold introduces errors of its own", 1),
+    ("WHY-core6", "Prose rots; guards don't", 1),
+    ("WHY-core12", "it reads as coverage", 1),
+    ("WHY-core14", "rot that will mislead a reader who trusts it", 1),
+    ("WHY-ma1", "sweeps the parent's uncommitted work into limbo", 1),
+    ("WHY-nopack", "anchors on its own prior conclusions", 1),
+    ("WHY-scout", "briefs built on stale premises", 1),
     ("WHY-lay1", "Invariants accumulate; abstractions evaporate", 1),
     ("WHY-nnm", "The metadata you need is missing one layer up", 1),
     ("WHY-dbg-q", "*Where was it last written?*", 1),
@@ -8795,10 +8821,10 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
 /// Shrink-only floor on the inventory, so a compaction cannot delete rows and
 /// the rules they pin in one move. RAISING is free (new rules landed);
 /// LOWERING requires owner sign-off, like the byte ceiling.
-const AGENTS_MD_RULE_FLOOR: usize = 451;
+const AGENTS_MD_RULE_FLOOR: usize = 456;
 
 /// Grow-only ceiling on the escape hatch (see above).
-const AGENTS_MD_MAX_NON_NORMATIVE: usize = 85;
+const AGENTS_MD_MAX_NON_NORMATIVE: usize = 92;
 
 /// Collapse every run of whitespace to a single space, so a probe survives the
 /// file being re-wrapped or re-flowed (Core #15(c): prose WRAPS).

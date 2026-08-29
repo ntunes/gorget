@@ -11,6 +11,8 @@ Gorget is a statically typed, Python-like language with Rust-inspired ownership 
 
 **Binary:** `gg` with commands: `lex`, `parse`, `check`, `build`, `run`
 
+**Who this binds.** Everything down to and including § Task Continuity binds **every agent** — orchestrator, scout, executor, reviewer alike. The last three sections (§ Multi-agent orchestration, § Review …, § Round lifecycle) bind the **orchestrator**, plus whatever a brief passes on to the agent it launches. Read the part that binds you, and obey the Core invariants regardless.
+
 ## Core invariants (read first)
 
 The sections below are the spec; these are the load-bearing rules they reduce to.
@@ -22,35 +24,27 @@ The sections below are the spec; these are the load-bearing rules they reduce to
 3. **Register ownership at the value's birth.** Every freshly-materialized owned, droppable value is registered for drop (or provably moved) at the producer; the leak/double-free class is always a missing or mis-typed ownership tag. (→ Ownership at Consuming Positions)
 4. **One fix, all siblings.** Fix the enumerated *class*, not the instance; centralize at the producer; add an arm-count lint. (→ Layering discipline)
 5. **Re-verify every premise; regenerate every number.** No dated figure enters a plan/brief/commit/handover unless you regenerated it this session. (→ Solution Quality)
-6. **Convert a recurring bug class into an executable guard** (validator or `tests/lints.rs` ratchet: env-gate → burn down → fatal). When passes or rounds keep finding ONE class in new costumes, the round's output owes the class-retiring guard. (→ `docs/devbook/25-structural-guards.md`)
+6. **Convert a recurring bug class into an executable guard** (validator or `tests/lints.rs` ratchet: env-gate → burn down → fatal). Prose rots; guards don't. When passes or rounds keep finding ONE class in new costumes, the round's output owes the class-retiring guard. (→ `docs/devbook/25-structural-guards.md`)
 7. **Gate on the bootstrap and the sanitizer**, not just a green suite — `self_host_bootstrap_fixed_point` + ASan catch what `cargo test` and the always-pass `*_comparison` diagnostics miss. (→ Build & Test)
 8. **Reference-grade is the bar, not parity with a possibly-wrong reference.** "Matches Rust gg" / "both backends agree" / "only fails on programs that are UB on both" is *necessary, not sufficient*. If the agreed-on behavior is itself wrong, that is ≥2 bugs to fix in BOTH compilers — most often by making the language *reject* it. "Benign because both backends are UB" is a red flag, never a pass; the output-review must refuse to ship a known defect. (→ Review … fresh agent)
 9. **A SEMANTIC change lands on every lane in the same round** — ggdef (in subset), Rust gg (C+LLVM), self-host — pinned by a cross-lane fixture, never a promise. Anything altering accept/reject ships with the conformance fixture encoding the intended FINAL state; a lagging lane is a red lane or an explicit `#[ignore]`+citation; out-of-subset shapes get a note + a filed subset gap. Implementation-internal fixes (one backend's codegen) are exempt. A track flipping fixture expectations carries the FULL ggdef suite. A round's OWN new fixtures must COMPILE + MATCH on the self-host lane the SAME ROUND; only PRE-EXISTING non-MATCH are exempt from `RUNTIME_DIFF_NONMATCH_CEILING`, and raising it for your OWN inflow is forbidden.
 10. **Lower-or-reject — never silently drop user syntax.** Every lowering arm either lowers the construct or emits a check-time rejection; a `_ =>` fall-through that discards a write is a miscompile-class defect. Enforcement: the silent-fallthrough allowlist ratchet.
 11. **Every fix ships wide, genuinely-exercising regression fixtures, same round.** Exercise the bug on the *real* path — non-constant operands, wired to RUN, one per sibling for a class, wide enough that a partial regression trips them (costumes · shapes · POS+NEG · lane pins). A single existing NEG with a thin harness pin is a floor, not the bar. The fixture lands WITH the fix, never "later", on every touch.
 12. **A regression fixture is not coverage until it has been seen to FAIL — and a fixture set that samples one value of a typed axis is an anecdote, not a net.**
-    - **RED-verify.** Run every new fixture against the PRE-fix compiler and record the failure. A fixture green before *and* after the fix tests nothing.
+    - **RED-verify.** Run every new fixture against the PRE-fix compiler and record the failure. A fixture green before *and* after the fix tests nothing, and is worse than none — it reads as coverage.
     - ⚠ **GREEN ON ARRIVAL IS NOT COVERAGE** — RED-verify binds EVERY new fixture. For a shipped feature, break the mechanism it claims to guard, confirm RED, restore. If neither red is possible, say so in the header and state what it pins instead.
     - **A fixture's NAME is a claim about SCOPE** — make it true or narrow it; record which CELL of which axis it samples.
     - **Axis-complete.** Where behaviour depends on a typed axis — field type · receiver/root shape · backend · lane · element type — the net must cover every value of that axis, or name each omitted cell and why. ENUMERATE its axes first, and check what each fixture *actually* exercises. Go TYPE-first on a partial audit.
 13. **Verify the verifier — and pick an instrument that can SEE the failure class.**
     - **Demonstrate a red.** Before reporting "gates green", show at least one gate going RED on a deliberately broken variant. A gate that has never been seen to fail is not evidence.
     - **Ask ggdef FIRST — a TRIAGE instrument, not just a round-close gate.** Run the shape through the oracle during triage and treat disagreement as the finding. But ggdef adjudicates VALUE SEMANTICS and is STRUCTURALLY BLIND to memory-invalidation — it accepts live heap-UAFs. ASan on the real backends adjudicates memory validity. ggdef can LAG a ratified decision — or be WRONG: it IMPLEMENTS the definition, it is not the definition. A BOTH-WRONG row is an OWNER ASK only if the semantics are UNRATIFIED; where the ledger rules, fix ggdef.
-14. **An invariant-asserting comment needs an enforcing guard, or it gets DELETED.** "This is unreachable", "the only consumer is X" — either a `debug_assert!`/lint/typed guard, or rot (Core #6 applied to prose). When you touch code near such a comment, verify it or delete it — never inherit it.
+14. **An invariant-asserting comment needs an enforcing guard, or it gets DELETED.** "This is unreachable", "the only consumer is X" — either a `debug_assert!`/lint/typed guard, or rot that will mislead a reader who trusts it (Core #6 applied to prose). When you touch code near such a comment, verify it or delete it — never inherit it.
 15. **Make rigor MECHANICAL, not clever — the gauntlet must still work with a weaker reviewer.**
-    - **(a)** Every load-bearing claim in a brief carries its VERIFICATION COMMAND. A claim with no command is not a claim, it is a hope.
+    - **(a) Every load-bearing claim in a brief carries its VERIFICATION COMMAND.** A claim with no command is not a claim, it is a hope.
     - **(b) Scope over a SET → present the SET:** the total enumeration with a disposition per row (LAND / DEFER / NEVER + reason), never a selection.
-    - **(c-bis) FOLD AT THE GRANULARITY OF THE DEFECT — VERIFY AT THE GRANULARITY OF THE SECTION.** One clause wrong ⇒ edit that clause; then re-read the WHOLE enclosing section — heading, both neighbouring paragraphs, and the comments inside its examples. On a rewrite, ask "what did the old text stop saying".
-    - **(c) Fold a correction → GREP for the thing it corrects**, in its *instruction form* (`old`→`new`), grepping the SHORTEST DISTINCTIVE TOKEN, never the sentence. Instruction form, because explanatory prose legitimately mentions the old value. Edit-asserts catch a MISSING fold; only a grep catches a SURVIVING CONTRADICTION.
-    - **(d) Fixed procedures for the recurring claim types**, run without judgement: *"fixture F guards mechanism M"* → break M, run F, confirm RED · *"X is filed"* → grep the record · *"there are N sites"* → run the census command and compare · *"shape S behaves B"* → build and run on C AND LLVM, plus ggdef when in-subset. MIND THE PROBE: never test accept/reject inside an f-string, never read a crash off a PIPELINE · *"the gates are green"* → make one go RED, once · *"line L says X"* → read L at HEAD.
-    - **(e) The SIX QUESTIONS no runbook generates**, asked of every brief and every "defect":
-      1. **Is this asymmetry a DEFECT, or two positions with different RATIFIED semantics?**
-      2. **Can this guard catch its OWN class?**
-      3. **Is this enumeration TOTAL, or a selection?**
-      4. **Does this rule's SUBJECT actually cover the case** — or is there a case with no subject at all?
-      5. **Am I reasoning about emission, or emission ORDER?**
-      6. **Is this passing case ACCIDENTALLY correct?**
-      ⚠ Plus one about the record itself: *is this premise still TRUE, or a filed fact that decayed?* A considered decision in a scratch file outranks a stale one in the ledger, and the fix is to **file it properly**, not to discount it. The signal that the process has thinned: reviews finding only compression errors, never a design defect.
+    - **(c) FOLD AT THE GRANULARITY OF THE DEFECT — VERIFY AT THE GRANULARITY OF THE SECTION.** One clause wrong ⇒ edit that clause; then re-read the WHOLE enclosing section — heading, both neighbouring paragraphs, and the comments inside its examples. On a rewrite, ask "what did the old text stop saying".
+    - **(d) Fold a correction → GREP for the thing it corrects**, in its *instruction form* (`old`→`new`), grepping the SHORTEST DISTINCTIVE TOKEN, never the sentence. Instruction form, because explanatory prose legitimately mentions the old value. Edit-asserts catch a MISSING fold; only a grep catches a SURVIVING CONTRADICTION.
+    - **(e) Fixed procedures for the recurring claim types**, run without judgement: *"fixture F guards mechanism M"* → break M, run F, confirm RED · *"X is filed"* → grep the record · *"there are N sites"* → run the census command and compare · *"shape S behaves B"* → build and run on C AND LLVM, plus ggdef when in-subset. MIND THE PROBE: never test accept/reject inside an f-string, never read a crash off a PIPELINE · *"the gates are green"* → make one go RED, once · *"line L says X"* → read L at HEAD.
 
 Delegated work runs scout → brief → ≥3 fresh brief-reviews → launch (worktree) → fresh output-review → integrate (→ Review … with a fresh agent), inside the Round lifecycle.
 
@@ -250,6 +244,24 @@ Rules:
 
 **This rule pairs with "Don't redesign around compiler gaps"** — that one is about not creating new dodges; this one retires old ones.
 
+## Task Continuity
+
+**Work items live ONE PER FILE in `todo/`**: TOML front matter, `+++`, prose verbatim — spec in `scripts/todo_index.py`. A field the item's text does not state stays EMPTY. `TODO.md` keeps the handover, the invariants, and a GENERATED index (`scripts/todo_index.py --write`; lint `todo_index_is_current`).
+
+**Cardinal rule:** any deferred work — a discovered bug, a remaining sub-task, a blocked feature — must be filed as a `todo/<id>.md` item before moving on. Nothing falls through the cracks.
+
+- **Adding work:** one new `todo/<id>.md`, then regenerate the index. Never replace existing items. Categorize by priority (High / Medium / Low).
+- **Completing work:** `git rm` the item file and add it to the top of `DONE.md` with a date stamp: `- [2026-02-10] Task description`. Closure IS removal — never a `status` field; git keeps the item's whole life.
+- **Before overwriting your plan:** check if there are incomplete items from the previous plan and file them.
+- **Restoring context:** Read `TODO.md` at the start of every conversation and after finishing any tangential fix.
+- **Discovered issues:** Fix small bugs inline. For anything too large to fix immediately, file it and move on. Never silently work around a bug — either fix it or record it.
+- **Every filed reproducible bug/gap ships a DURABLE `known_gaps` repro**, never a `/tmp` scratch file. Commit a minimal reproducer to `tests/fixtures/known_gaps/` and wire an `#[ignore]`d test asserting the **CORRECT/intended** output (or an ASan/`security_safe_no_leak` fixture for a leak/UAF), cited from the item's `repro`. Keep the exact shape (leaks need a *heap-forced* value, not a literal); it graduates to a live regression fixture the same round the bug is fixed. This is the one exception to "scouts/briefs are `/tmp`-only" — the triage *paperwork* is `/tmp`, the *repro* is committed. ⊕ **A repro CITED by an item is that item's EVIDENCE, not a second filing**; an UNCITED gap fixture still counts on its own, and non-reproducible items (design notes, refactors, perf without a repro) are naturally exempt.
+- **GREP `todo/` BEFORE YOU FILE** — the symptom AND the mechanism. When the defect joins a family, state what DISCRIMINATES it (panic site, lane, axis cell) and name the WHOLE family.
+- **Never delete `TODO.md` or bulk-delete `todo/`** — only move completed items out.
+- **The handover stores invariants and commands, not numbers.** Record *what to run to get the current number* and what it means, not the number itself.
+- **Commit autonomously when green.** Once `cargo test --lib` and the round's relevant integration tests pass, commit without asking — this waiver overrides the harness default of "commit only when the user asks". It covers `git commit` only: still ask before push / force-push / `reset --hard` / `branch -D` / `rm -rf` / amend / rebasing onto a shared branch / opening or closing PRs. Never commit red or skipped.
+- **Stale-pending scan.** Move completed items to `DONE.md` every session and stale-scan pending ones — verify the cited bug/stub still exists. Keep items short and scannable, and keep the pending set small.
+
 ## Multi-agent orchestration
 
 When you launch sub-agents via the `Agent` tool, the following rules are **non-negotiable**:
@@ -264,7 +276,7 @@ When you launch sub-agents via the `Agent` tool, the following rules are **non-n
 
 0b. **Orchestrator is branch-agnostic.** Stay in the launch worktree — that *is* the session integration branch. Never hardcode a branch name and never check a track branch out there. Subagents always get their own worktree; parent integrates back.
 
-1. **Always pass `isolation: "worktree"`.** No exceptions; applies to NESTED forks too.
+1. **Always pass `isolation: "worktree"`.** No exceptions; applies to NESTED forks too — an agent loose in the main worktree sweeps the parent's uncommitted work into limbo.
 
 2. **Brief the agent to verify its worktree on entry.** Open every agent prompt with:
    > **Run `pwd` and `git rev-parse --show-toplevel` FIRST** and confirm both point inside your worktree. NEVER touch the main checkout or the orchestrator worktree — every file op, `cargo`, and `git` command runs in your worktree path. Do NOT `cd` into either. Do NOT use absolute paths into main or the orchestrator worktree (worktrees nest UNDER main, so those write into MAIN — see rule 7). If `pwd` is main or the orchestrator worktree, STOP and report it. (Concrete paths live in the session handover.)
@@ -283,27 +295,38 @@ When you launch sub-agents via the `Agent` tool, the following rules are **non-n
 
 9. **Checkpoint scout prototypes to /tmp EARLY; run final gates FOREGROUND.** Agents are killable at any moment. Brief agents to checkpoint to `/tmp/recover_*.patch` after every meaningful step and to run FINAL validation gates as foreground commands with generous timeouts.
 
-## Review plans, TODO items, AND agent briefs/outputs with a fresh agent
+## Review with a fresh agent — the gauntlet
 
 A **fresh** agent must review any non-trivial artifact before it's acted on, folding each pass's findings, until a fresh pass raises no reservations. ⚠ THE GAUNTLET VERIFIES WORK; IT DOES NOT DEFER IT — fresh passes exist so one pass cannot quietly break something, NOT as a queue for handing fixes to the next agent or the next round; the round that surfaced it still owes the fix. Use a *new* agent each pass — a reused one anchors on its prior conclusions. Brief every reviewer to verify each load-bearing claim against source with `file:line` and return SIGN OFF or cited reservations; cross-check them yourself — a reviewer can be wrong too.
 
+⚠ **THE GAUNTLET SIGNS OFF THE DESIGN; ITS OBJECT IS TO REACH THE EXECUTOR.** Each pass asks whether the design makes sense and serves the project's objectives; the executor still owns the solution, reviewed in turn by the post-execution pass. ⚠ **SCOPE MAKES IT TERMINATE**: a finding resets the streak ONLY when it invalidates the DESIGN — wrong root cause, wrong layer, a Core invariant fought. **A finding that is merely more WORK inside a sound design — another sibling site, a nearby bug, a typo — GROWS THE TRACK'S SCOPE, ships to the executor in the brief, and does NOT reset the streak.** Never file such a finding as a `todo/` item for a later round, and never let it delay the launch. A TREE defect found while reviewing, and an ORCHESTRATOR fold/guard defect, are not the track's. Reviewers still hunt freely, and disposition belongs to Multi-agent rule 0. Terminal-pass minors fold as MARKED ERRATA, never woven into the body; the executor treats errata as spec.
+
 **The reviewer's checklist is DESIGN-SOUNDNESS, not just premise-accuracy: a brief or diff that violates a Core invariant is a blocking reservation *even when the code works and every premise checks out*.** Brief every reviewer to test the artifact's DESIGN against the Core invariants + Layering discipline and raise any violation as a cited reservation. "Correct and premise-accurate" is NOT a SIGN OFF if the design fights an invariant — the reviewer names the invariant and the reference-grade shape instead.
 
-**Scout before you brief.** Before writing a brief — and before committing to any non-trivial plan — run a scout: a read-only probe/audit (often a delegated `Explore` agent) that verifies every load-bearing premise against CURRENT source with `file:line`, confirms the bug still reproduces, and where a yield is claimed prototypes it end-to-end and MEASURES the real result. Killing an unsound plan after a one-agent scout is a win. Scout yield estimates MUST be end-to-end-verified — compile AND run AND diff whole output, never source-read.
+**Scout before you brief.** This tree's most expensive mistakes were briefs built on stale premises. Before writing a brief — and before committing to any non-trivial plan — run a scout: a read-only probe/audit (often a delegated `Explore` agent) that verifies every load-bearing premise against CURRENT source with `file:line`, confirms the bug still reproduces, and where a yield is claimed prototypes it end-to-end and MEASURES the real result. Killing an unsound plan after a one-agent scout is a win. Scout yield estimates MUST be end-to-end-verified — compile AND run AND diff whole output, never source-read.
 
 **Ground the scout's design in the docs, not just the code.** Every scout brief MUST tell the agent to consult the relevant documentation FIRST — `docs/language-design.md`, `docs/book/`, `docs/devbook/`, `docs/internals/` — and base the design on it, citing the sections it rests on. The code shows what IS; the docs show what's INTENDED, and a code-only design reproduces whatever fossil is there. ⚠ EXCEPT `docs/language-reference.md`, written AFTER the implementation, a reference-vs-code conflict is an OPEN QUESTION, not doc-wins, and a load-bearing one is an OWNER ASK.
 
-**The passes are SEQUENTIAL, not parallel**; a blocking pass always gets a confirming fresh pass after the fold. ≥3 passes is the FLOOR; there is NO upper bound — consecutive blocking passes are the gauntlet CONVERGING, not failing. **Launch the executor as soon as a fresh pass signs off the DESIGN.**
+**The passes are SEQUENTIAL, not parallel**; a blocking pass always gets a confirming fresh pass after the fold. ≥3 passes is the FLOOR; there is NO upper bound on passes that keep finding DESIGN defects — consecutive blocking passes are the gauntlet CONVERGING, not failing. **Launch the executor as soon as a fresh pass signs off the DESIGN.**
 
 **Convergence gate — the READINESS CHECKLIST.** A track is ready when the brief satisfies all FIVE, each binary and checkable without judgement: (1) every measurement carries a FIRE COUNT proving the mechanism executed; (2) every enumeration cites an INDEPENDENT witness (rustc exhaustiveness, a repo lint table — never the enumerator's own list); (3) `|pinned cells| == |changed cells|`; (4) the GUARD FAILS when the fix is reverted; (5) every load-bearing figure REGENERATED at current HEAD. ⚠ **The FIVE are CAPPED — a new class RETIRES a row or becomes a guard (Core #6), never a sixth.**
 
-⚠ **THE GAUNTLET SIGNS OFF THE DESIGN; ITS OBJECT IS TO REACH THE EXECUTOR.** Each pass asks whether the design makes sense and serves the project's objectives; the executor still owns the solution, reviewed in turn by the post-execution pass. ⚠ **SCOPE MAKES IT TERMINATE**: a finding resets the streak ONLY when it invalidates the DESIGN — wrong root cause, wrong layer, a Core invariant fought. **A finding that is merely more WORK inside a sound design — another sibling site, a nearby bug, a typo — GROWS THE TRACK'S SCOPE, ships to the executor in the brief, and does NOT reset the streak.** Never file such a finding as a `todo/` item for a later round, and never let it delay the launch. A TREE defect found while reviewing, and an ORCHESTRATOR fold/guard defect, are not the track's. Reviewers still hunt freely, and disposition belongs to Multi-agent rule 0. Terminal-pass minors fold as MARKED ERRATA, never woven into the body; the executor treats errata as spec.
-
-**FOLD VERBATIM, NEVER SUMMARISED; STACK FOLDS AS PRECEDENCE-ORDERED ADDENDA.** Each fold generation is its own marked addendum with an explicit precedence line (later > earlier > body); never rewrite the body silently. ⚠ **This binds the ORCHESTRATOR'S OWN directives too** — an addendum may DECIDE (scope, choice, retraction), never RESTATE; a restatement compresses, and OUTRANKS the verbatim text it compressed. Not narrowing ⇒ cite *operative text: pass-N §X, unchanged*; overriding PART ⇒ NAME the part; errata are RESTATED, never pointed at. After each fold re-read the enclosing SECTION and grep the correction.
+**FOLD VERBATIM, NEVER SUMMARISED; STACK FOLDS AS PRECEDENCE-ORDERED ADDENDA.** A summarised fold introduces errors of its own — that is what this rule was bought with, and it is why no reviewer's summary of a finding replaces the finding. Each fold generation is its own marked addendum with an explicit precedence line (later > earlier > body); never rewrite the body silently. ⚠ **This binds the ORCHESTRATOR'S OWN directives too** — an addendum may DECIDE (scope, choice, retraction), never RESTATE; a restatement compresses, and OUTRANKS the verbatim text it compressed. Not narrowing ⇒ cite *operative text: pass-N §X, unchanged*; overriding PART ⇒ NAME the part; errata are RESTATED, never pointed at. After each fold re-read the enclosing SECTION and grep the correction.
 
 Rationale + D45: devbook/30 §12; examples: [`docs/devbook/29`](docs/devbook/29-contributor-playbook.md#scout-before-you-brief-review-in-sequential-fresh-passes).
 
-**One track, one agent, clean context — NO pack reviews.** Forbidden: a single "pack" reviewer reading N track briefs (or N executor diffs) in one conversation and signing them off together. Required: per track, ≥3 sequential fresh brief-review agents each seeing *only that track's brief* (N tracks ⇒ N×≥3 agents); one executor per track (worktree); one fresh output-review per track's diff before it integrates. Pass *k* may run in parallel *across* tracks; within* a track passes stay sequential. Parallelism is *across tracks*, not *across roles for the same track*.
+**The SIX QUESTIONS no runbook generates.** (a)-(e) of Core #15 mechanise procedure, not taste; ask these of every brief and every "defect" before acting on it:
+
+1. **Is this asymmetry a DEFECT, or two positions with different RATIFIED semantics?** Check the design record before calling an accept/reject asymmetry a bug.
+2. **Can this guard catch its OWN class?** A guard that green-lights the class it was written to retire is worse than none.
+3. **Is this enumeration TOTAL, or a selection?** A selection cannot show you what it omits.
+4. **Does this rule's SUBJECT actually cover the case** — or is there a case with no subject at all, which no widening of the rule fixes?
+5. **Am I reasoning about emission, or emission ORDER?** When a thing happens relative to its siblings is only visible in the IR.
+6. **Is this passing case ACCIDENTALLY correct?** A green cell may be green for a reason unrelated to what you think it tests.
+
+⚠ Plus one about the record itself: *is this premise still TRUE, or a filed fact that decayed?* A considered decision in a scratch file outranks a stale one in the ledger, and the fix is to **file it properly**, not to discount it. The signal that the process has thinned: reviews finding only compression errors, never a design defect.
+
+**One track, one agent, clean context — NO pack reviews.** A reused context anchors on its own prior conclusions and divides attention across the tracks sharing it. Forbidden: a single "pack" reviewer reading N track briefs (or N executor diffs) in one conversation and signing them off together. Required: per track, ≥3 sequential fresh brief-review agents each seeing *only that track's brief* (N tracks ⇒ N×≥3 agents); one executor per track (worktree); one fresh output-review per track's diff before it integrates. Pass *k* may run in parallel *across* tracks; within* a track passes stay sequential. Parallelism is *across tracks*, not *across roles for the same track*.
 
 **Model allocation (harness-agnostic).** EVERY agent — scout, executor, every review pass — runs the STRONGEST available model. A rationing harness keeps it LAST at: (a) the FIRST review pass on a fresh artifact — first contact catches the structural defects while folding is cheapest; (b) the FINAL pre-integration output-review, for consequence and model diversity; (c) ad-hoc arbitration when two agents disagree. Mandate quality still dominates model strength.
 
@@ -319,24 +342,6 @@ A multi-track round is N independent per-track loops (scout → brief → ≥3 r
 **Scouts, briefs, and review checkpoints** — scout reports, executor briefs, census reports, review notes — are `/tmp`-only — never `git add` them. Durable content goes to its official home (`docs/language-design.md` / the define-gorget ledger / book / devbook); `todo/` items are written **self-contained**, findings inline, never "see the scout file". **The single session-state doc is `TODO.md`'s handover block.** Round close `git rm`s any scout/brief that slipped into the repo, guarded by the shrink-only allowlist lint `docs_plans_removed_and_define_gorget_is_ledger_only`; moving durable content out and deleting a completed plan is itself a reviewed change.
 
 **Fold/patch scripts MUST assert their replace targets matched.** A stale target silently dropped wastes the entire pass, so every fold asserts the old text was found and the new text landed (a `must_replace` helper), then greps a distinctive fragment of the new text — or just use the Edit tool, which errors on no-match. `str.replace` silently no-ops.
-
-## Task Continuity
-
-**Work items live ONE PER FILE in `todo/`**: TOML front matter, `+++`, prose verbatim — spec in `scripts/todo_index.py`. A field the item's text does not state stays EMPTY. `TODO.md` keeps the handover, the invariants, and a GENERATED index (`scripts/todo_index.py --write`; lint `todo_index_is_current`).
-
-**Cardinal rule:** any deferred work — a discovered bug, a remaining sub-task, a blocked feature — must be filed as a `todo/<id>.md` item before moving on. Nothing falls through the cracks.
-
-- **Adding work:** one new `todo/<id>.md`, then regenerate the index. Never replace existing items. Categorize by priority (High / Medium / Low).
-- **Completing work:** `git rm` the item file and add it to the top of `DONE.md` with a date stamp: `- [2026-02-10] Task description`. Closure IS removal — never a `status` field; git keeps the item's whole life.
-- **Before overwriting your plan:** check if there are incomplete items from the previous plan and file them.
-- **Restoring context:** Read `TODO.md` at the start of every conversation and after finishing any tangential fix.
-- **Discovered issues:** Fix small bugs inline. For anything too large to fix immediately, file it and move on. Never silently work around a bug — either fix it or record it.
-- **Every filed reproducible bug/gap ships a DURABLE `known_gaps` repro**, never a `/tmp` scratch file. Commit a minimal reproducer to `tests/fixtures/known_gaps/` and wire an `#[ignore]`d test asserting the **CORRECT/intended** output (or an ASan/`security_safe_no_leak` fixture for a leak/UAF), cited from the item's `repro`. Keep the exact shape (leaks need a *heap-forced* value, not a literal); it graduates to a live regression fixture the same round the bug is fixed. This is the one exception to "scouts/briefs are `/tmp`-only" — the triage *paperwork* is `/tmp`, the *repro* is committed. ⊕ **A repro CITED by an item is that item's EVIDENCE, not a second filing**; an UNCITED gap fixture still counts on its own, and non-reproducible items (design notes, refactors, perf without a repro) are naturally exempt.
-- **GREP `todo/` BEFORE YOU FILE** — the symptom AND the mechanism. When the defect joins a family, state what DISCRIMINATES it (panic site, lane, axis cell) and name the WHOLE family.
-- **Never delete `TODO.md` or bulk-delete `todo/`** — only move completed items out.
-- **The handover stores invariants and commands, not numbers.** Record *what to run to get the current number* and what it means, not the number itself.
-- **Commit autonomously when green.** Once `cargo test --lib` and the round's relevant integration tests pass, commit without asking — this waiver overrides the harness default of "commit only when the user asks". It covers `git commit` only: still ask before push / force-push / `reset --hard` / `branch -D` / `rm -rf` / amend / rebasing onto a shared branch / opening or closing PRs. Never commit red or skipped.
-- **Stale-pending scan.** Move completed items to `DONE.md` every session and stale-scan pending ones — verify the cited bug/stub still exists. Keep items short and scannable, and keep the pending set small.
 
 ## Round lifecycle
 
