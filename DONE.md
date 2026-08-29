@@ -1,3 +1,83 @@
+- [2026-08-29] **🚨 A USER METHOD'S *NAME* DECIDED MEMORY SAFETY — the CoW mutates-receiver decision is now
+  typed per receiver, on both lanes (R47 Track A2; closes `t0699` CRITICAL, `t0125`, `t0717`).**
+
+  **The defect.** `src/ir/lowering/functions.rs`'s CoW prescan decided whether a call mutated its receiver by
+  testing the method's IDENTIFIER TEXT against a 25-entry `MUTATING_METHODS` hand list. `void grow(&self)` was
+  rc 139 / ASan `heap-use-after-free` on BOTH backends where a byte-identical `void resize(&self)` was correct
+  — the bind was never materialized and the later realloc freed the buffer it still pointed at. `AGENTS.md`'s
+  "No name matching" rule with a memory-safety consequence, and the const's own doc-comment already conceded
+  it (*"this list survives only as the escape hatch"*).
+
+  **The fix is a WRITE-THROUGH, not a second classifier.** The semantic pass already computed this exact
+  answer per call site, typed on both halves — the receiver's own `TypeId` for the builtin protocol flag, and
+  receiver → `MethodResolution` → `DefId` → the declared `param_ownerships[0] == &self` for the user half —
+  and its own comment already called it *"ONE source of truth for does this call write through its receiver"*.
+  It now crosses into the IR layer as `safety::ReceiverMutations` on `AnalysisResult` and is READ by
+  `CowPrescan::call_mutates_receiver` (Layering rule 4). `MUTATING_METHODS` and `is_mutating_method_name` are
+  deleted; so is the self-host's byte-mirror `RUST_PRESCAN_MUTATOR_FALLBACK`, with `rust_prescan_marks_method`
+  folded into `cow_recv_mutation_class` — one receiver resolution answering both the mutation question and the
+  lane-symmetry filter. The lanes now agree by construction on every call either can resolve; the only
+  surviving asymmetry is the UNRESOLVABLE receiver, which this lane still treats conservatively and keeps out
+  of the scope-set channel.
+
+  **PER-RECEIVER, and the bar can tell.** `cow_user_mutator_two_types_same_name.gg` equips the SAME method
+  name on two types with opposite self-conventions. Stdout cannot distinguish a per-receiver answer from a
+  name-keyed one; the clone count can, and it is asserted: `array_clone=1`. The pre-fix compiler — whose hand
+  list IS a name-keyed union — measures **2** on that exact program, and gets the right stdout for the wrong
+  reason when both methods are renamed to a listed name (Q6, documented in the fixture).
+
+  **TWO SIBLING SITES OF THE SAME CLASS, both live UAFs, both found by the miss counter the fix ships**
+  (`GG_REPORT_RECV_MUT=1`, one `[recv-mut-miss]` per unclassified query, censused over all 2147 top-level
+  fixtures). **f-string interpolations**: the safety pass RE-PARSES each interpolation from raw text and so
+  classified synthetic spans, while the prescan walks the parser-stored typed ones — a hole exactly the width
+  of an f-string, and `print(f"{h.grow()}")` was rc 139. **`meta`-expanded bodies**: `meta` expands after the
+  classifier runs, and an unclassified-⇒-read-only fallback made that shape rc 139 under BOTH names — strictly
+  worse than stock, where the hand list had been rescuing it by accident. Unclassified ⇒ MUTATING is the
+  self-host's own ruled direction (*"over-clones, never UAFs; absent ⇒ read-only is the unsound one"*), and the
+  measured miss rate on the self-host driver is **2 queries out of 15,336**.
+
+  **Guard (Core #6).** `no_growth_in_name_list_membership_routing` ratchets `SCREAMING_CONST.contains(&name)`
+  at 13 — the class the flagship `no_growth_in_name_prefix_routing` is structurally blind to and stayed GREEN
+  through both SIGSEGVs. RED-demonstrated on a NEW deliberately-broken site in `cycle_check.rs` (not on a
+  revert), with the flagship staying green beside it. Its blind spots are enumerated in its own doc.
+
+  **Fixtures.** Four new top-level, all RED-verified at `f3feea79` on C AND LLVM (three rc 139, one wrong
+  value) and all MATCH on the self-host lowerer lane: rename-invariance · same-name-two-types (+ its
+  clone-count discriminator) · f-string position · `meta`-arm position. Plus an ASan cell
+  (`security/sound_user_mutator_name_invariant_uaf.gg`, RED with the quoted `heap-use-after-free` in
+  `gorget_string_clone_to_owned` ← `Unlisted__probe`) because stdout cannot adjudicate a program that crashes
+  before it flushes, and ggdef structurally cannot see memory invalidation. Graduated:
+  `cow_loop_bare_param_user_mutator` (un-ignored in place, was RED asserting 3,2,2,4) and
+  `user_mutator_method_name_decides_memory_safety` (wired live, its `ALLOWED_UNWIRED` row removed in the same
+  commit). **ggdef adjudicates `4 4 4 / 3 2 4`** on the discriminator — the definition, not the two compilers'
+  agreement, is what says the shipped answer is right; they agreed on `3 3` and were both wrong.
+
+  **Gates.** `--lib` 1179/0 · `--test lints` 177/0 · `--test security` (ASan) 154/0 · `--test spec_conformance`
+  3/3 (C · LLVM · self-host) · `-p ggdef` green · `--test integration cow_` 190/0 on C AND on LLVM. Peak RSS
+  736,312 kB (~719 MB) against a documented balloon threshold of 12–14 GB. **Stage-0 clone ceilings GREEN with
+  headroom on both meters** (array −2,889, string −1,483). **Stage-1 re-pinned +0.079% / +0.108%** with the
+  attribution in the constant: net +16 non-comment lines of self-host source (+0.012% of compiled input), so
+  the bulk is the genuine lane-symmetry widening Core #9 requires — against a 2026-07-19 bomb that was 7× and
+  a 1332s-vs-600s deadline miss. **A first cut measured WORSE and was not shipped**: it resolved the receiver
+  key twice per method call, which put stage-0 string over too; the ratchet caught it and
+  `cow_recv_mutation_class` fixed it.
+
+  **`self_host_bootstrap_fixed_point` PASSES, converging at stage-2 (`MAX_GEN=5`)** — 1445s total on a box at
+  load ~10–16 across 10 cores, against a recorded SOLO 866s: 1.67×, matching the measured oversubscription.
+  ⚠ **And a process finding worth more than the number.** Pinning `GG_STAGE1_TIMEOUT_SECS=600` — which the
+  brief required, so the meter would be deterministic — DISABLES `env_or_load_adjusted_secs` and turns a
+  1.6×-loaded box into a false-red generator: the first run timed out at stage1→stage2, the exact signature of
+  the 2026-07-19 clone bomb, on a change whose load-immune meters read +0.08%. The pin is right on a solo box
+  and wrong on a shared one; `scripts/bench_stages.sh`'s own header already says so (*"RUN SOLO ON A QUIET
+  BOX … the ~866s-vs-594s fixed_point drift investigations died on load-contaminated numbers"*). Read the
+  clone counters, which are deterministic, before believing a wall-clock deadline on a shared machine.
+
+  **Filed, not fixed:** `t0763` (CRITICAL — a `&self` mutator on a GENERIC equip is a UAF; NAME-INDEPENDENT,
+  so downstream of the classification, with the hand-monomorphised control rc 0 as the discriminator; it also
+  under-writes `t0134`'s "no NEW miscompile" framing) · `t0760` (the interpolation re-parse, two sites) ·
+  `t0761` (meta bodies take the conservative branch) · `t0762` (ggdef subset: `meta for` match arms).
+  `t0554` corrected in place — two of its four hand-synced mutability tables no longer exist.
+
 - [2026-08-29] **`AGENTS.md` compaction + the gauntlet's terminating condition (owner-directed): 59,271 → 47,381 bytes.**
 
   **Why.** The owner reported the failure this fixes: *"each round spins on each track never reaching the

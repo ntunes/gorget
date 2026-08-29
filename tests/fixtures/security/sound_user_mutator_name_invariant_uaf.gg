@@ -1,0 +1,52 @@
+# ASan MEMORY-VALIDITY pin for the class `todo/t0699` closed: the CoW
+# materialize decision must not depend on what the mutator is CALLED.
+#
+# ggdef is structurally blind to this (it adjudicates VALUE semantics and
+# accepts live heap-UAFs), and stdout cannot see it either — the pre-fix
+# program printed nothing and died. ASan on the real backend is the
+# adjudicator, which is why this cell lives here and not only in
+# tests/fixtures/cow_user_mutator_rename_invariance.gg.
+#
+# `resize` was on the retired 25-entry MUTATING_METHODS hand list; `grow` was
+# not. Pre-fix, ASan reported `heap-use-after-free` in
+# `gorget_string_clone_to_owned` called from `Unlisted__probe` — and NOTHING
+# for the byte-identical `Listed` half. The reallocating loop (64x) is
+# load-bearing: without it the stale bind still points at a live buffer.
+String mk(String a, String b):
+    return a + b
+
+struct Listed:
+    Vector[String] items
+
+equip Listed:
+    void resize(&self):
+        int i = 0
+        while i < 64:
+            self.items.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+            i = i + 1
+
+    String probe(&self):
+        String s = self.items.get(0).unwrap()
+        self.resize()
+        return s
+
+struct Unlisted:
+    Vector[String] items
+
+equip Unlisted:
+    void grow(&self):
+        int i = 0
+        while i < 64:
+            self.items.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+            i = i + 1
+
+    String probe(&self):
+        String s = self.items.get(0).unwrap()
+        self.grow()
+        return s
+
+void main():
+    Listed a = Listed([mk("hello", "world")])
+    print(a.probe())
+    Unlisted b = Unlisted([mk("hello", "world")])
+    print(b.probe())

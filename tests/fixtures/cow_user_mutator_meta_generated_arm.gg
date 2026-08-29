@@ -1,0 +1,60 @@
+# POSITION AXIS: the mutating call is inside a `meta for`-GENERATED MATCH ARM.
+#
+# `meta` bodies expand during IR lowering, AFTER the semantic pass has run, so
+# the expanded call site has no typed classification of its own — the arm's
+# pattern binding has no resolved type until the expansion happens. The CoW
+# prescan therefore gets no per-call answer here, and what it does with that
+# is the whole question.
+#
+# The answer is the self-host's, which states the direction explicitly:
+# absent ⇒ MUTATING, "over-clones, never UAFs; the absent ⇒ read-only
+# direction is the unsound one and is NOT used" (`lower.gg`,
+# `method_mutates_receiver` step 3).
+#
+# ⚠ THIS FIXTURE IS THE REASON THAT DIRECTION IS NOT NEGOTIABLE. Measured on
+# the pre-fix compiler, this shape was rescued ONLY by the mutator's NAME
+# being on the retired `MUTATING_METHODS` hand list: rename `grow` to `resize`
+# and the same program returned 0. An unclassified-⇒-read-only fallback made
+# BOTH names rc 139 — a REGRESSION against stock, caught by the miss counter
+# (`GG_REPORT_RECV_MUT=1`, which prints one `[recv-mut-miss] <name>` per
+# unclassified query) rather than by any test.
+#
+# RED-verified twice: rc 139 pre-fix (C AND LLVM) under the unlisted name, and
+# rc 139 again under an unclassified-⇒-read-only fallback under BOTH names.
+#
+# ⚠ NO ggdef ADJUDICATION — OUT OF SUBSET (Core #9 note). The oracle rejects
+# this shape: ``meta for` match arms are phase 2`
+# (`spec/ggdef/src/elaborate/mod.rs`). Verify:
+#   cargo run -q -p ggdef --release -- run tests/fixtures/cow_user_mutator_meta_generated_arm.gg
+# So the evidence here is C + LLVM + the self-host lowerer lane agreeing, which
+# Core #8 rates necessary-not-sufficient. The subset gap is filed as
+# `todo/t0762`; `lib/xtd/dataframe.gg` writes real stdlib code in this shape,
+# so the unadjudicated surface is not exotic.
+String mk(String a, String b):
+    return a + b
+
+struct Holder:
+    Vector[String] items
+
+equip Holder:
+    void grow(&self):
+        int i = 0
+        while i < 64:
+            self.items.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+            i = i + 1
+
+enum Wrap:
+    One(Holder)
+
+equip Wrap:
+    String probe(&self):
+        match self:
+            meta for vname, T in variant_payloads(Wrap):
+                case vname(h):
+                    String s = h.items.get(0).unwrap()
+                    h.grow()
+                    return s
+
+void main():
+    Wrap w = Wrap.One(Holder([mk("hello", "world")]))
+    print(w.probe())

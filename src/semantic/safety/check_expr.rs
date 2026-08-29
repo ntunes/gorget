@@ -10,6 +10,86 @@ use crate::semantic::scope::DefKind;
 use super::{BorrowChecker, BorrowOrigin, FallibleState, VarState};
 use super::type_utils::needs_explicit_move;
 
+/// Collects `(method-name span start, does-this-call-write-its-receiver)` for
+/// every method call inside an f-string's parser-stored interpolation
+/// expressions, so those call sites reach
+/// [`super::ReceiverMutations`] like any other.
+///
+/// Read-only over the checker: it asks
+/// [`BorrowChecker::classify_receiver_mutation`] and reports; the recording is
+/// done by the caller once the borrow ends. That two-phase shape is what lets
+/// the scan hold `&BorrowChecker` while the caller holds `&mut`.
+struct InterpolationMutationScan<'x, 'a> {
+    bc: &'x BorrowChecker<'a>,
+    out: Vec<(usize, bool)>,
+}
+
+impl crate::parser::visitor::ExprVisitor for InterpolationMutationScan<'_, '_> {
+    fn visit_expr(&mut self, expr: &Spanned<Expr>) {
+        if let Expr::MethodCall { receiver, method, .. } = &expr.node {
+            self.out.push((
+                method.span.start,
+                self.bc.classify_receiver_mutation(receiver, method),
+            ));
+        }
+        // `walk_expr`'s own `StringLiteral` arm fabricates dummy `Identifier`
+        // nodes from the raw segment TEXT and never descends into the
+        // parser-stored interpolation expressions, so a NESTED f-string would
+        // be invisible. Descend explicitly.
+        if let Expr::StringLiteral(_, interpolations) = &expr.node {
+            for part in interpolations {
+                self.visit_expr(part);
+            }
+        }
+        crate::parser::visitor::walk_expr(self, expr);
+    }
+}
+
+impl BorrowChecker<'_> {
+    /// Does `receiver.method(...)` WRITE THROUGH its receiver?
+    ///
+    /// The one classifier for this axis (Layering rule 3), and it is typed on
+    /// both halves: the builtin `is_mutating` protocol flag gated on the
+    /// RECEIVER's own type actually being buffer-owning, and the user half
+    /// resolved receiver → `MethodResolution` → `DefId` → the method's
+    /// DECLARED `param_ownerships[0] == &self`. Neither half asks what the
+    /// method is *called*.
+    ///
+    /// Consumers: the semantic taint gate and the dead-write lint (in
+    /// `check_expr`), and — through [`super::ReceiverMutations`] — the IR
+    /// lowering's CoW materialize prescan.
+    pub(super) fn classify_receiver_mutation(
+        &self,
+        receiver: &Spanned<Expr>,
+        method: &Spanned<String>,
+    ) -> bool {
+        // Builtin mutating method: gate the (name-keyed) protocol flag on the
+        // RECEIVER's type actually being a buffer-owning builtin
+        // (collection/Channel/Heap) or the owned String — interior-mutability
+        // handles (AtomicInt, WaitGroup, ...) are FFI-backed and write
+        // through, not CoW.
+        let recv_tid = self
+            .expr_types
+            .get(&receiver.span)
+            .copied()
+            .or_else(|| self.lvalue_value_type(receiver));
+        let is_builtin_mut = crate::ir::lowering::builtins::is_mutating_builtin_method(
+            method.node.as_str(),
+        ) && (self.is_buffer_owning_receiver(receiver)
+            || recv_tid.map_or(false, |t| {
+                self.is_buffer_owning_type(t) || t == self.types.owned_string_id
+            }));
+        let is_user_mut = self
+            .method_resolutions
+            .get(&method.span.start)
+            .and_then(|res| res.def_id.and_then(|d| self.function_info.get(&d)))
+            .map_or(false, |info| {
+                info.param_ownerships.first() == Some(&Ownership::MutableBorrow)
+            });
+        is_builtin_mut || is_user_mut
+    }
+}
+
 /// XXVIII Track C hotfix — match arm body direct-Move detection.
 ///
 /// Match arm bodies are RESTING positions per D32 (their value flows to the
@@ -272,7 +352,41 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
-            Expr::StringLiteral(lit, _) => {
+            Expr::StringLiteral(lit, interpolations) => {
+                // Write-through COMPLETENESS. The borrow-safety walk below
+                // RE-PARSES each interpolation from its raw segment text, so
+                // the nodes it checks carry synthetic spans. The parser has
+                // already stored the real, typechecked interpolation
+                // expressions in this literal's second field, and THOSE are
+                // the nodes the IR lowering's CoW prescan walks
+                // (`ir::lowering::functions`, `Expr::StringLiteral(_,
+                // interpolations)`). Classify them here or the write-through
+                // has a hole exactly the width of an f-string: measured, a
+                // user `&self` mutator called from an interpolation
+                // (`f"{h.grow()}"`) went unmarked and SIGSEGV'd — `todo/t0699`
+                // in a different costume, found by the miss counter this
+                // fix ships with (`GG_REPORT_RECV_MUT`).
+                //
+                // The traversal is the shared `ExprVisitor`, whose `walk_expr`
+                // matches every `Expr` variant explicitly (a new variant is a
+                // compile error there) — never a hand-rolled walk, which is
+                // how this collector's sibling under-approximated 41 of 47
+                // variants once already.
+                if !interpolations.is_empty() {
+                    let found = {
+                        let mut scan = InterpolationMutationScan {
+                            bc: self,
+                            out: Vec::new(),
+                        };
+                        for part in interpolations {
+                            crate::parser::visitor::ExprVisitor::visit_expr(&mut scan, part);
+                        }
+                        scan.out
+                    };
+                    for (span_start, mutates) in found {
+                        self.receiver_mutations.record(span_start, mutates);
+                    }
+                }
                 // Re-parse and check interpolation expressions for borrow safety.
                 // Interpolations are stored as raw strings; the borrow checker must
                 // parse them to catch use-after-move, bare param mutation, etc.
@@ -568,34 +682,17 @@ impl<'a> BorrowChecker<'a> {
                 // scout hoist): consumed by both the semantic taint gate
                 // (any position) and the dead-write lint (statement position
                 // + tracked roots only).
-                let receiver_is_mutating = {
-                    // Builtin mutating method: gate the (name-keyed)
-                    // protocol flag on the RECEIVER's type actually being
-                    // a buffer-owning builtin (collection/Channel/Heap) or
-                    // the owned String — interior-mutability handles
-                    // (AtomicInt, WaitGroup, ...) are FFI-backed and write
-                    // through, not CoW.
-                    let recv_tid = self
-                        .expr_types
-                        .get(&receiver.span)
-                        .copied()
-                        .or_else(|| self.lvalue_value_type(receiver));
-                    let is_builtin_mut = crate::ir::lowering::builtins::is_mutating_builtin_method(
-                        method.node.as_str(),
-                    ) && (self.is_buffer_owning_receiver(receiver)
-                        || recv_tid.map_or(false, |t| {
-                            self.is_buffer_owning_type(t)
-                                || t == self.types.owned_string_id
-                        }));
-                    let is_user_mut = self
-                        .method_resolutions
-                        .get(&method.span.start)
-                        .and_then(|res| res.def_id.and_then(|d| self.function_info.get(&d)))
-                        .map_or(false, |info| {
-                            info.param_ownerships.first() == Some(&Ownership::MutableBorrow)
-                        });
-                    is_builtin_mut || is_user_mut
-                };
+                let receiver_is_mutating =
+                    self.classify_receiver_mutation(receiver, method);
+                // Layering rule 4 — WRITE THROUGH. This is the single typed
+                // classifier for "does this call write through its receiver";
+                // record it so the IR lowering's CoW prescan READS the answer
+                // instead of re-deriving it from the method's identifier text
+                // (`todo/t0699`: a user `&self` mutator whose NAME was absent
+                // from a 25-entry hand list was invisible to the prescan → the
+                // receiver was never materialized → use-after-free).
+                self.receiver_mutations
+                    .record(method.span.start, receiver_is_mutating);
                 // 2T: the SEMANTIC taint gate fires on the UNFILTERED root
                 // (incl. `self` / `_`-named params, value OR statement
                 // position) — never on the lint's tracking subset. Strict

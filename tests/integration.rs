@@ -16113,16 +16113,182 @@ fn cow_loop_bare_param_tuple_assign() {
     run_gg("known_gaps/cow_loop_bare_param_tuple_assign.gg", "13\n10");
 }
 
+/// LIVE REGRESSION FIXTURE (graduated 2026-08-29, R47 Track A2). The CoW 2G
+/// user-`&self`-mutator loop-carried gap is FIXED: the prescan no longer asks
+/// what the method is CALLED, it reads the semantic pass's typed per-receiver
+/// answer (`semantic::safety::ReceiverMutations`), so `Buf.compact(&self)`
+/// marks its bare-param receiver and the loop-carried pre-header materialize
+/// fires once instead of being thrown away each iteration.
+///
+/// This test was `#[ignore]`d and RED at HEAD, asserting the intended
+/// 3,2,2,4 against a compiler that printed 3,3,4,4. It is the cell that
+/// distinguishes the shipped fix from a narrowed self-rooted-only one: the
+/// receiver here is a bare LOCAL parameter, which a self-rooted-only
+/// classifier never marks.
+///
+/// ⚠ It stays in `known_gaps/` deliberately: moving the file registers a
+/// non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING` unless the self-host
+/// lane is re-verified. (It was: the SH lane emits 3,2,2,4 too — measured
+/// 2026-08-29 through the lowerer driver. The file stays put anyway because
+/// the round's own new corpus fixtures already carry that coverage.)
 #[test]
-#[ignore = "CoW 2G user `&self`-mutator receiver in a loop (step-4 gap): the \
-untyped prescan cannot resolve that a user method name (`compact`) mutates its \
-receiver, so the loop-carried pre-header materialize does not fire and the \
-private copy is thrown away each iteration. A name-based over-approximation is \
-deferred (clone-balloon + generic-instance-tail risk; the R38 residual). \
-Asserts 3,2,2,4; compiler currently prints 3,3,4,4. See TODO 'CoW 2G \
-user-&self-mutator loop-carried receiver'."]
 fn cow_loop_bare_param_user_mutator() {
     run_gg("known_gaps/cow_loop_bare_param_user_mutator.gg", "3\n2\n2\n4");
+}
+
+/// LIVE REGRESSION FIXTURE (graduated 2026-08-29, R47 Track A2) — the
+/// CRITICAL one: a user method's NAME decided memory safety.
+///
+/// `void grow(&self)` was rc 139 / ASan heap-use-after-free on BOTH backends
+/// where a byte-identical `void resize(&self)` was correct, because `resize`
+/// sat on the 25-entry `MUTATING_METHODS` hand list the CoW prescan tested
+/// the method's identifier text against, and `grow` did not. The decision is
+/// now the semantic pass's typed per-receiver classification, which cannot
+/// see a name.
+///
+/// Stays in `known_gaps/` (out of `runtime_parity_corpus`) with a LIVE test;
+/// the corpus-scanned coverage for this class is
+/// `cow_user_mutator_rename_invariance.gg`, which carries BOTH names in one
+/// program and is verified on C, LLVM and the self-host lane.
+#[test]
+fn user_mutator_method_name_decides_memory_safety() {
+    run_gg(
+        "known_gaps/user_mutator_method_name_decides_memory_safety.gg",
+        "helloworld",
+    );
+}
+
+// ── R47 Track A2 — the typed per-receiver CoW mutation classifier ──────────
+//
+// The prescan's "does this call mutate its receiver" is resolved ONCE by the
+// semantic pass (`semantic::safety::ReceiverMutations`, written through into
+// `AnalysisResult`) and READ here; it is never re-derived from the method's
+// identifier text. The four fixtures below cover the axes that decision has:
+//
+//   receiver root      bare param (all four) · self-field · enum payload binding
+//   self-convention    `&self` mutating · bare `self` read-only, SAME NAME
+//   method name        on the retired hand list · not on it (rename invariance)
+//   call POSITION      statement · value · f-string interpolation ·
+//                      `meta for`-generated match arm
+//   failure mode       rc 139 heap-use-after-free · wrong loop-carried value
+//   lanes              C + LLVM here; all four verified MATCH on the
+//                      self-host lowerer lane 2026-08-29
+//
+// Omitted cells, named: `!self` consuming receivers (a `!self` call on a
+// bare/borrowed receiver is rejected before lowering, so there is no
+// materialize decision to pin) and GENERIC-equip instances (their method
+// resolution is registered during lowering, not by the semantic pass — the
+// already-filed R38 generic-equip residual; they take the conservative
+// unclassified branch).
+//
+// All four RED-verified at `f3feea79` on C AND LLVM: three rc 139, one wrong
+// value.
+
+#[test]
+fn cow_user_mutator_rename_invariance() {
+    run_gg("cow_user_mutator_rename_invariance.gg", "helloworld\nhelloworld");
+}
+
+#[test]
+fn cow_user_mutator_fstring_interpolation() {
+    run_gg("cow_user_mutator_fstring_interpolation.gg", "65\nhelloworld");
+}
+
+#[test]
+fn cow_user_mutator_meta_generated_arm() {
+    run_gg("cow_user_mutator_meta_generated_arm.gg", "helloworld");
+}
+
+#[test]
+fn cow_user_mutator_two_types_same_name() {
+    run_gg("cow_user_mutator_two_types_same_name.gg", "4\n4\n4\n3\n2\n4");
+}
+
+/// KNOWN GAP — `todo/t0763`. A `&self` mutator on a GENERIC equip is a
+/// use-after-free: `Cell[T]`'s `probe(&self)` binds a view of element 0, then
+/// `self.resize(v)` reallocates and the view dangles. rc 139 on BOTH backends.
+///
+/// ⚠ NOT the `t0699` class, and the discriminator is measured rather than
+/// argued: this one is NAME-INDEPENDENT. It is rc 139 under `resize` — a name
+/// that WAS on the retired `MUTATING_METHODS` list, so the prescan DID mark the
+/// receiver — and rc 139 under `grow`, before and after the typed per-receiver
+/// classifier landed. The mark is made and the materialize still does not
+/// happen, so the break is DOWNSTREAM of the classification.
+///
+/// The control is the point: hand-monomorphise the fixture (`Cell[T]` ->
+/// `Cell`, `T` -> `String`, nothing else) and it is rc 0 printing `helloworld`,
+/// at stock HEAD and after the fix. One type parameter is the whole difference.
+///
+/// Asserts the INTENDED output, which is exactly what that control prints.
+#[test]
+#[ignore = "todo/t0763 — a `&self` mutator on a GENERIC equip does not \
+materialize a view bound from the receiver, even though the prescan marks it: \
+rc 139 on both backends. NAME-INDEPENDENT, so NOT the t0699 class — the break \
+is downstream of the classification, in the generic-equip/monomorphisation \
+path. The hand-monomorphised control is rc 0. Asserts `helloworld`."]
+fn generic_equip_mutator_view_uaf() {
+    run_gg("known_gaps/generic_equip_mutator_view_uaf.gg", "helloworld");
+}
+
+/// THE (per-receiver) vs (name-keyed) DISCRIMINATOR, and the only cell in the
+/// suite that can tell them apart.
+///
+/// `cow_user_mutator_two_types_same_name.gg` equips the SAME method name on
+/// two types with opposite self-conventions — `Counter.bump(&self)` mutates,
+/// `Buf.bump(self)` is read-only — and loops over a bare param of each.
+/// STDOUT IS IDENTICAL under both spellings, so the assertion above cannot
+/// see the difference. The clone count can:
+///
+///   per-receiver typed answer   -> array_clone = 1  (only Counter's loop
+///                                  hoists a private copy)
+///   any NAME-keyed answer       -> array_clone = 2  (`bump` is mutating
+///                                  *somewhere*, so Buf's read-only loop
+///                                  hoists one too)
+///
+/// Both measured, not predicted (2026-08-29). The pre-fix compiler, whose
+/// `MUTATING_METHODS` list IS a name-keyed union, printed the WRONG 3,3 here
+/// with array_clone=2; renaming both methods to `dedup` (a name on that list)
+/// made it print the right answer at array_clone=2 — the name-keyed cost,
+/// with the same program. The shipped classifier gives array_clone=1 under
+/// either name.
+///
+/// ⚠ `--clones=stats` is a RUNTIME meter: `gg build --clones=stats` prints
+/// nothing, the `[clone-stats]` line appears when the BUILT BINARY runs.
+#[test]
+fn cow_user_mutator_two_types_same_name_clone_count() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture = manifest_dir
+        .join("tests/fixtures/cow_user_mutator_two_types_same_name.gg");
+    let exe = std::env::temp_dir()
+        .join(format!("gg_two_types_same_name_{}", std::process::id()));
+    let build = run_with_deadline(
+        Command::new(env!("CARGO_BIN_EXE_gg"))
+            .arg("build")
+            .arg("--clones=stats")
+            .arg(&fixture)
+            .arg("-o")
+            .arg(&exe),
+        "cow_user_mutator_two_types_same_name_clone_count build",
+        build_timeout(),
+    );
+    assert!(
+        build.status.success(),
+        "instrumented build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = run_with_timeout(&mut Command::new(&exe), "two_types_same_name");
+    assert!(run.status.success(), "instrumented run failed");
+    let (array_clone, _string_clone) =
+        parse_clone_stats(&String::from_utf8_lossy(&run.stderr));
+    let _ = std::fs::remove_file(&exe);
+    assert_eq!(
+        array_clone, 1,
+        "the read-only `Buf.bump(self)` loop must contribute NO clone. \
+         array_clone=2 means the mutates-receiver decision was keyed on the \
+         method NAME (`bump` mutates on Counter, so the union marks it on Buf \
+         too) rather than resolved per receiver — see \
+         `semantic::safety::ReceiverMutations`."
+    );
 }
 
 #[test]
@@ -30492,7 +30658,60 @@ fn self_host_clone_ceiling() {
 // it is overwhelmingly the CoW peel. Different levers, so do not reclaim them
 // as one — and note the two are ADDITIVE on both axes (the 2x2's whole point),
 // so a reclaim on one does not move the other.
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_124_255_029;
+//
+// ⚠ RE-PINNED 2026-08-29 (R47 Track A2) — the typed per-receiver CoW mutation
+// classifier (`todo/t0699`: a user method's NAME decided memory safety).
+// Regenerated on this tree this session; every figure below is from the run
+// that set these constants.
+//
+//   axis            measured        prior ceiling    delta
+//   stage-1 array   1,125,145,511   1,124,255,029    +890,482    (+0.079%)
+//   stage-1 string  2,361,764,496   2,359,224,224    +2,540,272  (+0.108%)
+//   stage-0 array      13,093,687      13,096,576    -2,889      UNDER, green
+//   stage-0 string     31,378,149      31,379,632    -1,483      UNDER, green
+//
+// WHY THIS IS A JUSTIFIED SEMANTIC COST, and not a bomb.
+// The self-host's scope-set channel now marks the typed user `&self`-mutator
+// receivers the retired `RUST_PRESCAN_MUTATOR_FALLBACK` name list used to
+// suppress — which is precisely what Core #9 REQUIRES now that Rust's prescan
+// marks them (it reads `semantic::safety::ReceiverMutations`, the same typed
+// per-receiver answer). Suppressing them here while Rust marks them there is
+// the lane asymmetry the whole track exists to remove. The cost buys a closed
+// use-after-free class, not a feature.
+//
+// ATTRIBUTION, measured rather than asserted:
+//   * net +16 NON-COMMENT lines of self-host source (+24 comment lines) over
+//     ~132k lines the stage-1 binary must itself compile = +0.012% of input.
+//     Regenerate: `git diff <base>..HEAD -- tests/fixtures/self_host_lowerer/
+//     compiler/data/resources.gg | grep '^+' | grep -vE '^\+\+\+|^\+\s*#' | wc -l`
+//   * so ~6x the source-growth fraction is the lowering-BEHAVIOUR change, i.e.
+//     the widening above. That is the honest split; it is not all bookkeeping.
+//
+// SCALE, so the comparison to the recorded bomb is explicit. The 2026-07-19
+// blowout was 7x (35.2M vs 4.96M probe clones) and a 1332s-vs-600s stage
+// deadline MISS. This is +0.08%, three orders of magnitude smaller, and the
+// STAGE-0 meters moved DOWN on both axes. The prior raise of these same two
+// constants was +1.427% and was owner-ratified; this is 18x smaller.
+//
+// ⚠ A FIRST CUT OF THIS FIX MEASURED WORSE AND WAS NOT SHIPPED. It asked the
+// self-host's `method_mutates_receiver` and a separate Rust-mirror predicate
+// in sequence on every method call in the CoW scan, each rebuilding the
+// `Type__mname` key from scratch: stage-0 string went OVER (+3,065) and
+// stage-1 string was +2,421,419. `cow_recv_mutation_class` answers both halves
+// from ONE resolution, which is what put stage-0 back UNDER on both axes. The
+// ratchet did that work — it is recorded here because a re-pin with no such
+// story is how a ratchet stops being one.
+//
+// STAGE-0 IS DELIBERATELY NOT TIGHTENED to its lower measured values, even
+// though the tighten-only discipline says lowering needs no sign-off: five
+// tracks land in this round and pinning a no-headroom floor from ONE track's
+// branch false-reds the integration. Tighten at round close, on the integrated
+// tree, where the number means something.
+//
+// TO REVERT: 1,124,255,029 / 2,359,224,224, and re-run
+//   GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 \
+//     cargo test --test integration --release clone_ceiling -- --nocapture
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_125_145_511;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -30637,7 +30856,13 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_124_255_029;
 // reverting them and leaving the gate red. This comment preserves the debt: the
 // bump is a SETTLED but UNPAID cost, not an absolution. `todo/t0715` carries the
 // reclaim, and lowering these constants needs no sign-off.
-const STAGE1_STRING_CLONE_CEILING: u64 = 2_359_224_224;
+//
+// ⚠ RE-PINNED 2026-08-29 (R47 Track A2) to 2,361,764,496 (+2,540,272,
+// +0.108%) — the typed per-receiver CoW mutation classifier. Full citation,
+// attribution and scale comparison on `STAGE1_ARRAY_CLONE_CEILING` above; the
+// two were re-pinned together from ONE measurement run and must be read
+// together.
+const STAGE1_STRING_CLONE_CEILING: u64 = 2_361_764_496;
 
 #[test]
 #[serial(self_host_lowerer_driver)]

@@ -96,6 +96,12 @@ pub struct AnalysisResult {
     /// the conversion on the error value before re-wrapping it in the caller's
     /// `Result`. Empty when all propagations are same-error-type.
     pub from_conversions: FxHashMap<Span, DefId>,
+    /// Per-method-call receiver-mutation classification, resolved ONCE by the
+    /// safety pass from typed per-receiver metadata and read by the IR
+    /// lowering's CoW prescan through
+    /// [`safety::ReceiverMutations::call_mutates_receiver`]. See that type's
+    /// doc for why the prescan must not re-derive it from the method's name.
+    pub receiver_mutations: safety::ReceiverMutations,
     /// CFA decisions for `shared` bindings: DefId → resolved sync strategy.
     pub shared_bindings: FxHashMap<DefId, SharedStrategy>,
     /// Non-fatal warnings (e.g., unnecessary `shared`).
@@ -398,6 +404,7 @@ pub fn analyze_with_source_dir(
     });
 
     // Pass 5: Borrow checking (two sub-passes: 5a computes return_borrows_from, 5b does full check)
+    let mut receiver_mutations = safety::ReceiverMutations::default();
     let (shared_bindings, mut warnings, fn_purity, borrow_deps, safety_pt) = time_pass(&mut pass_times, "safety_check_module", || {
         safety::check_module(
             module,
@@ -409,6 +416,7 @@ pub fn analyze_with_source_dir(
             &expr_types,
             &method_resolutions,
             &mut errors,
+            &mut receiver_mutations,
             warn_const,
         )
     });
@@ -435,6 +443,7 @@ pub fn analyze_with_source_dir(
         function_body_scopes: resolve_ctx.function_body_scopes,
         method_resolutions,
         from_conversions,
+        receiver_mutations,
         shared_bindings,
         warnings,
         fn_purity,

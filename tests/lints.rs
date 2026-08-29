@@ -21998,7 +21998,26 @@ fn fmt_author_row_grouping_survives_formatting() {
     /// disjunct no fixture in the family previously exercised). A RAISE needs no
     /// defence the way a lowering does; it is recorded only so the 26 → 24 note
     /// above is not read as describing the current value.
-    const MIN_SUBJECT_SITES: usize = 25;
+    ///
+    /// ⚠ LOWERED 25 → 24 (2026-08-29, R47 Track A2), and this note is the
+    /// defence the assert demands. The site that left is
+    /// `compiler/data/resources.gg`'s `RUST_PRESCAN_MUTATOR_FALLBACK` — a
+    /// hand-grouped 4-row/25-element name table, and the shape the author-row
+    /// ruling was originally made for. It left because the TABLE ITSELF was
+    /// retired: it mirrored Rust's `MUTATING_METHODS` hand list so both lanes'
+    /// scope hoists fired on identical shapes, and both lists are gone now that
+    /// the mutates-receiver decision is a typed per-receiver classification
+    /// rather than a name lookup (`todo/t0699` — a user method's NAME decided
+    /// memory safety).
+    ///
+    /// Exactly the 26 → 24 precedent above: the site did not leave the tree, it
+    /// moved to a STRONGER pin. `fmt_author_rows/resources_prescan_table_survives.gg`
+    /// is an exact-text copy pinned BY NAME
+    /// (`fmt_author_rows_corpus_table_survives`), so the grouping cell this
+    /// site contributed is still adjudicated — and now by a fixture no future
+    /// edit to a live corpus file can make vacuous. This is still not licence
+    /// to lower again for a shrink nobody chose.
+    const MIN_SUBJECT_SITES: usize = 24;
     /// The SCANNER's own non-vacuity floor, on a population three orders of
     /// magnitude larger than the subject set: if the walk stops finding
     /// multi-line comma-bearing regions at all, the roots moved or the
@@ -23320,7 +23339,6 @@ fn known_gaps_repros_are_wired_to_a_test() {
         "struct_ctor_arg_not_typechecked_against_field",
         "tuple_equality_returns_wrong_answer",
         "user_fn_name_collides_with_libc",
-        "user_mutator_method_name_decides_memory_safety",
     ];
 
     let mut sources = String::new();
@@ -23743,5 +23761,106 @@ fn cow_prescan_walkers_have_no_catch_all_arm() {
          of cloned. Four separate live defects came from exactly this. If a new AST variant \
          genuinely needs no handling, list it EXPLICITLY in the no-op arm with a reason.",
         offenders.join("\n  ")
+    );
+}
+
+/// Tier 3a ratchet — **a semantic decision keyed on an identifier string, in
+/// its second-commonest costume**: membership of a name in a hand-written
+/// `&[&str]` constant.
+///
+/// `no_growth_in_name_prefix_routing` above ratchets the `starts_with("X__")`
+/// spelling and is structurally blind to this one — it stayed GREEN through
+/// two SIGSEGVs caused by exactly this class (`todo/t0699`: a user `&self`
+/// mutator whose NAME was absent from `MUTATING_METHODS` was invisible to the
+/// CoW prescan, so `void grow(&self)` segfaulted where a byte-identical
+/// `void resize(&self)` was correct). A guard that cannot catch its own class
+/// is worse than none, so this is the sibling ratchet for the sibling
+/// spelling.
+///
+/// **Baseline 2026-08-29: 13**, seeded at the floor the moment
+/// `MUTATING_METHODS.contains(&method)` (`src/ir/lowering/functions.rs`) was
+/// retired in favour of the semantic pass's typed per-receiver classifier
+/// (`semantic::safety::ReceiverMutations`). Regenerate with:
+///
+/// ```text
+/// grep -rnoE '[A-Z_]{3,}\.contains\(&[a-z_]+\)' src/ | wc -l
+/// ```
+///
+/// **As you migrate**: lower `BUDGET` in the same commit that retires the
+/// site. As you ADD one: don't — put the flag on the typed declaration and
+/// read it through an accessor (CLAUDE.md "No name matching", Layering rule 2).
+///
+/// ⚠ **What this ratchet CANNOT see** — same class, different costume, and
+/// each is a place a future regression can hide. Stated rather than implied,
+/// because an unstated blind spot reads as coverage:
+///   * `matches!(name, "a" | "b")`
+///   * `name == "literal"` and `if let "a" | "b" = name`
+///   * an inline `["a", "b"].contains(&name)` (no screaming-snake const)
+///   * `HashSet`/`phf` membership, and `.iter().any(|m| *m == name)`
+///   * a COMPUTED name set (`ctx.mutating_names.contains(name)`) — not a
+///     const, so the regex misses it. That one matters: it is what "port the
+///     precise classifier as a name-keyed union" would have looked like, and
+///     this ratchet would have read 13 and passed it. The discriminator for
+///     THAT is the fixture `cow_user_mutator_two_types_same_name.gg`, whose
+///     clone count separates a per-receiver answer from a name-keyed union.
+/// Widening the regex is welcome; leaving the blind spots unlisted is not.
+#[test]
+fn no_growth_in_name_list_membership_routing() {
+    /// Maximum allowed `SCREAMING_CONST.contains(&ident)` routing sites in
+    /// `src/`. Seeded at the floor 2026-08-29 (was 14 with
+    /// `MUTATING_METHODS.contains(&method)`; that site is now typed).
+    const BUDGET: usize = 13;
+
+    let pattern = regex::Regex::new(r#"[A-Z_]{3,}\.contains\(&[a-z_]+\)"#).unwrap();
+    let mut sites: Vec<String> = Vec::new();
+    visit("src", &mut |path| {
+        if path.extension().map_or(true, |e| e != "rs") {
+            return;
+        }
+        let content = match fs::read_to_string(path) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        for (i, line) in content.lines().enumerate() {
+            for m in pattern.find_iter(line) {
+                sites.push(format!("{}:{}: {}", path.display(), i + 1, m.as_str()));
+            }
+        }
+    });
+    sites.sort();
+
+    // Site-NAMED, not just counted (a sibling track editing an unrelated
+    // `src/` file must not be able to move this number in either direction):
+    // the site this ratchet was seeded by must be GONE, permanently.
+    let retired = sites
+        .iter()
+        .find(|s| s.contains("MUTATING_METHODS"))
+        .cloned();
+    assert!(
+        retired.is_none(),
+        "`MUTATING_METHODS.contains(&method)` is back at {}.\n\n\
+         That name list decided whether the CoW prescan treated a receiver as \
+         mutated, which made a user method's NAME decide memory safety \
+         (todo/t0699 — SIGSEGV on both backends, fixed by routing the decision \
+         through `semantic::safety::ReceiverMutations`, the typed per-receiver \
+         answer the semantic pass already computes). Do not reintroduce it: \
+         put the flag on the typed declaration and read it through an accessor.",
+        retired.unwrap_or_default()
+    );
+
+    assert!(
+        sites.len() <= BUDGET,
+        "Name-list membership routing grew beyond budget: {} > {BUDGET}.\n\n\
+         A `SCREAMING_CONST.contains(&name)` that decides what something MEANS \
+         is CLAUDE.md's \"No name matching\" rule in its list costume — the one \
+         `no_growth_in_name_prefix_routing` cannot see, and the one that cost \
+         two SIGSEGVs (todo/t0699). Put the semantic flag on the typed \
+         declaration, set it once at the source, and read it via an accessor.\n\n\
+         If the new site is a genuine C-emit/registrar boundary spelling, raise \
+         BUDGET here WITH the reason. If the count went DOWN, lower BUDGET to \
+         lock the floor.\n\n\
+         Sites:\n  {}",
+        sites.len(),
+        sites.join("\n  ")
     );
 }

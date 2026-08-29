@@ -288,6 +288,16 @@ const EXCLUDE: &[&str] = &[
     // with different lane phrasing; the sibling fixtures adjudicate the
     // class. EXCLUDE with citation.
     "combinator_result_flatten_rejected.gg",
+    // R47 Track A2, 2026-08-29: the `meta for`-GENERATED MATCH ARM cell of the
+    // typed per-receiver CoW mutation classifier (`todo/t0699`). ggdef rejects
+    // the SHAPE, not the program: `elaborate/mod.rs` raises "`meta for` match
+    // arms are phase 2" for any match whose arm list holds a generator. The
+    // fixture's own defect (a user `&self` mutator reached only through the
+    // expansion; rc 139 on both backends pre-fix) is adjudicated on C, LLVM and
+    // the self-host lowerer lane instead. Subset gap filed as `todo/t0762` —
+    // and it is not exotic: `lib/xtd/dataframe.gg`'s `Column` methods are all
+    // written in this shape.
+    "cow_user_mutator_meta_generated_arm.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -571,5 +581,22 @@ fn corpus_b_all_match() {
     // one, so it sits squarely in what ggdef can adjudicate — unlike its
     // realloc-UAF sibling (`cow_rescue_mutation_through_getchain_receiver`),
     // which ggdef would accept cleanly. Count +2 → 178.
-    assert_eq!(fixtures.len(), 178, "B2 gate set drifted from 178 fixtures");
+    //
+    // R47 Track A2, 2026-08-29: 4 CoW fixtures added for the typed
+    // per-receiver mutation classifier (`todo/t0699` — a user method's NAME
+    // decided memory safety). THREE adjudicate MATCH via `run_gg` with no
+    // ggdef change, and one of them is the round's most load-bearing ggdef
+    // result rather than a formality (Core #13):
+    // `cow_user_mutator_two_types_same_name` adjudicates `4 4 4 / 3 2 4`,
+    // which is what the FIXED lanes print — the pre-fix compilers agreed on
+    // `3 3` and were both wrong, so the definition, not their agreement, is
+    // what says the shipped answer is right.
+    // ⚠ The other two (`rename_invariance`, `fstring_interpolation`) are
+    // memory-invalidation defects: ggdef adjudicates their VALUES and would
+    // have accepted the pre-fix UAF cleanly, so their real adjudicator is
+    // ASan (`tests/fixtures/security/sound_user_mutator_name_invariant_uaf.gg`).
+    // The fourth, `cow_user_mutator_meta_generated_arm.gg`, is EXCLUDEd above
+    // with citation (out of subset; `todo/t0762`). Count +4 additions
+    // − 1 EXCLUDE = +3 net → 181.
+    assert_eq!(fixtures.len(), 181, "B2 gate set drifted from 181 fixtures");
 }
