@@ -734,6 +734,19 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # An UNRESOLVED receiver yields "" and is not gated: this inference
             # is partial and withdrawing an answer it used to give would re-type
             # working code.
+            # ⚠ `uint8` IS FOLDED INTO THIS ARM, where Rust gives it its
+            # own table (the character-class predicates → bool, `to_upper` /
+            # `to_lower` → uint8). The self-host answers NO_TYPE for those
+            # instead — which is EXACTLY what it answered before this gate
+            # existed, so the fold costs nothing today and the lexer's
+            # `self.lex_peek().is_hex_digit()` on the bootstrap path is
+            # unaffected. It is named because it is a real difference from the
+            # oracle, and because `reject_no_method_on_primitive` DOES admit
+            # those names (pinned by
+            # `tests/lints.rs::sh_primitive_method_tables_mirror_rust`) — so the
+            # accept/reject axis agrees with Rust even where the TYPING does
+            # not. Typing them would be a re-type on the bootstrap path and is
+            # not this track's subject.
             String gate_prim = prim_recv_name(reg_obj_type, types)
             if gate_prim.len() > 0 and not is_string_prim_name(gate_prim):
                 if method_name == "hash":

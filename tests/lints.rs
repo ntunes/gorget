@@ -6729,6 +6729,159 @@ fn self_host_infer_bool_arms_publish_chain_link() {
     }
 }
 
+/// CITED-FIXTURE-PATH ratchet for the SELF-HOST sources (Core #6 — turn the
+/// recurring failure into an executable check; Core #14 — a citation naming a
+/// file that does not exist reads as evidence while pointing at nothing).
+///
+/// The self-host `.gg` sources cite fixture paths in their comments — "minimal
+/// repro: `known_gaps/foo.gg`", "behavioural counterpart:
+/// `tests/fixtures/bar.gg`". `cited_lint_names_resolve_to_real_tests` already
+/// pins the sibling class for `tests/lints.rs` names and
+/// `doc_source_citations_resolve` pins it for `docs/`. `.gg` COMMENTS had no
+/// such guard, and nothing else in the build reads them.
+///
+/// Measured (R47 Track D1): a repro was written under `known_gaps/`, then
+/// RELOCATED and renamed before the commit — and the citation naming it was not
+/// followed. It shipped pointing at a path that never existed in the tree, 64
+/// lines above a second citation that spelled the SAME fixture correctly. Every
+/// gate was green; a reviewer caught it by hand, which is the part that does
+/// not scale.
+///
+/// Paths are accepted whether written relative to the repo root
+/// (`tests/fixtures/x.gg`) or to the fixtures dir (`known_gaps/x.gg`).
+#[test]
+fn self_host_cited_fixture_paths_resolve() {
+    fn cited_paths(s: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for prefix in ["tests/fixtures/", "known_gaps/"] {
+            let mut rest = s;
+            while let Some(at) = rest.find(prefix) {
+                let tail = &rest[at..];
+                if let Some(e) = tail.find(".gg") {
+                    let cand = &tail[..e + 3];
+                    // A GLOB is prose about a family ("the
+                    // `liveness/match_exhaustive_no_catchall_*.gg` fixtures"),
+                    // not a citation of one file — skip it rather than resolve
+                    // it, so the guard stays about the class it retires.
+                    if !cand.contains(char::is_whitespace) && !cand.contains('*') {
+                        out.push(cand.to_string());
+                    }
+                }
+                rest = &tail[prefix.len()..];
+            }
+        }
+        out
+    }
+
+    let root = std::path::Path::new(".");
+    let mut checked = 0usize;
+    let mut broken: Vec<String> = Vec::new();
+    for d in fs::read_dir("tests/fixtures").expect("fixtures dir").filter_map(|e| e.ok()) {
+        let dp = d.path();
+        if !dp.is_dir() {
+            continue;
+        }
+        if !dp.file_name().unwrap().to_string_lossy().starts_with("self_host_") {
+            continue;
+        }
+        for f in fs::read_dir(&dp).expect("self-host dir").filter_map(|e| e.ok()) {
+            let fp = f.path();
+            if fp.extension().map_or(true, |e| e != "gg") {
+                continue;
+            }
+            let src = fs::read_to_string(&fp).expect("read .gg");
+            for cited in cited_paths(&src) {
+                checked += 1;
+                if !root.join(&cited).is_file()
+                    && !root.join("tests/fixtures").join(&cited).is_file()
+                {
+                    broken.push(format!("{} cites `{cited}`", fp.display()));
+                }
+            }
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "self_host_cited_fixture_paths_resolve scanned ZERO citations — the scan broke, not the \
+         tree. A guard that cannot fire is not evidence (Core #13)."
+    );
+    assert!(
+        broken.is_empty(),
+        "{} self-host comment(s) cite a fixture path that does not exist:\n  {}\n\n\
+         Either the fixture was renamed/relocated and the citation was not followed, or the \
+         repro was never committed. Fix the CITATION or commit the FIXTURE — do not delete the \
+         sentence, which is how a reader learns the claim has evidence behind it.",
+        broken.len(),
+        broken.join("\n  "),
+    );
+}
+
+/// PRIMITIVE-METHOD-TABLE drift guard (Core #6; the layering doc's own escape
+/// hatch — where two parallel lists must exist, make the build check they
+/// agree).
+///
+/// `self_host_typechecker/typecheck.gg`'s `string_prim_method_admitted` and
+/// `uint8_prim_method_admitted` are transcriptions of Rust gg's
+/// `builtin_method_type` arms (`src/semantic/typecheck.rs`: the
+/// `"str" | "String"` arm and the `"uint8"` arm). They decide what
+/// `reject_no_method_on_primitive` REFUSES, so a name that leaves the Rust arm
+/// without leaving the self-host copy is a stale accept, and a name ADDED to
+/// Rust without being mirrored is a FALSE REJECT of a valid program.
+///
+/// The transcription is unavoidable — the self-host is a separate
+/// implementation and cannot read Rust's tables — so the drift is pinned
+/// instead. The direction that matters most is the `uint8` arm: the self-host
+/// lexer calls these on a `byte` on the BOOTSTRAP path, so a missed name is a
+/// false reject of the compiler's own source.
+#[test]
+fn sh_primitive_method_tables_mirror_rust() {
+    let rust = fs::read_to_string("src/semantic/typecheck.rs").expect("typecheck.rs");
+    let sh = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
+        .expect("self-host typecheck.gg");
+
+    let uint8_at = rust
+        .find("\"uint8\" => match method {")
+        .expect("the `\"uint8\"` arm of builtin_method_type moved — re-anchor this lint");
+    let uint8_arm = &rust[uint8_at..(uint8_at + 600).min(rust.len())];
+    for n in [
+        "is_alpha", "is_digit", "is_alphanumeric", "is_whitespace",
+        "is_upper", "is_lower", "is_hex_digit", "is_ascii",
+        "to_upper", "to_lower",
+    ] {
+        assert!(
+            uint8_arm.contains(&format!("\"{n}\"")),
+            "`{n}` is in the self-host's uint8 table but NOT in Rust's `\"uint8\"` arm. One of \
+             the two moved; reconcile them rather than letting the reject drift."
+        );
+        assert!(
+            sh.contains(&format!("method_name == \"{n}\"")),
+            "Rust's `\"uint8\"` arm admits `{n}` but the self-host's \
+             `uint8_prim_method_admitted` does not. A `byte` receiver calling `{n}` would be \
+             REFUSED by `reject_no_method_on_primitive` although Rust ACCEPTS it — a false \
+             reject, and the self-host LEXER calls these on the bootstrap path."
+        );
+    }
+
+    // The five names R47 Track D1 dropped BECAUSE they are in neither Rust's
+    // oracle nor the IR GORGET_STRING_VIEW protocol. If one reappears in Rust's
+    // String arm, the self-host must mirror it and the reject fixtures flip.
+    let str_at = rust
+        .find("\"str\" | \"String\" => match method {")
+        .expect("the `\"str\" | \"String\"` arm moved — re-anchor this lint");
+    let str_arm = &rust[str_at..(str_at + 3000).min(rust.len())];
+    for n in ["to_string", "to_str", "concat", "trim_start", "trim_end"] {
+        assert!(
+            !str_arm.contains(&format!("\"{n}\"")),
+            "`{n}` reappeared in Rust's `\"str\" | \"String\"` arm. Track D1 dropped it from the \
+             self-host ladder BECAUSE it was absent from both that arm and the IR \
+             GORGET_STRING_VIEW protocol, and pinned the REJECT on it \
+             (spectests/run/reject_no_method_on_float.gg and _on_string.gg). Mirror it into \
+             `string_prim_method_admitted` and retire those pins in the same commit."
+        );
+    }
+}
+
 /// CITED-GUARD-NAME ratchet (Core #14 — an invariant-asserting comment needs an
 /// ENFORCING guard, or it gets deleted; Core #6 — turn the recurring failure into
 /// an executable check).

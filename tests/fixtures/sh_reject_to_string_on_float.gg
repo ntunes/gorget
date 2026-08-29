@@ -18,6 +18,14 @@
 # `spectests/run/reject_no_method_on_float.gg`; this fixture additionally
 # asserts that the self-host driver emits NO C at all rather than rejecting late.
 #
+# ⚠ WHAT THIS FIXTURE DOES *NOT* COVER — the RECEIVER/ROOT-SHAPE axis. The
+# receiver here is a bare IDENTIFIER, and that is the only cell of that axis the
+# reject reaches. `mk().to_string()`, `h.v.to_string()`, `v[0].to_string()` and
+# `f.mod(2.0).to_string()` on the same `float` are all still ACCEPTED (the last
+# one link-fails on an invented `int64_t__to_string`). Named rather than left
+# implicit, per Core #12; repro and enumeration in
+# known_gaps/sh_reject_misses_computed_receiver.gg, filed as todo/t0740.
+#
 # CORRECT behaviour: `gg check` REJECTS this program on every lane.
 void main():
     float f = 3.0

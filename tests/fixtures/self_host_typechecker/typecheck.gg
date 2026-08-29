@@ -3788,8 +3788,9 @@ bool string_prim_method_admitted(String method_name):
 # `3.0.len()`, which Rust does reject; it would ALSO reject
 # `generic_typearg_well_typed.gg`'s `v.len()`, which Rust ACCEPTS, because the
 # self-host resolves that `v` to an unrelated `int` match-arm binding that
-# leaked out of its arm (minimal repro: known_gaps/sh_match_arm_binding_leaks_
-# past_arm.gg — the binding wins over a LATER same-named local). BOTH of this
+# leaked out of its arm (minimal shape: tests/fixtures/
+# sh_match_arm_binding_shadow_shape.gg — the binding wins over a LATER
+# same-named local). BOTH of this
 # function's avenues read that same broken resolution, so corroboration cannot
 # see it, and refusing a valid program is strictly worse than the
 # over-acceptance already present.
@@ -3843,10 +3844,22 @@ bool registry_declares_method_anywhere(TraitRegistry registry, String method_nam
 # So the reject fires only where a SECOND, INDEPENDENT avenue agrees: lexical
 # scope lookup of the receiver's NAME. Two avenues that disagree mean the
 # span-keyed one landed on something else, and a reject built on it would refuse
-# a valid program. This bounds the reject to identifier receivers, which is
-# where the defect it retires lives (`float f = 3.0` … `f.to_string()`); a
-# chained or computed receiver keeps today's behaviour rather than risking a
-# false reject on a type nothing corroborates.
+# a valid program.
+#
+# ⚠ THIS BOUNDS THE REJECT TO IDENTIFIER RECEIVERS, AND THAT IS AN AXIS, NOT A
+# DETAIL. RECEIVER/ROOT SHAPE is one of the axes Core #12 names, and the reject
+# samples exactly one of its cells. Measured on the four others, all of which
+# Rust REJECTS: `mk().to_string()` (method-call result), `h.v.to_string()`
+# (field access), `v[0].to_string()` (index) — each accepted and CC-failing with
+# the `'Str' from type 'int'` mint — and `f.mod(2.0).to_string()` (chained),
+# which LINK-fails on `undefined reference to 'int64_t__to_string'`, i.e. it
+# reaches the exact symbol invention this reject exists to stop.
+#
+# A computed receiver has no NAME to look up, so there is no second avenue and
+# the reject abstains rather than guess. Closing the other four cells needs a
+# corroboration story for computed receivers, or the underlying resolution
+# defect fixed so one avenue is trustworthy alone. Repro + the enumeration:
+# tests/fixtures/known_gaps/sh_reject_misses_computed_receiver.gg.
 #
 # ⚠ CORROBORATION IS NOT PROOF, and the second half of the bound lives in
 # `any_prim_method_admitted`. Both avenues read the SAME resolution, so when the

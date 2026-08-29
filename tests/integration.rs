@@ -56469,6 +56469,27 @@ fn known_gap_sh_len_on_float_silently_miscompiles() {
     );
 }
 
+/// KNOWN GAP (R47 Track D1, found by the output-review) — the RECEIVER/ROOT-SHAPE
+/// axis. `reject_no_method_on_primitive` fires only for a bare IDENTIFIER
+/// receiver, because its soundness filter corroborates the receiver's type by
+/// looking the NAME up lexically and a computed receiver has no name. All four
+/// non-identifier spellings of the same `float` receiver still slip through;
+/// this pins the sharpest, which does not merely mis-mint a slot but LINK-FAILS
+/// on `undefined reference to 'int64_t__to_string'` — the symbol invention the
+/// reject exists to stop. The other three cells are enumerated in the fixture
+/// header and in `todo/t0740`.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0740): the primitive-receiver reject only fires for \
+an IDENTIFIER receiver; a computed receiver still reaches the backend and \
+invents a runtime symbol. Asserts the SH reject."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_sh_reject_misses_computed_receiver() {
+    assert_self_host_rejects(
+        "known_gaps/sh_reject_misses_computed_receiver.gg",
+        "`to_string()` on a COMPUTED `float` receiver",
+    );
+}
+
 /// KNOWN GAP (R47 Track D1) — the NOMINAL-receiver cell of the same family the
 /// primitive reject closes: the self-host accepts `to_lower()` on a
 /// `Vector[String]` and CC-FAILs with the same `'Str' from type 'int'` mint.
@@ -56508,6 +56529,22 @@ fn known_gap_hash_on_primitive_undefined_symbol() {
 (`undefined reference to int64_t__parse`). Asserts the intended `99`."]
 fn known_gap_equip_on_primitive_shadows_static_parse() {
     run_gg("known_gaps/equip_on_primitive_shadows_static_parse.gg", "99");
+}
+
+/// SHAPE PIN for the typed `Thread[T].join() -> T` arm R47 Track D1 added.
+///
+/// ⚠ NOT RED-VERIFIABLE and does not claim to be (Core #12). The arm corrects
+/// the typechecker's answer — `join` previously fell through to the
+/// String-returning name list — but no shape was found where the wrong answer
+/// was observable: an `int` payload, a `Vector[int]` payload and a discarded
+/// result all behave identically on the pre-fix and post-fix drivers, because
+/// the lowerer reconstructs this link's type without consulting the
+/// typechecker. It is a tripwire on a currently-latent axis: a later change
+/// that makes the typechecker's answer load-bearing cannot silently
+/// reintroduce the String. See the fixture header for the measurements.
+#[test]
+fn sh_thread_join_returns_payload() {
+    run_gg("sh_thread_join_returns_payload.gg", "7");
 }
 
 /// SHAPE PIN for the self-host identifier-resolution defect R47 Track D1 filed:
