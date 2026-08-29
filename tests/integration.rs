@@ -30054,7 +30054,88 @@ fn self_host_bootstrap() {
 //   2. `Parser.peek` -- 7,823,340 hits alone, ~33x the whole chokepoint.
 //   3. DEEP-1 return-view lazy materialization -- the actual fix, and the doc
 //      warns it is UAF-prone, so it lands AFTER the open UAF class is closed.
-const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 12_991_164;
+// ⚠ RE-SEEDED 2026-08-28 (R45 Track G) — 12,991,164 -> 13,096,576 (+105,412,
+// +0.811%).
+//
+// 🚨 NOT OWNER-AUTHORISED. NO OWNER SANCTIONED THIS BUMP, and an earlier
+// revision of this comment said "OWNER-AUTHORISED" — that was FALSE PROVENANCE
+// and it is corrected here. The only owner ruling in scope is the one three
+// paragraphs above: `RE-SEEDED TO THE EXACT MEASURED VALUE 2026-08-27 (owner
+// ruling) … No headroom is left deliberately: any further growth trips
+// immediately.` That ruling covers R44's overrun and says any further growth
+// trips. THIS IS THAT FURTHER GROWTH. It authorises nothing here.
+//
+// So this is an OPEN OWNER ASK on all four axes, not a settled cost. TO REVERT:
+// set the four ceilings back to 12,991,164 / 31,092,792 / 1,108,440,117 /
+// 2,082,113,453 and the gate goes red on the measured values below — which is
+// the honest state until the owner rules.
+//
+// Every figure is regenerated on THIS tree this session, and the cost is
+// ATTRIBUTED by a FULL 2x2 ablation rather than asserted. Command (prints all
+// four before asserting):
+//   GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 \
+//     cargo test --test integration --release clone_ceiling -- --nocapture
+//
+// ── ATTRIBUTION: THE FULL 2x2, not three cells of it ─────────────────────────
+// An earlier revision ran three cells (baseline / +chain-link / +chain-link+peel)
+// and reported the peel's cost as if it were a main effect. Three cells of a 2x2
+// is a SELECTION (Core #15e Q3): it cannot tell a main effect from an
+// interaction. The missing cell — PEEL WITHOUT THE CHAIN-LINK FIX — was run, and
+// it settles the question. All four cells are one tree, one session, `.gg`
+// sources swapped per cell (`git show <rev>:<file>`), harness held fixed:
+//
+//   cell                      s0 array    s0 string    s1 array       s1 string
+//   P pristine (2d619258)    12,991,164  31,092,792  1,108,440,117  2,082,113,453
+//   C chain-link only        13,091,435  31,350,380  1,123,804,797  2,086,329,621
+//   K CoW peel only          12,996,529  31,108,100  1,108,737,004  2,354,389,551
+//   S SHIPPED (this tree)    13,096,576  31,379,632  1,124,255,029  2,359,224,224
+//
+// (A fifth cell, the one-exit publish over the WHOLE EMethodCall case, measured
+// 13,102,205 / 31,400,631 / 1,124,676,585 / 2,360,350,411 — but it regressed ten
+// `self_host_runtime` rows and was reverted to the two-bool-arm publish that
+// ships. Its numbers are recorded only so nobody re-derives them.)
+//
+// The P row came back EXACTLY equal to the pre-round ceilings on all four axes,
+// so 100% of each delta is this round's — confirmed, not asserted.
+//
+// THE VERDICT: THE TWO FIXES ARE ADDITIVE, and the peel is a MAIN effect.
+// On the stage-1 string axis, Δ(peel | no chain-link) = K - P = +272,276,098.
+// Additivity predicts 2,082,113,453 + 272,276,098 + 4,216,168 = 2,358,605,719
+// for the both-fixes tree; the measured both-fixes value at `d60f511b` was
+// 2,358,807,839 — an interaction of 202,120, i.e. 0.07% of the effect. So the
+// hypothesis that the chain-link fix AMPLIFIES the peel (by changing what
+// `lookup_expr_gir_type` feeds `method_mutates_receiver`) is REFUTED by
+// measurement. The peel costs what it costs on its own.
+//
+// STAGE-0 vs STAGE-1 IS THE MECHANISM FINGERPRINT. The peel costs +15,308
+// string at stage 0 (Rust gg compiling ~17 more lines of self-host source) and
+// +272,276,098 at stage 1 (the self-host, now CARRYING the peel, compiling
+// itself) — a ~17,800x amplification. Only a BEHAVIOURAL change produces that:
+// the extra marked roots suppress Branch-C-pre borrow-flips in the code the
+// self-host EMITS, so stage-1 pays deep clones where it used to alias. No
+// measurement artifact fakes an amplification of that shape.
+//
+// The infix arms of `expr_spine_has_method_call` (EBinaryOp/ECatch/ERethrow/
+// ERange) account for only +1,673 array / +7,045 string of the chain-link cell,
+// i.e. spine completeness is ~free. The EBinaryOp arm is NOT unexercised: its
+// LEFT-operand cell is pinned by `chain_link_binop.gg`. (An earlier revision of
+// this comment said "no reachable defect was found" for those arms. That was
+// false and is retracted — see `chain_link_bool_builtin.gg`, a live miscompile
+// on a chain whose outer link is a bool-returning builtin, which no amount of
+// spine completeness reached because it was a different axis entirely.)
+//
+// WHAT THE COST BOUGHT: `self_host_runtime` was RED at HEAD (7 CC-FAIL rows) and
+// is green again, with the chain-link class retired by a parser-derived
+// discriminator rather than a costume-matching heuristic, and with the
+// `expr_link_types` publish extended to the SECOND bool-returning ladder arm —
+// its pair, and the only widening the ladder can safely carry until `t0712`
+// (name-list arms that never check the receiver) is fixed; and
+// the self-host's CoW prescan stopped missing mutations spelled through a
+// method-chain receiver — a live SIGSEGV
+// (`self_host_cow_rescue_mutation_through_getchain_receiver`) and, at the
+// assignment-target sibling, a silent WRONG ANSWER (`cow_assign_target_chain.gg`).
+// ALL FOUR of these figures need owner eyes, not just the stage-1 string one.
+const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_096_576;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to
@@ -30114,7 +30195,15 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 12_991_164;
 //   2. `Parser.peek` -- 7,823,340 hits alone, ~33x the whole chokepoint.
 //   3. DEEP-1 return-view lazy materialization -- the actual fix, and the doc
 //      warns it is UAF-prone, so it lands AFTER the open UAF class is closed.
-const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_092_792;
+// ⚠ RE-SEEDED 2026-08-28 (R45 Track G) — 31,092,792 -> 31,379,632 (+286,840,
+// +0.922%). 🚨 NOT OWNER-AUTHORISED — same OPEN OWNER ASK as the array ceiling
+// above, same revert instruction (back to 31,092,792). Same
+// regenerated-this-session rule, same 2x2 ablation; the per-cell split for this
+// axis is the `s0 string` column of the table in the array ceiling's comment
+// above (chain-link only 31,350,380 / peel only 31,108,100 — additive to
+// 31,365,688, with the residual to the shipped 31,379,632 being the widened
+// shared mutation-path peel plus the bool-arm chain-link publish).
+const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_379_632;
 
 // ── Shared clone-ceiling machinery ─────────────────────────────────────────
 // Core invariant #4 (one fix, all siblings): both clone-ceiling ratchets —
@@ -30351,7 +30440,18 @@ fn self_host_clone_ceiling() {
 //   2. `Parser.peek` -- 7,823,340 hits alone, ~33x the whole chokepoint.
 //   3. DEEP-1 return-view lazy materialization -- the actual fix, and the doc
 //      warns it is UAF-prone, so it lands AFTER the open UAF class is closed.
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_108_440_117;
+// ⚠ RE-SEEDED 2026-08-28 (R45 Track G) — 1,108,440,117 -> 1,124,255,029
+// (+15,814,912, +1.427%). 🚨 NOT OWNER-AUTHORISED — same OPEN OWNER ASK as the
+// stage-0 ceilings, same revert instruction (back to 1,108,440,117).
+// Regenerated on this tree this session; attributed by the 2x2 ablation
+// tabulated on `SELF_COMPILE_ARRAY_CLONE_CEILING`:
+//   chain-link only : 1,123,804,797  (+15,364,680, +1.386%)
+//   CoW peel only   : 1,108,737,004  (+296,887,    +0.027%)
+// So on the ARRAY axis the cost is the chain-link fix; on the STRING axis below
+// it is overwhelmingly the CoW peel. Different levers, so do not reclaim them
+// as one — and note the two are ADDITIVE on both axes (the 2x2's whole point),
+// so a reclaim on one does not move the other.
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_124_255_029;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -30396,7 +30496,100 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_108_440_117;
 //   2. `Parser.peek` -- 7,823,340 hits alone, ~33x the whole chokepoint.
 //   3. DEEP-1 return-view lazy materialization -- the actual fix, and the doc
 //      warns it is UAF-prone, so it lands AFTER the open UAF class is closed.
-const STAGE1_STRING_CLONE_CEILING: u64 = 2_082_113_453;
+// 🚨 RE-SEEDED 2026-08-28 (R45 Track G) — 2,082,113,453 -> 2,359,224,224
+// (+277,110,771, +13.31%). THIS IS THE LARGEST OF THE FOUR, and it is flagged
+// rather than absorbed.
+//
+// 🚨 NOT OWNER-AUTHORISED, ON ANY OF THE FOUR AXES. An earlier revision of these
+// comments claimed the round carried an owner authorisation for a chain-link fix
+// "measured at a fraction of a percent". NO SUCH AUTHORISATION WAS GIVEN — the
+// only owner ruling in scope is the 2026-08-27 re-seed above, which says any
+// further growth trips immediately. This is an OPEN OWNER ASK. TO REVERT: set
+// this ceiling back to 2,082,113,453 (and the other three to 12,991,164 /
+// 31,092,792 / 1,108,440,117) and let the gate go red on the measured values.
+//
+// WHERE IT COMES FROM, by the FULL 2x2 (table on
+// `SELF_COMPILE_ARRAY_CLONE_CEILING`; all four cells regenerated this session):
+//   chain-link only : 2,086,329,621  (+4,216,168,   +0.20%)
+//   CoW peel only   : 2,354,389,551  (+272,276,098, +13.08%)
+//   SHIPPED         : 2,359,224,224  (+277,110,771, +13.31%)
+// The peel is a MAIN EFFECT, measured as such rather than inferred from a
+// three-cell selection: Δ(peel) is +272,276,098 without the chain-link fix and
+// +272,478,218 with it (the `d60f511b` measurement), an interaction of 202,120 —
+// 0.07% of the effect. The remaining +4,834,673 between the peel-only cell and
+// the SHIPPED tree is THIS ROUND'S REWORK: the chain-link fix, the bool-arm
+// `expr_link_types` publish, and the widening of the shared mutation-path peel
+// to the two sibling write-walkers.
+//
+// WHY IT IS STILL THE RIGHT TRADE, and why it is not negotiable down:
+//   * Without it the self-host's CoW prescan does not see a mutation spelled
+//     through a method-chain receiver (`outer.get(0).unwrap().push(x)`), so
+//     `outer` stays PRISTINE, the Branch-C-pre borrow-flip aliases a live view
+//     into a vector that then realloc's, and the emitted binary SIGSEGVs
+//     (rc 139, RED-verified on the pre-fix driver). That is a MEMORY-SAFETY
+//     defect; Core #8 forbids shipping it for a clone count.
+//   * Rust gg already pays the identical conservatism — `extract_path_for_mut`
+//     has had the `Expr::MethodCall` arm all along (src/ir/lowering/functions.rs).
+//     So this is the self-host catching UP to the reference, not diverging.
+//   * The READ side of the very same file (`cow_source_root_name`) already
+//     peeled `EMethodCall`; the two sides disagreed about which name a position
+//     touches. One arm, at the write site.
+//   * The ASSIGNMENT-TARGET sibling had the same hole and was a silent WRONG
+//     ANSWER (rc 0, ASan clean): `outer.get(0).unwrap()[0] = v` marked nothing,
+//     so a view taken before the assignment observed the new value
+//     (`cow_assign_target_chain.gg`). All three write-side walkers now route
+//     through ONE `cow_mut_root_name` peel, pinned by
+//     `self_host_cow_write_walkers_share_one_root_peel` (tests/lints.rs), so
+//     the class cannot re-open one walker at a time.
+//
+// ⚠ WHERE THE RECLAIM IS *NOT*, and this correction matters because the wrong
+// answer was written here first. An earlier revision said the prescan is
+// "WHOLE-FUNCTION conservative by its own design note" and named
+// POSITION-AWARENESS as the lever. THAT IS REFUTED AT HEAD: `cow_pristine_after`
+// (self_host_lowerer/lower_cow.gg) computes `max_span(name) < pos` against the
+// position-keyed, max-merged `cow_mut_max_span`, i.e. a name mutated only BEFORE
+// a bind ALREADY flips. The "design note" it rested on was itself stale prose
+// contradicted by the function 500 lines below it in the same file (Core #14);
+// that note has been corrected. Re-check:
+//   sed -n '/^bool cow_pristine_after/,/^$/p' tests/fixtures/self_host_lowerer/lower_cow.gg
+// Reclaim available on the position axis: ZERO. Do not spend a round on it.
+//
+// WHERE THE COST ACTUALLY COMES FROM — CENSUSED, not reasoned. The peel changes
+// exactly one thing: which names enter the mutation set. So the set was measured
+// directly, by instrumenting `cow_mark_name` to print every `(name, pos)` mark,
+// building the driver both ways, and running each over `driver.gg`:
+//
+//   total marks   17,111  ->  17,305   (+194)
+//   distinct names 2,458  ->   2,493   (+35)
+//
+// **35 previously-unmarked root identifiers cost +272,276,098 stage-1 string
+// clones** — about 7.8M each. The multiplier is the mark's GRANULARITY: it is
+// the ROOT IDENTIFIER, not the field PATH. Rust keys `@mut:self.data` with an
+// ancestor walk (src/semantic/context.rs); the self-host collapses to the root,
+// so marking a name suppresses the Branch-C-pre borrow-flip for EVERY bind
+// rooted at that name in the function.
+//
+// The worked instance, and it is representative. `impl` is one of the 35. In
+// `self_host_lowerer/traits.gg` it is bound by exactly the resource-bind shape
+// the flip exists for — `registry.impls.get(idx_impl).unwrap()` — at three sites
+// inside `resolve_method_full`'s registry loops, which run for EVERY method call
+// the compiled program contains. `EquipInfo` (self_host_lowerer/types.gg) holds
+// three `String` fields and three `Vector[String]` fields. With `impl` marked,
+// each of those binds DEEP-CLONES a String-heavy struct per method resolution
+// instead of aliasing it. That is the whole shape of the regression, and it is
+// why the cost is 99.9% on the STRING axis and +0.027% on the array axis.
+//
+// So the reclaim is PATH GRANULARITY, not position: a mutation through
+// `impl.method_sigs…` should poison binds under `impl.method_sigs`, not every
+// bind rooted at `impl`. Filed as `todo/t0715` (rewritten to this, from the
+// refuted position-awareness lever).
+//
+// Re-check the census:  see the instrumented-mark procedure above — print in
+// `cow_mark_name`, build both ways, `comm` the distinct-name sets.
+//
+// A permanently-red ratchet stops being a ratchet; this comment preserves the
+// debt, and the bump is an OPEN OWNER ASK rather than a settled cost.
+const STAGE1_STRING_CLONE_CEILING: u64 = 2_359_224_224;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
@@ -54513,6 +54706,32 @@ fn cow_rescue_mutation_through_getchain_receiver() {
     run_gg("cow_rescue_mutation_through_getchain_receiver.gg", "hello");
 }
 
+/// SELF-HOST LANE pin for the same write site — Core #9: a semantic-visible
+/// miscompile is not fixed until every lane is fixed.
+///
+/// `cow_mark_if_ident` (`tests/fixtures/self_host_lowerer/lower_cow.gg`) is the
+/// self-host's mutation-side root walk, the analog of Rust's
+/// `extract_path_for_mut`, and carried the IDENTICAL hole: `EIdentifier` /
+/// `EFieldAccess` / `EIndex` arms and an `else: pass`, with no `EMethodCall`
+/// peel. So a mutation spelled through a chain receiver
+/// (`outer.get(0).unwrap().push(x)`) marked NOTHING, `outer` stayed pristine,
+/// and the borrow-flip aliased a live view into a vector that then realloc'd.
+/// The READ side of the very same file (`cow_source_root_name`) already peeled
+/// `EMethodCall` — the two sides disagreed about which name a position touches.
+///
+/// RED-verified on the PRE-fix self-host driver: the emitted binary SIGSEGVs
+/// (rc 139) while the Rust lane on the same source prints `hello`. This is a
+/// memory-safety defect, not a cosmetic divergence, which is why it gets a lane
+/// pin of its own rather than riding on the Rust-lane test above.
+#[test]
+fn self_host_cow_rescue_mutation_through_getchain_receiver() {
+    assert_self_host_stdout(
+        "cow_rescue_mutation_through_getchain_receiver.gg",
+        "cowchain",
+        "hello",
+    );
+}
+
 /// REGRESSION (R45, 2026-08-27) — the LIVENESS walker's silent catch-all.
 ///
 /// `walk_stmt` (src/ir/lowering/liveness.rs) handled 10 of 29 `Stmt` forms and
@@ -55650,5 +55869,605 @@ fn fmt_output_reparses_corpus_wide() {
         checked,
         skipped_unparseable,
         failures.join("\n")
+    );
+}
+
+// ───────────────────────── CHAIN-LINK corpus (Round XLV, Track G) ─────────────
+//
+// AXIS: the kind of POSTFIX LINK sitting between the two method calls of a
+// chain. `parse_expr_bp_with_lhs` (self_host_typechecker/parser.gg:1947, binding
+// `int bp_start = lhs.span.start` at :1968 and :2035) and `parse_dot_expr`
+// (:2234, binding `int start = lhs.span.start`) hand that SAME start to every
+// node they build, so `span.start` is a CONTENDED key across a whole postfix
+// spine. (There is no `parse_postfix` in the self-host parser — that is the
+// RUST parser's function name, `src/parser/expr.rs`.) The self-host typechecker
+// publishes a link's OWN resolved type only on the unique `span.end` key
+// (`expr_link_types`, infer.gg), and only from inside `infer_expr_type`. When
+// the targ-recorder's cost filter skips that call for an outer link,
+// `lower_types.gg:lookup_expr_gir_type` falls back to the contended
+// `expr_types[span.start]` slot and mints the outer link's destination with its
+// RECEIVER's type — the emitted C then does not compile.
+//
+// These `#[test]`s pin the C and LLVM (Rust gg) lanes; the SELF-HOST lane
+// auto-enrolls via the committed `runtime_snapshots/chain_link_*.out` snapshots.
+// That is the 3-lane pin Core #9 asks for, and the snapshot rows are what make
+// the runtime lock-in net able to SEE this class at all: before this corpus
+// there were ZERO chained `().is_none()` / `().is_some()` shapes anywhere in the
+// self-host sources, so the byte-identity instrument was structurally blind to
+// it and both narrowing commits shipped green.
+//
+// ── AXIS COVERAGE ─────────────────────────────────────────────────────────────
+//
+// The enumeration below is the FULL span-start-inheriting constructor set that
+// `self_host_targ_recorder_chain_link_spine_set` (tests/lints.rs) derives from
+// parser.gg — every row, with a disposition, not a selection (Core #15e Q3). The
+// lint is the independent witness: it re-derives the set from the parser and
+// fails if this list and the discriminator's arm set drift apart.
+//
+//   EMethodCall       → chain_link_method
+//   EFieldAccess      → chain_link_field           (+ depth twin chain_link_field_nested,
+//                       + spelling twin chain_link_field_parenthesized)
+//   EIndex            → chain_link_index           (+ depth twin chain_link_index_nested)
+//   EPropagate        → chain_link_propagate
+//   EBinaryOp         → chain_link_binop (LEFT operand is the contending cell; the
+//                       RIGHT operand rows in the same fixture are the control —
+//                       the right operand supplies span.END, so it is on its own key)
+//   builtin recv      → chain_link_builtin_recv_control (CONTROL; green before and after)
+//   ECall             → OMITTED: `b.getf()(3).is_none()` is RED on the RUST lane too
+//                       (`__v5 = BoxF__getf(__v3);` — void value not ignored), so it
+//                       cannot be a parity-corpus row until that is fixed. Filed as
+//                       todo/t0711 with known_gaps/method_returning_callable_called_in_chain.gg.
+//   ETry              → OMITTED: `s.fetch()?.to_upper()` ICEs the Rust lane
+//                       (resource-move validation panic) and the self-host rejects
+//                       it — both lanes broken. Filed as todo/t0720 with
+//                       known_gaps/postfix_try_on_option_ices_resource_move.gg.
+//   EAs               → OMITTED as UNREACHABLE: `(x.m() as T).n()` needs a method on
+//                       the cast target, and no method exists on any numeric/bool.
+//   EIs               → OMITTED as UNREACHABLE: `is` yields `bool`, which has no methods.
+//   EAwait            → OMITTED: needs async/Task machinery; the predicate arm is
+//                       present for spine-completeness but is not exercised here.
+//   ECatch, ERethrow  → OMITTED: the infix siblings of EBinaryOp. Same construction
+//                       shape (`Span(lhs.span.start, rhs.span.end)`), same LEFT-operand
+//                       recursion in the discriminator, and chain_link_binop exercises
+//                       that recursion. No separate row: the arms are identical code.
+//   ERange            → OMITTED: `(a.m()..b).n()` needs a method on a range value;
+//                       none exists. The arm is present (and takes only the LOW
+//                       endpoint, the only one that can contend).
+//   EImplicitClosure  → NO SEPARATE ROW, arm present. It copies the wrapped
+//                       expression's WHOLE span (`val.span`), so it inherits both
+//                       start and end; the discriminator recurses into it for
+//                       completeness, but the wrapper is returned directly as a call
+//                       argument, never as a method receiver, so no chain can be
+//                       spelled through it today.
+//   EDo               → NOT A SPINE LINK, and no arm can fix it (Core #15e Q4 — a
+//                       case with no subject). The synthesized `catch (e):`-block
+//                       form inherits `lhs.span.start` WITHOUT wrapping `lhs`: its
+//                       payload is a `Vector[Stmt]`, and `lhs` is a sibling, so there
+//                       is no sub-expression for a discriminator arm to walk. It is
+//                       a third tenant on the contended key. Deliberate in BOTH lanes
+//                       (Rust `parse_body_or_expr`, src/parser/mod.rs: "`start` is
+//                       the whole `catch`/`rethrow` expression"), and NO reachable
+//                       miscompile has been constructed from it — a chain spelled
+//                       through the catch value is rejected before reaching it. Left
+//                       as-is with the reasoning recorded at the parser site; the fix
+//                       if one is ever found is at that WRITE site, and it diverges
+//                       the lanes' spans, so it is not made speculatively.
+//
+// ── A SECOND AXIS crosses this one, and every row above sampled ONE cell of it
+//    without saying so: WHICH RETURN-TYPE ARM of `infer_expr_type` resolves the
+//    outer link. All seven link-shape rows above use `.is_none()`/`.is_some()`,
+//    i.e. the tag-check arm — which was one of only two arms that published
+//    `expr_link_types` at all. The other ~24 return sites in that ladder did
+//    not, so a link-shape row could be green while the identical shape spelled
+//    with a different outer method CC-failed.
+//
+//    ⚠ THAT AXIS IS NOT CLOSED, AND AN EARLIER REVISION OF THIS BLOCK SAID IT
+//    WAS. The paragraph immediately above PREDICTS the surviving defect, and
+//    nine lines later the block used to declare the axis fixed — "BOTH
+//    bool-returning arms now publish, so the arm an outer method lands on no
+//    longer decides whether the link is typed". That sentence was FALSE. THREE
+//    of the ladder's ~26 exits publish (infer.gg:677 registry, :749 bool
+//    predicates, :771 tag check); the other ~23 still fall back to the
+//    contended key, and the arm an outer method lands on still decides. Five
+//    measured cells are RED because of it. What follows is therefore the TOTAL
+//    enumeration with a disposition per row (Core #15(b); Core #15e Q3 — a
+//    selection cannot show you what it omits), the same shape the first-axis
+//    section above already uses.
+//
+//   LANDED — these arms publish, and each has a live behavioural row:
+//   bool String predicates  → chain_link_bool_builtin  (is_empty/contains/
+//                             starts_with/ends_with, + len/to_upper as the
+//                             non-bool rows that pin the fix did not narrow.
+//                             ⚠ SCOPE: those two rows sample the STRING-receiver
+//                             cell only — the VECTOR-receiver cell of the same
+//                             `len` arm is RED, see below)
+//   bool Set predicates     → chain_link_set_predicate (is_subset/is_empty/
+//                             contains — same ladder arm, different receiver
+//                             resolution path, measured not assumed)
+//   Option/Result tag check → every chain_link_* row above
+//   registry (user method)  → the RECEIVER half of every row above; it publishes
+//                             at its own resolution gate, from a RESOLVED type
+//                             rather than from a name.
+//
+//   RED — the ~23 non-publishing arms. Measured on BOTH the shipped driver and
+//   a pristine `2d619258` driver, so every one is PRE-EXISTING: this round
+//   neither introduced nor worsened them. Each has a durable `known_gaps/`
+//   repro wired `#[ignore]`d to the CORRECT answer and cited from todo/t0712.
+//   The self-host symptom is on the left, Rust gg's correct answer on the right:
+//     h.make().split(",").len()   CC-FAIL `'Str' from type 'GorgetArray'`      → 3
+//                                 known_gaps/chain_link_split_on_user_method_result.gg
+//     h.make().bytes().len()      CC-FAIL `'Str' from type 'GorgetArray'`      → 4
+//                                 known_gaps/chain_link_bytes_on_user_method_result.gg
+//     h.make().len()  Vector recv CC-FAIL `'GorgetArray' from type 'size_t'`   → 2
+//                                 known_gaps/chain_link_len_on_vector_method_result.gg
+//     h.make().keys().len()  Dict CC-FAIL `'GorgetMap' from type 'GorgetArray'`→ 1
+//                                 known_gaps/chain_link_keys_on_dict_method_result.gg
+//     h.make().get(0).unwrap()    SIGBUS rc 135, NO OUTPUT — same discriminator,
+//                                 DIFFERENT symptom, so its downstream mechanism
+//                                 is triaged on its own (Core #15e Q6)         → a
+//                                 known_gaps/chain_link_get_on_vector_method_result.gg
+//   Each was isolated against a CONTROL: bind the receiver to a named local
+//   first and the identical program compiles and runs correctly on both
+//   drivers. It is the CHAIN spelling that breaks, which is what makes these
+//   the same class and not a resemblance.
+//
+//   THE BOUNDARY, and why the RED rows are not simply "publish from more arms".
+//   Those arms answer from the method NAME without checking the receiver
+//   (todo/t0712), and the lowerer reads `expr_link_types` FIRST — so publishing
+//   THOSE guesses OVERRIDES a fallback that was getting it right. It was built
+//   and it regressed ten self_host_runtime rows. Publishable set = RESOLVED,
+//   never GUESSED. Both halves — the pair that must publish, and the total
+//   COUNT that must not grow — are pinned by
+//   `self_host_infer_bool_arms_publish_chain_link` (tests/lints.rs). The class
+//   fix that closes all five RED rows at once is t0712's receiver gate, after
+//   which the single-exit publish becomes safe; that is the round's found fix,
+//   named here so the fallback is a decision and not a default.
+//
+// ── A THIRD AXIS, and it is what made the corpus BLIND to those five rows:
+//    RECEIVER KIND — is the chain's receiver a BUILTIN method call or a
+//    USER-DEFINED (`equip`) one? Nothing named this axis before. The two are
+//    different paths: a builtin receiver records no `expr_types[span.start]`
+//    either, so the outer link falls through to `infer_method_return_type` and
+//    is ACCIDENTALLY correct (Core #15e Q6), which is exactly what
+//    chain_link_builtin_recv_control.gg was added to say.
+//    `tests/fixtures/string_chained_methods.gg:7` — `raw.trim().to_lower()
+//    .split(", ")` — samples ONLY the builtin cell, and it MATCHES on the
+//    self-host lane. That is why the runtime lock-in net saw nothing: the
+//    corpus had the `split` arm covered on the cell where it works. The
+//    USER-receiver cell of those same arms is the RED set above. Every future
+//    chain-link row states which cell of THIS axis it samples.
+
+/// CHAIN-LINK axis cell: EMethodCall link (the ADJACENT-receiver cell) over a
+/// user-defined receiver. RED-verified: CC-FAIL on the pre-fix self-host driver
+/// (`incompatible types when assigning to type 'Option__int64_t' from type 'int'`).
+#[test]
+fn chain_link_method() {
+    run_gg(
+        "chain_link_method.gg",
+        "\
+true
+false
+true
+true",
+    );
+}
+
+/// CHAIN-LINK axis cell: ONE EFieldAccess link. RED-verified: CC-FAIL on the
+/// pre-fix self-host driver (`… type '__gg_Inner' from type 'int'`) AND on the
+/// adjacent-receiver-only predicate, which is why the shipped discriminator
+/// walks the whole spine rather than the receiver's immediate node.
+#[test]
+fn chain_link_field() {
+    run_gg(
+        "chain_link_field.gg",
+        "\
+true
+false
+true
+5",
+    );
+}
+
+/// CHAIN-LINK spelling twin of `chain_link_field`: the receiver PARENTHESIZED,
+/// `(recv.method()).field.method()`. The intuition that parens reset the span is
+/// wrong — a single parenthesized expression is returned as-is, keeping its
+/// inner span — so the workaround a reader would reach for does not work.
+/// RED-verified: CC-FAIL pre-fix, identically to the bare spelling.
+#[test]
+fn chain_link_field_parenthesized() {
+    run_gg(
+        "chain_link_field_parenthesized.gg",
+        "\
+true
+false
+true
+8",
+    );
+}
+
+/// CHAIN-LINK axis cell: TWO consecutive EFieldAccess links — the depth twin,
+/// which a one-level receiver test passes while still miscompiling.
+/// RED-verified: CC-FAIL pre-fix (`… type '__gg_Mid' from type 'int'`).
+#[test]
+fn chain_link_field_nested() {
+    run_gg(
+        "chain_link_field_nested.gg",
+        "\
+true
+false
+true
+9",
+    );
+}
+
+/// CHAIN-LINK axis cell: ONE EIndex link — built in `parse_expr_bp_with_lhs`, a
+/// separately-parsed spine form from the dot forms. RED-verified: CC-FAIL
+/// pre-fix (`… type 'GorgetArray' from type 'int'`).
+#[test]
+fn chain_link_index() {
+    run_gg(
+        "chain_link_index.gg",
+        "\
+true
+false
+true
+4",
+    );
+}
+
+/// CHAIN-LINK axis cell: TWO consecutive EIndex links (depth twin of
+/// `chain_link_index`). RED-verified: CC-FAIL pre-fix.
+#[test]
+fn chain_link_index_nested() {
+    run_gg(
+        "chain_link_index_nested.gg",
+        "\
+true
+false
+true
+6",
+    );
+}
+
+/// CHAIN-LINK axis cell: an EPropagate link — D29's postfix `!` mark, the form
+/// furthest from a "method chain" reading of the bug. RED-verified: CC-FAIL
+/// pre-fix.
+#[test]
+fn chain_link_propagate() {
+    run_gg(
+        "chain_link_propagate.gg",
+        "\
+true
+false
+true
+3",
+    );
+}
+
+/// CHAIN-LINK axis cell: EBinaryOp, with the method call in the LEFT operand
+/// (the operand that supplies `span.start`, so the one that can contend); the
+/// RIGHT-operand rows in the same fixture are the control that cannot.
+/// RED-verified on the pre-fix self-host driver: CC-FAIL,
+/// `incompatible types when assigning to type 'Str' from type '_Bool'`.
+#[test]
+fn chain_link_binop() {
+    run_gg(
+        "chain_link_binop.gg",
+        "\
+4
+false
+true
+4
+false",
+    );
+}
+
+/// CHAIN-LINK **return-type** axis cell — a second axis crossing the link-shape
+/// one. The outer link is a bool-returning STRING predicate
+/// (`is_empty`/`contains`/`starts_with`/`ends_with`), resolved by a different
+/// arm of `infer_expr_type`'s builtin ladder than the `is_some`/`is_none`
+/// tag-check arm every other `chain_link_*` row happens to use. That arm did not
+/// publish `expr_link_types[span.end]`; the tag-check arm three lines below it
+/// did. RED-verified on the pre-fix self-host driver: CC-FAIL,
+/// `incompatible types when assigning to type 'Str' from type '_Bool'` at
+/// `__v12 = gorget_str_is_empty(__v11);`. The `len()`/`to_upper()` rows pin that
+/// the fix did not narrow the non-bool arms (`.len()` / `.to_upper()` still
+/// resolve through the untouched name-list ladder) — ⚠ but ONLY on the
+/// STRING-RECEIVER cell, which is the whole scope they may claim (Core #12: a
+/// fixture's NAME is a claim about SCOPE — make it true or narrow it). The
+/// VECTOR-receiver cell of that SAME `len` arm is RED: `h.make().len()` over a
+/// `Vector[String]`-returning method CC-FAILs with `'GorgetArray' from type
+/// 'size_t'` (known_gaps/chain_link_len_on_vector_method_result.gg, todo/t0712,
+/// wired as `known_gap_chain_link_len_on_vector_method_result`).
+#[test]
+fn chain_link_bool_builtin() {
+    run_gg(
+        "chain_link_bool_builtin.gg",
+        "\
+false
+true
+true
+true
+true
+4
+ABCD",
+    );
+}
+
+/// CHAIN-LINK return-type axis, SET half of the same bool-predicate ladder arm
+/// (`is_subset`/`is_empty`/`contains` over a `Set`). One arm serves both
+/// receivers, but they reach it by different resolution paths, so the cell is
+/// measured rather than assumed. RED-verified on the pre-fix self-host driver:
+/// CC-FAIL, `incompatible types when assigning to type 'GorgetSet' from type
+/// '_Bool'` at `__v26 = gorget_set_is_subset(__v24, __v25);`.
+#[test]
+fn chain_link_set_predicate() {
+    run_gg(
+        "chain_link_set_predicate.gg",
+        "\
+true
+false
+true",
+    );
+}
+
+// ───────────────── CoW write-walker corpus (Round XLV, Track G) ──────────────
+//
+// AXIS: how the mutated root is SPELLED at each kind of mutation site. The
+// self-host's CoW prescan records which names a function mutates; the
+// Branch-C-pre borrow-flip then lets a resource bind alias a collection element
+// only while the collection is pristine after the bind. A spelling the prescan
+// does not peel is a mutation it does not see — and an unseen mutation is a
+// live alias into freed or overwritten storage.
+//
+// These two rows sample the ASSIGNMENT-TARGET site (`… = v`); the
+// `cow_rescue_mutation_through_getchain_receiver` pair samples the MUTATING-
+// METHOD site (`….push(v)`). Both are now served by the single
+// `cow_mut_root_name` peel in lower_cow.gg, pinned by
+// `self_host_cow_write_walkers_share_one_root_peel` (tests/lints.rs).
+
+/// CoW write-walker axis cell: the assignment TARGET is reached through a method
+/// chain, so the mutated root is not a bare name anywhere in the LHS.
+/// RED-verified on the pre-fix self-host driver: rc 0 and the WRONG string
+/// (`zappedzappedzappedzappedzappedzapped` instead of `hello`) — a silent wrong
+/// answer, ASan-clean, visible only against the Rust oracle.
+#[test]
+fn cow_assign_target_chain() {
+    run_gg("cow_assign_target_chain.gg", "hello");
+}
+
+/// CoW write-walker CONTROL: the same mutation spelled through a NAME. Green
+/// before and after (Core #12 — declared, not implied). It pins that the fix is
+/// the missing method-chain peel and not a blanket over-marking, and it is the
+/// row that goes red if the refactor into a shared helper drops the plain
+/// spelling.
+#[test]
+fn cow_assign_target_named_control() {
+    run_gg("cow_assign_target_named_control.gg", "hello");
+}
+
+// ── The postfix-axis cells that are RED for reasons OTHER than the chain-link
+//    class. Each has a durable repro under `known_gaps/` cited by its `todo/`
+//    item; each asserts the CORRECT/intended behaviour, not today's. Un-ignore
+//    and promote out of `known_gaps/` the round the underlying bug is fixed.
+
+/// KNOWN GAP — the ECall cell of the postfix axis. A method returning a
+/// `Callable[...]`, immediately called, is miscompiled on BOTH lanes: Rust gg
+/// emits the method with a VOID C signature (`void value not ignored as it
+/// ought to be`), the self-host mints `int64_t` for an `Option__int64_t` value.
+/// Still RED with the complete spine discriminator in place, and Rust gg
+/// consults no span table at all — so this is a different class, not a residual
+/// of the chain-link fix.
+#[test]
+#[ignore = "KNOWN GAP: a method returning Callable, called immediately, is \
+miscompiled on BOTH lanes (Rust: void-typed method emit; SH: wrong mint). \
+This is why the ECall cell has no chain_link_* corpus row."]
+fn known_gap_method_returning_callable_called_in_chain() {
+    run_gg("known_gaps/method_returning_callable_called_in_chain.gg", "true");
+}
+
+/// KNOWN GAP — the SELF-HOST over-accepts `to_string()` on a `float` and then
+/// emits C that will not compile (`incompatible types when assigning to type
+/// 'Str' from type 'int'`). Rust gg is CORRECT here — it rejects with
+/// `E_NoMethodFound` — so this pin runs on the SELF-HOST lane; a Rust-lane
+/// `check_gg_fails` would pass vacuously and pin nothing.
+///
+/// Asserts the correct behaviour: the self-host driver REFUSES the program
+/// (non-zero exit, no emitted C). This gap is also what makes the EAs cell of
+/// the postfix axis unreachable — a cast target with a real callable method is
+/// the only way to build that probe, and no numeric has one.
+#[test]
+#[ignore = "KNOWN GAP: the self-host accepts `to_string()` on non-String \
+receivers and CC-FAILs; Rust gg correctly rejects. Asserts the SH reject."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_sh_to_string_on_float_overaccepted() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir
+        .join("tests/fixtures/known_gaps/sh_to_string_on_float_overaccepted.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "known_gap_sh_to_string_on_float_overaccepted",
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success() && !stdout.contains("int main("),
+        "the self-host ACCEPTED `to_string()` on a `float` and emitted C for it. \
+         Rust gg rejects the same program with `E_NoMethodFound: no method \
+         `to_string` found on type `float``; the self-host admits the name from a \
+         NAME LIST in infer.gg with no receiver-type check, so it accepts a call \
+         it cannot lower (Core #10). exit={:?}",
+        out.status.code(),
+    );
+}
+
+/// KNOWN GAP — the REFERENCE lags the self-host. Rust gg accepts `.is_none()`
+/// on a `Result` and answers `false` (the self-host correctly rejects it as
+/// Option-only), and separately accepts an unhandled `!` inside an `Ok(...)`
+/// argument in a function that is not `throws`. Asserts the reject.
+#[test]
+#[ignore = "KNOWN GAP: Rust gg accepts `.is_none()` on Result (answers false) \
+and an unhandled `!` at an enum-ctor argument; the self-host rejects the \
+first. Asserts the reject."]
+fn known_gap_is_none_on_result_wrongly_accepted() {
+    check_gg_fails("known_gaps/is_none_on_result_wrongly_accepted.gg", "is_none");
+}
+
+/// KNOWN GAP — the ETry cell of the postfix axis. Postfix `?` over an
+/// `Option[String]` with a method on the unwrapped result ICEs Rust gg
+/// (resource-move validation: "shallow copy of resource") and is rejected at
+/// resolve by the self-host. `infer.gg`'s ETry arm documents the intended
+/// semantics (`Option[T] -> T`), so `HI` is the correct output.
+#[test]
+#[ignore = "KNOWN GAP: postfix `?` over Option ICEs Rust gg (shallow copy of \
+resource) and the self-host fails to resolve a method on the result. This is \
+why the ETry cell has no chain_link_* corpus row."]
+fn known_gap_postfix_try_on_option_ices_resource_move() {
+    run_gg("known_gaps/postfix_try_on_option_ices_resource_move.gg", "HI");
+}
+
+// ── THE CHAIN-LINK RED CELLS: the ~23 ladder arms that do NOT publish
+//    `expr_link_types[span.end]`, over a USER-DEFINED receiver. All five are
+//    PRE-EXISTING (identical on a pristine `2d619258` driver) and all five are
+//    cited from `todo/t0712`, whose receiver gate is the class fix that closes
+//    them at once. Un-ignore and promote out of `known_gaps/` that round.
+//
+//    ⚠ THESE RUN ON THE SELF-HOST LANE, NOT THROUGH `run_gg`. Rust gg is
+//    CORRECT on every one of them, so a `run_gg` pin would be GREEN today and
+//    would pin nothing (Core #12 — green on arrival is not coverage). The
+//    lagging lane is the self-host, so that is the lane the assert must read.
+
+/// Compile a `known_gaps/` fixture with the SELF-HOST driver, cc it, run it, and
+/// assert the INTENDED stdout — the answer Rust gg already gives. Shared by the
+/// five chain-link RED cells so the harness is written once; each caller spells
+/// its fixture path as a LITERAL, which is also what
+/// `known_gaps_repros_are_wired_to_a_test` requires.
+fn known_gap_self_host_stdout(rel_fixture: &str, expected: &str) {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let runtime_dir = manifest_dir.join("src/backend/c/runtime");
+    let fixture = manifest_dir.join("tests/fixtures").join(rel_fixture);
+    let tmp_root = std::env::temp_dir().join(format!(
+        "gg_known_gap_chain_link_{}_{}",
+        std::process::id(),
+        fixture.file_stem().unwrap().to_string_lossy(),
+    ));
+    std::fs::create_dir_all(&tmp_root).expect("failed to create tmp_root");
+    let outcome =
+        self_host_emit_cc_run(&driver_exe, &lib_dir, &runtime_dir, &fixture, &tmp_root, "kgap");
+    let _ = std::fs::remove_dir_all(&tmp_root);
+    match outcome {
+        Ok(stdout) => assert_eq!(
+            stdout.trim_end(),
+            expected,
+            "{rel_fixture}: the self-host built it but it printed the wrong answer. \
+             Rust gg prints `{expected}`.",
+        ),
+        Err(other) => panic!(
+            "{rel_fixture}: the self-host did not produce a running program ({other:?}). \
+             Rust gg compiles the same source and prints `{expected}`; this fixture asserts \
+             the CORRECT behaviour, not today's. Class fix: todo/t0712.",
+        ),
+    }
+}
+
+/// KNOWN GAP — chain-link RED cell: `.split(",")` as the outer link over a
+/// USER-DEFINED method receiver. The `split` arm is one of the ~23 exits of
+/// `infer_expr_type`'s builtin ladder that never publishes
+/// `expr_link_types[span.end]`, so the lowerer falls back to the CONTENDED
+/// `expr_types[span.start]` slot and mints the link with its RECEIVER's type.
+/// Self-host: CC-FAIL `incompatible types when assigning to type 'Str' from
+/// type 'GorgetArray'`. Rust gg: `3`.
+///
+/// The corpus was blind to this because `string_chained_methods.gg:7` samples
+/// the same `split` arm on the BUILTIN-receiver cell, where it works.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0712): a non-publishing ladder arm over a \
+user-defined receiver types the outer link with its RECEIVER; the self-host \
+CC-FAILs where Rust gg answers 3."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_chain_link_split_on_user_method_result() {
+    known_gap_self_host_stdout("known_gaps/chain_link_split_on_user_method_result.gg", "3");
+}
+
+/// KNOWN GAP — chain-link RED cell: `.bytes()` as the outer link over a
+/// USER-DEFINED method receiver. A SECOND arm of the same ladder, so the cell is
+/// not a single-name anecdote. Self-host: CC-FAIL `'Str' from type
+/// 'GorgetArray'`. Rust gg: `4`.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0712): sibling arm of \
+known_gap_chain_link_split_on_user_method_result; self-host CC-FAILs where \
+Rust gg answers 4."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_chain_link_bytes_on_user_method_result() {
+    known_gap_self_host_stdout("known_gaps/chain_link_bytes_on_user_method_result.gg", "4");
+}
+
+/// KNOWN GAP — chain-link RED cell, and the one that FALSIFIES A SCOPE CLAIM:
+/// the VECTOR-receiver cell of the `len` arm. `chain_link_bool_builtin.gg`
+/// carries `h.make().len()` as a live green row, but over a STRING receiver;
+/// swap the receiver for a `Vector[String]` and the same arm is RED with the
+/// mint running the other way — `incompatible types when assigning to type
+/// 'GorgetArray' from type 'size_t'`. Rust gg: `2`. (Core #12 — a fixture's
+/// NAME is a claim about SCOPE.)
+#[test]
+#[ignore = "KNOWN GAP (todo/t0712): the VECTOR-receiver cell of the `len` arm \
+that chain_link_bool_builtin pins only on its STRING receiver; self-host \
+CC-FAILs where Rust gg answers 2."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_chain_link_len_on_vector_method_result() {
+    known_gap_self_host_stdout("known_gaps/chain_link_len_on_vector_method_result.gg", "2");
+}
+
+/// KNOWN GAP — chain-link RED cell: `.keys()` over a `Dict`-returning USER
+/// method, the third receiver TYPE on the same axis (String / Vector / Dict), so
+/// the axis is sampled rather than extrapolated from the String rows.
+/// Self-host: CC-FAIL `'GorgetMap' from type 'GorgetArray'`. Rust gg: `1`.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0712): the DICT-receiver cell; self-host CC-FAILs \
+where Rust gg answers 1."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_chain_link_keys_on_dict_method_result() {
+    known_gap_self_host_stdout("known_gaps/chain_link_keys_on_dict_method_result.gg", "1");
+}
+
+/// KNOWN GAP — chain-link RED cell, and the SHARPEST of the five: it does not
+/// fail to compile, it CRASHES. `h.make().get(0).unwrap()` over a
+/// `Vector[String]`-returning USER method builds and then dies with SIGBUS
+/// (rc 135, no output). Rust gg runs the identical program and prints `a`.
+///
+/// ⚠ SAME DISCRIMINATOR, DIFFERENT SYMPTOM. Binding the receiver to a named
+/// local first is correct on both lanes, exactly as for the four CC-FAIL rows,
+/// so it is at minimum reached by the same contended-key path — but the
+/// downstream mechanism is a memory failure, not a mint mismatch, and is
+/// triaged on its own rather than assumed identical (Core #15e Q6). If it
+/// survives t0712's receiver gate, it earns its own filing.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0712): ordinary beginner code that Rust gg runs \
+correctly and the self-host SIGBUSes on (rc 135, no output)."]
+#[serial(self_host_lowerer_driver)]
+fn known_gap_chain_link_get_on_vector_method_result() {
+    known_gap_self_host_stdout("known_gaps/chain_link_get_on_vector_method_result.gg", "a");
+}
+
+/// CHAIN-LINK CONTROL ROW — the same shape over a BUILTIN receiver
+/// (`Vector.pop()`). Green before AND after the fix, so it is NOT RED-verifiable
+/// against the pre-fix compiler and does not claim to be (Core #12). It is green
+/// for a reason unrelated to the chain-link path: nothing records
+/// `expr_types[span.start]` for a builtin-receiver chain either, so the outer
+/// link falls through to `infer_method_return_type` and happens to land on
+/// `bool` (Core #15e Q6 — accidentally correct). This row pins that other path
+/// so a later change cannot push the class sideways into it.
+#[test]
+fn chain_link_builtin_recv_control() {
+    run_gg(
+        "chain_link_builtin_recv_control.gg",
+        "\
+true
+false
+true
+true",
     );
 }

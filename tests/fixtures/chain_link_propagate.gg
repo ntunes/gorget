@@ -1,0 +1,25 @@
+# CHAIN-LINK corpus · AXIS = the kind of postfix link sitting between the two
+# method calls of a chain. CELL SAMPLED HERE: an EPropagate link -- D29's
+# postfix `!` error-propagation mark (`recv.method()!.method()`).
+#
+# The third independently-parsed spine form, and the one furthest from a
+# "method chain" reading of the bug: `!` is not a dot form at all, yet
+# `parse_expr_bp_with_lhs` hands EPropagate the same `bp_start = lhs.span.start`, so the
+# outer `.is_none()` reads the contended slot and mints its destination from
+# `fetch()`'s Result-shaped success type.
+struct Src:
+    int n
+
+equip Src:
+    Option[int] fetch(self) throws int:
+        if self.n > 0:
+            return Some(self.n)
+        return None()
+
+void main() throws int:
+    Src empty = Src(0)
+    Src full = Src(3)
+    print(empty.fetch()!.is_none())
+    print(empty.fetch()!.is_some())
+    print(full.fetch()!.is_some())
+    print(full.fetch()!.unwrap())

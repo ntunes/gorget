@@ -1,0 +1,26 @@
+# CHAIN-LINK corpus · AXIS = the kind of postfix link sitting between the two
+# method calls of a chain. CELL SAMPLED HERE: ONE EIndex link
+# (`recv.method()[i].method()`).
+#
+# EIndex is built in `parse_expr_bp_with_lhs` (parser.gg), not `parse_dot_expr`,
+# and takes the SAME `bp_start = lhs.span.start`. So the index link inherits the
+# contended slot exactly as a field link does -- a second, independently-parsed
+# spine form that a discriminator scoped to `parse_dot_expr`'s forms would miss. The
+# destination slot is minted from `items()`'s return type (`GorgetArray`)
+# instead of `Option[int]`.
+struct Bag:
+    int n
+
+equip Bag:
+    Vector[Option[int]] items(self):
+        Vector[Option[int]] v = Vector[Option[int]]()
+        v.push(None())
+        v.push(Some(self.n))
+        return v
+
+void main():
+    Bag b = Bag(4)
+    print(b.items()[0].is_none())
+    print(b.items()[0].is_some())
+    print(b.items()[1].is_some())
+    print(b.items()[1].unwrap())

@@ -29,19 +29,24 @@ from lower import LowerCtx, method_mutates_receiver, call_arg_lets_callee_mutate
 # resource-bind borrow-flip: a `T x = coll.get(i).unwrap()` (or
 # `T x = coll[i]`) bind may borrow-alias the collection element ONLY
 # when NEITHER the bound name x NOR the source-collection identifier
-# coll is ever mutated. This is the self-host analog of Rust's pair
-# `is_cow_unsafe_at` (dst mutated forward → unsafe to alias) +
-# `is_source_mut_unsafe_at` (source collection mutated forward →
-# alias dangling after realloc), collapsed from flow-sensitive
-# (block, position) gating to one whole-function set.
+# coll is ever mutated AFTER the bind. This is the self-host analog of
+# Rust's pair `is_cow_unsafe_at` (dst mutated forward → unsafe to alias) +
+# `is_source_mut_unsafe_at` (source collection mutated forward → alias
+# dangling after realloc).
 #
-# CONSERVATIVE DIRECTION: whole-fn, not position-aware. A name mutated
-# only BEFORE the bind still suppresses the flip (we can't tell "before"
-# from "after" without flow info). That OVER-clones (keeps the eager
-# deep-clone where a flip would have been sound) but NEVER under-clones
-# — the safety property. A borrow-flip only ever happens for a bind
-# whose name AND source are both pristine for the whole function, which
-# is exactly the read-only-borrow shape the flip targets.
+# POSITION-AWARE, NOT WHOLE-FUNCTION. The scan records, per name, the
+# `max` mutation position (`cow_mut_max_span`); the flip gate
+# `cow_pristine_after(name, pos)` (below) answers `max_span(name) < pos`,
+# so a name mutated ONLY BEFORE the bind still flips. `cow_mutated_names`
+# is the membership half of the same fact, not a coarser second gate.
+#
+# CONSERVATIVE DIRECTION, on the axes that remain: the root is the whole
+# identifier, not a field PATH (Rust keys `@mut:self.data` with an
+# ancestor walk, `src/semantic/context.rs`; `ctx.locals.push(x)` here
+# poisons every bind rooted at `ctx`), and a closure-body mutation makes
+# the name NEVER pristine because its run-time order is unknown. Both
+# OVER-clone (keep the eager deep-clone where a flip would have been
+# sound) and NEVER under-clone — that is the safety property.
 #
 # The scan recurses into nested blocks (while/for/if/match/with/loop/
 # do/named-scope bodies) so mutations inside loops (the
@@ -84,30 +89,64 @@ void cow_mark_name(LowerCtx &ctx, String idn, int pos, bool in_closure):
         if pos > prev:
             ctx.cow_mut_max_span.put(idn, pos)
 
-# Record the root identifier of an EMove operand in `cow_moved_names`
-# (the #37 Phase 2 lazy-bind eligibility exclusion). Same structural
-# root walk as cow_mark_if_ident.
-void cow_mark_moved_root(LowerCtx &ctx, SpannedExpr e):
+# THE MUTATION-PATH ROOT WALK — one producer, three consumers.
+#
+# Peels a mutation path (`x`, `x.f`, `x[i]`, `x.get(i).unwrap()`, `*p`, and
+# any nesting of those) down to the root identifier whose storage the
+# mutation reaches; returns "" when the expression has no recordable root
+# (a fresh temp, a literal, a call result — nothing aliasable to track).
+#
+# ⚠ WHY THIS IS ONE FUNCTION AND NOT THREE. The self-host used to carry
+# three hand-maintained copies of this walk — `cow_mark_moved_root` (3 arms),
+# `cow_mark_if_ident` (4) and `cow_mark_assign_target` (4) — against Rust's
+# single `extract_path_for_mut` (src/ir/lowering/functions.rs:566). The drift
+# between the copies WAS the bug class, twice over:
+#   • `cow_mark_if_ident` had no `EMethodCall` arm, so
+#     `outer.get(0).unwrap().push(x)` marked nothing, `outer` stayed PRISTINE,
+#     the Branch-C-pre borrow-flip aliased a live view into a vector that then
+#     realloc'd — SIGSEGV, while `first.push(x)` and `outer[0].push(x)` ran clean.
+#   • `cow_mark_assign_target` had no `EMethodCall` arm either, so
+#     `outer.get(0).unwrap()[0] = v` marked nothing and a view taken BEFORE the
+#     assignment observed the NEW value — a silent wrong answer (rc 0, ASan
+#     clean) that only the differential against Rust gg could see.
+# Adding the arm at one site and not the other is Core #4's instance fix.
+# Centralizing at the producer is the class fix: a new peelable shape is
+# added ONCE here and every mutation-recording site gets it, and
+# `self_host_cow_write_walkers_share_one_root_peel` (tests/lints.rs) fails if
+# a fourth copy sprouts its own `case E…` arms instead of calling this.
+#
+# ARM SET. `EIdentifier`/`EFieldAccess`/`EIndex`/`EMethodCall` are Rust's own
+# mutable-path set; `EDeref` is the self-host's (`*p = v` reaches p's storage).
+# The read side (`cow_source_root_name`, below) peels three more — `ETry`,
+# `EPropagate` and its own `EDeref` — because a read chain may thread a
+# fallible link that a mutation path cannot; the two sets are deliberately
+# different and `self_host_cow_write_walkers_share_one_root_peel` pins both.
+String cow_mut_root_name(SpannedExpr e):
     match e.expr:
-        case EIdentifier(mvr_idn):
-            ctx.cow_moved_names.put(mvr_idn, true)
-        case EFieldAccess(mvr_base, _):
-            cow_mark_moved_root(&ctx, *mvr_base)
-        case EIndex(mvr_base, _):
-            cow_mark_moved_root(&ctx, *mvr_base)
+        case EIdentifier(mut_idn):
+            return mut_idn
+        case EFieldAccess(mut_base, _):
+            return cow_mut_root_name(*mut_base)
+        case EIndex(mut_base, _):
+            return cow_mut_root_name(*mut_base)
+        case EMethodCall(mut_recv, _, _, _):
+            return cow_mut_root_name(*mut_recv)
+        case EDeref(mut_inner):
+            return cow_mut_root_name(*mut_inner)
         else:
-            pass
+            return ""
+
+# Record the root identifier of an EMove operand in `cow_moved_names`
+# (the #37 Phase 2 lazy-bind eligibility exclusion).
+void cow_mark_moved_root(LowerCtx &ctx, SpannedExpr e):
+    String mvr_root = cow_mut_root_name(e)
+    if mvr_root.len() > 0:
+        ctx.cow_moved_names.put(mvr_root, true)
 
 void cow_mark_if_ident(LowerCtx &ctx, SpannedExpr e, int pos, bool in_closure):
-    match e.expr:
-        case EIdentifier(idn):
-            cow_mark_name(&ctx, idn, pos, in_closure)
-        case EFieldAccess(base_box, _):
-            cow_mark_if_ident(&ctx, *base_box, pos, in_closure)
-        case EIndex(base_box, _):
-            cow_mark_if_ident(&ctx, *base_box, pos, in_closure)
-        else:
-            pass
+    String mut_root = cow_mut_root_name(e)
+    if mut_root.len() > 0:
+        cow_mark_name(&ctx, mut_root, pos, in_closure)
 
 # Forward-walk one expression, recording any mutation it performs AND
 # recursing into nested closures/blocks. Mutations recorded:
@@ -491,20 +530,13 @@ int stmts_first_pos(Vector[Stmt] stmts):
 
 
 # Mark the root identifier of an assignment LHS as mutated. For a bare
-# `x` this is x; for `x[i]` / `x.f` / `x.f[i]` it walks down to the
-# root EIdentifier (the owning container is mutated through the path).
+# `x` this is x; for `x[i]` / `x.f` / `x.f[i]` / `x.get(i).unwrap()[0]` /
+# `*p` it is the root the path reaches, via the one shared mutation-path
+# walk (`cow_mut_root_name`, above).
 void cow_mark_assign_target(LowerCtx &ctx, SpannedExpr lhs, int pos, bool in_closure):
-    match lhs.expr:
-        case EIdentifier(idn):
-            cow_mark_name(&ctx, idn, pos, in_closure)
-        case EIndex(base_box, _):
-            cow_mark_assign_target(&ctx, *base_box, pos, in_closure)
-        case EFieldAccess(base_box, _):
-            cow_mark_assign_target(&ctx, *base_box, pos, in_closure)
-        case EDeref(inner_box):
-            cow_mark_assign_target(&ctx, *inner_box, pos, in_closure)
-        else:
-            pass
+    String assign_root = cow_mut_root_name(lhs)
+    if assign_root.len() > 0:
+        cow_mark_name(&ctx, assign_root, pos, in_closure)
 
 # CoW tier-2 L1: is `name` PRISTINE for an alias bound at textual
 # position `pos`? True iff the name is never mutated, OR its mutations
@@ -583,9 +615,17 @@ void compute_cow_scan(LowerCtx &ctx, GirModule &gmod, Vector[Param] params, Vect
 # source-collection root identifier name. Handles `coll.get(i).unwrap()`,
 # `coll[i]`, `coll.first().unwrap()`, `(*coll)…`, returning "" when the
 # root is not a plain identifier (e.g. a fresh temp, a call result —
-# those have no aliasable collection to track). Only NON-mutating read
-# peels are followed; if the chain hits anything else we stop and return
-# whatever root we reached (or "").
+# those have no aliasable collection to track).
+#
+# The `EMethodCall` arm peels through ANY method name, mutating or not — the
+# method name is discarded by the wildcard in its own arm below. That is deliberate and it is the SAFE
+# direction here: this walk answers "which named collection could this bind
+# alias?", so peeling a mutating link too merely names a root that is then
+# checked for pristineness (`cow_pristine_after`), whereas STOPPING at a
+# mutating link would return "" and lose the alias entirely. It is the
+# MUTATION side (`cow_mut_root_name`) that must not over-peel — the two
+# walks have deliberately different arm sets, both pinned by
+# `self_host_cow_write_walkers_share_one_root_peel` (tests/lints.rs).
 String cow_source_root_name(SpannedExpr e):
     match e.expr:
         case EIdentifier(idn):

@@ -1,0 +1,32 @@
+# CHAIN-LINK corpus · SPELLING TWIN of chain_link_field, and the answer is not
+# the obvious one. CELL SAMPLED HERE: `(recv.method()).field.method()` -- the
+# same EFieldAccess link, written with the receiver PARENTHESIZED.
+#
+# The intuition "parens make a new expression, so they must reset the span" is
+# WRONG: the parser returns a single parenthesized expression AS-IS, keeping its
+# inner span, so the outer link still inherits the method call's `span.start`
+# and still lands on the contended `expr_types` key. RED-verified: CC-FAIL on
+# the pre-fix self-host driver, identically to the unparenthesized spelling.
+#
+# Worth its own row because the WORKAROUND a reader would reach for -- "wrap it
+# in parens" -- does not work, and a corpus that only carries the bare spelling
+# would let a future narrowing claim the paren form as out of scope.
+struct Inner2:
+    Option[int] o
+
+struct Holder2:
+    int n
+
+equip Holder2:
+    Inner2 make(self):
+        if self.n > 0:
+            return Inner2(Some(self.n))
+        return Inner2(None())
+
+void main():
+    Holder2 empty = Holder2(0)
+    Holder2 full = Holder2(8)
+    print((empty.make()).o.is_none())
+    print((empty.make()).o.is_some())
+    print((full.make()).o.is_some())
+    print((full.make()).o.unwrap())

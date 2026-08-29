@@ -1,0 +1,38 @@
+# CoW WRITE-WALKER corpus · AXIS = how the mutated root is SPELLED at an
+# ASSIGNMENT TARGET. CELL SAMPLED HERE: the target is reached through a METHOD
+# CHAIN (`outer.get(0).unwrap()[0] = …`), so the root `outer` is not a bare name
+# anywhere in the LHS.
+#
+# The self-host's CoW prescan records which names a function mutates; the
+# Branch-C-pre borrow-flip then lets a resource bind alias a collection element
+# only while the collection is pristine AFTER the bind. The prescan's
+# assignment-target walker had no `EMethodCall` arm, so this spelling marked
+# NOTHING: `outer` stayed pristine, `s` was kept as a live Ptr alias into the
+# element slot, and the assignment below overwrote the string `s` still points
+# at. The program printed the NEW value.
+#
+# It is a silent WRONG ANSWER, not a crash -- rc 0, and ASan on the emitted C is
+# clean, because no memory rule is broken: the alias is valid storage holding
+# the wrong string. Core #13's point exactly -- ASan adjudicates memory
+# validity, the differential against Rust gg adjudicates value semantics, and
+# only the second instrument can see this one.
+#
+# The fix is the shared `cow_mut_root_name` walk in lower_cow.gg: one
+# mutation-path peel that every write-side recorder routes through, so a
+# spelling learned at one site cannot be missing at another.
+#
+# CONTROL: cow_assign_target_named_control.gg -- the same mutation spelled
+# through the name `first`, which the walker always marked. It pins that the fix
+# is the missing peel and not a blanket over-marking of every assignment.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[Vector[String]] outer = []
+    Vector[String] inner = []
+    inner.push(mk("hel", "lo"))
+    outer.push(inner)
+    Vector[String] first = outer.get(0).unwrap()
+    String s = first.get(0).unwrap()
+    outer.get(0).unwrap()[0] = mk("zappedzappedzapped", "zappedzappedzapped")
+    print(s)

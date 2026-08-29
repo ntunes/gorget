@@ -1,0 +1,40 @@
+# KNOWN GAP -- CHAIN-LINK class, and the SHARPEST of the five: this one does not
+# fail to compile, it CRASHES.
+#
+# CELL: `.get(0).unwrap()` over a `Vector[String]`-returning USER method. Same
+# DISCRIMINATOR as its four siblings -- the chain spelling breaks, the
+# named-local spelling does not -- but a DIFFERENT SYMPTOM: a deterministic
+# SIGBUS (rc 135), no output at all, rather than a CC-FAIL. So it is at minimum
+# reached by the same contended-key path, and its downstream mechanism must be
+# triaged on its own rather than assumed identical (Core #15e Q6).
+#
+# INTENDED OUTPUT: `a`. Rust gg answers `a` (regenerated 2026-08-29:
+# `./target/debug/gg run tests/fixtures/known_gaps/chain_link_get_on_vector_method_result.gg`).
+#
+# TODAY the SELF-HOST-built binary dies with SIGBUS (rc 135) and prints nothing.
+# This is ordinary beginner code that the reference compiler runs correctly, so
+# under Core #8 it is a defect on the lagging lane, not an acceptable divergence.
+#
+# PRE-EXISTING, not a regression: identical on a pristine `2d619258` driver.
+#
+# CONTROL that establishes the CHAIN spelling is the discriminator (compiles and
+# runs correctly on both lanes today, recorded rather than wired so it cannot
+# change the asserted output):
+#   Vector[String] loc = h.make()   then  print(loc.get(0).unwrap())   -> a
+#
+# HEAP-FORCED: the receiver is a Vector field read back out of a struct, and the
+# element is a heap String -- a literal receiver constant-folds and would be a
+# false negative for a memory-shaped failure like this one.
+#
+# THE CLASS FIX is todo/t0712 (gate the name-list arms on the receiver type);
+# if the crash survives that gate, it is its own filing.
+struct HV:
+    Vector[String] v
+
+equip HV:
+    Vector[String] make(self):
+        return self.v
+
+void main():
+    HV h = HV(["a", "b"])
+    print(h.make().get(0).unwrap())

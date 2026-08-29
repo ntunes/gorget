@@ -416,10 +416,10 @@ void check_default_param_ordering(Vector[Param] params, ResolveContext &ctx):
 # walker mirrors resolve.gg's exhaustive `resolve_expr` enumeration (every Expr
 # variant + every sub-expression) and is driven ONCE per function body from
 # `type_check_function` AFTER `type_check_stmts` (types assigned), so each `??`/
-# `*x` is checked EXACTLY ONCE with no double-fire. The arm-count lint
-# `carrier_ops_expr_arm_count` (tests/lints.rs) forces every newly-added Expr
-# variant through this walker — the next sub-expression-bearing shape cannot
-# silently re-open the escape hole.
+# `*x` is checked EXACTLY ONCE with no double-fire. The exhaustiveness lint
+# `self_host_safety_walker_is_exhaustive` (tests/lints.rs) forces every
+# newly-added Expr variant through this walker — the next sub-expression-bearing
+# shape cannot silently re-open the escape hole.
 
 # True iff `type_id` resolves to an `Option`/`Result` carrier — the `??`-accepted
 # set (verified end-to-end: both `Option ?? x` and `Result ?? x` run). The
@@ -4293,8 +4293,12 @@ void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTabl
             # (`index_method_generic_names`, traits.gg). So for a name the registry
             # does not know as method-generic — `.len()`, `.get()`, `.push()`,
             # `.unwrap()`, `.clone()`, i.e. nearly every call in a compiler
-            # source — this inference provably records nothing, and skipping it
-            # cannot change what is recorded. The typed discriminator
+            # source — this inference provably records no TARGS, and skipping
+            # it cannot change what `expr_method_targs` holds. ⚠ That is a
+            # claim about ONE of `infer_expr_type`'s output channels; it says
+            # NOTHING about `expr_types` / `expr_link_types`, which the same
+            # call also writes — see the CHAIN LINK paragraph below, whose
+            # absence is what broke `self_host_runtime`. The typed discriminator
             # (`bound_has_closure` / `is_terminal_method` and
             # `sh.shape.generic_params.len() > 0`) is untouched: it remains the
             # only thing that decides whether targs are recorded, and this
@@ -4304,7 +4308,25 @@ void record_method_targs_in_expr(SpannedExpr sexpr, ScopeTable &scopes, TypeTabl
             # `v.iter().map(f).len()` has a non-generic OUTER name over a
             # method-generic INNER link, and on the infer path it is
             # `infer_expr_type`'s own receiver recursion that reaches that link.
-            if registry_has_method_generic_name(types.trait_registry, mname):
+            #
+            # CHAIN LINK — the SECOND reason to infer, and it is a CORRECTNESS
+            # reason, not a targs one. `infer_expr_type` has a second output
+            # channel the cost filter above does not model: it publishes this
+            # call's resolved type on `expr_link_types[span.end]` (infer.gg),
+            # which `lower_types.gg:lookup_expr_gir_type` reads FIRST for every
+            # EMethodCall. The parser gives EVERY link of a spine the SAME
+            # `span.start` — not just `.m()` chains: every node it builds around
+            # `lhs` takes `lhs.span.start` as its own. So one non-method link
+            # anywhere between two method calls (`h.make().o.is_none()`,
+            # `b.items()[0].is_none()`, `s.fetch()!.is_none()`) still shares the
+            # slot, and the span.start-keyed `expr_types` fallback would hand
+            # this link the RECEIVER's type. Hence the discriminator walks the
+            # WHOLE spine, not just the adjacent node. Its arm set is the
+            # authority on which forms those are — see
+            # `expr_spine_has_method_call` below; do not restate the list here,
+            # it is re-derived from parser.gg by
+            # `self_host_targ_recorder_chain_link_spine_set` (tests/lints.rs).
+            if registry_has_method_generic_name(types.trait_registry, mname) or expr_spine_has_method_call(*mrecv):
                 int _ignore = infer_expr_type(sexpr, scopes, &types, &ctx)
             else:
                 record_method_targs_in_expr(*mrecv, &scopes, &types, &ctx)
@@ -4507,6 +4529,86 @@ bool fstring_interp_is_tag_check(SpannedExpr fe):
             return false
     return false
 
+# TRUE when the SPAN-INHERITING SPINE rooted at `sexpr` contains a method call — not
+# merely when `sexpr` IS one. Used as the CHAIN-LINK discriminator.
+#
+# WHY THE WHOLE SPINE, and not the adjacent node. `parse_expr_bp_with_lhs`
+# and `parse_dot_expr` (parser.gg) build a node around `lhs`
+# and give it `Span(lhs.span.start, …)` — directly, or via a local
+# `int bp_start = lhs.span.start` / `int start = lhs.span.start`. So
+# `span.start` is a CONTENDED key over the whole spine, and `expr_types`
+# (keyed on it) can hold only ONE link's type. Any link whose spine contains a
+# method call therefore MUST have its own type published on the unique
+# `span.end` key (`expr_link_types`), or the lowerer's `lookup_expr_gir_type`
+# span.start fallback hands it the RECEIVER's type and the emitted C does not
+# compile.
+#
+# An adjacent-only test (`case EMethodCall: true; else: false`) is a HEURISTIC,
+# not the contender set. Measured: it leaves `h.make().o.is_none()`,
+# `r.grab().leaf.o.is_none()`, `b.items()[0].is_none()`,
+# `g.cells()[0][0].is_none()` and `s.fetch()!.is_none()` all CC-FAILing —
+# 5 of the 6 shapes the complete predicate repairs.
+#
+# ⚠ THE ARM SET IS NOT A JUDGEMENT CALL — it is the parser's own enumeration.
+# The arms below are exactly the constructors that wrap `lhs` AND inherit its
+# `span.start`, and `self_host_targ_recorder_chain_link_spine_set`
+# (tests/lints.rs) re-derives that set from parser.gg and fails if the two
+# diverge. Add a span-inheriting form to the parser without adding it here and
+# the lint goes red — which is the point: this class was re-opened twice by
+# narrowings that a comment could not stop.
+#
+# INFIX forms (EBinaryOp / ECatch / ERethrow / ERange) take only their LEFT
+# operand: `Span(lhs.span.start, rhs.span.end)` means the right operand
+# contributes the END, so it sits on its own key and cannot contend.
+#
+# Also pinned behaviourally by the `chain_link_*` fixtures + their committed
+# `runtime_snapshots/*.out` rows.
+bool expr_spine_has_method_call(SpannedExpr sexpr):
+    match sexpr.expr:
+        case EMethodCall(_, _, _, _):
+            return true
+        case EFieldAccess(sp0, _):
+            return expr_spine_has_method_call(*sp0)
+        case EIndex(sp0, _):
+            return expr_spine_has_method_call(*sp0)
+        case ECall(sp0, _, _):
+            return expr_spine_has_method_call(*sp0)
+        case EAwait(sp0):
+            return expr_spine_has_method_call(*sp0)
+        case ETry(sp0):
+            return expr_spine_has_method_call(*sp0)
+        case EPropagate(sp0):
+            return expr_spine_has_method_call(*sp0)
+        case EAs(sp0, _):
+            return expr_spine_has_method_call(*sp0)
+        case EIs(sp0, _, _):
+            return expr_spine_has_method_call(*sp0)
+        # The INFIX forms inherit `lhs.span.start` too -- `parse_expr_bp_with_lhs` builds
+        # each as `Span(lhs.span.start, rhs.span.end)` -- so the LEFT operand's
+        # spine is on the contended key exactly as a postfix receiver is. Only
+        # the LEFT operand: the right operand contributes `span.end`, not
+        # `span.start`, so it is on its own key and cannot contend.
+        case EBinaryOp(sp0, _, _):
+            return expr_spine_has_method_call(*sp0)
+        case ECatch(sp0, _, _):
+            return expr_spine_has_method_call(*sp0)
+        case ERethrow(sp0, _, _, _):
+            return expr_spine_has_method_call(*sp0)
+        case ERange(sp0opt, _, _):
+            if sp0opt is Some(__rng_lo):
+                return expr_spine_has_method_call(*__rng_lo)
+            return false
+        # WHOLE-SPAN COPY. `EImplicitClosure` is not built as `Span(lhs.span.start, …)`
+        # at all — it is `SpannedExpr(EImplicitClosure(Box[SpannedExpr](val)), val.span)`,
+        # taking the wrapped expression's span ENTIRE. That inherits `span.start` like
+        # every other arm here, and additionally collides on `span.end` — the very key
+        # `expr_link_types` uses as its escape hatch. Its spelling is why the parser
+        # census has to classify whole-span copies and not just `Span(` literals.
+        case EImplicitClosure(sp0):
+            return expr_spine_has_method_call(*sp0)
+        else:
+            return false
+
 # CHOKEPOINT GATE — exhaustive over `enum Expr` in ast.gg, and ARM-FOR-ARM
 # IDENTICAL to `record_method_targs_in_expr` below (pinned by
 # `self_host_targ_recorder_pregate_mirrors_recorder` in tests/lints.rs).
@@ -4514,9 +4616,20 @@ bool fstring_interp_is_tag_check(SpannedExpr fe):
 # Answers "would the recorder call `infer_expr_type` even once?", so the
 # `expr_types` snapshot/restore AND the whole recording walk are paid only by
 # the statements that can actually record a targ — not by every statement that
-# merely contains a `.len()`. It is EXACT, not conservative: `false` here means
-# the recorder's every `EMethodCall` would take its skip branch, and the skip
-# branch has no side effects at all (see the arm below).
+# merely contains a `.len()`.
+#
+# ⚠ THE SKIP BRANCH IS NOT SIDE-EFFECT-FREE, and believing it was is what broke
+# `self_host_runtime` (7 CC-FAIL rows, first-bad `0ec8606f`). `infer_expr_type`
+# has a SECOND output channel besides `expr_method_targs`: it publishes each
+# method call's resolved type on `expr_link_types[span.end]` (infer.gg), which
+# `lower_types.gg:lookup_expr_gir_type` reads FIRST for every EMethodCall. Skip
+# a CHAIN LINK and the lowerer falls back to the `span.start`-keyed
+# `expr_types`, whose slot every link of a SPAN-INHERITING SPINE shares — so the link
+# is typed with its RECEIVER's type and the emitted C does not compile. That is
+# why this gate answers `true` for a chain link too
+# (`expr_spine_has_method_call`, which walks the whole spine and not just the
+# adjacent node), and why any future narrowing must model BOTH output channels,
+# not just the targs one.
 #
 # ⚠ THE MIRROR IS THE CORRECTNESS PROPERTY. This walk must reach every
 # `EMethodCall` the recorder reaches; a sub-expression dropped HERE silently
@@ -4568,6 +4681,13 @@ bool expr_has_method_generic_call(SpannedExpr sexpr, TraitRegistry registry):
             # below. Mirroring them keeps this predicate EQUAL to "the recorder
             # would call `infer_expr_type` at least once", never weaker.
             if registry_has_method_generic_name(registry, h1):
+                return true
+            # CHAIN LINK: see `expr_spine_has_method_call`. The recorder must run
+            # `infer_expr_type` on this link so its OWN resolved type reaches
+            # `expr_link_types[span.end]`; otherwise the lowerer reads the
+            # receiver's type off the shared `span.start` key and emits a
+            # type-mismatched local (CC-FAIL).
+            if expr_spine_has_method_call(*h0):
                 return true
             if expr_has_method_generic_call(*h0, registry):
                 return true

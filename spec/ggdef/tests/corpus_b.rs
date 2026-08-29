@@ -560,5 +560,16 @@ fn corpus_b_all_match() {
     // string-based receiver-gate at `elaborate/mod.rs` (intercepts BEFORE
     // the arm-picker catch-all with `error[E_NoMethodFound]:` matching
     // Rust+SH lanes). All 4 adjudicate via CheckFails. Count +4 → 176.
-    assert_eq!(fixtures.len(), 176, "B2 gate set drifted from 176 fixtures");
+    //
+    // R45 Track G (rework), 2026-08-28: 2 CoW write-walker fixtures added
+    // (`cow_assign_target_chain.gg` + `cow_assign_target_named_control.gg`),
+    // the assignment-target sibling of the mutation-path root peel. Both
+    // adjudicate MATCH via `run_gg` with NO ggdef change — the shape is
+    // already in the phase-0 subset, and ggdef agrees with the fixed lanes.
+    // Worth recording WHY that is a real result and not a formality
+    // (Core #13): this defect was a WRONG ANSWER, not a memory-invalidation
+    // one, so it sits squarely in what ggdef can adjudicate — unlike its
+    // realloc-UAF sibling (`cow_rescue_mutation_through_getchain_receiver`),
+    // which ggdef would accept cleanly. Count +2 → 178.
+    assert_eq!(fixtures.len(), 178, "B2 gate set drifted from 178 fixtures");
 }

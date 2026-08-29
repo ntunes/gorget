@@ -1,0 +1,28 @@
+# CHAIN-LINK corpus · AXIS = the kind of postfix link sitting between the two
+# method calls of a chain. CELL SAMPLED HERE: TWO consecutive EIndex links
+# (`recv.method()[i][j].method()`).
+#
+# The depth twin of chain_link_index, for the same reason chain_link_field_nested
+# is the depth twin of chain_link_field: the discriminator has to walk the
+# whole spine, and a one-level test passes the single-index shape while still
+# failing this one.
+struct Grid:
+    int n
+
+equip Grid:
+    Vector[Vector[Option[int]]] cells(self):
+        Vector[Option[int]] row0 = Vector[Option[int]]()
+        row0.push(None())
+        Vector[Option[int]] row1 = Vector[Option[int]]()
+        row1.push(Some(self.n))
+        Vector[Vector[Option[int]]] g = Vector[Vector[Option[int]]]()
+        g.push(row0)
+        g.push(row1)
+        return g
+
+void main():
+    Grid g = Grid(6)
+    print(g.cells()[0][0].is_none())
+    print(g.cells()[0][0].is_some())
+    print(g.cells()[1][0].is_some())
+    print(g.cells()[1][0].unwrap())

@@ -2152,6 +2152,27 @@ equip Parser:
                     self.expect_tok(TOK_COLON, "expected ':' after catch binding")
                     SpannedExpr catch_val = SpannedExpr(EIntLiteral(0), Span(0, 0))
                     if self.check_tok(TOK_NEWLINE):
+                        # This SYNTHESIZED `EDo` (the author wrote no `do`) takes
+                        # the owning `catch` expression's start, deliberately and
+                        # in BOTH lanes — Rust's `parse_body_or_expr`
+                        # (src/parser/mod.rs) documents the same choice: "`start`
+                        # is the whole `catch`/`rethrow` expression". Its three
+                        # sibling `EDo` sites (the author-spelled `do:` form and
+                        # the two divergent-expression forms) use their own
+                        # keyword position because they HAVE one; this one does
+                        # not.
+                        #
+                        # ⚠ It is therefore a THIRD tenant on `lhs.span.start`,
+                        # which `expr_types` can hold only one of — and unlike a
+                        # spine link, no arm of `expr_spine_has_method_call` can
+                        # repair it, because there is no sub-expression to walk
+                        # (the payload is a `Vector[Stmt]`; `lhs` is a sibling,
+                        # not a child). No reachable miscompile has been
+                        # constructed from it: a chain spelled through the catch
+                        # value is rejected before it gets here. If one ever is,
+                        # the fix is HERE (give the block its own start), not a
+                        # new discriminator arm — and it will diverge the two
+                        # lanes' spans, so it needs the parity gates run with it.
                         Vector[Stmt] body = self.parse_block()
                         catch_val = SpannedExpr(EDo(body), Span(lhs.span.start, self.peek().lex_start))
                     else:

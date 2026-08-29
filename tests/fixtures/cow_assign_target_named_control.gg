@@ -1,0 +1,25 @@
+# CoW WRITE-WALKER corpus · CONTROL for cow_assign_target_chain.gg.
+#
+# CELL SAMPLED HERE: the identical mutation spelled through the NAME `first`
+# instead of through a method chain. The prescan's assignment-target walker
+# always had the `EIdentifier`/`EIndex` arms this needs, so this row was GREEN
+# before the fix and is GREEN after it -- it CANNOT be RED-verified against the
+# pre-fix compiler (Core #12), and saying so is the point of the row.
+#
+# WHAT IT PINS INSTEAD: that the fix is the missing method-chain peel and not a
+# blanket "mark everything at an assignment target". A change that over-marks
+# would keep this row correct too, but a change that stops marking the plain
+# spelling -- the far likelier way to break this walker while refactoring it
+# into a shared helper -- turns this row into `zapped…` immediately.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[Vector[String]] outer = []
+    Vector[String] inner = []
+    inner.push(mk("hel", "lo"))
+    outer.push(inner)
+    Vector[String] first = outer.get(0).unwrap()
+    String s = first.get(0).unwrap()
+    first[0] = mk("zappedzappedzapped", "zappedzappedzapped")
+    print(s)

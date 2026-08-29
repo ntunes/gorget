@@ -1,0 +1,35 @@
+# KNOWN GAP (found R45 Track G while auditing the chain-link postfix axis).
+#
+# The REFERENCE LAGS THE SELF-HOST here — a succession milestone, not an
+# embarrassment. TWO Rust-lane defects in one program:
+#
+#   (1) `.is_none()` is accepted on a `Result`, and ANSWERS `false`. `is_none`
+#       is an Option tag test; a Result has no None arm, so the answer is
+#       meaningless rather than merely surprising. The self-host REJECTS it:
+#       `error[E_NoMethodFound]: `.is_none()` on Result is outside the phase-0
+#       subset (Option-only)`.
+#
+#   (2) `s.fetch()!` — a postfix error-propagation mark — is accepted inside
+#       `Ok(...)` in a function that is NOT declared `throws`. The identical
+#       shape in a plain binding IS rejected, with
+#       `error[E_UnhandledThrows]: this call can fail with `String` but the
+#       error is not handled here`. So the enforcement has a hole at the
+#       enum-constructor argument position.
+#
+# CORRECT behaviour: `gg check` REJECTS this program on both lanes — (1) as
+# a no-such-method error and (2) as E_UnhandledThrows. It currently prints
+# `false` on the Rust lane, which is the worst outcome: a wrong answer with
+# rc 0.
+struct Src:
+    int n
+
+equip Src:
+    Result[Option[int], String] fetch(self):
+        return Ok(None())
+
+Result[bool, String] go(Src s):
+    return Ok(s.fetch()!.is_none())
+
+void main():
+    Src s = Src(1)
+    print(go(s).unwrap())

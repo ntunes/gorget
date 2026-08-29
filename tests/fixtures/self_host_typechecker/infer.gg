@@ -708,7 +708,45 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # is_empty/contains arm. Without this the result slot defaults to
             # I64 and a `print(f"{a.is_subset(b)}")` prints 1/0 instead of
             # true/false (the int-instead-of-bool symptom).
+            #
+            # CHAIN LINK: publish on the UNIQUE `span.end` key, exactly as the
+            # tag-check arm below does. These two arms are ONE class — bool
+            # returned REGARDLESS of the receiver — and only the tag-check half
+            # published, so `m.get(k).is_none()` compiled while the sibling
+            # `h.make().is_empty()` CC-failed with `incompatible types when
+            # assigning to type 'Str' from type '_Bool'`. The parser gives every
+            # link of a postfix spine the same `span.start`, so the span.start
+            # -keyed `expr_types` fallback in `lower_types.gg` hands the link its
+            # RECEIVER's type; `expr_link_types[span.end]` is the escape hatch.
+            # Pinned by `self_host_infer_bool_arms_publish_chain_link`
+            # (tests/lints.rs) and by `chain_link_bool_builtin.gg` /
+            # `chain_link_set_predicate.gg`.
+            #
+            # ⚠ WHY NOT PUBLISH FROM EVERY ARM OF THIS LADDER — MEASURED, not
+            # assumed. Publishing at a single exit for the whole `EMethodCall`
+            # case (a thin `infer_expr_type` wrapper over the dispatcher) is the
+            # shape Core #4 asks for, it was built, and it REGRESSED TEN
+            # `self_host_runtime` rows: `iterator_lazy_chain` (double free),
+            # `string_higher_order` / `test_vector_str_higher_order`
+            # (`gorget_string_free` invariant), `unicode_strings` (prints `80`
+            # for `é`), `test_method_chaining` / `test_option_chaining` /
+            # `leak_cow_boundaries` (CC-FAIL), `shared_stress{,_yield}`,
+            # `string_conversions`. A first-write-wins variant regressed the same
+            # ten, so it is not re-inference overwriting a good value — it is that
+            # THE LADDER'S OTHER ARMS ANSWER FROM THE METHOD NAME ALONE, without
+            # checking the receiver (`to_string`/`len`/`slice`/`get`/…). That is
+            # a live, filed defect in its own right (`todo/t0712`: the self-host
+            # accepts `to_string()` on a `float` off the same name list), and a
+            # guess is exactly the thing that must not be published: the lowerer
+            # reads `expr_link_types` FIRST, so a published guess OVERRIDES a
+            # fallback that was getting it right.
+            # SO THE PUBLISHABLE SET IS "RESOLVED, NOT GUESSED": the registry
+            # path (which publishes at its own gate, above), and these two
+            # bool arms, whose answer cannot depend on the receiver. Widening it
+            # is blocked on `t0712` — gate the ladder on the receiver type first,
+            # then the single-exit publish becomes safe and this comment can go.
             if method_name == "is_empty" or method_name == "contains" or method_name == "starts_with" or method_name == "ends_with" or method_name == "is_subset" or method_name == "is_superset" or method_name == "is_disjoint":
+                types.expr_link_types.put(sexpr.span.end, types.bool_id)
                 return types.bool_id
             # Option/Result tag-check intrinsics return bool (mirrors Rust
             # typecheck.rs:5851 `is_some`/`is_none` and :5869 `is_ok`/`is_error`

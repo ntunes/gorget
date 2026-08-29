@@ -1,0 +1,33 @@
+# CHAIN-LINK corpus · AXIS = which RETURN-TYPE ladder arm publishes the outer
+# link's type. CELL SAMPLED HERE: the SET half of the same bool-predicate arm
+# `chain_link_bool_builtin` samples on the String half
+# (`is_subset` / `is_empty` / `contains` over a `Set`).
+#
+# One `if method_name == "is_empty" or … or "is_subset" or …` arm in
+# `infer_expr_type` serves BOTH receivers, so a per-arm publish would have fixed
+# or broken them together — but the two receivers reach the arm through
+# different resolution paths, and "one arm, therefore one behaviour" is exactly
+# the kind of reasoning Core #12 says to measure instead of assert. Measured:
+# RED pre-fix, `incompatible types when assigning to type 'GorgetSet' from type
+# '_Bool'`, and green after.
+#
+# The `is_subset` row also samples the arm with an ARGUMENT, which the String
+# rows do not: the receiver and the argument are both chains-worth of spine, and
+# only the receiver's spine can contend for `span.start`.
+struct Holder:
+    Set[int] s
+
+equip Holder:
+    Set[int] grab(self):
+        return self.s
+
+void main():
+    Set[int] a = Set[int]()
+    a.add(1)
+    a.add(2)
+    Set[int] b = Set[int]()
+    b.add(1)
+    Holder h = Holder(b)
+    print(h.grab().is_subset(a))
+    print(h.grab().is_empty())
+    print(h.grab().contains(1))
