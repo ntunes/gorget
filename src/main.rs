@@ -2820,17 +2820,31 @@ fn real_main() {
     // silently absent on all four unless it is threaded deliberately — which
     // is precisely how `--sanitize` came to be a no-op under `--backend=llvm`.
     //
-    // `todo/t0641` is the family record. `--release` is still dropped on THREE
-    // of those four (`--shared`, hot-reload, freestanding) plus the
-    // `gg script.gg` shorthand, which builds its own `LoweringOptions`; it is
-    // correctly threaded through the LLVM pipeline. Measured, not read — the
-    // driver honours `CC`/`LLC`, so `CC=/bin/echo gg build <flags> f.gg` prints
-    // the constructed argv and a run without the sub-path flag is the control.
-    // `build_flags_reach_every_sub_path` (tests/integration.rs) runs exactly
-    // that census, so this enumeration is executable rather than prose.
+    // ⚠ AND THERE IS A SECOND AXIS, which is the easier one to miss: the ENTRY
+    // POINTS. `gg build`, `gg run`, `gg test` and the `gg script.gg` shorthand
+    // each construct their OWN `LoweringOptions`, so a field one of them omits
+    // is dropped for every sub-path beneath it — no early return involved.
+    // `gg test`'s omits `release` (it carries `sanitize, scheduler_mode` and
+    // simply not `release`), so `gg test --bench --release` benchmarks a `-O0`
+    // build. Enumerating sub-paths alone missed that cell entirely, twice.
     //
-    // When adding a build flag, check every early-returning sub-path, not just
-    // the one you tested.
+    // `todo/t0641` is the family record. `--release` is still dropped on FIVE
+    // shapes — `--shared`, hot-reload, freestanding, the `gg script.gg`
+    // shorthand and `gg test`; it is correctly threaded on `gg build`'s and
+    // `gg run`'s normal C path and through the LLVM pipeline. Measured, not
+    // read — the driver honours `CC`/`LLC`, so
+    // `CC=/bin/echo LLC=/bin/echo gg <sub> <flags> f.gg` prints the constructed
+    // argv, and the same invocation WITHOUT the flag is the control (the LLVM
+    // runtime carries an unconditional `-O2`, so presence alone proves nothing).
+    // `build_flags_are_never_silently_dropped` (tests/integration.rs) runs that
+    // census over both axes, so this enumeration is executable rather than prose.
+    // ⚠ Its instrument is argv-only: a flag consumed during lowering rather than
+    // passed to a compiler (`--scheduler`, `--strip-asserts`, `--trace`,
+    // `--feature`, `--hot-reload`) is invisible to it, and at least one of those
+    // is dropped today (`todo/t0627`).
+    //
+    // When adding a build flag, check every early-returning sub-path AND every
+    // entry point's `LoweringOptions` — not just the one you tested.
     if target.starts_with("freestanding") && backend_name == "llvm" {
         // Silently built a hosted ELF and printed `Built:`. The freestanding
         // path is C-backend-only: `try_build_ir` returns into

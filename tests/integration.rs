@@ -52820,14 +52820,31 @@ fn unhonourable_build_flag_combinations_are_rejected() {
 }
 
 
-/// t0641 — DOES EVERY BUILD FLAG REACH EVERY BUILD SUB-PATH?
+/// t0641 — IS AN ARGV-VISIBLE BUILD FLAG EVER SILENTLY DROPPED?
 ///
-/// `try_build_ir` has five build sub-paths and four of them construct their own
-/// compiler invocation and `return` before reaching the flag-application code
-/// at the bottom of the fifth. So a flag wired only on the normal path is
-/// silently absent on the other four, and nothing notices — that is exactly how
-/// `--sanitize` came to be a no-op under `--backend=llvm` (t0723), and
-/// `--release` is still dropped on four paths today.
+/// Two axes, and enumerating either one alone has already under-counted this
+/// family twice. WITHIN `try_build_ir`, five build sub-paths, four of which
+/// construct their own compiler invocation and `return` before reaching the
+/// flag-application code at the bottom of the fifth. ACROSS dispatchers, four
+/// ENTRY POINTS — `gg build`, `gg run`, `gg test`, and the `gg script.gg`
+/// shorthand — each building their own `LoweringOptions`, so a field one of
+/// them forgets is dropped for every sub-path underneath it.
+///
+/// A flag wired only on the normal `gg build` path is therefore silently absent
+/// almost everywhere, and nothing notices — that is exactly how `--sanitize`
+/// came to be a no-op under `--backend=llvm` (t0723), and `--release` is still
+/// dropped on five shapes today, one of which (`gg test`) was found by adding
+/// the entry-point axis to this very census.
+///
+/// ⚠ SCOPE — WHAT THIS INSTRUMENT CANNOT SEE. It reads the constructed compiler
+/// ARGV, so it covers only flags that reach a compiler command line. A flag
+/// carried inside `LoweringOptions` and consumed during lowering never appears
+/// in an argv and is structurally invisible here: `--scheduler`,
+/// `--strip-asserts`, `--trace`, `--feature`, `--hot-reload`. That is not
+/// hypothetical — `gg build --scheduler=` is silently dropped on the main path
+/// today (filed as a side-bullet of `todo/t0627`), and this census cannot see
+/// it. Catching that class needs a different probe: diff `--emit-c-lir` output
+/// with and without the flag.
 ///
 /// This is the census, run as a guard rather than written down as prose,
 /// because the prose has now under-counted this family twice. It measures the
@@ -52843,11 +52860,19 @@ fn unhonourable_build_flag_combinations_are_rejected() {
 ///
 /// `#[ignore]`d because it asserts the INTENDED state and `--release` does not
 /// meet it yet. Un-ignore when t0641 is closed.
+///
+/// ⚠ NOT ON THE `known_gaps` ROSTER. `scripts/known_gaps_census.sh` enrols
+/// `#[ignore]`d tests that name a `known_gaps/<fixture>` path, and this one has
+/// no fixture — its subject is the compiler's own argv, not a program. So
+/// nothing external will notice if it rots or if `t0641` is closed without
+/// un-ignoring it; `todo/t0641` carries that instruction instead.
 #[test]
-#[ignore = "KNOWN GAP t0641: --release is silently dropped on --shared, the \
-hot-reload split, freestanding/UEFI and the `gg script.gg` shorthand — it is \
-threaded only on the normal C path and the LLVM pipeline."]
-fn build_flags_reach_every_sub_path() {
+#[ignore = "KNOWN GAP t0641: --release is silently dropped on FIVE shapes — \
+gg build --shared, the hot-reload split, freestanding/UEFI, `gg script.gg`, and \
+`gg test` (whose LoweringOptions omits the field, so gg test --bench benchmarks \
+a -O0 build). It IS threaded on gg build's and gg run's normal C path and on \
+the LLVM pipeline."]
+fn build_flags_are_never_silently_dropped() {
     let dir = std::env::temp_dir().join(format!("gg_flag_census_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let plain = dir.join("plain.gg");
@@ -52859,29 +52884,45 @@ fn build_flags_reach_every_sub_path() {
     )
     .expect("write hot-reload source");
 
-    // (sub-path, selecting args, source, uses the `build` subcommand)
-    let sub_paths: [(&str, &[&str], &std::path::Path, bool); 6] = [
-        ("normal C path", &[], plain.as_path(), true),
-        ("--shared", &["--shared"], plain.as_path(), true),
-        ("hot-reload split", &[], hr.as_path(), true),
-        ("LLVM pipeline", &["--backend=llvm"], plain.as_path(), true),
-        ("freestanding/UEFI", &["--target=freestanding"], plain.as_path(), true),
-        ("`gg script.gg` shorthand", &[], plain.as_path(), false),
+    let t_gg = dir.join("t.gg");
+    std::fs::write(
+        &t_gg,
+        "void main():\n    print(\"hi\")\n\ntest \"t\":\n    assert 1 == 1\n",
+    )
+    .expect("write test-block source");
+
+    // ⚠ TWO AXES, and missing either one is how this family keeps being
+    // under-counted. WITHIN a dispatcher, the sub-paths of `try_build_ir`; and
+    // ACROSS dispatchers, the ENTRY POINTS — `gg build`, `gg run`, `gg test` and
+    // the `gg script.gg` shorthand each construct their OWN `LoweringOptions`,
+    // so a field one of them forgets is dropped for every sub-path underneath
+    // it. Enumerating sub-paths alone missed `gg test --release` entirely.
+    //
+    // (shape, selecting args, source, subcommand — "" means the shorthand)
+    let shapes: [(&str, &[&str], &std::path::Path, &str); 8] = [
+        ("gg build, normal C path", &[], plain.as_path(), "build"),
+        ("gg build --shared", &["--shared"], plain.as_path(), "build"),
+        ("gg build, hot-reload split", &[], hr.as_path(), "build"),
+        ("gg build --backend=llvm", &["--backend=llvm"], plain.as_path(), "build"),
+        ("gg build --target=freestanding", &["--target=freestanding"], plain.as_path(), "build"),
+        ("gg run", &[], plain.as_path(), "run"),
+        ("gg test", &[], t_gg.as_path(), "test"),
+        ("`gg script.gg` shorthand", &[], plain.as_path(), ""),
     ];
     // (flag, the marker it must put on some command line)
     let flags: [(&str, &str); 2] = [("--sanitize", "-fsanitize"), ("--release", "-O2")];
 
-    // ⚠ ARGUMENT ORDER IS PART OF THE INVOCATION, not a detail. `gg build` takes
-    // its flags before the file; the `gg script.gg` shorthand takes them AFTER
-    // (flag-first there is a loud `Unknown command: --sanitize`, rc 1 — a
+    // ⚠ ARGUMENT ORDER IS PART OF THE INVOCATION, not a detail. A subcommand
+    // takes its flags before the file; the `gg script.gg` shorthand takes them
+    // AFTER (flag-first there is a loud `Unknown command: --sanitize`, rc 1 — a
     // rejection, not a silent drop, so it is not this census's subject). Getting
     // this wrong makes the probe report a defect that is not there.
-    let run = |args: &[&str], src: &std::path::Path, is_build: bool| -> String {
+    let run = |args: &[&str], src: &std::path::Path, sub: &str| -> String {
         let mut c = Command::new(gg_binary());
-        if is_build {
-            c.arg("build").args(args).arg(src);
-        } else {
+        if sub.is_empty() {
             c.arg(src).args(args);
+        } else {
+            c.arg(sub).args(args).arg(src);
         }
         c.env("CC", "/bin/echo").env("LLC", "/bin/echo");
         let o = c.output().expect("run gg");
@@ -52892,11 +52933,11 @@ fn build_flags_reach_every_sub_path() {
 
     let mut dropped: Vec<String> = Vec::new();
     for (flag, marker) in flags {
-        for (name, sel, src, is_build) in sub_paths {
+        for (name, sel, src, sub) in shapes {
             let mut with_args: Vec<&str> = sel.to_vec();
             with_args.push(flag);
-            let with = run(&with_args, src, is_build);
-            let without = run(sel, src, is_build);
+            let with = run(&with_args, src, sub);
+            let without = run(sel, src, sub);
 
             // Rejected by name is a PASS: lower-or-reject is satisfied, the
             // user is told, and no wrong artifact ships.
@@ -52917,10 +52958,11 @@ fn build_flags_reach_every_sub_path() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(
         dropped.is_empty(),
-        "build flags must reach EVERY sub-path, or be rejected by name — never \
-         accepted and discarded (Core #10). {} cell(s) silently drop their flag:\n{}\n\n\
-         The measurement is `CC=/bin/echo LLC=/bin/echo gg build <flags> f.gg`, with the \
-         same build minus the flag as the control. Family record: `todo/t0641`.",
+        "an argv-visible build flag must reach EVERY invocation shape — every sub-path AND \
+         every entry point — or be rejected by name; never accepted and discarded \
+         (Core #10). {} cell(s) silently drop their flag:\n{}\n\n\
+         The measurement is `CC=/bin/echo LLC=/bin/echo gg <sub> <flags> f.gg`, with the \
+         same invocation minus the flag as the control. Family record: `todo/t0641`.",
         dropped.len(),
         dropped.join("\n")
     );

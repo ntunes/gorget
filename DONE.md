@@ -48,7 +48,16 @@
   carry none on purpose and none is owed: `t0730` and `t0733` are owner calls on unratified semantics
   (a `known_gaps` fixture must assert the INTENDED behaviour, and what that is *is* the open question),
   and `t0731` is a script-scope change with no program that reproduces it. `t0641`, modified rather than
-  filed, gained a guard instead: `build_flags_reach_every_sub_path`.
+  filed, gained a guard instead: `build_flags_are_never_silently_dropped`.
+
+  ⊕ **`todo/t0038` was re-graded rather than duplicated.** An output review reported an undefined type
+  name accepted in a PARAMETER position as unfiled; grepping the MECHANISM (not the symptom) found it
+  already filed as `t0038`, HIGH, with a committed repro containing that exact case. **The index was the
+  defect, not the item:** a name-resolution soundness bug sat under *CoW / ownership / materialization*
+  with an empty `mechanism` field, so neither a symptom nor a mechanism grep reached it and two agents
+  searching independently both missed it. `areas` corrected to `["semantics"]`, `mechanism` filled, the
+  pointer moved, and a dated re-confirmation appended. Filing a duplicate would have made the record
+  worse.
 
 - [2026-08-29] **`AGENTS.md` compaction + the gauntlet's terminating condition (owner-directed): 59,271 → 47,381 bytes.**
 

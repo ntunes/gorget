@@ -43,11 +43,13 @@
 //! wants `-- --test-threads=1`:
 //!     GG_BACKEND=llvm cargo test --test security -- --test-threads=1
 //!
-//! ⚠ `cargo test --test security -- --ignored` reports ONE failure by design:
-//! [`backend_flag_wiring_inner_probe`] is a child-process probe that requires
-//! `GG_BACKEND` to be set, and its parent asserts it FAILS when the variable is
-//! unset. Do not file it; run it through
-//! [`backend_flag_selection_is_wired`] instead.
+//! ⚠ `cargo test --test security -- --ignored` fails EVERYTHING it runs, by
+//! design — 25 of 25 at the time of writing. Those tests assert INTENDED states
+//! that do not hold yet, so failing is what they are for; a bare `--ignored`
+//! sweep is not a health check. One of the 25 is [`backend_flag_wiring_inner_probe`],
+//! a child-process probe that requires `GG_BACKEND` to be set and whose parent
+//! asserts it FAILS when the variable is unset — do not file it; it is exercised
+//! through [`backend_flag_selection_is_wired`].
 //!
 //! The full build includes `-fsanitize=address,undefined` via the
 //! compiler's own `--sanitize` flag. ⚠ On `--backend=llvm` that instruments the
