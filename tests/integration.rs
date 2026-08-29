@@ -16180,6 +16180,32 @@ fn cow_user_mutator_two_types_same_name() {
     run_gg("cow_user_mutator_two_types_same_name.gg", "4\n4\n4\n3\n2\n4");
 }
 
+/// KNOWN GAP — `todo/t0763`. A `&self` mutator on a GENERIC equip is a
+/// use-after-free: `Cell[T]`'s `probe(&self)` binds a view of element 0, then
+/// `self.resize(v)` reallocates and the view dangles. rc 139 on BOTH backends.
+///
+/// ⚠ NOT the `t0699` class, and the discriminator is measured rather than
+/// argued: this one is NAME-INDEPENDENT. It is rc 139 under `resize` — a name
+/// that WAS on the retired `MUTATING_METHODS` list, so the prescan DID mark the
+/// receiver — and rc 139 under `grow`, before and after the typed per-receiver
+/// classifier landed. The mark is made and the materialize still does not
+/// happen, so the break is DOWNSTREAM of the classification.
+///
+/// The control is the point: hand-monomorphise the fixture (`Cell[T]` ->
+/// `Cell`, `T` -> `String`, nothing else) and it is rc 0 printing `helloworld`,
+/// at stock HEAD and after the fix. One type parameter is the whole difference.
+///
+/// Asserts the INTENDED output, which is exactly what that control prints.
+#[test]
+#[ignore = "todo/t0763 — a `&self` mutator on a GENERIC equip does not \
+materialize a view bound from the receiver, even though the prescan marks it: \
+rc 139 on both backends. NAME-INDEPENDENT, so NOT the t0699 class — the break \
+is downstream of the classification, in the generic-equip/monomorphisation \
+path. The hand-monomorphised control is rc 0. Asserts `helloworld`."]
+fn generic_equip_mutator_view_uaf() {
+    run_gg("known_gaps/generic_equip_mutator_view_uaf.gg", "helloworld");
+}
+
 /// THE (per-receiver) vs (name-keyed) DISCRIMINATOR, and the only cell in the
 /// suite that can tell them apart.
 ///
