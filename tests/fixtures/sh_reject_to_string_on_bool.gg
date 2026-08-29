@@ -1,0 +1,17 @@
+# R47 Track D1 — the BOOL cell of the primitive-receiver E_NoMethodFound class.
+#
+# A sibling of `sh_reject_to_string_on_float.gg` on the RECEIVER-KIND axis. The
+# float cell alone could pass for a numeric-only story (a numeric payload landing
+# in a `Str` slot); this one can only pass if the admission decision is the
+# receiver's method TABLE rather than the method's NAME. Rust gg:
+# `error[E_NoMethodFound]: no method `to_string` found on type `bool``.
+#
+# RED-verified on the pre-fix self-host driver: it ACCEPTED this program and
+# CC-failed with `incompatible types when assigning to type 'Str' from type
+# 'int'` — the identical mint as the float cell, which is what establishes the
+# two as one class rather than two anecdotes.
+#
+# CORRECT behaviour: `gg check` REJECTS this program on every lane.
+void main():
+    bool b = true
+    print(b.to_string())

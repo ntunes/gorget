@@ -1,0 +1,65 @@
+# SHAPE PIN, not a red-verified regression fixture — say so up front (Core #12:
+# green on arrival is not coverage). This prints `7` / `1` on every lane before
+# and after R47 Track D1, and it is committed because the SHAPE is what a filed
+# self-host defect hangs off, and because a fix for that defect must not change
+# what this program prints.
+#
+# THE DEFECT (found R47 Track D1 by measurement, not by reading; filed).
+#
+# A `match` ARM BINDING leaks past its arm in the self-host's identifier
+# resolution: a LATER local with the same name resolves to the arm's binding
+# instead of to itself. Here `case Ok(v)` binds an `int`, and the subsequent
+# `Vector[int] v` is resolved as that `int` — `infer_expr_type` answers `int`
+# for the `v` in `v.len()`.
+#
+#   RUST gg   : correct — prints `1`.
+#   SELF-HOST : prints `1` TOO, today. The defect is currently LATENT at
+#               runtime: the lowerer resolves `v` correctly, so only the
+#               typechecker's answer is wrong and nothing downstream consumed
+#               it — until R47 Track D1 tried to.
+#
+# ⚠ WHY IT IS FILED DESPITE RUNNING CORRECTLY. It is the reason the
+# primitive-receiver reject (`typecheck.gg::reject_no_method_on_primitive`)
+# cannot dispatch on the receiver's own method table. Measured: with a
+# per-receiver-kind table the reject refused this shape (as
+# `generic_typearg_well_typed.gg`) and eleven other VALID corpus programs. Both
+# avenues the reject consults — the span-keyed resolution map and lexical scope
+# lookup — return the SAME wrong def, so corroboration cannot detect it; the
+# reject has to abstain instead, which is what leaves
+# `known_gaps/sh_len_on_float_silently_miscompiles.gg` open.
+#
+# A SECOND, INDEPENDENT mechanism produces the same wrong answer and is recorded
+# here rather than as its own fixture because it has no runtime symptom either:
+# an f-string interpolation's sub-expressions carry SYNTHETIC spans, and the
+# span-keyed resolution map mis-answers there too (`char_methods.gg`'s
+# `String c1` reads back as `int` inside `f"{c1.is_alphanumeric()}"`;
+# `dataframe_basic.gg`'s Column, `tensor_basic.gg`'s Tensor and
+# `string_conversions.gg`'s `Option[int]` all do the same). The EFString arm of
+# `walk_expr_closures_inner` already documents that inference is unreliable
+# there, which is why it scopes its own inference to four intrinsics.
+#
+# CORRECT behaviour: prints `1` — AND the self-host's `infer_expr_type` answers
+# `Vector[int]`, not `int`, for the receiver of `v.len()`. This fixture pins the
+# first half; the second is what actually needs fixing, and the executable
+# instrument for it is re-enabling the per-receiver-kind admission table in
+# `reject_no_method_on_primitive` and re-running the corpus census.
+enum AppError:
+    NotFound
+
+Result[int, AppError] producer():
+    return Ok(7)
+
+Vector[T] wrap_one[T](T x):
+    Vector[T] v = []
+    v.push(x)
+    return v
+
+void main():
+    Result[int, AppError] r = producer()
+    match r:
+        case Ok(v):
+            print(v)
+        case Error(_e):
+            print("err")
+    Vector[int] v = wrap_one(42)
+    print(v.len())

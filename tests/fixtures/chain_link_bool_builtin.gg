@@ -35,11 +35,15 @@
 # block in tests/integration.rs, repros under known_gaps/chain_link_*). That
 # boundary was MEASURED, not guessed. Publishing
 # at a single exit for the whole EMethodCall case was built and it regressed ten
-# `self_host_runtime` rows: the ladder's other arms answer from the method NAME
-# without checking the receiver (todo/t0712), and the lowerer reads
-# `expr_link_types` FIRST -- so a published guess OVERRIDES a fallback that was
-# getting it right. Publishable set = RESOLVED, never GUESSED. Both halves are
-# pinned by `self_host_infer_bool_arms_publish_chain_link` (tests/lints.rs).
+# `self_host_runtime` rows, and the lowerer reads `expr_link_types` FIRST -- so
+# a published guess OVERRIDES a fallback that was getting it right. Publishable
+# set = RESOLVED, never GUESSED. Both halves are pinned by
+# `self_host_infer_bool_arms_publish_chain_link` (tests/lints.rs).
+#
+# ⚠ Gating the ladder on the receiver type does NOT unblock the widening. R47
+# Track D1 built the gate and re-measured: the arms that break the publish
+# (`clone|copy|sorted|reversed|filter`, `len`/`count`, `split`) are not on any
+# gated name list, and the conflict is typechecker-type vs lowering-type.
 #
 # Sibling cells: chain_link_set_predicate (the Set half of the SAME ladder arm),
 # chain_link_binop (the same outer method reached through an infix left
@@ -63,7 +67,7 @@ void main():
     # ⚠ SCOPE: the STRING-RECEIVER cell of that arm, and nothing wider. The
     # VECTOR-receiver cell of this same `len` arm is RED -- `h.make().len()`
     # over a `Vector[String]`-returning method CC-FAILs with `'GorgetArray'
-    # from type 'size_t'` (known_gaps/chain_link_len_on_vector_method_result.gg,
-    # todo/t0712). The receiver KIND and the receiver TYPE are both axes here.
+    # from type 'size_t'` (known_gaps/chain_link_len_on_vector_method_result.gg).
+    # The receiver KIND and the receiver TYPE are both axes here.
     print(h.make().len())
     print(h.make().to_upper())

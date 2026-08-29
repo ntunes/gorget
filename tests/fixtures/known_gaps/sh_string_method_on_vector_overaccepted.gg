@@ -1,0 +1,38 @@
+# KNOWN GAP (found R47 Track D1 while auditing the receiver-kind axis of the
+# primitive-receiver reject).
+#
+# The NOMINAL-RECEIVER cell of the "name list answers without checking the
+# receiver" family. `to_lower` is a String method; a `Vector[String]` does not
+# have it.
+#
+#   RUST gg   : REJECTS — `error[E_NoMethodFound]: no method `to_lower` found on
+#               type `Vector[String]``. This is the correct behaviour.
+#   SELF-HOST : ACCEPTS, then CC-FAILs — `incompatible types when assigning to
+#               type 'Str' from type 'int'`, the same wrong mint the primitive
+#               cells produced: a `Str` destination minted from the method NAME.
+#
+# ⚠ WHY THIS IS NOT PART OF R47 TRACK D1'S REJECT, and the reason is structural
+# rather than a scope cut. Rust rejects the two receiver kinds from TWO
+# DIFFERENT BRANCHES of the EMethodCall arm with different machinery:
+#   - `base_name is None` (a PRIMITIVE receiver) — a small fixed method table
+#     per primitive. That is the branch Track D1 mirrored, as
+#     `typecheck.gg::reject_no_method_on_primitive`.
+#   - `base_name.is_some()` (a NOMINAL receiver) — `has_inherent_only_impls`,
+#     plus the D36 auto-deref rules for Guard / ReadGuard / WriteGuard / Box
+#     wrappers and the NonDerefContainer rejects.
+# The second needs the full builtin method table for every collection AND the
+# wrapper/auto-deref decision procedure, neither of which the self-host has. It
+# is a different fix, not another site of the same one.
+#
+# The typing half is one edit — withhold the String-returning ladder arm when
+# the receiver resolves to `RTDefined`/`RTGeneric` — but it was NOT landed
+# unmeasured: `join` alone belongs to three receivers in the Rust oracle
+# (String, `Thread[T]` → T, `TaskGroup` → void), so withholding it needs the
+# TaskGroup arm too, and `tests/fixtures/async_task_group.gg:8` calls
+# `group.join()` on the bootstrap-adjacent corpus. Measure before landing.
+#
+# CORRECT behaviour: `gg check` REJECTS this program on every lane.
+void main():
+    Vector[String] v = Vector[String]()
+    v.push("A")
+    print(v.to_lower())

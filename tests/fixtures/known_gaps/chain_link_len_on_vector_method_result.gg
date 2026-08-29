@@ -19,7 +19,20 @@
 #
 # HEAP-FORCED: the receiver is a Vector field read back out of a struct.
 #
-# THE CLASS FIX is todo/t0712 (gate the name-list arms on the receiver type).
+# THE CLASS FIX IS NOT A RECEIVER GATE. This was filed under todo/t0712 on
+# the claim that gating the ladder's name-list arms on the receiver type
+# closed all five chain-link cells at once. R47 Track D1 BUILT the gate and
+# MEASURED it: it closes ZERO — this fixture fails identically, byte for
+# byte, with and without it. It cannot help, by construction: this method is
+# not on the gated name list at all. What breaks the cell is that its ladder
+# arm never PUBLISHES `expr_link_types[span.end]`, so `lower_types.gg`
+# falls back to the CONTENDED `expr_types[span.start]` key that every link of
+# a postfix spine shares. Publishing from every arm was also built and
+# measured: it regressed ten `self_host_runtime` rows, because
+# `infer.gg`'s `clone|copy|sorted|reversed|filter` arm answers the
+# TYPECHECKER's type (`Vector[int]`) where the lowerer needs the LOWERING
+# type (`FilterIter`). Reconciling those two is the real fix and it is a
+# different axis from receiver typing; filed, and it starts at a scout.
 struct HV:
     Vector[String] v
 

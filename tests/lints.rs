@@ -6539,65 +6539,117 @@ fn self_host_cow_write_walkers_share_one_root_peel() {
 /// `gorget_string_free` invariant, `test_method_chaining` / `test_option_chaining`
 /// / `leak_cow_boundaries` CC-FAIL, `shared_stress{,_yield}`,
 /// `string_conversions`). A first-write-wins variant regressed the same ten, so
-/// it is not re-inference clobbering a good value. The cause is that the
-/// ladder's OTHER arms answer from the METHOD NAME ALONE without checking the
-/// receiver — a live filed defect (`todo/t0712`) — and the lowerer reads
-/// `expr_link_types` FIRST, so publishing a guess OVERRIDES a fallback that was
+/// it is not re-inference clobbering a good value. The lowerer reads
+/// `expr_link_types` FIRST, so a published GUESS OVERRIDES a fallback that was
 /// getting it right. Publishable set = RESOLVED, never GUESSED.
 ///
-/// So a future widening is not a refactor, it is gated on `t0712`: gate the
-/// ladder on the receiver type, THEN the single-exit publish becomes safe. This
-/// lint deliberately does NOT demand the wrapper shape — demanding it would
-/// demand the regression.
+/// ⚠ **A RECEIVER GATE ON THE LADDER DOES NOT MAKE THE SINGLE-EXIT PUBLISH
+/// SAFE.** Earlier revisions of this docstring prescribed exactly that, and the
+/// prescription is WRONG BY CONSTRUCTION: the arms that break the publish are
+/// NOT the ones a gate on the String-returning name list can reach. The
+/// `clone`/`copy`/`sorted`/`reversed`/`filter` arm answers with the RECEIVER's
+/// type (the correct *typechecker* answer, `Vector[int]`) where the lowerer
+/// needs the *lowering* type (`FilterIter`); `len`/`count`, `split` and the
+/// `slice`/`substr` arm each answer from their own arm. None of them is on the
+/// gated list, so gating it cannot change what any of them publishes — and
+/// `iterator_lazy_chain`, the `filter`/lazy row, must still regress. The
+/// typechecker-type-vs-lowering-type conflict is the mechanism, and it is a
+/// different axis from receiver typing. Re-verify before believing otherwise:
+/// revert `infer.gg` to a wrapper that publishes for every EMethodCall and run
+/// `cargo test --test integration --release self_host_runtime`.
 ///
-/// ⚠ THE BOUNDARY IS PINNED AS A **COUNT**, NOT AS A LIST OF TEMPTING NAMES.
-/// The first revision of this lint named the two arms it thought most likely to
-/// grow a publish (`len`/`count`, `to_string`/`to_str`) and checked only those.
-/// A publish planted in the `slice`/`substr` arm — an arm `todo/t0712` names in
-/// the same breath — sailed past it GREEN. A guard that green-lights the very
-/// class it exists to retire is worse than none (Core #15e Q2), because it
-/// reads as enforcement on the dashboard. The pin is now the TOTAL number of
-/// `expr_link_types` publishes in `infer.gg`: exactly three, so a FOURTH
-/// anywhere in the ladder, spelled any way, in any arm, goes red and is forced
-/// through review. The two named checks survive underneath it only for their
-/// sharper message; they are no longer the boundary.
+/// This lint deliberately does NOT demand the wrapper shape — demanding it
+/// would demand the regression.
+///
+/// ⚠ THE BOUNDARY IS PINNED AS A **COUNT AND BY ARM IDENTITY**, NOT AS A LIST
+/// OF TEMPTING NAMES. The first revision named the two arms it thought most
+/// likely to grow a publish (`len`/`count`, `to_string`/`to_str`) and checked
+/// only those; a publish planted in the `slice`/`substr` arm sailed past it
+/// GREEN. A guard that green-lights the very class it exists to retire is worse
+/// than none (Core #15e Q2), because it reads as enforcement on the dashboard.
+///
+/// The second revision pinned the TOTAL — exactly three `expr_link_types`
+/// publishes — so a FOURTH anywhere goes red. That still left a hole, and R47
+/// Track D1 demonstrated it: a SWAP keeps the count at three. Move the registry
+/// publish into a name-guessing arm and the count never moves; and because the
+/// named-arm checks underneath used `if let Some(at) = src.find(guess)`, a
+/// needle that DRIFTED (as this round's receiver gate made it drift) made the
+/// assert SILENTLY SKIP. Measured: swap + intact needle → RED; swap + drifted
+/// needle → GREEN, with the planted publish shipped.
+///
+/// So all THREE blessed publishes are now anchored BY ARM IDENTITY with
+/// `unwrap_or_else(panic!)` — a drifted anchor is RED, never a skip — the
+/// name-guessing arms are checked with anchors that panic the same way, and the
+/// count survives underneath as a redundant backstop that catches a FOURTH
+/// publish spelled in an arm nobody anchored. Neither half is the whole guard.
 #[test]
 fn self_host_infer_bool_arms_publish_chain_link() {
     let src = fs::read_to_string("tests/fixtures/self_host_typechecker/infer.gg")
         .expect("infer_bool_arms_publish: infer.gg not found");
 
-    // The two arms of the class, each identified by its own name-set test line.
-    let arms: [(&str, &str); 2] = [
+    // ── ALL THREE BLESSED PUBLISHES, ANCHORED BY ARM IDENTITY ──────────────
+    // Each row is (what, anchor spelling, the arm's own `return`, the publish
+    // it must carry). Anchoring all three — not just the bool pair — is what
+    // makes the SWAP go red: moving the registry publish into a name-guessing
+    // arm keeps the total at three, so the count alone cannot see it.
+    //
+    // ⚠ EVERY LOOKUP BELOW PANICS ON A MISS. A drifted anchor must be RED, not
+    // skipped. The earlier `if let Some(at) = src.find(...)` shape skipped
+    // silently, and R47 Track D1 measured a planted publish shipping GREEN
+    // behind exactly that skip.
+    //
+    // The window is bounded by the arm's OWN `return`, not by "the next line
+    // that looks like an arm head" — that terminator was a source-shape guess,
+    // and when an arm head changed shape the window silently swallowed the
+    // NEXT arm and fired on the wrong needle.
+    let blessed: [(&str, &str, &str, &str); 3] = [
+        (
+            "registry path (a RESOLVED type, not a name guess)",
+            "types.expr_types.put(span_start, reg_ret)",
+            "return reg_ret",
+            "types.expr_link_types.put(sexpr.span.end, reg_ret)",
+        ),
         (
             "predicate arm (is_empty/contains/starts_with/…)",
             "if method_name == \"is_empty\" or method_name == \"contains\"",
+            "return types.bool_id",
+            "types.expr_link_types.put(sexpr.span.end, types.bool_id)",
         ),
         (
             "tag-check arm (is_some/is_none/is_ok/is_error)",
             "if method_name == \"is_some\" or method_name == \"is_none\"",
+            "return types.bool_id",
+            "types.expr_link_types.put(sexpr.span.end, types.bool_id)",
         ),
     ];
-    for (what, needle) in arms {
-        let at = src.find(needle).unwrap_or_else(|| {
+    for (what, anchor, ret_spelling, publish) in blessed {
+        let at = src.find(anchor).unwrap_or_else(|| {
             panic!(
                 "infer_bool_arms_publish: the {what} is gone from infer.gg (looked for \
-                 `{needle}`). Both bool-returning builtin arms must exist AND publish the link \
-                 type; if the arm moved, update this lint to follow it — do not delete the pin."
+                 `{anchor}`). All three blessed publish sites must exist AND publish the link \
+                 type; if the site moved, update this lint to follow it — do not delete the pin. \
+                 An anchor that drifts must go RED here: this lint used to skip a missing needle \
+                 silently, and a planted publish shipped green behind that skip."
             )
         });
-        // The publish must sit between the test and its `return types.bool_id`.
+        // The publish must sit between the anchor and the site's own `return`.
         let tail = &src[at..];
-        let ret = tail.find("return types.bool_id").unwrap_or_else(|| {
-            panic!("infer_bool_arms_publish: no `return types.bool_id` after the {what}")
+        let ret = tail.find(ret_spelling).unwrap_or_else(|| {
+            panic!(
+                "infer_bool_arms_publish: no `{ret_spelling}` after the {what}. The window this \
+                 lint reads is bounded by that return; if the site was restructured, re-anchor \
+                 the lint rather than widening the window."
+            )
         });
         let body = &tail[..ret];
         assert!(
-            body.contains("types.expr_link_types.put(sexpr.span.end, types.bool_id)"),
+            body.contains(publish),
             "the {what} in infer.gg no longer publishes `expr_link_types[span.end]`.\n\n\
-             Its answer is `bool` REGARDLESS of the receiver, so it is one of the only two \
-             ladder arms that can safely publish — and it must, or a chain whose OUTER link is \
-             that method reads the CONTENDED `expr_types[span.start]` slot and is typed with its \
-             RECEIVER. That is a CC-FAIL, not a slow path.\n\
+             The blessed set is RESOLVED-not-GUESSED: the registry path (whose answer came from \
+             method resolution) and the two arms whose answer is `bool` REGARDLESS of the \
+             receiver. Each must publish, or a chain whose OUTER link is that method reads the \
+             CONTENDED `expr_types[span.start]` slot and is typed with its RECEIVER. That is a \
+             CC-FAIL, not a slow path.\n\
              Behavioural counterparts: tests/fixtures/chain_link_bool_builtin.gg (String half) \
              and chain_link_set_predicate.gg (Set half). Restore the `put`, never the fixture's \
              expectation."
@@ -6605,18 +6657,15 @@ fn self_host_infer_bool_arms_publish_chain_link() {
     }
 
     // ── THE BOUNDARY, TOTAL ────────────────────────────────────────────────
-    // The blessed publish set is small and exact, so pin its SIZE rather than a
-    // hand-list of the arms someone might add one to (which was tried, and a
-    // planted publish in the `slice`/`substr` arm stayed GREEN — see the
-    // docstring). Any FOURTH publish, in any arm, spelled any way, goes red.
+    // A redundant backstop UNDERNEATH the three arm-identity anchors above: it
+    // catches a FOURTH publish planted in an arm nobody anchored (which is how
+    // a publish in the `slice`/`substr` arm once sailed past a name-list-only
+    // guard). It cannot see a SWAP — that is what the anchors are for. Keep
+    // both: neither half catches the other's class.
     //
-    //   infer.gg:677  the registry path — a RESOLVED type, not a name guess
-    //   infer.gg:749  the bool-predicate arm (is_empty/contains/starts_with/…)
-    //   infer.gg:771  the tag-check arm      (is_some/is_none/is_ok/is_error)
-    //
-    // Line numbers drift and are here only as a reading aid; the COUNT is what
-    // is pinned, and the two per-arm asserts above pin WHICH two of the three
-    // are the bool pair.
+    //   the registry path       — a RESOLVED type, not a name guess
+    //   the bool-predicate arm  (is_empty/contains/starts_with/…)
+    //   the tag-check arm       (is_some/is_none/is_ok/is_error)
     const BLESSED_PUBLISH_SITES: usize = 3;
     let publishes = src.matches("types.expr_link_types.put(").count();
     assert_eq!(
@@ -6624,41 +6673,59 @@ fn self_host_infer_bool_arms_publish_chain_link() {
         "infer.gg has {publishes} `expr_link_types` publish site(s); the blessed set is \
          exactly {BLESSED_PUBLISH_SITES} — the registry path plus the two bool-returning \
          arms.\n\n\
-         MORE than that: a ladder arm grew a publish. Every OTHER arm in that ~26-return \
-         ladder answers from the METHOD NAME without checking the receiver (todo/t0712), \
-         and `lower_types.gg:lookup_expr_gir_type` reads `expr_link_types` FIRST — so a \
-         published guess OVERRIDES a fallback that was getting it right. Measured: \
-         publishing from those arms regressed TEN `self_host_runtime` rows \
-         (`iterator_lazy_chain` double-free, `unicode_strings` printing `80` for `é`, two \
-         `gorget_string_free` invariant trips, three CC-FAILs, …). Fix t0712's receiver \
-         gate FIRST; then this boundary can move and the single-exit publish becomes the \
-         right shape.\n\n\
+         MORE than that: a ladder arm grew a publish. The arms below the primitive-receiver \
+         gate still answer from the METHOD NAME, and `lower_types.gg:lookup_expr_gir_type` \
+         reads `expr_link_types` FIRST — so a published guess OVERRIDES a fallback that was \
+         getting it right. Measured: publishing from those arms regressed TEN \
+         `self_host_runtime` rows (`iterator_lazy_chain` double-free, `unicode_strings` \
+         printing `80` for `é`, two `gorget_string_free` invariant trips, three CC-FAILs, …). \
+         ⚠ A RECEIVER GATE DOES NOT UNBLOCK THIS: the arms that break the publish — \
+         `clone`/`copy`/`sorted`/`reversed`/`filter` (which answers the RECEIVER's type where \
+         the lowerer needs the LOWERING type), `len`/`count`, `split`, `slice`/`substr` — are \
+         not on any gated name list, so gating one cannot change what they publish. \
+         Re-verify before widening: revert infer.gg to a wrapper that publishes for every \
+         EMethodCall and run `cargo test --test integration --release self_host_runtime`.\n\n\
          FEWER than that: a publish was deleted. A chain whose outer link loses its \
          publish reads the CONTENDED `expr_types[span.start]` slot and is typed with its \
          RECEIVER — a CC-FAIL, not a slow path. Restore it; never the fixture's \
          expectation."
     );
 
-    // Named-arm checks, kept UNDERNEATH the total count for their sharper
-    // message on the two most tempting arms. Illustrative, not the boundary.
+    // Named-arm NEGATIVE checks, for their sharper message on the two most
+    // tempting arms. ⚠ These ANCHOR-OR-PANIC like the three above: the earlier
+    // `if let Some(at) = src.find(...)` shape skipped silently when a needle
+    // drifted, and this round's receiver gate is exactly the kind of edit that
+    // makes one drift.
     for guess in [
         "if method_name == \"len\" or method_name == \"count\":",
-        "if method_name == \"to_string\" or method_name == \"to_str\"",
+        "if method_name == \"to_lower\" or method_name == \"to_upper\"",
     ] {
-        if let Some(at) = src.find(guess) {
-            let tail = &src[at..];
-            let stop = tail[1..].find("\n            if method_name").map(|o| o + 1).unwrap_or(tail.len());
-            assert!(
-                !tail[..stop].contains("expr_link_types.put"),
-                "a NAME-GUESSING ladder arm (`{guess}`) grew an `expr_link_types` publish.\n\n\
-                 That arm answers from the method NAME without checking the receiver \
-                 (todo/t0712), and the lowerer reads `expr_link_types` FIRST — so the guess \
-                 OVERRIDES a fallback that was getting it right. Measured: publishing from these \
-                 arms regressed ten `self_host_runtime` rows (double-free, `é` printing as `80`, \
-                 three CC-FAILs, …). Fix t0712 first; then this boundary can move and the \
-                 single-exit publish becomes the right shape."
-            );
-        }
+        let at = src.find(guess).unwrap_or_else(|| {
+            panic!(
+                "infer_bool_arms_publish: the name-guessing arm `{guess}` is gone from \
+                 infer.gg. If the arm was renamed or its name set changed, re-point this \
+                 needle at the new spelling — do not delete the check. A needle that drifts \
+                 must go RED here; skipping it silently is how a planted publish ships green."
+            )
+        });
+        let tail = &src[at..];
+        // Bound the window by the arm's OWN `return`, never by guessing at the
+        // shape of the next arm head.
+        let stop = tail.find("\n                return ").map(|o| o + 1).unwrap_or_else(|| {
+            panic!(
+                "infer_bool_arms_publish: no `return` found in the body of `{guess}`. \
+                 Re-anchor this check rather than letting its window run past the arm."
+            )
+        });
+        assert!(
+            !tail[..stop].contains("expr_link_types.put"),
+            "a NAME-GUESSING ladder arm (`{guess}`) grew an `expr_link_types` publish.\n\n\
+             That arm answers from the method NAME, and the lowerer reads `expr_link_types` \
+             FIRST — so the guess OVERRIDES a fallback that was getting it right. Measured: \
+             publishing from these arms regressed ten `self_host_runtime` rows (double-free, \
+             `é` printing as `80`, three CC-FAILs, …), with and without a receiver gate on the \
+             String-returning list. The publishable set is RESOLVED, never GUESSED."
+        );
     }
 }
 

@@ -445,7 +445,7 @@ That kernel performs the **same Shape-1 / Shape-2 inference** as the Rust
 `try_infer_method_targs` (`traits.gg:6-8` documents both): Shape-1 binds a
 generic `G` when it appears bare as a param type; Shape-2 binds `G` when it
 appears in the return type and a function-typed arg's return type fills it
-in. It is wired into the `EMethodCall` return-type path: at `infer.gg:318-323`
+in. It is wired into the `EMethodCall` return-type path: at `infer.gg:525`
 the inferer calls `resolve_method_shape`, then `infer_method_targs` over the
 arg types, then `substitute_return_type` to type the method call's result
 from the inferred generics. So the self-host **does** infer method-level
@@ -473,3 +473,33 @@ Two things still diverge from Rust gg:
 Generic *free-function* call inference is likewise present
 (`typecheck.gg:869-910` builds a `var_id → concrete type` map and substitutes
 it into the return type).
+
+### The primitive-receiver reject
+
+The ladder that types builtin methods answers from the method NAME, and that
+is only sound once the RECEIVER has had its say. A non-String primitive has a
+very short method table — `hash`, `debug`, `display`, `mod`, plus the
+auto-derivable `clone` — so `infer.gg` gates the whole ladder on the receiver's
+resolved `RTPrimitive` before any name arm runs: a numeric or `bool` receiver
+gets those five answers and `NO_TYPE` for everything else, and never reaches
+the String or collection arms below. Anything the gate has no answer for is
+then REFUSED by `typecheck.gg::reject_no_method_on_primitive`, the self-host
+mirror of Rust's `E_NoMethodFound` chokepoint — lower-or-reject, rather than
+minting a `Str` slot for a numeric payload.
+
+That reject is a sibling of `reject_wrong_receiver_combinator` rather than a
+tenth arm of it: an ABSENT method is a different class from a method on the
+wrong side of a two-sided pair, and the combinator function's arm set is a
+ratified nine.
+
+Its admission test is deliberately weaker than Rust's, and the reason is worth
+knowing before tightening it. Rust dispatches on the receiver's OWN table; the
+self-host consults the UNION of every primitive's table, plus a registry-wide
+name check, so it refuses only a name that is *nobody's* method. The self-host
+resolves some identifier receivers to the wrong definition — its resolution map
+is keyed on `span.start`, and both `match`-arm bindings and f-string
+interpolations can make that key lie — so a per-receiver-kind table refuses
+valid programs. Corroborating the type through lexical scope lookup catches the
+f-string half but not the other, because both avenues read the same map. The
+bound is measured, filed with its repro, and tightens on its own once the
+resolution defect is fixed.

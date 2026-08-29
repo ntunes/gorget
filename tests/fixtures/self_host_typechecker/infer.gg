@@ -185,6 +185,39 @@ bool default_op_carrier_shape_equals(int lhs_type, int rhs_type, TypeTable types
         else:
             return false
 
+# ── Primitive-receiver method admission (Layering rule 2, Core #10) ──────────
+#
+# The EMethodCall ladder below answers from the METHOD NAME. That is only sound
+# once the RECEIVER has had its say: a name-only `or`-chain typed
+# `to_string`/`trim`/`join`/… as String for ANY receiver, so `f.to_string()` on
+# a `float` was accepted and lowered into an assignment of the raw numeric
+# payload into a `Str` slot, and `f.len()` printed a garbage integer. The name
+# is not the decision — the receiver's TYPE is.
+#
+# These two helpers are the SH's typed receiver-category accessor, read by the
+# ladder (to type a call) and by `typecheck.gg::reject_no_method_on_primitive`
+# (to refuse a call that has no answer) — one source of truth per axis.
+
+# The receiver's PRIMITIVE name (`int`, `float`, `bool`, `char`, `uint8`,
+# `str`, `String`, `cstr`, …), or "" when the receiver is a user/collection
+# type or was not resolved at all. "" means NO OPINION: this inference is
+# partial, and an unresolved receiver must never drive a reject or a re-type.
+String prim_recv_name(int recv_type, TypeTable types):
+    if recv_type < 0 or recv_type >= types.types.len():
+        return ""
+    ResolvedType prim_rt = get_rtype_at(types.types, recv_type)
+    match prim_rt:
+        case RTPrimitive(pname):
+            return pname
+        else:
+            return ""
+
+# `str` / `String` / `cstr` all answer the String method table — the mirror of
+# Rust gg's `Primitive(StringType | CStr) => "String"` receiver-name mapping in
+# `src/semantic/typecheck.rs::builtin_method_type`.
+bool is_string_prim_name(String pname):
+    return pname == "str" or pname == "String" or pname == "cstr"
+
 int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, ResolveContext &ctx):
     Expr e = sexpr.expr
     int span_start = sexpr.span.start
@@ -676,10 +709,74 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
                         # self-host analog of Rust's `infer_expr_ast_type`.
                         types.expr_link_types.put(sexpr.span.end, reg_ret)
                         return reg_ret
+            # ── THE PRIMITIVE-RECEIVER GATE ──────────────────────────────────
+            # Every arm below this line belongs to a String or to a collection.
+            # A NON-String primitive receiver has none of them: mirroring Rust
+            # gg's `builtin_method_type` numeric/bool arm
+            # (`src/semantic/typecheck.rs`), its whole method table is `hash`,
+            # `debug`, `display`, `mod`, plus the auto-derivable `clone`.
+            #
+            # This is ONE typed gate at the producer rather than a receiver
+            # check bolted onto each of the ~26 arms (Core #4): letting an
+            # `int` fall through to the `len` arm minted `int` for a value with
+            # no length (`f.len()` printed 281474937236040), and letting a
+            # `float` fall through to the String-returning arm minted a `Str`
+            # slot for a numeric payload (`incompatible types when assigning to
+            # type 'Str' from type 'int'`). Anything this gate has no answer for
+            # is NO_TYPE here, and `typecheck.gg::reject_no_method_on_primitive`
+            # then REFUSES it at check time rather than letting it lower —
+            # lower-or-reject, never silently accept (Core #10). ⚠ That reject
+            # abstains on a name some OTHER primitive's table admits, so
+            # `3.0.len()` is still accepted: the bound is measured and filed
+            # (`known_gaps/sh_len_on_float_silently_miscompiles.gg`), not an
+            # oversight.
+            #
+            # An UNRESOLVED receiver yields "" and is not gated: this inference
+            # is partial and withdrawing an answer it used to give would re-type
+            # working code.
+            String gate_prim = prim_recv_name(reg_obj_type, types)
+            if gate_prim.len() > 0 and not is_string_prim_name(gate_prim):
+                if method_name == "hash":
+                    return types.int_id
+                if method_name == "debug" or method_name == "display":
+                    return types.owned_string_id
+                # `mod` is Euclidean modulo (receiver's own type); `clone` is
+                # the auto-derivable owned copy, which Rust exempts from the
+                # reject but leaves untyped in the oracle — type it as the
+                # receiver so `int y = x.clone()` keeps working.
+                if method_name == "mod" or method_name == "clone":
+                    return reg_obj_type
+                return NO_TYPE
             # Infer return type from well-known methods
             if method_name == "len" or method_name == "count":
                 return types.int_id
-            if method_name == "to_string" or method_name == "to_str" or method_name == "to_lower" or method_name == "to_upper" or method_name == "trim" or method_name == "lower" or method_name == "upper" or method_name == "strip" or method_name == "replace" or method_name == "join" or method_name == "repeat" or method_name == "format" or method_name == "concat" or method_name == "trim_start" or method_name == "trim_end":
+            # `Thread[T].join()` → T. Mirrors Rust gg's Thread arm in
+            # `builtin_method_type`. The ladder had no Thread arm at all, so
+            # `join` fell through to the String-returning list below and typed
+            # `thread_spawn(compile_main, 512 * 1024 * 1024).join()` —
+            # `self_host_lowerer/driver.gg`, the driver's own `main` — as
+            # String. Receiver-typed, never name-matched.
+            if method_name == "join" and reg_obj_type >= 0 and reg_obj_type < types.types.len():
+                ResolvedType join_recv_rt = get_rtype_at(types.types, reg_obj_type)
+                match join_recv_rt:
+                    case RTGeneric(join_def, join_targs):
+                        DefInfo join_d = scopes.get_def(join_def)
+                        if join_d.name == "Thread" and join_targs.len() >= 1:
+                            return get_int_at(join_targs, 0)
+                    else:
+                        pass
+            # String-returning builtins.
+            #
+            # ⚠ `to_string` / `to_str` / `format` / `concat` / `trim_start` /
+            # `trim_end` are NOT on this list. They exist in NEITHER Rust gg's
+            # oracle (`builtin_method_type`'s `str`/`String` arm) NOR the IR
+            # `GORGET_STRING_VIEW` protocol (`src/ir/lowering/builtins.rs`,
+            # which has `trim_left`/`trim_right` and none of these six), so
+            # admitting them accepted calls no backend can lower — `"abc"
+            # .to_string()` CC-failed and `3.0.to_string()` CC-failed. Every
+            # `.to_string()` in the corpus is a USER `equip` method, which
+            # resolves through the trait registry above and never reaches here.
+            if method_name == "to_lower" or method_name == "to_upper" or method_name == "trim" or method_name == "lower" or method_name == "upper" or method_name == "strip" or method_name == "replace" or method_name == "join" or method_name == "repeat":
                 return types.string_id
             # `slice` / `substr` are RECEIVER-AWARE: on a `Vector` they return
             # the receiver's own type; on a String (or anything else) they
@@ -732,19 +829,32 @@ int infer_expr_type(SpannedExpr sexpr, ScopeTable scopes, TypeTable &types, Reso
             # for `é`), `test_method_chaining` / `test_option_chaining` /
             # `leak_cow_boundaries` (CC-FAIL), `shared_stress{,_yield}`,
             # `string_conversions`. A first-write-wins variant regressed the same
-            # ten, so it is not re-inference overwriting a good value — it is that
-            # THE LADDER'S OTHER ARMS ANSWER FROM THE METHOD NAME ALONE, without
-            # checking the receiver (`to_string`/`len`/`slice`/`get`/…). That is
-            # a live, filed defect in its own right (`todo/t0712`: the self-host
-            # accepts `to_string()` on a `float` off the same name list), and a
-            # guess is exactly the thing that must not be published: the lowerer
-            # reads `expr_link_types` FIRST, so a published guess OVERRIDES a
-            # fallback that was getting it right.
+            # ten, so it is not re-inference overwriting a good value — the
+            # lowerer reads `expr_link_types` FIRST, so a published GUESS
+            # OVERRIDES a fallback that was getting it right.
             # SO THE PUBLISHABLE SET IS "RESOLVED, NOT GUESSED": the registry
             # path (which publishes at its own gate, above), and these two
-            # bool arms, whose answer cannot depend on the receiver. Widening it
-            # is blocked on `t0712` — gate the ladder on the receiver type first,
-            # then the single-exit publish becomes safe and this comment can go.
+            # bool arms, whose answer cannot depend on the receiver.
+            #
+            # ⚠ THE RECEIVER GATE DOES NOT UNBLOCK THE WIDENING. An earlier
+            # version of this comment said it did — "gate the ladder on the
+            # receiver type first, then the single-exit publish becomes safe and
+            # this comment can go". That was measured false, twice (R45 built it;
+            # R47 built the gate and re-measured), and it is false BY
+            # CONSTRUCTION: the arms that break the publish are not on any gated
+            # name list. `clone`/`copy`/`sorted`/`reversed`/`filter` below
+            # answers the RECEIVER's type — the correct TYPECHECKER answer,
+            # `Vector[int]` — where the lowerer needs the LOWERING type,
+            # `FilterIter`; `len`/`count` and `split` each answer from their own
+            # arm; `bytes` has no arm at all. Gating the String-returning list
+            # cannot change what any of them publishes, so `iterator_lazy_chain`
+            # must still regress. The conflict is typechecker-type vs
+            # lowering-type, a DIFFERENT axis from receiver typing, and that is
+            # what a widening has to solve.
+            #
+            # Re-check the block before believing otherwise: revert this file to
+            # a wrapper that publishes for every EMethodCall and run
+            # `cargo test --test integration --release self_host_runtime`.
             if method_name == "is_empty" or method_name == "contains" or method_name == "starts_with" or method_name == "ends_with" or method_name == "is_subset" or method_name == "is_superset" or method_name == "is_disjoint":
                 types.expr_link_types.put(sexpr.span.end, types.bool_id)
                 return types.bool_id
