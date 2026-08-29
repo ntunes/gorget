@@ -245,13 +245,16 @@ run_one() {
   flags=""
   [ "$(sort -u "$OUT/tmp/$stem.v" | wc -l)" -gt 1 ] && flags=FLAKY
   # Both computed over the reps that actually LEAKED, and they are DIFFERENT
-  # findings, which is why they are two columns and two ceilings:
+  # findings, which is why they are two columns — but only ONE of them gates:
   #   CLASS_UNSTABLE — the SET of mechanisms differs run to run. Such a row
-  #                    cannot be pinned at all; fatal.
+  #                    cannot be pinned at all. FATAL, ceiling 0.
   #   COUNT_DRIFT    — same mechanisms, different number of records (a genuinely
   #                    racy program: how many workers leaked before exit). The
-  #                    row pins the MAXIMUM and the check is "measured <= row",
-  #                    so it stays pinnable; ratcheted, not fatal at zero.
+  #                    row stays pinnable by marking that class `*N+`, so this is
+  #                    a CENSUS and gates nothing: its own measured value moves
+  #                    with REPS and with the scheduler, and a ratchet on a
+  #                    quantity like that is a coin flip with a threshold. See
+  #                    the ceilings block near the top of this file.
   [ "$(grep -v '^-$' "$OUT/tmp/$stem.c" | sed 's/\*[0-9]*//g' | sort -u | wc -l)" -gt 1 ] \
     && flags="$flags${flags:+,}CLASS_UNSTABLE"
   [ "$(grep -v '^-$' "$OUT/tmp/$stem.c" | sort -u | wc -l)" -gt 1 ] \

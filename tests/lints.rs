@@ -8095,7 +8095,38 @@ fn sanitize_allowlists_shrink_only() {
     // history stays comparable — a row-per-(fixture, class) schema would have
     // changed the unit under an assertion that only checks `<=`, and getting
     // that wrong is silently accepted.
+    // ⚠ THE ROW COUNT IS NOT THE TOLERANCE. Pinning only `leaks.len()` leaves the
+    // AMOUNT each row tolerates completely unratcheted, and that is this file's
+    // own defect one level up: `str_alloc_copy*2` -> `str_alloc_copy*99` is one
+    // character, it keeps the row count at 313, and it re-opens exactly the case
+    // the class column exists to catch — a SECOND leak of a class the fixture
+    // already exhibits. Measured, not imagined: with that single edit the sweep
+    // returned EXIT=0 on the injected fixture that it otherwise reds, degrading
+    // the finding to a "leaking LESS than its row admits" advisory, and this
+    // test stayed green. Same for silently promoting a strict row to `*N+`,
+    // which switches its count check off entirely.
+    //
+    // So the TOLERANCE is pinned too, exactly, on three independent totals that
+    // the parse loop below is already computing:
+    //   * (fixture, class) PAIRS   — catches a class appended to a row
+    //   * tolerated RECORDS        — catches a count being widened
+    //   * `+`-marked SIGNATURES    — catches a count check being switched off
+    // Widening a row now fails HERE, in the cheap lint that runs on every
+    // commit, and the failure names the number to move.
+    //
+    // What this still cannot see, stated rather than papered over: a
+    // COMPENSATING edit (+1 on one row, -1 on another) preserves a total. Three
+    // totals make that harder than one, and the sweep's own per-row adjudication
+    // is what identifies rows — `known_gaps_passing_allowlist_shrink_only` makes
+    // the same admission for the same reason ("a ceiling counts rows; it does
+    // not identify them"). The point is that no SINGLE-character widening is
+    // silently accepted any more.
+    const LEAK_CLASS_PAIRS: usize = 523;
+    const LEAK_RECORDS: usize = 2295;
+    const LEAK_LOOSE_SIGNATURES: usize = 6;
+
     let mut leak_stems: Vec<&str> = Vec::new();
+    let (mut pairs, mut records, mut loose) = (0usize, 0usize, 0usize);
     for row in &leaks {
         let cols: Vec<&str> = row.split('\t').collect();
         assert!(
@@ -8112,12 +8143,20 @@ fn sanitize_allowlists_shrink_only() {
             });
             // A trailing `+` means "at least N, count not pinned" — reserved for
             // the concurrency rows whose leak COUNT is genuinely racy, where an
-            // exact count would make the sweep itself flap.
-            let n = n.strip_suffix('+').unwrap_or(n);
+            // exact count would make the sweep itself flap. It switches a count
+            // check OFF, so the number of them is pinned like everything else.
+            let (n, is_loose) = match n.strip_suffix('+') {
+                Some(stripped) => (stripped, true),
+                None => (n, false),
+            };
+            let parsed = n.parse::<u32>();
             assert!(
-                !sym.trim().is_empty() && n.parse::<u32>().is_ok_and(|v| v > 0),
+                !sym.trim().is_empty() && parsed.as_ref().is_ok_and(|v| *v > 0),
                 "leak allowlist signature is not <top-frame>*<records>[+]: {sig:?} in {row:?}"
             );
+            pairs += 1;
+            records += parsed.unwrap() as usize;
+            loose += usize::from(is_loose);
         }
         let stem = cols[0].trim();
         assert!(
@@ -8127,6 +8166,31 @@ fn sanitize_allowlists_shrink_only() {
         );
         leak_stems.push(stem);
     }
+
+    assert_eq!(
+        pairs, LEAK_CLASS_PAIRS,
+        "the LEAK allowlist now names {pairs} (fixture, class) pairs, the pinned \
+         count is {LEAK_CLASS_PAIRS}. A class was added to a row or removed from \
+         one. If a fix retired a mechanism, lower this in the same commit; if a \
+         NEW mechanism appeared inside an already-listed fixture, that is a new \
+         leak and the answer is not to widen the row."
+    );
+    assert_eq!(
+        records, LEAK_RECORDS,
+        "the LEAK allowlist now tolerates {records} leak records, the pinned \
+         count is {LEAK_RECORDS}. Widening a row's count re-opens the exact case \
+         the class column exists to catch — one more record of a class the \
+         fixture already exhibits. If a fix genuinely reduced the count, lower \
+         this in the same commit; the sweep prints a 'TIGHTEN these rows' \
+         advisory naming the row and the new number."
+    );
+    assert_eq!(
+        loose, LEAK_LOOSE_SIGNATURES,
+        "the LEAK allowlist now has {loose} `*N+` signatures, the pinned count is \
+         {LEAK_LOOSE_SIGNATURES}. `+` switches a row's count check OFF, so it is \
+         an admission, not an annotation: add one only for a row the sweep's own \
+         `count-drift` census has named, and move this number in the same commit."
+    );
 }
 
 /// The sanitize sweep's own positive controls exist, and the sweep runs them.

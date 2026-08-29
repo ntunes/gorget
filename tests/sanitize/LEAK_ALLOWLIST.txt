@@ -23,6 +23,13 @@
 # The sweep's `count-drift` census names the rows that earn the marker — do not
 # add one without that evidence.
 #
+# ⚠ THE TOLERANCE IS PINNED, NOT JUST THE ROW COUNT. `sanitize_allowlists_shrink_only`
+# asserts the exact number of rows, of (fixture, class) pairs, of tolerated leak
+# RECORDS, and of `*N+` signatures. Widening `*2` to `*99` is one character, it
+# leaves the row count untouched, and it re-opens the very case this column
+# exists to catch — so it fails the lint, which names the number to move. A
+# widening is an admission; make it deliberately or not at all.
+#
 # The second column is what the fixture is tolerated FOR, and it is checked.
 # A bare stem — which is all this file used to carry — tolerated ANY leak in
 # that fixture forever: a second, entirely unrelated mechanism appearing inside
