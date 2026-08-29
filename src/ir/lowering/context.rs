@@ -1593,9 +1593,11 @@ impl<'a> LoweringContext<'a> {
     ///
     /// ENFORCING GUARD (Core #6/#14 — this comment is not on its own):
     /// `indirect_dispatch_results_registered_at_birth` in `tests/lints.rs`
-    /// pins the per-file census of raw `builder.call(` producers under
-    /// `src/ir/lowering/`, so a NEW arm written the old way fails the lint
-    /// even though it is nowhere near this function.
+    /// pins the per-file census of ALL FOUR raw dst-producing spellings
+    /// (`builder.call` / `call_clone` / `call_extern` / `call_extern_into`)
+    /// under `src/ir/lowering/`, so a NEW arm written the old way fails the
+    /// lint even though it is nowhere near this function — whichever of the
+    /// four it happens to spell.
     pub fn call_indirect_tracked(
         &mut self,
         builder: &mut crate::ir::builder::FunctionBuilder,

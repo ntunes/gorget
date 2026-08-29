@@ -3994,8 +3994,8 @@ fn try_lower_option_result_combinator(
     // `enum_init`-built locals holding String/Vector payloads it zeroes
     // bytes the destination now aliases, corrupting the payload (observed
     // as `"BAD"` → `"B"` in coroutine_result_combinators, where the closure
-    // returns a 3-byte String through a map_err's Error wrap). The two
-    // four sites that DO need runtime zeroing — the `or_else`, `filter`,
+    // returns a 3-byte String through a map_err's Error wrap). The four
+    // sites that DO need runtime zeroing — the `or_else`, `filter`,
     // `unwrap_or_else` and `map_err` arms consuming `payload`, which stays
     // registered because a SIBLING CFG path may still have to drop it — pair
     // their own explicit `move_zero(payload)` at the call site.
