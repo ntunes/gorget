@@ -8064,7 +8064,7 @@ fn sanitize_allowlists_shrink_only() {
 /// second copy of the number that can drift from it. Lowering is free; raising
 /// needs owner sign-off — the rationale, the history, and what the current
 /// headroom is FOR live in the comment inside the ratchet below.
-const AGENTS_MD_SIZE_CEILING: u64 = 59_300;
+const AGENTS_MD_SIZE_CEILING: u64 = 47_400;
 
 #[test]
 fn agents_md_size_ratchet() {
@@ -8075,94 +8075,44 @@ fn agents_md_size_ratchet() {
          lint both route evidence there; the split rule is unenforceable without it."
     );
     let bytes = fs::metadata("AGENTS.md").expect("AGENTS.md metadata").len();
-    // 2026-07-28: raised 58_000 → 59_000 for the Round XII convergence-gate
-    // rule fold (owner-signed-off in-round). Extended treatment moved to
-    // devbook/30 §10; the AGENTS.md text was already compacted to a single-
-    // sentence rule + regen commands.
-    //
-    // 2026-08-04: raised 59_000 → 59_700, OWNER SIGN-OFF given same day. Three
-    // rules landed in one day — the big-ticket revocation, phased-work
-    // one-bullet-per-phase, and the blocked-convergence owner-ask — and each
-    // previously cost a byte-scavenging hunt through load-bearing prose, which
-    // trades rule precision for headroom. Paid for partly by extracting rule
-    // 6's literal cleanup commands into scripts/round_cleanup.sh (−309 bytes).
-    // The owner first authorised 59_500; the escalation rule was written after
-    // that figure was set and did not fit, hence 59_700.
-    //
-    // ⚠ THIS IS DEBT, not headroom. The file has absorbed four rules since the
-    // last real compaction and is structurally at capacity: a dedicated
-    // compaction round should move extended treatments into devbook/29–30 and
-    // ratchet this back DOWN toward 58_000. Lowering needs no sign-off;
-    // raising it again does.
-    //
-    // 2026-08-28: LOWERED from 59_600 — the dedicated compaction round the
-    // note above kept asking for. The landed value IS the constant above; this
-    // comment does not carry a second copy of it, because the copy is what goes
-    // stale — this line named a destination the constant had already moved past
-    // during review, and it survived a whole pass saying so. Regenerate the
-    // free bytes with the `headroom` command below, never from a line of prose.
-    // Evidence moved to devbook/29 (memory measurement; the harness's
-    // `--test-threads=1` history) and devbook/30 §4/§8/§15/§18 (the guard-slack
-    // and two-anchor measurement traps; the cited-repro metric distortion; the
-    // shortest-distinctive-token grep; the criticise-only ruling); four
-    // multi-rule mega-paragraphs became labelled rules, and the longest line
-    // came down by roughly half (measure it, never quote it:
-    // `awk '{print length}' AGENTS.md | sort -rn | head -1`).
-    //
-    // ⚠ THE CEILING DELIBERATELY LEAVES HEADROOM — for the pending rules that
-    // name this ratchet as their blocker, not as slack. Both figures are
-    // COMMANDS, because both have already gone stale here:
+    // HISTORY IS `git log -p -- tests/lints.rs`, NOT THIS COMMENT. Every figure
+    // ever written here went stale — the clause count, the longest line, the
+    // headroom, the ceiling's own numeric trail — so each one is a command now.
+    // Do not add another.
     //   headroom  `echo $(( $(grep -oP 'AGENTS_MD_SIZE_CEILING: u64 = \K[0-9_]+' \
     //             tests/lints.rs | tr -d _) - $(wc -c < AGENTS.md) ))`
     //   blocked   `grep -l agents_md_size_ratchet todo/*.md`
-    // Spending the whole recovered budget on the ceiling would leave those
-    // items exactly as blocked as before, which optimises the wrong number:
-    // the compaction exists to buy capacity for rules, not to make this
-    // constant small. What the headroom funds is battery lines and rule
-    // sharpenings, a couple at a time. When it will not stretch to all of
-    // them, land what FITS and leave the rest filed and blocked — never cram,
-    // and never raise the ceiling to absorb your own inflow, which is how a
-    // ratchet becomes fiction.
     //
-    // The compaction's first landing set it lower than the constant above now
-    // reads; it rose twice during review, when pass 2 required a FOURTH lint
-    // and pass 4 required documenting the INSERTION hole. The file's own
-    // § Core invariants header has to describe what each guard does and does
-    // not do, and that documentation is a rule like any other. The numeric
-    // trail lives in `git log -p -- tests/lints.rs` rather than here, because
-    // a partial trail reads as a current value.
+    // 2026-08-29 (owner-directed compaction). The file was cut by roughly a
+    // fifth with the rule set intact: the 18 META rows that restated this
+    // file's own lint internals were retired (they are stated here and measured
+    // in todo/t0714 — AGENTS.md was the third copy), five reviewer-checklist
+    // rows that restated Core #1/#2/#4/#8/#10 verbatim were folded into those
+    // invariants, nine owner-attribution and rationale exemptions moved to
+    // devbook/29-30, and the remaining justification prose was deleted in
+    // favour of the imperative. One rule was ADDED: Multi-agent rule 0's
+    // mechanical carve-out (`MA-0-mech`), letting the orchestrator fix a typo
+    // or stale figure in place instead of spending an agent round-trip on it.
+    // Evidence: devbook/30 §20.
     //
-    // Honest accounting for this round. Real compaction happened AND a
-    // substantial block of new load-bearing text landed that did not exist at
-    // HEAD (the landing rule, rule 0's fourth duty, the GAP precedence clause,
-    // and five review passes' worth of limit-documentation), so the net drop is
-    // much smaller than the gross. Measure it, never quote it:
-    //   `git show HEAD:AGENTS.md | wc -c` vs `wc -c AGENTS.md`.
-    // Every figure once written into this comment has gone stale: the clause
-    // count, the longest line, the insertion measurement, this accounting, the
-    // headroom, and the ceiling's own numeric trail. That is the whole list,
-    // and it is why each one is a command now. Do not add another.
+    // ⚠ THE PRIOR "~58_000 IS THE FLOOR" FINDING WAS WRONG, and is retired
+    // rather than restated: it measured the prose the rules were wrapped in,
+    // not the rules. The real floor is the pinned text itself — regenerate it,
+    // never quote it:
+    //   `AGENTS_MD_DUMP=1 cargo test --test lints agents_md_measurements -- --nocapture`
+    // Cutting materially below that DOES mean dropping rules, which needs the
+    // same owner sign-off as raising this ceiling.
     //
-    // The structural wins are the real yield: the longest line roughly halved,
-    // four mega-paragraphs split into labelled rules, and guards where there
-    // were none. The next big DROP comes from todo/t0714's burn-down, not from
-    // scavenging prose here — this comment has warned since 2026-08-04 that
-    // byte-scavenging trades rule precision for headroom, and paying for
-    // corrections out of neighbouring rules is close to exhausted: the last
-    // set of accuracy fixes fitted only because each was ALSO a compaction of
-    // the sentence it corrected. The next one that is not will not fit.
-    //
-    // ⚠ THE STRUCTURAL FINDING: ~58_000 is the FLOOR for the current rule set,
-    // not a way-station. The inventory below pins several hundred normative
-    // clauses (the exact count is `AGENTS_MD_RULE_FLOOR`, and a figure written
-    // here goes stale) and the classification table accounts for the rest;
-    // almost all remaining bytes ARE those clauses. Cutting materially below
-    // this means dropping rules — which the guards below make HARDER to do
-    // silently, NOT impossible: see `agents_md_unpinned_prose_ratchet`'s
-    // doc comment for what they do and do not catch, and todo/t0714 for the
-    // measured residual. A future lesson lands as ONE compact imperative here
-    // + its evidence in devbook/29-30; when the headroom is spent, compact a
-    // NEIGHBOURING rule rather than raising this.
+    // ⚠ THE CEILING DELIBERATELY LEAVES HEADROOM — for the pending rules that
+    // name this ratchet as their blocker, not as slack. Spending the whole
+    // recovered budget on the ceiling would leave those items exactly as
+    // blocked as before: the compaction exists to buy capacity for rules, not
+    // to make this constant small. Land what FITS, leave the rest filed and
+    // blocked — never cram, and never raise the ceiling to absorb your own
+    // inflow, which is how a ratchet becomes fiction. A future lesson lands as
+    // ONE compact imperative in AGENTS.md + its evidence in devbook/29-30; when
+    // the headroom is spent, compact a NEIGHBOURING rule rather than raising
+    // this.
     const CEILING: u64 = AGENTS_MD_SIZE_CEILING;
     assert!(
         bytes <= CEILING,
@@ -8208,18 +8158,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("META-edit-in-place", "Sharpening an existing rule EDITS that rule in place"),
     ("META-evidence-split", "provenance, measurement and war-story go to"),
     ("META-unratified", "unratified owner open-thinking goes to devbook/30"),
-    ("META-ratchet", "ratchets DOWN after each compaction"),
-    ("META-inventory", "requires every inventoried rule to still be stated, exactly once"),
-    ("META-onlydelete", "fires when an inventoried rule is DELETED"),
-    ("META-probedonly", "The census's *contains-a-probe* test is the weak one"),
-    ("META-ceiling", "a deletion that shifts no band is silent"),
     ("META-reviewer", "So the diff is the guard: after editing a rule, re-read the whole rule"),
-    // Reworded 2026-08-28: the old probe said the lint measures "the longest
-    // stretch", which is half of it — there are TWO ceilings, and the count of
-    // stretches over 100 chars is the one an inserted clause usually trips.
-    ("META-ratchet2", "caps the GROWTH of what NO probe accounts for"),
-    ("META-limits", "Know what they do NOT give you"),
-    ("META-backlog", "moves a run across a BAND EDGE"),
     ("META-harness", "never only in one harness's private memory"),
     ("CORE-1", "Fix at the write site, not the read site"),
     ("CORE-2", "Typed metadata, never name-matching"),
@@ -8361,6 +8300,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("MA-0-coord", "Coordinate parallel tracks"),
     ("MA-0-criticise", "CRITICISE the final form"),
     ("MA-0-return", "FINDING RETURNED TO THE AGENT, never an edit the orchestrator makes"),
+    ("MA-0-mech", "fix a typo, a stale figure or a one-line correction in place"),
     ("MA-0-roles", "Proposing the fix is the REVIEW AGENT's job"),
     ("MA-0-round", "binds the **ROUND**, not the orchestrator's hands"),
     ("MA-0-parent", "The parent still drives the integration battery"),
@@ -8498,8 +8438,6 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("CORE-15d-p4", "build and run on C AND LLVM, plus ggdef when in-subset"),
     ("CORE-15d-p5", "make one go RED, once"),
     ("CORE-15d-p6", "read L at HEAD"),
-    ("META-caveat", "Nor does any lint check that the evidence reached devbook/29-30"),
-    ("META-census", "a new SENTENCE must be pinned or marked non-normative"),
     ("BT-timeouts2", "bump to 600 on multi-agent boxes for DEBUG self-host builds"),
     ("BT-timeouts3", "bump for `stress_*`"),
     ("SYN-sigils2", "Never before the type"),
@@ -8594,11 +8532,6 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("TC-format", "TOML front matter, `+++`, prose verbatim"),
     ("TC-repro-exempt", "non-reproducible items (design notes, refactors, perf without a repro) are naturally exempt"),
     ("REV-design2", "raise any violation as a cited reservation"),
-    ("REV-design-a", "an instance-fix where a *class* exists"),
-    ("REV-design-b", "semantics from name-matching or shape heuristics instead of typed metadata"),
-    ("REV-design-c", "information rebuilt at a *read* site a *writer* should carry"),
-    ("REV-design-d", "a silently-dropping arm"),
-    ("REV-design-e", "a known defect shipped"),
     ("REV-design-f", "the reviewer names the invariant and the reference-grade shape instead"),
     ("REV-scout-probe", "a read-only probe/audit"),
     ("REV-scout-premise", "verifies every load-bearing premise against CURRENT source with `file:line`"),
@@ -8667,29 +8600,6 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("REV-nodefer3", "NOT as a queue for handing fixes to the next agent or the next round"),
     ("REV-checklist2", "each binary and checkable without judgement"),
     ("CORE-15cb4", "heading, both neighbouring paragraphs, and the comments inside its examples"),
-    ("META-authorhalf", "Those halves stay on the author."),
-    ("META-inplace", "its exemption side weaker still"),
-    ("META-insertion", "reach depends on WHERE and on LENGTH"),
-    // Was "the edit the landing rule above prescribes" — a CROSS-REFERENCE,
-    // which this table's own rule forbids as a probe (a probe pins the
-    // obligation, never its justification). Repointed to the limit clause it
-    // was standing next to; the row count is unchanged, so no row was removed.
-    ("META-weakest", "a short mid-sentence one in a run already between them is invisible"),
-    // Was "the census never separates a sentence starting lowercase (its
-    // capitalised twin IS caught)", then "only when the run it lands in was
-    // already near the cap". Both are refuted. Measured over all 8827
-    // insertion points (`agents_md_insertion_sweep`, run it — the figures live
-    // in its output and in todo/t0714): capitalisation moves the unpinned-prose
-    // rate a few points via the sentence census and leaves the ratchet's own
-    // catch count IDENTICAL; and "near the cap" is the wrong shape. The ratchet
-    // asserts two CEILINGS, so it sees an insertion only where the insertion
-    // pushes a counter PAST one — crossing the 100-char floor (the >=100 count
-    // is at its constant) or the cap itself. A run already between the two
-    // absorbs a clause with nothing firing, which is the largest hole.
-    ("META-lowercase", "pushes its run past the 100-char floor or the cap"),
-    ("META-fenced", "in a fence usually nothing"),
-    ("META-spanpin", "it breaks the pin and is caught"),
-    ("META-rates", "Per-class rates + commands"),
 ];
 
 /// The NON-NORMATIVE classification for `AGENTS.md`.
@@ -8758,7 +8668,6 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
     ("FMT-cow-head", "| Source", 1),
     ("FMT-cow-sep", "|---------------------------------------------------|", 1),
     ("PTR-cow-spec", "#materialization-points--the-enforced-boundary-set", 1),
-    ("PTR-reverify", "Burned-cycle incidents in", 1),
     ("PTR-lay-doc", "Full rules in [`docs/devbook/24-layering-discipline.md`]", 1),
     ("PTR-nnm-see", "(See \"No name matching\" below.)", 1),
     ("PTR-dbg-eg", "Worked examples (Snag #17, Snag #13)", 1),
@@ -8771,11 +8680,9 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
     ("PTR-sh-link", "#self-host-as-the-elegance-showcase--and-retiring-fossils", 1),
     ("PTR-rev-d45", "Rationale + D45: devbook/30 §12", 1),
     ("PTR-rev-link", "#scout-before-you-brief-review-in-sequential-fresh-passes", 1),
-    ("PTR-tc-trap", "Same trap as \"re-verify a premise\"", 1),
     ("PTR-core14", "Core #6 applied to prose", 1),
     ("PTR-sh-pairs", "This rule pairs with \"Don't redesign around compiler gaps\"", 1),
     ("PTR-done-fmt", "`- [2026-02-10] Task description`", 1),
-    ("WHY-core6", "Prose rots; guards don't", 1),
     ("WHY-core15a", "A claim with no command is not a claim, it is a hope", 1),
     ("WHY-lay1", "Invariants accumulate; abstractions evaporate", 1),
     ("WHY-nnm", "The metadata you need is missing one layer up", 1),
@@ -8787,9 +8694,7 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
     ("WHY-ma6", "Not \"later\" — \"later\" is when the disk is already full", 1),
     ("WHY-ma7", "so an unqualified absolute path", 1),
     ("WHY-ma7b", "necessary but NOT sufficient when the worktrees are children", 1),
-    ("WHY-rl1", "Focus means not fragmenting attention across rounds", 1),
     ("WHY-rl-atom", "is the atom; a **round** is the unit the orchestrator works in", 1),
-    ("WHY-tc-family", "when there are five is a selection, not an enumeration", 1),
     ("WHY-lay-intro", "How information crosses IR layer boundaries", 1),
     ("WHY-header", "The sections below are the spec", 1),
     ("LEAD-15e7", "⚠ Plus one about the record itself:", 1),
@@ -8801,27 +8706,23 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
     ("LEAD-ma2-paths", "(Concrete paths live in the session handover.)", 1),
     ("LEAD-ma7-paths", "(The concrete main-checkout path for the current environment", 1),
     ("EG-sib-producer", "`maybe_auto_propagate` hoisted to the `lower_expr` exit", 1),
-    ("EG-core11", "(#6 retires a class; this is the per-fix net.)", 1),
     ("LEAD-fourlints", "**Four lints hold the line**", 1),
     ("PTR-t0714", "`todo/t0714`.", 1),
-    ("PTR-owner-hdr", "(Owner 2026-07-18/25.)", 1),
     ("PTR-xref-lay", "(→ Layering discipline)", 3),
     ("PTR-xref-own", "(→ Ownership at Consuming Positions)", 1),
     ("PTR-xref-sq", "(→ Solution Quality)", 1),
     ("PTR-xref-guards", "(→ `docs/devbook/25-structural-guards.md`)", 1),
     ("PTR-xref-bt", "(→ Build & Test)", 1),
     ("PTR-xref-rev", "(→ Review … fresh agent)", 1),
-    ("PTR-owner-c10", "(Owner 2026-07-18.)", 1),
-    ("PTR-owner-c13", "(Owner 2026-08-22; devbook/30 §4.)", 1),
 ];
 
 /// Shrink-only floor on the inventory, so a compaction cannot delete rows and
 /// the rules they pin in one move. RAISING is free (new rules landed);
 /// LOWERING requires owner sign-off, like the byte ceiling.
-const AGENTS_MD_RULE_FLOOR: usize = 464;
+const AGENTS_MD_RULE_FLOOR: usize = 442;
 
 /// Grow-only ceiling on the escape hatch (see above).
-const AGENTS_MD_MAX_NON_NORMATIVE: usize = 94;
+const AGENTS_MD_MAX_NON_NORMATIVE: usize = 85;
 
 /// Collapse every run of whitespace to a single space, so a probe survives the
 /// file being re-wrapped or re-flowed (Core #15(c): prose WRAPS).
@@ -9126,8 +9027,8 @@ fn agents_md_every_clause_is_classified() {
 /// invisible, with every other lint green (see the assert's own comment).
 /// Raising either needs the same owner sign-off as raising the byte ceiling —
 /// unpinned prose ACCUMULATING is what this exists to notice.
-const AGENTS_MD_MAX_UNPINNED_RUN: usize = 198;
-const AGENTS_MD_MAX_RUNS_OVER_100: usize = 112;
+const AGENTS_MD_MAX_UNPINNED_RUN: usize = 177;
+const AGENTS_MD_MAX_RUNS_OVER_100: usize = 52;
 
 /// Logical blocks for coverage: hard-wrapped continuation lines joined, code
 /// fences kept (each command line stands alone), headings dropped.

@@ -1,3 +1,29 @@
+- [2026-08-29] **`AGENTS.md` compaction (owner-directed): 59,271 → 46,956 bytes with the rule set intact.**
+
+  **Why.** The owner reported the failure this fixes: *"each round spins on each track never reaching the
+  executor step. We waste entire weekly token quotas without any code written."* Measured cause — the file
+  doubled since mid-June (28,901 B on 2026-06-15) and **all** of the growth was process apparatus: Core
+  invariants +12,015 B, a new Round lifecycle section +6,756 B, Review +5,750 B, Multi-agent +3,345 B, while
+  the technical sections (Layering · CoW · Build&Test · Structure) NET SHRANK by 121 B.
+
+  **What changed.** 464 → 442 pinned clauses, 94 → 85 non-normative rows. Retired: the 18 `META-*` rows that
+  restated `AGENTS.md`'s own lint internals (a third copy — the mechanics are in `tests/lints.rs`, the rates in
+  `t0714`); 5 `REV-design-*` rows restating Core #1/#2/#4/#8/#10 verbatim; 9 owner-attribution and rationale
+  exemptions. Added ONE rule — `MA-0-mech`, the orchestrator may fix a typo, a stale figure or a one-line
+  correction in place, since a full agent round-trip per trivium is what starves the executor. All remaining
+  justification prose moved to devbook/29-30 or was deleted in favour of the imperative; `FOLD VERBATIM` was
+  explicitly reaffirmed by the owner and left intact.
+
+  **Ratchets re-seeded, all downward:** size ceiling 59_300 → 47_400, `RULE_FLOOR` 464 → 442,
+  `MAX_NON_NORMATIVE` 94 → 85, `MAX_UNPINNED_RUN` 198 → 177, `MAX_RUNS_OVER_100` 112 → 52. The prior
+  "~58_000 is the FLOOR for the current rule set" claim in the ratchet comment is **refuted and retired**, not
+  restated — it measured the prose the rules were wrapped in, not the rules.
+
+  **Verified, not asserted.** All four guards RED-demonstrated on the landed file: deleting `RL-5-red` fires
+  `agents_md_rule_inventory_is_pinned` by name; inserting an unpinned clause fires
+  `agents_md_every_clause_is_classified`; both restore green. `cargo test --test lints` 175 passed,
+  `cargo test --lib` 1179 passed. Evidence: devbook/30 §20.
+
 - [2026-08-29] **R45 CLOSED — the round-blocker, a class fix that was wrong, and a compaction that became a research project.**
 
   **What landed.** `t0702` (the owner-ordered round blocker: `self_host_runtime` RED at pristine HEAD) and

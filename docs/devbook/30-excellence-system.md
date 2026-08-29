@@ -1507,3 +1507,102 @@ track's scope by default and files only the genuinely disjoint.
 sharp reviewer would catch. Mitigation is that ≥3 passes stays the floor and any
 new class that slips through is added as a further row — the list earns its rows
 from failures, exactly as these five did.
+
+## §20 — The process apparatus outgrew the file it lived in (owner 2026-08-29)
+
+`AGENTS.md` doubled between mid-June and late August — 28,901 bytes on
+2026-06-15, 59,271 on 2026-08-28 — and the owner's report on what that cost is
+the finding this section exists to record: *"each round spins on each track never
+reaching the executor step. We waste entire weekly token quotas without any code
+written."*
+
+### The growth was entirely process, and the technical content was stable
+
+Measured by section, mid-June against the pre-compaction file:
+
+| Section | 2026-06-15 | 2026-08-28 | Δ |
+|---|---|---|---|
+| Core invariants | 1,867 | 13,882 | +12,015 |
+| Round lifecycle | 0 | 6,756 | +6,756 |
+| Review … fresh agent | 4,793 | 10,543 | +5,750 |
+| Multi-agent orchestration | 2,209 | 5,554 | +3,345 |
+| Task Continuity | 1,472 | 3,854 | +2,382 |
+| Layering · CoW · Build&Test · Structure | 13,893 | 13,772 | −121 |
+
+The compiler knowledge the file exists to carry did not grow at all. The
+excellence system grew 4.7×. Regenerate the table with
+`git show <rev>:./AGENTS.md` and a per-`##`-section byte count — never quote
+these figures, they are a snapshot of two revisions.
+
+### Why the gauntlet stopped terminating
+
+Four rules formed a loop that no amount of reviewer diligence could exit:
+
+1. *"≥3 passes is the FLOOR; there is NO upper bound … never invent a cap"* —
+   no terminating condition.
+2. The reviewer's mandate to block on DESIGN grounds — *"a blocking reservation
+   even when the code works and every premise checks out"* — evaluated against
+   15 invariants carrying roughly 50 sub-clauses. A conscientious reviewer finds
+   something essentially every pass.
+3. *"FIX INLINE unless really disjoint"* grows the brief's scope with each
+   finding.
+4. The convergence gate resets the streak when a finding *"changes the … scope
+   boundary"* — which (3) guarantees it does.
+
+So the clause written to make it terminate (§19's SCOPE MAKES IT TERMINATE) was
+fed by the clause above it. Add `FOLD VERBATIM`'s monotonically growing addenda
+stack — each pass reviewing a longer artifact than the last — and rule 0's
+prohibition on the orchestrator touching anything, and every finding cost a full
+agent round-trip while the thing under review kept getting bigger.
+
+**`FOLD VERBATIM` is not the defect and does not get relaxed.** It exists
+because summarising a fold introduced errors (§13); the owner reaffirmed it
+during this compaction. What changed is only who may apply a *mechanical* fix.
+
+### What the compaction did
+
+`AGENTS.md` 59,271 → 46,956 bytes with the rule set intact: 464 → 442 pinned
+clauses, 94 → 85 non-normative rows.
+
+- **Retired: 18 `META-*` rows** describing `AGENTS.md`'s own lint machinery —
+  what the four guards do and do not catch. This was the file's *third* copy:
+  the mechanics are in `tests/lints.rs` doc comments and the per-site-class rates
+  are measured in `todo/t0714`. A file loaded into every context window was
+  spending 2.5 KB explaining its own test.
+- **Retired: 5 `REV-design-*` rows** that restated Core #1, #2, #4, #8 and #10
+  verbatim inside the reviewer's checklist. Restating an invariant next to a
+  pointer to it is how the file doubled.
+- **Retired: 9 non-normative rows** — owner-attribution parentheticals and
+  rationale clauses whose evidence already lives here and in devbook/29.
+- **Added: 1 rule.** `MA-0-mech` — the orchestrator MAY fix a typo, a stale
+  figure or a one-line correction in place when it changes no behaviour and no
+  design. Rule 0's absolute prohibition was costing an agent round-trip per
+  trivium, which is the executor-starvation the owner reported.
+- Everything else lost its justification prose, not its imperative.
+
+### The prior floor estimate was wrong
+
+This lint comment carried, from 2026-08-04 to this compaction, the claim that
+*"~58,000 is the FLOOR for the current rule set, not a way-station"*. It was
+refuted by landing at 46,956 with 442 of the 464 clauses still pinned. The error
+was measuring the prose the rules were wrapped in and calling it the rules.
+
+The real floor is the pinned text itself, and it is regenerable rather than
+quotable:
+
+```text
+AGENTS_MD_DUMP=1 cargo test --test lints agents_md_measurements -- --nocapture
+```
+
+Cutting materially below that does mean deleting rules, which needs the same
+owner sign-off as raising the byte ceiling — the two ratchets exist to make
+exactly that trade visible in review rather than cheap in a compaction.
+
+### The lesson
+
+A guard that caps BYTES pushes an author to scavenge prose; it does not stop the
+RULE COUNT from growing, and the rule count is what a reviewer must check a brief
+against. The excellence system's own inflow needs the discipline it imposes on
+the compiler: a new process rule should retire an old one, or state why the pair
+is not a class (Core #4 turned on the ledger itself). Watch for the same shape —
+`AGENTS_MD_RULE_FLOOR` only ever ratcheted UP before this round.
