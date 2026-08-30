@@ -30421,40 +30421,148 @@ fn self_host_bootstrap() {
 // (`self_host_cow_rescue_mutation_through_getchain_receiver`) and, at the
 // assignment-target sibling, a silent WRONG ANSWER (`cow_assign_target_chain.gg`).
 // ALL FOUR of these figures need owner eyes, not just the stage-1 string one.
-    // ⚖ RE-PINNED 2026-08-30 (R47 close, OWNER-AUTHORISED) at the exact measured
-    // value — a HIGH-WATER MARK WITH A DEBT, not a sanctioned cost. The R47 close
-    // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
-    // memory-safety fixes that legitimately materialize more (a typed per-receiver
-    // mutation classifier replacing a name list, for-loop drop registration, and
-    // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
-    // ten R47 integration merges, one release build per cell, `gg` md5 per row):
-    // D1 is the dominant mover on all four axes (+52,221 / +98,019 / +5,063,623 /
-    // +10,411,779). ⚠ "THE WHOLE DELTA, ZERO RESIDUE" WAS WRONG AND IS WITHDRAWN:
-    // the cells file is a CUMULATIVE CHAIN, so summing successive deltas to the
-    // total is a telescoping identity, true of any sequence — it was never
-    // evidence. STAGE-0: base f3feea79 does equal the previous ceilings exactly,
-    // and D1 is the whole delta there. STAGE-1: the previous ceilings were A2's
+    // ⚖ R47 — WHAT THESE FOUR NUMBERS ARE, AND THE CHAIN OF OWNER RULINGS THAT
+    // MADE THEM. Written once, here; the other three axes point at this block.
+    //
+    // ── THE SUPERSESSION CHAIN ─────────────────────────────────────────────
+    // Each ruling below was, at some point, read as overturning the one before
+    // it. The record has to say what actually survives, or the next round
+    // re-litigates it:
+    //   2026-08-27 — re-seed to the EXACT measured value, no headroom; covers
+    //     R44's overrun and says further growth trips immediately. SURVIVES as
+    //     to the STORED VALUE. SUPERSEDED as to the COMPARISON.
+    //   2026-08-29 — ratify the four R45/R47 values with the debt named, over
+    //     reverting them and leaving the gate red. SURVIVES whole.
+    //   2026-08-30 (a) — "allow up to ~1% clone ceiling growth as it was
+    //     originally. I want to prevent regressions, not normal compiler
+    //     growth. Nevertheless, the trend should go down."
+    //   2026-08-30 (b), REFINING (a) — "it should only re-pin up if necessary.
+    //     If the clones increase ~1% then re-pin to the *exact new number* is
+    //     authorized implicitly. If it increases more, then ask. If it
+    //     decreases, then re-pin down to the exact number."  ⇒ THE PIN IS
+    //     ALWAYS EXACT; THE ~1% IS AN AUTHORIZATION THRESHOLD, NOT HEADROOM.
+    //   2026-08-30 (c) — "I don't understand why you claim it is always red. It
+    //     is only red if the increase is > 1%. green otherwise."  ⇒ STORAGE IS
+    //     EXACT, COMPARISON IS BANDED. The reading of (b) that had this gate
+    //     firing on any increase at all was an INFERENCE, never a ruling; it is
+    //     retracted, and with it the claim that exact pinning makes these four
+    //     gates permanently red.
+    //   2026-08-30 (d) — "keep slow accumulation unbounded, because that may
+    //     just be the compiler growing organically. But we should do periodic
+    //     audits to make sure we are not cloning wastefully."  ⇒ NO cumulative
+    //     cap and NO cross-round trend anchor. `todo/t0860` carries the audit,
+    //     which is the instrument that can tell growth from waste; a threshold
+    //     on a total never could.
+    //
+    // ── WHAT THE NUMBER IS FOR ─────────────────────────────────────────────
+    // A HIGH-WATER MARK ON A JOURNEY DOWN, not a budget. The target is
+    // hand-optimized cloning, so a round reading this constant is reading a
+    // trajectory: the git history of these four numbers IS the trend, which is
+    // only legible because the pin carries no slack. The mechanism — two
+    // numbers per meter, three outcomes, why one number cannot do both jobs —
+    // is documented on `struct CloneReading`, and the workload it measures is
+    // declared in `scripts/clone_meter.spec`.
+    //
+    // ── R47's OWN INFLOW, ATTRIBUTED ───────────────────────────────────────
+    // The R47 close sweep measured all four meters over by +0.30%..+0.43%; the
+    // round landed three memory-safety fixes that legitimately materialize more
+    // (a typed per-receiver mutation classifier replacing a name list, for-loop
+    // drop registration, and CoW identity resolution). Attributed 2026-08-30 by
+    // a bisect over all ten R47 integration merges, one release build per cell,
+    // `gg` md5 per row: D1 is the dominant mover on all four axes (+52,221 /
+    // +98,019 / +5,063,623 / +10,411,779).
+    // ⚠ "THE WHOLE DELTA, ZERO RESIDUE" WAS WRONG AND IS WITHDRAWN: the cells
+    // file is a CUMULATIVE CHAIN, so summing successive deltas to the total is a
+    // telescoping identity — true of any sequence, and never evidence.
+    // STAGE-0: base `f3feea79` does equal the previous ceilings exactly, and D1
+    // is the whole delta there. STAGE-1: the previous ceilings were A2's
     // MID-ROUND re-pin, not the round-open value; against round-open base
-    // (1,124,255,029 / 2,359,224,224) D1 accounts for 88.8% of +5,700,802 (array)
-    // and 83.4% of +12,486,518 (string). The remainder is pre-D1 inflow that A2's
-    // mid-round re-pin absorbed — which is precisely why a track must not re-pin. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
-    // and this test's own instrument disagree by 294 clones on that axis alone
-    // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
-    // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
-    // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
-    // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
-    // SITE: by ablation, an UPPER BOUND of 33% of the array overage and 47% of the
-    // string overage sit
-    // in D1's `typecheck.gg::reject_no_method_on_primitive` chokepoint, which runs
-    // up to four sequential resolution walks per method call (leading term:
-    // t0715's EquipInfo deep-clone shape). ⚠ UPPER BOUND because the ablation
-    // bundles "the reject executing" with "the reject's body being lowered at all"
-    // — stage1.c shrinks 75KB when ablated, so part of that share is not
-    // reclaimable by optimising the walks. That share is a REGRESSION TO RECLAIM,
-    // not a sanctioned cost — this ceiling comes DOWN when it is; lowering needs no
-    // sign-off. Regenerate:
-    //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
-const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_144_626;
+    // (1,124,255,029 / 2,359,224,224) D1 accounts for 88.8% of +5,700,802
+    // (array) and 83.4% of +12,486,518 (string). The remainder is pre-D1 inflow
+    // that A2's mid-round re-pin absorbed — which is precisely why a TRACK must
+    // never write a pin. The pin now has exactly one writer, the integrating
+    // parent, and `tests/lints.rs::clone_meter_pins_carry_their_provenance`
+    // makes a pin that moves without rewriting its `PINNED-BY:` line RED.
+    // ⚠ THE DEBT HAS A NAMED SITE: by ablation, an UPPER BOUND of 33% of the
+    // array overage and 47% of the string overage sit in D1's
+    // `typecheck.gg::reject_no_method_on_primitive` chokepoint, which runs up to
+    // four sequential resolution walks per method call (leading term: t0715's
+    // EquipInfo deep-clone shape). UPPER BOUND because the ablation bundles "the
+    // reject executing" with "the reject's body being lowered at all" —
+    // stage1.c shrinks 75KB when ablated, so part of that share is not
+    // reclaimable by optimising the walks. That share is a REGRESSION TO
+    // RECLAIM, not a sanctioned cost: this pin comes DOWN when it is, and
+    // lowering needs no sign-off.
+    //
+    // ── ⚠ THE 294 IS RESOLVED, AND NEITHER INSTRUMENT WAS WRONG ────────────
+    // An earlier revision of this comment recorded that `bench_stages.sh` and
+    // this test's own instrument "disagree by 294 clones on the stage-0 string
+    // axis — track F5 adjudicates which is right". They never disagreed. THE
+    // METER HAD AN UNDECLARED INPUT: the absolute path of the checkout.
+    //   root path                          len   string_clone
+    //   /tmp/s                               6   31,474,135
+    //   /workspace/gorget (the main tree)   17   31,474,212  ← the old pin
+    //   an agent worktree beneath it        59   31,474,506  ← every worktree
+    //   an 84-character root                84   31,474,681
+    // i.e. `string_clone = 31,474,093 + 7 × len(root)`, exact on four points
+    // spanning 6..84 characters with zero residual, and 7 × 42 = 294 is exactly
+    // the distance from the main checkout to an agent worktree. `array_clone` is
+    // invariant. `--clones=sites-tsv` attributes the WHOLE delta to ONE CloneId:
+    // `self_host_lowerer/loader.gg:32:25`, `VarDeclFromBorrow`, `String` — the
+    // `path.slice(i, i + 1)` in `parent_dir`'s character-by-character scan for
+    // the last `/`, which runs 7 times per compile. Filed as `todo/t0850` with a
+    // RED-verified repro; fixing it makes this meter checkout-invariant by
+    // construction. Until then the gate PRINTS `[clone-meter] root_len=` so two
+    // readings are never silently compared across checkouts. The effect is three
+    // orders of magnitude below the ~1% band, so it cannot flip this gate — but
+    // it corrupts ATTRIBUTION, which is what an exact pin exists for.
+    // ⚠ FOUR OTHER SUSPECTED INPUTS WERE MEASURED TO MOVE THESE COUNTERS BY
+    // EXACTLY ZERO — the gg build profile (debug vs release gg emit
+    // BYTE-IDENTICAL driver C), the driver argv spelling, the lib argv spelling,
+    // and the stdout target. They are declared as non-inputs in
+    // `scripts/clone_meter.spec`; regenerate the table with
+    // `scripts/clone_meter_probe.sh --axes`.
+    // ⚠ CORRECTION KEPT FROM THE EARLIER TEXT: A2 is NOT understated — its
+    // +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% was the
+    // CUMULATIVE overage since A2's pin, never A2's own.
+    //
+    // ── WHAT THESE FOUR NUMBERS DO NOT COVER ───────────────────────────────
+    // The LLVM lane. All four meters are C-only: `--clones=stats` is rejected
+    // under `--backend=llvm` (`grep -n "TODO(llvm-clone-stats)" src/main.rs`),
+    // so a clone regression that lands only in the LLVM backend rides straight
+    // under every one of them. Filed as `todo/t0550`.
+    //
+    // ── REGENERATE ─────────────────────────────────────────────────────────
+    //   GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 \
+    //     GG_STAGE1_TIMEOUT_SECS=1800 \
+    //     cargo test --test integration --release clone_ceiling -- --nocapture
+    // ⚠ ALL THREE knobs: the stage-1 test honours GG_STAGE1_TIMEOUT_SECS for
+    // both of its long runs, and a command that omits it is not the command
+    // these numbers came from.
+    // prints all four axes, both stages, with signed deltas against BOTH
+    // numbers, before anything asserts. `bash scripts/self_host_mem_baseline.sh
+    // --out /tmp/m.json` gives the stage-0 pair plus peak RSS
+    // (`.clone_stats.array_clone` / `.clone_stats.string_clone` — the string
+    // field was MISSING from that snapshot until R47, while all four of these
+    // comments cited the script as the way to regenerate the string pin).
+    // ⚠ `scripts/clone_attribution.sh` is NOT a triage answer for a move in
+    // these numbers: it is wired into no gate or test, and its own header puts
+    // its coverage at ~3.5% of aggregate clone volume (deep `Type__clone`
+    // cascades, explicit `.clone()` and LIR-layer emissions mint no CloneId).
+    // `--clones=sites-tsv=PATH` — which is what resolved the 294 — dumps EVERY
+    // CloneId with file:line, type and reason, and is the instrument to reach
+    // for instead.
+// PINNED-BY: cc0c0a79 VALUE: 13_144_626
+const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_144_626;
+// ⚠ THE BAND'S ANCHOR — ONE PER METER, ALL FOUR FROM THE SAME ROUND-OPEN
+// MEASUREMENT, RE-SEEDED ONCE PER ROUND AT ROUND OPEN. Nothing fails when that
+// reset is forgotten (see `struct CloneReading`). The date below is what
+// `scripts/clone_meter_check.sh --anchor-age` reads — but ⛔ NOTHING CALLS THAT
+// MODE YET, so today the reset is held by this comment alone. Wiring it into
+// the round-open step is `todo/t0851`.
+// ROUND-OPEN-DATE: 2026-08-29
+// ROUND-OPENED-BY: f3feea79 VALUE: 13_096_576
+const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_096_576;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to
@@ -30469,11 +30577,17 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_144_626;
 // self-compile, 2026-07-19 benchmark scout — deterministic for a fixed
 // tree, like the array count). Ceiling = seed + ~1% headroom.
 //
-// Discipline: measured ≤ CEILING, always; deliberate increases re-pin
-// HERE with a citation; round closes re-seed downward. Regenerate: re-run
-// this test (the fresh number always prints), or
-//   scripts/clone_attribution.sh (the [clone-stats] line + a per-site
-//   ranked breakdown of where the clones come from).
+// Discipline (as of R47: measured ≤ round-open + ~1%, pin always exact —
+// see the R47 block on `SELF_COMPILE_ARRAY_CLONE_PIN`). Regenerate: re-run
+// this test; the fresh number always prints, with signed deltas, before
+// anything asserts.
+// ⚠ THIS LINE USED TO SEND YOU TO `scripts/clone_attribution.sh` for "a
+// per-site ranked breakdown of where the clones come from". It is wired into
+// no gate or test, and its own header puts its coverage at ~3.5% of aggregate
+// clone volume, so it cannot answer a move in THIS number.
+// `--clones=sites-tsv=PATH` dumps EVERY CloneId with file:line/type/reason and
+// is the instrument that resolved the R47 "294"; `todo/t0860` carries the
+// periodic waste audit.
 //
 // Re-seeded 2026-07-19 (Class-C round): the read-only-`&`-param burn-down
 // elided the `&`-formation clones on the Rust-lane self-compile.
@@ -30522,40 +30636,23 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_144_626;
 // above (chain-link only 31,350,380 / peel only 31,108,100 — additive to
 // 31,365,688, with the residual to the shipped 31,379,632 being the widened
 // shared mutation-path peel plus the bool-arm chain-link publish).
-    // ⚖ RE-PINNED 2026-08-30 (R47 close, OWNER-AUTHORISED) at the exact measured
-    // value — a HIGH-WATER MARK WITH A DEBT, not a sanctioned cost. The R47 close
-    // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
-    // memory-safety fixes that legitimately materialize more (a typed per-receiver
-    // mutation classifier replacing a name list, for-loop drop registration, and
-    // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
-    // ten R47 integration merges, one release build per cell, `gg` md5 per row):
-    // D1 is the dominant mover on all four axes (+52,221 / +98,019 / +5,063,623 /
-    // +10,411,779). ⚠ "THE WHOLE DELTA, ZERO RESIDUE" WAS WRONG AND IS WITHDRAWN:
-    // the cells file is a CUMULATIVE CHAIN, so summing successive deltas to the
-    // total is a telescoping identity, true of any sequence — it was never
-    // evidence. STAGE-0: base f3feea79 does equal the previous ceilings exactly,
-    // and D1 is the whole delta there. STAGE-1: the previous ceilings were A2's
-    // MID-ROUND re-pin, not the round-open value; against round-open base
-    // (1,124,255,029 / 2,359,224,224) D1 accounts for 88.8% of +5,700,802 (array)
-    // and 83.4% of +12,486,518 (string). The remainder is pre-D1 inflow that A2's
-    // mid-round re-pin absorbed — which is precisely why a track must not re-pin. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
-    // and this test's own instrument disagree by 294 clones on that axis alone
-    // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
-    // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
-    // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
-    // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
-    // SITE: by ablation, an UPPER BOUND of 33% of the array overage and 47% of the
-    // string overage sit
-    // in D1's `typecheck.gg::reject_no_method_on_primitive` chokepoint, which runs
-    // up to four sequential resolution walks per method call (leading term:
-    // t0715's EquipInfo deep-clone shape). ⚠ UPPER BOUND because the ablation
-    // bundles "the reject executing" with "the reject's body being lowered at all"
-    // — stage1.c shrinks 75KB when ablated, so part of that share is not
-    // reclaimable by optimising the walks. That share is a REGRESSION TO RECLAIM,
-    // not a sanctioned cost — this ceiling comes DOWN when it is; lowering needs no
-    // sign-off. Regenerate:
-    //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
-const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_474_212;
+    // ⚖ R47 — stage-0 string_clone. The supersession chain of owner rulings, what these
+    // numbers are FOR, R47's attributed inflow, the resolution of the "294
+    // instrument disagreement" (it was an undeclared input, not a disagreement),
+    // and how to regenerate are written ONCE above
+    // `SELF_COMPILE_ARRAY_CLONE_PIN`. Read them there; this block carries only
+    // what is specific to this axis.
+    //
+    // ⚠ THIS IS THE AXIS THE 294 WAS ON, and the only one that moves with the
+    // checkout path: `string_clone = 31,474,093 + 7 x len(repo-root path)`,
+    // exact on four points, one CloneId (`loader.gg:32:25`), `todo/t0850`.
+    // The pin below is the value in an agent worktree 59 characters deep; the
+    // gate prints `[clone-meter] root_len=` beside every reading so two are
+    // never silently compared across checkouts.
+// PINNED-BY: cc0c0a79 VALUE: 31_474_506
+const SELF_COMPILE_STRING_CLONE_PIN: u64 = 31_474_506;
+// ROUND-OPENED-BY: f3feea79 VALUE: 31_379_632
+const SELF_COMPILE_STRING_CLONE_ROUND_OPEN: u64 = 31_379_632;
 
 // ── Shared clone-ceiling machinery ─────────────────────────────────────────
 // Core invariant #4 (one fix, all siblings): both clone-ceiling ratchets —
@@ -30563,6 +30660,259 @@ const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_474_212;
 // `self_host_stage1_clone_ceiling` (stage-1, the SH-lowered driver) — go
 // through this ONE producer + ONE parser, so a change to the instrumented
 // build flow or the [clone-stats] line shape can't drift between them.
+//
+// ⚠ THAT PRODUCER COVERED THE TWO GATE TESTS AND NOTHING ELSE, WHICH IS HOW THE
+// BASH INSTRUMENTS DRIFTED AWAY FROM IT. `scripts/self_host_mem_baseline.sh`
+// and `scripts/bench_stages.sh` each spelled the same invocation themselves, so
+// the meter had three definitions and two of them reported different numbers.
+// The invocation now lives in ONE declaration — `scripts/clone_meter.spec` —
+// read here by `clone_meter_spec_get` and in bash by `scripts/clone_meter.sh`.
+// `tests/lints.rs::clone_meter_instruments_read_the_declared_spec` fails when an
+// instrument spells it again.
+
+/// Read one key out of `scripts/clone_meter.spec`, the single declaration of
+/// the clone meter's workload (Layering rule 3: one source of truth per axis,
+/// read through one accessor).
+fn clone_meter_spec_get(key: &str) -> String {
+    let spec_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/clone_meter.spec");
+    let spec = std::fs::read_to_string(&spec_path).unwrap_or_else(|e| {
+        panic!("cannot read the clone-meter spec {}: {e}", spec_path.display())
+    });
+    for line in spec.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            if k.trim() == key {
+                return v.trim().to_string();
+            }
+        }
+    }
+    panic!("clone-meter spec has no key `{key}` ({})", spec_path.display());
+}
+
+/// The declared workload argv, in the declared spelling: repo-relative paths
+/// with cwd forced to the repo root, so every instrument runs provably the SAME
+/// workload.
+///
+/// ⛔ THE SPELLING DOES NOT MAKE THE NUMBER CHECKOUT-INDEPENDENT, and an earlier
+/// revision of this doc comment said it did. That sentence was the exact false
+/// belief that produced the "294-clone instrument disagreement", reproduced
+/// inside the fix for it. Two things are true instead, both measured:
+///   * the argv spelling — relative versus absolute — moves both counters by
+///     EXACTLY ZERO, so it was never what made anything independent;
+///   * the meter is NOT invariant under the checkout's absolute path. The
+///     string axis is `K + 7 × len(root)` (`root_path_is_an_input` in
+///     `scripts/clone_meter.spec`, `todo/t0850`), which is why
+///     `assert_clone_readings` prints `root_len=` beside every reading.
+fn clone_meter_run_argv() -> (PathBuf, Vec<String>) {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut argv = vec![clone_meter_spec_get("driver"), clone_meter_spec_get("lib")];
+    argv.extend(clone_meter_spec_get("run_args").split_whitespace().map(str::to_string));
+    (root, argv)
+}
+
+/// The ~1% AUTHORIZATION THRESHOLD (owner 2026-08-30), as integer percent.
+/// Integer arithmetic on purpose: the band must be reproducible to the unit by
+/// anyone re-deriving it, and `round_open / 100` is.
+const CLONE_BAND_PERCENT: u64 = 1;
+/// `band()` computes `round_open / (100 / CLONE_BAND_PERCENT)`, so 0 divides by
+/// zero and a non-divisor of 100 rounds silently (3 would give 3.03%, not 3%).
+/// Both are compile-time refusals rather than a surprise in a ratchet message.
+const _: () = assert!(
+    CLONE_BAND_PERCENT > 0 && 100 % CLONE_BAND_PERCENT == 0,
+    "CLONE_BAND_PERCENT must divide 100 exactly"
+);
+
+/// One axis's reading, judged against the meter's TWO numbers.
+///
+/// ⚠ TWO NUMBERS, AND THEY DO NOT DO THE SAME JOB.
+///   * **PIN** — the exact last measured value, with no slack of any kind. It
+///     moves at EVERY integration and it is the ATTRIBUTION baseline: a track
+///     diffs its own measurement against it to state its own delta.
+///   * **ROUND-OPEN** — the band's anchor, captured ONCE per round. The ~1%
+///     authorization threshold, and the >1% owner ask, are evaluated against
+///     THIS.
+///
+/// One number cannot do both jobs. If the band were anchored to the pin, then —
+/// since the pin moves at every integration — every integration would issue a
+/// fresh ~1% allowance, and N tracks at ~1% each would land N% with the gate
+/// green at every step. That is the salami the round-level threshold exists to
+/// close; anchoring the band at round-open is what makes "~1% per round" mean
+/// per ROUND. It also means a forgotten intra-round re-pin costs attribution
+/// precision only: it can no longer manufacture a false owner ask out of two
+/// legitimate sub-band steps.
+///
+/// ⛔ THIS IS NOT A CUMULATIVE CAP ACROSS ROUNDS. The anchor RESETS at every
+/// round open. Slow accumulation stays deliberately unbounded (owner
+/// 2026-08-30: sub-1%-per-round growth may just be the compiler growing
+/// organically, and a cap cannot tell that from waste). `todo/t0860` carries the
+/// periodic waste AUDIT that can — an audit measures the waste, a cap only ever
+/// measures the total.
+///
+/// ⚠ AND THE ANCHOR'S RESET IS A SCHEDULED ACTION WITH NO BATTERY GATE BEHIND
+/// IT. `clone_meter_pins_carry_their_provenance` checks that all four
+/// `ROUND-OPENED-BY` lines agree with each other and with their constants; it
+/// CANNOT check that the sha is *this* round's open, because "which round is
+/// open" is not in the tree. A forgotten reset does not fail loudly — it
+/// silently turns the per-round band into the cross-round accumulation the
+/// owner rejected, and manufactures a false owner ask out of two legitimate
+/// sub-band rounds. The signal that CAN see it is
+/// `scripts/clone_meter_check.sh --anchor-age`, which fails once a round has
+/// closed since the anchor was set. ⛔ IT HAS NO CALLER: no round procedure,
+/// gate or test runs it, so the reset is an unenforced obligation today, not a
+/// guarded one. Wiring it in is `todo/t0851`.
+///
+/// ⚠ WHAT PER-TRACK ATTRIBUTION CAN AND CANNOT BE TESTED FOR, so the next round
+/// does not re-derive a dead end at the cost of another ten-cell bisect.
+/// Attribution assumes per-track deltas are roughly ADDITIVE. **Patch-replay
+/// ablation is STRUCTURALLY UNABLE to test that for the pairs most likely to
+/// interact**: measuring track X "solo" on the round-open base means replaying
+/// X's diff there, and two tracks that interact usually do so by editing the
+/// same code, so the later diff does not apply. R47's D1/D3a pair was tried and
+/// failed exactly this way — `git apply` and `git apply --3way` both reject
+/// D3a's hunks in `src/ir/lowering/functions.rs` against base `f3feea79`.
+/// Hand-resolving would fabricate a tree no track ever produced. Additivity is
+/// therefore confirmed at n=1 (`A2solo` == in-chain `A2` on every counter) and
+/// is not going to be confirmed further by that method.
+/// ⊕ **The GATE does not rest on it**, which is why that is tolerable: the band
+/// is anchored at ROUND-OPEN and evaluated once, and the PIN is re-measured at
+/// every integration — so a non-additive interaction surfaces as a discrepancy
+/// in the NEXT measurement rather than being assumed away. Additivity bounds
+/// the PRECISION of a track's stated delta, nothing more.
+struct CloneReading {
+    axis: &'static str,
+    measured: u64,
+    pin: u64,
+    round_open: u64,
+}
+
+impl CloneReading {
+    /// Round-open + ~1%. The gate's comparison is BANDED even though the pin
+    /// is stored EXACT: storage is exact, comparison is banded, and conflating
+    /// the two is what produced a since-retracted claim that exact pinning
+    /// makes these four gates permanently red.
+    fn band(&self) -> u64 {
+        self.round_open + self.round_open / (100 / CLONE_BAND_PERCENT)
+    }
+
+    fn over_band(&self) -> bool {
+        self.measured > self.band()
+    }
+
+    fn signed_pct(delta: i128, base: u64) -> f64 {
+        if base == 0 { 0.0 } else { (delta as f64) * 100.0 / (base as f64) }
+    }
+
+    /// The THREE outcomes, phrased as the instruction the round acts on rather
+    /// than as a complaint. A bare pass/fail cannot express "re-pin up, you are
+    /// allowed" versus "stop and ask the owner".
+    fn action(&self) -> &'static str {
+        if self.over_band() {
+            "STOP — OWNER ASK (past the round's ~1% authorization threshold)"
+        } else if self.measured < self.pin {
+            "RE-PIN DOWN to the measured value (automatic — lowering never needs sign-off)"
+        } else if self.measured > self.pin {
+            "RE-PIN UP to the measured value (implicitly authorized — inside the round's ~1%)"
+        } else {
+            "none — the measurement equals the pin"
+        }
+    }
+
+    /// The line a round reads to re-pin, and the line a track pastes verbatim
+    /// into its report as its attribution.
+    ///
+    /// ⚠ `delta=` is SIGNED, and there are two of them, because there are two
+    /// numbers. The old print showed `headroom = CEILING.saturating_sub(measured)`,
+    /// which clamps at zero: at the R47 close all four axes were OVER and all
+    /// four printed `headroom=0`, making the one quantity an attribution report
+    /// needs — the signed distance — unrepresentable.
+    fn report_line(&self, tag: &str) -> String {
+        let d_pin = self.measured as i128 - self.pin as i128;
+        let d_open = self.measured as i128 - self.round_open as i128;
+        format!(
+            "[{tag}] {}={} pin={} delta_pin={:+} pct_pin={:+.3}% round_open={} \
+             delta_open={:+} pct_open={:+.3}% band={} verdict={} action={}",
+            self.axis,
+            self.measured,
+            self.pin,
+            d_pin,
+            Self::signed_pct(d_pin, self.pin),
+            self.round_open,
+            d_open,
+            Self::signed_pct(d_open, self.round_open),
+            self.band(),
+            if self.over_band() { "OVER-BAND" } else { "GREEN" },
+            self.action(),
+        )
+    }
+}
+
+/// Print every axis, THEN assert once over all of them.
+///
+/// ⚠ THE COLLECTED ASSERT IS THE POINT. Each ceiling test used to end in TWO
+/// sequential one-way `assert!`s, so a run with both axes over reported only the
+/// first: the second tripped meter could not announce itself as a failure, and a
+/// round re-pinning off a two-test failure had to read the printed lines to
+/// discover it was really four. Collecting the comparisons changes no comparison
+/// operator; it changes what a failure is allowed to hide.
+fn assert_clone_readings(tag: &str, readings: &[CloneReading]) {
+    // ⚠ THE ROOT PATH IS AN INPUT TO THE STRING AXIS, AND IT IS PRINTED SO THAT
+    // TWO READINGS ARE NEVER SILENTLY COMPARED ACROSS CHECKOUTS. Measured law,
+    // four points spanning 6..84 characters with zero residual:
+    //   string_clone = K + 7 × len(absolute repo-root path)
+    // and array_clone is invariant. That is where the R47 "294-clone instrument
+    // disagreement" came from: `/workspace/gorget` is 17 characters, an agent
+    // worktree under it is 59, and 7 × 42 = 294. NEITHER INSTRUMENT WAS WRONG —
+    // the meter had an undeclared input. The underlying waste (the self-host
+    // clones seven strings per character of the project path) is filed as
+    // `todo/t0850`; it is three orders of magnitude below the ~1% band, so it
+    // cannot flip this gate, but it corrupts ATTRIBUTION, which is what the
+    // exact pin exists for. Regenerate: `scripts/clone_meter_probe.sh --axes`.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    println!(
+        "[clone-meter] root_len={} root={} (string_clone scales +7/char — todo/t0850)",
+        root.as_os_str().len(),
+        root.display(),
+    );
+    for r in readings {
+        println!("{}", r.report_line(tag));
+    }
+    let over: Vec<&CloneReading> = readings.iter().filter(|r| r.over_band()).collect();
+    if over.is_empty() {
+        return;
+    }
+    let detail = over
+        .iter()
+        .map(|r| format!("  · {}", r.report_line(tag)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    panic!(
+        "CLONE RATCHET: {} of {} axes are past the round's ~{}% authorization threshold.\n{}\n\n\
+         WHAT TO DO, in order:\n\
+         1. This is NOT a re-pin you may make. Growth past the band is an OWNER ASK; a track never\n\
+            writes a pin at all, and the round writes one only inside the band.\n\
+         2. Attribute it before you argue about it: `scripts/clone_meter_check.sh --track --base\n\
+            <round-open sha> --report <your report>` says whether your diff could have moved the\n\
+            meter, and `todo/t0860` carries the waste audit. Do not reach for\n\
+            `scripts/clone_attribution.sh` expecting an answer: it is wired into no gate and sees\n\
+            ~3.5% of aggregate clone volume by its own header.\n\
+         3. The likely causes, in the order they have actually occurred here: a lost move or borrow\n\
+            (an over-materialize at a consuming position), a mark that got coarser (root-granular\n\
+            where it should be path-granular), or a resolution walk added to a hot path.\n\
+         4. Regenerate with the DECLARED invocation, never a hand-rolled one:\n\
+            GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 GG_STAGE1_TIMEOUT_SECS=1800 \\\n\
+              cargo test --test integration --release clone_ceiling -- --nocapture\n\
+            (`scripts/clone_meter.spec` declares what that measures, and what has been MEASURED not\n\
+            to change it: the gg build profile, the argv spelling and the stdout target all move\n\
+            these counters by exactly zero.)",
+        over.len(),
+        readings.len(),
+        CLONE_BAND_PERCENT,
+        detail,
+    );
+}
 
 /// Build the self-host driver instrumented with `--clones=stats` to a private
 /// `exe` path (never clobbers the cached driver the other self-host tests
@@ -30574,14 +30924,28 @@ const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_474_212;
 /// is assembled with this preamble (discovered by scripts/bench_stages.sh).
 fn build_instrumented_clone_driver(exe: &Path) -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let driver_gg = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.gg");
+    // Driver path and build flags come from the DECLARED spec, spelled
+    // repo-relative with cwd forced to the repo root — never assembled here.
+    let driver_gg = clone_meter_spec_get("driver");
+    let build_args: Vec<String> =
+        clone_meter_spec_get("build_args").split_whitespace().map(str::to_string).collect();
     // CARGO_BIN_EXE_gg (not gg_command) → the default C backend regardless of
     // GG_BACKEND, so the emitted `.c` (with the instrumented preamble) always
     // exists — the LLVM backend would emit only `.ll`/exe.
+    //
+    // ⚠ THE PROFILE IS NOT NORMALISED HERE, AND IT DOES NOT NEED TO BE. This
+    // resolves to `target/debug/gg` under a plain sweep and `target/release/gg`
+    // under `--release`, so the round-close battery genuinely VARIES it — which
+    // would make refusing an undeclared profile a red gate rather than a guard.
+    // It is instead DECLARED as a non-input, on a measurement: a driver built by
+    // debug gg and a driver built by release gg emit BYTE-IDENTICAL C
+    // (`scripts/clone_meter.spec`, `profile_is_an_input = no`;
+    // regenerate with `scripts/clone_meter_probe.sh --axes`).
     let build = run_with_deadline(
         Command::new(env!("CARGO_BIN_EXE_gg"))
+            .current_dir(&manifest_dir)
             .arg("build")
-            .arg("--clones=stats")
+            .args(&build_args)
             .arg(&driver_gg)
             .arg("-o")
             .arg(exe),
@@ -30624,12 +30988,112 @@ fn parse_clone_stats(stderr: &str) -> (u64, u64) {
     (array_clone, string_clone)
 }
 
+/// THE THREE-OUTCOME GATE, DEMONSTRATED IN ALL THREE DIRECTIONS.
+///
+/// The ratchet's decision is pure arithmetic over two constants, so it is
+/// pinned here without building anything. A gate whose decision logic has only
+/// ever been exercised by one green measurement is not evidence (Core #13); the
+/// expensive `self_host_clone_ceiling` run proves the WIRING, and this proves
+/// the DECISION — including the two branches a green tree never reaches.
+#[test]
+fn clone_gate_says_which_of_three_outcomes_and_what_is_authorized() {
+    let at = |measured| CloneReading {
+        axis: "array_clone",
+        measured,
+        pin: 1_000_000,
+        round_open: 1_000_000,
+    };
+
+    // BELOW the pin -> green, and the pin FOLLOWS IT DOWN. Automatic: lowering
+    // never needs sign-off, and a downward move that depends on someone
+    // remembering is not a ratchet.
+    let below = at(990_000);
+    assert!(!below.over_band());
+    assert!(below.action().starts_with("RE-PIN DOWN"), "{}", below.action());
+
+    // OVER by <= ~1% -> still green, and the round is IMPLICITLY AUTHORIZED to
+    // re-pin up to the exact number. Storage exact, comparison banded.
+    let inside = at(1_009_999);
+    assert_eq!(inside.band(), 1_010_000);
+    assert!(!inside.over_band(), "1,009,999 is inside a 1% band on 1,000,000");
+    assert!(inside.action().starts_with("RE-PIN UP"), "{}", inside.action());
+
+    // The band edge is INCLUSIVE — the test is `measured > band`, so a
+    // measurement landing exactly on it is authorized, not an ask.
+    assert!(!at(1_010_000).over_band());
+    // One clone past it is an OWNER ASK.
+    let over = at(1_010_001);
+    assert!(over.over_band());
+    assert!(over.action().starts_with("STOP"), "{}", over.action());
+
+    // THE BAND IS ANCHORED AT ROUND-OPEN, NOT AT THE PIN — which is what makes
+    // "~1% per round" mean per ROUND. Three integrations at +0.9% each, with
+    // the pin following each one up, must NOT quietly land +2.7%.
+    let mut pin = 1_000_000u64;
+    let round_open = 1_000_000u64;
+    let mut caught = None;
+    for step in 1..=3u64 {
+        let measured = 1_000_000 + 9_000 * step; // +0.9%, +1.8%, +2.7%
+        let r = CloneReading { axis: "array_clone", measured, pin, round_open };
+        if r.over_band() {
+            caught = Some(step);
+            break;
+        }
+        pin = measured; // the integrating parent re-pins; the ANCHOR does not move
+    }
+    assert_eq!(
+        caught,
+        Some(2),
+        "salami: with the band anchored at the pin instead of at round-open, successive <=1% \
+         integrations would each re-arm a fresh allowance and the gate would stay green all the \
+         way past 2.7%. The second step must be the one that asks."
+    );
+
+    // The report line is an INSTRUCTION, not a complaint — a bare pass/fail
+    // cannot express "re-pin up, you are allowed" versus "stop and ask".
+    let line = over.report_line("clone-ceiling");
+    assert!(line.contains("delta_open=+10001"), "{line}");
+    assert!(line.contains("verdict=OVER-BAND"), "{line}");
+    assert!(line.contains("action=STOP"), "{line}");
+    // The signed delta is representable in BOTH directions — the print it
+    // replaced clamped with `saturating_sub`, so all four axes of the R47 close
+    // printed `headroom=0` while over, hiding the one number attribution needs.
+    assert!(below.report_line("clone-ceiling").contains("delta_pin=-10000"));
+}
+
+/// A SECOND TRIPPED AXIS CAN ANNOUNCE ITSELF.
+///
+/// The two ceiling tests used to end in two sequential one-way `assert!`s, so a
+/// run with both axes over reported only the first — which is how a round
+/// re-pinning off a two-test failure had to read the printed lines to discover
+/// it was really four axes. The collected assert names every failing axis.
+#[test]
+#[should_panic(expected = "2 of 2 axes")]
+fn clone_gate_reports_every_tripped_axis_not_just_the_first() {
+    assert_clone_readings(
+        "clone-ceiling",
+        &[
+            CloneReading {
+                axis: "array_clone",
+                measured: 2_000_000,
+                pin: 1_000_000,
+                round_open: 1_000_000,
+            },
+            CloneReading {
+                axis: "string_clone",
+                measured: 3_000_000,
+                pin: 1_000_000,
+                round_open: 1_000_000,
+            },
+        ],
+    );
+}
+
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_clone_ceiling() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let driver_gg = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.gg");
-    let lib_dir = manifest_dir.join("lib");
+    // No local driver/lib paths: the invocation comes from the declared spec
+    // (`clone_meter_run_argv`), which is the whole point of the declaration.
     let exe = std::env::temp_dir().join(format!("gg_clone_ceiling_{}", std::process::id()));
 
     // Build the stage-0 driver with --clones=stats so its binary reports the
@@ -30637,14 +31101,14 @@ fn self_host_clone_ceiling() {
     // cached driver the other self-host tests share.
     let _driver_c = build_instrumented_clone_driver(&exe);
 
-    // The canonical clone-pressure workload: the driver compiling its own source
-    // (same as scripts/self_host_mem_baseline.sh). Stats land on stderr at exit.
+    // The canonical clone-pressure workload: the driver compiling its own source.
+    // Argv and cwd come from the DECLARED spec, which is now the SAME declaration
+    // scripts/self_host_mem_baseline.sh and scripts/bench_stages.sh read — the
+    // three used to spell it themselves and had drifted apart. Stats land on
+    // stderr at exit.
+    let (spec_cwd, spec_argv) = clone_meter_run_argv();
     let run = run_with_deadline(
-        Command::new(&exe)
-            .arg(&driver_gg)
-            .arg(&lib_dir)
-            .arg("--lir-c")
-            .stdout(Stdio::null()),
+        Command::new(&exe).current_dir(&spec_cwd).args(&spec_argv).stdout(Stdio::null()),
         "clone_ceiling_run",
         build_timeout(),
     );
@@ -30658,39 +31122,25 @@ fn self_host_clone_ceiling() {
     let stderr = String::from_utf8_lossy(&run.stderr);
     let (measured, measured_string) = parse_clone_stats(&stderr);
 
-    // Always print the fresh numbers — round closes read them to re-seed
-    // downward. Both print BEFORE either asserts, so a tripped ratchet still
-    // shows both measurements.
-    println!(
-        "[clone-ceiling] array_clone={} ceiling={} headroom={}",
-        measured,
-        SELF_COMPILE_ARRAY_CLONE_CEILING,
-        SELF_COMPILE_ARRAY_CLONE_CEILING.saturating_sub(measured),
-    );
-    println!(
-        "[clone-ceiling] string_clone={} ceiling={} headroom={}",
-        measured_string,
-        SELF_COMPILE_STRING_CLONE_CEILING,
-        SELF_COMPILE_STRING_CLONE_CEILING.saturating_sub(measured_string),
-    );
-    assert!(
-        measured <= SELF_COMPILE_ARRAY_CLONE_CEILING,
-        "CLONE-PRESSURE RATCHET TRIPPED: self-compile array_clone={measured} exceeds the \
-         ceiling {SELF_COMPILE_ARRAY_CLONE_CEILING}. A change made the compiler clone more. \
-         Either fix the regression (likely an over-materialize or a lost move/borrow), or — \
-         only if the increase is a justified semantic cost — re-pin the ceiling WITH a \
-         citation in the comment above. Regenerate: \
-         bash scripts/self_host_mem_baseline.sh --out /tmp/m.json → .clone_stats.array_clone"
-    );
-    assert!(
-        measured_string <= SELF_COMPILE_STRING_CLONE_CEILING,
-        "STRING-CLONE-PRESSURE RATCHET TRIPPED: self-compile string_clone={measured_string} \
-         exceeds the ceiling {SELF_COMPILE_STRING_CLONE_CEILING}. A change made the compiler \
-         clone more strings. Either fix the regression (likely an over-materialize or a lost \
-         move/borrow — scripts/clone_attribution.sh ranks the clone sites by reason), or — \
-         only if the increase is a justified semantic cost — re-pin the ceiling WITH a \
-         citation in the comment above. Regenerate: re-run this test (the fresh number \
-         always prints as [clone-ceiling] string_clone=…)."
+    // ONE assertion over BOTH axes, after BOTH have printed — see
+    // `assert_clone_readings`. The two sequential one-way asserts this replaces
+    // meant a run with both axes over could only ever report the first.
+    assert_clone_readings(
+        "clone-ceiling",
+        &[
+            CloneReading {
+                axis: "array_clone",
+                measured,
+                pin: SELF_COMPILE_ARRAY_CLONE_PIN,
+                round_open: SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN,
+            },
+            CloneReading {
+                axis: "string_clone",
+                measured: measured_string,
+                pin: SELF_COMPILE_STRING_CLONE_PIN,
+                round_open: SELF_COMPILE_STRING_CLONE_ROUND_OPEN,
+            },
+        ],
     );
 }
 
@@ -30728,10 +31178,13 @@ fn self_host_clone_ceiling() {
 //
 // Discipline: measured ≤ CEILING, always. A deliberate increase needs a
 // cited re-pin HERE (what changed, why the clones are justified). Round
-// closes RE-SEED downward when the fresh number drops — the ratchet only
-// tightens. Regenerate / triage a trip:
-//   scripts/bench_stages.sh --out /tmp/stages.tsv   (the S1->2 array_clone)
-//   scripts/clone_attribution.sh                    (per-site ranked breakdown)
+// closes RE-SEED downward when the fresh number drops. Regenerate / triage:
+//   scripts/bench_stages.sh --out /tmp/stages.tsv   (the S1->2 row, now with
+//                                                    BOTH ratcheted counters)
+//   gg build --clones=sites-tsv=PATH ...            (EVERY CloneId, with
+//                                                    file:line/type/reason)
+// ⚠ NOT `scripts/clone_attribution.sh`: no gate runs it, and its own header
+// puts its coverage at ~3.5% of aggregate clone volume.
 //
 // RE-SEEDED DOWN 2026-07-19 (stage-1 empty-blocks recovery): the Class-C
 // round had re-pinned this UP to 1,282.2M (measured 1,269,469,150, +~24%)
@@ -30796,7 +31249,7 @@ fn self_host_clone_ceiling() {
 // (+15,814,912, +1.427%). ✅ OWNER-RATIFIED 2026-08-29 — same ruling as the
 // stage-0 ceilings, same revert instruction (back to 1,108,440,117).
 // Regenerated on this tree this session; attributed by the 2x2 ablation
-// tabulated on `SELF_COMPILE_ARRAY_CLONE_CEILING`:
+// tabulated on `SELF_COMPILE_ARRAY_CLONE_PIN`:
 //   chain-link only : 1,123,804,797  (+15,364,680, +1.386%)
 //   CoW peel only   : 1,108,737,004  (+296,887,    +0.027%)
 // So on the ARRAY axis the cost is the chain-link fix; on the STRING axis below
@@ -30826,11 +31279,27 @@ fn self_host_clone_ceiling() {
 //
 // ATTRIBUTION, measured rather than asserted:
 //   * net +16 NON-COMMENT lines of self-host source (+24 comment lines) over
-//     ~132k lines the stage-1 binary must itself compile = +0.012% of input.
-//     Regenerate: `git diff <base>..HEAD -- tests/fixtures/self_host_lowerer/
-//     compiler/data/resources.gg | grep '^+' | grep -vE '^\+\+\+|^\+\s*#' | wc -l`
-//   * so ~6x the source-growth fraction is the lowering-BEHAVIOUR change, i.e.
+//     the 81,509 lines the stage-1 binary must itself compile = +0.020% of
+//     input.
+//     ⚠ THE DENOMINATOR IS CORRECTED. This read "~132k lines" with no closure
+//     and no command behind it; a counter-census then guessed ~102k. The
+//     workload's true closure is now MEASURED rather than globbed — every file
+//     the run actually opens, canonicalised through realpath so a file reached
+//     through the self_host_lowerer -> self_host_typechecker SYMLINK SEAM is
+//     counted where it really lives: 66 `.gg` files, 81,509 lines (22 in
+//     self_host_lowerer, 14 through the seam, 28 in lib/std, 2 in
+//     compiler/data), plus 63 C runtime sources under src/backend/c/runtime.
+//     It is declared in `scripts/clone_meter.spec` and regenerated with
+//     `scripts/clone_meter_probe.sh --closure`.
+//     ⚠ AND THE PATHSPEC BELOW WAS A LINE-WRAP, NOT A MISSING PATH: the wrap
+//     ate the space between TWO pathspecs that both exist. Reflowed:
+//     Regenerate: `git diff <base>..HEAD --
+//       tests/fixtures/self_host_lowerer/ compiler/data/resources.gg
+//       | grep '^+' | grep -vE '^\+\+\+|^\+\s*#' | wc -l`
+//   * so ~4x the source-growth fraction is the lowering-BEHAVIOUR change, i.e.
 //     the widening above. That is the honest split; it is not all bookkeeping.
+//     (The multiple moves with the corrected denominator; the conclusion —
+//     that most of the cost is BEHAVIOUR, not bookkeeping — does not.)
 //
 // SCALE, so the comparison to the recorded bomb is explicit. The 2026-07-19
 // blowout was 7x (35.2M vs 4.96M probe clones) and a 1332s-vs-600s stage
@@ -30856,40 +31325,28 @@ fn self_host_clone_ceiling() {
 // TO REVERT: 1,124,255,029 / 2,359,224,224, and re-run
 //   GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 \
 //     cargo test --test integration --release clone_ceiling -- --nocapture
-    // ⚖ RE-PINNED 2026-08-30 (R47 close, OWNER-AUTHORISED) at the exact measured
-    // value — a HIGH-WATER MARK WITH A DEBT, not a sanctioned cost. The R47 close
-    // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
-    // memory-safety fixes that legitimately materialize more (a typed per-receiver
-    // mutation classifier replacing a name list, for-loop drop registration, and
-    // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
-    // ten R47 integration merges, one release build per cell, `gg` md5 per row):
-    // D1 is the dominant mover on all four axes (+52,221 / +98,019 / +5,063,623 /
-    // +10,411,779). ⚠ "THE WHOLE DELTA, ZERO RESIDUE" WAS WRONG AND IS WITHDRAWN:
-    // the cells file is a CUMULATIVE CHAIN, so summing successive deltas to the
-    // total is a telescoping identity, true of any sequence — it was never
-    // evidence. STAGE-0: base f3feea79 does equal the previous ceilings exactly,
-    // and D1 is the whole delta there. STAGE-1: the previous ceilings were A2's
-    // MID-ROUND re-pin, not the round-open value; against round-open base
-    // (1,124,255,029 / 2,359,224,224) D1 accounts for 88.8% of +5,700,802 (array)
-    // and 83.4% of +12,486,518 (string). The remainder is pre-D1 inflow that A2's
-    // mid-round re-pin absorbed — which is precisely why a track must not re-pin. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
-    // and this test's own instrument disagree by 294 clones on that axis alone
-    // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
-    // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
-    // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
-    // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
-    // SITE: by ablation, an UPPER BOUND of 33% of the array overage and 47% of the
-    // string overage sit
-    // in D1's `typecheck.gg::reject_no_method_on_primitive` chokepoint, which runs
-    // up to four sequential resolution walks per method call (leading term:
-    // t0715's EquipInfo deep-clone shape). ⚠ UPPER BOUND because the ablation
-    // bundles "the reject executing" with "the reject's body being lowered at all"
-    // — stage1.c shrinks 75KB when ablated, so part of that share is not
-    // reclaimable by optimising the walks. That share is a REGRESSION TO RECLAIM,
-    // not a sanctioned cost — this ceiling comes DOWN when it is; lowering needs no
-    // sign-off. Regenerate:
-    //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_129_955_831;
+    // ⚖ R47 — stage-1 array_clone. The supersession chain of owner rulings, what these
+    // numbers are FOR, R47's attributed inflow, the resolution of the "294
+    // instrument disagreement" (it was an undeclared input, not a disagreement),
+    // and how to regenerate are written ONCE above
+    // `SELF_COMPILE_ARRAY_CLONE_PIN`. Read them there; this block carries only
+    // what is specific to this axis.
+    //
+    // ⚠ STAGE-1 IS THE ONLY METER THAT SEES A SELF-HOST-LOWERING-ONLY CLONE
+    // BOMB. Stage-0 guards Rust gg's lowering of the self-host; this guards the
+    // C the self-host itself EMITS. The 2026-07-19 blowout was 7x (35.2M vs
+    // 4.96M probe clones) and a 1332s-vs-600s stage deadline MISS, and it rode
+    // entirely UNDER the stage-0 ceiling. That is why a diff touching the
+    // declared closure owes BOTH stages, and why the tempting narrowing —
+    // "a Rust-frontend-only change cannot move stage-1" — is left unproven
+    // rather than acted on (`scripts/clone_meter.spec`, `stage1_closure_roots`).
+    // ⊕ The counters ride the runtime PREAMBLE, prepended from the
+    // --clones=stats driver's emitted C, so a `src/backend/c/` change moves this
+    // number with `stage1.c` byte-identical.
+// PINNED-BY: cc0c0a79 VALUE: 1_129_955_831
+const STAGE1_ARRAY_CLONE_PIN: u64 = 1_129_955_831;
+// ROUND-OPENED-BY: f3feea79 VALUE: 1_124_255_029
+const STAGE1_ARRAY_CLONE_ROUND_OPEN: u64 = 1_124_255_029;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -30951,7 +31408,7 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_129_955_831;
 // 31,092,792 / 1,108,440,117).
 //
 // WHERE IT COMES FROM, by the FULL 2x2 (table on
-// `SELF_COMPILE_ARRAY_CLONE_CEILING`; all four cells regenerated this session):
+// `SELF_COMPILE_ARRAY_CLONE_PIN`; all four cells regenerated this session):
 //   chain-link only : 2,086,329,621  (+4,216,168,   +0.20%)
 //   CoW peel only   : 2,354,389,551  (+272,276,098, +13.08%)
 //   SHIPPED         : 2,359,224,224  (+277,110,771, +13.31%)
@@ -31037,50 +31494,32 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_129_955_831;
 //
 // ⚠ RE-PINNED 2026-08-29 (R47 Track A2) to 2,361,764,496 (+2,540,272,
 // +0.108%) — the typed per-receiver CoW mutation classifier. Full citation,
-// attribution and scale comparison on `STAGE1_ARRAY_CLONE_CEILING` above; the
+// attribution and scale comparison on `STAGE1_ARRAY_CLONE_PIN` above; the
 // two were re-pinned together from ONE measurement run and must be read
 // together.
-    // ⚖ RE-PINNED 2026-08-30 (R47 close, OWNER-AUTHORISED) at the exact measured
-    // value — a HIGH-WATER MARK WITH A DEBT, not a sanctioned cost. The R47 close
-    // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
-    // memory-safety fixes that legitimately materialize more (a typed per-receiver
-    // mutation classifier replacing a name list, for-loop drop registration, and
-    // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
-    // ten R47 integration merges, one release build per cell, `gg` md5 per row):
-    // D1 is the dominant mover on all four axes (+52,221 / +98,019 / +5,063,623 /
-    // +10,411,779). ⚠ "THE WHOLE DELTA, ZERO RESIDUE" WAS WRONG AND IS WITHDRAWN:
-    // the cells file is a CUMULATIVE CHAIN, so summing successive deltas to the
-    // total is a telescoping identity, true of any sequence — it was never
-    // evidence. STAGE-0: base f3feea79 does equal the previous ceilings exactly,
-    // and D1 is the whole delta there. STAGE-1: the previous ceilings were A2's
-    // MID-ROUND re-pin, not the round-open value; against round-open base
-    // (1,124,255,029 / 2,359,224,224) D1 accounts for 88.8% of +5,700,802 (array)
-    // and 83.4% of +12,486,518 (string). The remainder is pre-D1 inflow that A2's
-    // mid-round re-pin absorbed — which is precisely why a track must not re-pin. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
-    // and this test's own instrument disagree by 294 clones on that axis alone
-    // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
-    // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
-    // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
-    // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
-    // SITE: by ablation, an UPPER BOUND of 33% of the array overage and 47% of the
-    // string overage sit
-    // in D1's `typecheck.gg::reject_no_method_on_primitive` chokepoint, which runs
-    // up to four sequential resolution walks per method call (leading term:
-    // t0715's EquipInfo deep-clone shape). ⚠ UPPER BOUND because the ablation
-    // bundles "the reject executing" with "the reject's body being lowered at all"
-    // — stage1.c shrinks 75KB when ablated, so part of that share is not
-    // reclaimable by optimising the walks. That share is a REGRESSION TO RECLAIM,
-    // not a sanctioned cost — this ceiling comes DOWN when it is; lowering needs no
-    // sign-off. Regenerate:
-    //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
-const STAGE1_STRING_CLONE_CEILING: u64 = 2_371_710_742;
+    // ⚖ R47 — stage-1 string_clone. The supersession chain of owner rulings, what these
+    // numbers are FOR, R47's attributed inflow, the resolution of the "294
+    // instrument disagreement" (it was an undeclared input, not a disagreement),
+    // and how to regenerate are written ONCE above
+    // `SELF_COMPILE_ARRAY_CLONE_PIN`. Read them there; this block carries only
+    // what is specific to this axis.
+    //
+    // ⚠ THE LARGEST DEBT OF THE FOUR. Its 2026-08-28 re-seed was +13.31%, and
+    // the census above attributes it to 35 newly-marked ROOT identifiers whose
+    // marks are ROOT-granular rather than PATH-granular (`todo/t0715`). Read it
+    // together with `STAGE1_ARRAY_CLONE_PIN`: the two are re-pinned from ONE
+    // measurement run and mean nothing apart.
+// PINNED-BY: cc0c0a79 VALUE: 2_371_710_742
+const STAGE1_STRING_CLONE_PIN: u64 = 2_371_710_742;
+// ROUND-OPENED-BY: f3feea79 VALUE: 2_359_224_224
+const STAGE1_STRING_CLONE_ROUND_OPEN: u64 = 2_359_224_224;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
 fn self_host_stage1_clone_ceiling() {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let driver_gg = manifest_dir.join("tests/fixtures/self_host_lowerer/driver.gg");
-    let lib_dir = manifest_dir.join("lib");
+    // BOTH self-compiles below use the DECLARED invocation, so stage-0 and
+    // stage-1 are measured on provably the same workload spelling.
+    let (spec_cwd, spec_argv) = clone_meter_run_argv();
     let tmp_dir = std::env::temp_dir();
     let exe = tmp_dir.join(format!("gg_stage1_ceiling_{}", std::process::id()));
 
@@ -31100,14 +31539,19 @@ fn self_host_stage1_clone_ceiling() {
     let runtime_preamble = &rust_c[..preamble_end];
 
     // (3) Emit the stage-1 body C: stage-0 driver lowers driver.gg → LIR C
-    // (backend-independent, byte-identical whether or not instrumented). The
+    // (backend-independent, byte-identical whether or not instrumented — the
+    // INSTRUMENTED half of that claim was an unguarded invariant-asserting
+    // comment and is now VERIFIED rather than inherited: a driver built WITHOUT
+    // `--clones=stats` emits stage1.c with md5 cb7906bd6c088d0b0acdaa7567b2685c,
+    // identical to the instrumented driver's, at 2026-08-30. Re-check by
+    // building the driver both ways and md5-ing the `--lir-c` stdout. ⚠ The
+    // BACKEND half is still unchecked, and cannot be checked with these
+    // counters: `--clones=stats` is rejected under `--backend=llvm`
+    // (`todo/t0550`). Do not lean on it.). The
     // emitting run ALSO prints its own [clone-stats] on stderr (the stage-0
     // count) — we ignore it; we only want the body on stdout.
     let body_out = run_with_deadline(
-        Command::new(&exe)
-            .arg(&driver_gg)
-            .arg(&lib_dir)
-            .arg("--lir-c"),
+        Command::new(&exe).current_dir(&spec_cwd).args(&spec_argv),
         "stage1_clone_ceiling stage0 → stage1.c",
         // Default 600s — generous vs the ~260s emit; leaves ~2× headroom under a
         // --test-threads=4 sweep (the serial group protects the shared driver
@@ -31151,11 +31595,7 @@ fn self_host_stage1_clone_ceiling() {
     // workload (driver.gg self-compile). Its [clone-stats] line on stderr is
     // the stage-1 self-compile clone count we guard.
     let run = run_with_deadline(
-        Command::new(&stage1_bin)
-            .arg(&driver_gg)
-            .arg(&lib_dir)
-            .arg("--lir-c")
-            .stdout(Stdio::null()),
+        Command::new(&stage1_bin).current_dir(&spec_cwd).args(&spec_argv).stdout(Stdio::null()),
         "stage1_clone_ceiling stage1 self-compile",
         // Default 600s — ~2× the ~260s stage-1 self-compile, headroom under sweep
         // load. Honors GG_STAGE1_TIMEOUT_SECS (CI overrides higher) like every other stage.
@@ -31174,40 +31614,24 @@ fn self_host_stage1_clone_ceiling() {
     let stderr = String::from_utf8_lossy(&run.stderr);
     let (measured, measured_string) = parse_clone_stats(&stderr);
 
-    // Always print the fresh numbers BEFORE either asserts — round closes read
-    // them to re-seed downward, and a tripped ratchet still shows both.
-    println!(
-        "[stage1-clone-ceiling] array_clone={} ceiling={} headroom={}",
-        measured,
-        STAGE1_ARRAY_CLONE_CEILING,
-        STAGE1_ARRAY_CLONE_CEILING.saturating_sub(measured),
-    );
-    println!(
-        "[stage1-clone-ceiling] string_clone={} ceiling={} headroom={}",
-        measured_string,
-        STAGE1_STRING_CLONE_CEILING,
-        STAGE1_STRING_CLONE_CEILING.saturating_sub(measured_string),
-    );
-    assert!(
-        measured <= STAGE1_ARRAY_CLONE_CEILING,
-        "STAGE-1 CLONE-PRESSURE RATCHET TRIPPED: stage-1 self-compile array_clone={measured} \
-         exceeds the ceiling {STAGE1_ARRAY_CLONE_CEILING}. A change made the SELF-HOST's \
-         lowering clone more (this fires even when the stage-0 ceiling holds — the classic \
-         self-host-only clone bomb). Either fix the regression (likely an over-materialize or \
-         a lost move/borrow in the self-host's own lowering), or — only if the increase is a \
-         justified semantic cost — re-pin the ceiling WITH a citation in the comment above. \
-         Triage: scripts/bench_stages.sh --out /tmp/stages.tsv (the S1->2 array_clone) + \
-         scripts/clone_attribution.sh (per-site ranked breakdown)."
-    );
-    assert!(
-        measured_string <= STAGE1_STRING_CLONE_CEILING,
-        "STAGE-1 STRING-CLONE-PRESSURE RATCHET TRIPPED: stage-1 self-compile \
-         string_clone={measured_string} exceeds the ceiling {STAGE1_STRING_CLONE_CEILING}. A \
-         change made the self-host's lowering clone more strings. Either fix the regression \
-         (likely an over-materialize or a lost move/borrow — scripts/clone_attribution.sh \
-         ranks the clone sites by reason), or — only if the increase is a justified semantic \
-         cost — re-pin the ceiling WITH a citation in the comment above. Regenerate: re-run \
-         this test (the fresh number always prints as [stage1-clone-ceiling] string_clone=…)."
+    // ONE assertion over BOTH axes, after BOTH have printed — see
+    // `assert_clone_readings`.
+    assert_clone_readings(
+        "stage1-clone-ceiling",
+        &[
+            CloneReading {
+                axis: "array_clone",
+                measured,
+                pin: STAGE1_ARRAY_CLONE_PIN,
+                round_open: STAGE1_ARRAY_CLONE_ROUND_OPEN,
+            },
+            CloneReading {
+                axis: "string_clone",
+                measured: measured_string,
+                pin: STAGE1_STRING_CLONE_PIN,
+                round_open: STAGE1_STRING_CLONE_ROUND_OPEN,
+            },
+        ],
     );
 }
 
@@ -57798,6 +58222,85 @@ fn sh_primitive_admitted_methods_still_run() {
              check.",
         ),
     }
+}
+
+/// KNOWN GAP (R47 Track F5a) — THE SELF-HOST'S `parent_dir` CLONES ONE HEAP
+/// `String` PER CHARACTER OF THE PATH, so the compiler's total clone count is a
+/// linear function of how long the absolute path to your checkout is.
+///
+/// This is the mechanism behind the R47 "294-clone instrument disagreement".
+/// Neither instrument was wrong: the meter had an undeclared input. Measured on
+/// ONE fixed binary at four root paths, zero residual —
+///   `/tmp/s` (6)  31,474,135 · `/workspace/gorget` (17) 31,474,212
+///   worktree (59) 31,474,506 · a 84-char root         31,474,681
+/// i.e. `string_clone = 31,474,093 + 7 × len(root)`, and 7 × 42 = 294 is exactly
+/// the gap between the main checkout and an agent worktree. `--clones=sites-tsv`
+/// attributes the WHOLE delta to ONE CloneId — `self_host_lowerer/loader.gg:32:25`,
+/// `VarDeclFromBorrow`, `String` — the `path.slice(i, i + 1)` inside
+/// `parent_dir`'s character-by-character scan for the last `/`. `parent_dir`
+/// runs 7 times per compile; hence 7 per character.
+///
+/// The FAMILY is `t0543`/`t0561`/`t0540` (the `VarDeclFromBorrow` clone class).
+/// What DISCRIMINATES this one: it needs no compiler change at all. Even a
+/// perfect lazy-bind reclaim leaves `slice(i, i+1)` minting a genuinely new
+/// one-character `String`; the fix is to stop scanning character by character.
+/// Filed as `todo/t0850`.
+#[test]
+#[ignore = "KNOWN GAP: the self-host's parent_dir materializes one String per \
+character of the path, so the clone meters scale with the length of the \
+checkout's absolute path. Asserts the INTENDED behaviour: the count does not \
+depend on the input length."]
+fn known_gap_sh_parent_dir_clones_one_string_per_path_char() {
+    let dir = std::env::temp_dir().join(format!("gg_parent_dir_probe_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let exe = dir.join("probe");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src = manifest_dir
+        .join("tests/fixtures/known_gaps/sh_parent_dir_clones_one_string_per_path_char.gg");
+    let build = run_with_deadline(
+        Command::new(env!("CARGO_BIN_EXE_gg"))
+            .arg("build")
+            .arg("--clones=stats")
+            .arg(&src)
+            .arg("-o")
+            .arg(&exe),
+        "parent_dir_probe_build",
+        build_timeout(),
+    );
+    assert!(
+        build.status.success(),
+        "probe build failed: {}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+
+    let count = |path: &str| -> u64 {
+        let out = run_with_deadline(
+            Command::new(&exe).arg(path).stdout(Stdio::null()),
+            "parent_dir_probe_run",
+            build_timeout(),
+        );
+        assert!(out.status.success(), "probe run failed on {path}");
+        parse_clone_stats(&String::from_utf8_lossy(&out.stderr)).1
+    };
+
+    // Two paths of very different length; same number of '/' separators, so the
+    // only thing that varies is how many CHARACTERS the scan walks.
+    let short = "/a/b";
+    let long = "/aaaaaaaaaa/bbbbbbbbbb/cccccccccc/d";
+    let (a, b) = (count(short), count(long));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        a, b,
+        "finding the last '/' in a path allocated {} Strings for a {}-character path and {} for a \
+         {}-character one — a delta of {}, which is exactly the character delta. Locating a \
+         separator must not cost one heap String per character. See todo/t0850; the live site is \
+         tests/fixtures/self_host_lowerer/loader.gg:26-38.",
+        a,
+        short.len(),
+        b,
+        long.len(),
+        b as i64 - a as i64,
+    );
 }
 
 /// KNOWN GAP (R47 Track D1) — the cell the primitive-receiver reject

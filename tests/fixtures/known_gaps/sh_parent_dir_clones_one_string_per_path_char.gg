@@ -1,0 +1,61 @@
+# KNOWN GAP (R47 Track F5a) — `parent_dir` in the self-host loader materializes
+# ONE heap String PER CHARACTER of the path it is given.
+#
+# THE SHAPE, copied from `tests/fixtures/self_host_lowerer/loader.gg:26-38`:
+# a `while` loop over the path's indices whose body does
+# `String ch = path.slice(i, i + 1)` just to compare one character to "/".
+# That bind is a `VarDeclFromBorrow` on a fresh 1-character String, so the loop
+# costs `len(path)` calls to `gorget_string_clone_to_owned` — for an operation
+# whose whole job is to find the last '/'.
+#
+# WHY IT IS MORE THAN AN INEFFICIENCY. `parent_dir` is called 7 times per
+# self-host compile, on paths rooted at the PROJECT ROOT, so the compiler's
+# total `string_clone` count is a linear function of how long the absolute path
+# to your checkout happens to be:
+#
+#   string_clone = K + 7 x len(repo-root path)
+#
+# measured on ONE binary at four root paths spanning 6..84 characters, zero
+# residual, and attributed to this ONE CloneId (site #2985, `loader.gg:32:25`,
+# `VarDeclFromBorrow`, `String`) which accounted for the whole delta. That is
+# what made the R47 clone ratchet read 31,474,212 in `/workspace/gorget` and
+# 31,474,506 in an agent worktree 42 characters deeper: 7 x 42 = 294.
+#
+# INTENDED BEHAVIOUR: finding the last '/' in a path allocates a number of
+# Strings that does NOT scale with the path's length. The `#[ignore]`d test
+# `known_gap_sh_parent_dir_clones_one_string_per_path_char` asserts exactly
+# that, by running this program over a short and a long path and requiring the
+# two `string_clone` totals to be EQUAL. Today they differ by the length delta.
+#
+# ⚠ KEEP `.slice()` HERE, DELIBERATELY, EVEN THOUGH D22 RETIRED IT. This
+# fixture is allowlisted in `tests/lints.rs::no_dot_slice_after_d22` because the
+# retired spelling IS the defect: `.slice(a, b)` materializes an owned String on
+# every call and the ratified colon form `s[a:b]` materializes NOTHING —
+# measured 1,002 vs 2 `string_clone` over 1,000 identical calls returning
+# identical results. Rewriting this to the colon form, or to `split`, would make
+# the fixture green and hide the thing it exists to hold.
+
+from std.os import args
+
+String parent_dir(String path):
+    # Extract parent directory: find last '/' by scanning
+    int last_slash = -1
+    int i = 0
+    while i < path.len():
+        if i + 1 <= path.len():
+            String ch = path.slice(i, i + 1)
+            if ch == "/":
+                last_slash = i
+        i += 1
+    if last_slash >= 0:
+        return path.slice(0, last_slash)
+    return "."
+
+void main():
+    # The path comes from argv so ONE binary can be measured at two input
+    # lengths — the clone COUNT is the observable here, not stdout.
+    Vector[String] argv = args()
+    String p = "/a/b"
+    if argv.len() > 1:
+        p = argv.get(1).unwrap()
+    print(parent_dir(p))

@@ -23,6 +23,10 @@
 #                the cc wrapper execs cc1 in a fork the poll can't see.
 #                (/usr/bin/time is absent in the dev container.)
 #   array_clone  the stage's self-reported [clone-stats] array_clone count.
+#   string_clone the stage's self-reported [clone-stats] string_clone count —
+#                the OTHER ratcheted counter. It was absent from this table
+#                until R47 even though the string ceiling's comment cited this
+#                script as the way to regenerate its pin.
 #                ALL compile stages report it: the aggregate counters and the
 #                armed atexit report live in the runtime PREAMBLE, prepended
 #                from the --clones=stats driver's emitted C — so even the
@@ -51,13 +55,20 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+# The S0_build and S0->1 stages ARE the clone meter, so they read the one
+# declaration rather than spelling the invocation again — that duplication is
+# how this script and the Rust gate came to report different string counts.
+# shellcheck source=scripts/clone_meter.sh
+source "$REPO_ROOT/scripts/clone_meter.sh"
 
 OUT="/tmp/stages_$$.tsv"
 if [[ "${1:-}" == "--out" ]]; then OUT="$2"; shift 2; fi
 
 GG="./target/release/gg"
-DRIVER_GG="tests/fixtures/self_host_lowerer/driver.gg"
-LIB="$REPO_ROOT/lib"
+DRIVER_GG=$(clone_meter_get driver)
+LIB=$(clone_meter_get lib)
+RUN_ARGS=$(clone_meter_get run_args)
+BUILD_ARGS=$(clone_meter_get build_args)
 W="$(mktemp -d /tmp/bench_stages.XXXXXX)"
 DRIVER_EXE="$W/driver_exe"
 
@@ -102,18 +113,21 @@ run_stage() {
     echo -e "${wall}\t$(awk -v k="$rss_kb" 'BEGIN{printf "%.0f", k / 1024}')"
 }
 # clones_of <label> — the stage's [clone-stats] array_clone, or "-" if absent.
+# ⚠ BOTH ratcheted counters are reported now. Until R47 this harness printed
+# array_clone only, while the STRING ceiling's comment cited it as the way to
+# regenerate the string pin — an instrument cited for an axis it did not print.
 clones_of() {
-    local c
-    c=$(grep '^\[clone-stats\]' "$W/$1.stderr" 2>/dev/null | tail -1 | \
-        awk '{for (i=1; i<=NF; i++) {split($i, k, "="); if (k[1]=="array_clone") print k[2]}}')
-    echo "${c:--}"
+    clone_meter_counter "$W/$1.stderr" array_clone
+}
+string_clones_of() {
+    clone_meter_counter "$W/$1.stderr" string_clone
 }
 
-echo -e "stage\twall_s\tpeak_rss_mb\tarray_clone\tnote" | tee "$OUT"
+echo -e "stage\twall_s\tpeak_rss_mb\tarray_clone\tstring_clone\tnote" | tee "$OUT"
 
 r=$(run_stage S0_build poll /dev/null -- \
-    "$GG" build --clones=stats "$DRIVER_GG" -o "$DRIVER_EXE")
-echo -e "S0_build\t${r}\t-\tRust gg (release) builds driver.gg (spawns cc internally)" | tee -a "$OUT"
+    "$GG" build $BUILD_ARGS "$DRIVER_GG" -o "$DRIVER_EXE")
+echo -e "S0_build\t${r}\t-\t-\tRust gg (release) builds driver.gg (spawns cc internally)" | tee -a "$OUT"
 
 # Runtime preamble = everything before the first user typedef in the driver's
 # emitted C (`gg build X -o E` writes the C next to the exe as E.c).
@@ -121,26 +135,26 @@ PRE="$W/preamble.c"
 awk '/^typedef struct __gg_/{exit} {print}' "$DRIVER_EXE.c" > "$PRE"
 
 r=$(run_stage S0to1 selfreport "$W/stage1.c" -- \
-    "$DRIVER_EXE" "$DRIVER_GG" "$LIB" --lir-c)
-echo -e "S0->1\t${r}\t$(clones_of S0to1)\tdriver self-compiles driver.gg+lib (clone workload)" | tee -a "$OUT"
+    "$DRIVER_EXE" "$DRIVER_GG" "$LIB" $RUN_ARGS)
+echo -e "S0->1\t${r}\t$(clones_of S0to1)\t$(string_clones_of S0to1)\tdriver self-compiles driver.gg+lib (clone workload)" | tee -a "$OUT"
 cat "$PRE" "$W/stage1.c" > "$W/stage1_full.c"
 
 r=$(run_stage cc_1 none /dev/null -- \
     cc -O0 -w -o "$W/stage1_bin" "$W/stage1_full.c" -lm -lpthread)
-echo -e "cc_1\t${r%%$'\t'*}\tn/a (fork)\t-\tcc -O0 stage1.c" | tee -a "$OUT"
+echo -e "cc_1\t${r%%$'\t'*}\tn/a (fork)\t-\t-\tcc -O0 stage1.c" | tee -a "$OUT"
 
 r=$(run_stage S1to2 poll "$W/stage2.c" -- \
-    "$W/stage1_bin" "$DRIVER_GG" "$LIB" --lir-c)
-echo -e "S1->2\t${r}\t$(clones_of S1to2)\tO0 stage1_bin self-compiles" | tee -a "$OUT"
+    "$W/stage1_bin" "$DRIVER_GG" "$LIB" $RUN_ARGS)
+echo -e "S1->2\t${r}\t$(clones_of S1to2)\t$(string_clones_of S1to2)\tO0 stage1_bin self-compiles" | tee -a "$OUT"
 cat "$PRE" "$W/stage2.c" > "$W/stage2_full.c"
 
 r=$(run_stage cc_2 none /dev/null -- \
     cc -O0 -w -o "$W/stage2_bin" "$W/stage2_full.c" -lm -lpthread)
-echo -e "cc_2\t${r%%$'\t'*}\tn/a (fork)\t-\tcc -O0 stage2.c" | tee -a "$OUT"
+echo -e "cc_2\t${r%%$'\t'*}\tn/a (fork)\t-\t-\tcc -O0 stage2.c" | tee -a "$OUT"
 
 r=$(run_stage S2to3 poll "$W/stage3.c" -- \
-    "$W/stage2_bin" "$DRIVER_GG" "$LIB" --lir-c)
-echo -e "S2->3\t${r}\t$(clones_of S2to3)\tO0 stage2_bin self-compiles (convergence)" | tee -a "$OUT"
+    "$W/stage2_bin" "$DRIVER_GG" "$LIB" $RUN_ARGS)
+echo -e "S2->3\t${r}\t$(clones_of S2to3)\t$(string_clones_of S2to3)\tO0 stage2_bin self-compiles (convergence)" | tee -a "$OUT"
 
 if diff -q "$W/stage2.c" "$W/stage3.c" >/dev/null 2>&1; then verdict=IDENTICAL; else verdict=DIFFER; fi
 echo "convergence: stage2.c vs stage3.c → $verdict" | tee -a "$OUT"

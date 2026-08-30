@@ -18568,7 +18568,11 @@ fn count_bang_move_in_code(roots: &[&str]) -> usize {
 /// D22 shrink-only lint (Core #6 executable guard). Retiring `.slice()` on
 /// String/Vector receivers in favor of colon-slice `v[a:b]` (ratified
 /// 2026-07-06). Track C-3a landed the non-SH migration + this ratchet;
-/// Track C-3b (208 SH sites in `tests/fixtures/self_host_lowerer/`) is
+/// Track C-3b (**205 call sites** in `tests/fixtures/self_host_lowerer/` across
+/// 11 files, recounted 2026-08-30 by THIS function — i.e. after strings and
+/// comments are stripped, which is what a migration has to change; a raw
+/// `grep -o '\.slice('` says 211 across 12 because 6 sit inside string
+/// literals and comments. Regenerate rather than quote either) is
 /// hard-blocked on Track A (SH stage-2 memory-safety fix) and defers to
 /// R40 if A stalls. Meanwhile the SH corpora sit in an ALLOWLIST — the
 /// allowlist entry drops out atomically when C-3b lands, ratcheting the
@@ -18635,12 +18639,39 @@ fn count_dot_slice_in_code(roots: &[&str]) -> usize {
     let mut total = 0usize;
     for root in roots {
         walk_gg_files(Path::new(root), &mut |path: &Path| {
-            // ALLOWLIST: self-host lowerer corpora — the 208 SH `.slice()`
-            // sites are gated on Track A (SH stage-2 memory-safety fix)
-            // landing before Track C-3b can migrate them. Remove this
-            // check when C-3b lands (atomic ceiling ratchet 208 → 0).
+            // ALLOWLIST: self-host lowerer corpora — the SH `.slice()` sites
+            // are gated on Track A (SH stage-2 memory-safety fix) landing
+            // before Track C-3b can migrate them. Remove this check when C-3b
+            // lands (atomic ceiling ratchet → 0).
+            // ⚠ The count is 205, not the 208 this comment carried: recounted
+            // 2026-08-30 over `self_host_lowerer/*.gg` by the stripping walk
+            // below — 205 CALL SITES across 11 files. A raw `grep -o '\.slice('`
+            // over the same glob says 211 across 12, the difference being 6
+            // occurrences inside string literals and comments, which a migration
+            // does not touch. `self_host_typechecker/*.gg` has none of its own;
+            // the 14 that appear there are the symlink seam. Regenerate the
+            // number rather than quoting either.
+            //
+            // ⚠ R47: THAT MIGRATION IS NOT COSMETIC, AND NOBODY HAD MEASURED
+            // IT. `.slice(a, b)` materializes an OWNED String on every call;
+            // the ratified colon form `s[a:b]` materializes NOTHING. Measured
+            // on one program, 1,000 identical calls returning identical
+            // results: `string_clone` 1,002 vs 2. So every remaining SH
+            // `.slice()` site is a per-call heap materialization the ratified
+            // spelling does not pay — a mechanical clone reclaim sitting
+            // inside a migration that reads like a rename. Recorded on
+            // `todo/t0316`; the live instance that made it visible (a
+            // per-character scan in `loader.gg::parent_dir`) is `todo/t0850`.
             let s = path.to_string_lossy();
             if s.contains("self_host_lowerer") {
+                return;
+            }
+            // ALLOWLIST: the `todo/t0850` repro DELIBERATELY spells the retired
+            // method, because the retired spelling is the defect it holds. It
+            // asserts the INTENDED behaviour (a slice scan whose clone count
+            // does not scale with the input length) and graduates to a live
+            // regression fixture when `loader.gg::parent_dir` is fixed.
+            if s.ends_with("known_gaps/sh_parent_dir_clones_one_string_per_path_char.gg") {
                 return;
             }
             let Ok(src) = fs::read_to_string(path) else { return };
@@ -25045,4 +25076,443 @@ fn race_warned_fixtures_pin_their_scheduler() {
          {SCHEDULER_PINNED_SENTENCE:?}. The corpus has {pinned_total} such fixtures; make the \
          comment say so (and update SCHEDULER_PINNED_SENTENCE) rather than deleting the claim.",
     );
+}
+// THE CLONE METER — the guards that make the four clone ratchets mean something
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Four ratchet constants in `tests/integration.rs` pin a clone count taken from
+// ONE workload. Until R47 that workload had THREE spellings (the Rust gate,
+// `scripts/self_host_mem_baseline.sh`, `scripts/bench_stages.sh`), the pins had
+// no provenance, and nothing obliged a change that moved a meter to say so.
+// `grep -n "CLONE_CEILING\|clone_ceiling" tests/lints.rs` returned one docstring
+// hit and no enforcement. These four lints are that enforcement.
+//
+// ⚠ WHAT A LINT CAN AND CANNOT SEE. A lint sees a TREE. Three of these are
+// tree-only. The fourth — the one that matters most — is about a DIFF and an
+// ABSENCE, so it delegates to `scripts/clone_meter_check.sh` and, on every run,
+// DEMONSTRATES THAT SCRIPT REFUSING a real closure-touching range whose report
+// carries no measurement. A guard that has never been seen to fail is not
+// evidence (Core #13); this one fails on demand, every time it runs.
+
+fn clone_meter_spec_text() -> String {
+    fs::read_to_string("scripts/clone_meter.spec")
+        .expect("scripts/clone_meter.spec is missing — it is the meter's one declaration")
+}
+
+fn clone_meter_spec_values(key: &str) -> Vec<String> {
+    clone_meter_spec_text()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| l.split_once('='))
+        .filter(|(k, _)| k.trim() == key)
+        .map(|(_, v)| v.trim().to_string())
+        .collect()
+}
+
+/// Every pinned clone constant carries provenance BOUND TO ITS VALUE.
+///
+/// ⚠ WHY `VALUE:` AND NOT JUST A SHA. A provenance line that records only *who*
+/// wrote the pin passes unchanged when someone edits the constant underneath it
+/// — the exact move it exists to police. Binding the recorded value to the
+/// constant makes any pin move that skips the provenance RED, tree-only and
+/// diff-free.
+///
+/// ⚠ WHAT IT STILL CANNOT SEE, said plainly so nobody mistakes it for the
+/// staleness guard: a MISSED re-pin. That leaves a perfectly self-consistent
+/// tree — constant P, provenance for P, matching value — because the missing
+/// thing is a MEASUREMENT, and a measurement is not in the tree.
+/// `scripts/clone_meter_check.sh --pin-staleness` is the signal that can see it.
+#[test]
+fn clone_meter_pins_carry_their_provenance() {
+    let src = fs::read_to_string("tests/integration.rs").expect("read integration.rs");
+    let lines: Vec<&str> = src.lines().collect();
+    let mut checked = 0usize;
+    for (i, line) in lines.iter().enumerate() {
+        let t = line.trim();
+        let Some(rest) = t.strip_prefix("const ") else { continue };
+        let Some((name, value)) = rest.split_once(": u64 = ") else { continue };
+        let is_pin = name.ends_with("_CLONE_PIN");
+        let is_open = name.ends_with("_CLONE_ROUND_OPEN");
+        if !is_pin && !is_open {
+            continue;
+        }
+        let value = value.trim_end_matches(';').trim();
+        let tag = if is_pin { "// PINNED-BY:" } else { "// ROUND-OPENED-BY:" };
+        assert!(i > 0, "{name} has no line above it to carry provenance");
+        let prov = lines[i - 1].trim();
+        assert!(
+            prov.starts_with(tag),
+            "clone pin `{name}` has no provenance line. The line directly above it must read\n\
+             `{tag} <sha> VALUE: {value}` — the sha the measurement was taken at, and the value\n\
+             it printed. Without it a pin can move with nobody accountable for the number.\n\
+             Found instead: {prov}"
+        );
+        let recorded = prov
+            .split("VALUE:")
+            .nth(1)
+            .unwrap_or_else(|| panic!("`{name}`'s provenance line has no `VALUE:` field: {prov}"))
+            .trim();
+        assert_eq!(
+            recorded, value,
+            "clone pin `{name}` was moved to {value} but its provenance still records {recorded}.\n\
+             A pin move rewrites its provenance line — that is the whole point of binding the two."
+        );
+        let sha = prov
+            .split_whitespace()
+            .nth(2)
+            .unwrap_or_else(|| panic!("`{name}`'s provenance line has no sha: {prov}"));
+        assert!(
+            sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+            "`{name}`'s provenance sha `{sha}` is not a commit id"
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked, 8,
+        "expected 8 pinned clone constants (PIN + ROUND_OPEN on each of the four axes), found \
+         {checked}. A new axis needs its provenance pair too; a removed one needs this count \
+         lowered deliberately."
+    );
+
+    // ⚠ THE FOUR ANCHORS ARE ONE EVENT, NOT FOUR. The band means "per round"
+    // only if all four axes are anchored at the SAME round open; a partial
+    // re-seed leaves some axes measuring against an older round and is exactly
+    // how a per-round band decays into cross-round accumulation.
+    let anchors: Vec<&str> = src
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("// ROUND-OPENED-BY:"))
+        .filter_map(|r| r.split_whitespace().next())
+        .collect();
+    assert_eq!(anchors.len(), 4, "expected 4 ROUND-OPENED-BY lines, found {}", anchors.len());
+    assert!(
+        anchors.windows(2).all(|w| w[0] == w[1]),
+        "the four band anchors do not share one sha: {anchors:?}. All four axes are re-seeded \
+         from ONE round-open measurement; a partial re-seed makes the ~1% band mean different \
+         spans on different axes."
+    );
+    let anchor = anchors[0];
+    let ok = std::process::Command::new("git")
+        .args(["merge-base", "--is-ancestor", anchor, "HEAD"])
+        .status()
+        .expect("git merge-base");
+    assert!(
+        ok.success(),
+        "the band anchor `{anchor}` is not an ancestor of HEAD — it names no round open on this \
+         history."
+    );
+    // ⚠ WHAT THIS STILL CANNOT SEE: whether `{anchor}` is THIS round's open.
+    // "Which round is open" is not in the tree, so a FORGOTTEN re-seed passes
+    // every assert above. `scripts/clone_meter_check.sh --anchor-age` is the
+    // signal for that, and ⛔ NOTHING CALLS IT — wiring it into the round-open
+    // step is `todo/t0851`.
+    let date_lines = src.lines().filter(|l| l.trim().starts_with("// ROUND-OPEN-DATE:")).count();
+    assert_eq!(
+        date_lines, 1,
+        "expected exactly one `// ROUND-OPEN-DATE:` line (the one thing --anchor-age reads), \
+         found {date_lines}"
+    );
+}
+
+/// The meter's instruments read the DECLARED invocation; none of them spells it.
+///
+/// This is the Layering-rule-3 guard at the harness boundary: one source of
+/// truth per axis, read through one accessor. Its class is exactly what went
+/// wrong — three instruments, three spellings, two different numbers for one
+/// meter on one tree.
+#[test]
+fn clone_meter_instruments_read_the_declared_spec() {
+    // The declaration itself, plus the two accessors, are allowed to name the
+    // driver path and the flags. Nothing else is.
+    let instruments = [
+        "scripts/self_host_mem_baseline.sh",
+        "scripts/bench_stages.sh",
+        "scripts/clone_meter_probe.sh",
+    ];
+    let declared_driver = clone_meter_spec_values("driver")
+        .pop()
+        .expect("spec declares no `driver`");
+    // ⚠ ARM-COUNT GUARD (Core #4 litmus: "what stops site N+1?"). The list above
+    // is hand-written, so a FOURTH measuring script could be added beside it and
+    // never be checked.
+    //
+    // The discriminator is SEMANTIC, not a path glob: a script is an instrument
+    // of THIS meter when it spells the declared workload AND arms the counters
+    // (`--clones=stats`) or reads their output (`[clone-stats]`). That is what
+    // separates a reading from a build. `scripts/gg_impl.sh` builds the same
+    // driver as a deliverable compiler and takes no measurement — it is
+    // correctly outside; `scripts/clone_attribution.sh` arms the counters but is
+    // a GENERIC tool (`<gg> <target.gg> …`) that only mentions this workload in
+    // a comment, and comments are stripped below.
+    let arms = ["--clones=stats", "[clone-stats]"];
+    for entry in fs::read_dir("scripts").expect("read scripts/").flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("sh") {
+            continue;
+        }
+        let rel = p.to_string_lossy().to_string();
+        if instruments.contains(&rel.as_str()) || rel.ends_with("clone_meter.sh") {
+            continue;
+        }
+        let Ok(src) = fs::read_to_string(&p) else { continue };
+        let code: String =
+            src.lines().map(|l| l.split('#').next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+        let names_workload = code.contains(&declared_driver);
+        let takes_a_reading = arms.iter().any(|a| code.contains(a));
+        assert!(
+            !(names_workload && takes_a_reading),
+            "{rel} spells the clone meter's workload AND arms its counters, but is not in this \
+             lint's instrument list. Either it measures the meter — add it, and make it source \
+             scripts/clone_meter.sh — or it must not do both."
+        );
+    }
+    for path in instruments {
+        let src = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        let sourced = src.contains("source \"$REPO_ROOT/scripts/clone_meter.sh\"")
+            || src.contains("source \"$ROOT/scripts/clone_meter.sh\"");
+        assert!(
+            sourced,
+            "{path} measures the clone meter but does not source scripts/clone_meter.sh. \
+             Every instrument builds its invocation from scripts/clone_meter.spec; an \
+             instrument that rolls its own is how the meter came to have two values."
+        );
+        // A hardcoded driver path outside a comment is the drift itself.
+        for (n, line) in src.lines().enumerate() {
+            let code = line.split('#').next().unwrap_or("");
+            assert!(
+                !code.contains(&declared_driver),
+                "{path}:{} hardcodes the declared driver path `{declared_driver}`. \
+                 Read it with `clone_meter_get driver` instead — that is the one declaration.\n\
+                 {line}",
+                n + 1
+            );
+        }
+    }
+    // The Rust gate reads it too.
+    let gate = fs::read_to_string("tests/integration.rs").expect("read integration.rs");
+    for f in ["fn self_host_clone_ceiling", "fn self_host_stage1_clone_ceiling"] {
+        let start = gate.find(f).unwrap_or_else(|| panic!("{f} is gone from integration.rs"));
+        let body = &gate[start..(start + 6000).min(gate.len())];
+        assert!(
+            body.contains("clone_meter_run_argv()"),
+            "{f} does not take its argv from the declared spec (clone_meter_run_argv)."
+        );
+        assert!(
+            !body.contains("\"tests/fixtures/self_host_lowerer/driver.gg\""),
+            "{f} hardcodes the driver path instead of reading the declared spec."
+        );
+    }
+}
+
+/// The workload's true closure is DECLARED, and the SYMLINK SEAM is visible in
+/// a diff rather than buried in a comment.
+///
+/// ⚠ THE SEAM IS THE POINT. 15 of the 38 `.gg` files in `self_host_lowerer/`
+/// are symlinks into `self_host_typechecker/`. A change to one of them moves
+/// every clone meter while `git diff -- tests/fixtures/self_host_lowerer/`
+/// shows NOTHING. Pinning the manifest here means any change to the seam
+/// surfaces as a diff in `scripts/clone_meter.spec`.
+#[test]
+fn clone_meter_closure_declares_the_symlink_seam() {
+    let dir = Path::new("tests/fixtures/self_host_lowerer");
+    let mut actual: Vec<String> = Vec::new();
+    let mut gg_files = 0usize;
+    for entry in fs::read_dir(dir).expect("read self_host_lowerer") {
+        let entry = entry.expect("dir entry");
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.ends_with(".gg") {
+            continue;
+        }
+        gg_files += 1;
+        if let Ok(target) = fs::read_link(entry.path()) {
+            actual.push(format!("{name} -> {}", target.display()));
+        }
+    }
+    actual.sort();
+    let mut declared = clone_meter_spec_values("symlink");
+    declared.sort();
+    assert_eq!(
+        actual, declared,
+        "the self_host_lowerer symlink seam and its declaration in scripts/clone_meter.spec \
+         disagree.\nA file added to or removed from the seam CHANGES THE CLONE METER'S WORKLOAD \
+         while showing no diff in the directory that names it — which is why the manifest is \
+         declared. Update the `symlink =` lines in the spec (and re-measure: a workload change \
+         moves the pins)."
+    );
+    assert_eq!(
+        gg_files, 38,
+        "self_host_lowerer/ now has {gg_files} .gg files, not the 38 the spec's closure block \
+         records. Update `closure_gg_files`/the closure block in scripts/clone_meter.spec — the \
+         workload grew or shrank, and the pins moved with it."
+    );
+    for root in clone_meter_spec_values("closure_roots").pop().expect("closure_roots").split_whitespace() {
+        assert!(
+            Path::new(root).exists(),
+            "declared closure root `{root}` does not exist. A closure that names a missing path \
+             cannot tell a track whether its diff can move the meter."
+        );
+    }
+}
+
+/// The row-5 guard, DEMONSTRATED FAILING on every run.
+///
+/// ⚠ ROW 5's CLASS IS THE OMISSION, NOT THE CHANGE. The four meters already
+/// caught R47's inflow — at round close, after the fact, and only because
+/// someone went looking. The defect is that a track could move a meter with
+/// NOTHING obliging it to measure. So the demonstration cannot be "the meter
+/// detects a clone-adding change" (nobody doubts that); it has to be "a
+/// closure-touching diff with no attribution is REFUSED".
+///
+/// This test runs `scripts/clone_meter_check.sh` against the most recent REAL
+/// commit that touched the declared closure, in both directions:
+///   * report with no measurement section  → the script must EXIT NON-ZERO
+///   * report with the required section    → the script must EXIT ZERO
+/// Both are zero-build, so an output-review that is barred from building can
+/// run the same check on the track it is reviewing.
+#[test]
+fn clone_meter_check_refuses_an_unattributed_track() {
+    let roots = clone_meter_spec_values("closure_roots").pop().expect("closure_roots");
+    // A REAL commit that changed the workload — self-locating, so the
+    // demonstration cannot rot into a range that touches nothing. We take the
+    // newest one whose own `<sha>~1..<sha>` range does NOT also move a pin, so
+    // the range exercises exactly the branch under demonstration and not the
+    // separate "tracks do not re-pin" refusal.
+    // ⊕ Recency IS the right axis here, unlike the pin-mover search below: this
+    // wants the NEWEST closure-touching commit, and integration only ever adds
+    // newer ones, so a sibling landing ahead moves the answer forward rather
+    // than out of reach. The bound is generous for the same reason.
+    let mut args = vec!["log", "-200", "--format=%H", "--"];
+    args.extend(roots.split_whitespace());
+    let out = std::process::Command::new("git").args(&args).output().expect("git log");
+    let candidates: Vec<String> =
+        String::from_utf8_lossy(&out.stdout).lines().map(|l| l.trim().to_string()).collect();
+    assert!(
+        !candidates.is_empty(),
+        "no commit in history touches the declared closure — the closure is wrong"
+    );
+    let moves_a_pin = |sha: &str| -> bool {
+        let d = std::process::Command::new("git")
+            .args(["diff", &format!("{sha}~1"), sha, "--", "tests/integration.rs"])
+            .output()
+            .expect("git diff");
+        String::from_utf8_lossy(&d.stdout).lines().any(|l| {
+            (l.starts_with('+') || l.starts_with('-'))
+                && (l.contains("_CLONE_PIN:") || l.contains("_CLONE_ROUND_OPEN:"))
+        })
+    };
+    let sha = candidates
+        .iter()
+        .find(|s| !moves_a_pin(s))
+        .unwrap_or_else(|| {
+            panic!(
+                "every one of the last {} closure-touching commits also moves a pin, so this \
+                 demonstration cannot isolate the missing-attribution branch. Widen the search.",
+                candidates.len()
+            )
+        })
+        .clone();
+
+    let run = |base: &str, tip: &str, report: &str| -> std::process::Output {
+        std::process::Command::new("bash")
+            .args([
+                "scripts/clone_meter_check.sh",
+                "--track",
+                "--base",
+                base,
+                "--tip",
+                tip,
+                "--report",
+                report,
+            ])
+            .output()
+            .expect("run clone_meter_check.sh")
+    };
+
+    // ── RED: the closure moved, the report says nothing. ───────────────────
+    let empty = std::env::temp_dir().join(format!("clone_meter_empty_{}.md", std::process::id()));
+    fs::write(&empty, "# a report with no measurement\n").expect("write");
+    let red = run(&format!("{sha}~1"), &sha, empty.to_str().unwrap());
+    let red_err = String::from_utf8_lossy(&red.stderr).to_string();
+    assert!(
+        !red.status.success(),
+        "clone_meter_check.sh PASSED a closure-touching range whose report carries no \
+         measurement. That is exactly the class it exists to refuse — a guard that green-lights \
+         its own class is worse than none.\nstdout:\n{}\nstderr:\n{red_err}",
+        String::from_utf8_lossy(&red.stdout)
+    );
+
+    // ── GREEN: the same range, with the required attribution section. ──────
+    let head = sha.clone();
+    let good = std::env::temp_dir().join(format!("clone_meter_good_{}.md", std::process::id()));
+    fs::write(
+        &good,
+        format!(
+            "## CLONE METER\n\
+             CLONE-METER-AT: {head}\n\
+             CLONE-METER-CMD: cargo test --test integration --release clone_ceiling -- --nocapture\n\
+             [clone-ceiling] array_clone=1 pin=1 delta_pin=+0\n\
+             [clone-ceiling] string_clone=1 pin=1 delta_pin=+0\n\
+             [stage1-clone-ceiling] array_clone=1 pin=1 delta_pin=+0\n\
+             [stage1-clone-ceiling] string_clone=1 pin=1 delta_pin=+0\n"
+        ),
+    )
+    .expect("write");
+    let green = run(&format!("{sha}~1"), &sha, good.to_str().unwrap());
+    assert!(
+        green.status.success(),
+        "clone_meter_check.sh REFUSED a report that carries the full attribution section. A gate \
+         nobody can satisfy stops being a gate.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&green.stdout),
+        String::from_utf8_lossy(&green.stderr)
+    );
+    // ── RED again, on the OTHER refusal: a track that moves a PIN. ────────
+    // ⚠ This branch was written as `git diff … | grep -q …` and did NOT WORK:
+    // under `set -o pipefail` grep exits on its first match, git diff takes
+    // SIGPIPE, and the pipeline reports 141, so the `if` was never true. It
+    // passed every review and every run until it was pointed at a commit that
+    // really did move a pin. Hence this third demonstration.
+    //
+    // ⚠ AND THE SEARCH FOR THAT COMMIT IS BY CONTENT, NOT BY RECENCY — the
+    // first version bounded it to the last N commits and BROKE ON INTEGRATION.
+    // On the track's own branch the pin-moving commit was 4 deep; merged onto a
+    // main carrying a sibling track's whole history it fell outside the window,
+    // and this test failed in the parent's merge with its own "widen the
+    // search" message. A recency window is a promise about how many commits
+    // land ahead of you, which is not a promise a track can make.
+    // `git log -G<text>` searches every commit whose DIFF touched that text, so
+    // it cannot be pushed out by anything landing in between.
+    let pin_movers = |needle: &str| -> Vec<String> {
+        let out = std::process::Command::new("git")
+            .args(["log", &format!("-G{needle}"), "--format=%H", "--", "tests/integration.rs"])
+            .output()
+            .expect("git log -G");
+        String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect()
+    };
+    // Two plain-substring searches rather than one alternation: no dependence
+    // on which regex flavour `-G` is configured for.
+    let pin_mover = pin_movers("_CLONE_PIN:")
+        .into_iter()
+        .chain(pin_movers("_CLONE_ROUND_OPEN:"))
+        .find(|s| moves_a_pin(s));
+    match pin_mover {
+        Some(pm) => {
+            let red2 = run(&format!("{pm}~1"), &pm, good.to_str().unwrap());
+            assert!(
+                !red2.status.success(),
+                "clone_meter_check.sh PASSED a diff that MOVES A PIN. Tracks report deltas; only \
+                 the integrating parent writes a pin.\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&red2.stdout),
+                String::from_utf8_lossy(&red2.stderr)
+            );
+        }
+        None => panic!(
+            "no commit in this history moves a clone pin, so the 'tracks do not re-pin' branch \
+             cannot be demonstrated. This is a CONTENT search over all of history, so a sibling \
+             track landing ahead cannot cause it — suspect a shallow clone, or the constants \
+             having been renamed without updating the two needles above."
+        ),
+    }
+
+    let _ = fs::remove_file(&empty);
+    let _ = fs::remove_file(&good);
 }
