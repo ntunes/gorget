@@ -30371,10 +30371,16 @@ fn self_host_bootstrap() {
     // mutation classifier replacing a name list, for-loop drop registration, and
     // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
     // ten R47 integration merges, one release build per cell, `gg` md5 per row):
-    // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
-    // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
-    // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
-    // inflow. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
+    // D1 is the dominant mover on all four axes (+52,221 / +98,019 / +5,063,623 /
+    // +10,411,779). ⚠ "THE WHOLE DELTA, ZERO RESIDUE" WAS WRONG AND IS WITHDRAWN:
+    // the cells file is a CUMULATIVE CHAIN, so summing successive deltas to the
+    // total is a telescoping identity, true of any sequence — it was never
+    // evidence. STAGE-0: base f3feea79 does equal the previous ceilings exactly,
+    // and D1 is the whole delta there. STAGE-1: the previous ceilings were A2's
+    // MID-ROUND re-pin, not the round-open value; against round-open base
+    // (1,124,255,029 / 2,359,224,224) D1 accounts for 88.8% of +5,700,802 (array)
+    // and 83.4% of +12,486,518 (string). The remainder is pre-D1 inflow that A2's
+    // mid-round re-pin absorbed — which is precisely why a track must not re-pin. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
     // and this test's own instrument disagree by 294 clones on that axis alone
     // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
     // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
@@ -30466,10 +30472,16 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_144_626;
     // mutation classifier replacing a name list, for-loop drop registration, and
     // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
     // ten R47 integration merges, one release build per cell, `gg` md5 per row):
-    // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
-    // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
-    // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
-    // inflow. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
+    // D1 is the dominant mover on all four axes (+52,221 / +98,019 / +5,063,623 /
+    // +10,411,779). ⚠ "THE WHOLE DELTA, ZERO RESIDUE" WAS WRONG AND IS WITHDRAWN:
+    // the cells file is a CUMULATIVE CHAIN, so summing successive deltas to the
+    // total is a telescoping identity, true of any sequence — it was never
+    // evidence. STAGE-0: base f3feea79 does equal the previous ceilings exactly,
+    // and D1 is the whole delta there. STAGE-1: the previous ceilings were A2's
+    // MID-ROUND re-pin, not the round-open value; against round-open base
+    // (1,124,255,029 / 2,359,224,224) D1 accounts for 88.8% of +5,700,802 (array)
+    // and 83.4% of +12,486,518 (string). The remainder is pre-D1 inflow that A2's
+    // mid-round re-pin absorbed — which is precisely why a track must not re-pin. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
     // and this test's own instrument disagree by 294 clones on that axis alone
     // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
     // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
@@ -30794,10 +30806,16 @@ fn self_host_clone_ceiling() {
     // mutation classifier replacing a name list, for-loop drop registration, and
     // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
     // ten R47 integration merges, one release build per cell, `gg` md5 per row):
-    // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
-    // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
-    // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
-    // inflow. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
+    // D1 is the dominant mover on all four axes (+52,221 / +98,019 / +5,063,623 /
+    // +10,411,779). ⚠ "THE WHOLE DELTA, ZERO RESIDUE" WAS WRONG AND IS WITHDRAWN:
+    // the cells file is a CUMULATIVE CHAIN, so summing successive deltas to the
+    // total is a telescoping identity, true of any sequence — it was never
+    // evidence. STAGE-0: base f3feea79 does equal the previous ceilings exactly,
+    // and D1 is the whole delta there. STAGE-1: the previous ceilings were A2's
+    // MID-ROUND re-pin, not the round-open value; against round-open base
+    // (1,124,255,029 / 2,359,224,224) D1 accounts for 88.8% of +5,700,802 (array)
+    // and 83.4% of +12,486,518 (string). The remainder is pre-D1 inflow that A2's
+    // mid-round re-pin absorbed — which is precisely why a track must not re-pin. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
     // and this test's own instrument disagree by 294 clones on that axis alone
     // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
     // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
@@ -30972,10 +30990,16 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_129_955_831;
     // mutation classifier replacing a name list, for-loop drop registration, and
     // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
     // ten R47 integration merges, one release build per cell, `gg` md5 per row):
-    // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
-    // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
-    // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
-    // inflow. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
+    // D1 is the dominant mover on all four axes (+52,221 / +98,019 / +5,063,623 /
+    // +10,411,779). ⚠ "THE WHOLE DELTA, ZERO RESIDUE" WAS WRONG AND IS WITHDRAWN:
+    // the cells file is a CUMULATIVE CHAIN, so summing successive deltas to the
+    // total is a telescoping identity, true of any sequence — it was never
+    // evidence. STAGE-0: base f3feea79 does equal the previous ceilings exactly,
+    // and D1 is the whole delta there. STAGE-1: the previous ceilings were A2's
+    // MID-ROUND re-pin, not the round-open value; against round-open base
+    // (1,124,255,029 / 2,359,224,224) D1 accounts for 88.8% of +5,700,802 (array)
+    // and 83.4% of +12,486,518 (string). The remainder is pre-D1 inflow that A2's
+    // mid-round re-pin absorbed — which is precisely why a track must not re-pin. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
     // and this test's own instrument disagree by 294 clones on that axis alone
     // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
     // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
