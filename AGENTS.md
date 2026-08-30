@@ -57,26 +57,26 @@ scripts/run_integration.sh  # integration tests (autoscaled)
 cargo test  # all tests
 ```
 
-**Always pipe integration tests through `tee`** with a random filename — parallel agents collide on fixed names:
+**Pipe integration tests through `tee`** with a random filename — parallel agents collide on fixed names:
 
 ```bash
 scripts/run_integration.sh 2>&1 | tee /tmp/integration-$RANDOM.log
 ```
 
-**LLVM backend.** Set `GG_BACKEND=llvm` to append `--backend=llvm` to every `gg build` (all-or-nothing per run; `tests/integration.rs:52-103`). Full sweeps autoscale via `scripts/run_integration.sh`; no `--test-threads=1`.
+**LLVM backend.** Set `GG_BACKEND=llvm` to append `--backend=llvm` to every `gg build` (all-or-nothing per run; `tests/integration.rs:52-103`) ; sweeps autoscale via `scripts/run_integration.sh`, no `--test-threads=1`.
 
 ```bash
 GG_BACKEND=llvm GG_BUILD_TIMEOUT_SECS=600 scripts/run_integration.sh --release 2>&1 | tee /tmp/llvm-$RANDOM.log
 GG_BACKEND=llvm cargo test --test integration --release dict_user_key_hashable
 ```
 
-**Backends should be at parity**; a regression on one but not the other means the change touched a backend-specific path, not shared LIR.
+**Backends should be at parity**; a regression on one and not the other means the change touched a backend-specific path, not shared LIR.
 
-**Timeouts** (override on loaded hosts): `GG_BUILD_TIMEOUT_SECS` (outer `gg build`; default 120/180; bump to 600 on multi-agent boxes for DEBUG self-host builds), `GG_TEST_TIMEOUT_SECS` (per-test binary; default 30; bump for `stress_*` / p2p / gorget-arena).
+**Timeouts** (override on loaded hosts): `GG_BUILD_TIMEOUT_SECS` (outer `gg build`; default 120/180; bump to 600 on multi-agent boxes for DEBUG self-host builds), `GG_TEST_TIMEOUT_SECS` (per-test binary; default 30; bump for `stress_*` / p2p / arena).
 
 ## Documentation
 
-- `docs/define-gorget/decisions.md` — **the RATIFIED OWNER DECISIONS. OUTRANKS every doc below** — read FIRST.
+- `docs/define-gorget/decisions.md` — **the RATIFIED OWNER DECISIONS. OUTRANKS every doc below** — read FIRST. ⛔ **NO AGENT EDITS IT — owner ask only.**
 - `docs/language-design.md` — Design philosophy, safety, rationale
 - `docs/language-reference.md` — Full syntax and semantics, written AFTER the code
 - `docs/book/` — [The Gorget Book](docs/book/README.md): learn the language from scratch (assumes programming experience)
