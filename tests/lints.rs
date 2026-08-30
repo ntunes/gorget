@@ -11045,24 +11045,27 @@ fn ratified_decisions_are_cited_in_the_spec() {
     // track ratifies nothing and cannot alter either side of the count.
     // Before the class-complete repair above, the header pattern saw 33 of
     // the 51 declared decisions and reported 12 uncited. It now sees all 51
-    // and reports 26 — the first honest measurement of a debt that was
-    // always there. Regenerate with:
+    // and reports the true debt — the first honest measurement of something
+    // that was always there. Regenerate with:
     //   cargo test --test lints ratified_decisions_are_cited_in_the_spec
     //
-    // The 26, in three cohorts:
+    // The 25, in three cohorts:
     //   already visible, already uncited (12) — D2 D12 D13 D14 D17 D18 D19
     //     D20 D21 D27 D28 D30
-    //   hidden by the emoji / batch header costumes (8) — D24 D25 D46 D47
-    //     D48 D49 D50 D51
+    //   hidden by the emoji / batch header costumes (7) — D24 D25 D46 D47
+    //     D48 D49 D51
     //   hidden by the `### D<N>.` section costume (6) — D1 D3 D5 D7 D8 D9
     //
+    // D50 is cited (`docs/language-design.md`, the Memory Safety design-target
+    // row stating the language has no unsafe escape hatch), which is what took
+    // the seed from 26 to 25.
+    //
     // BURN THIS DOWN: `todo/t0800.md` owns the backlog and names every one.
-    // The doc track landing behind D3a writes D50 through and lowers this
-    // by one in the same commit. Lower it as each decision is cited; the
-    // assert is `<=`, so it is a debt high-water, and it only goes down.
+    // Lower this as each decision is cited; the assert is `<=`, so it is a
+    // debt high-water, and it only goes down.
     // (This constant was itself seeded exactly this way — see the 2026-07-26
     // baseline in the doc comment above.)
-    const BUDGET: usize = 26;
+    const BUDGET: usize = 25;
     assert!(
         uncited.len() <= BUDGET,
         "ratified decisions with no citation in any spec document: {} (budget {}).\n\n\

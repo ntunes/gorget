@@ -117,7 +117,7 @@ Plain `+`/`-`/`*` always check overflow (trap uncatchably on fault); the `+%`/`-
 | `in` | Membership test | `x in collection` |
 | `^` | Move operator | `take(^value)` |
 | `&` | Mutable borrow | `modify(&value)` |
-| `*` | Dereference | `*ptr` (unsafe) |
+| `*` | Dereference | `*box` (requires a `Box[T]`) |
 | `rethrow` | Error transform | `risky()! rethrow (e): wrap(e)` |
 | `catch` | Error recovery | `risky()! catch (e): fallback` |
 

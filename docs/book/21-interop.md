@@ -1,8 +1,10 @@
-# Interop and Unsafe
+# Interop and the C Backend
 
-Sometimes you need to call C libraries, use raw pointers, or bypass the compiler's
-safety checks. Gorget supports this through `extern` blocks and `unsafe` — clearly
-marked escape hatches that don't compromise safety in the rest of your code.
+Sometimes you need to call a C library. Gorget does that through `extern` blocks —
+declarations that name a foreign symbol and the Gorget types it is marshalled
+through. There is no escape hatch to go with them: a foreign function is type
+checked, ownership tracked, and borrow checked like any other, so calling C does
+not switch off the rest of the language.
 
 ---
 
@@ -13,15 +15,12 @@ Declare foreign functions with `extern`:
 ```gorget
 extern "C":
     int abs(int x)
-    void free(RawPtr[void] ptr)
+    int atoi(cstr s)
 ```
 
-The string `"C"` specifies the ABI. It's optional — C is the default:
-
-```gorget
-extern:
-    int abs(int x)
-```
+The string `"C"` specifies the ABI, and it selects how arguments are marshalled:
+`String` parameters are passed as `const char*`, and the `cstr` type is only
+meaningful inside an `extern "C"` block.
 
 ### Binding to C Symbols
 
@@ -41,60 +40,28 @@ expose it in Gorget as `llabs_wrapper`.
 ### Calling C Libraries
 
 ```gorget
-extern:
-    int open(String path, int flags)
-    int read(int fd, RawPtr[void] buf, int count)
+extern "C":
+    int open(cstr path, int flags)
     int close(int fd)
 ```
 
 Extern functions are automatically available after declaration. The linker
 resolves them against system libraries.
 
----
-
-## Unsafe Blocks
-
-The `unsafe` keyword opts into operations the compiler can't verify:
+Declarations are top-level: an `extern` block sits alongside your functions, not
+inside one. Wrapping a foreign call in an ordinary Gorget function is the usual
+way to give it a typed, idiomatic signature:
 
 ```gorget
-unsafe:
-    int value = *raw_ptr          # raw pointer dereference
-    c_function()                  # FFI call
-    GLOBAL_COUNTER += 1           # mutable static access
-```
+extern "C":
+    int abs(int x)
 
-### What Unsafe Allows
+# Callers use the wrapper and never touch the foreign declaration
+int distance_from_origin(int x):
+    return abs(x)
 
-- **Raw pointer dereferencing**: `*ptr` where `ptr` is a `RawPtr[T]`
-- **FFI calls**: Calling extern functions
-- **Mutable static access**: Modifying global state
-
-### What Unsafe Does NOT Disable
-
-Unsafe doesn't turn off the type system, the borrow checker, or ownership rules.
-It only unlocks the specific operations listed above. An `unsafe` block with normal
-Gorget code is still fully checked:
-
-```gorget
-unsafe:
-    int x = 5         # still type-checked
-    String s = "hi"   # still ownership-tracked
-    *raw_ptr           # THIS is the unsafe part
-```
-
-### Minimizing Unsafe
-
-Wrap unsafe operations in safe abstractions:
-
-```gorget
-int safe_abs(int x):
-    extern int abs(int x) = "abs"
-    unsafe:
-        return abs(x)
-
-# All callers use the safe wrapper — no unsafe needed
 void main():
-    print(f"{safe_abs(-42)}")
+    print(f"{distance_from_origin(-42)}")
 ```
 
 ---
@@ -140,21 +107,6 @@ reach for when you are chasing a memory bug.
 
 ---
 
-## Raw Pointers
-
-`RawPtr[T]` is the unsafe pointer type:
-
-```gorget
-unsafe:
-    RawPtr[int] ptr = ...
-    int value = *ptr              # dereference
-```
-
-Raw pointers bypass all safety checks. They exist for FFI and low-level memory
-manipulation. In normal Gorget code, you never need them.
-
----
-
 ## Hot Reload
 
 For development workflows, Gorget supports hot code reloading:
@@ -179,8 +131,6 @@ UI iteration, and live-coding workflows.
 |---------|--------|---------|
 | Extern block | `extern "C": declarations` | Declare foreign functions |
 | Symbol binding | `extern T f(args) = "symbol"` | Map to C symbol name |
-| Unsafe block | `unsafe: operations` | Bypass compiler safety checks |
-| Raw pointer | `RawPtr[T]` | Unmanaged pointer (FFI) |
 | C backend | `gg build` pipeline | Transpile to C, compile to native |
 | Sanitizers | `--sanitize` | Runtime bug detection (fully on the C backend; leak- and runtime-side only on `--backend=llvm`) |
 | Hot reload | `directive hot-reload` | Reload code at runtime |

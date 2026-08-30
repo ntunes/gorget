@@ -136,7 +136,7 @@ async  await  spawn  blocking  shared  select
 **Safety keywords:**
 
 ```
-unsafe  extern  noreturn  unchecked
+extern  noreturn  unchecked
 ```
 
 **Self keywords:**
@@ -658,7 +658,7 @@ function_def = { attribute } [ "public" ] [ qualifiers ]
                "(" [ param_list ] ")" [ throws_clause ]
                ( block | ":" expr NEWLINE | "=" STRING_LITERAL NEWLINE | NEWLINE ) ;
 
-qualifiers    = { "async" | "const" | "static" | "unsafe" } ;
+qualifiers    = { "async" | "const" | "static" } ;
 return_type   = type { "," type } | "void" ;  (* bare tuple: String, int or (String, int) *)
 param_list    = param { "," param } ;
 param         = type [ "&" | "!" ] IDENTIFIER [ "=" expr ]
@@ -670,7 +670,7 @@ block         = ":" NEWLINE INDENT { statement } DEDENT ;
 A function has:
 - Zero or more **attributes** (e.g., `@test`, `@inline`)
 - Optional **visibility** (`public`)
-- Optional **qualifiers** (`async`, `const`, `static`, `unsafe`)
+- Optional **qualifiers** (`async`, `const`, `static`)
 - A **return type** (or `void`)
 - A **name**
 - Optional **generic parameters** in `[]`
@@ -1037,8 +1037,8 @@ tags are recognized:
 
 ```gorget
 extern "C":
-    int printf(String format, ...)
-    cstr getenv(cstr name) = "gorget_getenv"
+    int abs(int x)
+    extern cstr getenv(cstr name) = "gorget_getenv"
 
 extern "Gorget":
     extern int _vec_len(Vector[int] &v) = "gorget_array_len"
@@ -1071,7 +1071,11 @@ arm without breaking the surrounding type:
 extern "C":
     extern noreturn void exit(int code) = "gorget_exit"
 
+Result[int, String] parse(String input):
+    return Ok(7)
+
 void main():
+    String input = "7"
     int code = match parse(input):
         case Ok(n): n
         case Error(_): exit(1)   # Never composes with int
@@ -1145,7 +1149,7 @@ Statements are executed for their side effects. They appear inside function bodi
 statement = var_decl | expr_stmt | assign_stmt | compound_assign_stmt
           | return_stmt | throw_stmt | break_stmt | continue_stmt | pass_stmt
           | for_stmt | while_stmt | loop_stmt | if_stmt | match_stmt
-          | with_stmt | unsafe_stmt | named_scope_stmt | item ;
+          | with_stmt | named_scope_stmt | item ;
 ```
 
 ### 6.1 Variable Declarations
@@ -1458,15 +1462,7 @@ async void main():
 - `with expr as name:` — resource management. Creates a **new** binding from an expression. The expression is evaluated once, and `name` is dropped at block exit.
 - `with name:` — shared access. References an **existing** `shared` variable. Acquires its lock, auto-refreshes on yield, releases at block exit.
 
-### 6.15 Unsafe Block
-
-```ebnf
-unsafe_stmt = "unsafe" ":" block ;
-```
-
-Marks a block for operations the compiler cannot verify: raw pointer dereferencing, FFI calls, mutable static access. Currently parsed but not semantically enforced — the block compiles identically to a normal block. Future versions will require `unsafe` for operations that bypass the type or borrow checker.
-
-### 6.16 Named Scope Block
+### 6.15 Named Scope Block
 
 ```ebnf
 named_scope_stmt = IDENTIFIER ":" NEWLINE INDENT stmt* DEDENT ;
@@ -1507,7 +1503,7 @@ void crunch(String data):
 
 Variables declared *outside* the named scope and read or borrowed *inside* are perfectly valid — they outlive the scope by definition.
 
-### 6.17 Assert
+### 6.16 Assert
 
 ```ebnf
 assert_stmt = "assert" expr [ "," expr ] NEWLINE ;
@@ -1542,7 +1538,7 @@ void check_tree_invariants(Tree t):
     assert t.size() == t.count_nodes()
 ```
 
-### 6.18 Assert Return (Postconditions)
+### 6.17 Assert Return (Postconditions)
 
 ```ebnf
 assert_return_stmt = "assert" "return" expr NEWLINE ;
@@ -5943,7 +5939,7 @@ meta int NESTED = square(sum_range(3))   # 36
 - Nested function calls (including recursive)
 - Expression-body functions (`int double(int x): x * 2`)
 
-**Not supported:** `match`, `throw`, `select`, `with`, generic functions, `async` functions, `unsafe` functions.
+**Not supported:** `match`, `throw`, `select`, `with`, generic functions, `async` functions.
 
 **Limits:**
 
@@ -7099,7 +7095,7 @@ function_def = { attribute } [ "public" ] { qualifier }
                return_type IDENTIFIER [ generic_params ]
                "(" [ param_list ] ")" [ throws_clause ]
                ( block | ":" expr NEWLINE | "=" STRING_LITERAL NEWLINE | NEWLINE ) ;
-qualifier     = "async" | "const" | "static" | "unsafe" ;
+qualifier     = "async" | "const" | "static" ;
 return_type   = type { "," type } | "void" ;  (* bare tuple: String, int or (String, int) *)
 param_list    = param { "," param } ;
 param         = type [ "&" | "!" ] IDENTIFIER [ "=" expr ]
@@ -7197,7 +7193,7 @@ function_type  = type "(" [ type { "," type } ] ")" ;
 statement = var_decl | expr_stmt | assign_stmt | compound_assign_stmt
           | return_stmt | throw_stmt | break_stmt | continue_stmt | pass_stmt
           | for_stmt | while_stmt | loop_stmt | if_stmt | match_stmt
-          | with_stmt | unsafe_stmt | item ;
+          | with_stmt | named_scope_stmt | item ;
 
 var_decl            = [ "const" | "shared" [ "(" ( "rwlock" | "atomic" ) ")" ] ] ( type | "auto" ) pattern "=" expr NEWLINE ;
 expr_stmt           = expr NEWLINE ;
@@ -7222,7 +7218,7 @@ match_item = "case" pattern [ "if" expr ] ":" block
 with_stmt  = "with" with_binding { "," with_binding } ":" block
            | "with" IDENTIFIER { "," IDENTIFIER } ":" block ;  (* shared variable access *)
 with_binding = expr "as" IDENTIFIER ;
-unsafe_stmt = "unsafe" ":" block ;
+named_scope_stmt = IDENTIFIER ":" NEWLINE INDENT { statement } DEDENT ;
 
 (* ── Expressions ── *)
 expr = literal | IDENTIFIER | path_expr | unary_expr | binary_expr

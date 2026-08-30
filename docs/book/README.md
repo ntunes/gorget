@@ -108,8 +108,8 @@ need prior exposure to follow along.
     SSH, P2P, tensors, dataframes, 3D math, graphics (SDL2/OpenGL/Metal/GPU),
     image processing, audio, ECS, CLI parsing, logging, UUID.
 
-21. **[Interop and Unsafe](21-interop.md)**
-    `extern` blocks, calling C from Gorget, `unsafe` blocks, the C backend,
+21. **[Interop and the C Backend](21-interop.md)**
+    `extern` blocks, calling C from Gorget, binding to C symbols, the C backend,
     compilation model.
 
 22. **[Build Targets](22-targets.md)**

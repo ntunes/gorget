@@ -144,7 +144,7 @@ name (`src/semantic/meta.rs:1012-1124`):
 Anything else falls through to **M7 user-function evaluation**
 (`src/semantic/meta.rs:1107-1119`): `lookup_meta_function`
 (`src/semantic/meta.rs:1410`) scans `ctx.items` for a non-generic, non-async,
-non-unsafe function whose params and return are meta-compatible primitives
+function whose params and return are meta-compatible primitives
 (`is_meta_compatible_type`, `src/semantic/meta.rs:1384`), and
 `eval_meta_fn_call` (`src/semantic/meta.rs:1467`) interprets its body. Functions
 are *not* marked `meta`; any pure primitive-typed function is callable at
@@ -278,7 +278,7 @@ evaluates `MetaMatch` by value equality (`meta_values_eq`,
 `src/semantic/meta.rs:2706`); unrolls `MetaWhile`; binds `MetaConst` and
 substitutes it into the remaining statements; and recurses into the sub-blocks of
 nested control-flow and container statements — `if`/`elif`/`else`, `while`/`for`
-(incl. their `else`), `loop`, `unsafe`, `with`, `named scope`, `match` (arm bodies
+(incl. their `else`), `loop`, `with`, `named scope`, `match` (arm bodies
 + `else`, after expanding any `MetaFor` arms), `select` (arm bodies + `else`), and
 nested `meta match`/`meta while` (`recurse_delayed_meta_in_stmt`,
 `src/semantic/meta.rs:3651`). It deliberately does **not** recurse into `on error`

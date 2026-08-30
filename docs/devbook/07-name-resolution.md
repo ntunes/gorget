@@ -261,7 +261,7 @@ patterns are worth internalizing:
   their `SharedKind` stamped on the DefInfo and an entry in the resolution
   map for IR lowering.
 - **Every block-introducing construct pushes its own scope.** `for`/`loop`
-  use `ForLoop`; `if`/`while`/`match`-arm/`with`/`unsafe`/`select` use
+  use `ForLoop`; `if`/`while`/`match`-arm/`with`/`named scope`/`select` use
   `Block`. `if`/`while` push the body scope *before* resolving the
   condition so that compound `is`-pattern bindings (`a is Some(x) and x >
   10`) are visible to the guard — handled by `resolve_is_condition`

@@ -44,6 +44,7 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 | Scoped allocator control — `with Arena() as pool:` redirects all allocations in a block; `alloc=` on constructors for one-shot control; copy-on-write aliasing with lazy materialization (the copy happens at the mutation that demands it, never speculatively) + last-use move analysis eliminates unnecessary copies | Use-after-free and double-free reachable from safe code |
 | Stale-condition warnings when shared data crosses suspension points | Silent memory corruption from undefined behavior |
 | Distinct newtype / semantic types (UserId ≠ int at compile time) | C-style pointer arithmetic accessible without explicit opt-in |
+| No unsafe escape hatch (D50) — there is no block, qualifier, or annotation that suspends the language's guarantees, so every program the compiler accepts is checked by the same rules | A reserved `unsafe` keyword that suspends nothing — syntax standing in for a guarantee the compiler does not actually make |
 
 ### Performance
 
@@ -126,7 +127,7 @@ Long-term objectives grouped by pillar. These targets and anti-targets guide eve
 |---|---|
 | C as the compilation target — portable, zero new backend dependency | JVM / managed runtime requirement — kills the bare-metal story |
 | C ABI compatibility — generated symbols follow C calling conventions | Hidden runtime dependencies — hello world should not link unused runtime sections |
-| Explicit `unsafe` blocks — auditable regions where safety guarantees are suspended | Name mangling without an escape hatch — FFI must produce predictable C names |
+| Foreign declarations confined to `extern` blocks — the FFI surface of a program is explicit and auditable in one place | Name mangling without an escape hatch — FFI must produce predictable C names |
 | | Incompatible calling conventions without explicit annotation |
 | WASM target — browser and edge compute deployment path | Requiring manual translation layers to call existing C libraries |
 | Embedded / no-stdlib mode — bare runtime, no OS primitives required | Platform-specific ABI surprises — stdcall/cdecl confusion |
@@ -1997,80 +1998,66 @@ Shared[Mutex[int]] counter = Shared[Mutex[int]](Mutex[int](0))    # Sendable + S
 struct Point:                      # auto-Sendable, auto-Syncable (all fields are int)
     int x
     int y
-
-struct UnsafeHandle:
-    RawPtr[void] ptr               # RawPtr is NOT Sendable — Point is not auto-Sendable
 ```
 
-To manually implement these traits for types the compiler can't verify (e.g., FFI wrappers with internal synchronization), use `unsafe equip`:
-
-```gorget
-unsafe equip MyFfiHandle with Sendable    # "I guarantee this is safe to send"
-unsafe equip MyFfiHandle with Syncable    # "I guarantee this is safe to share"
-```
+Derivation is structural: a type composed only of `Sendable` fields is itself
+`Sendable`, and one field that is not demotes the whole type. A type the compiler
+cannot derive it for is made shareable by wrapping it in a synchronizing type
+(`Mutex[T]`, `Shared[T]`), which is `Syncable` by construction.
 
 The `thread.spawn` function has an implicit `[Sendable F]` bound, so the compiler rejects any attempt to send non-Sendable types across threads — no data races from accidental sharing.
 
 ---
 
-## 11. Unsafe Code
+## 11. FFI (Foreign Function Interface)
 
-Gorget is safe by default. The `unsafe` keyword opts into operations the compiler can't verify:
+Gorget is safe by default, and it stays that way at the C boundary: there is no
+block, qualifier, or annotation that suspends the compiler's guarantees. What FFI
+adds is not an exemption but a *declaration* — an `extern` block naming foreign
+symbols and the Gorget types they are marshalled through.
 
-### 11.1 Unsafe Blocks
-
-```gorget
-unsafe:
-    int &ptr = raw_pointer as int&
-    *ptr = 42
-```
-
-### 11.2 What Requires `unsafe`
-
-- **Raw pointer operations**: dereferencing, arithmetic, casting
-- **FFI calls**: calling external C functions
-- **Mutating static variables**: global mutable state (thread safety risk)
-- **Implementing unsafe traits**: e.g., `Sendable`, `Syncable` for manual implementations
-
-### 11.3 Raw Pointers
+### 11.1 Declaring Foreign Functions
 
 ```gorget
-# Raw pointer types
-RawPtr[int] ptr = ...           # mutable raw pointer
-ConstRawPtr[int] cptr = ...     # immutable raw pointer
-
-unsafe:
-    int value = *ptr             # dereference
-    ptr = ptr.offset(1)          # pointer arithmetic
-```
-
-### 11.4 FFI (Foreign Function Interface)
-
-```gorget
-# Declare external C functions
 extern "C":
-    int printf(String format, ...)
-    RawPtr[void] malloc(uint size)
-    void free(RawPtr[void] ptr)
-
-# Calling C functions
-void main():
-    unsafe:
-        printf("Hello from C! %d\n", 42)
-
-# Wrapping unsafe in a safe API
-int abs_value(int x):
-    unsafe:
-        return c_abs(x)
+    int abs(int x)
+    extern cstr getenv(cstr name) = "gorget_getenv"
 ```
 
-### 11.5 Unsafe Functions
+The ABI tag selects the marshalling convention. Every foreign declaration a
+program depends on is visible in an `extern` block, so the FFI surface can be read
+off the source rather than inferred from link errors.
+
+### 11.2 Calling Foreign Functions
+
+A declared foreign function is called like any other. It participates in type
+checking, ownership, and borrow checking exactly as a Gorget function does:
 
 ```gorget
-# Entire function is unsafe — caller must use unsafe block
-unsafe void dangerous_operation(RawPtr[int] ptr):
-    *ptr = 0
+extern "C":
+    int abs(int x)
+
+void main():
+    int distance = abs(-42)
+    print(f"{distance}")
 ```
+
+### 11.3 Binding to a C Symbol
+
+The `= "symbol"` form maps a Gorget name onto a differently-named C symbol, which
+lets a module expose a typed, idiomatic wrapper over a raw one:
+
+```gorget
+extern "C":
+    extern int magnitude(int x) = "llabs"
+
+void main():
+    print(f"{magnitude(-42)}")
+```
+
+See §5.10 of [the language reference](language-reference.md) for the full `extern`
+surface — ABI tags, the `noreturn` and `borrowed` qualifiers, generic extern
+declarations, and `extern` bodies on equip methods.
 
 ---
 
@@ -2606,14 +2593,7 @@ Vector[int] vec = [1, 2, 3]
 vec.set(10, 42)                  # panic: index 10 out of bounds (length 3)
 ```
 
-This is a **language guarantee**, not an implementation detail. Gorget will never silently read or write out-of-bounds memory. The compiler may elide bounds checks when it can statically prove the index is in range (e.g., iterating with `for i in 0..arr.len()`), but the semantics are always as-if checked.
-
-For performance-critical inner loops where bounds are known safe, `unsafe` indexing is available:
-
-```gorget
-unsafe:
-    int x = arr.get_unchecked(i)     # no bounds check — UB if out of range
-```
+This is a **language guarantee**, not an implementation detail. Gorget will never silently read or write out-of-bounds memory, and there is no opt-out: elision is the compiler's job, not the programmer's. The compiler may elide bounds checks when it can statically prove the index is in range (e.g., iterating with `for i in 0..arr.len()`), but the semantics are always as-if checked.
 
 #### Stdlib Design: Option Over Panic
 
