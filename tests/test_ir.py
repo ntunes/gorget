@@ -1,6 +1,24 @@
 #!/usr/bin/env python3
-"""Test all .gg fixtures through the --ir pipeline vs normal pipeline."""
-import subprocess, os, sys, glob
+"""Test all .gg fixtures through the --ir pipeline vs normal pipeline.
+
+Every spawn goes through `scripts/proc_guard.run`, not `subprocess.run`. Three
+of the seven sites below RUN A COMPILED FIXTURE BINARY, and a miscompiled fixture
+that forks is exactly the shape that leaves a spinner behind: on expiry CPython
+kills the DIRECT CHILD only and then blocks in `communicate()` on pipes the
+surviving grandchild still holds open. `proc_guard` makes the child a
+process-group leader and kills the group.
+
+⚠ AND EVERY SITE CHECKS `timed_out` EXPLICITLY. `subprocess.run`'s timeout RAISED;
+`proc_guard.run` RETURNS, because a timeout is a classification rather than a
+control-flow accident. Without the check a hung BUILD returns nonzero with no
+"semantic error" on stderr and is silently recorded as a build failure, and a hung
+RUN is recorded as "the binary printed nothing" — the false-CLEAN shape this whole
+change exists to retire, reintroduced by a mechanical call swap.
+"""
+import os, pathlib, sys, glob
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
+import proc_guard  # noqa: E402  (path must be set first)
 
 def test_one(gg_path):
     stem = os.path.splitext(os.path.basename(gg_path))[0]
@@ -9,10 +27,9 @@ def test_one(gg_path):
     ir_bin = f"/tmp/{stem}_ir"
 
     # Build reference (non-IR)
-    r = subprocess.run(
-        ["cargo", "run", "--quiet", "--", "build", gg_path],
-        capture_output=True, text=True, timeout=60
-    )
+    r = proc_guard.run(["cargo", "run", "--quiet", "--", "build", gg_path], timeout=60)
+    if r.timed_out:
+        return ("SKIP", stem, "", "", "ref BUILD HUNG (killed at 60s)")
 
     if r.returncode != 0:
         # Reference build failed. If it's a semantic error, both pipelines should reject it.
@@ -21,10 +38,10 @@ def test_one(gg_path):
         if "semantic error" not in ref_stderr and "error(s) found" not in ref_stderr:
             return ("SKIP", stem, "", "", "ref build fail (non-semantic)")
         # Semantic error: verify GIR also rejects the program
-        r_ir = subprocess.run(
-            ["cargo", "run", "--quiet", "--", "build", "--ir", gg_path, "-o", ir_bin],
-            capture_output=True, text=True, timeout=60
-        )
+        r_ir = proc_guard.run(["cargo", "run", "--quiet", "--", "build", "--ir", gg_path, "-o", ir_bin], timeout=60)
+        if r_ir.timed_out:
+            return ("MISMATCH", stem, "reject", "HUNG (killed at 60s)",
+                    "GIR build hung where the reference rejected")
         if r_ir.returncode != 0:
             return ("PASS", stem, "", "", "both reject (expected compile error)")
         else:
@@ -33,7 +50,9 @@ def test_one(gg_path):
 
     # Get expected output from reference run
     try:
-        r2 = subprocess.run([ref_bin], capture_output=True, text=True, timeout=10)
+        r2 = proc_guard.run([ref_bin], timeout=10)
+        if r2.timed_out:
+            return ("SKIP", stem, "", "", "ref run HUNG (killed at 10s)")
         expected = r2.stdout
         ref_ok = r2.returncode == 0
     except Exception as e:
@@ -42,15 +61,17 @@ def test_one(gg_path):
     if not ref_ok and expected == "":
         # Reference crashed with no stdout (e.g. div_by_zero, overflow, assert_fails).
         # Verify the GIR binary also crashes.
-        r_ir = subprocess.run(
-            ["cargo", "run", "--quiet", "--", "build", "--ir", gg_path, "-o", ir_bin],
-            capture_output=True, text=True, timeout=60
-        )
+        r_ir = proc_guard.run(["cargo", "run", "--quiet", "--", "build", "--ir", gg_path, "-o", ir_bin], timeout=60)
+        if r_ir.timed_out:
+            return ("BUILD_FAIL", stem, "", "", "GIR BUILD HUNG (killed at 60s)")
         if r_ir.returncode != 0:
             err = r_ir.stderr.strip().split('\n')[-1] if r_ir.stderr else ""
             return ("BUILD_FAIL", stem, "", "", err[-150:])
         try:
-            r4 = subprocess.run([ir_bin], capture_output=True, text=True, timeout=10)
+            r4 = proc_guard.run([ir_bin], timeout=10)
+            if r4.timed_out:
+                return ("MISMATCH", stem, "crash(exit!=0)", "HUNG (killed at 10s)",
+                        "GIR hung where the reference crashed")
             if r4.returncode != 0 and r4.stdout == "":
                 return ("PASS", stem, "", "", "both crash at runtime")
             elif r4.returncode == 0:
@@ -63,20 +84,22 @@ def test_one(gg_path):
             return ("SKIP", stem, "", "", "ir run fail")
 
     # Build with IR
-    r3 = subprocess.run(
-        ["cargo", "run", "--quiet", "--", "build", "--ir", gg_path, "-o", ir_bin],
-        capture_output=True, text=True, timeout=60
-    )
+    r3 = proc_guard.run(["cargo", "run", "--quiet", "--", "build", "--ir", gg_path, "-o", ir_bin], timeout=60)
+    if r3.timed_out:
+        return ("BUILD_FAIL", stem, "", "", "GIR BUILD HUNG (killed at 60s)")
     if r3.returncode != 0:
         err = r3.stderr.strip().split('\n')[-1] if r3.stderr else ""
         return ("BUILD_FAIL", stem, "", "", err[-150:])
 
     # Run IR binary
     try:
-        r4 = subprocess.run([ir_bin], capture_output=True, text=True, timeout=10)
+        r4 = proc_guard.run([ir_bin], timeout=10)
+        if r4.timed_out:
+            return ("MISMATCH", stem, expected[:300], "HUNG (killed at 10s)",
+                    "IR binary hung; a hang is a defect, not an empty stdout")
         actual = r4.stdout
-    except:
-        actual = ""
+    except Exception as e:
+        return ("SKIP", stem, "", "", f"ir run fail: {e}")
 
     if actual == expected:
         return ("PASS", stem, "", "", "")

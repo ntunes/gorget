@@ -16,10 +16,29 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use gorget::backend::c::c_runtime::{
     PANIC_NORMAL, RUNTIME_PREAMBLE, RUNTIME_STRING, RUNTIME_STRING_BASE_OPS,
 };
+use gorget::proc_guard::{RunFailure, run_with_deadline};
+
+/// `cc` and the produced binary both go through the shared deadline runner.
+///
+/// They used to be bare `.output()` calls: NO deadline, so a runtime that loops
+/// forever hung this target with nothing above it, and no process group, so a
+/// forked grandchild would have outlived the run. Both are the class
+/// `gorget::proc_guard` exists to retire; there is nothing special about this
+/// file that earns an exemption.
+fn run_or_panic(cmd: &mut Command, what: &str, timeout: Duration) -> std::process::Output {
+    match run_with_deadline(cmd, timeout) {
+        Ok(out) => out,
+        Err(RunFailure::Deadline { secs }) => panic!("{what} timed out after {secs}s"),
+        Err(RunFailure::Overflow { cap }) => {
+            panic!("{what} produced runaway output (>{cap} bytes) — killed")
+        }
+    }
+}
 
 // ───────────────────────── Str runtime, called directly ─────────────────
 
@@ -57,7 +76,8 @@ fn str_fat_ptr_runtime() {
     fs::write(&c_path, &c_source).unwrap();
 
     // Compile
-    let compile = Command::new("cc")
+    let mut compile_cmd = Command::new("cc");
+    compile_cmd
         .args([
             "-std=c11",
             "-Wall",
@@ -74,9 +94,8 @@ fn str_fat_ptr_runtime() {
         ])
         .arg(&exe_path)
         .arg(&c_path)
-        .args(["-lm"])
-        .output()
-        .expect("failed to run cc");
+        .args(["-lm"]);
+    let compile = run_or_panic(&mut compile_cmd, "cc", Duration::from_secs(300));
 
     if !compile.status.success() {
         let stderr = String::from_utf8_lossy(&compile.stderr);
@@ -84,9 +103,8 @@ fn str_fat_ptr_runtime() {
     }
 
     // Run
-    let run = Command::new(&exe_path)
-        .output()
-        .expect("failed to run str_test");
+    let mut run_cmd = Command::new(&exe_path);
+    let run = run_or_panic(&mut run_cmd, "str_test", Duration::from_secs(60));
 
     let stdout = String::from_utf8_lossy(&run.stdout);
     let stderr = String::from_utf8_lossy(&run.stderr);
@@ -460,12 +478,13 @@ fn assert_no_implicit_decls(fixture: &str) {
     let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
     let emitted_c = tmp_dir.join(format!("{stem}.emitted.c"));
 
-    let emit = Command::new(gg_binary())
-        .arg("build")
-        .arg(&fixture_path)
-        .arg("--emit-c-lir")
-        .output()
-        .expect("failed to run `gg build --emit-c-lir`");
+    // Through the shared runner like every other spawn in this file. These two
+    // sites were reported as "now routed" while still being bare `.output()`
+    // calls, and the arithmetic in the census hid it — a phantom bucket exactly
+    // offset the under-count, so the total came out right.
+    let mut emit_cmd = Command::new(gg_binary());
+    emit_cmd.arg("build").arg(&fixture_path).arg("--emit-c-lir");
+    let emit = run_or_panic(&mut emit_cmd, "gg build --emit-c-lir", Duration::from_secs(300));
     assert!(
         emit.status.success(),
         "`gg build {} --emit-c-lir` failed:\n{}",
@@ -490,7 +509,8 @@ fn assert_no_implicit_decls(fixture: &str) {
     //    an error and, critically, NO `-w` (which would defeat it). No `-Wall`
     //    either — only default warnings plus the one promotion — so this guard
     //    is about implicit decls specifically, not the broader warning posture.
-    let compile = Command::new(cc())
+    let mut compile_cmd = Command::new(cc());
+    compile_cmd
         .arg("-O2")
         .arg("-std=c11")
         .arg("-Werror=implicit-function-declaration")
@@ -498,9 +518,9 @@ fn assert_no_implicit_decls(fixture: &str) {
         .arg("-o")
         .arg(tmp_dir.join(format!("{stem}.o")))
         .arg(&emitted_c)
-        .arg("-lm")
-        .output()
-        .expect("failed to run cc on emitted runtime C");
+        .arg("-lm");
+    let compile = run_or_panic(&mut compile_cmd, "cc (emitted runtime C)",
+                               Duration::from_secs(300));
 
     if !compile.status.success() {
         panic!(

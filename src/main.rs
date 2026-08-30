@@ -11,6 +11,7 @@ use gorget::lexer::Lexer;
 use gorget::loader::{self, ModuleLoader};
 use gorget::manifest::{self, DepSpec, Manifest};
 use gorget::parser::Parser;
+use gorget::proc_guard;
 use gorget::resolver;
 
 /// Every legal `--backend` value. This is the ONE source of truth for the
@@ -3576,21 +3577,52 @@ fn real_main() {
                         .env("GORGET_PARALLEL_TOTAL", n.to_string())
                         .env("GORGET_TEST_RESULTS", worker_results_path(&results_path, worker_id).display().to_string());
                     if nocapture { worker_cmd.env("GORGET_TEST_NOCAPTURE", "1"); }
-                    let child = worker_cmd.spawn()
-                        .unwrap_or_else(|e| {
+                    // ⚠ THE LIKELIER LEAK PATH, and it used to be the untouched
+                    // one. If worker k fails to spawn, workers 0..k are already
+                    // running and `process::exit(1)` abandons every one of them
+                    // — and a spawn failure (fd exhaustion, ENOMEM) is exactly
+                    // the situation in which you bail early, so this path fires
+                    // when the box is ALREADY under pressure.
+                    match worker_cmd.spawn() {
+                        Ok(child) => children.push(child),
+                        Err(e) => {
                             eprintln!("Failed to spawn worker {worker_id}: {e}");
+                            for c in children.iter_mut() {
+                                proc_guard::kill_process_tree(c);
+                            }
                             process::exit(1);
-                        });
-                    children.push(child);
+                        }
+                    }
                 }
                 let mut any_failed = false;
                 #[cfg(unix)]
                 let mut first_signal: Option<(usize, i32)> = None;
-                for (worker_id, mut child) in children.into_iter().enumerate() {
-                    let status = child.wait().unwrap_or_else(|e| {
-                        eprintln!("Failed to wait for worker: {e}");
-                        process::exit(1);
-                    });
+                let mut children: Vec<_> = children.into_iter().collect();
+                // ⚠ Bailing out of this loop used to ORPHAN every worker that
+                // had not been waited on yet: `process::exit(1)` inside the loop
+                // skips their `wait`, and nothing else in the process ever
+                // reaps them. They keep running the user's tests, writing to the
+                // user's result files, after `gg` has reported failure and
+                // exited. Same class as the test-harness orphan this release
+                // closes -- in the shipped compiler.
+                fn reap_remaining(rest: &mut Vec<std::process::Child>) {
+                    for c in rest.iter_mut() {
+                        proc_guard::kill_process_tree(c);
+                    }
+                    rest.clear();
+                }
+                let mut worker_id = 0usize;
+                while !children.is_empty() {
+                    let mut child = children.remove(0);
+                    let status = match child.wait() {
+                        Ok(s) => s,
+                        Err(e) => {
+                            eprintln!("Failed to wait for worker: {e}");
+                            proc_guard::kill_process_tree(&mut child);
+                            reap_remaining(&mut children);
+                            process::exit(1);
+                        }
+                    };
                     if !status.success() { any_failed = true; }
                     #[cfg(unix)]
                     {
@@ -3601,6 +3633,7 @@ fn real_main() {
                             }
                         }
                     }
+                    worker_id += 1;
                 }
                 // Merge worker result files
                 merge_parallel_results(&results_path, n);

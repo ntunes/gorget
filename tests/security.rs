@@ -57,7 +57,7 @@
 //! runtime-side faults are caught there, user-code faults are not.
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 
 /// Sanitize builds are slower than the integration suite's, so the default
@@ -265,51 +265,29 @@ fn backend_flag_selection_is_wired() {
     assert_eq!(backend_flag_for("check", None), None);
 }
 
+/// Run a command with a deadline, through the SHARED runner
+/// (`gorget::proc_guard`).
+///
+/// ⚠ This was a hand-rolled copy, and it had the defect the correct copy's own
+/// doc comment described one file away: a plain `child.kill()` reaps the direct
+/// child and leaves every grandchild alive, spinning at ~100% CPU and poisoning
+/// every later load-adjusted measurement on the box. It also drained with an
+/// UNCAPPED `read_to_end` (the OOM class the capture cap exists to prevent) and
+/// joined the drain threads AFTER the kill, so a grandchild holding the pipe
+/// write end hung the timeout handler itself. All three are gone with the copy.
+///
+/// This is the ASAN target, so the uncapped drain mattered doubly here: a
+/// sanitizer report on a runaway fixture is exactly when the capture is largest.
 fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std::process::Output {
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to execute compiled binary");
-
-    let stdout_handle = child.stdout.take().unwrap();
-    let stderr_handle = child.stderr.take().unwrap();
-
-    let stdout_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut reader = stdout_handle;
-        reader.read_to_end(&mut buf).ok();
-        buf
-    });
-    let stderr_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut reader = stderr_handle;
-        reader.read_to_end(&mut buf).ok();
-        buf
-    });
-
-    let deadline = std::time::Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    child.kill().ok();
-                    child.wait().ok();
-                    panic!("Process for {fixture} timed out after {}s", timeout.as_secs());
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => panic!("Failed to wait on child for {fixture}: {e}"),
+    match gorget::proc_guard::run_with_deadline(cmd, timeout) {
+        Ok(out) => out,
+        Err(gorget::proc_guard::RunFailure::Deadline { secs }) => {
+            panic!("Process for {fixture} timed out after {secs}s")
         }
-    };
-
-    let stdout = stdout_thread.join().unwrap_or_default();
-    let stderr = stderr_thread.join().unwrap_or_default();
-
-    std::process::Output { status, stdout, stderr }
+        Err(gorget::proc_guard::RunFailure::Overflow { cap }) => {
+            panic!("Process for {fixture} produced runaway output (>{cap} bytes) — killed")
+        }
+    }
 }
 
 fn fixture_path(name: &str) -> PathBuf {
@@ -2969,4 +2947,35 @@ fn forset_move_out_elem_no_leak() {
 #[test]
 fn fordict_move_out_kv_no_leak() {
     security_safe_no_leak("fordict_move_out_kv", "2\n2\n2");
+}
+
+/// KNOWN GAP (`todo/t0840`) on the SANITIZER lane. The value lanes see a SEGV;
+/// this lane sees WHY — UBSan reports `load of misaligned address
+/// 0xbebebebebebebebe`, ASan's uninitialised-heap fill, so the `Vector[Shared]`
+/// element was never stored. A value lane is structurally blind to that
+/// distinction (Core #13), which is why the gap owes a fixture on BOTH.
+#[test]
+#[ignore = "known gap (R47/t0840): Vector[Shared[T]] push leaves the slot unwritten — UBSan 0xbe fill then SEGV"]
+fn known_gap_shared_vector_of_clones_unwritten_slot_asan() {
+    security_safe_no_leak("known_gap_shared_vector_of_clones_unwritten_slot", "3\n42");
+}
+
+/// KNOWN GAP (`todo/t0841`) on the SANITIZER lane: `AddressSanitizer: attempting
+/// double-free` in `__gorget_global_dealloc_fn` ← `gorget_string_free` ←
+/// `gorget_array_free` ← `main` — three aliases of one heap buffer, freed once
+/// each by the vector.
+#[test]
+#[ignore = "known gap (R47/t0841): a comprehension over a loop-invariant owned local double-frees at array free"]
+fn known_gap_comprehension_invariant_owned_body_double_free_asan() {
+    security_safe_no_leak("known_gap_comprehension_invariant_owned_body_double_free", "ababab");
+}
+
+/// KNOWN GAP (`todo/t0108`) on the SANITIZER lane: `heap-use-after-free` in
+/// `gorget_shared_get_ptr`, freed by `gorget_shared_drop` ← `Shared__int64_t__drop`
+/// ← the CALLEE. The free chain naming the callee is the whole diagnosis, and it
+/// exists only on this lane.
+#[test]
+#[ignore = "known gap (t0108): a bare Shared param is a borrow but the callee decrefs it at scope exit"]
+fn known_gap_shared_plain_call_param_uaf_asan() {
+    security_safe_no_leak("known_gap_shared_plain_call_param_uaf", "42\n42");
 }

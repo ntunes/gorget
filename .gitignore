@@ -59,3 +59,7 @@ perf.data*
 
 # LLVM backend emits *.ll into fixture dirs on manual --emit-llvm runs; never tracked.
 tests/fixtures/**/*.ll
+
+# `scripts/robustness_map.py` now imports `scripts/verdict.py` (one classifier,
+# not three copies), so Python writes a bytecode cache beside them.
+scripts/__pycache__/

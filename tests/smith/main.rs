@@ -140,7 +140,7 @@ mod generator;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -170,7 +170,11 @@ fn build_timeout() -> Duration {
         .and_then(|s| s.split_whitespace().next()?.parse::<f64>().ok())
         .unwrap_or(0.0);
     let cpus = std::thread::available_parallelism().map(|n| n.get() as f64).unwrap_or(1.0);
-    let ratio = (load / cpus).max(1.0);
+    // Capped for the same reason as integration.rs's copy: an unbounded
+    // multiplier lets a poisoned box buy arbitrary extra time, and the thread
+    // count moves the OTHER way on the same loadavg, so the two amplify each
+    // other. See `MAX_LOAD_RATIO` there.
+    let ratio = (load / cpus).clamp(1.0, 4.0);
     Duration::from_secs((120.0 * ratio).ceil() as u64)
 }
 
@@ -184,56 +188,28 @@ fn run_timeout() -> Duration {
 /// A child overran its deadline (killed; classified TIMEOUT by the caller).
 struct TimedOut;
 
-/// Run a command with nulled stdin and a deadline. Unlike integration.rs's
-/// `run_with_timeout` this does NOT panic on timeout — TIMEOUT is a smith
-/// classification, not a harness failure. stdout/stderr are drained on
-/// background threads to avoid the >64KB pipe-buffer deadlock.
+/// Run a command with a deadline, through the SHARED runner
+/// (`gorget::proc_guard`).
+///
+/// ⚠ This was a hand-rolled copy, and it had the defect the correct copy's own
+/// doc comment described one file away: a plain `child.kill()` reaps the direct
+/// child and leaves every grandchild alive, spinning at ~100% CPU and poisoning
+/// every later load-adjusted measurement on the box. It also drained with an
+/// UNCAPPED `read_to_end` (the OOM class the capture cap exists to prevent) and
+/// joined the drain threads AFTER the kill, so a grandchild holding the pipe
+/// write end hung the timeout handler itself. All three are gone with the copy.
+///
+/// Does NOT panic on timeout — TIMEOUT is a smith classification, not a harness
+/// failure. An overflow IS a harness failure: this is a FUZZER, so a generated
+/// program that prints without bound is the likeliest runaway in the tree.
 fn run_cmd(cmd: &mut Command, timeout: Duration) -> Result<Output, TimedOut> {
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|e| panic!("failed to spawn {cmd:?}: {e}"));
-
-    let stdout_handle = child.stdout.take().unwrap();
-    let stderr_handle = child.stderr.take().unwrap();
-    let stdout_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut reader = stdout_handle;
-        reader.read_to_end(&mut buf).ok();
-        buf
-    });
-    let stderr_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut reader = stderr_handle;
-        reader.read_to_end(&mut buf).ok();
-        buf
-    });
-
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    child.kill().ok();
-                    child.wait().ok();
-                    // Join the drain threads so their pipes close cleanly.
-                    stdout_thread.join().ok();
-                    stderr_thread.join().ok();
-                    return Err(TimedOut);
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(e) => panic!("failed to wait on child: {e}"),
+    match gorget::proc_guard::run_with_deadline(cmd, timeout) {
+        Ok(out) => Ok(out),
+        Err(gorget::proc_guard::RunFailure::Deadline { .. }) => Err(TimedOut),
+        Err(gorget::proc_guard::RunFailure::Overflow { cap }) => {
+            panic!("{cmd:?} produced runaway output (>{cap} bytes) — killed")
         }
-    };
-    let stdout = stdout_thread.join().unwrap_or_default();
-    let stderr = stderr_thread.join().unwrap_or_default();
-    Ok(Output { status, stdout, stderr })
+    }
 }
 
 /// Build the self-host driver ONCE per smith process (≈57s — see the

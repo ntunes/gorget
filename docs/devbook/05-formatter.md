@@ -39,13 +39,13 @@ many more).
 
 ## The `gg fmt` command
 
-`gg fmt <file>` is dispatched in the driver at `src/main.rs:3625`. It supports three
+`gg fmt <file>` is dispatched in the driver at `src/main.rs:3717`. It supports three
 modes, all keyed off one entry point:
 
-- default — print the formatted source to stdout (`src/main.rs:3653`);
-- `--in-place` / `-i` — overwrite the file in place (`src/main.rs:3647-3652`);
+- default — print the formatted source to stdout (`src/main.rs:3745`);
+- `--in-place` / `-i` — overwrite the file in place (`src/main.rs:3739-3744`);
 - `--check` / `-c` — exit non-zero if the file is not already formatted, printing
-  `"<file>: not formatted"` to stderr via `eprintln!` (`src/main.rs:3642-3646`). The
+  `"<file>: not formatted"` to stderr via `eprintln!` (`src/main.rs:3734-3738`). The
   check is a raw `formatted != source` string comparison — there is no structural diff.
 
 The public API is one function, and its return type is the interesting part:

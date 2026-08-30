@@ -72,7 +72,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -220,55 +220,35 @@ fn run_timeout() -> Duration {
 /// A child overran its deadline (killed).
 struct TimedOut;
 
-/// Run a command with nulled stdin and a deadline. Does NOT panic on timeout —
-/// a timeout is a lane classification, not a harness failure. stdout/stderr are
-/// drained on background threads to avoid the >64KB pipe-buffer deadlock
-/// (integration.rs:171-190 / smith:166-212).
+/// Run a command with a deadline, through the SHARED runner
+/// (`gorget::proc_guard`).
+///
+/// ⚠ This was a hand-rolled copy, and it had the defect the correct copy's own
+/// doc comment described one file away: a plain `child.kill()` reaps the direct
+/// child and leaves every grandchild alive, spinning at ~100% CPU and poisoning
+/// every later load-adjusted measurement on the box. It also drained with an
+/// UNCAPPED `read_to_end` (the OOM class the capture cap exists to prevent) and
+/// joined the drain threads AFTER the kill, so a grandchild holding the pipe
+/// write end hung the timeout handler itself. All three are gone with the copy.
+///
+/// ⚠ The post-kill `stdout_thread.join()` this replaces was a CONFIRMED
+/// DEADLOCK, and not only on the timeout path — the SUCCESS path joined
+/// unconditionally too. A grandchild inheriting the pipe write end keeps it
+/// open, `read_to_end` never returns, and the 3-lane adjudicator hangs with no
+/// deadline above it.
+///
+/// Does NOT panic on timeout: a timeout is a lane classification here, not a
+/// harness failure. An OVERFLOW is a harness failure and still panics — runaway
+/// output is a miscompile signal, and silently returning truncated bytes as a
+/// lane's answer would launder it into a MATCH.
 fn run_cmd(cmd: &mut Command, timeout: Duration) -> Result<Output, TimedOut> {
-    let mut child = cmd
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap_or_else(|e| panic!("failed to spawn {cmd:?}: {e}"));
-
-    let stdout_handle = child.stdout.take().unwrap();
-    let stderr_handle = child.stderr.take().unwrap();
-    let stdout_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut reader = stdout_handle;
-        reader.read_to_end(&mut buf).ok();
-        buf
-    });
-    let stderr_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut reader = stderr_handle;
-        reader.read_to_end(&mut buf).ok();
-        buf
-    });
-
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    child.kill().ok();
-                    child.wait().ok();
-                    stdout_thread.join().ok();
-                    stderr_thread.join().ok();
-                    return Err(TimedOut);
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-            Err(e) => panic!("failed to wait on child: {e}"),
+    match gorget::proc_guard::run_with_deadline(cmd, timeout) {
+        Ok(out) => Ok(out),
+        Err(gorget::proc_guard::RunFailure::Deadline { .. }) => Err(TimedOut),
+        Err(gorget::proc_guard::RunFailure::Overflow { cap }) => {
+            panic!("{cmd:?} produced runaway output (>{cap} bytes) — killed")
         }
-    };
-    let stdout = stdout_thread.join().unwrap_or_default();
-    let stderr = stderr_thread.join().unwrap_or_default();
-    Ok(Output { status, stdout, stderr })
+    }
 }
 
 /// Build the self-host driver ONCE per test process (mirrors
