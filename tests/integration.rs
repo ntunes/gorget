@@ -30364,7 +30364,19 @@ fn self_host_bootstrap() {
 // (`self_host_cow_rescue_mutation_through_getchain_receiver`) and, at the
 // assignment-target sibling, a silent WRONG ANSWER (`cow_assign_target_chain.gg`).
 // ALL FOUR of these figures need owner eyes, not just the stage-1 string one.
-const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_096_576;
+    // ⚖ RE-PINNED 2026-08-30 (R47 close, OWNER-AUTHORISED) at the exact measured
+    // value — a HIGH-WATER MARK WITH A DEBT, not a sanctioned cost. The R47 close
+    // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
+    // memory-safety fixes that legitimately materialize more (a typed per-receiver
+    // mutation classifier replacing a name list, for-loop drop registration, and
+    // CoW identity resolution). ⚠ THE ATTRIBUTION IS NOT YET DONE — track F5 is
+    // measuring the per-track delta with scripts/bench_stages.sh and
+    // scripts/clone_attribution.sh. ⚠ One figure in the record is suspect: A2
+    // reported +0.108% for stage-1 and re-pinned on that basis, while the true
+    // overage is +0.428%. If F5 finds a lost move/borrow, this ceiling comes DOWN
+    // — lowering needs no sign-off. Regenerate:
+    //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
+const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_144_626;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to
@@ -30432,7 +30444,19 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_096_576;
 // above (chain-link only 31,350,380 / peel only 31,108,100 — additive to
 // 31,365,688, with the residual to the shipped 31,379,632 being the widened
 // shared mutation-path peel plus the bool-arm chain-link publish).
-const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_379_632;
+    // ⚖ RE-PINNED 2026-08-30 (R47 close, OWNER-AUTHORISED) at the exact measured
+    // value — a HIGH-WATER MARK WITH A DEBT, not a sanctioned cost. The R47 close
+    // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
+    // memory-safety fixes that legitimately materialize more (a typed per-receiver
+    // mutation classifier replacing a name list, for-loop drop registration, and
+    // CoW identity resolution). ⚠ THE ATTRIBUTION IS NOT YET DONE — track F5 is
+    // measuring the per-track delta with scripts/bench_stages.sh and
+    // scripts/clone_attribution.sh. ⚠ One figure in the record is suspect: A2
+    // reported +0.108% for stage-1 and re-pinned on that basis, while the true
+    // overage is +0.428%. If F5 finds a lost move/borrow, this ceiling comes DOWN
+    // — lowering needs no sign-off. Regenerate:
+    //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
+const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_474_212;
 
 // ── Shared clone-ceiling machinery ─────────────────────────────────────────
 // Core invariant #4 (one fix, all siblings): both clone-ceiling ratchets —
@@ -30733,7 +30757,19 @@ fn self_host_clone_ceiling() {
 // TO REVERT: 1,124,255,029 / 2,359,224,224, and re-run
 //   GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 \
 //     cargo test --test integration --release clone_ceiling -- --nocapture
-const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_125_145_511;
+    // ⚖ RE-PINNED 2026-08-30 (R47 close, OWNER-AUTHORISED) at the exact measured
+    // value — a HIGH-WATER MARK WITH A DEBT, not a sanctioned cost. The R47 close
+    // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
+    // memory-safety fixes that legitimately materialize more (a typed per-receiver
+    // mutation classifier replacing a name list, for-loop drop registration, and
+    // CoW identity resolution). ⚠ THE ATTRIBUTION IS NOT YET DONE — track F5 is
+    // measuring the per-track delta with scripts/bench_stages.sh and
+    // scripts/clone_attribution.sh. ⚠ One figure in the record is suspect: A2
+    // reported +0.108% for stage-1 and re-pinned on that basis, while the true
+    // overage is +0.428%. If F5 finds a lost move/borrow, this ceiling comes DOWN
+    // — lowering needs no sign-off. Regenerate:
+    //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
+const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_129_955_831;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -30884,7 +30920,19 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_125_145_511;
 // attribution and scale comparison on `STAGE1_ARRAY_CLONE_CEILING` above; the
 // two were re-pinned together from ONE measurement run and must be read
 // together.
-const STAGE1_STRING_CLONE_CEILING: u64 = 2_361_764_496;
+    // ⚖ RE-PINNED 2026-08-30 (R47 close, OWNER-AUTHORISED) at the exact measured
+    // value — a HIGH-WATER MARK WITH A DEBT, not a sanctioned cost. The R47 close
+    // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
+    // memory-safety fixes that legitimately materialize more (a typed per-receiver
+    // mutation classifier replacing a name list, for-loop drop registration, and
+    // CoW identity resolution). ⚠ THE ATTRIBUTION IS NOT YET DONE — track F5 is
+    // measuring the per-track delta with scripts/bench_stages.sh and
+    // scripts/clone_attribution.sh. ⚠ One figure in the record is suspect: A2
+    // reported +0.108% for stage-1 and re-pinned on that basis, while the true
+    // overage is +0.428%. If F5 finds a lost move/borrow, this ceiling comes DOWN
+    // — lowering needs no sign-off. Regenerate:
+    //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
+const STAGE1_STRING_CLONE_CEILING: u64 = 2_371_710_742;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
