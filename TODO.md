@@ -26,7 +26,7 @@ answer to the R46 failure (*"each round spins on each track never reaching the e
   `tests/integration.rs`.
 
 **⊕ TRACK E ADDED MID-ROUND (owner go, 2026-08-29) — THE SANITIZER SWEEP GATE, BOTH HALVES.**
-`scripts/sanitize_sweep.sh` is a CI job (`.github/workflows/ci.yml:321`) and it is **RED at HEAD** — three
+`scripts/sanitize_sweep.sh` is a CI job (find it with `grep -n sanitize_sweep .github/workflows/ci.yml`; the line number is deliberately not quoted — it had already drifted) and it is **RED at HEAD** — three
 unallowlisted leaks, independently confirmed on a clean tree by Track B's brief-review. **A red battery is
 never waivable**, and no other R47 track owns it. ⚠ **The gate is ALSO nondeterministic at its own boundary**
 — one fixture measured leaking on 6-8 of 8 runs of a SINGLE UNCHANGED BINARY. For a shrink-only ratchet that
@@ -2021,6 +2021,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0821`](todo/t0821.md) **MED** — [MED — #[ignore] silences the unit test but NOT the auto-scanned parity corpus] vector_task_mixed_await_int is a known S…
 - [`t0824`](todo/t0824.md) **MED** — [MED — scripts/known_gaps_census.sh --check is RED at HEAD, unadjudicated] The #[ignore]d known-gap test catch_binding_t…
 - [`t0826`](todo/t0826.md) **MED** — [MED — Core #2 name-matching inside the census tool, and it makes --fast a lie] scripts/known_gaps_census.sh's is_sh_row…
+- [`t0827`](todo/t0827.md) **MED** — [MED — two CI-wiring guards are satisfied by a COMMENTED-OUT step, and the tree already has the helper that fixes it] te…
 ### Low
 
 - [`t0606`](todo/t0606.md) — 🧹 (G1 follow-up) lint-file-scope: widen g1_projected_materialize_sites_untrack files[] IF a projected-materialize cow_be…

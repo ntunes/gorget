@@ -48,7 +48,9 @@
 # a valid code here: a wrong-lane row is a bug to fix, not a row to file.
 #
 # Regenerate: scripts/known_gaps_census.sh --check
-# NO TIMING OR ROW COUNT IS QUOTED HERE, deliberately. Each run prints its own
+# NO RUN TIMING OR ROSTER COUNT IN THIS BLOCK, deliberately: those two are the
+# ones that rotted. (The DATED `R44 … TWELVE rows` above stays — it is history
+# about THIS file, not a live roster figure.) Each run prints its own
 # `# roster N · PASS n · FAIL n · SKIPPED_SH n` on stderr; that line is the
 # number and it is always current. The cost discussion lives once, in
 # `scripts/known_gaps_census.sh`'s header.

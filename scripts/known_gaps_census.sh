@@ -41,7 +41,12 @@
 #   scripts/known_gaps_census.sh --isolate  # one subprocess per row (hang triage)
 #   scripts/known_gaps_census.sh <name>…    # census only these tests
 #
-# COST — NO FIGURE IS QUOTED HERE, DELIBERATELY. Run it (Core #5):
+# COST — NO RUN TIMING OR ROSTER COUNT IN THIS BLOCK, DELIBERATELY: those two are
+# the ones that rotted. Two figures elsewhere in this header deliberately STAY,
+# because neither tracks the roster: the structural `~90 s` driver build (it
+# explains WHY batching matters) and the DATED `Measured at R44: 12 of 98`
+# above (history, supporting a qualitative claim, not a live count).
+# Run it (Core #5):
 #   time scripts/known_gaps_census.sh          # full
 #   time scripts/known_gaps_census.sh --fast   # meant to skip the self-host rows
 # Each run ends with its own `# roster N · PASS n · FAIL n · SKIPPED_SH n` line

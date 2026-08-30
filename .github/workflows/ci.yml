@@ -107,8 +107,9 @@ jobs:
       # shebang (compare the comment on the step above: "A guard CI does not run
       # is not a guard").
       #
-      # IN THE MAIN JOB, not a separate one like the sanitize sweep. NO TIMING IS
-      # QUOTED HERE, deliberately — `time scripts/known_gaps_census.sh` prints
+      # IN THE MAIN JOB, not a separate one like the sanitize sweep. NO RUN TIMING
+      # OR ROSTER COUNT IS QUOTED HERE, deliberately — those are the two that
+      # rotted; `time scripts/known_gaps_census.sh` prints
       # its own `# roster N · PASS n · FAIL n` line, and the cost discussion
       # lives once, in that script's header. What makes it cheap is structural,
       # not a number: the census BATCHES every row of a test file into one
