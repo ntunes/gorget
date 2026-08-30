@@ -30369,12 +30369,20 @@ fn self_host_bootstrap() {
     // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
     // memory-safety fixes that legitimately materialize more (a typed per-receiver
     // mutation classifier replacing a name list, for-loop drop registration, and
-    // CoW identity resolution). ⚠ THE ATTRIBUTION IS NOT YET DONE — track F5 is
-    // measuring the per-track delta with scripts/bench_stages.sh and
-    // scripts/clone_attribution.sh. ⚠ One figure in the record is suspect: A2
-    // reported +0.108% for stage-1 and re-pinned on that basis, while the true
-    // overage is +0.428%. If F5 finds a lost move/borrow, this ceiling comes DOWN
-    // — lowering needs no sign-off. Regenerate:
+    // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
+    // ten R47 integration merges, one release build per cell, `gg` md5 per row):
+    // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
+    // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
+    // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
+    // inflow. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
+    // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
+    // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
+    // SITE: by ablation, 33% of the array overage and 47% of the string overage sit
+    // in D1's `typecheck.gg::reject_no_method_on_primitive` chokepoint, which runs
+    // up to four sequential resolution walks per method call (leading term:
+    // t0715's EquipInfo deep-clone shape). That share is a REGRESSION TO RECLAIM,
+    // not a sanctioned cost — this ceiling comes DOWN when it is; lowering needs no
+    // sign-off. Regenerate:
     //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
 const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_144_626;
 
@@ -30449,12 +30457,20 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_144_626;
     // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
     // memory-safety fixes that legitimately materialize more (a typed per-receiver
     // mutation classifier replacing a name list, for-loop drop registration, and
-    // CoW identity resolution). ⚠ THE ATTRIBUTION IS NOT YET DONE — track F5 is
-    // measuring the per-track delta with scripts/bench_stages.sh and
-    // scripts/clone_attribution.sh. ⚠ One figure in the record is suspect: A2
-    // reported +0.108% for stage-1 and re-pinned on that basis, while the true
-    // overage is +0.428%. If F5 finds a lost move/borrow, this ceiling comes DOWN
-    // — lowering needs no sign-off. Regenerate:
+    // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
+    // ten R47 integration merges, one release build per cell, `gg` md5 per row):
+    // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
+    // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
+    // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
+    // inflow. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
+    // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
+    // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
+    // SITE: by ablation, 33% of the array overage and 47% of the string overage sit
+    // in D1's `typecheck.gg::reject_no_method_on_primitive` chokepoint, which runs
+    // up to four sequential resolution walks per method call (leading term:
+    // t0715's EquipInfo deep-clone shape). That share is a REGRESSION TO RECLAIM,
+    // not a sanctioned cost — this ceiling comes DOWN when it is; lowering needs no
+    // sign-off. Regenerate:
     //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
 const SELF_COMPILE_STRING_CLONE_CEILING: u64 = 31_474_212;
 
@@ -30762,12 +30778,20 @@ fn self_host_clone_ceiling() {
     // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
     // memory-safety fixes that legitimately materialize more (a typed per-receiver
     // mutation classifier replacing a name list, for-loop drop registration, and
-    // CoW identity resolution). ⚠ THE ATTRIBUTION IS NOT YET DONE — track F5 is
-    // measuring the per-track delta with scripts/bench_stages.sh and
-    // scripts/clone_attribution.sh. ⚠ One figure in the record is suspect: A2
-    // reported +0.108% for stage-1 and re-pinned on that basis, while the true
-    // overage is +0.428%. If F5 finds a lost move/borrow, this ceiling comes DOWN
-    // — lowering needs no sign-off. Regenerate:
+    // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
+    // ten R47 integration merges, one release build per cell, `gg` md5 per row):
+    // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
+    // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
+    // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
+    // inflow. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
+    // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
+    // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
+    // SITE: by ablation, 33% of the array overage and 47% of the string overage sit
+    // in D1's `typecheck.gg::reject_no_method_on_primitive` chokepoint, which runs
+    // up to four sequential resolution walks per method call (leading term:
+    // t0715's EquipInfo deep-clone shape). That share is a REGRESSION TO RECLAIM,
+    // not a sanctioned cost — this ceiling comes DOWN when it is; lowering needs no
+    // sign-off. Regenerate:
     //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
 const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_129_955_831;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
@@ -30925,12 +30949,20 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_129_955_831;
     // sweep measured all four meters over by +0.30%..+0.43%; the round landed three
     // memory-safety fixes that legitimately materialize more (a typed per-receiver
     // mutation classifier replacing a name list, for-loop drop registration, and
-    // CoW identity resolution). ⚠ THE ATTRIBUTION IS NOT YET DONE — track F5 is
-    // measuring the per-track delta with scripts/bench_stages.sh and
-    // scripts/clone_attribution.sh. ⚠ One figure in the record is suspect: A2
-    // reported +0.108% for stage-1 and re-pinned on that basis, while the true
-    // overage is +0.428%. If F5 finds a lost move/borrow, this ceiling comes DOWN
-    // — lowering needs no sign-off. Regenerate:
+    // CoW identity resolution). ⚖ ATTRIBUTION DONE (2026-08-30, bisect over all
+    // ten R47 integration merges, one release build per cell, `gg` md5 per row):
+    // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
+    // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
+    // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
+    // inflow. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
+    // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
+    // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
+    // SITE: by ablation, 33% of the array overage and 47% of the string overage sit
+    // in D1's `typecheck.gg::reject_no_method_on_primitive` chokepoint, which runs
+    // up to four sequential resolution walks per method call (leading term:
+    // t0715's EquipInfo deep-clone shape). That share is a REGRESSION TO RECLAIM,
+    // not a sanctioned cost — this ceiling comes DOWN when it is; lowering needs no
+    // sign-off. Regenerate:
     //   bash scripts/self_host_mem_baseline.sh --out /tmp/m.json
 const STAGE1_STRING_CLONE_CEILING: u64 = 2_371_710_742;
 
