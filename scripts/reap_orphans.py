@@ -215,7 +215,19 @@ class Root:
             self.owner_alive = True
 
 
-def scan(verbose=False):
+def scan(root_filter=None):
+    """Enumerate the domain. `root_filter` NARROWS it to scratch roots whose
+    basename starts with that prefix.
+
+    THIS PARAMETER IS A SAFETY BOUNDARY, NOT A CONVENIENCE. `--self-test` plants
+    live processes and then exercises the KILL path, and it is wired into
+    `cargo test --test lints`, which several agents run concurrently on a shared
+    box. A self-test that reaps whatever an unrestricted scan happens to find is
+    a box-wide SIGKILL fired by a test -- the precise incident the ownership
+    predicate exists to prevent, committed by the tool that prevents it. So the
+    self-test scans ONLY the uniquely-prefixed roots it created, and cannot see
+    another agent's processes at all.
+    """
     root_dir = temp_root()
     roots = []
     untagged_temp_dirs = 0
@@ -237,9 +249,11 @@ def scan(verbose=False):
                 if is_untagged:
                     # `tempfile::TempDir` / mkdtemp produce `.tmpXXXXXX` with NO
                     # owner tag at all. Counted so the blind spot has a number
-                    # instead of being an unstated absence.
+                    # instead of being an unstated absence. The count survives a
+                    # `root_filter`: it is a read-only statement about the
+                    # domain, and nothing is ever signalled on its strength.
                     untagged_temp_dirs += 1
-                else:
+                elif root_filter is None or name.startswith(root_filter):
                     roots.append(Root(entry.path))
     except OSError as e:
         print(f"cannot list {root_dir}: {e}", file=sys.stderr)
@@ -283,7 +297,46 @@ def scan(verbose=False):
         "untagged_temp_dirs": untagged_temp_dirs,
         "pids_examined": seen_pids,
         "temp_root": root_dir,
+        "root_filter": root_filter,
     }
+
+
+def kill_owned_tree(pid):
+    """SIGKILL a process — its whole GROUP, but ONLY when it leads one.
+
+    THE GUARD IS THE WHOLE POINT, AND IT MATTERS MORE HERE THAN ANYWHERE ELSE IN
+    THIS TREE. `os.killpg(os.getpgid(pid))` on a process that is NOT a group
+    leader signals whatever group it happens to be in — which, for anything
+    spawned without `setpgid` / `start_new_session`, is some OTHER live session's
+    group. `scripts/proc_guard.py` carries the same guard, but there the pids are
+    OUR OWN CHILDREN; here they are STRANGERS, found by walking `/proc`. An
+    unguarded group kill on a stranger is a name-matching `pkill` with extra
+    steps — it signals processes nobody identified.
+
+    `getpgid(pid) == pid` is exactly the harness's own spawn shape
+    (`process_group(0)` makes the child a group LEADER), so a genuine orphan
+    qualifies and its grandchildren go with it. Anything else gets a single-pid
+    kill, because the blast radius of that group is unknown and an unknown blast
+    radius is not ours to signal.
+
+    Returns "group" / "pid" / None (failed) so the caller can PRINT which
+    happened: an operator has to be able to see that a tree kill degraded.
+    """
+    try:
+        pgid = os.getpgid(pid)
+    except OSError:
+        pgid = None
+    if pgid is not None and pgid == pid:
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+            return "group"
+        except OSError:
+            pass
+    try:
+        os.kill(pid, signal.SIGKILL)
+        return "pid"
+    except OSError:
+        return None
 
 
 def report(res, preflight=False, do_reap=False) -> int:
@@ -292,6 +345,9 @@ def report(res, preflight=False, do_reap=False) -> int:
     print("=== orphan scan (predicate: OWNERSHIP — exe under a scratch root "
           "whose owning run is dead) ===")
     print(f"temp root:        {res['temp_root']}")
+    if res.get("root_filter"):
+        print(f"DOMAIN RESTRICTED to roots named {res['root_filter']}* — this is "
+              f"NOT a whole-box scan and must not be read as one.")
     print(f"pids examined:    {res['pids_examined']} "
           f"(this PID namespace only — processes outside it are INVISIBLE, "
           f"not absent)")
@@ -316,19 +372,12 @@ def report(res, preflight=False, do_reap=False) -> int:
     rc = 0
     if do_reap:
         for pid, exe, r in res["reapable"]:
-            try:
-                # Kill the process GROUP: the orphan is a group leader (the
-                # harness spawns with process_group(0)), so its own children go
-                # with it. A bare kill(pid) leaves the grandchildren spinning —
-                # which is how this class survives a "cleanup" in the first place.
-                try:
-                    os.killpg(os.getpgid(pid), signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    os.kill(pid, signal.SIGKILL)
-                print(f"    reaped pid {pid} ({exe})")
-            except OSError as e:
-                print(f"    FAILED to reap pid {pid}: {e}")
+            how = kill_owned_tree(pid)
+            if how is None:
+                print(f"    FAILED to reap pid {pid}")
                 rc = 1
+            else:
+                print(f"    reaped pid {pid} [{how} kill] ({exe})")
     elif res["reapable"]:
         print("\n(dry run — nothing was signalled. Pass --reap to act.)")
 
@@ -353,8 +402,18 @@ def report(res, preflight=False, do_reap=False) -> int:
 
 
 # ─────────────────────────────── the self-test ───────────────────────────────
-# Four controls. Control 3 IS the incident that motivated the ownership
-# predicate, encoded as a regression test.
+# SIX controls. Two of them are incidents this file has already caused or nearly
+# caused, encoded as regression tests; a third is the incident that motivated the
+# ownership predicate in the first place.
+#
+# ⚠ THE WHOLE SELF-TEST RUNS INSIDE A UNIQUE, PER-INVOCATION DOMAIN. It plants
+# live processes and then exercises the KILL path, and it is wired into
+# `cargo test --test lints`, which several agents run concurrently on this box.
+# An earlier version called `report(scan(), do_reap=True)` on an UNRESTRICTED
+# scan — a box-wide SIGKILL fired by a unit test, from the track whose own
+# deliverable is "dry-run by default". Every `scan()` below is filtered to the
+# prefix this invocation minted, so the test cannot SEE another agent's
+# processes, let alone signal them.
 
 def self_test() -> int:
     import shutil
@@ -365,31 +424,60 @@ def self_test() -> int:
     fails = 0
     made = []
     procs = []
+    # Unique per invocation, and deliberately NOT `_`-separable into digits: the
+    # owner-tag parser takes the last whole decimal component, and a prefix like
+    # `gg_st_1234_` would offer it a second candidate.
+    pfx = f"gg_st{os.getpid()}x{time.time_ns()}_"
 
-    def sleeper(path):
+    def sleeper(path, **kw):
         # A real executable under a real root, so /proc/<pid>/exe resolves to it.
         shutil.copy("/bin/sleep", path)
         os.chmod(path, 0o755)
         p = subprocess.Popen([path, "600"], stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
+                             stderr=subprocess.DEVNULL, start_new_session=True, **kw)
         procs.append(p)
         return p
 
+    def check(name, cond, why):
+        nonlocal fails
+        if not cond:
+            fails += 1
+        print(f"  {'ok  ' if cond else 'FAIL'} {name:48s} {why}")
+
+    def alive(pid):
+        """RUNNING, not merely present in /proc.
+
+        A killed process whose parent has not `wait()`ed is a ZOMBIE: its
+        `/proc/<pid>` directory persists, so a bare `os.path.exists` reports it
+        alive forever. Measured — it made this test fail on two controls that
+        had in fact been killed correctly. The `sh` leader in control 6 stays
+        alive by design, so its dead child stays unreaped by design too.
+        """
+        if pid is None:
+            return False
+        try:
+            with open(f"{PROC}/{pid}/stat", "rb") as fh:
+                raw = fh.read().decode("utf-8", "replace")
+        except OSError:
+            return False
+        return raw[raw.rfind(")") + 2:].split()[0] != "Z"
+
     try:
-        # CONTROL 1 (RED) — a live process under a root whose owner pid is dead.
         dead_owner = 999_999
         while proc_start_epoch(dead_owner) is not None:
             dead_owner -= 1
-        red_root = os.path.join(tmp, f"gg_selftest_reap_{dead_owner}")
+
+        # CONTROL 1 (RED) — a live process under a root whose owner pid is dead.
+        # Named after the binary the original incident was about, so a name-based
+        # reaper and an ownership-based one cannot be told apart by anything
+        # except the predicate itself.
+        red_root = os.path.join(tmp, f"{pfx}reap_{dead_owner}")
         os.makedirs(red_root, exist_ok=True)
         made.append(red_root)
-        # Name it after the binary the original incident was about, so a
-        # name-based reaper and an ownership-based one cannot be told apart by
-        # anything except the predicate itself.
         red_proc = sleeper(os.path.join(red_root, "async_select_diff"))
 
         # CONTROL 2 (GREEN) — same shape, but the owner is THIS live process.
-        live_root = os.path.join(tmp, f"gg_selftest_reap_{os.getpid()}")
+        live_root = os.path.join(tmp, f"{pfx}reap_{os.getpid()}")
         os.makedirs(live_root, exist_ok=True)
         made.append(live_root)
         green_proc = sleeper(os.path.join(live_root, "async_select_diff"))
@@ -399,71 +487,123 @@ def self_test() -> int:
         # executor's `target/release/deps/integration-<hash>`. A
         # `pkill -f async_select_diff` kills it; an ownership predicate cannot
         # even SEE it, because it is absent from the domain rather than excluded
-        # from it. ⚠ The prefix deliberately avoids `gg_`: putting the control
-        # inside the scratch family would test something else.
+        # from it by a list somebody maintains. The prefix deliberately avoids
+        # `gg_`: putting the control inside the scratch family would test
+        # something else. It is asserted absent from EVERY bucket, not merely
+        # from `reapable`, so the domain-filter above cannot be what excludes it.
         name_dir = tempfile.mkdtemp(prefix="selftest_namectl_")
         made.append(name_dir)
         outside = os.path.join(name_dir, "deps")
         os.makedirs(outside, exist_ok=True)
         name_proc = sleeper(os.path.join(outside, "async_select_diff"))
 
-        # CONTROL 5 (UNPARSABLE TAG) — a root that IS in the scratch family but
+        # CONTROL 4 (UNPARSABLE TAG) — a root that IS in the scratch family but
         # whose name carries no whole-component pid. It must be UNDECIDABLE, not
         # reapable: guessing an owner out of a random suffix is how the first
-        # version of this file nearly killed control 3.
-        untagged_family = tempfile.mkdtemp(prefix="gg_selftest_notag_x")
-        made.append(untagged_family)
-        notag_proc = sleeper(os.path.join(untagged_family, "async_select_diff"))
+        # version of this file flagged control 3 for reaping.
+        notag_root = tempfile.mkdtemp(prefix=f"{pfx}notagx")
+        made.append(notag_root)
+        notag_proc = sleeper(os.path.join(notag_root, "async_select_diff"))
 
-        # CONTROL 4 (OUT OF DOMAIN) — a live process inside an UNTAGGED temp
-        # family, the `tempfile::TempDir` blind spot. It must be REPORTED as
-        # undecidable-or-invisible, never counted as "0 orphans, all clear".
+        # CONTROL 5 (OUT OF DOMAIN) — a live process inside an UNTAGGED temp
+        # family, the `tempfile::TempDir` blind spot. It must be REPORTED as a
+        # blind class, never counted as "0 orphans, all clear".
         untagged = tempfile.mkdtemp(prefix=".tmp")
         made.append(untagged)
         oob_proc = sleeper(os.path.join(untagged, "async_select_diff"))
 
+        # ⭐ CONTROL 6 (NON-LEADER) — the control WITHOUT which this guard cannot
+        # catch its own class. Every other sleeper above is spawned with
+        # `start_new_session=True`, so `getpgid(pid) == pid` holds for all of
+        # them and an UNGUARDED `killpg(getpgid(pid))` passes every one. This
+        # control is the case that separates them:
+        #
+        #   a stranger `sh` leads its own group and then EXECs a sleep whose
+        #   binary is OUTSIDE the domain — so the leader is not reapable — while
+        #   a backgrounded child of it, in the SAME group and NOT a leader, runs
+        #   a binary INSIDE a dead-owner root, so the child IS reapable.
+        #
+        # An unguarded group kill on the child signals its group, i.e. the
+        # stranger leader too. The guard must degrade to a single-pid kill and
+        # the leader must SURVIVE. That is a `pkill` with extra steps, caught.
+        pg_root = os.path.join(tmp, f"{pfx}pgroup_{dead_owner}")
+        os.makedirs(pg_root, exist_ok=True)
+        made.append(pg_root)
+        inside_bin = os.path.join(pg_root, "async_select_diff")
+        shutil.copy("/bin/sleep", inside_bin)
+        os.chmod(inside_bin, 0o755)
+        outside_dir = tempfile.mkdtemp(prefix="selftest_leader_")
+        made.append(outside_dir)
+        outside_bin = os.path.join(outside_dir, "leader_sleep")
+        shutil.copy("/bin/sleep", outside_bin)
+        os.chmod(outside_bin, 0o755)
+        pidfile = os.path.join(outside_dir, "childpid")
+        leader = subprocess.Popen(
+            ["sh", "-c", f"{inside_bin} 600 & echo $! > {pidfile}; exec {outside_bin} 600"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        procs.append(leader)
+
+        # Give every sleeper time to exec, and read control 6's child pid.
+        member_pid = None
+        for _ in range(60):
+            if os.path.exists(pidfile) and open(pidfile).read().strip():
+                member_pid = int(open(pidfile).read().strip())
+                break
+            time.sleep(0.05)
         time.sleep(0.4)
-        res = scan()
+
+        res = scan(root_filter=pfx)
         reaped = {pid for pid, _, _ in res["reapable"]}
         left = {pid for pid, _, _ in res["leave"]}
-
-        def check(name, cond, why):
-            nonlocal fails
-            if not cond:
-                fails += 1
-            print(f"  {'ok  ' if cond else 'FAIL'} {name:46s} {why}")
+        undec = {pid for pid, _, _ in res["undecidable"]}
+        every = reaped | left | undec
 
         check("RED   orphan under a dead-owner root is FLAGGED",
               red_proc.pid in reaped, f"pid {red_proc.pid}")
         check("GREEN live-owner root is LEFT ALONE",
               green_proc.pid in left and green_proc.pid not in reaped,
               f"pid {green_proc.pid}")
-        check("NAME  identically-named binary OUTSIDE the domain SURVIVES",
-              name_proc.pid not in reaped,
+        check("NAME  identically-named binary is ABSENT FROM EVERY BUCKET",
+              name_proc.pid not in every,
               f"pid {name_proc.pid} — this is the pkill incident, as a test")
-        check("OOD   untagged-temp process is not counted as absent",
-              oob_proc.pid not in reaped and res["untagged_temp_dirs"] > 0,
-              f"pid {oob_proc.pid}; {res['untagged_temp_dirs']} untagged dirs reported")
-        undec = {pid for pid, _, _ in res["undecidable"]}
         check("NOTAG unparsable owner tag is UNDECIDABLE, not reapable",
               notag_proc.pid in undec and notag_proc.pid not in reaped,
               f"pid {notag_proc.pid}")
+        check("OOD   untagged-temp process is out of domain, blind class counted",
+              oob_proc.pid not in every and res["untagged_temp_dirs"] > 0,
+              f"pid {oob_proc.pid}; {res['untagged_temp_dirs']} untagged dirs reported")
+        check("PGRP  non-leader member of a STRANGER's group is FLAGGED",
+              member_pid in reaped, f"pid {member_pid}")
+        check("PGRP  the control really is a NON-leader (else it proves nothing)",
+              member_pid is not None and os.getpgid(member_pid) != member_pid,
+              f"pgid {os.getpgid(member_pid) if member_pid else '?'} != pid {member_pid}")
         check("preflight FAILS LOUDLY on the poisoned box",
               report(res, preflight=True) != 0, "rc != 0")
 
-        # And the reaper actually reaps, when told to.
-        rc = report(scan(), do_reap=True)
-        time.sleep(0.4)
+        # And the reaper actually reaps, when told to — still inside the domain
+        # this invocation minted, never a whole-box scan.
+        rc = report(scan(root_filter=pfx), do_reap=True)
+        for _ in range(60):
+            if not alive(red_proc.pid) and not alive(member_pid):
+                break
+            time.sleep(0.05)
+
         check("RED   orphan is GONE after --reap",
-              red_proc.poll() is not None, "process exited")
+              not alive(red_proc.pid), "process exited")
+        check("PGRP  non-leader member is GONE after --reap",
+              not alive(member_pid), f"pid {member_pid}")
+        check("PGRP  the STRANGER GROUP LEADER SURVIVED",
+              alive(leader.pid),
+              f"pid {leader.pid} — an unguarded killpg(getpgid(member)) kills it")
         check("GREEN survivor is STILL ALIVE after --reap",
-              green_proc.poll() is None, "untouched")
+              alive(green_proc.pid), "untouched")
         check("NAME  control is STILL ALIVE after --reap",
-              name_proc.poll() is None, "untouched — the incident does not recur")
+              alive(name_proc.pid), "untouched — the incident does not recur")
         check("OOD   control is STILL ALIVE after --reap",
-              oob_proc.poll() is None, "untouched")
+              alive(oob_proc.pid), "untouched")
         check("NOTAG control is STILL ALIVE after --reap",
-              notag_proc.poll() is None, "untouched — a guess is never a kill")
+              alive(notag_proc.pid), "untouched — a guess is never a kill")
         check("--reap exits 0 when every kill succeeded", rc == 0, f"rc={rc}")
     finally:
         for p in procs:
@@ -472,10 +612,18 @@ def self_test() -> int:
                 p.wait(timeout=5)
             except Exception:                                     # noqa: BLE001
                 pass
+        # Single-pid kills only: these strays' groups are not ours to signal —
+        # which is the same rule `kill_owned_tree` enforces, and the reason this
+        # cleanup does not use it.
+        for extra in (member_pid,):
+            if extra:
+                try:
+                    os.kill(extra, signal.SIGKILL)
+                except OSError:
+                    pass
         for d in made:
             try:
-                import shutil as _sh
-                _sh.rmtree(d, ignore_errors=True)
+                shutil.rmtree(d, ignore_errors=True)
             except Exception:                                     # noqa: BLE001
                 pass
     print(f"\nself-test: {fails} failures")

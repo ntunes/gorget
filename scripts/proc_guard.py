@@ -116,8 +116,16 @@ def _kill_group(pid, proc=None):
     So the group kill is conditional on the same structural fact the whole design
     rests on: `getpgid(pid) == pid` means we created that group and every member
     of it descends from the child we spawned. When it does not hold, the blast
-    radius is unknown, and an unknown blast radius gets a single-pid kill — the
-    same reasoning `scripts/reap_orphans.py` applies to its domain.
+    radius is unknown, and an unknown blast radius gets a single-pid kill.
+
+    ⚠ THIS SENTENCE USED TO CLAIM `scripts/reap_orphans.py` APPLIED THE SAME
+    REASONING, AND IT DID NOT — it carried the unguarded `killpg(getpgid(pid))`
+    this guard exists to prevent, on pids that are STRANGERS rather than our own
+    children. The claim was caught by an output review, not by a test, which is
+    exactly what AGENTS.md Core #14 predicts of an invariant asserted only in
+    prose. It is now true: `reap_orphans.kill_owned_tree` carries the same guard
+    and its self-test has a NON-LEADER control that fails without it. Verify that
+    before trusting this sentence again — do not inherit it.
     """
     try:
         pgid = os.getpgid(pid)
