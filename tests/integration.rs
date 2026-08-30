@@ -24,6 +24,21 @@ fn build_timeout() -> Duration {
 /// Read `var` if set; otherwise return `base` scaled by the host's load
 /// pressure (`loadavg(1m) / available_parallelism`), floor 1.0. Linux
 /// only — falls back to `base` when `/proc/loadavg` isn't readable.
+/// ⚠ THE RATIO IS CAPPED, and the cap is the point. Uncapped, this multiplied
+/// EVERY deadline by an unbounded `load/cpus` while `scripts/run_integration.sh`
+/// scaled the thread count DOWN off the same `/proc/loadavg` — so one spinning
+/// orphan raised every deadline AND lengthened every run, in the same direction,
+/// self-amplifying: hung fixtures live longer, more children pile up, load rises
+/// further. A hang quietly becomes a pass. Measured here: one orphan burned a
+/// core for forty hours and a load-adjusted deadline false-redded a bootstrap in
+/// the same round.
+///
+/// 4x is chosen so the adjustment still does what it was added for — absorbing a
+/// genuinely busy box, where the observed need was ~2-3x — while a POISONED box
+/// stops being able to buy an arbitrary amount of extra time. The pre-flight
+/// (`scripts/reap_orphans.py`, wired into `run_integration.sh`) is the other half:
+/// this cap bounds the damage, the pre-flight refuses to measure at all.
+const MAX_LOAD_RATIO: f64 = 4.0;
 fn env_or_load_adjusted_secs(var: &str, base: u64) -> u64 {
     if let Some(secs) = std::env::var(var).ok().and_then(|s| s.parse::<u64>().ok()) {
         return secs;
@@ -35,7 +50,7 @@ fn env_or_load_adjusted_secs(var: &str, base: u64) -> u64 {
     let cpus = std::thread::available_parallelism()
         .map(|n| n.get() as f64)
         .unwrap_or(1.0);
-    let ratio = (load / cpus).max(1.0);
+    let ratio = (load / cpus).clamp(1.0, MAX_LOAD_RATIO);
     ((base as f64) * ratio).ceil() as u64
 }
 /// Timeout for compiled test binaries. Override with GG_TEST_TIMEOUT_SECS env var
@@ -199,86 +214,15 @@ fn run_with_timeout(cmd: &mut Command, fixture: &str) -> std::process::Output {
 /// — the anti-OOM property is preserved.
 const MAX_CAPTURE_BYTES: usize = 256 * 1024 * 1024;
 
-/// Drain a child stream in a background thread, capturing at most `cap` bytes
-/// (`MAX_CAPTURE_BYTES` in production; the unit guards pass a tiny cap). Past the
-/// cap it keeps reading (so the pipe never blocks and deadlocks the poll loop)
-/// but DISCARDS the overflow and raises `overflow` so the caller can kill the
-/// runaway child. For any well-behaved fixture this is behaviourally identical
-/// to `read_to_end` (the flag never trips).
-fn capped_drain<R: std::io::Read + Send + 'static>(
-    mut reader: R,
-    overflow: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    cap: usize,
-) -> std::thread::JoinHandle<Vec<u8>> {
-    use std::sync::atomic::Ordering;
-    std::thread::spawn(move || {
-        let mut buf: Vec<u8> = Vec::new();
-        let mut chunk = [0u8; 64 * 1024];
-        loop {
-            match reader.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => {
-                    if buf.len() < cap {
-                        let room = cap - buf.len();
-                        buf.extend_from_slice(&chunk[..n.min(room)]);
-                        if buf.len() >= cap {
-                            overflow.store(true, Ordering::Relaxed);
-                        }
-                    }
-                    // Over cap: keep draining to avoid a pipe-buffer deadlock,
-                    // but discard — the flag is already set and the poll loop
-                    // will kill the child.
-                }
-                // A signal (SIGCHLD etc.) can interrupt a blocking read; the old
-                // `read_to_end` retried EINTR internally, so treat it as a
-                // transient retry rather than a fatal end-of-stream (a bare
-                // `break` here would silently truncate the capture).
-                Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
-            }
-        }
-        buf
-    })
-}
-
-/// SIGKILL a child AND its whole process group, then reap it.
+/// The runner lives in `gorget::proc_guard`, not here.
 ///
-/// `run_with_deadline` spawns every child as a process-group *leader*
-/// (`process_group(0)`, so the group id == the child's pid), so signalling the
-/// NEGATIVE pid reaps the entire tree — not just the direct child. This matters
-/// because the fixtures fork grandchildren: `gg run` spawns the compiled fixture
-/// binary, and some fixtures fork their own spinner. A plain `child.kill()` only
-/// reaps the direct child; the grandchild survives, reparents to PID 1, and
-/// spins at ~100% CPU forever (measured: orphaned `deadwrite_ok_while_drain`
-/// binaries at PPID 1 after deadline kills, cleaned up by hand). Killing the
-/// group closes that leak on every kill path (deadline, overflow).
-///
-/// Unix only (this box is Linux); elsewhere it degrades to a direct kill.
-#[cfg(unix)]
-fn kill_process_tree(child: &mut std::process::Child) {
-    // `kill(2)` is always linked (std depends on libc), so declaring the symbol
-    // here avoids adding a direct `libc` dev-dependency for one call.
-    unsafe extern "C" {
-        fn kill(pid: i32, sig: i32) -> i32;
-    }
-    const SIGKILL: i32 = 9;
-    let pid = child.id() as i32;
-    // Negative pid ⇒ signal the process GROUP led by `pid` (set at spawn via
-    // process_group(0)). Reaps the direct child + any grandchildren it forked.
-    unsafe {
-        kill(-pid, SIGKILL);
-    }
-    // Belt-and-suspenders: also target the direct child, then reap it so it does
-    // not linger as a zombie.
-    child.kill().ok();
-    child.wait().ok();
-}
-
-#[cfg(not(unix))]
-fn kill_process_tree(child: &mut std::process::Child) {
-    child.kill().ok();
-    child.wait().ok();
-}
+/// It used to live here, and it was the ONLY correct one of five hand-rolled
+/// copies in this repo: the other four called a plain `child.kill()`, which
+/// reaps the direct child and leaves every grandchild spinning. The prose
+/// describing that defect sat in this file while four copies still had it —
+/// prose does not propagate a fix. `tests/lints.rs::process_spawn_deadline_arm_count`
+/// now stops copy six from appearing.
+use gorget::proc_guard::{RunFailure, run_with_deadline_opts};
 
 /// Run a command with a specific timeout duration. Returns the output or panics
 /// if the process hangs beyond the deadline OR produces runaway output past
@@ -297,90 +241,36 @@ fn run_with_deadline_capped(
     timeout: Duration,
     cap: usize,
 ) -> std::process::Output {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    run_capped_with_stdin(cmd, fixture, timeout, cap, None)
+}
 
+/// `run_with_deadline_capped`, plus optional bytes to feed the child on stdin.
+///
+/// The stdin variant used to be a SIXTH hand-rolled spawn loop further down this
+/// file, and it was one of the four missing the process group. One runner, one
+/// kill path.
+fn run_capped_with_stdin(
+    cmd: &mut Command,
+    fixture: &str,
+    timeout: Duration,
+    cap: usize,
+    stdin_data: Option<&[u8]>,
+) -> std::process::Output {
     let start = std::time::Instant::now();
-    // Put the child in its OWN process group (leader pid == group id) so a
-    // deadline/overflow kill can reap the whole tree via the negative pgid —
-    // see kill_process_tree. Without this, `gg run`'s grandchild fixture binary
-    // orphans to PID 1 and spins forever.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to execute compiled binary");
-
-    // Drain stdout/stderr in background threads to prevent pipe-buffer deadlock.
-    // Without this, a child writing >64KB to stderr blocks until the parent reads,
-    // but the parent is polling try_wait() waiting for exit — classic deadlock.
-    // The drain is CAPPED (see MAX_CAPTURE_BYTES / capped_drain): a runaway
-    // infinite-print fixture must not be allowed to fill RAM unboundedly.
-    let stdout_handle = child.stdout.take().unwrap();
-    let stderr_handle = child.stderr.take().unwrap();
-
-    let overflow = Arc::new(AtomicBool::new(false));
-    let stdout_thread = capped_drain(stdout_handle, overflow.clone(), cap);
-    let stderr_thread = capped_drain(stderr_handle, overflow.clone(), cap);
-
-    let deadline = std::time::Instant::now() + timeout;
-
-    // Poll the child in a loop with short sleeps
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                // Runaway output: a LIVE fixture crossed the capture cap while
-                // still running. Kill its whole process tree and surface as a
-                // panic (caught by run_with_timeout_catching → a per-fixture
-                // CRASH), same as the deadline path — memory is already bounded
-                // at the cap by capped_drain.
-                if overflow.load(Ordering::Relaxed) {
-                    kill_process_tree(&mut child);
-                    panic!(
-                        "Test binary for {fixture} produced runaway output (>{} bytes) — killed",
-                        cap,
-                    );
-                }
-                if std::time::Instant::now() >= deadline {
-                    kill_process_tree(&mut child);
-                    panic!(
-                        "Test binary for {fixture} timed out after {}s",
-                        timeout.as_secs()
-                    );
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => panic!("Failed to wait on child for {fixture}: {e}"),
+    // PANIC, not `Result`, is this harness's contract: `run_with_timeout_catching`
+    // turns the unwind into a per-fixture CRASH, and the message text is read
+    // back by the EXPECTED_HANGS accounting, so both strings are load-bearing.
+    let out = match run_with_deadline_opts(cmd, timeout, cap, stdin_data) {
+        Ok(out) => out,
+        Err(RunFailure::Deadline { secs }) => {
+            panic!("Test binary for {fixture} timed out after {secs}s")
         }
+        Err(RunFailure::Overflow { cap }) => panic!(
+            "Test binary for {fixture} produced runaway output (>{cap} bytes) — killed",
+        ),
     };
-
-    let stdout = stdout_thread.join().unwrap_or_default();
-    let stderr = stderr_thread.join().unwrap_or_default();
-
     record_timing(fixture, start.elapsed());
-
-    // Exit-at-cap race guard. A child that emitted >cap and then exited FAST can
-    // win the try_wait() race before the poll-loop overflow branch ever observes
-    // the flag — leaving us about to return a buffer SILENTLY TRUNCATED at the
-    // cap as if it were the child's complete output. Now that both drain threads
-    // have joined, `overflow` is authoritative: if set, the capture hit the cap
-    // ⇒ raise the SAME loud runaway panic as the in-loop path (caught upstream →
-    // a per-fixture CRASH). Contract: >cap ⇒ loud CRASH, never silent truncation
-    // presented as complete output.
-    if overflow.load(Ordering::Relaxed) {
-        panic!(
-            "Test binary for {fixture} produced runaway output (>{} bytes) — killed",
-            cap,
-        );
-    }
-
-    std::process::Output { status, stdout, stderr }
+    out
 }
 
 /// Extract a caught panic payload as a `&str` for message assertions.
@@ -3186,8 +3076,6 @@ fn run_gg_with_args(fixture: &str, binary_args: &[&str], expected: &str) {
 
 /// Build and run a `.gg` fixture, piping `stdin_data` to the binary.
 fn run_gg_with_stdin(fixture: &str, stdin_data: &str, expected: &str) {
-    use std::io::Write;
-
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
 
@@ -3216,57 +3104,17 @@ fn run_gg_with_stdin(fixture: &str, stdin_data: &str, expected: &str) {
         String::from_utf8_lossy(&build.stderr),
     );
 
-    // 2. Execute with stdin (with timeout)
-    let mut child = Command::new(&exe_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to execute compiled binary");
-
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(stdin_data.as_bytes())
-        .unwrap();
-
-    // Drain stdout/stderr in background threads to prevent pipe-buffer deadlock
-    let mut stdout_handle = child.stdout.take().unwrap();
-    let mut stderr_handle = child.stderr.take().unwrap();
-    let stdout_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        stdout_handle.read_to_end(&mut buf).ok();
-        buf
-    });
-    let stderr_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        stderr_handle.read_to_end(&mut buf).ok();
-        buf
-    });
-
-    let deadline = std::time::Instant::now() + test_binary_timeout();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    child.kill().ok();
-                    child.wait().ok();
-                    panic!("Test binary for {fixture} timed out after {}s", test_binary_timeout().as_secs());
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => panic!("Failed to wait on child for {fixture}: {e}"),
-        }
-    };
-    let output = std::process::Output {
-        status,
-        stdout: stdout_thread.join().unwrap_or_default(),
-        stderr: stderr_thread.join().unwrap_or_default(),
-    };
+    // 2. Execute with stdin (with timeout). Through the SHARED runner: this was
+    // a hand-rolled spawn loop with an uncapped `read_to_end` and a plain
+    // `child.kill()`, so a fixture that forked left the grandchild spinning.
+    let mut run_cmd = Command::new(&exe_path);
+    let output = run_capped_with_stdin(
+        &mut run_cmd,
+        fixture,
+        test_binary_timeout(),
+        MAX_CAPTURE_BYTES,
+        Some(stdin_data.as_bytes()),
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     // 3. Assert stdout

@@ -11,6 +11,7 @@ pub mod loader;
 pub mod lockfile;
 pub mod manifest;
 pub mod parser;
+pub mod proc_guard;
 pub mod report;
 pub mod resolver;
 pub mod resource_schema;

@@ -24720,3 +24720,222 @@ fn for_loop_producers_carry_a_drop_disposition() {
         producers.len()
     );
 }
+
+// ─────────────────────── the subprocess harness (R47 F4a) ───────────────────
+// Three guards over ONE instrument each, all of them the Core #6 shape: a class
+// that kept coming back in new costumes, converted into something executable.
+
+/// **Arm-count guard — no SIXTH hand-rolled process runner.**
+///
+/// Five `run_with_deadline` clones existed in this repo. Exactly ONE put the
+/// child in its own process group; the other four called a plain `child.kill()`,
+/// which reaps the direct child and leaves every grandchild alive. `gg run`
+/// spawns the compiled fixture and some fixtures fork workers, so "the direct
+/// child" is rarely the whole story — the grandchild reparents and spins at
+/// ~100% CPU forever. One such orphan burned a full core for forty hours here,
+/// and because the harness autoscales BOTH its thread count and every
+/// load-adjusted deadline off `/proc/loadavg`, it corrupted every later
+/// measurement on the box in both directions at once.
+///
+/// The prose describing that defect already existed, one file away from four
+/// copies that still had it. Prose does not propagate a fix; this does.
+///
+/// The subject is a spawn-and-POLL loop — `try_wait()` — which is what a
+/// hand-rolled deadline runner looks like and what `gorget::proc_guard`
+/// replaces. A bare `.output()` or `.status()` is a DIFFERENT class (no deadline
+/// at all, filed as `todo/t0842`) and deliberately not this lint's subject: it
+/// blocks rather than orphaning, and folding the two together would make the
+/// count so large that a real new fork could hide inside it.
+///
+/// ⚠ Comments and string literals are stripped before counting, so the prose in
+/// `proc_guard.rs` describing `child.kill()` does not count as a call to it. A
+/// grep does not know the difference — measured: `grep -rn 'child.kill'` reports
+/// 7 sites tree-wide where there are 6, and `grep -c '\.output()'
+/// tests/integration.rs` reports 28 where there are 27.
+#[test]
+fn process_spawn_deadline_arm_count() {
+    /// Every spawn-and-poll loop in the tree lives in `src/proc_guard.rs`.
+    /// Raising this is not a fix: route the new caller through the shared runner.
+    const EXPECTED_POLL_LOOPS: usize = 1;
+
+    let mut sites: Vec<String> = Vec::new();
+    for path in tracked_files() {
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let Ok(src) = std::fs::read_to_string(path) else { continue };
+        let code = strip_rust_comments_and_strings(&src);
+        for (i, line) in code.lines().enumerate() {
+            if line.contains(".try_wait()") {
+                sites.push(format!("  {}:{}", path.display(), i + 1));
+            }
+        }
+    }
+    sites.sort();
+    assert_eq!(
+        sites.len(),
+        EXPECTED_POLL_LOOPS,
+        "process spawn-and-poll loop count changed: {} vs expected \
+         {EXPECTED_POLL_LOOPS}.\n{}\n\n\
+         A NEW one is a sixth hand-rolled runner. Do not raise this baseline — call \
+         `gorget::proc_guard::run_with_deadline{{,_opts}}`, which spawns the child as a \
+         process-group LEADER and signals the negative pgid, so the kill reaches \
+         grandchildren. A REMOVED one lowers it.",
+        sites.len(),
+        sites.join("\n"),
+    );
+}
+
+/// Strip `//` and `/* */` comments (nested) and string/char literals, replacing
+/// them with blanks so line numbers survive.
+///
+/// Counting occurrences in raw source is how two of this round's own
+/// enumerations came out wrong: a doc comment describing `child.kill()` counted
+/// as a call site. An enumeration whose instrument cannot tell code from prose
+/// is not total, it is approximate.
+fn strip_rust_comments_and_strings(src: &str) -> String {
+    let b: Vec<char> = src.chars().collect();
+    let mut out: Vec<char> = b.clone();
+    let n = b.len();
+    fn blank(out: &mut [char], a: usize, z: usize) {
+        for c in out.iter_mut().take(z).skip(a) {
+            if *c != '\n' {
+                *c = ' ';
+            }
+        }
+    }
+    let mut i = 0usize;
+    while i < n {
+        if b[i] == '/' && i + 1 < n && b[i + 1] == '/' {
+            let mut j = i;
+            while j < n && b[j] != '\n' {
+                j += 1;
+            }
+            blank(&mut out, i, j);
+            i = j;
+        } else if b[i] == '/' && i + 1 < n && b[i + 1] == '*' {
+            let (mut depth, mut j) = (1usize, i + 2);
+            while j < n && depth > 0 {
+                if b[j] == '/' && j + 1 < n && b[j + 1] == '*' {
+                    depth += 1;
+                    j += 2;
+                } else if b[j] == '*' && j + 1 < n && b[j + 1] == '/' {
+                    depth -= 1;
+                    j += 2;
+                } else {
+                    j += 1;
+                }
+            }
+            blank(&mut out, i, j);
+            i = j;
+        } else if b[i] == 'r' && i + 1 < n && (b[i + 1] == '#' || b[i + 1] == '"') {
+            let mut h = 0usize;
+            let mut j = i + 1;
+            while j < n && b[j] == '#' {
+                h += 1;
+                j += 1;
+            }
+            if j < n && b[j] == '"' {
+                j += 1;
+                while j < n {
+                    if b[j] == '"' && b[j + 1..].iter().take(h).filter(|c| **c == '#').count() == h {
+                        j += 1 + h;
+                        break;
+                    }
+                    j += 1;
+                }
+                blank(&mut out, i, j);
+                i = j;
+            } else {
+                i += 1;
+            }
+        } else if b[i] == '"' {
+            let mut j = i + 1;
+            while j < n {
+                if b[j] == '\\' {
+                    j += 2;
+                    continue;
+                }
+                if b[j] == '"' {
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            blank(&mut out, i, j);
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// **The verdict classifier certifies itself, on every `--test lints` run.**
+///
+/// `scripts/verdict.py` is the ONE definition of "what happened when we ran
+/// this", shared by bash (`sanitize_sweep.sh`), Python (`robustness_map.py`) and
+/// this file. Shelling out rather than reimplementing keeps one source of truth
+/// — the same precedent `todo_index_is_current` and `tracked_files()` already
+/// set, and `python3` is already a round-close dependency.
+///
+/// Two modes, because they catch different things and each left the other's
+/// class green when it was deliberately broken (measured, not assumed):
+///   * `--self-test` fires EVERY label and then demonstrates `CLEAN` by the
+///     INVERSE — it must NOT fire on any of the other inputs. "Make every label
+///     fire" alone is satisfied by a fall-through sink, which is the exact defect
+///     being retired: `[ -z "$_labels" ] && _labels=CLEAN` published CLEAN over a
+///     deterministic rc-139 SIGSEGV.
+///   * `--prove-exclusive` enumerates the observable tuple space and asserts the
+///     rules are mutually exclusive, that CLEAN is never reached from a nonzero
+///     or timed-out run, and that every DECLARED ambiguity cell really resolves
+///     to `UNKNOWN`. Deleting the ambiguity rule and guessing a verdict is not an
+///     overlap, so only the last check sees it.
+#[test]
+fn verdict_classifier_self_test_and_exclusivity() {
+    for mode in ["--self-test", "--prove-exclusive"] {
+        let out = std::process::Command::new("python3")
+            .args(["scripts/verdict.py", mode, "--quiet"])
+            .output()
+            .unwrap_or_else(|e| panic!("python3 scripts/verdict.py {mode} failed to start: {e}"));
+        assert!(
+            out.status.success(),
+            "scripts/verdict.py {mode} FAILED — the one verdict classifier cannot \
+             certify itself, so no verdict in this tree is trustworthy.\n{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr),
+        );
+    }
+}
+
+/// **The orphan reaper certifies itself, including the incident that shaped it.**
+///
+/// `scripts/reap_orphans.py --self-test` plants five live processes and checks
+/// all five dispositions. Two of them are the whole design:
+///   * the NAME control — an identically-named binary OUTSIDE the scratch domain
+///     must SURVIVE. A `pkill -f 'integration-[0-9a-f]'` has already killed a
+///     live executor's release test binary mid-gate in this tree; the ownership
+///     predicate cannot even see that process, because it is absent from the
+///     domain rather than excluded from it by a list somebody maintains.
+///   * the UNPARSABLE-TAG control — a root in the scratch family whose name
+///     carries no whole-component pid must be UNDECIDABLE, not reapable. This one
+///     is not hypothetical either: the first version of the predicate dug digits
+///     out of the MIDDLE of a word and invented an owner for a random `mkdtemp`
+///     suffix, which its own self-test caught before it shipped.
+///
+/// The test itself is what makes those two survivals a regression net rather
+/// than a comment.
+#[test]
+fn orphan_reaper_self_test() {
+    let out = std::process::Command::new("python3")
+        .args(["scripts/reap_orphans.py", "--self-test"])
+        .output()
+        .unwrap_or_else(|e| panic!("python3 scripts/reap_orphans.py --self-test failed: {e}"));
+    assert!(
+        out.status.success(),
+        "scripts/reap_orphans.py --self-test FAILED. A reaper that cannot pass its own \
+         NAME control is the pkill incident waiting to happen again.\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}

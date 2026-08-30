@@ -16,10 +16,29 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use gorget::backend::c::c_runtime::{
     PANIC_NORMAL, RUNTIME_PREAMBLE, RUNTIME_STRING, RUNTIME_STRING_BASE_OPS,
 };
+use gorget::proc_guard::{RunFailure, run_with_deadline};
+
+/// `cc` and the produced binary both go through the shared deadline runner.
+///
+/// They used to be bare `.output()` calls: NO deadline, so a runtime that loops
+/// forever hung this target with nothing above it, and no process group, so a
+/// forked grandchild would have outlived the run. Both are the class
+/// `gorget::proc_guard` exists to retire; there is nothing special about this
+/// file that earns an exemption.
+fn run_or_panic(cmd: &mut Command, what: &str, timeout: Duration) -> std::process::Output {
+    match run_with_deadline(cmd, timeout) {
+        Ok(out) => out,
+        Err(RunFailure::Deadline { secs }) => panic!("{what} timed out after {secs}s"),
+        Err(RunFailure::Overflow { cap }) => {
+            panic!("{what} produced runaway output (>{cap} bytes) — killed")
+        }
+    }
+}
 
 // ───────────────────────── Str runtime, called directly ─────────────────
 
@@ -57,7 +76,8 @@ fn str_fat_ptr_runtime() {
     fs::write(&c_path, &c_source).unwrap();
 
     // Compile
-    let compile = Command::new("cc")
+    let mut compile_cmd = Command::new("cc");
+    compile_cmd
         .args([
             "-std=c11",
             "-Wall",
@@ -74,9 +94,8 @@ fn str_fat_ptr_runtime() {
         ])
         .arg(&exe_path)
         .arg(&c_path)
-        .args(["-lm"])
-        .output()
-        .expect("failed to run cc");
+        .args(["-lm"]);
+    let compile = run_or_panic(&mut compile_cmd, "cc", Duration::from_secs(300));
 
     if !compile.status.success() {
         let stderr = String::from_utf8_lossy(&compile.stderr);
@@ -84,9 +103,8 @@ fn str_fat_ptr_runtime() {
     }
 
     // Run
-    let run = Command::new(&exe_path)
-        .output()
-        .expect("failed to run str_test");
+    let mut run_cmd = Command::new(&exe_path);
+    let run = run_or_panic(&mut run_cmd, "str_test", Duration::from_secs(60));
 
     let stdout = String::from_utf8_lossy(&run.stdout);
     let stderr = String::from_utf8_lossy(&run.stderr);

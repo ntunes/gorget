@@ -57,7 +57,7 @@
 //! runtime-side faults are caught there, user-code faults are not.
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::Duration;
 
 /// Sanitize builds are slower than the integration suite's, so the default
@@ -265,51 +265,29 @@ fn backend_flag_selection_is_wired() {
     assert_eq!(backend_flag_for("check", None), None);
 }
 
+/// Run a command with a deadline, through the SHARED runner
+/// (`gorget::proc_guard`).
+///
+/// ⚠ This was a hand-rolled copy, and it had the defect the correct copy's own
+/// doc comment described one file away: a plain `child.kill()` reaps the direct
+/// child and leaves every grandchild alive, spinning at ~100% CPU and poisoning
+/// every later load-adjusted measurement on the box. It also drained with an
+/// UNCAPPED `read_to_end` (the OOM class the capture cap exists to prevent) and
+/// joined the drain threads AFTER the kill, so a grandchild holding the pipe
+/// write end hung the timeout handler itself. All three are gone with the copy.
+///
+/// This is the ASAN target, so the uncapped drain mattered doubly here: a
+/// sanitizer report on a runaway fixture is exactly when the capture is largest.
 fn run_with_deadline(cmd: &mut Command, fixture: &str, timeout: Duration) -> std::process::Output {
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("failed to execute compiled binary");
-
-    let stdout_handle = child.stdout.take().unwrap();
-    let stderr_handle = child.stderr.take().unwrap();
-
-    let stdout_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut reader = stdout_handle;
-        reader.read_to_end(&mut buf).ok();
-        buf
-    });
-    let stderr_thread = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut buf = Vec::new();
-        let mut reader = stderr_handle;
-        reader.read_to_end(&mut buf).ok();
-        buf
-    });
-
-    let deadline = std::time::Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    child.kill().ok();
-                    child.wait().ok();
-                    panic!("Process for {fixture} timed out after {}s", timeout.as_secs());
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => panic!("Failed to wait on child for {fixture}: {e}"),
+    match gorget::proc_guard::run_with_deadline(cmd, timeout) {
+        Ok(out) => out,
+        Err(gorget::proc_guard::RunFailure::Deadline { secs }) => {
+            panic!("Process for {fixture} timed out after {secs}s")
         }
-    };
-
-    let stdout = stdout_thread.join().unwrap_or_default();
-    let stderr = stderr_thread.join().unwrap_or_default();
-
-    std::process::Output { status, stdout, stderr }
+        Err(gorget::proc_guard::RunFailure::Overflow { cap }) => {
+            panic!("Process for {fixture} produced runaway output (>{cap} bytes) — killed")
+        }
+    }
 }
 
 fn fixture_path(name: &str) -> PathBuf {

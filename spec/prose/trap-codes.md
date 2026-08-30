@@ -11,12 +11,28 @@
 > the ordinary `throws` / `Result` channel instead).
 
 > **Exit-code context.** Trap + ICE = exit **101** is one tier of the toolchain's
-> fixed exit-code taxonomy (ratified 2026-07-15): `0` success · `1` **static
+> fixed exit-code taxonomy (ratified 2026-07-15, amended in place 2026-08-10),
+> which the ledger records as a **total enumeration**: `0` success · `1` **static
 > rejection** (parse OR semantic OR flow-sensitive may-move liveness — ONE
 > compile-error class, `error[E_Code]:`) · `2` usage · `101` **trap + ICE** (this
-> registry) · `103` **fuel** (`ggdef`-only, outside the cross-lane compared set).
+> registry) · `102` **uncaught channel error** · `103` **fuel** (`ggdef`-only,
+> outside the cross-lane compared set).
 > Static rejection (never ran, stdout empty) and a runtime trap (ran and died)
 > are DELIBERATELY distinct codes. Full table: `docs/language-reference.md` §10.10.
+>
+> **`102` is the channel sibling of this registry, and it is deliberately NOT a
+> trap.** An *error* reaching the top of `main` is not a *fault*: it renders one
+> frozen-grammar line, `error: <Displayable of payload>`, on stderr and exits
+> **102** — where a trap renders `trap[T_X]: detail at file:line:col` and exits
+> 101. Reusing 101 for both would re-blur errors≠faults at the one place a
+> harness reads the distinction. `main throws int` is the carve-out: the escaping
+> int keeps the exit-code idiom, because there the user chose the exit contract.
+>
+> Being a TOTAL enumeration is what makes the set useful to tooling: its
+> complement is exactly the fault domain, so a `gg`-produced process exiting
+> outside `{0, 1, 2, 101, 102, 103}` died on a signal or off-contract and can
+> never be graded clean. `scripts/verdict.py` — the one verdict classifier every
+> lane shares — is anchored on this table for precisely that reason.
 
 ## Source of truth & the ratchet
 

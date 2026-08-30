@@ -143,6 +143,18 @@ TIMEOUT_CEILING="${TIMEOUT_CEILING:-0}"
 # SKIP_COPY + NO_BINARY + RUNNER_FAIL: the sweep's own plumbing failing.
 # Never legitimate, and RUNNER_FAIL in particular would otherwise read CLEAN.
 INFRA_CEILING="${INFRA_CEILING:-0}"
+# CRASH: the process died on a SIGNAL, or exited off the ratified toolchain
+# taxonomy (docs/define-gorget/decisions.md:2062-2070 — a TOTAL enumeration, so
+# its complement is exactly the fault domain). This label DID NOT EXIST here
+# before: every such run fell into the CLEAN sink, which is how a deterministic
+# SIGSEGV was published as a clean run. Fatal at 0 — a crash in this corpus is a
+# soundness defect, not debt.
+CRASH_CEILING="${CRASH_CEILING:-0}"
+# UNKNOWN: the classifier could not positively determine what happened. Also new
+# — the old body's answer to this case was CLEAN. An UNKNOWN is the instrument
+# telling you it cannot see, which is strictly more useful than a green it has
+# not earned, and it must never accumulate silently.
+UNKNOWN_CEILING="${UNKNOWN_CEILING:-0}"
 # COVERAGE FLOOR: fixtures that actually produced a RUN verdict. A fixture
 # drifting CLEAN -> BUILD_FAIL_* is a silent coverage loss the old gate could
 # not see; this is the ratchet that sees it. Raise it when the corpus grows.
@@ -151,32 +163,50 @@ COVERAGE_FLOOR="${COVERAGE_FLOOR:-1743}"
 # can be demonstrated without a 60-second fixture.
 RUN_TIMEOUT="${RUN_TIMEOUT:-60}"
 
+# PRE-FLIGHT. A test binary left alive by a DEAD run raises loadavg, and this
+# sweep's own `timeout $RUN_TIMEOUT` budget is a wall-clock one -- a poisoned box
+# turns real work into spurious TIMEOUTs. Dry run; the predicate is OWNERSHIP,
+# never a name (see scripts/reap_orphans.py). GG_SKIP_PREFLIGHT=1 escapes it.
+if [ -z "${GG_SKIP_PREFLIGHT:-}" ] && command -v python3 >/dev/null 2>&1; then
+  python3 scripts/reap_orphans.py --preflight || {
+    echo "refusing to measure a poisoned box (GG_SKIP_PREFLIGHT=1 overrides)"; exit 2; }
+fi
+
 [ -x "$GG" ] || { echo "no gg at $GG — run cargo build first"; exit 2; }
 [ "$REPS" -ge 2 ] || { echo "REPS must be >= 2: a union verdict and a flakiness census need at least two runs"; exit 2; }
 mkdir -p "$OUT/logs" "$OUT/tmp" "$OUT/w"
 
 # --- classification ----------------------------------------------------------
-# The label set for ONE run. Not an if/elif chain: a chain lets the first match
-# shadow every later one, which is how UBSan stayed invisible inside all 316
-# leaking fixtures, and how a single ASan rep could suppress a LEAK verdict.
+# The label set for ONE run is decided by scripts/verdict.py, the ONE classifier
+# every lane uses. It is SHELLED OUT rather than reimplemented here, on the same
+# precedent tests/lints.rs already sets for `python3 scripts/todo_index.py`:
+# three hand-maintained copies of a marker set and an exit-code table cannot
+# catch their own divergence, and two of the three copies in this tree were
+# measurably wrong.
+#
+# ⚠ WHAT THE OLD BODY GOT WRONG, and why this is not a refactor. It ended with
+#   `[ -z "$_labels" ] && _labels=CLEAN`
+# — a DEFAULT SINK. Any exit code outside {124,125,126,127} with a silent log
+# read CLEAN, so a deterministic **rc 139 SIGSEGV published as a clean run**.
+# That is R47 failure instance 1, and it lived in this file. verdict.py has no
+# sink: CLEAN is a POSITIVE verdict (rc 0, no sanitizer finding, no timeout) and
+# anything unclassifiable is UNKNOWN and loud.
+#
+# What is KEPT, because it was right: the multi-label SET (not an if/elif chain
+# — a chain lets the first match shadow every later one, which is how UBSan
+# stayed invisible inside all 316 leaking fixtures), the `ASAN_<kind>` spelling
+# the allowlists and the ceiling greps key on, the rc triage for 124 and
+# 125/126/127, and the CAPTURED sanitizer kind.
+#
+# The ASan exit-code convention is passed as an INPUT parsed from $ASANOPT, not
+# assumed: this file uses `exitcode=0` and every other site uses 99, so a
+# classifier that hardcodes either is wrong under the other.
+ASAN_EXITCODE=$(printf '%s' "$ASANOPT" | sed -n 's/.*exitcode=\([0-9]*\).*/\1/p')
+[ -z "$ASAN_EXITCODE" ] && ASAN_EXITCODE=1
 classify_log() {
-  _log="$1"; _rc="$2"; _labels=""
-  if [ "$_rc" = "124" ]; then echo "TIMEOUT"; return; fi
-  # 125 = `timeout` itself failed, 126/127 = could not execute. The RUNNER is
-  # broken, and a broken runner produces an EMPTY log, which every content-based
-  # classifier below would read as CLEAN — the whole corpus silently green. That
-  # is this gate's own defect class, so it gets its own label and a ceiling of 0.
-  # (Measured, not imagined: an unexported RUN_TIMEOUT did exactly this.)
-  case "$_rc" in 125|126|127) echo "RUNNER_FAIL"; return;; esac
-  if   grep -q 'ERROR: AddressSanitizer: stack-overflow' "$_log" 2>/dev/null; then
-    _labels="ASAN_stack-overflow"
-  elif grep -q 'ERROR: AddressSanitizer' "$_log" 2>/dev/null; then
-    _labels="ASAN_$(grep -o 'AddressSanitizer: [a-z-]*' "$_log" | head -1 | cut -d' ' -f2)"
-  fi
-  grep -q 'ERROR: LeakSanitizer' "$_log" 2>/dev/null && _labels="$_labels${_labels:+,}LEAK"
-  grep -q 'runtime error:'       "$_log" 2>/dev/null && _labels="$_labels${_labels:+,}UBSAN"
-  [ -z "$_labels" ] && _labels=CLEAN
-  echo "$_labels"
+  _log="$1"; _rc="$2"
+  python3 scripts/verdict.py --phase run --rc "$_rc" --stderr "$_log" \
+      --sanitizer-exitcode "$ASAN_EXITCODE" --format sweep
 }
 
 # The leak CLASS signature of one run: for each leak record, the first stack
@@ -266,7 +296,13 @@ run_one() {
   printf '%s\t%s\t%s\t%s\n' "$stem" "$union" "$flags" "$classes"
 }
 export -f run_one classify_log leak_classes
-export OUT GG REPS LSANOPT ASANOPT RUN_TIMEOUT
+# ⚠ ONE list, used by the corpus path AND by the self-test's re-export, so the
+# two cannot drift. Paired with `bash -uc` at both call sites: a name missing
+# from here is now an unset-variable ABORT inside the worker rather than an
+# empty string that quietly turns the corpus green.
+SWEEP_WORKER_ENV="OUT GG REPS LSANOPT ASANOPT RUN_TIMEOUT ASAN_EXITCODE"
+# shellcheck disable=SC2086
+export $SWEEP_WORKER_ENV
 
 # --- leak adjudication -------------------------------------------------------
 # $1 allowlist  $2 verdicts.tsv  $3 destination dir.
@@ -331,7 +367,10 @@ run_selftest() {
   _sout="$OUT/selftest"; mkdir -p "$_sout/logs" "$_sout/tmp" "$_sout/w"
   _saved_out="$OUT"; _saved_reps="$REPS"
   OUT="$_sout"; [ "$REPS" -lt 2 ] && REPS=2
-  export OUT REPS
+  # shellcheck disable=SC2086  -- the SAME list the corpus path exports, never a
+  # second hand-maintained copy: re-exporting only OUT and REPS here is what let
+  # this self-test pass while the corpus path was silently missing a name.
+  export $SWEEP_WORKER_ENV
   : > "$_sout/verdicts.tsv"
   # Drive the controls through the SAME `xargs bash -c` pipeline the corpus uses,
   # not by calling run_one in this shell. A control that takes a different path
@@ -340,8 +379,10 @@ run_selftest() {
   # came back empty, and the whole corpus read CLEAN while an in-process
   # self-test passed. Q2, on the self-test itself.
   find "$SELFTEST_DIR" -maxdepth 1 -name '*.gg' | sort \
-    | xargs -P 1 -I{} bash -c 'run_one "$@"' _ {} > "$_sout/verdicts.tsv"
-  OUT="$_saved_out"; REPS="$_saved_reps"; export OUT REPS
+    | xargs -P 1 -I{} bash -uc 'run_one "$@"' _ {} > "$_sout/verdicts.tsv"
+  OUT="$_saved_out"; REPS="$_saved_reps"
+  # shellcheck disable=SC2086
+  export $SWEEP_WORKER_ENV
 
   _fail=0
   _get() { awk -F'\t' -v s="$1" -v c="$2" '$1==s{print $c}' "$_sout/verdicts.tsv"; }
@@ -359,6 +400,41 @@ run_selftest() {
   _want selftest_leak_twice       3 -
   _want selftest_alternating_leak 2 LEAK
   _want selftest_alternating_leak 3 FLAKY
+
+  # ⚠ EVERY LABEL, FIRED. The four fixtures above demonstrate CLEAN and LEAK —
+  # two of the labels this gate can emit — and a guard that has never been seen
+  # to fire is not evidence (docs/devbook/25). The rest cannot be produced by a
+  # .gg fixture on demand (you cannot ask a fixture to be killed by SIGSEGV under
+  # a sanitizer that catches SIGSEGV, or to make `timeout` itself fail), so they
+  # are fired through the SAME `classify_log` the corpus calls, on a synthetic
+  # log. Same code path, same shell-out, same one classifier.
+  _cl() { # rc log-contents expected
+    printf '%s' "$2" > "$_sout/probe.log"
+    _cg="$(classify_log "$_sout/probe.log" "$1")"
+    if [ "$_cg" != "$3" ]; then
+      echo "  SELF-TEST FAIL: classify_log(rc=$1) = '$_cg', expected '$3'"; _fail=1
+    fi
+  }
+  _cl 0   ''                                          CLEAN
+  _cl 139 ''                                          CRASH:sig11
+  _cl 134 ''                                          CRASH:sig6
+  _cl 124 ''                                          TIMEOUT
+  _cl 127 ''                                          RUNNER_FAIL
+  _cl 1   ''                                          UNKNOWN
+  _cl 0   'x.c:1: runtime error: signed overflow'     UBSAN
+  _cl 0   '==1==ERROR: LeakSanitizer: detected memory leaks' LEAK
+  _cl 0   '==1==ERROR: AddressSanitizer: heap-use-after-free' ASAN_heap-use-after-free
+  _cl 0   '==1==ERROR: AddressSanitizer: stack-overflow'      ASAN_stack-overflow
+  # THE INVERSE for CLEAN, which is the label that mattered: it must NOT fire on
+  # a silent nonzero exit. That single row is R47 failure instance 1 — this
+  # file's own `[ -z "$_labels" ] && _labels=CLEAN` published CLEAN over a
+  # deterministic rc-139 SIGSEGV, and "make CLEAN fire" passed the whole time.
+  for _rc in 139 134 7 1 124 127; do
+    printf '' > "$_sout/probe.log"
+    case "$(classify_log "$_sout/probe.log" "$_rc")" in
+      *CLEAN*) echo "  SELF-TEST FAIL: rc=$_rc classified CLEAN — the sink is back"; _fail=1;;
+    esac
+  done
 
   # The class signatures must be the SAME mechanism at 1 record and 2 records —
   # that is what makes the next assertion a same-fixture, same-signature test
@@ -426,13 +502,17 @@ fi
 
 # --- the corpus --------------------------------------------------------------
 if [ -n "$FIXLIST" ]; then cat "$FIXLIST"; else find tests/fixtures -maxdepth 1 -name '*.gg' | sort; fi \
-  | xargs -P "$JOBS" -I{} bash -c 'run_one "$@"' _ {} > "$OUT/verdicts.tsv"
+  | xargs -P "$JOBS" -I{} bash -uc 'run_one "$@"' _ {} > "$OUT/verdicts.tsv"
 
 awk -F'\t' '$2 ~ /ASAN_/             {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_corrupt"
 awk -F'\t' '$2 ~ /(^|,)LEAK(,|$)/    {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_leak"
 awk -F'\t' '$2 ~ /(^|,)UBSAN(,|$)/   {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_ubsan"
 awk -F'\t' '$2 ~ /(^|,)TIMEOUT(,|$)/ {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_timeout"
-awk -F'\t' '$2 == "SKIP_COPY" || $2 == "NO_BINARY" || $2 == "RUNNER_FAIL" {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_infra"
+awk -F'\t' '$2 == "SKIP_COPY" || $2 == "NO_BINARY" || $2 ~ /(^|,)RUNNER_FAIL(,|$)/ {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_infra"
+# CRASH carries its signal or its off-taxonomy rc after a colon (CRASH:sig11),
+# so the class match is on the PREFIX -- the kind is captured, never enumerated.
+awk -F'\t' '$2 ~ /(^|,)CRASH(:|,|$)/   {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_crash"
+awk -F'\t' '$2 ~ /(^|,)UNKNOWN(,|$)/   {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_unknown"
 awk -F'\t' '$3 ~ /FLAKY/             {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_flaky"
 awk -F'\t' '$3 ~ /CLASS_UNSTABLE/    {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_class_unstable"
 awk -F'\t' '$3 ~ /COUNT_DRIFT/       {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_count_drift"
@@ -453,6 +533,8 @@ n_count_drift=$(wc -l < "$OUT/got_count_drift")
 n_ubsan=$(wc -l < "$OUT/got_ubsan")
 n_timeout=$(wc -l < "$OUT/got_timeout")
 n_infra=$(wc -l < "$OUT/got_infra")
+n_crash=$(wc -l < "$OUT/got_crash")
+n_unknown=$(wc -l < "$OUT/got_unknown")
 
 echo "=== sanitize sweep ==="
 echo "instrument:  REPS=$REPS  JOBS=$JOBS  timeout=${RUN_TIMEOUT}s  LSAN_OPTIONS='${LSANOPT:-<default roots>}'  ASAN_OPTIONS='$ASANOPT'"
@@ -468,6 +550,8 @@ echo "leaks:       $(wc -l < "$OUT/got_leak") (allowlisted $(wc -l < "$OUT/allow
 echo "ubsan:       $n_ubsan (ceiling $UBSAN_CEILING)"
 echo "timeout:     $n_timeout (ceiling $TIMEOUT_CEILING)"
 echo "infra:       $n_infra (SKIP_COPY/NO_BINARY/RUNNER_FAIL; ceiling $INFRA_CEILING)"
+echo "crash:       $n_crash (signal / off-taxonomy exit; ceiling $CRASH_CEILING)"
+echo "unknown:     $n_unknown (classifier could not tell; ceiling $UNKNOWN_CEILING)"
 echo "flaky:       $n_flaky (verdict not unanimous over $REPS runs; ceiling $FLAKY_CEILING)"
 echo "class-drift: $n_class_unstable (leak MECHANISM SET not identical over $REPS runs; ceiling $CLASS_UNSTABLE_CEILING)"
 echo "count-drift: $n_count_drift (same mechanisms, differing record COUNTS — census, not a gate;"
@@ -504,6 +588,20 @@ fi
 if [ "$n_timeout" -gt "$TIMEOUT_CEILING" ]; then
   echo; echo "❌ TIMED OUT (killed at ${RUN_TIMEOUT}s) — ceiling $TIMEOUT_CEILING:"; sed 's/^/    /' "$OUT/got_timeout"
   echo "    A hang is a defect, not a flake. Root-cause it into a census row."
+  rc=1
+fi
+if [ "$n_crash" -gt "$CRASH_CEILING" ]; then
+  echo; echo "❌ CRASHED (signal, or an exit code off the ratified taxonomy) — ceiling $CRASH_CEILING:"
+  sed 's/^/    /' "$OUT/got_crash"
+  echo "    These used to read CLEAN. A process that dies on a signal has not"
+  echo "    run correctly, whatever its stdout said."
+  rc=1
+fi
+if [ "$n_unknown" -gt "$UNKNOWN_CEILING" ]; then
+  echo; echo "❌ UNCLASSIFIABLE OUTCOME(S) — ceiling $UNKNOWN_CEILING:"
+  sed 's/^/    /' "$OUT/got_unknown"
+  echo "    The classifier found no positive discriminator. Root-cause it into a"
+  echo "    verdict; do NOT widen a rule until it swallows the case."
   rc=1
 fi
 if [ "$n_infra" -gt "$INFRA_CEILING" ]; then

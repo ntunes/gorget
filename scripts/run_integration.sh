@@ -20,6 +20,31 @@
 # Env passthrough (GG_BACKEND, GG_RUNTIME_DIFF, GG_BUILD_TIMEOUT_SECS, …) is inherited.
 set -euo pipefail
 
+# PRE-FLIGHT. The autoscaling below reads /proc/loadavg, and so does every
+# load-adjusted deadline inside the suite (tests/integration.rs's
+# `env_or_load_adjusted_secs`). A test binary left spinning by a DEAD run
+# therefore corrupts this run's numbers in BOTH directions at once: fewer
+# threads AND longer deadlines, so a genuine hang can quietly pass. Measured,
+# not theoretical -- one orphan burned a core for 40 hours here and skewed a
+# whole round's measurements.
+#
+# The predicate is OWNERSHIP, never a name and never PPID: see
+# scripts/reap_orphans.py's header for why both of the obvious ones are wrong
+# (a name-matching pkill has already killed a live executor's run in this tree).
+# It is a DRY RUN -- this never kills anything.
+#
+# REACH, stated rather than implied: this covers ONE of the round-close battery's
+# entry points. The others -- the LLVM sweep (this same script with GG_BACKEND
+# set, so covered), `cargo test --lib`, `--test lints`, `--test security`,
+# `--test spec_conformance`, `-p ggdef`, and `python3 scripts/robustness_map.py`
+# -- start on an unchecked box. `scripts/sanitize_sweep.sh` calls it too.
+if [ -z "${GG_SKIP_PREFLIGHT:-}" ] && command -v python3 >/dev/null 2>&1; then
+  if ! python3 "$(dirname "$0")/reap_orphans.py" --preflight; then
+    echo "[run_integration] refusing to measure a poisoned box."
+    exit 1
+  fi
+fi
+
 NCPU=$(nproc)
 CAP=${GG_MAX_TEST_THREADS:-8}
 

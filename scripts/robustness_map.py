@@ -87,6 +87,14 @@ Usage:
 """
 import argparse, concurrent.futures, os, pathlib, shutil, subprocess, sys, tempfile
 
+# THE verdict classifier, shelled in as a module rather than reimplemented.
+# One definition of "what happened when we ran this", shared with
+# scripts/sanitize_sweep.sh and tests/lints.rs -- three copies of a marker
+# set and an exit-code table cannot catch their own divergence, and this
+# file used to hold one of the copies that was wrong.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import verdict  # noqa: E402  (path must be set first)
+
 ROOT = pathlib.Path(subprocess.run(["git", "rev-parse", "--show-toplevel"],
                                    capture_output=True, text=True,
                                    cwd=pathlib.Path(__file__).parent).stdout.strip())
@@ -104,12 +112,17 @@ JOIN = " / "   # the manifest joins output lines with this; compare like-for-lik
 # stdout is already correct) distinguishable from the program's own exit code.
 ASAN_OPTIONS = ("detect_leaks=1:halt_on_error=1:abort_on_error=0:print_summary=1"
                 ":allocator_may_return_null=1:exitcode=99")
-# What a sanitizer report LOOKS like on stderr. UBSan does NOT abort by default
-# (it is a -fsanitize-recover class), so it can only be seen by READING stderr --
-# an exit-code-only check misses the entire undefined-behaviour half of the lane.
-SANITIZER_MARKERS = ("ERROR: AddressSanitizer", "ERROR: LeakSanitizer",
-                     "SUMMARY: AddressSanitizer", "SUMMARY: UndefinedBehaviorSanitizer",
-                     "runtime error:")
+# What a sanitizer report LOOKS like on stderr is NOT decided here any more: it
+# is `scripts/verdict.py`'s sanitizer axis. UBSan does NOT abort by default (it
+# is a -fsanitize-recover class), so it can only be seen by READING stderr -- an
+# exit-code-only check misses the entire undefined-behaviour half of the lane,
+# and that reasoning now lives with the markers instead of beside a second copy
+# of them.
+#
+# The `exitcode=99` above is passed to the classifier as an INPUT
+# (`sanitizer_exitcode=`), never assumed: sanitize_sweep.sh uses 0 for the same
+# runs, and a classifier that hardcodes either is wrong under the other.
+SANITIZER_EXITCODE = 99
 
 # MANIFEST.tsv columns. The first six are the original schema and keep their
 # positions, so every existing `cut -f3` / grep over the file still means what it
@@ -134,29 +147,110 @@ ALL_LANES = ["c", "llvm", "selfhost", "asan", "ggdef"]
 # The lanes that answer "what does this program print". Divergence is defined
 # over THESE only -- see the module docstring.
 VALUE_LANES = ["c", "llvm", "selfhost"]
-BUCKETS = ["WORKS", "WRONG", "REJECTED", "BUILD-FAIL", "ICE", "TRAP",
-           "SANITIZE-FAIL", "NO-VERDICT"]
+# CRASH, TIMEOUT and UNKNOWN are NEW, and their absence was a live false-green:
+#   * with no CRASH cell, a run that died on SIGSEGV fell through `returncode
+#     != 0` and, on a cell whose expectation mentions a loud failure, graded
+#     WORKS. A rc-139 crash published as a pass, in a round-close gate.
+#   * with no TIMEOUT cell, a hung RUN graded TRAP and a hung BUILD graded
+#     BUILD-FAIL -- a hang recorded as the miscompile-class signal, against
+#     AGENTS.md's "every hang/spin/timeout gets root-caused into a census row,
+#     never merely killed".
+#   * with no UNKNOWN cell there was nowhere to put an outcome the tree cannot
+#     discriminate, so `_classify_build_failure` guessed BUILD-FAIL by
+#     fall-through. A guess in a baseline is worse than a gap in one.
+BUCKETS = ["WORKS", "WRONG", "REJECTED", "BUILD-FAIL", "ICE", "TRAP", "CRASH",
+           "TIMEOUT", "SANITIZE-FAIL", "UNKNOWN", "NO-VERDICT"]
+
+# scripts/verdict.py's canonical labels -> this map's bucket vocabulary, which is
+# deliberately COARSER. The classifier never guesses; the map records the coarser
+# outcome and keeps the classifier's own words in the detail column, so an
+# ambiguity is visible in the report rather than laundered into a bucket.
+#
+# ⚠ TRAP absorbs the run-phase rc-1 AMBIGUITY CELL (todo/t0647: the program's own
+# `exit(1)` and `gorget_panic_at`'s `exit(1)` are indistinguishable from
+# outside). That is a COARSENING of a stated ambiguity, not a manufactured
+# discriminator: both readings are "ran, then failed loudly", which is exactly
+# what this bucket has always meant here, and the detail column says so.
+VERDICT_TO_BUCKET = {
+    "CLEAN": None,            # caller compares stdout: WORKS or WRONG
+    "TRAP": "TRAP",
+    "CRASH": "CRASH",
+    "TIMEOUT": "TIMEOUT",
+    "RUNNER_FAIL": "UNKNOWN",  # our plumbing broke: the measurement is void
+    "CORRUPT": "SANITIZE-FAIL",
+    "LEAK": "SANITIZE-FAIL",
+    "UB": "SANITIZE-FAIL",
+    "ICE": "ICE",
+    "REJECTED": "REJECTED",
+    "BUILD_FAIL": "BUILD-FAIL",
+    "USAGE": "UNKNOWN",
+    "CHANNEL_ERROR": "TRAP",
+    "FUEL": "NO-VERDICT",
+    "UNKNOWN": "UNKNOWN",
+}
 
 
-def _verdict(expected: str, r, actual: str):
+def _verdict(expected: str, r, actual: str, sanitized=False, timed_out=False):
     """Shared run-result adjudication: identical on every lane, so a lane can
-    never disagree with another because of how its OUTCOME was read."""
-    if r.returncode != 0:
-        # Some cells are SUPPOSED to trap -- divide-by-zero, index-out-of-range,
-        # integer overflow. For those the trap IS the expected behaviour, so a
-        # clean exit would be the defect. The manifest marks them by describing a
-        # loud failure in the expectation rather than giving literal stdout.
+    never disagree with another because of how its OUTCOME was read.
+
+    ⚠ THE DEFECT THIS REPLACED, AND WHY IT MATTERS MORE THAN IT LOOKS. The old
+    body read `r.returncode != 0` and nothing else, so on any cell whose
+    expectation mentions a loud failure, ANY nonzero exit plus the right stdout
+    prefix graded WORKS -- including **rc 139, a SIGSEGV**. This file is a
+    round-close gate, so that was a segfault publishing as green.
+
+    The rule that retires it is ratified, not invented: the toolchain exit-code
+    taxonomy (docs/define-gorget/decisions.md:2062-2070) is a TOTAL enumeration,
+    so `rc not in {0,1,2,101,102,103}` is off-taxonomy and can NEVER be WORKS.
+    `scripts/verdict.py` owns that rule; this function only decides what the
+    map's coarser bucket vocabulary calls the result.
+    """
+    v = verdict.findings_for("run", r.returncode, stderr=r.stderr or "",
+                             stdout=r.stdout or "", timed_out=timed_out,
+                             sanitizer_exitcode=SANITIZER_EXITCODE if sanitized else None)
+    base = v.verdict.split(":", 1)[0]
+    bucket = VERDICT_TO_BUCKET[base]
+
+    if bucket is None:                              # a genuinely clean run
         if "loud failure" in expected:
-            return ("WORKS", f"trapped rc={r.returncode}") if "before" in actual \
-                else ("WRONG", f"trapped rc={r.returncode} but stdout={actual!r}")
-        return "TRAP", f"rc={r.returncode}"
+            # Exited 0 where a trap was required: the check silently did not fire.
+            return "WRONG", f"NO TRAP (rc=0), stdout={actual!r}"
+        return ("WORKS", actual) if actual == expected.strip() else ("WRONG", actual)
+
+    # Some cells are SUPPOSED to fail loudly -- divide-by-zero,
+    # index-out-of-range, integer overflow. For those the trap IS the expected
+    # behaviour, so a clean exit would be the defect; the manifest marks them by
+    # describing a loud failure in the expectation rather than giving literal
+    # stdout.
+    #
+    # ⚠ A CRASH or a TIMEOUT never satisfies that expectation. "Fails loudly"
+    # means the language's own diagnostic fired, not that the process died
+    # however it liked: a SIGSEGV is not a trap, and a hang is not a failure
+    # mode a program can be said to have chosen. THIS is the rule that retires
+    # the rc-139-grades-WORKS false-green, and it is the whole point of the
+    # CRASH and TIMEOUT columns existing.
+    #
+    # ⚠ But run-phase rc 1 DOES. The classifier calls it ambiguous, correctly --
+    # from outside, the program's own `exit(1)` and `gorget_panic_at`'s exit(1)
+    # are indistinguishable (todo/t0647). The MANIFEST resolves what the process
+    # alone cannot: a cell whose hand-written expectation says "a loud failure"
+    # has declared its intent, and the ledger RATIFIES that reading --
+    # docs/define-gorget/decisions.md:2060, "`main throws int`'s escaping int
+    # KEEPS the exit-code idiom (the user chose the exit contract)". So the
+    # ambiguity is resolved by an INPUT the classifier does not have, not by the
+    # classifier guessing. Every other UNKNOWN stays UNKNOWN.
+    ambiguous_run_rc1 = v.ambiguity is not None and v.ambiguity[0] == "run_rc1"
+    detail = f"{v.verdict} rc={r.returncode}"
+    if bucket in ("CRASH", "TIMEOUT") or (bucket == "UNKNOWN" and not ambiguous_run_rc1):
+        return bucket, f"{detail}: {v.detail.get(v.verdict, '')[:120]}"
     if "loud failure" in expected:
-        # Exited 0 where a trap was required: the check silently did not fire.
-        return "WRONG", f"NO TRAP (rc=0), stdout={actual!r}"
-    return ("WORKS", actual) if actual == expected.strip() else ("WRONG", actual)
+        return ("WORKS", detail) if "before" in actual \
+            else ("WRONG", f"{detail} but stdout={actual!r}")
+    return ("TRAP" if ambiguous_run_rc1 else bucket), detail
 
 
-def _classify_build_failure(err: str):
+def _classify_build_failure(err: str, rc: int = 1):
     """Split "the compiler REFUSED this program" from "the compiler ACCEPTED it and
     then failed to produce a binary". Those are opposite outcomes and must never
     share a bucket: a rejection is a diagnostic doing its job, while a BUILD-FAIL
@@ -164,14 +258,22 @@ def _classify_build_failure(err: str):
     signal. The discriminator cannot be `error[` alone, because gg codes only its
     SEMANTIC diagnostics (`error[E_TypeMismatch]`); lexer and parser errors are
     uncoded (`error: expected 'case', found '='`) and used to land in BUILD-FAIL,
-    which read as codegen breakage. Both end with the parse-error tally."""
-    if "panicked" in err:
-        return "ICE", "compiler panic"
-    if "error[" in err:
-        return "REJECTED", "rejected at check"
-    if "parse error(s) found" in err:
-        return "REJECTED", "rejected at parse"
-    return "BUILD-FAIL", "codegen/link failure"
+    which read as codegen breakage. Both end with the parse-error tally.
+
+    ⚠ WHAT CHANGED, AND WHY IT IS NOT A LOSS OF SIGNAL. This used to END with
+    `return "BUILD-FAIL", "codegen/link failure"` -- a DEFAULT SINK, so anything
+    that did not match the three markers was ASSERTED to be a codegen failure.
+    The split itself is right and is kept; what is gone is the guess. gg prints a
+    positive marker on the delivery path (`C compiler exited with:` from the C
+    backend, `Linking failed:` from LLVM), so BUILD-FAIL is now POSITIVELY
+    matched, and a build failure with none of the markers is UNKNOWN instead of
+    being asserted to be something it might not be.
+    """
+    v = verdict.findings_for("build", rc, stderr=err or "")
+    base = v.verdict.split(":", 1)[0]
+    bucket = VERDICT_TO_BUCKET[base] or "UNKNOWN"
+    why = v.detail.get(v.verdict, "")
+    return bucket, f"{base.lower().replace('_', ' ')}: {why[:120]}"
 
 
 def run_gg(cell: pathlib.Path, expected: str, tmp: pathlib.Path, backend=None):
@@ -185,14 +287,14 @@ def run_gg(cell: pathlib.Path, expected: str, tmp: pathlib.Path, backend=None):
     try:
         b = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired:
-        return "BUILD-FAIL", "build timed out"
+        return "TIMEOUT", "build timed out"
     if b.returncode != 0:
-        return _classify_build_failure(b.stderr)
+        return _classify_build_failure(b.stderr, b.returncode)
     try:
         r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30,
                            stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
-        return "TRAP", "run timed out"
+        return "TIMEOUT", "run timed out"
     return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()))
 
 
@@ -209,15 +311,15 @@ def run_selfhost(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
              f"--runtime-dir={ROOT / 'src/backend/c/runtime'}"],
             capture_output=True, timeout=300)
     except subprocess.TimeoutExpired:
-        return "BUILD-FAIL", "self-host driver timed out"
+        return "TIMEOUT", "self-host driver timed out"
     if e.returncode != 0:
-        return _classify_build_failure(e.stderr.decode("utf-8", "replace"))
+        return _classify_build_failure(e.stderr.decode("utf-8", "replace"), e.returncode)
     c_path.write_bytes(e.stdout)
     try:
         c = subprocess.run(["cc", "-O0", "-w", "-o", str(exe), str(c_path),
                             "-lm", "-lpthread"], capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired:
-        return "BUILD-FAIL", "cc (self-host) timed out"
+        return "TIMEOUT", "cc (self-host) timed out"
     if c.returncode != 0:
         # The self-host emitted C that a C compiler refuses. That is never a
         # "rejection" -- the frontend ACCEPTED the program and then produced
@@ -227,7 +329,7 @@ def run_selfhost(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
         r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30,
                            stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
-        return "TRAP", "run timed out"
+        return "TIMEOUT", "run timed out"
     return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()))
 
 
@@ -254,21 +356,28 @@ def run_asan(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
         b = subprocess.run([str(GG), "build", str(cell), "--sanitize", "-o", str(exe)],
                            capture_output=True, text=True, timeout=300)
     except subprocess.TimeoutExpired:
-        return "BUILD-FAIL", "sanitize build timed out"
+        return "TIMEOUT", "sanitize build timed out"
     if b.returncode != 0:
-        return _classify_build_failure(b.stderr)
+        return _classify_build_failure(b.stderr, b.returncode)
     env = dict(os.environ, ASAN_OPTIONS=ASAN_OPTIONS)
     try:
         r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=120,
                            env=env, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
-        return "TRAP", "run timed out"
-    for line in r.stderr.splitlines():
-        if any(m in line for m in SANITIZER_MARKERS):
-            # Report the FIRST marker line: it names the class (double free,
-            # heap-use-after-free, leak, signed overflow) which is the finding.
-            return "SANITIZE-FAIL", line.strip()[:160]
-    return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()))
+        return "TIMEOUT", "run timed out"
+    # ⚠ This used to report the FIRST marker line. It is the MOST SEVERE finding
+    # that names the defect: for a sanitized null deref the UBSan `runtime
+    # error:` line PRECEDES the ASan report, so first-match under-graded it to
+    # "undefined behaviour" when ASan had already called it a SEGV. The full
+    # finding SET is reported too, so a run that both leaks and traps does not
+    # lose the leak to the headline.
+    v = verdict.findings_for("run", r.returncode, stderr=r.stderr or "",
+                             stdout=r.stdout or "",
+                             sanitizer_exitcode=SANITIZER_EXITCODE)
+    if any(f.split(":", 1)[0] in ("CORRUPT", "LEAK", "UB") for f in v.findings):
+        return "SANITIZE-FAIL", f"{'+'.join(v.findings)} rc={r.returncode}"
+    return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()),
+                    sanitized=True)
 
 
 def run_ggdef(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
@@ -294,7 +403,7 @@ def run_ggdef(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
         r = subprocess.run([str(GGDEF), "run", str(cell)], capture_output=True,
                            text=True, timeout=120, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
-        return "NO-VERDICT", "ggdef timed out"
+        return "TIMEOUT", "ggdef timed out"
     if r.returncode == 103:
         return "NO-VERDICT", "fuel exhausted (ggdef totality guard, not a language outcome)"
     if r.returncode == 2:
