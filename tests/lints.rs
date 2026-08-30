@@ -25700,8 +25700,17 @@ fn parity_declarations_are_well_formed() {
 /// The primary guard is STRUCTURAL and needs no lint: `fixture_parity_exclusion`
 /// takes the fixture SOURCE, so it is type-level incapable of matching on a
 /// name. This lint covers the second-order route — a caller re-deriving the
-/// answer from `stem` before or after asking the reader — which is exactly how
-/// the retired predicate was reached from both of its call sites.
+/// answer from `stem` before or after asking the reader.
+///
+/// ⚠ THE SPAN IS THE GUARD. The first version of this lint ended its scan at
+/// `fn regenerate_runtime_snapshots(`, which put the whole body of consumer 2 —
+/// the regen, the consumer that MATERIALISES the classification into the
+/// committed lock-in net — OUTSIDE the scanned region. The identical
+/// `stem.starts_with("httpserver_")` injection was RED at consumer 1 and GREEN
+/// at consumer 2, with the full lint suite passing and a filename classifier
+/// live in the regen. So the span is now checked against the thing it is for:
+/// every consumer of the classification must be INSIDE it, asserted by name
+/// below. A guard that cannot say which code it reads is not a guard.
 ///
 /// The allowlist is the whole point: two stem comparisons in the region are
 /// legitimate and named. A THIRD is a reservation, not a budget line.
@@ -25711,18 +25720,46 @@ fn parity_harness_does_not_classify_by_stem() {
     let src = fs::read_to_string(root.join("tests/integration.rs")).expect("read integration.rs");
     let lines: Vec<&str> = src.lines().collect();
 
-    // The parity harness region: from the Chain-3 banner to the end of the
-    // lock-in net. Located by TEXT, never by line number — the cites in this
-    // file have drifted six times in one round.
+    // The parity harness region: from the Chain-3 banner to the first `#[test]`
+    // AFTER the regen fn — i.e. past the end of the regen's body, so consumer 2
+    // is inside. Located by TEXT, never by line number: the cites in this file
+    // have drifted six times in one round.
     let start = lines
         .iter()
         .position(|l| l.contains("Chain 3 — splice-free runtime-parity harness"))
         .expect("parity harness banner not found — it was renamed; re-anchor this lint");
-    let end = lines
+    let regen = lines
         .iter()
         .position(|l| l.contains("fn regenerate_runtime_snapshots("))
         .expect("regen fn not found — it was renamed; re-anchor this lint");
-    assert!(start < end, "parity region anchors crossed");
+    let end = lines
+        .iter()
+        .skip(regen)
+        .position(|l| l.trim_end() == "#[test]")
+        .map(|off| regen + off)
+        .unwrap_or(lines.len());
+    assert!(start < regen && regen < end, "parity region anchors crossed");
+
+    // ⛔ THE SPAN MUST CONTAIN EVERY CONSUMER OF THE CLASSIFICATION, plus the
+    // reader itself. This is the check the first version of this lint did not
+    // have, and its absence made the lint structurally blind to consumer 2 (see
+    // the doc comment). An anchor that drifts now FAILS here instead of quietly
+    // shrinking the region to nothing.
+    const MUST_BE_IN_SPAN: &[&str] = &[
+        "fn fixture_parity_exclusion(",          // the reader
+        "fn self_host_runtime_diff(",            // consumer 1, the floored diagnostic
+        "fn self_host_runtime(",                 // consumer 3, the lock-in net
+        "fn regenerate_runtime_snapshots(",      // consumer 2, the regen
+    ];
+    let missing: Vec<&str> = MUST_BE_IN_SPAN
+        .iter()
+        .copied()
+        .filter(|needle| !lines[start..end].iter().any(|l| l.contains(needle)))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "the scanned parity region no longer contains {missing:?} — so this lint is BLIND to          whatever those do with a fixture stem. Re-anchor the span (lines {start}..{end}); do          not delete the row. The whole point of the region is that every consumer of the          classification is inside it."
+    );
 
     // Legitimate, NAMED stem comparisons inside the region. Each is a specific
     // fixture being pinned by identity, not a CLASS being classified by
