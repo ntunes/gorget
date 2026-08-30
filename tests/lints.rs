@@ -24784,6 +24784,47 @@ fn process_spawn_deadline_arm_count() {
         sites.len(),
         sites.join("\n"),
     );
+
+    // ── the PYTHON half of the same class ────────────────────────────────────
+    // `subprocess.run(..., timeout=N)` LOOKS like it handles this and does not:
+    // on expiry CPython kills the DIRECT CHILD only and then blocks in
+    // `communicate()`, so a forking child leaves a spinner AND can hang the
+    // timeout handler. Identical defect pair, in the stdlib call. Deadline-
+    // bearing spawns therefore go through `scripts/proc_guard.py`, whose own
+    // self-test MEASURES the contrast (`subprocess.run` leaves the grandchild
+    // alive; the group kill does not).
+    //
+    // Only `scripts/` is in scope: it is where the round-close gates live, and
+    // widening to every `.py` in the tree would drag in one-off analysis scripts
+    // whose children are `git` invocations.
+    let mut py: Vec<String> = Vec::new();
+    for path in tracked_files() {
+        if path.extension().and_then(|e| e.to_str()) != Some("py")
+            || !path.starts_with("scripts")
+            || path.ends_with("proc_guard.py")
+        {
+            continue;
+        }
+        let Ok(src) = std::fs::read_to_string(path) else { continue };
+        for (i, line) in src.lines().enumerate() {
+            let t = line.trim_start();
+            if t.starts_with('#') {
+                continue;
+            }
+            if line.contains("timeout=") && line.contains("subprocess.") {
+                py.push(format!("  {}:{}", path.display(), i + 1));
+            }
+        }
+    }
+    py.sort();
+    assert!(
+        py.is_empty(),
+        "deadline-bearing `subprocess.*(timeout=)` outside scripts/proc_guard.py:\n{}\n\n\
+         Call `proc_guard.run(cmd, timeout=N)` instead. The stdlib's own timeout \
+         path kills the direct child and then blocks draining pipes a surviving \
+         grandchild still holds open.",
+        py.join("\n"),
+    );
 }
 
 /// Strip `//` and `/* */` comments (nested) and string/char literals, replacing
@@ -24923,6 +24964,33 @@ fn verdict_classifier_self_test_and_exclusivity() {
 ///     out of the MIDDLE of a word and invented an owner for a random `mkdtemp`
 ///     suffix, which its own self-test caught before it shipped.
 ///
+/// **The shared Python runner certifies itself, and MEASURES the stdlib defect.**
+///
+/// `scripts/proc_guard.py --self-test` runs one program two ways: through
+/// `subprocess.run(..., timeout=)` and through the shared runner. Only the second
+/// leaves no grandchild. The stdlib arm is RECORDED rather than asserted — it
+/// documents why the module exists and must not red the gate if CPython ever
+/// fixes it — while the group-kill arm is asserted on the grandchild's PID, not
+/// on wall time.
+///
+/// ⚠ The refusal case is asserted too: `timeout=None` raises. A default deadline
+/// would let the next caller forget to choose one, which is the class
+/// `todo/t0842` records.
+#[test]
+fn shared_python_runner_self_test() {
+    let out = std::process::Command::new("python3")
+        .args(["scripts/proc_guard.py"])
+        .output()
+        .unwrap_or_else(|e| panic!("python3 scripts/proc_guard.py failed to start: {e}"));
+    assert!(
+        out.status.success(),
+        "scripts/proc_guard.py self-test FAILED — the Python lane's runner cannot \
+         show that it kills a grandchild.\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
 /// The test itself is what makes those two survivals a regression net rather
 /// than a comment.
 #[test]

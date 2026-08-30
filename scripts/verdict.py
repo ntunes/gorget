@@ -782,8 +782,12 @@ def _incumbent_map_verdict(rc, expected="prints ... then a loud failure", actual
 
 def live_test(verbose=True) -> int:
     import shutil
-    import subprocess
+    import sys as _sys
     import tempfile
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import proc_guard  # the shared runner: even a six-line live test spawns
+                       # through it, so there is no "small enough to hand-roll"
+                       # exemption for the next one.
     cc = os.environ.get("CC", "cc")
     if shutil.which(cc) is None:
         print(f"live-test SKIPPED: no {cc} on PATH")
@@ -799,8 +803,7 @@ def live_test(verbose=True) -> int:
             flags = ["-O0", "-g", "-w"]
             if sanitized:
                 flags.append("-fsanitize=address,undefined")
-            b = subprocess.run([cc, *flags, "-o", exe, src],
-                               capture_output=True, text=True, timeout=120)
+            b = proc_guard.run([cc, *flags, "-o", exe, src], timeout=120)
             if b.returncode != 0:
                 print(f"  SKIP {name}: cc refused ({b.stderr.strip()[:80]})")
                 continue
@@ -809,8 +812,7 @@ def live_test(verbose=True) -> int:
                 # exitcode=1 is ASan's default; pass it in explicitly, because
                 # the convention is an INPUT (this tree uses 0 and 99 too).
                 env["ASAN_OPTIONS"] = "detect_leaks=1:exitcode=1"
-            r = subprocess.run([exe], capture_output=True, text=True, timeout=120,
-                               env=env, stdin=subprocess.DEVNULL)
+            r = proc_guard.run([exe], timeout=120, env=env)
             v = findings_for("run", r.returncode, stderr=r.stderr, stdout=r.stdout,
                              sanitizer_exitcode=1 if sanitized else None)
             ok = _base(v.verdict) == want_headline and any(

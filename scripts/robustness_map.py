@@ -93,7 +93,8 @@ import argparse, concurrent.futures, os, pathlib, shutil, subprocess, sys, tempf
 # set and an exit-code table cannot catch their own divergence, and this
 # file used to hold one of the copies that was wrong.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import verdict  # noqa: E402  (path must be set first)
+import proc_guard  # noqa: E402  (path must be set first)
+import verdict  # noqa: E402
 
 ROOT = pathlib.Path(subprocess.run(["git", "rev-parse", "--show-toplevel"],
                                    capture_output=True, text=True,
@@ -285,16 +286,19 @@ def run_gg(cell: pathlib.Path, expected: str, tmp: pathlib.Path, backend=None):
     if backend:
         cmd.append(f"--backend={backend}")
     try:
-        b = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-    except subprocess.TimeoutExpired:
-        return "TIMEOUT", "build timed out"
+        b = proc_guard.run(cmd, timeout=300)
+        if b.timed_out:
+            return "TIMEOUT", "build timed out"
+    except OSError as e:
+        return "UNKNOWN", f"could not spawn gg: {e}"
     if b.returncode != 0:
         return _classify_build_failure(b.stderr, b.returncode)
     try:
-        r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30,
-                           stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        return "TIMEOUT", "run timed out"
+        r = proc_guard.run([str(exe)], timeout=30)
+        if r.timed_out:
+            return "TIMEOUT", "run timed out"
+    except OSError as e:
+        return "UNKNOWN", f"could not spawn the built binary: {e}"
     return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()))
 
 
@@ -306,30 +310,35 @@ def run_selfhost(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
     stem = cell.stem
     c_path, exe = tmp / f"{stem}.c", tmp / stem
     try:
-        e = subprocess.run(
+        e = proc_guard.run(
             [str(DRIVER), str(cell), str(ROOT / "lib"), "--emit-c",
              f"--runtime-dir={ROOT / 'src/backend/c/runtime'}"],
-            capture_output=True, timeout=300)
-    except subprocess.TimeoutExpired:
-        return "TIMEOUT", "self-host driver timed out"
+            timeout=300, text=False)
+        if e.timed_out:
+            return "TIMEOUT", "self-host driver timed out"
+    except OSError as ex:
+        return "UNKNOWN", f"could not spawn the self-host driver: {ex}"
     if e.returncode != 0:
         return _classify_build_failure(e.stderr.decode("utf-8", "replace"), e.returncode)
     c_path.write_bytes(e.stdout)
     try:
-        c = subprocess.run(["cc", "-O0", "-w", "-o", str(exe), str(c_path),
-                            "-lm", "-lpthread"], capture_output=True, text=True, timeout=300)
-    except subprocess.TimeoutExpired:
-        return "TIMEOUT", "cc (self-host) timed out"
+        c = proc_guard.run(["cc", "-O0", "-w", "-o", str(exe), str(c_path),
+                            "-lm", "-lpthread"], timeout=300)
+        if c.timed_out:
+            return "TIMEOUT", "cc (self-host) timed out"
+    except OSError as ex:
+        return "UNKNOWN", f"could not spawn cc: {ex}"
     if c.returncode != 0:
         # The self-host emitted C that a C compiler refuses. That is never a
         # "rejection" -- the frontend ACCEPTED the program and then produced
         # something unbuildable, which is a miscompile, not a diagnostic.
         return "BUILD-FAIL", "cc rejected self-host C"
     try:
-        r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=30,
-                           stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        return "TIMEOUT", "run timed out"
+        r = proc_guard.run([str(exe)], timeout=30)
+        if r.timed_out:
+            return "TIMEOUT", "run timed out"
+    except OSError as ex:
+        return "UNKNOWN", f"could not spawn the self-host binary: {ex}"
     return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()))
 
 
@@ -353,18 +362,21 @@ def run_asan(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
     and nothing else to see; an exit-code-only check is blind to it."""
     exe = tmp / cell.stem
     try:
-        b = subprocess.run([str(GG), "build", str(cell), "--sanitize", "-o", str(exe)],
-                           capture_output=True, text=True, timeout=300)
-    except subprocess.TimeoutExpired:
-        return "TIMEOUT", "sanitize build timed out"
+        b = proc_guard.run([str(GG), "build", str(cell), "--sanitize", "-o", str(exe)],
+                           timeout=300)
+        if b.timed_out:
+            return "TIMEOUT", "sanitize build timed out"
+    except OSError as ex:
+        return "UNKNOWN", f"could not spawn gg --sanitize: {ex}"
     if b.returncode != 0:
         return _classify_build_failure(b.stderr, b.returncode)
     env = dict(os.environ, ASAN_OPTIONS=ASAN_OPTIONS)
     try:
-        r = subprocess.run([str(exe)], capture_output=True, text=True, timeout=120,
-                           env=env, stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        return "TIMEOUT", "run timed out"
+        r = proc_guard.run([str(exe)], timeout=120, env=env)
+        if r.timed_out:
+            return "TIMEOUT", "run timed out"
+    except OSError as ex:
+        return "UNKNOWN", f"could not spawn the sanitized binary: {ex}"
     # ⚠ This used to report the FIRST marker line. It is the MOST SEVERE finding
     # that names the defect: for a sanitized null deref the UBSan `runtime
     # error:` line PRECEDES the ASan report, so first-match under-graded it to
@@ -400,10 +412,11 @@ def run_ggdef(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
     `tmp` is unused -- ggdef interprets, so there is nothing to emit."""
     del tmp
     try:
-        r = subprocess.run([str(GGDEF), "run", str(cell)], capture_output=True,
-                           text=True, timeout=120, stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        return "TIMEOUT", "ggdef timed out"
+        r = proc_guard.run([str(GGDEF), "run", str(cell)], timeout=120)
+        if r.timed_out:
+            return "TIMEOUT", "ggdef timed out"
+    except OSError as ex:
+        return "UNKNOWN", f"could not spawn ggdef: {ex}"
     if r.returncode == 103:
         return "NO-VERDICT", "fuel exhausted (ggdef totality guard, not a language outcome)"
     if r.returncode == 2:
