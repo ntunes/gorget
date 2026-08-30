@@ -1,3 +1,5 @@
+#!parity-excluded network: runs a real HTTP server over a bound TCP socket with a concurrent client; connection timing
+#!  decides the output
 # Test: JSON body parsing and JSON response factory in gg.httpserver.
 #
 # Validates:

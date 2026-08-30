@@ -1,3 +1,4 @@
+#!parity-excluded harness: `bench` block — the bench runner prints elapsed wall-clock time into stdout
 bench "addition":
     int x = 1 + 2
 

@@ -1,3 +1,6 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem.starts_with("httpserver_")`; its own header says "all core features exercised without TCP"
+#!  and lists the exact expected output
 # Test: Router dispatch — all core features exercised without TCP.
 #
 # Exercises (via direct Router.dispatch):

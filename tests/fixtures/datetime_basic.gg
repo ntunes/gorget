@@ -1,3 +1,6 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem.starts_with("datetime_")`; its own header says "no C call, fully deterministic" and it reads
+#!  no clock
 from std.datetime import DateTime, dt_is_leap, dt_days_from_epoch, dt_day_of_year_impl
 from std.conv import int_to_str
 

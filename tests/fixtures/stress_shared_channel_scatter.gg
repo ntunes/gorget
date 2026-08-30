@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: TaskGroup scatter over Channels around shared state; the interleaving is the scheduler's
 # Stress: scatter-gather — fan-out to 5 workers, fan-in via result channel.
 # Main scatters jobs 1..25 across 5 workers (5 jobs each via round-robin send).
 # Each worker squares its inputs and sends results to a shared result channel.

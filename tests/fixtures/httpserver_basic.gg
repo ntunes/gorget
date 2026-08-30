@@ -1,3 +1,5 @@
+#!parity-excluded network: runs a real HTTP server over a bound TCP socket with a concurrent client; connection timing
+#!  decides the output
 from xtd.httpserver import HttpServerResponse, HttpRequest
 from xtd.httpserver import http_server_parse_request, http_server_write_response
 from std.net.socket import ServerSocket, Socket, server_socket_bind, socket_connect

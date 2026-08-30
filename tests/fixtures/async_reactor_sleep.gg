@@ -1,3 +1,5 @@
+#!parity-excluded scheduling: async_sleep() then a time_ms() delta — the printed branch depends on how long the sleep
+#!  actually took
 from std.async import async_sleep
 from std.time import time_ms
 

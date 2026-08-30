@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: spawned tasks hammer an atomic; stdout aggregates a nondeterministic interleaving
 # Stress: 8 tasks each do 1000 atomic increments.
 # Tests atomic operations under real thread contention.
 # Expected: 8000

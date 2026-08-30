@@ -1,3 +1,6 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem.starts_with("httpserver_")`; its own header says "compile-only smoke test — no actual TLS
+#!  connection is made"
 # Test: TLS server types compile correctly.
 # This is a compile-only smoke test — no actual TLS connection is made,
 # because that would require a real certificate/key pair and a network stack.

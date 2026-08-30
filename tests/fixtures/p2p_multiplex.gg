@@ -1,3 +1,4 @@
+#!parity-excluded network: drives the xtd.p2p peer stack over real UDP sockets; peer/event ordering decides the output
 from xtd.p2p import Node, P2PEvent, p2p_create_node, p2p_add_peer, p2p_poll
 from xtd.p2p import p2p_stream_open, p2p_stream_accept, p2p_stream_send
 from xtd.p2p import p2p_stream_recv, p2p_stream_close, p2p_peer_id_hex

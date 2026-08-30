@@ -1,3 +1,4 @@
+#!parity-excluded allocator: prints mem_live() deltas — live-heap bytes differ per lane and per allocation history
 # Stress test: exercises many allocation patterns in loops to detect leaks.
 # Each section runs 500 iterations. A leak would show as mem_live growth.
 from std.os import mem_live

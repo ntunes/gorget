@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: many producers spawn onto one Channel; stdout aggregates a nondeterministic interleaving
 # Stress: 4 producers each send 500 values into a bounded channel (capacity 8).
 # Single consumer receives all 2000 values and sums them.
 # Tests bounded backpressure with multiple concurrent producers.

@@ -1,3 +1,4 @@
+#!parity-excluded random: draws from std.random rand_range()
 from std.random import seed, rand_range
 
 void main():

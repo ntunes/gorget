@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: TaskGroup workers rate-limited by a Channel semaphore; the interleaving is the scheduler's
 # Stress: semaphore pattern — buffered channel as token pool limits concurrency
 # to 3 simultaneous workers out of 12 total. Each worker acquires a token,
 # increments a shared completed counter, does work, then releases the token.

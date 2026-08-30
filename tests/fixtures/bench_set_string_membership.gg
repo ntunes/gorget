@@ -1,3 +1,5 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem.starts_with("bench_")`; it has no `bench` block — it prints hit counts and lengths
 # D39 Phase A.3 bench: Set[String] membership — String-hash + Str-eq on
 # the dense-index-map layout.
 from std.conv import int_to_str

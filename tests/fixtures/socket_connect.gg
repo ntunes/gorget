@@ -1,3 +1,5 @@
+#!parity-excluded network: imports std.net.socket and binds/connects a real TCP socket; port + peer timing decide the
+#!  output
 from std.net.socket import Socket, socket_connect
 
 void main():

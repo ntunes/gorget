@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: TaskGroup workers drain a Channel workqueue; which worker takes what is the scheduler's
 # Stress: work-queue pattern — channel distributes 100 jobs across 4 workers,
 # shared variable accumulates the result under concurrent contention.
 # Each job is a number 1..100; workers terminate on a -1 sentinel.

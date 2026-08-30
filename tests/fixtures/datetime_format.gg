@@ -1,3 +1,6 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem.starts_with("datetime_")`; it setenv()s TZ=UTC first so format() is deterministic (its own
+#!  header says so)
 from std.datetime import DateTime
 from std.os import setenv
 

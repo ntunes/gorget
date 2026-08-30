@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: spawned tasks pass multiple shared tokens; the interleaving is the scheduler's
 # Stress: 3 shared(mutex) variables, 6 tasks each touching 2 of the 3.
 # Tests token acquisition ordering (ascending DefId), deadlock freedom.
 # Each pair is incremented 500 times by each task.

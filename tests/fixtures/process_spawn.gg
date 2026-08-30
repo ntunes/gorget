@@ -1,3 +1,5 @@
+#!parity-excluded host: spawns an external `echo` binary via std.process and reads getpid(); needs that binary on the
+#!  host
 from std.process import process_spawn, getpid
 
 void main():

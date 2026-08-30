@@ -1,3 +1,5 @@
+#!parity-excluded harness: `test` blocks — `gg test` prints an elapsed `(Nms)` per test and a `(Nms)` total (0ms vs 1ms
+#!  flake)
 @tag("smoke")
 test "smoke test":
     assert true

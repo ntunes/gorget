@@ -1,3 +1,4 @@
+#!parity-excluded allocator: prints a mem_live() delta against a baseline — live-heap bytes differ per lane
 from std.os import mem_live
 from std.collections import Vector
 

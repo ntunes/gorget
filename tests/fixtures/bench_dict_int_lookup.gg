@@ -1,3 +1,5 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem.starts_with("bench_")`; it has no `bench` block — it prints hit counts and lengths
 # D39 Phase A.3 bench (#[ignore]d in integration.rs): Dict[int, int] lookup
 # under the dense-index-map layout. Micro-workload for RSS + clone-stats +
 # wall-clock measurements. Populated with 10k entries, then 100k lookups

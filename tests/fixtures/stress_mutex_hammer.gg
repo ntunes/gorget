@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: spawned tasks contend one Mutex; stdout aggregates a nondeterministic interleaving
 # Stress: 8 tasks each increment a shared(mutex) counter 1000 times.
 # Tests mutex waiter queue under heavy contention, no lost updates.
 # Expected: 8000

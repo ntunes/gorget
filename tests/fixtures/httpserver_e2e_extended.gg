@@ -1,3 +1,5 @@
+#!parity-excluded network: runs a real HTTP server over a bound TCP socket with a concurrent client; connection timing
+#!  decides the output
 # End-to-end test: additional wire-level tests for gg.http + gg.httpserver.
 #
 # Validates:

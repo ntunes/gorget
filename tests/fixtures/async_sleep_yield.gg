@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: spawned coroutines sleep and yield; the interleaving decides the print order
 from std.time import sleep
 
 # Spawned coroutine that sleeps (should yield, not block the worker).

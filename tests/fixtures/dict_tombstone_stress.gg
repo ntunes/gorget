@@ -1,3 +1,6 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem == "dict_tombstone_stress"`; it is a single-threaded Dict tombstone workload printing
+#!  lengths and lookups
 from std.collections import Dict
 
 void main():

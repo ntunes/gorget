@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: TaskGroup fan-out over an atomic; stdout aggregates a nondeterministic interleaving
 # Stress: spawn 200 tasks in parallel, each adds its index to an atomic counter.
 # Tests executor queue scaling, concurrent submit pressure, waker storms.
 # Expected: sum of 0..199 = 19900

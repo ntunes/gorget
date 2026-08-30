@@ -1,3 +1,5 @@
+#!parity-excluded scheduling: spawned tasks notify over a Channel around shared state; the interleaving is the
+#!  scheduler's
 # Stress: notification pattern at scale — 10 producers each increment a shared
 # counter and then signal via a dedicated done channel. The coordinator waits
 # for all 10 signals before reading the final count.

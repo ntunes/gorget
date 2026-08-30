@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: sleep(0.05) inside spawned coroutines; the completion order is the scheduler's
 from std.time import sleep
 
 async int slow_compute(int x):

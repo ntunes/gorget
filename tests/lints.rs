@@ -24832,7 +24832,8 @@ fn for_loop_producers_carry_a_drop_disposition() {
 // nondeterministic for reasons that are NOT a scheduling race, so this guard
 // is structurally the wrong instrument for them and does not pretend
 // otherwise: `test_process_timeout` prints a wall-clock elapsed `(Nms)` (the
-// `test_tags` family, whose instrument is `runtime_parity_excluded`), and
+// `test_tags` family, whose instrument is the fixture's own
+// `#!parity-excluded` declaration), and
 // `vector_task_mixed_await_int` reads UNINITIALIZED MEMORY (a filed
 // miscompile; its nondeterminism is UB, and the fix is the miscompile). Both
 // are filed. The blind set is a LOWER BOUND: the census below sees only
@@ -25515,4 +25516,394 @@ fn clone_meter_check_refuses_an_unattributed_track() {
 
     let _ = fs::remove_file(&empty);
     let _ = fs::remove_file(&good);
+}
+
+// ===========================================================================
+// R47 F1-ii — the runtime-parity exclusion is DECLARED, never name-matched
+// ===========================================================================
+//
+// The parity harness used to answer "is this fixture's stdout a stable
+// cross-lane function of its source?" with `stem.starts_with("httpserver_")`
+// and friends — Core #2 / layering rule 2 violated inside the instrument that
+// adjudicates whether the self-host lane agrees with Rust gg. A
+// misclassification there is silent in BOTH directions: an over-declared
+// fixture drops out of the truth axis, an under-declared one gets byte-compared
+// while it flaps.
+//
+// The mechanism is now a `#!parity-excluded <kind>: <evidence>` line in the
+// FIXTURE's own leading comment block, read by `fixture_parity_exclusion`
+// (`tests/integration.rs`), which is deliberately not given the stem. The four
+// lints below are the harness-side half of that: the reader lives in the
+// integration binary, so these re-implement it (they are a SECOND opinion, not
+// a call into it) and pin the invariants the reader alone cannot.
+//
+// ⚠ WHAT NO GUARD HERE CAN DO, STATED PLAINLY (Core #12's omitted-cell rule).
+// There is no independent witness for "does `datetime_basic` read a clock?" —
+// no compiler property answers it, unlike the race family in
+// `scheduling_race_fixtures_are_pinned_or_declared` above, where rustc
+// exhaustiveness over `SemanticWarningKind` IS the witness. What these pin
+// instead is everything AROUND that judgement: the declaration is well-formed
+// and effective (1), the name cannot decide again (2), the exclusion set and
+// the lock-in net cannot disagree (3), and the un-evidenced remainder is
+// COUNTED and can only shrink (4). The judgement itself is evidenced in the
+// fixture, in prose, where the next reader can check it.
+
+/// Every top-level fixture's `#!parity-excluded` declaration parses, and every
+/// occurrence of the directive is one the reader actually HONOURS.
+///
+/// The reader only scans the LEADING comment block (matching `#!spectest`), so
+/// a declaration further down the file would be silently ignored — the silent
+/// failure this whole mechanism exists to abolish. This lint is what makes that
+/// loud.
+#[test]
+fn parity_declarations_are_well_formed() {
+    const DECL: &str = "#!parity-excluded";
+    const KINDS: &[&str] = &[
+        "clock", "random", "network", "scheduling", "harness", "allocator", "host", "untriaged",
+    ];
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures = root.join("tests/fixtures");
+    let mut problems: Vec<String> = Vec::new();
+    let mut declared = 0usize;
+
+    let mut stems: Vec<String> = fs::read_dir(&fixtures)
+        .expect("read tests/fixtures")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |x| x == "gg"))
+        .map(|p| p.file_stem().unwrap().to_string_lossy().to_string())
+        .collect();
+    stems.sort();
+
+    for stem in &stems {
+        let src = fs::read_to_string(fixtures.join(format!("{stem}.gg"))).expect("read fixture");
+        // Where the leading comment block ends — the reader stops there.
+        let mut leading = 0usize;
+        for line in src.lines() {
+            if line.trim().is_empty() || line.trim_start().starts_with('#') {
+                leading += 1;
+            } else {
+                break;
+            }
+        }
+        let total_hits = src.lines().filter(|l| l.trim_start().starts_with(DECL)).count();
+        let leading_hits =
+            src.lines().take(leading).filter(|l| l.trim_start().starts_with(DECL)).count();
+        if total_hits > leading_hits {
+            problems.push(format!(
+                "{stem}.gg: a `{DECL}` line sits BELOW the leading comment block, where the \
+                 reader does not look — it would be silently ignored and the fixture would \
+                 re-enter the byte-compared corpus. Move it to the top."
+            ));
+            continue;
+        }
+        if leading_hits > 1 {
+            problems.push(format!(
+                "{stem}.gg: {leading_hits} `{DECL}` declarations — exactly one decides \
+                 (layering rule 3, one source of truth per axis)."
+            ));
+            continue;
+        }
+        let Some(line) = src.lines().take(leading).find(|l| l.trim_start().starts_with(DECL))
+        else {
+            continue;
+        };
+        declared += 1;
+        let rest = line.trim_start().strip_prefix(DECL).unwrap();
+        let Some((kind, evidence)) = rest.split_once(':') else {
+            problems.push(format!(
+                "{stem}.gg: `{DECL}` needs `<kind>: <evidence>`, got `{}`",
+                line.trim()
+            ));
+            continue;
+        };
+        // `#!` + WHITESPACE continues the evidence onto the next line, so no
+        // declaration has to blow the 120-column budget
+        // (`fmt_no_new_over_budget_lines`). A fence (`#!parity-excluded`,
+        // `#!spectest`, `#!end`) is `#!` + a word and never a continuation.
+        let mut evidence = evidence.trim().to_string();
+        let mut seen_decl = false;
+        for l in src.lines().take(leading) {
+            let t = l.trim_start();
+            let is_cont = t.strip_prefix("#!").is_some_and(|r| r.starts_with(char::is_whitespace));
+            if t.starts_with(DECL) || is_cont {
+                // The 120-column budget is enforced globally by
+                // `fmt_no_new_over_budget_lines`, but as a TALLY with a
+                // ceiling — a new over-wide declaration there reads as "the
+                // budget grew", not "your declaration is too long". Say it
+                // here, where the fix is obvious: wrap onto a `#!  ` line.
+                if l.chars().count() > 120 {
+                    problems.push(format!(
+                        "{stem}.gg: parity declaration line is {} columns (budget 120) — wrap \
+                         the evidence onto a `#!  ` continuation line:\n      {}",
+                        l.chars().count(),
+                        t.trim()
+                    ));
+                }
+            }
+            if t.starts_with(DECL) {
+                seen_decl = true;
+            } else if is_cont && seen_decl {
+                evidence.push(' ');
+                evidence.push_str(t.strip_prefix("#!").unwrap().trim());
+            } else if is_cont {
+                problems.push(format!(
+                    "{stem}.gg: `#!` continuation line with no `{DECL}` declaration above it: \
+                     `{}`",
+                    t.trim()
+                ));
+            } else {
+                seen_decl = false;
+            }
+        }
+        let (kind, evidence) = (kind.trim(), evidence.trim());
+        if !KINDS.contains(&kind) {
+            problems.push(format!(
+                "{stem}.gg: unknown parity-exclusion kind `{kind}` — the kinds are {KINDS:?} \
+                 (`ParityExclusionKind`, tests/integration.rs). Note there is deliberately NO \
+                 kind meaning \"the self-host miscompiles it\": that fixture stays in the corpus \
+                 as WRONG-OUTPUT / CC-FAIL and goes to the TODO backlog."
+            ));
+        }
+        if evidence.len() < 20 {
+            problems.push(format!(
+                "{stem}.gg: `{DECL} {kind}:` carries no usable evidence (`{evidence}`). Every \
+                 exclusion states WHAT varies, in the fixture, so the next reader can check it \
+                 or reinstate the fixture."
+            ));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "malformed runtime-parity declarations ({}):\n  {}",
+        problems.len(),
+        problems.join("\n  "),
+    );
+    // A corpus that stopped declaring anything means the reader is being fed
+    // nothing and every exclusion silently evaporated into the parity number.
+    assert!(
+        declared > 0,
+        "no fixture declares `{DECL}` — the parity harness would byte-compare the clock, the \
+         RNG and the socket fixtures. Either the directive was renamed without updating this \
+         lint, or the declarations were lost."
+    );
+    eprintln!(
+        "parity_declarations_are_well_formed: {declared} declared / {} fixtures",
+        stems.len()
+    );
+}
+
+/// ⛔ THE NAME CANNOT DECIDE AGAIN — shrink-only allowlist over stem-shaped
+/// classification inside the runtime-parity harness.
+///
+/// The primary guard is STRUCTURAL and needs no lint: `fixture_parity_exclusion`
+/// takes the fixture SOURCE, so it is type-level incapable of matching on a
+/// name. This lint covers the second-order route — a caller re-deriving the
+/// answer from `stem` before or after asking the reader — which is exactly how
+/// the retired predicate was reached from both of its call sites.
+///
+/// The allowlist is the whole point: two stem comparisons in the region are
+/// legitimate and named. A THIRD is a reservation, not a budget line.
+#[test]
+fn parity_harness_does_not_classify_by_stem() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let src = fs::read_to_string(root.join("tests/integration.rs")).expect("read integration.rs");
+    let lines: Vec<&str> = src.lines().collect();
+
+    // The parity harness region: from the Chain-3 banner to the end of the
+    // lock-in net. Located by TEXT, never by line number — the cites in this
+    // file have drifted six times in one round.
+    let start = lines
+        .iter()
+        .position(|l| l.contains("Chain 3 — splice-free runtime-parity harness"))
+        .expect("parity harness banner not found — it was renamed; re-anchor this lint");
+    let end = lines
+        .iter()
+        .position(|l| l.contains("fn regenerate_runtime_snapshots("))
+        .expect("regen fn not found — it was renamed; re-anchor this lint");
+    assert!(start < end, "parity region anchors crossed");
+
+    // Legitimate, NAMED stem comparisons inside the region. Each is a specific
+    // fixture being pinned by identity, not a CLASS being classified by
+    // spelling. Shrink-only: adding a row needs the same argument.
+    const ALLOWED: &[&str] = &[
+        // the `bitwise_ops` regression-proof assert in the lock-in net
+        "stem == \"bitwise_ops\"",
+        // the ggdef adjudication matching a BOTH-WRONG row back to its fixture
+        "bw.stem == *s",
+    ];
+    let mut offenders: Vec<String> = Vec::new();
+    for (i, line) in lines[start..end].iter().enumerate() {
+        let t = line.trim();
+        if t.starts_with("//") {
+            continue;
+        }
+        let stem_shaped = t.contains("stem.starts_with(")
+            || t.contains("stem.contains(")
+            || t.contains("stem.ends_with(")
+            || (t.contains("stem ==") && !ALLOWED.iter().any(|a| t.contains(a)));
+        if stem_shaped {
+            offenders.push(format!("tests/integration.rs:{}: {t}", start + i + 1));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "the runtime-parity harness is deciding something from a fixture's NAME again \
+         ({} site(s)):\n  {}\n\n\
+         Core #2 / layering rule 2. \"Is this fixture's stdout a stable cross-lane function of \
+         its source?\" is a property of the PROGRAM: the fixture declares it with a \
+         `#!parity-excluded <kind>: <evidence>` line and `fixture_parity_exclusion` reads it. \
+         The retired predicate excluded `httpserver_router` (\"all core features exercised \
+         without TCP\", per its own header) and kept `test_process_timeout` in the corpus \
+         (todo/t0820) purely because of how each is spelled.\n\
+         If the new site really is pinning ONE fixture by identity rather than classifying a \
+         CLASS by spelling, say which and add it to ALLOWED with that argument.",
+        offenders.len(),
+        offenders.join("\n  "),
+    );
+}
+
+/// THE PAIRING INVARIANT — the exclusion set and the lock-in net cannot
+/// disagree, in either direction.
+///
+/// `self_host_runtime` is the THIRD consumer of the classification and the only
+/// one that never calls the reader: it is default-running and build-breaking,
+/// and its oracle is the committed `tests/fixtures/runtime_snapshots/*.out`,
+/// which the regen produces (and wipes) UNDER the classification. So the
+/// classification has a materialized downstream artifact, and the two can drift
+/// apart silently between regens — a regen the owner ruling forbids running
+/// casually.
+///
+/// Both directions are pinned:
+///   * a DECLARED-excluded fixture with a snapshot ⇒ the build-breaking net is
+///     byte-comparing something the corpus says is unstable. Declaring a
+///     fixture is not enough; its `.out` must be `git rm`'d in the same commit.
+///   * a snapshot with no top-level fixture ⇒ a fossil `.out` pinning a fixture
+///     that no longer exists.
+#[test]
+fn parity_declared_fixtures_have_no_snapshot() {
+    const DECL: &str = "#!parity-excluded";
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures = root.join("tests/fixtures");
+    let snapshots = fixtures.join("runtime_snapshots");
+
+    let declared: Vec<String> = {
+        let mut v: Vec<String> = fs::read_dir(&fixtures)
+            .expect("read tests/fixtures")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_file() && p.extension().map_or(false, |x| x == "gg"))
+            .filter(|p| {
+                let src = fs::read_to_string(p).unwrap_or_default();
+                src.lines()
+                    .take_while(|l| l.trim().is_empty() || l.trim_start().starts_with('#'))
+                    .any(|l| l.trim_start().starts_with(DECL))
+            })
+            .map(|p| p.file_stem().unwrap().to_string_lossy().to_string())
+            .collect();
+        v.sort();
+        v
+    };
+    let mut snap_stems: Vec<String> = fs::read_dir(&snapshots)
+        .expect("read runtime_snapshots")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |x| x == "out"))
+        .map(|p| p.file_stem().unwrap().to_string_lossy().to_string())
+        .collect();
+    snap_stems.sort();
+
+    let paired: Vec<&String> = snap_stems.iter().filter(|s| declared.contains(s)).collect();
+    assert!(
+        paired.is_empty(),
+        "{} fixture(s) are DECLARED parity-excluded and STILL have a committed snapshot: \
+         {paired:?}.\n\
+         `self_host_runtime` is default-running and build-breaking and byte-compares every \
+         `runtime_snapshots/*.out` — so a declared-unstable fixture with a snapshot is a flake \
+         wired into every `cargo test`. Declaring a fixture excludes it from the DIAGNOSTIC and \
+         from the regen; removing it from the LOCK-IN NET is a `git rm` of its `.out` in the \
+         same commit.",
+        paired.len(),
+    );
+
+    let orphans: Vec<&String> = snap_stems
+        .iter()
+        .filter(|s| !fixtures.join(format!("{s}.gg")).is_file())
+        .collect();
+    assert!(
+        orphans.is_empty(),
+        "{} snapshot(s) have no top-level fixture: {orphans:?}. A fossil `.out` pins output for \
+         a program that no longer exists; `git rm` it.",
+        orphans.len(),
+    );
+    eprintln!(
+        "parity_declared_fixtures_have_no_snapshot: {} declared, {} snapshots, 0 paired",
+        declared.len(),
+        snap_stems.len(),
+    );
+}
+
+/// THE DEBT RATCHET — `untriaged` exclusions can only shrink.
+///
+/// `untriaged` is the honest bucket for a fixture the RETIRED filename
+/// heuristic excluded and for which no cause has been established. Writing a
+/// cause we cannot evidence into those fixtures would have laundered the
+/// heuristic into an assertion of fact; naming them `untriaged` instead makes
+/// the debt countable, which is what lets this ratchet exist at all.
+///
+/// ⚠ ONE-DIRECTIONAL, the `EXPECTED_BOTH_WRONG` / `EXPECTED_HANGS` idiom:
+/// lowering the count needs no sign-off and MUST be done in the same commit
+/// that retriages a fixture; raising it is refused. A fixture leaves this
+/// bucket in exactly one of two ways — it acquires a real cause and a real
+/// kind, or it is REINSTATED into the parity corpus (which moves
+/// `RUNTIME_DIFF_MATCH_FLOOR` / `RUNTIME_DIFF_NONMATCH_CEILING` and is
+/// therefore its own piece of work: `todo/t0828`).
+#[test]
+fn parity_untriaged_exclusions_shrink_only() {
+    // Regenerate:
+    //   grep -l '^#!parity-excluded untriaged:' tests/fixtures/*.gg | wc -l
+    const UNTRIAGED_CEILING: usize = 24;
+    const DECL: &str = "#!parity-excluded";
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures = root.join("tests/fixtures");
+
+    let mut untriaged: Vec<String> = fs::read_dir(&fixtures)
+        .expect("read tests/fixtures")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |x| x == "gg"))
+        .filter(|p| {
+            let src = fs::read_to_string(p).unwrap_or_default();
+            src.lines()
+                .take_while(|l| l.trim().is_empty() || l.trim_start().starts_with('#'))
+                .any(|l| {
+                    l.trim_start()
+                        .strip_prefix(DECL)
+                        .is_some_and(|r| r.trim_start().starts_with("untriaged:"))
+                })
+        })
+        .map(|p| p.file_stem().unwrap().to_string_lossy().to_string())
+        .collect();
+    untriaged.sort();
+
+    assert!(
+        untriaged.len() <= UNTRIAGED_CEILING,
+        "un-evidenced parity exclusions GREW: {} > {UNTRIAGED_CEILING}.\n{untriaged:?}\n\n\
+         `untriaged` is the retired filename heuristic's leftover debt, not a place to put a new \
+         exclusion. A NEW exclusion states its cause: pick the kind that is true \
+         (clock/random/network/scheduling/harness/allocator/host) and write the evidence. If the \
+         cause really is unknown, the fixture is not yet known to be unstable and does not \
+         belong outside the parity corpus at all.",
+        untriaged.len(),
+    );
+    assert!(
+        untriaged.len() >= UNTRIAGED_CEILING,
+        "un-evidenced parity exclusions SHRANK: {} < {UNTRIAGED_CEILING} — good. Lower \
+         UNTRIAGED_CEILING to {} in the SAME commit that retriages them (shrink-only ratchet; a \
+         tolerance band with no downward move is an escalator, Core #6 ⊕).",
+        untriaged.len(),
+        untriaged.len(),
+    );
+    eprintln!("parity_untriaged_exclusions_shrink_only: {} untriaged", untriaged.len());
 }
