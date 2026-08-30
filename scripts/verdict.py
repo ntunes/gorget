@@ -43,7 +43,7 @@ false-greens above actually were.
 
 THE EXIT-CODE AXIS IS ANCHORED ON THE RATIFIED TAXONOMY
 ───────────────────────────────────────────────────────
-`docs/define-gorget/decisions.md:2062-2070` (ratified 2026-07-15, amended in
+`docs/define-gorget/decisions.md:2074-2070` (ratified 2026-07-15, amended in
 place 2026-08-10) is a TOTAL enumeration of the toolchain's exit codes:
 
     0 success · 1 static rejection · 2 usage · 101 trap + ICE
@@ -101,7 +101,7 @@ import re
 import sys
 
 # ── the ratified exit-code taxonomy ──────────────────────────────────────────
-# docs/define-gorget/decisions.md:2062-2070. A TOTAL enumeration, which is what
+# docs/define-gorget/decisions.md:2074-2070. A TOTAL enumeration, which is what
 # lets the complement be the fault domain.
 RATIFIED_EXIT_CODES = {
     0: "success",
@@ -153,7 +153,7 @@ PHASES = ("build", "run")
 # ⚠ WHOSE EXIT CODE IS THIS? A REQUIRED INPUT, and its absence produced a
 # confident wrong answer on the first full corpus sweep.
 #
-# The ratified taxonomy (`decisions.md:2062-2070`) is the TOOLCHAIN's contract —
+# The ratified taxonomy (`decisions.md:2074-2070`) is the TOOLCHAIN's contract —
 # what `gg` and `ggdef` return. It does NOT constrain a user's program: the same
 # ledger entry hands the small-int band to the USER as their exit API
 # (`:2073`, *"`main throws int` hands the small-int band to the USER as their
@@ -188,7 +188,7 @@ UBSAN_MARKERS = ("SUMMARY: UndefinedBehaviorSanitizer", "runtime error:")
 # WRONG THE MOMENT IT WAS PUBLISHED: the same commit that created this file also
 # added a `use` line to src/main.rs, shifting everything below it by one. Two
 # output-review passes then certified them as correct. The ledger already ruled on
-# exactly this pattern (`docs/define-gorget/decisions.md:2043-2045`): cite by
+# exactly this pattern (`docs/define-gorget/decisions.md:2055-2045`): cite by
 # anchor, not by line, "which is what line numbers do".
 #
 # The MARKER STRINGS BELOW ARE THE ANCHOR — they are literally the grep. Regenerate
@@ -259,7 +259,7 @@ AMBIGUITY_CELLS = {
 UNREACHABLE_AT_HEAD = {
     102: "E_MainThrowsNonInt is still live (src/semantic/typecheck.rs) and there "
          "is no exit(102) in the C runtime; the ledger records 102 as RETIRING "
-         "at E0 (decisions.md:2057-2060). The label exists and is honoured if a "
+         "at E0 (decisions.md:2069-2060). The label exists and is honoured if a "
          "102 ever arrives; it has no RED demonstration against a real process.",
 }
 
@@ -329,7 +329,7 @@ def _off_taxonomy_crash(rc, exit_axis, detail, subject):
 
     For the toolchain the ratified set is TOTAL, so its complement is exactly the
     fault domain — with ratified backing rather than a heuristic. For a USER
-    PROGRAM the small-int band is the user's own exit API (`decisions.md:2073`),
+    PROGRAM the small-int band is the user's own exit API (`decisions.md:2085`),
     so a plain `exit(7)` is a deliberate outcome, not a fault: `EXIT:7`. It is
     still not CLEAN — CLEAN means rc 0 with nothing found — so nothing can hide
     behind it.
@@ -355,7 +355,7 @@ def _off_taxonomy_crash(rc, exit_axis, detail, subject):
     else:
         label = f"EXIT:{rc}"
         why = (f"the program exited {rc} of its own accord; the small-int band "
-               f"is the USER's exit API (decisions.md:2073), not the toolchain's")
+               f"is the USER's exit API (decisions.md:2085), not the toolchain's")
     exit_axis.append(label)
     detail[label] = why
 

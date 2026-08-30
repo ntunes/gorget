@@ -4,7 +4,7 @@
 # type (D31 spelling philosophy; CoW's no-user-visible-Ref[T] principle).
 # Rejected at type-resolution time in `ast_type_to_resolved` with
 # `E_NonDerefContainerBareTrait`. See TODO.md Round XII handover + D36
-# (`docs/define-gorget/decisions.md:1373`).
+# (`docs/define-gorget/decisions.md:1385`).
 
 trait Speaker:
     String greet(self)

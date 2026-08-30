@@ -20,7 +20,7 @@
 #   * `for k in &dict` -- the binding IS the hash key.
 #   Writing through either corrupts the bucket index. Their correct answer is
 #   reject, or mutable-private-copy per the bare-form ruling
-#   (`docs/define-gorget/decisions.md:2554-2578`, owner 2026-08-18).
+#   (`docs/define-gorget/decisions.md:2566-2578`, owner 2026-08-18).
 #
 # RELATED, and measured alongside: the natural in-loop update spelling
 # `for k in d: d[k] = 99` dies at **build rc 101 with `E_CONSUME_SITES`** --

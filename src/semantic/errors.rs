@@ -397,7 +397,7 @@ pub enum SemanticErrorKind {
     /// visible in the type. Silently boxing would violate D31's spelling
     /// philosophy (costs stay visible) and CoW's no-user-visible-`Ref[T]`
     /// principle. Rejected at type-resolution time; see
-    /// `docs/define-gorget/decisions.md:1373` (D36 NonDerefContainer clause)
+    /// `docs/define-gorget/decisions.md:1385` (D36 NonDerefContainer clause)
     /// and the owner Q1 ruling in TODO.md's Round XII handover.
     NonDerefContainerBareTrait { container: String, trait_: String },
 

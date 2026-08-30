@@ -207,7 +207,7 @@ def _verdict(expected: str, r, actual: str, sanitized=False, timed_out=False,
     round-close gate, so that was a segfault publishing as green.
 
     The rule that retires it is ratified, not invented: the toolchain exit-code
-    taxonomy (docs/define-gorget/decisions.md:2062-2070) is a TOTAL enumeration,
+    taxonomy (docs/define-gorget/decisions.md:2074-2070) is a TOTAL enumeration,
     so `rc not in {0,1,2,101,102,103}` is off-taxonomy and can NEVER be WORKS.
     `scripts/verdict.py` owns that rule; this function only decides what the
     map's coarser bucket vocabulary calls the result.
@@ -242,7 +242,7 @@ def _verdict(expected: str, r, actual: str, sanitized=False, timed_out=False,
     # are indistinguishable (todo/t0647). The MANIFEST resolves what the process
     # alone cannot: a cell whose hand-written expectation says "a loud failure"
     # has declared its intent, and the ledger RATIFIES that reading --
-    # docs/define-gorget/decisions.md:2060, "`main throws int`'s escaping int
+    # docs/define-gorget/decisions.md:2072, "`main throws int`'s escaping int
     # KEEPS the exit-code idiom (the user chose the exit contract)". So the
     # ambiguity is resolved by an INPUT the classifier does not have, not by the
     # classifier guessing. Every other UNKNOWN stays UNKNOWN.

@@ -12,7 +12,7 @@
 # and reuses the shared `types::trait_name_of_inner` predicate.
 #
 # Reject fires at the callee span (`Mutex` identifier); user is advised to
-# write `Mutex[Box[Speaker]]` (D36, `docs/define-gorget/decisions.md:1373`).
+# write `Mutex[Box[Speaker]]` (D36, `docs/define-gorget/decisions.md:1385`).
 
 trait Speaker:
     String greet(self)
