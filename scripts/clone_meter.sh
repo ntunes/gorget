@@ -40,8 +40,13 @@ clone_meter_get() {
 
 # clone_meter_build <gg-binary> <out-exe> <stderr-log>
 # Builds the instrumented self-host driver — the meter's producer. cwd is forced
-# to the repo root and the driver path is spelled repo-relative, which is what
-# makes the number independent of where the checkout lives.
+# to the repo root and the driver path is spelled repo-relative so that every
+# instrument runs the SAME workload.
+# ⛔ That does NOT make the number independent of where the checkout lives — an
+# earlier revision of this comment said it did, which is the belief that
+# produced the 294. The string axis scales at 7 clones per character of the
+# root path (`root_path_is_an_input` in the spec, `todo/t0850`), and the argv
+# spelling itself was measured to change nothing at all.
 clone_meter_build() {
     local gg="$1" out="$2" errlog="$3"
     local driver build_args

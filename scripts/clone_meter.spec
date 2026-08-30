@@ -16,14 +16,32 @@
 #   FILE. `tests/lints.rs::clone_meter_instruments_read_the_declared_spec`
 #   fails when one of them spells the invocation itself instead.
 #
-# FORMAT: `key = value`, one per line; `#` comments; blank lines ignored.
-# Bash reads it with `scripts/clone_meter.sh`; Rust reads it with
-# `fn clone_meter_spec()` in `tests/integration.rs`.
+# FORMAT: `key = value`, one per line. WHOLE-LINE `#` comments only — no inline
+# trailing comment, and no trailing whitespace on a value. Blank lines ignored.
+# ⚠ The DATA is single-source, which is the half of Layering rule 3 that
+# matters; the READERS are three, and they are not identical. `clone_meter_get`
+# (awk, `scripts/clone_meter.sh`), `clone_meter_spec_get`
+# (`tests/integration.rs`) and `clone_meter_spec_values` (`tests/lints.rs`) are
+# three implementations with no agreement guard — the two Rust ones live in
+# separate test binaries that cannot share a module without a helper crate. The
+# Rust readers `trim()` a value; awk strips only the leading run, so a trailing
+# space would reach the shell's `"$driver"` intact and break the build. Keeping
+# the format to the restriction above is what makes the three agree.
 
 # ── THE INVOCATION ─────────────────────────────────────────────────────────
-# cwd is ALWAYS the repo root; every path below is relative to it, so the meter
-# is invariant under where the checkout lives (a worktree three components
-# deeper than main measures the same number).
+# cwd is ALWAYS the repo root and every path below is relative to it, so both
+# instruments run provably the SAME workload. That is all this spelling buys.
+#
+# ⛔ IT DOES NOT BUY CHECKOUT-INVARIANCE, AND AN EARLIER REVISION OF THIS VERY
+# PARAGRAPH CLAIMED IT DID — "a worktree three components deeper than main
+# measures the same number". THAT IS FALSE, IT IS THE EXACT BELIEF THAT
+# PRODUCED THE 294, and it was written into the file created to retire it.
+# A worktree 42 characters deeper measures 294 MORE on the string axis; see
+# `root_path_is_an_input` below and `todo/t0850`.
+# ⊕ Nor is the relative SPELLING what would make it invariant: the argv
+# spelling was MEASURED to move both counters by exactly zero (the table
+# below), so relative-vs-absolute makes no difference either way. The spelling
+# is declared to pin the WORKLOAD, not to normalise the path.
 driver     = tests/fixtures/self_host_lowerer/driver.gg
 lib        = lib
 build_args = --clones=stats

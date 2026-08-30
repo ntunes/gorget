@@ -12,6 +12,20 @@
 #       Is each pinned constant still the last measurement? A pin whose
 #       PINNED-BY commit predates a closure change is STALE — the number in the
 #       tree is no longer what the meter would print.
+#       ⚠ It presupposes `tests/lints.rs::clone_meter_pins_carry_their_provenance`,
+#       which is what asserts the four pins EXIST: on a tree with no provenance
+#       lines this mode prints a header, zero rows and exits 0.
+#
+#   scripts/clone_meter_check.sh --anchor-age
+#       ⚠ RUN THIS AT ROUND OPEN. The ~1% band is anchored at the ROUND-OPEN
+#       value, and that anchor is re-seeded by a scheduled human action with no
+#       battery gate behind it. Forget the reset and the band silently stops
+#       meaning "per round": R48's legitimate +0.9% stacks on R47's +0.5% and
+#       reads as +1.4% against a stale anchor — a false owner ask, and the
+#       cross-round accumulation the owner explicitly rejected, arrived at by
+#       omission. This mode fails once a round has CLOSED since the anchor was
+#       set (newest dated `DONE.md` entry newer than `ROUND-OPEN-DATE`), which
+#       is the one tree-visible signal that a new round has begun.
 #
 # ⚠ WHY THIS IS NOT A `tests/lints.rs` LINT. A lint sees a TREE; both questions
 # above are about a DIFF, and the failure class is an ABSENCE — nobody measured.
@@ -37,12 +51,13 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --track)         MODE=track; shift ;;
         --pin-staleness) MODE=staleness; shift ;;
+        --anchor-age)    MODE=anchor; shift ;;
         --base)          BASE="$2"; shift 2 ;;
         # --tip defaults to HEAD; naming it lets a reviewer check a branch tip
         # without checking it out, and lets the lint below pin an exact range.
         --tip)           TIP="$2"; shift 2 ;;
         --report)        REPORT="$2"; shift 2 ;;
-        *) echo "usage: $0 --track --base <sha> [--tip <sha>] --report <file> | $0 --pin-staleness" >&2; exit 2 ;;
+        *) echo "usage: $0 --track --base <sha> [--tip <sha>] --report <file> | $0 --pin-staleness | $0 --anchor-age" >&2; exit 2 ;;
     esac
 done
 
@@ -110,6 +125,12 @@ track_mode() {
     # (2) The required section. Its three parts are the three things a reader
     #     needs to know the number is real: WHAT ran, WHEN (which commit), and
     #     the verbatim lines the gate printed.
+    # `CLONE-METER-AT:` is THE COMMIT THE BINARY UNDER MEASUREMENT WAS BUILT
+    # FROM, and it must equal the tip under review — a number taken at another
+    # commit attributes another commit's clones. (A harness-only track whose
+    # diff touches nothing in the closure never reaches this check: it
+    # short-circuits above with NO MEASUREMENT REQUIRED, and its report may
+    # honestly cite the base, since the base IS the closure state it measured.)
     grep -q '^CLONE-METER-CMD:' "$REPORT" || fail "report has no 'CLONE-METER-CMD:' line (the exact command run)"
     local at
     at=$(awk '/^CLONE-METER-AT:/ && !seen { sub(/^CLONE-METER-AT:[[:space:]]*/, ""); print; seen = 1 }' "$REPORT")
@@ -163,8 +184,37 @@ staleness_mode() {
     return $FAILED
 }
 
+anchor_mode() {
+    # The band's anchor carries its own date, beside the four ROUND-OPENED-BY
+    # lines. A round CLOSES by adding a dated entry at the top of DONE.md, so a
+    # DONE.md entry newer than the anchor means a round boundary was crossed
+    # without re-seeding it.
+    local anchor_date newest_done
+    anchor_date=$(awk '/^\/\/ ROUND-OPEN-DATE:/ && !seen { print $3; seen = 1 }' "$GATE_FILE")
+    # Plain bracket expressions, not {n} intervals — mawk needs --re-interval.
+    newest_done=$(awk '/^- \[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\]/ { print substr($0, 4, 10); exit }' DONE.md)
+    echo "clone-meter band anchor"
+    echo "  ROUND-OPEN-DATE : ${anchor_date:-<MISSING>}"
+    echo "  newest DONE.md  : ${newest_done:-<none>}"
+    if [[ -z "$anchor_date" ]]; then
+        fail "no '// ROUND-OPEN-DATE: <YYYY-MM-DD>' line beside the anchors — the band's anchor has
+   no age, so nothing can tell a fresh anchor from one carried over from a closed round."
+        return 1
+    fi
+    if [[ -n "$newest_done" && "$newest_done" > "$anchor_date" ]]; then
+        fail "a round has CLOSED ($newest_done) since this band anchor was set ($anchor_date).
+   RE-SEED THE FOUR '..._CLONE_ROUND_OPEN' CONSTANTS from the round-open measurement, and update
+   ROUND-OPEN-DATE / ROUND-OPENED-BY. Leaving them is not conservative: the band stops meaning
+   'per round' and starts accumulating across rounds, which is the shape the owner rejected."
+        return 1
+    fi
+    echo "  ✅ the anchor is not older than the newest closed round."
+    return 0
+}
+
 case "$MODE" in
     track)     track_mode ;;
     staleness) staleness_mode ;;
-    *) echo "usage: $0 --track --base <sha> --report <file> | $0 --pin-staleness" >&2; exit 2 ;;
+    anchor)    anchor_mode ;;
+    *) echo "usage: $0 --track --base <sha> [--tip <sha>] --report <file> | $0 --pin-staleness | $0 --anchor-age" >&2; exit 2 ;;
 esac

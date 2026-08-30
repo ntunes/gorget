@@ -30477,7 +30477,11 @@ fn self_host_bootstrap() {
     //
     // ── REGENERATE ─────────────────────────────────────────────────────────
     //   GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 \
+    //     GG_STAGE1_TIMEOUT_SECS=1800 \
     //     cargo test --test integration --release clone_ceiling -- --nocapture
+    // ⚠ ALL THREE knobs: the stage-1 test honours GG_STAGE1_TIMEOUT_SECS for
+    // both of its long runs, and a command that omits it is not the command
+    // these numbers came from.
     // prints all four axes, both stages, with signed deltas against BOTH
     // numbers, before anything asserts. `bash scripts/self_host_mem_baseline.sh
     // --out /tmp/m.json` gives the stage-0 pair plus peak RSS
@@ -30493,6 +30497,12 @@ fn self_host_bootstrap() {
     // for instead.
 // PINNED-BY: cc0c0a79 VALUE: 13_144_626
 const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_144_626;
+// ⚠ THE BAND'S ANCHOR — ONE PER METER, ALL FOUR FROM THE SAME ROUND-OPEN
+// MEASUREMENT, RE-SEEDED ONCE PER ROUND AT ROUND OPEN. Nothing in the battery
+// fails when that reset is forgotten (see `struct CloneReading`); the signal
+// that does is `scripts/clone_meter_check.sh --anchor-age`, which the
+// round-open step runs, and the date below is what it reads.
+// ROUND-OPEN-DATE: 2026-08-29
 // ROUND-OPENED-BY: f3feea79 VALUE: 13_096_576
 const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_096_576;
 
@@ -30625,10 +30635,19 @@ fn clone_meter_spec_get(key: &str) -> String {
 }
 
 /// The declared workload argv, in the declared spelling: repo-relative paths
-/// with cwd forced to the repo root. That spelling is what makes the number
-/// independent of WHERE the checkout lives — an agent worktree nests three
-/// components under the main checkout, and an absolute-path meter would make
-/// that a difference in the reading.
+/// with cwd forced to the repo root, so every instrument runs provably the SAME
+/// workload.
+///
+/// ⛔ THE SPELLING DOES NOT MAKE THE NUMBER CHECKOUT-INDEPENDENT, and an earlier
+/// revision of this doc comment said it did. That sentence was the exact false
+/// belief that produced the "294-clone instrument disagreement", reproduced
+/// inside the fix for it. Two things are true instead, both measured:
+///   * the argv spelling — relative versus absolute — moves both counters by
+///     EXACTLY ZERO, so it was never what made anything independent;
+///   * the meter is NOT invariant under the checkout's absolute path. The
+///     string axis is `K + 7 × len(root)` (`root_path_is_an_input` in
+///     `scripts/clone_meter.spec`, `todo/t0850`), which is why
+///     `assert_clone_readings` prints `root_len=` beside every reading.
 fn clone_meter_run_argv() -> (PathBuf, Vec<String>) {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut argv = vec![clone_meter_spec_get("driver"), clone_meter_spec_get("lib")];
@@ -30640,6 +30659,13 @@ fn clone_meter_run_argv() -> (PathBuf, Vec<String>) {
 /// Integer arithmetic on purpose: the band must be reproducible to the unit by
 /// anyone re-deriving it, and `round_open / 100` is.
 const CLONE_BAND_PERCENT: u64 = 1;
+/// `band()` computes `round_open / (100 / CLONE_BAND_PERCENT)`, so 0 divides by
+/// zero and a non-divisor of 100 rounds silently (3 would give 3.03%, not 3%).
+/// Both are compile-time refusals rather than a surprise in a ratchet message.
+const _: () = assert!(
+    CLONE_BAND_PERCENT > 0 && 100 % CLONE_BAND_PERCENT == 0,
+    "CLONE_BAND_PERCENT must divide 100 exactly"
+);
 
 /// One axis's reading, judged against the meter's TWO numbers.
 ///
@@ -30666,6 +30692,35 @@ const CLONE_BAND_PERCENT: u64 = 1;
 /// organically, and a cap cannot tell that from waste). `todo/t0860` carries the
 /// periodic waste AUDIT that can — an audit measures the waste, a cap only ever
 /// measures the total.
+///
+/// ⚠ AND THE ANCHOR'S RESET IS A SCHEDULED ACTION WITH NO BATTERY GATE BEHIND
+/// IT. `clone_meter_pins_carry_their_provenance` checks that all four
+/// `ROUND-OPENED-BY` lines agree with each other and with their constants; it
+/// CANNOT check that the sha is *this* round's open, because "which round is
+/// open" is not in the tree. A forgotten reset does not fail loudly — it
+/// silently turns the per-round band into the cross-round accumulation the
+/// owner rejected, and manufactures a false owner ask out of two legitimate
+/// sub-band rounds. The signal that CAN see it is
+/// `scripts/clone_meter_check.sh --anchor-age`, which fails once a round has
+/// closed since the anchor was set; the round-open step runs it.
+///
+/// ⚠ WHAT PER-TRACK ATTRIBUTION CAN AND CANNOT BE TESTED FOR, so the next round
+/// does not re-derive a dead end at the cost of another ten-cell bisect.
+/// Attribution assumes per-track deltas are roughly ADDITIVE. **Patch-replay
+/// ablation is STRUCTURALLY UNABLE to test that for the pairs most likely to
+/// interact**: measuring track X "solo" on the round-open base means replaying
+/// X's diff there, and two tracks that interact usually do so by editing the
+/// same code, so the later diff does not apply. R47's D1/D3a pair was tried and
+/// failed exactly this way — `git apply` and `git apply --3way` both reject
+/// D3a's hunks in `src/ir/lowering/functions.rs` against base `f3feea79`.
+/// Hand-resolving would fabricate a tree no track ever produced. Additivity is
+/// therefore confirmed at n=1 (`A2solo` == in-chain `A2` on every counter) and
+/// is not going to be confirmed further by that method.
+/// ⊕ **The GATE does not rest on it**, which is why that is tolerable: the band
+/// is anchored at ROUND-OPEN and evaluated once, and the PIN is re-measured at
+/// every integration — so a non-additive interaction surfaces as a discrepancy
+/// in the NEXT measurement rather than being assumed away. Additivity bounds
+/// the PRECISION of a track's stated delta, nothing more.
 struct CloneReading {
     axis: &'static str,
     measured: u64,
@@ -30782,12 +30837,12 @@ fn assert_clone_readings(tag: &str, readings: &[CloneReading]) {
             <round-open sha> --report <your report>` says whether your diff could have moved the\n\
             meter, and `todo/t0860` carries the waste audit. Do not reach for\n\
             `scripts/clone_attribution.sh` expecting an answer: it is wired into no gate and sees\n\
-            ~3.5%% of aggregate clone volume by its own header.\n\
+            ~3.5% of aggregate clone volume by its own header.\n\
          3. The likely causes, in the order they have actually occurred here: a lost move or borrow\n\
             (an over-materialize at a consuming position), a mark that got coarser (root-granular\n\
             where it should be path-granular), or a resolution walk added to a hot path.\n\
          4. Regenerate with the DECLARED invocation, never a hand-rolled one:\n\
-            GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 \\\n\
+            GG_BUILD_TIMEOUT_SECS=1800 GG_TEST_TIMEOUT_SECS=1800 GG_STAGE1_TIMEOUT_SECS=1800 \\\n\
               cargo test --test integration --release clone_ceiling -- --nocapture\n\
             (`scripts/clone_meter.spec` declares what that measures, and what has been MEASURED not\n\
             to change it: the gg build profile, the argv spelling and the stdout target all move\n\

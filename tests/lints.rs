@@ -18613,10 +18613,15 @@ fn count_dot_slice_in_code(roots: &[&str]) -> usize {
     let mut total = 0usize;
     for root in roots {
         walk_gg_files(Path::new(root), &mut |path: &Path| {
-            // ALLOWLIST: self-host lowerer corpora — the 208 SH `.slice()`
-            // sites are gated on Track A (SH stage-2 memory-safety fix)
-            // landing before Track C-3b can migrate them. Remove this
-            // check when C-3b lands (atomic ceiling ratchet 208 → 0).
+            // ALLOWLIST: self-host lowerer corpora — the SH `.slice()` sites
+            // are gated on Track A (SH stage-2 memory-safety fix) landing
+            // before Track C-3b can migrate them. Remove this check when C-3b
+            // lands (atomic ceiling ratchet → 0).
+            // ⚠ The count is 211, not the 208 this comment carried: recounted
+            // 2026-08-30 over `self_host_lowerer/*.gg` (12 files;
+            // `self_host_typechecker/*.gg` has none of its own, the 14 that
+            // appear there are the symlink seam). Regenerate the number rather
+            // than quoting this one.
             //
             // ⚠ R47: THAT MIGRATION IS NOT COSMETIC, AND NOBODY HAD MEASURED
             // IT. `.slice(a, b)` materializes an OWNED String on every call;
@@ -24840,6 +24845,43 @@ fn clone_meter_pins_carry_their_provenance() {
          {checked}. A new axis needs its provenance pair too; a removed one needs this count \
          lowered deliberately."
     );
+
+    // ⚠ THE FOUR ANCHORS ARE ONE EVENT, NOT FOUR. The band means "per round"
+    // only if all four axes are anchored at the SAME round open; a partial
+    // re-seed leaves some axes measuring against an older round and is exactly
+    // how a per-round band decays into cross-round accumulation.
+    let anchors: Vec<&str> = src
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("// ROUND-OPENED-BY:"))
+        .filter_map(|r| r.split_whitespace().next())
+        .collect();
+    assert_eq!(anchors.len(), 4, "expected 4 ROUND-OPENED-BY lines, found {}", anchors.len());
+    assert!(
+        anchors.windows(2).all(|w| w[0] == w[1]),
+        "the four band anchors do not share one sha: {anchors:?}. All four axes are re-seeded \
+         from ONE round-open measurement; a partial re-seed makes the ~1% band mean different \
+         spans on different axes."
+    );
+    let anchor = anchors[0];
+    let ok = std::process::Command::new("git")
+        .args(["merge-base", "--is-ancestor", anchor, "HEAD"])
+        .status()
+        .expect("git merge-base");
+    assert!(
+        ok.success(),
+        "the band anchor `{anchor}` is not an ancestor of HEAD — it names no round open on this \
+         history."
+    );
+    // ⚠ WHAT THIS STILL CANNOT SEE: whether `{anchor}` is THIS round's open.
+    // "Which round is open" is not in the tree, so a FORGOTTEN re-seed passes
+    // every assert above. `scripts/clone_meter_check.sh --anchor-age` is the
+    // signal for that, and the round-open step runs it.
+    let date_lines = src.lines().filter(|l| l.trim().starts_with("// ROUND-OPEN-DATE:")).count();
+    assert_eq!(
+        date_lines, 1,
+        "expected exactly one `// ROUND-OPEN-DATE:` line (the one thing --anchor-age reads), \
+         found {date_lines}"
+    );
 }
 
 /// The meter's instruments read the DECLARED invocation; none of them spells it.
@@ -24860,6 +24902,40 @@ fn clone_meter_instruments_read_the_declared_spec() {
     let declared_driver = clone_meter_spec_values("driver")
         .pop()
         .expect("spec declares no `driver`");
+    // ⚠ ARM-COUNT GUARD (Core #4 litmus: "what stops site N+1?"). The list above
+    // is hand-written, so a FOURTH measuring script could be added beside it and
+    // never be checked.
+    //
+    // The discriminator is SEMANTIC, not a path glob: a script is an instrument
+    // of THIS meter when it spells the declared workload AND arms the counters
+    // (`--clones=stats`) or reads their output (`[clone-stats]`). That is what
+    // separates a reading from a build. `scripts/gg_impl.sh` builds the same
+    // driver as a deliverable compiler and takes no measurement — it is
+    // correctly outside; `scripts/clone_attribution.sh` arms the counters but is
+    // a GENERIC tool (`<gg> <target.gg> …`) that only mentions this workload in
+    // a comment, and comments are stripped below.
+    let arms = ["--clones=stats", "[clone-stats]"];
+    for entry in fs::read_dir("scripts").expect("read scripts/").flatten() {
+        let p = entry.path();
+        if p.extension().and_then(|e| e.to_str()) != Some("sh") {
+            continue;
+        }
+        let rel = p.to_string_lossy().to_string();
+        if instruments.contains(&rel.as_str()) || rel.ends_with("clone_meter.sh") {
+            continue;
+        }
+        let Ok(src) = fs::read_to_string(&p) else { continue };
+        let code: String =
+            src.lines().map(|l| l.split('#').next().unwrap_or("")).collect::<Vec<_>>().join("\n");
+        let names_workload = code.contains(&declared_driver);
+        let takes_a_reading = arms.iter().any(|a| code.contains(a));
+        assert!(
+            !(names_workload && takes_a_reading),
+            "{rel} spells the clone meter's workload AND arms its counters, but is not in this \
+             lint's instrument list. Either it measures the meter — add it, and make it source \
+             scripts/clone_meter.sh — or it must not do both."
+        );
+    }
     for path in instruments {
         let src = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
         let sourced = src.contains("source \"$REPO_ROOT/scripts/clone_meter.sh\"")
