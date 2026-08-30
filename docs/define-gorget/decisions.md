@@ -1263,6 +1263,18 @@ P1-infra reviewers' recommendation.
   underflow bugs) and deserve their own decision with usage data; step's real use is
   `.reversed()`'s job and a stride breaks the future offset+len CoW-share repr. Both
   pure widenings later. D15's removal track becomes the COMBINED slice-surface track.
+  - **RIDER, owner 2026-08-30 — the migration is a CLONE RECLAIM, not a rename.**
+    *"materialize nothing is the correct behavior. Especially on strings where views are
+    native."* ⇒ **Materializing nothing is the RATIFIED behaviour of `s[a:b]`**, and
+    `.slice()` materializing an owned String per call is a DEFECT, not an alternative
+    calling convention. R47 measured 1,002 clones over 1,000 `.slice()` calls against 2
+    for the identical `s[a:b]`, with identical results. ⚠ **This reprices `t0316`**, which
+    has carried the migration clause as a cosmetic rename since 2026-07-06: it is a sized
+    reclaim against the clone ceilings. ⊕ **Note before sizing the work:** the String
+    `.slice` decl ALREADY carries `returns_view: true` (`src/ir/lowering/builtins.rs:854`,
+    sharing `gorget_str_slice` with `substring`), while the sequence `.slice` at `:383`
+    carries `returns_view: false`. So the fix may be at the producer rather than at 211
+    call sites — establish which BEFORE scoping it.
 
 - 2026-07-06 — **D11 RATIFIED IN FULL (registry shape approved; owner clarified the
   governing rule: CLAUDE.md's NO NAME-MATCHING / NO SIDECARS discipline — typed metadata
