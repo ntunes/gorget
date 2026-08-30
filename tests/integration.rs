@@ -37106,7 +37106,15 @@ done",
     );
 }
 
-/// (A) FLOORED DIAGNOSTIC — env-gated (GG_RUNTIME_DIFF=1).
+/// (A) FLOORED DIAGNOSTIC — DEFAULT-RUNNING (owner 2026-08-22); opt OUT
+/// with `GG_RUNTIME_DIFF=0`.
+///
+/// ⚠ This line used to read "env-gated (GG_RUNTIME_DIFF=1)" — false since the
+/// opt-IN era ended, and contradicted seven lines below by this same comment's
+/// own "Runs BY DEFAULT". It is the third spelling of the belief that let the
+/// non-MATCH ceiling drift 148 -> 151 unobserved (a gate believed not to run is
+/// a gate nobody checks); the other two are corrected at the Chain-3 header and
+/// at the `self_host_runtime` panic-hook note. Do not restore any of them.
 ///
 /// Full corpus, live `gg run` oracle. Discovers the MATCH set and the
 /// WRONG-OUTPUT / CC-FAIL / CRASH / DRIVER-FAIL backlog. Prints the honest
@@ -37115,9 +37123,11 @@ done",
 /// (linux + default C backend + release only — see `parity_floor_active` and
 /// the comment at the assert).
 ///
-/// Role: DEV-LOOP ratchet, not a CI gate — CI sets neither GG_RUNTIME_DIFF nor
-/// GG_FULL, so this test early-returns there (correct semantics: the assert is
-/// bypassed only when no work was done). The default-running per-fixture CI
+/// Role: DEV-LOOP ratchet, not a CI gate — CI sets `GG_RUNTIME_DIFF: "0"` in both
+/// integration jobs (`.github/workflows/ci.yml:162`, `:275`), i.e. it opts OUT
+/// explicitly, so this test early-returns there (correct semantics: the assert is
+/// bypassed only when no work was done). It does NOT "set neither" and there is
+/// no `GG_FULL` gate on this entry point at HEAD. The default-running per-fixture CI
 /// guard for self-host runtime behaviour is the `self_host_runtime` snapshot
 /// net below. What this floor adds: it guards the matching-but-UNsnapshotted
 /// fixtures, and turns every intentional north-star run (the documented
@@ -37738,8 +37748,19 @@ fn self_host_runtime_diff() {
     // (R40 close) -> 1415 (R41 close, `e62fef9d`, alongside 440 -> 443 and the
     // 149 -> 148 ceiling reseed). The log above therefore ENDS at 1400 while
     // the constant reads 1415 — read the constant, not the last log line, and
-    // append an entry here when you raise it (`:37548` says to raise it in the
-    // same commit; it does not excuse you from saying why).
+    // append an entry here when you raise it (the assert below says to raise it
+    // in the same commit; it does not excuse you from saying why).
+    //
+    // ⚠ SLACK, MEASURED AND UNSPENT (R47 F1, 2026-08-30): a full documented run
+    // at that round printed **MATCH = 1485** against this floor of 1415, so the
+    // gate would not notice a 69-fixture MATCH regression. That is the same
+    // "gate that stopped looking" shape the non-MATCH ceiling's own comment
+    // describes 100 lines below. It was deliberately NOT raised there: the gain
+    // was not that track's (its change removed variance, it did not add MATCH),
+    // and five tracks were in flight, where a mid-round ratchet from one
+    // worktree is how a round close false-reds. RAISING IT IS A ROUND-CLOSE
+    // ACTION, on the number the post-integration battery prints, with the usual
+    // jitter discount — not on 1485.
     const RUNTIME_DIFF_MATCH_FLOOR: usize = 1415;
     if cfg!(debug_assertions) {
         eprintln!(
@@ -38020,7 +38041,9 @@ fn self_host_runtime() {
     // (→ `Crashed`, reported as a regression), and the only OTHER panic source is
     // an emit-step hang in the passing set — that's a REAL regression that must
     // surface loudly, not be silenced. (A)/regen keep the hook because there
-    // hung fixtures are expected and the entry point is opt-in/env-gated.
+    // hung fixtures are expected: (A) sweeps the WHOLE corpus (default-running,
+    // opt OUT with GG_RUNTIME_DIFF=0 — NOT opt-in), and regen is the genuinely
+    // env-gated one (GG_REGEN_RUNTIME_SNAPSHOT=1).
     let failures: Vec<String> = parallel_map_fixtures(&fixtures, |fixture| {
         let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
         let expected = match std::fs::read_to_string(&snap_paths[&stem]) {
@@ -43919,15 +43942,60 @@ fn unknown_directive_error() {
 }
 
 /// The directive-VALUE arm of the same validation, which had no fixture. It is
-/// load-bearing for two lowering arms that would otherwise be a Core #10 silent
-/// drop: `src/ir/lowering/mod.rs`'s `_ => {}` and the self-host lowerer's
-/// missing `else` (`self_host_lowerer/lower.gg`) are unreachable only because a
-/// bad mode is rejected here first. RED-verified by deleting the `"scheduler"`
-/// arm of the directive validation in `src/semantic/mod.rs`: the fixture then
-/// COMPILES and RUNS under the default pool scheduler and this test fails.
+/// load-bearing for `src/ir/lowering/mod.rs`'s `_ => {}`, which is unreachable
+/// only because a bad mode is rejected here first — otherwise that arm is a
+/// Core #10 silent drop. RED-verified by deleting the `"scheduler"` arm of the
+/// directive validation in `src/semantic/mod.rs`: the fixture then COMPILES and
+/// RUNS under the default pool scheduler and this test fails.
+///
+/// ⚠ THIS PINS ONE LANE ONLY, and the other lane is a live defect — do not read
+/// it as cross-lane coverage. The self-host performs NO directive validation
+/// (`self_host_check/resolve.gg`'s `IDirective` arm is a bare `pass`), so its
+/// lowerer's missing `else` IS the silent drop, filed as `todo/t0825`. Measured
+/// 2026-08-30: the self-host emits, compiles and RUNS this very fixture at rc 0,
+/// and on an async program `scheduler=bogus` silently selects the POOL runtime
+/// where `scheduler=single` selects the N:1 loop — different observable
+/// interleaving, no diagnostic. Graduate this to a two-lane pin when `t0825`
+/// lands.
 #[test]
 fn unknown_scheduler_mode_error() {
     check_gg_fails("unknown_scheduler_mode_error.gg", "unknown directive `scheduler=bogus`");
+}
+
+/// The SELF-HOST half of `unknown_scheduler_mode_error`, on the lagging lane —
+/// the shape `assert_self_host_rejects` exists for (a `check_gg_fails` pin here
+/// would be green today and would pin nothing, Core #12).
+///
+/// Rust gg rejects `directive scheduler=bogus`; the self-host validates no
+/// directive at all (`self_host_check/resolve.gg`'s `IDirective` arm is a bare
+/// `pass`) and its lowerer's scheduler arm has no `else`, so the value is
+/// silently dropped and the module keeps the default POOL scheduler. Measured
+/// 2026-08-30: emit + cc + run of the repro at rc 0 on every stage, printing the
+/// pool interleaving, where the same program with `scheduler=single` prints the
+/// N:1 one. Core #10 lower-or-reject, filed as `todo/t0825`.
+///
+/// RED at HEAD by construction: the self-host ACCEPTS and emits C. Un-ignore and
+/// promote the fixture out of `known_gaps/` the round the self-host validates
+/// directives.
+#[test]
+#[ignore]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_unknown_scheduler_mode() {
+    const REL: &str = "known_gaps/sh_unknown_scheduler_mode_overaccepted.gg";
+    let (accepted, exit_code) = self_host_accepts_and_emits(REL);
+    assert!(
+        !accepted,
+        "{REL}: the self-host ACCEPTED `directive scheduler=bogus` and emitted C for it \
+         (exit={exit_code:?}). Rust gg rejects the same program with \
+         `error[E_UnknownDirective]` (`src/semantic/mod.rs`), so this is a cross-lane \
+         accept/reject divergence AND a Core #10 silent drop: the self-host validates no \
+         directive at all (`self_host_check/resolve.gg`'s `IDirective` arm is a bare `pass`) \
+         and `self_host_lowerer/lower.gg`'s scheduler arm has no `else`, so the value is \
+         discarded and the module keeps the default POOL scheduler. That is observable: the \
+         same program with `scheduler=single` emits the N:1 runtime and prints a different \
+         interleaving. Fix = validate directives in the self-host frontend (name AND value), \
+         then un-ignore this test and promote the fixture out of `known_gaps/`."
+    );
 }
 
 #[test]
@@ -57576,7 +57644,18 @@ fn known_gap_method_returning_callable_called_in_chain() {
 /// read. The three-lane VERDICT pins (C / LLVM / self-host) live in
 /// `spectests/run/reject_no_method_on_{float,string}.gg`; these add the stronger
 /// "emitted no C at all" property and widen the receiver-kind axis.
-fn assert_self_host_rejects(rel_fixture: &str, what: &str) {
+/// The MECHANISM behind `assert_self_host_rejects`, factored out so a second
+/// diagnostic family can reuse it without inheriting the first one's failure
+/// prose. Returns `(accepted, exit_code)`, where `accepted` means the driver
+/// exited 0 AND emitted a `main` — i.e. it lowered the program instead of
+/// refusing it.
+///
+/// ⚠ Extracted rather than parameterising `assert_self_host_rejects`'s message:
+/// that helper has eight callers in the `E_NoMethodFound` net whose wording is
+/// correct for them, and adding an argument would have edited all eight to fix
+/// one. The rule this follows is the same one that kept the stdout pin OUT of
+/// `build_gg_expect_warning`: share the mechanism, never the assertion text.
+fn self_host_accepts_and_emits(rel_fixture: &str) -> (bool, Option<i32>) {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -57586,14 +57665,19 @@ fn assert_self_host_rejects(rel_fixture: &str, what: &str) {
         rel_fixture,
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
+    (out.status.success() || stdout.contains("int main("), out.status.code())
+}
+
+fn assert_self_host_rejects(rel_fixture: &str, what: &str) {
+    let (accepted, exit_code) = self_host_accepts_and_emits(rel_fixture);
     assert!(
-        !out.status.success() && !stdout.contains("int main("),
+        !accepted,
         "{rel_fixture}: the self-host ACCEPTED {what} and emitted C for it. Rust gg rejects \
          the same program with `error[E_NoMethodFound]`. A method absent from the receiver's \
          builtin table AND from the trait registry must be REFUSED at check time, not lowered \
          into a runtime symbol nothing defines (Core #10 lower-or-reject). Chokepoint: \
          `self_host_typechecker/typecheck.gg::reject_no_method_on_primitive`. exit={:?}",
-        out.status.code(),
+        exit_code,
     );
 }
 

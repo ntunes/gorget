@@ -48,7 +48,17 @@
 # a valid code here: a wrong-lane row is a bug to fix, not a row to file.
 #
 # Regenerate: scripts/known_gaps_census.sh --check
-# (full run ~1 min 49 s; `--fast` ~13 s skips the self-host-driver rows)
+# (measured 2026-08-30, `time scripts/known_gaps_census.sh[ --fast]`: full run
+#  2 min 39 s over `roster 159 · PASS 7 · FAIL 152`; `--fast` 2 min 08 s over
+#  `roster 159 · PASS 5 · FAIL 137 · SKIPPED_SH 17` — it skips the
+#  self-host-driver rows, which includes two of the CELL-BLIND rows below, so
+#  `--fast --check` cannot confirm SET EQUALITY against this file. Use the full
+#  run for --check.)
+# ⚠ THIRD AND FOURTH SPELLINGS OF A ROTTED FIGURE, both regenerated on the same
+#  day: this header said `~1 min 49 s` / `--fast ~13 s` (the latter off by ~10x)
+#  and `.github/workflows/ci.yml` said `1 min 47 s for all 99 rows` while the
+#  roster had grown to 159. A timing quoted to argue a CI step is cheap is
+#  load-bearing: regenerate it or drop it, never carry it.
 
 # ── CELL-BLIND: right lane, but this cell cannot observe the defect ─────────
 # Both rows assert the SELF-HOST lane, which is where their gap lives, and both

@@ -22715,7 +22715,15 @@ fn fmt_author_row_grouping_survives_formatting() {
 /// 47 s for all 99 rows" and then sat unregenerated while the roster grew by 60:
 /// that figure is exactly the argument someone would use to DELETE the CI step,
 /// and the assertion that would stop them is 250 lines below in this same
-/// function. Regenerate it or drop it; never carry it — twice now. This is the cheap half that runs in
+/// function. Regenerate it or drop it; never carry it.
+/// ⚠ AND GREP FOR IT (Core #15d). Correcting the two copies here left two more
+/// alive, found only by grepping `known_gaps_census.sh`: the data file's own
+/// header (`tests/gaps/PASSING_ALLOWLIST.txt`, which also claimed `--fast ~13 s`
+/// against a measured 2 min 08 s) and `.github/workflows/ci.yml`, the very step
+/// the figure exists to justify. All four are regenerated as of 2026-08-30; a
+/// fifth spelling is what this note is here to prevent.
+///
+/// This is the cheap half that runs in
 /// the normal lint gate: the census's finding set is committed as
 /// `tests/gaps/PASSING_ALLOWLIST.txt` and may only ever SHRINK, mirroring
 /// `sanitize_allowlists_shrink_only` next door.
