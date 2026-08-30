@@ -48,7 +48,21 @@
 # a valid code here: a wrong-lane row is a bug to fix, not a row to file.
 #
 # Regenerate: scripts/known_gaps_census.sh --check
-# (full run ~1 min 49 s; `--fast` ~13 s skips the self-host-driver rows)
+# NO RUN TIMING OR ROSTER COUNT IN THIS BLOCK, deliberately: those two are the
+# ones that rotted. (The DATED `R44 … TWELVE rows` above stays — it is history
+# about THIS file, not a live roster figure.) Each run prints its own
+# `# roster N · PASS n · FAIL n · SKIPPED_SH n` on stderr; that line is the
+# number and it is always current. The cost discussion lives once, in
+# `scripts/known_gaps_census.sh`'s header.
+# ⚠ This header used to carry `~1 min 49 s` and `--fast ~13 s` — one of FIVE
+#  copies of a pair that had rotted while the roster grew by more than half.
+#  Two of them (this one and the CI step's) were "regenerated" and were stale
+#  again at the very commit that published them, because the roster changes
+#  whenever anyone files a gap. That is why the numbers are gone rather than
+#  refreshed: a command cannot go stale.
+# ⚠ USE THE FULL RUN FOR --check, not `--fast`: `--fast` is meant to skip the
+#  self-host-driver rows, and two of the CELL-BLIND rows below are exactly
+#  those — so a `--fast --check` cannot confirm SET EQUALITY against this file.
 
 # ── CELL-BLIND: right lane, but this cell cannot observe the defect ─────────
 # Both rows assert the SELF-HOST lane, which is where their gap lives, and both

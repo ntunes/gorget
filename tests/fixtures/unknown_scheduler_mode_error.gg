@@ -1,0 +1,25 @@
+# Test: `directive scheduler=<mode>` REJECTS an unknown mode (E_UnknownDirective).
+#
+# The valid set is {pool, thread, inline, single} — `src/semantic/mod.rs`
+# validates it, and that rejection is what makes the Rust lowerer's `_ => {}`
+# arm (`src/ir/lowering/mod.rs`) unreachable. Without it a typo'd mode would
+# compile and run under the default pool scheduler, which for an async program
+# silently changes the interleaving.
+#
+# ⚠ THIS IS A ONE-LANE PIN, AND THE OTHER LANE IS BROKEN. The self-host
+# performs NO directive validation at all (`self_host_check/resolve.gg`'s
+# IDirective arm is a bare `pass`; no self-host source mentions
+# E_UnknownDirective), so its lowerer's missing `else` IS a live Core #10
+# silent drop — filed as `todo/t0825`. Measured 2026-08-30: the self-host emits,
+# compiles and RUNS this very file, printing the line below, rc 0 at every
+# stage. Graduate this fixture to a two-lane pin the round `t0825` lands; until
+# then, do not read a green `check_gg_fails` here as cross-lane coverage.
+#
+# The sibling `unknown_directive_error.gg` pins an unknown directive NAME; this
+# one pins an unknown directive VALUE, which is a separate arm of the same
+# validation and had no fixture.
+
+directive scheduler=bogus
+
+async void main():
+    print("REACHED — the scheduler directive was NOT validated on this lane")

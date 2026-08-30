@@ -27295,11 +27295,68 @@ fn shared_with_check_then_act() {
     // WARNS that the condition may no longer hold. The warning IS the feature
     // under test — and it is non-fatal (the program still builds and runs).
     //
-    // The old assertion pinned the program's stdout (`was zero\nafter sleep\n1`),
-    // which is a race winner that flips under timing (x86_64 CI: `Got: 1`) and
-    // never checked the warning at all (it's on stderr). We assert the warning +
-    // clean build/run instead, and leave the racy stdout unpinned.
+    // A stdout pin USED to be the whole test, and it was a race winner that
+    // flipped under timing (x86_64 CI: `Got: 1`) while never checking the
+    // warning at all (it's on stderr). The warning assertion below is the
+    // primary one and stays.
     build_gg_expect_warning("shared_with_check_then_act.gg", "condition may no longer hold");
+
+    // SECOND assertion, deliberately at the CALL SITE and not inside
+    // `build_gg_expect_warning`: that helper has seven callers and six of them
+    // are still intentionally racy, so pinning stdout in the helper would
+    // silently re-pin six unrelated fixtures. This ONE fixture declares
+    // `directive scheduler=single` (like its nine `shared_stale_*` siblings), so
+    // the interleaving is pinned and its stdout IS an invariant. Measured at the
+    // fix's landing commit, one pinned release binary, 16-way parallel:
+    // 2000/2000 identical on the Rust lane and 2000/2000 identical on the
+    // self-host lane; the same program WITHOUT the directive flipped 27/400
+    // (Rust) and 11/400 (self-host) under 8-way load, and 2/300 even serially.
+    // This pin is what stops the two differential harnesses
+    // (`self_host_runtime`'s committed snapshot, `self_host_runtime_diff`'s live
+    // byte-compare) from byte-comparing a coin flip. The pinned bytes are the
+    // ones already committed at `runtime_snapshots/shared_with_check_then_act.out`,
+    // so nothing was re-seeded.
+    //
+    // ⚠ THIS REVERSES A CONSIDERED DECISION, deliberately, and the reversal is
+    // recorded rather than silent. `DONE.md` 2026-06-17 rejected
+    // `scheduler=single` here — "defeats the multithread synchronization the
+    // test exists to demonstrate" — and unpinned the stdout. That round's remit
+    // was THIS test; it did not weigh the two harnesses above, which byte-compare
+    // the same stdout and were left flapping. Two things measured now say the
+    // trade is cheap: the mid-branch invalidation the warning describes was
+    // never observable on this stdout under ANY scheduler (a worker that mutates
+    // `x` during the sleep and a worker that runs after the `with` block print
+    // the same three lines), and the row still DISCRIMINATES a self-host
+    // spawn-lowering regression — breaking the shared-spawn path makes it print
+    // `was zero/after sleep/0` 200/200, a clean non-MATCH. What is genuinely
+    // given up is OS-thread contention in this one fixture, which 142 other
+    // unpinned spawn fixtures plus `scheduler_thread`/`thread_*` still cover.
+    // `scheduler=thread` was measured as the alternative that keeps the
+    // contention AND shows the interleaving — but it still flips 2/200, so it
+    // cannot pin a byte-compared fixture.
+    run_gg("shared_with_check_then_act.gg", "was zero\nafter sleep\n1");
+}
+
+/// Under `directive scheduler=single`, `sleep` is not a scheduling point: a
+/// pending spawned task does NOT run during the sleep, contradicting
+/// `docs/book/14-concurrency.md`'s "at each such point, the runtime releases all
+/// held locks, runs other tasks, then reacquires the locks on resumption", which
+/// names `sleep` explicitly. Filed as `todo/t0822`; repro
+/// `known_gaps/sched_single_sleep_does_not_yield.gg`.
+///
+/// The expected output below is the book-documented behaviour — exactly what
+/// `scheduler=pool` prints for the same program today — not what `single`
+/// prints. RED at HEAD by construction: `single` prints
+/// `after sleep\n0\nworker runs\n1` (40/40 on both lanes). Un-ignore and
+/// promote the fixture out of `known_gaps/` the round the N:1 loop drains its
+/// ready queue at a sleep.
+#[test]
+#[ignore]
+fn sched_single_sleep_does_not_yield() {
+    run_gg(
+        "known_gaps/sched_single_sleep_does_not_yield.gg",
+        "worker runs\nafter sleep\n1\n1",
+    );
 }
 
 // ─── W_CompoundYieldRace: the RHS walker under-recurses (FILED GAP) ────────
@@ -35705,9 +35762,15 @@ fn self_host_full_program() {
 // compare STDOUT vs Rust `gg run` (the oracle). No preamble splice; OUTPUT is
 // compared, never C-text. Two entry points share the machinery below:
 //
-//   * `self_host_runtime_diff`  — DIAGNOSTIC, env-gated (GG_RUNTIME_DIFF=1),
-//      always-pass. Full corpus, live `gg run` oracle. Prints the honest
-//      parity number + the WRONG-OUTPUT / CC-FAIL backlog.
+//   * `self_host_runtime_diff`  — FLOORED DIAGNOSTIC, default-running (owner
+//      2026-08-22); opt OUT with GG_RUNTIME_DIFF=0, which is what CI does.
+//      NOT always-pass: it asserts a MATCH-count FLOOR and a non-MATCH-count
+//      CEILING at the end of the fn (release + linux + default backend only —
+//      see `parity_floor_active`). Full corpus, live `gg run` oracle. Prints
+//      the honest parity number + the WRONG-OUTPUT / CC-FAIL backlog.
+//      ⚠ The "env-gated, always-pass" description this comment used to carry
+//      was stale from the opt-IN era and is exactly the false belief that let
+//      the ceiling drift 148 -> 151 unobserved; do not restore it.
 //   * `self_host_runtime`       — LOCK-IN NET, default-running, build-breaking.
 //      Oracle = committed snapshots in tests/fixtures/runtime_snapshots/. For
 //      each snapshotted fixture, re-emits via the self-host and asserts the run
@@ -35941,6 +36004,113 @@ fn adjudicate_matches_body(
     (adj, unadj, both_wrong)
 }
 
+/// Where `self_host_emit_cc_run` puts the self-host-compiled binary for one
+/// fixture. ONE source of truth for the naming convention: the runtime-parity
+/// mismatch attribution below re-runs that binary, and a second hand-written
+/// `format!("{stem}_{tag}")` next to it would be a convention kept in sync by
+/// hand (the exact shape the layering chapter's rule 3 forbids).
+fn self_host_bin_path(tmp_root: &Path, stem: &str, tag: &str) -> PathBuf {
+    tmp_root.join(format!("{stem}_{tag}"))
+}
+
+/// How many extra times the self-host binary is re-run when attributing a
+/// runtime-parity mismatch, and how many extra times the Rust oracle is.
+///
+/// The self-host side is nearly free (the binary is already sitting in
+/// `tmp_root`); the oracle side costs a `gg run` compile each, so it gets
+/// fewer. POWER, since "re-run it a few times" is exactly the instrument that
+/// CANNOT see a rare flapper in general: this re-run is CONDITIONAL ON A
+/// MISMATCH HAVING JUST HAPPENED, which means the lane that flipped is sitting
+/// in its MINORITY state. Measured on `shared_with_check_then_act` before it
+/// was pinned (one pinned release binary, 8-way parallel load): the Rust lane
+/// produced its minority output 27/400 and the self-host lane 11/400, so
+/// conditional on a flip, P(a re-run reproduces the MAJORITY output and the
+/// disagreement is seen) is 1 - 0.0675^2 ≈ 0.995 on the oracle side and
+/// 1 - 0.0275^6 ≈ 1 - 4e-10 on the self-host side. An UNCONDITIONAL sweep at
+/// the same K would have detected that fixture ~15% of the time and certified
+/// it stable — which is why this instrument lives on the mismatch path and
+/// nowhere else.
+const PARITY_ATTRIBUTION_SELF_RERUNS: usize = 6;
+const PARITY_ATTRIBUTION_ORACLE_RERUNS: usize = 2;
+
+/// Attribute a runtime-parity mismatch: is this row parity DEBT, or is one of
+/// the two lanes simply disagreeing WITH ITSELF?
+///
+/// A byte-exact differential gate is only meaningful over an output both lanes
+/// pin. A fixture whose stdout is a function of the SCHEDULER rather than of
+/// the program (`docs/language-design.md:94-95` — stale-condition warnings are
+/// a design target and the scheduler is a pluggable knob, so interleaving is
+/// admitted nondeterminism) will mismatch some fraction of sweeps and match the
+/// rest, and the row then reads as a self-host parity defect that no amount of
+/// reading the diff will explain. That misreading cost a full round-close
+/// triage three gate runs before this attribution existed.
+///
+/// This EXCUSES NOTHING. The row stays in the WRONG-OUTPUT tally, both bounds
+/// see exactly the counts they saw before, and no allowlist is involved — the
+/// only thing that changes is that the printed line NAMES the nondeterminism
+/// instead of leaving it to be rediscovered. The fix for a row this flags is
+/// to pin the fixture's interleaving (`directive scheduler=…`, as the
+/// `shared_stale_*` family does) or to declare it non-deterministic in
+/// `runtime_parity_excluded` — never to leave it flapping.
+///
+/// Returns `None` when both lanes reproduced their own output every time (the
+/// mismatch is real parity debt), or `Some(note)` naming the unstable lane.
+fn attribute_parity_nondeterminism(
+    gg_exe: &Path,
+    fixture: &Path,
+    self_bin: &Path,
+    stem: &str,
+    oracle_stdout: &str,
+    self_stdout: &str,
+) -> Option<String> {
+    let mut self_variants: Vec<String> = vec![self_stdout.to_string()];
+    for _ in 0..PARITY_ATTRIBUTION_SELF_RERUNS {
+        let mut cmd = Command::new(self_bin);
+        cmd.stdin(Stdio::null());
+        let Ok(out) = run_with_timeout_catching(&mut cmd, stem) else { break };
+        if !out.status.success() {
+            break;
+        }
+        let s = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
+        if !self_variants.contains(&s) {
+            self_variants.push(s);
+        }
+    }
+    if self_variants.len() > 1 {
+        return Some(format!(
+            "NONDETERMINISTIC[self-host lane: {} distinct outputs over {} runs]",
+            self_variants.len(),
+            PARITY_ATTRIBUTION_SELF_RERUNS + 1,
+        ));
+    }
+
+    let mut oracle_variants: Vec<String> = vec![oracle_stdout.to_string()];
+    for _ in 0..PARITY_ATTRIBUTION_ORACLE_RERUNS {
+        let Ok(out) = run_with_timeout_catching(
+            Command::new(gg_exe).arg("run").arg(fixture).stdin(Stdio::null()),
+            stem,
+        ) else {
+            break;
+        };
+        if !out.status.success() {
+            break;
+        }
+        let s = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
+        if !oracle_variants.contains(&s) {
+            oracle_variants.push(s);
+        }
+    }
+    if oracle_variants.len() > 1 {
+        return Some(format!(
+            "NONDETERMINISTIC[Rust oracle: {} distinct outputs over {} runs]",
+            oracle_variants.len(),
+            PARITY_ATTRIBUTION_ORACLE_RERUNS + 1,
+        ));
+    }
+
+    None
+}
+
 /// First-differing-line summary between an oracle and a self-host stdout.
 fn first_diff_line(oracle: &str, mine: &str) -> String {
     oracle
@@ -36037,7 +36207,7 @@ fn self_host_emit_cc_run(
     let fname = fixture.file_name().unwrap().to_string_lossy().to_string();
     let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
     let c_path = tmp_root.join(format!("{stem}_{tag}.c"));
-    let bin_path = tmp_root.join(format!("{stem}_{tag}"));
+    let bin_path = self_host_bin_path(tmp_root, &stem, tag);
 
     // Self-host: driver F lib --emit-c --runtime-dir=<abs>.
     let emit = run_with_timeout(
@@ -36936,7 +37106,15 @@ done",
     );
 }
 
-/// (A) FLOORED DIAGNOSTIC — env-gated (GG_RUNTIME_DIFF=1).
+/// (A) FLOORED DIAGNOSTIC — DEFAULT-RUNNING (owner 2026-08-22); opt OUT
+/// with `GG_RUNTIME_DIFF=0`.
+///
+/// ⚠ This line used to read "env-gated (GG_RUNTIME_DIFF=1)" — false since the
+/// opt-IN era ended, and contradicted seven lines below by this same comment's
+/// own "Runs BY DEFAULT". It is the third spelling of the belief that let the
+/// non-MATCH ceiling drift 148 -> 151 unobserved (a gate believed not to run is
+/// a gate nobody checks); the other two are corrected at the Chain-3 header and
+/// at the `self_host_runtime` panic-hook note. Do not restore any of them.
 ///
 /// Full corpus, live `gg run` oracle. Discovers the MATCH set and the
 /// WRONG-OUTPUT / CC-FAIL / CRASH / DRIVER-FAIL backlog. Prints the honest
@@ -36945,9 +37123,12 @@ done",
 /// (linux + default C backend + release only — see `parity_floor_active` and
 /// the comment at the assert).
 ///
-/// Role: DEV-LOOP ratchet, not a CI gate — CI sets neither GG_RUNTIME_DIFF nor
-/// GG_FULL, so this test early-returns there (correct semantics: the assert is
-/// bypassed only when no work was done). The default-running per-fixture CI
+/// Role: DEV-LOOP ratchet, not a CI gate — CI sets `GG_RUNTIME_DIFF: "0"` in both
+/// integration jobs, i.e. it opts OUT explicitly, so this test early-returns
+/// there (correct semantics: the assert is bypassed only when no work was done).
+/// It does NOT "set neither" and there is no `GG_FULL` gate on this entry point.
+/// Verify with `grep -rn "GG_RUNTIME_DIFF" .github/workflows/` rather than a line
+/// number — the two sites moved within the same commit that first cited them. The default-running per-fixture CI
 /// guard for self-host runtime behaviour is the `self_host_runtime` snapshot
 /// net below. What this floor adds: it guards the matching-but-UNsnapshotted
 /// fixtures, and turns every intentional north-star run (the documented
@@ -37059,8 +37240,25 @@ fn self_host_runtime_diff() {
                     if self_stdout == oracle_stdout {
                         (stem, RuntimeParityOutcome::Match { agreed: oracle_stdout })
                     } else {
+                        // Attribute BEFORE reporting: a lane that disagrees
+                        // with itself is not parity debt, and the note is
+                        // prepended to the printed line. The row still counts
+                        // as WRONG-OUTPUT — attribution, not reclassification,
+                        // so neither bound moves.
+                        let note = attribute_parity_nondeterminism(
+                            gg_exe,
+                            fixture,
+                            &self_host_bin_path(tmp_root, &stem, "diff"),
+                            &stem,
+                            &oracle_stdout,
+                            &self_stdout,
+                        );
+                        let diff = first_diff_line(&oracle_stdout, &self_stdout);
                         (stem, RuntimeParityOutcome::WrongOutput {
-                            first_diff: first_diff_line(&oracle_stdout, &self_stdout),
+                            first_diff: match note {
+                                Some(n) => format!("{n} {diff}"),
+                                None => diff,
+                            },
                         })
                     }
                 }
@@ -37137,6 +37335,30 @@ fn self_host_runtime_diff() {
     eprintln!("\n--- WRONG-OUTPUT backlog ({}) ---", wrong.len());
     for (stem, diff) in &wrong {
         eprintln!("  WRONG-OUTPUT  {stem} | {diff}");
+    }
+    // Attribution summary (see `attribute_parity_nondeterminism`): rows whose
+    // diff is a lane disagreeing with ITSELF, not with the other lane. They
+    // still count as WRONG-OUTPUT above — this section exists so the next
+    // reader does not spend three gate runs rediscovering that a byte-exact
+    // differential gate was pinning a coin flip.
+    let nondet_rows: Vec<&(String, String)> =
+        wrong.iter().filter(|(_, d)| d.starts_with("NONDETERMINISTIC[")).collect();
+    eprintln!("\n--- NONDETERMINISTIC (a lane disagrees with ITSELF; counted in WRONG-OUTPUT above) ({}) ---", nondet_rows.len());
+    for (stem, diff) in &nondet_rows {
+        eprintln!("  NONDET        {stem} | {diff}");
+    }
+    if !nondet_rows.is_empty() {
+        eprintln!(
+            "  ⇒ Do NOT read these rows' diffs as parity debt — the named lane does not agree\n     \
+             with ITSELF, so there is no stable wrong answer to explain. Two causes, and the\n     \
+             printed variants tell them apart:\n     \
+             (a) a SCHEDULING RACE — the variants are all plausible program outputs. Pin the\n     \
+                 fixture's interleaving with `directive scheduler=<mode>`, as the\n     \
+                 `shared_stale_*` family does, or declare it in `runtime_parity_excluded`.\n     \
+             (b) a MEMORY DEFECT on that lane — the variants are raw pointers, garbage bytes or\n     \
+                 uninitialized reads. That is a real bug in the named lane and is worth MORE\n     \
+                 attention than the byte diff, not less: file it and run it under ASan."
+        );
     }
     eprintln!("\n--- CC-FAIL backlog ({}) ---", cc_fail.len());
     for (stem, detail) in &cc_fail {
@@ -37523,6 +37745,23 @@ fn self_host_runtime_diff() {
     // else-arm may shift a couple of borderline shapes on future measurements).
     // Ratcheted 2026-08-10 (Round XXXIX close): +27 MATCH from R39's
     // 11-regression fix + fold on the SH lane. Locked at 1400.
+    // Ratcheted again since, WITHOUT a log entry of their own: 1400 -> 1409
+    // (R40 close) -> 1415 (R41 close, `e62fef9d`, alongside 440 -> 443 and the
+    // 149 -> 148 ceiling reseed). The log above therefore ENDS at 1400 while
+    // the constant reads 1415 — read the constant, not the last log line, and
+    // append an entry here when you raise it (the assert below says to raise it
+    // in the same commit; it does not excuse you from saying why).
+    //
+    // ⚠ SLACK, MEASURED AND UNSPENT (R47 F1, 2026-08-30): a full documented run
+    // at that round printed **MATCH = 1485** against this floor of 1415, so the
+    // gate would not notice a 69-fixture MATCH regression. That is the same
+    // "gate that stopped looking" shape the non-MATCH ceiling's own comment
+    // describes 100 lines below. It was deliberately NOT raised there: the gain
+    // was not that track's (its change removed variance, it did not add MATCH),
+    // and five tracks were in flight, where a mid-round ratchet from one
+    // worktree is how a round close false-reds. RAISING IT IS A ROUND-CLOSE
+    // ACTION, on the number the post-integration battery prints, with the usual
+    // jitter discount — not on 1485.
     const RUNTIME_DIFF_MATCH_FLOOR: usize = 1415;
     if cfg!(debug_assertions) {
         eprintln!(
@@ -37803,7 +38042,9 @@ fn self_host_runtime() {
     // (→ `Crashed`, reported as a regression), and the only OTHER panic source is
     // an emit-step hang in the passing set — that's a REAL regression that must
     // surface loudly, not be silenced. (A)/regen keep the hook because there
-    // hung fixtures are expected and the entry point is opt-in/env-gated.
+    // hung fixtures are expected: (A) sweeps the WHOLE corpus (default-running,
+    // opt OUT with GG_RUNTIME_DIFF=0 — NOT opt-in), and regen is the genuinely
+    // env-gated one (GG_REGEN_RUNTIME_SNAPSHOT=1).
     let failures: Vec<String> = parallel_map_fixtures(&fixtures, |fixture| {
         let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
         let expected = match std::fs::read_to_string(&snap_paths[&stem]) {
@@ -43699,6 +43940,63 @@ fn d35_fn_type_sigil_before_type_error() {
 #[test]
 fn unknown_directive_error() {
     check_gg_fails("unknown_directive_error.gg", "unknown directive");
+}
+
+/// The directive-VALUE arm of the same validation, which had no fixture. It is
+/// load-bearing for `src/ir/lowering/mod.rs`'s `_ => {}`, which is unreachable
+/// only because a bad mode is rejected here first — otherwise that arm is a
+/// Core #10 silent drop. RED-verified by deleting the `"scheduler"` arm of the
+/// directive validation in `src/semantic/mod.rs`: the fixture then COMPILES and
+/// RUNS under the default pool scheduler and this test fails.
+///
+/// ⚠ THIS PINS ONE LANE ONLY, and the other lane is a live defect — do not read
+/// it as cross-lane coverage. The self-host performs NO directive validation
+/// (`self_host_check/resolve.gg`'s `IDirective` arm is a bare `pass`), so its
+/// lowerer's missing `else` IS the silent drop, filed as `todo/t0825`. Measured
+/// 2026-08-30: the self-host emits, compiles and RUNS this very fixture at rc 0,
+/// and on an async program `scheduler=bogus` silently selects the POOL runtime
+/// where `scheduler=single` selects the N:1 loop — different observable
+/// interleaving, no diagnostic. Graduate this to a two-lane pin when `t0825`
+/// lands.
+#[test]
+fn unknown_scheduler_mode_error() {
+    check_gg_fails("unknown_scheduler_mode_error.gg", "unknown directive `scheduler=bogus`");
+}
+
+/// The SELF-HOST half of `unknown_scheduler_mode_error`, on the lagging lane —
+/// the shape `assert_self_host_rejects` exists for (a `check_gg_fails` pin here
+/// would be green today and would pin nothing, Core #12).
+///
+/// Rust gg rejects `directive scheduler=bogus`; the self-host validates no
+/// directive at all (`self_host_check/resolve.gg`'s `IDirective` arm is a bare
+/// `pass`) and its lowerer's scheduler arm has no `else`, so the value is
+/// silently dropped and the module keeps the default POOL scheduler. Measured
+/// 2026-08-30: emit + cc + run of the repro at rc 0 on every stage, printing the
+/// pool interleaving, where the same program with `scheduler=single` prints the
+/// N:1 one. Core #10 lower-or-reject, filed as `todo/t0825`.
+///
+/// RED at HEAD by construction: the self-host ACCEPTS and emits C. Un-ignore and
+/// promote the fixture out of `known_gaps/` the round the self-host validates
+/// directives.
+#[test]
+#[ignore]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_unknown_scheduler_mode() {
+    const REL: &str = "known_gaps/sh_unknown_scheduler_mode_overaccepted.gg";
+    let (accepted, exit_code) = self_host_accepts_and_emits(REL);
+    assert!(
+        !accepted,
+        "{REL}: the self-host ACCEPTED `directive scheduler=bogus` and emitted C for it \
+         (exit={exit_code:?}). Rust gg rejects the same program with \
+         `error[E_UnknownDirective]` (`src/semantic/mod.rs`), so this is a cross-lane \
+         accept/reject divergence AND a Core #10 silent drop: the self-host validates no \
+         directive at all (`self_host_check/resolve.gg`'s `IDirective` arm is a bare `pass`) \
+         and `self_host_lowerer/lower.gg`'s scheduler arm has no `else`, so the value is \
+         discarded and the module keeps the default POOL scheduler. That is observable: the \
+         same program with `scheduler=single` emits the N:1 runtime and prints a different \
+         interleaving. Fix = validate directives in the self-host frontend (name AND value), \
+         then un-ignore this test and promote the fixture out of `known_gaps/`."
+    );
 }
 
 #[test]
@@ -57336,18 +57634,19 @@ fn known_gap_method_returning_callable_called_in_chain() {
     run_gg("known_gaps/method_returning_callable_called_in_chain.gg", "true");
 }
 
-/// Assert the SELF-HOST driver REFUSES a fixture at check time — non-zero exit
-/// AND no emitted C. Shared by the primitive-receiver `E_NoMethodFound` net so
-/// the harness is written once; each caller spells its fixture path as a
-/// LITERAL.
+/// Did the SELF-HOST driver ACCEPT this fixture? Returns `(accepted, exit_code)`,
+/// where `accepted` means the driver exited 0 OR emitted a `main` — i.e. it
+/// lowered the program instead of refusing it. Pure MECHANISM: it makes no
+/// assertion and carries no diagnostic prose, so a second family can reuse it.
 ///
-/// ⚠ These pins run on the SELF-HOST lane on purpose. Rust gg has always
-/// rejected every one of them, so a `check_gg_fails` pin would be green today
-/// and would pin nothing (Core #12). The lagging lane is the one the assert must
-/// read. The three-lane VERDICT pins (C / LLVM / self-host) live in
-/// `spectests/run/reject_no_method_on_{float,string}.gg`; these add the stronger
-/// "emitted no C at all" property and widen the receiver-kind axis.
-fn assert_self_host_rejects(rel_fixture: &str, what: &str) {
+/// ⚠ Extracted from `assert_self_host_rejects` rather than parameterising that
+/// helper's message: it has eight callers in the `E_NoMethodFound` net whose
+/// wording is correct for them, and adding an argument would have edited all
+/// eight to fix one. Same rule that kept the stdout pin OUT of
+/// `build_gg_expect_warning`: share the mechanism, never the assertion text.
+/// ⊕ The extraction is De Morgan-exact — the original asserted
+/// `!success && !has_main`, which is `!(success || has_main)`.
+fn self_host_accepts_and_emits(rel_fixture: &str) -> (bool, Option<i32>) {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let lib_dir = manifest_dir.join("lib");
@@ -57357,14 +57656,33 @@ fn assert_self_host_rejects(rel_fixture: &str, what: &str) {
         rel_fixture,
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
+    (out.status.success() || stdout.contains("int main("), out.status.code())
+}
+
+/// Assert the SELF-HOST driver REFUSES a fixture at check time — non-zero exit
+/// AND no emitted C. Shared by the primitive-receiver `E_NoMethodFound` net so
+/// the harness is written once; each caller spells its fixture path as a
+/// LITERAL. The accept/reject decision itself lives in
+/// `self_host_accepts_and_emits` above; what this adds is the `E_NoMethodFound`
+/// family's failure prose, which is why a different family calls the mechanism
+/// directly rather than this.
+///
+/// ⚠ These pins run on the SELF-HOST lane on purpose. Rust gg has always
+/// rejected every one of them, so a `check_gg_fails` pin would be green today
+/// and would pin nothing (Core #12). The lagging lane is the one the assert must
+/// read. The three-lane VERDICT pins (C / LLVM / self-host) live in
+/// `spectests/run/reject_no_method_on_{float,string}.gg`; these add the stronger
+/// "emitted no C at all" property and widen the receiver-kind axis.
+fn assert_self_host_rejects(rel_fixture: &str, what: &str) {
+    let (accepted, exit_code) = self_host_accepts_and_emits(rel_fixture);
     assert!(
-        !out.status.success() && !stdout.contains("int main("),
+        !accepted,
         "{rel_fixture}: the self-host ACCEPTED {what} and emitted C for it. Rust gg rejects \
          the same program with `error[E_NoMethodFound]`. A method absent from the receiver's \
          builtin table AND from the trait registry must be REFUSED at check time, not lowered \
          into a runtime symbol nothing defines (Core #10 lower-or-reject). Chokepoint: \
          `self_host_typechecker/typecheck.gg::reject_no_method_on_primitive`. exit={:?}",
-        out.status.code(),
+        exit_code,
     );
 }
 

@@ -41,11 +41,35 @@
 #   scripts/known_gaps_census.sh --isolate  # one subprocess per row (hang triage)
 #   scripts/known_gaps_census.sh <name>…    # census only these tests
 #
-# COST — regenerate it, do not trust the quoted figure (Core #5):
+# COST — NO RUN TIMING OR ROSTER COUNT IN THIS BLOCK, DELIBERATELY: those two are
+# the ones that rotted. Two figures elsewhere in this header deliberately STAY,
+# because neither tracks the roster: the structural `~90 s` driver build (it
+# explains WHY batching matters) and the DATED `Measured at R44: 12 of 98`
+# above (history, supporting a qualitative claim, not a live count).
+# Run it (Core #5):
 #   time scripts/known_gaps_census.sh          # full
-#   time scripts/known_gaps_census.sh --fast   # skips the self-host rows
-# Measured 2026-08-23, dev container, test binaries already built: full run
-# 1 min 47 s (99 rows), `--fast` 14 s (87 rows; 12 self-host rows skipped).
+#   time scripts/known_gaps_census.sh --fast   # meant to skip the self-host rows
+# Each run ends with its own `# roster N · PASS n · FAIL n · SKIPPED_SH n` line
+# on stderr; that line IS the number, and it is always current.
+#
+# ⚠ THIS COMMENT USED TO CARRY "1 min 47 s (99 rows), --fast 14 s (87 rows)"
+# one line under an instruction not to trust quoted figures — and it was the
+# FIFTH copy of that rotted pair. The roster had grown past 99 long before
+# anyone noticed, because a number can be transcribed and a command cannot.
+# The four other copies (tests/lints.rs ×2, tests/gaps/PASSING_ALLOWLIST.txt,
+# .github/workflows/ci.yml) now all point HERE and quote no figure either. If
+# you are about to add a timing to any of them: don't — add the command.
+#
+# ⚠ AND THE `--fast` FIGURE WAS NEVER REACHABLE. `is_sh_row` (below) decides
+# "does this row drive the self-host lowerer?" by GREPPING THE TEST BODY FOR
+# THREE HELPER NAMES, so every row reaching the driver through any other helper
+# is invisible to it and runs anyway — which means `--fast` still pays the
+# ~90 s driver build and is nowhere near the quoted 14 s. Filed as `todo/t0826`
+# with the reproduction and the reference-grade shape.
+#
+# ⚠ AND `--list | wc -l` IS OFF BY ONE: `--list` prints a `# ignored tests
+# citing known_gaps: N` header before the rows. Read that header, or the
+# `roster N` summary line, rather than counting lines.
 # BATCHING every row for a test file into ONE invocation is what keeps the full
 # run cheap: `build_gg_dir_cached`'s `OnceLock` builds `driver.gg` (~90 s) once
 # and shares it across every test in that process — which is most of the full
