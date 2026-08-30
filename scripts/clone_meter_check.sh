@@ -17,6 +17,10 @@
 #       lines this mode prints a header, zero rows and exits 0.
 #
 #   scripts/clone_meter_check.sh --anchor-age
+#       ⛔ NOTHING CALLS THIS YET. It is a mode looking for a caller: no round
+#       procedure, no gate and no test runs it, so a forgotten re-anchor is
+#       still SILENT today. Wiring it into the round-open step is `todo/t0851`;
+#       until that lands, do not read the paragraph below as a guarantee.
 #       ⚠ RUN THIS AT ROUND OPEN. The ~1% band is anchored at the ROUND-OPEN
 #       value, and that anchor is re-seeded by a scheduled human action with no
 #       battery gate behind it. Forget the reset and the band silently stops

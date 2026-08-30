@@ -30498,10 +30498,11 @@ fn self_host_bootstrap() {
 // PINNED-BY: cc0c0a79 VALUE: 13_144_626
 const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_144_626;
 // ⚠ THE BAND'S ANCHOR — ONE PER METER, ALL FOUR FROM THE SAME ROUND-OPEN
-// MEASUREMENT, RE-SEEDED ONCE PER ROUND AT ROUND OPEN. Nothing in the battery
-// fails when that reset is forgotten (see `struct CloneReading`); the signal
-// that does is `scripts/clone_meter_check.sh --anchor-age`, which the
-// round-open step runs, and the date below is what it reads.
+// MEASUREMENT, RE-SEEDED ONCE PER ROUND AT ROUND OPEN. Nothing fails when that
+// reset is forgotten (see `struct CloneReading`). The date below is what
+// `scripts/clone_meter_check.sh --anchor-age` reads — but ⛔ NOTHING CALLS THAT
+// MODE YET, so today the reset is held by this comment alone. Wiring it into
+// the round-open step is `todo/t0851`.
 // ROUND-OPEN-DATE: 2026-08-29
 // ROUND-OPENED-BY: f3feea79 VALUE: 13_096_576
 const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_096_576;
@@ -30702,7 +30703,9 @@ const _: () = assert!(
 /// owner rejected, and manufactures a false owner ask out of two legitimate
 /// sub-band rounds. The signal that CAN see it is
 /// `scripts/clone_meter_check.sh --anchor-age`, which fails once a round has
-/// closed since the anchor was set; the round-open step runs it.
+/// closed since the anchor was set. ⛔ IT HAS NO CALLER: no round procedure,
+/// gate or test runs it, so the reset is an unenforced obligation today, not a
+/// guarded one. Wiring it in is `todo/t0851`.
 ///
 /// ⚠ WHAT PER-TRACK ATTRIBUTION CAN AND CANNOT BE TESTED FOR, so the next round
 /// does not re-derive a dead end at the cost of another ten-cell bisect.

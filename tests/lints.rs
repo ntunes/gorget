@@ -18546,7 +18546,8 @@ fn count_bang_move_in_code(roots: &[&str]) -> usize {
 /// D22 shrink-only lint (Core #6 executable guard). Retiring `.slice()` on
 /// String/Vector receivers in favor of colon-slice `v[a:b]` (ratified
 /// 2026-07-06). Track C-3a landed the non-SH migration + this ratchet;
-/// Track C-3b (208 SH sites in `tests/fixtures/self_host_lowerer/`) is
+/// Track C-3b (211 SH sites in `tests/fixtures/self_host_lowerer/`, recounted
+/// 2026-08-30 — regenerate rather than quote) is
 /// hard-blocked on Track A (SH stage-2 memory-safety fix) and defers to
 /// R40 if A stalls. Meanwhile the SH corpora sit in an ALLOWLIST — the
 /// allowlist entry drops out atomically when C-3b lands, ratcheting the
@@ -24875,7 +24876,8 @@ fn clone_meter_pins_carry_their_provenance() {
     // ⚠ WHAT THIS STILL CANNOT SEE: whether `{anchor}` is THIS round's open.
     // "Which round is open" is not in the tree, so a FORGOTTEN re-seed passes
     // every assert above. `scripts/clone_meter_check.sh --anchor-age` is the
-    // signal for that, and the round-open step runs it.
+    // signal for that, and ⛔ NOTHING CALLS IT — wiring it into the round-open
+    // step is `todo/t0851`.
     let date_lines = src.lines().filter(|l| l.trim().starts_with("// ROUND-OPEN-DATE:")).count();
     assert_eq!(
         date_lines, 1,
