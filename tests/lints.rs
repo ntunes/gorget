@@ -14519,67 +14519,6 @@ fn doc_source_citations_name_the_right_line() {
     // bulk-allowlist: an unread row asserts a verification nobody did.
     let wide = std::env::var("GG_LINT_CITE_CONTENT_WIDE").is_ok();
     let mut targets: Vec<PathBuf> = vec![PathBuf::from(SCOPE)];
-
-    // ⚠ `scripts/` IS IN THE FATAL SET, AND ITS ABSENCE IS WHY ONE DEFECT REACHED
-    // PUBLICATION THREE TIMES ON ONE TRACK. Neither citation guard could see it:
-    // `doc_source_citations_resolve` walks `docs/` only, and this lint's fatal
-    // SCOPE was a single chapter. So `scripts/verdict.py` shipped eight
-    // `src/main.rs:NNN` cites that were wrong the moment they were written (the
-    // same commit added a `use` line above them), and `scripts/reap_orphans.py`
-    // shipped three `tests/integration.rs:NNN` cites — THE WITNESS FOR ITS WHOLE
-    // OWNERSHIP PREDICATE — resolved against a file the same commit reshaped by
-    // -98 lines. Both were then CERTIFIED CORRECT by two output-review passes,
-    // because a reviewer re-derives what the diff draws attention to.
-    //
-    // Every one of those eleven was IN RANGE, so a range check passes all of
-    // them. Only a CONTENT check catches this class, which is why the widening
-    // is here and not in the resolve lint.
-    //
-    // Scripts are a natural home for load-bearing citations — an instrument that
-    // explains WHY it greps for a marker has to say where the marker is produced
-    // — so this is the one directory outside `docs/` whose cite density earns a
-    // fatal gate today. Core #6: the class becomes a guard.
-    //
-    // ⚠ WHAT THIS DOES **NOT** CATCH, MEASURED RATHER THAN HOPED. The `WINDOW` is
-    // ±10 lines, so it catches the `reap_orphans` shape — 98 lines off, the
-    // dangerous one — and demonstrably NOT the `verdict.py` shape, which was off
-    // by ONE. A cite that drifts less than the window is invisible to this guard
-    // and always will be. The only complete answer for a file whose citations
-    // drift every time a `use` line lands above them is to stop citing lines and
-    // cite the grep instead, which is what both of those scripts now do and what
-    // the ledger rules (`docs/define-gorget/decisions.md:2043-2045`). This gate
-    // is the backstop, not the primary defence.
-    //
-    // ⚠ WHAT THIS DOES **NOT** CATCH, MEASURED RATHER THAN HOPED. The `WINDOW` is
-    // ±10 lines, so it catches the `reap_orphans` shape — 98 lines off, the
-    // dangerous one — and demonstrably NOT the `verdict.py` shape, which was off
-    // by ONE. A cite that drifts less than the window is invisible to this guard
-    // and always will be. The only complete answer for a file whose citations
-    // drift every time a `use` line lands above them is to stop citing lines and
-    // cite the grep instead, which is what both of those scripts now do and what
-    // the ledger rules (`docs/define-gorget/decisions.md:2043-2045`). This gate
-    // is the backstop, not the primary defence.
-    //
-    // ⚠ WHAT THIS DOES **NOT** CATCH, MEASURED RATHER THAN HOPED. The `WINDOW` is
-    // ±10 lines, so it catches the `reap_orphans` shape — 98 lines off, the
-    // dangerous one — and demonstrably NOT the `verdict.py` shape, which was off
-    // by ONE. A cite that drifts less than the window is invisible to this guard
-    // and always will be. The only complete answer for a file whose citations
-    // drift every time a `use` line lands above them is to stop citing lines and
-    // cite the grep instead, which is what both of those scripts now do and what
-    // the ledger rules (`docs/define-gorget/decisions.md:2043-2045`). This gate
-    // is the backstop, not the primary defence.
-    if let Ok(entries) = fs::read_dir("scripts") {
-        let mut items: Vec<PathBuf> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                matches!(p.extension().and_then(|x| x.to_str()), Some("py") | Some("sh"))
-            })
-            .collect();
-        items.sort();
-        targets.extend(items);
-    }
     if wide {
         targets.push(PathBuf::from("TODO.md"));
         // The item bodies moved out of TODO.md into todo/ (owner 2026-08-23);

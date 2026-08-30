@@ -29,17 +29,22 @@ THE PREDICATE IS OWNERSHIP
 
 This is AGENTS.md Core #3 — *register ownership at the value's birth* — applied
 to processes instead of heap values. The harness already writes the tag: every
-scratch root is named `gg_..._<owner pid>[_<creation stamp>]`. Enumerate the
-producing sites — this is the WITNESS for the whole predicate, so regenerate it
-rather than trusting a list:
+scratch root is named `gg_..._<owner pid>[_<creation stamp>]`. This is the WITNESS
+for the whole predicate, so ENUMERATE it — the domain is exactly SCRATCH_PREFIX
+below, and it is not confined to one file:
 
-    grep -n 'gg_sh_\|gg_runtime_diff_' tests/integration.rs
+    grep -rn '"gg_' tests/
 
-⚠ That command replaces three line numbers which were WRONG FROM THE DAY THIS FILE
-WAS COMMITTED — the same commit reshaped tests/integration.rs by -98 lines, so the
-cites resolved against the pre-commit file and landed on `let mut excluded…`, a
-comment, and `);`. Two output-review passes certified them. The ledger's ruling
-(`docs/define-gorget/decisions.md:2043-2045`) is the fix: anchors, not lines.
+⚠ USE THAT, NOT A NARROWER PATTERN. An earlier version greped two prefixes in
+`tests/integration.rs` and returned 16 — a SELECTION dressed as a census, missing
+`spec_conformance.rs`, `security.rs` and `smith/main.rs` entirely, which no grep
+of one file can reach. The command above returns 65. The ledger says exactly this
+one line above the anchors ruling: *"derived by CENSUS … never by this list
+(a cited list is a selection)"* (`docs/define-gorget/decisions.md:2040-2045`).
+
+⊕ It replaces three line numbers that were WRONG FROM THE DAY THIS FILE WAS
+COMMITTED — the same commit reshaped tests/integration.rs (net -152), so the cites
+resolved against the pre-commit file. Two output-review passes certified them.
 
 Why that is STRUCTURALLY safe rather than merely careful: a live executor's
 `target/release/deps/integration-<hash>` is **not under a scratch root at all**,
