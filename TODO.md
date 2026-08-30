@@ -238,6 +238,33 @@ legitimate move is to FIX or to get an explicit owner ruling on inherited debt, 
 exact equality rather than an inequality, so **any track that adds or removes a leak-allowlist row must move
 the constant in the same commit** or the lint reds.
 
+**⚖⚖ OWNER RULINGS 2026-08-30 — TWO, BOTH EXPANDING THE ROUND.**
+**(1) THE PARITY CEILING DOES NOT MOVE; FIX THE FLAPPER.** Verbatim: *"Keep the parity ceiling where it is, fix
+the known flapping fixture."* ⇒ `RUNTIME_DIFF_NONMATCH_CEILING` stays at **151**. The gate sits at exactly that
+after D50, and D3a measured **151 / 152 (FAIL) / 151** across three runs with `shared_with_check_then_act` as
+the row that appears and disappears. **That is a TRACK (F1), not a note** — owner clarified: *"1. Means launch a
+track for it."* Same pipeline as every other track. ⚠ `todo/t0184` explicitly forbids excluding that fixture
+and corrects a conclusion another agent already reached about it — read it before forming a hypothesis.
+**(2) LAUNCH MORE TRACKS IN THIS ROUND FOR THE EXPOSED DEBT.** Verbatim: *"Launch more tracks in current round
+to fix the exposed debt."* ⇒ **R47 does not close on the debt it made visible; it works it.** Four tracks
+scouting as of 2026-08-30:
+- **F1 — the parity flapper** (owner-directed). Ceiling immovable; root-cause the flap, and count whether it is
+  the only one or merely the only one noticed.
+- **F2 — the UBSan `nonnull` class** (`t0780`): an empty-collection sort passes NULL to a `nonnull` parameter;
+  15 emitted sites, one reported fix shape, UBSan ceiling is 0 so it reds the sweep. **Inherited debt made
+  visible by R47's own gate repair, not new breakage.**
+- **F3 — the three CRITICAL memory-safety defects R47 FOUND AND DID NOT FIX** (`t0770` adapter mis-size, rc 139,
+  which was hidden behind a false green · `t0771` closure-capture UAF with **silent wrong output and no crash to
+  trip any gate** · `t0763` generic-equip UAF, name-independent, downstream of A2's landed fix). ⚠ Scout must
+  run the N×N gated matrix before calling them one class or three — this round measured a claimed-one-class pair
+  **orthogonal** and a claimed-disjoint pair **shared**.
+- **F4 — instrument integrity.** The round's six wrong measurements, all toward false confidence, plus the
+  unguarded citation surface. Deliverables: the **shared verdict classifier** (Core #6), the **orphan reaper**
+  (`t0900` — ⚠ match the ORPHAN CONDITION, never the binary name), and **one citation check over every citing
+  surface** (`t0901`/`t0675`; three sibling guards already exist and their union still misses `todo/`).
+⊕ **Held for R48, deliberately:** `t0729` (LLVM `memcpy` over overlapping stack slots — found by C's newly-real
+gate) and E3 (the spawned-task drop, whose naive form double-frees 6 fixtures and needs its own scout).
+
 **⚑ R47 INTEGRATION PLAN — CONSOLIDATED. Read this before merging anything.**
 **MERGE ORDER (measured, not guessed):** every branch merges CLEAN against base individually, and the ONLY
 conflicts across every pair are `todo/t07xx.md` add/add plus `TODO.md` (which is REGENERATED, never merged).
