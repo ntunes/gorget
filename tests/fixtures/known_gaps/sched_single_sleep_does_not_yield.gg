@@ -1,0 +1,46 @@
+# DEFERRED-GAP FIXTURE (#[ignore]'d — the N:1 scheduler does not treat `sleep`
+# as a suspension point; see todo/t0822).
+#
+# `docs/book/14-concurrency.md` states the async model plainly: "tasks run
+# cooperatively, and a task yields control at explicit suspension points:
+# `await`, `sleep`, blocking I/O. At each such point, the runtime releases all
+# held locks, RUNS OTHER TASKS, then reacquires the locks on resumption."
+#
+# Under `directive scheduler=single` (the N:1 cooperative event loop) `sleep`
+# does NOT run other tasks: the spawned worker is still pending after a 100 ms
+# sleep and only runs at `t.await()`. Under the default pool scheduler the same
+# program runs the worker during the sleep, as documented.
+#
+# MEASURED at the filing commit, one pinned release binary, 40 runs at
+# parallelism 4 per cell — every cell 40/40 identical, so this is a property,
+# not a race:
+#   --- pool   (both lanes): worker runs | after sleep | 1 | 1     ← documented
+#   --- single (Rust lane) : after sleep | 0 | worker runs | 1     ← actual
+#   --- single (self-host) : after sleep | 0 | worker runs | 1     ← same
+# Both lanes agree because the scheduler runtime is shared C
+# (`src/backend/c/runtime`), selected by `SchedulerMode` — this is a RUNTIME
+# defect, not a lowering divergence, so there is no lane split to reconcile.
+#
+# Expected output below is the language-CORRECT, book-documented behaviour —
+# i.e. what `scheduler=pool` already prints — NOT what `single` prints today.
+# A program that sleeps while waiting for a spawned task to make progress
+# cannot make that progress under `single`, which is a livelock shape, not a
+# scheduling preference.
+
+directive scheduler=single
+
+from std.time import sleep
+
+async void worker(int &counter):
+    print("worker runs")
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    sleep(0.1)
+    print("after sleep")
+    with x:
+        print(x)
+    t.await()
+    print(x)

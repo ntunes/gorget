@@ -3,6 +3,36 @@
 # variable should warn — the condition may no longer hold after the
 # yield re-acquires the lock.
 # The warning is non-fatal — program still compiles and runs.
+#
+# `scheduler=single` pins the interleaving, as the nine `shared_stale_*`
+# siblings do. Without it this program's stdout is a coin flip between
+# `was zero/after sleep/1` and `1` — admitted nondeterminism (the scheduler is
+# a pluggable knob and stale-condition warnings are a design TARGET, per
+# docs/language-design.md), but two harnesses byte-compare this stdout, so an
+# unpinned interleaving makes both of them flap. MEASURED without the
+# directive, one pinned release binary at 8-way parallel load: 27/400 flips on
+# the Rust lane, 11/400 on the self-host lane. With it: 2000/2000 identical on
+# each lane at 16-way.
+#
+# WHAT THE PIN DOES AND DOES NOT BUY — measured with an instrumented copy that
+# also prints inside the worker (40/40 at 4-way): under the N:1 loop the worker
+# runs at `t.await()`, AFTER the `with` block, so the branch is entered,
+# completes, and only then is `x` invalidated. The mid-branch invalidation the
+# warning describes is not observable on this program's stdout under ANY
+# scheduler, because "the worker mutated x during the sleep" and "the worker
+# ran after the with block" print the same three lines. `scheduler=thread`
+# DOES show the worker interleaving (`was zero/worker runs/after sleep/…`) but
+# is still nondeterministic — 2/200 flip to a worker-first ordering — so it
+# cannot pin a byte-compared fixture.
+# ⚠ That the worker runs at the await rather than at the sleep is itself a
+# filed gap (todo/t0822: under `single`, `sleep` is not a scheduling point,
+# contradicting docs/book/14-concurrency.md). Fixing it should NOT change this
+# program's stdout — both orderings print the same three lines — but re-run
+# this fixture when it lands rather than trusting that sentence.
+# The WARNING is the feature under test; it is a static shape check and is
+# unaffected by the directive.
+
+directive scheduler=single
 
 from std.time import sleep
 

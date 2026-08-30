@@ -14884,13 +14884,35 @@ fn tracked_files() -> &'static std::collections::HashSet<PathBuf> {
     use std::sync::OnceLock;
     static TRACKED: OnceLock<std::collections::HashSet<PathBuf>> = OnceLock::new();
     TRACKED.get_or_init(|| {
-        let out = std::process::Command::new("git")
-            .args(["ls-files", "-z"])
-            .output()
-            .expect("git ls-files failed — these lints must run inside the repo");
+        // ⚠ RETRY ONCE, AND REPORT WHY. Observed 2026-08-30: a full
+        // `cargo test --test lints --release` run failed here with the bare
+        // message below, while the SAME binary passed the same test alone
+        // immediately after, and six consecutive full runs since have been
+        // clean. The CAUSE WAS NOT ESTABLISHED and is not asserted here — the
+        // old message discarded git's status and stderr, so there was nothing
+        // to diagnose from, and a multi-agent sandbox intercepting `git`
+        // subprocesses is as plausible as suite-parallelism contention. That
+        // is exactly why the retry is paired with SURFACING status and stderr
+        // rather than replacing the assertion: a gate that reds on machine
+        // conditions and cannot say why is a gate that gets waived, and the
+        // next occurrence must leave evidence.
+        let run_ls_files = || {
+            std::process::Command::new("git")
+                .args(["ls-files", "-z"])
+                .output()
+                .expect("git ls-files failed — these lints must run inside the repo")
+        };
+        let mut out = run_ls_files();
+        if !out.status.success() {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            out = run_ls_files();
+        }
         assert!(
             out.status.success(),
-            "git ls-files exited non-zero; refusing to scan an unknown file set"
+            "git ls-files exited non-zero TWICE ({}); refusing to scan an unknown file set.\n\
+             git stderr: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim(),
         );
         let set: std::collections::HashSet<PathBuf> = out
             .stdout
@@ -22686,12 +22708,14 @@ fn fmt_author_row_grouping_survives_formatting() {
 /// describing a bug that no longer exists.
 ///
 /// The behavioural instrument is `scripts/known_gaps_census.sh`, which runs the
-/// whole ignored roster and IS wired into CI (main job) — measured 1 min 47 s
-/// for all 99 rows, regenerate with `time scripts/known_gaps_census.sh`. ⚠ An
-/// earlier draft of this line said "~20 min", a pre-batching remnant: that
-/// figure is exactly the argument someone would use to DELETE the CI step, and
-/// the assertion that would stop them is 250 lines below in this same function.
-/// Regenerate it or drop it; never carry it. This is the cheap half that runs in
+/// whole ignored roster and IS wired into CI (main job) — measured **2 min 39 s
+/// for all 159 rows** (2026-08-30, `time scripts/known_gaps_census.sh`, reporting
+/// `roster 159 · PASS 7 · FAIL 152`). ⚠ An earlier draft of this line said
+/// "~20 min", a pre-batching remnant, and the line that replaced it said "1 min
+/// 47 s for all 99 rows" and then sat unregenerated while the roster grew by 60:
+/// that figure is exactly the argument someone would use to DELETE the CI step,
+/// and the assertion that would stop them is 250 lines below in this same
+/// function. Regenerate it or drop it; never carry it — twice now. This is the cheap half that runs in
 /// the normal lint gate: the census's finding set is committed as
 /// `tests/gaps/PASSING_ALLOWLIST.txt` and may only ever SHRINK, mirroring
 /// `sanitize_allowlists_shrink_only` next door.
@@ -22947,7 +22971,7 @@ fn known_gaps_passing_allowlist_shrink_only() {
          This lint is the CHEAP half of a two-part guard and cannot catch the class on its \
          own: it fires when a human EDITS tests/gaps/PASSING_ALLOWLIST.txt, never when an \
          `#[ignore]`d test silently starts passing. Only the census observes that. Measured \
-         2026-08-23: the full run is 1 min 47 s over all 99 rows, so there is no cost \
+         2026-08-30: the full run is 2 min 39 s over all 159 rows, so there is no cost \
          argument for leaving it out of the main job."
     );
 }
@@ -24720,5 +24744,290 @@ fn for_loop_producers_carry_a_drop_disposition() {
          A NEW site must carry its own disposition (see above) before this baseline is \
          raised; a REMOVED site lowers it. Never raise it to make the pairing assert pass.",
         producers.len()
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scheduling-race nondeterminism in the byte-compared fixture corpus
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// THE CLASS this guard retires, stated before its members (and it is narrower
+// than "flaky fixture" on purpose):
+//
+//   A corpus fixture whose stdout is a function of the SCHEDULER rather than
+//   of the program, left unpinned in a corpus that byte-compares stdout.
+//
+// Two harnesses byte-compare every fixture's stdout: `self_host_runtime`
+// (default-running, against a committed snapshot) and `self_host_runtime_diff`
+// (a live Rust-gg oracle, with a MATCH floor and a non-MATCH ceiling). Neither
+// can be meaningful over an output the language does not pin. Interleaving is
+// admitted nondeterminism — `docs/language-design.md:94-95` lists
+// "Stale-condition warnings for shared data across await points" and
+// "Pluggable scheduler backends (pool, thread, inline, single)" as design
+// TARGETS against an explicitly-avoided "Data races reachable from safe code",
+// and the compiler WARNS rather than rejects on the shapes below
+// (`src/semantic/errors.rs:191`). So the program is legal, the warning is
+// correct, and the defect is entirely that a byte-exact gate pinned the coin
+// flip. The remedy the tree already standardised on is
+// `directive scheduler=<mode>` (`src/ir/lowering/mod.rs:532-538`, self-host
+// `lower.gg` → `lir_lower.gg:5708` → `lir_codegen.gg:8836-8843`).
+//
+// WHY THIS GUARD IS STATIC. The obvious dynamic guard — run every fixture K
+// times, assert one output — CANNOT CATCH ITS OWN CLASS at any affordable K.
+// Measured on `shared_with_check_then_act` before it was pinned, with one
+// pinned release binary: 2/300 flips running serially (0.67%) and 27/400 at
+// 8-way parallel load (6.75%) on the Rust lane, 11/400 at 8-way on the
+// self-host lane. A universal K=20 stability sweep would have certified it
+// stable ~87% of the time. Sensitivity has to be BOUGHT, so it is spent
+// narrowly here: the census asks the COMPILER which fixtures can race, and the
+// obligation on that set is static and instant.
+//
+// WHAT IS OUT OF CLASS (named, not hidden). Two other corpus fixtures are
+// nondeterministic for reasons that are NOT a scheduling race, so this guard
+// is structurally the wrong instrument for them and does not pretend
+// otherwise: `test_process_timeout` prints a wall-clock elapsed `(Nms)` (the
+// `test_tags` family, whose instrument is `runtime_parity_excluded`), and
+// `vector_task_mixed_await_int` reads UNINITIALIZED MEMORY (a filed
+// miscompile; its nondeterminism is UB, and the fix is the miscompile). Both
+// are filed. The blind set is a LOWER BOUND: the census below sees only
+// fixtures the compiler's race-warning family fires on, plus the 19 fixtures
+// that deliberately fail to parse and are therefore never analysed.
+
+/// The race family of `SemanticWarningKind`, as a TYPED predicate.
+///
+/// ⚠ EXHAUSTIVE MATCH WITH NO `_` ARM, DELIBERATELY. The independent witness
+/// for this enumeration is rustc's exhaustiveness checker, not a list someone
+/// remembered to update: a new `SemanticWarningKind` variant fails to compile
+/// here until it is classified in or out of the race family. That is the same
+/// device `SemanticWarningKind::code()` uses one layer down, and it is why the
+/// census reads typed metadata instead of grepping diagnostic prose (which
+/// would be Core #2's name-matching in a different costume — and the warning
+/// CODES are deliberately not rendered yet, so prose is all a subprocess could
+/// see).
+fn is_race_class_warning(kind: &gorget::semantic::errors::SemanticWarningKind) -> bool {
+    use gorget::semantic::errors::SemanticWarningKind as K;
+    match kind {
+        // ── the race family: observable behaviour depends on interleaving ──
+        K::StaleSharedCondition { .. }
+        | K::WithCheckThenAct { .. }
+        | K::StaleSharedWriteBack { .. }
+        | K::SharedIteratorInvalidation { .. }
+        | K::SpawnWithTrackedBinding { .. }
+        | K::CompoundYieldRace { .. }
+        | K::ClosureCapturesWithBinding { .. } => true,
+
+        // ── not a race: a `shared` that never crosses a boundary is the
+        //    OPPOSITE diagnostic (no concurrency at all) ──
+        K::UnnecessaryShared { .. } => false,
+
+        // ── everything else is single-threaded hygiene ──
+        K::UnreachableCode
+        | K::UnusedVariable { .. }
+        | K::UnusedImport { .. }
+        | K::UncheckedUnwrap { .. }
+        | K::CouldBeConst { .. }
+        | K::NeedlessMutableBorrow { .. }
+        | K::DeadBareParamWrite { .. }
+        | K::RecursiveBareParamMaterialize { .. }
+        | K::CowBorrowMutation { .. }
+        | K::XorLikelyPower { .. }
+        | K::SuggestThrowsRefactor { .. } => false,
+    }
+}
+
+/// Census members that emit a race-class warning yet legitimately need NO
+/// scheduler pin, each with the measurement that says so. ⚠ An entry here is
+/// not a waiver, it is a CLAIM that the fixture's stdout is a function of the
+/// program on every interleaving — and the budget below makes adding one a
+/// visible, deliberate ratchet raise rather than a way out of a red test.
+const RACE_WARNED_NO_PIN_NEEDED: &[(&str, &str)] = &[(
+    "shared_spawn_with_tracked",
+    "prints a by-VALUE copy of the shared int taken inside the `with` block, so \
+     every interleaving prints `42`; the warning is about the spawned task \
+     escaping the lock scope, not about the output. Measured at the guard's \
+     landing commit, one pinned release binary, 16-way parallel: 1000/1000 `42`.",
+)];
+
+/// Growing this is a ratchet raise: state the measurement in the entry above,
+/// then move this number. Shrinking it (a fixture that acquires a scheduler
+/// pin, or stops warning) needs no ceremony.
+const RACE_WARNED_NO_PIN_BUDGET: usize = 1;
+
+/// Thirteen top-level fixtures declare `directive scheduler=<mode>` — eleven
+/// `=single`, one `=inline`, one `=thread` — and the self-host lowerer's
+/// directive-scan comment says so in prose. Core #14: an invariant-asserting
+/// comment needs an enforcing guard or it rots — its predecessor said "8" for
+/// long enough that `todo/t0184` inherited the number. Pinning BOTH counts and
+/// the sentence means the comment cannot drift from the corpus without this
+/// test going red.
+const SCHEDULER_PINNED_FIXTURES: usize = 13;
+const SCHEDULER_SINGLE_FIXTURES: usize = 11;
+const SCHEDULER_PINNED_SENTENCE: &str = "13 top-level fixtures declare";
+
+/// Every fixture the compiler's race-warning family fires on must PIN its
+/// interleaving, or be on the measured no-pin list above.
+///
+/// Can this guard catch its OWN class (the question a guard that green-lights
+/// its own class fails)? Yes, and it was demonstrated rather than asserted:
+/// reverting `shared_with_check_then_act.gg`'s `directive scheduler=single`
+/// puts that fixture back in the census with no pin and no list entry, and this
+/// test fails naming it. The census costs ~0.4s over the whole top-level
+/// corpus — a figure deliberately left unpinned here, unlike the two counts
+/// below, because a timing is not an invariant.
+#[test]
+fn race_warned_fixtures_pin_their_scheduler() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures_dir = root.join("tests/fixtures");
+
+    let mut files: Vec<PathBuf> = fs::read_dir(&fixtures_dir)
+        .expect("tests/fixtures unreadable")
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.extension().map_or(false, |x| x == "gg"))
+        .collect();
+    files.sort();
+
+    let mut census: Vec<String> = Vec::new(); // race-warned stems
+    let mut unpinned: Vec<String> = Vec::new(); // ... with no scheduler directive
+    let mut pinned_total = 0usize;
+    let mut single_total = 0usize;
+    let mut unparsed = 0usize;
+    let mut rejected = 0usize;
+
+    for path in &files {
+        let Ok(src) = fs::read_to_string(path) else { continue };
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+
+        let mut parser = gorget::parser::Parser::new(&src);
+        let mut module = parser.parse_module();
+        if !parser.errors.is_empty() {
+            // A deliberate parse-error fixture. It never reaches the semantic
+            // pass, so the census cannot see it — counted, not silently
+            // dropped (this is the guard's other blind cell).
+            unparsed += 1;
+            continue;
+        }
+
+        // Read the directive off the AST, not the source text: the scheduler
+        // pin is a typed `Item::Directive`, and matching `"directive
+        // scheduler="` in the file would find it inside a comment too.
+        let scheduler_mode: Option<Option<String>> = module.items.iter().find_map(|item| {
+            match &item.node {
+                gorget::parser::ast::Item::Directive(d) if d.name == "scheduler" => {
+                    Some(d.value.clone())
+                }
+                _ => None,
+            }
+        });
+        let pins_scheduler = scheduler_mode.is_some();
+
+        let analysis = gorget::semantic::analyze_with_source_dir(
+            &mut module,
+            &[],
+            path.parent().map(|d| d.to_path_buf()),
+            false,
+        );
+
+        // A directive the compiler REFUSES is not a pin: `unknown_scheduler_mode_error.gg`
+        // declares `scheduler=bogus` precisely so `src/semantic/mod.rs` will
+        // reject it, and such a fixture is never run by either byte-comparing
+        // harness (`self_host_runtime_diff` records it as RUST-REJECTED and
+        // stops). Detected on the TYPED error kind, not on the value: matching
+        // the four accepted mode strings here would be a second copy of the
+        // validator's own list, kept in sync by hand.
+        //
+        // ⚠ Deliberately NOT `!analysis.errors.is_empty()`. This census parses
+        // and analyses each fixture WITHOUT resolving its imports, so an
+        // ordinary `from std.time import sleep` leaves unresolved-name errors
+        // behind — a blanket error filter silently dropped 5 of the 13
+        // scheduler-pinned fixtures when it was tried. The race-warning census
+        // below is unaffected by those errors (the warnings still fire), which
+        // is why it is left unfiltered.
+        let directive_refused = analysis.errors.iter().any(|e| {
+            matches!(
+                &e.kind,
+                gorget::semantic::errors::SemanticErrorKind::UnknownDirective { .. }
+            )
+        });
+        if directive_refused {
+            rejected += 1;
+            continue;
+        }
+
+        if pins_scheduler {
+            pinned_total += 1;
+        }
+        if scheduler_mode.as_ref().and_then(|v| v.as_deref()) == Some("single") {
+            single_total += 1;
+        }
+
+        if !analysis.warnings.iter().any(|w| is_race_class_warning(&w.kind)) {
+            continue;
+        }
+        census.push(stem.clone());
+        if !pins_scheduler {
+            unpinned.push(stem);
+        }
+    }
+
+    assert!(
+        !census.is_empty(),
+        "the race-warning census found NOTHING over {} fixtures ({unparsed} unparsed). \
+         The instrument is broken, not the corpus — a green result from a census that \
+         cannot see its subject is the failure mode this guard exists to retire.",
+        files.len(),
+    );
+
+    let allowed: Vec<&str> = RACE_WARNED_NO_PIN_NEEDED.iter().map(|(s, _)| *s).collect();
+    assert_eq!(
+        RACE_WARNED_NO_PIN_NEEDED.len(),
+        RACE_WARNED_NO_PIN_BUDGET,
+        "no-pin list size changed ({} vs budget {RACE_WARNED_NO_PIN_BUDGET}). Every entry \
+         claims a fixture's stdout is scheduler-INDEPENDENT; move the budget only with the \
+         measurement that backs the claim.",
+        RACE_WARNED_NO_PIN_NEEDED.len(),
+    );
+
+    let offenders: Vec<&String> =
+        unpinned.iter().filter(|s| !allowed.contains(&s.as_str())).collect();
+    assert!(
+        offenders.is_empty(),
+        "fixture(s) the compiler warns about as a RACE, with no `directive scheduler=<mode>` \
+         and no measured no-pin entry:\n{}\n\n\
+         Their stdout is a function of the scheduler, and two harnesses byte-compare it \
+         (`self_host_runtime` against a committed snapshot, `self_host_runtime_diff` against a \
+         live oracle under a MATCH floor and a non-MATCH ceiling). Leaving one unpinned makes \
+         BOTH gates flap at a rate low enough to read as a self-host parity regression — that \
+         misreading cost a round-close triage three full gate runs.\n\n\
+         Fix: add `directive scheduler=single`, as the `shared_stale_*` siblings do — the \
+         interleaving is then a property of the program rather than of the machine's load. Or, \
+         if the output really is the same on every interleaving, add a \
+         `RACE_WARNED_NO_PIN_NEEDED` entry WITH the run count that proves it and raise the \
+         budget.\n\n\
+         Census: {} race-warned of {} fixtures ({unparsed} unparsed + {rejected} \
+         with a REFUSED directive, both invisible to this census).",
+        offenders.iter().map(|s| format!("  {s}")).collect::<Vec<_>>().join("\n"),
+        census.len(),
+        files.len(),
+    );
+
+    assert_eq!(
+        (pinned_total, single_total),
+        (SCHEDULER_PINNED_FIXTURES, SCHEDULER_SINGLE_FIXTURES),
+        "count of fixtures declaring `directive scheduler=<mode>` changed: \
+         {pinned_total} total / {single_total} `=single` vs {SCHEDULER_PINNED_FIXTURES} / \
+         {SCHEDULER_SINGLE_FIXTURES}. Update BOTH these constants and the sentence they pin in \
+         tests/fixtures/self_host_lowerer/lower.gg — that comment said \"8\" for long enough \
+         that todo/t0184 inherited the wrong number (Core #14: an invariant-asserting comment \
+         needs an enforcing guard).",
+    );
+
+    let lower_gg = fs::read_to_string(root.join("tests/fixtures/self_host_lowerer/lower.gg"))
+        .expect("self_host_lowerer/lower.gg unreadable");
+    assert!(
+        lower_gg.contains(SCHEDULER_PINNED_SENTENCE),
+        "tests/fixtures/self_host_lowerer/lower.gg no longer contains \
+         {SCHEDULER_PINNED_SENTENCE:?}. The corpus has {pinned_total} such fixtures; make the \
+         comment say so (and update SCHEDULER_PINNED_SENTENCE) rather than deleting the claim.",
     );
 }

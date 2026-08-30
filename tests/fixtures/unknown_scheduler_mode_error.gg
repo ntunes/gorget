@@ -1,0 +1,18 @@
+# Test: `directive scheduler=<mode>` REJECTS an unknown mode (E_UnknownDirective).
+#
+# The valid set is {pool, thread, inline, single} — `src/semantic/mod.rs`
+# validates it, and the lowerer's `_ => {}` arm (`src/ir/lowering/mod.rs`) and
+# the self-host lowerer's missing `else` (`self_host_lowerer/lower.gg`) are
+# unreachable BECAUSE of this rejection. Without it both lowering arms would be
+# a Core #10 silent drop of user syntax: a typo'd mode would compile and run
+# under the default pool scheduler, which for an async program silently changes
+# the interleaving.
+#
+# The sibling `unknown_directive_error.gg` pins an unknown directive NAME; this
+# one pins an unknown directive VALUE, which is a separate arm of the same
+# validation and had no fixture.
+
+directive scheduler=bogus
+
+async void main():
+    print("unreachable — the directive is rejected at check time")

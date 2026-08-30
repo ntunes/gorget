@@ -3768,18 +3768,32 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
 
     # R11: extract the `strip-asserts` directive so the SAssert case in
     # lower_stmt can emit a no-op instead of a conditional panic. Mirrors
-    # Rust gg's directive scan (`src/ir/lowering/mod.rs:486-489`).
+    # Rust gg's directive scan (`src/ir/lowering/mod.rs:526-540`).
     for dir_item in m.items:
         match dir_item:
             case IDirective(dir_name, dir_value):
                 if dir_name == "strip-asserts":
                     gmod.strip_asserts = true
                 # `directive scheduler=<mode>` selects the async scheduler
-                # runtime. The 8 `shared_stale_*` fixtures declare
-                # `directive scheduler=single`, which the parser captures as
-                # IDirective("scheduler", "single"). Without SCHED_SINGLE the
-                # spawned worker may race the producer under the default pool
-                # scheduler. Mirrors Rust gg's scheduler-directive scan.
+                # runtime. 13 top-level fixtures declare it — 11 `=single`
+                # (nine `shared_stale_*`, `shared_with_check_then_act` and
+                # `scheduler_single`), one `=inline`, one `=thread` — which the
+                # parser captures as IDirective("scheduler", <mode>). Without
+                # SCHED_SINGLE the spawned worker may race the producer under the
+                # default pool scheduler, and the racy stdout then flaps under
+                # every byte-comparing harness. Both counts are pinned by
+                # `race_warned_fixtures_pin_their_scheduler` in `tests/lints.rs`,
+                # so this comment cannot rot the way its "8" predecessor did.
+                # Mirrors Rust gg's scheduler-directive scan.
+                #
+                # There is no `else` for an unknown mode, and none is needed:
+                # the Rust frontend REJECTS any value outside
+                # {pool, thread, inline, single} with E_UnknownDirective
+                # (`src/semantic/mod.rs:180-192`, pinned by the
+                # `unknown_scheduler_mode_error` fixture) before a program ever
+                # reaches this lowerer, so the missing arm is unreachable rather
+                # than a Core #10 silent drop. `pool` likewise needs no arm here
+                # because it is `new_lir_module`'s default.
                 elif dir_name == "scheduler":
                     if dir_value == "single":
                         gmod.scheduler_mode = SCHED_SINGLE
