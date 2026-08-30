@@ -428,7 +428,7 @@ impl crate::parser::visitor::ExprVisitor for ClosureBodyParamTracer<'_> {
     // visit_stmt and visit_block: use default walk_stmt/walk_block.
     // This covers all statement variants exhaustively, fixing coverage gaps
     // in the previous manual trace_closure_body_stmts (which missed Assign,
-    // CompoundAssign, For, While, Loop, Match, With, Unsafe, Assert, etc.).
+    // CompoundAssign, For, While, Loop, Match, With, Assert, etc.).
 }
 
 // ─── Local Alias Map ─────────────────────────────────────────
@@ -524,7 +524,7 @@ fn build_aliases_from_stmt(
         Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::Loop { body } => {
             build_aliases_from_block(body, param_names, aliases, function_info, resolution_map, scopes);
         }
-        Stmt::With { body, .. } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+        Stmt::With { body, .. } | Stmt::NamedScope { body, .. } => {
             build_aliases_from_block(body, param_names, aliases, function_info, resolution_map, scopes);
         }
         _ => {}
@@ -765,7 +765,7 @@ fn trace_stmt_returns_to_params(
         Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::Loop { body } => {
             trace_block_returns_to_params(body, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
-        Stmt::With { body, .. } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+        Stmt::With { body, .. } | Stmt::NamedScope { body, .. } => {
             trace_block_returns_to_params(body, param_names, local_aliases, function_info, resolution_map, scopes, result);
         }
         _ => {}

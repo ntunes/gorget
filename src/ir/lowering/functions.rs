@@ -212,7 +212,6 @@ fn collect_loop_reassigned(
                 }
             }
             Stmt::With { body, .. }
-            | Stmt::Unsafe { body }
             | Stmt::NamedScope { body, .. }
             | Stmt::OnError { body } => {
                 collect_loop_reassigned(&body.stmts, in_loop, names);
@@ -877,7 +876,7 @@ fn cow_after_stmt(
                 cow_after_expr_moves(&b.expr.node, future, info, interner);
             }
         }
-        Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } | Stmt::OnError { body } => {
+        Stmt::NamedScope { body, .. } | Stmt::OnError { body } => {
             cow_after_block(&body.stmts, future, result, info, interner);
         }
         // `select` multiplexes over channel ops; each arm body (and the optional
@@ -1298,7 +1297,6 @@ fn count_uses_in_block(stmts: &[Spanned<Stmt>], counts: &mut rustc_hash::FxHashM
                 count_uses_in_expr(&value.node, counts);
             }
             Stmt::Loop { body }
-            | Stmt::Unsafe { body }
             | Stmt::NamedScope { body, .. }
             | Stmt::OnError { body }
             | Stmt::MetaFor { body, .. }

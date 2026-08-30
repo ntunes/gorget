@@ -88,7 +88,6 @@ impl Parser {
             Token::Keyword(Keyword::Match) => self.parse_match_stmt(),
             Token::Keyword(Keyword::Select) => self.parse_select_stmt(),
             Token::Keyword(Keyword::With) => self.parse_with_stmt(),
-            Token::Keyword(Keyword::Unsafe) => self.parse_unsafe_stmt(),
 
             // shared — shared variable declaration with automatic synchronization
             Token::Keyword(Keyword::Shared) => self.parse_shared_var_decl(),
@@ -580,14 +579,6 @@ impl Parser {
             });
         }
         Err(self.error_at(span, "expected '<expr> as <name>' or bare identifier in with-binding"))
-    }
-
-    fn parse_unsafe_stmt(&mut self) -> Result<Spanned<Stmt>, ParseError> {
-        let start = self.peek_span();
-        self.expect_keyword(Keyword::Unsafe)?;
-        let body = self.parse_block(start.start)?;
-        let end = self.previous_span();
-        Ok(Spanned::new(Stmt::Unsafe { body }, start.merge(end)))
     }
 
     fn parse_const_var_decl(&mut self) -> Result<Spanned<Stmt>, ParseError> {

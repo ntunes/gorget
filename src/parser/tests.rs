@@ -1912,7 +1912,6 @@ const BLOCK_PROBES: &[(&str, &str, ProbeKind)] = &[
     ("for `else:` clause", "void f():\n    for i in [1, 2]:\n        print(i)\n    else:\n        print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
     ("while + while-else", "void f():\n    while false:\n        print(1)\n    else:\n        print(0)\n", NotWrappable("the `else` clause is the keyword and the colon, adjacent")),
     ("loop", "void f():\n    loop:\n        break\n", NotWrappable("`loop` and the colon, adjacent — no token between them")),
-    ("unsafe", "void f():\n    unsafe:\n        print(1)\n", NotWrappable("`unsafe` and the colon, adjacent")),
     ("with … as …, WRAPPED binding", "int mk(int a,\n       int b):\n    return a + b\n\nvoid f(int r,\n       int s):\n    with mk(\n            r, s) as held:\n        print(held)\n", Wrapped),
     ("named scope", "void f():\n    cleanup:\n        print(1)\n", NotWrappable("an identifier is one token and identifiers cannot span lines")),
     ("on error", "void f():\n    on error:\n        print(1)\n", NotWrappable("`on error` and the colon, adjacent")),

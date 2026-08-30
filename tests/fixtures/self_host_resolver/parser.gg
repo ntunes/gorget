@@ -146,7 +146,6 @@ const int KW_EXTENDS = 68
 const int KW_MOVE = 69
 const int KW_ASSERT = 71
 const int KW_CONST = 72
-const int KW_UNSAFE = 73
 const int KW_EXTERN = 74
 const int KW_WEAK = 75
 const int KW_CELL = 76
@@ -450,8 +449,6 @@ int keyword_tag(Token tok):
                     return KW_ASSERT
                 case KwConst:
                     return KW_CONST
-                case KwUnsafe:
-                    return KW_UNSAFE
                 case KwExtern:
                     return KW_EXTERN
                 case KwAsync:

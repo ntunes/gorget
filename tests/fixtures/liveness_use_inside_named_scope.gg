@@ -1,4 +1,5 @@
-# REGRESSION — the liveness walker must see uses inside `unsafe:` and a NAMED SCOPE.
+# REGRESSION — the liveness walker must see uses inside a NAMED SCOPE, at two
+# positions: mid-body and at the function tail.
 #
 # `walk_stmt` (src/ir/lowering/liveness.rs) handled 10 of 29 `Stmt` forms and
 # swept 19 into `_ => {}`. A use the liveness walker cannot see makes the
@@ -18,7 +19,7 @@ void main():
     String s = mk("abcdefghijklmnopqrstuvwxyz0123456789", "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
     Vector[String] v = []
     v.push(s)
-    unsafe:
+    guarded:
         print(s)
     String t = mk("0123456789012345678901234567890123456789", "abcdefghij")
     Vector[String] w = []

@@ -1448,10 +1448,6 @@ impl<'a> BorrowChecker<'a> {
                 }
             }
 
-            Stmt::Unsafe { body } => {
-                self.check_block(body);
-            }
-
             Stmt::NamedScope { body, .. } => {
                 self.check_block(body);
             }

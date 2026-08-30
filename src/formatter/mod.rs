@@ -3139,9 +3139,6 @@ impl Formatter {
         if q.is_static {
             self.emitter.write("static ");
         }
-        if q.is_unsafe {
-            self.emitter.write("unsafe ");
-        }
         // R39 Track A output-review finding (filed 2026-08-09): the `blocking`
         // and `noreturn` extern qualifiers were dropped by `gg fmt`. Both are
         // load-bearing at lowering (`src/ir/lowering/mod.rs` — is_blocking
@@ -5146,13 +5143,6 @@ impl Formatter {
                     }
                 }
                 self.emitter.write(":");
-                self.emitter.newline();
-                self.emitter.indent();
-                self.format_block_stmts(body);
-                self.emitter.dedent();
-            }
-            Stmt::Unsafe { body } => {
-                self.emitter.write("unsafe:");
                 self.emitter.newline();
                 self.emitter.indent();
                 self.format_block_stmts(body);

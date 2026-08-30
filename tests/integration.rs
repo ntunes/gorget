@@ -4935,6 +4935,30 @@ fn sh_adapter_chain_fstring_interp() {
     );
 }
 
+/// KNOWN GAP (t0556) — the CLASS behind D50's `unsafe:` instance. A word that
+/// lexes as a KEYWORD but is claimed by no parse rule falls past the
+/// `TOK_IDENT`-gated named-scope path in `self_host_typechecker/parser.gg`
+/// into `parse_expr()`, which swallows the word, its block, AND every
+/// statement after it in the enclosing block. Core #10 lower-or-reject: the
+/// self-host must fail LOUDLY, never emit silently-truncated code.
+///
+/// `where` is the surviving costume — a keyword on both lanes with zero
+/// consumers outside the lexer (`grep -rn 'Keyword::Where' src/` -> 2 hits,
+/// both `token.rs`). D50 retired the `unsafe:` costume by deleting the
+/// keyword; the MECHANISM is untouched.
+#[test]
+#[ignore = "KNOWN GAP: a lexer keyword with no parse rule is silently \
+swallowed by the self-host along with its block and the rest of the \
+enclosing block (t0556); `where` is the surviving costume."]
+#[serial(self_host_lowerer_driver)]
+fn sh_keyword_no_parse_rule_swallows_block_where() {
+    sh_known_gap_expect(
+        "known_gaps/sh_keyword_no_parse_rule_swallows_block_where.gg",
+        "sh_keyword_no_parse_rule_swallows_block_where",
+        "a\nb\nc\nd",
+    );
+}
+
 /// Shared body for the SELF-HOST-lane `known_gaps` pins above: build (cached)
 /// the self-host lowerer driver, emit C for the fixture, compile and run it,
 /// and assert the CORRECT output — the output Rust gg already produces. Each
@@ -11170,7 +11194,7 @@ fn fmt_catch_rethrow_single_stmt_terminal_axis_source_runs() {
 // mis-lower the resulting extern calls. Verified reproducing across
 // lib/std/fs.gg (blocking) and tests/fixtures/noreturn_diverges.gg
 // (noreturn). ~4 LOC fix mirrors the existing is_async/is_const/
-// is_static/is_unsafe arms.
+// is_static arms.
 // R39 gorget-arena verdict finding (owner 2026-08-09): trailing comments on
 // block-opening lines (`if x:  # comment`) were being pushed onto the first
 // body stmt. Same class as snag #2; fix mirrored `emit_trailing_comment_after_header`
@@ -14412,7 +14436,6 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
                 }
             }
             Stmt::With { body, .. } => visit_block(&format!("{path}.with"), body, facts),
-            Stmt::Unsafe { body, .. } => visit_block(&format!("{path}.unsafe"), body, facts),
             Stmt::NamedScope { body, .. } => visit_block(&format!("{path}.scope"), body, facts),
             Stmt::Expr(e) => visit_expr(&format!("{path}.e"), &e.node, facts),
             Stmt::Return(Some(e)) => visit_expr(&format!("{path}.ret"), &e.node, facts),
@@ -14446,7 +14469,6 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
         facts.push(format!("{path}.async={}", f.qualifiers.is_async));
         facts.push(format!("{path}.const={}", f.qualifiers.is_const));
         facts.push(format!("{path}.static={}", f.qualifiers.is_static));
-        facts.push(format!("{path}.unsafe={}", f.qualifiers.is_unsafe));
         for (i, prm) in f.params.iter().enumerate() {
             // §3 member + R39's is_meta_op. The NAME is projected too: the
             // §3 defect deleted it while every other fact stayed correct.
@@ -15975,11 +15997,6 @@ fn cow_scope_bare_param_elif_cond_then() {
 // Out-of-ggdef-subset scope shapes (known_gaps/, C+LLVM validated on Rust gg,
 // not corpus-harvested). Each fixture header records the C+LLVM verdict + SH
 // lane note.
-
-#[test]
-fn cow_scope_bare_param_unsafe() {
-    run_gg("known_gaps/cow_scope_bare_param_unsafe.gg", "3\n4");
-}
 
 #[test]
 fn cow_scope_bare_param_named() {
@@ -25223,10 +25240,6 @@ fn format_stmt_canonical(stmt: &Stmt) -> String {
             } else {
                 "with ?".to_string()
             }
-        }
-        Stmt::Unsafe { body } => {
-            let b = format_block_canonical(&body.stmts);
-            format!("unsafe:{b}")
         }
         Stmt::Assert { condition, message } => {
             let cond = format_expr_canonical(&condition.node);
@@ -38874,6 +38887,29 @@ done",
     );
 }
 
+/// D50 — with the reserved keyword gone, `unsafe:` lexes as an identifier
+/// and lands on the NAMED SCOPE path. The DISCRIMINATOR is the stdout
+/// ORDER: the old `Stmt::Unsafe` arm called `lower_block_scoped`, which
+/// opens no drop scope, so an inner local was dropped at FUNCTION exit
+/// (`in block / after block / drop inner`). A named scope drops at BLOCK
+/// exit. RED-verified against a compiler built from f3feea79.
+#[test]
+fn unsafe_is_now_a_named_scope() {
+    run_gg(
+        "unsafe_is_now_a_named_scope.gg",
+        "in block inner\ndrop inner\nafter block",
+    );
+}
+
+/// D50 — the removal is a pure WIDENING: `unsafe` is now an ordinary
+/// identifier in every position a reserved word blocked (local, struct
+/// field, parameter, function name, field access, scope label). RED-verified
+/// against f3feea79: 6 parse errors across 5 of the 6 cells.
+#[test]
+fn unsafe_is_an_ordinary_identifier() {
+    run_gg("unsafe_is_an_ordinary_identifier.gg", "5\n7\n2\n9");
+}
+
 #[test]
 fn named_scope_basic() {
     run_gg(
@@ -44592,6 +44628,15 @@ fn amp_bind_declsigil_error() {
 #[test]
 fn mutable_keyword_error() {
     check_gg_fails("mutable_keyword_error.gg", "expected");
+}
+
+/// D50 — `unsafe` is removed from the language. The FUNCTION QUALIFIER
+/// spelling is the removal's only accept -> reject flip: `unsafe void f():`
+/// compiled clean at f3feea79 (rc 0, "OK: no semantic errors") and is now a
+/// parse error. Same shape as the `mutable` removal above.
+#[test]
+fn unsafe_keyword_error() {
+    check_gg_fails("unsafe_keyword_error.gg", "expected");
 }
 
 /// There is no `range()` function — integer sequences are `0..n`.
@@ -55750,7 +55795,7 @@ fn liveness_metafor_match_arm() {
 
 /// REGRESSION (R45) — `on error:` is an ALTERNATIVE path, not a straight-line
 /// scope. Making `walk_stmt` exhaustive in `c5860a68` lumped `OnError` with
-/// `Unsafe`/`NamedScope`, so a KILL inside the handler deleted a name still
+/// `NamedScope`, so a KILL inside the handler deleted a name still
 /// live on the normal path: ICE rc 101 for an assign-kill, and rc 0 with
 /// GARBAGE for a shadowing VarDecl, on both backends. The handler is now
 /// UNIONED the way an `if` branch is. Both RED-verified against the regressed
@@ -55771,9 +55816,9 @@ fn liveness_use_inside_loop() {
 }
 
 #[test]
-fn liveness_use_inside_unsafe_scope() {
+fn liveness_use_inside_named_scope() {
     run_gg(
-        "liveness_use_inside_unsafe_scope.gg",
+        "liveness_use_inside_named_scope.gg",
         "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ\n0123456789012345678901234567890123456789abcdefghij",
     );
 }

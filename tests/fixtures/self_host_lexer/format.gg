@@ -147,8 +147,6 @@ String describe_keyword_canonical(Keyword kw):
             return "kw:await"
         case KwSpawn():
             return "kw:spawn"
-        case KwUnsafe():
-            return "kw:unsafe"
         case KwExtern():
             return "kw:extern"
         case KwSelfLower():

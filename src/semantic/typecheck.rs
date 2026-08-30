@@ -5503,10 +5503,6 @@ impl<'a> TypeChecker<'a> {
                 self.check_block(body);
             }
 
-            Stmt::Unsafe { body } => {
-                self.check_block(body);
-            }
-
             Stmt::NamedScope { body, .. } => {
                 self.check_block(body);
             }
@@ -5749,7 +5745,6 @@ impl<'a> TypeChecker<'a> {
 
             // Transparent block wrappers.
             Stmt::With { body, .. }
-            | Stmt::Unsafe { body }
             | Stmt::NamedScope { body, .. } => self.block_terminates(body),
 
             // select: waits until some arm fires; if every arm body
@@ -9928,7 +9923,6 @@ fn stmt_has_loop_break(stmt: &Stmt) -> bool {
             }) || else_arm.as_ref().is_some_and(block_has_loop_break)
         }
         Stmt::With { body, .. }
-        | Stmt::Unsafe { body }
         | Stmt::NamedScope { body, .. } => block_has_loop_break(body),
         Stmt::Select { arms, else_arm } => {
             arms.iter().any(|a| block_has_loop_break(&a.body))
@@ -10000,7 +9994,6 @@ fn stmt_contains_return(stmt: &Stmt) -> bool {
             }) || else_arm.as_ref().is_some_and(block_contains_return)
         }
         Stmt::With { body, .. }
-        | Stmt::Unsafe { body }
         | Stmt::NamedScope { body, .. } => block_contains_return(body),
         Stmt::Select { arms, else_arm } => {
             arms.iter().any(|a| block_contains_return(&a.body))
@@ -10201,7 +10194,6 @@ pub fn apply_inferred_method_targs(
                 walk_block(body, inferred);
             }
             Stmt::Loop { body }
-            | Stmt::Unsafe { body }
             | Stmt::NamedScope { body, .. }
             | Stmt::OnError { body } => walk_block(body, inferred),
             Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
@@ -10373,7 +10365,7 @@ pub fn apply_inferred_call_targs(
                 walk_block(body, inferred);
                 if let Some(eb) = else_body { walk_block(eb, inferred); }
             }
-            Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+            Stmt::Loop { body } | Stmt::NamedScope { body, .. } => {
                 walk_block(body, inferred);
             }
             _ => {}
@@ -10624,7 +10616,7 @@ pub fn apply_collect_target_rewrites(module: &mut Module) {
                 for binding in bindings { walk_expr(&mut binding.expr, sigs); }
                 walk_block(body, ret_ty, sigs);
             }
-            Stmt::Loop { body } | Stmt::Unsafe { body } | Stmt::NamedScope { body, .. } => {
+            Stmt::Loop { body } | Stmt::NamedScope { body, .. } => {
                 walk_block(body, ret_ty, sigs);
             }
             _ => {}

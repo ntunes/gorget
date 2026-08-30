@@ -3728,7 +3728,6 @@ fn stmt_kind(s: &ast::Stmt) -> &'static str {
         ast::Stmt::Match { .. } => "match",
         ast::Stmt::Select { .. } => "select",
         ast::Stmt::With { .. } => "with",
-        ast::Stmt::Unsafe { .. } => "unsafe",
         ast::Stmt::NamedScope { .. } => "named-scope",
         ast::Stmt::Assert { .. } => "assert",
         _ => "unsupported",

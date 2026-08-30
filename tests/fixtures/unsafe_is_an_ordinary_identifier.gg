@@ -1,0 +1,42 @@
+# D50 (2026-08-28): `unsafe` is REMOVED from the language, so the word is now
+# an ORDINARY IDENTIFIER. The removal is a pure WIDENING on every position a
+# reserved word blocked — this fixture is one cell per position, so a partial
+# re-reservation (a stray keyword row, a parser special-case) trips it.
+#
+# AXIS: source positions where an identifier is legal.
+#   local variable name .... `int unsafe = 5`      (was: "`unsafe` is a reserved keyword")
+#   struct field name ...... `int unsafe`          (was: "expected identifier")
+#   parameter name ......... `int unsafe`          (was: parse error)
+#   function name .......... `int unsafe(...)`     (was: parse error)
+#   scope label ............ `unsafe:`             (was: `Stmt::Unsafe`)
+#   field access ........... `s.unsafe`
+# OMITTED CELL: `unsafe` as a TYPE name — Gorget type names are capitalised by
+# convention and the lexer draws no keyword distinction there, so it samples
+# the same lexer cell as the local-variable row.
+#
+# RED-verified against the pre-removal compiler built from f3feea79:
+# `gg check` -> rc 1, **6 parse errors across 5 of the 6 cells** —
+# "expected identifier, found 'unsafe'" (field, param), "expected type,
+# found INDENT" (the cascade from the broken fn header), "`unsafe` is a
+# reserved keyword and cannot be used as a variable name" (local), and
+# "expected expression, found 'unsafe'" (both reads). Only the scope-label
+# cell parsed pre-removal, and it parsed as a DIFFERENT construct.
+struct Holder:
+    int unsafe
+
+int unsafe(int unsafe):
+    return unsafe + 1
+
+# The call lives in its own function: a local named `unsafe` SHADOWS the
+# function of the same name, which is ordinary scoping and not a D50 cell.
+void call_the_function():
+    print(unsafe(1))
+
+void main():
+    int unsafe = 5
+    print(unsafe)
+    Holder h = Holder(7)
+    print(h.unsafe)
+    call_the_function()
+    unsafe:
+        print(9)

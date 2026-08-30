@@ -115,7 +115,7 @@ enum Keyword:
     KwWith  KwAs  KwVia
     KwWhere  KwExtends
     KwAsync  KwAwait  KwSpawn
-    KwUnsafe  KwExtern
+    KwExtern
     KwSelfLower  KwSelfUpper
     KwMove
     KwTest  KwSuite  KwBench  KwIt  KwPanic  KwAssert
@@ -338,8 +338,6 @@ Option[Keyword] keyword_from_str(String s):
         return Some(KwAwait())
     elif s == "spawn":
         return Some(KwSpawn())
-    elif s == "unsafe":
-        return Some(KwUnsafe())
     elif s == "extern":
         return Some(KwExtern())
     elif s == "self":

@@ -68,7 +68,7 @@
 # NON-VALUE-NEEDING — the rule is **a header holding no token that can span
 # source lines**, and every one of these carries its own `NotWrappable` row,
 # held against its probe's spelling by the disposition test:
-#   `loop:` · `unsafe:` · `on error:` · a named scope `name:` · `do:` ·
+#   `loop:` · `on error:` · a named scope `name:` · `do:` ·
 #   `suite setup:` · `suite teardown:` · and EVERY `else:` clause (statement-if,
 #   for-else, while-else, match-else, select-else, meta-else, meta-match-else).
 # A named scope's identifier is one token AND identifiers cannot span lines —

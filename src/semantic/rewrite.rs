@@ -331,7 +331,7 @@ fn rename_stmt(stmt: &mut Stmt, aliases: &rustc_hash::FxHashMap<String, String>)
             }
             rename_block(body, aliases);
         }
-        Stmt::Unsafe { body } | Stmt::OnError { body } | Stmt::NamedScope { body, .. } => {
+        Stmt::OnError { body } | Stmt::NamedScope { body, .. } => {
             rename_block(body, aliases);
         }
         Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
@@ -749,7 +749,6 @@ fn rewrite_stmt(stmt: &mut Stmt, res: &ResolutionMap, scopes: &ScopeTable, error
             }
             rewrite_block(body, res, scopes, errors);
         }
-        Stmt::Unsafe { body } => rewrite_block(body, res, scopes, errors),
         Stmt::NamedScope { body, .. } => rewrite_block(body, res, scopes, errors),
         Stmt::Assert { condition, message } | Stmt::AssertReturn { condition, message } => {
             rewrite_expr(condition, res, scopes, errors);

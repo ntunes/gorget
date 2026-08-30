@@ -10,7 +10,7 @@
 # Post-fix: `format_block_stmts` calls
 # `emit_trailing_comment_after(stmt.span.end)` after each stmt in ANY
 # block context (function bodies, if/elif/else, match-arm bodies,
-# try/catch, with, unsafe, select), so the trailing comment on the
+# try/catch, with, select), so the trailing comment on the
 # else-body's last stmt stays at the else-body's indentation (12
 # spaces = case-body indent + else-body indent).
 #

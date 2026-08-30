@@ -1335,6 +1335,22 @@ mod tests {
         );
     }
 
+    /// D50 (2026-08-28): `unsafe` is REMOVED from the language — the reserved
+    /// keyword and all support. The word is now an ordinary identifier, exactly
+    /// as `mutable` became one when it was removed (f16ae5a3).
+    #[test]
+    fn test_unsafe_is_an_identifier() {
+        assert!(Keyword::from_str("unsafe").is_none());
+        let tokens = lex("unsafe\n");
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Identifier(crate::intern::intern("unsafe")),
+                Token::Newline,
+            ]
+        );
+    }
+
     #[test]
     fn test_mutable_is_an_identifier() {
         assert!(Keyword::from_str("mutable").is_none());
