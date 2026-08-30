@@ -8706,6 +8706,8 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("CORE-6", "Convert a recurring bug class into an executable guard"),
     ("CORE-6b", "validator or `tests/lints.rs` ratchet"),
     ("CORE-6c", "the round's output owes the class-retiring guard"),
+    ("CORE-6d", "A ratchet needs BOTH directions"),
+    ("CORE-6e", "an escalator that greens every step of its own drift"),
     ("CORE-7", "Gate on the bootstrap and the sanitizer"),
     ("CORE-8", "Reference-grade is the bar, not parity with a possibly-wrong reference"),
     ("CORE-8b", "≥2 bugs to fix in BOTH compilers"),

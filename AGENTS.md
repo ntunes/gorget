@@ -24,7 +24,7 @@ The sections below are the spec; these are the load-bearing rules they reduce to
 3. **Register ownership at the value's birth.** Every freshly-materialized owned, droppable value is registered for drop (or provably moved) at the producer; the leak/double-free class is always a missing or mis-typed ownership tag. (→ Ownership at Consuming Positions)
 4. **One fix, all siblings.** Fix the enumerated *class*, not the instance; centralize at the producer; add an arm-count lint. (→ Layering discipline)
 5. **Re-verify every premise; regenerate every number.** No dated figure enters a plan/brief/commit/handover unless you regenerated it this session. (→ Solution Quality)
-6. **Convert a recurring bug class into an executable guard** (validator or `tests/lints.rs` ratchet: env-gate → burn down → fatal). Prose rots; guards don't. When passes or rounds keep finding ONE class in new costumes, the round's output owes the class-retiring guard. (→ `docs/devbook/25-structural-guards.md`)
+6. **Convert a recurring bug class into an executable guard** (validator or `tests/lints.rs` ratchet: env-gate → burn down → fatal). Prose rots; guards don't. When passes or rounds keep finding ONE class in new costumes, the round's output owes the class-retiring guard. ⊕ A ratchet needs BOTH directions: a tolerance band with no downward move is an escalator that greens every step of its own drift. (→ `docs/devbook/25-structural-guards.md`)
 7. **Gate on the bootstrap and the sanitizer**, not just a green suite — `self_host_bootstrap_fixed_point` + ASan catch what `cargo test` and the always-pass `*_comparison` diagnostics miss. (→ Build & Test)
 8. **Reference-grade is the bar, not parity with a possibly-wrong reference.** "Matches Rust gg" / "both backends agree" / "only fails on programs that are UB on both" is *necessary, not sufficient*. If the agreed-on behavior is itself wrong, that is ≥2 bugs to fix in BOTH compilers — most often by making the language *reject* it. "Benign because both backends are UB" is a red flag, never a pass; the output-review must refuse to ship a known defect. (→ Review … fresh agent)
 9. **A SEMANTIC change lands on every lane in the same round** — ggdef (in subset), Rust gg (C+LLVM), self-host — pinned by a cross-lane fixture, never a promise. Anything altering accept/reject ships with the conformance fixture encoding the intended FINAL state; a lagging lane is a red lane or an explicit `#[ignore]`+citation; out-of-subset shapes get a note + a filed subset gap. Implementation-internal fixes (one backend's codegen) are exempt. A track flipping fixture expectations carries the FULL ggdef suite. A round's OWN new fixtures must COMPILE + MATCH on the self-host lane the SAME ROUND; only PRE-EXISTING non-MATCH are exempt from `RUNTIME_DIFF_NONMATCH_CEILING`, and raising it for your OWN inflow is forbidden.
@@ -51,10 +51,10 @@ The sections below are the spec; these are the load-bearing rules they reduce to
 ## Build & Test
 
 ```bash
-cargo build                                          # build the compiler
-cargo test --lib                                     # unit tests (~1027)
-scripts/run_integration.sh                  # integration tests (autoscaled)
-cargo test                                           # all tests
+cargo build  # build the compiler
+cargo test --lib  # unit tests (~1027)
+scripts/run_integration.sh  # integration tests (autoscaled)
+cargo test  # all tests
 ```
 
 **Always pipe integration tests through `tee`** with a random filename — parallel agents collide on fixed names:
