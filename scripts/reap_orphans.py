@@ -29,8 +29,17 @@ THE PREDICATE IS OWNERSHIP
 
 This is AGENTS.md Core #3 — *register ownership at the value's birth* — applied
 to processes instead of heap values. The harness already writes the tag: every
-scratch root is named `gg_..._<owner pid>[_<creation stamp>]`
-(`tests/integration.rs:36903`, `:36070`, `:38315`, …).
+scratch root is named `gg_..._<owner pid>[_<creation stamp>]`. Enumerate the
+producing sites — this is the WITNESS for the whole predicate, so regenerate it
+rather than trusting a list:
+
+    grep -n 'gg_sh_\|gg_runtime_diff_' tests/integration.rs
+
+⚠ That command replaces three line numbers which were WRONG FROM THE DAY THIS FILE
+WAS COMMITTED — the same commit reshaped tests/integration.rs by -98 lines, so the
+cites resolved against the pre-commit file and landed on `let mut excluded…`, a
+comment, and `);`. Two output-review passes certified them. The ledger's ruling
+(`docs/define-gorget/decisions.md:2043-2045`) is the fix: anchors, not lines.
 
 Why that is STRUCTURALLY safe rather than merely careful: a live executor's
 `target/release/deps/integration-<hash>` is **not under a scratch root at all**,
@@ -409,10 +418,15 @@ def report(res, preflight=False, do_reap=False) -> int:
 
 
 # ─────────────────────────────── the self-test ───────────────────────────────
-# SIX PLANTED PROCESSES, SIXTEEN ASSERTIONS. Two of them are incidents this file
-# has already caused or nearly
-# caused, encoded as regression tests; a third is the incident that motivated the
-# ownership predicate in the first place.
+# SIX PLANTED PROCESSES, SIXTEEN ASSERTIONS.
+#
+# ⚠ SIX is what the harness SPAWNS AND TRACKS; control 6's stranger `sh` also
+# forks a group member this file never holds a handle to, so seven processes
+# exist at the high-water mark. The tracked six are what `finally` cleans up.
+#
+# Two of the CONTROLS are incidents this file has already caused or nearly
+# caused, encoded as regression tests; a third is the incident that motivated
+# the ownership predicate in the first place.
 #
 # ⚠ THE WHOLE SELF-TEST RUNS INSIDE A UNIQUE, PER-INVOCATION DOMAIN. It plants
 # live processes and then exercises the KILL path, and it is wired into

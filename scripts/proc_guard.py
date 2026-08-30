@@ -159,7 +159,8 @@ def _kill_group(pid, proc=None):
 #     e = subprocess.run(
 #         [str(DRIVER), ...],
 #         capture_output=True, timeout=300)
-# — which is `scripts/robustness_map.py:207` as it stood, i.e. ONE OF THE EIGHT
+# — which is how `run_selfhost`'s driver call was spelled at `05f72286`, before
+# this change converted it: ONE OF THE EIGHT
 # SITES THIS VERY CHANGE CONVERTED. The guard could not have found the thing it
 # was written to find. It also skipped `#`-prefixed lines only, so a `timeout=`
 # inside a docstring false-POSITIVED. An AST cannot make either mistake.

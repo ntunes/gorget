@@ -309,7 +309,10 @@ def run_gg(cell: pathlib.Path, expected: str, tmp: pathlib.Path, backend=None):
 
 def run_selfhost(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
     """Self-host lane: driver `--emit-c` -> `cc` -> run. Mirrors
-    `selfhost_step` (tests/spec_conformance.rs:505) -- same driver, same lib dir,
+    `selfhost_step` in tests/spec_conformance.rs (find it with
+    `grep -n "fn selfhost_step" tests/spec_conformance.rs`; the line number is
+    deliberately not quoted -- it was cited as :505 and the function had moved to
+    :497) -- same driver, same lib dir,
     same ABSOLUTE --runtime-dir (a relative one only works by cwd luck), same cc
     flags. The driver is built ONCE, out of band, and reused for every cell."""
     stem = cell.stem

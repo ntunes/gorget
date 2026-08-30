@@ -182,20 +182,38 @@ UBSAN_MARKERS = ("SUMMARY: UndefinedBehaviorSanitizer", "runtime error:")
 # Each is a POSITIVE marker printed by a known site in src/main.rs. They are the
 # reason the build phase is NOT the four-way collapse it is often described as:
 # link failure and uncoded lexer/parser errors both DO carry a discriminator.
+#
+# ⚠ NO LINE NUMBERS HERE, DELIBERATELY, AND THIS IS THE THIRD TIME OF ASKING.
+# These comments carried eight `src/main.rs:NNN` cites, and every one of them was
+# WRONG THE MOMENT IT WAS PUBLISHED: the same commit that created this file also
+# added a `use` line to src/main.rs, shifting everything below it by one. Two
+# output-review passes then certified them as correct. The ledger already ruled on
+# exactly this pattern (`docs/define-gorget/decisions.md:2043-2045`): cite by
+# anchor, not by line, "which is what line numbers do".
+#
+# The MARKER STRINGS BELOW ARE THE ANCHOR — they are literally the grep. Regenerate
+# the sites, and see any that have been added since, with:
+#
+#     grep -n 'parse error(s) found\|error(s) found' src/main.rs
+#     grep -n 'C compiler exited with\|Failed to run C compiler\|Linking failed\|for linking' src/main.rs
+#
+# That second command finds EIGHT sites where the old comment named four — it
+# surfaced a whole freestanding-target arm the line list had never mentioned. A
+# command does not rot, and it enumerates.
 BUILD_ICE_MARKERS = ("panicked at", "panicked",)
-# `error[E_Code]` (semantic, coded) — src/errors.rs render path.
+# `error[E_Code]` (semantic, coded) — rendered via src/errors.rs.
 BUILD_REJECT_MARKERS = (
     "error[",                    # coded semantic diagnostic
-    "parse error(s) found",      # src/main.rs:3148 — the parse/lex tally
-    "error(s) found",            # src/main.rs:3126,:3181 — the semantic tally
+    "parse error(s) found",      # the parse/lex tally
+    "error(s) found",            # the semantic tally
 )
 # "the compiler said yes and then failed to deliver a binary" — a
 # miscompile-class signal that must NEVER share a bucket with a rejection.
 BUILD_DELIVER_FAIL_MARKERS = (
-    "C compiler exited with:",       # src/main.rs:1296,:1369  (C backend)
-    "Failed to run C compiler '",    # src/main.rs:1373
-    "Linking failed:",               # src/main.rs:1719        (LLVM backend)
-    "for linking:",                  # src/main.rs:1720
+    "C compiler exited with:",       # C backend, incl. the freestanding arm
+    "Failed to run C compiler '",    # cc could not be spawned at all
+    "Linking failed:",               # LLVM backend
+    "for linking:",                  # the linker could not be spawned
 )
 # t0646: usage errors collapse into 1 instead of the ratified 2. Two of the 79
 # `process::exit(1)` sites in src/main.rs print something recognisable; the rest
