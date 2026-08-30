@@ -25540,8 +25540,8 @@ fn clone_meter_check_refuses_an_unattributed_track() {
 // ⚠ WHAT NO GUARD HERE CAN DO, STATED PLAINLY (Core #12's omitted-cell rule).
 // There is no independent witness for "does `datetime_basic` read a clock?" —
 // no compiler property answers it, unlike the race family in
-// `scheduling_race_fixtures_are_pinned_or_declared` above, where rustc
-// exhaustiveness over `SemanticWarningKind` IS the witness. What these pin
+// `race_warned_fixtures_pin_their_scheduler` above, where rustc exhaustiveness
+// over `SemanticWarningKind` IS the witness. What these pin
 // instead is everything AROUND that judgement: the declaration is well-formed
 // and effective (1), the name cannot decide again (2), the exclusion set and
 // the lock-in net cannot disagree (3), and the un-evidenced remainder is
@@ -25712,6 +25712,18 @@ fn parity_declarations_are_well_formed() {
 /// every consumer of the classification must be INSIDE it, asserted by name
 /// below. A guard that cannot say which code it reads is not a guard.
 ///
+/// ⊕ AND THE SPAN CHECK IS TWO CHECKS, because naming the consumers is not
+/// enough on its own. `MUST_BE_IN_SPAN` only proves each fn's SIGNATURE LINE is
+/// inside the region — measured: forcing `end = regen + 1` keeps that line
+/// in-span while excluding the regen's entire BODY, and a classifier injected
+/// there went GREEN with the consumer-name check passing. So the second check
+/// is a COVERAGE one: every mention of `fixture_parity_exclusion` in the file
+/// must be in-span. That is the enumeration that actually matters — the reader
+/// is only ever reached through those call sites, so covering all of them
+/// covers every consumer's body by construction, however the anchors drift.
+/// (Deliberately no count here: a number would rot the next time someone adds
+/// a call.)
+///
 /// The allowlist is the whole point: two stem comparisons in the region are
 /// legitimate and named. A THIRD is a reservation, not a budget line.
 #[test]
@@ -25758,7 +25770,36 @@ fn parity_harness_does_not_classify_by_stem() {
         .collect();
     assert!(
         missing.is_empty(),
-        "the scanned parity region no longer contains {missing:?} — so this lint is BLIND to          whatever those do with a fixture stem. Re-anchor the span (lines {start}..{end}); do          not delete the row. The whole point of the region is that every consumer of the          classification is inside it."
+        "the scanned parity region no longer contains {missing:?} — so this lint is BLIND to \
+         whatever those do with a fixture stem. Re-anchor the span \
+         (tests/integration.rs:{}..{}); do not delete the row. The whole point of the region is \
+         that every consumer of the classification is inside it.",
+        start + 1,
+        end + 1,
+    );
+
+    // ⛔ AND EVERY CALL SITE'S BODY, not just the four signature lines. The
+    // check above passes as long as each `fn` HEADER is in-span, which a span
+    // ending one line into the regen still satisfies while excluding all of its
+    // body. The reader is only ever reached through these mentions, so covering
+    // them covers every consumer's body by construction.
+    let outside: Vec<String> = lines
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| l.contains("fixture_parity_exclusion") && !(start..end).contains(i))
+        .map(|(i, l)| format!("tests/integration.rs:{}: {}", i + 1, l.trim()))
+        .collect();
+    assert!(
+        outside.is_empty(),
+        "{} use(s) of the parity reader sit OUTSIDE the scanned span \
+         (tests/integration.rs:{}..{}), so this lint cannot see what they do with a stem:\n  {}\n\n\
+         Either the anchors drifted and the span must be re-cut to contain them, or a new \
+         consumer was added outside the harness region — in which case the region is no longer \
+         the right shape and the lint needs re-anchoring, NOT an exemption.",
+        outside.len(),
+        start + 1,
+        end + 1,
+        outside.join("\n  "),
     );
 
     // Legitimate, NAMED stem comparisons inside the region. Each is a specific
