@@ -12,7 +12,7 @@
 #       gorget_shared_drop ← Shared__int64_t__drop ← read_it
 #
 # — the CALLEE decrefs at scope exit and frees the cell under the caller. Root
-# cause is filed: `needs_param_drop` (`src/ir/types.rs:573`) keys on TYPE only and
+# cause is filed: `needs_param_drop` (`src/ir/types.rs:602`) keys on TYPE only and
 # cannot tell bare `Shared s` (borrow) from `Shared !s` (owned). See todo/t0108,
 # which this cell is evidence for — it is NOT a separate defect.
 #

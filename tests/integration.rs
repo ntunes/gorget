@@ -4504,7 +4504,7 @@ fn known_gap_comprehension_invariant_owned_body_double_free() {
 /// a plain function / method call these types are simply borrowed, so no
 /// operator is needed"* — and the callee decrefs it at scope exit anyway, so the
 /// caller's next `.get()` reads freed memory. Root cause already filed:
-/// `needs_param_drop` (`src/ir/types.rs:573`) keys on TYPE only and cannot tell
+/// `needs_param_drop` (`src/ir/types.rs:602`) keys on TYPE only and cannot tell
 /// bare `Shared s` from `Shared !s`. This is EVIDENCE for `todo/t0108`, not a
 /// separate defect.
 ///

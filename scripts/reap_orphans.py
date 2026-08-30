@@ -78,7 +78,7 @@ deadlocking on a single stale orphan.
     scripts/reap_orphans.py                # report (dry run), always exit 0
     scripts/reap_orphans.py --preflight    # exit 1 if the box is poisoned
     scripts/reap_orphans.py --reap         # SIGKILL the reapable set
-    scripts/reap_orphans.py --self-test    # four controls, incl. the NAME control
+    scripts/reap_orphans.py --self-test    # six planted procs, 16 assertions
 """
 from __future__ import annotations
 
@@ -409,7 +409,8 @@ def report(res, preflight=False, do_reap=False) -> int:
 
 
 # ─────────────────────────────── the self-test ───────────────────────────────
-# SIX controls. Two of them are incidents this file has already caused or nearly
+# SIX PLANTED PROCESSES, SIXTEEN ASSERTIONS. Two of them are incidents this file
+# has already caused or nearly
 # caused, encoded as regression tests; a third is the incident that motivated the
 # ownership predicate in the first place.
 #

@@ -24985,8 +24985,14 @@ fn stripper_handles_char_literals_and_lifetimes() {
     assert!(!out.contains("done"), "the string literal should still be stripped:\n{out}");
 
     // Every escape form, and the negatives. `keep_N` must survive each.
+    //
+    // ⚠ DOUBLE backslashes below, deliberately. In a Rust string literal `\'` is
+    // an escape for `'`, so the obvious spelling feeds the stripper THREE quotes
+    // in a row, which resolve through the UNESCAPED branch — the escape branch is
+    // never sampled while the doc comment claims it is pinned. Core #12: a
+    // fixture's name is a claim about scope.
     for (src, tag) in [
-        ("let a = '\''; keep_1();", "keep_1"),
+        ("let a = '\\''; keep_1();", "keep_1"),
         ("let a = '\\\\'; keep_2();", "keep_2"),
         ("let a = '\\n'; keep_3();", "keep_3"),
         ("let a = '\\u{1F600}'; keep_4();", "keep_4"),
@@ -24996,6 +25002,28 @@ fn stripper_handles_char_literals_and_lifetimes() {
     ] {
         let out = strip_rust_comments_and_strings(src);
         assert!(out.contains(tag), "{tag} was swallowed by: {src:?} -> {out:?}");
+    }
+
+    // ⚠ SURVIVAL OF THE FOLLOWING CODE IS NOT ENOUGH TO PIN THE ESCAPE BRANCH,
+    // and asserting only that would be a control green for the wrong reason
+    // (Q6). Measured: with the escape branch disabled, `'\''` is consumed as the
+    // 3-char `'\'` and the leftover `'` pairs with nothing, so every `keep_N`
+    // above still survives and the loop passes.
+    //
+    // What DOES distinguish is the residue: a correctly-consumed literal leaves
+    // NO quote and NO backslash behind, a half-consumed one leaves the orphan.
+    for src in [
+        "let a = '\\'';",
+        "let a = '\\\\';",
+        "let a = '\\u{1F600}';",
+        "let a = '\"';",
+    ] {
+        let out = strip_rust_comments_and_strings(src);
+        assert!(
+            !out.contains('\'') && !out.contains('\\'),
+            "the literal in {src:?} was only partly consumed -> {out:?}; an orphan \
+             quote is what a broken escape branch leaves behind",
+        );
     }
 
     // NEGATIVE: a `.try_wait()` INSIDE a string or a comment must still be
@@ -25049,8 +25077,8 @@ fn verdict_classifier_self_test_and_exclusivity() {
 
 /// **The orphan reaper certifies itself, including the incident that shaped it.**
 ///
-/// `scripts/reap_orphans.py --self-test` plants five live processes and checks
-/// all five dispositions. Two of them are the whole design:
+/// `scripts/reap_orphans.py --self-test` plants SIX live processes and makes
+/// SIXTEEN assertions about them. Three are the whole design:
 ///   * the NAME control — an identically-named binary OUTSIDE the scratch domain
 ///     must SURVIVE. A `pkill -f 'integration-[0-9a-f]'` has already killed a
 ///     live executor's release test binary mid-gate in this tree; the ownership
@@ -25061,6 +25089,14 @@ fn verdict_classifier_self_test_and_exclusivity() {
 ///     is not hypothetical either: the first version of the predicate dug digits
 ///     out of the MIDDLE of a word and invented an owner for a random `mkdtemp`
 ///     suffix, which its own self-test caught before it shipped.
+///   * the NON-LEADER control — a member of a STRANGER's process group must be
+///     killed by pid, and the stranger's group LEADER must survive. Without it
+///     every planted process was a group leader, so an unguarded
+///     `killpg(getpgid(pid))` passed every other control.
+///
+/// ⚠ And the whole run is confined to a per-invocation scratch prefix. An earlier
+/// version reaped whatever an UNRESTRICTED scan found — a box-wide SIGKILL fired
+/// by this very test, on a box with other agents on it.
 ///
 /// **The shared Python runner certifies itself, and MEASURES the stdlib defect.**
 ///

@@ -7,6 +7,13 @@ that forks is exactly the shape that leaves a spinner behind: on expiry CPython
 kills the DIRECT CHILD only and then blocks in `communicate()` on pipes the
 surviving grandchild still holds open. `proc_guard` makes the child a
 process-group leader and kills the group.
+
+⚠ AND EVERY SITE CHECKS `timed_out` EXPLICITLY. `subprocess.run`'s timeout RAISED;
+`proc_guard.run` RETURNS, because a timeout is a classification rather than a
+control-flow accident. Without the check a hung BUILD returns nonzero with no
+"semantic error" on stderr and is silently recorded as a build failure, and a hung
+RUN is recorded as "the binary printed nothing" — the false-CLEAN shape this whole
+change exists to retire, reintroduced by a mechanical call swap.
 """
 import os, pathlib, sys, glob
 
@@ -21,6 +28,8 @@ def test_one(gg_path):
 
     # Build reference (non-IR)
     r = proc_guard.run(["cargo", "run", "--quiet", "--", "build", gg_path], timeout=60)
+    if r.timed_out:
+        return ("SKIP", stem, "", "", "ref BUILD HUNG (killed at 60s)")
 
     if r.returncode != 0:
         # Reference build failed. If it's a semantic error, both pipelines should reject it.
@@ -30,6 +39,9 @@ def test_one(gg_path):
             return ("SKIP", stem, "", "", "ref build fail (non-semantic)")
         # Semantic error: verify GIR also rejects the program
         r_ir = proc_guard.run(["cargo", "run", "--quiet", "--", "build", "--ir", gg_path, "-o", ir_bin], timeout=60)
+        if r_ir.timed_out:
+            return ("MISMATCH", stem, "reject", "HUNG (killed at 60s)",
+                    "GIR build hung where the reference rejected")
         if r_ir.returncode != 0:
             return ("PASS", stem, "", "", "both reject (expected compile error)")
         else:
@@ -50,6 +62,8 @@ def test_one(gg_path):
         # Reference crashed with no stdout (e.g. div_by_zero, overflow, assert_fails).
         # Verify the GIR binary also crashes.
         r_ir = proc_guard.run(["cargo", "run", "--quiet", "--", "build", "--ir", gg_path, "-o", ir_bin], timeout=60)
+        if r_ir.timed_out:
+            return ("BUILD_FAIL", stem, "", "", "GIR BUILD HUNG (killed at 60s)")
         if r_ir.returncode != 0:
             err = r_ir.stderr.strip().split('\n')[-1] if r_ir.stderr else ""
             return ("BUILD_FAIL", stem, "", "", err[-150:])
@@ -71,6 +85,8 @@ def test_one(gg_path):
 
     # Build with IR
     r3 = proc_guard.run(["cargo", "run", "--quiet", "--", "build", "--ir", gg_path, "-o", ir_bin], timeout=60)
+    if r3.timed_out:
+        return ("BUILD_FAIL", stem, "", "", "GIR BUILD HUNG (killed at 60s)")
     if r3.returncode != 0:
         err = r3.stderr.strip().split('\n')[-1] if r3.stderr else ""
         return ("BUILD_FAIL", stem, "", "", err[-150:])

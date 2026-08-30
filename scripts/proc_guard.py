@@ -178,6 +178,12 @@ def _kill_group(pid, proc=None):
 
 SPAWN_ATTRS = {"run", "Popen", "call", "check_call", "check_output",
                "getoutput", "getstatusoutput"}
+# Module aliases this walker recognises. ⚠ A STATED LIMIT: `import subprocess
+# as X` for any other X is invisible to it. Measured 2026-08-30 -- the tree uses
+# only `subprocess` and `_sp`, so the hole is theoretical today; but this
+# enumerator is the witness the whole Python census rests on, and its blind spots
+# belong in writing rather than in someone's head.
+SPAWN_MODULES = ("subprocess", "sp", "_sp")
 
 # Sites that legitimately spawn WITHOUT going through `run()`: file -> (COUNT,
 # reason).
@@ -234,7 +240,7 @@ def census(root=None):
             name = None
             if isinstance(fn, ast.Attribute) and fn.attr in SPAWN_ATTRS:
                 base = fn.value
-                if isinstance(base, ast.Name) and base.id in ("subprocess", "sp", "_sp"):
+                if isinstance(base, ast.Name) and base.id in SPAWN_MODULES:
                     name = f"subprocess.{fn.attr}"
             elif isinstance(fn, ast.Name) and fn.id in ("Popen", "check_output", "check_call"):
                 name = fn.id
