@@ -711,7 +711,7 @@ struct TypeChecker<'a> {
     /// runs the bare-fallible-discard check on the tail statement exactly when
     /// this is set. Expression blocks (`Expr::Block`/`Expr::Do`) clear it (their
     /// tail IS consumed as the expression's value); nested statement blocks
-    /// (if/match branches, `with`/`unsafe` bodies) inherit it.
+    /// (if/match branches, `with` bodies) inherit it.
     tail_value_dropped: bool,
     /// Maps (function_name, span_start) → body scope id (for scope-aware lookups).
     function_body_scopes: &'a FxHashMap<(String, usize), ScopeId>,

@@ -315,7 +315,7 @@ fn walk_stmt<'a>(
         // consuming position, so the value is MOVED instead of cloned and the
         // later read returns garbage. Measured at pristine HEAD: `loop:` and
         // `throw` printed garbage at rc 0 on BOTH backends while ggdef printed
-        // the right answer, and `unsafe:` / a named scope / `with` /
+        // the right answer, and a named scope / `with` /
         // `assert return` ICE'd with `read after MoveZero`. `while true:` and
         // `loop:` differ by one keyword and differed in correctness.
         // Over-approximating is merely conservative (an extra clone), so every

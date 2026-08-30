@@ -453,7 +453,7 @@ pub(crate) fn cow_mutations_in_loop(
 
 /// Planner consumer #1 (scope pre-header) — the drift-free scope analog of
 /// `cow_mutations_in_loop`. Returns the UNION mutation-marker set that a whole
-/// non-loop SCOPE statement (`if`/`with`/`unsafe`/named-scope/`match`/`select`)
+/// non-loop SCOPE statement (`if`/`with`/named-scope/`match`/`select`)
 /// contributes, so its pre-scope hoist can materialize every bare param the scope
 /// mutates on any path — before the scope's `save_locals`, so the post-scope read
 /// sees the private copy on every path without a phi (the same write-site-hoist
@@ -862,7 +862,7 @@ fn cow_after_stmt(
             cow_after_block(&body.stmts, future, result, info, interner);
         }
         // Block-bearing scope forms: a mutating method / reassignment inside a
-        // `with` / `unsafe` / named-scope / bare block body is still a forward
+        // `with` / named-scope / bare block body is still a forward
         // mutation w.r.t. statements BEFORE the block. Omitting these left every
         // such mutation invisible to the prescan — a CoW element borrow taken
         // before a `with`-block that mutates its source collection would dangle

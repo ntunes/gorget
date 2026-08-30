@@ -2642,7 +2642,7 @@ pub(in crate::ir::lowering) fn materialize_loop_carried_bare_params(
 
 /// Planner consumer #1 — scope-carried bare-param materialize. Called at the
 /// `lower_stmt` DISPATCH ARM of every NON-LOOP scope form (`if`/elif/else,
-/// `with`, `unsafe`, named-scope, `match` arms, `select` arms) — i.e. in the
+/// `with`, named-scope, `match` arms, `select` arms) — i.e. in the
 /// PRE-SCOPE block, before the scope fn creates any block or runs its
 /// `save_locals`. For each in-scope bare (borrow) param the scope statement
 /// mutates on ANY path, eagerly materialize a private owned copy HERE through the
@@ -2660,7 +2660,7 @@ pub(in crate::ir::lowering) fn materialize_loop_carried_bare_params(
 /// needs no phi. Devbook/11 2G: fix at the WRITE site, never phi-repair at the
 /// merge. (Conditional scopes therefore hoist to the dominating pre-scope point;
 /// the identical treatment is sound for the straight-line scopes too — `with` /
-/// `unsafe` / named-scope have a single predecessor, so the entry hoist trivially
+/// named-scope has a single predecessor, so the entry hoist trivially
 /// dominates.)
 ///
 /// Eager-here-is-observationally-lazy: a bare param's private copy starts == the

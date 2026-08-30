@@ -218,7 +218,7 @@ pub enum ImplicitCloneReason {
     LoopPreHeaderMaterialize,
     /// CoW materialization hoisted to a SCOPE PRE-HEADER (a bare param a
     /// non-loop scope — an `if`/elif/else branch (bodies + conditions), `with`,
-    /// `unsafe`, named-scope, `match` arms (bodies + guards), `select` recv
+    /// named-scope, `match` arms (bodies + guards), `select` recv
     /// arms — mutates, hoisted once before the scope dispatch so the post-merge
     /// read sees the private copy without a phi). Distinct from
     /// `LoopPreHeaderMaterialize` (per-loop hoist; also covers loop-`else`
