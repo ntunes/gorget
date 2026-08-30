@@ -37124,10 +37124,11 @@ done",
 /// the comment at the assert).
 ///
 /// Role: DEV-LOOP ratchet, not a CI gate — CI sets `GG_RUNTIME_DIFF: "0"` in both
-/// integration jobs (`.github/workflows/ci.yml:162`, `:275`), i.e. it opts OUT
-/// explicitly, so this test early-returns there (correct semantics: the assert is
-/// bypassed only when no work was done). It does NOT "set neither" and there is
-/// no `GG_FULL` gate on this entry point at HEAD. The default-running per-fixture CI
+/// integration jobs, i.e. it opts OUT explicitly, so this test early-returns
+/// there (correct semantics: the assert is bypassed only when no work was done).
+/// It does NOT "set neither" and there is no `GG_FULL` gate on this entry point.
+/// Verify with `grep -rn "GG_RUNTIME_DIFF" .github/workflows/` rather than a line
+/// number — the two sites moved within the same commit that first cited them. The default-running per-fixture CI
 /// guard for self-host runtime behaviour is the `self_host_runtime` snapshot
 /// net below. What this floor adds: it guards the matching-but-UNsnapshotted
 /// fixtures, and turns every intentional north-star run (the documented
@@ -57633,28 +57634,18 @@ fn known_gap_method_returning_callable_called_in_chain() {
     run_gg("known_gaps/method_returning_callable_called_in_chain.gg", "true");
 }
 
-/// Assert the SELF-HOST driver REFUSES a fixture at check time — non-zero exit
-/// AND no emitted C. Shared by the primitive-receiver `E_NoMethodFound` net so
-/// the harness is written once; each caller spells its fixture path as a
-/// LITERAL.
+/// Did the SELF-HOST driver ACCEPT this fixture? Returns `(accepted, exit_code)`,
+/// where `accepted` means the driver exited 0 OR emitted a `main` — i.e. it
+/// lowered the program instead of refusing it. Pure MECHANISM: it makes no
+/// assertion and carries no diagnostic prose, so a second family can reuse it.
 ///
-/// ⚠ These pins run on the SELF-HOST lane on purpose. Rust gg has always
-/// rejected every one of them, so a `check_gg_fails` pin would be green today
-/// and would pin nothing (Core #12). The lagging lane is the one the assert must
-/// read. The three-lane VERDICT pins (C / LLVM / self-host) live in
-/// `spectests/run/reject_no_method_on_{float,string}.gg`; these add the stronger
-/// "emitted no C at all" property and widen the receiver-kind axis.
-/// The MECHANISM behind `assert_self_host_rejects`, factored out so a second
-/// diagnostic family can reuse it without inheriting the first one's failure
-/// prose. Returns `(accepted, exit_code)`, where `accepted` means the driver
-/// exited 0 AND emitted a `main` — i.e. it lowered the program instead of
-/// refusing it.
-///
-/// ⚠ Extracted rather than parameterising `assert_self_host_rejects`'s message:
-/// that helper has eight callers in the `E_NoMethodFound` net whose wording is
-/// correct for them, and adding an argument would have edited all eight to fix
-/// one. The rule this follows is the same one that kept the stdout pin OUT of
+/// ⚠ Extracted from `assert_self_host_rejects` rather than parameterising that
+/// helper's message: it has eight callers in the `E_NoMethodFound` net whose
+/// wording is correct for them, and adding an argument would have edited all
+/// eight to fix one. Same rule that kept the stdout pin OUT of
 /// `build_gg_expect_warning`: share the mechanism, never the assertion text.
+/// ⊕ The extraction is De Morgan-exact — the original asserted
+/// `!success && !has_main`, which is `!(success || has_main)`.
 fn self_host_accepts_and_emits(rel_fixture: &str) -> (bool, Option<i32>) {
     let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -57668,6 +57659,20 @@ fn self_host_accepts_and_emits(rel_fixture: &str) -> (bool, Option<i32>) {
     (out.status.success() || stdout.contains("int main("), out.status.code())
 }
 
+/// Assert the SELF-HOST driver REFUSES a fixture at check time — non-zero exit
+/// AND no emitted C. Shared by the primitive-receiver `E_NoMethodFound` net so
+/// the harness is written once; each caller spells its fixture path as a
+/// LITERAL. The accept/reject decision itself lives in
+/// `self_host_accepts_and_emits` above; what this adds is the `E_NoMethodFound`
+/// family's failure prose, which is why a different family calls the mechanism
+/// directly rather than this.
+///
+/// ⚠ These pins run on the SELF-HOST lane on purpose. Rust gg has always
+/// rejected every one of them, so a `check_gg_fails` pin would be green today
+/// and would pin nothing (Core #12). The lagging lane is the one the assert must
+/// read. The three-lane VERDICT pins (C / LLVM / self-host) live in
+/// `spectests/run/reject_no_method_on_{float,string}.gg`; these add the stronger
+/// "emitted no C at all" property and widen the receiver-kind axis.
 fn assert_self_host_rejects(rel_fixture: &str, what: &str) {
     let (accepted, exit_code) = self_host_accepts_and_emits(rel_fixture);
     assert!(

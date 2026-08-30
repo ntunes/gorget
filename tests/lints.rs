@@ -22708,20 +22708,25 @@ fn fmt_author_row_grouping_survives_formatting() {
 /// describing a bug that no longer exists.
 ///
 /// The behavioural instrument is `scripts/known_gaps_census.sh`, which runs the
-/// whole ignored roster and IS wired into CI (main job) — measured **2 min 39 s
-/// for all 159 rows** (2026-08-30, `time scripts/known_gaps_census.sh`, reporting
-/// `roster 159 · PASS 7 · FAIL 152`). ⚠ An earlier draft of this line said
-/// "~20 min", a pre-batching remnant, and the line that replaced it said "1 min
-/// 47 s for all 99 rows" and then sat unregenerated while the roster grew by 60:
-/// that figure is exactly the argument someone would use to DELETE the CI step,
+/// whole ignored roster and IS wired into CI (main job). **No timing or row
+/// count is quoted here, deliberately** — run `time scripts/known_gaps_census.sh`
+/// and read the `# roster N · PASS n · FAIL n` line it prints; that line is the
+/// number and it is always current.
+///
+/// ⚠ THE HISTORY IS THE ARGUMENT FOR NOT QUOTING ONE. This line has carried
+/// three wrong figures: "~20 min" (a pre-batching remnant), then "1 min 47 s for
+/// all 99 rows", which sat unregenerated while the roster grew by more than
+/// half. That is exactly the figure someone would cite to DELETE the CI step,
 /// and the assertion that would stop them is 250 lines below in this same
-/// function. Regenerate it or drop it; never carry it.
-/// ⚠ AND GREP FOR IT (Core #15d). Correcting the two copies here left two more
-/// alive, found only by grepping `known_gaps_census.sh`: the data file's own
-/// header (`tests/gaps/PASSING_ALLOWLIST.txt`, which also claimed `--fast ~13 s`
-/// against a measured 2 min 08 s) and `.github/workflows/ci.yml`, the very step
-/// the figure exists to justify. All four are regenerated as of 2026-08-30; a
-/// fifth spelling is what this note is here to prevent.
+/// function. Grepping `known_gaps_census.sh` — not the sentence — then found the
+/// same pair alive in `tests/gaps/PASSING_ALLOWLIST.txt`, in
+/// `.github/workflows/ci.yml` (the very step the figure justifies), and in the
+/// census script's own header, one line under an instruction not to trust
+/// quoted figures. **FIVE copies.** They were "regenerated" once and were stale
+/// again at the commit that published them, because the roster changes whenever
+/// anyone files a gap. So the numbers are GONE rather than refreshed, here and
+/// at all four siblings: a command cannot go stale, and the cost discussion now
+/// lives once, in the census script's header.
 ///
 /// This is the cheap half that runs in
 /// the normal lint gate: the census's finding set is committed as
@@ -22978,9 +22983,11 @@ fn known_gaps_passing_allowlist_shrink_only() {
         "scripts/known_gaps_census.sh --check is not run by .github/workflows/ci.yml.\n\
          This lint is the CHEAP half of a two-part guard and cannot catch the class on its \
          own: it fires when a human EDITS tests/gaps/PASSING_ALLOWLIST.txt, never when an \
-         `#[ignore]`d test silently starts passing. Only the census observes that. Measured \
-         2026-08-30: the full run is 2 min 39 s over all 159 rows, so there is no cost \
-         argument for leaving it out of the main job."
+         `#[ignore]`d test silently starts passing. Only the census observes that. Its cost \
+         is deliberately NOT quoted here (that figure rotted across five copies before it was \
+         removed) -- run `time scripts/known_gaps_census.sh` if you need it; the run is cheap \
+         because it batches, and the step also builds the test binaries the later steps need \
+         anyway, so there is no cost argument for leaving it out of the main job."
     );
 }
 

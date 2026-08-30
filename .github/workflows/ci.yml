@@ -107,19 +107,23 @@ jobs:
       # shebang (compare the comment on the step above: "A guard CI does not run
       # is not a guard").
       #
-      # IN THE MAIN JOB, not a separate one like the sanitize sweep: measured
-      # 2026-08-30 at 2 min 39 s for all 159 rows (regenerate with
-      # `time scripts/known_gaps_census.sh`), versus ~25 min for the sweep. The
-      # figure this replaced said `1 min 47 s for all 99 rows` and had gone
-      # unregenerated while the roster grew by 60 — a timing quoted to argue a
-      # step is cheap is exactly the number someone would use to DELETE it, so
-      # regenerate it or drop it, never carry it. Same stale figure lived in
-      # `tests/lints.rs` and `tests/gaps/PASSING_ALLOWLIST.txt`; all four
-      # spellings were regenerated together.
-      # marginal cost is smaller still — the step's `cargo test --no-run --tests`
-      # builds the integration binary the later steps need anyway, so it moves
-      # that build earlier rather than adding it. Per-commit is the right
-      # cadence here: a gap fixed as a side effect of an unrelated round should
+      # IN THE MAIN JOB, not a separate one like the sanitize sweep. NO TIMING IS
+      # QUOTED HERE, deliberately — `time scripts/known_gaps_census.sh` prints
+      # its own `# roster N · PASS n · FAIL n` line, and the cost discussion
+      # lives once, in that script's header. What makes it cheap is structural,
+      # not a number: the census BATCHES every row of a test file into one
+      # invocation so the ~90 s `driver.gg` build is shared, and this step's
+      # `cargo test --no-run --tests` builds the integration binary the later
+      # steps need anyway, so it moves that build earlier rather than adding it.
+      # ⚠ This comment carried `1 min 47 s for all 99 rows` while the roster
+      # grew past that by more than half — one of FIVE copies of the same rotted
+      # pair. It was regenerated once and was stale again at the commit that
+      # published it, because the roster changes whenever anyone files a gap.
+      # A timing quoted to argue a step is cheap is exactly the number someone
+      # would cite to DELETE it: give the command, never the figure.
+      #
+      # Per-commit is the right cadence here: a gap fixed as a side effect of
+      # an unrelated round should
       # be caught in the commit that fixes it, while the mechanism is still in
       # someone's head, not at the next round close.
       - name: known_gaps graduation census
