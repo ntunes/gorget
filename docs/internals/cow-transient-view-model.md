@@ -116,13 +116,30 @@ into a view return.
 
 ### Rule 3 — views are transient; there are no stored borrows
 
-A view never outlives the expression that produced it. This needs **no new
-mechanism and no borrow checker**, because every position where a value could
-come to *rest* — a local bind, a field init, a closure capture, a collection
-`push`, a `return`-as-owned — is *already* an ownership boundary that
-materializes (the "Ownership at Consuming Positions" set). A view that reaches
-any storage position hits the existing clone and becomes owned. So "no stored
-borrows" is the boundary set doing its existing job.
+A view never outlives the expression that produced it. Every position where a
+value could come to *rest* — a local bind, a field init, a closure capture, a
+collection `push`, a `return`-as-owned — is an ownership boundary, and a view
+reaching one becomes owned.
+
+**D52 (ratified 2026-08-30) amends this rule for the BIND position: a bind
+materializes UNLESS PROVABLY FREE.** For every other resting position the rule
+is unchanged — they materialize, full stop.
+
+⚠ **The amendment costs the free guarantee, and the cost is the point.** The
+original rule needed **no new mechanism and no borrow checker** precisely
+*because* a bind always materialized: safety fell out of the boundary set doing
+its existing job. Once a bind may be free, that guarantee must be
+**re-established by analysis**. The sufficient condition — not a decision
+procedure — is: free the bind only when, within its live range, **(i)** the
+binding is never mutated, **(ii)** the source is never mutated or dropped, and
+**(iii)** no call could reach the source. **Clone in every other case;
+materialize when unsure; never reject the program.** Obligation (ii) is where
+soundness lives, and a bug there is a **use-after-free, not a wrong answer**.
+
+⚠ **UNBUILT.** The analysis does not exist yet, so *today every bind still
+materializes* — the amendment states the intended rule, not current behaviour.
+D52 sequences it behind the soundness work for the reason recorded there: an
+unsound baseline cannot be measured against.
 
 Consequently the whole model is a **small delta**: (1) a typed view-of-self
 return flag replacing the name whitelist, and (2) the place-lvalue gate.
@@ -265,7 +282,8 @@ int b = g.copy_at(0).n     # owned T, but #13 borrows-and-reads → no clone eit
 g.view_at(0).n = 99        # ✓ writes through
 g.copy_at(0).n = 99        # ✗ rejected — owned return, not a place
 
-# BIND: both materialize (no stored borrows) — #13 does NOT apply to binds
+# BIND: today both materialize. D52 amends this — #13 DOES cover binds:
+#      a bind is free when provably safe, and materializes otherwise (UNBUILT).
 Cell c = g.view_at(0)      # owned copy; the Ref evaporates
 Cell d = g.copy_at(0)      # owned copy
 ```

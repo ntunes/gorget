@@ -3125,6 +3125,27 @@ baseline.
   `Box[Concrete]` → `Box[Trait]` is an implicit upcast, since silence there is what let the ambiguity
   stand.
 
+- 2026-08-30 — **🎯 D52 RATIFIED (owner): CoW **RULE 3 IS AMENDED** — a bind **MATERIALIZES UNLESS PROVABLY FREE**. #13 (return-view lazy materialization) **DOES cover binds**.**
+
+  **The ruling, verbatim:** asked whether #13 covers binds — *"which means amending CoW Rule 3 from 'a bind always materializes' to 'materializes unless provably free'"* — the owner answered: ***"materializes unless provably free."***
+
+  **What it resolves.** `todo/t0544` has blocked since 2026-07-24 on exactly this sentence, and `todo/t0543` states *"BLOCKED ON `t0544` — that must be ruled before an executor track opens."* The block is now lifted. The owner had stated the position on 2026-08-27; `t0544` correctly recorded it as **not yet ratified**. It is ratified now.
+
+  **What changes, precisely.** `docs/internals/cow-transient-view-model.md` Rule 3 (*"views are transient; there are no stored borrows"*) rests on: *"every position where a value could come to rest — a local bind, a field init, a closure capture, a collection `push`, a `return`-as-owned — is ALREADY an ownership boundary that materializes."* That sentence is what supplies memory safety **without a borrow checker**, for free. Amending it means **the guarantee must be re-established by analysis** for the bind position specifically.
+
+  ⚠ **THE SUFFICIENT CONDITION, not a decision procedure** (from `t0543`, and it is the operative shape): free the bind only when, within its live range, **(i)** the binding is never mutated, **(ii)** the source is never mutated or dropped, and **(iii)** no call could reach the source; **clone in every other case.** Materialize-when-unsure — **never reject the program**. Obligation **(ii)** is where soundness lives, and a bug there is a **UAF, not a wrong answer**.
+
+  **DOC WRITE-THROUGH OWED (standing rule 1 — a decision is not DONE until the docs agree):**
+  * `docs/internals/cow-transient-view-model.md` — Rule 3's statement, and its § *Articulation with #13* worked example, which today reads verbatim `# BIND: both materialize (no stored borrows) — #13 does NOT apply to binds`. **That line is now false.**
+  * `docs/language-design.md` — the §3.6 user-facing split.
+  * `docs/internals/cow-cost-contract.md` — it owns the cost axis and merely *reads* the legality axis.
+
+  **⚠ WHAT THIS RULING DOES *NOT* DO.** It does not unblock the DEEP-1 executor track on its own. `t0543` records the owner's own sequencing ruling — **SOUNDNESS FIRST, at the accepted cost of safe-but-wasteful cloning** — because *"an unsound baseline cannot be measured against"*, and layering laziness on an aliasing bug *"would bake the aliasing in rather than expose it."* At R47 close, obligation (ii)/(iii) still has **three CRITICAL live UAFs** (`t0763`, `t0770`, `t0771` — the last one silent, with no crash to trip a gate) plus `t0772`. Those close first.
+
+  **⊕ AND THE YIELD SPLIT IS STILL UNSETTLED** — `t0544`'s second half. The advertised *"~65–71% is ONE class"* combines `ReturnFromBorrow` (genuine cross-return reclaim) with `VarDeclFromBorrow` (the self-host-excess bind slice, which needs **no #13 machinery at all**). With binds now in scope the two are no longer separable by definition, but they remain separable by **route**: the SH-excess slice is still the cheap, no-new-machinery first step `t0543` sequences first. **Re-derive both halves with `scripts/clone_attribution.sh` before quoting any number.**
+
+  **⚠ SOURCE CORRECTION, verified 2026-08-30.** `t0543`/`t0544` both carry *"DEAD CITE — `docs/internals/unified-resource-model.md` DOES NOT EXIST and has NO SUCCESSOR"*. That is true of **that file** — `c09b23d7` dropped it whole, *"including Phase B and its four open design questions"*, per an owner decision that round — but the items' framing has misled at least one reader (this orchestrator) into believing the whole design tree was gone. **It is not.** `docs/internals/` survives with four status-headed files, and the live design homes for this effort are **`cow-transient-view-model.md` (RATIFIED-UNBUILT, elaborates D41 — the legality axis)** and **`cow-cost-contract.md` (RATIFIED-UNBUILT, elaborates D42 — the cost axis, which owns #13)**. History: `e6588ff8` deleted the tree claiming a devbook fold, `1346ecc4` reverted that because the fold had left **phantom devbook citations** and had conflated the shipped value-axis D6 with the deferred borrow-axis `Slot.origin`; `c09b23d7` then retired 21 of 24 files deliberately. **Recover the dropped file only if a briefing needs it: `git show c09b23d7^:docs/internals/unified-resource-model.md`.**
+
 - 2026-08-28 — **🎯 D50 RATIFIED (owner): `unsafe` IS REMOVED FROM THE LANGUAGE — THE RESERVED KEYWORD AND ALL SUPPORT.**
 
   **The ruling, verbatim:** *"'unsafe' was a placeholder for a feature never implemented in gorget. I think we should remove the reserved keyword from the lexer and remove all support for the feature. We never finished it, and shouldn't do it now."*
