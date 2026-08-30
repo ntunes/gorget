@@ -78,8 +78,8 @@ GG_BACKEND=llvm cargo test --test integration --release dict_user_key_hashable
 
 - `docs/define-gorget/decisions.md` — **the RATIFIED OWNER DECISIONS. OUTRANKS every doc below** — read FIRST.
 - `docs/book/` — [The Gorget Book](docs/book/README.md): learn the language from scratch (assumes programming experience)
-- `docs/language-reference.md` — Full syntax and semantics (the authoritative spec)
 - `docs/language-design.md` — Design philosophy, safety, rationale
+- `docs/language-reference.md` — Full syntax and semantics, written AFTER the code
 - `docs/devbook/` — [Compiler Internals](docs/devbook/README.md): pipeline and design docs
 
 **`docs/book/` and `docs/devbook/` read like a published book** — timeless present-tense design narrative faithful to INTENDED behavior, never a fix-log. No dates, commit hashes, `Snag #N` labels or perf "win" numbers in design chapters — those belong in `DONE.md` and `docs/devbook/29`–`30`. A round that changes behavior owes a doc-write-through; book-ifying a chapter rotted into changelog style is its own DOC track.

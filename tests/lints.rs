@@ -9203,7 +9203,7 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
     ("REF-binary", "**Binary:** `gg` with commands", 1),
     ("REF-commands", "`lex`, `parse`, `check`, `build`, `run`", 1),
     ("REF-doc-book", "learn the language from scratch", 1),
-    ("REF-doc-ref", "Full syntax and semantics (the authoritative spec)", 1),
+    ("REF-doc-ref", "Full syntax and semantics, written AFTER the code", 1),
     ("REF-doc-design", "Design philosophy, safety, rationale", 1),
     ("REF-doc-ledger", "the RATIFIED OWNER DECISIONS", 1),
     ("REF-doc-ledger2", "OUTRANKS every doc below", 1),
