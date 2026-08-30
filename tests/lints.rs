@@ -8856,8 +8856,12 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("MA-4", "Parent drives the integration sweep, not agents"),
     ("MA-5", "Brief file zones when running agents in parallel"),
     ("MA-5b", "Scout the overlap first"),
-    ("MA-6", "Clean up scratch and worktrees once integrated or abandoned"),
-    ("MA-6b", "needs an explicit keep-list"),
+    ("MA-6", "Prune a track's worktrees the moment it INTEGRATES"),
+    ("MA-6f", "Safe iff CLEAN"),
+    ("MA-6h", "uncommitted work always is"),
+    ("MA-6i", "check `git status --porcelain`"),
+    ("MA-6g", "`df` lies in a container"),
+    ("MA-6b", "needs a keep-list"),
     ("MA-6c", "Also sweep `/tmp`"),
     ("MA-7", "Worktree-RELATIVE paths only"),
     ("MA-7b", "re-Read and retry the Edit tool"),
@@ -9044,7 +9048,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("MA-3b", "NEVER `git add -a`, `git add .`, or `git commit -a`"),
     ("MA-5c", "Do NOT defer or reshape a worthwhile parallel track to avoid overlap"),
     ("MA-5d", "brief EACH on the other's exact edit regions"),
-    ("MA-6d", "Read the dry-run first"),
+    ("MA-6d", "dry-run first"),
     ("MA-7c", "run `git -C <main-checkout> status` and STOP if it shows changes"),
     // Reworded 2026-08-28: the old instruction said `git diff`, which silently
     // omits untracked files — so a checkpoint dropped the `todo/` item a killed
@@ -9259,7 +9263,6 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
     ("WHY-dbg-rep", "Repeat.", 1),
     ("WHY-sh-tests", "tests will catch regressions", 1),
     ("WHY-ma3", "A sweeping stage clobbers other agents' uncommitted work", 1),
-    ("WHY-ma6", "Not \"later\" — \"later\" is when the disk is already full", 1),
     ("WHY-ma7", "so an unqualified absolute path", 1),
     ("WHY-ma7b", "necessary but NOT sufficient when the worktrees are children", 1),
     ("WHY-rl-atom", "is the atom; a **round** is the unit the orchestrator works in", 1),
@@ -9268,7 +9271,6 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
     ("LEAD-15e7", "⚠ Plus one about the record itself:", 1),
     ("LEAD-sh-rules", "Rules:", 1),
     ("LEAD-four", "This applies to four kinds of artifact:", 1),
-    ("LEAD-ma6", "Closing step of every round:", 1),
     ("LEAD-ma2-paths", "(Concrete paths live in the session handover.)", 1),
     ("LEAD-ma7-paths", "(The concrete main-checkout path for the current environment", 1),
     ("EG-sib-producer", "`maybe_auto_propagate` hoisted to the `lower_expr` exit", 1),
@@ -9594,7 +9596,7 @@ fn agents_md_every_clause_is_classified() {
 /// Raising either needs the same owner sign-off as raising the byte ceiling —
 /// unpinned prose ACCUMULATING is what this exists to notice.
 const AGENTS_MD_MAX_UNPINNED_RUN: usize = 160;
-const AGENTS_MD_MAX_RUNS_OVER_100: usize = 51;
+const AGENTS_MD_MAX_RUNS_OVER_100: usize = 50;
 
 /// Logical blocks for coverage: hard-wrapped continuation lines joined, code
 /// fences kept (each command line stands alone), headings dropped.
