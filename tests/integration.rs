@@ -30374,7 +30374,10 @@ fn self_host_bootstrap() {
     // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
     // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
     // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
-    // inflow. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
+    // inflow. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
+    // and this test's own instrument disagree by 294 clones on that axis alone
+    // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
+    // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
     // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
     // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
     // SITE: by ablation, 33% of the array overage and 47% of the string overage sit
@@ -30462,7 +30465,10 @@ const SELF_COMPILE_ARRAY_CLONE_CEILING: u64 = 13_144_626;
     // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
     // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
     // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
-    // inflow. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
+    // inflow. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
+    // and this test's own instrument disagree by 294 clones on that axis alone
+    // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
+    // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
     // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
     // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
     // SITE: by ablation, 33% of the array overage and 47% of the string overage sit
@@ -30783,7 +30789,10 @@ fn self_host_clone_ceiling() {
     // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
     // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
     // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
-    // inflow. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
+    // inflow. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
+    // and this test's own instrument disagree by 294 clones on that axis alone
+    // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
+    // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
     // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
     // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
     // SITE: by ablation, 33% of the array overage and 47% of the string overage sit
@@ -30954,7 +30963,10 @@ const STAGE1_ARRAY_CLONE_CEILING: u64 = 1_129_955_831;
     // the WHOLE delta on all four axes is Track D1 (+52,221 / +98,019 / +5,063,623
     // / +10,411,779) — arithmetic closes to the unit with zero residue, and base
     // f3feea79 equals the PREVIOUS ceilings EXACTLY, so 100% of it is R47's own
-    // inflow. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
+    // inflow. ⚠ THE STAGE-0 STRING FIGURE IS NOT YET TRUSTWORTHY: bench_stages.sh
+    // and this test's own instrument disagree by 294 clones on that axis alone
+    // (31,474,506 vs the 31,474,212 printed here) — track F5 adjudicates which is
+    // right. ⚠ CORRECTION TO THIS COMMENT'S EARLIER TEXT: A2 is NOT understated —
     // its +0.108% re-measures bit-exactly and A2 moves stage-0 DOWN; +0.428% is the
     // CUMULATIVE overage since A2's pin, never A2's own. ⚠ THE DEBT HAS A NAMED
     // SITE: by ablation, 33% of the array overage and 47% of the string overage sit
