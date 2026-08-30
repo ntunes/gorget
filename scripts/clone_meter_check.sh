@@ -35,8 +35,13 @@
 # above are about a DIFF, and the failure class is an ABSENCE — nobody measured.
 # A provenance line can prove WHO wrote a pin; it can never prove that anyone
 # measured. The only tree-adjacent signal that can is history against the
-# declared closure, which is what this script computes. Its RED case is
-# demonstrated in `tests/lints.rs::clone_meter_check_refuses_an_unattributed_track`.
+# declared closure, which is what this script computes. `--track`'s RED cases —
+# a closure-touching diff with no attribution, and a diff that moves a pin — are
+# demonstrated in `tests/lints.rs::clone_meter_check_refuses_an_unattributed_track`,
+# which is the ONLY test that runs this script. `--pin-staleness` and
+# `--anchor-age` have no test and no caller; their REDs have been shown by hand
+# and are recorded in the track report, which is not a durable place for them
+# (`todo/t0851`).
 #
 # It builds NOTHING: git + grep only, so an output-review that is barred from
 # building can still run it.

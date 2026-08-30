@@ -18546,8 +18546,11 @@ fn count_bang_move_in_code(roots: &[&str]) -> usize {
 /// D22 shrink-only lint (Core #6 executable guard). Retiring `.slice()` on
 /// String/Vector receivers in favor of colon-slice `v[a:b]` (ratified
 /// 2026-07-06). Track C-3a landed the non-SH migration + this ratchet;
-/// Track C-3b (211 SH sites in `tests/fixtures/self_host_lowerer/`, recounted
-/// 2026-08-30 — regenerate rather than quote) is
+/// Track C-3b (**205 call sites** in `tests/fixtures/self_host_lowerer/` across
+/// 11 files, recounted 2026-08-30 by THIS function — i.e. after strings and
+/// comments are stripped, which is what a migration has to change; a raw
+/// `grep -o '\.slice('` says 211 across 12 because 6 sit inside string
+/// literals and comments. Regenerate rather than quote either) is
 /// hard-blocked on Track A (SH stage-2 memory-safety fix) and defers to
 /// R40 if A stalls. Meanwhile the SH corpora sit in an ALLOWLIST — the
 /// allowlist entry drops out atomically when C-3b lands, ratcheting the
@@ -18618,11 +18621,14 @@ fn count_dot_slice_in_code(roots: &[&str]) -> usize {
             // are gated on Track A (SH stage-2 memory-safety fix) landing
             // before Track C-3b can migrate them. Remove this check when C-3b
             // lands (atomic ceiling ratchet → 0).
-            // ⚠ The count is 211, not the 208 this comment carried: recounted
-            // 2026-08-30 over `self_host_lowerer/*.gg` (12 files;
-            // `self_host_typechecker/*.gg` has none of its own, the 14 that
-            // appear there are the symlink seam). Regenerate the number rather
-            // than quoting this one.
+            // ⚠ The count is 205, not the 208 this comment carried: recounted
+            // 2026-08-30 over `self_host_lowerer/*.gg` by the stripping walk
+            // below — 205 CALL SITES across 11 files. A raw `grep -o '\.slice('`
+            // over the same glob says 211 across 12, the difference being 6
+            // occurrences inside string literals and comments, which a migration
+            // does not touch. `self_host_typechecker/*.gg` has none of its own;
+            // the 14 that appear there are the symlink seam. Regenerate the
+            // number rather than quoting either.
             //
             // ⚠ R47: THAT MIGRATION IS NOT COSMETIC, AND NOBODY HAD MEASURED
             // IT. `.slice(a, b)` materializes an OWNED String on every call;
@@ -25049,7 +25055,11 @@ fn clone_meter_check_refuses_an_unattributed_track() {
     // newest one whose own `<sha>~1..<sha>` range does NOT also move a pin, so
     // the range exercises exactly the branch under demonstration and not the
     // separate "tracks do not re-pin" refusal.
-    let mut args = vec!["log", "-40", "--format=%H", "--"];
+    // ⊕ Recency IS the right axis here, unlike the pin-mover search below: this
+    // wants the NEWEST closure-touching commit, and integration only ever adds
+    // newer ones, so a sibling landing ahead moves the answer forward rather
+    // than out of reach. The bound is generous for the same reason.
+    let mut args = vec!["log", "-200", "--format=%H", "--"];
     args.extend(roots.split_whitespace());
     let out = std::process::Command::new("git").args(&args).output().expect("git log");
     let candidates: Vec<String> =
@@ -25139,13 +25149,29 @@ fn clone_meter_check_refuses_an_unattributed_track() {
     // SIGPIPE, and the pipeline reports 141, so the `if` was never true. It
     // passed every review and every run until it was pointed at a commit that
     // really did move a pin. Hence this third demonstration.
-    let pin_mover = candidates.iter().find(|s| moves_a_pin(s)).cloned().or_else(|| {
+    //
+    // ⚠ AND THE SEARCH FOR THAT COMMIT IS BY CONTENT, NOT BY RECENCY — the
+    // first version bounded it to the last N commits and BROKE ON INTEGRATION.
+    // On the track's own branch the pin-moving commit was 4 deep; merged onto a
+    // main carrying a sibling track's whole history it fell outside the window,
+    // and this test failed in the parent's merge with its own "widen the
+    // search" message. A recency window is a promise about how many commits
+    // land ahead of you, which is not a promise a track can make.
+    // `git log -G<text>` searches every commit whose DIFF touched that text, so
+    // it cannot be pushed out by anything landing in between.
+    let pin_movers = |needle: &str| -> Vec<String> {
         let out = std::process::Command::new("git")
-            .args(["log", "-60", "--format=%H", "--", "tests/integration.rs"])
+            .args(["log", &format!("-G{needle}"), "--format=%H", "--", "tests/integration.rs"])
             .output()
-            .expect("git log");
-        String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).find(|s| moves_a_pin(s))
-    });
+            .expect("git log -G");
+        String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect()
+    };
+    // Two plain-substring searches rather than one alternation: no dependence
+    // on which regex flavour `-G` is configured for.
+    let pin_mover = pin_movers("_CLONE_PIN:")
+        .into_iter()
+        .chain(pin_movers("_CLONE_ROUND_OPEN:"))
+        .find(|s| moves_a_pin(s));
     match pin_mover {
         Some(pm) => {
             let red2 = run(&format!("{pm}~1"), &pm, good.to_str().unwrap());
@@ -25158,8 +25184,10 @@ fn clone_meter_check_refuses_an_unattributed_track() {
             );
         }
         None => panic!(
-            "no commit in recent history moves a clone pin, so the 'tracks do not re-pin' branch \
-             cannot be demonstrated. Widen the search rather than dropping the demonstration."
+            "no commit in this history moves a clone pin, so the 'tracks do not re-pin' branch \
+             cannot be demonstrated. This is a CONTENT search over all of history, so a sibling \
+             track landing ahead cannot cause it — suspect a shallow clone, or the constants \
+             having been renamed without updating the two needles above."
         ),
     }
 
