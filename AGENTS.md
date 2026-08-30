@@ -76,12 +76,13 @@ GG_BACKEND=llvm cargo test --test integration --release dict_user_key_hashable
 
 ## Documentation
 
-- `docs/book/` — [The Gorget Book](docs/book/README.md): learn the language from scratch (assumes programming experience, not Gorget experience)
-- `docs/language-reference.md` — Full syntax and semantics specification (the authoritative language spec)
-- `docs/language-design.md` — Design philosophy, safety features, and rationale
-- `docs/devbook/` — [Compiler Internals Book](docs/devbook/README.md): contributor-facing pipeline and design docs
+- `docs/define-gorget/decisions.md` — **the RATIFIED OWNER DECISIONS. OUTRANKS every doc below** — read FIRST.
+- `docs/book/` — [The Gorget Book](docs/book/README.md): learn the language from scratch (assumes programming experience)
+- `docs/language-reference.md` — Full syntax and semantics (the authoritative spec)
+- `docs/language-design.md` — Design philosophy, safety, rationale
+- `docs/devbook/` — [Compiler Internals](docs/devbook/README.md): pipeline and design docs
 
-**`docs/book/` and `docs/devbook/` read like a published book** — timeless present-tense design narrative faithful to INTENDED behavior, never a fix-log. No dates, commit hashes, `Snag #N` labels, or parity/perf "win" numbers in design chapters — those belong in `DONE.md` and the playbook chapters (`docs/devbook/29`–`30`). A round that changes behavior owes a doc-write-through; book-ifying a chapter that has rotted into changelog style is its own DOC track, reviewed like any work.
+**`docs/book/` and `docs/devbook/` read like a published book** — timeless present-tense design narrative faithful to INTENDED behavior, never a fix-log. No dates, commit hashes, `Snag #N` labels or perf "win" numbers in design chapters — those belong in `DONE.md` and `docs/devbook/29`–`30`. A round that changes behavior owes a doc-write-through; book-ifying a chapter rotted into changelog style is its own DOC track.
 
 ## Project Structure
 
@@ -305,7 +306,7 @@ A **fresh** agent must review any non-trivial artifact before it's acted on, fol
 
 **Scout before you brief.** This tree's most expensive mistakes were briefs built on stale premises. Before writing a brief — and before committing to any non-trivial plan — run a scout: a read-only probe/audit (often a delegated `Explore` agent) that verifies every load-bearing premise against CURRENT source with `file:line`, confirms the bug still reproduces, and where a yield is claimed prototypes it end-to-end and MEASURES the real result — in a throwaway worktree, shipping no diff. Killing an unsound plan after a one-agent scout is a win. Scout yield estimates MUST be end-to-end-verified — compile AND run AND diff whole output, never source-read.
 
-**Ground the scout's design in the docs, not just the code.** Every scout brief MUST tell the agent to consult the relevant documentation FIRST — `docs/language-design.md`, `docs/book/`, `docs/devbook/`, `docs/internals/` — and base the design on it, citing the sections it rests on. The code shows what IS; the docs show what's INTENDED, and a code-only design reproduces whatever fossil is there. ⚠ EXCEPT `docs/language-reference.md`, written AFTER the implementation, a reference-vs-code conflict is an OPEN QUESTION, not doc-wins, and a load-bearing one is an OWNER ASK.
+**Ground the scout's design in the docs, not just the code.** Every scout brief MUST tell the agent to consult FIRST — **`docs/define-gorget/decisions.md` (RATIFIED, outranks the rest)**, `docs/language-design.md`, `docs/book/`, `docs/devbook/`, `docs/internals/` — and cite what it rests on. The code shows what IS; the docs show what's INTENDED, and a code-only design reproduces whatever fossil is there. ⚠ EXCEPT `docs/language-reference.md`, written AFTER the implementation, a reference-vs-code conflict is an OPEN QUESTION, not doc-wins, and a load-bearing one is an OWNER ASK.
 
 **The passes are SEQUENTIAL, not parallel**; a blocking pass always gets a confirming fresh pass after the fold. ≥3 passes is the FLOOR; there is NO upper bound on passes that keep finding DESIGN defects — consecutive blocking passes are the gauntlet CONVERGING, not failing. **Launch the executor as soon as a fresh pass signs off the DESIGN.** ⚠ **A track that cannot get its design signed off is REBUILT or SPLIT, never reviewed harder** — repeated DESIGN rejection is evidence about the BRIEF (its root cause, its scope, its size), not a reason for another pass; record which in `DONE.md`. ⊕ **SPLIT also when the scope genuinely grows too much** — each half becomes its own track, with its own brief, gauntlet and worktree, in the SAME round; a split is division, never deferral.
 

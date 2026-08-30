@@ -8776,7 +8776,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("DOC-book", "read like a published book"),
     ("DOC-nodates", "No dates, commit hashes"),
     ("DOC-writethrough", "owes a doc-write-through"),
-    ("DOC-bookify", "book-ifying a chapter that has rotted into changelog style"),
+    ("DOC-bookify", "book-ifying a chapter rotted into changelog style"),
     ("SYN-sigils", "sigils go in the name's slot"),
     ("SYN-typefirst", "Always use type-first Gorget syntax"),
     ("SYN-String", "`str` is not a keyword"),
@@ -9142,7 +9142,7 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("RL-7-auto", "battery and parity regen all run AUTONOMOUSLY"),
     ("CORE-15e7b", "A considered decision in a scratch file outranks a stale one in the ledger"),
     ("CORE-15e7c", "the fix is to **file it properly**, not to discount it"),
-    ("DOC-nodates2", "those belong in `DONE.md` and the playbook chapters"),
+    ("DOC-nodates2", "those belong in `DONE.md` and `docs/devbook/29`"),
     ("CORE-13b2", "Run the shape through the oracle during triage and treat disagreement as the finding"),
     ("SQ-history4", "grep `DONE.md`, `todo/`, `git log`, AND the Rust impl in `src/`"),
     ("CMD-integration", "```bash scripts/run_integration.sh 2>&1 | tee"),
@@ -9156,8 +9156,9 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("MA-7e", "never fall back to a shell heredoc with an absolute path"),
     ("CORE-8e", "is *necessary, not sufficient*"),
     ("CORE-8f", "most often by making the language *reject* it"),
-    ("REV-docs3", "MUST tell the agent to consult the relevant documentation FIRST"),
-    ("REV-docs4", "citing the sections it rests on"),
+    ("REV-docs3", "MUST tell the agent to consult FIRST"),
+    ("REV-ledger", "RATIFIED, outranks the rest"),
+    ("REV-docs4", "cite what it rests on"),
     ("CORE-3b", "registered for drop (or provably moved) at the producer"),
     ("RL-1-lens3", "bias class-fix (Core #4) and bulk-graduation over instance-fixes-with-follow-ups"),
     ("REV-scope2", "A TREE defect found while reviewing, and an ORCHESTRATOR fold/guard defect, are not the track's"),
@@ -9202,9 +9203,11 @@ const AGENTS_MD_NON_NORMATIVE: &[(&str, &str, usize)] = &[
     ("REF-binary", "**Binary:** `gg` with commands", 1),
     ("REF-commands", "`lex`, `parse`, `check`, `build`, `run`", 1),
     ("REF-doc-book", "learn the language from scratch", 1),
-    ("REF-doc-ref", "Full syntax and semantics specification", 1),
-    ("REF-doc-design", "Design philosophy, safety features, and rationale", 1),
-    ("REF-doc-devbook", "contributor-facing pipeline and design docs", 1),
+    ("REF-doc-ref", "Full syntax and semantics (the authoritative spec)", 1),
+    ("REF-doc-design", "Design philosophy, safety, rationale", 1),
+    ("REF-doc-ledger", "the RATIFIED OWNER DECISIONS", 1),
+    ("REF-doc-ledger2", "OUTRANKS every doc below", 1),
+    ("REF-doc-devbook", "pipeline and design docs", 1),
     ("REF-src-lexer", "Logos-based tokenizer with indentation tracking", 1),
     ("REF-src-parser", "Recursive descent parser producing AST", 1),
     ("REF-src-sem", "Name resolution, type checking, trait registry", 1),
@@ -9596,7 +9599,7 @@ fn agents_md_every_clause_is_classified() {
 /// Raising either needs the same owner sign-off as raising the byte ceiling —
 /// unpinned prose ACCUMULATING is what this exists to notice.
 const AGENTS_MD_MAX_UNPINNED_RUN: usize = 160;
-const AGENTS_MD_MAX_RUNS_OVER_100: usize = 50;
+const AGENTS_MD_MAX_RUNS_OVER_100: usize = 49;
 
 /// Logical blocks for coverage: hard-wrapped continuation lines joined, code
 /// fences kept (each command line stands alone), headings dropped.
