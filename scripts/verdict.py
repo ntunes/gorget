@@ -143,11 +143,30 @@ SEVERITY = [
     "REJECTED",      # ratified 1 on the build phase: a diagnostic doing its job
     "USAGE",         # ratified 2
     "FUEL",          # ratified 103 (ggdef totality guard)
+    "EXIT",          # a USER PROGRAM chose a nonzero exit code. Not a fault.
     "CLEAN",         # positive: rc 0, no finding, no timeout
 ]
 SEVERITY_RANK = {name: i for i, name in enumerate(SEVERITY)}
 
 PHASES = ("build", "run")
+
+# ⚠ WHOSE EXIT CODE IS THIS? A REQUIRED INPUT, and its absence produced a
+# confident wrong answer on the first full corpus sweep.
+#
+# The ratified taxonomy (`decisions.md:2062-2070`) is the TOOLCHAIN's contract —
+# what `gg` and `ggdef` return. It does NOT constrain a user's program: the same
+# ledger entry hands the small-int band to the USER as their exit API
+# (`:2073`, *"`main throws int` hands the small-int band to the USER as their
+# exit API"*). So "rc off the ratified set ⇒ CRASH" is right for the toolchain
+# and WRONG for a program.
+#
+# Measured, not reasoned: `tests/fixtures/gg_impl_exit7.gg` is a fixture whose
+# entire purpose is `exit(7)` — the self-host driver must propagate it unchanged
+# — and the first version of this classifier graded it `CRASH:rc7` and RED-ed a
+# round-close gate over a program doing exactly what it was written to do. Same
+# shape as the PHASE lesson one input earlier: the exit code alone never meant
+# what it appeared to mean.
+SUBJECTS = ("toolchain", "program")
 
 # ── the sanitizer marker set ─────────────────────────────────────────────────
 # The complete set: BOTH UBSan forms are here, which no single incumbent site
@@ -275,8 +294,8 @@ class Verdict:
                 out.append(f"ASAN_{kind}")
             elif base == "UB":
                 out.append("UBSAN")
-            elif base == "CRASH":
-                out.append(f)          # CRASH:sig11 / CRASH:rc139 — kind captured
+            elif base in ("CRASH", "EXIT"):
+                out.append(f)          # CRASH:sig11 / EXIT:7 — the value captured
             else:
                 out.append(base)
         return ",".join(out)
@@ -286,29 +305,45 @@ def _base(finding: str) -> str:
     return finding.split(":", 1)[0]
 
 
-def _off_taxonomy_crash(rc, exit_axis, detail):
-    """OFF-TAXONOMY. The ratified set is TOTAL, so its complement is exactly the
-    fault domain — an rc outside it can never be CLEAN, with ratified backing
-    rather than a heuristic. The signal is CAPTURED from the code, not matched
-    against a list of "interesting" signals."""
-    if 128 < rc < 192:
-        label = f"CRASH:sig{rc - 128}"
-        why = (f"rc {rc} = 128 + signal {rc - 128} (shell convention); "
-               f"off the ratified taxonomy")
-    elif rc < 0:
+def _off_taxonomy_crash(rc, exit_axis, detail, subject):
+    """A signal death is always a CRASH. An off-taxonomy plain exit is a crash
+    only for the TOOLCHAIN.
+
+    For the toolchain the ratified set is TOTAL, so its complement is exactly the
+    fault domain — with ratified backing rather than a heuristic. For a USER
+    PROGRAM the small-int band is the user's own exit API (`decisions.md:2073`),
+    so a plain `exit(7)` is a deliberate outcome, not a fault: `EXIT:7`. It is
+    still not CLEAN — CLEAN means rc 0 with nothing found — so nothing can hide
+    behind it.
+
+    ⚠ The 128+n band under SHELL reporting is the one place a program could
+    spoof a signal by exiting 139 on purpose. The ledger already ruled on that
+    pattern for the reserved codes — *"a user can still `throw 102` and spoof the
+    class — same caveat as Rust's `process::exit(101)`"* — so the conventional
+    reading is the ratified-consistent one, and it is taken here rather than
+    treated as undecidable. The signal number is CAPTURED, never matched against
+    a list of "interesting" signals.
+    """
+    if rc < 0:
         label = f"CRASH:sig{-rc}"
-        why = (f"rc {rc} = killed by signal {-rc} (POSIX wait convention); "
-               f"off the ratified taxonomy")
-    else:
+        why = (f"rc {rc} = killed by signal {-rc} (POSIX wait convention)")
+    elif 128 < rc < 192:
+        label = f"CRASH:sig{rc - 128}"
+        why = (f"rc {rc} = 128 + signal {rc - 128} (shell convention)")
+    elif subject == "toolchain":
         label = f"CRASH:rc{rc}"
-        why = (f"rc {rc} is off the ratified taxonomy "
+        why = (f"rc {rc} is off the RATIFIED TOOLCHAIN taxonomy "
                f"{sorted(RATIFIED_EXIT_CODES)} — never CLEAN")
+    else:
+        label = f"EXIT:{rc}"
+        why = (f"the program exited {rc} of its own accord; the small-int band "
+               f"is the USER's exit API (decisions.md:2073), not the toolchain's")
     exit_axis.append(label)
     detail[label] = why
 
 
 def findings_for(phase, rc, stderr="", stdout="", timed_out=False,
-                 sanitizer_exitcode=None) -> Verdict:
+                 sanitizer_exitcode=None, subject=None) -> Verdict:
     """Classify one observed outcome. THE definition; everything else is a view.
 
     `sanitizer_exitcode` is the value the caller passed to ASAN_OPTIONS'
@@ -318,6 +353,14 @@ def findings_for(phase, rc, stderr="", stdout="", timed_out=False,
     """
     if phase not in PHASES:
         raise ValueError(f"phase must be one of {PHASES}, got {phase!r}")
+    # `build` means we ran the compiler, so the subject is the toolchain; `run`
+    # means we ran what it produced. Callers that break that correspondence —
+    # `ggdef run <cell>` is a TOOLCHAIN invocation spelled as a run — pass
+    # `subject` explicitly.
+    if subject is None:
+        subject = "toolchain" if phase == "build" else "program"
+    if subject not in SUBJECTS:
+        raise ValueError(f"subject must be one of {SUBJECTS}, got {subject!r}")
     stderr = stderr or ""
     stdout = stdout or ""
     detail = {}
@@ -371,13 +414,27 @@ def findings_for(phase, rc, stderr="", stdout="", timed_out=False,
         # A sanitizer report EXPLAINS a nonzero exit that is otherwise
         # off-taxonomy — except that the process may ALSO have died on a signal,
         # which the off-taxonomy branch below still records. Fall through.
-        _off_taxonomy_crash(rc, exit_axis, detail)
+        _off_taxonomy_crash(rc, exit_axis, detail, subject)
     elif sanitizer_fired and rc != 0:
         # rc 1 (default ASan) or the configured sanitizer exit code: the
         # sanitizer channel positively accounts for the nonzero exit, so the
         # rc-1 ambiguity cell does NOT apply. This is the one case where a
         # second channel legitimately resolves an otherwise-ambiguous tuple.
-        pass
+        #
+        # ⚠ BUT THE EXIT CODE STILL CARRIES ITS OWN RATIFIED MEANING, AND THE SET
+        # MUST KEEP IT. An earlier version returned here unconditionally, so a
+        # run that BOTH trapped (101 + `trap[T_X]:`) and produced an ASan report
+        # yielded `['CORRUPT:kind']` with TRAP absent — the headline was right
+        # (CORRUPT outranks TRAP) and no ceiling reads TRAP, so nothing went
+        # green that should not have. It was still a set-completeness hole, and
+        # "emit the full finding SET" is the rule that keeps `UBSAN_CEILING`
+        # counting a leak+UBSan program.
+        if rc == 101 and TRAP_MARKER_RE.search(stderr):
+            exit_axis.append("TRAP")
+            detail["TRAP"] = TRAP_MARKER_RE.search(stderr).group(0)
+        elif rc == 103:
+            exit_axis.append("FUEL")
+            detail["FUEL"] = "ratified exit 103: ggdef fuel exhaustion"
     elif rc == 0:
         # CLEAN is a POSITIVE verdict and it is the one that must never be a
         # sink: it requires rc 0, no sanitizer finding, and no timeout. A UBSan
@@ -440,7 +497,7 @@ def findings_for(phase, rc, stderr="", stdout="", timed_out=False,
                          f"sanitizer report is present on stderr: the two channels "
                          f"disagree about whether a sanitizer fired.")
     else:
-        _off_taxonomy_crash(rc, exit_axis, detail)
+        _off_taxonomy_crash(rc, exit_axis, detail, subject)
 
     # ── rule 2: two exit-axis rules fired ⇒ the channels contradict ──────────
     if len(exit_axis) > 1:
@@ -597,7 +654,13 @@ SELF_TEST_CASES = [
      "UB", "UB"),
     ("CRASH", dict(phase="run", rc=139), "CRASH:sig11", "CRASH:sig11"),
     ("CRASH/negative-rc", dict(phase="run", rc=-11), "CRASH:sig11", "CRASH:sig11"),
-    ("CRASH/off-taxonomy", dict(phase="run", rc=7), "CRASH:rc7", "CRASH:rc7"),
+    ("CRASH/off-taxonomy-toolchain",
+     dict(phase="run", rc=7, subject="toolchain"), "CRASH:rc7", "CRASH:rc7"),
+    # ⭐ THE CASE THE FIRST FULL SWEEP CAUGHT. `tests/fixtures/gg_impl_exit7.gg`
+    # exists to `exit(7)` and have the driver propagate it; grading that a CRASH
+    # RED-ed a round-close gate over a program doing its job.
+    ("EXIT/program-chose-it", dict(phase="run", rc=7, subject="program"),
+     "EXIT:7", "EXIT:7"),
     ("TIMEOUT/flag", dict(phase="run", rc=0, timed_out=True), "TIMEOUT", "TIMEOUT"),
     ("TIMEOUT/rc124", dict(phase="run", rc=124), "TIMEOUT", "TIMEOUT"),
     ("RUNNER_FAIL", dict(phase="run", rc=127), "RUNNER_FAIL", "RUNNER_FAIL"),
@@ -630,6 +693,13 @@ SELF_TEST_CASES = [
      "UNKNOWN", "UNKNOWN"),
     ("UNKNOWN/sanitizer-exit-no-report",
      dict(phase="run", rc=99, sanitizer_exitcode=99), "UNKNOWN", "UNKNOWN"),
+    # N3: the exit code keeps its ratified meaning even when a sanitizer also
+    # fired. CORRUPT still headlines; TRAP must not vanish from the SET.
+    ("set/trap+corrupt",
+     dict(phase="run", rc=101,
+          stderr="trap[T_Bounds]: oob at a.gg:1:1\n"
+                 "==1==ERROR: AddressSanitizer: heap-buffer-overflow"),
+     "CORRUPT:heap-buffer-overflow", "TRAP"),
     # Severity: MOST severe wins, and the SET is preserved.
     ("severity/leak+crash",
      dict(phase="run", rc=139,
@@ -652,7 +722,8 @@ CLEAN_MUST_NOT_FIRE = [
                      stderr="==1==ERROR: AddressSanitizer: double-free")),
     ("segv", dict(phase="run", rc=139)),
     ("abort", dict(phase="run", rc=134)),
-    ("off-taxonomy", dict(phase="run", rc=7)),
+    ("off-taxonomy-toolchain", dict(phase="run", rc=7, subject="toolchain")),
+    ("program-chose-a-nonzero-exit", dict(phase="run", rc=7, subject="program")),
     ("timeout-flag", dict(phase="run", rc=0, timed_out=True)),
     ("timeout-124", dict(phase="run", rc=124)),
     ("runner-fail", dict(phase="run", rc=127)),
@@ -861,6 +932,11 @@ def main(argv=None) -> int:
     ap.add_argument("--timed-out", action="store_true",
                     help="the runner killed it on a deadline (no exit code of "
                          "its own on two of the three mechanisms)")
+    ap.add_argument("--subject", choices=SUBJECTS, default=None,
+                    help="WHOSE exit code this is. Defaults from --phase "
+                         "(build=toolchain, run=program). Pass it explicitly "
+                         "when the two come apart — `ggdef run <cell>` is a "
+                         "TOOLCHAIN invocation spelled as a run.")
     ap.add_argument("--sanitizer-exitcode", type=int, default=None,
                     help="the ASAN_OPTIONS exitcode= this run was configured "
                          "with (0 in sanitize_sweep.sh, 99 elsewhere). An "
@@ -889,7 +965,7 @@ def main(argv=None) -> int:
 
     stderr = a.stderr_text if a.stderr_text is not None else _read(a.stderr)
     v = findings_for(a.phase, a.rc, stderr=stderr, stdout=_read(a.stdout),
-                     timed_out=a.timed_out,
+                     timed_out=a.timed_out, subject=a.subject,
                      sanitizer_exitcode=a.sanitizer_exitcode)
     if a.format == "json":
         print(v.to_json())

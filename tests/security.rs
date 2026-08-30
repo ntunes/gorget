@@ -2948,3 +2948,34 @@ fn forset_move_out_elem_no_leak() {
 fn fordict_move_out_kv_no_leak() {
     security_safe_no_leak("fordict_move_out_kv", "2\n2\n2");
 }
+
+/// KNOWN GAP (`todo/t0840`) on the SANITIZER lane. The value lanes see a SEGV;
+/// this lane sees WHY — UBSan reports `load of misaligned address
+/// 0xbebebebebebebebe`, ASan's uninitialised-heap fill, so the `Vector[Shared]`
+/// element was never stored. A value lane is structurally blind to that
+/// distinction (Core #13), which is why the gap owes a fixture on BOTH.
+#[test]
+#[ignore = "known gap (R47/t0840): Vector[Shared[T]] push leaves the slot unwritten — UBSan 0xbe fill then SEGV"]
+fn known_gap_shared_vector_of_clones_unwritten_slot_asan() {
+    security_safe_no_leak("known_gap_shared_vector_of_clones_unwritten_slot", "3\n42");
+}
+
+/// KNOWN GAP (`todo/t0841`) on the SANITIZER lane: `AddressSanitizer: attempting
+/// double-free` in `__gorget_global_dealloc_fn` ← `gorget_string_free` ←
+/// `gorget_array_free` ← `main` — three aliases of one heap buffer, freed once
+/// each by the vector.
+#[test]
+#[ignore = "known gap (R47/t0841): a comprehension over a loop-invariant owned local double-frees at array free"]
+fn known_gap_comprehension_invariant_owned_body_double_free_asan() {
+    security_safe_no_leak("known_gap_comprehension_invariant_owned_body_double_free", "ababab");
+}
+
+/// KNOWN GAP (`todo/t0108`) on the SANITIZER lane: `heap-use-after-free` in
+/// `gorget_shared_get_ptr`, freed by `gorget_shared_drop` ← `Shared__int64_t__drop`
+/// ← the CALLEE. The free chain naming the callee is the whole diagnosis, and it
+/// exists only on this lane.
+#[test]
+#[ignore = "known gap (t0108): a bare Shared param is a borrow but the callee decrefs it at scope exit"]
+fn known_gap_shared_plain_call_param_uaf_asan() {
+    security_safe_no_leak("known_gap_shared_plain_call_param_uaf", "42\n42");
+}

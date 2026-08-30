@@ -73,24 +73,45 @@ pub enum RunFailure {
 /// (`process_group(0)`, so the group id == the child's pid), so signalling the
 /// NEGATIVE pid reaps the entire tree — not just the direct child.
 ///
+/// ⚠ THE GROUP KILL IS GUARDED, AND THE GUARD IS THE DIFFERENCE BETWEEN A
+/// CONTRACT AND A COMMENT. The paragraph above states a PRECONDITION, and a
+/// precondition stated only in prose is one every future caller has to remember.
+/// One already did not: `gg test --parallel` in `src/main.rs` spawns its workers
+/// with no process group at all, so `kill(-pid)` there addresses a group the
+/// worker does not lead — `ESRCH`, only the direct-child fallback fires, and the
+/// worker's own grandchildren orphan exactly as before. The comment was true of
+/// the helper and false at that call site (Core #14).
+///
+/// So the group kill now happens only when `getpgid(pid) == pid` — i.e. when the
+/// child really does lead the group, which is precisely what `process_group(0)`
+/// guarantees. Every present and future caller is safe without remembering
+/// anything, and a caller that did NOT set the group gets a correct single-child
+/// kill instead of a signal aimed at some other group. `scripts/proc_guard.py`
+/// and `scripts/reap_orphans.py` carry the identical guard for the identical
+/// reason.
+///
 /// Unix only (this box is Linux); elsewhere it degrades to a direct kill, which
 /// is the best a portable API offers.
 #[cfg(unix)]
 pub fn kill_process_tree(child: &mut Child) {
-    // `kill(2)` is always linked (std depends on libc), so declaring the symbol
-    // here avoids adding a direct `libc` dependency for one call.
+    // `kill(2)` and `getpgid(2)` are always linked (std depends on libc), so
+    // declaring the symbols here avoids a direct `libc` dependency for two calls.
     unsafe extern "C" {
         fn kill(pid: i32, sig: i32) -> i32;
+        fn getpgid(pid: i32) -> i32;
     }
     const SIGKILL: i32 = 9;
     let pid = child.id() as i32;
-    // Negative pid ⇒ signal the process GROUP led by `pid` (set at spawn via
-    // process_group(0)). Reaps the direct child + any grandchildren it forked.
-    unsafe {
-        kill(-pid, SIGKILL);
+    // Negative pid ⇒ signal the process GROUP led by `pid`. Only correct when
+    // `pid` LEADS that group; otherwise it reaches whatever group the child
+    // happens to be in, which may be the caller's own.
+    if unsafe { getpgid(pid) } == pid {
+        unsafe {
+            kill(-pid, SIGKILL);
+        }
     }
-    // Belt-and-suspenders: also target the direct child, then reap it so it does
-    // not linger as a zombie.
+    // Always target the direct child too, then reap it so it does not linger as
+    // a zombie. This is the whole kill when the child leads no group.
     child.kill().ok();
     child.wait().ok();
 }
@@ -278,6 +299,74 @@ mod tests {
         cmd.arg("-c").arg("16384").arg("/dev/zero");
         let r = run_with_deadline_opts(&mut cmd, Duration::from_secs(20), 8 * 1024, None);
         assert_eq!(r.unwrap_err(), RunFailure::Overflow { cap: 8 * 1024 });
+    }
+
+    /// The DEGRADATION contract: a child that leads no group is still killed,
+    /// exactly once, and the call returns promptly.
+    ///
+    /// ⚠ WHAT THIS TEST DOES **NOT** PIN, STATED RATHER THAN IMPLIED (Core #12).
+    /// It cannot demonstrate the `getpgid(pid) == pid` guard, and the first
+    /// version of it PRETENDED TO. That version asserted "the group leader
+    /// survives when a non-leader member is killed" — and it passed with the
+    /// guard REMOVED, because `kill(-member_pid)` addresses the group led by
+    /// `member_pid`, which does not exist: the leader's group is `leader_pid`.
+    /// So the unguarded call returns `ESRCH` and hits nothing. An accidentally
+    /// green control (Six Questions Q6), caught by running the reversion.
+    ///
+    /// The guard's stray-signal half is only reachable under PID REUSE — some
+    /// other process coming to lead a group whose pgid equals our child's pid —
+    /// and our child is un-reaped at the moment of the call, so its pid is
+    /// reserved and that cannot happen. The guard therefore buys CLARITY (the
+    /// degradation is explicit instead of relying on `ESRCH`) rather than a
+    /// behaviour change, and this test pins only the half that is observable.
+    /// The half that MATTERS at the `gg test --parallel` call site — that a
+    /// worker's grandchildren still orphan because the worker leads no group —
+    /// is a live gap, filed as `todo/t0844`, not something this guard closes.
+    #[cfg(unix)]
+    #[test]
+    fn non_leader_child_is_still_killed_directly() {
+        use std::os::unix::process::CommandExt;
+        let mut leader = Command::new("sleep")
+            .arg("300")
+            .process_group(0)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn leader");
+        let mut member = Command::new("sleep")
+            .arg("300")
+            .process_group(leader.id() as i32)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn member");
+        assert_ne!(
+            member.id(),
+            leader.id(),
+            "the member must not be the group leader, or this test proves nothing",
+        );
+
+        let start = std::time::Instant::now();
+        kill_process_tree(&mut member);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "killing a non-leader child blocked — the degradation path must not hang",
+        );
+        // Liveness via /proc, NOT `try_wait()`. `process_spawn_deadline_arm_count`
+        // counts every `try_wait()` in the tree as a spawn-and-poll loop, and it
+        // is RIGHT to — an exemption for "it's only a test" is how the sixth
+        // hand-rolled runner gets in. The lint caught this line; the fix is the
+        // test, never the lint.
+        assert!(
+            !std::path::Path::new(&format!("/proc/{}", member.id())).exists()
+                || std::fs::read_to_string(format!("/proc/{}/stat", member.id()))
+                    .map(|r| r[r.rfind(')').unwrap_or(0) + 2..].split(' ').next() == Some("Z"))
+                    .unwrap_or(true),
+            "the non-leader member was not killed; the direct-child fallback is \
+             the WHOLE kill when the child leads no group, so it must always fire",
+        );
+        leader.kill().ok();
+        leader.wait().ok();
     }
 
     /// ⭐ THE REASON THIS MODULE EXISTS: a GRANDCHILD must die with the child.

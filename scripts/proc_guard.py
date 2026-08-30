@@ -36,8 +36,10 @@ reports facts; it does not decide what a run means.
 from __future__ import annotations
 
 import os
+import pathlib
 import signal
 import subprocess
+import sys
 
 
 class Result:
@@ -146,6 +148,157 @@ def _kill_group(pid, proc=None):
         pass
 
 
+# ─────────────────────────── the Python census ───────────────────────────────
+# The ENUMERATOR for the Python half of the process-runner class, and the one
+# definition of it: `tests/lints.rs` shells out to `--census` rather than
+# re-implementing the scan, the same precedent `todo_index.py` sets.
+#
+# ⚠ IT IS AN AST WALK, NOT A GREP, AND THE REASON IS MEASURED. The first version
+# of the lint required `subprocess.` and `timeout=` on the SAME LINE, so it could
+# not see
+#     e = subprocess.run(
+#         [str(DRIVER), ...],
+#         capture_output=True, timeout=300)
+# — which is `scripts/robustness_map.py:207` as it stood, i.e. ONE OF THE EIGHT
+# SITES THIS VERY CHANGE CONVERTED. The guard could not have found the thing it
+# was written to find. It also skipped `#`-prefixed lines only, so a `timeout=`
+# inside a docstring false-POSITIVED. An AST cannot make either mistake.
+#
+# TWO VERDICTS, because there are TWO CLASSES and folding them would make the
+# baseline so large a real regression could hide in it:
+#
+#   RUNNER   -- a deadline-bearing spawn (`timeout=`), or a `Popen` (whose
+#               `p.wait(timeout=5)` is the same hand-rolled runner spelled across
+#               two statements, and that shape is live in this tree). These MUST
+#               go through `run()`. A new one is a hard FAILURE.
+#   NO-DEADLINE -- a spawn with no deadline at all. A different class: it BLOCKS
+#               rather than orphaning, converting it is a per-site budget
+#               decision, and it is filed as todo/t0842. Reported as a COUNT
+#               RATCHET, not a hard failure -- it may only shrink.
+
+SPAWN_ATTRS = {"run", "Popen", "call", "check_call", "check_output",
+               "getoutput", "getstatusoutput"}
+
+# Sites that legitimately spawn WITHOUT going through `run()`: file -> (COUNT,
+# reason).
+#
+# ⚠ THE COUNT IS LOAD-BEARING, AND ITS ABSENCE WAS MEASURED. A bare
+# file-allowlist exempts the FILE, so a new hand-rolled runner added to an
+# already-listed file passes silently. Reproduced while RED-verifying this very
+# guard: re-introducing a multi-line `subprocess.run(timeout=300)` into
+# `robustness_map.py` — a file listed only for its import-time `git rev-parse` —
+# did NOT fire. An exemption has to be as narrow as the thing exempted, or it is
+# a hole with a comment on it.
+CENSUS_ALLOW_COUNTS = {
+    # This module IS the runner.
+    "scripts/proc_guard.py": (3,
+        "the shared runner itself, plus its self-test's deliberate "
+        "`subprocess.run(timeout=)` ARM -- the control that MEASURES the stdlib "
+        "leaving a grandchild alive. Routing that arm through run() would delete "
+        "the comparison the self-test exists to make."),
+    # The reaper's self-test plants live processes on purpose; a deadline on a
+    # 600s sleeper it kills itself would be noise, and `run()` blocks.
+    "scripts/reap_orphans.py": (2,
+        "--self-test PLANTS long-lived sleepers and signals them itself; they "
+        "are the subject, not children to be waited on. `run()` is a blocking "
+        "call and cannot express them."),
+    # Import-time repo-root discovery. Not a runner; a `git rev-parse` that
+    # cannot hang without git itself being broken.
+    "scripts/robustness_map.py": (1,
+        "ONE import-time `git rev-parse --show-toplevel`. Not a runner: no child "
+        "of its own, nothing to drain (todo/t0842 row). The count is 1 on "
+        "purpose — every LANE spawn in this file goes through run()."),
+}
+
+
+def census(root=None):
+    """Return [(relpath, lineno, call, has_timeout, flagged)] over tracked .py."""
+    import ast
+    import subprocess as _sp
+    here = pathlib.Path(__file__).resolve().parent
+    root = pathlib.Path(root) if root else here.parent
+    out = _sp.run(["git", "ls-files", "-z", "*.py"], cwd=root,
+                  capture_output=True, text=True)
+    files = [f for f in out.stdout.split("\0") if f]
+    rows = []
+    for rel in sorted(files):
+        f = root / rel
+        try:
+            tree = ast.parse(f.read_text(), filename=rel)
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = None
+            if isinstance(fn, ast.Attribute) and fn.attr in SPAWN_ATTRS:
+                base = fn.value
+                if isinstance(base, ast.Name) and base.id in ("subprocess", "sp", "_sp"):
+                    name = f"subprocess.{fn.attr}"
+            elif isinstance(fn, ast.Name) and fn.id in ("Popen", "check_output", "check_call"):
+                name = fn.id
+            if name is None:
+                continue
+            has_timeout = "timeout" in {k.arg for k in node.keywords if k.arg}
+            is_runner = has_timeout or name.endswith("Popen")
+            kind = "ALLOWED" if rel in CENSUS_ALLOW_COUNTS else (
+                "RUNNER" if is_runner else "NO-DEADLINE")
+            rows.append((rel, node.lineno, name, has_timeout, kind))
+    return rows
+
+
+# Shrink-only ratchet over the OTHER class (todo/t0842): spawns with no deadline
+# at all. It may fall freely; it may not rise. Regenerate with
+# `python3 scripts/proc_guard.py --census`.
+NO_DEADLINE_BASELINE = 6
+
+
+def print_census() -> int:
+    rows = census()
+    runners = [r for r in rows if r[4] == "RUNNER"]
+    nodl = [r for r in rows if r[4] == "NO-DEADLINE"]
+    counts = {}
+    for rel, _, _, _, kind in rows:
+        counts.setdefault(rel, {}).setdefault(kind, 0)
+        counts[rel][kind] += 1
+    print("=== python spawn census (AST over `git ls-files '*.py'`) ===")
+    for rel in sorted(counts):
+        kinds = ", ".join(f"{k}={v}" for k, v in sorted(counts[rel].items()))
+        print(f"  {rel:42s} {kinds}")
+    for rel, line, call, _, _ in runners:
+        print(f"    ❌ RUNNER      {rel}:{line}  {call}")
+    for rel, line, call, _, _ in nodl:
+        print(f"       NO-DEADLINE {rel}:{line}  {call}   (todo/t0842)")
+    print(f"total sites: {len(rows)}   runners-outside-proc_guard: {len(runners)}"
+          f"   no-deadline: {len(nodl)} (baseline {NO_DEADLINE_BASELINE})")
+    rc = 0
+    # The allowlist is a COUNT, so a new spawn inside an exempted file is a
+    # failure rather than a free ride.
+    for rel, (want, why) in sorted(CENSUS_ALLOW_COUNTS.items()):
+        got = sum(counts.get(rel, {}).values())
+        if got != want:
+            print(f"\n❌ ALLOWLIST COUNT MOVED for {rel}: {got} spawn site(s), "
+                  f"expected {want}.\n   The exemption reads: {why}\n"
+                  f"   A NEW site here is not covered by that reason — route it "
+                  f"through proc_guard.run, or widen the entry deliberately.")
+            rc = 1
+    if runners:
+        print("\n❌ Every deadline-bearing Python spawn goes through "
+              "`proc_guard.run(cmd, timeout=N)`, which makes the child a "
+              "process-group leader and kills the GROUP. `subprocess.run("
+              "timeout=)` kills the direct child only and then blocks in "
+              "communicate() on pipes a surviving grandchild holds open. If a "
+              "site genuinely cannot, add its FILE to CENSUS_ALLOW with a reason.")
+        rc = 1
+    if len(nodl) > NO_DEADLINE_BASELINE:
+        print(f"\n❌ NO-DEADLINE spawn count rose to {len(nodl)} (baseline "
+              f"{NO_DEADLINE_BASELINE}). This ratchet only shrinks: give the new "
+              f"site a deadline via proc_guard.run, or lower nothing and fix it.")
+        rc = 1
+    return rc
+
+
 def self_test() -> int:
     """⭐ A GRANDCHILD MUST DIE WITH THE CHILD, and a plain `subprocess.run`
     leaves it alive. That contrast IS the test: both arms run the same program,
@@ -234,5 +387,6 @@ def _try_kill(pid):
 
 
 if __name__ == "__main__":
-    import sys
+    if "--census" in sys.argv:
+        sys.exit(print_census())
     sys.exit(self_test())

@@ -4462,6 +4462,60 @@ fn div_by_zero_int_traps_float_ieee() {
     run_gg("div_by_zero_int_traps_float_ieee.gg", "inf\n-inf\ntrue");
 }
 
+/// KNOWN GAP (both real backends): the Book Ch16 "many owners" idiom — several
+/// `Shared` handles to one value held in a `Vector` — SEGFAULTS reading an
+/// element that was never written. `all.len()` prints 3, so the container
+/// bookkeeping ran and only the payload store is missing; under `--sanitize`
+/// UBSan names it first, `load of misaligned address 0xbebebebebebebebe`, which
+/// is ASan's UNINITIALISED-HEAP FILL. Filed as `todo/t0840`.
+///
+/// ⚠ Read the UBSan line before the ASan line here: the SEGV address `0x17d7…`
+/// is that fill after the accessor's pointer arithmetic, one frame later, and a
+/// triage that reads only the SEGV concludes "layout disagreement" and aims at
+/// the wrong fix. The self-host lane ALSO traps, so unlike `t0108` there is no
+/// correct lane to use as an oracle.
+#[test]
+#[ignore = "known gap (R47/t0840): a Vector[Shared[T]] built by push leaves the element slot unwritten; un-ignore when the push stores the handle"]
+fn known_gap_shared_vector_of_clones_unwritten_slot() {
+    run_gg("known_gaps/shared_vector_of_clones_unwritten_slot.gg", "3\n42");
+}
+
+/// KNOWN GAP (C lane): a comprehension whose body is a LOOP-INVARIANT owned
+/// local pushes N aliases of ONE heap buffer, so freeing the vector double-frees
+/// it (rc 134). `s` is live past the accumulate, and AGENTS.md § "Ownership at
+/// Consuming Positions" says a live source at a consuming position must be
+/// CLONED. Filed as `todo/t0841`.
+///
+/// ⚠ The axis is narrower than "loop-invariant body":
+/// `known_gaps/map_inline_closure_cross_type_input_mint.gg` asserts that
+/// `[mk("t","ag") for n in nums]` — also loop-invariant, also a heap String — is
+/// CORRECT. The difference is an already-owned live NAME versus a fresh call
+/// result, so the value is aliased instead of minted per iteration. Not
+/// `todo/t0003`, whose axis is the accumulator's ELEMENT TYPE even though one of
+/// its symptoms crashes in these very frames.
+#[test]
+#[ignore = "known gap (R47/t0841): a comprehension over a loop-invariant owned local aliases it N times and double-frees; un-ignore when the accumulate clones a live source"]
+fn known_gap_comprehension_invariant_owned_body_double_free() {
+    run_gg("known_gaps/comprehension_invariant_owned_body_double_free.gg", "ababab");
+}
+
+/// KNOWN GAP (both real backends): a `Shared[T]` passed to a PLAIN function is
+/// documented as BORROWED — AGENTS.md § "Ownership at Consuming Positions", *"At
+/// a plain function / method call these types are simply borrowed, so no
+/// operator is needed"* — and the callee decrefs it at scope exit anyway, so the
+/// caller's next `.get()` reads freed memory. Root cause already filed:
+/// `needs_param_drop` (`src/ir/types.rs:573`) keys on TYPE only and cannot tell
+/// bare `Shared s` from `Shared !s`. This is EVIDENCE for `todo/t0108`, not a
+/// separate defect.
+///
+/// ⭐ The SELF-HOST lane is CORRECT here, so it is the oracle: fix the Rust side,
+/// never dumb the self-host down to match.
+#[test]
+#[ignore = "known gap (t0108): a bare Shared param is a borrow but the callee drops it; un-ignore when needs_param_drop becomes sigil-aware"]
+fn known_gap_shared_plain_call_param_uaf() {
+    run_gg("known_gaps/shared_plain_call_param_uaf.gg", "42\n42");
+}
+
 /// KNOWN GAP: a comprehension with a TUPLE target pattern over a `Dict` source is
 /// accepted by `gg check` (rc 0) and then fails in the C compiler, leaking a raw
 /// C diagnostic to the user (`incompatible types when assigning to type 'Str'`).

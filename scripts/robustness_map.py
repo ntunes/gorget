@@ -187,11 +187,16 @@ VERDICT_TO_BUCKET = {
     "USAGE": "UNKNOWN",
     "CHANNEL_ERROR": "TRAP",
     "FUEL": "NO-VERDICT",
+    # The program chose a nonzero exit code. Not a fault, and not a clean run
+    # either: the map compares STDOUT, so a deliberate `exit(7)` is adjudicated
+    # exactly like any other run — it just is not a CRASH.
+    "EXIT": "TRAP",
     "UNKNOWN": "UNKNOWN",
 }
 
 
-def _verdict(expected: str, r, actual: str, sanitized=False, timed_out=False):
+def _verdict(expected: str, r, actual: str, sanitized=False, timed_out=False,
+             subject="program"):
     """Shared run-result adjudication: identical on every lane, so a lane can
     never disagree with another because of how its OUTCOME was read.
 
@@ -208,7 +213,7 @@ def _verdict(expected: str, r, actual: str, sanitized=False, timed_out=False):
     map's coarser bucket vocabulary calls the result.
     """
     v = verdict.findings_for("run", r.returncode, stderr=r.stderr or "",
-                             stdout=r.stdout or "", timed_out=timed_out,
+                             stdout=r.stdout or "", timed_out=timed_out, subject=subject,
                              sanitizer_exitcode=SANITIZER_EXITCODE if sanitized else None)
     base = v.verdict.split(":", 1)[0]
     bucket = VERDICT_TO_BUCKET[base]
@@ -430,7 +435,12 @@ def run_ggdef(cell: pathlib.Path, expected: str, tmp: pathlib.Path):
         if "error[" in r.stderr:
             return "REJECTED", "rejected at check"
         return "REJECTED", "rejected (uncoded)"
-    return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()))
+    # ⚠ SUBJECT = TOOLCHAIN. `ggdef run <cell>` is a compiler invocation spelled
+    # as a run: the exit code is ggdef's, and ggdef IS bound by the ratified
+    # taxonomy (its own header says so). Everywhere else on this map the subject
+    # is the user's compiled program, whose small-int band is the USER's exit API.
+    return _verdict(expected, r, JOIN.join(r.stdout.strip().splitlines()),
+                    subject="toolchain")
 
 
 LANE_RUNNER = {

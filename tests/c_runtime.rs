@@ -478,12 +478,13 @@ fn assert_no_implicit_decls(fixture: &str) {
     let stem = fixture_path.file_stem().unwrap().to_str().unwrap();
     let emitted_c = tmp_dir.join(format!("{stem}.emitted.c"));
 
-    let emit = Command::new(gg_binary())
-        .arg("build")
-        .arg(&fixture_path)
-        .arg("--emit-c-lir")
-        .output()
-        .expect("failed to run `gg build --emit-c-lir`");
+    // Through the shared runner like every other spawn in this file. These two
+    // sites were reported as "now routed" while still being bare `.output()`
+    // calls, and the arithmetic in the census hid it — a phantom bucket exactly
+    // offset the under-count, so the total came out right.
+    let mut emit_cmd = Command::new(gg_binary());
+    emit_cmd.arg("build").arg(&fixture_path).arg("--emit-c-lir");
+    let emit = run_or_panic(&mut emit_cmd, "gg build --emit-c-lir", Duration::from_secs(300));
     assert!(
         emit.status.success(),
         "`gg build {} --emit-c-lir` failed:\n{}",
@@ -508,7 +509,8 @@ fn assert_no_implicit_decls(fixture: &str) {
     //    an error and, critically, NO `-w` (which would defeat it). No `-Wall`
     //    either — only default warnings plus the one promotion — so this guard
     //    is about implicit decls specifically, not the broader warning posture.
-    let compile = Command::new(cc())
+    let mut compile_cmd = Command::new(cc());
+    compile_cmd
         .arg("-O2")
         .arg("-std=c11")
         .arg("-Werror=implicit-function-declaration")
@@ -516,9 +518,9 @@ fn assert_no_implicit_decls(fixture: &str) {
         .arg("-o")
         .arg(tmp_dir.join(format!("{stem}.o")))
         .arg(&emitted_c)
-        .arg("-lm")
-        .output()
-        .expect("failed to run cc on emitted runtime C");
+        .arg("-lm");
+    let compile = run_or_panic(&mut compile_cmd, "cc (emitted runtime C)",
+                               Duration::from_secs(300));
 
     if !compile.status.success() {
         panic!(

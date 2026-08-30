@@ -153,8 +153,23 @@ CRASH_CEILING="${CRASH_CEILING:-0}"
 # UNKNOWN: the classifier could not positively determine what happened. Also new
 # — the old body's answer to this case was CLEAN. An UNKNOWN is the instrument
 # telling you it cannot see, which is strictly more useful than a green it has
-# not earned, and it must never accumulate silently.
-UNKNOWN_CEILING="${UNKNOWN_CEILING:-0}"
+# not earned.
+#
+# ⚠ IT IS A CENSUS, NOT A CEILING, AND THE DISTINCTION IS DELIBERATE. Every other
+# gate in this file counts a DEFECT IN THE COMPILER; UNKNOWN counts a LIMITATION
+# OF THE INSTRUMENT. Two reasons that must not become a ratchet at 0:
+#   * the `run_rc1` ambiguity cell (todo/t0647: a program's own `exit(1)` is
+#     indistinguishable from `gorget_panic_at`'s) means ANY fixture that
+#     legitimately exits 1 lands here — and this corpus has no expectation column
+#     to resolve it with, unlike the robustness map, which uses its hand-written
+#     "loud failure" expectation for exactly that.
+#   * this file's own rule, stated for FLAKY and CLASS_UNSTABLE above: *"you
+#     cannot pin a key you have not measured stable."* The corpus-wide UNKNOWN
+#     count has never been measured, so pinning it at 0 unmeasured would be the
+#     coin-flip-with-a-threshold this file explicitly refuses to ship.
+# Printed with its rows, gating nothing, until a full sweep has measured it. Set
+# UNKNOWN_CEILING to make it fatal once there is a number to defend.
+UNKNOWN_CEILING="${UNKNOWN_CEILING:-}"
 # COVERAGE FLOOR: fixtures that actually produced a RUN verdict. A fixture
 # drifting CLEAN -> BUILD_FAIL_* is a silent coverage loss the old gate could
 # not see; this is the ratchet that sees it. Raise it when the corpus grows.
@@ -205,8 +220,13 @@ ASAN_EXITCODE=$(printf '%s' "$ASANOPT" | sed -n 's/.*exitcode=\([0-9]*\).*/\1/p'
 [ -z "$ASAN_EXITCODE" ] && ASAN_EXITCODE=1
 classify_log() {
   _log="$1"; _rc="$2"
+  # --subject program: this corpus runs COMPILED FIXTURES, not the compiler.
+  # The ratified exit-code taxonomy binds the TOOLCHAIN; a fixture that exits 7
+  # on purpose (tests/fixtures/gg_impl_exit7.gg does exactly that) is using the
+  # USER's exit API, and grading it a crash red-ed this gate on the first full
+  # corpus run.
   python3 scripts/verdict.py --phase run --rc "$_rc" --stderr "$_log" \
-      --sanitizer-exitcode "$ASAN_EXITCODE" --format sweep
+      --subject program --sanitizer-exitcode "$ASAN_EXITCODE" --format sweep
 }
 
 # The leak CLASS signature of one run: for each leak record, the first stack
@@ -513,6 +533,10 @@ awk -F'\t' '$2 == "SKIP_COPY" || $2 == "NO_BINARY" || $2 ~ /(^|,)RUNNER_FAIL(,|$
 # so the class match is on the PREFIX -- the kind is captured, never enumerated.
 awk -F'\t' '$2 ~ /(^|,)CRASH(:|,|$)/   {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_crash"
 awk -F'\t' '$2 ~ /(^|,)UNKNOWN(,|$)/   {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_unknown"
+# EXIT:n — the fixture chose a nonzero exit code. Its own business; this sweep
+# adjudicates MEMORY VALIDITY, and a deliberate exit is neither a leak nor a
+# crash. Counted so it cannot read as CLEAN, gating nothing.
+awk -F'\t' '$2 ~ /(^|,)EXIT:/          {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_exit"
 awk -F'\t' '$3 ~ /FLAKY/             {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_flaky"
 awk -F'\t' '$3 ~ /CLASS_UNSTABLE/    {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_class_unstable"
 awk -F'\t' '$3 ~ /COUNT_DRIFT/       {print $1}' "$OUT/verdicts.tsv" | sort -u > "$OUT/got_count_drift"
@@ -535,6 +559,7 @@ n_timeout=$(wc -l < "$OUT/got_timeout")
 n_infra=$(wc -l < "$OUT/got_infra")
 n_crash=$(wc -l < "$OUT/got_crash")
 n_unknown=$(wc -l < "$OUT/got_unknown")
+n_exit=$(wc -l < "$OUT/got_exit")
 
 echo "=== sanitize sweep ==="
 echo "instrument:  REPS=$REPS  JOBS=$JOBS  timeout=${RUN_TIMEOUT}s  LSAN_OPTIONS='${LSANOPT:-<default roots>}'  ASAN_OPTIONS='$ASANOPT'"
@@ -551,7 +576,8 @@ echo "ubsan:       $n_ubsan (ceiling $UBSAN_CEILING)"
 echo "timeout:     $n_timeout (ceiling $TIMEOUT_CEILING)"
 echo "infra:       $n_infra (SKIP_COPY/NO_BINARY/RUNNER_FAIL; ceiling $INFRA_CEILING)"
 echo "crash:       $n_crash (signal / off-taxonomy exit; ceiling $CRASH_CEILING)"
-echo "unknown:     $n_unknown (classifier could not tell; ceiling $UNKNOWN_CEILING)"
+echo "unknown:     $n_unknown (classifier could not tell; census, ceiling '${UNKNOWN_CEILING:-<unset>}')"
+echo "exit-nonzero:$n_exit (the fixture's OWN exit code; census, not a fault)"
 echo "flaky:       $n_flaky (verdict not unanimous over $REPS runs; ceiling $FLAKY_CEILING)"
 echo "class-drift: $n_class_unstable (leak MECHANISM SET not identical over $REPS runs; ceiling $CLASS_UNSTABLE_CEILING)"
 echo "count-drift: $n_count_drift (same mechanisms, differing record COUNTS — census, not a gate;"
@@ -597,12 +623,17 @@ if [ "$n_crash" -gt "$CRASH_CEILING" ]; then
   echo "    run correctly, whatever its stdout said."
   rc=1
 fi
-if [ "$n_unknown" -gt "$UNKNOWN_CEILING" ]; then
+if [ -n "$UNKNOWN_CEILING" ] && [ "$n_unknown" -gt "$UNKNOWN_CEILING" ]; then
   echo; echo "❌ UNCLASSIFIABLE OUTCOME(S) — ceiling $UNKNOWN_CEILING:"
   sed 's/^/    /' "$OUT/got_unknown"
   echo "    The classifier found no positive discriminator. Root-cause it into a"
   echo "    verdict; do NOT widen a rule until it swallows the case."
   rc=1
+elif [ "$n_unknown" -gt 0 ]; then
+  echo; echo "ℹ UNCLASSIFIABLE OUTCOME(S) — census, gating nothing (no ceiling set):"
+  sed 's/^/    /' "$OUT/got_unknown"
+  echo "    These used to read CLEAN. Most will be the run-phase rc-1 ambiguity"
+  echo "    cell (todo/t0647). Set UNKNOWN_CEILING once the number is measured."
 fi
 if [ "$n_infra" -gt "$INFRA_CEILING" ]; then
   echo; echo "❌ SWEEP PLUMBING FAILED (SKIP_COPY / NO_BINARY / RUNNER_FAIL) — ceiling $INFRA_CEILING:"

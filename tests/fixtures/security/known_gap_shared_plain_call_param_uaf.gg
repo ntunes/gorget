@@ -1,0 +1,33 @@
+# KNOWN GAP (ASan lane). The value-lane twin is
+# tests/fixtures/known_gaps/shared_plain_call_param_uaf.gg — same program, different lane.
+# reads freed memory (rc -11 / 139; ASan `heap-use-after-free`).
+#
+# A `Shared[T]` passed to a plain function is BORROWED. AGENTS.md § "Ownership at
+# Consuming Positions" says so explicitly of the single-owner-by-design family:
+# *"At a plain function / method call these types are simply borrowed, so no
+# operator is needed."* The caller keeps its handle. It does not:
+#
+#   ERROR: AddressSanitizer: heap-use-after-free
+#       #0 gorget_shared_get_ptr  #1 Shared__int64_t__get  #2 main
+#   freed by:
+#       gorget_shared_drop ← Shared__int64_t__drop ← read_it
+#
+# — the CALLEE decrefs at scope exit and frees the cell under the caller. Root
+# cause is filed: `needs_param_drop` (`src/ir/types.rs:573`) keys on TYPE only and
+# cannot tell bare `Shared s` (borrow) from `Shared !s` (owned). See todo/t0108,
+# which this cell is evidence for — it is NOT a separate defect.
+#
+# ⭐ THE SELF-HOST LANE IS CORRECT HERE, so it is the ORACLE: fix the Rust side,
+# never dumb the self-host down to match (AGENTS.md, the succession plan).
+#
+# INTENDED (asserted by the wired test): prints 42 twice.
+# Evidence added 2026-08-30 by R47 Track F4a.
+
+int read_it(Shared[int] s):
+    return s.get()
+
+
+void main():
+    Shared[int] s = Shared[int](42)
+    print(f"{read_it(s)}")
+    print(f"{s.get()}")

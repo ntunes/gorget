@@ -178,6 +178,7 @@ class Root:
         self.owner_pid = None
         self.undecidable = None
         self.owner_alive = None
+        self.recycled = False
         self.created = None
         try:
             self.created = os.stat(path).st_mtime
@@ -210,6 +211,11 @@ class Root:
         # is NOT the owner. 5s of slack absorbs mtime/starttime granularity.
         if self.created is not None and start > self.created + 5.0:
             self.owner_alive = False
+            # SURFACED, not merely recorded: "the owner pid is gone" and "the
+            # owner pid was REUSED by something else" are different facts, and
+            # the header advertises the distinction. An earlier version set this
+            # and never read it, which is a dead attribute asserting a capability
+            # the report did not have.
             self.recycled = True
         else:
             self.owner_alive = True
@@ -360,7 +366,8 @@ def report(res, preflight=False, do_reap=False) -> int:
           f"Phase-2 run ledger closes.)")
     print(f"REAPABLE:         {len(res['reapable'])}")
     for pid, exe, r in res["reapable"]:
-        print(f"    pid {pid:<8} owner {r.owner_pid} dead   {exe}")
+        why = "RECYCLED" if r.recycled else "dead"
+        print(f"    pid {pid:<8} owner {r.owner_pid} {why:<9} {exe}")
     print(f"LEAVE (owner alive): {len(res['leave'])}")
     for pid, exe, r in res["leave"]:
         print(f"    pid {pid:<8} owner {r.owner_pid} ALIVE  {exe}")

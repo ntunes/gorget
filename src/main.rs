@@ -3577,12 +3577,22 @@ fn real_main() {
                         .env("GORGET_PARALLEL_TOTAL", n.to_string())
                         .env("GORGET_TEST_RESULTS", worker_results_path(&results_path, worker_id).display().to_string());
                     if nocapture { worker_cmd.env("GORGET_TEST_NOCAPTURE", "1"); }
-                    let child = worker_cmd.spawn()
-                        .unwrap_or_else(|e| {
+                    // ⚠ THE LIKELIER LEAK PATH, and it used to be the untouched
+                    // one. If worker k fails to spawn, workers 0..k are already
+                    // running and `process::exit(1)` abandons every one of them
+                    // — and a spawn failure (fd exhaustion, ENOMEM) is exactly
+                    // the situation in which you bail early, so this path fires
+                    // when the box is ALREADY under pressure.
+                    match worker_cmd.spawn() {
+                        Ok(child) => children.push(child),
+                        Err(e) => {
                             eprintln!("Failed to spawn worker {worker_id}: {e}");
+                            for c in children.iter_mut() {
+                                proc_guard::kill_process_tree(c);
+                            }
                             process::exit(1);
-                        });
-                    children.push(child);
+                        }
+                    }
                 }
                 let mut any_failed = false;
                 #[cfg(unix)]

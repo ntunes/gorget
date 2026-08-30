@@ -24789,41 +24789,34 @@ fn process_spawn_deadline_arm_count() {
     // `subprocess.run(..., timeout=N)` LOOKS like it handles this and does not:
     // on expiry CPython kills the DIRECT CHILD only and then blocks in
     // `communicate()`, so a forking child leaves a spinner AND can hang the
-    // timeout handler. Identical defect pair, in the stdlib call. Deadline-
-    // bearing spawns therefore go through `scripts/proc_guard.py`, whose own
-    // self-test MEASURES the contrast (`subprocess.run` leaves the grandchild
-    // alive; the group kill does not).
+    // timeout handler. Identical defect pair, in the stdlib call.
     //
-    // Only `scripts/` is in scope: it is where the round-close gates live, and
-    // widening to every `.py` in the tree would drag in one-off analysis scripts
-    // whose children are `git` invocations.
-    let mut py: Vec<String> = Vec::new();
-    for path in tracked_files() {
-        if path.extension().and_then(|e| e.to_str()) != Some("py")
-            || !path.starts_with("scripts")
-            || path.ends_with("proc_guard.py")
-        {
-            continue;
-        }
-        let Ok(src) = std::fs::read_to_string(path) else { continue };
-        for (i, line) in src.lines().enumerate() {
-            let t = line.trim_start();
-            if t.starts_with('#') {
-                continue;
-            }
-            if line.contains("timeout=") && line.contains("subprocess.") {
-                py.push(format!("  {}:{}", path.display(), i + 1));
-            }
-        }
-    }
-    py.sort();
+    // ⚠ THE ENUMERATION IS AN AST WALK, SHELLED OUT — it is NOT re-implemented
+    // here, and it is not a grep. The first version of this check was a
+    // same-line `contains("subprocess.") && contains("timeout=")` scan scoped to
+    // `scripts/`, and an output review measured three holes in it, each with a
+    // live witness:
+    //   * it could not see a call spelled across lines — including
+    //     `scripts/robustness_map.py:207`, ONE OF THE EIGHT SITES THIS VERY
+    //     CHANGE CONVERTED. The guard could not have found the thing it was
+    //     written to find.
+    //   * its `scripts/` scope excluded `tests/test_ir.py`'s SEVEN sites, three
+    //     of which run compiled fixture binaries — the class verbatim, in
+    //     another directory. Its stated rationale was simply false for that file.
+    //   * `t.starts_with('#')` skipped comments by line, so a `timeout=` inside
+    //     a docstring false-POSITIVED.
+    // `python3 scripts/proc_guard.py --census` walks `git ls-files '*.py'` with
+    // `ast`, which cannot make any of those three mistakes, and it keeps ONE
+    // definition of the census — the precedent `todo_index_is_current` sets.
+    let census = std::process::Command::new("python3")
+        .args(["scripts/proc_guard.py", "--census"])
+        .output()
+        .expect("python3 scripts/proc_guard.py --census failed to start");
     assert!(
-        py.is_empty(),
-        "deadline-bearing `subprocess.*(timeout=)` outside scripts/proc_guard.py:\n{}\n\n\
-         Call `proc_guard.run(cmd, timeout=N)` instead. The stdlib's own timeout \
-         path kills the direct child and then blocks draining pipes a surviving \
-         grandchild still holds open.",
-        py.join("\n"),
+        census.status.success(),
+        "the Python spawn census FAILED:\n{}{}",
+        String::from_utf8_lossy(&census.stdout),
+        String::from_utf8_lossy(&census.stderr),
     );
 }
 
@@ -24834,6 +24827,22 @@ fn process_spawn_deadline_arm_count() {
 /// enumerations came out wrong: a doc comment describing `child.kill()` counted
 /// as a call site. An enumeration whose instrument cannot tell code from prose
 /// is not total, it is approximate.
+///
+/// ⚠ THE CHAR-LITERAL BRANCH IS NOT COSMETIC — WITHOUT IT THIS UNDER-COUNTS, AND
+/// UNDER-COUNTING IS THE DANGEROUS DIRECTION FOR AN `assert_eq!` BASELINE. The
+/// first version of this function claimed in this very comment to strip char
+/// literals and had no branch for them, so `'"'` fell through, its inner `"`
+/// opened a string scan, and **every line up to the next `"` anywhere in the
+/// file was blanked — including real code.** There are 102 such literals across
+/// 20 tracked `.rs` files, so a new hand-rolled runner added below any of them
+/// would have been INVISIBLE to `process_spawn_deadline_arm_count`, whose entire
+/// job is to stop fork six. Core #14 (a comment asserting an invariant the code
+/// does not enforce) and Six Questions Q2 (a guard that cannot catch its own
+/// class), in the guard the census rests on.
+///
+/// The subtle half is that `'` is ALSO the lifetime sigil: `'a`, `'static`, `'_`
+/// must not be mistaken for an opening quote. `char_literal_end` decides, and
+/// `stripper_handles_char_literals_and_lifetimes` pins both directions.
 fn strip_rust_comments_and_strings(src: &str) -> String {
     let b: Vec<char> = src.chars().collect();
     let mut out: Vec<char> = b.clone();
@@ -24905,11 +24914,100 @@ fn strip_rust_comments_and_strings(src: &str) -> String {
             }
             blank(&mut out, i, j);
             i = j;
+        } else if b[i] == '\'' {
+            // A char literal, or a LIFETIME? `'a` / `'static` / `'_` are
+            // lifetimes and must not open a quote scan.
+            match char_literal_end(&b, i) {
+                Some(j) => {
+                    blank(&mut out, i, j);
+                    i = j;
+                }
+                None => i += 1,
+            }
         } else {
             i += 1;
         }
     }
     out.into_iter().collect()
+}
+
+/// If `b[i]` opens a Rust CHAR LITERAL, return its exclusive end; `None` means a
+/// lifetime (or nothing recognisable), which must be stepped over, never scanned
+/// as a quote.
+///
+/// The cases, each pinned by `stripper_handles_char_literals_and_lifetimes`:
+/// `'x'` · `'"'` (the one that broke it) · `'\''` · `'\\'` · `'\n'` ·
+/// `'\u{1F600}'` · and the negatives `'a`, `'static`, `'_`, `&'a str`.
+fn char_literal_end(b: &[char], i: usize) -> Option<usize> {
+    let n = b.len();
+    if i + 2 >= n || b[i] != '\'' {
+        return None;
+    }
+    if b[i + 1] == '\\' {
+        // Escaped: the char AFTER the backslash belongs to the escape, so the
+        // closing quote cannot be found by scanning for the first `'` — in
+        // `'\''` that would stop on the escaped quote itself.
+        let mut j = i + 2;
+        if b[j] == 'u' && j + 1 < n && b[j + 1] == '{' {
+            j += 2;
+            while j < n && b[j] != '}' {
+                j += 1;
+            }
+            j += 1; // past `}`
+        } else {
+            j += 1;
+        }
+        if j < n && b[j] == '\'' { Some(j + 1) } else { None }
+    } else if b[i + 2] == '\'' {
+        Some(i + 3)
+    } else {
+        None // a lifetime: `'a`, `'static`, `'_`
+    }
+}
+
+/// The stripper's own regression net. Written because the function CLAIMED to
+/// handle char literals while having no branch for them, and the claim went
+/// unchallenged until an output review measured it.
+#[test]
+fn stripper_handles_char_literals_and_lifetimes() {
+    // POSITIVE: the literal is removed and the code AFTER it survives. This is
+    // the exact witness that reproduced the defect — `.try_wait()` used to
+    // vanish here, taking the arm-count baseline with it.
+    let witness = "fn f(c: char) -> bool { c == '\"' }\n\
+                   fn poll(ch: &mut C) { match ch.try_wait() { _ => () } }\n\
+                   let msg = \"done\";\n";
+    let out = strip_rust_comments_and_strings(witness);
+    assert!(
+        out.contains(".try_wait()"),
+        "a `'\"'` char literal swallowed the code after it — the stripper is \
+         under-counting, which is the direction that lets fork six through:\n{out}",
+    );
+    assert!(!out.contains("done"), "the string literal should still be stripped:\n{out}");
+
+    // Every escape form, and the negatives. `keep_N` must survive each.
+    for (src, tag) in [
+        ("let a = '\''; keep_1();", "keep_1"),
+        ("let a = '\\\\'; keep_2();", "keep_2"),
+        ("let a = '\\n'; keep_3();", "keep_3"),
+        ("let a = '\\u{1F600}'; keep_4();", "keep_4"),
+        ("let a = 'x'; keep_5();", "keep_5"),
+        ("fn g<'a>(s: &'a str) -> &'static str { keep_6(); s }", "keep_6"),
+        ("let v: Vec<Foo<'_>> = keep_7();", "keep_7"),
+    ] {
+        let out = strip_rust_comments_and_strings(src);
+        assert!(out.contains(tag), "{tag} was swallowed by: {src:?} -> {out:?}");
+    }
+
+    // NEGATIVE: a `.try_wait()` INSIDE a string or a comment must still be
+    // invisible, or the stripper has stopped doing its original job.
+    for src in [
+        "let s = \"call .try_wait() here\";",
+        "// a comment mentioning .try_wait()",
+        "/* block .try_wait() */",
+    ] {
+        let out = strip_rust_comments_and_strings(src);
+        assert!(!out.contains(".try_wait()"), "not stripped: {src:?} -> {out:?}");
+    }
 }
 
 /// **The verdict classifier certifies itself, on every `--test lints` run.**
