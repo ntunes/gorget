@@ -20,9 +20,17 @@ CLONE_METER_SPEC="$CLONE_METER_ROOT/scripts/clone_meter.spec"
 
 # clone_meter_get <key> — the declared value of a single-valued spec key.
 # Fails loud on a missing key: a silently-empty argv is how the drift started.
+# ⚠ NO PIPE INTO AN EARLY-CLOSING READER. `sed ... | head -1` under
+# `set -o pipefail` — which both calling scripts use — reports the WRITER's
+# SIGPIPE as the pipeline's status, so a successful lookup can abort the script.
+# awk reads its whole input and holds the first match instead.
 clone_meter_get() {
     local key="$1" val
-    val=$(sed -n "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//p" "$CLONE_METER_SPEC" | head -1)
+    val=$(awk -v k="$key" '
+        $0 ~ "^[[:space:]]*"k"[[:space:]]*=" && !seen {
+            sub("^[[:space:]]*"k"[[:space:]]*=[[:space:]]*", "")
+            print; seen = 1
+        }' "$CLONE_METER_SPEC")
     if [[ -z "$val" ]]; then
         echo "clone_meter: no key '$key' in $CLONE_METER_SPEC" >&2
         return 1
@@ -63,7 +71,9 @@ clone_meter_run() {
 # preamble).
 clone_meter_counter() {
     local errlog="$1" name="$2" v
-    v=$(grep '^\[clone-stats\]' "$errlog" 2>/dev/null | tail -1 | tr ' ' '\n' |
-        sed -n "s/^${name}=//p" | head -1)
+    # Single awk pass, no early-closing reader (see clone_meter_get).
+    v=$(awk -v f="$name" '
+        /^\[clone-stats\]/ { for (i = 1; i <= NF; i++) { split($i, kv, "="); if (kv[1] == f) last = kv[2] } }
+        END { if (last != "") print last }' "$errlog" 2>/dev/null)
     printf '%s' "${v:--}"
 }

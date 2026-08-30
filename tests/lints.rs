@@ -24966,17 +24966,54 @@ fn clone_meter_closure_declares_the_symlink_seam() {
 #[test]
 fn clone_meter_check_refuses_an_unattributed_track() {
     let roots = clone_meter_spec_values("closure_roots").pop().expect("closure_roots");
-    // The newest commit that actually changed the workload — self-locating, so
-    // the demonstration cannot rot into a range that touches nothing.
-    let mut args = vec!["log", "-1", "--format=%H", "--"];
+    // A REAL commit that changed the workload — self-locating, so the
+    // demonstration cannot rot into a range that touches nothing. We take the
+    // newest one whose own `<sha>~1..<sha>` range does NOT also move a pin, so
+    // the range exercises exactly the branch under demonstration and not the
+    // separate "tracks do not re-pin" refusal.
+    let mut args = vec!["log", "-40", "--format=%H", "--"];
     args.extend(roots.split_whitespace());
     let out = std::process::Command::new("git").args(&args).output().expect("git log");
-    let sha = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    assert!(!sha.is_empty(), "no commit in history touches the declared closure — the closure is wrong");
+    let candidates: Vec<String> =
+        String::from_utf8_lossy(&out.stdout).lines().map(|l| l.trim().to_string()).collect();
+    assert!(
+        !candidates.is_empty(),
+        "no commit in history touches the declared closure — the closure is wrong"
+    );
+    let moves_a_pin = |sha: &str| -> bool {
+        let d = std::process::Command::new("git")
+            .args(["diff", &format!("{sha}~1"), sha, "--", "tests/integration.rs"])
+            .output()
+            .expect("git diff");
+        String::from_utf8_lossy(&d.stdout).lines().any(|l| {
+            (l.starts_with('+') || l.starts_with('-'))
+                && (l.contains("_CLONE_PIN:") || l.contains("_CLONE_ROUND_OPEN:"))
+        })
+    };
+    let sha = candidates
+        .iter()
+        .find(|s| !moves_a_pin(s))
+        .unwrap_or_else(|| {
+            panic!(
+                "every one of the last {} closure-touching commits also moves a pin, so this \
+                 demonstration cannot isolate the missing-attribution branch. Widen the search.",
+                candidates.len()
+            )
+        })
+        .clone();
 
-    let run = |base: &str, report: &str| -> std::process::Output {
+    let run = |base: &str, tip: &str, report: &str| -> std::process::Output {
         std::process::Command::new("bash")
-            .args(["scripts/clone_meter_check.sh", "--track", "--base", base, "--report", report])
+            .args([
+                "scripts/clone_meter_check.sh",
+                "--track",
+                "--base",
+                base,
+                "--tip",
+                tip,
+                "--report",
+                report,
+            ])
             .output()
             .expect("run clone_meter_check.sh")
     };
@@ -24984,7 +25021,7 @@ fn clone_meter_check_refuses_an_unattributed_track() {
     // ── RED: the closure moved, the report says nothing. ───────────────────
     let empty = std::env::temp_dir().join(format!("clone_meter_empty_{}.md", std::process::id()));
     fs::write(&empty, "# a report with no measurement\n").expect("write");
-    let red = run(&format!("{sha}~1"), empty.to_str().unwrap());
+    let red = run(&format!("{sha}~1"), &sha, empty.to_str().unwrap());
     let red_err = String::from_utf8_lossy(&red.stderr).to_string();
     assert!(
         !red.status.success(),
@@ -24995,11 +25032,7 @@ fn clone_meter_check_refuses_an_unattributed_track() {
     );
 
     // ── GREEN: the same range, with the required attribution section. ──────
-    let head = String::from_utf8_lossy(
-        &std::process::Command::new("git").args(["rev-parse", "HEAD"]).output().expect("rev-parse").stdout,
-    )
-    .trim()
-    .to_string();
+    let head = sha.clone();
     let good = std::env::temp_dir().join(format!("clone_meter_good_{}.md", std::process::id()));
     fs::write(
         &good,
@@ -25014,7 +25047,7 @@ fn clone_meter_check_refuses_an_unattributed_track() {
         ),
     )
     .expect("write");
-    let green = run(&format!("{sha}~1"), good.to_str().unwrap());
+    let green = run(&format!("{sha}~1"), &sha, good.to_str().unwrap());
     assert!(
         green.status.success(),
         "clone_meter_check.sh REFUSED a report that carries the full attribution section. A gate \
@@ -25022,6 +25055,36 @@ fn clone_meter_check_refuses_an_unattributed_track() {
         String::from_utf8_lossy(&green.stdout),
         String::from_utf8_lossy(&green.stderr)
     );
+    // ── RED again, on the OTHER refusal: a track that moves a PIN. ────────
+    // ⚠ This branch was written as `git diff … | grep -q …` and did NOT WORK:
+    // under `set -o pipefail` grep exits on its first match, git diff takes
+    // SIGPIPE, and the pipeline reports 141, so the `if` was never true. It
+    // passed every review and every run until it was pointed at a commit that
+    // really did move a pin. Hence this third demonstration.
+    let pin_mover = candidates.iter().find(|s| moves_a_pin(s)).cloned().or_else(|| {
+        let out = std::process::Command::new("git")
+            .args(["log", "-60", "--format=%H", "--", "tests/integration.rs"])
+            .output()
+            .expect("git log");
+        String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).find(|s| moves_a_pin(s))
+    });
+    match pin_mover {
+        Some(pm) => {
+            let red2 = run(&format!("{pm}~1"), &pm, good.to_str().unwrap());
+            assert!(
+                !red2.status.success(),
+                "clone_meter_check.sh PASSED a diff that MOVES A PIN. Tracks report deltas; only \
+                 the integrating parent writes a pin.\nstdout:\n{}\nstderr:\n{}",
+                String::from_utf8_lossy(&red2.stdout),
+                String::from_utf8_lossy(&red2.stderr)
+            );
+        }
+        None => panic!(
+            "no commit in recent history moves a clone pin, so the 'tracks do not re-pin' branch \
+             cannot be demonstrated. Widen the search rather than dropping the demonstration."
+        ),
+    }
+
     let _ = fs::remove_file(&empty);
     let _ = fs::remove_file(&good);
 }
