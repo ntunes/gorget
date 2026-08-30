@@ -31424,7 +31424,15 @@ fn self_host_stage1_clone_ceiling() {
     let runtime_preamble = &rust_c[..preamble_end];
 
     // (3) Emit the stage-1 body C: stage-0 driver lowers driver.gg → LIR C
-    // (backend-independent, byte-identical whether or not instrumented). The
+    // (backend-independent, byte-identical whether or not instrumented — the
+    // INSTRUMENTED half of that claim was an unguarded invariant-asserting
+    // comment and is now VERIFIED rather than inherited: a driver built WITHOUT
+    // `--clones=stats` emits stage1.c with md5 cb7906bd6c088d0b0acdaa7567b2685c,
+    // identical to the instrumented driver's, at 2026-08-30. Re-check by
+    // building the driver both ways and md5-ing the `--lir-c` stdout. ⚠ The
+    // BACKEND half is still unchecked, and cannot be checked with these
+    // counters: `--clones=stats` is rejected under `--backend=llvm`
+    // (`todo/t0550`). Do not lean on it.). The
     // emitting run ALSO prints its own [clone-stats] on stderr (the stage-0
     // count) — we ignore it; we only want the body on stdout.
     let body_out = run_with_deadline(

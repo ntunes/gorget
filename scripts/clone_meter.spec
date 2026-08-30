@@ -53,6 +53,36 @@ counters   = array_clone string_clone
 #   been shown to be deterministic.
 profile_is_an_input = no
 
+# ⚠ THE ROW THAT IS NOT ZERO — declare it before you compare two readings.
+#   the ABSOLUTE PATH of the checkout    string_clone = K + 7 x len(root)
+#                                        array_clone  unchanged
+# Measured on ONE fixed binary at four roots spanning 6..84 characters, zero
+# residual, attributed by `--clones=sites-tsv` to ONE CloneId
+# (`self_host_lowerer/loader.gg:32:25`, `VarDeclFromBorrow`, `String` — the
+# `path.slice(i, i + 1)` in `parent_dir`'s per-character scan, which runs 7
+# times per compile). This is what made the main checkout and an agent worktree
+# disagree by 294 on one axis. Filed as `todo/t0850`; the gate PRINTS
+# `[clone-meter] root_len=` beside every reading until it is fixed. The effect
+# is stage-0 only: both stage-1 pins reproduce to the digit across the same
+# 42-character difference.
+root_path_is_an_input = yes-on-the-string-axis
+
+# ⚠ AND THE ROWS NOBODY HAS MEASURED, named so the list is a TOTAL and not a
+# SELECTION. Each of these is an input to the stage-1 meter by construction and
+# has simply never been varied:
+#   * the RUNTIME PREAMBLE. The stage-1 binary is `preamble ++ stage1.c` and the
+#     counters ride the preamble, so a `src/backend/c/` change moves the stage-1
+#     counts with `stage1.c` BYTE-IDENTICAL. (This is why no "cheap signal"
+#     based on the stage1.c hash alone is authorised: it names half its input.)
+#   * the stage-1 `cc` flags (`-O0 -w … -lm -lpthread`).
+#   * `GG_STAGE1_TIMEOUT_SECS` and host load — deadline knobs, believed not to
+#     move a count, never checked.
+#   * the BACKEND. All four meters are C-only: `--clones=stats` is rejected
+#     under `--backend=llvm` (`grep -n "TODO(llvm-clone-stats)" src/main.rs`),
+#     so an LLVM-only clone regression rides under every one of them.
+#     Filed as `todo/t0550`.
+# Do not read this list as "measured to be zero" — only the table above is.
+
 # ── THE WORKLOAD'S TRUE CLOSURE ────────────────────────────────────────────
 # Measured, not globbed: the set of files the meter's run actually OPENS.
 #   bash scripts/clone_meter_probe.sh --closure
