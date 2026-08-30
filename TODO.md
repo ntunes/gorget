@@ -43,6 +43,27 @@ value — it overlaps Track B's zone in `src/ir/lowering/exprs/methods.rs`, and 
 that a dispatching leak fixture cannot wire to `security_safe_no_leak` until the call-result class (B) lands.
 It is R48's headline candidate, with B's landing as its precondition.
 
+**⚑⚑ THE SEVENTH INSTRUMENT FAILURE WAS THE ERRATUM WRITTEN TO PREVENT INSTRUMENT FAILURE — and it is mine.**
+D3b's brief carried erratum E1 for one reason: its acceptance bar would be **inert on a stale base**, since
+every affected example would pass while proving nothing. The probe I specified was *"compile a program using
+the construct and require it to FAIL."*
+⇒ **That probe is rc 0 on a CORRECT base too.** With the keyword removed the word lexes as an ordinary
+identifier and `unsafe:` becomes a plain named scope (`gg parse` → `NamedScope { node: "unsafe" }`). rc 0
+before, rc 0 after — **zero discriminating power in either direction**, and on a correct base it raises a FALSE
+stale-base alarm.
+⚠ **It never could have discriminated, because the keyword suppressed NOTHING.** Pre-removal it was handled
+identically to a named scope in both the checker and the validator — in one file it literally shared an arm.
+D50 removed a construct that was already a no-op, which is precisely why the reference's *"compiles identically
+to a normal block"* sentence was **true of the implementation** while the docs promised otherwise.
+⊕ **The executor's earlier stop was still sound — it rested on `grep -rl 'Stmt::Unsafe' src/` returning 17,
+DIRECT EVIDENCE, not on my probe.** The direct observation held; the clever probe did not.
+⇒ **The discriminating probe tests the OTHER direction — the word as an ORDINARY IDENTIFIER** (`int unsafe = 41`).
+Green at HEAD, RED-verified by re-adding the keyword to the lexer, rebuilding, 4 parse errors, then reverting.
+**When testing "was X removed", probe what the removal ENABLES, not what it forbids** — the forbidden direction
+may be legal for an unrelated reason.
+⚠⚠ **Core #13 says a gate never seen to fail is not evidence. I invoked that rule to write E1, and E1 had never
+been seen to fail. Every erratum that ADDS a check owes the demonstration it demands of others.**
+
 **⚑⚑⚑ THE ROUND'S DEEPEST FINDING, from Track E2's output review — A TOTAL ENUMERATION CAN STILL BE WRONG.**
 Its words: *"three fresh passes signed off a design whose literal implementation corrupts memory, because every
 pass reasoned about `for_loops.rs` while the defect was minted one layer up. **The census was total over the
