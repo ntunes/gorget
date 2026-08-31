@@ -17,6 +17,20 @@
 #
 # NEGATIVE CONTROLS (green BEFORE and AFTER — they never read the helper):
 #   Option.filter · Option.unwrap_or_else · Result.unwrap_or_else
+#
+# ⭐ PLUS ONE CELL THAT IS NEITHER — the VOID-RETURNING callable. `Option[T].map(f)`
+# with a `Callable[void(T)]` runs `f` for its effect and keeps the receiver's
+# payload type: ggdef does that, and so did the closure-literal spelling on both
+# backends, before and after. It is here because the fix's FIRST draft broke it —
+# minting the recovered `unit` as the result payload stores a void call's result
+# into a `Str` slot, measured rc 139 on C AND LLVM, strictly worse than the
+# `I64_TYPE` default it replaced. The reader therefore DROPS a `unit` recovery.
+# RED-verify for this cell is by breaking that mechanism: delete the
+# `!= UNIT_TYPE` guard in `callable_param_return_type` and it segfaults again.
+# ⊕ The ANNOTATED sibling `Option[String] r = o.map(void_f)` is NOT here because
+# it is now correctly REJECTED (`expected 'String', found 'void'` — the result is
+# `Option[void]`). That too is an improvement over base, where it was rc 139
+# SIGSEGV on BOTH backends.
 # Structurally outside the class, not omitted: `Option.or`, `Option.flatten`
 # and `Result.or` take a VALUE or no argument at all, so the adapter never has
 # a closure operand to type. That is the whole `combinator_kind` census —
@@ -157,6 +171,15 @@ String ctl_res_unwrap_or_else(Callable[String(String)] f):
     Result[String, String] o = Error(mk("b", "ad"))
     return o.unwrap_or_else(f)
 
+# --- the void-returning callable: effect runs, payload type survives ---
+
+void shout(String s):
+    print(mk(s, "%"))
+
+void void_map(Callable[void(String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    o.map(f)
+
 void main():
     print(opt_map(bang))
     print(opt_and_then(some_q))
@@ -169,3 +192,4 @@ void main():
     print(ctl_opt_filter(never))
     print(ctl_opt_unwrap_or_else(fallback))
     print(ctl_res_unwrap_or_else(caret))
+    void_map(shout)

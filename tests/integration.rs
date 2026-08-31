@@ -59242,7 +59242,8 @@ bad~
 bad-|
 filtered
 default
-bad^",
+bad^
+hello%",
     );
 }
 

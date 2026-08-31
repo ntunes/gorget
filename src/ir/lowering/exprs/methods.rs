@@ -4279,7 +4279,21 @@ fn callable_param_return_type(ctx: &LoweringContext, closure_op: &Operand) -> Op
     if !place.projections.is_empty() {
         return None;
     }
-    ctx.callable_return_type(place.local)
+    // ⚠ A RECOVERED `unit` RETURN IS DROPPED, NOT PROPAGATED. `Option[T].map(f)`
+    // with a `Callable[void(T)]` runs `f` for its effect and keeps the receiver's
+    // payload type — that is what ggdef does, and what the closure-literal
+    // spelling of the same program already did on both backends (`hello` then
+    // `done`). Minting `unit` as the result payload instead stores a void call's
+    // result into a `Str` slot: measured rc 139 on C AND LLVM, i.e. strictly
+    // worse than the pre-fix `I64_TYPE` default this helper replaces. Returning
+    // `None` here falls through to each caller's existing default, which is the
+    // behaviour those spellings agree on. Mirrors the identical `!= UNIT_TYPE`
+    // guards on the direct callable-call site (`exprs/calls.rs`) and on the
+    // self-host's own `__callable_N` return recovery.
+    match ctx.callable_return_type(place.local) {
+        Some(ret) if ret != UNIT_TYPE => Some(ret),
+        _ => None,
+    }
 }
 
 /// Infer the return type of a closure operand from its __call function signature.
