@@ -40,7 +40,7 @@ below, and it is not confined to one file:
 `spec_conformance.rs`, `security.rs` and `smith/main.rs` entirely, which no grep
 of one file can reach. The command above returns 65. The ledger says exactly this
 one line above the anchors ruling: *"derived by CENSUS … never by this list
-(a cited list is a selection)"* (`docs/define-gorget/decisions.md:2052-2045`).
+(a cited list is a selection)"* (`docs/define-gorget/decisions.md:2070-2045`).
 
 ⊕ It replaces three line numbers that were WRONG FROM THE DAY THIS FILE WAS
 COMMITTED — the same commit reshaped tests/integration.rs (net -152), so the cites

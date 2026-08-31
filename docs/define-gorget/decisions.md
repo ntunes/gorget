@@ -378,7 +378,7 @@ language-design/book examples showing float output.
   A35, whose warning would otherwise be the highest-volume diagnostic in the language and the
   only one users cannot name. **(2) a generic suppression mechanism is REQUIRED** — none
   exists today (no `#[allow]`, no lint levels; `--implicit-clones=…` is a bespoke per-feature
-  flag). **The shape is already ratified: GENERALIZE D42** (`decisions.md:1472` — "ONE NAME,
+  flag). **The shape is already ratified: GENERALIZE D42** (`decisions.md:1490` — "ONE NAME,
   THREE SCOPES, `allow`/`warn`/`deny`", ratified 2026-07-28, NOT IMPLEMENTED) from the single
   `implicit_clones` knob to every lint.
   **⚡ OWNER PINS (all ratified 2026-08-10):**
@@ -1275,6 +1275,24 @@ P1-infra reviewers' recommendation.
     sharing `gorget_str_slice` with `substring`), while the sequence `.slice` at `:383`
     carries `returns_view: false`. So the fix may be at the producer rather than at 211
     call sites — establish which BEFORE scoping it.
+  - **RIDER 2, owner 2026-08-31 — THE REMOVAL CLAUSE IS OVERRIDDEN. `.slice()` AND
+    `.substring()` ARE KEPT.** *"let's not remove .slice/substring as ratified by D22. we
+    keep it for now, both documented as aliases."* ⇒ **D22's *".slice() removed after
+    migration"* no longer binds the String spellings.** The colon form `v[a:b]` remains
+    CANONICAL and everything else D22 ratified (the four open forms, CLAMP bounds,
+    codepoint slicing, deferred negatives/step) is UNCHANGED — only the removal is
+    withdrawn. `t0316` keeps the clone reclaim and loses its removal deliverable;
+    `t0862` owns the read-site materialization.
+    ⚠ **"Documented as aliases" is a claim about BEHAVIOUR and is NOT yet verified.**
+    Measured 2026-08-31: String `.slice` is **absent from `docs/language-reference.md`**
+    (only `substring` and `byte_slice` are listed) though `.slice(` has **236** uses in
+    the tree against `.substring(`'s **38**; and the reference says `substring` *"panics
+    if out of bounds"* while the colon form *"CLAMPS"* — yet the two decls are
+    **byte-identical apart from the name** and share callee `gorget_str_slice`. Either
+    both clamp and the reference is stale, or bounds handling lives outside the decl.
+    **Measure all three spellings on an out-of-range index BEFORE writing "alias"
+    anywhere.** The reference is written AFTER the code, so this is an OPEN QUESTION,
+    not doc-wins.
 
 - 2026-07-06 — **D11 RATIFIED IN FULL (registry shape approved; owner clarified the
   governing rule: CLAUDE.md's NO NAME-MATCHING / NO SIDECARS discipline — typed metadata

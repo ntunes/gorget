@@ -144,7 +144,7 @@ TIMEOUT_CEILING="${TIMEOUT_CEILING:-0}"
 # Never legitimate, and RUNNER_FAIL in particular would otherwise read CLEAN.
 INFRA_CEILING="${INFRA_CEILING:-0}"
 # CRASH: the process died on a SIGNAL, or exited off the ratified toolchain
-# taxonomy (docs/define-gorget/decisions.md:2074-2070 — a TOTAL enumeration, so
+# taxonomy (docs/define-gorget/decisions.md:2092-2070 — a TOTAL enumeration, so
 # its complement is exactly the fault domain). This label DID NOT EXIST here
 # before: every such run fell into the CLEAN sink, which is how a deterministic
 # SIGSEGV was published as a clean run. Fatal at 0 — a crash in this corpus is a

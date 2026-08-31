@@ -14087,7 +14087,7 @@ const COMPREHENSION_PRE_IN_SIGIL_SRC: &str = "void main():\n    \
 /// The shape is `[x for x in ^xs]`: the parser strips the sigil BEFORE `in`
 /// (`parse_ownership_modifier` at the comprehension's iterable), while the
 /// formatter emits it AFTER. That asymmetry is NOT a bug to fix here — the
-/// ratified D33 comprehension rider (`docs/define-gorget/decisions.md:1461-1463`,
+/// ratified D33 comprehension rider (`docs/define-gorget/decisions.md:1479-1463`,
 /// 2026-07-26) RETIRES the pre-`in` spelling by moving the PARSER, and cites the
 /// formatter's post-`in` emission as corroboration of that direction. Repairing
 /// it in the FORMATTER instead would contradict the ratified decision (Core #15e
@@ -14202,7 +14202,7 @@ fn project_facts(source: &str, label: &str) -> Vec<String> {
                     "D33 comprehension-rider carve-out is STALE: the parser now \
                      records a non-borrow ownership for `[x for x in ^xs]`, so the \
                      pre-`in` sigil divergence has moved. Re-derive this allowlist \
-                     row against docs/define-gorget/decisions.md:1461-1463 and \
+                     row against docs/define-gorget/decisions.md:1479-1463 and \
                      tests/fixtures/known_gaps/comprehension_pre_in_sigil_retired.gg, \
                      then PIN ListComprehension.ownership here."
                 );
@@ -27025,7 +27025,7 @@ fn mutex_async_contention() {
 // `deref_wrapper_kind == NonDerefContainer` flag (layering rule 2 — no
 // name-matching). Every REJECT below was RED-verified against HEAD (silently
 // accepts EXIT=0 pre-fix; rejects with `E_NonDerefContainerBareTrait`
-// post-fix). D36: `docs/define-gorget/decisions.md:1385`.
+// post-fix). D36: `docs/define-gorget/decisions.md:1403`.
 
 const NON_DEREF_CONTAINER_BARE_TRAIT_CODE: &str = "error[E_NonDerefContainerBareTrait]";
 
