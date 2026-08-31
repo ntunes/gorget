@@ -4287,9 +4287,15 @@ fn callable_param_return_type(ctx: &LoweringContext, closure_op: &Operand) -> Op
     // result into a `Str` slot: measured rc 139 on C AND LLVM, i.e. strictly
     // worse than the pre-fix `I64_TYPE` default this helper replaces. Returning
     // `None` here falls through to each caller's existing default, which is the
-    // behaviour those spellings agree on. Mirrors the identical `!= UNIT_TYPE`
-    // guards on the direct callable-call site (`exprs/calls.rs`) and on the
-    // self-host's own `__callable_N` return recovery.
+    // behaviour those spellings agree on. ⚠ The two sibling sites handle the
+    // same `unit` case, but each in its own way, so this is a family
+    // resemblance and not a copied guard: the DIRECT callable-call arm
+    // (`exprs/calls.rs`, the `UNIT_TYPE`-local arm) recovers `unit` and then
+    // emits `call_void` instead of a tracked destination, which it can do
+    // because nothing consumes the result there; the self-host's
+    // `__callable_N` recovery DROPS a `unit` exactly as this does, and says
+    // why in its own comment. Here the recovered type would become a result
+    // PAYLOAD, so dropping it is the only correct move.
     match ctx.callable_return_type(place.local) {
         Some(ret) if ret != UNIT_TYPE => Some(ret),
         _ => None,
