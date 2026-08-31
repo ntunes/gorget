@@ -1,3 +1,6 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem.starts_with("httpserver_")`; it runs the middleware pipeline in-process; no socket module is
+#!  imported
 # Test: Router middleware pipeline
 # Verifies that:
 #   1. Middleware hooks are called in registration order after dispatch.

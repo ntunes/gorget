@@ -1,3 +1,4 @@
+#!parity-excluded network: imports std.net.udp and binds a real UDP socket; datagram timing decides the output
 # UDP typed-error API — `send_to` / `recv_from` route failure through
 # `IoError` instead of stringly-typed `Result[_, String]`.
 #

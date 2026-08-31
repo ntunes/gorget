@@ -1,3 +1,4 @@
+#!parity-excluded harness: `bench` block — the bench runner prints elapsed wall-clock time into stdout
 bench "trim whitespace":
     String s = "   hello world   "
     int i = 0

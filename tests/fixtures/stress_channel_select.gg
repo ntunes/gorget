@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: spawned producers race a channel select; which arm wins is the scheduler's
 # Stress: 4 channels, 4 producers, consumer using select to drain all.
 # Tests select fairness and correctness under contention.
 # Each producer sends values 1..100 on its channel.

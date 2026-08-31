@@ -1,3 +1,5 @@
+#!parity-excluded network: runs a real HTTP server over a bound TCP socket with a concurrent client; connection timing
+#!  decides the output
 # Tests that serve() handles multiple concurrent connections.
 # A server accepts exactly 2 connections concurrently using TaskGroup.
 # Both clients send requests simultaneously; both must get 200 responses.

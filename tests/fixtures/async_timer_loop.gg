@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: loops on async_sleep(); the iteration count reached depends on real elapsed time
 from std.async import async_sleep
 
 void main():

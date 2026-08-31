@@ -1,3 +1,5 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem.starts_with("httpserver_")`; it dispatches a Router directly; no socket module is imported
 # Test: Router dispatch for PUT, DELETE, PATCH + HEAD and OPTIONS auto-handling.
 #
 # Validates (all via direct Router.dispatch, no TCP):

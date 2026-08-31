@@ -1,3 +1,5 @@
+#!parity-excluded scheduling: 500 spawned writers plus async_sleep over shared state; the interleaving is the
+#!  scheduler's
 # Comprehensive shared variable stress test — thousands of concurrent tasks.
 #
 # Exercises: multi-token ordering, nested spawns, with-refresh after async_sleep,

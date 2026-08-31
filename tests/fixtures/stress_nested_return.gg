@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: nested spawned tasks; stdout aggregates a nondeterministic interleaving
 # Stress: nested spawn with return values — tasks spawning tasks.
 # Main spawns 5 tasks, each internally spawns 5 sub-tasks and sums results.
 # With work-stealing, blocking await in inner tasks won't starve the pool.

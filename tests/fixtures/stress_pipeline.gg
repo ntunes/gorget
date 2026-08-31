@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: spawned pipeline stages over Channels; stage interleaving is the scheduler's
 # Stress: 3-stage pipeline via 2 channels.
 # Producer sends 1..500, transformer doubles each, consumer sums.
 # Tests channel chaining, multi-hop async flow, backpressure.

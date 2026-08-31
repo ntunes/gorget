@@ -1,3 +1,5 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem.starts_with("httpserver_")`; its own header says "(no TCP)"
 # Test: parse_query_string edge cases (no TCP).
 #
 # Validates:

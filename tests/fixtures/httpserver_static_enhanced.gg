@@ -1,3 +1,5 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem.starts_with("httpserver_")`; it exercises ETag/304/206 over std.fs; no socket is bound
 # Test: Static file serving with ETag, conditional GET (304), and Range (206).
 #
 # Validates:

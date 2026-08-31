@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: spawned producers race a channel select; the per-arm counts are the scheduler's
 # Stress: select over 3 producers; shared per-channel counters track provenance.
 # Producers A, B, C each send 20 values (A: 1..20, B: 101..120, C: 201..220).
 # A drain task uses select to consume from all three and accumulates a global sum

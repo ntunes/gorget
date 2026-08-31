@@ -36106,81 +36106,411 @@ fn self_host_full_program() {
 // GG_REGEN_RUNTIME_SNAPSHOT=1; it materializes one `<stem>.out` per fixture
 // that is a STABLE MATCH (self-host twice + oracle twice, identical).
 //
-// CLAUDE.md "don't redesign around compiler gaps": the exclusion blocklist
-// below carries ONLY non-deterministic / platform-gated fixtures (the Rust
-// output is itself unstable or host-specific). A fixture the self-host
-// MISCOMPILES is NEVER excluded — it surfaces as WRONG-OUTPUT / CC-FAIL in the
-// diagnostic and goes to the TODO backlog. Inflating parity by excluding
-// self-host failures is the forbidden anti-pattern.
+// CLAUDE.md "don't redesign around compiler gaps": the exclusion set carries
+// ONLY fixtures whose own stdout is not a stable cross-lane function of their
+// source (the Rust output is itself unstable or host-specific). A fixture the
+// self-host MISCOMPILES is NEVER excluded — it surfaces as WRONG-OUTPUT /
+// CC-FAIL in the diagnostic and goes to the TODO backlog. Inflating parity by
+// excluding self-host failures is the forbidden anti-pattern, and no
+// `ParityExclusionKind` names it.
+//
+// ⛔ THE EXCLUSION IS DECLARED BY THE FIXTURE, NEVER INFERRED FROM ITS NAME.
+// `fixture_parity_exclusion` reads a `#!parity-excluded <kind>: <evidence>`
+// line out of the fixture's own leading comment block and is deliberately not
+// given the stem, so a name CANNOT decide the question at any of the three
+// consumers below (Core #2 / layering rule 2). Full rationale:
+// `docs/devbook/27-comparison-bootstrap.md`.
+//
+// THE THREE CONSUMERS AND WHAT ADJUDICATES EACH. The classification is a
+// judgement, so every consumer names the instrument that can overrule it —
+// a consumer with no arbiter is a place where a wrong classification survives
+// forever, and consumer 1 was exactly that until the ratchet below existed.
+//
+//   1. `self_host_runtime_diff` (the FLOORED DIAGNOSTIC) — calls the reader.
+//      ARBITER: `attribute_parity_nondeterminism` + the
+//      `EXPECTED_NONDETERMINISTIC` ratchet. A fixture wrongly treated as
+//      DETERMINISTIC (under-declared) re-runs both lanes, is NAMED as a lane
+//      disagreeing with itself, and FAILS the gate unless it is on the filed
+//      list. ⚠ Nothing here catches the OTHER direction: a fixture wrongly
+//      declared unstable is simply absent, and absence is invisible. That is
+//      what the `untriaged` kind + `parity_untriaged_exclusions_shrink_only`
+//      (`tests/lints.rs`) make countable instead of silent.
+//   2. `regenerate_runtime_snapshots` (GG_REGEN_RUNTIME_SNAPSHOT=1) — calls the
+//      reader. ARBITER: the run-twice stability filter, and it is FINAL here.
+//      A fixture that survives the reader but varies across the double pass
+//      gets no snapshot, so an under-declaration cannot reach the lock-in net
+//      through this path.
+//   3. `self_host_runtime` (the LOCK-IN NET, build-breaking) — NEVER calls the
+//      reader. Its oracle is the committed `runtime_snapshots/*.out`, which
+//      consumer 2 produces and wipes UNDER the classification, so the two can
+//      drift apart silently between regens. ARBITER:
+//      `parity_declared_fixtures_have_no_snapshot` (`tests/lints.rs`), which
+//      fails if a declared-excluded fixture still has a snapshot (or a snapshot
+//      has no fixture). ⚠ Declaring a fixture does NOT remove it from this net:
+//      its `.out` is `git rm`'d in the same commit.
 
-/// Static exclusion blocklist for the runtime-parity harness. Each entry is a
-/// `(reason, predicate)` pair; a fixture stem matching ANY predicate is
-/// excluded from the parity number (its Rust output is non-deterministic or
-/// platform-gated, so a stdout diff would be meaningless / flaky).
+/// The declaration directive a fixture uses to take itself out of the
+/// runtime-parity corpus. Lives in the fixture's LEADING comment block, in the
+/// tree's established "`#!` fence inside leading `#` comments" convention (the
+/// same one `#!spectest` uses — `spec/ggdef/src/frontmatter.rs`), so it is
+/// invisible to the lexer and `gg run`/`gg build` are unaffected.
 ///
-/// Predicates use PRECISE shapes (prefix / exact-name / explicit contains),
-/// never a loose substring on a short token — `contains("now")` would wrongly
-/// catch `leak_known_patterns` ("known") and `unknown_directive_error`
-/// ("unknown"). The stability filter (run-twice) is the final arbiter for the
-/// LOCK-IN net: a "deterministic" entry here that still varies gets no
-/// snapshot; a real deterministic fixture wrongly family-matched is reinstated
-/// by evidence. We deliberately do NOT blanket-exclude
-/// async/channel/mutex/thread/shared/spawn — the deterministic ones belong in
-/// the set; the stability filter decides per fixture.
-fn runtime_parity_excluded(stem: &str) -> Option<&'static str> {
-    // Time/date: wall-clock / now() / current-date dependent output.
-    if stem.starts_with("datetime_")
-        || stem.starts_with("time_")
-        || stem == "toml_datetime"
-    {
-        return Some("time/date (wall-clock dependent)");
+/// Shape, with the evidence free to run onto continuation lines so no line
+/// blows the ratified 120-column budget (`fmt_no_new_over_budget_lines`):
+///
+/// ```text
+/// #!parity-excluded untriaged: DEBT (todo/t0828) — no cause established.
+/// #!  Excluded only because the retired filename heuristic matched
+/// #!  `stem.starts_with("datetime_")`; its own header says "fully deterministic".
+/// ```
+///
+/// A continuation is `#!` + WHITESPACE, which cannot collide with a fence
+/// (`#!parity-excluded`, `#!spectest`, `#!end` are all `#!` + a word).
+const PARITY_EXCLUDED_DECL: &str = "#!parity-excluded";
+
+/// WHY a fixture's stdout is not a stable cross-lane function of its source.
+///
+/// TYPED, not a free string: `reason()` and `spelling()` are exhaustive
+/// `match`es with NO `_` arm, so **rustc is the witness** that every kind the
+/// reader can produce has both a wire spelling and a human reason. Adding a
+/// variant without one does not compile.
+///
+/// ⛔ There is deliberately NO variant meaning "the self-host miscompiles it".
+/// That fixture stays in the corpus as WRONG-OUTPUT / CC-FAIL and goes to the
+/// TODO backlog — excluding it would be the forbidden parity-inflation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum ParityExclusionKind {
+    /// The program reads the wall clock / current date into its own stdout.
+    Clock,
+    /// The program draws from an RNG.
+    Random,
+    /// The program binds/connects a socket or drives a peer stack.
+    Network,
+    /// A sleep, a timed wait, or a concurrent interleaving decides the output.
+    Scheduling,
+    /// The `bench` / `test` RUNNER prints elapsed wall-clock time into stdout —
+    /// the program itself is deterministic, its harness output is not.
+    Harness,
+    /// The program reads runtime/allocator-internal state (`mem_live()`) into
+    /// stdout, so the bytes differ per lane and per allocation history.
+    Allocator,
+    /// The output depends on the host environment beyond the program: an
+    /// external binary, the host time zone, a device/windowing stack.
+    Host,
+    /// ⚠ DEBT — inherited from the retired filename-substring heuristic; NO
+    /// cause has been established for this fixture. It is excluded only because
+    /// of how it is SPELLED, which is exactly the defect this declaration
+    /// retired. Each one is a candidate for reinstatement; see
+    /// `parity_untriaged_exclusions_shrink_only` in `tests/lints.rs` for the
+    /// shrink-only ratchet and `todo/` for the reinstatement work.
+    Untriaged,
+}
+
+impl ParityExclusionKind {
+    /// The wire spelling used in the fixture declaration. Exhaustive — rustc
+    /// rejects a new variant that forgets its spelling.
+    fn spelling(self) -> &'static str {
+        match self {
+            Self::Clock => "clock",
+            Self::Random => "random",
+            Self::Network => "network",
+            Self::Scheduling => "scheduling",
+            Self::Harness => "harness",
+            Self::Allocator => "allocator",
+            Self::Host => "host",
+            Self::Untriaged => "untriaged",
+        }
     }
-    // Randomness.
-    if stem.starts_with("random_") || stem.contains("_rand") {
-        return Some("randomness (non-deterministic)");
+
+    /// The reason text carried into the parity report. Exhaustive — rustc
+    /// rejects a new variant that forgets its reason.
+    fn reason(self) -> &'static str {
+        match self {
+            Self::Clock => "clock (the program reads the wall clock into stdout)",
+            Self::Random => "random (the program draws from an RNG)",
+            Self::Network => "network (binds/connects a socket or drives a peer stack)",
+            Self::Scheduling => "scheduling (a sleep, timed wait or interleaving decides the output)",
+            Self::Harness => "harness (the bench/test runner prints elapsed wall-clock time)",
+            Self::Allocator => "allocator (reads mem_live()/runtime-internal state into stdout)",
+            Self::Host => "host (depends on an external binary, the host time zone, or a device)",
+            Self::Untriaged => "untriaged (DEBT — inherited from the retired filename heuristic)",
+        }
     }
-    // Network / sockets — bind to ports, talk to peers, non-deterministic.
-    if stem.starts_with("httpserver_")
-        || stem.starts_with("p2p_")
-        || stem.starts_with("socket_")
-        || stem.starts_with("udp_")
-        || stem.contains("_socket_")
-        || stem.starts_with("stdlib_udp_")
-        || stem.starts_with("stdlib_io_socket_")
-        || stem == "process_spawn"
-    {
-        return Some("network/sockets (non-deterministic / platform)");
+
+    /// Parse one wire spelling. An unrecognised kind is a LOUD error at the
+    /// reader, never a silent "not declared" — a mis-parse would silently put a
+    /// nondeterministic fixture back into a byte-compared corpus.
+    fn parse(s: &str) -> Option<Self> {
+        match s {
+            "clock" => Some(Self::Clock),
+            "random" => Some(Self::Random),
+            "network" => Some(Self::Network),
+            "scheduling" => Some(Self::Scheduling),
+            "harness" => Some(Self::Harness),
+            "allocator" => Some(Self::Allocator),
+            "host" => Some(Self::Host),
+            "untriaged" => Some(Self::Untriaged),
+            _ => None,
+        }
     }
-    // Sleep / timing.
-    if stem.contains("sleep")
-        || stem.contains("timer")
-        || stem == "async_reactor_sleep"
-        || stem == "shared_sleep_loop"
-        || stem == "channel_recv_timeout"
-        || stem == "test_tags"  // `gg test` output pins elapsed `(Nms)` — wall-clock dependent (0ms vs 1ms flake)
-    {
-        return Some("sleep/timing (wall-clock dependent)");
+}
+
+/// One fixture's parity-exclusion declaration: the typed kind plus the
+/// fixture-authored evidence sentence that justifies it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParityExclusion {
+    kind: ParityExclusionKind,
+    evidence: String,
+}
+
+impl ParityExclusion {
+    /// The reason string the parity report prints for this fixture.
+    fn reason(&self) -> String {
+        format!("{} — {}", self.kind.reason(), self.evidence)
     }
-    // Stress / bench — PREFIX only. A loose `*_stress*` CONTAINS would
-    // over-exclude the deterministic string_stress_methods /
-    // string_fstring_stress / string_unicode_stress; the stability filter
-    // reinstates real deterministic *stress* fixtures by evidence.
-    if stem.starts_with("stress_")
-        || stem.starts_with("bench_")
-        || stem == "dict_tombstone_stress"
-        || stem == "leak_stress"
-    {
-        return Some("stress/bench (timing / non-deterministic)");
+}
+
+/// Read a fixture's runtime-parity exclusion **from its SOURCE**.
+///
+/// ⛔ CORE #2 / LAYERING RULE 2 — this function is deliberately NOT given the
+/// fixture's name. "Is this fixture's stdout a stable cross-lane function of
+/// its source?" is a property of the PROGRAM, so the program declares it and
+/// this accessor reads it. The predicate this replaced answered the question
+/// with `stem.starts_with("httpserver_")` — which excluded `httpserver_router`
+/// ("all core features exercised without TCP", per its own header) purely
+/// because of how it is spelled, and left `test_process_timeout` in the corpus
+/// for the same reason (`todo/t0820`). A name cannot decide meaning here even
+/// by accident: there is no name in scope.
+///
+/// The declaration is only honoured inside the LEADING comment block — the
+/// first non-comment, non-blank line ends the scan — matching `#!spectest`'s
+/// "the block lives entirely in leading `#` comments" rule. A declaration
+/// further down the file would be silently ignored, so
+/// `parity_declarations_are_well_formed` (`tests/lints.rs`) fails on one.
+///
+/// Every malformed declaration is a LOUD `Err`, never a silent `None`: a
+/// silent mis-parse would put a nondeterministic fixture back into a
+/// byte-compared corpus, which is the exact failure class this reader exists
+/// to make impossible.
+fn fixture_parity_exclusion(src: &str) -> Result<Option<ParityExclusion>, String> {
+    let mut found: Option<ParityExclusion> = None;
+    let mut in_continuation = false;
+    for line in src.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() {
+            in_continuation = false;
+            continue;
+        }
+        if !trimmed.starts_with('#') {
+            break; // leading comment block is over
+        }
+        // `#!` + whitespace continues the evidence of the declaration above.
+        if let Some(cont) = parity_continuation_text(trimmed) {
+            if in_continuation {
+                let decl = found.as_mut().expect("continuation implies a declaration");
+                decl.evidence.push(' ');
+                decl.evidence.push_str(cont);
+                continue;
+            }
+            return Err(format!(
+                "`#!` continuation line with no `{PARITY_EXCLUDED_DECL}` declaration \
+                 directly above it: `{trimmed}`",
+            ));
+        }
+        in_continuation = false;
+        let Some(rest) = trimmed.strip_prefix(PARITY_EXCLUDED_DECL) else {
+            continue;
+        };
+        let Some((kind_text, evidence)) = rest.split_once(':') else {
+            return Err(format!(
+                "malformed `{PARITY_EXCLUDED_DECL}` declaration: expected \
+                 `{PARITY_EXCLUDED_DECL} <kind>: <evidence>`, got `{trimmed}`",
+            ));
+        };
+        let kind_text = kind_text.trim();
+        let Some(kind) = ParityExclusionKind::parse(kind_text) else {
+            return Err(format!(
+                "unknown parity-exclusion kind `{kind_text}` in `{trimmed}` — the kinds are \
+                 clock / random / network / scheduling / harness / allocator / host / untriaged \
+                 (`ParityExclusionKind` in tests/integration.rs). There is deliberately no kind \
+                 for \"the self-host miscompiles it\": that fixture stays in the corpus.",
+            ));
+        };
+        let evidence = evidence.trim().to_string();
+        if evidence.is_empty() {
+            return Err(format!(
+                "`{PARITY_EXCLUDED_DECL} {kind_text}:` carries no evidence — every exclusion \
+                 states WHAT varies, in the fixture, so the next reader can check it or \
+                 reinstate the fixture.",
+            ));
+        }
+        if found.is_some() {
+            return Err(format!(
+                "two `{PARITY_EXCLUDED_DECL}` declarations in one fixture — exactly one \
+                 declaration decides (layering rule 3: one source of truth per axis).",
+            ));
+        }
+        found = Some(ParityExclusion { kind, evidence });
+        in_continuation = true;
     }
-    // Platform GPU / windowing.
-    if stem.starts_with("metal_")
-        || stem.starts_with("gl_")
-        || stem.contains("_gpu")
-        || stem.starts_with("sdl_")
-    {
-        return Some("platform (GPU/windowing — not available)");
+    Ok(found)
+}
+
+/// The text of a `#!`-continuation line, or `None` if the line is a fence
+/// (`#!parity-excluded`, `#!spectest`, `#!end` — all `#!` + a word character)
+/// or an ordinary `#` comment.
+fn parity_continuation_text(trimmed_line: &str) -> Option<&str> {
+    let rest = trimmed_line.strip_prefix("#!")?;
+    if !rest.starts_with(|c: char| c.is_whitespace()) {
+        return None;
     }
-    None
+    Some(rest.trim())
+}
+
+/// `fixture_parity_exclusion` for a fixture on disk. A malformed declaration or
+/// an unreadable fixture PANICS — the three consumers must never proceed on a
+/// guessed classification.
+fn fixture_parity_exclusion_at(path: &Path) -> Option<ParityExclusion> {
+    let src = std::fs::read_to_string(path)
+        .unwrap_or_else(|e| panic!("parity: cannot read fixture {}: {e}", path.display()));
+    fixture_parity_exclusion(&src)
+        .unwrap_or_else(|e| panic!("parity: {} — {e}", path.display()))
+}
+
+/// The reader, exercised on the shapes that must NOT silently succeed.
+///
+/// ⚠ The first case is the one that matters and the one this replaces: a
+/// fixture whose NAME says one thing and whose DECLARATION says the other, with
+/// the declaration winning. The retired predicate would have excluded
+/// `httpserver_router` (its own header: "all core features exercised without
+/// TCP") on its spelling alone, and would have missed a `datetime_`-shaped
+/// fixture spelled `foo`. The reader cannot do either — it is never given a
+/// name.
+#[test]
+fn parity_declaration_reader_ignores_the_name_and_rejects_malformed() {
+    // 1. A name that SCREAMS "exclude me" decides nothing: no declaration, no
+    //    exclusion. (`httpserver_`, `datetime_`, `stress_` were all families in
+    //    the retired cascade.)
+    for looks_excluded in ["httpserver_router", "datetime_basic", "stress_alloc_vectors"] {
+        let src = format!("# Test: {looks_excluded} — no TCP, no clock.\nvoid main():\n    print(1)\n");
+        assert_eq!(
+            fixture_parity_exclusion(&src),
+            Ok(None),
+            "a fixture named like {looks_excluded} must not be excluded by its NAME",
+        );
+    }
+
+    // 2. A name that says nothing, declaring: the DECLARATION decides.
+    let declared = "#!parity-excluded clock: reads std.time time() into stdout\nvoid main():\n    print(1)\n";
+    let got = fixture_parity_exclusion(declared).expect("well-formed").expect("declared");
+    assert_eq!(got.kind, ParityExclusionKind::Clock);
+    assert_eq!(got.evidence, "reads std.time time() into stdout");
+    assert!(got.reason().starts_with("clock ("), "reason renders the typed kind: {}", got.reason());
+
+    // 3. Every kind round-trips through its own wire spelling.
+    for kind in [
+        ParityExclusionKind::Clock,
+        ParityExclusionKind::Random,
+        ParityExclusionKind::Network,
+        ParityExclusionKind::Scheduling,
+        ParityExclusionKind::Harness,
+        ParityExclusionKind::Allocator,
+        ParityExclusionKind::Host,
+        ParityExclusionKind::Untriaged,
+    ] {
+        assert_eq!(
+            ParityExclusionKind::parse(kind.spelling()),
+            Some(kind),
+            "{kind:?} does not round-trip through `{}`",
+            kind.spelling(),
+        );
+    }
+
+    // 4. Malformed is LOUD, never a silent `None` — a silent mis-parse would
+    //    put a nondeterministic fixture back into a byte-compared corpus.
+    for bad in [
+        "#!parity-excluded clock reads a clock\nvoid main():\n",          // no colon
+        "#!parity-excluded wallclock: reads a clock\nvoid main():\n",     // unknown kind
+        "#!parity-excluded clock:   \nvoid main():\n",                    // no evidence
+        "#!parity-excluded clock: a\n#!parity-excluded host: b\nvoid main():\n", // two decls
+    ] {
+        assert!(
+            fixture_parity_exclusion(bad).is_err(),
+            "reader accepted a malformed declaration: {bad:?}",
+        );
+    }
+
+    // 5. A declaration BELOW the leading comment block is not honoured — which
+    //    is why `parity_declarations_are_well_formed` (tests/lints.rs) fails on
+    //    one rather than letting it pass as "not declared".
+    let below = "void main():\n    print(1)\n#!parity-excluded clock: too late\n";
+    assert_eq!(fixture_parity_exclusion(below), Ok(None));
+
+    // 6. `#!` + WHITESPACE continues the evidence (so no line has to blow the
+    //    120-column budget); `#!` + a word is a FENCE and never a continuation.
+    let wrapped = "#!parity-excluded network: binds a real TCP socket;\n\
+                   #!  the port and the peer's timing decide the output\n\
+                   # An ordinary comment, NOT part of the evidence.\n\
+                   void main():\n";
+    let got = fixture_parity_exclusion(wrapped).expect("well-formed").expect("declared");
+    assert_eq!(
+        got.evidence,
+        "binds a real TCP socket; the port and the peer's timing decide the output",
+    );
+    assert_eq!(parity_continuation_text("#!spectest"), None, "a fence is not a continuation");
+    assert_eq!(parity_continuation_text("#!end"), None, "a fence is not a continuation");
+    assert_eq!(parity_continuation_text("#!  more"), Some("more"));
+
+    // 7. A continuation with nothing to continue is LOUD, not silently dropped.
+    let orphan = "# a header\n#!  orphaned continuation\nvoid main():\n";
+    assert!(fixture_parity_exclusion(orphan).is_err());
+}
+
+/// The REAL reader over the REAL corpus, in the fast lane.
+///
+/// `parity_declarations_are_well_formed` (`tests/lints.rs`) re-implements the
+/// grammar as a second opinion; this runs the actual `fixture_parity_exclusion`
+/// the three consumers call, over every top-level fixture, so a reader change
+/// that stops seeing the committed declarations is caught in 0.1s instead of at
+/// the end of a ~12-minute release gate.
+#[test]
+fn parity_declarations_read_back_from_the_real_corpus() {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixtures = runtime_parity_corpus(&manifest_dir);
+    assert!(fixtures.len() > 2000, "corpus scan found only {} fixtures", fixtures.len());
+
+    let mut by_kind: Vec<(ParityExclusionKind, usize)> = Vec::new();
+    let mut thin: Vec<String> = Vec::new();
+    let mut declared = 0usize;
+    for f in &fixtures {
+        // `_at` PANICS on a malformed declaration, which is the point: every
+        // committed fixture must read back cleanly through the real path.
+        let Some(decl) = fixture_parity_exclusion_at(f) else { continue };
+        declared += 1;
+        if decl.evidence.chars().count() < 20 {
+            thin.push(format!(
+                "{}: evidence is {} chars — say WHAT varies",
+                f.file_stem().unwrap().to_string_lossy(),
+                decl.evidence.chars().count(),
+            ));
+        }
+        match by_kind.iter_mut().find(|(k, _)| *k == decl.kind) {
+            Some((_, n)) => *n += 1,
+            None => by_kind.push((decl.kind, 1)),
+        }
+    }
+    by_kind.sort();
+    eprintln!("parity declarations read back: {declared} / {} fixtures", fixtures.len());
+    for (kind, n) in &by_kind {
+        eprintln!("  {:<12}: {n}", kind.spelling());
+    }
+    assert!(thin.is_empty(), "declarations with no usable evidence:\n  {}", thin.join("\n  "));
+    assert!(
+        declared > 0,
+        "the reader sees NO declarations in the corpus — every clock, RNG and socket fixture \
+         would be byte-compared across lanes. The directive was renamed, the leading-block scan \
+         broke, or the declarations were lost."
+    );
 }
 
 /// Outcome of one fixture under the runtime-parity diagnostic.
@@ -36194,8 +36524,9 @@ enum RuntimeParityOutcome {
     CcFailed { detail: String },
     DriverFailed { detail: String },
     Crashed { exit_code: Option<i32>, stderr_first: String },
-    /// Statically excluded (non-det / platform). Carries the reason.
-    Excluded(&'static str),
+    /// Excluded by the fixture's own `#!parity-excluded` declaration. Carries
+    /// the typed kind and the rendered reason (kind + fixture evidence).
+    Excluded(ParityExclusionKind, String),
     /// Rust `gg run` rejected the fixture with a diagnostic (clean non-zero
     /// exit). An error-test fixture — excluded from parity.
     RustRejected,
@@ -36376,8 +36707,9 @@ const PARITY_ATTRIBUTION_ORACLE_RERUNS: usize = 2;
 /// only thing that changes is that the printed line NAMES the nondeterminism
 /// instead of leaving it to be rediscovered. The fix for a row this flags is
 /// to pin the fixture's interleaving (`directive scheduler=…`, as the
-/// `shared_stale_*` family does) or to declare it non-deterministic in
-/// `runtime_parity_excluded` — never to leave it flapping.
+/// `shared_stale_*` family does) or, if the nondeterminism is inherent, to add
+/// a `#!parity-excluded <kind>: <evidence>` line to the FIXTURE — never to
+/// leave it flapping.
 ///
 /// Returns `None` when both lanes reproduced their own output every time (the
 /// mismatch is real parity debt), or `Some(note)` naming the unstable lane.
@@ -37479,6 +37811,17 @@ fn self_host_runtime_diff() {
     // cold, where the driver BUILD dominates and the census itself is the
     // smaller half.
     if std::env::var("GG_RUNTIME_DIFF").as_deref() == Ok("0") {
+        // ANNOUNCE IT. This was a bare `return;` — the ONLY one of the five
+        // conditions that can silence both bounds without saying so, in the
+        // gate whose entire documented history (above, 148 -> 151) is about
+        // running blind. The other four all print: `parity_floor_active`'s
+        // three, and the `cfg!(debug_assertions)` branch at each bound. With
+        // this line the readiness FIRE COUNT is mechanical — you read whether
+        // the asserts ran off the run's own stderr — instead of inferential.
+        eprintln!(
+            "\nself_host_runtime_diff: SKIPPED — GG_RUNTIME_DIFF=0. The MATCH floor and the \
+             non-MATCH ceiling did NOT execute; this run is not evidence about either.\n"
+        );
         return;
     }
 
@@ -37529,9 +37872,10 @@ fn self_host_runtime_diff() {
         parallel_map_fixtures(&fixtures, |fixture| {
             let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
 
-            // 1. Static exclusion (non-det / platform) — skip all work.
-            if let Some(reason) = runtime_parity_excluded(&stem) {
-                return (stem, RuntimeParityOutcome::Excluded(reason));
+            // 1. The fixture's own `#!parity-excluded` declaration — skip all
+            // work. Read from the SOURCE, not the stem (Core #2).
+            if let Some(decl) = fixture_parity_exclusion_at(fixture) {
+                return (stem, RuntimeParityOutcome::Excluded(decl.kind, decl.reason()));
             }
 
             // 2. Oracle: gg run F (live). A hung fixture (infinite loop /
@@ -37606,7 +37950,7 @@ fn self_host_runtime_diff() {
     let mut cc_fail: Vec<(String, String)> = Vec::new();
     let mut driver_fail: Vec<(String, String)> = Vec::new();
     let mut crashed: Vec<(String, String)> = Vec::new();
-    let mut excluded: Vec<(String, &'static str)> = Vec::new();
+    let mut excluded: Vec<(String, ParityExclusionKind, String)> = Vec::new();
     let mut rust_rejected: Vec<String> = Vec::new();
     let mut rust_crash: Vec<String> = Vec::new();
 
@@ -37626,7 +37970,9 @@ fn self_host_runtime_diff() {
             RuntimeParityOutcome::Crashed { exit_code, stderr_first } => {
                 crashed.push((stem.clone(), format!("exit={exit_code:?} {stderr_first}")))
             }
-            RuntimeParityOutcome::Excluded(reason) => excluded.push((stem.clone(), reason)),
+            RuntimeParityOutcome::Excluded(kind, reason) => {
+                excluded.push((stem.clone(), *kind, reason.clone()))
+            }
             RuntimeParityOutcome::RustRejected => rust_rejected.push(stem.clone()),
             RuntimeParityOutcome::RustCrash => rust_crash.push(stem.clone()),
         }
@@ -37650,7 +37996,22 @@ fn self_host_runtime_diff() {
     eprintln!("  CRASH               : {}", crashed.len());
     eprintln!("  DRIVER-FAIL         : {}", driver_fail.len());
     eprintln!("  --- excluded from parity ---");
-    eprintln!("  EXCLUDED (non-det)  : {}", excluded.len());
+    eprintln!("  EXCLUDED (declared) : {}", excluded.len());
+    {
+        // Per-kind breakdown, so the exclusion set is auditable from the gate's
+        // own output instead of from a script somebody has to write again.
+        let mut by_kind: Vec<(ParityExclusionKind, usize)> = Vec::new();
+        for (_, kind, _) in &excluded {
+            match by_kind.iter_mut().find(|(k, _)| k == kind) {
+                Some((_, n)) => *n += 1,
+                None => by_kind.push((*kind, 1)),
+            }
+        }
+        by_kind.sort();
+        for (kind, n) in by_kind {
+            eprintln!("      {:<12}: {n}", kind.spelling());
+        }
+    }
     eprintln!("  RUST-REJECTED       : {}", rust_rejected.len());
     eprintln!("  RUST-CRASH          : {}", rust_crash.len());
     eprintln!(
@@ -37680,12 +38041,79 @@ fn self_host_runtime_diff() {
              printed variants tell them apart:\n     \
              (a) a SCHEDULING RACE — the variants are all plausible program outputs. Pin the\n     \
                  fixture's interleaving with `directive scheduler=<mode>`, as the\n     \
-                 `shared_stale_*` family does, or declare it in `runtime_parity_excluded`.\n     \
+                 `shared_stale_*` family does, or — if the nondeterminism is inherent —\n                 \
+                 add a `#!parity-excluded <kind>: <evidence>` line to the FIXTURE.\n     \
              (b) a MEMORY DEFECT on that lane — the variants are raw pointers, garbage bytes or\n     \
                  uninitialized reads. That is a real bug in the named lane and is worth MORE\n     \
                  attention than the byte diff, not less: file it and run it under ASan."
         );
     }
+
+    // ── UNSTABLE-ROW shrink-only allowlist: the attribution becomes a GATE ──
+    //
+    // `attribute_parity_nondeterminism` NAMES a lane that disagrees with
+    // itself. Naming is not gating: on its own it `eprintln!`s into a report
+    // block nothing asserts on, so a newly-flapping fixture is printed and
+    // never failed — on a diagnostic CI switches off. A witness that cannot
+    // FAIL does not retire a class (Core #6), so the verdict is ratcheted here.
+    //
+    // ⚠ ONE-DIRECTIONAL, deliberately asymmetric with `EXPECTED_BOTH_WRONG`
+    // above. A row NOT on the list is a FAILURE. An expected row that does NOT
+    // appear is NOT a failure and never asks to be removed: the signal is
+    // probabilistic — it fires only when the run happens to produce a
+    // cross-lane mismatch AND the re-runs happen to disagree — so "it did not
+    // show up this time" is not evidence that it is fixed. Removing an entry is
+    // a deliberate act by whoever fixed the underlying defect.
+    //
+    // ⛔ THIS IS NOT AN EXCLUSION LIST, AND THE REMEDY IS ALMOST NEVER
+    // "declare the fixture". Two causes, and the printed variants tell them
+    // apart (see the advisory above): (a) a SCHEDULING RACE — pin the
+    // interleaving with `directive scheduler=…`, and only if the flap is
+    // inherent add a `#!parity-excluded <kind>: <evidence>` line to the
+    // FIXTURE; (b) a MEMORY DEFECT on the named lane — a real miscompile, to be
+    // filed and run under ASan, NOT declared away. Reaching for the declaration
+    // to quiet this assert is "redesign around a compiler gap", which the
+    // harness banner above already forbids.
+    //
+    // Each entry MUST carry a filed TODO citation, like `EXPECTED_BOTH_WRONG`.
+    // Regenerate the list with the documented invocation above (release,
+    // `-- --nocapture`) and read the `--- NONDETERMINISTIC ---` block.
+    const EXPECTED_NONDETERMINISTIC: &[&str] = &[
+        // ALL FOUR are cause (b), one mechanism, one filed item: `todo/t0823` —
+        // the self-host stores an `int32_t` into a `void*` slot, so the emitted
+        // binary prints an ASLR-moving address or garbage bytes and disagrees
+        // with itself every run. They are MISCOMPILES, not under-declared
+        // fixtures, and they leave this list when t0823 is fixed — never by
+        // being declared `#!parity-excluded`.
+        "closure_fstring_capture",
+        "cow_lazy_w3c_arg_temp",
+        "ecs_advanced",
+        "iter_map_after_filter",
+    ];
+    if !cfg!(debug_assertions) && parity_floor_active("self_host_runtime_diff") {
+        let new_nondet: Vec<&str> = nondet_rows
+            .iter()
+            .map(|(stem, _)| stem.as_str())
+            .filter(|s| !EXPECTED_NONDETERMINISTIC.contains(s))
+            .collect();
+        assert!(
+            new_nondet.is_empty(),
+            "NEW NONDETERMINISTIC row(s) in the parity corpus: {new_nondet:?}. A lane disagrees \
+             with ITSELF on a fixture nothing has declared unstable — the byte-exact differential \
+             gate is pinning a coin flip. The variants are printed in the NONDETERMINISTIC block \
+             above; they tell you which of the two causes it is:\n  \
+             (a) SCHEDULING RACE (all variants are plausible program outputs) — pin the \
+             interleaving with `directive scheduler=…` as the `shared_stale_*` family does; only \
+             if the flap is INHERENT, add a `#!parity-excluded <kind>: <evidence>` line to the \
+             fixture.\n  \
+             (b) MEMORY DEFECT on the named lane (raw pointers / garbage bytes / uninitialized \
+             reads) — a real miscompile. File it, run it under ASan, and fix the lane.\n  \
+             ⛔ Do NOT add the row to EXPECTED_NONDETERMINISTIC without a filed TODO + triage, \
+             and do NOT reach for the fixture declaration to quiet this: excluding a fixture the \
+             self-host miscompiles is the forbidden parity-inflation.",
+        );
+    }
+
     eprintln!("\n--- CC-FAIL backlog ({}) ---", cc_fail.len());
     for (stem, detail) in &cc_fail {
         eprintln!("  CC-FAIL       {stem} | {detail}");
@@ -39108,8 +39536,8 @@ fn regenerate_runtime_snapshots(
       parallel_map_fixtures(&fixtures, |fixture| {
         let stem = fixture.file_stem().unwrap().to_string_lossy().to_string();
 
-        if let Some(reason) = runtime_parity_excluded(&stem) {
-            return Regen::Skipped(stem, format!("excluded: {reason}"));
+        if let Some(decl) = fixture_parity_exclusion_at(fixture) {
+            return Regen::Skipped(stem, format!("excluded: {}", decl.reason()));
         }
 
         // Oracle twice. A hung oracle ⇒ skip (can't snapshot a non-terminating

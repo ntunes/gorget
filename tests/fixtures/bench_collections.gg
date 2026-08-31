@@ -1,3 +1,4 @@
+#!parity-excluded harness: `bench` block — the bench runner prints elapsed wall-clock time into stdout
 bench "Vector[int] push x1000":
     Vector[int] v = Vector[int]()
     int i = 0

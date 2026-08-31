@@ -1,3 +1,5 @@
+#!parity-excluded scheduling: spawned pipeline stages over Channels around shared state; the interleaving is the
+#!  scheduler's
 # Stress: 3-stage pipeline with shared throughput monitoring.
 # Stages: generate(1..40) → transform(*2) → collect(sum).
 # Shared variable counts items that passed through the transform stage.

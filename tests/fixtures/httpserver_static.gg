@@ -1,3 +1,6 @@
+#!parity-excluded untriaged: DEBT (todo/t0828) — no cause established. Excluded only because the RETIRED filename
+#!  heuristic matched `stem.starts_with("httpserver_")`; it exercises http_mime_type and http_serve_file over std.fs; no
+#!  socket is bound
 # Test: http_serve_file and http_mime_type
 # Verifies:
 #   1. Correct 200 + MIME type when file exists.

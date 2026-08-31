@@ -1,3 +1,5 @@
+#!parity-excluded network: runs a real HTTP server over a bound TCP socket with a concurrent client; connection timing
+#!  decides the output
 # Tests HTTP keep-alive: send two requests on the same TCP connection.
 # First request has "Connection: keep-alive" → server keeps connection open.
 # Second request has "Connection: close" → server closes after responding.

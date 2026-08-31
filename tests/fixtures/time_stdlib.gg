@@ -1,3 +1,5 @@
+#!parity-excluded clock: calls std.time time() and time_ms(), then prints only inside a sub-second window (`diff <
+#!  1000`)
 from std.time import time, time_ms
 
 void main():

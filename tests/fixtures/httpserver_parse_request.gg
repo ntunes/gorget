@@ -1,3 +1,5 @@
+#!parity-excluded network: runs a real HTTP server over a bound TCP socket with a concurrent client; connection timing
+#!  decides the output
 # Test: http_server_parse_request edge cases over real TCP connections.
 #
 # Validates:

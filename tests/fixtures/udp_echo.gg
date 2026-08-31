@@ -1,3 +1,4 @@
+#!parity-excluded network: imports std.net.udp and binds a real UDP socket; datagram timing decides the output
 from std.net.udp import UdpSocket, UdpAddr, UdpPacket, udp_bind
 from std.bytes import bytes_from_str, bytes_to_str
 

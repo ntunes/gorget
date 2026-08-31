@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: nested TaskGroup spawns over an atomic; stdout aggregates a nondeterministic interleaving
 # Stress: nested spawning — main spawns 10 tasks, each spawns 10 sub-tasks.
 # Uses atomic accumulation + TaskGroup to avoid blocking await chains
 # that would exhaust the thread pool (blocking-path fallback issue).

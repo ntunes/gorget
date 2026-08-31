@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: ch.recv_timeout(1000) — whether the timeout arm is taken is a race with the sender
 from std.sync import Channel
 
 void main():

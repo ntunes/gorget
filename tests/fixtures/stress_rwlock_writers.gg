@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: spawned writers contend an RwLock; stdout aggregates a nondeterministic interleaving
 # Stress: shared(rwlock) value with 4 writer tasks, each incrementing 500 times.
 # Tests RWLock write exclusion under contention.
 # Expected: 2000

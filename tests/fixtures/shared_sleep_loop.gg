@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: spawned tasks async_sleep around a shared counter; the interleaving decides the value
 # Test: async_sleep inside a loop with shared params.
 # Exercises the coroutine state machine with mixed yield kinds
 # (Sleep + MutexLock reacquire) inside a loop body.

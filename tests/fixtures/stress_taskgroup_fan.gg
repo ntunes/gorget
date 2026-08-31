@@ -1,3 +1,4 @@
+#!parity-excluded scheduling: 100 TaskGroup tasks increment an atomic; stdout aggregates a nondeterministic interleaving
 # Stress: TaskGroup with 100 spawned tasks, each incrementing an atomic counter.
 # Tests TaskGroup bookkeeping, join correctness, atomic pending counter.
 # Expected: 100
