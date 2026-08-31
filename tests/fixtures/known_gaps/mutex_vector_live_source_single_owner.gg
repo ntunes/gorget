@@ -1,0 +1,33 @@
+# REGRESSION (R48 Track D2 output-review): the LIVE half of the source axis.
+#
+# Its sibling `mutex_vector_single_owner_move.gg` reads the handle back THROUGH
+# the collection, so the source is DEAD at the push. This cell keeps the source
+# LIVE (`m.lock()` afterwards) — the other value of the axis `AGENTS.md`'s CoW
+# table is indexed on, and the one a net of read-back-through-the-collection
+# cells cannot see.
+#
+# ⚠ THIS CELL IS GREEN AT THE t0840 BASE BLOB (3b8a5561) AND WAS RED IN BETWEEN.
+# It is a regression pin, not a gap graduation, and saying otherwise would be a
+# false RED-verify. Measured at 93621491 — the t0840 fix before this repair:
+# rc 134 `free(): double free detected in tcache 2` on C AND LLVM, and rc 99
+# `heap-use-after-free` under `--sanitize`, for BOTH members of the
+# single-owner set. Base was rc 0 only because the element slot held garbage
+# nothing ever dropped correctly.
+#
+# THE MECHANISM: move-eligibility fires at LAST USE. With the source live the
+# CoW table asks for a clone, and `Mutex[T]` has no clone path — so once the
+# slot really held the handle, the local and the slot both dropped it. The
+# repair transfers the single owner UNCONDITIONALLY (the source's drop is
+# unregistered whether or not it was zeroed) and the source degrades to a
+# BORROW of the collection's element, which is why `m.lock()` below still reads
+# the same mutex.
+#
+# CELL: container=Vector · handle=Mutex · payload=int · producing-arm=push ·
+#       source=LIVE past the call · read=through the SOURCE, not the collection.
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Vector[Mutex[int]] all = []
+    all.push(m)
+    print(f"{all.len()}")
+    print(f"{m.lock().get()}")

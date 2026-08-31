@@ -12,14 +12,19 @@
 # HEAD, so there is nothing to pin and nothing filed.
 #
 # ⚠ SANITIZER NOTE: this cell is value-lane green but NOT ASan-clean, for a
-# PRE-EXISTING reason it does not introduce. `w.upgrade()` leaks the 32-byte
-# control block with NO container anywhere — `Shared[int] s` / `s.downgrade()`
-# / `match w.upgrade()` alone reproduces it — and the robustness map already
-# carries that as a baselined row (`sh_weak_clone_upgrade`, `asan =
-# SANITIZE-FAIL`, note *"prints the RIGHT answer"*). Push + `len()` on the same
-# Vector is ASan-clean, so the marshalling half this cell pins is sound; the
-# leak lives in `upgrade`'s Option payload, which is why this cell has no ASan
-# twin.
+# PRE-EXISTING and ALREADY-FILED reason it does not introduce: **`todo/t0620`**,
+# whose text matches what this cell measures byte for byte — *"LEAKS 40 bytes
+# under LSan (the 32-byte Shared control block + 8-byte value) — the match-bound
+# `sh` ... is never drop-registered"*. Regenerated here:
+# `SUMMARY: AddressSanitizer: 40 byte(s) leaked in 2 allocation(s)`.
+#
+# t0620 also records the isolation this cell independently reproduces: the Weak
+# CONSUMING position ALONE is ASan-clean, and only the `upgrade()`-result
+# binding leaks. So the marshalling half this cell pins is sound, and the leak
+# is `t0620`'s — which is why this cell has no ASan twin while its
+# ownership-sensitive siblings do. The robustness map carries the same defect as
+# a baselined row (`sh_weak_clone_upgrade`, `asan = SANITIZE-FAIL`, note
+# *"prints the RIGHT answer"*).
 #
 # CELL: container=Vector · handle=Weak · payload=int · producing-arm=push ·
 #       read=`.get(i).unwrap().upgrade()`.

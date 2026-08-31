@@ -3101,6 +3101,60 @@ pub(super) fn lower_method_call(
         // Builtin consuming methods (push/put/set/insert/...) don't always have
         // fn_param_ownerships entries, so we fall back to the method-name
         // `consuming_positions` whitelist computed once above.
+        // SINGLE-OWNER HANDLE at a consuming position: the destination takes
+        // THE one owner, whether or not the source is dead here.
+        //
+        // `move_zero_locals` below only fires at LAST USE, which is right for a
+        // type that can clone: a source still live past the call gets a clone
+        // and both ends drop their own copy. `Mutex[T]` / `RWLock[T]` have NO
+        // clone path, so that branch has nothing to hand the collection — and
+        // once the element slot actually holds the handle (the t0840 write
+        // repair) the local and the slot both drop it: `free(): double free
+        // detected in tcache 2`, and `heap-use-after-free` under ASan, on C and
+        // LLVM, for BOTH members of the set.
+        //
+        // The transfer is therefore unconditional: the collection owns the
+        // handle and the SOURCE DEGRADES TO A BORROW of it. That is the CoW
+        // default (`AGENTS.md` § Ownership at Consuming Positions) read for a
+        // destination that must own and a source that cannot copy — and it
+        // keeps a live source WORKING (`m.lock()` after the push still reads
+        // the same handle) rather than trading a double free for a crash.
+        // Zeroing stays gated on last use, because zeroing a live source is
+        // what would break it.
+        //
+        // ⚠ This is a LOWERING decision, not a ruling on whether `Mutex`/
+        // `RWLock` should join the `E_MoveWithoutOperator` carve-out list
+        // (`AGENTS.md` § Ownership at Consuming Positions names closures,
+        // `Owned`, `Box`, `Task`, `TaskGroup`, `Guard` — and `Guard`, which
+        // `Mutex.lock()` returns, is on it while `Mutex` is not). That is an
+        // owner call. It is deliberately decided so the program is memory-safe
+        // WHICHEVER WAY that question goes: if the answer is "reject", this
+        // code is unreachable; if it is "accept", this is what accepting has to
+        // mean.
+        let single_owner_consumed: Vec<LocalId> = args.iter()
+            .enumerate()
+            .filter_map(|(i, arg)| {
+                let call_site_move = matches!(arg.node.ownership, Ownership::Move);
+                let callee_move = ctx.fn_param_ownerships.get(&sig_name)
+                    .and_then(|ownerships| ownerships.get(i + 1))
+                    .map(|o| matches!(o, Ownership::Move))
+                    .unwrap_or(false)
+                    || consuming_positions.contains(&i);
+                if !call_site_move && !callee_move { return None; }
+                let local_id = match &arg.node.value.node {
+                    Expr::Identifier(name) => ctx.lookup_local(name)?.0,
+                    _ => match lowered_method_args.get(i)? {
+                        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.local,
+                        _ => return None,
+                    },
+                };
+                if !is_single_owner_handle_local(local_id, builder, &ctx.type_registry) {
+                    return None;
+                }
+                Some(local_id)
+            })
+            .collect();
+
         let move_zero_locals: Vec<Place> = args.iter()
             .enumerate()
             .filter_map(|(i, arg)| {
@@ -3506,6 +3560,14 @@ pub(super) fn lower_method_call(
         for place in &move_zero_locals {
             builder.move_zero(place.clone());
             ctx.drops.mark_moved(place.local);
+        }
+
+        // The ownership half of the single-owner transfer described above. The
+        // drop is dropped from the source WHETHER OR NOT it was zeroed: a dead
+        // source was zeroed just above and a live one keeps its bytes as a
+        // borrow, and in both cases the collection is now the only owner.
+        for local_id in &single_owner_consumed {
+            ctx.drops.unregister(*local_id);
         }
 
         // !self consuming methods: MoveZero the receiver after the call.

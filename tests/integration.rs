@@ -4568,7 +4568,10 @@ fn channel_clone_consuming_positions() {
 /// bind, so `gorget_map_free` walks its second entry into an already-freed
 /// control block. The identical loop over `String` values is clean, and so is
 /// `for h in v` over a `Vector[Shared[int]]` — the Vector element bind takes
-/// the Ptr-borrow path and the Dict value bind does not. Filed as `todo/t0907`.
+/// the Ptr-borrow path and never copies. The ROOT is shared with the
+/// nested-clone cell — `gorget_map_iter_value` calls the same `val_clone`
+/// in-place hook `gorget_array_clone` calls as `elem_clone`, NULL for a
+/// refcount element — so ONE fix closes both. Filed as `todo/t0907`.
 #[test]
 #[ignore = "known gap (todo/t0907): `for (k, v) in d` over refcount VALUES over-releases — heap-use-after-free in gorget_map_free under --sanitize; the value lanes print the right answer"]
 fn known_gap_shared_dict_iteration_value_over_release() {
@@ -4613,6 +4616,28 @@ fn rwlock_vector_single_owner_move() {
     // Cell: handle = RWLock — the OTHER member of `is_single_owner_handle_local`
     // (measured: exactly two at HEAD), so that axis is covered, not sampled.
     run_gg("known_gaps/rwlock_vector_single_owner_move.gg", "1\n5");
+}
+
+// The LIVE half of the source axis. Both cells above read the handle back
+// THROUGH the collection, so the source is DEAD at the push — one value of the
+// axis `AGENTS.md`'s CoW table is indexed on, and a net that samples one value
+// of a typed axis is an anecdote (Core #12). These two keep the source live.
+//
+// They are REGRESSION pins, not gap graduations, and the distinction is
+// load-bearing: they are GREEN at the t0840 base blob `3b8a5561` and were RED
+// at `93621491` — rc 134 `free(): double free detected in tcache 2` on C AND
+// LLVM, rc 99 `heap-use-after-free` under `--sanitize`, for BOTH members of the
+// set. Base was green only because the element slot held garbage that nothing
+// ever dropped correctly, so there was no second owner to collide with.
+
+#[test]
+fn mutex_vector_live_source_single_owner() {
+    run_gg("known_gaps/mutex_vector_live_source_single_owner.gg", "1\n5");
+}
+
+#[test]
+fn rwlock_vector_live_source_single_owner() {
+    run_gg("known_gaps/rwlock_vector_live_source_single_owner.gg", "1\n5");
 }
 
 /// KNOWN GAP — C backend only; `--backend=llvm` is CORRECT (lane divergence).

@@ -1,0 +1,55 @@
+# REGRESSION (was todo/t0840, R48 Track D2): the SIBLING-SITE sweep for the
+# refcount-clone convention (Core #4).
+#
+# `.clone()` is only one of the positions that reaches a type's `clone_fn`.
+# `ctx.clone_fn_for_ptr` is consulted from roughly forty call sites — struct
+# field init, container literal, map put, return, reassign — and each of them
+# has to know that a REFCOUNT handle's `clone_fn` is the by-VALUE incref, not a
+# deep clone through a `const T*`. This cell walks a `Channel[int]` through
+# four of them and proves the handle survives each: every `send` goes through a
+# DIFFERENT clone's product and every `recv` reads it back on the ORIGINAL.
+#
+# `Channel` is the right probe for this sweep because it is the one refcount
+# handle with no hand-written dispatch arm of its own — `Shared` and `Weak`
+# pass the handle by value by hand, so they would hide a generic-path defect.
+#
+# CELL: handle=Channel · payload=int ·
+#       position={struct field init, container literal, dict put, plain
+#       reassign of a live source}.
+#
+# ⚠ The FIFTH position — a clone RETURNED across a function boundary — is
+# deliberately NOT here, and this is a recorded gap, not a dodge. It fails for
+# a DIFFERENT, already-filed reason: the callee drops its own bare parameter
+# (`todo/t0108` repro (a)/(b), the `needs_param_drop` boundary-ownership
+# model). Isolated with no clone anywhere — `void take(Channel[int] src)` called
+# once — the same `AddressSanitizer: heap-use-after-free` appears, so it is not
+# about the clone convention at all. It ships as its own `#[ignore]`d cell,
+# `channel_bare_param_callee_drop_uaf.gg`, asserting the intended output.
+
+struct Hub:
+    Channel[int] ch
+
+void main():
+    Channel[int] c = Channel[int](8)
+
+    # struct field init from a LIVE source
+    Hub h = Hub(c.clone())
+    h.ch.send(1)
+    print(f"{c.recv()}")
+
+    # container literal
+    Vector[Channel[int]] lit = [c.clone()]
+    lit.get(0).unwrap().send(2)
+    print(f"{c.recv()}")
+
+    # dict put
+    Dict[String, Channel[int]] d = {}
+    d.put("a", c.clone())
+    d.get("a").unwrap().send(3)
+    print(f"{c.recv()}")
+
+    # plain reassign of a live source
+    Channel[int] alias = c.clone()
+    alias.send(4)
+    print(f"{c.recv()}")
+    print("done")

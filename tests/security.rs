@@ -3039,13 +3039,76 @@ fn shared_vector_of_clones_push_marshalling_asan() {
     security_safe_no_leak("shared_vector_of_clones_push_marshalling", "3\n42\n4");
 }
 
+// R48 Track D2 - the sanitizer half of the handle net. Six of this track's
+// findings came out of the sanitize sweep and NONE was visible to a
+// stdout-comparing fixture: an over-release that still printed the right
+// answer, a 32-byte control block nobody owned, a double free that only
+// appeared once the element slot held a real handle. One ASan pin on the
+// headline cell was too thin a net for that.
+
+#[test]
+fn mutex_vector_single_owner_move_asan() {
+    // DEAD source: the collection takes the one owner and drops it once.
+    security_safe_no_leak("mutex_vector_single_owner_move", "1\n5");
+}
+
+#[test]
+fn rwlock_vector_single_owner_move_asan() {
+    security_safe_no_leak("rwlock_vector_single_owner_move", "1\n5");
+}
+
+/// LIVE source -- the value of the axis the read-back-through-the-collection
+/// cells cannot reach, and the one the output-review caught. `Mutex`/`RWLock`
+/// have no clone path, so once the element slot really held the handle the
+/// local and the slot both dropped it: rc 134 `double free detected in tcache
+/// 2` on both backends, `heap-use-after-free` here. The single owner now
+/// transfers unconditionally and the source degrades to a borrow.
+#[test]
+fn mutex_vector_live_source_single_owner_asan() {
+    security_safe_no_leak("mutex_vector_live_source_single_owner", "1\n5");
+}
+
+#[test]
+fn rwlock_vector_live_source_single_owner_asan() {
+    security_safe_no_leak("rwlock_vector_live_source_single_owner", "1\n5");
+}
+
+/// Refcount arithmetic: five releases against four retains printed the right
+/// answer on both value lanes and hung or tripped a pthread assertion instead
+/// of reporting itself. Only this lane names it.
+#[test]
+fn channel_clone_by_value_incref_asan() {
+    security_safe_no_leak("channel_clone_by_value_incref", "7\n1\n9");
+}
+
+#[test]
+fn channel_clone_consuming_positions_asan() {
+    security_safe_no_leak("channel_clone_consuming_positions", "1\n2\n3\n4\ndone");
+}
+
+/// The cell that surfaced the index-read leak: a refcount element read as a
+/// VALUE took the element-clone path and nobody owned the retain. Stdout was
+/// correct throughout.
+#[test]
+fn shared_vector_element_read_shapes_asan() {
+    security_safe_no_leak("shared_vector_element_read_shapes", "4\n12\n4\n2");
+}
+
+#[test]
+fn shared_vector_producing_arms_asan() {
+    security_safe_no_leak("shared_vector_producing_arms", "2\n1\n2\n2\n1");
+}
+
 /// KNOWN GAP (`todo/t0907`) on the SANITIZER lane, and ONLY this lane can see
 /// it: `for (k, v) in d` over a `Dict[String, Shared[int]]` prints the RIGHT
 /// answer on both value lanes while over-releasing the value bind, so
 /// `gorget_map_free` walks its second entry into an already-freed control
 /// block. The identical loop over `String` values is clean, and so is
-/// `for h in v` over a `Vector[Shared[int]]` — the Vector element bind takes
-/// the Ptr-borrow path and the Dict value bind does not.
+/// `for h in v` over a `Vector[Shared[int]]` — the Vector element bind borrows
+/// and never copies. The ROOT is shared with the nested-clone cell:
+/// `gorget_map_iter_value` calls the same `val_clone` in-place hook that
+/// `gorget_array_clone` calls as `elem_clone`, and it is NULL for a refcount
+/// element, so ONE fix closes both faces.
 #[test]
 #[ignore = "known gap (todo/t0907): Dict value-bind iteration over refcount values over-releases — heap-use-after-free in gorget_map_free"]
 fn known_gap_shared_dict_iteration_value_over_release_asan() {

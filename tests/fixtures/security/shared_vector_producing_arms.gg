@@ -1,0 +1,32 @@
+# REGRESSION (was todo/t0840): the PRODUCING-ARM axis of the handle class.
+# `push` is only one of the positions tagged `AbiKind::VoidElem`; each of the
+# arms below reached the same runtime entry with the same wrong argument
+# (rc 139 on C and LLVM pre-fix). Fixing the marshalling at the shared LIR
+# dispatcher rather than at `push` is what makes them all land together
+# (Core #4 — the class, not the instance).
+#
+# CELL: container=Vector · handle=Shared · payload=int ·
+#       producing-arm={container literal, insert, set, index-assign}.
+
+void main():
+    Shared[int] a = Shared[int](1)
+    Shared[int] b = Shared[int](2)
+
+    # container literal
+    Vector[Shared[int]] lit = [a.clone(), a.clone()]
+    print(f"{lit.len()}")
+    print(f"{lit.get(1).unwrap().get()}")
+
+    # insert
+    Vector[Shared[int]] v = []
+    v.push(a.clone())
+    v.insert(0, b.clone())
+    print(f"{v.get(0).unwrap().get()}")
+
+    # set
+    v.set(1, b.clone())
+    print(f"{v.get(1).unwrap().get()}")
+
+    # index-assign
+    v[0] = a.clone()
+    print(f"{v.get(0).unwrap().get()}")
