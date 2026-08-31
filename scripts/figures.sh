@@ -76,8 +76,11 @@ figures_field() { figures_get "$1.$2"; }
 # real ratchet ceiling three times to illustrate the three forms, and
 # `figures.py --scan` reported all three against that ceiling's own row —
 # unplanted, on the author, inside the accessor written to retire the class.
-# ⚠ NORMALISATION LIVES IN THE READER, not in a per-row list of spellings:
-# across the eight clone-meter values the tree uses 29 commas and 19
-# underscores, so a rule that knows only one of the two finds fewer than half
-# and silently misses the rest.
+# ⚠ NORMALISATION LIVES IN THE READER, not in a per-row list of spellings: both
+# the comma and the underscore form are in live use across the declared scan
+# roots, so a reader that knows only one of the two is silently blind to the
+# other. Regenerate the split with `python3 scripts/figures.py --spellings` and
+# do NOT paste its numbers here: the previous version of this comment cited a
+# tally a round-open re-seed had already voided, and this file is itself a
+# scanned root, so the number would move as you wrote it.
 figures_value() { figures_field "$1" value | tr -d '_,'; }

@@ -30,11 +30,22 @@
 #     DECLARATION (grep a constant, copy another row)? Observe ⇒ measured. Read
 #     ⇒ derived, and then `authority` names what is read.
 #
-#   ⚠ `policy` IS NOT A FIFTH POLARITY. It crosses more than one: below,
-#     `agents_md.size_ceiling` is policy × shrink-only while `fmt.max_width` is
-#     derived × exact-pin and `parity.c_emit.match_floor` is measured ×
-#     grow-only. Two axes, reached by finding NON-MEMBERS of each — not one
-#     class reached by resemblance (docs/devbook/29).
+#   ⛔ `policy` IS NOT A FIFTH POLARITY — AND THE PROOF IS NOT "IT CROSSES MORE
+#     THAN ONE POLARITY". It does not: `policy` occupies exactly ONE cell here
+#     (shrink-only), because the row that would have given it a second,
+#     `SHAPE_MAX_DEPTH`, is correctly ruled NEVER. An earlier revision of this
+#     paragraph made the crossing claim anyway; it was false the moment that
+#     ruling stood, and it is exactly the "class statement reached by
+#     resemblance" this file's own doctrine warns about.
+#     THE TRUE PROOF IS THAT NEITHER AXIS IS A FUNCTION OF THE OTHER:
+#       polarity does NOT determine provenance — `exact-pin` carries both
+#         `measured` (the clone pins) and `derived` (`fmt.max_width`), and
+#         `shrink-only` carries both `measured` (`proc_guard.no_deadline_
+#         baseline`) and `policy` (`agents_md.size_ceiling`);
+#       provenance does NOT determine polarity — `measured` carries `exact-pin`,
+#         `grow-only`, `shrink-only` AND `informational`.
+#     Two independent questions about one row, and `tests/lints.rs::
+#     figures_db_axes_are_occupied` fails if either fact stops holding.
 #
 # ── THE VALUE IS THE GUARD, NOT THIS FILE ──────────────────────────────────
 # A figures file with no lint forbidding an undeclared bare literal of a
@@ -123,6 +134,24 @@
 # records what is true NOW. Same reason for `DONE.md`: a round record is history.
 figures.scan_roots = tests/integration.rs tests/lints.rs todo docs/devbook TODO.md scripts
 figures.scan_skip = scripts/figures.db
+#
+# ⛔ WHAT THE SCANNER CANNOT SEE — SAY THE REACH, NEVER IMPLY TOTALITY. A guard
+# that is read as total is worse than one whose limits are written down (the
+# lesson `todo/t0875` was filed for). Probe-verified at the time of writing:
+#   * `src/` — NOT a root. 11 files there carry integer const declarations. A
+#     row whose `home`/`mirror` is in `src/` IS scanned (a declared path is
+#     always opened), but an UNDECLARED re-spelling in `src/` is invisible.
+#   * `tests/*.rs` other than `integration.rs` and `lints.rs` — invisible.
+#     `tests/spec_conformance.rs` alone carries 4 integer const declarations.
+#   * `docs/` outside `docs/devbook/` — `book/`, `internals/`, `census/`,
+#     `profiling/`, `language-reference.md` are all unscanned.
+#   * THE EXTENSION FILTER: only `.md .rs .py .sh .spec .toml` are opened.
+#     `.gg` fixtures, `.json` baselines, `.tsv` manifests and `Makefile`-shaped
+#     files inside the roots are invisible even though their directory is a root.
+#   * `DONE.md` and `docs/define-gorget/` are excluded ON PURPOSE (above), not
+#     by oversight.
+# ⇒ Widening a root is cheap and is the right move when a family of rows lands
+#   there; widening it BLINDLY is not — every new file is new waiver surface.
 
 # ═══════════════════════════════════════════════════════════════════════════
 # THE PILOT — the clone meters (exact-pin × measured, with a declared input)
@@ -434,7 +463,7 @@ proc_guard.no_deadline_baseline.instrument = scripts/proc_guard.py --census (AST
 proc_guard.no_deadline_baseline.measured_at = 3b8a5561
 proc_guard.no_deadline_baseline.home = scripts/proc_guard.py:NO_DEADLINE_BASELINE
 proc_guard.no_deadline_baseline.scan = none
-proc_guard.no_deadline_baseline.caveat = a single-digit value cannot be policed by the uniqueness scanner — 62 EXPECTED_* arm pins in tests/ share this limitation, which is the schema's largest under-served population
+proc_guard.no_deadline_baseline.caveat = a single-digit value cannot be policed by the uniqueness scanner — 66 EXPECTED_* arm pins in tests/ share this limitation, which is the schema's largest under-served population
 proc_guard.no_deadline_baseline.cost_secs = 120
 proc_guard.no_deadline_baseline.mirror = scripts/proc_guard.py:NO_DEADLINE_BASELINE
 proc_guard.no_deadline_baseline.input = none

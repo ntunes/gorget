@@ -33,8 +33,10 @@
 #       reads as +1.4% against a stale anchor — a false owner ask, and the
 #       cross-round accumulation the owner explicitly rejected, arrived at by
 #       omission. This mode fails once a round has CLOSED since the anchor was
-#       set (newest dated `DONE.md` entry newer than `ROUND-OPEN-DATE`), which
-#       is the one tree-visible signal that a new round has begun.
+#       set — newest `DONE.md` entry OF THE ROUND-CLOSE SHAPE
+#       (`- [YYYY-MM-DD] **ROUND `) newer than `ROUND-OPEN-DATE`, which is the
+#       one tree-visible signal that a new round has begun. ⚠ NOT "newest dated
+#       entry": DONE.md is mostly PER-TRACK entries landing mid-round.
 #
 # ⚠ WHY THE FIRST TWO MODES ARE A SCRIPT AND NOT A LINT — and the claim is now
 # scoped, because an earlier revision of this paragraph over-generalised it to
@@ -207,13 +209,27 @@ staleness_mode() {
 
 anchor_mode() {
     # The band's anchor carries its own date, beside the four ROUND-OPENED-BY
-    # lines. A round CLOSES by adding a dated entry at the top of DONE.md, so a
-    # DONE.md entry newer than the anchor means a round boundary was crossed
+    # lines. A round CLOSES by adding a dated ROUND entry at the top of DONE.md,
+    # so a ROUND entry newer than the anchor means a round boundary was crossed
     # without re-seeding it.
+    #
+    # ⛔ MATCH THE ROUND-CLOSE SHAPE, NOT "A DATED ENTRY". An earlier revision
+    # read the top dated entry OF ANY KIND, and DONE.md is overwhelmingly
+    # PER-TRACK entries landing MID-round: at the time this was fixed the file
+    # held 2,027 dated entries and exactly 3 round closes. So the first track to
+    # land on a later calendar day made this mode announce "a round has CLOSED"
+    # when none had — and the remedy it then printed, a mid-round re-seed of the
+    # band, is the exact move `tests/integration.rs`'s salami assertion exists
+    # to prove destroys the band. A false RED that instructs the harmful action
+    # is worse than no check.
+    # ⚠ `ROUND ` is the stable prefix; `CLOSED` is NOT — R42 and R43's entries
+    # do not carry it. Regenerate the two populations before touching this:
+    #   grep -cE '^- \[[0-9-]{10}\]' DONE.md
+    #   grep -cE '^- \[[0-9-]{10}\] \*\*ROUND ' DONE.md
     local anchor_date newest_done
     anchor_date=$(awk '/^\/\/ ROUND-OPEN-DATE:/ && !seen { print $3; seen = 1 }' "$GATE_FILE")
     # Plain bracket expressions, not {n} intervals — mawk needs --re-interval.
-    newest_done=$(awk '/^- \[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\]/ { print substr($0, 4, 10); exit }' DONE.md)
+    newest_done=$(awk '/^- \[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\] \*\*ROUND / { print substr($0, 4, 10); exit }' DONE.md)
     echo "clone-meter band anchor"
     echo "  ROUND-OPEN-DATE : ${anchor_date:-<MISSING>}"
     echo "  newest DONE.md  : ${newest_done:-<none>}"

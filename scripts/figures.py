@@ -24,11 +24,16 @@ crossed with PROVENANCE — where the number CAME FROM. Subject ("clones",
       policy      CHOSEN. `regen = none` is legal ONLY here. `authority`
                   records who chose it and where the choice is recorded.
 
-  ⚠ `policy` is NOT a fifth polarity, and the proof is that it crosses more
-    than one: `agents_md.size_ceiling` is policy × shrink-only. `measured`
-    likewise crosses grow-only (a parity floor) and exact-pin (a clone meter).
-    A class reached by resemblance is the error `docs/devbook/29` names; these
-    two axes were reached by finding NON-MEMBERS of each.
+  ⛔ `policy` is NOT a fifth polarity — and the proof is NOT "it crosses more
+    than one polarity". It does not: `policy` occupies exactly one cell today
+    (shrink-only), because `SHAPE_MAX_DEPTH`, the row that would have given it a
+    second, is correctly excluded. THE TRUE PROOF IS THAT NEITHER AXIS IS A
+    FUNCTION OF THE OTHER: `exact-pin` carries both `measured` and `derived`,
+    `shrink-only` carries both `measured` and `policy`, and `measured` carries
+    four different polarities. Two independent questions about one row.
+    `tests/lints.rs::figures_db_axes_are_occupied` fails if that stops holding —
+    an earlier revision of this docstring asserted the crossing claim and it was
+    simply false, which is why the fact is now a lint and not a sentence.
 
 ═══════════════════════════════════════════════════════════════════════════
 THE VALUE IS THE GUARD, NOT THE FILE
@@ -46,6 +51,7 @@ in `tests/lints.rs` (`figures_db_*`) plus the two runnable modes here:
     python3 scripts/figures.py report         the informational table (round close)
     python3 scripts/figures.py --list         id · polarity · provenance · value
     python3 scripts/figures.py --where <n>    every unmasked spelling of a value
+    python3 scripts/figures.py --spellings    the separator census (see rule 1)
 
 ⚠ EVERY SPAWN GOES THROUGH `proc_guard.run` with the row's own `cost_secs` as
   the deadline — a bare `subprocess.run` reddens `process_spawn_deadline_arm_count`.
@@ -54,13 +60,21 @@ in `tests/lints.rs` (`figures_db_*`) plus the two runnable modes here:
 THE TWO SCANNER RULES THAT WERE BOUGHT WITH MEASUREMENTS
 ═══════════════════════════════════════════════════════════════════════════
 
-1. **SEPARATOR NORMALISATION IS SCANNER-SIDE, NEVER A PER-ROW LIST.** Across
-   the eight clone-meter values the tree spells them 29 times with COMMAS, 19
-   with UNDERSCORES and once bare. A rule that knows only about `_` finds 19
-   of 48 and silently misses 29 — the same silent-green it exists to retire.
+1. **SEPARATOR NORMALISATION IS SCANNER-SIDE, NEVER A PER-ROW LIST.** Both the
+   comma and the underscore form are in live use across the declared scan roots,
+   so a normaliser that knows only one of the two is blind to the other, and
+   blind SILENTLY.
+   ⛔ THE SPLIT IS A COMMAND, NEVER A NUMBER HERE:
+   `python3 scripts/figures.py --spellings`. Two reasons, and the second is the
+   funnier: (a) the first version of this paragraph justified the rule with a
+   per-row tally — "29 commas, 19 underscores, 1 bare" — measured against the
+   PREVIOUS round's clone values, and the round-open re-seed took the comma
+   count to zero inside the same round; (b) this file IS a declared scan root,
+   so writing the census into it CHANGES the census. A figure that moves when
+   you write it down does not belong written down.
    Both sides (the DB value and the scanned text) are normalised by stripping
    `_` and `,` from digit runs, in ONE place. A per-row `spellings` list would
-   be ~50 chances to omit it (Layering rule 3).
+   be one omission opportunity per row (Layering rule 3).
 
 2. **THE MASK IS THE CITATION FORM, NOT QUOTING.** The obvious reuse —
    `tests/lints.rs::width_ratchet_mask_strings` — masks quoted runs, and the
@@ -75,6 +89,16 @@ THE TWO SCANNER RULES THAT WERE BOUGHT WITH MEASUREMENTS
    minus ISO dates, which are recognised FIRST so `2026-08-31` is never read
    as a range. ⚠ The single `path:NNN` form is the COMMONER of the two and
    collides today on ten distinct covered values.
+
+
+⛔ WHAT THE SCANNER CANNOT SEE. State the reach; never imply totality. `src/` is
+  not a root (a DECLARED `home`/`mirror` path there is always opened, an
+  undeclared re-spelling is not); `tests/*.rs` other than `integration.rs` and
+  `lints.rs` are unscanned; `docs/` outside `docs/devbook/` is unscanned; and
+  the extension filter opens only `.md .rs .py .sh .spec .toml`, so `.gg`,
+  `.json`, `.tsv` and extensionless files inside a root are invisible. The full
+  list with its per-file counts lives beside `figures.scan_roots` in
+  `scripts/figures.db`.
 
 ⚠ DELIBERATELY NOT STRIPPED: COMMENTS. The scanner reads comment text, which
   is what lets it catch a live figure planted in the doc comment of the very
@@ -434,6 +458,13 @@ def scan(db, verbose=False):
             for w in db.get(f"{r}.waiver", []):
                 parts = w.split(None, 3)
                 expected[parts[0]] = expected.get(parts[0], 0) + int(parts[1])
+        # ⛔ A DECLARED PATH IS ALWAYS SCANNED, EVEN OUTSIDE THE SCAN ROOTS.
+        # Without this a row whose `home` is in `src/` — which every `src/`-side
+        # adopter will have — declared 1 expected spelling at a file the scan
+        # never opened, and read as a FALSE RED (`src/formatter/doc.rs has 0
+        # unmasked spelling(s), 1 declared`). Declaring a spelling site is a
+        # claim that it EXISTS; the scan has to be able to falsify it.
+        files = sorted(set(files) | {p for p in expected if os.path.exists(os.path.join(ROOT, p))})
         actual = {}
         for rel in files:
             try:
@@ -451,6 +482,44 @@ def scan(db, verbose=False):
             elif verbose and a:
                 print(f"  ok   {value:>12} {path}: {a}")
     return problems
+
+
+def spellings(db):
+    """The separator census — the regenerable evidence for scanner rule 1.
+
+    Reports how the declared scan roots actually spell 4+ digit figures, so the
+    rule's justification is a COMMAND rather than a tally that a re-seed can
+    void — which is exactly what happened to its first version.
+    """
+    roots = scan_files(db, "standard")
+    covered = {norm(one(db, f"{r}.value", "")) for r in rows(db)}
+    tally = {"comma": 0, "underscore": 0, "bare": 0}
+    cov = {"comma": 0, "underscore": 0, "bare": 0}
+    for rel in roots:
+        try:
+            with open(os.path.join(ROOT, rel), "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for line in text.splitlines():
+            for m in NUM.finditer(mask_citations(line)):
+                tok = m.group(0)
+                n = norm(tok)
+                if len(n) < 4:
+                    continue
+                kind = "comma" if "," in tok else ("underscore" if "_" in tok else "bare")
+                tally[kind] += 1
+                if n in covered:
+                    cov[kind] += 1
+    print("=== separator census over the declared scan roots ===")
+    print(f"  files scanned: {len(roots)}")
+    print(f"  all 4+ digit figures : comma={tally['comma']} "
+          f"underscore={tally['underscore']} bare={tally['bare']}")
+    print(f"  of the covered values: comma={cov['comma']} "
+          f"underscore={cov['underscore']} bare={cov['bare']}")
+    print("  => both separator forms are in live use, which is why normalisation is "
+          "scanner-side and not a per-row list.")
+    return 0
 
 
 def census(db):
@@ -660,7 +729,7 @@ def main():
     # the leading run is stripped before it sees argv.
     argv = list(sys.argv[1:])
     for i, a in enumerate(argv[:2]):
-        if a.startswith("--") and a[2:] in ("validate", "scan", "census", "list", "where"):
+        if a.startswith("--") and a[2:] in ("validate", "scan", "census", "list", "where", "spellings"):
             argv[i] = a[2:]
     ap = argparse.ArgumentParser(description="the generic figures DB")
     ap.add_argument("command", nargs="?", default="validate")
@@ -691,6 +760,8 @@ def main():
     if cmd in ("--census", "census"):
         census(db)
         return 0
+    if cmd in ("--spellings", "spellings"):
+        return spellings(db)
     if cmd in ("--list", "list"):
         for rid in rows(db):
             print(f"{rid:44s} {one(db, rid + '.polarity'):13s} "

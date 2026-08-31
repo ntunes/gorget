@@ -26838,11 +26838,14 @@ fn figures_db_rows() -> Vec<String> {
 
 /// Strip `_` and `,` from a digit run. ⚠ SEPARATOR NORMALISATION IS SCANNER-
 /// SIDE AND LIVES IN ONE PLACE PER READER, never in a per-row list of
-/// spellings. Across the eight clone-meter values this tree spells them 29
-/// times with commas and 19 times with underscores: a rule that knows only
-/// about `_` finds fewer than half and misses the rest SILENTLY, which is the
-/// failure mode it was written to retire. A per-row `spellings` field would be
-/// one omission opportunity per row (Layering rule 3).
+/// spellings. Both the comma and the underscore form are in live use across the
+/// declared scan roots, so a reader that knows only one of the two is blind to
+/// the other SILENTLY — the exact failure mode it was written to retire. A
+/// per-row `spellings` field would be one omission opportunity per row
+/// (Layering rule 3).
+/// ⚠ The split is a COMMAND, not a number here: `python3 scripts/figures.py
+/// --spellings`. The first version of this comment quoted a per-row tally that
+/// the round-open clone re-seed voided within the same round.
 fn figures_norm(s: &str) -> String {
     s.chars().filter(|c| *c != '_' && *c != ',').collect()
 }
@@ -27111,6 +27114,21 @@ fn figures_db_mirrors_agree() {
 /// is never read as a range. ⚠ The single `path:NNN` form is the COMMONER of
 /// the two, and it collides today.
 ///
+/// ⛔ **AND ITS REACH IS NOT THE TREE.** Say what a guard cannot see, or it
+/// gets read as totality — `todo/t0875` is filed for exactly that mistake one
+/// guard away from here. This one reads the DECLARED scan roots plus any path a
+/// row explicitly declares, and NOT: `src/` (11 files there carry integer const
+/// declarations, and an UNDECLARED re-spelling in any of them is invisible),
+/// `tests/*.rs` other than this file and `integration.rs`
+/// (`tests/spec_conformance.rs` alone carries 4), `docs/` outside
+/// `docs/devbook/`, or any file whose extension is not one of
+/// `.md .rs .py .sh .spec .toml` — so a `.gg` fixture or a `.json` baseline
+/// inside a scanned directory is invisible. `DONE.md` and
+/// `docs/define-gorget/` are excluded deliberately, not by oversight. The list
+/// with its counts is beside `figures.scan_roots` in `scripts/figures.db`.
+/// ⊕ A value too small or too common to police takes `scan = none` and says so
+/// in its `caveat`; that is the honest half of adopting it, not a gap.
+///
 /// **⭐ AND HERE IS A LIVE FIGURE, PLANTED ON PURPOSE.** The
 /// `C_EMIT_MATCH_FLOOR` parity floor is 1283, and that spelling — right here,
 /// inside the doc comment of the lint that forbids undeclared spellings — is
@@ -27333,5 +27351,84 @@ fn clone_meter_pin_provenance_shas_resolve() {
         "--pin-staleness examined NO pins. It presupposes the provenance lines that \
          `clone_meter_pins_carry_their_provenance` asserts exist; with none present it prints a \
          header, zero rows and exits 0 — a green run that checked nothing.\n\n{text}"
+    );
+}
+
+/// ⛔ THE TWO AXES ARE AXES, AND THIS IS THE LINT THAT KEEPS THAT TRUE.
+///
+/// `scripts/figures.db` claims that POLARITY (what a checker does with a
+/// number) and PROVENANCE (where the number came from) are independent
+/// questions about one row. That claim shipped once as prose and was **false as
+/// written** — it said "`policy` crosses more than one polarity", which it does
+/// not: `policy` occupies exactly one cell, because `SHAPE_MAX_DEPTH`, the row
+/// that would have given it a second, is correctly excluded as terminal. Three
+/// copies of that sentence went out; the one place that had it right was the
+/// round record. Prose rots, so the fact is a lint now (Core #6).
+///
+/// The claim it actually asserts, which IS true and IS load-bearing:
+///
+/// * **every polarity and every provenance is OCCUPIED** — a schema validated
+///   only against shrink-only ratchets would be a class reached by resemblance,
+///   and the pilot exists precisely to probe non-members;
+/// * **polarity does not determine provenance** — at least one polarity carries
+///   two different provenances;
+/// * **provenance does not determine polarity** — at least one provenance
+///   carries two different polarities.
+///
+/// A row set that degenerates to one-provenance-per-polarity would make the
+/// orthogonality claim vacuous again, silently. This fails instead.
+///
+/// ⚠ RED-VERIFY HONESTY (Core #12). The two OCCUPANCY asserts were each shown
+/// RED on a deliberately degraded declaration (`policy` and `derived` removed
+/// in turn) and restored. The two NON-FUNCTIONALITY asserts were NOT, and
+/// cannot be at this row set: `measured` currently occupies all four
+/// polarities, so any polarity holding a `derived` or `policy` row necessarily
+/// holds two provenances — the occupancy asserts fire first on every mutation
+/// that would reach them. They are not decoration: they are what still fails if
+/// the row set later stops looking like this (say, `measured` retreats to one
+/// polarity), which is exactly when the header's orthogonality paragraph would
+/// silently become false again.
+#[test]
+fn figures_db_axes_are_occupied() {
+    use std::collections::{BTreeMap, BTreeSet};
+    const POLARITIES: [&str; 4] = ["shrink-only", "grow-only", "exact-pin", "informational"];
+    const PROVENANCES: [&str; 3] = ["measured", "derived", "policy"];
+
+    let mut by_pol: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut by_prov: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for row in figures_db_rows() {
+        let pol = figures_db_field(&row, "polarity").expect("row has a polarity");
+        let prov = figures_db_field(&row, "provenance").expect("row has a provenance");
+        by_pol.entry(pol.clone()).or_default().insert(prov.clone());
+        by_prov.entry(prov).or_default().insert(pol);
+    }
+    for p in POLARITIES {
+        assert!(
+            by_pol.contains_key(p),
+            "polarity `{p}` has NO row in scripts/figures.db. Every polarity carries a worked \
+             example on purpose: a schema exercised only by the polarities it was designed \
+             around is validated by resemblance, not by a non-member. Occupied: {:?}",
+            by_pol.keys().collect::<Vec<_>>()
+        );
+    }
+    for p in PROVENANCES {
+        assert!(
+            by_prov.contains_key(p),
+            "provenance `{p}` has NO row in scripts/figures.db. Same reason as the polarities: \
+             the axis is only demonstrated by a row that occupies it. Occupied: {:?}",
+            by_prov.keys().collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        by_pol.values().any(|s| s.len() >= 2),
+        "no polarity carries two different provenances, so polarity now DETERMINES provenance \
+         and the two are not independent axes. Either a row was removed, or the schema really \
+         has collapsed into one axis — in which case the header's orthogonality paragraph in \
+         scripts/figures.db is the thing to fix, not this assert. Map: {by_pol:?}"
+    );
+    assert!(
+        by_prov.values().any(|s| s.len() >= 2),
+        "no provenance carries two different polarities, so provenance now DETERMINES polarity. \
+         Same reading as above. Map: {by_prov:?}"
     );
 }
