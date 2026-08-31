@@ -65,20 +65,6 @@ const EXCLUDE: &[&str] = &[
     "cow_rescue_mutation_in_operand_position.gg",
     "cow_rescue_mutation_through_getchain_receiver.gg",
     "cow_rescue_mutation_inside_assert.gg",
-    // R48 Track C — the per-function-body prescan net. Of its four
-    // equip-FREE cells, one (`cow_generic_fn_view_survives_realloc.gg`) is
-    // in-subset and adjudicated here at `helloworld`; the other three are out
-    // of subset, each row citing the gate that fires at HEAD. Mirrors the
-    // identical block in corpus_b.rs (Core #4: the two gates share the phase-0
-    // subset, so an exclusion in one without the other reds the sibling).
-    // "expression `unsupported` is outside the phase-0 subset" — the closure
-    // literal whose body is the cell under test.
-    "cow_closure_body_view_survives_realloc.gg",
-    // "item kind other is outside the phase-0 subset" — `suite setup` /
-    // `suite teardown` / `test` / `bench` blocks. These cells exist only on the
-    // `gg test` lane, which `gg build` never lowers at all.
-    "cow_test_body_view_survives_realloc.gg",
-    "cow_bench_body_view_survives_realloc.gg",
     "liveness_use_inside_loop.gg",
     "liveness_on_error_in_match_arm_do.gg",
     "liveness_on_error_inside_do_block.gg",
@@ -94,6 +80,20 @@ const EXCLUDE: &[&str] = &[
     "liveness_use_inside_named_scope.gg",
     "liveness_use_inside_with_block.gg",
     "liveness_use_inside_assert_return.gg",
+    // R48 Track C — the per-function-body prescan net. Of its four
+    // equip-FREE cells, one (`cow_generic_fn_view_survives_realloc.gg`) is
+    // in-subset and adjudicated here at `helloworld`; the other three are out
+    // of subset, each row citing the gate that fires at HEAD. Mirrors the
+    // identical block in corpus_b.rs (Core #4: the two gates share the phase-0
+    // subset, so an exclusion in one without the other reds the sibling).
+    // "expression `unsupported` is outside the phase-0 subset" — the closure
+    // literal whose body is the cell under test.
+    "cow_closure_body_view_survives_realloc.gg",
+    // "item kind other is outside the phase-0 subset" — `suite setup` /
+    // `suite teardown` / `test` / `bench` blocks. These cells exist only on the
+    // `gg test` lane, which `gg build` never lowers at all.
+    "cow_test_body_view_survives_realloc.gg",
+    "cow_bench_body_view_survives_realloc.gg",
     "deadwrite_ok_atomic_add.gg",
     "cow_value_index_field_writethrough.gg",
     "cow_dict_index_field_writethrough.gg",
