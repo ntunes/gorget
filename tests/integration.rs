@@ -38574,7 +38574,17 @@ fn self_host_runtime_diff() {
     // worktree is how a round close false-reds. RAISING IT IS A ROUND-CLOSE
     // ACTION, on the number the post-integration battery prints, with the usual
     // jitter discount — not on 1485.
-    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1415;
+    // ⚠ RAISED at R47 close (2026-08-31), doing exactly what the paragraph above
+    // says. The POST-INTEGRATION battery — all 15 track integrations in, including
+    // F4a, F5a, F1-ii and the sanitize track that landed after F1 measured — was
+    // re-run at HEAD and printed **MATCH = 1485** again, so the figure survived
+    // four further integrations rather than being carried from F1's branch. Floor
+    // 1415 → 1476 (−9 jitter from 1485, the most conservative discount this log
+    // records; the run also shows 4 DRIVER-FAILs on one SH `??` gap that could
+    // move a borderline shape). Slack drops 70 → 9: the gate can now notice a
+    // 10-fixture MATCH regression where it previously would have missed 69.
+    // Non-MATCH ceiling untouched at 151 — owner ruling, and MATCH did not move.
+    const RUNTIME_DIFF_MATCH_FLOOR: usize = 1476;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: MATCH-count floor skipped (debug profile — the \
