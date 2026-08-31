@@ -8405,11 +8405,21 @@ fn sanitize_allowlists_shrink_only() {
     // reps `onceflag_basic` and `opaque_handle_struct_field_waitgroup` report
     // the SAME mechanism at a DIFFERENT record count (how many spawned workers
     // had leaked by exit is a race), while the other two admitted rows are
-    // stable over the same 12 reps and are therefore pinned EXACTLY. Pinning
-    // an exact count on a racy row would make this gate flap, which is the
-    // defect it exists to remove. Note both markers land on the SAME mechanism
-    // two existing rows already carry it for (`waitgroup_basic` /
-    // `waitgroup_amp_param`, `__gorget_spawn_worker*2+`).
+    // stable over the same 12 reps and are therefore pinned EXACTLY.
+    //
+    // ⚠ WHY THAT DRIFT IMPLIES A FLAP, since the obvious version of the
+    // argument is WRONG. The sweep's column 4 is the MAX over reps, so drift
+    // seen inside one sweep is necessarily DOWNWARD — and a downward count
+    // cannot red an exact pin, because `adjudicate_leaks` violates on
+    // `k > allowed` and only files a TIGHTEN advisory on `k < allowed`. The
+    // flap risk is BETWEEN runs: an exact pin is a claim that no future sweep
+    // will ever observe a higher max, and 12 reps sample that distribution
+    // without bounding it. Concretely, `onceflag_basic` spawns FOUR tasks and
+    // `opaque_handle_struct_field_waitgroup` THREE, while the observed maxima
+    // are 3 and 2 — so one more worker leaking before exit reds an exact pin
+    // on either. Note both markers land on the SAME mechanism two existing
+    // rows already carry it for (`waitgroup_basic` / `waitgroup_amp_param`,
+    // `__gorget_spawn_worker*2+`).
     const LEAK_CLASS_PAIRS: usize = 509;
     const LEAK_RECORDS: usize = 2256;
     const LEAK_LOOSE_SIGNATURES: usize = 8;

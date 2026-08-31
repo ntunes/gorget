@@ -8518,6 +8518,47 @@ bb",
     );
 }
 
+/// KNOWN GAP (`todo/t0609` item 2) — a BUILTIN METHOD's owned String result,
+/// passed STRAIGHT into a call argument, is never drop-registered. Measured at
+/// R47 close: 7 bytes in 2 allocations, frames `str_alloc_copy` <-
+/// `gorget_string_adopt` <- `gorget_int_to_str` / `gorget_float_to_str` <-
+/// `main`. stdout is correct, so only LeakSanitizer can see it.
+///
+/// THE DISCRIMINATOR IS THE BINDING: `print(x.debug())` leaks, while
+/// `String d = x.debug(); print(d)` is clean, because binding to a named local
+/// drop-registers the value and passing it into a call does not.
+///
+/// ⚠ THE PRODUCER AXIS IS NARROWER THAN t0609(2)'s HEADLINE. That item frames
+/// the class as "a call/await result temp consumed as an arg"; a plain USER
+/// function returning a heap String in the same position is CLEAN at this HEAD,
+/// and the fixture keeps that cell as a control so the narrowing stays visible.
+/// It also keeps the named-local cells, because t0609(2) warns a fix must be
+/// conditional or it double-frees them.
+///
+/// This is the durable repro `t0609`(2) had been missing — the row
+/// `sh_primitive_admitted_methods_ok` was admitted to the leak allowlist
+/// against this class, and the Cardinal rule wants the evidence committed.
+///
+/// Un-ignore + promote out of `known_gaps/` when the temp is dropped.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0609 item 2): a builtin method's owned String \
+result passed straight into a call argument is never drop-registered -- \
+LeakSanitizer reports 7 bytes in 2 allocations from gorget_int_to_str / \
+gorget_float_to_str, while stdout is correct and detect_leaks=0 exits 0. \
+Binding the result to a named local first is clean. Fixture: \
+tests/fixtures/known_gaps/call_result_temp_at_call_arg_leaks.gg. TODO.md."]
+fn call_result_temp_at_call_arg_leaks() {
+    assert_gg_sanitize_clean(
+        "known_gaps/call_result_temp_at_call_arg_leaks",
+        "\
+alphabeta
+21
+7.5
+gammadelta
+21",
+    );
+}
+
 #[test]
 fn drop_collection_custom_elem_field_leak_asan() {
     // P2 gate: a custom-Drop element WITH a droppable (heap String) field held

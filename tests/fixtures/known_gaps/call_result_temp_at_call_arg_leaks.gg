@@ -1,0 +1,55 @@
+# KNOWN GAP — a BUILTIN METHOD's owned String result, passed STRAIGHT into a
+# call argument, is never drop-registered. `todo/t0609` item (2).
+#
+# THE DISCRIMINATOR IS THE BINDING, AND IT IS ONE LINE:
+#     print(x.debug())              -> LEAKS 3 bytes
+#     String d = x.debug(); print(d) -> CLEAN
+# Binding the result to a named local drop-registers it (`gorget_string_free`
+# is emitted); passing it directly into a call does not, so the temp is dropped
+# on the floor. Frames: `str_alloc_copy` <- `gorget_string_adopt` <-
+# `gorget_int_to_str` <- `main`.
+#
+# ⚠ THE PRODUCER AXIS IS NARROWER THAN t0609(2)'s HEADLINE, measured here
+# rather than assumed. That item frames the class as "a call/await result temp
+# consumed as an arg", citing `print(t.await())` and `print(s.speak())`. A
+# PLAIN USER FUNCTION returning a heap String in the very same position —
+# `print(heavy("alpha", "beta"))` below — is CLEAN at this HEAD. So the
+# leaking producers are a SUBSET of "calls", and a fix aimed at every call
+# result would be aimed wider than the defect. The clean user-call cell is kept
+# in this fixture as a CONTROL precisely so that stays visible.
+#
+# ⚠ HEAP-FORCED throughout: `x.debug()` and `f.display()` allocate their result
+# (3 and 4 bytes), and `heavy` concatenates rather than returning a literal. A
+# literal-only version of this program leaks nothing observable and would be a
+# false negative (the lesson `todo/t0705` was filed for).
+#
+# ⚠ ONLY LeakSanitizer CAN SEE THIS. stdout is correct today, so this is wired
+# to `assert_gg_sanitize_clean` (`detect_leaks=1`), never to `run_gg`.
+#
+# ⚠ t0609(2) warns the fix must be CONDITIONAL: the same result also binds to a
+# VarDecl in the control cells below, and drop-registering it unconditionally
+# double-frees those. This fixture holds both cells for that reason.
+#
+# Un-ignore + promote out of `known_gaps/` when the temp is dropped.
+
+String heavy(String a, String b):
+    return a + b
+
+int main():
+    int x = 21
+    float f = 7.5
+
+    # CONTROL — a user call's result temp at a call-arg position. CLEAN today.
+    print(heavy("alpha", "beta"))
+
+    # THE GAP — a builtin method's result temp at the same position. LEAKS.
+    print(x.debug())
+    print(f.display())
+
+    # CONTROL — the same producers, bound to a named local first. CLEAN today,
+    # and what a fix must not turn into a double free.
+    String bound = heavy("gamma", "delta")
+    print(bound)
+    String d = x.debug()
+    print(d)
+    return 0
