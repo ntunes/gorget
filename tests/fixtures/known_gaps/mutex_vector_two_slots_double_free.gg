@@ -1,0 +1,39 @@
+# KNOWN GAP — REGRESSION introduced by R48 Track D2, BOTH BACKENDS, rc 134;
+# `gg check` accepts. Filed as todo/t0908.
+#
+# One single-owner handle reaching TWO element slots — here the same Vector
+# twice; the two-collections spelling (`a.push(m); b.push(m)`) behaves
+# identically and is the same defect.
+#
+#   free(): double free detected in tcache 2                    (C and LLVM)
+#   AddressSanitizer: heap-use-after-free in gorget_mutex_free  (--sanitize)
+#
+# ⚠ GREEN at the t0840 base blob 3b8a5561 (rc 0, prints `2`) — but green there
+# only because the element slot held garbage that was never a real handle. Once
+# the t0840 write repair put the handle in the slot, N slots means N owners.
+#
+# WHY THE ONE-SLOT REPAIR DOES NOT REACH IT. For a single slot the fix transfers
+# the one owner to the collection and degrades the source to a borrow, so
+# exactly one drop runs. That has no N-slot analogue: `elem_drop` is per-ARRAY,
+# not per-element, so every slot holding the handle will drop it, and there is
+# no lowering that gives one owner to N slots. `Mutex[T]`/`RWLock[T]` have no
+# clone path, so there is nothing to put in slots 2..N either.
+#
+# ⛔ THIS IS THE OWNER ASK MADE CONCRETE, NOT A SEPARATE BUG. `AGENTS.md`
+# § Ownership at Consuming Positions lists `Guard` — what `Mutex.lock()` returns
+# — among the single-owner-by-design carve-outs that must emit
+# `E_MoveWithoutOperator`, and does NOT list `Mutex` or `RWLock`. If they join
+# that list this program is REJECTED and the gap closes; if they do not, they
+# need a real clone path. Both are owner calls, and no lowering choice available
+# to an executor makes an accepted N-slot program sound.
+#
+# INTENDED (asserted by the wired test, under the accept resolution): prints `2`,
+# rc 0, ASan-clean. Under the reject resolution the expectation flips to a
+# check-time `E_MoveWithoutOperator` and this fixture moves to a reject test.
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Vector[Mutex[int]] all = []
+    all.push(m)
+    all.push(m)
+    print(f"{all.len()}")

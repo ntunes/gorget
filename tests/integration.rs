@@ -4640,6 +4640,24 @@ fn rwlock_vector_live_source_single_owner() {
     run_gg("known_gaps/rwlock_vector_live_source_single_owner.gg", "1\n5");
 }
 
+/// KNOWN GAP — a REGRESSION this round introduced and could not close without
+/// an owner call (`todo/t0908`). One single-owner handle reaching TWO element
+/// slots double-frees: `elem_drop` is per-ARRAY, so every slot holding the
+/// handle drops it, and `Mutex`/`RWLock` have no clone path to fill slots
+/// 2..N with. The one-slot repair transfers the single owner and degrades the
+/// source to a borrow, which has no N-slot analogue.
+///
+/// GREEN at the t0840 base blob — but only because the slot held garbage that
+/// was never a real handle. This is the carve-out owner ask made concrete:
+/// `Guard` (what `Mutex.lock()` returns) is on the `E_MoveWithoutOperator`
+/// list and `Mutex` is not. If they join it, this is REJECTED and the gap
+/// closes; if not, they need a real clone path. Both are owner calls.
+#[test]
+#[ignore = "known gap (todo/t0908): one single-owner handle in TWO element slots double-frees — elem_drop is per-array and Mutex/RWLock have no clone path; needs the carve-out owner call"]
+fn known_gap_mutex_vector_two_slots_double_free() {
+    run_gg("known_gaps/mutex_vector_two_slots_double_free.gg", "2");
+}
+
 /// KNOWN GAP — C backend only; `--backend=llvm` is CORRECT (lane divergence).
 /// `Shared[String]("a literal")` — the form `docs/language-design.md:1846`
 /// teaches — passes `gg check`, then `cc` refuses the emitted call:

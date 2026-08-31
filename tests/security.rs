@@ -3073,6 +3073,16 @@ fn rwlock_vector_live_source_single_owner_asan() {
     security_safe_no_leak("rwlock_vector_live_source_single_owner", "1\n5");
 }
 
+/// KNOWN GAP (`todo/t0908`) on the SANITIZER lane — a regression this round
+/// introduced and could not close without an owner call. One single-owner
+/// handle in TWO element slots: `heap-use-after-free` in `gorget_mutex_free`,
+/// because `elem_drop` is per-ARRAY and every slot holding the handle drops it.
+#[test]
+#[ignore = "known gap (todo/t0908): one single-owner handle in TWO element slots double-frees; needs the carve-out owner call"]
+fn known_gap_mutex_vector_two_slots_double_free_asan() {
+    security_safe_no_leak("mutex_vector_two_slots_double_free", "2");
+}
+
 /// Refcount arithmetic: five releases against four retains printed the right
 /// answer on both value lanes and hung or tripped a pthread assertion instead
 /// of reporting itself. Only this lane names it.
