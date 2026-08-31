@@ -45,10 +45,12 @@
 # The second column is what the fixture is tolerated FOR, and it is checked.
 # A bare stem — which is all this file used to carry — tolerated ANY leak in
 # that fixture forever: a second, entirely unrelated mechanism appearing inside
-# an already-listed fixture was invisible to the gate. MOST of the rows that
-# carry two or more distinct mechanisms used to hide all of them behind one
-# name (count them with `grep -v '^#' … | grep -c ,`; a number written here
-# would be stale by the next edit, as this header has twice demonstrated). The gate now fails on a mechanism the row does not name, AND on one
+# an already-listed fixture was invisible to the gate. MANY rows carry two or
+# more distinct mechanisms, every one of which used to hide behind a single
+# name. No count is written here — a number counting this file's own rows
+# cannot be maintained, as this header has twice demonstrated. Count them:
+#   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -c ','
+# The gate now fails on a mechanism the row does not name, AND on one
 # more record of a mechanism it does — COUNTS, not a set, because a set cannot
 # see a SECOND leak of a class the fixture already exhibits. That case is the
 # gate's own positive control (tests/fixtures/sanitize_selftest/).
@@ -336,9 +338,14 @@ set_user_key_hashable	str_alloc_copy*1
 # double-frees the case that also binds to a VarDecl. DURABLE REPRO for that
 # item, committed alongside this admission because the Cardinal rule wants a
 # row's evidence in the tree rather than in a report:
-# `known_gaps/call_result_temp_at_call_arg_leaks.gg`. It also NARROWS t0609(2):
-# a plain USER function returning a heap String in the same call-arg position
-# is CLEAN, so the leaking producers are a subset of "calls".
+# `known_gaps/call_result_temp_at_call_arg_leaks.gg`. It also RE-AIMS t0609(2):
+# the discriminator is not the call, and not "builtin method" either — it is the
+# PRODUCER'S DECLARED RETURN TYPE. `gorget_int_to_str` / `gorget_float_to_str`
+# are emitted `static inline Str`, the VIEW type, while allocating and adopting;
+# `to_upper` and `join` are emitted `GorgetString` and are CLEAN in the very
+# same argument position. So the fix is a write-site declaration correction
+# (7 such producers, 6 in `src/backend/c/runtime/runtime_tostr.c`), not the
+# read-site drop-machinery work t0609(2) originally described.
 sh_primitive_admitted_methods_ok	str_alloc_copy*2
 shared_arc_only	gorget_shared_new*2
 shared_atomic	gorget_atomic_int_new*1

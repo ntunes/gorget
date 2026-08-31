@@ -1,36 +1,45 @@
-# KNOWN GAP — a BUILTIN METHOD's owned String result, passed STRAIGHT into a
-# call argument, is never drop-registered. `todo/t0609` item (2).
+# KNOWN GAP — a producer whose emitted C DECLARES a borrowed view but RETURNS
+# an owned heap string: the caller's temp is never dropped. `todo/t0609` item 2.
 #
-# THE DISCRIMINATOR IS THE BINDING, AND IT IS ONE LINE:
-#     print(x.debug())              -> LEAKS 3 bytes
-#     String d = x.debug(); print(d) -> CLEAN
-# Binding the result to a named local drop-registers it (`gorget_string_free`
-# is emitted); passing it directly into a call does not, so the temp is dropped
-# on the floor. Frames: `str_alloc_copy` <- `gorget_string_adopt` <-
-# `gorget_int_to_str` <- `main`.
+# THE DISCRIMINATOR IS THE PRODUCER'S DECLARED RETURN TYPE, and it is visible in
+# the emitted C. Measured at R47 close, all four in the identical `print(...)`
+# argument position:
+#     print(s.trim().to_upper())  -> CLEAN   `static inline GorgetString gorget_str_to_upper`
+#     print(",".join(parts))      -> CLEAN   `static inline GorgetString gorget_str_join`
+#     print(x.debug())            -> LEAKS   `static inline Str      gorget_int_to_str`
+#     print(f.display())          -> LEAKS   `static inline Str      gorget_float_to_str`
+# `Str` is the VIEW type — a borrowed slice, nothing for the caller to drop —
+# yet those two bodies `GORGET_ALLOC` and `return gorget_string_adopt(out)`,
+# i.e. they hand back an OWNED allocation. The drop machinery reads the declared
+# type, correctly concludes there is nothing to drop, and the temp is lost. The
+# write site is lying to it (Core #2; layering rule 1 names view-vs-owned as an
+# invariant a layer may not drop). Frames: `str_alloc_copy` <-
+# `gorget_string_adopt` <- `gorget_int_to_str` / `gorget_float_to_str` <- `main`.
 #
-# ⚠ THE PRODUCER AXIS IS NARROWER THAN t0609(2)'s HEADLINE, measured here
-# rather than assumed. That item frames the class as "a call/await result temp
-# consumed as an arg", citing `print(t.await())` and `print(s.speak())`. A
-# PLAIN USER FUNCTION returning a heap String in the very same position —
-# `print(heavy("alpha", "beta"))` below — is CLEAN at this HEAD. So the
-# leaking producers are a SUBSET of "calls", and a fix aimed at every call
-# result would be aimed wider than the defect. The clean user-call cell is kept
-# in this fixture as a CONTROL precisely so that stays visible.
+# ⚠ IT IS NOT "BUILTIN METHODS LEAK", AND IT IS NOT "CALL RESULT TEMPS LEAK".
+# Both are refuted by cells in this file: `to_upper` and `join` are builtin
+# methods in the same position and are clean, and a plain USER function
+# returning a heap String there is clean too. Every earlier attempt to state
+# this class more broadly than the measurement was wrong; if you widen it again,
+# probe first.
 #
-# ⚠ HEAP-FORCED throughout: `x.debug()` and `f.display()` allocate their result
-# (3 and 4 bytes), and `heavy` concatenates rather than returning a literal. A
-# literal-only version of this program leaks nothing observable and would be a
-# false negative (the lesson `todo/t0705` was filed for).
+# ⚠ THE TWO CLEAN BUILTIN CELLS ARE THE POINT OF THE NET, not decoration. A fix
+# that drop-registers every builtin-method result temp — the scope the earlier
+# version of this header implied — DOUBLE FREES `to_upper` and `join`, whose
+# emitted helpers already free their result. Those cells are what trips.
 #
-# ⚠ ONLY LeakSanitizer CAN SEE THIS. stdout is correct today, so this is wired
+# ⚠ HEAP-FORCED throughout: `x.debug()` / `f.display()` allocate (3 and 4
+# bytes), `heavy` concatenates, and `s.trim().to_upper()` allocates. A
+# literal-only version leaks nothing observable and is a false negative (the
+# lesson `todo/t0705` was filed for).
+#
+# ⚠ ONLY LeakSanitizer CAN SEE THIS — stdout is correct today, so this is wired
 # to `assert_gg_sanitize_clean` (`detect_leaks=1`), never to `run_gg`.
 #
-# ⚠ t0609(2) warns the fix must be CONDITIONAL: the same result also binds to a
-# VarDecl in the control cells below, and drop-registering it unconditionally
-# double-frees those. This fixture holds both cells for that reason.
-#
-# Un-ignore + promote out of `known_gaps/` when the temp is dropped.
+# Un-ignore + promote out of `known_gaps/` when the producers are declared to
+# return what they actually return.
+
+from std.collections import Vector
 
 String heavy(String a, String b):
     return a + b
@@ -38,16 +47,28 @@ String heavy(String a, String b):
 int main():
     int x = 21
     float f = 7.5
+    String s = "  hi  "
+    Vector[String] parts = Vector[String]()
+    parts.push("a")
+    parts.push("b")
 
-    # CONTROL — a user call's result temp at a call-arg position. CLEAN today.
+    # CONTROL — a USER call's result temp at a call-arg position. Clean today.
     print(heavy("alpha", "beta"))
 
-    # THE GAP — a builtin method's result temp at the same position. LEAKS.
+    # CONTROL — BUILTIN methods at the same position whose emitted producer is
+    # declared `GorgetString` and frees its result. Clean today, and exactly
+    # what an over-wide fix would turn into a double free.
+    print(s.trim().to_upper())
+    print(",".join(parts))
+
+    # THE GAP — builtin methods whose emitted producer is declared `Str` while
+    # returning an owned allocation.
     print(x.debug())
     print(f.display())
 
-    # CONTROL — the same producers, bound to a named local first. CLEAN today,
-    # and what a fix must not turn into a double free.
+    # CONTROL — the same leaking producers, bound to a named local first. Clean
+    # today, because binding drop-registers the value; also a double-free cell
+    # for any fix that registers unconditionally.
     String bound = heavy("gamma", "delta")
     print(bound)
     String d = x.debug()

@@ -8518,40 +8518,56 @@ bb",
     );
 }
 
-/// KNOWN GAP (`todo/t0609` item 2) — a BUILTIN METHOD's owned String result,
-/// passed STRAIGHT into a call argument, is never drop-registered. Measured at
-/// R47 close: 7 bytes in 2 allocations, frames `str_alloc_copy` <-
-/// `gorget_string_adopt` <- `gorget_int_to_str` / `gorget_float_to_str` <-
-/// `main`. stdout is correct, so only LeakSanitizer can see it.
+/// KNOWN GAP (`todo/t0609` item 2) — a producer whose emitted C DECLARES a
+/// borrowed view but RETURNS an owned heap string, so the caller's temp is
+/// never dropped. Measured at R47 close: 7 bytes in 2 allocations, frames
+/// `str_alloc_copy` <- `gorget_string_adopt` <- `gorget_int_to_str` /
+/// `gorget_float_to_str` <- `main`. stdout is correct, so only LeakSanitizer
+/// can see it.
 ///
-/// THE DISCRIMINATOR IS THE BINDING: `print(x.debug())` leaks, while
-/// `String d = x.debug(); print(d)` is clean, because binding to a named local
-/// drop-registers the value and passing it into a call does not.
+/// THE DISCRIMINATOR IS THE PRODUCER'S DECLARED RETURN TYPE, measured in the
+/// identical `print(...)` argument position:
+/// `print(s.trim().to_upper())` and `print(",".join(parts))` are CLEAN — their
+/// emitted helpers are `static inline GorgetString` and free their result —
+/// while `print(x.debug())` and `print(f.display())` LEAK, because
+/// `gorget_int_to_str` / `gorget_float_to_str` are declared `static inline Str`
+/// (the VIEW type, nothing for a caller to drop) and yet `GORGET_ALLOC` +
+/// `return gorget_string_adopt(out)`. The drop machinery reads the declared
+/// type and is right to conclude there is nothing to drop; the write site is
+/// lying to it (Core #2; layering rule 1 names view-vs-owned as an invariant a
+/// layer may not drop). Census at the write site: 7 such producers, 6 of them
+/// in `src/backend/c/runtime/runtime_tostr.c`.
 ///
-/// ⚠ THE PRODUCER AXIS IS NARROWER THAN t0609(2)'s HEADLINE. That item frames
-/// the class as "a call/await result temp consumed as an arg"; a plain USER
-/// function returning a heap String in the same position is CLEAN at this HEAD,
-/// and the fixture keeps that cell as a control so the narrowing stays visible.
-/// It also keeps the named-local cells, because t0609(2) warns a fix must be
-/// conditional or it double-frees them.
+/// ⚠ IT IS NEITHER "BUILTIN METHODS LEAK" NOR "CALL RESULT TEMPS LEAK", and
+/// both wordings have already been written into this tree and refuted by one
+/// probe. The fixture holds the refuting cells: two builtin methods and one
+/// user function, all clean, all in the same position.
+///
+/// ⚠ THE CLEAN BUILTIN CELLS ARE THE POINT OF THE NET. A fix that
+/// drop-registers every builtin-method result temp DOUBLE FREES `to_upper` and
+/// `join`, whose helpers already free. Those cells are what trips.
 ///
 /// This is the durable repro `t0609`(2) had been missing — the row
 /// `sh_primitive_admitted_methods_ok` was admitted to the leak allowlist
 /// against this class, and the Cardinal rule wants the evidence committed.
 ///
-/// Un-ignore + promote out of `known_gaps/` when the temp is dropped.
+/// Un-ignore + promote out of `known_gaps/` when the producers are declared to
+/// return what they actually return.
 #[test]
-#[ignore = "KNOWN GAP (todo/t0609 item 2): a builtin method's owned String \
-result passed straight into a call argument is never drop-registered -- \
-LeakSanitizer reports 7 bytes in 2 allocations from gorget_int_to_str / \
-gorget_float_to_str, while stdout is correct and detect_leaks=0 exits 0. \
-Binding the result to a named local first is clean. Fixture: \
+#[ignore = "KNOWN GAP (todo/t0609 item 2): gorget_int_to_str / \
+gorget_float_to_str are declared `static inline Str` -- the VIEW type -- while \
+allocating and adopting, so the caller's temp is never dropped. LeakSanitizer \
+reports 7 bytes in 2 allocations while stdout is correct and detect_leaks=0 \
+exits 0. NOT `builtin methods leak`: to_upper and join are clean in the same \
+position. Fixture: \
 tests/fixtures/known_gaps/call_result_temp_at_call_arg_leaks.gg. TODO.md."]
 fn call_result_temp_at_call_arg_leaks() {
     assert_gg_sanitize_clean(
         "known_gaps/call_result_temp_at_call_arg_leaks",
         "\
 alphabeta
+HI
+a,b
 21
 7.5
 gammadelta
