@@ -160,6 +160,31 @@ fn visit(dir: impl AsRef<Path>, f: &mut dyn FnMut(&Path)) {
 /// Equality costs one line of bookkeeping on an improvement, which is the
 /// point: the number that retires sites is written down in the same commit
 /// that retires them.
+///
+/// ## What this helper CANNOT see
+///
+/// Its whole reach is *"the count did not move without someone writing down
+/// why"*. Everything below is outside it, and none of it is hypothetical —
+/// `todo/t0875` is the standing record of a guard in this file reaching FOUR
+/// assertions, each demonstrated RED and each then evaded by respelling
+/// exactly the thing it counted — the fourth in SEVEN separate costumes.
+///
+/// 1. **It sees only what its COUNTER sees.** Each caller passes a number a
+///    TEXTUAL census produced, and a site respelled outside that census's
+///    pattern is invisible to the census and therefore to this assertion. A
+///    substring census counts COSTUMES, not a class.
+/// 2. **Equality is evaded by a COMPENSATING PAIR.** Retire one site and add
+///    another in the same commit and the count is unchanged: green gate, new
+///    violation. Equality closes the SLACK hole — a band absorbing drift — and
+///    says nothing about SUBSTITUTION.
+/// 3. **A count is not a verdict.** That a census finds exactly as many sites
+///    as its constant says is a fact about arithmetic, not about whether any
+///    one of those sites belongs there.
+///
+/// So this is a BOOKKEEPING guard, not a class-retiring one. Retiring a class
+/// takes a guard that cannot be respelled around — a type whose misuse fails
+/// to COMPILE (Core #6, and `t0875` for the worked example). Do not read a
+/// green run here as evidence that the class is closed.
 #[track_caller]
 fn assert_exact_ratchet(what: &str, count: usize, budget: usize, guidance: &str) {
     assert_eq!(
@@ -173,7 +198,12 @@ fn assert_exact_ratchet(what: &str, count: usize, budget: usize, guidance: &str)
            why.\n  \
          • count < budget — sites were retired (great!). LOWER the constant \
            in the SAME commit so the new floor is locked in; a band left \
-           above the real count silently absorbs the next regression."
+           above the real count silently absorbs the next regression.\n\n\
+         What a GREEN run here does NOT prove: the counter is textual, so a \
+         site respelled outside its pattern is invisible; and equality is \
+         evaded by a compensating pair (retire one, add one, count unchanged). \
+         This is bookkeeping, not a class-retiring guard — see the doc comment \
+         on assert_exact_ratchet."
     );
 }
 
