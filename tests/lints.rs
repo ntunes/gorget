@@ -18724,7 +18724,35 @@ fn count_bang_move_in_code(roots: &[&str]) -> usize {
 /// Positive-control: add `foo.slice(0, 1)` to any non-SH `.gg` under
 /// `tests/fixtures/` → this lint MUST fire with a count above the
 /// ceiling. If it doesn't, the regex or the ceiling has decayed.
+/// ⛔ SUSPENDED 2026-08-31 BY OWNER DIRECTION. Do not re-enable without an
+/// owner ruling. TWO independent reasons, either sufficient:
+///
+/// (1) **ITS RATIONALE WAS WITHDRAWN BY THE OWNER THE SAME DAY IT WAS BEING
+///     ENFORCED.** `docs/define-gorget/decisions.md:1278-1284` — **D22 RIDER 2,
+///     owner 2026-08-31: "THE REMOVAL CLAUSE IS OVERRIDDEN. `.slice()` AND
+///     `.substring()` ARE KEPT."** *"let's not remove .slice/substring as
+///     ratified by D22. we keep it for now, both documented as aliases."*
+///     The colon form stays CANONICAL and the rest of D22 is unchanged — only
+///     the removal is withdrawn. This lint enforced the withdrawn clause.
+///
+/// (2) **THE MIGRATION TARGET IS SILENTLY BROKEN — see `todo/t0871`.**
+///     `s[a:b]` does not tag its result as a view (`index_load` at
+///     `src/ir/lowering/exprs/methods.rs:4394` never calls `set_view_of`), so a
+///     bind whose source later REALLOCATES reads freed memory. Measured at HEAD,
+///     rc 0 and no diagnostic on BOTH backends: `String t = s[0:5]` then 64
+///     reallocating appends to `s` prints garbage on C and LLVM, while
+///     `s.slice(0, 5)` prints correctly. ⚠ Without the reallocation the two
+///     spellings agree, which is how this survived. So the ceiling was pushing
+///     205 self-host sites (`todo/t0850`, `todo/t0316`) from the CORRECT
+///     spelling onto the broken one, advertised as "MEASURED FREE" — free
+///     because it does not do the work.
+///
+/// RESTORE ONLY AFTER the R49 soundness fix lands (owner-scheduled 2026-08-31)
+/// AND an owner ruling on whether a ceiling is wanted at all, given (1).
 #[test]
+#[ignore = "SUSPENDED by owner 2026-08-31: enforces D22's removal clause, which \
+D22 Rider 2 (decisions.md:1278) withdrew, and migrates onto the silently-broken \
+`s[a:b]` bind (todo/t0871). Soundness fix scheduled R49."]
 fn no_dot_slice_after_d22() {
     /// Non-SH ceiling AFTER C-3a lands = 0 (every non-SH site was
     /// migrated in the same commit as this lint). The SH corpora sit in
