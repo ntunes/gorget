@@ -38939,7 +38939,29 @@ fn self_host_runtime_diff() {
     // ⚠ This raise was sanctioned ONLY because the inflow is PRE-EXISTING from
     // the raising round's point of view. Core #9 ⊕ forbids raising it for a
     // round's OWN inflow, with no exemption; the fix there is to port.
-    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 151;
+    //
+    // 2026-08-31: LOWERED 151 -> 147 by R48 Track γ, locking in the gain. Three
+    // WRONG-OUTPUT rows became MATCH when the self-host nondeterminism was
+    // fixed at three separate write sites (`closure_fstring_capture`,
+    // `iter_map_after_filter`, `cow_lazy_w3c_arg_temp`), and a fourth row went
+    // with them. Lowering needs no sign-off; this is the ratchet doing its job.
+    // Measured at HEAD with the documented release invocation: WRONG-OUTPUT 30
+    // + CC-FAIL 66 + CRASH 36 + DRIVER-FAIL 15 = 147, MATCH 1505.
+    //
+    // ⚠ The track's OWN three new corpus fixtures
+    // (`vector_hof_cross_type_map`, `iter_trait_default_trait_args`,
+    // `cow_lazy_index_slice_join`) all MATCH, so they add ZERO inflow — which
+    // is the obligation Core #9 ⊕ encodes, met rather than exempted.
+    //
+    // ⚠ UNLIKE the MATCH floor above, this bound carries NO jitter discount,
+    // and one member of the CRASH set is timing-sensitive: `async_select`'s
+    // 'timed out' row (the dropped `select:` body — the sole `EXPECTED_HANGS`
+    // member). The 147 was measured on a box running three concurrent agents,
+    // i.e. under MORE timeout pressure than a quiet one, so it is a pessimistic
+    // bound rather than an optimistic one. If this ever reds by exactly one on
+    // an otherwise-unchanged tree, check that row before believing in new
+    // inflow.
+    const RUNTIME_DIFF_NONMATCH_CEILING: usize = 147;
     if cfg!(debug_assertions) {
         eprintln!(
             "NOTE [self_host_runtime_diff]: non-MATCH ceiling skipped (debug profile — same \
