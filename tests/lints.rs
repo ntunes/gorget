@@ -2766,7 +2766,7 @@ fn self_host_loop_dispatcher_bypass_pairs() {
 /// | 2 | `try_lower_set_hof` | SET-1 | **FIXED THIS ROUND, and it LEFT SET-3.** Its `filter` arm minted the result set with the raw `gorget_(ordered_)set_new` symbol and a hardcoded 8-byte key, at TWO emission sites (ordered and unordered) — measured wrong at rc 0 for `bool`, `String`, `@derive(Hashable)` structs with a resource field, and primitives-only structs whose discriminating field sits past byte 8. Now mints through the single producer `set_ctor_name` (`lower_types.gg`). Pinned by the nine `sethof_filter_*` cells in `tests/fixtures/self_host_comprehension/`. |
 /// | 3 | `comp_make_acc` | (was SET-3) | **FIXED THIS ROUND, and it LEFT SET-3.** Its untyped `else` branch — a bare `gorget_array_new(8)` for an empty element name — is DELETED. A non-empty element name is now the callers' contract, and the contract is ENFORCED by a `lower_abort` rather than asserted in a comment. |
 /// | 4 | `lower_expr_inner` | SET-1 **and** SET-3 | ⛔ **NOT CLEAN — DEFER, filed.** Its array-literal path leaves the element-type name empty for `auto v = []`, so the accumulator is `gorget_array_new(8)` with no elem drop / clone / materialize hooks; a later `push(<String>)` then prints a RAW POINTER at rc 0 on BOTH real lanes while ggdef prints the right answer — Core #8's trap in its cleanest form. Out of this round's scope: the root is the destination-declaration channel, not the comprehension mint. Durable repro `known_gaps/auto_empty_literal_push_string_raw_pointer.gg`; grep `todo/` for `auto EMPTY-COLLECTION LITERAL`. |
-/// | 5 | `try_lower_vector_hof` | SET-1 | ⛔ **NOT CLEAN — DEFER, TWO filed defects.** (a) cross-type `flat_map` mints from the INPUT element type (`(T) -> Vector[U]` is legal, so the result element is `U`); (b) the inline-closure `map` shape mints cross-type from the input too. Both wrong at rc 0. Durable repros `known_gaps/flat_map_cross_type_input_mint.gg` and `known_gaps/map_inline_closure_cross_type_input_mint.gg`; grep `todo/` for `cross-type` and `flat_map`. This is Core #4 in the flesh: the comprehension producer was fixed and a SIBLING producer still mints from the wrong channel. |
+/// | 5 | `try_lower_vector_hof` | — | ✅ **LEFT SET-1 (R48).** It used to mint the accumulator itself, from the INPUT element type, which was wrong at rc 0 for both cross-type shapes: `flat_map` (`(T) -> Vector[U]`, so the result element is `U`) and an inline-closure `map`. It now routes `map`/`filter` through the comprehension producer's deferred mint (`comp_reserve`/`comp_note_elem`/`comp_close`) and desugars `flat_map` to the nested loop the comprehension form already used, so the element type comes from the MATERIALIZED local and nothing is minted here. Core #4 closed in the flesh: the sibling producer is on the chokepoint's channel rather than its own. The two repros are now LIVE tests (`known_gap_flat_map_cross_type_input_mint`, `known_gap_map_inline_closure_cross_type_input_mint`) plus corpus fixture `vector_hof_cross_type_map.gg`. |
 ///
 /// ## Residual the SET-only helper does NOT cover (Core #12: name the omitted cells)
 ///
@@ -2789,12 +2789,12 @@ fn self_host_loop_dispatcher_bypass_pairs() {
 /// Regenerate by running this test — on failure it prints the current sets.
 #[test]
 fn self_host_accumulator_producer_sets() {
-    /// Baseline regenerated 2026-08-24 by running this test.
-    const EXPECTED_SET1: [&str; 4] = [
+    /// Baseline regenerated 2026-08-31 by running this test.
+    /// `try_lower_vector_hof` LEFT this set in R48 — see row 5 of the table.
+    const EXPECTED_SET1: [&str; 3] = [
         "comp_mint_tid",
         "lower_expr_inner",
         "try_lower_set_hof",
-        "try_lower_vector_hof",
     ];
     /// Baseline regenerated 2026-08-24. `try_lower_set_hof` and
     /// `comp_make_acc` both left this set this round — see the table above.
@@ -26771,4 +26771,109 @@ fn parity_untriaged_exclusions_shrink_only() {
         untriaged.len(),
     );
     eprintln!("parity_untriaged_exclusions_shrink_only: {} untriaged", untriaged.len());
+}
+
+/// R48 Track γ class guard (Core #4 / Core #6): every generic-equip
+/// TRAIT-DEFAULT substitution in the self-host lowerer binds the TRAIT's own
+/// type params through the ONE helper, `bind_trait_type_params`.
+///
+/// `setup_type_subs` binds an equip's params (`[Iter, T, U, F]`). A trait
+/// default body speaks the TRAIT's params (`Vector[T] collect()` on
+/// `trait Iterator[T]`), and for `equip [Iter, T, U, F] MapIter[…] with
+/// Iterator[U]` those two `T`s are different types. Four sites bound the trait
+/// params by hand and a fifth did not, so the trait's `T` was shadowed by the
+/// equip's and `collect` allocated an 8-byte element array while pushing a
+/// 32-byte `Str`. The hand-rolled copies are now one helper and the sites that
+/// need it call it.
+///
+/// ⚠ WHAT THIS GUARD ACTUALLY REACHES — it is a TRIPWIRE, not a class
+/// retirement, and it must not be described as one:
+///   * It CATCHES a new `setup_type_subs` call site appearing without review
+///     (the subs count moves), and it CATCHES an existing site losing its bind
+///     (the bind count moves). Those are the two directions the R48 defect
+///     could return through.
+///   * It does NOT catch a new site that adds a `bind_trait_type_params` call
+///     in the WRONG PLACE — before `setup_type_subs` (which resets the dict and
+///     discards the bind) or after the demand gate has already read the
+///     substituted return type. Order is invisible to a count.
+///   * It does NOT judge whether a given site NEEDS the bind. The two
+///     `lower_generics.gg` sites (`lower_generic_function`,
+///     `lower_generic_equip`) are not trait-default emits and correctly do not
+///     call it; a reviewer, not this lint, decides which bucket a new site is
+///     in. That is exactly the review the count forces.
+/// R48 counted four assertions of this shape evaded seven times (`todo/t0875`);
+/// treat a green here as "nobody added a site silently", nothing more.
+///
+/// **If this fails because a site was ADDED:** decide whether it emits or
+/// signs a generic-equip TRAIT DEFAULT. If it does, call
+/// `bind_trait_type_params` immediately after the `Self` binding and before any
+/// demand-gate read, and bump BOTH constants. If it does not, bump only
+/// `EXPECTED_SETUP_SITES` with a comment naming the site and why.
+///
+/// **If a count went DOWN:** lower the constant in the same commit.
+#[test]
+fn sh_generic_equip_trait_defaults_bind_trait_params() {
+    let def_src = fs::read_to_string("tests/fixtures/self_host_lowerer/lower_types.gg")
+        .expect("read tests/fixtures/self_host_lowerer/lower_types.gg");
+    assert_eq!(
+        def_src
+            .lines()
+            .filter(|l| {
+                let t = l.trim_start();
+                !t.starts_with('#') && t.starts_with("void bind_trait_type_params(")
+            })
+            .count(),
+        1,
+        "bind_trait_type_params must be defined exactly once, in lower_types.gg \
+         next to its concrete-equip sibling `setup_concrete_trait_subs`.",
+    );
+
+    /// `setup_type_subs` CALL sites (the definition and the `from … import` line
+    /// are not calls). Baseline R48: 11 in lower.gg + 2 in lower_generics.gg.
+    const EXPECTED_SETUP_SITES: usize = 13;
+    /// `bind_trait_type_params` CALL sites, all in lower.gg. Baseline R48: the
+    /// fn_sigs pre-pass (`dsi_`), the proto pre-pass (`p0_`), the generic-equip
+    /// trait-default body emit (`g_`), the equip-overridden method-generic emit
+    /// (`gm_`), and the per-call-site method-generic emit (`p_`).
+    const EXPECTED_BIND_SITES: usize = 5;
+
+    let mut setup_sites = 0usize;
+    let mut bind_sites = 0usize;
+    for path in [
+        "tests/fixtures/self_host_lowerer/lower.gg",
+        "tests/fixtures/self_host_lowerer/lower_generics.gg",
+    ] {
+        let src = fs::read_to_string(path).unwrap_or_else(|_| panic!("read {path}"));
+        for line in src.lines() {
+            let t = line.trim_start();
+            if t.starts_with('#') || t.starts_with("from ") {
+                continue;
+            }
+            if t.contains("setup_type_subs(") && !t.starts_with("void setup_type_subs(") {
+                setup_sites += 1;
+            }
+            if t.contains("bind_trait_type_params(") {
+                bind_sites += 1;
+            }
+        }
+    }
+
+    assert_eq!(
+        setup_sites, EXPECTED_SETUP_SITES,
+        "self-host `setup_type_subs` call-site count changed: {setup_sites} vs \
+         {EXPECTED_SETUP_SITES}. A NEW site that emits or signs a generic-equip \
+         TRAIT DEFAULT must also call `bind_trait_type_params` (after the `Self` \
+         binding, before any demand-gate read) or the trait's own params stay \
+         shadowed by the equip's same-named ones. Bump both constants together \
+         when it does; bump this one alone, with a comment naming the site, when \
+         it genuinely does not emit a trait default.",
+    );
+    assert_eq!(
+        bind_sites, EXPECTED_BIND_SITES,
+        "self-host `bind_trait_type_params` call-site count changed: {bind_sites} \
+         vs {EXPECTED_BIND_SITES}. A site that LOST its trait bind re-opens the \
+         R48 name-collision class (`equip [Iter, T, U, F] MapIter[…] with \
+         Iterator[U]` — two different `T`s). If a site was legitimately removed, \
+         lower the constant in the same commit.",
+    );
 }

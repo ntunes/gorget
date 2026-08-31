@@ -1,0 +1,84 @@
+# Regression: a String INDEX or SLICE taken off a lazy-CoW family member JOINS
+# the family, so a later mutation of the source materializes the derived view
+# too — not just the member it was derived from.
+#
+# `String s = v.get(0).unwrap()` binds a cap=0 borrow_view into the Vector's
+# element and registers `s` as a lazy family member keyed on `v`. Any mutation
+# of `v` emits the family's flag-guarded materialize first. `s[0..5]` and `s[1]`
+# alias the SAME element buffer, but they lower through the EIndex arm rather
+# than the `returns_view` method dispatch, so the single String-view choke point
+# that performs the join never saw them: the guard rebound the MEMBER's slot and
+# left every derived view pointing into the pre-materialize buffer, which the
+# mutation then invalidated. Both routes now join with their own flag.
+#
+# AXES — derivation {slice `s[a..b]`, index `s[i]`} × consumption {temp as a
+# call argument, named bind} × mutation route {call sig-arg `&v` (hook 2/3),
+# method mut-receiver `v.push` (hook 1)}. The `plain` rows are the CONTROL
+# where nothing mutates and the view stays valid trivially.
+#
+# OMITTED CELL, named per Core #12: a view derived from a view that is itself
+# bound to a NAME (`String t = s[0..3]` then `String c = t[2]`) is still wrong
+# on the self-host lane — the join is transitive only through a statement-
+# scoped TEMP, and the named bind retires the member before the second
+# derivation lowers. Different sub-mechanism (member LIFETIME, not the missing
+# join), filed with its own durable repro at
+# `known_gaps/sh_cow_lazy_nested_named_view.gg`. The single-level named binds
+# below (`t3`, `c3`, `t4`) are in.
+#
+# ⚠ ASan REPORTS NOTHING on this class — the runtime allocates through a custom
+# pool, so the invalidated read is inside a live allocation. The instrument that
+# sees it is the emitted C: pre-fix, `gorget_str_slice` derives its result from
+# the BORROWED slot and only the member's slot is reassigned by the guard.
+#
+# RED-VERIFIED on the pre-fix self-host driver: `arg-slice` printed
+# `a = K\xef\xbf\xbd\xef\xbf\xbd` and the row was 7 distinct outputs over 7 runs.
+# Rust gg is correct before and after, so this is a self-host-lane fix; the
+# fixture pins BOTH lanes at the correct answer.
+
+from std.collections import Vector
+
+void show_arg(String a, Vector[String] &v):
+    v.set(0, "mutated")
+    print(f"arg-slice = {a}")
+
+void show_idx(String a, Vector[String] &v):
+    v.set(0, "mutated")
+    print(f"arg-index = {a}")
+
+void main():
+    # ── slice × temp-as-arg × call sig-arg mutation ──────────────────
+    Vector[String] v1 = ["hello", "world"]
+    String s1 = v1.get(0).unwrap()
+    show_arg(s1[0..5], &v1)
+    print(f"s1 = {s1}")
+
+    # ── index × temp-as-arg × call sig-arg mutation ──────────────────
+    Vector[String] v2 = ["hello", "world"]
+    String s2 = v2.get(0).unwrap()
+    show_idx(s2[1], &v2)
+    print(f"s2 = {s2}")
+
+    # ── slice + index × named bind × method mut-receiver mutation ────
+    Vector[String] v3 = ["hello", "world"]
+    String s3 = v3.get(0).unwrap()
+    String t3 = s3[0..4]
+    String c3 = s3[1]
+    v3.push("filler")
+    print(f"t3 = {t3}")
+    print(f"c3 = {c3}")
+    print(f"s3 = {s3}")
+    print(f"v3.len() = {v3.len()}")
+
+    # ── slice × named bind × sig-arg mutation ────────────────────────
+    Vector[String] v4 = ["gorget", "world"]
+    String s4 = v4.get(0).unwrap()
+    String t4 = s4[0..3]
+    show_arg(t4, &v4)
+    print(f"s4 = {s4}")
+
+    # ── CONTROL: no mutation at all, views stay valid trivially ──────
+    Vector[String] v5 = ["stable", "world"]
+    String s5 = v5.get(0).unwrap()
+    print(f"plain-slice = {s5[0..3]}")
+    print(f"plain-index = {s5[4]}")
+    print(f"s5 = {s5}")

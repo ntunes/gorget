@@ -1,0 +1,107 @@
+# Regression: the Vector-HOF accumulator is minted from the RESULT element
+# type, on both lanes, for every combination of {map, flat_map} × {inline
+# closure, named function} × {auto, typed} destination.
+#
+# `Vector.map` is `(T) -> U ⇒ Vector[U]` and `Vector.flat_map` is
+# `(T) -> Vector[U] ⇒ Vector[U]`. Three layers have to agree on `U` and one
+# of them used to disagree with the other two:
+#   * the typechecker resolves both from the closure's return type;
+#   * the LIR HOF expander sizes the result array by `closure_ret_ty`;
+#   * the GIR lowering declared both `ret_self` in the builtin protocol, so
+#     the RESULT bound to `Vector[T]` — the RECEIVER's element type.
+# A declared destination papered over the third layer, so the visible
+# discriminator on the Rust lane was `auto` vs `Vector[U]`, NOT the callee
+# shape. The self-host had its own half: `try_lower_vector_hof` minted the
+# accumulator from the input element type with a carve-out that read `fn_sigs`
+# for NAMED callees only, so `map(label)` was right and `map((int n): …)` was
+# wrong.
+#
+# RED-VERIFIED against the pre-fix compiler (`git show <base>:…`, both binaries
+# rebuilt): every `String`/`Boxed` row printed an ASLR-moving raw pointer at
+# rc 0 on the Rust C backend, the Rust LLVM backend, and the self-host lane.
+# The `int` rows are the same-type CONTROL — they were green before and after
+# and pin nothing on their own; they are here so a fix that types every
+# accumulator `String` is caught.
+#
+# AXIS CELLS SAMPLED — producer {map, flat_map} × callee {inline, named} ×
+# result element {int (control), String, struct} × destination {auto, typed}.
+# The struct cell matters on its own: a struct element is neither the
+# receiver's width nor a pointer width, so a mis-sized store shows up as a
+# wrong field value rather than a pointer, which is how the deterministic-but-
+# wrong `0 0 0` reading used to hide inside a nondeterminism hunt.
+
+from std.collections import Vector
+from std.conv import int_to_str
+
+struct Boxed:
+    int val
+
+String label(int n):
+    return int_to_str(n * 10)
+
+Vector[String] fan(int n):
+    Vector[String] out = []
+    out.push(int_to_str(n * 10))
+    out.push(int_to_str(n * 10 + 1))
+    return ^out
+
+Boxed box_it(int n):
+    return Boxed(n * 100)
+
+Vector[Boxed] fan_box(int n):
+    Vector[Boxed] out = []
+    out.push(Boxed(n * 100))
+    return ^out
+
+void main():
+    Vector[int] nums = [1, 2, 3]
+
+    # ── map × inline closure ─────────────────────────────────────────
+    auto m_in_auto_str = nums.map((int n): int_to_str(n * 10))
+    print(m_in_auto_str.get(0).unwrap())
+    Vector[String] m_in_typ_str = nums.map((int n): int_to_str(n * 10))
+    print(m_in_typ_str.get(2).unwrap())
+    auto m_in_auto_box = nums.map((int n): Boxed(n * 100))
+    print(f"{m_in_auto_box.get(0).unwrap().val}")
+    Vector[Boxed] m_in_typ_box = nums.map((int n): Boxed(n * 100))
+    print(f"{m_in_typ_box.get(2).unwrap().val}")
+    # CONTROL — same-type map, green before and after.
+    auto m_in_auto_int = nums.map((int n): n * 7)
+    print(f"{m_in_auto_int.get(2).unwrap()}")
+
+    # ── map × named function ─────────────────────────────────────────
+    auto m_nm_auto_str = nums.map(label)
+    print(m_nm_auto_str.get(1).unwrap())
+    Vector[String] m_nm_typ_str = nums.map(label)
+    print(m_nm_typ_str.get(2).unwrap())
+    auto m_nm_auto_box = nums.map(box_it)
+    print(f"{m_nm_auto_box.get(1).unwrap().val}")
+    Vector[Boxed] m_nm_typ_box = nums.map(box_it)
+    print(f"{m_nm_typ_box.get(0).unwrap().val}")
+
+    # ── flat_map × inline closure ────────────────────────────────────
+    auto f_in_auto_str = nums.flat_map((int n): fan(n))
+    print(f"{f_in_auto_str.len()}")
+    print(f_in_auto_str.get(0).unwrap())
+    Vector[String] f_in_typ_str = nums.flat_map((int n): fan(n))
+    print(f_in_typ_str.get(5).unwrap())
+
+    # ── flat_map × named function ────────────────────────────────────
+    auto f_nm_auto_str = nums.flat_map(fan)
+    print(f_nm_auto_str.get(2).unwrap())
+    Vector[String] f_nm_typ_str = nums.flat_map(fan)
+    print(f_nm_typ_str.get(3).unwrap())
+    auto f_nm_auto_box = nums.flat_map(fan_box)
+    print(f"{f_nm_auto_box.get(2).unwrap().val}")
+    Vector[Boxed] f_nm_typ_box = nums.flat_map(fan_box)
+    print(f"{f_nm_typ_box.get(0).unwrap().val}")
+
+    # ── filter CONTROL — element-preserving, must stay untouched ─────
+    auto kept = nums.filter((int n): n > 1)
+    print(f"{kept.len()}")
+    print(f"{kept.get(0).unwrap()}")
+
+    # ── chained: map to String then filter, then map back to int ─────
+    auto chained = nums.map((int n): int_to_str(n)).filter((String s): s != "2")
+    print(f"{chained.len()}")
+    print(chained.get(1).unwrap())

@@ -5275,6 +5275,22 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                                         int eix_sl_dst = add_local_with(&ctx, eix_sl_gs, None, LoView(), BoNone())
                                         Vector[Operand] eix_sl_args = [op_consume(ctx, &gmod, eix_base, CkCallArgBorrow()), op_consume(ctx, &gmod, eix_sl_start, CkBinOpArg()), op_consume(ctx, &gmod, eix_sl_end, CkBinOpArg())]
                                         emit(&ctx, GICallExtern(eix_sl_dst, "gorget_str_slice", eix_sl_args))
+                                        # #37 Phase 2 derivation join (d) — the
+                                        # INDEX/SLICE route's half of join (a).
+                                        # `s[a..b]` aliases the same buffer a
+                                        # view-returning METHOD would, but it
+                                        # lowers here rather than through the
+                                        # `returns_view` dispatch, so without
+                                        # this the slice never enters the lazy
+                                        # family: the mutation hook materializes
+                                        # the MEMBER and rebinds its slot while
+                                        # the slice keeps pointing into the
+                                        # pre-materialize buffer, and the callee
+                                        # then invalidates it. Same join, same
+                                        # typed drop override as (a).
+                                        if ctx.cow_lazy_members.len() > 0:
+                                            if cow_lazy_join_view_result(&ctx, eix_base, eix_sl_dst, eix_sl_gs):
+                                                register_lazy_slot_for_drop(&ctx, eix_sl_dst, eix_sl_gs)
                                         return eix_sl_dst
                                     # Vector / Deque / Heap base slice `v[a:b]` — R39 round-close fix
                                     # 2026-08-09.  D22 (ratified 2026-07-06) `v[a:b]` colon-slice
@@ -5369,6 +5385,12 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int eix_str_dst = add_local_with(&ctx, eix_str_gs, None, LoView(), BoNone())
                 Vector[Operand] eix_str_args = [op_consume(ctx, &gmod, eix_base, CkCallArgBorrow()), op_consume(ctx, &gmod, eix_idx, CkBinOpArg())]
                 emit(&ctx, GICallExtern(eix_str_dst, "gorget_str_index", eix_str_args))
+                # #37 Phase 2 derivation join (d) — the `s[i]` sibling of the
+                # `s[a..b]` join just above. One codepoint is as much a view
+                # into the member's buffer as a slice is.
+                if ctx.cow_lazy_members.len() > 0:
+                    if cow_lazy_join_view_result(&ctx, eix_base, eix_str_dst, eix_str_gs):
+                        register_lazy_slot_for_drop(&ctx, eix_str_dst, eix_str_gs)
                 return eix_str_dst
             String eix_getter = ""
             match resource_meta_for(&gmod, eix_base_name):
@@ -6733,73 +6755,55 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             return -1
         String var_name = cparams.get(0).unwrap()
         SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
-        # map's output element type defaults to the INPUT element type (the
-        # scalar-preserving common case, e.g. `map(double)` int→int); filter
-        # always keeps the input type. For a CROSS-TYPE `map(f)` with a NAMED
-        # function whose registered `fn_sigs` return type differs (e.g.
-        # `map(label)` with `String label(int)`), resolve the output element
-        # from the function's return type so the accumulator is `Vector[U]`,
-        # not `Vector[T]` — otherwise a `String` return gets stored into an
-        # int64 slot and read back as pointer garbage. Falls back to the input
-        # element type for inline closures / unregistered fns (unchanged — a
-        # known gap for inline cross-type map).
-        String out_elem_name = elem_name
-        if mname == "map":
-            match margs.get(0).unwrap().expr:
-                case EIdentifier(map_fn_nm):
-                    if gmod.fn_sigs.contains(map_fn_nm):
-                        out_elem_name = type_id_to_name(gmod.fn_sigs.get(map_fn_nm).unwrap(), &gmod)
-                else:
-                    pass
-        # Type the accumulator with the ELEMENT-CARRYING `Vector__<elem>`
-        # name (not bare `GorgetArray`) so the result is a self-describing
-        # Vector: a CHAINED HOF (`v.filter(…).map(…).fold(…)`) sees a
-        # `Vector__<elem>` receiver and re-resolves the element type via
-        # `collection_element_type`, instead of hitting a bare `GorgetArray`
-        # that `lower_for_vector` can't iterate. The runtime layout is the
-        # same `GorgetArray` struct (resource_meta_for maps both), so the
-        # push/extend/get/len calls and the C-emit assignment are unchanged.
-        # Routed through the centralized `collection_accumulator_tid` helper
-        # (one source of truth for collection-accumulator typing).
-        int acc_tid = collection_accumulator_tid(&gmod, "array", out_elem_name, "", "")
-        int acc = comp_make_acc(&ctx, acc_tid, out_elem_name, &gmod)
+        # `v.map(f)` ≡ `[f(x) for x in v]` and `v.filter(p)` ≡
+        # `[x for x in v if p(x)]`, so both go through the comprehension
+        # producer's DEFERRED MINT: `comp_reserve` reserves the accumulator
+        # local plus an unterminated mint block, the synthesized
+        # bind-then-push body publishes the MATERIALIZED element type through
+        # `comp_note_elem`, and `comp_close` emits the typed constructor once
+        # that type is known. `map` is CROSS-TYPE ((T) -> U), so the
+        # accumulator element is `U` — whatever the closure body actually
+        # produced — and never the receiver's `T`.
+        #
+        # ⚠ THE HISTORY THIS REPLACED, kept because it CONSTRAINS the shape.
+        # This arm used to mint from the INPUT element type, with a narrow
+        # carve-out that read `fn_sigs` when the argument happened to be a
+        # NAMED function identifier. That made `v.map(label)` right and the
+        # identical `v.map((int n): …)` wrong — a `String` element stored
+        # into an int64 slot and read back as pointer garbage — while the
+        # same computation written as a comprehension was correct all along.
+        # The element type has to come from the MATERIALIZED local, which is
+        # exactly what `comp_note_elem` carries; a producer that reads the
+        # RECEIVER's element type, or re-derives one from the argument's
+        # syntactic shape, is on the wrong channel.
+        CompSave hsv = comp_reserve(&ctx, &gmod, "array", false)
+        int acc = ctx.comp_acc
         String acc_name = "__hof_acc_" + int_to_str(acc)
         nl_put(&ctx, acc_name, acc)
+        String hbind = ctx.comp_w0.clone()
         Vector[Stmt] body = []
-        SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
-        Vector[SpannedType] no_targs = []
-        Vector[String] no_arg_names = []
         if mname == "map":
-            # `acc.push(<closure body>)`
-            Vector[CallArg] push_args = [pos_arg(cbody.clone())]
-            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
-            body.push(SExpr(push_call))
+            # `<bind> = <closure body>; acc.push(<bind>)`
+            body = comp_synth_body_bound(acc_name, hbind, "push", cbody, false, cbody, span)
         else:
-            # `if <closure body>: acc.push(<element>)`
+            # `if <closure body>: <bind> = <element>; acc.push(<bind>)`
             SpannedExpr elem_ref = SpannedExpr(EIdentifier(var_name), span)
-            Vector[CallArg] push_args = [pos_arg(elem_ref)]
-            SpannedExpr push_call = SpannedExpr(EMethodCall(Box(acc_ref), "push", push_args, no_targs), span)
-            Vector[Stmt] then_body = [SExpr(push_call)]
-            Vector[ElseBranch] no_elifs = []
-            body.push(SIf(cbody.clone(), then_body, no_elifs))
+            body = comp_synth_body_bound(acc_name, hbind, "push", elem_ref, true, cbody, span)
         lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, false, body, &gmod, false)
-        return acc
+        return comp_close(&ctx, &gmod, hsv)
     # ── flat_map: concatenate the Vector the closure returns per element ──
-    # `v.flat_map(f)` ≡ `acc = []; for x in v: acc.extend(f(x))`. Mirrors
-    # Rust gg's `expand_flat_map` (src/bir/lower.rs:2297) — per element call
-    # the closure (which returns a Vector) and append its elements into the
-    # accumulator via `gorget_array_extend`. ⚠ `flat_map` is CROSS-TYPE:
+    # `v.flat_map(f)` ≡ `[y for x in v for y in f(x)]`, and that is exactly
+    # what is synthesized: a NESTED loop whose inner variable is bound to one
+    # element of the Vector `f(x)` returns. `flat_map` is CROSS-TYPE —
     # `src/semantic/typecheck.rs` types `("Vector","flat_map")` as
     # `(T) -> Vector[U]`, so the RESULT element type is `U`, not the input's
-    # `T`. The mint below reads the INPUT element type and is therefore WRONG
-    # whenever U != T — a live, filed defect, not an invariant:
-    # `tests/fixtures/known_gaps/flat_map_cross_type_input_mint.gg` (grep
-    # TODO.md for "cross-type `flat_map` mints from the INPUT element type").
-    # The comprehension lowerer next door already mints from the MATERIALIZED
-    # result element (`comp_mint_tid`); this producer is the sibling that
-    # still does not. The synthesized `acc.extend(<closure body>)`
-    # routes through the normal method dispatch (`extend` → gorget_array_extend,
-    # lir_lower.gg:1559) — NOT the HOF intercept, since `extend` isn't a HOF.
+    # `T` — and the nesting is what makes the deferred mint see `U`: the
+    # published element is the INNER loop variable, materialized from the
+    # returned Vector, so `comp_note_elem` carries `U` and `comp_close` mints
+    # `Vector[U]`. A flat single loop pushing the whole returned Vector could
+    # only ever publish `Vector[U]`, and the older shape
+    # (`acc.extend(f(x))` over an accumulator minted from `elem_name`)
+    # published nothing at all and printed a raw pointer whenever `U != T`.
     if mname == "flat_map":
         if margs.len() != 1:
             return -1
@@ -6811,24 +6815,21 @@ int try_lower_vector_hof(LowerCtx &ctx, int recv, String recv_type_name, String 
             return -1
         String var_name = cparams.get(0).unwrap()
         SpannedPattern var_pat = SpannedPattern(PBinding(var_name), span)
-        # Centralized collection-accumulator typing. ⚠ `elem_name` is the
-        # INPUT element type; for a cross-type `flat_map` ((T) -> Vector[U])
-        # the accumulator must be minted from `U`. Known defect, filed with a
-        # durable repro — see the banner above.
-        int acc_tid = collection_accumulator_tid(&gmod, "array", elem_name, "", "")
-        int acc = comp_make_acc(&ctx, acc_tid, elem_name, &gmod)
+        CompSave fsv = comp_reserve(&ctx, &gmod, "array", false)
+        int acc = ctx.comp_acc
         String acc_name = "__hof_acc_" + int_to_str(acc)
         nl_put(&ctx, acc_name, acc)
-        SpannedExpr acc_ref = SpannedExpr(EIdentifier(acc_name), span)
-        Vector[SpannedType] no_targs = []
-        Vector[String] no_arg_names = []
-        # `acc.extend(<closure body>)` — the closure body is a Vector
-        # expression; extend appends all its elements into acc.
-        Vector[CallArg] ext_args = [pos_arg(cbody.clone())]
-        SpannedExpr ext_call = SpannedExpr(EMethodCall(Box(acc_ref), "extend", ext_args, no_targs), span)
-        Vector[Stmt] body = [SExpr(ext_call)]
+        String fbind = ctx.comp_w0.clone()
+        # Inner loop: `for <inner> in <closure body>:` with the comprehension
+        # bind-then-push body pushing `<inner>`.
+        String inner_name = "__flatelem_" + int_to_str(acc)
+        SpannedPattern inner_pat = SpannedPattern(PBinding(inner_name), span)
+        SpannedExpr inner_ref = SpannedExpr(EIdentifier(inner_name), span)
+        Vector[Stmt] inner_body = comp_synth_body_bound(acc_name, fbind, "push", inner_ref, false, inner_ref, span)
+        Vector[Stmt] no_else = []
+        Vector[Stmt] body = [SFor(inner_pat, cbody.clone(), inner_body, 0, no_else)]
         lower_for_vector(&ctx, var_pat, recv, recv_type_name, false, false, body, &gmod, false)
-        return acc
+        return comp_close(&ctx, &gmod, fsv)
     # ── fold: seeded scalar accumulator threaded through the closure ──
     if mname == "fold":
         if margs.len() != 2:

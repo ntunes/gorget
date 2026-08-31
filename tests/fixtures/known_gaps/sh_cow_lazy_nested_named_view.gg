@@ -1,0 +1,46 @@
+# KNOWN GAP — SELF-HOST lane. A String view derived from a view that is itself
+# bound to a NAME does not join the lazy-CoW family, so the source's mutation
+# leaves it reading the pre-materialize buffer.
+#
+#     String s = v.get(0).unwrap()     # lazy family member, root `v`
+#     String t = s[0..3]               # joins the family (R48)
+#     String c = t[2]                  # does NOT join — prints a garbage byte
+#     show(t, &v)                      # mutates v; guard materializes s and t
+#     print(f"c = {c}")                # expected "r", prints a replacement char
+#
+# ⚠ NOT the missing derivation JOIN that R48 fixed. The join is present and the
+# SINGLE-level cases are correct on this lane and pinned live by
+# `tests/fixtures/cow_lazy_index_slice_join.gg` — a slice or index taken
+# directly off the member, whether consumed as a call-argument temp or bound to
+# a name, materializes correctly. The discriminator is the INTERMEDIATE name:
+# a derivation-join temp is registered `stmt_scoped`, so it retires at the end
+# of its own statement (`cow_lazy_retire_stmt_temps`, `self_host_lowerer/
+# lower.gg`), and the next statement's `t[2]` finds no family member whose slot
+# matches `t`. The mechanism is member LIFETIME, not a missing hook.
+#
+# ⚠ A `stmt_scoped` → persistent PROMOTION at the declaration site was BUILT and
+# MEASURED during R48 and does NOT fix it — neither keyed on the declaration's
+# `var_local` nor on `nl_get(name)` — so the slot the name ends up bound to is
+# not the joined temp's slot. Whatever binds the name copies or re-slots the
+# view; that is where the next attempt should start, not at the retire pass.
+#
+# ⚠ ASan REPORTS NOTHING (custom allocator pool). Diff the emitted C.
+#
+# ⚠ Rust gg prints `c = r` on C and on LLVM.
+#
+# INTENDED (asserted below): prints `c = r` then `s = gorget`.
+
+from std.collections import Vector
+
+void show(String a, Vector[String] &v):
+    v.set(0, "mutated")
+    print(f"a = {a}")
+
+void main():
+    Vector[String] v = ["gorget", "world"]
+    String s = v.get(0).unwrap()
+    String t = s[0..3]
+    String c = t[2]
+    show(t, &v)
+    print(f"c = {c}")
+    print(f"s = {s}")

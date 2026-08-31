@@ -3079,6 +3079,28 @@ pub(super) fn lower_method_call(
             ret_type
         };
 
+        // Sibling refinement for the CROSS-TYPE Vector HOFs. `map` is
+        // `(T) -> U ⇒ Vector[U]` and `flat_map` is `(T) -> Vector[U] ⇒
+        // Vector[U]`, but both are declared `ret_self` in the builtin
+        // protocol (`src/ir/lowering/builtins.rs`), which erases the U axis
+        // and types the result as the RECEIVER's `Vector[T]`.
+        //
+        // Two layers already carry the right answer and this one disagreed
+        // with both: the typechecker resolves `("Vector", "map")` /
+        // `("Vector", "flat_map")` from the closure's return type
+        // (`src/semantic/typecheck.rs`), and the LIR HOF expander sizes the
+        // result array by `closure_ret_ty` from the same closure signature
+        // (`src/lir/lower/insts.rs`). A DECLARED destination
+        // (`Vector[String] v = …`) therefore came out right while `auto v =
+        // …` bound `Vector[T]` and read a `String` element back as a raw
+        // pointer — the destination declaration was the discriminator, for
+        // named callees and inline closures alike. Reading the same typed
+        // signature here makes all three layers one channel.
+        let ret_type = match hof_cross_type_result(ctx, builder, method_name, recv_is_array, call_args.last()) {
+            Some(refined) => refined,
+            None => ret_type,
+        };
+
         // Auto-clone Ptr(resource) args at consuming method positions — the
         // Ptr(Ptr(resource)) fallback for cases the pre-call section above
         // missed (e.g. call arg is wrapped in an extra Ptr layer by
@@ -4649,6 +4671,62 @@ pub(super) fn infer_type_name_from_operand_full(
     // since opaque pointer types like PoolAllocator are registered as Ptr(Named(...)))
     ctx.type_mapper.iter_named()
         .find_map(|(name, &id)| if id == effective_tid || id == type_id { Some(name.clone()) } else { None })
+}
+
+/// The result type of a CROSS-TYPE Vector HOF, read from the closure
+/// argument's registered signature — the same channel the LIR expander sizes
+/// the result array by (`closure_ret_ty`, `src/lir/lower/insts.rs`) and the
+/// same answer the typechecker already resolved
+/// (`("Vector", "map")` / `("Vector", "flat_map")`, `src/semantic/typecheck.rs`).
+///
+/// `map` returns `Vector[U]` where `U` is the closure's return type; `flat_map`
+/// returns the closure's `Vector[U]` unchanged (it flattens). `None` means
+/// "no better answer than the protocol's" — the argument is not a shape whose
+/// signature is registered (a `Callable` parameter, a bare fn-pointer value),
+/// the receiver is not an array, or the method is not one of the two. The
+/// caller keeps the protocol's receiver-typed result in that case, which is
+/// exactly the same-type answer whenever `U == T`.
+fn hof_cross_type_result(
+    ctx: &mut LoweringContext,
+    builder: &FunctionBuilder,
+    method_name: &str,
+    recv_is_array: bool,
+    closure_arg: Option<&Operand>,
+) -> Option<TypeId> {
+    if !recv_is_array || !matches!(method_name, "map" | "flat_map") {
+        return None;
+    }
+    // The closure's declared return type, via the typed signature table:
+    // `__Closure_N__call` for a lifted closure literal, the target's own name
+    // for a `FuncRef` to a named function.
+    let closure_ret = match closure_arg? {
+        Operand::Constant(Constant::FuncRef(name)) => ctx.fn_sigs.get(name.as_str()).map(|(_, r)| *r)?,
+        Operand::Copy(p) | Operand::Move(p) => {
+            let local_ty = builder.local_type(p.local);
+            let base_ty = ctx.pointee_type(local_ty).unwrap_or(local_ty);
+            let ty_name = ctx.type_name_for_id(base_ty)?.to_string();
+            if !ty_name.starts_with("__Closure_") {
+                return None;
+            }
+            ctx.fn_sigs.get(format!("{ty_name}__call").as_str()).map(|(_, r)| *r)?
+        }
+        _ => return None,
+    };
+    if closure_ret == UNIT_TYPE {
+        return None;
+    }
+    if method_name == "flat_map" {
+        // The closure already returns `Vector[U]`; that IS the result type.
+        // Anything else is a program the typechecker should have rejected —
+        // keep the protocol's answer rather than inventing one.
+        let name = ctx.type_name_for_id(closure_ret)?;
+        if !name.starts_with("Vector__") {
+            return None;
+        }
+        return Some(closure_ret);
+    }
+    let elem_name = crate::ir::types::format_type_for_mangle(closure_ret, &ctx.type_registry);
+    Some(ctx.ensure_collection_type(&format!("Vector__{elem_name}")))
 }
 
 /// Resolve the inner TypeId from a type name (e.g., "int64_t" → I64_TYPE).

@@ -3459,6 +3459,26 @@ impl<'a> FuncLowering<'a> {
             let d = dst.as_ref().expect("find requires dst");
             let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
             Some(self.map_type(&gir_ty))
+        } else if is_flat_map {
+            // `flat_map` is `(T) -> Vector[U]`, so the accumulator's element is
+            // `U` — not the source element `T`, and not recoverable from the
+            // closure's return type, which is a bare `Struct(GorgetArray)` here.
+            // The GIR already resolved the result as `Vector__<U>`, so read it
+            // back rather than re-deriving: sizing the accumulator by `T` is how
+            // a cross-type `flat_map` over a `Vector[int]` built an 8-byte-slot
+            // array and then `gorget_array_extend`ed 32-byte `Str`s into it.
+            let d = dst.as_ref().expect("flat_map requires dst");
+            let gir_ty = self.gir_func.locals[d.0 as usize].type_id;
+            let res_name = match self.gir_types.get(gir_ty) {
+                Some(crate::ir::types::GirType::Named(n)) => n.clone(),
+                _ => return None,
+            };
+            // Same mangled-name channel `element_ty` above is derived through —
+            // at this boundary the mangled symbol IS the contract.
+            let res_elem = res_name
+                .strip_prefix("Vector__")
+                .or_else(|| res_name.strip_prefix("Deque__"))?;
+            Some(super::component_to_lir_type(res_elem, self.struct_reg, self.gir_types))
         } else {
             None
         };
