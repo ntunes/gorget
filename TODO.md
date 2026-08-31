@@ -60,6 +60,33 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
   (full run 765.98s rc=0; non-MATCH exactly 151, the frozen ceiling) — and Scout F's figures-DB pilot used
   that same const as its grow-only row. **F swaps to `C_EMIT_MATCH_FLOOR` or `RESOLVER_MATCH_FLOOR`.**
 
+### ⛔ OWNER RULING 2026-08-31 — ggdef STAYS SIMPLE. NO THIRD PRODUCTION COMPILER.
+
+Asked directly whether ggdef had become a liability, the owner ruled:
+> *"What I don't want is a third production compiler. ggdef is there to be **VERY** simple to
+> write and understand."*
+
+⇒ **THE DEFAULT DISPOSITION FOR OUT-OF-MODEL SURFACE IS *REFUSE LOUDLY*, NOT *IMPLEMENT*.**
+Implementing is the EXCEPTION, taken only when the semantics fit in a few lines of the existing
+eval style. **A design whose answer to "ggdef gets this wrong" is "teach ggdef the feature" must
+justify itself against this ruling explicitly.** This IS ggdef's own `classify.rs` invariant #8
+and its charter (`decisions.md:489` *"clarity and simplicity, not speed"*; MiniRust-style single
+fuel-indexed eval; never imports `src/ir/`/`src/semantic/`). ⚠ **The charter guards ggdef against
+IMPORTING the compiler; NOTHING guards it against GROWING into one** — Track G owes that guard.
+⊕ **Corollary, under test by Track G:** ratcheting `GGDEF_ADJUDICATED_FLOOR` (443) **upward**
+rewards an oracle that ANSWERS MORE — the exact failure mode. The information is in the
+DISAGREEMENTS, not the agreements.
+⚠ **This ruling is NOT yet in `decisions.md`** (⛔ no agent edits it). It merits an owner-written
+entry; until then this block and the `t0304` item are its only durable home.
+
+⊕ **TRACK G ADDED (owner-directed, 2026-08-31): `t0304` — ORACLE HYGIENE.** Zone `spec/ggdef/`,
+disjoint from every other track. The two `EXPECTED_BOTH_WRONG` rows are a ggdef defect, not a
+production bug (measured; see the corrected hot-list line). Deliverables: invariant-#8 enforcement,
+a **complexity ratchet in ggdef's OWN test target** (`cargo test -p ggdef`, NOT `tests/lints.rs` —
+Track F owns that EOF), and the **poisoning audit**: how many of the 443 ADJ-MATCH rows involve a
+user `Drop`, a droppable element, or a resource field, i.e. are certified by an oracle that runs no
+destructors. If that fraction is non-trivial, the succession plan's truth axis is partly fictional.
+
 ⚠ **E and F both touch `tests/lints.rs`** — both scouts were briefed to name their exact edit regions.
 ⚠ **Sequence memory-safety FIRST**: A–D's fixes retire `known_gaps` fixtures and leak-allowlist rows that
 E is adjudicating. E was briefed to list those rows so it does not adjudicate one out from under a track.
