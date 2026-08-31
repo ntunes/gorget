@@ -171,12 +171,23 @@ hard case) and **must** include a non-shrink-only polarity. Sequencing recorded 
 | `t0861` figures DB | **IN** — Track F (owner: "should go in early") |
 | burn-down campaign | **IN** — Tracks E-B1/B2/B3 (Scout E's split) |
 | `t0304` ggdef hygiene | **IN** — Track G (owner-directed, this session) |
-| `t0823` + `t0825` | **IN** — Track H. `t0823` is the whole `EXPECTED_NONDETERMINISTIC` list (one mechanism, four rows); fixing it **unblocks E-B2's parity instrument**, so it sequences early. |
+| `t0823` + `t0825` | ⚠ **RE-SEQUENCED — the premise was DISPROVED end-to-end by Scout H.** `t0823` does **NOT** unblock the parity instrument: a prototype removing **90.6%** of the corpus's int→pointer emits (19,835 → 1,855; **three of the four rows drop to ZERO**) leaves **all four rows still printing 7 distinct outputs over 7 runs.** The `EXPECTED_NONDETERMINISTIC` comment's *"ALL FOUR are cause (b), one mechanism, one filed item: `todo/t0823`"* (`tests/integration.rs:38140`) is **false**. Real causes are **three separate mechanisms** (γ1 `.map()` result-element collapse, axis = closure return type · γ2 CoW materialize emitted AFTER the derived view, **ASan reports nothing** · γ3 generic `T` lost, not isolated). ⇒ **Split into THREE tracks: α `t0823` (type fidelity) · β `t0825` (accept/reject, Core #9) · γ (the nondeterminism — the one that actually unblocks the instrument).** |
 | `t0862` slice | **SCOUTED, GATED** — the item forbids scoping before the method-call materialization site is pinned. Scout I is running; track opens only if it pins the site AND the `Vector` view flip does not create a fourth dangling-view UAF. |
 | `t0851` anchor-age wiring · `t0860` clone audit trigger | **FOLDED into Track F** — same subject (ratchet plumbing), same zone (`scripts/`). Not separate tracks. |
 | `t0829` bare `:NNNN` cites | **LATE** — rides the doc-write-through track, which cannot open until A–D land (a round that changes behaviour owes one). |
 | `t0850` `parent_dir` per-char clone | **R49** — MED perf; already declared as the clone meter's path-length input, so nothing is blocked on it. |
 | `t0844` Ctrl-C · `t0842`(A) `wait_timeout` | **STAY PARKED** — no R48 track touches them; the rule is ask when the work is SCHEDULED. |
+
+### ⛔ THE PARITY GATE CANNOT CATCH ITS OWN CLASS (Scout H, 2026-08-31 — six-questions #2)
+
+`RustRejected` rows **return before the self-host is ever invoked** (`tests/integration.rs:37943-37960`) and
+are excluded from the denominator. ⇒ **a self-host OVER-ACCEPTANCE — it runs a program Rust correctly
+rejects, printing ASLR pointers — is STRUCTURALLY INVISIBLE to `self_host_runtime_diff`.** A corpus-wide
+sweep found **11** nondeterministic rows, not 4; the extra **five** (`catch_recovery_type_unchecked` ·
+`missing_return_no_return_error` · `rwlock_read_annotation_less_binding_check` ·
+`snag11_cross_error_propagation` · `supertrait_default_throws_unhandled`) are all Rust-rejected /
+self-host-accepted. **None is filed as an SH over-acceptance** (per-stem `todo/` grep done; three stems
+appear for unrelated reasons). This is exactly `t0825`'s class, and it is the same blind spot.
 
 ⚠ **THE R47 BURN-DOWN FIGURES ARE SUPERSEDED** — see the scout-corrections block above. The surface is
 roughly a QUARTER of what it was scoped at: **183/28** anchored (not 230/32), only **9 rows genuinely
