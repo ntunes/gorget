@@ -194,6 +194,44 @@ withdrawn **the same day**, and driving 205 sites from a CORRECT spelling onto a
 a *"MEASURED FREE"* banner. It was free because it did not do the work. **A guard is only as good as the
 ruling it encodes — re-verify the ruling, not just the count.**
 
+### ▶ DEFERRED TO R49 BY OWNER DECISION (2026-08-31): `t0771` — BOTH HALVES
+
+Owner: *"B2 in R49, after B1 has been integrated"* then *"Can B1 be postponed to R49 too?"* — **yes, and it
+is the better call.** Briefs preserved at `/tmp/r49briefs/trackB1.md`, `trackB2.md`, and the pre-split
+history + 4 review passes at `SPLIT_trackB_history.md`. ⚠ **`/tmp` is not durable — re-materialise these
+into the R49 round-open before relying on them.**
+
+**WHY IT IS RIGHT, not just accepted:** B1's ENTIRE same-round justification was unblocking B2. With B2 in
+R49, **nothing in R48 depends on B1** — Track C's semantic interaction is with **B2**, not B1 — and B1 is
+**not** fixing a new regression (the 40 B/call arg-temp leak is pre-existing and allowlisted). Against that,
+B1's pass 1 **falsified its own premise, put its design at the wrong layer, and GREW its scope**. ⊕ Bonus:
+B1 owned four sites in `src/lir/lower/operands.rs` and needed `insts.rs` — **both contended with Track D2;
+that contention is now gone.**
+
+**WHAT R49 INHERITS (do not re-derive):**
+- **THE ORDERING ARGUMENT IS INVERTED FROM THE ONE FIRST WRITTEN.** B1 precedes B2 **because B2's E1
+  CREATES the field leak** by transferring ownership into a box nobody frees — **NOT** because the field
+  already leaks. ⚠ Track B pass 4 reported an `Indirect leak … gorget_str_cat` at HEAD; **B1 pass 1 probed
+  four shapes and it did NOT reproduce** (`closures.rs:322-333`'s last-use arm never fires;
+  `drop_if_alive _2` survives the `struct_init`, so the frame still owns the capture). **Do not re-assert it.**
+- **The typed discriminator ALREADY EXISTS: `AbiKind::VoidElem` (`src/lir/runtime.rs`) — 26 rows**, chosen
+  per `operands.rs:1490-1494` *precisely to avoid "a brittle allow-list"*. ⛔ **Do NOT add a per-decl bool to
+  `BuiltinMethodDecl`** — `src/ir/lowering/builtins.rs:136-142` calls that *"exactly the hand-synced
+  parallel-list smell Core #2 forbids"*.
+- **`VoidElem` is NOT a retains predicate:** 13 of its 26 rows retain, **12 use the element as a KEY**.
+- **The decision belongs in the six `src/lir/lower/insts.rs` callers** (`:552`, `:680`, `:794`, `:2655`,
+  `:2822`, `:3393`), not in `wrap_single_closure_arg`, which **receives no callee identity at all**.
+- **Yield is 53 deletable allowlist rows, not 77** (24 need editing); `LEAK_CEILING` **304 → 251**.
+- **ERRATUM that recurred across the split:** the escape-path owner is **`src/lir/lower/drops.rs:110-114`**
+  (+ `:784`), **not** `src/ir/lowering/drops.rs:107-114`.
+- **B2 carries a CROSS-TRACK HAZARD with Track C** (landing in R48): C **enables auto-move inside closure
+  bodies** — harmless while the `is_borrow` co-gate holds, **a DOUBLE FREE once B2 gives env fields real
+  ownership.** ⇒ **R49's B2 must re-run its §8 matrix against a tree that already contains C.**
+- ⊕ Two defects found while scouting B1 are **filed separately as `t0873`** and are NOT closed by B1/B2.
+
+⚠ **R48's headline was six CRITICAL memory-safety defects. `t0771` moves to R49; the other five remain:**
+`t0770`+`t0772` (Track A) · `t0763` (Track C) · `t0840` (Track D2) · `t0841` (Track D1, **executor running**).
+
 ### ⛔⛔ ROUND-CLOSE TRAP — `robustness_map.py` WILL REPORT THIS ROUND'S FIXES AS REGRESSIONS
 
 Orchestrator-verified 2026-08-31 (found by Track E-B3 brief-review pass 1):
