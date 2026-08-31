@@ -7570,7 +7570,7 @@ int comp_close(LowerCtx &ctx, GirModule &gmod, CompSave sv):
         lower_abort(comp_abort_msg)
         # `lower_abort` does not return (`lower.gg`: stderr diagnostic +
         # `exit(1)`), so there is nothing to repair after it and no CFG left to
-        # keep well-formed -- same shape as `comp_make_acc`'s abort arm. The
+        # keep well-formed -- `lower_abort` is the same loud-refusal shape. The
         # `return` below exists only to satisfy the return type.
         #
         # ⚠ IF `lower_abort` IS EVER DOWNGRADED to something that returns, this
@@ -7806,36 +7806,6 @@ int lower_list_comprehension(LowerCtx &ctx, SpannedExpr comp_expr, String var_na
     Vector[Stmt] vbody = comp_synth_body_bound(vacc_name, vbind, "push", comp_expr, has_filt, filt_e, span)
     drive_loop_lowered(&ctx, var_pat, coll_local, coll_tn, false, false, vbody, Vector[Stmt](), &gmod, false)
     return comp_close(&ctx, &gmod, vsv)
-
-# Allocate a Vector-HOF accumulator array from a CONCRETE element type name.
-# `__gorget_array_new_sized_<T>` expands at C-emit to
-# `gorget_array_new(sizeof(T))` plus the T elem_drop / elem_clone /
-# elem_materialize fn-ptr registration, exactly like the typed EArrayLiteral
-# path, so non-scalar elements (e.g. GorgetString codepoint views) are sized,
-# freed and cloned correctly.
-#
-# A NON-EMPTY `elem_tyname` IS THE CALLERS' CONTRACT, AND IT IS ENFORCED
-# BELOW rather than asserted in prose. Both call sites are in
-# `try_lower_vector_hof`, which early-returns `-1` on an empty element name
-# before either is reached, and the `map` arm's name comes from
-# `type_id_to_name`, which never returns `""`. The scalar
-# `gorget_array_new(8)` fallback this used to take is the same
-# withhold-the-element-type shape the round retired everywhere else: it
-# would produce an untyped accumulator whose downstream readers recover `""`
-# and stub the result. A third caller that cannot supply a name must fix its
-# own channel, not silently get an 8-byte slot — so it gets a loud abort
-# (Core #10 lower-or-reject).
-int comp_make_acc(LowerCtx &ctx, int acc_tid, String elem_tyname, GirModule &gmod):
-    if elem_tyname == "":
-        String hof_abort_msg = "cannot lower a Vector HOF: its accumulator element type is unknown, "
-        hof_abort_msg = hof_abort_msg + "and an untyped accumulator would silently withhold the element type "
-        hof_abort_msg = hof_abort_msg + "from every downstream reader"
-        lower_abort(hof_abort_msg)
-    int acc_local = add_local(&ctx, acc_tid, None)
-    Vector[Operand] an_args = []
-    emit(&ctx, GICallExtern(acc_local, "__gorget_array_new_sized_" + elem_tyname, an_args))
-    register_local_for_drop(&ctx, acc_local, acc_tid, &gmod)
-    return acc_local
 
 # ── Set comprehension lowering ───────────────────────────
 # `{comp_expr for var in iterable [if filter]}` → a loop that builds a

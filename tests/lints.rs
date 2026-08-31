@@ -2764,7 +2764,7 @@ fn self_host_loop_dispatcher_bypass_pairs() {
 /// |---|---|---|---|
 /// | 1 | `comp_mint_tid` (+ its twin `comp_mint_ctor`) | SET-1 | **CLEAN — the chokepoint.** Mints strictly from the MATERIALIZED result element(s); every list/set/dict comprehension routes through it. |
 /// | 2 | `try_lower_set_hof` | SET-1 | **FIXED THIS ROUND, and it LEFT SET-3.** Its `filter` arm minted the result set with the raw `gorget_(ordered_)set_new` symbol and a hardcoded 8-byte key, at TWO emission sites (ordered and unordered) — measured wrong at rc 0 for `bool`, `String`, `@derive(Hashable)` structs with a resource field, and primitives-only structs whose discriminating field sits past byte 8. Now mints through the single producer `set_ctor_name` (`lower_types.gg`). Pinned by the nine `sethof_filter_*` cells in `tests/fixtures/self_host_comprehension/`. |
-/// | 3 | `comp_make_acc` | (was SET-3) | **FIXED THIS ROUND, and it LEFT SET-3.** Its untyped `else` branch — a bare `gorget_array_new(8)` for an empty element name — is DELETED. A non-empty element name is now the callers' contract, and the contract is ENFORCED by a `lower_abort` rather than asserted in a comment. |
+/// | 3 | `comp_make_acc` | (gone) | **DELETED (R48).** It had already left SET-3 when its untyped `gorget_array_new(8)` fallback was replaced by a `lower_abort`; it left the file entirely once `try_lower_vector_hof` — its only two callers — moved onto the comprehension producer's deferred mint. A helper that allocates from a name supplied by the caller has no place left: the element type now comes from the MATERIALIZED local, so there is no name to pass. |
 /// | 4 | `lower_expr_inner` | SET-1 **and** SET-3 | ⛔ **NOT CLEAN — DEFER, filed.** Its array-literal path leaves the element-type name empty for `auto v = []`, so the accumulator is `gorget_array_new(8)` with no elem drop / clone / materialize hooks; a later `push(<String>)` then prints a RAW POINTER at rc 0 on BOTH real lanes while ggdef prints the right answer — Core #8's trap in its cleanest form. Out of this round's scope: the root is the destination-declaration channel, not the comprehension mint. Durable repro `known_gaps/auto_empty_literal_push_string_raw_pointer.gg`; grep `todo/` for `auto EMPTY-COLLECTION LITERAL`. |
 /// | 5 | `try_lower_vector_hof` | — | ✅ **LEFT SET-1 (R48).** It used to mint the accumulator itself, from the INPUT element type, which was wrong at rc 0 for both cross-type shapes: `flat_map` (`(T) -> Vector[U]`, so the result element is `U`) and an inline-closure `map`. It now routes `map`/`filter` through the comprehension producer's deferred mint (`comp_reserve`/`comp_note_elem`/`comp_close`) and desugars `flat_map` to the nested loop the comprehension form already used, so the element type comes from the MATERIALIZED local and nothing is minted here. Core #4 closed in the flesh: the sibling producer is on the chokepoint's channel rather than its own. The two repros are now LIVE tests (`known_gap_flat_map_cross_type_input_mint`, `known_gap_map_inline_closure_cross_type_input_mint`) plus corpus fixture `vector_hof_cross_type_map.gg`. |
 ///
@@ -2775,8 +2775,8 @@ fn self_host_loop_dispatcher_bypass_pairs() {
 /// are: regenerate with
 /// `grep -n '__gorget_.*_new_sized_' tests/fixtures/self_host_lowerer/lower_expr.gg tests/fixtures/self_host_lowerer/lower_types.gg`
 /// — the ARRAY magic name is hand-spelled at the array literal, in
-/// `comp_mint_ctor`, and in `comp_make_acc`; the DICT/MAP name at the dict
-/// literal and in `comp_mint_ctor`. That is a defensible scope boundary — a
+/// `comp_mint_ctor` (`comp_make_acc`'s third spelling went with it in R48);
+/// the DICT/MAP name at the dict literal and in `comp_mint_ctor`. That is a defensible scope boundary — a
 /// wrong spelling there fails LOUDLY at link, unlike the untyped-ctor class,
 /// which fails silently at rc 0 — but it is a boundary, not a closed class.
 ///
@@ -2791,6 +2791,8 @@ fn self_host_loop_dispatcher_bypass_pairs() {
 fn self_host_accumulator_producer_sets() {
     /// Baseline regenerated 2026-08-31 by running this test.
     /// `try_lower_vector_hof` LEFT this set in R48 — see row 5 of the table.
+    /// (`comp_make_acc`, row 3, was DELETED outright in the same change; it had
+    /// already left SET-3 in an earlier round.)
     const EXPECTED_SET1: [&str; 3] = [
         "comp_mint_tid",
         "lower_expr_inner",
