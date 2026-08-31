@@ -1,3 +1,57 @@
+- [2026-08-31] **R48 Track C — `t0763` + `t0134`: the five per-function prescans ran on 2 of ELEVEN
+  function-lowering paths.** `cow_reassigned_names` / `loop_reassigned_names` / `cow_reassigned_after` /
+  `name_use_counts` / `liveness` were hand-copied into `lower_function` and `lower_equip_method` only, so
+  `lower_generic_function`, `lower_equip_method_with_subs`, `lower_trait_method_body`,
+  `lower_static_trait_method`, `emit_closure_call_function` and the four module-loop bodies (suite setup /
+  teardown / test / bench — a hand-copied liveness-ONLY subset, a second unnamed hole) lowered with an
+  EMPTY `cow_reassigned_after`. `is_source_mut_unsafe_at` then answered false unconditionally, the CoW
+  element borrow stayed lazy, and a reallocating `&self` mutator left it dangling: rc 139 SIGSEGV on BOTH
+  backends, ASan `heap-use-after-free`. ggdef, the definitional interpreter, had adjudicated `helloworld`
+  all along — both compilers were wrong and the oracle knew (Core #8).
+  **The class was the PATH, not the genericness:** a generic FREE function, a trait DEFAULT method, a
+  static trait method, a closure body and a `gg test` body all crashed on the same shape; the
+  hand-monomorphised control passed only because a NON-generic equip lowers through one of the two
+  already-prescanned paths.
+  **Fix (Core #4, centralize at the producer):** `functions::begin_function_body(ctx, FnBodyAst)` does the
+  reset AND all five prescans as ONE operation; `LoweringContext::clear_locals` became
+  `begin_function_body_reset` with exactly one caller; all eleven paths route through it. The body
+  parameter is TYPED (`enum FnBodyAst { Stmts, Expr }`) rather than a `&[]` sentinel meaning three
+  different things (Layering rule 2) — the closure path's `Spanned<Expr>` cannot be spelled `&[]` any more.
+  The `lower_function::prescan::*` sub-timers moved into it and now cover all eleven paths.
+  **Guard:** `function_body_prescans_are_centralised` (`tests/lints.rs`), three counts — raw-reset callers
+  = 1, wholesale `func_state` replacements = 2 (matching `FunctionState::default()` OR any
+  `func_state = …`, so the type-elided spellings are caught), non-test `FunctionBuilder::new(` = 15
+  (11 body paths + 4 synthetic). All three demonstrated RED on injected twelfth paths, including the
+  type-elided `ctx.func_state = Default::default()` evasion. Its doc comment ENUMERATES what it cannot
+  see; it is a new-path tripwire, not a total partition.
+  **Self-host half (`t0134`, Core #9):** `compute_method_mutates_self` classified NON-generic equips only,
+  so a generic-equip `&self` mutator was absent from `method_mutates_self` and the named-receiver gate let
+  the write through (`Y/Y` vs Rust's `Y/A`). The classification now rides along in the generic-instances
+  pre-pass, keyed on the MONO'D name (`Cell__int64_t__assign`, not the bare `Cell__assign` — both the
+  write and the read side go through `mangle_type_name`), with its own seed + fixpoint.
+  **Fixtures:** one cell per body-lowering path, each RED-verified at rc 139 on C AND LLVM against a
+  base-commit binary, each also pinned under ASan —
+  `cow_generic_equip_mutator_view_uaf` (graduated) · `cow_generic_fn_view_survives_realloc` ·
+  `cow_trait_default_view_survives_realloc` · `cow_static_trait_method_view_survives_realloc` ·
+  `cow_closure_body_view_survives_realloc` · `cow_test_body_view_survives_realloc` (setup/teardown/test) ·
+  `cow_bench_body_view_survives_realloc` · `cow_generic_equip_named_recv` (graduated; SH lane + Rust
+  control). Plus `closure_capture_called_twice` as a committed cross-track CLASS GUARD for the closure
+  capture's ownership marking.
+  **Blast radius, re-measured on this build over the FULL corpus (no truncation):** 333
+  generic/equip/trait/closure/`cow_` fixtures A/B'd on emitted C — 276 byte-identical, 56 NEG fixtures
+  failing IDENTICALLY in both modes (no accept/reject flip), 1 differs and it SHRINKS
+  (`closure_float_ret`, 439,804 -> 437,492 bytes, `_clone(` 132 -> 124, output still correct). The
+  `gg test` lane (21 fixtures with test/bench/suite blocks — paths 8–11, which `gg build` never lowers)
+  is 21/21 identical.
+  **Not fixed, and now over-determined:** `t0704` — the capture-boundary UAF. A second repro
+  (`closure_capture_inside_body_uaf.gg`: capture, realloc INSIDE, no saved view at all) is still rc 139
+  after this fix, while the identical statements WITHOUT a capture are rc 0. The discriminator is the
+  CAPTURE ROOT, not where the mutation is spelled — attached to `t0704` as evidence, not filed as a new
+  item. Two false invariant-comments deleted along the way (Core #14).
+  **Filed:** `t0874` (ggdef's 3 standing generic-equip subset exclusions have no oracle row),
+  `t0875` (ggdef rejects `equip [T] Cell[T]` but elaborates `equip Cell[T]` — one construct, two subset
+  answers, a boundary drawn on a SPELLING).
+
 - [2026-08-31] **ROUND XLVII (R47) CLOSED — MEMORY SAFETY: RETIRE THE NAME-MATCHING CLASS.**
   15 track integrations · 101 commits · 25 touching `src/`. Opened as the answer to R46, which was
   stopped before execution with zero code written; R47 reached an executor on every track it opened.

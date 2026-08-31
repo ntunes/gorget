@@ -1,38 +1,58 @@
-# KNOWN GAP — 🚨 CAPTURING A COLLECTION IN A CLOSURE AND THEN MUTATING THE
-# SOURCE is a use-after-free. rc 139 SIGSEGV on BOTH backends at pristine HEAD.
+# KNOWN GAP (`todo/t0704`) — 🚨 CAPTURING A COLLECTION IN A CLOSURE AND THEN
+# REALLOCATING IT is a use-after-free. rc 139 SIGSEGV on BOTH backends.
 #
 #     String() f = (): v.get(0).unwrap()   # closure captures `v`
 #     while i < 64: v.push(mk(...))        # source realloc'd through `v`
 #     print(f())                           # reads freed memory -> rc 139
 #
-# MECHANISM (Core #10 silent fall-through): `cow_after_expr_moves`
-# (`src/ir/lowering/functions.rs`) has **no `Expr::Closure` arm** and ends in a
-# bare `_ => {}` at `:838`. The closure body is never walked, so the capture
-# never registers as a use of `v`, and the pre-header prescan does not
-# materialize. ⚠ Do not be misled by the `Expr::Closure` arm at `:962` -- that
-# is a DIFFERENT function (the use-counting prescan).
+# MECHANISM — THE CAPTURE BOUNDARY. A closure's captured collection handle is a
+# BORROW BOUND AT CAPTURE TIME (`src/ir/lowering/closures.rs`, the
+# `CaptureMode::ByValue` arm: `field_load` -> `Ptr(cap.type_id)` +
+# `set_field_borrow`), and a realloc of the source leaves that handle stale. The
+# rescue owed is at the capture boundary — a closure capture is an ownership
+# boundary per AGENTS.md § Ownership at Consuming Positions — not in the
+# mutation prescan.
 #
-# ⚠ THIS IS A THIRD MEMBER OF THE FAMILY AND **NEITHER ORDERED FIX CLOSES IT**
-# -- measured by the R45 Track F scout against both prototypes. State the
-# discriminator before merging it with either sibling:
-#   * `t0699` -- a user &self MUTATOR METHOD's NAME is absent from the
-#     `MUTATING_METHODS` list, so the prescan never fires. Wrong KEY -> right
-#     set. Fixed by the typed-mutator fix.
-#   * `t0703` -- the view is spelled through an ALIAS name, so `CollectionId`
-#     names the spelling instead of the storage owner. Right key -> wrong SET.
-#     Fixed by the alias-root fix.
-#   * THIS -- the use is inside a CLOSURE BODY that the walker never visits at
-#     all. Not a key problem and not a set problem: the query is never made.
+# ⚠ AN EARLIER REVISION OF THIS HEADER BLAMED A MISSING `Expr::Closure` ARM IN
+# `cow_after_expr_moves` AND A `_ => {}` CATCH-ALL. That diagnosis is RETRACTED:
+# the arm EXISTS and the match is exhaustive over every `Expr` variant, and this
+# repro still segfaults. It is not a prescan defect. Do NOT start there.
+#
+# THE DISCRIMINATOR IS THE CAPTURE ROOT, NOT WHERE THE MUTATION IS SPELLED —
+# measured, both backends, both before and after the per-function-prescan
+# centralisation that fixed the sibling non-capture shapes:
+#
+#   | shape                                              | capture | result   |
+#   |----------------------------------------------------|---------|----------|
+#   | this file — mutate OUTSIDE the closure              | yes     | rc 139   |
+#   | `closure_capture_inside_body_uaf.gg` — INSIDE       | yes     | rc 139   |
+#   | same body, vector LOCAL to the closure             | no      | rc 0 ✅  |
+#   | capture + 0 pushes (control)                        | yes     | rc 0     |
+#   | capture + 1 push (control)                          | yes     | rc 0     |
+#
+# The last two controls are why the REALLOC is load-bearing, and the third row
+# is the live regression fixture `cow_closure_body_view_survives_realloc.gg` —
+# the same statements without a capture are now correct. So capture is
+# NECESSARY; the sibling repro (no saved view variable at all) shows it is also
+# SUFFICIENT, which rules out "a CoW view taken inside the body that the prescan
+# failed to materialize".
 #
 # ⚠ THE REALLOC IS LOAD-BEARING (64 pushes, not one) and the payload must be
 # heap-FORCED via `mk`, never a literal. One push is rc 0 and proves nothing.
+#
+# Family, stated so this is not merged with either sibling:
+#   * `t0699` — a user &self MUTATOR METHOD's NAME is absent from the
+#     `MUTATING_METHODS` list, so the prescan never fires. Wrong KEY -> right
+#     set. Fixed by the typed-mutator fix.
+#   * `t0703` — the view is spelled through an ALIAS name, so `CollectionId`
+#     names the spelling instead of the storage owner. Right key -> wrong SET.
+#     Fixed by the alias-root fix.
+#   * THIS — neither: the capture binds a borrow that a later realloc severs.
 #
 # ⇒ Bears on DEEP-1 (`t0543`): closure capture is a rest position the lazy-bind
 # model must materialize at, and obligation (ii) is already unsound here.
 #
 # INTENDED (asserted below): prints `hello`, both backends, ASan-clean.
-# Measured 2026-08-27 by the R45 Track F scout; orchestrator-verified on both
-# lanes.
 
 String mk(String a, String b):
     return a + b

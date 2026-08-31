@@ -8053,29 +8053,35 @@ A",
     );
 }
 
+/// LANE CELL — the SELF-HOST half of the generic-equip `&self` mutator axis.
+///
+/// `compute_method_mutates_self` classified NON-generic equips only
+/// (`type_params.len() == 0`), so a generic-equip method was absent from
+/// `method_mutates_self`, the named-receiver gate answered read-only, and the
+/// write went THROUGH: the self-host printed `Y / Y` where Rust gg prints
+/// `Y / A`. The classification now rides along in the generic-instances
+/// pre-pass, keyed on the MONO'D name (`Cell__int64_t__assign`, not the bare
+/// `Cell__assign` — both sides go through `mangle_type_name`).
+///
+/// GRADUATED from `tests/fixtures/known_gaps/` to the top-level parity corpus.
+/// RED-verified: `Y / Y` against the pre-fix lowerer.
 #[test]
-#[ignore = "R38 known self-host gap: a GENERIC-equip `&self` mutator invoked \
-via a bare-value-param named receiver is NOT materialized by the self-host \
-(compute_method_mutates_self classifies non-generic equips only), so it \
-writes through (self-host Y/Y) whereas Rust materializes (Y/A). This asserts \
-the language-intended Y/A (Rust already satisfies it — the gap is self-host \
-runtime-diff-only; the fixture lives in tests/fixtures/known_gaps/ so it \
-stays OUT of the runtime-diff corpus). Un-ignore + promote when generic-equip \
-classification lands (mirror the fn_sigs generic-instances pre-pass). See \
-TODO.md."]
 #[serial(self_host_lowerer_driver)]
 fn cow_named_recv_generic_equip_gap() {
-    // R44 census: the ignore reason says "Rust already satisfies it — the gap
-    // is self-host runtime-diff-only", and the body then asserted the RUST
-    // lane. Rewired onto the SH lane, which prints `Y / Y` at HEAD (the write
-    // goes through where Rust materializes) — the filed symptom, unchanged.
     assert_self_host_stdout(
-        "known_gaps/generic_equip_mutator_named_recv.gg",
+        "cow_generic_equip_named_recv.gg",
         "generic_equip_named_recv",
         "\
 Y
 A",
     );
+}
+
+/// The RUST control for the same fixture, so the lane cell above is a genuine
+/// cross-lane pin rather than a self-host-only assertion.
+#[test]
+fn cow_generic_equip_named_recv() {
+    run_gg("cow_generic_equip_named_recv.gg", "Y\nA");
 }
 
 // matcluster #4 (was a known BOTH-BACKEND bug, found by the gorget-smith fuzzer,
@@ -16188,30 +16194,136 @@ fn cow_user_mutator_two_types_same_name() {
     run_gg("cow_user_mutator_two_types_same_name.gg", "4\n4\n4\n3\n2\n4");
 }
 
-/// KNOWN GAP — `todo/t0763`. A `&self` mutator on a GENERIC equip is a
-/// use-after-free: `Cell[T]`'s `probe(&self)` binds a view of element 0, then
-/// `self.resize(v)` reallocates and the view dangles. rc 139 on BOTH backends.
+// ══════════════════════════════════════════════════════════════════════════
+// THE PER-FUNCTION-BODY PRESCAN NET — one cell per body-lowering PATH
+// ══════════════════════════════════════════════════════════════════════════
+//
+// The five per-function CoW / auto-move prescans (`cow_reassigned_names`,
+// `loop_reassigned_names`, `cow_reassigned_after`, `name_use_counts`,
+// `liveness`) are what makes `is_source_mut_unsafe_at` answer truthfully, and
+// therefore what makes a CoW element view MATERIALIZE before a reallocating
+// mutation. They used to be hand-copied into TWO of the ELEVEN
+// function-body-lowering paths; the other nine lowered with an EMPTY
+// `cow_reassigned_after` and the view dangled — rc 139 SIGSEGV on both
+// backends, ASan heap-use-after-free.
+//
+// `functions::begin_function_body` now does the reset and the prescans as ONE
+// operation and every path calls it; `function_body_prescans_are_centralised`
+// in tests/lints.rs is the arm-count guard. These fixtures are the AXIS: one
+// cell per path, each RED-verified at rc 139 on C AND LLVM against the pre-fix
+// compiler, each also pinned under ASan in tests/security.rs.
+//
+//   path                            | fixture
+//   --------------------------------|------------------------------------------
+//   lower_function                  | (pre-existing: the whole cow_* corpus)
+//   lower_equip_method              | (pre-existing: the monomorphic control)
+//   lower_generic_function          | cow_generic_fn_view_survives_realloc
+//   lower_equip_method_with_subs    | cow_generic_equip_mutator_view_uaf
+//   lower_trait_method_body         | cow_trait_default_view_survives_realloc
+//   lower_static_trait_method       | cow_static_trait_method_view_survives_realloc
+//   emit_closure_call_function      | cow_closure_body_view_survives_realloc
+//   suite setup / teardown / test   | cow_test_body_view_survives_realloc
+//   bench                           | cow_bench_body_view_survives_realloc
+
+/// PATH CELL — `lower_equip_method_with_subs`. A `&self` mutator on a GENERIC
+/// equip: `Cell[T]`'s `probe(&self)` binds a view of element 0, then
+/// `self.resize(v)` reallocates and the view dangled. rc 139 on BOTH backends.
 ///
-/// ⚠ NOT the `t0699` class, and the discriminator is measured rather than
-/// argued: this one is NAME-INDEPENDENT. It is rc 139 under `resize` — a name
-/// that WAS on the retired `MUTATING_METHODS` list, so the prescan DID mark the
-/// receiver — and rc 139 under `grow`, before and after the typed per-receiver
-/// classifier landed. The mark is made and the materialize still does not
-/// happen, so the break is DOWNSTREAM of the classification.
+/// ⚠ NOT the `t0699` "mutator NAME decides memory safety" class, and the
+/// discriminator was measured rather than argued: this one is NAME-INDEPENDENT.
+/// It was rc 139 under `resize` — a name that WAS on the retired
+/// `MUTATING_METHODS` list, so the prescan DID mark the receiver — and rc 139
+/// under `grow`, before and after the typed per-receiver classifier landed. The
+/// mark was made and the materialize still did not happen, so the break was
+/// DOWNSTREAM of the classification, at the per-function-body entry.
 ///
-/// The control is the point: hand-monomorphise the fixture (`Cell[T]` ->
-/// `Cell`, `T` -> `String`, nothing else) and it is rc 0 printing `helloworld`,
-/// at stock HEAD and after the fix. One type parameter is the whole difference.
+/// The monomorphic control was the clue: hand-monomorphise the fixture
+/// (`Cell[T]` -> `Cell`, `T` -> `String`, nothing else) and it was rc 0 even
+/// pre-fix — because a NON-generic equip lowers through `lower_equip_method`,
+/// one of the two paths that already ran the prescans. The difference was the
+/// PATH, not the genericness.
 ///
-/// Asserts the INTENDED output, which is exactly what that control prints.
+/// GRADUATED from `tests/fixtures/known_gaps/` (closes `todo/t0763`).
 #[test]
-#[ignore = "todo/t0763 — a `&self` mutator on a GENERIC equip does not \
-materialize a view bound from the receiver, even though the prescan marks it: \
-rc 139 on both backends. NAME-INDEPENDENT, so NOT the t0699 class — the break \
-is downstream of the classification, in the generic-equip/monomorphisation \
-path. The hand-monomorphised control is rc 0. Asserts `helloworld`."]
 fn generic_equip_mutator_view_uaf() {
-    run_gg("known_gaps/generic_equip_mutator_view_uaf.gg", "helloworld");
+    run_gg("cow_generic_equip_mutator_view_uaf.gg", "helloworld");
+}
+
+/// PATH CELL — `lower_generic_function`. A plain generic FREE function, no
+/// equip and no receiver: one type parameter and a `&`-param collection.
+#[test]
+fn cow_generic_fn_view_survives_realloc() {
+    run_gg("cow_generic_fn_view_survives_realloc.gg", "helloworld");
+}
+
+/// PATH CELL — `lower_trait_method_body`. A trait DEFAULT method body.
+#[test]
+fn cow_trait_default_view_survives_realloc() {
+    run_gg("cow_trait_default_view_survives_realloc.gg", "helloworld");
+}
+
+/// PATH CELL — `lower_static_trait_method`. A static trait method (no `self`).
+#[test]
+fn cow_static_trait_method_view_survives_realloc() {
+    run_gg("cow_static_trait_method_view_survives_realloc.gg", "helloworld");
+}
+
+/// PATH CELL — `emit_closure_call_function`. The closure body, whose AST is a
+/// bare `Spanned<Expr>` rather than a statement block: `FnBodyAst::Expr` is
+/// what carries it into the prescans.
+///
+/// ⚠ THE VECTOR IS LOCAL TO THE CLOSURE, DELIBERATELY. The captured-collection
+/// sibling is a DIFFERENT defect (`todo/t0704`, the capture boundary) and is
+/// still rc 139 — see `tests/fixtures/known_gaps/closure_capture_*_uaf.gg`.
+#[test]
+fn cow_closure_body_view_survives_realloc() {
+    run_gg("cow_closure_body_view_survives_realloc.gg", "helloworld");
+}
+
+/// PATH CELLS — `suite setup` / `suite teardown` / `test` bodies
+/// (`lower_test_items`). These ran a hand-copied SUBSET of the prescans
+/// (liveness only). `gg build` never lowers them, so only the `gg test` lane
+/// exercises them: pre-fix this died with SIGSEGV mid-run.
+#[test]
+fn cow_test_body_view_survives_realloc() {
+    run_gg_test(
+        "cow_test_body_view_survives_realloc.gg",
+        &["SETUP helloworld", "TEARDOWN helloworld", "2 passed, 0 failed"],
+        true,
+    );
+}
+
+/// A closure with HEAP-FORCED resource captures, called TWICE, with each
+/// capture forwarded into a CONSUMING position inside the body. A CLASS GUARD
+/// for the capture's ownership marking: the env owns the data across calls, so
+/// a consuming position must copy, never move. See the fixture header for the
+/// four mechanisms measured to hold it up today, and
+/// `closure_capture_called_twice_no_leak` in tests/security.rs for the ASan pin
+/// (a stale read or a double free here can still print the right thing).
+#[test]
+fn closure_capture_called_twice() {
+    run_gg(
+        "closure_capture_called_twice.gg",
+        "helloworld/alphabeta\nhelloworld/alphabeta\nhelloworld\nalphabeta",
+    );
+}
+
+/// KNOWN GAP — `todo/t0704`, SECOND REPRO. The capture-boundary use-after-free
+/// with the realloc spelled INSIDE the closure body and NO saved view variable,
+/// which rules out "a CoW view the prescan failed to materialize" — there is no
+/// such view. Its sibling `closure_capture_then_mutate_source_uaf` reallocates
+/// OUTSIDE; both are rc 139, so the discriminator is the CAPTURE ROOT, not
+/// where the mutation is spelled. Take the capture away and the identical
+/// statements pass — that is `cow_closure_body_view_survives_realloc`.
+#[test]
+#[ignore = "todo/t0704 — a closure's captured collection handle is a borrow \
+bound at capture time (closures.rs CaptureMode::ByValue: field_load -> Ptr + \
+set_field_borrow); a realloc of the source leaves it stale, wherever the \
+realloc is spelled. rc 139 on both backends. Second repro: no saved view \
+variable at all, which kills the competing prescan hypothesis. Asserts \
+`helloworld`."]
+fn closure_capture_inside_body_uaf() {
+    run_gg("known_gaps/closure_capture_inside_body_uaf.gg", "helloworld");
 }
 
 /// THE (per-receiver) vs (name-keyed) DISCRIMINATOR, and the only cell in the
@@ -40958,6 +41070,20 @@ fn bench_basic() {
             "bench: string concat",
             "2 benchmarks complete",
         ],
+    );
+}
+
+/// PATH CELL — the `bench` body (`lower_bench_items`), the fourth and last
+/// module-loop body-lowering path. Like its three siblings in
+/// `cow_test_body_view_survives_realloc` it ran a hand-copied SUBSET of the
+/// per-function prescans (liveness only), so a CoW element view bound in a
+/// bench body was never materialized before a reallocating push. Only
+/// `gg test --bench` lowers this body. RED-verified: SIGSEGV pre-fix.
+#[test]
+fn cow_bench_body_view_survives_realloc() {
+    run_gg_bench(
+        "cow_bench_body_view_survives_realloc.gg",
+        &["helloworld", "1 benchmark"],
     );
 }
 

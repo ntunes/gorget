@@ -1,0 +1,28 @@
+# CoW view-materialization on the GENERIC FREE FUNCTION body-lowering path.
+#
+# AXIS CELL — path = `lower_generic_function` (src/ir/lowering/functions.rs).
+# One of eleven function-body-lowering paths; the five per-function CoW /
+# auto-move prescans used to be hand-copied into only two of them, so this one
+# lowered with an EMPTY `cow_reassigned_after`: `is_source_mut_unsafe_at`
+# answered false, the element view stayed a lazy borrow, and the 64 pushes
+# reallocated the buffer out from under it.
+#
+# THE REALLOC IS LOAD-BEARING (64 pushes; one push is rc 0 and proves nothing),
+# and the payload is heap-FORCED via `mk` so the freed element is a heap String
+# and ASan reports a legible heap-use-after-free rather than a bare SIGSEGV.
+#
+# RED-VERIFIED against the pre-fix compiler: rc 139 SIGSEGV on C AND LLVM.
+String mk(String a, String b):
+    return a + b
+
+T probe[T](Vector[T] &v, T x):
+    T s = v.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(x)
+        i = i + 1
+    return s
+
+void main():
+    Vector[String] v = [mk("hello", "world")]
+    print(probe(&v, mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy")))

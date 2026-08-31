@@ -1671,6 +1671,12 @@ void compute_method_mutates_self(GirModule &gmod, Module m):
     for mi_item in m.items:
         match mi_item:
             case IEquip(mi_eq):
+                # NON-generic equips only. A generic equip has no single key
+                # here — its methods are classified per MONOMORPHIZED instance
+                # (`Cell__int64_t__assign`), which is what the gate reads, and
+                # `generic_instances` does not exist yet at this point in
+                # `lower_module`. The generic-instances pre-pass carries the
+                # mirror of this seed + fixpoint.
                 if mi_eq.type_params.len() == 0:
                     String mi_tn = ""
                     match mi_eq.target.ty:
@@ -1717,10 +1723,11 @@ void compute_method_mutates_self(GirModule &gmod, Module m):
 # actually WRITE its receiver? Resolves the receiver local's declared type
 # (via ctx.locals — a bare EIdentifier receiver has NO typechecker
 # expr-type entry, so lookup_expr_gir_type returns -1) and reads the
-# classification map. A method not in the map either takes bare `self`
-# (a copy — no write-through) or is a generic-equip instance (not yet
-# classified) → treat as read-only (the BASE gate already did not
-# materialize named receivers, so this is no regression — degrade-to-BASE).
+# classification map. The key is the MONO'D type name, so a generic-equip
+# instance resolves here exactly like a non-generic one
+# (`Cell__int64_t__assign`, registered by the generic-instances pre-pass). A
+# method still absent from the map takes bare `self` — a copy, with no
+# write-through — so read-only is the right answer for it.
 bool mutinf_named_recv_writes_self(LowerCtx ctx, GirModule &gmod, String recv_name, String mname):
     if not nl_contains(ctx, recv_name):
         return false
@@ -4875,6 +4882,22 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
     # `lower_generic_equip` which strips trait_name and routes through
     # lower_equip_block — produces `Target__method` naming with type subs
     # applied. We mirror that naming here.
+    #
+    # GENERIC-EQUIP `&self` MUTATION CLASSIFICATION rides along in the same
+    # loop. `compute_method_mutates_self` (called far above, before
+    # `generic_instances` even exists) classifies NON-generic equips only, so a
+    # generic-equip mutator like `Cell[T].assign(&self, T v)` never entered
+    # `method_mutates_self` and the named-receiver gate answered read-only — the
+    # write then went straight through to the caller's value. The mono'd key is
+    # the one the gate reads: `mutinf_named_recv_writes_self` builds
+    # `type_id_to_name(peel_ptr_tid(rtid)) + "__" + mname`, and both sides go
+    # through `mangle_type_name` (`type_to_c_name`'s TNamed arm writes it,
+    # `map_ast_type` registers `GtNamed(mangled)`, `type_id_to_name` is the
+    # identity on `GtNamed`) — so the key is `Cell__int64_t__assign`, NOT the
+    # bare `Cell__assign`.
+    Dict[String, bool] geq_direct = {}
+    Dict[String, Vector[String]] geq_edges = {}
+    Vector[String] geq_keys = []
     for eqsi_inst in generic_instances:
         if equip_generic_names.contains(eqsi_inst.base_name):
             for eqs_tmpl in equip_templates:
@@ -4934,7 +4957,42 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                             gmod.fn_borrow_params.put(eqs_mv_key.clone(), eqs_borrows)
                             gmod.fn_move_params.put(eqs_mv_key.clone(), eqs_moves)
                             gmod.fn_defaults.put(eqs_mv_key, eqs_defaults)
+                    # SECOND pass over the same methods: seed the `&self`
+                    # mutation classification. It runs after the loop above so
+                    # every SIBLING method of this instance is already in
+                    # fn_borrow_params — `mutinf_scan_expr`'s step 1 needs that
+                    # to emit a callee EDGE (`Cell__int64_t__resize`) instead of
+                    # falling to its conservative step-3 leaf, which would mark
+                    # every caller mutating and re-materialize far more than the
+                    # gate needs.
+                    for eqs_mut_mdef in eqs_tmpl.methods:
+                        if eqs_mut_mdef.type_params.len() == 0:
+                            String eqs_mut_key = eqs_mono_target + "__" + eqs_mut_mdef.name
+                            if mutinf_takes_mut_self(gmod, eqs_mut_key) and not geq_direct.contains(eqs_mut_key):
+                                Vector[String] eqs_ces = []
+                                bool eqs_dm = mutinf_scan_stmts(eqs_mut_mdef.body, eqs_mono_target, &gmod, &eqs_ces)
+                                geq_direct.put(eqs_mut_key.clone(), eqs_dm)
+                                geq_edges.put(eqs_mut_key.clone(), eqs_ces)
+                                geq_keys.push(eqs_mut_key)
                     clear_type_subs(&gmod)
+
+    # Seed + fixpoint for the mono'd generic-equip keys, mirroring
+    # `compute_method_mutates_self`'s own two steps. Self-callee edges only ever
+    # point INSIDE one instance (`self` has exactly one type, so a self-rooted
+    # call inside `Cell__int64_t__probe` keys on `Cell__int64_t__…`), which is
+    # why a local fixpoint over these keys is complete rather than a subset of
+    # the module-wide one that already ran.
+    for geq_sk in geq_keys:
+        gmod.method_mutates_self.put(geq_sk, geq_direct.get(geq_sk).unwrap())
+    bool geq_changed = true
+    while geq_changed:
+        geq_changed = false
+        for geq_fk in geq_keys:
+            if not gmod.method_mutates_self.get(geq_fk).unwrap():
+                for geq_ce in geq_edges.get(geq_fk).unwrap():
+                    if gmod.method_mutates_self.contains(geq_ce) and gmod.method_mutates_self.get(geq_ce).unwrap():
+                        gmod.method_mutates_self.put(geq_fk, true)
+                        geq_changed = true
 
     # Build trait lookup map for default method generation
     Dict[String, TraitDef] trait_defs = {}

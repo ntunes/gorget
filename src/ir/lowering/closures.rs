@@ -384,7 +384,16 @@ pub fn emit_closure_call_function(
         &params,
     );
 
-    ctx.clear_locals();
+    // The closure body is a bare `Spanned<Expr>` (`LiftedClosure::body`), so it
+    // reaches the prescans as `FnBodyAst::Expr` — an `Expr::Block` body unwraps
+    // to its own statements, anything else has none. Before centralisation this
+    // path reset per-function state but ran NO prescans, so a CoW view bound
+    // inside a closure body was never materialised before a reallocating
+    // mutation (see `functions::begin_function_body`).
+    super::functions::begin_function_body(
+        ctx,
+        super::functions::FnBodyAst::Expr(&closure.body.node),
+    );
 
     // Save the outer function's drop state and push a fresh Function scope
     // for the closure body. Without this, locals registered during closure
