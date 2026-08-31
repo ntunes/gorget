@@ -232,6 +232,22 @@ that contention is now gone.**
 ⚠ **R48's headline was six CRITICAL memory-safety defects. `t0771` moves to R49; the other five remain:**
 `t0770`+`t0772` (Track A) · `t0763` (Track C) · `t0840` (Track D2) · `t0841` (Track D1, **executor running**).
 
+### ⚠ RED-VERIFY PROBE TRAP — BINDS EVERY EXECUTOR (found 2026-08-31, R48 Track D1)
+
+**Once your own fix is committed, `git checkout HEAD -- src/…` reverts to YOUR FIX.** The "pre-fix"
+compiler it builds is the **fixed** one, so the cell comes back **rc 0 — a false GREEN** that, taken at face
+value, *confirms* whatever the header claims.
+✅ **THE PRE-FIX BLOB MUST COME FROM THE BASE COMMIT: `git show <base-sha>:<path>`.**
+⚠ D1 hit this while re-measuring a cell it was in the middle of *correcting*; the false GREEN would have
+"verified" the very miscount being fixed. **RED-verify is only evidence if the compiler under test is
+genuinely the pre-fix one — state which blob you built.**
+
+⊕ **AND ONE RED DEMO IS NOT A CLASS DEMO.** D1's lint had been demonstrated RED on a *renamed* map and I
+read that as proof it caught its class. The output-review then broke it with the **type-elided** spelling
+(`let mut d = FxHashMap::default();`) and **all three asserts stayed GREEN**. A RED demo proves the guard
+catches **the evasion you thought of** — enumerate the evasions, or say in the doc comment what the guard
+still cannot see (which is what D1's fixed comment now does, instead of re-asserting totality).
+
 ### ⛔⛔ ROUND-CLOSE TRAP — `robustness_map.py` WILL REPORT THIS ROUND'S FIXES AS REGRESSIONS
 
 Orchestrator-verified 2026-08-31 (found by Track E-B3 brief-review pass 1):
