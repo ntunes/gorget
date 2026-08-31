@@ -147,6 +147,30 @@ const EXCLUDE: &[&str] = &[
     // already filed; do NOT re-file it.
     "cow_loop_bare_param_comprehension.gg",
     "cow_loop_bare_param_comprehension_matrix.gg",
+    // R48 Track D1's comprehension net (t0841). The SAME twelve rows the B2
+    // gate excludes, for the SAME measured reasons — both gates share the
+    // phase-0 subset, so a construct outside it is outside it here too. Three
+    // distinct classes, each verified with `ggdef run`: eight list
+    // comprehensions and one set comprehension ("expression `unsupported`"),
+    // one `.join()` ("outside the phase-0 builtin-method set — may need
+    // Increment B2"), and two `meta for`/`meta while` ("statement
+    // `unsupported`"; phase 0 has no compile-time-evaluation arm). Full
+    // rationale in `corpus_b.rs`; the subset gaps are already filed
+    // (`todo/t0003`, `todo/t0099`) — do NOT re-file them. ⚠ The net's
+    // thirteenth fixture, `cow_for_zero_trip_body_kill_control.gg`, is
+    // deliberately absent: ggdef elaborates it and adjudicates `ab / ab`.
+    "cow_comprehension_fresh_mint_control.gg",
+    "cow_comprehension_invariant_dict_value.gg",
+    "cow_comprehension_invariant_filter_arm.gg",
+    "cow_comprehension_invariant_in_condition.gg",
+    "cow_comprehension_invariant_nested.gg",
+    "cow_comprehension_invariant_owned_name.gg",
+    "cow_comprehension_invariant_struct_payload.gg",
+    "cow_comprehension_invariant_vector_source.gg",
+    "cow_set_comprehension_invariant_in_condition.gg",
+    "cow_loop_invariant_owned_name_push_control.gg",
+    "cow_meta_for_zero_trip_body_kill.gg",
+    "cow_meta_while_false_guard_body_kill.gg",
     // NOTE: the 2T get-chain fixtures (`cow_taint_getchain_*`) all carry `equip R
     // with Drop`, so `gate_fixtures`'s `equip ` filter already routes them to B2
     // (corpus_b) — they are NOT in the B1 gate set and need no B1 exclusion.
@@ -384,5 +408,12 @@ fn corpus_b1_all_match() {
     // 8th is EXCLUDEd above on `.first()` (`todo/t0753`) → 137.
     // ⚠ The 130 was never reached while this gate was RED on that elaboration
     // error, so it had not absorbed the 8; the arithmetic starts from 130.
-    assert_eq!(fixtures.len(), 137, "B1 gate set drifted from 137 fixtures");
+    // +14 −12 (2026-08-31, R48): Track D1's 13-fixture comprehension/meta net
+    // (`todo/t0841`) plus Track γ's `cow_lazy_index_slice_join`. Twelve of the
+    // fourteen are EXCLUDEd above on three distinct out-of-subset constructs,
+    // each measured with `ggdef run`; the 2 that remain are adjudicated, not
+    // merely counted → 139.
+    // ⚠ Same caveat again: the 137 was never reached, because this gate was RED
+    // at R48's open on D1's comprehension rows.
+    assert_eq!(fixtures.len(), 139, "B1 gate set drifted from 139 fixtures");
 }
