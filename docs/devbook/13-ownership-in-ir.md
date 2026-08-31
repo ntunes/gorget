@@ -429,13 +429,16 @@ while`, whose bodies are real code that liveness sees before meta
 expansion runs. Seven arms, one helper: a per-arm copy of this dance is
 how the comprehension arms drifted away from their statement siblings in
 the first place, so the count is held by
-`liveness_loop_back_edge_single_source` (`tests/lints.rs`). A count of
-call sites alone cannot see the regression that matters — a *new* arm
-hand-rolling the dance beside the helper rather than calling it — so the
-guard also counts the dance's own ingredients, ending at the one no
-spelling can shed: two passes over the live set need two clones of it,
-so a second dance is visible in the `live.clone()` count however it is
-written.
+`liveness_loop_back_edge_single_source` (`tests/lints.rs`). What that
+guard reliably catches is a *new path*: a `walk_loop_two_pass` call site
+added or removed. Its three other counts — the throwaway map's
+declaration, its construction, and `live.clone()` — catch the
+hand-rolled spellings measured so far, and a review has shown that a
+determined hand-rolled dance escapes all of them, so they are a
+tripwire rather than a proof. A textual census over one file counts
+spellings; making the dance *impossible* to hand-roll is a type-level
+job — a live-set newtype whose copy path is private to the helper's
+module, so a second dance fails to compile. That is `todo/t0875`.
 
 ## The Phase C validator — shallow copy of a resource is fatal
 

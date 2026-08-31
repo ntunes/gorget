@@ -25822,19 +25822,32 @@ fn process_spawn_deadline_arm_count() {
 /// type, no rename, no construction, all three assertions GREEN. It is
 /// arguably the most natural spelling of all, since `lu` is already in scope.
 ///
-/// Two recurrences of one class in one guard is the point at which naming the
-/// next hole stops being honest and starts being a habit (Core #6). Assertion
-/// four therefore counts what the dance CANNOT DO WITHOUT, at any spelling:
-/// `live.clone()`. Two passes over the live set need two clones of it, so
-/// every hand-rolled dance moves the count by exactly two whatever it calls
-/// its map, however that map is typed, and whether it is constructed, cloned,
-/// or obtained some way nobody has thought of yet. Measured: all three earlier
-/// escapes AND the `lu.clone()` one read 11 against a baseline of 9.
+/// Assertion four counts `live.clone()`, which catches that spelling and the
+/// three earlier escapes: all four read 11 against a baseline of 9.
 ///
-/// The four are layered, not redundant — one names the arm, one names the
-/// local, one the construction, one the structure — and only the last is about
-/// a property the class cannot shed. What no layer replaces is reading the
-/// arm: a new loop-shaped form belongs in the helper.
+/// ⛔ AND IT IS STILL NOT A TOTAL GUARD — READ THIS BEFORE TRUSTING IT, AND
+/// BEFORE ADDING A FIFTH. An earlier version of this comment claimed assertion
+/// four counted something the dance "cannot do without, at any spelling". That
+/// was false, and a review demonstrated it SEVEN ways, each a complete,
+/// compiling, wired dance with all 198 tests green: rename the receiver
+/// (`live` -> `l`) and the body is otherwise byte-identical — the very
+/// rename-evasion this comment faults assertion two for — plus
+/// `live.iter().copied().collect()`, `FxHashSet::from_iter(..)`,
+/// `std::mem::take`/`replace` with a restore (no `.clone()` at all),
+/// `Clone::clone(&*live)`, an extension-trait `.snapshot()`, and holding the
+/// dance's state in a struct and copying the field. FIVE of those keep the name
+/// `live`. A substring census over one file counts COSTUMES; it cannot count a
+/// CLASS, and a fifth count would be a fifth costume.
+///
+/// ⭐ SO STATE THE REACH HONESTLY: these four are a NEW-PATH TRIPWIRE, not a
+/// total guard. Assertion one is the one that holds — an added or removed
+/// `walk_loop_two_pass` call site IS caught. Assertions two to four catch the
+/// hand-rolled spellings measured so far and nothing guarantees the next one.
+/// The total guard has to be type-level, not textual: a `LiveSet` newtype whose
+/// copy path is private to this helper's module, so a hand-rolled dance fails
+/// to COMPILE. That is filed as `todo/t0875` with the seven escapes as its
+/// evidence. Until it lands, what no assertion here replaces is READING THE
+/// ARM: a new loop-shaped form belongs in the helper.
 #[test]
 fn liveness_loop_back_edge_single_source() {
     /// Seven loop-shaped arms: `Stmt::While`, `Stmt::For`, `Stmt::Loop`,
@@ -25852,11 +25865,16 @@ fn liveness_loop_back_edge_single_source() {
     /// seed's `discard`, and the helper's `lu_discard`. A fourth is a fourth
     /// map, and in this file that means a second copy of the dance.
     const EXPECTED_MAP_CTORS: usize = 3;
-    /// Nine `live.clone()` sites: the helper's two (one per pass) and the seven
-    /// branch-union saves (`if` / `match` / `meta if` / `meta match` arms).
-    /// This is the assertion that retires the class rather than naming its next
-    /// costume: a second two-pass dance needs two more clones of the live set
-    /// no matter how it spells its throwaway map, so it reads 11.
+    /// Nine `live.clone()` sites: the helper's two (one per pass) and SEVEN
+    /// branch-union saves — `Stmt::If`, `Stmt::Match`, `Stmt::Select`,
+    /// `Stmt::MetaIf`, `Stmt::MetaMatch`, `Expr::If`, `Expr::Match`. All seven
+    /// are named because an earlier version of this comment named four ("if /
+    /// match / meta if / meta match") for seven sites, and `Stmt::Select` was
+    /// named by nothing — a selection presented as an enumeration.
+    ///
+    /// ⚠ This catches the four hand-rolled spellings measured so far, NOT the
+    /// class: seven further evasions compile with every assertion green (see
+    /// the rationale above, and `todo/t0875`).
     const EXPECTED_LIVE_CLONES: usize = 9;
 
     let path = "src/ir/lowering/liveness.rs";
@@ -25941,16 +25959,20 @@ fn liveness_loop_back_edge_single_source() {
         live_clone_count,
         EXPECTED_LIVE_CLONES,
         "`live.clone()` count changed: {} vs expected {EXPECTED_LIVE_CLONES}.\n{}\n\n\
-         THIS IS THE ASSERTION THAT RETIRES THE CLASS, so read it before \
-         adjusting it. The three above name a thing the dance HAS — an arm, a \
-         local, a constructor — and each was walked through by respelling that \
-         thing (`lu_discard`->`discard`, an elided type, `lu.clone()` instead of \
-         a fresh map). This one counts what two passes over a live set cannot \
-         do without: two clones of it. A new hand-rolled dance reads 11 whatever \
-         it calls its map. Nine is the helper's two plus the seven branch-union \
-         saves in `if`/`match`/`meta if`/`meta match`. A genuine new BRANCH form \
-         raises it by one; a new loop-shaped arm should raise it by ZERO, \
-         because it belongs in `walk_loop_two_pass`.",
+         Nine is the helper's two (one per pass) plus seven branch-union \
+         saves: `Stmt::If`, `Stmt::Match`, `Stmt::Select`, `Stmt::MetaIf`, \
+         `Stmt::MetaMatch`, `Expr::If`, `Expr::Match`. A genuine new BRANCH \
+         form raises it by one. A new loop-shaped arm should raise it by ZERO \
+         — it belongs in `walk_loop_two_pass`. \
+         \n\n\
+         ⛔ DO NOT READ THIS AS A TOTAL GUARD, AND DO NOT ADD A FIFTH COUNT. \
+         This assertion and the two above catch the hand-rolled spellings \
+         measured so far; a review then evaded this one SEVEN ways, five of \
+         them without even renaming `live` (see the rationale on the test). \
+         A substring census counts costumes, not the class. The four together \
+         are a NEW-PATH TRIPWIRE: assertion one catches an added or removed \
+         helper call site, which is the property that actually holds. The total \
+         guard is type-level and filed as `todo/t0875`.",
         live_clone_count,
         live_clones.join("\n"),
     );

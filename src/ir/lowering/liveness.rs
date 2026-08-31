@@ -251,11 +251,13 @@ fn on_error_bodies_in<'a>(stmt: &'a Stmt) -> Vec<&'a [Spanned<Stmt>]> {
 /// regression it exists to prevent — a NEW loop-shaped arm hand-rolling the
 /// dance rather than calling this — so three further assertions count the
 /// dance's own ingredients: the `lu_discard` declaration, the map
-/// CONSTRUCTION, and `live.clone()`. The last is the one that retires the
-/// class: two passes over the live set need two clones of it, so a second
-/// dance shows up whatever it calls its throwaway map and however that map is
-/// obtained. Adding a loop-shaped arm here should move NONE of the four
-/// (Core #6, six-questions #2).
+/// CONSTRUCTION, and `live.clone()`. ⚠ Those three catch the hand-rolled
+/// spellings measured so far and NOT the class — a review evaded the last of
+/// them seven ways, five without renaming anything — so treat the four as a
+/// NEW-PATH TRIPWIRE: an added or removed call site IS caught, a hand-rolled
+/// dance may not be. The total guard is type-level (a `LiveSet` whose copy path
+/// is private to this module), filed as `todo/t0875`. Adding a loop-shaped arm
+/// here should move NONE of the four (Core #6, six-questions #2).
 fn walk_loop_two_pass<'a>(
     live: &mut FxHashSet<&'a str>,
     lu: &mut FxHashMap<usize, String>,
