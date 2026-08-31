@@ -100,8 +100,21 @@ C sweep 2533/0/182 · LLVM sweep 2533/0/182 · `spec_conformance` 3/0 · `securi
 
 ### ⚠ STATE A NEXT SESSION MUST NOT RE-DERIVE
 
-- **`RUNTIME_DIFF_NONMATCH_CEILING` = 151 — OWNER RULING, immovable.** `RUNTIME_DIFF_MATCH_FLOOR` raised
-  1415 → **1476** at R47 close on a re-measured post-integration MATCH of 1485, −9 jitter. Slack 70 → 9.
+- **`RUNTIME_DIFF_NONMATCH_CEILING` = 151 — ⚠ CORRECTED 2026-08-31: it is a SHRINK-ONLY RATCHET, not
+  "immovable".** The owner ruling froze it against **RAISING** only. Its own text
+  (`tests/integration.rs:38629-38635`, `:38684`, `:38713`): *"Reseed DOWN in the same commit whenever the
+  backlog shrinks"* · *"lowering needs no sign-off; raising is the owner ask."* **Lowering it when the
+  backlog shrinks is REQUIRED, not optional** — the "immovable" framing in earlier handovers was
+  directionally wrong and would have made R48 forfeit the gain Track H is about to earn (fixing `t0823`
+  takes non-MATCH 151 → ~147, since nondeterministic rows are counted in WRONG-OUTPUT, `:38091`).
+  ⛔ Core #9 ⊕ still forbids raising it for the round's OWN inflow.
+- **⚠ `RUNTIME_DIFF_MATCH_FLOOR` (1476) IS A ROUND-CLOSE RESEED, NEVER MID-ROUND.** Its own comment
+  (`tests/integration.rs:38570-38586`): raising is *"A ROUND-CLOSE ACTION, on the number the
+  post-integration battery prints, with the usual jitter discount"*, because *"a mid-round ratchet from one
+  worktree is how a round close false-reds"* — written when FIVE tracks were in flight. **R48 has ELEVEN.**
+  Raised 1415 → 1476 at R47 close on a re-measured post-integration MATCH of 1485, −9 jitter. Slack 70 → 9.
+- **⚠ `UNTRIAGED_CEILING` LIVES IN `tests/lints.rs:26507`, NOT `tests/integration.rs`** — i.e. inside the
+  EOF region Track F and Track E-B3 both append to. Any track editing it collides there.
 - **The clone ratchet's shape is RATIFIED (owner, 2026-08-30/31):** the pin is the **exact** last measured
   value; **~1% is an AUTHORIZATION THRESHOLD, not headroom** — below → re-pin down (automatic); ≤1% over →
   re-pin up to exact (implicit); >1% over → **STOP, owner ask**; per meter. **Accumulation is UNBOUNDED —
