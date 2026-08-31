@@ -37,12 +37,25 @@
   `cow_bench_body_view_survives_realloc` · `cow_generic_equip_named_recv` (graduated; SH lane + Rust
   control). Plus `closure_capture_called_twice` as a committed cross-track CLASS GUARD for the closure
   capture's ownership marking.
-  **Blast radius, re-measured on this build over the FULL corpus (no truncation):** 333
-  generic/equip/trait/closure/`cow_` fixtures A/B'd on emitted C — 276 byte-identical, 56 NEG fixtures
-  failing IDENTICALLY in both modes (no accept/reject flip), 1 differs and it SHRINKS
-  (`closure_float_ret`, 439,804 -> 437,492 bytes, `_clone(` 132 -> 124, output still correct). The
-  `gg test` lane (21 fixtures with test/bench/suite blocks — paths 8–11, which `gg build` never lowers)
-  is 21/21 identical.
+  **Blast radius, re-measured on THIS build (base-commit blob vs HEAD, never `git checkout --`) over the
+  FULL corpus, no truncation:** 342 generic/equip/trait/closure/`cow_` fixtures A/B'd on emitted C —
+  277 byte-identical, 56 NEG fixtures failing IDENTICALLY in both modes (no accept/reject flip), 9
+  differ. Six of the nine are this round's OWN new fixtures (the point of the fix). One is
+  `closure_float_ret` and it SHRINKS (439,804 -> 437,492 bytes, `_clone(` 132 -> 124, output still
+  correct). The remaining two (`generic_callable_ref`, `spawn_closure_copy`) are NOT this change:
+  10 runs of EACH binary on each input show BOTH binaries producing BOTH outputs — a pre-existing
+  NON-DETERMINISTIC emission ORDER, filed as `t0876`. The `gg test` lane (23 fixtures carrying
+  test/bench/suite blocks — paths 8-11, which `gg build` never lowers) is 22/23 identical, the one
+  difference being `cow_test_body_view_survives_realloc` going rc 139 -> rc 0.
+  **Re-bomb measurement, BOTH lanes (Core: perf work measures MEMORY).** Rust lane: `gg build` on the
+  self-host driver, 3 isolated samples each — peak RSS 984,976 -> 985,076 KB (**+0.010%**), user time
+  inside its own run-to-run spread; the driver's emitted C is **BYTE-IDENTICAL** (34,768,294 bytes,
+  empty diff). Self-host lane: a 2x2 of {driver built by PRE, by POST} x {BASE source, HEAD source}
+  shows the clone meter depends ONLY on the source tree — `array_clone` 13,150,071 and `string_clone`
+  31,490,660 on BASE source for BOTH binaries, 13,175,009 / 31,517,690 on HEAD source for BOTH. **The
+  compiler change moves both meters by EXACTLY ZERO**; the +0.19% between naive pre/post snapshots is
+  INPUT GROWTH — the meter's workload IS `lower.gg`, which gained the t0134 pre-pass. Peak RSS
+  738.6-740.6 MB across all four cells.
   **Not fixed, and now over-determined:** `t0704` — the capture-boundary UAF. A second repro
   (`closure_capture_inside_body_uaf.gg`: capture, realloc INSIDE, no saved view at all) is still rc 139
   after this fix, while the identical statements WITHOUT a capture are rc 0. The discriminator is the
@@ -50,7 +63,11 @@
   item. Two false invariant-comments deleted along the way (Core #14).
   **Filed:** `t0874` (ggdef's 3 standing generic-equip subset exclusions have no oracle row),
   `t0875` (ggdef rejects `equip [T] Cell[T]` but elaborates `equip Cell[T]` — one construct, two subset
-  answers, a boundary drawn on a SPELLING).
+  answers, a boundary drawn on a SPELLING), `t0876` (**the emitted C is not reproducible**: the same
+  binary on the same input emits two different files run to run, because the C backend iterates
+  `std::collections::HashMap`/`HashSet` — RandomState, a per-PROCESS seed — to decide declaration
+  order. Found by this round's own A/B; it means every "byte-identical emitted C" argument is a coin
+  flip on the affected fixtures).
 
 - [2026-08-31] **ROUND XLVII (R47) CLOSED — MEMORY SAFETY: RETIRE THE NAME-MATCHING CLASS.**
   15 track integrations · 101 commits · 25 touching `src/`. Opened as the answer to R46, which was

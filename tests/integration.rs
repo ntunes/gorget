@@ -8079,6 +8079,14 @@ A",
 
 /// The RUST control for the same fixture, so the lane cell above is a genuine
 /// cross-lane pin rather than a self-host-only assertion.
+///
+/// ⚠ GREEN ON ARRIVAL, DELIBERATELY — this row is a CONTROL, not coverage
+/// (Core #12). Rust gg printed `Y / A` before the fix and prints it after; the
+/// RED lived on the self-host lane (`Y / Y`), which
+/// `cow_named_recv_generic_equip_gap` above asserts. What this pins is that the
+/// self-host lane was brought UP to Rust rather than Rust being dragged down to
+/// meet it: if a later change makes Rust write through, the two rows disagree
+/// instead of quietly agreeing on the wrong answer (Core #8).
 #[test]
 fn cow_generic_equip_named_recv() {
     run_gg("cow_generic_equip_named_recv.gg", "Y\nA");
