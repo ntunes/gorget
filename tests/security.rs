@@ -540,6 +540,54 @@ fn security_safe_no_leak(name: &str, expected_stdout: &str) {
     cleanup(&fp);
 }
 
+/// Like [`security_safe`], but a UBSan diagnostic is a hard failure.
+///
+/// `--sanitize` already builds with `-fsanitize=address,undefined`, and UBSan
+/// findings are RECOVERABLE by default: the program prints
+/// `runtime error: ...` to stderr and CARRIES ON, exit 0, with correct stdout.
+/// So [`security_safe`] — which checks stdout and the exit code and nothing
+/// else — passes straight through undefined behaviour, and did: the
+/// `qsort(NULL, 0, ...)` class (`t0780`, closed at R47 close — DONE.md) sat in
+/// the corpus for months producing exactly the right answers.
+///
+/// Use this for a defect whose only observable is a UBSan line. Core #13: pick
+/// an instrument that can SEE the failure class.
+///
+/// Each fixture MUST have been verified to emit the diagnostic at the pre-fix
+/// baseline and to be silent post-fix — else it guards nothing (Core #12).
+fn security_safe_no_ubsan(name: &str, expected_stdout: &str) {
+    let (out, fp) = sanitize_build_and_run(name);
+    assert!(
+        out.build_ok,
+        "security_safe_no_ubsan({name}): sanitize build failed\nstderr: {}",
+        out.build_stderr
+    );
+    assert!(out.ran, "security_safe_no_ubsan({name}): binary did not run");
+    assert!(
+        !out.stderr.contains("runtime error:"),
+        "security_safe_no_ubsan({name}): UndefinedBehaviorSanitizer reported \
+         undefined behaviour. stdout can be entirely correct and this still be \
+         a real defect — \"nothing is read, so it is benign\" is not a defence \
+         (Core #8).\nstderr:\n{}",
+        out.stderr
+    );
+    assert_eq!(
+        out.stdout.trim(),
+        expected_stdout.trim(),
+        "security_safe_no_ubsan({name}): stdout mismatch\nExpected:\n{expected_stdout}\nGot:\n{}\nstderr:\n{}",
+        out.stdout,
+        out.stderr
+    );
+    assert_eq!(
+        out.exit_code,
+        Some(0),
+        "security_safe_no_ubsan({name}): nonzero exit {:?}\nstderr:\n{}",
+        out.exit_code,
+        out.stderr
+    );
+    cleanup(&fp);
+}
+
 /// A program that intentionally performs a runtime-defined trap (e.g.
 /// division by zero, integer overflow). Must build and run, then exit
 /// nonzero with the Gorget-level trap message in stderr — NOT raw C UB.
@@ -1690,6 +1738,31 @@ fn sec_92_static_set_runtime() {
 #[test]
 fn box_trait_closure_return_no_leak() {
     security_safe_no_leak("box_trait_closure_return_leak", "R2");
+}
+
+/// `sort()` / `sorted()` / `unique()` on an EMPTY collection reached `qsort`
+/// with a NULL base pointer, which is UNDEFINED BEHAVIOUR by the C standard
+/// (`qsort`'s first parameter is declared `nonnull`) even at length zero.
+///
+/// RED-VERIFIED at `ce54bdc1`, the pre-fix compiler: this program printed the
+/// expected 27 lines AND emitted **9** `runtime error: null pointer passed as
+/// argument 1, which is declared to never be null` lines — one per
+/// (element type × operation) cell. Post-fix stderr is empty and stdout is
+/// byte-identical, which is the whole reason a stdout-comparing fixture could
+/// not see this: `test_vector_sort_methods` exercised the same defect and had
+/// been green in `cargo test --test integration` since it was written.
+///
+/// The class was 15 emitted call sites in Rust gg and 12 in the self-host
+/// lowerer; both now build the call through one `qsort_guarded` producer, and
+/// `emitted_qsort_is_guarded` in tests/lints.rs is the arm-count guard.
+/// Retires `t0780` (closed at R47 close — DONE.md).
+#[test]
+fn sort_empty_collection_no_ub() {
+    security_safe_no_ubsan(
+        "sort_empty_collection_no_ub",
+        "0\n0\n0\n0\n0\n0\n0\n0\n0\n42\n42\n1\n42\nsolo\nsolo\n1\n2\n3\n\
+         0.250000\n0.500000\n0.750000\napple\nbanana\ncherry\n2\n1\n2",
+    );
 }
 
 #[test]

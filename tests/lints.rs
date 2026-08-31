@@ -8264,7 +8264,33 @@ fn sanitize_allowlists_shrink_only() {
     // still counted ONE PER FIXTURE (the class signatures the same round added
     // live in TAB column 2, not in extra rows), so this number stays
     // comparable to every value it has held.
-    const LEAK_CEILING: usize = 305;
+    // 305 -> 300 (R47 close): `iter_enumerate_zip`, `iter_map_after_filter`,
+    // `iter_map_inference`, `test_linked_list` and `vector_userspace_hofs`
+    // measured CLEAN on all 3 reps of `scripts/sanitize_sweep.sh` at HEAD,
+    // where each still LEAKS under the round's base compiler `f3feea79` (same
+    // instrument, same fixtures, the pinned base binary) — so these five are
+    // leaks the round genuinely burned down, not an instrument artefact.
+    //
+    // ⚖ 300 -> 304 (R47 close, OWNER RULING 2026-08-31: *"admit with explicit
+    // per-row citations"*). THIS IS THE FIRST UPWARD MOVE OF THIS CEILING, and
+    // the assertion below is `==` precisely so it could not happen quietly.
+    // Read the four `⚖ ADMITTED` blocks in the allowlist before touching this:
+    // `iter_terminal_stmt_positions`, `onceflag_basic`,
+    // `opaque_handle_struct_field_waitgroup`, `sh_primitive_admitted_methods_ok`.
+    //
+    // WHY IT IS NOT THIS ROUND TOLERATING ITS OWN REGRESSION, measured on a
+    // three-cell matrix with pinned binaries rather than argued: all four leak
+    // under the ROUND-OPEN compiler `f3feea79`; none is in THAT commit's
+    // 316-row allowlist; and the 92-line sweep script of that commit — whose
+    // line 55 computes `LEAK` from the same `ERROR: LeakSanitizer` marker —
+    // reports all four as `NEW LEAK(S)` and exits 1. So this gate was ALREADY
+    // RED at round-open and the 2026-08-18 baseline had UNDERCOUNTED (it was a
+    // single run under LSan's DEFAULT root set, which suppresses a leaked
+    // spawn context whenever a worker thread's stale frame still points at it).
+    // Raising the ceiling records debt that already existed. It is NOT a
+    // licence for the next row: an addition with no `⚖ ADMITTED` block is
+    // outside the ruling.
+    const LEAK_CEILING: usize = 304;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -8360,9 +8386,43 @@ fn sanitize_allowlists_shrink_only() {
     // the same admission for the same reason ("a ceiling counts rows; it does
     // not identify them"). The point is that no SINGLE-character widening is
     // silently accepted any more.
-    const LEAK_CLASS_PAIRS: usize = 512;
-    const LEAK_RECORDS: usize = 2259;
-    const LEAK_LOOSE_SIGNATURES: usize = 6;
+    // 512 -> 504 and 2259 -> 2247 with the five rows deleted above: they
+    // named 8 (fixture, class) pairs tolerating 12 leak records between
+    // them, and none carried a `*N+` marker, so the loose count is unmoved.
+    //
+    // ⚖ Then 504 -> 509 and 2247 -> 2256 for the four admitted rows: 5 new
+    // (fixture, class) pairs tolerating 9 leak records. Every count is the
+    // MEASURED one from the sweep's own `verdicts.tsv` column 4, not a
+    // rounded-up cushion — the owner admitted debt on the understanding that
+    // it is RECORDED, so a row that tolerates more than it leaks would defeat
+    // the point. (The sweep's `TIGHTEN` advisory says 21 EXISTING rows already
+    // do exactly that, by 85 records; filed on `todo/t0572`.)
+    //
+    // ⚖ And 6 -> 8, which is the admission that needs the most justification
+    // because a `+` switches a row's COUNT CHECK OFF. Both new markers went to
+    // concurrency rows and both are earned by this file's own stated evidence
+    // rule — the sweep's `count-drift` census names them: over 12 consecutive
+    // reps `onceflag_basic` and `opaque_handle_struct_field_waitgroup` report
+    // the SAME mechanism at a DIFFERENT record count (how many spawned workers
+    // had leaked by exit is a race), while the other two admitted rows are
+    // stable over the same 12 reps and are therefore pinned EXACTLY.
+    //
+    // ⚠ WHY THAT DRIFT IMPLIES A FLAP, since the obvious version of the
+    // argument is WRONG. The sweep's column 4 is the MAX over reps, so drift
+    // seen inside one sweep is necessarily DOWNWARD — and a downward count
+    // cannot red an exact pin, because `adjudicate_leaks` violates on
+    // `k > allowed` and only files a TIGHTEN advisory on `k < allowed`. The
+    // flap risk is BETWEEN runs: an exact pin is a claim that no future sweep
+    // will ever observe a higher max, and 12 reps sample that distribution
+    // without bounding it. Concretely, `onceflag_basic` spawns FOUR tasks and
+    // `opaque_handle_struct_field_waitgroup` THREE, while the observed maxima
+    // are 3 and 2 — so one more worker leaking before exit reds an exact pin
+    // on either. Note both markers land on the SAME mechanism two existing
+    // rows already carry it for (`waitgroup_basic` / `waitgroup_amp_param`,
+    // `__gorget_spawn_worker*2+`).
+    const LEAK_CLASS_PAIRS: usize = 509;
+    const LEAK_RECORDS: usize = 2256;
+    const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     let mut leak_stems: Vec<&str> = Vec::new();
     let (mut pairs, mut records, mut loose) = (0usize, 0usize, 0usize);
@@ -8430,6 +8490,88 @@ fn sanitize_allowlists_shrink_only() {
          an admission, not an annotation: add one only for a row the sweep's own \
          `count-drift` census has named, and move this number in the same commit."
     );
+}
+
+/// Every `qsort` this compiler EMITS is guarded on `len > 1`.
+///
+/// **The defect this retires (`t0780`, measured 2026-08-29, closed at R47
+/// close — DONE.md).** An empty `GorgetArray` has `data == NULL` and
+/// `len == 0`, and `qsort`'s first
+/// parameter is declared `nonnull` — so `qsort(NULL, 0, ...)` is undefined
+/// behaviour by the C standard even though nothing is ever read. UBSan reports
+/// `null pointer passed as argument 1, which is declared to never be null`,
+/// and `test_vector_sort_methods` red-ed `scripts/sanitize_sweep.sh` on it.
+/// "Nothing is read, so it is benign" is exactly the reasoning Core #8 refuses.
+///
+/// **Why a lint and not just the fix.** The call was written out fifteen times
+/// in the Rust emitter and twelve more in the self-host one — one per
+/// `sort`/`sorted`/`unique` × element-type arm — so fixing the instance would
+/// have left twenty-six siblings and no way to stop the twenty-seventh
+/// (Core #4). Both emitters now build the call through a single
+/// `qsort_guarded(recv, cmp)` producer, and this is the arm-count lint that
+/// forces the next arm through it.
+///
+/// Can it catch its own class (Core #15e Q2)? Yes, and that is the point of
+/// assertion (a): it does not look for the helper, it looks at every emitted
+/// `qsort(` and demands the guard text immediately before it. A new arm that
+/// spells the call directly fails here whether or not the helper still exists.
+/// Assertion (b) is the count, which catches the inverse — an arm quietly
+/// deleted or added without anyone restating how many there are.
+#[test]
+fn emitted_qsort_is_guarded() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // (file, line-comment marker, pinned `qsort_guarded` occurrences = 1
+    // definition + N call sites).
+    const EMITTERS: &[(&str, &str, usize)] = &[
+        ("src/backend/c_lir/emit_types.rs", "//", 16),
+        ("tests/fixtures/self_host_lowerer/lir_codegen.gg", "#", 13),
+    ];
+    for (rel, comment, pinned) in EMITTERS {
+        let path = root.join(rel);
+        let body = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        // Comment lines are excluded because both files legitimately DISCUSS
+        // `qsort(NULL, 0, ...)` in the prose explaining this guard.
+        let code: Vec<(usize, &str)> = body
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with(comment))
+            .map(|(i, l)| (i + 1, l))
+            .collect();
+
+        // (a) EVERY emitted qsort carries the guard, immediately before it.
+        let mut unguarded: Vec<String> = Vec::new();
+        for (lineno, line) in &code {
+            for (col, _) in line.match_indices("qsort(") {
+                if !line[..col].ends_with("len > 1) ") {
+                    unguarded.push(format!("{rel}:{lineno}: {}", line.trim()));
+                }
+            }
+        }
+        assert!(
+            unguarded.is_empty(),
+            "these emitted `qsort` calls are NOT guarded on `len > 1`:\n{}\n\n\
+             An empty GorgetArray has `data == NULL`, and `qsort`'s first \
+             parameter is declared `nonnull`, so `qsort(NULL, 0, ...)` is \
+             undefined behaviour even though nothing is read. \
+             Build the call through `qsort_guarded(recv, cmp)` in the same \
+             file — do not hand-write the guard, and do not add a per-arm \
+             emptiness check at the call sites.",
+            unguarded.join("\n")
+        );
+
+        // (b) The arm count, restated deliberately or not at all.
+        let uses = code.iter().filter(|(_, l)| l.contains("qsort_guarded(")).count();
+        assert_eq!(
+            uses, *pinned,
+            "{rel} now has {uses} `qsort_guarded` occurrences (1 definition + \
+             one per emitted sort/sorted/unique arm), the pinned count is \
+             {pinned}. If an arm was added, good — it went through the \
+             producer; restate the number here. If one vanished, check that \
+             the arm did not grow a hand-written `qsort` somewhere this file \
+             cannot see."
+        );
+    }
 }
 
 /// The sanitize sweep's own positive controls exist, and the sweep runs them.

@@ -132,10 +132,13 @@ CLASS_UNSTABLE_CEILING="${CLASS_UNSTABLE_CEILING:-0}"
 # it is a coin flip with a threshold, and this file is the wrong place to ship
 # one. The rows it names are what earn a `*N+` marker in the allowlist.
 # UBSan findings were computed and then DISCARDED by the old diff, in a CI job
-# named "Sanitize sweep (ASan+UBSan)". Fatal at 0. There is exactly one finding
-# in the corpus today — `test_vector_sort_methods`, `qsort(NULL, 0, …)` on an
-# empty collection, filed as todo/t0780 — and it is a real defect, so it reds
-# this gate rather than being admitted to a ceiling.
+# named "Sanitize sweep (ASan+UBSan)". Fatal at 0, and the corpus measures ZERO
+# — so there is nothing to burn down and no reason this ceiling should ever
+# move off 0. The one finding it was shipped red on, `test_vector_sort_methods`
+# passing `qsort(NULL, 0, …)` on an empty collection, was fixed at R47 close:
+# both emitters now build the call through one `qsort_guarded` producer, and
+# `emitted_qsort_is_guarded` in tests/lints.rs is what stops the next arm
+# spelling it directly. That defect was `t0780`; see DONE.md.
 UBSAN_CEILING="${UBSAN_CEILING:-0}"
 # A `timeout 60` kill used to read as CLEAN. AGENTS.md: every hang/spin/timeout
 # gets root-caused into a census row, never merely killed.
@@ -167,9 +170,21 @@ CRASH_CEILING="${CRASH_CEILING:-0}"
 #     cannot pin a key you have not measured stable."* The corpus-wide UNKNOWN
 #     count has never been measured, so pinning it at 0 unmeasured would be the
 #     coin-flip-with-a-threshold this file explicitly refuses to ship.
-# Printed with its rows, gating nothing, until a full sweep has measured it. Set
-# UNKNOWN_CEILING to make it fatal once there is a number to defend.
-UNKNOWN_CEILING="${UNKNOWN_CEILING:-}"
+# MEASURED, so it is now a ratchet at the measured value (R47 close, three
+# full-corpus sweeps agreeing): exactly ONE fixture, `test_timeout`, and it is
+# precisely the cell the second bullet above predicts. It is a test-runner
+# program whose `@timeout("100")` "slow test" is MEANT to fail, so the runner
+# reports the failure and exits 1 — deterministically, verified by running the
+# built binary directly — and `todo/t0647`'s ambiguity means the classifier
+# cannot tell that apart from `gorget_panic_at`'s exit 1.
+#
+# ⚠ WHAT MOVING THIS COSTS, so the next person moves it deliberately. Every
+# other ceiling here counts a compiler defect; this one counts fixtures the
+# instrument cannot see. Pinning it at 1 means a NEW fixture that legitimately
+# exits 1 reds this gate — which is the intended pressure (resolve the
+# ambiguity, per t0647, or say why the fixture is exempt), not a bug in the
+# ratchet. Raising it is an admission that the blind spot grew.
+UNKNOWN_CEILING="${UNKNOWN_CEILING:-1}"
 # COVERAGE FLOOR: fixtures that actually produced a RUN verdict. A fixture
 # drifting CLEAN -> BUILD_FAIL_* is a silent coverage loss the old gate could
 # not see; this is the ratchet that sees it. Raise it when the corpus grows.
@@ -576,7 +591,7 @@ echo "ubsan:       $n_ubsan (ceiling $UBSAN_CEILING)"
 echo "timeout:     $n_timeout (ceiling $TIMEOUT_CEILING)"
 echo "infra:       $n_infra (SKIP_COPY/NO_BINARY/RUNNER_FAIL; ceiling $INFRA_CEILING)"
 echo "crash:       $n_crash (signal / off-taxonomy exit; ceiling $CRASH_CEILING)"
-echo "unknown:     $n_unknown (classifier could not tell; census, ceiling '${UNKNOWN_CEILING:-<unset>}')"
+echo "unknown:     $n_unknown (classifier could not tell; ceiling '${UNKNOWN_CEILING:-<unset>}')"
 echo "exit-nonzero:$n_exit (the fixture's OWN exit code; census, not a fault)"
 echo "flaky:       $n_flaky (verdict not unanimous over $REPS runs; ceiling $FLAKY_CEILING)"
 echo "class-drift: $n_class_unstable (leak MECHANISM SET not identical over $REPS runs; ceiling $CLASS_UNSTABLE_CEILING)"
@@ -630,10 +645,11 @@ if [ -n "$UNKNOWN_CEILING" ] && [ "$n_unknown" -gt "$UNKNOWN_CEILING" ]; then
   echo "    verdict; do NOT widen a rule until it swallows the case."
   rc=1
 elif [ "$n_unknown" -gt 0 ]; then
-  echo; echo "ℹ UNCLASSIFIABLE OUTCOME(S) — census, gating nothing (no ceiling set):"
+  echo; echo "ℹ UNCLASSIFIABLE OUTCOME(S) — within the ceiling of ${UNKNOWN_CEILING:-<unset>}:"
   sed 's/^/    /' "$OUT/got_unknown"
-  echo "    These used to read CLEAN. Most will be the run-phase rc-1 ambiguity"
-  echo "    cell (todo/t0647). Set UNKNOWN_CEILING once the number is measured."
+  echo "    These used to read CLEAN. Each is the run-phase rc-1 ambiguity cell"
+  echo "    (todo/t0647): a program's own exit(1) is indistinguishable from"
+  echo "    gorget_panic_at's. Resolving t0647 retires them and lowers the ceiling."
 fi
 if [ "$n_infra" -gt "$INFRA_CEILING" ]; then
   echo; echo "❌ SWEEP PLUMBING FAILED (SKIP_COPY / NO_BINARY / RUNNER_FAIL) — ceiling $INFRA_CEILING:"

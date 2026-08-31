@@ -1,0 +1,134 @@
+# `sort()` / `sorted()` / `unique()` on an EMPTY collection must not reach
+# `qsort` with a NULL base pointer.
+#
+# THE DEFECT (`t0780`, measured 2026-08-29, closed at R47 close — DONE.md):
+# an empty `GorgetArray` has `data == NULL` and `len == 0`, and every emitted
+# sort helper called
+# `qsort(a->data, a->len, ...)` unconditionally. `qsort`'s first parameter is
+# declared `nonnull`, so `qsort(NULL, 0, ...)` is UNDEFINED BEHAVIOUR by the C
+# standard even though nothing is ever read — "benign because nothing happens"
+# is exactly the reasoning Core #8 refuses. UBSan reports
+# `runtime error: null pointer passed as argument 1, which is declared to never
+# be null`, and stdout stays CORRECT throughout, which is why an ordinary
+# stdout-comparing fixture cannot see this and `security_safe_no_ubsan` exists.
+#
+# RED-VERIFIED: against the pre-fix compiler this program prints exactly the
+# output below AND emits one `runtime error: null pointer passed as argument 1`
+# per empty-collection call. Post-fix the stderr is silent.
+#
+# AXES SAMPLED — the fix guards ONE emitted call shape, so the net has to cover
+# every arm that shape is emitted into:
+#   * ELEMENT TYPE, which selects the comparator suffix and therefore a
+#     DISTINCT emitted helper: int (`gorget_int_compare`) · float
+#     (`gorget_float_compare`) · String (`gorget_str_compare`).
+#   * OPERATION, which selects the receiver spelling the guard is written in:
+#     `sort()` mutates in place and holds a `GorgetArray*` (`a->len`), while
+#     `sorted()` and `unique()` clone first and hold a value (`r.len`). Both
+#     spellings must be guarded; a fix that only handled the pointer form
+#     leaves ten of the fifteen sites live.
+#   * LENGTH: 0 (the UB cell) · 1 (the boundary the `len > 1` guard sits on)
+#     · 3 (the CONTROL — a guard written `len < 1`, or one that skipped the
+#     call entirely, still produces no UBSan output, so the net needs a cell
+#     where a wrong guard changes the VALUE).
+#   * BACKEND. `t0780` recorded the LLVM lane as UNVERIFIED; it is not.
+#     Measured pre-fix on BOTH: `--backend=llvm --sanitize` reports the same 9
+#     findings, from `__gorget_runtime_<stem>.c` — the LLVM lane compiles the
+#     SAME `emit_types.rs` helper text, which is why one producer fix covers
+#     both. `security_safe_no_ubsan` runs on whichever lane `GG_BACKEND`
+#     selects, so the round-close LLVM sweep re-asserts this cell.
+#
+# OMITTED CELLS, counted rather than hidden: this samples 9 of the Rust
+# emitter's 15 arms — which is why the pre-fix run reports exactly 9 findings.
+# The 6 it does not reach are the `_generic` arms (`gorget_generic_compare`,
+# user structs: `Vector[UserStruct].sort()` is not a shape the corpus exercises
+# today, and that comparator memcmp's `sizeof(int64_t)` rather than the element,
+# which is a separate question from this one) and the three UNTYPED arms
+# `gorget_array_sort` / `_sorted` / `_unique`, which have no element suffix and
+# are selected only when the lowerer cannot type the element. All 6 are guarded
+# by the same single producer as the 9 that are sampled — the guard comes from
+# `qsort_guarded()` in `src/backend/c_lir/emit_types.rs`, which has no per-arm
+# branch — so none can regress alone; `emitted_qsort_is_guarded` in
+# tests/lints.rs is what pins that, over every arm in both emitters.
+
+from std.collections import Vector
+
+void main():
+    # === EMPTY (length 0) — the cell that was UB, one per element type ===
+    Vector[int] ei = Vector[int]()
+    ei.sort()
+    print(ei.len())
+    Vector[int] eis = ei.sorted()
+    print(eis.len())
+    Vector[int] eiu = ei.unique()
+    print(eiu.len())
+
+    Vector[float] ef = Vector[float]()
+    ef.sort()
+    print(ef.len())
+    Vector[float] efs = ef.sorted()
+    print(efs.len())
+    Vector[float] efu = ef.unique()
+    print(efu.len())
+
+    Vector[String] es = Vector[String]()
+    es.sort()
+    print(es.len())
+    Vector[String] ess = es.sorted()
+    print(ess.len())
+    Vector[String] esu = es.unique()
+    print(esu.len())
+
+    # === LENGTH 1 — the boundary the `len > 1` guard sits on ===
+    Vector[int] oi = Vector[int]()
+    oi.push(42)
+    oi.sort()
+    print(oi[0])
+    Vector[int] ois = oi.sorted()
+    print(ois[0])
+    Vector[int] oiu = oi.unique()
+    print(oiu.len())
+    print(oiu[0])
+
+    Vector[String] os = Vector[String]()
+    os.push("solo")
+    os.sort()
+    print(os[0])
+    Vector[String] oss = os.sorted()
+    print(oss[0])
+
+    # === LENGTH 3 — the CONTROL: a wrongly-written guard changes the VALUE ===
+    Vector[int] mi = Vector[int]()
+    mi.push(3)
+    mi.push(1)
+    mi.push(2)
+    mi.sort()
+    print(mi[0])
+    print(mi[1])
+    print(mi[2])
+
+    Vector[float] mf = Vector[float]()
+    mf.push(0.75)
+    mf.push(0.25)
+    mf.push(0.5)
+    Vector[float] mfs = mf.sorted()
+    print(mfs[0])
+    print(mfs[1])
+    print(mfs[2])
+
+    Vector[String] ms = Vector[String]()
+    ms.push("cherry")
+    ms.push("apple")
+    ms.push("banana")
+    ms.sort()
+    print(ms[0])
+    print(ms[1])
+    print(ms[2])
+
+    Vector[int] du = Vector[int]()
+    du.push(2)
+    du.push(1)
+    du.push(2)
+    Vector[int] duu = du.unique()
+    print(duu.len())
+    print(duu[0])
+    print(duu[1])
