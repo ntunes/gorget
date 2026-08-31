@@ -249,6 +249,7 @@
   dependency order; the gauntlet's PURPOSE was the seventh paragraph of its own section, six paragraphs after
   the unbounded-sounding rule it bounds, now second; the section heading was a sentence duplicating its own
   body, now `## Review with a fresh agent — the gauntlet`. Added a reader's map (`MAP-all`/`MAP-orch`/
+- [2026-08-31] `t0801` closed by stale-scan at R48 open, not by new work: the ggdef round-close gate is GREEN at `2d4098bd` (`cargo test -p ggdef --release`, all targets pass). `cow_alias_spelled_view_via_first_getter.gg` is now listed in `EXCLUDE` (`spec/ggdef/tests/corpus_b.rs:318`) and the `.first()`/`last()` phase-0 subset gap it exposed is filed as `t0753` — i.e. disposition (b) of the two the item offered, with the citation Core #9 requires. The item's own reusable finding (corpus membership is glob-minus-exclusions, so a track can redden a lane it never ran) remains unguarded and is R48 burn-down material.
   `MAP-core`) and moved § Task Continuity up so the three orchestrator-only sections form one contiguous block.
   Core #15's SIX QUESTIONS moved to the orchestrator's section, where their own text says they are used.
   **The audience split into two files was considered and REJECTED:** the auto-loaded file is loaded by the MAIN

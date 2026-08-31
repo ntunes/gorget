@@ -73,9 +73,10 @@ it may be an abandoned dead end, but re-deriving it blind would waste the crash 
 
 ### ⚠ STALE-SCAN FIRST, BEFORE ANY SELECTION
 
-- **`t0801`** is titled *"A ROUND-CLOSE GATE IS RED ON THE R47 INTEGRATION BRANCH"* but its `priority` field
-  is **EMPTY**, so it appears in no High listing. The battery is green at close — **verify whether it is still
-  real before acting on it, and either close it or set its priority.**
+- ✅ **`t0801` STALE-SCANNED AND CLOSED at R48 open** (gate green at `2d4098bd`; fixture in `EXCLUDE`
+  `spec/ggdef/tests/corpus_b.rs:318`; subset gap filed as `t0753`). **Its reusable finding survives it and is
+  burn-down material:** `corpus_b` membership is glob-minus-exclusions, so a track can add a `cow_*` fixture
+  and redden a lane it never ran. Nothing guards that yet.
 - **`t0862`** forbids scoping the `slice` work until the method-call materialization site is located.
 - The `??` self-host lane gap cost **4 DRIVER-FAILs** in the close parity run — filed shape, cleanly
   diagnosed, four fixtures' parity behind one feature.
@@ -741,7 +742,6 @@ The Increment-3 `closure_value_ret_type` channel is populated only at the closur
 
 - [`t0304`](todo/t0304.md) **HIGH** — 🆕🚨 [HIGH — ggdef CONTRADICTS RATIFIED D37: it does not run container-element destructors at all; measured 2026-08-22 at…
 - [`t0696`](todo/t0696.md) **MED** — 🆕📐 [MED — ggdef SUBSET GAP: Gorget's Box[T] is not in the definitional oracle's type language at all; filed 2026-08-27 b…
-- [`t0801`](todo/t0801.md) **HIGH** — 🆕🚨 [HIGH — A ROUND-CLOSE GATE IS RED ON THE R47 INTEGRATION BRANCH. Found 2026-08-29 by R47 Track D3a when it merged the…
 ### High
 
 - [`t0305`](todo/t0305.md) **HIGH** — 🆕🐛 [HIGH — Core #9 lane divergence, oracle ACCEPTS 3 programs the language REJECTS; filed 2026-07-31 by Round XX pass 6,…
