@@ -1,0 +1,29 @@
+# REGRESSION (`todo/t0841`, R48 Track D1) — the DICT arm of the same class.
+#
+# `Expr::DictComprehension` is one of the three comprehension arms that walked
+# their body in a single pass instead of the loop back-edge two-pass dance
+# (`src/ir/lowering/liveness.rs`). The loop-invariant owned name `s` sits in
+# the VALUE position here, so the dict's own free runs the string destructor
+# once per stored alias.
+#
+# AXIS CELL: comprehension kind = DICT · body sub-position = VALUE ·
+# source = RANGE · value type = String (heap-forced), key type = int.
+# The int key is deliberate: a HEAP key would additionally trip `todo/t0121`
+# (the dedup-discard leak), which is a different class and would make this cell
+# unable to sit in the ASan sweep.
+#
+# RED-VERIFIED at pre-fix HEAD, both lanes: run rc 134, `free(): double free
+# detected in tcache 2` (C and `--backend=llvm`); `--sanitize` reports
+# `AddressSanitizer: attempting double-free`.
+
+from std.collections import Dict
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Dict[int, String] d = {i: s for i in 0..3}
+    print(d.len())
+    print(d[0])
+    print(d[2])

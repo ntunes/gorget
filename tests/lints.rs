@@ -25719,6 +25719,116 @@ fn clone_meter_check_refuses_an_unattributed_track() {
 /// grep does not know the difference — measured: `grep -rn 'child.kill'` reports
 /// 7 sites tree-wide where there are 6, and `grep -c '\.output()'
 /// tests/integration.rs` reports 28 where there are 27.
+/// The loop back-edge dance in `src/ir/lowering/liveness.rs` has exactly ONE
+/// implementation, and every loop-shaped arm routes through it.
+///
+/// WHY THIS EXISTS. The four STATEMENT loop arms (`while` / `for` / `loop` /
+/// `meta for`|`meta while`) each carried their own hand-rolled copy of the
+/// two-pass dance; the three COMPREHENSION arms carried none, because a prior
+/// round swept the statement forms and stopped at the expression boundary. The
+/// consequence was a miscompile — `[s for i in 0..3]` moved a loop-invariant
+/// owned local on every iteration and the collection's free double-freed one
+/// heap buffer (`todo/t0841`, rc 134 on both backends) — and, in the one
+/// statement arm the sweep also missed, a compiler ICE. Copies drift; this
+/// asserts there are none.
+///
+/// ⚠ THE COUNT ALONE CANNOT CATCH ITS OWN CLASS (Core #6, six-questions Q2).
+/// A call-site count goes red when a call is REMOVED and stays GREEN on the one
+/// regression it exists to prevent: a NEW loop-shaped arm that hand-rolls the
+/// dance beside the helper instead of calling it. rustc exhaustiveness does not
+/// close that either — a new AST variant is satisfied by writing ANY arm. So
+/// the second and third assertions count the DANCE'S OWN INGREDIENT, the
+/// throwaway last-use map that pass 1 writes into and discards: exactly one may
+/// be declared in the file, inside the helper.
+///
+/// ⚠ AND THE THIRD ASSERTION IS NOT REDUNDANT WITH THE SECOND. Keying only on
+/// the identifier `lu_discard` is evadable by rename, and the file contains a
+/// COMMITTED PRECEDENT for exactly that: `seed_on_error_uses` declares the same
+/// throwaway map spelled `discard`. Counting the TYPE spelling catches a
+/// hand-rolled dance whatever its local is called.
+#[test]
+fn liveness_loop_back_edge_single_source() {
+    /// Seven loop-shaped arms: `Stmt::While`, `Stmt::For`, `Stmt::Loop`,
+    /// `Stmt::MetaFor|MetaWhile` (ONE arm), `Expr::ListComprehension`,
+    /// `Expr::SetComprehension`, `Expr::DictComprehension`.
+    ///
+    /// Raising this is only correct for a genuinely NEW loop-shaped AST
+    /// variant, wired THROUGH the helper. Lowering it means an arm stopped
+    /// calling it — check it did not grow its own copy.
+    const EXPECTED_CALL_SITES: usize = 7;
+    /// One `let mut lu_discard` declaration: the one inside the helper.
+    const EXPECTED_LU_DISCARD_DECLS: usize = 1;
+    /// Two throwaway `usize -> String` maps in the whole file: the helper's,
+    /// and `seed_on_error_uses`'s `discard` (a different analysis — the
+    /// `on error:` seed, which discards last-use decisions for its own
+    /// documented reason).
+    const EXPECTED_THROWAWAY_MAPS: usize = 2;
+
+    let path = "src/ir/lowering/liveness.rs";
+    let src = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    // Strip comments and string literals: this file's doc comments MENTION the
+    // helper by name, and an enumeration whose instrument cannot tell code from
+    // prose is not total, it is approximate.
+    let code = strip_rust_comments_and_strings(&src);
+
+    let mut call_sites: Vec<String> = Vec::new();
+    let mut lu_discard_decls: Vec<String> = Vec::new();
+    let mut throwaway_maps: Vec<String> = Vec::new();
+    for (i, line) in code.lines().enumerate() {
+        let t = line.trim_start();
+        if line.contains("walk_loop_two_pass(") && !t.starts_with("fn walk_loop_two_pass") {
+            call_sites.push(format!("  {path}:{}", i + 1));
+        }
+        if t.starts_with("let mut lu_discard") {
+            lu_discard_decls.push(format!("  {path}:{}", i + 1));
+        }
+        if line.contains("FxHashMap<usize, String> = FxHashMap::default()") {
+            throwaway_maps.push(format!("  {path}:{}", i + 1));
+        }
+    }
+
+    assert_eq!(
+        call_sites.len(),
+        EXPECTED_CALL_SITES,
+        "`walk_loop_two_pass` call-site count changed: {} vs expected \
+         {EXPECTED_CALL_SITES}.\n{}\n\n\
+         Every loop-shaped arm — the four statement forms AND the three \
+         comprehensions, which ARE loops — must route through the ONE helper \
+         (Core #4). A NEW arm belongs there too: raise this only after wiring \
+         it through. A REMOVED call lowers it, but check the arm did not grow \
+         its own copy of the dance instead.",
+        call_sites.len(),
+        call_sites.join("\n"),
+    );
+
+    assert_eq!(
+        lu_discard_decls.len(),
+        EXPECTED_LU_DISCARD_DECLS,
+        "`lu_discard` declaration count changed: {} vs expected \
+         {EXPECTED_LU_DISCARD_DECLS}.\n{}\n\n\
+         Pass 1's throwaway last-use map is the dance's own ingredient, so a \
+         SECOND declaration means a second copy of the dance — which the \
+         call-site count above cannot see. Delete the copy and call \
+         `walk_loop_two_pass`.",
+        lu_discard_decls.len(),
+        lu_discard_decls.join("\n"),
+    );
+
+    assert_eq!(
+        throwaway_maps.len(),
+        EXPECTED_THROWAWAY_MAPS,
+        "throwaway `FxHashMap<usize, String>` count changed: {} vs expected \
+         {EXPECTED_THROWAWAY_MAPS}.\n{}\n\n\
+         This is the rename-proof half of the assertion above: `liveness.rs` \
+         already spells one such map `discard` (in `seed_on_error_uses`), so a \
+         hand-rolled dance calling its map anything at all would slip past a \
+         name-keyed count. The two permitted declarations are the helper's and \
+         the `on error:` seed's.",
+        throwaway_maps.len(),
+        throwaway_maps.join("\n"),
+    );
+}
+
 #[test]
 fn process_spawn_deadline_arm_count() {
     /// Every spawn-and-poll loop in the tree lives in `src/proc_guard.rs`.

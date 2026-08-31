@@ -1,0 +1,28 @@
+# CONTROL for `todo/t0841` (R48 Track D1) — GREEN BEFORE AND AFTER.
+#
+# This is the statement-loop spelling of
+# `cow_comprehension_invariant_owned_name.gg`: same invariant owned name, same
+# heap-forced payload, same number of pushes into the same collection type. It
+# was already correct at pre-fix HEAD (run rc 0, `ababab`, ASan-clean, on C and
+# `--backend=llvm`) because `Stmt::For` carried the two-pass back-edge dance the
+# comprehension arms lacked.
+#
+# ⚠ IT IS THE CONTROL THAT RELOCATED THE FIX SITE. If the accumulate had been
+# the defect — the reading `todo/t0841` was filed with — this cell would have
+# been red too. It is green, so the wrong decision came from the liveness
+# PRODUCER one layer up and the fix belongs there (Core #1: fix at the write
+# site, not the read site).
+#
+# A regression here means the shared `walk_loop_two_pass` helper changed the
+# statement arms' behaviour; those three arms are supposed to come out
+# byte-for-byte equivalent.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Vector[String] parts = []
+    for i in 0..3:
+        parts.push(s)
+    print("".join(parts))

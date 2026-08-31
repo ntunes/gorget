@@ -1,0 +1,35 @@
+# REGRESSION (`todo/t0841`, R48 Track D1) — SANITIZER lane. The value-lane twin
+# is `tests/fixtures/cow_comprehension_invariant_owned_name.gg`: same program,
+# different instrument.
+#
+# Both lanes are needed. A value lane cannot tell a double-free from a correct
+# run when the abort lands after the last print, and this program printed
+# `ababab` before aborting.
+#
+# A COMPREHENSION IS A LOOP. `[s for i in 0..3]` evaluates `s` once per
+# iteration exactly as `for i in 0..3: parts.push(s)` does, and the accumulate
+# is a consuming position, so AGENTS.md § "Ownership at Consuming Positions"
+# applies unchanged: *"Borrow, OR owned but live past this call → clone before
+# call"*. The defect was upstream of the accumulate, in the liveness producer:
+# the three comprehension arms of `src/ir/lowering/liveness.rs` recorded
+# last-use in a SINGLE pass while the statement-loop arms did a two-pass
+# back-edge dance, so the loop-invariant `s` was marked dead at its only
+# syntactic use and MOVED on every iteration.
+#
+# RED-VERIFIED at pre-fix HEAD under `--sanitize`:
+#
+#   ERROR: AddressSanitizer: attempting double-free
+#       #1 __gorget_global_dealloc_fn  #2 gorget_string_free
+#       #3 gorget_array_free           #4 main
+#
+# ⚠ THE PAYLOAD MUST BE HEAP-FORCED (`mk("a","b")`, not a literal) or the
+# double free is invisible: a literal is an immortal `.rodata` view with no
+# destructor to run twice.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Vector[String] parts = [s for i in 0..3]
+    print("".join(parts))

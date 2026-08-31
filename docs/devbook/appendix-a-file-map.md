@@ -136,16 +136,16 @@ the remaining files define the IR itself. Module list at `src/ir/mod.rs:1`.
 | `lowering/stmts/for_loops.rs` | ~1,060 | `for` lowering. |
 | `transforms/shared_async.rs` | ~1,010 | Shared/async (spawn, channels) transform. |
 | `lowering/exprs/collections.rs` | ~925 | Collection-literal / index lowering. |
-| `liveness.rs` | ~900 | Liveness analysis (move/last-use). |
 | `printer.rs` | ~880 | GIR pretty-printer. |
 | `mod.rs` | ~855 | GIR module structures. |
+| `lowering/liveness.rs` | ~790 | Liveness analysis (move/last-use), including the loop back-edge two-pass shared by all seven loop-shaped arms. |
 | `lowering/drops.rs` | ~755 | Drop insertion. |
 | `builder.rs` | ~735 | GIR builder helpers. |
 | `lowering/exprs/spawn.rs` | ~730 | Spawn / task lowering. |
 | `tag_ownership.rs` | ~650 | Ownership-tagging pass on GIR locals. |
 | `resources.rs` | ~533 | Resource-table consumer. |
 | `instructions.rs` | ~504 | GIR instruction set. |
-| smaller files | — | `lowering/{exprs/operators,generics/substitute,liveness,exprs/type_reg,exprs/shared}.rs`, `resource_schema.rs` (~160), `abi.rs` (~50). |
+| smaller files | — | `lowering/{exprs/operators,generics/substitute,exprs/type_reg,exprs/shared}.rs`, `resource_schema.rs` (~160), `abi.rs` (~50). |
 
 ## Inside `src/lir/` (LIR)
 

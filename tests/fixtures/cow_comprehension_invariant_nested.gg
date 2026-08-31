@@ -1,0 +1,30 @@
+# REGRESSION (`todo/t0841`, R48 Track D1) — NESTED comprehensions.
+#
+# The inner comprehension is invariant in BOTH loop variables, so the outer
+# comprehension's element expression is itself a loop whose body aliases `s`.
+# Before the fix the inner arm moved `s` on every inner iteration and the outer
+# arm re-entered it on every outer iteration; the two inner vectors and the
+# outer vector then freed one heap buffer four times.
+#
+# AXIS CELL: comprehension kind = LIST × LIST (nested) · body sub-position =
+# ELEMENT · source = RANGE × RANGE · element type = Vector[String].
+#
+# RED-VERIFIED at pre-fix HEAD, both lanes: run rc 134, `free(): double free
+# detected in tcache 2` (C and `--backend=llvm`); `--sanitize` reports
+# `AddressSanitizer: attempting double-free`.
+#
+# ⚠ NOT `todo/t0003`'s nested residual (`[[c for c in w] for w in ws]`, which
+# ICEs at `src/ir/lowering/mod.rs` resource-move validation before codegen).
+# This cell COMPILES on both lanes at pre-fix HEAD and fails at RUN, and its
+# inner body does not mention either loop variable — that invariance is the
+# whole point.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Vector[Vector[String]] rows = [[s for i in 0..2] for j in 0..2]
+    print(rows.len())
+    print("".join(rows[0]))
+    print("".join(rows[1]))

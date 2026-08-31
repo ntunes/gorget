@@ -380,16 +380,59 @@ without callee-signature consultation" class.
 
 The clone-vs-move decision needs "is this the last use of the source?".
 That comes from a backward AST liveness pass,
-`compute_function_liveness` (`src/ir/lowering/liveness.rs:33-37`),
-producing a `last_use_spans: FxHashSet<usize>` of span starts; queried by
-`is_last_use_at` (`context.rs:1028-1033`, conservative — returns false
-when liveness data is absent) and the higher-level `source_live_past`
-(`context.rs:1047-…`). The pass counts *every* identifier read as a use
-regardless of mode (borrow or consume). That conservatism is
+`compute_function_liveness` (`src/ir/lowering/liveness.rs:42`),
+producing `last_use_spans: FxHashMap<usize, String>` — each last-use span
+start mapped to the *name* it is the last use of, because the query is
+"is this use of `name` its last use", which a position-only set cannot
+answer. It is read by `is_last_use_at` (`context.rs:1389`, conservative —
+returns false when liveness data is absent) and the higher-level
+`source_live_past` (`context.rs:1420`). The pass counts *every* identifier
+read as a use regardless of mode (borrow or consume). That conservatism is
 *semantically correct*, not a limitation: the borrow checker (Pass 5,
 Chapter 10) forbids borrow-after-move at compile time, so a consume at
 position P that has any later read — borrow or consume — is correctly not
 a last use.
+
+#### Loops: the back-edge is not visible to a single backward walk
+
+A backward walk over straight-line code sees every future read before it
+reaches the use it is judging. A **loop** breaks that: the body's *first*
+statement is followed, at runtime, by the body's *last* statement on the
+next iteration, and a backward AST walk reaches the first statement with
+nothing after it. So a name the body reads on every iteration looks dead
+on the iteration being judged, and the consuming position moves it — once
+per iteration, out of one slot.
+
+Every loop-shaped form therefore takes **two passes** through one helper,
+`walk_loop_two_pass`. Pass 1 walks the body to collect the set that is
+live *at the back edge* and throws its last-use decisions away, because
+those decisions are the ones that cannot see the back edge. Pass 2 walks
+the body again against that loop-propagated set and records the decisions.
+Pass 2 **unions** its result into the enclosing live set rather than
+overwriting it: a body can run zero times, or a `break` can skip past a
+kill, so a kill inside the body must not delete a name that is live before
+the loop.
+
+The header splits by *execution frequency*, not by syntax. Anything
+re-executed per iteration — a `while` condition, a `for`'s pattern
+re-binding, a comprehension's `if` filter — is walked inside both passes,
+after the body, since a backward walk visits it after what it guards.
+Anything evaluated once before the loop starts — the `for` iterable, the
+comprehension iterable, a `meta for`'s range — is walked by the caller
+after the two passes, against the post-loop live set.
+
+**A comprehension is a loop.** `[e for x in xs]` executes `e` once per
+element exactly as `for x in xs: acc.push(e)` does, and its accumulate is a
+consuming position exactly like `push`, so it takes the same two passes —
+as do `while`, `for`, `loop`, and the compile-time `meta for` / `meta
+while`, whose bodies are real code that liveness sees before meta
+expansion runs. Seven arms, one helper: a per-arm copy of this dance is
+how the comprehension arms drifted away from their statement siblings in
+the first place, so the count is held by
+`liveness_loop_back_edge_single_source` (`tests/lints.rs`), which also
+requires the dance's throwaway last-use map to exist exactly once in the
+file — the half of the guard that can see a *new* arm hand-rolling the
+dance rather than calling the helper.
 
 ## The Phase C validator — shallow copy of a resource is fatal
 

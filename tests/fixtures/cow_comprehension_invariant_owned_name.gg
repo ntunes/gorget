@@ -1,0 +1,48 @@
+# REGRESSION (`todo/t0841`, R48 Track D1) — GRADUATED from
+# `known_gaps/comprehension_invariant_owned_body_double_free.gg`.
+#
+# A COMPREHENSION IS A LOOP. `[s for i in 0..3]` evaluates `s` once per
+# iteration exactly as `for i in 0..3: parts.push(s)` does, and the accumulate
+# is a consuming position, so the compiler contract applies unchanged —
+# AGENTS.md § "Ownership at Consuming Positions": *"Borrow, OR owned but live
+# past this call → clone before call"*.
+#
+# The defect was in the liveness PRODUCER, not the accumulate: the three
+# comprehension arms of `src/ir/lowering/liveness.rs` recorded last-use in a
+# SINGLE pass while the statement-loop arms did a two-pass back-edge dance, so
+# `s` — the loop-invariant body — was marked dead at its only syntactic use and
+# MOVED on every iteration. Three aliases of one heap buffer landed in the
+# vector and the array's free ran the string destructor three times on it.
+#
+# AXIS CELL: comprehension kind = LIST · body sub-position = ELEMENT ·
+# source = RANGE · element type = String (heap-forced).
+#
+# RED-VERIFIED at pre-fix HEAD, both lanes: build rc 0, run rc 134,
+# `free(): double free detected in tcache 2` (C and `--backend=llvm`);
+# under `--sanitize`, `AddressSanitizer: attempting double-free` in
+# `__gorget_global_dealloc_fn` <- `gorget_string_free` <- `gorget_array_free`.
+#
+# ⚠ THE PAYLOAD MUST BE HEAP-FORCED (`mk("a","b")`, not a literal) or the
+# double free is invisible: a literal is an immortal `.rodata` view with no
+# destructor to run twice.
+#
+# ⚠ THE AXIS IS NARROWER THAN "LOOP-INVARIANT BODY" — the discriminator is an
+# already-owned live NAME, not a fresh call result. The control is
+# `cow_comprehension_fresh_mint_control.gg` (`[mk("t","ag") for n in nums]`),
+# green before AND after. ⚠ `known_gaps/map_inline_closure_cross_type_input_mint.gg`
+# is NOT that control: it is a `.map()` fixture and it is RED at HEAD.
+#
+# ⚠ NOT `todo/t0003`. That family's axis is the ACCUMULATOR'S ELEMENT TYPE —
+# the result element minted from the source element's size/destructor — and one
+# of its recorded symptoms crashes in these very frames by DESTRUCTOR
+# INHERITANCE. Here nothing is mis-minted: the element type is right and the
+# values are right, and the program would print the correct answer if it did
+# not free three times. Same frames, different cause.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Vector[String] parts = [s for i in 0..3]
+    print("".join(parts))

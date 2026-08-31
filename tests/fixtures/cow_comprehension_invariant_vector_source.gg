@@ -1,0 +1,23 @@
+# REGRESSION (`todo/t0841`, R48 Track D1) — a VECTOR source, not a range.
+#
+# The iterable is walked AFTER the two-pass call (it is evaluated once, before
+# the loop starts), while the body is walked inside it. This cell pins that the
+# split is by EXECUTION FREQUENCY and not by syntax: swapping a range for a
+# collection changes the source arm of the loop dispatcher and must not change
+# the ownership decision made for the body.
+#
+# AXIS CELL: comprehension kind = LIST · body sub-position = ELEMENT ·
+# source = Vector[int] · element type = String (heap-forced).
+#
+# RED-VERIFIED at pre-fix HEAD, both lanes: run rc 134, `free(): double free
+# detected in tcache 2` (C and `--backend=llvm`); `--sanitize` reports
+# `AddressSanitizer: attempting double-free`.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[int] nums = [1, 2, 3]
+    String s = mk("a", "b")
+    Vector[String] parts = [s for n in nums]
+    print("".join(parts))

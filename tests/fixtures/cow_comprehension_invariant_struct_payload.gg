@@ -1,0 +1,26 @@
+# REGRESSION (`todo/t0841`, R48 Track D1) — a STRUCT element type.
+#
+# The aliased loop-invariant name is a struct with a resource field rather than
+# a bare `String`, so the destructor run once per alias is the struct's
+# generated drop rather than `gorget_string_free` directly. Same liveness
+# producer, one axis value over.
+#
+# AXIS CELL: comprehension kind = LIST · body sub-position = ELEMENT ·
+# source = RANGE · element type = STRUCT with a heap-forced String field.
+#
+# RED-VERIFIED at pre-fix HEAD, both lanes: run rc 134, `free(): double free
+# detected in tcache 2` (C and `--backend=llvm`); `--sanitize` reports
+# `AddressSanitizer: attempting double-free`.
+
+struct Holder:
+    String v
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Holder h = Holder(mk("a", "b"))
+    Vector[Holder] hs = [h for i in 0..3]
+    print(hs.len())
+    print(hs[0].v)
+    print(hs[2].v)
