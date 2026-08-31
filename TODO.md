@@ -33,6 +33,33 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 | **E** | burn-down campaign (owner-directed) | `tests/` | F2 patch |
 | **F** | `t0861` figures DB — schema + clone-meter pilot | `scripts/`, `tests/lints.rs` | `clone_meter.spec` |
 
+### ⚠ R48 SCOUT CORRECTIONS — MEASURED, SUPERSEDE THE FIGURES ABOVE (2026-08-31)
+
+- **THE BURN-DOWN WAS SIZED WITH A BROKEN GREP.** `grep -c '#\[ignore'` counts PROSE. Anchored
+  (`grep -cE '^\s*#\[ignore'`): integration **183** (not 230) · security **28** (not 32).
+  `known_gaps`: **238** top-level `*.gg` · **271** recursive · **327** entries · 12 subdirs — quote the
+  COMMAND, not one of the three numbers.
+  ⇒ **15 of 183 ignored integration tests PASS at HEAD; 0 of 28 security. 6 of the 15 are already
+  adjudicated. THE REAL TARGET IS 9 ROWS, NOT 211.** Regen:
+  `cargo test --test integration -- --ignored --test-threads=4`.
+- **⛔ `AGENTS.md` HAS EXACTLY 0 BYTES OF HEADROOM.** `wc -c AGENTS.md` = 49400 = `AGENTS_MD_SIZE_CEILING`
+  (`tests/lints.rs:8714`), assert is `<=` (`:8793`). **Any track adding one byte reds `agents_md_size_ratchet`
+  on arrival.** This is BY DESIGN — the lint says *"compact a NEIGHBOURING rule rather than raising this."*
+  Every AGENTS.md edit this round is byte-neutral-or-smaller.
+- **✅ `^` IS THE RATIFIED MOVE SIGIL — `AGENTS.md` IS CORRECT, DO NOT "FIX" IT.** D27
+  (`decisions.md:1191`): *"`^` = the MOVE sigil, replacing `!`"*. The ledger's surviving `!` spellings are
+  PRE-D27 entries awaiting the `!`→`^` sweep (`:2241`, `:2499`, `:2816`). A scout reported this inverted;
+  both spellings still parse at HEAD, which is what makes the drift invisible.
+- **`sanitize_sweep.sh:539` uses `find tests/fixtures -maxdepth 1`** ⇒ **all 238 `known_gaps` fixtures are
+  invisible to the leak gate.** A graduated fixture stays green while leaking.
+- **`fmt_suite_layout_census_is_complete` EXISTS** at `tests/integration.rs:55849` (a scout reported it
+  absent, having grepped only `tests/lints.rs`). It is the model for the membership guard.
+- **The figures-DB census is ≈130 (tests) + 14 (src) + ~15 (scripts), not 54** — the item's suffix regex
+  over-counts 22 vendored SQLite macros and misses every `EXPECTED_*` arm pin.
+- **⚠ COLLISION, resolved by swap:** Scout E's parity track owes `RUNTIME_DIFF_MATCH_FLOOR` 1476→**1503**
+  (full run 765.98s rc=0; non-MATCH exactly 151, the frozen ceiling) — and Scout F's figures-DB pilot used
+  that same const as its grow-only row. **F swaps to `C_EMIT_MATCH_FLOOR` or `RESOLVER_MATCH_FLOOR`.**
+
 ⚠ **E and F both touch `tests/lints.rs`** — both scouts were briefed to name their exact edit regions.
 ⚠ **Sequence memory-safety FIRST**: A–D's fixes retire `known_gaps` fixtures and leak-allowlist rows that
 E is adjudicating. E was briefed to list those rows so it does not adjudicate one out from under a track.
