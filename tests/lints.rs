@@ -8270,7 +8270,27 @@ fn sanitize_allowlists_shrink_only() {
     // where each still LEAKS under the round's base compiler `f3feea79` (same
     // instrument, same fixtures, the pinned base binary) — so these five are
     // leaks the round genuinely burned down, not an instrument artefact.
-    const LEAK_CEILING: usize = 300;
+    //
+    // ⚖ 300 -> 304 (R47 close, OWNER RULING 2026-08-31: *"admit with explicit
+    // per-row citations"*). THIS IS THE FIRST UPWARD MOVE OF THIS CEILING, and
+    // the assertion below is `==` precisely so it could not happen quietly.
+    // Read the four `⚖ ADMITTED` blocks in the allowlist before touching this:
+    // `iter_terminal_stmt_positions`, `onceflag_basic`,
+    // `opaque_handle_struct_field_waitgroup`, `sh_primitive_admitted_methods_ok`.
+    //
+    // WHY IT IS NOT THIS ROUND TOLERATING ITS OWN REGRESSION, measured on a
+    // three-cell matrix with pinned binaries rather than argued: all four leak
+    // under the ROUND-OPEN compiler `f3feea79`; none is in THAT commit's
+    // 316-row allowlist; and the 92-line sweep script of that commit — whose
+    // line 55 computes `LEAK` from the same `ERROR: LeakSanitizer` marker —
+    // reports all four as `NEW LEAK(S)` and exits 1. So this gate was ALREADY
+    // RED at round-open and the 2026-08-18 baseline had UNDERCOUNTED (it was a
+    // single run under LSan's DEFAULT root set, which suppresses a leaked
+    // spawn context whenever a worker thread's stale frame still points at it).
+    // Raising the ceiling records debt that already existed. It is NOT a
+    // licence for the next row: an addition with no `⚖ ADMITTED` block is
+    // outside the ruling.
+    const LEAK_CEILING: usize = 304;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -8369,9 +8389,30 @@ fn sanitize_allowlists_shrink_only() {
     // 512 -> 504 and 2259 -> 2247 with the five rows deleted above: they
     // named 8 (fixture, class) pairs tolerating 12 leak records between
     // them, and none carried a `*N+` marker, so the loose count is unmoved.
-    const LEAK_CLASS_PAIRS: usize = 504;
-    const LEAK_RECORDS: usize = 2247;
-    const LEAK_LOOSE_SIGNATURES: usize = 6;
+    //
+    // ⚖ Then 504 -> 509 and 2247 -> 2256 for the four admitted rows: 5 new
+    // (fixture, class) pairs tolerating 9 leak records. Every count is the
+    // MEASURED one from the sweep's own `verdicts.tsv` column 4, not a
+    // rounded-up cushion — the owner admitted debt on the understanding that
+    // it is RECORDED, so a row that tolerates more than it leaks would defeat
+    // the point. (The sweep's `TIGHTEN` advisory says 21 EXISTING rows already
+    // do exactly that, by 85 records; filed on `todo/t0572`.)
+    //
+    // ⚖ And 6 -> 8, which is the admission that needs the most justification
+    // because a `+` switches a row's COUNT CHECK OFF. Both new markers went to
+    // concurrency rows and both are earned by this file's own stated evidence
+    // rule — the sweep's `count-drift` census names them: over 12 consecutive
+    // reps `onceflag_basic` and `opaque_handle_struct_field_waitgroup` report
+    // the SAME mechanism at a DIFFERENT record count (how many spawned workers
+    // had leaked by exit is a race), while the other two admitted rows are
+    // stable over the same 12 reps and are therefore pinned EXACTLY. Pinning
+    // an exact count on a racy row would make this gate flap, which is the
+    // defect it exists to remove. Note both markers land on the SAME mechanism
+    // two existing rows already carry it for (`waitgroup_basic` /
+    // `waitgroup_amp_param`, `__gorget_spawn_worker*2+`).
+    const LEAK_CLASS_PAIRS: usize = 509;
+    const LEAK_RECORDS: usize = 2256;
+    const LEAK_LOOSE_SIGNATURES: usize = 8;
 
     let mut leak_stems: Vec<&str> = Vec::new();
     let (mut pairs, mut records, mut loose) = (0usize, 0usize, 0usize);

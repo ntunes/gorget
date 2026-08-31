@@ -37,14 +37,18 @@
 #     both. `security_safe_no_ubsan` runs on whichever lane `GG_BACKEND`
 #     selects, so the round-close LLVM sweep re-asserts this cell.
 #
-# OMITTED CELL, named rather than hidden: the `_generic` arm
-# (`gorget_generic_compare`, user structs). `Vector[UserStruct].sort()` is not
-# a shape the corpus exercises today and its comparator memcmp's `sizeof(int64_t)`
-# rather than the element, which is a separate question from this one. The arm
-# is guarded by the same single producer as every other arm — the guard is
-# emitted by `qsort_guarded()` in `src/backend/c_lir/emit_types.rs`, which has
-# no per-arm branch — so it cannot regress alone; `emitted_qsort_is_guarded`
-# in tests/lints.rs is what pins that.
+# OMITTED CELLS, counted rather than hidden: this samples 9 of the Rust
+# emitter's 15 arms — which is why the pre-fix run reports exactly 9 findings.
+# The 6 it does not reach are the `_generic` arms (`gorget_generic_compare`,
+# user structs: `Vector[UserStruct].sort()` is not a shape the corpus exercises
+# today, and that comparator memcmp's `sizeof(int64_t)` rather than the element,
+# which is a separate question from this one) and the three UNTYPED arms
+# `gorget_array_sort` / `_sorted` / `_unique`, which have no element suffix and
+# are selected only when the lowerer cannot type the element. All 6 are guarded
+# by the same single producer as the 9 that are sampled — the guard comes from
+# `qsort_guarded()` in `src/backend/c_lir/emit_types.rs`, which has no per-arm
+# branch — so none can regress alone; `emitted_qsort_is_guarded` in
+# tests/lints.rs is what pins that, over every arm in both emitters.
 
 from std.collections import Vector
 
