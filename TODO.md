@@ -271,9 +271,11 @@ to fix the exposed debt."* ⇒ **R47 does not close on the debt it made visible;
 scouting as of 2026-08-30:
 - **F1 — the parity flapper** (owner-directed). Ceiling immovable; root-cause the flap, and count whether it is
   the only one or merely the only one noticed.
-- **F2 — the UBSan `nonnull` class** (`t0780`): an empty-collection sort passes NULL to a `nonnull` parameter;
-  15 emitted sites, one reported fix shape, UBSan ceiling is 0 so it reds the sweep. **Inherited debt made
-  visible by R47's own gate repair, not new breakage.**
+- **F2 — the UBSan `nonnull` class (`t0780`) — ✅ DONE, not by F2.** The round-close sanitize track fixed it
+  while root-causing the red leg: 15 emitted sites in `emit_types.rs` + 12 in `lir_codegen.gg` now route
+  through one `qsort_guarded` producer, the LLVM lane (previously recorded UNVERIFIED) reproduces and is
+  fixed by the same producer, and `t0780` is closed to `DONE.md`. **F2 was never launched — it was lost in
+  the disk crash and never relaunched. Do not open it.**
 - **F3 — the three CRITICAL memory-safety defects R47 FOUND AND DID NOT FIX** (`t0770` adapter mis-size, rc 139,
   which was hidden behind a false green · `t0771` closure-capture UAF with **silent wrong output and no crash to
   trip any gate** · `t0763` generic-equip UAF, name-independent, downstream of A2's landed fix). ⚠ Scout must
