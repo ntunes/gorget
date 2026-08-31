@@ -1,0 +1,26 @@
+# CONTROL for `todo/t0841` (R48 Track D1) — GREEN BEFORE AND AFTER.
+#
+# THE AXIS IS NARROWER THAN "A LOOP-INVARIANT BODY". `[mk("t","ag") for n in
+# nums]` is loop-invariant and heap-forced too, and it was CORRECT at pre-fix
+# HEAD (run rc 0, `tagtagtag`, ASan-clean, on C and `--backend=llvm`): a fresh
+# call result is minted per iteration and owned by the accumulate, so there is
+# nothing to alias. The discriminator is an already-owned live NAME.
+#
+# ⚠ THIS FIXTURE EXISTS BECAUSE THE CLAIM HAD NO HOME. `todo/t0841` and its
+# `known_gaps` repro both cited
+# `known_gaps/map_inline_closure_cross_type_input_mint.gg` as this control. That
+# fixture is RED at HEAD (it prints a pointer instead of `tag` on both lanes)
+# and its wired body is a `.map()` call, not a comprehension — the comprehension
+# claim lived only in its comment. The discriminator survives; the citation did
+# not, so the control is committed here in the shape it is actually claimed in.
+#
+# A regression here means the fix over-corrected: it would have started cloning
+# a value that is already uniquely owned by the collection.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[int] nums = [1, 2, 3]
+    Vector[String] parts = [mk("t", "ag") for n in nums]
+    print("".join(parts))

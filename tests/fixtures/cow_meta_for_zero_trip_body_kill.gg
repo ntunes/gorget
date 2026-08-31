@@ -1,0 +1,38 @@
+# REGRESSION (`todo/t0841`, R48 Track D1) — the `meta for` arm, and the
+# HARDEST cell of the class: this one was a COMPILER ICE, not a runtime abort.
+#
+# `Stmt::MetaFor | Stmt::MetaWhile` is the fourth loop-shaped statement arm.
+# Its pass 2 walked the live set IN PLACE while its three siblings cloned and
+# unioned — the overwrite bug, surviving in the one arm an earlier sweep
+# missed. With a ZERO-TRIP `meta for`, the assignment in the body is a KILL the
+# expansion never emits: walked in place, it deleted `s` from the live set, the
+# `v.push(s)` above it then read `s` as dead and emitted a move, and the
+# `print(s)` below read the moved-out slot.
+#
+# Liveness runs on the UNEXPANDED AST — `compute_function_liveness` is called
+# from the prescan in `src/ir/lowering/functions.rs` ~50 lines BEFORE meta
+# expansion — so a `liveness.rs` comment claiming the meta forms "cannot
+# themselves consume a runtime local" was false; it is corrected in the same
+# commit (Core #14).
+#
+# AXIS CELL: loop kind = `meta for` · trip count = ZERO · body = an
+# ASSIGN-KILL of a name consumed above and read below · name type = String
+# (heap-forced).
+#
+# RED-VERIFIED at pre-fix HEAD, both lanes: `gg build` rc 101,
+# `GIR validation errors: ... local _1 read after MoveZero`, panicking at
+# `src/ir/lowering/mod.rs` (C and `--backend=llvm`). The byte-identical runtime
+# twin `cow_for_zero_trip_body_kill_control.gg` is rc 0 and correct at pre-fix
+# HEAD — that pair is what localises the defect to this one arm.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Vector[String] v = []
+    v.push(s)
+    meta for i in 0..0:
+        s = mk("c", "d")
+    print(s)
+    print(v[0])

@@ -1,0 +1,51 @@
+# KNOWN GAP (`todo/t0121`), BOTH lanes. `gg check` clean, stdout CORRECT, rc 0
+# on a plain build; under `--sanitize` with `detect_leaks=1` it exits 99 with
+# `LeakSanitizer: Direct leak of 6 byte(s) in 2 object(s)`.
+#
+# The COMPREHENSION face of the duplicate-rejection leak. `{s for i in 0..3}`
+# offers the same heap key three times; the set stores one and DECLINES two,
+# and the insert path drops the two it declined on the floor instead of freeing
+# them. Same mechanism as `known_gaps/set_string_dup_elem_leak.gg` (the literal
+# face), which is this item's original repro — this file is the second EVIDENCE
+# cell, not a second filing.
+#
+# ⚠ IT PINS TWO THINGS AT ONCE, AND THE SECOND IS WHY IT EXISTS. The Dict-KEY
+# spelling `{s: i for i in 0..3}` leaks identically (6 B / 2 objects), so the
+# class is the MAP INSERT PATH and not a `Set`-only defect. The class also needs
+# no comprehension at all: a plain `for i in 0..3: out.add(mk("a","b"))` leaks
+# the same 6 B / 2 objects, and a `Dict[String,int]` literal with two duplicate
+# heap keys leaks 3 B / 1 object.
+#
+# ⚠⚠ THIS SHAPE WAS ASan-CLEAN BEFORE `todo/t0841` WAS FIXED, AND THAT WAS AN
+# ACCIDENT — the exact shape of a cell that is green for a reason unrelated to
+# what it tests. The liveness walker used to MOVE one aliased buffer into the
+# set three times, so the two keys dedup rejected were the SAME allocation as
+# the one it stored: nothing was left over to leak. Now that the accumulate
+# correctly CLONES a live source, the rejected clones are real allocations and
+# this pre-existing defect is visible here. Nothing about `t0121`'s mechanism
+# changed; the fix removed what was masking it.
+#
+# ⚠ HEAP-FORCED IS LOAD-BEARING: with a string LITERAL the key is a static
+# `.rodata` view and there is nothing to leak, so a literal-backed probe is a
+# false negative.
+#
+# The live SET-arm regression fixture for the `t0841` liveness fix is
+# `tests/fixtures/cow_set_comprehension_invariant_in_condition.gg`, which runs
+# through the CONDITION with `int` elements precisely so that it pins the
+# liveness decision and not this leak.
+#
+# INTENDED (asserted by the wired `#[ignore]`d test): rc 0, stdout `1` / `true`,
+# and LeakSanitizer-clean under `detect_leaks=1`.
+# Fix at the map insert path: free the key when `gorget_map_put` reports the
+# entry already existed.
+
+from std.collections import Set
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Set[String] out = {s for i in 0..3}
+    print(out.len())
+    print(out.contains(mk("a", "b")))

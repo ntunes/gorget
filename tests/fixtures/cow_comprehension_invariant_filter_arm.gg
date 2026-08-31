@@ -1,0 +1,24 @@
+# REGRESSION (`todo/t0841`, R48 Track D1) — the FILTER arm present.
+#
+# A comprehension with an `if` filter runs its element expression on a SUBSET
+# of the iterations, so the number of aliases and the number of frees differ
+# from the source length. The cell exists because the filter is walked in the
+# shared helper's `tail` slot (called in BOTH passes) rather than after the
+# two-pass call: get that slot wrong and the filter's own uses lose their
+# back-edge protection while the element expression keeps it.
+#
+# AXIS CELL: comprehension kind = LIST · body sub-position = ELEMENT ·
+# filter = PRESENT · source = RANGE · element type = String (heap-forced).
+#
+# RED-VERIFIED at pre-fix HEAD, both lanes: run rc 134, `free(): double free
+# detected in tcache 2` (C and `--backend=llvm`); `--sanitize` reports
+# `AddressSanitizer: attempting double-free`.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Vector[String] parts = [s for i in 0..5 if i % 2 == 0]
+    print(parts.len())
+    print("".join(parts))

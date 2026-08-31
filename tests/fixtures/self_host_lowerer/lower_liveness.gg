@@ -70,8 +70,14 @@ from lower import add_local, add_local_with
 #     function identifier-string count (~500-2000 with shadowing).
 #   • Keys are `int local_id`, so `Vector[bool] live_clone(...)` is a
 #     plain memcpy with no String allocation.
-#   • The pass naturally handles loops (back-edge fixpoint) where the
-#     AST walker is correct-but-conservative.
+#   • The pass naturally handles loops: the back-edge fixpoint IS the
+#     loop handling, and no arm can opt out of it. The AST walker gets
+#     the same property only by routing every loop-shaped arm through
+#     one explicit two-pass helper — `walk_loop_two_pass`, seven call
+#     sites, held there by `liveness_loop_back_edge_single_source`
+#     (`tests/lints.rs`). Where an arm was missing that dance the AST
+#     walker was not conservative, it was WRONG: a comprehension body's
+#     loop-invariant owned name looked dead on its first iteration.
 #
 # Algorithm (standard textbook backward liveness):
 #   USE[B]  = locals read in B before being assigned in B

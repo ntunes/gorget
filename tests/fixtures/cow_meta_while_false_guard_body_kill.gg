@@ -1,0 +1,39 @@
+# REGRESSION (`todo/t0841`, R48 Track D1) — the `meta while` half of the same
+# arm.
+#
+# `Stmt::MetaFor` and `Stmt::MetaWhile` share ONE match arm in
+# `src/ir/lowering/liveness.rs`, so this cell and
+# `cow_meta_for_zero_trip_body_kill.gg` sample the two SURFACE spellings that
+# reach it. `meta while` is a compile-time GUARD (language-reference §19.28):
+# with a false condition the body is emitted zero times, which is the same
+# zero-trip shape the `meta for` cell builds with an empty range. Both are
+# wired because the arm is the thing being pinned and either spelling could
+# grow its own arm later.
+#
+# ⚠ THE FUNCTION IS DELIBERATELY NON-GENERIC. The first draft of this cell put
+# the guard in `probe[T]` with `bitwidth(T) > 64`, and that spelling is GREEN at
+# pre-fix HEAD — measured, rc 0, `ab` / `ab` on both lanes — as is a generic
+# `meta for i in 0..0`. A generic body reaches the lowerer with its meta forms
+# already resolved, so the walker never sees this arm there and the fixture
+# would have been green before AND after: coverage in name only (Core #12).
+# The non-generic spelling is the one that reproduces.
+#
+# AXIS CELL: loop kind = `meta while` · guard = FALSE (`1 > 2`, a plain
+# function) · body = an ASSIGN-KILL of a name consumed above and read below ·
+# name type = String (heap-forced).
+#
+# RED-VERIFIED at pre-fix HEAD, both lanes: `gg build` rc 101,
+# `GIR validation errors: function @main: local _1 read after MoveZero in bb0`
+# (C and `--backend=llvm`).
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Vector[String] v = []
+    v.push(s)
+    meta while 1 > 2:
+        s = mk("c", "d")
+    print(s)
+    print(v[0])

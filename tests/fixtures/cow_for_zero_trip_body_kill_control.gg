@@ -1,0 +1,22 @@
+# CONTROL for `todo/t0841` (R48 Track D1) — GREEN BEFORE AND AFTER.
+#
+# The runtime twin of `cow_meta_for_zero_trip_body_kill.gg`: byte-identical
+# except that `meta for` is spelled `for`. It was already correct at pre-fix
+# HEAD (run rc 0, `ab` / `ab`, ASan-clean, on C and `--backend=llvm`) because
+# `Stmt::For`'s pass 2 cloned and unioned its live set while
+# `Stmt::MetaFor`'s walked it in place.
+#
+# The pair is the measurement that localised the meta-form ICE to that one arm
+# rather than to zero-trip loops in general.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Vector[String] v = []
+    v.push(s)
+    for i in 0..0:
+        s = mk("c", "d")
+    print(s)
+    print(v[0])

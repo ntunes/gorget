@@ -1,0 +1,32 @@
+# REGRESSION (`todo/t0841`, R48 Track D1) — the owned name is consumed INSIDE
+# THE CONDITION, and nowhere else.
+#
+# THE SUB-POSITION AXIS, and the cell that discriminates two candidate fixes.
+# A comprehension's `if` filter runs once per element exactly as the element
+# expression does, so a consuming use inside it needs the same back-edge
+# protection. Route the condition after the two-pass call — the shape the
+# pre-fix code had, walking it first in a single pass — and the element
+# position is protected while this one is not. Here `[s]` is an array-literal
+# element, a consuming position, and `s` is used nowhere else in the function,
+# so the walker sees it dead at the comprehension and moves it once per
+# iteration.
+#
+# The fix puts the condition in the shared helper's `tail` slot, which runs in
+# BOTH passes.
+#
+# AXIS CELL: comprehension kind = LIST · body sub-position = CONDITION ·
+# consuming position inside it = array-literal element · source = RANGE ·
+# name type = String (heap-forced).
+#
+# RED-VERIFIED at pre-fix HEAD, both lanes: run rc 134, `free(): double free
+# detected in tcache 2` (C and `--backend=llvm`); `--sanitize` reports
+# `AddressSanitizer: attempting double-free on ...` with
+# `SUMMARY: AddressSanitizer: double-free`.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Vector[int] out = [i for i in 0..3 if [s].len() > 0]
+    print(out.len())

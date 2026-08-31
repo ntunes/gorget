@@ -1,0 +1,30 @@
+# REGRESSION (`todo/t0841`, R48 Track D1) — the SET arm, third of three.
+#
+# `Expr::SetComprehension` is the last of the three comprehension arms that
+# walked their body in a single pass. It is exercised through the CONDITION
+# sub-position on purpose: a set comprehension whose ELEMENT is the invariant
+# owned name deduplicates down to one entry and then discards the surviving
+# clones on the insert path — `todo/t0121`, a different class — so an
+# element-position cell here would be a leaking fixture pinning someone else's
+# defect. With `int` elements and the consuming use inside the filter, the set
+# stores three distinct values and this cell measures only the liveness
+# decision it is about.
+#
+# AXIS CELL: comprehension kind = SET · body sub-position = CONDITION ·
+# consuming position inside it = array-literal element · source = RANGE ·
+# element type = int, name type = String (heap-forced).
+#
+# RED-VERIFIED at pre-fix HEAD, both lanes: run rc 134, `free(): double free
+# detected in tcache 2` (C and `--backend=llvm`); `--sanitize` reports
+# `AddressSanitizer: attempting double-free`.
+
+from std.collections import Set
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String s = mk("a", "b")
+    Set[int] out = {i for i in 0..3 if [s].len() > 0}
+    print(out.len())
+    print(out.contains(2))

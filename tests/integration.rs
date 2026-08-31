@@ -4480,23 +4480,139 @@ fn known_gap_shared_vector_of_clones_unwritten_slot() {
     run_gg("known_gaps/shared_vector_of_clones_unwritten_slot.gg", "3\n42");
 }
 
-/// KNOWN GAP (C lane): a comprehension whose body is a LOOP-INVARIANT owned
-/// local pushes N aliases of ONE heap buffer, so freeing the vector double-frees
-/// it (rc 134). `s` is live past the accumulate, and AGENTS.md § "Ownership at
-/// Consuming Positions" says a live source at a consuming position must be
-/// CLONED. Filed as `todo/t0841`.
-///
-/// ⚠ The axis is narrower than "loop-invariant body":
-/// `known_gaps/map_inline_closure_cross_type_input_mint.gg` asserts that
-/// `[mk("t","ag") for n in nums]` — also loop-invariant, also a heap String — is
-/// CORRECT. The difference is an already-owned live NAME versus a fresh call
-/// result, so the value is aliased instead of minted per iteration. Not
-/// `todo/t0003`, whose axis is the accumulator's ELEMENT TYPE even though one of
-/// its symptoms crashes in these very frames.
+// ══════════════════════════════════════════════════════════════════════════
+// R48 Track D1 — a comprehension IS a loop (`todo/t0841`, CLOSED)
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Every loop-shaped form needs the back-edge two-pass dance: a name read on a
+// later iteration must not be marked dead on this one. The four STATEMENT arms
+// of `src/ir/lowering/liveness.rs` had it; the three COMPREHENSION arms did
+// not, so a loop-invariant owned name was MOVED on every iteration and N
+// aliases of one heap buffer landed in the collection. The fix routes all
+// SEVEN arms through one `walk_loop_two_pass` helper (Core #4), pinned by
+// `liveness_loop_back_edge_single_source` in `tests/lints.rs`.
+//
+// The axes the cells below cover: comprehension KIND (list · dict · set) ×
+// body SUB-POSITION (element · dict value · condition) × SOURCE (range ·
+// Vector) × element TYPE (String · struct · Vector) × loop SHAPE (nested ·
+// filtered · `meta for` · `meta while`), each against its held-fixed control.
+// Every cell's own header records the RED it was verified against.
+
+/// The headline cell, graduated from
+/// `known_gaps/comprehension_invariant_owned_body_double_free.gg`: run rc 134,
+/// `free(): double free detected in tcache 2` on C AND LLVM at pre-fix HEAD.
+/// The ASan twin is `cow_comprehension_invariant_owned_name` in
+/// `tests/security.rs` — a value lane cannot tell a double-free from a correct
+/// run when the abort lands after the last print.
 #[test]
-#[ignore = "known gap (R47/t0841): a comprehension over a loop-invariant owned local aliases it N times and double-frees; un-ignore when the accumulate clones a live source"]
-fn known_gap_comprehension_invariant_owned_body_double_free() {
-    run_gg("known_gaps/comprehension_invariant_owned_body_double_free.gg", "ababab");
+fn cow_comprehension_invariant_owned_name() {
+    run_gg("cow_comprehension_invariant_owned_name.gg", "ababab");
+}
+
+/// DICT arm, VALUE sub-position. The key is an `int` on purpose: a heap key
+/// would additionally trip `todo/t0121`'s dedup-discard leak, a different
+/// class. RED at pre-fix HEAD: rc 134 on both lanes.
+#[test]
+fn cow_comprehension_invariant_dict_value() {
+    run_gg("cow_comprehension_invariant_dict_value.gg", "3\nab\nab");
+}
+
+/// NESTED comprehensions, the inner one invariant in BOTH loop variables.
+/// RED at pre-fix HEAD: rc 134 on both lanes. Distinct from `todo/t0003`'s
+/// nested residual, which ICEs before codegen; this one compiled and ran.
+#[test]
+fn cow_comprehension_invariant_nested() {
+    run_gg("cow_comprehension_invariant_nested.gg", "2\nabab\nabab");
+}
+
+/// A STRUCT element type, so the destructor run once per alias is the struct's
+/// generated drop rather than `gorget_string_free` directly. RED at pre-fix
+/// HEAD: rc 134 on both lanes.
+#[test]
+fn cow_comprehension_invariant_struct_payload() {
+    run_gg("cow_comprehension_invariant_struct_payload.gg", "3\nab\nab");
+}
+
+/// The FILTER arm present, so the alias count and the source length differ.
+/// RED at pre-fix HEAD: rc 134 on both lanes.
+#[test]
+fn cow_comprehension_invariant_filter_arm() {
+    run_gg("cow_comprehension_invariant_filter_arm.gg", "3\nababab");
+}
+
+/// A Vector source rather than a range — a different arm of the loop
+/// dispatcher, the same ownership decision for the body. RED at pre-fix HEAD:
+/// rc 134 on both lanes.
+#[test]
+fn cow_comprehension_invariant_vector_source() {
+    run_gg("cow_comprehension_invariant_vector_source.gg", "ababab");
+}
+
+/// The SUB-POSITION cell: the owned name is consumed inside the CONDITION and
+/// nowhere else. It discriminates two candidate fixes — route the condition
+/// after the two-pass call and the element position is protected while this one
+/// is not. RED at pre-fix HEAD: rc 134 on both lanes.
+#[test]
+fn cow_comprehension_invariant_in_condition() {
+    run_gg("cow_comprehension_invariant_in_condition.gg", "3");
+}
+
+/// The SET arm, third of the three comprehension arms, exercised through the
+/// condition so the cell does not also trip `todo/t0121`. RED at pre-fix HEAD:
+/// rc 134 on both lanes.
+#[test]
+fn cow_set_comprehension_invariant_in_condition() {
+    run_gg("cow_set_comprehension_invariant_in_condition.gg", "3\ntrue");
+}
+
+/// The `meta for` arm — the HARDEST cell of the class, and a COMPILER ICE
+/// rather than a runtime abort. Its pass 2 walked the live set IN PLACE while
+/// its three siblings cloned and unioned. RED at pre-fix HEAD: `gg build`
+/// rc 101, `local _1 read after MoveZero`, GIR validation panic, on C AND LLVM.
+#[test]
+fn cow_meta_for_zero_trip_body_kill() {
+    run_gg("cow_meta_for_zero_trip_body_kill.gg", "ab\nab");
+}
+
+/// The `meta while` spelling of the same shared arm (a compile-time GUARD with
+/// a false condition, language-reference §19.28). RED at pre-fix HEAD:
+/// `gg build` rc 101, `read after MoveZero`, on C AND LLVM.
+#[test]
+fn cow_meta_while_false_guard_body_kill() {
+    run_gg("cow_meta_while_false_guard_body_kill.gg", "ab\nab");
+}
+
+/// CONTROL — GREEN BEFORE AND AFTER. The statement-loop spelling of the
+/// headline cell. It is what relocated the fix site: if the accumulate had been
+/// the defect this would have been red too (Core #1). A red here means the
+/// shared helper changed the statement arms, which are supposed to come out
+/// byte-for-byte equivalent.
+#[test]
+fn cow_loop_invariant_owned_name_push_control() {
+    run_gg("cow_loop_invariant_owned_name_push_control.gg", "ababab");
+}
+
+/// CONTROL — GREEN BEFORE AND AFTER. A fresh call result is minted per
+/// iteration and owned by the accumulate, so there is nothing to alias: the
+/// axis is an already-owned live NAME, not "a loop-invariant body". A red here
+/// means the fix over-corrected into cloning a uniquely-owned value.
+///
+/// ⚠ This fixture exists because the claim had no home. `todo/t0841` cited
+/// `known_gaps/map_inline_closure_cross_type_input_mint.gg` as this control;
+/// that fixture is RED at HEAD and its wired body is a `.map()` call, not a
+/// comprehension.
+#[test]
+fn cow_comprehension_fresh_mint_control() {
+    run_gg("cow_comprehension_fresh_mint_control.gg", "tagtagtag");
+}
+
+/// CONTROL — GREEN BEFORE AND AFTER. The runtime twin of
+/// `cow_meta_for_zero_trip_body_kill`, byte-identical but for the `meta`
+/// keyword. The pair localised the ICE to the meta arm rather than to
+/// zero-trip loops in general.
+#[test]
+fn cow_for_zero_trip_body_kill_control() {
+    run_gg("cow_for_zero_trip_body_kill_control.gg", "ab\nab");
 }
 
 /// KNOWN GAP (both real backends): a `Shared[T]` passed to a PLAIN function is
@@ -8515,6 +8631,48 @@ fn set_string_dup_elem_leak() {
 2
 aa
 bb",
+    );
+}
+
+/// KNOWN GAP (`todo/t0121`) — the COMPREHENSION face of the duplicate-rejection
+/// leak, and the EVIDENCE that the class is the map insert path rather than a
+/// `Set`-literal defect. `{s for i in 0..3}` offers the same heap key three
+/// times; the set stores one and declines two, and the two it declined are
+/// dropped on the floor. `LeakSanitizer: Direct leak of 6 byte(s) in 2
+/// object(s)`, rc 99, while a plain build prints the right answer at rc 0 on
+/// both backends.
+///
+/// ⚠⚠ THIS SHAPE WAS ASan-CLEAN UNTIL `todo/t0841` WAS FIXED, AND THAT WAS AN
+/// ACCIDENT — a cell green for a reason unrelated to what it tests (Six
+/// Questions Q6). The liveness walker used to MOVE one aliased buffer into the
+/// set three times, so the keys dedup rejected were the SAME allocation it
+/// stored and nothing was left over to leak. Now that the accumulate correctly
+/// CLONES a live source, the rejected clones are real allocations. `t0121`'s
+/// mechanism did not change; the fix removed what was masking it.
+///
+/// ⚠ It is `t0121`'s EVIDENCE, not a second filing — the Dict-KEY spelling
+/// leaks identically, and so does a plain `for i in 0..3: out.add(mk("a","b"))`
+/// with no comprehension anywhere, which is what establishes the axis. The live
+/// SET-arm regression fixture for the `t0841` liveness fix is
+/// `cow_set_comprehension_invariant_in_condition.gg`, which runs through the
+/// CONDITION with `int` elements precisely so it pins liveness and not this.
+///
+/// Un-ignore + promote out of `known_gaps/` when the rejected key is freed.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0121): a Set comprehension over a loop-invariant \
+heap element leaks every key dedup rejects -- LeakSanitizer reports `Direct \
+leak of 6 byte(s) in 2 object(s)`, rc 99, while stdout is correct (1 / true) \
+and detect_leaks=0 exits 0. The COMPREHENSION face of the literal defect \
+pinned by set_string_dup_elem_leak; the Dict-KEY spelling and a plain \
+`for i in 0..3: out.add(mk(\"a\",\"b\"))` leak identically, so the class is \
+the map insert path. Fixture: tests/fixtures/known_gaps/\
+set_comprehension_dup_elem_leak.gg. TODO.md."]
+fn set_comprehension_dup_elem_leak() {
+    assert_gg_sanitize_clean(
+        "known_gaps/set_comprehension_dup_elem_leak",
+        "\
+1
+true",
     );
 }
 
