@@ -899,6 +899,52 @@ shared. If they shared a harness the shipping tests do not use, you have measure
 harness. The finding is not wrong yet — but it is unverified, and the cheapest way to
 verify it is to make the failure appear somewhere the project already trusts.
 
+## A class statement reached by resemblance is the defect that survives four reviews
+
+One R47 track produced four consecutive blocking findings, one per review pass, and every one was the
+same error wearing different clothes: **a two-point correlation promoted to a mechanism, where the two
+points differed on several axes and only one of them was named.**
+
+| claim | refuted by | axis named | axis that mattered |
+|---|---|---|---|
+| the iterator binding-drop work owns this leak | hoisting one `.iter()` out of a `while` condition | the fixture's name and its leak frames | the statement *position* |
+| a call result temp leaks | a plain user function in the same position is clean | it was a call | — |
+| a *builtin method's* result temp leaks | `to_upper` and `join` are clean | it was a builtin method | which lowering arm |
+| the producer's declared return type is the discriminator | a clean member of the class; and `typedef Str GorgetString` | the C declaration | which lowering arm |
+
+Two properties make this worse than an ordinary wrong guess.
+
+**It looks compliant.** Every one of those statements cited real measurements and named a real filed item.
+The fourth was replicated into five places including a durable `todo/` record, and its un-ignore
+instruction — *"when the producers are declared to return what they actually return"* — had degenerated
+into a **literal no-op edit**, because the two C spellings are the same type. A reader would have rewritten
+declarations that were already correct.
+
+**"Probe a non-X first" does not save you.** The executor adopted that rule after the first finding and
+committed the second in the same commit. He *had* counter-examples both times; they simply did not vary the
+axis that mattered. Passes 3 and 4 missed the **same** axis, because the class statements were being
+generated from the C runtime text — downstream of every decision that actually determines the behaviour.
+
+**The rule that does work, and it is one grep:**
+
+> **Before stating a class from a C-runtime observation, find the Rust site that emits the call and read
+> what it does with the result.**
+
+Applied here it lands immediately on the real candidate: the `debug`/`display` lowering arm has **zero**
+`register_local` calls, while the structurally identical `bin`-format arm registers with the comment
+*"Register the conversion result at its birth… Print-temp leak class"* — Core #3 verbatim — and is clean.
+
+**And when the class cannot be stated, say so.** The round's final commit on that track struck the root
+cause from all five sites, kept the (correct, valuable) measurement table, and marked the mechanism
+**UNRESOLVED** with its two candidate sites. A durable record carrying an honest gap is worth more than one
+carrying a confident wrong mechanism: the first costs the next person an investigation, the second costs
+them a wrong fix.
+
+⊕ The same shape appears outside code. This round also shipped a convergence figure of `net −179` that was
+a **file count compared against an open-gap count** — two different metrics, 228 phantom closures — caught
+only because the owner asked whether that many fixtures had really graduated. Resemblance between two
+numbers is the same failure as resemblance between two leaks.
+
 ## The playbook in one paragraph
 
 When a fix feels complex, you are at the wrong layer: trace the buggy read to
