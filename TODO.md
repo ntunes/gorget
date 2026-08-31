@@ -178,6 +178,22 @@ hard case) and **must** include a non-shrink-only polarity. Sequencing recorded 
 | `t0850` `parent_dir` per-char clone | **R49** — MED perf; already declared as the clone meter's path-length input, so nothing is blocked on it. |
 | `t0844` Ctrl-C · `t0842`(A) `wait_timeout` | **STAY PARKED** — no R48 track touches them; the rule is ask when the work is SCHEDULED. |
 
+### ✅ D22 MIGRATION STOPPED + LINT SUSPENDED (owner-directed 2026-08-31, DONE this session)
+
+Owner: *"suspend the lint now, and open the soundness fix in R49"* · *"Stop the canonical-spelling
+migration too. That is not urgent."*
+- **`tests/lints.rs::no_dot_slice_after_d22` is `#[ignore]`d**, both reasons inline. Suite green:
+  **197 passed / 0 failed / 1 ignored.** ⚠ **Track E-B1 must NOT burn this row down** — it is deliberate.
+- **The 205-site canonical-spelling migration is WITHDRAWN** from `todo/t0850` and `todo/t0316`; their
+  clone-reclaim MEASUREMENT is explicitly preserved (it is **soundness, not waste**).
+- ▶ **`t0871` (the `s[a:b]` soundness fix) opens in R49**, not R48 — the round is full.
+⚠ **Do NOT restore the ceiling when the fix lands:** D22 Rider 2 keeps `.slice()`/`.substring()` as
+documented aliases **permanently**, so whether a ceiling is wanted at all is a **separate OWNER ASK**.
+⭐ **THE LESSON WORTH KEEPING:** a `CEILING = 0` shrink-only ratchet was enforcing a clause the owner had
+withdrawn **the same day**, and driving 205 sites from a CORRECT spelling onto a SILENTLY BROKEN one under
+a *"MEASURED FREE"* banner. It was free because it did not do the work. **A guard is only as good as the
+ruling it encodes — re-verify the ruling, not just the count.**
+
 ### ⛔ OWED ROUND-OPEN ACTION — THE CLONE BAND ANCHORS WERE NOT RE-SEEDED AT R48 OPEN
 
 **This is the ORCHESTRATOR's omission, not a track's.** `bash scripts/clone_meter_check.sh --anchor-age`
