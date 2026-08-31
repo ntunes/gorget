@@ -12,7 +12,18 @@ directive <name>
 directive <name>=<value>
 ```
 
-Directives must appear before any code in the file.
+Directives must appear before any code in the file. The name and the value are
+both identifiers, and `=` is the only way to attach a value — `directive
+scheduler single` is a syntax error, not a second spelling of
+`directive scheduler=single`.
+
+**The set below is closed.** A name that is not on it is rejected, and so is a
+value outside the set the directive admits: `directive frobnicate`,
+`directive trace=yes` and `directive scheduler=Pool` are all errors (the
+scheduler modes are lower-case). A compiler that quietly ignored an unrecognised
+directive would turn a typo into a silent change of behaviour — the scheduler
+one in particular decides how an `async` program interleaves. Lints do not go
+here either: they have their own `lint` keyword.
 
 ---
 

@@ -1,0 +1,32 @@
+# DEFERRED-GAP FIXTURE (#[ignore]'d — the self-host renders every ITEM-level
+# diagnostic at line 1, column 1, because no `Item` variant in its AST carries a
+# span; see todo/t0902).
+#
+# The VERDICT is right on both lanes — `directive scheduler=bogus` is refused —
+# so this is not a lane divergence. What differs is WHERE the compiler says the
+# problem is. Rust gg points at the directive (`Directive.span`, merged in
+# `src/parser/mod.rs::parse_directive`). The self-host points at line 1, which in
+# this file is a comment, because `validate_directives` has only
+# `IDirective(String, String)` to work with and passes `Span(0, 0)`.
+#
+# MEASURED at HEAD on the self-host lowerer driver:
+#   error[E_UnknownDirective]: unknown directive `scheduler=bogus`
+#     ┌─ …/sh_directive_diagnostic_points_at_line_one.gg:1:1
+#   1 │ # DEFERRED-GAP FIXTURE (#[ignore]'d — the self-host renders every ITEM-level
+#     │ ^
+#
+# The blank padding below is deliberate and load-bearing: it puts the directive
+# well away from line 1, so a diagnostic that lands on line 1 cannot be mistaken
+# for a correct one. Do not "tidy" it.
+#
+# The INTENDED state is the caret on the `directive` line itself — which is what
+# the `#[ignore]`d `sh_directive_diagnostic_points_at_the_directive` asserts, and
+# why it is RED at HEAD. Un-ignore it and promote this fixture out of
+# `known_gaps/` the round the self-host AST carries item spans.
+
+
+
+directive scheduler=bogus
+
+void main():
+    print("REACHED — the directive was not validated")

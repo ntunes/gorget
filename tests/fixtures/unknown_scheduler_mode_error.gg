@@ -1,23 +1,27 @@
 # Test: `directive scheduler=<mode>` REJECTS an unknown mode (E_UnknownDirective).
 #
-# The valid set is {pool, thread, inline, single} — `src/semantic/mod.rs`
-# validates it, and that rejection is what makes the Rust lowerer's `_ => {}`
-# arm (`src/ir/lowering/mod.rs`) unreachable. Without it a typo'd mode would
-# compile and run under the default pool scheduler, which for an async program
-# silently changes the interleaving.
+# The valid set is {pool, thread, inline, single}, CASE-SENSITIVE. Rust gg
+# validates it in `src/semantic/mod.rs`; the self-host validates it in
+# `validate_directives` (`self_host_typechecker/resolve.gg`, twinned in
+# `self_host_resolver/resolve.gg`), and the two name lists are compared
+# mechanically by `directive_name_sets_agree_across_lanes` in tests/lints.rs.
+# That rejection is what makes each lowerer's unhandled-mode arm unreachable —
+# `src/ir/lowering/mod.rs`'s `_ => {}` and `self_host_lowerer/lower.gg`'s missing
+# `else`. Without it a typo'd mode compiles and runs under the default pool
+# scheduler, which for an async program silently changes the interleaving.
 #
-# ⚠ THIS IS A ONE-LANE PIN, AND THE OTHER LANE IS BROKEN. The self-host
-# performs NO directive validation at all (`self_host_check/resolve.gg`'s
-# IDirective arm is a bare `pass`; no self-host source mentions
-# E_UnknownDirective), so its lowerer's missing `else` IS a live Core #10
-# silent drop — filed as `todo/t0825`. Measured 2026-08-30: the self-host emits,
-# compiles and RUNS this very file, printing the line below, rc 0 at every
-# stage. Graduate this fixture to a two-lane pin the round `t0825` lands; until
-# then, do not read a green `check_gg_fails` here as cross-lane coverage.
+# ⊕ THIS IS NOW A TWO-LANE PIN. It was a one-lane pin whose green told you
+# nothing about the other lane: the self-host performed NO directive validation
+# at all and compiled, linked and RAN this very file, rc 0 at every stage. The
+# self-host half is `sh_rejects_unknown_scheduler_mode` (over
+# `sh_reject_unknown_scheduler_mode.gg`, an async program where the wrong
+# scheduler is observable), and the same cell is adjudicated on all three
+# production lanes — C, LLVM and self-host — by
+# `spectests/run/reject_directive_scheduler_unknown_value.gg`.
 #
-# The sibling `unknown_directive_error.gg` pins an unknown directive NAME; this
-# one pins an unknown directive VALUE, which is a separate arm of the same
-# validation and had no fixture.
+# The sibling `spectests/run/reject_directive_unknown_name.gg` pins an unknown
+# directive NAME; this one pins an unknown directive VALUE, a separate arm of the
+# same validation.
 
 directive scheduler=bogus
 

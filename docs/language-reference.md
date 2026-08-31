@@ -5270,6 +5270,19 @@ name      = IDENT { "-" IDENT } ;
 value     = IDENT ;
 ```
 
+`=` is optional, but it is the only way to attach a value: `directive scheduler
+single` is a syntax error, not a second spelling of `directive scheduler=single`.
+The name and the value are both identifiers, so `directive 42` and
+`directive trace=1` are syntax errors too.
+
+The directive set is **closed**, and both the names and each directive's values
+are validated. An unrecognised name (`directive frobnicate`), a value on a
+directive that takes none (`directive trace=yes`), a missing `scheduler` value,
+and a value outside a directive's admitted set (`directive scheduler=Pool` — the
+modes are lower-case) are all rejected with `E_UnknownDirective`. Ignoring an
+unrecognised directive would make a typo a silent change of behaviour, and for
+`scheduler` that behaviour is an `async` program's observable interleaving.
+
 **Available directives:**
 
 | Directive                          | Equivalent CLI flag   | Effect                                    |

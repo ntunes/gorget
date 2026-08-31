@@ -1,0 +1,24 @@
+# Test: an unknown item ATTRIBUTE is rejected (E_UnknownDirective).
+#
+# ⚠ THE NAME IS THE CLAIM. This fixture was called `unknown_directive_error.gg`
+# and pinned nothing of the kind: `@nonexistent` is an ATTRIBUTE, checked by
+# `validate_attributes` (`src/semantic/mod.rs`) against the allowlist
+# {derive, tag, should_panic, skip, timeout}. It shares only the ERROR CODE with
+# the `directive` validation two screens above it — a different validator, a
+# different surface, a different grammar. The real unknown-directive-NAME cell is
+# `spectests/run/reject_directive_unknown_name.gg`, pinned on all three lanes
+# (Core #12: a fixture's name is a claim about scope — make it true or narrow it).
+#
+# ⚠ THIS IS A ONE-LANE PIN and the other lane is a live gap, deliberately left
+# open: the self-host performs no attribute validation, so it still ACCEPTS this
+# program (measured: rc 0, `int main(` emitted). That is a DIFFERENT class from
+# the directive validation this round closed — a different validator over a
+# different item surface — and it is filed rather than absorbed. Do not read a
+# green `check_gg_fails` here as cross-lane coverage.
+
+@nonexistent
+struct Foo:
+    int x
+
+void main():
+    print("hello")
