@@ -25787,6 +25787,10 @@ fn process_spawn_deadline_arm_count() {
     );
 }
 
+// ───────────────── the loop back-edge dance (R48 D1) ──────────────────
+// One guard over one instrument. Not part of the subprocess-harness trio
+// above: different file, different class, its own rationale below.
+
 /// The loop back-edge dance in `src/ir/lowering/liveness.rs` has exactly ONE
 /// implementation, and every loop-shaped arm routes through it.
 ///
@@ -25805,27 +25809,32 @@ fn process_spawn_deadline_arm_count() {
 /// regression it exists to prevent: a NEW loop-shaped arm that hand-rolls the
 /// dance beside the helper instead of calling it. rustc exhaustiveness does not
 /// close that either — a new AST variant is satisfied by writing ANY arm. So
-/// the second and third assertions count the DANCE'S OWN INGREDIENT, the
-/// throwaway last-use map that pass 1 writes into and discards.
+/// assertions two, three and four count the DANCE'S OWN INGREDIENTS.
 ///
-/// ⚠ THE THIRD ASSERTION COUNTS THE CONSTRUCTION, NOT THE TYPE ANNOTATION, AND
-/// THAT DISTINCTION WAS BOUGHT WITH A LIVE ESCAPE. Assertion two keys on the
-/// identifier `lu_discard`, which is evadable by rename — and this very file
-/// carries the precedent, since `seed_on_error_uses` spells the same throwaway
-/// map `discard`. The first version of assertion three answered that by
-/// counting the annotated spelling `FxHashMap<usize, String> = ...`, and an
-/// output review broke it in one line: a complete hand-rolled dance whose local
-/// is `let mut d = FxHashMap::default();` — type ELIDED — left all three
-/// assertions GREEN. The rename demo had proved only the rename case. Counting
-/// `FxHashMap::default()` catches both spellings, because a map has to be
-/// constructed however it is declared.
+/// ⚠ ASSERTION FOUR EXISTS BECAUSE ASSERTIONS TWO AND THREE EACH SHIPPED AS A
+/// NAMED HOLE AND EACH WAS THEN WALKED THROUGH. Two keys on the identifier
+/// `lu_discard` and is evadable by RENAME — this file carries the precedent,
+/// since `seed_on_error_uses` spells the same throwaway map `discard`. Three
+/// answered that by counting the annotated type, and an output review walked
+/// through it in one line with `let mut d = FxHashMap::default();`, the type
+/// ELIDED. Counting the CONSTRUCTION closed that, and a second review walked
+/// through THAT with `let mut discard_lu = lu.clone();` — same file, same map
+/// type, no rename, no construction, all three assertions GREEN. It is
+/// arguably the most natural spelling of all, since `lu` is already in scope.
 ///
-/// ⚠ It is still not total, and the honest list of what it cannot see is
-/// short: a `Default::default()` at an annotated binding, or a dance built on
-/// some other map type. Those need the call-site count and assertion two to
-/// stay useful — three cheap layers, none of them alone sufficient. What no
-/// layer replaces is reading the arm: a new loop-shaped form belongs in the
-/// helper.
+/// Two recurrences of one class in one guard is the point at which naming the
+/// next hole stops being honest and starts being a habit (Core #6). Assertion
+/// four therefore counts what the dance CANNOT DO WITHOUT, at any spelling:
+/// `live.clone()`. Two passes over the live set need two clones of it, so
+/// every hand-rolled dance moves the count by exactly two whatever it calls
+/// its map, however that map is typed, and whether it is constructed, cloned,
+/// or obtained some way nobody has thought of yet. Measured: all three earlier
+/// escapes AND the `lu.clone()` one read 11 against a baseline of 9.
+///
+/// The four are layered, not redundant — one names the arm, one names the
+/// local, one the construction, one the structure — and only the last is about
+/// a property the class cannot shed. What no layer replaces is reading the
+/// arm: a new loop-shaped form belongs in the helper.
 #[test]
 fn liveness_loop_back_edge_single_source() {
     /// Seven loop-shaped arms: `Stmt::While`, `Stmt::For`, `Stmt::Loop`,
@@ -25843,6 +25852,12 @@ fn liveness_loop_back_edge_single_source() {
     /// seed's `discard`, and the helper's `lu_discard`. A fourth is a fourth
     /// map, and in this file that means a second copy of the dance.
     const EXPECTED_MAP_CTORS: usize = 3;
+    /// Nine `live.clone()` sites: the helper's two (one per pass) and the seven
+    /// branch-union saves (`if` / `match` / `meta if` / `meta match` arms).
+    /// This is the assertion that retires the class rather than naming its next
+    /// costume: a second two-pass dance needs two more clones of the live set
+    /// no matter how it spells its throwaway map, so it reads 11.
+    const EXPECTED_LIVE_CLONES: usize = 9;
 
     let path = "src/ir/lowering/liveness.rs";
     let src = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
@@ -25855,6 +25870,8 @@ fn liveness_loop_back_edge_single_source() {
     let mut lu_discard_decls: Vec<String> = Vec::new();
     let mut map_ctors: Vec<String> = Vec::new();
     let mut map_ctor_count = 0usize;
+    let mut live_clones: Vec<String> = Vec::new();
+    let mut live_clone_count = 0usize;
     for (i, line) in code.lines().enumerate() {
         let t = line.trim_start();
         if line.contains("walk_loop_two_pass(") && !t.starts_with("fn walk_loop_two_pass") {
@@ -25867,6 +25884,11 @@ fn liveness_loop_back_edge_single_source() {
         if n > 0 {
             map_ctor_count += n;
             map_ctors.push(format!("  {path}:{} (x{n})", i + 1));
+        }
+        let c = line.matches("live.clone()").count();
+        if c > 0 {
+            live_clone_count += c;
+            live_clones.push(format!("  {path}:{} (x{c})", i + 1));
         }
     }
 
@@ -25914,7 +25936,30 @@ fn liveness_loop_back_edge_single_source() {
         map_ctor_count,
         map_ctors.join("\n"),
     );
+
+    assert_eq!(
+        live_clone_count,
+        EXPECTED_LIVE_CLONES,
+        "`live.clone()` count changed: {} vs expected {EXPECTED_LIVE_CLONES}.\n{}\n\n\
+         THIS IS THE ASSERTION THAT RETIRES THE CLASS, so read it before \
+         adjusting it. The three above name a thing the dance HAS — an arm, a \
+         local, a constructor — and each was walked through by respelling that \
+         thing (`lu_discard`->`discard`, an elided type, `lu.clone()` instead of \
+         a fresh map). This one counts what two passes over a live set cannot \
+         do without: two clones of it. A new hand-rolled dance reads 11 whatever \
+         it calls its map. Nine is the helper's two plus the seven branch-union \
+         saves in `if`/`match`/`meta if`/`meta match`. A genuine new BRANCH form \
+         raises it by one; a new loop-shaped arm should raise it by ZERO, \
+         because it belongs in `walk_loop_two_pass`.",
+        live_clone_count,
+        live_clones.join("\n"),
+    );
 }
+
+// ──────────────── the subprocess harness (R47 F4a), continued ───────────────
+// `strip_rust_comments_and_strings` and its self-test serve BOTH sections: the
+// spawn census above needs it, and the loop-dance guard reuses it for the same
+// reason (an enumeration that cannot tell code from prose is approximate).
 
 /// Strip `//` and `/* */` comments (nested) and string/char literals, replacing
 /// them with blanks so line numbers survive.

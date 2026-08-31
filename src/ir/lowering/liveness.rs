@@ -247,10 +247,15 @@ fn on_error_bodies_in<'a>(stmt: &'a Stmt) -> Vec<&'a [Spanned<Stmt>]> {
 /// after this returns, on the post-loop `live` set.
 ///
 /// The seven call sites are pinned by `liveness_loop_back_edge_single_source`
-/// (`tests/lints.rs`), which also asserts that this function holds the only
-/// throwaway last-use map in the file — a count-only lint would stay green on
-/// the one regression it exists to prevent, a NEW loop-shaped arm hand-rolling
-/// the dance (Core #6, six-questions #2).
+/// (`tests/lints.rs`). A count-only lint would stay green on the one
+/// regression it exists to prevent — a NEW loop-shaped arm hand-rolling the
+/// dance rather than calling this — so three further assertions count the
+/// dance's own ingredients: the `lu_discard` declaration, the map
+/// CONSTRUCTION, and `live.clone()`. The last is the one that retires the
+/// class: two passes over the live set need two clones of it, so a second
+/// dance shows up whatever it calls its throwaway map and however that map is
+/// obtained. Adding a loop-shaped arm here should move NONE of the four
+/// (Core #6, six-questions #2).
 fn walk_loop_two_pass<'a>(
     live: &mut FxHashSet<&'a str>,
     lu: &mut FxHashMap<usize, String>,

@@ -429,10 +429,13 @@ while`, whose bodies are real code that liveness sees before meta
 expansion runs. Seven arms, one helper: a per-arm copy of this dance is
 how the comprehension arms drifted away from their statement siblings in
 the first place, so the count is held by
-`liveness_loop_back_edge_single_source` (`tests/lints.rs`), which also
-requires the dance's throwaway last-use map to exist exactly once in the
-file — the half of the guard that can see a *new* arm hand-rolling the
-dance rather than calling the helper.
+`liveness_loop_back_edge_single_source` (`tests/lints.rs`). A count of
+call sites alone cannot see the regression that matters — a *new* arm
+hand-rolling the dance beside the helper rather than calling it — so the
+guard also counts the dance's own ingredients, ending at the one no
+spelling can shed: two passes over the live set need two clones of it,
+so a second dance is visible in the `live.clone()` count however it is
+written.
 
 ## The Phase C validator — shallow copy of a resource is fatal
 
