@@ -140,6 +140,26 @@ rows the burn-down tracks are adjudicating.
 blocks nobody's start; migration is absorbed by the burn-down tracks. Pilot **must** be the clone meters (the
 hard case) and **must** include a non-shrink-only polarity. Sequencing recorded in the item.
 
+### ✅ R47-QUEUE DISPOSITION (owner asked 2026-08-31: what fits R48, what waits) — TOTAL, per row
+
+| item | disposition |
+|---|---|
+| `t0770` `t0771` `t0763` `t0840` `t0841` `t0772` | **IN** — Tracks A/B/C/D1/D2 |
+| `t0801` | **CLOSED** at R48 open (stale; gate green) |
+| `t0861` figures DB | **IN** — Track F (owner: "should go in early") |
+| burn-down campaign | **IN** — Tracks E-B1/B2/B3 (Scout E's split) |
+| `t0304` ggdef hygiene | **IN** — Track G (owner-directed, this session) |
+| `t0823` + `t0825` | **IN** — Track H. `t0823` is the whole `EXPECTED_NONDETERMINISTIC` list (one mechanism, four rows); fixing it **unblocks E-B2's parity instrument**, so it sequences early. |
+| `t0862` slice | **SCOUTED, GATED** — the item forbids scoping before the method-call materialization site is pinned. Scout I is running; track opens only if it pins the site AND the `Vector` view flip does not create a fourth dangling-view UAF. |
+| `t0851` anchor-age wiring · `t0860` clone audit trigger | **FOLDED into Track F** — same subject (ratchet plumbing), same zone (`scripts/`). Not separate tracks. |
+| `t0829` bare `:NNNN` cites | **LATE** — rides the doc-write-through track, which cannot open until A–D land (a round that changes behaviour owes one). |
+| `t0850` `parent_dir` per-char clone | **R49** — MED perf; already declared as the clone meter's path-length input, so nothing is blocked on it. |
+| `t0844` Ctrl-C · `t0842`(A) `wait_timeout` | **STAY PARKED** — no R48 track touches them; the rule is ask when the work is SCHEDULED. |
+
+⚠ **THE R47 BURN-DOWN FIGURES ARE SUPERSEDED** — see the scout-corrections block above. The surface is
+roughly a QUARTER of what it was scoped at: **183/28** anchored (not 230/32), only **9 rows genuinely
+unadjudicated** (not 211), and parity floor slack is **27** (1476 → measured 1503), not 70.
+
 ### ⚖ PARKED OWNER ASKS — ask when the work is scheduled, not before
 
 - **`t0844`** — `process_group(0)` + SIGINT forwarding: user-visible Ctrl-C semantics in the shipped compiler.
