@@ -194,6 +194,23 @@ withdrawn **the same day**, and driving 205 sites from a CORRECT spelling onto a
 a *"MEASURED FREE"* banner. It was free because it did not do the work. **A guard is only as good as the
 ruling it encodes — re-verify the ruling, not just the count.**
 
+### ⛔⛔ ROUND-CLOSE TRAP — `robustness_map.py` WILL REPORT THIS ROUND'S FIXES AS REGRESSIONS
+
+Orchestrator-verified 2026-08-31 (found by Track E-B3 brief-review pass 1):
+- **`scripts/robustness_map.py:617`** — `good = "REJECTED" if row[COL_C] == "REJECTED" else "WORKS"`. The
+  "correct state" is derived from the **C-lane BASELINE BUCKET**, never from `COL_EXPECTED`. ⇒ **FIXING a
+  C-lane cell scores as a REGRESSION**, and on the **43** cells where self-host is WORKS, **a self-host
+  REGRESSION scores as PROGRESS.** The baseline records what the compiler PRINTED — the exact thing
+  § Don't redesign around compiler gaps forbids — and the comment above the line argues *for* it.
+- **`:715-723`** — `--accept` writes `MANIFEST.tsv` **unconditionally, BEFORE** the
+  `if regressions or new_div: return 1`, and `:623-624` folds every row regardless. ⇒ **exit 1 but the file
+  is already overwritten; the next run is clean.** A **one-shot regression launderer**. Its help text
+  (`:503`) claims it folds "PROGRESS rows" — false.
+
+⚠ **R48's memory-safety tracks (A/B/C/D1/D2) WILL fix C-lane cells.** At round close this gate will call
+those fixes REGRESSIONS. ⛔ **Do NOT "resolve" that with `--accept`.** Track E-B3 owns the fix (folded into
+its brief as M4/M5); the round-close battery must not be read as green or red on this gate until it lands.
+
 ### ⛔ OWED ROUND-OPEN ACTION — THE CLONE BAND ANCHORS WERE NOT RE-SEEDED AT R48 OPEN
 
 **This is the ORCHESTRATOR's omission, not a track's.** `bash scripts/clone_meter_check.sh --anchor-age`
