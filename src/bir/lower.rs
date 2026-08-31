@@ -2331,7 +2331,6 @@ fn expand_flat_map(
     let result_slot = func.add_slot(garray_ty.clone(), None);
     let elem_size_val = alloc_value(next);
     let elem_size = c_sizeof_lir_type(&result_elem_ty, structs) as i64;
-    let _ = &element_ty;
     func.block_mut(cur).push_synthetic(Inst::IConst {
         dst: elem_size_val,
         ty: LirType::I64,
