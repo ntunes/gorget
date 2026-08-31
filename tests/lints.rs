@@ -25380,6 +25380,10 @@ fn clone_meter_pins_carry_their_provenance() {
     // `clone_band_anchor_is_reseeded_before_work_resumes` at the end of this
     // file — which reads `DONE.md`, exactly the thing a lint over
     // `tests/integration.rs` alone cannot see.
+    // ⛔ AND THAT CHECK SEES ~8% OF THE ROUND CLOSES IN `DONE.md` (3 of ~38,
+    // across seven prose shapes with no typed marker), failing GREEN. Do not
+    // read it as covering this hole; `todo/t0851` is re-opened on it, and
+    // `done_md_round_close_shapes_are_pinned` is what makes the gap loud.
     let date_lines = src.lines().filter(|l| l.trim().starts_with("// ROUND-OPEN-DATE:")).count();
     assert_eq!(
         date_lines, 1,
@@ -27255,6 +27259,18 @@ fn figures_db_scanner_sees_into_doc_comments() {
 /// AFTER it with the anchor still pointing at the closed round — which is
 /// precisely the state the item describes as silent today.
 ///
+/// ⛔ **AND ITS REACH IS ~8%, WHICH IS THE THING TO CARRY AWAY FROM THIS
+/// COMMENT.** The underlying question — "has a round closed?" — is answered by
+/// matching a PROSE HEADLINE, because a round-close `DONE.md` entry carries no
+/// typed marker and its shape has never been enforced anywhere. Seven shapes
+/// across ~38 closes; this predicate matches 3, including neither of the two
+/// closes immediately before R47 (`**R45 CLOSED`, `**R44 —`). ⚠ So the failure
+/// direction is a FALSE GREEN: a green run here is NOT evidence the anchors are
+/// fresh. Widening the predicate is measured to be worse, and the real fix is a
+/// typed marker on the entry — a round-procedure decision, filed as
+/// `todo/t0851`, which is RE-OPENED for it rather than closed on 8% reach.
+/// `done_md_round_close_shapes_are_pinned` below is what keeps the gap loud.
+///
 /// ⊕ The complementary half is already a lint and stays one:
 /// `clone_meter_pins_carry_their_provenance` asserts the four anchors share ONE
 /// sha, that it is an ancestor of HEAD, and that exactly one `ROUND-OPEN-DATE`
@@ -27378,16 +27394,30 @@ fn clone_meter_pin_provenance_shas_resolve() {
 /// A row set that degenerates to one-provenance-per-polarity would make the
 /// orthogonality claim vacuous again, silently. This fails instead.
 ///
-/// ⚠ RED-VERIFY HONESTY (Core #12). The two OCCUPANCY asserts were each shown
-/// RED on a deliberately degraded declaration (`policy` and `derived` removed
-/// in turn) and restored. The two NON-FUNCTIONALITY asserts were NOT, and
-/// cannot be at this row set: `measured` currently occupies all four
-/// polarities, so any polarity holding a `derived` or `policy` row necessarily
-/// holds two provenances — the occupancy asserts fire first on every mutation
-/// that would reach them. They are not decoration: they are what still fails if
-/// the row set later stops looking like this (say, `measured` retreats to one
-/// polarity), which is exactly when the header's orthogonality paragraph would
-/// silently become false again.
+/// ⚠ RED-VERIFY HONESTY (Core #12), CORRECTED — the first version of this note
+/// was wrong in BOTH directions, which is worth more than the asserts it
+/// describes.
+/// * **Asserts 1 and 2 (occupancy): RED-verified**, each on a degraded
+///   declaration (`policy` removed, then `derived`), and restored.
+/// * **Assert 3 (polarity does not determine provenance): RED-VERIFIED.** The
+///   first note claimed it was unreachable because "the occupancy asserts fire
+///   first on every mutation". False — that covers provenance REMOVALS only. A
+///   four-line polarity PERMUTATION reaches it with all six cells still
+///   occupied: give `policy` and `derived` a polarity each to themselves and
+///   herd every `measured` row into the other two, and the map collapses to
+///   `{exact-pin: {measured}, grow-only: {derived}, informational: {measured},
+///   shrink-only: {policy}}` with asserts 1 and 2 both green. Demonstrated and
+///   restored.
+/// * **Assert 4 (provenance does not determine polarity): NOT reachable, and
+///   the reason is arithmetic rather than "the others fire first".** Given
+///   assert 1, all FOUR polarities are occupied and each contributes at least
+///   one provenance, but only THREE provenances exist — so by pigeonhole some
+///   provenance carries two polarities, always. It is a tautology at the
+///   current axis sizes and cannot be shown red; an attempt trips assert 1
+///   instead. It stops being a tautology the moment a fourth provenance is
+///   added or a polarity is retired, and that is exactly when the header's
+///   orthogonality paragraph could silently go false again — so it stays, with
+///   its reach stated rather than implied.
 #[test]
 fn figures_db_axes_are_occupied() {
     use std::collections::{BTreeMap, BTreeSet};
@@ -27430,5 +27460,99 @@ fn figures_db_axes_are_occupied() {
         by_prov.values().any(|s| s.len() >= 2),
         "no provenance carries two different polarities, so provenance now DETERMINES polarity. \
          Same reading as above. Map: {by_prov:?}"
+    );
+}
+
+/// ⛔ THE REACH RATCHET ON A GUARD THAT CANNOT CATCH ITS OWN CLASS.
+///
+/// `scripts/clone_meter_check.sh --anchor-age` decides "has a round closed?" by
+/// matching a PROSE HEADLINE in `DONE.md`. That is a name-match on free text —
+/// Core #2's forbidden shape — and it is forced, because a round-close entry
+/// carries NO TYPED MARKER and its shape has never been enforced anywhere: the
+/// reviewer grepped `AGENTS.md` and this file and found no rule on it at all.
+/// Measured over the seven shapes actually present, the predicate matches **3
+/// of roughly 38 closes**, and its failure direction is a FALSE GREEN.
+///
+/// ⛔ WIDENING IT IS WORSE, AND THAT IS MEASURED, NOT ASSUMED. The obvious
+/// widening matches 79 headlines including mid-round ones (`**R42 Phase 4b`,
+/// `**R41 T-FMT-A`, `**ROUND-33 rolling item 4`), which re-creates a false RED
+/// whose printed remedy — a mid-round band re-seed — is the exact move the
+/// salami assertion in `tests/integration.rs` exists to prove destroys the band.
+/// The real fix is a marker on the entry, which is a round-procedure decision;
+/// it is filed with this evidence as `todo/t0851`, RE-OPENED for it.
+///
+/// **So this pins BOTH POPULATIONS rather than trusting either.** A round close
+/// landing in a shape the predicate cannot see moves the round-ish count and
+/// NOT the matched count — which is precisely the class `--anchor-age` is blind
+/// to, made loud. ⚠ It also fires on a mid-round round-ish entry; that is the
+/// honest cost of an unenforced convention, and the remedy there is a
+/// 30-second adjudication and a number bump, never a re-seed.
+///
+/// ⊕ Both counts live in `scripts/figures.db` (the DB's first SOURCED rows —
+/// DB-native, no code literal to mirror), and both predicates are spelled ONCE,
+/// in the script's `--round-close-census`, which this reads rather than
+/// re-spelling (Layering rule 3: the guard and the thing it guards cannot drift
+/// apart if there is only one spelling).
+#[test]
+fn done_md_round_close_shapes_are_pinned() {
+    let out = std::process::Command::new("bash")
+        .args(["scripts/clone_meter_check.sh", "--round-close-census"])
+        .output()
+        .expect("run scripts/clone_meter_check.sh --round-close-census");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "--round-close-census failed:\n{text}");
+
+    let field = |label: &str| -> usize {
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix(label))
+            .unwrap_or_else(|| panic!("--round-close-census printed no `{label}` line:\n{text}"))
+            .trim()
+            .parse()
+            .expect("census field is a count")
+    };
+    let matched = field("anchor-age-matched:");
+    let roundish = field("round-ish headlines:");
+
+    let want_matched: usize = figures_norm(
+        &figures_db_field("done_md.round_close.anchor_age_matched", "value").expect("row"),
+    )
+    .parse()
+    .expect("pinned count");
+    let want_roundish: usize = figures_norm(
+        &figures_db_field("done_md.round_close.roundish_headlines", "value").expect("row"),
+    )
+    .parse()
+    .expect("pinned count");
+
+    if roundish != want_roundish && matched == want_matched {
+        panic!(
+            "A ROUND-ISH `DONE.md` HEADLINE APPEARED THAT `--anchor-age` CANNOT SEE.\n\
+             round-ish {roundish} (pinned {want_roundish}), matched {matched} (pinned, unchanged).\n\n\
+             ADJUDICATE, do not just bump. Read the new entry:\n\
+             * If it IS a round close — then `--anchor-age` went GREEN on a closed round, which is \
+             the exact false-green this pin exists to catch. Re-seed the four \
+             `..._CLONE_ROUND_OPEN` constants and `ROUND-OPEN-DATE`, and revisit the predicate in \
+             `scripts/clone_meter_check.sh::anchor_mode` (todo/t0851 carries the real fix: a typed \
+             marker on the entry).\n\
+             * If it is a MID-ROUND entry that merely starts with ROUND/Round/Rn, bump ONLY \
+             `done_md.round_close.roundish_headlines` in scripts/figures.db.\n\
+             ⛔ In neither case is the answer to widen the predicate: widening was MEASURED to \
+             swallow mid-round entries and re-create a false RED whose remedy destroys the band.\n\n{text}"
+        );
+    }
+    assert_eq!(
+        (matched, roundish),
+        (want_matched, want_roundish),
+        "the DONE.md round-close populations moved. Regenerate with \
+         `bash scripts/clone_meter_check.sh --round-close-census`, adjudicate what changed \
+         (the note fields on both rows say how), and re-pin in scripts/figures.db IN THE SAME \
+         COMMIT — this is an exact pin, so it is meant to be moved deliberately rather than \
+         drifted past. ⚠ A round CLOSE moves both counts and will land here: that is the \
+         records commit's own chore, and it is the moment to confirm the anchors get re-seeded \
+         at the next round open.\n\n{text}"
     );
 }

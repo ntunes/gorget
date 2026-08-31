@@ -30676,10 +30676,15 @@ const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_150_071;
 // MEASUREMENT, RE-SEEDED ONCE PER ROUND AT ROUND OPEN. The date below is what
 // `scripts/clone_meter_check.sh --anchor-age` reads, and that mode's caller is
 // `tests/lints.rs::clone_band_anchor_is_reseeded_before_work_resumes` — so a
-// forgotten reset now fails a gate instead of being held by a comment. ⚠ The
-// lint's predicate is narrowed to "commits exist after the round-close records
-// commit with the anchors un-reseeded", because the window between a round's
-// records commit and the next round's re-anchor is legitimate.
+// forgotten reset fails a gate instead of being held by a comment. ⚠ The lint's
+// predicate is narrowed to "commits exist after the round-close records commit
+// with the anchors un-reseeded", because the window between a round's records
+// commit and the next round's re-anchor is legitimate.
+// ⛔ PARTIALLY. That check matches 3 of ~38 round closes in DONE.md — the
+// entries have no typed marker, so the question is answered by matching prose —
+// and it fails GREEN. `todo/t0851` is re-opened on it; the loud half is
+// `tests/lints.rs::done_md_round_close_shapes_are_pinned`, which pins both
+// populations so a close in an unseeable shape cannot pass silently.
 // ROUND-OPEN-DATE: 2026-08-31
 // ROUND-OPENED-BY: 4c473a88 VALUE: 13_150_071
 const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_150_071;
@@ -30885,6 +30890,11 @@ const _: () = assert!(
 /// narrows the predicate to "work has RESUMED with the anchors un-reseeded" so
 /// that the legitimate window between a round's records commit and the next
 /// round's re-anchor is not permanently red.
+/// ⛔ ITS REACH IS ~8% AND IT FAILS GREEN: "has a round closed?" is answered by
+/// matching a prose headline, and the round-close entry has no typed marker —
+/// 3 of ~38 closes match. `todo/t0851` is re-opened on it, and
+/// `tests/lints.rs::done_md_round_close_shapes_are_pinned` pins both
+/// populations so a close in an unseeable shape fails rather than passing.
 ///
 /// ⚠ WHAT PER-TRACK ATTRIBUTION CAN AND CANNOT BE TESTED FOR, so the next round
 /// does not re-derive a dead end at the cost of another ten-cell bisect.

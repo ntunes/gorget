@@ -475,7 +475,7 @@ proc_guard.no_deadline_baseline.input = none
 # build would re-introduce the cap through the back door. `figures.py report`
 # runs every informational row at round close and prints prev | now | delta.
 row = todo.pending_items
-todo.pending_items.value = 774
+todo.pending_items.value = 775
 todo.pending_items.unit = pending todo/ items
 todo.pending_items.polarity = informational
 todo.pending_items.provenance = measured
@@ -523,3 +523,52 @@ clone.waste.attributed_site_hits.cost_secs = 2400
 clone.waste.attributed_site_hits.input = none
 clone.waste.attributed_site_hits.note = the by-reason rollup and the ranked table are printed by `python3 scripts/figures.py report`; re-seed this value in the same commit that wires the report into round close
 clone.waste.attributed_site_hits.note = regenerated TWICE at 3b8a5561, bit-identical both times; the second run took 145s with a warm target/ and a cached driver, so cost_secs covers a COLD release build plus a cold driver build
+
+# ── exact-pin × measured, DB-NATIVE — the REACH RATCHET on a guard that cannot
+#    catch its own class, and the reason `todo/t0851` is re-opened rather than
+#    closed. `scripts/clone_meter_check.sh --anchor-age` decides "did a round
+#    close?" by matching a PROSE headline, and DONE.md's round-close entries
+#    have no typed marker and no enforced shape: seven shapes across ~38 closes,
+#    of which the predicate matches 3. Widening it is measured to be worse (it
+#    swallows mid-round entries and re-creates a false RED whose printed remedy
+#    destroys the band). So the two POPULATIONS are pinned instead: a close
+#    landing in a shape the predicate cannot see moves `roundish` without moving
+#    `matched`, and `tests/lints.rs::done_md_round_close_shapes_are_pinned`
+#    fails. ⚠ It also fires on a mid-round round-ish entry — that is the honest
+#    cost of an unenforced convention, and its remedy is a 30-second
+#    adjudication and a number bump, never a band re-seed.
+row = done_md.round_close.anchor_age_matched
+done_md.round_close.anchor_age_matched.value = 3
+done_md.round_close.anchor_age_matched.unit = DONE.md entries matched by --anchor-age's round-close predicate
+done_md.round_close.anchor_age_matched.polarity = exact-pin
+done_md.round_close.anchor_age_matched.provenance = measured
+done_md.round_close.anchor_age_matched.regen = bash scripts/clone_meter_check.sh --round-close-census
+done_md.round_close.anchor_age_matched.regen_extract = anchor-age-matched: (?P<value>[0-9]+)
+done_md.round_close.anchor_age_matched.regen_fires = round-close census over DONE.md
+done_md.round_close.anchor_age_matched.regen_env = none
+done_md.round_close.anchor_age_matched.instrument = scripts/clone_meter_check.sh --round-close-census (the ONE place the predicate is spelled)
+done_md.round_close.anchor_age_matched.measured_at = c31b0ad0
+done_md.round_close.anchor_age_matched.home = scripts/figures.db (DB-native; the predicate lives in the script, the count has no code literal)
+done_md.round_close.anchor_age_matched.scan = none
+done_md.round_close.anchor_age_matched.caveat = a single-digit value the uniqueness scanner cannot police; and the number itself is EVIDENCE OF A GAP, not of health — 3 of ~38 closes, an 8% reach whose failure direction is a FALSE GREEN
+done_md.round_close.anchor_age_matched.cost_secs = 60
+done_md.round_close.anchor_age_matched.input = none
+done_md.round_close.anchor_age_matched.note = when this moves WITH roundish, a close landed in the shape the predicate sees — confirm the anchors were re-seeded, then re-pin both
+
+row = done_md.round_close.roundish_headlines
+done_md.round_close.roundish_headlines.value = 79
+done_md.round_close.roundish_headlines.unit = DONE.md entries whose headline begins ROUND / Round / Rn
+done_md.round_close.roundish_headlines.polarity = exact-pin
+done_md.round_close.roundish_headlines.provenance = measured
+done_md.round_close.roundish_headlines.regen = bash scripts/clone_meter_check.sh --round-close-census
+done_md.round_close.roundish_headlines.regen_extract = round-ish headlines: (?P<value>[0-9]+)
+done_md.round_close.roundish_headlines.regen_fires = round-close census over DONE.md
+done_md.round_close.roundish_headlines.regen_env = none
+done_md.round_close.roundish_headlines.instrument = scripts/clone_meter_check.sh --round-close-census (the ONE place the predicate is spelled)
+done_md.round_close.roundish_headlines.measured_at = c31b0ad0
+done_md.round_close.roundish_headlines.home = scripts/figures.db (DB-native)
+done_md.round_close.roundish_headlines.scan = none
+done_md.round_close.roundish_headlines.caveat = a SUPERSET, not an enumeration — it contains mid-round entries (R42 Phase 4b, R41 T-FMT-A, ROUND-33 rolling item 4, R43 Track C), which is exactly why the predicate is not widened to it
+done_md.round_close.roundish_headlines.cost_secs = 60
+done_md.round_close.roundish_headlines.input = none
+done_md.round_close.roundish_headlines.note = when this moves and anchor_age_matched does NOT, adjudicate: a round close in an unseeable shape (re-seed the anchors AND revisit the predicate), or a mid-round round-ish entry (bump this pin only)
