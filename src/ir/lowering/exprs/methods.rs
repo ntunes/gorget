@@ -8,7 +8,7 @@ use crate::span::Spanned;
 
 use super::super::context::{LoweringContext, CollectionId, ParamABI};
 use super::{lower_expr, lower_call_arg, maybe_auto_propagate, infer_operand_type_full, register_tuple_type,
-            is_resource_type_local, get_or_register_type,
+            is_resource_type_local, is_single_owner_handle_local, get_or_register_type,
             ensure_box_type_def, ensure_guard_type_def, ensure_shared_type_def, ensure_weak_type_def,
             index_expr_to_mangle_fragment, try_resolve_field_place, try_resolve_index_element_ptr,
             extract_field_path_string,
@@ -167,6 +167,48 @@ fn build_enum_recv_ptr(
         builder.emit_borrow(borrow, place.clone());
         (FunctionBuilder::copy(borrow), false)
     }
+}
+
+/// Coerce a method receiver to the callee's declared `self` ABI when the
+/// receiver's type is an OPAQUE HANDLE — `Shared[T]`, `Weak[T]`, `Mutex[T]`,
+/// `AtomicInt`, `Thread`, … — reached through a BORROW.
+///
+/// Each of these is a C typedef to `Gorget<Family>*`: the pointer IS the
+/// value. Every method on them is declared `SelfConvention::ByValue`
+/// (`builtins.rs`), so a `Ptr(H)` / `MutPtr(H)` receiver carries ONE
+/// indirection too many and the callee reinterprets the borrow's target
+/// address as the handle. The load restores the declared convention.
+///
+/// Reading the convention through [`is_by_value_receiver`] — the typed
+/// accessor over the protocol table — is deliberate: the fact lives on the
+/// `BuiltinMethodDecl`, set once at the source, and this site must never
+/// re-derive it from the type's NAME (`AGENTS.md` § No name matching).
+///
+/// A no-op unless the receiver is a bare local holding a pointer to a
+/// by-value handle, so non-handle borrows (`&Vector`, `&`-params of user
+/// structs, `Guard`'s `MutBorrow` methods) are untouched.
+fn deref_by_value_handle_receiver(
+    ctx: &mut LoweringContext,
+    builder: &mut FunctionBuilder,
+    recv: Operand,
+) -> Operand {
+    let place = match &recv {
+        Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.clone(),
+        _ => return recv,
+    };
+    if (place.local.0 as usize) >= builder.locals.len() {
+        return recv;
+    }
+    let recv_ty = builder.local_type(place.local);
+    let Some(handle_ty) = ctx.pointee_type(recv_ty) else { return recv };
+    let Some(handle_name) = ctx.type_name_for_id(handle_ty).map(|n| n.to_string()) else {
+        return recv;
+    };
+    if !crate::ir::lowering::builtins::is_by_value_receiver(&handle_name) {
+        return recv;
+    }
+    let loaded = builder.load_ref(place, handle_ty);
+    Operand::Copy(Place::local(loaded))
 }
 
 pub(super) fn lower_method_call(
@@ -534,10 +576,13 @@ pub(super) fn lower_method_call(
         // callees take a `*T` and write THROUGH the alias — a value copy
         // would drop the mutation.
         //
-        // EXCEPTION — opaque-handle (SelfConvention::ByValue) types (Mutex,
-        // AtomicInt, RWLock, Semaphore, Barrier, WaitGroup, Thread, Heap,
-        // Shared, Weak, OnceFlag, TaskGroup, AtomicBool). Each of these is a
-        // C typedef to `Gorget<Family>*` — the "pointer" IS the handle. Their
+        // EXCEPTION — opaque-handle (`SelfConvention::ByValue`) types. The set
+        // is NOT restated here: it is whatever `is_by_value_receiver` answers
+        // yes to, read off the protocol table. (A hand-written copy of it used
+        // to sit in this comment and had drifted — it listed `Heap`, whose
+        // methods are all `MutBorrow`/`Borrow`. Core #14: the enumeration
+        // belongs to the accessor, not to prose.) Each such type is a C
+        // typedef to `Gorget<Family>*` — the "pointer" IS the handle. Their
         // methods take self BY VALUE (a single `*` of indirection), so a
         // pointer-typed receiver (`&`/`!` param whose local type is
         // `MutPtr(Named("Mutex__int64_t"))`) is one indirection too many and
@@ -552,20 +597,11 @@ pub(super) fn lower_method_call(
         // site; downstream C/LLVM emitters must never fish it back out of a
         // name.
         let local_id = borrow_param_local.unwrap();
-        let receiver_ty = builder.local_type(local_id);
-        let handle = ctx.pointee_type(receiver_ty)
-            .and_then(|inner| ctx.type_name_for_id(inner)
-                .map(|n| (inner, n.to_string())));
-        if let Some((handle_ty, handle_name)) = handle {
-            if crate::ir::lowering::builtins::is_by_value_receiver(&handle_name) {
-                let loaded = builder.load_ref(Place::local(local_id), handle_ty);
-                Operand::Copy(Place::local(loaded))
-            } else {
-                Operand::Copy(Place::local(local_id))
-            }
-        } else {
-            Operand::Copy(Place::local(local_id))
-        }
+        deref_by_value_handle_receiver(
+            ctx,
+            builder,
+            Operand::Copy(Place::local(local_id)),
+        )
     } else {
         lower_expr(ctx, builder, receiver)
     };
@@ -662,6 +698,22 @@ pub(super) fn lower_method_call(
             DerefWrapperKind::NonDerefContainer => {}
         }
     }
+
+    // Fourth route of the "receiver ABI matches callee SelfConvention"
+    // chokepoint (Core #4). The `&`/`!`-param arm above covers a receiver
+    // BOUND to a borrow param; this covers every other way a borrow of an
+    // opaque handle reaches a receiver position — the element view returned by
+    // `Vector[Shared[T]].get(i).unwrap()` (`Option__Ref__Shared__T`'s payload
+    // is `Ptr(Shared__T)` — a ratified VIEW, decisions.md:78/:1395), a
+    // `Dict[K, Shared[V]]` read, a `Ref[Shared[T]]` field load. Every method
+    // on these types takes self BY VALUE, so a pointer-typed receiver is one
+    // indirection too many and the callee reinterprets the SLOT ADDRESS as the
+    // handle (measured: `Shared__int64_t__get(&slot)` → SEGV, t0840).
+    //
+    // The fix at the read site is the LOAD, never an address-of: `.get()`
+    // returning a view is the ratified design, so the deref is what the
+    // by-value convention asks for.
+    recv = deref_by_value_handle_receiver(ctx, builder, recv);
 
     // .await() on Task → dispatch through __gorget_await_<fn> (joins pthread, returns result).
     // Check spawn_result_locals FIRST, before type check, since the declared type may be I64_TYPE
@@ -1920,12 +1972,38 @@ pub(super) fn lower_method_call(
                 _ => UNIT_TYPE,
             };
             if let Some(clone_fn) = ctx.clone_fn_for_ptr(recv_type_id) {
-                // Build the call: clone_fn(&receiver) → owned T
+                // Build the call. A DEEP clone (`gorget_string_clone_to_owned`,
+                // `gorget_array_clone`, `{Struct}__clone`) reads THROUGH a
+                // `const T*`, so it gets `&receiver`. A REFCOUNT handle
+                // ({Shared, Weak, Channel}) is the exception: its `clone_fn` is
+                // the by-VALUE incref written by the single writer
+                // `TypeMetadata::set_refcount_clone_fn`, and
+                // `is_refcount_clone_type` is the accessor for exactly that
+                // fact. Handing it `&handle` increfs whatever the CALLER'S
+                // STACK SLOT happens to alias — measured on
+                // `Channel[int].clone()`: `gorget_channel_retain(&c)` then
+                // `send` on `c->buf` reinterpreted as a channel (hang / pthread
+                // assertion, both backends). The Shared/Weak surface only
+                // escaped it because their `clone` arms upstream pass the
+                // handle by value by hand.
+                let clone_takes_value = ctx.type_registry.is_refcount_clone_type(recv_type_id);
                 let ptr_arg = match &recv {
                     Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => {
                         let lid = p.local.0 as usize;
                         let tid = builder.locals[lid].type_id;
-                        if matches!(ctx.type_registry.get(tid), Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))) {
+                        let recv_is_ptr = matches!(
+                            ctx.type_registry.get(tid),
+                            Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+                        );
+                        if clone_takes_value {
+                            if recv_is_ptr {
+                                // Borrow of a handle — load the handle itself.
+                                let loaded = builder.load_ref(p.clone(), recv_type_id);
+                                FunctionBuilder::copy(loaded)
+                            } else {
+                                recv.clone()
+                            }
+                        } else if recv_is_ptr {
                             // Already a pointer — pass directly
                             FunctionBuilder::copy(p.local)
                         } else {
@@ -1938,6 +2016,41 @@ pub(super) fn lower_method_call(
                     }
                     _ => recv.clone(),
                 };
+                if clone_takes_value {
+                    // Core #3 (register at birth) — and the EXACT shape of the
+                    // `Shared`/`Weak` `clone` arms upstream, which this arm is
+                    // the sibling of.
+                    //
+                    // A refcount incref's result is a FRESH owned handle that
+                    // a consuming position MOVES in, so it must be tagged
+                    // `FreshOwned` (otherwise the boundary sees an Untracked
+                    // temp and conservatively increfs a second time) and it
+                    // must NOT be independently drop-registered the way
+                    // `call_tracked_clone` registers a deep clone: the
+                    // collection's `elem_drop` is the one release that pairs
+                    // with this retain. A named bind (`Channel[int] c2 =
+                    // c.clone()`) gets its drop from the var-decl path, which
+                    // is where the ownership actually settles.
+                    //
+                    // The registration is UNDONE rather than skipped so this
+                    // arm keeps using the shared producer chokepoint — the
+                    // `Shared`/`Weak` arms spell the same thing as a raw
+                    // `builder.call_clone`, and two ratchets in `tests/lints.rs`
+                    // (`indirect_dispatch_results_registered_at_birth`,
+                    // `ratchet_c_handrolled_materialize_bypass_count`) exist to
+                    // stop that census growing.
+                    //
+                    // Measured with both halves wrong on
+                    // `Vector[Channel[int]].push(c.clone())`:
+                    // `AddressSanitizer: heap-use-after-free` in
+                    // `gorget_channel_release` ← `Channel__int64_t__drop`,
+                    // after `gorget_array_free` had already taken the same
+                    // channel to zero — five releases against four retains.
+                    let dst = ctx.call_tracked_clone(builder, clone_fn, vec![ptr_arg], recv_type_id, crate::ir::ImplicitCloneReason::ExplicitUserClone);
+                    ctx.drops.unregister(dst);
+                    ctx.set_owned_fresh(builder, dst);
+                    return FunctionBuilder::copy(dst);
+                }
                 let dst = ctx.call_tracked_clone(builder, clone_fn, vec![ptr_arg], recv_type_id, crate::ir::ImplicitCloneReason::ExplicitUserClone);
                 return FunctionBuilder::copy(dst);
             }
@@ -2999,11 +3112,24 @@ pub(super) fn lower_method_call(
                     || consuming_positions.contains(&i);
                 if !call_site_move && !callee_move { return None; }
 
+                // Move-eligibility is "the source owns something that a second
+                // drop would double-free". `is_resource_type_local` covers the
+                // heap-owning types; `is_single_owner_handle_local` covers the
+                // opaque runtime handles with a drop and no clone path
+                // (`Mutex[T]`, `RWLock[T]`, `Thread`, …) — see its doc: the
+                // collection takes THE one owner, so the source has to die
+                // here. Refcount handles stay out of both, which is right:
+                // they incref at the boundary and both owners drop.
+                let owns_at_consume = |local_id, builder: &FunctionBuilder, ctx: &LoweringContext| {
+                    is_resource_type_local(local_id, builder, &ctx.type_registry)
+                        || is_single_owner_handle_local(local_id, builder, &ctx.type_registry)
+                };
+
                 // For explicit `!`: always move_zero the identifier source.
                 if call_site_move {
                     if let Expr::Identifier(name) = &arg.node.value.node {
                         if let Some((local_id, _)) = ctx.lookup_local(name) {
-                            if is_resource_type_local(local_id, builder, &ctx.type_registry) {
+                            if owns_at_consume(local_id, builder, ctx) {
                                 return Some(Place::local(local_id));
                             }
                         }
@@ -3015,7 +3141,7 @@ pub(super) fn lower_method_call(
                 if let Expr::Identifier(name) = &arg.node.value.node {
                     // Identifier: only move_zero if last use (non-last-use was cloned pre-call).
                     let (local_id, _) = ctx.lookup_local(name)?;
-                    if !is_resource_type_local(local_id, builder, &ctx.type_registry) {
+                    if !owns_at_consume(local_id, builder, ctx) {
                         return None;
                     }
                     // Skip non-drop-tracked locals — they're borrows (for-loop string
@@ -3046,7 +3172,7 @@ pub(super) fn lower_method_call(
                     Operand::Copy(p) | Operand::Move(p) if p.projections.is_empty() => p.clone(),
                     _ => return None,
                 };
-                if !is_resource_type_local(place.local, builder, &ctx.type_registry) {
+                if !owns_at_consume(place.local, builder, ctx) {
                     return None;
                 }
                 // Skip Ptr wrappers (CoW clone already replaced them with a temp that
@@ -4248,6 +4374,27 @@ fn infer_closure_return_type(
 }
 
 /// Lower an index access expression.
+/// Does `v[i]` on an element of this type produce a BORROW (`Ptr(elem)`)
+/// rather than an owned value?
+///
+/// Every heap-owning element type already answers yes — `v[0]` on a
+/// `Vector[String]` is a view into the buffer, and the ratified `.get(i)`
+/// surface returns `Option[Ref[T]]` for exactly the same reason
+/// (`decisions.md:78`, `:1395`). A REFCOUNT handle belongs on the same side of
+/// the line even though `is_resource_type` answers no for it (its
+/// `copy_semantics` is `Trivial`, because the handle itself is a bitwise
+/// pointer): read as a VALUE it went through the element-clone path, which for
+/// a refcount type is a retain — and the resulting temp is nobody's to
+/// release, so the control block leaked (32 bytes on
+/// `Vector[Shared[int]]` + `all[0].get()`, measured under LSan). As a borrow
+/// there is no retain to balance, and the by-value receiver chokepoint loads
+/// the handle out of the slot at the call — the same path
+/// `all.get(0).unwrap().get()` already takes.
+fn elem_read_is_borrow(ctx: &LoweringContext, elem_type: TypeId) -> bool {
+    ctx.type_registry.is_resource_type(elem_type)
+        || ctx.type_registry.is_refcount_clone_type(elem_type)
+}
+
 pub(super) fn lower_index_access(
     ctx: &mut LoweringContext,
     builder: &mut FunctionBuilder,
@@ -4382,7 +4529,7 @@ pub(super) fn lower_index_access(
             resolved_base
         } else if is_task || is_string_base {
             elem_type
-        } else if ctx.type_registry.is_resource_type(elem_type) {
+        } else if elem_read_is_borrow(ctx, elem_type) {
             ctx.register_ptr_type(elem_type)
         } else {
             elem_type
@@ -4392,7 +4539,7 @@ pub(super) fn lower_index_access(
         // fault-catch recovery form remains). Plain `index_load` — the runtime
         // trap emitter handles the panic case.
         let dst = builder.index_load(place.clone(), idx, result_type);
-        if ctx.type_registry.is_resource_type(elem_type) && !is_task && !is_string_base
+        if elem_read_is_borrow(ctx, elem_type) && !is_task && !is_string_base
         {
             // Use FieldPath provenance when the base is a field access (e.g., s.v[0]).
             // This ensures cow_before_field_mutation("s.v") finds the ref when

@@ -4462,22 +4462,186 @@ fn div_by_zero_int_traps_float_ieee() {
     run_gg("div_by_zero_int_traps_float_ieee.gg", "inf\n-inf\ntrue");
 }
 
-/// KNOWN GAP (both real backends): the Book Ch16 "many owners" idiom — several
-/// `Shared` handles to one value held in a `Vector` — SEGFAULTS reading an
-/// element that was never written. `all.len()` prints 3, so the container
-/// bookkeeping ran and only the payload store is missing; under `--sanitize`
-/// UBSan names it first, `load of misaligned address 0xbebebebebebebebe`, which
-/// is ASan's UNINITIALISED-HEAP FILL. Filed as `todo/t0840`.
-///
-/// ⚠ Read the UBSan line before the ASan line here: the SEGV address `0x17d7…`
-/// is that fill after the accessor's pointer arithmetic, one frame later, and a
-/// triage that reads only the SEGV concludes "layout disagreement" and aims at
-/// the wrong fix. The self-host lane ALSO traps, so unlike `t0108` there is no
-/// correct lane to use as an oracle.
+// ══════════════════════════════════════════════════════════════════════════
+// R48 Track D2 — one handle type, two calling conventions (`todo/t0840`)
+// ══════════════════════════════════════════════════════════════════════════
+//
+// `Shared[T]`, `Weak[T]`, `Mutex[T]`, `Channel[T]` are C typedefs to
+// `Gorget<Family>*`: the POINTER IS THE VALUE. Their LIR representation is
+// therefore `LirType::Ptr`, indistinguishable BY REPRESENTATION from an
+// address-of-something — and three separate consumers picked the wrong one:
+//
+//   • the `AbiKind::VoidElem` argument marshalling stored the handle VALUE
+//     where the runtime memcpys FROM an address (every consuming position:
+//     push / insert / set / index-assign / container literal / map put);
+//   • the method-receiver marshalling passed a BORROW of a handle straight
+//     through to a by-VALUE `self` (`.get(i).unwrap().get()`);
+//   • the collection-element read handed the element ADDRESS to the by-VALUE
+//     refcount incref (`v[i]`, `for h in v`, `.pop()`).
+//
+// Two of those need an address-of and one needs a load, which is why no single
+// repair greens the class. Every cell below was rc 139 on BOTH backends before
+// the fix (RED-verified against the pre-fix compiler); the `Mutex` and
+// `Channel` cells are the two the write repair UNMASKED — they "passed" before
+// only because the element slot held garbage nothing looked at.
+//
+// The fixtures live in `known_gaps/` for the same reason their older siblings
+// `shared_array_literal_live/dead.gg` do: they are LIVE Rust-lane pins, but
+// `Shared`/`Weak`/`Channel` are outside the ggdef phase-0 subset and the
+// self-host lane does not lower them, so they stay out of the runtime-diff
+// corpus.
+
 #[test]
-#[ignore = "known gap (R47/t0840): a Vector[Shared[T]] built by push leaves the element slot unwritten; un-ignore when the push stores the handle"]
-fn known_gap_shared_vector_of_clones_unwritten_slot() {
-    run_gg("known_gaps/shared_vector_of_clones_unwritten_slot.gg", "3\n42");
+fn shared_vector_of_clones_push_marshalling() {
+    // Cell: Vector · Shared · int · push · `.get(i).unwrap().get()` + strong_count.
+    run_gg("known_gaps/shared_vector_of_clones_push_marshalling.gg", "3\n42\n4");
+}
+
+#[test]
+fn shared_vector_push_write_only() {
+    // Cell: the WRITE side isolated — no element is ever read.
+    run_gg("known_gaps/shared_vector_push_write_only.gg", "3\n4");
+}
+
+#[test]
+fn shared_vector_element_read_shapes() {
+    // Cell: read producer = {index, for-loop bind, pop} — the element-clone
+    // convention, distinct from the `.get(i).unwrap()` view.
+    run_gg("known_gaps/shared_vector_element_read_shapes.gg", "4\n12\n4\n2");
+}
+
+#[test]
+fn shared_vector_producing_arms() {
+    // Cell: producing arm = {container literal, insert, set, index-assign}.
+    run_gg("known_gaps/shared_vector_producing_arms.gg", "2\n1\n2\n2\n1");
+}
+
+#[test]
+fn shared_dict_value_handle() {
+    // Cell: container = Dict(value). `Set[Shared[T]]` is a check-time REJECT
+    // (`Shared[int]` is not `Hashable`), so that cell has no lowering path.
+    // Key/value ITERATION is split out to `shared_dict_iteration_value_over_release`
+    // — it over-releases under ASan for an unrelated reason (todo/t0907).
+    run_gg("known_gaps/shared_dict_value_handle.gg", "2\n11\n3");
+}
+
+#[test]
+fn shared_vector_payload_types() {
+    // Cell: payload = {String, struct} — the handle is pointer-sized whatever
+    // it points at, so the repair has to be payload-independent.
+    run_gg("known_gaps/shared_vector_payload_types.gg", "2\nhi!\n3\n2\n3");
+}
+
+#[test]
+fn shared_vector_root_shapes() {
+    // Cell: root = struct field. The nested-container and function-return roots
+    // are split out — they fail for two other classes (todo/t0907 and
+    // todo/t0108), each with its own pinned cell.
+    run_gg("known_gaps/shared_vector_root_shapes.gg", "2\n6\n3");
+}
+
+#[test]
+fn weak_vector_bound_handle() {
+    // Cell: handle = Weak. Same `Gorget<Family>*` typedef, same defect.
+    run_gg("known_gaps/weak_vector_bound_handle.gg", "2\n9");
+}
+
+#[test]
+fn channel_clone_by_value_incref() {
+    // Cell: handle = Channel — and the first half needs NO container: the
+    // generic `.clone()` lowering handed `&handle` to the by-VALUE incref.
+    run_gg("known_gaps/channel_clone_by_value_incref.gg", "7\n1\n9");
+}
+
+#[test]
+fn channel_clone_consuming_positions() {
+    // Cell: the SIBLING-SITE sweep — four different consumers of the same
+    // `clone_fn`, each sending through its own clone's product. The fifth
+    // position (a clone returned across a function boundary) belongs to
+    // `todo/t0108` and ships as `channel_bare_param_callee_drop_uaf`.
+    run_gg("known_gaps/channel_clone_consuming_positions.gg", "1\n2\n3\n4\ndone");
+}
+
+/// KNOWN GAP — both real backends under `--sanitize`; the VALUE lanes print the
+/// right answer, which is why no stdout-comparing fixture can see it.
+/// `for (k, v) in d` over a `Dict[String, Shared[int]]` over-releases the value
+/// bind, so `gorget_map_free` walks its second entry into an already-freed
+/// control block. The identical loop over `String` values is clean, and so is
+/// `for h in v` over a `Vector[Shared[int]]` — the Vector element bind takes
+/// the Ptr-borrow path and the Dict value bind does not. Filed as `todo/t0907`.
+#[test]
+#[ignore = "known gap (todo/t0907): `for (k, v) in d` over refcount VALUES over-releases — heap-use-after-free in gorget_map_free under --sanitize; the value lanes print the right answer"]
+fn known_gap_shared_dict_iteration_value_over_release() {
+    run_gg("known_gaps/shared_dict_iteration_value_over_release.gg", "4");
+}
+
+/// KNOWN GAP — both real backends under `--sanitize`; the VALUE lanes print the
+/// right answer. Cloning a `Vector[Shared[int]]` does not incref its elements:
+/// `gorget_array_clone` consults `elem_clone`, a refcount element type carries
+/// `clone_fn` but no `clone_inplace_fn`, so the slot is NULL and the two arrays
+/// alias the same handles with the refcount never raised. The identical shape
+/// with `String` elements is clean. Filed as `todo/t0907`.
+#[test]
+#[ignore = "known gap (todo/t0907): cloning a Vector[Shared[T]] does not incref its elements (no clone_inplace_fn) — heap-use-after-free under --sanitize; the value lanes print the right answer"]
+fn known_gap_shared_nested_vector_clone_over_release() {
+    run_gg("known_gaps/shared_nested_vector_clone_over_release.gg", "1\n6");
+}
+
+/// KNOWN GAP — both real backends under `--sanitize`, `gg check` accepts.
+/// Evidence for `todo/t0108` in its `Channel` costume: `needs_param_drop` keys
+/// on TYPE alone, so a BARE `Channel[int]` parameter — a borrow under
+/// CoW-default-borrow — is dropped by the CALLEE at scope exit and the caller's
+/// channel goes to zero underneath it (`AddressSanitizer: heap-use-after-free`
+/// in `gorget_channel_release` ← `Channel__int64_t__drop` ← the callee).
+/// There is no `.clone()` anywhere in the program, which is what discriminates
+/// it from the R48 Track D2 clone-convention class.
+#[test]
+#[ignore = "known gap (todo/t0108): a bare refcount-handle PARAM is dropped by the callee — heap-use-after-free under --sanitize; un-ignore when needs_param_drop becomes sigil-aware"]
+fn known_gap_channel_bare_param_callee_drop_uaf() {
+    run_gg("known_gaps/channel_bare_param_callee_drop_uaf.gg", "in\n1");
+}
+
+#[test]
+fn mutex_vector_single_owner_move() {
+    // Cell: handle = Mutex — a single-owner handle at a consuming position
+    // must MOVE, or the local and the collection slot both drop it.
+    run_gg("known_gaps/mutex_vector_single_owner_move.gg", "1\n5");
+}
+
+#[test]
+fn rwlock_vector_single_owner_move() {
+    // Cell: handle = RWLock — the OTHER member of `is_single_owner_handle_local`
+    // (measured: exactly two at HEAD), so that axis is covered, not sampled.
+    run_gg("known_gaps/rwlock_vector_single_owner_move.gg", "1\n5");
+}
+
+/// KNOWN GAP — C backend only; `--backend=llvm` is CORRECT (lane divergence).
+/// `Shared[String]("a literal")` — the form `docs/language-design.md:1846`
+/// teaches — passes `gg check`, then `cc` refuses the emitted call:
+/// `incompatible type for argument 1 of 'Shared__GorgetString__new'`, because
+/// the `Str`-typed constructor parameter is marshalled as `const char*`.
+/// Feeding the same constructor a `String` VARIABLE works on both lanes.
+///
+/// NOT the `t0840` handle-marshalling class: no container, no element slot, no
+/// `AbiKind::VoidElem` position — this is argument marshalling into a
+/// synthesized inline wrapper.
+#[test]
+#[ignore = "known gap (R48 Track D2): Shared[String](\"literal\") fails the C build (Str ctor param marshalled as const char*); LLVM is correct. Un-ignore when the C emit boundary marshals the Str argument"]
+fn known_gap_shared_string_literal_ctor_cc_fail() {
+    run_gg("known_gaps/shared_string_literal_ctor_cc_fail.gg", "hi");
+}
+
+/// KNOWN GAP — both real backends, rc 139, `gg check` accepts. Evidence for
+/// `todo/t0406`: calling a `Callable` back OUT of a container SEGVs because
+/// the element's signature collapses to the zero-parameter fallback
+/// `fn() -> i64`. What this cell adds to that item's existing repros: they all
+/// carry a `&` sigil, this one has NO sigil at all, so the defect is the
+/// erased element signature and not the borrow tagging. `push` + `len()` on
+/// the same vector is green.
+#[test]
+#[ignore = "known gap (todo/t0406): a Callable read back out of a Vector SEGVs — the element signature collapses to fn() -> i64; un-ignore when the element signature reaches callable_alias_sigs"]
+fn known_gap_callable_vector_element_plain_sig_call_segv() {
+    run_gg("known_gaps/callable_vector_element_plain_sig_call_segv.gg", "1\n42\n42");
 }
 
 // ══════════════════════════════════════════════════════════════════════════

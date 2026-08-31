@@ -3022,15 +3022,57 @@ fn fordict_move_out_kv_no_leak() {
     security_safe_no_leak("fordict_move_out_kv", "2\n2\n2");
 }
 
-/// KNOWN GAP (`todo/t0840`) on the SANITIZER lane. The value lanes see a SEGV;
-/// this lane sees WHY — UBSan reports `load of misaligned address
-/// 0xbebebebebebebebe`, ASan's uninitialised-heap fill, so the `Vector[Shared]`
-/// element was never stored. A value lane is structurally blind to that
-/// distinction (Core #13), which is why the gap owes a fixture on BOTH.
+/// REGRESSION (was `todo/t0840`, R48 Track D2) on the SANITIZER lane. The
+/// value lanes saw only a SEGV; this lane sees the memory story — the push
+/// stored the handle VALUE where an ADDRESS was required, so the runtime
+/// memcpy'd out of the refcount control block, and the read then handed the
+/// slot's ADDRESS to a by-VALUE accessor. A value lane is structurally blind
+/// to that distinction (Core #13), which is why the class owes a fixture on
+/// BOTH.
+///
+/// What only this lane can pin: the refcount arithmetic BALANCES — three
+/// `.clone()` increfs against three element drops from `gorget_array_free`
+/// plus the original's — so a repair that wrote the slot correctly but leaked
+/// or over-released a reference would still redden here.
 #[test]
-#[ignore = "known gap (R47/t0840): Vector[Shared[T]] push leaves the slot unwritten — UBSan 0xbe fill then SEGV"]
-fn known_gap_shared_vector_of_clones_unwritten_slot_asan() {
-    security_safe_no_leak("known_gap_shared_vector_of_clones_unwritten_slot", "3\n42");
+fn shared_vector_of_clones_push_marshalling_asan() {
+    security_safe_no_leak("shared_vector_of_clones_push_marshalling", "3\n42\n4");
+}
+
+/// KNOWN GAP (`todo/t0907`) on the SANITIZER lane, and ONLY this lane can see
+/// it: `for (k, v) in d` over a `Dict[String, Shared[int]]` prints the RIGHT
+/// answer on both value lanes while over-releasing the value bind, so
+/// `gorget_map_free` walks its second entry into an already-freed control
+/// block. The identical loop over `String` values is clean, and so is
+/// `for h in v` over a `Vector[Shared[int]]` — the Vector element bind takes
+/// the Ptr-borrow path and the Dict value bind does not.
+#[test]
+#[ignore = "known gap (todo/t0907): Dict value-bind iteration over refcount values over-releases — heap-use-after-free in gorget_map_free"]
+fn known_gap_shared_dict_iteration_value_over_release_asan() {
+    security_safe_no_leak("shared_dict_iteration_value_over_release", "4");
+}
+
+/// KNOWN GAP (`todo/t0907`) on the SANITIZER lane. Cloning a
+/// `Vector[Shared[int]]` does not incref its elements: `gorget_array_clone`
+/// consults `elem_clone`, a refcount element type carries `clone_fn` but no
+/// `clone_inplace_fn`, so the two arrays alias the same handles with the
+/// refcount never raised and both drop. The `String`-element twin is clean.
+#[test]
+#[ignore = "known gap (todo/t0907): cloning a Vector[Shared[T]] does not incref its elements — heap-use-after-free under two nested gorget_array_free frames"]
+fn known_gap_shared_nested_vector_clone_over_release_asan() {
+    security_safe_no_leak("shared_nested_vector_clone_over_release", "1\n6");
+}
+
+/// KNOWN GAP (`todo/t0108`) on the SANITIZER lane, in its `Channel` costume.
+/// `needs_param_drop` keys on TYPE alone, so a BARE refcount-handle parameter —
+/// a borrow under CoW-default-borrow — is dropped by the CALLEE at scope exit
+/// and the caller's handle goes to zero underneath it. There is no `.clone()`
+/// anywhere in the program, which is what discriminates it from the R48
+/// Track D2 clone-convention class.
+#[test]
+#[ignore = "known gap (todo/t0108): a bare refcount-handle PARAM is dropped by the callee — heap-use-after-free in gorget_channel_release"]
+fn known_gap_channel_bare_param_callee_drop_uaf_asan() {
+    security_safe_no_leak("channel_bare_param_callee_drop_uaf", "in\n1");
 }
 
 /// REGRESSION (`todo/t0841`, R48 Track D1) on the SANITIZER lane. RED at

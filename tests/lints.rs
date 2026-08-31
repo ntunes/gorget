@@ -145,6 +145,38 @@ fn visit(dir: impl AsRef<Path>, f: &mut dyn FnMut(&Path)) {
     }
 }
 
+/// The two-directional ratchet shared by the burn-down counters in this file.
+///
+/// It asserts EQUALITY, not `<=`, because a tolerance band with no enforced
+/// downward move is an escalator that greens every step of its own drift
+/// (Core #6 ⊕): with slack in the band a new violation lands silently and the
+/// *next* contributor inherits it as the floor. Measured on
+/// `no_growth_in_name_prefix_routing` — a probe added TWENTY fresh
+/// `starts_with("X__")` sites to `src/` and the gate still passed, because its
+/// constant had been left 54 above the actual count. Its sibling
+/// `no_typed_metadata_sidecars` was 138 above an actual count of ZERO, so it
+/// could not have caught anything at all.
+///
+/// Equality costs one line of bookkeeping on an improvement, which is the
+/// point: the number that retires sites is written down in the same commit
+/// that retires them.
+#[track_caller]
+fn assert_exact_ratchet(what: &str, count: usize, budget: usize, guidance: &str) {
+    assert_eq!(
+        count, budget,
+        "\n{what}: expected exactly {budget} site(s), found {count}.\n\n\
+         {guidance}\n\n\
+         This ratchet asserts EQUALITY in BOTH directions:\n  \
+         • count > budget — a new site was added. Migrate it to typed \
+           metadata, or, if it is a genuine registrar / C-emit-boundary \
+           spelling, raise the constant DELIBERATELY with a comment saying \
+           why.\n  \
+         • count < budget — sites were retired (great!). LOWER the constant \
+           in the SAME commit so the new floor is locked in; a band left \
+           above the real count silently absorbs the next regression."
+    );
+}
+
 /// Tier 3a ratchet: the count of name-prefix routing sites in the compiler
 /// must never grow. Decreases freely as migrations land — bring the budget
 /// down when you remove a site so the next regression is caught immediately.
@@ -233,23 +265,25 @@ fn no_growth_in_name_prefix_routing() {
     /// contract (identical form to the adjacent `is_wrapper_method`
     /// `starts_with("Shared__")` dispatcher), so it genuinely cannot be
     /// typed away. `refcount_clone_arm_symmetry` locks the arm set.
-    const BUDGET: usize = 259;
+    /// EXACT count of name-prefix routing sites in src/ — see
+    /// [`assert_exact_ratchet`] for why this is an equality, not a ceiling.
+    /// Reseeded 259 → 205 (R48 Track D2): the band carried 54 sites of slack,
+    /// enough that a probe adding twenty fresh sites still passed the gate.
+    const BUDGET: usize = 205;
 
     let count = count_name_prefix_sites();
-    assert!(
-        count <= BUDGET,
-        "Name-prefix routing count grew beyond budget: {count} > {BUDGET}.\n\n\
-         The layering-discipline ratchet (Tier 3a per docs/devbook/25-structural-guards.md) \
-         bars new `starts_with(\"X__\")` sites where X is a mangled-type prefix. \
-         Either migrate the new site to typed metadata (read a typed flag on \
-         StructDef / TypeMetadata / LirExtern instead of pattern-matching the \
-         name) or, if it's a genuine registrar / C-emit-boundary spelling, \
-         raise BUDGET in tests/lints.rs with a comment explaining why.\n\n\
-         To find new sites:\n  \
-         grep -rEn 'starts_with(\"({}|...)__\")' src/ | grep -v target/\n\n\
-         If the count went DOWN (great!), drop BUDGET in this file to lock in \
-         the new floor.",
-        MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
+    assert_exact_ratchet(
+        "Name-prefix routing sites in src/ (Tier 3a, docs/devbook/25-structural-guards.md)",
+        count,
+        BUDGET,
+        &format!(
+            "The layering-discipline ratchet bars new `starts_with(\"X__\")` sites \
+             where X is a mangled-type prefix: read a typed flag on StructDef / \
+             TypeMetadata / LirExtern instead of pattern-matching the name.\n\n\
+             To list the sites:\n  \
+             grep -rnoE 'starts_with\\(\"({}|...)__\"\\)' src/",
+            MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
+        ),
     );
 }
 
@@ -355,28 +389,29 @@ fn count_sidecar_declarations() -> usize {
 /// callback) were retired during Phase D / Phase A migrations.
 #[test]
 fn no_typed_metadata_sidecars() {
-    const BUDGET: usize = 138;
+    /// EXACT count — see [`assert_exact_ratchet`]. Core #4 sibling of
+    /// `no_growth_in_name_prefix_routing`'s reseed (R48 Track D2): a `<=`
+    /// band with no enforced downward move greens its own drift. Reseeded
+    /// 138 → 0: the band was 138 ABOVE the real count, so this lint could
+    /// not have caught anything — the doc comment above already said the
+    /// floor was 0, and only the assertion disagreed.
+    const BUDGET: usize = 0;
 
     let count = count_sidecar_declarations();
-    assert!(
-        count <= BUDGET,
-        "Tier 2d sidecar absence violated: {count} > {BUDGET}.\n\n\
-         A new `HashMap<key, value>` / `FxHashMap` / `BTreeMap` was \
-         introduced in src/ where the value type is a watched typed-\
-         metadata axis (DropStrategy / CopySemantics / CollectionKind / \
-         EnumKind / EnumCategory / LocalOwnership / BorrowOrigin). The \
-         canonical home for these facts is the typed field on \
-         TypeMetadata / Local / Inst; a parallel registry is a Layering \
-         discipline rule 3 violation (`docs/devbook/24-layering-\
-         discipline.md`).\n\n\
-         To find new sites:\n  \
-         grep -rnE 'HashMap\\s*<\\s*(LocalId|TypeId|String)\\s*,\\s*(DropStrategy|CopySemantics|CollectionKind|EnumKind|EnumCategory|LocalOwnership|BorrowOrigin)\\s*>' src/\n\n\
-         Either:\n  \
-         1. Migrate the lookup to read the typed field directly via \
-            the canonical accessor.\n  \
-         2. If the map is a per-pass scratch computed from the typed \
-            field (not a parallel persistent registry), add an \
-            allowlist entry to SIDECAR_VALUE_TYPES with citation."
+    assert_exact_ratchet(
+        "Tier 2d typed-metadata sidecars in src/",
+        count,
+        BUDGET,
+        "A `HashMap<key, value>` / `FxHashMap` / `BTreeMap` in src/ whose value \
+         type is a watched typed-metadata axis (DropStrategy / CopySemantics / \
+         CollectionKind / EnumKind / EnumCategory / LocalOwnership / \
+         BorrowOrigin). The canonical home is the typed field on TypeMetadata / \
+         Local / Inst; a parallel registry is a Layering discipline rule 3 \
+         violation (`docs/devbook/24-layering-discipline.md`). A per-pass \
+         scratch computed FROM the typed field gets an allowlist entry in \
+         SIDECAR_VALUE_TYPES with a citation.\n\n\
+         To list the sites:\n  \
+         grep -rnE 'HashMap\\s*<\\s*(LocalId|TypeId|String)\\s*,\\s*(DropStrategy|CopySemantics|CollectionKind|EnumKind|EnumCategory|LocalOwnership|BorrowOrigin)\\s*>' src/",
     );
 }
 
@@ -589,27 +624,25 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// `cargo test --test lints no_growth_in_phase_d_proxy_reads`, read the
     /// printed count, restore. (That is also a free Core #13 red on a gate an
     /// executor otherwise never sees fail.)
+    /// EXACT count — see [`assert_exact_ratchet`]. Core #4 sibling of
+    /// `no_growth_in_name_prefix_routing`'s reseed (R48 Track D2).
     const BUDGET: usize = 89;
 
     let count = count_phase_d_proxy_reads();
-    assert!(
-        count <= BUDGET,
-        "Phase D proxy-read count grew beyond budget: {count} > {BUDGET}.\n\n\
-         Tier 3b (`docs/devbook/25-structural-guards.md`) bars new proxy \
-         reads of ownership state. The typed source of truth is \
-         `Local.ownership` (Phase D's `LocalOwnership` field). Proxies \
-         duplicate the same fact and drift from each other under \
-         complex CFG paths.\n\n\
-         To find new sites:\n  \
-         grep -rnE '\\.(is_named_local|is_owned_local)\\s*\\(|drops\\s*\\.\\s*(is_registered|is_moved)\\s*\\(' src/ | grep -v '//'\n\n\
-         Either:\n  \
-         1. Migrate to read `builder.locals[local.0 as usize].ownership` \
-            (or `ctx.source_ownership(...)` for operands).\n  \
-         2. If the proxy is genuinely needed (e.g. inside the proxy's \
-            own implementation), exclude its file/line via the \
-            comment-skip / fn-def-skip already in this lint.\n\n\
-         If the count went DOWN, lower BUDGET in this file to lock the \
-         new floor."
+    assert_exact_ratchet(
+        "Tier 3b Phase-D ownership proxy reads in src/",
+        count,
+        BUDGET,
+        "A proxy read of ownership state (`is_named_local` / `is_owned_local` / \
+         `drops.is_registered` / `drops.is_moved`). The typed source of truth is \
+         `Local.ownership` (Phase D's `LocalOwnership`); proxies duplicate the \
+         same fact and drift from each other under complex CFG paths. Migrate to \
+         `builder.locals[local.0 as usize].ownership` (or \
+         `ctx.source_ownership(...)` for operands); a proxy needed INSIDE the \
+         proxy's own implementation is excluded via the comment-skip / \
+         fn-def-skip already in this lint.\n\n\
+         To list the sites:\n  \
+         grep -rnE '\\.(is_named_local|is_owned_local)\\s*\\(|drops\\s*\\.\\s*(is_registered|is_moved)\\s*\\(' src/ | grep -v '//'",
     );
 }
 
@@ -3943,6 +3976,8 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// 74→75 comment) — when that field lands, drop BUDGET by 3 more with :4630.
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
+    /// EXACT count — see [`assert_exact_ratchet`]. Core #4 sibling of
+    /// `no_growth_in_name_prefix_routing`'s reseed (R48 Track D2).
     const BUDGET: usize = 81;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
@@ -3953,21 +3988,23 @@ fn no_growth_in_self_host_name_prefix_routing() {
         .filter(|p| !PRELUDE_OPTIONLIKE_PREFIXES.contains(p))
         .collect();
     let count = count_name_prefix_sites_self_host(&nonprelude);
-    assert!(
-        count <= BUDGET,
-        "Self-host name-prefix routing count grew beyond budget: {count} > {BUDGET}.\n\n\
-         Phase A migrated the classification consumers in self-host's lir_lower.gg \
-         and lower.gg to read through `build_resource_metadata` (the single source \
-         of truth). Adding a new `starts_with(\"Vector__\"/\"Box__\"/...)` outside \
-         that function or its inner name-parsing dispatchers is a layering regression. \
-         Either:\n  \
-         1. Read the typed metadata: `match build_resource_metadata(name): case Some(rmeta): ...`\n  \
-         2. If it's a genuinely necessary name-parsing site (extracting T from Vector__T), \
-         add it to Pass 1 dispatcher's already-migrated arms.\n\n\
-         If the count went DOWN (great!), drop BUDGET in this file to lock the new floor.\n\n\
-         To find sites:\n  \
-         grep -rnE --include='*.gg' 'starts_with(\"({}|...)__\")' tests/fixtures/self_host_*",
-        MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
+    assert_exact_ratchet(
+        "Self-host name-prefix routing sites (tests/fixtures/self_host_*)",
+        count,
+        BUDGET,
+        &format!(
+            "Phase A migrated the classification consumers in self-host's \
+             lir_lower.gg and lower.gg to read through `build_resource_metadata` \
+             (the single source of truth). A new `starts_with(\"Vector__\"/\
+             \"Box__\"/...)` outside that function or its inner name-parsing \
+             dispatchers is a layering regression: read the typed metadata \
+             (`match build_resource_metadata(name): case Some(rmeta): ...`), or, \
+             for a genuinely necessary name-parsing site (extracting T from \
+             Vector__T), add it to the Pass 1 dispatcher's migrated arms.\n\n\
+             To list the sites:\n  \
+             grep -rnE --include='*.gg' 'starts_with(\"({}|...)__\")' tests/fixtures/self_host_*",
+            MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
+        ),
     );
 }
 

@@ -1,0 +1,31 @@
+# KNOWN GAP — BOTH REAL BACKENDS under `--sanitize`; the value lanes print the
+# RIGHT answer, which is exactly why a stdout-comparing fixture cannot see it.
+#
+# `for (k, v) in d` over a `Dict[String, Shared[int]]` OVER-RELEASES: the
+# iteration's value bind takes a release the retains never paid for, so
+# `gorget_map_free` walks its second entry into an already-freed control block.
+#
+#   AddressSanitizer: heap-use-after-free in gorget_shared_drop
+#     <- Shared__int64_t__drop  <- gorget_map_free  <- main
+#
+# DISCRIMINATOR: the identical loop over `String` VALUES is ASan-clean, and so
+# is `for h in v` over a `Vector[Shared[int]]` — the Vector element bind takes
+# the Ptr-borrow path (`for_loops.rs`), the Dict value bind does not. So this
+# is refcount ARITHMETIC at ONE iteration bind, not a general iteration defect.
+#
+# NOT the R48 Track D2 marshalling class (`t0840`): the put side is correct
+# (`shared_dict_value_handle.gg` is green and ASan-clean), and the `.get(k)`
+# read is correct. Only the iteration bind is wrong.
+#
+# INTENDED (asserted by the wired test): prints `4`, rc 0, ASan-clean.
+# Filed as todo/t0907.
+
+void main():
+    Shared[int] s = Shared[int](2)
+    Dict[String, Shared[int]] d = {}
+    d.put("a", s.clone())
+    d.put("b", s.clone())
+    int total = 0
+    for (k, v) in d:
+        total = total + v.get()
+    print(f"{total}")

@@ -1,0 +1,26 @@
+# REGRESSION (was todo/t0840, found while widening its net): a SINGLE-OWNER
+# opaque handle at a consuming position.
+#
+# `Mutex[T]` is a `GorgetMutex*` typedef with a drop and NO clone path. Once
+# the element slot actually held the handle (the t0840 write repair), `m` and
+# the collection slot both owned it and both dropped: `free(): double free
+# detected in tcache 2`, both backends. Before that repair the cell "passed"
+# only because the slot held garbage the drop happened to survive — the
+# `Vector[Mutex]` was never usable at all (Core #15e Q6: a green cell green for
+# an unrelated reason).
+#
+# The repair is the CoW contract's own rule — owns AND dead at this call ⇒
+# move — applied to the handles `is_resource_type` answers `false` for because
+# their `copy_semantics` is `Trivial` (`is_single_owner_handle_local`).
+# Refcount handles are excluded: they incref at the boundary and both owners
+# drop legitimately.
+#
+# CELL: container=Vector · handle=Mutex · payload=int · producing-arm=push ·
+#       read=`.get(i).unwrap().lock().get()`.
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Vector[Mutex[int]] all = []
+    all.push(m)
+    print(f"{all.len()}")
+    print(f"{all.get(0).unwrap().lock().get()}")
