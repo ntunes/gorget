@@ -1,0 +1,42 @@
+# KNOWN GAP — BOTH LANES, an ICE. `.iter().filter_map(f)` where the closure
+# returns `Option[U]` aborts the Rust lowerer before codegen: `gg check`
+# accepts the program, `gg build` panics.
+#
+#     GIR validation errors:
+#       function @Vector__Option__GorgetString__iter, bb0:
+#         reference to undefined type 'VectorIter__Option__GorgetString'
+#       function @Vector__Option__GorgetString__drain, bb0:
+#         reference to undefined type 'VectorDrain__Option__GorgetString'
+#     thread 'gg-main' panicked at src/ir/lowering/mod.rs:1724:
+#       GIR module failed validation (2 errors)
+#
+# The closure's `Option[String]` return registers `Vector__Option__GorgetString`
+# and its protocol methods, but the `VectorIter`/`VectorDrain` instances those
+# methods reference are never registered — so the adapter types the equip
+# methods name do not exist. Note the failure is in `Vector[Option[String]]`'s
+# OWN protocol, not in `FilterMapIter`: `filter_map` is only what puts an
+# `Option[String]` into a collection position in the first place.
+#
+# ⚠ NOT the R48 Track-γ trait-default param-binding class, and not its
+# HOF-accumulator sibling. Both of those produce a wrong VALUE at rc 0; this
+# one never reaches codegen at all. RE-VERIFIED on the PRE-fix compiler
+# (`/tmp/gg_base`, built from the base blobs): byte-identical panic, so R48
+# neither caused it nor touched it.
+#
+# ⚠ THE ELEMENT TYPE IS NOT THE AXIS — measured, so nobody scopes this as a
+# resource defect. `Option[int]` reproduces identically, only with the names
+# substituted: `reference to undefined type 'VectorIter__Option__int64_t'` /
+# `'VectorDrain__Option__int64_t'`. Whatever registers `Vector__Option__U`'s
+# protocol methods does not register the adapter instances they reference, for
+# any `U`.
+#
+# INTENDED (asserted below): prints 3 then 101.
+
+from std.collections import Vector
+from std.conv import int_to_str
+
+void main():
+    Vector[int] nums = [1, 2, 3]
+    Vector[String] b = nums.iter().filter_map((int n): Some(int_to_str(n + 100))).collect()
+    print(f"{b.len()}")
+    print(b.get(0).unwrap())

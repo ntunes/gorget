@@ -4961,6 +4961,25 @@ fn sh_forelse_else_body_dropped() {
 /// NOT `todo/t0219`'s `gm-inherent-generic-equip DEFERRED` arm, which covers a
 /// method-level-GENERIC method on a generic receiver while `each` has none. The
 /// two are neighbouring holes in the inherent (no-trait) half of the same wall.
+/// KNOWN GAP (filed R48 Track γ), BOTH LANES — an ICE on a program `gg check`
+/// accepts. `.iter().filter_map(f)` with an `Option[U]`-returning closure
+/// registers `Vector__Option__U` and its protocol methods but never registers
+/// the `VectorIter__Option__U` / `VectorDrain__Option__U` instances those
+/// methods reference, so GIR validation fails before codegen.
+///
+/// The element type is NOT the axis — `Option[int]` reproduces identically.
+/// Verified pre-existing on a compiler built from the pre-R48 blobs, so this is
+/// a neighbour of Track γ's classes, not one of them: those produce a wrong
+/// VALUE at rc 0, this never reaches codegen.
+#[test]
+#[ignore = "known gap (R48): `Vector[Option[U]]`'s protocol methods reference VectorIter/VectorDrain instances that are never registered, so a filter_map returning Option[U] ICEs in GIR validation; un-ignore when the adapter instances are registered alongside the element's protocol"]
+fn known_gap_filter_map_option_elem_type_never_registered() {
+    run_gg(
+        "known_gaps/filter_map_option_elem_type_never_registered.gg",
+        "3\n101",
+    );
+}
+
 #[test]
 #[ignore = "known gap (R48): the self-host emits an INHERENT generic-equip method from its template with the equip's own `T` unbound, under the mono'd symbol name; un-ignore when the template arm binds the equip type params (or stops emitting the template)"]
 #[serial(self_host_lowerer_driver)]
