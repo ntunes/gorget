@@ -2,9 +2,40 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**⚠ R46 STOPPED BEFORE EXECUTION 2026-08-29. ▶ R47 CLOSED 2026-08-31. ⛔ NO NEW ROUND — the owner
-suspended the autonomous default on 2026-08-31: *"After closing the round, do not start a new round this
-time."* R48 does not open until the owner says so.**
+**▶ R48 IS OPEN (2026-08-31) — the owner lifted the R47 suspension with *"open next round"*.**
+Headline: **the six CRITICAL memory-safety defects**, with the owner-directed burn-down campaign in
+parallel and `t0861` (the figures DB) early at the owner's explicit request (*"please do not forget
+t0861, the figures DB. It should go in early this round."*).
+
+**⭐ R48 OPENED ON A RECOVERED HEAD START — do not re-derive it.** The kept worktree
+`agent-a619349ec03b80e93` (flagged at R47 close as the F3 scout lost to the disk crash) holds an
+**env-gated prototype diagnosing THREE of the six CRITICALs**, never measured or reported, based
+68 commits behind main. **Preserved at `/tmp/r48_recovered_f3_scout.patch`** — `GG_FIX_A` (t0770:
+read `ctx.callable_return_type` instead of the `I64_TYPE` fall-through) · `GG_FIX_B`/`GG_FIX_B2`
+(t0771: the closure-env `TypeDef` is built with `..TypeMetadata::default()`, so `drop: None` on a
+struct holding owned resource fields — the root of BOTH the UAF and the leak face) · `GG_FIX_C`
+(t0763: **the five per-function prescans run at only TWO of the FOUR function-lowering paths**, so
+`cow_reassigned_after` is EMPTY for every generic function). The F2 worktree
+`agent-aa19c1e589090caae` is preserved at `/tmp/r48_recovered_f2_sanitize.patch` (seven
+`sanitize_empty_sort_*.gg` fixtures + a `tests/lints.rs` addition).
+⚠ **All three are HYPOTHESES, not answers** — each track's scout verifies end-to-end at current HEAD.
+⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
+§ Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
+
+### R48 TRACKS (6 scouts launched 2026-08-31; file zones disjoint by construction)
+
+| Track | Items | Zone | Head start |
+|---|---|---|---|
+| **A** | `t0770` + `t0772` (same helper, opposite directions) | `src/ir/lowering/exprs/methods.rs` | `GG_FIX_A` |
+| **B** | `t0771` | `src/ir/lowering/closures.rs` | `GG_FIX_B2` |
+| **C** | `t0763` + `t0134` (self-host lane, Core #9) | `src/ir/lowering/functions.rs`, `generics/` | `GG_FIX_C` |
+| **D** | `t0840` + `t0841` | TBD by scout | none — diagnose from scratch |
+| **E** | burn-down campaign (owner-directed) | `tests/` | F2 patch |
+| **F** | `t0861` figures DB — schema + clone-meter pilot | `scripts/`, `tests/lints.rs` | `clone_meter.spec` |
+
+⚠ **E and F both touch `tests/lints.rs`** — both scouts were briefed to name their exact edit regions.
+⚠ **Sequence memory-safety FIRST**: A–D's fixes retire `known_gaps` fixtures and leak-allowlist rows that
+E is adjudicating. E was briefed to list those rows so it does not adjudicate one out from under a track.
 
 **R47's record is in `DONE.md` (2026-08-31). Do not recap it here.** Battery at close, all green:
 C sweep 2533/0/182 · LLVM sweep 2533/0/182 · `spec_conformance` 3/0 · `security` 189/0/28 ·
@@ -28,7 +59,7 @@ C sweep 2533/0/182 · LLVM sweep 2533/0/182 · `spec_conformance` 3/0 · `securi
 - **Four leak rows are ADMITTED with per-row citations** (owner, 2026-08-31) — inherited debt, not R47's.
   `sanitize_sweep.sh` was **already RED at the round-open commit**; R47 made it green.
 
-### ▶ R48 CANDIDATE SHAPE (scouted, NOT opened)
+### ▶ R48 SCOPE (OPENED 2026-08-31 — the constraints below are LIVE, not a proposal)
 
 **Headline: the six CRITICAL memory-safety defects** — `t0770` (rc 139 SIGSEGV) · `t0771` (heap-UAF, silent
 wrong output, no crash) · `t0763` (`&self` mutator on a generic equip is a UAF) · `t0840` (**the Book Ch16
