@@ -1,0 +1,151 @@
+# The combinator adapter CLONES a resource receiver and works on the copy. Its
+# move-if-dead prologue used to unregister the ORIGINAL's local from drop
+# tracking anyway — correct only if the receiver had been CONSUMED — so every
+# combinator call over a NAMED receiver holding a heap payload leaked that
+# payload. Stdout-invisible: the whole integration suite is stdout comparison,
+# which is why this is an ASan fixture and not a `run_gg`.
+#
+# AXIS SAMPLED — arm x receiver x receiver-liveness, all with a heap-FORCED
+# payload (`mk()`, never a literal, so the leak has something to leak):
+#
+#   Option: map · and_then · flat_map · or_else · filter · unwrap_or_else
+#   Result: map · map_err · unwrap_or_else
+#   liveness: receiver LIVE after the call · receiver DEAD after the call
+#   shape:    named local · chained · inside a loop · borrowed param ·
+#             Vector payload
+#
+# MEASURED PRE-FIX at base `3b8a5561`: `Direct leak of 6 byte(s) in 1 object(s)`
+# per leaking cell, from `gorget_str_cat` inside `mk`, under
+# `ASAN_OPTIONS=detect_leaks=1`. No double-free and no use-after-free appear
+# post-fix on any cell here — the receiver a combinator sees can never carry a
+# move sigil (`(^o).map(f)` and `(!o).map(f)` are both `E_MoveInOperandPosition`),
+# so restoring its drop registration cannot race a consumer.
+#
+# ⚠ The INLINE-CONSTRUCTOR receiver (`Some(mk(..)).map(f)`) is NOT here and is
+# NOT covered: it leaks 6 B before AND after this fix and the generated C is
+# byte-identical, because that temp was never registered at all. That is
+# `t0872`, a registration gap on the adapter path at a different layer, with
+# its own repro. This fixture must not read as covering it.
+#
+# ⚠ Callable arguments are top-level functions rather than closure literals
+# WITH CAPTURES: a capturing closure leaks its 8-byte environment (`t0526`),
+# which would mask this fixture's own signal. Non-capturing closure literals
+# are ASan-clean and one is used deliberately, to keep both spellings pinned.
+
+String mk(String a, String b):
+    return a + b
+
+String bang(String s):
+    return mk(s, "!")
+
+Option[String] some_q(String s):
+    return Some(mk(s, "?"))
+
+Option[String] some_hash(String s):
+    return Some(mk(s, "#"))
+
+Option[String] some_orelse():
+    return Some(mk("or", "else"))
+
+bool always(String s):
+    return s.len() > 0
+
+String fallback():
+    return mk("de", "fault")
+
+String from_err(String e):
+    return mk(e, "^")
+
+void map_live_after():
+    Option[String] o = Some(mk("hel", "lo"))
+    Option[String] r = o.map(bang)
+    print(r.unwrap())
+    print(o.unwrap())
+
+void map_dead_after():
+    Option[String] o = Some(mk("de", "ad"))
+    Option[String] r = o.map(bang)
+    print(r.unwrap())
+
+void map_closure_literal():
+    Option[String] o = Some(mk("li", "t"))
+    Option[String] r = o.map((String s): mk(s, "*"))
+    print(r.unwrap())
+
+void and_then_named():
+    Option[String] o = Some(mk("an", "d"))
+    Option[String] r = o.and_then(some_q)
+    print(r.unwrap())
+
+void flat_map_named():
+    Option[String] o = Some(mk("fl", "at"))
+    Option[String] r = o.flat_map(some_hash)
+    print(r.unwrap())
+
+void or_else_named():
+    Option[String] o = None()
+    Option[String] r = o.or_else(some_orelse)
+    print(r.unwrap())
+
+void filter_named():
+    Option[String] o = Some(mk("fi", "lt"))
+    Option[String] r = o.filter(always)
+    print(r.unwrap())
+
+void unwrap_or_else_named():
+    Option[String] o = Some(mk("uo", "e"))
+    print(o.unwrap_or_else(fallback))
+
+void result_map_named():
+    Result[String, String] o = Ok(mk("re", "s"))
+    Result[String, String] r = o.map(bang)
+    print(r.unwrap())
+
+void result_map_err_named():
+    Result[String, String] o = Error(mk("b", "ad"))
+    Result[String, String] r = o.map_err(bang)
+    print(r.unwrap_or_else(from_err))
+
+void result_unwrap_or_else_named():
+    Result[String, String] o = Error(mk("e", "rr"))
+    print(o.unwrap_or_else(from_err))
+
+void chained():
+    Option[String] o = Some(mk("ch", "ain"))
+    Option[String] r = o.map(bang).map(bang)
+    print(r.unwrap())
+
+void in_loop():
+    int i = 0
+    while i < 3:
+        Option[String] o = Some(mk("lo", "op"))
+        Option[String] r = o.map(bang)
+        print(r.unwrap())
+        i = i + 1
+
+void borrowed_param(Option[String] o):
+    Option[String] r = o.map(bang)
+    print(r.unwrap())
+
+void vector_payload():
+    Vector[String] v = [mk("v", "1"), mk("v", "2")]
+    Option[Vector[String]] o = Some(v)
+    Option[int] r = o.map((Vector[String] xs): xs.len())
+    print(r.unwrap())
+
+void main():
+    map_live_after()
+    map_dead_after()
+    map_closure_literal()
+    and_then_named()
+    flat_map_named()
+    or_else_named()
+    filter_named()
+    unwrap_or_else_named()
+    result_map_named()
+    result_map_err_named()
+    result_unwrap_or_else_named()
+    chained()
+    in_loop()
+    borrowed_param(Some(mk("pa", "ram")))
+    vector_payload()

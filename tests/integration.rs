@@ -4906,6 +4906,51 @@ fn fstring_interp_match_scrutinee_binding() {
 /// ⚠ Deliberately asserts the OUTPUT: `grep -c lower_fail` on the emitted C
 /// gives 1 for the Vector/Dict arms and 0 for the String/bytes arms, so a
 /// marker-grep guard is structurally blind to half the class.
+/// KNOWN GAP `t0877`, SELF-HOST lane — a closure LITERAL whose body
+/// `guess_return_type` cannot type falls to `I64_TYPE`, so the closure is
+/// emitted `int64_t`-returning. Two arms of the same helper: an `Ok(..)` /
+/// `Error(..)` body with no `expected_type` in scope (the `Some(x)` sibling arm
+/// MINTS `Option__U`; the Result constructors are gated on `expected_type`,
+/// which is `-1` at a closure-argument site), and a body that is a bare
+/// PARAMETER identifier (the EIdentifier arm reads `fn_sigs` only — the
+/// self-host does not register closure params as locals the way Rust gg's
+/// `lower_closure` does). Rust gg compiles and runs both. NOT `t0770`: nothing
+/// is erased here, the inference simply has no arm. NOT `t0230`(b), which is
+/// the same helper's `SMatch`/`SIf`-tail arm returning UNIT.
+#[test]
+#[ignore = "KNOWN GAP t0877: self-host guess_return_type types an Ok(..)-bodied \
+or bare-param-bodied closure literal as int64_t; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_closure_literal_ok_body_typed_int() {
+    sh_known_gap_expect(
+        "known_gaps/sh_closure_literal_ok_body_typed_int.gg",
+        "sh_closure_literal_ok_body_typed_int",
+        "hello?\nbad",
+    );
+}
+
+/// KNOWN GAP `t0879`, SELF-HOST lane — a USER-DEFINED generic method taking a
+/// callable (`U transform[U, F](self, F f)`) cannot be compiled on the
+/// self-host lane on ANY spelling of the argument: top-level fn, closure
+/// literal and `Callable` PARAM all give `incompatible types when assigning to
+/// type 'Str' from type 'int'`. Measured identical before and after R48 Track
+/// A, so it is a pre-existing lag, not that round's inflow — and it is why the
+/// live Rust-lane fixture for the same shape
+/// (`generic_method_callable_param/targ_inference.gg`) is NOT top-level.
+/// ⚠ Fixing the self-host's `RTFunction`-only shape-2 predicate alone will NOT
+/// close it: the top-level-fn spelling has no wrapper anywhere and fails too.
+#[test]
+#[ignore = "KNOWN GAP t0879: self-host cannot compile a user generic method \
+taking a callable, on any argument spelling; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_generic_method_callable_arg() {
+    sh_known_gap_expect(
+        "known_gaps/sh_generic_method_callable_arg.gg",
+        "sh_generic_method_callable_arg",
+        "hello!\n5\nhello?",
+    );
+}
+
 #[test]
 #[ignore = "KNOWN GAP: self-host lower_for_{vector,dict,string,string_bytes} drop the \
 loop-else body silently; TODO.md."]
@@ -59148,20 +59193,145 @@ true",
     );
 }
 
-/// KNOWN GAP `t0770` — `Option[String].map(f)` with `f` a type-erased
-/// `Callable` PARAMETER allocates `result_local` as `Option[i64]` (16 bytes)
-/// and the caller reads it as `Option[String]` (40 bytes). rc 139 on a plain
-/// build, ASan `stack-buffer-overflow` under `--sanitize`, deterministic 3/3
-/// at `f3feea79`. Un-ignore when `infer_closure_return_type` reads
-/// `ctx.callable_return_type` instead of defaulting to `I64_TYPE`.
+/// LIVE REGRESSION FIXTURE (graduated from `t0770`). `Option[String].map(f)`
+/// with `f` a type-erased `Callable` PARAMETER used to allocate `result_local`
+/// as `Option[i64]` (16 bytes) while the caller read it as `Option[String]`
+/// (40 bytes) — rc 139 on a plain build, ASan `stack-buffer-overflow` under
+/// `--sanitize`. The six readers of that erased fact now all go through
+/// `ctx.callable_return_type` / `extract_fn_return_type_from_hint`.
+///
+/// This test was `#[ignore]`d and RED, asserting the intended `hello!` against
+/// a compiler that segfaulted. Re-verified RED against the pre-fix compiler
+/// blob (`git show <base>:src/...`), GREEN on C, LLVM and the self-host lane.
+///
+/// ⚠ The `.gg` deliberately stays in `known_gaps/`, a SUBDIRECTORY: it is the
+/// CLOSURE-LITERAL spelling of the cell, and a capturing closure literal leaks
+/// its 8-byte environment (`t0526`, an independent gap). `known_gaps/` is
+/// outside both the top-level `runtime_parity_corpus` scan and the top-level
+/// `scripts/sanitize_sweep.sh` walk, whose leak allowlist is shrink-only. The
+/// top-level-function spelling of the same cell IS a top-level fixture
+/// (`combinator_callable_param_same_type.gg`) and is ASan-clean.
 #[test]
-#[ignore = "KNOWN GAP t0770: combinator adapter mis-sizes result_local for a \
-type-erased Callable parameter — rc 139 / ASan stack-buffer-overflow"]
-fn known_gap_combinator_callable_param_result_type_erased_sbo() {
+fn combinator_callable_param_result_type_erased_sbo() {
     run_gg(
         "known_gaps/combinator_callable_param_result_type_erased_sbo.gg",
         "hello!",
     );
+}
+
+/// The erased-`Callable`-PARAMETER combinator net, SAME-TYPE half: 8 broken
+/// cells (Option map/and_then/flat_map/or_else, Result map/and_then/or_else/
+/// map_err) plus 3 negative controls that never read the helper. Top-level, so
+/// `runtime_parity_corpus` requires it to MATCH the self-host lane — which it
+/// does, because `self_host_lowerer/lower_closures.gg` grew the mirror read.
+/// RED pre-fix: C `incompatible types when assigning to type
+/// '__gg_Option__GorgetString' from type 'int64_t'`, LLVM rc 139, self-host
+/// `incompatible types when assigning to type 'Str' from type 'int64_t'`.
+#[test]
+fn combinator_callable_param_same_type() {
+    run_gg(
+        "combinator_callable_param_same_type.gg",
+        "\
+hello!
+hello?
+hello#
+orelse
+hello+
+hello&
+bad~
+bad-|
+filtered
+default
+bad^",
+    );
+}
+
+/// The CROSS-TYPE half of the same net — the axis on which a wrong `I64`
+/// answer is wrong about WHICH type rather than merely wrong-sized, and the
+/// only place the `extract_fn_return_type` reader is visible at all. RED
+/// pre-fix on BOTH backends with a clean `error[E_TypeMismatch]: type mismatch:
+/// expected `int`, found `String`` — a rejection of a program ggdef accepts.
+#[test]
+fn combinator_callable_param_cross_type() {
+    run_gg(
+        "combinator_callable_param_cross_type.gg",
+        "\
+5
+6
+8
+7",
+    );
+}
+
+/// Method-level generic inference (`U transform[U, F](self, F f)`) over a
+/// `Callable[U(T)]` PARAMETER. Two more readers of the same erased fact: the
+/// shape-2 loop in `try_infer_method_targs`, which inlined its own
+/// `ResolvedType::Function` match and so SURVIVED the accessor fix, and
+/// `typeid_to_ast_type`, which refused to render any callable wrapper and so
+/// could not mint the monomorph even once the binding succeeded.
+///
+/// RED pre-fix: C `incompatible types when assigning to type 'Str' from type
+/// 'int32_t'`, LLVM `undefined reference to 'Holder__transform'`. The
+/// top-level-fn and closure-literal spellings in the same file are the
+/// controls — green before and after.
+///
+/// ⚠ NOT a top-level fixture: the self-host lane cannot compile a user generic
+/// method taking a callable AT ALL, on ANY spelling, identically before and
+/// after this change (`t0879`). A top-level placement would register a
+/// self-host non-MATCH that this round did not cause.
+#[test]
+fn generic_method_callable_param_targ_inference() {
+    run_gg(
+        "generic_method_callable_param/targ_inference.gg",
+        "\
+hello!
+5
+hello?
+hello~",
+    );
+}
+
+/// KNOWN GAP `t0876` — a closure that CAPTURES a `Callable[T]` PARAMETER
+/// cannot be compiled: the env struct's field for the capture is typed `unit`
+/// (a `Callable` param's GIR local type is erased), so the generated C
+/// dereferences a `void` slot (`error: void value not ignored as it ought to
+/// be`) and llc rejects the LLVM (`void type only allowed for function
+/// results`). A SECOND fault sits one line down — the indirect call inside the
+/// closure body is cast `int64_t`-returning, because the enclosing function's
+/// `callable_return_types` sidecar is not propagated into the lifted closure's
+/// own `func_state`.
+///
+/// ⚠ NOT `t0770`: that class's reader 5 (the closure-body return-type
+/// inference) IS fixed and DOES fire on this program — verified by
+/// instrumentation — but the closure's registered return type is re-pinned
+/// from the emitted body, and the body cannot be emitted while the field is
+/// `void`. Un-ignore when a captured `Callable` gets a real field type and the
+/// sidecars cross the closure boundary.
+#[test]
+#[ignore = "KNOWN GAP t0876: a captured Callable param becomes a unit-typed \
+closure-env field — the generated C dereferences a void slot"]
+fn known_gap_closure_captures_callable_param_void_env_field() {
+    run_gg(
+        "known_gaps/closure_captures_callable_param_void_env_field.gg",
+        "hello!",
+    );
+}
+
+/// KNOWN GAP `t0878` — `Vector[T].map(f)` / `.flat_map(f)` with `f` a
+/// `Callable[U(T)]` PARAMETER: the monomorph body is never emitted, because
+/// `discover_method_instances` walks with a `LocalTypeEnv` a callable param is
+/// not in. The two `Vector` arms in `typecheck.rs` DECLINE the shape
+/// (`is_monomorphizable_closure_operand`) rather than un-gate it, because
+/// un-gating gives `undefined reference` on C and rc 0 printing GARBAGE on
+/// LLVM — a silent miscompile is strictly worse than the rejection it replaces.
+/// The rejection's own wording is also wrong (it reports the fallback type);
+/// the end state is that this program COMPILES. `Iterator.map` with a Callable
+/// param needs no gate — measured correct.
+#[test]
+#[ignore = "KNOWN GAP t0878: Vector[T].map with a Callable param has no \
+monomorph; the arm declines the shape to avoid a silent LLVM miscompile"]
+fn known_gap_vector_map_callable_param_no_monomorph() {
+    run_gg("known_gaps/vector_map_callable_param_no_monomorph.gg", "5");
 }
 
 /// KNOWN GAP `t0771` — a closure capturing a PARAMETER and escaping via

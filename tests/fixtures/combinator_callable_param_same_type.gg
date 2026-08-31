@@ -1,0 +1,171 @@
+# The Option/Result combinator adapter must read a `Callable[T]` PARAMETER's
+# DECLARED return type. Every helper below calls a combinator whose closure
+# operand is a `Callable` PARAM — the one closure shape whose GIR local type is
+# ERASED to unit, so it resolves through neither `lookup_closure_info` nor
+# `fn_sigs`. Six readers of that erased fact used to fall through to a
+# hardcoded `I64_TYPE`, sizing the result slot for an `int` payload whatever
+# the callable actually returns.
+#
+# AXIS CELLS SAMPLED — (arm x receiver), SAME-TYPE half: the callable's return
+# type EQUALS the receiver's payload type, so a wrong `I64` answer is
+# WRONG-SIZED. The CROSS-TYPE half, where a wrong answer is wrong about WHICH
+# type, is `combinator_callable_param_cross_type.gg`; neither half alone is a
+# net, because on this half the mistake and the truth have the same shape.
+#
+#   Option: map · and_then · flat_map · or_else
+#   Result: map · and_then · or_else · map_err
+#
+# NEGATIVE CONTROLS (green BEFORE and AFTER — they never read the helper):
+#   Option.filter · Option.unwrap_or_else · Result.unwrap_or_else
+# Structurally outside the class, not omitted: `Option.or`, `Option.flatten`
+# and `Result.or` take a VALUE or no argument at all, so the adapter never has
+# a closure operand to type. That is the whole `combinator_kind` census —
+# 14 registrations (`tests/lints.rs::EXPECTED_BUILTIN_REGISTRATIONS`), 11 with
+# a closure operand, 3 without.
+#
+# MEASURED PRE-FIX, PER CELL, at base `3b8a5561` — C and LLVM pinned
+# SEPARATELY, because on `Result.map` the two backends genuinely DISAGREE and
+# no blanket "both backends agree" claim may stand in for the measurement:
+#
+#   Option.map        C rc 139             LLVM rc 139
+#   Option.and_then   C cc-error           LLVM rc 139
+#   Option.flat_map   C cc-error           LLVM rc 139
+#   Option.or_else    C cc-error           LLVM rc 139
+#   Result.map        C rc 0, stdout ""    LLVM rc 0, stdout "hello!"
+#   Result.and_then   C cc-error           LLVM rc 139
+#   Result.or_else    C cc-error           LLVM rc 139
+#   Result.map_err    C rc 1 "gorget_string_free invariant: cap=1 but alloc=NULL"
+#                                          LLVM rc 1, same invariant
+#   the three controls C rc 0 correct      LLVM rc 0 correct
+#
+# and the whole file, as one program: C `incompatible types when assigning to
+# type '__gg_Option__GorgetString' from type 'int64_t'`, LLVM rc 139. The
+# SELF-HOST lane was RED too — `incompatible types when assigning to type 'Str'
+# from type 'int64_t'` — and is fixed by the same read in
+# `self_host_lowerer/lower_closures.gg::combinator_closure_ret_type`.
+#
+# ⚠ TWO SPELLING CONSTRAINTS, both about OTHER filed defects, neither one
+# weakening the cell this file pins (the Callable PARAM lives inside the
+# helpers; how `main` spells the argument is a different axis):
+#   * the arguments are TOP-LEVEL FUNCTIONS, not closure literals. A closure
+#     literal leaks its 8-byte environment (`t0526`), and this fixture is
+#     top-level, so `scripts/sanitize_sweep.sh` sweeps it and its leak
+#     allowlist is shrink-only. The closure-literal spelling of the same cell
+#     is pinned by `known_gaps/combinator_callable_param_result_type_erased_sbo.gg`.
+#   * `Result.and_then` / `Result.or_else` would ALSO need the top-level-fn
+#     spelling on the self-host lane regardless: a closure literal whose body
+#     is `Ok(...)` is typed `int64_t` by the self-host's own closure-signature
+#     inference (`t0877`), and `runtime_parity_corpus` requires a top-level
+#     fixture to MATCH there.
+
+String mk(String a, String b):
+    return a + b
+
+String bang(String s):
+    return mk(s, "!")
+
+String plus(String s):
+    return mk(s, "+")
+
+String dash(String s):
+    return mk(s, "-")
+
+String caret(String e):
+    return mk(e, "^")
+
+Option[String] some_q(String s):
+    return Some(mk(s, "?"))
+
+Option[String] some_hash(String s):
+    return Some(mk(s, "#"))
+
+Option[String] some_orelse():
+    return Some(mk("or", "else"))
+
+Result[String, String] ok_amp(String s):
+    return Ok(mk(s, "&"))
+
+Result[String, String] recover(String e):
+    return Ok(mk(e, "~"))
+
+bool never(String s):
+    return s.len() > 99
+
+String filtered():
+    return mk("fil", "tered")
+
+String fallback():
+    return mk("de", "fault")
+
+String bar(String e):
+    return mk(e, "|")
+
+# --- the eight defective cells ---
+
+String opt_map(Callable[String(String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    Option[String] r = o.map(f)
+    return r.unwrap()
+
+String opt_and_then(Callable[Option[String](String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    Option[String] r = o.and_then(f)
+    return r.unwrap()
+
+String opt_flat_map(Callable[Option[String](String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    Option[String] r = o.flat_map(f)
+    return r.unwrap()
+
+String opt_or_else(Callable[Option[String]()] f):
+    Option[String] o = None()
+    Option[String] r = o.or_else(f)
+    return r.unwrap()
+
+String res_map(Callable[String(String)] f):
+    Result[String, String] o = Ok(mk("hel", "lo"))
+    Result[String, String] r = o.map(f)
+    return r.unwrap()
+
+String res_and_then(Callable[Result[String, String](String)] f):
+    Result[String, String] o = Ok(mk("hel", "lo"))
+    Result[String, String] r = o.and_then(f)
+    return r.unwrap()
+
+String res_or_else(Callable[Result[String, String](String)] f):
+    Result[String, String] o = Error(mk("b", "ad"))
+    Result[String, String] r = o.or_else(f)
+    return r.unwrap()
+
+String res_map_err(Callable[String(String)] f):
+    Result[String, String] o = Error(mk("b", "ad"))
+    Result[String, String] r = o.map_err(f)
+    return r.unwrap_or_else(bar)
+
+# --- the three negative controls ---
+
+String ctl_opt_filter(Callable[bool(String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    Option[String] r = o.filter(f)
+    return r.unwrap_or_else(filtered)
+
+String ctl_opt_unwrap_or_else(Callable[String()] f):
+    Option[String] o = None()
+    return o.unwrap_or_else(f)
+
+String ctl_res_unwrap_or_else(Callable[String(String)] f):
+    Result[String, String] o = Error(mk("b", "ad"))
+    return o.unwrap_or_else(f)
+
+void main():
+    print(opt_map(bang))
+    print(opt_and_then(some_q))
+    print(opt_flat_map(some_hash))
+    print(opt_or_else(some_orelse))
+    print(res_map(plus))
+    print(res_and_then(ok_amp))
+    print(res_or_else(recover))
+    print(res_map_err(dash))
+    print(ctl_opt_filter(never))
+    print(ctl_opt_unwrap_or_else(fallback))
+    print(ctl_res_unwrap_or_else(caret))

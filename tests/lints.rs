@@ -13167,6 +13167,115 @@ fn unify_closure_ret_axis_class_enumeration() {
     );
 }
 
+/// Class-guard (Core #6) for the ERASED-`Callable`-PARAMETER READER AXIS.
+///
+/// A `Callable[T]` PARAMETER's type is erased — to `unit` in the GIR, and to a
+/// `ResolvedType::CallableTrait` wrapper (not a bare `Function`) in the
+/// typechecker. Every site that wants "what does this callable return" and
+/// answers it from `fn_sigs` / `lookup_closure_info` / a bare `Function` match
+/// gets it WRONG for that one shape and silently defaults. R48 Track A found
+/// SEVEN such readers, one at a time, each in a new costume: an adapter's
+/// result-type helper, the adapter's own call emitter, a check-time accessor,
+/// a self-host mirror, a closure-body inference, a generic-inference loop that
+/// INLINED its own copy of the accessor's match and so survived the accessor's
+/// fix, and an AST renderer whose blanket `_ => None` swallowed the wrapper.
+///
+/// ⚠ WHAT THIS GUARD CANNOT DO — state it, do not overclaim (`t0875` is this
+/// tree's record of four arm-counts evaded seven times). It is a TRIPWIRE on
+/// the two spellings the fixed readers use, NOT a class-retiring guard:
+///   * it CANNOT see a reader that answers the question a THIRD way — a fresh
+///     `fn_sigs.get(...)` fall-through, a new `unwrap_or(I64_TYPE)`, a match on
+///     a type NAME. Those are exactly the costumes readers 1, 2 and 5 wore.
+///   * it CANNOT see a reader in a file it does not read — it scans four files
+///     by name, and the eighth reader may live in a fifth.
+///   * it CANNOT tell a correct reader from an incorrect one; it counts.
+/// What it DOES do is make the census a number someone has to change on
+/// purpose, with this comment in front of them, instead of a fact a reviewer
+/// has to rediscover. Retiring the class needs a TYPE (one accessor that is
+/// the only way to ask), not a count.
+#[test]
+fn erased_callable_param_reader_axis_census() {
+    /// GIR-side readers: sites reading `callable_return_type(..)` inside the
+    /// lowering. Readers 1+2 share ONE helper in `exprs/methods.rs`
+    /// (`callable_param_return_type`, whose two callers are the adapter's
+    /// result-type inference and its indirect-call emitter, so they can never
+    /// disagree), reader 5 is the closure-body inference in `closures.rs`, and
+    /// the pre-existing direct-call arm is in `exprs/calls.rs`.
+    const EXPECTED_GIR_READS_METHODS: usize = 1;
+    const EXPECTED_GIR_READS_CLOSURES: usize = 1;
+    const EXPECTED_GIR_READS_CALLS: usize = 1;
+    /// Typechecker-side: `extract_fn_return_type_from_hint` is the ONE
+    /// accessor that resolves the id and unwraps every callable wrapper.
+    /// Callers today (3): `extract_fn_return_type` (reader 3, now a thin alias
+    /// of it, `typecheck.rs:8571`), the shape-2 generic-inference loop
+    /// (reader 6, `:7949`), and the pre-existing decl-type-hint site
+    /// (`:4475`). A NEW caller is fine — bump this. A new INLINE
+    /// `ResolvedType::Function` match beside it instead is the thing that hid
+    /// reader 6 through a whole gauntlet, and is what this count exists to
+    /// make someone justify.
+    const EXPECTED_ACCESSOR_CALLERS: usize = 3;
+    /// Self-host mirror: the combinator's own reader in
+    /// `self_host_lowerer/lower_closures.gg` peels the callable local's
+    /// `GtFnPtr` and falls back to the `closure_value_ret_type` side-channel.
+    const EXPECTED_SH_FNPTR_PEELS: usize = 1;
+
+    fn count(src: &str, needle: &str) -> usize {
+        src.matches(needle).count()
+    }
+
+    let methods = fs::read_to_string("src/ir/lowering/exprs/methods.rs")
+        .expect("read src/ir/lowering/exprs/methods.rs");
+    let closures = fs::read_to_string("src/ir/lowering/closures.rs")
+        .expect("read src/ir/lowering/closures.rs");
+    let calls = fs::read_to_string("src/ir/lowering/exprs/calls.rs")
+        .expect("read src/ir/lowering/exprs/calls.rs");
+    let typecheck = fs::read_to_string("src/semantic/typecheck.rs")
+        .expect("read src/semantic/typecheck.rs");
+    let sh_closures = fs::read_to_string("tests/fixtures/self_host_lowerer/lower_closures.gg")
+        .expect("read tests/fixtures/self_host_lowerer/lower_closures.gg");
+
+    let m = count(&methods, "ctx.callable_return_type(");
+    let c = count(&closures, "ctx.callable_return_type(");
+    let k = count(&calls, "ctx.callable_return_type(");
+    // The accessor's own definition is `fn extract_fn_return_type_from_hint`,
+    // which the `self.` prefix excludes from the caller count.
+    let a = count(&typecheck, "self.extract_fn_return_type_from_hint(");
+    let sh = count(&sh_closures, "case GtFnPtr(_, cc_ret):");
+
+    let mut problems: Vec<String> = Vec::new();
+    for (what, got, want) in [
+        ("src/ir/lowering/exprs/methods.rs `ctx.callable_return_type(`", m, EXPECTED_GIR_READS_METHODS),
+        ("src/ir/lowering/closures.rs `ctx.callable_return_type(`", c, EXPECTED_GIR_READS_CLOSURES),
+        ("src/ir/lowering/exprs/calls.rs `ctx.callable_return_type(`", k, EXPECTED_GIR_READS_CALLS),
+        ("src/semantic/typecheck.rs `self.extract_fn_return_type_from_hint(`", a, EXPECTED_ACCESSOR_CALLERS),
+        ("self_host_lowerer/lower_closures.gg `case GtFnPtr(_, cc_ret):`", sh, EXPECTED_SH_FNPTR_PEELS),
+    ] {
+        if got != want {
+            problems.push(format!("  {what}: found {got}, expected {want}"));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "ERASED-CALLABLE READER-AXIS CENSUS DRIFTED:\n{}\n\n\
+         A `Callable[T]` PARAMETER is erased to `unit` (GIR) and to a \
+         `CallableTrait` wrapper (typechecker). Any site that answers \
+         \"what does this callable return\" from `fn_sigs`, \
+         `lookup_closure_info`, or a bare `ResolvedType::Function` match is \
+         WRONG for that shape and defaults silently — historically to \
+         `I64_TYPE`, which mis-sizes a result slot.\n\n\
+         If you ADDED a reader: route it through `ctx.callable_return_type` \
+         (GIR) or `self.extract_fn_return_type_from_hint` (typechecker) — \
+         NEVER an inline `ResolvedType::Function` match, which is exactly how \
+         reader 6 survived reader 3's fix — then bump the constant here.\n\
+         If you REMOVED one: bump it down and say which reader retired.\n\n\
+         ⚠ This lint is a TRIPWIRE, not a class-retirement: it cannot see a \
+         reader that invents a THIRD way to ask, nor one in a file it does \
+         not read. Its doc-comment says so; keep that honest.",
+        problems.join("\n"),
+    );
+}
+
 /// Class-guard (Core #6): the "zero-cost move" advice mechanism was DELETED
 /// in Round XXIV Track A because every possible suggestion it could emit
 /// named a bare Ptr param, which D31 full-strict rejects with

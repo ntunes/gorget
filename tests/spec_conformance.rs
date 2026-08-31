@@ -163,9 +163,9 @@ use ggdef::{parse_frontmatter, Expect};
 // so a new fixture that is never counted in leaves every assert passing —
 // including after the fix it pins is reverted. Verified for these two: with the
 // self-host reject reverted, the SH lane MISMATCHes both and drops to 221 < 222.
-const C_MATCH_FLOOR: usize = 223;
-const LLVM_MATCH_FLOOR: usize = 223;
-const SELFHOST_MATCH_FLOOR: usize = 222;
+const C_MATCH_FLOOR: usize = 224;
+const LLVM_MATCH_FLOOR: usize = 224;
+const SELFHOST_MATCH_FLOOR: usize = 223;
 // SH lane doesn't yet reproduce d22_slice_clamp.gg — SH lowerer needs the
 // Range-in-index lowering wired (parser mirror lands the syntax, but the
 // lowerer's SIndex arm at self_host_lowerer/lower_expr.gg doesn't yet
@@ -179,7 +179,7 @@ const SELFHOST_MATCH_FLOOR: usize = 222;
 /// It equals the C and LLVM MATCH floors. The SELF-HOST floor sits ONE BELOW,
 /// on `d22_slice_clamp.gg` (see `SELFHOST_MATCH_FLOOR`); adding a fixture
 /// raises all four constants together.
-const MIN_FIXTURES: usize = 223;
+const MIN_FIXTURES: usize = 224;
 
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs

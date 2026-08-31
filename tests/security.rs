@@ -2798,20 +2798,71 @@ fn direct_dispatch_call_result_stays_clean() {
     security_safe_no_leak("direct_dispatch_call_result_no_leak", "hello\nt?\nR2!");
 }
 
-/// KNOWN GAP `t0772` — the MIRROR of the class this block fixes: the
-/// combinator adapter CLONES its receiver and then unregisters the ORIGINAL,
-/// so `o.map(...)` leaks `o`'s payload. 6 B / 1, 3/3 runs at `f3feea79` and
-/// unchanged by this track (over-unregistration at a consumer, not
-/// under-registration at a producer). Un-ignore when the adapter's
-/// move-if-dead prologue stops unregistering a receiver it only cloned.
+/// LIVE REGRESSION FIXTURE (graduated from `t0772`) — the MIRROR of the class
+/// this block fixes. The combinator adapter CLONES its receiver and then used
+/// to unregister the ORIGINAL from drop tracking anyway, so `o.map(...)` leaked
+/// `o`'s payload: 6 B / 1 allocation, RED-verified against the pre-fix compiler
+/// blob. The prologue now gates the receiver's unregister on the adapter's own
+/// `receiver_was_cloned` decision — the authoritative fact, not a second
+/// opinion from `LocalOwnership` that could disagree with the emitted code.
 #[test]
-#[ignore = "KNOWN GAP t0772: the combinator adapter unregisters a receiver it \
-CLONED, leaking the original's payload (6 B / 1)"]
-fn known_gap_option_map_clones_receiver_then_unregisters_it() {
+fn option_map_clones_receiver_then_unregisters_it() {
     security_safe_no_leak(
         "option_map_clones_receiver_then_unregisters_it_leak",
         "hello!",
     );
+}
+
+/// The WIDE net for that same class: every combinator arm on a NAMED receiver
+/// with a heap-forced payload, across the receiver-liveness axis (live after /
+/// dead after), the shape axis (named local, chained, in a loop, borrowed
+/// param, Vector payload) and both receivers. RED pre-fix at 334 bytes leaked
+/// in 18 allocations; clean after, with no double-free and no use-after-free —
+/// a combinator receiver can never carry a move sigil, so restoring its drop
+/// registration cannot race a consumer.
+///
+/// ⚠ It does NOT cover the INLINE-CONSTRUCTOR receiver (`Some(mk(..)).map(f)`),
+/// which leaks 6 B before AND after with byte-identical generated C: that temp
+/// was never registered at all (`t0872`, a different layer).
+#[test]
+fn combinator_named_receiver_stays_leak_free() {
+    security_safe_no_leak(
+        "combinator_named_receiver_no_leak",
+        "\
+hello!
+hello
+dead!
+lit*
+and?
+flat#
+orelse
+filt
+uoe
+res!
+bad!^
+err^
+chain!!
+loop!
+loop!
+loop!
+param!
+2",
+    );
+}
+
+/// KNOWN GAP `t0880` — `Result[T, E].unwrap_or(<heap temp>)` leaks the temp
+/// (5 B / 1, from `gorget_string_copy_cow`) while the `Option[T]` sibling of
+/// the SAME method is clean. Same method name, same argument shape, two
+/// receivers, opposite results — so the temp IS normally registered at this
+/// position and the Result arm specifically drops the registration.
+/// Pre-existing: measured identical before and after the
+/// `receiver_was_cloned` gate (`t0772`), which is about the RECEIVER's
+/// registration, not an ARGUMENT's. Found while widening that fix's ASan net.
+#[test]
+#[ignore = "KNOWN GAP t0880: Result.unwrap_or leaks a heap default argument \
+(5 B / 1); the Option sibling is clean"]
+fn known_gap_result_unwrap_or_heap_default_leak() {
+    security_safe_no_leak("result_unwrap_or_heap_default_leak", "res");
 }
 
 /// The ASan-armed twin of `tests/fixtures/print_trait_object.gg`, which had no
