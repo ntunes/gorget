@@ -61,8 +61,8 @@
   after this fix, while the identical statements WITHOUT a capture are rc 0. The discriminator is the
   CAPTURE ROOT, not where the mutation is spelled — attached to `t0704` as evidence, not filed as a new
   item. Two false invariant-comments deleted along the way (Core #14).
-  **Filed:** `t0874` (ggdef's 3 standing generic-equip subset exclusions have no oracle row),
-  `t0875` (ggdef rejects `equip [T] Cell[T]` but elaborates `equip Cell[T]` — one construct, two subset
+  **Filed:** `t0920` (ggdef's 3 standing generic-equip subset exclusions have no oracle row),
+  `t0921` (ggdef rejects `equip [T] Cell[T]` but elaborates `equip Cell[T]` — one construct, two subset
   answers, a boundary drawn on a SPELLING), `t0876` (**the emitted C is not reproducible**: the same
   binary on the same input emits two different files run to run, because the C backend iterates
   `std::collections::HashMap`/`HashSet` — RandomState, a per-PROCESS seed — to decide declaration

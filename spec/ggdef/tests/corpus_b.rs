@@ -80,8 +80,8 @@ const EXCLUDE: &[&str] = &[
     //
     // `equip [T] Cell[T]` — `register_equip` rejects on
     // `eq.generic_params.is_some()`. ⚠ The SAME construct spelled
-    // `equip Cell[T]` elaborates (the row above it does), which is `todo/t0875`;
-    // the class is `todo/t0874`.
+    // `equip Cell[T]` elaborates (the row above it does), which is `todo/t0921`;
+    // the class is `todo/t0920`.
     "cow_generic_equip_named_recv.gg",
     // "item kind trait is outside the phase-0 subset" — a trait DEFAULT method
     // body and a static trait method.
