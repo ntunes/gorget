@@ -79,6 +79,15 @@ DISAGREEMENTS, not the agreements.
 ⚠ **This ruling is NOT yet in `decisions.md`** (⛔ no agent edits it). It merits an owner-written
 entry; until then this block and the `t0304` item are its only durable home.
 
+⚠ **SCOUT-G CORRECTIONS TO FIGURES THIS SESSION QUOTED (Core #5):** ADJ-MATCH is **469**, not 443 (443 is
+the FLOOR CONSTANT, `tests/integration.rs:38308`, not the measurement); the denominator is **MATCH 1485**,
+not ~1654 ⇒ **31.6%**, not 26.8%. `corpus_b.rs`'s `EXCLUDE` holds **85 LIVE** rows, not 114 — the 114
+counted quoted strings inside COMMENT lines (`corpus_b1.rs` has a separate 45).
+⛔ **`drop_value_transitively` DOES NOT EXIST.** D37's closing line — *"ggdef's `drop_value_transitively`
+helper walks elements FORWARD"* — describes a helper that **never landed** (`grep -rn` in
+`spec/ggdef/src/` → nothing), and D37's *"row 2 is unblocked and mechanical"* is **measured false**.
+⚠ **OWNER NOTE ONLY — no agent edits `decisions.md`.**
+
 ⊕ **TRACK G ADDED (owner-directed, 2026-08-31): `t0304` — ORACLE HYGIENE.** Zone `spec/ggdef/`,
 disjoint from every other track. The two `EXPECTED_BOTH_WRONG` rows are a ggdef defect, not a
 production bug (measured; see the corrected hot-list line). Deliverables: invariant-#8 enforcement,
