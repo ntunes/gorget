@@ -30673,11 +30673,13 @@ fn self_host_bootstrap() {
 // PINNED-BY: 4c473a88 VALUE: 13_150_071
 const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_150_071;
 // ⚠ THE BAND'S ANCHOR — ONE PER METER, ALL FOUR FROM THE SAME ROUND-OPEN
-// MEASUREMENT, RE-SEEDED ONCE PER ROUND AT ROUND OPEN. Nothing fails when that
-// reset is forgotten (see `struct CloneReading`). The date below is what
-// `scripts/clone_meter_check.sh --anchor-age` reads — but ⛔ NOTHING CALLS THAT
-// MODE YET, so today the reset is held by this comment alone. Wiring it into
-// the round-open step is `todo/t0851`.
+// MEASUREMENT, RE-SEEDED ONCE PER ROUND AT ROUND OPEN. The date below is what
+// `scripts/clone_meter_check.sh --anchor-age` reads, and that mode's caller is
+// `tests/lints.rs::clone_band_anchor_is_reseeded_before_work_resumes` — so a
+// forgotten reset now fails a gate instead of being held by a comment. ⚠ The
+// lint's predicate is narrowed to "commits exist after the round-close records
+// commit with the anchors un-reseeded", because the window between a round's
+// records commit and the next round's re-anchor is legitimate.
 // ROUND-OPEN-DATE: 2026-08-31
 // ROUND-OPENED-BY: 4c473a88 VALUE: 13_150_071
 const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_150_071;
@@ -30878,9 +30880,11 @@ const _: () = assert!(
 /// owner rejected, and manufactures a false owner ask out of two legitimate
 /// sub-band rounds. The signal that CAN see it is
 /// `scripts/clone_meter_check.sh --anchor-age`, which fails once a round has
-/// closed since the anchor was set. ⛔ IT HAS NO CALLER: no round procedure,
-/// gate or test runs it, so the reset is an unenforced obligation today, not a
-/// guarded one. Wiring it in is `todo/t0851`.
+/// closed since the anchor was set — and its caller is
+/// `tests/lints.rs::clone_band_anchor_is_reseeded_before_work_resumes`, which
+/// narrows the predicate to "work has RESUMED with the anchors un-reseeded" so
+/// that the legitimate window between a round's records commit and the next
+/// round's re-anchor is not permanently red.
 ///
 /// ⚠ WHAT PER-TRACK ATTRIBUTION CAN AND CANNOT BE TESTED FOR, so the next round
 /// does not re-derive a dead end at the cost of another ten-cell bisect.

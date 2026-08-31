@@ -17,10 +17,15 @@
 #       lines this mode prints a header, zero rows and exits 0.
 #
 #   scripts/clone_meter_check.sh --anchor-age
-#       ⛔ NOTHING CALLS THIS YET. It is a mode looking for a caller: no round
-#       procedure, no gate and no test runs it, so a forgotten re-anchor is
-#       still SILENT today. Wiring it into the round-open step is `todo/t0851`;
-#       until that lands, do not read the paragraph below as a guarantee.
+#       ⊕ ITS CALLER IS `tests/lints.rs::clone_band_anchor_is_reseeded_before_
+#       work_resumes`, which runs this mode on every `cargo test --test lints`.
+#       ⚠ THE LINT NARROWS THE PREDICATE, DELIBERATELY. This mode fails from the
+#       moment a round closes until the next one re-anchors, and that window is
+#       LEGITIMATE — a raw lint would red the very records commit that closes a
+#       round, and a permanently-red ratchet stops being a ratchet. So the lint
+#       asks the narrower question: are there commits AFTER the records commit
+#       with the anchors still un-reseeded? Sitting on the records commit is
+#       green; resuming work on a stale anchor is not.
 #       ⚠ RUN THIS AT ROUND OPEN. The ~1% band is anchored at the ROUND-OPEN
 #       value, and that anchor is re-seeded by a scheduled human action with no
 #       battery gate behind it. Forget the reset and the band silently stops
@@ -31,17 +36,24 @@
 #       set (newest dated `DONE.md` entry newer than `ROUND-OPEN-DATE`), which
 #       is the one tree-visible signal that a new round has begun.
 #
-# ⚠ WHY THIS IS NOT A `tests/lints.rs` LINT. A lint sees a TREE; both questions
-# above are about a DIFF, and the failure class is an ABSENCE — nobody measured.
-# A provenance line can prove WHO wrote a pin; it can never prove that anyone
-# measured. The only tree-adjacent signal that can is history against the
-# declared closure, which is what this script computes. `--track`'s RED cases —
-# a closure-touching diff with no attribution, and a diff that moves a pin — are
-# demonstrated in `tests/lints.rs::clone_meter_check_refuses_an_unattributed_track`,
-# which is the ONLY test that runs this script. `--pin-staleness` and
-# `--anchor-age` have no test and no caller; their REDs have been shown by hand
-# and are recorded in the track report, which is not a durable place for them
-# (`todo/t0851`).
+# ⚠ WHY THE FIRST TWO MODES ARE A SCRIPT AND NOT A LINT — and the claim is now
+# scoped, because an earlier revision of this paragraph over-generalised it to
+# all three. `--track` and `--pin-staleness` ask about a DIFF, and their failure
+# class is an ABSENCE: nobody measured. A provenance line can prove WHO wrote a
+# pin; it can never prove that anyone measured. The only tree-adjacent signal
+# that can is history against the declared closure, which is what this script
+# computes — so those two live here.
+# ⊕ `--anchor-age` IS DIFFERENT AND IS NOW LINTED. Its predicate is pure tree
+# state (a `DONE.md` date against a `ROUND-OPEN-DATE` line); the objection that
+# kept it out of `tests/lints.rs` was about the raw predicate's legitimate RED
+# WINDOW, not about tree-visibility, and the lint narrows the predicate instead
+# of widening the window.
+# ⇒ ALL THREE MODES NOW HAVE A CALLER IN `tests/lints.rs`, which is the only
+#   thing that makes any of the paragraphs above a guarantee rather than a hope:
+#     --track          clone_meter_check_refuses_an_unattributed_track
+#                      (and it DEMONSTRATES the refusal, on every run)
+#     --pin-staleness  clone_meter_pin_provenance_shas_resolve
+#     --anchor-age     clone_band_anchor_is_reseeded_before_work_resumes
 #
 # It builds NOTHING: git + grep only, so an output-review that is barred from
 # building can still run it.
