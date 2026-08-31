@@ -8634,6 +8634,48 @@ bb",
     );
 }
 
+/// KNOWN GAP (`todo/t0121`) — the COMPREHENSION face of the duplicate-rejection
+/// leak, and the EVIDENCE that the class is the map insert path rather than a
+/// `Set`-literal defect. `{s for i in 0..3}` offers the same heap key three
+/// times; the set stores one and declines two, and the two it declined are
+/// dropped on the floor. `LeakSanitizer: Direct leak of 6 byte(s) in 2
+/// object(s)`, rc 99, while a plain build prints the right answer at rc 0 on
+/// both backends.
+///
+/// ⚠⚠ THIS SHAPE WAS ASan-CLEAN UNTIL `todo/t0841` WAS FIXED, AND THAT WAS AN
+/// ACCIDENT — a cell green for a reason unrelated to what it tests (Six
+/// Questions Q6). The liveness walker used to MOVE one aliased buffer into the
+/// set three times, so the keys dedup rejected were the SAME allocation it
+/// stored and nothing was left over to leak. Now that the accumulate correctly
+/// CLONES a live source, the rejected clones are real allocations. `t0121`'s
+/// mechanism did not change; the fix removed what was masking it.
+///
+/// ⚠ It is `t0121`'s EVIDENCE, not a second filing — the Dict-KEY spelling
+/// leaks identically, and so does a plain `for i in 0..3: out.add(mk("a","b"))`
+/// with no comprehension anywhere, which is what establishes the axis. The live
+/// SET-arm regression fixture for the `t0841` liveness fix is
+/// `cow_set_comprehension_invariant_in_condition.gg`, which runs through the
+/// CONDITION with `int` elements precisely so it pins liveness and not this.
+///
+/// Un-ignore + promote out of `known_gaps/` when the rejected key is freed.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0121): a Set comprehension over a loop-invariant \
+heap element leaks every key dedup rejects -- LeakSanitizer reports `Direct \
+leak of 6 byte(s) in 2 object(s)`, rc 99, while stdout is correct (1 / true) \
+and detect_leaks=0 exits 0. The COMPREHENSION face of the literal defect \
+pinned by set_string_dup_elem_leak; the Dict-KEY spelling and a plain \
+`for i in 0..3: out.add(mk(\"a\",\"b\"))` leak identically, so the class is \
+the map insert path. Fixture: tests/fixtures/known_gaps/\
+set_comprehension_dup_elem_leak.gg. TODO.md."]
+fn set_comprehension_dup_elem_leak() {
+    assert_gg_sanitize_clean(
+        "known_gaps/set_comprehension_dup_elem_leak",
+        "\
+1
+true",
+    );
+}
+
 /// KNOWN GAP (`todo/t0609` item 2) — some stringification temps passed straight
 /// into a call argument are never dropped, and some are.
 ///
