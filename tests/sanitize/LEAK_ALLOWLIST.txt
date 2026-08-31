@@ -33,7 +33,7 @@
 # The second column is what the fixture is tolerated FOR, and it is checked.
 # A bare stem — which is all this file used to carry — tolerated ANY leak in
 # that fixture forever: a second, entirely unrelated mechanism appearing inside
-# an already-listed fixture was invisible to the gate. 124 of these 313 rows
+# an already-listed fixture was invisible to the gate. 118 of these 300 rows
 # exhibit two or more distinct mechanisms, all of which used to hide behind one
 # name. The gate now fails on a mechanism the row does not name, AND on one
 # more record of a mechanism it does — COUNTS, not a set, because a set cannot
@@ -56,17 +56,25 @@
 # prints a "TIGHTEN these rows" advisory whenever a fixture leaks LESS than its
 # row admits.
 #
-# The big groups (top frame -> fixtures), so a fix can retire many rows at once:
+# The big groups (top frame -> fixtures), so a fix can retire many rows at once.
+# ⚠ REGENERATE, NEVER QUOTE — every number below is a claim about the rows
+# CURRENTLY in this file, so any burn-down stales it, and three entries silently
+# had before R47 close regenerated the whole table: `str_alloc_copy`,
+# `gorget_array_push` and `gorget_dict_new` each read HIGH, the last of them
+# without any row having been deleted from under it. Run:
+#   grep -v '^#' tests/sanitize/LEAK_ALLOWLIST.txt | grep -v '^$' | cut -f2 \
+#     | tr ',' '\n' | sed 's/\*[0-9]*+\?$//' | sort | uniq -c | sort -rn
+#   str_alloc_copy               93   7 sub-classes; `parse_int` alone spans 22
 #   __gorget_closure_env_alloc   77   every builtin HOF call (map/filter/fold)
 #                                     leaks an 8-byte env, UNBOUNDED per call
-#   str_alloc_copy              104   7 sub-classes; `parse_int` alone spans 22
 #   gorget_shared_new            38   every `shared` local
-#   gorget_array_push            38
 #   gorget_mutex_new             37
+#   gorget_array_push            36
 #   gorget_map_clone             16
-#   gorget_dict_new              16
 #   gorget_channel_new           16
 #   CRYPTO_* / OPENSSL_*         15   keygen results the caller never frees
+#   gorget_dict_new              14
+#   gorget_string_format         12
 #
 async_channel	gorget_channel_new*2
 async_channel_unbuffered	gorget_channel_new*2
@@ -189,9 +197,6 @@ httpserver_router_extended	__gorget_closure_env_alloc*1,gorget_dict_new*6,gorget
 httpserver_static	gorget_path_extension*8,gorget_path_join*4
 httpserver_static_enhanced	gorget_path_extension*5,gorget_path_join*5
 io_input	gorget_readline*2
-iter_enumerate_zip	gorget_array_push*1,gorget_array_reserve*2
-iter_map_after_filter	str_alloc_copy*2
-iter_map_inference	gorget_str_cat*1,str_alloc_copy*1
 iterator_adapters	__gorget_closure_env_alloc*4
 iterator_lazy_chain	__gorget_closure_env_alloc*6
 json_edge_cases	str_alloc_copy*9
@@ -335,7 +340,6 @@ test_failure	gorget_format*1,str_alloc_copy*2
 test_hashmap_all	__gorget_closure_env_alloc*4,str_alloc_copy*3
 test_hashset_all	__gorget_closure_env_alloc*4
 test_higher_order_named_fn	gorget_array_push*1
-test_linked_list	gorget_array_push*3
 test_method_chaining	__gorget_closure_env_alloc*12
 test_multiline_closures	__gorget_closure_env_alloc*1
 test_process_timeout	gorget_process_spawn*8
@@ -368,7 +372,6 @@ vector_sort_by_key	__gorget_closure_env_alloc*3,str_alloc_copy*2
 vector_sort_stable	__gorget_closure_env_alloc*3
 vector_task_get	gorget_atomic_int_new*1
 vector_task_mixed_await	gorget_atomic_int_new*1
-vector_userspace_hofs	gorget_str_cat*1,str_alloc_copy*1
 waitgroup_amp_param	__gorget_spawn_worker*2+
 waitgroup_basic	__gorget_spawn_worker*2+
 xml_parse	str_alloc_copy*2

@@ -8264,7 +8264,13 @@ fn sanitize_allowlists_shrink_only() {
     // still counted ONE PER FIXTURE (the class signatures the same round added
     // live in TAB column 2, not in extra rows), so this number stays
     // comparable to every value it has held.
-    const LEAK_CEILING: usize = 305;
+    // 305 -> 300 (R47 close): `iter_enumerate_zip`, `iter_map_after_filter`,
+    // `iter_map_inference`, `test_linked_list` and `vector_userspace_hofs`
+    // measured CLEAN on all 3 reps of `scripts/sanitize_sweep.sh` at HEAD,
+    // where each still LEAKS under the round's base compiler `f3feea79` (same
+    // instrument, same fixtures, the pinned base binary) — so these five are
+    // leaks the round genuinely burned down, not an instrument artefact.
+    const LEAK_CEILING: usize = 300;
 
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let read = |name: &str| -> Vec<String> {
@@ -8360,8 +8366,11 @@ fn sanitize_allowlists_shrink_only() {
     // the same admission for the same reason ("a ceiling counts rows; it does
     // not identify them"). The point is that no SINGLE-character widening is
     // silently accepted any more.
-    const LEAK_CLASS_PAIRS: usize = 512;
-    const LEAK_RECORDS: usize = 2259;
+    // 512 -> 504 and 2259 -> 2247 with the five rows deleted above: they
+    // named 8 (fixture, class) pairs tolerating 12 leak records between
+    // them, and none carried a `*N+` marker, so the loose count is unmoved.
+    const LEAK_CLASS_PAIRS: usize = 504;
+    const LEAK_RECORDS: usize = 2247;
     const LEAK_LOOSE_SIGNATURES: usize = 6;
 
     let mut leak_stems: Vec<&str> = Vec::new();
@@ -8430,6 +8439,88 @@ fn sanitize_allowlists_shrink_only() {
          an admission, not an annotation: add one only for a row the sweep's own \
          `count-drift` census has named, and move this number in the same commit."
     );
+}
+
+/// Every `qsort` this compiler EMITS is guarded on `len > 1`.
+///
+/// **The defect this retires (`t0780`, measured 2026-08-29, closed at R47
+/// close — DONE.md).** An empty `GorgetArray` has `data == NULL` and
+/// `len == 0`, and `qsort`'s first
+/// parameter is declared `nonnull` — so `qsort(NULL, 0, ...)` is undefined
+/// behaviour by the C standard even though nothing is ever read. UBSan reports
+/// `null pointer passed as argument 1, which is declared to never be null`,
+/// and `test_vector_sort_methods` red-ed `scripts/sanitize_sweep.sh` on it.
+/// "Nothing is read, so it is benign" is exactly the reasoning Core #8 refuses.
+///
+/// **Why a lint and not just the fix.** The call was written out fifteen times
+/// in the Rust emitter and twelve more in the self-host one — one per
+/// `sort`/`sorted`/`unique` × element-type arm — so fixing the instance would
+/// have left twenty-six siblings and no way to stop the twenty-seventh
+/// (Core #4). Both emitters now build the call through a single
+/// `qsort_guarded(recv, cmp)` producer, and this is the arm-count lint that
+/// forces the next arm through it.
+///
+/// Can it catch its own class (Core #15e Q2)? Yes, and that is the point of
+/// assertion (a): it does not look for the helper, it looks at every emitted
+/// `qsort(` and demands the guard text immediately before it. A new arm that
+/// spells the call directly fails here whether or not the helper still exists.
+/// Assertion (b) is the count, which catches the inverse — an arm quietly
+/// deleted or added without anyone restating how many there are.
+#[test]
+fn emitted_qsort_is_guarded() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // (file, line-comment marker, pinned `qsort_guarded` occurrences = 1
+    // definition + N call sites).
+    const EMITTERS: &[(&str, &str, usize)] = &[
+        ("src/backend/c_lir/emit_types.rs", "//", 16),
+        ("tests/fixtures/self_host_lowerer/lir_codegen.gg", "#", 13),
+    ];
+    for (rel, comment, pinned) in EMITTERS {
+        let path = root.join(rel);
+        let body = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+        // Comment lines are excluded because both files legitimately DISCUSS
+        // `qsort(NULL, 0, ...)` in the prose explaining this guard.
+        let code: Vec<(usize, &str)> = body
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| !l.trim_start().starts_with(comment))
+            .map(|(i, l)| (i + 1, l))
+            .collect();
+
+        // (a) EVERY emitted qsort carries the guard, immediately before it.
+        let mut unguarded: Vec<String> = Vec::new();
+        for (lineno, line) in &code {
+            for (col, _) in line.match_indices("qsort(") {
+                if !line[..col].ends_with("len > 1) ") {
+                    unguarded.push(format!("{rel}:{lineno}: {}", line.trim()));
+                }
+            }
+        }
+        assert!(
+            unguarded.is_empty(),
+            "these emitted `qsort` calls are NOT guarded on `len > 1`:\n{}\n\n\
+             An empty GorgetArray has `data == NULL`, and `qsort`'s first \
+             parameter is declared `nonnull`, so `qsort(NULL, 0, ...)` is \
+             undefined behaviour even though nothing is read. \
+             Build the call through `qsort_guarded(recv, cmp)` in the same \
+             file — do not hand-write the guard, and do not add a per-arm \
+             emptiness check at the call sites.",
+            unguarded.join("\n")
+        );
+
+        // (b) The arm count, restated deliberately or not at all.
+        let uses = code.iter().filter(|(_, l)| l.contains("qsort_guarded(")).count();
+        assert_eq!(
+            uses, *pinned,
+            "{rel} now has {uses} `qsort_guarded` occurrences (1 definition + \
+             one per emitted sort/sorted/unique arm), the pinned count is \
+             {pinned}. If an arm was added, good — it went through the \
+             producer; restate the number here. If one vanished, check that \
+             the arm did not grow a hand-written `qsort` somewhere this file \
+             cannot see."
+        );
+    }
 }
 
 /// The sanitize sweep's own positive controls exist, and the sweep runs them.

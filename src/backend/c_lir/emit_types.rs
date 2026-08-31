@@ -2706,6 +2706,25 @@ pub(super) fn emit_lir_helpers(out: &mut String, module: &LirModule) {
     writeln!(out).unwrap();
 }
 
+/// The ONE spelling of a `qsort` call in emitted C.
+///
+/// `qsort`'s first parameter is declared `nonnull`, and an EMPTY `GorgetArray`
+/// has `data == NULL` with `len == 0` — so `qsort(NULL, 0, ...)` is undefined
+/// behaviour by the C standard even though nothing is ever read, and UBSan
+/// reports it as `null pointer passed as argument 1, which is declared to never
+/// be null`. Guarding on `len > 1` retires the whole class at the producer (it
+/// also skips a call that could not reorder anything anyway), rather than one
+/// `sort`/`sorted`/`unique` arm at a time.
+///
+/// `recv` is the receiver spelling the caller already has in hand: `"a->"` for
+/// the in-place helpers, which hold a `GorgetArray*`, and `"r."` for the
+/// clone-then-sort ones, which hold a value. EVERY emitted `qsort` in this file
+/// goes through here, and `emitted_qsort_is_guarded` in `tests/lints.rs` fails
+/// if a sixteenth site ever spells one directly.
+fn qsort_guarded(recv: &str, cmp: &str) -> String {
+    format!("if ({recv}len > 1) qsort({recv}data, {recv}len, {recv}elem_size, {cmp});")
+}
+
 /// Emit `__gorget_box_alloc_*` monomorphized box allocators and inline shim
 /// functions for str/array operations that supplement the C runtime.
 pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_names: &HashMap<u32, String>) {
@@ -2846,7 +2865,7 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
         // Thread-local to prevent data races when two threads sort concurrently.
         writeln!(out, "static _Thread_local size_t __gorget_sort_elem_size;").unwrap();
         writeln!(out, "static int __gorget_sort_cmp(const void* a, const void* b) {{ return memcmp(a, b, __gorget_sort_elem_size); }}").unwrap();
-        writeln!(out, "static inline void gorget_array_sort(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; __gorget_sort_elem_size = a->elem_size; qsort(a->data, a->len, a->elem_size, __gorget_sort_cmp); }}").unwrap();
+        writeln!(out, "static inline void gorget_array_sort(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; __gorget_sort_elem_size = a->elem_size; {} }}", qsort_guarded("a->", "__gorget_sort_cmp")).unwrap();
     }
     // Typed sort/unique variants — chosen by element type at LIR
     // emission time so qsort uses the right comparator:
@@ -2855,31 +2874,31 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     //   _str    → gorget_str_compare     (lexical on Str struct)
     //   _generic → gorget_generic_compare (memcmp, for user structs)
     if has_extern("gorget_array_sort_int") {
-        writeln!(out, "static inline void gorget_array_sort_int(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; qsort(a->data, a->len, a->elem_size, gorget_int_compare); }}").unwrap();
+        writeln!(out, "static inline void gorget_array_sort_int(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; {} }}", qsort_guarded("a->", "gorget_int_compare")).unwrap();
     }
     if has_extern("gorget_array_sort_float") {
-        writeln!(out, "static inline void gorget_array_sort_float(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; qsort(a->data, a->len, a->elem_size, gorget_float_compare); }}").unwrap();
+        writeln!(out, "static inline void gorget_array_sort_float(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; {} }}", qsort_guarded("a->", "gorget_float_compare")).unwrap();
     }
     if has_extern("gorget_array_sort_str") {
-        writeln!(out, "static inline void gorget_array_sort_str(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; qsort(a->data, a->len, a->elem_size, gorget_str_compare); }}").unwrap();
+        writeln!(out, "static inline void gorget_array_sort_str(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; {} }}", qsort_guarded("a->", "gorget_str_compare")).unwrap();
     }
     if has_extern("gorget_array_sort_generic") {
-        writeln!(out, "static inline void gorget_array_sort_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; qsort(a->data, a->len, a->elem_size, gorget_generic_compare); }}").unwrap();
+        writeln!(out, "static inline void gorget_array_sort_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; {} }}", qsort_guarded("a->", "gorget_generic_compare")).unwrap();
     }
     if has_extern("gorget_array_sorted") {
-        writeln!(out, "static inline GorgetArray gorget_array_sorted(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); return r; }}").unwrap();
+        writeln!(out, "static inline GorgetArray gorget_array_sorted(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); {} return r; }}", qsort_guarded("r.", "gorget_generic_compare")).unwrap();
     }
     if has_extern("gorget_array_sorted_int") {
-        writeln!(out, "static inline GorgetArray gorget_array_sorted_int(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_int_compare); return r; }}").unwrap();
+        writeln!(out, "static inline GorgetArray gorget_array_sorted_int(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); {} return r; }}", qsort_guarded("r.", "gorget_int_compare")).unwrap();
     }
     if has_extern("gorget_array_sorted_float") {
-        writeln!(out, "static inline GorgetArray gorget_array_sorted_float(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_float_compare); return r; }}").unwrap();
+        writeln!(out, "static inline GorgetArray gorget_array_sorted_float(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); {} return r; }}", qsort_guarded("r.", "gorget_float_compare")).unwrap();
     }
     if has_extern("gorget_array_sorted_str") {
-        writeln!(out, "static inline GorgetArray gorget_array_sorted_str(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_str_compare); return r; }}").unwrap();
+        writeln!(out, "static inline GorgetArray gorget_array_sorted_str(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); {} return r; }}", qsort_guarded("r.", "gorget_str_compare")).unwrap();
     }
     if has_extern("gorget_array_sorted_generic") {
-        writeln!(out, "static inline GorgetArray gorget_array_sorted_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); return r; }}").unwrap();
+        writeln!(out, "static inline GorgetArray gorget_array_sorted_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); {} return r; }}", qsort_guarded("r.", "gorget_generic_compare")).unwrap();
     }
     // gorget_array_reversed: clone + reverse (not in runtime, inlined by old backend)
     if has_extern("gorget_array_reversed") {
@@ -2887,19 +2906,19 @@ pub(super) fn emit_runtime_helpers(out: &mut String, module: &LirModule, struct_
     }
     // gorget_array_unique: clone + sort + dedup (matches GIR backend semantics)
     if has_extern("gorget_array_unique") {
-        writeln!(out, "static inline GorgetArray gorget_array_unique(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+        writeln!(out, "static inline GorgetArray gorget_array_unique(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); {} gorget_array_dedup(&r); return r; }}", qsort_guarded("r.", "gorget_generic_compare")).unwrap();
     }
     if has_extern("gorget_array_unique_int") {
-        writeln!(out, "static inline GorgetArray gorget_array_unique_int(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_int_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+        writeln!(out, "static inline GorgetArray gorget_array_unique_int(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); {} gorget_array_dedup(&r); return r; }}", qsort_guarded("r.", "gorget_int_compare")).unwrap();
     }
     if has_extern("gorget_array_unique_float") {
-        writeln!(out, "static inline GorgetArray gorget_array_unique_float(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_float_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+        writeln!(out, "static inline GorgetArray gorget_array_unique_float(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); {} gorget_array_dedup(&r); return r; }}", qsort_guarded("r.", "gorget_float_compare")).unwrap();
     }
     if has_extern("gorget_array_unique_str") {
-        writeln!(out, "static inline GorgetArray gorget_array_unique_str(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_str_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+        writeln!(out, "static inline GorgetArray gorget_array_unique_str(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); {} gorget_array_dedup(&r); return r; }}", qsort_guarded("r.", "gorget_str_compare")).unwrap();
     }
     if has_extern("gorget_array_unique_generic") {
-        writeln!(out, "static inline GorgetArray gorget_array_unique_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); qsort(r.data, r.len, r.elem_size, gorget_generic_compare); gorget_array_dedup(&r); return r; }}").unwrap();
+        writeln!(out, "static inline GorgetArray gorget_array_unique_generic(void* __arr_ptr) {{ GorgetArray* a = (GorgetArray*)__arr_ptr; GorgetArray r = gorget_array_clone(a); {} gorget_array_dedup(&r); return r; }}", qsort_guarded("r.", "gorget_generic_compare")).unwrap();
     }
     // Type-independent set predicates — each walks the argument
     // sets using their own `cap`/`states`/`key_size` fields, so a
