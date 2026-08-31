@@ -65,6 +65,20 @@ const EXCLUDE: &[&str] = &[
     "cow_rescue_mutation_in_operand_position.gg",
     "cow_rescue_mutation_through_getchain_receiver.gg",
     "cow_rescue_mutation_inside_assert.gg",
+    // R48 Track C — the per-function-body prescan net. Of its four
+    // equip-FREE cells, one (`cow_generic_fn_view_survives_realloc.gg`) is
+    // in-subset and adjudicated here at `helloworld`; the other three are out
+    // of subset, each row citing the gate that fires at HEAD. Mirrors the
+    // identical block in corpus_b.rs (Core #4: the two gates share the phase-0
+    // subset, so an exclusion in one without the other reds the sibling).
+    // "expression `unsupported` is outside the phase-0 subset" — the closure
+    // literal whose body is the cell under test.
+    "cow_closure_body_view_survives_realloc.gg",
+    // "item kind other is outside the phase-0 subset" — `suite setup` /
+    // `suite teardown` / `test` / `bench` blocks. These cells exist only on the
+    // `gg test` lane, which `gg build` never lowers at all.
+    "cow_test_body_view_survives_realloc.gg",
+    "cow_bench_body_view_survives_realloc.gg",
     "liveness_use_inside_loop.gg",
     "liveness_on_error_in_match_arm_do.gg",
     "liveness_on_error_inside_do_block.gg",
@@ -384,5 +398,10 @@ fn corpus_b1_all_match() {
     // 8th is EXCLUDEd above on `.first()` (`todo/t0753`) → 137.
     // ⚠ The 130 was never reached while this gate was RED on that elaboration
     // error, so it had not absorbed the 8; the arithmetic starts from 130.
-    assert_eq!(fixtures.len(), 137, "B1 gate set drifted from 137 fixtures");
+    // +1 (2026-08-31, R48 Track C): the per-function-body prescan
+    // centralisation landed 8 `cow_*` path cells; 4 carry an `equip` block and
+    // belong to B2, 3 of the remaining 4 are EXCLUDEd above with their cited
+    // gates, and `cow_generic_fn_view_survives_realloc.gg` is in-subset and
+    // adjudicated here → 138.
+    assert_eq!(fixtures.len(), 138, "B1 gate set drifted from 138 fixtures");
 }

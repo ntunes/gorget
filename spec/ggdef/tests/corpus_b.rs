@@ -67,6 +67,34 @@ const EXCLUDE: &[&str] = &[
     "cow_element_borrow_alias_mutate.gg",
     "cow_p3_alias_chain_mutate.gg",
     "cow_p3_index_mutate.gg",
+    // The per-function-body prescan net (one cell per body-lowering PATH). Six
+    // of its eight `cow_*` cells are outside the phase-0 subset — each row below
+    // cites the gate that actually fires, run at HEAD, not a guess. The other
+    // two ARE in the gate and MATCH: `cow_generic_equip_mutator_view_uaf.gg`
+    // (ggdef prints `helloworld`, which is how that use-after-free was
+    // adjudicated when BOTH compilers printed nothing and exited 139) and
+    // `cow_generic_fn_view_survives_realloc.gg`. As always the adjudicating
+    // lanes for the memory-safety claim are C, LLVM and ASan — ggdef is
+    // STRUCTURALLY BLIND to memory validity (AGENTS.md Core #13); what it
+    // adjudicates here is the VALUE.
+    //
+    // `equip [T] Cell[T]` — `register_equip` rejects on
+    // `eq.generic_params.is_some()`. ⚠ The SAME construct spelled
+    // `equip Cell[T]` elaborates (the row above it does), which is `todo/t0875`;
+    // the class is `todo/t0874`.
+    "cow_generic_equip_named_recv.gg",
+    // "item kind trait is outside the phase-0 subset" — a trait DEFAULT method
+    // body and a static trait method.
+    "cow_trait_default_view_survives_realloc.gg",
+    "cow_static_trait_method_view_survives_realloc.gg",
+    // "expression `unsupported` is outside the phase-0 subset" — the closure
+    // literal whose body is the cell under test.
+    "cow_closure_body_view_survives_realloc.gg",
+    // "item kind other is outside the phase-0 subset" — `suite setup` /
+    // `suite teardown` / `test` / `bench` blocks. These two cells exist only on
+    // the `gg test` lane, which `gg build` never lowers at all.
+    "cow_test_body_view_survives_realloc.gg",
+    "cow_bench_body_view_survives_realloc.gg",
     // Module statics are outside the phase-0 subset (`Item::StaticDecl` not
     // elaborated — "item kind static"): the CoW-1B fixture mixes static and
     // local shapes; its LOCAL half was ggdef-adjudicated at authoring (88/30/45,
@@ -624,5 +652,19 @@ fn corpus_b_all_match() {
     // `.first()` elaboration error, so it had not absorbed those 8 — the
     // arithmetic here starts from 181, not from a figure this assert had
     // confirmed.
-    assert_eq!(fixtures.len(), 188, "B2 gate set drifted from 188 fixtures");
+    // R48 Track C: 8 `cow_*` fixtures landed with the per-function-body prescan
+    // centralisation — one cell per body-lowering PATH. SIX are EXCLUDEd above,
+    // each row citing the gate that fires (generic `equip` spelling; `item kind
+    // trait`; `expression unsupported`; `item kind other` for the `gg test` and
+    // `gg test --bench` lanes). TWO elaborate and are adjudicated here, and one
+    // of them is load-bearing rather than a formality (Core #13):
+    // `cow_generic_equip_mutator_view_uaf` adjudicates `helloworld` — the answer
+    // the FIXED lanes print, while BOTH pre-fix compilers printed nothing and
+    // exited 139. The definition, not their agreement, is what says the shipped
+    // answer is right. ⚠ Its memory-safety claim is NOT ggdef's to make: ggdef
+    // is structurally blind to the realloc-UAF and would accept it cleanly, so
+    // that half is adjudicated by ASan
+    // (`tests/fixtures/security/cow_generic_equip_mutator_view_uaf.gg` and its
+    // four path siblings). Count +8 additions − 6 EXCLUDEs = +2 net → 190.
+    assert_eq!(fixtures.len(), 190, "B2 gate set drifted from 190 fixtures");
 }
