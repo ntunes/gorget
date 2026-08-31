@@ -338,14 +338,13 @@ set_user_key_hashable	str_alloc_copy*1
 # double-frees the case that also binds to a VarDecl. DURABLE REPRO for that
 # item, committed alongside this admission because the Cardinal rule wants a
 # row's evidence in the tree rather than in a report:
-# `known_gaps/call_result_temp_at_call_arg_leaks.gg`. It also RE-AIMS t0609(2):
-# the discriminator is not the call, and not "builtin method" either — it is the
-# PRODUCER'S DECLARED RETURN TYPE. `gorget_int_to_str` / `gorget_float_to_str`
-# are emitted `static inline Str`, the VIEW type, while allocating and adopting;
-# `to_upper` and `join` are emitted `GorgetString` and are CLEAN in the very
-# same argument position. So the fix is a write-site declaration correction
-# (7 such producers, 6 in `src/backend/c/runtime/runtime_tostr.c`), not the
-# read-site drop-machinery work t0609(2) originally described.
+# `known_gaps/call_result_temp_at_call_arg_leaks.gg`. ⚠ THAT ITEM'S ROOT CAUSE
+# IS UNRESOLVED and this row does not assert one: three class statements were
+# tried and each refuted by one probe (a user call is clean; `to_upper` and
+# `join` are builtin methods and clean; `bytes_to_hex` is spelled exactly like
+# the leaking producers and clean). What IS measured is the leak/clean split in
+# the fixture. Evidence points at the lowering arm `methods.rs:860`, as a
+# hypothesis to probe — see t0609. This row retires when that lands.
 sh_primitive_admitted_methods_ok	str_alloc_copy*2
 shared_arc_only	gorget_shared_new*2
 shared_atomic	gorget_atomic_int_new*1

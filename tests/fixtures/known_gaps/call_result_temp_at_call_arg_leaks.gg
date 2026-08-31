@@ -1,45 +1,67 @@
-# KNOWN GAP — a producer whose emitted C DECLARES a borrowed view but RETURNS
-# an owned heap string: the caller's temp is never dropped. `todo/t0609` item 2.
+# KNOWN GAP — some stringification temps passed straight into a call argument
+# are never dropped, and some are. `todo/t0609` item 2.
 #
-# THE DISCRIMINATOR IS THE PRODUCER'S DECLARED RETURN TYPE, and it is visible in
-# the emitted C. Measured at R47 close, all four in the identical `print(...)`
-# argument position:
-#     print(s.trim().to_upper())  -> CLEAN   `static inline GorgetString gorget_str_to_upper`
-#     print(",".join(parts))      -> CLEAN   `static inline GorgetString gorget_str_join`
-#     print(x.debug())            -> LEAKS   `static inline Str      gorget_int_to_str`
-#     print(f.display())          -> LEAKS   `static inline Str      gorget_float_to_str`
-# `Str` is the VIEW type — a borrowed slice, nothing for the caller to drop —
-# yet those two bodies `GORGET_ALLOC` and `return gorget_string_adopt(out)`,
-# i.e. they hand back an OWNED allocation. The drop machinery reads the declared
-# type, correctly concludes there is nothing to drop, and the temp is lost. The
-# write site is lying to it (Core #2; layering rule 1 names view-vs-owned as an
-# invariant a layer may not drop). Frames: `str_alloc_copy` <-
-# `gorget_string_adopt` <- `gorget_int_to_str` / `gorget_float_to_str` <- `main`.
+# ⚠ THE ROOT CAUSE IS UNRESOLVED. This header states what was MEASURED and
+# stops there, on purpose: three successive attempts to name the class from
+# this program's behaviour were each refuted by one probe (see t0609), and a
+# fourth guess written down as fact is worth less than an honest gap.
 #
-# ⚠ IT IS NOT "BUILTIN METHODS LEAK", AND IT IS NOT "CALL RESULT TEMPS LEAK".
-# Both are refuted by cells in this file: `to_upper` and `join` are builtin
-# methods in the same position and are clean, and a plain USER function
-# returning a heap String there is clean too. Every earlier attempt to state
-# this class more broadly than the measurement was wrong; if you widen it again,
-# probe first.
+# ═══ WHAT IS MEASURED (R47 close, `--sanitize`, LSAN_OPTIONS=use_stacks=0) ═══
+# Every cell below sits in the IDENTICAL `print(...)` argument position.
 #
-# ⚠ THE TWO CLEAN BUILTIN CELLS ARE THE POINT OF THE NET, not decoration. A fix
-# that drop-registers every builtin-method result temp — the scope the earlier
-# version of this header implied — DOUBLE FREES `to_upper` and `join`, whose
-# emitted helpers already free their result. Those cells are what trips.
+#   LEAKS                              CLEAN
+#   -----------------------------      ----------------------------------
+#   x.debug()      3 B  int_to_str     heavy("alpha","beta")  a USER function
+#   f.display()    4 B  float_to_str   s.trim().to_upper()    str_to_upper
+#   bo.debug()     5 B  bool_to_str    ",".join(parts)        str_join
+#   q.debug()      5 B  string_debug   bytes_to_hex(raw)      bytes_to_hex
+#                                      String d = x.debug()   named local
 #
-# ⚠ HEAP-FORCED throughout: `x.debug()` / `f.display()` allocate (3 and 4
-# bytes), `heavy` concatenates, and `s.trim().to_upper()` allocates. A
-# literal-only version leaks nothing observable and is a false negative (the
-# lesson `todo/t0705` was filed for).
+# Total 17 bytes in 4 allocations. Frames: `str_alloc_copy` <-
+# `gorget_string_adopt` <- the producer <- `main`.
 #
-# ⚠ ONLY LeakSanitizer CAN SEE THIS — stdout is correct today, so this is wired
-# to `assert_gg_sanitize_clean` (`detect_leaks=1`), never to `run_gg`.
+# ⚠ THE BYTE COUNTS ARE PAYLOAD-DEPENDENT, NOT INVARIANT — `q.debug()` is 5 B
+# for `"zz"` and grows with the string. Assert the FRAMES and the leak/clean
+# split; do not pin a byte total (the lesson `todo/t0526` was filed for).
 #
-# Un-ignore + promote out of `known_gaps/` when the producers are declared to
-# return what they actually return.
+# ═══ THREE CLASS STATEMENTS THAT LOOKED RIGHT AND ARE REFUTED BY CELLS HERE ══
+#   "a call result temp leaks"        -> `heavy(...)` is a call. CLEAN.
+#   "a builtin method's temp leaks"   -> to_upper and join are builtin methods.
+#                                        CLEAN.
+#   "the producer is declared `Str`   -> `gorget_bytes_to_hex` is declared
+#    (the view type) while returning     `static inline Str`, GORGET_ALLOCs and
+#    an owned allocation"                adopts, and is CLEAN. And the premise
+#                                        is false anyway: runtime_string.c:30
+#                                        is `typedef Str GorgetString;` — the
+#                                        two spellings are THE SAME TYPE, so
+#                                        neither can signal ownership. View-vs-
+#                                        owned is the `cap` field (`:39-41`,
+#                                        `gorget_is_view`), which both carry.
+# The `bytes_to_hex` cell is in this net for exactly that reason: it is the one
+# that kills the third theory. Do not remove it as redundant.
+#
+# ═══ WHERE THE EVIDENCE POINTS — A HYPOTHESIS TO PROBE, NOT A FOURTH CLAIM ═══
+# Not the C runtime text, which is downstream of every decision that matters.
+# The LOWERING ARM: `src/ir/lowering/exprs/methods.rs:860`
+# (`if method_name == "debug" || method_name == "display"`) contains ZERO
+# `register_local` calls in :860-914, while the structurally identical
+# `bin`-format arm at `src/ir/lowering/exprs/calls.rs:2929-2938` DOES register
+# its conversion result — its comment reads "Register the conversion result at
+# its birth ... Print-temp leak class", which is Core #3 verbatim — and is
+# clean. All four leaking cells route through the first arm. VERIFY THAT before
+# building on it.
+#
+# ⚠ THE CLEAN CELLS ARE THE POINT OF THE NET. A fix aimed at "builtin method
+# temps" or at "call result temps" DOUBLE FREES to_upper, join, bytes_to_hex
+# and the named locals. Those cells are what trips.
+#
+# ⚠ HEAP-FORCED throughout, and ONLY LeakSanitizer can see this: stdout is
+# correct today, so it is wired to `assert_gg_sanitize_clean`, never `run_gg`.
+#
+# Un-ignore + promote out of `known_gaps/` when all four leaking cells run
+# clean AND the clean cells still do.
 
-from std.collections import Vector
+from std.bytes import bytes_from_str, bytes_to_hex
 
 String heavy(String a, String b):
     return a + b
@@ -47,28 +69,35 @@ String heavy(String a, String b):
 int main():
     int x = 21
     float f = 7.5
+    bool bo = true
     String s = "  hi  "
+    String q = "zz"
     Vector[String] parts = Vector[String]()
     parts.push("a")
     parts.push("b")
+    Vector[uint8] raw = bytes_from_str("hi")
 
-    # CONTROL — a USER call's result temp at a call-arg position. Clean today.
+    # CLEAN — a user function's result temp at a call-arg position.
     print(heavy("alpha", "beta"))
 
-    # CONTROL — BUILTIN methods at the same position whose emitted producer is
-    # declared `GorgetString` and frees its result. Clean today, and exactly
-    # what an over-wide fix would turn into a double free.
+    # CLEAN — builtin methods at the same position.
     print(s.trim().to_upper())
     print(",".join(parts))
 
-    # THE GAP — builtin methods whose emitted producer is declared `Str` while
-    # returning an owned allocation.
+    # CLEAN — and the cell that refutes the "declared `Str`" theory: this
+    # producer is `static inline Str`, GORGET_ALLOCs and adopts, like the four
+    # below, and does not leak.
+    print(bytes_to_hex(raw))
+
+    # THE GAP — four stringification temps in that same position.
     print(x.debug())
     print(f.display())
+    print(bo.debug())
+    print(q.debug())
 
-    # CONTROL — the same leaking producers, bound to a named local first. Clean
-    # today, because binding drop-registers the value; also a double-free cell
-    # for any fix that registers unconditionally.
+    # CLEAN — the same leaking producers bound to a named local first, which
+    # drop-registers them. A fix that registers unconditionally double-frees
+    # these.
     String bound = heavy("gamma", "delta")
     print(bound)
     String d = x.debug()

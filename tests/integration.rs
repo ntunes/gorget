@@ -8518,48 +8518,46 @@ bb",
     );
 }
 
-/// KNOWN GAP (`todo/t0609` item 2) — a producer whose emitted C DECLARES a
-/// borrowed view but RETURNS an owned heap string, so the caller's temp is
-/// never dropped. Measured at R47 close: 7 bytes in 2 allocations, frames
-/// `str_alloc_copy` <- `gorget_string_adopt` <- `gorget_int_to_str` /
-/// `gorget_float_to_str` <- `main`. stdout is correct, so only LeakSanitizer
-/// can see it.
+/// KNOWN GAP (`todo/t0609` item 2) — some stringification temps passed straight
+/// into a call argument are never dropped, and some are.
 ///
-/// THE DISCRIMINATOR IS THE PRODUCER'S DECLARED RETURN TYPE, measured in the
-/// identical `print(...)` argument position:
-/// `print(s.trim().to_upper())` and `print(",".join(parts))` are CLEAN — their
-/// emitted helpers are `static inline GorgetString` and free their result —
-/// while `print(x.debug())` and `print(f.display())` LEAK, because
-/// `gorget_int_to_str` / `gorget_float_to_str` are declared `static inline Str`
-/// (the VIEW type, nothing for a caller to drop) and yet `GORGET_ALLOC` +
-/// `return gorget_string_adopt(out)`. The drop machinery reads the declared
-/// type and is right to conclude there is nothing to drop; the write site is
-/// lying to it (Core #2; layering rule 1 names view-vs-owned as an invariant a
-/// layer may not drop). Census at the write site: 7 such producers, 6 of them
-/// in `src/backend/c/runtime/runtime_tostr.c`.
+/// ⚠ THE ROOT CAUSE IS UNRESOLVED, deliberately. Three successive attempts to
+/// name this class were each refuted by one probe (see the fixture header and
+/// `t0609`), so what is recorded is the MEASUREMENT and nothing more.
 ///
-/// ⚠ IT IS NEITHER "BUILTIN METHODS LEAK" NOR "CALL RESULT TEMPS LEAK", and
-/// both wordings have already been written into this tree and refuted by one
-/// probe. The fixture holds the refuting cells: two builtin methods and one
-/// user function, all clean, all in the same position.
+/// MEASURED at R47 close, every cell in the identical `print(...)` argument
+/// position: `x.debug()` (3 B), `f.display()` (4 B), `bo.debug()` (5 B) and
+/// `q.debug()` (5 B) LEAK — 17 bytes in 4 allocations, frames `str_alloc_copy`
+/// <- `gorget_string_adopt` <- the producer <- `main`. In the SAME position,
+/// a user function's result, `s.trim().to_upper()`, `",".join(parts)`,
+/// `bytes_to_hex(raw)` and any of them bound to a named local are CLEAN.
+/// stdout is correct throughout, so only LeakSanitizer can see it. The byte
+/// counts are payload-dependent; assert the frames and the split, not a total.
 ///
-/// ⚠ THE CLEAN BUILTIN CELLS ARE THE POINT OF THE NET. A fix that
-/// drop-registers every builtin-method result temp DOUBLE FREES `to_upper` and
-/// `join`, whose helpers already free. Those cells are what trips.
+/// ⚠ THE CLEAN CELLS ARE THE POINT OF THE NET. A fix aimed at "builtin method
+/// temps" or "call result temps" DOUBLE FREES `to_upper`, `join`,
+/// `bytes_to_hex` and the named locals. Those cells are what trips.
+///
+/// WHERE THE EVIDENCE POINTS, as a hypothesis to probe rather than a fourth
+/// claim: the LOWERING ARM. `src/ir/lowering/exprs/methods.rs:860` has zero
+/// `register_local` calls in :860-914, while the structurally identical
+/// `bin`-format arm at `src/ir/lowering/exprs/calls.rs:2929-2938` registers its
+/// conversion result (its comment is Core #3 verbatim) and is clean.
 ///
 /// This is the durable repro `t0609`(2) had been missing — the row
 /// `sh_primitive_admitted_methods_ok` was admitted to the leak allowlist
 /// against this class, and the Cardinal rule wants the evidence committed.
 ///
-/// Un-ignore + promote out of `known_gaps/` when the producers are declared to
-/// return what they actually return.
+/// Un-ignore + promote out of `known_gaps/` when all four leaking cells run
+/// clean AND the clean cells still do.
 #[test]
-#[ignore = "KNOWN GAP (todo/t0609 item 2): gorget_int_to_str / \
-gorget_float_to_str are declared `static inline Str` -- the VIEW type -- while \
-allocating and adopting, so the caller's temp is never dropped. LeakSanitizer \
-reports 7 bytes in 2 allocations while stdout is correct and detect_leaks=0 \
-exits 0. NOT `builtin methods leak`: to_upper and join are clean in the same \
-position. Fixture: \
+#[ignore = "KNOWN GAP (todo/t0609 item 2, ROOT CAUSE UNRESOLVED): four \
+stringification temps in a print() argument -- int/float/bool/String debug \
+and display -- are never dropped, 17 bytes in 4 allocations, while stdout is \
+correct and detect_leaks=0 exits 0. In the SAME position a user call, \
+to_upper, join, bytes_to_hex and any named local are CLEAN, which refutes the \
+three class statements tried so far; evidence points at the lowering arm \
+methods.rs:860. Fixture: \
 tests/fixtures/known_gaps/call_result_temp_at_call_arg_leaks.gg. TODO.md."]
 fn call_result_temp_at_call_arg_leaks() {
     assert_gg_sanitize_clean(
@@ -8568,8 +8566,11 @@ fn call_result_temp_at_call_arg_leaks() {
 alphabeta
 HI
 a,b
+6869
 21
 7.5
+true
+\"zz\"
 gammadelta
 21",
     );
