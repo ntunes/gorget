@@ -38395,9 +38395,10 @@ fn self_host_runtime_diff() {
         // trait clause) emits its method from the template with the equip's own
         // `T` unbound, under the monomorphized symbol name — the emitted C
         // carries the self-host's own `[bug] EFieldAccess … unknown field
-        // 'count' on base type 'SparseSet__T'` verdict three times. Reduced to
-        // eight lines at `known_gaps/sh_inherent_generic_equip_template_
-        // unbound_t.gg`, pinned `#[ignore]`d by
+        // 'count' on base type 'SparseSet__T'` verdict three times. FILED as
+        // `todo/t0902` (this entry's required TODO citation), reduced to eight
+        // lines at `known_gaps/sh_inherent_generic_equip_template_unbound_t.gg`
+        // and pinned `#[ignore]`d by
         // `sh_inherent_generic_equip_template_unbound_t`.
         "ecs_advanced",
     ];
