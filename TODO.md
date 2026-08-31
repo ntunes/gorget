@@ -116,10 +116,14 @@ C sweep 2533/0/182 · LLVM sweep 2533/0/182 · `spec_conformance` 3/0 · `securi
 ### ▶ R48 SCOPE (OPENED 2026-08-31 — the constraints below are LIVE, not a proposal)
 
 **Headline: the six CRITICAL memory-safety defects** — `t0770` (rc 139 SIGSEGV) · `t0771` (heap-UAF, silent
-wrong output, no crash) · `t0763` (`&self` mutator on a generic equip is a UAF) · `t0840` (**the Book Ch16
-"many owners" idiom segfaults**; one is a UAF at a *borrowing* call) · `t0841` (`[s for i in 0..3]`
-double-frees and `gg check` passes) · `t0772`. Two are documented book idioms, which is worse than an
-ordinary bug.
+wrong output, no crash) · `t0763` (`&self` mutator on a generic equip is a UAF) · `t0840` (`Vector[Shared[T]]`
+segfaults) · `t0841` (`[s for i in 0..3]` double-frees and `gg check` passes) · `t0772`.
+⚠ **CORRECTED 2026-08-31 by the Track-D scout, and the item still carries the false claim:
+`t0840` is NOT a documented book idiom.** `grep -rn "Vector\[Shared" docs/` returns **NOTHING**;
+Ch16's actual `Shared` examples (`Shared[int]`, `Shared[Callable[...]]`) are GREEN at HEAD. The
+"the Book Ch16 idiom segfaults" framing — in `t0840`, in R48's opening handover and relayed to the
+owner — is unsupported. It is a synthesized shape, still CRITICAL, but the round must not sell it
+as a documented-idiom failure. **D2's executor owes the item correction.**
 
 **⊕ Owner-directed 2026-08-31: run a BURN-DOWN campaign in parallel.** Zones are naturally disjoint from the
 memory-safety work (`src/` vs `tests/`). Surface, measured 2026-08-31: **230** `#[ignore]`d integration tests
