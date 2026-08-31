@@ -316,6 +316,40 @@ const EXCLUDE: &[&str] = &[
     // `tests/fixtures/security/cow_element_borrow_uaf.gg`.
     // Subset gap filed as `todo/t0753`.
     "cow_alias_spelled_view_via_first_getter.gg",
+    // ⚠ ADDED 2026-08-31 AT R48 INTEGRATION, AND THE RECURRENCE IS THE POINT.
+    // `cow_comprehension_fresh_mint_control.gg` arrives with `800cfcc2`
+    // (Track D1, `t0841`) as the GREEN control proving the axis is an
+    // already-owned live NAME, not "a loop-invariant body" — it had to be
+    // committed because the control the item cited was a `.map()` fixture, not
+    // a comprehension. ggdef cannot elaborate a comprehension at all
+    // (`expression `unsupported` is outside the phase-0 subset`), and the
+    // subset gap is ALREADY FILED as `todo/t0003` — so this is Core #9's
+    // "a note + a filed subset gap", not a silent exclusion.
+    // ⛔ THIS IS `todo/t0801`'S CLASS, RECURRING IN THE ROUND THAT CLOSED IT:
+    // corpus membership is glob-minus-exclusions, so ANY new `cow_*` fixture is
+    // opted IN by default and reddens a lane its own track never ran. D1's
+    // gauntlet was clean; the orchestrator integrated without `-p ggdef` (a
+    // SEPARATE target `--test integration` never touches) and main went red.
+    // The declared-membership guard that would have caught it at add-time is
+    // R48 Track E-B3's deliverable and was still in gauntlet when D1 landed.
+    "cow_comprehension_fresh_mint_control.gg",
+    // ⊕ THE OTHER ELEVEN FROM THE SAME COMMIT. Measured one-by-one against
+    // `ggdef run`, not assumed: 12 of D1's 13 new `cow_*` fixtures are
+    // out-of-subset (comprehensions, and the `meta for`/`meta while` forms);
+    // only `cow_for_zero_trip_body_kill_control.gg` elaborates, and it stays
+    // GATED. Subset gaps: comprehensions `todo/t0003`; the meta forms are the
+    // same phase-0 boundary and are covered by the same item.
+    "cow_comprehension_invariant_dict_value.gg",
+    "cow_comprehension_invariant_filter_arm.gg",
+    "cow_comprehension_invariant_in_condition.gg",
+    "cow_comprehension_invariant_nested.gg",
+    "cow_comprehension_invariant_owned_name.gg",
+    "cow_comprehension_invariant_struct_payload.gg",
+    "cow_comprehension_invariant_vector_source.gg",
+    "cow_loop_invariant_owned_name_push_control.gg",
+    "cow_meta_for_zero_trip_body_kill.gg",
+    "cow_meta_while_false_guard_body_kill.gg",
+    "cow_set_comprehension_invariant_in_condition.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -624,5 +658,19 @@ fn corpus_b_all_match() {
     // `.first()` elaboration error, so it had not absorbed those 8 — the
     // arithmetic here starts from 181, not from a figure this assert had
     // confirmed.
-    assert_eq!(fixtures.len(), 188, "B2 gate set drifted from 188 fixtures");
+    // R48 Track D1 (`t0841`, `800cfcc2`): 13 new `cow_*` fixtures landed with the
+    // comprehension back-edge fix. Measured one-by-one against `ggdef run`, not
+    // assumed: 12 are out-of-subset (the comprehension forms, and the
+    // `meta for`/`meta while` pair) and are EXCLUDEd above with citations —
+    // comprehensions `todo/t0003`, the meta forms the same phase-0 boundary.
+    // Only `cow_for_zero_trip_body_kill_control.gg` elaborates and is gated.
+    // Count +13 additions − 12 EXCLUDE = +1 net → 189.
+    // ⛔ AND THE RECURRENCE IS THE LESSON: this gate went RED on main because
+    // corpus membership is glob-minus-exclusions, so every new `cow_*` fixture
+    // is opted IN by default and reddens a lane its own track never ran. That
+    // is `todo/t0801`'s finding, in the round that closed it. D1's gauntlet was
+    // clean; the integration skipped `-p ggdef`, which is a SEPARATE target
+    // `--test integration` never touches. The declared-membership guard that
+    // catches this at add-time is R48 Track E-B3's deliverable.
+    assert_eq!(fixtures.len(), 189, "B2 gate set drifted from 189 fixtures");
 }
