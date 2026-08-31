@@ -30512,17 +30512,17 @@ fn self_host_bootstrap() {
     // `--clones=sites-tsv=PATH` — which is what resolved the 294 — dumps EVERY
     // CloneId with file:line, type and reason, and is the instrument to reach
     // for instead.
-// PINNED-BY: cc0c0a79 VALUE: 13_144_626
-const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_144_626;
+// PINNED-BY: 4c473a88 VALUE: 13_150_071
+const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_150_071;
 // ⚠ THE BAND'S ANCHOR — ONE PER METER, ALL FOUR FROM THE SAME ROUND-OPEN
 // MEASUREMENT, RE-SEEDED ONCE PER ROUND AT ROUND OPEN. Nothing fails when that
 // reset is forgotten (see `struct CloneReading`). The date below is what
 // `scripts/clone_meter_check.sh --anchor-age` reads — but ⛔ NOTHING CALLS THAT
 // MODE YET, so today the reset is held by this comment alone. Wiring it into
 // the round-open step is `todo/t0851`.
-// ROUND-OPEN-DATE: 2026-08-29
-// ROUND-OPENED-BY: f3feea79 VALUE: 13_096_576
-const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_096_576;
+// ROUND-OPEN-DATE: 2026-08-31
+// ROUND-OPENED-BY: 4c473a88 VALUE: 13_150_071
+const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_150_071;
 
 // STRING-CLONE ceiling — same workload, same tighten-only discipline as
 // the array ceiling above. string_clone (calls to
@@ -30609,10 +30609,10 @@ const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_096_576;
     // The pin below is the value in an agent worktree 59 characters deep; the
     // gate prints `[clone-meter] root_len=` beside every reading so two are
     // never silently compared across checkouts.
-// PINNED-BY: cc0c0a79 VALUE: 31_474_506
-const SELF_COMPILE_STRING_CLONE_PIN: u64 = 31_474_506;
-// ROUND-OPENED-BY: f3feea79 VALUE: 31_379_632
-const SELF_COMPILE_STRING_CLONE_ROUND_OPEN: u64 = 31_379_632;
+// PINNED-BY: 4c473a88 VALUE: 31_490_366
+const SELF_COMPILE_STRING_CLONE_PIN: u64 = 31_490_366;
+// ROUND-OPENED-BY: 4c473a88 VALUE: 31_490_366
+const SELF_COMPILE_STRING_CLONE_ROUND_OPEN: u64 = 31_490_366;
 
 // ── Shared clone-ceiling machinery ─────────────────────────────────────────
 // Core invariant #4 (one fix, all siblings): both clone-ceiling ratchets —
@@ -31303,10 +31303,10 @@ fn self_host_clone_ceiling() {
     // ⊕ The counters ride the runtime PREAMBLE, prepended from the
     // --clones=stats driver's emitted C, so a `src/backend/c/` change moves this
     // number with `stage1.c` byte-identical.
-// PINNED-BY: cc0c0a79 VALUE: 1_129_955_831
-const STAGE1_ARRAY_CLONE_PIN: u64 = 1_129_955_831;
-// ROUND-OPENED-BY: f3feea79 VALUE: 1_124_255_029
-const STAGE1_ARRAY_CLONE_ROUND_OPEN: u64 = 1_124_255_029;
+// PINNED-BY: 4c473a88 VALUE: 1_130_449_295
+const STAGE1_ARRAY_CLONE_PIN: u64 = 1_130_449_295;
+// ROUND-OPENED-BY: 4c473a88 VALUE: 1_130_449_295
+const STAGE1_ARRAY_CLONE_ROUND_OPEN: u64 = 1_130_449_295;
 // STAGE-1 STRING-CLONE ceiling — same workload, same tighten-only
 // discipline as the array ceiling above. string_clone would ride under
 // the array ratchet exactly as it would at stage 0, so it gets its own
@@ -31469,10 +31469,10 @@ const STAGE1_ARRAY_CLONE_ROUND_OPEN: u64 = 1_124_255_029;
     // marks are ROOT-granular rather than PATH-granular (`todo/t0715`). Read it
     // together with `STAGE1_ARRAY_CLONE_PIN`: the two are re-pinned from ONE
     // measurement run and mean nothing apart.
-// PINNED-BY: cc0c0a79 VALUE: 2_371_710_742
-const STAGE1_STRING_CLONE_PIN: u64 = 2_371_710_742;
-// ROUND-OPENED-BY: f3feea79 VALUE: 2_359_224_224
-const STAGE1_STRING_CLONE_ROUND_OPEN: u64 = 2_359_224_224;
+// PINNED-BY: 4c473a88 VALUE: 2_372_992_131
+const STAGE1_STRING_CLONE_PIN: u64 = 2_372_992_131;
+// ROUND-OPENED-BY: 4c473a88 VALUE: 2_372_992_131
+const STAGE1_STRING_CLONE_ROUND_OPEN: u64 = 2_372_992_131;
 
 #[test]
 #[serial(self_host_lowerer_driver)]
