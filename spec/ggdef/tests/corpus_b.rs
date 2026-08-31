@@ -35,6 +35,25 @@ use std::path::{Path, PathBuf};
 /// these are excluded BY NAME (the generic-equip ones are the only equip
 /// fixtures ggdef cannot elaborate — generic monomorph is phase 1).
 const EXCLUDE: &[&str] = &[
+    // R48 Track A's erased-`Callable`-PARAMETER combinator net. Excluded on an
+    // out-of-subset CONSTRUCT, not on the shape under test: both fixtures pass
+    // their callables as TOP-LEVEL FUNCTION NAMES USED AS VALUES, which ggdef
+    // phase-0 rejects with `error: unresolved local `bang`` /
+    // `unresolved local `strlen_of`` (verified by running the CLI on each).
+    //
+    // ⚠ THE SPELLING IS NOT A CHOICE MADE TO DODGE THIS GATE. A closure
+    // literal in the argument position allocates a closure environment that
+    // leaks 8 bytes (`t0526`), and these are TOP-LEVEL fixtures, so
+    // `scripts/sanitize_sweep.sh` sweeps them and its leak allowlist is
+    // shrink-only — the closure-literal spelling could not be committed here.
+    //
+    // ⭐ ggdef COVERAGE OF THE SHAPE IS NOT LOST, it moved: the SAME cells,
+    // spelled with closure literals, are `spectests/run/combinator_callable_param.gg`,
+    // which ggdef adjudicates and which MATCHes on C, LLVM and the self-host
+    // lane. Retiring these two rows is what closing the top-level-fn-as-a-value
+    // subset gap buys.
+    "combinator_callable_param_same_type.gg",
+    "combinator_callable_param_cross_type.gg",
     // R45 memory-safety regression net. These fixtures pin the CoW rescue
     // against realloc-induced use-after-free — the class ggdef is
     // STRUCTURALLY BLIND to (it adjudicates value semantics, not memory
