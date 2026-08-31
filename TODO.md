@@ -178,6 +178,35 @@ hard case) and **must** include a non-shrink-only polarity. Sequencing recorded 
 | `t0850` `parent_dir` per-char clone | **R49** — MED perf; already declared as the clone meter's path-length input, so nothing is blocked on it. |
 | `t0844` Ctrl-C · `t0842`(A) `wait_timeout` | **STAY PARKED** — no R48 track touches them; the rule is ask when the work is SCHEDULED. |
 
+### ⛔ OWED ROUND-OPEN ACTION — THE CLONE BAND ANCHORS WERE NOT RE-SEEDED AT R48 OPEN
+
+**This is the ORCHESTRATOR's omission, not a track's.** `bash scripts/clone_meter_check.sh --anchor-age`
+is **RED at HEAD**: `ROUND-OPEN-DATE 2026-08-29` (R47's open, `f3feea79`) against `DONE.md` newest
+`2026-08-31`. The script's own words: *"a round has CLOSED since this band anchor was set… Leaving them is
+not conservative: **the band stops meaning 'per round' and starts accumulating across rounds, which is the
+shape the owner rejected.**"*
+
+⇒ **Until this is done, every ~1% band check this round is measured against R47's anchor, so R47's drift
+and R48's drift are being summed.** The owner explicitly REJECTED a cumulative cap in favour of a per-round
+band + periodic audit (`t0860`), which this silently defeats.
+
+**THE FOUR CONSTANTS + 2 comment lines** (`tests/integration.rs`): `SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN`
+(`:30525`) · `SELF_COMPILE_STRING_CLONE_ROUND_OPEN` (`:30615`) · `STAGE1_ARRAY_CLONE_ROUND_OPEN` (`:31309`)
+· `STAGE1_STRING_CLONE_ROUND_OPEN` · `// ROUND-OPEN-DATE:` (`:30523`) · `// ROUND-OPENED-BY:` (`:30524`).
+
+⚠ **DO NOT set ROUND_OPEN := PIN by inference.** It is *tempting* — **zero `src/` commits have landed since
+R48 opened** (`git log --oneline 2d4098bd..HEAD -- src/ | wc -l` → 0), so the meters cannot have moved —
+but Core #5 requires a figure REGENERATED this session, and `clone_meter_check.sh:111-113` deliberately
+fails any diff that moves a PIN or ROUND-OPEN constant without one. **Measure it.**
+```
+# regen (expensive: four full self-compiles; run when the box is not loaded)
+bash scripts/clone_meter_check.sh            # then re-seed the 4 constants + both comment lines
+bash scripts/clone_meter_check.sh --anchor-age   # must exit 0
+```
+⚠ **Track F's `t0851` lint would be RED ON ARRIVAL until this lands** — F's brief is told not to re-seed it.
+⊕ **Silver lining, and F should use it:** this is a **live, unplanted RED** — better Core #13 evidence for
+the `--anchor-age` guard than any planted one.
+
 ### ⛔ THE PARITY GATE CANNOT CATCH ITS OWN CLASS (Scout H, 2026-08-31 — six-questions #2)
 
 `RustRejected` rows **return before the self-host is ever invoked** (`tests/integration.rs:37943-37960`) and
