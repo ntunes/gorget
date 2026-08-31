@@ -58,6 +58,19 @@ hard case) and **must** include a non-shrink-only polarity. Sequencing recorded 
   timed-out child *by design*. Unratified language surface.
 - **`t0863`** — six robustness divergences left **UNACCEPTED**: verify the prior per-lane grade before folding.
 
+### 🗂 13 AGENT WORKTREES DELIBERATELY KEPT (R47 close, 1.2G)
+
+`ls .claude/worktrees/agent-*` — all 13 are **DIRTY with real uncommitted work**, checked file-by-file at
+close, so rule 6 keeps them: *branches survive a removal, uncommitted work does not.* They are **not**
+build artefacts. Samples: one holds modified `docs/book/` chapters; `agent-aa19c1e589090caae` holds four
+new `sanitize_empty_sort_*.gg` fixtures; **`agent-a619349ec03b80e93` holds edits to
+`src/ir/lowering/{closures,functions}.rs` and `exprs/methods.rs`** — that is the **F3 scout, lost to the
+disk crash**, and F3 was the three-CRITICAL-UAF track that R48's headline proposes.
+⇒ **Before opening R48's memory-safety track, LOOK IN THAT WORKTREE FIRST** — it may be a head start, or
+it may be an abandoned dead end, but re-deriving it blind would waste the crash twice. Same for
+`agent-aa19c1e589090caae` (F2's sanitize fixtures) against `t0863`/`t0572`.
+⚠ **Do not run `scripts/round_cleanup.sh` without a keep-list** — it prunes EVERY `agent-*` worktree.
+
 ### ⚠ STALE-SCAN FIRST, BEFORE ANY SELECTION
 
 - **`t0801`** is titled *"A ROUND-CLOSE GATE IS RED ON THE R47 INTEGRATION BRANCH"* but its `priority` field
