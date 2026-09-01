@@ -2,10 +2,14 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN (2026-08-31) — the owner lifted the R47 suspension with *"open next round"*.**
-Headline: **the six CRITICAL memory-safety defects**, with the owner-directed burn-down campaign in
-parallel and `t0861` (the figures DB) early at the owner's explicit request (*"please do not forget
-t0861, the figures DB. It should go in early this round."*).
+**▶ R48 IS OPEN AND MID-FLIGHT — 2 of 7 tracks integrated, 5 landed and awaiting one gauntlet step each.
+⛔ NEW AGENTS ARE ON AN OWNER HOLD. ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST; it carries the
+per-track table, the integration recipe, and what must happen before close.**
+Opened 2026-08-31 (owner: *"open next round"*). Headline: **the six CRITICAL memory-safety defects** —
+`t0841` and `t0763`+`t0134` are CLOSED and integrated; `t0770`/`t0772`, `t0840` and `t0825` are fixed on
+branches; `t0771` moved to R49 — with the owner-directed burn-down campaign in parallel and `t0861` (the
+figures DB) early at the owner's explicit request (*"please do not forget t0861, the figures DB. It should
+go in early this round."*).
 
 **⭐ R48 OPENED ON A RECOVERED HEAD START — do not re-derive it.** The kept worktree
 `agent-a619349ec03b80e93` (flagged at R47 close as the F3 scout lost to the disk crash) holds an
