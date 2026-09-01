@@ -1,0 +1,53 @@
+# KNOWN GAP — `Vector[T].map(f)` / `Vector[T].flat_map(f)` where `f` is a
+# `Callable[U(T)]` PARAMETER never gets a monomorph body emitted, so the call
+# links against nothing.
+#
+# MECHANISM, read at HEAD. The typechecker elaborates the call's result type
+# fine; the BODY of `Vector__T__map` is emitted only if
+# `ir::lowering::generics::discover_method_instances` registered the instance
+# while walking the AST with a `LocalTypeEnv`. A `Callable[U(T)]` parameter is
+# not in that env, so no instance is registered:
+#
+#     undefined reference to `Vector__GorgetString__map'
+#
+# ⚠ WHY THE PROGRAM IS CURRENTLY REJECTED RATHER THAN MISCOMPILED. R48 Track A
+# widened `extract_fn_return_type` to see through the `CallableTrait` wrapper
+# (reader 3 of `t0770`). That un-gates this shape from a clean check-time
+# rejection into the un-minted monomorph — measured as the `undefined
+# reference` above on C and, on LLVM, as **rc 0 printing garbage**
+# (`281470681743361` where `5` is correct). A silent miscompile is strictly
+# worse than the rejection it replaces (Core #8, Core #10), so the two `Vector`
+# arms in `src/semantic/typecheck.rs` DECLINE a non-`Function` closure operand
+# through `is_monomorphizable_closure_operand`, restoring the rejection until
+# the monomorph exists. Deleting that gate without minting the monomorph
+# re-opens the LLVM miscompile.
+#
+# ⚠ THE CURRENT DIAGNOSTIC IS ALSO WRONG, and the fix owes both halves:
+# `error[E_TypeMismatch]: type mismatch: expected 'int', found 'String'` reports
+# the FALLBACK type, not anything the user wrote. The reference-grade end state
+# is that this program COMPILES AND RUNS; a better-worded rejection is the
+# interim, not the destination.
+#
+# NEGATIVE CONTROLS, both green at HEAD: the same call with a CLOSURE LITERAL
+# (`xs.map((String s): s.len())`) builds and prints `5`; and `Iterator.map` with
+# a `Callable` PARAM (`v.iter().map(f).collect()[0]`) also builds and runs
+# correctly — it needs no gate, so the defect is specific to the `Vector`
+# collection HOFs. Pin: `iterator_map_callable_param/collect_index.gg`.
+#
+# INTENDED: prints `5`, rc 0, on C and LLVM.
+
+from std.conv import int_to_str
+
+String mk(String a, String b):
+    return a + b
+
+Vector[int] lengths(Callable[int(String)] f):
+    Vector[String] xs = [mk("hel", "lo")]
+    return xs.map(f)
+
+int strlen_of(String s):
+    return s.len()
+
+void main():
+    Vector[int] ys = lengths(strlen_of)
+    print(int_to_str(ys[0]))

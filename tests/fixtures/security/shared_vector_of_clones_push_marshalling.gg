@@ -1,0 +1,25 @@
+# REGRESSION (was todo/t0840) on the SANITIZER lane. The value-lane twin is
+# tests/fixtures/known_gaps/shared_vector_of_clones_push_marshalling.gg — same
+# program, different lane.
+#
+# The value lanes saw only a SEGV. This lane sees the actual memory story: the
+# `gorget_array_push` argument was the handle VALUE where an ADDRESS was
+# required, so the runtime memcpy'd 8 bytes out of the CONTROL BLOCK into the
+# element slot; the read then handed that slot's ADDRESS to a by-VALUE
+# accessor. A value lane is structurally blind to the distinction (Core #13),
+# which is why the class owes a fixture on BOTH.
+#
+# What this lane pins that the value lane cannot: the refcount arithmetic is
+# now BALANCED — three `.clone()` increfs against three element drops from
+# `gorget_array_free` plus the original's drop — so ASan reports neither a leak
+# nor a double free at exit.
+
+void main():
+    Shared[int] s = Shared[int](42)
+    Vector[Shared[int]] all = []
+    all.push(s.clone())
+    all.push(s.clone())
+    all.push(s.clone())
+    print(f"{all.len()}")
+    print(f"{all.get(1).unwrap().get()}")
+    print(f"{s.strong_count()}")

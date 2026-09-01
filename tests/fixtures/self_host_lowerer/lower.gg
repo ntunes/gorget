@@ -1671,6 +1671,12 @@ void compute_method_mutates_self(GirModule &gmod, Module m):
     for mi_item in m.items:
         match mi_item:
             case IEquip(mi_eq):
+                # NON-generic equips only. A generic equip has no single key
+                # here — its methods are classified per MONOMORPHIZED instance
+                # (`Cell__int64_t__assign`), which is what the gate reads, and
+                # `generic_instances` does not exist yet at this point in
+                # `lower_module`. The generic-instances pre-pass carries the
+                # mirror of this seed + fixpoint.
                 if mi_eq.type_params.len() == 0:
                     String mi_tn = ""
                     match mi_eq.target.ty:
@@ -1717,10 +1723,11 @@ void compute_method_mutates_self(GirModule &gmod, Module m):
 # actually WRITE its receiver? Resolves the receiver local's declared type
 # (via ctx.locals — a bare EIdentifier receiver has NO typechecker
 # expr-type entry, so lookup_expr_gir_type returns -1) and reads the
-# classification map. A method not in the map either takes bare `self`
-# (a copy — no write-through) or is a generic-equip instance (not yet
-# classified) → treat as read-only (the BASE gate already did not
-# materialize named receivers, so this is no regression — degrade-to-BASE).
+# classification map. The key is the MONO'D type name, so a generic-equip
+# instance resolves here exactly like a non-generic one
+# (`Cell__int64_t__assign`, registered by the generic-instances pre-pass). A
+# method still absent from the map takes bare `self` — a copy, with no
+# write-through — so read-only is the right answer for it.
 bool mutinf_named_recv_writes_self(LowerCtx ctx, GirModule &gmod, String recv_name, String mname):
     if not nl_contains(ctx, recv_name):
         return false
@@ -3793,28 +3800,27 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                 # so this comment cannot rot the way its "8" predecessor did.
                 # Mirrors Rust gg's scheduler-directive scan.
                 #
-                # ⚠ There is no `else` for an unknown mode, and THAT IS A LIVE
-                # CORE #10 SILENT DROP ON THIS LANE — filed as `todo/t0825`.
+                # ⚠ There is no `else` for an unknown mode. That used to be a
+                # CORE #10 SILENT DROP ON THIS LANE (`todo/t0825`, closed).
+                # Unreachable as a user-visible drop because
+                # `validate_directives` rejects first.
                 # It is easy to talk yourself out of, so here is the measurement
                 # rather than the reasoning: on the RUST lane
                 # `directive scheduler=bogus` is REJECTED with E_UnknownDirective
                 # (`src/semantic/mod.rs`, pinned by the
-                # `unknown_scheduler_mode_error` fixture). On THIS lane it is
-                # ACCEPTED: `self_host_check/resolve.gg`'s IDirective arm is a
-                # bare `pass`, the self-host validates no directive at all, and
-                # the arm below silently ignores the value. Measured 2026-08-30 —
+                # `unknown_scheduler_mode_error` fixture). Pre-fix, THIS lane
+                # ACCEPTED it: `self_host_check/resolve.gg`'s IDirective arm was
+                # a bare `pass`, the self-host validated no directive at all, and
+                # the arm below silently ignored the value. Measured 2026-08-30 —
                 # emit + cc + run of one async program, rc 0 at every stage:
                 #   scheduler=bogus  -> "── Scheduler: Pool ──",   worker runs|after sleep|1|1
                 #   scheduler=single -> "── Scheduler: Single ──", after sleep|0|worker runs|1
-                # A typo therefore changes an async program's interleaving with
-                # no diagnostic. The arm is unreachable only INSIDE THE HARNESS,
-                # because the runtime-parity corpus feeds the self-host solely
-                # Rust-ACCEPTED programs — and a self-host source file may not
-                # justify a missing arm by citing the other compiler's frontend
-                # (that is exactly what the succession plan forbids).
+                # A typo therefore changed an async program's interleaving with
+                # no diagnostic. The missing `else` is no longer a user-visible
+                # drop: `validate_directives` (both resolve copies) rejects the
+                # unknown mode before `lower_module` runs.
                 # `pool` needs no arm here because it is `new_lir_module`'s
-                # default — but note that is also an unguarded coincidence, and
-                # `t0825` is where both are tracked.
+                # default — an unguarded coincidence the closed item also named.
                 elif dir_name == "scheduler":
                     if dir_value == "single":
                         gmod.scheduler_mode = SCHED_SINGLE
@@ -4877,6 +4883,22 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
     # `lower_generic_equip` which strips trait_name and routes through
     # lower_equip_block — produces `Target__method` naming with type subs
     # applied. We mirror that naming here.
+    #
+    # GENERIC-EQUIP `&self` MUTATION CLASSIFICATION rides along in the same
+    # loop. `compute_method_mutates_self` (called far above, before
+    # `generic_instances` even exists) classifies NON-generic equips only, so a
+    # generic-equip mutator like `Cell[T].assign(&self, T v)` never entered
+    # `method_mutates_self` and the named-receiver gate answered read-only — the
+    # write then went straight through to the caller's value. The mono'd key is
+    # the one the gate reads: `mutinf_named_recv_writes_self` builds
+    # `type_id_to_name(peel_ptr_tid(rtid)) + "__" + mname`, and both sides go
+    # through `mangle_type_name` (`type_to_c_name`'s TNamed arm writes it,
+    # `map_ast_type` registers `GtNamed(mangled)`, `type_id_to_name` is the
+    # identity on `GtNamed`) — so the key is `Cell__int64_t__assign`, NOT the
+    # bare `Cell__assign`.
+    Dict[String, bool] geq_direct = {}
+    Dict[String, Vector[String]] geq_edges = {}
+    Vector[String] geq_keys = []
     for eqsi_inst in generic_instances:
         if equip_generic_names.contains(eqsi_inst.base_name):
             for eqs_tmpl in equip_templates:
@@ -4936,7 +4958,60 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                             gmod.fn_borrow_params.put(eqs_mv_key.clone(), eqs_borrows)
                             gmod.fn_move_params.put(eqs_mv_key.clone(), eqs_moves)
                             gmod.fn_defaults.put(eqs_mv_key, eqs_defaults)
+                    # SECOND pass over the same methods: seed the `&self`
+                    # mutation classification. It runs after the loop above so
+                    # every SIBLING method of this instance is already in
+                    # fn_borrow_params — `mutinf_scan_expr`'s step 1 needs that
+                    # to emit a callee EDGE (`Cell__int64_t__resize`) instead of
+                    # falling to its conservative step-3 leaf, which would mark
+                    # every caller mutating and re-materialize far more than the
+                    # gate needs.
+                    #
+                    # ⚠ ONE CELL OF THIS AXIS IS DELIBERATELY OMITTED, and it is
+                    # named rather than left for a reader to discover: a
+                    # METHOD-generic method on a GENERIC equip
+                    # (`equip [T] Cell[T]: U convert[U](&self, U x)`) is skipped
+                    # by the `type_params.len() == 0` guard below, exactly as it
+                    # is skipped by the fn_sigs registration in the loop above
+                    # (whose own comment says so: "method-level generics skip
+                    # this pre-pass; they need per-call-site mono of their own").
+                    # Those instances are discovered later, via
+                    # `mono_method_insts` (~lower.gg:5887), and the inherent
+                    # no-trait arm there is still a `case None: pass` stub —
+                    # `todo/t0219`'s `gm_` entry. Classifying them here would key
+                    # on a mangled name that does not exist yet. The cell is
+                    # therefore UNCOVERED, not covered-by-shape: a
+                    # method-generic mutator on a generic equip still degrades to
+                    # the read-only answer, which is the pre-R38 BASE behaviour
+                    # rather than a new miscompile.
+                    for eqs_mut_mdef in eqs_tmpl.methods:
+                        if eqs_mut_mdef.type_params.len() == 0:
+                            String eqs_mut_key = eqs_mono_target + "__" + eqs_mut_mdef.name
+                            if mutinf_takes_mut_self(gmod, eqs_mut_key) and not geq_direct.contains(eqs_mut_key):
+                                Vector[String] eqs_ces = []
+                                bool eqs_dm = mutinf_scan_stmts(eqs_mut_mdef.body, eqs_mono_target, &gmod, &eqs_ces)
+                                geq_direct.put(eqs_mut_key.clone(), eqs_dm)
+                                geq_edges.put(eqs_mut_key.clone(), eqs_ces)
+                                geq_keys.push(eqs_mut_key)
                     clear_type_subs(&gmod)
+
+    # Seed + fixpoint for the mono'd generic-equip keys, mirroring
+    # `compute_method_mutates_self`'s own two steps. Self-callee edges only ever
+    # point INSIDE one instance (`self` has exactly one type, so a self-rooted
+    # call inside `Cell__int64_t__probe` keys on `Cell__int64_t__…`), which is
+    # why a local fixpoint over these keys is complete rather than a subset of
+    # the module-wide one that already ran.
+    for geq_sk in geq_keys:
+        gmod.method_mutates_self.put(geq_sk, geq_direct.get(geq_sk).unwrap())
+    bool geq_changed = true
+    while geq_changed:
+        geq_changed = false
+        for geq_fk in geq_keys:
+            if not gmod.method_mutates_self.get(geq_fk).unwrap():
+                for geq_ce in geq_edges.get(geq_fk).unwrap():
+                    if gmod.method_mutates_self.contains(geq_ce) and gmod.method_mutates_self.get(geq_ce).unwrap():
+                        gmod.method_mutates_self.put(geq_fk, true)
+                        geq_changed = true
 
     # Build trait lookup map for default method generation
     Dict[String, TraitDef] trait_defs = {}

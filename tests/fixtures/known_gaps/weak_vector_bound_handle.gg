@@ -1,0 +1,43 @@
+# REGRESSION (was todo/t0840): the HANDLE-TYPE axis — `Weak[T]`.
+# `Weak__T` is the same `Gorget<Family>*` pointer typedef as `Shared__T`, so a
+# BOUND `Weak` in a `Vector` carried the identical defect: pre-fix this built
+# and then died (rc 135 / 139 depending on lane) with
+# `gorget_array_push(__v13, __v15)` storing the handle value under
+# `typedef GorgetShared* Weak__int64_t`.
+#
+# ⚠ An UNBOUND `Vector[Weak[int]]` — declared, never fed from a `downgrade()` —
+# was reported as a separate missing-typedef class while this net was being
+# built. It does NOT reproduce: `Vector[Weak[int]] all = []` with `len()`,
+# `get(0)` and a struct-field root all build and run clean on C and LLVM at
+# HEAD, so there is nothing to pin and nothing filed.
+#
+# ⚠ SANITIZER NOTE: this cell is value-lane green but NOT ASan-clean, for a
+# PRE-EXISTING and ALREADY-FILED reason it does not introduce: **`todo/t0620`**,
+# whose text matches what this cell measures byte for byte — *"LEAKS 40 bytes
+# under LSan (the 32-byte Shared control block + 8-byte value) — the match-bound
+# `sh` ... is never drop-registered"*. Regenerated here:
+# `SUMMARY: AddressSanitizer: 40 byte(s) leaked in 2 allocation(s)`.
+#
+# t0620 also records the isolation this cell independently reproduces: the Weak
+# CONSUMING position ALONE is ASan-clean, and only the `upgrade()`-result
+# binding leaks. So the marshalling half this cell pins is sound, and the leak
+# is `t0620`'s — which is why this cell has no ASan twin while its
+# ownership-sensitive siblings do. The robustness map carries the same defect as
+# a baselined row (`sh_weak_clone_upgrade`, `asan = SANITIZE-FAIL`, note
+# *"prints the RIGHT answer"*).
+#
+# CELL: container=Vector · handle=Weak · payload=int · producing-arm=push ·
+#       read=`.get(i).unwrap().upgrade()`.
+
+void main():
+    Shared[int] s = Shared[int](9)
+    Weak[int] w = s.downgrade()
+    Vector[Weak[int]] all = []
+    all.push(w.clone())
+    all.push(w.clone())
+    print(f"{all.len()}")
+    match all.get(0).unwrap().upgrade():
+        case Some(v):
+            print(f"{v.get()}")
+        else:
+            print("gone")

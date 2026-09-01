@@ -1,0 +1,9 @@
+# D53 NEG — bare-assign of a named Mutex place.
+# CELL: lock=Mutex · position=assign · source=named place.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+# RED at 4850bf38: `gg check` ACCEPT, C rc 134 double-free.
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Mutex[int] n = m
+    print(n.lock().get())

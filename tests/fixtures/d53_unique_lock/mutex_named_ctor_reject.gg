@@ -1,0 +1,12 @@
+# D53 NEG — named Mutex at struct-ctor / field-init.
+# CELL: lock=Mutex · position=ctor · source=named place.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+# RED at 4850bf38: `gg check` ACCEPT, C rc 134.
+
+struct Wrap:
+    Mutex[int] lock
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Wrap w = Wrap(m)
+    print(w.lock.lock().get())

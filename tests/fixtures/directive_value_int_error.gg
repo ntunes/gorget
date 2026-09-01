@@ -1,0 +1,28 @@
+# Test: a directive VALUE must be an IDENTIFIER — `directive trace=1` is refused.
+#
+# The normative grammar (`docs/language-reference.md`, "Directives") is
+#
+#     directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ]
+#
+# so the value slot admits an identifier and nothing else. Rust gg refuses this
+# at PARSE time (`expect_identifier()?` in `src/parser/mod.rs::parse_directive`);
+# the self-host now refuses it at parse time too.
+#
+# ⚠ THIS CELL CANNOT BE CAUGHT BY THE SEMANTIC VALIDATOR, and that is the whole
+# reason it has its own fixture. `token_ident` returns "" for a non-identifier
+# token, so the self-host parser used to build `IDirective("trace", "")` for
+# BOTH `directive trace` (which must be ACCEPTED) and `directive trace=1` (which
+# must be REFUSED) — byte-identical AST. A validator reading `IDirective(name,
+# value)` is structurally incapable of telling them apart; only the parser can.
+#
+# Pinned on BOTH lanes: `directive_value_int_error` (Rust gg) and
+# `sh_rejects_directive_value_int` (self-host driver). The self-host half is the
+# load-bearing one — `self_host_runtime_diff` returns RustRejected BEFORE the
+# self-host is invoked (todo/t0870), so a self-host over-acceptance of a
+# Rust-rejected program is invisible to the parity gate and has to be asserted
+# directly.
+
+directive trace=1
+
+void main():
+    print("REACHED — the directive value was NOT validated on this lane")

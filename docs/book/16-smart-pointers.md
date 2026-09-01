@@ -180,5 +180,5 @@ when ownership rules don't fit your problem, not as the default approach.
 | `Box[T]` | Single | N/A | Heap allocation |
 | `Shared[T]` | Shared (ref-counted) | Yes (atomic) | Ref count + allocation |
 | `Weak[T]` | Non-owning | Yes | Ref count check on upgrade |
-| `Mutex[T]` | Shared + mutable | Yes | Lock overhead |
-| `RwLock[T]` | Shared + mutable | Yes | Lock overhead |
+| `Mutex[T]` | Single (share via `Shared[Mutex[T]]`) | Yes | Lock overhead |
+| `RwLock[T]` | Single (share via `Shared[RWLock[T]]`) | Yes | Lock overhead |

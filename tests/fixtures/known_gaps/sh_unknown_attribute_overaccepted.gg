@@ -1,0 +1,36 @@
+# DEFERRED-GAP FIXTURE (#[ignore]'d — the self-host performs NO item-ATTRIBUTE
+# validation and silently discards an unknown attribute; see todo/t0929).
+#
+# Rust gg REJECTS this program with `error[E_UnknownDirective]: unknown directive
+# `@nonexistent`` — `validate_attributes` (`src/semantic/mod.rs`) checks every
+# item's attributes against the {derive, tag, should_panic, skip, timeout}
+# allowlist. Pinned on that lane by `tests/fixtures/unknown_attribute_error.gg`.
+#
+# The self-host has no counterpart. MEASURED at HEAD on the lowerer driver: rc 0,
+# `int main(` emitted, no diagnostic — the attribute is simply gone. That is
+# Core #10 lower-or-reject (user syntax discarded with no diagnostic) and a
+# Core #9 accept/reject lane divergence.
+#
+# ⚠ IT IS A DIFFERENT CLASS FROM THE DIRECTIVE VALIDATION R48 closed, sharing
+# only the error code: a different validator over a different item surface, with
+# a different allowlist. It was dispositioned DEFER-with-reason rather than
+# absorbed, precisely so it would not be quietly folded into a fix whose scope it
+# is not in.
+#
+# ⚠ THE PARITY GATE CANNOT SEE THIS. `self_host_runtime_diff` classifies a
+# Rust-rejected program as RustRejected and returns before the self-host is
+# invoked (todo/t0870), so the over-acceptance is invisible to it — which is why
+# the pin is an explicit self-host assertion.
+#
+# The INTENDED state is a REJECTION on this lane too, matching Rust gg — what the
+# `#[ignore]`d `sh_rejects_unknown_attribute` asserts, and why it is RED at HEAD.
+# Un-ignore it and promote this fixture out of `known_gaps/` the round the
+# self-host validates attributes.
+
+@nonexistent
+struct Foo:
+    int x
+
+void main():
+    Foo f = Foo(1)
+    print(f.x)

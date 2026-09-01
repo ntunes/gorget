@@ -4861,7 +4861,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int _cm_recv_tid = ctx.locals.get(recv).unwrap().type_id
                 EnumCategory _cm_ec = enum_category_of(&gmod, _cm_recv_tid)
                 if (_cm_ec.category == ENUM_CAT_OPTION or _cm_ec.category == ENUM_CAT_RESULT) and margs.len() == 1:
-                    int _cm_u = combinator_closure_ret_type(margs.get(0).unwrap().value, &gmod)
+                    int _cm_u = combinator_closure_ret_type(ctx, margs.get(0).unwrap().value, &gmod)
                     if mname == "map":
                         if _cm_ec.category == ENUM_CAT_OPTION:
                             # Option.map: ok payload becomes U; Option has no err.
@@ -4898,7 +4898,7 @@ int lower_expr_inner(LowerCtx &ctx, SpannedExpr sexpr, GirModule &gmod):
                 int _at_recv_tid = ctx.locals.get(recv).unwrap().type_id
                 EnumCategory _at_ec = enum_category_of(&gmod, _at_recv_tid)
                 if (_at_ec.category == ENUM_CAT_OPTION or _at_ec.category == ENUM_CAT_RESULT) and margs.len() == 1:
-                    int _at_ret = combinator_closure_ret_type(margs.get(0).unwrap().value, &gmod)
+                    int _at_ret = combinator_closure_ret_type(ctx, margs.get(0).unwrap().value, &gmod)
                     EnumCategory _at_ret_ec = enum_category_of(&gmod, _at_ret)
                     if _at_ret_ec.category == ENUM_CAT_OPTION or _at_ret_ec.category == ENUM_CAT_RESULT:
                         ret_tid = _at_ret

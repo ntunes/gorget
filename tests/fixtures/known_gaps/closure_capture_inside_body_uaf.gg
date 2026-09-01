@@ -1,0 +1,44 @@
+# KNOWN GAP (`todo/t0704`, SECOND REPRO) — the SAME capture-boundary
+# use-after-free with the realloc spelled INSIDE the closure body, and with NO
+# saved view variable at all. rc 139 SIGSEGV on BOTH backends.
+#
+# WHY A SECOND REPRO. The sibling
+# (`closure_capture_then_mutate_source_uaf.gg`) reallocates OUTSIDE the closure
+# and saves a view; that shape admits a plausible competing story — "a CoW view
+# the prescan failed to materialize". This one kills it. The closure captures
+# `v`, pushes 64 times THROUGH the capture, then does a FRESH
+# `print(v.get(0).unwrap())`. There is no view variable to materialize, the
+# mutation and the read are both inside the body, and it is still rc 139.
+#
+# ⇒ ONE MECHANISM, stated positively: a closure's captured collection handle is
+# a BORROW BOUND AT CAPTURE TIME (`src/ir/lowering/closures.rs`, the
+# `CaptureMode::ByValue` arm: `field_load` -> `Ptr(cap.type_id)` +
+# `set_field_borrow`); a realloc of the source leaves that handle stale,
+# WHEREVER the realloc is spelled.
+#
+# ⚠ THE DISCRIMINATOR IS THE CAPTURE ROOT, NOT THE MUTATION'S LOCATION. Take the
+# capture away — declare the vector INSIDE the closure — and the identical
+# statements are rc 0. That is the live regression fixture
+# `cow_closure_body_view_survives_realloc.gg`, fixed by routing the closure body
+# through the per-function-body prescans. This one is NOT fixed by that, which
+# is exactly why it stays a known gap. Do NOT start from the prescan.
+#
+# ⚠ THE REALLOC IS LOAD-BEARING: 0 pushes -> rc 0, 1 push -> rc 0, 64 pushes ->
+# rc 139. The payload is heap-FORCED via `mk` so ASan reports a legible
+# heap-use-after-free rather than a bare SIGSEGV.
+#
+# INTENDED (asserted by the `#[ignore]`d `closure_capture_inside_body_uaf`):
+# prints `helloworld`, both backends, ASan-clean.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Vector[String] v = [mk("hello", "world")]
+    auto f = ():
+        int i = 0
+        while i < 64:
+            v.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+            i = i + 1
+        print(v.get(0).unwrap())
+    f()

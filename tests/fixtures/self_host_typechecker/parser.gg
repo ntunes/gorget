@@ -2,6 +2,8 @@
 # Consumes a token stream from the lexer and produces an AST.
 
 from std.collections import Vector
+from std.io import stderr
+from std.os import exit
 from std.conv import int_to_str
 from lexer import lex_tokenize_with_offset, SpannedToken, Token, Keyword, StringLiteral, StringKind, StringSegment
 from ast import Module, Item, Stmt, Expr, Type, Pattern, Span, SpannedExpr, SpannedType, SpannedPattern, FunctionDef, StructDef, EnumDef, EnumVariant, TraitDef, EquipBlock, MatchArm, ElseBranch, Param, ImportStmt
@@ -4515,43 +4517,68 @@ equip Parser:
             return self.extract_name(alias_tok)
         return ""
 
+    # `directive <name>[-<part>…] [= <value>]`. The grammar is normative
+    # (`docs/language-reference.md`, "Directives"):
+    #
+    #     directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ]
+    #
+    # — `=` is OPTIONAL, and BOTH the name and the value are IDENTIFIERs.
+    # Twin: Rust gg's `parse_directive` (`src/parser/mod.rs`), whose
+    # `expect_identifier()?` on the name AND on the value is what refuses
+    # `directive 42` and `directive trace=1`, and whose absence of any
+    # space-separated branch is what refuses `directive scheduler single`.
+    #
+    # This function owns the SHAPE only. WHICH names and WHICH `scheduler`
+    # values are legal is the semantic pass's job (`validate_directives` in
+    # resolve.gg) — and it has to be, because `token_ident` returns "" for a
+    # non-identifier, so `directive trace` (accept) and `directive trace=1`
+    # (reject) would otherwise reach it as the same `IDirective("trace", "")`.
     Item parse_directive_item(&self):
         self.expect_kw(KW_DIRECTIVE, "expected 'directive'")
         SpannedToken name_tok = self.advance()
         String name = token_ident(name_tok.lex_token)
-        # Consume hyphenated parts: immutable-by-default → "immutable-by-default"
+        if name == "":
+            self.reject_directive_syntax("expected identifier after `directive`")
+        # Hyphenated names: strip-asserts, hot-reload, implicit-clones.
         while self.check_tok(TOK_MINUS):
             self.advance()
             SpannedToken next = self.advance()
-            name = name + "-" + token_ident(next.lex_token)
-        # Check for test_suite directive
-        if name == "test_suite":
-            self.expect_tok(TOK_COLON, "expected ':' after test_suite")
-            self.skip_trivia()
-            # Look for setup: or teardown:
-            if self.check_tok(TOK_INDENT):
-                self.advance()
-            SpannedToken sub_tok = self.advance()
-            String sub_name = token_ident(sub_tok.lex_token)
-            self.expect_tok(TOK_COLON, "expected ':' after setup/teardown")
-            Vector[Stmt] body = self.parse_block()
-            if sub_name == "setup":
-                return ISuiteSetup(body)
-            return ISuiteTeardown(body)
+            String part = token_ident(next.lex_token)
+            if part == "":
+                self.reject_directive_syntax("expected identifier after `-` in a directive name")
+            name = name + "-" + part
         String value = ""
         if self.match_tok(TOK_EQ):
-            # directive name=value
             SpannedToken val_tok = self.advance()
             value = token_ident(val_tok.lex_token)
-        elif not self.check_tok(TOK_NEWLINE) and not self.at_end():
-            SpannedToken val_tok = self.advance()
-            value = token_ident(val_tok.lex_token)
-            # Consume hyphenated parts of value
-            while self.check_tok(TOK_MINUS):
-                self.advance()
-                SpannedToken next = self.advance()
-                value = value + "-" + token_ident(next.lex_token)
+            if value == "":
+                self.reject_directive_syntax("expected identifier after `=` in `directive " + name + "=`")
+        # Nothing else may sit on the line. A directive value is written
+        # `directive name=value`; the space-separated spelling is not in the
+        # grammar, and accepting it here used to make `directive scheduler single`
+        # SELECT the single-threaded scheduler on this lane while Rust gg
+        # refused the same source.
+        if not self.check_tok(TOK_NEWLINE) and not self.at_end():
+            self.reject_directive_syntax("unexpected token after `directive " + name + "` — a directive value is written `directive " + name + "=<value>`")
         return IDirective(name, value)
+
+    # The reject channel for the directive grammar above. This copy's
+    # `Vector[String] errors` accumulator is DISCARDED by `parse_source` — the
+    # systemic gap filed as `todo/t0310`, which this file's own notes name at
+    # the compound-fallible-assign and unary-minus-pow rejects — so a pushed
+    # message would be silently dropped and the malformed directive would be
+    # LOWERED, which is Core #10's forbidden shape. The lane's established
+    # surfacing route for a parse-time reject is therefore a hard abort
+    # (D26's compound fallible operators,
+    # D28-R1's `E_AmbiguousUnaryMinusPow` both `panic` here); this one renders
+    # the same `error: <message>` headline Rust gg prints and exits 1 with it,
+    # rather than 101 under a `trap[T_Panic]` banner a reader would take for a
+    # compiler crash. The `self_host_parser` copy, whose diagnostic stream IS
+    # drained by its driver, pushes a `DkParseError` instead — same call shape
+    # at the three grammar sites, one live channel each.
+    void reject_directive_syntax(&self, String msg):
+        print("error: " + msg, file=stderr)
+        exit(1)
 
     Item parse_const_item(&self):
         self.expect_kw(KW_CONST, "expected 'const'")

@@ -1,0 +1,574 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# scripts/figures.db — ONE GENERIC DECLARATION FOR EVERY PINNED NUMBER
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# ⛔ THIS IS NOT A CLONE-METER FEATURE. A "figure" is any pinned number a
+# guard, a report or a reader depends on: a ratchet ceiling, a parity floor, an
+# exact meter pin, a policy budget, a benchmark, a census. The clone meters are
+# the PILOT because they are the hard case (exact-pin + a declared non-zero
+# input + a per-round authorization band); a schema that expresses them
+# expresses a leak ceiling or a coverage floor trivially.
+#
+# THE GENERALISING AXIS IS POLARITY, NOT SUBJECT. Subject ("clone", "parity",
+# "fmt") is a naming convention and carries zero behaviour.
+#
+#   polarity      what a checker DOES with the number
+#     shrink-only   measured <= value   a ratchet: may fall, never rise
+#     grow-only     measured >= value   a floor:   may rise, never fall
+#     exact-pin     measured == value   (± band_pct against band_anchor)
+#     informational NEVER RED           a report; a table, not a gate
+#
+#   provenance    where `value` CAME FROM — an ORTHOGONAL axis
+#     measured      an instrument ran and printed it; `regen` observes BEHAVIOUR
+#     derived       copied/computed from a declared `authority`; `regen` READS
+#                   a declaration instead of measuring
+#     policy        CHOSEN. `regen = none` is legal ONLY here, and `authority`
+#                   is mandatory: who chose it, and where the choice is recorded
+#
+#   ⚠ THE DISCRIMINATOR between `measured` and `derived`, stated once: does the
+#     regen OBSERVE BEHAVIOUR (run a test, run a binary, count files) or READ A
+#     DECLARATION (grep a constant, copy another row)? Observe ⇒ measured. Read
+#     ⇒ derived, and then `authority` names what is read.
+#
+#   ⛔ `policy` IS NOT A FIFTH POLARITY — AND THE PROOF IS NOT "IT CROSSES MORE
+#     THAN ONE POLARITY". It does not: `policy` occupies exactly ONE cell here
+#     (shrink-only), because the row that would have given it a second,
+#     `SHAPE_MAX_DEPTH`, is correctly ruled NEVER. An earlier revision of this
+#     paragraph made the crossing claim anyway; it was false the moment that
+#     ruling stood, and it is exactly the "class statement reached by
+#     resemblance" this file's own doctrine warns about.
+#     THE TRUE PROOF IS THAT NEITHER AXIS IS A FUNCTION OF THE OTHER:
+#       polarity does NOT determine provenance — `exact-pin` carries both
+#         `measured` (the clone pins) and `derived` (`fmt.max_width`), and
+#         `shrink-only` carries both `measured` (`proc_guard.no_deadline_
+#         baseline`) and `policy` (`agents_md.size_ceiling`);
+#       provenance does NOT determine polarity — `measured` carries `exact-pin`,
+#         `grow-only`, `shrink-only` AND `informational`.
+#     Two independent questions about one row, and `tests/lints.rs::
+#     figures_db_axes_are_occupied` fails if either fact stops holding.
+#
+# ── THE VALUE IS THE GUARD, NOT THIS FILE ──────────────────────────────────
+# A figures file with no lint forbidding an undeclared bare literal of a
+# covered figure is a sixth spelling with better manners. The enforcement:
+#   tests/lints.rs::figures_db_rows_are_wellformed          the schema contract
+#   tests/lints.rs::figures_db_mirrors_agree                MIRROR-mode drift
+#   tests/lints.rs::figures_db_values_have_one_spelling     the uniqueness guard
+#   tests/lints.rs::figures_db_scanner_sees_into_doc_comments  it catches its own
+#   python3 scripts/figures.py --validate | --scan | --census | check <row>
+#
+# ── ADOPTION IS MIRROR-MODE ────────────────────────────────────────────────
+# The literal STAYS in the code; the row declares where, and
+# `figures_db_mirrors_agree` REDs when the two drift. The alternative (SOURCED:
+# delete the literal, have the consumer read the row) is deliberately NOT used
+# here — sourcing the clone pins would delete the very literals
+# `clone_meter_pins_carry_their_provenance` reads, and it delivers nothing the
+# uniqueness guard does not already deliver.
+#
+# ── FORMAT ─────────────────────────────────────────────────────────────────
+# EXACTLY `scripts/clone_meter.spec`'s restricted dialect, and for its reason:
+# `key = value`, one per line, WHOLE-LINE `#` comments only, no trailing
+# whitespace on any line, blank lines ignored, a repeated key is a list.
+# ⛔ NOT TOML — one reader is awk (`scripts/figures.sh`), and awk strips only a
+# leading whitespace run while Rust `trim()`s both ends, so a trailing space
+# would reach a shell reader intact.
+# ⚠ KEYS ARE DOTTED, AND EVERY READER COMPARES THEM AS WHOLE STRINGS. The
+# precedent's `clone_meter_get` matches its key as a REGEX, where `.` is a
+# wildcard — `figures_get` in scripts/figures.sh uses an exact `==` instead.
+#
+# ── FIELDS ─────────────────────────────────────────────────────────────────
+# MANDATORY on every row:
+#   value          the figure, bare digits (separators are normalised anyway)
+#   unit           what it counts
+#   polarity       shrink-only | grow-only | exact-pin | informational
+#   provenance     measured | derived | policy
+#   regen          the command that reproduces a number to compare against;
+#                  `none` ONLY under provenance = policy
+#   regen_extract  a regex with a NAMED `(?P<value>...)` capture. ⛔ MANDATORY,
+#                  NO DEFAULT — "the last integer in stdout" is a silent lie:
+#                  it yields 0 for c_emit_comparison and 1 for
+#                  resolver_comparison, not 1283 and 1865
+#   regen_fires    a regex whose match COUNT proves the mechanism executed
+#   regen_env      NAME=value / NAME=unset pairs the regen must run under, or
+#                  `none`. ⚠ This is the real hazard: `GG_BACKEND=llvm` makes
+#                  `parity_floor_active` return false and captures a DIFFERENT,
+#                  unseeded count under the very same regex
+#   instrument     the tool that produces the number
+#   measured_at    the commit the recorded value was taken at
+#   home           where a reader should look for the figure
+#   scan           `standard` (the declared roots below) | `none` | paths
+#   caveat         what the figure does NOT mean; `none` is a claim, not a gap
+#   cost_secs      the DEADLINE `figures.py` hands `proc_guard.run`, seeded
+#                  from the measured cost of `regen` and rounded generously UP —
+#                  a deadline equal to the measured time is a flake. Or
+#                  `unmeasured`, and then `check` REFUSES to run the row without
+#                  an explicit `--timeout`: a spawn with no chosen deadline is
+#                  the class `scripts/proc_guard.py` exists to retire
+# CONDITIONAL:
+#   authority      mandatory for provenance derived AND policy; forbidden for
+#                  measured (its authority is the instrument)
+#   input          mandatory; `none`, or a named input that also owes
+#                  input.<name>.at / .law / .regen
+#                  ⚠ `input = none` means NO QUANTIFIED INPUT, not "nothing can
+#                  move this". A suspected-but-unmeasured axis belongs in
+#                  `caveat`, which is exactly how `scripts/clone_meter.spec`
+#                  splits its MEASURED-to-be-zero table from the rows nobody has
+#                  varied. An input with a law you have not measured is a rumour
+#                  promoted to a field, and it would poison the field for the
+#                  rows that did the work
+# OPTIONAL:
+#   mirror         `<path>:<symbol>` — a declared literal that must EQUAL value
+#   waiver         `<path> <count> declared|debt <reason>` — the EXACT number of
+#                  unmasked spellings expected in that file. ⚠ EXACT, not `<=`:
+#                  a STALE waiver must be as red as a new duplicate, or the
+#                  guard waivers itself into uselessness
+#   band_pct       + band_anchor: an exact-pin's authorization band, anchored on
+#                  another ROW (a pointer, never a second copy of a number)
+#   regen_forbids  a regex that must NOT appear (a skip notice)
+#   note           anything else worth pinning to the row
+#
+# ── SCAN ROOTS ─────────────────────────────────────────────────────────────
+# ⛔ `docs/define-gorget/decisions.md` is NOT a scan root and never becomes one.
+# A dated measurement inside a ratified entry is EVIDENCE FOR THE RULING AT THE
+# TIME IT WAS MADE; a guard that forced it to point at a live value would change
+# what the entry asserts. The ledger records what was measured THEN; this file
+# records what is true NOW. Same reason for `DONE.md`: a round record is history.
+figures.scan_roots = tests/integration.rs tests/lints.rs todo docs/devbook TODO.md scripts
+figures.scan_skip = scripts/figures.db
+#
+# ⛔ WHAT THE SCANNER CANNOT SEE — SAY THE REACH, NEVER IMPLY TOTALITY. A guard
+# that is read as total is worse than one whose limits are written down (the
+# lesson `todo/t0875` was filed for). Probe-verified at the time of writing:
+#   * `src/` — NOT a root. 11 files there carry integer const declarations. A
+#     row whose `home`/`mirror` is in `src/` IS scanned (a declared path is
+#     always opened), but an UNDECLARED re-spelling in `src/` is invisible.
+#   * `tests/*.rs` other than `integration.rs` and `lints.rs` — invisible.
+#     `tests/spec_conformance.rs` alone carries 4 integer const declarations.
+#   * `docs/` outside `docs/devbook/` — `book/`, `internals/`, `census/`,
+#     `profiling/`, `language-reference.md` are all unscanned.
+#   * THE EXTENSION FILTER: only `.md .rs .py .sh .spec .toml` are opened.
+#     `.gg` fixtures, `.json` baselines, `.tsv` manifests and `Makefile`-shaped
+#     files inside the roots are invisible even though their directory is a root.
+#   * `DONE.md` and `docs/define-gorget/` are excluded ON PURPOSE (above), not
+#     by oversight.
+# ⇒ Widening a root is cheap and is the right move when a family of rows lands
+#   there; widening it BLINDLY is not — every new file is new waiver surface.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# THE PILOT — the clone meters (exact-pin × measured, with a declared input)
+# ═══════════════════════════════════════════════════════════════════════════
+# Eight constants, four axes, two roles. The PIN moves at every integration; the
+# ROUND-OPEN anchor moves once, at round open, and is what the ~1% authorization
+# band is evaluated against. They start each round equal and legitimately
+# diverge inside it, which is why they are eight ROWS and not four: a single row
+# mirroring both would RED on a legitimate intra-round re-pin.
+row = clone.self_compile.array.pin
+row = clone.self_compile.array.round_open
+row = clone.self_compile.string.pin
+row = clone.self_compile.string.round_open
+row = clone.stage1.array.pin
+row = clone.stage1.array.round_open
+row = clone.stage1.string.pin
+row = clone.stage1.string.round_open
+
+clone.self_compile.array.pin.value = 13150071
+clone.self_compile.array.pin.unit = array_clone calls, stage-0 self-compile
+clone.self_compile.array.pin.polarity = exact-pin
+clone.self_compile.array.pin.provenance = measured
+clone.self_compile.array.pin.regen = cargo test --test integration --release self_host_clone_ceiling -- --nocapture
+clone.self_compile.array.pin.regen_extract = \[clone-ceiling\] array_clone=(?P<value>[0-9_,]+)
+clone.self_compile.array.pin.regen_fires = \[clone-ceiling\] [a-z_]+=[0-9]+ .*verdict=
+clone.self_compile.array.pin.regen_env = GG_BACKEND=unset
+clone.self_compile.array.pin.instrument = tests/integration.rs::self_host_clone_ceiling
+clone.self_compile.array.pin.measured_at = 4c473a88
+clone.self_compile.array.pin.home = tests/integration.rs:SELF_COMPILE_ARRAY_CLONE_PIN
+clone.self_compile.array.pin.scan = standard
+clone.self_compile.array.pin.caveat = C backend only — --clones=stats is rejected under --backend=llvm, so an LLVM-only clone regression rides under this pin (todo/t0550)
+clone.self_compile.array.pin.cost_secs = 1800
+clone.self_compile.array.pin.mirror = tests/integration.rs:SELF_COMPILE_ARRAY_CLONE_PIN
+clone.self_compile.array.pin.band_pct = 1
+clone.self_compile.array.pin.band_anchor = clone.self_compile.array.round_open
+clone.self_compile.array.pin.waiver = tests/integration.rs 2 declared the PINNED-BY / ROUND-OPENED-BY provenance lines, which clone_meter_pins_carry_their_provenance requires to BIND the value
+clone.self_compile.array.pin.input = none
+clone.self_compile.array.pin.note = the array axis is checkout-invariant; only the string axis carries the root-path input
+
+clone.self_compile.array.round_open.value = 13150071
+clone.self_compile.array.round_open.unit = array_clone calls, stage-0 self-compile
+clone.self_compile.array.round_open.polarity = exact-pin
+clone.self_compile.array.round_open.provenance = measured
+clone.self_compile.array.round_open.regen = cargo test --test integration --release self_host_clone_ceiling -- --nocapture
+clone.self_compile.array.round_open.regen_extract = \[clone-ceiling\] array_clone=(?P<value>[0-9_,]+)
+clone.self_compile.array.round_open.regen_fires = \[clone-ceiling\] [a-z_]+=[0-9]+ .*verdict=
+clone.self_compile.array.round_open.regen_env = GG_BACKEND=unset
+clone.self_compile.array.round_open.instrument = tests/integration.rs::self_host_clone_ceiling
+clone.self_compile.array.round_open.measured_at = 4c473a88
+clone.self_compile.array.round_open.home = tests/integration.rs:SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN
+clone.self_compile.array.round_open.scan = standard
+clone.self_compile.array.round_open.caveat = re-seeded ONCE per round, at round open; all four anchors must share one sha
+clone.self_compile.array.round_open.cost_secs = 1800
+clone.self_compile.array.round_open.mirror = tests/integration.rs:SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN
+clone.self_compile.array.round_open.input = none
+
+clone.self_compile.string.pin.value = 31490366
+clone.self_compile.string.pin.unit = string_clone calls, stage-0 self-compile
+clone.self_compile.string.pin.polarity = exact-pin
+clone.self_compile.string.pin.provenance = measured
+clone.self_compile.string.pin.regen = cargo test --test integration --release self_host_clone_ceiling -- --nocapture
+clone.self_compile.string.pin.regen_extract = \[clone-ceiling\] string_clone=(?P<value>[0-9_,]+)
+clone.self_compile.string.pin.regen_fires = \[clone-ceiling\] [a-z_]+=[0-9]+ .*verdict=
+clone.self_compile.string.pin.regen_env = GG_BACKEND=unset
+clone.self_compile.string.pin.instrument = tests/integration.rs::self_host_clone_ceiling
+clone.self_compile.string.pin.measured_at = 4c473a88
+clone.self_compile.string.pin.home = tests/integration.rs:SELF_COMPILE_STRING_CLONE_PIN
+clone.self_compile.string.pin.scan = standard
+clone.self_compile.string.pin.caveat = NOT checkout-invariant — see the declared input below; C backend only (todo/t0550)
+clone.self_compile.string.pin.cost_secs = 1800
+clone.self_compile.string.pin.mirror = tests/integration.rs:SELF_COMPILE_STRING_CLONE_PIN
+clone.self_compile.string.pin.band_pct = 1
+clone.self_compile.string.pin.band_anchor = clone.self_compile.string.round_open
+# ⭐ A DECLARED INPUT. The value is not a constant of the tree: it moves with the
+# absolute path of the checkout, 7 clones per character, attributed to ONE
+# CloneId. Two readings taken at different roots are NOT comparable until this
+# law is applied — the belief that they were is what produced the 294 discrepancy
+# between main and an agent worktree (todo/t0850).
+clone.self_compile.string.pin.waiver = tests/integration.rs 2 declared the PINNED-BY / ROUND-OPENED-BY provenance lines
+clone.self_compile.string.pin.input = root_path_len
+clone.self_compile.string.pin.input.root_path_len.at = 59
+clone.self_compile.string.pin.input.root_path_len.law = value + 7 * (root_path_len - 59)
+clone.self_compile.string.pin.input.root_path_len.regen = pwd | tr -d '\n' | wc -c
+
+clone.self_compile.string.round_open.value = 31490366
+clone.self_compile.string.round_open.unit = string_clone calls, stage-0 self-compile
+clone.self_compile.string.round_open.polarity = exact-pin
+clone.self_compile.string.round_open.provenance = measured
+clone.self_compile.string.round_open.regen = cargo test --test integration --release self_host_clone_ceiling -- --nocapture
+clone.self_compile.string.round_open.regen_extract = \[clone-ceiling\] string_clone=(?P<value>[0-9_,]+)
+clone.self_compile.string.round_open.regen_fires = \[clone-ceiling\] [a-z_]+=[0-9]+ .*verdict=
+clone.self_compile.string.round_open.regen_env = GG_BACKEND=unset
+clone.self_compile.string.round_open.instrument = tests/integration.rs::self_host_clone_ceiling
+clone.self_compile.string.round_open.measured_at = 4c473a88
+clone.self_compile.string.round_open.home = tests/integration.rs:SELF_COMPILE_STRING_CLONE_ROUND_OPEN
+clone.self_compile.string.round_open.scan = standard
+clone.self_compile.string.round_open.caveat = re-seeded ONCE per round, at round open; carries the same root-path input as its pin
+clone.self_compile.string.round_open.cost_secs = 1800
+clone.self_compile.string.round_open.mirror = tests/integration.rs:SELF_COMPILE_STRING_CLONE_ROUND_OPEN
+clone.self_compile.string.round_open.input = root_path_len
+clone.self_compile.string.round_open.input.root_path_len.at = 59
+clone.self_compile.string.round_open.input.root_path_len.law = value + 7 * (root_path_len - 59)
+clone.self_compile.string.round_open.input.root_path_len.regen = pwd | tr -d '\n' | wc -c
+
+clone.stage1.array.pin.value = 1130449295
+clone.stage1.array.pin.unit = array_clone calls, stage-1 self-compile
+clone.stage1.array.pin.polarity = exact-pin
+clone.stage1.array.pin.provenance = measured
+clone.stage1.array.pin.regen = cargo test --test integration --release stage1_clone_ceiling -- --nocapture
+clone.stage1.array.pin.regen_extract = \[stage1-clone-ceiling\] array_clone=(?P<value>[0-9_,]+)
+clone.stage1.array.pin.regen_fires = \[stage1-clone-ceiling\] [a-z_]+=[0-9]+ .*verdict=
+clone.stage1.array.pin.regen_env = GG_BACKEND=unset
+clone.stage1.array.pin.instrument = tests/integration.rs::stage1_clone_ceiling
+clone.stage1.array.pin.measured_at = 4c473a88
+clone.stage1.array.pin.home = tests/integration.rs:STAGE1_ARRAY_CLONE_PIN
+clone.stage1.array.pin.scan = standard
+clone.stage1.array.pin.caveat = the only meter that can see a self-host-lowering-only clone bomb; the stage-0 ceiling rides straight over one
+clone.stage1.array.pin.cost_secs = 2400
+clone.stage1.array.pin.mirror = tests/integration.rs:STAGE1_ARRAY_CLONE_PIN
+clone.stage1.array.pin.band_pct = 1
+clone.stage1.array.pin.band_anchor = clone.stage1.array.round_open
+clone.stage1.array.pin.waiver = tests/integration.rs 2 declared the PINNED-BY / ROUND-OPENED-BY provenance lines
+clone.stage1.array.pin.input = none
+
+clone.stage1.array.round_open.value = 1130449295
+clone.stage1.array.round_open.unit = array_clone calls, stage-1 self-compile
+clone.stage1.array.round_open.polarity = exact-pin
+clone.stage1.array.round_open.provenance = measured
+clone.stage1.array.round_open.regen = cargo test --test integration --release stage1_clone_ceiling -- --nocapture
+clone.stage1.array.round_open.regen_extract = \[stage1-clone-ceiling\] array_clone=(?P<value>[0-9_,]+)
+clone.stage1.array.round_open.regen_fires = \[stage1-clone-ceiling\] [a-z_]+=[0-9]+ .*verdict=
+clone.stage1.array.round_open.regen_env = GG_BACKEND=unset
+clone.stage1.array.round_open.instrument = tests/integration.rs::stage1_clone_ceiling
+clone.stage1.array.round_open.measured_at = 4c473a88
+clone.stage1.array.round_open.home = tests/integration.rs:STAGE1_ARRAY_CLONE_ROUND_OPEN
+clone.stage1.array.round_open.scan = standard
+clone.stage1.array.round_open.caveat = re-seeded ONCE per round, at round open; all four anchors must share one sha
+clone.stage1.array.round_open.cost_secs = 2400
+clone.stage1.array.round_open.mirror = tests/integration.rs:STAGE1_ARRAY_CLONE_ROUND_OPEN
+clone.stage1.array.round_open.input = none
+
+clone.stage1.string.pin.value = 2372992131
+clone.stage1.string.pin.unit = string_clone calls, stage-1 self-compile
+clone.stage1.string.pin.polarity = exact-pin
+clone.stage1.string.pin.provenance = measured
+clone.stage1.string.pin.regen = cargo test --test integration --release stage1_clone_ceiling -- --nocapture
+clone.stage1.string.pin.regen_extract = \[stage1-clone-ceiling\] string_clone=(?P<value>[0-9_,]+)
+clone.stage1.string.pin.regen_fires = \[stage1-clone-ceiling\] [a-z_]+=[0-9]+ .*verdict=
+clone.stage1.string.pin.regen_env = GG_BACKEND=unset
+clone.stage1.string.pin.instrument = tests/integration.rs::stage1_clone_ceiling
+clone.stage1.string.pin.measured_at = 4c473a88
+clone.stage1.string.pin.home = tests/integration.rs:STAGE1_STRING_CLONE_PIN
+clone.stage1.string.pin.scan = standard
+clone.stage1.string.pin.caveat = stage-1 counters ride the runtime PREAMBLE, so a src/backend/c/ change moves this with stage1.c byte-identical
+clone.stage1.string.pin.cost_secs = 2400
+clone.stage1.string.pin.mirror = tests/integration.rs:STAGE1_STRING_CLONE_PIN
+clone.stage1.string.pin.band_pct = 1
+clone.stage1.string.pin.band_anchor = clone.stage1.string.round_open
+clone.stage1.string.pin.waiver = tests/integration.rs 2 declared the PINNED-BY / ROUND-OPENED-BY provenance lines
+clone.stage1.string.pin.input = none
+
+clone.stage1.string.round_open.value = 2372992131
+clone.stage1.string.round_open.unit = string_clone calls, stage-1 self-compile
+clone.stage1.string.round_open.polarity = exact-pin
+clone.stage1.string.round_open.provenance = measured
+clone.stage1.string.round_open.regen = cargo test --test integration --release stage1_clone_ceiling -- --nocapture
+clone.stage1.string.round_open.regen_extract = \[stage1-clone-ceiling\] string_clone=(?P<value>[0-9_,]+)
+clone.stage1.string.round_open.regen_fires = \[stage1-clone-ceiling\] [a-z_]+=[0-9]+ .*verdict=
+clone.stage1.string.round_open.regen_env = GG_BACKEND=unset
+clone.stage1.string.round_open.instrument = tests/integration.rs::stage1_clone_ceiling
+clone.stage1.string.round_open.measured_at = 4c473a88
+clone.stage1.string.round_open.home = tests/integration.rs:STAGE1_STRING_CLONE_ROUND_OPEN
+clone.stage1.string.round_open.scan = standard
+clone.stage1.string.round_open.caveat = re-seeded ONCE per round, at round open; all four anchors must share one sha
+clone.stage1.string.round_open.cost_secs = 2400
+clone.stage1.string.round_open.mirror = tests/integration.rs:STAGE1_STRING_CLONE_ROUND_OPEN
+clone.stage1.string.round_open.input = none
+
+# ═══════════════════════════════════════════════════════════════════════════
+# THE NON-MEMBERS — the rows that prove the two axes are axes
+# ═══════════════════════════════════════════════════════════════════════════
+# ⚠ A schema validated only against shrink-only ratchets would be a class
+# reached by resemblance. Every polarity and every provenance below is occupied
+# by a row that is NOT a clone meter.
+
+# ── grow-only × measured ───────────────────────────────────────────────────
+row = parity.c_emit.match_floor
+parity.c_emit.match_floor.value = 1283
+parity.c_emit.match_floor.unit = fixtures whose self-host C emission matches Rust gg
+parity.c_emit.match_floor.polarity = grow-only
+parity.c_emit.match_floor.provenance = measured
+parity.c_emit.match_floor.regen = rm -f tests/fixtures/self_host_lowerer/driver tests/fixtures/self_host_lowerer/driver.c; cargo test --test integration --release c_emit_comparison -- --nocapture
+parity.c_emit.match_floor.regen_extract = Total: [0-9]+, Matched: (?P<value>[0-9]+)
+parity.c_emit.match_floor.regen_fires = === C Emit Comparison Results ===
+parity.c_emit.match_floor.regen_env = GG_BACKEND=unset GG_PARITY_FLOOR_OFF=unset
+parity.c_emit.match_floor.regen_forbids = MATCH-count floor (skipped|DISABLED)
+parity.c_emit.match_floor.instrument = tests/integration.rs::c_emit_comparison
+parity.c_emit.match_floor.measured_at = c0c5d59c
+parity.c_emit.match_floor.home = tests/integration.rs:C_EMIT_MATCH_FLOOR
+parity.c_emit.match_floor.scan = standard
+parity.c_emit.match_floor.caveat = linux + default C backend only; under GG_BACKEND the floor is skipped and a DIFFERENT unseeded count is captured by the same regex
+parity.c_emit.match_floor.cost_secs = 3600
+parity.c_emit.match_floor.mirror = tests/integration.rs:C_EMIT_MATCH_FLOOR
+parity.c_emit.match_floor.waiver = tests/integration.rs 2 declared the two TIGHTEN-ONLY re-seed lines the constant cites as its evidence
+parity.c_emit.match_floor.waiver = tests/lints.rs 1 declared ⭐ THE PLANT — a live figure written on purpose into the doc comment of figures_db_values_have_one_spelling, so that a refactor stripping comments out of the scanner makes THIS waiver stale and reds it
+parity.c_emit.match_floor.waiver = todo/t0593.md 1 debt the torn-driver incident quotes the floor value inline; it should cite the constant
+parity.c_emit.match_floor.input = none
+# ⛔ THE FIELD THIS ROW EXISTS TO JUSTIFY. The last integer in this test's own
+# stdout is 0 (the trailing `Rust crashes: 0`), not 1283. A default extractor
+# of "last integer in stdout" would have made this row silently wrong — and on
+# a grow-only row a wrong-low capture reds LOUDLY while on a shrink-only row it
+# passes SILENTLY, which is why the field is mandatory rather than defaulted.
+parity.c_emit.match_floor.note = last-integer-in-stdout yields 0 here; resolver_comparison yields 1
+
+row = parity.resolver.match_floor
+parity.resolver.match_floor.value = 1865
+parity.resolver.match_floor.unit = fixtures whose self-host resolver output matches Rust gg
+parity.resolver.match_floor.polarity = grow-only
+parity.resolver.match_floor.provenance = measured
+parity.resolver.match_floor.regen = cargo test --test integration --release resolver_comparison -- --nocapture
+parity.resolver.match_floor.regen_extract = Fixtures compared: [0-9]+, matched: (?P<value>[0-9]+)
+parity.resolver.match_floor.regen_fires = === Resolver Comparison Results ===
+parity.resolver.match_floor.regen_env = GG_BACKEND=unset GG_PARITY_FLOOR_OFF=unset
+parity.resolver.match_floor.regen_forbids = MATCH-count floor (skipped|DISABLED)
+parity.resolver.match_floor.instrument = tests/integration.rs::resolver_comparison
+parity.resolver.match_floor.measured_at = 4a1c9d9e
+parity.resolver.match_floor.home = tests/integration.rs:RESOLVER_MATCH_FLOOR
+parity.resolver.match_floor.scan = standard
+parity.resolver.match_floor.caveat = linux + default C backend only; matched cannot fall merely because the corpus grew, so it is a pure regression ratchet
+parity.resolver.match_floor.cost_secs = 3600
+parity.resolver.match_floor.mirror = tests/integration.rs:RESOLVER_MATCH_FLOOR
+parity.resolver.match_floor.waiver = tests/integration.rs 1 declared the seed line the constant cites as its evidence
+parity.resolver.match_floor.waiver = todo/t0582.md 1 debt the floorless-comparison item quotes the floor value inline; it should cite the constant
+parity.resolver.match_floor.input = none
+parity.resolver.match_floor.note = last-integer-in-stdout yields 1 here (the trailing `crashed: 1`), not 1865
+
+# ── shrink-only × policy ───────────────────────────────────────────────────
+# ⭐ THE ROW THAT PROVES `policy` IS NOT A POLARITY. 49400 is CHOSEN — nothing
+# measures it, and raising it needs owner sign-off — yet its polarity is
+# shrink-only, the same polarity a purely measured ratchet carries. `regen` here
+# measures the thing the choice CONSTRAINS (the file), not the choice itself.
+row = agents_md.size_ceiling
+agents_md.size_ceiling.value = 49400
+agents_md.size_ceiling.unit = bytes of AGENTS.md
+agents_md.size_ceiling.polarity = shrink-only
+agents_md.size_ceiling.provenance = policy
+agents_md.size_ceiling.authority = owner sign-off; recorded at tests/lints.rs:AGENTS_MD_SIZE_CEILING, whose comment states the rule — compact a NEIGHBOURING rule rather than raising this
+agents_md.size_ceiling.regen = wc -c < AGENTS.md
+agents_md.size_ceiling.regen_extract = ^\s*(?P<value>[0-9]+)
+agents_md.size_ceiling.regen_fires = ^\s*[0-9]+\s*$
+agents_md.size_ceiling.regen_env = none
+agents_md.size_ceiling.instrument = wc
+agents_md.size_ceiling.measured_at = 3b8a5561
+agents_md.size_ceiling.home = tests/lints.rs:AGENTS_MD_SIZE_CEILING
+agents_md.size_ceiling.scan = standard
+agents_md.size_ceiling.caveat = the headroom is 0 bytes at 3b8a5561 — every R48 track's edits to AGENTS.md must be byte-neutral-or-smaller or agents_md_size_ratchet REDs on arrival
+agents_md.size_ceiling.cost_secs = 30
+agents_md.size_ceiling.mirror = tests/lints.rs:AGENTS_MD_SIZE_CEILING
+agents_md.size_ceiling.waiver = tests/lints.rs 1 declared the ratchet's own `49_200 -> 49_400` history line, directly above the constant
+agents_md.size_ceiling.waiver = TODO.md 1 debt the handover's zero-headroom note spells the ceiling instead of citing it; the handover is rewritten every round, so this one WILL rot
+agents_md.size_ceiling.input = none
+
+# ── exact-pin × derived ────────────────────────────────────────────────────
+# ⭐ THE ROW THE FIRST DISPOSITION GOT WRONG, KEPT HERE BECAUSE OF IT. 120 was
+# proposed for permanent EXCLUSION as a "chosen input nothing reproduces". It is
+# not: it is a hand-kept MIRROR that announces itself in three places, and
+# `tests/integration.rs`'s own comment on the third says a change to MAX_WIDTH
+# should red these tests "instead of silently sliding their expectations along
+# with it". Exclusion does not make drift impossible — it makes it INVISIBLE.
+row = fmt.max_width
+fmt.max_width.value = 120
+fmt.max_width.unit = columns
+fmt.max_width.polarity = exact-pin
+fmt.max_width.provenance = derived
+fmt.max_width.authority = src/formatter/doc.rs:MAX_WIDTH — the owner-ratified FMT CANON PAIR; the two mirrors below are hand-kept copies of it
+fmt.max_width.regen = grep -oP 'MAX_WIDTH: usize = \K[0-9]+' src/formatter/doc.rs
+fmt.max_width.regen_extract = ^(?P<value>[0-9]+)
+fmt.max_width.regen_fires = ^[0-9]+$
+fmt.max_width.regen_env = none
+fmt.max_width.instrument = grep over the authority declaration
+fmt.max_width.measured_at = 3b8a5561
+fmt.max_width.home = src/formatter/doc.rs:MAX_WIDTH
+# ⚠ scan = none, and this is the honest half of the LAND, DEGRADED disposition:
+# 120 is a three-digit value that occurs legitimately all over the tree (column
+# numbers, byte counts, sizes). The uniqueness guard cannot police it, so the
+# MIRROR check is 100% of this row's enforcement. Saying so is the point — a
+# `scan = standard` here would be a waiver farm, which is how a guard dies.
+fmt.max_width.scan = none
+fmt.max_width.caveat = the value is too small and too common to police by scanning; only figures_db_mirrors_agree guards it
+fmt.max_width.cost_secs = 30
+fmt.max_width.mirror = tests/lints.rs:WIDTH_RATCHET_BUDGET
+fmt.max_width.mirror = tests/integration.rs:FILL_PACK_MAX_WIDTH
+fmt.max_width.input = none
+
+# ── shrink-only × measured, read by a PYTHON consumer ──────────────────────
+# ⭐ THE CHEAPEST PROOF OF THE OWNER'S "reusable by other systems": every other
+# current reader of a pinned figure in this tree is Rust or awk. This one is a
+# Python module's own ratchet, and it adopts the schema with no change to it.
+row = proc_guard.no_deadline_baseline
+proc_guard.no_deadline_baseline.value = 6
+proc_guard.no_deadline_baseline.unit = python spawn sites with no deadline
+proc_guard.no_deadline_baseline.polarity = shrink-only
+proc_guard.no_deadline_baseline.provenance = measured
+proc_guard.no_deadline_baseline.regen = python3 scripts/proc_guard.py --census
+proc_guard.no_deadline_baseline.regen_extract = no-deadline: (?P<value>[0-9]+) \(baseline
+proc_guard.no_deadline_baseline.regen_fires = === python spawn census
+proc_guard.no_deadline_baseline.regen_env = none
+proc_guard.no_deadline_baseline.instrument = scripts/proc_guard.py --census (AST over `git ls-files '*.py'`)
+proc_guard.no_deadline_baseline.measured_at = 3b8a5561
+proc_guard.no_deadline_baseline.home = scripts/proc_guard.py:NO_DEADLINE_BASELINE
+proc_guard.no_deadline_baseline.scan = none
+proc_guard.no_deadline_baseline.caveat = a single-digit value cannot be policed by the uniqueness scanner — 66 EXPECTED_* arm pins in tests/ share this limitation, which is the schema's largest under-served population
+proc_guard.no_deadline_baseline.cost_secs = 120
+proc_guard.no_deadline_baseline.mirror = scripts/proc_guard.py:NO_DEADLINE_BASELINE
+proc_guard.no_deadline_baseline.input = none
+
+# ── informational × measured ───────────────────────────────────────────────
+# ⛔ `informational` IS DEFINED NEVER-RED, and that definition is load-bearing:
+# the owner ruled slow clone accumulation UNBOUNDED and explicitly REJECTED a
+# cumulative cap, replacing it with a periodic AUDIT. A table that fails the
+# build would re-introduce the cap through the back door. `figures.py report`
+# runs every informational row at round close and prints prev | now | delta.
+row = todo.pending_items
+todo.pending_items.value = 775
+todo.pending_items.unit = pending todo/ items
+todo.pending_items.polarity = informational
+todo.pending_items.provenance = measured
+todo.pending_items.regen = ls todo/t*.md | wc -l
+todo.pending_items.regen_extract = ^\s*(?P<value>[0-9]+)
+todo.pending_items.regen_fires = ^\s*[0-9]+\s*$
+todo.pending_items.regen_env = none
+todo.pending_items.instrument = ls over todo/
+todo.pending_items.measured_at = 3b8a5561
+todo.pending_items.home = TODO.md (the generated index)
+todo.pending_items.scan = none
+todo.pending_items.caveat = a COUNT, not a burden — a round that closes five and files six is not worse than one that closes none; the convergence line is the measurement, this is the level
+todo.pending_items.cost_secs = 60
+todo.pending_items.input = none
+
+# ── informational × measured, the ROUND-CLOSE CLONE-WASTE AUDIT (`t0860`) ──
+# ⛔ The owner ruled slow clone accumulation UNBOUNDED and explicitly REJECTED a
+# cumulative cap, replacing it with a periodic AUDIT: *"maybe this should be run
+# at round close and measure increase. at least just a small table report that I
+# can see."* THAT IS WHY `informational` IS DEFINED NEVER-RED. A table that
+# failed the build would re-introduce the rejected cap through the back door —
+# so `figures.py report` prints prev | now | delta and then the instrument's own
+# ranked table and by-reason rollup, and returns 0 whatever it reads.
+row = clone.waste.attributed_site_hits
+clone.waste.attributed_site_hits.value = 32275140
+clone.waste.attributed_site_hits.unit = attributed top-level implicit-clone site hits, stage-0 self-compile
+clone.waste.attributed_site_hits.polarity = informational
+clone.waste.attributed_site_hits.provenance = measured
+clone.waste.attributed_site_hits.regen = cargo build --release && TOPN=8 scripts/clone_attribution.sh ./target/release/gg tests/fixtures/self_host_lowerer/driver.gg -o /tmp/gg_clone_audit_$$ -- tests/fixtures/self_host_lowerer/driver.gg "$PWD/lib" --lir-c
+clone.waste.attributed_site_hits.regen_extract = total_site_hits=(?P<value>[0-9]+) across
+clone.waste.attributed_site_hits.regen_fires = == by reason ==
+clone.waste.attributed_site_hits.regen_env = GG_BACKEND=unset
+clone.waste.attributed_site_hits.instrument = scripts/clone_attribution.sh — the offline join of `--clones=sites-tsv` (static CloneId table) with `[clone-site]` runtime hits
+clone.waste.attributed_site_hits.measured_at = 3b8a5561
+clone.waste.attributed_site_hits.home = scripts/figures.db (DB-native — there is no code constant to mirror, which is why this row's whole enforcement is its regen)
+clone.waste.attributed_site_hits.scan = standard
+# ⚠ READ THE NUMBER CORRECTLY OR A CLEAN TABLE READS AS AN ALL-CLEAR IT CANNOT
+# SUPPORT. These are top-level clone EVENTS, not leaf volume: synthesized deep
+# `Type__clone` fns cascade into many inner leaf calls, explicit `.clone()` mints
+# no CloneId, and LIR-layer emissions have no CloneId concept at all. The RANKING
+# is the actionable lever — killing a top-level clone removes its entire cascade
+# — and it is NOT a measure of total clone volume. Coverage is `todo/t0546`.
+clone.waste.attributed_site_hits.caveat = top-level clone EVENTS ranked by dynamic count, NOT leaf volume (~3.5% of aggregate array+string clone calls are attributed); C backend only; and the count is root-path sensitive on the string axis, unquantified for this aggregate, so a cross-checkout delta is not a measurement
+clone.waste.attributed_site_hits.cost_secs = 2400
+clone.waste.attributed_site_hits.input = none
+clone.waste.attributed_site_hits.note = the by-reason rollup and the ranked table are printed by `python3 scripts/figures.py report`; re-seed this value in the same commit that wires the report into round close
+clone.waste.attributed_site_hits.note = regenerated TWICE at 3b8a5561, bit-identical both times; the second run took 145s with a warm target/ and a cached driver, so cost_secs covers a COLD release build plus a cold driver build
+
+# ── exact-pin × measured, DB-NATIVE — the REACH RATCHET on a guard that cannot
+#    catch its own class, and the reason `todo/t0851` is re-opened rather than
+#    closed. `scripts/clone_meter_check.sh --anchor-age` decides "did a round
+#    close?" by matching a PROSE headline, and DONE.md's round-close entries
+#    have no typed marker and no enforced shape: seven shapes across ~38 closes,
+#    of which the predicate matches 3. Widening it is measured to be worse (it
+#    swallows mid-round entries and re-creates a false RED whose printed remedy
+#    destroys the band). So the two POPULATIONS are pinned instead: a close
+#    landing in a shape the predicate cannot see moves `roundish` without moving
+#    `matched`, and `tests/lints.rs::done_md_round_close_shapes_are_pinned`
+#    fails. ⚠ It also fires on a mid-round round-ish entry — that is the honest
+#    cost of an unenforced convention, and its remedy is a 30-second
+#    adjudication and a number bump, never a band re-seed.
+row = done_md.round_close.anchor_age_matched
+done_md.round_close.anchor_age_matched.value = 3
+done_md.round_close.anchor_age_matched.unit = DONE.md entries matched by --anchor-age's round-close predicate
+done_md.round_close.anchor_age_matched.polarity = exact-pin
+done_md.round_close.anchor_age_matched.provenance = measured
+done_md.round_close.anchor_age_matched.regen = bash scripts/clone_meter_check.sh --round-close-census
+done_md.round_close.anchor_age_matched.regen_extract = anchor-age-matched: (?P<value>[0-9]+)
+done_md.round_close.anchor_age_matched.regen_fires = round-close census over DONE.md
+done_md.round_close.anchor_age_matched.regen_env = none
+done_md.round_close.anchor_age_matched.instrument = scripts/clone_meter_check.sh --round-close-census (the ONE place the predicate is spelled)
+done_md.round_close.anchor_age_matched.measured_at = c31b0ad0
+done_md.round_close.anchor_age_matched.home = scripts/figures.db (DB-native; the predicate lives in the script, the count has no code literal)
+done_md.round_close.anchor_age_matched.scan = none
+done_md.round_close.anchor_age_matched.caveat = a single-digit value the uniqueness scanner cannot police; and the number itself is EVIDENCE OF A GAP, not of health — 3 of ~38 closes, an 8% reach whose failure direction is a FALSE GREEN
+done_md.round_close.anchor_age_matched.cost_secs = 60
+done_md.round_close.anchor_age_matched.input = none
+done_md.round_close.anchor_age_matched.note = when this moves WITH roundish, a close landed in the shape the predicate sees — confirm the anchors were re-seeded, then re-pin both
+
+row = done_md.round_close.roundish_headlines
+done_md.round_close.roundish_headlines.value = 80
+done_md.round_close.roundish_headlines.unit = DONE.md entries whose headline begins ROUND / Round / Rn
+done_md.round_close.roundish_headlines.polarity = exact-pin
+done_md.round_close.roundish_headlines.provenance = measured
+done_md.round_close.roundish_headlines.regen = bash scripts/clone_meter_check.sh --round-close-census
+done_md.round_close.roundish_headlines.regen_extract = round-ish headlines: (?P<value>[0-9]+)
+done_md.round_close.roundish_headlines.regen_fires = round-close census over DONE.md
+done_md.round_close.roundish_headlines.regen_env = none
+done_md.round_close.roundish_headlines.instrument = scripts/clone_meter_check.sh --round-close-census (the ONE place the predicate is spelled)
+done_md.round_close.roundish_headlines.measured_at = f5cea100
+done_md.round_close.roundish_headlines.home = scripts/figures.db (DB-native)
+done_md.round_close.roundish_headlines.scan = none
+done_md.round_close.roundish_headlines.caveat = a SUPERSET, not an enumeration — it contains mid-round entries (R42 Phase 4b, R41 T-FMT-A, ROUND-33 rolling item 4, R43 Track C), which is exactly why the predicate is not widened to it
+done_md.round_close.roundish_headlines.cost_secs = 60
+done_md.round_close.roundish_headlines.input = none
+done_md.round_close.roundish_headlines.note = when this moves and anchor_age_matched does NOT, adjudicate: a round close in an unseeable shape (re-seed the anchors AND revisit the predicate), or a mid-round round-ish entry (bump this pin only)

@@ -384,7 +384,16 @@ pub fn emit_closure_call_function(
         &params,
     );
 
-    ctx.clear_locals();
+    // The closure body is a bare `Spanned<Expr>` (`LiftedClosure::body`), so it
+    // reaches the prescans as `FnBodyAst::Expr` — an `Expr::Block` body unwraps
+    // to its own statements, anything else has none. Before centralisation this
+    // path reset per-function state but ran NO prescans, so a CoW view bound
+    // inside a closure body was never materialised before a reallocating
+    // mutation (see `functions::begin_function_body`).
+    super::functions::begin_function_body(
+        ctx,
+        super::functions::FnBodyAst::Expr(&closure.body.node),
+    );
 
     // Save the outer function's drop state and push a fresh Function scope
     // for the closure body. Without this, locals registered during closure
@@ -1121,6 +1130,33 @@ fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) ->
             if let Expr::Identifier(name) = &callee.node {
                 if let Some((_, ret_type)) = ctx.fn_sigs.get(name.as_str()) {
                     return *ret_type;
+                }
+                // READER 5 of the erased-Callable class (`t0770`): a closure
+                // BODY that calls a `Callable[T]` parameter of the ENCLOSING
+                // function (this inference runs in the enclosing function's
+                // `func_state`, so the sidecar is in scope). The callee is
+                // neither a top-level fn (`fn_sigs`) nor a closure struct —
+                // its GIR local type is erased to unit — so the fall-through
+                // at the end of this fn typed the whole closure `I64_TYPE`.
+                // That value is published into `fn_sigs` for `__Closure_N__call`
+                // and is what the combinator adapter's closure-struct arm reads,
+                // so a wrong answer here re-opens `t0770` one level in.
+                // Read the declared return through the same accessor every
+                // other reader uses (devbook/24 rule 4).
+                //
+                // ⚠ MEASURED SCOPE, do not overclaim: this arm fires (verified
+                // by instrumentation on `(String s): f(s)` shapes) but the
+                // capture face it serves is still blocked one layer down — a
+                // captured `Callable[T]` param becomes a `unit`-typed env field
+                // (`void __v5 = *(void *)(__v4);` → `error: void value not
+                // ignored as it ought to be`), which is `t0927`, a different
+                // class (env-field typing + sidecar propagation into the lifted
+                // closure). This read is correct and stays; it is not, on its
+                // own, sufficient to compile that shape.
+                if let Some((local_id, _)) = ctx.lookup_local(name) {
+                    if let Some(ret_type) = ctx.callable_return_type(local_id) {
+                        return ret_type;
+                    }
                 }
                 // Enum variant constructors: Some(x), Ok(x), Error(x)
                 if name == "Some" && args.len() == 1 {

@@ -1,0 +1,14 @@
+# D53 NEG — one unique lock in N element slots (RWLock twin of
+# `mutex_vector_two_slots_double_free`).
+# CELL: lock=RWLock · position=push × 2 · source=named place.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+# RED at 4850bf38: `gg check` ACCEPT, C/LLVM rc 134.
+
+from std.sync import RWLock
+
+void main():
+    RWLock[int] r = RWLock[int](5)
+    Vector[RWLock[int]] all = []
+    all.push(r)
+    all.push(r)
+    print(f"{all.len()}")

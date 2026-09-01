@@ -544,15 +544,16 @@ fn populate_def_field_types(
 /// the element, `Dict[K,V]` on either side, tuples on any element.
 ///
 /// Deliberate carve-outs (NOT tainted by a tainted type argument):
-/// - `Shared[T]`/`Weak[T]`/`Mutex[T]`/`Channel[T]`: refcounted / handle types
-///   — the sanctioned multi-owner escape hatch. Copying the HANDLE is a
-///   pointer copy (refcount), not a value clone; drop-count determinism is
-///   owned by the refcount, not by the copy site. (ggdef has no model for
-///   these; divergence is noted in the D12 scout report.)
+/// - `Shared[T]`/`Weak[T]`/`Channel[T]`: refcounted handle types — the
+///   sanctioned multi-owner escape hatch. Copying the HANDLE is a pointer
+///   copy (refcount), not a value clone.
+/// - `Mutex[T]`/`RWLock[T]`: unique locks (D53). Still un-drop-tainted by
+///   their payload — that axis is unchanged; uniqueness is the
+///   `needs_explicit_move` carve-out, not drop-taint.
 /// - `Ref[T]` / `T &`: borrows are not implicit copies.
-/// `Box[T]`/`Task`/`TaskGroup`/`Guard`/`Owned[T]`/closures are already
-/// single-owner via `needs_explicit_move` — the taint check unions with that
-/// set rather than replacing it.
+/// `Box[T]`/`Task`/`TaskGroup`/`Guard`/`Owned[T]`/closures/`Mutex`/`RWLock`
+/// are already single-owner via `needs_explicit_move` — the taint check
+/// unions with that set rather than replacing it.
 pub fn is_drop_tainted_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool {
     match types.get(type_id) {
         types::ResolvedType::Defined(def_id) => scopes.get_def(*def_id).is_drop_tainted,
@@ -561,8 +562,9 @@ pub fn is_drop_tainted_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTa
             if def.is_drop_tainted {
                 return true;
             }
-            // Handle types: copying the handle never duplicates a drop.
-            // (`is_copy_type`-Copy generics — Channel/Shared/Weak/Mutex.)
+            // Handle types: copying the handle never duplicates a payload drop.
+            // Channel/Shared/Weak are refcounted; Mutex is a unique lock (D53)
+            // whose payload taint still does not leak through the handle.
             if matches!(def.name.as_str(), "Channel" | "Shared" | "Weak" | "Mutex") {
                 return false;
             }

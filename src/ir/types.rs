@@ -754,12 +754,21 @@ impl TypeRegistry {
     pub fn is_refcount_clone_type(&self, type_id: TypeId) -> bool {
         if type_id.0 < PRIMITIVE_TYPE_COUNT { return false; }
         if let Some(GirType::Named(name)) = self.get(type_id) {
-            if let Some(td) = self.get_type_def(name) {
-                return td.metadata.copy_semantics == CopySemantics::Trivial
-                    && td.metadata.clone_fn.is_some();
-            }
+            return self.is_refcount_clone_type_name(name);
         }
         false
+    }
+
+    /// Name-keyed form of [`Self::is_refcount_clone_type`], for the LIR-side
+    /// readers that only ever hold a mangled element-type name (a collection's
+    /// element type is carried as the `Vector__`/`Dict__K__` suffix, never as a
+    /// `TypeId`). Shares the predicate body so the two cannot drift apart
+    /// (layering rule 3 — one source of truth per axis).
+    pub fn is_refcount_clone_type_name(&self, name: &str) -> bool {
+        self.get_type_def(name).map_or(false, |td| {
+            td.metadata.copy_semantics == CopySemantics::Trivial
+                && td.metadata.clone_fn.is_some()
+        })
     }
 
     /// Check if a type is a direct collection type (Vector, Dict, Set, etc.).

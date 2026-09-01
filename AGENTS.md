@@ -126,11 +126,10 @@ clone-if-the-source-is-live, move-if-it-is-dead. Even at the boundary,
 **the compiler prefers move when liveness allows it**.
 
 **The carve-outs to CoW-default-borrow are**: closures / `Callable[T]`,
-`Owned[T]`, `Box[T]`, `Task`, `TaskGroup`, `Guard` — these are
-**single-owner-by-design (no clone path in the lowering)**, so the safety pass
-emits `MoveWithoutOperator` (E_MoveWithoutOperator)
-**at bare-assign sites AND at constructor / struct / enum-init sites**, forcing
-**the user to write `^source` or `source.clone()`**. (At a plain function / method call these types are simply borrowed, so no operator is needed.)
+`Owned[T]`, `Box[T]`, `Task`, `TaskGroup`, `Guard`, `Mutex`/`RWLock` (D53) —
+**single-owner-by-design (no clone path in the lowering)**. `E_MoveWithoutOperator`
+**at bare-assign sites AND at constructor / struct / enum-init sites** + consume;
+**the user to write `^source` or `source.clone()`** (unique locks: `Shared[Mutex[T]]`, never `.clone()`). (At a plain function / method call these types are simply borrowed.)
 
 At each consuming position (`push`, `put`, `set`, `insert`, `send`,
 `v[i] = x`) the collection must own. The compiler **picks per-arg from

@@ -145,6 +145,68 @@ fn visit(dir: impl AsRef<Path>, f: &mut dyn FnMut(&Path)) {
     }
 }
 
+/// The two-directional ratchet shared by the burn-down counters in this file.
+///
+/// It asserts EQUALITY, not `<=`, because a tolerance band with no enforced
+/// downward move is an escalator that greens every step of its own drift
+/// (Core #6 ⊕): with slack in the band a new violation lands silently and the
+/// *next* contributor inherits it as the floor. Measured on
+/// `no_growth_in_name_prefix_routing` — a probe added TWENTY fresh
+/// `starts_with("X__")` sites to `src/` and the gate still passed, because its
+/// constant had been left 54 above the actual count. Its sibling
+/// `no_typed_metadata_sidecars` was 138 above an actual count of ZERO, so it
+/// could not have caught anything at all.
+///
+/// Equality costs one line of bookkeeping on an improvement, which is the
+/// point: the number that retires sites is written down in the same commit
+/// that retires them.
+///
+/// ## What this helper CANNOT see
+///
+/// Its whole reach is *"the count did not move without someone writing down
+/// why"*. Everything below is outside it, and none of it is hypothetical —
+/// `todo/t0875` is the standing record of a guard in this file reaching FOUR
+/// assertions, each demonstrated RED and each then evaded by respelling
+/// exactly the thing it counted — the fourth in SEVEN separate costumes.
+///
+/// 1. **It sees only what its COUNTER sees.** Each caller passes a number a
+///    TEXTUAL census produced, and a site respelled outside that census's
+///    pattern is invisible to the census and therefore to this assertion. A
+///    substring census counts COSTUMES, not a class.
+/// 2. **Equality is evaded by a COMPENSATING PAIR.** Retire one site and add
+///    another in the same commit and the count is unchanged: green gate, new
+///    violation. Equality closes the SLACK hole — a band absorbing drift — and
+///    says nothing about SUBSTITUTION.
+/// 3. **A count is not a verdict.** That a census finds exactly as many sites
+///    as its constant says is a fact about arithmetic, not about whether any
+///    one of those sites belongs there.
+///
+/// So this is a BOOKKEEPING guard, not a class-retiring one. Retiring a class
+/// takes a guard that cannot be respelled around — a type whose misuse fails
+/// to COMPILE (Core #6, and `t0875` for the worked example). Do not read a
+/// green run here as evidence that the class is closed.
+#[track_caller]
+fn assert_exact_ratchet(what: &str, count: usize, budget: usize, guidance: &str) {
+    assert_eq!(
+        count, budget,
+        "\n{what}: expected exactly {budget} site(s), found {count}.\n\n\
+         {guidance}\n\n\
+         This ratchet asserts EQUALITY in BOTH directions:\n  \
+         • count > budget — a new site was added. Migrate it to typed \
+           metadata, or, if it is a genuine registrar / C-emit-boundary \
+           spelling, raise the constant DELIBERATELY with a comment saying \
+           why.\n  \
+         • count < budget — sites were retired (great!). LOWER the constant \
+           in the SAME commit so the new floor is locked in; a band left \
+           above the real count silently absorbs the next regression.\n\n\
+         What a GREEN run here does NOT prove: the counter is textual, so a \
+         site respelled outside its pattern is invisible; and equality is \
+         evaded by a compensating pair (retire one, add one, count unchanged). \
+         This is bookkeeping, not a class-retiring guard — see the doc comment \
+         on assert_exact_ratchet."
+    );
+}
+
 /// Tier 3a ratchet: the count of name-prefix routing sites in the compiler
 /// must never grow. Decreases freely as migrations land — bring the budget
 /// down when you remove a site so the next regression is caught immediately.
@@ -233,23 +295,25 @@ fn no_growth_in_name_prefix_routing() {
     /// contract (identical form to the adjacent `is_wrapper_method`
     /// `starts_with("Shared__")` dispatcher), so it genuinely cannot be
     /// typed away. `refcount_clone_arm_symmetry` locks the arm set.
-    const BUDGET: usize = 259;
+    /// EXACT count of name-prefix routing sites in src/ — see
+    /// [`assert_exact_ratchet`] for why this is an equality, not a ceiling.
+    /// Reseeded 259 → 205 (R48 Track D2): the band carried 54 sites of slack,
+    /// enough that a probe adding twenty fresh sites still passed the gate.
+    const BUDGET: usize = 205;
 
     let count = count_name_prefix_sites();
-    assert!(
-        count <= BUDGET,
-        "Name-prefix routing count grew beyond budget: {count} > {BUDGET}.\n\n\
-         The layering-discipline ratchet (Tier 3a per docs/devbook/25-structural-guards.md) \
-         bars new `starts_with(\"X__\")` sites where X is a mangled-type prefix. \
-         Either migrate the new site to typed metadata (read a typed flag on \
-         StructDef / TypeMetadata / LirExtern instead of pattern-matching the \
-         name) or, if it's a genuine registrar / C-emit-boundary spelling, \
-         raise BUDGET in tests/lints.rs with a comment explaining why.\n\n\
-         To find new sites:\n  \
-         grep -rEn 'starts_with(\"({}|...)__\")' src/ | grep -v target/\n\n\
-         If the count went DOWN (great!), drop BUDGET in this file to lock in \
-         the new floor.",
-        MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
+    assert_exact_ratchet(
+        "Name-prefix routing sites in src/ (Tier 3a, docs/devbook/25-structural-guards.md)",
+        count,
+        BUDGET,
+        &format!(
+            "The layering-discipline ratchet bars new `starts_with(\"X__\")` sites \
+             where X is a mangled-type prefix: read a typed flag on StructDef / \
+             TypeMetadata / LirExtern instead of pattern-matching the name.\n\n\
+             To list the sites:\n  \
+             grep -rnoE 'starts_with\\(\"({}|...)__\"\\)' src/",
+            MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
+        ),
     );
 }
 
@@ -355,28 +419,29 @@ fn count_sidecar_declarations() -> usize {
 /// callback) were retired during Phase D / Phase A migrations.
 #[test]
 fn no_typed_metadata_sidecars() {
-    const BUDGET: usize = 138;
+    /// EXACT count — see [`assert_exact_ratchet`]. Core #4 sibling of
+    /// `no_growth_in_name_prefix_routing`'s reseed (R48 Track D2): a `<=`
+    /// band with no enforced downward move greens its own drift. Reseeded
+    /// 138 → 0: the band was 138 ABOVE the real count, so this lint could
+    /// not have caught anything — the doc comment above already said the
+    /// floor was 0, and only the assertion disagreed.
+    const BUDGET: usize = 0;
 
     let count = count_sidecar_declarations();
-    assert!(
-        count <= BUDGET,
-        "Tier 2d sidecar absence violated: {count} > {BUDGET}.\n\n\
-         A new `HashMap<key, value>` / `FxHashMap` / `BTreeMap` was \
-         introduced in src/ where the value type is a watched typed-\
-         metadata axis (DropStrategy / CopySemantics / CollectionKind / \
-         EnumKind / EnumCategory / LocalOwnership / BorrowOrigin). The \
-         canonical home for these facts is the typed field on \
-         TypeMetadata / Local / Inst; a parallel registry is a Layering \
-         discipline rule 3 violation (`docs/devbook/24-layering-\
-         discipline.md`).\n\n\
-         To find new sites:\n  \
-         grep -rnE 'HashMap\\s*<\\s*(LocalId|TypeId|String)\\s*,\\s*(DropStrategy|CopySemantics|CollectionKind|EnumKind|EnumCategory|LocalOwnership|BorrowOrigin)\\s*>' src/\n\n\
-         Either:\n  \
-         1. Migrate the lookup to read the typed field directly via \
-            the canonical accessor.\n  \
-         2. If the map is a per-pass scratch computed from the typed \
-            field (not a parallel persistent registry), add an \
-            allowlist entry to SIDECAR_VALUE_TYPES with citation."
+    assert_exact_ratchet(
+        "Tier 2d typed-metadata sidecars in src/",
+        count,
+        BUDGET,
+        "A `HashMap<key, value>` / `FxHashMap` / `BTreeMap` in src/ whose value \
+         type is a watched typed-metadata axis (DropStrategy / CopySemantics / \
+         CollectionKind / EnumKind / EnumCategory / LocalOwnership / \
+         BorrowOrigin). The canonical home is the typed field on TypeMetadata / \
+         Local / Inst; a parallel registry is a Layering discipline rule 3 \
+         violation (`docs/devbook/24-layering-discipline.md`). A per-pass \
+         scratch computed FROM the typed field gets an allowlist entry in \
+         SIDECAR_VALUE_TYPES with a citation.\n\n\
+         To list the sites:\n  \
+         grep -rnE 'HashMap\\s*<\\s*(LocalId|TypeId|String)\\s*,\\s*(DropStrategy|CopySemantics|CollectionKind|EnumKind|EnumCategory|LocalOwnership|BorrowOrigin)\\s*>' src/",
     );
 }
 
@@ -589,27 +654,25 @@ fn no_growth_in_phase_d_proxy_reads() {
     /// `cargo test --test lints no_growth_in_phase_d_proxy_reads`, read the
     /// printed count, restore. (That is also a free Core #13 red on a gate an
     /// executor otherwise never sees fail.)
+    /// EXACT count — see [`assert_exact_ratchet`]. Core #4 sibling of
+    /// `no_growth_in_name_prefix_routing`'s reseed (R48 Track D2).
     const BUDGET: usize = 89;
 
     let count = count_phase_d_proxy_reads();
-    assert!(
-        count <= BUDGET,
-        "Phase D proxy-read count grew beyond budget: {count} > {BUDGET}.\n\n\
-         Tier 3b (`docs/devbook/25-structural-guards.md`) bars new proxy \
-         reads of ownership state. The typed source of truth is \
-         `Local.ownership` (Phase D's `LocalOwnership` field). Proxies \
-         duplicate the same fact and drift from each other under \
-         complex CFG paths.\n\n\
-         To find new sites:\n  \
-         grep -rnE '\\.(is_named_local|is_owned_local)\\s*\\(|drops\\s*\\.\\s*(is_registered|is_moved)\\s*\\(' src/ | grep -v '//'\n\n\
-         Either:\n  \
-         1. Migrate to read `builder.locals[local.0 as usize].ownership` \
-            (or `ctx.source_ownership(...)` for operands).\n  \
-         2. If the proxy is genuinely needed (e.g. inside the proxy's \
-            own implementation), exclude its file/line via the \
-            comment-skip / fn-def-skip already in this lint.\n\n\
-         If the count went DOWN, lower BUDGET in this file to lock the \
-         new floor."
+    assert_exact_ratchet(
+        "Tier 3b Phase-D ownership proxy reads in src/",
+        count,
+        BUDGET,
+        "A proxy read of ownership state (`is_named_local` / `is_owned_local` / \
+         `drops.is_registered` / `drops.is_moved`). The typed source of truth is \
+         `Local.ownership` (Phase D's `LocalOwnership`); proxies duplicate the \
+         same fact and drift from each other under complex CFG paths. Migrate to \
+         `builder.locals[local.0 as usize].ownership` (or \
+         `ctx.source_ownership(...)` for operands); a proxy needed INSIDE the \
+         proxy's own implementation is excluded via the comment-skip / \
+         fn-def-skip already in this lint.\n\n\
+         To list the sites:\n  \
+         grep -rnE '\\.(is_named_local|is_owned_local)\\s*\\(|drops\\s*\\.\\s*(is_registered|is_moved)\\s*\\(' src/ | grep -v '//'",
     );
 }
 
@@ -1039,6 +1102,143 @@ fn d23_trait_registration_lookup_type() {
              type-namespace keying invariant).",
         );
     }
+}
+
+/// Class-retirement guard (Core #6 + Core #4 — centralize at the producer, then
+/// add the arm-count lint that forces path N+1 through it).
+///
+/// THE CLASS. The five per-function prescans the CoW + auto-move machinery reads
+/// out of `func_state` — `cow_reassigned_names`, `loop_reassigned_names`,
+/// `cow_reassigned_after`, `name_use_counts`, `liveness` — were hand-copied into
+/// TWO of the ELEVEN function-body-lowering paths (`lower_function`,
+/// `lower_equip_method`). The other nine — `lower_generic_function`,
+/// `lower_equip_method_with_subs`, `lower_trait_method_body`,
+/// `lower_static_trait_method`, `emit_closure_call_function` and the four
+/// module-loop bodies (suite setup / teardown / test / bench, which had a
+/// hand-copied liveness-only SUBSET) — lowered with an EMPTY
+/// `cow_reassigned_after`, so `is_source_mut_unsafe_at` answered false
+/// unconditionally, the CoW element borrow stayed lazy, and a reallocating
+/// `&self` mutator on a GENERIC equip left it DANGLING: rc 139 SIGSEGV on both
+/// backends, ASan `heap-use-after-free`.
+///
+/// THE GUARD. `functions::begin_function_body(ctx, FnBodyAst)` performs the reset
+/// AND the prescans as ONE operation, and every path calls it.
+/// `LoweringContext::begin_function_body_reset` is the raw half; it must keep
+/// EXACTLY ONE caller (that function). Three counts, three ways to bypass:
+///   1. the raw reset — a new path that resets per-function state by hand;
+///   2. a wholesale `func_state` replacement — either the literal
+///      `FunctionState::default()` or a `func_state = …` assignment, so the
+///      type-elided spellings (`= Default::default()`, `= FunctionState { .. }`,
+///      `= std::mem::take(&mut other)`) are caught too. ⚠ NOT "ANY" such
+///      assignment: the pattern is the literal `"func_state = "`, WITH the
+///      space, so `func_state=…` (no space) walks straight past it. There is no
+///      `cargo fmt` gate in this repo forcing the spaced form, so that evasion
+///      compiles and stays green. Stated rather than papered over — a fourth
+///      count would be a fourth costume (see `todo/t0921`'s sibling lesson on
+///      main, `t0875`);
+///   3. non-test `FunctionBuilder::new(` — a new path that never resets at all
+///      (counts 1 and 2 are blind to it by construction, since they only see
+///      resetters). `FunctionBuilder::new` is the ONLY constructor —
+///      `FunctionBuilder::copy` returns an `Operand`, not a builder.
+///
+/// ⚠ THIS IS A NEW-PATH TRIPWIRE, NOT A TOTAL PARTITION OF CORRECTNESS. It
+/// catches the ADDITION of a twelfth path, forcing the author to classify it.
+/// ⚠ WHAT IT CANNOT SEE — enumerated, because a guard whose blind spots are
+/// unstated reads as a totality claim:
+///   * a body-lowering path that reuses an EXISTING `FunctionBuilder` and an
+///     existing reset (it adds no counted site at all);
+///   * an existing path regressing to a body that yields no statements — the
+///     TYPED `FnBodyAst` parameter is what makes that a compile error rather
+///     than a silent empty prescan, not this count;
+///   * any of the three tokens reached through an ALIAS or an indirection: a
+///     `use … FunctionBuilder as FB;` import, a local wrapper `fn` around
+///     `FunctionBuilder::new` or the raw reset, or a function pointer. These
+///     are textual counts, not a type-level partition;
+///   * `#[cfg(test)]` code, which count 3 deliberately truncates away.
+///
+/// **If this fails**: you added a body-lowering path. Call
+/// `functions::begin_function_body(ctx, FnBodyAst::…)` and pick the variant that
+/// matches your body's AST shape. Do NOT raise a constant to make it pass.
+#[test]
+fn function_body_prescans_are_centralised() {
+    // The single caller is `functions::begin_function_body`.
+    const EXPECTED_RAW_RESET_CALLERS: usize = 1;
+    // `context.rs`: the `LoweringContext::new` initializer + the raw reset's
+    // own assignment (which matches both halves of the pattern; counted once).
+    const EXPECTED_FUNCTION_STATE_DEFAULTS: usize = 2;
+    // 11 body-lowering paths + 4 synthetic builders that lower no user AST:
+    // `traits.rs` `emit_via_forwarding_function` (vtable thunk) and
+    // `exprs/spawn.rs` x3 (method-spawn / spawn / shared-token wrappers).
+    const EXPECTED_FUNCTION_BUILDER_NEW: usize = 15;
+
+    let mut raw = Vec::new();
+    let mut defaults = Vec::new();
+    let mut builders = Vec::new();
+    for entry in walkdir_rs("src") {
+        let text = fs::read_to_string(&entry).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        // Unit tests legitimately construct builders; truncate at the first
+        // `#[cfg(test)]` so only production sites are counted.
+        let cut = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with("#[cfg(test)]"))
+            .unwrap_or(lines.len());
+        for (n, line) in lines.iter().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if line.contains("begin_function_body_reset()") {
+                raw.push(format!("{}:{}", entry.display(), n + 1));
+            }
+            // Either spelling of a wholesale per-function-state replacement.
+            // Matched per LINE so the raw reset's own
+            // `self.func_state = FunctionState::default();` counts once.
+            if line.contains("FunctionState::default()") || line.contains("func_state = ") {
+                defaults.push(format!("{}:{}", entry.display(), n + 1));
+            }
+            if n < cut && line.contains("FunctionBuilder::new(") {
+                builders.push(format!("{}:{}", entry.display(), n + 1));
+            }
+        }
+    }
+
+    assert_eq!(
+        raw.len(),
+        EXPECTED_RAW_RESET_CALLERS,
+        "raw per-function reset callers changed: {raw:#?}\n\n\
+         Every function-body-lowering path must go through \
+         `functions::begin_function_body(ctx, FnBodyAst::…)`, which performs the \
+         reset AND the five CoW/auto-move prescans as one operation (nine of \
+         eleven paths were missing them, and a generic-equip `&self` mutator was \
+         a use-after-free). Call it instead of the raw reset; do not raise this \
+         constant.",
+    );
+    assert_eq!(
+        defaults.len(),
+        EXPECTED_FUNCTION_STATE_DEFAULTS,
+        "wholesale `func_state` replacement sites changed: {defaults:#?}\n\n\
+         A body-lowering path that builds or replaces its own `FunctionState` \
+         bypasses the prescans exactly as the raw reset does — whichever way it \
+         is spelled (`FunctionState::default()`, `Default::default()`, a struct \
+         literal, `std::mem::take`). Route it through \
+         `functions::begin_function_body`.",
+    );
+    assert_eq!(
+        builders.len(),
+        EXPECTED_FUNCTION_BUILDER_NEW,
+        "non-test `FunctionBuilder::new(` sites changed: {builders:#?}\n\n\
+         A new GIR function is being built. Classify it:\n  \
+         (a) it lowers a USER BODY -> it MUST call \
+         `functions::begin_function_body(ctx, FnBodyAst::…)`, or its body lowers \
+         with empty CoW prescans and a reallocating mutator becomes a \
+         use-after-free;\n  \
+         (b) it is SYNTHETIC (built from typed metadata, lowers no user AST, like \
+         the vtable forwarding thunk and the spawn wrappers) -> no prescan is \
+         owed.\n\
+         Then bump this constant WITH the classification in a comment. The two \
+         reset-site counts above cannot see a path that never resets, which is \
+         why this third count exists.",
+    );
 }
 
 /// Ratchet: the number of container-literal arms in `infer_expr` must
@@ -1565,6 +1765,8 @@ fn walkdir_rs(root: &str) -> Vec<PathBuf> {
 ///   - position 3: EMethodCall ingest arg (collection put)
 ///   - position 4: SReturn value (return / expr-body) + EClosure trailing SExpr
 ///     (closure-tail)
+///   - D53 container-literals: EArrayLiteral + ETupleLiteral + EDictLiteral
+///     key + EDictLiteral value (four calls; ownership-boundary elements)
 /// (positions 5 [capture] and 6 [materialize-on-write / &self mutator] use their
 /// own specialized producers — `reject_tainted_captures`,
 /// `reject_materialize_on_write`, `reject_amp_self_mutator` — since they gate on
@@ -1577,20 +1779,16 @@ fn walkdir_rs(root: &str) -> Vec<PathBuf> {
 ///     under-rejection hole; restore the call, do not lower EXPECTED.
 #[test]
 fn self_host_d12_reject_hook_count() {
-    // 1 definition (`void reject_tainted_place(`) + 8 consuming-position calls.
-    // Positions 2 (ctor-arg) + 3 (collection-put) were re-enabled once the
-    // CallArg{name, ownership, value} normalization landed: parse_call_args now
-    // carries the `!`/`&` arg sigil as a TYPED `CallArg.ownership` field, so those
-    // two positions gate on `a.ownership == OWN_BORROW` — a bare copy is rejected
-    // while an explicit `push(!x)`/`W(!x)` move is accepted (no more over-rejection).
-    const EXPECTED: usize = 9;
+    // 1 definition (`void reject_tainted_place(`) + 12 consuming-position calls
+    // (8 D12 + 4 D53 container-literal elements).
+    const EXPECTED: usize = 13;
     let src = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
         .expect("read self_host_typechecker/typecheck.gg");
     let count = src.matches("reject_tainted_place(").count();
     assert_eq!(
         count, EXPECTED,
         "self-host D12 `reject_tainted_place` site count changed: {count} vs \
-         expected {EXPECTED} (1 def + 8 consuming-position hooks).\n\n\
+         expected {EXPECTED} (1 def + 12 consuming-position hooks).\n\n\
          If a new consuming ownership boundary was added, route it through the \
          shared `reject_tainted_place` producer and bump EXPECTED. If a hook was \
          removed, a D12 under-rejection hole re-opened — restore it, do NOT lower \
@@ -2017,6 +2215,43 @@ fn tainted_formation_arg_gate_sites() {
          {count} vs expected {EXPECTED} (the two per-arg loops covering all three \
          call kinds). A new call kind's arg loop must call the formation gate too; \
          a removed site re-opens the `f(&s.field)` tainted double-drop.",
+    );
+}
+
+/// Core #4: `require_explicit_move_for_single_owner_init` is the ONE helper
+/// for the single-owner / unique-lock / drop-taint reject at every ownership
+/// boundary. A new boundary that hand-rolls `tainted_place_name` or a
+/// `"Mutex" | "RWLock"` name match re-opens t0908's consume-position hole
+/// (Guard/Box `all.push(g)` accepted while assign rejected).
+///
+/// SET (LAND each; return/expr-body tail and plain non-consuming calls are
+/// NEVER this helper — D53's consume list is the six collection positions):
+///   1. ctor args (`check_call_arg_ownership`, `is_constructor`)
+///   2. qualified-enum MethodCall constructor
+///   3. consume MethodCall (`push`/`put`/`set`/`insert`/`send`/…)
+///   4. array / tuple literal elements
+///   5. dict literal keys and values
+///   6. struct-literal field init
+///   7. bind / assign / `v[i] = x` (`check_value_needs_move`)
+///
+/// **If this fails:** a new ownership-boundary site was added without the
+/// helper, or a site was dropped. Route the new site through the helper
+/// (not a Mutex-only arm) and bump EXPECTED.
+#[test]
+fn single_owner_init_helper_call_sites() {
+    const EXPECTED: usize = 7;
+    let expr = fs::read_to_string("src/semantic/safety/check_expr.rs")
+        .expect("read src/semantic/safety/check_expr.rs");
+    let stmt = fs::read_to_string("src/semantic/safety/check_stmt.rs")
+        .expect("read src/semantic/safety/check_stmt.rs");
+    let count = expr.matches("self.require_explicit_move_for_single_owner_init(").count()
+        + stmt.matches("self.require_explicit_move_for_single_owner_init(").count();
+    assert_eq!(
+        count, EXPECTED,
+        "`require_explicit_move_for_single_owner_init` call-site count changed: \
+         {count} vs expected {EXPECTED}. Every ownership boundary (ctor / enum-init \
+         / consume MethodCall / array-tuple / dict / struct-literal / assign) must \
+         call the shared helper — not a taint-only copy and not a Mutex costume.",
     );
 }
 
@@ -3945,6 +4180,8 @@ fn snag11_equip_symbol_mangle_site_count() {
 /// 74→75 comment) — when that field lands, drop BUDGET by 3 more with :4630.
 #[test]
 fn no_growth_in_self_host_name_prefix_routing() {
+    /// EXACT count — see [`assert_exact_ratchet`]. Core #4 sibling of
+    /// `no_growth_in_name_prefix_routing`'s reseed (R48 Track D2).
     const BUDGET: usize = 81;
 
     // Phase-A classification-routing class only: all MANGLED_PREFIXES EXCEPT
@@ -3955,21 +4192,23 @@ fn no_growth_in_self_host_name_prefix_routing() {
         .filter(|p| !PRELUDE_OPTIONLIKE_PREFIXES.contains(p))
         .collect();
     let count = count_name_prefix_sites_self_host(&nonprelude);
-    assert!(
-        count <= BUDGET,
-        "Self-host name-prefix routing count grew beyond budget: {count} > {BUDGET}.\n\n\
-         Phase A migrated the classification consumers in self-host's lir_lower.gg \
-         and lower.gg to read through `build_resource_metadata` (the single source \
-         of truth). Adding a new `starts_with(\"Vector__\"/\"Box__\"/...)` outside \
-         that function or its inner name-parsing dispatchers is a layering regression. \
-         Either:\n  \
-         1. Read the typed metadata: `match build_resource_metadata(name): case Some(rmeta): ...`\n  \
-         2. If it's a genuinely necessary name-parsing site (extracting T from Vector__T), \
-         add it to Pass 1 dispatcher's already-migrated arms.\n\n\
-         If the count went DOWN (great!), drop BUDGET in this file to lock the new floor.\n\n\
-         To find sites:\n  \
-         grep -rnE --include='*.gg' 'starts_with(\"({}|...)__\")' tests/fixtures/self_host_*",
-        MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
+    assert_exact_ratchet(
+        "Self-host name-prefix routing sites (tests/fixtures/self_host_*)",
+        count,
+        BUDGET,
+        &format!(
+            "Phase A migrated the classification consumers in self-host's \
+             lir_lower.gg and lower.gg to read through `build_resource_metadata` \
+             (the single source of truth). A new `starts_with(\"Vector__\"/\
+             \"Box__\"/...)` outside that function or its inner name-parsing \
+             dispatchers is a layering regression: read the typed metadata \
+             (`match build_resource_metadata(name): case Some(rmeta): ...`), or, \
+             for a genuinely necessary name-parsing site (extracting T from \
+             Vector__T), add it to the Pass 1 dispatcher's migrated arms.\n\n\
+             To list the sites:\n  \
+             grep -rnE --include='*.gg' 'starts_with(\"({}|...)__\")' tests/fixtures/self_host_*",
+            MANGLED_PREFIXES.iter().take(3).copied().collect::<Vec<_>>().join("|"),
+        ),
     );
 }
 
@@ -8932,6 +9171,8 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("COW-uniform", "there is no push-vs-constructor split"),
     ("COW-carveouts", "The carve-outs to CoW-default-borrow are"),
     ("COW-operator", "the user to write `^source` or `source.clone()`"),
+    ("COW-d53", "`Shared[Mutex[T]]`, never `.clone()`"),
+    ("COW-d53-names", "`Mutex`/`RWLock` (D53)"),
     ("COW-table", "Owns AND dead at this call"),
     ("COW-eligible", "The three move-eligible shapes are"),
     ("COW-movezero", "the source slot becomes logically dead"),
@@ -13166,6 +13407,115 @@ fn unify_closure_ret_axis_class_enumeration() {
          closure-returning; the point of the twin-count invariant is to \
          make silent additions impossible even when they don't touch the \
          axis-unify class.",
+    );
+}
+
+/// Class-guard (Core #6) for the ERASED-`Callable`-PARAMETER READER AXIS.
+///
+/// A `Callable[T]` PARAMETER's type is erased — to `unit` in the GIR, and to a
+/// `ResolvedType::CallableTrait` wrapper (not a bare `Function`) in the
+/// typechecker. Every site that wants "what does this callable return" and
+/// answers it from `fn_sigs` / `lookup_closure_info` / a bare `Function` match
+/// gets it WRONG for that one shape and silently defaults. R48 Track A found
+/// SEVEN such readers, one at a time, each in a new costume: an adapter's
+/// result-type helper, the adapter's own call emitter, a check-time accessor,
+/// a self-host mirror, a closure-body inference, a generic-inference loop that
+/// INLINED its own copy of the accessor's match and so survived the accessor's
+/// fix, and an AST renderer whose blanket `_ => None` swallowed the wrapper.
+///
+/// ⚠ WHAT THIS GUARD CANNOT DO — state it, do not overclaim (`t0875` is this
+/// tree's record of four arm-counts evaded seven times). It is a TRIPWIRE on
+/// the two spellings the fixed readers use, NOT a class-retiring guard:
+///   * it CANNOT see a reader that answers the question a THIRD way — a fresh
+///     `fn_sigs.get(...)` fall-through, a new `unwrap_or(I64_TYPE)`, a match on
+///     a type NAME. Those are exactly the costumes readers 1, 2 and 5 wore.
+///   * it CANNOT see a reader in a file it does not read — it scans four files
+///     by name, and the eighth reader may live in a fifth.
+///   * it CANNOT tell a correct reader from an incorrect one; it counts.
+/// What it DOES do is make the census a number someone has to change on
+/// purpose, with this comment in front of them, instead of a fact a reviewer
+/// has to rediscover. Retiring the class needs a TYPE (one accessor that is
+/// the only way to ask), not a count.
+#[test]
+fn erased_callable_param_reader_axis_census() {
+    /// GIR-side readers: sites reading `callable_return_type(..)` inside the
+    /// lowering. Readers 1+2 share ONE helper in `exprs/methods.rs`
+    /// (`callable_param_return_type`, whose two callers are the adapter's
+    /// result-type inference and its indirect-call emitter, so they can never
+    /// disagree), reader 5 is the closure-body inference in `closures.rs`, and
+    /// the pre-existing direct-call arm is in `exprs/calls.rs`.
+    const EXPECTED_GIR_READS_METHODS: usize = 1;
+    const EXPECTED_GIR_READS_CLOSURES: usize = 1;
+    const EXPECTED_GIR_READS_CALLS: usize = 1;
+    /// Typechecker-side: `extract_fn_return_type_from_hint` is the ONE
+    /// accessor that resolves the id and unwraps every callable wrapper.
+    /// Callers today (3): `extract_fn_return_type` (reader 3, now a thin alias
+    /// of it, `typecheck.rs:8571`), the shape-2 generic-inference loop
+    /// (reader 6, `:7949`), and the pre-existing decl-type-hint site
+    /// (`:4475`). A NEW caller is fine — bump this. A new INLINE
+    /// `ResolvedType::Function` match beside it instead is the thing that hid
+    /// reader 6 through a whole gauntlet, and is what this count exists to
+    /// make someone justify.
+    const EXPECTED_ACCESSOR_CALLERS: usize = 3;
+    /// Self-host mirror: the combinator's own reader in
+    /// `self_host_lowerer/lower_closures.gg` peels the callable local's
+    /// `GtFnPtr` and falls back to the `closure_value_ret_type` side-channel.
+    const EXPECTED_SH_FNPTR_PEELS: usize = 1;
+
+    fn count(src: &str, needle: &str) -> usize {
+        src.matches(needle).count()
+    }
+
+    let methods = fs::read_to_string("src/ir/lowering/exprs/methods.rs")
+        .expect("read src/ir/lowering/exprs/methods.rs");
+    let closures = fs::read_to_string("src/ir/lowering/closures.rs")
+        .expect("read src/ir/lowering/closures.rs");
+    let calls = fs::read_to_string("src/ir/lowering/exprs/calls.rs")
+        .expect("read src/ir/lowering/exprs/calls.rs");
+    let typecheck = fs::read_to_string("src/semantic/typecheck.rs")
+        .expect("read src/semantic/typecheck.rs");
+    let sh_closures = fs::read_to_string("tests/fixtures/self_host_lowerer/lower_closures.gg")
+        .expect("read tests/fixtures/self_host_lowerer/lower_closures.gg");
+
+    let m = count(&methods, "ctx.callable_return_type(");
+    let c = count(&closures, "ctx.callable_return_type(");
+    let k = count(&calls, "ctx.callable_return_type(");
+    // The accessor's own definition is `fn extract_fn_return_type_from_hint`,
+    // which the `self.` prefix excludes from the caller count.
+    let a = count(&typecheck, "self.extract_fn_return_type_from_hint(");
+    let sh = count(&sh_closures, "case GtFnPtr(_, cc_ret):");
+
+    let mut problems: Vec<String> = Vec::new();
+    for (what, got, want) in [
+        ("src/ir/lowering/exprs/methods.rs `ctx.callable_return_type(`", m, EXPECTED_GIR_READS_METHODS),
+        ("src/ir/lowering/closures.rs `ctx.callable_return_type(`", c, EXPECTED_GIR_READS_CLOSURES),
+        ("src/ir/lowering/exprs/calls.rs `ctx.callable_return_type(`", k, EXPECTED_GIR_READS_CALLS),
+        ("src/semantic/typecheck.rs `self.extract_fn_return_type_from_hint(`", a, EXPECTED_ACCESSOR_CALLERS),
+        ("self_host_lowerer/lower_closures.gg `case GtFnPtr(_, cc_ret):`", sh, EXPECTED_SH_FNPTR_PEELS),
+    ] {
+        if got != want {
+            problems.push(format!("  {what}: found {got}, expected {want}"));
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "ERASED-CALLABLE READER-AXIS CENSUS DRIFTED:\n{}\n\n\
+         A `Callable[T]` PARAMETER is erased to `unit` (GIR) and to a \
+         `CallableTrait` wrapper (typechecker). Any site that answers \
+         \"what does this callable return\" from `fn_sigs`, \
+         `lookup_closure_info`, or a bare `ResolvedType::Function` match is \
+         WRONG for that shape and defaults silently — historically to \
+         `I64_TYPE`, which mis-sizes a result slot.\n\n\
+         If you ADDED a reader: route it through `ctx.callable_return_type` \
+         (GIR) or `self.extract_fn_return_type_from_hint` (typechecker) — \
+         NEVER an inline `ResolvedType::Function` match, which is exactly how \
+         reader 6 survived reader 3's fix — then bump the constant here.\n\
+         If you REMOVED one: bump it down and say which reader retired.\n\n\
+         ⚠ This lint is a TRIPWIRE, not a class-retirement: it cannot see a \
+         reader that invents a THIRD way to ask, nor one in a file it does \
+         not read. Its doc-comment says so; keep that honest.",
+        problems.join("\n"),
     );
 }
 
@@ -25378,8 +25728,14 @@ fn clone_meter_pins_carry_their_provenance() {
     // ⚠ WHAT THIS STILL CANNOT SEE: whether `{anchor}` is THIS round's open.
     // "Which round is open" is not in the tree, so a FORGOTTEN re-seed passes
     // every assert above. `scripts/clone_meter_check.sh --anchor-age` is the
-    // signal for that, and ⛔ NOTHING CALLS IT — wiring it into the round-open
-    // step is `todo/t0851`.
+    // signal for that, and its caller is
+    // `clone_band_anchor_is_reseeded_before_work_resumes` at the end of this
+    // file — which reads `DONE.md`, exactly the thing a lint over
+    // `tests/integration.rs` alone cannot see.
+    // ⛔ AND THAT CHECK SEES ~8% OF THE ROUND CLOSES IN `DONE.md` (3 of ~38,
+    // across seven prose shapes with no typed marker), failing GREEN. Do not
+    // read it as covering this hole; `todo/t0851` is re-opened on it, and
+    // `done_md_round_close_shapes_are_pinned` is what makes the gap loud.
     let date_lines = src.lines().filter(|l| l.trim().starts_with("// ROUND-OPEN-DATE:")).count();
     assert_eq!(
         date_lines, 1,
@@ -26877,5 +27233,1038 @@ fn sh_generic_equip_trait_defaults_bind_trait_params() {
          R48 name-collision class (`equip [Iter, T, U, F] MapIter[…] with \
          Iterator[U]` — two different `T`s). If a site was legitimately removed, \
          lower the constant in the same commit.",
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE DIRECTIVE SET — a CROSS-LANE SET COMPARISON, not an arm count
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Every double-quoted literal on `line`, with the quotes stripped. Good enough
+/// for the four call sites below, which read single-line `match` patterns and
+/// single-line `if` comparisons — none of them contains an escaped quote.
+fn quoted_literals(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('"') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('"') else { break };
+        out.push(after[..close].to_string());
+        rest = &after[close + 1..];
+    }
+    out
+}
+
+/// The slice of `src` between the first line containing `from` and the first
+/// line after it containing `to`. Panics naming the missing marker — a silently
+/// empty region would make every set below vacuously equal, which is exactly the
+/// "a guard that cannot see its own class" failure this test exists to avoid.
+fn region<'a>(src: &'a str, path: &str, from: &str, to: &str) -> Vec<&'a str> {
+    let lines: Vec<&str> = src.lines().collect();
+    let start = lines
+        .iter()
+        .position(|l| l.contains(from))
+        .unwrap_or_else(|| panic!("{path}: region start marker {from:?} not found"));
+    let end = start
+        + 1
+        + lines[start + 1..]
+            .iter()
+            .position(|l| l.contains(to))
+            .unwrap_or_else(|| panic!("{path}: region end marker {to:?} not found"));
+    lines[start..end].to_vec()
+}
+
+/// The set of directive NAMES and `scheduler` MODES each lane admits must be
+/// IDENTICAL, and must equal the set the documentation publishes.
+///
+/// ⚠ WHY A SET COMPARISON AND NOT AN ARM COUNT. The obvious guard for "the
+/// lanes drifted" is a per-lane arm count, and it is worse than useless here:
+/// the divergence that motivated this test — the self-host ACCEPTING
+/// `directive scheduler=Pool`, which Rust gg rejects — moves NO arm count in
+/// either compiler. A guard that green-lights the class it was written to
+/// retire is worse than none, so this one compares the SETS.
+///
+/// ⚠ AND WHY NOT rustc EXHAUSTIVENESS. Rust gg's validator is a STRING MATCH on
+/// `d.name.as_str()` with a `_ =>` catch-all (`src/semantic/mod.rs`), so the
+/// compiler witnesses nothing about the set's contents. The INDEPENDENT witness
+/// is the documentation: the book appendix's per-directive sections and the
+/// reference's scheduler-backend table, neither of which is derived from any
+/// implementation's list.
+///
+/// The set is CLOSED by design, not by omission: D-A36(e) ratified that lints
+/// get their own `lint` keyword and never ride `directive`, so a name outside
+/// this set is a user error rather than a forward-compatible extension point.
+/// Adding a directive is therefore a five-file change — Rust gg, both self-host
+/// `resolve.gg` copies, the book appendix, the reference — and this test is what
+/// makes it five rather than one.
+#[test]
+fn directive_name_sets_agree_across_lanes() {
+    use std::collections::BTreeSet;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let read = |rel: &str| {
+        fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("cannot read {rel}: {e}"))
+    };
+
+    // ── Lane 1: Rust gg. The `match d.name.as_str()` arms, bounded to the
+    //    directive block so `validate_attributes`'s allowlist (a DIFFERENT
+    //    validator, sharing only the error code) cannot leak in.
+    let rust_src = read("src/semantic/mod.rs");
+    let rust_block = region(
+        &rust_src,
+        "src/semantic/mod.rs",
+        "// Validate directives",
+        "// Validate item-level attributes",
+    );
+    let mut rust_names: BTreeSet<String> = BTreeSet::new();
+    let mut rust_modes: BTreeSet<String> = BTreeSet::new();
+    for line in &rust_block {
+        let t = line.trim();
+        if !(t.ends_with("=> {") || t.ends_with("=> {}")) {
+            continue;
+        }
+        for lit in quoted_literals(t) {
+            // `Some("pool")` is a VALUE pattern; a bare `"scheduler"` is a NAME.
+            if t.contains(&format!("Some(\"{lit}\")")) {
+                rust_modes.insert(lit);
+            } else {
+                rust_names.insert(lit);
+            }
+        }
+    }
+
+    // ── Lanes 2 & 3: the two self-host `resolve.gg` copies. (`self_host_check`
+    //    and `self_host_lowerer` SYMLINK the typechecker's, so listing them
+    //    would double-count; `self_host_resolver`'s is a genuine second file.)
+    let sh_paths = [
+        "tests/fixtures/self_host_typechecker/resolve.gg",
+        "tests/fixtures/self_host_resolver/resolve.gg",
+    ];
+    let mut lanes: Vec<(&str, BTreeSet<String>, BTreeSet<String>)> =
+        vec![("src/semantic/mod.rs", rust_names.clone(), rust_modes.clone())];
+    for path in sh_paths {
+        let src = read(path);
+        let mut names = BTreeSet::new();
+        for line in region(&src, path, "void validate_directives(", "bool is_scheduler_mode(") {
+            let t = line.trim();
+            if t.starts_with('#') || !t.contains("name == \"") {
+                continue;
+            }
+            names.extend(quoted_literals(t));
+        }
+        let mut modes = BTreeSet::new();
+        for line in region(&src, path, "bool is_scheduler_mode(", "void collect_item(") {
+            let t = line.trim();
+            if t.starts_with('#') || !t.contains("value == \"") {
+                continue;
+            }
+            modes.extend(quoted_literals(t));
+        }
+        lanes.push((path, names, modes));
+    }
+
+    // ── The INDEPENDENT witness: the docs. The book appendix names one section
+    //    per directive; its scheduler section tables the modes, as does the
+    //    reference's "Scheduler Backends" table.
+    let book = read("docs/book/appendix-directives.md");
+    let mut doc_names: BTreeSet<String> = BTreeSet::new();
+    for line in book.lines() {
+        if let Some(rest) = line.trim().strip_prefix("### `directive ") {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_lowercase() || *c == '-')
+                .collect();
+            if !name.is_empty() {
+                doc_names.insert(name);
+            }
+        }
+    }
+    let mut doc_modes: BTreeSet<String> = BTreeSet::new();
+    for line in region(
+        &book,
+        "docs/book/appendix-directives.md",
+        "### `directive scheduler=",
+        "## CLI Override Rules",
+    ) {
+        let t = line.trim();
+        if !t.starts_with("| `") {
+            continue;
+        }
+        if let Some(m) = quoted_or_ticked_first(t) {
+            doc_modes.insert(m);
+        }
+    }
+    let reference = read("docs/language-reference.md");
+    let mut ref_modes: BTreeSet<String> = BTreeSet::new();
+    for line in region(
+        &reference,
+        "docs/language-reference.md",
+        "#### Scheduler Backends",
+        "The CLI flag `--scheduler=X` overrides the source directive.",
+    ) {
+        let t = line.trim();
+        if !t.starts_with("| `") {
+            continue;
+        }
+        if let Some(m) = quoted_or_ticked_first(t) {
+            ref_modes.insert(m);
+        }
+    }
+
+    // ── Non-vacuity first: an empty set on any side would make every equality
+    //    below trivially true (Core #13 — verify the verifier).
+    for (label, set) in [
+        ("Rust names", &lanes[0].1),
+        ("Rust modes", &lanes[0].2),
+        ("book names", &doc_names),
+        ("book modes", &doc_modes),
+        ("reference modes", &ref_modes),
+    ] {
+        assert!(
+            set.len() >= 3,
+            "the {label} extraction found only {} entries ({set:?}). The markers this test \
+             scans between have moved, and an empty extraction makes every comparison below \
+             vacuously green — which is the exact failure mode a set guard exists to avoid. \
+             Fix the extraction, do not relax the assert.",
+            set.len(),
+        );
+    }
+
+    // ── The lanes must agree with each other …
+    let (ref_label, ref_names, ref_lane_modes) = lanes[0].clone();
+    for (label, names, modes) in &lanes[1..] {
+        assert_eq!(
+            names, &ref_names,
+            "DIRECTIVE NAME SETS DIVERGED between {ref_label} and {label}.\n  {ref_label}: \
+             {ref_names:?}\n  {label}: {names:?}\nA name one lane admits and the other refuses \
+             is an accept/reject lane divergence (Core #9), which is what `todo/t0825` was: the \
+             self-host admitted EVERY name because it validated none.",
+        );
+        assert_eq!(
+            modes, &ref_lane_modes,
+            "SCHEDULER MODE SETS DIVERGED between {ref_label} and {label}.\n  {ref_label}: \
+             {ref_lane_modes:?}\n  {label}: {modes:?}\nThe mode set is CASE-SENSITIVE and \
+             closed; a lane that admits an extra value silently selects a runtime the other \
+             lane refuses to compile.",
+        );
+    }
+
+    // ── … and with the documentation, which no implementation derives from.
+    assert_eq!(
+        ref_names, doc_names,
+        "the directive NAME set in {ref_label} disagrees with the one the book publishes \
+         (docs/book/appendix-directives.md, one `### `directive X`` section per name).\n  \
+         code: {ref_names:?}\n  book: {doc_names:?}\nAdding a directive is a five-file change \
+         — both compilers, both self-host resolve.gg copies, the book appendix and the \
+         reference table. If the book is the one that is wrong, fix the book: it is what a \
+         user reads.",
+    );
+    assert_eq!(
+        ref_lane_modes, doc_modes,
+        "the `scheduler` MODE set in {ref_label} disagrees with the book's mode table \
+         (docs/book/appendix-directives.md).\n  code: {ref_lane_modes:?}\n  book: {doc_modes:?}",
+    );
+    assert_eq!(
+        doc_modes, ref_modes,
+        "the two published `scheduler` mode tables disagree with each other.\n  book: \
+         {doc_modes:?}\n  reference: {ref_modes:?}\nBoth are read by users; neither is derived \
+         from the other.",
+    );
+
+    eprintln!(
+        "directive_name_sets_agree_across_lanes: names {:?} · modes {:?} · {} lanes + 2 doc \
+         witnesses",
+        ref_names,
+        ref_lane_modes,
+        lanes.len(),
+    );
+}
+
+/// The first back-ticked token in a markdown table row (`| \`pool\` | … |`).
+fn quoted_or_ticked_first(row: &str) -> Option<String> {
+    let after = row.strip_prefix("| `")?;
+    let end = after.find('`')?;
+    let tok = &after[..end];
+    if !tok.is_empty() && tok.chars().all(|c| c.is_ascii_lowercase()) {
+        Some(tok.to_string())
+    } else {
+        None
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE FIGURES DB — one declaration for every pinned number, and the guard that
+// makes it worth having
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// ⛔ THIS IS NOT A CLONE-METER FEATURE, AND THE SCHEMA IS WRONG IF IT FITS ONE
+// SYSTEM. `scripts/figures.db` declares ratchet ceilings, parity floors, exact
+// meter pins, policy budgets and census figures through ONE schema, because the
+// generalising axis is POLARITY — what a checker DOES with the number
+// (shrink-only · grow-only · exact-pin · informational) — crossed with
+// PROVENANCE — where the number CAME FROM (measured · derived · policy).
+// Subject is a naming convention and carries no behaviour.
+//
+// ⛔ THE VALUE IS THE GUARD, NOT THE FILE. A figures file with no lint
+// forbidding an undeclared bare literal of a covered figure is a sixth spelling
+// with better manners; R47 shipped five spellings of one census figure and a
+// live figure surviving inside the doc comment of the lint enforcing the rule.
+// The five lints below are the enforcement, and the LAST TWO exist because that
+// R47 failure reproduced — unplanted, on this very hunk's author, twice.
+//
+// ⚠ SCHEMA VALIDATION AND THE SCAN LIVE IN `scripts/figures.py`, NOT HERE, and
+// these lints DELEGATE to it. One reader per axis (Layering rule 3): a second
+// Rust implementation of the same contract is a second thing to drift. What
+// these lints add is that the delegate is SEEN TO FAIL on every run — each one
+// hands the checker a deliberately broken declaration and asserts it refuses.
+// The precedent is `clone_meter_check_refuses_an_unattributed_track`.
+
+fn figures_db_path() -> &'static str {
+    "scripts/figures.db"
+}
+
+fn figures_db_text() -> String {
+    fs::read_to_string(figures_db_path())
+        .expect("scripts/figures.db is missing — it is the figures' one declaration")
+}
+
+/// Every value of `key`, in file order. ⚠ KEYS ARE COMPARED AS WHOLE STRINGS.
+/// The precedent this generalises (`clone_meter_spec_values`) splits on `=` and
+/// compares the trimmed key, which is exactly right; the trap is the OTHER
+/// precedent reader, `clone_meter_get`, which matches its key as an awk REGEX.
+/// These keys are DOTTED, and `.` is a regex wildcard, so a regex reader would
+/// answer `clone.stage1.array.pin.value` from a key it merely resembles.
+fn figures_db_values(key: &str) -> Vec<String> {
+    figures_db_text()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| l.split_once('='))
+        .filter(|(k, _)| k.trim() == key)
+        .map(|(_, v)| v.trim().to_string())
+        .collect()
+}
+
+fn figures_db_field(row: &str, field: &str) -> Option<String> {
+    figures_db_values(&format!("{row}.{field}")).pop()
+}
+
+fn figures_db_rows() -> Vec<String> {
+    figures_db_values("row")
+}
+
+/// Strip `_` and `,` from a digit run. ⚠ SEPARATOR NORMALISATION IS SCANNER-
+/// SIDE AND LIVES IN ONE PLACE PER READER, never in a per-row list of
+/// spellings. Both the comma and the underscore form are in live use across the
+/// declared scan roots, so a reader that knows only one of the two is blind to
+/// the other SILENTLY — the exact failure mode it was written to retire. A
+/// per-row `spellings` field would be one omission opportunity per row
+/// (Layering rule 3).
+/// ⚠ The split is a COMMAND, not a number here: `python3 scripts/figures.py
+/// --spellings`. The first version of this comment quoted a per-row tally that
+/// the round-open clone re-seed voided within the same round.
+fn figures_norm(s: &str) -> String {
+    s.chars().filter(|c| *c != '_' && *c != ',').collect()
+}
+
+/// Run `scripts/figures.py`, optionally against a substituted declaration.
+fn figures_py(args: &[&str], db_override: Option<&Path>) -> (bool, String) {
+    let mut cmd = std::process::Command::new("python3");
+    cmd.arg("scripts/figures.py").args(args);
+    if let Some(p) = db_override {
+        cmd.env("FIGURES_DB", p);
+    }
+    let out = cmd.output().expect("run scripts/figures.py");
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.success(), text)
+}
+
+/// Write a deliberately broken copy of the declaration and return its path.
+fn figures_db_broken(tag: &str, mutate: impl Fn(String) -> String) -> PathBuf {
+    let text = mutate(figures_db_text());
+    // ⚠ A RANDOM-ISH, PER-PROCESS NAME. Parallel agents and parallel test
+    // binaries share /tmp, and a fixed scratch name is how two runs silently
+    // read each other's file.
+    let p = std::env::temp_dir().join(format!("figures_db_{}_{tag}.db", std::process::id()));
+    fs::write(&p, text).expect("write broken figures.db variant");
+    p
+}
+
+/// Replace the first line starting with `prefix`, asserting it existed.
+///
+/// ⚠ `str::replace` on a MISSING target silently no-ops, which would turn every
+/// RED demonstration below into a green run against an UNBROKEN file — a gate
+/// that has never been seen to fail, dressed as one that has.
+fn figures_db_edit_line(text: &str, prefix: &str, replacement: Option<&str>) -> String {
+    let mut out = Vec::new();
+    let mut hit = false;
+    for l in text.lines() {
+        if !hit && l.starts_with(prefix) {
+            hit = true;
+            if let Some(r) = replacement {
+                out.push(r.to_string());
+            }
+            continue;
+        }
+        out.push(l.to_string());
+    }
+    assert!(hit, "no line starts with `{prefix}` — the RED demonstration would have run \
+                  against an unbroken declaration");
+    out.join("\n") + "\n"
+}
+
+/// THE SCHEMA CONTRACT — and it is seen to REFUSE seven broken declarations on
+/// every run.
+///
+/// The contract's load-bearing clauses, each with the failure it was bought
+/// with:
+///
+/// * **`regen` is mandatory** — a figure with no command is a hope (Core #15a).
+/// * **`regen_extract` is mandatory and has NO DEFAULT.** The obvious default,
+///   "the last integer in stdout", is a SILENT LIE at exactly the magnitudes
+///   this DB is for: `resolver_comparison`'s last integer is its trailing
+///   `crashed: 1`, not its match count. And it is asymmetrically dangerous —
+///   on a floor a wrong-low capture reds loudly, on a ceiling it passes
+///   silently. The precedent for a required-with-no-default field is
+///   `proc_guard.run`'s `timeout`.
+/// * **`regen_fires` is mandatory for a runnable regen.** A measurement with no
+///   FIRE COUNT proves nothing ran (readiness item 1).
+/// * **`regen_env` is mandatory**, because the real hazard is not whether the
+///   assert fired but the ENVIRONMENT it fired in: with `GG_BACKEND` set,
+///   `parity_floor_active` returns false and the same regex captures a
+///   DIFFERENT, unseeded count.
+/// * **`regen = none` is legal ONLY under provenance `policy`**, where
+///   `authority` becomes mandatory instead — otherwise a row could buy its way
+///   out of the mandatory command by claiming nothing reproduces it.
+/// * **`authority` is mandatory for `derived` too**, not just `policy`: a
+///   derived figure that does not name what it derives FROM is just another
+///   spelling.
+/// * **A named `input` owes all three of `.at`, `.law`, `.regen`.** Two
+///   readings of a figure with an undeclared input are not comparable, and the
+///   belief that they were is what produced this tree's 294-clone discrepancy
+///   between the main checkout and an agent worktree.
+/// * **No two rows may waive the same (value, path).** The scan accounts per
+///   VALUE — two rows legitimately share one (a pin and its round-open anchor
+///   start equal) — so a duplicated waiver would double-count and hide a real
+///   spelling.
+#[test]
+fn figures_db_rows_are_wellformed() {
+    let (ok, out) = figures_py(&["validate"], None);
+    assert!(ok, "scripts/figures.db does not satisfy its own schema:\n{out}");
+    assert!(
+        out.contains("0 schema error(s)"),
+        "figures.py validate did not report a clean run:\n{out}"
+    );
+
+    // ⭐ VERIFY THE VERIFIER (Core #13). Seven broken declarations, seven
+    // refusals, on every run of this lint. A guard that has never been seen to
+    // fail is not evidence.
+    let cases: Vec<(&str, Box<dyn Fn(String) -> String>, &str)> = vec![
+        (
+            "trailing_ws",
+            Box::new(|t: String| {
+                figures_db_edit_line(&t, "fmt.max_width.unit = ", Some("fmt.max_width.unit = columns "))
+            }),
+            "trailing whitespace",
+        ),
+        (
+            "no_regen",
+            Box::new(|t: String| {
+                figures_db_edit_line(&t, "parity.c_emit.match_floor.regen = ", None)
+            }),
+            "missing mandatory field `regen`",
+        ),
+        (
+            "regen_none_on_measured",
+            Box::new(|t: String| {
+                figures_db_edit_line(
+                    &t,
+                    "parity.c_emit.match_floor.regen = ",
+                    Some("parity.c_emit.match_floor.regen = none"),
+                )
+            }),
+            "legal only under provenance `policy`",
+        ),
+        (
+            "unnamed_capture",
+            Box::new(|t: String| {
+                figures_db_edit_line(
+                    &t,
+                    "parity.resolver.match_floor.regen_extract = ",
+                    Some("parity.resolver.match_floor.regen_extract = matched: ([0-9]+)"),
+                )
+            }),
+            "named `(?P<value>...)` capture",
+        ),
+        (
+            "input_without_law",
+            Box::new(|t: String| {
+                figures_db_edit_line(
+                    &t,
+                    "clone.self_compile.string.pin.input.root_path_len.law = ",
+                    None,
+                )
+            }),
+            "is named without `input.root_path_len.law`",
+        ),
+        (
+            "derived_without_authority",
+            Box::new(|t: String| figures_db_edit_line(&t, "fmt.max_width.authority = ", None)),
+            "requires `authority`",
+        ),
+        (
+            "duplicate_waiver",
+            Box::new(|t: String| {
+                figures_db_edit_line(
+                    &t,
+                    "clone.self_compile.array.round_open.input = ",
+                    Some(
+                        "clone.self_compile.array.round_open.waiver = tests/integration.rs 2 declared a second claim on the same (value, path)\nclone.self_compile.array.round_open.input = none",
+                    ),
+                )
+            }),
+            "already declared by",
+        ),
+    ];
+    for (tag, mutate, expect) in cases {
+        let p = figures_db_broken(tag, mutate);
+        let (ok, out) = figures_py(&["validate"], Some(&p));
+        let _ = fs::remove_file(&p);
+        assert!(
+            !ok,
+            "figures.py validate ACCEPTED the `{tag}` breakage. The schema contract is \
+             replicated into every row that adopts it, so a clause that cannot be seen to \
+             refuse its own violation is worse than no clause.\n{out}"
+        );
+        assert!(
+            out.contains(expect),
+            "the `{tag}` refusal did not name its cause (expected {expect:?}):\n{out}"
+        );
+    }
+}
+
+/// MIRROR-MODE ADOPTION: the literal stays in the code, the row declares where,
+/// and the two may not drift.
+///
+/// ⚠ WHY MIRROR AND NOT SOURCED. The alternative — delete the literal, have the
+/// consumer read the row — would delete the very constants
+/// `clone_meter_pins_carry_their_provenance` reads, and it buys nothing the
+/// uniqueness guard does not already buy. Mirroring plus a drift check IS the
+/// whole guarantee; sourcing only removes literals.
+///
+/// ⚠ AND THE MIRROR MUST BE FOUND, not merely not-contradicted: a mirror
+/// pointing at a renamed or deleted symbol fails here rather than passing
+/// vacuously, which is the shape a "check" degrades into when nobody tests it.
+#[test]
+fn figures_db_mirrors_agree() {
+    fn literal_of(path: &str, symbol: &str) -> Option<String> {
+        let src = fs::read_to_string(path).ok()?;
+        for line in src.lines() {
+            let t = line.trim();
+            let rest = t.strip_prefix("pub ").unwrap_or(t);
+            let rest = rest.strip_prefix("const ").unwrap_or(rest);
+            let Some(after) = rest.strip_prefix(symbol) else { continue };
+            if !after.starts_with(':') && !after.starts_with(' ') && !after.starts_with('=') {
+                continue;
+            }
+            let Some((_, val)) = t.rsplit_once('=') else { continue };
+            let digits: String = val
+                .trim()
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '_' || *c == ',')
+                .collect();
+            if !digits.is_empty() {
+                return Some(figures_norm(&digits));
+            }
+        }
+        None
+    }
+
+    let mut checked = 0usize;
+    for row in figures_db_rows() {
+        let value = figures_norm(&figures_db_field(&row, "value").expect("row has a value"));
+        for m in figures_db_values(&format!("{row}.mirror")) {
+            if m == "none" {
+                continue;
+            }
+            let (path, symbol) = m.rsplit_once(':').expect("mirror is <path>:<symbol>");
+            let found = literal_of(path, symbol).unwrap_or_else(|| {
+                panic!(
+                    "row `{row}` declares a mirror at {path}:{symbol}, and no such constant \
+                     carries an integer literal there. A mirror that cannot be RESOLVED is not \
+                     a check — rename the declaration in scripts/figures.db, or retire the row."
+                )
+            });
+            assert_eq!(
+                found, value,
+                "MIRROR DRIFT: {path}:{symbol} spells {found} but row `{row}` records {value}. \
+                 One of the two moved without the other. The row and the constant are ONE \
+                 figure; re-measure and move both, or the DB is a sixth spelling."
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= 12,
+        "only {checked} mirrors were checked — the pilot declares more than that, so a row \
+         lost its `mirror` field and this lint quietly stopped guarding it."
+    );
+}
+
+/// ⛔ THE UNIQUENESS GUARD — the reason this DB is worth having.
+///
+/// Every unmasked, separator-normalised spelling of a covered figure inside the
+/// declared scan roots must be DECLARED, as an EXACT count. Exact, not `<=`: a
+/// STALE waiver has to be as red as a new duplicate, or the guard waivers itself
+/// into uselessness one convenient `<=` at a time.
+///
+/// **The mask is the CITATION FORM, not quoting.** The tempting reuse,
+/// `width_ratchet_mask_strings` above, masks quoted runs — and the false
+/// positives this scanner actually hits are backtick-delimited Markdown
+/// coordinates with no quote character in them at all. Measured: that masker
+/// fixes NEITHER of the two coordinate collisions in `docs/devbook/`, while
+/// swallowing 15.6% of every 3+ digit figure in the tree, much of it by
+/// unpaired-apostrophe runaway. So `scripts/figures.py` recognises the citation
+/// form positively — `path.ext:NNN`, `path.ext:NNN:MMM`, `path.ext:NNN-MMM` and
+/// a bare `NNN-MMM` — minus ISO dates, which are matched FIRST so `2026-08-31`
+/// is never read as a range. ⚠ The single `path:NNN` form is the COMMONER of
+/// the two, and it collides today.
+///
+/// ⛔ **AND ITS REACH IS NOT THE TREE.** Say what a guard cannot see, or it
+/// gets read as totality — `todo/t0875` is filed for exactly that mistake one
+/// guard away from here. This one reads the DECLARED scan roots plus any path a
+/// row explicitly declares, and NOT: `src/` (11 files there carry integer const
+/// declarations, and an UNDECLARED re-spelling in any of them is invisible),
+/// `tests/*.rs` other than this file and `integration.rs`
+/// (`tests/spec_conformance.rs` alone carries 4), `docs/` outside
+/// `docs/devbook/`, or any file whose extension is not one of
+/// `.md .rs .py .sh .spec .toml` — so a `.gg` fixture or a `.json` baseline
+/// inside a scanned directory is invisible. `DONE.md` and
+/// `docs/define-gorget/` are excluded deliberately, not by oversight. The list
+/// with its counts is beside `figures.scan_roots` in `scripts/figures.db`.
+/// ⊕ A value too small or too common to police takes `scan = none` and says so
+/// in its `caveat`; that is the honest half of adopting it, not a gap.
+///
+/// **⭐ AND HERE IS A LIVE FIGURE, PLANTED ON PURPOSE.** The
+/// `C_EMIT_MATCH_FLOOR` parity floor is 1283, and that spelling — right here,
+/// inside the doc comment of the lint that forbids undeclared spellings — is
+/// declared in `scripts/figures.db` as a waiver of EXACTLY ONE. It is not
+/// decoration. `figures_db_scanner_sees_into_doc_comments` below asserts the
+/// scanner still finds it, and this lint's exact-count waiver goes STALE the
+/// moment it stops. Between them they make "the guard catches its own author"
+/// a property with two independent alarms rather than a story about one lucky
+/// afternoon.
+#[test]
+fn figures_db_values_have_one_spelling() {
+    let (ok, out) = figures_py(&["scan"], None);
+    assert!(
+        ok,
+        "a covered figure has an UNDECLARED spelling. Either cite the constant instead of \
+         re-spelling the number, or — if the spelling is load-bearing — declare it in \
+         scripts/figures.db with an exact `waiver = <path> <count> declared|debt <reason>`.\n{out}"
+    );
+
+    // ⭐ RED #1 — an undeclared spelling is DETECTED, on the live tree. The
+    // formatter's width figure is deliberately `scan = none` in the DB (it is
+    // three digits and occurs legitimately everywhere, so scanning it would be
+    // a waiver farm). Turning the scan ON is therefore a guaranteed, honest
+    // supply of undeclared spellings.
+    let p = figures_db_broken("scan_on", |t| {
+        figures_db_edit_line(&t, "fmt.max_width.scan = ", Some("fmt.max_width.scan = standard"))
+    });
+    let (ok, out) = figures_py(&["scan"], Some(&p));
+    let _ = fs::remove_file(&p);
+    assert!(
+        !ok,
+        "the uniqueness scan found NOTHING undeclared after a three-digit figure was pointed \
+         at the whole tree. The scanner is not scanning.\n{out}"
+    );
+
+    // ⭐ RED #2 — A STALE WAIVER IS AS RED AS A NEW DUPLICATE. This is the
+    // clause the whole design turns on: waivers are exact counts, so a waiver
+    // that outlives the thing it waived fails rather than lingering.
+    let p = figures_db_broken("stale_waiver", |t| {
+        figures_db_edit_line(
+            &t,
+            "parity.resolver.match_floor.waiver = todo/",
+            Some("parity.resolver.match_floor.waiver = todo/t0582.md 2 debt a count that is now stale"),
+        )
+    });
+    let (ok, out) = figures_py(&["scan"], Some(&p));
+    let _ = fs::remove_file(&p);
+    assert!(
+        !ok,
+        "a waiver claiming MORE spellings than exist passed. Waivers must be EXACT: a `<=` \
+         waiver never goes stale, so it survives the removal of the thing it waived and \
+         permanently blinds the guard to that file.\n{out}"
+    );
+}
+
+/// ⭐ THE PROPERTY THAT ONE IDIOMATIC REFACTOR WOULD DELETE, HELD AS A TEST.
+///
+/// This tree's standard Rust-scan pre-pass is `strip_rust_comments_and_strings`
+/// above, and reaching for it here is the natural next move for anyone tuning
+/// the scanner's false positives. It would also silently destroy the single
+/// most valuable thing the scanner does: reading COMMENT TEXT, which is how a
+/// live figure surviving inside the doc comment of the lint that forbids one
+/// gets caught at all. That failure is not hypothetical — it shipped in R47,
+/// and it reproduced TWICE while this hunk was being written, both times on the
+/// author, both times found by this scanner and not by a reviewer.
+///
+/// So the property is asserted, not narrated. The figure planted in
+/// `figures_db_values_have_one_spelling`'s doc comment must still be FOUND, and
+/// the count is read from `scripts/figures.db` rather than spelled here — a
+/// second spelling in the test that guards against second spellings would be
+/// its own punchline.
+///
+/// ⚠ It is deliberately a REAL figure in a REAL doc comment, not a synthetic
+/// fixture: a synthetic input proves the scanner can see a string, which was
+/// never in doubt. What is in doubt is whether the scanner is still pointed at
+/// the text a reviewer's eye slides over.
+#[test]
+fn figures_db_scanner_sees_into_doc_comments() {
+    let value = figures_db_field("parity.c_emit.match_floor", "value").expect("the planted row");
+    let (ok, out) = figures_py(&["where", &value], None);
+    assert!(ok, "figures.py where failed:\n{out}");
+    let here: Vec<&str> =
+        out.lines().filter(|l| l.starts_with("tests/lints.rs:")).collect();
+    let found = here.len();
+    assert_eq!(
+        found,
+        1,
+        "the scanner found {found} spelling(s) of the planted figure in tests/lints.rs, expected \
+         exactly 1.\n\
+         ⇒ If it found ZERO, the scanner stopped reading comment text — almost certainly \
+         because it was routed through `strip_rust_comments_and_strings`. Undo that: the \
+         false positives it fixes are coordinate citations, which the citation mask already \
+         handles, and the property it destroys is the only reason this guard ever caught \
+         anything a human reviewer had already read.\n\
+         ⇒ If it found MORE, someone added a real duplicate spelling of a live parity floor \
+         to this file; cite the constant instead.\nFound: {here:?}"
+    );
+}
+
+/// `todo/t0851`: the band anchor's re-seed had a guard, and the guard had no
+/// caller.
+///
+/// `scripts/clone_meter_check.sh --anchor-age` detects a missed re-seed of the
+/// four `..._CLONE_ROUND_OPEN` constants: a round CLOSES by adding a dated entry
+/// at the top of `DONE.md`, so an entry newer than `// ROUND-OPEN-DATE:` means a
+/// round boundary was crossed without re-anchoring. Left un-run, a forgotten
+/// re-seed silently converts the per-round ~1% authorization band into the
+/// CROSS-ROUND ACCUMULATION the owner explicitly rejected, and manufactures a
+/// false owner ask out of two legitimate sub-band rounds.
+///
+/// ⚠ THE PREDICATE IS NARROWED, AND THE NARROWING IS THE WHOLE DESIGN. The item
+/// filing this said in bold that it must NOT become a lint, for a specific and
+/// correct reason: a lint on the raw script predicate would go RED in the
+/// legitimate window between the commit that adds a round's `DONE.md` entry and
+/// the next round's re-anchor — it would red the records commit that closes a
+/// round, and a permanently-red ratchet stops being a ratchet. That objection is
+/// about the RAW predicate, not about lint-ness. So this asks the narrower
+/// question the objection leaves open:
+///
+///   **has WORK RESUMED with the anchors un-reseeded?**
+///
+/// The round-close records commit itself is green; so is a tree sitting exactly
+/// at it, waiting for the next round to open. What is red is a commit landing
+/// AFTER it with the anchor still pointing at the closed round — which is
+/// precisely the state the item describes as silent today.
+///
+/// ⛔ **AND ITS REACH IS ~8%, WHICH IS THE THING TO CARRY AWAY FROM THIS
+/// COMMENT.** The underlying question — "has a round closed?" — is answered by
+/// matching a PROSE HEADLINE, because a round-close `DONE.md` entry carries no
+/// typed marker and its shape has never been enforced anywhere. Seven shapes
+/// across ~38 closes; this predicate matches 3, including neither of the two
+/// closes immediately before R47 (`**R45 CLOSED`, `**R44 —`). ⚠ So the failure
+/// direction is a FALSE GREEN: a green run here is NOT evidence the anchors are
+/// fresh. Widening the predicate is measured to be worse, and the real fix is a
+/// typed marker on the entry — a round-procedure decision, filed as
+/// `todo/t0851`, which is RE-OPENED for it rather than closed on 8% reach.
+/// `done_md_round_close_shapes_are_pinned` below is what keeps the gap loud.
+///
+/// ⊕ The complementary half is already a lint and stays one:
+/// `clone_meter_pins_carry_their_provenance` asserts the four anchors share ONE
+/// sha, that it is an ancestor of HEAD, and that exactly one `ROUND-OPEN-DATE`
+/// line exists. What it cannot see is WHICH round is open, because that is not
+/// in the tree — which is why the script reads `DONE.md` and why this lint runs
+/// the script instead of re-deriving it.
+#[test]
+fn clone_band_anchor_is_reseeded_before_work_resumes() {
+    // The narrowed predicate, isolated so it can be exercised on states this
+    // tree is not currently in (Core #13: a gate seen only in its passing
+    // state is not evidence).
+    fn verdict(anchor_stale: bool, commits_since_records: usize) -> bool {
+        !anchor_stale || commits_since_records == 0
+    }
+    assert!(verdict(false, 9), "a fresh anchor is green whatever the history looks like");
+    assert!(verdict(true, 0), "the round-close records commit itself is the legitimate window");
+    assert!(!verdict(true, 1), "work resuming on a stale anchor is the failure this lint is for");
+
+    let out = std::process::Command::new("bash")
+        .args(["scripts/clone_meter_check.sh", "--anchor-age"])
+        .output()
+        .expect("run scripts/clone_meter_check.sh --anchor-age");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if out.status.success() {
+        return;
+    }
+
+    // The anchor IS older than the newest closed round. Green only while the
+    // tree sits on the records commit that closed it.
+    let records = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%H", "--", "DONE.md"])
+        .output()
+        .expect("git log DONE.md");
+    let records = String::from_utf8_lossy(&records.stdout).trim().to_string();
+    let since = std::process::Command::new("git")
+        .args(["rev-list", "--count", &format!("{records}..HEAD")])
+        .output()
+        .expect("git rev-list");
+    let since: usize = String::from_utf8_lossy(&since.stdout).trim().parse().unwrap_or(0);
+    assert!(
+        verdict(true, since),
+        "the clone band anchors were not re-seeded at round open, and {since} commit(s) have \
+         landed since the records commit {records} that closed the previous round. Re-seed the \
+         four `..._CLONE_ROUND_OPEN` constants and `ROUND-OPEN-DATE` from the round-open \
+         measurement (the previous round's CLOSING measurement is the round-open value, so this \
+         costs no new build), and note that all four anchors must share ONE sha.\n\n{text}"
+    );
+}
+
+/// `todo/t0851` ⊕: the OTHER two modes had no caller either, and a sibling site
+/// in the same enumerated class is the class, not a second item (Core #4).
+///
+/// `--pin-staleness` answers "is each pinned constant still the last
+/// measurement?" — and STALENESS ITSELF IS NOT A FAILURE. Mid-round it is the
+/// normal state, and the mode exits 0 on it deliberately; turning that into a
+/// red would be a ratchet nobody could keep green. What it DOES refuse is a
+/// `// PINNED-BY:` sha that does not resolve to a commit in this repository,
+/// which is a real and silent corruption: a provenance line naming a sha lost
+/// to a rebase or a squashed branch looks exactly like a good one to
+/// `clone_meter_pins_carry_their_provenance` above, which checks the sha's
+/// SHAPE and not its existence.
+///
+/// So this lint gives the mode its caller AND asserts the one thing in it that
+/// can honestly be red. With `clone_meter_check_refuses_an_unattributed_track`
+/// (`--track`) and `clone_band_anchor_is_reseeded_before_work_resumes`
+/// (`--anchor-age`), all three modes of `scripts/clone_meter_check.sh` are now
+/// invoked by the test suite; none of them is held by a sentence.
+#[test]
+fn clone_meter_pin_provenance_shas_resolve() {
+    let out = std::process::Command::new("bash")
+        .args(["scripts/clone_meter_check.sh", "--pin-staleness"])
+        .output()
+        .expect("run scripts/clone_meter_check.sh --pin-staleness");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "scripts/clone_meter_check.sh --pin-staleness refused this tree. A STALE pin is not a \
+         failure and this mode exits 0 on one, so the refusal is the other thing it checks: a \
+         `// PINNED-BY:` sha that resolves to no commit here. Re-write the provenance line from \
+         a sha that exists on this history.\n\n{text}"
+    );
+    // The mode short-circuits to a header and zero rows on a tree with no
+    // provenance lines, which would make the assert above vacuously green.
+    assert!(
+        text.contains("pin from "),
+        "--pin-staleness examined NO pins. It presupposes the provenance lines that \
+         `clone_meter_pins_carry_their_provenance` asserts exist; with none present it prints a \
+         header, zero rows and exits 0 — a green run that checked nothing.\n\n{text}"
+    );
+}
+
+/// ⛔ THE TWO AXES ARE AXES, AND THIS IS THE LINT THAT KEEPS THAT TRUE.
+///
+/// `scripts/figures.db` claims that POLARITY (what a checker does with a
+/// number) and PROVENANCE (where the number came from) are independent
+/// questions about one row. That claim shipped once as prose and was **false as
+/// written** — it said "`policy` crosses more than one polarity", which it does
+/// not: `policy` occupies exactly one cell, because `SHAPE_MAX_DEPTH`, the row
+/// that would have given it a second, is correctly excluded as terminal. Three
+/// copies of that sentence went out; the one place that had it right was the
+/// round record. Prose rots, so the fact is a lint now (Core #6).
+///
+/// The claim it actually asserts, which IS true and IS load-bearing:
+///
+/// * **every polarity and every provenance is OCCUPIED** — a schema validated
+///   only against shrink-only ratchets would be a class reached by resemblance,
+///   and the pilot exists precisely to probe non-members;
+/// * **polarity does not determine provenance** — at least one polarity carries
+///   two different provenances;
+/// * **provenance does not determine polarity** — at least one provenance
+///   carries two different polarities.
+///
+/// A row set that degenerates to one-provenance-per-polarity would make the
+/// orthogonality claim vacuous again, silently. This fails instead.
+///
+/// ⚠ RED-VERIFY HONESTY (Core #12), CORRECTED — the first version of this note
+/// was wrong in BOTH directions, which is worth more than the asserts it
+/// describes.
+/// * **Asserts 1 and 2 (occupancy): RED-verified**, each on a degraded
+///   declaration (`policy` removed, then `derived`), and restored.
+/// * **Assert 3 (polarity does not determine provenance): RED-VERIFIED.** The
+///   first note claimed it was unreachable because "the occupancy asserts fire
+///   first on every mutation". False — that covers provenance REMOVALS only. A
+///   four-line polarity PERMUTATION reaches it with all six cells still
+///   occupied: give `policy` and `derived` a polarity each to themselves and
+///   herd every `measured` row into the other two, and the map collapses to
+///   `{exact-pin: {measured}, grow-only: {derived}, informational: {measured},
+///   shrink-only: {policy}}` with asserts 1 and 2 both green. Demonstrated and
+///   restored.
+/// * **Assert 4 (provenance does not determine polarity): NOT reachable, and
+///   the reason is arithmetic rather than "the others fire first".** Given
+///   assert 1, all FOUR polarities are occupied and each contributes at least
+///   one provenance, but only THREE provenances exist — so by pigeonhole some
+///   provenance carries two polarities, always. It is a tautology at the
+///   current axis sizes and cannot be shown red; an attempt trips assert 1
+///   instead. It stops being a tautology the moment a fourth provenance is
+///   added or a polarity is retired, and that is exactly when the header's
+///   orthogonality paragraph could silently go false again — so it stays, with
+///   its reach stated rather than implied.
+#[test]
+fn figures_db_axes_are_occupied() {
+    use std::collections::{BTreeMap, BTreeSet};
+    const POLARITIES: [&str; 4] = ["shrink-only", "grow-only", "exact-pin", "informational"];
+    const PROVENANCES: [&str; 3] = ["measured", "derived", "policy"];
+
+    let mut by_pol: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut by_prov: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for row in figures_db_rows() {
+        let pol = figures_db_field(&row, "polarity").expect("row has a polarity");
+        let prov = figures_db_field(&row, "provenance").expect("row has a provenance");
+        by_pol.entry(pol.clone()).or_default().insert(prov.clone());
+        by_prov.entry(prov).or_default().insert(pol);
+    }
+    for p in POLARITIES {
+        assert!(
+            by_pol.contains_key(p),
+            "polarity `{p}` has NO row in scripts/figures.db. Every polarity carries a worked \
+             example on purpose: a schema exercised only by the polarities it was designed \
+             around is validated by resemblance, not by a non-member. Occupied: {:?}",
+            by_pol.keys().collect::<Vec<_>>()
+        );
+    }
+    for p in PROVENANCES {
+        assert!(
+            by_prov.contains_key(p),
+            "provenance `{p}` has NO row in scripts/figures.db. Same reason as the polarities: \
+             the axis is only demonstrated by a row that occupies it. Occupied: {:?}",
+            by_prov.keys().collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        by_pol.values().any(|s| s.len() >= 2),
+        "no polarity carries two different provenances, so polarity now DETERMINES provenance \
+         and the two are not independent axes. Either a row was removed, or the schema really \
+         has collapsed into one axis — in which case the header's orthogonality paragraph in \
+         scripts/figures.db is the thing to fix, not this assert. Map: {by_pol:?}"
+    );
+    assert!(
+        by_prov.values().any(|s| s.len() >= 2),
+        "no provenance carries two different polarities, so provenance now DETERMINES polarity. \
+         Same reading as above. Map: {by_prov:?}"
+    );
+}
+
+/// ⛔ THE REACH RATCHET ON A GUARD THAT CANNOT CATCH ITS OWN CLASS.
+///
+/// `scripts/clone_meter_check.sh --anchor-age` decides "has a round closed?" by
+/// matching a PROSE HEADLINE in `DONE.md`. That is a name-match on free text —
+/// Core #2's forbidden shape — and it is forced, because a round-close entry
+/// carries NO TYPED MARKER and its shape has never been enforced anywhere: the
+/// reviewer grepped `AGENTS.md` and this file and found no rule on it at all.
+/// Measured over the seven shapes actually present, the predicate matches **3
+/// of roughly 38 closes**, and its failure direction is a FALSE GREEN.
+///
+/// ⛔ WIDENING IT IS WORSE, AND THAT IS MEASURED, NOT ASSUMED. The obvious
+/// widening matches 79 headlines including mid-round ones (`**R42 Phase 4b`,
+/// `**R41 T-FMT-A`, `**ROUND-33 rolling item 4`), which re-creates a false RED
+/// whose printed remedy — a mid-round band re-seed — is the exact move the
+/// salami assertion in `tests/integration.rs` exists to prove destroys the band.
+/// The real fix is a marker on the entry, which is a round-procedure decision;
+/// it is filed with this evidence as `todo/t0851`, RE-OPENED for it.
+///
+/// **So this pins BOTH POPULATIONS rather than trusting either.** A round close
+/// landing in a shape the predicate cannot see moves the round-ish count and
+/// NOT the matched count — which is precisely the class `--anchor-age` is blind
+/// to, made loud. ⚠ It also fires on a mid-round round-ish entry; that is the
+/// honest cost of an unenforced convention, and the remedy there is a
+/// 30-second adjudication and a number bump, never a re-seed.
+///
+/// ⊕ Both counts live in `scripts/figures.db` (the DB's first SOURCED rows —
+/// DB-native, no code literal to mirror), and both predicates are spelled ONCE,
+/// in the script's `--round-close-census`, which this reads rather than
+/// re-spelling (Layering rule 3: the guard and the thing it guards cannot drift
+/// apart if there is only one spelling).
+#[test]
+fn done_md_round_close_shapes_are_pinned() {
+    let out = std::process::Command::new("bash")
+        .args(["scripts/clone_meter_check.sh", "--round-close-census"])
+        .output()
+        .expect("run scripts/clone_meter_check.sh --round-close-census");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "--round-close-census failed:\n{text}");
+
+    let field = |label: &str| -> usize {
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix(label))
+            .unwrap_or_else(|| panic!("--round-close-census printed no `{label}` line:\n{text}"))
+            .trim()
+            .parse()
+            .expect("census field is a count")
+    };
+    let matched = field("anchor-age-matched:");
+    let roundish = field("round-ish headlines:");
+
+    let want_matched: usize = figures_norm(
+        &figures_db_field("done_md.round_close.anchor_age_matched", "value").expect("row"),
+    )
+    .parse()
+    .expect("pinned count");
+    let want_roundish: usize = figures_norm(
+        &figures_db_field("done_md.round_close.roundish_headlines", "value").expect("row"),
+    )
+    .parse()
+    .expect("pinned count");
+
+    if roundish != want_roundish && matched == want_matched {
+        panic!(
+            "A ROUND-ISH `DONE.md` HEADLINE APPEARED THAT `--anchor-age` CANNOT SEE.\n\
+             round-ish {roundish} (pinned {want_roundish}), matched {matched} (pinned, unchanged).\n\n\
+             ADJUDICATE, do not just bump. Read the new entry:\n\
+             * If it IS a round close — then `--anchor-age` went GREEN on a closed round, which is \
+             the exact false-green this pin exists to catch. Re-seed the four \
+             `..._CLONE_ROUND_OPEN` constants and `ROUND-OPEN-DATE`, and revisit the predicate in \
+             `scripts/clone_meter_check.sh::anchor_mode` (todo/t0851 carries the real fix: a typed \
+             marker on the entry).\n\
+             * If it is a MID-ROUND entry that merely starts with ROUND/Round/Rn, bump ONLY \
+             `done_md.round_close.roundish_headlines` in scripts/figures.db.\n\
+             ⛔ In neither case is the answer to widen the predicate: widening was MEASURED to \
+             swallow mid-round entries and re-create a false RED whose remedy destroys the band.\n\n{text}"
+        );
+    }
+    assert_eq!(
+        (matched, roundish),
+        (want_matched, want_roundish),
+        "the DONE.md round-close populations moved. Regenerate with \
+         `bash scripts/clone_meter_check.sh --round-close-census`, adjudicate what changed \
+         (the note fields on both rows say how), and re-pin in scripts/figures.db IN THE SAME \
+         COMMIT — this is an exact pin, so it is meant to be moved deliberately rather than \
+         drifted past. ⚠ A round CLOSE moves both counts and will land here: that is the \
+         records commit's own chore, and it is the moment to confirm the anchors get re-seeded \
+         at the next round open.\n\n{text}"
     );
 }

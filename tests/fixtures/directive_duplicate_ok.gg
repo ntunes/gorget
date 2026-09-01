@@ -1,0 +1,26 @@
+# The ACCEPT control for the DUPLICATE-directive cell: repeating a directive is
+# legal on both lanes, and stays legal after directive validation lands.
+#
+# Neither compiler de-duplicates or complains — each occurrence is validated
+# independently, and `strip-asserts` is idempotent. That is the property this
+# fixture pins: the new `validate_directives` pass walks EVERY `IDirective` item
+# rather than the first, so a per-item validator must not acquire a
+# "seen already" reject by accident (the `suite setup` / `suite teardown`
+# validation two screens away in `src/semantic/mod.rs` DOES reject duplicates,
+# which is exactly the neighbouring shape a reader might copy).
+#
+# ⚠ NOT RED-VERIFIABLE and does not claim to be (Core #12): the pre-fix compiler
+# accepted every directive, so this row was green before and after. It is a
+# negative control — it goes red only if the new validation over-rejects, the
+# failure mode the reject fixtures cannot see.
+#
+# The asserts below are what makes `strip-asserts` observable: they are removed
+# from the build, so a false one still prints the line rather than aborting.
+
+directive strip-asserts
+directive strip-asserts
+
+void main():
+    int x = 1
+    assert x == 999
+    print("duplicate directives ok")

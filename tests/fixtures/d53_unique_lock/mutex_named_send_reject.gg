@@ -1,0 +1,9 @@
+# D53 NEG — named Mutex at Channel.send (consume sibling).
+# CELL: lock=Mutex · position=send · source=named place.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Channel[Mutex[int]] ch = Channel[Mutex[int]](1)
+    ch.send(m)
+    print(1)

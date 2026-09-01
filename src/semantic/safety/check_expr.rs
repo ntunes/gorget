@@ -8,7 +8,8 @@ use crate::semantic::ids::{DefId, ScopeId};
 use crate::semantic::scope::DefKind;
 
 use super::{BorrowChecker, BorrowOrigin, FallibleState, VarState};
-use super::type_utils::needs_explicit_move;
+use super::helpers::{expr_is_place, place_shape};
+use super::type_utils::{needs_explicit_move, unique_lock_family};
 
 /// Collects `(method-name span start, does-this-call-write-its-receiver)` for
 /// every method call inside an f-string's parser-stored interpolation
@@ -117,31 +118,57 @@ pub(crate) fn arm_body_is_direct_move(body: &Spanned<Expr>) -> bool {
 }
 
 impl<'a> BorrowChecker<'a> {
-    /// At a constructor / struct-literal / enum-variant init boundary, a bare
-    /// (non-`!`) identifier arg of a CoW-eligible type is fine — the lowering
-    /// clones-if-live / moves-if-dead. But the single-owner carve-out types
-    /// (closures/`Callable`, `Owned[T]`, `Box[T]`, `Task`/`TaskGroup`/`Guard`)
-    /// have NO clone path: passing one bare would be accepted here and then
-    /// panic the IR lowering as an untracked consumed source — so they still
-    /// require an explicit `!`. Emit `MoveWithoutOperator` (liveness-independent,
-    /// mirroring the bare-assign carve-out in `check_stmt`). Explicit `!arg`
-    /// goes through the `Ownership::Move` arm / `Expr::Move` walk and is never
-    /// an `Expr::Identifier` here, so it is correctly not flagged.
-    fn require_explicit_move_for_single_owner_init(&mut self, arg: &Spanned<Expr>) {
-        // D4/D12 position 2 (ctor / field-init): a bare drop-tainted PLACE
-        // rejects at an init boundary. `tainted_place_name` resolves the
-        // place STRUCTURALLY (via `lvalue_value_type`), so field/index places
-        // (`obj.field`, `v[i]`) are covered alongside identifier/self/param —
-        // mirroring ggdef's `owning_source_from_arg`
-        // (spec/ggdef/src/elaborate/mod.rs:988, :1008).
+    /// At an ownership boundary, a bare (non-`^`) place of a CoW-eligible
+    /// type is fine — the lowering clones-if-live / moves-if-dead. The
+    /// single-owner carve-out types (closures/`Callable`, `Owned[T]`,
+    /// `Box[T]`, `Task`/`TaskGroup`/`Guard`, and D53 unique locks
+    /// `Mutex`/`RWLock`) have NO clone path: a bare place would be N owners
+    /// of one drop. Emit `MoveWithoutOperator` (liveness-independent).
+    /// Explicit `^arg` is `Expr::Move` and is never a place, so it is not
+    /// flagged. Temps (ctors/calls) are not places either.
+    ///
+    /// `param_exempt`: TRUE only at bind/reassign (`check_value_needs_move`)
+    /// for the by-design SingleOwner identifier arm — a param rebind copies
+    /// a pointer. Unique locks never take that exemption (aliasing a unique
+    /// lock through a param bind is still N owners). Ctor / consume /
+    /// container-literal sites pass `false`.
+    pub(super) fn require_explicit_move_for_single_owner_init(
+        &mut self,
+        arg: &Spanned<Expr>,
+        param_exempt: bool,
+    ) {
+        // Unique locks first (D53): any PLACE of Mutex/RWLock, including
+        // field/index, resolved STRUCTURALLY via `lvalue_value_type`.
+        if expr_is_place(&arg.node) {
+            if let Some(tid) = self.lvalue_value_type(arg) {
+                if let Some(family) = unique_lock_family(tid, self.types, self.scopes) {
+                    let name = self
+                        .find_root_def_id(arg)
+                        .map(|d| self.scopes.get_def(d).name.clone())
+                        .unwrap_or_else(|| "<place>".to_string());
+                    self.error(
+                        SemanticErrorKind::MoveWithoutOperator {
+                            name,
+                            reason: MoveReason::UniqueLock(family),
+                            shape: place_shape(&arg.node),
+                            write_through_available: false,
+                        },
+                        arg.span,
+                    );
+                    return;
+                }
+            }
+        }
+        // D4/D12: a bare drop-tainted PLACE rejects at an ownership boundary.
+        // `tainted_place_name` resolves the place STRUCTURALLY (via
+        // `lvalue_value_type`), so field/index places (`obj.field`, `v[i]`)
+        // are covered alongside identifier/self/param.
         if let Some((name, shape)) = self.tainted_place_name(arg) {
             self.error(
                 SemanticErrorKind::MoveWithoutOperator {
                     name,
                     reason: MoveReason::DropTaint,
                     shape,
-                    // ctor / field-init boundary: `&` is not a valid fix here
-                    // (`Some(&fh)` is not a thing) — no write-through hint.
                     write_through_available: false,
                 },
                 arg.span,
@@ -152,15 +179,19 @@ impl<'a> BorrowChecker<'a> {
             if let Some(&var_def_id) = self.resolution_map.get(&arg.span.start) {
                 let def = self.scopes.get_def(var_def_id);
                 if def.kind == DefKind::Variable {
+                    if param_exempt && def.is_param {
+                        return;
+                    }
                     if let Some(type_id) = def.type_id {
-                        let name = def.name.clone();
                         if needs_explicit_move(type_id, self.types, self.scopes) {
+                            let reason = unique_lock_family(type_id, self.types, self.scopes)
+                                .map(MoveReason::UniqueLock)
+                                .unwrap_or(MoveReason::SingleOwner);
                             self.error(
                                 SemanticErrorKind::MoveWithoutOperator {
-                                    name,
-                                    reason: MoveReason::SingleOwner,
+                                    name: def.name.clone(),
+                                    reason,
                                     shape: MoveShape::Whole,
-                                    // ctor single-owner-init: no write-through fix.
                                     write_through_available: false,
                                 },
                                 arg.span,
@@ -249,7 +280,7 @@ impl<'a> BorrowChecker<'a> {
                     // function call, where the arg is just borrowed. Hence
                     // the `is_constructor` gate.
                     if is_constructor {
-                        self.require_explicit_move_for_single_owner_init(&arg.node.value);
+                        self.require_explicit_move_for_single_owner_init(&arg.node.value, false);
                     }
                     self.check_expr(&arg.node.value);
                     // Dead-write lint: `&p` args are NOT
@@ -957,33 +988,25 @@ impl<'a> BorrowChecker<'a> {
                 //      gates use, so `d.put(k,v)` / `d[k]=v` / `d[k]+=v` are
                 //      behaviorally identical. `.clone()` is NOT suggested —
                 //      cloning into the in-scope arena UAFs too.
-                // D4/D12 position 3 (collection-put): a bare drop-tainted
+                // D4/D12/D53 position 3 (collection-put): a bare single-owner
                 // PLACE arg into an element-ingesting mutating builtin
                 // (push/put/insert/send/...) is an implicit copy at an
-                // ownership boundary — require `!arg` / `.clone()`. Reuses the
+                // ownership boundary. The SHARED helper unions drop-taint +
+                // `needs_explicit_move` (Guard/Box/Task + D53 unique locks) —
+                // not a taint-only copy and not a Mutex costume. Reuses the
                 // SAME typed gates as the arena element-ingest position below
                 // (`is_mutating_builtin_method` + `is_buffer_owning_receiver`
-                // — no name-matching; Core #4 shared classification). Mirrors
-                // ggdef positions 2/3 (spec/ggdef/src/elaborate/mod.rs:1008).
+                // — no name-matching; Core #4). Temps and `^arg` are not places.
                 if crate::ir::lowering::builtins::is_mutating_builtin_method(
                     method.node.as_str(),
                 ) && self.is_buffer_owning_receiver(receiver)
                 {
                     for arg in args {
                         if arg.node.ownership == Ownership::Borrow {
-                            if let Some((name, shape)) = self.tainted_place_name(&arg.node.value) {
-                                self.error(
-                                    SemanticErrorKind::MoveWithoutOperator {
-                                        name,
-                                        reason: MoveReason::DropTaint,
-                                        shape,
-                                        // ingest-arg boundary (`v.push(fh.field)`):
-                                        // `&` is not a valid fix — no hint.
-                                        write_through_available: false,
-                                    },
-                                    arg.node.value.span,
-                                );
-                            }
+                            self.require_explicit_move_for_single_owner_init(
+                                &arg.node.value,
+                                false,
+                            );
                         }
                     }
                 }
@@ -1063,7 +1086,10 @@ impl<'a> BorrowChecker<'a> {
                             // single-owner types still require explicit `!` at a
                             // qualified-enum CONSTRUCTOR (not a plain method call).
                             if is_enum_constructor {
-                                self.require_explicit_move_for_single_owner_init(&arg.node.value);
+                                self.require_explicit_move_for_single_owner_init(
+                                    &arg.node.value,
+                                    false,
+                                );
                             }
                             self.check_expr(&arg.node.value);
                         }
@@ -1640,6 +1666,8 @@ impl<'a> BorrowChecker<'a> {
                 let prev = self.suppress_move_in_operand_position;
                 self.suppress_move_in_operand_position = true;
                 for elem in elements {
+                    // D53: container-literal elements are ownership boundaries.
+                    self.require_explicit_move_for_single_owner_init(elem, false);
                     self.check_expr(elem);
                 }
                 self.suppress_move_in_operand_position = prev;
@@ -1651,8 +1679,10 @@ impl<'a> BorrowChecker<'a> {
                 let prev = self.suppress_move_in_operand_position;
                 self.suppress_move_in_operand_position = true;
                 for (k, v) in pairs {
-                    self.check_expr(k);
-                    self.check_expr(v);
+                    for place in [k, v] {
+                        self.require_explicit_move_for_single_owner_init(place, false);
+                        self.check_expr(place);
+                    }
                 }
                 self.suppress_move_in_operand_position = prev;
             }
@@ -1698,7 +1728,7 @@ impl<'a> BorrowChecker<'a> {
                         // `target_is_mut_ref` arm below. Carve-out: single-owner
                         // types (closures/`Box`/`Owned`/`Task`/...) still require
                         // explicit `!` — they have no clone path.
-                        self.require_explicit_move_for_single_owner_init(arg);
+                        self.require_explicit_move_for_single_owner_init(arg, false);
                     } else if target_is_mut_ref {
                         // Identify the source local being mutably-borrowed.
                         if let Some(src) = self.find_root_def_id(arg) {

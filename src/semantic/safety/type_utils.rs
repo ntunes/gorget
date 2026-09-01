@@ -3,6 +3,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use crate::parser::ast::*;
 use crate::span::Spanned;
 
+use crate::semantic::errors::UniqueLockFamily;
 use crate::semantic::ids::{DefId, ScopeId, TypeId};
 use crate::semantic::scope::ScopeTable;
 use crate::semantic::types::{ResolvedType, TypeTable};
@@ -42,9 +43,11 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
             elems.iter().all(|e| is_copy_type(*e, types, scopes))
         }
         ResolvedType::Generic(def_id, _) => {
-            // Channel[T], Shared[T], Weak[T], and Mutex[T] are Copy — they're opaque pointers.
-            // Guard[T] and TaskGroup are NOT Copy — they hold exclusive resources.
-            matches!(scopes.get_def(*def_id).name.as_str(), "Channel" | "Shared" | "Weak" | "Mutex")
+            // Channel[T], Shared[T], Weak[T] are Copy — refcounted handle
+            // pointers (multi-owner). Mutex[T]/RWLock[T] are unique locks
+            // (D53) and are NOT Copy: a pointer copy is N owners of one
+            // `gorget_*_free`. Guard[T] and TaskGroup are also not Copy.
+            matches!(scopes.get_def(*def_id).name.as_str(), "Channel" | "Shared" | "Weak")
         }
         ResolvedType::Defined(def_id) => {
             let def = scopes.get_def(*def_id);
@@ -88,17 +91,18 @@ pub(super) fn is_copy_type(type_id: TypeId, types: &TypeTable, scopes: &ScopeTab
 }
 
 /// Returns true for the single-owner carve-out types that ALWAYS require an
-/// explicit `!` (move) or `.clone()` at an ownership boundary — they are NOT
-/// CoW-eligible, so there is no implicit clone-if-live path. Closures hold env
-/// captures whose semantics are load-bearing on the move; `Owned[T]`/`Box[T]`
-/// are by-value-of-heap; `Task`/`TaskGroup`/`Guard` are single-owner handles.
+/// explicit `^` (move) at an ownership boundary — they are NOT CoW-eligible,
+/// so there is no implicit clone-if-live path. Closures hold env captures
+/// whose semantics are load-bearing on the move; `Owned[T]`/`Box[T]` are
+/// by-value-of-heap; `Task`/`TaskGroup`/`Guard` are single-owner handles;
+/// `Mutex[T]`/`RWLock[T]` are unique locks (D53 — share as `Shared[Mutex[T]]`).
 ///
 /// This is the single source of truth for the carve-out set, shared by the
-/// bare-assign check (`check_stmt`) AND the constructor / struct-literal /
-/// enum-variant init checks (`check_expr`). For these types the IR lowering has
-/// no clone boundary — passing one bare (no `!`) into a constructor would be
-/// accepted by the checker and then panic the lowering as an untracked consumed
-/// source — so the checker must require the explicit move here.
+/// bare-assign check (`check_stmt`), constructor / struct-literal / enum-init
+/// / container-literal checks, AND consuming positions (`push`/`put`/`set`/
+/// `insert`/`send`/`v[i] = x`) in `check_expr`. For these types the IR
+/// lowering has no clone boundary — a bare place at an ownership boundary
+/// would be N owners of one drop.
 pub(super) fn needs_explicit_move(type_id: TypeId, types: &TypeTable, scopes: &ScopeTable) -> bool {
     // D4 (D12): drop-tainted types join the single-owner set automatically —
     // ONE PRINCIPLED RULE (side-effectful drop ⇒ single-owner) plus the
@@ -117,10 +121,27 @@ pub(super) fn needs_explicit_move(type_id: TypeId, types: &TypeTable, scopes: &S
         ResolvedType::Generic(def_id, _) => {
             matches!(
                 scopes.get_def(*def_id).name.as_str(),
-                "Box" | "Task" | "TaskGroup" | "Guard"
+                "Box" | "Task" | "TaskGroup" | "Guard" | "Mutex" | "RWLock"
             )
         }
         _ => false,
+    }
+}
+
+/// D53 unique-lock accessor: `Mutex[T]` / `RWLock[T]` at the generic's
+/// declaration name (the carve-out list), not a consumer-side `starts_with`.
+pub(super) fn unique_lock_family(
+    type_id: TypeId,
+    types: &TypeTable,
+    scopes: &ScopeTable,
+) -> Option<UniqueLockFamily> {
+    match types.get(type_id) {
+        ResolvedType::Generic(def_id, _) => match scopes.get_def(*def_id).name.as_str() {
+            "Mutex" => Some(UniqueLockFamily::Mutex),
+            "RWLock" => Some(UniqueLockFamily::RWLock),
+            _ => None,
+        },
+        _ => None,
     }
 }
 

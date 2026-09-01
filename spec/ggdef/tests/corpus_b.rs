@@ -35,6 +35,25 @@ use std::path::{Path, PathBuf};
 /// these are excluded BY NAME (the generic-equip ones are the only equip
 /// fixtures ggdef cannot elaborate — generic monomorph is phase 1).
 const EXCLUDE: &[&str] = &[
+    // R48 Track A's erased-`Callable`-PARAMETER combinator net. Excluded on an
+    // out-of-subset CONSTRUCT, not on the shape under test: both fixtures pass
+    // their callables as TOP-LEVEL FUNCTION NAMES USED AS VALUES, which ggdef
+    // phase-0 rejects with `error: unresolved local `bang`` /
+    // `unresolved local `strlen_of`` (verified by running the CLI on each).
+    //
+    // ⚠ THE SPELLING IS NOT A CHOICE MADE TO DODGE THIS GATE. A closure
+    // literal in the argument position allocates a closure environment that
+    // leaks 8 bytes (`t0526`), and these are TOP-LEVEL fixtures, so
+    // `scripts/sanitize_sweep.sh` sweeps them and its leak allowlist is
+    // shrink-only — the closure-literal spelling could not be committed here.
+    //
+    // ⭐ ggdef COVERAGE OF THE SHAPE IS NOT LOST, it moved: the SAME cells,
+    // spelled with closure literals, are `spectests/run/combinator_callable_param.gg`,
+    // which ggdef adjudicates and which MATCHes on C, LLVM and the self-host
+    // lane. Retiring these two rows is what closing the top-level-fn-as-a-value
+    // subset gap buys.
+    "combinator_callable_param_same_type.gg",
+    "combinator_callable_param_cross_type.gg",
     // R45 memory-safety regression net. These fixtures pin the CoW rescue
     // against realloc-induced use-after-free — the class ggdef is
     // STRUCTURALLY BLIND to (it adjudicates value semantics, not memory
@@ -67,6 +86,36 @@ const EXCLUDE: &[&str] = &[
     "cow_element_borrow_alias_mutate.gg",
     "cow_p3_alias_chain_mutate.gg",
     "cow_p3_index_mutate.gg",
+    // The per-function-body prescan net (one cell per body-lowering PATH). Six
+    // of its eight `cow_*` cells are outside the phase-0 subset — each row below
+    // cites the gate that actually fires, run at HEAD, not a guess. The other
+    // two ARE in the gate and MATCH: `cow_generic_equip_mutator_view_uaf.gg`
+    // (ggdef prints `helloworld`, which is how that use-after-free was
+    // adjudicated when BOTH compilers printed nothing and exited 139) and
+    // `cow_generic_fn_view_survives_realloc.gg`. As always the adjudicating
+    // lanes for the memory-safety claim are C, LLVM and ASan — ggdef is
+    // STRUCTURALLY BLIND to memory validity (AGENTS.md Core #13); what it
+    // adjudicates here is the VALUE.
+    //
+    // `equip [T] Cell[T]` — `register_equip` rejects on
+    // `eq.generic_params.is_some()`. ⚠ The SAME construct spelled
+    // `equip Cell[T]` elaborates (the row above it does), which is `todo/t0921`;
+    // the class is `todo/t0920`.
+    "cow_generic_equip_named_recv.gg",
+    // "item kind trait is outside the phase-0 subset" — a trait DEFAULT method
+    // body. ⊕ Its static-trait sibling needs no row: that fixture lives in
+    // `tests/fixtures/self_host_gaps/` (`todo/t0923`) and this glob only sees
+    // top-level `tests/fixtures/*.gg`. Re-add the row in the commit that fixes
+    // t0923 and moves the fixture back up.
+    "cow_trait_default_view_survives_realloc.gg",
+    // "expression `unsupported` is outside the phase-0 subset" — the closure
+    // literal whose body is the cell under test.
+    "cow_closure_body_view_survives_realloc.gg",
+    // "item kind other is outside the phase-0 subset" — `suite setup` /
+    // `suite teardown` / `test` / `bench` blocks. These two cells exist only on
+    // the `gg test` lane, which `gg build` never lowers at all.
+    "cow_test_body_view_survives_realloc.gg",
+    "cow_bench_body_view_survives_realloc.gg",
     // Module statics are outside the phase-0 subset (`Item::StaticDecl` not
     // elaborated — "item kind static"): the CoW-1B fixture mixes static and
     // local shapes; its LOCAL half was ggdef-adjudicated at authoring (88/30/45,
@@ -351,6 +400,40 @@ const EXCLUDE: &[&str] = &[
     // `tests/fixtures/security/cow_element_borrow_uaf.gg`.
     // Subset gap filed as `todo/t0753`.
     "cow_alias_spelled_view_via_first_getter.gg",
+    // ⚠ ADDED 2026-08-31 AT R48 INTEGRATION, AND THE RECURRENCE IS THE POINT.
+    // `cow_comprehension_fresh_mint_control.gg` arrives with `800cfcc2`
+    // (Track D1, `t0841`) as the GREEN control proving the axis is an
+    // already-owned live NAME, not "a loop-invariant body" — it had to be
+    // committed because the control the item cited was a `.map()` fixture, not
+    // a comprehension. ggdef cannot elaborate a comprehension at all
+    // (`expression `unsupported` is outside the phase-0 subset`), and the
+    // subset gap is ALREADY FILED as `todo/t0003` — so this is Core #9's
+    // "a note + a filed subset gap", not a silent exclusion.
+    // ⛔ THIS IS `todo/t0801`'S CLASS, RECURRING IN THE ROUND THAT CLOSED IT:
+    // corpus membership is glob-minus-exclusions, so ANY new `cow_*` fixture is
+    // opted IN by default and reddens a lane its own track never ran. D1's
+    // gauntlet was clean; the orchestrator integrated without `-p ggdef` (a
+    // SEPARATE target `--test integration` never touches) and main went red.
+    // The declared-membership guard that would have caught it at add-time is
+    // R48 Track E-B3's deliverable and was still in gauntlet when D1 landed.
+    "cow_comprehension_fresh_mint_control.gg",
+    // ⊕ THE OTHER ELEVEN FROM THE SAME COMMIT. Measured one-by-one against
+    // `ggdef run`, not assumed: 12 of D1's 13 new `cow_*` fixtures are
+    // out-of-subset (comprehensions, and the `meta for`/`meta while` forms);
+    // only `cow_for_zero_trip_body_kill_control.gg` elaborates, and it stays
+    // GATED. Subset gaps: comprehensions `todo/t0003`; the meta forms are the
+    // same phase-0 boundary and are covered by the same item.
+    "cow_comprehension_invariant_dict_value.gg",
+    "cow_comprehension_invariant_filter_arm.gg",
+    "cow_comprehension_invariant_in_condition.gg",
+    "cow_comprehension_invariant_nested.gg",
+    "cow_comprehension_invariant_owned_name.gg",
+    "cow_comprehension_invariant_struct_payload.gg",
+    "cow_comprehension_invariant_vector_source.gg",
+    "cow_loop_invariant_owned_name_push_control.gg",
+    "cow_meta_for_zero_trip_body_kill.gg",
+    "cow_meta_while_false_guard_body_kill.gg",
+    "cow_set_comprehension_invariant_in_condition.gg",
 ];
 
 fn ws_root() -> PathBuf {
@@ -671,5 +754,48 @@ fn corpus_b_all_match() {
     // ⚠ Like the 181 before it, the 188 was never reached: this gate was RED at
     // R48's open on D1's comprehension net, so it had not absorbed those rows
     // either.
-    assert_eq!(fixtures.len(), 190, "B2 gate set drifted from 190 fixtures");
+    // R48 Track D1 (`t0841`, `800cfcc2`): 13 new `cow_*` fixtures landed with the
+    // comprehension back-edge fix. Measured one-by-one against `ggdef run`, not
+    // assumed: 12 are out-of-subset (the comprehension forms, and the
+    // `meta for`/`meta while` pair) and are EXCLUDEd above with citations —
+    // comprehensions `todo/t0003`, the meta forms the same phase-0 boundary.
+    // Only `cow_for_zero_trip_body_kill_control.gg` elaborates and is gated.
+    // Count +13 additions − 12 EXCLUDE = +1 net → 189.
+    // ⛔ AND THE RECURRENCE IS THE LESSON: this gate went RED on main because
+    // corpus membership is glob-minus-exclusions, so every new `cow_*` fixture
+    // is opted IN by default and reddens a lane its own track never ran. That
+    // is `todo/t0801`'s finding, in the round that closed it. D1's gauntlet was
+    // clean; the integration skipped `-p ggdef`, which is a SEPARATE target
+    // `--test integration` never touches. The declared-membership guard that
+    // catches this at add-time is R48 Track E-B3's deliverable.
+    // R48 Track C: 8 `cow_*` fixtures landed with the per-function-body prescan
+    // centralisation — one cell per body-lowering PATH. SIX are EXCLUDEd above,
+    // each row citing the gate that fires (generic `equip` spelling; `item kind
+    // trait`; `expression unsupported`; `item kind other` for the `gg test` and
+    // `gg test --bench` lanes). TWO elaborate and are adjudicated here, and one
+    // of them is load-bearing rather than a formality (Core #13):
+    // `cow_generic_equip_mutator_view_uaf` adjudicates `helloworld` — the answer
+    // the FIXED lanes print, while BOTH pre-fix compilers printed nothing and
+    // exited 139. The definition, not their agreement, is what says the shipped
+    // answer is right. ⚠ Its memory-safety claim is NOT ggdef's to make: ggdef
+    // is structurally blind to the realloc-UAF and would accept it cleanly, so
+    // that half is adjudicated by ASan
+    // (`tests/fixtures/security/cow_generic_equip_mutator_view_uaf.gg` and its
+    // four path siblings).
+    // ⚠ RE-DERIVED ON TOP OF D1's 189, NOT ADDED TO THE 188 THIS TRACK BRANCHED
+    // FROM — D1 landed between the two, and each track's arithmetic starts from
+    // a number the other never saw. ⚠⚠ AND THE B1 SIBLING IS THE SHARPER
+    // WARNING: there, BOTH branches independently computed 138 for DIFFERENT
+    // populations, so "the two numbers agree" would have read as safe and been
+    // wrong. Re-derive from the merged tree; never add.
+    // Arithmetic: 189 + 8 new `cow_*` cells − 2 that live in
+    // `tests/fixtures/self_host_gaps/` and are outside this glob entirely
+    // (`todo/t0922`, `todo/t0923`) − 5 EXCLUDEd above with cited gates = 190.
+    // R48: re-enumerated after merging Track γ onto main. Harvest is glob
+    // minus EXCLUDE, same filter as `gate_fixtures` (cow_/deadwrite_/
+    // combinator_ top-level). D1's 12 EXCLUDEs stay; `cow_for_zero_trip_body_kill_control`
+    // stays IN (NOT excluded); Track γ's `cow_lazy_index_slice_join` stays IN and
+    // MATCH-gated. Main's Track C cells are in the merged tree (six EXCLUDEd, two
+    // adjudicated). Count = 191.
+    assert_eq!(fixtures.len(), 191, "B2 gate set drifted from 191 fixtures");
 }

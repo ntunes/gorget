@@ -3697,43 +3697,60 @@ equip Parser:
 
         return IImport(ImportStmt(module_path, names))
 
+    # `directive <name>[-<part>…] [= <value>]`. The grammar is normative
+    # (`docs/language-reference.md`, "Directives"):
+    #
+    #     directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ]
+    #
+    # — `=` is OPTIONAL, and BOTH the name and the value are IDENTIFIERs.
+    # Twin: Rust gg's `parse_directive` (`src/parser/mod.rs`), whose
+    # `expect_identifier()?` on the name AND on the value is what refuses
+    # `directive 42` and `directive trace=1`, and whose absence of any
+    # space-separated branch is what refuses `directive scheduler single`.
+    #
+    # This function owns the SHAPE only. WHICH names and WHICH `scheduler`
+    # values are legal is the semantic pass's job (`validate_directives` in
+    # resolve.gg) — and it has to be, because `token_ident` returns "" for a
+    # non-identifier, so `directive trace` (accept) and `directive trace=1`
+    # (reject) would otherwise reach it as the same `IDirective("trace", "")`.
     Item parse_directive_item(&self):
         self.expect_kw(KW_DIRECTIVE, "expected 'directive'")
         SpannedToken name_tok = self.advance()
         String name = token_ident(name_tok.lex_token)
-        # Consume hyphenated parts: immutable-by-default → "immutable-by-default"
+        if name == "":
+            self.reject_directive_syntax("expected identifier after `directive`")
+        # Hyphenated names: strip-asserts, hot-reload, implicit-clones.
         while self.check_tok(TOK_MINUS):
             self.advance()
             SpannedToken next = self.advance()
-            name = name + "-" + token_ident(next.lex_token)
-        # Check for test_suite directive
-        if name == "test_suite":
-            self.expect_tok(TOK_COLON, "expected ':' after test_suite")
-            self.skip_trivia()
-            # Look for setup: or teardown:
-            if self.check_tok(TOK_INDENT):
-                self.advance()
-            SpannedToken sub_tok = self.advance()
-            String sub_name = token_ident(sub_tok.lex_token)
-            self.expect_tok(TOK_COLON, "expected ':' after setup/teardown")
-            Vector[Stmt] body = self.parse_block()
-            if sub_name == "setup":
-                return ISuiteSetup(body)
-            return ISuiteTeardown(body)
+            String part = token_ident(next.lex_token)
+            if part == "":
+                self.reject_directive_syntax("expected identifier after `-` in a directive name")
+            name = name + "-" + part
         String value = ""
         if self.match_tok(TOK_EQ):
-            # directive name=value
             SpannedToken val_tok = self.advance()
             value = token_ident(val_tok.lex_token)
-        elif not self.check_tok(TOK_NEWLINE) and not self.at_end():
-            SpannedToken val_tok = self.advance()
-            value = token_ident(val_tok.lex_token)
-            # Consume hyphenated parts of value
-            while self.check_tok(TOK_MINUS):
-                self.advance()
-                SpannedToken next = self.advance()
-                value = value + "-" + token_ident(next.lex_token)
+            if value == "":
+                self.reject_directive_syntax("expected identifier after `=` in `directive " + name + "=`")
+        # Nothing else may sit on the line. A directive value is written
+        # `directive name=value`; the space-separated spelling is not in the
+        # grammar, and accepting it here used to make `directive scheduler single`
+        # SELECT the single-threaded scheduler on this lane while Rust gg
+        # refused the same source.
+        if not self.check_tok(TOK_NEWLINE) and not self.at_end():
+            self.reject_directive_syntax("unexpected token after `directive " + name + "` — a directive value is written `directive " + name + "=<value>`")
         return IDirective(name, value)
+
+    # The reject channel for the directive grammar above. THIS copy has a live
+    # `Vector[Diagnostic]` stream that `driver.gg` drains to stderr, so the
+    # reject is a pushed diagnostic. The typechecker / resolver copies carry a
+    # `Vector[String] errors` accumulator that `parse_source` DISCARDS — the
+    # systemic gap filed as `todo/t0310` — so there the same call renders the
+    # message on stderr and exits 1 instead. Three copies, one call shape at the
+    # three grammar sites; one live channel each.
+    void reject_directive_syntax(&self, String msg):
+        self.diagnostics.push(Diagnostic.error(self.current_span(), DkParseError(), msg))
 
     Item parse_const_item(&self):
         self.expect_kw(KW_CONST, "expected 'const'")

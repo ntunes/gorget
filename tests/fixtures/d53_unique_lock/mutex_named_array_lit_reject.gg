@@ -1,0 +1,9 @@
+# D53 NEG — named Mutex at a container-literal element.
+# CELL: lock=Mutex · position=array-literal · source=named place.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+# RED at 4850bf38: `gg check` ACCEPT, C rc 134.
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Vector[Mutex[int]] all = [m]
+    print(all.len())

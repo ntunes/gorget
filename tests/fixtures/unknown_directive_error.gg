@@ -1,6 +1,0 @@
-@nonexistent
-struct Foo:
-    int x
-
-void main():
-    print("hello")

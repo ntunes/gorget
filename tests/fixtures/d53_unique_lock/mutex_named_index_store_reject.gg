@@ -1,0 +1,11 @@
+# D53 NEG — named Mutex at `v[i] = x` (consume sibling).
+# CELL: lock=Mutex · position=index-store · source=named place.
+# Slot fill is a TEMP (`Mutex[int](0)`), which D53 keeps POS.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Vector[Mutex[int]] all = []
+    all.push(Mutex[int](0))
+    all[0] = m
+    print(all.len())

@@ -1,0 +1,57 @@
+# The SELF-HOST reject pin for `directive scheduler=<unknown mode>`, wired as
+# `sh_rejects_unknown_scheduler_mode` in tests/integration.rs.
+#
+# GRADUATED out of `known_gaps/` (was `sh_unknown_scheduler_mode_overaccepted.gg`,
+# `#[ignore]`d, asserting the intended reject while the self-host over-accepted).
+# It is here rather than merged into `unknown_scheduler_mode_error.gg` because it
+# asserts something that fixture cannot: an ASYNC program whose scheduler choice
+# is observable, so the pin fails loudly if a future change starts accepting the
+# mode again and silently picks a runtime.
+#
+# Rust gg REJECTS this source with `error[E_UnknownDirective]`
+# (`src/semantic/mod.rs`). The self-host now refuses it too, in
+# `validate_directives` (`self_host_typechecker/resolve.gg`, twinned in
+# `self_host_resolver/resolve.gg`).
+#
+# WHAT IT USED TO DO, MEASURED — this is why the reject is not cosmetic. The
+# self-host performed NO directive validation at all, and
+# `self_host_lowerer/lower.gg`'s scheduler arm has no `else`, so the value was
+# discarded and the module kept `new_lir_module`'s POOL default. Emit + cc + run
+# of THIS program, rc 0 at every stage, against the same program with
+# `scheduler=single`:
+#   scheduler=bogus   -> `// ── Scheduler: Pool (M:N thread pool …) ──`
+#                        worker runs | after sleep | 1 | 1
+#   scheduler=single  -> `// ── Scheduler: Single (N:1 cooperative loop) ──`
+#                        after sleep | 0 | worker runs | 1
+# A typo in the mode silently changed an async program's interleaving — Core #10
+# lower-or-reject in its exact forbidden shape, on the lane the succession plan
+# makes the reference.
+#
+# ⚠ THE PARITY GATE CANNOT SEE THIS CLASS. `self_host_runtime_diff` classifies a
+# Rust-rejected program as RustRejected and returns BEFORE the self-host is
+# invoked, so a self-host over-acceptance of a Rust-rejected program is
+# structurally invisible to it (filed as `todo/t0870`). That is why the pin is an
+# explicit self-host assertion and not a parity row.
+#
+# ⚠ The `sleep` here is deliberate: it is what makes the two schedulers
+# distinguishable on stdout. That `sleep` is not a scheduling point under
+# `single` is a SEPARATE filed gap (todo/t0822) and does not affect this one —
+# either way the two modes differ, which is the property under test.
+
+directive scheduler=bogus
+
+from std.time import sleep
+
+async void worker(int &counter):
+    print("worker runs")
+    counter = counter + 1
+
+async void main():
+    shared int x = 0
+    Task[void] t = spawn worker(&x)
+    sleep(0.1)
+    print("after sleep")
+    with x:
+        print(x)
+    t.await()
+    print(x)

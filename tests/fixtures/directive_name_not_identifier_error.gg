@@ -1,0 +1,24 @@
+# Test: a directive NAME must be an IDENTIFIER — `directive 42` is refused.
+#
+# The NAME half of the same grammar rule `directive_value_int_error.gg` pins on
+# the VALUE half:
+#
+#     directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ]
+#
+# Rust gg refuses it at parse time (`expected identifier, found integer 42`).
+# Before this round the self-host ACCEPTED it and emitted `int main(` — measured
+# — because `token_ident` returns "" for an integer token and the empty name then
+# flowed into an AST nobody validated.
+#
+# ⚠ This cell is NOT in the divergence matrix `todo/t0825` was filed with; it was
+# found by re-running that matrix's grammar axis with the name slot varied
+# instead of the value slot. It and `directive_trailing_token_error.gg` are the
+# 14th and 15th divergent cells.
+#
+# Pinned on BOTH lanes: `directive_name_not_identifier_error` (Rust gg) and
+# `sh_rejects_directive_name_not_identifier` (self-host driver).
+
+directive 42
+
+void main():
+    print("REACHED — the directive name was NOT validated on this lane")

@@ -52,6 +52,8 @@ invariant. The invariants Gorget tracks, and where they live as typed fields:
 | View-vs-fresh result of a builtin | `BuiltinMethodDecl.returns_view` / `.returns_fresh`, `src/ir/lowering/builtins.rs:71,79` |
 | Box inner type for drop/alloc codegen | `StructDef.box_inner_type: Option<String>`, `src/lir/mod.rs:1541` |
 | Receiver convention (by-ptr vs by-value) | `BuiltinMethodDecl.self_conv: SelfConvention`, `src/ir/lowering/builtins.rs:65` |
+| Borrow-vs-value provenance of a `Ptr`-represented operand | the GIR type itself — `GirType::Ptr` / `MutPtr` *is* the borrow, `src/ir/types.rs` |
+| Whether a type's `clone_fn` is a by-value incref or a deep copy | `TypeMetadata.clone_fn` + `copy_semantics`, read through `TypeRegistry::is_refcount_clone_type`, `src/ir/types.rs` |
 | Why a compiler-inserted clone happened | `Instruction::Call.reason: Option<ImplicitCloneReason>`, `src/ir/instructions.rs` (GIR-only — see below) |
 
 `Local.ownership` is explicit about *not* defaulting: the `LocalOwnership::Untracked`
@@ -207,6 +209,55 @@ fires and the whole read-site fix is never-taken code. The same `self_conv` flag
 drives `runtime_callees.self_by_ptr` — one source of truth, read everywhere the
 receiver convention matters. (Full case study: the contributor playbook,
 [Ch. 29](29-contributor-playbook.md).)
+
+### One representation, two provenances (Rules 1 & 2)
+
+The concurrency handles — `Shared[T]`, `Weak[T]`, `Mutex[T]`, `Channel[T]` and
+their neighbours — are C typedefs to `Gorget<Family>*`. The pointer *is* the
+value. Their LIR type is therefore `LirType::Ptr`, which makes them, at the
+level of representation, indistinguishable from a pointer that *points at*
+something: a borrow, a slot address, an out-parameter. Representation answers
+"how many bytes and shaped how"; it does not answer "is this the thing or the
+way to reach the thing". That second question is **provenance**, and it is a
+semantic invariant, so by Rule 1 it has to survive every layer that carries the
+value.
+
+Three consumers need the answer, and each needs a *different* one:
+
+- The argument marshalling at a parameter tagged `AbiKind::VoidElem` — every
+  collection consuming position, `push` / `insert` / `set` / index-assign /
+  container literal / map put — must be handed the **address of** the element,
+  because the runtime memcpys `elem_size` bytes *from* that pointer. An
+  aggregate already lowers to its slot address and a scalar is wrapped in a
+  compound literal, so a handle is the one shape whose `Ptr` needs an
+  address-of.
+- The method-receiver marshalling must hand a `ByValue` callee the handle
+  **itself**, so a borrow of a handle — the element view `.get(i)` returns, a
+  `Ref[Shared[T]]` field — needs a load, in the opposite direction.
+- The collection-element read hands the element pointer to the element type's
+  `clone_fn`. A deep clone wants exactly that pointer; a *refcount* handle's
+  `clone_fn` is the by-value incref, so it wants a load first.
+
+Ask the representation and you get one answer for all three, which is why two
+of them were wrong: a handle stored by value where an address belonged put the
+refcount control block's first word into the element slot, and a slot address
+passed to a by-value accessor dereferenced one level short.
+
+The provenance is available at each site, and never in the name. Borrow-vs-value
+lives in the GIR type — `GirType::Ptr` / `MutPtr` *is* the borrow, and anything
+else whose representation is `Ptr` is a value. The receiver convention lives on
+`BuiltinMethodDecl.self_conv`, read through `is_by_value_receiver`. Whether a
+`clone_fn` is a by-value incref or a deep copy lives on `TypeMetadata`, written
+by the single writer `set_refcount_clone_fn` and read through
+`is_refcount_clone_type`. Each consumer reads the channel that answers *its*
+question, at the layer where the fact is still typed.
+
+Two properties of the fix follow from the layer it sits at rather than from the
+fix itself. It lands in LIR lowering and in GIR method lowering, so both
+backends inherit it — a repair in the C emitter's `AbiKind` marshalling could
+not have reached the LLVM backend, which never sees an `AbiKind`. And it lands
+at the shared dispatcher rather than at `push`, so every sibling consuming
+position arrives already correct.
 
 ### Box inner-type metadata (Rules 2 & 4)
 

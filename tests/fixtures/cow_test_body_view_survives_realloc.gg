@@ -1,0 +1,57 @@
+# CoW view-materialization on the MODULE-LOOP body-lowering paths.
+#
+# AXIS CELLS — `suite setup`, `suite teardown` and `test` bodies
+# (`lower_test_items`, src/ir/lowering/mod.rs). Three of eleven
+# function-body-lowering paths. These four module-loop paths (bench is the
+# fourth, in `cow_bench_body_view_survives_realloc.gg`) had a HAND-COPIED SUBSET
+# of the per-function prescans — liveness only — so `cow_reassigned_after` was
+# empty, the element view stayed a lazy borrow, and the 64 pushes reallocated it
+# away. `gg build` never lowers these bodies, so only the `gg test` lane
+# exercises them: this fixture is wired through `run_gg_test`.
+#
+# THE REALLOC IS LOAD-BEARING (64 pushes), and the payload is heap-FORCED via
+# `mk` so ASan reports a legible heap-use-after-free, not a bare SIGSEGV.
+#
+# RED-VERIFIED against the pre-fix compiler: `gg test` died with SIGSEGV mid-run
+# (`terminated by SIGSEGV (signal 11)`), so no assertion was even reached.
+String mk(String a, String b):
+    return a + b
+
+String survives_realloc():
+    Vector[String] v = [mk("hello", "world")]
+    String s = v.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+        i = i + 1
+    return s
+
+suite setup:
+    Vector[String] v = [mk("hello", "world")]
+    String s = v.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+        i = i + 1
+    print("SETUP " + s)
+
+suite teardown:
+    Vector[String] v = [mk("hello", "world")]
+    String s = v.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+        i = i + 1
+    print("TEARDOWN " + s)
+
+test "view bound in a test body survives a realloc":
+    Vector[String] v = [mk("hello", "world")]
+    String s = v.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+        i = i + 1
+    assert s == "helloworld"
+
+test "the same shape behind a plain function call still works":
+    assert survives_realloc() == "helloworld"

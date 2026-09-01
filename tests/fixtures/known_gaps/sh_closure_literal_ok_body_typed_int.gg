@@ -1,0 +1,46 @@
+# KNOWN GAP, SELF-HOST lane — a closure LITERAL whose body the self-host's
+# `guess_return_type` cannot type falls through to `I64_TYPE`, and the closure
+# is then emitted `int64_t`-returning whatever it actually returns.
+#
+# TWO ARMS, one helper (`self_host_lowerer/lower_closures.gg::guess_return_type`):
+#   (a) `Ok(...)` / `Error(...)` body with no `expected_type` in scope — the
+#       `Some(x)` sibling arm MINTS `Option__U` from the payload, but the
+#       Result constructors are gated on `expected_type` being a Result, which
+#       is `-1` at a closure-argument site. Result of the miss: `int64_t`.
+#   (b) a body that is a bare PARAMETER identifier — `(String e): e`. The
+#       EIdentifier arm consults `fn_sigs` only; the self-host does not
+#       temporarily register closure params as locals the way Rust gg's
+#       `lower_closure` does ("Tier 1c"), so the param is invisible.
+#
+# Both surface as `error: incompatible types when returning type 'Str' but
+# 'int64_t' {aka 'long int'} was expected` in the self-host's emitted C.
+# Rust gg compiles and runs both spellings correctly, so this is a self-host
+# lag, not a language question.
+#
+# DISCRIMINATE FROM `t0230` (b), which is the same helper's OTHER
+# fall-through: a closure whose body's last statement is `SMatch`/`SIf` returns
+# UNIT, not I64. Same helper, different arms, different wrong answer.
+#
+# NOT `t0770`: that class is about reading an ERASED `Callable` PARAMETER's
+# declared return type, and its self-host reader
+# (`combinator_closure_ret_type`) is fixed. This one is about a closure
+# LITERAL's own body, where nothing is erased — the inference has no arm.
+#
+# INTENDED, on the self-host lane: prints `hello?` then `bad`, rc 0 — matching
+# Rust gg, which already does.
+
+String mk(String a, String b):
+    return a + b
+
+String result_and_then(Callable[Result[String, String](String)] f):
+    Result[String, String] o = Ok(mk("hel", "lo"))
+    Result[String, String] r = o.and_then(f)
+    return r.unwrap()
+
+String identity_closure():
+    Result[String, String] o = Error(mk("b", "ad"))
+    return o.unwrap_or_else((String e): e)
+
+void main():
+    print(result_and_then((String s): Ok(mk(s, "?"))))
+    print(identity_closure())

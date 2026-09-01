@@ -1,0 +1,83 @@
+from std.conv import int_to_str
+
+# CROSS-TYPE half of the erased-`Callable`-parameter combinator net; the
+# same-type half is `combinator_callable_param_same_type.gg`.
+#
+# THE AXIS THIS FILE EXISTS FOR. On every same-type cell the callable's return
+# type EQUALS the receiver's payload type, so a wrong `I64` answer merely
+# mis-SIZES a slot and the mistake coincides with the truth in shape. Here the
+# two differ, and one whole reader is visible ONLY here: `extract_fn_return_type`
+# (`src/semantic/typecheck.rs`) matched `ResolvedType::Function` on the
+# UNRESOLVED id, so the `CallableTrait` wrapper a `Callable[U(T)]` PARAMETER
+# resolves to returned `None` and the combinator arm bailed out entirely.
+#
+# AXIS CELLS SAMPLED — (arm x receiver x cross-type):
+#   Option.map (String -> int) · Option.and_then (String -> Option[int]) ·
+#   Option.flat_map (String -> Option[int]) · Result.map (String -> int)
+#
+# MEASURED PRE-FIX at base `3b8a5561`, C AND LLVM alike: every cell is
+# `error[E_TypeMismatch]: type mismatch: expected 'int', found 'String'` — a
+# CLEAN check-time rejection of a program ggdef accepts and runs. That is why
+# the semantic un-gating must land AFTER the GIR readers and never before: on
+# its own it would replace a clean rejection with silent garbage.
+#
+# CELLS DELIBERATELY ABSENT, each with its reason:
+#   * `Result.and_then` / `Result.or_else` cross-type — the callable returns the
+#     FULL `Result[U, E]` and the receiver's `E` must survive, so those are
+#     `and_then`'s own axis; the same-type fixture pins their arms.
+#   * `Result.map_err` cross-type — check-rejected both BEFORE and AFTER this
+#     fix, on a separate axis this change does not touch.
+#   * `Vector[T].map` / `Vector[T].flat_map` with a Callable PARAM — the arm
+#     DECLINES the shape on purpose (`t0878`): its monomorph is never minted,
+#     and un-gating it produces `undefined reference` on C and rc 0 printing
+#     GARBAGE on LLVM. A silent miscompile is strictly worse than the rejection
+#     it replaces, so those two arms keep rejecting until the monomorph exists.
+#     `known_gaps/vector_map_callable_param_no_monomorph.gg` asserts the
+#     intended output. `Iterator.map` needs no such gate — measured on
+#     `v.iter().map(f).collect()[0]` with `f: Callable[int(int)]`: PRE C and
+#     LLVM `BUILD_RC=101`, panic at `src/ir/lowering/exprs/methods.rs:4417`
+#     (`typecheck must reject non-indexable receivers before lowering
+#     (E_NotIndexable)`); POST prints `12`. Pin:
+#     `iterator_map_callable_param/collect_index.gg`. Not an `undefined
+#     reference`.
+
+String mk(String a, String b):
+    return a + b
+
+int strlen_of(String s):
+    return s.len()
+
+int strlen_plus2(String s):
+    return s.len() + 2
+
+Option[int] some_len_plus1(String s):
+    return Some(s.len() + 1)
+
+Option[int] some_len_plus3(String s):
+    return Some(s.len() + 3)
+
+int opt_map_cross(Callable[int(String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    Option[int] r = o.map(f)
+    return r.unwrap()
+
+int opt_and_then_cross(Callable[Option[int](String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    Option[int] r = o.and_then(f)
+    return r.unwrap()
+
+int opt_flat_map_cross(Callable[Option[int](String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    Option[int] r = o.flat_map(f)
+    return r.unwrap()
+
+int res_map_cross(Callable[int(String)] f):
+    Result[String, String] o = Ok(mk("hel", "lo"))
+    Result[int, String] r = o.map(f)
+    return r.unwrap()
+
+void main():
+    print(int_to_str(opt_map_cross(strlen_of)))
+    print(int_to_str(opt_and_then_cross(some_len_plus1)))
+    print(int_to_str(opt_flat_map_cross(some_len_plus3)))
+    print(int_to_str(res_map_cross(strlen_plus2)))

@@ -1,0 +1,37 @@
+# REGRESSION (was todo/t0840): the PAYLOAD-TYPE axis. The handle is
+# pointer-sized whatever it points at, so the marshalling defect was
+# payload-independent — and so is the repair. These two cells prove it for a
+# heap payload (`String`) and an aggregate payload (a struct); the `int` cell
+# is `shared_vector_of_clones_push_marshalling.gg`.
+#
+# ⚠ The `String` payload is built from a CONCATENATION, not a literal:
+# `Shared[String]("literal")` hits a SEPARATE, still-open C-emit defect — the
+# `Str` ctor argument is marshalled as `const char*` — pinned by
+# `shared_string_literal_ctor_cc_fail.gg`.
+#
+# CELL: container=Vector · handle=Shared · payload={String, struct} ·
+#       producing-arm=push · read=`.get(i).unwrap().get()`.
+
+struct Point:
+    int x
+    int y
+
+void main():
+    String base = "hi"
+    String joined = base + "!"
+    Shared[String] s = Shared[String](joined)
+    Vector[Shared[String]] strs = []
+    strs.push(s.clone())
+    strs.push(s.clone())
+    print(f"{strs.len()}")
+    print(f"{strs.get(0).unwrap().get()}")
+    print(f"{s.strong_count()}")
+
+    Point p = Point(3, 4)
+    Shared[Point] sp = Shared[Point](p)
+    Vector[Shared[Point]] pts = []
+    pts.push(sp.clone())
+    pts.push(sp.clone())
+    print(f"{pts.len()}")
+    Point q = pts.get(1).unwrap().get()
+    print(f"{q.x}")

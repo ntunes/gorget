@@ -1478,20 +1478,34 @@ impl<'a> FuncLowering<'a> {
         true
     }
 
-    /// Wrap closure args only at parameter positions that take an element by
-    /// pointer (`AbiKind::VoidElem` — collection storage like `gorget_array_push`,
-    /// `gorget_map_put`). The runtime memcpys `elem_size` bytes from the arg
-    /// pointer into the slot, so for `Vector[Callable].push(closure)` the arg
-    /// must already point at a packed `GorgetClosure` (16 bytes) rather than
-    /// the source `__Closure_N` env struct. Other ABIs (struct-by-value,
-    /// scalar, etc.) leave the arg untouched — combinators like `Result.map_err`
-    /// take the closure as a struct value through their lowered wrapper, and
-    /// wrapping there would replace the struct with a pointer and break the
-    /// call.
+    /// Marshal args at parameter positions that take an element BY POINTER
+    /// (`AbiKind::VoidElem` — collection storage like `gorget_array_push`,
+    /// `gorget_map_put`). The runtime memcpys `elem_size` bytes FROM the arg
+    /// pointer into the slot, so the argument must be the ADDRESS OF the
+    /// element, never the element itself.
     ///
-    /// Picking the wrap site by parameter ABI rather than callee name avoids a
+    /// Two shapes arrive here NOT already satisfying that, and each gets its
+    /// own repair:
+    ///
+    /// 1. **A closure.** For `Vector[Callable].push(closure)` the arg must
+    ///    point at a packed `GorgetClosure` (16 bytes) rather than the source
+    ///    `__Closure_N` env struct — see [`Self::wrap_single_closure_arg`].
+    /// 2. **A pointer-REPRESENTED handle value** (`Shared[T]`, `Weak[T]`,
+    ///    `Mutex[T]`, …) — see [`Self::spill_handle_value_at_void_elem`].
+    ///
+    /// Everything else already holds: an aggregate local lowers to its slot
+    /// ADDRESS (`lower_place_load`), and a scalar is wrapped in a compound
+    /// literal by the backends. Other ABIs (struct-by-value, scalar, etc.)
+    /// leave the arg untouched — combinators like `Result.map_err` take the
+    /// closure as a struct value through their lowered wrapper, and wrapping
+    /// there would replace the struct with a pointer and break the call.
+    ///
+    /// Picking the site by parameter ABI rather than callee name avoids a
     /// brittle allow-list of "is this a collection-storage method"; new
-    /// runtimes that adopt the `VoidElem` ABI participate automatically.
+    /// runtimes that adopt the `VoidElem` ABI participate automatically. It
+    /// also puts the repair in LIR lowering, shared by BOTH backends — the C
+    /// emitter's `AbiKind::VoidElem` arm cannot fix this class alone, because
+    /// the LLVM backend never sees an `AbiKind`.
     pub(super) fn wrap_closure_args_at_void_elem(
         &mut self,
         gir_args: &[Operand],
@@ -1503,8 +1517,79 @@ impl<'a> FuncLowering<'a> {
         for (i, abi) in param_abis.iter().enumerate() {
             if i >= gir_args.len() || i >= lir_args.len() { break; }
             if !matches!(abi, AbiKind::VoidElem) { continue; }
+            let before = lir_args[i];
             self.wrap_single_closure_arg(i, &gir_args[i], lir_args, bb);
+            // Disjoint by construction — a closure is never a handle — but
+            // read back rather than re-deriving "was it a closure": the
+            // closure wrapper owns that question and answers it by
+            // REPLACING the arg.
+            if lir_args[i] == before {
+                self.spill_handle_value_at_void_elem(i, &gir_args[i], lir_args, bb);
+            }
         }
+    }
+
+    /// Spill a pointer-REPRESENTED handle VALUE into a stack slot at a
+    /// `VoidElem` position and pass the slot's ADDRESS.
+    ///
+    /// `Shared[T]`, `Weak[T]`, `Mutex[T]`, `RWLock[T]`, `AtomicInt`, `Thread`
+    /// and friends are C typedefs to `Gorget<Family>*`: the pointer IS the
+    /// element's value. Their LIR representation is therefore `LirType::Ptr`,
+    /// which at a `VoidElem` position is indistinguishable BY REPRESENTATION
+    /// from an address-of-element — and the backends, asking only
+    /// `is_ptr`, passed the handle straight through. The runtime then memcpy'd
+    /// 8 bytes out of the CONTROL BLOCK (the refcount) into the element slot,
+    /// and every later read of that element was reading a refcount as a
+    /// handle (`t0840`: `Vector[Shared[int]]` segfaulted on both backends).
+    ///
+    /// The discriminator is PROVENANCE, which lives in the GIR type, not in
+    /// the LIR representation (layering rule 2): `GirType::Ptr` / `MutPtr` is
+    /// a BORROW and already an address — `v.push(other.get(0).unwrap())` must
+    /// pass it through — while any other GIR type whose representation is
+    /// `Ptr` is a VALUE and needs its address taken. Same question, same
+    /// answer as `key_already_ptr` in the Dict `get_or` lowering
+    /// (`insts.rs`), which asks the GIR type for exactly this reason.
+    ///
+    /// ⚠ The repair here is an `AddressOf`; the READ side of the same class
+    /// (`Shared[T].get()` on an element VIEW) needs the OPPOSITE repair, a
+    /// load — see `deref_by_value_handle_receiver` in
+    /// `ir/lowering/exprs/methods.rs`. Neither greens the fixture alone.
+    fn spill_handle_value_at_void_elem(
+        &mut self,
+        i: usize,
+        gir_arg: &Operand,
+        lir_args: &mut [ValueId],
+        bb: BlockId,
+    ) {
+        let place = match gir_arg {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            Operand::Constant(_) => return,
+        };
+        if (place.local.0 as usize) >= self.gir_func.locals.len() { return; }
+        // The value the operand lowered to must be a bare pointer. Read the
+        // same source `lower_place_load` did, so this cannot disagree with it.
+        let lowered_ty = if place.projections.is_empty() {
+            let slot = self.local_to_slot[place.local.0 as usize];
+            self.lir_func.slots[slot.0 as usize].ty.clone()
+        } else {
+            self.resolve_place_type(place)
+        };
+        if lowered_ty != LirType::Ptr { return; }
+        // …and its GIR type must NOT be a borrow.
+        let gir_ty = self.effective_place_type(place);
+        if matches!(
+            self.gir_types.get(gir_ty),
+            Some(GirType::Ptr(_)) | Some(GirType::MutPtr(_))
+        ) {
+            return;
+        }
+        let addr = self.lir_func.next_value();
+        self.push_inst(bb, Inst::AddressOf {
+            dst: addr,
+            value: lir_args[i],
+            ty: LirType::Ptr,
+        });
+        lir_args[i] = addr;
     }
 
     /// Wrap one argument if it's a closure (`__Closure_N` local or `FuncRef`).

@@ -1797,13 +1797,40 @@ impl<'a> FuncLowering<'a> {
                 clone_fn_name
             };
             let ret_ty = elem_ty.clone();
-            self.ensure_extern(&actual_fn, &[LirType::Ptr], &ret_ty);
+            // The element pointer `gorget_array_get` / `gorget_map_get` returned
+            // is what a DEEP clone (`gorget_string_clone_to_owned`,
+            // `gorget_array_clone`, `{Struct}__clone`) wants — those read
+            // THROUGH a `const T*`. A REFCOUNT-handle element is the exception:
+            // its `clone_fn` is the by-VALUE incref
+            // (`TypeMetadata::set_refcount_clone_fn`, the single writer for that
+            // axis), so the element must be LOADED out of the slot first.
+            // Passing the slot address made `Shared__T__clone` incref whatever
+            // the SLOT ADDRESS pointed at (t0840: `v[i].get()` / `for h in v`
+            // both SEGV'd on both backends).
+            //
+            // `is_refcount_clone_type_name` is the same typed predicate
+            // `clone_fn_for_collection_element` reads the symbol from — one
+            // question, one accessor, no name-shape probe here.
+            let clone_takes_value = self.gir_types.is_refcount_clone_type_name(elem_type_name);
+            let clone_arg = if clone_takes_value {
+                let loaded = self.lir_func.next_value();
+                self.push_inst(bb, Inst::Load {
+                    dst: loaded,
+                    ptr: ptr_val,
+                    ty: elem_ty.clone(),
+                });
+                self.ensure_extern(&actual_fn, &[elem_ty.clone()], &ret_ty);
+                loaded
+            } else {
+                self.ensure_extern(&actual_fn, &[LirType::Ptr], &ret_ty);
+                ptr_val
+            };
             let abis = self.lookup_arg_abis(&actual_fn);
             let result = self.lir_func.next_value();
             self.push_inst(bb, Inst::CallExtern {
                 dst: Some(result),
                 name: actual_fn,
-                args: vec![ptr_val],
+                args: vec![clone_arg],
                 arg_abis: abis,
             });
             self.store_to_local(dst, result, bb);
