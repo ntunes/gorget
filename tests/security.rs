@@ -3048,39 +3048,51 @@ fn shared_vector_of_clones_push_marshalling_asan() {
 
 #[test]
 fn mutex_vector_single_owner_move_asan() {
-    // DEAD source: the collection takes the one owner and drops it once.
-    security_safe_no_leak("mutex_vector_single_owner_move", "1\n5");
+    security_rejected("mutex_vector_single_owner_move", "E_MoveWithoutOperator");
 }
 
 #[test]
 fn rwlock_vector_single_owner_move_asan() {
-    security_safe_no_leak("rwlock_vector_single_owner_move", "1\n5");
+    security_rejected("rwlock_vector_single_owner_move", "E_MoveWithoutOperator");
 }
 
-/// LIVE source -- the value of the axis the read-back-through-the-collection
-/// cells cannot reach, and the one the output-review caught. `Mutex`/`RWLock`
-/// have no clone path, so once the element slot really held the handle the
-/// local and the slot both dropped it: rc 134 `double free detected in tcache
-/// 2` on both backends, `heap-use-after-free` here. The single owner now
-/// transfers unconditionally and the source degrades to a borrow.
 #[test]
 fn mutex_vector_live_source_single_owner_asan() {
-    security_safe_no_leak("mutex_vector_live_source_single_owner", "1\n5");
+    security_rejected("mutex_vector_live_source_single_owner", "E_MoveWithoutOperator");
 }
 
 #[test]
 fn rwlock_vector_live_source_single_owner_asan() {
-    security_safe_no_leak("rwlock_vector_live_source_single_owner", "1\n5");
+    security_rejected("rwlock_vector_live_source_single_owner", "E_MoveWithoutOperator");
 }
 
-/// KNOWN GAP (`todo/t0908`) on the SANITIZER lane — a regression this round
-/// introduced and could not close without an owner call. One single-owner
-/// handle in TWO element slots: `heap-use-after-free` in `gorget_mutex_free`,
-/// because `elem_drop` is per-ARRAY and every slot holding the handle drops it.
 #[test]
-#[ignore = "known gap (todo/t0908): one single-owner handle in TWO element slots double-frees; needs the carve-out owner call"]
-fn known_gap_mutex_vector_two_slots_double_free_asan() {
-    security_safe_no_leak("mutex_vector_two_slots_double_free", "2");
+fn mutex_vector_two_slots_named_push_reject_asan() {
+    security_rejected("mutex_vector_two_slots_double_free", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn rwlock_vector_nslot_named_push_reject_asan() {
+    security_rejected("rwlock_nslot_named_push_reject", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn mutex_vector_d53_class_pin_guard_push_reject_asan() {
+    security_rejected("guard_named_push_reject", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn mutex_vector_d53_pos_temp_caret_nonconsuming_asan() {
+    // `mutex_temp_push` is the legal D53 spelling; its 136B Mutex-ctor leak is
+    // the pre-existing `todo/t0623` lock-object leak (`mutex_basic` same size),
+    // not a consume-position defect — pin it with `security_safe` (UAF-visible)
+    // rather than `no_leak`.
+    security_safe("mutex_temp_push", "1\n0");
+    security_safe_no_leak("rwlock_temp_push", "1\n0");
+    security_safe_no_leak("mutex_caret_push", "1\n5");
+    security_safe_no_leak("rwlock_caret_push", "1\n5");
+    security_safe_no_leak("mutex_nonconsuming_call", "5\n5");
+    security_safe_no_leak("rwlock_nonconsuming_call", "5\n5");
 }
 
 /// Refcount arithmetic: five releases against four retains printed the right

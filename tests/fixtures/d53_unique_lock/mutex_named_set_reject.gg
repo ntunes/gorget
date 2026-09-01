@@ -1,0 +1,9 @@
+# D53 NEG — named Mutex at Dict.set (consume sibling).
+# CELL: lock=Mutex · position=set · source=named place.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Dict[int, Mutex[int]] d = {}
+    d.set(1, m)
+    print(d.len())

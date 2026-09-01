@@ -1,0 +1,12 @@
+# D53 NEG — two collections, one named unique lock.
+# CELL: lock=Mutex · position=push · collections=2 · source=named place.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+# RED at 4850bf38: `gg check` ACCEPT, C/LLVM rc 134.
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Vector[Mutex[int]] a = []
+    Vector[Mutex[int]] b = []
+    a.push(m)
+    b.push(m)
+    print(f"{a.len()}")

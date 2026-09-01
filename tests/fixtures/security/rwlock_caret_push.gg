@@ -1,13 +1,12 @@
-# D53 NEG — named RWLock place at a consuming position (dead-source cell).
-# CELL: lock=RWLock · position=push · source=named place (last use).
+# D53 POS — explicit `^source` at a consuming position.
+# CELL: lock=RWLock · position=push · source=`^r`.
 # ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
-# RED at 4850bf38: `gg check` ACCEPT, C/LLVM printed `1\n5`.
 
 from std.sync import RWLock
 
 void main():
     RWLock[int] r = RWLock[int](5)
     Vector[RWLock[int]] all = []
-    all.push(r)
+    all.push(^r)
     print(f"{all.len()}")
     print(f"{all.get(0).unwrap().read().get()}")

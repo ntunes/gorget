@@ -1,22 +1,7 @@
-# REGRESSION (was todo/t0840, R48 Track D2): the SECOND value of the
-# single-owner-handle axis.
-#
-# `is_single_owner_handle_local` — by-value receiver AND needs-drop AND not a
-# refcount handle — has exactly TWO members at HEAD, `Mutex[T]` and
-# `RWLock[T]`. Its Mutex cell is `mutex_vector_single_owner_move.gg`; this is
-# the other one, so the axis is covered rather than sampled. (Every other
-# by-value handle is excluded for a stated reason: `Shared`/`Weak`/`Channel`
-# have a refcount clone path, `Thread` and `TaskGroup` carry `Resource`
-# copy-semantics and were already covered by `is_resource_type`, and
-# `AtomicInt`/`AtomicBool`/`Barrier`/`WaitGroup`/`Semaphore`/`OnceFlag` have no
-# drop at all, so nothing can double-free.)
-#
-# Pre-fix, the read below is rc 139 on C and LLVM: the push stored the handle
-# VALUE where the runtime memcpys FROM an address, so the element slot held the
-# first word of the pthread rwlock rather than the handle.
-#
-# CELL: container=Vector · handle=RWLock · payload=int · producing-arm=push ·
-#       read=`.get(i).unwrap().read().get()`.
+# D53 NEG — named RWLock place at a consuming position (dead-source cell).
+# CELL: lock=RWLock · position=push · source=named place (last use).
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+# RED at 4850bf38: `gg check` ACCEPT, C/LLVM printed `1\n5`.
 
 from std.sync import RWLock
 

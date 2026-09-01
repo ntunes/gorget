@@ -1,18 +1,7 @@
-# REGRESSION (R48 Track D2 output-review): the LIVE half of the source axis,
-# for the OTHER member of `is_single_owner_handle_local`'s set.
-#
-# The set has exactly two members at HEAD, `Mutex[T]` and `RWLock[T]`, so
-# pinning only one of them would sample one value of a two-value axis. Its
-# Mutex twin is `mutex_vector_live_source_single_owner.gg` and carries the full
-# mechanism note.
-#
-# ⚠ GREEN at the t0840 base blob (3b8a5561); RED at 93621491 — rc 134
-# `free(): double free detected in tcache 2` on C AND LLVM, rc 99
-# `heap-use-after-free` under `--sanitize`. A regression pin, not a gap
-# graduation.
-#
-# CELL: container=Vector · handle=RWLock · payload=int · producing-arm=push ·
-#       source=LIVE past the call · read=through the SOURCE, not the collection.
+# D53 NEG — named RWLock place at a consuming position (live-source cell).
+# CELL: lock=RWLock · position=push · source=named place LIVE past the call.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+# RED at 4850bf38: `gg check` ACCEPT, C/LLVM printed `1\n5`.
 
 from std.sync import RWLock
 

@@ -828,10 +828,10 @@ void check_local_borrow_bind(SpannedExpr init, ResolveContext &ctx):
 
 # Recurse a resolved type: is it drop-tainted? Mirrors Rust
 # `is_drop_tainted_type` (src/semantic/mod.rs:486-514) EXACTLY. Borrows
-# (RTRef) are NOT copies. The Channel/Shared/Weak/Mutex generic handles are
-# the sanctioned multi-owner escape hatch (name-matched inherited debt,
-# filed with the Rust side in TODO:243). The self-host `ResolvedType` has no
-# `RTOwned` variant, so Rust's `Owned(inner) => recurse` arm has no analogue.
+# (RTRef) are NOT copies. Channel/Shared/Weak are the sanctioned multi-owner
+# hatch; Mutex is a unique lock (D53) but still un-drop-tainted by its payload.
+# The self-host `ResolvedType` has no `RTOwned` variant, so Rust's
+# `Owned(inner) => recurse` arm has no analogue.
 bool is_drop_tainted_type(int type_id, ScopeTable scopes, TypeTable types):
     if type_id < 0 or type_id >= types.types.len():
         return false
@@ -1076,9 +1076,10 @@ void reject_tainted_place(SpannedExpr e, ScopeTable scopes, TypeTable &types, Re
 # double-diagnosis.
 
 # Is a resolved type single-owner-by-design (carve-out)? Callables (closures) +
-# Box/Task/TaskGroup/Guard. NOT drop-tainted types — that axis is
-# `reject_tainted_place`'s. Mirrors `needs_explicit_move` within the self-host
-# `ResolvedType` vocabulary (no RTOwned variant exists — types.gg).
+# Box/Task/TaskGroup/Guard/Mutex/RWLock (D53 unique locks). NOT drop-tainted
+# types — that axis is `reject_tainted_place`'s. Mirrors `needs_explicit_move`
+# within the self-host `ResolvedType` vocabulary (no RTOwned variant exists —
+# types.gg).
 bool is_single_owner_type(int type_id, ScopeTable scopes, TypeTable types):
     if type_id < 0 or type_id >= types.types.len():
         return false
@@ -1098,9 +1099,37 @@ bool is_single_owner_type(int type_id, ScopeTable scopes, TypeTable types):
             return true
         case RTGeneric(def_id, _args):
             String n = scopes.get_def(def_id).name
-            return n == "Box" or n == "Task" or n == "TaskGroup" or n == "Guard"
+            return n == "Box" or n == "Task" or n == "TaskGroup" or n == "Guard" or n == "Mutex" or n == "RWLock"
         else:
             return false
+
+# D53 unique-lock accessor — declaration name of the generic, not a consumer-side prefix.
+bool is_unique_lock_type(int type_id, ScopeTable scopes, TypeTable types):
+    if type_id < 0 or type_id >= types.types.len():
+        return false
+    ResolvedType rt = get_rtype_at(types.types, type_id)
+    match rt:
+        case RTGeneric(def_id, _args):
+            String n = scopes.get_def(def_id).name
+            return n == "Mutex" or n == "RWLock"
+        else:
+            return false
+
+String unique_lock_wrap(int type_id, ScopeTable scopes, TypeTable types):
+    if type_id < 0 or type_id >= types.types.len():
+        return "Shared[Mutex[T]]"
+    ResolvedType rt = get_rtype_at(types.types, type_id)
+    match rt:
+        case RTGeneric(def_id, _args):
+            if scopes.get_def(def_id).name == "RWLock":
+                return "Shared[RWLock[T]]"
+            return "Shared[Mutex[T]]"
+        else:
+            return "Shared[Mutex[T]]"
+
+# D53 unique-lock diagnostic: `^source` or Shared[Mutex[T]], never `.clone()`.
+String unique_lock_message(String name, String wrap):
+    return f"cannot copy `{name}`: `{name}` is a unique lock — write `^{name}` to move or wrap in `{wrap}` to share"
 
 # The single-owner INIT-class reject message (mirrors Rust MoveWithoutOperator +
 # MoveReason::SingleOwner + MoveShape::Whole, errors.rs:1045/1049). An init-class
@@ -1116,8 +1145,14 @@ String single_owner_message(String name):
 # a param is borrowed from the caller, so re-binding it copies a pointer not the
 # value (Rust `!def.is_param`, check_stmt.rs:1464). At a ctor / field-init
 # boundary NO exemption applies (check_expr.rs:45 gates on DkVariable only — a
-# param IS rejected there).
+# param IS rejected there). Unique locks (D53) never take the param exemption.
 void reject_single_owner_init(SpannedExpr e, bool param_exempt, ScopeTable scopes, TypeTable types, ResolveContext &ctx):
+    if expr_is_place(e.expr):
+        int tid = infer_expr_type(e, scopes, &types, &ctx)
+        if is_unique_lock_type(tid, scopes, types):
+            String wrap = unique_lock_wrap(tid, scopes, types)
+            ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), unique_lock_message(place_root_name(e.expr), wrap)))
+            return
     match e.expr:
         case EIdentifier(_name):
             if ctx.resolution_map.contains(e.span.start):
@@ -1130,7 +1165,10 @@ void reject_single_owner_init(SpannedExpr e, bool param_exempt, ScopeTable scope
                     else:
                         pass
                 if is_var and (not param_exempt or not d.is_param):
-                    if is_single_owner_type(d.type_id, scopes, types):
+                    if is_unique_lock_type(d.type_id, scopes, types):
+                        String wrap = unique_lock_wrap(d.type_id, scopes, types)
+                        ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), unique_lock_message(d.name, wrap)))
+                    elif is_single_owner_type(d.type_id, scopes, types):
                         ctx.diagnostics.push(Diagnostic.error(e.span, DkMoveWithoutOperator(), single_owner_message(d.name)))
         else:
             pass
@@ -1280,7 +1318,8 @@ String render_place_sig(int own, String root, Vector[String] path):
 #   * scalar primitive          → Copy (int/float/bool/char families)
 #   * tuple of all-Copy elems    → Copy
 #   * borrow (`RTRef`)           → Copy (a pointer; copying it duplicates no buffer)
-#   * Channel/Shared/Weak/Mutex  → Copy (opaque handle pointers)
+#   * Channel/Shared/Weak        → Copy (refcount handle pointers)
+#   * Mutex/RWLock               → NOT Copy (D53 unique locks)
 # Str/String, collections and buffer-owning structs are NOT. A struct/enum
 # (`RTDefined`) is Copy in production iff it is NOT drop-tainted AND all fields
 # are (transitively) Copy — resolved off the per-def `DefInfo.is_copy` flag that
@@ -1311,7 +1350,7 @@ bool resolved_type_is_copy(int type_id, ScopeTable scopes, TypeTable types):
             return not dd.is_drop_tainted and dd.is_copy
         case RTGeneric(def_id, _args):
             DefInfo gd = scopes.get_def(def_id)
-            return gd.name == "Channel" or gd.name == "Shared" or gd.name == "Weak" or gd.name == "Mutex"
+            return gd.name == "Channel" or gd.name == "Shared" or gd.name == "Weak"
         else:
             return false
 
@@ -2664,6 +2703,9 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
                 else:
                     if ingest and a.ownership == OWN_BORROW:
                         reject_tainted_place(a.value, scopes, &types, &ctx)
+                        # D53: consume-position single-owner / unique-lock gate
+                        # (the shared helper, not a Mutex costume).
+                        reject_single_owner_init(a.value, false, scopes, types, &ctx)
                     # 2T FORMATION (method-call kind): same `&`-arg materialize
                     # reject as the free-call loop (mirror Rust — all call kinds).
                     if a.ownership == OWN_MUTABLE:
@@ -2786,6 +2828,8 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             bool saved_supp_arr = ctx.suppress_move_in_operand_position
             ctx.suppress_move_in_operand_position = true
             for e in elements:
+                reject_tainted_place(e, scopes, &types, &ctx)
+                reject_single_owner_init(e, false, scopes, types, &ctx)
                 check_safety_expr(e, scope_id, &state, &scopes, &types, &ctx)
             ctx.suppress_move_in_operand_position = saved_supp_arr
         case ETupleLiteral(elements):
@@ -2793,6 +2837,8 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             bool saved_supp_tup = ctx.suppress_move_in_operand_position
             ctx.suppress_move_in_operand_position = true
             for e in elements:
+                reject_tainted_place(e, scopes, &types, &ctx)
+                reject_single_owner_init(e, false, scopes, types, &ctx)
                 check_safety_expr(e, scope_id, &state, &scopes, &types, &ctx)
             ctx.suppress_move_in_operand_position = saved_supp_tup
         case EDictLiteral(keys, values):
@@ -2800,8 +2846,13 @@ void check_safety_expr(SpannedExpr expr, int scope_id, SafetyState &state, Scope
             bool saved_supp_dict = ctx.suppress_move_in_operand_position
             ctx.suppress_move_in_operand_position = true
             for (di, k) in keys.enumerate():
+                reject_tainted_place(k, scopes, &types, &ctx)
+                reject_single_owner_init(k, false, scopes, types, &ctx)
                 check_safety_expr(k, scope_id, &state, &scopes, &types, &ctx)
-                check_safety_expr(values.get(di).unwrap(), scope_id, &state, &scopes, &types, &ctx)
+                SpannedExpr dv = values.get(di).unwrap()
+                reject_tainted_place(dv, scopes, &types, &ctx)
+                reject_single_owner_init(dv, false, scopes, types, &ctx)
+                check_safety_expr(dv, scope_id, &state, &scopes, &types, &ctx)
             ctx.suppress_move_in_operand_position = saved_supp_dict
         case EStructLiteral(_name, _fields, args):
             # D12 position 2 (struct field-init): every struct-literal arg is a

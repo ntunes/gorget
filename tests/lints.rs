@@ -1765,6 +1765,8 @@ fn walkdir_rs(root: &str) -> Vec<PathBuf> {
 ///   - position 3: EMethodCall ingest arg (collection put)
 ///   - position 4: SReturn value (return / expr-body) + EClosure trailing SExpr
 ///     (closure-tail)
+///   - D53 container-literals: EArrayLiteral + ETupleLiteral + EDictLiteral
+///     key + EDictLiteral value (four calls; ownership-boundary elements)
 /// (positions 5 [capture] and 6 [materialize-on-write / &self mutator] use their
 /// own specialized producers — `reject_tainted_captures`,
 /// `reject_materialize_on_write`, `reject_amp_self_mutator` — since they gate on
@@ -1777,20 +1779,16 @@ fn walkdir_rs(root: &str) -> Vec<PathBuf> {
 ///     under-rejection hole; restore the call, do not lower EXPECTED.
 #[test]
 fn self_host_d12_reject_hook_count() {
-    // 1 definition (`void reject_tainted_place(`) + 8 consuming-position calls.
-    // Positions 2 (ctor-arg) + 3 (collection-put) were re-enabled once the
-    // CallArg{name, ownership, value} normalization landed: parse_call_args now
-    // carries the `!`/`&` arg sigil as a TYPED `CallArg.ownership` field, so those
-    // two positions gate on `a.ownership == OWN_BORROW` — a bare copy is rejected
-    // while an explicit `push(!x)`/`W(!x)` move is accepted (no more over-rejection).
-    const EXPECTED: usize = 9;
+    // 1 definition (`void reject_tainted_place(`) + 12 consuming-position calls
+    // (8 D12 + 4 D53 container-literal elements).
+    const EXPECTED: usize = 13;
     let src = fs::read_to_string("tests/fixtures/self_host_typechecker/typecheck.gg")
         .expect("read self_host_typechecker/typecheck.gg");
     let count = src.matches("reject_tainted_place(").count();
     assert_eq!(
         count, EXPECTED,
         "self-host D12 `reject_tainted_place` site count changed: {count} vs \
-         expected {EXPECTED} (1 def + 8 consuming-position hooks).\n\n\
+         expected {EXPECTED} (1 def + 12 consuming-position hooks).\n\n\
          If a new consuming ownership boundary was added, route it through the \
          shared `reject_tainted_place` producer and bump EXPECTED. If a hook was \
          removed, a D12 under-rejection hole re-opened — restore it, do NOT lower \
@@ -2217,6 +2215,43 @@ fn tainted_formation_arg_gate_sites() {
          {count} vs expected {EXPECTED} (the two per-arg loops covering all three \
          call kinds). A new call kind's arg loop must call the formation gate too; \
          a removed site re-opens the `f(&s.field)` tainted double-drop.",
+    );
+}
+
+/// Core #4: `require_explicit_move_for_single_owner_init` is the ONE helper
+/// for the single-owner / unique-lock / drop-taint reject at every ownership
+/// boundary. A new boundary that hand-rolls `tainted_place_name` or a
+/// `"Mutex" | "RWLock"` name match re-opens t0908's consume-position hole
+/// (Guard/Box `all.push(g)` accepted while assign rejected).
+///
+/// SET (LAND each; return/expr-body tail and plain non-consuming calls are
+/// NEVER this helper — D53's consume list is the six collection positions):
+///   1. ctor args (`check_call_arg_ownership`, `is_constructor`)
+///   2. qualified-enum MethodCall constructor
+///   3. consume MethodCall (`push`/`put`/`set`/`insert`/`send`/…)
+///   4. array / tuple literal elements
+///   5. dict literal keys and values
+///   6. struct-literal field init
+///   7. bind / assign / `v[i] = x` (`check_value_needs_move`)
+///
+/// **If this fails:** a new ownership-boundary site was added without the
+/// helper, or a site was dropped. Route the new site through the helper
+/// (not a Mutex-only arm) and bump EXPECTED.
+#[test]
+fn single_owner_init_helper_call_sites() {
+    const EXPECTED: usize = 7;
+    let expr = fs::read_to_string("src/semantic/safety/check_expr.rs")
+        .expect("read src/semantic/safety/check_expr.rs");
+    let stmt = fs::read_to_string("src/semantic/safety/check_stmt.rs")
+        .expect("read src/semantic/safety/check_stmt.rs");
+    let count = expr.matches("self.require_explicit_move_for_single_owner_init(").count()
+        + stmt.matches("self.require_explicit_move_for_single_owner_init(").count();
+    assert_eq!(
+        count, EXPECTED,
+        "`require_explicit_move_for_single_owner_init` call-site count changed: \
+         {count} vs expected {EXPECTED}. Every ownership boundary (ctor / enum-init \
+         / consume MethodCall / array-tuple / dict / struct-literal / assign) must \
+         call the shared helper — not a taint-only copy and not a Mutex costume.",
     );
 }
 
@@ -9134,6 +9169,8 @@ const AGENTS_MD_RULE_INVENTORY: &[(&str, &str)] = &[
     ("COW-uniform", "there is no push-vs-constructor split"),
     ("COW-carveouts", "The carve-outs to CoW-default-borrow are"),
     ("COW-operator", "the user to write `^source` or `source.clone()`"),
+    ("COW-d53", "`Shared[Mutex[T]]`, never `.clone()`"),
+    ("COW-d53-names", "`Mutex`/`RWLock` (D53)"),
     ("COW-table", "Owns AND dead at this call"),
     ("COW-eligible", "The three move-eligible shapes are"),
     ("COW-movezero", "the source slot becomes logically dead"),

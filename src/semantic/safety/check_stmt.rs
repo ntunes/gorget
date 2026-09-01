@@ -3,13 +3,13 @@ use rustc_hash::FxHashSet;
 use crate::parser::ast::*;
 use crate::span::Spanned;
 
-use crate::semantic::errors::{ArenaEscapeKind, MoveReason, MoveShape, SemanticErrorKind};
+use crate::semantic::errors::{ArenaEscapeKind, MoveReason, SemanticErrorKind};
 use crate::semantic::ids::DefId;
 use crate::semantic::scope::DefKind;
 use crate::semantic::types::{self as types};
 
 use super::{BorrowChecker, BorrowOrigin, BorrowCaptureMode, EscapeCtx, FallibleState, SharedDerivedInfo, WithGuardKind};
-use super::type_utils::{is_copy_type, is_ast_type_ref, needs_explicit_move};
+use super::type_utils::{is_copy_type, is_ast_type_ref};
 
 impl<'a> BorrowChecker<'a> {
     pub(super) fn check_stmt(&mut self, stmt: &Spanned<Stmt>) {
@@ -1580,83 +1580,28 @@ impl<'a> BorrowChecker<'a> {
         self.live_guards.retain(|mutex_def, _| entry_set.contains(mutex_def));
     }
 
-    /// Check if a value expression is a bare identifier of a non-Copy type (needs `!`).
+    /// Check if a value expression is a bare identifier of a non-Copy type (needs `^`).
     pub(super) fn check_value_needs_move(&mut self, value: &Spanned<Expr>) {
         // Destructuring binds (Pattern::Tuple) implicitly move the value,
-        // like Rust's `let (x, y) = expr`. No `!` operator required.
+        // like Rust's `let (x, y) = expr`. No `^` operator required.
         if self.in_destructuring_bind {
             return;
         }
-        // D4/D12 position 1 (bind): a bare bind of a drop-tainted PLACE is an
-        // implicit copy — require `!place` / `.clone()`. Unlike the by-design
-        // single-owner set below (identifier-local-only), `tainted_place_name`
-        // resolves the place's type STRUCTURALLY (via `lvalue_value_type`), so
-        // it covers field/index places (`obj.field`, `v[i]`) as well as
-        // identifier/self/param — mirroring ggdef's bind-position rejection
-        // (spec/ggdef/src/elaborate/mod.rs:970).
-        if let Some((name, shape)) = self.tainted_place_name(value) {
-            self.error(
-                SemanticErrorKind::MoveWithoutOperator {
-                    name,
-                    reason: MoveReason::DropTaint,
-                    shape,
-                    // bind boundary (`R b = place`): no write-through hint.
-                    write_through_available: false,
-                },
-                value.span,
-            );
-            return;
-        }
+        // String unification: owned strings (owned_string_id) in VarDecl/Assign
+        // contexts create views — the target borrows from the source. Skip the
+        // move check; lifetime tracking handles dangling-pointer safety.
         if let Expr::Identifier(_) = &value.node {
             if let Some(&def_id) = self.resolution_map.get(&value.span.start) {
-                let def = self.scopes.get_def(def_id);
-                // Only check local variables, not functions/types/imports.
-                // Skip parameters — they're borrowed from the caller, so
-                // re-binding them is just copying a pointer, not transferring ownership.
-                if def.kind == DefKind::Variable && !def.is_param {
-                    if let Some(type_id) = def.type_id {
-                        // String unification: owned strings (owned_string_id) in VarDecl/Assign
-                        // contexts create views — the target borrows from the source. Skip the
-                        // move check; lifetime tracking handles dangling-pointer safety.
-                        if type_id == self.types.owned_string_id {
-                            return;
-                        }
-                        // Collection types (Vector, Dict, Set) are auto-cloned on assignment —
-                        // no `!` needed.
-                        //
-                        // **CoW-by-default for bare-assign RHS (2026-05-12).** User struct /
-                        // enum non-Copy types are also routed through CoW: the IR-lowering's
-                        // Phase D4 decision tree (`lower_var_decl_assign_mode` Branch C/D) lifts
-                        // resource-typed user types into a Ptr alias (`set_ref`) when CoW-safe,
-                        // and falls back to clone-and-Move when CoW-unsafe (assignment to the
-                        // destination later). Bare-assign now mirrors the other consume
-                        // positions (function params, match scrutinees, closure captures): all
-                        // borrow by default with CoW-sever on mutation. Explicit `!` is kept
-                        // as the use-site move opt-in; explicit `.clone()` stays for explicit
-                        // independent-copy intent.
-                        // Single-owner carve-out types (closures/Callable, Owned[T],
-                        // Box[T], Task/TaskGroup/Guard) are not CoW-eligible — bare-assign
-                        // requires explicit `!`. Shared predicate `needs_explicit_move` is
-                        // the single source of truth (also used at the constructor / struct /
-                        // enum init boundaries in `check_expr`).
-                        if !is_copy_type(type_id, self.types, self.scopes)
-                            && needs_explicit_move(type_id, self.types, self.scopes)
-                        {
-                            self.error(
-                                SemanticErrorKind::MoveWithoutOperator {
-                                    name: def.name.clone(),
-                                    reason: MoveReason::SingleOwner,
-                                    shape: MoveShape::Whole,
-                                    // bare-assign single-owner: no write-through fix.
-                                    write_through_available: false,
-                                },
-                                value.span,
-                            );
-                        }
-                    }
+                if self.scopes.get_def(def_id).type_id == Some(self.types.owned_string_id) {
+                    return;
                 }
             }
         }
+        // D4/D12/D53 position 1 (bind/assign, including `v[i] = x`): the
+        // SHARED helper unions drop-taint + unique locks + by-design
+        // single-owner. `param_exempt = true` preserves the Guard/Box param
+        // rebind skip (t0682 backlog); unique locks never take it.
+        self.require_explicit_move_for_single_owner_init(value, true);
     }
 
     /// Walk compound `And` chains in conditions, marking borrow origins for each

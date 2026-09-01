@@ -1,0 +1,11 @@
+# D53 NEG — named RWLock at Dict.put (consume sibling).
+# CELL: lock=RWLock · position=put · source=named place.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+
+from std.sync import RWLock
+
+void main():
+    RWLock[int] r = RWLock[int](5)
+    Dict[int, RWLock[int]] d = {}
+    d.put(1, r)
+    print(d.len())

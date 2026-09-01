@@ -4606,56 +4606,80 @@ fn known_gap_channel_bare_param_callee_drop_uaf() {
 
 #[test]
 fn mutex_vector_single_owner_move() {
-    // Cell: handle = Mutex — a single-owner handle at a consuming position
-    // must MOVE, or the local and the collection slot both drop it.
-    run_gg("known_gaps/mutex_vector_single_owner_move.gg", "1\n5");
+    // D53: a named unique-lock place at push is E_MoveWithoutOperator.
+    check_d53_unique_lock_reject("known_gaps/mutex_vector_single_owner_move.gg", "Shared[Mutex[T]]");
 }
 
 #[test]
 fn rwlock_vector_single_owner_move() {
-    // Cell: handle = RWLock — the OTHER member of `is_single_owner_handle_local`
-    // (measured: exactly two at HEAD), so that axis is covered, not sampled.
-    run_gg("known_gaps/rwlock_vector_single_owner_move.gg", "1\n5");
+    check_d53_unique_lock_reject("known_gaps/rwlock_vector_single_owner_move.gg", "Shared[RWLock[T]]");
 }
-
-// The LIVE half of the source axis. Both cells above read the handle back
-// THROUGH the collection, so the source is DEAD at the push — one value of the
-// axis `AGENTS.md`'s CoW table is indexed on, and a net that samples one value
-// of a typed axis is an anecdote (Core #12). These two keep the source live.
-//
-// They are REGRESSION pins, not gap graduations, and the distinction is
-// load-bearing: they are GREEN at the t0840 base blob `3b8a5561` and were RED
-// at `93621491` — rc 134 `free(): double free detected in tcache 2` on C AND
-// LLVM, rc 99 `heap-use-after-free` under `--sanitize`, for BOTH members of the
-// set. Base was green only because the element slot held garbage that nothing
-// ever dropped correctly, so there was no second owner to collide with.
 
 #[test]
 fn mutex_vector_live_source_single_owner() {
-    run_gg("known_gaps/mutex_vector_live_source_single_owner.gg", "1\n5");
+    check_d53_unique_lock_reject(
+        "known_gaps/mutex_vector_live_source_single_owner.gg",
+        "Shared[Mutex[T]]",
+    );
 }
 
 #[test]
 fn rwlock_vector_live_source_single_owner() {
-    run_gg("known_gaps/rwlock_vector_live_source_single_owner.gg", "1\n5");
+    check_d53_unique_lock_reject(
+        "known_gaps/rwlock_vector_live_source_single_owner.gg",
+        "Shared[RWLock[T]]",
+    );
 }
 
-/// KNOWN GAP — a REGRESSION this round introduced and could not close without
-/// an owner call (`todo/t0908`). One single-owner handle reaching TWO element
-/// slots double-frees: `elem_drop` is per-ARRAY, so every slot holding the
-/// handle drops it, and `Mutex`/`RWLock` have no clone path to fill slots
-/// 2..N with. The one-slot repair transfers the single owner and degrades the
-/// source to a borrow, which has no N-slot analogue.
-///
-/// GREEN at the t0840 base blob — but only because the slot held garbage that
-/// was never a real handle. This is the carve-out owner ask made concrete:
-/// `Guard` (what `Mutex.lock()` returns) is on the `E_MoveWithoutOperator`
-/// list and `Mutex` is not. If they join it, this is REJECTED and the gap
-/// closes; if not, they need a real clone path. Both are owner calls.
 #[test]
-#[ignore = "known gap (todo/t0908): one single-owner handle in TWO element slots double-frees — elem_drop is per-array and Mutex/RWLock have no clone path; needs the carve-out owner call"]
-fn known_gap_mutex_vector_two_slots_double_free() {
-    run_gg("known_gaps/mutex_vector_two_slots_double_free.gg", "2");
+fn mutex_vector_two_slots_named_push_reject() {
+    // Was `*_double_free` under the accept resolution; D53 flipped it to reject.
+    check_d53_unique_lock_reject(
+        "known_gaps/mutex_vector_two_slots_double_free.gg",
+        "Shared[Mutex[T]]",
+    );
+}
+
+const D53_MUTEX: &str = "Shared[Mutex[T]]";
+const D53_RWLOCK: &str = "Shared[RWLock[T]]";
+
+#[test]
+fn mutex_vector_d53_consume_siblings_reject() {
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_nslot_named_push_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_two_collections_push_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_two_collections_push_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_put_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_put_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_set_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_set_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_insert_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_insert_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_send_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_send_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_index_store_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_index_store_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_assign_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_assign_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_ctor_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_ctor_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_array_lit_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_array_lit_reject.gg", D53_RWLOCK);
+}
+
+#[test]
+fn mutex_vector_d53_class_pin_guard_push_reject() {
+    // Proves the consume hook is the shared helper, not a Mutex costume.
+    check_gg_fails("d53_unique_lock/guard_named_push_reject.gg", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn mutex_vector_d53_pos_temp_caret_nonconsuming() {
+    run_gg("d53_unique_lock/mutex_temp_push.gg", "1\n0");
+    run_gg("d53_unique_lock/rwlock_temp_push.gg", "1\n0");
+    run_gg("d53_unique_lock/mutex_caret_push.gg", "1\n5");
+    run_gg("d53_unique_lock/rwlock_caret_push.gg", "1\n5");
+    run_gg("d53_unique_lock/mutex_nonconsuming_call.gg", "5\n5");
+    run_gg("d53_unique_lock/rwlock_nonconsuming_call.gg", "5\n5");
 }
 
 /// KNOWN GAP — C backend only; `--backend=llvm` is CORRECT (lane divergence).
@@ -15330,6 +15354,37 @@ fn check_gg_fails(fixture: &str, expected_stderr: &str) {
     assert!(
         stderr.contains(expected_stderr),
         "Expected stderr to contain '{expected_stderr}' for {fixture}, got:\n{stderr}",
+    );
+}
+
+/// D53 unique-lock reject: `E_MoveWithoutOperator`, names `^` / `Shared[…]`,
+/// never offers `.clone()`.
+fn check_d53_unique_lock_reject(fixture: &str, wrap: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+    let output = build_with_timeout(gg_command("check").arg(&fixture_path), fixture);
+    assert!(
+        !output.status.success(),
+        "Expected `gg check` to fail for {fixture}, but it succeeded.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("E_MoveWithoutOperator"),
+        "Expected E_MoveWithoutOperator for {fixture}, got:\n{stderr}",
+    );
+    assert!(
+        stderr.contains(wrap),
+        "Expected diagnostic to name `{wrap}` for {fixture}, got:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains(".clone()"),
+        "D53 diagnostic must not offer `.clone()` for {fixture}, got:\n{stderr}",
     );
 }
 
