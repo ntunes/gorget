@@ -1,0 +1,11 @@
+# D53 class pin — consume hook is the SHARED helper, not a Mutex costume.
+# CELL: lock=Guard (already on needs_explicit_move) · position=push · source=named place.
+# At 4850bf38 `Guard[int] h = g` REJECTS but `all.push(g)` ACCEPTS.
+# ggdef: ABSTAIN (Guard/Mutex out of subset).
+
+void main():
+    Mutex[int] m = Mutex[int](0)
+    Guard[int] g = m.lock()
+    Vector[Guard[int]] all = []
+    all.push(g)
+    print(all.len())

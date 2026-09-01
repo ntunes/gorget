@@ -1,0 +1,9 @@
+# D53 POS — temp at a consuming position. Spell the type arg (`Mutex(0)` link-fails).
+# CELL: lock=Mutex · position=push · source=typed temp.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+void main():
+    Vector[Mutex[int]] all = []
+    all.push(Mutex[int](0))
+    print(f"{all.len()}")
+    print(f"{all.get(0).unwrap().lock().get()}")

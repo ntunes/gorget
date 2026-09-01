@@ -1,0 +1,11 @@
+# D53 NEG — named RWLock at Vector.insert (consume sibling).
+# CELL: lock=RWLock · position=insert · source=named place.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+
+from std.sync import RWLock
+
+void main():
+    RWLock[int] r = RWLock[int](5)
+    Vector[RWLock[int]] all = []
+    all.insert(0, r)
+    print(all.len())

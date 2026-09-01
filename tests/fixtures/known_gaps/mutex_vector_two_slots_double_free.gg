@@ -1,0 +1,12 @@
+# D53 NEG — one unique lock in N element slots. Pins the check-time reject
+# (name was `*_double_free` when this was a runtime bomb; D53 flipped it).
+# CELL: lock=Mutex · position=push × 2 · source=named place.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+# RED at 4850bf38: `gg check` ACCEPT, C/LLVM rc 134 double-free / ASan UAF.
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Vector[Mutex[int]] all = []
+    all.push(m)
+    all.push(m)
+    print(f"{all.len()}")

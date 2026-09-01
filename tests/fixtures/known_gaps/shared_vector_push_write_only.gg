@@ -1,0 +1,18 @@
+# REGRESSION (was todo/t0840): the WRITE side of the handle-marshalling class,
+# ISOLATED — pushes and reads only `len()`, never an element. Pre-fix this
+# still died (rc 139 on C and LLVM) because `gorget_array_push` received the
+# handle VALUE instead of its address and the runtime memcpy'd out of the
+# control block; that proves the write repair is load-bearing on its own and
+# not an artefact of the read path.
+#
+# CELL: container=Vector · handle=Shared · payload=int · producing-arm=push ·
+#       read=NONE.
+
+void main():
+    Shared[int] s = Shared[int](7)
+    Vector[Shared[int]] all = []
+    all.push(s.clone())
+    all.push(s.clone())
+    all.push(s.clone())
+    print(f"{all.len()}")
+    print(f"{s.strong_count()}")

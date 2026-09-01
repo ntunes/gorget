@@ -1,0 +1,9 @@
+# D53 NEG — named Mutex at Vector.insert (consume sibling).
+# CELL: lock=Mutex · position=insert · source=named place.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Vector[Mutex[int]] all = []
+    all.insert(0, m)
+    print(all.len())

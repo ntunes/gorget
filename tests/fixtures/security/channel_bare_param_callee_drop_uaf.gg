@@ -1,0 +1,39 @@
+# KNOWN GAP — BOTH REAL BACKENDS under `--sanitize`; `gg check` accepts.
+#
+# Evidence for `todo/t0108` (the refcount PARAM / boundary ownership model),
+# in its `Channel` costume. `needs_param_drop` keys on TYPE alone, so a BARE
+# `Channel[int] src` parameter — a BORROW under CoW-default-borrow — is dropped
+# by the CALLEE at scope exit, taking the caller's channel to zero underneath
+# it:
+#
+#   AddressSanitizer: heap-use-after-free in gorget_channel_release
+#     <- Channel__int64_t__drop  <- take  (the CALLEE's scope exit)
+#
+# There is NO clone anywhere in this program, which is what discriminates it
+# from the R48 Track D2 clone-convention class: `.clone()` is not involved,
+# `Vector`/`Dict` are not involved, and the same shape with a `Shared[int]`
+# parameter is `t0108` repro (a) verbatim. The item's own text already names
+# {Shared, Weak, Channel} as one family and records that the SELF-HOST lane is
+# CORRECT on the `Shared` costume, so that lane is the oracle for the fix.
+#
+# The sibling shape — a clone RETURNED across the same boundary
+# (`Channel[int] hand_back(Channel[int] src): return src.clone()`) — is
+# `t0108` repro (b), and fails here for this same reason: the callee's drop of
+# `src` is what over-releases, not the clone.
+#
+# ⊕ Measured against the PRE-t0840 compiler this shape did not even reach the
+# sanitizer to explain itself: `gorget: panic: send on closed channel`, rc 1,
+# on both backends — the callee's drop took the last reference, which CLOSED
+# the channel before the caller's `send`. Same defect, louder costume.
+#
+# INTENDED (asserted by the wired test): prints `in` then `1`, rc 0,
+# ASan-clean.
+
+void take(Channel[int] src):
+    print("in")
+
+void main():
+    Channel[int] c = Channel[int](8)
+    take(c)
+    c.send(1)
+    print(f"{c.recv()}")

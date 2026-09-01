@@ -1,0 +1,28 @@
+# REGRESSION (was todo/t0840): the CONTAINER axis — `Dict[K, Shared[V]]`.
+# `gorget_map_put`'s value parameter carries the same `AbiKind::VoidElem` tag
+# as `gorget_array_push`'s element, so the Dict cell died identically (rc 139,
+# both backends) and is fixed by the same shared dispatcher.
+#
+# `Set[Shared[T]]` is the one container cell that is NOT covered here and never
+# will be: `Shared[int]` does not satisfy `Hashable`, so a Set of handles is a
+# check-time REJECT (`E_UnsatisfiedTraitBound`), not a lowering path.
+#
+# ⚠ The key/value ITERATION over the same Dict is deliberately NOT here, and
+# this is a recorded gap, not a dodge: `for (k, v) in d` over refcount VALUES
+# over-releases (`AddressSanitizer: heap-use-after-free` inside
+# `gorget_map_free`), while the identical loop over `String` values is clean.
+# That is refcount ARITHMETIC at the iteration bind, not the marshalling class
+# this cell pins, and it ships as its own `#[ignore]`d cell,
+# `shared_dict_iteration_value_over_release.gg` (todo/t0907).
+#
+# CELL: container=Dict(value) · handle=Shared · payload=int ·
+#       producing-arm=put · read=`.get(k).unwrap()`.
+
+void main():
+    Shared[int] s = Shared[int](11)
+    Dict[String, Shared[int]] d = {}
+    d.put("a", s.clone())
+    d.put("b", s.clone())
+    print(f"{d.len()}")
+    print(f"{d.get('a').unwrap().get()}")
+    print(f"{s.strong_count()}")

@@ -1,0 +1,32 @@
+# REGRESSION (was todo/t0840, found while widening its net): `Channel[T]` is a
+# refcount handle whose `clone_fn` is the by-VALUE incref
+# (`TypeMetadata::set_refcount_clone_fn`, the single writer for that axis) —
+# but the generic `.clone()` lowering handed it `&handle`, so
+# `gorget_channel_retain` increfed the CALLER'S STACK SLOT. Everything after
+# that read `ch->buf` as a channel: `send` hung, or tripped
+# `__pthread_mutex_lock_full: Assertion 'e != ESRCH || !robust'`.
+#
+# `Shared`/`Weak` escaped only because their own dispatch arms pass the handle
+# by value by hand; `Channel` has no such arm and got the generic path, which
+# is exactly why the fix belongs in the generic path (read
+# `is_refcount_clone_type`) and not in a fourth hand-written arm.
+#
+# ⚠ The first half needs NO container at all — that is the point: the defect
+# was in `.clone()`, and the container merely made it visible.
+#
+# CELL: handle=Channel · payload=int · {bare clone, Vector element}.
+
+void main():
+    # bare clone — no container involved
+    Channel[int] c = Channel[int](4)
+    Channel[int] c2 = c.clone()
+    c2.send(7)
+    print(f"{c.recv()}")
+
+    # the same handle inside a Vector, sent through the element view
+    Channel[int] d = Channel[int](4)
+    Vector[Channel[int]] all = []
+    all.push(d.clone())
+    print(f"{all.len()}")
+    all.get(0).unwrap().send(9)
+    print(f"{d.recv()}")

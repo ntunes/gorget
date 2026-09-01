@@ -1,0 +1,30 @@
+# KNOWN GAP — C BACKEND ONLY; LLVM is CORRECT (lane divergence, Core #9).
+#
+# `Shared[String]("a literal")` — the exact form `docs/language-design.md:1846`
+# teaches — passes `gg check`, then the C backend emits
+#
+#     Shared__GorgetString__new((const char*)__v0.data)
+#
+# against the wrapper it emitted one line earlier,
+#
+#     static inline Shared__GorgetString Shared__GorgetString__new(Str val)
+#
+# and `cc` refuses: `error: incompatible type for argument 1 of
+# 'Shared__GorgetString__new'`. The `Str`-typed constructor parameter is
+# marshalled as if it were tagged `CStr`. `--backend=llvm` builds and prints
+# `hi`, so the C emit boundary is the lane that is wrong.
+#
+# Feeding the SAME constructor a `String` VARIABLE compiles and runs on both
+# lanes, which is why `shared_vector_payload_types.gg` builds its payload from
+# a concatenation — that is a dodge around THIS gap, and it is recorded here
+# rather than buried in that fixture.
+#
+# NOT the `Vector[Shared[T]]` handle-marshalling class (todo/t0840): no
+# container, no element slot, no `AbiKind::VoidElem` position — this is
+# argument marshalling into a synthesized inline wrapper.
+#
+# INTENDED (asserted by the wired test): prints `hi`.
+
+void main():
+    Shared[String] s = Shared[String]("hi")
+    print(f"{s.get()}")

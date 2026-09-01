@@ -3022,15 +3022,142 @@ fn fordict_move_out_kv_no_leak() {
     security_safe_no_leak("fordict_move_out_kv", "2\n2\n2");
 }
 
-/// KNOWN GAP (`todo/t0840`) on the SANITIZER lane. The value lanes see a SEGV;
-/// this lane sees WHY — UBSan reports `load of misaligned address
-/// 0xbebebebebebebebe`, ASan's uninitialised-heap fill, so the `Vector[Shared]`
-/// element was never stored. A value lane is structurally blind to that
-/// distinction (Core #13), which is why the gap owes a fixture on BOTH.
+/// REGRESSION (was `todo/t0840`, R48 Track D2) on the SANITIZER lane. The
+/// value lanes saw only a SEGV; this lane sees the memory story — the push
+/// stored the handle VALUE where an ADDRESS was required, so the runtime
+/// memcpy'd out of the refcount control block, and the read then handed the
+/// slot's ADDRESS to a by-VALUE accessor. A value lane is structurally blind
+/// to that distinction (Core #13), which is why the class owes a fixture on
+/// BOTH.
+///
+/// What only this lane can pin: the refcount arithmetic BALANCES — three
+/// `.clone()` increfs against three element drops from `gorget_array_free`
+/// plus the original's — so a repair that wrote the slot correctly but leaked
+/// or over-released a reference would still redden here.
 #[test]
-#[ignore = "known gap (R47/t0840): Vector[Shared[T]] push leaves the slot unwritten — UBSan 0xbe fill then SEGV"]
-fn known_gap_shared_vector_of_clones_unwritten_slot_asan() {
-    security_safe_no_leak("known_gap_shared_vector_of_clones_unwritten_slot", "3\n42");
+fn shared_vector_of_clones_push_marshalling_asan() {
+    security_safe_no_leak("shared_vector_of_clones_push_marshalling", "3\n42\n4");
+}
+
+// R48 Track D2 - the sanitizer half of the handle net. Six of this track's
+// findings came out of the sanitize sweep and NONE was visible to a
+// stdout-comparing fixture: an over-release that still printed the right
+// answer, a 32-byte control block nobody owned, a double free that only
+// appeared once the element slot held a real handle. One ASan pin on the
+// headline cell was too thin a net for that.
+
+#[test]
+fn mutex_vector_single_owner_move_asan() {
+    security_rejected("mutex_vector_single_owner_move", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn rwlock_vector_single_owner_move_asan() {
+    security_rejected("rwlock_vector_single_owner_move", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn mutex_vector_live_source_single_owner_asan() {
+    security_rejected("mutex_vector_live_source_single_owner", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn rwlock_vector_live_source_single_owner_asan() {
+    security_rejected("rwlock_vector_live_source_single_owner", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn mutex_vector_two_slots_named_push_reject_asan() {
+    security_rejected("mutex_vector_two_slots_double_free", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn rwlock_vector_nslot_named_push_reject_asan() {
+    security_rejected("rwlock_nslot_named_push_reject", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn mutex_vector_d53_class_pin_guard_push_reject_asan() {
+    security_rejected("guard_named_push_reject", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn mutex_vector_d53_pos_temp_caret_nonconsuming_asan() {
+    // `mutex_temp_push` is the legal D53 spelling; its 136B Mutex-ctor leak is
+    // the pre-existing `todo/t0623` lock-object leak (`mutex_basic` same size),
+    // not a consume-position defect — pin it with `security_safe` (UAF-visible)
+    // rather than `no_leak`.
+    security_safe("mutex_temp_push", "1\n0");
+    security_safe_no_leak("rwlock_temp_push", "1\n0");
+    security_safe_no_leak("mutex_caret_push", "1\n5");
+    security_safe_no_leak("rwlock_caret_push", "1\n5");
+    security_safe_no_leak("mutex_nonconsuming_call", "5\n5");
+    security_safe_no_leak("rwlock_nonconsuming_call", "5\n5");
+}
+
+/// Refcount arithmetic: five releases against four retains printed the right
+/// answer on both value lanes and hung or tripped a pthread assertion instead
+/// of reporting itself. Only this lane names it.
+#[test]
+fn channel_clone_by_value_incref_asan() {
+    security_safe_no_leak("channel_clone_by_value_incref", "7\n1\n9");
+}
+
+#[test]
+fn channel_clone_consuming_positions_asan() {
+    security_safe_no_leak("channel_clone_consuming_positions", "1\n2\n3\n4\ndone");
+}
+
+/// The cell that surfaced the index-read leak: a refcount element read as a
+/// VALUE took the element-clone path and nobody owned the retain. Stdout was
+/// correct throughout.
+#[test]
+fn shared_vector_element_read_shapes_asan() {
+    security_safe_no_leak("shared_vector_element_read_shapes", "4\n12\n4\n2");
+}
+
+#[test]
+fn shared_vector_producing_arms_asan() {
+    security_safe_no_leak("shared_vector_producing_arms", "2\n1\n2\n2\n1");
+}
+
+/// KNOWN GAP (`todo/t0907`) on the SANITIZER lane, and ONLY this lane can see
+/// it: `for (k, v) in d` over a `Dict[String, Shared[int]]` prints the RIGHT
+/// answer on both value lanes while over-releasing the value bind, so
+/// `gorget_map_free` walks its second entry into an already-freed control
+/// block. The identical loop over `String` values is clean, and so is
+/// `for h in v` over a `Vector[Shared[int]]` — the Vector element bind borrows
+/// and never copies. The ROOT is shared with the nested-clone cell:
+/// `gorget_map_iter_value` calls the same `val_clone` in-place hook that
+/// `gorget_array_clone` calls as `elem_clone`, and it is NULL for a refcount
+/// element, so ONE fix closes both faces.
+#[test]
+#[ignore = "known gap (todo/t0907): Dict value-bind iteration over refcount values over-releases — heap-use-after-free in gorget_map_free"]
+fn known_gap_shared_dict_iteration_value_over_release_asan() {
+    security_safe_no_leak("shared_dict_iteration_value_over_release", "4");
+}
+
+/// KNOWN GAP (`todo/t0907`) on the SANITIZER lane. Cloning a
+/// `Vector[Shared[int]]` does not incref its elements: `gorget_array_clone`
+/// consults `elem_clone`, a refcount element type carries `clone_fn` but no
+/// `clone_inplace_fn`, so the two arrays alias the same handles with the
+/// refcount never raised and both drop. The `String`-element twin is clean.
+#[test]
+#[ignore = "known gap (todo/t0907): cloning a Vector[Shared[T]] does not incref its elements — heap-use-after-free under two nested gorget_array_free frames"]
+fn known_gap_shared_nested_vector_clone_over_release_asan() {
+    security_safe_no_leak("shared_nested_vector_clone_over_release", "1\n6");
+}
+
+/// KNOWN GAP (`todo/t0108`) on the SANITIZER lane, in its `Channel` costume.
+/// `needs_param_drop` keys on TYPE alone, so a BARE refcount-handle parameter —
+/// a borrow under CoW-default-borrow — is dropped by the CALLEE at scope exit
+/// and the caller's handle goes to zero underneath it. There is no `.clone()`
+/// anywhere in the program, which is what discriminates it from the R48
+/// Track D2 clone-convention class.
+#[test]
+#[ignore = "known gap (todo/t0108): a bare refcount-handle PARAM is dropped by the callee — heap-use-after-free in gorget_channel_release"]
+fn known_gap_channel_bare_param_callee_drop_uaf_asan() {
+    security_safe_no_leak("channel_bare_param_callee_drop_uaf", "in\n1");
 }
 
 /// REGRESSION (`todo/t0841`, R48 Track D1) on the SANITIZER lane. RED at
