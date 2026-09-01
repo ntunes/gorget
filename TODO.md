@@ -2,13 +2,13 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN AND MID-FLIGHT — 5 of 7 tracks integrated (D1, C, D2, F, A), β first output-review in flight, γ awaiting its first.
-⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A) and the owner's lift to drive β through integration.
+**▶ R48 IS OPEN AND MID-FLIGHT — 6 of 7 tracks integrated (D1, C, D2, F, A, β), γ awaiting its first output-review.
+⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β).
 ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
 **D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
 Opened 2026-08-31 (owner: *"open next round"*). Headline: **the six CRITICAL memory-safety defects** —
-`t0841`, `t0763`+`t0134`, `t0840`+D53, and `t0770`/`t0772` are CLOSED and integrated; `t0825` is fixed on
-a branch; `t0771` moved to R49 — with the owner-directed burn-down campaign in parallel and `t0861` (the
+`t0841`, `t0763`+`t0134`, `t0840`+D53, `t0770`/`t0772`, and `t0825` are CLOSED and integrated;
+`t0771` moved to R49 — with the owner-directed burn-down campaign in parallel and `t0861` (the
 figures DB) early at the owner's explicit request (*"please do not forget t0861, the figures DB. It should
 go in early this round."*).
 
@@ -27,14 +27,12 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `ac577f6b`)
+### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `35037071`)
 
-**5 of 7 tracks INTEGRATED. β first OR: design SIGN OFF, ID collision BLOCKING; fix-up in flight.
-γ still owes a first output-review.**
-Lifts spent: C, D2, F, A (integrated). Owner lifted β through integration. D53 unique-lock reject
-and the figures DB are **on main**. A's capture residual is `t0927`; main's `t0876` remains C-emit jitter.
-β residuals become `t0928` (SH span) / `t0929` (SH attributes) / `t0930` (ggdef ABSTAIN) — main keeps D2's `t0902`–`t0904`.
-⚠ After D2, β/γ add/add-collide with D2's `todo/t0902.md`–`t0904.md` (different defects).
+**6 of 7 tracks INTEGRATED. γ still owes a first output-review.**
+Lifts spent: C, D2, F, A, β (integrated). D53 unique-lock reject and the figures DB are **on main**.
+A's capture residual is `t0927`; β's are `t0928`/`t0929`/`t0930`; main's `t0876` remains C-emit jitter.
+⚠ γ still add/add-collides with D2's `todo/t0902.md`–`t0904.md` (different defects). Renumber above `t0930`.
 Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption is `t0926`.
 
 | track | items | branch tip | ahead | merge | OWED STEP |
@@ -43,7 +41,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **C** | `t0763` `t0134` | — | — | — | **INTEGRATED** `329ad020` |
 | **D2** | `t0840` D53 | — | — | — | **INTEGRATED** `d5707a77` |
 | **A** | `t0770` `t0772` | — | — | — | **INTEGRATED** (residuals `t0877`–`t0880`, `t0872`, `t0927`) |
-| **β** | `t0825` | `470cd49f` | 1 | ⚠ add/add `t0902`–`t0904` vs D2 | **first OR blocked; fix-up executor in flight** (renumber → `t0928`–`t0930`) |
+| **β** | `t0825` | — | — | — | **INTEGRATED** `35037071` (residuals `t0928`–`t0930`) |
 | **γ** | nondeterminism | `5f67841f` | 7 | ggdef + `integration.rs` + add/add `t0902`–`t0904` | **a first output-review** (none yet) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
 | **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded) |
@@ -66,11 +64,12 @@ relying on them.**
 
 ⛔ **ID COLLISIONS (`t0910`).** F's figures-DB adoption is `t0926` (was colliding `t0876`). Main's
 `t0876` is C-emit jitter. A's capture residual is `t0927` (was colliding `t0876`; landed, not a live
-add/add). β/γ collide with D2 on `t0902`–`t0904`. **Renumber the LATER track above the current max
-and fix every citation. Never take a side on add/add todo ids.**
+add/add). β's residuals landed as `t0928`–`t0930` (was colliding `t0902`–`t0904`). γ still collides
+with D2 on `t0902`–`t0904`. **Renumber the LATER track above the current max (`t0930`) and fix every
+citation. Never take a side on add/add todo ids.**
 
 ### ⛔ WHAT MUST HAPPEN BEFORE R48 CAN CLOSE
-1. **β's remaining gauntlet (first OR → fold collisions → confirming → integrate) + γ's first output-review + three E-B brief pass-2s.** No diff integrates without a fresh pass on it.
+1. **γ's first output-review + three E-B brief pass-2s.** No diff integrates without a fresh pass on it.
 2. **E-B3's `robustness_map` scorer fix is UNLANDED.** `scripts/robustness_map.py:617` derives "good" from
    the C-lane BASELINE bucket, never `COL_EXPECTED` ⇒ **fixing a C-lane cell scores as a REGRESSION**, and
    on the 43 self-host-WORKS cells a self-host regression scores as PROGRESS. `:715-723` makes `--accept`
