@@ -3,7 +3,7 @@
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
 **▶ R48 IS OPEN AND MID-FLIGHT — 4 of 7 tracks integrated (D1, C, D2, F), 3 landed and awaiting one gauntlet step each.
-⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F gauntlet through confirming).
+⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts and the current lift: **Track A first output-review**.
 ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
 **D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
 Opened 2026-08-31 (owner: *"open next round"*). Headline: **the six CRITICAL memory-safety defects** —
@@ -41,7 +41,7 @@ F's figures-DB adoption is `t0926`.
 | **D1** | `t0841` | — | — | — | **INTEGRATED** `3b8a5561` |
 | **C** | `t0763` `t0134` | — | — | — | **INTEGRATED** `329ad020` |
 | **D2** | `t0840` D53 | — | — | — | **INTEGRATED** `d5707a77` |
-| **A** | `t0770` `t0772` | `5d43cedd` | 6 | ⚠ `todo/t0876.md` | **a first output-review** (none yet) |
+| **A** | `t0770` `t0772` | `5d43cedd` | 6 | ⚠ add/add `todo/t0876.md` (Callable-capture vs main C-emit) | **first output-review in flight** |
 | **β** | `t0825` | `470cd49f` | 1 | ⚠ add/add `t0902`–`t0904` vs D2 | **a first output-review** (none yet) |
 | **γ** | nondeterminism | `5f67841f` | 7 | ggdef + `integration.rs` + add/add `t0902`–`t0904` | **a first output-review** (none yet) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
