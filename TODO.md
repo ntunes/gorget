@@ -42,7 +42,7 @@ yet in the D2 diff — that is the confirming pass's load-bearing bar.
 | **D1** | `t0841` | — | — | — | **INTEGRATED** `3b8a5561` |
 | **C** | `t0763` `t0134` | — | — | — | **INTEGRATED** `329ad020` |
 | **A** | `t0770` `t0772` | `5d43cedd` | 6 | ⚠ `todo/t0876.md` | **a first output-review** (none yet) |
-| **D2** | `t0840` | `4850bf38` | 6 | `TODO.md`+`DONE.md` | **executor in flight** — confirming pass Q1 closed, Q2 BLOCKED (D53 consume-gate unimplemented; `gg check` accepts N-slot, both backends rc 134). Review: `/tmp/d2_confirming_review.md` |
+| **D2** | `t0840` + D53 | `71e5e5bf` (`worktree-agent-01a05cce`) | merge-tree vs main **clean** | **D53 confirming pass in flight** (Q1 closed; Q2 implemented at executor claim; review `/tmp/d2_confirming_review.md` then `/tmp/r48briefs/trackD2_d53_confirming.md`) |
 | **β** | `t0825` | `470cd49f` | 1 | clean | **a first output-review** (none yet) |
 | **γ** | nondeterminism | `5f67841f` | 7 | clean | **a first output-review** (none yet) |
 | **F** | `t0861` `t0851` `t0860` | `6e9404f5` | 6 | ⚠ `todo/t0876.md` | **a confirming pass** (2 reviews blocked → folded) |
