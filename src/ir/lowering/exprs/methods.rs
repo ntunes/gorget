@@ -5014,11 +5014,14 @@ fn hof_cross_type_result(
         return None;
     }
     if method_name == "flat_map" {
-        // The closure already returns `Vector[U]`; that IS the result type.
-        // Anything else is a program the typechecker should have rejected —
-        // keep the protocol's answer rather than inventing one.
-        let name = ctx.type_name_for_id(closure_ret)?;
-        if !name.starts_with("Vector__") {
+        // The closure already returns an array collection (`Vector[U]` /
+        // `Deque[U]`); that IS the result type. Typed `collection_kind`,
+        // not a `Vector__` name prefix (Core #2). Anything else is a
+        // program the typechecker should have rejected — keep the
+        // protocol's answer rather than inventing one.
+        if ctx.type_registry.collection_kind(closure_ret)
+            != Some(crate::ir::types::CollectionKind::Array)
+        {
             return None;
         }
         return Some(closure_ret);
