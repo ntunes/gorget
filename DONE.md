@@ -29,10 +29,13 @@
   the write through (`Y/Y` vs Rust's `Y/A`). The classification now rides along in the generic-instances
   pre-pass, keyed on the MONO'D name (`Cell__int64_t__assign`, not the bare `Cell__assign` — both the
   write and the read side go through `mangle_type_name`), with its own seed + fixpoint.
-  **Fixtures:** one cell per body-lowering path, each RED-verified at rc 139 on C AND LLVM against a
-  base-commit binary, each also pinned under ASan —
-  `cow_generic_equip_mutator_view_uaf` (graduated) · `cow_generic_fn_view_survives_realloc` ·
-  `cow_trait_default_view_survives_realloc` · `cow_static_trait_method_view_survives_realloc` ·
+  **Fixtures:** one cell per body-lowering path, every one RED-verified against a base-commit binary.
+  ⚠ The lane claim is NOT uniform and the axis table in `tests/integration.rs` carries it per cell: the
+  six `gg build` cells are rc 139 on C AND LLVM and ALSO pinned under ASan; the two module-loop cells
+  (`cow_test_body_*`, `cow_bench_body_*`) RED as a SIGSEGV on the C lane and have NO ASan pin, because a
+  fixture with no entry point does not link under `gg build --sanitize` at all. The cells —
+  `cow_generic_equip_mutator_view_uaf` (graduated) · `self_host_gaps/cow_generic_fn_view_survives_realloc` ·
+  `cow_trait_default_view_survives_realloc` · `self_host_gaps/cow_static_trait_method_view_survives_realloc` ·
   `cow_closure_body_view_survives_realloc` · `cow_test_body_view_survives_realloc` (setup/teardown/test) ·
   `cow_bench_body_view_survives_realloc` · `cow_generic_equip_named_recv` (graduated; SH lane + Rust
   control). Plus `closure_capture_called_twice` as a committed cross-track CLASS GUARD for the closure
@@ -61,6 +64,22 @@
   after this fix, while the identical statements WITHOUT a capture are rc 0. The discriminator is the
   CAPTURE ROOT, not where the mutation is spelled — attached to `t0704` as evidence, not filed as a new
   item. Two false invariant-comments deleted along the way (Core #14).
+  ⊕ **TWO CELLS LIVE IN `tests/fixtures/self_host_gaps/`, NOT AT TOP LEVEL, AND THAT IS CORE #9 ⊕
+  BEING OBEYED RATHER THAN A CAVEAT.** Every top-level `tests/fixtures/*.gg` is auto-scanned into
+  `runtime_parity_corpus`; those two do not MATCH on the self-host lane, non-MATCH sits at the FROZEN
+  ceiling of 151, and raising it for a round's OWN inflow is forbidden with no exemption. Both trip
+  PRE-EXISTING self-host defects that have nothing to do with the cell under test, minimised to 6- and
+  11-line programs and filed as `t0922` (a generic free fn whose type param is reachable only INSIDE a
+  container argument emits the call and never the body → `undefined reference`; the bare-`T` control
+  LINKS AND RUNS) and `t0923` (a static TRAIT method returning a String returns its LENGTH — `7` for
+  `abcdefg`, `10` for `helloworld`; the `int` sibling on the same block and the same method on a plain
+  non-trait `equip` are both correct). Their Rust-lane `run_gg` and ASan coverage is unchanged; two
+  named `#[ignore]`d tests assert the INTENDED self-host output and were confirmed RED for exactly the
+  filed reason. ⚠ **The gate that should have caught this passed VACUOUSLY** — the ceiling assert is
+  behind `if cfg!(debug_assertions)`, so the DEBUG build every executor runs takes the skip branch and
+  prints a note. It now says THIS IS A NO-OP, NOT A PASS; filed as `t0924`. The remaining six
+  comparable top-level fixtures were run through the self-host lane BY HAND and all MATCH, so this
+  round's parity inflow is zero — measured, because the gate could not measure it.
   **Filed:** `t0920` (ggdef's 3 standing generic-equip subset exclusions have no oracle row),
   `t0921` (ggdef rejects `equip [T] Cell[T]` but elaborates `equip Cell[T]` — one construct, two subset
   answers, a boundary drawn on a SPELLING), `t0876` (**the emitted C is not reproducible**: the same
