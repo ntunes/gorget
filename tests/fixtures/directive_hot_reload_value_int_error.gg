@@ -1,0 +1,18 @@
+# Test: the non-identifier-VALUE reject, HYPHENATED-name half.
+#
+# Sibling of `directive_value_int_error.gg` (`directive trace=1`). Same parser
+# arm, different route into it: `hot-reload` is assembled by the `-` continuation
+# loop before the `=` is seen, so a regression that mangles hyphen handling can
+# leave one of the two rows green while the other goes red. Both are pinned
+# because neither covers the other.
+#
+# Rust gg: parse error, `expected identifier, found integer 1`. Self-host: the
+# same verdict from `parse_directive_item`'s value check.
+#
+# Pinned on BOTH lanes: `directive_hot_reload_value_int_error` (Rust gg) and
+# `sh_rejects_directive_hot_reload_value_int` (self-host driver).
+
+directive hot-reload=1
+
+void main():
+    print("REACHED — the directive value was NOT validated on this lane")

@@ -15,7 +15,7 @@ from scope import DkGenericParam, DkImport
 from scope import SkModule, SkFunction, SkBlock, SkEquipBlock, SkTraitDef, SkForLoop
 from scope import get_def_at, is_known_variant_name
 from types import TypeTable, ast_type_to_resolved, ResolvedType, get_stype_at
-from diagnostic import Diagnostic, DiagKind, DkUndefinedName, DkDuplicateDefinition
+from diagnostic import Diagnostic, DiagKind, DkUndefinedName, DkDuplicateDefinition, DkUnknownDirective
 
 # ── Typed accessors ─────────────────────────────────────────
 
@@ -211,7 +211,74 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
         collect_item(item, &scopes, types)
         i = i + 1
 
+    validate_directives(module, &ctx)
+
     return ctx
+
+
+# ── Directive validation — the CLOSED set ───────────────────
+#
+# `directive` names a closed set of four compile-time switches, and
+# `scheduler` a closed set of four modes. The grammar is normative
+# (`docs/language-reference.md`, "Directives"):
+#
+#     directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ]
+#
+# so `=` is OPTIONAL, and both the name and the value are IDENTIFIERs —
+# the parser owns that half (`parse_directive_item`), this pass owns the
+# SETS. The set is closed by DESIGN rather than by omission: D-A36(e)
+# ratified that lints get their own `lint` keyword and never ride
+# `directive`, so an unrecognised name is a user error, not a
+# forward-compatible extension point.
+#
+# Twin: Rust gg's directive scan in `src/semantic/mod.rs`, and the
+# identical pass in `self_host_typechecker/resolve.gg`. All three name
+# lists are compared mechanically by `directive_name_sets_agree_across_lanes`
+# (tests/lints.rs) — a lane-set comparison, because an arm COUNT cannot
+# see a `scheduler=Pool` cell (it moves no count at all).
+#
+# ⚠ The `Span(0, 0)`s below are a KNOWN GAP, not a shrug: no `Item` variant in
+# this AST carries a span, so the caret lands on line 1. Filed as `todo/t0928`.
+#
+# Core #10, lower-or-reject: without this pass the self-host LOWERS an
+# unknown directive by discarding it.
+void validate_directives(Module module, ResolveContext &ctx):
+    int di = 0
+    while di < module.items.len():
+        Item item = module.items.get(di).unwrap()
+        match item:
+            case IDirective(name, value):
+                if name == "strip-asserts" or name == "trace" or name == "hot-reload":
+                    # Valueless switches: a value is the error, and the
+                    # message quotes the whole `name=value` the user wrote.
+                    if value != "":
+                        ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkUnknownDirective(), "unknown directive `" + name + "=" + value + "`"))
+                elif name == "scheduler":
+                    if not is_scheduler_mode(value):
+                        String shown = value
+                        if shown == "":
+                            shown = "(missing value)"
+                        ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkUnknownDirective(), "unknown directive `scheduler=" + shown + "`"))
+                else:
+                    ctx.diagnostics.push(Diagnostic.error(Span(0, 0), DkUnknownDirective(), "unknown directive `" + name + "`"))
+            else:
+                pass
+        di = di + 1
+
+
+# The `scheduler` value set — {pool, thread, inline, single}, CASE-SENSITIVE
+# (`scheduler=Pool` is a reject on both lanes). One function so the lane
+# comparison lint has a single list to read.
+bool is_scheduler_mode(String value):
+    if value == "pool":
+        return true
+    if value == "thread":
+        return true
+    if value == "inline":
+        return true
+    if value == "single":
+        return true
+    return false
 
 
 void collect_item(Item item, ScopeTable &scopes, TypeTable types):

@@ -31,6 +31,7 @@ enum DiagKind:
     # Resolver kinds (active)
     DkUndefinedName        # EIdentifier / EStructLiteral lookup miss
     DkDuplicateDefinition  # `define` rejected — name already bound
+    DkUnknownDirective     # `directive <name>` outside the closed set, or a bad value (E_UnknownDirective)
 
     # Reserved for future migrators (kept so the type doesn't churn
     # when typechecker / lowerer / parser / lexer sites migrate). Not
@@ -85,6 +86,8 @@ String diag_kind_str(DiagKind kind):
             return "undefined-name"
         case DkDuplicateDefinition():
             return "duplicate-definition"
+        case DkUnknownDirective():
+            return "unknown-directive"
         case DkNotAType():
             return "not-a-type"
         case DkTypeMismatch():

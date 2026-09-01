@@ -1,0 +1,27 @@
+# Test: `directive scheduler single` — the SPACE-SEPARATED value spelling — is
+# refused. A directive value is written `directive name=value`; the grammar has
+# no space-separated form (`docs/language-reference.md`, "Directives").
+#
+# ⚠ THIS IS THE CELL THAT WAS NOT MERELY OVER-ACCEPTED BUT ACTED ON. The
+# self-host parser carried a branch that consumed a bare token after the name as
+# the value, so `directive scheduler single` SELECTED the N:1 single-threaded
+# scheduler — measured: the emitted C carried `── Scheduler: Single ──` — while
+# Rust gg refused the very same source at parse time. A program whose observable
+# interleaving differs between the two compilers, from a spelling only one of
+# them admits.
+#
+# It is a DIFFERENT parser arm from `directive_value_int_error.gg` (that one is
+# the `=`-branch value check; this one is the trailing-token check), so one does
+# not cover the other. After the fix the `single` token is no longer consumed and
+# the directive reduces to a valueless `scheduler`, which the semantic pass then
+# also refuses — but the trailing-token check is what fires first, and it is what
+# makes `directive trace single` (see `directive_trailing_token_error.gg`) a
+# reject too, where the valueless form alone would have been accepted.
+#
+# Pinned on BOTH lanes: `directive_space_separated_value_error` (Rust gg) and
+# `sh_rejects_directive_space_separated_value` (self-host driver).
+
+directive scheduler single
+
+void main():
+    print("REACHED — the space-separated directive value was NOT refused")

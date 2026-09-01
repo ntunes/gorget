@@ -1,0 +1,30 @@
+#!spectest
+# mode: run
+# adjudicator: production-v1
+# since: spec-v0.1
+# features: []
+# doc: |
+#   THE ACCEPT control for the `scheduler` value set — the `pool` cell, which
+#   had NO coverage on any lane. Eleven top-level fixtures pin `=single`, one
+#   `=inline` and one `=thread` (counted by `race_warned_fixtures_pin_their_scheduler`
+#   in tests/lints.rs), so `pool` was the one admitted mode nothing exercised —
+#   green by coincidence, because `pool` is also the lowerer's default.
+#
+#   ⚠ NOT RED-VERIFIABLE against the pre-fix compiler and it does not claim to
+#   be (Core #12): the pre-fix self-host accepted EVERY directive, so this row
+#   was green before and after. It is the negative control Core #13 asks for —
+#   it goes red only if the new validation over-rejects, which is the failure
+#   mode the reject rows above cannot see.
+#
+#   adjudicator: production-v1 — `Item::Directive` has no arm anywhere in
+#   ggdef's `elaborate`, so the ggdef lane records GGDEF-SKIP. Per the owner's
+#   2026-08-31 ruling ggdef ABSTAINS on directives; the subset gap is filed.
+# expect:
+#   exit: 0
+#   stdout: "scheduler pool ok\n"
+#!end
+
+directive scheduler=pool
+
+void main():
+    print("scheduler pool ok")

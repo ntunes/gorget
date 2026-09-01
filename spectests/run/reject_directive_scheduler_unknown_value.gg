@@ -1,0 +1,49 @@
+#!spectest
+# mode: run
+# adjudicator: production-v1
+# since: spec-v0.1
+# features: []
+# doc: |
+#   THE `scheduler` VALUE cell — a mode outside {pool, thread, inline, single}.
+#   This is the cell `todo/t0825` was filed on, and the one with observable
+#   consequence: the dropped value changes an async program's interleaving.
+#
+#   `directive` names a CLOSED set of four compile-time switches. The set is
+#   closed by DESIGN rather than by omission: D-A36(e) ratified that lints get
+#   their own `lint` keyword and never ride `directive`, so an unrecognised
+#   name is a user error, not a forward-compatible extension point. The
+#   normative grammar (`docs/language-reference.md`, "Directives") is
+#
+#       directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ]
+#
+#   and the accompanying table fixes the four names and the four `scheduler`
+#   modes. Four independent witnesses agree on that set: the book appendix
+#   (`docs/book/appendix-directives.md`), the reference table + EBNF, Rust gg's
+#   validator arms (`src/semantic/mod.rs`), and the consumers
+#   (`src/ir/lowering/mod.rs`, `src/loader.rs`).
+#
+#   Until this fixture landed the self-host performed NO directive validation
+#   at all — it COMPILED, LINKED and RAN a program whose directive Rust gg
+#   refuses, and `self_host_lowerer/lower.gg` then discarded the value, so
+#   `directive scheduler=bogus` silently ran an async program under the
+#   default POOL scheduler where `=single` gives a different interleaving.
+#   That is Core #10 (lower-or-reject) in its exact forbidden shape, on the
+#   lane the succession plan makes the reference — which is why the verdict is
+#   pinned on all three production lanes and not on the one that already had
+#   it right.
+#
+#   adjudicator: production-v1 — `Item::Directive` has no arm anywhere in
+#   ggdef's `elaborate`, so the ggdef lane records GGDEF-SKIP
+#   (`item kind other is outside the phase-0 subset`, measured). Per the
+#   owner's 2026-08-31 ruling ggdef ABSTAINS on directives rather than being
+#   taught them; the subset gap is filed.
+# expect:
+#   exit: 1
+#   stdout: ""
+#   reject: E_UnknownDirective
+#!end
+
+directive scheduler=bogus
+
+void main():
+    print("REACHED — the directive was NOT validated on this lane")

@@ -3798,28 +3798,27 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                 # so this comment cannot rot the way its "8" predecessor did.
                 # Mirrors Rust gg's scheduler-directive scan.
                 #
-                # ⚠ There is no `else` for an unknown mode, and THAT IS A LIVE
-                # CORE #10 SILENT DROP ON THIS LANE — filed as `todo/t0825`.
+                # ⚠ There is no `else` for an unknown mode. That used to be a
+                # CORE #10 SILENT DROP ON THIS LANE (`todo/t0825`, closed).
+                # Unreachable as a user-visible drop because
+                # `validate_directives` rejects first.
                 # It is easy to talk yourself out of, so here is the measurement
                 # rather than the reasoning: on the RUST lane
                 # `directive scheduler=bogus` is REJECTED with E_UnknownDirective
                 # (`src/semantic/mod.rs`, pinned by the
-                # `unknown_scheduler_mode_error` fixture). On THIS lane it is
-                # ACCEPTED: `self_host_check/resolve.gg`'s IDirective arm is a
-                # bare `pass`, the self-host validates no directive at all, and
-                # the arm below silently ignores the value. Measured 2026-08-30 —
+                # `unknown_scheduler_mode_error` fixture). Pre-fix, THIS lane
+                # ACCEPTED it: `self_host_check/resolve.gg`'s IDirective arm was
+                # a bare `pass`, the self-host validated no directive at all, and
+                # the arm below silently ignored the value. Measured 2026-08-30 —
                 # emit + cc + run of one async program, rc 0 at every stage:
                 #   scheduler=bogus  -> "── Scheduler: Pool ──",   worker runs|after sleep|1|1
                 #   scheduler=single -> "── Scheduler: Single ──", after sleep|0|worker runs|1
-                # A typo therefore changes an async program's interleaving with
-                # no diagnostic. The arm is unreachable only INSIDE THE HARNESS,
-                # because the runtime-parity corpus feeds the self-host solely
-                # Rust-ACCEPTED programs — and a self-host source file may not
-                # justify a missing arm by citing the other compiler's frontend
-                # (that is exactly what the succession plan forbids).
+                # A typo therefore changed an async program's interleaving with
+                # no diagnostic. The missing `else` is no longer a user-visible
+                # drop: `validate_directives` (both resolve copies) rejects the
+                # unknown mode before `lower_module` runs.
                 # `pool` needs no arm here because it is `new_lir_module`'s
-                # default — but note that is also an unguarded coincidence, and
-                # `t0825` is where both are tracked.
+                # default — an unguarded coincidence the closed item also named.
                 elif dir_name == "scheduler":
                     if dir_value == "single":
                         gmod.scheduler_mode = SCHED_SINGLE

@@ -45472,65 +45472,332 @@ fn d35_fn_type_sigil_before_type_error() {
     );
 }
 
+/// An unknown item ATTRIBUTE is rejected. ⚠ RENAMED from
+/// `unknown_directive_error`: the fixture pins `@nonexistent`, which
+/// `validate_attributes` (`src/semantic/mod.rs`) refuses against the
+/// {derive, tag, should_panic, skip, timeout} allowlist — a DIFFERENT validator
+/// from the `directive` scan two screens above it, sharing only the error code.
+/// Under the old name it read as coverage of the unknown-directive-NAME cell,
+/// which in fact had no fixture on any lane (Core #12 — a fixture's name is a
+/// claim about scope). That cell is now
+/// `spectests/run/reject_directive_unknown_name.gg`, pinned on all three lanes.
+///
+/// One-lane pin, deliberately: the self-host performs no ATTRIBUTE validation
+/// and still accepts this program. A different class from the directive
+/// validation, filed rather than absorbed.
 #[test]
-fn unknown_directive_error() {
-    check_gg_fails("unknown_directive_error.gg", "unknown directive");
+fn unknown_attribute_error() {
+    check_gg_fails("unknown_attribute_error.gg", "unknown directive");
 }
 
-/// The directive-VALUE arm of the same validation, which had no fixture. It is
-/// load-bearing for `src/ir/lowering/mod.rs`'s `_ => {}`, which is unreachable
-/// only because a bad mode is rejected here first — otherwise that arm is a
-/// Core #10 silent drop. RED-verified by deleting the `"scheduler"` arm of the
-/// directive validation in `src/semantic/mod.rs`: the fixture then COMPILES and
-/// RUNS under the default pool scheduler and this test fails.
+/// The directive-VALUE arm of the same validation. It is load-bearing for
+/// `src/ir/lowering/mod.rs`'s `_ => {}`, which is unreachable only because a bad
+/// mode is rejected here first — otherwise that arm is a Core #10 silent drop.
+/// RED-verified by deleting the `"scheduler"` arm of the directive validation in
+/// `src/semantic/mod.rs`: the fixture then COMPILES and RUNS under the default
+/// pool scheduler and this test fails.
 ///
-/// ⚠ THIS PINS ONE LANE ONLY, and the other lane is a live defect — do not read
-/// it as cross-lane coverage. The self-host performs NO directive validation
-/// (`self_host_check/resolve.gg`'s `IDirective` arm is a bare `pass`), so its
-/// lowerer's missing `else` IS the silent drop, filed as `todo/t0825`. Measured
-/// 2026-08-30: the self-host emits, compiles and RUNS this very fixture at rc 0,
-/// and on an async program `scheduler=bogus` silently selects the POOL runtime
-/// where `scheduler=single` selects the N:1 loop — different observable
-/// interleaving, no diagnostic. Graduate this to a two-lane pin when `t0825`
-/// lands.
+/// ⊕ GRADUATED TO A TWO-LANE PIN (`todo/t0825`): the self-host half is
+/// `sh_rejects_unknown_scheduler_mode` below, and the same cell is adjudicated on
+/// all three production lanes by
+/// `spectests/run/reject_directive_scheduler_unknown_value.gg`. Until this round
+/// this was a one-lane pin whose green told you nothing about the lagging lane —
+/// the self-host validated NO directive at all and compiled, linked and RAN this
+/// very fixture.
 #[test]
 fn unknown_scheduler_mode_error() {
     check_gg_fails("unknown_scheduler_mode_error.gg", "unknown directive `scheduler=bogus`");
 }
 
-/// The SELF-HOST half of `unknown_scheduler_mode_error`, on the lagging lane —
-/// the shape `assert_self_host_rejects` exists for (a `check_gg_fails` pin here
-/// would be green today and would pin nothing, Core #12).
+// ─────────────── the directive-validation net (todo/t0825, R48 β) ────────────
+//
+// AXIS 1 — the SETS, enforced by `validate_directives` (semantic phase):
+//   the four names {strip-asserts, trace, hot-reload, scheduler} and the four
+//   scheduler modes {pool, thread, inline, single}. Those cells carry the
+//   `E_UnknownDirective` code, so they are adjudicated on all THREE production
+//   lanes by `spectests/run/reject_directive_*.gg` and are not duplicated here.
+//
+// AXIS 2 — the GRAMMAR, enforced by `parse_directive_item` (parse phase):
+//   `directive = "directive" IDENTIFIER { "-" IDENTIFIER } [ "=" IDENTIFIER ]`.
+//   Rust gg reports these as PARSE errors, which carry no registry code, so a
+//   `spectests/run/reject_*.gg` fixture (which adjudicates on the `error[E_..]`
+//   marker) cannot own them. They live here, pinned on BOTH lanes.
+//
+// ⚠ WHY EVERY ROW BELOW HAS AN EXPLICIT SELF-HOST HALF. `self_host_runtime_diff`
+// classifies a Rust-rejected program as RustRejected and RETURNS BEFORE THE
+// SELF-HOST IS INVOKED, so a self-host OVER-ACCEPTANCE of a Rust-rejected
+// program is structurally invisible to the parity gate (filed as `todo/t0870`).
+// The gate that would "obviously" catch this class cannot see it; these asserts
+// are the instrument that can (Core #13).
+
+/// The SELF-HOST half of `unknown_scheduler_mode_error`, on what used to be the
+/// lagging lane — the shape `self_host_accepts_and_emits` exists for (a
+/// `check_gg_fails` pin here would be green today and would pin nothing,
+/// Core #12).
 ///
-/// Rust gg rejects `directive scheduler=bogus`; the self-host validates no
-/// directive at all (`self_host_check/resolve.gg`'s `IDirective` arm is a bare
-/// `pass`) and its lowerer's scheduler arm has no `else`, so the value is
-/// silently dropped and the module keeps the default POOL scheduler. Measured
-/// 2026-08-30: emit + cc + run of the repro at rc 0 on every stage, printing the
-/// pool interleaving, where the same program with `scheduler=single` prints the
-/// N:1 one. Core #10 lower-or-reject, filed as `todo/t0825`.
-///
-/// RED at HEAD by construction: the self-host ACCEPTS and emits C. Un-ignore and
-/// promote the fixture out of `known_gaps/` the round the self-host validates
-/// directives.
+/// GRADUATED from `known_gaps/sh_unknown_scheduler_mode_overaccepted.gg`, which
+/// was `#[ignore]`d asserting exactly this reject. RED-verified against the
+/// pre-fix driver: it ACCEPTED the program and emitted C for it, exit 0 — and
+/// the emitted C carried `── Scheduler: Pool ──` where the same program with
+/// `=single` carries `── Scheduler: Single ──`, i.e. the dropped value changed
+/// an async program's observable interleaving with no diagnostic.
 #[test]
-#[ignore]
 #[serial(self_host_lowerer_driver)]
 fn sh_rejects_unknown_scheduler_mode() {
-    const REL: &str = "known_gaps/sh_unknown_scheduler_mode_overaccepted.gg";
+    const REL: &str = "sh_reject_unknown_scheduler_mode.gg";
     let (accepted, exit_code) = self_host_accepts_and_emits(REL);
     assert!(
         !accepted,
         "{REL}: the self-host ACCEPTED `directive scheduler=bogus` and emitted C for it \
          (exit={exit_code:?}). Rust gg rejects the same program with \
          `error[E_UnknownDirective]` (`src/semantic/mod.rs`), so this is a cross-lane \
-         accept/reject divergence AND a Core #10 silent drop: the self-host validates no \
-         directive at all (`self_host_check/resolve.gg`'s `IDirective` arm is a bare `pass`) \
-         and `self_host_lowerer/lower.gg`'s scheduler arm has no `else`, so the value is \
-         discarded and the module keeps the default POOL scheduler. That is observable: the \
-         same program with `scheduler=single` emits the N:1 runtime and prints a different \
-         interleaving. Fix = validate directives in the self-host frontend (name AND value), \
-         then un-ignore this test and promote the fixture out of `known_gaps/`."
+         accept/reject divergence AND a Core #10 silent drop. Chokepoint: \
+         `validate_directives` in `self_host_typechecker/resolve.gg` (and its twin in \
+         `self_host_resolver/resolve.gg`)."
+    );
+}
+
+/// GRAMMAR axis, non-identifier VALUE. Rust gg: `expected identifier, found
+/// integer 1` at parse. RED-verified against the pre-fix self-host driver: it
+/// ACCEPTED the program and emitted `int main(` at exit 0.
+///
+/// ⚠ This cell is the reason the fix has TWO sites. `token_ident` returns "" for
+/// a non-identifier, so `directive trace` (ACCEPT) and `directive trace=1`
+/// (REJECT) reached the semantic phase as the byte-identical
+/// `IDirective("trace", "")` — a set validator cannot separate them, only the
+/// parser can.
+#[test]
+fn directive_value_int_error() {
+    check_gg_fails("directive_value_int_error.gg", "expected identifier");
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_directive_value_int() {
+    assert_self_host_rejects_directive("directive_value_int_error.gg", "`directive trace=1`");
+}
+
+/// GRAMMAR axis, non-identifier VALUE on a HYPHENATED name — the same parser arm
+/// reached through the `-` continuation loop. RED-verified against the pre-fix
+/// driver (ACCEPTED + emitted C).
+#[test]
+fn directive_hot_reload_value_int_error() {
+    check_gg_fails("directive_hot_reload_value_int_error.gg", "expected identifier");
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_directive_hot_reload_value_int() {
+    assert_self_host_rejects_directive(
+        "directive_hot_reload_value_int_error.gg",
+        "`directive hot-reload=1`",
+    );
+}
+
+/// GRAMMAR axis, the SPACE-SEPARATED value spelling — a DIFFERENT parser arm
+/// from the two rows above (trailing-token check, not the `=`-branch check).
+///
+/// ⚠ The one cell that was not merely over-accepted but ACTED ON: the self-host
+/// parser consumed the bare token as the value, so `directive scheduler single`
+/// SELECTED the N:1 scheduler (measured: `── Scheduler: Single ──` in the emitted
+/// C) on a program Rust gg refuses outright. RED-verified against the pre-fix
+/// driver.
+#[test]
+fn directive_space_separated_value_error() {
+    check_gg_fails("directive_space_separated_value_error.gg", "expected identifier");
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_directive_space_separated_value() {
+    assert_self_host_rejects_directive(
+        "directive_space_separated_value_error.gg",
+        "`directive scheduler single`",
+    );
+}
+
+/// GRAMMAR axis, non-identifier NAME. Rust gg: `expected identifier, found
+/// integer 42`. RED-verified against the pre-fix driver (ACCEPTED + emitted C).
+///
+/// ⚠ NOT in the divergence matrix `todo/t0825` was filed with — the 14th
+/// divergent cell, found by varying the NAME slot of the grammar rather than the
+/// value slot.
+#[test]
+fn directive_name_not_identifier_error() {
+    check_gg_fails("directive_name_not_identifier_error.gg", "expected identifier");
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_directive_name_not_identifier() {
+    assert_self_host_rejects_directive(
+        "directive_name_not_identifier_error.gg",
+        "`directive 42`",
+    );
+}
+
+/// GRAMMAR axis, a stray token after a VALUELESS directive. The twin of
+/// `directive_space_separated_value_error` and the row that shows why the
+/// trailing-token check must live in the parser: dropping the space-separated
+/// branch alone turns `directive scheduler single` into a valueless `scheduler`
+/// (which the SET check refuses anyway) but turns `directive trace single` into a
+/// valueless `trace`, which is LEGAL — so the stray word would be silently
+/// discarded. RED-verified against the pre-fix driver.
+///
+/// ⚠ The 15th divergent cell, also absent from the filed matrix.
+#[test]
+fn directive_trailing_token_error() {
+    check_gg_fails("directive_trailing_token_error.gg", "expected identifier");
+}
+
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_directive_trailing_token() {
+    assert_self_host_rejects_directive(
+        "directive_trailing_token_error.gg",
+        "`directive trace single`",
+    );
+}
+
+/// The ACCEPT control the reject rows above cannot supply: a REPEATED directive
+/// stays legal, and the program still runs. `validate_directives` walks every
+/// `IDirective` item rather than the first, and unlike the `suite setup` /
+/// `suite teardown` validation a screen away in `src/semantic/mod.rs` it must NOT
+/// acquire a duplicate reject.
+///
+/// ⚠ NOT RED-VERIFIABLE and does not claim to be (Core #12): green before AND
+/// after. It goes red only if the new validation over-rejects.
+#[test]
+fn directive_duplicate_ok() {
+    run_gg("directive_duplicate_ok.gg", "duplicate directives ok");
+}
+
+/// The MESSAGE-SHAPE pin for the grammar axis on the self-host lane. The verdict
+/// pins above read only the exit status; this one reads stderr and asserts the
+/// self-host names the offending construct rather than dying under a
+/// `trap[T_Panic]` banner a reader would take for a compiler crash.
+///
+/// One cell is enough here: the five grammar rows share one reject channel
+/// (`reject_directive_syntax`), so this pins the channel, not the row.
+#[test]
+#[serial(self_host_lowerer_driver)]
+fn sh_directive_grammar_reject_names_the_construct() {
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures/directive_space_separated_value_error.gg");
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "sh_directive_grammar_reject_names_the_construct",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "the self-host must refuse a malformed directive with Rust gg's exit code (1), not a \
+         panic/trap exit. stderr:\n{stderr}",
+    );
+    assert!(
+        stderr.contains("unexpected token after `directive scheduler`"),
+        "the self-host refused the malformed directive but did not name it. A reject the user \
+         cannot act on is half a reject.\nstderr:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains("trap["),
+        "the self-host refused the malformed directive as a TRAP. A user syntax error must not \
+         render as a compiler crash.\nstderr:\n{stderr}",
+    );
+}
+
+/// KNOWN GAP (`todo/t0929`) — the self-host performs NO item-ATTRIBUTE
+/// validation, so `@nonexistent` on a struct is accepted and the attribute is
+/// silently discarded, where Rust gg rejects it (`validate_attributes`,
+/// `src/semantic/mod.rs`; pinned on that lane by `unknown_attribute_error`).
+///
+/// ⚠ A DIFFERENT CLASS from the directive validation this round closed, sharing
+/// only the error code: a different validator, a different item surface, a
+/// different allowlist. Dispositioned DEFER-with-reason rather than absorbed.
+/// RED at HEAD by construction: the self-host ACCEPTS and emits C. Un-ignore and
+/// promote the fixture out of `known_gaps/` the round the self-host validates
+/// attributes.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0929): the self-host validates no item attributes; \
+`@nonexistent` is accepted and discarded where Rust gg rejects it."]
+#[serial(self_host_lowerer_driver)]
+fn sh_rejects_unknown_attribute() {
+    const REL: &str = "known_gaps/sh_unknown_attribute_overaccepted.gg";
+    let (accepted, exit_code) = self_host_accepts_and_emits(REL);
+    assert!(
+        !accepted,
+        "{REL}: the self-host ACCEPTED `@nonexistent` on a struct and emitted C for it \
+         (exit={exit_code:?}). Rust gg rejects the same program with \
+         `error[E_UnknownDirective]` via `validate_attributes` (`src/semantic/mod.rs`), so this \
+         is a cross-lane accept/reject divergence AND a Core #10 silent drop — the attribute is \
+         discarded with no diagnostic. Fix = a `validate_attributes` twin beside \
+         `validate_directives` in the self-host resolve pass (todo/t0929), after checking that \
+         the self-host parser keeps unrecognised attributes at all."
+    );
+}
+
+/// KNOWN GAP (`todo/t0928`) — the self-host renders every ITEM-level diagnostic
+/// at line 1, column 1, because no `Item` variant in its AST carries a span.
+///
+/// The VERDICT is right on both lanes, so this is not a lane divergence; what
+/// differs is WHERE the compiler says the problem is. Rust gg points at the
+/// directive; the self-host points at the file's first line, which in the repro
+/// is a comment. RED at HEAD by construction. Un-ignore and promote the fixture
+/// out of `known_gaps/` the round the self-host AST carries item spans.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0928): no self-host AST Item variant carries a span, \
+so every item-level diagnostic renders its caret at 1:1."]
+#[serial(self_host_lowerer_driver)]
+fn sh_directive_diagnostic_points_at_the_directive() {
+    const REL: &str = "known_gaps/sh_directive_diagnostic_points_at_line_one.gg";
+    let (driver_exe, _driver_c) = build_gg_dir_cached("self_host_lowerer", "driver.gg");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let lib_dir = manifest_dir.join("lib");
+    let fixture = manifest_dir.join("tests/fixtures").join(REL);
+    let out = run_with_timeout(
+        Command::new(&driver_exe).arg(&fixture).arg(&lib_dir).arg("--lir-c"),
+        "sh_directive_diagnostic_points_at_the_directive",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // The `directive scheduler=bogus` line in the repro. Read it out of the
+    // fixture rather than hardcoding it, so editing the header cannot make this
+    // test lie about what it checked.
+    let src = std::fs::read_to_string(&fixture).expect("repro unreadable");
+    let want_line = src
+        .lines()
+        .position(|l| l.starts_with("directive scheduler=bogus"))
+        .expect("repro no longer contains the directive")
+        + 1;
+    assert!(
+        stderr.contains(&format!(":{want_line}:1")),
+        "{REL}: the self-host refused the directive but located it at the wrong line — the \
+         directive is on line {want_line} and the diagnostic does not say so. No `Item` variant \
+         in the self-host AST carries a span, so `validate_directives` has nothing to pass to \
+         `Diagnostic.error` and passes `Span(0, 0)`; the caret lands on the file's first line, \
+         which here is a comment. Rust gg points at the directive. Fix = give `IDirective` a \
+         `Span` payload (12 sites, todo/t0928), or the general `SpannedItem` wrapper.\
+         \nstderr:\n{stderr}",
+    );
+}
+
+/// Shared assertion for the directive GRAMMAR net on the self-host lane. Wraps
+/// the `self_host_accepts_and_emits` mechanism with this family's prose, exactly
+/// as `assert_self_host_rejects` does for the `E_NoMethodFound` family — share
+/// the mechanism, never the assertion text.
+fn assert_self_host_rejects_directive(rel_fixture: &str, what: &str) {
+    let (accepted, exit_code) = self_host_accepts_and_emits(rel_fixture);
+    assert!(
+        !accepted,
+        "{rel_fixture}: the self-host ACCEPTED {what} and emitted C for it. Rust gg refuses the \
+         same source at PARSE time — the grammar is `directive = \"directive\" IDENTIFIER \
+         {{ \"-\" IDENTIFIER }} [ \"=\" IDENTIFIER ]` (docs/language-reference.md), so both the \
+         name and the value are identifiers and nothing else may follow. Accepting it is a \
+         Core #10 silent drop, and for the space-separated spelling it is worse than silent: \
+         the self-host used to ACT on the dropped token. Chokepoint: `parse_directive_item` in \
+         all three self_host_*/parser.gg copies. exit={exit_code:?}",
     );
 }
 

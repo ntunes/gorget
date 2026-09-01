@@ -1,0 +1,26 @@
+# Test: a VALUELESS directive followed by a stray token is refused —
+# `directive trace single`.
+#
+# The twin of `directive_space_separated_value_error.gg` (`directive scheduler
+# single`), and the one that shows why the trailing-token check has to exist in
+# the PARSER rather than being folded into the semantic set check. Deleting the
+# space-separated branch alone turns `directive scheduler single` into a
+# valueless `scheduler`, which the semantic pass refuses anyway — but it turns
+# `directive trace single` into a valueless `trace`, which is LEGAL. Without the
+# trailing-token check this row would silently ACCEPT, dropping the word the
+# author wrote (Core #10).
+#
+# Rust gg refuses it: `single` is not consumed by `parse_directive`, so the item
+# loop tries to parse it and fails.
+#
+# ⚠ Not in the divergence matrix `todo/t0825` was filed with — this and
+# `directive_name_not_identifier_error.gg` are the 14th and 15th divergent cells,
+# found by varying the grammar axis rather than the name/value sets.
+#
+# Pinned on BOTH lanes: `directive_trailing_token_error` (Rust gg) and
+# `sh_rejects_directive_trailing_token` (self-host driver).
+
+directive trace single
+
+void main():
+    print("REACHED — the trailing directive token was NOT refused")

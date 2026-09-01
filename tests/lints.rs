@@ -27130,6 +27130,261 @@ fn parity_untriaged_exclusions_shrink_only() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// THE DIRECTIVE SET — a CROSS-LANE SET COMPARISON, not an arm count
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Every double-quoted literal on `line`, with the quotes stripped. Good enough
+/// for the four call sites below, which read single-line `match` patterns and
+/// single-line `if` comparisons — none of them contains an escaped quote.
+fn quoted_literals(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = line;
+    while let Some(open) = rest.find('"') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('"') else { break };
+        out.push(after[..close].to_string());
+        rest = &after[close + 1..];
+    }
+    out
+}
+
+/// The slice of `src` between the first line containing `from` and the first
+/// line after it containing `to`. Panics naming the missing marker — a silently
+/// empty region would make every set below vacuously equal, which is exactly the
+/// "a guard that cannot see its own class" failure this test exists to avoid.
+fn region<'a>(src: &'a str, path: &str, from: &str, to: &str) -> Vec<&'a str> {
+    let lines: Vec<&str> = src.lines().collect();
+    let start = lines
+        .iter()
+        .position(|l| l.contains(from))
+        .unwrap_or_else(|| panic!("{path}: region start marker {from:?} not found"));
+    let end = start
+        + 1
+        + lines[start + 1..]
+            .iter()
+            .position(|l| l.contains(to))
+            .unwrap_or_else(|| panic!("{path}: region end marker {to:?} not found"));
+    lines[start..end].to_vec()
+}
+
+/// The set of directive NAMES and `scheduler` MODES each lane admits must be
+/// IDENTICAL, and must equal the set the documentation publishes.
+///
+/// ⚠ WHY A SET COMPARISON AND NOT AN ARM COUNT. The obvious guard for "the
+/// lanes drifted" is a per-lane arm count, and it is worse than useless here:
+/// the divergence that motivated this test — the self-host ACCEPTING
+/// `directive scheduler=Pool`, which Rust gg rejects — moves NO arm count in
+/// either compiler. A guard that green-lights the class it was written to
+/// retire is worse than none, so this one compares the SETS.
+///
+/// ⚠ AND WHY NOT rustc EXHAUSTIVENESS. Rust gg's validator is a STRING MATCH on
+/// `d.name.as_str()` with a `_ =>` catch-all (`src/semantic/mod.rs`), so the
+/// compiler witnesses nothing about the set's contents. The INDEPENDENT witness
+/// is the documentation: the book appendix's per-directive sections and the
+/// reference's scheduler-backend table, neither of which is derived from any
+/// implementation's list.
+///
+/// The set is CLOSED by design, not by omission: D-A36(e) ratified that lints
+/// get their own `lint` keyword and never ride `directive`, so a name outside
+/// this set is a user error rather than a forward-compatible extension point.
+/// Adding a directive is therefore a five-file change — Rust gg, both self-host
+/// `resolve.gg` copies, the book appendix, the reference — and this test is what
+/// makes it five rather than one.
+#[test]
+fn directive_name_sets_agree_across_lanes() {
+    use std::collections::BTreeSet;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let read = |rel: &str| {
+        fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("cannot read {rel}: {e}"))
+    };
+
+    // ── Lane 1: Rust gg. The `match d.name.as_str()` arms, bounded to the
+    //    directive block so `validate_attributes`'s allowlist (a DIFFERENT
+    //    validator, sharing only the error code) cannot leak in.
+    let rust_src = read("src/semantic/mod.rs");
+    let rust_block = region(
+        &rust_src,
+        "src/semantic/mod.rs",
+        "// Validate directives",
+        "// Validate item-level attributes",
+    );
+    let mut rust_names: BTreeSet<String> = BTreeSet::new();
+    let mut rust_modes: BTreeSet<String> = BTreeSet::new();
+    for line in &rust_block {
+        let t = line.trim();
+        if !(t.ends_with("=> {") || t.ends_with("=> {}")) {
+            continue;
+        }
+        for lit in quoted_literals(t) {
+            // `Some("pool")` is a VALUE pattern; a bare `"scheduler"` is a NAME.
+            if t.contains(&format!("Some(\"{lit}\")")) {
+                rust_modes.insert(lit);
+            } else {
+                rust_names.insert(lit);
+            }
+        }
+    }
+
+    // ── Lanes 2 & 3: the two self-host `resolve.gg` copies. (`self_host_check`
+    //    and `self_host_lowerer` SYMLINK the typechecker's, so listing them
+    //    would double-count; `self_host_resolver`'s is a genuine second file.)
+    let sh_paths = [
+        "tests/fixtures/self_host_typechecker/resolve.gg",
+        "tests/fixtures/self_host_resolver/resolve.gg",
+    ];
+    let mut lanes: Vec<(&str, BTreeSet<String>, BTreeSet<String>)> =
+        vec![("src/semantic/mod.rs", rust_names.clone(), rust_modes.clone())];
+    for path in sh_paths {
+        let src = read(path);
+        let mut names = BTreeSet::new();
+        for line in region(&src, path, "void validate_directives(", "bool is_scheduler_mode(") {
+            let t = line.trim();
+            if t.starts_with('#') || !t.contains("name == \"") {
+                continue;
+            }
+            names.extend(quoted_literals(t));
+        }
+        let mut modes = BTreeSet::new();
+        for line in region(&src, path, "bool is_scheduler_mode(", "void collect_item(") {
+            let t = line.trim();
+            if t.starts_with('#') || !t.contains("value == \"") {
+                continue;
+            }
+            modes.extend(quoted_literals(t));
+        }
+        lanes.push((path, names, modes));
+    }
+
+    // ── The INDEPENDENT witness: the docs. The book appendix names one section
+    //    per directive; its scheduler section tables the modes, as does the
+    //    reference's "Scheduler Backends" table.
+    let book = read("docs/book/appendix-directives.md");
+    let mut doc_names: BTreeSet<String> = BTreeSet::new();
+    for line in book.lines() {
+        if let Some(rest) = line.trim().strip_prefix("### `directive ") {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_lowercase() || *c == '-')
+                .collect();
+            if !name.is_empty() {
+                doc_names.insert(name);
+            }
+        }
+    }
+    let mut doc_modes: BTreeSet<String> = BTreeSet::new();
+    for line in region(
+        &book,
+        "docs/book/appendix-directives.md",
+        "### `directive scheduler=",
+        "## CLI Override Rules",
+    ) {
+        let t = line.trim();
+        if !t.starts_with("| `") {
+            continue;
+        }
+        if let Some(m) = quoted_or_ticked_first(t) {
+            doc_modes.insert(m);
+        }
+    }
+    let reference = read("docs/language-reference.md");
+    let mut ref_modes: BTreeSet<String> = BTreeSet::new();
+    for line in region(
+        &reference,
+        "docs/language-reference.md",
+        "#### Scheduler Backends",
+        "The CLI flag `--scheduler=X` overrides the source directive.",
+    ) {
+        let t = line.trim();
+        if !t.starts_with("| `") {
+            continue;
+        }
+        if let Some(m) = quoted_or_ticked_first(t) {
+            ref_modes.insert(m);
+        }
+    }
+
+    // ── Non-vacuity first: an empty set on any side would make every equality
+    //    below trivially true (Core #13 — verify the verifier).
+    for (label, set) in [
+        ("Rust names", &lanes[0].1),
+        ("Rust modes", &lanes[0].2),
+        ("book names", &doc_names),
+        ("book modes", &doc_modes),
+        ("reference modes", &ref_modes),
+    ] {
+        assert!(
+            set.len() >= 3,
+            "the {label} extraction found only {} entries ({set:?}). The markers this test \
+             scans between have moved, and an empty extraction makes every comparison below \
+             vacuously green — which is the exact failure mode a set guard exists to avoid. \
+             Fix the extraction, do not relax the assert.",
+            set.len(),
+        );
+    }
+
+    // ── The lanes must agree with each other …
+    let (ref_label, ref_names, ref_lane_modes) = lanes[0].clone();
+    for (label, names, modes) in &lanes[1..] {
+        assert_eq!(
+            names, &ref_names,
+            "DIRECTIVE NAME SETS DIVERGED between {ref_label} and {label}.\n  {ref_label}: \
+             {ref_names:?}\n  {label}: {names:?}\nA name one lane admits and the other refuses \
+             is an accept/reject lane divergence (Core #9), which is what `todo/t0825` was: the \
+             self-host admitted EVERY name because it validated none.",
+        );
+        assert_eq!(
+            modes, &ref_lane_modes,
+            "SCHEDULER MODE SETS DIVERGED between {ref_label} and {label}.\n  {ref_label}: \
+             {ref_lane_modes:?}\n  {label}: {modes:?}\nThe mode set is CASE-SENSITIVE and \
+             closed; a lane that admits an extra value silently selects a runtime the other \
+             lane refuses to compile.",
+        );
+    }
+
+    // ── … and with the documentation, which no implementation derives from.
+    assert_eq!(
+        ref_names, doc_names,
+        "the directive NAME set in {ref_label} disagrees with the one the book publishes \
+         (docs/book/appendix-directives.md, one `### `directive X`` section per name).\n  \
+         code: {ref_names:?}\n  book: {doc_names:?}\nAdding a directive is a five-file change \
+         — both compilers, both self-host resolve.gg copies, the book appendix and the \
+         reference table. If the book is the one that is wrong, fix the book: it is what a \
+         user reads.",
+    );
+    assert_eq!(
+        ref_lane_modes, doc_modes,
+        "the `scheduler` MODE set in {ref_label} disagrees with the book's mode table \
+         (docs/book/appendix-directives.md).\n  code: {ref_lane_modes:?}\n  book: {doc_modes:?}",
+    );
+    assert_eq!(
+        doc_modes, ref_modes,
+        "the two published `scheduler` mode tables disagree with each other.\n  book: \
+         {doc_modes:?}\n  reference: {ref_modes:?}\nBoth are read by users; neither is derived \
+         from the other.",
+    );
+
+    eprintln!(
+        "directive_name_sets_agree_across_lanes: names {:?} · modes {:?} · {} lanes + 2 doc \
+         witnesses",
+        ref_names,
+        ref_lane_modes,
+        lanes.len(),
+    );
+}
+
+/// The first back-ticked token in a markdown table row (`| \`pool\` | … |`).
+fn quoted_or_ticked_first(row: &str) -> Option<String> {
+    let after = row.strip_prefix("| `")?;
+    let end = after.find('`')?;
+    let tok = &after[..end];
+    if !tok.is_empty() && tok.chars().all(|c| c.is_ascii_lowercase()) {
+        Some(tok.to_string())
+    } else {
+        None
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // THE FIGURES DB — one declaration for every pinned number, and the guard that
 // makes it worth having
 // ═══════════════════════════════════════════════════════════════════════════
