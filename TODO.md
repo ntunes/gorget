@@ -3,8 +3,11 @@
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
 **▶ R48 IS OPEN AND MID-FLIGHT — 2 of 7 tracks integrated, 5 landed and awaiting one gauntlet step each.
-⛔ NEW AGENTS ARE ON AN OWNER HOLD. ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST; it carries the
-per-track table, the integration recipe, and what must happen before close.**
+⛔ NEW AGENTS ARE ON AN OWNER HOLD, LIFTED FOR ONE: D2's confirming output-review (2026-09-01).
+⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST; it carries the per-track table, the
+integration recipe, and what must happen before close.**
+**D53 sharpened in place the same day:** Mutex/RWLock are unique locks; consume-position reject is
+load-bearing; `.clone()` is not a fix-it; Channel stays multi-owner. Not yet implemented.
 Opened 2026-08-31 (owner: *"open next round"*). Headline: **the six CRITICAL memory-safety defects** —
 `t0841` and `t0763`+`t0134` are CLOSED and integrated; `t0770`/`t0772`, `t0840` and `t0825` are fixed on
 branches; `t0771` moved to R49 — with the owner-directed burn-down campaign in parallel and `t0861` (the
@@ -29,16 +32,17 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `329ad020`)
 
 **2 of 7 tracks INTEGRATED. 5 branches are LANDED, GREEN ON THEIR OWN BRANCH, and each owes exactly one
-gauntlet step before it may merge.** Nothing is blocked on a technical finding; it is blocked on
-⛔ **an OWNER HOLD ON NEW AGENTS** (2026-09-01: *"don't start new ones (for the gauntlet or otherwise)
-until I say so"*). One agent was later authorised, spent on Track C's confirming pass, which signed off.
+gauntlet step before it may merge.** The standing hold is *"don't start new ones until I say so"*;
+it has been lifted twice, once per agent: Track C's confirming pass (signed off, integrated), and
+**D2's confirming pass (in flight)**. D53 (sharpened): unique lock + consume-position reject; not
+yet in the D2 diff — that is the confirming pass's load-bearing bar.
 
 | track | items | branch tip | ahead | merge | OWED STEP |
 |---|---|---|---|---|---|
 | **D1** | `t0841` | — | — | — | **INTEGRATED** `3b8a5561` |
 | **C** | `t0763` `t0134` | — | — | — | **INTEGRATED** `329ad020` |
 | **A** | `t0770` `t0772` | `5d43cedd` | 6 | ⚠ `todo/t0876.md` | **a first output-review** (none yet) |
-| **D2** | `t0840` | `4850bf38` | 6 | clean | **a confirming pass** (output-review blocked → folded) |
+| **D2** | `t0840` | `4850bf38` | 6 | `TODO.md`+`DONE.md` | **confirming pass in flight** (D53 consume-gate is the bar; t0908 reject not yet implemented) |
 | **β** | `t0825` | `470cd49f` | 1 | clean | **a first output-review** (none yet) |
 | **γ** | nondeterminism | `5f67841f` | 7 | clean | **a first output-review** (none yet) |
 | **F** | `t0861` `t0851` `t0860` | `6e9404f5` | 6 | ⚠ `todo/t0876.md` | **a confirming pass** (2 reviews blocked → folded) |
@@ -88,14 +92,15 @@ accordingly.** ⊕ Related: `t0875` — four counting assertions were each evade
 counted, the last in **seven** costumes. **A textual guard's reach is the TOKEN, never the CONCEPT.**
 
 ### ✅ OWNER RULINGS THIS ROUND — do not re-litigate
-- **D53 (2026-09-01):** `Mutex`/`RWLock` join the `E_MoveWithoutOperator` carve-out list.
-  `decisions.md` + write-through in `language-reference.md`. ⭐ It **corrected a false classification** —
-  the reference had `Mutex[T]` under *"the sanctioned MULTI-OWNER escape hatch"*, but the lowering gives it
-  **no clone path**, which is why slots 2..N of a `Vector[Mutex]` had nothing to hold. Share via
-  `Shared[Mutex[T]]`. ⇒ **`t0908` (CRITICAL) closes by CHECK-TIME REJECTION with no lowering change.**
-  ⚠ **D2's report still says "blocked on the owner call" — STALE**, the ruling landed after its last read.
-  ⚠ **The rejection is RATIFIED but NOT YET IMPLEMENTED.** ⚠ `AGENTS.md`'s carve-out list is a second
-  spelling, now short by two, left unedited at 0 bytes headroom (D53 records the enumerate-vs-cite question).
+- **D53 (2026-09-01, sharpened in place the same day):** `Mutex`/`RWLock` are **unique locks**.
+  Exclusion and sharing are orthogonal — share via `Shared[Mutex[T]]`, never by cloning the mutex.
+  `E_MoveWithoutOperator` at assign, init, **and consuming positions** (`push`/`put`/`set`/`insert`/
+  `send`/`v[i] = x`). Diagnostic names `^source` or `Shared[Mutex[T]]` — **not** `.clone()`. Channel
+  stays multi-owner (it actually refcounts). ⇒ **`t0908` closes by check-time reject**; the consume
+  gate is load-bearing (`push` is a method call, so assign+ctor alone does not close it).
+  ⚠ **The rejection is RATIFIED but NOT YET IMPLEMENTED** (D2 confirming pass is the next step).
+  ⚠ `AGENTS.md` is a second spelling, stale by two names *and* the consume-position clause, at 0
+  bytes headroom — compact a neighbour; prefer cite-the-ledger.
 - **`t0771` (B1+B2) → R49**; **`t0823` (α) → R49**; the D22 canonical-spelling migration **STOPPED** and
   `no_dot_slice_after_d22` **suspended** (`t0871`: `s[a:b]` is silently wrong — the migration target was
   broken and the removal clause had been withdrawn by D22 Rider 2).

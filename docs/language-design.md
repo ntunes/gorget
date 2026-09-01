@@ -566,13 +566,17 @@ anywhere in its transitive field graph is **drop-tainted** and single-owner-by-d
 because an implicit copy would run that custom `drop` twice. Implicit clones are available
 only to types whose transitive drop is side-effect-free; `.clone()` stays legal (Clone and
 Drop coexist, as in Rust). The by-design members — `Box[T]`, `Task`, `TaskGroup`, `Guard`,
-`Owned[T]`, `Callable[...]` and closure values — are single-owner because aliasing them is
-unsafe (their drops are pure; they are unique by construction). For all of these,
-`Box[int] b = a` (or `R b = a` for a custom-`Drop` `R`) is a compile error
-(`E_MoveWithoutOperator`) — write `Box[int] b = ^a` or `b = a.clone()`. A fresh temporary
-(`R b = R(1)`) is not a live place and moves without an operator. The refcounted/handle
-types (`Shared[T]`, `Weak[T]`, `Mutex[T]`, `Channel[T]`) are the sanctioned multi-owner
-escape hatch and are not drop-tainted by their payload.
+`Mutex[T]`, `RWLock[T]`, `Owned[T]`, `Callable[...]` and closure values — are
+single-owner because aliasing them is unsafe (their drops are pure; they are
+unique by construction). For all of these, `Box[int] b = a` (or `R b = a` for a
+custom-`Drop` `R`) is a compile error (`E_MoveWithoutOperator`) — write
+`Box[int] b = ^a`. `.clone()` is a remedy only when the type has a clone path.
+A fresh temporary (`R b = R(1)`) is not a live place and moves without an
+operator. **D53:** `Mutex[T]` / `RWLock[T]` are unique locks, not a second
+`Shared` — the same reject fires at consuming positions (`push`/`put`/`set`/
+`insert`/`send`/`v[i] = x`); share a lock with `Shared[Mutex[T]]`. The
+refcounted/handle types (`Shared[T]`, `Weak[T]`, `Channel[T]`) are the
+sanctioned multi-owner escape hatch and are not drop-tainted by their payload.
 
 Trivial types (int, float, bool) are always copied automatically:
 ```gorget

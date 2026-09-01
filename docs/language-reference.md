@@ -2641,15 +2641,22 @@ Underneath the sigils, the ownership model itself is these ten rules:
       has no user spelling yet — `Owned[Item] a = …` is `E_UndefinedName`.)
 
     For all of these, a bare `T b = a` of a live source is a
-    **`MoveWithoutOperator`** error; write `T b = ^a` or `T b = a.clone()`. A
-    fresh temporary (`T b = make()`, `T b = T(1)`) is not a live place — it
-    moves and is never rejected. The refcounted/handle types (`Shared[T]`,
-    `Weak[T]`, `Channel[T]`) are the sanctioned multi-owner escape hatch and are
-    **not** drop-tainted by their payload. ⚠ `Mutex[T]` and `RWLock[T]` were
-    listed here until **D53** (2026-09-01) and are **not** multi-owner: the
-    lowering gives them no clone path, so a second owner cannot be constructed.
-    Duplicating one is `E_MoveWithoutOperator`; share a lock through
-    `Shared[Mutex[T]]`. They remain un-drop-tainted by their payload.
+    **`MoveWithoutOperator`** error; write `T b = ^a`. `.clone()` is a remedy
+    only for types that have a clone path (drop-tainted user types; some
+    by-design members). A fresh temporary (`T b = make()`, `T b = T(1)`) is not
+    a live place — it moves and is never rejected. The same reject fires at
+    constructor / struct / enum-init / container-literal elements. The
+    refcounted/handle types (`Shared[T]`, `Weak[T]`, `Channel[T]`) are the
+    sanctioned multi-owner escape hatch and are **not** drop-tainted by their
+    payload. ⚠ `Mutex[T]` and `RWLock[T]` were listed here until **D53**
+    (2026-09-01) and are **not** multi-owner: exclusion and sharing are
+    orthogonal — a mutex is a unique lock, sharing one is `Shared[Mutex[T]]`.
+    Duplicating one is `E_MoveWithoutOperator` at assign, init, **and consuming
+    positions** (`push` / `put` / `set` / `insert` / `send` / `v[i] = x`). The
+    diagnostic names `^source` or `Shared[Mutex[T]]`; it does **not** offer
+    `.clone()` (there is no clone path, and D53 forbids growing one). They
+    remain un-drop-tainted by their payload. At a plain non-consuming call they
+    are borrowed, so no operator is needed.
 
 The rules above are about **binds** (`Type b = ^a` / `a.clone()`) and use sites.
 A borrow or move that crosses a **call** is a distinct position: the sigil is
