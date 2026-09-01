@@ -29,9 +29,11 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 
 ### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `ac577f6b`)
 
-**5 of 7 tracks INTEGRATED. β's first output-review is in flight; γ still owes one.**
+**5 of 7 tracks INTEGRATED. β first OR: design SIGN OFF, ID collision BLOCKING; fix-up in flight.
+γ still owes a first output-review.**
 Lifts spent: C, D2, F, A (integrated). Owner lifted β through integration. D53 unique-lock reject
 and the figures DB are **on main**. A's capture residual is `t0927`; main's `t0876` remains C-emit jitter.
+β residuals become `t0928` (SH span) / `t0929` (SH attributes) / `t0930` (ggdef ABSTAIN) — main keeps D2's `t0902`–`t0904`.
 ⚠ After D2, β/γ add/add-collide with D2's `todo/t0902.md`–`t0904.md` (different defects).
 Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption is `t0926`.
 
@@ -41,7 +43,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **C** | `t0763` `t0134` | — | — | — | **INTEGRATED** `329ad020` |
 | **D2** | `t0840` D53 | — | — | — | **INTEGRATED** `d5707a77` |
 | **A** | `t0770` `t0772` | — | — | — | **INTEGRATED** (residuals `t0877`–`t0880`, `t0872`, `t0927`) |
-| **β** | `t0825` | `470cd49f` | 1 | ⚠ add/add `t0902`–`t0904` vs D2 | **first output-review in flight** |
+| **β** | `t0825` | `470cd49f` | 1 | ⚠ add/add `t0902`–`t0904` vs D2 | **first OR blocked; fix-up executor in flight** (renumber → `t0928`–`t0930`) |
 | **γ** | nondeterminism | `5f67841f` | 7 | ggdef + `integration.rs` + add/add `t0902`–`t0904` | **a first output-review** (none yet) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
 | **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded) |
