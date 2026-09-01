@@ -59292,7 +59292,24 @@ hello~",
     );
 }
 
-/// KNOWN GAP `t0876` — a closure that CAPTURES a `Callable[T]` PARAMETER
+/// Iterator.map with a `Callable[int(int)]` PARAMETER — reader 3 un-gated the
+/// `"map"` arm of `try_iterator_adapter_type` and the cell is value-correct.
+/// SPELLING: `v.iter().map(f).collect()[0]`, expected `12`.
+///
+/// RED pre-fix at `f5ab385d`: C AND LLVM `BUILD_RC=101`, panic at
+/// `src/ir/lowering/exprs/methods.rs:4417` (`typecheck must reject
+/// non-indexable receivers before lowering (E_NotIndexable)`). That is an ICE,
+/// not `undefined reference`.
+///
+/// ⚠ NOT a top-level fixture: the self-host lane CC-fails (`MapIter` assigned
+/// from `int`). A top-level placement would register a non-MATCH against
+/// `RUNTIME_DIFF_NONMATCH_CEILING`.
+#[test]
+fn iterator_map_callable_param() {
+    run_gg("iterator_map_callable_param/collect_index.gg", "12");
+}
+
+/// KNOWN GAP `t0927` — a closure that CAPTURES a `Callable[T]` PARAMETER
 /// cannot be compiled: the env struct's field for the capture is typed `unit`
 /// (a `Callable` param's GIR local type is erased), so the generated C
 /// dereferences a `void` slot (`error: void value not ignored as it ought to
@@ -59309,7 +59326,7 @@ hello~",
 /// `void`. Un-ignore when a captured `Callable` gets a real field type and the
 /// sidecars cross the closure boundary.
 #[test]
-#[ignore = "KNOWN GAP t0876: a captured Callable param becomes a unit-typed \
+#[ignore = "KNOWN GAP t0927: a captured Callable param becomes a unit-typed \
 closure-env field — the generated C dereferences a void slot"]
 fn known_gap_closure_captures_callable_param_void_env_field() {
     run_gg(
@@ -59327,7 +59344,7 @@ fn known_gap_closure_captures_callable_param_void_env_field() {
 /// LLVM — a silent miscompile is strictly worse than the rejection it replaces.
 /// The rejection's own wording is also wrong (it reports the fallback type);
 /// the end state is that this program COMPILES. `Iterator.map` with a Callable
-/// param needs no gate — measured correct.
+/// param needs no gate — pinned by `iterator_map_callable_param`.
 #[test]
 #[ignore = "KNOWN GAP t0878: Vector[T].map with a Callable param has no \
 monomorph; the arm declines the shape to avoid a silent LLVM miscompile"]

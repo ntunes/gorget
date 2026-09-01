@@ -1109,7 +1109,7 @@ fn infer_closure_return_type(ctx: &mut LoweringContext, body: &Spanned<Expr>) ->
                 // capture face it serves is still blocked one layer down — a
                 // captured `Callable[T]` param becomes a `unit`-typed env field
                 // (`void __v5 = *(void *)(__v4);` → `error: void value not
-                // ignored as it ought to be`), which is `t0876`, a different
+                // ignored as it ought to be`), which is `t0927`, a different
                 // class (env-field typing + sidecar propagation into the lifted
                 // closure). This read is correct and stays; it is not, on its
                 // own, sufficient to compile that shape.

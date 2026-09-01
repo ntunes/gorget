@@ -8593,9 +8593,11 @@ impl<'a> TypeChecker<'a> {
     /// two arms keep declining the shape until the monomorph is minted for it.
     /// `Option`/`Result` combinators and `Iterator.map` do NOT need this gate —
     /// their lowering handles a Callable-param operand (measured: the
-    /// `VectorIter__int64_t__map` cell goes from `undefined reference` on BOTH
-    /// backends to the correct `12`). Tracked as `t0878`, whose `known_gaps`
-    /// repro asserts the INTENDED output.
+    /// `v.iter().map(f).collect()[0]` cell with `f: Callable[int(int)]` ICEs at
+    /// `methods.rs:4417` (`E_NotIndexable` debug_assert, `BUILD_RC=101`) on BOTH
+    /// backends at the pre-fix blob, and prints `12` after; pin
+    /// `tests/fixtures/iterator_map_callable_param/collect_index.gg`). Tracked
+    /// as `t0878`, whose `known_gaps` repro asserts the INTENDED output.
     fn is_monomorphizable_closure_operand(&self, type_id: TypeId) -> bool {
         matches!(
             self.types.get(self.resolve_type(type_id)),

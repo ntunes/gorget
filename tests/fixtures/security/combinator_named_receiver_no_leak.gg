@@ -24,8 +24,11 @@
 # ⚠ The INLINE-CONSTRUCTOR receiver (`Some(mk(..)).map(f)`) is NOT here and is
 # NOT covered: it leaks 6 B before AND after this fix and the generated C is
 # byte-identical, because that temp was never registered at all. That is
-# `t0872`, a registration gap on the adapter path at a different layer, with
-# its own repro. This fixture must not read as covering it.
+# `t0872`, a registration gap on the adapter path at a different layer. Its
+# durable repro is `inline_ctor_temp_not_registered_leak.gg` (also the
+# struct-ctor field-read twin), wired `#[ignore]`d as
+# `known_gap_inline_ctor_temp_not_registered`. This fixture must not read as
+# covering it.
 #
 # ⚠ Callable arguments are top-level functions rather than closure literals
 # WITH CAPTURES: a capturing closure leaks its 8-byte environment (`t0526`),

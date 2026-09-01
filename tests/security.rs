@@ -2823,7 +2823,9 @@ fn option_map_clones_receiver_then_unregisters_it() {
 ///
 /// ⚠ It does NOT cover the INLINE-CONSTRUCTOR receiver (`Some(mk(..)).map(f)`),
 /// which leaks 6 B before AND after with byte-identical generated C: that temp
-/// was never registered at all (`t0872`, a different layer).
+/// was never registered at all (`t0872`, a different layer). That residual's
+/// durable repro is `inline_ctor_temp_not_registered_leak.gg`, wired ignored
+/// below as `known_gap_inline_ctor_temp_not_registered`.
 #[test]
 fn combinator_named_receiver_stays_leak_free() {
     security_safe_no_leak(
@@ -2847,6 +2849,24 @@ loop!
 loop!
 param!
 2",
+    );
+}
+
+/// KNOWN GAP `t0872` — an inline-constructor combinator receiver
+/// (`Some(mk(..)).map(f)`) and a plain struct-ctor field read
+/// (`Node(mk(..)).name`) each leak 6 B: the temp is never registered for drop.
+/// The `.unwrap()` control is clean, so ctor temps ARE normally registered;
+/// the gap is on the adapter / field-read path. Heap-forced payload. Not
+/// fixed here — this test asserts the INTENDED ASan-clean state.
+#[test]
+#[ignore = "KNOWN GAP t0872: inline-ctor combinator receiver and struct-ctor \
+field read leak 6 B each; temp never registered for drop"]
+fn known_gap_inline_ctor_temp_not_registered() {
+    security_safe_no_leak(
+        "inline_ctor_temp_not_registered_leak",
+        "\
+hello!
+hello",
     );
 }
 

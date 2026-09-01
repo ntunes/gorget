@@ -1,0 +1,41 @@
+# KNOWN GAP `t0872` — an inline-constructor receiver's temp is never registered
+# for drop on the adapter path, and a plain struct-ctor field read leaks the
+# same way. Heap-FORCED payload (`mk()`, never a literal).
+#
+# AXIS CELLS SAMPLED — the two still-leaking rows of the item's table:
+#
+#   combinator inline-ctor  `Some(mk(..)).map(f)`
+#   struct-ctor field read  `Node(mk(..)).name`
+#
+# The named-receiver face (`t0772`) is CLOSED and is NOT here; it lives in
+# `combinator_named_receiver_no_leak.gg`. The `.unwrap()` control
+# (`Some(mk(..)).unwrap()`) is ASan-clean — inline-constructor temps ARE
+# normally registered — so this is a registration gap at the adapter /
+# field-read, not "ctors never drop".
+#
+# MEASURED at HEAD (`5d43cedd`), `ASAN_OPTIONS=detect_leaks=1`:
+#   C:    Direct leak of 6 byte(s) in 1 object(s) × 2 (12 B / 2 allocations),
+#         both from `gorget_str_cat` inside `mk`
+#   LLVM: Direct leak of 12 byte(s) in 2 object(s), same site
+# Stdout is `hello!` then `hello` (rc 0) — the leak is stdout-invisible, which
+# is why this is an ASan fixture and not a `run_gg`.
+#
+# ⚠ Callable arguments are top-level functions rather than capturing closure
+# literals (`t0526` would mask the 6 B signal with an 8 B env leak).
+#
+# INTENDED: prints `hello!` then `hello`, rc 0, ASan-clean under
+# `detect_leaks=1`, on C and LLVM.
+
+String mk(String a, String b):
+    return a + b
+
+String bang(String s):
+    return mk(s, "!")
+
+struct Node:
+    String name
+
+void main():
+    print(Some(mk("hel", "lo")).map(bang).unwrap())
+    String s = Node(mk("hel", "lo")).name
+    print(s)

@@ -33,8 +33,13 @@ from std.conv import int_to_str
 #     GARBAGE on LLVM. A silent miscompile is strictly worse than the rejection
 #     it replaces, so those two arms keep rejecting until the monomorph exists.
 #     `known_gaps/vector_map_callable_param_no_monomorph.gg` asserts the
-#     intended output. `Iterator.map` needs no such gate — measured, it goes
-#     from `undefined reference` on BOTH backends to the correct value.
+#     intended output. `Iterator.map` needs no such gate — measured on
+#     `v.iter().map(f).collect()[0]` with `f: Callable[int(int)]`: PRE C and
+#     LLVM `BUILD_RC=101`, panic at `src/ir/lowering/exprs/methods.rs:4417`
+#     (`typecheck must reject non-indexable receivers before lowering
+#     (E_NotIndexable)`); POST prints `12`. Pin:
+#     `iterator_map_callable_param/collect_index.gg`. Not an `undefined
+#     reference`.
 
 String mk(String a, String b):
     return a + b

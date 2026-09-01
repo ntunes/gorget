@@ -30,8 +30,9 @@
 #
 # NEGATIVE CONTROLS, both green at HEAD: the same call with a CLOSURE LITERAL
 # (`xs.map((String s): s.len())`) builds and prints `5`; and `Iterator.map` with
-# a `Callable` PARAM (`v.iter().map(f)`) also builds and runs correctly — it
-# needs no gate, so the defect is specific to the `Vector` collection HOFs.
+# a `Callable` PARAM (`v.iter().map(f).collect()[0]`) also builds and runs
+# correctly — it needs no gate, so the defect is specific to the `Vector`
+# collection HOFs. Pin: `iterator_map_callable_param/collect_index.gg`.
 #
 # INTENDED: prints `5`, rc 0, on C and LLVM.
 
