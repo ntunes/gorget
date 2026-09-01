@@ -43,7 +43,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **β** | `t0825` | — | — | — | **INTEGRATED** `35037071` (residuals `t0928`–`t0930`) |
 | **γ** | nondeterminism | — | — | — | **INTEGRATED** `abd1d79a2` (residuals `t0931`–`t0933`; CEILING 147; `t0204`/`t0267` closed) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
-| **S** | guard simplification | — | — | `tests/lints.rs` agents_md block · `figures.db` | **brief gauntlet in flight** (owner: retire prose gates; keep size + heading-id inventory) |
+| **S** | guard simplification | — | — | `tests/lints.rs` agents_md block · `figures.db` | **executor in flight** (brief SIGN OFF ×2 after pass-1 fold; A3 > A2 > A1) |
 | **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded). ⚠ S owns `figures.db` + agents_md block until S integrates; E-B3 EOF-only on `lints.rs` |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
 
