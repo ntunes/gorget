@@ -4945,27 +4945,11 @@ fn sh_forelse_else_body_dropped() {
     );
 }
 
-/// KNOWN GAP (filed R48 Track γ), SELF-HOST lane — a method on an INHERENT
-/// generic equip (`equip SparseSet[T]:`, no `with Trait` clause) is emitted
-/// from its TEMPLATE with `T` never bound, then given the monomorphized SYMBOL
-/// name. The self-host prints its own verdict into the emitted C — `[bug]
-/// EFieldAccess: in fn 'SparseSet__T__each': unknown field 'count' on base type
-/// 'SparseSet__T'`, three times — and emits the broken body anyway, so the
-/// program prints an ASLR-moving pointer and disagrees with itself every run.
-/// Rust gg prints `100` on C and on LLVM.
-///
-/// This is the mechanism behind `ecs_advanced`'s row in
-/// `EXPECTED_NONDETERMINISTIC`, reduced to eight lines. It is NOT the
-/// trait-default param-binding class R48 fixed (`bind_trait_type_params`) —
-/// this equip has no trait clause, so there is no trait `T` to bind — and it is
-/// NOT `todo/t0219`'s `gm-inherent-generic-equip DEFERRED` arm, which covers a
-/// method-level-GENERIC method on a generic receiver while `each` has none. The
-/// two are neighbouring holes in the inherent (no-trait) half of the same wall.
-/// KNOWN GAP (filed R48 Track γ), BOTH LANES — an ICE on a program `gg check`
-/// accepts. `.iter().filter_map(f)` with an `Option[U]`-returning closure
-/// registers `Vector__Option__U` and its protocol methods but never registers
-/// the `VectorIter__Option__U` / `VectorDrain__Option__U` instances those
-/// methods reference, so GIR validation fails before codegen.
+/// KNOWN GAP (filed R48 Track γ as `todo/t0933`), BOTH LANES — an ICE on a
+/// program `gg check` accepts. `.iter().filter_map(f)` with an `Option[U]`-
+/// returning closure registers `Vector__Option__U` and its protocol methods
+/// but never registers the `VectorIter__Option__U` / `VectorDrain__Option__U`
+/// instances those methods reference, so GIR validation fails before codegen.
 ///
 /// The element type is NOT the axis — `Option[int]` reproduces identically.
 /// Verified pre-existing on a compiler built from the pre-R48 blobs, so this is
@@ -4980,6 +4964,22 @@ fn known_gap_filter_map_option_elem_type_never_registered() {
     );
 }
 
+/// KNOWN GAP (filed R48 Track γ as `todo/t0931`), SELF-HOST lane — a method on
+/// an INHERENT generic equip (`equip SparseSet[T]:`, no `with Trait` clause) is
+/// emitted from its TEMPLATE with `T` never bound, then given the
+/// monomorphized SYMBOL name. The self-host prints its own verdict into the
+/// emitted C — `[bug] EFieldAccess: in fn 'SparseSet__T__each': unknown field
+/// 'count' on base type 'SparseSet__T'`, three times — and emits the broken
+/// body anyway, so the program prints an ASLR-moving pointer and disagrees
+/// with itself every run. Rust gg prints `100` on C and on LLVM.
+///
+/// This is the mechanism behind `ecs_advanced`'s row in
+/// `EXPECTED_NONDETERMINISTIC`, reduced to eight lines. It is NOT the
+/// trait-default param-binding class R48 fixed (`bind_trait_type_params`) —
+/// this equip has no trait clause, so there is no trait `T` to bind — and it is
+/// NOT `todo/t0219`'s `gm-inherent-generic-equip DEFERRED` arm, which covers a
+/// method-level-GENERIC method on a generic receiver while `each` has none. The
+/// two are neighbouring holes in the inherent (no-trait) half of the same wall.
 #[test]
 #[ignore = "known gap (R48): the self-host emits an INHERENT generic-equip method from its template with the equip's own `T` unbound, under the mono'd symbol name; un-ignore when the template arm binds the equip type params (or stops emitting the template)"]
 #[serial(self_host_lowerer_driver)]
@@ -38396,7 +38396,7 @@ fn self_host_runtime_diff() {
         // `T` unbound, under the monomorphized symbol name — the emitted C
         // carries the self-host's own `[bug] EFieldAccess … unknown field
         // 'count' on base type 'SparseSet__T'` verdict three times. FILED as
-        // `todo/t0902` (this entry's required TODO citation), reduced to eight
+        // `todo/t0931` (this entry's required TODO citation), reduced to eight
         // lines at `known_gaps/sh_inherent_generic_equip_template_unbound_t.gg`
         // and pinned `#[ignore]`d by
         // `sh_inherent_generic_equip_template_unbound_t`.

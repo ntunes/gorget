@@ -22,8 +22,13 @@
 # scoped TEMP, and the named bind retires the member before the second
 # derivation lowers. Different sub-mechanism (member LIFETIME, not the missing
 # join), filed with its own durable repro at
-# `known_gaps/sh_cow_lazy_nested_named_view.gg`. The single-level named binds
-# below (`t3`, `c3`, `t4`) are in.
+# `known_gaps/sh_cow_lazy_nested_named_view.gg`.
+#
+# ⚠ GREEN ON ARRIVAL (Core #12): `t3`/`c3` (named-bind × method-mut-receiver
+# `v3.push`) were already correct on pre-fix SH (`t3 = hell`, `c3 = e`) — they
+# pin nothing. The `v3.push` route did not invalidate the buffer. Temp-as-arg
+# (`arg-slice`/`arg-index`) and named-bind × sig-arg (`t4`) are the RED cells
+# that exercise `v.set`.
 #
 # ⚠ ASan REPORTS NOTHING on this class — the runtime allocates through a custom
 # pool, so the invalidated read is inside a live allocation. The instrument that

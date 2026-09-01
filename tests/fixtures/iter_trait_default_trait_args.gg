@@ -25,6 +25,13 @@
 # `Vector[T]` and DictIter rows below hold the non-bare-param end of the axis
 # until that link gap closes.
 #
+# ALSO OMITTED, named per Core #12 — not expanded this round:
+#   * DictIter `.collect()` — the actual `Vector[(K,V)]` demand-gate re-entry;
+#     `.count()` below is `int` and does not contain the tuple.
+#   * DictKeysIter `Iterator[K]`
+#   * DictValuesIter `Iterator[V]`
+#   * DictDrain `Iterator[(K,V)]`
+#
 # The `int` rows are CONTROLS. Eleven of the twenty-two `with Iterator[…]`
 # equips spell the trait argument `T`, so the collision is a NO-OP for them and
 # they were green before and after — which is exactly why a net that sampled
