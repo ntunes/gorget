@@ -22,16 +22,65 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### R48 TRACKS (6 scouts launched 2026-08-31; file zones disjoint by construction)
+### ▶ R48 STATE AS OF 2026-09-01 — SIX BRANCHES LANDED, ONE INTEGRATED, SEVEN GAUNTLET STEPS OWED
 
-| Track | Items | Zone | Head start |
-|---|---|---|---|
-| **A** | `t0770` + `t0772` (same helper, opposite directions) | `src/ir/lowering/exprs/methods.rs` | `GG_FIX_A` |
-| **B** | `t0771` | `src/ir/lowering/closures.rs` | `GG_FIX_B2` |
-| **C** | `t0763` + `t0134` (self-host lane, Core #9) | `src/ir/lowering/functions.rs`, `generics/` | `GG_FIX_C` |
-| **D** | `t0840` + `t0841` | TBD by scout | none — diagnose from scratch |
-| **E** | burn-down campaign (owner-directed) | `tests/` | F2 patch |
-| **F** | `t0861` figures DB — schema + clone-meter pilot | `scripts/`, `tests/lints.rs` | `clone_meter.spec` |
+⛔ **OWNER HOLD 2026-09-01: no new agents** ("we are running out of tokens... don't start new ones
+(for the gauntlet or otherwise) until I say so"). The seven owed steps below are BLOCKED ON THAT, not on
+any technical finding.
+
+| track | items | executor | review | state |
+|---|---|---|---|---|
+| **D1** | `t0841` | ✅ | ✅×3 + final gate | **INTEGRATED** `3b8a5561` |
+| **A** | `t0770` `t0772` | ✅ `5d43cedd` | **none** | owes output-review |
+| **C** | `t0763` `t0134` | ✅ `bf5ba47a` | ✅ blocked→folded | owes confirming pass |
+| **D2** | `t0840` | ✅ `4850bf38` | ✅ blocked→folded | owes confirming pass |
+| **β** | `t0825` | ✅ `470cd49f` | **none** | owes output-review |
+| **γ** | nondeterminism | ✅ `5f67841f` | **none** | owes output-review |
+| **F** | `t0861` `t0851` `t0860` | ✅ `6e9404f5` | ✅×2 blocked→folded | owes confirming pass |
+| **E-B1/B2/B3** | burn-down | — | brief pass 1 blocked→folded | owe brief pass 2 |
+| **B1/B2** | `t0771` | — | — | **R49** (owner) — briefs in `/tmp/r49briefs/` ⚠ `/tmp` is not durable |
+
+⚠ **ALL SIX BRANCHES CONFLICT WITH MAIN** — mostly `t0910`'s ID-collision class plus main moving (D53,
+the ggdef fix, `t0910`). **Only Track C has resolved its share** (renumbered to `t0920`/`t0921`, both
+ggdef pins re-derived: B2 **190**, B1 **138**). ⛔ **Resolve collisions by RENUMBERING THE LATER TRACK,
+never by taking one side — the sides are DIFFERENT DEFECTS and "taking one" silently destroys a filed
+item and hands its `repro`/`cites` to an unrelated one.**
+
+### ⛔ TWO GATES THAT REPORT SUCCESS WITHOUT EVALUATING ANYTHING (R48's sharpest instrument finding)
+- **`t0925`** — `scripts/run_integration.sh:66` puts `"$@"` BEFORE cargo's `--`, so a harness arg is eaten
+  as a cargo filter: `--skip self_host` → **`0 passed; 2748 filtered out`, exit 0.** This is the wrapper
+  Round-lifecycle step 4 names as the round-close C sweep. **A green zero.**
+- **`t0924`** — the parity non-MATCH ceiling assert is wrapped in `if cfg!(debug_assertions)`, so it
+  **no-ops in the profile executors actually run**. Track C's family run passed **vacuously**.
+⇒ **Both were found by executors noticing something suspicious, never by the gates. Weigh the round-close
+battery accordingly.**
+
+### ✅ D53 RATIFIED (owner, 2026-09-01) — `Mutex`/`RWLock` ARE CARVE-OUTS
+In `docs/define-gorget/decisions.md` (owner-authorised edit) + write-through to
+`docs/language-reference.md`. ⭐ **It CORRECTED A FALSE CLASSIFICATION**: the reference listed `Mutex[T]`
+among *"the sanctioned MULTI-OWNER escape hatch"*, but the lowering gives it **no clone path** — which is
+exactly why slots 2..N of a `Vector[Mutex]` had nothing to hold. Share a lock via `Shared[Mutex[T]]`.
+⇒ **`t0908` (CRITICAL) IS UNBLOCKED and closes by CHECK-TIME REJECTION with NO lowering change.**
+⚠ **D2's own report still says "blocked on the owner call" — that is STALE; the ruling landed after its
+last read.** ⚠ `AGENTS.md`'s carve-out list is a SECOND SPELLING and is now short by two; it was left
+unedited (0 bytes headroom) — D53 records the enumerate-vs-cite question.
+
+### ⚠ WHAT IS NOT RUN, AND MUST BE BEFORE CLOSE
+`GG_BACKEND=llvm` whole-corpus · `scripts/sanitize_sweep.sh` · `robustness_map` **on the merged tree**
+(⛔ and **E-B3's scorer fix is unlanded**, so until it is, that gate reports this round's own C-lane fixes
+as REGRESSIONS and `--accept` launders them — `:617` derives "good" from the C baseline bucket, never
+`COL_EXPECTED`). D2 ran integration whole-corpus green on ITS branch (2557/0, bootstrap included, scope
+verified) — that is one branch, not the integrated tree.
+
+### ⚠ ORCHESTRATOR ERRATA FROM THIS SESSION — do not re-derive
+- **A persisting `cd` into an agent worktree sent three commits to the wrong branch.** The Bash tool keeps
+  cwd between calls. **Use `git -C <path>`, never `cd`, outside the orchestrator worktree.** Recovered by
+  cherry-picking the ggdef fix to main (`f5ab385d`).
+- **Integrating D1 without `-p ggdef` turned main RED** — it is a SEPARATE target `--test integration`
+  never touches, and `t0801`'s class (glob-minus-exclusions corpus membership) recurred in the round that
+  closed it. **Run the separate targets at every integration, not only at close.**
+- **A figure confirmed by re-running the enumerator's own regex is not confirmed** — "3 round closes" was
+  the predicate's own output; the real count is ~38 (`t0851`, re-opened).
 
 ### ⚠ R48 SCOUT CORRECTIONS — MEASURED, SUPERSEDE THE FIGURES ABOVE (2026-08-31)
 
