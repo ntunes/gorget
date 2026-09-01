@@ -238,7 +238,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
 # see a `scheduler=Pool` cell (it moves no count at all).
 #
 # ⚠ The `Span(0, 0)`s below are a KNOWN GAP, not a shrug: no `Item` variant in
-# this AST carries a span, so the caret lands on line 1. Filed as `todo/t0902`.
+# this AST carries a span, so the caret lands on line 1. Filed as `todo/t0928`.
 #
 # Core #10, lower-or-reject: without this pass the self-host LOWERS an
 # unknown directive by discarding it.

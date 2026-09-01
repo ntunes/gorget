@@ -1,5 +1,5 @@
 # DEFERRED-GAP FIXTURE (#[ignore]'d — the self-host performs NO item-ATTRIBUTE
-# validation and silently discards an unknown attribute; see todo/t0903).
+# validation and silently discards an unknown attribute; see todo/t0929).
 #
 # Rust gg REJECTS this program with `error[E_UnknownDirective]: unknown directive
 # `@nonexistent`` — `validate_attributes` (`src/semantic/mod.rs`) checks every

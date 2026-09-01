@@ -305,7 +305,7 @@ ResolveContext collect_top_level(Module module, ScopeTable &scopes, TypeTable ty
 #
 # ⚠ The `Span(0, 0)`s below are a KNOWN GAP, not a shrug: no `Item` variant in
 # this AST carries a span (Rust gg wraps each item in `Spanned<Item>`), so the
-# caret lands on line 1. Filed as `todo/t0902` with the 12-site fix and an
+# caret lands on line 1. Filed as `todo/t0928` with the 12-site fix and an
 # `#[ignore]`d test asserting the intended location.
 #
 # Core #10, lower-or-reject: without this pass the self-host LOWERS an

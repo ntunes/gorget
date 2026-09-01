@@ -45154,7 +45154,7 @@ fn sh_directive_grammar_reject_names_the_construct() {
     );
 }
 
-/// KNOWN GAP (`todo/t0903`) — the self-host performs NO item-ATTRIBUTE
+/// KNOWN GAP (`todo/t0929`) — the self-host performs NO item-ATTRIBUTE
 /// validation, so `@nonexistent` on a struct is accepted and the attribute is
 /// silently discarded, where Rust gg rejects it (`validate_attributes`,
 /// `src/semantic/mod.rs`; pinned on that lane by `unknown_attribute_error`).
@@ -45166,7 +45166,7 @@ fn sh_directive_grammar_reject_names_the_construct() {
 /// promote the fixture out of `known_gaps/` the round the self-host validates
 /// attributes.
 #[test]
-#[ignore = "KNOWN GAP (todo/t0903): the self-host validates no item attributes; \
+#[ignore = "KNOWN GAP (todo/t0929): the self-host validates no item attributes; \
 `@nonexistent` is accepted and discarded where Rust gg rejects it."]
 #[serial(self_host_lowerer_driver)]
 fn sh_rejects_unknown_attribute() {
@@ -45179,12 +45179,12 @@ fn sh_rejects_unknown_attribute() {
          `error[E_UnknownDirective]` via `validate_attributes` (`src/semantic/mod.rs`), so this \
          is a cross-lane accept/reject divergence AND a Core #10 silent drop — the attribute is \
          discarded with no diagnostic. Fix = a `validate_attributes` twin beside \
-         `validate_directives` in the self-host resolve pass (todo/t0903), after checking that \
+         `validate_directives` in the self-host resolve pass (todo/t0929), after checking that \
          the self-host parser keeps unrecognised attributes at all."
     );
 }
 
-/// KNOWN GAP (`todo/t0902`) — the self-host renders every ITEM-level diagnostic
+/// KNOWN GAP (`todo/t0928`) — the self-host renders every ITEM-level diagnostic
 /// at line 1, column 1, because no `Item` variant in its AST carries a span.
 ///
 /// The VERDICT is right on both lanes, so this is not a lane divergence; what
@@ -45193,7 +45193,7 @@ fn sh_rejects_unknown_attribute() {
 /// is a comment. RED at HEAD by construction. Un-ignore and promote the fixture
 /// out of `known_gaps/` the round the self-host AST carries item spans.
 #[test]
-#[ignore = "KNOWN GAP (todo/t0902): no self-host AST Item variant carries a span, \
+#[ignore = "KNOWN GAP (todo/t0928): no self-host AST Item variant carries a span, \
 so every item-level diagnostic renders its caret at 1:1."]
 #[serial(self_host_lowerer_driver)]
 fn sh_directive_diagnostic_points_at_the_directive() {
@@ -45223,7 +45223,7 @@ fn sh_directive_diagnostic_points_at_the_directive() {
          in the self-host AST carries a span, so `validate_directives` has nothing to pass to \
          `Diagnostic.error` and passes `Span(0, 0)`; the caret lands on the file's first line, \
          which here is a comment. Rust gg points at the directive. Fix = give `IDirective` a \
-         `Span` payload (12 sites, todo/t0902), or the general `SpannedItem` wrapper.\
+         `Span` payload (12 sites, todo/t0928), or the general `SpannedItem` wrapper.\
          \nstderr:\n{stderr}",
     );
 }
