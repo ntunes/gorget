@@ -1041,6 +1041,143 @@ fn d23_trait_registration_lookup_type() {
     }
 }
 
+/// Class-retirement guard (Core #6 + Core #4 — centralize at the producer, then
+/// add the arm-count lint that forces path N+1 through it).
+///
+/// THE CLASS. The five per-function prescans the CoW + auto-move machinery reads
+/// out of `func_state` — `cow_reassigned_names`, `loop_reassigned_names`,
+/// `cow_reassigned_after`, `name_use_counts`, `liveness` — were hand-copied into
+/// TWO of the ELEVEN function-body-lowering paths (`lower_function`,
+/// `lower_equip_method`). The other nine — `lower_generic_function`,
+/// `lower_equip_method_with_subs`, `lower_trait_method_body`,
+/// `lower_static_trait_method`, `emit_closure_call_function` and the four
+/// module-loop bodies (suite setup / teardown / test / bench, which had a
+/// hand-copied liveness-only SUBSET) — lowered with an EMPTY
+/// `cow_reassigned_after`, so `is_source_mut_unsafe_at` answered false
+/// unconditionally, the CoW element borrow stayed lazy, and a reallocating
+/// `&self` mutator on a GENERIC equip left it DANGLING: rc 139 SIGSEGV on both
+/// backends, ASan `heap-use-after-free`.
+///
+/// THE GUARD. `functions::begin_function_body(ctx, FnBodyAst)` performs the reset
+/// AND the prescans as ONE operation, and every path calls it.
+/// `LoweringContext::begin_function_body_reset` is the raw half; it must keep
+/// EXACTLY ONE caller (that function). Three counts, three ways to bypass:
+///   1. the raw reset — a new path that resets per-function state by hand;
+///   2. a wholesale `func_state` replacement — either the literal
+///      `FunctionState::default()` or a `func_state = …` assignment, so the
+///      type-elided spellings (`= Default::default()`, `= FunctionState { .. }`,
+///      `= std::mem::take(&mut other)`) are caught too. ⚠ NOT "ANY" such
+///      assignment: the pattern is the literal `"func_state = "`, WITH the
+///      space, so `func_state=…` (no space) walks straight past it. There is no
+///      `cargo fmt` gate in this repo forcing the spaced form, so that evasion
+///      compiles and stays green. Stated rather than papered over — a fourth
+///      count would be a fourth costume (see `todo/t0921`'s sibling lesson on
+///      main, `t0875`);
+///   3. non-test `FunctionBuilder::new(` — a new path that never resets at all
+///      (counts 1 and 2 are blind to it by construction, since they only see
+///      resetters). `FunctionBuilder::new` is the ONLY constructor —
+///      `FunctionBuilder::copy` returns an `Operand`, not a builder.
+///
+/// ⚠ THIS IS A NEW-PATH TRIPWIRE, NOT A TOTAL PARTITION OF CORRECTNESS. It
+/// catches the ADDITION of a twelfth path, forcing the author to classify it.
+/// ⚠ WHAT IT CANNOT SEE — enumerated, because a guard whose blind spots are
+/// unstated reads as a totality claim:
+///   * a body-lowering path that reuses an EXISTING `FunctionBuilder` and an
+///     existing reset (it adds no counted site at all);
+///   * an existing path regressing to a body that yields no statements — the
+///     TYPED `FnBodyAst` parameter is what makes that a compile error rather
+///     than a silent empty prescan, not this count;
+///   * any of the three tokens reached through an ALIAS or an indirection: a
+///     `use … FunctionBuilder as FB;` import, a local wrapper `fn` around
+///     `FunctionBuilder::new` or the raw reset, or a function pointer. These
+///     are textual counts, not a type-level partition;
+///   * `#[cfg(test)]` code, which count 3 deliberately truncates away.
+///
+/// **If this fails**: you added a body-lowering path. Call
+/// `functions::begin_function_body(ctx, FnBodyAst::…)` and pick the variant that
+/// matches your body's AST shape. Do NOT raise a constant to make it pass.
+#[test]
+fn function_body_prescans_are_centralised() {
+    // The single caller is `functions::begin_function_body`.
+    const EXPECTED_RAW_RESET_CALLERS: usize = 1;
+    // `context.rs`: the `LoweringContext::new` initializer + the raw reset's
+    // own assignment (which matches both halves of the pattern; counted once).
+    const EXPECTED_FUNCTION_STATE_DEFAULTS: usize = 2;
+    // 11 body-lowering paths + 4 synthetic builders that lower no user AST:
+    // `traits.rs` `emit_via_forwarding_function` (vtable thunk) and
+    // `exprs/spawn.rs` x3 (method-spawn / spawn / shared-token wrappers).
+    const EXPECTED_FUNCTION_BUILDER_NEW: usize = 15;
+
+    let mut raw = Vec::new();
+    let mut defaults = Vec::new();
+    let mut builders = Vec::new();
+    for entry in walkdir_rs("src") {
+        let text = fs::read_to_string(&entry).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        // Unit tests legitimately construct builders; truncate at the first
+        // `#[cfg(test)]` so only production sites are counted.
+        let cut = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with("#[cfg(test)]"))
+            .unwrap_or(lines.len());
+        for (n, line) in lines.iter().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            if line.contains("begin_function_body_reset()") {
+                raw.push(format!("{}:{}", entry.display(), n + 1));
+            }
+            // Either spelling of a wholesale per-function-state replacement.
+            // Matched per LINE so the raw reset's own
+            // `self.func_state = FunctionState::default();` counts once.
+            if line.contains("FunctionState::default()") || line.contains("func_state = ") {
+                defaults.push(format!("{}:{}", entry.display(), n + 1));
+            }
+            if n < cut && line.contains("FunctionBuilder::new(") {
+                builders.push(format!("{}:{}", entry.display(), n + 1));
+            }
+        }
+    }
+
+    assert_eq!(
+        raw.len(),
+        EXPECTED_RAW_RESET_CALLERS,
+        "raw per-function reset callers changed: {raw:#?}\n\n\
+         Every function-body-lowering path must go through \
+         `functions::begin_function_body(ctx, FnBodyAst::…)`, which performs the \
+         reset AND the five CoW/auto-move prescans as one operation (nine of \
+         eleven paths were missing them, and a generic-equip `&self` mutator was \
+         a use-after-free). Call it instead of the raw reset; do not raise this \
+         constant.",
+    );
+    assert_eq!(
+        defaults.len(),
+        EXPECTED_FUNCTION_STATE_DEFAULTS,
+        "wholesale `func_state` replacement sites changed: {defaults:#?}\n\n\
+         A body-lowering path that builds or replaces its own `FunctionState` \
+         bypasses the prescans exactly as the raw reset does — whichever way it \
+         is spelled (`FunctionState::default()`, `Default::default()`, a struct \
+         literal, `std::mem::take`). Route it through \
+         `functions::begin_function_body`.",
+    );
+    assert_eq!(
+        builders.len(),
+        EXPECTED_FUNCTION_BUILDER_NEW,
+        "non-test `FunctionBuilder::new(` sites changed: {builders:#?}\n\n\
+         A new GIR function is being built. Classify it:\n  \
+         (a) it lowers a USER BODY -> it MUST call \
+         `functions::begin_function_body(ctx, FnBodyAst::…)`, or its body lowers \
+         with empty CoW prescans and a reallocating mutator becomes a \
+         use-after-free;\n  \
+         (b) it is SYNTHETIC (built from typed metadata, lowers no user AST, like \
+         the vtable forwarding thunk and the spawn wrappers) -> no prescan is \
+         owed.\n\
+         Then bump this constant WITH the classification in a comment. The two \
+         reset-site counts above cannot see a path that never resets, which is \
+         why this third count exists.",
+    );
+}
+
 /// Ratchet: the number of container-literal arms in `infer_expr` must
 /// stay at the expected baseline. New arms require an audit for
 /// `decl_type_hint` propagation (see DictLiteral / TupleLiteral fixes

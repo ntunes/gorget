@@ -67,6 +67,36 @@ const EXCLUDE: &[&str] = &[
     "cow_element_borrow_alias_mutate.gg",
     "cow_p3_alias_chain_mutate.gg",
     "cow_p3_index_mutate.gg",
+    // The per-function-body prescan net (one cell per body-lowering PATH). Six
+    // of its eight `cow_*` cells are outside the phase-0 subset — each row below
+    // cites the gate that actually fires, run at HEAD, not a guess. The other
+    // two ARE in the gate and MATCH: `cow_generic_equip_mutator_view_uaf.gg`
+    // (ggdef prints `helloworld`, which is how that use-after-free was
+    // adjudicated when BOTH compilers printed nothing and exited 139) and
+    // `cow_generic_fn_view_survives_realloc.gg`. As always the adjudicating
+    // lanes for the memory-safety claim are C, LLVM and ASan — ggdef is
+    // STRUCTURALLY BLIND to memory validity (AGENTS.md Core #13); what it
+    // adjudicates here is the VALUE.
+    //
+    // `equip [T] Cell[T]` — `register_equip` rejects on
+    // `eq.generic_params.is_some()`. ⚠ The SAME construct spelled
+    // `equip Cell[T]` elaborates (the row above it does), which is `todo/t0921`;
+    // the class is `todo/t0920`.
+    "cow_generic_equip_named_recv.gg",
+    // "item kind trait is outside the phase-0 subset" — a trait DEFAULT method
+    // body. ⊕ Its static-trait sibling needs no row: that fixture lives in
+    // `tests/fixtures/self_host_gaps/` (`todo/t0923`) and this glob only sees
+    // top-level `tests/fixtures/*.gg`. Re-add the row in the commit that fixes
+    // t0923 and moves the fixture back up.
+    "cow_trait_default_view_survives_realloc.gg",
+    // "expression `unsupported` is outside the phase-0 subset" — the closure
+    // literal whose body is the cell under test.
+    "cow_closure_body_view_survives_realloc.gg",
+    // "item kind other is outside the phase-0 subset" — `suite setup` /
+    // `suite teardown` / `test` / `bench` blocks. These two cells exist only on
+    // the `gg test` lane, which `gg build` never lowers at all.
+    "cow_test_body_view_survives_realloc.gg",
+    "cow_bench_body_view_survives_realloc.gg",
     // Module statics are outside the phase-0 subset (`Item::StaticDecl` not
     // elaborated — "item kind static"): the CoW-1B fixture mixes static and
     // local shapes; its LOCAL half was ggdef-adjudicated at authoring (88/30/45,
@@ -672,5 +702,28 @@ fn corpus_b_all_match() {
     // clean; the integration skipped `-p ggdef`, which is a SEPARATE target
     // `--test integration` never touches. The declared-membership guard that
     // catches this at add-time is R48 Track E-B3's deliverable.
-    assert_eq!(fixtures.len(), 189, "B2 gate set drifted from 189 fixtures");
+    // R48 Track C: 8 `cow_*` fixtures landed with the per-function-body prescan
+    // centralisation — one cell per body-lowering PATH. SIX are EXCLUDEd above,
+    // each row citing the gate that fires (generic `equip` spelling; `item kind
+    // trait`; `expression unsupported`; `item kind other` for the `gg test` and
+    // `gg test --bench` lanes). TWO elaborate and are adjudicated here, and one
+    // of them is load-bearing rather than a formality (Core #13):
+    // `cow_generic_equip_mutator_view_uaf` adjudicates `helloworld` — the answer
+    // the FIXED lanes print, while BOTH pre-fix compilers printed nothing and
+    // exited 139. The definition, not their agreement, is what says the shipped
+    // answer is right. ⚠ Its memory-safety claim is NOT ggdef's to make: ggdef
+    // is structurally blind to the realloc-UAF and would accept it cleanly, so
+    // that half is adjudicated by ASan
+    // (`tests/fixtures/security/cow_generic_equip_mutator_view_uaf.gg` and its
+    // four path siblings).
+    // ⚠ RE-DERIVED ON TOP OF D1's 189, NOT ADDED TO THE 188 THIS TRACK BRANCHED
+    // FROM — D1 landed between the two, and each track's arithmetic starts from
+    // a number the other never saw. ⚠⚠ AND THE B1 SIBLING IS THE SHARPER
+    // WARNING: there, BOTH branches independently computed 138 for DIFFERENT
+    // populations, so "the two numbers agree" would have read as safe and been
+    // wrong. Re-derive from the merged tree; never add.
+    // Arithmetic: 189 + 8 new `cow_*` cells − 2 that live in
+    // `tests/fixtures/self_host_gaps/` and are outside this glob entirely
+    // (`todo/t0922`, `todo/t0923`) − 5 EXCLUDEd above with cited gates = 190.
+    assert_eq!(fixtures.len(), 190, "B2 gate set drifted from 190 fixtures");
 }

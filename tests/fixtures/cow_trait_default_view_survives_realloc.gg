@@ -1,0 +1,36 @@
+# CoW view-materialization on the TRAIT DEFAULT METHOD body-lowering path.
+#
+# AXIS CELL — path = `lower_trait_method_body` (src/ir/lowering/traits.rs).
+# One of eleven function-body-lowering paths; the five per-function CoW /
+# auto-move prescans used to be hand-copied into only two of them, so a trait
+# default body lowered with an EMPTY `cow_reassigned_after`: the element view
+# stayed a lazy borrow and the 64 pushes reallocated it away.
+#
+# THE REALLOC IS LOAD-BEARING (64 pushes), and the payload is heap-FORCED via
+# `mk` so ASan reports a legible heap-use-after-free, not a bare SIGSEGV.
+#
+# RED-VERIFIED against the pre-fix compiler: rc 139 SIGSEGV on C AND LLVM.
+String mk(String a, String b):
+    return a + b
+
+trait Probeable:
+    int tag(self)
+    String probe(&self):
+        Vector[String] v = [mk("hello", "world")]
+        String s = v.get(0).unwrap()
+        int i = 0
+        while i < 64:
+            v.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+            i = i + 1
+        return s
+
+struct Cell:
+    int n
+
+equip Cell with Probeable:
+    int tag(self):
+        return self.n
+
+void main():
+    Cell h = Cell(1)
+    print(h.probe())

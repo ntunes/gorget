@@ -1,0 +1,26 @@
+#!parity-excluded harness: `bench` block — the bench runner prints elapsed wall-clock time into stdout
+# CoW view-materialization on the BENCH body-lowering path.
+#
+# AXIS CELL — `bench` bodies (`lower_bench_items`, src/ir/lowering/mod.rs). The
+# fourth and last of the module-loop paths (setup / teardown / test are in
+# `cow_test_body_view_survives_realloc.gg`), and one of eleven
+# function-body-lowering paths. Like its three siblings it ran a HAND-COPIED
+# SUBSET of the per-function prescans — liveness only — so
+# `cow_reassigned_after` was empty, the element view stayed a lazy borrow, and
+# the 64 pushes reallocated it away. Only `gg test --bench` lowers this body.
+#
+# THE REALLOC IS LOAD-BEARING (64 pushes), and the payload is heap-FORCED via
+# `mk` so ASan reports a legible heap-use-after-free, not a bare SIGSEGV.
+#
+# RED-VERIFIED against the pre-fix compiler: `gg test --bench` died with SIGSEGV.
+String mk(String a, String b):
+    return a + b
+
+bench "view bound in a bench body survives a realloc":
+    Vector[String] v = [mk("hello", "world")]
+    String s = v.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+        i = i + 1
+    print(s)

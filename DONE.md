@@ -1,3 +1,93 @@
+- [2026-08-31] **R48 Track C — `t0763` + `t0134`: the five per-function prescans ran on 2 of ELEVEN
+  function-lowering paths.** `cow_reassigned_names` / `loop_reassigned_names` / `cow_reassigned_after` /
+  `name_use_counts` / `liveness` were hand-copied into `lower_function` and `lower_equip_method` only, so
+  `lower_generic_function`, `lower_equip_method_with_subs`, `lower_trait_method_body`,
+  `lower_static_trait_method`, `emit_closure_call_function` and the four module-loop bodies (suite setup /
+  teardown / test / bench — a hand-copied liveness-ONLY subset, a second unnamed hole) lowered with an
+  EMPTY `cow_reassigned_after`. `is_source_mut_unsafe_at` then answered false unconditionally, the CoW
+  element borrow stayed lazy, and a reallocating `&self` mutator left it dangling: rc 139 SIGSEGV on BOTH
+  backends, ASan `heap-use-after-free`. ggdef, the definitional interpreter, had adjudicated `helloworld`
+  all along — both compilers were wrong and the oracle knew (Core #8).
+  **The class was the PATH, not the genericness:** a generic FREE function, a trait DEFAULT method, a
+  static trait method, a closure body and a `gg test` body all crashed on the same shape; the
+  hand-monomorphised control passed only because a NON-generic equip lowers through one of the two
+  already-prescanned paths.
+  **Fix (Core #4, centralize at the producer):** `functions::begin_function_body(ctx, FnBodyAst)` does the
+  reset AND all five prescans as ONE operation; `LoweringContext::clear_locals` became
+  `begin_function_body_reset` with exactly one caller; all eleven paths route through it. The body
+  parameter is TYPED (`enum FnBodyAst { Stmts, Expr }`) rather than a `&[]` sentinel meaning three
+  different things (Layering rule 2) — the closure path's `Spanned<Expr>` cannot be spelled `&[]` any more.
+  The `lower_function::prescan::*` sub-timers moved into it and now cover all eleven paths.
+  **Guard:** `function_body_prescans_are_centralised` (`tests/lints.rs`), three counts — raw-reset callers
+  = 1, wholesale `func_state` replacements = 2 (matching `FunctionState::default()` OR any
+  `func_state = …`, so the type-elided spellings are caught), non-test `FunctionBuilder::new(` = 15
+  (11 body paths + 4 synthetic). All three demonstrated RED on injected twelfth paths, including the
+  type-elided `ctx.func_state = Default::default()` evasion. Its doc comment ENUMERATES what it cannot
+  see; it is a new-path tripwire, not a total partition.
+  **Self-host half (`t0134`, Core #9):** `compute_method_mutates_self` classified NON-generic equips only,
+  so a generic-equip `&self` mutator was absent from `method_mutates_self` and the named-receiver gate let
+  the write through (`Y/Y` vs Rust's `Y/A`). The classification now rides along in the generic-instances
+  pre-pass, keyed on the MONO'D name (`Cell__int64_t__assign`, not the bare `Cell__assign` — both the
+  write and the read side go through `mangle_type_name`), with its own seed + fixpoint.
+  **Fixtures:** one cell per body-lowering path, every one RED-verified against a base-commit binary.
+  ⚠ The lane claim is NOT uniform and the axis table in `tests/integration.rs` carries it per cell: the
+  six `gg build` cells are rc 139 on C AND LLVM and ALSO pinned under ASan; the two module-loop cells
+  (`cow_test_body_*`, `cow_bench_body_*`) RED as a SIGSEGV on the C lane and have NO ASan pin, because a
+  fixture with no entry point does not link under `gg build --sanitize` at all. The cells —
+  `cow_generic_equip_mutator_view_uaf` (graduated) · `self_host_gaps/cow_generic_fn_view_survives_realloc` ·
+  `cow_trait_default_view_survives_realloc` · `self_host_gaps/cow_static_trait_method_view_survives_realloc` ·
+  `cow_closure_body_view_survives_realloc` · `cow_test_body_view_survives_realloc` (setup/teardown/test) ·
+  `cow_bench_body_view_survives_realloc` · `cow_generic_equip_named_recv` (graduated; SH lane + Rust
+  control). Plus `closure_capture_called_twice` as a committed cross-track CLASS GUARD for the closure
+  capture's ownership marking.
+  **Blast radius, re-measured on THIS build (base-commit blob vs HEAD, never `git checkout --`) over the
+  FULL corpus, no truncation:** 342 generic/equip/trait/closure/`cow_` fixtures A/B'd on emitted C —
+  277 byte-identical, 56 NEG fixtures failing IDENTICALLY in both modes (no accept/reject flip), 9
+  differ. Six of the nine are this round's OWN new fixtures (the point of the fix). One is
+  `closure_float_ret` and it SHRINKS (439,804 -> 437,492 bytes, `_clone(` 132 -> 124, output still
+  correct). The remaining two (`generic_callable_ref`, `spawn_closure_copy`) are NOT this change:
+  10 runs of EACH binary on each input show BOTH binaries producing BOTH outputs — a pre-existing
+  NON-DETERMINISTIC emission ORDER, filed as `t0876`. The `gg test` lane (23 fixtures carrying
+  test/bench/suite blocks — paths 8-11, which `gg build` never lowers) is 22/23 identical, the one
+  difference being `cow_test_body_view_survives_realloc` going rc 139 -> rc 0.
+  **Re-bomb measurement, BOTH lanes (Core: perf work measures MEMORY).** Rust lane: `gg build` on the
+  self-host driver, 3 isolated samples each — peak RSS 984,976 -> 985,076 KB (**+0.010%**), user time
+  inside its own run-to-run spread; the driver's emitted C is **BYTE-IDENTICAL** (34,768,294 bytes,
+  empty diff). Self-host lane: a 2x2 of {driver built by PRE, by POST} x {BASE source, HEAD source}
+  shows the clone meter depends ONLY on the source tree — `array_clone` 13,150,071 and `string_clone`
+  31,490,660 on BASE source for BOTH binaries, 13,175,009 / 31,517,690 on HEAD source for BOTH. **The
+  compiler change moves both meters by EXACTLY ZERO**; the +0.19% between naive pre/post snapshots is
+  INPUT GROWTH — the meter's workload IS `lower.gg`, which gained the t0134 pre-pass. Peak RSS
+  738.6-740.6 MB across all four cells.
+  **Not fixed, and now over-determined:** `t0704` — the capture-boundary UAF. A second repro
+  (`closure_capture_inside_body_uaf.gg`: capture, realloc INSIDE, no saved view at all) is still rc 139
+  after this fix, while the identical statements WITHOUT a capture are rc 0. The discriminator is the
+  CAPTURE ROOT, not where the mutation is spelled — attached to `t0704` as evidence, not filed as a new
+  item. Two false invariant-comments deleted along the way (Core #14).
+  ⊕ **TWO CELLS LIVE IN `tests/fixtures/self_host_gaps/`, NOT AT TOP LEVEL, AND THAT IS CORE #9 ⊕
+  BEING OBEYED RATHER THAN A CAVEAT.** Every top-level `tests/fixtures/*.gg` is auto-scanned into
+  `runtime_parity_corpus`; those two do not MATCH on the self-host lane, non-MATCH sits at the FROZEN
+  ceiling of 151, and raising it for a round's OWN inflow is forbidden with no exemption. Both trip
+  PRE-EXISTING self-host defects that have nothing to do with the cell under test, minimised to 6- and
+  11-line programs and filed as `t0922` (a generic free fn whose type param is reachable only INSIDE a
+  container argument emits the call and never the body → `undefined reference`; the bare-`T` control
+  LINKS AND RUNS) and `t0923` (a static TRAIT method returning a String returns its LENGTH — `7` for
+  `abcdefg`, `10` for `helloworld`; the `int` sibling on the same block and the same method on a plain
+  non-trait `equip` are both correct). Their Rust-lane `run_gg` and ASan coverage is unchanged; two
+  named `#[ignore]`d tests assert the INTENDED self-host output and were confirmed RED for exactly the
+  filed reason. ⚠ **The gate that should have caught this passed VACUOUSLY** — the ceiling assert is
+  behind `if cfg!(debug_assertions)`, so the DEBUG build every executor runs takes the skip branch and
+  prints a note. It now says THIS IS A NO-OP, NOT A PASS; filed as `t0924`. The remaining six
+  comparable top-level fixtures were run through the self-host lane BY HAND and all MATCH, so this
+  round's parity inflow is zero — measured, because the gate could not measure it.
+  **Filed:** `t0920` (ggdef's 3 standing generic-equip subset exclusions have no oracle row),
+  `t0921` (ggdef rejects `equip [T] Cell[T]` but elaborates `equip Cell[T]` — one construct, two subset
+  answers, a boundary drawn on a SPELLING), `t0876` (**the emitted C is not reproducible**: the same
+  binary on the same input emits two different files run to run, because the C backend iterates
+  `std::collections::HashMap`/`HashSet` — RandomState, a per-PROCESS seed — to decide declaration
+  order. Found by this round's own A/B; it means every "byte-identical emitted C" argument is a coin
+  flip on the affected fixtures).
+
 - [2026-08-31] **t0841 — a comprehension IS a loop, and the liveness walker did not know it: `[s for i in 0..3]` double-freed on BOTH backends while the byte-equivalent `for i in 0..3: parts.push(s)` was correct.** Every loop-shaped form needs the back-edge two-pass dance — a name read on a later iteration must not be marked dead on this one. The four STATEMENT arms of `src/ir/lowering/liveness.rs` each carried their own hand-rolled copy of it; the three COMPREHENSION arms carried none, because an earlier round swept the statement forms and stopped at the expression boundary. So the loop-invariant owned name `s` was marked dead at its only syntactic use, MOVED on every iteration, and three aliases of one heap buffer landed in the vector. **The item's assumed fix site was wrong and the correction is the interesting part:** it filed the defect at the comprehension's accumulate, and the statement-loop control being GREEN is what relocated it to the liveness PRODUCER one layer up (Core #1 — fix at the write site). The accumulate faithfully executed a move it was told was safe. **The fix is ONE helper, not seven copies:** `walk_loop_two_pass(live, lu, pass1_only, per_iteration, tail)` — `live`/`lu` are parameters, never captured, so there is no borrowck fight — with all SEVEN arms routed through it. The three statement arms come out byte-for-byte equivalent; that half is a provable no-op. ⚠ **The enumeration was a selection at six: `Stmt::MetaFor | Stmt::MetaWhile` is a fourth hand-rolled dance and its pass 2 walked `live` IN PLACE, missing the union fix its three siblings carry** — and that arm is HARDER than the headline: a zero-trip `meta for` whose body assigns a name consumed above it is a COMPILER ICE (`gg build` rc 101, `local _1 read after MoveZero`, GIR validation panic, C and LLVM). Liveness runs on the UNEXPANDED AST, so the arm's own comment claiming the meta forms *"cannot themselves consume a runtime local"* was a false Core #14 comment; it is corrected in the same commit, as is `self_host_lowerer/lower_liveness.gg`'s claim that the AST walker is *"correct-but-conservative"* on loops. **The guard is `liveness_loop_back_edge_single_source` (`tests/lints.rs`) and it can catch its own class.** A call-site count alone cannot: it goes red on a REMOVED call and stays GREEN on the one regression it exists to prevent, a new loop-shaped arm hand-rolling the dance. So it also counts the dance's own ingredients, and the guard reached FOUR assertions by being walked through twice. Assertion two counts `lu_discard` DECLARATIONS and is evadable by RENAME — `liveness.rs:102` already spells the same throwaway map `discard`, a committed evasion precedent. Assertion three answered that by counting the annotated TYPE, and an output review walked through it with `let mut d = FxHashMap::default();`, the type ELIDED; it now counts CONSTRUCTIONS. A second review walked through THAT with `let mut discard_lu = lu.clone();` — same file, same map type, no rename, no construction — all three green. ⚠ **TWO RECURRENCES OF ONE CLASS IN ONE GUARD IS WHERE NAMING THE NEXT HOLE STOPS BEING HONEST (Core #6).** Assertion four counts `live.clone()`, which catches that spelling and the three earlier escapes: all six breaks were demonstrated RED and restored, the two that matter being the ones GREEN before it — the `lu.clone()` spelling and the `Default::default()` hole an earlier version of this record merely NAMED. ⛔ **AND THE GUARD IS STILL NOT TOTAL — THE ROUND'S LAST REVIEW EVADED ASSERTION FOUR SEVEN TIMES**, each a complete, compiling, wired dance with all 198 tests green: rename the receiver (`live`->`l`) and the body is otherwise byte-identical — the very rename-evasion assertion two had just been faulted for — plus `live.iter().copied().collect()`, `FxHashSet::from_iter(..)`, `std::mem::take`/`replace` with a restore (no `.clone()` at all), `Clone::clone(&*live)`, an extension-trait `.snapshot()`, and holding the dance's state in a struct and copying the field. FIVE keep the name `live`. **A substring census over one file counts COSTUMES, not a CLASS, and a fifth count would be a fifth costume** — so no fifth was added. ⭐ The honest reach, which is what the brief specified before the prose inflated it: the four are a **NEW-PATH TRIPWIRE**. Assertion one holds — an added or removed helper call site IS caught. Two to four catch the hand-rolled spellings measured so far and guarantee nothing about the next. The total guard has to be type-level rather than textual — a `LiveSet` newtype whose copy path is private to the helper's module, so a hand-rolled dance fails to COMPILE — filed as `t0875` with the seven escapes as its evidence. ⚠ The lesson generalises past this guard: three successive assertions were each described as closing the class, and each was walked through by respelling the exact token it counted. A textual guard's reach is the token, never the concept. ⚠ Each earlier RED demo had used the spelling its own assertion was always going to catch — a guard shown red on a variant it cannot miss is not evidence about the variant it can. **13 fixtures, 10 of them RED-verified against the pre-fix compiler** (11 counting the ASan twin) on C AND LLVM AND `--sanitize` (rc 134 `free(): double free detected in tcache 2` / `AddressSanitizer: attempting double-free` for the eight runtime cells; `gg build` rc 101 for the `meta for` ICE), covering comprehension KIND (list · dict · set) × body SUB-POSITION (element · dict value · CONDITION) × SOURCE (range · Vector) × element TYPE (String · struct · Vector) × loop SHAPE (nested · filtered · `meta for` · `meta while`). The CONDITION cell is the one that discriminates two candidate fixes: route the filter after the two-pass call — the shape the pre-fix code had — and the element position is protected while a consuming use inside the filter is not. **3 controls are green before AND after and are labelled as controls**, including the fresh-mint comprehension `[mk("t","ag") for n in nums]`: the axis is an already-owned live NAME, not "a loop-invariant body". ⚠ That control had to be COMMITTED because it did not exist — the item and its repro both cited `known_gaps/map_inline_closure_cross_type_input_mint.gg`, which is RED at HEAD and whose wired body is a `.map()` call, not a comprehension; the comprehension claim lived only in its comment. ⚠ **One drafted cell was GREEN on arrival and was replaced rather than shipped**: the `meta while` guard written inside a generic `probe[T]` is correct at pre-fix HEAD (a generic body reaches the lowerer with its meta forms already resolved), so it would have read as coverage while testing nothing; the non-generic `meta while 1 > 2` spelling reproduces (Core #12). **Instrument note:** the clone meter is structurally blind here (~4 comprehensions against 573 `for`-in sites in the self-host lowerer corpus), so the refactor-safety check was the 39-cell `tests/fixtures/self_host_comprehension/` corpus run through RUST gg — `ok=38 bad=1` on C and on LLVM before and after, `ok=29 bad=10` under `--sanitize` before and after, the same cell names each time (the one value-lane red is `list_bytessrc_narrow_elem`, which the harness header already names as Rust-lane-wrong; the nine ASan reds are pre-existing `sethof_filter_*` leaks). On the headline cell the meter reads `array_clone=0 string_clone=3` — three clones, one per iteration, which is the contract. **All 13 new fixtures COMPILE and MATCH on the self-host lane** (driver emit + `cc` + run), so nothing enters `RUNTIME_DIFF_NONMATCH_CEILING`; and the self-host lane was already CORRECT on every shape Rust gg got wrong, which is a reference-lags-the-self-host data point. `tests/fixtures/robustness_map/MANIFEST.tsv`'s `pair_strrepeat3_c_join_comprehension` moves `CRASH`→`WORKS`, `TRAP`→`WORKS` on LLVM, `SANITIZE-FAIL`→`WORKS`, divergence cleared — measured as PROGRESS on all three lanes with 0 regressions in its topic. ⚠ **What this fix EXPOSED and did not cause:** a set / dict-KEY comprehension over an invariant owned name now leaks 6 bytes in 2 objects, because the clones the fix correctly makes are the ones the insert path discards on dedup — `todo/t0121`, whose class reproduces with no comprehension anywhere (a plain `for i in 0..3: out.add(mk("a","b"))` leaks identically, and a `Dict` literal with duplicate heap keys leaks 3 bytes). It was invisible before only because the discarded keys were ALIASES of the stored one — a cell that was green for a reason unrelated to what it tested. That is why the set cell here is exercised through the CONDITION with `int` elements — and why the element-position shape it declines to wire ships instead as `t0121`'s second durable repro, `tests/fixtures/known_gaps/set_comprehension_dup_elem_leak.gg` + the `#[ignore]`d `set_comprehension_dup_elem_leak` asserting the intended leak-free run (RED-verified: rc 99, `6 byte(s) leaked in 2 allocation(s)`). Without it the one shape this round made observable would exist nowhere in the tree.
 - [2026-08-31] **ROUND XLVII (R47) CLOSED — MEMORY SAFETY: RETIRE THE NAME-MATCHING CLASS.**
   15 track integrations · 101 commits · 25 touching `src/`. Opened as the answer to R46, which was

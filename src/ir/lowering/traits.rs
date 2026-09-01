@@ -884,7 +884,10 @@ fn lower_trait_method_body(
 
     let mut builder =
         FunctionBuilder::new(mangled.to_string(), return_type, &params);
-    ctx.clear_locals();
+    super::functions::begin_function_body(
+        ctx,
+        super::functions::FnBodyAst::from(&method_def.body),
+    );
 
     // Register self_void as local _1
     ctx.register_local(
@@ -1523,7 +1526,7 @@ fn lower_static_trait_method(
         .collect();
 
     let mut builder = FunctionBuilder::new(mangled, return_type, &param_refs);
-    ctx.clear_locals();
+    super::functions::begin_function_body(ctx, super::functions::FnBodyAst::from(&method.body));
 
     // Register params starting at _1, tracking pointer-wrapped params to avoid double-wrapping
     let mut param_idx = 1u32;

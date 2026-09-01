@@ -3061,3 +3061,76 @@ fn cow_comprehension_invariant_owned_name_asan() {
 fn known_gap_shared_plain_call_param_uaf_asan() {
     security_safe_no_leak("known_gap_shared_plain_call_param_uaf", "42\n42");
 }
+
+// ══════════════════════════════════════════════════════════════════════════
+// THE PER-FUNCTION-BODY PRESCAN NET — the SANITIZE axis
+// ══════════════════════════════════════════════════════════════════════════
+//
+// The value lanes (tests/integration.rs) see rc 139; this lane sees WHY —
+// `AddressSanitizer: heap-use-after-free`, with the freeing `gorget_array_push`
+// realloc naming the mechanism. Core #13: pick an instrument that can SEE the
+// failure class. A CoW element view is a pointer INTO the collection's buffer,
+// so a reallocating push frees it; only ASan distinguishes "read freed memory"
+// from "read garbage that happened to look right".
+//
+// One cell per function-body-lowering PATH, mirroring the integration net.
+// Each was RED-verified against the pre-fix compiler: rc 139 on C AND LLVM,
+// ASan heap-use-after-free under `--sanitize`.
+
+/// PATH CELL — `lower_equip_method_with_subs` (a `&self` mutator on a GENERIC
+/// equip). Graduated from `tests/fixtures/known_gaps/`.
+#[test]
+fn cow_generic_equip_mutator_view_uaf_safe() {
+    security_safe("cow_generic_equip_mutator_view_uaf", "helloworld");
+}
+
+/// PATH CELL — `lower_generic_function` (a plain generic FREE function).
+#[test]
+fn cow_generic_fn_view_survives_realloc_safe() {
+    security_safe("cow_generic_fn_view_survives_realloc", "helloworld");
+}
+
+/// PATH CELL — `lower_trait_method_body` (a trait DEFAULT method).
+#[test]
+fn cow_trait_default_view_survives_realloc_safe() {
+    security_safe("cow_trait_default_view_survives_realloc", "helloworld");
+}
+
+/// PATH CELL — `lower_static_trait_method` (a static trait method, no `self`).
+#[test]
+fn cow_static_trait_method_view_survives_realloc_safe() {
+    security_safe("cow_static_trait_method_view_survives_realloc", "helloworld");
+}
+
+/// PATH CELL — `emit_closure_call_function` (the closure body, whose AST is a
+/// bare `Spanned<Expr>`). The vector is LOCAL to the closure: the CAPTURED
+/// sibling is `todo/t0704`, a different defect at the capture boundary.
+#[test]
+fn cow_closure_body_view_survives_realloc_safe() {
+    security_safe("cow_closure_body_view_survives_realloc", "helloworld");
+}
+
+/// LANE CELL — the generic-equip `&self` mutator on a NAMED bare-value-param
+/// receiver. The value lanes assert `Y / A`; this lane asserts nobody wrote
+/// through a freed or aliased buffer to get there.
+#[test]
+fn cow_generic_equip_named_recv_safe() {
+    security_safe("cow_generic_equip_named_recv", "Y\nA");
+}
+
+/// CLASS GUARD — a closure with heap-forced resource captures, called TWICE,
+/// each capture forwarded into a CONSUMING position inside the body. The env
+/// owns the captured data ACROSS calls, so a consuming position must COPY. If
+/// a future change to capture ownership lets it MOVE instead, the second call
+/// reads a move-zeroed slot and the env's drop double-frees — and BOTH can
+/// still print the right bytes, which is precisely why the value lanes are not
+/// enough here. Run under `detect_leaks=1` so the clone-per-call is also held
+/// to not leaking. See the fixture header for the four mechanisms measured to
+/// hold this up today, and why no single-line RED stub exists at HEAD.
+#[test]
+fn closure_capture_called_twice_no_leak() {
+    security_safe_no_leak(
+        "closure_capture_called_twice",
+        "helloworld/alphabeta\nhelloworld/alphabeta\nhelloworld\nalphabeta",
+    );
+}
