@@ -22,65 +22,91 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### ▶ R48 STATE AS OF 2026-09-01 — SIX BRANCHES LANDED, ONE INTEGRATED, SEVEN GAUNTLET STEPS OWED
+### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `329ad020`)
 
-⛔ **OWNER HOLD 2026-09-01: no new agents** ("we are running out of tokens... don't start new ones
-(for the gauntlet or otherwise) until I say so"). The seven owed steps below are BLOCKED ON THAT, not on
-any technical finding.
+**2 of 7 tracks INTEGRATED. 5 branches are LANDED, GREEN ON THEIR OWN BRANCH, and each owes exactly one
+gauntlet step before it may merge.** Nothing is blocked on a technical finding; it is blocked on
+⛔ **an OWNER HOLD ON NEW AGENTS** (2026-09-01: *"don't start new ones (for the gauntlet or otherwise)
+until I say so"*). One agent was later authorised, spent on Track C's confirming pass, which signed off.
 
-| track | items | executor | review | state |
-|---|---|---|---|---|
-| **D1** | `t0841` | ✅ | ✅×3 + final gate | **INTEGRATED** `3b8a5561` |
-| **A** | `t0770` `t0772` | ✅ `5d43cedd` | **none** | owes output-review |
-| **C** | `t0763` `t0134` | ✅ | ✅ blocked→folded + ✅ confirming **SIGN OFF** | **INTEGRATED** |
-| **D2** | `t0840` | ✅ `4850bf38` | ✅ blocked→folded | owes confirming pass |
-| **β** | `t0825` | ✅ `470cd49f` | **none** | owes output-review |
-| **γ** | nondeterminism | ✅ `5f67841f` | **none** | owes output-review |
-| **F** | `t0861` `t0851` `t0860` | ✅ `6e9404f5` | ✅×2 blocked→folded | owes confirming pass |
-| **E-B1/B2/B3** | burn-down | — | brief pass 1 blocked→folded | owe brief pass 2 |
-| **B1/B2** | `t0771` | — | — | **R49** (owner) — briefs in `/tmp/r49briefs/` ⚠ `/tmp` is not durable |
+| track | items | branch tip | ahead | merge | OWED STEP |
+|---|---|---|---|---|---|
+| **D1** | `t0841` | — | — | — | **INTEGRATED** `3b8a5561` |
+| **C** | `t0763` `t0134` | — | — | — | **INTEGRATED** `329ad020` |
+| **A** | `t0770` `t0772` | `5d43cedd` | 6 | ⚠ `todo/t0876.md` | **a first output-review** (none yet) |
+| **D2** | `t0840` | `4850bf38` | 6 | clean | **a confirming pass** (output-review blocked → folded) |
+| **β** | `t0825` | `470cd49f` | 1 | clean | **a first output-review** (none yet) |
+| **γ** | nondeterminism | `5f67841f` | 7 | clean | **a first output-review** (none yet) |
+| **F** | `t0861` `t0851` `t0860` | `6e9404f5` | 6 | ⚠ `todo/t0876.md` | **a confirming pass** (2 reviews blocked → folded) |
+| **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded) |
+| **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
 
-⚠ **ALL SIX BRANCHES CONFLICT WITH MAIN** — mostly `t0910`'s ID-collision class plus main moving (D53,
-the ggdef fix, `t0910`). **Only Track C has resolved its share** (renumbered to `t0920`/`t0921`, both
-ggdef pins re-derived: B2 **190**, B1 **138**). ⛔ **Resolve collisions by RENUMBERING THE LATER TRACK,
-never by taking one side — the sides are DIFFERENT DEFECTS and "taking one" silently destroys a filed
-item and hands its `repro`/`cites` to an unrelated one.**
+⚠ **Briefs + all fold addenda live in `/tmp/r48briefs/*.md` and are NOT durable.** Each carries its
+review history as precedence-ordered addenda (`PRECEDENCE: A3 > A2 > A1 > BODY`). **Re-materialise before
+relying on them.**
 
-### ⛔ TWO GATES THAT REPORT SUCCESS WITHOUT EVALUATING ANYTHING (R48's sharpest instrument finding)
+**THE INTEGRATION RECIPE THAT WORKED FOR C — follow it, it was bought twice:**
+1. Merge the branch; expect `TODO.md` to conflict (the handover block moves under every track).
+2. Resolve `TODO.md` with **`git checkout --ours`**, then **`python3 scripts/todo_index.py --write`** —
+   the generated index picks up the track's filed/closed items automatically.
+3. ⛔ **Run the SEPARATE targets AT INTEGRATION, not at close:** `-p ggdef` · `--test spec_conformance` ·
+   `--test security` · `--test lints` · `--lib`. **`--test integration` never touches the first three, and
+   skipping `-p ggdef` after D1 left main RED for hours.**
+4. Prune the worktree (`git worktree unlock` then `remove --force`; branches survive).
+
+⛔ **ID COLLISIONS (`t0910`): A and F both add a DIFFERENT `todo/t0876.md`.** ⛔ **NEVER resolve by taking
+one side** — the sides are different defects, and taking one silently destroys a filed item while handing
+its `repro`/`cites` to an unrelated one. **Renumber the LATER track above `t0925` and fix every citation**
+(Track C did this correctly: `t0920`/`t0921`, including a hand-off line that had pointed at D1's item).
+
+### ⛔ WHAT MUST HAPPEN BEFORE R48 CAN CLOSE
+1. **The five owed gauntlet steps + three brief pass-2s.** No diff integrates without a fresh pass on it.
+2. **E-B3's `robustness_map` scorer fix is UNLANDED.** `scripts/robustness_map.py:617` derives "good" from
+   the C-lane BASELINE bucket, never `COL_EXPECTED` ⇒ **fixing a C-lane cell scores as a REGRESSION**, and
+   on the 43 self-host-WORKS cells a self-host regression scores as PROGRESS. `:715-723` makes `--accept`
+   a one-shot launderer (it writes before the regression check). **Until this lands the round-close
+   robustness gate cannot be read either way, and this round FIXED C-lane cells.**
+3. **NOT RUN on the integrated tree:** `GG_BACKEND=llvm` whole-corpus · `scripts/sanitize_sweep.sh` ·
+   `robustness_map` · the C whole-corpus sweep. (D2 ran the C sweep green on ITS branch — 2557/0 with the
+   bootstrap included and scope verified — that is one branch, not the integrated tree.)
+4. **`RUNTIME_DIFF_MATCH_FLOOR` reseed is a ROUND-CLOSE action** on the post-integration number with the
+   jitter discount — **never mid-round from one worktree**. γ measured MATCH **1505** and already lowered
+   `RUNTIME_DIFF_NONMATCH_CEILING` 151 → **147** as its assert instructs (lowering needs no sign-off).
+
+### ⛔ TWO GATES THAT REPORT SUCCESS WITHOUT EVALUATING ANYTHING — R48's sharpest instrument finding
 - **`t0925`** — `scripts/run_integration.sh:66` puts `"$@"` BEFORE cargo's `--`, so a harness arg is eaten
   as a cargo filter: `--skip self_host` → **`0 passed; 2748 filtered out`, exit 0.** This is the wrapper
   Round-lifecycle step 4 names as the round-close C sweep. **A green zero.**
 - **`t0924`** — the parity non-MATCH ceiling assert is wrapped in `if cfg!(debug_assertions)`, so it
-  **no-ops in the profile executors actually run**. Track C's family run passed **vacuously**.
-⇒ **Both were found by executors noticing something suspicious, never by the gates. Weigh the round-close
-battery accordingly.**
+  **no-ops in the profile executors actually run.** Track C's family run passed **vacuously**.
+⇒ **Both were found by executors noticing something odd, never by the gates. Weigh round-close green
+accordingly.** ⊕ Related: `t0875` — four counting assertions were each evaded by respelling what they
+counted, the last in **seven** costumes. **A textual guard's reach is the TOKEN, never the CONCEPT.**
 
-### ✅ D53 RATIFIED (owner, 2026-09-01) — `Mutex`/`RWLock` ARE CARVE-OUTS
-In `docs/define-gorget/decisions.md` (owner-authorised edit) + write-through to
-`docs/language-reference.md`. ⭐ **It CORRECTED A FALSE CLASSIFICATION**: the reference listed `Mutex[T]`
-among *"the sanctioned MULTI-OWNER escape hatch"*, but the lowering gives it **no clone path** — which is
-exactly why slots 2..N of a `Vector[Mutex]` had nothing to hold. Share a lock via `Shared[Mutex[T]]`.
-⇒ **`t0908` (CRITICAL) IS UNBLOCKED and closes by CHECK-TIME REJECTION with NO lowering change.**
-⚠ **D2's own report still says "blocked on the owner call" — that is STALE; the ruling landed after its
-last read.** ⚠ `AGENTS.md`'s carve-out list is a SECOND SPELLING and is now short by two; it was left
-unedited (0 bytes headroom) — D53 records the enumerate-vs-cite question.
+### ✅ OWNER RULINGS THIS ROUND — do not re-litigate
+- **D53 (2026-09-01):** `Mutex`/`RWLock` join the `E_MoveWithoutOperator` carve-out list.
+  `decisions.md` + write-through in `language-reference.md`. ⭐ It **corrected a false classification** —
+  the reference had `Mutex[T]` under *"the sanctioned MULTI-OWNER escape hatch"*, but the lowering gives it
+  **no clone path**, which is why slots 2..N of a `Vector[Mutex]` had nothing to hold. Share via
+  `Shared[Mutex[T]]`. ⇒ **`t0908` (CRITICAL) closes by CHECK-TIME REJECTION with no lowering change.**
+  ⚠ **D2's report still says "blocked on the owner call" — STALE**, the ruling landed after its last read.
+  ⚠ **The rejection is RATIFIED but NOT YET IMPLEMENTED.** ⚠ `AGENTS.md`'s carve-out list is a second
+  spelling, now short by two, left unedited at 0 bytes headroom (D53 records the enumerate-vs-cite question).
+- **`t0771` (B1+B2) → R49**; **`t0823` (α) → R49**; the D22 canonical-spelling migration **STOPPED** and
+  `no_dot_slice_after_d22` **suspended** (`t0871`: `s[a:b]` is silently wrong — the migration target was
+  broken and the removal clause had been withdrawn by D22 Rider 2).
 
-### ⚠ WHAT IS NOT RUN, AND MUST BE BEFORE CLOSE
-`GG_BACKEND=llvm` whole-corpus · `scripts/sanitize_sweep.sh` · `robustness_map` **on the merged tree**
-(⛔ and **E-B3's scorer fix is unlanded**, so until it is, that gate reports this round's own C-lane fixes
-as REGRESSIONS and `--accept` launders them — `:617` derives "good" from the C baseline bucket, never
-`COL_EXPECTED`). D2 ran integration whole-corpus green on ITS branch (2557/0, bootstrap included, scope
-verified) — that is one branch, not the integrated tree.
-
-### ⚠ ORCHESTRATOR ERRATA FROM THIS SESSION — do not re-derive
-- **A persisting `cd` into an agent worktree sent three commits to the wrong branch.** The Bash tool keeps
-  cwd between calls. **Use `git -C <path>`, never `cd`, outside the orchestrator worktree.** Recovered by
-  cherry-picking the ggdef fix to main (`f5ab385d`).
-- **Integrating D1 without `-p ggdef` turned main RED** — it is a SEPARATE target `--test integration`
-  never touches, and `t0801`'s class (glob-minus-exclusions corpus membership) recurred in the round that
-  closed it. **Run the separate targets at every integration, not only at close.**
-- **A figure confirmed by re-running the enumerator's own regex is not confirmed** — "3 round closes" was
-  the predicate's own output; the real count is ~38 (`t0851`, re-opened).
+### ⚠ ORCHESTRATOR ERRATA — bought expensively, do not repeat
+- **A persisting `cd` into an agent worktree misrouted three commits.** The Bash tool keeps cwd between
+  calls. **Use `git -C <path>`, never `cd`, outside the orchestrator worktree.**
+- **Integrating without `-p ggdef` turned main RED** — `t0801`'s glob-minus-exclusions class recurred in
+  the round that closed it.
+- **A figure confirmed by re-running the enumerator's own regex is NOT confirmed** — "3 round closes" was
+  the predicate's own output; the truth is ~38 (`t0851`, re-opened).
+- **`git add <explicit paths>` silently omits** — D53 sat uncommitted through a later commit because only
+  `TODO.md`/`todo/` were staged. Lints verify content, nothing verifies it was committed.
+- **Three of my own probes misled me** (wrong flag · a syntax error read as a result · a non-reallocating
+  mutation). **MIND THE PROBE: check `rc`, and confirm the probe reaches the mechanism.**
 
 ### ⚠ R48 SCOUT CORRECTIONS — MEASURED, SUPERSEDE THE FIGURES ABOVE (2026-08-31)
 
