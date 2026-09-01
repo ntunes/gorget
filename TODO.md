@@ -27,11 +27,12 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `f5cea100`)
+### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `907387a0`)
 
 **4 of 7 tracks INTEGRATED. 3 branches are LANDED and each owes exactly one gauntlet step.**
-The standing hold is *"don't start new ones until I say so"*. Lifts spent: C, D2, F (confirming →
-t0876→t0926 executor → confirming). D53 unique-lock reject and the figures DB are **on main**.
+The standing hold is *"don't start new ones until I say so"*. Lifts spent: C, D2, F. Current lift:
+**Track A first output-review** (in flight; no `/tmp/a_output_review.md` yet). D53 unique-lock reject
+and the figures DB are **on main**.
 ⚠ After D2, β/γ add/add-collide with D2's `todo/t0902.md`–`t0904.md` (different defects). A's
 `todo/t0876.md` is still a different item from main's C-emit `t0876` — **never take a side**.
 F's figures-DB adoption is `t0926`.
