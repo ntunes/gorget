@@ -29,7 +29,7 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 
 ### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `8192464bb`)
 
-**6 of 7 tracks INTEGRATED. γ's first output-review is in flight.**
+**6 of 7 tracks INTEGRATED. γ first OR: design holds, ID collision + breadcrumb BLOCKING; fix-up in flight.**
 Lifts spent: C, D2, F, A, β (integrated). Owner lifted γ through integration. D53 unique-lock reject and the figures DB are **on main**.
 A's capture residual is `t0927`; β's are `t0928`/`t0929`/`t0930`; main's `t0876` remains C-emit jitter.
 ⚠ γ still add/add-collides with D2's `todo/t0902.md`–`t0904.md` (different defects). Renumber above `t0930`.
@@ -42,7 +42,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **D2** | `t0840` D53 | — | — | — | **INTEGRATED** `d5707a77` |
 | **A** | `t0770` `t0772` | — | — | — | **INTEGRATED** (residuals `t0877`–`t0880`, `t0872`, `t0927`) |
 | **β** | `t0825` | — | — | — | **INTEGRATED** `35037071` (residuals `t0928`–`t0930`) |
-| **γ** | nondeterminism | `5f67841f` | 7 | ggdef + `integration.rs` + add/add `t0902`–`t0904` | **first output-review in flight** |
+| **γ** | nondeterminism | `5f67841f` | 7 | ggdef + `integration.rs` + add/add `t0902`–`t0904` | **first OR blocked; fix-up executor in flight** (renumber → `t0931`–`t0933`) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
 | **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded) |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
