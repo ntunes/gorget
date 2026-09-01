@@ -27,11 +27,11 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `907387a0`)
+### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `860a23a9`)
 
 **5 of 7 tracks INTEGRATED. 2 branches are LANDED and each owes a first output-review.**
 The standing hold is *"don't start new ones until I say so"*. Lifts spent: C, D2, F, A (OR →
-fix-up → confirming). D53 unique-lock reject and the figures DB are **on main**. A's capture
+fix-up → confirming → integrated). D53 unique-lock reject and the figures DB are **on main**. A's capture
 residual is `t0927`; main's `t0876` remains C-emit jitter.
 ⚠ After D2, β/γ add/add-collide with D2's `todo/t0902.md`–`t0904.md` (different defects).
 Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption is `t0926`.
@@ -62,12 +62,12 @@ relying on them.**
 4. Prune the worktree (`git worktree unlock` then `remove --force`; branches survive).
 
 ⛔ **ID COLLISIONS (`t0910`).** F's figures-DB adoption is `t0926` (was colliding `t0876`). Main's
-`t0876` is C-emit jitter. A's `t0876` is Callable-param capture — still a different file; **never take
-a side**. β/γ collide with D2 on `t0902`–`t0904`. **Renumber the LATER track above the current max
-and fix every citation.**
+`t0876` is C-emit jitter. A's capture residual is `t0927` (was colliding `t0876`; landed, not a live
+add/add). β/γ collide with D2 on `t0902`–`t0904`. **Renumber the LATER track above the current max
+and fix every citation. Never take a side on add/add todo ids.**
 
 ### ⛔ WHAT MUST HAPPEN BEFORE R48 CAN CLOSE
-1. **The five owed gauntlet steps + three brief pass-2s.** No diff integrates without a fresh pass on it.
+1. **The two remaining first output-reviews (β, γ) + three E-B brief pass-2s.** No diff integrates without a fresh pass on it.
 2. **E-B3's `robustness_map` scorer fix is UNLANDED.** `scripts/robustness_map.py:617` derives "good" from
    the C-lane BASELINE bucket, never `COL_EXPECTED` ⇒ **fixing a C-lane cell scores as a REGRESSION**, and
    on the 43 self-host-WORKS cells a self-host regression scores as PROGRESS. `:715-723` makes `--accept`
