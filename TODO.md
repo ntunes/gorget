@@ -27,7 +27,7 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `d5707a77`)
+### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `f5cea100`)
 
 **4 of 7 tracks INTEGRATED. 3 branches are LANDED and each owes exactly one gauntlet step.**
 The standing hold is *"don't start new ones until I say so"*. Lifts spent: C, D2, F (confirming →
@@ -42,8 +42,8 @@ F's figures-DB adoption is `t0926`.
 | **C** | `t0763` `t0134` | — | — | — | **INTEGRATED** `329ad020` |
 | **D2** | `t0840` D53 | — | — | — | **INTEGRATED** `d5707a77` |
 | **A** | `t0770` `t0772` | `5d43cedd` | 6 | ⚠ `todo/t0876.md` | **a first output-review** (none yet) |
-| **β** | `t0825` | `470cd49f` | 1 | clean | **a first output-review** (none yet) |
-| **γ** | nondeterminism | `5f67841f` | 7 | clean | **a first output-review** (none yet) |
+| **β** | `t0825` | `470cd49f` | 1 | ⚠ add/add `t0902`–`t0904` vs D2 | **a first output-review** (none yet) |
+| **γ** | nondeterminism | `5f67841f` | 7 | ggdef + `integration.rs` + add/add `t0902`–`t0904` | **a first output-review** (none yet) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
 | **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded) |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
