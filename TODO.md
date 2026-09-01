@@ -2,8 +2,8 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN AND MID-FLIGHT — 6 of 7 tracks integrated (D1, C, D2, F, A, β), γ awaiting its first output-review.
-⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β).
+**▶ R48 IS OPEN AND MID-FLIGHT — 6 of 7 tracks integrated (D1, C, D2, F, A, β), γ first output-review in flight.
+⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β) and the owner's lift to drive γ through integration.
 ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
 **D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
 Opened 2026-08-31 (owner: *"open next round"*). Headline: **the six CRITICAL memory-safety defects** —
@@ -27,10 +27,10 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `35037071`)
+### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `8192464bb`)
 
-**6 of 7 tracks INTEGRATED. γ still owes a first output-review.**
-Lifts spent: C, D2, F, A, β (integrated). D53 unique-lock reject and the figures DB are **on main**.
+**6 of 7 tracks INTEGRATED. γ's first output-review is in flight.**
+Lifts spent: C, D2, F, A, β (integrated). Owner lifted γ through integration. D53 unique-lock reject and the figures DB are **on main**.
 A's capture residual is `t0927`; β's are `t0928`/`t0929`/`t0930`; main's `t0876` remains C-emit jitter.
 ⚠ γ still add/add-collides with D2's `todo/t0902.md`–`t0904.md` (different defects). Renumber above `t0930`.
 Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption is `t0926`.
@@ -42,7 +42,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **D2** | `t0840` D53 | — | — | — | **INTEGRATED** `d5707a77` |
 | **A** | `t0770` `t0772` | — | — | — | **INTEGRATED** (residuals `t0877`–`t0880`, `t0872`, `t0927`) |
 | **β** | `t0825` | — | — | — | **INTEGRATED** `35037071` (residuals `t0928`–`t0930`) |
-| **γ** | nondeterminism | `5f67841f` | 7 | ggdef + `integration.rs` + add/add `t0902`–`t0904` | **a first output-review** (none yet) |
+| **γ** | nondeterminism | `5f67841f` | 7 | ggdef + `integration.rs` + add/add `t0902`–`t0904` | **first output-review in flight** |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
 | **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded) |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
@@ -69,7 +69,7 @@ with D2 on `t0902`–`t0904`. **Renumber the LATER track above the current max (
 citation. Never take a side on add/add todo ids.**
 
 ### ⛔ WHAT MUST HAPPEN BEFORE R48 CAN CLOSE
-1. **γ's first output-review + three E-B brief pass-2s.** No diff integrates without a fresh pass on it.
+1. **γ's remaining gauntlet (first OR → fold collisions → confirming → integrate) + three E-B brief pass-2s.** No diff integrates without a fresh pass on it.
 2. **E-B3's `robustness_map` scorer fix is UNLANDED.** `scripts/robustness_map.py:617` derives "good" from
    the C-lane BASELINE bucket, never `COL_EXPECTED` ⇒ **fixing a C-lane cell scores as a REGRESSION**, and
    on the 43 self-host-WORKS cells a self-host regression scores as PROGRESS. `:715-723` makes `--accept`
