@@ -2,8 +2,8 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN AND MID-FLIGHT — 3 of 7 tracks integrated (D1, C, D2), 4 landed and awaiting one gauntlet step each.
-⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2) and the current lift: **Track F confirming pass**.
+**▶ R48 IS OPEN AND MID-FLIGHT — 4 of 7 tracks integrated (D1, C, D2, F), 3 landed and awaiting one gauntlet step each.
+⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F gauntlet through confirming).
 ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
 **D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
 Opened 2026-08-31 (owner: *"open next round"*). Headline: **the six CRITICAL memory-safety defects** —
@@ -29,12 +29,12 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 
 ### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `d5707a77`)
 
-**3 of 7 tracks INTEGRATED. 4 branches are LANDED and each owes exactly one gauntlet step.**
-The standing hold is *"don't start new ones until I say so"*. Lifts spent: C, D2. Current lift:
-**Track F confirming pass** (closest remaining: 2 output-reviews folded; owes confirming).
-D53 unique-lock reject is **on main**.
-⚠ After D2, β/γ add/add-collide with D2's `todo/t0902.md`–`t0904.md` (different defects). F still
-collides on `todo/t0876.md` vs main's C-emit item — **never take a side; renumber above t0925**.
+**4 of 7 tracks INTEGRATED. 3 branches are LANDED and each owes exactly one gauntlet step.**
+The standing hold is *"don't start new ones until I say so"*. Lifts spent: C, D2, F (confirming →
+t0876→t0926 executor → confirming). D53 unique-lock reject and the figures DB are **on main**.
+⚠ After D2, β/γ add/add-collide with D2's `todo/t0902.md`–`t0904.md` (different defects). A's
+`todo/t0876.md` is still a different item from main's C-emit `t0876` — **never take a side**.
+F's figures-DB adoption is `t0926`.
 
 | track | items | branch tip | ahead | merge | OWED STEP |
 |---|---|---|---|---|---|
@@ -44,7 +44,7 @@ collides on `todo/t0876.md` vs main's C-emit item — **never take a side; renum
 | **A** | `t0770` `t0772` | `5d43cedd` | 6 | ⚠ `todo/t0876.md` | **a first output-review** (none yet) |
 | **β** | `t0825` | `470cd49f` | 1 | clean | **a first output-review** (none yet) |
 | **γ** | nondeterminism | `5f67841f` | 7 | clean | **a first output-review** (none yet) |
-| **F** | `t0861` `t0851` `t0860` `t0926` | `38ecd462` (`worktree-agent-01a05d31`) | 7 | ggdef corpora (t0876 add/add claimed gone) | **t0926 confirming pass in flight** (Q1 closed; renumber executor claimed ready) |
+| **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
 | **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded) |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
 
@@ -61,10 +61,10 @@ relying on them.**
    skipping `-p ggdef` after D1 left main RED for hours.**
 4. Prune the worktree (`git worktree unlock` then `remove --force`; branches survive).
 
-⛔ **ID COLLISIONS (`t0910`): A and F both add a DIFFERENT `todo/t0876.md`.** ⛔ **NEVER resolve by taking
-one side** — the sides are different defects, and taking one silently destroys a filed item while handing
-its `repro`/`cites` to an unrelated one. **Renumber the LATER track above `t0925` and fix every citation**
-(Track C did this correctly: `t0920`/`t0921`, including a hand-off line that had pointed at D1's item).
+⛔ **ID COLLISIONS (`t0910`).** F's figures-DB adoption is `t0926` (was colliding `t0876`). Main's
+`t0876` is C-emit jitter. A's `t0876` is Callable-param capture — still a different file; **never take
+a side**. β/γ collide with D2 on `t0902`–`t0904`. **Renumber the LATER track above the current max
+and fix every citation.**
 
 ### ⛔ WHAT MUST HAPPEN BEFORE R48 CAN CLOSE
 1. **The five owed gauntlet steps + three brief pass-2s.** No diff integrates without a fresh pass on it.
@@ -656,7 +656,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t0752`](todo/t0752.md) **MED** — 🆕🧹🔍 [MED — cow_sever_all_aliases_from IS NEVER ENTERED BY THE ENTIRE ALIAS CORPUS, and its two conditions may be MUTUALL…
 - [`t0790`](todo/t0790.md) **MED** — 🆕🐛 [MED — LEAK, gg check clean and stdout CORRECT; found 2026-08-29 by R47 Track E2's brief-review pass 1, re-measured b…
 - [`t0792`](todo/t0792.md) **MED** — 🆕🐛 [MED — WRONG ANSWER, gg check clean, both backends, ASan-clean; found 2026-08-29 by R47 Track E2's executor while clo…
-- [`t0860`](todo/t0860.md) — [MED — owner ruling 2026-08-30] Periodic clone-waste AUDIT, with a trigger that cannot rot.
+- [`t0860`](todo/t0860.md) — [MED — owner ruling 2026-08-30, mechanism landed R48 Track F, TRIGGER STILL MISSING] Wire the
 - [`t0862`](todo/t0862.md) — [MED — owner-directed 2026-08-31, R48 candidate] slice MATERIALIZES AT THE READ SITE ON BOTH RECEIVERS.
 ### Low
 
@@ -1698,7 +1698,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0713`](todo/t0713.md) **MED** — 🆕🐛 [MED — THE ROUND-CLOSE C SWEEP RUNS ITS MOST EXPENSIVE TEST WITH BOTH GATES INERT; found 2026-08-28 by the D50 track,…
 - [`t0719`](todo/t0719.md) **MED** — 🆕🧹 [MED — four residuals from the R45 AGENTS.md compaction track's own output-review, deliberately FILED rather than fix…
 - [`t0726`](todo/t0726.md) **MED** — 🆕🧹 [MED — READINESS CHECKLIST rows should GRADUATE to executable guards and LEAVE the checklist (owner 2026-08-29). Defe…
-- [`t0851`](todo/t0851.md) **MED** — [MED — R47 Track F5a] Wire scripts/clone_meter_check.sh --anchor-age into the round-open step.
+- [`t0851`](todo/t0851.md) **MED** — [MED — RE-OPENED 2026-08-31 by R48 Track F's own output-review, after being closed the same
 - [`t0820`](todo/t0820.md) **MED** — [MED — a fixture the tree already knows is wall-clock dependent sits in the byte-compared corpus, unexcluded] test_proce…
 - [`t0821`](todo/t0821.md) **MED** — [MED — #[ignore] silences the unit test but NOT the auto-scanned parity corpus] vector_task_mixed_await_int is a known S…
 - [`t0824`](todo/t0824.md) **MED** — [MED — scripts/known_gaps_census.sh --check is RED at HEAD, unadjudicated] The #[ignore]d known-gap test catch_binding_t…
@@ -1706,11 +1706,11 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0827`](todo/t0827.md) **MED** — [MED — two CI-wiring guards are satisfied by a COMMENTED-OUT step, and the tree already has the helper that fixes it] te…
 - [`t0828`](todo/t0828.md) **MED** — [MED — 24 fixtures are OUT of the runtime-parity corpus with no established reason, and the reason they are out is that…
 - [`t0829`](todo/t0829.md) **MED** — [MED — the BARE :NNNN citation form is invisible to BOTH doc-citation guards, and docs/devbook/27 is the tree's largest…
-- [`t0861`](todo/t0861.md) — [MED — owner-approved 2026-08-30, R48 candidate] ONE GENERIC FIGURES DB — for ratchets, limits,
 - [`t0863`](todo/t0863.md) — [MED — R47 close, deliberately NOT accepted] Six robustness-map divergences outside the baseline.
 - [`t0874`](todo/t0874.md) **MED** — 🆕🐛 [MED — A LINT IS INTERMITTENT UNDER PARALLEL AGENTS, and its own doc comment asserts the opposite; suspected 2026-08-…
 - [`t0910`](todo/t0910.md) **MED** — 🆕🧹 [MED — A STRUCTURAL CONSEQUENCE OF THE PARALLELISM THE OWNER ASKED FOR; measured 2026-08-31 at R48 integration] Six c…
 - [`t0905`](todo/t0905.md) **MED** — 🆕🧹 [MED — guard hygiene, Core #6 ⊕; filed 2026-08-31 by R48 Track D2] Seven <= burn-down ratchets remain in tests/lints.…
+- [`t0926`](todo/t0926.md) — [MED — R48 Track F, declared phase 2 of the figures DB] EACH BURN-DOWN TRACK ADOPTS scripts/figures.db FOR ITS OWN ROWS…
 ### Low
 
 - [`t0606`](todo/t0606.md) — 🧹 (G1 follow-up) lint-file-scope: widen g1_projected_materialize_sites_untrack files[] IF a projected-materialize cow_be…

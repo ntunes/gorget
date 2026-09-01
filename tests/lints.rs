@@ -25617,8 +25617,14 @@ fn clone_meter_pins_carry_their_provenance() {
     // ⚠ WHAT THIS STILL CANNOT SEE: whether `{anchor}` is THIS round's open.
     // "Which round is open" is not in the tree, so a FORGOTTEN re-seed passes
     // every assert above. `scripts/clone_meter_check.sh --anchor-age` is the
-    // signal for that, and ⛔ NOTHING CALLS IT — wiring it into the round-open
-    // step is `todo/t0851`.
+    // signal for that, and its caller is
+    // `clone_band_anchor_is_reseeded_before_work_resumes` at the end of this
+    // file — which reads `DONE.md`, exactly the thing a lint over
+    // `tests/integration.rs` alone cannot see.
+    // ⛔ AND THAT CHECK SEES ~8% OF THE ROUND CLOSES IN `DONE.md` (3 of ~38,
+    // across seven prose shapes with no typed marker), failing GREEN. Do not
+    // read it as covering this hole; `todo/t0851` is re-opened on it, and
+    // `done_md_round_close_shapes_are_pinned` is what makes the gap loud.
     let date_lines = src.lines().filter(|l| l.trim().starts_with("// ROUND-OPEN-DATE:")).count();
     assert_eq!(
         date_lines, 1,
@@ -27012,4 +27018,782 @@ fn parity_untriaged_exclusions_shrink_only() {
         untriaged.len(),
     );
     eprintln!("parity_untriaged_exclusions_shrink_only: {} untriaged", untriaged.len());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// THE FIGURES DB — one declaration for every pinned number, and the guard that
+// makes it worth having
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// ⛔ THIS IS NOT A CLONE-METER FEATURE, AND THE SCHEMA IS WRONG IF IT FITS ONE
+// SYSTEM. `scripts/figures.db` declares ratchet ceilings, parity floors, exact
+// meter pins, policy budgets and census figures through ONE schema, because the
+// generalising axis is POLARITY — what a checker DOES with the number
+// (shrink-only · grow-only · exact-pin · informational) — crossed with
+// PROVENANCE — where the number CAME FROM (measured · derived · policy).
+// Subject is a naming convention and carries no behaviour.
+//
+// ⛔ THE VALUE IS THE GUARD, NOT THE FILE. A figures file with no lint
+// forbidding an undeclared bare literal of a covered figure is a sixth spelling
+// with better manners; R47 shipped five spellings of one census figure and a
+// live figure surviving inside the doc comment of the lint enforcing the rule.
+// The five lints below are the enforcement, and the LAST TWO exist because that
+// R47 failure reproduced — unplanted, on this very hunk's author, twice.
+//
+// ⚠ SCHEMA VALIDATION AND THE SCAN LIVE IN `scripts/figures.py`, NOT HERE, and
+// these lints DELEGATE to it. One reader per axis (Layering rule 3): a second
+// Rust implementation of the same contract is a second thing to drift. What
+// these lints add is that the delegate is SEEN TO FAIL on every run — each one
+// hands the checker a deliberately broken declaration and asserts it refuses.
+// The precedent is `clone_meter_check_refuses_an_unattributed_track`.
+
+fn figures_db_path() -> &'static str {
+    "scripts/figures.db"
+}
+
+fn figures_db_text() -> String {
+    fs::read_to_string(figures_db_path())
+        .expect("scripts/figures.db is missing — it is the figures' one declaration")
+}
+
+/// Every value of `key`, in file order. ⚠ KEYS ARE COMPARED AS WHOLE STRINGS.
+/// The precedent this generalises (`clone_meter_spec_values`) splits on `=` and
+/// compares the trimmed key, which is exactly right; the trap is the OTHER
+/// precedent reader, `clone_meter_get`, which matches its key as an awk REGEX.
+/// These keys are DOTTED, and `.` is a regex wildcard, so a regex reader would
+/// answer `clone.stage1.array.pin.value` from a key it merely resembles.
+fn figures_db_values(key: &str) -> Vec<String> {
+    figures_db_text()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .filter_map(|l| l.split_once('='))
+        .filter(|(k, _)| k.trim() == key)
+        .map(|(_, v)| v.trim().to_string())
+        .collect()
+}
+
+fn figures_db_field(row: &str, field: &str) -> Option<String> {
+    figures_db_values(&format!("{row}.{field}")).pop()
+}
+
+fn figures_db_rows() -> Vec<String> {
+    figures_db_values("row")
+}
+
+/// Strip `_` and `,` from a digit run. ⚠ SEPARATOR NORMALISATION IS SCANNER-
+/// SIDE AND LIVES IN ONE PLACE PER READER, never in a per-row list of
+/// spellings. Both the comma and the underscore form are in live use across the
+/// declared scan roots, so a reader that knows only one of the two is blind to
+/// the other SILENTLY — the exact failure mode it was written to retire. A
+/// per-row `spellings` field would be one omission opportunity per row
+/// (Layering rule 3).
+/// ⚠ The split is a COMMAND, not a number here: `python3 scripts/figures.py
+/// --spellings`. The first version of this comment quoted a per-row tally that
+/// the round-open clone re-seed voided within the same round.
+fn figures_norm(s: &str) -> String {
+    s.chars().filter(|c| *c != '_' && *c != ',').collect()
+}
+
+/// Run `scripts/figures.py`, optionally against a substituted declaration.
+fn figures_py(args: &[&str], db_override: Option<&Path>) -> (bool, String) {
+    let mut cmd = std::process::Command::new("python3");
+    cmd.arg("scripts/figures.py").args(args);
+    if let Some(p) = db_override {
+        cmd.env("FIGURES_DB", p);
+    }
+    let out = cmd.output().expect("run scripts/figures.py");
+    let mut text = String::from_utf8_lossy(&out.stdout).to_string();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.success(), text)
+}
+
+/// Write a deliberately broken copy of the declaration and return its path.
+fn figures_db_broken(tag: &str, mutate: impl Fn(String) -> String) -> PathBuf {
+    let text = mutate(figures_db_text());
+    // ⚠ A RANDOM-ISH, PER-PROCESS NAME. Parallel agents and parallel test
+    // binaries share /tmp, and a fixed scratch name is how two runs silently
+    // read each other's file.
+    let p = std::env::temp_dir().join(format!("figures_db_{}_{tag}.db", std::process::id()));
+    fs::write(&p, text).expect("write broken figures.db variant");
+    p
+}
+
+/// Replace the first line starting with `prefix`, asserting it existed.
+///
+/// ⚠ `str::replace` on a MISSING target silently no-ops, which would turn every
+/// RED demonstration below into a green run against an UNBROKEN file — a gate
+/// that has never been seen to fail, dressed as one that has.
+fn figures_db_edit_line(text: &str, prefix: &str, replacement: Option<&str>) -> String {
+    let mut out = Vec::new();
+    let mut hit = false;
+    for l in text.lines() {
+        if !hit && l.starts_with(prefix) {
+            hit = true;
+            if let Some(r) = replacement {
+                out.push(r.to_string());
+            }
+            continue;
+        }
+        out.push(l.to_string());
+    }
+    assert!(hit, "no line starts with `{prefix}` — the RED demonstration would have run \
+                  against an unbroken declaration");
+    out.join("\n") + "\n"
+}
+
+/// THE SCHEMA CONTRACT — and it is seen to REFUSE seven broken declarations on
+/// every run.
+///
+/// The contract's load-bearing clauses, each with the failure it was bought
+/// with:
+///
+/// * **`regen` is mandatory** — a figure with no command is a hope (Core #15a).
+/// * **`regen_extract` is mandatory and has NO DEFAULT.** The obvious default,
+///   "the last integer in stdout", is a SILENT LIE at exactly the magnitudes
+///   this DB is for: `resolver_comparison`'s last integer is its trailing
+///   `crashed: 1`, not its match count. And it is asymmetrically dangerous —
+///   on a floor a wrong-low capture reds loudly, on a ceiling it passes
+///   silently. The precedent for a required-with-no-default field is
+///   `proc_guard.run`'s `timeout`.
+/// * **`regen_fires` is mandatory for a runnable regen.** A measurement with no
+///   FIRE COUNT proves nothing ran (readiness item 1).
+/// * **`regen_env` is mandatory**, because the real hazard is not whether the
+///   assert fired but the ENVIRONMENT it fired in: with `GG_BACKEND` set,
+///   `parity_floor_active` returns false and the same regex captures a
+///   DIFFERENT, unseeded count.
+/// * **`regen = none` is legal ONLY under provenance `policy`**, where
+///   `authority` becomes mandatory instead — otherwise a row could buy its way
+///   out of the mandatory command by claiming nothing reproduces it.
+/// * **`authority` is mandatory for `derived` too**, not just `policy`: a
+///   derived figure that does not name what it derives FROM is just another
+///   spelling.
+/// * **A named `input` owes all three of `.at`, `.law`, `.regen`.** Two
+///   readings of a figure with an undeclared input are not comparable, and the
+///   belief that they were is what produced this tree's 294-clone discrepancy
+///   between the main checkout and an agent worktree.
+/// * **No two rows may waive the same (value, path).** The scan accounts per
+///   VALUE — two rows legitimately share one (a pin and its round-open anchor
+///   start equal) — so a duplicated waiver would double-count and hide a real
+///   spelling.
+#[test]
+fn figures_db_rows_are_wellformed() {
+    let (ok, out) = figures_py(&["validate"], None);
+    assert!(ok, "scripts/figures.db does not satisfy its own schema:\n{out}");
+    assert!(
+        out.contains("0 schema error(s)"),
+        "figures.py validate did not report a clean run:\n{out}"
+    );
+
+    // ⭐ VERIFY THE VERIFIER (Core #13). Seven broken declarations, seven
+    // refusals, on every run of this lint. A guard that has never been seen to
+    // fail is not evidence.
+    let cases: Vec<(&str, Box<dyn Fn(String) -> String>, &str)> = vec![
+        (
+            "trailing_ws",
+            Box::new(|t: String| {
+                figures_db_edit_line(&t, "fmt.max_width.unit = ", Some("fmt.max_width.unit = columns "))
+            }),
+            "trailing whitespace",
+        ),
+        (
+            "no_regen",
+            Box::new(|t: String| {
+                figures_db_edit_line(&t, "parity.c_emit.match_floor.regen = ", None)
+            }),
+            "missing mandatory field `regen`",
+        ),
+        (
+            "regen_none_on_measured",
+            Box::new(|t: String| {
+                figures_db_edit_line(
+                    &t,
+                    "parity.c_emit.match_floor.regen = ",
+                    Some("parity.c_emit.match_floor.regen = none"),
+                )
+            }),
+            "legal only under provenance `policy`",
+        ),
+        (
+            "unnamed_capture",
+            Box::new(|t: String| {
+                figures_db_edit_line(
+                    &t,
+                    "parity.resolver.match_floor.regen_extract = ",
+                    Some("parity.resolver.match_floor.regen_extract = matched: ([0-9]+)"),
+                )
+            }),
+            "named `(?P<value>...)` capture",
+        ),
+        (
+            "input_without_law",
+            Box::new(|t: String| {
+                figures_db_edit_line(
+                    &t,
+                    "clone.self_compile.string.pin.input.root_path_len.law = ",
+                    None,
+                )
+            }),
+            "is named without `input.root_path_len.law`",
+        ),
+        (
+            "derived_without_authority",
+            Box::new(|t: String| figures_db_edit_line(&t, "fmt.max_width.authority = ", None)),
+            "requires `authority`",
+        ),
+        (
+            "duplicate_waiver",
+            Box::new(|t: String| {
+                figures_db_edit_line(
+                    &t,
+                    "clone.self_compile.array.round_open.input = ",
+                    Some(
+                        "clone.self_compile.array.round_open.waiver = tests/integration.rs 2 declared a second claim on the same (value, path)\nclone.self_compile.array.round_open.input = none",
+                    ),
+                )
+            }),
+            "already declared by",
+        ),
+    ];
+    for (tag, mutate, expect) in cases {
+        let p = figures_db_broken(tag, mutate);
+        let (ok, out) = figures_py(&["validate"], Some(&p));
+        let _ = fs::remove_file(&p);
+        assert!(
+            !ok,
+            "figures.py validate ACCEPTED the `{tag}` breakage. The schema contract is \
+             replicated into every row that adopts it, so a clause that cannot be seen to \
+             refuse its own violation is worse than no clause.\n{out}"
+        );
+        assert!(
+            out.contains(expect),
+            "the `{tag}` refusal did not name its cause (expected {expect:?}):\n{out}"
+        );
+    }
+}
+
+/// MIRROR-MODE ADOPTION: the literal stays in the code, the row declares where,
+/// and the two may not drift.
+///
+/// ⚠ WHY MIRROR AND NOT SOURCED. The alternative — delete the literal, have the
+/// consumer read the row — would delete the very constants
+/// `clone_meter_pins_carry_their_provenance` reads, and it buys nothing the
+/// uniqueness guard does not already buy. Mirroring plus a drift check IS the
+/// whole guarantee; sourcing only removes literals.
+///
+/// ⚠ AND THE MIRROR MUST BE FOUND, not merely not-contradicted: a mirror
+/// pointing at a renamed or deleted symbol fails here rather than passing
+/// vacuously, which is the shape a "check" degrades into when nobody tests it.
+#[test]
+fn figures_db_mirrors_agree() {
+    fn literal_of(path: &str, symbol: &str) -> Option<String> {
+        let src = fs::read_to_string(path).ok()?;
+        for line in src.lines() {
+            let t = line.trim();
+            let rest = t.strip_prefix("pub ").unwrap_or(t);
+            let rest = rest.strip_prefix("const ").unwrap_or(rest);
+            let Some(after) = rest.strip_prefix(symbol) else { continue };
+            if !after.starts_with(':') && !after.starts_with(' ') && !after.starts_with('=') {
+                continue;
+            }
+            let Some((_, val)) = t.rsplit_once('=') else { continue };
+            let digits: String = val
+                .trim()
+                .chars()
+                .take_while(|c| c.is_ascii_digit() || *c == '_' || *c == ',')
+                .collect();
+            if !digits.is_empty() {
+                return Some(figures_norm(&digits));
+            }
+        }
+        None
+    }
+
+    let mut checked = 0usize;
+    for row in figures_db_rows() {
+        let value = figures_norm(&figures_db_field(&row, "value").expect("row has a value"));
+        for m in figures_db_values(&format!("{row}.mirror")) {
+            if m == "none" {
+                continue;
+            }
+            let (path, symbol) = m.rsplit_once(':').expect("mirror is <path>:<symbol>");
+            let found = literal_of(path, symbol).unwrap_or_else(|| {
+                panic!(
+                    "row `{row}` declares a mirror at {path}:{symbol}, and no such constant \
+                     carries an integer literal there. A mirror that cannot be RESOLVED is not \
+                     a check — rename the declaration in scripts/figures.db, or retire the row."
+                )
+            });
+            assert_eq!(
+                found, value,
+                "MIRROR DRIFT: {path}:{symbol} spells {found} but row `{row}` records {value}. \
+                 One of the two moved without the other. The row and the constant are ONE \
+                 figure; re-measure and move both, or the DB is a sixth spelling."
+            );
+            checked += 1;
+        }
+    }
+    assert!(
+        checked >= 12,
+        "only {checked} mirrors were checked — the pilot declares more than that, so a row \
+         lost its `mirror` field and this lint quietly stopped guarding it."
+    );
+}
+
+/// ⛔ THE UNIQUENESS GUARD — the reason this DB is worth having.
+///
+/// Every unmasked, separator-normalised spelling of a covered figure inside the
+/// declared scan roots must be DECLARED, as an EXACT count. Exact, not `<=`: a
+/// STALE waiver has to be as red as a new duplicate, or the guard waivers itself
+/// into uselessness one convenient `<=` at a time.
+///
+/// **The mask is the CITATION FORM, not quoting.** The tempting reuse,
+/// `width_ratchet_mask_strings` above, masks quoted runs — and the false
+/// positives this scanner actually hits are backtick-delimited Markdown
+/// coordinates with no quote character in them at all. Measured: that masker
+/// fixes NEITHER of the two coordinate collisions in `docs/devbook/`, while
+/// swallowing 15.6% of every 3+ digit figure in the tree, much of it by
+/// unpaired-apostrophe runaway. So `scripts/figures.py` recognises the citation
+/// form positively — `path.ext:NNN`, `path.ext:NNN:MMM`, `path.ext:NNN-MMM` and
+/// a bare `NNN-MMM` — minus ISO dates, which are matched FIRST so `2026-08-31`
+/// is never read as a range. ⚠ The single `path:NNN` form is the COMMONER of
+/// the two, and it collides today.
+///
+/// ⛔ **AND ITS REACH IS NOT THE TREE.** Say what a guard cannot see, or it
+/// gets read as totality — `todo/t0875` is filed for exactly that mistake one
+/// guard away from here. This one reads the DECLARED scan roots plus any path a
+/// row explicitly declares, and NOT: `src/` (11 files there carry integer const
+/// declarations, and an UNDECLARED re-spelling in any of them is invisible),
+/// `tests/*.rs` other than this file and `integration.rs`
+/// (`tests/spec_conformance.rs` alone carries 4), `docs/` outside
+/// `docs/devbook/`, or any file whose extension is not one of
+/// `.md .rs .py .sh .spec .toml` — so a `.gg` fixture or a `.json` baseline
+/// inside a scanned directory is invisible. `DONE.md` and
+/// `docs/define-gorget/` are excluded deliberately, not by oversight. The list
+/// with its counts is beside `figures.scan_roots` in `scripts/figures.db`.
+/// ⊕ A value too small or too common to police takes `scan = none` and says so
+/// in its `caveat`; that is the honest half of adopting it, not a gap.
+///
+/// **⭐ AND HERE IS A LIVE FIGURE, PLANTED ON PURPOSE.** The
+/// `C_EMIT_MATCH_FLOOR` parity floor is 1283, and that spelling — right here,
+/// inside the doc comment of the lint that forbids undeclared spellings — is
+/// declared in `scripts/figures.db` as a waiver of EXACTLY ONE. It is not
+/// decoration. `figures_db_scanner_sees_into_doc_comments` below asserts the
+/// scanner still finds it, and this lint's exact-count waiver goes STALE the
+/// moment it stops. Between them they make "the guard catches its own author"
+/// a property with two independent alarms rather than a story about one lucky
+/// afternoon.
+#[test]
+fn figures_db_values_have_one_spelling() {
+    let (ok, out) = figures_py(&["scan"], None);
+    assert!(
+        ok,
+        "a covered figure has an UNDECLARED spelling. Either cite the constant instead of \
+         re-spelling the number, or — if the spelling is load-bearing — declare it in \
+         scripts/figures.db with an exact `waiver = <path> <count> declared|debt <reason>`.\n{out}"
+    );
+
+    // ⭐ RED #1 — an undeclared spelling is DETECTED, on the live tree. The
+    // formatter's width figure is deliberately `scan = none` in the DB (it is
+    // three digits and occurs legitimately everywhere, so scanning it would be
+    // a waiver farm). Turning the scan ON is therefore a guaranteed, honest
+    // supply of undeclared spellings.
+    let p = figures_db_broken("scan_on", |t| {
+        figures_db_edit_line(&t, "fmt.max_width.scan = ", Some("fmt.max_width.scan = standard"))
+    });
+    let (ok, out) = figures_py(&["scan"], Some(&p));
+    let _ = fs::remove_file(&p);
+    assert!(
+        !ok,
+        "the uniqueness scan found NOTHING undeclared after a three-digit figure was pointed \
+         at the whole tree. The scanner is not scanning.\n{out}"
+    );
+
+    // ⭐ RED #2 — A STALE WAIVER IS AS RED AS A NEW DUPLICATE. This is the
+    // clause the whole design turns on: waivers are exact counts, so a waiver
+    // that outlives the thing it waived fails rather than lingering.
+    let p = figures_db_broken("stale_waiver", |t| {
+        figures_db_edit_line(
+            &t,
+            "parity.resolver.match_floor.waiver = todo/",
+            Some("parity.resolver.match_floor.waiver = todo/t0582.md 2 debt a count that is now stale"),
+        )
+    });
+    let (ok, out) = figures_py(&["scan"], Some(&p));
+    let _ = fs::remove_file(&p);
+    assert!(
+        !ok,
+        "a waiver claiming MORE spellings than exist passed. Waivers must be EXACT: a `<=` \
+         waiver never goes stale, so it survives the removal of the thing it waived and \
+         permanently blinds the guard to that file.\n{out}"
+    );
+}
+
+/// ⭐ THE PROPERTY THAT ONE IDIOMATIC REFACTOR WOULD DELETE, HELD AS A TEST.
+///
+/// This tree's standard Rust-scan pre-pass is `strip_rust_comments_and_strings`
+/// above, and reaching for it here is the natural next move for anyone tuning
+/// the scanner's false positives. It would also silently destroy the single
+/// most valuable thing the scanner does: reading COMMENT TEXT, which is how a
+/// live figure surviving inside the doc comment of the lint that forbids one
+/// gets caught at all. That failure is not hypothetical — it shipped in R47,
+/// and it reproduced TWICE while this hunk was being written, both times on the
+/// author, both times found by this scanner and not by a reviewer.
+///
+/// So the property is asserted, not narrated. The figure planted in
+/// `figures_db_values_have_one_spelling`'s doc comment must still be FOUND, and
+/// the count is read from `scripts/figures.db` rather than spelled here — a
+/// second spelling in the test that guards against second spellings would be
+/// its own punchline.
+///
+/// ⚠ It is deliberately a REAL figure in a REAL doc comment, not a synthetic
+/// fixture: a synthetic input proves the scanner can see a string, which was
+/// never in doubt. What is in doubt is whether the scanner is still pointed at
+/// the text a reviewer's eye slides over.
+#[test]
+fn figures_db_scanner_sees_into_doc_comments() {
+    let value = figures_db_field("parity.c_emit.match_floor", "value").expect("the planted row");
+    let (ok, out) = figures_py(&["where", &value], None);
+    assert!(ok, "figures.py where failed:\n{out}");
+    let here: Vec<&str> =
+        out.lines().filter(|l| l.starts_with("tests/lints.rs:")).collect();
+    let found = here.len();
+    assert_eq!(
+        found,
+        1,
+        "the scanner found {found} spelling(s) of the planted figure in tests/lints.rs, expected \
+         exactly 1.\n\
+         ⇒ If it found ZERO, the scanner stopped reading comment text — almost certainly \
+         because it was routed through `strip_rust_comments_and_strings`. Undo that: the \
+         false positives it fixes are coordinate citations, which the citation mask already \
+         handles, and the property it destroys is the only reason this guard ever caught \
+         anything a human reviewer had already read.\n\
+         ⇒ If it found MORE, someone added a real duplicate spelling of a live parity floor \
+         to this file; cite the constant instead.\nFound: {here:?}"
+    );
+}
+
+/// `todo/t0851`: the band anchor's re-seed had a guard, and the guard had no
+/// caller.
+///
+/// `scripts/clone_meter_check.sh --anchor-age` detects a missed re-seed of the
+/// four `..._CLONE_ROUND_OPEN` constants: a round CLOSES by adding a dated entry
+/// at the top of `DONE.md`, so an entry newer than `// ROUND-OPEN-DATE:` means a
+/// round boundary was crossed without re-anchoring. Left un-run, a forgotten
+/// re-seed silently converts the per-round ~1% authorization band into the
+/// CROSS-ROUND ACCUMULATION the owner explicitly rejected, and manufactures a
+/// false owner ask out of two legitimate sub-band rounds.
+///
+/// ⚠ THE PREDICATE IS NARROWED, AND THE NARROWING IS THE WHOLE DESIGN. The item
+/// filing this said in bold that it must NOT become a lint, for a specific and
+/// correct reason: a lint on the raw script predicate would go RED in the
+/// legitimate window between the commit that adds a round's `DONE.md` entry and
+/// the next round's re-anchor — it would red the records commit that closes a
+/// round, and a permanently-red ratchet stops being a ratchet. That objection is
+/// about the RAW predicate, not about lint-ness. So this asks the narrower
+/// question the objection leaves open:
+///
+///   **has WORK RESUMED with the anchors un-reseeded?**
+///
+/// The round-close records commit itself is green; so is a tree sitting exactly
+/// at it, waiting for the next round to open. What is red is a commit landing
+/// AFTER it with the anchor still pointing at the closed round — which is
+/// precisely the state the item describes as silent today.
+///
+/// ⛔ **AND ITS REACH IS ~8%, WHICH IS THE THING TO CARRY AWAY FROM THIS
+/// COMMENT.** The underlying question — "has a round closed?" — is answered by
+/// matching a PROSE HEADLINE, because a round-close `DONE.md` entry carries no
+/// typed marker and its shape has never been enforced anywhere. Seven shapes
+/// across ~38 closes; this predicate matches 3, including neither of the two
+/// closes immediately before R47 (`**R45 CLOSED`, `**R44 —`). ⚠ So the failure
+/// direction is a FALSE GREEN: a green run here is NOT evidence the anchors are
+/// fresh. Widening the predicate is measured to be worse, and the real fix is a
+/// typed marker on the entry — a round-procedure decision, filed as
+/// `todo/t0851`, which is RE-OPENED for it rather than closed on 8% reach.
+/// `done_md_round_close_shapes_are_pinned` below is what keeps the gap loud.
+///
+/// ⊕ The complementary half is already a lint and stays one:
+/// `clone_meter_pins_carry_their_provenance` asserts the four anchors share ONE
+/// sha, that it is an ancestor of HEAD, and that exactly one `ROUND-OPEN-DATE`
+/// line exists. What it cannot see is WHICH round is open, because that is not
+/// in the tree — which is why the script reads `DONE.md` and why this lint runs
+/// the script instead of re-deriving it.
+#[test]
+fn clone_band_anchor_is_reseeded_before_work_resumes() {
+    // The narrowed predicate, isolated so it can be exercised on states this
+    // tree is not currently in (Core #13: a gate seen only in its passing
+    // state is not evidence).
+    fn verdict(anchor_stale: bool, commits_since_records: usize) -> bool {
+        !anchor_stale || commits_since_records == 0
+    }
+    assert!(verdict(false, 9), "a fresh anchor is green whatever the history looks like");
+    assert!(verdict(true, 0), "the round-close records commit itself is the legitimate window");
+    assert!(!verdict(true, 1), "work resuming on a stale anchor is the failure this lint is for");
+
+    let out = std::process::Command::new("bash")
+        .args(["scripts/clone_meter_check.sh", "--anchor-age"])
+        .output()
+        .expect("run scripts/clone_meter_check.sh --anchor-age");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if out.status.success() {
+        return;
+    }
+
+    // The anchor IS older than the newest closed round. Green only while the
+    // tree sits on the records commit that closed it.
+    let records = std::process::Command::new("git")
+        .args(["log", "-1", "--format=%H", "--", "DONE.md"])
+        .output()
+        .expect("git log DONE.md");
+    let records = String::from_utf8_lossy(&records.stdout).trim().to_string();
+    let since = std::process::Command::new("git")
+        .args(["rev-list", "--count", &format!("{records}..HEAD")])
+        .output()
+        .expect("git rev-list");
+    let since: usize = String::from_utf8_lossy(&since.stdout).trim().parse().unwrap_or(0);
+    assert!(
+        verdict(true, since),
+        "the clone band anchors were not re-seeded at round open, and {since} commit(s) have \
+         landed since the records commit {records} that closed the previous round. Re-seed the \
+         four `..._CLONE_ROUND_OPEN` constants and `ROUND-OPEN-DATE` from the round-open \
+         measurement (the previous round's CLOSING measurement is the round-open value, so this \
+         costs no new build), and note that all four anchors must share ONE sha.\n\n{text}"
+    );
+}
+
+/// `todo/t0851` ⊕: the OTHER two modes had no caller either, and a sibling site
+/// in the same enumerated class is the class, not a second item (Core #4).
+///
+/// `--pin-staleness` answers "is each pinned constant still the last
+/// measurement?" — and STALENESS ITSELF IS NOT A FAILURE. Mid-round it is the
+/// normal state, and the mode exits 0 on it deliberately; turning that into a
+/// red would be a ratchet nobody could keep green. What it DOES refuse is a
+/// `// PINNED-BY:` sha that does not resolve to a commit in this repository,
+/// which is a real and silent corruption: a provenance line naming a sha lost
+/// to a rebase or a squashed branch looks exactly like a good one to
+/// `clone_meter_pins_carry_their_provenance` above, which checks the sha's
+/// SHAPE and not its existence.
+///
+/// So this lint gives the mode its caller AND asserts the one thing in it that
+/// can honestly be red. With `clone_meter_check_refuses_an_unattributed_track`
+/// (`--track`) and `clone_band_anchor_is_reseeded_before_work_resumes`
+/// (`--anchor-age`), all three modes of `scripts/clone_meter_check.sh` are now
+/// invoked by the test suite; none of them is held by a sentence.
+#[test]
+fn clone_meter_pin_provenance_shas_resolve() {
+    let out = std::process::Command::new("bash")
+        .args(["scripts/clone_meter_check.sh", "--pin-staleness"])
+        .output()
+        .expect("run scripts/clone_meter_check.sh --pin-staleness");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        out.status.success(),
+        "scripts/clone_meter_check.sh --pin-staleness refused this tree. A STALE pin is not a \
+         failure and this mode exits 0 on one, so the refusal is the other thing it checks: a \
+         `// PINNED-BY:` sha that resolves to no commit here. Re-write the provenance line from \
+         a sha that exists on this history.\n\n{text}"
+    );
+    // The mode short-circuits to a header and zero rows on a tree with no
+    // provenance lines, which would make the assert above vacuously green.
+    assert!(
+        text.contains("pin from "),
+        "--pin-staleness examined NO pins. It presupposes the provenance lines that \
+         `clone_meter_pins_carry_their_provenance` asserts exist; with none present it prints a \
+         header, zero rows and exits 0 — a green run that checked nothing.\n\n{text}"
+    );
+}
+
+/// ⛔ THE TWO AXES ARE AXES, AND THIS IS THE LINT THAT KEEPS THAT TRUE.
+///
+/// `scripts/figures.db` claims that POLARITY (what a checker does with a
+/// number) and PROVENANCE (where the number came from) are independent
+/// questions about one row. That claim shipped once as prose and was **false as
+/// written** — it said "`policy` crosses more than one polarity", which it does
+/// not: `policy` occupies exactly one cell, because `SHAPE_MAX_DEPTH`, the row
+/// that would have given it a second, is correctly excluded as terminal. Three
+/// copies of that sentence went out; the one place that had it right was the
+/// round record. Prose rots, so the fact is a lint now (Core #6).
+///
+/// The claim it actually asserts, which IS true and IS load-bearing:
+///
+/// * **every polarity and every provenance is OCCUPIED** — a schema validated
+///   only against shrink-only ratchets would be a class reached by resemblance,
+///   and the pilot exists precisely to probe non-members;
+/// * **polarity does not determine provenance** — at least one polarity carries
+///   two different provenances;
+/// * **provenance does not determine polarity** — at least one provenance
+///   carries two different polarities.
+///
+/// A row set that degenerates to one-provenance-per-polarity would make the
+/// orthogonality claim vacuous again, silently. This fails instead.
+///
+/// ⚠ RED-VERIFY HONESTY (Core #12), CORRECTED — the first version of this note
+/// was wrong in BOTH directions, which is worth more than the asserts it
+/// describes.
+/// * **Asserts 1 and 2 (occupancy): RED-verified**, each on a degraded
+///   declaration (`policy` removed, then `derived`), and restored.
+/// * **Assert 3 (polarity does not determine provenance): RED-VERIFIED.** The
+///   first note claimed it was unreachable because "the occupancy asserts fire
+///   first on every mutation". False — that covers provenance REMOVALS only. A
+///   four-line polarity PERMUTATION reaches it with all six cells still
+///   occupied: give `policy` and `derived` a polarity each to themselves and
+///   herd every `measured` row into the other two, and the map collapses to
+///   `{exact-pin: {measured}, grow-only: {derived}, informational: {measured},
+///   shrink-only: {policy}}` with asserts 1 and 2 both green. Demonstrated and
+///   restored.
+/// * **Assert 4 (provenance does not determine polarity): NOT reachable, and
+///   the reason is arithmetic rather than "the others fire first".** Given
+///   assert 1, all FOUR polarities are occupied and each contributes at least
+///   one provenance, but only THREE provenances exist — so by pigeonhole some
+///   provenance carries two polarities, always. It is a tautology at the
+///   current axis sizes and cannot be shown red; an attempt trips assert 1
+///   instead. It stops being a tautology the moment a fourth provenance is
+///   added or a polarity is retired, and that is exactly when the header's
+///   orthogonality paragraph could silently go false again — so it stays, with
+///   its reach stated rather than implied.
+#[test]
+fn figures_db_axes_are_occupied() {
+    use std::collections::{BTreeMap, BTreeSet};
+    const POLARITIES: [&str; 4] = ["shrink-only", "grow-only", "exact-pin", "informational"];
+    const PROVENANCES: [&str; 3] = ["measured", "derived", "policy"];
+
+    let mut by_pol: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut by_prov: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for row in figures_db_rows() {
+        let pol = figures_db_field(&row, "polarity").expect("row has a polarity");
+        let prov = figures_db_field(&row, "provenance").expect("row has a provenance");
+        by_pol.entry(pol.clone()).or_default().insert(prov.clone());
+        by_prov.entry(prov).or_default().insert(pol);
+    }
+    for p in POLARITIES {
+        assert!(
+            by_pol.contains_key(p),
+            "polarity `{p}` has NO row in scripts/figures.db. Every polarity carries a worked \
+             example on purpose: a schema exercised only by the polarities it was designed \
+             around is validated by resemblance, not by a non-member. Occupied: {:?}",
+            by_pol.keys().collect::<Vec<_>>()
+        );
+    }
+    for p in PROVENANCES {
+        assert!(
+            by_prov.contains_key(p),
+            "provenance `{p}` has NO row in scripts/figures.db. Same reason as the polarities: \
+             the axis is only demonstrated by a row that occupies it. Occupied: {:?}",
+            by_prov.keys().collect::<Vec<_>>()
+        );
+    }
+    assert!(
+        by_pol.values().any(|s| s.len() >= 2),
+        "no polarity carries two different provenances, so polarity now DETERMINES provenance \
+         and the two are not independent axes. Either a row was removed, or the schema really \
+         has collapsed into one axis — in which case the header's orthogonality paragraph in \
+         scripts/figures.db is the thing to fix, not this assert. Map: {by_pol:?}"
+    );
+    assert!(
+        by_prov.values().any(|s| s.len() >= 2),
+        "no provenance carries two different polarities, so provenance now DETERMINES polarity. \
+         Same reading as above. Map: {by_prov:?}"
+    );
+}
+
+/// ⛔ THE REACH RATCHET ON A GUARD THAT CANNOT CATCH ITS OWN CLASS.
+///
+/// `scripts/clone_meter_check.sh --anchor-age` decides "has a round closed?" by
+/// matching a PROSE HEADLINE in `DONE.md`. That is a name-match on free text —
+/// Core #2's forbidden shape — and it is forced, because a round-close entry
+/// carries NO TYPED MARKER and its shape has never been enforced anywhere: the
+/// reviewer grepped `AGENTS.md` and this file and found no rule on it at all.
+/// Measured over the seven shapes actually present, the predicate matches **3
+/// of roughly 38 closes**, and its failure direction is a FALSE GREEN.
+///
+/// ⛔ WIDENING IT IS WORSE, AND THAT IS MEASURED, NOT ASSUMED. The obvious
+/// widening matches 79 headlines including mid-round ones (`**R42 Phase 4b`,
+/// `**R41 T-FMT-A`, `**ROUND-33 rolling item 4`), which re-creates a false RED
+/// whose printed remedy — a mid-round band re-seed — is the exact move the
+/// salami assertion in `tests/integration.rs` exists to prove destroys the band.
+/// The real fix is a marker on the entry, which is a round-procedure decision;
+/// it is filed with this evidence as `todo/t0851`, RE-OPENED for it.
+///
+/// **So this pins BOTH POPULATIONS rather than trusting either.** A round close
+/// landing in a shape the predicate cannot see moves the round-ish count and
+/// NOT the matched count — which is precisely the class `--anchor-age` is blind
+/// to, made loud. ⚠ It also fires on a mid-round round-ish entry; that is the
+/// honest cost of an unenforced convention, and the remedy there is a
+/// 30-second adjudication and a number bump, never a re-seed.
+///
+/// ⊕ Both counts live in `scripts/figures.db` (the DB's first SOURCED rows —
+/// DB-native, no code literal to mirror), and both predicates are spelled ONCE,
+/// in the script's `--round-close-census`, which this reads rather than
+/// re-spelling (Layering rule 3: the guard and the thing it guards cannot drift
+/// apart if there is only one spelling).
+#[test]
+fn done_md_round_close_shapes_are_pinned() {
+    let out = std::process::Command::new("bash")
+        .args(["scripts/clone_meter_check.sh", "--round-close-census"])
+        .output()
+        .expect("run scripts/clone_meter_check.sh --round-close-census");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.status.success(), "--round-close-census failed:\n{text}");
+
+    let field = |label: &str| -> usize {
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix(label))
+            .unwrap_or_else(|| panic!("--round-close-census printed no `{label}` line:\n{text}"))
+            .trim()
+            .parse()
+            .expect("census field is a count")
+    };
+    let matched = field("anchor-age-matched:");
+    let roundish = field("round-ish headlines:");
+
+    let want_matched: usize = figures_norm(
+        &figures_db_field("done_md.round_close.anchor_age_matched", "value").expect("row"),
+    )
+    .parse()
+    .expect("pinned count");
+    let want_roundish: usize = figures_norm(
+        &figures_db_field("done_md.round_close.roundish_headlines", "value").expect("row"),
+    )
+    .parse()
+    .expect("pinned count");
+
+    if roundish != want_roundish && matched == want_matched {
+        panic!(
+            "A ROUND-ISH `DONE.md` HEADLINE APPEARED THAT `--anchor-age` CANNOT SEE.\n\
+             round-ish {roundish} (pinned {want_roundish}), matched {matched} (pinned, unchanged).\n\n\
+             ADJUDICATE, do not just bump. Read the new entry:\n\
+             * If it IS a round close — then `--anchor-age` went GREEN on a closed round, which is \
+             the exact false-green this pin exists to catch. Re-seed the four \
+             `..._CLONE_ROUND_OPEN` constants and `ROUND-OPEN-DATE`, and revisit the predicate in \
+             `scripts/clone_meter_check.sh::anchor_mode` (todo/t0851 carries the real fix: a typed \
+             marker on the entry).\n\
+             * If it is a MID-ROUND entry that merely starts with ROUND/Round/Rn, bump ONLY \
+             `done_md.round_close.roundish_headlines` in scripts/figures.db.\n\
+             ⛔ In neither case is the answer to widen the predicate: widening was MEASURED to \
+             swallow mid-round entries and re-create a false RED whose remedy destroys the band.\n\n{text}"
+        );
+    }
+    assert_eq!(
+        (matched, roundish),
+        (want_matched, want_roundish),
+        "the DONE.md round-close populations moved. Regenerate with \
+         `bash scripts/clone_meter_check.sh --round-close-census`, adjudicate what changed \
+         (the note fields on both rows say how), and re-pin in scripts/figures.db IN THE SAME \
+         COMMIT — this is an exact pin, so it is meant to be moved deliberately rather than \
+         drifted past. ⚠ A round CLOSE moves both counts and will land here: that is the \
+         records commit's own chore, and it is the moment to confirm the anchors get re-seeded \
+         at the next round open.\n\n{text}"
+    );
 }
