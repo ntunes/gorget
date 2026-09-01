@@ -1,0 +1,84 @@
+#!spectest
+# mode: run
+# adjudicator: ggdef
+# since: spec-v0.1
+# features: [callable, option, result]
+# doc: |
+#   Option/Result combinators applied to a `Callable[T]` PARAMETER — the first
+#   combinator coverage in this corpus, and a three-lane pin on a SEMANTIC
+#   change: programs the C, LLVM and self-host lanes used to crash on, emit
+#   invalid C for, or reject outright now run and agree with the definition.
+#
+#   The cell is the CALLABLE PARAM specifically. A closure literal and a
+#   top-level function both carry their signature into the lowering — a
+#   `Callable[T]` parameter's GIR local type is ERASED to unit, so the adapter
+#   resolves it through neither the closure-struct registry nor the function
+#   signature table and used to default the result's payload type to `int`.
+#   `Option[String].map(f)` then allocated a 16-byte `Option[int64]` slot that
+#   the caller read as a 40-byte `Option[String]`.
+#
+#   Nine shapes, chosen to span both directions of the axis the defect is
+#   about: `opt_map`/`res_map`/`opt_and_then`/`opt_flat_map`/`opt_or_else`/
+#   `res_map_err` are SAME-TYPE (callable return == payload type, so a wrong
+#   `int` answer is merely wrong-SIZED), `opt_map_cross` is CROSS-TYPE (a wrong
+#   answer is wrong about WHICH type — the cell a purely same-type net cannot
+#   see). `opt_filter` and `opt_unwrap_or_else` are the NEGATIVE CONTROLS: they
+#   take a callable too but never consult the result-type helper, so they were
+#   correct before and must stay correct.
+# expect:
+#   exit: 0
+#   stdout: "hello!\n5\nhello?\nhello#\norelse\nhello+\nbad-|\nfiltered\ndefault\n"
+#!end
+
+from std.conv import int_to_str
+
+String mk(String a, String b):
+    return a + b
+
+String opt_map(Callable[String(String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    return o.map(f).unwrap()
+
+int opt_map_cross(Callable[int(String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    return o.map(f).unwrap_or(0)
+
+String opt_and_then(Callable[Option[String](String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    return o.and_then(f).unwrap()
+
+String opt_flat_map(Callable[Option[String](String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    return o.flat_map(f).unwrap()
+
+String opt_or_else(Callable[Option[String]()] f):
+    Option[String] o = None()
+    return o.or_else(f).unwrap()
+
+String res_map(Callable[String(String)] f):
+    Result[String, String] r = Ok(mk("hel", "lo"))
+    return r.map(f).unwrap()
+
+String res_map_err(Callable[String(String)] f):
+    Result[String, String] r = Error(mk("b", "ad"))
+    Result[String, String] m = r.map_err(f)
+    return m.unwrap_or_else((String e): mk(e, "|"))
+
+String opt_filter(Callable[bool(String)] f):
+    Option[String] o = Some(mk("hel", "lo"))
+    return o.filter(f).unwrap_or(mk("fil", "tered"))
+
+String opt_unwrap_or_else(Callable[String()] f):
+    Option[String] o = None()
+    return o.unwrap_or_else(f)
+
+void main():
+    print(opt_map((String s): mk(s, "!")))
+    print(int_to_str(opt_map_cross((String s): s.len())))
+    print(opt_and_then((String s): Some(mk(s, "?"))))
+    print(opt_flat_map((String s): Some(mk(s, "#"))))
+    print(opt_or_else((): Some(mk("or", "else"))))
+    print(res_map((String s): mk(s, "+")))
+    print(res_map_err((String s): mk(s, "-")))
+    print(opt_filter((String s): s.len() > 99))
+    print(opt_unwrap_or_else((): mk("de", "fault")))

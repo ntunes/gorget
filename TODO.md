@@ -2,13 +2,13 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN AND MID-FLIGHT — 4 of 7 tracks integrated (D1, C, D2, F), 3 landed and awaiting one gauntlet step each.
-⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts and the current lift: **Track A first output-review**.
+**▶ R48 IS OPEN AND MID-FLIGHT — 5 of 7 tracks integrated (D1, C, D2, F, A), 2 landed and awaiting one gauntlet step each.
+⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A gauntlet through confirming).
 ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
 **D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
 Opened 2026-08-31 (owner: *"open next round"*). Headline: **the six CRITICAL memory-safety defects** —
-`t0841`, `t0763`+`t0134`, and `t0840`+D53 are CLOSED and integrated; `t0770`/`t0772` and `t0825` are fixed on
-branches; `t0771` moved to R49 — with the owner-directed burn-down campaign in parallel and `t0861` (the
+`t0841`, `t0763`+`t0134`, `t0840`+D53, and `t0770`/`t0772` are CLOSED and integrated; `t0825` is fixed on
+a branch; `t0771` moved to R49 — with the owner-directed burn-down campaign in parallel and `t0861` (the
 figures DB) early at the owner's explicit request (*"please do not forget t0861, the figures DB. It should
 go in early this round."*).
 
@@ -29,20 +29,19 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 
 ### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `907387a0`)
 
-**4 of 7 tracks INTEGRATED. 3 branches are LANDED and each owes exactly one gauntlet step.**
-The standing hold is *"don't start new ones until I say so"*. Lifts spent: C, D2, F. Current lift:
-**Track A first output-review** (in flight; no `/tmp/a_output_review.md` yet). D53 unique-lock reject
-and the figures DB are **on main**.
-⚠ After D2, β/γ add/add-collide with D2's `todo/t0902.md`–`t0904.md` (different defects). A's
-`todo/t0876.md` is still a different item from main's C-emit `t0876` — **never take a side**.
-F's figures-DB adoption is `t0926`.
+**5 of 7 tracks INTEGRATED. 2 branches are LANDED and each owes a first output-review.**
+The standing hold is *"don't start new ones until I say so"*. Lifts spent: C, D2, F, A (OR →
+fix-up → confirming). D53 unique-lock reject and the figures DB are **on main**. A's capture
+residual is `t0927`; main's `t0876` remains C-emit jitter.
+⚠ After D2, β/γ add/add-collide with D2's `todo/t0902.md`–`t0904.md` (different defects).
+Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption is `t0926`.
 
 | track | items | branch tip | ahead | merge | OWED STEP |
 |---|---|---|---|---|---|
 | **D1** | `t0841` | — | — | — | **INTEGRATED** `3b8a5561` |
 | **C** | `t0763` `t0134` | — | — | — | **INTEGRATED** `329ad020` |
 | **D2** | `t0840` D53 | — | — | — | **INTEGRATED** `d5707a77` |
-| **A** | `t0770` `t0772` | `0e367ea7` (`worktree-agent-01a05dc0`) | 7 | TODO/DONE only (t0876 add/add claimed gone → `t0927`) | **fix-up confirming pass in flight** — first OR design sound; R1–R3 folded at executor claim. `/tmp/a_output_review.md` |
+| **A** | `t0770` `t0772` | — | — | — | **INTEGRATED** (residuals `t0877`–`t0880`, `t0872`, `t0927`) |
 | **β** | `t0825` | `470cd49f` | 1 | ⚠ add/add `t0902`–`t0904` vs D2 | **a first output-review** (none yet) |
 | **γ** | nondeterminism | `5f67841f` | 7 | ggdef + `integration.rs` + add/add `t0902`–`t0904` | **a first output-review** (none yet) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
@@ -610,7 +609,6 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t0715`](todo/t0715.md) **HIGH** — 🆕📉 [HIGH — a MEASURED +13.08% stage-1 string-clone regression, correctness-required but reclaimable; ceilings re-seeded…
 - [`t0750`](todo/t0750.md) **HIGH** — 🆕🚨 [HIGH — A CoW COLLECTION ALIAS LOSES ITS VALUE SEMANTICS INSIDE A while LOOP, IN BOTH DIRECTIONS. Silent wrong values…
 - [`t0771`](todo/t0771.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — AddressSanitizer: heap-use-after-free under --sanitize, and on a plain build rc 0 with SILENTLY WRONG OU…
-- [`t0772`](todo/t0772.md) **HIGH** — 🆕🐛 [HIGH — a stdout-invisible leak on EVERY combinator call over a named receiver with a heap payload; 6 B / 1 allocatio…
 - [`t0872`](todo/t0872.md) **HIGH** — 🆕🐛 [HIGH — a 6-byte leak on EVERY inline-constructor receiver, and on a plain struct-ctor field read; isolated 2026-08-3…
 - [`t0873`](todo/t0873.md) **HIGH** — 🆕🚨 [HIGH — TWO defects on Vector[Callable], found 2026-08-31 by the R48 Track-B1 brief-review pass 1 while probing the r…
 - [`t0907`](todo/t0907.md) **HIGH** — 🆕🚨💥 [HIGH — MEMORY-UNSAFE, gg check rc 0, and BOTH VALUE LANES PRINT THE RIGHT ANSWER; found 2026-08-31 by R48 Track D2…
@@ -659,6 +657,7 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t0792`](todo/t0792.md) **MED** — 🆕🐛 [MED — WRONG ANSWER, gg check clean, both backends, ASan-clean; found 2026-08-29 by R47 Track E2's executor while clo…
 - [`t0860`](todo/t0860.md) — [MED — owner ruling 2026-08-30, mechanism landed R48 Track F, TRIGGER STILL MISSING] Wire the
 - [`t0862`](todo/t0862.md) — [MED — owner-directed 2026-08-31, R48 candidate] slice MATERIALIZES AT THE READ SITE ON BOTH RECEIVERS.
+- [`t0880`](todo/t0880.md) **MED** — 🆕🐛 [MED — a stdout-invisible 5-byte leak on every Result.unwrap_or with a heap default; found R48 Track A while widening…
 ### Low
 
 - [`t0142`](todo/t0142.md) **LOW** — 🆕📋 [LOW — GUARD SHAPE, measured four times in one track; filed 2026-08-19 by R43 Track G] doc_source_citations_name_the_…
@@ -988,6 +987,8 @@ Remaining from this triage (GO #1 / GO #2 v2 / named-arg-reorder candidate #3 ar
 - [`t0746`](todo/t0746.md) **MED** — 🆕🐛 [MED — the NOMINAL-receiver cell of the "name list answers without checking the receiver" family; a lane divergence w…
 - [`t0747`](todo/t0747.md) **MED** — 🆕🐛 [MED — a VIEW-VS-OWNED axis divergence, i.e. Layering rule 1's explicitly named invariant, on a path the bootstrap us…
 - [`t0791`](todo/t0791.md) **MED** — 🆕🐛 [MED — Core #9 LANE LAG, opened 2026-08-29 by R47 Track E2's own fix; source-verified, not yet run-measured on the se…
+- [`t0877`](todo/t0877.md) **MED** — 🆕🐛 [MED — SELF-HOST lane, two arms of one helper; found R48 Track A while porting the t0770 fix to the self-host] A clos…
+- [`t0879`](todo/t0879.md) **MED** — 🆕🐛 [MED — SELF-HOST lane; a USER-DEFINED generic method taking a callable fails on EVERY argument spelling; isolated R48…
 ### Low
 
 - [`t0269`](todo/t0269.md) — 🐛 SELF-HOST (SH-lane miscompile, filed R40 Track-J review 2026-08-10) — for (i, b) in s.bytes().enumerate() over-reads t…
@@ -1273,7 +1274,8 @@ Rust gg's `check_named_args_and_defaults` (PositionalAfterNamed) is invoked at O
 - [`t0710`](todo/t0710.md) **HIGH** — 🆕🚨 [HIGH — AN IMPORT STATEMENT CHANGES WHETHER A PROGRAM TYPECHECKS; found 2026-08-27 by R45 Track A brief-review pass 2…
 - [`t0718`](todo/t0718.md) **HIGH** — 🆕🚨 [HIGH — Layering rule 2 class retirement: NAME MATCHING DECIDES TYPE SEMANTICS, and the typed replacement already exi…
 - [`t0721`](todo/t0721.md) **HIGH** — 🆕🐛 [HIGH — a WRONG ANSWER with rc 0, the worst outcome; the REFERENCE LAGS THE SELF-HOST, i.e. a succession milestone (s…
-- [`t0770`](todo/t0770.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — rc 139 SIGSEGV on a plain build, AddressSanitizer: stack-buffer-overflow under --sanitize, deterministic…
+- [`t0878`](todo/t0878.md) **HIGH** — 🆕🐛 [HIGH — Vector[T].map(f) / .flat_map(f) with f a Callable[U(T)] PARAMETER links against nothing; found R48 Track A, w…
+- [`t0927`](todo/t0927.md) **HIGH** — 🆕🐛 [HIGH — a closure that CAPTURES a Callable[T] parameter cannot be compiled AT ALL, on either backend; found R48 Track…
 ### Medium
 
 

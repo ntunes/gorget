@@ -3759,7 +3759,14 @@ fn call_closure_in_adapter(
         let callable_name = format!("__callable_{}", place.local.0);
         let mut final_args = vec![closure_op.clone()];
         final_args.extend(call_args);
-        let dst = ctx.call_indirect_tracked(builder, callable_name, final_args, fallback_ret_type);
+        // READER 2 of the erased-Callable class (`t0770`). `fallback_ret_type`
+        // is RECEIVER-derived (`some_ok_type` for `map`, `none_err_type` for
+        // `map_err`) — correct only when the callable's return type happens to
+        // equal the receiver's payload type. Read the declared return through
+        // the same accessor reader 1 uses, so the slot's TYPE and the indirect
+        // call's CAST are always the same fact.
+        let ret_type = callable_param_return_type(ctx, closure_op).unwrap_or(fallback_ret_type);
+        let dst = ctx.call_indirect_tracked(builder, callable_name, final_args, ret_type);
         return FunctionBuilder::copy(dst);
     }
     if let Operand::Constant(Constant::FuncRef(name)) = closure_op {
@@ -3948,9 +3955,23 @@ fn try_lower_option_result_combinator(
     } else {
         None
     };
+    // `t0772`: did this adapter CLONE the receiver, or consume it?
+    //
+    // The move-if-dead prologue below unregisters the receiver's own local from
+    // drop tracking. That is correct only when the receiver was genuinely moved
+    // in. The clone branch immediately below deep-copies it and works on the
+    // copy, so the ORIGINAL still owns a payload nobody would free — a leak on
+    // EVERY combinator call over a named receiver with a heap payload.
+    //
+    // The authoritative fact is THIS decision, not `LocalOwnership`: the adapter
+    // clones a resource receiver regardless of liveness, so Phase D would be a
+    // SECOND source of truth that can disagree with the emitted code
+    // (devbook/24 rule 3). The boolean below discriminates BOTH arms.
+    let mut receiver_was_cloned = false;
     if let (Some(ptr_local), Some(clone_fn)) = (ptr_local_opt, ctx.clone_fn_for_ptr(recv_type)) {
         // `args` is non-empty here (guarded above); use the closure arg's
         // span as the diagnostic site for this combinator-receiver clone.
+        receiver_was_cloned = true;
         ctx.warn_clone_and_hit(builder, args[0].span, recv_type, crate::ir::ImplicitCloneReason::CallArg);
         let cloned = builder.call_clone(
             &clone_fn,
@@ -4062,11 +4083,22 @@ fn try_lower_option_result_combinator(
     let merge_bb = builder.new_block();
     builder.branch(FunctionBuilder::copy(is_some_ok), some_bb, none_bb);
 
-    // Move-if-dead: unregister scrutinee from drops before branching
+    // Move-if-dead: unregister scrutinee from drops before branching.
+    //
+    // `scrut_local` is unconditionally the adapter's own slot — the clone, or
+    // the loaded/copied value — and the branch arms consume it, so it always
+    // unregisters.
+    //
+    // The RECEIVER's own local is a different question: unregistering it is
+    // correct only when the receiver was CONSUMED. When the clone branch above
+    // ran, the original was copied, not consumed, and dropping its registration
+    // leaks its payload (`t0772`). Gate on the adapter's own clone decision.
     ctx.drops.unregister(scrut_local);
-    if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
-        if place.projections.is_empty() {
-            ctx.drops.unregister(place.local);
+    if !receiver_was_cloned {
+        if let Operand::Copy(ref place) | Operand::Move(ref place) = recv {
+            if place.projections.is_empty() {
+                ctx.drops.unregister(place.local);
+            }
         }
     }
 
@@ -4407,6 +4439,57 @@ fn try_lower_option_result_combinator(
     Some(FunctionBuilder::copy(result_local))
 }
 
+/// The declared return type of a `Callable[T]` PARAMETER operand, or `None`
+/// when the operand is not one.
+///
+/// A `Callable[T]` parameter's GIR local type is ERASED to unit — it resolves
+/// through neither `lookup_closure_info` (no closure struct) nor `fn_sigs` (no
+/// `FuncRef`). The declared signature survives in the `callable_return_types`
+/// sidecar, written at the six registration sites
+/// (`functions.rs:1597/1958/2314/2730`, `context.rs:3362`, `stmts/mod.rs:559`)
+/// and read by the DIRECT callable-param call arm at
+/// `exprs/calls.rs` (the `UNIT_TYPE`-local arm). This is devbook/24 rule 4 —
+/// resolve once, write through: the combinator adapter reads the SAME fact
+/// through the SAME accessor rather than re-deriving or defaulting.
+///
+/// ⚠ BOTH adapter readers — `infer_closure_return_type` (which SIZES
+/// `result_local`) and `call_closure_in_adapter` (which CASTS the indirect
+/// call) — go through this one helper so they can never disagree. A
+/// disagreement is exactly the `t0770` defect: a slot allocated
+/// `Option__int64_t` and read as `Option__GorgetString`.
+fn callable_param_return_type(ctx: &LoweringContext, closure_op: &Operand) -> Option<TypeId> {
+    let (Operand::Copy(place) | Operand::Move(place)) = closure_op else {
+        return None;
+    };
+    // The sidecar is keyed on the LOCAL. A projection reads a field of the
+    // local, not the callable itself, so it carries no entry — fall through
+    // to the caller's existing behaviour rather than mis-attributing one.
+    if !place.projections.is_empty() {
+        return None;
+    }
+    // ⚠ A RECOVERED `unit` RETURN IS DROPPED, NOT PROPAGATED. `Option[T].map(f)`
+    // with a `Callable[void(T)]` runs `f` for its effect and keeps the receiver's
+    // payload type — that is what ggdef does, and what the closure-literal
+    // spelling of the same program already did on both backends (`hello` then
+    // `done`). Minting `unit` as the result payload instead stores a void call's
+    // result into a `Str` slot: measured rc 139 on C AND LLVM, i.e. strictly
+    // worse than the pre-fix `I64_TYPE` default this helper replaces. Returning
+    // `None` here falls through to each caller's existing default, which is the
+    // behaviour those spellings agree on. ⚠ The two sibling sites handle the
+    // same `unit` case, but each in its own way, so this is a family
+    // resemblance and not a copied guard: the DIRECT callable-call arm
+    // (`exprs/calls.rs`, the `UNIT_TYPE`-local arm) recovers `unit` and then
+    // emits `call_void` instead of a tracked destination, which it can do
+    // because nothing consumes the result there; the self-host's
+    // `__callable_N` recovery DROPS a `unit` exactly as this does, and says
+    // why in its own comment. Here the recovered type would become a result
+    // PAYLOAD, so dropping it is the only correct move.
+    match ctx.callable_return_type(place.local) {
+        Some(ret) if ret != UNIT_TYPE => Some(ret),
+        _ => None,
+    }
+}
+
 /// Infer the return type of a closure operand from its __call function signature.
 fn infer_closure_return_type(
     ctx: &LoweringContext,
@@ -4431,6 +4514,12 @@ fn infer_closure_return_type(
         if let Some((_, ret)) = ctx.fn_sigs.get(name.as_str()) {
             return *ret;
         }
+    }
+    // READER 1 of the erased-Callable class (`t0770`). Without this the
+    // hardcoded `I64_TYPE` below sizes `result_local` for an `int` payload
+    // whatever the callable actually returns.
+    if let Some(ret) = callable_param_return_type(ctx, closure_op) {
+        return ret;
     }
     I64_TYPE
 }

@@ -1,0 +1,72 @@
+# Method-level generic inference over a `Callable[U(T)]` PARAMETER.
+#
+# `U transform[U, F](self, F f)` binds `F` from the argument's type (shape 1)
+# and `U = F.return_type` (shape 2) in `try_infer_method_targs`. TWO readers of
+# the same erased fact sit on that path, and both had to be fixed:
+#
+#   * the shape-2 loop INLINED its own `ResolvedType::Function` match instead of
+#     routing through the accessor, so it SURVIVED the fix to that accessor and
+#     a `CallableTrait` wrapper still bound nothing; and
+#   * `typeid_to_ast_type` returned `None` for every callable wrapper, so even a
+#     successful binding could not be MINTED as a monomorph. Its own comment
+#     asserted such a binding "shouldn't appear as an inferred method-generic
+#     binding in well-typed code" — this file is the counter-example that
+#     retired the claim.
+#
+# AXIS SAMPLED — spelling of the callable argument {Callable PARAM, top-level
+# fn, closure literal} x {same-type U, cross-type U}. All three spellings must
+# agree: they name ONE monomorph.
+#
+# MEASURED PRE-FIX at base `3b8a5561`:
+#   Callable PARAM, same-type   C `incompatible types when assigning to type
+#                                  'Str' from type 'int32_t'`
+#                               LLVM `undefined reference to 'Holder__transform'`
+#   Callable PARAM, cross-type  C AND LLVM `undefined reference to
+#                                  'Holder__transform'`
+#   top-level fn  } BOTH build and print correctly pre-fix. They are the
+#   closure lit   } negative controls that locate the defect on the
+#                   Callable-PARAM cell specifically, and they stay green.
+#
+# ⚠ NOT a top-level fixture, on purpose: the SELF-HOST lane cannot compile a
+# user-defined generic method taking a callable AT ALL — measured identical
+# before and after this change, on the top-level-fn spelling too
+# (`incompatible types when assigning to type 'Str' from type 'int'`), so it is
+# a PRE-EXISTING self-host gap (`t0879`) and not this round's inflow. A
+# top-level placement would register it against
+# `RUNTIME_DIFF_NONMATCH_CEILING`, which Core #9 forbids raising for own inflow.
+
+from std.conv import int_to_str
+
+String mk(String a, String b):
+    return a + b
+
+struct Holder:
+    String name
+
+equip Holder:
+    U transform[U, F](self, F f): return f(self.name)
+
+String bang(String s):
+    return mk(s, "!")
+
+String query(String s):
+    return mk(s, "?")
+
+int length_of(String s):
+    return s.len()
+
+String via_callable_param(Callable[String(String)] f):
+    Holder h = Holder(mk("hel", "lo"))
+    return h.transform(f)
+
+int via_callable_param_cross(Callable[int(String)] f):
+    Holder h = Holder(mk("hel", "lo"))
+    return h.transform(f)
+
+void main():
+    print(via_callable_param(bang))
+    print(int_to_str(via_callable_param_cross(length_of)))
+    # controls: the two spellings that already worked
+    Holder h = Holder(mk("hel", "lo"))
+    print(h.transform(query))
+    print(h.transform((String s): mk(s, "~")))

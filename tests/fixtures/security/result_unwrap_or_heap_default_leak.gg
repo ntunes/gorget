@@ -1,0 +1,30 @@
+# KNOWN GAP — `Result[T, E].unwrap_or(<heap temp>)` leaks the temp; the
+# `Option[T]` sibling of the SAME method does not.
+#
+# `Direct leak of 5 byte(s) in 1 object(s)` from `gorget_string_copy_cow`, under
+# `ASAN_OPTIONS=detect_leaks=1`, on the Ok path. The default argument is a
+# freshly-materialized owned String that the Result arm neither consumes nor
+# registers for drop.
+#
+# ⭐ THE DISCRIMINATOR THAT LOCATES IT — `Option[String] o = None()` then
+# `o.unwrap_or(mk("no", "pe"))` is ASan-CLEAN. So the temp IS normally
+# registered at this position; the `Result` arm specifically drops the
+# registration. Same method name, same argument shape, two receivers, opposite
+# results — which also rules out "the temp was never registered" as the
+# mechanism (that is `t0872`'s, at the inline-constructor position).
+#
+# ⚠ PRE-EXISTING, and NOT the combinator-receiver class: measured identical
+# before and after R48 Track A's `receiver_was_cloned` gate (`t0772`), which is
+# about the RECEIVER's registration, not an ARGUMENT's. It was found while
+# widening that fix's ASan net, on a cell the net then avoided so its own signal
+# stayed readable.
+#
+# INTENDED: prints `res`, rc 0, ASan-clean under `detect_leaks=1`, on C and
+# LLVM.
+
+String mk(String a, String b):
+    return a + b
+
+void main():
+    Result[String, String] o = Ok(mk("re", "s"))
+    print(o.unwrap_or(mk("no", "pe")))
