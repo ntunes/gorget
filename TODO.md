@@ -44,7 +44,7 @@ collides on `todo/t0876.md` vs main's C-emit item — **never take a side; renum
 | **A** | `t0770` `t0772` | `5d43cedd` | 6 | ⚠ `todo/t0876.md` | **a first output-review** (none yet) |
 | **β** | `t0825` | `470cd49f` | 1 | clean | **a first output-review** (none yet) |
 | **γ** | nondeterminism | `5f67841f` | 7 | clean | **a first output-review** (none yet) |
-| **F** | `t0861` `t0851` `t0860` | `6e9404f5` | 6 | ⚠ `todo/t0876.md` + ggdef corpora | **confirming pass in flight** (2 reviews folded; t0851 re-opened; t0876 must be renumbered) |
+| **F** | `t0861` `t0851` `t0860` | `6e9404f5` | 6 | ⚠ `todo/t0876.md` + ggdef corpora | **executor in flight** — confirming Q1 closed; Q2 BLOCKED (renumber figures-DB `t0876` → `t0926`; never take a side vs main's C-emit `t0876`) |
 | **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded) |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
 
