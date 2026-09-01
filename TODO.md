@@ -2,7 +2,7 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN AND MID-FLIGHT — 7 of 7 code tracks integrated (D1, C, D2, F, A, β, γ). Track S (guard simplification) brief gauntlet in flight. E-B still owes brief pass 2.
+**▶ R48 IS OPEN AND MID-FLIGHT — 7 of 7 code tracks integrated (D1, C, D2, F, A, β, γ). Track S executor died 402 with no diff; relaunching with density addendum. E-B still owes brief pass 2.
 ⛔ NEW AGENTS ARE ON AN OWNER HOLD except spent lifts (C, D2, F, A, β, γ) and the owner's lift to launch Track S.
 ⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST.**
 **D53 is implemented** (unique lock + consume-position reject; diagnostic `^source` / `Shared[Mutex[T]]`).
@@ -43,7 +43,7 @@ Main's `t0876` is C-emit jitter; A's capture residual is `t0927`; F's adoption i
 | **β** | `t0825` | — | — | — | **INTEGRATED** `35037071` (residuals `t0928`–`t0930`) |
 | **γ** | nondeterminism | — | — | — | **INTEGRATED** `abd1d79a2` (residuals `t0931`–`t0933`; CEILING 147; `t0204`/`t0267` closed) |
 | **F** | `t0861` `t0851` `t0860` `t0926` | — | — | — | **INTEGRATED** (t0861 closed; t0851 re-opened; t0860 pending trigger; adoption is `t0926`) |
-| **S** | guard simplification | — | — | `tests/lints.rs` agents_md block · `figures.db` | **executor in flight** (brief SIGN OFF ×2 after pass-1 fold; A3 > A2 > A1) |
+| **S** | guard simplification | — | — | `tests/lints.rs` agents_md block · `figures.db` · `AGENTS.md` density | **executor relaunch** (brief SIGN OFF ×2; A4 density: title+intent, war-stories → 29/30) |
 | **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded). ⚠ S owns `figures.db` + agents_md block until S integrates; E-B3 EOF-only on `lints.rs` |
 | **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
 
