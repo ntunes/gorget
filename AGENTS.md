@@ -126,11 +126,10 @@ clone-if-the-source-is-live, move-if-it-is-dead. Even at the boundary,
 **the compiler prefers move when liveness allows it**.
 
 **The carve-outs to CoW-default-borrow are**: closures / `Callable[T]`,
-`Owned[T]`, `Box[T]`, `Task`, `TaskGroup`, `Guard` — these are
-**single-owner-by-design (no clone path in the lowering)**, so the safety pass
-emits `MoveWithoutOperator` (E_MoveWithoutOperator)
-**at bare-assign sites AND at constructor / struct / enum-init sites**, forcing
-**the user to write `^source` or `source.clone()`**. (At a plain function / method call these types are simply borrowed, so no operator is needed.)
+`Owned[T]`, `Box[T]`, `Task`, `TaskGroup`, `Guard`, `Mutex`/`RWLock` (D53) —
+**single-owner-by-design (no clone path in the lowering)**. `E_MoveWithoutOperator`
+**at bare-assign sites AND at constructor / struct / enum-init sites** + consume;
+**the user to write `^source` or `source.clone()`** (unique locks: `Shared[Mutex[T]]`, never `.clone()`). (At a plain function / method call these types are simply borrowed.)
 
 At each consuming position (`push`, `put`, `set`, `insert`, `send`,
 `v[i] = x`) the collection must own. The compiler **picks per-arg from
@@ -288,7 +287,7 @@ When you launch sub-agents via the `Agent` tool, the following rules are **non-n
 
 5. **Brief file zones when running agents in parallel — disjointness is cheap insurance, NOT a hard requirement.** Tell each agent which files the others are touching. Do NOT defer or reshape a worthwhile parallel track to avoid overlap. When two tracks must touch one file, brief EACH on the other's exact edit regions so the diffs stay mergeable. Scout the overlap first so integration is planned, not discovered.
 
-6. **Prune a track's worktrees the moment it INTEGRATES — not at round close.** They do NOT dispose of themselves; each carries a multi-GB `target/`. **Safe iff CLEAN.** Branches survive the remove, so committed work is safe; **uncommitted work always is** at risk — check `git status --porcelain`, keep anything dirty. ⚠ **`df` lies in a container**; measure bytes written. Round close runs **`scripts/round_cleanup.sh`** (dry-run first; ⚠ it prunes EVERY `agent-*` worktree, so a live agent needs a keep-list). ⚠ **Also sweep `/tmp`.**
+6. **Prune a track's worktrees and isolation clones the moment it INTEGRATES — not at round close.** They do NOT dispose of themselves; each carries a multi-GB `target/`. **Safe iff CLEAN.** Branches survive the remove; **uncommitted work always is** at risk — check `git status --porcelain`, keep anything dirty. ⚠ **`df` lies in a container**; measure bytes written. Round close runs **`scripts/round_cleanup.sh`** (dry-run first; ⚠ it prunes EVERY `agent-*` worktree, so a live agent needs a keep-list). ⚠ **Also sweep `/tmp`.**
 
 7. **Worktree-RELATIVE paths only — agent worktrees nest UNDER main.** They live at `<main-checkout>/.claude/worktrees/agent-*`, *inside* the main checkout, so an unqualified absolute path writes into MAIN. Brief every agent: all file ops use paths RELATIVE to its worktree; on an Edit-tool desync, re-Read and retry the Edit tool and never fall back to a shell heredoc with an absolute path; after any non-Edit-tool write, run `git -C <main-checkout> status` and STOP if it shows changes. Worktree isolation is necessary but NOT sufficient when the worktrees are children of the thing they must not touch. (The concrete main-checkout path for the current environment is in the session handover.)
 

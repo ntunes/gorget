@@ -1,0 +1,10 @@
+# D53 POS — explicit `^source` at a consuming position.
+# CELL: lock=Mutex · position=push · source=`^m`.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Vector[Mutex[int]] all = []
+    all.push(^m)
+    print(f"{all.len()}")
+    print(f"{all.get(0).unwrap().lock().get()}")

@@ -1,0 +1,40 @@
+# KNOWN GAP — BOTH REAL BACKENDS under `--sanitize`; the value lanes print the
+# RIGHT answer, which is exactly why a stdout-comparing fixture cannot see it.
+#
+# `for (k, v) in d` over a `Dict[String, Shared[int]]` OVER-RELEASES: the
+# iteration's value bind takes a release the retains never paid for, so
+# `gorget_map_free` walks its second entry into an already-freed control block.
+#
+#   AddressSanitizer: heap-use-after-free in gorget_shared_drop
+#     <- Shared__int64_t__drop  <- gorget_map_free  <- main
+#
+# DISCRIMINATOR: the identical loop over `String` VALUES is ASan-clean, and so
+# is `for h in v` over a `Vector[Shared[int]]` — the Vector element bind takes
+# the Ptr-borrow path (`index_load_borrow`, drop-disposition BORROW) and never
+# copies at all, while the Dict value bind copies the value OUT and expects the
+# copy to be independent.
+#
+# ⚠ THE ROOT IS THE SAME AS ITS SIBLING `shared_nested_vector_clone_over_release.gg`,
+# which an earlier reading of this cell got wrong. `gorget_map_iter_value`
+# (`runtime_map.c:1227`) memcpys and then calls `mm->val_clone(out)` — the SAME
+# in-place hook `gorget_array_clone` calls as `elem_clone`, wired from
+# `TypeMetadata.clone_inplace_fn`, which the refcount TypeDefs do not set. NULL
+# hook, bitwise alias, no incref, and the loop bind then registers a drop for a
+# reference never taken. ONE fix closes both faces; see `todo/t0907`.
+#
+# NOT the R48 Track D2 marshalling class (`t0840`): the put side is correct
+# (`shared_dict_value_handle.gg` is green and ASan-clean), and the `.get(k)`
+# read is correct. Only the iteration bind is wrong.
+#
+# INTENDED (asserted by the wired test): prints `4`, rc 0, ASan-clean.
+# Filed as todo/t0907.
+
+void main():
+    Shared[int] s = Shared[int](2)
+    Dict[String, Shared[int]] d = {}
+    d.put("a", s.clone())
+    d.put("b", s.clone())
+    int total = 0
+    for (k, v) in d:
+        total = total + v.get()
+    print(f"{total}")

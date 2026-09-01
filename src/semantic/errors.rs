@@ -293,6 +293,26 @@ pub enum ArenaEscapeKind {
     IngestLiveOuter { target: String },
 }
 
+/// D53: which unique-lock family a `MoveReason::UniqueLock` names in the
+/// diagnostic (`Shared[Mutex[T]]` vs `Shared[RWLock[T]]`). Set at the
+/// generic's declaration name (the carve-out list), never at a consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UniqueLockFamily {
+    Mutex,
+    RWLock,
+}
+
+impl UniqueLockFamily {
+    /// The share-wrap the diagnostic names. Mutex/RWLock have no clone path
+    /// and must not be offered `.clone()` (D53).
+    pub fn share_wrap(self) -> &'static str {
+        match self {
+            UniqueLockFamily::Mutex => "Shared[Mutex[T]]",
+            UniqueLockFamily::RWLock => "Shared[RWLock[T]]",
+        }
+    }
+}
+
 /// D12/D4: WHY a bare copy of a non-Copy value is rejected. Controls the
 /// "why" clause of `E_MoveWithoutOperator`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,6 +323,10 @@ pub enum MoveReason {
     /// A single-owner-BY-DESIGN carve-out type (closure/`Callable`, `Owned[T]`,
     /// `Box[T]`, `Task`/`TaskGroup`/`Guard`) — no clone path in the lowering.
     SingleOwner,
+    /// D53: `Mutex[T]` / `RWLock[T]` are unique locks. Sharing is
+    /// `Shared[Mutex[T]]` / `Shared[RWLock[T]]`. The diagnostic names `^source`
+    /// or that wrap — never `.clone()`.
+    UniqueLock(UniqueLockFamily),
 }
 
 /// D12/D4: the PLACE SHAPE of the rejected source, which decides the valid
@@ -1497,6 +1521,30 @@ impl std::fmt::Display for SemanticError {
                 write!(f, "use of moved value `{name}`")
             }
             SemanticErrorKind::MoveWithoutOperator { name, reason, shape, write_through_available } => {
+                // D53 unique locks: no clone path, so the Whole/FieldIndex
+                // `.clone()` arms must not render. Canonical move glyph is `^`
+                // (D27); sharing is `Shared[Mutex[T]]` / `Shared[RWLock[T]]`.
+                if let MoveReason::UniqueLock(family) = reason {
+                    let wrap = family.share_wrap();
+                    return match shape {
+                        MoveShape::Whole => write!(
+                            f,
+                            "cannot copy `{name}`: `{name}` is a unique lock — write `^{name}` \
+                             to move or wrap in `{wrap}` to share"
+                        ),
+                        MoveShape::FieldIndex => write!(
+                            f,
+                            "cannot copy `{name}`: `{name}` is a unique lock — wrap the \
+                             sub-place in `{wrap}` (a bare `^` on a field/index sub-place \
+                             is a partial move and is rejected)"
+                        ),
+                        MoveShape::Capture => write!(
+                            f,
+                            "cannot capture `{name}` by value: `{name}` is a unique lock — \
+                             wrap it in `{wrap}`"
+                        ),
+                    };
+                }
                 // The "why" clause depends on the reason; the REMEDY depends on
                 // the place shape (D12 pin-4). The message texts below still
                 // spell the RETIRED `!` glyph; `^` is the CANONICAL one and
@@ -1507,6 +1555,7 @@ impl std::fmt::Display for SemanticError {
                 let why = match reason {
                     MoveReason::DropTaint => "a resource (a type with a custom `Drop` is single-owner)",
                     MoveReason::SingleOwner => "a single-owner type (no implicit copy)",
+                    MoveReason::UniqueLock(_) => unreachable!("UniqueLock rendered above"),
                 };
                 match shape {
                     // Materialize-on-write position (2T/D2): re-declaring the
@@ -1965,6 +2014,16 @@ mod code_tests {
         let so = mwo("g", MoveReason::SingleOwner, MoveShape::Whole);
         assert!(so.contains("single-owner"), "single-owner why-clause: {so}");
         assert!(so.contains("!g") && so.contains("g.clone()"), "so remedies: {so}");
+
+        // D53 unique lock: `^source` or Shared[Mutex[T]], never `.clone()` / `!`.
+        let ul = mwo("m", MoveReason::UniqueLock(UniqueLockFamily::Mutex), MoveShape::Whole);
+        assert!(ul.contains("^m"), "unique lock must offer `^m`: {ul}");
+        assert!(ul.contains("Shared[Mutex[T]]"), "unique lock share wrap: {ul}");
+        assert!(!ul.contains(".clone()"), "unique lock must not offer clone: {ul}");
+        assert!(!ul.contains("!m"), "unique lock uses `^`, not `!`: {ul}");
+        let ulr = mwo("r", MoveReason::UniqueLock(UniqueLockFamily::RWLock), MoveShape::Whole);
+        assert!(ulr.contains("Shared[RWLock[T]]"), "rwlock share wrap: {ulr}");
+        assert!(!ulr.contains(".clone()"), "rwlock must not offer clone: {ulr}");
 
         // Field/Index sub-place: `.clone()` ONLY — a bare `!` is a partial move.
         let field = mwo("hh", MoveReason::DropTaint, MoveShape::FieldIndex);

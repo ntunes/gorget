@@ -1,0 +1,43 @@
+from std.conv import int_to_str
+
+# Iterator.map with a `Callable[int(int)]` PARAMETER — a cell reader 3 un-gated
+# (`try_iterator_adapter_type`'s `"map"` arm has no `is_monomorphizable`
+# decline, by design) and that was shown VALUE-CORRECT in a commit message
+# without a live pin. Core #11: a measurement in DONE.md is not a pin.
+#
+# SPELLING PINNED — `v.iter().map(f).collect()[0]` with `f` a Callable PARAM,
+# expected `12`. This is the spelling the first output-review measured.
+#
+# MEASURED PRE-FIX at base `f5ab385d` (combinator src identical to `3b8a5561`),
+# C AND LLVM alike:
+#
+#     BUILD_RC=101
+#     panic at src/ir/lowering/exprs/methods.rs:4417
+#         typecheck must reject non-indexable receivers before lowering
+#         (E_NotIndexable)
+#
+# That is an ICE (`debug_assert!` in the index-lowering fall-through), not a
+# link error. Do not recap this cell as `undefined reference to
+# VectorIter__int64_t__map` — that was a different recap of a different
+# spelling.
+#
+# MEASURED POST-FIX at `5d43cedd`: C and LLVM print `12`. ASan-clean on C
+# (`detect_leaks=1`).
+#
+# ⚠ NOT a top-level fixture: the SELF-HOST lane emits C that will not compile
+# (`incompatible types when assigning to type
+# '__gg_MapIter__VectorIter__int64_t__int64_t__int64_t__int64_t' from type
+# 'int'` — the Callable-param return is still I64 on that lane). A top-level
+# placement would register a self-host non-MATCH against
+# `RUNTIME_DIFF_NONMATCH_CEILING`. The argument is a TOP-LEVEL FUNCTION, not a
+# closure literal, so this is not `t0526` and not `t0877`.
+
+int times_six(int x):
+    return x * 6
+
+int apply(Callable[int(int)] f):
+    Vector[int] v = [2]
+    return v.iter().map(f).collect()[0]
+
+void main():
+    print(int_to_str(apply(times_six)))

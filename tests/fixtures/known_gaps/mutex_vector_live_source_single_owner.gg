@@ -1,0 +1,12 @@
+# D53 NEG — named Mutex place at a consuming position (live-source cell).
+# CELL: lock=Mutex · position=push · source=named place LIVE past the call.
+# The reject is liveness-independent: a bare named unique lock never moves.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+# RED at 4850bf38: `gg check` ACCEPT, C/LLVM printed `1\n5`.
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Vector[Mutex[int]] all = []
+    all.push(m)
+    print(f"{all.len()}")
+    print(f"{m.lock().get()}")

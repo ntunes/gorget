@@ -848,9 +848,49 @@ int guess_return_type(SpannedExpr sexpr, GirModule &gmod, int expected_type):
 # want the closure's OWN return type, not a context-coerced one. The
 # STRING_MARKER sentinel resolves to the `GorgetString` tid exactly as the
 # sig-side helpers do.
-int combinator_closure_ret_type(SpannedExpr closure_arg, GirModule &gmod):
+int combinator_closure_ret_type(LowerCtx ctx, SpannedExpr closure_arg, GirModule &gmod):
     int u = I64_TYPE
     match closure_arg.expr:
+        case EIdentifier(cc_name):
+            # A `Callable[U(T)]` PARAMETER passed by NAME (`o.map(f)`).
+            # `guess_return_type`'s EIdentifier arm consults `fn_sigs` only,
+            # and a callable param is never in `fn_sigs` — it would fall to
+            # `I64_TYPE` and mint `Option__int64_t` for a `String`-returning
+            # callable, so the payload slot is 8 bytes and the closure is
+            # called through an `int64_t(*)` cast. The declared return type
+            # is already on the local's own type: callable params are passed
+            # ByPtr, so peel the Ptr layers and read the `GtFnPtr` return —
+            # the same typed read the direct `__callable_N` call site
+            # performs in `lower_expr.gg`. A closure VALUE local carries the
+            # erased `GorgetClosure` struct instead, and its return lives in
+            # the `closure_value_ret_type` side-channel the make-site wrote.
+            bool cc_found = false
+            int cc_local = nl_get(ctx, cc_name)
+            if cc_local >= 0:
+                int cc_tid = ctx.locals.get(cc_local).unwrap().type_id
+                int cc_peeled = peel_ptr_tid(&gmod, cc_tid)
+                if cc_peeled >= 0 and cc_peeled < gmod.type_table.len():
+                    GirType cc_gt = gmod.type_table.get(cc_peeled).unwrap()
+                    match cc_gt:
+                        case GtFnPtr(_, cc_ret):
+                            # GUARD on `!= UNIT_TYPE`, same reason as the
+                            # `__callable_N` site: a recovered `void` return
+                            # must not be cast over a used result.
+                            if cc_ret != UNIT_TYPE:
+                                u = cc_ret
+                                cc_found = true
+                        else:
+                            pass
+                if not cc_found:
+                    String cc_key = ctx.current_fn_name + "\0" + int_to_str(cc_local)
+                    if gmod.closure_value_ret_type.contains(cc_key):
+                        int cc_cv = gmod.closure_value_ret_type.get(cc_key).unwrap()
+                        if cc_cv != UNIT_TYPE:
+                            u = cc_cv
+                            cc_found = true
+            if not cc_found:
+                # A top-level function NAME used as a value — `fn_sigs` has it.
+                u = guess_return_type(closure_arg, &gmod, -1)
         case EClosure(_, cbody):
             # Explicit `(p…): body` — return type is the last statement's
             # type (SReturn payload / SExpr tail), mirroring compute_closure_sig.

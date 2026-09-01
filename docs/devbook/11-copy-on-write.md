@@ -319,8 +319,10 @@ note (it is dropped at GIR→LIR until a LIR consumer needs it).
 
 **The explicit table has LANDED (planner round 3): `MaterializePlan`.** The
 per-function `MaterializePlan` (a `Vec<MaterializeDirective>` on the
-`LoweringContext`, reset per function through `clear_locals` — the universal
-per-function-body reset every lowering entry funnels through) is the reason enum's
+`LoweringContext`, reset per function through `functions::begin_function_body` —
+the single per-function-body entry that performs the reset AND the five CoW /
+auto-move prescans as ONE operation, which every one of the eleven body-lowering
+paths calls) is the reason enum's
 directive table made concrete: each `MaterializeDirective { root: LocalId, reason:
 ImplicitCloneReason, position: MaterializePosition }` records WHICH root to break
 the alias on, WHY (the cost tag stamped on the emitted clone), and at WHICH

@@ -1,0 +1,13 @@
+# D53 NEG — named RWLock place at a consuming position (live-source cell).
+# CELL: lock=RWLock · position=push · source=named place LIVE past the call.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+# RED at 4850bf38: `gg check` ACCEPT, C/LLVM printed `1\n5`.
+
+from std.sync import RWLock
+
+void main():
+    RWLock[int] r = RWLock[int](5)
+    Vector[RWLock[int]] all = []
+    all.push(r)
+    print(f"{all.len()}")
+    print(f"{r.read().get()}")

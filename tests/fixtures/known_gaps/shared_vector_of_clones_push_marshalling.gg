@@ -1,0 +1,35 @@
+# REGRESSION (was todo/t0840, both real backends): the Book Ch16 "many owners"
+# idiom — several `Shared` handles to ONE value, held in a `Vector`.
+#
+# TWO defects, needing OPPOSITE repairs, and neither greens this cell alone:
+#
+#   WRITE  `gorget_array_push(__v10, __v12)` passed the handle VALUE where an
+#          ADDRESS is required, so the runtime memcpy'd 8 bytes out of the
+#          CONTROL BLOCK (the refcount) into the element slot. Repaired by
+#          spilling the handle to a slot and passing its address — the
+#          `AbiKind::VoidElem` arg marshalling in LIR lowering
+#          (`spill_handle_value_at_void_elem`).
+#   READ   `Shared__int64_t__get(__v53)` received the SLOT ADDRESS, one deref
+#          short, because `.get(i)` returns a ratified VIEW
+#          (`Option__Ref__Shared__int64_t`, decisions.md:78/:1395) and the
+#          by-value `self` convention was not applied to it. Repaired by a
+#          LOAD at the receiver chokepoint (`deref_by_value_handle_receiver`).
+#
+# CELL: container=Vector · handle=Shared · payload=int · producing-arm=push ·
+#       read=`.get(i).unwrap().get()` + `strong_count`.
+# The write side ALONE is isolated by `shared_vector_push_write_only.gg`; the
+# element-read shapes by `shared_vector_element_read_shapes.gg`.
+#
+# Stays in `known_gaps/` (out of the runtime-diff corpus) for the same reason
+# as its live siblings `shared_array_literal_live/dead.gg`: `Shared` is outside
+# the ggdef phase-0 subset and the self-host lane does not lower it.
+
+void main():
+    Shared[int] s = Shared[int](42)
+    Vector[Shared[int]] all = []
+    all.push(s.clone())
+    all.push(s.clone())
+    all.push(s.clone())
+    print(f"{all.len()}")
+    print(f"{all.get(1).unwrap().get()}")
+    print(f"{s.strong_count()}")

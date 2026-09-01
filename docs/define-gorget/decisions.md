@@ -516,6 +516,31 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-09-01 — **D53 RATIFIED (owner): `Mutex` AND `RWLock` ARE UNIQUE LOCKS. SHARING IS `Shared[Mutex[T]]`.** Owner: *"Add Mutex/RWLock to the E_MoveWithoutOperator list, as you recommended."* Same-day re-examination (owner stands with the unique-lock recommendation): **Mutex is not multi-owner.** Sharpened in place — not a second dated copy.
+
+  **TWO AXES, ONE COMPOSITION.** Exclusion (`Mutex[T]` / `RWLock[T]`: many tasks may mutate `T`, one at a time) and sharing (`Shared[T]`: many names own the *lock object*) are orthogonal. The book table that called `Mutex[T]` "Shared + mutable" describes the first axis (interior mutability) and was copied into the ownership chapter as if it were the second. That is how Mutex landed on the "sanctioned multi-owner escape hatch" list next to `Shared`/`Weak`/`Channel` — **aspirational, never true in the runtime.** `GorgetMutex` is a unique heap object; `gorget_mutex_free` destroys it; there is no refcount field. The resource table tagging it `CsRefCounted` with `clone_fn = None` is a lie: pointer copy looks like sharing and drop runs `free` N times. That is `t0908`. The documented concurrent counter is already `Shared[Mutex[int]]`; `shared int x` desugars to the same wrap.
+
+  **THE LANGUAGE REASON (not "no clone path ⇒ single-owner").** Duplicating a mutex is either a double-free (alias the pointer) or a second lock (deep-copy the payload). Both are wrong. Go's `sync.Mutex` is the cautionary tale (`go vet -copylocks`); C++ deletes copy *and* move on `std::mutex`; Rust's `Mutex<T>` is move-only, not `Clone`, and sharing is `Arc<Mutex<T>>`. Rejection is the only meaning-preserving option. A clone path that shares would make Mutex a second `Shared` and `Shared[Mutex[T]]` a double wrap; a clone path that deep-copies is Go's bug with extra steps; a collection-holds-a-borrow trades the double-free for a dangling lock. All three were considered and refused.
+
+  **WHAT FORCED THE QUESTION — measured, both backends, `gg check` clean throughout.** `Vector[Mutex] all; all.push(m); all.push(m)` is **rc 134 double-free** (heap-use-after-free under ASan). The single-slot case was repairable in lowering (source degrades to a borrow of the slot); the N-slot case is not, and the reason is structural: **`elem_drop` is a PER-ARRAY pointer**, so every slot holding the handle drops it. ⊕ The one-slot regression was itself instructive — it appeared only once D2's write fix put a *real* handle where `elem_drop` could reach it; the pre-fix "clean" run was clean because the slot held garbage.
+
+  **THE RULING.** `Mutex` and `RWLock` join the by-design single-owner set (`Guard`, `Task`, `TaskGroup`, `Box[T]`, `Owned[T]`, closures / `Callable[T]`). The safety pass emits `E_MoveWithoutOperator` at:
+  1. bare-assign,
+  2. constructor / struct / enum-init / container-literal elements,
+  3. **consuming positions** (`push` / `put` / `set` / `insert` / `send` / `v[i] = x`).
+  At a *plain non-consuming* function or method call they are borrowed, so no operator is needed. A fresh temporary (`all.push(Mutex(0))`, `Mutex b = make()`) is not a live place and moves without an operator. Independent locks in a collection are `all.push(Mutex(0))` or `all.push(^m)`. Sharing one lock is `Vector[Shared[Mutex[T]]]` / `Shared[Mutex[T]]`.
+
+  ⛔ **CONSUME POSITIONS ARE LOAD-BEARING, NOT IMPLIED.** `needs_explicit_move` today fires at assign + ctor + literals; `push` is a method call and the carve-out currently says plain calls are borrows. **Without a consume-position gate, `all.push(m); all.push(m)` still typechecks and t0908 stays a runtime bomb.** The original "gap closes with no lowering change" line was false as a mechanism claim. Check-time reject is the write-site fix (Core #1); any lowering "unconditional transfer" of a live Mutex is defense-in-depth that becomes unreachable for rejected programs, not a substitute.
+
+  **THE FIX-IT IS NOT `.clone()`.** Mutex/RWLock have no clone path and must not grow one. The diagnostic names `^source` (move) or `Shared[Mutex[T]]` (share). Offering `.clone()` as a remedy for a type that cannot clone is a bad diagnostic.
+
+  **CHANNEL IS THE SIBLING, NOT A SLOGAN.** `GorgetChannel` actually has `volatile int64_t refcount`. It stays on the multi-owner list if clone/drop are balanced. Do not drag Channel onto D53 because Mutex was filed in the same bucket.
+
+  **WRITE-THROUGH.** `docs/language-reference.md` §Ownership (by-design single-owner list; multi-owner hatch is `Shared`/`Weak`/`Channel` only). `docs/language-design.md` §3.3 and `docs/book/11-ownership.md` drop Mutex from the hatch. Ch16's *purpose* table ("use Mutex when you need exclusive shared mutability") may stand; its *ownership* column must not say Mutex is multi-owner. They stay un-drop-tainted by their payload — that axis is unchanged. ⚠ `AGENTS.md` is a SECOND spelling, stale by the consume-position clause and by two names, at 0 bytes of `AGENTS_MD_SIZE_CEILING` headroom — compact a neighbouring rule rather than raising the ceiling; prefer cite-the-ledger over a second enumeration.
+
+  **SCOPE:** accept/reject surface change ⇒ all three lanes (Rust gg C+LLVM · self-host · ggdef), a NEG fixture per rejected position (assign · ctor/init · **each consume sibling**), and the write-through above. R48 Track D2 carries the fixtures; `todo/t0908` pins the reject resolution (the repro becomes a reject test). The Python-shaped path is already `shared int x`. Explicit `Mutex` is the systems path and is unique, like Rust.
+
+
 - 2026-07-17 — **🎯 2T RATIFIED (owner): drop-taint × materialize = REJECT — materialize-on-write
   is the SEVENTH implicit-copy position.** At every materialize-on-write site (a write to a
   bare/borrowed binding that would CoW-materialize a private copy), a DROP-TAINTED source

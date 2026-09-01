@@ -1,0 +1,34 @@
+# KNOWN GAP — BOTH REAL BACKENDS under `--sanitize`; the value lanes print the
+# RIGHT answer, so no stdout-comparing fixture can see it.
+#
+# Cloning a `Vector[Shared[int]]` does not incref its elements.
+# `gorget_array_clone` memcpys the element bytes and then calls `elem_clone` on
+# each slot IF the array carries one — the hook that makes a `Vector[String]`
+# clone deep. A refcount element type has `clone_fn` (the by-value incref) but
+# NO `clone_inplace_fn`, so `elem_clone_fn_for_type` returns `None`, the slot
+# is left NULL, and the two arrays end up aliasing the same handles with the
+# refcount never raised. Both then drop:
+#
+#   AddressSanitizer: heap-use-after-free in gorget_shared_drop
+#     <- Shared__int64_t__drop  <- gorget_array_free  <- gorget_array_free
+#
+# DISCRIMINATOR: the identical shape with `String` elements
+# (`Vector[Vector[String]]`, inner built from a runtime concat) is ASan-clean,
+# because `GorgetString` carries `clone_inplace_fn`.
+#
+# NOT the R48 Track D2 marshalling class (`t0840`): the push of the INNER
+# handles is correct, and so is every read. The missing fact is one metadata
+# field on the refcount TypeDefs plus the `{T}__clone_inplace` wrapper to go
+# with it — refcount ARITHMETIC at the container-clone boundary.
+#
+# INTENDED (asserted by the wired test): prints `1` then `6`, rc 0, ASan-clean.
+# Filed as todo/t0907.
+
+void main():
+    Shared[int] s = Shared[int](6)
+    Vector[Shared[int]] inner = []
+    inner.push(s.clone())
+    Vector[Vector[Shared[int]]] outer = []
+    outer.push(inner.clone())
+    print(f"{outer.len()}")
+    print(f"{outer.get(0).unwrap().get(0).unwrap().get()}")

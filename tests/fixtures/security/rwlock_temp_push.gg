@@ -1,0 +1,11 @@
+# D53 POS — temp at a consuming position.
+# CELL: lock=RWLock · position=push · source=typed temp.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+
+from std.sync import RWLock
+
+void main():
+    Vector[RWLock[int]] all = []
+    all.push(RWLock[int](0))
+    print(f"{all.len()}")
+    print(f"{all.get(0).unwrap().read().get()}")

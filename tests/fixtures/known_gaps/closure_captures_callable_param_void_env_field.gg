@@ -1,0 +1,56 @@
+# KNOWN GAP — a closure that CAPTURES a `Callable[T]` PARAMETER cannot be
+# compiled: the captured value's env field is typed `unit`, so the generated C
+# dereferences a `void` slot.
+#
+# MECHANISM, read at HEAD (not guessed). A `Callable[T]` parameter's GIR local
+# type is ERASED to unit. `ClosureLowering::lower_closure`
+# (`src/ir/lowering/closures.rs`) builds the env struct's field types straight
+# from each capture's `type_id` (`pointee_type(..).unwrap_or(cap.type_id)`), so
+# the field for `f` is `unit` — and loading it emits
+#
+#     __v4 = (void*)&((__gg___Closure_0 *)(__v3))->f;
+#     __v5 = *(void *)(__v4);        <-- error: void value not ignored as it
+#                                        ought to be
+#
+# on C, and `void type only allowed for function results` from llc on LLVM.
+# There is a SECOND fault one line further down: the indirect call inside the
+# closure body is cast `((int64_t(*)(void*, void*))...)` even for a
+# `String`-returning callable, because the enclosing function's
+# `callable_return_types` / `callable_param_types` sidecars are not propagated
+# into the lifted closure's own `func_state` (inside the closure, `f` is an env
+# field, not the outer local the sidecar is keyed on).
+#
+# ⚠ DISCRIMINATE FROM `t0770` (fixed): that one is about the combinator
+# adapter's own reader of the callable's RETURN TYPE, and its reader 5 — the
+# closure-body return-type inference in `closures.rs` — IS fixed and DOES fire
+# on this program (verified by instrumentation). It is not sufficient: the
+# closure's registered return type is re-pinned from the emitted body, and the
+# body cannot be emitted at all while the env field is `void`. So this is a
+# CAPTURE-TYPING + sidecar-propagation gap, at the closure boundary, not a
+# reader defect.
+#
+# ⚠ DISCRIMINATE FROM `t0526` (closure-env TypeDef built with no drop
+# strategy): that one is about the env's DROP, this one about a field's TYPE.
+# And from `t0026` (capture of a collection-element borrow returns the
+# address): that capture has a real type and compiles.
+#
+# THE DESIGN QUESTION THE FIX OWES AN ANSWER TO: a callable value is a fat
+# pointer (code pointer + environment pointer). Capturing one BY VALUE copies
+# the pair, which aliases the captured environment — so the fix has to say
+# whether a captured `Callable` is a borrow of the outer callable (lifetime
+# tied to it) or an owned copy. That is why this is filed rather than patched.
+#
+# NEGATIVE CONTROL: the identical program with a TOP-LEVEL FUNCTION in place of
+# the captured parameter builds and prints `hello!` on both backends.
+#
+# INTENDED: prints `hello!`, rc 0, on C and LLVM.
+
+String mk(String a, String b):
+    return a + b
+
+void go(Callable[String(String)] f):
+    Callable[String()] g = (): f("hel")
+    print(g())
+
+void main():
+    go((String s): mk(s, "lo!"))

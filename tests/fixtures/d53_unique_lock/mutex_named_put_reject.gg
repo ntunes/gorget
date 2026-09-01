@@ -1,0 +1,10 @@
+# D53 NEG — named Mutex at Dict.put (consume sibling).
+# CELL: lock=Mutex · position=put · source=named place.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+# RED at 4850bf38: `gg check` ACCEPT, C rc 134 on N-slot put.
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    Dict[int, Mutex[int]] d = {}
+    d.put(1, m)
+    print(d.len())

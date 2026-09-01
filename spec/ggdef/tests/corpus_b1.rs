@@ -55,6 +55,38 @@ use std::path::{Path, PathBuf};
 /// `cow_for_bare_resource_elem_materialize`) ARE in the subset — ggdef
 /// adjudicates them against their `run_gg` expectation (`1`).
 const EXCLUDE: &[&str] = &[
+    // ⚠ ADDED 2026-08-31 AT R48 INTEGRATION, AND THE RECURRENCE IS THE POINT.
+    // `cow_comprehension_fresh_mint_control.gg` arrives with `800cfcc2`
+    // (Track D1, `t0841`) as the GREEN control proving the axis is an
+    // already-owned live NAME, not "a loop-invariant body" — it had to be
+    // committed because the control the item cited was a `.map()` fixture, not
+    // a comprehension. ggdef cannot elaborate a comprehension at all
+    // (`expression `unsupported` is outside the phase-0 subset`), and the
+    // subset gap is ALREADY FILED as `todo/t0003` — so this is Core #9's
+    // "a note + a filed subset gap", not a silent exclusion.
+    // ⛔ THIS IS `todo/t0801`'S CLASS, RECURRING IN THE ROUND THAT CLOSED IT:
+    // corpus membership is glob-minus-exclusions, so ANY new `cow_*` fixture is
+    // opted IN by default and reddens a lane its own track never ran. D1's
+    // gauntlet was clean; the orchestrator integrated without `-p ggdef` (a
+    // SEPARATE target `--test integration` never touches) and main went red.
+    // The declared-membership guard that would have caught it at add-time is
+    // R48 Track E-B3's deliverable and was still in gauntlet when D1 landed.
+    "cow_comprehension_fresh_mint_control.gg",
+    // ⊕ THE OTHER ELEVEN FROM THE SAME COMMIT — same measurement, same gaps:
+    // 12 of D1's 13 new `cow_*` fixtures are out-of-subset (comprehensions plus
+    // the `meta for`/`meta while` pair); only
+    // `cow_for_zero_trip_body_kill_control.gg` elaborates. `todo/t0003`.
+    "cow_comprehension_invariant_dict_value.gg",
+    "cow_comprehension_invariant_filter_arm.gg",
+    "cow_comprehension_invariant_in_condition.gg",
+    "cow_comprehension_invariant_nested.gg",
+    "cow_comprehension_invariant_owned_name.gg",
+    "cow_comprehension_invariant_struct_payload.gg",
+    "cow_comprehension_invariant_vector_source.gg",
+    "cow_loop_invariant_owned_name_push_control.gg",
+    "cow_meta_for_zero_trip_body_kill.gg",
+    "cow_meta_while_false_guard_body_kill.gg",
+    "cow_set_comprehension_invariant_in_condition.gg",
     // R45 memory-safety regression net — see the identical block in
     // corpus_b.rs. Both gates share the phase-0 subset, so an exclusion in one
     // without the other is a red in the sibling (Core #4: fix the class).
@@ -80,6 +112,20 @@ const EXCLUDE: &[&str] = &[
     "liveness_use_inside_named_scope.gg",
     "liveness_use_inside_with_block.gg",
     "liveness_use_inside_assert_return.gg",
+    // R48 Track C — the per-function-body prescan net. Of its four
+    // equip-FREE cells, one (`cow_generic_fn_view_survives_realloc.gg`) is
+    // in-subset and adjudicated here at `helloworld`; the other three are out
+    // of subset, each row citing the gate that fires at HEAD. Mirrors the
+    // identical block in corpus_b.rs (Core #4: the two gates share the phase-0
+    // subset, so an exclusion in one without the other reds the sibling).
+    // "expression `unsupported` is outside the phase-0 subset" — the closure
+    // literal whose body is the cell under test.
+    "cow_closure_body_view_survives_realloc.gg",
+    // "item kind other is outside the phase-0 subset" — `suite setup` /
+    // `suite teardown` / `test` / `bench` blocks. These cells exist only on the
+    // `gg test` lane, which `gg build` never lowers at all.
+    "cow_test_body_view_survives_realloc.gg",
+    "cow_bench_body_view_survives_realloc.gg",
     "deadwrite_ok_atomic_add.gg",
     "cow_value_index_field_writethrough.gg",
     "cow_dict_index_field_writethrough.gg",
@@ -384,5 +430,24 @@ fn corpus_b1_all_match() {
     // 8th is EXCLUDEd above on `.first()` (`todo/t0753`) → 137.
     // ⚠ The 130 was never reached while this gate was RED on that elaboration
     // error, so it had not absorbed the 8; the arithmetic starts from 130.
-    assert_eq!(fixtures.len(), 137, "B1 gate set drifted from 137 fixtures");
+    // R48 Track D1 (`t0841`, `800cfcc2`): 13 new `cow_*` fixtures; 12 EXCLUDEd
+    // above as out-of-subset (measured one-by-one against `ggdef run`, not
+    // assumed — comprehensions `todo/t0003`, the `meta for`/`meta while` pair on
+    // the same phase-0 boundary), only `cow_for_zero_trip_body_kill_control.gg`
+    // elaborates and is gated. Count +13 additions − 12 EXCLUDE = +1 net → 138.
+    // ⛔ Same recurrence as B2: glob-minus-exclusions membership means a new
+    // `cow_*` fixture reddens this lane by default — `todo/t0801`'s finding, in
+    // the round that closed it. The add-time guard is R48 Track E-B3's.
+    // ⚠ THE TRAP THIS RESOLUTION WALKED INTO AND OUT OF: R48 Track C ALSO
+    // computed 138 for this assert, from the SAME 137 base, for a DIFFERENT
+    // fixture. Two branches agreeing on a number is not two branches agreeing on
+    // a population. Re-derived from D1's 138, not added to the pre-D1 137.
+    // R48 Track C (the per-function-body prescan centralisation) landed 8
+    // `cow_*` path cells. Four carry an `equip` block and belong to B2. Of the
+    // remaining four, three are EXCLUDEd above with their cited gates and the
+    // fourth (`cow_generic_fn_view_survives_realloc.gg`) is NOT in this
+    // population at all — it lives in `tests/fixtures/self_host_gaps/` because
+    // the self-host lane cannot link it (`todo/t0922`), and this glob only sees
+    // top-level `tests/fixtures/*.gg`. Count +0 net → 138.
+    assert_eq!(fixtures.len(), 138, "B1 gate set drifted from 138 fixtures");
 }

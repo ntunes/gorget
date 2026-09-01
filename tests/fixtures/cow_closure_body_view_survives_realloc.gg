@@ -1,0 +1,36 @@
+# CoW view-materialization on the CLOSURE BODY lowering path.
+#
+# AXIS CELL — path = `emit_closure_call_function` (src/ir/lowering/closures.rs).
+# One of eleven function-body-lowering paths, and the only one whose body is a
+# bare `Spanned<Expr>` rather than a statement block — `FnBodyAst::Expr` is what
+# carries it into the prescans. It used to lower with an EMPTY
+# `cow_reassigned_after`, so the element view stayed a lazy borrow and the 64
+# pushes reallocated it away.
+#
+# ⚠ THE VECTOR IS LOCAL TO THE CLOSURE, DELIBERATELY. The sibling shape where
+# the vector is CAPTURED is a DIFFERENT defect with a different mechanism — the
+# captured collection handle is a borrow bound at capture time
+# (`closures.rs` `field_load` -> `Ptr` + `set_field_borrow`) and goes stale on
+# realloc wherever the realloc is spelled. That one is `todo/t0704`, still open,
+# with its own two repros in `tests/fixtures/known_gaps/`. Measured
+# discriminator: capture -> still rc 139 after this fix; no capture -> rc 0.
+# Do not "generalise" this fixture by hoisting the vector out of the closure —
+# it would stop testing this cell and start failing for t0704's reason.
+#
+# THE REALLOC IS LOAD-BEARING (64 pushes), and the payload is heap-FORCED via
+# `mk` so ASan reports a legible heap-use-after-free, not a bare SIGSEGV.
+#
+# RED-VERIFIED against the pre-fix compiler: rc 139 SIGSEGV on C AND LLVM.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    auto f = ():
+        Vector[String] v = [mk("hello", "world")]
+        String s = v.get(0).unwrap()
+        int i = 0
+        while i < 64:
+            v.push(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy"))
+            i = i + 1
+        print(s)
+    f()

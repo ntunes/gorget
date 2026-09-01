@@ -1,0 +1,31 @@
+# KNOWN GAP — BOTH REAL BACKENDS, `gg check` accepts, rc 139.
+#
+# Evidence for todo/t0406 (non-identifier-callee / signature-erased container
+# element). What this cell DISCRIMINATES from that item's existing repros:
+# they all carry a `&` sigil, so their story is "the borrow tag never reaches
+# either ABI channel". This one has NO sigil at all — a pure by-value
+# `Callable[int(int)]` — and it dies just the same, which shows the defect is
+# the element signature collapsing to the zero-parameter fallback
+# `fn() -> i64`, not the sigil tagging.
+#
+# `push` + `len()` on the same vector is GREEN (the closure-packing wrap at
+# `AbiKind::VoidElem` handles the write); only calling the element back out
+# dies, on BOTH read shapes below.
+#
+# DISCRIMINATED from todo/t0873, the other open `Vector[Callable]` item: that
+# one is a container-LITERAL SEGV and a NULL `elem_drop` (the pushed envs leak).
+# This cell pushes, so it is past the literal arm, and it dies on the CALL, not
+# at drop.
+#
+# INTENDED (asserted by the wired test): prints `1` then `42` then `42`.
+
+void main():
+    Callable[int(int)] f = (int x): x * 2
+    Vector[Callable[int(int)]] fs = []
+    fs.push(f.clone())
+    print(f"{fs.len()}")
+    # index-read call
+    print(f"{fs[0](21)}")
+    # get-chain call through a bound local
+    Callable[int(int)] g = fs.get(0).unwrap()
+    print(f"{g(21)}")

@@ -163,6 +163,9 @@ use ggdef::{parse_frontmatter, Expect};
 // so a new fixture that is never counted in leaves every assert passing —
 // including after the fix it pins is reverted. Verified for these two: with the
 // self-host reject reverted, the SH lane MISMATCHes both and drops to 221 < 222.
+// R48 Track A (+1): `combinator_callable_param.gg` — the corpus's first
+// combinator coverage (Callable-param class). Main's floors at that integrate
+// were 224/224/223 + `MIN_FIXTURES` 224.
 // R48 Track β (+11): the DIRECTIVE-VALIDATION class, `todo/t0825`. Ten rejects
 // — `reject_directive_{scheduler_unknown_value,scheduler_case_mismatch,
 // scheduler_missing_value,unknown_name,unknown_name_with_value,retired_overflow,
@@ -178,7 +181,10 @@ use ggdef::{parse_frontmatter, Expect};
 // (`self_host_typechecker/resolve.gg`). Before this round the self-host
 // validated NO directive at all — it COMPILED, LINKED and RAN every one of the
 // ten reject programs — so all ten are RED-verified on the SH lane by
-// construction, and the floors move by all ELEVEN (223 → 234, SH 222 → 233).
+// construction. Merged floors name both inflows: Track A's +1 combinator seed
+// and Track β's +11 directive seeds (main 224/224/223/`MIN` 224 + 11 →
+// 235/235/234/`MIN` 235). Taking tip's 234 drops A's fixture from the glob
+// guard (silently loosen); taking main's 224 drops the eleven.
 //
 // ⚠ The GRAMMAR half of the same class (`directive trace=1`,
 // `directive scheduler single`, `directive 42`, `directive trace single`) is a
@@ -186,9 +192,9 @@ use ggdef::{parse_frontmatter, Expect};
 // — which reads the `error[E_..]` marker — cannot own it. Those five cells are
 // pinned two-lane in tests/integration.rs instead; do not "complete" this list
 // by adding them here without a code.
-const C_MATCH_FLOOR: usize = 234;
-const LLVM_MATCH_FLOOR: usize = 234;
-const SELFHOST_MATCH_FLOOR: usize = 233;
+const C_MATCH_FLOOR: usize = 235;
+const LLVM_MATCH_FLOOR: usize = 235;
+const SELFHOST_MATCH_FLOOR: usize = 234;
 // SH lane doesn't yet reproduce d22_slice_clamp.gg — SH lowerer needs the
 // Range-in-index lowering wired (parser mirror lands the syntax, but the
 // lowerer's SIndex arm at self_host_lowerer/lower_expr.gg doesn't yet
@@ -202,7 +208,7 @@ const SELFHOST_MATCH_FLOOR: usize = 233;
 /// It equals the C and LLVM MATCH floors. The SELF-HOST floor sits ONE BELOW,
 /// on `d22_slice_clamp.gg` (see `SELFHOST_MATCH_FLOOR`); adding a fixture
 /// raises all four constants together.
-const MIN_FIXTURES: usize = 234;
+const MIN_FIXTURES: usize = 235;
 
 // ─────────────────────────── infrastructure ────────────────────────────
 // tests/spec_conformance.rs is a SEPARATE test target from tests/integration.rs

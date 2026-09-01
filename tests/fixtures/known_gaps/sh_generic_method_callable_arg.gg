@@ -1,0 +1,57 @@
+# KNOWN GAP, SELF-HOST lane — a USER-DEFINED generic method that takes a
+# callable cannot be compiled on the self-host lane at all, on ANY spelling of
+# the argument.
+#
+# `U transform[U, F](self, F f)` needs `F` bound from the argument (shape 1) and
+# `U = F.return_type` (shape 2). The self-host's mirror
+# (`self_host_typechecker/traits.gg::infer_method_targs`) has both shapes, but
+# the emitted C assigns the call's result into a `Str` slot from an `int`:
+#
+#     error: incompatible types when assigning to type 'Str' from type 'int'
+#
+# MEASURED identical BEFORE and AFTER R48 Track A's `t0770` readers, and on
+# every spelling — top-level function, closure literal, and `Callable` PARAM —
+# so it is a PRE-EXISTING self-host lag, not that round's inflow. Rust gg
+# compiles and runs all three spellings correctly (see the live fixture
+# `tests/fixtures/generic_method_callable_param/targ_inference.gg`), which is
+# why that fixture is NOT top-level: a top-level placement would register this
+# self-host non-MATCH against `RUNTIME_DIFF_NONMATCH_CEILING`.
+#
+# ⚠ DISCRIMINATE: the self-host's shape-2 loop has the SAME `RTFunction`-only
+# predicate that made Rust gg's reader 6 blind to a `CallableTrait` wrapper —
+# but fixing only that will NOT close this gap, because the TOP-LEVEL-FN
+# spelling (a plain `RTFunction`, no wrapper anywhere) fails identically. The
+# defect is downstream of the binding.
+#
+# NOT `t0877` (a closure LITERAL's own body typed I64 by `guess_return_type`) —
+# this one has no closure literal in the failing control.
+#
+# INTENDED, on the self-host lane: prints `hello!` then `5` then `hello?`,
+# rc 0 — matching Rust gg, which already does.
+
+from std.conv import int_to_str
+
+String mk(String a, String b):
+    return a + b
+
+struct Holder:
+    String name
+
+equip Holder:
+    U transform[U, F](self, F f): return f(self.name)
+
+String bang(String s):
+    return mk(s, "!")
+
+int length_of(String s):
+    return s.len()
+
+String via_callable_param(Callable[String(String)] f):
+    Holder h = Holder(mk("hel", "lo"))
+    return h.transform(f)
+
+void main():
+    Holder h = Holder(mk("hel", "lo"))
+    print(h.transform(bang))
+    print(int_to_str(h.transform(length_of)))
+    print(via_callable_param((String s): mk(s, "?")))

@@ -1,0 +1,39 @@
+# REGRESSION (was todo/t0840): the ELEMENT-READ face of the handle class —
+# the shapes that do NOT go through `.get(i).unwrap()`.
+#
+# `v[i]` and `for h in v` both lower to `gorget_array_get*`, which returns the
+# element ADDRESS; `materialize_collection_element` then hands that address to
+# the element type's `clone_fn`. For a deep clone (`gorget_string_clone_to_owned`,
+# `{Struct}__clone`) an address is exactly right. For a REFCOUNT handle it is
+# not: `Shared__T__clone` is the by-VALUE incref written by
+# `TypeMetadata::set_refcount_clone_fn`, so it increfed whatever the slot
+# address pointed at and every later use was a SEGV (rc 139, both backends).
+# Repaired by loading the handle out of the slot first, gated on the typed
+# `is_refcount_clone_type_name`.
+#
+# CELL: container=Vector · handle=Shared · payload=int ·
+#       read={index, for-loop, pop} — one cell per read producer.
+
+void main():
+    Shared[int] s = Shared[int](4)
+    Vector[Shared[int]] all = []
+    all.push(s.clone())
+    all.push(s.clone())
+    all.push(s.clone())
+
+    # index read
+    print(f"{all[0].get()}")
+
+    # for-loop element bind
+    int total = 0
+    for h in all:
+        total = total + h.get()
+    print(f"{total}")
+
+    # pop — the element leaves the collection
+    match all.pop():
+        case Some(h):
+            print(f"{h.get()}")
+        else:
+            print("empty")
+    print(f"{all.len()}")

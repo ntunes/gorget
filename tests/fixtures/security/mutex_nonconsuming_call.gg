@@ -1,0 +1,11 @@
+# D53 POS — plain non-consuming call borrows the unique lock; no operator.
+# CELL: lock=Mutex · position=plain-call · source=named place.
+# ggdef: ABSTAIN (Mutex out of subset; owner: ggdef stays simple).
+
+void peek(Mutex[int] x):
+    print(x.lock().get())
+
+void main():
+    Mutex[int] m = Mutex[int](5)
+    peek(m)
+    print(m.lock().get())

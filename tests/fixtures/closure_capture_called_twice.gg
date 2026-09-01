@@ -1,0 +1,52 @@
+# A closure with HEAP-FORCED resource captures, called TWICE, with each capture
+# forwarded into a CONSUMING position (`push`) inside the body. Both calls, and
+# the outer reads after them, must see the original values.
+#
+# WHAT THIS PINS — the capture's ownership marking at a consuming position.
+# A closure body loads a resource `ByValue` capture out of the env struct as
+# `Ptr(cap.type_id)` and marks the local `LocalOwnership::Borrowed { origin:
+# Field }` (`src/ir/lowering/closures.rs`, the `CaptureMode::ByValue` arm). The
+# env owns the data ACROSS calls; the body only borrows it. So at a consuming
+# position the compiler must COPY, never move: the Ptr materialization clones
+# unconditionally, and `is_ref_local` (true for any `Borrowed`) forces the clone
+# branch of the consume-position decision even where liveness says "last use".
+# If a future change gives env fields real ownership and a header `drop_fn`, the
+# capture stops being a borrow — and this exact program would move the value out
+# of the env on the FIRST call, leaving the SECOND call reading a move-zeroed
+# slot and the env's `drop_fn` double-freeing. Two calls is the whole point: one
+# call cannot see it.
+#
+# ⚠ NO SINGLE-LINE RED IS AVAILABLE AT HEAD — measured, not assumed, so that
+# whoever changes capture ownership knows what actually holds this up:
+#   * stubbing `is_cow_borrow` off changes NOTHING (byte-identical emitted C).
+#     `set_field_borrow` writes `BorrowOrigin::Field`, and `is_cow_borrow`
+#     matches only `CowBorrowPending | CollectionElement | FieldPath` — so it is
+#     already FALSE for a capture. The co-gate here is `is_ref_local`, not
+#     `is_cow_borrow`.
+#   * stubbing the consume-position `Ptr(T)` materialization off changes the
+#     emitted C but not the result — a second materialization site still covers
+#     the shape.
+#   * marking the capture `Owned` instead changes nothing, because the `Ptr(T)`
+#     materialization at a consuming position is unconditional.
+#   * loading the capture BY VALUE (owned + drop-registered), the shape an
+#     owned-env-field design implies, is REJECTED by the GIR resource
+#     field-read validator — that shape is not currently representable.
+# So this fixture is a CLASS GUARD, not a regression pin: it is green today and
+# fails the moment any of those four facts stops holding. It is wired on C, on
+# LLVM, and under ASan (`closure_capture_called_twice_no_leak`), because a
+# double-free or a stale read here can produce correct-looking stdout.
+String mk(String a, String b):
+    return a + b
+
+void main():
+    String greeting = mk("hello", "world")
+    Vector[String] items = [mk("alpha", "beta")]
+    auto f = ():
+        Vector[String] out = []
+        out.push(greeting)
+        out.push(items.get(0).unwrap())
+        print(out.get(0).unwrap() + "/" + out.get(1).unwrap())
+    f()
+    f()
+    print(greeting)
+    print(items.get(0).unwrap())

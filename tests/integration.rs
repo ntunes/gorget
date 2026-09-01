@@ -4462,22 +4462,253 @@ fn div_by_zero_int_traps_float_ieee() {
     run_gg("div_by_zero_int_traps_float_ieee.gg", "inf\n-inf\ntrue");
 }
 
-/// KNOWN GAP (both real backends): the Book Ch16 "many owners" idiom — several
-/// `Shared` handles to one value held in a `Vector` — SEGFAULTS reading an
-/// element that was never written. `all.len()` prints 3, so the container
-/// bookkeeping ran and only the payload store is missing; under `--sanitize`
-/// UBSan names it first, `load of misaligned address 0xbebebebebebebebe`, which
-/// is ASan's UNINITIALISED-HEAP FILL. Filed as `todo/t0840`.
-///
-/// ⚠ Read the UBSan line before the ASan line here: the SEGV address `0x17d7…`
-/// is that fill after the accessor's pointer arithmetic, one frame later, and a
-/// triage that reads only the SEGV concludes "layout disagreement" and aims at
-/// the wrong fix. The self-host lane ALSO traps, so unlike `t0108` there is no
-/// correct lane to use as an oracle.
+// ══════════════════════════════════════════════════════════════════════════
+// R48 Track D2 — one handle type, two calling conventions (`todo/t0840`)
+// ══════════════════════════════════════════════════════════════════════════
+//
+// `Shared[T]`, `Weak[T]`, `Mutex[T]`, `Channel[T]` are C typedefs to
+// `Gorget<Family>*`: the POINTER IS THE VALUE. Their LIR representation is
+// therefore `LirType::Ptr`, indistinguishable BY REPRESENTATION from an
+// address-of-something — and three separate consumers picked the wrong one:
+//
+//   • the `AbiKind::VoidElem` argument marshalling stored the handle VALUE
+//     where the runtime memcpys FROM an address (every consuming position:
+//     push / insert / set / index-assign / container literal / map put);
+//   • the method-receiver marshalling passed a BORROW of a handle straight
+//     through to a by-VALUE `self` (`.get(i).unwrap().get()`);
+//   • the collection-element read handed the element ADDRESS to the by-VALUE
+//     refcount incref (`v[i]`, `for h in v`, `.pop()`).
+//
+// Two of those need an address-of and one needs a load, which is why no single
+// repair greens the class. Every cell below was rc 139 on BOTH backends before
+// the fix (RED-verified against the pre-fix compiler); the `Mutex` and
+// `Channel` cells are the two the write repair UNMASKED — they "passed" before
+// only because the element slot held garbage nothing looked at.
+//
+// The fixtures live in `known_gaps/` for the same reason their older siblings
+// `shared_array_literal_live/dead.gg` do: they are LIVE Rust-lane pins, but
+// `Shared`/`Weak`/`Channel` are outside the ggdef phase-0 subset and the
+// self-host lane does not lower them, so they stay out of the runtime-diff
+// corpus.
+
 #[test]
-#[ignore = "known gap (R47/t0840): a Vector[Shared[T]] built by push leaves the element slot unwritten; un-ignore when the push stores the handle"]
-fn known_gap_shared_vector_of_clones_unwritten_slot() {
-    run_gg("known_gaps/shared_vector_of_clones_unwritten_slot.gg", "3\n42");
+fn shared_vector_of_clones_push_marshalling() {
+    // Cell: Vector · Shared · int · push · `.get(i).unwrap().get()` + strong_count.
+    run_gg("known_gaps/shared_vector_of_clones_push_marshalling.gg", "3\n42\n4");
+}
+
+#[test]
+fn shared_vector_push_write_only() {
+    // Cell: the WRITE side isolated — no element is ever read.
+    run_gg("known_gaps/shared_vector_push_write_only.gg", "3\n4");
+}
+
+#[test]
+fn shared_vector_element_read_shapes() {
+    // Cell: read producer = {index, for-loop bind, pop} — the element-clone
+    // convention, distinct from the `.get(i).unwrap()` view.
+    run_gg("known_gaps/shared_vector_element_read_shapes.gg", "4\n12\n4\n2");
+}
+
+#[test]
+fn shared_vector_producing_arms() {
+    // Cell: producing arm = {container literal, insert, set, index-assign}.
+    run_gg("known_gaps/shared_vector_producing_arms.gg", "2\n1\n2\n2\n1");
+}
+
+#[test]
+fn shared_dict_value_handle() {
+    // Cell: container = Dict(value). `Set[Shared[T]]` is a check-time REJECT
+    // (`Shared[int]` is not `Hashable`), so that cell has no lowering path.
+    // Key/value ITERATION is split out to `shared_dict_iteration_value_over_release`
+    // — it over-releases under ASan for an unrelated reason (todo/t0907).
+    run_gg("known_gaps/shared_dict_value_handle.gg", "2\n11\n3");
+}
+
+#[test]
+fn shared_vector_payload_types() {
+    // Cell: payload = {String, struct} — the handle is pointer-sized whatever
+    // it points at, so the repair has to be payload-independent.
+    run_gg("known_gaps/shared_vector_payload_types.gg", "2\nhi!\n3\n2\n3");
+}
+
+#[test]
+fn shared_vector_root_shapes() {
+    // Cell: root = struct field. The nested-container and function-return roots
+    // are split out — they fail for two other classes (todo/t0907 and
+    // todo/t0108), each with its own pinned cell.
+    run_gg("known_gaps/shared_vector_root_shapes.gg", "2\n6\n3");
+}
+
+#[test]
+fn weak_vector_bound_handle() {
+    // Cell: handle = Weak. Same `Gorget<Family>*` typedef, same defect.
+    run_gg("known_gaps/weak_vector_bound_handle.gg", "2\n9");
+}
+
+#[test]
+fn channel_clone_by_value_incref() {
+    // Cell: handle = Channel — and the first half needs NO container: the
+    // generic `.clone()` lowering handed `&handle` to the by-VALUE incref.
+    run_gg("known_gaps/channel_clone_by_value_incref.gg", "7\n1\n9");
+}
+
+#[test]
+fn channel_clone_consuming_positions() {
+    // Cell: the SIBLING-SITE sweep — four different consumers of the same
+    // `clone_fn`, each sending through its own clone's product. The fifth
+    // position (a clone returned across a function boundary) belongs to
+    // `todo/t0108` and ships as `channel_bare_param_callee_drop_uaf`.
+    run_gg("known_gaps/channel_clone_consuming_positions.gg", "1\n2\n3\n4\ndone");
+}
+
+/// KNOWN GAP — both real backends under `--sanitize`; the VALUE lanes print the
+/// right answer, which is why no stdout-comparing fixture can see it.
+/// `for (k, v) in d` over a `Dict[String, Shared[int]]` over-releases the value
+/// bind, so `gorget_map_free` walks its second entry into an already-freed
+/// control block. The identical loop over `String` values is clean, and so is
+/// `for h in v` over a `Vector[Shared[int]]` — the Vector element bind takes
+/// the Ptr-borrow path and never copies. The ROOT is shared with the
+/// nested-clone cell — `gorget_map_iter_value` calls the same `val_clone`
+/// in-place hook `gorget_array_clone` calls as `elem_clone`, NULL for a
+/// refcount element — so ONE fix closes both. Filed as `todo/t0907`.
+#[test]
+#[ignore = "known gap (todo/t0907): `for (k, v) in d` over refcount VALUES over-releases — heap-use-after-free in gorget_map_free under --sanitize; the value lanes print the right answer"]
+fn known_gap_shared_dict_iteration_value_over_release() {
+    run_gg("known_gaps/shared_dict_iteration_value_over_release.gg", "4");
+}
+
+/// KNOWN GAP — both real backends under `--sanitize`; the VALUE lanes print the
+/// right answer. Cloning a `Vector[Shared[int]]` does not incref its elements:
+/// `gorget_array_clone` consults `elem_clone`, a refcount element type carries
+/// `clone_fn` but no `clone_inplace_fn`, so the slot is NULL and the two arrays
+/// alias the same handles with the refcount never raised. The identical shape
+/// with `String` elements is clean. Filed as `todo/t0907`.
+#[test]
+#[ignore = "known gap (todo/t0907): cloning a Vector[Shared[T]] does not incref its elements (no clone_inplace_fn) — heap-use-after-free under --sanitize; the value lanes print the right answer"]
+fn known_gap_shared_nested_vector_clone_over_release() {
+    run_gg("known_gaps/shared_nested_vector_clone_over_release.gg", "1\n6");
+}
+
+/// KNOWN GAP — both real backends under `--sanitize`, `gg check` accepts.
+/// Evidence for `todo/t0108` in its `Channel` costume: `needs_param_drop` keys
+/// on TYPE alone, so a BARE `Channel[int]` parameter — a borrow under
+/// CoW-default-borrow — is dropped by the CALLEE at scope exit and the caller's
+/// channel goes to zero underneath it (`AddressSanitizer: heap-use-after-free`
+/// in `gorget_channel_release` ← `Channel__int64_t__drop` ← the callee).
+/// There is no `.clone()` anywhere in the program, which is what discriminates
+/// it from the R48 Track D2 clone-convention class.
+#[test]
+#[ignore = "known gap (todo/t0108): a bare refcount-handle PARAM is dropped by the callee — heap-use-after-free under --sanitize; un-ignore when needs_param_drop becomes sigil-aware"]
+fn known_gap_channel_bare_param_callee_drop_uaf() {
+    run_gg("known_gaps/channel_bare_param_callee_drop_uaf.gg", "in\n1");
+}
+
+#[test]
+fn mutex_vector_single_owner_move() {
+    // D53: a named unique-lock place at push is E_MoveWithoutOperator.
+    check_d53_unique_lock_reject("known_gaps/mutex_vector_single_owner_move.gg", "Shared[Mutex[T]]");
+}
+
+#[test]
+fn rwlock_vector_single_owner_move() {
+    check_d53_unique_lock_reject("known_gaps/rwlock_vector_single_owner_move.gg", "Shared[RWLock[T]]");
+}
+
+#[test]
+fn mutex_vector_live_source_single_owner() {
+    check_d53_unique_lock_reject(
+        "known_gaps/mutex_vector_live_source_single_owner.gg",
+        "Shared[Mutex[T]]",
+    );
+}
+
+#[test]
+fn rwlock_vector_live_source_single_owner() {
+    check_d53_unique_lock_reject(
+        "known_gaps/rwlock_vector_live_source_single_owner.gg",
+        "Shared[RWLock[T]]",
+    );
+}
+
+#[test]
+fn mutex_vector_two_slots_named_push_reject() {
+    // Was `*_double_free` under the accept resolution; D53 flipped it to reject.
+    check_d53_unique_lock_reject(
+        "known_gaps/mutex_vector_two_slots_double_free.gg",
+        "Shared[Mutex[T]]",
+    );
+}
+
+const D53_MUTEX: &str = "Shared[Mutex[T]]";
+const D53_RWLOCK: &str = "Shared[RWLock[T]]";
+
+#[test]
+fn mutex_vector_d53_consume_siblings_reject() {
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_nslot_named_push_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_two_collections_push_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_two_collections_push_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_put_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_put_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_set_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_set_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_insert_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_insert_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_send_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_send_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_index_store_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_index_store_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_assign_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_assign_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_ctor_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_ctor_reject.gg", D53_RWLOCK);
+    check_d53_unique_lock_reject("d53_unique_lock/mutex_named_array_lit_reject.gg", D53_MUTEX);
+    check_d53_unique_lock_reject("d53_unique_lock/rwlock_named_array_lit_reject.gg", D53_RWLOCK);
+}
+
+#[test]
+fn mutex_vector_d53_class_pin_guard_push_reject() {
+    // Proves the consume hook is the shared helper, not a Mutex costume.
+    check_gg_fails("d53_unique_lock/guard_named_push_reject.gg", "E_MoveWithoutOperator");
+}
+
+#[test]
+fn mutex_vector_d53_pos_temp_caret_nonconsuming() {
+    run_gg("d53_unique_lock/mutex_temp_push.gg", "1\n0");
+    run_gg("d53_unique_lock/rwlock_temp_push.gg", "1\n0");
+    run_gg("d53_unique_lock/mutex_caret_push.gg", "1\n5");
+    run_gg("d53_unique_lock/rwlock_caret_push.gg", "1\n5");
+    run_gg("d53_unique_lock/mutex_nonconsuming_call.gg", "5\n5");
+    run_gg("d53_unique_lock/rwlock_nonconsuming_call.gg", "5\n5");
+}
+
+/// KNOWN GAP — C backend only; `--backend=llvm` is CORRECT (lane divergence).
+/// `Shared[String]("a literal")` — the form `docs/language-design.md:1846`
+/// teaches — passes `gg check`, then `cc` refuses the emitted call:
+/// `incompatible type for argument 1 of 'Shared__GorgetString__new'`, because
+/// the `Str`-typed constructor parameter is marshalled as `const char*`.
+/// Feeding the same constructor a `String` VARIABLE works on both lanes.
+///
+/// NOT the `t0840` handle-marshalling class: no container, no element slot, no
+/// `AbiKind::VoidElem` position — this is argument marshalling into a
+/// synthesized inline wrapper.
+#[test]
+#[ignore = "known gap (R48 Track D2): Shared[String](\"literal\") fails the C build (Str ctor param marshalled as const char*); LLVM is correct. Un-ignore when the C emit boundary marshals the Str argument"]
+fn known_gap_shared_string_literal_ctor_cc_fail() {
+    run_gg("known_gaps/shared_string_literal_ctor_cc_fail.gg", "hi");
+}
+
+/// KNOWN GAP — both real backends, rc 139, `gg check` accepts. Evidence for
+/// `todo/t0406`: calling a `Callable` back OUT of a container SEGVs because
+/// the element's signature collapses to the zero-parameter fallback
+/// `fn() -> i64`. What this cell adds to that item's existing repros: they all
+/// carry a `&` sigil, this one has NO sigil at all, so the defect is the
+/// erased element signature and not the borrow tagging. `push` + `len()` on
+/// the same vector is green.
+#[test]
+#[ignore = "known gap (todo/t0406): a Callable read back out of a Vector SEGVs — the element signature collapses to fn() -> i64; un-ignore when the element signature reaches callable_alias_sigs"]
+fn known_gap_callable_vector_element_plain_sig_call_segv() {
+    run_gg("known_gaps/callable_vector_element_plain_sig_call_segv.gg", "1\n42\n42");
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -4906,6 +5137,51 @@ fn fstring_interp_match_scrutinee_binding() {
 /// ⚠ Deliberately asserts the OUTPUT: `grep -c lower_fail` on the emitted C
 /// gives 1 for the Vector/Dict arms and 0 for the String/bytes arms, so a
 /// marker-grep guard is structurally blind to half the class.
+/// KNOWN GAP `t0877`, SELF-HOST lane — a closure LITERAL whose body
+/// `guess_return_type` cannot type falls to `I64_TYPE`, so the closure is
+/// emitted `int64_t`-returning. Two arms of the same helper: an `Ok(..)` /
+/// `Error(..)` body with no `expected_type` in scope (the `Some(x)` sibling arm
+/// MINTS `Option__U`; the Result constructors are gated on `expected_type`,
+/// which is `-1` at a closure-argument site), and a body that is a bare
+/// PARAMETER identifier (the EIdentifier arm reads `fn_sigs` only — the
+/// self-host does not register closure params as locals the way Rust gg's
+/// `lower_closure` does). Rust gg compiles and runs both. NOT `t0770`: nothing
+/// is erased here, the inference simply has no arm. NOT `t0230`(b), which is
+/// the same helper's `SMatch`/`SIf`-tail arm returning UNIT.
+#[test]
+#[ignore = "KNOWN GAP t0877: self-host guess_return_type types an Ok(..)-bodied \
+or bare-param-bodied closure literal as int64_t; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_closure_literal_ok_body_typed_int() {
+    sh_known_gap_expect(
+        "known_gaps/sh_closure_literal_ok_body_typed_int.gg",
+        "sh_closure_literal_ok_body_typed_int",
+        "hello?\nbad",
+    );
+}
+
+/// KNOWN GAP `t0879`, SELF-HOST lane — a USER-DEFINED generic method taking a
+/// callable (`U transform[U, F](self, F f)`) cannot be compiled on the
+/// self-host lane on ANY spelling of the argument: top-level fn, closure
+/// literal and `Callable` PARAM all give `incompatible types when assigning to
+/// type 'Str' from type 'int'`. Measured identical before and after R48 Track
+/// A, so it is a pre-existing lag, not that round's inflow — and it is why the
+/// live Rust-lane fixture for the same shape
+/// (`generic_method_callable_param/targ_inference.gg`) is NOT top-level.
+/// ⚠ Fixing the self-host's `RTFunction`-only shape-2 predicate alone will NOT
+/// close it: the top-level-fn spelling has no wrapper anywhere and fails too.
+#[test]
+#[ignore = "KNOWN GAP t0879: self-host cannot compile a user generic method \
+taking a callable, on any argument spelling; TODO.md."]
+#[serial(self_host_lowerer_driver)]
+fn sh_generic_method_callable_arg() {
+    sh_known_gap_expect(
+        "known_gaps/sh_generic_method_callable_arg.gg",
+        "sh_generic_method_callable_arg",
+        "hello!\n5\nhello?",
+    );
+}
+
 #[test]
 #[ignore = "KNOWN GAP: self-host lower_for_{vector,dict,string,string_bytes} drop the \
 loop-else body silently; TODO.md."]
@@ -8169,29 +8445,43 @@ A",
     );
 }
 
+/// LANE CELL — the SELF-HOST half of the generic-equip `&self` mutator axis.
+///
+/// `compute_method_mutates_self` classified NON-generic equips only
+/// (`type_params.len() == 0`), so a generic-equip method was absent from
+/// `method_mutates_self`, the named-receiver gate answered read-only, and the
+/// write went THROUGH: the self-host printed `Y / Y` where Rust gg prints
+/// `Y / A`. The classification now rides along in the generic-instances
+/// pre-pass, keyed on the MONO'D name (`Cell__int64_t__assign`, not the bare
+/// `Cell__assign` — both sides go through `mangle_type_name`).
+///
+/// GRADUATED from `tests/fixtures/known_gaps/` to the top-level parity corpus.
+/// RED-verified: `Y / Y` against the pre-fix lowerer.
 #[test]
-#[ignore = "R38 known self-host gap: a GENERIC-equip `&self` mutator invoked \
-via a bare-value-param named receiver is NOT materialized by the self-host \
-(compute_method_mutates_self classifies non-generic equips only), so it \
-writes through (self-host Y/Y) whereas Rust materializes (Y/A). This asserts \
-the language-intended Y/A (Rust already satisfies it — the gap is self-host \
-runtime-diff-only; the fixture lives in tests/fixtures/known_gaps/ so it \
-stays OUT of the runtime-diff corpus). Un-ignore + promote when generic-equip \
-classification lands (mirror the fn_sigs generic-instances pre-pass). See \
-TODO.md."]
 #[serial(self_host_lowerer_driver)]
 fn cow_named_recv_generic_equip_gap() {
-    // R44 census: the ignore reason says "Rust already satisfies it — the gap
-    // is self-host runtime-diff-only", and the body then asserted the RUST
-    // lane. Rewired onto the SH lane, which prints `Y / Y` at HEAD (the write
-    // goes through where Rust materializes) — the filed symptom, unchanged.
     assert_self_host_stdout(
-        "known_gaps/generic_equip_mutator_named_recv.gg",
+        "cow_generic_equip_named_recv.gg",
         "generic_equip_named_recv",
         "\
 Y
 A",
     );
+}
+
+/// The RUST control for the same fixture, so the lane cell above is a genuine
+/// cross-lane pin rather than a self-host-only assertion.
+///
+/// ⚠ GREEN ON ARRIVAL, DELIBERATELY — this row is a CONTROL, not coverage
+/// (Core #12). Rust gg printed `Y / A` before the fix and prints it after; the
+/// RED lived on the self-host lane (`Y / Y`), which
+/// `cow_named_recv_generic_equip_gap` above asserts. What this pins is that the
+/// self-host lane was brought UP to Rust rather than Rust being dragged down to
+/// meet it: if a later change makes Rust write through, the two rows disagree
+/// instead of quietly agreeing on the wrong answer (Core #8).
+#[test]
+fn cow_generic_equip_named_recv() {
+    run_gg("cow_generic_equip_named_recv.gg", "Y\nA");
 }
 
 // matcluster #4 (was a known BOTH-BACKEND bug, found by the gorget-smith fuzzer,
@@ -15112,6 +15402,37 @@ fn check_gg_fails(fixture: &str, expected_stderr: &str) {
     );
 }
 
+/// D53 unique-lock reject: `E_MoveWithoutOperator`, names `^` / `Shared[…]`,
+/// never offers `.clone()`.
+fn check_d53_unique_lock_reject(fixture: &str, wrap: &str) {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir.join("tests/fixtures").join(fixture);
+    assert!(
+        fixture_path.exists(),
+        "Fixture not found: {}",
+        fixture_path.display()
+    );
+    let output = build_with_timeout(gg_command("check").arg(&fixture_path), fixture);
+    assert!(
+        !output.status.success(),
+        "Expected `gg check` to fail for {fixture}, but it succeeded.\nstdout: {}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("E_MoveWithoutOperator"),
+        "Expected E_MoveWithoutOperator for {fixture}, got:\n{stderr}",
+    );
+    assert!(
+        stderr.contains(wrap),
+        "Expected diagnostic to name `{wrap}` for {fixture}, got:\n{stderr}",
+    );
+    assert!(
+        !stderr.contains(".clone()"),
+        "D53 diagnostic must not offer `.clone()` for {fixture}, got:\n{stderr}",
+    );
+}
+
 /// Like `check_gg_fails` but asserts BOTH that `present` appears in stderr
 /// AND that `forbidden` does NOT. Round XXV Track D §D-3: pins the
 /// single-diagnostic contract on compound-shape borrow-bind fixtures — the
@@ -16346,30 +16667,218 @@ fn cow_user_mutator_two_types_same_name() {
     run_gg("cow_user_mutator_two_types_same_name.gg", "4\n4\n4\n3\n2\n4");
 }
 
-/// KNOWN GAP — `todo/t0763`. A `&self` mutator on a GENERIC equip is a
-/// use-after-free: `Cell[T]`'s `probe(&self)` binds a view of element 0, then
-/// `self.resize(v)` reallocates and the view dangles. rc 139 on BOTH backends.
+// ══════════════════════════════════════════════════════════════════════════
+// THE PER-FUNCTION-BODY PRESCAN NET — one cell per body-lowering PATH
+// ══════════════════════════════════════════════════════════════════════════
+//
+// The five per-function CoW / auto-move prescans (`cow_reassigned_names`,
+// `loop_reassigned_names`, `cow_reassigned_after`, `name_use_counts`,
+// `liveness`) are what makes `is_source_mut_unsafe_at` answer truthfully, and
+// therefore what makes a CoW element view MATERIALIZE before a reallocating
+// mutation. They used to be hand-copied into TWO of the ELEVEN
+// function-body-lowering paths; the other nine lowered with an EMPTY
+// `cow_reassigned_after` and the view dangled — rc 139 SIGSEGV on both
+// backends, ASan heap-use-after-free.
+//
+// `functions::begin_function_body` now does the reset and the prescans as ONE
+// operation and every path calls it; `function_body_prescans_are_centralised`
+// in tests/lints.rs is the arm-count guard. These fixtures are the AXIS: one
+// cell per path, every one of them RED-verified against a compiler built from
+// the pre-fix base commit.
+//
+// ⚠ THE LANE CLAIM IS NOT UNIFORM ACROSS THE AXIS — read the RED column rather
+// than assuming it. The six `gg build` cells are rc 139 on C AND LLVM and are
+// ALSO pinned under ASan in tests/security.rs. The two module-loop cells are
+// `gg test` / `gg test --bench` programs with no `main`: their RED is a SIGSEGV
+// mid-run on the C lane, and they have NO ASan pin, because a fixture with no
+// entry point does not link under a plain `gg build --sanitize` at all — the
+// same reason the five pre-existing `bench_*` fixtures score BUILD_FAIL_BOTH in
+// the sanitize sweep.
+//
+//   path                          | fixture                       | RED           | ASan
+//   ------------------------------|-------------------------------|---------------|-----
+//   lower_function                | (pre-existing: the cow_* corpus)              |
+//   lower_equip_method            | (pre-existing: the monomorphic control)       |
+//   lower_generic_function        | self_host_gaps/cow_generic_fn_…| 139 C+LLVM   | yes
+//   lower_equip_method_with_subs  | cow_generic_equip_mutator_view_uaf | 139 C+LLVM | yes
+//   lower_trait_method_body       | cow_trait_default_…           | 139 C+LLVM    | yes
+//   lower_static_trait_method     | self_host_gaps/cow_static_trait_…| 139 C+LLVM | yes
+//   emit_closure_call_function    | cow_closure_body_…            | 139 C+LLVM    | yes
+//   suite setup / teardown / test | cow_test_body_…               | SIGSEGV (C)   | NO
+//   bench                         | cow_bench_body_…              | SIGSEGV (C)   | NO
+//
+// ⊕ The two `self_host_gaps/` cells sit in a subdirectory so they stay OUT of
+// the auto-scanned `runtime_parity_corpus`: each trips a PRE-EXISTING self-host
+// defect (`todo/t0922`, `todo/t0923`) that has nothing to do with the cell it
+// tests, and Core #9 ⊕ forbids raising the non-MATCH ceiling for a round's own
+// inflow. Their Rust-lane and ASan coverage is unchanged.
+
+/// PATH CELL — `lower_equip_method_with_subs`. A `&self` mutator on a GENERIC
+/// equip: `Cell[T]`'s `probe(&self)` binds a view of element 0, then
+/// `self.resize(v)` reallocates and the view dangled. rc 139 on BOTH backends.
 ///
-/// ⚠ NOT the `t0699` class, and the discriminator is measured rather than
-/// argued: this one is NAME-INDEPENDENT. It is rc 139 under `resize` — a name
-/// that WAS on the retired `MUTATING_METHODS` list, so the prescan DID mark the
-/// receiver — and rc 139 under `grow`, before and after the typed per-receiver
-/// classifier landed. The mark is made and the materialize still does not
-/// happen, so the break is DOWNSTREAM of the classification.
+/// ⚠ NOT the `t0699` "mutator NAME decides memory safety" class, and the
+/// discriminator was measured rather than argued: this one is NAME-INDEPENDENT.
+/// It was rc 139 under `resize` — a name that WAS on the retired
+/// `MUTATING_METHODS` list, so the prescan DID mark the receiver — and rc 139
+/// under `grow`, before and after the typed per-receiver classifier landed. The
+/// mark was made and the materialize still did not happen, so the break was
+/// DOWNSTREAM of the classification, at the per-function-body entry.
 ///
-/// The control is the point: hand-monomorphise the fixture (`Cell[T]` ->
-/// `Cell`, `T` -> `String`, nothing else) and it is rc 0 printing `helloworld`,
-/// at stock HEAD and after the fix. One type parameter is the whole difference.
+/// The monomorphic control was the clue: hand-monomorphise the fixture
+/// (`Cell[T]` -> `Cell`, `T` -> `String`, nothing else) and it was rc 0 even
+/// pre-fix — because a NON-generic equip lowers through `lower_equip_method`,
+/// one of the two paths that already ran the prescans. The difference was the
+/// PATH, not the genericness.
 ///
-/// Asserts the INTENDED output, which is exactly what that control prints.
+/// GRADUATED from `tests/fixtures/known_gaps/` (closes `todo/t0763`).
 #[test]
-#[ignore = "todo/t0763 — a `&self` mutator on a GENERIC equip does not \
-materialize a view bound from the receiver, even though the prescan marks it: \
-rc 139 on both backends. NAME-INDEPENDENT, so NOT the t0699 class — the break \
-is downstream of the classification, in the generic-equip/monomorphisation \
-path. The hand-monomorphised control is rc 0. Asserts `helloworld`."]
 fn generic_equip_mutator_view_uaf() {
-    run_gg("known_gaps/generic_equip_mutator_view_uaf.gg", "helloworld");
+    run_gg("cow_generic_equip_mutator_view_uaf.gg", "helloworld");
+}
+
+/// PATH CELL — `lower_generic_function`. A plain generic FREE function, no
+/// equip and no receiver: one type parameter and a `&`-param collection.
+///
+/// ⚠ Lives in `tests/fixtures/self_host_gaps/`, NOT at top level, because the
+/// self-host lane cannot LINK it (`todo/t0922`) and every top-level fixture is
+/// auto-scanned into `runtime_parity_corpus` — Core #9 ⊕ forbids raising the
+/// non-MATCH ceiling for a round's own inflow. The Rust-lane and ASan coverage
+/// is unchanged; only the parity corpus is opted out of. The intended self-host
+/// behaviour is asserted by `sh_gap_generic_fn_body_never_emitted` below.
+#[test]
+fn cow_generic_fn_view_survives_realloc() {
+    run_gg("self_host_gaps/cow_generic_fn_view_survives_realloc.gg", "helloworld");
+}
+
+/// PATH CELL — `lower_trait_method_body`. A trait DEFAULT method body.
+#[test]
+fn cow_trait_default_view_survives_realloc() {
+    run_gg("cow_trait_default_view_survives_realloc.gg", "helloworld");
+}
+
+/// PATH CELL — `lower_static_trait_method`. A static trait method (no `self`).
+///
+/// ⚠ Lives in `tests/fixtures/self_host_gaps/` for the same reason as its
+/// generic-free-function sibling: the self-host lane prints the String's LENGTH
+/// instead of the String (`todo/t0923`), so it is a non-MATCH row this round
+/// must not push into `RUNTIME_DIFF_NONMATCH_CEILING`. The intended self-host
+/// behaviour is asserted by `sh_gap_static_trait_method_returns_string_len`.
+#[test]
+fn cow_static_trait_method_view_survives_realloc() {
+    run_gg(
+        "self_host_gaps/cow_static_trait_method_view_survives_realloc.gg",
+        "helloworld",
+    );
+}
+
+/// KNOWN SELF-HOST GAP (`todo/t0922`) — a generic FREE function whose type
+/// parameter is inferred from inside a CONTAINER argument (`Vector[T]`) has its
+/// CALL emitted and its BODY never monomorphized: `undefined reference to
+/// 'probe'` at link time.
+///
+/// PRE-EXISTING and PROVED so, not caused by the prescan centralisation: it
+/// reproduces on a 6-line program with no view, no realloc and no equip
+/// (`T firstOf[T](Vector[T] v)`), for `String` AND `int` element types, against
+/// a driver built from the PRE-fix compiler. The discriminator is measured:
+/// `T id[T](T x)` — type parameter from a BARE argument — links and runs
+/// correctly on the self-host for both instantiations.
+#[test]
+#[ignore = "todo/t0922 — self-host: a generic free fn whose type param is \
+inferred from inside a container argument (Vector[T]) emits the call but never \
+the monomorphized body, so the emitted C fails to link (`undefined reference`). \
+Pre-existing; reproduces without any of this fixture's CoW machinery. Asserts \
+the intended `helloworld` on the self-host lane."]
+#[serial(self_host_lowerer_driver)]
+fn sh_gap_generic_fn_body_never_emitted() {
+    assert_self_host_stdout(
+        "self_host_gaps/cow_generic_fn_view_survives_realloc.gg",
+        "sh_gap_generic_fn",
+        "helloworld",
+    );
+}
+
+/// KNOWN SELF-HOST GAP (`todo/t0923`) — a STATIC TRAIT method returning a
+/// `String` returns the string's LENGTH instead of the string. This fixture
+/// prints `10` on the self-host lane where Rust gg prints `helloworld`, and
+/// `10 == len("helloworld")`.
+///
+/// PRE-EXISTING and PROVED so: an 11-line program with no view and no realloc
+/// (`equip Cell with Maker: String make(): return "abcdefg"`) prints `7` on the
+/// self-host. Two discriminators, both measured: the `int tag()` sibling on the
+/// SAME equip block returns `42` correctly, so it is String-return-specific; and
+/// the identical method on a PLAIN `equip Cell:` (no `with Maker`) prints
+/// `abcdefg` correctly, so it is the static TRAIT-method path.
+#[test]
+#[ignore = "todo/t0923 — self-host: a static TRAIT method returning a String \
+returns its LENGTH instead of the String (prints `10` for `helloworld`, `7` for \
+`abcdefg`). Pre-existing; an `int` return on the same equip is correct and a \
+plain non-trait `equip` is correct. Asserts the intended `helloworld`."]
+#[serial(self_host_lowerer_driver)]
+fn sh_gap_static_trait_method_returns_string_len() {
+    assert_self_host_stdout(
+        "self_host_gaps/cow_static_trait_method_view_survives_realloc.gg",
+        "sh_gap_static_trait",
+        "helloworld",
+    );
+}
+
+/// PATH CELL — `emit_closure_call_function`. The closure body, whose AST is a
+/// bare `Spanned<Expr>` rather than a statement block: `FnBodyAst::Expr` is
+/// what carries it into the prescans.
+///
+/// ⚠ THE VECTOR IS LOCAL TO THE CLOSURE, DELIBERATELY. The captured-collection
+/// sibling is a DIFFERENT defect (`todo/t0704`, the capture boundary) and is
+/// still rc 139 — see `tests/fixtures/known_gaps/closure_capture_*_uaf.gg`.
+#[test]
+fn cow_closure_body_view_survives_realloc() {
+    run_gg("cow_closure_body_view_survives_realloc.gg", "helloworld");
+}
+
+/// PATH CELLS — `suite setup` / `suite teardown` / `test` bodies
+/// (`lower_test_items`). These ran a hand-copied SUBSET of the prescans
+/// (liveness only). `gg build` never lowers them, so only the `gg test` lane
+/// exercises them: pre-fix this died with SIGSEGV mid-run.
+#[test]
+fn cow_test_body_view_survives_realloc() {
+    run_gg_test(
+        "cow_test_body_view_survives_realloc.gg",
+        &["SETUP helloworld", "TEARDOWN helloworld", "2 passed, 0 failed"],
+        true,
+    );
+}
+
+/// A closure with HEAP-FORCED resource captures, called TWICE, with each
+/// capture forwarded into a CONSUMING position inside the body. A CLASS GUARD
+/// for the capture's ownership marking: the env owns the data across calls, so
+/// a consuming position must copy, never move. See the fixture header for the
+/// four mechanisms measured to hold it up today, and
+/// `closure_capture_called_twice_no_leak` in tests/security.rs for the ASan pin
+/// (a stale read or a double free here can still print the right thing).
+#[test]
+fn closure_capture_called_twice() {
+    run_gg(
+        "closure_capture_called_twice.gg",
+        "helloworld/alphabeta\nhelloworld/alphabeta\nhelloworld\nalphabeta",
+    );
+}
+
+/// KNOWN GAP — `todo/t0704`, SECOND REPRO. The capture-boundary use-after-free
+/// with the realloc spelled INSIDE the closure body and NO saved view variable,
+/// which rules out "a CoW view the prescan failed to materialize" — there is no
+/// such view. Its sibling `closure_capture_then_mutate_source_uaf` reallocates
+/// OUTSIDE; both are rc 139, so the discriminator is the CAPTURE ROOT, not
+/// where the mutation is spelled. Take the capture away and the identical
+/// statements pass — that is `cow_closure_body_view_survives_realloc`.
+#[test]
+#[ignore = "todo/t0704 — a closure's captured collection handle is a borrow \
+bound at capture time (closures.rs CaptureMode::ByValue: field_load -> Ptr + \
+set_field_borrow); a realloc of the source leaves it stale, wherever the \
+realloc is spelled. rc 139 on both backends. Second repro: no saved view \
+variable at all, which kills the competing prescan hypothesis. Asserts \
+`helloworld`."]
+fn closure_capture_inside_body_uaf() {
+    run_gg("known_gaps/closure_capture_inside_body_uaf.gg", "helloworld");
 }
 
 /// THE (per-receiver) vs (name-keyed) DISCRIMINATOR, and the only cell in the
@@ -30673,11 +31182,18 @@ fn self_host_bootstrap() {
 // PINNED-BY: 4c473a88 VALUE: 13_150_071
 const SELF_COMPILE_ARRAY_CLONE_PIN: u64 = 13_150_071;
 // ⚠ THE BAND'S ANCHOR — ONE PER METER, ALL FOUR FROM THE SAME ROUND-OPEN
-// MEASUREMENT, RE-SEEDED ONCE PER ROUND AT ROUND OPEN. Nothing fails when that
-// reset is forgotten (see `struct CloneReading`). The date below is what
-// `scripts/clone_meter_check.sh --anchor-age` reads — but ⛔ NOTHING CALLS THAT
-// MODE YET, so today the reset is held by this comment alone. Wiring it into
-// the round-open step is `todo/t0851`.
+// MEASUREMENT, RE-SEEDED ONCE PER ROUND AT ROUND OPEN. The date below is what
+// `scripts/clone_meter_check.sh --anchor-age` reads, and that mode's caller is
+// `tests/lints.rs::clone_band_anchor_is_reseeded_before_work_resumes` — so a
+// forgotten reset fails a gate instead of being held by a comment. ⚠ The lint's
+// predicate is narrowed to "commits exist after the round-close records commit
+// with the anchors un-reseeded", because the window between a round's records
+// commit and the next round's re-anchor is legitimate.
+// ⛔ PARTIALLY. That check matches 3 of ~38 round closes in DONE.md — the
+// entries have no typed marker, so the question is answered by matching prose —
+// and it fails GREEN. `todo/t0851` is re-opened on it; the loud half is
+// `tests/lints.rs::done_md_round_close_shapes_are_pinned`, which pins both
+// populations so a close in an unseeable shape cannot pass silently.
 // ROUND-OPEN-DATE: 2026-08-31
 // ROUND-OPENED-BY: 4c473a88 VALUE: 13_150_071
 const SELF_COMPILE_ARRAY_CLONE_ROUND_OPEN: u64 = 13_150_071;
@@ -30878,9 +31394,16 @@ const _: () = assert!(
 /// owner rejected, and manufactures a false owner ask out of two legitimate
 /// sub-band rounds. The signal that CAN see it is
 /// `scripts/clone_meter_check.sh --anchor-age`, which fails once a round has
-/// closed since the anchor was set. ⛔ IT HAS NO CALLER: no round procedure,
-/// gate or test runs it, so the reset is an unenforced obligation today, not a
-/// guarded one. Wiring it in is `todo/t0851`.
+/// closed since the anchor was set — and its caller is
+/// `tests/lints.rs::clone_band_anchor_is_reseeded_before_work_resumes`, which
+/// narrows the predicate to "work has RESUMED with the anchors un-reseeded" so
+/// that the legitimate window between a round's records commit and the next
+/// round's re-anchor is not permanently red.
+/// ⛔ ITS REACH IS ~8% AND IT FAILS GREEN: "has a round closed?" is answered by
+/// matching a prose headline, and the round-close entry has no typed marker —
+/// 3 of ~38 closes match. `todo/t0851` is re-opened on it, and
+/// `tests/lints.rs::done_md_round_close_shapes_are_pinned` pins both
+/// populations so a close in an unseeable shape fails rather than passing.
 ///
 /// ⚠ WHAT PER-TRACK ATTRIBUTION CAN AND CANNOT BE TESTED FOR, so the next round
 /// does not re-derive a dead end at the cost of another ten-cell bisect.
@@ -38844,11 +39367,29 @@ fn self_host_runtime_diff() {
     // the raising round's point of view. Core #9 ⊕ forbids raising it for a
     // round's OWN inflow, with no exemption; the fix there is to port.
     const RUNTIME_DIFF_NONMATCH_CEILING: usize = 151;
+    // ⛔ THIS GATE NO-OPS IN THE PROFILE PEOPLE ACTUALLY RUN, AND THAT IS A
+    // COVERAGE HOLE, NOT A DESIGN. `cargo test --test integration self_host` is
+    // a DEBUG build, so every executor's own gauntlet run takes the branch
+    // below and prints a note instead of evaluating the ceiling. R48 Track C
+    // shipped two fixtures that would have BREACHED it and its debug family run
+    // was green — the breach was caught by a human output-review running the
+    // lane by hand, which is exactly the instrument Core #13 says not to depend
+    // on. Only the documented `--release` invocation arms it, and nothing makes
+    // a round run that before integrating.
+    // ⇒ Until the profile split is fixed (an env-gated arm for debug, or a
+    // cheap add-time membership check that does not need the whole corpus),
+    // treat "the family run was green" as SAYING NOTHING about parity inflow.
+    // The obligation is on the ADDER: if you added a top-level
+    // `tests/fixtures/*.gg`, run it through the self-host lane by hand and
+    // confirm MATCH, or keep it out of the auto-scanned set (see
+    // `tests/fixtures/self_host_gaps/` for the shape). Filed as `todo/t0924`.
     if cfg!(debug_assertions) {
         eprintln!(
-            "NOTE [self_host_runtime_diff]: non-MATCH ceiling skipped (debug profile — same \
+            "NOTE [self_host_runtime_diff]: non-MATCH ceiling SKIPPED (debug profile — same \
              timeout-flip sensitivity as the MATCH floor; use the documented --release \
-             invocation for the gate)."
+             invocation for the gate). ⚠ THIS IS A NO-OP, NOT A PASS: a round that added \
+             top-level fixtures has NOT been checked for parity inflow by this run. See \
+             todo/t0924."
         );
     } else if parity_floor_active("self_host_runtime_diff") {
         let non_match = non_excluded - matched.len();
@@ -41116,6 +41657,20 @@ fn bench_basic() {
             "bench: string concat",
             "2 benchmarks complete",
         ],
+    );
+}
+
+/// PATH CELL — the `bench` body (`lower_bench_items`), the fourth and last
+/// module-loop body-lowering path. Like its three siblings in
+/// `cow_test_body_view_survives_realloc` it ran a hand-copied SUBSET of the
+/// per-function prescans (liveness only), so a CoW element view bound in a
+/// bench body was never materialized before a reallocating push. Only
+/// `gg test --bench` lowers this body. RED-verified: SIGSEGV pre-fix.
+#[test]
+fn cow_bench_body_view_survives_realloc() {
+    run_gg_bench(
+        "cow_bench_body_view_survives_realloc.gg",
+        &["helloworld", "1 benchmark"],
     );
 }
 
@@ -59415,20 +59970,163 @@ true",
     );
 }
 
-/// KNOWN GAP `t0770` — `Option[String].map(f)` with `f` a type-erased
-/// `Callable` PARAMETER allocates `result_local` as `Option[i64]` (16 bytes)
-/// and the caller reads it as `Option[String]` (40 bytes). rc 139 on a plain
-/// build, ASan `stack-buffer-overflow` under `--sanitize`, deterministic 3/3
-/// at `f3feea79`. Un-ignore when `infer_closure_return_type` reads
-/// `ctx.callable_return_type` instead of defaulting to `I64_TYPE`.
+/// LIVE REGRESSION FIXTURE (graduated from `t0770`). `Option[String].map(f)`
+/// with `f` a type-erased `Callable` PARAMETER used to allocate `result_local`
+/// as `Option[i64]` (16 bytes) while the caller read it as `Option[String]`
+/// (40 bytes) — rc 139 on a plain build, ASan `stack-buffer-overflow` under
+/// `--sanitize`. The six readers of that erased fact now all go through
+/// `ctx.callable_return_type` / `extract_fn_return_type_from_hint`.
+///
+/// This test was `#[ignore]`d and RED, asserting the intended `hello!` against
+/// a compiler that segfaulted. Re-verified RED against the pre-fix compiler
+/// blob (`git show <base>:src/...`), GREEN on C, LLVM and the self-host lane.
+///
+/// ⚠ The `.gg` deliberately stays in `known_gaps/`, a SUBDIRECTORY: it is the
+/// CLOSURE-LITERAL spelling of the cell, and a capturing closure literal leaks
+/// its 8-byte environment (`t0526`, an independent gap). `known_gaps/` is
+/// outside both the top-level `runtime_parity_corpus` scan and the top-level
+/// `scripts/sanitize_sweep.sh` walk, whose leak allowlist is shrink-only. The
+/// top-level-function spelling of the same cell IS a top-level fixture
+/// (`combinator_callable_param_same_type.gg`) and is ASan-clean.
 #[test]
-#[ignore = "KNOWN GAP t0770: combinator adapter mis-sizes result_local for a \
-type-erased Callable parameter — rc 139 / ASan stack-buffer-overflow"]
-fn known_gap_combinator_callable_param_result_type_erased_sbo() {
+fn combinator_callable_param_result_type_erased_sbo() {
     run_gg(
         "known_gaps/combinator_callable_param_result_type_erased_sbo.gg",
         "hello!",
     );
+}
+
+/// The erased-`Callable`-PARAMETER combinator net, SAME-TYPE half: 8 broken
+/// cells (Option map/and_then/flat_map/or_else, Result map/and_then/or_else/
+/// map_err) plus 3 negative controls that never read the helper. Top-level, so
+/// `runtime_parity_corpus` requires it to MATCH the self-host lane — which it
+/// does, because `self_host_lowerer/lower_closures.gg` grew the mirror read.
+/// RED pre-fix: C `incompatible types when assigning to type
+/// '__gg_Option__GorgetString' from type 'int64_t'`, LLVM rc 139, self-host
+/// `incompatible types when assigning to type 'Str' from type 'int64_t'`.
+#[test]
+fn combinator_callable_param_same_type() {
+    run_gg(
+        "combinator_callable_param_same_type.gg",
+        "\
+hello!
+hello?
+hello#
+orelse
+hello+
+hello&
+bad~
+bad-|
+filtered
+default
+bad^
+hello%",
+    );
+}
+
+/// The CROSS-TYPE half of the same net — the axis on which a wrong `I64`
+/// answer is wrong about WHICH type rather than merely wrong-sized, and the
+/// only place the `extract_fn_return_type` reader is visible at all. RED
+/// pre-fix on BOTH backends with a clean `error[E_TypeMismatch]: type mismatch:
+/// expected `int`, found `String`` — a rejection of a program ggdef accepts.
+#[test]
+fn combinator_callable_param_cross_type() {
+    run_gg(
+        "combinator_callable_param_cross_type.gg",
+        "\
+5
+6
+8
+7",
+    );
+}
+
+/// Method-level generic inference (`U transform[U, F](self, F f)`) over a
+/// `Callable[U(T)]` PARAMETER. Two more readers of the same erased fact: the
+/// shape-2 loop in `try_infer_method_targs`, which inlined its own
+/// `ResolvedType::Function` match and so SURVIVED the accessor fix, and
+/// `typeid_to_ast_type`, which refused to render any callable wrapper and so
+/// could not mint the monomorph even once the binding succeeded.
+///
+/// RED pre-fix: C `incompatible types when assigning to type 'Str' from type
+/// 'int32_t'`, LLVM `undefined reference to 'Holder__transform'`. The
+/// top-level-fn and closure-literal spellings in the same file are the
+/// controls — green before and after.
+///
+/// ⚠ NOT a top-level fixture: the self-host lane cannot compile a user generic
+/// method taking a callable AT ALL, on ANY spelling, identically before and
+/// after this change (`t0879`). A top-level placement would register a
+/// self-host non-MATCH that this round did not cause.
+#[test]
+fn generic_method_callable_param_targ_inference() {
+    run_gg(
+        "generic_method_callable_param/targ_inference.gg",
+        "\
+hello!
+5
+hello?
+hello~",
+    );
+}
+
+/// Iterator.map with a `Callable[int(int)]` PARAMETER — reader 3 un-gated the
+/// `"map"` arm of `try_iterator_adapter_type` and the cell is value-correct.
+/// SPELLING: `v.iter().map(f).collect()[0]`, expected `12`.
+///
+/// RED pre-fix at `f5ab385d`: C AND LLVM `BUILD_RC=101`, panic at
+/// `src/ir/lowering/exprs/methods.rs:4417` (`typecheck must reject
+/// non-indexable receivers before lowering (E_NotIndexable)`). That is an ICE,
+/// not `undefined reference`.
+///
+/// ⚠ NOT a top-level fixture: the self-host lane CC-fails (`MapIter` assigned
+/// from `int`). A top-level placement would register a non-MATCH against
+/// `RUNTIME_DIFF_NONMATCH_CEILING`.
+#[test]
+fn iterator_map_callable_param() {
+    run_gg("iterator_map_callable_param/collect_index.gg", "12");
+}
+
+/// KNOWN GAP `t0927` — a closure that CAPTURES a `Callable[T]` PARAMETER
+/// cannot be compiled: the env struct's field for the capture is typed `unit`
+/// (a `Callable` param's GIR local type is erased), so the generated C
+/// dereferences a `void` slot (`error: void value not ignored as it ought to
+/// be`) and llc rejects the LLVM (`void type only allowed for function
+/// results`). A SECOND fault sits one line down — the indirect call inside the
+/// closure body is cast `int64_t`-returning, because the enclosing function's
+/// `callable_return_types` sidecar is not propagated into the lifted closure's
+/// own `func_state`.
+///
+/// ⚠ NOT `t0770`: that class's reader 5 (the closure-body return-type
+/// inference) IS fixed and DOES fire on this program — verified by
+/// instrumentation — but the closure's registered return type is re-pinned
+/// from the emitted body, and the body cannot be emitted while the field is
+/// `void`. Un-ignore when a captured `Callable` gets a real field type and the
+/// sidecars cross the closure boundary.
+#[test]
+#[ignore = "KNOWN GAP t0927: a captured Callable param becomes a unit-typed \
+closure-env field — the generated C dereferences a void slot"]
+fn known_gap_closure_captures_callable_param_void_env_field() {
+    run_gg(
+        "known_gaps/closure_captures_callable_param_void_env_field.gg",
+        "hello!",
+    );
+}
+
+/// KNOWN GAP `t0878` — `Vector[T].map(f)` / `.flat_map(f)` with `f` a
+/// `Callable[U(T)]` PARAMETER: the monomorph body is never emitted, because
+/// `discover_method_instances` walks with a `LocalTypeEnv` a callable param is
+/// not in. The two `Vector` arms in `typecheck.rs` DECLINE the shape
+/// (`is_monomorphizable_closure_operand`) rather than un-gate it, because
+/// un-gating gives `undefined reference` on C and rc 0 printing GARBAGE on
+/// LLVM — a silent miscompile is strictly worse than the rejection it replaces.
+/// The rejection's own wording is also wrong (it reports the fallback type);
+/// the end state is that this program COMPILES. `Iterator.map` with a Callable
+/// param needs no gate — pinned by `iterator_map_callable_param`.
+#[test]
+#[ignore = "KNOWN GAP t0878: Vector[T].map with a Callable param has no \
+monomorph; the arm declines the shape to avoid a silent LLVM miscompile"]
+fn known_gap_vector_map_callable_param_no_monomorph() {
+    run_gg("known_gaps/vector_map_callable_param_no_monomorph.gg", "5");
 }
 
 /// KNOWN GAP `t0771` — a closure capturing a PARAMETER and escaping via

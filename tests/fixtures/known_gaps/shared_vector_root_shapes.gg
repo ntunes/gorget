@@ -1,0 +1,38 @@
+# REGRESSION (was todo/t0840): the RECEIVER/ROOT-SHAPE axis — the collection
+# is not always a bare local. A struct FIELD holding the vector reaches the
+# consuming position through a different root, and died the same way pre-fix
+# (rc 139, both backends).
+#
+# ⚠ Two more roots were probed and are deliberately NOT here, each a recorded
+# gap rather than a dodge:
+#
+#   • NESTED container — `outer.push(inner.clone())` where `inner` is a
+#     `Vector[Shared[int]]`. `gorget_array_clone` memcpys the elements and
+#     consults `elem_clone` for the deep-clone types; a refcount element has no
+#     `clone_inplace_fn`, so the two arrays alias the same handles with no
+#     incref and both drop (`AddressSanitizer: heap-use-after-free` in
+#     `gorget_shared_drop` under two nested `gorget_array_free` frames). The
+#     identical shape with `String` elements is clean. Ships as
+#     `shared_nested_vector_clone_over_release.gg` (todo/t0907).
+#
+#   • FUNCTION RETURN — `Vector[Shared[int]] build(Shared[int] s)`. This one
+#     fails on the PARAMETER, not the return: the callee drops its own bare
+#     `Shared` param (`todo/t0108` repro (a)/(b), `needs_param_drop`). Drop the
+#     parameter and build the handle inside the function and the same shape is
+#     ASan-clean, which is what isolates it. The Channel costume ships as
+#     `channel_bare_param_callee_drop_uaf.gg`.
+#
+# CELL: container=Vector · handle=Shared · payload=int · root=struct field.
+
+struct Bag:
+    Vector[Shared[int]] items
+
+void main():
+    Shared[int] s = Shared[int](6)
+    Vector[Shared[int]] empty = []
+    Bag b = Bag(empty)
+    b.items.push(s.clone())
+    b.items.push(s.clone())
+    print(f"{b.items.len()}")
+    print(f"{b.items.get(0).unwrap().get()}")
+    print(f"{s.strong_count()}")

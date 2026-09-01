@@ -17,10 +17,15 @@
 #       lines this mode prints a header, zero rows and exits 0.
 #
 #   scripts/clone_meter_check.sh --anchor-age
-#       ⛔ NOTHING CALLS THIS YET. It is a mode looking for a caller: no round
-#       procedure, no gate and no test runs it, so a forgotten re-anchor is
-#       still SILENT today. Wiring it into the round-open step is `todo/t0851`;
-#       until that lands, do not read the paragraph below as a guarantee.
+#       ⊕ ITS CALLER IS `tests/lints.rs::clone_band_anchor_is_reseeded_before_
+#       work_resumes`, which runs this mode on every `cargo test --test lints`.
+#       ⚠ THE LINT NARROWS THE PREDICATE, DELIBERATELY. This mode fails from the
+#       moment a round closes until the next one re-anchors, and that window is
+#       LEGITIMATE — a raw lint would red the very records commit that closes a
+#       round, and a permanently-red ratchet stops being a ratchet. So the lint
+#       asks the narrower question: are there commits AFTER the records commit
+#       with the anchors still un-reseeded? Sitting on the records commit is
+#       green; resuming work on a stale anchor is not.
 #       ⚠ RUN THIS AT ROUND OPEN. The ~1% band is anchored at the ROUND-OPEN
 #       value, and that anchor is re-seeded by a scheduled human action with no
 #       battery gate behind it. Forget the reset and the band silently stops
@@ -28,20 +33,35 @@
 #       reads as +1.4% against a stale anchor — a false owner ask, and the
 #       cross-round accumulation the owner explicitly rejected, arrived at by
 #       omission. This mode fails once a round has CLOSED since the anchor was
-#       set (newest dated `DONE.md` entry newer than `ROUND-OPEN-DATE`), which
-#       is the one tree-visible signal that a new round has begun.
+#       set — newest `DONE.md` entry OF A ROUND-CLOSE SHAPE
+#       (`- [YYYY-MM-DD] **ROUND `) newer than `ROUND-OPEN-DATE`. ⚠ NOT "newest
+#       dated entry": DONE.md is mostly PER-TRACK entries landing mid-round.
+#       ⛔ AND THE PREDICATE IS PARTIAL — it matches 3 of the ~38 round closes
+#       in this file (the shape table in `anchor_mode` enumerates them). Its
+#       failure direction is a FALSE GREEN, so do NOT read a green
+#       `--anchor-age` as "the anchors are fresh". `todo/t0851` carries the
+#       evidence and the real fix (a typed marker on the entry);
+#       `tests/lints.rs::done_md_round_close_shapes_are_pinned` is what stops
+#       the gap being silent in the meantime.
 #
-# ⚠ WHY THIS IS NOT A `tests/lints.rs` LINT. A lint sees a TREE; both questions
-# above are about a DIFF, and the failure class is an ABSENCE — nobody measured.
-# A provenance line can prove WHO wrote a pin; it can never prove that anyone
-# measured. The only tree-adjacent signal that can is history against the
-# declared closure, which is what this script computes. `--track`'s RED cases —
-# a closure-touching diff with no attribution, and a diff that moves a pin — are
-# demonstrated in `tests/lints.rs::clone_meter_check_refuses_an_unattributed_track`,
-# which is the ONLY test that runs this script. `--pin-staleness` and
-# `--anchor-age` have no test and no caller; their REDs have been shown by hand
-# and are recorded in the track report, which is not a durable place for them
-# (`todo/t0851`).
+# ⚠ WHY THE FIRST TWO MODES ARE A SCRIPT AND NOT A LINT — and the claim is now
+# scoped, because an earlier revision of this paragraph over-generalised it to
+# all three. `--track` and `--pin-staleness` ask about a DIFF, and their failure
+# class is an ABSENCE: nobody measured. A provenance line can prove WHO wrote a
+# pin; it can never prove that anyone measured. The only tree-adjacent signal
+# that can is history against the declared closure, which is what this script
+# computes — so those two live here.
+# ⊕ `--anchor-age` IS DIFFERENT AND IS NOW LINTED. Its predicate is pure tree
+# state (a `DONE.md` date against a `ROUND-OPEN-DATE` line); the objection that
+# kept it out of `tests/lints.rs` was about the raw predicate's legitimate RED
+# WINDOW, not about tree-visibility, and the lint narrows the predicate instead
+# of widening the window.
+# ⇒ ALL THREE MODES NOW HAVE A CALLER IN `tests/lints.rs`, which is the only
+#   thing that makes any of the paragraphs above a guarantee rather than a hope:
+#     --track          clone_meter_check_refuses_an_unattributed_track
+#                      (and it DEMONSTRATES the refusal, on every run)
+#     --pin-staleness  clone_meter_pin_provenance_shas_resolve
+#     --anchor-age     clone_band_anchor_is_reseeded_before_work_resumes
 #
 # It builds NOTHING: git + grep only, so an output-review that is barred from
 # building can still run it.
@@ -61,12 +81,13 @@ while [[ $# -gt 0 ]]; do
         --track)         MODE=track; shift ;;
         --pin-staleness) MODE=staleness; shift ;;
         --anchor-age)    MODE=anchor; shift ;;
+        --round-close-census) MODE=census; shift ;;
         --base)          BASE="$2"; shift 2 ;;
         # --tip defaults to HEAD; naming it lets a reviewer check a branch tip
         # without checking it out, and lets the lint below pin an exact range.
         --tip)           TIP="$2"; shift 2 ;;
         --report)        REPORT="$2"; shift 2 ;;
-        *) echo "usage: $0 --track --base <sha> [--tip <sha>] --report <file> | $0 --pin-staleness | $0 --anchor-age" >&2; exit 2 ;;
+        *) echo "usage: $0 --track --base <sha> [--tip <sha>] --report <file> | $0 --pin-staleness | $0 --anchor-age | $0 --round-close-census" >&2; exit 2 ;;
     esac
 done
 
@@ -193,15 +214,75 @@ staleness_mode() {
     return $FAILED
 }
 
+# THE TWO POPULATIONS, PRINTED FROM THE ONE PLACE EACH PREDICATE IS SPELLED.
+# `tests/lints.rs::done_md_round_close_shapes_are_pinned` reads these rather
+# than re-spelling the regexes, so the guard and the thing it guards cannot
+# drift apart (Layering rule 3).
+census_mode() {
+    local matched roundish dated
+    matched=$(grep -cE '^- \[[0-9]{4}-[0-9]{2}-[0-9]{2}\] \*\*ROUND ' DONE.md)
+    roundish=$(grep -cE '^- \[[0-9]{4}-[0-9]{2}-[0-9]{2}\] \*\*(ROUND|Round|R[0-9])' DONE.md)
+    dated=$(grep -cE '^- \[[0-9]{4}-[0-9]{2}-[0-9]{2}\]' DONE.md)
+    echo "round-close census over DONE.md"
+    echo "  anchor-age-matched: $matched"
+    echo "  round-ish headlines: $roundish"
+    echo "  dated entries: $dated"
+    echo "  ⚠ round-ish is a SUPERSET containing mid-round entries; matched is a SUBSET of the"
+    echo "    real closes (~38). Neither is the enumeration — see the shape table in anchor_mode."
+    return 0
+}
+
 anchor_mode() {
     # The band's anchor carries its own date, beside the four ROUND-OPENED-BY
-    # lines. A round CLOSES by adding a dated entry at the top of DONE.md, so a
-    # DONE.md entry newer than the anchor means a round boundary was crossed
+    # lines. A round CLOSES by adding a dated ROUND entry at the top of DONE.md,
+    # so a ROUND entry newer than the anchor means a round boundary was crossed
     # without re-seeding it.
+    #
+    # ⛔ MATCH A ROUND-CLOSE SHAPE, NOT "A DATED ENTRY". An earlier revision read
+    # the top dated entry OF ANY KIND, and DONE.md is overwhelmingly PER-TRACK
+    # entries landing MID-round. So the first track to land on a later calendar
+    # day made this mode announce "a round has CLOSED" when none had — and the
+    # remedy it then printed, a mid-round re-seed of the band, is the exact move
+    # `tests/integration.rs`'s salami assertion exists to prove destroys the
+    # band. A false RED that instructs the harmful action is worse than no check.
+    #
+    # ⛔⛔ AND THE FIX FOR THAT IS PARTIAL. SAY SO HERE, BECAUSE THE FAILURE IS
+    # NOW A FALSE GREEN, WHICH IS QUIETER. THE PREDICATE BELOW SEES ROUGHLY 8%
+    # OF THE ROUND CLOSES IN THIS FILE. Enumerated by hand over every round-ish
+    # headline (`--round-close-census` prints the populations; the by-hand step
+    # is the point — see below):
+    #     Round <ROMAN> close .................. 31   NOT matched
+    #     Round <ROMAN> (Rnn) close ............  2   NOT matched
+    #     Rnn CLOSED ...........................  1   NOT matched   (R45)
+    #     Rnn close-out ........................  1   NOT matched   (R43)
+    #     Rnn — <theme> ........................  1   NOT matched   (R44)
+    #     ROUND <ROMAN> (Rnn) CLOSED ...........  1   matched       (R47)
+    #     ROUND <ROMAN> (Rnn) — <theme> ........  2   matched       (R42, R43)
+    #   ≈38 distinct round closes; this predicate matches 3.
+    # ⚠ AN EARLIER REVISION OF THIS COMMENT ASSERTED "`ROUND ` IS THE STABLE
+    # PREFIX". THAT IS FALSE — the two closes immediately before R47 are
+    # `**R45 CLOSED` and `**R44 —`, and every close from R41 down is lowercase
+    # `**Round `. Worse, it was the ENUMERATOR'S OWN REGEX OUTPUT presented as
+    # the enumeration: running the predicate and reporting what it matched
+    # cannot show you what it misses (six-questions #3).
+    #
+    # ⛔ DO NOT "FIX" THIS BY WIDENING THE REGEX. Measured: the obvious widening
+    # (`\*\*(ROUND|Round|R[0-9])`) matches 79 headlines, including mid-round
+    # ones — `**R42 Phase 4b`, `**R41 T-FMT-A`, `**ROUND-33 rolling item 4`,
+    # `**R43 Track C` — which re-creates the false-RED-with-harmful-remedy this
+    # narrowing removed. The real defect is one layer up and it is Core #2: the
+    # round-close entry has NO TYPED MARKER, so any predicate over it is a
+    # name-match on free prose, and no regex over an unenforced convention can
+    # be both complete and precise. Filed with this evidence as `todo/t0851`;
+    # the fix is a marker on the entry, which is a round-procedure decision.
+    # ⊕ WHAT STOPS THE GAP BEING SILENT MEANWHILE:
+    # `tests/lints.rs::done_md_round_close_shapes_are_pinned` pins BOTH
+    # populations, so a close landing in a shape this predicate cannot see moves
+    # the round-ish count without moving the matched count, and fails.
     local anchor_date newest_done
     anchor_date=$(awk '/^\/\/ ROUND-OPEN-DATE:/ && !seen { print $3; seen = 1 }' "$GATE_FILE")
     # Plain bracket expressions, not {n} intervals — mawk needs --re-interval.
-    newest_done=$(awk '/^- \[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\]/ { print substr($0, 4, 10); exit }' DONE.md)
+    newest_done=$(awk '/^- \[[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\] \*\*ROUND / { print substr($0, 4, 10); exit }' DONE.md)
     echo "clone-meter band anchor"
     echo "  ROUND-OPEN-DATE : ${anchor_date:-<MISSING>}"
     echo "  newest DONE.md  : ${newest_done:-<none>}"
@@ -224,6 +305,7 @@ anchor_mode() {
 case "$MODE" in
     track)     track_mode ;;
     staleness) staleness_mode ;;
+    census)    census_mode ;;
     anchor)    anchor_mode ;;
-    *) echo "usage: $0 --track --base <sha> [--tip <sha>] --report <file> | $0 --pin-staleness | $0 --anchor-age" >&2; exit 2 ;;
+    *) echo "usage: $0 --track --base <sha> [--tip <sha>] --report <file> | $0 --pin-staleness | $0 --anchor-age | $0 --round-close-census" >&2; exit 2 ;;
 esac

@@ -1,0 +1,10 @@
+# D53 NEG — bare-assign of a named RWLock place.
+# CELL: lock=RWLock · position=assign · source=named place.
+# ggdef: ABSTAIN (Mutex/RWLock out of subset; owner: ggdef stays simple).
+
+from std.sync import RWLock
+
+void main():
+    RWLock[int] r = RWLock[int](5)
+    RWLock[int] n = r
+    print(n.read().get())

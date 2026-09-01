@@ -7839,11 +7839,34 @@ impl<'a> TypeChecker<'a> {
                     span: dummy,
                 })))
             }
-            // Trait objects, callable wrappers, and inference variables
-            // are intentionally not convertible — they shouldn't appear as
-            // an inferred method-generic binding in well-typed code, and
-            // failing the conversion makes the caller skip inference
-            // gracefully (falls back to the existing dispatch).
+            // READER 7 of the erased-`Callable` class (`t0770`). A bare
+            // `Callable[R(A)]` PARAMETER passed to a generic method IS an
+            // inferred method-generic binding in well-typed code — the old
+            // blanket `_ => None` here (whose comment claimed the opposite)
+            // made `try_infer_method_targs` bail, so no monomorph was minted
+            // and the call site emitted an unmangled `void`-returning
+            // `Holder__transform` (C: `incompatible types … 'Str' from
+            // 'int32_t'`; LLVM: `undefined reference`) while the SAME method
+            // called with a top-level fn or a closure literal built and ran.
+            // Render it as the inner function type, which is exactly what
+            // those two working spellings bind, so all three spellings share
+            // ONE monomorph.
+            ResolvedType::CallableTrait(inner) => {
+                let inner = *inner;
+                self.typeid_to_ast_type(inner)
+            }
+            // The SET, with a disposition per row (Core #15b). NOT converted,
+            // deliberately, because the wrapper is not erasable to its inner
+            // function type — each would need its own AST spelling and its own
+            // measured cell before it could be minted as a monomorph binding:
+            //   - `MutCallableTrait` / `ConsumeCallableTrait` — the callable's
+            //     own mutate/consume discipline is carried by the WRAPPER, not
+            //     by the inner signature's per-param ownerships.
+            //   - `BoxedCallable` — heap representation, not the same ABI.
+            //   - `TraitObject` — vtable dispatch, no AST spelling here.
+            //   - `Var` / `Error` / `Never` — not a concrete binding.
+            // For these, failing the conversion still makes the caller skip
+            // inference gracefully (falls back to the existing dispatch).
             _ => None,
         }
     }
@@ -7917,9 +7940,13 @@ impl<'a> TypeChecker<'a> {
             }
             let mut fn_ret_type: Option<TypeId> = None;
             for &arg_ty in arg_types {
-                let resolved = self.resolve_type(arg_ty);
-                if let ResolvedType::Function { return_type, .. } = self.types.get(resolved) {
-                    let rt = *return_type;
+                // READER 6 of the erased-`Callable` class (`t0770`). This loop
+                // used to INLINE its own `ResolvedType::Function` match, so it
+                // survived the reader-3 fix untouched: a `Callable[U(T)]`
+                // PARAMETER resolves to `CallableTrait(Function{..})` and bound
+                // nothing, leaving `U` unbound. Route through the ONE accessor
+                // (devbook/24 rule 3) instead of a second match.
+                if let Some(rt) = self.extract_fn_return_type_from_hint(Some(arg_ty)) {
                     if rt == self.types.error_id {
                         continue;
                     }
@@ -8201,6 +8228,11 @@ impl<'a> TypeChecker<'a> {
             ("Vector", "map") => {
                 // (T) -> U, returns Vector[U]
                 let closure_type = self.infer_expr(&args.first()?.node.value);
+                // `t0878`: decline the shape whose monomorph is never minted,
+                // rather than un-gate it into a silent LLVM miscompile.
+                if !self.is_monomorphizable_closure_operand(closure_type) {
+                    return None;
+                }
                 let u_type = self.extract_fn_return_type(closure_type)?;
                 Some(self.types.intern_generic(def_id, vec![u_type]))
             }
@@ -8215,6 +8247,10 @@ impl<'a> TypeChecker<'a> {
                 // returns receiver_type (wrong for cross-type) but is
                 // shadowed by this LIVE path.
                 let closure_type = self.infer_expr(&args.first()?.node.value);
+                // `t0878`, same gate as `Vector.map` directly above.
+                if !self.is_monomorphizable_closure_operand(closure_type) {
+                    return None;
+                }
                 let ret_type = self.extract_fn_return_type(closure_type)?;
                 Some(ret_type)
             }
@@ -8518,11 +8554,55 @@ impl<'a> TypeChecker<'a> {
     }
 
     /// Extract the return type from a Function type.
+    ///
+    /// READER 3 of the erased-`Callable` class (`t0770`). This used to match
+    /// `ResolvedType::Function` on the UNRESOLVED id only, so a
+    /// `Callable[U(T)]` PARAMETER — whose resolved type is
+    /// `ResolvedType::CallableTrait(Function{..})`, not a bare `Function` —
+    /// returned `None` at all of this helper's combinator call sites and the
+    /// whole `o.map(f)` expression fell back to an `E_TypeMismatch` rejection,
+    /// while the closure-literal spelling of the same program compiled.
+    ///
+    /// The correct accessor already existed: `extract_fn_return_type_from_hint`
+    /// resolves first and unwraps every callable wrapper. This one is now a
+    /// thin alias of it — ONE source of truth for "what does this callable
+    /// return" (devbook/24 rule 3), so the two can never drift apart again.
     fn extract_fn_return_type(&self, type_id: TypeId) -> Option<TypeId> {
-        match self.types.get(type_id) {
-            ResolvedType::Function { return_type, .. } => Some(*return_type),
-            _ => None,
-        }
+        self.extract_fn_return_type_from_hint(Some(type_id))
+    }
+
+    /// True when a closure OPERAND is a shape the collection-HOF
+    /// monomorphization walker can see through.
+    ///
+    /// ⚠ THIS IS NOT A SECOND RETURN-TYPE ACCESSOR — it answers a different
+    /// question: *can the lowering mint a body for this call?* The `Vector.map`
+    /// / `Vector.flat_map` elaboration mangles a `Vector__T__map` monomorph
+    /// whose body is emitted only if
+    /// `ir::lowering::generics::discover_method_instances` registered the
+    /// instance while walking the AST with a `LocalTypeEnv`. A `Callable[U(T)]`
+    /// PARAMETER is not in that env, so no instance is registered and the call
+    /// links against nothing.
+    ///
+    /// Widening `extract_fn_return_type` to see through the `CallableTrait`
+    /// wrapper (reader 3 of `t0770`) un-gates those arms from a clean
+    /// `E_TypeMismatch` into that un-minted monomorph — MEASURED as
+    /// `undefined reference to 'Vector__GorgetString__map'` on C and, on LLVM,
+    /// as **rc 0 printing garbage** (`281470681743361` for a call whose value
+    /// is `5`). A silent miscompile where the compiler previously rejected is
+    /// strictly worse than the rejection (Core invariants #8 and #10), so these
+    /// two arms keep declining the shape until the monomorph is minted for it.
+    /// `Option`/`Result` combinators and `Iterator.map` do NOT need this gate —
+    /// their lowering handles a Callable-param operand (measured: the
+    /// `v.iter().map(f).collect()[0]` cell with `f: Callable[int(int)]` ICEs at
+    /// `methods.rs:4417` (`E_NotIndexable` debug_assert, `BUILD_RC=101`) on BOTH
+    /// backends at the pre-fix blob, and prints `12` after; pin
+    /// `tests/fixtures/iterator_map_callable_param/collect_index.gg`). Tracked
+    /// as `t0878`, whose `known_gaps` repro asserts the INTENDED output.
+    fn is_monomorphizable_closure_operand(&self, type_id: TypeId) -> bool {
+        matches!(
+            self.types.get(self.resolve_type(type_id)),
+            ResolvedType::Function { .. }
+        )
     }
 
     /// Round XXIII Track α (Core #4 class-fix, Core #2 typed metadata):

@@ -360,3 +360,49 @@ pub(super) fn is_resource_type_local(
 ) -> bool {
     registry.is_resource_type(builder.local_type(local))
 }
+
+/// Returns true if `local` holds a SINGLE-OWNER OPAQUE HANDLE: a
+/// pointer-typedef handle that HAS a drop but NO clone path.
+///
+/// The membership is DERIVED, never listed — but so that a reader knows the
+/// shape of it, the three clauses below select exactly `Mutex[T]` and
+/// `RWLock[T]` at present. Every other by-value handle is excluded for a
+/// stated reason: `Shared`/`Weak`/`Channel` have a refcount clone path;
+/// `Thread` and `TaskGroup` carry `Resource` copy-semantics, so
+/// `is_resource_type` already covered them; and `AtomicInt`/`AtomicBool`/
+/// `Barrier`/`WaitGroup`/`Semaphore`/`OnceFlag` have no drop at all, so
+/// nothing can double-free.
+///
+/// `is_resource_type` answers `false` for these, because the handle itself is
+/// a bitwise-copyable pointer (`copy_semantics: Trivial`). At a CONSUMING
+/// position that answer is wrong: the collection takes THE one owner, so the
+/// source must be move-zeroed or both the local and the collection slot drop
+/// the same handle (measured: `Vector[Mutex[int]].push(m)` → `free(): double
+/// free detected in tcache 2`, both backends).
+///
+/// The two predicates read are the typed ones already governing the axis:
+/// `is_by_value_receiver` (the protocol table's `SelfConvention::ByValue` —
+/// "this type IS a runtime handle pointer") and `is_refcount_clone_type`
+/// (`TypeMetadata::set_refcount_clone_fn`'s single-writer axis). REFCOUNT
+/// handles — {Shared, Weak, Channel} — are deliberately EXCLUDED: they have a
+/// real clone path, the consuming position increfs, and both owners drop
+/// legitimately.
+pub(super) fn is_single_owner_handle_local(
+    local: LocalId,
+    builder: &FunctionBuilder,
+    registry: &TypeRegistry,
+) -> bool {
+    let tid = builder.local_type(local);
+    if registry.is_resource_type(tid) || registry.is_refcount_clone_type(tid) {
+        return false;
+    }
+    if !registry.needs_drop(tid) {
+        return false;
+    }
+    match registry.get(tid) {
+        Some(crate::ir::types::GirType::Named(name)) => {
+            crate::ir::lowering::builtins::is_by_value_receiver(name)
+        }
+        _ => false,
+    }
+}
