@@ -1,0 +1,55 @@
+# CoW view-materialization on the GENERIC EQUIP METHOD body-lowering path.
+#
+# AXIS CELL — path = `lower_equip_method_with_subs`
+# (src/ir/lowering/functions.rs). `Cell[T]` holds a `Vector[T]`; `probe(&self)`
+# binds a view of element 0 and then calls `self.resize(v)`, which pushes 64
+# times and reallocates. One of eleven function-body-lowering paths; the five
+# per-function CoW / auto-move prescans used to be hand-copied into only two of
+# them, so this one lowered with an EMPTY `cow_reassigned_after`: the mark was
+# made and the materialize still did not happen, and the view dangled.
+#
+# ⚠ THE CONTROL IS THE POINT, AND IT IS WHAT NAMED THE DEFECT. Hand-monomorphise
+# this file — `Cell[T]` -> `Cell`, `T` -> `String`, nothing else — and it was
+# rc 0 printing `helloworld` even before the fix, because a NON-generic equip
+# method lowers through `lower_equip_method`, one of the two paths that already
+# ran the prescans. ONE type parameter was the whole difference, and the
+# difference was the PATH, not the genericness: a generic FREE function
+# (`cow_generic_fn_view_survives_realloc.gg`), a trait DEFAULT method
+# (`cow_trait_default_view_survives_realloc.gg`), a static trait method, a
+# closure body and the four module-loop bodies all crashed on the same shape.
+#
+# ⚠ NOT the "mutator NAME decides memory safety" class: this was rc 139 under
+# `resize` (a name that WAS on the retired `MUTATING_METHODS` list, so the
+# prescan DID mark the receiver) and under `grow` (a name that was not). The
+# mark was made and the materialize still did not happen — the break was
+# DOWNSTREAM of the classification, at the per-function-body entry.
+#
+# THE REALLOC IS LOAD-BEARING (64 pushes; one push is rc 0 and proves nothing).
+# The heap payload via `mk` is NOT load-bearing for reproduction — it is kept so
+# the freed element is a heap String and ASan reports a legible
+# heap-use-after-free rather than a bare SIGSEGV.
+#
+# RED-VERIFIED against the pre-fix compiler: rc 139 SIGSEGV on C AND LLVM, ASan
+# `heap-use-after-free`. ggdef, the definitional interpreter, adjudicated
+# `helloworld` all along — both compilers were wrong and the oracle knew.
+String mk(String a, String b):
+    return a + b
+
+struct Cell[T]:
+    Vector[T] items
+
+equip Cell[T]:
+    void resize(&self, T v):
+        int i = 0
+        while i < 64:
+            self.items.push(v)
+            i = i + 1
+
+    T probe(&self, T v):
+        T s = self.items.get(0).unwrap()
+        self.resize(v)
+        return s
+
+void main():
+    Cell[String] h = Cell[String]([mk("hello", "world")])
+    print(h.probe(mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy")))

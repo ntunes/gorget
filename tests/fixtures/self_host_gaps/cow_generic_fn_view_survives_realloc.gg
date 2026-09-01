@@ -1,0 +1,38 @@
+# CoW view-materialization on the GENERIC FREE FUNCTION body-lowering path.
+#
+# AXIS CELL — path = `lower_generic_function` (src/ir/lowering/functions.rs).
+# One of eleven function-body-lowering paths; the five per-function CoW /
+# auto-move prescans used to be hand-copied into only two of them, so this one
+# lowered with an EMPTY `cow_reassigned_after`: `is_source_mut_unsafe_at`
+# answered false, the element view stayed a lazy borrow, and the 64 pushes
+# reallocated the buffer out from under it.
+#
+# THE REALLOC IS LOAD-BEARING (64 pushes; one push is rc 0 and proves nothing),
+# and the payload is heap-FORCED via `mk` so the freed element is a heap String
+# and ASan reports a legible heap-use-after-free rather than a bare SIGSEGV.
+#
+# RED-VERIFIED against the pre-fix compiler: rc 139 SIGSEGV on C AND LLVM.
+#
+# ⚠ WHY THIS FIXTURE IS IN A SUBDIRECTORY AND NOT AT TOP LEVEL. Every top-level
+# `tests/fixtures/*.gg` is auto-scanned into `runtime_parity_corpus`, and this
+# program does not MATCH on the self-host lane — for a reason that has nothing
+# to do with the cell it tests (see the `#[ignore]`d self-host test wired
+# alongside it). Core #9 ⊕ forbids raising `RUNTIME_DIFF_NONMATCH_CEILING` for a
+# round's OWN inflow, so the fixture stays out of the auto-scanned set. It is
+# STILL a live regression guard: `run_gg` runs it on C and on LLVM, and
+# `tests/fixtures/security/` symlinks it for the ASan lane. Only the parity
+# corpus is opted out of, and only until the self-host defect is fixed.
+String mk(String a, String b):
+    return a + b
+
+T probe[T](Vector[T] &v, T x):
+    T s = v.get(0).unwrap()
+    int i = 0
+    while i < 64:
+        v.push(x)
+        i = i + 1
+    return s
+
+void main():
+    Vector[String] v = [mk("hello", "world")]
+    print(probe(&v, mk("xxxxxxxxxxxxxxxx", "yyyyyyyyyyyyyyyy")))

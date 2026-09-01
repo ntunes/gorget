@@ -3830,9 +3830,11 @@ fn lower_test_items(
     for item in &ast_module.items {
         if let Item::SuiteSetup(setup) = &item.node {
             let mut builder = FunctionBuilder::new("__suite_setup", UNIT_TYPE, &[]);
-            ctx.clear_locals();
+            functions::begin_function_body(
+                ctx,
+                functions::FnBodyAst::Stmts(&setup.body.stmts),
+            );
             ctx.drops.push_scope(drops::DropScopeKind::Function);
-            ctx.func_state.liveness = liveness::compute_function_liveness(&setup.body.stmts);
             stmts::lower_block(ctx, &mut builder, &setup.body);
             let last = builder.current_block.0 as usize;
             if builder.blocks[last].terminator.is_none() {
@@ -3851,9 +3853,11 @@ fn lower_test_items(
     for item in &ast_module.items {
         if let Item::SuiteTeardown(teardown) = &item.node {
             let mut builder = FunctionBuilder::new("__suite_teardown", UNIT_TYPE, &[]);
-            ctx.clear_locals();
+            functions::begin_function_body(
+                ctx,
+                functions::FnBodyAst::Stmts(&teardown.body.stmts),
+            );
             ctx.drops.push_scope(drops::DropScopeKind::Function);
-            ctx.func_state.liveness = liveness::compute_function_liveness(&teardown.body.stmts);
             stmts::lower_block(ctx, &mut builder, &teardown.body);
             let last = builder.current_block.0 as usize;
             if builder.blocks[last].terminator.is_none() {
@@ -3924,16 +3928,20 @@ fn lower_test_items(
 
             // Build the test function (no parameters — with-bindings use body-level `with` blocks).
             let mut builder = FunctionBuilder::new(&fn_name, UNIT_TYPE, &[]);
-            ctx.clear_locals();
-            ctx.drops.push_scope(drops::DropScopeKind::Function);
             // Match scrutinee staging consults `is_last_use_at` to decide
             // whether to transfer drop ownership from a named source to the
             // staged scrutinee. Without function-level liveness data (Snag
             // #25d), it stays conservative — the source's drop fires at
             // scope exit, double-freeing payloads an arm's `unwrap()`
-            // already extracted via the aliased scrutinee. Same call as
-            // the regular function lowering path in `functions.rs`.
-            ctx.func_state.liveness = liveness::compute_function_liveness(&test_def.body.stmts);
+            // already extracted via the aliased scrutinee. `begin_function_body`
+            // is the same call the regular function lowering path in
+            // `functions.rs` makes, and it also supplies the four CoW prescans
+            // this path used to lack (a hand-copied liveness-only subset).
+            functions::begin_function_body(
+                ctx,
+                functions::FnBodyAst::Stmts(&test_def.body.stmts),
+            );
+            ctx.drops.push_scope(drops::DropScopeKind::Function);
 
             stmts::lower_block(ctx, &mut builder, &test_def.body);
 
@@ -3993,9 +4001,11 @@ fn lower_bench_items(
             let bench_name = bench_def.name.node.clone();
 
             let mut builder = FunctionBuilder::new(&fn_name, UNIT_TYPE, &[]);
-            ctx.clear_locals();
+            functions::begin_function_body(
+                ctx,
+                functions::FnBodyAst::Stmts(&bench_def.body.stmts),
+            );
             ctx.drops.push_scope(drops::DropScopeKind::Function);
-            ctx.func_state.liveness = liveness::compute_function_liveness(&bench_def.body.stmts);
 
             stmts::lower_block(ctx, &mut builder, &bench_def.body);
 

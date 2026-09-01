@@ -201,7 +201,8 @@ pub struct SharedVarState {
 ///
 /// Extracted from `LoweringContext` to prevent per-function state from leaking
 /// across function boundaries during monomorphization. All fields reset to their
-/// defaults between functions via `LoweringContext::clear_locals()`.
+/// defaults between functions via `LoweringContext::begin_function_body_reset()`,
+/// which only `functions::begin_function_body` may call.
 #[derive(Default)]
 pub struct FunctionState {
     /// name → (LocalId, GIR TypeId) for variables in the current function.
@@ -366,7 +367,8 @@ pub struct FunctionState {
     /// is harmless: spans are unique per source location, the value-lowering
     /// block dominates every binding site (so the local is always valid to
     /// read), and the whole map is cleared en masse per-function via `Default`
-    /// (`clear_locals`) — so a stale entry can never be reused across functions.
+    /// (`begin_function_body_reset`) — so a stale entry can never be reused across
+    /// functions.
     pub is_scrut_memo: FxHashMap<usize, (LocalId, TypeId)>,
 }
 
@@ -577,9 +579,9 @@ pub struct LoweringContext<'a> {
     /// 3). Records every materialize routed through the plan-apply funnel; the
     /// convergence meter (`ratchet_b_materialize_site_count`) drops as at-site
     /// `cow_before_mutation` classes migrate here. Reset per function via
-    /// `clear_locals` (the universal per-function-body reset every lowering entry
-    /// funnels through) — so this genuinely IS per-function, not module-wide
-    /// accumulation.
+    /// `functions::begin_function_body` (the universal per-function-body entry
+    /// every lowering path funnels through) — so this genuinely IS per-function,
+    /// not module-wide accumulation.
     pub materialize_plan: MaterializePlan,
     /// Maps monomorphized method name → runtime callee metadata.
     /// Populated from BuiltinTypeProtocol declarations during module setup.
@@ -1911,23 +1913,32 @@ impl<'a> LoweringContext<'a> {
     }
 
     /// Reset all per-function transient state for the next function.
-    pub fn clear_locals(&mut self) {
+    ///
+    /// ⚠ THE RAW HALF ONLY. Resetting is half of what a body-lowering path owes:
+    /// the other half is the five per-function prescans the CoW / auto-move
+    /// machinery reads back out of `func_state`. Call
+    /// `functions::begin_function_body(ctx, body)` — which does both as ONE
+    /// operation — and never this directly. It must keep exactly ONE caller
+    /// (that function); the `function_body_prescans_are_centralised` lint in
+    /// `tests/lints.rs` pins the count.
+    pub(crate) fn begin_function_body_reset(&mut self) {
         self.func_state = FunctionState::default();
         // Also reset per-function subfields on module-wide structs:
         self.spawn.result_locals.clear();
         self.spawn.pending_fn = None;
         self.shared.locals.clear();
         // Planner round 3: the `MaterializePlan` is per-function transient state
-        // (directives recorded this function's lowering), so it resets here — the
-        // SINGLE universal per-function-body reset chokepoint every body-lowering
-        // entry funnels through (`lower_function` / `lower_equip_method` /
-        // `lower_generic_function` / `lower_equip_method_with_subs` — which also
-        // covers `lower_method_instance`, since it delegates — PLUS the closure
-        // (`emit_closure_call_function`), trait-default, and module-loop body
-        // paths). One source of truth (devbook/24 r3) rather than a clear scattered
-        // across every entry point; closures are drained in a dedicated post-pass
-        // (mod.rs P2.4), never mid-enclosing-function, so this never wipes an
-        // in-progress plan.
+        // (directives recorded this function's lowering), so it resets here — in
+        // the raw half of the SINGLE universal per-function-body entry every
+        // body-lowering path funnels through (`lower_function` /
+        // `lower_equip_method` / `lower_generic_function` /
+        // `lower_equip_method_with_subs` — which also covers
+        // `lower_method_instance`, since it delegates — PLUS the closure
+        // (`emit_closure_call_function`), both trait paths, and the four
+        // module-loop body paths). One source of truth (devbook/24 r3) rather
+        // than a clear scattered across every entry point; closures are drained
+        // in a dedicated post-pass (mod.rs P2.4), never mid-enclosing-function,
+        // so this never wipes an in-progress plan.
         self.materialize_plan.clear();
     }
 

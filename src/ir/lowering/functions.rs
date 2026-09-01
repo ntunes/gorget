@@ -11,6 +11,125 @@ use super::exprs::lower_expr;
 use super::generics;
 use super::stmts::lower_block;
 
+/// The AST shape a function body takes at the point `begin_function_body` runs.
+///
+/// The prescans want a `&[Spanned<Stmt>]`, but the eleven body-lowering paths do
+/// not all *have* one: `FunctionBody::Block` and the module-loop bodies carry a
+/// statement slice directly, while a closure body is a bare `Spanned<Expr>`
+/// (`ClosureLowering`'s `LiftedClosure::body`). Passing `&[]` for the second kind
+/// is a **sentinel** — the empty slice would then mean three different things
+/// ("genuinely empty body", "expression body, extract them differently", "I did
+/// not know how to get the statements"), which Layering discipline rule 2 names
+/// explicitly. Typing the parameter makes the third meaning unspellable: a new
+/// path must pick a variant, and the `Expr::Block` unwrap happens once, here.
+pub(crate) enum FnBodyAst<'a> {
+    /// A statement block — the prescans run over exactly these statements.
+    Stmts(&'a [Spanned<Stmt>]),
+    /// An expression body. `Expr::Block` unwraps to its statements; any other
+    /// expression has no statement list at all, so the prescans see none.
+    Expr(&'a Expr),
+}
+
+impl<'a> FnBodyAst<'a> {
+    /// The statement slice the prescans walk.
+    fn stmts(&self) -> &'a [Spanned<Stmt>] {
+        match self {
+            FnBodyAst::Stmts(stmts) => stmts,
+            FnBodyAst::Expr(e) => expr_body_stmts(e),
+        }
+    }
+}
+
+impl<'a> From<&'a FunctionBody> for FnBodyAst<'a> {
+    fn from(body: &'a FunctionBody) -> Self {
+        match body {
+            FunctionBody::Block(block) => FnBodyAst::Stmts(&block.stmts),
+            FunctionBody::Expression(e) => FnBodyAst::Expr(&e.node),
+            // `Declaration` / `Extern` have no user body to lower at all.
+            FunctionBody::Declaration | FunctionBody::Extern(_) => FnBodyAst::Stmts(&[]),
+        }
+    }
+}
+
+/// Statement slice of an expression body: `Expr::Block` unwraps to its own
+/// statements, every other expression has none. The single place the closure
+/// path's `Spanned<Expr>` is converted (see `FnBodyAst`).
+fn expr_body_stmts(e: &Expr) -> &[Spanned<Stmt>] {
+    match e {
+        Expr::Block(block) => &block.stmts,
+        _ => &[],
+    }
+}
+
+/// THE SINGLE PER-FUNCTION-BODY ENTRY POINT.
+///
+/// Every one of the eleven body-lowering paths funnels through here. It performs
+/// the per-function state reset AND computes the five per-function prescans the
+/// whole CoW / auto-move machinery reads out of `func_state`
+/// (`cow_reassigned_names`, `loop_reassigned_names`, `cow_reassigned_after`,
+/// `name_use_counts`, `liveness`).
+///
+/// Before this existed, the reset (`LoweringContext::clear_locals`) was the
+/// universal chokepoint but the five prescans were hand-copied into TWO of the
+/// eleven callers. `lower_generic_function`, `lower_equip_method_with_subs`,
+/// `lower_trait_method_body`, `lower_static_trait_method`,
+/// `emit_closure_call_function` and the four module-loop bodies (suite setup /
+/// teardown / test / bench — those four had liveness only, i.e. a hand-copied
+/// SUBSET) therefore lowered with an EMPTY `cow_reassigned_after`, so
+/// `is_source_mut_unsafe_at` answered false unconditionally, the CoW element
+/// borrow stayed lazy, and a reallocating `&self` mutator on a generic equip
+/// left it DANGLING: rc 139 SIGSEGV on both backends, ASan
+/// `heap-use-after-free`.
+///
+/// Layering rule 4 (resolve once, write through) + Core #4 (fix the class,
+/// centralize at the producer): the reset and the state it must establish are
+/// ONE operation, so path twelve cannot be born missing them.
+/// `LoweringContext::begin_function_body_reset` is the raw half and has exactly
+/// ONE caller — this function — pinned by the
+/// `function_body_prescans_are_centralised` lint in `tests/lints.rs`.
+///
+/// Returns the wall time the prescans took, so `lower_function` can keep its
+/// `setup` / `prescan` sub-pass timings partitioned (they are reported under
+/// `lower_function::prescan*` in the `gir_lower` pass-times map, and now cover
+/// all eleven paths rather than one).
+pub(crate) fn begin_function_body(
+    ctx: &mut LoweringContext,
+    body: FnBodyAst<'_>,
+) -> std::time::Duration {
+    ctx.begin_function_body_reset();
+
+    let stmts = body.stmts();
+    let prescan_t0 = std::time::Instant::now();
+
+    let t = std::time::Instant::now();
+    ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(stmts);
+    ctx.func_state.loop_reassigned_names = prescan_loop_reassigned_names(stmts);
+    *ctx.lower_fn_sub_times.entry("lower_function::prescan::cow_unsafe").or_default() += t.elapsed();
+
+    let t = std::time::Instant::now();
+    ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(
+        stmts,
+        &CowPrescan {
+            fn_param_ownerships: &ctx.fn_param_ownerships,
+            receiver_mutations: &ctx.analysis.receiver_mutations,
+        },
+    );
+    *ctx.lower_fn_sub_times.entry("lower_function::prescan::cow_after").or_default() += t.elapsed();
+
+    let t = std::time::Instant::now();
+    ctx.func_state.name_use_counts = prescan_name_use_counts(stmts);
+    *ctx.lower_fn_sub_times.entry("lower_function::prescan::name_use_counts").or_default() +=
+        t.elapsed();
+
+    let t = std::time::Instant::now();
+    ctx.func_state.liveness = super::liveness::compute_function_liveness(stmts);
+    *ctx.lower_fn_sub_times.entry("lower_function::prescan::liveness").or_default() += t.elapsed();
+
+    let prescan = prescan_t0.elapsed();
+    *ctx.lower_fn_sub_times.entry("lower_function::prescan").or_default() += prescan;
+    prescan
+}
+
 /// Assign an expression-body operand into the return slot _0, picking the
 /// AssignMode that matches Phase C semantics: Move for resource-typed
 /// bare-place sources (transfer ownership; the source is dead at function
@@ -1135,7 +1254,7 @@ fn cow_after_expr_moves(
         }
         // A closure BODY mutating a captured collection is a mutation of that
         // collection, wherever the closure later runs — the capture is what
-        // makes it reachable. `t0704` is this arm's absence.
+        // makes it reachable.
         Expr::Closure { body, .. } => {
             cow_after_expr_moves(&body.node, future, info, interner);
         }
@@ -1547,8 +1666,9 @@ pub fn lower_function(
 
     let mut builder = FunctionBuilder::new(name.to_string(), return_type, &params);
 
-    // Clear and register locals for this function
-    ctx.clear_locals();
+    // Reset per-function state and run the five prescans for this body. The
+    // prescan slice is timed separately below so `setup` keeps its own number.
+    let __prescan_elapsed = begin_function_body(ctx, FnBodyAst::from(&func.body));
     ctx.func_state.current_fn_name = name.to_string();
 
     // Register parameters as locals
@@ -1630,36 +1750,13 @@ pub fn lower_function(
         }
     }
 
-    // End of `setup` sub-pass — accumulate timing before prescan.
-    *ctx.lower_fn_sub_times.entry("lower_function::setup").or_default() += __setup_t0.elapsed();
-
-    let __prescan_t0 = std::time::Instant::now();
-
-    // Pre-scan: find variables unsafe for CoW (reassigned, !-moved).
-    // Also count name uses and compute liveness for auto-move (Phase 1f).
-    if let FunctionBody::Block(block) = &func.body {
-        let __t = std::time::Instant::now();
-        ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
-        ctx.func_state.loop_reassigned_names = prescan_loop_reassigned_names(&block.stmts);
-        *ctx.lower_fn_sub_times.entry("lower_function::prescan::cow_unsafe").or_default() += __t.elapsed();
-        let __t = std::time::Instant::now();
-        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(
-            &block.stmts,
-            &CowPrescan {
-                fn_param_ownerships: &ctx.fn_param_ownerships,
-                receiver_mutations: &ctx.analysis.receiver_mutations,
-            },
-        );
-        *ctx.lower_fn_sub_times.entry("lower_function::prescan::cow_after").or_default() += __t.elapsed();
-        let __t = std::time::Instant::now();
-        ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
-        *ctx.lower_fn_sub_times.entry("lower_function::prescan::name_use_counts").or_default() += __t.elapsed();
-        let __t = std::time::Instant::now();
-        ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
-        *ctx.lower_fn_sub_times.entry("lower_function::prescan::liveness").or_default() += __t.elapsed();
-    }
-
-    *ctx.lower_fn_sub_times.entry("lower_function::prescan").or_default() += __prescan_t0.elapsed();
+    // End of `setup` sub-pass. The prescans now run inside
+    // `begin_function_body` at the top of this function (so all eleven
+    // body-lowering paths get them), which is inside this window — subtract
+    // their time so `setup` and `prescan` stay a partition of the wall clock.
+    // `begin_function_body` accumulates `lower_function::prescan*` itself.
+    *ctx.lower_fn_sub_times.entry("lower_function::setup").or_default() +=
+        __setup_t0.elapsed().saturating_sub(__prescan_elapsed);
 
     let __body_t0 = std::time::Instant::now();
 
@@ -1910,8 +2007,8 @@ pub fn lower_equip_method(
 
     let mut builder = FunctionBuilder::new(mangled_name.clone(), return_type, &params);
 
-    // Clear and register locals
-    ctx.clear_locals();
+    // Reset per-function state and run the five prescans for this body.
+    begin_function_body(ctx, FnBodyAst::from(&method.body));
     ctx.func_state.current_fn_name = mangled_name.clone();
     ctx.callable_return_types_clear();
     ctx.func_state.consuming_self = self_is_consuming;
@@ -2004,20 +2101,7 @@ pub fn lower_equip_method(
         ctx.fn_sigs.insert(mangled_name.clone(), (base_param_types, return_type));
     }
 
-    // Pre-scan: find variables unsafe for CoW + count name uses + liveness for auto-move.
-    if let FunctionBody::Block(block) = &method.body {
-        ctx.func_state.cow_reassigned_names = prescan_cow_unsafe_names(&block.stmts);
-        ctx.func_state.loop_reassigned_names = prescan_loop_reassigned_names(&block.stmts);
-        ctx.func_state.cow_reassigned_after = compute_cow_reassigned_after(
-            &block.stmts,
-            &CowPrescan {
-                fn_param_ownerships: &ctx.fn_param_ownerships,
-                receiver_mutations: &ctx.analysis.receiver_mutations,
-            },
-        );
-        ctx.func_state.name_use_counts = prescan_name_use_counts(&block.stmts);
-        ctx.func_state.liveness = super::liveness::compute_function_liveness(&block.stmts);
-    }
+    // (The five prescans ran in `begin_function_body` above.)
 
     // Lower the body
     match &method.body {
@@ -2267,9 +2351,10 @@ pub fn lower_generic_function(
 
     let mut builder = FunctionBuilder::new(mangled_name, return_type, &param_refs);
 
-    // Clear and register locals — assign sequential LocalIds to runtime params only
-    // (meta op params carry no runtime value and are skipped).
-    ctx.clear_locals();
+    // Reset per-function state + prescans, then register locals — assign
+    // sequential LocalIds to runtime params only (meta op params carry no
+    // runtime value and are skipped).
+    begin_function_body(ctx, FnBodyAst::from(&template.body));
     ctx.func_state.current_fn_name = mangled_name.to_string();
     ctx.callable_return_types_clear();
 
@@ -2680,7 +2765,7 @@ fn lower_equip_method_with_subs(
 
     let mut builder = FunctionBuilder::new(method_mangled, return_type, &params);
 
-    ctx.clear_locals();
+    begin_function_body(ctx, FnBodyAst::from(&method_def.body));
     ctx.callable_return_types_clear();
     let mut param_idx = if has_self {
         ctx.register_local("self", LocalId(1), self_ptr_type);

@@ -115,22 +115,25 @@ or a struct with an `R` field are all drop-tainted too. A **field or
 index place** of a tainted type (`hh.r`, `v[0]`) must use `.clone()` —
 `^hh.r` would be a partial move.
 
-The by-design single-owner members follow the same `!`/`.clone()` rule:
+The by-design single-owner members follow the same `^` rule:
 
 - `Box[T]`, `Task`, `TaskGroup`, `Guard` — single-owner heap
   allocations whose value-semantics ARE move-semantics
+- `Mutex[T]`, `RWLock[T]` — unique locks (D53). Sharing one lock is
+  `Shared[Mutex[T]]`; `.clone()` is not a remedy
 - `Callable[...]` and closure values — closures hold captured-env
   references that aren't safe to alias
 - `Owned[T]` — when you've explicitly asked the type system to track
   ownership transfers
 
 For all of these, `Box[int] b = a` is a compile error; write
-`Box[int] b = ^a` (or `.clone()` for an independent copy). A fresh
-temporary (`R b = R(1)`, `Box[int] b = make()`) is not a live place — it
-moves without an operator and is never rejected. The refcounted/handle
-types (`Shared[T]`, `Weak[T]`, `Mutex[T]`, `Channel[T]`) are the
-sanctioned multi-owner escape hatch and are not drop-tainted by their
-payload.
+`Box[int] b = ^a` (`.clone()` only when the type has a clone path). A
+fresh temporary (`R b = R(1)`, `Box[int] b = make()`) is not a live
+place — it moves without an operator and is never rejected. The same
+reject fires at consuming positions (`push`/`put`/`set`/`insert`/`send`/
+`v[i] = x`). The refcounted/handle types (`Shared[T]`, `Weak[T]`,
+`Channel[T]`) are the sanctioned multi-owner escape hatch and are not
+drop-tainted by their payload.
 
 ---
 

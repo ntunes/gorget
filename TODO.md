@@ -2,10 +2,17 @@
 
 ## ⏭ CURRENT NEXT (the HANDOVER — UPDATE IN PLACE each session; state + NEXT only, no completed recap — landed work lives in DONE.md)
 
-**▶ R48 IS OPEN (2026-08-31) — the owner lifted the R47 suspension with *"open next round"*.**
-Headline: **the six CRITICAL memory-safety defects**, with the owner-directed burn-down campaign in
-parallel and `t0861` (the figures DB) early at the owner's explicit request (*"please do not forget
-t0861, the figures DB. It should go in early this round."*).
+**▶ R48 IS OPEN AND MID-FLIGHT — 2 of 7 tracks integrated, 5 landed and awaiting one gauntlet step each.
+⛔ NEW AGENTS ARE ON AN OWNER HOLD, LIFTED FOR ONE: D2's confirming output-review (2026-09-01).
+⇒ READ "R48 IS MID-FLIGHT — PICK UP HERE" BELOW FIRST; it carries the per-track table, the
+integration recipe, and what must happen before close.**
+**D53 sharpened in place the same day:** Mutex/RWLock are unique locks; consume-position reject is
+load-bearing; `.clone()` is not a fix-it; Channel stays multi-owner. Not yet implemented.
+Opened 2026-08-31 (owner: *"open next round"*). Headline: **the six CRITICAL memory-safety defects** —
+`t0841` and `t0763`+`t0134` are CLOSED and integrated; `t0770`/`t0772`, `t0840` and `t0825` are fixed on
+branches; `t0771` moved to R49 — with the owner-directed burn-down campaign in parallel and `t0861` (the
+figures DB) early at the owner's explicit request (*"please do not forget t0861, the figures DB. It should
+go in early this round."*).
 
 **⭐ R48 OPENED ON A RECOVERED HEAD START — do not re-derive it.** The kept worktree
 `agent-a619349ec03b80e93` (flagged at R47 close as the F3 scout lost to the disk crash) holds an
@@ -22,16 +29,93 @@ struct holding owned resource fields — the root of BOTH the UAF and the leak f
 ⚠ **`GG_FIX_C`'s shape (copy-paste the prescan block into the two missing paths) is exactly what
 § Sibling-site drift forbids** — the reference-grade shape centralizes at the producer + arm-count lint.
 
-### R48 TRACKS (6 scouts launched 2026-08-31; file zones disjoint by construction)
+### ▶ R48 IS MID-FLIGHT — PICK UP HERE (state as of 2026-09-01, main `329ad020`)
 
-| Track | Items | Zone | Head start |
-|---|---|---|---|
-| **A** | `t0770` + `t0772` (same helper, opposite directions) | `src/ir/lowering/exprs/methods.rs` | `GG_FIX_A` |
-| **B** | `t0771` | `src/ir/lowering/closures.rs` | `GG_FIX_B2` |
-| **C** | `t0763` + `t0134` (self-host lane, Core #9) | `src/ir/lowering/functions.rs`, `generics/` | `GG_FIX_C` |
-| **D** | `t0840` + `t0841` | TBD by scout | none — diagnose from scratch |
-| **E** | burn-down campaign (owner-directed) | `tests/` | F2 patch |
-| **F** | `t0861` figures DB — schema + clone-meter pilot | `scripts/`, `tests/lints.rs` | `clone_meter.spec` |
+**2 of 7 tracks INTEGRATED. 5 branches are LANDED, GREEN ON THEIR OWN BRANCH, and each owes exactly one
+gauntlet step before it may merge.** The standing hold is *"don't start new ones until I say so"*;
+it has been lifted twice, once per agent: Track C's confirming pass (signed off, integrated), and
+**D2's confirming pass (in flight)**. D53 (sharpened): unique lock + consume-position reject; not
+yet in the D2 diff — that is the confirming pass's load-bearing bar.
+
+| track | items | branch tip | ahead | merge | OWED STEP |
+|---|---|---|---|---|---|
+| **D1** | `t0841` | — | — | — | **INTEGRATED** `3b8a5561` |
+| **C** | `t0763` `t0134` | — | — | — | **INTEGRATED** `329ad020` |
+| **A** | `t0770` `t0772` | `5d43cedd` | 6 | ⚠ `todo/t0876.md` | **a first output-review** (none yet) |
+| **D2** | `t0840` | `4850bf38` | 6 | `TODO.md`+`DONE.md` | **confirming pass in flight** (D53 consume-gate is the bar; t0908 reject not yet implemented) |
+| **β** | `t0825` | `470cd49f` | 1 | clean | **a first output-review** (none yet) |
+| **γ** | nondeterminism | `5f67841f` | 7 | clean | **a first output-review** (none yet) |
+| **F** | `t0861` `t0851` `t0860` | `6e9404f5` | 6 | ⚠ `todo/t0876.md` | **a confirming pass** (2 reviews blocked → folded) |
+| **E-B1/B2/B3** | burn-down | — | — | — | **brief pass 2** each (pass 1 blocked → folded) |
+| **B1/B2** | `t0771` | — | — | — | **R49** by owner call — briefs in `/tmp/r49briefs/` ⚠ `/tmp` IS NOT DURABLE |
+
+⚠ **Briefs + all fold addenda live in `/tmp/r48briefs/*.md` and are NOT durable.** Each carries its
+review history as precedence-ordered addenda (`PRECEDENCE: A3 > A2 > A1 > BODY`). **Re-materialise before
+relying on them.**
+
+**THE INTEGRATION RECIPE THAT WORKED FOR C — follow it, it was bought twice:**
+1. Merge the branch; expect `TODO.md` to conflict (the handover block moves under every track).
+2. Resolve `TODO.md` with **`git checkout --ours`**, then **`python3 scripts/todo_index.py --write`** —
+   the generated index picks up the track's filed/closed items automatically.
+3. ⛔ **Run the SEPARATE targets AT INTEGRATION, not at close:** `-p ggdef` · `--test spec_conformance` ·
+   `--test security` · `--test lints` · `--lib`. **`--test integration` never touches the first three, and
+   skipping `-p ggdef` after D1 left main RED for hours.**
+4. Prune the worktree (`git worktree unlock` then `remove --force`; branches survive).
+
+⛔ **ID COLLISIONS (`t0910`): A and F both add a DIFFERENT `todo/t0876.md`.** ⛔ **NEVER resolve by taking
+one side** — the sides are different defects, and taking one silently destroys a filed item while handing
+its `repro`/`cites` to an unrelated one. **Renumber the LATER track above `t0925` and fix every citation**
+(Track C did this correctly: `t0920`/`t0921`, including a hand-off line that had pointed at D1's item).
+
+### ⛔ WHAT MUST HAPPEN BEFORE R48 CAN CLOSE
+1. **The five owed gauntlet steps + three brief pass-2s.** No diff integrates without a fresh pass on it.
+2. **E-B3's `robustness_map` scorer fix is UNLANDED.** `scripts/robustness_map.py:617` derives "good" from
+   the C-lane BASELINE bucket, never `COL_EXPECTED` ⇒ **fixing a C-lane cell scores as a REGRESSION**, and
+   on the 43 self-host-WORKS cells a self-host regression scores as PROGRESS. `:715-723` makes `--accept`
+   a one-shot launderer (it writes before the regression check). **Until this lands the round-close
+   robustness gate cannot be read either way, and this round FIXED C-lane cells.**
+3. **NOT RUN on the integrated tree:** `GG_BACKEND=llvm` whole-corpus · `scripts/sanitize_sweep.sh` ·
+   `robustness_map` · the C whole-corpus sweep. (D2 ran the C sweep green on ITS branch — 2557/0 with the
+   bootstrap included and scope verified — that is one branch, not the integrated tree.)
+4. **`RUNTIME_DIFF_MATCH_FLOOR` reseed is a ROUND-CLOSE action** on the post-integration number with the
+   jitter discount — **never mid-round from one worktree**. γ measured MATCH **1505** and already lowered
+   `RUNTIME_DIFF_NONMATCH_CEILING` 151 → **147** as its assert instructs (lowering needs no sign-off).
+
+### ⛔ TWO GATES THAT REPORT SUCCESS WITHOUT EVALUATING ANYTHING — R48's sharpest instrument finding
+- **`t0925`** — `scripts/run_integration.sh:66` puts `"$@"` BEFORE cargo's `--`, so a harness arg is eaten
+  as a cargo filter: `--skip self_host` → **`0 passed; 2748 filtered out`, exit 0.** This is the wrapper
+  Round-lifecycle step 4 names as the round-close C sweep. **A green zero.**
+- **`t0924`** — the parity non-MATCH ceiling assert is wrapped in `if cfg!(debug_assertions)`, so it
+  **no-ops in the profile executors actually run.** Track C's family run passed **vacuously**.
+⇒ **Both were found by executors noticing something odd, never by the gates. Weigh round-close green
+accordingly.** ⊕ Related: `t0875` — four counting assertions were each evaded by respelling what they
+counted, the last in **seven** costumes. **A textual guard's reach is the TOKEN, never the CONCEPT.**
+
+### ✅ OWNER RULINGS THIS ROUND — do not re-litigate
+- **D53 (2026-09-01, sharpened in place the same day):** `Mutex`/`RWLock` are **unique locks**.
+  Exclusion and sharing are orthogonal — share via `Shared[Mutex[T]]`, never by cloning the mutex.
+  `E_MoveWithoutOperator` at assign, init, **and consuming positions** (`push`/`put`/`set`/`insert`/
+  `send`/`v[i] = x`). Diagnostic names `^source` or `Shared[Mutex[T]]` — **not** `.clone()`. Channel
+  stays multi-owner (it actually refcounts). ⇒ **`t0908` closes by check-time reject**; the consume
+  gate is load-bearing (`push` is a method call, so assign+ctor alone does not close it).
+  ⚠ **The rejection is RATIFIED but NOT YET IMPLEMENTED** (D2 confirming pass is the next step).
+  ⚠ `AGENTS.md` is a second spelling, stale by two names *and* the consume-position clause, at 0
+  bytes headroom — compact a neighbour; prefer cite-the-ledger.
+- **`t0771` (B1+B2) → R49**; **`t0823` (α) → R49**; the D22 canonical-spelling migration **STOPPED** and
+  `no_dot_slice_after_d22` **suspended** (`t0871`: `s[a:b]` is silently wrong — the migration target was
+  broken and the removal clause had been withdrawn by D22 Rider 2).
+
+### ⚠ ORCHESTRATOR ERRATA — bought expensively, do not repeat
+- **A persisting `cd` into an agent worktree misrouted three commits.** The Bash tool keeps cwd between
+  calls. **Use `git -C <path>`, never `cd`, outside the orchestrator worktree.**
+- **Integrating without `-p ggdef` turned main RED** — `t0801`'s glob-minus-exclusions class recurred in
+  the round that closed it.
+- **A figure confirmed by re-running the enumerator's own regex is NOT confirmed** — "3 round closes" was
+  the predicate's own output; the truth is ~38 (`t0851`, re-opened).
+- **`git add <explicit paths>` silently omits** — D53 sat uncommitted through a later commit because only
+  `TODO.md`/`todo/` were staged. Lints verify content, nothing verifies it was committed.
+- **Three of my own probes misled me** (wrong flag · a syntax error read as a result · a non-reallocating
+  mutation). **MIND THE PROBE: check `rc`, and confirm the probe reaches the mechanism.**
 
 ### ⚠ R48 SCOUT CORRECTIONS — MEASURED, SUPERSEDE THE FIGURES ABOVE (2026-08-31)
 
@@ -530,7 +614,6 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t0709`](todo/t0709.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — a Vector[Box[Trait]] built with Box.new + push and RETURNED FROM A HELPER segfaults: rc 139 on BOTH back…
 - [`t0715`](todo/t0715.md) **HIGH** — 🆕📉 [HIGH — a MEASURED +13.08% stage-1 string-clone regression, correctness-required but reclaimable; ceilings re-seeded…
 - [`t0750`](todo/t0750.md) **HIGH** — 🆕🚨 [HIGH — A CoW COLLECTION ALIAS LOSES ITS VALUE SEMANTICS INSIDE A while LOOP, IN BOTH DIRECTIONS. Silent wrong values…
-- [`t0763`](todo/t0763.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — a &self MUTATOR ON A GENERIC EQUIP IS A USE-AFTER-FREE; rc 139 SIGSEGV on BOTH backends; found 2026-08-2…
 - [`t0771`](todo/t0771.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — AddressSanitizer: heap-use-after-free under --sanitize, and on a plain build rc 0 with SILENTLY WRONG OU…
 - [`t0772`](todo/t0772.md) **HIGH** — 🆕🐛 [HIGH — a stdout-invisible leak on EVERY combinator call over a named receiver with a heap payload; 6 B / 1 allocatio…
 - [`t0872`](todo/t0872.md) **HIGH** — 🆕🐛 [HIGH — a 6-byte leak on EVERY inline-constructor receiver, and on a plain struct-ctor field read; isolated 2026-08-3…
@@ -565,7 +648,6 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 
 #### 🆕 ROUND-38 FOLLOW-UPS + DISCOVERED RESIDUALS (filed 2026-07-04; T-B landed = self-host `&self` MUTATION-INFERENCE pass — `compute_method_mutates_self` classifies each non-generic equip method read-only-vs-writes-self via a monotone fixpoint over self-callee edges, and the named-receiver CoW gate materializes ONLY genuine mutators. Both the SCAN (`mutinf_scan_expr`) and the lower_expr GATE are USER→BUILTIN order (Core #4), so a user `&self`-mutator NAMED like a read-only builtin (`get`/`map`/`peek`/…) is classified correctly for BOTH a RESOLVABLE named receiver AND a RESOLVABLE projected receiver (`v[i].get()` / `s.v[i].get()` / `o.inner.get()`) — the GATE's name-collision guard resolves the projected element/field type via `mutinf_recv_type_name` (the typed local slot + `index_value_type_name` + `GirTypeInfo.fields`) and reads the PRECISE `method_mutates_self` map (bomb-safe: a genuine projected builtin `v[i].len()` resolves to `Elem__len`, absent → no clone). Closes the R37 T1 named-user-`&self`-mutator write-through divergence for NON-GENERIC equips [see the ROUND-37 item below]; +5 MATCH fixtures; measured peak self-compile RSS ~625-628 MB == BASE, self-compile wall-time ~128.9s == BASE (NOT the 14GB bomb). New `gir.gg` field `method_mutates_self`; `lower.gg` mutinf_* walker+fixpoint + projected-type resolver + two arm-count lints; `lower_expr.gg` gate wiring + name-collision guard (named + projected).)
 - [`t0133`](todo/t0133.md) **HIGH** — [HIGH — self-host latent FOOTGUN; from T-B] apply_collect_target_rewrites (lower.gg:2665) RESETS equip-method self param…
-- [`t0134`](todo/t0134.md) **MED** — [MED — self-host, Rust; T-B residual, Core #8] GENERIC-equip &self mutator on a bare-value-param named receiver still WR…
 - [`t0135`](todo/t0135.md) **LOW** — [LOW — self-host, Rust; T-B residual, Core #8] name-collision on an UNRESOLVABLE projection stays read-only (both the SC…
 - [`t0136`](todo/t0136.md) **LOW** — [LOW — self-host, Rust; T-B residual] self reborrowed into a local then mutated is not traced by the scan. Holder r = se…
 - [`t0137`](todo/t0137.md) **LOW** — [LOW — self-host; T-D adv(c) deferred capability, NOT a regression] scalar/struct-field & element &-bind write-through i…
@@ -646,6 +728,8 @@ Read the printed `PARITY = MATCH/(...)` line and the adjudication split (ADJ-MAT
 - [`t0712`](todo/t0712.md) **HIGH** — 🐛 [HIGH — five live self-host miscompiles, one of them a deterministic SIGBUS on ordinary beginner code; Rust gg is corr…
 - [`t0823`](todo/t0823.md) **HIGH** — [HIGH — the self-host's int32 → void* emit is not a portability nuisance, it is the MECHANISM behind run-to-run GARBAGE…
 - [`t0825`](todo/t0825.md) **HIGH** — [HIGH — Core #10 lower-or-reject, on the lane the succession plan makes the reference] The self-host frontend performs N…
+- [`t0922`](todo/t0922.md) **HIGH** — 🆕🚨 [HIGH — SELF-HOST CC-FAIL: a generic FREE function's body is never emitted, so the emitted C does not LINK; found 202…
+- [`t0923`](todo/t0923.md) **HIGH** — 🆕🚨 [HIGH — SELF-HOST SILENT WRONG OUTPUT, not a crash: a static TRAIT method returning a String returns its LENGTH; foun…
 - [`t0903`](todo/t0903.md) **HIGH** — 🆕🐛 [HIGH — LAGGING LANE (Core #9); the Rust lane is now CORRECT and the self-host still SEGFAULTS; found 2026-08-31 by R…
 ### Medium
 
@@ -1094,6 +1178,8 @@ The Increment-3 `closure_value_ret_type` channel is populated only at the closur
 
 - [`t0356`](todo/t0356.md) **MED** — [MEDIUM — D8 float chain, filed by P1-infra review 2026-07-06; ~63-79 fixtures held behind it] Three sequenced prerequis…
 - [`t0357`](todo/t0357.md) **MED** — [MEDIUM — ggdef, owner-question-driven 2026-07-06] 🔍 HOST-INHERITANCE AUDIT: enumerate and PIN every place spec/ggdef's…
+- [`t0920`](todo/t0920.md) **MED** — [MED — ggdef PHASE-0 SUBSET GAP, filed while closing the per-function-prescan class] The 3 standing generic-equip EXCLUD…
+- [`t0921`](todo/t0921.md) **MED** — [MED — ggdef ORACLE HYGIENE; the same generic equip gets two different subset answers depending on how it is spelled] re…
 ### Low
 
 - [`t0358`](todo/t0358.md) **MED** — 🆕🧹 [MED-LOW — typed-metadata smell in OUR OWN test infra, self-filed 2026-07-16] The ggdef corpus out-of-subset mechanis…
@@ -1446,6 +1532,7 @@ Multiple sites reconstruct "is this field a borrow pointer" from the field-type-
 - [`t0728`](todo/t0728.md) **MED** — [MED — A NAME MATCH OUTRANKS THE USER'S TYPED DECLARATION: an extern bound to malloc/calloc/realloc has its declared ret…
 - [`t0742`](todo/t0742.md) **MED** — 🆕🐛 [MED — BOTH LANES AGREE ON THE WRONG ANSWER, which is a red flag and not a pass (Core #8); found R47 Track D1 while m…
 - [`t0743`](todo/t0743.md) **MED** — 🆕🐛 [MED — BOTH LANES AGREE ON THE WRONG ANSWER (Core #8 red flag); found R47 Track D1 while building the ACCEPT control…
+- [`t0876`](todo/t0876.md) **MED** — 🆕🧹 [MED — THE EMITTED C IS NOT REPRODUCIBLE: the SAME compiler binary on the SAME input emits two different files run to…
 - [`t0902`](todo/t0902.md) **MED** — 🆕🐛 [MED — C BACKEND ONLY, LLVM IS CORRECT (Core #9 lane divergence); gg check rc 0, gg build fails at cc; found 2026-08-…
 ### Low
 
@@ -1573,6 +1660,8 @@ when it passes cleanly (per Task Continuity).
 - [`t0870`](todo/t0870.md) **HIGH** — \U0001F195\U0001F6A8 [HIGH — THE PARITY GATE CANNOT CATCH ITS OWN CLASS (six-questions #2); found 2026-08-31 by the R48…
 - [`t0871`](todo/t0871.md) **CRITICAL** — 🆕🚨💥 [CRITICAL — A GUARD IS ENFORCING MIGRATION ONTO A SILENTLY-WRONG SPELLING; found 2026-08-31 by the R48 t0862 gate sc…
 - [`t0875`](todo/t0875.md) **HIGH** — 🆕🚧 [HIGH — Core #6 OWES A CLASS-RETIRING GUARD AND FOUR ATTEMPTS FAILED; measured 2026-08-31 across four R48 Track-D1 re…
+- [`t0925`](todo/t0925.md) **HIGH** — 🆕🚨 [HIGH — THE ROUND-CLOSE SWEEP CAN PASS HAVING RUN ZERO TESTS, AND EXIT 0; observed 2026-08-31 by the R48 Track-D2 exe…
+- [`t0924`](todo/t0924.md) **HIGH** — 🆕🚧 [HIGH — A GATE THAT NO-OPS IN THE PROFILE EXECUTORS RUN, demonstrated by a live breach it let through 2026-08-31] RUN…
 ### Medium
 - [`t0590`](todo/t0590.md) **LOW** — 🆕🧹 [LOW — lint ergonomics; flagged by the R42 Track-B executor 2026-08-15 (bit three times in one track), filed by the o…
 
@@ -1627,6 +1716,7 @@ Re-derive the list: `GG_REGEN_RUNTIME_SNAPSHOT=1 cargo test --test integration -
 - [`t0861`](todo/t0861.md) — [MED — owner-approved 2026-08-30, R48 candidate] ONE GENERIC FIGURES DB — for ratchets, limits,
 - [`t0863`](todo/t0863.md) — [MED — R47 close, deliberately NOT accepted] Six robustness-map divergences outside the baseline.
 - [`t0874`](todo/t0874.md) **MED** — 🆕🐛 [MED — A LINT IS INTERMITTENT UNDER PARALLEL AGENTS, and its own doc comment asserts the opposite; suspected 2026-08-…
+- [`t0910`](todo/t0910.md) **MED** — 🆕🧹 [MED — A STRUCTURAL CONSEQUENCE OF THE PARALLELISM THE OWNER ASKED FOR; measured 2026-08-31 at R48 integration] Six c…
 - [`t0905`](todo/t0905.md) **MED** — 🆕🧹 [MED — guard hygiene, Core #6 ⊕; filed 2026-08-31 by R48 Track D2] Seven <= burn-down ratchets remain in tests/lints.…
 ### Low
 

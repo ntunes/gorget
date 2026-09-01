@@ -1,0 +1,39 @@
+# A GENERIC-equip `&self` MUTATOR invoked via a NAMED receiver that is a
+# bare-value param must leave the CALLER's value untouched — CoW-default-borrow
+# means the callee's `Cell[String]` is a private copy.
+#
+# AXIS CELL — lane = SELF-HOST (with Rust gg as the control). Rust gg has always
+# got this right: `method_mutates_receiver` over-approximates to true for any
+# `&self`, and `cow_before_mutation` no-ops on owned roots, so it materializes
+# and prints Y then A. The self-host mutation-inference pass
+# (`compute_method_mutates_self`, self_host_lowerer/lower.gg) classified
+# NON-generic equips only (`type_params.len() == 0`), so a generic-equip method
+# was absent from `method_mutates_self`, the named-receiver gate answered
+# read-only, and the write went straight THROUGH: self-host printed Y then Y.
+#
+# ⚠ THE KEY IS THE MONO'D NAME. The gate reads
+# `type_id_to_name(peel_ptr_tid(rtid)) + "__" + mname`, and both the write and
+# the read side go through `mangle_type_name` (`type_to_c_name`'s TNamed arm
+# writes it, `map_ast_type` registers `GtNamed(mangled)`, `type_id_to_name` is
+# the identity on `GtNamed`). So the classification must be registered under
+# `Cell__int64_t__assign`, NOT the bare `Cell__assign` — the generic-instances
+# pre-pass is where the mono'd name exists.
+#
+# RED-VERIFIED on the self-host lane against the pre-fix lowerer: `Y / Y`
+# against the intended `Y / A`.
+struct Cell[T]:
+    T val
+
+equip [T] Cell[T]:
+    void assign(&self, T v):
+        self.val = v
+
+String touch(Cell[String] c):
+    c.assign("Y")
+    return c.val
+
+void main():
+    Cell[String] orig = Cell[String]("A")
+    String inner = touch(orig)
+    print(inner)          # Y
+    print(orig.val)       # A
