@@ -4480,23 +4480,139 @@ fn known_gap_shared_vector_of_clones_unwritten_slot() {
     run_gg("known_gaps/shared_vector_of_clones_unwritten_slot.gg", "3\n42");
 }
 
-/// KNOWN GAP (C lane): a comprehension whose body is a LOOP-INVARIANT owned
-/// local pushes N aliases of ONE heap buffer, so freeing the vector double-frees
-/// it (rc 134). `s` is live past the accumulate, and AGENTS.md § "Ownership at
-/// Consuming Positions" says a live source at a consuming position must be
-/// CLONED. Filed as `todo/t0841`.
-///
-/// ⚠ The axis is narrower than "loop-invariant body":
-/// `known_gaps/map_inline_closure_cross_type_input_mint.gg` asserts that
-/// `[mk("t","ag") for n in nums]` — also loop-invariant, also a heap String — is
-/// CORRECT. The difference is an already-owned live NAME versus a fresh call
-/// result, so the value is aliased instead of minted per iteration. Not
-/// `todo/t0003`, whose axis is the accumulator's ELEMENT TYPE even though one of
-/// its symptoms crashes in these very frames.
+// ══════════════════════════════════════════════════════════════════════════
+// R48 Track D1 — a comprehension IS a loop (`todo/t0841`, CLOSED)
+// ══════════════════════════════════════════════════════════════════════════
+//
+// Every loop-shaped form needs the back-edge two-pass dance: a name read on a
+// later iteration must not be marked dead on this one. The four STATEMENT arms
+// of `src/ir/lowering/liveness.rs` had it; the three COMPREHENSION arms did
+// not, so a loop-invariant owned name was MOVED on every iteration and N
+// aliases of one heap buffer landed in the collection. The fix routes all
+// SEVEN arms through one `walk_loop_two_pass` helper (Core #4), pinned by
+// `liveness_loop_back_edge_single_source` in `tests/lints.rs`.
+//
+// The axes the cells below cover: comprehension KIND (list · dict · set) ×
+// body SUB-POSITION (element · dict value · condition) × SOURCE (range ·
+// Vector) × element TYPE (String · struct · Vector) × loop SHAPE (nested ·
+// filtered · `meta for` · `meta while`), each against its held-fixed control.
+// Every cell's own header records the RED it was verified against.
+
+/// The headline cell, graduated from
+/// `known_gaps/comprehension_invariant_owned_body_double_free.gg`: run rc 134,
+/// `free(): double free detected in tcache 2` on C AND LLVM at pre-fix HEAD.
+/// The ASan twin is `cow_comprehension_invariant_owned_name` in
+/// `tests/security.rs` — a value lane cannot tell a double-free from a correct
+/// run when the abort lands after the last print.
 #[test]
-#[ignore = "known gap (R47/t0841): a comprehension over a loop-invariant owned local aliases it N times and double-frees; un-ignore when the accumulate clones a live source"]
-fn known_gap_comprehension_invariant_owned_body_double_free() {
-    run_gg("known_gaps/comprehension_invariant_owned_body_double_free.gg", "ababab");
+fn cow_comprehension_invariant_owned_name() {
+    run_gg("cow_comprehension_invariant_owned_name.gg", "ababab");
+}
+
+/// DICT arm, VALUE sub-position. The key is an `int` on purpose: a heap key
+/// would additionally trip `todo/t0121`'s dedup-discard leak, a different
+/// class. RED at pre-fix HEAD: rc 134 on both lanes.
+#[test]
+fn cow_comprehension_invariant_dict_value() {
+    run_gg("cow_comprehension_invariant_dict_value.gg", "3\nab\nab");
+}
+
+/// NESTED comprehensions, the inner one invariant in BOTH loop variables.
+/// RED at pre-fix HEAD: rc 134 on both lanes. Distinct from `todo/t0003`'s
+/// nested residual, which ICEs before codegen; this one compiled and ran.
+#[test]
+fn cow_comprehension_invariant_nested() {
+    run_gg("cow_comprehension_invariant_nested.gg", "2\nabab\nabab");
+}
+
+/// A STRUCT element type, so the destructor run once per alias is the struct's
+/// generated drop rather than `gorget_string_free` directly. RED at pre-fix
+/// HEAD: rc 134 on both lanes.
+#[test]
+fn cow_comprehension_invariant_struct_payload() {
+    run_gg("cow_comprehension_invariant_struct_payload.gg", "3\nab\nab");
+}
+
+/// The FILTER arm present, so the alias count and the source length differ.
+/// RED at pre-fix HEAD: rc 134 on both lanes.
+#[test]
+fn cow_comprehension_invariant_filter_arm() {
+    run_gg("cow_comprehension_invariant_filter_arm.gg", "3\nababab");
+}
+
+/// A Vector source rather than a range — a different arm of the loop
+/// dispatcher, the same ownership decision for the body. RED at pre-fix HEAD:
+/// rc 134 on both lanes.
+#[test]
+fn cow_comprehension_invariant_vector_source() {
+    run_gg("cow_comprehension_invariant_vector_source.gg", "ababab");
+}
+
+/// The SUB-POSITION cell: the owned name is consumed inside the CONDITION and
+/// nowhere else. It discriminates two candidate fixes — route the condition
+/// after the two-pass call and the element position is protected while this one
+/// is not. RED at pre-fix HEAD: rc 134 on both lanes.
+#[test]
+fn cow_comprehension_invariant_in_condition() {
+    run_gg("cow_comprehension_invariant_in_condition.gg", "3");
+}
+
+/// The SET arm, third of the three comprehension arms, exercised through the
+/// condition so the cell does not also trip `todo/t0121`. RED at pre-fix HEAD:
+/// rc 134 on both lanes.
+#[test]
+fn cow_set_comprehension_invariant_in_condition() {
+    run_gg("cow_set_comprehension_invariant_in_condition.gg", "3\ntrue");
+}
+
+/// The `meta for` arm — the HARDEST cell of the class, and a COMPILER ICE
+/// rather than a runtime abort. Its pass 2 walked the live set IN PLACE while
+/// its three siblings cloned and unioned. RED at pre-fix HEAD: `gg build`
+/// rc 101, `local _1 read after MoveZero`, GIR validation panic, on C AND LLVM.
+#[test]
+fn cow_meta_for_zero_trip_body_kill() {
+    run_gg("cow_meta_for_zero_trip_body_kill.gg", "ab\nab");
+}
+
+/// The `meta while` spelling of the same shared arm (a compile-time GUARD with
+/// a false condition, language-reference §19.28). RED at pre-fix HEAD:
+/// `gg build` rc 101, `read after MoveZero`, on C AND LLVM.
+#[test]
+fn cow_meta_while_false_guard_body_kill() {
+    run_gg("cow_meta_while_false_guard_body_kill.gg", "ab\nab");
+}
+
+/// CONTROL — GREEN BEFORE AND AFTER. The statement-loop spelling of the
+/// headline cell. It is what relocated the fix site: if the accumulate had been
+/// the defect this would have been red too (Core #1). A red here means the
+/// shared helper changed the statement arms, which are supposed to come out
+/// byte-for-byte equivalent.
+#[test]
+fn cow_loop_invariant_owned_name_push_control() {
+    run_gg("cow_loop_invariant_owned_name_push_control.gg", "ababab");
+}
+
+/// CONTROL — GREEN BEFORE AND AFTER. A fresh call result is minted per
+/// iteration and owned by the accumulate, so there is nothing to alias: the
+/// axis is an already-owned live NAME, not "a loop-invariant body". A red here
+/// means the fix over-corrected into cloning a uniquely-owned value.
+///
+/// ⚠ This fixture exists because the claim had no home. `todo/t0841` cited
+/// `known_gaps/map_inline_closure_cross_type_input_mint.gg` as this control;
+/// that fixture is RED at HEAD and its wired body is a `.map()` call, not a
+/// comprehension.
+#[test]
+fn cow_comprehension_fresh_mint_control() {
+    run_gg("cow_comprehension_fresh_mint_control.gg", "tagtagtag");
+}
+
+/// CONTROL — GREEN BEFORE AND AFTER. The runtime twin of
+/// `cow_meta_for_zero_trip_body_kill`, byte-identical but for the `meta`
+/// keyword. The pair localised the ICE to the meta arm rather than to
+/// zero-trip loops in general.
+#[test]
+fn cow_for_zero_trip_body_kill_control() {
+    run_gg("cow_for_zero_trip_body_kill_control.gg", "ab\nab");
 }
 
 /// KNOWN GAP (both real backends): a `Shared[T]` passed to a PLAIN function is
@@ -8529,6 +8645,48 @@ fn set_string_dup_elem_leak() {
 2
 aa
 bb",
+    );
+}
+
+/// KNOWN GAP (`todo/t0121`) — the COMPREHENSION face of the duplicate-rejection
+/// leak, and the EVIDENCE that the class is the map insert path rather than a
+/// `Set`-literal defect. `{s for i in 0..3}` offers the same heap key three
+/// times; the set stores one and declines two, and the two it declined are
+/// dropped on the floor. `LeakSanitizer: Direct leak of 6 byte(s) in 2
+/// object(s)`, rc 99, while a plain build prints the right answer at rc 0 on
+/// both backends.
+///
+/// ⚠⚠ THIS SHAPE WAS ASan-CLEAN UNTIL `todo/t0841` WAS FIXED, AND THAT WAS AN
+/// ACCIDENT — a cell green for a reason unrelated to what it tests (Six
+/// Questions Q6). The liveness walker used to MOVE one aliased buffer into the
+/// set three times, so the keys dedup rejected were the SAME allocation it
+/// stored and nothing was left over to leak. Now that the accumulate correctly
+/// CLONES a live source, the rejected clones are real allocations. `t0121`'s
+/// mechanism did not change; the fix removed what was masking it.
+///
+/// ⚠ It is `t0121`'s EVIDENCE, not a second filing — the Dict-KEY spelling
+/// leaks identically, and so does a plain `for i in 0..3: out.add(mk("a","b"))`
+/// with no comprehension anywhere, which is what establishes the axis. The live
+/// SET-arm regression fixture for the `t0841` liveness fix is
+/// `cow_set_comprehension_invariant_in_condition.gg`, which runs through the
+/// CONDITION with `int` elements precisely so it pins liveness and not this.
+///
+/// Un-ignore + promote out of `known_gaps/` when the rejected key is freed.
+#[test]
+#[ignore = "KNOWN GAP (todo/t0121): a Set comprehension over a loop-invariant \
+heap element leaks every key dedup rejects -- LeakSanitizer reports `Direct \
+leak of 6 byte(s) in 2 object(s)`, rc 99, while stdout is correct (1 / true) \
+and detect_leaks=0 exits 0. The COMPREHENSION face of the literal defect \
+pinned by set_string_dup_elem_leak; the Dict-KEY spelling and a plain \
+`for i in 0..3: out.add(mk(\"a\",\"b\"))` leak identically, so the class is \
+the map insert path. Fixture: tests/fixtures/known_gaps/\
+set_comprehension_dup_elem_leak.gg. TODO.md."]
+fn set_comprehension_dup_elem_leak() {
+    assert_gg_sanitize_clean(
+        "known_gaps/set_comprehension_dup_elem_leak",
+        "\
+1
+true",
     );
 }
 
@@ -16218,20 +16376,35 @@ fn cow_user_mutator_two_types_same_name() {
 // `functions::begin_function_body` now does the reset and the prescans as ONE
 // operation and every path calls it; `function_body_prescans_are_centralised`
 // in tests/lints.rs is the arm-count guard. These fixtures are the AXIS: one
-// cell per path, each RED-verified at rc 139 on C AND LLVM against the pre-fix
-// compiler, each also pinned under ASan in tests/security.rs.
+// cell per path, every one of them RED-verified against a compiler built from
+// the pre-fix base commit.
 //
-//   path                            | fixture
-//   --------------------------------|------------------------------------------
-//   lower_function                  | (pre-existing: the whole cow_* corpus)
-//   lower_equip_method              | (pre-existing: the monomorphic control)
-//   lower_generic_function          | cow_generic_fn_view_survives_realloc
-//   lower_equip_method_with_subs    | cow_generic_equip_mutator_view_uaf
-//   lower_trait_method_body         | cow_trait_default_view_survives_realloc
-//   lower_static_trait_method       | cow_static_trait_method_view_survives_realloc
-//   emit_closure_call_function      | cow_closure_body_view_survives_realloc
-//   suite setup / teardown / test   | cow_test_body_view_survives_realloc
-//   bench                           | cow_bench_body_view_survives_realloc
+// ⚠ THE LANE CLAIM IS NOT UNIFORM ACROSS THE AXIS — read the RED column rather
+// than assuming it. The six `gg build` cells are rc 139 on C AND LLVM and are
+// ALSO pinned under ASan in tests/security.rs. The two module-loop cells are
+// `gg test` / `gg test --bench` programs with no `main`: their RED is a SIGSEGV
+// mid-run on the C lane, and they have NO ASan pin, because a fixture with no
+// entry point does not link under a plain `gg build --sanitize` at all — the
+// same reason the five pre-existing `bench_*` fixtures score BUILD_FAIL_BOTH in
+// the sanitize sweep.
+//
+//   path                          | fixture                       | RED           | ASan
+//   ------------------------------|-------------------------------|---------------|-----
+//   lower_function                | (pre-existing: the cow_* corpus)              |
+//   lower_equip_method            | (pre-existing: the monomorphic control)       |
+//   lower_generic_function        | self_host_gaps/cow_generic_fn_…| 139 C+LLVM   | yes
+//   lower_equip_method_with_subs  | cow_generic_equip_mutator_view_uaf | 139 C+LLVM | yes
+//   lower_trait_method_body       | cow_trait_default_…           | 139 C+LLVM    | yes
+//   lower_static_trait_method     | self_host_gaps/cow_static_trait_…| 139 C+LLVM | yes
+//   emit_closure_call_function    | cow_closure_body_…            | 139 C+LLVM    | yes
+//   suite setup / teardown / test | cow_test_body_…               | SIGSEGV (C)   | NO
+//   bench                         | cow_bench_body_…              | SIGSEGV (C)   | NO
+//
+// ⊕ The two `self_host_gaps/` cells sit in a subdirectory so they stay OUT of
+// the auto-scanned `runtime_parity_corpus`: each trips a PRE-EXISTING self-host
+// defect (`todo/t0922`, `todo/t0923`) that has nothing to do with the cell it
+// tests, and Core #9 ⊕ forbids raising the non-MATCH ceiling for a round's own
+// inflow. Their Rust-lane and ASan coverage is unchanged.
 
 /// PATH CELL — `lower_equip_method_with_subs`. A `&self` mutator on a GENERIC
 /// equip: `Cell[T]`'s `probe(&self)` binds a view of element 0, then
@@ -16259,9 +16432,16 @@ fn generic_equip_mutator_view_uaf() {
 
 /// PATH CELL — `lower_generic_function`. A plain generic FREE function, no
 /// equip and no receiver: one type parameter and a `&`-param collection.
+///
+/// ⚠ Lives in `tests/fixtures/self_host_gaps/`, NOT at top level, because the
+/// self-host lane cannot LINK it (`todo/t0922`) and every top-level fixture is
+/// auto-scanned into `runtime_parity_corpus` — Core #9 ⊕ forbids raising the
+/// non-MATCH ceiling for a round's own inflow. The Rust-lane and ASan coverage
+/// is unchanged; only the parity corpus is opted out of. The intended self-host
+/// behaviour is asserted by `sh_gap_generic_fn_body_never_emitted` below.
 #[test]
 fn cow_generic_fn_view_survives_realloc() {
-    run_gg("cow_generic_fn_view_survives_realloc.gg", "helloworld");
+    run_gg("self_host_gaps/cow_generic_fn_view_survives_realloc.gg", "helloworld");
 }
 
 /// PATH CELL — `lower_trait_method_body`. A trait DEFAULT method body.
@@ -16271,9 +16451,69 @@ fn cow_trait_default_view_survives_realloc() {
 }
 
 /// PATH CELL — `lower_static_trait_method`. A static trait method (no `self`).
+///
+/// ⚠ Lives in `tests/fixtures/self_host_gaps/` for the same reason as its
+/// generic-free-function sibling: the self-host lane prints the String's LENGTH
+/// instead of the String (`todo/t0923`), so it is a non-MATCH row this round
+/// must not push into `RUNTIME_DIFF_NONMATCH_CEILING`. The intended self-host
+/// behaviour is asserted by `sh_gap_static_trait_method_returns_string_len`.
 #[test]
 fn cow_static_trait_method_view_survives_realloc() {
-    run_gg("cow_static_trait_method_view_survives_realloc.gg", "helloworld");
+    run_gg(
+        "self_host_gaps/cow_static_trait_method_view_survives_realloc.gg",
+        "helloworld",
+    );
+}
+
+/// KNOWN SELF-HOST GAP (`todo/t0922`) — a generic FREE function whose type
+/// parameter is inferred from inside a CONTAINER argument (`Vector[T]`) has its
+/// CALL emitted and its BODY never monomorphized: `undefined reference to
+/// 'probe'` at link time.
+///
+/// PRE-EXISTING and PROVED so, not caused by the prescan centralisation: it
+/// reproduces on a 6-line program with no view, no realloc and no equip
+/// (`T firstOf[T](Vector[T] v)`), for `String` AND `int` element types, against
+/// a driver built from the PRE-fix compiler. The discriminator is measured:
+/// `T id[T](T x)` — type parameter from a BARE argument — links and runs
+/// correctly on the self-host for both instantiations.
+#[test]
+#[ignore = "todo/t0922 — self-host: a generic free fn whose type param is \
+inferred from inside a container argument (Vector[T]) emits the call but never \
+the monomorphized body, so the emitted C fails to link (`undefined reference`). \
+Pre-existing; reproduces without any of this fixture's CoW machinery. Asserts \
+the intended `helloworld` on the self-host lane."]
+#[serial(self_host_lowerer_driver)]
+fn sh_gap_generic_fn_body_never_emitted() {
+    assert_self_host_stdout(
+        "self_host_gaps/cow_generic_fn_view_survives_realloc.gg",
+        "sh_gap_generic_fn",
+        "helloworld",
+    );
+}
+
+/// KNOWN SELF-HOST GAP (`todo/t0923`) — a STATIC TRAIT method returning a
+/// `String` returns the string's LENGTH instead of the string. This fixture
+/// prints `10` on the self-host lane where Rust gg prints `helloworld`, and
+/// `10 == len("helloworld")`.
+///
+/// PRE-EXISTING and PROVED so: an 11-line program with no view and no realloc
+/// (`equip Cell with Maker: String make(): return "abcdefg"`) prints `7` on the
+/// self-host. Two discriminators, both measured: the `int tag()` sibling on the
+/// SAME equip block returns `42` correctly, so it is String-return-specific; and
+/// the identical method on a PLAIN `equip Cell:` (no `with Maker`) prints
+/// `abcdefg` correctly, so it is the static TRAIT-method path.
+#[test]
+#[ignore = "todo/t0923 — self-host: a static TRAIT method returning a String \
+returns its LENGTH instead of the String (prints `10` for `helloworld`, `7` for \
+`abcdefg`). Pre-existing; an `int` return on the same equip is correct and a \
+plain non-trait `equip` is correct. Asserts the intended `helloworld`."]
+#[serial(self_host_lowerer_driver)]
+fn sh_gap_static_trait_method_returns_string_len() {
+    assert_self_host_stdout(
+        "self_host_gaps/cow_static_trait_method_view_survives_realloc.gg",
+        "sh_gap_static_trait",
+        "helloworld",
+    );
 }
 
 /// PATH CELL — `emit_closure_call_function`. The closure body, whose AST is a
@@ -38806,11 +39046,29 @@ fn self_host_runtime_diff() {
     // the raising round's point of view. Core #9 ⊕ forbids raising it for a
     // round's OWN inflow, with no exemption; the fix there is to port.
     const RUNTIME_DIFF_NONMATCH_CEILING: usize = 151;
+    // ⛔ THIS GATE NO-OPS IN THE PROFILE PEOPLE ACTUALLY RUN, AND THAT IS A
+    // COVERAGE HOLE, NOT A DESIGN. `cargo test --test integration self_host` is
+    // a DEBUG build, so every executor's own gauntlet run takes the branch
+    // below and prints a note instead of evaluating the ceiling. R48 Track C
+    // shipped two fixtures that would have BREACHED it and its debug family run
+    // was green — the breach was caught by a human output-review running the
+    // lane by hand, which is exactly the instrument Core #13 says not to depend
+    // on. Only the documented `--release` invocation arms it, and nothing makes
+    // a round run that before integrating.
+    // ⇒ Until the profile split is fixed (an env-gated arm for debug, or a
+    // cheap add-time membership check that does not need the whole corpus),
+    // treat "the family run was green" as SAYING NOTHING about parity inflow.
+    // The obligation is on the ADDER: if you added a top-level
+    // `tests/fixtures/*.gg`, run it through the self-host lane by hand and
+    // confirm MATCH, or keep it out of the auto-scanned set (see
+    // `tests/fixtures/self_host_gaps/` for the shape). Filed as `todo/t0924`.
     if cfg!(debug_assertions) {
         eprintln!(
-            "NOTE [self_host_runtime_diff]: non-MATCH ceiling skipped (debug profile — same \
+            "NOTE [self_host_runtime_diff]: non-MATCH ceiling SKIPPED (debug profile — same \
              timeout-flip sensitivity as the MATCH floor; use the documented --release \
-             invocation for the gate)."
+             invocation for the gate). ⚠ THIS IS A NO-OP, NOT A PASS: a round that added \
+             top-level fixtures has NOT been checked for parity inflow by this run. See \
+             todo/t0924."
         );
     } else if parity_floor_active("self_host_runtime_diff") {
         let non_match = non_excluded - matched.len();

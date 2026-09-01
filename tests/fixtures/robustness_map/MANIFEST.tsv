@@ -471,7 +471,7 @@ topic	cell	bucket	expected	actual	note	llvm	selfhost	divergence	asan	ggdef
 16 spelling-equivalence pairs	pair_strlen5_c_chars_len	WORKS	5		pair:strlen5.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_strrepeat3_a_repeat	WORKS	ababab		pair:strrepeat3.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_strrepeat3_b_loop_concat	WORKS	ababab		pair:strrepeat3.	WORKS	WORKS		WORKS	WORKS
-16 spelling-equivalence pairs	pair_strrepeat3_c_join_comprehension	CRASH	ababab		pair:strrepeat3.	TRAP	WORKS	DIVERGENT	SANITIZE-FAIL	NO-VERDICT
+16 spelling-equivalence pairs	pair_strrepeat3_c_join_comprehension	WORKS	ababab		pair:strrepeat3.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_strsplitjoin_a_split_join	WORKS	a-b-c		pair:strsplitjoin.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_strsplitjoin_b_split_loop	WORKS	a-b-c		pair:strsplitjoin.	WORKS	WORKS		WORKS	NO-VERDICT
 16 spelling-equivalence pairs	pair_strsplitjoin_c_replace	WORKS	a-b-c		pair:strsplitjoin.	WORKS	WORKS		WORKS	NO-VERDICT

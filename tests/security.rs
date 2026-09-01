@@ -3033,14 +3033,23 @@ fn known_gap_shared_vector_of_clones_unwritten_slot_asan() {
     security_safe_no_leak("known_gap_shared_vector_of_clones_unwritten_slot", "3\n42");
 }
 
-/// KNOWN GAP (`todo/t0841`) on the SANITIZER lane: `AddressSanitizer: attempting
-/// double-free` in `__gorget_global_dealloc_fn` ← `gorget_string_free` ←
-/// `gorget_array_free` ← `main` — three aliases of one heap buffer, freed once
-/// each by the vector.
+/// REGRESSION (`todo/t0841`, R48 Track D1) on the SANITIZER lane. RED at
+/// pre-fix HEAD: `AddressSanitizer: attempting double-free` in
+/// `__gorget_global_dealloc_fn` ← `gorget_string_free` ← `gorget_array_free` ←
+/// `main` — three aliases of one heap buffer, freed once each by the vector.
+///
+/// A comprehension IS a loop, and its three liveness arms were single-pass
+/// while the statement-loop arms did the back-edge two-pass dance, so the
+/// loop-invariant owned name was MOVED on every iteration instead of cloned.
+/// All seven loop-shaped arms now share one helper (Core #4).
+///
+/// BOTH LANES ARE NEEDED: the value twin is
+/// `cow_comprehension_invariant_owned_name` in `tests/integration.rs`, and it
+/// could not have caught this alone — the program printed the right answer
+/// before aborting.
 #[test]
-#[ignore = "known gap (R47/t0841): a comprehension over a loop-invariant owned local double-frees at array free"]
-fn known_gap_comprehension_invariant_owned_body_double_free_asan() {
-    security_safe_no_leak("known_gap_comprehension_invariant_owned_body_double_free", "ababab");
+fn cow_comprehension_invariant_owned_name_asan() {
+    security_safe_no_leak("cow_comprehension_invariant_owned_name", "ababab");
 }
 
 /// KNOWN GAP (`todo/t0108`) on the SANITIZER lane: `heap-use-after-free` in

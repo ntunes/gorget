@@ -4965,6 +4965,24 @@ GirModule lower_module(Module &m, ScopeTable scopes, TypeTable types, Dict[Strin
                     # falling to its conservative step-3 leaf, which would mark
                     # every caller mutating and re-materialize far more than the
                     # gate needs.
+                    #
+                    # ⚠ ONE CELL OF THIS AXIS IS DELIBERATELY OMITTED, and it is
+                    # named rather than left for a reader to discover: a
+                    # METHOD-generic method on a GENERIC equip
+                    # (`equip [T] Cell[T]: U convert[U](&self, U x)`) is skipped
+                    # by the `type_params.len() == 0` guard below, exactly as it
+                    # is skipped by the fn_sigs registration in the loop above
+                    # (whose own comment says so: "method-level generics skip
+                    # this pre-pass; they need per-call-site mono of their own").
+                    # Those instances are discovered later, via
+                    # `mono_method_insts` (~lower.gg:5887), and the inherent
+                    # no-trait arm there is still a `case None: pass` stub —
+                    # `todo/t0219`'s `gm_` entry. Classifying them here would key
+                    # on a mangled name that does not exist yet. The cell is
+                    # therefore UNCOVERED, not covered-by-shape: a
+                    # method-generic mutator on a generic equip still degrades to
+                    # the read-only answer, which is the pre-R38 BASE behaviour
+                    # rather than a new miscompile.
                     for eqs_mut_mdef in eqs_tmpl.methods:
                         if eqs_mut_mdef.type_params.len() == 0:
                             String eqs_mut_key = eqs_mono_target + "__" + eqs_mut_mdef.name

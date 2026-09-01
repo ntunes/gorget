@@ -197,6 +197,89 @@ fn on_error_bodies_in<'a>(stmt: &'a Stmt) -> Vec<&'a [Spanned<Stmt>]> {
     out
 }
 
+/// The loop back-edge dance — ONE implementation for every loop-shaped form.
+///
+/// **A COMPREHENSION IS A LOOP.** `[e for x in xs]` executes `e` once per
+/// element exactly as `for x in xs: acc.push(e)` does, so a name `e` reads must
+/// survive the back-edge in both. The three comprehension arms used to record
+/// last-use in a SINGLE forward pass while the four statement forms did the
+/// two-pass dance, and the consequence was a miscompile: a loop-invariant owned
+/// local was marked dead at its only syntactic use, MOVED on every iteration,
+/// and N aliases of one heap buffer landed in the collection — `[s for i in
+/// 0..3]` aborted with `free(): double free detected in tcache 2` on BOTH
+/// backends while the byte-equivalent statement loop was correct (`todo/t0841`).
+/// A prior round swept the statement forms and stopped at the expression
+/// boundary; the fix for that class is ONE helper, not a seventh copy of the
+/// dance (Core #4, § Sibling-site drift).
+///
+/// The two passes:
+///
+/// * **Pass 1 collects the live-at-back-edge set** and DISCARDS its last-use
+///   decisions — they cannot account for the back-edge and produce false
+///   positives (a name read on a later iteration looks dead on this one).
+/// * **Pass 2 records last-use decisions** against that loop-propagated set,
+///   and UNIONS its result rather than overwriting: the body may run ZERO
+///   times, so a KILL inside it must not delete a name live before the loop.
+///   Measured — overwriting printed garbage at rc 0 on both backends for a
+///   `break`-skips-kill shape and for a zero-iteration `for`, and ICE'd with
+///   `local _N read after MoveZero` for a zero-iteration `meta for` whose body
+///   assigns a name consumed before it. The last of those is pinned by
+///   `cow_meta_for_zero_trip_body_kill.gg` against its runtime-`for` twin.
+///
+/// The slots, in the order they run within a pass:
+///
+/// * `pass1_only` — an ALTERNATIVE path (`while`/`for`'s `else:` body): its
+///   uses are collected into the live set, but it runs in PASS 1 ONLY, so no
+///   last-use decision inside it is ever recorded. That is exactly what those
+///   two arms did before this helper existed, preserved unchanged; the effect
+///   is over-approximation, which costs a clone and never a correctness bug.
+/// * `per_iteration` — the loop body / the comprehension's element expression.
+///   Runs in BOTH passes, into a CLONE of `live` that is unioned back.
+/// * `tail` — the part of the header that re-executes on every iteration and
+///   sits, in reverse order, AFTER the body: the `while` condition, the `for`
+///   pattern kill, a comprehension's `if` filter and loop-variable kill. Runs
+///   in BOTH passes. ⚠ A comprehension's `condition` belongs HERE, not after
+///   the call: it is evaluated once per element, so a use inside it must be
+///   protected by pass 1 exactly as a use in the body is.
+///
+/// Anything evaluated ONCE, before the loop starts — `for`'s `iterable`, a
+/// comprehension's `iterable`, a `meta for`'s range — is walked by the CALLER
+/// after this returns, on the post-loop `live` set.
+///
+/// The seven call sites are pinned by `liveness_loop_back_edge_single_source`
+/// (`tests/lints.rs`). A count-only lint would stay green on the one
+/// regression it exists to prevent — a NEW loop-shaped arm hand-rolling the
+/// dance rather than calling this — so three further assertions count the
+/// dance's own ingredients: the `lu_discard` declaration, the map
+/// CONSTRUCTION, and `live.clone()`. ⚠ Those three catch the hand-rolled
+/// spellings measured so far and NOT the class — a review evaded the last of
+/// them seven ways, five without renaming anything — so treat the four as a
+/// NEW-PATH TRIPWIRE: an added or removed call site IS caught, a hand-rolled
+/// dance may not be. The total guard is type-level (a `LiveSet` whose copy path
+/// is private to this module), filed as `todo/t0875`. Adding a loop-shaped arm
+/// here should move NONE of the four (Core #6, six-questions #2).
+fn walk_loop_two_pass<'a>(
+    live: &mut FxHashSet<&'a str>,
+    lu: &mut FxHashMap<usize, String>,
+    pass1_only: impl FnOnce(&mut FxHashSet<&'a str>, &mut FxHashMap<usize, String>),
+    per_iteration: impl Fn(&mut FxHashSet<&'a str>, &mut FxHashMap<usize, String>),
+    tail: impl Fn(&mut FxHashSet<&'a str>, &mut FxHashMap<usize, String>),
+) {
+    // Pass 1: collect the live-at-back-edge set, last-use decisions discarded.
+    let mut live_body = live.clone();
+    let mut lu_discard: FxHashMap<usize, String> = FxHashMap::default();
+    pass1_only(&mut live_body, &mut lu_discard);
+    per_iteration(&mut live_body, &mut lu_discard);
+    tail(&mut live_body, &mut lu_discard);
+    live.extend(live_body);
+
+    // Pass 2: record last-use decisions. UNION, never overwrite.
+    let mut live_body2 = live.clone();
+    per_iteration(&mut live_body2, lu);
+    live.extend(live_body2);
+    tail(live, lu);
+}
+
 fn walk_stmt<'a>(
     stmt: &'a Stmt,
     live: &mut FxHashSet<&'a str>,
@@ -237,43 +320,28 @@ fn walk_stmt<'a>(
             }
             uses_expr(&condition.node, condition.span.start, live, lu);
         }
+        // The condition re-executes on every iteration, so it is the `tail`,
+        // not a post-loop walk. The `else:` body runs only when the loop exits
+        // normally and cannot reach the back-edge, so it is `pass1_only`.
         Stmt::While { condition, body, else_body, .. } => {
-            // Pass 1: collect live-at-exit set.  Discard last-use decisions —
-            // they don't account for the loop back-edge and produce false
-            // positives (e.g., match scrutinee incorrectly marked last-use).
-            let mut live_body = live.clone();
-            let mut lu_discard: FxHashMap<usize, String> = FxHashMap::default();
-            if let Some(eb) = else_body { walk_block(&eb.stmts, &mut live_body, &mut lu_discard); }
-            walk_block(&body.stmts, &mut live_body, &mut lu_discard);
-            uses_expr(&condition.node, condition.span.start, &mut live_body, &mut lu_discard);
-            live.extend(live_body);
-            // Pass 2: walk with loop-propagated live set.  Only this pass
-            // records last-use decisions.
-            //
-            // UNION, never overwrite: the body may run ZERO times, so a KILL
-            // inside it must not delete a name that is live before the loop.
-            // Measured -- overwriting printed garbage at rc 0 on both backends
-            // for a break-skips-kill shape and for a zero-iteration `for`.
-            let mut live_body2 = live.clone();
-            walk_block(&body.stmts, &mut live_body2, lu);
-            live.extend(live_body2);
-            uses_expr(&condition.node, condition.span.start, live, lu);
+            walk_loop_two_pass(
+                live,
+                lu,
+                |l, d| { if let Some(eb) = else_body { walk_block(&eb.stmts, l, d); } },
+                |l, u| walk_block(&body.stmts, l, u),
+                |l, u| uses_expr(&condition.node, condition.span.start, l, u),
+            );
         }
+        // The pattern is re-bound on every iteration (the `tail` kill); the
+        // `iterable` is evaluated ONCE, before the loop, so it is walked after.
         Stmt::For { pattern, iterable, body, else_body, .. } => {
-            // Pass 1: collect live set (discard last-use decisions).
-            let mut live_body = live.clone();
-            let mut lu_discard: FxHashMap<usize, String> = FxHashMap::default();
-            if let Some(eb) = else_body { walk_block(&eb.stmts, &mut live_body, &mut lu_discard); }
-            walk_block(&body.stmts, &mut live_body, &mut lu_discard);
-            kill_pattern(pattern, &mut live_body);
-            live.extend(live_body);
-            // Pass 2: record last-use decisions. UNION, never overwrite -- see
-            // the `While` arm; a zero-iteration `for` must not let a kill in
-            // its body delete a name live before the loop.
-            let mut live_body2 = live.clone();
-            walk_block(&body.stmts, &mut live_body2, lu);
-            live.extend(live_body2);
-            kill_pattern(pattern, live);
+            walk_loop_two_pass(
+                live,
+                lu,
+                |l, d| { if let Some(eb) = else_body { walk_block(&eb.stmts, l, d); } },
+                |l, u| walk_block(&body.stmts, l, u),
+                |l, _u| kill_pattern(pattern, l),
+            );
             uses_expr(&iterable.node, iterable.span.start, live, lu);
         }
         Stmt::Match { scrutinee, arms, else_arm, .. } => {
@@ -321,22 +389,17 @@ fn walk_stmt<'a>(
         // Over-approximating is merely conservative (an extra clone), so every
         // arm here walks everything it carries.
 
-        // An infinite loop is `While` without the condition: the body's uses
-        // must survive the back-edge, so the same two-pass treatment applies —
-        // pass 1 collects live-at-exit with last-use decisions DISCARDED
-        // (they cannot account for the back-edge), pass 2 records them.
+        // An infinite loop is `While` without the condition: same dance, empty
+        // header. (A `break` can skip a kill in the body, which is why the
+        // helper unions pass 2 rather than overwriting.)
         Stmt::Loop { body } => {
-            let mut live_body = live.clone();
-            let mut lu_discard: FxHashMap<usize, String> = FxHashMap::default();
-            walk_block(&body.stmts, &mut live_body, &mut lu_discard);
-            live.extend(live_body);
-            // UNION, never overwrite -- a `break` can skip a kill in the body,
-            // so the kill must not delete a name live before the loop. This arm
-            // shipped with the overwrite bug and is fixed here with its
-            // siblings (Core #4).
-            let mut live_body2 = live.clone();
-            walk_block(&body.stmts, &mut live_body2, lu);
-            live.extend(live_body2);
+            walk_loop_two_pass(
+                live,
+                lu,
+                |_l, _d| {},
+                |l, u| walk_block(&body.stmts, l, u),
+                |_l, _u| {},
+            );
         }
         // Straight-line scopes: the block runs in sequence with its neighbours.
         Stmt::NamedScope { body, .. } => {
@@ -395,9 +458,17 @@ fn walk_stmt<'a>(
                 }
             }
         }
-        // Compile-time forms. They are evaluated/eliminated before lowering, so
-        // they cannot themselves consume a runtime local — but they can MENTION
-        // one, and over-approximation is the safe direction, so walk them.
+        // Compile-time forms. Their HEADERS are evaluated away before lowering,
+        // but their BODIES are real code the expansion emits — and liveness runs
+        // on the UNEXPANDED AST (`compute_function_liveness` is called from the
+        // prescan at `functions.rs:1658`, ~50 lines BEFORE meta expansion), so
+        // these arms see the body as written and their kills are real. An
+        // earlier version of this comment claimed the meta forms "cannot
+        // themselves consume a runtime local"; it was false, and the
+        // `Stmt::MetaFor` arm below shipped the overwrite bug because of it —
+        // `meta for i in 0..0:` with a body that assigns a name consumed above
+        // it ICE'd with `local _N read after MoveZero` on both backends
+        // (Core #14: an invariant-asserting comment with no guard is rot).
         Stmt::MetaIf { condition, then_body, elif_branches, else_body, .. } => {
             let saved = live.clone();
             if let Some(b) = else_body { walk_block(&b.stmts, live, lu); }
@@ -412,12 +483,19 @@ fn walk_stmt<'a>(
             }
             uses_expr(&condition.node, condition.span.start, live, lu);
         }
+        // A `meta for`/`meta while` body is a loop body: the same dance. Its
+        // pass 2 used to walk `live` IN PLACE while its three siblings cloned
+        // and unioned — the overwrite bug, surviving in the one arm the earlier
+        // sweep missed. The range/condition is a compile-time header evaluated
+        // once, so it is walked after.
         Stmt::MetaFor { range: e, body, .. } | Stmt::MetaWhile { condition: e, body, .. } => {
-            let mut live_body = live.clone();
-            let mut lu_discard: FxHashMap<usize, String> = FxHashMap::default();
-            walk_block(&body.stmts, &mut live_body, &mut lu_discard);
-            live.extend(live_body);
-            walk_block(&body.stmts, live, lu);
+            walk_loop_two_pass(
+                live,
+                lu,
+                |_l, _d| {},
+                |l, u| walk_block(&body.stmts, l, u),
+                |_l, _u| {},
+            );
             uses_expr(&e.node, e.span.start, live, lu);
         }
         Stmt::MetaMatch { scrutinee, arms, else_arm, .. } => {
@@ -553,16 +631,33 @@ fn uses_expr<'a>(
         Expr::Spawn { expr, .. } | Expr::SpawnBlocking { expr, .. } => {
             uses_expr(&expr.node, expr.span.start, live, lu);
         }
+        // A comprehension IS a loop — the element expression and the `if`
+        // filter both run once per element — so it gets the same back-edge
+        // treatment as `Stmt::For`, through the same helper (Core #4).
         Expr::ListComprehension { expr, variable, iterable, condition, .. } => {
-            if let Some(c) = condition { uses_expr(&c.node, c.span.start, live, lu); }
-            uses_expr(&expr.node, expr.span.start, live, lu);
-            kill_pattern(variable, live);
+            walk_loop_two_pass(
+                live,
+                lu,
+                |_l, _d| {},
+                |l, u| uses_expr(&expr.node, expr.span.start, l, u),
+                |l, u| {
+                    if let Some(c) = condition { uses_expr(&c.node, c.span.start, l, u); }
+                    kill_pattern(variable, l);
+                },
+            );
             uses_expr(&iterable.node, iterable.span.start, live, lu);
         }
         Expr::SetComprehension { expr, variable, iterable, condition, .. } => {
-            if let Some(c) = condition { uses_expr(&c.node, c.span.start, live, lu); }
-            uses_expr(&expr.node, expr.span.start, live, lu);
-            live.remove(variable.node.as_str());
+            walk_loop_two_pass(
+                live,
+                lu,
+                |_l, _d| {},
+                |l, u| uses_expr(&expr.node, expr.span.start, l, u),
+                |l, u| {
+                    if let Some(c) = condition { uses_expr(&c.node, c.span.start, l, u); }
+                    l.remove(variable.node.as_str());
+                },
+            );
             uses_expr(&iterable.node, iterable.span.start, live, lu);
         }
         Expr::StringLiteral(_, interp_exprs) => {
@@ -590,10 +685,19 @@ fn uses_expr<'a>(
             }
         }
         Expr::DictComprehension { key, value, variables, iterable, condition } => {
-            if let Some(c) = condition { uses_expr(&c.node, c.span.start, live, lu); }
-            uses_expr(&value.node, value.span.start, live, lu);
-            uses_expr(&key.node, key.span.start, live, lu);
-            for v in variables { live.remove(v.node.as_str()); }
+            walk_loop_two_pass(
+                live,
+                lu,
+                |_l, _d| {},
+                |l, u| {
+                    uses_expr(&value.node, value.span.start, l, u);
+                    uses_expr(&key.node, key.span.start, l, u);
+                },
+                |l, u| {
+                    if let Some(c) = condition { uses_expr(&c.node, c.span.start, l, u); }
+                    for v in variables { l.remove(v.node.as_str()); }
+                },
+            );
             uses_expr(&iterable.node, iterable.span.start, live, lu);
         }
         Expr::Range { start, end, .. } => {

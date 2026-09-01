@@ -1064,9 +1064,15 @@ fn d23_trait_registration_lookup_type() {
 /// EXACTLY ONE caller (that function). Three counts, three ways to bypass:
 ///   1. the raw reset — a new path that resets per-function state by hand;
 ///   2. a wholesale `func_state` replacement — either the literal
-///      `FunctionState::default()` or ANY `func_state = …` assignment, so the
+///      `FunctionState::default()` or a `func_state = …` assignment, so the
 ///      type-elided spellings (`= Default::default()`, `= FunctionState { .. }`,
-///      `= std::mem::take(&mut other)`) are caught too;
+///      `= std::mem::take(&mut other)`) are caught too. ⚠ NOT "ANY" such
+///      assignment: the pattern is the literal `"func_state = "`, WITH the
+///      space, so `func_state=…` (no space) walks straight past it. There is no
+///      `cargo fmt` gate in this repo forcing the spaced form, so that evasion
+///      compiles and stays green. Stated rather than papered over — a fourth
+///      count would be a fourth costume (see `todo/t0921`'s sibling lesson on
+///      main, `t0875`);
 ///   3. non-test `FunctionBuilder::new(` — a new path that never resets at all
 ///      (counts 1 and 2 are blind to it by construction, since they only see
 ///      resetters). `FunctionBuilder::new` is the ONLY constructor —
@@ -25917,6 +25923,202 @@ fn process_spawn_deadline_arm_count() {
         String::from_utf8_lossy(&census.stderr),
     );
 }
+
+// ───────────────── the loop back-edge dance (R48 D1) ──────────────────
+// One guard over one instrument. Not part of the subprocess-harness trio
+// above: different file, different class, its own rationale below.
+
+/// The loop back-edge dance in `src/ir/lowering/liveness.rs` has exactly ONE
+/// implementation, and every loop-shaped arm routes through it.
+///
+/// WHY THIS EXISTS. The four STATEMENT loop arms (`while` / `for` / `loop` /
+/// `meta for`|`meta while`) each carried their own hand-rolled copy of the
+/// two-pass dance; the three COMPREHENSION arms carried none, because a prior
+/// round swept the statement forms and stopped at the expression boundary. The
+/// consequence was a miscompile — `[s for i in 0..3]` moved a loop-invariant
+/// owned local on every iteration and the collection's free double-freed one
+/// heap buffer (`todo/t0841`, rc 134 on both backends) — and, in the one
+/// statement arm the sweep also missed, a compiler ICE. Copies drift; this
+/// asserts there are none.
+///
+/// ⚠ THE COUNT ALONE CANNOT CATCH ITS OWN CLASS (Core #6, six-questions Q2).
+/// A call-site count goes red when a call is REMOVED and stays GREEN on the one
+/// regression it exists to prevent: a NEW loop-shaped arm that hand-rolls the
+/// dance beside the helper instead of calling it. rustc exhaustiveness does not
+/// close that either — a new AST variant is satisfied by writing ANY arm. So
+/// assertions two, three and four count the DANCE'S OWN INGREDIENTS.
+///
+/// ⚠ ASSERTION FOUR EXISTS BECAUSE ASSERTIONS TWO AND THREE EACH SHIPPED AS A
+/// NAMED HOLE AND EACH WAS THEN WALKED THROUGH. Two keys on the identifier
+/// `lu_discard` and is evadable by RENAME — this file carries the precedent,
+/// since `seed_on_error_uses` spells the same throwaway map `discard`. Three
+/// answered that by counting the annotated type, and an output review walked
+/// through it in one line with `let mut d = FxHashMap::default();`, the type
+/// ELIDED. Counting the CONSTRUCTION closed that, and a second review walked
+/// through THAT with `let mut discard_lu = lu.clone();` — same file, same map
+/// type, no rename, no construction, all three assertions GREEN. It is
+/// arguably the most natural spelling of all, since `lu` is already in scope.
+///
+/// Assertion four counts `live.clone()`, which catches that spelling and the
+/// three earlier escapes: all four read 11 against a baseline of 9.
+///
+/// ⛔ AND IT IS STILL NOT A TOTAL GUARD — READ THIS BEFORE TRUSTING IT, AND
+/// BEFORE ADDING A FIFTH. An earlier version of this comment claimed assertion
+/// four counted something the dance "cannot do without, at any spelling". That
+/// was false, and a review demonstrated it SEVEN ways, each a complete,
+/// compiling, wired dance with all 198 tests green: rename the receiver
+/// (`live` -> `l`) and the body is otherwise byte-identical — the very
+/// rename-evasion this comment faults assertion two for — plus
+/// `live.iter().copied().collect()`, `FxHashSet::from_iter(..)`,
+/// `std::mem::take`/`replace` with a restore (no `.clone()` at all),
+/// `Clone::clone(&*live)`, an extension-trait `.snapshot()`, and holding the
+/// dance's state in a struct and copying the field. FIVE of those keep the name
+/// `live`. A substring census over one file counts COSTUMES; it cannot count a
+/// CLASS, and a fifth count would be a fifth costume.
+///
+/// ⭐ SO STATE THE REACH HONESTLY: these four are a NEW-PATH TRIPWIRE, not a
+/// total guard. Assertion one is the one that holds — an added or removed
+/// `walk_loop_two_pass` call site IS caught. Assertions two to four catch the
+/// hand-rolled spellings measured so far and nothing guarantees the next one.
+/// The total guard has to be type-level, not textual: a `LiveSet` newtype whose
+/// copy path is private to this helper's module, so a hand-rolled dance fails
+/// to COMPILE. That is filed as `todo/t0875` with the seven escapes as its
+/// evidence. Until it lands, what no assertion here replaces is READING THE
+/// ARM: a new loop-shaped form belongs in the helper.
+#[test]
+fn liveness_loop_back_edge_single_source() {
+    /// Seven loop-shaped arms: `Stmt::While`, `Stmt::For`, `Stmt::Loop`,
+    /// `Stmt::MetaFor|MetaWhile` (ONE arm), `Expr::ListComprehension`,
+    /// `Expr::SetComprehension`, `Expr::DictComprehension`.
+    ///
+    /// Raising this is only correct for a genuinely NEW loop-shaped AST
+    /// variant, wired THROUGH the helper. Lowering it means an arm stopped
+    /// calling it — check it did not grow its own copy.
+    const EXPECTED_CALL_SITES: usize = 7;
+    /// One `let mut lu_discard` declaration: the one inside the helper.
+    const EXPECTED_LU_DISCARD_DECLS: usize = 1;
+    /// Three `FxHashMap::default()` constructions in the whole file: the
+    /// walker's REAL result map in `compute_function_liveness`, the `on error:`
+    /// seed's `discard`, and the helper's `lu_discard`. A fourth is a fourth
+    /// map, and in this file that means a second copy of the dance.
+    const EXPECTED_MAP_CTORS: usize = 3;
+    /// Nine `live.clone()` sites: the helper's two (one per pass) and SEVEN
+    /// branch-union saves — `Stmt::If`, `Stmt::Match`, `Stmt::Select`,
+    /// `Stmt::MetaIf`, `Stmt::MetaMatch`, `Expr::If`, `Expr::Match`. All seven
+    /// are named because an earlier version of this comment named four ("if /
+    /// match / meta if / meta match") for seven sites, and `Stmt::Select` was
+    /// named by nothing — a selection presented as an enumeration.
+    ///
+    /// ⚠ This catches the four hand-rolled spellings measured so far, NOT the
+    /// class: seven further evasions compile with every assertion green (see
+    /// the rationale above, and `todo/t0875`).
+    const EXPECTED_LIVE_CLONES: usize = 9;
+
+    let path = "src/ir/lowering/liveness.rs";
+    let src = fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+    // Strip comments and string literals: this file's doc comments MENTION the
+    // helper by name, and an enumeration whose instrument cannot tell code from
+    // prose is not total, it is approximate.
+    let code = strip_rust_comments_and_strings(&src);
+
+    let mut call_sites: Vec<String> = Vec::new();
+    let mut lu_discard_decls: Vec<String> = Vec::new();
+    let mut map_ctors: Vec<String> = Vec::new();
+    let mut map_ctor_count = 0usize;
+    let mut live_clones: Vec<String> = Vec::new();
+    let mut live_clone_count = 0usize;
+    for (i, line) in code.lines().enumerate() {
+        let t = line.trim_start();
+        if line.contains("walk_loop_two_pass(") && !t.starts_with("fn walk_loop_two_pass") {
+            call_sites.push(format!("  {path}:{}", i + 1));
+        }
+        if t.starts_with("let mut lu_discard") {
+            lu_discard_decls.push(format!("  {path}:{}", i + 1));
+        }
+        let n = line.matches("FxHashMap::default()").count();
+        if n > 0 {
+            map_ctor_count += n;
+            map_ctors.push(format!("  {path}:{} (x{n})", i + 1));
+        }
+        let c = line.matches("live.clone()").count();
+        if c > 0 {
+            live_clone_count += c;
+            live_clones.push(format!("  {path}:{} (x{c})", i + 1));
+        }
+    }
+
+    assert_eq!(
+        call_sites.len(),
+        EXPECTED_CALL_SITES,
+        "`walk_loop_two_pass` call-site count changed: {} vs expected \
+         {EXPECTED_CALL_SITES}.\n{}\n\n\
+         Every loop-shaped arm — the four statement forms AND the three \
+         comprehensions, which ARE loops — must route through the ONE helper \
+         (Core #4). A NEW arm belongs there too: raise this only after wiring \
+         it through. A REMOVED call lowers it, but check the arm did not grow \
+         its own copy of the dance instead.",
+        call_sites.len(),
+        call_sites.join("\n"),
+    );
+
+    assert_eq!(
+        lu_discard_decls.len(),
+        EXPECTED_LU_DISCARD_DECLS,
+        "`lu_discard` declaration count changed: {} vs expected \
+         {EXPECTED_LU_DISCARD_DECLS}.\n{}\n\n\
+         Pass 1's throwaway last-use map is the dance's own ingredient, so a \
+         SECOND declaration means a second copy of the dance — which the \
+         call-site count above cannot see. Delete the copy and call \
+         `walk_loop_two_pass`.",
+        lu_discard_decls.len(),
+        lu_discard_decls.join("\n"),
+    );
+
+    assert_eq!(
+        map_ctor_count,
+        EXPECTED_MAP_CTORS,
+        "`FxHashMap::default()` construction count changed: {} vs expected \
+         {EXPECTED_MAP_CTORS}.\n{}\n\n\
+         This is the spelling-proof layer, and it counts the CONSTRUCTION on \
+         purpose: the assertion above keys on the identifier `lu_discard` and \
+         is evadable by rename, and an earlier version of THIS assertion keyed \
+         on the annotated type and was evaded by `let mut d = \
+         FxHashMap::default();` with the type elided — measured, all three \
+         assertions green. A map has to be constructed however it is declared. \
+         The three permitted constructions are `compute_function_liveness`'s \
+         real result map, `seed_on_error_uses`'s `discard`, and the helper's \
+         `lu_discard`; a fourth in this file means a second copy of the dance.",
+        map_ctor_count,
+        map_ctors.join("\n"),
+    );
+
+    assert_eq!(
+        live_clone_count,
+        EXPECTED_LIVE_CLONES,
+        "`live.clone()` count changed: {} vs expected {EXPECTED_LIVE_CLONES}.\n{}\n\n\
+         Nine is the helper's two (one per pass) plus seven branch-union \
+         saves: `Stmt::If`, `Stmt::Match`, `Stmt::Select`, `Stmt::MetaIf`, \
+         `Stmt::MetaMatch`, `Expr::If`, `Expr::Match`. A genuine new BRANCH \
+         form raises it by one. A new loop-shaped arm should raise it by ZERO \
+         — it belongs in `walk_loop_two_pass`. \
+         \n\n\
+         ⛔ DO NOT READ THIS AS A TOTAL GUARD, AND DO NOT ADD A FIFTH COUNT. \
+         This assertion and the two above catch the hand-rolled spellings \
+         measured so far; a review then evaded this one SEVEN ways, five of \
+         them without even renaming `live` (see the rationale on the test). \
+         A substring census counts costumes, not the class. The four together \
+         are a NEW-PATH TRIPWIRE: assertion one catches an added or removed \
+         helper call site, which is the property that actually holds. The total \
+         guard is type-level and filed as `todo/t0875`.",
+        live_clone_count,
+        live_clones.join("\n"),
+    );
+}
+
+// ──────────────── the subprocess harness (R47 F4a), continued ───────────────
+// `strip_rust_comments_and_strings` and its self-test serve BOTH sections: the
+// spawn census above needs it, and the loop-dance guard reuses it for the same
+// reason (an enumeration that cannot tell code from prose is approximate).
 
 /// Strip `//` and `/* */` comments (nested) and string/char literals, replacing
 /// them with blanks so line numbers survive.
