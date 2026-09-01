@@ -516,6 +516,21 @@ P1-infra reviewers' recommendation.
 
 ## LOG
 
+- 2026-09-01 — **D53 RATIFIED (owner): `Mutex` AND `RWLock` JOIN THE `E_MoveWithoutOperator` CARVE-OUT LIST.** Owner: *"Add Mutex/RWLock to the E_MoveWithoutOperator list, as you recommended."*
+
+  **THE CRITERION WAS ALREADY MET AND NOBODY HAD CHECKED.** The carve-out list's own stated test is **single-owner-by-design — no clone path in the lowering**. `Mutex`/`RWLock` have none. The orchestrator initially recommended the opposite, reasoning that a mutex "is clonable"; that was an assumption, not a measurement, and R48 Track D2 measured it.
+
+  **WHAT FORCED THE QUESTION — measured, both backends, `gg check` clean throughout.** `Vector[Mutex] all; all.push(m); all.push(m)` is **rc 134 double-free** (heap-use-after-free under ASan). The single-slot case was repairable in lowering; the N-slot case is not, and the reason is structural: **`elem_drop` is a PER-ARRAY pointer**, so every slot holding the handle drops it, and a type with no clone path has nothing to put in slots 2..N. ⊕ The one-slot regression was itself instructive — it appeared only once D2's write fix put a *real* handle where `elem_drop` could reach it; the pre-fix "clean" run was clean because the slot held garbage.
+
+  **THE RULING.** `Mutex` and `RWLock` are single-owner-by-design. The safety pass emits `E_MoveWithoutOperator` at bare-assign AND constructor / struct / enum-init sites, forcing `^source` or `source.clone()` — identical to `Guard`, `Task`, `TaskGroup`, `Box[T]`, `Owned[T]` and closures / `Callable[T]`. At a plain function / method call they are simply borrowed, so no operator is needed. ⇒ **`all.push(m); all.push(m)` is REJECTED AT CHECK TIME, and the gap closes with NO lowering change.**
+
+  **WHY THIS SHAPE RATHER THAN A CLONE PATH.** Giving them one would mean deciding what a duplicated lock *means* — a second handle to one mutex, or a second mutex — which is a semantics question nobody has asked for. Rejection needs no such answer. ⊕ **`Guard` was already on the list**, so the pre-ruling tree demanded the operator for what `Mutex.lock()` RETURNS while accepting it for the `Mutex` itself; the asymmetry is now gone.
+
+  **WRITE-THROUGH (`docs/language-reference.md` §Ownership, the by-design single-owner list).** ⚠ **The reference CONTRADICTED this ruling and the contradiction is the interesting part:** it listed `Mutex[T]` among *"the sanctioned MULTI-OWNER escape hatch"* alongside `Shared[T]`/`Weak[T]`/`Channel[T]`. That was aspirational — **the lowering gives `Mutex`/`RWLock` no clone path, so a second owner cannot be constructed**, which is exactly why slots 2..N of a `Vector[Mutex]` had nothing to hold. They move to the single-owner list; sharing a lock is spelled `Shared[Mutex[T]]`. They stay un-drop-tainted by their payload — that axis is unchanged.
+
+  **SCOPE:** accept/reject surface change ⇒ all three lanes (Rust gg C+LLVM · self-host · ggdef), a NEG fixture per rejected position, and doc write-through to `AGENTS.md` § Ownership at Consuming Positions and `docs/language-reference.md`. R48 Track D2 carries the fixtures and `todo/t0908` pins the intended output for exactly this resolution. ⚠ The `AGENTS.md` carve-out list is a SECOND SPELLING of this ruling and is now stale by two entries; see the note filed with `t0908` on whether it should enumerate or cite.
+
+
 - 2026-07-17 — **🎯 2T RATIFIED (owner): drop-taint × materialize = REJECT — materialize-on-write
   is the SEVENTH implicit-copy position.** At every materialize-on-write site (a write to a
   bare/borrowed binding that would CoW-materialize a private copy), a DROP-TAINTED source
